@@ -1,0 +1,27 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# GDExtension build output
+gdextension/**/godot-cpp/bin/
+gdextension/**/godot-cpp/gen/
+gdextension/**/*.obj
+gdextension/**/*.os
+gdextension/**/.sconsign.dblite
+addons/*/bin/*.exp
+addons/*/bin/*.lib
+addons/*/bin/*.pdb
+addons/*/bin/*.TMP
+
+# Probe and screenshot output
+shots/
+
+# Godot's hot-reload leftovers. The editor copies the extension aside while it
+# holds a lock on the running one and never tidies up after itself, so this
+# directory fills with ~libbrick...dll~RF*.TMP and .locked-* copies.
+addons/*/bin/~*
+addons/*/bin/*.locked-*
+
+# godot-cpp is a submodule, not a copy. Its own build output is not ours.
+gdextension/**/godot-cpp/bin/
+gdextension/**/godot-cpp/gen/

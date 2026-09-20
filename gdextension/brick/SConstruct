@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+"""
+SConstruct for the Brick GDExtension.
+
+Output goes to: ../../addons/brick/bin/
+
+Build (SCons is pip-installed and not on PATH on this machine):
+    python -m SCons -C gdextension/brick platform=windows target=template_debug
+    python -m SCons -C gdextension/brick platform=windows target=template_release
+"""
+
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+
+sources = Glob("src/*.cpp")
+
+output_dir = "../../addons/brick/bin"
+
+if env["platform"] == "macos":
+    library = env.SharedLibrary(
+        "{}/libbrick.{}.{}.framework/libbrick.{}.{}".format(
+            output_dir, env["platform"], env["target"], env["platform"], env["target"]
+        ),
+        source=sources,
+    )
+elif env["platform"] == "ios":
+    if env["ios_simulator"]:
+        library = env.StaticLibrary(
+            "{}/libbrick.{}.{}.simulator.a".format(output_dir, env["platform"], env["target"]),
+            source=sources,
+        )
+    else:
+        library = env.StaticLibrary(
+            "{}/libbrick.{}.{}.a".format(output_dir, env["platform"], env["target"]),
+            source=sources,
+        )
+else:
+    library = env.SharedLibrary(
+        "{}/libbrick{}{}".format(output_dir, env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+
+Default(library)

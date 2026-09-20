@@ -1,0 +1,3 @@
+[submodule "gdextension/brick/godot-cpp"]
+	path = gdextension/brick/godot-cpp
+	url = https://github.com/godotengine/godot-cpp.git
