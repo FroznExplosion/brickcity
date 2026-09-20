@@ -50,6 +50,36 @@ uniform float seam_fade_end = 75.0;
 // facet on either side of it. The seam survives to 75 m because a dark line
 // stays legible; the chamfer fades by 60 m because a sub-pixel highlight
 // shimmers.
+//
+// --- why not real geometry near the camera, and a line far away? ----------
+//
+// Asked, and the answer is no, for two reasons of different weight.
+//
+// The triangle count is the small one. A chamfered quad is a centre quad plus
+// four edge strips plus four mitred corners: 14 triangles where there was 2.
+// Against the measured figures -- M0's 824 blocks at 36,256 triangles after
+// 82.9% face culling, a 150 m tower at 685k, a 25-tile terrain field at 76k --
+// that is 254k, 4.8M and 532k. The tower alone ends it.
+//
+// The real reason is M2c. Faces are baked ONCE and damage flips index slots,
+// because re-uploading a chunk's vertex buffer measured 175 ms at 16.5k
+// blocks. A geometry tier that switches with distance has to rebuild and
+// re-upload that buffer every time the camera crosses the threshold -- which
+// is the exact cost M2c was written to remove, re-introduced and now driven
+// by camera movement rather than by damage. Hysteresis bounds how often, not
+// how much.
+//
+// So: shaded bevel in the chunk mesh, always. Where a real chamfer is wanted
+// it goes on geometry that ALREADY exists and is already instanced and few --
+// studs, scatter, and loose debris. A single brick tumbling past the camera is
+// the one place a flat silhouette genuinely reads wrong, and those are
+// separate meshes with their own budget.
+//
+// The corollary, for anyone tempted to switch the seam off and rely on
+// geometry: there is no geometry to rely on. Two touching coplanar block faces
+// are meshed as touching coplanar quads, so without the seam a run of same-
+// coloured bricks is one flat slab. The seam is not decorating a division that
+// exists -- it IS the division.
 group_uniforms chamfer;
 uniform bool chamfer_enabled = true;
 uniform float chamfer_width : hint_range(0.0, 0.05) = 0.013;  // metres, per side

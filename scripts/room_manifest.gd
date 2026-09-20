@@ -67,6 +67,7 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int) -> Array[Room]:
 	var out: Array[Room] = []
 	var plates := TowerRecipe.PLATES_PER_COURSE
+	@warning_ignore("integer_division")
 	var storeys := maxi(courses / COURSES_PER_STOREY, 1)
 	var split := 2 if mini(footprint_x, footprint_z) >= 20 else 1
 	var inner_x := footprint_x - WALL_MARGIN * 2
@@ -85,8 +86,8 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 				r.id = out.size()
 				r.lo = Vector3i(WALL_MARGIN + gx * cell_x, y + 1, WALL_MARGIN + gz * cell_z)
 				r.size = Vector3i(cell_x, COURSES_PER_STOREY * plates - 1, cell_z)
-				r.seed = hash3(building_seed, r.id, 0x9E37)
-				r.kind = Room.KINDS[r.seed % Room.KINDS.size()]
+				r.room_seed = hash3(building_seed, r.id, 0x9E37)
+				r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
 				out.append(r)
 	return out
 
@@ -103,18 +104,18 @@ static func items_for(room: Room) -> Array:
 	# Two to five things. A room is furnished, not warehoused: the count is what
 	# keeps 5000 buildings x 20 rooms from being a million items even when
 	# every one of them is awake.
-	var n := 2 + int(hash3(room.seed, 11, 3) % 4)
+	var n := 2 + int(hash3(room.room_seed, 11, 3) % 4)
 	for i in n:
-		var type: String = kinds[hash3(room.seed, i, 7) % kinds.size()]
+		var type: String = kinds[hash3(room.room_seed, i, 7) % kinds.size()]
 		var span: Vector3i = _item_span(type)
 		var free_x := maxi(room.size.x - span.x, 1)
 		var free_z := maxi(room.size.z - span.z, 1)
 		out.append({
 			"type": type,
 			"cell": room.lo + Vector3i(
-					int(hash3(room.seed, i, 19) % free_x), 0,
-					int(hash3(room.seed, i, 23) % free_z)),
-			"yaw": int(hash3(room.seed, i, 29) % 4),
+					int(hash3(room.room_seed, i, 19) % free_x), 0,
+					int(hash3(room.room_seed, i, 23) % free_z)),
+			"yaw": int(hash3(room.room_seed, i, 29) % 4),
 		})
 	return out
 
@@ -235,9 +236,9 @@ static func resolved_cell(room: Room, item: Dictionary, down: Vector3i,
 	var span := _item_span(str(item.type))
 	var at: Vector3i = item.cell
 	var jitter := Vector3i(
-			int(hash3(room.seed, index, 41) % maxi(room.size.x - span.x, 1)),
-			int(hash3(room.seed, index, 43) % maxi(room.size.y - span.y, 1)),
-			int(hash3(room.seed, index, 47) % maxi(room.size.z - span.z, 1)))
+			int(hash3(room.room_seed, index, 41) % maxi(room.size.x - span.x, 1)),
+			int(hash3(room.room_seed, index, 43) % maxi(room.size.y - span.y, 1)),
+			int(hash3(room.room_seed, index, 47) % maxi(room.size.z - span.z, 1)))
 	# Against the new floor: the axis that is now down goes to the low (or high)
 	# end of the room, and the other two keep the authored position, jittered.
 	match down:

@@ -39,6 +39,21 @@ var islands: IslandManager
 var palette := {}
 
 var brick_material: ShaderMaterial
+
+## Shader toggles, held HERE rather than read back from the material.
+##
+## `get_shader_parameter` returns the value that was ASSIGNED to the material,
+## not the default the shader declares -- so a uniform nobody has written
+## reads as null, and `var on: bool = <null>` is the crash `B` produced.
+## `seams_enabled` only escaped it because `_build_scenery` happens to set it.
+##
+## Keeping the state on this side means the default is stated once, the
+## material is only ever written to, and adding a uniform cannot introduce
+## the same bug again.
+var _shader_toggles := {
+	"seams_enabled": true,
+	"chamfer_enabled": true,
+}
 var stats_label: Label
 var camera: DebugCamera
 
@@ -229,6 +244,18 @@ const ROOM_VIEW_COS := 0.35
 ## How many rooms may have their walls re-read in one pass. See _can_see_into.
 const ROOM_SCANS_PER_PASS := 2
 var _room_scans := 0
+## Building id -> the chunk its bricks became when it came down. A room that
+## was never opened is spilled into THAT, not into a building that no longer
+## exists (Interiors section 4.1).
+var _wrecks := {}
+var _spilled_rooms := 0
+## How close somebody has to be for a spilled room to be laid into the wreck.
+## Further than the walking range, because arriving at a collapsed building and
+## finding the kitchen in it is the point.
+const SPILL_RANGE := 34.0
+## Items laid in full per spilled room. Section 4.1's degradation ladder: the
+## rest of the manifest is written off rather than built.
+const SPILL_ITEMS := 4
 
 var _blast_radius := BLAST_RADIUS
 var _reticle: Reticle
@@ -573,6 +600,30 @@ func _stream_rooms() -> void:
 				opened += 1
 				break
 
+	# And the wreckage: a building that came down still has rooms, and what was
+	# in them is owed to whoever walks up to the pile.
+	for id in _wrecks.keys():
+		var wreck: int = _wrecks[id]
+		if not world.is_chunk_alive(wreck):
+			_wrecks.erase(id)
+			continue
+		if opened >= ROOMS_PER_PASS:
+			break
+		var fell := registry.get_building(id)
+		if fell == null:
+			continue
+		for room in registry.spilled_rooms(id):
+			# The room's box travels with the wreck: the chunk's transform is
+			# where those bricks ended up.
+			var was: Transform3D = world.get_chunk_transform(wreck)
+			if _box_distance(room.world_box(was), here) > SPILL_RANGE:
+				continue
+			if registry.spill_room(id, room.id, wreck, SPILL_ITEMS) > 0:
+				_spilled_rooms += 1
+				islands.rebuild_chunk(wreck)
+				opened += 1
+				break
+
 	# Only what is bricks: `_materialised` is the city's own list, so this is
 	# never O(the city) however many buildings there are.
 	for id in _materialised:
@@ -892,6 +943,15 @@ func _topple(id: int) -> void:
 	_dirty.erase(id)
 	_remesh_queue.erase(id)
 	_pending_bricks.erase(id)
+
+	# What was in the rooms. An OPEN room's contents are bricks in this chunk
+	# already, so they ride it down (Interiors section 4.2). A shut one is
+	# marked spilled, and resolves into the wreck when somebody arrives -- which
+	# is section 5.1's rule: do not build, in the middle of a collapse, contents
+	# for rooms nobody may ever look at.
+	if not b.is_build():
+		registry.mark_rooms_spilled(id)
+		_wrecks[id] = chunk
 
 	# The sideways frames go with it, each as its own piece. A welded assembly
 	# coming down in one piece would need the solver to carry the welds, which
@@ -1628,8 +1688,8 @@ func _update_hud() -> void:
 			_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _promote_queue.size()],
 		"impact damage %d brick(s) sheared by falling debris" % _impact_damage,
 		"fixtures      %d, built with the buildings that hold them" % rep.fixtures,
-		"rooms         %d  (%d open, %d with a diff)" % [
-			rooms.rooms, rooms.active, rooms.changed],
+		"rooms         %d  (%d open, %d with a diff, %d spilled into wreckage)" % [
+			rooms.rooms, rooms.active, rooms.changed, _spilled_rooms],
 		"",
 		"blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
@@ -1686,6 +1746,14 @@ func _update_reticle() -> void:
 		_reticle.queue_redraw()
 
 
+## Flip a shader bool and return its new value. Never reads the material.
+func _toggle_shader(param: String) -> bool:
+	var on: bool = not bool(_shader_toggles.get(param, true))
+	_shader_toggles[param] = on
+	brick_material.set_shader_parameter(param, on)
+	return on
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		match event.button_index:
@@ -1706,12 +1774,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_L:
-			var on: bool = brick_material.get_shader_parameter("seams_enabled")
-			brick_material.set_shader_parameter("seams_enabled", not on)
+			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:
-			var bevel: bool = brick_material.get_shader_parameter("chamfer_enabled")
-			brick_material.set_shader_parameter("chamfer_enabled", not bevel)
-			print("[city] chamfered edges: %s" % ("OFF" if bevel else "ON"))
+			print("[city] chamfered edges: %s"
+					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
 		KEY_J:
 			# The overlap. A piece that has just come off a building is drawn by
 			# BOTH for two frames, because on the frame it is born there is
@@ -2518,6 +2584,7 @@ func _run_chamfer_pass() -> void:
 ## Render one frame with the chamfer on or off and hand back the image. A name
 ## also writes it to shots/, for the eye to judge what a number cannot.
 func _capture_chamfer(on: bool, shot_name: String) -> Image:
+	_shader_toggles["chamfer_enabled"] = on
 	brick_material.set_shader_parameter("chamfer_enabled", on)
 	await _frames(3)
 	var img := get_viewport().get_texture().get_image()
@@ -2712,6 +2779,48 @@ func _run_rooms_pass() -> void:
 		guard += 1
 	_gate_ok("turning away shuts it again", _open_rooms_of(1) == 0,
 			"%d open" % _open_rooms_of(1))
+
+	# And the wreckage. A building comes down while nobody is inside it; what
+	# was in its rooms is owed to whoever walks up to the pile afterwards.
+	print("\n[rooms] what was in a building that fell down")
+	var fell := registry.get_building(2)
+	camera.global_position = fell.xform.origin + Vector3(0.0, 40.0, -220.0)
+	camera.look_at(fell.xform.origin, Vector3.UP)
+	await _frames(20)
+	_promote(2)
+	await _frames(20)
+	_gate_ok("nobody opened anything in it", _open_rooms_of(2) == 0)
+	_topple(2)
+	await _frames(30)
+	var waiting := registry.spilled_rooms(2).size()
+	_gate_ok("its rooms are marked to spill rather than simulated", waiting > 0,
+			"%d waiting" % waiting)
+	_gate_ok("and nothing was built to do it from two hundred metres",
+			_open_rooms_of(2) == 0)
+
+	# Walk up to the pile.
+	var wreck: int = _wrecks.get(2, -1)
+	_gate_ok("the wreck is a chunk the city can still find",
+			wreck >= 0 and world.is_chunk_alive(wreck))
+	var pile: Vector3 = world.get_chunk_transform(wreck).origin
+	var bricks_before := world.get_alive_block_count(wreck)
+	camera.global_position = pile + Vector3(0.0, 6.0, -12.0)
+	camera.look_at(pile, Vector3.UP)
+	guard = 0
+	while guard < 400 and registry.spilled_rooms(2).size() >= waiting:
+		await _frames(1)
+		guard += 1
+	_gate_ok("arriving spills a room into it",
+			registry.spilled_rooms(2).size() < waiting,
+			"%d waiting, was %d" % [registry.spilled_rooms(2).size(), waiting])
+	_gate_ok("and there are more bricks in the pile than there were",
+			world.get_alive_block_count(wreck) > bricks_before,
+			"%d against %d" % [world.get_alive_block_count(wreck), bricks_before])
+	_gate_ok("some of what spilled is broken",
+			world.get_dead_blocks(wreck).size() > 0,
+			"%d dead" % world.get_dead_blocks(wreck).size())
+	await _frames(20)
+	await _save("rooms_spilled")
 
 	# A room nowhere near anybody, in the path of a blast, resolves anyway.
 	var far := registry.get_building(registry.buildings.size() - 1)
@@ -3446,7 +3555,8 @@ func _build_scenery() -> void:
 
 	brick_material = ShaderMaterial.new()
 	brick_material.shader = load("res://shaders/brick.gdshader")
-	brick_material.set_shader_parameter("seams_enabled", true)
+	for key in _shader_toggles:
+		brick_material.set_shader_parameter(key, _shader_toggles[key])
 
 	camera = DebugCamera.new()
 	camera.name = "DebugCamera"

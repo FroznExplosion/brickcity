@@ -28,7 +28,10 @@ var kind := "storeroom"
 ## Cells, in the building's own grid: the floor corner and the size.
 var lo := Vector3i.ZERO
 var size := Vector3i.ONE
-var seed := 0
+## Named `room_seed`, not `seed`: the bare name shadows GDScript's own
+## `seed()` and the warning is worth heeding — a call to it inside this class
+## would silently hit the property instead.
+var room_seed := 0
 
 ## Materialised state. `items` is the manifest once it has been run; `blocks`
 ## holds what each item actually laid, so deactivating can take it back out.
@@ -45,6 +48,12 @@ var gone := {}
 ## made by somebody shooting at it, which means an undamaged building has none
 ## and the portal test costs nothing until it does.
 var openings: Array[AABB] = []
+## The building came down while this room held nothing -- so its contents were
+## never built, and what happens to them is Interiors §4.1's question. A
+## spilled room resolves into the wreckage when somebody arrives, rather than
+## having been simulated while nobody was watching (§5.2).
+var spilled := false
+
 ## How damaged the building was when the openings were last looked for. Walls
 ## only change when something hits them.
 var openings_at := -1

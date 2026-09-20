@@ -3,7 +3,7 @@
 Design note, and now partly a description. Extends [Plan.md](Plan.md) §4.2 (three layers, only the
 last is LOD'd) to the things inside buildings, which is where the object count actually explodes.
 
-**Built: §1-§3 and §5, in first pass, portal test included.** `scripts/room.gd`, `scripts/room_manifest.gd` and the room
+**Built: §1-§5, in first pass -- portal test and seeded spill included.** `scripts/room.gd`, `scripts/room_manifest.gd` and the room
 half of `BuildingRegistry`: rooms generated from the recipe, contents generated from
 `(building seed, room id)`, activation by proximity and by damage volume, a diff that survives
 deactivation, and §5.2's analytic resolve for a room that fell over. `tools/interior_probe.gd`
@@ -97,7 +97,7 @@ vanish either, because the player watched a building fall and expects to find wh
 **The room is cut in half.** Objects on the standing side stay; objects on the falling side go with
 the island.
 
-### 4.1 Spill the manifest, do not randomise it
+### 4.1 Spill the manifest, do not randomise it ✅ **built**
 
 The obvious implementation is to delete the contents and scatter random debris. **Seeded spill is
 better and costs the same**: when a room is destroyed, run its manifest and spawn *those* items into
@@ -111,6 +111,13 @@ the rubble volume, in a damaged state.
 
 Cap it with the same degradation ladder as debris: spill the N most valuable or most visible items
 in full, represent the rest as generic rubble, and let distance and budget decide N.
+
+> **As built.** A room open when the building fell needs nothing -- its contents are already bricks
+> in the chunk that becomes the island. A shut one is marked `spilled` and **nothing is built until
+> somebody arrives** (§5.1), at which point the manifest runs into the wreck: each item against the
+> face that is now the floor (§5.2), a third of its bricks killed from the room's seed, four items
+> in full and the rest written off. There is no generic-rubble item yet, so "the rest" means gone
+> rather than reduced — the honest version of the same trade.
 
 ### 4.2 Items ride the island, not the world
 

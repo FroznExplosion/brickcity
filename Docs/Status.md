@@ -720,10 +720,30 @@ from the chunk's own transform -- snap world-down into the room's frame, take th
 and each item is placed against whatever face is now the floor, at its authored position with a
 seeded offset. Deterministic, instant, and indistinguishable from having watched it tumble.
 
-**Gate met.** `godot --path . -- --rooms` is at **20 checks** with the portal case in it: from
+**A room that came down spills what was in it** (Interiors §4.1). A room that was OPEN when its
+building fell needs nothing: its contents are bricks in the chunk that becomes the island, so they
+ride it. A room that was SHUT is marked `spilled` and nothing is built -- the middle of a collapse
+is the worst possible moment to construct furniture for a room nobody may ever walk to. When
+somebody does walk to the pile, within 34 m, the manifest runs **into the wreck**: each item placed
+against whatever face is now the floor (§5.2's resolve), with about a third of its bricks killed
+from the room's own seed, so the same wreck looks the same on a second visit and on another machine.
+Four items are laid in full and the rest are written off -- §4.1's degradation ladder, minus the
+generic-rubble item, which does not exist yet.
+
+A kitchen therefore spills kitchen things, and looting a building you flattened finds what was in
+it rather than a slot machine. It costs nothing to have, because the manifest was already the cheap
+representation.
+
+One bug worth recording, because it was the API's fault and not the caller's: rooms are generated
+lazily, and `mark_rooms_spilled` walked the list rather than asking for it -- so a building **nobody
+had ever looked inside** spilled nothing at all, which is exactly the building most likely to fall
+over unwatched. It generates them now.
+
+**Gate met.** `godot --path . -- --rooms` is at **27 checks**, with the portal case and the spill in
+it: from
 sixty metres nothing is open, a blast puts a hole in a wall, the rooms are shut again by hand, and
 then *looking through the hole opens one* -- and turning away shuts it. `tools/interior_probe.gd`
-passes **39 checks**: rooms generate identically twice and
+passes **53 checks**: rooms generate identically twice and
 differently for a different building, a manifest is a pure function of its seed, an unopened room
 creates no chunk and no bricks, opening one puts its contents inside the room's own box, closing it
 takes them out without the building counting it as damage, the diff remembers exactly what was

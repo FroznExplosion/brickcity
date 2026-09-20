@@ -674,6 +674,28 @@ static func _patch_fits(region: Dictionary, buffer_bytes: int) -> bool:
 ## Same index-region patch the buildings use: the vertex buffer never changes
 ## under damage, so re-uploading it is both slow and, at this scale, a way to
 ## run the GPU out of memory.
+## The island holding this chunk, or null. Used by anything that changes a
+## piece's blocks from outside -- spilling a room's contents into wreckage, for
+## one (Docs/Interiors.md section 4.1).
+func find_by_chunk(chunk: int) -> BrickIsland:
+	for isl in islands:
+		if isl.is_valid() and isl.chunk == chunk:
+			return isl
+	return null
+
+
+## Redraw the piece holding this chunk, after somebody else has added blocks to
+## it. A collision rebuild comes with it: what was put in has to be solid.
+func rebuild_chunk(chunk: int) -> bool:
+	var isl := find_by_chunk(chunk)
+	if isl == null:
+		return false
+	isl.changed = true
+	_reshape(isl, isl.settled)
+	rebuild_mesh(isl, true, true)
+	return true
+
+
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
 	if isl.mesh == null:
 		return

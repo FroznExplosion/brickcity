@@ -211,8 +211,10 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 	var room := get_room(building_id, index)
 	if b == null or room == null or not b.is_materialised() or b.is_build():
 		return []
-	var damage := world.get_dead_blocks(b.chunk).size()
-	if room.openings_at == damage:
+	# Not `damage`: that is a method on this class, and shadowing it here
+	# means a later call inside this function would hit the int.
+	var dead := world.get_dead_blocks(b.chunk).size()
+	if room.openings_at == dead:
 		return room.openings
 	if not may_scan:
 		# The walls have moved on and this pass has already spent its scan. The
@@ -220,8 +222,8 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 		# wall" is not wrong enough to pay for: a hole that appeared this tick
 		# is a hole next tick too.
 		return room.openings
-	room.openings_at = damage
-	room.openings = ([] as Array[AABB]) if damage == 0 else RoomManifest.openings_for(
+	room.openings_at = dead
+	room.openings = ([] as Array[AABB]) if dead == 0 else RoomManifest.openings_for(
 			world, b.chunk, room, b.recipe.footprint_x, b.recipe.footprint_z)
 	return room.openings
 
@@ -308,6 +310,104 @@ func deactivate_room(building_id: int, index: int) -> void:
 		item["blocks"] = PackedInt32Array()
 	room.active = false
 	_rooms_active -= 1
+
+
+## The host is coming down. Decide what happens to each room's contents.
+##
+## Interiors §4.1: a destroyed room's contents "should not survive intact -- but
+## they should not simply vanish either, because the player watched a building
+## fall and expects to find what was in it". So the manifest is **spilled**: the
+## same items the room would have held, in the wreckage, damaged.
+##
+## A room that was OPEN needs nothing done -- its bricks are in the chunk that
+## is about to become an island, so they ride it (§4.2). A room that was shut is
+## marked `spilled`, and `spill_room` puts its contents in when somebody is
+## close enough for it to matter. §5.1's rule, and the one this project keeps
+## arriving at: do not build, in the most expensive moment there is, something
+## nobody can see.
+func mark_rooms_spilled(building_id: int) -> int:
+	var b := get_building(building_id)
+	if b == null:
+		return 0
+	# Generated here if nobody has asked before. A building coming down is
+	# exactly the moment its rooms start to matter, whether or not anybody
+	# had looked inside it first -- and rooms are lazy, so without this a
+	# tower nobody had approached spilled nothing at all.
+	var n := 0
+	for room in rooms_of(building_id):
+		if room.active or room.spilled:
+			continue
+		room.spilled = true
+		n += 1
+	return n
+
+
+## Put a spilled room's contents into the wreckage.
+##
+## `chunk` is the island that holds what the building became. Where each item
+## lands is §5.2's analytic resolve -- against whatever face is now the floor --
+## and what state it is in is seeded from the room: roughly a third of each
+## item's bricks are gone, deterministically, so the same wreck looks the same
+## on a second visit and on another machine.
+##
+## `budget` caps how many items are laid in full; the rest are written off.
+## §4.1's degradation ladder: "spill the N most valuable or most visible items
+## in full, represent the rest as generic rubble, and let distance and budget
+## decide N". There is no generic rubble item yet, so the remainder is simply
+## gone, which is the honest version of the same trade.
+func spill_room(building_id: int, index: int, chunk: int, budget: int = 4) -> int:
+	var b := get_building(building_id)
+	var room := get_room(building_id, index)
+	if b == null or room == null or not room.spilled or room.active:
+		return 0
+	if chunk < 0 or not world.is_chunk_alive(chunk):
+		return 0
+	if room.items.is_empty():
+		room.items = RoomManifest.items_for(room)
+	var down := RoomManifest.down_axis(world.get_chunk_transform(chunk))
+	var offset := _rebase_of(b)
+	var laid := 0
+	var placed := 0
+	for i in room.items.size():
+		if room.gone.has(i):
+			continue
+		var item: Dictionary = room.items[i]
+		if laid >= budget:
+			room.gone[i] = true      # rubble, in the sense that nothing is left of it
+			continue
+		var at := RoomManifest.resolved_cell(room, item, down, i)
+		var blocks := RoomManifest.build_item(world, chunk, palette,
+				{"type": item.type, "cell": at, "yaw": item.yaw},
+				4 + int(i % 8), offset)
+		if blocks.is_empty():
+			room.gone[i] = true
+			continue
+		# Damaged, not intact: a third of it, chosen from the room's seed.
+		var broken := PackedInt32Array()
+		for k in blocks.size():
+			if RoomManifest.hash3(room.room_seed, i, k) % 3 == 0:
+				broken.push_back(blocks[k])
+		if not broken.is_empty():
+			world.kill_blocks(chunk, broken)
+		item["blocks"] = blocks
+		laid += 1
+		placed += blocks.size()
+	room.spilled = false
+	room.active = true
+	_rooms_active += 1
+	return placed
+
+
+## Rooms of this building that came down without being opened.
+func spilled_rooms(building_id: int) -> Array[Room]:
+	var out: Array[Room] = []
+	var b := get_building(building_id)
+	if b == null:
+		return out
+	for room in b.rooms:
+		if room.spilled:
+			out.append(room)
+	return out
 
 
 ## Every room this volume reaches, activated where it stands.

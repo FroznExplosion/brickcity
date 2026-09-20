@@ -31,6 +31,7 @@ func _init() -> void:
 	_check_the_diff()
 	_check_compromised()
 	_check_the_analytic_resolve()
+	_check_the_spill()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -282,6 +283,91 @@ func _check_the_analytic_resolve() -> void:
 	w.set_chunk_transform(chunk, on_its_side)
 	var placed := reg.activate_room(id, index, chunk)
 	_ok("a fallen room still produces its contents", placed > 0, "%d blocks" % placed)
+
+
+func _check_the_spill() -> void:
+	print("\nand a room that came down spills what was in it")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var reg := BuildingRegistry.new(w, res[1])
+	var id := _tower(reg)
+	var index := _furnished_room(reg, id)
+	var room := reg.get_room(id, index)
+	var chunk := reg.materialise(id)
+
+	# It came down without anybody opening it.
+	_ok("nothing is open when the building falls", not room.active)
+	var marked := reg.mark_rooms_spilled(id)
+	_ok("every shut room is marked spilled", marked == reg.rooms_of(id).size(),
+			"%d of %d" % [marked, reg.rooms_of(id).size()])
+	_ok("including this one", room.spilled)
+	_ok("and nothing was built to do it",
+			room.items.is_empty() or _laid(room) == 0)
+
+	# The bricks are an island now. Somebody walks up to the pile.
+	reg.hand_over(id)
+	_ok("the building is gone, the chunk is not",
+			not reg.get_building(id).is_materialised() and w.is_chunk_alive(chunk))
+	var before := w.get_alive_block_count(chunk)
+	var placed := reg.spill_room(id, index, chunk, 4)
+	_ok("its contents are in the wreck", placed > 0, "%d blocks" % placed)
+	_ok("which is where the wreck is", w.get_alive_block_count(chunk) > before)
+	_ok("and the room is no longer waiting to spill", not room.spilled)
+
+	# Damaged, not intact: that is the difference between spilling a room and
+	# furnishing one.
+	var dead := {}
+	for gone_id in w.get_dead_blocks(chunk):
+		dead[gone_id] = true
+	var broken := 0
+	var whole := 0
+	for item in room.items:
+		for block in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+			if dead.has(block):
+				broken += 1
+			else:
+				whole += 1
+	_ok("some of it is broken", broken > 0, "%d broken, %d whole" % [broken, whole])
+	_ok("and some of it is not", whole > 0, "%d whole" % whole)
+
+	# Capped: four items in full, the rest written off as rubble.
+	var laid_items := 0
+	for item in room.items:
+		if not (item.get("blocks", PackedInt32Array()) as PackedInt32Array).is_empty():
+			laid_items += 1
+	_ok("at most the budget was laid in full", laid_items <= 4, "%d items" % laid_items)
+
+	# Deterministic: the same wreck twice.
+	var again := _world()
+	var reg2 := BuildingRegistry.new(again[0], again[1])
+	var id2 := _tower(reg2)
+	var chunk2 := reg2.materialise(id2)
+	reg2.mark_rooms_spilled(id2)
+	reg2.hand_over(id2)
+	var placed2 := reg2.spill_room(id2, index, chunk2, 4)
+	_ok("spilling the same room twice gives the same wreck", placed2 == placed,
+			"%d against %d blocks" % [placed2, placed])
+	var dead2: int = (again[0] as BrickWorld).get_dead_blocks(chunk2).size()
+	_ok("broken in the same places", dead2 == w.get_dead_blocks(chunk).size(),
+			"%d against %d" % [dead2, w.get_dead_blocks(chunk).size()])
+
+	# A kitchen spills kitchen things (section 4.1): what came out is what the
+	# manifest said would be in there, not generic debris.
+	var allowed: Array = RoomManifest.BY_KIND.get(room.kind, [])
+	var foreign := 0
+	for item in room.items:
+		if not allowed.has(str(item.type)):
+			foreign += 1
+	_ok("and it spilled its own things, not somebody's", foreign == 0,
+			"%s room, %d foreign" % [room.kind, foreign])
+
+
+## How many blocks a room currently has laid.
+func _laid(room: Room) -> int:
+	var n := 0
+	for item in room.items:
+		n += (item.get("blocks", PackedInt32Array()) as PackedInt32Array).size()
+	return n
 
 
 ## The first room with something in it -- some are generated empty on purpose.
