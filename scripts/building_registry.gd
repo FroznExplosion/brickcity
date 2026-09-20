@@ -415,7 +415,8 @@ func spilled_rooms(building_id: int) -> Array[Room]:
 ## Interiors section 5: a COMPROMISED room resolves immediately, whether or not
 ## anybody can see it, because its contents are part of what the damage does.
 ## Plan section 4.4 is the same rule one level up.
-func compromise_rooms(building_id: int, world_point: Vector3, radius: float) -> int:
+func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
+		build: bool = true) -> int:
 	var b := get_building(building_id)
 	if b == null or b.is_build():
 		return 0
@@ -426,8 +427,25 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float) -> 
 			continue
 		if not room.local_box().grow(radius).has_point(local):
 			continue
-		if activate_room(building_id, room.id) > 0:
-			woken += 1
+		if build:
+			if activate_room(building_id, room.id) > 0:
+				woken += 1
+			continue
+		# Nobody is near enough to see it, so nothing is built. Interiors
+		# section 5.1: "rooms near the camera spawn full contents; distant ones
+		# write spilled into the diff and resolve analytically if anybody ever
+		# arrives". What the blast did to this room is recorded and costs
+		# nothing -- and it costs nothing in the right way, because BUILDING it
+		# means taking the host's body out of the physics space to add the
+		# collision, which wakes everything resting on that building. Doing
+		# that once per blast took the stress pass's damage phase from 20 ms a
+		# frame to 108.
+		if room.items.is_empty():
+			room.items = RoomManifest.items_for(room)
+		for i in room.items.size():
+			room.gone[i] = true
+		room.spilled = false
+		woken += 1
 	return woken
 
 

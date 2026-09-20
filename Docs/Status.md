@@ -751,6 +751,48 @@ destroyed, a blast opens the rooms it reaches with nobody there, and a room on i
 contents to the new floor and does so the same way every time. `godot --path . -- --rooms` passes
 **13** in the scene: solid, destructible, streamed by distance, and remembered afterwards.
 
+### Merged collision for standing buildings, and the cost that was not where it looked
+
+One box per brick is what a large body costs the solver, and a census settled who was actually
+carrying them: in the 200-building stress pass, **112,321 boxes across 37 standing buildings**
+against 1,827 in all the settled wreckage put together. The wreckage already merged when it came to
+rest ([limitation 2](#known-limitations)); the buildings never did.
+
+They do now, on the same rule: **once it has stopped.** Not at promotion -- a building materialises
+*because* something hit it, so merging there would be undone by the hit that caused it, which is
+the mistake `IslandManager.spawn` already records. A building merges when the shooting has moved
+on: nothing queued, nothing dirty, every island settled, and ten seconds since its last hit, one
+building a tick. **111,580 boxes become 8,634**, for 102 merges costing 112 ms in total and 3.5 ms
+at worst, and no un-merges at all in the pass.
+
+**What it bought in frame time: nothing measurable.** 17.2 ms mean either way; the worst frame is
+56.9 ms against 69.0 and the settled phase loses its one frame over budget, which is a direction
+rather than a result. The thing it should help -- debris landing on many standing buildings at once
+-- is not what the stress pass spends its time on. It is kept because 103,000 fewer collision
+shapes is a real resource saving with no cost attached, not because the frame got faster.
+
+**And the measurement found something much more expensive on the way.** Merging looked catastrophic
+at first: the damage-draining phase ran at 9 fps. It turned out not to be the merging at all -- the
+control arm, the same body rebuild with the shapes left per block, was just as slow, and so was a
+run with merging switched off entirely. The regression was already there, from the interiors work:
+**`_apply_blast` compromised rooms anywhere in the city, and building a room's contents takes its
+host's body out of the physics space to add the collision, which wakes everything resting on that
+building.** Once per blast, across 2,064 shots.
+
+Interiors §5.1 had already written the fix down -- *"rooms near the camera spawn full contents;
+distant ones write spilled into the diff"* -- and it had simply not been implemented that way. Only
+rooms within about 39 m of the blast are built now; the rest are resolved in the record for nothing.
+The phase went from **107.7 ms a frame (9.3 fps) back to 21.7 ms (46 fps)**, and the whole run from
+19.6 ms to 17.2.
+
+Two lessons worth keeping, both about the same thing:
+
+* **Swapping the shapes on a static body is not priced by the shapes.** It is priced by everything
+  resting on that body waking up. That is why merging waits for a still scene, and why adding a
+  room's furniture mid-firefight was so expensive.
+* **Measure the baseline you think you have.** Three arms of this experiment were run against a
+  contaminated one, and every conclusion drawn from them was wrong.
+
 ### Wreckage, given back
 
 An island that came to rest kept a chunk, an occupancy grid, a face bake, a mesh and a body for the
@@ -2794,8 +2836,9 @@ the stress pass could not say" for why it prints all three.
    frame time is 16.8-17.2 ms and 97.6% of frames are inside budget, so these are spikes rather
    than a throughput problem.
 2. **Collision is one box per brick for anything still moving.** Settled pieces merge theirs down,
-   but a falling section carries a shape per brick, and that is what the solver spends a collapse
-   on.
+   and standing buildings now merge once the shooting has moved on (112,321 boxes to 8,634 in the
+   stress pass), but a falling section still carries a shape per brick -- and merging one at birth
+   was tried and reverted, because its own landing undoes it.
 3. **The tail after a big collapse drains slowly.** Splitting is capped at one piece per pass and
    re-queued, so 5,562 splits finish over many seconds. Frames stay near budget during it but not
    reliably under -- the settled phase measured 16.7 ms on one run and 21.1 ms on the next.
@@ -2928,10 +2971,10 @@ under fire, in the order they are worth doing:
 3. **Networking**, when it is wanted. The substrate is in and tested
    ([Multiplayer.md](Multiplayer.md)); what is missing is a transport, server authority, and a
    bandwidth budget for physics state.
-4. **Merge runs of blocks into larger collision boxes.** One box per block is what makes a large
-   body expensive for the physics solver, and the solver is most of what is left in the collapsing
-   phase. The same greedy pass the face bake now does would work here, with the constraint that a
-   merged box cannot span blocks that need to be disabled separately.
+4. ~~**Merge runs of blocks into larger collision boxes.**~~ **Done for standing buildings** (see
+   "Merged collision for standing buildings"), 13x fewer boxes, frame time unchanged. What is left
+   is the case that resisted it twice: a section still **falling** carries a box per brick, and
+   merging it at birth is undone by its own landing.
 5. **Sections, not buildings** (Plan §4.3). A rocket hitting one corner has no business allocating
    a 2.5M-cell grid for the whole tower, and it is the same allocation that makes splitting
    expensive. A *local* stress solve falls out of the same change.

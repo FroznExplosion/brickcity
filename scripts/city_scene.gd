@@ -67,6 +67,30 @@ var _retirer := MeshRetirer.new()
 var _brick_index_bytes := {}  ## building id -> that surface's index buffer length
 var _brick_index_width := {} ## building id -> 2 or 4, that surface's index width
 var _brick_bodies := {}    ## building id -> RID
+## Buildings whose collision has been merged down, and when each was last hit.
+##
+## A standing building carries ONE BOX PER BRICK, and measured on the
+## 200-building stress pass that is 112,321 boxes across 37 buildings against
+## 1,827 in all the settled wreckage put together -- the wreckage already merges
+## and the buildings did not. So they merge too, on the same rule that works
+## for a settled piece: **once it has stopped**.
+##
+## Not at promotion, and not while it is being shot. Merging a piece at birth
+## was tried on the islands and reverted (see IslandManager.spawn) because the
+## first hit has to undo it, and the scene pays for two shape builds instead of
+## one. A building is materialised BECAUSE something hit it, so merging it then
+## would walk into exactly that. It merges when the shooting has moved on.
+var _brick_merged := {}
+var _last_hit := {}
+## How long a building has to have been quiet, and how many may be merged in
+## one tick. A merge is one `add_chunk_shapes` over the whole chunk, which is
+## the same call promotion makes, so it is budgeted like promotion.
+const MERGE_AFTER_MS := 10000
+const MERGES_PER_TICK := 1
+## The experiment's other arm: rebuild the body exactly as a merge does, but
+## per block. If the cost is the same either way, it is the REBUILD and not the
+## merged geometry.
+const MERGE_SHAPES := true
 var _brick_shapes := {}    ## building id -> { block id -> PackedInt32Array }
 var _shape_cache := {}
 var _materialised: Array[int] = []
@@ -215,6 +239,12 @@ var damage_log := DamageLog.new()
 var _dirty: Array[int] = []
 var _impact_damage := 0
 var _full_rebuilds := 0
+var _merges := 0
+var _unmerges := 0
+var _merged_boxes := 0
+var _merge_ms := 0.0
+var _merge_worst := 0.0
+var _unmerge_ms := 0.0
 var _show_grids := false
 var _grid_count := 0
 var _grid_view: MeshInstance3D
@@ -939,6 +969,8 @@ func _topple(id: int) -> void:
 	_brick_index_bytes.erase(id)
 	_brick_index_width.erase(id)
 	_brick_shapes.erase(id)
+	_brick_merged.erase(id)
+	_last_hit.erase(id)
 	_materialised.erase(id)
 	_dirty.erase(id)
 	_remesh_queue.erase(id)
@@ -965,6 +997,90 @@ func _topple(id: int) -> void:
 			break
 		var node: MeshInstance3D = extra_nodes[i - 1]
 		islands.adopt(extra_frames[i], node, null, 0, 4)
+
+
+## Swap a building's collision between one box per brick and as few boxes as
+## the shape allows.
+##
+## The merged form cannot disable a single block -- a box spans several -- so
+## anything about to damage this building calls `_ensure_building_per_block`
+## first, exactly as the islands do.
+func _reshape_building(id: int, merged: bool) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or not _brick_bodies.has(id):
+		return
+	if bool(_brick_merged.get(id, false)) == merged:
+		return
+	var _t_reshape := Time.get_ticks_usec()
+	var body: RID = _brick_bodies[id]
+	var space := PhysicsServer3D.body_get_space(body)
+	# Out of the space first: a shape call on a body IN a space costs time
+	# proportional to its shape count, and this body has thousands.
+	if space.is_valid():
+		PhysicsServer3D.body_set_space(body, RID())
+	PhysicsServer3D.body_clear_shapes(body)
+	# skip_dead now, where promotion cannot: by this point the holes are known,
+	# so a dead brick costs no box at all rather than a disabled one.
+	var built: Dictionary = world.add_chunk_shapes(body, b.chunk, Vector3.ZERO, true,
+			merged and MERGE_SHAPES)
+	_brick_shapes[id] = built.map
+	_brick_merged[id] = merged
+	if space.is_valid():
+		PhysicsServer3D.body_set_space(body, space)
+	var cost := float(Time.get_ticks_usec() - _t_reshape) / 1000.0
+	if merged:
+		_merges += 1
+		_merged_boxes += int(built.count)
+		_merge_ms += cost
+		_merge_worst = maxf(_merge_worst, cost)
+	else:
+		_unmerges += 1
+		_unmerge_ms += cost
+
+
+## About to damage this building, so it needs shapes it can disable one at a
+## time.
+func _ensure_building_per_block(id: int) -> void:
+	if bool(_brick_merged.get(id, false)):
+		_reshape_building(id, false)
+
+
+## Merge the collision of buildings the fighting has moved on from.
+##
+## One a tick, and only for a building that is not queued for anything: a
+## merge undone by the next hit is two shape builds for nothing, which is the
+## mistake the island spawn path already records.
+func _merge_quiet_buildings() -> void:
+	# Not while the scene is busy. A merge is a whole-chunk shape rebuild, and
+	# measured on the stress pass it is 5-15 ms of one -- doing that while the
+	# damage queue is draining took the phase from 17 ms a frame to 94. This is
+	# idle work: it waits for the fighting to stop, which is also when its
+	# result is worth having.
+	if not _damage_queue.is_empty() or not _dirty.is_empty() 			or not _remesh_queue.is_empty() or not _promote_queue.is_empty() 			or not _pending_bricks.is_empty():
+		return
+	# And not while anything is still moving. Swapping the shapes of a static
+	# body wakes whatever is resting on it, so a rebuild during a settling
+	# scene re-activates the whole pile -- which is what the measurement below
+	# actually found, and it costs far more than the boxes it saves.
+	var isl: Dictionary = islands.report()
+	if int(isl.islands) != int(isl.settled):
+		return
+	var merged := 0
+	var now := Time.get_ticks_msec()
+	for id in _materialised:
+		if merged >= MERGES_PER_TICK:
+			break
+		if bool(_brick_merged.get(id, false)) or _toppling.has(id):
+			continue
+		if _dirty.has(id) or _remesh_queue.has(id) or _pending_disable.has(id):
+			continue
+		if now - int(_last_hit.get(id, 0)) < MERGE_AFTER_MS:
+			continue
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		_reshape_building(id, true)
+		merged += 1
 
 
 ## Something changed this building's structure, so it needs re-solving.
@@ -1042,6 +1158,9 @@ func _remesh(id: int, force_full: bool = false) -> void:
 func _disable(id: int, ids: PackedInt32Array) -> void:
 	if ids.is_empty() or not _brick_bodies.has(id):
 		return
+	# Merged boxes span blocks, so there is nothing to disable one at a time
+	# until the shapes are per block again.
+	_ensure_building_per_block(id)
 	var body: RID = _brick_bodies[id]
 	var map: Dictionary = _brick_shapes[id]
 	# Lifting the body out of the space first: each shape call costs time
@@ -1194,7 +1313,11 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		# anybody can see it: its contents are part of what the damage does
 		# (Interiors section 5). The blast then destroys them like anything
 		# else in its way.
-		if registry.compromise_rooms(b.id, point, radius) > 0:
+		# Only a room somebody could actually see is built. The rest are
+		# resolved in the record, which is Interiors section 5.1's own rule and
+		# the difference between 20 ms a frame and 108 in a firefight.
+		var watched_room: bool = camera != null 				and camera.global_position.distance_to(point) < ROOM_RANGE * 1.5
+		if registry.compromise_rooms(b.id, point, radius, watched_room) > 0 and watched_room:
 			for room in registry.rooms_of(b.id):
 				if room.active:
 					_add_room_shapes(b.id, room.id)
@@ -1220,6 +1343,7 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		# the tick. _disable lifts the body out of its space and back, and
 		# _remesh walks every baked face; doing either once per HIT meant a
 		# burst of fire paid for them over and over on the same building.
+		_last_hit[b.id] = Time.get_ticks_msec()
 		if not _pending_disable.has(b.id):
 			_pending_disable[b.id] = PackedInt32Array()
 		_pending_disable[b.id].append_array(killed)
@@ -1396,6 +1520,8 @@ func _physics_process(_delta: float) -> void:
 	# back. The damage record stays, so the holes are still there next time.
 	if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 		_trim_quiet()
+	if Engine.get_physics_frames() % 8 == 5:
+		_merge_quiet_buildings()
 	if camera != null and Engine.get_physics_frames() % 4 == 3:
 		_stream_rooms()
 	if camera != null and Engine.get_physics_frames() % 4 == 2:
@@ -1612,6 +1738,8 @@ func _demote(id: int, dist: float) -> void:
 	_brick_index_bytes.erase(id)
 	_brick_index_width.erase(id)
 	_brick_shapes.erase(id)
+	_brick_merged.erase(id)
+	_last_hit.erase(id)
 	_dirty.erase(id)
 	_remesh_queue.erase(id)
 	_pending_bricks.erase(id)
@@ -2183,6 +2311,7 @@ func _run_stress_pass() -> void:
 	print("[stress]   occupancy %.1f MB, blocks %.1f MB, bake %.1f MB" % [
 			float(mem.occupancy_bytes) / 1048576.0, float(mem.block_bytes) / 1048576.0,
 			float(int(mem.total_bytes) - int(mem.occupancy_bytes) - int(mem.block_bytes)) / 1048576.0])
+	print("[stress] collision: %s" % _collision_report())
 	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
 	print("[stress] asleep %d piece(s) holding %d block(s) in %.1f KB (%d slept, %d woken)" % [
@@ -3481,6 +3610,39 @@ func _run_walk_pass() -> void:
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit()
+
+
+## How many collision shapes the scene is actually holding, and where.
+##
+## One box per brick is what a large body costs the solver, and the only honest
+## way to decide whether to merge anything is to know who is carrying the boxes
+## -- the standing buildings, the pieces still falling, or the settled wreckage
+## that already merges.
+func _collision_report() -> String:
+	var building_shapes := 0
+	var building_blocks := 0
+	for id in _materialised:
+		if _brick_bodies.has(id):
+			building_shapes += PhysicsServer3D.body_get_shape_count(_brick_bodies[id])
+		var b := registry.get_building(id)
+		if b != null and b.is_materialised():
+			building_blocks += world.get_alive_block_count(b.chunk)
+	var falling := 0
+	var settled_boxes := 0
+	for isl in islands.islands:
+		if not isl.is_valid():
+			continue
+		if isl.settled:
+			settled_boxes += isl.shape_count
+		else:
+			falling += isl.shape_count
+	return ("%d box(es) in %d standing building(s) (%d bricks), %d in pieces still falling, "
+			+ "%d in settled wreckage; buildings merged %d time(s) (%.1f ms total, worst %.1f) "
+			+ "and un-merged %d (%.1f ms); "
+			+ "islands merged %d time(s), %d boxes against %d unmerged") % [
+			building_shapes, _materialised.size(), building_blocks, falling, settled_boxes,
+			_merges, _merge_ms, _merge_worst, _unmerges, _unmerge_ms,
+			islands.merged_shapes, islands.merged_boxes, islands.unmerged_boxes]
 
 
 func _report_phases() -> void:
