@@ -76,6 +76,16 @@ scons platform=windows target=template_debug
 
 `godot-cpp` is pinned as a submodule at the commit this was built against.
 
+## Licence, and what is not licensed
+
+The **code** is [GPL-3.0](LICENSE): use it, change it, redistribute it — and if you distribute a
+changed version, publish your changes too.
+
+Everything else is not. `Docs/` is all rights reserved, assets will be all rights reserved when
+there are any, and the project's name is reserved. [NOTICE.md](NOTICE.md) sets that out, along with
+the trademark disclaimer: **LEGO® is a trademark of the LEGO Group, which has no connection with
+this project**, and no compatibility with any commercial brick system is claimed or intended.
+
 ## State
 
 M0–M4 are in and probed; build mode's staged order is complete through fixtures; interiors have
