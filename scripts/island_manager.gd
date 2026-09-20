@@ -593,9 +593,12 @@ func _join_multimesh(isl: BrickIsland, block_ids: PackedInt32Array) -> void:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
-		var box := BoxMesh.new()
-		box.size = key
-		mm.mesh = box
+		# A chamfered brick, not a cube. This mesh is shared by every single
+		# brick of this size in the debris field, so the bevel costs 44
+		# triangles once -- and a loose brick tumbling past the camera is the
+		# one case where the shaded bevel in brick.gdshader cannot help,
+		# because it is all silhouette.
+		mm.mesh = PieceMeshes.chamfered_box(key)
 		mmi.multimesh = mm
 		var mat := StandardMaterial3D.new()
 		mat.vertex_color_use_as_albedo = true

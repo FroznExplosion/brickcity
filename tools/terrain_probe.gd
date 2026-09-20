@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_check_studs()
 	_check_tile_build()
 	_check_winding()
+	_check_chamfer_mesh()
 	_check_volumetric()
 	_check_wave()
 
@@ -428,6 +429,57 @@ func _check_winding() -> void:
 		print("        " + "   ".join(parts))
 	_ok("every triangle is wound to face the way its normal says",
 		bad == 0, "%d of %d triangles backwards" % [bad, total])
+
+
+## The chamfered debris brick: watertight, correctly wound, and cached.
+func _check_chamfer_mesh() -> void:
+	print("chamfered debris brick")
+	var stud := BrickWorld.get_stud_metres()
+	var brick := BrickTerrain.get_brick_metres()
+	var size := Vector3(stud, brick, stud)
+	var m := PieceMeshes.chamfered_box(size)
+	var arrays := m.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var tris := v.size() / 3
+	_ok("6 faces, 12 bevels and 8 corners", tris == 44, "%d triangles" % tris)
+
+	# Same rule the terrain mesher has to obey, checked here because
+	# `_tri_n` decides the winding at runtime rather than by hand.
+	var bad := 0
+	for i in range(0, v.size(), 3):
+		var cross := (v[i + 1] - v[i]).cross(v[i + 2] - v[i])
+		if cross.length_squared() < 1e-14:
+			continue
+		if cross.normalized().dot(n[i]) > -0.2:
+			bad += 1
+	_ok("every triangle faces the way its normal says", bad == 0, "%d backwards" % bad)
+
+	# It must still be a brick: no vertex outside the box it replaces, and the
+	# chamfer must actually cut the corners in.
+	var aabb := m.get_aabb()
+	_ok("it fits inside the box it replaces",
+		aabb.size.x <= size.x + 1e-4 and aabb.size.y <= size.y + 1e-4
+			and aabb.size.z <= size.z + 1e-4,
+		"%.3f x %.3f x %.3f" % [aabb.size.x, aabb.size.y, aabb.size.z])
+	_ok("and fills it, so the silhouette is unchanged except at the edges",
+		aabb.size.x > size.x - 1e-4 and aabb.size.y > size.y - 1e-4)
+
+	var corner := 0
+	for p in v:
+		if absf(absf(p.x) - size.x * 0.5) < 1e-5 and absf(absf(p.y) - size.y * 0.5) < 1e-5:
+			corner += 1
+	_ok("no vertex sits on a sharp corner any more", corner == 0, "%d" % corner)
+
+	_ok("the mesh is cached per size",
+		PieceMeshes.chamfered_box(size) == m)
+
+	# A 1x1 plate is thinner than two chamfers; it must not invert.
+	var thin := PieceMeshes.chamfered_box(Vector3(stud, BrickWorld.get_plate_metres(), stud))
+	var tb := thin.get_aabb()
+	_ok("a plate-thin brick does not turn inside out",
+		tb.size.y > 0.0 and tb.size.y <= BrickWorld.get_plate_metres() + 1e-4,
+		"%.3f m tall" % tb.size.y)
 
 
 func _check_volumetric() -> void:

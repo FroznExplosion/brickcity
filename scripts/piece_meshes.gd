@@ -221,6 +221,104 @@ static func _slab(st: SurfaceTool, cx: float, y: float, cz: float,
 		_tri(st, n, bot[i], top[j], top[i])
 
 
+## A brick with its edges cut off: 6 inset faces, 12 bevel strips, 8 corner
+## triangles. 44 triangles, watertight, flat-shaded.
+##
+## This is the ONE place real chamfer geometry earns its cost, and it is worth
+## saying why, because the same request for the chunk mesh is refused in
+## `brick.gdshader`.
+##
+## A 13 mm bevel subtends 17.8/distance pixels — 8.9 px at 2 m, 2.2 px at 8 m.
+## On a baked chunk that is millions of triangles to move two pixels on edges
+## that are almost all interior, where the shaded bevel is not an approximation
+## but the correct answer. A loose brick tumbling past the camera is the
+## opposite case on every count: it is entirely silhouette, it is routinely the
+## nearest geometry in the frame, and it is a SHARED instanced mesh — so the
+## 44 triangles are paid once for the whole debris field, not once per brick.
+##
+## Cached per size, because `IslandManager` already keeps one MultiMesh per
+## distinct brick size and there are a handful of those.
+static var _chamfered: Dictionary = {}
+
+const DEBRIS_CHAMFER := 0.013   # metres, the same figure brick.gdshader shades
+
+static func chamfered_box(size: Vector3, chamfer: float = DEBRIS_CHAMFER) -> ArrayMesh:
+	var key := "%.4f,%.4f,%.4f,%.4f" % [size.x, size.y, size.z, chamfer]
+	if _chamfered.has(key):
+		return _chamfered[key]
+
+	var e := size * 0.5
+	# Never eat more than a third of the smallest side, or a 1x1 plate turns
+	# into an octahedron.
+	var c: float = minf(chamfer, minf(e.x, minf(e.y, e.z)) * 0.34)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var axes := [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
+
+	# --- 6 faces, each inset by the chamfer on its two free axes -----------
+	for ai in 3:
+		for sgn in [-1.0, 1.0]:
+			var n: Vector3 = axes[ai] * sgn
+			var u: Vector3 = axes[(ai + 1) % 3]
+			var v: Vector3 = axes[(ai + 2) % 3]
+			var centre := n * e[ai]
+			var du: Vector3 = u * (e[(ai + 1) % 3] - c)
+			var dv: Vector3 = v * (e[(ai + 2) % 3] - c)
+			_quad_n(st, n, centre - du - dv, centre + du - dv,
+				centre + du + dv, centre - du + dv)
+
+	# --- 12 bevel strips, one per edge -------------------------------------
+	for ai in 3:
+		var bi: int = (ai + 1) % 3
+		var li: int = (ai + 2) % 3        # the axis the strip runs along
+		for sa in [-1.0, 1.0]:
+			for sb in [-1.0, 1.0]:
+				var na: Vector3 = axes[ai] * sa
+				var nb: Vector3 = axes[bi] * sb
+				var along: Vector3 = axes[li] * (e[li] - c)
+				# One long edge sits on face A, the other on face B.
+				var pa: Vector3 = na * e[ai] + nb * (e[bi] - c)
+				var pb: Vector3 = na * (e[ai] - c) + nb * e[bi]
+				_quad_n(st, (na + nb).normalized(),
+					pa - along, pa + along, pb + along, pb - along)
+
+	# --- 8 corner triangles -------------------------------------------------
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				var sgn := Vector3(sx, sy, sz)
+				var p1 := Vector3(sx * e.x, sy * (e.y - c), sz * (e.z - c))
+				var p2 := Vector3(sx * (e.x - c), sy * e.y, sz * (e.z - c))
+				var p3 := Vector3(sx * (e.x - c), sy * (e.y - c), sz * e.z)
+				_tri_n(st, sgn.normalized(), p1, p2, p3)
+
+	var mesh := st.commit()
+	_chamfered[key] = mesh
+	return mesh
+
+
+## Emit a triangle facing `n`, fixing the winding if it came in backwards.
+##
+## The convention, read off the one face always known to render: for outward
+## normal N, (b - a) x (c - a) must point along -N. Checking it here instead of
+## getting the sign parity right by hand at 26 call sites is what stops this
+## turning into the mask mesher's inverted-winding bug, which was invisible and
+## silent for four rounds.
+static func _tri_n(st: SurfaceTool, n: Vector3, a: Vector3, b: Vector3,
+		c: Vector3) -> void:
+	if (b - a).cross(c - a).dot(n) > 0.0:
+		_tri(st, n, a, c, b)
+	else:
+		_tri(st, n, a, b, c)
+
+
+static func _quad_n(st: SurfaceTool, n: Vector3, a: Vector3, b: Vector3,
+		c: Vector3, d: Vector3) -> void:
+	_tri_n(st, n, a, b, c)
+	_tri_n(st, n, a, c, d)
+
+
 static func _tri(st: SurfaceTool, n: Vector3, a: Vector3, b: Vector3, c: Vector3) -> void:
 	st.set_normal(n)
 	st.add_vertex(a)

@@ -2919,9 +2919,9 @@ the stress pass could not say" for why it prints all three.
 M0-M4 are done and probed. The three things standing between this and a city that holds 60 fps
 under fire, in the order they are worth doing:
 
-1. **Try `physics/3d/run_on_separate_thread`.** Untested and not obviously safe -- islands spawn
-   nodes from `_physics_process`, which would then be running off the main thread -- but the solver
-   is still 30-50 ms of a collapse frame and this is where it would go.
+1. ~~**Try `physics/3d/run_on_separate_thread`.**~~ **Tried, measured, rejected** -- see "Physics on
+   a separate thread". The solver is still the biggest single cost in a collapse; what is left to
+   try on it is item 4, not another thread.
 2. **Fewer floor plates.** 54% of a building by block count is flooring, and everything that scales
    with blocks pays for it first. This is a design decision about how buildings look, not an
    optimisation to make unilaterally.
@@ -2948,6 +2948,10 @@ Build mode's §11 is complete, Stage 5 included, and so is the cheap tier §12 q
 a build's shell is a voxelised silhouette of its own recipe, so a creation streams and trims like
 anything else and shows its damage while it does. The dormant tier that was left over from
 fixtures is in too, for the layer that needed it most: wreckage sleeps into a `ChunkRecord` when
-nobody is near it. And [Interiors](Interiors.md) has its first pass -- rooms from the recipe,
-contents from a seed, a diff for what changed, and §5.2's analytic resolve -- which leaves its
-**portal test** (§3) as the piece that decides what a shell can show of its own interior.
+nobody is near it. And [Interiors](Interiors.md) §1-§5 are in: rooms from the recipe,
+contents from a seed, a diff for what changed, the portal test, §5.2's analytic resolve and
+§4.1's seeded spill. What that leaves on the interiors side is occlusion (§3's
+`OccluderInstance3D`) and §5.3's audio rule, which needs audio to exist first.
+
+**The measurement everything here rests on has a hole in it: every number in this document is a
+`template_debug` build.** Item 7 is cheap to try and would re-baseline the lot.

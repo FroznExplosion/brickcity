@@ -284,9 +284,7 @@ func _spawn_debris(buf: PackedFloat32Array, origin: Vector3) -> void:
 		cs.shape = shape
 		body.add_child(cs)
 		var mi := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = size
-		mi.mesh = box
+		mi.mesh = PieceMeshes.chamfered_box(size)
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = col
 		mat.roughness = 0.9
@@ -372,6 +370,7 @@ func _run_shots() -> void:
 	# whole mesher exists for: is the ground LAID, out of 2x4s and their
 	# neighbours, or is it a moulded baseplate with a grid drawn on it?
 	await _shot_packing()
+	await _shot_debris_ab()
 	print("[terrain] pieces/tris/studs written to shots/")
 	get_tree().quit()
 
@@ -433,6 +432,53 @@ func _shot_blast() -> void:
 	await _frames(6)
 	get_viewport().get_texture().get_image().save_png("res://shots/terrain_ceiling.png")
 	print("[terrain] shot written: terrain_ceiling.png")
+
+
+## Chamfered brick against plain box, side by side, at the distance debris is
+## actually seen from. This is the comparison that decides whether the bevel
+## is worth 44 triangles — the same shape of test the `--chamfer` gate runs
+## for the shaded version, so the two answers are comparable.
+func _shot_debris_ab() -> void:
+	BrickTerrain.clear_terrain_edits()
+	for tile in _tiles:
+		tile.rebuild(_terrain_mat)
+	_water.visible = false
+
+	var stud := BrickWorld.get_stud_metres()
+	var brick := BrickTerrain.get_brick_metres()
+	var size := Vector3(stud * 2.0, brick, stud * 4.0)
+	var ground := float(BrickTerrain.surface_plate(0, 0)) * BrickWorld.get_plate_metres()
+	var holder := Node3D.new()
+	add_child(holder)
+
+	for i in 6:
+		var mi := MeshInstance3D.new()
+		var chamfered := i % 2 == 0
+		mi.mesh = PieceMeshes.chamfered_box(size) if chamfered else _plain_box(size)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = BrickWorld.get_filament_colour(4 if chamfered else 8)
+		mat.roughness = 0.85
+		mi.material_override = mat
+		# Tumbled, so the comparison is on silhouettes and not on one flat face.
+		mi.position = Vector3(-1.5 + float(i) * 0.6, ground + 1.35, 0.0)
+		mi.rotation = Vector3(0.45 + float(i) * 0.09, 0.7 + float(i) * 0.31, 0.2)
+		holder.add_child(mi)
+
+	# 2.4 m: where a brick that has just come off a wall actually passes
+	# you. At that range the 13 mm bevel is 7.4 px, which is the whole
+	# question.
+	_camera.position = Vector3(0.0, ground + 1.7, 2.4)
+	_camera.look_at(Vector3(0.0, ground + 1.35, 0.0), Vector3.UP)
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/debris_chamfer_ab.png")
+	print("[terrain] shot written: debris_chamfer_ab.png  (red = chamfered, blue = plain box)")
+	holder.queue_free()
+
+
+func _plain_box(size: Vector3) -> BoxMesh:
+	var b := BoxMesh.new()
+	b.size = size
+	return b
 
 
 func _shot_packing() -> void:
