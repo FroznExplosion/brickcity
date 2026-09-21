@@ -689,8 +689,9 @@ building's own chunk -- so it is destructible, meshed, collided, rideable and sp
 already existed, and Interiors §7 question 3 answers itself.
 
 **Three triggers, and they are not the same urgency** (Interiors §5). PROXIMATE is presentation:
-walk within 26 m of a room in a building that is already bricks and it lays its contents, one room
-per streaming pass; walk past 42 m and it takes them back. COMPROMISED is truth: a blast opens every
+walk within 26 m of a room and it lays its contents, one room per streaming pass; walk past 42 m and
+it takes them back. Getting the building itself that far is the other half, and it took a second
+pass to see -- "Walking up to a building is what makes it bricks", below. COMPROMISED is truth: a blast opens every
 room its volume reaches **before the hit lands**, whether or not anybody is there, because the
 contents are part of what the damage does. And VISIBLE is Interiors §3's portal test, below.
 
@@ -792,6 +793,57 @@ Two lessons worth keeping, both about the same thing:
   room's furniture mid-firefight was so expensive.
 * **Measure the baseline you think you have.** Three arms of this experiment were run against a
   contaminated one, and every conclusion drawn from them was wrong.
+
+### Walking up to a building is what makes it bricks
+
+Rooms only stream for a building that is already bricks, and for a long time the only thing that
+made a building bricks was **being shot**. So an intact building had no interior at all, and the
+first shot into one materialised it and compromised its rooms in the same frame: the furniture
+arrived *in the act of being destroyed*. Walk up to an untouched tower and there was nothing inside
+it, because nothing had asked.
+
+The comment above `ROOM_RANGE` used to defend this -- "materialising a whole tower because somebody
+walked past it would be the opposite of the point" -- and it was wrong in a specific way. It is only
+the opposite of the point if residency is *expensive at rest*, and by this point it is not: a
+building that has been quiet for ten seconds merges its collision down ("Merged collision for
+standing buildings"), and a resident building past 110 m has already given its mesh back. What was
+being protected against had been fixed somewhere else.
+
+So residency is a distance as well as a hit. `PROMOTE_RANGE` is **46 m**, measured from the
+building's BOX rather than its origin -- standing with your face against the wall of a forty-metre
+tower is not forty metres from that building, and the rooms behind that wall are the ones about to
+be asked for. The band is chosen by what sits on either side of it: far enough outside `ROOM_RANGE`
+(26 m) that a building is bricks well before its rooms want to open, and far enough inside
+`TRIM_RADIUS` (90 m) that the trim can never take back what the walk just gave. Two a pass, nearest
+first, capped at a queue of 24 so a spawn or a teleport cannot queue a district at once.
+
+**Promotion without a solve.** A hit changes the structure and the structure has to be re-answered.
+Walking up to an intact building changes nothing -- a stress pass, a stability check and a
+detached-group walk over every brick would all return "nothing happened". So `_promote` takes a
+`solve` flag, and the proximity path passes `b.is_damaged()`: a building that was hit, trimmed, and
+has now been walked back up to still gets its solve; one that has never been touched does not.
+
+**And a queue served in the wrong order is a queue that never arrives.** The first attempt looked
+like a failure of the range: the building the camera was pressed against went resident and then
+furnished nothing, for fifteen seconds. It was not the range. Rooms open **one per streaming pass**,
+and the candidates were walked in grid-cell order -- which was harmless while two or three buildings
+in the city were bricks, and became a starvation bug the moment a whole district was. The buildings
+at one corner of the search took every pass. Rooms are picked nearest-first now, the same order the
+promotions use, and the expensive half -- scanning walls for holes to see through -- runs only when
+nothing is close enough to walk into, because there is no point paying for a portal test while a
+room at arm's length is still waiting.
+
+**Cost: none that the passes can find.** `--shot` 16.8 ms against 16.7; the 200-building `--stress`
+17.3 against 17.2, which is the same number twice. The gates say the rest of it: from 150 m the
+building is a shell holding nothing, and standing against it makes it bricks, furnishes a room and
+lays real bricks **with the building still undamaged and nobody having fired a thing**.
+
+The `--walk` gate lost a claim to this and got a better one. It used to assert that a walker is
+stopped by the shell tier's collision, four metres from a wall -- which is now inside
+`PROMOTE_RANGE`, so what stops the walker is bricks. The shell's collision is still worth testing
+and is still tested, from seventy metres with a ray, which is how a shell gets hit in practice
+anyway: `FIRE_RANGE` is 2 km against `SHELL_RANGE`'s 260 m, so most shots that land on a building
+land on one of these.
 
 ### Wreckage, given back
 

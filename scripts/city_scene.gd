@@ -98,6 +98,28 @@ var _toppling := {}   ## building id -> already handed to physics
 ## M4: promotion is ~42 ms, so several landing in one frame is a visible hitch.
 ## The queue spreads them; a blast's own target is still promoted immediately.
 const PROMOTIONS_PER_FRAME := 1
+## How close somebody has to be for a building to become bricks on its own.
+##
+## Promotion used to be damage's job alone, and the comment above ROOM_RANGE
+## used to explain why: materialising a tower because somebody walked past it
+## looked like the opposite of the point. It is not, because a room can only
+## stream for a building that is already bricks -- so an intact building had no
+## interior at all, and the FIRST shot into one both materialised it and
+## compromised its rooms in the same frame. The furniture arrived in the act of
+## being destroyed.
+##
+## So residency is a distance as well as a hit. The band is chosen by the two
+## things on either side of it: far enough outside ROOM_RANGE (26 m) that a
+## building is bricks well before its rooms want to open, and far enough inside
+## TRIM_RADIUS (90 m) that the trim can never take back what this just gave.
+const PROMOTE_RANGE := 46.0
+## Nearest first, two a pass, fifteen passes a second. Promotion is already
+## rate-limited downstream -- the queue drains at PROMOTIONS_PER_FRAME and the
+## face bake finishes one building a tick -- so this only decides how fast the
+## queue fills, and the cap stops a spawn or a teleport queueing a whole
+## district at once.
+const PROMOTE_PER_PASS := 2
+const PROMOTE_QUEUE_MAX := 24
 ## How many islands may be cut out of standing structure per tick. Splitting a
 ## 2800-brick section out of its building costs ~6 ms in the extension alone --
 ## a new chunk, its occupancy grid, and every block copied across -- so eleven
@@ -232,6 +254,9 @@ var _damage_queue: Array = []
 var _pending_disable := {}
 ## Lookup grid cell -> building ids whose footprint touches it.
 var _building_grid := {}
+## building id -> its box in the world. See _world_box.
+var _world_boxes := {}
+var _near_promotions := 0
 ## Every structural command, for replay, saving and eventually the wire.
 ## Off unless something asks for it; see DamageLog.
 var damage_log := DamageLog.new()
@@ -255,10 +280,9 @@ var _grid_view: MeshInstance3D
 ## before it lets go of them. Interiors section 3's hysteresis, so standing in a
 ## doorway does not thrash.
 ##
-## Rooms are only streamed for buildings that are ALREADY bricks. Materialising
-## a whole tower because somebody walked past it would be the opposite of the
-## point; the portal test that would let a shell show its interior is Interiors
-## section 3 and is not built.
+## Rooms are only streamed for buildings that are ALREADY bricks -- which is
+## why buildings become bricks for being NEAR and not only for being shot; see
+## PROMOTE_RANGE.
 const ROOM_RANGE := 26.0
 const ROOM_SLEEP_RANGE := 42.0
 ## One a pass, like every other streaming decision here: opening a room lays
@@ -273,6 +297,11 @@ const ROOM_VIEW_RANGE := 70.0
 const ROOM_VIEW_COS := 0.35
 ## How many rooms may have their walls re-read in one pass. See _can_see_into.
 const ROOM_SCANS_PER_PASS := 2
+## How many rooms a pass may ACTIVATE while trying to place ROOMS_PER_PASS of
+## them. A room generated with nothing in it lays no bricks and costs no
+## collision, so it should not spend the pass -- but it still must not be able
+## to spend the whole district either.
+const ROOM_TRIES_PER_PASS := 6
 var _room_scans := 0
 ## Building id -> the chunk its bricks became when it came down. A room that
 ## was never opened is spilled into THAT, not into a building that no longer
@@ -613,22 +642,52 @@ func _stream_rooms() -> void:
 	# The VIEW range, not the walking range: a hole in a wall is a way to see
 	# into a room from further than anybody could walk to it, and scoping this
 	# loop to ROOM_RANGE meant the portal test below was never asked.
+	# NEAREST FIRST, and that is not a nicety. One room a pass is a queue, and
+	# this queue used to be served in grid-cell order: with the whole district
+	# around the player resident (PROMOTE_RANGE), the buildings at one corner of
+	# the search took every pass and the building the player was standing in was
+	# never reached at all. Distance is the only order that means anything here.
+	var shut: Array = []
+	var here_buildings: Array = []
 	for id in _near_buildings(here, ROOM_VIEW_RANGE):
-		if opened >= ROOMS_PER_PASS:
-			break
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
 			continue
+		here_buildings.append(b)
 		for room in registry.rooms_of(id):
 			if room.active:
 				continue
-			var near := _box_distance(room.world_box(b.xform), here) <= ROOM_RANGE
-			# Close enough to walk in, or visible through a hole in its wall.
-			if not near and not (b.is_damaged() and _can_see_into(b, room)):
-				continue
-			if _open_room(id, room.id) > 0:
-				opened += 1
+			var d := _box_distance(room.world_box(b.xform), here)
+			if d <= ROOM_RANGE:
+				shut.append([d, id, room.id])
+	shut.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+	# A room whose whole manifest is empty activates without laying anything, so
+	# it costs nothing and does not count against the pass -- but a handful of
+	# them in a row must not turn one pass into a walk over the district.
+	var tries := 0
+	for cand in shut:
+		if opened >= ROOMS_PER_PASS or tries >= ROOM_TRIES_PER_PASS:
+			break
+		tries += 1
+		if _open_room(int(cand[1]), int(cand[2])) > 0:
+			opened += 1
+
+	# Nothing close enough to walk into: a hole in a wall is a way to SEE into a
+	# room from further than anybody could walk to it. Second, because the scan
+	# for holes is the expensive half and there is no point paying for it while
+	# there is still a room at arm's length waiting to be laid.
+	if opened < ROOMS_PER_PASS:
+		for b in here_buildings:
+			if opened >= ROOMS_PER_PASS:
 				break
+			if not b.is_damaged():
+				continue
+			for room in registry.rooms_of(b.id):
+				if room.active or not _can_see_into(b, room):
+					continue
+				if _open_room(b.id, room.id) > 0:
+					opened += 1
+					break
 
 	# And the wreckage: a building that came down still has rooms, and what was
 	# in them is owed to whoever walks up to the pile.
@@ -749,8 +808,16 @@ func _shape_rid(size: Vector3) -> RID:
 
 ## Applying damage does not require a player to be nearby; only SHOWING debris
 ## does (Plan §4.4). So this materialises whenever the building is hit, wherever
-## the hit came from.
-func _promote(id: int) -> int:
+## the hit came from -- and, since PROMOTE_RANGE, whenever somebody walks up to
+## one as well.
+##
+## `solve` is what tells those two apart. A hit changes the structure and the
+## structure has to be re-answered; walking up to an INTACT building changes
+## nothing, and a stress pass, a stability check and a detached-group walk over
+## every brick in it would all return "nothing happened". The proximity path
+## passes `b.is_damaged()`, so a building that was hit, trimmed and has now been
+## walked back up to still gets its solve.
+func _promote(id: int, solve: bool = true) -> int:
 	var b := registry.get_building(id)
 	if b == null:
 		return -1
@@ -799,7 +866,8 @@ func _promote(id: int) -> int:
 
 	_materialised.append(id)
 	_promote_frames(id)
-	_mark_dirty(id)
+	if solve:
+		_mark_dirty(id)
 	_promotions += 1
 	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	return chunk
@@ -1512,7 +1580,9 @@ func _physics_process(_delta: float) -> void:
 
 	var promoted := 0
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
-		_promote(_promote_queue.pop_front())
+		var pid: int = _promote_queue.pop_front()
+		var pb := registry.get_building(pid)
+		_promote(pid, pb == null or pb.is_damaged())
 		promoted += 1
 	t = _mark("promote", t)
 
@@ -1526,6 +1596,8 @@ func _physics_process(_delta: float) -> void:
 		_stream_rooms()
 	if camera != null and Engine.get_physics_frames() % 4 == 2:
 		_stream_detail()
+	if camera != null and Engine.get_physics_frames() % 4 == 1:
+		_stream_residency()
 	# Every fourth tick is fifteen times a second: far faster than anyone can
 	# cross an LOD band, and a quarter of the cost.
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
@@ -1561,6 +1633,60 @@ func _free_shell(id: int) -> void:
 	if _shell_bodies.has(id):
 		PhysicsServer3D.free_rid(_shell_bodies[id])
 		_shell_bodies.erase(id)
+
+
+## A building's box in the world.
+##
+## `local_box` is in the building's own frame and a placement can be rotated, so
+## the eight corners are what has to be covered -- the same reasoning as
+## `_index_building`, which needs only the XZ of it. Buildings do not move, so
+## the answer is kept.
+func _world_box(b: BuildingRegistry.Building) -> AABB:
+	if _world_boxes.has(b.id):
+		return _world_boxes[b.id]
+	var box := registry.local_box(b.id)
+	var out := AABB(b.xform * box.position, Vector3.ZERO)
+	for i in range(1, 8):
+		out = out.expand(b.xform * (box.position + Vector3(
+				box.size.x if (i & 1) else 0.0,
+				box.size.y if (i & 2) else 0.0,
+				box.size.z if (i & 4) else 0.0)))
+	_world_boxes[b.id] = out
+	return out
+
+
+## Make buildings near the player bricks, before anything shoots them.
+##
+## The middle of the LOD ladder was reachable from one direction only: damage
+## pushed a building up it and the trim pulled it back down. This is the other
+## direction -- walking towards one. See PROMOTE_RANGE.
+##
+## Measured against the BOX, not the origin: standing with your face against the
+## wall of a forty-metre tower is not forty metres from the building, and the
+## rooms inside that wall are about to be asked for.
+func _stream_residency() -> void:
+	if _promote_queue.size() >= PROMOTE_QUEUE_MAX:
+		return
+	var here := camera.global_position
+	var found: Array = []
+	for id in _near_buildings(here, PROMOTE_RANGE):
+		var b := registry.get_building(id)
+		if b == null or b.is_materialised() or b.toppled or b.is_build():
+			continue
+		if _promote_queue.has(id):
+			continue
+		var dist := _box_distance(_world_box(b), here)
+		if dist > PROMOTE_RANGE:
+			continue
+		found.append([dist, id])
+	if found.is_empty():
+		return
+	# Nearest first: the one whose rooms are about to be asked for is the one
+	# worth a promotion this pass.
+	found.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+	for i in mini(PROMOTE_PER_PASS, found.size()):
+		_promote_queue.append(int(found[i][1]))
+		_near_promotions += 1
 
 
 ## M4, far tier: give distant buildings their shells, take them back when they
@@ -2120,8 +2246,8 @@ func _run_shot_pass() -> void:
 		isl.peak_drop, isl.long_landings])
 	print("[city]   landings rejected: %d too gentle, %d too short; longest piece landed %.1f m" % [
 		isl.soft_landings, isl.short_landings, isl.longest_landed])
-	print("[city] promotions: %d in %.0f ms (%.1f ms each)" % [
-		_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1)])
+	print("[city] promotions: %d in %.0f ms (%.1f ms each), %d of them for somebody walking up" % [
+		_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _near_promotions])
 	print("[city] falling debris sheared %d brick(s) off what it landed on" % _impact_damage)
 
 	# --- measurement 2: is settled wreckage still breakable? -----------------
@@ -2328,8 +2454,8 @@ func _run_stress_pass() -> void:
 			_trim_split.demat, _trim_split.free, _trim_split.shell])
 	print("[stress] peak %.1f MB with %d resident; after trimming %.1f MB with %d" % [
 			peak_mb, peak_res, float(mem.total_bytes) / 1048576.0, rep.materialised])
-	print("[stress] promotions: %d in %.0f ms (%.1f ms each)" % [
-			_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1)])
+	print("[stress] promotions: %d in %.0f ms (%.1f ms each), %d of them for somebody walking up" % [
+			_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _near_promotions])
 	if _frame_samples > 0:
 		print("[stress] whole run: mean %.1f ms, worst %.1f ms, %d of %d over 33.3 ms (%.1f%%)" % [
 			_frame_sum / _frame_samples, _frame_worst, _frames_over_30, _frame_samples,
@@ -2756,8 +2882,44 @@ func _run_rooms_pass() -> void:
 	print("[rooms] what is inside a building, and what it costs")
 	var b := registry.get_building(0)
 	var rep: Dictionary = registry.room_report()
-	_gate_ok("a city of recipes holds no rooms at all", int(rep.rooms) == 0,
+	_gate_ok("a city nobody has reached holds no rooms at all", int(rep.rooms) == 0,
 			"%d" % int(rep.rooms))
+
+	# Walking up to one is enough. Nothing shoots this building and nothing
+	# needs to: what it shows is what PROMOTE_RANGE gives it, and before that
+	# range existed an intact building had no interior at all -- the first shot
+	# into one both materialised it and compromised its rooms in the same frame,
+	# so the furniture arrived in the act of being destroyed.
+	var near_id: int = mini(12, registry.buildings.size() - 1)
+	var nb := registry.get_building(near_id)
+	var nbox := registry.local_box(near_id)
+	var nmid: Vector3 = nb.xform * (nbox.position + nbox.size * 0.5)
+	camera.global_position = nmid + Vector3(0.0, 6.0, -150.0)
+	camera.look_at(nmid, Vector3.UP)
+	await _frames(20)
+	_gate_ok("from a hundred and fifty metres it is a shell, not bricks",
+			not nb.is_materialised())
+	_gate_ok("and it is holding nothing", _open_rooms_of(near_id) == 0)
+
+	camera.global_position = nmid + Vector3(0.0, 1.0, -2.0)
+	camera.look_at(nmid, Vector3.UP)
+	var walk_guard := 0
+	var near_laid := 0
+	while walk_guard < 900 and near_laid == 0:
+		await _frames(1)
+		walk_guard += 1
+		near_laid = 0
+		for room in registry.rooms_of(near_id):
+			if not room.active:
+				continue
+			for item in room.items:
+				near_laid += (item.get("blocks", PackedInt32Array()) as PackedInt32Array).size()
+	_gate_ok("standing against it makes it bricks, unshot", nb.is_materialised())
+	_gate_ok("and furnishes a room without anybody firing a thing",
+			_open_rooms_of(near_id) > 0, "%d open" % _open_rooms_of(near_id))
+	_gate_ok("with the building still undamaged", not nb.is_damaged())
+	_gate_ok("which laid real bricks inside an intact building", near_laid > 0,
+			"%d blocks" % near_laid)
 
 	# Shoot it: a building becomes bricks, and its rooms become askable.
 	var box := registry.local_box(0)
@@ -3486,6 +3648,24 @@ func _run_walk_pass() -> void:
 	var d: float = b.recipe.footprint_z * 0.35
 	var centre: Vector3 = b.xform.origin + Vector3(w * 0.5, 0.0, d * 0.5)
 	var start := centre - Vector3(0.0, 0.0, d * 0.5 + 4.0)
+
+	# The shell's own collision, tested from outside PROMOTE_RANGE -- which is
+	# now the only place a shell survives being looked at, because walking up to
+	# a building is what makes it bricks. A ray is how a shell gets hit in
+	# practice anyway: FIRE_RANGE is 2 km against SHELL_RANGE's 260 m, so most
+	# shots that land on a building land on one of these.
+	camera.set_walking(false)
+	camera.global_position = centre - Vector3(0.0, -3.0, d * 0.5 + 70.0)
+	camera.look_at(Vector3(centre.x, 3.0, centre.z), Vector3.UP)
+	await _frames(20)
+	_gate_ok("from seventy metres it is a shell and nothing else",
+			_shells.has(0) and not b.is_materialised())
+	var shell_q := PhysicsRayQueryParameters3D.create(
+			camera.global_position, Vector3(centre.x, 3.0, centre.z))
+	shell_q.collision_mask = Layers.PAWN_MASK
+	_gate_ok("and it is solid to the thing a walker collides with",
+			not get_world_3d().direct_space_state.intersect_ray(shell_q).is_empty())
+
 	camera.set_walking(false)
 	camera.global_position = start + Vector3(0.0, DebugCamera.EYE_HEIGHT, 0.0)
 	camera.look_at(Vector3(centre.x, camera.global_position.y, centre.z), Vector3.UP)
@@ -3499,7 +3679,13 @@ func _run_walk_pass() -> void:
 	_gate_ok("walking stops outside the wall (z %.2f, wall at %.2f)" % [
 			walked.z, centre.z - d * 0.5],
 			walked.z < centre.z - d * 0.5)
-	_gate_ok("and the shell is still there to have stopped it", _shells.has(0))
+	# And what stopped it is the brick tier, not the shell: standing four metres
+	# from a wall is inside PROMOTE_RANGE, so by the time the walker arrives the
+	# building it walked up to is made of bricks. That is the whole point of the
+	# range -- the interior has to exist before anybody shoots a hole in it.
+	_gate_ok("and walking up to it made it bricks, with nobody firing",
+			b.is_materialised() and not b.is_damaged())
+	_gate_ok("so the shell that used to stop the walker is gone", not _shells.has(0))
 
 	camera.set_walking(false)
 	camera.global_position = start + Vector3(0.0, DebugCamera.EYE_HEIGHT, 0.0)
