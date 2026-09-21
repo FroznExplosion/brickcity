@@ -815,6 +815,53 @@ Two lessons worth keeping, both about the same thing:
 * **Measure the baseline you think you have.** Three arms of this experiment were run against a
   contaminated one, and every conclusion drawn from them was wrong.
 
+### A streaming pass cost 183 ms, and none of it was the streaming
+
+Reported from walking round the big city: interiors did not appear until the
+building was shot again, and once they started appearing everything stopped.
+
+The first half was mine. `respawn_buildings` was meant to stop a building giving
+its bricks BACK and taking them again -- the trim putting a shell over rubble --
+and I gated proximity promotion behind it as well. With promotion off, nothing
+made a building bricks except damage, and rooms only stream for a building that
+is already bricks. The switch now gates the trim alone, which is all it was ever
+about: with the trim off nothing is ever de-materialised, so there is nothing
+that could be a respawn.
+
+The second half was the pass itself, and it was 183 ms each on the big shapes.
+Four things, each of them the same mistake -- **work proportional to what
+exists, not to what changed**:
+
+| | before | after |
+|---|---|---|
+| a streaming pass | **183 ms** | **3.3 ms** |
+| candidate gather | 12.5 ms | 0.9 ms |
+
+* **"Have the holes moved?" built the list of holes.** `openings_of` compared
+  `get_dead_blocks(chunk).size()` against the last answer -- allocating a
+  PackedInt32Array of every dead block in a fifty-thousand-block chunk, once per
+  ROOM. `get_dead_block_count` answers without the array, and the answer is
+  memoised for the frame, so four thousand walks of the chunk became one.
+* **The portal test was asked of every room in the building.** Standing inside
+  one of the big shapes, every one of its four thousand rooms is inside
+  `ROOM_VIEW_RANGE`. A pass asks a slice of them and the cursor moves on, with a
+  budget on the raycasts underneath.
+* **Candidates were found by walking every room there is.** Rooms sit on a
+  regular lattice -- storeys, then a grid across each floor -- so which ones are
+  near a point is arithmetic. `RoomManifest.rooms_near` computes the index range
+  directly and the pass measures only what it returns.
+* **Every candidate built a world-space box to be measured.** Eight matrix
+  multiplies and an allocation, a thousand times a pass. The camera goes into
+  the building's space once and `Room.local_distance` is plain arithmetic.
+
+**And one of them was a design answer, not an optimisation.** A 26 m sphere in a
+building of the big shapes spans fifteen storeys, and fourteen of them hold rooms
+the player is standing above or below with a concrete slab in between. A room you
+can WALK into is on your floor or one flight away, and saying so (`ROOM_STOREY_SPAN`)
+took the gather from 12.5 ms to 0.9. That is the separation worth having: not a
+radius, but the cell you are in and the cells next to it -- which is what a portal
+graph is, and what every engine that streams a building this way uses.
+
 ### Odd shapes, and what a building standing on legs breaks
 
 Asked of the system rather than of a bug: what happens to a building that is not
@@ -912,9 +959,9 @@ rooms collide on **their own static body**, made on demand and freed with the br
 to ride anything: a piece that breaks off builds its collision from the chunk, decorative blocks
 included, so the furniture is already covered by a body that exists.
 
-    a room, before          224.7 ms     +0.6 MB
-    with the bake out       104.1 ms     +0.0 MB
-    with its own body         0.9 ms     +0.0 MB
+	a room, before          224.7 ms     +0.6 MB
+	with the bake out       104.1 ms     +0.0 MB
+	with its own body         0.9 ms     +0.0 MB
 
 	the building's 4,000 rooms:  899 s  ->  4 s
 	all of them at once, resident:  +50.7 MB  ->  +1.0 MB

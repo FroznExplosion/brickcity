@@ -123,7 +123,22 @@ static func bake_buttress(world: BrickWorld) -> int:
 ## The vertical layout of a building, band by band. Both the brick recipe and
 ## the shell mesh walk this, so what you see at a distance and what you get when
 ## it materialises are the same building by construction.
+## Memoised. The bands of a tower are a pure function of its course count,
+## and this is asked for on hot paths -- room streaming reaches it twice per
+## building per tick through RoomManifest.lattice_for -- while building a
+## couple of hundred Dictionaries every time it is.
+static var _layouts := {}
+
+
 static func layout(courses: int) -> Array[Dictionary]:
+	if _layouts.has(courses):
+		return _layouts[courses]
+	var built := _build_layout(courses)
+	_layouts[courses] = built
+	return built
+
+
+static func _build_layout(courses: int) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var y := 0
 	out.append({"kind": "base", "y": y, "plates": SLAB_PLATES})

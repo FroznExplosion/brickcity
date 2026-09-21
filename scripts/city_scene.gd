@@ -349,6 +349,11 @@ const ROOM_SLEEP_RANGE := 42.0
 ## and a table five -- so a pass stops on whichever it reaches first.
 const ROOMS_PER_PASS := 12
 const ROOM_BUDGET_MS := 2.0
+## How many storeys either side of the player's own a room may be and still be
+## walked into, or seen into. One flight up or down for walking; a few floors
+## for looking in through a window from outside.
+const ROOM_STOREY_SPAN := 1
+const ROOM_VIEW_STOREY_SPAN := 3
 ## How far "can see into" reaches. Interiors section 7 question 2 asks exactly
 ## this -- a sniper looking through a window 300 m away technically activates a
 ## room -- and a distance cap is the answer it expects.
@@ -358,6 +363,21 @@ const ROOM_VIEW_RANGE := 70.0
 const ROOM_VIEW_COS := 0.35
 ## How many rooms may have their walls re-read in one pass. See _can_see_into.
 const ROOM_SCANS_PER_PASS := 2
+## How many rooms a pass may even ASK the portal question of.
+##
+## The question is cheap per room and there are four thousand rooms in a
+## building of the big shapes, which is not cheap at all -- and standing inside
+## one, every one of them is within ROOM_VIEW_RANGE. A pass looks at a slice and
+## the cursor moves on, so every room is asked within a second or so and no
+## single pass pays for the building.
+const ROOM_VIEW_TESTS_PER_PASS := 24
+## And how many RAYS all of those tests may cast between them. An opening
+## that passes the distance and the view-cone tests still has to be looked
+## through, and a room has four of them: twenty-four rooms is nearly a
+## hundred raycasts, which is the rest of what a pass used to cost.
+const ROOM_RAYS_PER_PASS := 16
+var _view_cursor := 0
+var _room_rays := 0
 ## How many rooms a pass may ACTIVATE while trying to place ROOMS_PER_PASS of
 ## them. A room generated with nothing in it lays no bricks and costs no
 ## collision, so it should not spend the pass -- but it still must not be able
@@ -659,7 +679,17 @@ func _close_room(id: int, index: int) -> void:
 ## A walk over the decorative blocks of one chunk -- hundreds, against the tens
 ## of thousands a face bake walks -- and the building's own mesh is not touched
 ## at all. See FurnitureMesh.
+var _phase_gather := 0.0
+var _phase_open := 0.0
+var _phase_portal := 0.0
+var _phase_close := 0.0
+var _phase_spill := 0.0
+var _furniture_ms := 0.0
+var _furniture_calls := 0
+
+
 func _refresh_furniture(id: int) -> void:
+	var _ft := Time.get_ticks_usec()
 	# Nothing has ever been laid in this building, so there is nothing to
 	# redraw -- and this is the guard that makes the call safe to put on the
 	# damage path. get_decorative_blocks walks every block in the chunk, so
@@ -672,6 +702,8 @@ func _refresh_furniture(id: int) -> void:
 	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
 		return
 	FurnitureMesh.attach(world, b.chunk, _brick_nodes[id], _furniture)
+	_furniture_ms += float(Time.get_ticks_usec() - _ft) / 1000.0
+	_furniture_calls += 1
 
 
 ## `batch` leaves the body out of the physics space for the caller to put back,
@@ -774,6 +806,8 @@ func _can_see_into(b: BuildingRegistry.Building, room: Room) -> bool:
 	# solidity queries a room -- so one room's walls are re-read per pass and
 	# the rest use what was found last time. Budgeted like everything else in
 	# this tick.
+	if _room_rays >= ROOM_RAYS_PER_PASS:
+		return false
 	var openings := registry.openings_of(b.id, room.id, _room_scans < ROOM_SCANS_PER_PASS)
 	if room.openings_at >= 0:
 		_room_scans += 1
@@ -791,6 +825,9 @@ func _can_see_into(b: BuildingRegistry.Building, room: Room) -> bool:
 			continue
 		# And nothing in the way. The opening's centre is inside the hole, so a
 		# ray that reaches it went through the hole.
+		if _room_rays >= ROOM_RAYS_PER_PASS:
+			return false
+		_room_rays += 1
 		var q := PhysicsRayQueryParameters3D.create(eye, at)
 		q.collision_mask = Layers.HITSCAN_MASK
 		var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -807,6 +844,7 @@ func _can_see_into(b: BuildingRegistry.Building, room: Room) -> bool:
 func _stream_rooms() -> void:
 	var here := camera.global_position
 	_room_scans = 0
+	_room_rays = 0
 	var opened := 0
 	# The VIEW range, not the walking range: a hole in a wall is a way to see
 	# into a room from further than anybody could walk to it, and scoping this
@@ -816,6 +854,11 @@ func _stream_rooms() -> void:
 	# around the player resident (PROMOTE_RANGE), the buildings at one corner of
 	# the search took every pass and the building the player was standing in was
 	# never reached at all. Distance is the only order that means anything here.
+	# ASKED, not scanned. Rooms sit on a regular lattice, so which ones are
+	# within reach of a point is arithmetic -- and the difference is the
+	# whole cost of this pass. Walking every room of every building in view
+	# is tens of thousands of box tests fifteen times a second once buildings
+	# have four thousand rooms each, whether or not a single one opens.
 	var shut: Array = []
 	var here_buildings: Array = []
 	for id in _near_buildings(here, ROOM_VIEW_RANGE):
@@ -823,12 +866,20 @@ func _stream_rooms() -> void:
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
 			continue
 		here_buildings.append(b)
-		for room in registry.rooms_of(id):
-			if room.active:
+		# Measured in the BUILDING's space, with the camera brought into it
+		# once. A world AABB per candidate is eight matrix multiplies and an
+		# allocation, and a pass standing inside one of the big shapes has a
+		# thousand candidates.
+		var local: Vector3 = b.xform.affine_inverse() * here
+		for index in registry.rooms_in_range(id, here, ROOM_RANGE, ROOM_STOREY_SPAN):
+			var room := registry.get_room(id, index)
+			if room == null or room.active:
 				continue
-			var d := _box_distance(room.world_box(b.xform), here)
+			var d := room.local_distance(local)
 			if d <= ROOM_RANGE:
 				shut.append([d, id, room.id])
+	# Sorted, but only ever ROOMS_PER_PASS long: the pass opens a dozen and the
+	# rest of a thousand candidates are collected, sorted and thrown away.
 	shut.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
 	# A room whose whole manifest is empty activates without laying anything, so
 	# it costs nothing and does not count against the pass -- but a handful of
@@ -865,15 +916,30 @@ func _stream_rooms() -> void:
 	# for holes is the expensive half and there is no point paying for it while
 	# there is still a room at arm's length waiting to be laid.
 	if opened < ROOMS_PER_PASS:
+		var tested := 0
 		for b in here_buildings:
-			if opened >= ROOMS_PER_PASS:
+			if opened >= ROOMS_PER_PASS or tested >= ROOM_VIEW_TESTS_PER_PASS:
 				break
-			for room in registry.rooms_of(b.id):
-				if room.active or not _can_see_into(b, room):
+			# Out to the VIEW range, because a hole in a wall is a way to see
+			# into a room from further than anybody could walk to it -- but a
+			# SLICE of them, from a cursor that moves on. Standing inside one of
+			# the big shapes, every room in the building is within that range.
+			var candidates := registry.rooms_in_range(b.id, here, ROOM_VIEW_RANGE,
+					ROOM_VIEW_STOREY_SPAN)
+			if candidates.is_empty():
+				continue
+			for k in candidates.size():
+				if opened >= ROOMS_PER_PASS or tested >= ROOM_VIEW_TESTS_PER_PASS:
+					break
+				tested += 1
+				var index: int = candidates[(_view_cursor + k) % candidates.size()]
+				var room := registry.get_room(b.id, index)
+				if room == null or room.active or not _can_see_into(b, room):
 					continue
-				if _open_room(b.id, room.id) > 0:
+				if _open_room(b.id, index) > 0:
 					opened += 1
 					break
+		_view_cursor += ROOM_VIEW_TESTS_PER_PASS
 
 	# And the wreckage: a building that came down still has rooms, and what was
 	# in them is owed to whoever walks up to the pile.
@@ -901,14 +967,17 @@ func _stream_rooms() -> void:
 
 	# Only what is bricks: `_materialised` is the city's own list, so this is
 	# never O(the city) however many buildings there are.
+	# The OPEN ones, which the registry keeps a list of. Walking `rooms` to
+	# find them is a walk over everything that exists to reach a handful.
 	for id in _materialised:
 		var b := registry.get_building(id)
-		if b == null or b.rooms.is_empty() or not b.is_materialised():
+		if b == null or b.open_rooms.is_empty() or not b.is_materialised():
 			continue
-		for room in b.rooms:
-			if not room.active:
+		for index in b.open_rooms.duplicate():
+			var room := registry.get_room(id, index)
+			if room == null or not room.active:
 				continue
-			if _box_distance(room.world_box(b.xform), here) <= ROOM_SLEEP_RANGE:
+			if room.local_distance(b.xform.affine_inverse() * here) <= ROOM_SLEEP_RANGE:
 				continue
 			# Still being looked into is what keeps it open past the range that
 			# would otherwise shut it: Interiors section 3's hysteresis, with
@@ -1901,8 +1970,11 @@ func _world_box(b: BuildingRegistry.Building) -> AABB:
 ## wall of a forty-metre tower is not forty metres from the building, and the
 ## rooms inside that wall are about to be asked for.
 func _stream_residency() -> void:
-	if not respawn_buildings:
-		return
+	# NOT gated on respawn_buildings. Turning that off means a building never
+	# gives its bricks BACK -- it was never meant to stop one getting them in
+	# the first place, and with it off nothing is ever de-materialised, so
+	# there is nothing here that could be a respawn. Gating this as well is
+	# what made interiors wait for a building to be shot before they appeared.
 	if _promote_queue.size() >= PROMOTE_QUEUE_MAX:
 		return
 	var here := camera.global_position
@@ -3354,6 +3426,46 @@ func _run_interiors_pass() -> void:
 			storeys * (c_total / maxf(c_floors, 1)) / 1000.0])
 	await _frames(5)
 	
+	# --- D: what a streaming pass costs, which is what the player feels ----
+	# Arms A to C measure what OPENING a room costs. This measures what the
+	# pass costs when it is deciding -- the part that runs every tick whether
+	# or not anything opens, and the part that was most of the bill.
+	chunk = await _fresh_bricks(biggest)
+	var inside: Vector3 = host.xform * (box.position + box.size * 0.5)
+	camera.global_position = inside
+	await _frames(2)
+	var pass_total := 0.0
+	var pass_worst := 0.0
+	var passes := 40
+	for i in passes:
+		var t := Time.get_ticks_usec()
+		_stream_rooms()
+		var dt := float(Time.get_ticks_usec() - t) / 1000.0
+		pass_total += dt
+		pass_worst = maxf(pass_worst, dt)
+		await _frames(1)
+	print("\n[interiors] D: a streaming pass, standing inside the building")
+	print("[interiors]   %d pass(es), %.2f ms each, worst %.2f ms, %d room(s) open after"
+			% [passes, pass_total / float(passes), pass_worst,
+			_open_rooms_of(biggest)])
+	# What the same decision costs the way it used to be made: measure every
+	# room of every building in view rather than asking which are in range.
+	var t_scan := Time.get_ticks_usec()
+	var seen := 0
+	for id in _near_buildings(camera.global_position, ROOM_VIEW_RANGE):
+		var sb := registry.get_building(id)
+		if sb == null or not sb.is_materialised():
+			continue
+		for room in registry.rooms_of(id):
+			seen += 1
+			_box_distance(room.world_box(sb.xform), camera.global_position)
+	print("[interiors]   the same decision by walking every room: %d room(s), %.2f ms"
+			% [seen, float(Time.get_ticks_usec() - t_scan) / 1000.0])
+	print("[interiors]   of the passes: gather %.0f, open %.0f, portal %.0f, spill %.0f, close %.0f ms"
+			% [_phase_gather, _phase_open, _phase_portal, _phase_spill, _phase_close])
+	print("[interiors]   furniture redraw %.0f ms over %d call(s); lay %.0f, collision %.0f"
+			% [_furniture_ms, _furniture_calls, _room_lay_ms, _room_shape_ms])
+
 	print("\n[interiors] and what the city is carrying")
 	var rep: Dictionary = registry.room_report()
 	print("[interiors]   %d room(s), %d open, %d with a diff" % [

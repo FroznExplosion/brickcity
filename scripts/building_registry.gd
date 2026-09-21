@@ -103,6 +103,22 @@ class Building:
 		else:
 			dead_frames[frame] = ids
 
+	## How many blocks this building has lost, and the frame that was counted on.
+	##
+	## Memoised because counting walks every block in the chunk, and the room
+	## streaming pass asks "have the holes moved" once per ROOM -- which on the
+	## big shapes is four thousand walks of a fifty-thousand-block chunk in a
+	## single tick.
+	var dead_count := -1
+	var dead_frame := -1
+
+	## Which of this building's rooms are holding contents right now.
+	##
+	## Kept rather than found, because finding it means walking `rooms`, and a
+	## building of the big shapes has four thousand of them. The streaming pass
+	## asks this every tick; the answer is normally a handful.
+	var open_rooms: Array[int] = []
+
 	func is_damaged() -> bool:
 		if hit or not dead.is_empty():
 			return true
@@ -216,9 +232,17 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 	var room := get_room(building_id, index)
 	if b == null or room == null or not b.is_materialised() or b.is_build():
 		return []
-	# Not `damage`: that is a method on this class, and shadowing it here
-	# means a later call inside this function would hit the int.
-	var dead := world.get_dead_blocks(b.chunk).size()
+	# The COUNT, not the list, and memoised for the frame. "Have the holes
+	# moved since I last looked" is a comparison, and answering it walks every
+	# block in the chunk -- which the streaming pass asks once per room.
+	#
+	# Not named `damage`: that is a method on this class, and shadowing it
+	# here means a later call inside this function would hit the int.
+	var frame := Engine.get_physics_frames()
+	if b.dead_frame != frame:
+		b.dead_frame = frame
+		b.dead_count = world.get_dead_block_count(b.chunk)
+	var dead: int = b.dead_count
 	if room.openings_at == dead:
 		return room.openings
 	if not may_scan:
@@ -277,6 +301,8 @@ func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
 		else:
 			placed += laid.size()
 	room.active = true
+	if not b.open_rooms.has(index):
+		b.open_rooms.append(index)
 	_rooms_active += 1
 	return placed
 
@@ -314,6 +340,7 @@ func deactivate_room(building_id: int, index: int) -> void:
 				world.remove_block(chunk, id)
 		item["blocks"] = PackedInt32Array()
 	room.active = false
+	b.open_rooms.erase(index)
 	_rooms_active -= 1
 
 
@@ -399,6 +426,8 @@ func spill_room(building_id: int, index: int, chunk: int, budget: int = 4) -> in
 		placed += blocks.size()
 	room.spilled = false
 	room.active = true
+	if not b.open_rooms.has(index):
+		b.open_rooms.append(index)
 	_rooms_active += 1
 	return placed
 
@@ -455,6 +484,22 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 		room.spilled = false
 		woken += 1
 	return woken
+
+
+## Which of this building's rooms are within `radius` metres of a world point.
+##
+## Arithmetic on the room lattice rather than a walk over the rooms. The
+## streaming pass used to measure every room of every building within seventy
+## metres, which on the big shapes is tens of thousands of box tests fifteen
+## times a second, and that was most of what the interiors cost.
+func rooms_in_range(building_id: int, world_point: Vector3, radius: float,
+		storey_span: int = -1) -> PackedInt32Array:
+	var b := get_building(building_id)
+	if b == null or b.is_build() or b.recipe == null:
+		return PackedInt32Array()
+	var local: Vector3 = b.xform.affine_inverse() * world_point
+	return RoomManifest.rooms_near(b.recipe.footprint_x, b.recipe.footprint_z,
+			b.recipe.courses, local, radius, storey_span)
 
 
 ## How many rooms are holding contents, and how many have a diff to their name.
@@ -645,6 +690,7 @@ func hand_over(id: int) -> void:
 			_rooms_active -= 1
 			for item in room.items:
 				item["blocks"] = PackedInt32Array()
+	b.open_rooms.clear()
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
 	b.toppled = true

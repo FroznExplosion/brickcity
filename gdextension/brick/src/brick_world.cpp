@@ -777,6 +777,24 @@ Dictionary BrickWorld::build_damage_profile(int chunk_id, int fx, int fz, int th
     return out;
 }
 
+int BrickWorld::get_dead_block_count(int chunk_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    const Chunk &c = chunks[chunk_id];
+    int n = 0;
+    // Same test as get_dead_blocks, and it has to stay the same test: callers
+    // compare this count against a previous one to decide whether the holes
+    // have moved.
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive && !b.detached && !b.removed) {
+            ++n;
+        }
+    }
+    return n;
+}
+
 PackedInt32Array BrickWorld::get_dead_blocks(int chunk_id) const {
     PackedInt32Array out;
     if (!valid_chunk(chunk_id)) {
@@ -3680,6 +3698,8 @@ void BrickWorld::_bind_methods() {
                     "segments", "bands"),
             &BrickWorld::build_damage_profile);
     ClassDB::bind_method(D_METHOD("get_dead_blocks", "chunk_id"), &BrickWorld::get_dead_blocks);
+    ClassDB::bind_method(D_METHOD("get_dead_block_count", "chunk_id"),
+            &BrickWorld::get_dead_block_count);
     ClassDB::bind_method(D_METHOD("get_block_archetype", "chunk_id", "block_id"),
             &BrickWorld::get_block_archetype);
     ClassDB::bind_method(D_METHOD("get_block_colour", "chunk_id", "block_id"),

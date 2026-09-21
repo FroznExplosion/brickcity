@@ -194,6 +194,15 @@ public:
     /// a lightly damaged building, and the only thing that has to survive
     /// de-materialisation.
     PackedInt32Array get_dead_blocks(int chunk_id) const;
+    /// How many blocks this chunk has lost to damage, without building the
+    /// list of them.
+    ///
+    /// The count is what callers usually want -- "has the damage moved on since
+    /// I last looked" is a comparison, not a set -- and building a
+    /// PackedInt32Array of every dead block to ask it allocates once per call.
+    /// The room streaming pass asked it thousands of times a tick and that was
+    /// 180 ms of a 183 ms pass.
+    int get_dead_block_count(int chunk_id) const;
 
     int get_block_archetype(int chunk_id, int block_id) const;
     int get_block_colour(int chunk_id, int block_id) const;

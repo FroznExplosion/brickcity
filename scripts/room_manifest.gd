@@ -69,6 +69,111 @@ const WALL_MARGIN := 3
 const ROOM_STUDS := 7
 
 
+## The lattice a building's rooms sit on, without building a single one of them.
+##
+## Rooms are a regular grid -- storeys, then `split_x` by `split_z` across each
+## floor, in that order -- so which room is where is arithmetic. Knowing that
+## without generating the rooms is the difference between a streaming pass that
+## costs what it opens and one that costs what EXISTS: the pass used to walk
+## every room of every building within seventy metres, and a building of the big
+## shapes has four thousand of them.
+## Memoised. A lattice is a pure function of three integers, there are a
+## handful of distinct shapes in a city, and working it out involves
+## rebuilding the recipe's band layout -- a couple of hundred Dictionaries.
+## The streaming pass asks for it twice per building per tick.
+static var _lattices := {}
+
+
+static func lattice_for(footprint_x: int, footprint_z: int, courses: int) -> Dictionary:
+	var key := Vector3i(footprint_x, footprint_z, courses)
+	if _lattices.has(key):
+		return _lattices[key]
+	var lat := _build_lattice(footprint_x, footprint_z, courses)
+	_lattices[key] = lat
+	return lat
+
+
+static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> Dictionary:
+	var inner_x := footprint_x - WALL_MARGIN * 2
+	var inner_z := footprint_z - WALL_MARGIN * 2
+	if inner_x < 4 or inner_z < 4:
+		return {"split_x": 0, "split_z": 0, "cell_x": 0, "cell_z": 0, "storeys": []}
+	@warning_ignore("integer_division")
+	var split_x: int = maxi(inner_x / ROOM_STUDS, 1)
+	@warning_ignore("integer_division")
+	var split_z: int = maxi(inner_z / ROOM_STUDS, 1)
+	@warning_ignore("integer_division")
+	var cell_x: int = inner_x / split_x
+	@warning_ignore("integer_division")
+	var cell_z: int = inner_z / split_z
+	return {
+		"split_x": split_x, "split_z": split_z,
+		"cell_x": cell_x, "cell_z": cell_z,
+		"storeys": storeys_of(courses),
+	}
+
+
+## Which rooms lie within `radius` metres of a point in the building's own
+## space, as indices into `rooms_for`.
+##
+## A conservative prefilter: it returns everything that could be in range and
+## the caller still measures the ones it gets. What it does not do is look at
+## the ones that cannot be.
+## `storey_span` limits the answer to the storey the point is on and that many
+## either side of it. -1 means every storey the radius reaches.
+##
+## It is a correctness rule before it is an optimisation: a room you can WALK
+## into is on your floor, or one flight away. A 26 m sphere in a building of the
+## big shapes spans fifteen storeys, and fourteen of them are rooms the player
+## is standing above or below with a concrete slab in between -- and measuring
+## all of them was most of what the streaming pass cost.
+static func rooms_near(footprint_x: int, footprint_z: int, courses: int,
+		local: Vector3, radius: float, storey_span: int = -1) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var lat := lattice_for(footprint_x, footprint_z, courses)
+	var split_x: int = lat.split_x
+	var split_z: int = lat.split_z
+	if split_x <= 0 or split_z <= 0:
+		return out
+	var cs := BrickWorld.get_cell_size()
+	var cell_x: int = lat.cell_x
+	var cell_z: int = lat.cell_z
+	# The grid index range that overlaps [local - radius, local + radius]. The
+	# lattice starts at WALL_MARGIN studs in, so the studs come off first.
+	var gx0 := int(floor(((local.x - radius) / cs.x - WALL_MARGIN) / float(cell_x)))
+	var gx1 := int(floor(((local.x + radius) / cs.x - WALL_MARGIN) / float(cell_x)))
+	var gz0 := int(floor(((local.z - radius) / cs.z - WALL_MARGIN) / float(cell_z)))
+	var gz1 := int(floor(((local.z + radius) / cs.z - WALL_MARGIN) / float(cell_z)))
+	gx0 = clampi(gx0, 0, split_x - 1)
+	gx1 = clampi(gx1, 0, split_x - 1)
+	gz0 = clampi(gz0, 0, split_z - 1)
+	gz1 = clampi(gz1, 0, split_z - 1)
+	var storeys: Array = lat.storeys
+	# Which storey the point is standing on, for `storey_span`.
+	var on := -1
+	if storey_span >= 0:
+		for si in storeys.size():
+			var st: Dictionary = storeys[si]
+			var top: float = float(int(st.floor_y) + int(st.height)) * cs.y
+			if local.y <= top:
+				on = si
+				break
+		if on < 0:
+			on = storeys.size() - 1
+	for si in storeys.size():
+		if storey_span >= 0 and absi(si - on) > storey_span:
+			continue
+		var storey: Dictionary = storeys[si]
+		var y0: float = float(storey.floor_y) * cs.y
+		var y1: float = float(int(storey.floor_y) + int(storey.height)) * cs.y
+		if local.y + radius < y0 or local.y - radius > y1:
+			continue
+		for gx in range(gx0, gx1 + 1):
+			for gz in range(gz0, gz1 + 1):
+				out.push_back((si * split_x + gx) * split_z + gz)
+	return out
+
+
 ## The rooms of a generated building, in its own cells.
 ##
 ## A floor is cut into rooms of about ROOM_STUDS across, per axis, so a bigger
@@ -78,19 +183,17 @@ const ROOM_STUDS := 7
 static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int) -> Array[Room]:
 	var out: Array[Room] = []
-	var inner_x := footprint_x - WALL_MARGIN * 2
-	var inner_z := footprint_z - WALL_MARGIN * 2
-	if inner_x < 4 or inner_z < 4:
+	# One description of the lattice, read by the generator and by rooms_near.
+	# Two would drift, and the last time two numbers described one layout here
+	# every item in the city was laid a plate above the floor.
+	var lat := lattice_for(footprint_x, footprint_z, courses)
+	var split_x: int = lat.split_x
+	var split_z: int = lat.split_z
+	if split_x <= 0 or split_z <= 0:
 		return out
-	@warning_ignore("integer_division")
-	var split_x: int = maxi(inner_x / ROOM_STUDS, 1)
-	@warning_ignore("integer_division")
-	var split_z: int = maxi(inner_z / ROOM_STUDS, 1)
-	@warning_ignore("integer_division")
-	var cell_x: int = inner_x / split_x
-	@warning_ignore("integer_division")
-	var cell_z: int = inner_z / split_z
-	for storey in storeys_of(courses):
+	var cell_x: int = lat.cell_x
+	var cell_z: int = lat.cell_z
+	for storey in (lat.storeys as Array):
 		for gx in split_x:
 			for gz in split_z:
 				var r := Room.new()
