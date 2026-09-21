@@ -43,6 +43,13 @@ var peak_speed := 0.0
 var max_speed_lost := 0.0
 var born_ms := 0
 var settled := false
+## When it came to rest, for the debris cap's eviction order. `born_ms` is when
+## it was CUT, which for a piece that tumbled for ten seconds is a different
+## thing -- and what "oldest debris" means is oldest at rest, not first cut.
+var settled_ms := 0
+## Blocks it held when it settled. Cached because the cap sorts on it every
+## time it runs and asking the world costs a call per island.
+var settled_blocks := 0
 ## Small enough to be swept up after a few seconds. Big sections never are --
 ## a piece that stays intact is what the whole model exists to produce.
 var disposable := false

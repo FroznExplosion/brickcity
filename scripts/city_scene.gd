@@ -70,6 +70,15 @@ const BIG_SHAPES := [
 ## and nothing reappears. It costs memory -- that is what the trim was for --
 ## and it is the switch to reach for when something is fighting the physics.
 @export var respawn_buildings := true
+## The debris cap (Docs/Scale.md section 4.8, IslandManager). Exported because
+## it is a player setting in the end -- Teardown ships exactly this pair, and
+## the honest thing is to admit the cap exists rather than hide it.
+##
+## `--debris-small=`, `--debris-large=` and `--debris-total=` override them, so
+## a pass can sweep values without editing a scene.
+@export_range(0, 2000) var debris_small_max := 220
+@export_range(0, 2000) var debris_large_max := 60
+@export_range(0, 4000) var debris_total_max := 240
 var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
@@ -504,6 +513,12 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--buildings="):
 			_city_size = maxi(1, int(a.split("=")[1]))
+		elif a.begins_with("--debris-small="):
+			debris_small_max = maxi(0, int(a.split("=")[1]))
+		elif a.begins_with("--debris-large="):
+			debris_large_max = maxi(0, int(a.split("=")[1]))
+		elif a.begins_with("--debris-total="):
+			debris_total_max = maxi(0, int(a.split("=")[1]))
 	if _stress_mode:
 		for a in args:
 			if a.begins_with("--collapse="):
@@ -517,6 +532,9 @@ func _ready() -> void:
 	registry = BuildingRegistry.new(world, palette)
 
 	islands = IslandManager.new()
+	islands.small_live_max = debris_small_max
+	islands.large_live_max = debris_large_max
+	islands.total_live_max = debris_total_max
 	islands.name = "Islands"
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
@@ -2764,6 +2782,9 @@ func _run_stress_pass() -> void:
 	print("[stress] collision: %s" % _collision_report())
 	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
+	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
+			islands.small_live_max, islands.large_live_max, islands.total_live_max,
+			islands.cap_deleted, islands.cap_slept, maxi(islands.cap_worst_over, 0)])
 	print("[stress] asleep %d piece(s) holding %d block(s) in %.1f KB (%d slept, %d woken)" % [
 			isl.dormant, isl.dormant_blocks, float(isl.dormant_bytes) / 1024.0,
 			isl.slept, isl.woken])

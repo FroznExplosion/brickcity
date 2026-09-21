@@ -237,6 +237,40 @@ var blind_count := 0
 ## It is not deletion. The record round-trips: the same blocks in the same
 ## order, so a piece a player walks back to is the piece they left, and it can
 ## still be shot, broken and moved. What it costs is a rebuild when they do.
+## THE DEBRIS CAP. Docs/Scale.md section 4.8.
+##
+## A collapse makes two kinds of thing and they are worth different amounts. A
+## LARGE piece is a landmark: it changes how the place is navigated and it is
+## what the player remembers doing. A SMALL piece is texture: hundreds of them
+## are what fill the solver and nobody misses one.
+##
+## So two caps with one eviction order -- oldest at rest first, within a class
+## -- and the classes differ in what eviction MEANS:
+##
+##     small, over its cap  ->  DELETED
+##     large, over its cap  ->  SLEPT, into the dormant record that already
+##                              exists, at 17 bytes a block, able to come back
+##
+## That second row is why the cap is not a new mechanism. Dormancy already
+## reduces a large piece to a record; until now it only ever fired on DISTANCE,
+## so a hundred large pieces at the player's feet stayed live however long they
+## sat there. The cap is what drives it on a schedule as well.
+##
+## `total` sits over both: when it is exceeded the small class is spent first,
+## down to `small_floor`, and only then does the large class begin to sleep.
+static var SMALL_BLOCKS := 24
+var small_live_max := 220
+var large_live_max := 60
+var total_live_max := 240
+var small_floor := 24
+## How many pieces may be evicted in one tick. Deleting is cheap; sleeping
+## captures a record, so it is budgeted like every other per-tick cost here.
+const EVICTIONS_PER_TICK := 3
+var cap_deleted := 0
+var cap_slept := 0
+var cap_worst_over := 0
+
+
 class Dormant:
 	var record: ChunkRecord
 	var slept_ms := 0
@@ -1324,6 +1358,8 @@ func tick() -> void:
 			isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 			isl.body.freeze = true
 			isl.settled = true
+			isl.settled_ms = Time.get_ticks_msec()
+			isl.settled_blocks = world.get_alive_block_count(isl.chunk)
 			world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 			_apply_layers(isl)
 			# Inert now: give the solver as few boxes as the shape allows.
@@ -1331,6 +1367,9 @@ func tick() -> void:
 			settled += 1
 
 	_stream_dormancy()
+	# After dormancy, not before: what distance already put away does not
+	# need the cap's attention.
+	_enforce_debris_cap()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
 	_count_meshless()
@@ -1462,6 +1501,71 @@ func _drain_mesh_queue() -> void:
 
 ## Put distant, settled wreckage away, and bring back what somebody has walked
 ## up to. One of each a tick.
+## Bring the live debris back under the caps.
+##
+## Only SETTLED pieces are ever evicted -- something still falling is something
+## the player is watching, and the cap is about what is lying around afterwards.
+func _enforce_debris_cap() -> void:
+	var small: Array = []
+	var large: Array = []
+	for i in islands.size():
+		var isl: BrickIsland = islands[i]
+		if not isl.is_valid() or not isl.settled or isl.disposable:
+			continue
+		if isl.settled_blocks <= SMALL_BLOCKS:
+			small.append(i)
+		else:
+			large.append(i)
+	var live := small.size() + large.size()
+	cap_worst_over = maxi(cap_worst_over, live - total_live_max)
+	var over_small := maxi(small.size() - small_live_max, 0)
+	var over_large := maxi(large.size() - large_live_max, 0)
+	# The total, spent on the small class first and only then on the large one.
+	var over_total := maxi(live - total_live_max, 0)
+	if over_total > 0:
+		var spare_small := maxi(small.size() - small_floor, 0)
+		var from_small := mini(over_total, spare_small)
+		over_small = maxi(over_small, from_small)
+		over_large = maxi(over_large, over_total - from_small)
+	if over_small <= 0 and over_large <= 0:
+		return
+
+	# Oldest at rest first, and evicted by index descending so that removing one
+	# cannot move another out from under the loop.
+	var doomed: Array = []
+	if over_small > 0:
+		small.sort_custom(func(a, c) -> bool:
+				return islands[a].settled_ms < islands[c].settled_ms)
+		for k in mini(over_small, small.size()):
+			doomed.append([small[k], true])
+	if over_large > 0:
+		large.sort_custom(func(a, c) -> bool:
+				return islands[a].settled_ms < islands[c].settled_ms)
+		for k in mini(over_large, large.size()):
+			doomed.append([large[k], false])
+	doomed.sort_custom(func(a, c) -> bool: return int(a[0]) > int(c[0]))
+	var done := 0
+	for entry in doomed:
+		if done >= EVICTIONS_PER_TICK:
+			break
+		var at: int = int(entry[0])
+		if at >= islands.size():
+			continue
+		var isl: BrickIsland = islands[at]
+		if not isl.is_valid() or not isl.settled:
+			continue
+		if bool(entry[1]):
+			_retire(isl, at)
+			cap_deleted += 1
+		elif _sleep(isl, at):
+			cap_slept += 1
+		else:
+			# Nothing to photograph, so there is nothing to keep either.
+			_retire(isl, at)
+			cap_deleted += 1
+		done += 1
+
+
 func _stream_dormancy() -> void:
 	if camera == null:
 		return
@@ -1531,6 +1635,8 @@ func _wake_record(d: Dormant) -> BrickIsland:
 	isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 	isl.body.freeze = true
 	isl.settled = true
+	isl.settled_ms = Time.get_ticks_msec()
+	isl.settled_blocks = world.get_alive_block_count(isl.chunk)
 	settled += 1
 	_apply_layers(isl)
 	_reshape(isl, true)
