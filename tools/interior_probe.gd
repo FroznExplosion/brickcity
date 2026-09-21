@@ -34,6 +34,7 @@ func _init() -> void:
 	_check_the_analytic_resolve()
 	_check_the_spill()
 	_check_furniture_is_not_structure()
+	_check_grounding_is_one_way()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -436,6 +437,106 @@ func _check_furniture_is_not_structure() -> void:
 	_ok("and setting it again on what already has it changes nothing",
 			w.set_blocks_decorative(chunk, decor, true) == decor.size()
 			and w.set_blocks_decorative(chunk, decor, true) == 0)
+
+
+## Grounding goes INTO a room's contents and never back out of them.
+##
+## Two reported bugs, one rule. Furniture held whole buildings up -- a section
+## that should have come down hung off the table standing in it -- because
+## grounding is reachability and a chair was a perfectly good step on the path.
+## And furniture floated, because a chair still touching a wall was still
+## reachable after the floor under it had gone.
+##
+## So the edge is directed. Grounding never leaves a decorative block for a
+## structural one, and a decorative block is only ever reached from BELOW.
+## Structure keeps the old rule and needs it: undercut a wall and its weight
+## travels sideways to the corners that still stand, which is why the support
+## pass is a BFS rather than a downward walk. Furniture has no such story.
+func _check_grounding_is_one_way() -> void:
+	print("\ngrounding flows into a room's contents, never out of them")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var pal: Dictionary = res[1]
+	var reg := BuildingRegistry.new(w, pal)
+	var id := _tower(reg)
+	var index := _furnished_room(reg, id)
+	var chunk := reg.materialise(id)
+	var room := reg.get_room(id, index)
+	reg.activate_room(id, index)
+	var decor: PackedInt32Array = w.get_decorative_blocks(chunk)
+	_ok("the room has contents", decor.size() > 0, "%d block(s)" % decor.size())
+
+	var grounded := w.solve_grounded(chunk)
+	var floating := 0
+	for b in decor:
+		if grounded[b] == 0:
+			floating += 1
+	_ok("all of it is held up while its floor is there", floating == 0,
+			"%d floating" % floating)
+
+	# A purpose-built stack, because a generated room cannot be relied on to
+	# offer a perch: the top of a crate is a TILE, and a tile has no studs, so
+	# nothing clutches to it -- which is correct and not what is being tested.
+	# Floor, a decorative brick standing on it, a structural brick on that.
+	var w2 := BrickWorld.new()
+	var pal2 := TowerRecipe.bake_palette(w2)
+	var c2 := w2.create_chunk(Vector3i.ZERO, Vector3i(8, 24, 8))
+	var slab := w2.place_block(c2, Vector3i(0, 0, 0), pal2.plate_2x2, 2)
+	var chair := w2.place_block(c2, Vector3i(0, 1, 0), pal2.brick_2x2, 4, true)
+	var perched := w2.place_block(c2, Vector3i(0, 4, 0), pal2.brick_2x2, 5)
+	_ok("a stack of floor, furniture and brick builds",
+			slab >= 0 and chair >= 0 and perched >= 0,
+			"%d %d %d" % [slab, chair, perched])
+	_ok("the middle one is the furniture",
+			w2.is_block_decorative(c2, chair) and not w2.is_block_decorative(c2, perched))
+	_ok("and they are all clutched together",
+			w2.get_block_neighbours(c2, perched).has(chair)
+			and w2.get_block_neighbours(c2, chair).has(slab),
+			"%s / %s" % [w2.get_block_neighbours(c2, perched),
+					w2.get_block_neighbours(c2, chair)])
+
+	var g2 := w2.solve_grounded(c2)
+	_ok("the floor is held up by the ground", g2[slab] == 1)
+	_ok("the furniture is held up by the floor", g2[chair] == 1)
+	_ok("but the brick standing on the furniture is NOT held up by it",
+			g2[perched] == 0)
+	var loose2: Array = w2.find_detached_groups(c2)
+	var carried := 0
+	for g in loose2:
+		if (g as PackedInt32Array).has(perched):
+			carried += 1
+	_ok("so it comes away as a piece", carried == 1,
+			"%d group(s) hold it" % carried)
+
+	# And the same block, once the floor under it is gone.
+	w2.kill_blocks(c2, PackedInt32Array([slab]))
+	g2 = w2.solve_grounded(c2)
+	_ok("with the floor gone the furniture is falling too", g2[chair] == 0)
+
+	# Through the CHUNK's transform: apply_hit takes a world point, and this
+	# tower is registered at an offset. Aimed in local metres it lands in
+	# open air next to the building and kills nothing, which is what it did.
+	var cell := BrickWorld.get_cell_size()
+	var under: Vector3 = w.get_chunk_transform(chunk) * Vector3(
+			(room.lo.x + room.size.x * 0.5) * cell.x,
+			(room.lo.y - 1) * cell.y,
+			(room.lo.z + room.size.z * 0.5) * cell.z)
+	var killed: PackedInt32Array = w.apply_hit(chunk, under, 2.2)
+	_ok("a blast under the room takes its floor out", killed.size() > 0,
+			"%d block(s)" % killed.size())
+	grounded = w.solve_grounded(chunk)
+	var dead := {}
+	for d in w.get_dead_blocks(chunk):
+		dead[d] = true
+	var still_alive := 0
+	var held := 0
+	for b in decor:
+		if not dead.has(b):
+			still_alive += 1
+			if grounded[b] == 1:
+				held += 1
+	_ok("what is left of the furniture is falling, not floating", held == 0,
+			"%d of %d still held" % [held, still_alive])
 
 
 ## The first room with something in it -- some are generated empty on purpose.

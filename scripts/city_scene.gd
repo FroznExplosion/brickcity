@@ -336,9 +336,19 @@ var _grid_view: MeshInstance3D
 ## PROMOTE_RANGE.
 const ROOM_RANGE := 26.0
 const ROOM_SLEEP_RANGE := 42.0
-## One a pass, like every other streaming decision here: opening a room lays
-## bricks, adds collision shapes and dirties a mesh.
-const ROOMS_PER_PASS := 1
+## How many rooms a streaming pass may open, and how many milliseconds it may
+## spend doing it.
+##
+## One a pass was right when a room cost 225 ms and wrong the moment it cost
+## 0.9: at one every fourth physics tick that is seven rooms a second, and a
+## storey of the big shapes is eighty of them. Walking into a building meant
+## watching it furnish for ten seconds.
+##
+## The budget is the real limit and the count is the guard on it. Rooms are not
+## all the same size -- an empty one costs nothing, a shelf costs four bricks
+## and a table five -- so a pass stops on whichever it reaches first.
+const ROOMS_PER_PASS := 12
+const ROOM_BUDGET_MS := 2.0
 ## How far "can see into" reaches. Interiors section 7 question 2 asks exactly
 ## this -- a sniper looking through a window 300 m away technically activates a
 ## room -- and a distance cap is the answer it expects.
@@ -600,21 +610,25 @@ func _add_staircase(id: int, footprint_x: int, footprint_z: int, courses: int) -
 
 ## Open a room: its contents go into the building's own chunk, so they need
 ## collision on the building's own body and a mesh rebuild to be seen.
-func _open_room(id: int, index: int) -> int:
+## `batch` means the caller has already lifted this building's furniture body
+## out of the physics space and will put it back, and will redraw the furniture
+## itself once the pass is done. See _stream_rooms.
+func _open_room(id: int, index: int, batch: bool = false) -> int:
 	var t0 := Time.get_ticks_usec()
 	var placed := registry.activate_room(id, index)
 	_room_lay_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 	if placed <= 0:
 		return 0
 	var t1 := Time.get_ticks_usec()
-	_add_room_shapes(id, index)
+	_add_room_shapes(id, index, batch)
 	_room_shape_ms += float(Time.get_ticks_usec() - t1) / 1000.0
 	# NOT _queue_remesh. A room's contents are not in the building's face bake,
 	# so the building's mesh has not changed and re-uploading it would be the
 	# whole 225 ms this design exists to remove. What changed is the furniture,
 	# and that is its own MultiMesh over its own blocks.
 	_furnished[id] = true
-	_refresh_furniture(id)
+	if not batch:
+		_refresh_furniture(id)
 	_room_opens += 1
 	_room_open_worst = maxf(_room_open_worst, float(Time.get_ticks_usec() - t0) / 1000.0)
 	return placed
@@ -820,12 +834,31 @@ func _stream_rooms() -> void:
 	# it costs nothing and does not count against the pass -- but a handful of
 	# them in a row must not turn one pass into a walk over the district.
 	var tries := 0
+	var until := Time.get_ticks_usec() + int(ROOM_BUDGET_MS * 1000.0)
+	# One swap of each building's furniture body in and out of the physics
+	# space for the whole pass, and one redraw of its furniture at the end of
+	# it. Both are per BUILDING costs -- the swap is priced by the body's
+	# shape count and the redraw walks every decorative block in the chunk --
+	# so paying them per room made opening a storey quadratic in the storey.
+	var touched := {}
 	for cand in shut:
 		if opened >= ROOMS_PER_PASS or tries >= ROOM_TRIES_PER_PASS:
 			break
+		if opened > 0 and Time.get_ticks_usec() >= until:
+			break
 		tries += 1
-		if _open_room(int(cand[1]), int(cand[2])) > 0:
+		var bid: int = int(cand[1])
+		if not touched.has(bid):
+			var body := _room_body(bid)
+			if body.is_valid():
+				PhysicsServer3D.body_set_space(body, RID())
+			touched[bid] = true
+		if _open_room(bid, int(cand[2]), true) > 0:
 			opened += 1
+	for bid in touched:
+		if _room_bodies.has(bid):
+			PhysicsServer3D.body_set_space(_room_bodies[bid], get_world_3d().space)
+		_refresh_furniture(bid)
 
 	# Nothing close enough to walk into: a hole in a wall is a way to SEE into a
 	# room from further than anybody could walk to it. Second, because the scan
@@ -1790,6 +1823,11 @@ func _physics_process(_delta: float) -> void:
 			_trim_quiet()
 		if Engine.get_physics_frames() % 8 == 5:
 			_merge_quiet_buildings()
+		# Still every fourth tick. A pass now opens up to ROOMS_PER_PASS rooms
+		# rather than one, which is where the speed comes from; running the
+		# pass twice as often as well cost the stress pass 2 ms of mean frame
+		# for nothing, because the SCAN is the per-pass cost and it is over
+		# every room of every building in view.
 		if camera != null and Engine.get_physics_frames() % 4 == 3:
 			_stream_rooms()
 		if camera != null and Engine.get_physics_frames() % 4 == 2:
@@ -2798,10 +2836,7 @@ func _run_lod_pass() -> void:
 	# of the far side of the building: the shot landed on nothing and the check
 	# read it as damage not carrying to 200 m. A slab spans the whole footprint
 	# and is the one band of a tower that is solid all the way across.
-	var aim_high: Vector3 = target.xform.origin + Vector3(
-			target.recipe.footprint_x * 0.35 * 0.5,
-			_slab_height(target.recipe.courses, 0.8),
-			target.recipe.footprint_z * 0.35 * 0.5)
+	var aim_high: Vector3 = _intact_aim(0)
 	var before: int = _dead_count(0)
 	camera.look_at(aim_high, Vector3.UP)
 	# From whichever bearing has a clear line. The first shot knocked a piece
@@ -2821,7 +2856,14 @@ func _run_lod_pass() -> void:
 				camera.global_position - camera.global_transform.basis.z * FIRE_RANGE)
 		look.collision_mask = Layers.HITSCAN_MASK
 		var seen := get_world_3d().direct_space_state.intersect_ray(look)
-		if not seen.is_empty() and islands.find_by_body(seen.collider) == null:
+		# BUILDING 0, not merely something solid. "Not an island" was too weak:
+		# another building's shell in front of this one is not an island
+		# either, and the shot landed on that and destroyed nothing here.
+		# Either of building 0's own bodies counts -- de-meshed, it is drawn
+		# by a shell and collided by its bricks, and both are in the space.
+		var struck_rid: RID = seen.get("rid", RID())
+		if not seen.is_empty() and (struck_rid == _brick_bodies.get(0, RID())
+				or struck_rid == _shell_bodies.get(0, RID())):
 			clear_line = true
 			break
 	check.call("there is a clear line to it from 200 m", clear_line, "")
@@ -3576,7 +3618,16 @@ func _run_rooms_pass() -> void:
 	await _frames(20)
 	_gate_ok("nobody opened anything in it", _open_rooms_of(2) == 0)
 	_topple(2)
-	await _frames(30)
+	# Polled, not a fixed wait. Toppling hands the bricks to an island and
+	# the island may split again on the tick after that, so how many frames
+	# it takes for the wreck to be a chunk anybody can find depends on what
+	# else the scene is doing. A fixed thirty was enough until rooms began
+	# streaming twelve at a time, and then it was enough most runs.
+	var settle := 0
+	while settle < 240 and not world.is_chunk_alive(int(_wrecks.get(2, -1))):
+		await _frames(1)
+		settle += 1
+	await _frames(20)
 	var waiting := registry.spilled_rooms(2).size()
 	_gate_ok("its rooms are marked to spill rather than simulated", waiting > 0,
 			"%d waiting" % waiting)
@@ -3915,6 +3966,37 @@ func _widest_opening(id: int, index: int) -> float:
 	for box in registry.openings_of(id, index):
 		widest = maxf(widest, maxf((box as AABB).size.x, (box as AABB).size.z))
 	return widest
+
+
+## Somewhere on this building that still HAS brick in it, high up.
+##
+## Aiming at a fixed fraction of the height was wrong twice over. The walls have
+## windows in them, so a ray at an arbitrary height goes through one and out of
+## the far side; and the shot that damaged this building in the first place can
+## have detached everything above it, so the brick that was at 80% of the height
+## is an island lying on the ground by the time the second shot is fired. Both
+## read as "damage does not carry to 200 m", which is not what either of them is.
+##
+## So: the floor slabs, from the top down, because a slab spans the whole
+## footprint and is the one band of a tower that is solid all the way across --
+## and the first one whose wall cell is still solid.
+func _intact_aim(id: int) -> Vector3:
+	var b := registry.get_building(id)
+	var cell := BrickWorld.get_cell_size()
+	var stud: int = int(b.recipe.footprint_x * 0.5)
+	var bands := TowerRecipe.layout(b.recipe.courses)
+	for i in range(bands.size() - 1, -1, -1):
+		var band: Dictionary = bands[i]
+		if str(band.kind) != "slab":
+			continue
+		var plate: int = int(band.y)
+		if b.is_materialised() and not world.is_solid(b.chunk, Vector3i(stud, plate, 0)):
+			continue
+		return b.xform * Vector3(stud * cell.x, plate * cell.y, 0.0)
+	# Nothing left standing at any slab: aim at the middle and let the check say
+	# so rather than inventing a point.
+	return b.xform * (registry.local_box(id).position
+			+ registry.local_box(id).size * 0.5)
 
 
 ## The height in metres of the floor slab nearest `fraction` of the way up a

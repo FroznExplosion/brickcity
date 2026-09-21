@@ -1868,6 +1868,40 @@ PackedInt32Array BrickWorld::get_block_neighbours(int chunk_id, int block_id) co
     return out;
 }
 
+// Can grounding travel from `from` to `to`?
+//
+// Two rules, and both are about interiors (Block::decorative). Grounding is
+// reachability from the foundation, so it is DIRECTED, and the direction is
+// what these say.
+//
+//   * Grounding never leaves an interior for structure. A chair is held up by
+//     the floor it stands on; a wall is not held up by the chair. Without this
+//     a room's furniture is a load path, and a section that should have fallen
+//     hangs off the table in it -- which is exactly what it did.
+//   * An interior block is grounded only from BELOW. Structure is not: undercut
+//     a wall and its weight travels sideways to the corners that still stand,
+//     which is the whole reason the support tree is a BFS rather than a
+//     downward walk. Furniture has no such story. A chair whose floor has been
+//     blown out from under it is falling, even if it is still touching a wall.
+static inline bool grounding_flows(const Chunk &c, const std::vector<Archetype> &parts,
+        int32_t from, int32_t to, const Vector3i &up) {
+    const Block &a = c.blocks[from];
+    const Block &b = c.blocks[to];
+    // The overwhelming case, and this is the hottest loop in the solve: two
+    // structural blocks, nothing to decide. Two bools before any arithmetic.
+    if (!a.decorative && !b.decorative) {
+        return true;
+    }
+    if (a.decorative && !b.decorative) {
+        return false;
+    }
+    if (b.decorative && height_along(b.cell, up) <= height_along(a.cell, up)) {
+        return false;
+    }
+    (void)parts;
+    return true;
+}
+
 PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
@@ -1909,6 +1943,9 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
         const int32_t next_depth = scratch_depth[bid] + 1;
         for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
+                return;
+            }
+            if (!grounding_flows(c, archetypes, bid, nb, up)) {
                 return;
             }
             mark[nb] = 1;
@@ -3405,6 +3442,7 @@ PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32A
     scratch_queue.clear();
     scratch_queue.reserve(n);
     scratch_depth.assign(n, -1);
+    const Vector3i up = -chunk_down[chunk_id];
 
     for (int i = 0; i < seeds.size(); ++i) {
         const int32_t bid = seeds[i];
@@ -3426,6 +3464,9 @@ PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32A
         const int32_t next_depth = scratch_depth[bid] + 1;
         for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
+                return;
+            }
+            if (!grounding_flows(c, archetypes, bid, nb, up)) {
                 return;
             }
             mark[nb] = 1;
