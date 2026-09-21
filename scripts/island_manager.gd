@@ -564,7 +564,7 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## 2,800 `place_block` calls and a second face bake. Here the chunk, its bake and
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
-		carried_bytes: int, carried_width: int) -> BrickIsland:
+		carried_bytes: int, carried_width: int, carried_bands: Array = []) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_anchored(chunk, false)
@@ -574,6 +574,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.local_com = world.get_chunk_com(chunk)
 	isl.disposable = false
 
+	isl.bands = carried_bands
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(world.get_chunk_mass(chunk) * MASS_SCALE, 0.5)
 	isl.body.contact_monitor = true
@@ -756,6 +757,17 @@ func refresh_furniture(isl: BrickIsland) -> void:
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
 	if isl.mesh == null:
 		return
+	# Band meshes carried down from a building that toppled whole. They were
+	# right until something changed, and something has: drop them and build the
+	# one mesh an island uses.
+	if not isl.bands.is_empty():
+		for node in isl.bands:
+			if is_instance_valid(node):
+				_retirer.retire((node as MeshInstance3D).mesh)
+				(node as MeshInstance3D).queue_free()
+		isl.bands.clear()
+		isl.array_mesh = null
+		force_full = true
 	# A child it just shed is still coming up; keep drawing those bricks until
 	# it has. See OVERLAP_FRAMES. force_full comes from the mesh queue, for a
 	# piece that is waiting on its own bake, and is never held.

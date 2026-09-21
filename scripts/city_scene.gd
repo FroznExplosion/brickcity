@@ -131,6 +131,30 @@ var _room_bodies := {}
 var _room_shapes := {}
 ## Buildings that have had a room laid in them. See _refresh_furniture.
 var _furnished := {}
+## How a building's drawing is cut up. See BrickWorld::set_chunk_section_plates.
+##
+## Rebuilding a building's mesh is linear in the whole building however few
+## bricks changed: ~104 ms for one of the big shapes, and a promotion forces
+## one. Bands make a rebuild proportional to the band.
+##
+## The two numbers pull against each other. Taller bands mean fewer draw calls
+## and a bigger rebuild; shorter bands mean the opposite. A cap on the COUNT is
+## what keeps a 700-plate tower from becoming thirty draw calls, and a floor on
+## the HEIGHT keeps an ordinary building as one or two.
+const SECTION_PLATES := 24
+const SECTION_MAX := 16
+## building id -> its band nodes, its band meshes, and the index bytes each
+## band's surface holds. Parallel arrays, one entry per band.
+## building id -> the next band to build, for a rebuild in progress.
+var _band_cursor := {}
+## How much band building a tick may do. A band of one of the big shapes is a
+## few milliseconds; the point is that a building's worth of them is not one
+## frame's problem.
+const BANDS_PER_TICK := 2
+const BAND_BUDGET_MS := 6.0
+var _brick_bands := {}
+var _brick_band_meshes := {}
+var _brick_band_bytes := {}
 var _brick_meshes := {}    ## building id -> the ArrayMesh whose indices we patch
 ## Meshes the renderer may still be holding. See MeshRetirer.
 var _retirer := MeshRetirer.new()
@@ -1133,6 +1157,11 @@ func _promote(id: int, solve: bool = true) -> int:
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
 	world.set_tension_per_stud(chunk, 9.3)
+	# BEFORE the bake is started. Changing the band height invalidates the
+	# bake and cancels one in flight, so doing it afterwards cancels the very
+	# bake this promotion is waiting on -- the shell never comes down and the
+	# building never finishes promoting.
+	world.set_chunk_section_plates(chunk, _section_plates(chunk))
 
 	# The shell STAYS UP. Bricks and collision exist from this instant, but the
 	# mesh that draws them is baked on a worker and arrives a tick or two later
@@ -1298,7 +1327,11 @@ func _finish_promotions() -> void:
 		_remesh(id, true)
 		_remesh_frames(id)
 		_refresh_furniture(id)
-		_free_shell(id)
+		# The shell stays up until every band is built -- see _advance_bands.
+		# Dropping it here would leave a half-drawn building standing in the
+		# open for the few ticks the rest of the bands take.
+		if not _band_cursor.has(id):
+			_free_shell(id)
 		done += 1
 
 
@@ -1336,6 +1369,11 @@ func _topple(id: int) -> void:
 	var carried_mesh: ArrayMesh = _brick_meshes.get(id)
 	var carried_bytes: int = int(_brick_index_bytes.get(id, 0))
 	var carried_width: int = int(_brick_index_width.get(id, 4))
+	# A banded building has no single mesh to hand over -- it has its bands,
+	# and they already hold the right geometry. The island draws them until
+	# the first thing that changes it, and becomes an ordinary one-mesh
+	# island then. See BrickIsland.bands.
+	var carried_bands: Array = _take_bands(id)
 	_brick_bodies.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
@@ -1369,7 +1407,7 @@ func _topple(id: int) -> void:
 	# section 6.3 defers real joints), so what falls is the frames.
 	_free_frames(id, true)
 	registry.hand_over(id)
-	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width)
+	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands)
 	for i in range(1, extra_frames.size()):
 		if i - 1 >= extra_nodes.size():
 			break
@@ -1500,37 +1538,158 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# tick.
 	if world.get_alive_block_count(b.chunk) == 0:
 		_retirer.retire((_brick_nodes[id] as MeshInstance3D).mesh)
+		for node in _take_bands(id):
+			if is_instance_valid(node):
+				_retirer.retire((node as MeshInstance3D).mesh)
+				(node as MeshInstance3D).queue_free()
 		_brick_meshes[id] = null
 		_brick_index_bytes[id] = 0
 		_brick_index_width[id] = 4
 		(_brick_nodes[id] as MeshInstance3D).mesh = null
 		return
 
-	var mesh: ArrayMesh = _brick_meshes.get(id)
-	if mesh != null and mesh.get_surface_count() > 0 and not force_full:
-		var region: Dictionary = world.update_index_region(b.chunk,
+	# PATCH. One re-index of the chunk, and only the bands whose index bytes
+	# actually moved cross to the renderer -- which for a blast is the band it
+	# landed in, not the building it landed on.
+	var bands: Array = _brick_bands.get(id, [])
+	if not bands.is_empty() and not force_full:
+		var moved: Array = world.update_index_regions(b.chunk,
 				int(_brick_index_width.get(id, 4)))
-		# An empty answer means the bake is gone and the surface has to be
-		# rebuilt; a present answer with zero changed bytes means nothing moved.
-		if not region.is_empty() and IslandManager._patch_fits(region, _brick_index_bytes.get(id, 0)):
-			if int(region.get("changed_bytes", 0)) > 0:
-				RenderingServer.mesh_surface_update_index_region(
-						mesh.get_rid(), 0, int(region.offset), region.data)
+		var held: Array = _brick_band_meshes.get(id, [])
+		var byte_counts: Array = _brick_band_bytes.get(id, [])
+		var ok: bool = world.get_chunk_sections(b.chunk) == bands.size()
+		for entry in moved:
+			if not ok:
+				break
+			var d: Dictionary = entry
+			var si: int = int(d.section)
+			if si < 0 or si >= held.size() or held[si] == null:
+				ok = false
+				break
+			# The band's buffer is not the length it was, so it cannot be patched
+			# in place -- the same rule the whole-mesh path used.
+			if int(d.offset) + int(d.changed_bytes) > int(byte_counts[si]):
+				ok = false
+				break
+			RenderingServer.mesh_surface_update_index_region(
+					(held[si] as ArrayMesh).get_rid(), 0, int(d.offset), d.data)
+		if ok:
 			return
 
+	_rebuild_bands(id, b.chunk)
+
+
+## How tall a band should be for a chunk this tall. See SECTION_PLATES.
+func _section_plates(chunk: int) -> int:
+	var plates: int = world.get_chunk_dims(chunk).y
+	@warning_ignore("integer_division")
+	var wanted: int = maxi(SECTION_PLATES, (plates + SECTION_MAX - 1) / SECTION_MAX)
+	return wanted
+
+
+## Build every band of a building's mesh from scratch.
+##
+## The expensive path, and the one bands exist to make cheaper: it is O(the
+## building) and a promotion runs it. What bands change is that the NEXT one --
+## a blast, a piece coming off -- is O(the band).
+func _rebuild_bands(id: int, chunk: int) -> void:
 	_full_rebuilds += 1
-	var arrays: Array = world.build_chunk_mesh(b.chunk)
-	mesh = ArrayMesh.new()
-	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "building %d" % id):
+	var parent: MeshInstance3D = _brick_nodes[id]
+	var n := world.get_chunk_sections(chunk)
+	# Slots first, bands afterwards, a few a tick. Building all of them here is
+	# what the whole-mesh path did and it is the ~104 ms this exists to remove:
+	# the total is the same, what changes is that it no longer lands in one
+	# frame. The OLD band stays drawn in its slot until its replacement is
+	# ready, so nothing flickers on the way through.
+	var old: Array = _brick_bands.get(id, [])
+	var nodes: Array = []
+	var meshes: Array = []
+	var bytes: Array = []
+	for si in n:
+		nodes.append(old[si] if si < old.size() else null)
+		meshes.append(null)
+		bytes.append(0)
+	for si in range(n, old.size()):
+		if is_instance_valid(old[si]):
+			_retirer.retire((old[si] as MeshInstance3D).mesh)
+			(old[si] as MeshInstance3D).queue_free()
+	_brick_bands[id] = nodes
+	_brick_band_meshes[id] = meshes
+	_brick_band_bytes[id] = bytes
+	_band_cursor[id] = 0
+	# The parent draws nothing itself; it is the transform the bands hang off
+	# and the node the furniture is parented to.
+	_retirer.retire(parent.mesh)
+	parent.mesh = null
+	_brick_meshes[id] = null
+	_brick_index_bytes[id] = 0
+
+
+## Build one band of a building's mesh. Returns false when there are none left.
+func _build_one_band(id: int) -> bool:
+	var at: int = int(_band_cursor.get(id, -1))
+	if at < 0:
+		return false
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
+		_band_cursor.erase(id)
+		return false
+	var nodes: Array = _brick_bands.get(id, [])
+	if at >= nodes.size():
+		_band_cursor.erase(id)
+		return false
+	var parent: MeshInstance3D = _brick_nodes[id]
+	var arrays: Array = world.build_chunk_mesh_section(b.chunk, at)
+	var mesh := ArrayMesh.new()
+	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at]):
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	# The renderer may still be drawing the mesh this replaces.
-	_retirer.retire((_brick_nodes[id] as MeshInstance3D).mesh)
-	# Same rule as the islands: an ArrayMesh with no surface cannot be patched.
-	_brick_meshes[id] = mesh if mesh.get_surface_count() > 0 else null
-	_brick_index_bytes[id] = (IslandManager.index_patch_bytes(arrays)
-			if _brick_meshes[id] != null else 0)
-	_brick_index_width[id] = IslandManager.index_width(arrays)
-	(_brick_nodes[id] as MeshInstance3D).mesh = mesh
+		_brick_index_width[id] = IslandManager.index_width(arrays)
+	var node: MeshInstance3D = nodes[at]
+	if node == null or not is_instance_valid(node):
+		node = MeshInstance3D.new()
+		node.material_override = brick_material
+		# In the parent's space, which already carries the chunk transform.
+		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		parent.add_child(node)
+		nodes[at] = node
+	else:
+		_retirer.retire(node.mesh)
+	var live := mesh.get_surface_count() > 0
+	node.mesh = mesh if live else null
+	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
+	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
+	_band_cursor[id] = at + 1
+	if at + 1 >= nodes.size():
+		_band_cursor.erase(id)
+		return false
+	return true
+
+
+## Drain the band work, a budget at a time.
+func _advance_bands() -> void:
+	if _band_cursor.is_empty():
+		return
+	var until := Time.get_ticks_usec() + int(BAND_BUDGET_MS * 1000.0)
+	var built := 0
+	while built < BANDS_PER_TICK and not _band_cursor.is_empty():
+		var id: int = _band_cursor.keys()[0]
+		_build_one_band(id)
+		built += 1
+		if not _band_cursor.has(id):
+			# Finished: the shell it was hiding behind can go.
+			_free_shell(id)
+		if Time.get_ticks_usec() >= until:
+			break
+
+
+## Drop a building's band nodes, returning them so a caller can hand them on.
+func _take_bands(id: int) -> Array:
+	var nodes: Array = _brick_bands.get(id, [])
+	_band_cursor.erase(id)
+	_brick_bands.erase(id)
+	_brick_band_meshes.erase(id)
+	_brick_band_bytes.erase(id)
+	return nodes
 
 
 func _disable(id: int, ids: PackedInt32Array) -> void:
@@ -1908,6 +2067,7 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("damage", t)
 
 	_retirer.drain()
+	_advance_bands()
 	_finish_promotions()
 	t = _mark("promote_finish", t)
 
@@ -2152,6 +2312,11 @@ func _demesh(id: int) -> void:
 	if _brick_nodes.has(id):
 		var mi: MeshInstance3D = _brick_nodes[id]
 		_retirer.retire(mi.mesh)
+		# The band nodes are its children and go with it; their meshes are
+		# retired first so the renderer is not still reading them.
+		for node in _take_bands(id):
+			if is_instance_valid(node):
+				_retirer.retire((node as MeshInstance3D).mesh)
 		mi.queue_free()
 		_brick_nodes.erase(id)
 	_brick_meshes.erase(id)
@@ -2242,6 +2407,8 @@ func _demote(id: int, dist: float) -> void:
 		(_brick_nodes[id] as MeshInstance3D).queue_free()
 		_brick_nodes.erase(id)
 	_free_frames(id)
+	_take_bands(id)
+	_band_cursor.erase(id)
 	_brick_meshes.erase(id)
 	_brick_index_bytes.erase(id)
 	_brick_index_width.erase(id)
@@ -3119,9 +3286,10 @@ func _run_lod_pass() -> void:
 	b = registry.get_building(0)
 	check.call("bricks came back", _brick_nodes.has(0), "after %d frame(s)" % waited)
 	check.call("and the shell went away", not _shells.has(0), "")
-	var mi: MeshInstance3D = _brick_nodes.get(0)
-	check.call("with geometry in it",
-			mi != null and mi.mesh != null and (mi.mesh as ArrayMesh).get_surface_count() > 0, "")
+	# The node itself holds no mesh: a building draws through its BANDS, and
+	# the node is the transform they hang off. See _rebuild_bands.
+	check.call("with geometry in it", _drawn_surfaces(0) > 0,
+			"%d band(s) with a surface" % _drawn_surfaces(0))
 	check.call("damage survived the round trip", _dead_count(0) >= after,
 			"%d dead" % _dead_count(0))
 
@@ -4285,6 +4453,15 @@ func _slab_height(courses: int, fraction: float) -> float:
 			gap = absf(y - want)
 			best = y
 	return best * 0.14
+
+
+## How many of a building's bands actually hold a surface.
+func _drawn_surfaces(id: int) -> int:
+	var n := 0
+	for mesh in (_brick_band_meshes.get(id, []) as Array):
+		if mesh != null and (mesh as ArrayMesh).get_surface_count() > 0:
+			n += 1
+	return n
 
 
 func _open_rooms_of(id: int) -> int:

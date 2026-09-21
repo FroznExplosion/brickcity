@@ -20,6 +20,12 @@ var mesh: MeshInstance3D
 ## MeshInstance3D.mesh is typed Mesh, and losing this reference is what forces a
 ## full vertex re-upload.
 var array_mesh: ArrayMesh
+## Band meshes inherited from a building that toppled whole (city_scene
+## SECTION_PLATES). They already hold the right geometry, so a piece that has
+## just come down draws for nothing -- and the FIRST time it needs rebuilding
+## they are freed and it becomes an ordinary one-mesh island. Sectioning is for
+## standing buildings, which are the ones that get rebuilt over and over.
+var bands: Array = []
 ## Size of that surface's index buffer, in bytes. A patch is only valid
 ## while the buffer is the length it was built at.
 var index_bytes := 0
