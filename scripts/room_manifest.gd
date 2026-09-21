@@ -191,16 +191,16 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		var name: String = part[0]
 		if not palette.has(name):
 			continue
+		# Decorative AT BIRTH, not marked afterwards, and that is worth the
+		# argument: a decorative block is not in the chunk's face bake, so
+		# placing one leaves the bake this chunk already holds exactly right.
+		# Marking it after the fact cannot -- place_block has already thrown the
+		# bake away by then, and re-baking a 50,000-brick building to add a
+		# chair is what made one room cost 225 ms.
 		var id := world.place_block(chunk, at + (part[1] as Vector3i), palette[name],
-				(colour + int(part[2])) % BrickWorld.get_filament_count())
+				(colour + int(part[2])) % BrickWorld.get_filament_count(), true)
 		if id >= 0:
 			out.push_back(id)
-	# A room's contents are IN the building's grid and are not OF its structure.
-	# Marked here rather than at the two call sites because this is the only
-	# place an item's blocks come into existence -- furnishing a room and
-	# spilling one into a wreck both land here.
-	if not out.is_empty():
-		world.set_blocks_decorative(chunk, out, true)
 	return out
 
 

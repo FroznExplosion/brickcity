@@ -111,6 +111,13 @@ placing a brick is the same in both; the recipe carries one bit per block (v4) a
 it back. Nothing about a brick's shape or position could have inferred this — a table built out of
 wall bricks is a table, and only its author knows.
 
+**And the role is what lets a room be the streaming unit.** A decorative block is outside the
+chunk's face bake and outside the building's collision body, so opening a room touches neither: it
+lays its bricks, adds them to the building's own small furniture body, and redraws a MultiMesh over
+the furniture's blocks alone. **0.9 ms on a 50,000-brick, 4,000-room tower**, against 224.7 ms when
+a chair invalidated the building's bake. Measured in `--interiors --big`; Status.md, "What a room
+costs, and the two whole-building bills inside it".
+
 ---
 
 ## 4. What happens to the contents when the building comes down

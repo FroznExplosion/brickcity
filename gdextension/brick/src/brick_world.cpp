@@ -440,7 +440,8 @@ Vector3i BrickWorld::get_chunk_dims(int chunk_id) const {
     return valid_chunk(chunk_id) ? chunks[chunk_id].dims : Vector3i();
 }
 
-int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int colour) {
+int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int colour,
+        bool decorative) {
     if (!valid_chunk(chunk_id) || !valid_archetype(archetype_id)) {
         return -1;
     }
@@ -472,6 +473,7 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     b.cell = cell;
     b.archetype = archetype_id;
     b.colour = (uint8_t)std::clamp(colour, 0, FILAMENT_COUNT - 1);
+    b.decorative = decorative;
     c.blocks.push_back(b);
 
     for (int x = 0; x < a.size.x; ++x) {
@@ -487,6 +489,14 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     }
     // Geometry changed, so the bake has to be redone. Damage never gets here:
     // killing a block only changes which baked faces are indexed.
+    //
+    // A DECORATIVE block is the exception, and it is the point of the flag
+    // being passed in here rather than set afterwards: it is not in the bake,
+    // and its cells read as air to everything that is, so the bake this chunk
+    // already holds is still exactly right.
+    if (decorative) {
+        return id;
+    }
     c.bake.valid = false;
     // A bake running against the old geometry is now worthless, and it is
     // reading the very arrays this call just wrote. Join it and drop it.
@@ -545,10 +555,13 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     b.load = 0;
 
     // Geometry changed, so the bake is stale and a bake in flight is reading
-    // the arrays this call just wrote. Same contract as place_block.
-    c.bake.valid = false;
-    if (bake_pending(chunk_id)) {
-        settle_bake_job(chunk_id, false);
+    // the arrays this call just wrote. Same contract as place_block -- and the
+    // same exception, for the same reason.
+    if (!b.decorative) {
+        c.bake.valid = false;
+        if (bake_pending(chunk_id)) {
+            settle_bake_job(chunk_id, false);
+        }
     }
     return true;
 }
@@ -883,6 +896,14 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         if (b.removed) {
             continue; // edited away: owns no cells, so it has no faces
         }
+        if (b.decorative) {
+            // Interiors are not in the building's bake AT ALL. They are drawn
+            // separately, per chunk, from the blocks themselves -- because a
+            // bake is whole-chunk and a room is not, and re-baking 50,000
+            // bricks to add a chair is the single most expensive thing
+            // interiors ever did.
+            continue;
+        }
         const Archetype &a = parts[b.archetype];
         const Vector3i base = b.cell - c.origin;
         const Color col = filament_colour(b.colour);
@@ -923,9 +944,18 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             continue;
                         }
                         const Vector3i local(base.x + lc[0], base.y + lc[1], base.z + lc[2]);
-                        const int32_t other = c.block_at(local + FACE_DIR[f]);
+                        int32_t other = c.block_at(local + FACE_DIR[f]);
                         if (other == (int32_t)bi) {
                             continue; // buried inside this block; never visible
+                        }
+                        // A decorative neighbour reads as OPEN AIR here, and it
+                        // has to. It owns its cells, so without this the floor
+                        // under a chair bakes with `other` = the chair, and the
+                        // draw rule (other < 0 || !alive[other]) then hides that
+                        // floor for as long as the chair is alive -- a chair
+                        // shaped hole in the floor it is standing on.
+                        if (other >= 0 && c.blocks[other].decorative) {
+                            other = -1;
                         }
                         mask[m] = other;
                         any = true;
@@ -3483,8 +3513,9 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_origin", "chunk_id"), &BrickWorld::get_chunk_origin);
     ClassDB::bind_method(D_METHOD("get_chunk_dims", "chunk_id"), &BrickWorld::get_chunk_dims);
 
-    ClassDB::bind_method(D_METHOD("place_block", "chunk_id", "cell", "archetype_id", "colour"),
-            &BrickWorld::place_block, DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("place_block", "chunk_id", "cell", "archetype_id", "colour",
+                    "decorative"),
+            &BrickWorld::place_block, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("remove_block", "chunk_id", "block_id"),
             &BrickWorld::remove_block);
     ClassDB::bind_method(D_METHOD("can_place", "chunk_id", "cell", "archetype_id"),

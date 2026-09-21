@@ -126,7 +126,16 @@ public:
 
     /// Place a block with its min corner at an ABSOLUTE grid cell. Returns the
     /// block id, or -1 if it would leave the chunk or overlap something.
-    int place_block(int chunk_id, Vector3i cell, int archetype_id, int colour);
+    /// `decorative` places the block in the interior role (Block::decorative)
+    /// AND KEEPS THE FACE BAKE VALID.
+    ///
+    /// That second half is the whole reason the argument exists rather than
+    /// leaving set_blocks_decorative to do it afterwards. A decorative block is
+    /// not in the bake, so placing one changes nothing the bake holds -- and
+    /// invalidating it anyway is what made opening one room in a 50,000-brick
+    /// building cost 225 ms, 56% of it re-baking faces that had not moved.
+    int place_block(int chunk_id, Vector3i cell, int archetype_id, int colour,
+            bool decorative = false);
 
     // --- editing -----------------------------------------------------------
     //

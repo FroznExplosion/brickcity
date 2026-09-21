@@ -794,6 +794,81 @@ Two lessons worth keeping, both about the same thing:
 * **Measure the baseline you think you have.** Three arms of this experiment were run against a
   contaminated one, and every conclusion drawn from them was wrong.
 
+### What a room costs, and the two whole-building bills inside it
+
+The question was whether interiors are worth streaming per room, or whether per
+building is simpler and good enough. It has no answer at 20x20x18 studs, so `--big` builds the same
+city out of buildings up to **28 x 22 m on plan and 84 m tall** and `--interiors` measures the same
+one three ways.
+
+Rooms had to scale first. The split was "one, or two per axis if the footprint is at least 20
+studs", which says every building has four rooms a storey however big it is -- and would have made
+per-room streaming look four times cheaper than it is on exactly the buildings in question. A floor
+is cut into rooms of about seven studs per axis now, which leaves the existing city untouched and
+gives the 80x64 tower 80 a storey, 4,000 in the building.
+
+On that building -- 50,289 bricks, 4,000 rooms:
+
+| | per unit | whole building | resident |
+|---|---|---|---|
+| a room (x4000) | 224.7 ms | 899 s | +0.6 MB |
+| a storey (x50) | 256 ms | 12.8 s | |
+| the building (x1) | 444 ms | 0.44 s | **+50.7 MB, +25,537 boxes** |
+
+**The per-unit costs barely differ, and that is the finding.** 56% of opening one room was the face
+bake and another 35% the mesh upload, and both are proportional to the *building* rather than to
+what changed. The unit only decided how many times a whole-building bill was paid. So it was never
+really a question about rooms.
+
+**Bill one: the face bake.** A chunk's bake is whole-chunk, and placing a block invalidates it --
+so a chair invalidated 50,000 bricks' worth of faces. Interiors are out of the bake entirely now
+(`place_block(..., decorative = true)` both marks the block and leaves the bake alone, which is why
+it is an argument rather than a call afterwards -- by the time you could mark it, the bake is
+already gone). They are drawn instead from `FurnitureMesh`: one `MultiMesh` per chunk, one instance
+per live decorative block, hung off the node that draws the chunk so it inherits its transform. A
+building's furniture hangs off the building's mesh, an island's off the island's, so it rides a
+collapse without anything tracking it -- which is Interiors 4.2 still working, and it had to be,
+because the alternative was furniture vanishing the instant its building came down.
+
+That the contents are boxes is not an approximation. `_add_room_shapes` has always built one
+collision box per item block out of `get_block_ticks`; the mesh uses the same description.
+
+One thing had to go with it: **a decorative block reads as open air to the bake**. It owns its
+cells, so without that the floor under a chair bakes with the chair as its `other`, and the draw
+rule then hides that floor for as long as the chair is alive -- a chair-shaped hole in the floor it
+is standing on.
+
+**Bill two: the collision swap.** With the bake gone, one room cost 104 ms, and 22 ms of that was
+`_add_room_shapes` lifting the building's body out of the physics space and putting it back. That
+call is priced by the body's shape count, and the body had 56,269 shapes. So a building's open
+rooms collide on **their own static body**, made on demand and freed with the bricks. It never has
+to ride anything: a piece that breaks off builds its collision from the chunk, decorative blocks
+included, so the furniture is already covered by a body that exists.
+
+    a room, before          224.7 ms     +0.6 MB
+    with the bake out       104.1 ms     +0.0 MB
+    with its own body         0.9 ms     +0.0 MB
+
+    the building's 4,000 rooms:  899 s  ->  4 s
+    all of them at once, resident:  +50.7 MB  ->  +1.0 MB
+
+**Per room is now the cheap option as well as the frugal one**, which is not where it started. Per
+building is 178 ms in one frame against 4 s spread over 4,000 passes, and it holds 25,537 more
+collision boxes to do it.
+
+Two notes on measuring it, both mistakes worth not repeating. The first version of the pass ran one
+arm on the 4,000-room tower and the other on a 180-room one, and let `_merge_quiet_buildings`
+rebuild the body inside a timed region -- 30 merges and 28 un-merges deep. And when the fixes
+landed, the harness went on forcing the bake and mesh the real path no longer does, so it kept
+reporting 104 ms for work nothing performs. **A harness that measures the code you replaced is worse
+than no harness.**
+
+The last of it was a guard. `_disable` redraws the furniture, and `get_decorative_blocks` walks
+every block in the chunk -- so a burst of fire at an *unfurnished* tower paid for a scan of the
+whole tower per hit, which cost the stress pass a millisecond of mean frame and nine of its damage
+phase. Buildings that have had something laid in them are remembered, and the rest return
+immediately.
+
 ### Interiors and structure: one grid, two roles
 
 A building and the things inside it are the same bricks in the same grid. They are not the same
@@ -832,8 +907,8 @@ A tower of 18 courses had 3 fictional storeys and has 5 real ones, so the stress
 it looks like it should: a blast nobody is watching no longer generates a manifest in order to
 count it, because the count is in the seed and "everything in here is gone" is a set of indices.
 
-    --stress --buildings=200   17.2-17.7 ms  ->  17.6-18.2 ms
-    compromise total                             75 ms over 4,400 rooms
+	--stress --buildings=200   17.2-17.7 ms  ->  17.6-18.2 ms
+	compromise total                             75 ms over 4,400 rooms
 
 That pass moves 10 ms a run in its damage phase, so the mean is the only figure in it worth
 reading, and it is up about half a millisecond for having twice as many rooms that are actually
@@ -898,7 +973,7 @@ the ids per chunk with
 
 ```gdscript
 if not by_chunk.has(chunk):
-    by_chunk[chunk] = PackedInt32Array()
+	by_chunk[chunk] = PackedInt32Array()
 (by_chunk[chunk] as PackedInt32Array).push_back(id)
 ```
 
@@ -3125,10 +3200,11 @@ the stress pass could not say" for why it prints all three.
 	Nothing in the generated city does this, but the workshop's INTERIOR layer allows it, so a
 	player can stand a wall on a table and get a bridge for free. BuildMode §9.2 already names
 	the rule -- a structural frame may not weld to a decorative one -- and it is not enforced.
-47. **Opening a room rebuilds the building's bake and its whole mesh.** Furniture is blocks in the
-	host chunk, and placing a block invalidates the face bake, so every room that opens costs a
-	rebake and a full vertex upload for the building it is in. One room per streaming pass
-	hides it; a building whose rooms all open at once would not.
+47. **Interiors are drawn flat.** `FurnitureMesh` is a MultiMesh of scaled unit cubes under a plain
+	`StandardMaterial3D`, so a chair has neither the seams nor the chamfer the brickwork around
+	it has. The brick shader reads UV as metres across a face and UV2 as that face's size, and
+	a unit cube scaled by an instance transform has neither. Same road the single bricks in
+	`IslandManager`'s shared MultiMesh already take.
 48. **A room reports the openings of all four exterior walls over its own span**, including the
 	two that belong to the room across the floor from it. Harmless for a portal test on one
 	open storey -- the ray still has to reach the hole -- and wrong if floors are ever

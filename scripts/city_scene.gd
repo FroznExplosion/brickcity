@@ -80,6 +80,15 @@ var camera: DebugCamera
 var _shells := {}          ## building id -> MeshInstance3D
 var _shell_bodies := {}    ## building id -> RID
 var _brick_nodes := {}     ## building id -> MeshInstance3D
+## chunk id -> the MultiMeshInstance3D drawing that chunk's interiors, parented
+## to the building's own mesh so it inherits the chunk's transform.
+var _furniture := {}
+## building id -> the static body its open rooms' furniture collides on, and
+## that body's block -> shape indices. See _room_body.
+var _room_bodies := {}
+var _room_shapes := {}
+## Buildings that have had a room laid in them. See _refresh_furniture.
+var _furnished := {}
 var _brick_meshes := {}    ## building id -> the ArrayMesh whose indices we patch
 ## Meshes the renderer may still be holding. See MeshRetirer.
 var _retirer := MeshRetirer.new()
@@ -571,7 +580,12 @@ func _open_room(id: int, index: int) -> int:
 	var t1 := Time.get_ticks_usec()
 	_add_room_shapes(id, index)
 	_room_shape_ms += float(Time.get_ticks_usec() - t1) / 1000.0
-	_queue_remesh(id)
+	# NOT _queue_remesh. A room's contents are not in the building's face bake,
+	# so the building's mesh has not changed and re-uploading it would be the
+	# whole 225 ms this design exists to remove. What changed is the furniture,
+	# and that is its own MultiMesh over its own blocks.
+	_furnished[id] = true
+	_refresh_furniture(id)
 	_room_opens += 1
 	_room_open_worst = maxf(_room_open_worst, float(Time.get_ticks_usec() - t0) / 1000.0)
 	return placed
@@ -589,7 +603,7 @@ func _close_room(id: int, index: int) -> void:
 		leaving.append_array(item.get("blocks", PackedInt32Array()) as PackedInt32Array)
 	_disable(id, leaving)
 	registry.deactivate_room(id, index)
-	_queue_remesh(id)
+	_refresh_furniture(id)
 
 
 ## Collision for what a room just laid, appended to the building's body.
@@ -597,15 +611,42 @@ func _close_room(id: int, index: int) -> void:
 ## One box per block and no merging: a chair is five blocks, and a room of them
 ## is a few dozen shapes against a tower's thousands. Every item part is a box,
 ## so `get_block_ticks` describes it exactly.
-func _add_room_shapes(id: int, index: int) -> void:
+## Redraw a building's interiors.
+##
+## A walk over the decorative blocks of one chunk -- hundreds, against the tens
+## of thousands a face bake walks -- and the building's own mesh is not touched
+## at all. See FurnitureMesh.
+func _refresh_furniture(id: int) -> void:
+	# Nothing has ever been laid in this building, so there is nothing to
+	# redraw -- and this is the guard that makes the call safe to put on the
+	# damage path. get_decorative_blocks walks every block in the chunk, so
+	# without it a burst of fire at an unfurnished tower paid for a scan of
+	# the whole tower per hit. That cost the stress pass a millisecond of
+	# mean frame and nine of its damage phase.
+	if not _furnished.has(id):
+		return
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
+		return
+	FurnitureMesh.attach(world, b.chunk, _brick_nodes[id], _furniture)
+
+
+## `batch` leaves the body out of the physics space for the caller to put back,
+## so that opening several rooms at once pays for one swap rather than one each.
+## Opening every room of a 4,000-room building a swap at a time is quadratic and
+## measured 11.6 s; batched it is a tenth of a second.
+func _add_room_shapes(id: int, index: int, batch: bool = false) -> void:
 	var b := registry.get_building(id)
 	var room := registry.get_room(id, index)
 	if b == null or room == null or not _brick_bodies.has(id):
 		return
-	var body: RID = _brick_bodies[id]
-	var map: Dictionary = _brick_shapes.get(id, {})
+	var body := _room_body(id)
+	if not body.is_valid():
+		return
+	var map: Dictionary = _room_shapes.get(id, {})
 	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
-	PhysicsServer3D.body_set_space(body, RID())
+	if not batch:
+		PhysicsServer3D.body_set_space(body, RID())
 	for item in room.items:
 		for block in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
 			var ticks: Array = world.get_block_ticks(b.chunk, block)
@@ -619,8 +660,51 @@ func _add_room_shapes(id: int, index: int) -> void:
 			var shapes: PackedInt32Array = map.get(block, PackedInt32Array())
 			shapes.push_back(at)
 			map[block] = shapes
-	_brick_shapes[id] = map
+	_room_shapes[id] = map
+	if not batch:
+		PhysicsServer3D.body_set_space(body, get_world_3d().space)
+
+
+## The static body a building's OPEN ROOMS put their collision on.
+##
+## Not the building's own body, and the reason is the same one that took
+## interiors out of the face bake. Adding a room's shapes means lifting the
+## body out of the physics space and putting it back, and that call is priced
+## by the body's shape count -- on a 50,000-brick tower that is 56,000 shapes,
+## and it measured **22 ms for one room**. A separate body carries hundreds.
+##
+## One per building rather than one per room, because the swap is what costs,
+## not the shapes: a building with twenty rooms open is one body of a few
+## thousand boxes, and opening the twenty-first pays for those rather than for
+## the tower.
+##
+## It never has to ride anything. A building that comes apart hands its blocks
+## to an island, and an island builds its collision from the CHUNK -- decorative
+## blocks included -- so the furniture is covered there by a body that already
+## exists. This one exists only while the building is standing.
+func _room_body(id: int) -> RID:
+	if _room_bodies.has(id):
+		return _room_bodies[id]
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised():
+		return RID()
+	var body := PhysicsServer3D.body_create()
+	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
+	PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
+	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
+	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM,
+			world.get_chunk_transform(b.chunk))
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
+	_room_bodies[id] = body
+	return body
+
+
+## Take a building's room collision away entirely. Called when the bricks go.
+func _free_room_body(id: int) -> void:
+	if _room_bodies.has(id):
+		PhysicsServer3D.free_rid(_room_bodies[id])
+		_room_bodies.erase(id)
+	_room_shapes.erase(id)
 
 
 ## How far a point is from a box. AABB has `has_point` and nothing between, and
@@ -1033,6 +1117,7 @@ func _finish_promotions() -> void:
 		_pending_bricks.remove_at(i)
 		_remesh(id, true)
 		_remesh_frames(id)
+		_refresh_furniture(id)
 		_free_shell(id)
 		done += 1
 
@@ -1072,6 +1157,11 @@ func _topple(id: int) -> void:
 	var carried_bytes: int = int(_brick_index_bytes.get(id, 0))
 	var carried_width: int = int(_brick_index_width.get(id, 4))
 	_brick_bodies.erase(id)
+	# The furniture body belongs to a STANDING building. What is falling
+	# carries its own -- an island builds collision from the chunk, and a
+	# decorative block is in the chunk like any other.
+	_free_room_body(id)
+	_furnished.erase(id)
 	_brick_nodes.erase(id)
 	_brick_meshes.erase(id)
 	_brick_index_bytes.erase(id)
@@ -1269,10 +1359,30 @@ func _disable(id: int, ids: PackedInt32Array) -> void:
 	# Merged boxes span blocks, so there is nothing to disable one at a time
 	# until the shapes are per block again.
 	_ensure_building_per_block(id)
-	var body: RID = _brick_bodies[id]
-	var map: Dictionary = _brick_shapes[id]
-	# Lifting the body out of the space first: each shape call costs time
-	# proportional to the body's shape count, so in a loop it is quadratic.
+	# Interiors are drawn from their own blocks rather than from the face
+	# bake, so a blast that takes a chair out has to be told to redraw one.
+	_refresh_furniture(id)
+	_disable_on(_brick_bodies[id], _brick_shapes.get(id, {}), ids)
+	# And the furniture body, if this building has one. A blast does not
+	# know which of the two a block it killed was on, so both are asked.
+	if _room_bodies.has(id):
+		_disable_on(_room_bodies[id], _room_shapes.get(id, {}), ids)
+
+
+## Switch off the shapes these blocks own on one body.
+##
+## Lifting the body out of the space first: each shape call costs time
+## proportional to the body's shape count, so in a loop it is quadratic.
+func _disable_on(body: RID, map: Dictionary, ids: PackedInt32Array) -> void:
+	if map.is_empty():
+		return
+	var any := false
+	for bid in ids:
+		if map.has(bid):
+			any = true
+			break
+	if not any:
+		return
 	PhysicsServer3D.body_set_space(body, RID())
 	for bid in ids:
 		if map.has(bid):
@@ -1428,9 +1538,18 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		var t_room := Time.get_ticks_usec()
 		var woke: int = registry.compromise_rooms(b.id, point, radius, watched_room)
 		if woke > 0 and watched_room:
-			for room in registry.rooms_of(b.id):
-				if room.active:
-					_add_room_shapes(b.id, room.id)
+			var fb := _room_body(b.id)
+			if fb.is_valid():
+				PhysicsServer3D.body_set_space(fb, RID())
+				for room in registry.rooms_of(b.id):
+					if room.active:
+						_add_room_shapes(b.id, room.id, true)
+				PhysicsServer3D.body_set_space(fb, get_world_3d().space)
+			# A blast furnishes rooms without _open_room ever running, so the
+			# building has to be told it holds furniture now or the redraw
+			# guard will skip it forever.
+			_furnished[b.id] = true
+			_refresh_furniture(b.id)
 		if woke > 0:
 			_room_compromises += woke
 			if watched_room:
@@ -1900,6 +2019,12 @@ func _trim_quiet() -> void:
 ## index, which is not this function's business.
 func _demote(id: int, dist: float) -> void:
 	var _ta := Time.get_ticks_usec()
+	# Before dematerialising, which is what takes the chunk id away: the
+	# furniture node is keyed on the chunk, not on the building.
+	var gone := registry.get_building(id)
+	FurnitureMesh.drop(gone.chunk if gone != null else -1, _furniture)
+	_free_room_body(id)
+	_furnished.erase(id)
 	registry.dematerialise(id)
 	_trim_split.demat += float(Time.get_ticks_usec() - _ta) / 1000.0
 	_ta = Time.get_ticks_usec()
@@ -3034,7 +3159,6 @@ func _run_interiors_pass() -> void:
 	var lay := 0.0
 	var shapes_ms := 0.0
 	var mesh_ms := 0.0
-	var bake_ms := 0.0
 	var worst := 0.0
 	var opened := 0
 	var laid := 0
@@ -3050,27 +3174,26 @@ func _run_interiors_pass() -> void:
 			continue
 		_add_room_shapes(biggest, room.id)
 		var c := Time.get_ticks_usec()
-		# What the streamer defers to the end of the tick, charged here to the
-		# room that caused it: one room opening dirties the whole building's
-		# face bake, and the mesh that draws it.
-		bake_ms += _bake_and_wait(chunk)
-		var cb := Time.get_ticks_usec()
-		_remesh(biggest, true)
+		# Everything else _open_room does. The face bake is NOT in this list
+		# any more and that is the whole point: a decorative block is not in
+		# the bake, so opening a room cannot invalidate it. What is left is
+		# redrawing the furniture, over the furniture's own blocks.
+		_refresh_furniture(biggest)
 		var d := Time.get_ticks_usec()
 		lay += float(b_ - a) / 1000.0
 		shapes_ms += float(c - b_) / 1000.0
-		mesh_ms += float(d - cb) / 1000.0
+		mesh_ms += float(d - c) / 1000.0
 		worst = maxf(worst, float(d - a) / 1000.0)
 		laid += placed
 		opened += 1
 		await _frames(1)
-	var a_total := lay + shapes_ms + bake_ms + mesh_ms
+	var a_total := lay + shapes_ms + mesh_ms
 	var per_room := a_total / maxf(opened, 1)
 	print("\n[interiors] A: one room at a time (what the streamer does)")
 	print("[interiors]   %d room(s), %d brick(s), %.0f ms total, %.1f ms a room, worst %.1f ms"
 			% [opened, laid, a_total, per_room, worst])
-	print("[interiors]   lay %.0f + collision %.0f + FACE BAKE %.0f (%.0f%%) + mesh upload %.0f ms"
-			% [lay, shapes_ms, bake_ms, 100.0 * bake_ms / maxf(a_total, 0.001), mesh_ms])
+	print("[interiors]   lay %.0f + collision %.0f (%.0f%%) + furniture redraw %.0f ms; face bake untouched"
+			% [lay, shapes_ms, 100.0 * shapes_ms / maxf(a_total, 0.001), mesh_ms])
 	print("[interiors]   every room in this building this way: %d x %.1f ms = %.0f s of work"
 			% [rooms.size(), per_room, rooms.size() * per_room / 1000.0])
 	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
@@ -3091,11 +3214,15 @@ func _run_interiors_pass() -> void:
 	for room in registry.rooms_of(biggest):
 		all_laid += registry.activate_room(biggest, room.id)
 	var t_laid := Time.get_ticks_usec()
-	_brick_merged[biggest] = true   # force the rebuild below to actually run
-	_reshape_building(biggest, false)
+	# Batched: one swap of the furniture body in and out of the physics
+	# space for the lot. A swap a room is quadratic and measured 11.6 s.
+	var fb := _room_body(biggest)
+	PhysicsServer3D.body_set_space(fb, RID())
+	for room in registry.rooms_of(biggest):
+		_add_room_shapes(biggest, room.id, true)
+	PhysicsServer3D.body_set_space(fb, get_world_3d().space)
 	var t_shapes := Time.get_ticks_usec()
-	_bake_and_wait(chunk)
-	_remesh(biggest, true)
+	_refresh_furniture(biggest)
 	var t_mesh := Time.get_ticks_usec()
 	var bl := float(t_laid - t_all) / 1000.0
 	var bs := float(t_shapes - t_laid) / 1000.0
@@ -3104,7 +3231,7 @@ func _run_interiors_pass() -> void:
 	print("\n[interiors] B: the same building, every room at once")
 	print("[interiors]   %d room(s), %d brick(s), %.0f ms total"
 			% [registry.rooms_of(biggest).size(), all_laid, b_total])
-	print("[interiors]   lay %.0f ms + collision %.0f ms + bake and mesh %.0f ms"
+	print("[interiors]   lay %.0f ms + collision %.0f ms + furniture redraw %.0f ms"
 			% [bl, bs, bm])
 	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
 			% [_world_mb(), _world_mb() - b_bare_mb,
@@ -3133,11 +3260,9 @@ func _run_interiors_pass() -> void:
 			if idx >= registry.rooms_of(biggest).size():
 				break
 			if registry.activate_room(biggest, idx) > 0:
+				_add_room_shapes(biggest, idx)
 				c_rooms += 1
-		_brick_merged[biggest] = true
-		_reshape_building(biggest, false)
-		_bake_and_wait(chunk)
-		_remesh(biggest, true)
+		_refresh_furniture(biggest)
 		c_total += float(Time.get_ticks_usec() - t_f) / 1000.0
 		await _frames(1)
 	print("\n[interiors] C: a storey at a time")
@@ -4182,11 +4307,18 @@ func _collision_report() -> String:
 			settled_boxes += isl.shape_count
 		else:
 			falling += isl.shape_count
-	return ("%d box(es) in %d standing building(s) (%d bricks), %d in pieces still falling, "
+	# The furniture bodies are separate from the buildings' own (see _room_body),
+	# so they are counted separately or the census quietly stops adding up.
+	var furniture := 0
+	for fid in _room_bodies:
+		furniture += PhysicsServer3D.body_get_shape_count(_room_bodies[fid])
+	return ("%d box(es) in %d standing building(s) (%d bricks), %d on open room contents, "
+			+ "%d in pieces still falling, "
 			+ "%d in settled wreckage; buildings merged %d time(s) (%.1f ms total, worst %.1f) "
 			+ "and un-merged %d (%.1f ms); "
 			+ "islands merged %d time(s), %d boxes against %d unmerged") % [
-			building_shapes, _materialised.size(), building_blocks, falling, settled_boxes,
+			building_shapes, _materialised.size(), building_blocks, furniture,
+			falling, settled_boxes,
 			_merges, _merge_ms, _merge_worst, _unmerges, _unmerge_ms,
 			islands.merged_shapes, islands.merged_boxes, islands.unmerged_boxes]
 

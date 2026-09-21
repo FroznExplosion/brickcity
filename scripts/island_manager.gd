@@ -201,6 +201,11 @@ var band_breaks := 0
 ## can turn it off in a running scene. That is not a debug nicety: this is a fix
 ## no instrument can see, so the only evidence it works is the flash coming back
 ## when it is switched off, and that has to stay available.
+## chunk id -> the MultiMeshInstance3D drawing that chunk's interiors.
+##
+## Interiors are not in the face bake (FurnitureMesh), so a piece that breaks
+## off a furnished building draws its own furniture from here.
+var _furniture := {}
 static var OVERLAP_FRAMES := 2
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
@@ -386,6 +391,12 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
+		# What was standing in the rooms this piece took with it. Under the
+		# MESH, which is the node holding the chunk's own space -- so the
+		# furniture rides the collapse without anything here tracking it, which
+		# is Interiors section 4.2 and the reason interiors are blocks in the
+		# host's grid in the first place.
+		FurnitureMesh.attach(world, isl.chunk, isl.mesh, _furniture)
 
 	var island_xform: Transform3D = world.get_chunk_transform(isl.chunk)
 	isl.body.transform = island_xform * Transform3D(Basis(), isl.local_com)
@@ -696,7 +707,16 @@ func rebuild_chunk(chunk: int) -> bool:
 	isl.changed = true
 	_reshape(isl, isl.settled)
 	rebuild_mesh(isl, true, true)
+	refresh_furniture(isl)
 	return true
+
+
+## Redraw a piece's interiors. Cheap enough to call on any change: it walks the
+## decorative blocks of one chunk, which is a room or two, not a building.
+func refresh_furniture(isl: BrickIsland) -> void:
+	if isl == null or isl.mesh == null:
+		return
+	FurnitureMesh.attach(world, isl.chunk, isl.mesh, _furniture)
 
 
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
@@ -1558,6 +1578,7 @@ func dormant_report() -> Dictionary:
 
 
 func _retire(isl: BrickIsland, index: int) -> void:
+	FurnitureMesh.drop(isl.chunk, _furniture)
 	_mesh_queue.erase(isl)
 	if isl.settled:
 		settled = maxi(settled - 1, 0)
