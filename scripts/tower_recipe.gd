@@ -28,6 +28,44 @@ const COURSES_PER_FLOOR := 4
 const SLAB_PLATES := 2
 const SLAB_COLOUR := 2
 
+## Windows: where a wall is deliberately missing.
+##
+## Interiors §3 makes visibility a portal test -- "can the player see into this
+## room through an opening" -- and until now every opening in the city was a hole
+## somebody blew, because a generated building had none. So the test could not
+## fire on an intact building and a room could only be entered, never seen into.
+##
+## A window is a gap in a RUN, which is all it needs to be: the run lays the full
+## wall thickness in one pass, so a gap in it is a hole clean through.
+##
+## The two constraints that fix everything else about them:
+##
+##   * **The lintel is the last course, and the slab is over that.** A gap with
+##     brickwork over it is brickwork resting on air unless something bridges
+##     the opening, and a greedy run gives no such guarantee on its own. What
+##     does guarantee it is the bond: courses alternate which pair of walls owns
+##     the corners, so the course above a window always starts half a brick
+##     offset from the course the window is cut in, and the bricks over the
+##     opening are carried on the pier at one end each. That is a brick lintel,
+##     built the way a brick lintel is built. Above it is the floor slab, which
+##     is tied to all four walls and is the strongest thing in the building.
+##
+##     Cutting the top TWO courses instead -- letting the slab be the lintel --
+##     works and looks the same, and it is not free: it leaves the slab joined
+##     to its walls only at the piers. Measured on the 200-building stress pass
+##     that tripled the splits (1321 against 440), doubled the breaks and put
+##     the damage phase at 7.5 fps. A building is held together at the band
+##     where its floors meet its walls, and windows do not go there.
+##   * **The corners stay solid.** WINDOW_INSET studs at each end of every run,
+##     because the corners are what make the four walls one structure
+##     (see `build`) and a quoin with a hole in it is four walls again.
+const WINDOW_WIDE := 4       ## studs of opening
+const WINDOW_PITCH := 8      ## studs from one opening to the next
+## On a four-stud boundary, so a run breaks into whole bricks either side of an
+## opening instead of closing each pier with 2x2s and 1x2s.
+const WINDOW_INSET := 4      ## solid wall to leave at each corner
+const WINDOW_COURSES := 1    ## how many courses tall, below the lintel course
+
 # Filament indices, matching brick_grid.h.
 const COURSE_COLOURS := [4, 5, 6, 11, 2, 8]  # red, orange, yellow, tan, grey, blue
 const BASE_COLOUR := 3                        # dark grey
@@ -139,16 +177,23 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 			"course":
 				var colour: int = COURSE_COLOURS[int(band.index) % COURSE_COLOURS.size()]
 				var y: int = band.y
+				# Gaps are in the RUN's own axis, so both window courses take the
+				# same openings whichever pair of walls owns the corners this
+				# course. That is what makes a window a rectangle instead of two
+				# staggered slots.
+				var lit := is_window_course(int(band.index), courses)
+				var gx: Array = window_gaps(footprint_x) if lit else []
+				var gz: Array = window_gaps(footprint_z) if lit else []
 				if int(band.index) % 2 == 0:
-					_run_x(world, chunk_id, palette, y, 0, footprint_x, 0, colour)
-					_run_x(world, chunk_id, palette, y, 0, footprint_x, footprint_z - t, colour)
-					_run_z(world, chunk_id, palette, y, t, footprint_z - t, 0, colour)
-					_run_z(world, chunk_id, palette, y, t, footprint_z - t, footprint_x - t, colour)
+					_run_x(world, chunk_id, palette, y, 0, footprint_x, 0, colour, gx)
+					_run_x(world, chunk_id, palette, y, 0, footprint_x, footprint_z - t, colour, gx)
+					_run_z(world, chunk_id, palette, y, t, footprint_z - t, 0, colour, gz)
+					_run_z(world, chunk_id, palette, y, t, footprint_z - t, footprint_x - t, colour, gz)
 				else:
-					_run_z(world, chunk_id, palette, y, 0, footprint_z, 0, colour)
-					_run_z(world, chunk_id, palette, y, 0, footprint_z, footprint_x - t, colour)
-					_run_x(world, chunk_id, palette, y, t, footprint_x - t, 0, colour)
-					_run_x(world, chunk_id, palette, y, t, footprint_x - t, footprint_z - t, colour)
+					_run_z(world, chunk_id, palette, y, 0, footprint_z, 0, colour, gz)
+					_run_z(world, chunk_id, palette, y, 0, footprint_z, footprint_x - t, colour, gz)
+					_run_x(world, chunk_id, palette, y, t, footprint_x - t, 0, colour, gx)
+					_run_x(world, chunk_id, palette, y, t, footprint_x - t, footprint_z - t, colour, gx)
 			"cornice":
 				for x in range(0, footprint_x - 1, 2):
 					world.place_block(chunk_id, Vector3i(x, band.y, 0), palette.buttress_2x2, 1)
@@ -198,33 +243,85 @@ static func _fill_2x2(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		x += 2
 
 
+## Is this course one of the ones a window is cut through?
+##
+## The courses just under the storey's LAST one, which is left solid to be the
+## lintel -- and only in a storey that actually has a slab over it, because the
+## last few courses of a tower are capped by a cornice and a cornice carries
+## nothing.
+static func is_window_course(index: int, courses: int) -> bool:
+	@warning_ignore("integer_division")
+	var storey := index / COURSES_PER_FLOOR
+	if (storey + 1) * COURSES_PER_FLOOR > courses:
+		return false  # no slab above this one: the cornice is not a lintel
+	var within := index % COURSES_PER_FLOOR
+	return within >= COURSES_PER_FLOOR - 1 - WINDOW_COURSES \
+			and within < COURSES_PER_FLOOR - 1
+
+
+## Where the openings are along a wall of this length, as [from, to) in studs.
+static func window_gaps(span: int) -> Array:
+	var out := []
+	var at := WINDOW_INSET
+	while at + WINDOW_WIDE <= span - WINDOW_INSET:
+		out.append(Vector2i(at, at + WINDOW_WIDE))
+		at += WINDOW_PITCH
+	return out
+
+
+## If `at` is inside an opening, where that opening ends. Otherwise `at`.
+static func _gap_end(gaps: Array, at: int) -> int:
+	for g in gaps:
+		if at >= (g as Vector2i).x and at < (g as Vector2i).y:
+			return (g as Vector2i).y
+	return at
+
+
+## Where the next opening starts after `at`, or a number past any wall.
+static func _gap_next(gaps: Array, at: int) -> int:
+	var best := 1 << 30
+	for g in gaps:
+		if (g as Vector2i).x > at:
+			best = mini(best, (g as Vector2i).x)
+	return best
+
+
 ## Lay a course along X. Largest piece that fits wins, so a run closes its ends
-## with shorter bricks instead of leaving a gap.
+## with shorter bricks instead of leaving a gap -- and stops short of a window
+## rather than laying a brick halfway across one.
 static func _run_x(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, x0: int, x1: int, z: int, colour: int) -> void:
+		y: int, x0: int, x1: int, z: int, colour: int, gaps: Array = []) -> void:
 	var x := x0
 	while x < x1:
-		var remaining := x1 - x
+		var skip := _gap_end(gaps, x)
+		if skip > x:
+			x = skip
+			continue
+		var remaining := mini(x1, _gap_next(gaps, x)) - x
 		if remaining >= 4 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_2x4_x, colour) >= 0:
 			x += 4
 		elif remaining >= 2 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_2x2, colour) >= 0:
 			x += 2
-		elif world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_1x2_z, colour) >= 0:
+		elif remaining >= 1 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_1x2_z, colour) >= 0:
 			x += 1
 		else:
-			x += 1  # cell already taken; step over it
+			x += 1  # cell already taken, or the last stud before a window
 
 
 static func _run_z(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, z0: int, z1: int, x: int, colour: int) -> void:
+		y: int, z0: int, z1: int, x: int, colour: int, gaps: Array = []) -> void:
 	var z := z0
 	while z < z1:
-		var remaining := z1 - z
+		var skip := _gap_end(gaps, z)
+		if skip > z:
+			z = skip
+			continue
+		var remaining := mini(z1, _gap_next(gaps, z)) - z
 		if remaining >= 4 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_2x4_z, colour) >= 0:
 			z += 4
 		elif remaining >= 2 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_2x2, colour) >= 0:
 			z += 2
-		elif world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_1x2_x, colour) >= 0:
+		elif remaining >= 1 and world.place_block(chunk_id, Vector3i(x, y, z), palette.brick_1x2_x, colour) >= 0:
 			z += 1
 		else:
 			z += 1

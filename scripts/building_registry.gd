@@ -204,8 +204,13 @@ func get_room(building_id: int, index: int) -> Room:
 ## moved on. Interiors §3: a destroyed wall is a new opening, and it falls out
 ## of the damage record for free.
 ##
-## An UNDAMAGED building has none, and is not walked at all -- which is what
-## keeps a portal test off the bill for a city that has not been shot at.
+## An undamaged building used to have none, and the scan was skipped outright
+## for one. That was true when every opening in the city was a hole somebody
+## blew, and it is not true now: TowerRecipe cuts windows into the top courses
+## of every storey, which is what gives §3's portal test something to be a test
+## OF. So the scan runs whatever the damage is, and what keeps it off the bill
+## is the cache below -- an undamaged building's walls are scanned once and
+## never again until something changes them.
 func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[AABB]:
 	var b := get_building(building_id)
 	var room := get_room(building_id, index)
@@ -223,7 +228,7 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 		# is a hole next tick too.
 		return room.openings
 	room.openings_at = dead
-	room.openings = ([] as Array[AABB]) if dead == 0 else RoomManifest.openings_for(
+	room.openings = RoomManifest.openings_for(
 			world, b.chunk, room, b.recipe.footprint_x, b.recipe.footprint_z)
 	return room.openings
 

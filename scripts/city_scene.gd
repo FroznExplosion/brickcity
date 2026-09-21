@@ -693,8 +693,6 @@ func _stream_rooms() -> void:
 		for b in here_buildings:
 			if opened >= ROOMS_PER_PASS:
 				break
-			if not b.is_damaged():
-				continue
 			for room in registry.rooms_of(b.id):
 				if room.active or not _can_see_into(b, room):
 					continue
@@ -740,7 +738,7 @@ func _stream_rooms() -> void:
 			# Still being looked into is what keeps it open past the range that
 			# would otherwise shut it: Interiors section 3's hysteresis, with
 			# visibility rather than a timer.
-			if b.is_damaged() and _can_see_into(b, room):
+			if _can_see_into(b, room):
 				continue
 			_close_room(b.id, room.id)
 
@@ -2600,12 +2598,39 @@ func _run_lod_pass() -> void:
 	# from the first hole: firing at the same point again destroys nothing
 	# because everything in range of it is already destroyed, which is the game
 	# being right and the test being wrong.
+	#
+	# And aimed at a FLOOR SLAB rather than at a fraction of the height. The
+	# walls have windows in them now, and a ray through a window is a ray out
+	# of the far side of the building: the shot landed on nothing and the check
+	# read it as damage not carrying to 200 m. A slab spans the whole footprint
+	# and is the one band of a tower that is solid all the way across.
 	var aim_high: Vector3 = target.xform.origin + Vector3(
 			target.recipe.footprint_x * 0.35 * 0.5,
-			target.recipe.courses * TowerRecipe.PLATES_PER_COURSE * 0.14 * 0.8,
+			_slab_height(target.recipe.courses, 0.8),
 			target.recipe.footprint_z * 0.35 * 0.5)
 	var before: int = _dead_count(0)
 	camera.look_at(aim_high, Vector3.UP)
+	# From whichever bearing has a clear line. The first shot knocked a piece
+	# off the near wall, and a piece knocked off a building 200 m away is a
+	# rigid body standing between the camera and the target: the shot lands on
+	# the DEBRIS and the building takes nothing, which is the game being right
+	# and the test aiming badly. Walk round until the ray reaches the building
+	# itself.
+	var bearings := [Vector3(0.0, 0.0, -1.0), Vector3(-1.0, 0.0, 0.0),
+			Vector3(0.0, 0.0, 1.0), Vector3(1.0, 0.0, 0.0)]
+	var clear_line := false
+	for bearing in bearings:
+		camera.global_position = aim_high + (bearing as Vector3) * 200.0
+		camera.look_at(aim_high, Vector3.UP)
+		await _frames(10)
+		var look := PhysicsRayQueryParameters3D.create(camera.global_position,
+				camera.global_position - camera.global_transform.basis.z * FIRE_RANGE)
+		look.collision_mask = Layers.HITSCAN_MASK
+		var seen := get_world_3d().direct_space_state.intersect_ray(look)
+		if not seen.is_empty() and islands.find_by_body(seen.collider) == null:
+			clear_line = true
+			break
+	check.call("there is a clear line to it from 200 m", clear_line, "")
 	_fire(1.6)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
@@ -3031,9 +3056,11 @@ func _run_rooms_pass() -> void:
 			world.get_alive_block_count(chunk) <= bare,
 			"%d against %d" % [world.get_alive_block_count(chunk), bare])
 
-	# The portal test: a hole in a wall is a way to see in, from further than
-	# anybody could walk.
-	print("\n[rooms] a hole in the wall is a way in")
+	# The portal test: an opening in a wall is a way to see in, from further
+	# than anybody could walk. Two kinds of opening now -- the windows the
+	# recipe cuts into every storey and the holes a blast makes -- and the
+	# test does not know the difference, which is the point of it.
+	print("\n[rooms] an opening in the wall is a way in")
 	var host := registry.get_building(1)
 	_promote(1)
 	await _frames(20)
@@ -3055,10 +3082,26 @@ func _run_rooms_pass() -> void:
 	await _frames(20)
 	# Counted for THIS building: by now the first one has holes in it, and a
 	# hole in view is exactly what the test below is about to rely on.
-	_gate_ok("nothing is open in it from sixty metres away",
-			_open_rooms_of(1) == 0, "%d open" % _open_rooms_of(1))
-	_gate_ok("because an undamaged wall has no openings",
-			registry.openings_of(1, target.id).is_empty())
+	# Its walls have windows: every storey with a slab over it is cut through
+	# in its top two courses. So the room OPENS from out here, on the portal
+	# test alone, with nothing having been fired at it -- which is the thing
+	# windows were added for. Before them the test could only fire on a
+	# building somebody had already shot, and a room could be walked into
+	# but never seen into.
+	var windows: int = registry.openings_of(1, target.id).size()
+	_gate_ok("an undamaged wall has windows in it", windows > 0, "%d" % windows)
+	_gate_ok("each of them one window, not a box drawn round two",
+			_widest_opening(1, target.id) < 2.0,
+			"widest %.2f m" % _widest_opening(1, target.id))
+	guard = 0
+	while guard < 300 and _open_rooms_of(1) == 0:
+		await _frames(1)
+		guard += 1
+	_gate_ok("and looking in through one opens the room from sixty metres",
+			_open_rooms_of(1) > 0, "%d open" % _open_rooms_of(1))
+	for room in registry.rooms_of(1):
+		if room.active:
+			_close_room(1, room.id)
 
 	# Blow one. The blast compromises the room, which is a different trigger --
 	# so it is shut again before the portal test is asked anything.
@@ -3436,6 +3479,36 @@ func _run_fixture_pass() -> void:
 
 ## Rooms of one building that are holding their contents. The global count is
 ## not the same question once another building in view has a hole in it.
+## The longest side of the widest opening a room reports, in metres.
+##
+## A window is 4 studs (1.4 m). Much wider than that means the scan merged
+## two of them across the pier between, which is what used to make the portal
+## test aim its ray at solid brickwork.
+func _widest_opening(id: int, index: int) -> float:
+	var widest := 0.0
+	for box in registry.openings_of(id, index):
+		widest = maxf(widest, maxf((box as AABB).size.x, (box as AABB).size.z))
+	return widest
+
+
+## The height in metres of the floor slab nearest `fraction` of the way up a
+## tower of this many courses. Somewhere to aim that is not a window.
+func _slab_height(courses: int, fraction: float) -> float:
+	var bands := TowerRecipe.layout(courses)
+	var top := TowerRecipe.total_plates(courses)
+	var want := float(top) * fraction
+	var best := want
+	var gap := INF
+	for band in bands:
+		if str(band.kind) != "slab":
+			continue
+		var y := float(band.y)
+		if absf(y - want) < gap:
+			gap = absf(y - want)
+			best = y
+	return best * 0.14
+
+
 func _open_rooms_of(id: int) -> int:
 	var n := 0
 	for room in registry.rooms_of(id):

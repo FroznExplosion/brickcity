@@ -201,8 +201,17 @@ static func _item_span(type: String) -> Vector3i:
 ##
 ## Interiors §3's portals, and the whole of what makes them cheap: a room is an
 ## axis-aligned box on a grid, so "is there a hole in that wall" is a walk over
-## integer cells rather than anything geometric. Returns one box per side that
-## has a hole in it, in the building's own local metres.
+## integer cells rather than anything geometric. Returns one box per APERTURE --
+## per contiguous run of missing wall along a side -- in the building's own local
+## metres.
+##
+## Per aperture and not per side, and the difference is the whole test. A side
+## used to report the bounding box of every hole in it, which was harmless while
+## the only holes were blast craters (one blast, one crater) and became wrong the
+## moment walls had windows: two windows with a pier between them reported one
+## box spanning both, whose centre is the pier. §3 aims a ray at that centre to
+## ask whether the opening can be seen through, and the answer was always no --
+## the ray hit the brickwork between the two windows.
 ##
 ## The step is two studs and a course -- a brick -- because a hole you can see a
 ## room through is at least one brick wide, and sampling every cell of four wall
@@ -224,29 +233,61 @@ static func openings_for(world: BrickWorld, chunk: int, room: Room,
 		{"axis": "x", "at": footprint_x - inner, "from": room.lo.z, "to": room.lo.z + room.size.z},
 	]
 	for side in sides:
-		var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
-		var hi := Vector3i(-(1 << 30), -(1 << 30), -(1 << 30))
-		var holes := 0
-		var y := room.lo.y
-		while y < room.lo.y + room.size.y:
-			var u: int = side.from
-			while u < side.to:
-				var at: Vector3i = (Vector3i(u, y, int(side.at)) if side.axis == "z"
-						else Vector3i(int(side.at), y, u))
-				if not world.is_solid(chunk, at):
-					holes += 1
-					lo = Vector3i(mini(lo.x, at.x), mini(lo.y, at.y), mini(lo.z, at.z))
-					hi = Vector3i(maxi(hi.x, at.x), maxi(hi.y, at.y), maxi(hi.z, at.z))
-				u += 2
-			y += plates
-		if holes == 0:
-			continue
-		out.append(AABB(
-				Vector3(lo.x * cell.x, lo.y * cell.y, lo.z * cell.z),
-				Vector3(maxf((hi.x - lo.x + 2) * cell.x, cell.x),
-						maxf((hi.y - lo.y + plates) * cell.y, cell.y),
-						maxf((hi.z - lo.z + 2) * cell.z, cell.z))))
+		# One pass along the side. A column of the wall either has a hole
+		# somewhere up it or does not; consecutive columns that do are one
+		# aperture, and the first solid column closes it.
+		var run_from := -1
+		var run_to := -1
+		var run_lo_y := 0
+		var run_hi_y := 0
+		var u: int = side.from
+		while u <= side.to:
+			var top := -1
+			var bottom := -1
+			if u < side.to:
+				var y := room.lo.y
+				while y < room.lo.y + room.size.y:
+					var at: Vector3i = (Vector3i(u, y, int(side.at)) if side.axis == "z"
+							else Vector3i(int(side.at), y, u))
+					if not world.is_solid(chunk, at):
+						if bottom < 0:
+							bottom = y
+						top = y
+					y += plates
+			if bottom >= 0:
+				if run_from < 0:
+					run_from = u
+					run_lo_y = bottom
+					run_hi_y = top
+				else:
+					run_lo_y = mini(run_lo_y, bottom)
+					run_hi_y = maxi(run_hi_y, top)
+				run_to = u + 2
+			elif run_from >= 0:
+				out.append(_aperture(side, run_from, run_to, run_lo_y, run_hi_y, plates, cell))
+				run_from = -1
+			u += 2
+		if run_from >= 0:
+			out.append(_aperture(side, run_from, run_to, run_lo_y, run_hi_y, plates, cell))
 	return out
+
+
+## One opening's box, in the building's own local metres. `side` says which wall
+## plane it is in and which axis the run measures along.
+static func _aperture(side: Dictionary, from_u: int, to_u: int, lo_y: int, hi_y: int,
+		plates: int, cell: Vector3) -> AABB:
+	var thick := TowerRecipe.WALL_THICK
+	var lo: Vector3
+	var size: Vector3
+	if side.axis == "z":
+		lo = Vector3(from_u * cell.x, lo_y * cell.y, int(side.at) * cell.z)
+		size = Vector3((to_u - from_u) * cell.x, (hi_y - lo_y + plates) * cell.y,
+				thick * cell.z)
+	else:
+		lo = Vector3(int(side.at) * cell.x, lo_y * cell.y, from_u * cell.z)
+		size = Vector3(thick * cell.x, (hi_y - lo_y + plates) * cell.y,
+				(to_u - from_u) * cell.z)
+	return AABB(lo, size)
 
 
 ## Which way is down for a room whose building has fallen over.
