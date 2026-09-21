@@ -89,14 +89,94 @@ float value_noise3(float x, float y, float z, uint32_t seed) {
 
 // --- the field -------------------------------------------------------------
 
-int Field::nominal_height(int x, int z) const {
+/// Curved ground. See BrickTerrain::set_smooth_terrain.
+static bool g_smooth_terrain = false;
+
+namespace smoothcfg {
+/// ~67 studs (23 m) a biome patch.
+///
+/// This was 0.0035 -- a 285-stud patch -- and the whole 160-stud test field
+/// then sat INSIDE ONE NOISE CELL, so the "regional" mask was a single
+/// constant and 100% of the map came out curved. A mask whose wavelength
+/// exceeds the world cannot be a mask. The plate-step mask had exactly the
+/// same bug and the same fix; both are measured now rather than asserted.
+constexpr float FREQ = 0.015f;
+/// Above this the biome asks for curves -- value_noise is [-1, 1], so zero
+/// is about half the map before steepness gets a say.
+constexpr float BIAS = 0.0f;
+/// ...but only where it is not steep. A cliff of stacked courses looks
+/// BUILT, and a smooth 45-degree slope is where a heightfield looks most
+/// like a heightfield -- so steepness overrules the biome, never the other
+/// way round.
+///
+/// In plates a stud, on the UNQUANTISED surface. Measured on this field:
+/// median 0.17, p90 0.50, max 0.67, so 0.30 keeps the flats and hands the
+/// valley sides back to the bricks.
+constexpr float MAX_SLOPE = 0.30f;
+/// ...and the same test on the QUANTISED surface, in plates, because the
+/// continuous one does not know about the plate-step mask: a curve can be
+/// gentle and still straddle the boundary where quantisation changes from
+/// plates to bricks, and the drawn step there is a whole brick. The probe
+/// found a 3-plate cliff under a curve on the first run.
+constexpr int MAX_QSTEP = 2;
+}
+
+/// Steepness at a column, in plates a stud: the larger of the two central
+/// differences of the unquantised surface.
+static float surface_slope(const Field &f, int x, int z) {
+    const float dx = (f.raw_plate(x + 1, z) - f.raw_plate(x - 1, z)) * 0.5f;
+    const float dz = (f.raw_plate(x, z + 1) - f.raw_plate(x, z - 1)) * 0.5f;
+    return std::max(std::abs(dx), std::abs(dz));
+}
+
+/// Curve or bricks, for one column. `qstep` is the largest step to a
+/// neighbour on the QUANTISED surface, in plates -- the caller has it to
+/// hand, and recomputing it would be four more field evaluations a cell.
+static bool smooth_column(const Field &f, int x, int z, int qstep) {
+    return qstep <= smoothcfg::MAX_QSTEP
+            && surface_slope(f, x, z) <= smoothcfg::MAX_SLOPE
+            && value_noise((float)x * smoothcfg::FREQ, (float)z * smoothcfg::FREQ,
+                    f.seed + 6197U) > smoothcfg::BIAS;
+}
+
+/// Quantise the surface to plates rather than bricks. See set_plate_steps.
+static bool g_plate_steps = false;
+
+float Field::raw_plate(int x, int z) const {
+    const float base = fbm((float)x * 0.010f, (float)z * 0.010f, seed, 3, 2.0f, 0.5f);
+    const float detail = value_noise((float)x * 0.035f, (float)z * 0.035f, seed + 977U) * 0.25f;
+    return (base + detail) * 7.0f * (float)PLATES_PER_CELL
+            + 5.0f * (float)PLATES_PER_CELL;
+}
+
+int Field::top_plate(int x, int z) const {
     // 0.010 per stud is a ~100-stud (35 m) feature size for the base shape.
     const float base = fbm((float)x * 0.010f, (float)z * 0.010f, seed, 3, 2.0f, 0.5f);
     const float detail = value_noise((float)x * 0.035f, (float)z * 0.035f, seed + 977U) * 0.25f;
     // fBm over value noise rarely reaches its extremes, so the multiplier is
     // bigger than the nominal range suggests: x4 measured only five terraces
     // across the whole test field.
-    return (int)std::floor((base + detail) * 7.0f + 5.0f);
+    const float v = base + detail;
+    // Plate steps are REGIONAL, not global. Everywhere at once cost 60% more
+    // triangles and a third of the studs (section 17.23) for a smoothness
+    // that only some ground wants; a low-frequency mask puts it on about
+    // half the map, in patches big enough to read as terrain rather than as
+    // noise.
+    // 0.012 is a ~83-stud patch. It was 0.004, a 250-stud one, which is
+    // wider than the test field -- so "about half the map" was in fact all
+    // of it, every time. Measured now.
+    if (g_plate_steps
+            && value_noise((float)x * 0.012f, (float)z * 0.012f, seed + 3301U) > 0.0f) {
+        // The same relief, cut into plates instead of bricks: three times the
+        // steps, each a third the height.
+        return (int)std::floor(v * 7.0f * (float)PLATES_PER_CELL
+                + 5.0f * (float)PLATES_PER_CELL);
+    }
+    return ((int)std::floor(v * 7.0f + 5.0f) + 1) * PLATES_PER_CELL - 1;
+}
+
+int Field::nominal_height(int x, int z) const {
+    return floor_div(top_plate(x, z), PLATES_PER_CELL);
 }
 
 int Field::material_at(int x, int z, int h) const {
@@ -152,17 +232,25 @@ bool Field::cave_at(int x, int yp, int z, int top) const {
     return std::fabs(a) < w && std::fabs(b) < w;
 }
 
+/// Heightfield mode. See BrickTerrain::set_flat_mode.
+static bool g_flat_mode = false;
+
 int Field::solid_at(int x, int yp, int z) const {
+    if (g_flat_mode) {
+        const int t = top_plate(x, z);
+        return yp > t ? MAT_AIR : material_at(x, z, floor_div(t, PLATES_PER_CELL));
+    }
     if (!edits_empty()) {
         const int e = edit_at(pack_cell(x, yp, z));
         if (e >= 0) {
             return e;   // an edit is the truth, air included
         }
     }
-    const int h = nominal_height(x, z);
-    if (yp >= (h + 1) * PLATES_PER_CELL) {
+    const int t = top_plate(x, z);
+    if (yp > t) {
         return MAT_AIR;
     }
+    const int h = floor_div(t, PLATES_PER_CELL);
     if (cave_at(x, yp, z)) {
         return MAT_AIR;
     }
@@ -243,16 +331,16 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // The mask spans from a little above the highest nominal surface down
     // SECTION_BELOW plates from the lowest. Everything above is air and
     // everything below is rock, and neither needs storing (section 17.4).
-    int hi = -100000, lo = 100000;
+    int hi = -1000000, lo = 1000000;
     for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
-            const int h = f.nominal_height(gx0 + lx, gz0 + lz);
-            hi = std::max(hi, h);
-            lo = std::min(lo, h);
+            const int t = f.top_plate(gx0 + lx, gz0 + lz);
+            hi = std::max(hi, t);
+            lo = std::min(lo, t);
         }
     }
-    const int top_plate = (hi + 1) * PLATES_PER_CELL;
-    out.y0 = (lo + 1) * PLATES_PER_CELL - SECTION_BELOW;
+    const int top_plate = hi + 1;
+    out.y0 = lo + 1 - SECTION_BELOW;
     // Reach whatever has been dug, plus a little, or the bottom of a deep pit
     // falls outside the mask and is never meshed.
     const int dug = deepest_edit_near(tx, tz);
@@ -267,18 +355,19 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // CELL recomputed them for all ~85 plates of every column: 9.4 ms a tile,
     // against 0.6 ms for the heightfield it replaced. Hoisted out, only the
     // cave test and the edit lookup remain per cell.
-    const bool no_edits = edits_empty();
+    const bool no_edits = edits_empty() || g_flat_mode;
     for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
             const int gx = gx0 + lx, gz = gz0 + lz;
-            const int ch = f.nominal_height(gx, gz);
-            const int ctop = (ch + 1) * PLATES_PER_CELL;
+            const int ctop_plate = f.top_plate(gx, gz);
+            const int ch = floor_div(ctop_plate, PLATES_PER_CELL);
+            const int ctop = ctop_plate + 1;
             const uint8_t cmat = (uint8_t)f.material_at(gx, gz, ch);
             for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
                 uint8_t v;
                 if (yp >= ctop) {
                     v = (uint8_t)MAT_AIR;
-                } else if (f.cave_at(gx, yp, gz, ctop)) {
+                } else if (!g_flat_mode && f.cave_at(gx, yp, gz, ctop)) {
                     v = (uint8_t)MAT_AIR;
                 } else {
                     v = cmat;
@@ -377,6 +466,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     out.mat.assign(SPAN * SPAN, 0);
     out.plate.assign(SPAN * SPAN, 0);
     out.ramp.assign(SPAN * SPAN, 255);
+    out.smooth.assign(SPAN * SPAN, 0);
 
     for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
@@ -410,13 +500,39 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
             // With an integer height this is an EQUALITY test, not a normal
             // threshold. No tuning constant, and a slope gets NO studs rather
             // than some -- spec section 4's "no half-studs melting into hills".
-            out.plate[i] = (n[0] == h && n[1] == h && n[2] == h && n[3] == h) ? 1 : 0;
+            // Flat means the same exact PLATE. Comparing bricks called a
+            // one-plate step flat, which with plate quantisation is most of
+            // the terrain.
+            const int t = out.tp[i];
+            const int nt[4] = {
+                out.tp[TileSample::idx(lx - 1, lz)],
+                out.tp[TileSample::idx(lx + 1, lz)],
+                out.tp[TileSample::idx(lx, lz - 1)],
+                out.tp[TileSample::idx(lx, lz + 1)],
+            };
+            out.plate[i] = (nt[0] == t && nt[1] == t && nt[2] == t && nt[3] == t) ? 1 : 0;
+
+            // CURVED or BRICKED, from the biome and the steepness together.
+            //
+            // Steepness is free: the four neighbours are already in hand,
+            // and it is the half that carries the idea -- steep ground goes
+            // bricked because a stack of courses is what a cliff should look
+            // like. The biome decides what happens on the flat.
+            if (g_smooth_terrain) {
+                int qstep = 0;
+                for (int k = 0; k < 4; ++k) {
+                    qstep = std::max(qstep, std::abs(nt[k] - t));
+                }
+                out.smooth[i] = smooth_column(f, out.tx * TILE + lx,
+                        out.tz * TILE + lz, qstep) ? 1 : 0;
+            }
 
             int lower = -1, count = 0;
             for (int k = 0; k < 4; ++k) {
                 if (n[k] < h) { ++count; lower = k; }
             }
-            out.ramp[i] = (count == 1 && n[lower] == h - 1) ? (uint8_t)lower : (uint8_t)255;
+            out.ramp[i] = (RAMPS_ENABLED && count == 1 && n[lower] == h - 1)
+                    ? (uint8_t)lower : (uint8_t)255;
         }
     }
 }
@@ -509,6 +625,10 @@ static const SizeStep LADDER[] = {
 };
 static const int LADDER_COUNT = (int)(sizeof(LADDER) / sizeof(LADDER[0]));
 
+/// How many brick pieces carry a second course — a tile or a plate laid on
+/// their studs. Runtime so a scene can turn it off and compare.
+static float g_overlay_chance = OVERLAY_CHANCE;
+
 void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         std::vector<int32_t> &owner) {
     out.clear();
@@ -534,6 +654,14 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         // tile is smooth by definition and a ramp is not flat, so neither
         // does -- which is also why neither can be built on (section 7.6).
         pc.studded = (kind == PIECE_BRICK && material_studded(pc.mat)) ? 1 : 0;
+        // Some flat pieces are laid smooth. A tile takes no studs and nothing
+        // clips to it, so this is also a BUILD rule, not only a look: you
+        // cannot build on a tiled patch (section 7.6).
+        if (pc.studded && hashf(gx0 + ox, gz0 + oz, (int32_t)(seed ^ 0x7113U))
+                < TILE_CHANCE) {
+            pc.kind = (uint8_t)PIECE_TILE;
+            pc.studded = 0;
+        }
         pc.overlay = 0;
         const int index = (int)out.size();
         out.push_back(pc);
@@ -550,6 +678,9 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
     for (int lz = 0; lz < TILE; ++lz) {
         for (int lx = 0; lx < TILE; ++lx) {
             const int i = TileSample::idx(lx, lz);
+            if (s.smooth[i]) {
+                continue;   // curved ground is not made of pieces
+            }
             if (s.ramp[i] != 255) {
                 emit(lx, lz, 1, 1, PIECE_RAMP, s.ramp[i]);
             }
@@ -575,6 +706,11 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                     return false;
                 }
                 const int i = TileSample::idx(cx, cz);
+                // A curve has no pieces in it, so no piece may reach into
+                // one. This is the whole of the packer's involvement.
+                if (s.smooth[i]) {
+                    return false;
+                }
                 if ((s.plate[i] == 1) != want_plate) {
                     return false;
                 }
@@ -639,7 +775,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         }
         const int gx = gx0 + pc.ox;
         const int gz = gz0 + pc.oz;
-        if (hashf(gx, gz, (int32_t)(seed ^ 0x0A11U)) >= OVERLAY_CHANCE) {
+        if (hashf(gx, gz, (int32_t)(seed ^ 0x0A11U)) >= g_overlay_chance) {
             continue;
         }
         const bool smooth = hashf(gx, gz, (int32_t)(seed ^ 0x71E5U)) < OVERLAY_TILE_SHARE;
@@ -663,6 +799,33 @@ using namespace brick;
 
 static Field g_field;
 
+
+/// Metres of real 45-degree chamfer cut off every face edge, or 0 for none.
+///
+/// KNOWN BROKEN, kept behind the `G` toggle as a comparison only. Chamfering
+/// FACES of a surface opens a groove with no bottom: two coplanar pieces each
+/// inset their top, and the V between them has no brick body under it because
+/// the terrain mesh is a skin, not solids. Convex corners have the opposite
+/// fault -- only one of the two faces owns the facet, so the other leaves a
+/// notch.
+///
+/// The fix is not a better face chamfer. It is to draw NEAR bricks as closed
+/// chamfered SOLIDS, which have a body and therefore a groove bottom, the way
+/// `PieceMeshes.chamfered_box` already does for debris. See Terrain.md.
+///
+/// This is the built version of what `brick.gdshader` shades, and it is here
+/// because the shaded bevel does not give a SILHOUETTE: a brick outlined in
+/// light is still a box against the sky.
+///
+/// It is not free and the toggle is not decoration. Every quad becomes
+/// fourteen triangles -- an inset face, four bevel strips and four corners --
+/// so a terrain tile goes from ~3.6k triangles to ~25k and the 25-tile test
+/// field from 70k to roughly 490k. That is affordable for terrain at this
+/// size and is NOT affordable for the city's chunk mesh, where the same
+/// multiplier puts a 150 m tower at 4.8M. Measure before turning it on
+/// anywhere new.
+static float g_face_bevel = 0.0f;
+
 void BrickTerrain::configure(int64_t world_seed) {
     g_field.seed = (uint32_t)(world_seed & 0xffffffff);
 }
@@ -673,6 +836,12 @@ float BrickTerrain::get_brick_metres() { return BRICK_M; }
 int BrickTerrain::get_tile_studs() { return TILE; }
 int BrickTerrain::get_max_piece_length() { return MAX_LEN; }
 int BrickTerrain::get_period() { return PERIOD; }
+
+void BrickTerrain::set_face_bevel(double metres) {
+    g_face_bevel = (float)std::max(0.0, metres);
+}
+
+double BrickTerrain::get_face_bevel() { return (double)g_face_bevel; }
 int BrickTerrain::get_piece_stride() { return PIECE_STRIDE; }
 
 /// The real surface, in bricks: scan down from the nominal top until
@@ -682,7 +851,10 @@ int BrickTerrain::height_at(int x, int z) {
 }
 
 int BrickTerrain::surface_plate(int x, int z) {
-    const int top = (g_field.nominal_height(x, z) + 1) * PLATES_PER_CELL - 1;
+    const int top = g_field.top_plate(x, z);
+    if (g_flat_mode) {
+        return top;   // nothing is ever carved out of it
+    }
     int floor_p = top - SECTION_BELOW;
     const int dug = deepest_edit_near(floor_div(x, TILE), floor_div(z, TILE));
     if (dug != INT_MAX) {
@@ -701,6 +873,34 @@ int BrickTerrain::solid_at(int x, int yp, int z) { return g_field.solid_at(x, yp
 int BrickTerrain::get_edit_count() { return (int)edit_count(); }
 
 void BrickTerrain::clear_terrain_edits() { clear_edits(); }
+
+void BrickTerrain::set_flat_mode(bool on) { g_flat_mode = on; }
+
+void BrickTerrain::set_plate_steps(bool on) { g_plate_steps = on; }
+bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
+
+void BrickTerrain::set_smooth_terrain(bool on) { g_smooth_terrain = on; }
+bool BrickTerrain::get_smooth_terrain() { return g_smooth_terrain; }
+
+bool BrickTerrain::smooth_at(int x, int z) {
+    if (!g_smooth_terrain) {
+        return false;
+    }
+    const int t = g_field.top_plate(x, z);
+    int qstep = 0;
+    qstep = std::max(qstep, std::abs(g_field.top_plate(x - 1, z) - t));
+    qstep = std::max(qstep, std::abs(g_field.top_plate(x + 1, z) - t));
+    qstep = std::max(qstep, std::abs(g_field.top_plate(x, z - 1) - t));
+    qstep = std::max(qstep, std::abs(g_field.top_plate(x, z + 1) - t));
+    return smooth_column(g_field, x, z, qstep);
+}
+
+void BrickTerrain::set_overlay_chance(double c) {
+    g_overlay_chance = (float)std::max(0.0, std::min(1.0, c));
+}
+
+double BrickTerrain::get_overlay_chance() { return (double)g_overlay_chance; }
+bool BrickTerrain::get_flat_mode() { return g_flat_mode; }
 
 Dictionary BrickTerrain::carve(Vector3 world_point, double radius_m) {
     Dictionary out;
@@ -793,6 +993,11 @@ bool BrickTerrain::stud_at(int x, int z) {
 }
 
 int BrickTerrain::ramp_dir(int x, int z) {
+    // Must agree with `sample_tile`, or the query says a cell ramps while the
+    // mesher lays a tile there.
+    if (!RAMPS_ENABLED) {
+        return -1;
+    }
     const int h = height_at(x, z);
     const int n[4] = {
         height_at(x - 1, z), height_at(x + 1, z),
@@ -845,6 +1050,19 @@ PackedInt32Array BrickTerrain::pack_tile(int tx, int tz) {
 
 namespace {
 
+
+
+/// Which axis a unit axis-aligned direction lies on. Used to decide, without
+/// either face knowing about the other, which of two faces sharing an edge
+/// draws the chamfer facet between them.
+static inline int axis_of(const Vector3 &v) {
+    const float ax = std::fabs(v.x), ay = std::fabs(v.y), az = std::fabs(v.z);
+    if (ax >= ay && ax >= az) {
+        return 0;
+    }
+    return (ay >= az) ? 1 : 2;
+}
+
 struct MeshBuf {
     PackedVector3Array verts;
     PackedVector3Array normals;
@@ -853,7 +1071,7 @@ struct MeshBuf {
     PackedVector2Array uv2s;
     PackedInt32Array indices;
 
-    void quad(const Vector3 &n, const Color &c, const Vector2 &face,
+    void raw_quad(const Vector3 &n, const Color &c, const Vector2 &face,
             const Vector3 &a, const Vector3 &b, const Vector3 &d, const Vector3 &e,
             const Vector2 &ua, const Vector2 &ub, const Vector2 &ud, const Vector2 &ue) {
         const int base = verts.size();
@@ -867,7 +1085,296 @@ struct MeshBuf {
         indices.push_back(base); indices.push_back(base + 1); indices.push_back(base + 2);
         indices.push_back(base); indices.push_back(base + 2); indices.push_back(base + 3);
     }
+
+    /// A quad with a normal PER VERTEX, so the GPU interpolates across it.
+    /// Everything else in this buffer is a flat face of a brick and wants
+    /// one normal for four corners; curved ground is the one thing that
+    /// does not, and it is the only reason this exists.
+    void quad_soft(const Color &c, const Vector2 &face,
+            const Vector3 v[4], const Vector3 nrm[4], const Vector2 uv[4]) {
+        const int base = verts.size();
+        for (int i = 0; i < 4; ++i) {
+            verts.push_back(v[i]);
+            normals.push_back(nrm[i]);
+            colours.push_back(c);
+            uv2s.push_back(face);
+            uvs.push_back(uv[i]);
+        }
+        indices.push_back(base); indices.push_back(base + 1); indices.push_back(base + 2);
+        indices.push_back(base); indices.push_back(base + 2); indices.push_back(base + 3);
+    }
+
+    /// A triangle whose winding is CORRECTED to face `n`, rather than
+    /// trusted. Four hand-derived winding errors in this system is enough:
+    /// the corner fans below have eight sign cases and deriving them by hand
+    /// is how the last three happened.
+    void tri_facing(const Vector3 &n, const Color &c, const Vector2 &face,
+            const Vector3 &a, const Vector3 &b, const Vector3 &d,
+            const Vector2 &ua, const Vector2 &ub, const Vector2 &ud) {
+        if ((b - a).cross(d - a).dot(n) > 0.0f) {
+            tri(n, c, face, a, d, b, ua, ud, ub);
+        } else {
+            tri(n, c, face, a, b, d, ua, ub, ud);
+        }
+    }
+
+    void tri(const Vector3 &n, const Color &c, const Vector2 &face,
+            const Vector3 &a, const Vector3 &b, const Vector3 &d,
+            const Vector2 &ua, const Vector2 &ub, const Vector2 &ud) {
+        const int base = verts.size();
+        verts.push_back(a); verts.push_back(b); verts.push_back(d);
+        for (int i = 0; i < 3; ++i) {
+            normals.push_back(n);
+            colours.push_back(c);
+            uv2s.push_back(face);
+        }
+        uvs.push_back(ua); uvs.push_back(ub); uvs.push_back(ud);
+        indices.push_back(base); indices.push_back(base + 1); indices.push_back(base + 2);
+    }
+
+    /// One face, chamfered in place.
+    ///
+    /// The face is inset by the bevel and a strip runs from the inset edge
+    /// back out to the ORIGINAL rim. Two faces meeting at a 90-degree corner
+    /// each contribute a strip whose normal is the bisector of the two face
+    /// normals -- the same direction, in the same plane -- so the two halves
+    /// form one 45-degree facet without either face knowing the other exists.
+    /// That is what lets the packer's tops and the mask's sides bevel
+    /// independently.
+    /// `convex` is one bit an edge: set when a PERPENDICULAR face meets this
+    /// one there, clear when the neighbour is coplanar (or there is none).
+    ///
+    /// The two cases need different geometry and there is no formula that
+    /// serves both:
+    ///
+    ///   coplanar -- two tops side by side. Each emits HALF, down to the
+    ///               shared rim one bevel back, and the two halves meet at
+    ///               the bottom of the V. The groove has a floor.
+    ///   convex   -- a top meeting a wall. The facet runs from OUR inset edge
+    ///               to THEIRS, and exactly one of the two must draw all of
+    ///               it, or you get a slot the length of the edge.
+    ///
+    /// Getting this wrong is not a notch at a corner. It is an open slot
+    /// running the whole length of every terrace lip, which is what the olive
+    /// lines were: daylight through the ground.
+    /// An edge has THREE states, not two, and every round of chamfer bugs
+    /// so far has been a missing third case:
+    ///
+    ///   CONVEX    the neighbour cell is air, so a perpendicular face meets
+    ///             this one on an outside corner. One facet, one owner.
+    ///   COPLANAR  the neighbour is solid and its own face in our direction
+    ///             is exposed — another floor beside this floor. Each emits
+    ///             HALF and they meet in the groove between them.
+    ///   SQUARE    the neighbour is solid and covered: an INSIDE corner,
+    ///             where a wall meets the floor it stands on. Chamfering
+    ///             here cuts away material that is really there and opens a
+    ///             slot with nothing behind it. A real brick has no bevel on
+    ///             an inside corner either.
+    ///
+    /// A square edge is not inset at all, so the face reaches its full
+    /// extent and butts against the geometry it meets.
+    void quad(const Vector3 &n, const Color &c, const Vector2 &face,
+            const Vector3 &a, const Vector3 &b, const Vector3 &d, const Vector3 &e,
+            const Vector2 &ua, const Vector2 &ub, const Vector2 &ud, const Vector2 &ue,
+            uint8_t convex = 0, uint8_t square = 0) {
+        const float bev = g_face_bevel;
+        if (bev <= 0.0f) {
+            raw_quad(n, c, face, a, b, d, e, ua, ub, ud, ue);
+            return;
+        }
+        const Vector3 rim[4] = { a, b, d, e };
+        const Vector2 ruv[4] = { ua, ub, ud, ue };
+
+        // Never eat more than a third of the shorter side, or a 1x1 plate's
+        // face collapses through itself.
+        const float side_u = a.distance_to(b);
+        const float side_v = b.distance_to(d);
+        const float cut = std::min(bev, std::min(side_u, side_v) * 0.34f);
+        if (cut <= 1e-5f) {
+            raw_quad(n, c, face, a, b, d, e, ua, ub, ud, ue);
+            return;
+        }
+
+        Vector3 in[4];
+        Vector2 inuv[4];
+        for (int i = 0; i < 4; ++i) {
+            const Vector3 &p = rim[i];
+            const Vector3 &nx = rim[(i + 1) % 4];
+            const Vector3 &pv = rim[(i + 3) % 4];
+            // Moving toward the NEXT corner insets away from the PREVIOUS
+            // edge, and vice versa, so a square edge zeroes the displacement
+            // that would have pulled the face off it.
+            const float c1 = (square & (1u << ((i + 3) % 4))) ? 0.0f : cut;
+            const float c2 = (square & (1u << i)) ? 0.0f : cut;
+            const Vector3 e1 = (nx - p).normalized();
+            const Vector3 e2 = (pv - p).normalized();
+            in[i] = p + e1 * c1 + e2 * c2;
+            const Vector2 &q = ruv[i];
+            const Vector2 qn = ruv[(i + 1) % 4];
+            const Vector2 qp = ruv[(i + 3) % 4];
+            const Vector2 f1 = (qn - q).normalized();
+            const Vector2 f2 = (qp - q).normalized();
+            inuv[i] = q + f1 * c1 + f2 * c2;
+        }
+
+        raw_quad(n, c, face, in[0], in[1], in[2], in[3],
+            inuv[0], inuv[1], inuv[2], inuv[3]);
+
+        // Every edge gets its strip, running from the inset edge back to the
+        // rim pushed one bevel BEHIND the face plane.
+        //
+        // The axis rule that used to live here -- "the face on the lower axis
+        // owns the facet" -- was solving the wrong problem. It assumed the
+        // other half of every edge belonged to a PERPENDICULAR face. Most
+        // edges on this surface are shared with a COPLANAR neighbour instead,
+        // where there is no second face at all, and skipping the strip left
+        // the V-groove between two pieces open with nothing under it.
+        //
+        // With all four emitted, two coplanar neighbours' strips meet at the
+        // shared rim line one bevel down: the groove has a bottom, which is
+        // the whole thing the face version was missing. At a convex corner
+        // the strip stops a bevel short of the perpendicular face and leaves
+        // a 13 mm notch -- small enough to read as part of the bevel, and it
+        // goes away when walls are packed into pieces (V2).
+        //
+        // 10 triangles a face, and only the near tier pays it.
+        const Vector3 back = -n * cut;
+        Vector3 edge_out[4];
+        for (int i = 0; i < 4; ++i) {
+            const int j = (i + 1) % 4;
+            edge_out[i] = ((rim[i] + rim[j]) * 0.5f
+                    - (in[i] + in[j]) * 0.5f).normalized();
+        }
+        for (int i = 0; i < 4; ++i) {
+            const int j = (i + 1) % 4;
+            const Vector3 out = edge_out[i];
+            // The facet ALWAYS runs from our inset edge to the rim pushed
+            // back along OUR normal. That point is the neighbouring face's
+            // own inset edge, whether the neighbour is coplanar or
+            // perpendicular, so the geometry is identical in both cases.
+            //
+            // Pushing it along `out` instead put the far edge exactly on top
+            // of the near one -- a zero-area facet -- and every convex edge
+            // simply vanished.
+            //
+            // The ONLY difference convexity makes is ownership: two coplanar
+            // faces each draw their half and meet in the middle of the V,
+            // while two perpendicular faces would both draw the WHOLE facet,
+            // so one of them has to stand down.
+            if ((square & (1u << i)) != 0) {
+                continue;   // an inside corner takes no bevel
+            }
+            if ((convex & (1u << i)) != 0 && axis_of(n) > axis_of(out)) {
+                continue;   // the perpendicular face owns this facet
+            }
+            const Vector3 off = back;
+            const Vector3 sn = (n + out).normalized();
+            // j FIRST. Wound the other way the strip's cross product comes
+            // out along +sn instead of -sn, so every chamfer facet faced
+            // inward: visible from behind the surface and invisible from in
+            // front, which is what the capture showed.
+            raw_quad(sn, c, face, in[j], in[i], rim[i] + off, rim[j] + off,
+                inuv[j], inuv[i], ruv[i], ruv[j]);
+        }
+
+        // --- the corner, where three chamfers meet -----------------------
+        //
+        // Three faces share a convex corner and each one's strip stops a
+        // bevel short of the other two, leaving a triangular hole. You see
+        // the backs of the surrounding facets through it, which is the
+        // pinwheel of light and dark triangles at every terrace corner.
+        //
+        // The hole is the triangle joining the three faces' pulled-back rim
+        // points. All three faces can compute it -- the other two normals
+        // are just this face's two edge outward directions -- so exactly one
+        // must own it. The three normals lie on three DIFFERENT axes, so
+        // "lowest axis index wins" picks one and only one.
+        for (int i = 0; i < 4; ++i) {
+            // Only where TWO convex edges meet is there a third face and so a
+            // corner hole. A corner between coplanar edges is already closed
+            // by the two half-facets.
+            if (!(convex & (1u << ((i + 3) % 4))) || !(convex & (1u << i))) {
+                continue;
+            }
+            const Vector3 o1 = edge_out[(i + 3) % 4];
+            const Vector3 o2 = edge_out[i];
+            const int an = axis_of(n);
+            if (an > axis_of(o1) || an > axis_of(o2)) {
+                continue;   // a neighbouring face owns this corner
+            }
+            // The three points where each PAIR of the corner's facets meet.
+            // Using rim - n*cut and friends made a triangle twice the size
+            // that did not line up with the facets bounding the hole.
+            const Vector3 p0 = rim[i] - (o1 + o2) * cut;
+            const Vector3 p1 = rim[i] - (n + o2) * cut;
+            const Vector3 p2 = rim[i] - (n + o1) * cut;
+            tri_facing((n + o1 + o2).normalized(), c, face, p0, p1, p2,
+                ruv[i], ruv[i], ruv[i]);
+        }
+    }
 };
+
+/// How far a brick is pulled back from its neighbour, per side. Two of these
+/// meet as a 16 mm groove, which is the visible join between bricks.
+constexpr float BRICK_GAP = 0.008f;
+
+/// How far the backing sits below the surface. The groove between two bricks
+/// shows this, so it is the groove's depth.
+constexpr float BACKING_DROP = 0.030f;
+
+/// A piece, as a brick standing on a backing.
+///
+/// This replaces six rounds of chamfered-FACE geometry, and the reason is
+/// structural rather than a preference. A face chamfer needs every facet to
+/// agree with the facet on the other side of the edge -- and the other side
+/// might belong to the packer, to the greedy mask, or to nothing at all,
+/// because the volume behind the surface is not meshed. Three systems, no
+/// shared knowledge, and an agreement required at every edge. Each round
+/// found a real bug in one of those contracts and the next round found the
+/// next one.
+///
+/// Here NOTHING agrees with anything:
+///
+///   * the brick is a CLOSED box with every edge convex against air. It is
+///     `PieceMeshes.chamfered_box` in C++, the one piece of chamfer geometry
+///     that has never produced an artefact -- it is what the debris uses.
+///   * it is pulled back by BRICK_GAP on any side with a neighbour, so the
+///     join between two bricks is a real physical gap, not a negotiated V.
+///   * behind it sits a BACKING quad. Every gap, and every mistake in the
+///     gap, shows backing rather than daylight.
+///
+/// The property that matters: a wrong inset is now a cosmetic gap width. It
+/// can no longer be a hole.
+///
+/// A side where the ground DROPS AWAY is not pulled back -- there is no
+/// neighbouring brick to leave a gap against, and the brick's own face is
+/// the cliff.
+void piece_brick(MeshBuf &m, const Color &col, float x0, float y0, float z0,
+        float x1, float y1, float z1) {
+    const Vector2 fxz(x1 - x0, z1 - z0);
+    const Vector2 fxy(x1 - x0, y1 - y0);
+    const Vector2 fzy(z1 - z0, y1 - y0);
+    const uint8_t ALL = 0xF;
+
+    m.quad(Vector3(0, 1, 0), col, fxz,
+        Vector3(x0, y1, z0), Vector3(x1, y1, z0), Vector3(x1, y1, z1), Vector3(x0, y1, z1),
+        Vector2(0, 0), Vector2(fxz.x, 0), fxz, Vector2(0, fxz.y), ALL);
+    m.quad(Vector3(0, -1, 0), col, fxz,
+        Vector3(x0, y0, z0), Vector3(x0, y0, z1), Vector3(x1, y0, z1), Vector3(x1, y0, z0),
+        Vector2(0, 0), Vector2(fxz.x, 0), fxz, Vector2(0, fxz.y), ALL);
+    m.quad(Vector3(-1, 0, 0), col, fzy,
+        Vector3(x0, y0, z1), Vector3(x0, y0, z0), Vector3(x0, y1, z0), Vector3(x0, y1, z1),
+        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), ALL);
+    m.quad(Vector3(1, 0, 0), col, fzy,
+        Vector3(x1, y0, z0), Vector3(x1, y0, z1), Vector3(x1, y1, z1), Vector3(x1, y1, z0),
+        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), ALL);
+    m.quad(Vector3(0, 0, -1), col, fxy,
+        Vector3(x0, y0, z0), Vector3(x1, y0, z0), Vector3(x1, y1, z0), Vector3(x0, y1, z0),
+        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), ALL);
+    m.quad(Vector3(0, 0, 1), col, fxy,
+        Vector3(x1, y0, z1), Vector3(x0, y0, z1), Vector3(x0, y1, z1), Vector3(x1, y1, z1),
+        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), ALL);
+}
 
 /// COLOR.a carries "this piece takes studs" to the shader, which is what lets
 /// the painted stud tier know where to draw with no second texture. A piece
@@ -919,6 +1426,49 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
         Color c = filament_colour(material_filament(mat));
         const float t = piece_tint(seed, s.tx * TILE + lx, s.tz * TILE + lz);
         return Color(c.r * t, c.g * t, c.b * t, 0.0f);
+    };
+
+    // Is this face the one the ramp's tilted quad already covers?
+    //
+    // ONLY the low side. The first version skipped every lateral face of the
+    // wedge's brick, on the reasoning that a ramp has exactly one lower
+    // neighbour so its other three sides face solid rock. That is true of the
+    // GENERATED surface, where every column's top is brick-aligned -- and
+    // false the moment anything is carved, because `ramp_dir` compares brick
+    // heights (`h`) while the real surface is a plate (`tp`). Two columns can
+    // share a brick and not share a top, and then the perpendicular face IS
+    // exposed and skipping it punches the hole that showed up beside every
+    // ramp.
+    auto ramp_covers = [&](int lx, int yp, int lz, int dx, int dz) {
+        if (lx < -MARGIN || lz < -MARGIN || lx >= TILE + MARGIN || lz >= TILE + MARGIN) {
+            return false;
+        }
+        const int i = TileSample::idx(lx, lz);
+        const uint8_t r = s.ramp[i];
+        if (r == 255) {
+            return false;
+        }
+        const int t = s.tp[i];
+        if (yp > t || yp <= t - PLATES_PER_CELL) {
+            return false;
+        }
+        // 0 = -X, 1 = +X, 2 = -Z, 3 = +Z
+        const int rdx = (r == 0) ? -1 : ((r == 1) ? 1 : 0);
+        const int rdz = (r == 2) ? -1 : ((r == 3) ? 1 : 0);
+        return dx == rdx && dz == rdz;
+    };
+
+    // Is this cell inside the brick a solid piece occupies?
+    auto in_piece_solid = [&](int lx, int yp, int lz) {
+        if (lx < 0 || lz < 0 || lx >= TILE || lz >= TILE) {
+            return false;
+        }
+        const int32_t o = owner[(size_t)lx + TILE * lz];
+        if (o < 0 || pieces[o].kind == PIECE_RAMP) {
+            return false;
+        }
+        const int t = pieces[o].top;
+        return yp <= t && yp > t - PLATES_PER_CELL;
     };
 
     // Is this +Y face already drawn by a packed surface piece?
@@ -979,6 +1529,26 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     }
                     if (dy > 0 && top_is_packed(lx, yp, lz)) {
                         continue;   // the surface packer owns this one
+                    }
+                    if (in_piece_solid(lx, yp, lz)) {
+                        // A piece owns EVERY face of its own brick, not just
+                        // the top — and this is true whether it is bevelled
+                        // or not.
+                        //
+                        // The mask merges walls on its own lattice, which has
+                        // nothing to do with where the packer put the piece
+                        // boundaries above. So a 2x4 on top had its side
+                        // divided somewhere else entirely, and the seams did
+                        // not line up from the top to the side of the same
+                        // brick. Letting the piece draw its own sides makes
+                        // them the same brick by construction.
+                        continue;
+                    }
+                    if (dy == 0 && ramp_covers(lx, yp, lz, dx, dz)) {
+                        // The wedge replaces the flat wall on its low side --
+                        // that rectangle standing exactly where the slope is
+                        // was the square behind every angled piece.
+                        continue;
                     }
                     face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
                 }
@@ -1098,9 +1668,53 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         d0 = Vector3(X + WU, Y + HV, Z + STUD_M);
                         fsz = Vector2(WU, HV);
                     }
+                    // Which of this quad's edges has a perpendicular face
+                    // on it. The in-plane neighbour being AIR is exactly the
+                    // condition for this cell to have an exposed lateral
+                    // face there -- the face the chamfer has to meet.
+                    //
+                    // Corners were wound a0 -> b0 -> c0 -> d0, so edge 0 runs
+                    // along U, 1 along V, 2 back along U, 3 back along V.
+                    uint8_t convex = 0;
+                    uint8_t square = 0;
+                    {
+                        // Unit steps along the slice's U and V axes.
+                        const int ux = (dx != 0) ? 0 : 1;
+                        const int uz = (dx != 0) ? 1 : 0;
+                        const int vy = (dy != 0) ? 0 : 1;
+                        const int vz = (dy != 0) ? 1 : 0;
+                        const int probe[4][3] = {
+                            { 0, -vy, -vz },
+                            { ux * wdt, 0, uz * wdt },
+                            { 0, vy * hgt, vz * hgt },
+                            { -ux, 0, -uz },
+                        };
+                        // Two tests give all three states:
+                        //   neighbour air                  -> convex
+                        //   neighbour solid, ITS n-face air -> coplanar
+                        //   neighbour solid and covered     -> square
+                        for (int k = 0; k < 4; ++k) {
+                            const int nx2 = lx + probe[k][0];
+                            const int ny2 = yp + probe[k][1];
+                            const int nz2 = lz + probe[k][2];
+                            if (!s.solid(nx2, ny2, nz2)) {
+                                convex |= (uint8_t)(1u << k);
+                            } else if (s.solid(nx2 + dx, ny2 + dy, nz2 + dz)) {
+                                square |= (uint8_t)(1u << k);
+                            }
+                            // A solid piece above butts square against this
+                            // wall; its own bottom is square too, so neither
+                            // side bevels the join.
+                            if (g_face_bevel > 0.0f && in_piece_solid(nx2, ny2, nz2)) {
+                                convex &= (uint8_t)~(1u << k);
+                                square |= (uint8_t)(1u << k);
+                            }
+                        }
+                    }
                     m.quad(Vector3((float)dx, (float)dy, (float)dz), col, fsz,
                         a0, b0, c0, d0,
-                        Vector2(0, 0), Vector2(fsz.x, 0), fsz, Vector2(0, fsz.y));
+                        Vector2(0, 0), Vector2(fsz.x, 0), fsz, Vector2(0, fsz.y),
+                        convex, square);
                     u += wdt;
                 }
             }
@@ -1222,6 +1836,120 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
+    // --- curved ground ---------------------------------------------------
+    //
+    // The same field and the same `tp`, with a different top face: one
+    // vertex a column, interpolated. See Terrain.md 18.5.
+    //
+    // A corner's height is the mean of the four columns that meet there --
+    // EXCEPT where one of them is bricked, and then it takes that brick's
+    // exact top. The curve has to land on the brick's top edge rather than
+    // near it, or the boundary is a row of pinholes.
+    const int CLO = -1, CHI = TILE + 1;
+    const int CSPAN = CHI - CLO + 1;
+    std::vector<float> cy;
+    if (g_smooth_terrain) {
+        cy.assign((size_t)CSPAN * CSPAN, 0.0f);
+        for (int cz = CLO; cz <= CHI; ++cz) {
+            for (int cx = CLO; cx <= CHI; ++cx) {
+                float sum = 0.0f;
+                int n = 0;
+                int hard = -100000;
+                for (int dz = -1; dz <= 0; ++dz) {
+                    for (int dx = -1; dx <= 0; ++dx) {
+                        const int i = TileSample::idx(cx + dx, cz + dz);
+                        sum += (float)(s.tp[i] + 1) * PLATE_M;
+                        ++n;
+                        if (!s.smooth[i]) {
+                            hard = std::max<int>(hard, s.tp[i]);
+                        }
+                    }
+                }
+                cy[(size_t)(cx - CLO) + CSPAN * (cz - CLO)] =
+                        hard > -100000 ? (float)(hard + 1) * PLATE_M : sum / (float)n;
+            }
+        }
+    }
+    auto corner_y = [&](int cx, int cz) -> float {
+        return cy[(size_t)(cx - CLO) + CSPAN * (cz - CLO)];
+    };
+    // Central differences over the corner grid. A vertex normal, which is
+    // the whole point: a flat quad per cell would be a staircase with the
+    // steps painted out.
+    auto corner_n = [&](int cx, int cz) -> Vector3 {
+        const float dx = corner_y(cx - 1, cz) - corner_y(cx + 1, cz);
+        const float dz = corner_y(cx, cz - 1) - corner_y(cx, cz + 1);
+        return Vector3(dx, 2.0f * STUD_M, dz).normalized();
+    };
+
+    if (g_smooth_terrain) {
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                const int i = TileSample::idx(lx, lz);
+                if (!s.smooth[i]) {
+                    continue;
+                }
+                const float x0 = (float)lx * STUD_M, x1 = (float)(lx + 1) * STUD_M;
+                const float z0 = (float)lz * STUD_M, z1 = (float)(lz + 1) * STUD_M;
+                const float y00 = corner_y(lx, lz);
+                const float y10 = corner_y(lx + 1, lz);
+                const float y11 = corner_y(lx + 1, lz + 1);
+                const float y01 = corner_y(lx, lz + 1);
+                // UV2 ZERO says "no piece here" to the shader: no outline to
+                // draw and no perimeter for the nozzle to walk, because a
+                // curve is not a moulded part with edges.
+                const Vector2 face(0.0f, 0.0f);
+                const Color col = piece_colour(s, lx, lz, s.mat[i], true);
+                const Vector3 v[4] = {
+                    Vector3(x0, y00, z0), Vector3(x1, y10, z0),
+                    Vector3(x1, y11, z1), Vector3(x0, y01, z1),
+                };
+                const Vector3 nrm[4] = {
+                    corner_n(lx, lz), corner_n(lx + 1, lz),
+                    corner_n(lx + 1, lz + 1), corner_n(lx, lz + 1),
+                };
+                const Vector2 uv[4] = {
+                    Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1), Vector2(x0, z1),
+                };
+                m.quad_soft(col, face, v, nrm, uv);
+
+                // The skirt. Wherever the neighbouring column's surface is
+                // BELOW this cell's edge, a wall closes the difference --
+                // the same rule the brick mesher follows, and the reason a
+                // curve can sit next to a terrace without a hole between
+                // them. Against a bricked neighbour the brick draws its own
+                // face at the same plane facing the other way, which costs
+                // one quad and never z-fights.
+                struct Edge {
+                    int dx, dz;
+                    Vector3 n;
+                    float ax, az, bx, bz;
+                    float ya, yb;
+                };
+                const Edge edges[4] = {
+                    { 0, -1, Vector3(0, 0, -1), x0, z0, x1, z0, y00, y10 },
+                    { 0,  1, Vector3(0, 0,  1), x1, z1, x0, z1, y11, y01 },
+                    { -1, 0, Vector3(-1, 0, 0), x0, z1, x0, z0, y01, y00 },
+                    {  1, 0, Vector3(1, 0,  0), x1, z0, x1, z1, y10, y11 },
+                };
+                for (const Edge &e : edges) {
+                    const int ni = TileSample::idx(lx + e.dx, lz + e.dz);
+                    const float ny = (float)(s.tp[ni] + 1) * PLATE_M;
+                    const float lo = std::min(e.ya, e.yb);
+                    if (ny >= lo - 1e-5f) {
+                        continue;   // nothing showing
+                    }
+                    const Vector2 wall(STUD_M, lo - ny);
+                    m.raw_quad(e.n, col, wall,
+                        Vector3(e.ax, ny, e.az), Vector3(e.bx, ny, e.bz),
+                        Vector3(e.bx, e.yb, e.bz), Vector3(e.ax, e.ya, e.az),
+                        Vector2(0, wall.y), Vector2(wall.x, wall.y),
+                        Vector2(wall.x, 0), Vector2(0, 0));
+                }
+            }
+        }
+    }
+
     for (const Piece &p : pieces) {
         const Color col = piece_colour(s, p.ox, p.oz, p.mat, p.studded != 0);
         const float top = (float)(p.top + 1) * PLATE_M;
@@ -1279,10 +2007,97 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 Vector3(x1, oy, z1), Vector3(x1, oy, z0),
                 Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0));
         } else {
-            m.quad(Vector3(0, 1, 0), col, face,
-                Vector3(x0, top, z0), Vector3(x1, top, z0),
-                Vector3(x1, top, z1), Vector3(x0, top, z1),
-                Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+            // A side is convex where the ground DROPS AWAY, because that is
+            // where a wall face exists for the chamfer to meet. Level with a
+            // neighbour, or under one, it is coplanar or concave, and there
+            // the two half-facets close the groove between them.
+            uint8_t convex = 0;
+            uint8_t square = 0;
+            bool lo_zm = false, lo_zp = false, lo_xm = false, lo_xp = false;
+            bool hi_zm = false, hi_zp = false, hi_xm = false, hi_xp = false;
+            for (int dx2 = 0; dx2 < p.sx; ++dx2) {
+                const int16_t a2 = s.tp[TileSample::idx(p.ox + dx2, p.oz - 1)];
+                const int16_t b2 = s.tp[TileSample::idx(p.ox + dx2, p.oz + p.sz)];
+                if (a2 < p.top) lo_zm = true;
+                if (b2 < p.top) lo_zp = true;
+                if (a2 > p.top) hi_zm = true;
+                if (b2 > p.top) hi_zp = true;
+            }
+            for (int dz2 = 0; dz2 < p.sz; ++dz2) {
+                const int16_t a2 = s.tp[TileSample::idx(p.ox - 1, p.oz + dz2)];
+                const int16_t b2 = s.tp[TileSample::idx(p.ox + p.sx, p.oz + dz2)];
+                if (a2 < p.top) lo_xm = true;
+                if (b2 < p.top) lo_xp = true;
+                if (a2 > p.top) hi_xm = true;
+                if (b2 > p.top) hi_xp = true;
+            }
+            // A HIGHER neighbour is an inside corner: a wall standing on this
+            // floor. Bevelling there cut a slot along the foot of every wall.
+            if (hi_zm) square |= 1u;
+            if (hi_xp) square |= 2u;
+            if (hi_zp) square |= 4u;
+            if (hi_xm) square |= 8u;
+            // Corners are (x0,z0) (x1,z0) (x1,z1) (x0,z1), so edge 0 faces
+            // -Z, edge 1 faces +X, edge 2 faces +Z, edge 3 faces -X.
+            if (lo_zm) convex |= 1u;
+            if (lo_xp) convex |= 2u;
+            if (lo_zp) convex |= 4u;
+            if (lo_xm) convex |= 8u;
+            {
+                // TOP EDGES ONLY.
+                //
+                // Every artefact in six rounds came from a facet having to
+                // agree with one drawn by somebody else -- the greedy mask,
+                // a neighbouring piece, or unmeshed space. The four top edges
+                // of a piece meet the piece's OWN side faces, which it now
+                // draws itself (section 17.23), so there is no second party.
+                //
+                // The top is emitted coplanar on all four edges, which is the
+                // half-facet case: level neighbours meet in the groove
+                // between them, and at a drop the strip runs down onto this
+                // piece's own side face. The sides themselves are SQUARE --
+                // no bevel, nothing to negotiate.
+                //
+                // On a floor seen at a grazing angle the top edge is the only
+                // one that reads, which is where this started.
+                m.quad(Vector3(0, 1, 0), col, face,
+                    Vector3(x0, top, z0), Vector3(x1, top, z0),
+                    Vector3(x1, top, z1), Vector3(x0, top, z1),
+                    Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y),
+                    0, square);
+                // ...and its own sides, so a brick's side seam is the same
+                // brick as its top. Only where the ground drops away; level
+                // with a neighbour the face is interior. SQUARE: the top's
+                // strip already runs down onto them.
+                const uint8_t SQ = 0xF;
+                const float yb = top - BRICK_M;
+                const Vector2 fzy(z1 - z0, BRICK_M);
+                const Vector2 fxy(x1 - x0, BRICK_M);
+                if (lo_xm) {
+                    m.quad(Vector3(-1, 0, 0), col, fzy,
+                        Vector3(x0, yb, z1), Vector3(x0, yb, z0),
+                        Vector3(x0, top, z0), Vector3(x0, top, z1),
+                        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
+                }
+                if (lo_xp) {
+                    m.quad(Vector3(1, 0, 0), col, fzy,
+                        Vector3(x1, yb, z0), Vector3(x1, yb, z1),
+                        Vector3(x1, top, z1), Vector3(x1, top, z0),
+                        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
+                }
+                if (lo_zm) {
+                    m.quad(Vector3(0, 0, -1), col, fxy,
+                        Vector3(x0, yb, z0), Vector3(x1, yb, z0),
+                        Vector3(x1, top, z0), Vector3(x0, top, z0),
+                        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
+                }
+                if (lo_zp) {
+                    m.quad(Vector3(0, 0, 1), col, fxy,
+                        Vector3(x1, yb, z1), Vector3(x0, yb, z1),
+                        Vector3(x0, top, z1), Vector3(x1, top, z1),
+                        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
+                }
+            }
         }
     }
 
@@ -1405,13 +2220,30 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 continue;   // something is standing here
             }
             const int32_t o = owner[(size_t)lx + TILE * lz];
+            const int i = TileSample::idx(lx, lz);
+            if (o < 0 && s.smooth[i]) {
+                // Curved ground takes studs on its FLAT spots and nowhere
+                // else -- which is what `plate` already means, and is the
+                // original idea from section 4: curves, with studs standing
+                // out of them where the ground levels off. A flat cell's
+                // four corners are all at its own height, so the stud sits
+                // exactly on the surface and not near it.
+                if (s.plate[i] && material_studded(s.mat[i])) {
+                    Color c = piece_colour(s, lx, lz, s.mat[i], true);
+                    c.a = 1.0f;
+                    push_instance(studs, ((float)lx + 0.5f) * STUD_M,
+                        (float)(s.tp[i] + 1) * PLATE_M,
+                        ((float)lz + 0.5f) * STUD_M, 0.0f, c);
+                    ++stud_count;
+                }
+                continue;
+            }
             // A stud belongs to a PIECE, not to a cell: a tile, a ramp and a
             // smooth overlay are studless however flat the cell under them
             // is, and asking the piece is the only way to know which this is.
             if (o < 0 || pieces[o].studded == 0) {
                 continue;
             }
-            const int i = TileSample::idx(lx, lz);
             const float y = (float)(s.tp[i] + 1) * PLATE_M
                     + (pieces[o].overlay != 0 ? OVERLAY_M : 0.0f);
             // The colour of the piece it stands on, so a stud can never
@@ -1463,6 +2295,10 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_max_piece_length"),
         &BrickTerrain::get_max_piece_length);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_period"), &BrickTerrain::get_period);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_face_bevel", "metres"),
+        &BrickTerrain::set_face_bevel);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_face_bevel"),
+        &BrickTerrain::get_face_bevel);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("height_at", "x", "z"),
         &BrickTerrain::height_at);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("solid_at", "x", "yp", "z"),
@@ -1473,6 +2309,24 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::carve);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_terrain_edits"),
         &BrickTerrain::clear_terrain_edits);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_flat_mode", "on"),
+        &BrickTerrain::set_flat_mode);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_plate_steps", "on"),
+        &BrickTerrain::set_plate_steps);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_plate_steps"),
+        &BrickTerrain::get_plate_steps);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_smooth_terrain", "on"),
+        &BrickTerrain::set_smooth_terrain);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_terrain"),
+        &BrickTerrain::get_smooth_terrain);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("smooth_at", "x", "z"),
+        &BrickTerrain::smooth_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_overlay_chance", "chance"),
+        &BrickTerrain::set_overlay_chance);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_overlay_chance"),
+        &BrickTerrain::get_overlay_chance);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_flat_mode"),
+        &BrickTerrain::get_flat_mode);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_edit_count"),
         &BrickTerrain::get_edit_count);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("material_at", "x", "z"),
@@ -1549,7 +2403,17 @@ const WaveComponent WAVES[] = {
 };
 const int WAVE_COUNT = (int)(sizeof(WAVES) / sizeof(WAVES[0]));
 
-constexpr double SEA_LEVEL = 1.1;
+double g_sea_level = 1.1;
+double g_wave_gain = 1.0;
+
+/// Depth over which the swell is throttled to nothing. 2.5 m is a little
+/// under two full-gain wave heights, so the surf is already half its size a
+/// couple of metres out and flat by the waterline.
+constexpr double SHORE_TAPER_DEPTH = 2.5;
+
+/// How far the swell is allowed to run, as a fraction of its full height,
+/// where the ground is unknown (outside the sampled field).
+constexpr double OPEN_SEA_TAPER = 1.0;
 
 /// Deep-water dispersion: a wave of length L travels at sqrt(gL/2pi), so the
 /// long swell and the ripples cannot share a speed without the sea looking
@@ -1564,7 +2428,44 @@ inline double omega(double wavelength) {
 } // namespace
 
 int BrickWave::component_count() { return WAVE_COUNT; }
-double BrickWave::get_sea_level() { return SEA_LEVEL; }
+
+void BrickWave::set_sea_level(double m) { g_sea_level = m; }
+double BrickWave::get_sea_level() { return g_sea_level; }
+
+/// A TALLER SWELL IS ALSO A LONGER ONE.
+///
+/// The gain scales wavelength as well as amplitude, so wave steepness -- and
+/// with it the terrace width, which is section 2's whole argument -- does not
+/// move. Scaling amplitude alone at gain 2.2 tripled the surface slope and
+/// cut the terraces to 1.0 stud: every cell on a different step, which reads
+/// as chaos rather than as a swell, and is exactly the failure section 2
+/// warned about for plate quantisation. Measured, in the water captures.
+///
+/// It is also the physical answer. Real swell holds H/L roughly constant; a
+/// 4 m wave 13 m long is not a swell, it is a wall. Speed follows for free,
+/// because omega comes from the wavelength.
+void BrickWave::set_wave_gain(double g) { g_wave_gain = std::max(g, 0.0); }
+double BrickWave::get_wave_gain() { return g_wave_gain; }
+
+double BrickWave::get_shore_taper_depth() { return SHORE_TAPER_DEPTH; }
+
+namespace {
+
+/// The shore ramp, from the SAME ground the seabed texture is built from --
+/// (height + 1) * brick -- so the CPU surface and the drawn one agree to
+/// within the texture's own quantisation rather than by construction.
+double shore_taper(double x, double z) {
+    const int gx = (int)std::floor(x / (double)STUD_M);
+    const int gz = (int)std::floor(z / (double)STUD_M);
+    const double ground = (double)(BrickTerrain::height_at(gx, gz) + 1) * (double)BRICK_M;
+    const double depth = g_sea_level - ground;
+    if (depth <= 0.0) {
+        return 0.0;
+    }
+    return std::min(depth / SHORE_TAPER_DEPTH, OPEN_SEA_TAPER);
+}
+
+} // namespace
 
 /// Water quantises to one BRICK, not one plate. At A=1 m, L=12 m the mean
 /// surface slope is 0.52, so a plate step gives a 0.76-stud terrace -- every
@@ -1572,13 +2473,21 @@ double BrickWave::get_sea_level() { return SEA_LEVEL; }
 /// studs, which reads as a terrace (Water section 2).
 double BrickWave::get_step_metres() { return (double)BRICK_M; }
 
+double BrickWave::shore_gain(double x, double z) { return shore_taper(x, z); }
+
 double BrickWave::height_at(double x, double z, double t) {
-    double h = SEA_LEVEL;
+    // One field query a sample, for the shore ramp. That is an fBm evaluation
+    // where there used to be none, so this is a per-BODY call and not a
+    // per-vertex one -- which is what `sample_heights` is for.
+    const double taper = shore_taper(x, z);
+    double h = g_sea_level;
     for (int i = 0; i < WAVE_COUNT; ++i) {
         const WaveComponent &w = WAVES[i];
-        const double k = Math_TAU / w.wavelength;
-        h += w.amplitude * std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
-                - omega(w.wavelength) * t + w.phase);
+        const double len = w.wavelength * g_wave_gain;
+        const double k = Math_TAU / len;
+        h += w.amplitude * g_wave_gain * taper
+                * std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
+                - omega(len) * t + w.phase);
     }
     return h;
 }
@@ -1606,10 +2515,13 @@ PackedVector4Array BrickWave::uniform_array() {
     PackedVector4Array out;
     for (int i = 0; i < WAVE_COUNT; ++i) {
         const WaveComponent &w = WAVES[i];
-        const double k = Math_TAU / w.wavelength;
-        out.push_back(Vector4((float)w.amplitude, (float)k,
+        // Gained here -- amplitude AND wavelength -- so the shader has no
+        // knob of its own to disagree with.
+        const double len = w.wavelength * g_wave_gain;
+        const double k = Math_TAU / len;
+        out.push_back(Vector4((float)(w.amplitude * g_wave_gain), (float)k,
             (float)std::cos(w.angle), (float)std::sin(w.angle)));
-        out.push_back(Vector4((float)omega(w.wavelength), (float)w.phase, 0.0f, 0.0f));
+        out.push_back(Vector4((float)omega(len), (float)w.phase, 0.0f, 0.0f));
     }
     return out;
 }
@@ -1617,7 +2529,9 @@ PackedVector4Array BrickWave::uniform_array() {
 double BrickWave::terrace_studs() {
     double slope = 0.0;
     for (int i = 0; i < WAVE_COUNT; ++i) {
-        slope += Math_TAU * WAVES[i].amplitude / WAVES[i].wavelength;
+        // Gain cancels: it scales both. That is the point of it.
+        slope += Math_TAU * (WAVES[i].amplitude * g_wave_gain)
+                / (WAVES[i].wavelength * g_wave_gain);
     }
     return (get_step_metres() / std::max(slope, 1e-4)) / (double)STUD_M;
 }
@@ -1625,7 +2539,17 @@ double BrickWave::terrace_studs() {
 void BrickWave::_bind_methods() {
     ClassDB::bind_static_method("BrickWave", D_METHOD("component_count"),
         &BrickWave::component_count);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("set_sea_level", "m"),
+        &BrickWave::set_sea_level);
     ClassDB::bind_static_method("BrickWave", D_METHOD("get_sea_level"), &BrickWave::get_sea_level);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("set_wave_gain", "g"),
+        &BrickWave::set_wave_gain);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("get_wave_gain"),
+        &BrickWave::get_wave_gain);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("get_shore_taper_depth"),
+        &BrickWave::get_shore_taper_depth);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("shore_gain", "x", "z"),
+        &BrickWave::shore_gain);
     ClassDB::bind_static_method("BrickWave", D_METHOD("get_step_metres"),
         &BrickWave::get_step_metres);
     ClassDB::bind_static_method("BrickWave", D_METHOD("height_at", "x", "z", "t"),

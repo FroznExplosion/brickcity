@@ -221,6 +221,34 @@ public:
 
     /// Build the chunk's surface arrays, ready for
     /// ArrayMesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ...).
+    /// Cut this chunk's drawing into horizontal bands `plates` tall.
+    ///
+    /// Drawing only: the chunk, the occupancy, the damage record, the stress
+    /// solve and the collision are all untouched and stay whole-chunk. What
+    /// changes is that the face bake comes out grouped by band, so a band can
+    /// be rebuilt and re-uploaded on its own -- and rebuilding a 50,000-brick
+    /// tower's mesh costs about 104 ms, which a collapse forces.
+    ///
+    /// 0 means one band, which is what every chunk is until asked otherwise.
+    /// Re-bakes on change.
+    void set_chunk_section_plates(int chunk_id, int plates);
+    int get_chunk_sections(int chunk_id) const;
+
+    /// One band's arrays, ready for `add_surface_from_arrays`.
+    ///
+    /// A slice, not a gather: faces are baked band by band, so a band's
+    /// vertices are contiguous and this copies a range rather than walking the
+    /// chunk. Indices are local to the band.
+    Array build_chunk_mesh_section(int chunk_id, int section);
+
+    /// Re-index every band and return the ones whose index bytes MOVED.
+    ///
+    /// One array of {section, offset, data, changed_bytes} per band that
+    /// changed, so damage uploads the band it happened in rather than the
+    /// building it happened to. Empty when the bake is gone and the caller must
+    /// rebuild.
+    Array update_index_regions(int chunk_id, int index_bytes);
+
     /// Vertices are local to the chunk origin. Interior faces are culled.
     Array build_chunk_mesh(int chunk_id);
 

@@ -335,9 +335,30 @@ struct FaceBake {
     bool valid = false;
     double bake_ms = 0.0;
 
+    // Where each SECTION's faces start and how many there are.
+    //
+    // A section is a horizontal band of the chunk, `Chunk::section_plates`
+    // tall. Faces are baked section by section, so a section's faces -- and
+    // therefore its vertices, four per face -- are one contiguous range, and a
+    // section's mesh is a SLICE rather than a gather.
+    //
+    // That is the whole point of the ordering. Rebuilding a 50,000-brick tower's
+    // mesh costs ~104 ms and a collapse forces one; rebuilding the band that
+    // actually changed costs that divided by the number of bands.
+    //
+    // A block belongs wholly to the section its lowest cell is in, even when it
+    // straddles the boundary, so a block's faces stay contiguous too and the
+    // per-block index range keeps meaning what it meant.
+    std::vector<int32_t> section_first;
+    std::vector<int32_t> section_faces;
+
+    int section_count() const { return (int)section_first.size(); }
+
     int face_count() const { return (int)owner.size(); }
 
     void clear() {
+        section_first.clear();
+        section_faces.clear();
         verts = PackedVector3Array();
         normals = PackedVector3Array();
         colours = PackedColorArray();
@@ -352,6 +373,27 @@ struct FaceBake {
 struct Chunk {
     Vector3i origin;               // grid coords of the min corner
     Vector3i dims;                 // size in cells
+    // How many plates tall a section is, or 0 for "one section, the whole
+    // chunk" -- which is what every chunk is until somebody asks otherwise, so
+    // nothing changes for islands, fixtures or anything small.
+    int section_plates = 0;
+
+    /// Which section a cell's Y belongs to.
+    int section_of_y(int y) const {
+        if (section_plates <= 0) {
+            return 0;
+        }
+        const int s = (y - origin.y) / section_plates;
+        return s < 0 ? 0 : (s >= sections() ? sections() - 1 : s);
+    }
+
+    int sections() const {
+        if (section_plates <= 0) {
+            return 1;
+        }
+        return (dims.y + section_plates - 1) / section_plates;
+    }
+
     std::vector<int32_t> occupancy; // dims.x * dims.y * dims.z, -1 = empty
     std::vector<Block> blocks;
     FaceBake bake;

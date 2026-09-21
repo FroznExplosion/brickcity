@@ -909,18 +909,31 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
     std::vector<int32_t> mask;   // what is on the far side of each cell face
     std::vector<uint8_t> taken;
 
-    for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
+    // Blocks bucketed by section, so the faces come out grouped. See
+    // FaceBake::section_first -- a section's faces, and therefore its vertices,
+    // have to be ONE contiguous range or a section mesh is a gather rather than
+    // a slice.
+    const int section_n = c.sections();
+    std::vector<std::vector<int32_t>> by_section((size_t)section_n);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || b.decorative) {
+            continue;
+        }
+        by_section[(size_t)c.section_of_y(b.cell.y)].push_back((int32_t)i);
+    }
+    fb.section_first.assign((size_t)section_n, 0);
+    fb.section_faces.assign((size_t)section_n, 0);
+
+    for (int sec = 0; sec < section_n; ++sec) {
+    fb.section_first[(size_t)sec] = (int32_t)fb.owner.size();
+    for (int32_t bi : by_section[(size_t)sec]) {
         const Block &b = c.blocks[bi];
         if (b.removed) {
             continue; // edited away: owns no cells, so it has no faces
         }
         if (b.decorative) {
-            // Interiors are not in the building's bake AT ALL. They are drawn
-            // separately, per chunk, from the blocks themselves -- because a
-            // bake is whole-chunk and a room is not, and re-baking 50,000
-            // bricks to add a chair is the single most expensive thing
-            // interiors ever did.
-            continue;
+            continue; // bucketed out above; see FurnitureMesh
         }
         const Archetype &a = parts[b.archetype];
         const Vector3i base = b.cell - c.origin;
@@ -1057,6 +1070,8 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                 }
             }
         }
+    }
+    fb.section_faces[(size_t)sec] = (int32_t)fb.owner.size() - fb.section_first[(size_t)sec];
     }
 
     fb.valid = true;
@@ -1609,6 +1624,154 @@ Dictionary BrickWorld::update_index_region(int chunk_id, int index_bytes) {
     out["changed_bytes"] = count * width;
     out["drawn_faces"] = st.faces_emitted;
     out["update_ms"] = st.compact_ms;
+    return out;
+}
+
+void BrickWorld::set_chunk_section_plates(int chunk_id, int plates) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    Chunk &c = chunks[chunk_id];
+    const int want = plates > 0 ? plates : 0;
+    if (c.section_plates == want) {
+        return;
+    }
+    c.section_plates = want;
+    // The face ORDER depends on this, so anything already baked is now baked
+    // in the wrong order.
+    c.bake.valid = false;
+    if (bake_pending(chunk_id)) {
+        settle_bake_job(chunk_id, false);
+    }
+}
+
+int BrickWorld::get_chunk_sections(int chunk_id) const {
+    return valid_chunk(chunk_id) ? chunks[chunk_id].sections() : 0;
+}
+
+Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    Chunk &c = chunks[chunk_id];
+    MeshStats &st = stats[chunk_id];
+    if (!c.bake.valid) {
+        bake_chunk_faces(c);
+        st.bake_ms = c.bake.bake_ms;
+    }
+    if (section < 0 || section >= c.bake.section_count()) {
+        return Array();
+    }
+    // The whole chunk's index buffer is rebuilt here, because a face's drawn
+    // state depends on its neighbour and a neighbour can be in another band.
+    // It is integer work over the faces; the EXPENSIVE half is the vertex
+    // upload, and that is what this cuts to one band.
+    fill_indices(c, st, c.live_indices);
+
+    const int first = c.bake.section_first[(size_t)section];
+    const int faces = c.bake.section_faces[(size_t)section];
+    if (faces <= 0) {
+        return Array();
+    }
+    const int v0 = first * 4;
+    const int vn = faces * 4;
+
+    Array arrays;
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = c.bake.verts.slice(v0, v0 + vn);
+    arrays[Mesh::ARRAY_NORMAL] = c.bake.normals.slice(v0, v0 + vn);
+    arrays[Mesh::ARRAY_COLOR] = c.bake.colours.slice(v0, v0 + vn);
+    arrays[Mesh::ARRAY_TEX_UV] = c.bake.uvs.slice(v0, v0 + vn);
+    arrays[Mesh::ARRAY_TEX_UV2] = c.bake.uv2s.slice(v0, v0 + vn);
+
+    // Local indices: the same six per face the whole-chunk path writes, with
+    // the band's vertex base taken off.
+    PackedInt32Array idx;
+    idx.resize((int64_t)faces * 6);
+    int32_t *w = idx.ptrw();
+    const int32_t *src = c.live_indices.ptr();
+    for (int f = 0; f < faces; ++f) {
+        const int from = (first + f) * 6;
+        const int to = f * 6;
+        // A culled face is six zeroes in the chunk buffer; it has to stay a
+        // degenerate triangle here too, or the band's buffer changes length
+        // when something breaks and it can never be patched again.
+        const bool drawn = src[from] != 0 || src[from + 1] != 0 || src[from + 2] != 0;
+        for (int k = 0; k < 6; ++k) {
+            w[to + k] = drawn ? src[from + k] - v0 : 0;
+        }
+    }
+    arrays[Mesh::ARRAY_INDEX] = idx;
+    return arrays;
+}
+
+Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
+    Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    if (!c.bake.valid || c.live_indices.is_empty()) {
+        return out; // nothing built yet; the caller must build first
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    MeshStats &st = stats[chunk_id];
+    st.faces_emitted = 0;
+    st.faces_culled = 0;
+
+    PackedInt32Array next;
+    fill_indices(c, st, next);
+    const int32_t *a = c.live_indices.ptr();
+    const int32_t *b = next.ptr();
+
+    for (int sec = 0; sec < c.bake.section_count(); ++sec) {
+        const int first = c.bake.section_first[(size_t)sec];
+        const int faces = c.bake.section_faces[(size_t)sec];
+        if (faces <= 0) {
+            continue;
+        }
+        const int lo = first * 6;
+        const int hi = lo + faces * 6;
+        const int v0 = first * 4;
+        int changed_lo = -1;
+        int changed_hi = -1;
+        for (int i = lo; i < hi; ++i) {
+            if (a[i] != b[i]) {
+                if (changed_lo < 0) {
+                    changed_lo = i;
+                }
+                changed_hi = i;
+            }
+        }
+        if (changed_lo < 0) {
+            continue;
+        }
+        // Whole indices, and in the band's own numbering.
+        const int n = changed_hi - changed_lo + 1;
+        PackedByteArray data;
+        data.resize((int64_t)n * index_bytes);
+        uint8_t *w = data.ptrw();
+        for (int i = 0; i < n; ++i) {
+            const int32_t val = b[changed_lo + i] == 0 ? 0 : b[changed_lo + i] - v0;
+            if (index_bytes == 2) {
+                const uint16_t v = (uint16_t)val;
+                std::memcpy(w + (size_t)i * 2, &v, 2);
+            } else {
+                std::memcpy(w + (size_t)i * 4, &val, 4);
+            }
+        }
+        Dictionary d;
+        d["section"] = sec;
+        d["offset"] = (changed_lo - lo) * index_bytes;
+        d["data"] = data;
+        d["changed_bytes"] = data.size();
+        out.push_back(d);
+    }
+
+    c.live_indices = next;
+    st.indices = next.size();
+    st.compact_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
     return out;
 }
 
@@ -3713,6 +3876,14 @@ void BrickWorld::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("build_chunk_mesh", "chunk_id"), &BrickWorld::build_chunk_mesh);
     ClassDB::bind_method(D_METHOD("get_mesh_stats", "chunk_id"), &BrickWorld::get_mesh_stats);
+    ClassDB::bind_method(D_METHOD("set_chunk_section_plates", "chunk_id", "plates"),
+            &BrickWorld::set_chunk_section_plates);
+    ClassDB::bind_method(D_METHOD("get_chunk_sections", "chunk_id"),
+            &BrickWorld::get_chunk_sections);
+    ClassDB::bind_method(D_METHOD("build_chunk_mesh_section", "chunk_id", "section"),
+            &BrickWorld::build_chunk_mesh_section);
+    ClassDB::bind_method(D_METHOD("update_index_regions", "chunk_id", "index_bytes"),
+            &BrickWorld::update_index_regions);
     ClassDB::bind_method(D_METHOD("update_index_region", "chunk_id", "index_bytes"),
             &BrickWorld::update_index_region, DEFVAL(4));
     ClassDB::bind_method(D_METHOD("get_memory_report"), &BrickWorld::get_memory_report);

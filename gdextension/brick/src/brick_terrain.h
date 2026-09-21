@@ -71,6 +71,23 @@ constexpr int PLATES_PER_CELL = PLATES_PER_BRICK;
 /// save rather than misapply it -- mvs-c's LAYOUT_VERSION lesson.
 /// 2: volumetric. A heightmap delta and a voxel diff are different formats,
 /// so damage saved under version 1 must be REJECTED, not misapplied.
+/// Slope pieces at every single-brick terrace step.
+///
+/// OFF. They exist to make a 0.42 m step walkable, but a 1x1 slope is a
+/// 50-degree face a third of a metre across -- twenty times a chamfer -- and
+/// at close range the ground reads as melted rather than built. Walkability
+/// moves to the character's step-up height, which already exists.
+///
+/// The cells that were ramps do not vanish: they are terrace edges, so they
+/// are not flat plates, so the packer makes them TILES. Dropping slopes
+/// raises the smooth-tile share on its own.
+constexpr bool RAMPS_ENABLED = false;
+
+/// Chance a flat plate piece is laid as a smooth TILE rather than a studded
+/// brick. Ground that is wall-to-wall studs reads as one material; a mix of
+/// tile and brick reads as a surface someone laid.
+constexpr float TILE_CHANCE = 0.22f;
+
 constexpr int FIELD_VERSION = 2;
 
 enum Material {
@@ -155,8 +172,23 @@ float value_noise3(float x, float y, float z, uint32_t seed);
 struct Field {
     uint32_t seed = 1337;
 
-    /// The surface the 2D noise alone would give, in BRICKS. An upper bound
+    /// The same surface BEFORE it is quantised, in plates.
+    ///
+    /// Steepness has to be measured on this and not on `top_plate`: the
+    /// quantised surface of gentle ground is a field of one-plate steps, so
+    /// every slope from 0.1 to 0.9 plates a stud measures as exactly the
+    /// same "one", and a steepness test on it can only ever say "1 or 0".
+    float raw_plate(int x, int z) const;
+
+    /// The topmost solid PLATE the 2D noise alone would give. An upper bound
     /// on the real surface once caves are carved out of it.
+    ///
+    /// Primary: the brick height is derived from it, not the other way
+    /// round, so the generator can quantise to plates (0.14 m) instead of
+    /// bricks (0.42 m) and get three times the vertical resolution.
+    int top_plate(int x, int z) const;
+
+    /// The same surface in BRICKS, for material banding and cave depth.
     int nominal_height(int x, int z) const;
     int material_at(int x, int z, int h) const;
 
@@ -229,6 +261,10 @@ struct TileSample {
     std::vector<uint8_t> mat;
     std::vector<uint8_t> plate;
     std::vector<uint8_t> ramp;   ///< 255 = not a ramp, else 0=-X 1=+X 2=-Z 3=+Z
+    /// This column is drawn as a CURVED surface rather than packed into
+    /// bricks. A function of the biome field and the local steepness, so
+    /// two tiles always agree about a column on their shared edge.
+    std::vector<uint8_t> smooth;
 
     static int idx(int lx, int lz) { return (lx + MARGIN) + SPAN * (lz + MARGIN); }
     int height(int lx, int lz) const { return h[idx(lx, lz)]; }
@@ -376,6 +412,10 @@ public:
     static int get_tile_studs();
     static int get_max_piece_length();
     static int get_period();
+    /// Real 45-degree chamfer cut off every emitted face edge, in metres.
+    /// 0 disables it. Costs 7x the triangles -- see the note in the .cpp.
+    static void set_face_bevel(double metres);
+    static double get_face_bevel();
     static int get_piece_stride();
 
     static int height_at(int x, int z);
@@ -393,6 +433,48 @@ public:
     /// z, size x, y, z in metres, and a packed rgb -- for the caller to throw
     /// as rigid bodies.
     static Dictionary carve(Vector3 world_point, double radius_m);
+    /// Heightfield mode: no caves, no edits, no destruction.
+    ///
+    /// The surface is exactly `nominal_height` and nothing can be below it,
+    /// so a column is solid from the mask floor to its top and no further.
+    /// Everything downstream -- the packer, studs, tiles, scatter, collision
+    /// -- is unchanged; it just gets a field with nothing carved out of it.
+    ///
+    /// This is section 17's decision taken back, and deliberately as a FLAG
+    /// rather than by deleting the volumetric path, because the two differ
+    /// only in what `solid_at` answers.
+    /// Quantise the generated surface to PLATES rather than to bricks.
+    ///
+    /// A brick step is 0.42 m, which against a 1.68 m player is a big stair.
+    /// A plate step is 0.14 m and the terrain reads as a gentler slope built
+    /// out of thinner pieces — the "half bricks to step elevation" idea,
+    /// except the grid was already in plates so it costs nothing but a
+    /// different multiplier in the generator.
+    static void set_plate_steps(bool on);
+    static bool get_plate_steps();
+
+    /// Let some ground be a CURVE instead of a stack of bricks.
+    ///
+    /// Same field, same `tp`, different top face: a smooth column emits one
+    /// vertex at its own height and lets the GPU interpolate, where a
+    /// bricked one emits a flat quad and side walls. Studs are unchanged --
+    /// `stud_at` already means "are my four neighbours at my exact height",
+    /// which on a curve means "am I on a flat spot".
+    ///
+    /// Off by default, and off for the volumetric scene: a curve is a
+    /// heightfield statement and a cave roof is not a heightfield.
+    static void set_smooth_terrain(bool on);
+    static bool get_smooth_terrain();
+
+    /// Is this column drawn as a curve? Biome AND steepness — see
+    /// Docs/Terrain.md 18.5.
+    static bool smooth_at(int x, int z);
+
+    static void set_flat_mode(bool on);
+    static bool get_flat_mode();
+    static void set_overlay_chance(double chance);
+    static double get_overlay_chance();
+
     static void clear_terrain_edits();
     static int get_edit_count();
     static int material_at(int x, int z);
@@ -447,7 +529,37 @@ protected:
 
 public:
     static int component_count();
+
+    /// Still water, in metres. A world knob, not a constant: the same
+    /// generator with the sea 1.5 m higher is an archipelago instead of a
+    /// plain, and nothing else about the water changes.
+    static void set_sea_level(double m);
     static double get_sea_level();
+
+    /// Multiply every component's amplitude. Tall waves are wanted, and the
+    /// brick step is what makes them affordable -- a 3 m swell is seven steps
+    /// rather than a ramp needing more vertices.
+    ///
+    /// It lives HERE and not in the shader. A gain the shader applied alone
+    /// would put the drawn surface 2.2x away from the one the swimmer and the
+    /// buoyancy solver read, which is precisely the divergence this class
+    /// exists to prevent (section 1).
+    static void set_wave_gain(double g);
+    static double get_wave_gain();
+
+    /// Waves die as the water shallows: the amplitude is scaled by
+    /// clamp(depth / this, 0, 1). Without it a 3 m swell drives bricks
+    /// straight through the beach. The shader applies the same ramp off the
+    /// seabed texture, so this is what the scene pushes to it.
+    static double get_shore_taper_depth();
+
+    /// The shore ramp at a point: 1 in open water, 0 on dry land. The packed
+    /// uniforms carry the amplitudes WITHOUT it -- the shader applies its own
+    /// from the seabed texture -- so anything reproducing the drawn surface
+    /// on the CPU needs this factor, and so does the probe that checks the
+    /// two agree.
+    static double shore_gain(double x, double z);
+
     static double get_step_metres();
 
     static double height_at(double x, double z, double t);
