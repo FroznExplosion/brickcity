@@ -270,6 +270,14 @@ integer, grid-aligned problem.
 
 ---
 
+## 6.1 The rung that is missing — see [Scale.md](Scale.md)
+
+A room here is either nothing or fully laid brick. What it wants in between is a **drawn** rung:
+instanced boxes at the manifest's own positions, one collider per item, no blocks in the chunk at
+all — promoted to real blocks only when something damages it or the player is close enough to touch
+it. [Docs/Scale.md](Scale.md) sets that out against what shipped destruction systems do, and it is
+the largest single cost still on the table.
+
 ## 7. Open questions
 
 1. ~~**Does a room's manifest depend on damage state?**~~ **Answered in §5.2: already-spilled**, by
