@@ -6,3 +6,4 @@
 script = ExtResource("1_city")
 big_shapes = true
 building_count = 22
+respawn_buildings = false

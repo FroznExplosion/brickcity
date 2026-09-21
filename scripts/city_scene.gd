@@ -56,6 +56,20 @@ const BIG_SHAPES := [
 ## How many buildings the city has. The command line's `--buildings=` wins over
 ## this for the same reason.
 @export_range(1, 400) var building_count := 22
+## Whether a building may give its bricks back and get them again.
+##
+## Two things happen when it can. `_trim_quiet` hands the bricks of a quiet,
+## distant building back and puts a SHELL in their place; walking up to it
+## (`PROMOTE_RANGE`) turns it back into bricks. Both are right for an
+## undisturbed building and wrong once something has fallen where it stands:
+## the shell is a coarse box over the whole footprint, so rubble lying inside
+## that footprint ends up inside the shell's collision, and every brick of it
+## is a contact. Jolt's manifold cache is 20,480 contacts and says so.
+##
+## Off, a building is promoted once and stays promoted. Nothing is handed back
+## and nothing reappears. It costs memory -- that is what the trim was for --
+## and it is the switch to reach for when something is fighting the physics.
+@export var respawn_buildings := true
 var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
@@ -1849,6 +1863,8 @@ func _world_box(b: BuildingRegistry.Building) -> AABB:
 ## wall of a forty-metre tower is not forty metres from the building, and the
 ## rooms inside that wall are about to be asked for.
 func _stream_residency() -> void:
+	if not respawn_buildings:
+		return
 	if _promote_queue.size() >= PROMOTE_QUEUE_MAX:
 		return
 	var here := camera.global_position
@@ -1996,6 +2012,8 @@ func _remesh_bricks(id: int) -> void:
 
 ## Hand the bricks back for buildings nobody is near. Damage is kept.
 func _trim_quiet() -> void:
+	if not respawn_buildings:
+		return  # nothing is handed back, so nothing has to come back
 	var here := camera.global_position
 	var freed := 0
 	var t0 := Time.get_ticks_usec()
@@ -2137,7 +2155,8 @@ func _update_hud() -> void:
 		"",
 		"blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
-		"LMB fire · X big blast · WASD move · shift fast · G grids · B bevel · J overlap · F1 stats",
+		"LMB fire · X big blast · WASD move · shift fast · G grids · B bevel · J overlap · F1 stats"
+			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
 
 
@@ -2242,6 +2261,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			var at := steps.find(snappedf(Engine.time_scale, 0.01))
 			Engine.time_scale = steps[(at + 1) % steps.size()] if at >= 0 else 1.0
 			print("[city] time scale: %.2f" % Engine.time_scale)
+		KEY_N:
+			respawn_buildings = not respawn_buildings
+			print("[city] buildings give their bricks back and take them again: %s"
+					% ("ON" if respawn_buildings else "OFF -- promoted once, resident for good"))
+			_update_hud()
 		KEY_G:
 			_show_grids = not _show_grids
 			if _grid_view != null:
