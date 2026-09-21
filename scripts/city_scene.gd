@@ -147,6 +147,13 @@ const SECTION_MAX := 16
 ## band's surface holds. Parallel arrays, one entry per band.
 ## building id -> the next band to build, for a rebuild in progress.
 var _band_cursor := {}
+## Buildings that were damaged while their bands were being rebuilt, and so
+## need one more pass when this one finishes.
+var _band_redo := {}
+var _band_cpp_ms := 0.0
+var _band_upload_ms := 0.0
+var _band_builds := 0
+var _band_worst := 0.0
 ## How much band building a tick may do. A band of one of the big shapes is a
 ## few milliseconds; the point is that a building's worth of them is not one
 ## frame's problem.
@@ -206,6 +213,11 @@ const PROMOTIONS_PER_FRAME := 1
 ## things on either side of it: far enough outside ROOM_RANGE (26 m) that a
 ## building is bricks well before its rooms want to open, and far enough inside
 ## TRIM_RADIUS (90 m) that the trim can never take back what this just gave.
+## Six metres ahead of ROOM_RANGE, and that gap is the whole requirement: a
+## building has to BE bricks before its rooms are asked for. At walking pace
+## six metres is over a second, which is many times what a promotion needs.
+## Raising it further was tried and reverted -- it promotes buildings nobody
+## is near, and it is rooms that pop in, not buildings.
 const PROMOTE_RANGE := 46.0
 ## Nearest first, two a pass, fifteen passes a second. Promotion is already
 ## rate-limited downstream -- the queue drains at PROMOTIONS_PER_FRAME and the
@@ -381,8 +393,11 @@ var _grid_view: MeshInstance3D
 ## Rooms are only streamed for buildings that are ALREADY bricks -- which is
 ## why buildings become bricks for being NEAR and not only for being shot; see
 ## PROMOTE_RANGE.
-const ROOM_RANGE := 26.0
-const ROOM_SLEEP_RANGE := 42.0
+## Raised from 26. A room that opens at 26 m opens where the player can watch
+## it happen, which is what "the interiors pop in" is. At 40 it is furnished
+## before there is anything to notice, and a room costs 0.9 ms.
+const ROOM_RANGE := 40.0
+const ROOM_SLEEP_RANGE := 58.0
 ## How many rooms a streaming pass may open, and how many milliseconds it may
 ## spend doing it.
 ##
@@ -394,8 +409,8 @@ const ROOM_SLEEP_RANGE := 42.0
 ## The budget is the real limit and the count is the guard on it. Rooms are not
 ## all the same size -- an empty one costs nothing, a shelf costs four bricks
 ## and a table five -- so a pass stops on whichever it reaches first.
-const ROOMS_PER_PASS := 12
-const ROOM_BUDGET_MS := 2.0
+const ROOMS_PER_PASS := 16
+const ROOM_BUDGET_MS := 3.0
 ## How many storeys either side of the player's own a room may be and still be
 ## walked into, or seen into. One flight up or down for walking; a few floors
 ## for looking in through a window from outside.
@@ -1551,6 +1566,14 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# PATCH. One re-index of the chunk, and only the bands whose index bytes
 	# actually moved cross to the renderer -- which for a blast is the band it
 	# landed in, not the building it landed on.
+	# A rebuild already running covers whatever just happened, and restarting
+	# it is how a building under sustained fire never finishes one: every hit
+	# fails the patch, because the bands it has not reached yet hold no mesh
+	# to patch, and the cursor goes back to zero. One more pass is queued
+	# instead, and it runs when this one is done.
+	if _band_cursor.has(id):
+		_band_redo[id] = true
+		return
 	var bands: Array = _brick_bands.get(id, [])
 	if not bands.is_empty() and not force_full:
 		var moved: Array = world.update_index_regions(b.chunk,
@@ -1638,12 +1661,26 @@ func _build_one_band(id: int) -> bool:
 	if at >= nodes.size():
 		_band_cursor.erase(id)
 		return false
+	# A band built against a stale bake re-bakes the WHOLE chunk on this
+	# thread -- measured at 55 ms against 2.6 for an ordinary band, and it
+	# lands in one frame. Wait for the worker instead.
+	if not world.has_bake(b.chunk):
+		if not world.bake_pending(b.chunk):
+			world.bake_chunk_async(b.chunk)
+		return true
 	var parent: MeshInstance3D = _brick_nodes[id]
+	var _t0 := Time.get_ticks_usec()
 	var arrays: Array = world.build_chunk_mesh_section(b.chunk, at)
+	var _t1 := Time.get_ticks_usec()
 	var mesh := ArrayMesh.new()
 	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at]):
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		_brick_index_width[id] = IslandManager.index_width(arrays)
+	var _t2 := Time.get_ticks_usec()
+	_band_cpp_ms += float(_t1 - _t0) / 1000.0
+	_band_upload_ms += float(_t2 - _t1) / 1000.0
+	_band_builds += 1
+	_band_worst = maxf(_band_worst, float(_t2 - _t0) / 1000.0)
 	var node: MeshInstance3D = nodes[at]
 	if node == null or not is_instance_valid(node):
 		node = MeshInstance3D.new()
@@ -1676,8 +1713,15 @@ func _advance_bands() -> void:
 		_build_one_band(id)
 		built += 1
 		if not _band_cursor.has(id):
-			# Finished: the shell it was hiding behind can go.
-			_free_shell(id)
+			if _band_redo.has(id):
+				# Something hit it on the way through. Go round once more.
+				_band_redo.erase(id)
+				var rb := registry.get_building(id)
+				if rb != null and rb.is_materialised():
+					_rebuild_bands(id, rb.chunk)
+			else:
+				# Finished: the shell it was hiding behind can go.
+				_free_shell(id)
 		if Time.get_ticks_usec() >= until:
 			break
 
@@ -1686,6 +1730,7 @@ func _advance_bands() -> void:
 func _take_bands(id: int) -> Array:
 	var nodes: Array = _brick_bands.get(id, [])
 	_band_cursor.erase(id)
+	_band_redo.erase(id)
 	_brick_bands.erase(id)
 	_brick_band_meshes.erase(id)
 	_brick_band_bytes.erase(id)
@@ -2067,7 +2112,9 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("damage", t)
 
 	_retirer.drain()
+	t = _mark("retire", t)
 	_advance_bands()
+	t = _mark("bands", t)
 	_finish_promotions()
 	t = _mark("promote_finish", t)
 
@@ -2939,7 +2986,8 @@ func _report_profile() -> void:
 	if _prof_worst.is_empty():
 		return
 	var keys := ["stress", "stability", "detach", "disable", "spawn", "remesh",
-			"damage", "promote", "promote_finish", "stream", "islands", "hud"]
+			"bands", "retire", "damage", "promote", "promote_finish", "stream",
+			"islands", "hud"]
 	if _frame_samples > 0:
 		print("[prof] mean frame: %.1f ms physics (solver + this script), %.1f ms idle process" % [
 				_phys_sum / _frame_samples, _proc_sum / _frame_samples])
@@ -3086,6 +3134,8 @@ func _run_stress_pass() -> void:
 	print("[stress] collision: %s" % _collision_report())
 	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
+	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
+			_band_builds, _band_cpp_ms, _band_upload_ms, _band_worst])
 	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
 			islands.small_live_max, islands.large_live_max, islands.total_live_max,
 			islands.cap_deleted, islands.cap_slept, maxi(islands.cap_worst_over, 0)])

@@ -233,6 +233,10 @@ public:
     /// Re-bakes on change.
     void set_chunk_section_plates(int chunk_id, int plates);
     int get_chunk_sections(int chunk_id) const;
+    /// Is this chunk's face bake current? A band built while it is not pays
+    /// for re-baking the WHOLE chunk on the calling thread -- 55 ms against
+    /// 2.6 for an ordinary band -- so the caller waits for an async bake.
+    bool has_bake(int chunk_id) const;
 
     /// One band's arrays, ready for `add_surface_from_arrays`.
     ///

@@ -1649,6 +1649,10 @@ int BrickWorld::get_chunk_sections(int chunk_id) const {
     return valid_chunk(chunk_id) ? chunks[chunk_id].sections() : 0;
 }
 
+bool BrickWorld::has_bake(int chunk_id) const {
+    return valid_chunk(chunk_id) && chunks[chunk_id].bake.valid;
+}
+
 Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     if (!valid_chunk(chunk_id)) {
         return Array();
@@ -1662,12 +1666,11 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     if (section < 0 || section >= c.bake.section_count()) {
         return Array();
     }
-    // The whole chunk's index buffer is rebuilt here, because a face's drawn
-    // state depends on its neighbour and a neighbour can be in another band.
-    // It is integer work over the faces; the EXPENSIVE half is the vertex
-    // upload, and that is what this cuts to one band.
-    fill_indices(c, st, c.live_indices);
-
+    // NOT filled here. A band computes its own indices below, and the
+    // whole-chunk buffer is only a BASELINE for the next diff -- so
+    // update_index_regions establishes it the first time it is asked. Filling
+    // it here made the first band after a bake pay for every face in the chunk:
+    // measured at 57 ms against 5.5 for an ordinary band.
     const int first = c.bake.section_first[(size_t)section];
     const int faces = c.bake.section_faces[(size_t)section];
     if (faces <= 0) {
@@ -1686,20 +1689,34 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
 
     // Local indices: the same six per face the whole-chunk path writes, with
     // the band's vertex base taken off.
+    // Computed from the faces themselves rather than read out of the chunk
+    // buffer, so this band does not depend on that buffer being current.
     PackedInt32Array idx;
     idx.resize((int64_t)faces * 6);
     int32_t *w = idx.ptrw();
-    const int32_t *src = c.live_indices.ptr();
     for (int f = 0; f < faces; ++f) {
-        const int from = (first + f) * 6;
+        const int face = first + f;
+        const int32_t owner = c.bake.owner[(size_t)face];
+        const int32_t other = c.bake.other[(size_t)face];
+        const bool drawn = c.blocks[owner].alive
+                && (other < 0 || !c.blocks[other].alive);
         const int to = f * 6;
-        // A culled face is six zeroes in the chunk buffer; it has to stay a
-        // degenerate triangle here too, or the band's buffer changes length
-        // when something breaks and it can never be patched again.
-        const bool drawn = src[from] != 0 || src[from + 1] != 0 || src[from + 2] != 0;
-        for (int k = 0; k < 6; ++k) {
-            w[to + k] = drawn ? src[from + k] - v0 : 0;
+        if (!drawn) {
+            // A culled face stays a degenerate triangle, or the band's buffer
+            // changes length when something breaks and it can never be patched
+            // again.
+            for (int k = 0; k < 6; ++k) {
+                w[to + k] = 0;
+            }
+            continue;
         }
+        const int32_t base = face * 4 - v0;
+        w[to + 0] = base + 0;
+        w[to + 1] = base + 1;
+        w[to + 2] = base + 2;
+        w[to + 3] = base + 1;
+        w[to + 4] = base + 3;
+        w[to + 5] = base + 2;
     }
     arrays[Mesh::ARRAY_INDEX] = idx;
     return arrays;
@@ -1711,8 +1728,8 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
         return out;
     }
     Chunk &c = chunks[chunk_id];
-    if (!c.bake.valid || c.live_indices.is_empty()) {
-        return out; // nothing built yet; the caller must build first
+    if (!c.bake.valid) {
+        return out; // nothing to compare; the caller must build first
     }
     const auto t0 = std::chrono::steady_clock::now();
     MeshStats &st = stats[chunk_id];
@@ -1721,6 +1738,17 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
 
     PackedInt32Array next;
     fill_indices(c, st, next);
+
+    // No baseline yet -- a fresh bake, whose bands were built from exactly this
+    // block state. So nothing has MOVED; this call is what establishes what to
+    // diff against next time.
+    if (c.live_indices.size() != next.size()) {
+        c.live_indices = next;
+        st.indices = next.size();
+        st.compact_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        return out;
+    }
     const int32_t *a = c.live_indices.ptr();
     const int32_t *b = next.ptr();
 
@@ -3880,6 +3908,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::set_chunk_section_plates);
     ClassDB::bind_method(D_METHOD("get_chunk_sections", "chunk_id"),
             &BrickWorld::get_chunk_sections);
+    ClassDB::bind_method(D_METHOD("has_bake", "chunk_id"), &BrickWorld::has_bake);
     ClassDB::bind_method(D_METHOD("build_chunk_mesh_section", "chunk_id", "section"),
             &BrickWorld::build_chunk_mesh_section);
     ClassDB::bind_method(D_METHOD("update_index_regions", "chunk_id", "index_bytes"),
