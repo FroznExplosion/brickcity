@@ -44,6 +44,21 @@ Play:
 godot --path . --resolution 1280x720
 ```
 
+A city of the big shapes -- up to 28 x 22 m on plan and 84 m tall, 4,000 rooms
+in the largest. `--buildings=` sets how many (default 22); six is one of each
+shape:
+
+```bash
+godot --path . --resolution 1280x720 -- --big
+godot --path . --resolution 1280x720 -- --big --buildings=6
+```
+
+What interiors cost, measured three ways on the same building:
+
+```bash
+godot --path . --resolution 1280x720 -- --interiors --big
+```
+
 Capture the scripted collapse to `shots/` and quit:
 
 ```bash
@@ -849,8 +864,8 @@ included, so the furniture is already covered by a body that exists.
     with the bake out       104.1 ms     +0.0 MB
     with its own body         0.9 ms     +0.0 MB
 
-    the building's 4,000 rooms:  899 s  ->  4 s
-    all of them at once, resident:  +50.7 MB  ->  +1.0 MB
+	the building's 4,000 rooms:  899 s  ->  4 s
+	all of them at once, resident:  +50.7 MB  ->  +1.0 MB
 
 **Per room is now the cheap option as well as the frugal one**, which is not where it started. Per
 building is 178 ms in one frame against 4 s spread over 4,000 passes, and it holds 25,537 more

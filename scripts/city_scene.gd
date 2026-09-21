@@ -443,11 +443,15 @@ func _ready() -> void:
 			_build_path = DEFAULT_BUILD_PATH
 		elif a.begins_with("--build="):
 			_build_path = a.split("=", true, 1)[1]
+	# Not only in the stress pass. Walking round a city is the reason to want a
+	# different number of buildings in it -- and with --big, six shapes is six
+	# towers and twenty-two is a district.
+	for a in args:
+		if a.begins_with("--buildings="):
+			_city_size = maxi(1, int(a.split("=")[1]))
 	if _stress_mode:
 		for a in args:
-			if a.begins_with("--buildings="):
-				_city_size = maxi(1, int(a.split("=")[1]))
-			elif a.begins_with("--collapse="):
+			if a.begins_with("--collapse="):
 				var v: String = a.split("=")[1]
 				_stress_collapse = -1 if v == "all" else maxi(0, int(v))
 
@@ -4410,7 +4414,11 @@ func _build_scenery() -> void:
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse
 	camera.far = 3000.0
-	camera.position = Vector3(-52.0, 34.0, -52.0)
+	# Outside the corner of the city, looking in along the diagonal. Scaled by
+	# the spacing, because --big puts 84 m towers on a 46 m pitch and the fixed
+	# position that was fine for a 13 m one starts INSIDE a building.
+	var stand: float = 52.0 * (BIG_SPACING / 13.0 if _big else 1.0)
+	camera.position = Vector3(-stand, stand * 0.65, -stand)
 	camera.rotation = Vector3(-0.42, -2.36, 0.0)
 	add_child(camera)
 	camera.mode_changed.connect(func(_walking: bool) -> void: _update_hud())
