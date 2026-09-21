@@ -211,6 +211,10 @@ const SPAWNS_PER_TICK := 2
 ## one tick was 32 ms; they queue instead. The bricks are already gone from the
 ## world -- only the picture lags.
 const REMESHES_PER_TICK := 2
+## And the real budget. See the loop in _physics_process: the count bounds
+## how many SMALL patches run, this bounds how much a big rebuild may cost
+## the frame it lands in.
+const REMESH_BUDGET_MS := 8.0
 ## Handing a finished bake to the renderer still costs a full mesh build and
 ## upload -- ~16 ms for a tall building. The shell is still drawn until it
 ## happens, so there is no reason to do more than one per tick.
@@ -1909,8 +1913,16 @@ func _physics_process(_delta: float) -> void:
 
 	var remeshed := 0
 	var now_frame := Engine.get_process_frames()
+	var remesh_until := Time.get_ticks_usec() + int(REMESH_BUDGET_MS * 1000.0)
 	var ri := 0
 	while remeshed < REMESHES_PER_TICK and ri < _remesh_queue.size():
+		# A count is the wrong budget when the items differ by two orders of
+		# magnitude. Patching a small surface is microseconds; rebuilding a
+		# 50,000-brick tower is ~53 ms, and two of those landing together was
+		# 106 ms of a 162 ms worst tick on --stress --big. One is allowed to
+		# overrun -- something has to go first -- and the next waits a tick.
+		if remeshed > 0 and Time.get_ticks_usec() >= remesh_until:
+			break
 		var rid_b: int = _remesh_queue[ri]
 		# Held: a piece this building just shed has not come up yet.
 		if int(_remesh_hold.get(rid_b, -1)) > now_frame:
