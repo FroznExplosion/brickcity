@@ -815,6 +815,52 @@ Two lessons worth keeping, both about the same thing:
 * **Measure the baseline you think you have.** Three arms of this experiment were run against a
   contaminated one, and every conclusion drawn from them was wrong.
 
+### Odd shapes, and what a building standing on legs breaks
+
+Asked of the system rather than of a bug: what happens to a building that is not
+a box -- one with legs, like a pylon or a tower with an arch under it. Measured
+on a four-legged deck (four 2x2 columns twenty courses tall, a two-layer plate
+deck across the tops) and on a splayed tower whose corners step inward as they
+rise, which is what a tapered leg is on a grid.
+
+**Almost all of it does not care.** Connectivity is integer adjacency, the stress
+solve follows the support tree it finds, splitting is a component walk, and none
+of them knows what shape the blocks are in. The splayed tower builds, solves with
+zero joint failures and zero detached groups, and stands. Take one leg off the
+four-legged deck and it stands on three, correctly -- a table with its mass in
+the middle does. Take two off the same side and it falls, correctly.
+
+**The one part that was shape-blind was the support polygon**, and it was the
+bounding RECTANGLE of every block touching the foundation. For a building
+standing on its own outline that is the same thing. For one standing on legs it
+claims every corner, including the ones no leg is under. It is the convex hull
+of the feet now:
+
+| | rectangle | hull |
+|---|---|---|
+| four legs | -2.02 | -2.02 |
+| one leg gone | -1.58 | **-1.23** |
+| two gone, same side | +0.17 | +0.17 (falls, both) |
+| two gone, diagonal | -1.97 | **-0.49** |
+
+Overhang in metres; negative is standing. So it is a tightening of up to a metre
+and a half rather than a different answer in any of those, and the answers it
+agrees with are the right ones. What it buys is the case they are one load away
+from: put weight over a corner no leg is under and the rectangle still says it is
+supported. Degenerate hulls are the point as much as the polygon -- a building
+left standing on one foot is balanced on a point and one on two feet is balanced
+on a line, and the hull says so where a rectangle cannot.
+
+It costs nothing measurable: `--shot` 16.8 ms, `--stress --buildings=200` 17.5
+-17.8 ms, the same 8 of 200 buildings toppling.
+
+**What is still box-shaped is the generation, not the destruction.** `TowerRecipe`
+makes boxes; `BuildRecipe` and the workshop already author any shape and the city
+places it. `BuildingShell`'s two cheap tiers are a banded box and a box, so an odd
+shape has no far representation yet, and `RoomManifest` cuts storeys into
+rectangles. Those are three generators to write, against a destruction system
+that needs nothing.
+
 ### What a room costs, and the two whole-building bills inside it
 
 The question was whether interiors are worth streaming per room, or whether per
@@ -3216,11 +3262,10 @@ the stress pass could not say" for why it prints all three.
 45. **The walking body is on the debug camera**, not on a pawn owned by a player slot. It is one
 	capsule with no animation, no third person and no networking, and it is deliberately the same
 	throwaway rig the free-fly camera always was.
-46. **A structural brick resting on a decorative one is still grounded by it.** The role takes a
-	block out of the load and out of the balance test; it does not cut the connectivity graph.
-	Nothing in the generated city does this, but the workshop's INTERIOR layer allows it, so a
-	player can stand a wall on a table and get a bridge for free. BuildMode §9.2 already names
-	the rule -- a structural frame may not weld to a decorative one -- and it is not enforced.
+46. **An odd-shaped building has no cheap tier and no rooms.** Destruction does not care what
+	shape a building is, but `BuildingShell` draws distant buildings as a banded box or a box,
+	and `RoomManifest` cuts storeys into rectangles. A tower with legs would be a box at
+	range and would furnish as though it were one.
 47. **Interiors are drawn flat.** `FurnitureMesh` is a MultiMesh of scaled unit cubes under a plain
 	`StandardMaterial3D`, so a chair has neither the seams nor the chamfer the brickwork around
 	it has. The brick shader reads UV as metres across a face and UV2 as that face's size, and

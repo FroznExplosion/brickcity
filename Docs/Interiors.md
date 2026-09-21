@@ -111,6 +111,15 @@ placing a brick is the same in both; the recipe carries one bit per block (v4) a
 it back. Nothing about a brick's shape or position could have inferred this — a table built out of
 wall bricks is a table, and only its author knows.
 
+**Grounding goes into a room's contents and never back out of them.** The role takes a block out
+of the load and out of the balance test; for a while it left the connectivity graph alone, and that
+was not a limitation but a bug — grounding is reachability, so a chair was a perfectly good step on
+the path and a section that should have come down hung off the table standing in it. Two directed
+rules fix it: grounding never leaves a decorative block for a structural one, and a decorative block
+is reached only from BELOW. Structure keeps the old rule and needs it — undercut a wall and its
+weight travels sideways to the corners that still stand — but furniture has no such story, and
+without the second rule a chair still touching a wall floated after its floor had gone.
+
 **And the role is what lets a room be the streaming unit.** A decorative block is outside the
 chunk's face bake and outside the building's collision body, so opening a room touches neither: it
 lays its bricks, adds them to the building's own small furniture body, and redraws a MultiMesh over

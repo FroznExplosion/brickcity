@@ -2293,6 +2293,84 @@ bool BrickWorld::is_support_broken(int chunk_id, int block_id) const {
     return c.blocks[block_id].support_broken;
 }
 
+// The convex hull of a set of points in the ground plane, anticlockwise.
+//
+// Monotone chain: sort, sweep the lower side, sweep the upper side. `pts` is
+// consumed. Degenerate inputs come back as they are -- a single point stays a
+// point and a straight line stays two ends -- which is what the caller wants,
+// because a building standing on one foot is balanced on a point and a building
+// standing on two is balanced on a line.
+static std::vector<Vector2> ground_hull(std::vector<Vector2> &pts) {
+    std::sort(pts.begin(), pts.end(), [](const Vector2 &a, const Vector2 &b) {
+        return a.x != b.x ? a.x < b.x : a.y < b.y;
+    });
+    pts.erase(std::unique(pts.begin(), pts.end(), [](const Vector2 &a, const Vector2 &b) {
+        return a.is_equal_approx(b);
+    }), pts.end());
+    const size_t n = pts.size();
+    if (n < 3) {
+        return pts;
+    }
+    auto cross = [](const Vector2 &o, const Vector2 &a, const Vector2 &b) -> float {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    };
+    std::vector<Vector2> hull(2 * n);
+    size_t k = 0;
+    for (size_t i = 0; i < n; ++i) {
+        while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0.0f) {
+            --k;
+        }
+        hull[k++] = pts[i];
+    }
+    for (size_t i = n - 1, t = k + 1; i > 0; --i) {
+        while (k >= t && cross(hull[k - 2], hull[k - 1], pts[i - 1]) <= 0.0f) {
+            --k;
+        }
+        hull[k++] = pts[i - 1];
+    }
+    hull.resize(k > 0 ? k - 1 : 0);
+    return hull;
+}
+
+// How far outside the support polygon a point is, in metres. Negative inside.
+//
+// For a proper polygon this is the largest signed distance to any edge line,
+// which for a convex anticlockwise hull is exactly "outside" when positive. A
+// hull that came back as a segment or a point has no interior at all, so the
+// answer is the plain distance to it -- and that is the case that matters for
+// anything standing on legs.
+static float hull_overhang(const std::vector<Vector2> &hull, const Vector2 &p) {
+    if (hull.empty()) {
+        return 1e9f;
+    }
+    if (hull.size() == 1) {
+        return hull[0].distance_to(p);
+    }
+    if (hull.size() == 2) {
+        const Vector2 ab = hull[1] - hull[0];
+        const float len2 = ab.length_squared();
+        if (len2 <= 0.0f) {
+            return hull[0].distance_to(p);
+        }
+        const float t = std::clamp((p - hull[0]).dot(ab) / len2, 0.0f, 1.0f);
+        return (hull[0] + ab * t).distance_to(p);
+    }
+    float worst = -1e9f;
+    for (size_t i = 0; i < hull.size(); ++i) {
+        const Vector2 a = hull[i];
+        const Vector2 b = hull[(i + 1) % hull.size()];
+        const Vector2 edge = b - a;
+        const float len = edge.length();
+        if (len <= 0.0f) {
+            continue;
+        }
+        // Anticlockwise hull, so the interior is to the LEFT of every edge.
+        const float side = ((p.x - a.x) * edge.y - (p.y - a.y) * edge.x) / len;
+        worst = std::max(worst, side);
+    }
+    return worst;
+}
+
 Dictionary BrickWorld::check_stability(int chunk_id) {
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
@@ -2312,6 +2390,7 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
     bool have_support = false;
     Vector2 support_min(0, 0);
     Vector2 support_max(0, 0);
+    std::vector<Vector2> feet;
 
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
@@ -2333,13 +2412,37 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
         total_mass += m;
 
         // What the building actually stands on: the blocks in contact with the
-        // foundation. Their footprint is the support polygon, approximated by
-        // its bounding rectangle.
+        // foundation. Every foot contributes the four corners of its footprint
+        // and the support polygon is their convex hull.
+        //
+        // It was the bounding RECTANGLE of those corners, which is the same
+        // thing for a building standing on its own outline and too generous for
+        // one standing on legs: the rectangle claims every corner, including
+        // the ones no leg is under.
+        //
+        // Measured on a four-legged deck, as overhang in metres -- negative is
+        // standing, and tighter is the hull being stricter:
+        //
+        //     four legs              rect -2.02   hull -2.02
+        //     one leg gone           rect -1.58   hull -1.23
+        //     two gone, same side    rect +0.17   hull +0.17   (falls, both)
+        //     two gone, diagonal     rect -1.97   hull -0.49
+        //
+        // So it is a tightening of up to a metre and a half rather than a
+        // different verdict in any of those, and the verdicts it agrees with
+        // are the right ones -- a deck on three legs with its mass in the
+        // middle really is standing. What the hull buys is the case those are
+        // one load away from: put weight over a corner no leg is under and the
+        // rectangle still says it is supported.
         if (b.cell.y <= floor_y) {
             const Vector3i base = b.cell - c.origin;
             const Vector3i sz = archetypes[b.archetype].size;
             const Vector2 lo(base.x * cs.x, base.z * cs.z);
             const Vector2 hi((base.x + sz.x) * cs.x, (base.z + sz.z) * cs.z);
+            feet.push_back(lo);
+            feet.push_back(Vector2(hi.x, lo.y));
+            feet.push_back(hi);
+            feet.push_back(Vector2(lo.x, hi.y));
             if (!have_support) {
                 support_min = lo;
                 support_max = hi;
@@ -2360,14 +2463,13 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
     bool stable = true;
     float overhang = 0.0f;
 
+    std::vector<Vector2> hull;
     if (!have_support) {
         stable = false; // nothing touching the ground at all
         overhang = 1e9f;
     } else {
-        // How far outside the support rectangle the centre of mass sits.
-        const float dx = std::max(support_min.x - com.x, com.x - support_max.x);
-        const float dz = std::max(support_min.y - com.z, com.z - support_max.y);
-        overhang = std::max(dx, dz);
+        hull = ground_hull(feet);
+        overhang = hull_overhang(hull, Vector2(com.x, com.z));
         stable = overhang <= 0.0f;
     }
 
@@ -2375,6 +2477,13 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
     out["com"] = com;
     out["support_min"] = support_min;
     out["support_max"] = support_max;
+    // The polygon itself, for an overlay to draw and a probe to measure. The
+    // rectangle above is kept because plenty of callers only want a rough box.
+    PackedVector2Array poly;
+    for (const Vector2 &v : hull) {
+        poly.push_back(v);
+    }
+    out["support_hull"] = poly;
     out["overhang"] = overhang;
     out["blocks"] = standing;
     return out;
