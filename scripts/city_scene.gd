@@ -464,6 +464,23 @@ var _frame_sum := 0.0
 var _frame_samples := 0
 var _frames_over_30 := 0
 var _sampling := false
+## The live profiler. F2.
+##
+## Everything a scripted pass measures is already collected every tick; it was
+## only ever PRINTED at the end of a pass, which is no use for the case that
+## actually matters -- walking round the city and feeling it stutter. This puts
+## the same numbers on screen over a rolling window, so the thing being
+## complained about is the thing being measured.
+##
+## A window rather than a total: what a session did on average ten minutes ago
+## says nothing about the hitch that just happened.
+var _live_prof := false
+const LIVE_WINDOW := 60
+var _live_ring: Array = []
+var _live_frame_ms: Array = []
+var _live_worst := {}
+var _live_worst_ms := 0.0
+var _live_label: Label
 ## Frame times bucketed by what the city was doing at the time, because a single
 ## mean over a whole run cannot answer "does it come back afterwards".
 var _phase := ""
@@ -1937,15 +1954,22 @@ func _physics_process(_delta: float) -> void:
 		_update_hud()
 	_mark("hud", t)
 
+	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
+	_prof["script_total"] = tick_total
 	if _sampling:
-		var total := float(Time.get_ticks_usec() - t_tick) / 1000.0
-		_prof["script_total"] = total
 		for k in _prof:
 			_prof_sum[k] = float(_prof_sum.get(k, 0.0)) + float(_prof[k])
-		if total > _prof_worst_ms:
-			_prof_worst_ms = total
+		if tick_total > _prof_worst_ms:
+			_prof_worst_ms = tick_total
 			_prof_worst = _prof.duplicate()
 			_prof_worst["island_count"] = islands.islands.size()
+	if _live_prof:
+		_live_ring.append(_prof.duplicate())
+		if _live_ring.size() > LIVE_WINDOW:
+			_live_ring.remove_at(0)
+		if tick_total > _live_worst_ms:
+			_live_worst_ms = tick_total
+			_live_worst = _prof.duplicate()
 
 
 func _free_shell(id: int) -> void:
@@ -2219,6 +2243,7 @@ func _demote(id: int, dist: float) -> void:
 
 func _process(delta: float) -> void:
 	_update_reticle()
+	_update_live_prof(delta)
 	if not _sampling:
 		return
 	var ms := delta * 1000.0
@@ -2283,9 +2308,86 @@ func _update_hud() -> void:
 		"",
 		"blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
-		"LMB fire · X big blast · WASD move · shift fast · G grids · B bevel · J overlap · F1 stats"
+		"LMB fire · X big blast · WASD move · shift fast · G grids · B bevel · J overlap"
+			+ "
+F1 stats · F2 profiler · F3 reset worst · N respawn"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
+
+
+## What the last second of ticks cost, by phase, worst first.
+##
+## Drawn from the same `_prof` the scripted passes read, so a number seen here
+## and a number in a pass summary mean the same thing.
+func _update_live_prof(delta: float) -> void:
+	if _live_label == null:
+		return
+	_live_frame_ms.append(delta * 1000.0)
+	if _live_frame_ms.size() > LIVE_WINDOW:
+		_live_frame_ms.remove_at(0)
+	if not _live_prof or _live_ring.is_empty():
+		return
+	var mean := {}
+	for entry in _live_ring:
+		for k in (entry as Dictionary):
+			mean[k] = float(mean.get(k, 0.0)) + float(entry[k])
+	var n := float(_live_ring.size())
+	var phases: Array = []
+	for k in mean:
+		if k == "script_total":
+			continue
+		phases.append([float(mean[k]) / n, str(k)])
+	phases.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
+
+	var frame_mean := 0.0
+	var frame_worst := 0.0
+	for ms in _live_frame_ms:
+		frame_mean += float(ms)
+		frame_worst = maxf(frame_worst, float(ms))
+	frame_mean /= maxf(float(_live_frame_ms.size()), 1.0)
+
+	var lines: Array = []
+	lines.append("frame     %6.2f ms mean   %6.2f worst   (%.0f fps)" % [
+			frame_mean, frame_worst, 1000.0 / maxf(frame_mean, 0.01)])
+	# TIME_PHYSICS_PROCESS includes this script's own tick, so subtracting it
+	# leaves the solver. The PHYSICS_3D_* counters are NOT used anywhere here:
+	# Jolt does not populate them and they read zero whoever asks.
+	var phys := float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
+	var script_ms := float(mean.get("script_total", 0.0)) / n
+	lines.append("physics   %6.2f ms   script %6.2f   solver ~%6.2f" % [
+			phys, script_ms, maxf(phys - script_ms, 0.0)])
+	lines.append("")
+	lines.append("per tick, mean of the last %d:" % _live_ring.size())
+	for i in mini(phases.size(), 8):
+		var row: Array = phases[i]
+		lines.append("  %-16s %6.2f ms" % [row[1], row[0]])
+	if _live_worst_ms > 0.0:
+		lines.append("")
+		lines.append("worst tick %.2f ms (F3 resets):" % _live_worst_ms)
+		var worst: Array = []
+		for k in _live_worst:
+			if k != "script_total":
+				worst.append([float(_live_worst[k]), str(k)])
+		worst.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
+		for i in mini(worst.size(), 4):
+			var row: Array = worst[i]
+			if float(row[0]) < 0.01:
+				break
+			lines.append("  %-16s %6.2f ms" % [row[1], row[0]])
+	var isl: Dictionary = islands.report()
+	lines.append("")
+	lines.append("islands %d (%d settled, %d loose) · dormant %d" % [
+			isl.islands, isl.settled, isl.islands - int(isl.settled), isl.dormant])
+	lines.append("resident buildings %d · open rooms %d" % [
+			_materialised.size(), int(registry.room_report().active)])
+	# The census in one line rather than the full sentence _collision_report
+	# writes: this label is 430 pixels wide.
+	var boxes := 0
+	for bid in _brick_bodies:
+		boxes += PhysicsServer3D.body_get_shape_count(_brick_bodies[bid])
+	lines.append("collision boxes %d standing · %d falling · %d settled" % [
+			boxes, int(isl.get("loose_boxes", 0)), int(isl.get("settled_boxes", 0))])
+	_live_label.text = "\n".join(lines)
 
 
 ## Wind the blast up or down a notch.
@@ -2389,6 +2491,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			var at := steps.find(snappedf(Engine.time_scale, 0.01))
 			Engine.time_scale = steps[(at + 1) % steps.size()] if at >= 0 else 1.0
 			print("[city] time scale: %.2f" % Engine.time_scale)
+		KEY_F2:
+			_live_prof = not _live_prof
+			_live_ring.clear()
+			_live_frame_ms.clear()
+			_live_worst = {}
+			_live_worst_ms = 0.0
+			if _live_label != null:
+				_live_label.visible = _live_prof
+			print("[city] live profiler: %s" % ("ON" if _live_prof else "OFF"))
+		KEY_F3:
+			_live_worst = {}
+			_live_worst_ms = 0.0
+			print("[city] worst frame reset")
 		KEY_N:
 			respawn_buildings = not respawn_buildings
 			print("[city] buildings give their bricks back and take them again: %s"
@@ -4680,6 +4795,18 @@ func _build_scenery() -> void:
 	stats_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	stats_label.add_theme_constant_override("outline_size", 4)
 	layer.add_child(stats_label)
+
+	# The live profiler, top right, off until F2. Monospace, because a column
+	# of numbers that will not line up is a column of numbers nobody reads.
+	_live_label = Label.new()
+	_live_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_live_label.position = Vector2(-430, 12)
+	_live_label.add_theme_font_override("font", ThemeDB.fallback_font)
+	_live_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.62))
+	_live_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_live_label.add_theme_constant_override("outline_size", 4)
+	_live_label.visible = false
+	layer.add_child(_live_label)
 
 	_reticle = Reticle.new()
 	_reticle.set_anchors_preset(Control.PRESET_FULL_RECT)
