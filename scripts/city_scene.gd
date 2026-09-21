@@ -76,9 +76,19 @@ const BIG_SHAPES := [
 ##
 ## `--debris-small=`, `--debris-large=` and `--debris-total=` override them, so
 ## a pass can sweep values without editing a scene.
-@export_range(0, 2000) var debris_small_max := 220
-@export_range(0, 2000) var debris_large_max := 60
-@export_range(0, 4000) var debris_total_max := 240
+## Measured on --stress --big --buildings=4, which is the case that hurts:
+##
+##     uncapped        38.0 ms mean, 24.5% of frames over, 510 islands
+##     220 / 60 / 240  45.6 ms mean, 37.0% over, 300 islands
+##     80 / 24 / 96    33.8 ms mean, 16.5% over, 210 islands
+##
+## The middle row is the one worth keeping: a cap loose enough to fire
+## occasionally pays for the capture a sleep costs without removing enough
+## bodies to earn it back. Tight is better than loose, and loose is worse
+## than none.
+@export_range(0, 2000) var debris_small_max := 80
+@export_range(0, 2000) var debris_large_max := 24
+@export_range(0, 4000) var debris_total_max := 96
 var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.

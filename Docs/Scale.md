@@ -377,7 +377,41 @@ Jolt's manifold cache overflowing at 20,480 contacts in the big city.
 **Measure:** live body count and contact count during a big-city collapse, against the manifold
 cap; that the total holds under a sustained fight; that a large piece slept and came back.
 
+### Stage 1 results, and what they redirected
+
+Measured on `--stress --big --buildings=4`, which is the case that hurts:
+
+| caps (small / large / total) | mean | over budget | islands left |
+|---|---|---|---|
+| uncapped | 38.0 ms | 24.5% | 510 |
+| 220 / 60 / 240 | **45.6 ms** | 37.0% | 300 |
+| 80 / 24 / 96 | **33.8 ms** | 16.5% | 210 |
+
+**A loose cap is worse than no cap.** Firing occasionally pays for the record a
+sleep captures without removing enough bodies to earn it back. Tight beats loose,
+loose loses to none, and 80/24/96 is what ships.
+
+**And the cap is not the problem.** The damage phase is 74-77 ms in all three
+runs and the worst frame is ~164 ms in all three. Debris does not own either.
+The profile of the worst tick says who does:
+
+    remesh 106.3   damage 52.4   islands 3.8   everything else ~0
+    collapsing phase: 132.8 ms mean, 7.5 fps, 180 of 180 frames over budget
+    45,248 collision boxes in pieces still falling
+
+**One full mesh rebuild of a big building is ~100 ms**, and a collapse forces
+them: blocks leaving the chunk invalidate the face bake, and the rebuild is
+linear in the whole tower however few bricks left it. Eight of them in that run.
+
+That is [Plan §4.3](Plan.md) — **sections, not buildings** — which has been on
+the backlog since before any of this and now has a number against it. A building
+drawn as N section meshes rebuilds one section, not the tower. It is worth more
+than everything below, and nothing below touches it.
+
+So the order changed: **sections first**, then the drawn rung.
+
 ### Stage 2 — The drawn rung
+
 
 **Why second:** it is the biggest single win left and nothing else depends on its internals.
 
