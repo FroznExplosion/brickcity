@@ -54,26 +54,45 @@ const BY_KIND := {
 const WALL_MARGIN := 3
 
 
+## How many studs across a room wants to be. A floor is cut into as many rooms
+## as fit at roughly this size, per axis.
+##
+## The split used to be "1, or 2 if the footprint is at least 20 studs", which
+## is the same thing as saying every building in the city has four rooms a
+## storey however big it is. That is fine while the biggest tower is 28 studs
+## across and actively misleading past it: a 60-stud floor is not four rooms,
+## and pretending it is makes per-room streaming look cheaper than it is by
+## giving it a quarter of the work to do.
+##
+## Seven keeps the existing city exactly as it was -- a 20-stud footprint is 14
+## studs inside its margins, which is two -- and scales from there.
+const ROOM_STUDS := 7
+
+
 ## The rooms of a generated building, in its own cells.
 ##
-## One per storey for a small footprint, quartered for a large one -- which is
-## the whole of "rooms come from the recipe" for a building whose recipe is
-## four walls and a floor every few courses.
+## A floor is cut into rooms of about ROOM_STUDS across, per axis, so a bigger
+## building has more rooms rather than bigger ones -- which is the whole of
+## "rooms come from the recipe" for a building whose recipe is four walls and a
+## floor every few courses.
 static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int) -> Array[Room]:
 	var out: Array[Room] = []
-	var split := 2 if mini(footprint_x, footprint_z) >= 20 else 1
 	var inner_x := footprint_x - WALL_MARGIN * 2
 	var inner_z := footprint_z - WALL_MARGIN * 2
 	if inner_x < 4 or inner_z < 4:
 		return out
 	@warning_ignore("integer_division")
-	var cell_x: int = inner_x / split
+	var split_x: int = maxi(inner_x / ROOM_STUDS, 1)
 	@warning_ignore("integer_division")
-	var cell_z: int = inner_z / split
+	var split_z: int = maxi(inner_z / ROOM_STUDS, 1)
+	@warning_ignore("integer_division")
+	var cell_x: int = inner_x / split_x
+	@warning_ignore("integer_division")
+	var cell_z: int = inner_z / split_z
 	for storey in storeys_of(courses):
-		for gx in split:
-			for gz in split:
+		for gx in split_x:
+			for gz in split_z:
 				var r := Room.new()
 				r.id = out.size()
 				r.lo = Vector3i(WALL_MARGIN + gx * cell_x, int(storey.floor_y),

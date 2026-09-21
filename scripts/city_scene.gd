@@ -33,6 +33,25 @@ const SHAPES := [
 	{"x": 20, "z": 20, "courses": 80},
 ]
 
+## `--big`: the same city with buildings the size the game eventually wants.
+##
+## The largest here is 28 x 22 m on plan and 84 m tall, which is a mid-rise
+## office block rather than a test tower -- and 4,000 rooms. Everything about
+## interiors that is a judgement call at 20x20x18 is a measurement at this
+## size, which is what the mode exists for.
+const BIG_SHAPES := [
+	{"x": 40, "z": 32, "courses": 60},
+	{"x": 48, "z": 48, "courses": 120},
+	{"x": 64, "z": 40, "courses": 160},
+	{"x": 56, "z": 56, "courses": 100},
+	{"x": 80, "z": 64, "courses": 200},
+	{"x": 36, "z": 36, "courses": 240},
+]
+var _big := false
+## Metres between buildings. Big ones need more, or they start inside each
+## other -- the shapes above are up to 28 m across against a 13 m pitch.
+const BIG_SPACING := 46.0
+
 var world: BrickWorld
 var registry: BuildingRegistry
 var islands: IslandManager
@@ -352,6 +371,11 @@ var _build_mode := false
 var _fixture_mode := false
 var _dormant_mode := false
 var _rooms_mode := false
+var _interiors_mode := false
+## Set by the interiors pass. The streamers and the collision merge run on a
+## timer and would rebuild the body underneath a measurement -- which they did,
+## 30 merges and 28 un-merges deep into the first run of it.
+var _measuring := false
 var _chamfer_mode := false
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
 ## city. Empty means nothing was asked for.
@@ -400,6 +424,8 @@ func _ready() -> void:
 	_fixture_mode = "--fixture" in args
 	_dormant_mode = "--dormant" in args
 	_rooms_mode = "--rooms" in args
+	_big = "--big" in args
+	_interiors_mode = "--interiors" in args
 	_chamfer_mode = "--chamfer" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
@@ -443,6 +469,8 @@ func _ready() -> void:
 		_run_fixture_pass()
 	elif _dormant_mode:
 		_run_dormant_pass()
+	elif _interiors_mode:
+		_run_interiors_pass()
 	elif _rooms_mode:
 		_run_rooms_pass()
 	elif _chamfer_mode:
@@ -471,14 +499,15 @@ func _exit_tree() -> void:
 
 func _build_city() -> void:
 	var t0 := Time.get_ticks_usec()
-	var spacing := 13.0
+	var spacing := BIG_SPACING if _big else 13.0
+	var shapes: Array = BIG_SHAPES if _big else SHAPES
 	var index := 0
 	var side := int(ceil(sqrt(float(_city_size))))
 	for row in side:
 		for col in side:
 			if index >= _city_size:
 				break
-			var shape: Dictionary = SHAPES[(row * side + col) % SHAPES.size()]
+			var shape: Dictionary = shapes[(row * side + col) % shapes.size()]
 			# Close together on purpose: these have to be able to fall on each
 			# other, which is the whole point of the scene.
 			var half := (side - 1) * spacing * 0.5
@@ -1608,16 +1637,17 @@ func _physics_process(_delta: float) -> void:
 
 	# M4: buildings that have been quiet and are far away give their bricks
 	# back. The damage record stays, so the holes are still there next time.
-	if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
-		_trim_quiet()
-	if Engine.get_physics_frames() % 8 == 5:
-		_merge_quiet_buildings()
-	if camera != null and Engine.get_physics_frames() % 4 == 3:
-		_stream_rooms()
-	if camera != null and Engine.get_physics_frames() % 4 == 2:
-		_stream_detail()
-	if camera != null and Engine.get_physics_frames() % 4 == 1:
-		_stream_residency()
+	if not _measuring:
+		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
+			_trim_quiet()
+		if Engine.get_physics_frames() % 8 == 5:
+			_merge_quiet_buildings()
+		if camera != null and Engine.get_physics_frames() % 4 == 3:
+			_stream_rooms()
+		if camera != null and Engine.get_physics_frames() % 4 == 2:
+			_stream_detail()
+		if camera != null and Engine.get_physics_frames() % 4 == 1:
+			_stream_residency()
 	# Every fourth tick is fifteen times a second: far faster than anyone can
 	# cross an LOD band, and a quarter of the cost.
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
@@ -2921,6 +2951,238 @@ func _image_difference(a: Image, b: Image) -> float:
 
 
 # ---------------------------------------------------------------------------
+# What interiors cost, per room against per building
+# ---------------------------------------------------------------------------
+
+## Re-bake a chunk's faces and wait for the worker, returning wall milliseconds.
+##
+## Wall time, and it is the honest number for this question: a room that opens
+## invalidates its building's whole face bake, and the building cannot be drawn
+## again until that bake lands. The streamer hides the latency behind a tick; it
+## does not remove the work.
+func _bake_and_wait(chunk: int) -> float:
+	var t := Time.get_ticks_usec()
+	world.bake_chunk_async(chunk)
+	var spin := 0
+	while not world.bake_ready(chunk) and spin < 400000:
+		OS.delay_usec(50)
+		spin += 1
+	return float(Time.get_ticks_usec() - t) / 1000.0
+
+
+## Is it worth streaming interiors a ROOM at a time, or should a building simply
+## furnish itself all at once?
+##
+## The question only has an answer at scale, so this runs on `--big`: buildings
+## up to 28 x 22 m on plan and 84 m tall, which is where a floor is a dozen
+## rooms rather than four.
+##
+##     godot --path . --resolution 1280x720 -- --interiors --big
+##
+## Both arms run on the SAME building, back to back, with the streamers and the
+## collision merge held off -- the first version of this measured one arm on a
+## 4,000-room tower and the other on a 180-room one, and let `_merge_quiet_
+## buildings` rebuild the body underneath both of them.
+func _run_interiors_pass() -> void:
+	_measuring = true
+	print("[interiors] what a room costs, and what a building's worth of them costs")
+	print("[interiors] %d building(s), %s shapes" % [
+			registry.buildings.size(), "BIG" if _big else "default"])
+
+	# What the recipes alone say. No bricks anywhere: this is the shape of the
+	# problem before any of it is paid for.
+	var t_rooms := Time.get_ticks_usec()
+	var total_rooms := 0
+	var biggest := -1
+	var biggest_rooms := 0
+	for b in registry.buildings:
+		var n: int = registry.rooms_of(b.id).size()
+		total_rooms += n
+		if n > biggest_rooms:
+			biggest_rooms = n
+			biggest = b.id
+	var rooms_ms := float(Time.get_ticks_usec() - t_rooms) / 1000.0
+	print("[interiors] %d room(s) across the city, %d in the biggest building, generated in %.0f ms"
+			% [total_rooms, biggest_rooms, rooms_ms])
+	for b in registry.buildings:
+		if b.id > 5:
+			break
+		var st: int = RoomManifest.storeys_of(b.recipe.courses).size()
+		var n: int = registry.rooms_of(b.id).size()
+		@warning_ignore("integer_division")
+		print("[interiors]   building %d: %d x %d studs, %d courses -> %d storeys, %d rooms (%d a storey)"
+				% [b.id, b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
+				st, n, n / maxi(st, 1)])
+
+	var host := registry.get_building(biggest)
+	var box := registry.local_box(biggest)
+	var mid: Vector3 = host.xform * (box.position + box.size * 0.5)
+	camera.global_position = mid + Vector3(0.0, 0.0, -box.size.z - 40.0)
+	camera.look_at(mid, Vector3.UP)
+	await _frames(10)
+	var chunk := await _fresh_bricks(biggest)
+	var bare_blocks := world.get_alive_block_count(chunk)
+	var bare_mb := _world_mb()
+	var bare_shapes := PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest])
+	var bare_bake := _bake_and_wait(chunk)
+	print("[interiors] the building: %d brick(s), %d collision box(es), %.1f MB, one face bake %.0f ms"
+			% [bare_blocks, bare_shapes, bare_mb, bare_bake])
+
+	# --- A: a room at a time, which is what _stream_rooms does ---------------
+	var rooms := registry.rooms_of(biggest)
+	var sample: int = mini(rooms.size(), 40)
+	var lay := 0.0
+	var shapes_ms := 0.0
+	var mesh_ms := 0.0
+	var bake_ms := 0.0
+	var worst := 0.0
+	var opened := 0
+	var laid := 0
+	for room in rooms:
+		if opened >= sample:
+			break
+		if room.active:
+			continue
+		var a := Time.get_ticks_usec()
+		var placed: int = registry.activate_room(biggest, room.id)
+		var b_ := Time.get_ticks_usec()
+		if placed <= 0:
+			continue
+		_add_room_shapes(biggest, room.id)
+		var c := Time.get_ticks_usec()
+		# What the streamer defers to the end of the tick, charged here to the
+		# room that caused it: one room opening dirties the whole building's
+		# face bake, and the mesh that draws it.
+		bake_ms += _bake_and_wait(chunk)
+		var cb := Time.get_ticks_usec()
+		_remesh(biggest, true)
+		var d := Time.get_ticks_usec()
+		lay += float(b_ - a) / 1000.0
+		shapes_ms += float(c - b_) / 1000.0
+		mesh_ms += float(d - cb) / 1000.0
+		worst = maxf(worst, float(d - a) / 1000.0)
+		laid += placed
+		opened += 1
+		await _frames(1)
+	var a_total := lay + shapes_ms + bake_ms + mesh_ms
+	var per_room := a_total / maxf(opened, 1)
+	print("\n[interiors] A: one room at a time (what the streamer does)")
+	print("[interiors]   %d room(s), %d brick(s), %.0f ms total, %.1f ms a room, worst %.1f ms"
+			% [opened, laid, a_total, per_room, worst])
+	print("[interiors]   lay %.0f + collision %.0f + FACE BAKE %.0f (%.0f%%) + mesh upload %.0f ms"
+			% [lay, shapes_ms, bake_ms, 100.0 * bake_ms / maxf(a_total, 0.001), mesh_ms])
+	print("[interiors]   every room in this building this way: %d x %.1f ms = %.0f s of work"
+			% [rooms.size(), per_room, rooms.size() * per_room / 1000.0])
+	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
+			% [_world_mb(), _world_mb() - bare_mb,
+			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]),
+			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]) - bare_shapes])
+	await _save("interiors_room")
+
+	# --- B: the same building, all of it at once ------------------------------
+	# The alternative: no per-room streaming. Every room is furnished the moment
+	# anybody is near the building, which is ONE collision build, ONE face bake
+	# and ONE mesh upload rather than one of each per room.
+	chunk = await _fresh_bricks(biggest)
+	var b_bare_mb := _world_mb()
+	var b_bare_shapes := PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest])
+	var t_all := Time.get_ticks_usec()
+	var all_laid := 0
+	for room in registry.rooms_of(biggest):
+		all_laid += registry.activate_room(biggest, room.id)
+	var t_laid := Time.get_ticks_usec()
+	_brick_merged[biggest] = true   # force the rebuild below to actually run
+	_reshape_building(biggest, false)
+	var t_shapes := Time.get_ticks_usec()
+	_bake_and_wait(chunk)
+	_remesh(biggest, true)
+	var t_mesh := Time.get_ticks_usec()
+	var bl := float(t_laid - t_all) / 1000.0
+	var bs := float(t_shapes - t_laid) / 1000.0
+	var bm := float(t_mesh - t_shapes) / 1000.0
+	var b_total := float(t_mesh - t_all) / 1000.0
+	print("\n[interiors] B: the same building, every room at once")
+	print("[interiors]   %d room(s), %d brick(s), %.0f ms total"
+			% [registry.rooms_of(biggest).size(), all_laid, b_total])
+	print("[interiors]   lay %.0f ms + collision %.0f ms + bake and mesh %.0f ms"
+			% [bl, bs, bm])
+	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
+			% [_world_mb(), _world_mb() - b_bare_mb,
+			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]),
+			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]) - b_bare_shapes])
+	print("[interiors]   %.0f ms once, against %.0f s of work spread a room at a time"
+			% [b_total, rooms.size() * per_room / 1000.0])
+	await _frames(10)
+	await _save("interiors_building")
+
+	# --- C: a storey at a time, the obvious middle ---------------------------
+	# Rooms are cut out of storeys, and a storey is what a player walks onto.
+	# It is the same trade one notch along: fewer bakes than a room at a time,
+	# less resident furniture than a building at a time.
+	chunk = await _fresh_bricks(biggest)
+	var storeys: int = maxi(RoomManifest.storeys_of(host.recipe.courses).size(), 1)
+	@warning_ignore("integer_division")
+	var per_storey: int = maxi(registry.rooms_of(biggest).size() / storeys, 1)
+	var c_total := 0.0
+	var c_rooms := 0
+	var c_floors: int = mini(storeys, 4)
+	for f in c_floors:
+		var t_f := Time.get_ticks_usec()
+		for k in per_storey:
+			var idx: int = f * per_storey + k
+			if idx >= registry.rooms_of(biggest).size():
+				break
+			if registry.activate_room(biggest, idx) > 0:
+				c_rooms += 1
+		_brick_merged[biggest] = true
+		_reshape_building(biggest, false)
+		_bake_and_wait(chunk)
+		_remesh(biggest, true)
+		c_total += float(Time.get_ticks_usec() - t_f) / 1000.0
+		await _frames(1)
+	print("\n[interiors] C: a storey at a time")
+	print("[interiors]   %d storey(s), %d room(s), %.0f ms total, %.0f ms a storey"
+			% [c_floors, c_rooms, c_total, c_total / maxf(c_floors, 1)])
+	print("[interiors]   every storey of this building: %d x %.0f ms = %.1f s of work"
+			% [storeys, c_total / maxf(c_floors, 1),
+			storeys * (c_total / maxf(c_floors, 1)) / 1000.0])
+	await _frames(5)
+	
+	print("\n[interiors] and what the city is carrying")
+	var rep: Dictionary = registry.room_report()
+	print("[interiors]   %d room(s), %d open, %d with a diff" % [
+			int(rep.rooms), int(rep.active), int(rep.changed)])
+	print("[interiors]   %s" % _collision_report())
+	print("[interiors]   BrickWorld %.1f MB" % _world_mb())
+	get_tree().quit(0)
+
+
+func _world_mb() -> float:
+	return float(world.get_memory_report().total_bytes as int) / 1048576.0
+
+
+## Give a building brand-new bricks: no rooms open, no merged collision, one
+## bake done. Both arms start here so neither inherits the other's state.
+func _fresh_bricks(id: int) -> int:
+	var b := registry.get_building(id)
+	if b.is_materialised():
+		for room in registry.rooms_of(id):
+			if room.active:
+				registry.deactivate_room(id, room.id)
+		_demote(id, 0.0)
+		_materialised.erase(id)
+		await _frames(2)
+	_free_shell(id)
+	var chunk := _promote(id)
+	var guard := 0
+	while _pending_bricks.has(id) and guard < 1200:
+		await _frames(1)
+		guard += 1
+	_brick_merged[id] = false
+	return chunk
+
+
+# ---------------------------------------------------------------------------
 # The interiors gate
 # ---------------------------------------------------------------------------
 
@@ -4011,7 +4273,7 @@ func _build_scenery() -> void:
 	# which is why the reach probe reported misses at 40 m.
 	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
-			or _rooms_mode or _chamfer_mode)
+			or _rooms_mode or _chamfer_mode or _interiors_mode)
 	# A scripted pass puts the camera where it wants it and must not be able to
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse
