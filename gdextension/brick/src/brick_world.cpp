@@ -2013,7 +2013,11 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
 
     for (size_t i = 0; i < n; ++i) {
         Block &b = c.blocks[i];
-        b.load = b.alive
+        // A decorative block weighs nothing HERE and only here. It still has
+        // mass everywhere it matters -- the island it becomes is thrown by it --
+        // but a chair is not a load case for the floor it stands on, and a
+        // furnished tower must not be closer to collapse than an empty one.
+        b.load = (b.alive && !b.decorative)
                 ? std::max((int64_t)1, brick::to_mass_units(archetypes[b.archetype].mass))
                 : (int64_t)0;
     }
@@ -2113,6 +2117,53 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     return out;
 }
 
+int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on) {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    int changed = 0;
+    for (int i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        if (bid < 0 || bid >= (int32_t)c.blocks.size()) {
+            continue;
+        }
+        if (c.blocks[bid].decorative == on) {
+            continue;
+        }
+        c.blocks[bid].decorative = on;
+        ++changed;
+    }
+    // No bake invalidation: the role changes nothing about the geometry, the
+    // faces or the colours. It is read by the solve and by nothing else.
+    return changed;
+}
+
+bool BrickWorld::is_block_decorative(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    const Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size()) {
+        return false;
+    }
+    return c.blocks[block_id].decorative;
+}
+
+PackedInt32Array BrickWorld::get_decorative_blocks(int chunk_id) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        if (c.blocks[i].decorative && c.blocks[i].alive) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
 void BrickWorld::set_tension_per_stud(int chunk_id, float capacity) {
     if (valid_chunk(chunk_id)) {
         stress[chunk_id].tension_per_stud = std::max(capacity, 0.0001f);
@@ -2200,7 +2251,13 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
         if (!b.alive || scratch_depth[i] < 0) {
             continue; // gone, or already not connected to the ground
         }
+        // In `standing` whatever its role: this list is what gets handed to
+        // split_island, and furniture has to leave with the building it is
+        // standing in (Docs/Interiors.md section 4.2).
         standing.push_back((int32_t)i);
+        if (b.decorative) {
+            continue; // not what the building is balanced on, nor balanced BY
+        }
 
         Vector3 centre, size;
         block_extent(c, b, centre, size);
@@ -3473,6 +3530,12 @@ void BrickWorld::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("get_block_neighbours", "chunk_id", "block_id"),
             &BrickWorld::get_block_neighbours);
+    ClassDB::bind_method(D_METHOD("set_blocks_decorative", "chunk_id", "block_ids", "on"),
+            &BrickWorld::set_blocks_decorative);
+    ClassDB::bind_method(D_METHOD("is_block_decorative", "chunk_id", "block_id"),
+            &BrickWorld::is_block_decorative);
+    ClassDB::bind_method(D_METHOD("get_decorative_blocks", "chunk_id"),
+            &BrickWorld::get_decorative_blocks);
     ClassDB::bind_method(D_METHOD("solve_grounded", "chunk_id"), &BrickWorld::solve_grounded);
     ClassDB::bind_method(D_METHOD("find_detached_groups", "chunk_id"), &BrickWorld::find_detached_groups);
     ClassDB::bind_method(D_METHOD("set_foundation_level", "chunk_id", "grid_y"),

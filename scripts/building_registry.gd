@@ -440,9 +440,12 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 		# collision, which wakes everything resting on that building. Doing
 		# that once per blast took the stress pass's damage phase from 20 ms a
 		# frame to 108.
-		if room.items.is_empty():
-			room.items = RoomManifest.items_for(room)
-		for i in room.items.size():
+		# Not even the manifest: how many things were in here is a function of
+		# the room's seed, so "all of them are gone" is writable without a list
+		# of what they were. `items_for` is deterministic, so the indices still
+		# line up if anybody ever does build it.
+		var count: int = room.items.size() if not room.items.is_empty() 				else RoomManifest.item_count_for(room)
+		for i in count:
 			room.gone[i] = true
 		room.spilled = false
 		woken += 1

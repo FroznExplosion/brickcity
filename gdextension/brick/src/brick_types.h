@@ -231,6 +231,31 @@ struct Block {
     // without checking anything first.
     bool removed = false;
 
+    // Fixed TO the structure rather than BEING structure: furniture, fittings,
+    // a staircase flight. Docs/BuildMode.md section 9.2 named this role for a
+    // FRAME and then found frames were the wrong unit -- a separate chunk with
+    // a body of its own produced a building that landed on its own staircase,
+    // and then, once the layers were fixed, a staircase left standing in the
+    // rubble. The unit is the BLOCK, in the host's own grid.
+    //
+    // What the role changes is deliberately small, and it is the whole of what
+    // "not structure" means here:
+    //
+    //   * it weighs nothing in solve_stress, so a room full of furniture cannot
+    //     break the floor it stands on and a tower does not get heavier for
+    //     being furnished;
+    //   * it is left out of the centre of mass and the support footprint in
+    //     check_stability, so what a building is balanced on is what it is
+    //     BUILT of.
+    //
+    // What the role does NOT change is as important. A decorative block is in
+    // the same chunk, the same occupancy grid, the same bake, the same
+    // collision and the same damage record as everything else. It is connected:
+    // grounding reaches it through whatever it rests on, so it holds still while
+    // its floor exists and comes away with that floor when it does not. It rides
+    // the island (Docs/Interiors.md section 4.2) because it is IN the island.
+    bool decorative = false;
+
     // Crushed loose: the joints carrying this block's weight gave way. Damage,
     // so it stays set. Grounding will not reach a broken block at all, so it
     // and everything resting on it fall together -- which is the cascade.

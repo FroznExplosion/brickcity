@@ -282,6 +282,18 @@ public:
     /// structure stands.
     float get_max_stress_ratio(int chunk_id) const;
 
+    /// Mark blocks as fixed TO the structure rather than as structure: they
+    /// weigh nothing in the stress solve and are left out of the balance test.
+    /// See Block::decorative. Returns how many records actually changed.
+    ///
+    /// Set after placing, not during: place_block always appends a fresh record,
+    /// so there is no state to thread through it and no path by which a reused
+    /// id inherits somebody else's role.
+    int set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on);
+    bool is_block_decorative(int chunk_id, int block_id) const;
+    /// Every decorative block still alive, ascending. For probes and for saving.
+    PackedInt32Array get_decorative_blocks(int chunk_id) const;
+
     /// Per-block readouts, for debug overlays and probes.
     float get_block_load(int chunk_id, int block_id) const;
     float get_block_capacity(int chunk_id, int block_id) const;

@@ -11,7 +11,8 @@ extends SceneTree
 ##       and are reproducible without being stored
 ##   §3  activating materialises the manifest, deactivating frees the objects
 ##       and keeps the diff
-##   §4.2 items ride the island the floor they stand on rides
+##   §4.2 items ride the island the floor they stand on rides -- and, since the
+##       block role, weigh nothing in the solve while doing it
 ##   §5.2 a room that fell while nobody was looking RESOLVES, it does not
 ##       simulate: contents end up against whatever face is now the floor
 ##   §5.4 an uncompromised room nobody has approached costs nothing
@@ -32,6 +33,7 @@ func _init() -> void:
 	_check_compromised()
 	_check_the_analytic_resolve()
 	_check_the_spill()
+	_check_furniture_is_not_structure()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -368,6 +370,72 @@ func _laid(room: Room) -> int:
 	for item in room.items:
 		n += (item.get("blocks", PackedInt32Array()) as PackedInt32Array).size()
 	return n
+
+
+## A room full of furniture must not bring a building closer to falling down.
+##
+## The role is per BLOCK and it lives in the host's own chunk (BuildMode §9.2's
+## third answer). So the test is the one that matters: solve the same building
+## empty and furnished and demand the structural answer be identical, while the
+## furniture is still there to ride the island.
+func _check_furniture_is_not_structure() -> void:
+	print("\nwhat is in a room weighs nothing in the building's own solve")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var reg := BuildingRegistry.new(w, res[1])
+	var id := _tower(reg)
+	var index := _furnished_room(reg, id)
+	var chunk := reg.materialise(id)
+
+	var empty_stress: Dictionary = w.solve_stress(chunk)
+	var empty_balance: Dictionary = w.check_stability(chunk)
+	var empty_blocks := w.get_alive_block_count(chunk)
+	_ok("an unfurnished building holds together", int(empty_stress.failures) == 0)
+	_ok("and nothing in it is decorative yet",
+			w.get_decorative_blocks(chunk).is_empty())
+
+	var placed := reg.activate_room(id, index)
+	_ok("furnishing it laid bricks", placed > 0, "%d" % placed)
+	_ok("and the count was knowable without making the list",
+			RoomManifest.item_count_for(reg.get_room(id, index))
+			== RoomManifest.items_for(reg.get_room(id, index)).size())
+	var decor := w.get_decorative_blocks(chunk)
+	_ok("and every one of them is marked decorative", decor.size() == placed,
+			"%d of %d" % [decor.size(), placed])
+	_ok("which is more blocks in the chunk than there were",
+			w.get_alive_block_count(chunk) > empty_blocks)
+
+	var full_stress: Dictionary = w.solve_stress(chunk)
+	_ok("the structure still holds", int(full_stress.failures) == 0)
+	_ok("carrying exactly the weight it carried empty",
+			is_equal_approx(float(full_stress.peak_load), float(empty_stress.peak_load)),
+			"%.4f against %.4f" % [float(full_stress.peak_load), float(empty_stress.peak_load)])
+
+	var full_balance: Dictionary = w.check_stability(chunk)
+	_ok("and balanced where it was balanced empty",
+			(full_balance.com as Vector3).distance_to(empty_balance.com as Vector3) < 0.0001,
+			"%v against %v" % [full_balance.com, empty_balance.com])
+	_ok("on the same footprint",
+			full_balance.support_min == empty_balance.support_min
+			and full_balance.support_max == empty_balance.support_max)
+
+	# Weightless is not absent. §4.2: the furniture is in the chunk, so it is in
+	# the piece that chunk becomes.
+	var standing: PackedInt32Array = full_balance.blocks
+	var riding := 0
+	for bid in decor:
+		if standing.has(bid):
+			riding += 1
+	_ok("but every piece of it is still standing in the building",
+			riding == decor.size(), "%d of %d" % [riding, decor.size()])
+	_ok("and still something the blast record knows about",
+			w.get_block_ticks(chunk, decor[0]).size() > 0)
+
+	# And it can be taken back off, which is what the workshop will need.
+	_ok("the role can be cleared", w.set_blocks_decorative(chunk, decor, false) == decor.size())
+	_ok("and setting it again on what already has it changes nothing",
+			w.set_blocks_decorative(chunk, decor, true) == decor.size()
+			and w.set_blocks_decorative(chunk, decor, true) == 0)
 
 
 ## The first room with something in it -- some are generated empty on purpose.

@@ -49,10 +49,6 @@ const BY_KIND := {
 	"empty": [],
 }
 
-## Rooms per storey, and how tall a storey is in courses. A building is cut into
-## boxes by the same rule that lays its floors, so a room's ceiling is a floor
-## and its walls are walls.
-const COURSES_PER_STOREY := 6
 ## Studs of wall to keep clear of, so a room's contents are not inside the
 ## masonry.
 const WALL_MARGIN := 3
@@ -66,9 +62,6 @@ const WALL_MARGIN := 3
 static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int) -> Array[Room]:
 	var out: Array[Room] = []
-	var plates := TowerRecipe.PLATES_PER_COURSE
-	@warning_ignore("integer_division")
-	var storeys := maxi(courses / COURSES_PER_STOREY, 1)
 	var split := 2 if mini(footprint_x, footprint_z) >= 20 else 1
 	var inner_x := footprint_x - WALL_MARGIN * 2
 	var inner_z := footprint_z - WALL_MARGIN * 2
@@ -78,18 +71,63 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 	var cell_x: int = inner_x / split
 	@warning_ignore("integer_division")
 	var cell_z: int = inner_z / split
-	for s in storeys:
-		var y := TowerRecipe.SLAB_PLATES + s * COURSES_PER_STOREY * plates
+	for storey in storeys_of(courses):
 		for gx in split:
 			for gz in split:
 				var r := Room.new()
 				r.id = out.size()
-				r.lo = Vector3i(WALL_MARGIN + gx * cell_x, y + 1, WALL_MARGIN + gz * cell_z)
-				r.size = Vector3i(cell_x, COURSES_PER_STOREY * plates - 1, cell_z)
+				r.lo = Vector3i(WALL_MARGIN + gx * cell_x, int(storey.floor_y),
+						WALL_MARGIN + gz * cell_z)
+				r.size = Vector3i(cell_x, int(storey.height), cell_z)
 				r.room_seed = hash3(building_seed, r.id, 0x9E37)
 				r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
 				out.append(r)
 	return out
+
+
+## Every habitable storey of a tower: where its floor's TOP surface is, and how
+## many plates of clear air stand on it before the next slab.
+##
+## Read from the recipe's own band layout, and that is the point. This file used
+## to recompute the storeys from a `COURSES_PER_STOREY` of its own -- six, while
+## the recipe laid a floor every four (`TowerRecipe.COURSES_PER_FLOOR`) -- so the
+## two never agreed and had no way to. Rooms sat at heights no floor was at, and
+## the header above `rooms_for` claimed the opposite: "a building is cut into
+## boxes by the same rule that lays its floors, so a room's ceiling is a floor
+## and its walls are walls."
+##
+## What it cost was invisible until the blocks were asked a structural question.
+## A base slab is `SLAB_PLATES` thick, so its surface is at `y + plates` and NOT
+## at `y + 1`; with the storey heights wrong as well, every item in the building
+## was laid a plate above the floor, resting on nothing, clutched to nothing.
+## They sat there looking correct -- a static body holds anything up -- until a
+## grounding pass ran, at which point the entire contents of a building were a
+## dozen detached groups waiting to be spawned as debris.
+static func storeys_of(courses: int) -> Array:
+	var out := []
+	var floor_y := -1
+	for band in TowerRecipe.layout(courses):
+		var kind := str(band.kind)
+		if kind != "base" and kind != "slab" and kind != "cornice":
+			continue
+		# A slab closes the storey under it and opens the one above it.
+		if floor_y >= 0 and int(band.y) - floor_y >= 2:
+			out.append({"floor_y": floor_y, "height": int(band.y) - floor_y})
+		floor_y = -1 if kind == "cornice" else int(band.y) + int(band.plates)
+	return out
+
+
+## How many things are in this room, without working out what they are.
+##
+## The count is the first thing `items_for` computes and the only thing a blast
+## nobody is watching needs: "everything in here is gone" is a set of indices,
+## and the indices do not require the list. A city under fire compromises
+## thousands of rooms it will never build, and each of those used to generate a
+## manifest purely to count it.
+static func item_count_for(room: Room) -> int:
+	if (BY_KIND.get(room.kind, []) as Array).is_empty():
+		return 0
+	return 2 + int(hash3(room.room_seed, 11, 3) % 4)
 
 
 ## The manifest: what is in this room. A pure function of its seed.
@@ -138,6 +176,12 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 				(colour + int(part[2])) % BrickWorld.get_filament_count())
 		if id >= 0:
 			out.push_back(id)
+	# A room's contents are IN the building's grid and are not OF its structure.
+	# Marked here rather than at the two call sites because this is the only
+	# place an item's blocks come into existence -- furnishing a room and
+	# spilling one into a wreck both land here.
+	if not out.is_empty():
+		world.set_blocks_decorative(chunk, out, true)
 	return out
 
 

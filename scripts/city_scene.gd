@@ -308,6 +308,13 @@ var _room_scans := 0
 ## exists (Interiors section 4.1).
 var _wrecks := {}
 var _spilled_rooms := 0
+var _room_opens := 0
+var _room_lay_ms := 0.0
+var _room_shape_ms := 0.0
+var _room_open_worst := 0.0
+var _room_compromises := 0
+var _room_built := 0
+var _room_compromise_ms := 0.0
 ## How close somebody has to be for a spilled room to be laid into the wreck.
 ## Further than the walking range, because arriving at a collapsed building and
 ## finding the kitchen in it is the point.
@@ -527,11 +534,17 @@ func _add_staircase(id: int, footprint_x: int, footprint_z: int, courses: int) -
 ## Open a room: its contents go into the building's own chunk, so they need
 ## collision on the building's own body and a mesh rebuild to be seen.
 func _open_room(id: int, index: int) -> int:
+	var t0 := Time.get_ticks_usec()
 	var placed := registry.activate_room(id, index)
+	_room_lay_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 	if placed <= 0:
 		return 0
+	var t1 := Time.get_ticks_usec()
 	_add_room_shapes(id, index)
+	_room_shape_ms += float(Time.get_ticks_usec() - t1) / 1000.0
 	_queue_remesh(id)
+	_room_opens += 1
+	_room_open_worst = maxf(_room_open_worst, float(Time.get_ticks_usec() - t0) / 1000.0)
 	return placed
 
 
@@ -1385,10 +1398,19 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		# resolved in the record, which is Interiors section 5.1's own rule and
 		# the difference between 20 ms a frame and 108 in a firefight.
 		var watched_room: bool = camera != null 				and camera.global_position.distance_to(point) < ROOM_RANGE * 1.5
-		if registry.compromise_rooms(b.id, point, radius, watched_room) > 0 and watched_room:
+		var t_room := Time.get_ticks_usec()
+		var woke: int = registry.compromise_rooms(b.id, point, radius, watched_room)
+		if woke > 0 and watched_room:
 			for room in registry.rooms_of(b.id):
 				if room.active:
 					_add_room_shapes(b.id, room.id)
+		if woke > 0:
+			_room_compromises += woke
+			if watched_room:
+				_room_built += woke
+			var dt := float(Time.get_ticks_usec() - t_room) / 1000.0
+			_room_compromise_ms += dt
+			_room_open_worst = maxf(_room_open_worst, dt)
 		var killed: PackedInt32Array = world.apply_hit(chunk, point, radius)
 		# Every other frame of a multi-frame build takes the same hit: a blast
 		# does not care which grid the brick it removed was authored in.
@@ -2454,6 +2476,9 @@ func _run_stress_pass() -> void:
 			_trim_split.demat, _trim_split.free, _trim_split.shell])
 	print("[stress] peak %.1f MB with %d resident; after trimming %.1f MB with %d" % [
 			peak_mb, peak_res, float(mem.total_bytes) / 1048576.0, rep.materialised])
+	print("[stress] rooms opened %d in %.0f ms (lay %.0f + collision %.0f); compromised %d (%d built) in %.0f ms; worst %.1f ms" % [
+			_room_opens, _room_lay_ms + _room_shape_ms, _room_lay_ms, _room_shape_ms,
+			_room_compromises, _room_built, _room_compromise_ms, _room_open_worst])
 	print("[stress] promotions: %d in %.0f ms (%.1f ms each), %d of them for somebody walking up" % [
 			_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _near_promotions])
 	if _frame_samples > 0:
