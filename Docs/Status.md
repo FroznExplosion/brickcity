@@ -45,13 +45,19 @@ godot --path . --resolution 1280x720
 ```
 
 A city of the big shapes -- up to 28 x 22 m on plan and 84 m tall, 4,000 rooms
-in the largest. `--buildings=` sets how many (default 22); six is one of each
-shape:
+in the largest. It is a scene, so it opens in the editor and runs with F6; the
+flag does the same thing from a terminal, and `--buildings=` sets how many
+(default 22 -- six is one of each shape):
 
 ```bash
+godot --path . --resolution 1280x720 res://scenes/big_city.tscn
 godot --path . --resolution 1280x720 -- --big
 godot --path . --resolution 1280x720 -- --big --buildings=6
 ```
+
+`big_shapes` and `building_count` are exported, so the scene sets them in the
+inspector; the command line wins over both, because a scripted pass has to be
+able to name what it wants whatever scene launched it.
 
 What interiors cost, measured three ways on the same building:
 

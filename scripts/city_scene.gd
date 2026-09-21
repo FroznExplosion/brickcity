@@ -47,6 +47,15 @@ const BIG_SHAPES := [
 	{"x": 80, "z": 64, "courses": 200},
 	{"x": 36, "z": 36, "courses": 240},
 ]
+## Set in the SCENE as well as on the command line, so that
+## `scenes/big_city.tscn` is something you open and press play on rather than a
+## flag you have to remember. `--big` still works and still wins: a scripted
+## pass names what it wants and must not be overruled by whichever scene file
+## happened to launch it.
+@export var big_shapes := false
+## How many buildings the city has. The command line's `--buildings=` wins over
+## this for the same reason.
+@export_range(1, 400) var building_count := 22
 var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
@@ -433,7 +442,9 @@ func _ready() -> void:
 	_fixture_mode = "--fixture" in args
 	_dormant_mode = "--dormant" in args
 	_rooms_mode = "--rooms" in args
-	_big = "--big" in args
+	# The scene's settings first, the command line over the top of them.
+	_big = big_shapes or "--big" in args
+	_city_size = maxi(building_count, 1)
 	_interiors_mode = "--interiors" in args
 	_chamfer_mode = "--chamfer" in args
 	if _build_mode:
