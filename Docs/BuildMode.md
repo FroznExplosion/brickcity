@@ -605,6 +605,19 @@ everything that in a real building is fixed *to* structure rather than *being* s
 > What survives of "decorative" is the **frame** flag (§2.4, `Assembly.set_decorative`), for
 > something welded on rather than built in, and the `Role` the recipe still carries for when a
 > fixture is genuinely not brick.
+>
+> **And then the idea came back on the right unit: the BLOCK.** `Block::decorative` is exactly the
+> left-hand column of the table above, minus the parts that needed a separate object to mean
+> anything: absent from `solve_stress`, absent from the centre of mass and the support footprint in
+> `check_stability`, and otherwise identical to every other brick in the chunk. It is held by the
+> structure it rests on rather than by assertion, so it needs no grounding of its own; it detaches
+> with whatever it was standing on rather than being "released"; and it rides the island, because
+> it is in the island. A room's contents are marked this way, and the workshop's INTERIOR layer
+> authors it (§11, and Docs/Interiors.md §3.1).
+>
+> The staircase is **not** marked, and that is the trade §9.2 already accepted written down once
+> more: a staircase in a brick building is made of bricks and the building is allowed to lean on
+> it.
 
 Three costs vanish at once:
 

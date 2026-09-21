@@ -794,6 +794,117 @@ Two lessons worth keeping, both about the same thing:
 * **Measure the baseline you think you have.** Three arms of this experiment were run against a
   contaminated one, and every conclusion drawn from them was wrong.
 
+### Interiors and structure: one grid, two roles
+
+A building and the things inside it are the same bricks in the same grid. They are not the same
+object to the solver, and until this thread they were: a room full of furniture made a tower
+heavier and moved where it balanced, and a hit hard enough to take a wall out had to carry the
+chairs as load on the way down.
+
+**`Block::decorative` changes two things and nothing else.** It weighs nothing in `solve_stress`,
+so a furnished tower is not closer to collapse than an empty one; and it is left out of the centre
+of mass and the support footprint in `check_stability`, so what a building balances on is what it
+is *built* of. Same chunk, same occupancy, same bake, same collision, same damage record. It is
+grounded through whatever it rests on, and it is still in the list `check_stability` hands to
+`split_island` -- so it rides the island the floor it stands on rides, which is Interiors §4.2 for
+nothing.
+
+BuildMode §9.2 asked for this role twice and got the **unit** wrong both times: a decorative
+*frame*, with a chunk and a body of its own, gave a building that landed on its own staircase, and
+then, with the layers fixed, a staircase standing in the rubble. The unit is the block.
+
+**The probe for it found something much worse underneath.** `RoomManifest` worked its storeys out
+from a `COURSES_PER_STOREY` of six while `TowerRecipe` laid a floor every four, and took a slab's
+surface to be one plate above its base rather than `SLAB_PLATES` above it. The two numbers had
+never agreed and had no way to. The header said the opposite --
+
+> a building is cut into boxes by the same rule that lays its floors, so a room's ceiling is a
+> floor and its walls are walls
+
+-- and nothing ever showed it, because a static body holds anything up. **Every item in every room
+in the city was laid one plate above the floor**, clutched to nothing. A grounding pass over a
+furnished building returned the whole contents of it as detached groups waiting to be spawned as
+debris; the only reason the city never did it is that opening a room does not mark the building
+dirty. Storeys are read out of `TowerRecipe.layout()` now, so there is one number instead of two.
+
+A tower of 18 courses had 3 fictional storeys and has 5 real ones, so the stress pass compromises
+4,400 rooms where it compromised 2,600. `RoomManifest.item_count_for` keeps that from costing what
+it looks like it should: a blast nobody is watching no longer generates a manifest in order to
+count it, because the count is in the seed and "everything in here is gone" is a set of indices.
+
+    --stress --buildings=200   17.2-17.7 ms  ->  17.6-18.2 ms
+    compromise total                             75 ms over 4,400 rooms
+
+That pass moves 10 ms a run in its damage phase, so the mean is the only figure in it worth
+reading, and it is up about half a millisecond for having twice as many rooms that are actually
+there.
+
+### Windows, and where a hole in a wall may go
+
+Interiors §3 makes visibility a portal test, and every opening in the city was a hole somebody had
+blown -- so it could only fire on a building that had already been shot. A room could be walked
+into and never seen into.
+
+A window is a gap in a *run*. The run lays the full wall thickness in one pass, so a gap in it is a
+hole clean through, and the only question is where the gap may go. **The first answer was wrong in
+a way worth keeping.** Cutting the top two courses of a storey and letting the floor slab be the
+lintel builds, looks right, and leaves the slab joined to its walls only at the piers:
+
+| | top two courses | one course, brick lintel |
+|---|---|---|
+| splits | 1,321 | 554-579 |
+| breaks | 94 | 33-42 |
+| impacts | 428 | 227-250 |
+| damage phase | 92-134 ms (**7.5 fps**) | 22-25 ms |
+| `--shot` | 18.4 ms, 111.5 MB | **16.7 ms, 77.0 MB** |
+
+A building is held together at the band where its floors meet its walls, and windows do not go
+there. So the window is cut in the course *below* the storey's last one, and the lintel is that
+last course: the bond alternates which pair of walls owns the corners, so the course above a window
+always starts half a brick offset from the one it is cut in, and the bricks over the opening are
+carried on the pier at one end each. That is how a brick lintel is built. With the openings also
+aligned to a four-stud boundary, a tower has **fewer** blocks than it had with solid walls (695
+against 719), because a run breaks into whole bricks either side of an opening instead of closing
+each pier with 2x2s.
+
+`openings_for` returns one box per **aperture** now rather than one per side. Per side was harmless
+while the only openings were craters -- one blast, one crater -- and wrong the moment a wall had
+two windows in it: the bounding box of both is centred on the pier between them, and §3 aims its
+ray at that centre, so the answer was always "that hit brickwork".
+
+Two gates had claims that windows falsified, and both are better for it. `--rooms` asserted that an
+undamaged wall has no openings; it now asserts the wall has windows, that each opening is one
+window rather than a box drawn round two, and that **looking in through one opens the room from
+sixty metres with nothing fired**. `--lod` fired at a fraction of a tower's height and hit a piece
+its own first shot had knocked off; it aims at a floor slab now -- the one band solid all the way
+across -- and walks round the building until the ray reaches the building rather than the debris in
+front of it.
+
+### The workshop builds in two layers
+
+Nothing about a brick's shape or position can say whether it is structure. A table built out of
+wall bricks is a table, and only its author knows, so the role is authored: `I` switches the
+workshop between **STRUCTURE** and **INTERIOR**.
+
+Everything else about placing a brick is identical in both -- same parts, same six grids, same
+snapping, same undo -- because they are one build and not two. What differs is one bit per block in
+the recipe (v4, and a v3 file loads as structure all through, which is what it is), the ghost's
+colour, and the fact that the city reads that bit into `Block::decorative` when it materialises the
+build. Undo takes the role with the brick and so does `T`: turning a chair is not a way to make it
+load-bearing.
+
+One bug on the way, of a kind worth naming because GDScript will hand it to you again. Collecting
+the ids per chunk with
+
+```gdscript
+if not by_chunk.has(chunk):
+    by_chunk[chunk] = PackedInt32Array()
+(by_chunk[chunk] as PackedInt32Array).push_back(id)
+```
+
+compiles, runs, and marks nothing at all: a `Packed*Array` is a **value**, so indexing the
+dictionary hands over a copy and the push lands on the copy. Read out, append, put back.
+
 ### Walking up to a building is what makes it bricks
 
 Rooms only stream for a building that is already bricks, and for a long time the only thing that
@@ -2822,6 +2933,8 @@ they were.
 | `fallen` | breaking a building that has already fallen |
 | `replay` | integer determinism, command replay, content-derived piece identity |
 | `city` | 5000 buildings as recipes, damage across de-materialisation, shell streaming |
+| `interior` | rooms, manifests, the spill, and that furniture is not structure |
+| `build` | the recipe, the city placement, fixtures, the cheap tier, the two layers |
 
 **Cost.** Taken on a quiet machine -- no editor open on the project, nothing else resident. This
 matters more than it sounds: the same shot pass with a Godot editor holding 1.3 GB alongside it
@@ -2887,7 +3000,7 @@ the stress pass could not say" for why it prints all three.
    has no room left to give -- the operations themselves have to get cheaper or be split. Mean
    frame time is 16.8-17.2 ms and 97.6% of frames are inside budget, so these are spikes rather
    than a throughput problem.
-2. **Collision is one box per brick for anything still moving.** Settled pieces merge theirs down,
+3. **Collision is one box per brick for anything still moving.** Settled pieces merge theirs down,
    and standing buildings now merge once the shooting has moved on (112,321 boxes to 8,634 in the
    stress pass), but a falling section still carries a shape per brick -- and merging one at birth
    was tried and reverted, because its own landing undoes it.
@@ -2990,13 +3103,12 @@ the stress pass could not say" for why it prints all three.
 	the structural/decorative flag is not exposed, which is [BuildMode §9.2](BuildMode.md)'s own
 	condition rather than an oversight, and railings, cornices and pipework are more masks on the
 	same machinery whenever they are wanted.
-41. **The portal test only sees holes, and only in buildings that are bricks.** There are no doors
-	and no windows to look through, so an undamaged building has no openings at all -- and a
-	building that is still a shell has no interior to show even if it had. Occlusion
-	(`OccluderInstance3D`, Interiors §3) is not wired up either.
-42. **A room's contents only exist while its building holds bricks.** That is the ladder working --
-	a recipe has no furniture -- but it means an undamaged building nobody has shot has no
-	interior to walk into either.
+41. **Occlusion is not wired up.** `OccluderInstance3D` (Interiors §3) would let a building's shell
+	hide its own interior; nothing does that yet, so a furnished room is drawn whenever it is
+	within the frustum, walls or no walls.
+42. **A shell has no windows.** The brick tier is cut through and neither shell tier is, so a
+	building gains its windows at the moment it materialises. Inside `PROMOTE_RANGE` that
+	usually happens behind the player's back; on the shell/brick boundary it is a pop.
 43. **Room collision accumulates shapes.** `PhysicsServer3D` has no remove-shape that keeps the
 	other indices, so closing a room disables its shapes rather than removing them. They are
 	reclaimed when the building next de-materialises; a room opened and closed many times between
@@ -3008,6 +3120,19 @@ the stress pass could not say" for why it prints all three.
 45. **The walking body is on the debug camera**, not on a pawn owned by a player slot. It is one
 	capsule with no animation, no third person and no networking, and it is deliberately the same
 	throwaway rig the free-fly camera always was.
+46. **A structural brick resting on a decorative one is still grounded by it.** The role takes a
+	block out of the load and out of the balance test; it does not cut the connectivity graph.
+	Nothing in the generated city does this, but the workshop's INTERIOR layer allows it, so a
+	player can stand a wall on a table and get a bridge for free. BuildMode §9.2 already names
+	the rule -- a structural frame may not weld to a decorative one -- and it is not enforced.
+47. **Opening a room rebuilds the building's bake and its whole mesh.** Furniture is blocks in the
+	host chunk, and placing a block invalidates the face bake, so every room that opens costs a
+	rebake and a full vertex upload for the building it is in. One room per streaming pass
+	hides it; a building whose rooms all open at once would not.
+48. **A room reports the openings of all four exterior walls over its own span**, including the
+	two that belong to the room across the floor from it. Harmless for a portal test on one
+	open storey -- the ray still has to reach the hole -- and wrong if floors are ever
+	partitioned into rooms with walls of their own.
 
 ## Next
 

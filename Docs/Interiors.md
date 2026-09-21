@@ -73,6 +73,13 @@ cheap because they are few and they are volumes.
 - A room is **active** if the player is inside it, or can see into it through an opening.
 - Openings are the portals: doors, windows, and — importantly — **holes blown in the walls**.
   A destroyed wall is a new opening, which falls out of the damage record for free.
+  > **Built, and windows had to come first.** For a while every opening in the city was a hole
+  > somebody had blown, because a generated building had none — so this test could not fire on an
+  > intact building, and a room could be walked into but never seen into. `TowerRecipe` cuts
+  > windows into every storey now (Status.md, "Windows, so the portal test has something to be a
+  > test of"), and the scan reports one box per APERTURE rather than one per side, because the
+  > bounding box of two windows is centred on the pier between them and the ray aimed at it always
+  > hit brickwork.
 - Activating a room materialises its manifest; deactivating frees the objects and keeps the diff.
 - Hysteresis on the transition, so standing in a doorway does not thrash.
 
@@ -82,6 +89,27 @@ axis-aligned boxes on a grid, so the portal test is integer work, not geometry.
 **Occlusion is then nearly free.** Godot's `OccluderInstance3D` is render-only and safe at every LOD
 (Reference/reddawn.md §9), so the building shell occludes its own interior and the room system
 decides what exists at all.
+
+---
+
+### 3.1 What is in a room is not what holds it up ✅ **built**
+
+A room's contents are **blocks in the building's own chunk**, and they are marked
+`Block::decorative`. The role changes two things and nothing else: a decorative block weighs
+nothing in `solve_stress`, and it is left out of the centre of mass and the support footprint in
+`check_stability`. Everything else is deliberately identical — same grid, same occupancy, same
+bake, same collision, same damage record — so it is grounded through whatever it rests on, and it
+is still in the list `check_stability` hands to `split_island`, which is §4.2 for free.
+
+That is the third answer to a question BuildMode §9.2 got wrong twice on the unit rather than on
+the idea. A "decorative" **frame**, with a chunk and a body of its own, gave a building that landed
+on its own staircase; moving it to a layer nothing structural could touch gave a staircase left
+standing in the rubble. The unit is the **block**.
+
+The workshop authors it. `I` switches between STRUCTURE and INTERIOR and everything else about
+placing a brick is the same in both; the recipe carries one bit per block (v4) and the city reads
+it back. Nothing about a brick's shape or position could have inferred this — a table built out of
+wall bricks is a table, and only its author knows.
 
 ---
 

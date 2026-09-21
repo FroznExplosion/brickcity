@@ -29,6 +29,7 @@ R            rotate X / Z  F     flip (studs down)
 TAB          next build grid (upright / 4 sideways / inverted)
 S            snap to side studs (brackets) -- on/off
 T            rotate the brick you just placed
+I            layer: STRUCTURE / INTERIOR (what holds it up, or what is in it)
 K            spiral staircase (a fixture) at the ghost
 G            grid          H     stress overlay
 F5 / F9      save / load   ENTER place in the city and shoot it
@@ -88,6 +89,18 @@ var _keys: Label
 var _keys_panel: PanelContainer
 var _keys_on := true
 
+## Which layer is being built. Docs/Interiors.md: a building's structure and
+## the things inside it are the same bricks in the same grid and are NOT the
+## same object to the solver -- what is in a room weighs nothing in the stress
+## pass and is not part of what the building balances on.
+##
+## Nothing about a brick's shape or place can say which it is. A player who
+## builds a table out of wall bricks has built a table, and only they know it,
+## so the layer is a mode they are in rather than anything inferred. Everything
+## else about placing a brick is identical in both, deliberately: same parts,
+## same grids, same snapping, same undo. The recipe carries one bit per block
+## and the city reads it into Block::decorative.
+var _interior := false
 var _part_index := 0
 var _colour := 4
 var _axis_z := false        ## which of the two axis variants is selected
@@ -797,8 +810,15 @@ func _update_ghost() -> void:
 	_ghost.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), BrickWorld.grid_to_world(_cell) + box.size * 0.5)
 
+	# Red is still "it does not fit" in either layer -- that is a placement
+	# answer, and the layer does not change it. The other two say which layer
+	# this brick is going in, because the thing most worth seeing before the
+	# click is which of the two you are about to add to.
 	if not _valid:
 		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
+	elif _interior:
+		_ghost_material.albedo_color = Color(0.72, 1.0, 0.35, 0.40) if _joints > 0 \
+				else Color(0.72, 1.0, 0.35, 0.28)
 	elif _joints == 0:
 		_ghost_material.albedo_color = Color(1.0, 0.72, 0.15, 0.40)
 	else:
@@ -819,10 +839,13 @@ func _update_hud() -> void:
 	var worst := 0.0
 	for v in _stress.values():
 		worst = maxf(worst, v)
-	_hud.text = "%s  [%s%s]  colour %d   grid: %s\ncell %v   %s\n%d bricks placed%s%s" % [
+	var interior := recipe.interior_count()
+	_hud.text = "%s  [%s%s]  colour %d   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s" % [
 		_part(), "Z" if _axis_z else "X", " inverted" if _flip else "",
 		_colour, FRAME_NAMES[_frame] if _frame < FRAME_NAMES.size() else str(_frame),
-		_cell, state, recipe.size(),
+		"INTERIOR (I)  — weighs nothing, holds nothing up" if _interior
+				else "STRUCTURE (I)  — what holds the building up",
+		_cell, state, recipe.size(), recipe.size() - interior, interior,
 		(", %d fixture(s)" % recipe.fixture_count()) if recipe.fixture_count() > 0 else "",
 		("\nworst joint %.2f of capacity" % worst) if _overlay_on else ""]
 
@@ -847,6 +870,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_R: _axis_z = not _axis_z; _has_good = false
 		KEY_F: _flip = not _flip; _has_good = false
 		KEY_T: _rotate_last()
+		KEY_I: _toggle_layer()
 		KEY_K: _place_staircase()
 		KEY_Z: _undo()
 		KEY_TAB: _cycle_frame()
@@ -878,7 +902,7 @@ func _place() -> void:
 	# in the same order, so recipe index == block id, which is the contract
 	# BuildRecipe exists to keep.
 	var rid := recipe.size()
-	recipe.add(name, _cell, _colour, _recipe_frame_for(_frame))
+	recipe.add(name, _cell, _colour, _recipe_frame_for(_frame), _interior)
 	_placed_at.append([_frame, placed])
 	# The weld goes in the RECIPE as well, or the build stands here and falls
 	# apart everywhere else: a saved file, a city placement and a replay all
@@ -1014,6 +1038,18 @@ func _cycle_frame() -> void:
 	_build_grid()
 
 
+## Swap which layer the next brick goes in.
+##
+## The two are not separate scenes, separate grids or separate files. It is one
+## build, and the switch is the moment the author stops saying "this is what
+## holds it up" and starts saying "this is what is in it" -- which is a fact
+## only they have. See `_interior`.
+func _toggle_layer() -> void:
+	_interior = not _interior
+	_update_ghost()
+	_update_hud()
+
+
 ## Re-lay the last brick placed, turned 90 degrees.
 ##
 ## Undo-and-replace rather than an in-place edit: orientation is baked into the
@@ -1046,6 +1082,9 @@ func _rotate_last() -> void:
 
 	if not _edits.is_empty() and _edits[_edits.size() - 1] != "brick":
 		return  # the last edit was a fixture; there is no brick to turn
+	# The layer travels with the brick, not with the cursor: turning a chair is
+	# not a way to make it load-bearing.
+	var was_interior := recipe.is_interior(id)
 	if not _undo():
 		return
 	var placed := asm.place(asm.frames[af], cell, palette[turned], colour)
@@ -1053,12 +1092,12 @@ func _rotate_last() -> void:
 		# It does not fit turned. Put the original back rather than losing it.
 		var back := asm.place(asm.frames[af], cell, palette[name], colour)
 		if back >= 0:
-			recipe.add(name, cell, colour, rf)
+			recipe.add(name, cell, colour, rf, was_interior)
 			_placed_at.append([af, back])
 			_edits.append("brick")
 		_after_edit()
 		return
-	recipe.add(turned, cell, colour, rf)
+	recipe.add(turned, cell, colour, rf, was_interior)
 	_placed_at.append([af, placed])
 	_edits.append("brick")
 	_after_edit()

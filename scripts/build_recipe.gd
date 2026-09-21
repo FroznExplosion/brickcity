@@ -17,12 +17,14 @@ extends RefCounted
 ## order inside one BrickWorld and mean nothing across a save; names are the
 ## stable identity (Docs/Status.md, the part palette).
 
-const VERSION := 3
+const VERSION := 4
 ## Every older version means the same thing in a newer one, because each bump
-## has only ADDED a column: v2 added welds, v3 added fixtures. So an old recipe
-## loads rather than being refused, and it comes back with exactly what it was
-## saved with -- a v1 sideways build with nothing holding its frames on, a v2
-## build with no staircase in it.
+## has only ADDED a column: v2 added welds, v3 added fixtures, v4 added the
+## structure/interior role per block. So an old recipe loads rather than being
+## refused, and it comes back with exactly what it was saved with -- a v1
+## sideways build with nothing holding its frames on, a v2 build with no
+## staircase in it, a v3 build that is structure all the way through, which is
+## what every recipe authored before the workshop had two layers actually is.
 const OLDEST_VERSION := 1
 
 var name := "untitled"
@@ -46,6 +48,14 @@ var _cells := PackedInt32Array()   ## 3 ints per block: x, y, z
 var _parts := PackedInt32Array()   ## index into `parts`
 var _colours := PackedByteArray()
 var _frames := PackedInt32Array()  ## which frame each block is in
+## 1 if this block is INTERIOR -- fixed to the structure rather than being it.
+##
+## Authored, not derived. Nothing about a chair's shape or position says it is
+## not load-bearing; a player who builds a table out of the same bricks as a
+## wall has built a table, and only they know that. BuildMode §9.2 left this as
+## an authored flag on a frame and said so; it is a flag on a BLOCK, which is
+## the unit the city's own interiors turned out to need (Block::decorative).
+var _decor := PackedByteArray()
 
 ## Welds, as 2 ints per weld: the two BLOCK IDS joined.
 ##
@@ -86,7 +96,8 @@ func is_empty() -> bool:
 
 ## Append a block. Returns the block id it will have when built, which is also
 ## its index here -- the two are the same number by construction.
-func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0) -> int:
+func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0,
+		interior: bool = false) -> int:
 	var pi := parts.find(archetype_name)
 	if pi < 0:
 		pi = parts.size()
@@ -98,7 +109,22 @@ func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0) ->
 	_parts.push_back(pi)
 	_colours.push_back(clampi(colour, 0, 255))
 	_frames.push_back(maxi(frame, 0))
+	_decor.push_back(1 if interior else 0)
 	return id
+
+
+## Is this block interior rather than structure?
+func is_interior(id: int) -> bool:
+	return id >= 0 and id < _decor.size() and _decor[id] != 0
+
+
+## How many blocks of this recipe are interior.
+func interior_count() -> int:
+	var n := 0
+	for v in _decor:
+		if v != 0:
+			n += 1
+	return n
 
 
 ## Join two blocks with a weld. Order is parent-then-child, which matters for
@@ -207,6 +233,7 @@ func pop() -> bool:
 	_parts.resize(_parts.size() - 1)
 	_colours.resize(_colours.size() - 1)
 	_frames.resize(_frames.size() - 1)
+	_decor.resize(_decor.size() - 1)
 	# A weld to a block that no longer exists is not a weld. Undo is the only
 	# removal, so the only ids that can be orphaned are the one just dropped.
 	var kept := PackedInt32Array()
@@ -308,6 +335,7 @@ func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 				% [name, frame_count()])
 	var lo := origin() if rebase else Vector3i.ZERO
 	var placed := 0
+	var built := {}
 	for i in size():
 		if frame_of(i) != 0:
 			continue
@@ -318,7 +346,36 @@ func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		var got := world.place_block(chunk_id, cell_of(i) - lo, palette[pn], colour_of(i))
 		if got >= 0:
 			placed += 1
+			built[i] = got
+	apply_roles(world, built, func(_f: int) -> int: return chunk_id)
 	return placed
+
+
+## Tell the world which of the blocks just built are interior.
+##
+## `built` maps recipe block id -> the id it got in its chunk, which is what
+## build_into already keeps: the two are not the same number, because a chunk
+## holds one frame's blocks and a part the palette could not place leaves a
+## hole. Grouped per chunk so this is one call per frame rather than one per
+## brick.
+func apply_roles(world: BrickWorld, built: Dictionary, chunk_of_frame: Callable) -> int:
+	var by_chunk := {}
+	for i in built:
+		if not is_interior(int(i)):
+			continue
+		var chunk: int = chunk_of_frame.call(frame_of(int(i)))
+		if chunk < 0:
+			continue
+		# Read out, append, put back. A Packed*Array is a VALUE, so indexing
+		# the dictionary hands over a COPY -- pushing onto it in place
+		# compiles, runs, and marks nothing at all.
+		var ids: PackedInt32Array = by_chunk.get(chunk, PackedInt32Array())
+		ids.push_back(int(built[i]))
+		by_chunk[chunk] = ids
+	var marked := 0
+	for chunk in by_chunk:
+		marked += world.set_blocks_decorative(chunk, by_chunk[chunk], true)
+	return marked
 
 
 ## Cells this frame needs, measured in ITS OWN grid with its origin at zero.
@@ -381,6 +438,8 @@ func build_into(asm: Assembly, palette: Dictionary, dims: Vector3i = Vector3i.ZE
 			# weld. Silent: the failed placement above has already said so.
 			continue
 		asm.weld(asm.frames[frame_of(w.x)], built[w.x], asm.frames[frame_of(w.y)], built[w.y])
+	apply_roles(asm.world, built, func(f: int) -> int:
+			return asm.frames[f] if f < asm.frames.size() else -1)
 	return placed
 
 
@@ -406,6 +465,7 @@ func to_dict() -> Dictionary:
 		"part_index": _plain(_parts),
 		"colours": _plain(_colours),
 		"block_frames": _plain(_frames),
+		"interior": _plain(_decor),
 		"frame_rot": _plain(_frame_rot),
 		"frame_ticks": _plain(_frame_ticks),
 		"welds": _plain(_welds),
@@ -426,6 +486,9 @@ static func from_dict(d: Dictionary) -> BuildRecipe:
 	r._parts = _ints(d.get("part_index", []))
 	r._colours = _bytes(d.get("colours", []))
 	r._frames = _ints(d.get("block_frames", []))
+	# A file written before the workshop had two layers has no role column, and
+	# it means what it always meant: all of it is structure.
+	r._decor = _bytes(d.get("interior", []))
 	r._frame_rot = _ints(d.get("frame_rot", []))
 	r._frame_ticks = _ints(d.get("frame_ticks", []))
 	# A v1 file has no weld column at all. Missing is not the same as empty
@@ -455,6 +518,8 @@ static func from_dict(d: Dictionary) -> BuildRecipe:
 	if r._frames.is_empty() and not r._parts.is_empty():
 		r._frames.resize(r._parts.size())
 		r._frames.fill(0)
+	if r._decor.size() != r._parts.size():
+		r._decor.resize(r._parts.size())
 	if r._cells.size() != r._parts.size() * 3 or r._colours.size() != r._parts.size() \
 			or r._frames.size() != r._parts.size() \
 			or r._frame_ticks.size() != r._frame_rot.size() * 3:

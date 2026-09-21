@@ -30,6 +30,7 @@ func _init() -> void:
 	_check_the_cheap_tier()
 	_check_damage_record_keys_survive()
 	_check_stress_overlay_inputs()
+	_check_the_two_layers()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -41,6 +42,97 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 	else:
 		_fail += 1
 		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
+
+
+## The workshop authors a building in two layers, and the city has to be able to
+## tell them apart afterwards.
+##
+## Docs/Interiors.md: the structure and the things standing in it are the same
+## bricks in the same grid and are not the same object to the solver. Nothing
+## about a brick's shape or place says which it is -- a table built out of wall
+## bricks is a table, and only its author knows -- so the recipe carries a bit
+## per block and the city reads it into Block::decorative.
+func _check_the_two_layers() -> void:
+	print("\nstructure and interior are one build and two roles")
+	var r := BuildRecipe.new()
+	r.name = "two layers"
+	# A floor and four walls' worth of one wall, then a table standing on it.
+	for x in 4:
+		r.add("plate_2x2", Vector3i(x * 2, 0, 0), 2)
+	var wall := r.add("brick_2x4_x", Vector3i(0, 1, 0), 4)
+	var leg := r.add("brick_2x2", Vector3i(6, 1, 0), 6, 0, true)
+	var top := r.add("plate_2x2", Vector3i(6, 4, 0), 5, 0, true)
+	_ok("a recipe defaults to structure", not r.is_interior(wall))
+	_ok("and remembers what was authored as interior",
+			r.is_interior(top) and r.is_interior(leg))
+	_ok("counted", r.interior_count() == 2, "%d" % r.interior_count())
+
+	# Undo has to take the role with the brick, or the next brick inherits it.
+	var before := r.interior_count()
+	r.pop()
+	_ok("undo drops the role with the block", r.interior_count() == before - 1,
+			"%d" % r.interior_count())
+	r.add("plate_2x2", Vector3i(6, 4, 0), 5, 0, true)
+
+	# Into a chunk.
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var chunk: int = w.create_chunk(Vector3i.ZERO, r.chunk_dims())
+	var placed := r.build(w, chunk, res[1])
+	_ok("all of it builds", placed == r.size(), "%d of %d" % [placed, r.size()])
+	var decor := w.get_decorative_blocks(chunk)
+	_ok("and exactly the interior bricks are decorative in the world",
+			decor.size() == r.interior_count(),
+			"%d of %d" % [decor.size(), r.interior_count()])
+	var wrong := 0
+	for i in r.size():
+		if w.is_block_decorative(chunk, i) != r.is_interior(i):
+			wrong += 1
+	_ok("block for block", wrong == 0, "%d wrong" % wrong)
+
+	# Through the save file.
+	var path := "user://_probe_layers.json"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(r.to_dict()))
+	f.close()
+	var back := BuildRecipe.from_dict(JSON.parse_string(
+			FileAccess.open(path, FileAccess.READ).get_as_text()))
+	_ok("a saved build comes back with its layers", back.size() == r.size()
+			and back.interior_count() == r.interior_count(),
+			"%d blocks, %d interior" % [back.size(), back.interior_count()])
+	var drifted := 0
+	for i in r.size():
+		if back.is_interior(i) != r.is_interior(i):
+			drifted += 1
+	_ok("block for block, through JSON", drifted == 0, "%d drifted" % drifted)
+
+	# An older file has no role column and means what it always meant.
+	var old := r.to_dict()
+	old.erase("interior")
+	old["version"] = 3
+	var v3 := BuildRecipe.from_dict(old)
+	_ok("a recipe saved before the layers existed is all structure",
+			v3.size() == r.size() and v3.interior_count() == 0,
+			"%d blocks, %d interior" % [v3.size(), v3.interior_count()])
+
+	# And the point of the whole thing: the table does not hold the building up.
+	var with_table: Dictionary = w.check_stability(chunk)
+	w.solve_stress(chunk)
+	var under_table := w.get_block_load(chunk, 3)
+	w.set_blocks_decorative(chunk, decor, false)
+	var as_structure: Dictionary = w.check_stability(chunk)
+	w.solve_stress(chunk)
+	var under_table_as_structure := w.get_block_load(chunk, 3)
+	_ok("the interior is outside the centre of mass",
+			(with_table.com as Vector3).distance_to(as_structure.com as Vector3) > 0.0001,
+			"%v against %v" % [with_table.com, as_structure.com])
+	# The plate the table leg stands on. peak_load is no use here: the
+	# heaviest block in this build is under the WALL, and the wall is
+	# structure either way -- the question is what the floor under the
+	# TABLE is asked to carry.
+	_ok("and outside the load the floor under it is asked to carry",
+			under_table < under_table_as_structure,
+			"%.4f against %.4f" % [under_table, under_table_as_structure])
 
 
 ## A small house: a 12x10 footprint, four walls four courses high, a plate roof.
