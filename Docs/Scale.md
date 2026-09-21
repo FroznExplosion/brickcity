@@ -3,14 +3,22 @@
 How a city of fully destructible buildings *with interiors* is supposed to work, what the shipped
 games do, what stops them, and where this project stands against that.
 
-Written because of a proposal worth taking seriously: **bake interiors the way buildings are baked,
-draw a cheap version until something touches them, then switch to the real destructible thing —
-warm on approach, unwarm if untouched, and resolve an unwarmed room procedurally if it is destroyed
+Written because of a proposal worth taking seriously: **bake interiors for their LOD levels, draw
+the cheap version until something touches them, then switch to the real destructible thing — warm
+on approach, unwarm if untouched, and resolve an unwarmed room procedurally if it is destroyed
 without ever having been looked at.**
 
 Short answer: that is the right shape, it is what the ladder already does for buildings
 ([Plan §4.2](Plan.md)), and two thirds of it exist. What is missing is the middle rung — and the
 proposal's own best idea is the part that names it.
+
+Four decisions taken here, which the rest of the document is written against:
+
+* **everything is authored in the workshop eventually** — buildings and their interiors both;
+* **only the terrain is protected**; every structure in the city can come down;
+* **the debris cap is two connected caps**, so large pieces outlive small ones, with ages and
+  oldest-first eviction;
+* **baking is per item type**, and it is what makes authored interiors affordable.
 
 ---
 
@@ -19,10 +27,12 @@ proposal's own best idea is the part that names it.
 1. **The proposal is correct and the project half-implements it already.** Rooms have a truth layer
    (a seed and a diff) and a real layer (blocks in the host's grid). They have no *cheap* layer: a
    room is either nothing or fully laid brick. That is the gap.
-2. **"Bake interiors like buildings" is the one part to reject**, and there is a measurement behind
-   that. Interiors were in the building's face bake until recently; taking them out is what dropped
-   a room from 225 ms to 0.9 ms and a furnished building from +50.7 MB to +1.0 MB
-   ([Status](Status.md)). The cheap tier must be *drawn from the manifest*, not baked into anything.
+2. **Baking is worth it — per item TYPE, never per room.** Baking a room's contents into the
+   building is the thing to reject, and there is a measurement behind that: interiors were in the
+   building's face bake until recently, and taking them out dropped a room from 225 ms to 0.9 ms and
+   a furnished building from +50.7 MB to +1.0 MB ([Status](Status.md)). Baking a *chair* once, and
+   instancing it everywhere a chair stands, is the opposite trade and it is how every engine ships
+   props. See §4.2.
 3. **The industry's answer to "hundreds of objects in a room" is not a faster physics engine.** It
    is that almost nothing in the room is a physics object, almost nothing is an individual draw,
    and nothing is asked a question proportional to how much exists.
@@ -34,6 +44,12 @@ proposal's own best idea is the part that names it.
    fight network determinism; we have a deterministic integer model already
    ([Multiplayer §3](Multiplayer.md)). Our exposure is *resident cost* — how much a city of warm
    buildings holds when nobody is shooting.
+6. **Authored buildings kill the room lattice**, and that is the largest consequence of the plan to
+   build everything in the workshop. Rooms are found by arithmetic today only because a generated
+   tower puts them on a regular grid. An authored building has rooms wherever its walls are. The
+   answer is not to keep the lattice or to replace it, but to put both behind one index — and to
+   get rooms, storeys, portals and the neighbour graph out of a single flood fill of the building's
+   own empty space. See §4.6.
 
 ---
 
@@ -172,21 +188,50 @@ scale with interiors it wants a fourth rung, between "nothing" and "real":
 Rung 2 is the missing one, and it is the proposal's core. A drawn room is not simulable and does not
 need to be: it is furniture nobody has touched.
 
-### 4.2 The promotion rule is "touched", not "near"
+### 4.2 Bake per item TYPE, and instance it
+
+The question was whether to bake interiors for the LOD tier. Yes — but the unit of the bake is the
+**item type**, not the room and not the building.
+
+A city has a few dozen kinds of thing that stand in rooms and millions of placements of them. Bake
+a chair once — its faces, and a merged collider — and every chair anywhere is an instance with a
+transform and a colour. Memory is per type; a million chairs cost a million transforms, not a
+million meshes. Damage never invalidates it, because a damaged chair has already been promoted to
+real blocks and is not being drawn from the bake any more.
+
+Baking per ROOM would be the opposite of all three: memory per instance, invalidated by every hit,
+and rebuilt constantly.
+
+Right now this does not pay, and it is worth being honest about why: the current items are boxes,
+and a `MultiMesh` of scaled unit cubes is already one draw call with less memory than a baked mesh
+would use. **It starts paying the moment items are authored in the workshop**, because an authored
+chair is a brick assembly with a silhouette, and drawing it as a box is simply wrong.
+
+Two levels are enough:
+
+| | what it is | when |
+|---|---|---|
+| **LOD0** | the item type's baked faces, instanced | near |
+| **LOD1** | the item's merged boxes, instanced — what we draw today | far, or crowded |
+
+The machinery exists: an item type is a tiny chunk, and `bake_chunk_faces` already turns a chunk
+into faces. Baking one at load and keeping it is a handful of kilobytes per type.
+
+### 4.3 The promotion rule is "touched", not "near"
 
 Distance decides **drawn**. Interaction decides **real**. A blast whose radius reaches a room, or a
 player within arm's reach, promotes rung 2 → 3 for that room alone. Everything else in the building
 stays drawn.
 
-This is the pattern the engines use for props: register cheap proxies, swap in the destructible
-in place of the proxy on interaction, hide the proxy.
+This is the pattern the engines use for props: register cheap proxies, swap in the destructible in
+place of the proxy on interaction, hide the proxy.
 
-### 4.3 Demotion is the same ladder backwards, and it keeps the diff
+### 4.4 Demotion is the same ladder backwards, and it keeps the diff
 
 Walk away and a room goes 3 → 2 → 1, dropping blocks then instances, keeping only what changed.
 This is already how `deactivate_room` works: free the objects, keep the diff.
 
-### 4.4 A room destroyed at rung 0 or 1 resolves, it does not simulate
+### 4.5 A room destroyed at rung 0 or 1 resolves, it does not simulate
 
 If a shell nobody ever entered comes down, its rooms' contents are computed — thrown, broken, and
 placed — from the seed, deterministically, rather than simulated. This is the proposal's
@@ -195,23 +240,76 @@ placed — from the seed, deterministically, rather than simulated. This is the 
 bricks from the room's own seed so the same wreck looks the same on a second visit and on another
 machine.
 
-### 4.5 Never ask a question proportional to the building
+### 4.6 One room index, two ways of filling it — and a flood fill that gives four things at once
+
+Generated buildings put rooms on a lattice, so "which rooms are near this point" is arithmetic.
+Authored buildings do not, and everything is going to be authored. So the arithmetic is not the
+design — it is one **implementation** of an index that also has to serve arbitrary rooms.
+
+The index a building needs is small: per room, a local box and a storey number, plus a coarse
+bucket per storey. Queries go through one API; a generated tower fills it from the lattice and pays
+nothing, an authored building fills it from its own rooms.
+
+**Where an authored building's rooms come from is the interesting half, and one pass gives all of
+it.** Flood-fill the *empty* cells inside the building's bounds:
+
+* each **connected region of air between two slabs is a room** — its box is the region's bounds;
+* the **slabs fall out on the way**, as the y-layers where solidity crosses a threshold, which is
+  what defines a storey;
+* two regions on one storey that touch through a gap are **connected** — that is the neighbour
+  graph, and it is what replaces "rooms within R metres" with "the room you are in, and the rooms
+  it opens onto";
+* a region that reaches the outside air does so **through a window or a door** — that is the portal
+  list, computed once instead of raycast every tick.
+
+Rooms, storeys, portals and connectivity from one walk over the empty space, cached in the recipe.
+It is what portal-cell systems do offline, and it works for generated buildings too — which means
+the lattice is a fast path that can eventually be deleted rather than a second system to maintain.
+
+Manual override sits on top: a workshop tool to drag a room box, name it and set its kind, for the
+cases where the fill is wrong or the author wants two rooms where the geometry says one.
+
+### 4.7 Never ask a question proportional to the building
 
 Every per-tick decision is over the *neighbourhood*: the cell the player is in and its neighbours.
 Not a radius over everything that exists. This is the single lesson that cost the most to relearn —
 a streaming pass was 183 ms because it measured every room in a 4,000-room building fifteen times a
 second.
 
-### 4.6 Bound the debris, and say so
+### 4.8 Bound the debris — two classes, and the cap drives the ladder we already have
 
-A hard cap on live dynamic bodies, with the smallest and oldest discarded first. Teardown ships this
-as a user setting. Pretending the cap does not exist is how a collapse becomes a slideshow.
+A hard cap, and not one number. A collapse makes two kinds of thing and they are worth different
+amounts:
 
-### 4.7 Structure is destructible; the *frame* of the game is not
+* a **large piece** is a landmark. It changes how the place is navigated and it is what the player
+  remembers doing. It should outlast everything.
+* a **small piece** is texture. Hundreds of them are what fill the solver, and nobody misses one.
 
-The design answer, stated up front rather than discovered late: some things do not come down.
-Terrain, level borders, and — probably — a load-bearing core per building. Geo-Mod 2.0 drew that
-line and shipped.
+So two caps, connected by one eviction order. Every piece carries the two facts that decide its
+fate — **how big it is** and **when it settled** — and eviction is oldest-first within a class:
+
+| | over its cap | what happens |
+|---|---|---|
+| small, oldest first | → | **deleted**, outright |
+| large, oldest first | → | **slept** — a dormant record at 17 bytes a block, able to come back |
+
+That second row is the point of connecting the cap to what already exists: a large piece never has
+to be *destroyed* to stop costing anything, because dormancy already reduces it to a record. The cap
+is not a new mechanism, it is the thing that finally *drives* the mechanism on a schedule rather
+than on distance.
+
+Connected, because a total budget sits over both: when the total is exceeded the small class is
+spent first, down to a floor, and only then does the large class begin to sleep. And it should be a
+user setting, as Teardown ships it — the honest admission that the cap exists.
+
+### 4.9 Only the terrain is protected
+
+Decided, rather than left open: **the terrain is the only thing that does not come down.** No
+protected cores, no indestructible frames, no borders. That is a harder promise than Geo-Mod 2.0
+made — it explicitly excluded level borders and ground — and it is the one this project is for.
+
+The cost of that promise is that every mitigation has to be real. Nothing is saved by a building
+that cannot fall.
 
 ---
 
@@ -226,13 +324,15 @@ line and shipped.
 | Promotion trigger | touched | ⚠️ distance only (`ROOM_RANGE`) | promote on damage/reach instead |
 | Demotion | keeps the diff | ✅ `deactivate_room` | — |
 | Destroyed-unseen | resolve from seed | ✅ `spill_room`, analytic resolve | — |
-| Neighbourhood queries | cells + portals | ⚠️ lattice lookup + storey span; portals are raycasts | a real neighbour graph |
+| Neighbourhood queries | cells + portals | ⚠️ lattice lookup + storey span; portals are raycasts | one index, then a graph from the flood fill |
+| Rooms in authored buildings | detected or authored | ❌ **nothing** — the lattice assumes a generated grid | flood fill, plus a manual tool |
+| Item drawing | baked per type, instanced | ⚠️ unit boxes, instanced | fine until items are authored; then bake per type |
 | Instanced drawing | one draw per chunk | ✅ `FurnitureMesh` MultiMesh | — |
 | Collision merging | merge at rest | ✅ buildings and settled islands | falling pieces still per-brick |
-| Debris cap | hard, with discard | ⚠️ budgets and dormancy, no hard cap | a cap, and a setting for it |
+| Debris cap | two classes, ages, oldest first | ⚠️ budgets and dormancy, no cap and no ages | small deleted, large slept, total over both |
 | Determinism | integer, reproducible | ✅ integer stress, seeded contents, command replay | keep floats out |
 | Authoring cost | procedural | ✅ recipes and seeds | — |
-| Design control | authored limits | ❌ nothing is protected | decide, then enforce |
+| Design control | authored limits | ✅ decided: terrain only | nothing to build; the promise raises the bar on everything else |
 
 ### 5.1 What the gap actually costs today
 
@@ -258,7 +358,102 @@ Everything else in the table is a tightening, not a hole.
 
 ---
 
-## 6. Honest limits of this write-up
+## 6. The plan
+
+Six stages. Each is shippable on its own, each has something to measure, and the order is chosen so
+that nothing has to be written twice.
+
+### Stage 1 — The debris cap
+
+**Why first:** it is independent of everything else and it fixes a bug that is happening now —
+Jolt's manifold cache overflowing at 20,480 contacts in the big city.
+
+* every island records `settled_at` and its block count;
+* two classes split on a block-count threshold, each with its own cap, and a total over both;
+* eviction is oldest-first within a class: **small pieces are deleted, large pieces are slept** into
+  the dormant record that already exists;
+* both caps are settings, exposed on the scene alongside `respawn_buildings`.
+
+**Measure:** live body count and contact count during a big-city collapse, against the manifold
+cap; that the total holds under a sustained fight; that a large piece slept and came back.
+
+### Stage 2 — The drawn rung
+
+**Why second:** it is the biggest single win left and nothing else depends on its internals.
+
+* `FurnitureMesh` draws from the **manifest** — item type, cell, yaw — with no blocks laid;
+* one collider per *item*, not per block, on the building's furniture body;
+* rooms promote to real blocks when something **touches** them: a blast whose radius reaches the
+  room, or the player within reach. Not on distance.
+* demotion drops blocks back to drawn, and drawn back to nothing, keeping the diff.
+
+**Measure:** a room at rung 2 against 0.9 ms and ~30 blocks an item at rung 3; a building with every
+room drawn against +25,537 collision boxes and 189 ms; that a blast still destroys what it reaches.
+
+### Stage 3 — One room index
+
+**Why third:** small, and Stage 4 needs it.
+
+* per building: room id, local box, storey number, and a bucket per storey;
+* one query API — `rooms_in_range(building, point, radius, storey_span)` — with the lattice as the
+  fast path that fills it for generated towers;
+* `_stream_rooms` does not change, which is the point.
+
+**Measure:** the streaming pass stays at its current 3.3 ms with the index in the way.
+
+### Stage 4 — Rooms, storeys and portals from a flood fill
+
+**Why fourth:** it is what makes authored buildings have interiors at all, and it retires three
+other things on its way past.
+
+* find the slabs: y-layers whose solidity crosses a threshold;
+* flood-fill the air between slabs; each connected region is a room, its bounds are its box;
+* regions that touch on one storey are **connected** — the neighbour graph;
+* regions that reach outside air do so through **portals** — windows and doors, found once instead
+  of raycast every tick;
+* cache all of it in the recipe, so it is computed at authoring time and not at runtime.
+
+Then: the streaming pass walks the graph instead of testing a radius, and `_can_see_into` stops
+casting rays.
+
+**Measure:** detected rooms against the generated lattice's rooms for a tower (they should agree);
+the pass cost with a graph walk against the radius query; portal tests at zero raycasts.
+
+### Stage 5 — Baked item types, instanced, with two LODs
+
+**Why fifth:** it does not pay until items are authored, and Stage 2 defines where drawing happens.
+
+* an item type is a tiny chunk; bake its faces once at load and keep them;
+* LOD0 instances the baked faces, LOD1 instances merged boxes — what Stage 2 draws;
+* one merged collider per type, reused by every instance.
+
+**Measure:** memory per type against per instance; draw calls for a furnished storey; the distance
+at which LOD1 is indistinguishable.
+
+### Stage 6 — Workshop room tools
+
+**Why last:** the flood fill covers most of it, and this is the override.
+
+* drag a room box, name it, set its kind;
+* mark a region as its own room, or merge two the fill split;
+* the existing STRUCTURE / INTERIOR layer already covers "what is actually holding this up", so
+  there is nothing new to invent for structure — only for rooms.
+
+**Measure:** a building authored end to end in the workshop, placed in the city, shot, and its
+interiors behaving like a generated one's.
+
+### What is deliberately not in the plan
+
+* **Occlusion.** `OccluderInstance3D` would let a building hide its own interior. It is a real win
+  and it is orthogonal; it can land any time.
+* **Falling pieces merging their collision.** Tried twice, reverted twice, and the reason is
+  recorded in `IslandManager.spawn`. Stage 1 reduces the pressure that made it attractive.
+* **Anything about networking.** The determinism is in place; nothing here should be allowed to put
+  a float on the structural path.
+
+---
+
+## 7. Honest limits of this write-up
 
 The two most directly relevant talks — Embark's *Engineering Mayhem: Technical Deep-Dive into
 Environmental Destruction in THE FINALS* and Ubisoft's *The Art of Destruction in Rainbow Six:
