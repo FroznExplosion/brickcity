@@ -410,6 +410,74 @@ than everything below, and nothing below touches it.
 
 So the order changed: **sections first**, then the drawn rung.
 
+### Floors are 75% of a building, and five attempts at fixing that
+
+Measured, on the shape the big city is built from:
+
+| | blocks | share |
+|---|---|---|
+| `plate_4x4` | 30,855 | **61.1%** |
+| `plate_2x2` | 7,140 | **14.1%** |
+| `brick_2x4_x` | 6,900 | 13.7% |
+| `brick_2x4_z` | 5,400 | 10.7% |
+| everything else | 240 | 0.5% |
+
+**Three quarters of every building is its floors.** Two plate layers per storey,
+offset so they interlock — because stud connections are vertical and plates side
+by side in one layer are not joined to each other at all, so a single layer is
+held only at its edges and drops out on the first solve. That was true, the fix
+was the wrong one, and it has cost 75% of the brick budget ever since.
+
+The replacement is not in doubt: **one layer of large panels standing on
+columns**, which is how a building holds a floor up. `plate_10x10`,
+`column_1x1` and `column_2x2` are in the palette and probe-verified. Built
+naively it gives **50,535 blocks → 17,508**, with five of seven shapes solving
+with zero stress failures and nothing detached.
+
+It has not landed, across two attempts, and the reason is always the same: the
+leftover strip. What was tried, in order, with what it cost:
+
+| attempt | result |
+|---|---|
+| greedy fill, column per panel corner | 5 of 7 shapes clean; **9 blocks orphan round every stairwell** |
+| keep-outs so columns dodge the stairwell | stairwell fixed; still clean on conforming shapes |
+| interior walls standing on panels | **880 stress failures, 1,724 shed** — four courses of wall through one column |
+| wall lines cut out of the floor | shattered the panel layout; tower grew to **53,422** |
+| one planned lattice: columns, walls and panels all on it | 20x20 clean but for the stairs; non-conforming footprints shed hundreds |
+
+**What the fifth attempt got right**, and is worth keeping when this is picked
+up again: plan the lattice before placing anything. Lines inset by the wall
+thickness, stepping by `PANEL`; columns on every lattice point; interior walls
+along lattice lines; floor panels as lattice cells. Then every panel has a
+column at its corner and every stretch of wall has one under it every `PANEL`
+studs, by construction, with nothing cut around anything. Keep-outs from
+`Fixture.footprint()` snap outward to whole cells, so a stairwell removes whole
+cells rather than cutting one in half and taking its column.
+
+**What it got wrong is the remainder.** A footprint of 80 studs with a 2-stud
+wall band leaves 76 inside, which is seven panels and a six-stud strip. That
+strip fills with 2x2s that reach neither a column nor the wall, and every
+attempt to support it — a column at its far end, a column under every panel,
+requiring columns for wall-straddling panels — made some other shape worse.
+
+**The fix is almost certainly to stop stretching the lattice to fit the
+footprint and choose footprints that fit the lattice**: `2 * WALL_THICK + k *
+PANEL`. 22, 42, 62, 82 rather than 20, 40, 60, 80. Then there is no remainder,
+no fill, no strip, and the whole class of failure goes away. That is a change to
+the shape tables, not to the algorithm, and it should be made *first* next time
+rather than after the algorithm has been bent round the problem.
+
+Two smaller things learned and worth not relearning:
+
+* **Interior walls must not stand on floor panels.** A wall is four courses
+  running the width of the building; resting it on a panel puts all of that
+  through whichever column is under that panel. Walls want a column line of
+  their own, which a lattice gives them for free.
+* **Rooms cost real bricks.** An interior wall is a run across the whole floor
+  on every storey, so room size is a budget decision before it is a spatial one.
+  At three panels a room (~10 m) the interior walls of the big tower are roughly
+  10,000 blocks; at one panel they would cost more than the floors do.
+
 ### Stage 2 — The drawn rung
 
 
