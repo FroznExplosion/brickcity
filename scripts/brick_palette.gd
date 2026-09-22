@@ -172,6 +172,38 @@ const _PARTS := {
 	"bracket_1x2": Vector3i(1, 3, 2),
 	"bracket_1x4": Vector3i(1, 3, 4),
 	"bracket_2x2": Vector3i(2, 3, 2),
+
+	# --- shaped: slopes, curves, rounds, arches --------------------------
+	# Not boxes. Each is drawn and collides as its shape and connects as the
+	# cells that shape mostly fills (scripts/shaped_parts.gd, _SHAPED below).
+	"slope_1x2": Vector3i(1, 3, 2),
+	"slope_2x2": Vector3i(2, 3, 2),
+	"slope_2x4": Vector3i(2, 3, 4),
+	"curve_1x2": Vector3i(1, 3, 2),
+	"curve_2x2": Vector3i(2, 3, 2),
+	"round_1x1": Vector3i(1, 3, 1),
+	"round_2x2": Vector3i(2, 3, 2),
+	"arch_1x4": Vector3i(1, 3, 4),
+	"arch_1x6": Vector3i(1, 3, 6),
+}
+
+
+## How each shaped part is shaped: the ShapedParts kind and, for a slope or a
+## curve, the axis it falls along in its canonical orientation. A slope falls
+## toward its FRONT, the low edge at 0 along that axis.
+##
+## A 2x4 slope falls across its two studs, not its four, so its long side is
+## the sloped face -- the real part, and the one a roof is made of.
+const _SHAPED := {
+	"slope_1x2": {"kind": "slope", "axis": "z"},
+	"slope_2x2": {"kind": "slope", "axis": "z"},
+	"slope_2x4": {"kind": "slope", "axis": "x"},
+	"curve_1x2": {"kind": "curve", "axis": "z"},
+	"curve_2x2": {"kind": "curve", "axis": "z"},
+	"round_1x1": {"kind": "round"},
+	"round_2x2": {"kind": "round"},
+	"arch_1x4": {"kind": "arch"},
+	"arch_1x6": {"kind": "arch"},
 }
 
 
@@ -187,7 +219,9 @@ static func bake(world: BrickWorld) -> Dictionary:
 	for part in _PARTS:
 		var size: Vector3i = _PARTS[part]
 		var base := -1
-		if has_studs(part):
+		if is_shaped(part):
+			base = _bake_shaped(world, part, size)
+		elif has_studs(part):
 			base = world.bake_archetype(part + "#base", size, mass_of(size))
 		else:
 			# Studless: solid box, sockets all the way across the underside,
@@ -209,6 +243,26 @@ static func bake(world: BrickWorld) -> Dictionary:
 	return out
 
 
+## A shaped part's base archetype: the cell mask, stud and socket masks, mass,
+## surface and hulls all from one ShapedParts description. The variants that
+## follow turn every one of them together.
+static func _bake_shaped(world: BrickWorld, part: String, size: Vector3i) -> int:
+	var spec: Dictionary = _SHAPED[part]
+	var sh := ShapedParts.build(spec.kind, size, spec.get("axis", "z"))
+	var up := PackedByteArray()
+	var down := PackedByteArray()
+	for i in size.x * size.z:
+		up.append(FACE_STUD if sh.studs[i] != 0 else FACE_NONE)
+		down.append(FACE_SOCKET if sh.sockets[i] != 0 else FACE_NONE)
+	var id := world.bake_faced_archetype(part + "#base", size, sh.solid * MASS_PER_CELL,
+			sh.cells, up, down)
+	if id < 0:
+		return -1
+	world.set_archetype_mesh(id, sh.positions, sh.normals)
+	world.set_archetype_hulls(id, sh.hulls)
+	return id
+
+
 ## Face values, mirroring `brick::Face` in brick_types.h.
 const FACE_NONE := 0
 const FACE_STUD := 1
@@ -216,9 +270,27 @@ const FACE_SOCKET := 2
 
 
 ## Does this part carry studs on top in its canonical orientation? Everything
-## but a tile does.
+## but a tile and a curved slope does. (A slope has them only on its back
+## strip, but it has them.)
 static func has_studs(part: String) -> bool:
-	return not part.begins_with("tile_")
+	return not part.begins_with("tile_") and not part.begins_with("curve_")
+
+
+## Is this part a shape rather than a box?
+static func is_shaped(part: String) -> bool:
+	return _SHAPED.has(part)
+
+
+## Does this part have a FRONT? A slope or a curve does: yawing it 180 degrees
+## is a different part in the world, not the same one, so it has four
+## orientations where a brick has two. Its names say which with `_y0`.. `_y3`,
+## quarter turns about +Y from canonical.
+##
+## A bracket does too: its studs are on ONE side, so turned 180 degrees they
+## face the other way. Given only `_x` / `_z` it could be turned two ways and
+## never the other two.
+static func is_directional(part: String) -> bool:
+	return is_bracket(part) or (_SHAPED.has(part) and (_SHAPED[part] as Dictionary).has("axis"))
 
 
 ## A bracket also carries studs on one lateral face.
@@ -272,14 +344,22 @@ static func is_square(part: String) -> bool:
 	return s.x == s.z
 
 
-## Archetype names for a part, in every orientation it has: the axis variants
-## (one if square, two otherwise) each in upright and inverted form.
+## Archetype names for a part, in every orientation it has: the yaw variants
+## (one if square, two if it only has a long axis, four if it has a front),
+## each in upright and inverted form.
 ##
-## `_x` is the orientation whose LONG side runs along world X; `_i` is inverted.
+## `_x` is the orientation whose LONG side runs along world X; `_y1` is a
+## directional part turned one quarter; `_i` is inverted.
 static func variants_of(part: String) -> Array:
 	if not _PARTS.has(part):
 		return []
-	var axes: Array = [part] if is_square(part) else [part + "_x", part + "_z"]
+	var axes: Array
+	if is_directional(part):
+		axes = [part + "_y0", part + "_y1", part + "_y2", part + "_y3"]
+	elif is_square(part):
+		axes = [part]
+	else:
+		axes = [part + "_x", part + "_z"]
 	var out := []
 	for a in axes:
 		out.append(a)
@@ -296,8 +376,60 @@ static func orientation_of(name: String) -> Vector2i:
 	if n.ends_with("_i"):
 		flip = 1
 		n = n.substr(0, n.length() - 2)
-	var yaw := 1 if n.ends_with("_x") else 0
+	var yaw := 0
+	var tail := n.substr(n.length() - 3)
+	if tail.begins_with("_y") and tail[2].is_valid_int():
+		yaw = tail[2].to_int()
+	elif n.ends_with("_x"):
+		yaw = 1
 	return Vector2i(yaw, flip)
+
+
+## The archetype name for a part at quarter-turn `yaw` (any integer), upright or
+## flipped. A part with only a long axis folds yaw 2 onto 0 and 3 onto 1; a
+## square part has no yaw at all.
+static func variant_name(part: String, yaw: int, flip: bool) -> String:
+	var k := posmod(yaw, 4)
+	var name: String
+	if is_directional(part):
+		name = "%s_y%d" % [part, k]
+	elif is_square(part):
+		name = part
+	else:
+		name = part + ("_x" if k % 2 == 1 else "_z")
+	return name + ("_i" if flip else "")
+
+
+## Which way a directional part's low front faces, as a unit grid vector, or
+## ZERO for a part without one. The same quarter turn and flip bake_variant
+## applies (Orient::direction), so this cannot disagree with the baked shape.
+static func front_of(name: String) -> Vector3i:
+	var part := part_of(name)
+	if part == "" or not is_directional(part):
+		return Vector3i.ZERO
+	var v: Vector3i
+	if is_bracket(part):
+		v = Vector3i(1, 0, 0)  # the side its studs are on; see _side_studs_for
+	else:
+		v = Vector3i(0, 0, -1) if _SHAPED[part].axis == "z" else Vector3i(-1, 0, 0)
+	var o := orientation_of(name)
+	match o.x:
+		1: v = Vector3i(-v.z, v.y, v.x)
+		2: v = Vector3i(-v.x, v.y, -v.z)
+		3: v = Vector3i(v.z, v.y, -v.x)
+	if o.y != 0:
+		v = Vector3i(v.x, -v.y, -v.z)
+	return v
+
+
+## The same part, turned one more quarter about +Y. What the workshop's rotate
+## key does to a placed part; "" if the name is not the palette's.
+static func turn(name: String) -> String:
+	var part := part_of(name)
+	if part == "":
+		return ""
+	var o := orientation_of(name)
+	return variant_name(part, o.x + 1, o.y != 0)
 
 
 ## True when this archetype name is the inverted form of its part.
@@ -330,7 +462,14 @@ static func size_of(name: String) -> Vector3i:
 	var part := n.substr(0, cut)
 	var axis := n.substr(cut + 1)
 	var s: Vector3i = _PARTS.get(part, Vector3i.ZERO)
-	if s == Vector3i.ZERO or is_square(part):
+	if s == Vector3i.ZERO:
+		return Vector3i.ZERO
+	if is_directional(part):
+		# y0..y3; an odd quarter turn swaps the two stud axes.
+		if axis.length() != 2 or axis[0] != "y" or not "0123".contains(axis[1]):
+			return Vector3i.ZERO
+		return Vector3i(s.z, s.y, s.x) if axis[1].to_int() % 2 == 1 else s
+	if is_square(part) or not (axis == "x" or axis == "z"):
 		return Vector3i.ZERO  # a square part must not carry an axis suffix
 	# Canonical is long-on-Z. The _x variant swaps the two stud axes.
 	return Vector3i(s.z, s.y, s.x) if axis == "x" else s
@@ -347,12 +486,22 @@ static func part_of(name: String) -> String:
 	if cut < 0:
 		return ""
 	var part := n.substr(0, cut)
-	return part if _PARTS.has(part) and not is_square(part) else ""
+	return part if _PARTS.has(part) and size_of(name) != Vector3i.ZERO else ""
 
 
-## Grams for a box part of this size, at print scale.
+## Grams for a box part of this size, at print scale. A shaped part weighs its
+## SOLID cells instead, which its bake counts: see `mass_of_part`.
 static func mass_of(size: Vector3i) -> float:
 	return size.x * size.y * size.z * MASS_PER_CELL
+
+
+## Grams for a named part, box or shaped.
+static func mass_of_part(part: String) -> float:
+	if is_shaped(part):
+		var spec: Dictionary = _SHAPED[part]
+		return ShapedParts.build(spec.kind, part_size(part), spec.get("axis", "z")).solid \
+				* MASS_PER_CELL
+	return mass_of(part_size(part))
 
 
 ## What a part measures in metres in game. Purely derived -- here so a UI can

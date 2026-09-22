@@ -32,7 +32,7 @@ const KEY_ROWS := [
 	["BUILD", "LMB", "place on the stud aimed at", "RMB", "delete"],
 	["", "hold E", "lock height, slide anywhere", "Z", "undo last"],
 	["", "[ ]  wheel", "part", ", .", "colour"],
-	["", "R", "rotate X / Z", "F", "flip (studs down)"],
+	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "", ""],
 	["", "I", "layer: structure / interior", "", ""],
@@ -123,7 +123,15 @@ var _keys_on := true
 var _interior := false
 var _part_index := 0
 var _colour := 4
-var _axis_z := false        ## which of the two axis variants is selected
+## Quarter turns about +Y, 0..3. A brick only has two distinct orientations and
+## reads this mod 2; a slope has a front, and all four are different parts.
+var _yaw := 1
+## The old two-way switch, kept as a view of `_yaw`: true is the long side on Z.
+var _axis_z: bool:
+	get:
+		return _yaw % 2 == 0
+	set(v):
+		_yaw = 0 if v else 1
 var _flip := false          ## inverted: 180 degrees about X, so studs point down
 var _cell := Vector3i.ZERO  ## where the ghost currently sits
 var _valid := false
@@ -523,10 +531,19 @@ func _part() -> String:
 ## studs point down, so it mates with a socket rather than with a stud
 ## (Docs/BuildMode.md section 3.1). An inverted brick will NOT clip onto a
 ## normal one, and the ghost goes amber to say so rather than pretending.
+## What the HUD says the ghost is facing: the axis its long side runs along, or
+## for a part with a front, the way that front looks.
+func _facing() -> String:
+	var front := BrickPalette.front_of(_archetype_name())
+	if front != Vector3i.ZERO:
+		return "front %s%s" % ["+" if front.x + front.z > 0 else "-", "X" if front.x != 0 else "Z"]
+	if BrickPalette.is_square(_part()):
+		return "-"
+	return "Z" if _axis_z else "X"
+
+
 func _archetype_name() -> String:
-	var square := BrickPalette.is_square(_part())
-	var name := _part() if square else (_part() + ("_z" if _axis_z else "_x"))
-	return name + "_i" if _flip else name
+	return BrickPalette.variant_name(_part(), _yaw, _flip)
 
 
 func _archetype() -> int:
@@ -1024,7 +1041,7 @@ func _update_hud() -> void:
 		worst = maxf(worst, v)
 	var interior := recipe.interior_count()
 	_hud.text = "%s  [%s%s]  colour %d   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s" % [
-		_part(), "Z" if _axis_z else "X", " inverted" if _flip else "",
+		_part(), _facing(), " inverted" if _flip else "",
 		_colour, FRAME_NAMES[_frame] if _frame < FRAME_NAMES.size() else str(_frame),
 		"INTERIOR (I)  — weighs nothing, holds nothing up" if _interior
 				else "STRUCTURE (I)  — what holds the building up",
@@ -1053,7 +1070,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _part_index = (_part_index + 1) % _parts().size()
 		KEY_COMMA: _colour = (_colour - 1 + BrickWorld.get_filament_count()) % BrickWorld.get_filament_count()
 		KEY_PERIOD: _colour = (_colour + 1) % BrickWorld.get_filament_count()
-		KEY_R: _axis_z = not _axis_z
+		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
 		KEY_I: _toggle_layer()
@@ -1289,8 +1306,8 @@ func _rotate_last() -> void:
 		return
 	var id := recipe.size() - 1
 	var name := recipe.part_of(id)
-	var part := BrickPalette.part_of(name)
-	if part == "" or BrickPalette.is_square(part):
+	var turned := BrickPalette.turn(name)
+	if turned == "" or turned == name:
 		return  # a square part looks the same turned
 
 	var cell := recipe.cell_of(id)
@@ -1301,9 +1318,6 @@ func _rotate_last() -> void:
 	if af < 0:
 		return  # it is not in the world to be turned
 
-	var inv := BrickPalette.is_inverted(name)
-	var was_x := name.begins_with(part + "_x")
-	var turned := part + ("_z" if was_x else "_x") + ("_i" if inv else "")
 	if not palette.has(turned):
 		return
 

@@ -152,6 +152,12 @@ Convex collision (gap 8, part two) -- a real space and real rays:
 godot --headless --path . --script tools/hull_probe.gd
 ```
 
+Slopes, curved slopes, round bricks and arches -- one shape, drawn, collided and connected:
+
+```bash
+godot --headless --path . --script tools/shaped_probe.gd
+```
+
 Anchored placement in the workshop -- drag, re-anchor, blocking, side-stud snap:
 
 ```bash
@@ -315,9 +321,10 @@ vertex colour — no textures, matching spec §2.
 ### The part palette (`scripts/brick_palette.gd`)
 
 **A part is what a player picks; an archetype is what the extension bakes.** The table lists
-**20 parts** -- plates, bricks and tiles at 1x1, 1x2, 1x4, 1x6, 2x2, 2x4 and 4x4 -- and `bake()`
-expands each into the **64 archetypes** they need, one per orientation, deduping the squares. Callers index
-archetypes exactly as before (`palette.brick_2x4_x`); build mode will show the 13.
+**36 parts** -- plates, bricks and tiles at 1x1 to 4x4, a 10x10 floor plate, columns, brackets, and
+the shaped parts (slopes, curves, rounds, arches) -- and `bake()` expands them into **134 archetype
+names**, one per orientation, deduping the squares. Callers index archetypes exactly as before
+(`palette.brick_2x4_x`); build mode shows the parts.
 
 That split is the whole point of the file. The first version hand-wrote `_x` and `_z` as separate
 table rows, which leaked a runtime representation into the authoring layer: adding a part meant
@@ -344,7 +351,7 @@ Note that none of this is visible yet either way. **Stud geometry is M5** (Plan 
 today is a structural fact the connectivity graph reads, not something on screen.
 
 **Proportions are asserted, not asserted-in-a-comment.** `tools/palette_probe.gd` passes
-**532 checks**:
+**1177 checks**:
 
 | | |
 |---|---|
@@ -352,8 +359,8 @@ today is a structural fact the connectivity graph reads, not something on screen
 | Ratios | `plate / stud = 0.4` and `brick / stud = 1.2`, in **both** systems |
 | Constants | the GDScript copies are pinned against `grid_to_world()` in the extension, so the two cannot drift |
 | Parts | canonical `W <= L`, a `brick` is 3 plates and a `plate` is 1, and no part carries an axis suffix |
-| Archetypes | a square part expands to exactly one; others to two that are the same part rotated, with equal mass -- and a suffix on a square part resolves to nothing |
-| Mass | a pure function of cell count at 0.1 g per cell, anchored on the real hollow 2x4 at **2.4 g**. A brick weighs exactly three of its own plate |
+| Archetypes | a square part expands to exactly one; others to two that are the same part rotated, with equal mass; a part with a front (a slope) to four -- and a suffix on a square part resolves to nothing |
+| Mass | a pure function of SOLID cell count at 0.1 g per cell, anchored on the real hollow 2x4 at **2.4 g**. A brick weighs exactly three of its own plate |
 | Studs | every studded part stacked on itself **joins**; every tile **does not** -- so nothing is unbuildable-on by accident, and no tile quietly behaves like a plate |
 | Tiles | same footprint, volume and mass as the plate they match, and a tile laid on a brick still joins downward |
 
@@ -567,6 +574,50 @@ the ray, all three of which can only pass through it.
 **Connectivity, stress and occupancy are untouched by both halves** -- they read the cell mask, as
 they always have, so gap 8 changes how a part looks and what you bump into and nothing about how it
 stands or breaks.
+
+#### Slopes, curves, rounds and arches: the first parts that are not boxes
+
+Nine parts in the palette now use gap 8 rather than the staircase alone: **slopes** 1x2, 2x2 and
+2x4, **curved slopes** 1x2 and 2x2, **round bricks** 1x1 and 2x2, and **arches** 1x4 and 1x6, all a
+brick tall. `scripts/shaped_parts.gd` builds each from ONE description -- a polygon profile extruded
+along one axis -- and derives all three things a part is from it:
+
+| | from the profile |
+|---|---|
+| Drawn | the extrusion's faces, flat walls cut on the cell grid so the bake's per-cell culling hides exactly what a neighbour covers |
+| Collides | the profile cut into convex pieces, one hull each. A slope, curve or round is one piece; an arch is the two pillars, the beam and the haunch slices, because one hull would fill the opening in |
+| Connects | the pieces **sampled**, 216 points a cell: a cell is solid when at least half of it is inside. A column has a stud where the solid reaches the top and a socket where it reaches the floor |
+
+Nothing about studs is written down. A slope comes out with studs on its flat back strip only, a
+2x4 slope along its long back edge, an arch with sockets under its two pillars and none under the
+opening, a round brick with a full set -- and the curved slope is made studless on purpose, because
+a stud stood on a curve floats half in the air. Mass follows the SOLID cells, so a slope weighs less
+than the brick it fits in.
+
+**A part with a front has four orientations, not two.** A brick yawed 180 degrees is the same brick;
+a slope yawed 180 degrees faces the other way. Directional parts are named `_y0`..`_y3` (quarter
+turns about +Y) where a brick has `_x`/`_z`, so a slope expands to eight archetypes. `R` in the
+workshop is now a quarter turn and cycles all four; a brick reads it mod 2 and behaves as it always
+did. The HUD says which way a slope's low front faces, from `BrickPalette.front_of`, which applies
+the same quarter turn `bake_variant` does -- and the probe checks it against where the bake actually
+put the studs, in every orientation, upright and flipped.
+
+One C++ change came with it. The face bake hid a voxel face whenever its neighbour's cell was
+occupied, which is right for a brick and wrong for a part that does not fill its cells: a round
+brick on the baseplate opened a dark square round itself where the plate's top face had been culled
+under corners the cylinder does not reach. A neighbour with an authored surface now reads as open
+air to a voxel face, as a decorative one already did. Where the shape does cover the face, the face
+is buried and costs a quad; the staircase's treads, which had the same problem at their curved
+edge, get it for free.
+
+`tools/shaped_probe.gd` passes **185 checks**, mutation-tested three ways (reversed edge normals,
+a wrong quarter turn in `front_of`, an arch missing its haunches -- 9, 6 and 2 failures). Its
+strongest checks are the ones that set the three descriptions against each other: the drawn
+surface encloses **exactly** the profile's volume (divergence theorem, which also proves the
+surface closed and facing out), the collision pieces tile **exactly** that volume, and the solid
+cell count is pinned by it to within the half-cell rule. In a real physics space, a ray lands on a
+slope's face at the slope's height rather than its cells', passes clean through an arch's opening
+and not its pillar, and misses the corner of a round brick's footprint.
 
 #### What frames cost, and the one seam left open
 

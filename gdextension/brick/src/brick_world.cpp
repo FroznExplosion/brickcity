@@ -1158,6 +1158,16 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                         if (other >= 0 && c.blocks[other].decorative) {
                             other = -1;
                         }
+                        // So does a neighbour with an authored surface. Its
+                        // cell is solid in the mask but its SHAPE need not fill
+                        // it -- a round brick leaves the corners of its cells
+                        // open -- and hiding this face behind it opens a
+                        // square hole round the curve. Drawn, the face is
+                        // buried wherever the shape does cover it and costs a
+                        // quad there.
+                        if (other >= 0 && !parts[c.blocks[other].archetype].mesh.empty()) {
+                            other = -1;
+                        }
                         mask[m] = other;
                         any = true;
                     }

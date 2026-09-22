@@ -106,7 +106,7 @@ func _check_names(palette: Dictionary) -> void:
 		# gap between one floor and the next, so it stands on the floor below
 		# and the floor above stands on it.
 		var expect_y := 1
-		if bits[0] in ["brick", "bracket"]:
+		if bits[0] in ["brick", "bracket", "slope", "curve", "round", "arch"]:
 			expect_y = 3
 		elif bits[0] == "column":
 			expect_y = 12
@@ -116,12 +116,14 @@ func _check_names(palette: Dictionary) -> void:
 	# An ARCHETYPE is a part plus an ORIENTATION, generated not written. Four
 	# grid-legal ones per part -- two yaw states x upright/inverted -- collapsing
 	# to two when the footprint is square, because yawing a square changes
-	# nothing.
+	# nothing, and growing to eight when the part has a FRONT (a slope), because
+	# then all four yaws are different parts.
 	for part in BrickPalette.parts():
 		var vars_: Array = BrickPalette.variants_of(part)
 		var square: bool = BrickPalette.is_square(part)
-		_ok("%s: %d archetypes" % [part, 2 if square else 4],
-				vars_.size() == (2 if square else 4), "%s" % [vars_])
+		var directional: bool = BrickPalette.is_directional(part)
+		var expect := 8 if directional else (2 if square else 4)
+		_ok("%s: %d archetypes" % [part, expect], vars_.size() == expect, "%s" % [vars_])
 
 		# Every variant resolves back to the part it came from.
 		for v in vars_:
@@ -137,6 +139,15 @@ func _check_names(palette: Dictionary) -> void:
 						BrickPalette.size_of(v) == BrickPalette.size_of(upright),
 						"%v vs %v" % [BrickPalette.size_of(v), BrickPalette.size_of(upright)])
 
+		if directional:
+			var y0: Vector3i = BrickPalette.size_of(part + "_y0")
+			var y1: Vector3i = BrickPalette.size_of(part + "_y1")
+			_ok("%s: a quarter turn swaps the stud axes" % part,
+					y1 == Vector3i(y0.z, y0.y, y0.x), "%v vs %v" % [y0, y1])
+			_ok("%s: a half turn keeps the footprint" % part,
+					BrickPalette.size_of(part + "_y2") == y0
+					and BrickPalette.size_of(part + "_y3") == y1)
+			continue
 		if square:
 			continue
 		var sx: Vector3i = BrickPalette.size_of(part + "_x")
@@ -209,11 +220,17 @@ func _check_mass(w: BrickWorld, palette: Dictionary) -> void:
 	_ok("a 2x4 brick is 2.4 g, which is the real hollow figure",
 			is_equal_approx(m24, 2.4), "%.3f" % m24)
 
+	# Mass tracks SOLID cells. For a box that is its whole volume; a shaped part
+	# weighs only the cells its shape mostly fills.
 	for name in BrickPalette.names():
 		var size: Vector3i = BrickPalette.size_of(name)
-		var cells := size.x * size.y * size.z
-		_ok("%s: mass tracks cell count" % name,
-				is_equal_approx(BrickPalette.mass_of(size), cells * BrickPalette.MASS_PER_CELL))
+		var solid: int = w.get_archetype_solid_cells(palette[name])
+		var part := BrickPalette.part_of(name)
+		_ok("%s: mass tracks solid cells" % name,
+				is_equal_approx(BrickPalette.mass_of_part(part), solid * BrickPalette.MASS_PER_CELL),
+				"%.2f vs %d cells" % [BrickPalette.mass_of_part(part), solid])
+		if not BrickPalette.is_shaped(part):
+			_ok("%s: a box is all solid" % name, solid == size.x * size.y * size.z)
 
 	# The relationships that have to hold for a collapse to look right.
 	var brick := BrickPalette.mass_of(BrickPalette.size_of("brick_2x2"))
@@ -235,16 +252,21 @@ func _check_mass(w: BrickWorld, palette: Dictionary) -> void:
 
 func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 	print("\nstuds")
-	# Tall enough to stack two of the tallest part: a column is 12 plates.
+	# Tall enough to stack two of the tallest part: a column is 12 plates. Two
+	# rows, because the palette no longer fits in one.
 	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 32, 16))
 	var x := 0
+	var z := 0
 	var studded := 0
 	var smooth := 0
 	for part in BrickPalette.parts():
 		var name: String = BrickPalette.variants_of(part)[0]
 		var size: Vector3i = BrickPalette.size_of(name)
-		var lower := w.place_block(chunk, Vector3i(x, 0, 0), palette[name], 0)
-		var upper := w.place_block(chunk, Vector3i(x, size.y, 0), palette[name], 0)
+		if x + size.x > 128:
+			x = 0
+			z = 8
+		var lower := w.place_block(chunk, Vector3i(x, 0, z), palette[name], 0)
+		var upper := w.place_block(chunk, Vector3i(x, size.y, z), palette[name], 0)
 		_ok("%s: two of them stack" % part, lower >= 0 and upper >= 0)
 		var joined: bool = w.get_block_neighbours(chunk, lower).has(upper)
 		if BrickPalette.has_studs(part):
@@ -264,7 +286,7 @@ func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 	_ok("every studded part can be built on",
 			studded == BrickPalette.parts().size() - expect_smooth,
 			"%d" % studded)
-	_ok("every tile refuses a clip", smooth == expect_smooth, "%d of %d" % [smooth, expect_smooth])
+	_ok("every studless part refuses a clip", smooth == expect_smooth, "%d of %d" % [smooth, expect_smooth])
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +297,7 @@ func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 func _check_tiles(w: BrickWorld, palette: Dictionary) -> void:
 	print("\ntiles")
 	for part in BrickPalette.parts():
-		if BrickPalette.has_studs(part):
+		if not part.begins_with("tile_"):
 			continue
 		var twin: String = "plate" + part.substr(4)
 		_ok("%s: there is a plate of the same size" % part, BrickPalette.parts().has(twin))

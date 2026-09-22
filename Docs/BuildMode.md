@@ -1012,6 +1012,15 @@ archetype, used by both the per-block and the merged collision paths (`tools/hul
 checks, against a real physics space). The staircase's treads are true arcs to look at and to stand
 on.
 
+### Slopes, curves, rounds and arches ✅
+
+The palette has its first non-box parts: slopes (1x2, 2x2, 2x4), curved slopes (1x2, 2x2), round
+bricks (1x1, 2x2) and arches (1x4, 1x6). Each is one extruded profile from which
+`scripts/shaped_parts.gd` derives the drawn surface, the convex hulls and the cell mask, so the three
+cannot disagree; studs and sockets fall out of where the shape reaches the top and the floor. A
+slope has a front, so it has four yaws (`_y0`..`_y3`) where a brick has two, and `R` is a quarter
+turn. `tools/shaped_probe.gd`, 185 checks. Status.md has the detail.
+
 ### Placement — aim at a stud, hold E to lock the plane, RMB deletes ✅
 
 Looking at a stud puts the part **on that stud**: the face picks the grid (a brick top keeps its
