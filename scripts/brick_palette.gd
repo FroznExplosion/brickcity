@@ -167,7 +167,7 @@ const _PARTS := {
 	# meet every second stud. A bracket names the exact plane to put a frame
 	# on, and the parity problem goes away.
 	#
-	# Studs face the part's +Z, which is its long side for a 1xN.
+	# Studs face the part's +X: down its long side, one per stud of length.
 	"bracket_1x1": Vector3i(1, 3, 1),
 	"bracket_1x2": Vector3i(1, 3, 2),
 	"bracket_1x4": Vector3i(1, 3, 4),
@@ -226,25 +226,33 @@ static func is_bracket(part: String) -> bool:
 	return part.begins_with("bracket_")
 
 
-## Side studs down the part's +Z face, one per cell of that face.
+## Side studs down the part's LONG side (+X in the canonical W x H x L), one per
+## stud of its length: a 1x4 bracket has four, in a row.
+##
+## One per column, not one per cell of the face. A brick is three plates tall
+## and a stud is one stud wide, so a column holds exactly one real stud; the
+## first version put one on every plate row -- three stacked half-overlapping
+## studs a column -- and on the short END face, which is not where a bracket
+## has them. Each is recorded on the bottom plate row; where it actually sits
+## (a stud's width up from the bottom, so a part on it stands flush with the
+## bracket's own base) is the workshop's to draw and snap to.
 ##
 ## Six ints each: the cell they sit on, then the outward normal. The extension
 ## rotates both with the part, so every orientation of a bracket gets its studs
 ## facing the right way without any of this being written twice.
 static func _side_studs_for(size: Vector3i) -> PackedInt32Array:
 	var out := PackedInt32Array()
-	var z := size.z - 1
-	for x in size.x:
-		for y in size.y:
-			# push_back one at a time: PackedInt32Array.append_array wants
-			# another PackedInt32Array, and handing it an untyped Array
-			# literal silently appends nothing.
-			out.push_back(x)
-			out.push_back(y)
-			out.push_back(z)
-			out.push_back(0)
-			out.push_back(0)
-			out.push_back(1)
+	var x := size.x - 1
+	for z in size.z:
+		# push_back one at a time: PackedInt32Array.append_array wants
+		# another PackedInt32Array, and handing it an untyped Array
+		# literal silently appends nothing.
+		out.push_back(x)
+		out.push_back(0)
+		out.push_back(z)
+		out.push_back(1)
+		out.push_back(0)
+		out.push_back(0)
 	return out
 
 

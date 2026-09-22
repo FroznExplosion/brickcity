@@ -34,7 +34,7 @@ const KEY_ROWS := [
 	["", "[ ]  wheel", "part", ", .", "colour"],
 	["", "R", "rotate X / Z", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
-	["", "TAB", "next build grid", "V", "snap to side studs"],
+	["", "V", "snap to side studs", "", ""],
 	["", "I", "layer: structure / interior", "", ""],
 	["", "K", "spiral staircase at the ghost", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
@@ -80,8 +80,10 @@ var palette := {}
 var recipe := BuildRecipe.new()
 
 ## The assembly being built. Frame 0 is the upright one with the baseplate in
-## it; TAB cycles and N adds a sideways one. Docs/BuildMode.md section 2 --
-## a sideways brick is a rotated FRAME, never a rotated block.
+## it; a sideways one is made by aiming at a bracket's side stud, and there is
+## no other way to get one -- a sideways part needs something with studs on its
+## side to be on. Docs/BuildMode.md section 2 -- a sideways brick is a rotated
+## FRAME, never a rotated block.
 var asm: Assembly
 var _frame := 0             ## index into asm.frames
 ## asm frame index -> recipe frame index, filled in on first use.
@@ -101,6 +103,8 @@ var _grid: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
+var _dot: ColorRect
+const DOT_PX := 8.0
 var _keys: GridContainer
 var _keys_panel: PanelContainer
 var _keys_on := true
@@ -136,7 +140,7 @@ var _snapped := {}
 ## is not on one.
 const NO_STUD := Vector3i(-1, -1, -1)
 var _stud := NO_STUD
-## Every cell that stud touches -- usually just `_stud`; see `_side_stud_cells`.
+## The cells the part may cover to be on that stud; `_fit_over` takes any of them.
 var _studs := []
 ## The LOCK, while E is held: the plane the ghost was on when E went down --
 ## {frame (asm index), y, snapped, stud} -- and the ghost follows the cursor
@@ -424,6 +428,23 @@ func _build_hud() -> void:
 	_style(_hud, Color(0.92, 0.94, 1.0))
 	layer.add_child(_hud)
 
+	# The aim dot. While the mouse is captured the aim ray goes through the
+	# middle of the screen, and this says exactly where that is. Its colour is
+	# worked out from what is under it (shaders/crosshair.gdshader), because
+	# the bricks behind it are whatever colour the player chose.
+	_dot = ColorRect.new()
+	var dot_mat := ShaderMaterial.new()
+	dot_mat.shader = load("res://shaders/crosshair.gdshader")
+	dot_mat.set_shader_parameter("size_px", DOT_PX)
+	_dot.material = dot_mat
+	_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dot.set_anchors_preset(Control.PRESET_CENTER)
+	_dot.offset_left = -DOT_PX * 0.5
+	_dot.offset_top = -DOT_PX * 0.5
+	_dot.offset_right = DOT_PX * 0.5
+	_dot.offset_bottom = DOT_PX * 0.5
+	layer.add_child(_dot)
+
 	# The controls, on screen rather than only in the launch log. A build mode
 	# whose keys you have to remember is a build mode nobody uses.
 	#
@@ -517,6 +538,7 @@ func _archetype() -> int:
 # ---------------------------------------------------------------------------
 
 func _process(_dt: float) -> void:
+	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	_aim()
 	_update_ghost()
 	_update_hud()
@@ -539,7 +561,7 @@ func _process(_dt: float) -> void:
 ##   AIM (default).  Look at a stud and the part goes ON that stud. The face
 ##       picks the grid -- a brick's top keeps the grid that brick is in, a
 ##       bracket's side stud derives a sideways one -- so the part turns to
-##       match what it is going onto without R or TAB. It then covers the stud
+##       match what it is going onto, by itself. It then covers the stud
 ##       the cursor is on: centred when that fits, shifted along until it does
 ##       when it does not, so aiming at the end stud of a wall never puts the
 ##       ghost into the wall beside it.
@@ -558,13 +580,16 @@ func _aim() -> void:
 	_aim_ray(ray[0], ray[1])
 
 
-## [from, dir] for the ray under the mouse.
+## [from, dir] for the ray being aimed: through the middle of the screen (the
+## dot) while the mouse is captured to look, under the cursor while it is free.
 func _mouse_ray() -> Array:
 	var vp := get_viewport()
 	var from: Vector3 = _camera.global_position
 	var dir: Vector3 = -_camera.global_transform.basis.z
 	if vp != null:
 		var m := vp.get_mouse_position()
+		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			m = vp.get_visible_rect().size * 0.5
 		from = _camera.project_ray_origin(m)
 		dir = _camera.project_ray_normal(m)
 	return [from, dir]
@@ -627,103 +652,146 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 
 ## The face of the block that was hit, as something to build on.
 ##
-## A side stud wins when one is pointing back at the camera -- that is a bracket
-## and the player is asking to build sideways off it. Otherwise the block's top
-## face, which is the ordinary case. V turns side studs off.
+## Decided by the face the ray went IN through, not by guessing from the view
+## direction:
+##
+##   top      -- the part goes on top, the ordinary case;
+##   bottom   -- the part goes UNDER, its top against the block's underside.
+##               Whether that clips is `would_connect`'s answer and the ghost's
+##               colour says it: a brick's sockets take a brick's studs;
+##   a side   -- a bracket's side stud on that face, if it has one there, and
+##               the part is built sideways off it. Any other side of anything
+##               is treated as its top: a plain brick offers nothing sideways.
+##
+## The first version picked a side stud whenever one faced the camera by more
+## than a threshold, which needed a special case for looking straight down at a
+## bracket; the entry face has no such case to get wrong.
 func _face_for(hit: Dictionary, dir: Vector3) -> Dictionary:
-	var best := {}
-	# The stud has to FACE the camera, not merely not face away. At -0.1 a stud
-	# edge-on to the view scored as a candidate, so looking straight down at a
-	# bracket snapped to its side instead of building on its top.
-	#
-	# Of those, the one nearest the ray is the one being looked at. Picking by
-	# facing alone took a bracket's FIRST stud whichever one the cursor was on.
-	var best_miss := INF
-	var from: Vector3 = hit.point - dir * hit.t
-	var studs: Array = world.get_side_studs(hit.frame, hit.block) if _snap_on else []
-	for stud in studs:
-		var n := Vector3(stud.dir as Vector3i).normalized()
-		if -n.dot(dir) <= 0.3:
-			continue
-		var to := _stud_world_centre(stud) - from
-		var miss := (to - dir * to.dot(dir)).length()
-		if miss < best_miss:
-			best_miss = miss
-			best = stud
-			best["frame"] = hit.frame
-			best["block"] = hit.block
-	if not best.is_empty():
-		return best
-
-	# No side stud facing us: the top of whatever was hit, in the grid that
-	# block lives in.
 	var box: Array = world.get_block_ticks(hit.frame, hit.block)
 	if box.is_empty():
 		return {}
 	var lo: Vector3i = box[0]
 	var hi: Vector3i = lo + (box[1] as Vector3i)
 	var up: Vector3i = _round_axis(world.get_chunk_transform(hit.frame).basis.y)
+	var from: Vector3 = hit.point - dir * hit.t
+	var entry := _entry_normal(lo, hi, from, dir)
+
+	if entry == -up:
+		return {
+			"lo": lo, "hi": hi, "dir": -up,
+			"frame": hit.frame, "block": hit.block, "bottom": true,
+		}
+	if entry != up and _snap_on:
+		# Of the studs on the face the ray came in through, the one nearest the
+		# ray is the one being looked at.
+		var best := {}
+		var best_miss := INF
+		for stud in _real_side_studs(hit.frame, hit.block):
+			if stud.dir != entry:
+				continue
+			var to: Vector3 = stud.centre - from
+			var miss := (to - dir * to.dot(dir)).length()
+			if miss < best_miss:
+				best_miss = miss
+				best = stud
+		if not best.is_empty():
+			return best
 	return {
 		"lo": lo, "hi": hi, "dir": up,
 		"frame": hit.frame, "block": hit.block, "top": true,
 	}
 
 
+## Which face of a box (world ticks) a ray enters through, as an outward world
+## axis. The slab test: the entry face is on the axis whose slab the ray enters
+## LAST.
+func _entry_normal(lo: Vector3i, hi: Vector3i, from: Vector3, dir: Vector3) -> Vector3i:
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	var a := Vector3(lo) * tick
+	var b := Vector3(hi) * tick
+	var best_t := -INF
+	var n := Vector3i.ZERO
+	for axis in 3:
+		if absf(dir[axis]) < 0.000001:
+			continue
+		var t := minf((a[axis] - from[axis]) / dir[axis], (b[axis] - from[axis]) / dir[axis])
+		if t > best_t:
+			best_t = t
+			n = Vector3i.ZERO
+			n[axis] = -1 if dir[axis] > 0.0 else 1
+	return n
+
+
+## A bracket's side studs as they really sit, one per stud of its length.
+##
+## The extension records each on the bracket's bottom plate row (see
+## `BrickPalette._side_studs_for`); a real stud is a stud wide, so its centre is
+## half a stud up from the bracket's base, and a part on it stands flush with
+## that base. Buried studs are already left out by the extension.
+##
+## Each is {lo, hi, dir, centre, base, frame, block}: `lo`/`hi` are the raw cell
+## (its face is the plane the part goes on), `centre` is the real stud's centre
+## on that face in metres, and `base` is the bracket's world-tick box corner the
+## sideways grid is lined up with.
+func _real_side_studs(frame_chunk: int, block: int) -> Array:
+	var out := []
+	var raw: Array = world.get_side_studs(frame_chunk, block)
+	if raw.is_empty():
+		return out
+	var box: Array = world.get_block_ticks(frame_chunk, block)
+	var blo: Vector3i = box[0]
+	var bhi: Vector3i = blo + (box[1] as Vector3i)
+	var up: Vector3i = _round_axis(world.get_chunk_transform(frame_chunk).basis.y)
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	var half := BrickWorld.ticks_per_stud() * 0.5
+	for s in raw:
+		var d := {
+			"lo": s.lo, "hi": s.hi, "dir": s.dir,
+			"frame": frame_chunk, "block": block, "base": blo,
+		}
+		var c := _stud_world_centre(d) / tick
+		for axis in 3:
+			if up[axis] > 0:
+				c[axis] = blo[axis] + half
+			elif up[axis] < 0:
+				c[axis] = bhi[axis] - half
+		d["centre"] = c * tick
+		out.append(d)
+	return out
+
+
 static func _round_axis(v: Vector3) -> Vector3i:
 	return Vector3i(int(round(v.x)), int(round(v.y)), int(round(v.z)))
 
 
-## Put the held part on the stud the cursor is on.
+## Put the held part on the stud the cursor is on -- or under the socket.
 ##
 ## Switches to the grid that matches the face, finds the stud column in it, and
 ## fits the part over that column.
 func _enter_face(face: Dictionary, hit: Dictionary) -> bool:
 	if not _enter_stud_frame(face):
 		return false
-	var d: Vector3i = face.dir
-	if face.get("top", false):
-		# A top face has a stud in every column, and the one meant is the one
-		# under the cursor. The hit point is just inside the block, so its
-		# column is one of the block's own; the height is the face's.
-		var s := _cell_in(chunk, _stud_world_centre(face) + Vector3(d) * 0.001)
-		var c := _cell_in(chunk, hit.point)
-		_studs = [Vector3i(c.x, s.y, c.z)]
-	else:
+	var d := Vector3(face.dir as Vector3i)
+	if face.has("centre"):
+		# A side stud: the sideways grid is lined up with the bracket, so the
+		# stud's centre is a cell centre and the part covers exactly it.
 		_snapped = face
-		_studs = _side_stud_cells(face)
+		_studs = [_cell_in(chunk, face.centre + d * 0.001)]
+	else:
+		# A top or bottom face has a stud (or socket) in every column, and the
+		# one meant is the one under the cursor. The hit point is just inside
+		# the block, so its column is one of the block's own. `s` is the cell
+		# just outside the face.
+		var s := _cell_in(chunk, _stud_world_centre(face) + d * 0.001)
+		var c := _cell_in(chunk, hit.point)
+		var y := s.y
+		if face.get("bottom", false):
+			# Under it: the part's TOP row is the one just below the face.
+			y = s.y - BrickPalette.size_of(_archetype_name()).y + 1
+		_studs = [Vector3i(c.x, y, c.z)]
 	_stud = _studs[0]
 	_cell = _fit_over(_studs)
 	return true
-
-
-## Every cell of the derived grid a side stud's face touches, its centre first.
-##
-## Usually one. But the derived grid is only lined up with the stud along the
-## stud's own axis -- across the face it steps in whole studs from the build
-## volume's corner, and a bracket's side stud sits at plate heights, so it can
-## straddle two cells. Which of the two a rounded centre lands in is float luck,
-## and only one of them may leave room for the part (the other reaching down
-## into the baseplate), so both are offered.
-func _side_stud_cells(face: Dictionary) -> Array:
-	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
-	var lo := Vector3(face.lo as Vector3i) * tick
-	var hi := Vector3(face.hi as Vector3i) * tick
-	var d := Vector3(face.dir as Vector3i)
-	var centre := _stud_world_centre(face)
-	var cells := [_cell_in(chunk, centre + d * 0.001)]
-	for a in [0.2, 0.8]:
-		for b in [0.2, 0.8]:
-			var p := centre
-			var k := 0
-			for axis in 3:
-				if d[axis] != 0.0:
-					continue
-				p[axis] = lerpf(lo[axis], hi[axis], a if k == 0 else b)
-				k += 1
-			var c := _cell_in(chunk, p + d * 0.001)
-			if not cells.has(c):
-				cells.append(c)
-	return cells
 
 
 ## The cell that puts the held part over one of `studs`: centred on the first
@@ -829,7 +897,7 @@ func _stud_world_centre(stud: Dictionary) -> Vector3:
 ## stud has no such parity.
 func _enter_stud_frame(stud: Dictionary) -> bool:
 	var d: Vector3i = stud.dir
-	if stud.get("top", false):
+	if not stud.has("centre"):
 		var idx := asm.frames.find(stud.frame)
 		if idx < 0:
 			return false
@@ -845,7 +913,7 @@ func _enter_stud_frame(stud: Dictionary) -> bool:
 		hi.y if d.y > 0 else lo.y,
 		hi.z if d.z > 0 else lo.z)
 	var dims := Vector3i(PLATE_STUDS, HEIGHT_PLATES, PLATE_STUDS)
-	var origin := _origin_on_plane(rot, dims, d, plane)
+	var origin := _origin_on_plane(rot, dims, d, plane, stud.base)
 	var f := _asm_frame_for(rot, origin)
 	if f < 0:
 		f = asm.frames.size()
@@ -857,17 +925,24 @@ func _enter_stud_frame(stud: Dictionary) -> bool:
 
 
 ## A frame origin that puts the grid's local y = 0 plane exactly on `plane`,
-## while keeping the other two axes over the build volume.
+## with its stud lines on `align`'s, and still over the build volume.
+##
+## Across the face the grid steps in whole studs. Left where `_origin_for` puts
+## it, those steps fall at multiples of 5 ticks from the world corner while a
+## bracket sits at plate heights (multiples of 2), so a part on its side stud
+## hung a tick or three off -- up out of line with the bracket, or down into the
+## baseplate. Shifting each in-plane axis by under a stud onto the bracket's own
+## corner lines every cell up with it.
 func _origin_on_plane(rotation: int, dims: Vector3i, dir: Vector3i,
-		plane: Vector3i) -> Vector3i:
+		plane: Vector3i, align: Vector3i) -> Vector3i:
 	var origin := _origin_for(rotation, dims)
-	# Local y maps to `dir`, so only that component decides the build plane.
-	if dir.x != 0:
-		origin.x = plane.x
-	elif dir.y != 0:
-		origin.y = plane.y
-	else:
-		origin.z = plane.z
+	var t := BrickWorld.ticks_per_stud()
+	for axis in 3:
+		if dir[axis] != 0:
+			# Local y maps to `dir`, so this component is the build plane.
+			origin[axis] = plane[axis]
+		else:
+			origin[axis] += posmod(align[axis] - origin[axis], t)
 	return origin
 
 
@@ -918,12 +993,16 @@ func _update_ghost() -> void:
 	# answer, and the layer does not change it. The other two say which layer
 	# this brick is going in, because the thing most worth seeing before the
 	# click is which of the two you are about to add to.
+	#
+	# A part on a side stud has no joint in its own grid -- the stud holds it
+	# through a weld, across grids -- so it counts as attached, not mid-air.
+	var held := _joints > 0 or not _snapped.is_empty()
 	if not _valid:
 		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
 	elif _interior:
-		_ghost_material.albedo_color = Color(0.72, 1.0, 0.35, 0.40) if _joints > 0 \
+		_ghost_material.albedo_color = Color(0.72, 1.0, 0.35, 0.40) if held \
 				else Color(0.72, 1.0, 0.35, 0.28)
-	elif _joints == 0:
+	elif not held:
 		_ghost_material.albedo_color = Color(1.0, 0.72, 0.15, 0.40)
 	else:
 		_ghost_material.albedo_color = Color(0.35, 0.9, 1.0, 0.40)
@@ -980,7 +1059,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_I: _toggle_layer()
 		KEY_K: _place_staircase()
 		KEY_Z: _undo()
-		KEY_TAB: _cycle_frame()
 		KEY_V: _snap_on = not _snap_on
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
 		KEY_F1: _keys_on = not _keys_on; _keys_panel.visible = _keys_on
@@ -1047,7 +1125,7 @@ func _recipe_id_at(frame_index: int, block: int) -> int:
 ## wants yet.
 func _place_staircase() -> void:
 	if _frame != 0:
-		print("[workshop] fixtures are authored in the upright grid (TAB back to it)")
+		print("[workshop] fixtures are authored in the upright grid (aim at an upright brick)")
 		return
 	var steps := _steps_above(_cell)
 	var at := Vector3i(_cell.x, _cell.y, _cell.z)
@@ -1185,22 +1263,6 @@ func _baseplate_blocks() -> int:
 	@warning_ignore("integer_division")
 	var n: int = (PLATE_STUDS / 4) * (PLATE_STUDS / 4)
 	return n
-
-
-## Switch which build grid new bricks go into. All six already exist and all
-## six cover the same volume, so this changes orientation and nothing else.
-##
-## Aiming at a stud picks the grid by itself, so this matters while E is held
-## (the locked plane turns, through where the ghost is) and over empty space.
-func _cycle_frame() -> void:
-	var at := _ghost.transform.origin   # the middle of the ghost
-	_frame = (_frame + 1) % asm.frames.size()
-	if not _lock.is_empty():
-		_lock.frame = _frame
-		_lock.y = _cell_in(chunk, at).y
-		_lock.snapped = {}
-		_lock.studs = []
-	_build_grid()
 
 
 ## Swap which layer the next brick goes in.
@@ -1371,6 +1433,7 @@ func _restud(frame: int, parent: MeshInstance3D) -> void:
 		parent.add_child(mmi)
 		_frame_studs[frame] = mmi
 	var buffer: PackedFloat32Array = world.get_chunk_studs(frame)
+	buffer.append_array(_side_stud_instances(frame))
 	@warning_ignore("integer_division")
 	var count := buffer.size() / 16
 	var mm := MultiMesh.new()
@@ -1382,6 +1445,41 @@ func _restud(frame: int, parent: MeshInstance3D) -> void:
 		mm.set_buffer(buffer)
 	mmi.multimesh = mm
 	_stud_count += count
+
+
+## Brackets' side studs, in the same sixteen-float layout as
+## `get_chunk_studs`, in this frame's own space.
+##
+## The extension draws top and bottom studs only. Without these a bracket looks
+## exactly like a plain brick, and a player has no way to see that it is the
+## part to build sideways off, or where.
+func _side_stud_instances(frame_chunk: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var fi := asm.frames.find(frame_chunk)
+	var inv := world.get_chunk_transform(frame_chunk).affine_inverse()
+	for at in _placed_at:
+		if int(at[0]) != fi or int(at[1]) < 0:
+			continue
+		var studs := _real_side_studs(frame_chunk, int(at[1]))
+		if studs.is_empty():
+			continue
+		var col := BrickWorld.get_filament_colour(world.get_block_colour(frame_chunk, int(at[1])))
+		for st in studs:
+			var b := inv.basis * _basis_up(Vector3(st.dir as Vector3i))
+			var o: Vector3 = inv * (st.centre as Vector3)
+			for v in [b.x.x, b.y.x, b.z.x, o.x, b.x.y, b.y.y, b.z.y, o.y,
+					b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, 1.0]:
+				out.push_back(v)
+	return out
+
+
+## A rotation taking +Y (the way a stud mesh points) to `n`.
+static func _basis_up(n: Vector3) -> Basis:
+	if n.is_equal_approx(Vector3.UP):
+		return Basis()
+	if n.is_equal_approx(Vector3.DOWN):
+		return Basis(Vector3.RIGHT, PI)
+	return Basis(Quaternion(Vector3.UP, n))
 
 
 # ---------------------------------------------------------------------------

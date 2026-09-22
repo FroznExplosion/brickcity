@@ -1024,18 +1024,41 @@ ghost goes back down to the floor.
 **Holding E** freezes the plane the ghost is on at that moment — that grid, that height — and the
 ghost follows the cursor across it. That is the overhang move (a 1x4 pulled off the end of a 1x6
 until one stud overlaps) and the way into mid-air at a chosen height. A part slid off a side stud
-stops being welded to it. `TAB` while E is held turns the locked plane through the ghost.
+stops being welded to it.
 
 This replaces a plane that was ALWAYS locked until something nearer than it came under the cursor.
 The overhang worked; so did a ghost that stayed at wall height while the cursor went out across the
 floor, which read as placement being broken.
+
+What the part goes on is decided by the face the ray went **in** through (a slab test on the hit
+block), not by guessing from the view direction:
+
+- **top** — on top, the ordinary case;
+- **underside** — **under** it, the part's top against the block's underside, in that block's
+  grid; whether it clips is `would_connect`'s answer and the ghost's colour says it;
+- **a side** — a bracket's side stud on that face if it has one, and the part is built sideways off
+  it; any other side of anything builds on its top. There is no other way to get a sideways part:
+  `TAB` (cycle the six standing grids) is gone, because a sideways part needs something with studs
+  on its side to be on.
+
+Brackets were broken three ways, and are not now. Their side studs were on the short END face
+rather than down the long side; there was one per plate row (three stacked, half-overlapping studs
+a column) rather than one per stud of length; and they were never drawn, so a bracket looked like a
+plain brick. And the sideways grid off a stud stepped in whole studs from the world corner while
+brackets sit at plate heights, so a part on one hung a tick or three off it. Now a 1x4 bracket has
+four studs down its long side, the workshop draws them, and the sideways grid is lined up with the
+bracket so a part on it stands flush with the bracket's base.
+
+While the mouse is captured the aim ray goes through the middle of the screen, marked by a **dot**
+whose colour is the inverse of what is under it (black or white where inverting would not show —
+`shaders/crosshair.gdshader`).
 
 **RMB** deletes what the cursor is on, from anywhere in the build — a brick, or a whole fixture.
 Unlike undo it reaches into the middle, so `BuildRecipe.remove_at` renumbers the blocks after it
 and their welds with them; that is authoring-time only, while nothing is keyed on the ids yet. The
 baseplate does not delete.
 
-`T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays — **54
+`T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays — **65
 checks**. It found three real bugs on the way: an edge-on side stud used to qualify, so looking down
 at a bracket built sideways off it instead of on top; a bracket's side studs were chosen by facing
 alone, so the FIRST one won whichever the cursor was on; and a side stud straddling two cells of its

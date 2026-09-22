@@ -4,8 +4,9 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script tools/place_probe.gd
 ##
-## Looking at a stud puts the part ON that stud; holding E locks the plane and
-## the ghost follows the cursor across it; RMB deletes what the cursor is on.
+## Looking at a stud puts the part ON that stud, and at the underside of one
+## puts it UNDER; holding E locks the plane and the ghost follows the cursor
+## across it; RMB deletes what the cursor is on.
 ## Everything here was first checked by driving the scene by hand, and one of
 ## those hand checks was wrong in a way that looked like a pass -- a ghost that
 ## "slid through a wall" had in fact moved on top of it, which is correct. So
@@ -43,6 +44,7 @@ func _tick() -> void:
 	_check_side_stud_snap()
 	_check_sliding_off_a_side_stud_drops_the_weld()
 	_check_looking_down_at_a_bracket_builds_on_top()
+	_check_under()
 	_check_rotate_last_and_undo()
 	_check_delete()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -201,30 +203,50 @@ func _check_fits_beside_an_obstruction() -> void:
 	_ws._hold_lock(false)
 
 
-func _check_side_stud_snap() -> void:
-	print("\nlooking at a bracket's side stud builds sideways off it")
-	_reset()
-	_put("brick_2x4", Vector3i(10, 1, 10))       # z 10..11
-	_ok("a bracket placed, studs facing +Z", _put("bracket_1x2", Vector3i(14, 1, 10), true) == 1)
+## A bracket's i-th side stud, as the workshop sees it.
+func _bracket_stud(cell: Vector3i, i := 0) -> Dictionary:
 	var f0: int = _ws.asm.frames[0]
-	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 11))
-	var studs: Array = _ws.world.get_side_studs(f0, bid)
-	_ok("it exposes side studs", studs.size() > 0, "%d" % studs.size())
-	if studs.is_empty():
+	var studs: Array = _ws._real_side_studs(f0, _ws.world.block_at(f0, cell))
+	return studs[i] if i < studs.size() else {}
+
+
+## A ray straight at a side stud, from in front of it, optionally offset.
+func _at_stud(st: Dictionary, offset := Vector3.ZERO) -> void:
+	var n := Vector3(st.dir as Vector3i)
+	_ws._aim_ray(st.centre + n * 3.0 + offset, -n)
+	_ws._update_ghost()
+
+
+func _check_side_stud_snap() -> void:
+	print("\nlooking at a bracket's side stud builds sideways off it, lined up with it")
+	_reset()
+	# A 1x4 bracket running along Z: its four side studs face +X.
+	_ok("a 1x4 bracket placed", _put("bracket_1x4", Vector3i(14, 1, 10), true) == 1)
+	var f0: int = _ws.asm.frames[0]
+	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 10))
+	var studs: Array = _ws._real_side_studs(f0, bid)
+	_ok("four side studs, one per stud of its length", studs.size() == 4, "%d" % studs.size())
+	if studs.size() < 4:
 		return
+	var dirs_ok := true
+	for st in studs:
+		if st.dir != Vector3i(1, 0, 0):
+			dirs_ok = false
+	_ok("all down its long side (+X)", dirs_ok)
+	@warning_ignore("integer_division")
+	var drawn: int = _ws._side_stud_instances(f0).size() / 16
+	_ok("and they are drawn", drawn == 4, "%d" % drawn)
 
 	_hold("plate_2x2")
-	var target: Vector3 = _ws._stud_world_centre(studs[1])
 	var welds: int = _ws.asm.live_weld_count()
-	# Horizontally at the face, from in front of it.
-	_ws._aim_ray(target + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
-	_ws._update_ghost()
+	_at_stud(studs[1])
 	_ok("it snapped to the stud", not _ws._snapped.is_empty())
 	_ok("in a grid that is not the upright one", _ws._frame != 0)
 	var up: Vector3 = _ws.world.get_chunk_transform(_ws.chunk).basis.y
-	_ok("turned to match: its up is the stud's direction (+Z)",
-			up.is_equal_approx(Vector3(0, 0, 1)), "%v" % up)
-	_ok("and the placement is legal", _ws._valid)
+	_ok("turned to match: its up is the stud's direction (+X)",
+			up.is_equal_approx(Vector3(1, 0, 0)), "%v" % up)
+	_ok("legal, and shown as attached (not amber)", _ws._valid
+			and _ws._ghost_material.albedo_color.b > 0.5)
 
 	var n: int = _ws.recipe.size()
 	_ws._place()
@@ -232,40 +254,44 @@ func _check_side_stud_snap() -> void:
 	_ok("welded to the bracket", _ws.asm.live_weld_count() == welds + 1,
 			"%d -> %d" % [welds, _ws.asm.live_weld_count()])
 
-	# Flush, not floating: the plate's face sits exactly on the stud's face plane.
 	var at: Array = _ws._placed_at[_ws._placed_at.size() - 1]
 	var box: Array = _ws.world.get_block_ticks(_ws.asm.frames[at[0]], at[1])
-	var face: int = (studs[1].hi as Vector3i).z
-	_ok("the plate sits flush on the stud face, in exact ticks",
-			(box[0] as Vector3i).z == face, "plate z %d vs face %d" % [(box[0] as Vector3i).z, face])
+	var blo: Vector3i = box[0]
+	var bhi: Vector3i = blo + (box[1] as Vector3i)
+	var brk: Array = _ws.world.get_block_ticks(f0, bid)
+	var klo: Vector3i = brk[0]
+	_ok("flush on the stud face, in exact ticks", blo.x == (studs[1].hi as Vector3i).x,
+			"plate x %d vs face %d" % [blo.x, (studs[1].hi as Vector3i).x])
+	_ok("standing flush with the bracket's base, not a tick off", blo.y == klo.y,
+			"plate y %d vs bracket y %d" % [blo.y, klo.y])
+	var c: Vector3 = studs[1].centre / (BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
+	_ok("and over the stud it was aimed at", c.z > blo.z and c.z < bhi.z and c.y > blo.y and c.y < bhi.y,
+			"stud %v, plate %v..%v" % [c, blo, bhi])
 
 
 func _check_sliding_off_a_side_stud_drops_the_weld() -> void:
 	print("\nE on a side stud: slide along its plane, and the weld only while still on it")
 	_reset()
 	_put("bracket_1x2", Vector3i(14, 1, 10), true)
-	var f0: int = _ws.asm.frames[0]
-	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 11))
-	var studs: Array = _ws.world.get_side_studs(f0, bid)
-	if studs.is_empty():
+	var st := _bracket_stud(Vector3i(14, 1, 10), 0)
+	if st.is_empty():
 		_ok("the bracket has side studs", false)
 		return
 	_hold("plate_1x1")
-	var target: Vector3 = _ws._stud_world_centre(studs[0])
-	_ws._aim_ray(target + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
+	_at_stud(st)
 	_ok("on the stud", not _ws._snapped.is_empty())
 	var frame: int = _ws._frame
 	_ws._hold_lock(true)
-	_ws._aim_ray(target + Vector3(2.0, 0, 3.0), Vector3(0, 0, -1))
+	_at_stud(st, Vector3(0, 0, -2.0))
 	_ok("slid off sideways, same sideways grid", _ws._frame == frame)
 	_ok("no longer held by the stud", _ws._snapped.is_empty())
-	_ws._aim_ray(target + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
+	_at_stud(st)
 	_ok("slid back on: held again", not _ws._snapped.is_empty())
 	_ws._hold_lock(false)
 
 
 func _check_looking_down_at_a_bracket_builds_on_top() -> void:
-	print("\nlooking straight down at a bracket builds on its top, not its side")
+	print("\nlooking at a bracket's top, even from its stud side, builds on top")
 	_reset()
 	_put("bracket_1x2", Vector3i(20, 1, 20), true)
 	_hold("brick_1x2", true)
@@ -273,6 +299,38 @@ func _check_looking_down_at_a_bracket_builds_on_top() -> void:
 	_ok("no side-stud snap from above", _ws._snapped.is_empty())
 	_ok("upright grid", _ws._frame == 0)
 	_ok("on top of it", _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	# Steeply down from the stud side: the ray goes in through the top.
+	var top := Vector3(20.5 * STUD, 4 * PLATE, 20.5 * STUD)
+	var dir := Vector3(-0.3, -1.0, 0.0).normalized()
+	_ws._aim_ray(top - dir * 3.0, dir)
+	_ok("from the stud side at a steep angle, still on top", _ws._snapped.is_empty()
+			and _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+
+
+func _check_under() -> void:
+	print("\nlooking at the underside of a brick places the part under it")
+	_reset()
+	_put("brick_1x4", Vector3i(20, 4, 20))       # y 4..6, x 20..23, in mid-air
+	_hold("brick_1x2")                           # 2 long, half = 0
+	var up := Vector3(0, 1, 0)
+	_ws._aim_ray(Vector3(21.5 * STUD, 0.3, 20.5 * STUD), up)
+	_ws._update_ghost()
+	_ok("under it: its top against the brick's underside (y = 4 - 3)",
+			_ws._cell == Vector3i(21, 1, 20), "%v" % _ws._cell)
+	_ok("and it clips on", _ws._valid and _ws._joints > 0,
+			"valid=%s joints=%d" % [_ws._valid, _ws._joints])
+	var n: int = _ws.recipe.size()
+	_ws._place()
+	_ok("it places", _ws.recipe.size() == n + 1)
+	_hold("plate_1x1")
+	_ws._aim_ray(Vector3(23.5 * STUD, 0.3, 20.5 * STUD), up)
+	_ws._update_ghost()
+	_ok("a plate under goes one plate down (y = 3)", _ws._cell == Vector3i(23, 3, 20),
+			"%v" % _ws._cell)
+	_ok("and clips too", _ws._valid and _ws._joints > 0)
+	# Side-on to a plain brick is not under: it builds on top, as before.
+	_ws._aim_ray(Vector3(21.5 * STUD, 5 * PLATE, 17.0 * STUD), Vector3(0, 0, 1))
+	_ok("the plain side of a brick builds on its top", _ws._cell.y == 7, "y = %d" % _ws._cell.y)
 
 
 func _check_rotate_last_and_undo() -> void:
@@ -300,11 +358,8 @@ func _check_delete() -> void:
 	_put("brick_2x2", Vector3i(4, 1, 4))         # recipe 0
 	_put("bracket_1x2", Vector3i(14, 1, 10), true)  # recipe 1
 	var f0: int = _ws.asm.frames[0]
-	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 11))
-	var studs: Array = _ws.world.get_side_studs(f0, bid)
 	_hold("plate_2x2")
-	_ws._aim_ray(_ws._stud_world_centre(studs[1]) + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
-	_ws._update_ghost()
+	_at_stud(_bracket_stud(Vector3i(14, 1, 10), 1))
 	_ws._place()                                 # recipe 2, welded 1 -> 2
 	_ok("three bricks and a weld", _ws.recipe.size() == 3 and _ws.recipe.weld_count() == 1)
 
