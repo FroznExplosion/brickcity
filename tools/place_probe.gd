@@ -260,10 +260,18 @@ func _check_side_stud_snap() -> void:
 	var bhi: Vector3i = blo + (box[1] as Vector3i)
 	var brk: Array = _ws.world.get_block_ticks(f0, bid)
 	var klo: Vector3i = brk[0]
+	var khi: Vector3i = klo + (brk[1] as Vector3i)
 	_ok("flush on the stud face, in exact ticks", blo.x == (studs[1].hi as Vector3i).x,
 			"plate x %d vs face %d" % [blo.x, (studs[1].hi as Vector3i).x])
-	_ok("standing flush with the bracket's base, not a tick off", blo.y == klo.y,
-			"plate y %d vs bracket y %d" % [blo.y, klo.y])
+	# In line with the bracket's TOP, as the real part is: in line with its base,
+	# a sideways part hung down into the studs the bracket stands on. (The 2x2
+	# covers the stud's column and the one beyond it, so it is the grid that
+	# lines up, a whole number of studs from the top.)
+	var t := BrickWorld.ticks_per_stud()
+	_ok("in line with the bracket's top, not a tick off", posmod(bhi.y - khi.y, t) == 0,
+			"plate top y %d vs bracket top y %d" % [bhi.y, khi.y])
+	_ok("and clear of the studs below it", blo.y > klo.y,
+			"plate y %d vs bracket base %d" % [blo.y, klo.y])
 	var c: Vector3 = studs[1].centre / (BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
 	_ok("and over the stud it was aimed at", c.z > blo.z and c.z < bhi.z and c.y > blo.y and c.y < bhi.y,
 			"stud %v, plate %v..%v" % [c, blo, bhi])

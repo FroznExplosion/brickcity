@@ -602,6 +602,15 @@ did. The HUD says which way a slope's low front faces, from `BrickPalette.front_
 the same quarter turn `bake_variant` does -- and the probe checks it against where the bake actually
 put the studs, in every orientation, upright and flipped.
 
+**Low poly.** The first cut used 20-sided rounds and six-facet curves, shaded smooth. They are now
+facets at 45 degrees, shaded flat: a round brick is an octagon (`ROUND_SEGMENTS = 8`) whose flats
+lie on its footprint's edges, so it is as wide as the brick it replaces and a 2x2's studs fit
+inside it exactly (they reach 0.35 m along the diagonal, which is where the diagonal flat is); a
+curved slope falls in two facets and an arch's opening is half an octagon (`ARC_SEGMENTS = 2`).
+Octagons match the octagonal studs and the staircase newel, and unlike a hexagon an octagon turned
+a quarter is itself -- a hexagonal round brick would have a front and four orientations. The cell
+masks came out unchanged, and all 185 checks still hold, including the exact-volume ones.
+
 One C++ change came with it. The face bake hid a voxel face whenever its neighbour's cell was
 occupied, which is right for a brick and wrong for a part that does not fill its cells: a round
 brick on the baseplate opened a dark square round itself where the plate's top face had been culled

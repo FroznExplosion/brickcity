@@ -35,9 +35,18 @@ const P := BrickPalette.PLATE_M
 ## inside" from "mostly outside" with room to spare, and the whole palette of
 ## these bakes in a few milliseconds, once.
 const SAMPLES := 6
-## Segments in a full circle, and in the curve of a curved slope or an arch.
-const ROUND_SEGMENTS := 20
-const ARC_SEGMENTS := 6
+## Low poly, on purpose. Every curve is facets at 45 degrees -- a round brick
+## is an octagon, a curved slope two facets, an arch half an octagon -- the
+## same language as the octagonal studs and the staircase's newel. Octagons
+## rather than hexagons because the grid is square: an octagon turned a
+## quarter is itself, so a round brick keeps one orientation, where a hexagon
+## would have a front and need four.
+const ROUND_SEGMENTS := 8
+## Facets in a quarter turn of curve (a curved slope's fall, half an arch).
+const ARC_SEGMENTS := 2
+## Facets are shaded flat. The smooth-normal path stays for a smooth variant
+## one day; set this false and every curve edge shades round again.
+const FACETED := true
 
 
 ## Everything the palette needs to bake one shaped part in its canonical size:
@@ -120,12 +129,13 @@ static func _slope_prism(size: Vector3i, axis: String, curved: bool) -> Dictiona
 	var poly := PackedVector2Array([Vector2(0, 0), Vector2(depth, 0), Vector2(depth, h)])
 	var smooth := [false, false]                 # floor, back
 	if curved:
-		# Centred on the back corner of the floor, bulging out.
+		# Centred on the back corner of the floor, bulging out: ARC_SEGMENTS
+		# facets from the top of the back round to the front of the floor.
 		for i in range(1, ARC_SEGMENTS):
 			var t := float(i) / ARC_SEGMENTS * PI * 0.5
 			poly.append(Vector2(depth - depth * sin(t), h * cos(t)))
 		# Every remaining edge is curve -- including the one closing back to
-		# (0, 0), which is the curve's last segment.
+		# (0, 0), which is the curve's last facet.
 		while smooth.size() < poly.size():
 			smooth.append(true)
 	else:
@@ -136,15 +146,19 @@ static func _slope_prism(size: Vector3i, axis: String, curved: bool) -> Dictiona
 	return _prism(poly, plane, 0.0, width, smooth)
 
 
-## A round brick: a cylinder in the footprint, a little inside it, as the real
-## part sits inside its stud pitch.
+## A round brick: an octagonal prism with its flats on the footprint's edges,
+## so it is exactly as wide as the brick it replaces and only the corners are
+## cut. The studs on top fit inside it: a 2x2's studs reach 0.35 m out along
+## the diagonal and the diagonal flat is 0.35 m from the centre.
 static func _round_prism(size: Vector3i) -> Dictionary:
-	var r := minf(size.x, size.z) * S * 0.5 * 0.96
+	var apothem := minf(size.x, size.z) * S * 0.5
+	var r := apothem / cos(PI / ROUND_SEGMENTS)
 	var c := Vector2(size.x * S * 0.5, size.z * S * 0.5)
 	var poly := PackedVector2Array()
 	var smooth := []
 	for i in ROUND_SEGMENTS:
-		var a := TAU * float(i) / ROUND_SEGMENTS
+		# Offset half a segment so the first flat, not a corner, faces +X.
+		var a := TAU * (float(i) + 0.5) / ROUND_SEGMENTS
 		poly.append(c + Vector2(cos(a), sin(a)) * r)
 		smooth.append(true)
 	return _prism(poly, "xz", 0.0, size.y * P, smooth)
@@ -164,21 +178,28 @@ static func _arch(size: Vector3i) -> Dictionary:
 	var rise := h - P
 	var a0 := S
 	var a1 := l - S
+	# The opening's underside: half an ellipse spanning a0..a1 and rising to
+	# the beam, in ARC_SEGMENTS facets a side -- half an octagon.
+	var mid := (a0 + a1) * 0.5
+	var half := (a1 - a0) * 0.5
+	var curve := PackedVector2Array()
 	var n := ARC_SEGMENTS * 2
-	var curve := func(z: float) -> float:
-		return rise * sin(PI * (z - a0) / (a1 - a0))
+	for i in n + 1:
+		var t := PI * float(i) / n
+		curve.append(Vector2(mid - half * cos(t), rise * sin(t)))
+	curve[0] = Vector2(a0, 0.0)
+	curve[n] = Vector2(a1, 0.0)
 
 	# The outline, counter-clockwise: floor under the near pillar, up and over
 	# the opening, floor under the far pillar, up the far end, back along the
 	# top, down the near end.
-	var outline := PackedVector2Array([Vector2(0, 0), Vector2(a0, 0)])
+	var outline := PackedVector2Array([Vector2(0, 0)])
 	var smooth := [false]
-	for i in range(1, n):
-		var z := lerpf(a0, a1, float(i) / n)
-		outline.append(Vector2(z, curve.call(z)))
-		smooth.append(true)
-	outline.append_array([Vector2(a1, 0), Vector2(l, 0), Vector2(l, h), Vector2(0, h)])
-	smooth.append_array([true, false, false, false, false])
+	for i in n + 1:
+		outline.append(curve[i])
+		smooth.append(i < n)
+	outline.append_array([Vector2(l, 0), Vector2(l, h), Vector2(0, h)])
+	smooth.append_array([false, false, false])
 	var draw := _prism(outline, "zy", 0.0, w, smooth)
 
 	var rect := func(z0: float, z1: float, y0: float, y1: float) -> Dictionary:
@@ -186,22 +207,19 @@ static func _arch(size: Vector3i) -> Dictionary:
 				Vector2(z1, y1), Vector2(z0, y1)]), "zy", 0.0, w)
 	var pieces := [rect.call(0.0, a0, 0.0, h), rect.call(a1, l, 0.0, h),
 			rect.call(a0, a1, rise, h)]
-	# Haunch slices, between the curve and the underside of the beam.
+	# Haunches: one per facet, between it and the underside of the beam.
 	for i in n:
-		var z0 := lerpf(a0, a1, float(i) / n)
-		var z1 := lerpf(a0, a1, float(i + 1) / n)
-		var y0: float = curve.call(z0)
-		var y1: float = curve.call(z1)
-		if rise - minf(y0, y1) < 1e-4:
+		var p0 := curve[i]
+		var p1 := curve[i + 1]
+		if rise - minf(p0.y, p1.y) < 1e-4:
 			continue  # the crown: nothing between curve and beam
-		var poly := PackedVector2Array([Vector2(z0, y0), Vector2(z1, y1)])
-		# A slice touching the crown is a triangle; a quad there would repeat a
-		# corner, and a hull does not want a zero-length edge.
-		if rise - y1 > 1e-4:
-			poly.append(Vector2(z1, rise))
-		poly.append(Vector2(z0, rise))
-		if rise - y0 <= 1e-4:
-			poly.remove_at(poly.size() - 1)
+		var poly := PackedVector2Array([p0, p1])
+		# A facet touching the crown makes a triangle; a quad there would repeat
+		# a corner, and a hull does not want a zero-length edge.
+		if rise - p1.y > 1e-4:
+			poly.append(Vector2(p1.x, rise))
+		if rise - p0.y > 1e-4:
+			poly.append(Vector2(p0.x, rise))
 		pieces.append(_prism(poly, "zy", 0.0, w))
 	return {"draw": [draw], "pieces": pieces}
 
@@ -346,7 +364,7 @@ static func _mesh(prisms: Array) -> Array:
 			var fn: Vector2 = edge_n[i]
 			var ni := fn
 			var nj := fn
-			if smooth[i]:
+			if smooth[i] and not FACETED:
 				var prev := (i - 1 + n) % n
 				if smooth[prev]:
 					ni = ((edge_n[prev] as Vector2) + fn).normalized()

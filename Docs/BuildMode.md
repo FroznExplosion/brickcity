@@ -1021,6 +1021,12 @@ cannot disagree; studs and sockets fall out of where the shape reaches the top a
 slope has a front, so it has four yaws (`_y0`..`_y3`) where a brick has two, and `R` is a quarter
 turn. `tools/shaped_probe.gd`, 185 checks. Status.md has the detail.
 
+They are **low poly**, on purpose: every curve is facets at 45 degrees. A round brick is an octagon
+with its flats on the footprint's edges, a curved slope falls in two facets, an arch's opening is
+half an octagon -- the same language as the octagonal studs. Octagons rather than hexagons because
+the grid is square: an octagon turned a quarter is itself, where a hexagon would give a round brick
+a front and four orientations. Facets shade flat; `ShapedParts.FACETED` turns smooth shading back on.
+
 ### Placement — aim at a stud, hold E to lock the plane, RMB deletes ✅
 
 Looking at a stud puts the part **on that stud**: the face picks the grid (a brick top keeps its
@@ -1056,7 +1062,10 @@ a column) rather than one per stud of length; and they were never drawn, so a br
 plain brick. And the sideways grid off a stud stepped in whole studs from the world corner while
 brackets sit at plate heights, so a part on one hung a tick or three off it. Now a 1x4 bracket has
 four studs down its long side, the workshop draws them, and the sideways grid is lined up with the
-bracket so a part on it stands flush with the bracket's base.
+bracket so a part on it is in line with the bracket's **top**, as on the real part. It was in line
+with the base at first, which put a sideways part's lower edge level with the bracket's own floor
+-- down among the studs of whatever the bracket stood on. Side studs are recorded on the top plate
+row, so an inverted bracket carries them to the bottom with everything else.
 
 While the mouse is captured the aim ray goes through the middle of the screen, marked by a **dot**
 whose colour is the inverse of what is under it (black or white where inverting would not show —

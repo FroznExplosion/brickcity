@@ -741,10 +741,11 @@ func _entry_normal(lo: Vector3i, hi: Vector3i, from: Vector3, dir: Vector3) -> V
 
 ## A bracket's side studs as they really sit, one per stud of its length.
 ##
-## The extension records each on the bracket's bottom plate row (see
+## The extension records each on the bracket's top plate row (see
 ## `BrickPalette._side_studs_for`); a real stud is a stud wide, so its centre is
-## half a stud up from the bracket's base, and a part on it stands flush with
-## that base. Buried studs are already left out by the extension.
+## half a stud in from the end of the bracket that row is at, and a part on it
+## stands flush with that end -- the top, unless the bracket is inverted.
+## Buried studs are already left out by the extension.
 ##
 ## Each is {lo, hi, dir, centre, base, frame, block}: `lo`/`hi` are the raw cell
 ## (its face is the plane the part goes on), `centre` is the real stud's centre
@@ -768,10 +769,20 @@ func _real_side_studs(frame_chunk: int, block: int) -> Array:
 		}
 		var c := _stud_world_centre(d) / tick
 		for axis in 3:
-			if up[axis] > 0:
-				c[axis] = blo[axis] + half
-			elif up[axis] < 0:
+			if up[axis] == 0:
+				continue
+			# Whichever end of the bracket the stud's row is nearer. The grid
+			# built off it lines up with that end: `base` is what
+			# `_origin_on_plane` aligns to, and a stud is a whole number of
+			# ticks, so the far end lines up exactly as well as the near one.
+			var row: float = ((s.lo as Vector3i)[axis] + (s.hi as Vector3i)[axis]) * 0.5
+			if row > (blo[axis] + bhi[axis]) * 0.5:
 				c[axis] = bhi[axis] - half
+				var b: Vector3i = d.base
+				b[axis] = bhi[axis]
+				d["base"] = b
+			else:
+				c[axis] = blo[axis] + half
 		d["centre"] = c * tick
 		out.append(d)
 	return out

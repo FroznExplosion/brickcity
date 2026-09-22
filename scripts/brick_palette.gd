@@ -305,9 +305,12 @@ static func is_bracket(part: String) -> bool:
 ## and a stud is one stud wide, so a column holds exactly one real stud; the
 ## first version put one on every plate row -- three stacked half-overlapping
 ## studs a column -- and on the short END face, which is not where a bracket
-## has them. Each is recorded on the bottom plate row; where it actually sits
-## (a stud's width up from the bottom, so a part on it stands flush with the
-## bracket's own base) is the workshop's to draw and snap to.
+## has them. Each is recorded on the TOP plate row, and really sits half a stud
+## below the top, so a part built on it is flush with the bracket's top -- the
+## real part's geometry, and the reason for it: flush with the BASE instead, a
+## sideways part hangs down into the studs of whatever the bracket stands on.
+## Recording the row rather than a height lets an inverted bracket carry it to
+## the bottom row with everything else. The workshop draws and snaps to it.
 ##
 ## Six ints each: the cell they sit on, then the outward normal. The extension
 ## rotates both with the part, so every orientation of a bracket gets its studs
@@ -320,7 +323,7 @@ static func _side_studs_for(size: Vector3i) -> PackedInt32Array:
 		# another PackedInt32Array, and handing it an untyped Array
 		# literal silently appends nothing.
 		out.push_back(x)
-		out.push_back(0)
+		out.push_back(size.y - 1)
 		out.push_back(z)
 		out.push_back(1)
 		out.push_back(0)
