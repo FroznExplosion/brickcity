@@ -19,8 +19,8 @@ extends SceneTree
 ##      stud, 2 studs wide and 1 deep. This is about SIZE only. The legal brief
 ##      rules out the minifigure's shape; nothing here models one.
 ##
-## Parts 1 and 2 fail the run when they are wrong. Part 3 is a design choice
-## that has not been made yet, so it reports and does not fail.
+## All three fail the run when they are wrong. Part 3 was a report until the
+## figure and storey were settled: four bricks, six-course storeys.
 
 var _pass := 0
 var _fail := 0
@@ -102,27 +102,39 @@ func _real_bricks() -> void:
 
 
 func _figure() -> void:
-	print("\n3. a person-sized figure, at the same scale (size only, never the shape)")
+	print("
+3. a four-brick figure, and buildings it fits in (size only, never the shape)")
 	var cam: GDScript = load("res://scripts/debug_camera.gd")
 	var k := cam.get_script_constant_map()
 	var brick := BrickWorld.get_plate_metres() * 3.0
 	var body: float = k.get("BODY_HEIGHT", 0.0)
 	var radius: float = k.get("BODY_RADIUS", 0.0)
-	# 4 bricks without the head stud (38.4 mm), 15.4 x 7.8 mm through the hips.
-	var fig_h := 38.4 * MM * SCALE
-	var fig_w := 15.4 * MM * SCALE
-	print("         walking figure: %.2f m tall (%.2f bricks), %.2f m wide" % [
-			body, body / brick, radius * 2.0])
-	print("         minifig-sized:  %.2f m tall (4.00 bricks), %.2f m wide" % [fig_h, fig_w])
-	var ok_spec := body / brick >= 3.0 - 1e-3 and body / brick <= 5.0 + 1e-3
-	if ok_spec:
-		_ok("figure is within the spec's 3-5 bricks", true)
-	else:
-		_note("figure is %.2f bricks; the spec (section 3) asks for 3-5" % (body / brick))
+	var head: float = k.get("HEAD_HEIGHT", 0.0)
+	print("         figure: %.2f m (%.2f bricks), %.2f m wide, head %.2f m" % [
+			body, body / brick, radius * 2.0, head])
+	_ok("the figure is four bricks: 38.4 mm in print", _near(body, brick * 4.0, 1e-4),
+			"%.3f m" % body)
+	# Slimmer than a figure-sized one (15.4 mm at the hips), never wider.
+	_ok("and no wider than 15.4 mm in print", radius * 2.0 <= 15.4 * MM * SCALE + 1e-4,
+			"%.3f m" % (radius * 2.0))
+	_ok("a big head: over a quarter of its height", head > body * 0.25)
+
 	var tower: GDScript = load("res://scripts/tower_recipe.gd")
 	var tk := tower.get_script_constant_map()
 	var storey: int = tk.get("COURSES_PER_FLOOR", 0)
-	print("         storey: %d courses = %.2f m floor to floor" % [storey, storey * brick])
-	if storey < 5:
-		_note("a %d-course storey is under what a 4-brick figure needs (4 bricks clear + floor)"
-				% storey)
+	var clear_door := (storey - 1) * brick     # the top course is the lintel
+	print("         storey: %d courses; %.2f m under the slab, %.2f m through a door" % [
+			storey, storey * brick, clear_door])
+	_ok("a doorway clears the figure by a brick", clear_door >= body + brick - 1e-4)
+	_ok("a column is exactly one storey", BrickPalette.part_size("column_1x1").y
+			== int(tk.get("COLUMN_PLATES", -1)))
+	var sc: GDScript = load("res://scripts/city_scene.gd")
+	var ck := sc.get_script_constant_map()
+	var whole := true
+	var bad := []
+	for table in ["SHAPES", "BIG_SHAPES"]:
+		for shape in ck.get(table, []):
+			if int(shape.courses) % storey != 0:
+				whole = false
+				bad.append(shape.courses)
+	_ok("every city shape is whole storeys, no half floor under the roof", whole, "%s" % [bad])

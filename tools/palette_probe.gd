@@ -102,14 +102,14 @@ func _check_names(palette: Dictionary) -> void:
 		_ok("%s: W <= L in the name" % part, w <= l, "%dx%d" % [w, l])
 		_ok("%s: canonical size matches the name" % part,
 				size.x == w and size.z == l, "%v" % size)
-		# A plate is one, a brick is three, and a COLUMN is four bricks -- the
+		# A plate is one, a brick is three, and a COLUMN is six bricks -- the
 		# gap between one floor and the next, so it stands on the floor below
 		# and the floor above stands on it.
 		var expect_y := 1
 		if bits[0] in ["brick", "bracket", "slope", "curve", "round", "arch"]:
 			expect_y = 3
 		elif bits[0] == "column":
-			expect_y = 12
+			expect_y = TowerRecipe.COLUMN_PLATES   # one storey: six courses
 		_ok("%s: %s is %d plate(s) tall" % [part, bits[0], expect_y], size.y == expect_y,
 				"y = %d" % size.y)
 
@@ -252,9 +252,9 @@ func _check_mass(w: BrickWorld, palette: Dictionary) -> void:
 
 func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 	print("\nstuds")
-	# Tall enough to stack two of the tallest part: a column is 12 plates. Two
+	# Tall enough to stack two of the tallest part: a column is 18 plates. Two
 	# rows, because the palette no longer fits in one.
-	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 32, 16))
+	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 40, 16))
 	var x := 0
 	var z := 0
 	var studded := 0

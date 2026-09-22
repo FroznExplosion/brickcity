@@ -24,13 +24,16 @@ const BLAST_MAX := 12.0
 const BLAST_STEP := 1.2
 
 ## Building shapes, chosen to give a skyline rather than a grid of clones.
+## Courses are whole storeys of TowerRecipe.COURSES_PER_FLOOR. When a storey went
+## from four courses to six, every shape kept its height (or lost up to a storey
+## of it) and gave up floors instead: 46 courses was 11 floors and is 7 now.
 const SHAPES := [
 	{"x": 16, "z": 16, "courses": 18},
 	{"x": 20, "z": 16, "courses": 30},
-	{"x": 24, "z": 20, "courses": 46},
-	{"x": 16, "z": 24, "courses": 62},
-	{"x": 28, "z": 20, "courses": 26},
-	{"x": 20, "z": 20, "courses": 80},
+	{"x": 24, "z": 20, "courses": 42},
+	{"x": 16, "z": 24, "courses": 60},
+	{"x": 28, "z": 20, "courses": 24},
+	{"x": 20, "z": 20, "courses": 78},
 ]
 
 ## `--big`: the same city with buildings the size the game eventually wants.
@@ -42,10 +45,10 @@ const SHAPES := [
 const BIG_SHAPES := [
 	{"x": 40, "z": 32, "courses": 60},
 	{"x": 48, "z": 48, "courses": 120},
-	{"x": 64, "z": 40, "courses": 160},
-	{"x": 56, "z": 56, "courses": 100},
-	{"x": 80, "z": 64, "courses": 200},
-	{"x": 36, "z": 36, "courses": 240},
+	{"x": 64, "z": 40, "courses": 162},
+	{"x": 56, "z": 56, "courses": 102},
+	{"x": 80, "z": 64, "courses": 204},
+	{"x": 36, "z": 36, "courses": 246},
 ]
 ## Set in the SCENE as well as on the command line, so that
 ## `scenes/big_city.tscn` is something you open and press play on rather than a

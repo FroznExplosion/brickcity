@@ -54,7 +54,8 @@ A city-sized, fully destructible open world where every object — guns, vehicle
 - Matches common brick spacing; **never marketed as compatible**.
 
 ### In-game scale
-- Player is 3–5 bricks tall (roughly 1:40–1:45 vs. print scale; one stud ≈ 35cm in game).
+- Characters are **4 bricks tall** (38.4 mm in print, 1.68 m in game; one stud = 35 cm), the height real brick buildings are designed around. Our own proportions: a bigger head and a slimmer body; never the minifigure's shape (legal brief).
+- Buildings are sized for them: a storey is 6 courses (2.52 m), a doorway 5 bricks clear and 4 studs wide. `tools/scale_probe.gd` enforces all of it; measurements in `Docs/Parts/`.
 - Rough density: a 150m tower is on the order of 50k bricks; a city is millions.
 
 ### Export scaling

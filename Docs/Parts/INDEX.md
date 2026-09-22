@@ -8,7 +8,7 @@ change the part and re-run. Conventions and anatomy: [README](README.md).
 | [Plates](plates.md) | 8 | One plate (3.2 mm) tall. Studs on top, sockets underneath. |
 | [Bricks](bricks.md) | 6 | Three plates (9.6 mm) tall. Studs on top, sockets underneath. |
 | [Tiles](tiles.md) | 7 | One plate tall with a SMOOTH top: sockets underneath, nothing on top. |
-| [Columns](columns.md) | 2 | Twelve plates (four bricks, 38.4 mm) tall: one storey of the city's frame. |
+| [Columns](columns.md) | 2 | Eighteen plates (six bricks, 57.6 mm) tall: one storey of the city's frame. |
 | [Brackets](brackets.md) | 4 | A brick with studs down one long side, for building sideways. |
 | [Slopes](slopes.md) | 3 | A brick whose top falls to the front; studs only on the flat back strip. |
 | [Curved slopes](curves.md) | 2 | A slope that bows outward; smooth all over, no studs. |

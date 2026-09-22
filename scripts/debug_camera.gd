@@ -17,9 +17,14 @@ const LOOK_SENSITIVITY := 0.0022
 ## bricks like everything else it walks on.
 const PLATE_M := 0.14
 const BRICK_M := PLATE_M * 3.0
-## Half a plate under three bricks. Not a person's height -- a minifigure's, at
-## the scale the bricks are actually built at.
-const BODY_HEIGHT := BRICK_M * 3.0 - PLATE_M * 0.5
+## Four bricks: 38.4 mm in print, 1.68 m here. The height real brick buildings
+## are designed around, so what is built here fits what is built for them
+## (Docs/Parts/README.md section 5). The SIZE only -- the figure's shape is our
+## own: a bigger head and a slimmer body than the trademarked one.
+const BODY_HEIGHT := BRICK_M * 4.0
+## The head is a big part of that: a brick and a quarter of it, where the
+## trademarked figure's is under one. Eyes at its middle.
+const HEAD_HEIGHT := BRICK_M * 1.25
 ## Crouched: a whole brick shorter, which is exactly the clearance the floor
 ## under you costs.
 ##
@@ -29,8 +34,10 @@ const BODY_HEIGHT := BRICK_M * 3.0 - PLATE_M * 0.5
 ## stopped dead by it. A brick of crouch covers that with a plate to spare, and
 ## it covers a doorway one course too low as well.
 const CROUCH_HEIGHT := BODY_HEIGHT - BRICK_M
-const BODY_RADIUS := 0.2         ## a little over half a stud
-const EYE_HEIGHT := BODY_HEIGHT - PLATE_M
+## Slimmer than a two-stud figure: a stud and a half across (0.525 m), where
+## a figure-sized one is nearly two.
+const BODY_RADIUS := 0.35 * 0.75
+const EYE_HEIGHT := BODY_HEIGHT - HEAD_HEIGHT * 0.5
 ## Speeds scale with the body. Kept in bricks per second so they stay honest if
 ## the figure is ever resized again: 10, 20 and 4.3 courses a second.
 const WALK_SPEED := BRICK_M * 6.7

@@ -128,16 +128,17 @@ const _PARTS := {
 	## number in the whole brick budget.
 	"plate_10x10": Vector3i(10, 1, 10),
 
-	# --- columns, four bricks tall --------------------------------------
-	# One block each rather than four stacked bricks, because a column is a
+	# --- columns, six bricks tall ---------------------------------------
+	# One block each rather than six stacked bricks, because a column is a
 	# column: nothing is ever going to break it in the middle that would not
-	# also break it whole, and four blocks would cost four of everything.
+	# also break it whole, and six blocks would cost six of everything.
 	#
-	# Twelve plates is exactly four courses, which is exactly the gap between
-	# one floor and the next -- so a column stands on the floor below and the
-	# floor above stands on it.
-	"column_1x1": Vector3i(1, 12, 1),
-	"column_2x2": Vector3i(2, 12, 2),
+	# Eighteen plates is exactly six courses (TowerRecipe.COURSES_PER_FLOOR),
+	# which is exactly the gap between one floor and the next -- so a column
+	# stands on the floor below and the floor above stands on it.
+	# tools/scale_probe.gd fails if the two ever disagree.
+	"column_1x1": Vector3i(1, 18, 1),
+	"column_2x2": Vector3i(2, 18, 2),
 
 	# --- bricks, three plates tall --------------------------------------
 	"brick_1x1": Vector3i(1, 3, 1),   # one stud, full height

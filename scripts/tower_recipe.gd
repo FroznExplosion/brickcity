@@ -9,7 +9,7 @@ class_name TowerRecipe
 
 const WALL_THICK := 2        # studs
 const PLATES_PER_COURSE := 3
-## Four brick courses, then a floor, then four more on top of it. The floor
+## Six brick courses, then a floor, then six more on top of it. The floor
 ## spans the WHOLE footprint -- walls included -- so it is part of the exterior,
 ## reads as a band from outside, and the walls above genuinely sit on it.
 ##
@@ -24,7 +24,13 @@ const PLATES_PER_COURSE := 3
 ## Two offset layers interlock: each plate in the upper layer bridges four in the
 ## lower one. It is a running bond laid flat, and it is how a real brick floor
 ## holds together too.
-const COURSES_PER_FLOOR := 4
+## Six, not four. The figure is four bricks tall (Docs/Parts/README.md), so a
+## storey is the figure, a course of headroom, and the lintel course a doorway
+## is cut under: five bricks clear through a door, six under the slab. At four
+## the figure could not stand up indoors. Buildings did NOT get taller when this
+## changed -- the city's shapes kept their height and lost floors instead, and
+## floors are three quarters of a building's bricks (Docs/Scale.md).
+const COURSES_PER_FLOOR := 6
 const SLAB_PLATES := 2
 const SLAB_COLOUR := 2
 
@@ -64,7 +70,9 @@ const WINDOW_PITCH := 8      ## studs from one opening to the next
 ## On a four-stud boundary, so a run breaks into whole bricks either side of an
 ## opening instead of closing each pier with 2x2s and 1x2s.
 const WINDOW_INSET := 4      ## solid wall to leave at each corner
-const WINDOW_COURSES := 1    ## how many courses tall, below the lintel course
+## Three: a sill two bricks up and a head five up, under the lintel -- a window
+## a four-brick figure looks out of rather than a slot at its feet.
+const WINDOW_COURSES := 3    ## how many courses tall, below the lintel course
 
 # Filament indices, matching brick_grid.h.
 const COURSE_COLOURS := [4, 5, 6, 11, 2, 8]  # red, orange, yellow, tan, grey, blue

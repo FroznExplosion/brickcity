@@ -32,7 +32,8 @@ plate 2, a brick 6. Every part is a whole number of studs across and plates tall
 | plate | 2 | 3.2 | 0.14 |
 | stud pitch | 5 | 8.0 | 0.35 |
 | brick (3 plates) | 6 | 9.6 | 0.42 |
-| column / storey (12 plates) | 24 | 38.4 | 1.68 |
+| figure (4 bricks) | 24 | 38.4 | 1.68 |
+| storey = column (6 bricks) | 36 | 57.6 | 2.52 |
 
 The same factor on every axis: 0.35 / 8.0 = 0.14 / 3.2 = 0.04375 m per mm. Nothing is squashed.
 The extension owns these (`gdextension/brick/src/brick_grid.h`); `BrickPalette` and a few scripts
@@ -113,19 +114,28 @@ As a rule of thumb (common builder practice, not a measured source): a doorway f
 size is 4 studs wide and at least 5 bricks of clear opening, and a storey is 6 or more bricks plus
 the floor. Section 6 compares the game to these.
 
-## 6. Where the game stands against section 5
+## 6. What the game commits to
 
-`tools/scale_probe.gd`, part 3, reports these every run:
+Settled (Sep 2026), and enforced by `tools/scale_probe.gd` part 3:
 
-- **The walking figure is 1.19 m, 2.83 bricks, 0.40 m wide.** That is 70% of a figure-sized
-  figure, and under the spec's own "3–5 bricks" (spec §3).
-- **A storey is 4 courses: 1.68 m floor to floor.** A 4-brick figure needs 4 bricks *clear*, plus
-  the floor, so it would not stand up inside.
+| | Game | Print |
+|---|---|---|
+| figure height | 4 bricks, 1.68 m | 38.4 mm |
+| figure width | 1.5 studs, 0.525 m: slimmer than figure-sized | 12 mm |
+| head | 1.25 bricks, 0.53 m: bigger than the trademarked figure's | 12 mm |
+| eyes | mid-head, 1.42 m | |
+| storey | 6 courses + 1 plate slab, 2.52 m under the slab | 57.6 mm |
+| doorway | 4 studs wide, 5 bricks clear (the 6th is the lintel) | 32 x 48 mm |
+| window | 3 courses: sill 2 bricks up, head 5 up | |
+| column | one storey, 18 plates | 57.6 mm |
 
-The two are linked. The figure was shrunk to fit the storey, and the storey was set by the brick
-budget (floors are ~75% of a building; Docs/Scale.md). Making both figure-sized means about 6
-courses a storey, 50% more wall per storey. That is a game-design decision, not a
-measurement fix, so nothing here changes it.
+Our figure's **shape** is our own: big head, slim body, low-poly, no C hands, no stud-topped
+cylinder head, no minifig hip/leg/torso outline. Only its outer size follows section 5, so it
+fits anything built for a figure that size.
+
+When the storey went from 4 courses to 6, **no building got taller**. Every city shape kept its
+height (or lost up to one storey of it) and got fewer floors: 11 floors became 7. Floors are three
+quarters of a building's bricks (Docs/Scale.md), so fewer floors pays for the taller walls.
 
 ## Sources
 

@@ -28,7 +28,7 @@ const FAMILIES := [
 	["plate", "Plates", "One plate (3.2 mm) tall. Studs on top, sockets underneath."],
 	["brick", "Bricks", "Three plates (9.6 mm) tall. Studs on top, sockets underneath."],
 	["tile", "Tiles", "One plate tall with a SMOOTH top: sockets underneath, nothing on top."],
-	["column", "Columns", "Twelve plates (four bricks, 38.4 mm) tall: one storey of the city's frame."],
+	["column", "Columns", "Eighteen plates (six bricks, 57.6 mm) tall: one storey of the city's frame."],
 	["bracket", "Brackets", "A brick with studs down one long side, for building sideways."],
 	["slope", "Slopes", "A brick whose top falls to the front; studs only on the flat back strip."],
 	["curve", "Curved slopes", "A slope that bows outward; smooth all over, no studs."],
