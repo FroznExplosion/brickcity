@@ -45,6 +45,7 @@ func _tick() -> void:
 	_check_sliding_off_a_side_stud_drops_the_weld()
 	_check_looking_down_at_a_bracket_builds_on_top()
 	_check_under()
+	_check_ghost_and_bracket_turns()
 	_check_rotate_last_and_undo()
 	_check_delete()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -339,6 +340,30 @@ func _check_under() -> void:
 	# Side-on to a plain brick is not under: it builds on top, as before.
 	_ws._aim_ray(Vector3(21.5 * STUD, 5 * PLATE, 17.0 * STUD), Vector3(0, 0, 1))
 	_ok("the plain side of a brick builds on its top", _ws._cell.y == 7, "y = %d" % _ws._cell.y)
+
+
+func _check_ghost_and_bracket_turns() -> void:
+	print("\nthe ghost is the real part, studs and all; a bracket turns four ways")
+	_reset()
+	_hold("brick_2x4")
+	_down(8, 8)
+	_ok("a 2x4 ghost carries its 8 studs", _ws._ghost_studs.multimesh.instance_count == 8,
+			"%d" % _ws._ghost_studs.multimesh.instance_count)
+	_hold("bracket_1x4")
+	var dirs := {}
+	for yaw in 4:
+		_ws._yaw = yaw
+		_down(8, 8)
+		var n: int = _ws._ghost_studs.multimesh.instance_count
+		_ok("bracket yaw %d: ghost shows 4 top + 4 side studs" % yaw, n == 8, "%d" % n)
+		var arch: int = _ws._archetype()
+		var raw: PackedInt32Array = _ws.world.get_archetype_side_studs(arch)
+		var d := Vector3i(raw[3], raw[4], raw[5]) if raw.size() >= 6 else Vector3i.ZERO
+		dirs[d] = true
+		_ok("bracket yaw %d: front_of is where its studs face" % yaw,
+				BrickPalette.front_of(_ws._archetype_name()) == d,
+				"front %v, studs %v" % [BrickPalette.front_of(_ws._archetype_name()), d])
+	_ok("four turns, four different stud directions", dirs.size() == 4, "%s" % [dirs.keys()])
 
 
 func _check_rotate_last_and_undo() -> void:

@@ -99,6 +99,9 @@ var _frame_meshes := {}     ## chunk id -> MeshInstance3D
 var _frame_studs := {}      ## chunk id -> MultiMeshInstance3D, child of the mesh
 var _stud_count := 0        ## studs drawn, all frames, after the last remesh
 var _ghost: MeshInstance3D
+var _ghost_studs: MultiMeshInstance3D   ## child of _ghost
+## archetype id -> [ArrayMesh, MultiMesh]: the held part's real shape and studs.
+var _ghost_shapes := {}
 var _grid: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
@@ -213,6 +216,10 @@ func _ready() -> void:
 	_ghost = MeshInstance3D.new()
 	_ghost.material_override = _ghost_material
 	add_child(_ghost)
+	_ghost_studs = MultiMeshInstance3D.new()
+	_ghost_studs.material_override = _ghost_material
+	_ghost_studs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ghost.add_child(_ghost_studs)
 
 	_grid = MeshInstance3D.new()
 	add_child(_grid)
@@ -372,9 +379,9 @@ func _rotation_with_up(up: Vector3) -> int:
 ## no cells at all. Offsetting by the rotated box's minimum corner puts every
 ## grid's buildable region over the same tick cube. Exact integers, because the
 ## whole point of ticks is that cross-grid alignment never rounds.
-func _origin_for(rotation: int, dims: Vector3i) -> Vector3i:
+func _origin_for(rot: int, dims: Vector3i) -> Vector3i:
 	var probe := world.create_chunk(Vector3i.ZERO, Vector3i(1, 1, 1))
-	world.set_chunk_frame(probe, rotation, Vector3i.ZERO)
+	world.set_chunk_frame(probe, rot, Vector3i.ZERO)
 	var b: Basis = world.get_chunk_transform(probe).basis
 	world.release_chunk(probe)
 
@@ -961,9 +968,9 @@ func _enter_stud_frame(stud: Dictionary) -> bool:
 ## hung a tick or three off -- up out of line with the bracket, or down into the
 ## baseplate. Shifting each in-plane axis by under a stud onto the bracket's own
 ## corner lines every cell up with it.
-func _origin_on_plane(rotation: int, dims: Vector3i, dir: Vector3i,
+func _origin_on_plane(rot: int, dims: Vector3i, dir: Vector3i,
 		plane: Vector3i, align: Vector3i) -> Vector3i:
-	var origin := _origin_for(rotation, dims)
+	var origin := _origin_for(rot, dims)
 	var t := BrickWorld.ticks_per_stud()
 	for axis in 3:
 		if dir[axis] != 0:
@@ -997,6 +1004,38 @@ func _cell_in(frame: int, p: Vector3) -> Vector3i:
 		int(floor(local.z / BrickPalette.STUD_M + EPS)))
 
 
+## The held part as it will look placed: its real shape, its studs, and a
+## bracket's side studs, so the ghost says which way those face before the
+## click. It used to be a bare box, which showed none of that.
+##
+## Built by placing the part alone in a scratch chunk and asking the same
+## calls the frames are drawn with, so it cannot disagree with them. Once per
+## archetype; the ghost only changes shape when the part or its turn does.
+func _ghost_shape(arch: int) -> Array:
+	if _ghost_shapes.has(arch):
+		return _ghost_shapes[arch]
+	var c := world.create_chunk(Vector3i.ZERO, world.get_archetype_size(arch))
+	var bid := world.place_block(c, Vector3i.ZERO, arch, 0)
+	var arrays := world.build_chunk_mesh(c)
+	var m := ArrayMesh.new()
+	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var buffer: PackedFloat32Array = world.get_chunk_studs(c)
+	if bid >= 0:
+		buffer.append_array(_side_stud_floats(c, bid, Transform3D(), Color.WHITE))
+	world.release_chunk(c)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.stud()
+	@warning_ignore("integer_division")
+	mm.instance_count = buffer.size() / 16
+	if mm.instance_count > 0:
+		mm.set_buffer(buffer)
+	_ghost_shapes[arch] = [m, mm]
+	return _ghost_shapes[arch]
+
+
 ## Three tint states, straight off would_connect: -1 red, 0 amber, positive cyan.
 func _update_ghost() -> void:
 	var arch := _archetype()
@@ -1008,14 +1047,13 @@ func _update_ghost() -> void:
 	if _joints >= 0 and not _valid:
 		_joints = -1
 
-	var size := BrickPalette.size_of(_archetype_name())
-	var box := BoxMesh.new()
-	box.size = BrickPalette.extents_m(size)
-	_ghost.mesh = box
+	var shape := _ghost_shape(arch)
+	_ghost.mesh = shape[0]
+	_ghost_studs.multimesh = shape[1]
 	# The ghost belongs to the frame being built in, so it has to be drawn in
 	# that frame's space rather than the world's.
 	_ghost.transform = world.get_chunk_transform(chunk) \
-			* Transform3D(Basis(), BrickWorld.grid_to_world(_cell) + box.size * 0.5)
+			* Transform3D(Basis(), BrickWorld.grid_to_world(_cell))
 
 	# Red is still "it does not fit" in either layer -- that is a placement
 	# answer, and the layer does not change it. The other two say which layer
@@ -1099,8 +1137,8 @@ func _unhandled_input(e: InputEvent) -> void:
 func _place() -> void:
 	if not _valid:
 		return
-	var name := _archetype_name()
-	var placed := asm.place(chunk, _cell, palette[name], _colour)
+	var arch_name := _archetype_name()
+	var placed := asm.place(chunk, _cell, palette[arch_name], _colour)
 	if placed < 0:
 		return
 	# A brick put onto a side stud is held by that stud, and a cross-frame join
@@ -1114,7 +1152,7 @@ func _place() -> void:
 	# in the same order, so recipe index == block id, which is the contract
 	# BuildRecipe exists to keep.
 	var rid := recipe.size()
-	recipe.add(name, _cell, _colour, _recipe_frame_for(_frame), _interior)
+	recipe.add(arch_name, _cell, _colour, _recipe_frame_for(_frame), _interior)
 	_placed_at.append([_frame, placed])
 	# The weld goes in the RECIPE as well, or the build stands here and falls
 	# apart everywhere else: a saved file, a city placement and a replay all
@@ -1316,9 +1354,9 @@ func _rotate_last() -> void:
 	if recipe.is_empty() or _placed_at.is_empty():
 		return
 	var id := recipe.size() - 1
-	var name := recipe.part_of(id)
-	var turned := BrickPalette.turn(name)
-	if turned == "" or turned == name:
+	var arch_name := recipe.part_of(id)
+	var turned := BrickPalette.turn(arch_name)
+	if turned == "" or turned == arch_name:
 		return  # a square part looks the same turned
 
 	var cell := recipe.cell_of(id)
@@ -1342,9 +1380,9 @@ func _rotate_last() -> void:
 	var placed := asm.place(asm.frames[af], cell, palette[turned], colour)
 	if placed < 0:
 		# It does not fit turned. Put the original back rather than losing it.
-		var back := asm.place(asm.frames[af], cell, palette[name], colour)
+		var back := asm.place(asm.frames[af], cell, palette[arch_name], colour)
 		if back >= 0:
-			recipe.add(name, cell, colour, rf, was_interior)
+			recipe.add(arch_name, cell, colour, rf, was_interior)
 			_placed_at.append([af, back])
 			_edits.append("brick")
 		_after_edit()
@@ -1485,16 +1523,21 @@ func _side_stud_instances(frame_chunk: int) -> PackedFloat32Array:
 	for at in _placed_at:
 		if int(at[0]) != fi or int(at[1]) < 0:
 			continue
-		var studs := _real_side_studs(frame_chunk, int(at[1]))
-		if studs.is_empty():
-			continue
 		var col := BrickWorld.get_filament_colour(world.get_block_colour(frame_chunk, int(at[1])))
-		for st in studs:
-			var b := inv.basis * _basis_up(Vector3(st.dir as Vector3i))
-			var o: Vector3 = inv * (st.centre as Vector3)
-			for v in [b.x.x, b.y.x, b.z.x, o.x, b.x.y, b.y.y, b.z.y, o.y,
-					b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, 1.0]:
-				out.push_back(v)
+		out.append_array(_side_stud_floats(frame_chunk, int(at[1]), inv, col))
+	return out
+
+
+## One block's side studs as stud instances, taken from world space by `inv`.
+func _side_stud_floats(frame_chunk: int, block: int, inv: Transform3D,
+		col: Color) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for st in _real_side_studs(frame_chunk, block):
+		var b := inv.basis * _basis_up(Vector3(st.dir as Vector3i))
+		var o: Vector3 = inv * (st.centre as Vector3)
+		for v in [b.x.x, b.y.x, b.z.x, o.x, b.x.y, b.y.y, b.z.y, o.y,
+				b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, 1.0]:
+			out.push_back(v)
 	return out
 
 
@@ -1696,10 +1739,10 @@ func _load() -> void:
 
 ## Which standing grid matches this (rotation, origin). -1 if none does, which
 ## means the recipe was built somewhere this workshop cannot represent.
-func _asm_frame_for(rotation: int, ticks: Vector3i) -> int:
+func _asm_frame_for(rot: int, ticks: Vector3i) -> int:
 	for i in asm.frames.size():
 		var f: int = asm.frames[i]
-		if world.get_chunk_rotation(f) == rotation and world.get_chunk_origin_ticks(f) == ticks:
+		if world.get_chunk_rotation(f) == rot and world.get_chunk_origin_ticks(f) == ticks:
 			return i
 	return -1
 
