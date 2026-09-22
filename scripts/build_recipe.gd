@@ -212,37 +212,53 @@ func fixture_at(i: int) -> Dictionary:
 	}
 
 
-## Drop the most recently attached fixture. Fixtures are not blocks: they have
-## no ids anything else keys on, so removing one from the middle would be safe
-## too -- but undo only ever asks for the last one.
+## Drop the most recently attached fixture. Undo.
 func pop_fixture() -> bool:
-	if _fixtures.is_empty():
+	return remove_fixture(_fixtures.size() - 1)
+
+
+## Drop one fixture, from anywhere. Fixtures are not blocks: they have no ids
+## anything else keys on, so taking one out of the middle is safe.
+func remove_fixture(i: int) -> bool:
+	if i < 0 or i >= _fixtures.size():
 		return false
-	_fixtures.remove_at(_fixtures.size() - 1)
+	_fixtures.remove_at(i)
 	return true
 
 
-## Drop the most recently added block. Undo, and the ONLY removal this type
-## allows: taking a block out of the middle would renumber everything after it
-## and silently invalidate any damage record keyed on those ids.
+## Drop the most recently added block. Undo.
 func pop() -> bool:
 	if _parts.is_empty():
 		return false
-	var gone := _parts.size() - 1
-	_cells.resize(_cells.size() - 3)
-	_parts.resize(_parts.size() - 1)
-	_colours.resize(_colours.size() - 1)
-	_frames.resize(_frames.size() - 1)
-	_decor.resize(_decor.size() - 1)
-	# A weld to a block that no longer exists is not a weld. Undo is the only
-	# removal, so the only ids that can be orphaned are the one just dropped.
+	return remove_at(_parts.size() - 1)
+
+
+## Take one block out, from anywhere. Every block after it moves down one id.
+##
+## Authoring-time only. A recipe that has been built into the city has damage
+## records keyed on its block ids, and renumbering under those would silently
+## point them at the wrong bricks -- so nothing on the city side calls this. In
+## the workshop nothing is keyed on the ids yet, and the renumbering IS the
+## point: recipe index == block id has to stay true for the next build.
+func remove_at(id: int) -> bool:
+	if id < 0 or id >= _parts.size():
+		return false
+	_cells.remove_at(id * 3 + 2)
+	_cells.remove_at(id * 3 + 1)
+	_cells.remove_at(id * 3)
+	_parts.remove_at(id)
+	_colours.remove_at(id)
+	_frames.remove_at(id)
+	_decor.remove_at(id)
+	# A weld to a block that no longer exists is not a weld, and every weld to
+	# a block after it follows that block down.
 	var kept := PackedInt32Array()
 	for i in weld_count():
 		var w := weld_blocks(i)
-		if w.x == gone or w.y == gone:
+		if w.x == id or w.y == id:
 			continue
-		kept.push_back(w.x)
-		kept.push_back(w.y)
+		kept.push_back(w.x - 1 if w.x > id else w.x)
+		kept.push_back(w.y - 1 if w.y > id else w.y)
 	_welds = kept
 	return true
 

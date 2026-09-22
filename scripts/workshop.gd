@@ -26,10 +26,11 @@ extends Node3D
 ## Rows are [section, key, action, key, action]; "" leaves a cell empty.
 const KEY_ROWS := [
 	["CAMERA", "click", "capture mouse to look", "ESC", "release it"],
-	["", "WASD", "fly", "E / SPACE", "up"],
+	["", "WASD", "fly", "SPACE", "up"],
 	["", "shift", "fast", "Q / CTRL", "down"],
 	["", "alt", "slow", "", ""],
-	["BUILD", "LMB", "place", "Z", "undo last"],
+	["BUILD", "LMB", "place on the stud aimed at", "RMB", "delete"],
+	["", "hold E", "lock height, slide anywhere", "Z", "undo last"],
 	["", "[ ]  wheel", "part", ", .", "colour"],
 	["", "R", "rotate X / Z", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
@@ -130,19 +131,20 @@ var _snap_on := true
 ## The stud the ghost is currently snapped to, or {} for free placement.
 var _snapped := {}
 
-## The ANCHOR: the plane the ghost is sliding on, and where it came from.
-##
-## Looking at a stud picks a plane -- its frame (so the orientation matches the
-## face) and the local height of its surface. The ghost then slides ON that
-## plane while the cursor moves, so you can pull a 1x4 sideways off the end of a
-## 1x5 until only one stud overlaps. The plane is only given up when the cursor
-## finds something NEARER than it, which is what stops the floor behind a wall
-## from stealing the anchor as you drag past the wall's edge.
-var _anchor := {}           ## {frame, y, block} or {}
-## Last cell the part actually fitted in, so it stops against an obstruction
-## rather than sliding through it.
-var _last_good := Vector3i.ZERO
-var _has_good := false
+## The stud the cursor is on, as a cell of the grid being built in: the column
+## the held part has to cover, at the height it sits at. NO_STUD when the cursor
+## is not on one.
+const NO_STUD := Vector3i(-1, -1, -1)
+var _stud := NO_STUD
+## Every cell that stud touches -- usually just `_stud`; see `_side_stud_cells`.
+var _studs := []
+## The LOCK, while E is held: the plane the ghost was on when E went down --
+## {frame (asm index), y, snapped, stud} -- and the ghost follows the cursor
+## across it. {} when E is up. See `_aim`.
+var _lock := {}
+## up axis -> rotation index. `_rotation_with_up` makes a probe chunk to find
+## out, and aiming asks every frame.
+var _rot_for_up := {}
 ## recipe index -> [asm frame index, chunk block id].
 ##
 ## Tracked rather than computed. The first version worked out the chunk block id
@@ -337,6 +339,8 @@ func _build_frames() -> void:
 ## Looked up rather than hard-coded: the enumeration order of the 24 is an
 ## implementation detail of the extension.
 func _rotation_with_up(up: Vector3) -> int:
+	if _rot_for_up.has(up):
+		return _rot_for_up[up]
 	var probe := world.create_chunk(Vector3i.ZERO, Vector3i(1, 1, 1))
 	var found := -1
 	for r in BrickWorld.rotation_count():
@@ -345,6 +349,7 @@ func _rotation_with_up(up: Vector3) -> int:
 			found = r
 			break
 	world.release_chunk(probe)
+	_rot_for_up[up] = found
 	return found
 
 
@@ -400,6 +405,7 @@ func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_camera.set_script(load("res://scripts/debug_camera.gd"))
 	_camera.far = 400.0
+	_camera.set("e_climbs", false)   # E is the plane lock here; SPACE still climbs
 	var mid := PLATE_STUDS * BrickPalette.STUD_M * 0.5
 	var centre := Vector3(mid, 0.0, mid)
 	_camera.position = centre + Vector3(-mid * 0.9, mid * 0.75, mid * 1.35)
@@ -527,21 +533,33 @@ func _process(_dt: float) -> void:
 
 ## Where the ghost goes.
 ##
-## Anchored placement. Looking at a stud picks a PLANE -- the frame whose "up"
-## matches that face, and the height of the face itself. After that the ghost
-## slides on the plane, following the cursor, until something nearer than the
-## plane takes over. That is what makes the ordinary brick move possible: point
-## at the right-hand stud of a 1x5, drag right, and the 1x4 walks out one stud
-## at a time until only its left stud overlaps.
+## Two modes, and the player always knows which one they are in, because the
+## second is only on while they hold a key:
 ##
-## Three things fall out of doing it this way rather than by picking a cell:
+##   AIM (default).  Look at a stud and the part goes ON that stud. The face
+##       picks the grid -- a brick's top keeps the grid that brick is in, a
+##       bracket's side stud derives a sideways one -- so the part turns to
+##       match what it is going onto without R or TAB. It then covers the stud
+##       the cursor is on: centred when that fits, shifted along until it does
+##       when it does not, so aiming at the end stud of a wall never puts the
+##       ghost into the wall beside it.
+##   LOCK (hold E).  The plane the ghost is on at that moment -- that grid, that
+##       height -- is frozen, and the ghost follows the cursor across it. That
+##       is the overhang move (a 1x4 pulled off the end of a 1x6 until one stud
+##       overlaps) and the way out into mid-air at a chosen height.
 ##
-##   * no precision needed -- you aim at a plane, and the grid does the rest;
-##   * dragging off the end of a piece keeps the plane instead of dropping to
-##     the floor, because the floor is FURTHER along the ray;
-##   * the ghost stops against anything solid instead of passing through it,
-##     because a cell that does not fit is simply not taken.
+## The first version had the lock ALWAYS on: a plane stayed until the cursor
+## found something nearer than it. The overhang worked, and a ghost that had
+## once been on top of a wall stayed at wall height while the cursor went out
+## across the floor, which read as placement being broken.
 func _aim() -> void:
+	var ray := _mouse_ray()
+	_hold_lock(Input.is_key_pressed(KEY_E))
+	_aim_ray(ray[0], ray[1])
+
+
+## [from, dir] for the ray under the mouse.
+func _mouse_ray() -> Array:
 	var vp := get_viewport()
 	var from: Vector3 = _camera.global_position
 	var dir: Vector3 = -_camera.global_transform.basis.z
@@ -549,44 +567,43 @@ func _aim() -> void:
 		var m := vp.get_mouse_position()
 		from = _camera.project_ray_origin(m)
 		dir = _camera.project_ray_normal(m)
-	_aim_ray(from, dir)
+	return [from, dir]
+
+
+## E down freezes the plane the ghost is on right now; E up lets it go. Over
+## bare floor that is the floor, which is as much a plane as a brick top.
+func _hold_lock(on: bool) -> void:
+	if not on:
+		_lock = {}
+	elif _lock.is_empty():
+		_lock = {"frame": _frame, "y": _cell.y, "snapped": _snapped, "studs": _studs}
 
 
 ## The placement rule itself, for any ray. Split from `_aim` so a probe can
 ## drive it with exact rays instead of a mouse (tools/place_probe.gd).
 func _aim_ray(from: Vector3, dir: Vector3) -> void:
-	# How far along the ray the current anchor plane is, if there is one.
-	var t_plane := _anchor_distance(from, dir)
-
-	# The first solid thing along the ray, and which block it was.
-	var hit := _first_hit(from, dir)
-	var t_hit: float = hit.get("t", INF)
-
-	# Re-anchor only when the cursor finds something NEARER than the plane it is
-	# already sliding on. Drag off the end of a brick and the floor beyond it is
-	# further away, so the plane survives -- which is the whole point.
-	if not hit.is_empty() and t_hit < t_plane - 0.01:
-		var stud := _face_for(hit, dir)
-		if not stud.is_empty():
-			_set_anchor(stud)
-		else:
-			_anchor = {}
-
-	if _anchor.is_empty():
-		_free_aim(from, dir, hit)
+	if not _lock.is_empty():
+		_slide_on_lock(from, dir)
 		return
+	_snapped = {}
+	_stud = NO_STUD
+	_studs = []
+	var hit := _first_hit(from, dir)
+	if hit.is_empty():
+		_free_aim(from, dir)
+		return
+	var face := _face_for(hit, dir)
+	if face.is_empty():
+		return
+	_enter_face(face, hit)
 
-	_slide_on_anchor(from, dir)
 
-
-## Distance along the ray to the anchor plane, or INF when there is no anchor or
-## the ray runs parallel to it.
-func _anchor_distance(from: Vector3, dir: Vector3) -> float:
-	if _anchor.is_empty():
-		return INF
-	var xf: Transform3D = world.get_chunk_transform(_anchor.frame)
+## Distance along the ray to local plane `y` of grid `frame_chunk`, or INF when
+## the ray runs parallel to it or it is behind the camera.
+func _plane_distance(frame_chunk: int, y: int, from: Vector3, dir: Vector3) -> float:
+	var xf: Transform3D = world.get_chunk_transform(frame_chunk)
 	var n: Vector3 = xf.basis.y.normalized()
-	var p0: Vector3 = xf * Vector3(0.0, _anchor.y * BrickPalette.PLATE_M, 0.0)
+	var p0: Vector3 = xf * Vector3(0.0, y * BrickPalette.PLATE_M, 0.0)
 	var denom := n.dot(dir)
 	if absf(denom) < 0.0001:
 		return INF
@@ -608,30 +625,38 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 	return {}
 
 
-## The face of the block that was hit, as something to anchor to.
+## The face of the block that was hit, as something to build on.
 ##
 ## A side stud wins when one is pointing back at the camera -- that is a bracket
 ## and the player is asking to build sideways off it. Otherwise the block's top
-## face, which is the ordinary case.
+## face, which is the ordinary case. V turns side studs off.
 func _face_for(hit: Dictionary, dir: Vector3) -> Dictionary:
 	var best := {}
 	# The stud has to FACE the camera, not merely not face away. At -0.1 a stud
 	# edge-on to the view scored as a candidate, so looking straight down at a
 	# bracket snapped to its side instead of building on its top.
-	var best_dot := 0.3
-	for stud in world.get_side_studs(hit.frame, hit.block):
+	#
+	# Of those, the one nearest the ray is the one being looked at. Picking by
+	# facing alone took a bracket's FIRST stud whichever one the cursor was on.
+	var best_miss := INF
+	var from: Vector3 = hit.point - dir * hit.t
+	var studs: Array = world.get_side_studs(hit.frame, hit.block) if _snap_on else []
+	for stud in studs:
 		var n := Vector3(stud.dir as Vector3i).normalized()
-		var d := -n.dot(dir)
-		if d > best_dot:
-			best_dot = d
+		if -n.dot(dir) <= 0.3:
+			continue
+		var to := _stud_world_centre(stud) - from
+		var miss := (to - dir * to.dot(dir)).length()
+		if miss < best_miss:
+			best_miss = miss
 			best = stud
 			best["frame"] = hit.frame
 			best["block"] = hit.block
 	if not best.is_empty():
 		return best
 
-	# No side stud facing us: anchor to the top of whatever was hit, in the grid
-	# that block lives in.
+	# No side stud facing us: the top of whatever was hit, in the grid that
+	# block lives in.
 	var box: Array = world.get_block_ticks(hit.frame, hit.block)
 	if box.is_empty():
 		return {}
@@ -648,76 +673,132 @@ static func _round_axis(v: Vector3) -> Vector3i:
 	return Vector3i(int(round(v.x)), int(round(v.y)), int(round(v.z)))
 
 
-## Adopt a face as the anchor, switching to the grid that matches it.
-func _set_anchor(stud: Dictionary) -> void:
-	var same: bool = not _anchor.is_empty() and _anchor.get("block", -1) == stud.block \
-			and _anchor.get("source", -1) == stud.frame
-	if same:
-		return
-	if not _enter_stud_frame(stud):
-		return
-	_anchor = {
-		"frame": chunk,
-		"y": _cell.y,
-		"block": stud.block,
-		"source": stud.frame,
-	}
-	_snapped = stud if not stud.get("top", false) else {}
-	_has_good = false
+## Put the held part on the stud the cursor is on.
+##
+## Switches to the grid that matches the face, finds the stud column in it, and
+## fits the part over that column.
+func _enter_face(face: Dictionary, hit: Dictionary) -> bool:
+	if not _enter_stud_frame(face):
+		return false
+	var d: Vector3i = face.dir
+	if face.get("top", false):
+		# A top face has a stud in every column, and the one meant is the one
+		# under the cursor. The hit point is just inside the block, so its
+		# column is one of the block's own; the height is the face's.
+		var s := _cell_in(chunk, _stud_world_centre(face) + Vector3(d) * 0.001)
+		var c := _cell_in(chunk, hit.point)
+		_studs = [Vector3i(c.x, s.y, c.z)]
+	else:
+		_snapped = face
+		_studs = _side_stud_cells(face)
+	_stud = _studs[0]
+	_cell = _fit_over(_studs)
+	return true
 
 
-## Slide the ghost along the anchor plane, following the cursor.
-func _slide_on_anchor(from: Vector3, dir: Vector3) -> void:
-	var t := _anchor_distance(from, dir)
+## Every cell of the derived grid a side stud's face touches, its centre first.
+##
+## Usually one. But the derived grid is only lined up with the stud along the
+## stud's own axis -- across the face it steps in whole studs from the build
+## volume's corner, and a bracket's side stud sits at plate heights, so it can
+## straddle two cells. Which of the two a rounded centre lands in is float luck,
+## and only one of them may leave room for the part (the other reaching down
+## into the baseplate), so both are offered.
+func _side_stud_cells(face: Dictionary) -> Array:
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	var lo := Vector3(face.lo as Vector3i) * tick
+	var hi := Vector3(face.hi as Vector3i) * tick
+	var d := Vector3(face.dir as Vector3i)
+	var centre := _stud_world_centre(face)
+	var cells := [_cell_in(chunk, centre + d * 0.001)]
+	for a in [0.2, 0.8]:
+		for b in [0.2, 0.8]:
+			var p := centre
+			var k := 0
+			for axis in 3:
+				if d[axis] != 0.0:
+					continue
+				p[axis] = lerpf(lo[axis], hi[axis], a if k == 0 else b)
+				k += 1
+			var c := _cell_in(chunk, p + d * 0.001)
+			if not cells.has(c):
+				cells.append(c)
+	return cells
+
+
+## The cell that puts the held part over one of `studs`: centred on the first
+## when that fits, otherwise the nearest shift that still covers one. When
+## nothing that covers one fits, centred anyway, and the ghost goes red where
+## it was aimed.
+func _fit_over(studs: Array) -> Vector3i:
+	var size := BrickPalette.size_of(_archetype_name())
+	@warning_ignore("integer_division")
+	var half := Vector3i((size.x - 1) / 2, 0, (size.z - 1) / 2)
+	var first: Vector3i = studs[0]
+	var centred := _clamp_cell(Vector3i(first.x - half.x, first.y, first.z - half.z), size)
+	var arch := _archetype()
+	var best := centred
+	var best_d := -1
+	for stud: Vector3i in studs:
+		for dx in size.x:
+			for dz in size.z:
+				var c := Vector3i(stud.x - dx, stud.y, stud.z - dz)
+				if c != _clamp_cell(c, size):
+					continue
+				var dist := absi(c.x - centred.x) + absi(c.z - centred.z)
+				if best_d >= 0 and dist >= best_d:
+					continue
+				if asm.can_place(chunk, c, arch):
+					best = c
+					best_d = dist
+	return best
+
+
+## Keep a part's cell inside the build volume.
+func _clamp_cell(c: Vector3i, size: Vector3i) -> Vector3i:
+	return Vector3i(
+		clampi(c.x, 0, PLATE_STUDS - size.x),
+		clampi(c.y, 0, HEIGHT_PLATES - size.y),
+		clampi(c.z, 0, PLATE_STUDS - size.z))
+
+
+## E held: the ghost follows the cursor across the locked plane.
+##
+## No fitting here. The player is placing by hand, so a cell that does not fit
+## goes red rather than the ghost quietly going somewhere else.
+func _slide_on_lock(from: Vector3, dir: Vector3) -> void:
+	_frame = _lock.frame
+	var t := _plane_distance(chunk, _lock.y, from, dir)
 	if t == INF:
 		return
-	var p := from + dir * t
-	var cell := _cell_in(_anchor.frame, p)
+	var cell := _cell_in(chunk, from + dir * t)
 	var size := BrickPalette.size_of(_archetype_name())
 	@warning_ignore("integer_division")
 	var half := Vector3i((size.x - 1) / 2, 0, (size.z - 1) / 2)
-
-	var want := Vector3i(cell.x - half.x, _anchor.y, cell.z - half.z)
-	want.x = clampi(want.x, 0, PLATE_STUDS - size.x)
-	want.z = clampi(want.z, 0, PLATE_STUDS - size.z)
-	want.y = clampi(want.y, 0, HEIGHT_PLATES - size.y)
-
-	# The ghost must not pass through anything already placed. A cell that does
-	# not fit is simply not taken, so the part stops against the obstruction and
-	# stays where it last fitted -- which reads as sliding until it bumps.
-	var arch := _archetype()
-	if asm.can_place(_anchor.frame, want, arch):
-		_cell = want
-		_last_good = want
-		_has_good = true
-	elif _has_good:
-		_cell = _last_good
-	else:
-		_cell = want
+	_cell = _clamp_cell(Vector3i(cell.x - half.x, _lock.y, cell.z - half.z), size)
+	# A side stud only holds what is still ON it. Slide the part off the stud
+	# and it is a part floating on that plane, not one welded to the bracket.
+	_studs = _lock.studs
+	_stud = _studs[0] if not _studs.is_empty() else NO_STUD
+	var covers := false
+	for s: Vector3i in _studs:
+		if s.x >= _cell.x and s.x < _cell.x + size.x \
+				and s.z >= _cell.z and s.z < _cell.z + size.z:
+			covers = true
+	_snapped = _lock.snapped if covers else {}
 
 
-## No anchor: the old voxel rule, which is what allows building in mid-air.
-func _free_aim(from: Vector3, dir: Vector3, hit: Dictionary) -> void:
-	var plate := BrickPalette.PLATE_M
-	var point: Vector3
-	if hit.is_empty():
-		if absf(dir.y) < 0.0001:
-			return
-		var d := -(from.y - plate) / dir.y
-		if d <= 0.0:
-			return
-		point = from + dir * d
-	else:
-		point = from + dir * maxf(hit.t - plate * 0.34, 0.0)
-
+## Nothing under the cursor: the baseplate's top, extended past its edge.
+func _free_aim(from: Vector3, dir: Vector3) -> void:
+	_frame = 0
+	var t := _plane_distance(chunk, 1, from, dir)
+	if t == INF:
+		return
 	var size := BrickPalette.size_of(_archetype_name())
-	var cell := _cell_in(chunk, point)
+	var cell := _cell_in(chunk, from + dir * t)
 	@warning_ignore("integer_division")
 	var half := Vector3i((size.x - 1) / 2, 0, (size.z - 1) / 2)
-	_cell = cell - half
-	_cell.x = clampi(_cell.x, 0, PLATE_STUDS - size.x)
-	_cell.y = clampi(_cell.y, 0, HEIGHT_PLATES - size.y)
-	_cell.z = clampi(_cell.z, 0, PLATE_STUDS - size.z)
+	_cell = _clamp_cell(Vector3i(cell.x - half.x, 1, cell.z - half.z), size)
 
 
 ## Where a face sits in the world, in metres: the centre of the cell face the
@@ -734,7 +815,7 @@ func _stud_world_centre(stud: Dictionary) -> Vector3:
 	return c * tick
 
 
-## Switch to the grid that matches this face, and put the ghost on it.
+## Switch to the grid that matches this face.
 ##
 ## A TOP face keeps the grid the block already lives in -- building upward on a
 ## brick does not change orientation. A SIDE stud derives a grid instead: its
@@ -748,43 +829,30 @@ func _stud_world_centre(stud: Dictionary) -> Vector3:
 ## stud has no such parity.
 func _enter_stud_frame(stud: Dictionary) -> bool:
 	var d: Vector3i = stud.dir
-	var centre := _stud_world_centre(stud)
-
 	if stud.get("top", false):
 		var idx := asm.frames.find(stud.frame)
 		if idx < 0:
 			return false
 		_frame = idx
-	else:
-		var rot := _rotation_with_up(Vector3(d))
-		if rot < 0:
+		return true
+	var rot := _rotation_with_up(Vector3(d))
+	if rot < 0:
+		return false
+	var lo: Vector3i = stud.lo
+	var hi: Vector3i = stud.hi
+	var plane := Vector3i(
+		hi.x if d.x > 0 else lo.x,
+		hi.y if d.y > 0 else lo.y,
+		hi.z if d.z > 0 else lo.z)
+	var dims := Vector3i(PLATE_STUDS, HEIGHT_PLATES, PLATE_STUDS)
+	var origin := _origin_on_plane(rot, dims, d, plane)
+	var f := _asm_frame_for(rot, origin)
+	if f < 0:
+		f = asm.frames.size()
+		if asm.add_frame(dims, rot, origin) < 0:
 			return false
-		var lo: Vector3i = stud.lo
-		var hi: Vector3i = stud.hi
-		var plane := Vector3i(
-			hi.x if d.x > 0 else lo.x,
-			hi.y if d.y > 0 else lo.y,
-			hi.z if d.z > 0 else lo.z)
-		var dims := Vector3i(PLATE_STUDS, HEIGHT_PLATES, PLATE_STUDS)
-		var origin := _origin_on_plane(rot, dims, d, plane)
-		var f := _asm_frame_for(rot, origin)
-		if f < 0:
-			f = asm.frames.size()
-			if asm.add_frame(dims, rot, origin) < 0:
-				return false
-			_remesh()
-		_frame = f
-
-	_build_grid()
-
-	var size := BrickPalette.size_of(_archetype_name())
-	var cell := _cell_in(chunk, centre + Vector3(d) * 0.001)
-	@warning_ignore("integer_division")
-	var half := Vector3i((size.x - 1) / 2, 0, (size.z - 1) / 2)
-	_cell = Vector3i(cell.x - half.x, cell.y, cell.z - half.z)
-	_cell.x = clampi(_cell.x, 0, PLATE_STUDS - size.x)
-	_cell.y = clampi(_cell.y, 0, HEIGHT_PLATES - size.y)
-	_cell.z = clampi(_cell.z, 0, PLATE_STUDS - size.z)
+		_remesh()
+	_frame = f
 	return true
 
 
@@ -870,8 +938,8 @@ func _update_hud() -> void:
 			state = "mid-air (allowed)"
 		else:
 			state = "%d joints" % _joints
-	if not _anchor.is_empty():
-		state += "  [sliding]"
+	if not _lock.is_empty():
+		state += "  [plane locked -- E]"
 	var worst := 0.0
 	for v in _stress.values():
 		worst = maxf(worst, v)
@@ -894,6 +962,9 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT: _place()
+			MOUSE_BUTTON_RIGHT:
+				var ray := _mouse_ray()
+				_delete_ray(ray[0], ray[1])
 			MOUSE_BUTTON_WHEEL_UP: _part_index = (_part_index + 1) % _parts().size()
 			MOUSE_BUTTON_WHEEL_DOWN: _part_index = (_part_index - 1 + _parts().size()) % _parts().size()
 	if not (e is InputEventKey and e.pressed and not e.echo):
@@ -903,8 +974,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _part_index = (_part_index + 1) % _parts().size()
 		KEY_COMMA: _colour = (_colour - 1 + BrickWorld.get_filament_count()) % BrickWorld.get_filament_count()
 		KEY_PERIOD: _colour = (_colour + 1) % BrickWorld.get_filament_count()
-		KEY_R: _axis_z = not _axis_z; _has_good = false
-		KEY_F: _flip = not _flip; _has_good = false
+		KEY_R: _axis_z = not _axis_z
+		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
 		KEY_I: _toggle_layer()
 		KEY_K: _place_staircase()
@@ -933,7 +1004,6 @@ func _place() -> void:
 	if not _snapped.is_empty():
 		asm.weld(_snapped.frame, _snapped.block, chunk, placed)
 		welded_to = _recipe_id_at(asm.frames.find(_snapped.frame), _snapped.block)
-	_has_good = false
 	# The recipe is the record; the chunk is the preview of it. They are appended
 	# in the same order, so recipe index == block id, which is the contract
 	# BuildRecipe exists to keep.
@@ -1061,6 +1131,56 @@ func _undo() -> bool:
 	return true
 
 
+## RMB: take out whatever the ray hits first, from anywhere in the build.
+##
+## Unlike undo this reaches into the middle, which renumbers the recipe blocks
+## after it. That is safe HERE and only here: nothing in the workshop is keyed
+## on a recipe id except `_placed_at`, which is renumbered in the same step,
+## and the world's own block ids are tombstoned rather than reused. A fixture
+## goes as a whole -- it is one record, not the bricks it laid. The baseplate
+## is not part of the build, so it does not go at all.
+func _delete_ray(from: Vector3, dir: Vector3) -> bool:
+	var hit := _first_hit(from, dir)
+	if hit.is_empty():
+		return false
+	var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+	if rid >= 0:
+		var at: Array = _placed_at[rid]
+		if not world.remove_block(asm.frames[at[0]], at[1]):
+			return false
+		_placed_at.remove_at(rid)
+		recipe.remove_at(rid)
+		_drop_edit("brick", rid)
+		_after_edit()
+		return true
+	if hit.frame != asm.frames[0]:
+		return false
+	for k in _fixture_blocks.size():
+		var ids: PackedInt32Array = _fixture_blocks[k]
+		if not ids.has(hit.block):
+			continue
+		for id in ids:
+			world.remove_block(asm.frames[0], id)
+		_fixture_blocks.remove_at(k)
+		recipe.remove_fixture(k)
+		_drop_edit("fixture", k)
+		_after_edit()
+		return true
+	return false
+
+
+## Forget the n-th edit of this kind, so undo still takes the others back in
+## the order they were made.
+func _drop_edit(kind: String, n: int) -> void:
+	for i in _edits.size():
+		if _edits[i] != kind:
+			continue
+		if n == 0:
+			_edits.remove_at(i)
+			return
+		n -= 1
+
+
 func _baseplate_blocks() -> int:
 	@warning_ignore("integer_division")
 	var n: int = (PLATE_STUDS / 4) * (PLATE_STUDS / 4)
@@ -1069,8 +1189,17 @@ func _baseplate_blocks() -> int:
 
 ## Switch which build grid new bricks go into. All six already exist and all
 ## six cover the same volume, so this changes orientation and nothing else.
+##
+## Aiming at a stud picks the grid by itself, so this matters while E is held
+## (the locked plane turns, through where the ghost is) and over empty space.
 func _cycle_frame() -> void:
+	var at := _ghost.transform.origin   # the middle of the ghost
 	_frame = (_frame + 1) % asm.frames.size()
+	if not _lock.is_empty():
+		_lock.frame = _frame
+		_lock.y = _cell_in(chunk, at).y
+		_lock.snapped = {}
+		_lock.studs = []
 	_build_grid()
 
 

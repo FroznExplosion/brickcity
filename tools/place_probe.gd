@@ -1,15 +1,16 @@
 extends SceneTree
 
-## Acceptance probe for anchored placement in the workshop.
+## Acceptance probe for placement in the workshop.
 ##
 ##     godot --headless --path . --script tools/place_probe.gd
 ##
-## Looking at a stud picks a PLANE; the ghost then slides on it following the
-## cursor. Everything here was first checked by driving the scene by hand, and
-## one of those hand checks was wrong in a way that looked like a pass -- a
-## ghost that "slid through a wall" had in fact re-anchored on top of it, which
-## is correct. So every case is driven with exact rays through `_aim_ray`, and
-## each asserts the one property it exists for.
+## Looking at a stud puts the part ON that stud; holding E locks the plane and
+## the ghost follows the cursor across it; RMB deletes what the cursor is on.
+## Everything here was first checked by driving the scene by hand, and one of
+## those hand checks was wrong in a way that looked like a pass -- a ghost that
+## "slid through a wall" had in fact moved on top of it, which is correct. So
+## every case is driven with exact rays through `_aim_ray`, and each asserts the
+## one property it exists for.
 ##
 ## The workshop's own `_process` is switched off, so the real mouse cannot move
 ## the ghost between checks.
@@ -34,14 +35,16 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	print("place probe (anchored placement)")
-	_check_top_anchor()
-	_check_drag_along_the_plane()
-	_check_nearer_thing_re_anchors()
-	_check_ghost_stops_at_obstruction()
+	print("place probe (stud aim, E lock, RMB delete)")
+	_check_top_stud()
+	_check_aim_follows_the_cursor()
+	_check_drag_along_the_locked_plane()
+	_check_fits_beside_an_obstruction()
 	_check_side_stud_snap()
+	_check_sliding_off_a_side_stud_drops_the_weld()
 	_check_looking_down_at_a_bracket_builds_on_top()
 	_check_rotate_last_and_undo()
+	_check_delete()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -60,8 +63,7 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 func _reset() -> void:
 	while _ws._undo():
 		pass
-	_ws._anchor = {}
-	_ws._has_good = false
+	_ws._hold_lock(false)
 	_ws._frame = 0
 	_ws._axis_z = false
 	_ws._flip = false
@@ -70,12 +72,12 @@ func _reset() -> void:
 func _hold(part: String, axis_z := false) -> void:
 	_ws._part_index = BrickPalette.parts().find(part)
 	_ws._axis_z = axis_z
-	_ws._has_good = false
 
 
 ## Place directly, bypassing the aim. For building the scenery a case needs.
 func _put(part: String, cell: Vector3i, axis_z := false) -> int:
 	_hold(part, axis_z)
+	_ws._snapped = {}
 	_ws._cell = cell
 	_ws._update_ghost()
 	var n: int = _ws.recipe.size()
@@ -89,50 +91,75 @@ func _down(x: float, z: float) -> void:
 	_ws._update_ghost()
 
 
+func _delete_down(x: float, z: float) -> bool:
+	return _ws._delete_ray(Vector3((x + 0.5) * STUD, 20.0, (z + 0.5) * STUD), Vector3(0, -1, 0))
+
+
 func _arch() -> int:
 	return _ws.palette[_ws._archetype_name()]
 
 
 # ---------------------------------------------------------------------------
 
-func _check_top_anchor() -> void:
-	print("\nlooking at a brick anchors to its top")
+func _check_top_stud() -> void:
+	print("\nlooking at a brick puts the part on the stud under the cursor")
 	_reset()
 	_ok("a 1x6 placed", _put("brick_1x6", Vector3i(20, 1, 20)) == 1)
 	_hold("brick_1x4")
 	_down(22, 20)
-	_ok("the ghost anchored", not _ws._anchor.is_empty())
-	_ok("on the brick's top: 1 + 3 plates", _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	_ok("the cursor is on a stud", _ws._stud != _ws.NO_STUD)
+	_ok("that stud: column 22, on the brick's top (1 + 3 plates)",
+			_ws._stud == Vector3i(22, 4, 20), "%v" % _ws._stud)
+	_ok("the part covers it, centred: x 21..24", _ws._cell == Vector3i(21, 4, 20),
+			"%v" % _ws._cell)
 	_ok("in the upright grid", _ws._frame == 0)
 	_ok("and it would connect", _ws._valid and _ws._joints > 0,
 			"valid=%s joints=%d" % [_ws._valid, _ws._joints])
 
 
-func _check_drag_along_the_plane() -> void:
-	print("\ndragging walks the part along the plane, one stud at a time")
+func _check_aim_follows_the_cursor() -> void:
+	print("\nwithout E the height is whatever the cursor is on -- nothing is sticky")
+	_reset()
+	_hold("brick_2x2")
+	_down(8, 8)
+	_ok("on the baseplate top", _ws._cell.y == 1, "y = %d" % _ws._cell.y)
+	_put("brick_2x2", Vector3i(12, 1, 8))
+	_hold("brick_2x2")
+	_down(12, 8)
+	_ok("over a brick: on its top", _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	_down(8, 8)
+	_ok("back over bare floor: back on the floor (the old sticky plane stayed at 4)",
+			_ws._cell.y == 1, "y = %d" % _ws._cell.y)
+
+
+func _check_drag_along_the_locked_plane() -> void:
+	print("\nholding E, the part walks across the locked plane one stud at a time")
 	_reset()
 	_put("brick_1x6", Vector3i(20, 1, 20))     # x 20..25
 	_hold("brick_1x4")                           # 4 long, centred with half = 1
 	_down(24, 20)
+	_ws._hold_lock(true)
+	_ok("E locks a plane", not _ws._lock.is_empty() and _ws._lock.y == 4)
 	var xs := []
 	var ys := {}
 	var joints := []
+	var valid := []
 	for cx in range(24, 33):
 		_down(cx, 20)
 		xs.append(_ws._cell.x)
 		ys[_ws._cell.y] = true
 		joints.append(_ws._joints)
+		valid.append(_ws._valid)
 
 	var steps_ok := true
 	for i in range(1, xs.size()):
 		if xs[i] - xs[i - 1] != 1:
 			steps_ok = false
 	_ok("every step moves exactly one stud", steps_ok, "%s" % [xs])
-	_ok("and the plane never changes", ys.size() == 1 and ys.has(4), "%s" % [ys.keys()])
-	_ok("the anchor survives dragging off the end (the floor is further away)",
-			not _ws._anchor.is_empty() and _ws._cell.y == 4)
+	_ok("and the plane never changes, off the end of the brick too", ys.size() == 1 and ys.has(4),
+			"%s" % [ys.keys()])
 
-	# The case the drag exists for: the 1x4 overlapping the 1x6 by ONE stud.
+	# The case the lock exists for: the 1x4 overlapping the 1x6 by ONE stud.
 	var one := xs.find(25)
 	_ok("there is a position overlapping by exactly one stud (x = 25)", one >= 0)
 	if one >= 0:
@@ -140,54 +167,38 @@ func _check_drag_along_the_plane() -> void:
 
 	# Past the end it is mid-air on the plane -- allowed, and it places.
 	_ok("fully off the end it floats: no joints", joints[joints.size() - 1] == 0)
-	_ok("but it is still a legal placement", _ws._valid)
+	_ok("but it is still a legal placement", valid[valid.size() - 1])
 	var n: int = _ws.recipe.size()
 	_ws._place()
 	_ok("and it places in mid-air", _ws.recipe.size() == n + 1)
 
+	_ws._hold_lock(false)
+	_down(40, 40)
+	_ok("letting go of E lets go of the plane", _ws._lock.is_empty() and _ws._cell.y == 1,
+			"y = %d" % _ws._cell.y)
 
-func _check_nearer_thing_re_anchors() -> void:
-	print("\nsomething nearer than the plane takes the anchor")
+
+func _check_fits_beside_an_obstruction() -> void:
+	print("\naiming next to a wall shifts the part to fit, instead of into the wall")
 	_reset()
-	_hold("brick_2x2")
-	_down(8, 8)                                  # the baseplate
-	_ok("anchored on the baseplate top", _ws._cell.y == 1, "y = %d" % _ws._cell.y)
-	_put("brick_2x2", Vector3i(12, 1, 8))
-	_hold("brick_2x2")
-	_ws._anchor = {}
-	_down(8, 8)
-	_down(12, 8)                                 # now over the brick
-	_ok("aiming at a brick on the floor re-anchors to its top",
-			_ws._cell.y == 4, "y = %d" % _ws._cell.y)
-	_down(8, 8)
-	_ok("and back over bare floor, the floor is FURTHER than the brick's plane, so it stays",
-			_ws._cell.y == 4, "y = %d" % _ws._cell.y)
-
-
-func _check_ghost_stops_at_obstruction() -> void:
-	print("\nthe ghost stops against an obstruction instead of passing into it")
-	_reset()
-	# A two-course wall, x 30..33 at z = 30.
+	# A two-course wall, x 30..33 at z = 30..31.
 	_put("brick_2x4", Vector3i(30, 1, 30))
 	_put("brick_2x4", Vector3i(30, 4, 30))
 	_hold("brick_1x6")                           # 6 long, half = 2
-	_down(20, 30)                                # anchor on the floor beside it
-	_ok("anchored on the floor", _ws._cell.y == 1)
+	_down(29, 30)                                # the floor stud against the wall
+	_ok("on the floor", _ws._cell.y == 1)
+	_ok("covering the stud aimed at", _ws._cell.x <= 29 and _ws._cell.x + 6 > 29)
+	_ok("pushed back flush: x = 24 (24..29, wall at 30)", _ws._cell.x == 24,
+			"x = %d" % _ws._cell.x)
+	_ok("and legal", _ws._valid)
 
-	# Walk the cursor toward the wall. The cursor itself never goes over the wall
-	# -- that would re-anchor on its top, which is correct and not what this
-	# checks -- but the far end of the 1x6 does reach into it.
-	var inside := 0
-	var max_x := -1
-	for cx in range(20, 30):
-		_down(cx, 30)
-		if not _ws.asm.can_place(_ws.chunk, _ws._cell, _arch()):
-			inside += 1
-		max_x = maxi(max_x, _ws._cell.x)
-	_ok("at no step is the ghost inside the wall", inside == 0, "%d steps inside" % inside)
-	_ok("it stops flush: the last good cell is x = 24 (24..29, wall at 30)",
-			max_x == 24, "max x = %d" % max_x)
-	_ok("and still on the floor plane", _ws._cell.y == 1)
+	# With the plane locked the player is placing by hand: no shifting, and a
+	# part that does not fit says so.
+	_ws._hold_lock(true)
+	_down(29, 30)
+	_ok("E held: centred on the cursor (x = 27) and red", _ws._cell.x == 27 and not _ws._valid,
+			"x = %d valid = %s" % [_ws._cell.x, _ws._valid])
+	_ws._hold_lock(false)
 
 
 func _check_side_stud_snap() -> void:
@@ -211,8 +222,8 @@ func _check_side_stud_snap() -> void:
 	_ok("it snapped to the stud", not _ws._snapped.is_empty())
 	_ok("in a grid that is not the upright one", _ws._frame != 0)
 	var up: Vector3 = _ws.world.get_chunk_transform(_ws.chunk).basis.y
-	_ok("whose up is the stud's direction (+Z)", up.is_equal_approx(Vector3(0, 0, 1)),
-			"%v" % up)
+	_ok("turned to match: its up is the stud's direction (+Z)",
+			up.is_equal_approx(Vector3(0, 0, 1)), "%v" % up)
 	_ok("and the placement is legal", _ws._valid)
 
 	var n: int = _ws.recipe.size()
@@ -227,6 +238,30 @@ func _check_side_stud_snap() -> void:
 	var face: int = (studs[1].hi as Vector3i).z
 	_ok("the plate sits flush on the stud face, in exact ticks",
 			(box[0] as Vector3i).z == face, "plate z %d vs face %d" % [(box[0] as Vector3i).z, face])
+
+
+func _check_sliding_off_a_side_stud_drops_the_weld() -> void:
+	print("\nE on a side stud: slide along its plane, and the weld only while still on it")
+	_reset()
+	_put("bracket_1x2", Vector3i(14, 1, 10), true)
+	var f0: int = _ws.asm.frames[0]
+	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 11))
+	var studs: Array = _ws.world.get_side_studs(f0, bid)
+	if studs.is_empty():
+		_ok("the bracket has side studs", false)
+		return
+	_hold("plate_1x1")
+	var target: Vector3 = _ws._stud_world_centre(studs[0])
+	_ws._aim_ray(target + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
+	_ok("on the stud", not _ws._snapped.is_empty())
+	var frame: int = _ws._frame
+	_ws._hold_lock(true)
+	_ws._aim_ray(target + Vector3(2.0, 0, 3.0), Vector3(0, 0, -1))
+	_ok("slid off sideways, same sideways grid", _ws._frame == frame)
+	_ok("no longer held by the stud", _ws._snapped.is_empty())
+	_ws._aim_ray(target + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
+	_ok("slid back on: held again", not _ws._snapped.is_empty())
+	_ws._hold_lock(false)
 
 
 func _check_looking_down_at_a_bracket_builds_on_top() -> void:
@@ -257,3 +292,40 @@ func _check_rotate_last_and_undo() -> void:
 	while _ws._undo():
 		undone += 1
 	_ok("undo takes all three back", undone == 3 and _ws.recipe.is_empty(), "%d" % undone)
+
+
+func _check_delete() -> void:
+	print("\nRMB deletes what the cursor is on, from anywhere in the build")
+	_reset()
+	_put("brick_2x2", Vector3i(4, 1, 4))         # recipe 0
+	_put("bracket_1x2", Vector3i(14, 1, 10), true)  # recipe 1
+	var f0: int = _ws.asm.frames[0]
+	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 11))
+	var studs: Array = _ws.world.get_side_studs(f0, bid)
+	_hold("plate_2x2")
+	_ws._aim_ray(_ws._stud_world_centre(studs[1]) + Vector3(0, 0, 3.0), Vector3(0, 0, -1))
+	_ws._update_ghost()
+	_ws._place()                                 # recipe 2, welded 1 -> 2
+	_ok("three bricks and a weld", _ws.recipe.size() == 3 and _ws.recipe.weld_count() == 1)
+
+	_ok("the baseplate does not delete", not _delete_down(40, 40) and _ws.recipe.size() == 3)
+	_ok("RMB on the first brick deletes it", _delete_down(4, 4))
+	_ok("gone from the world", _ws.world.block_at(f0, Vector3i(4, 1, 4)) < 0)
+	_ok("and from the recipe, the rest renumbered", _ws.recipe.size() == 2
+			and _ws.recipe.part_of(0).begins_with("bracket_1x2"), "%d" % _ws.recipe.size())
+	_ok("the weld follows its blocks down: 1->2 is now 0->1",
+			_ws.recipe.weld_count() == 1 and _ws.recipe.weld_blocks(0) == Vector2i(0, 1))
+
+	_ok("RMB on the bracket deletes it", _delete_down(14, 10))
+	_ok("and a weld with a missing end is dropped", _ws.recipe.weld_count() == 0)
+	_ok("undo still takes back what is left", _ws._undo() and _ws.recipe.is_empty())
+	_ok("with nothing more to undo", not _ws._undo())
+
+	_ws._frame = 0
+	_ws._cell = Vector3i(12, 1, 12)
+	_ws._place_staircase()
+	@warning_ignore("integer_division")
+	var mid := 12 + StaircaseRecipe.DIAMETER / 2
+	_ok("RMB on a staircase deletes the whole fixture", _delete_down(mid, mid)
+			and _ws.recipe.fixture_count() == 0 and _ws._fixture_blocks.is_empty())
+	_ok("and its bricks", _ws.world.block_at(f0, Vector3i(mid, 1, mid)) < 0)

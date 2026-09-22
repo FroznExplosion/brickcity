@@ -1012,14 +1012,35 @@ archetype, used by both the per-block and the merged collision paths (`tools/hul
 checks, against a real physics space). The staircase's treads are true arcs to look at and to stand
 on.
 
-### Placement — anchored, and probed ✅
+### Placement — aim at a stud, hold E to lock the plane, RMB deletes ✅
 
-Looking at a stud anchors the ghost to that face's plane; it then slides on the plane with the
-cursor, keeps the plane when dragged off the end of a part (the floor beyond is further along the
-ray), stops flush against anything solid, and snaps to brackets' side studs in a grid derived from
-the stud. `T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays —
-**35 checks**, mutation-tested — and found one real bug on the way: an edge-on side stud used to
-qualify, so looking down at a bracket built sideways off it instead of on top.
+Looking at a stud puts the part **on that stud**: the face picks the grid (a brick top keeps its
+brick's grid, a bracket's side stud derives a sideways one from the stud), so the part turns to
+match without `R` or `TAB`, and it covers the stud under the cursor — centred when that fits,
+shifted along until it does when it does not, so aiming at the floor stud beside a wall puts the
+part flush against the wall rather than in it. Nothing is sticky: move the cursor off a wall and the
+ghost goes back down to the floor.
+
+**Holding E** freezes the plane the ghost is on at that moment — that grid, that height — and the
+ghost follows the cursor across it. That is the overhang move (a 1x4 pulled off the end of a 1x6
+until one stud overlaps) and the way into mid-air at a chosen height. A part slid off a side stud
+stops being welded to it. `TAB` while E is held turns the locked plane through the ghost.
+
+This replaces a plane that was ALWAYS locked until something nearer than it came under the cursor.
+The overhang worked; so did a ghost that stayed at wall height while the cursor went out across the
+floor, which read as placement being broken.
+
+**RMB** deletes what the cursor is on, from anywhere in the build — a brick, or a whole fixture.
+Unlike undo it reaches into the middle, so `BuildRecipe.remove_at` renumbers the blocks after it
+and their welds with them; that is authoring-time only, while nothing is keyed on the ids yet. The
+baseplate does not delete.
+
+`T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays — **54
+checks**. It found three real bugs on the way: an edge-on side stud used to qualify, so looking down
+at a bracket built sideways off it instead of on top; a bracket's side studs were chosen by facing
+alone, so the FIRST one won whichever the cursor was on; and a side stud straddling two cells of its
+derived grid (bracket studs sit at plate heights, the grid steps in studs) landed in whichever one
+float rounding picked, sometimes the one that put the part into the baseplate.
 
 ### Two things that are not build mode, but build mode needed them ✅ **both done**
 

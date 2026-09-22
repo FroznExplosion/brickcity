@@ -54,6 +54,10 @@ var allow_walk := false
 ## drives this camera with synthesised keys and must not steal the cursor to do
 ## it -- the `--walk` gate is the only caller.
 var drive_uncaptured := false
+## Whether E climbs as well as SPACE. The workshop turns it off: there, holding E
+## locks the build plane, and a camera drifting upward while you do it would move
+## the very thing you are aiming at.
+var e_climbs := true
 
 ## Emitted when the mode changes, so a HUD can say which one it is in.
 signal mode_changed(walking: bool)
@@ -236,7 +240,7 @@ func _fly(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S): dir += basis.z
 	if Input.is_key_pressed(KEY_A): dir -= basis.x
 	if Input.is_key_pressed(KEY_D): dir += basis.x
-	if Input.is_key_pressed(KEY_E) or Input.is_key_pressed(KEY_SPACE): dir += Vector3.UP
+	if (e_climbs and Input.is_key_pressed(KEY_E)) or Input.is_key_pressed(KEY_SPACE): dir += Vector3.UP
 	if Input.is_key_pressed(KEY_Q) or Input.is_key_pressed(KEY_CTRL): dir -= Vector3.UP
 
 	var speed := SPEED
