@@ -714,7 +714,7 @@ Ordered by dependency. Items 1–4 are small; item 8 dominates.
 | 5 | **Seed-set grounding** — `solve_grounded` from an explicit block set, not a plane (§3.3) | Without it every sideways frame falls off on the first solve. Also most of what limitation 16 needs | M |
 | 6 | **Weld table** — stored edges, **invalidated on block death** (§2.8) — plus weld-subtree body merging (§1.1) and weld-graph component detachment | The one genuinely new graph in the system, and the one that can go stale | M |
 | 7 | **Ghost, snap, tint, undo, palette, frame picker** | §4 | M |
-| 8 | **Baked mesh + convex colliders per archetype** | [Limitation 12](Status.md#known-limitations). Today a masked part is a voxel approximation. In a city at 100 m that is invisible; **in build mode a curve is a metre from the camera and reads as a staircase.** Build mode is what makes this unavoidable. The seam is already in `Archetype` | **L** |
+| 8 | **Baked mesh + convex colliders per archetype** | ✅ **Done.** An archetype can carry an authored surface the face bake draws (`set_archetype_mesh`, `tools/mesh_probe.gd`) and convex hulls both collision paths use (`set_archetype_hulls`, `tools/hull_probe.gd`). The staircase is drawn and collides as its shape. The cell mask stays the truth for connectivity and stress. | **L** |
 | 9 | **`Assembly`** — a first-class owner of frames + welds + recipe | Today `island_manager` owns chunks ad hoc. Nothing owns a *creation* | M |
 | 10 | **Rotated-building probe** (§2.7) | Cheap, and it keeps a property that is currently true by accident | S |
 | 11 | **Structural / decorative flag on a frame** (§9.2) | Removes fixtures from the stress solve and from seed-set grounding entirely | S |
@@ -1000,6 +1000,26 @@ building's cheap representation (§9.5 is about buildings; the fixture half of i
 answer as §12 question 3). A fixture is still materialised wherever it is when a blast reaches it,
 which is what a building does too. And a staircase is the only kind there is: railings, cornices and
 pipework are more masks on the same machinery, not new machinery.
+
+### Studs, and gap 8 ✅
+
+Workshop bricks draw real studs, with terrain's stud mesh and material, from a C++ buffer that leaves
+out every stud a brick is sitting on (`tools/stud_probe.gd`, 23 checks). And a part can be drawn as
+its **shape** rather than its cells: an authored surface per archetype, drawn by the face bake with
+no new pipeline, while the cell mask stays the truth for connectivity, stress and collision
+(`tools/mesh_probe.gd`, 28 checks). And it can **collide** as that shape: convex hulls per
+archetype, used by both the per-block and the merged collision paths (`tools/hull_probe.gd`, 13
+checks, against a real physics space). The staircase's treads are true arcs to look at and to stand
+on.
+
+### Placement — anchored, and probed ✅
+
+Looking at a stud anchors the ghost to that face's plane; it then slides on the plane with the
+cursor, keeps the plane when dragged off the end of a part (the floor beyond is further along the
+ray), stops flush against anything solid, and snaps to brackets' side studs in a grid derived from
+the stud. `T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays —
+**35 checks**, mutation-tested — and found one real bug on the way: an edge-on side stud used to
+qualify, so looking down at a bracket built sideways off it instead of on top.
 
 ### Two things that are not build mode, but build mode needed them ✅ **both done**
 

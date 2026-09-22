@@ -294,6 +294,49 @@ int BrickWorld::bake_variant(int base_archetype, const String &name, int yaw, bo
         }
     }
 
+    // An authored surface turns with the part. Positions go through the linear
+    // map and are then shifted back into the part's box, which the map may
+    // have flipped to negative; normals take the linear map alone.
+    if (!base.mesh.empty() || !base.hulls.empty()) {
+        const Vector3 csz = cell_size();
+        const Vector3 box((float)base.size.x * csz.x, (float)base.size.y * csz.y,
+                (float)base.size.z * csz.z);
+        auto lin = [&o](const Vector3 &v) {
+            // The same map as Orient::direction, for float vectors.
+            float ax = v.x, az = v.z, ay = v.y;
+            switch (o.yaw) {
+                case 1: ax = -v.z; az = v.x;  break;
+                case 2: ax = -v.x; az = -v.z; break;
+                case 3: ax = v.z;  az = -v.x; break;
+                default: break;
+            }
+            if (o.flip) {
+                ay = -ay;
+                az = -az;
+            }
+            return Vector3(ax, ay, az);
+        };
+        const Vector3 far = lin(box);
+        const Vector3 shift(std::max(0.0f, -far.x), std::max(0.0f, -far.y),
+                std::max(0.0f, -far.z));
+        for (const Archetype::MeshTri &t : base.mesh) {
+            Archetype::MeshTri r;
+            for (int k = 0; k < 3; ++k) {
+                r.p[k] = lin(t.p[k]) + shift;
+                r.n[k] = lin(t.n[k]);
+            }
+            a.mesh.push_back(r);
+        }
+        for (const PackedVector3Array &h : base.hulls) {
+            PackedVector3Array r;
+            r.resize(h.size());
+            for (int k = 0; k < h.size(); ++k) {
+                r.set(k, lin(h[k]) + shift);
+            }
+            a.hulls.push_back(r);
+        }
+    }
+
     // Side studs move with the part: the cell they sit on rotates like a
     // position, the face they point along rotates like a normal.
     for (const Archetype::SideStud &ss : base.side_studs) {
@@ -664,6 +707,61 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
     }
 }
 
+PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
+    PackedFloat32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+
+    // Sixteen floats: three rows of four (basis columns interleaved with the
+    // origin, as MultiMesh.set_buffer wants), then rgba.
+    auto push = [&out](float px, float py, float pz, bool down, const Color &col) {
+        // A downward stud is the same mesh turned 180 degrees about X -- a
+        // proper rotation, so the winding stays right. A negative Y scale would
+        // mirror it and the stud would render inside out.
+        const float sy = down ? -1.0f : 1.0f;
+        out.push_back(1.0f); out.push_back(0.0f); out.push_back(0.0f); out.push_back(px);
+        out.push_back(0.0f); out.push_back(sy);   out.push_back(0.0f); out.push_back(py);
+        out.push_back(0.0f); out.push_back(0.0f); out.push_back(sy);   out.push_back(pz);
+        out.push_back(col.r); out.push_back(col.g); out.push_back(col.b); out.push_back(1.0f);
+    };
+
+    for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
+        const Block &b = c.blocks[bi];
+        if (b.removed || !b.alive) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        const Color col = filament_colour(b.colour);
+
+        for (const Archetype::SurfaceCell &sc : a.top_cells) {
+            if (a.up_at(sc.x, sc.z) != FACE_STUD) {
+                continue;
+            }
+            const Vector3i cell(base.x + sc.x, base.y + sc.y, base.z + sc.z);
+            if (c.solid_at(cell + Vector3i(0, 1, 0))) {
+                continue; // covered: inside the brick above
+            }
+            push(((float)cell.x + 0.5f) * STUD_M, (float)(cell.y + 1) * PLATE_M,
+                    ((float)cell.z + 0.5f) * STUD_M, false, col);
+        }
+        for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
+            if (a.down_at(sc.x, sc.z) != FACE_STUD) {
+                continue;
+            }
+            const Vector3i cell(base.x + sc.x, base.y + sc.y, base.z + sc.z);
+            if (c.solid_at(cell - Vector3i(0, 1, 0))) {
+                continue;
+            }
+            push(((float)cell.x + 0.5f) * STUD_M, (float)cell.y * PLATE_M,
+                    ((float)cell.z + 0.5f) * STUD_M, true, col);
+        }
+    }
+    return out;
+}
+
 PackedByteArray BrickWorld::get_column_mask(int chunk_id, int y0, int y1) const {
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
@@ -940,6 +1038,78 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         const Color col = filament_colour(b.colour);
         const Vector3 block_origin(base.x * cs.x, base.y * cs.y, base.z * cs.z);
         const int asize[3] = { a.size.x, a.size.y, a.size.z };
+
+        // An authored surface replaces the voxel faces outright. Each triangle
+        // is stored as a quad whose fourth corner repeats the second: the
+        // second triangle of the pair, (1, 3, 2), collapses to zero area, and
+        // every other part of the pipeline -- four vertices a face, the index
+        // partition, damage by degenerate triangles, sections -- is unchanged.
+        if (!a.mesh.empty()) {
+            for (const Archetype::MeshTri &t : a.mesh) {
+                Vector3 n = t.n[0] + t.n[1] + t.n[2];
+                if (n.length_squared() < 1e-12f) {
+                    n = -(t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]);
+                }
+                n = n.normalized();
+
+                // Culling. Only a triangle lying flat on a cell boundary can be
+                // hidden by a neighbour, and only by an ordinary VOXEL block:
+                // two authored surfaces meeting (one stair's newel on the
+                // next's) do not fill their cells, so letting one hide the
+                // other would open holes where the mask is square and the
+                // drawing is not. Both are kept; they face each other inside
+                // solid and cost a few triangles.
+                int32_t other = -1;
+                int axis = -1;
+                if (std::abs(n.x) > 0.999f) {
+                    axis = 0;
+                } else if (std::abs(n.y) > 0.999f) {
+                    axis = 1;
+                } else if (std::abs(n.z) > 0.999f) {
+                    axis = 2;
+                }
+                if (axis >= 0) {
+                    const Vector3 g = (t.p[0] + t.p[1] + t.p[2]) / 3.0f;
+                    const float q = g[axis] / cs[axis];
+                    if (std::abs(q - std::round(q)) < 1e-3f) {
+                        const Vector3 probe = g + n * (cs[axis] * 0.5f);
+                        const Vector3i nc(
+                            base.x + (int)std::floor(probe.x / cs.x),
+                            base.y + (int)std::floor(probe.y / cs.y),
+                            base.z + (int)std::floor(probe.z / cs.z));
+                        const int32_t nb = c.block_at(nc);
+                        if (nb >= 0 && nb != (int32_t)bi && !c.blocks[nb].decorative
+                                && parts[c.blocks[nb].archetype].mesh.empty()) {
+                            other = nb;
+                        }
+                    }
+                }
+
+                // Godot draws CLOCKWISE as the front, so (b-a) x (c-a) has to
+                // point AWAY from the side the face is seen from.
+                Vector3 p0 = t.p[0], p1 = t.p[1], p2 = t.p[2];
+                Vector3 n0 = t.n[0], n1 = t.n[1], n2 = t.n[2];
+                if ((p1 - p0).cross(p2 - p0).dot(n) > 0.0f) {
+                    std::swap(p1, p2);
+                    std::swap(n1, n2);
+                }
+                const Vector3 vs[4] = { p0, p1, p2, p1 };
+                const Vector3 ns[4] = { n0, n1, n2, n1 };
+                for (int k = 0; k < 4; ++k) {
+                    fb.verts.push_back(block_origin + vs[k]);
+                    fb.normals.push_back(ns[k]);
+                    fb.colours.push_back(col);
+                    // The seam shader outlines a face at the edge of its UV2
+                    // rectangle. An authored surface has no rectangle, so it
+                    // is handed one far larger than itself and draws no seam.
+                    fb.uvs.push_back(Vector2(50.0f, 50.0f));
+                    fb.uv2s.push_back(Vector2(100.0f, 100.0f));
+                }
+                fb.owner.push_back((int32_t)bi);
+                fb.other.push_back(other);
+            }
+            continue;
+        }
 
         for (int f = 0; f < 6; ++f) {
             const int sa = SLICE_AXIS[f];
@@ -1230,11 +1400,18 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset)
     }
 
     std::vector<uint8_t> solid((size_t)n, 0);
+    // Parts with authored hulls are kept out of the merge -- their cells are not
+    // what they collide as -- and get their own shapes after it.
+    std::vector<const Block *> hulled;
     for (const Block &b : c.blocks) {
         if (!b.alive) {
             continue;
         }
         const Archetype &a = archetypes[b.archetype];
+        if (!a.hulls.empty()) {
+            hulled.push_back(&b);
+            continue;
+        }
         const Vector3i base = b.cell - c.origin;
         for (int lx = 0; lx < a.size.x; ++lx) {
             for (int ly = 0; ly < a.size.y; ++ly) {
@@ -1311,6 +1488,17 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset)
         }
     }
 
+    for (const Block *b : hulled) {
+        const Archetype &a = archetypes[b->archetype];
+        const Vector3i base = b->cell - c.origin;
+        const Vector3 origin(base.x * cs.x, base.y * cs.y, base.z * cs.z);
+        for (int h = 0; h < (int)a.hulls.size(); ++h) {
+            ps->body_add_shape(body, hull_shape_for(b->archetype, h),
+                    Transform3D(Basis(), origin - offset));
+            ++count;
+        }
+    }
+
     out["map"] = Dictionary();
     out["count"] = count;
     out["merged"] = true;
@@ -1355,7 +1543,22 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
         }
         const Archetype &a = archetypes[b.archetype];
         PackedInt32Array mine;
-        if (a.is_full_box()) {
+        if (!a.hulls.empty()) {
+            // Authored hulls: the part collides as what it draws. One shared
+            // shape per hull, placed at the block's origin.
+            const Vector3 cs = cell_size();
+            const Vector3i base = b.cell - c.origin;
+            const Vector3 origin(base.x * cs.x, base.y * cs.y, base.z * cs.z);
+            for (int h = 0; h < (int)a.hulls.size(); ++h) {
+                ps->body_add_shape(body, hull_shape_for(b.archetype, h),
+                        Transform3D(Basis(), origin - offset));
+                mine.push_back(next);
+                if (!b.alive) {
+                    ps->body_set_shape_disabled(body, next, true);
+                }
+                ++next;
+            }
+        } else if (a.is_full_box()) {
             Vector3 centre, size;
             block_extent(c, b, centre, size);
             ps->body_add_shape(body, box_shape_for(size),
@@ -1462,8 +1665,12 @@ BrickWorld::~BrickWorld() {
         for (auto &kv : box_shapes) {
             ps->free_rid(kv.second);
         }
+        for (auto &kv : hull_shapes) {
+            ps->free_rid(kv.second);
+        }
     }
     box_shapes.clear();
+    hull_shapes.clear();
 }
 
 void BrickWorld::fill_indices(Chunk &c, MeshStats &st, PackedInt32Array &out) {
@@ -3487,6 +3694,80 @@ bool boxes_overlap(const Vector3i &alo, const Vector3i &ahi,
 
 int BrickWorld::ticks_per_stud() { return TICKS_STUD; }
 
+RID BrickWorld::hull_shape_for(int archetype_id, int hull) {
+    const std::pair<int, int> key(archetype_id, hull);
+    auto it = hull_shapes.find(key);
+    if (it != hull_shapes.end()) {
+        return it->second;
+    }
+    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+    const RID rid = ps->convex_polygon_shape_create();
+    ps->shape_set_data(rid, archetypes[archetype_id].hulls[hull]);
+    hull_shapes[key] = rid;
+    return rid;
+}
+
+void BrickWorld::free_hull_shapes(int archetype_id) {
+    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+    for (auto it = hull_shapes.begin(); it != hull_shapes.end();) {
+        if (it->first.first == archetype_id) {
+            if (ps != nullptr) {
+                ps->free_rid(it->second);
+            }
+            it = hull_shapes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void BrickWorld::set_archetype_hulls(int archetype_id, const Array &hulls) {
+    if (!valid_archetype(archetype_id)) {
+        return;
+    }
+    std::vector<PackedVector3Array> next;
+    for (int i = 0; i < hulls.size(); ++i) {
+        const PackedVector3Array h = hulls[i];
+        if (h.size() < 4) {
+            UtilityFunctions::push_error("BrickWorld: a hull needs at least four points");
+            return;
+        }
+        next.push_back(h);
+    }
+    // Any shape built from the old hulls is now wrong.
+    free_hull_shapes(archetype_id);
+    archetypes[archetype_id].hulls = next;
+}
+
+int BrickWorld::get_archetype_hull_count(int archetype_id) const {
+    return valid_archetype(archetype_id) ? (int)archetypes[archetype_id].hulls.size() : 0;
+}
+
+void BrickWorld::set_archetype_mesh(int archetype_id, const PackedVector3Array &positions,
+        const PackedVector3Array &normals) {
+    if (!valid_archetype(archetype_id)) {
+        return;
+    }
+    if (positions.size() % 3 != 0 || normals.size() != positions.size()) {
+        UtilityFunctions::push_error("BrickWorld: a mesh needs three positions and three normals a triangle");
+        return;
+    }
+    Archetype &a = archetypes[archetype_id];
+    a.mesh.clear();
+    for (int i = 0; i < positions.size(); i += 3) {
+        Archetype::MeshTri t;
+        for (int k = 0; k < 3; ++k) {
+            t.p[k] = positions[i + k];
+            t.n[k] = normals[i + k].normalized();
+        }
+        a.mesh.push_back(t);
+    }
+}
+
+int BrickWorld::get_archetype_mesh_triangles(int archetype_id) const {
+    return valid_archetype(archetype_id) ? (int)archetypes[archetype_id].mesh.size() : 0;
+}
+
 void BrickWorld::set_side_studs(int archetype_id, const PackedInt32Array &studs) {
     if (!valid_archetype(archetype_id)) {
         return;
@@ -3853,6 +4134,14 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::bake_variant);
     ClassDB::bind_method(D_METHOD("bake_faced_archetype", "name", "size", "mass", "cells",
             "up_face", "down_face"), &BrickWorld::bake_faced_archetype);
+    ClassDB::bind_method(D_METHOD("set_archetype_hulls", "archetype_id", "hulls"),
+            &BrickWorld::set_archetype_hulls);
+    ClassDB::bind_method(D_METHOD("get_archetype_hull_count", "archetype_id"),
+            &BrickWorld::get_archetype_hull_count);
+    ClassDB::bind_method(D_METHOD("set_archetype_mesh", "archetype_id", "positions", "normals"),
+            &BrickWorld::set_archetype_mesh);
+    ClassDB::bind_method(D_METHOD("get_archetype_mesh_triangles", "archetype_id"),
+            &BrickWorld::get_archetype_mesh_triangles);
     ClassDB::bind_method(D_METHOD("set_side_studs", "archetype_id", "studs"),
             &BrickWorld::set_side_studs);
     ClassDB::bind_method(D_METHOD("get_archetype_side_studs", "archetype_id"),
@@ -3883,6 +4172,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::would_connect);
     ClassDB::bind_method(D_METHOD("kill_block", "chunk_id", "cell"), &BrickWorld::kill_block);
     ClassDB::bind_method(D_METHOD("kill_blocks", "chunk_id", "ids"), &BrickWorld::kill_blocks);
+    ClassDB::bind_method(D_METHOD("get_chunk_studs", "chunk_id"), &BrickWorld::get_chunk_studs);
     ClassDB::bind_method(D_METHOD("get_column_mask", "chunk_id", "y0", "y1"),
             &BrickWorld::get_column_mask);
     ClassDB::bind_method(D_METHOD("build_damage_profile", "chunk_id", "fx", "fz", "thick",

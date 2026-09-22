@@ -17,6 +17,7 @@
 #include <atomic>
 #include <deque>
 #include <map>
+#include <utility>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -89,6 +90,25 @@ public:
     /// cell x, y, z then the outward normal dx, dy, dz.
     ///
     /// These are what a sideways frame attaches to. See `get_side_studs`.
+    /// Give a part an AUTHORED surface: triangles in its own local metres,
+    /// three positions and three normals each. The face bake draws these in
+    /// place of voxel faces; nothing else changes -- connectivity, stress and
+    /// collision still read the cell mask (gap 8, Docs/BuildMode.md section 10).
+    ///
+    /// Winding does not matter: each triangle is turned to face along its
+    /// normals. Pass empty arrays to go back to voxel faces.
+    void set_archetype_mesh(int archetype_id, const PackedVector3Array &positions,
+            const PackedVector3Array &normals);
+    int get_archetype_mesh_triangles(int archetype_id) const;
+
+    /// Give a part CONVEX HULLS to collide as, each a PackedVector3Array of at
+    /// least four points in its own local metres. Both collision paths -- one
+    /// body shape per block, and a standing building's merged boxes -- then use
+    /// one shared convex shape per hull for it instead of boxes. Pass an empty
+    /// array to go back to boxes.
+    void set_archetype_hulls(int archetype_id, const Array &hulls);
+    int get_archetype_hull_count(int archetype_id) const;
+
     void set_side_studs(int archetype_id, const PackedInt32Array &studs);
     PackedInt32Array get_archetype_side_studs(int archetype_id) const;
 
@@ -180,6 +200,20 @@ public:
     /// silhouette. Deliberately knows nothing about courses, walls or recipes
     /// -- the caller decides what a band is (Docs/BuildMode.md section 9.5).
     PackedByteArray get_column_mask(int chunk_id, int y0, int y1) const;
+
+    /// Every EXPOSED stud in a chunk, as a MultiMesh buffer in chunk-local
+    /// metres: TRANSFORM_3D with colours, sixteen floats an instance -- the
+    /// same layout BrickTerrain emits, so the same mesh and material draw both.
+    ///
+    /// A stud is drawn where a live block's face offers one (`up_face` STUD, or
+    /// `down_face` STUD on an inverted part) AND the cell it would stand in is
+    /// empty. Covering it with another brick removes it, which is not a visual
+    /// nicety: a covered stud is inside the brick above it, and drawing it is
+    /// ~0.8k wasted triangles a course on a wall and a z-fight on every seam.
+    ///
+    /// Dead blocks show their neighbours' studs again, because `solid_at` asks
+    /// about LIVE blocks -- a crater exposes the studs under it.
+    PackedFloat32Array get_chunk_studs(int chunk_id) const;
 
     /// Gate G1b: what the cheap representation needs to know about the damage.
     ///
@@ -726,6 +760,11 @@ private:
     /// Box collision shapes, shared by size. Keyed by size in tenths of a
     /// millimetre so a float size is a stable key.
     std::map<Vector3i, RID> box_shapes;
+    /// (archetype, hull) -> shared convex shape. Created on first use, like
+    /// box_shapes, and freed with the world.
+    std::map<std::pair<int, int>, RID> hull_shapes;
+    RID hull_shape_for(int archetype_id, int hull);
+    void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
     Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset);
 

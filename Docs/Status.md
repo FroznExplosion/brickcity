@@ -134,6 +134,30 @@ City scale, the registry, and what streaming costs:
 godot --headless --path . --script tools/city_probe.gd
 ```
 
+Drawn studs on brick chunks, and the rule that hides covered ones:
+
+```bash
+godot --headless --path . --script tools/stud_probe.gd
+```
+
+Authored surfaces (gap 8) -- a part drawn as its shape rather than its cells:
+
+```bash
+godot --headless --path . --script tools/mesh_probe.gd
+```
+
+Convex collision (gap 8, part two) -- a real space and real rays:
+
+```bash
+godot --headless --path . --script tools/hull_probe.gd
+```
+
+Anchored placement in the workshop -- drag, re-anchor, blocking, side-stud snap:
+
+```bash
+godot --headless --path . --script tools/place_probe.gd
+```
+
 Frames -- sideways building, welds, and grounding through them:
 
 ```bash
@@ -425,6 +449,124 @@ upright one.
 
 `frame_probe.gd` pins both properties -- every grid's cells inside one tick cube, and a world point
 converting into any grid without drifting further than the cell it is in.
+
+
+#### Anchored placement, pinned
+
+Looking at a stud picks a **plane** -- the frame whose up matches that face, and the face's height --
+and the ghost then slides on it following the cursor. The plane is given up only when the cursor
+finds something **nearer** than it, which is what stops the floor beyond a brick stealing the anchor
+as you drag a part off the end. Side studs on brackets anchor the same way, except the grid is
+**derived** from the stud rather than picked from the six standing ones, because a grid at a fixed
+origin steps by a plate (2 ticks) and upright faces sit on stud boundaries (5), so it could only ever
+meet every second stud.
+
+All of it was first checked by driving the scene by hand, and one of those checks was wrong in a way
+that read as a pass: a ghost that seemed to slide *through* a wall had in fact re-anchored on the
+wall's top, which is correct. `tools/place_probe.gd` now drives `_aim_ray` with exact rays and pins
+each property on its own -- **35 checks**:
+
+| | |
+|---|---|
+| Drag | a 1x4 dragged off a 1x6 walks one stud a step, on one plane, through the one-stud overlap, and places in mid-air past the end |
+| Re-anchor | a brick nearer than the plane takes the anchor; bare floor, being further, does not |
+| Blocking | a 1x6 walked toward a wall is never inside it and stops flush at the last cell that fits |
+| Side studs | aiming at a bracket snaps into a grid whose up is the stud, places flush on the face in exact ticks, and welds |
+| From above | looking straight down at a bracket builds on its top, not its side |
+| Rotate | `T` turns the last brick indefinitely; undo repeats |
+
+The probe was mutation-tested: switching off the blocking rule fails two checks, and restoring the
+old side-stud threshold fails three.
+
+That second mutation is a real bug the probe found. `_face_for` accepted a side stud with a facing
+score of -0.1, so a stud **edge-on** to the view qualified, and looking straight down at a bracket
+dropped the ghost into a sideways grid at `y = 0`. It has to face the camera now (score 0.3).
+
+**One control clash, fixed.** `S` was both "snap to side studs on/off" and the camera's fly-backward,
+so every step back toggled snapping. Snap is on `V`. The on-screen controls panel now lists every
+bound key -- camera included, and "RMB look", which was never true, replaced by what the camera
+actually does (click to capture, ESC to release) -- in a monospace font so the columns line up.
+
+
+#### Studs on the bricks, and only where nothing covers them
+
+Workshop bricks draw real studs now, with the same instanced stud mesh and printed material terrain
+uses (`PieceMeshes.stud()`, `TerrainTile.stud_material()`), so a stud on a brick and a stud on the
+ground are one thing. `BrickWorld.get_chunk_studs` emits the buffer from C++ in the engine's own
+MultiMesh layout -- sixteen floats an instance, the same as `BrickTerrain` -- and the workshop
+uploads it in one `set_buffer` per frame.
+
+**A stud is drawn where a face offers one and the cell it would stand in is empty.** A brick on top
+removes it, which is not only tidiness: a covered stud is inside the brick above it. Inverted parts
+get downward studs, turned 180 degrees about X -- a rotation, not a negative scale, or they would
+render inside out. Because the test asks about LIVE blocks, destroying or removing the covering brick
+brings the studs under it back. Each frame's studs hang off that frame's mesh, so a sideways grid's
+studs point sideways for nothing. They never cast (Terrain.md 7.4).
+
+`tools/stud_probe.gd` passes **23 checks**: the counts through covering, tiles, inverted parts, kill
+and remove; the buffer layout down to the float; and the workshop's 48 x 48 baseplate, a 2x4 that
+buries eight and shows eight, and a tile that buries four and shows none.
+
+#### Gap 8, part one: parts drawn as their shape
+
+A masked part used to be drawn as its solid cells -- right for the graph, visibly stepped for a
+curve, and in the workshop a curve is a metre from the camera. An archetype can now carry an
+**authored surface** (`set_archetype_mesh`: triangles in its own local metres, with per-vertex
+normals), and the face bake draws that instead of voxel faces.
+
+**Only the drawing changes.** Connectivity, stress, occupancy and collision all still read the cell
+mask, so nothing about how a part stands or breaks moved -- `mesh_probe.gd` checks exactly that
+before it checks any triangle.
+
+It needed no new pipeline, because a triangle fits the bake's four-vertices-a-face layout as a quad
+whose fourth corner repeats its second: the pair's second triangle, `(1, 3, 2)`, has zero area. The
+index partition, damage by degenerate triangles, index patching and sections all carry on unchanged.
+Two rules are the whole of it:
+
+* **Winding is fixed up by the extension.** Each triangle is turned to face along its normals, so an
+  author never has to know Godot draws clockwise as the front.
+* **Only a voxel neighbour hides an authored face.** A flat authored triangle on a cell boundary is
+  culled when an ordinary brick sits against it. Two authored surfaces meeting never cull each other,
+  because neither is guaranteed to fill its cells -- one stair's octagonal newel on the next one's
+  square mask cell would otherwise open holes. They are kept, face each other inside solid, and cost
+  a few triangles.
+
+Variants carry the surface through yaw and flip, and it is part of shape identity, so a meshed part
+never dedupes onto the plain part with the same cells.
+
+**The staircase is the first customer**: an octagonal newel and a tread that is a true eighth of an
+annulus, 58 triangles a step. The octagon's vertices sit on the sector boundaries, so a tread's inner
+edge is exactly one octagon side and the two meet along it rather than overlapping -- two coplanar
+tops over one patch would z-fight.
+
+`tools/mesh_probe.gd` passes **28 checks**, mutation-tested: dropping the winding fix-up fails one,
+and letting authored surfaces cull each other fails another.
+
+#### Gap 8, part two: parts that collide as their shape
+
+An archetype can also carry **convex hulls** (`set_archetype_hulls`: point sets in its own metres),
+and both collision paths use them. The per-block path -- islands, and anything whose shapes are
+disabled one block at a time by damage -- gives the block one shared convex shape per hull instead
+of a box per cell, and the damage map lists all of them against the block, so killing it disables
+all of them. The merged path a standing building uses keeps hulled parts **out of** the box merge,
+because their cells are not what they collide as, and adds their hulls afterwards. Shapes are cached
+per (archetype, hull) exactly as boxes are cached per size, dropped when the hulls are replaced, and
+freed with the world. Variants turn their hulls with the part.
+
+The staircase's two hulls are the octagonal newel and the tread, built from the same vertices
+`step_mesh` draws -- so what is seen is what is hit. Both are genuinely convex: an octagonal prism,
+and a 45 degree sector cut off by a straight chord.
+
+`tools/hull_probe.gd` passes **13 checks** against a real physics space rather than a shape count
+alone. The one that matters fires a ray at a point **inside a tread's cell but outside its curve**:
+the old box-per-cell rule reports it solid, the hulls report it empty, and the tread is solid where
+it is drawn with its top at the tread's height. Mutation-tested on the merged path (switching the
+exclusion off breaks the count); the per-block path is pinned by the shape count, the shape type and
+the ray, all three of which can only pass through it.
+
+**Connectivity, stress and occupancy are untouched by both halves** -- they read the cell mask, as
+they always have, so gap 8 changes how a part looks and what you bump into and nothing about how it
+stands or breaks.
 
 #### What frames cost, and the one seam left open
 
@@ -1552,8 +1694,10 @@ to 4 ms but was **not** the bottleneck it was predicted to be. It only mattered 
 stopped dominating.
 
 `tools/m0_probe.gd` passes 22 checks, `m1_probe.gd` 37, `m2_probe.gd` 26, `m3_probe.gd` 41,
-`palette_probe.gd` 532, `edit_probe.gd` 67, `shell_probe.gd` 28, `build_probe.gd` 46,
-`orient_probe.gd` 51, `frame_probe.gd` 67.
+`palette_probe.gd` 670, `edit_probe.gd` 74, `shell_probe.gd` 28, `build_probe.gd` 117,
+`orient_probe.gd` 51, `frame_probe.gd` 67, `place_probe.gd` 35, `fixture_probe.gd` 47,
+`interior_probe.gd` 79, `section_probe.gd` 24, `dormant_probe.gd` 21, `stud_probe.gd` 23,
+`mesh_probe.gd` 28, `hull_probe.gd` 13.
 
 > **Measurement hygiene:** `Engine.get_frames_per_second()` reports frames rendered in the *last
 > second*, so one stall drags a whole window down and its "minimum" describes no actual frame. It
@@ -3229,9 +3373,10 @@ the stress pass could not say" for why it prints all three.
    have one at all.
 13. **A dense occupancy grid costs ~150 cells per block for a hollow tower** (9.5 MB of a 150 m
    tower's 10 MB at rest). Fine for a damaged region, wrong for a whole building.
-14. **A masked part is a voxel approximation.** No baked custom mesh and no convex colliders per
-   archetype yet, so a true slope or curve reads as a staircase and collides as one. The seam is in
-   `Archetype`; the masks already carry the structural truth.
+14. ~~**A masked part is a voxel approximation.**~~ **Closed by gap 8** for any part that carries
+   an authored surface and hulls: it is drawn as its shape (`set_archetype_mesh`) and collides as it
+   (`set_archetype_hulls`). The staircase does both. A masked part WITHOUT them still meshes and
+   collides as its cells, which is the right default for anything genuinely made of cells.
 15. **A masked part collides as one box per solid cell.** Blunt but exact; merging runs into larger
    boxes is an optimisation, not a correctness matter.
 16. **Rotation is not a runtime feature.** Both orientations of a 2x4 are separate archetypes.

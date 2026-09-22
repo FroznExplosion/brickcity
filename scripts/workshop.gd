@@ -21,21 +21,34 @@ extends Node3D
 ##       operations and the extension keeps them separate (remove_block).
 
 ## Drawn bottom-left, and printed once on start. F1 hides it.
-const KEYS := """WASD / Q E   fly      shift fast · alt slow · RMB look · ESC release
-LMB          place a brick
-Z            undo the last placement
-[ ]  wheel   part          , .   colour
-R            rotate X / Z  F     flip (studs down)
-TAB          next build grid (upright / 4 sideways / inverted)
-S            snap to side studs (brackets) -- on/off
-T            rotate the brick you just placed
-I            layer: STRUCTURE / INTERIOR (what holds it up, or what is in it)
-K            spiral staircase (a fixture) at the ghost
-G            grid          H     stress overlay
-F5 / F9      save / load   ENTER place in the city and shoot it
-F1           hide these"""
+## Every bound key, once. The on-screen panel and the launch log are both built
+## from this, so neither can drift from the other or from `_unhandled_input`.
+## Rows are [section, key, action, key, action]; "" leaves a cell empty.
+const KEY_ROWS := [
+	["CAMERA", "click", "capture mouse to look", "ESC", "release it"],
+	["", "WASD", "fly", "E / SPACE", "up"],
+	["", "shift", "fast", "Q / CTRL", "down"],
+	["", "alt", "slow", "", ""],
+	["BUILD", "LMB", "place", "Z", "undo last"],
+	["", "[ ]  wheel", "part", ", .", "colour"],
+	["", "R", "rotate X / Z", "F", "flip (studs down)"],
+	["", "T", "rotate the brick just placed", "", ""],
+	["", "TAB", "next build grid", "V", "snap to side studs"],
+	["", "I", "layer: structure / interior", "", ""],
+	["", "K", "spiral staircase at the ghost", "", ""],
+	["VIEW", "G", "grid", "H", "stress overlay"],
+	["FILE", "F5 / F9", "save / load", "ENTER", "place in city, shoot it"],
+	["", "F1", "hide these", "", ""],
+]
 
-const CONTROLS := "[workshop]\n" + KEYS
+
+static func _keys_text() -> String:
+	var out := PackedStringArray()
+	for r in KEY_ROWS:
+		out.append("%-7s %-11s %-30s %-10s %s" % r)
+	return "\n".join(out)
+
+
 
 ## Baseplate size in studs. Big enough for a house, small enough that the whole
 ## thing is on screen from the default camera.
@@ -80,12 +93,14 @@ var chunk: int:
 		return asm.frames[_frame] if asm != null and asm.frames.size() > 0 else -1
 
 var _frame_meshes := {}     ## chunk id -> MeshInstance3D
+var _frame_studs := {}      ## chunk id -> MultiMeshInstance3D, child of the mesh
+var _stud_count := 0        ## studs drawn, all frames, after the last remesh
 var _ghost: MeshInstance3D
 var _grid: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
-var _keys: Label
+var _keys: GridContainer
 var _keys_panel: PanelContainer
 var _keys_on := true
 
@@ -199,7 +214,7 @@ func _ready() -> void:
 	if "--gate" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
 		call_deferred("_run_gate")
 		return
-	print(CONTROLS)
+	print("[workshop]\n" + _keys_text())
 
 
 # ---------------------------------------------------------------------------
@@ -422,13 +437,26 @@ func _build_hud() -> void:
 	_keys_panel.add_theme_stylebox_override("panel", style)
 	layer.add_child(_keys_panel)
 
-	_keys = Label.new()
-	_keys.text = KEYS
-	_style(_keys, Color(0.80, 0.84, 0.92), 13)
-	# The default theme leaves a big gap between lines, which turns eight short
-	# rows into half the screen. The constant is additive on top of the font's
-	# own line height, so it has to go negative to actually tighten.
-	_keys.add_theme_constant_override("line_spacing", -9)
+	# A GRID of labels, not one label of spaced-out text. Aligning columns with
+	# spaces needs a monospace font, and the system monospace font's line height
+	# came out different from one run to the next -- tight in one capture, twice
+	# the height in the next, with the same settings. A grid aligns by cell, in
+	# the default font, and has nothing to tune.
+	_keys = GridContainer.new()
+	_keys.columns = 5
+	_keys.add_theme_constant_override("h_separation", 14)
+	_keys.add_theme_constant_override("v_separation", 0)
+	for r in KEY_ROWS:
+		for i in 5:
+			var l := Label.new()
+			l.text = r[i]
+			var col := Color(0.55, 0.62, 0.75)        # section
+			if i == 1 or i == 3:
+				col = Color(1.0, 0.86, 0.45)          # key
+			elif i == 2 or i == 4:
+				col = Color(0.84, 0.87, 0.93)         # action
+			_style(l, col, 13)
+			_keys.add_child(l)
 	_keys_panel.add_child(_keys)
 
 	get_viewport().size_changed.connect(_place_keys)
@@ -521,7 +549,12 @@ func _aim() -> void:
 		var m := vp.get_mouse_position()
 		from = _camera.project_ray_origin(m)
 		dir = _camera.project_ray_normal(m)
+	_aim_ray(from, dir)
 
+
+## The placement rule itself, for any ray. Split from `_aim` so a probe can
+## drive it with exact rays instead of a mouse (tools/place_probe.gd).
+func _aim_ray(from: Vector3, dir: Vector3) -> void:
 	# How far along the ray the current anchor plane is, if there is one.
 	var t_plane := _anchor_distance(from, dir)
 
@@ -582,7 +615,10 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 ## face, which is the ordinary case.
 func _face_for(hit: Dictionary, dir: Vector3) -> Dictionary:
 	var best := {}
-	var best_dot := -0.1
+	# The stud has to FACE the camera, not merely not face away. At -0.1 a stud
+	# edge-on to the view scored as a candidate, so looking straight down at a
+	# bracket snapped to its side instead of building on its top.
+	var best_dot := 0.3
 	for stud in world.get_side_studs(hit.frame, hit.block):
 		var n := Vector3(stud.dir as Vector3i).normalized()
 		var d := -n.dot(dir)
@@ -874,7 +910,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_K: _place_staircase()
 		KEY_Z: _undo()
 		KEY_TAB: _cycle_frame()
-		KEY_S: _snap_on = not _snap_on
+		KEY_V: _snap_on = not _snap_on
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
 		KEY_F1: _keys_on = not _keys_on; _keys_panel.visible = _keys_on
 		KEY_H: _overlay_on = not _overlay_on; _stress_dirty = true; _refresh_overlay()
@@ -1139,6 +1175,7 @@ func _after_edit() -> void:
 ## so it cannot share a mesh with another -- that is the whole reason a sideways
 ## brick is a frame rather than a rotated block.
 func _remesh() -> void:
+	_stud_count = 0
 	for i in asm.frames.size():
 		var f: int = asm.frames[i]
 		var mi: MeshInstance3D = _frame_meshes.get(f)
@@ -1153,6 +1190,69 @@ func _remesh() -> void:
 		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		mi.mesh = m
+		_restud(f, mi)
+
+
+## Studs for one frame: the same instanced stud and the same printed material
+## the terrain uses (terrain_tile.gd), so a stud on a brick and a stud on the
+## ground are one thing.
+##
+## The instances come from `BrickWorld.get_chunk_studs`, which already leaves out
+## every stud a brick is sitting on -- a covered stud is inside the brick above,
+## and drawing it would only z-fight the seam. They are in chunk-local space and
+## the MultiMesh is a child of the frame's mesh, so a sideways frame's studs
+## point sideways with no extra work.
+##
+## Rebuilt whole on every edit. The workshop holds hundreds of bricks, the
+## buffer is emitted by C++ in the engine's own layout, and one set_buffer is
+## cheaper than working out which studs a placement covered.
+## Terrain's shared stud material when it exists, so a stud on a brick and a stud
+## on the ground are drawn by one thing; a plain vertex-coloured one otherwise.
+##
+## Looked up by name rather than called directly because the printed-plastic
+## stud material and its shader are terrain work that lands on its own schedule.
+## A direct call is a PARSE error wherever that work is not present, and a parse
+## error takes the whole workshop down with it -- which is what the first commit
+## attempt of this found, building from a clean checkout.
+static var _studs_fallback: StandardMaterial3D = null
+
+static func _stud_material() -> Material:
+	var terrain: Script = load("res://scripts/terrain_tile.gd")
+	if terrain != null:
+		for m in terrain.get_script_method_list():
+			if m.name == "stud_material":
+				return terrain.call("stud_material")
+	if _studs_fallback == null:
+		_studs_fallback = StandardMaterial3D.new()
+		_studs_fallback.vertex_color_use_as_albedo = true
+		_studs_fallback.roughness = 0.75
+	return _studs_fallback
+
+
+func _restud(frame: int, parent: MeshInstance3D) -> void:
+	var mmi: MultiMeshInstance3D = _frame_studs.get(frame)
+	if mmi == null:
+		mmi = MultiMeshInstance3D.new()
+		mmi.name = "Studs"
+		mmi.material_override = _stud_material()
+		# Studs never cast (Terrain.md 7.4): a 0.07 m shadow for thousands of
+		# instances through every cascade, drawn analytically by the shader
+		# instead.
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mmi)
+		_frame_studs[frame] = mmi
+	var buffer: PackedFloat32Array = world.get_chunk_studs(frame)
+	@warning_ignore("integer_division")
+	var count := buffer.size() / 16
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.stud()
+	mm.instance_count = count
+	if count > 0:
+		mm.set_buffer(buffer)
+	mmi.multimesh = mm
+	_stud_count += count
 
 
 # ---------------------------------------------------------------------------

@@ -84,6 +84,32 @@ struct Archetype {
     };
     std::vector<SideStud> side_studs;
 
+    // --- authored surface -----------------------------------------------
+    //
+    // Gap 8 (Docs/BuildMode.md section 10). A masked part meshes as its solid
+    // CELLS, which is right for the graph and the physics and visibly stepped
+    // for anything curved -- and in the workshop a curve is a metre from the
+    // camera. An archetype may instead carry authored triangles, in its own
+    // local metres, and the face bake draws those instead of voxel faces.
+    //
+    // The cell mask is untouched by this and stays the truth: connectivity,
+    // stress, occupancy and collision all still read `cells`. Only the DRAWING
+    // changes, which is what keeps destruction exactly as it was.
+    struct MeshTri {
+        Vector3 p[3];
+        Vector3 n[3]; // per-vertex normals, so a curved wall can shade smooth
+    };
+    std::vector<MeshTri> mesh;
+
+    // Convex hulls to COLLIDE as, in the part's local metres -- the other half
+    // of gap 8. Empty means the old rule: a full box collides as one box, a
+    // masked part as one box per solid cell. With hulls, the part collides as
+    // exactly what `mesh` draws, so a figure stands on a curved tread where the
+    // tread is rather than on the square cells under it.
+    //
+    // Collision only. Occupancy, connectivity and stress still read `cells`.
+    std::vector<PackedVector3Array> hulls;
+
     std::vector<uint8_t> cells;     // size.x * size.y * size.z, 1 = solid
     std::vector<uint8_t> up_face;   // size.x * size.z, Face. empty = all STUD
     std::vector<uint8_t> down_face; // size.x * size.z, Face. empty = all SOCKET
@@ -141,6 +167,31 @@ struct Archetype {
             if (p.x != q.x || p.y != q.y || p.z != q.z
                     || p.dx != q.dx || p.dy != q.dy || p.dz != q.dz) {
                 return false;
+            }
+        }
+        // An authored surface is part of the shape too: two parts with the same
+        // cells and different meshes must not share an id.
+        if (mesh.size() != o.mesh.size()) {
+            return false;
+        }
+        if (hulls.size() != o.hulls.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < hulls.size(); ++i) {
+            if (hulls[i].size() != o.hulls[i].size()) {
+                return false;
+            }
+            for (int k = 0; k < hulls[i].size(); ++k) {
+                if (!hulls[i][k].is_equal_approx(o.hulls[i][k])) {
+                    return false;
+                }
+            }
+        }
+        for (size_t i = 0; i < mesh.size(); ++i) {
+            for (int k = 0; k < 3; ++k) {
+                if (!mesh[i].p[k].is_equal_approx(o.mesh[i].p[k])) {
+                    return false;
+                }
             }
         }
         return size == o.size && cells == o.cells

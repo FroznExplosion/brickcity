@@ -67,8 +67,159 @@ static func _bake_step(world: BrickWorld, sector: int) -> int:
 	# Studs on top and sockets underneath wherever the part is solid: that is
 	# what clips one step's slice of newel to the next one's and makes the
 	# column a real load path rather than a drawing of one.
-	return world.bake_shaped_archetype("stair_step_%d" % sector, size,
+	var id := world.bake_shaped_archetype("stair_step_%d" % sector, size,
 			float(n) * BrickPalette.MASS_PER_CELL, cells, solid, solid)
+	if id >= 0:
+		# Drawn as its real shape rather than as its cells (gap 8). The mask
+		# above stays the truth for connectivity, stress and collision -- only
+		# the drawing changes -- so a flight still stands, loads and breaks
+		# exactly as it did.
+		var m := step_mesh(sector)
+		world.set_archetype_mesh(id, m[0], m[1])
+		# And COLLIDES as that shape, so a figure stands on the tread where it
+		# is drawn rather than on the square cells under it.
+		world.set_archetype_hulls(id, step_hulls(sector))
+	return id
+
+
+## The two convex pieces a step collides as, in the step's own metres: the
+## octagonal newel and the tread.
+##
+## Both are genuinely convex, which is what a convex shape needs: an octagonal
+## prism, and an eighth of an annulus cut off by a straight chord -- a sector of
+## 45 degrees is convex, and the chord only removes a convex piece of it. They
+## use exactly the vertices step_mesh() draws, so what you see is what you hit.
+static func step_hulls(sector: int) -> Array:
+	var S := BrickPalette.STUD_M
+	var y0 := 0.0
+	var y1 := float(STEP_PLATES) * BrickPalette.PLATE_M
+	var cx := float(DIAMETER) * 0.5 * S
+	var cz := cx
+	var rn := float(NEWEL) * 0.5 * S / cos(PI / 8.0)
+	var ro := float(DIAMETER) * 0.5 * S
+	var step := TAU / float(STEPS_PER_TURN)
+	var lo := float(sector) * step
+	var hi := lo + step
+
+	var newel := PackedVector3Array()
+	for k in STEPS_PER_TURN:
+		var a := float(k) * step
+		for y in [y0, y1]:
+			newel.push_back(Vector3(cx + rn * cos(a), y, cz + rn * sin(a)))
+
+	var tread := PackedVector3Array()
+	for y in [y0, y1]:
+		tread.push_back(Vector3(cx + rn * cos(lo), y, cz + rn * sin(lo)))
+		tread.push_back(Vector3(cx + rn * cos(hi), y, cz + rn * sin(hi)))
+		for i in ARC_SEGMENTS + 1:
+			var a := lerpf(lo, hi, float(i) / ARC_SEGMENTS)
+			tread.push_back(Vector3(cx + ro * cos(a), y, cz + ro * sin(a)))
+	return [newel, tread]
+
+
+## Arc segments per step. Four across 45 degrees keeps the outer edge reading as
+## a curve at a metre, which is where the workshop puts the camera.
+const ARC_SEGMENTS := 4
+
+
+## One step's surface, in the step's own metres: [positions, normals], three of
+## each a triangle.
+##
+## An octagonal newel and a tread that is an eighth of an annulus. The octagon's
+## vertices sit on the SECTOR boundaries, so a tread's inner edge is exactly one
+## side of the octagon and the two meet along it instead of overlapping -- two
+## coplanar tops over the same patch would z-fight. That side is the one this
+## step leaves out of its newel.
+##
+## Winding is left to the extension, which turns every triangle to face along
+## its normals.
+static func step_mesh(sector: int) -> Array:
+	var pos := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var S := BrickPalette.STUD_M
+	var y0 := 0.0
+	var y1 := float(STEP_PLATES) * BrickPalette.PLATE_M
+	var cx := float(DIAMETER) * 0.5 * S
+	var cz := cx
+	# The newel's INradius is the mask's half-width, so the octagon sits inside
+	# the square column the connectivity graph sees, touching its sides.
+	var rn := float(NEWEL) * 0.5 * S / cos(PI / 8.0)
+	var ro := float(DIAMETER) * 0.5 * S
+	var step := TAU / float(STEPS_PER_TURN)
+	var lo := float(sector) * step
+	var hi := lo + step
+
+	var at := func(r: float, a: float, y: float) -> Vector3:
+		return Vector3(cx + r * cos(a), y, cz + r * sin(a))
+	var radial := func(a: float) -> Vector3:
+		return Vector3(cos(a), 0.0, sin(a))
+	var tri := func(a: Vector3, b: Vector3, c: Vector3, na: Vector3, nb: Vector3, nc: Vector3) -> void:
+		pos.append_array([a, b, c])
+		nrm.append_array([na, nb, nc])
+	var flat := func(a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
+		tri.call(a, b, c, n, n, n)
+
+	var up := Vector3.UP
+	var down := Vector3.DOWN
+	var p_lo: Vector3 = at.call(rn, lo, 0.0)
+	var p_hi: Vector3 = at.call(rn, hi, 0.0)
+
+	# --- tread: top and bottom, a strip from the chord out to the arc -------
+	for i in ARC_SEGMENTS:
+		var t0 := float(i) / ARC_SEGMENTS
+		var t1 := float(i + 1) / ARC_SEGMENTS
+		for y in [y0, y1]:
+			var n: Vector3 = up if y == y1 else down
+			var in0 := p_lo.lerp(p_hi, t0) + Vector3(0, y, 0)
+			var in1 := p_lo.lerp(p_hi, t1) + Vector3(0, y, 0)
+			var o0: Vector3 = at.call(ro, lerpf(lo, hi, t0), y)
+			var o1: Vector3 = at.call(ro, lerpf(lo, hi, t1), y)
+			flat.call(in0, in1, o1, n)
+			flat.call(in0, o1, o0, n)
+
+	# --- tread: the outer wall, shaded smooth so it reads as a curve --------
+	for i in ARC_SEGMENTS:
+		var a0 := lerpf(lo, hi, float(i) / ARC_SEGMENTS)
+		var a1 := lerpf(lo, hi, float(i + 1) / ARC_SEGMENTS)
+		var b0: Vector3 = at.call(ro, a0, y0)
+		var b1: Vector3 = at.call(ro, a1, y0)
+		var t0: Vector3 = at.call(ro, a0, y1)
+		var t1: Vector3 = at.call(ro, a1, y1)
+		var n0: Vector3 = radial.call(a0)
+		var n1: Vector3 = radial.call(a1)
+		tri.call(b0, b1, t1, n0, n1, n1)
+		tri.call(b0, t1, t0, n0, n1, n0)
+
+	# --- tread: the two risers, one at each end of the sector ---------------
+	for end in [[lo, Vector3(sin(lo), 0.0, -cos(lo))], [hi, Vector3(-sin(hi), 0.0, cos(hi))]]:
+		var a: float = end[0]
+		var n: Vector3 = end[1]
+		var i0: Vector3 = at.call(rn, a, y0)
+		var i1: Vector3 = at.call(rn, a, y1)
+		var o0: Vector3 = at.call(ro, a, y0)
+		var o1: Vector3 = at.call(ro, a, y1)
+		flat.call(i0, o0, o1, n)
+		flat.call(i0, o1, i1, n)
+
+	# --- newel: an octagonal prism, less the side the tread joins -----------
+	var c0 := Vector3(cx, y0, cz)
+	var c1 := Vector3(cx, y1, cz)
+	for k in STEPS_PER_TURN:
+		var a0 := float(k) * step
+		var a1 := float(k + 1) * step
+		flat.call(c1, at.call(rn, a0, y1), at.call(rn, a1, y1), up)
+		flat.call(c0, at.call(rn, a1, y0), at.call(rn, a0, y0), down)
+		if k == sector:
+			continue  # the tread's inner edge; inside solid
+		var n: Vector3 = radial.call((a0 + a1) * 0.5)
+		var b0: Vector3 = at.call(rn, a0, y0)
+		var b1: Vector3 = at.call(rn, a1, y0)
+		var u0: Vector3 = at.call(rn, a0, y1)
+		var u1: Vector3 = at.call(rn, a1, y1)
+		flat.call(b0, b1, u1, n)
+		flat.call(b0, u1, u0, n)
+
+	return [pos, nrm]
 
 
 ## Which columns of the bounding box this sector fills: the whole newel, plus
