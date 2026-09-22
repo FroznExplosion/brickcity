@@ -100,6 +100,11 @@ static func build(world: BrickWorld, chunk: int, into: MultiMesh = null) -> Mult
 static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 		held: Dictionary) -> int:
 	var node: MultiMeshInstance3D = held.get(chunk)
+	# A node whose parent was freed is not null, it is FREED, and reading
+	# anything off it is an error rather than a null check.
+	if node != null and not is_instance_valid(node):
+		held.erase(chunk)
+		node = null
 	var mm := build(world, chunk, node.multimesh if node != null else null)
 	if mm == null:
 		if node != null:
@@ -129,6 +134,9 @@ static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 ## Drop a chunk's furniture node, if it has one.
 static func drop(chunk: int, held: Dictionary) -> void:
 	var node: MultiMeshInstance3D = held.get(chunk)
-	if node != null:
+	# Valid, not merely non-null: this node hangs off the building's own,
+	# and freeing that takes this with it while leaving the map pointing at
+	# a freed object.
+	if node != null and is_instance_valid(node):
 		node.queue_free()
 	held.erase(chunk)

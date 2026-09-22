@@ -1384,6 +1384,11 @@ func _topple(id: int) -> void:
 	var carried_mesh: ArrayMesh = _brick_meshes.get(id)
 	var carried_bytes: int = int(_brick_index_bytes.get(id, 0))
 	var carried_width: int = int(_brick_index_width.get(id, 4))
+	# The furniture node goes with the mesh node to the island, and the island
+	# then makes its OWN from its own chunk -- so the first one hangs there
+	# drawing furniture that has already been redrawn, forever. It is the
+	# floating brick over a building that has come down.
+	FurnitureMesh.drop(chunk, _furniture)
 	# A banded building has no single mesh to hand over -- it has its bands,
 	# and they already hold the right geometry. The island draws them until
 	# the first thing that changes it, and becomes an ordinary one-mesh
@@ -2364,6 +2369,10 @@ func _demesh(id: int) -> void:
 		for node in _take_bands(id):
 			if is_instance_valid(node):
 				_retirer.retire((node as MeshInstance3D).mesh)
+		# And the furniture, which is ALSO a child of this node. Freeing the
+		# parent takes the node with it but leaves the map pointing at a freed
+		# object, and the next attach reads that as "already have one".
+		FurnitureMesh.drop(b.chunk, _furniture)
 		mi.queue_free()
 		_brick_nodes.erase(id)
 	_brick_meshes.erase(id)

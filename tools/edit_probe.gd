@@ -206,7 +206,11 @@ func _check_would_connect() -> void:
 
 func _check_tint_states() -> void:
 	print("\nthe ghost's three states")
-	var c := _chunk(Vector3i(16, 16, 16))
+	# Room for the biggest part in the palette to sit in mid-air without
+	# touching a wall of the chunk: a floor panel is 10 studs across and a
+	# column is 12 plates tall, and a part that does not FIT reads as red
+	# rather than amber.
+	var c := _chunk(Vector3i(32, 32, 32))
 	_world.place_block(c, Vector3i(0, 0, 0), _a("plate_4x4"), 2)
 
 	# Exactly one of the three, every time, for every part in the palette.

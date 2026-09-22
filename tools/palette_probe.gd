@@ -102,7 +102,14 @@ func _check_names(palette: Dictionary) -> void:
 		_ok("%s: W <= L in the name" % part, w <= l, "%dx%d" % [w, l])
 		_ok("%s: canonical size matches the name" % part,
 				size.x == w and size.z == l, "%v" % size)
-		var expect_y := 3 if bits[0] in ["brick", "bracket"] else 1
+		# A plate is one, a brick is three, and a COLUMN is four bricks -- the
+		# gap between one floor and the next, so it stands on the floor below
+		# and the floor above stands on it.
+		var expect_y := 1
+		if bits[0] in ["brick", "bracket"]:
+			expect_y = 3
+		elif bits[0] == "column":
+			expect_y = 12
 		_ok("%s: %s is %d plate(s) tall" % [part, bits[0], expect_y], size.y == expect_y,
 				"y = %d" % size.y)
 
@@ -228,7 +235,8 @@ func _check_mass(w: BrickWorld, palette: Dictionary) -> void:
 
 func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 	print("\nstuds")
-	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 16, 16))
+	# Tall enough to stack two of the tallest part: a column is 12 plates.
+	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 32, 16))
 	var x := 0
 	var studded := 0
 	var smooth := 0

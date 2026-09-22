@@ -122,6 +122,22 @@ const _PARTS := {
 	"plate_2x2": Vector3i(2, 1, 2),
 	"plate_2x4": Vector3i(2, 1, 4),
 	"plate_4x4": Vector3i(4, 1, 4),
+	## A floor panel. One of these covers what a hundred 1x1 plates would, and
+	## floors were 75% of every block in a building -- 30,855 plate_4x4 of a
+	## 50,535-block tower -- so the size of the floor unit is the single biggest
+	## number in the whole brick budget.
+	"plate_10x10": Vector3i(10, 1, 10),
+
+	# --- columns, four bricks tall --------------------------------------
+	# One block each rather than four stacked bricks, because a column is a
+	# column: nothing is ever going to break it in the middle that would not
+	# also break it whole, and four blocks would cost four of everything.
+	#
+	# Twelve plates is exactly four courses, which is exactly the gap between
+	# one floor and the next -- so a column stands on the floor below and the
+	# floor above stands on it.
+	"column_1x1": Vector3i(1, 12, 1),
+	"column_2x2": Vector3i(2, 12, 2),
 
 	# --- bricks, three plates tall --------------------------------------
 	"brick_1x1": Vector3i(1, 3, 1),   # one stud, full height
