@@ -18,11 +18,20 @@ func _init() -> void:
 	quit()
 
 
+## A footprint the lattice divides, as every city shape is. It was 16x12, which
+## divides into nothing: its floors end in a strip of small plates reaching
+## neither the walls nor a lattice column, tied to the building only by a stack
+## of columns of their own -- and on its side that stack is five loose blocks
+## that say nothing about fallen SECTIONS, which is what this probe is for.
+const FX := 20
+const FZ := 20
+
+
 func _world() -> Array:
 	var w := BrickWorld.new()
 	var palette := TowerRecipe.bake_palette(w)
-	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(16, 12, 16))
-	TowerRecipe.build(w, c, palette, 16, 12, 16)
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(FX, FZ, 16))
+	TowerRecipe.build(w, c, palette, FX, FZ, 16)
 	w.set_tension_per_stud(c, 9.3)
 	return [w, c]
 
@@ -39,7 +48,7 @@ func _check_split_takes_its_collision() -> void:
 	# Saw straight through the middle, the way shooting along a line does.
 	var mid := 8 * TowerRecipe.PLATES_PER_COURSE
 	var cut := 0
-	for x in range(0, 17, 1):
+	for x in range(0, FX + 1, 1):
 		cut += w.apply_hit(c, Vector3(x * STUD, mid * PLATE, 2.0), 1.1).size()
 	print("  %d blocks, cut %d of them out across the middle" % [total, cut])
 
@@ -138,7 +147,7 @@ func _check_tension_on_a_fallen_piece() -> void:
 	var courses: int = TowerRecipe.total_plates(16) / TowerRecipe.PLATES_PER_COURSE + 1
 	var removed := 0
 	for y in range(0, courses):
-		for z in range(0, 17, 2):
+		for z in range(0, FZ + 1, 2):
 			removed += w.apply_hit(c, xform * Vector3(1.0 * STUD, y * 3 * PLATE, z * STUD),
 					1.0).size()
 	w.solve_stress(c)

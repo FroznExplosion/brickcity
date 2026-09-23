@@ -1054,6 +1054,18 @@ pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--int
 measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
 `--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
 
+### Floors are part of their walls
+
+`tools/structure_probe.gd` found that not one floor panel in the city was joined to an exterior
+wall: the floor stopped at the inside face and every panel hung on columns. The lattice now starts
+at the outer face, so the edge panels run under the walls and every course clamps them; columns
+stand centred on lattice points and tie four panels each; interior walls straddle the seams.
+Footprints are `k * PANEL` (the city's shapes are 30-80 studs), and a stairwell is a cell clear of
+the walls. Every shape stands, every edge panel is joined, the biggest tower went from 29,716
+blocks to 22,507, and removing every column drops 136 of its 1,646 panels instead of 1,020.
+Collapses shed far fewer loose floor panels as a result -- 51 islands in `--shot` against 140-176.
+1x4 walls were measured and left as a switch (`ROOM_WALL_THICK`); see Scale.md, "The seventh".
+
 ### Floating furniture: four causes, counted
 
 Reported by eye: furniture hanging untextured where a floor used to be, and dropping the moment

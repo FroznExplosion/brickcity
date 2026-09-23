@@ -238,7 +238,10 @@ func rooms_of(building_id: int) -> Array[Room]:
 			# where the columns go. Copied first: a room's posts are the
 			# lattice's own array, shared by every storey of every building
 			# of this shape.
-			var keep := _keepouts_of(b)
+			# SNAPPED, as the recipe snaps them: the floor it leaves out is the
+			# whole cells a keep-out touches, not the keep-out itself.
+			var keep := TowerRecipe.snap_keepouts(_keepouts_of(b),
+					b.recipe.footprint_x, b.recipe.footprint_z)
 			if not keep.is_empty():
 				for room in b.rooms:
 					var plan := Rect2i(room.lo.x, room.lo.z, room.size.x, room.size.z)

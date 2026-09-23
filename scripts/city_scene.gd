@@ -31,34 +31,38 @@ const PLATE := BrickPalette.PLATE_M
 
 ## Building shapes, chosen to give a skyline rather than a grid of clones.
 ##
-## Footprints are LATTICE-CONFORMING: `2 * WALL_THICK + k * PANEL`, so 24, 34,
-## 44 and so on. Every one divides into whole floor panels, each with a column
-## at its corner, and nothing left over at the far wall.
+## Footprints are LATTICE-CONFORMING: `k * PANEL`, so 20, 30, 40 and so on.
+## Every one divides into whole floor panels from face to face -- the ones round
+## the edge running under the walls, which is what makes each floor part of its
+## walls -- with nothing left over.
 ##
-## That is the constraint five attempts at the floor rewrite failed on. A
-## footprint of 80 studs leaves 76 inside, which is seven panels and a six-stud
-## strip, and that strip fills with small plates reaching neither a column nor a
-## wall. Stretching the lattice to fit the footprint could not be made to work;
-## choosing footprints that fit the lattice makes the whole class of failure go
-## away. Docs/Scale.md.
+## That is the constraint five attempts at the floor rewrite failed on: a
+## footprint that does not divide leaves a strip of small plates reaching
+## neither a column nor a wall. Choosing footprints that fit the lattice makes
+## the whole class of failure go away. Docs/Scale.md.
+##
+## They were `2 * WALL_THICK + k * PANEL` (24, 34, 44...) while the floor
+## stopped at the inside face of the wall. Now it runs to the outer face, each
+## shape is four studs smaller outside and has the same number of panels.
 ##
 ## It is a constraint in STUDS, so a printed brick still lines up: the lattice
 ## is a multiple of the stud pitch, not a departure from it.
 ##
-## The smallest here is 24 and not 14, because a stairwell is a whole panel
-## across and the interior of a 14-stud building is 10 -- the carve took the
-## entire floor and the building came apart on its own.
+## The smallest here is 30, because a stairwell is a whole panel across and has
+## to be a cell CLEAR of the walls: a 20-stud building is two cells, both under
+## a wall on their outer sides, and a staircase in either cut through the wall
+## to fit (TowerRecipe.stair_line).
 ##
 ## Courses are whole storeys of TowerRecipe.COURSES_PER_FLOOR. When a storey went
 ## from four courses to six, every shape kept its height (or lost up to a storey
 ## of it) and gave up floors instead: 46 courses was 11 floors and is 7 now.
 const SHAPES := [
-	{"x": 24, "z": 24, "courses": 18},
-	{"x": 34, "z": 24, "courses": 30},
-	{"x": 34, "z": 34, "courses": 42},
-	{"x": 24, "z": 34, "courses": 60},
-	{"x": 44, "z": 34, "courses": 24},
-	{"x": 24, "z": 24, "courses": 78},
+	{"x": 30, "z": 30, "courses": 18},
+	{"x": 40, "z": 30, "courses": 30},
+	{"x": 30, "z": 30, "courses": 42},
+	{"x": 30, "z": 40, "courses": 60},
+	{"x": 40, "z": 30, "courses": 24},
+	{"x": 30, "z": 30, "courses": 78},
 ]
 
 ## `--big`: the same city with buildings the size the game eventually wants.
@@ -68,12 +72,12 @@ const SHAPES := [
 ## interiors that is a judgement call at 20x20x18 is a measurement at this
 ## size, which is what the mode exists for.
 const BIG_SHAPES := [
-	{"x": 44, "z": 34, "courses": 60},
-	{"x": 44, "z": 44, "courses": 120},
-	{"x": 64, "z": 44, "courses": 162},
-	{"x": 54, "z": 54, "courses": 102},
-	{"x": 84, "z": 64, "courses": 204},
-	{"x": 34, "z": 34, "courses": 246},
+	{"x": 40, "z": 30, "courses": 60},
+	{"x": 40, "z": 40, "courses": 120},
+	{"x": 60, "z": 40, "courses": 162},
+	{"x": 50, "z": 50, "courses": 102},
+	{"x": 80, "z": 60, "courses": 204},
+	{"x": 30, "z": 30, "courses": 246},
 ]
 ## Set in the SCENE as well as on the command line, so that
 ## `scenes/big_city.tscn` is something you open and press play on rather than a
@@ -787,20 +791,6 @@ func _build_city() -> void:
 	_update_hud()
 
 
-## The lattice line nearest the middle of a footprint: which floor cell a
-## stairwell goes in.
-func _nearest_lattice(footprint: int) -> int:
-	var lines: Array = TowerRecipe.lattice(footprint)
-	if lines.is_empty():
-		return TowerRecipe.WALL_THICK
-	var middle := float(footprint) * 0.5 - float(TowerRecipe.PANEL) * 0.5
-	var best: int = int(lines[0])
-	for v in lines:
-		if absf(float(v) - middle) < absf(float(best) - middle):
-			best = int(v)
-	return best
-
-
 ## A spiral staircase up the middle, dormant.
 ##
 ## Docs/BuildMode.md section 9: a fixture is a sub-assembly with its own
@@ -811,15 +801,14 @@ func _nearest_lattice(footprint: int) -> int:
 func _add_staircase(id: int, footprint_x: int, footprint_z: int, courses: int) -> void:
 	if _no_fixtures:
 		return
-	if mini(footprint_x, footprint_z) < StaircaseRecipe.DIAMETER + 2:
-		return  # no room inside the walls for a flight
-	# ON a lattice point, so the shaft is exactly one floor cell. Anywhere else
-	# it straddles two, and a cell cut in half loses the column at its corner
-	# along with half its panel.
-	var at := Vector3i(
-			_nearest_lattice(footprint_x),
-			TowerRecipe.SLAB_PLATES,
-			_nearest_lattice(footprint_z))
+	# ON a lattice point, so the shaft is exactly one floor cell -- and a cell
+	# clear of the exterior walls, which run over the edge cells. Anywhere else
+	# it straddles two cells, or cuts through the wall.
+	var sx := TowerRecipe.stair_line(footprint_x)
+	var sz := TowerRecipe.stair_line(footprint_z)
+	if sx < 0 or sz < 0:
+		return  # no cell inside the walls for a flight
+	var at := Vector3i(sx, TowerRecipe.SLAB_PLATES, sz)
 	registry.add_fixture(id, "staircase", {
 		"steps": StaircaseRecipe.steps_for_courses(courses),
 		"colour": 11,

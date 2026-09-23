@@ -11,13 +11,15 @@ Last updated **2026-09-23**, after the drawn interior rung (§2.1).
 
 ## 1. Where things stand
 
-The **structure half is finished and clean.** Buildings are laid on a lattice:
-one `plate_10x10` per floor cell, a column under every panel, interior walls on
-lattice lines, and a stairwell that is exactly one cell. Eleven shapes build
-with **zero stress failures and zero detached blocks**, and the biggest tower
-went from 50,535 blocks to 34,215 *with rooms included*. The 26-probe suite is
-green. Docs/Scale.md has the full account, including the three bugs it flushed
-out and the four things not to relearn.
+The **structure half is finished and clean.** Buildings are laid on a lattice
+that starts at the outer face: one `plate_10x10` per floor cell, the edge ones
+running under the exterior walls so **every floor is clamped into its walls**,
+columns centred on lattice points tying four panels each, interior walls
+straddling panel seams, and a stairwell that is one cell clear of the walls.
+Twelve shapes build with **zero stress failures and zero detached blocks** and
+the biggest tower is 22,507 blocks (it was 50,535 before the lattice and 29,716
+before the floors went into the walls). `tools/structure_probe.gd` is the gate;
+Docs/Scale.md has the full account, "The seventh: floors IN the walls".
 
 The **interior half is where the work is.** Rooms and their contents exist and
 are correct, and now have three states: nothing, drawn, or every brick (§2.1).
@@ -115,19 +117,22 @@ marking does not.
 
 ## 3. Open questions and known limits
 
-* **Small footprints get one room.** `ROOM_PANELS = 3`, so a 24- or 34-stud
+* **Small footprints get two rooms.** `ROOM_PANELS = 3`, so a 30- or 40-stud
   building has no lattice line far enough in to carry a wall and falls back to
   one wall down the middle. Fine today; revisit if the city gets more small
   buildings.
+* **1x4 walls are a switch, not the default.** `ROOM_WALL_THICK` / `WALL_THICK`
+  = 1 builds them; measured, they save no blocks and stop tying the floor
+  together (Scale.md). If they are wanted for the look, they want columns.
 * **`ROOM_PANELS` is a budget decision.** An interior wall is four courses
   running the width of the building on *every* storey. At three panels (~10 m)
   the big tower's interior walls are about 9,000 blocks. At one panel they
   would cost more than the floors do. Do not lower it without measuring.
-* **Non-conforming footprints still work, but pay.** Columns follow the panels
-  the floor laid, so a footprint that does not divide is correct — its leftover
-  strip just fragments into 4x4s and 2x2s with a column under each. The city's
-  shape tables conform (`2 * WALL_THICK + k * PANEL`); anything authored in the
-  workshop may not, and that is the cost.
+* **Non-conforming footprints still work, but pay.** A footprint that does not
+  divide leaves a strip of 4x4s and 2x2s that reach neither a wall nor a lattice
+  column, so they get columns of their own — tied to the building only through
+  the base, which on its side comes loose. The city's shape tables conform
+  (`k * PANEL`); anything authored in the workshop may not, and that is the cost.
 * **Real printable assets are not started.** The decision stands: game parts and
   printable parts are separate assets so each can be designed for its medium,
   and things nobody prints — building structure, terrain, the 10x10 floor panel,
@@ -141,7 +146,7 @@ marking does not.
 Godot: `C:\Users\lbaun\Documents\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stable_win64_console.exe`
 
 ```sh
-# every probe -- 26 of them, all should end "0 failed"
+# every probe -- 28 of them, all should end "0 failed"
 for f in tools/*_probe.gd; do "$GODOT" --headless --path . --script "$f"; done
 
 # the city. NAME THE SCENE: main_scene is terrain_test.tscn in the working tree.
@@ -160,9 +165,10 @@ exit. The `--shot` pass's "settled wreckage is still breakable" check is
 flaky — it aims at one brick of whatever piece landed biggest — so rerun
 before believing a FAIL there.
 
-Numbers to beat, as of `17b0127`: 22 buildings in 22 ms (63 ms for `--big`),
-16,572 triangles of shell, and every one of the eleven shapes building with
-zero stress failures and zero detached blocks.
+Numbers to beat, as of the floors-in-walls change: 22 buildings in ~20 ms,
+16,572 triangles of shell, and `structure_probe` 48/0 -- every one of the twelve
+shapes standing with zero stress failures, zero detached blocks and every edge
+floor panel joined to its wall. The biggest tower is 22,507 blocks.
 
 Building the GDExtension: `cd gdextension/brick && python -m SCons target=template_debug -j8`
 (`scons` is not on PATH; the module is).

@@ -547,6 +547,63 @@ support face, and the top of that face held the whole thing up — so the check
 passed nothing and failed. The undercut is worked out from the recipe now.
 **A hard-coded extent in a probe is a check with a shelf life.**
 
+#### The seventh: floors IN the walls (2026-09-23)
+
+The sixth attempt stood up, and `tools/structure_probe.gd` asked it a question
+nobody had: **which floor panels share a joint with an exterior wall?** None.
+Not one in the city — 0 of 840 on the biggest tower. The lattice started at the
+inside face of the wall, the ring under the wall was its own 2x2 plates, and
+plates side by side are not joined, so every floor hung on its columns and
+interior walls alone. Take the columns out and 1,020 of 1,646 panels fell.
+
+The fix is the one a real modular building uses: **the floor runs to the outer
+face**, so the edge panels go under the walls and every course above and below
+clamps them. Three changes, each for a reason:
+
+* **The lattice starts at 0; footprints are `k * PANEL`.** Every shape is four
+  studs smaller outside with the same panels, and the separate wall ring is gone.
+* **Columns stand centred on lattice points**, so a column's top carries the
+  corners of all four panels meeting there and ties them together. Under one
+  panel's corner, a column joined nothing.
+* **Interior walls straddle the seam** they stand on, so a wall ties its two
+  panels along their whole length.
+
+And one thing it forced: **a stairwell must be a cell clear of the walls**
+(`TowerRecipe.stair_line`). An edge cell is under a wall now, and a staircase
+there cut through it. So the smallest shape is 30, not 20.
+
+| shape (old → new) | blocks before | after | panels fall, columns removed |
+|---|---|---|---|
+| 24x24x18 → 30x30x18 | 787 | 651 | 0 → 0 |
+| 44x34x24 → 40x30x24 | 1,619 | 1,157 | 24 → 0 |
+| 44x44x120 → 40x40x120 | 8,829 | 6,758 | 160 → 0 |
+| 64x44x162 → 60x40x162 | 15,073 | 11,016 | 378 → 81 |
+| 84x64x204 → 80x60x204 | 29,716 | **22,507** | 1,020 → **136** |
+
+Every shape: 0 stress failures, 0 detached, **every edge panel joined to its
+wall**. Some of the saving is the smaller footprint (shorter walls); the rest is
+the wall ring and the columns the walls now replace. Laid on its side, a
+30x30 tower that shed 591 blocks under the old lattice sheds none.
+
+**1x4 walls were measured and are not the default.** `ROOM_WALL_THICK` (and
+`WALL_THICK`) can be 1:
+
+| walls | blocks, biggest | panels fall, columns removed | shapes standing |
+|---|---|---|---|
+| 2-stud (default) | 22,507 | 136 | 12 of 12 |
+| 1-stud interior | 22,909 | 408 | 10 of 12 |
+| 1-stud interior and exterior | 24,348 | 408 | 10 of 12 |
+
+A run costs the same number of bricks whatever its thickness, so thin walls
+save nothing — and a one-stud wall cannot straddle a seam, so it stops tying the
+floor together. Use it for the look if it is wanted, and add columns under it.
+
+**Non-conforming footprints still stand, and one thing about them is worth
+knowing:** the leftover strip's plates reach neither a wall nor a lattice
+column, so they get columns of their own — a stack tied to the building only
+through the base. Upright that is fine; lying on its side it comes loose
+(five blocks on a 16x12). Workshop builds may hit this; the city does not.
+
 ### Stage 2 — The drawn rung
 
 

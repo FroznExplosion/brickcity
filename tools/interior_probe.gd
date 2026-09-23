@@ -314,11 +314,13 @@ func _check_nothing_stands_on_air() -> void:
 	var reg := BuildingRegistry.new(w, res[1])
 	# A building with a stairwell, placed as the city places one: a shaft ten
 	# studs across with no floor in it on any storey.
-	var id := reg.register(44, 34, 78, Transform3D())
+	var sx := TowerRecipe.stair_line(40)
+	var sz := TowerRecipe.stair_line(30)
+	var id := reg.register(40, 30, 78, Transform3D())
 	reg.add_fixture(id, "staircase", {"steps": StaircaseRecipe.steps_for_courses(78),
-			"colour": 11}, Vector3i(12, TowerRecipe.SLAB_PLATES, 12))
+			"colour": 11}, Vector3i(sx, TowerRecipe.SLAB_PLATES, sz))
 	var chunk := reg.materialise(id)
-	var shaft := Rect2i(12, 12, StaircaseRecipe.DIAMETER, StaircaseRecipe.DIAMETER)
+	var shaft := Rect2i(sx, sz, StaircaseRecipe.DIAMETER, StaircaseRecipe.DIAMETER)
 	var in_shaft := 0
 	var on_air := 0
 	var items := 0
@@ -362,7 +364,7 @@ func _check_nothing_stands_on_air() -> void:
 
 	# The building comes down with nobody inside: its untouched rooms are
 	# written off rather than spilled into the wreck.
-	var other := reg.register(44, 34, 78, Transform3D(Basis(), Vector3(40, 0, 0)))
+	var other := reg.register(40, 30, 78, Transform3D(Basis(), Vector3(40, 0, 0)))
 	reg.materialise(other)
 	reg.draw_room(other, _furnished_room(reg, other))
 	var written := reg.write_off_rooms(other)

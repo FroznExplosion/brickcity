@@ -87,13 +87,12 @@ static func lattice_for(footprint_x: int, footprint_z: int, courses: int) -> Dic
 
 static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> Dictionary:
 	var pl := TowerRecipe.plan(footprint_x, footprint_z)
-	# A column stands at the corner of each floor panel and is as wide as the
-	# part under it, which is two studs unless the panel itself is one.
+	# The recipe's own columns, where it will stand them. Read, not worked out
+	# again: two descriptions of one layout is how items came to be laid a
+	# plate above the floor.
 	var posts: Array[Rect2i] = []
-	for entry in (pl.panels as Array):
-		var p: Vector3i = entry
-		var n: int = 2 if p.z >= 2 else 1
-		posts.append(Rect2i(p.x, p.y, n, n))
+	for entry in (pl.columns as Array):
+		posts.append(entry)
 	var rects: Array[Rect2i] = []
 	var mine: Array = []
 	var m := WALL_MARGIN
