@@ -131,6 +131,55 @@ static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 	return mm.visible_instance_count
 
 
+## Floats per instance in a drawn room's buffer: a 3x4 transform and a colour.
+const STRIDE := 16
+
+
+## Draw a building's DRAWN rooms -- the ones with no blocks at all -- under
+## `parent`. [Scale §4.1](../Docs/Scale.md) rung 2.
+##
+## The other half of this file draws from blocks. This draws from the
+## manifest: each room worked out its buffer once when it was drawn
+## (`RoomManifest.draw_items`), so a redraw is a concatenation, not a walk over
+## anything. `key` is the caller's key into `held` -- a building id, since a
+## drawn room belongs to a standing building and never to an island.
+static func attach_drawn(rooms: Array, parent: Node3D, held: Dictionary, key: int) -> int:
+	var node: MultiMeshInstance3D = held.get(key)
+	if node != null and not is_instance_valid(node):
+		held.erase(key)
+		node = null
+	var buffer := PackedFloat32Array()
+	for room in rooms:
+		buffer.append_array((room as Room).drawn_buffer)
+	@warning_ignore("integer_division")
+	var count: int = buffer.size() / STRIDE
+	if count == 0:
+		if node != null:
+			node.queue_free()
+			held.erase(key)
+		return 0
+	var mm: MultiMesh = node.multimesh if node != null else null
+	if mm == null:
+		mm = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = unit_mesh()
+	mm.instance_count = count
+	mm.buffer = buffer
+	mm.visible_instance_count = -1
+	if node == null:
+		node = MultiMeshInstance3D.new()
+		node.transform = Transform3D.IDENTITY
+		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		node.material_override = material()
+		parent.add_child(node)
+		held[key] = node
+	elif node.get_parent() != parent:
+		node.reparent(parent, false)
+	node.multimesh = mm
+	return count
+
+
 ## Drop a chunk's furniture node, if it has one.
 static func drop(chunk: int, held: Dictionary) -> void:
 	var node: MultiMeshInstance3D = held.get(chunk)

@@ -350,6 +350,58 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 	return out
 
 
+## What a room looks like DRAWN: every part of every item it still holds, as a
+## MultiMesh buffer, and one box per item for collision -- without laying a
+## single block. [Scale §4.1](../Docs/Scale.md) rung 2.
+##
+## The same parts, cells and colours `build_item` would lay, so promoting a
+## drawn room to bricks changes nothing on screen. `offset` is the host's
+## rebase, as there. Returns {buffer, boxes, parts}; `boxes` holds one AABB
+## per item drawn, in the chunk's own metres, which is the space the building's
+## mesh and its furniture body are both in.
+##
+## An item is drawn where the manifest says, which for a standing building is
+## where it would be laid. That is what `Room.posts` bought: an item placed
+## clear of the columns, so the drawing does not have to ask the chunk whether
+## there is room for it.
+static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
+		room: Room, offset: Vector3i = Vector3i.ZERO) -> Dictionary:
+	var buffer := PackedFloat32Array()
+	var boxes: Array[AABB] = []
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(chunk)
+	var filaments := BrickWorld.get_filament_count()
+	var parts := 0
+	for i in room.items.size():
+		if room.gone.has(i):
+			continue
+		var item: Dictionary = room.items[i]
+		var at: Vector3i = (item.cell as Vector3i) - offset - origin
+		var colour := 4 + int(i % 8)
+		var box := AABB()
+		var any := false
+		for part in (ITEMS.get(str(item.type), []) as Array):
+			var name: String = part[0]
+			if not palette.has(name):
+				continue
+			var size := Vector3(world.get_archetype_size(palette[name])) * cs
+			var lo := Vector3(at + (part[1] as Vector3i)) * cs
+			var c := BrickWorld.get_filament_colour((colour + int(part[2])) % filaments)
+			var mid := lo + size * 0.5
+			# MultiMesh's own row layout: the basis by rows with the origin at
+			# the end of each, then the colour.
+			buffer.append_array([size.x, 0.0, 0.0, mid.x,
+					0.0, size.y, 0.0, mid.y,
+					0.0, 0.0, size.z, mid.z,
+					c.r, c.g, c.b, c.a])
+			parts += 1
+			box = box.merge(AABB(lo, size)) if any else AABB(lo, size)
+			any = true
+		if any:
+			boxes.append(box)
+	return {"buffer": buffer, "boxes": boxes, "parts": parts}
+
+
 ## How many cells an item needs, so that it is placed inside the room rather
 ## than through its wall.
 static func _item_span(type: String) -> Vector3i:

@@ -43,6 +43,23 @@ var room_seed := 0
 ## holds what each item actually laid, so deactivating can take it back out.
 var active := false
 var items: Array = []
+## DRAWN: the manifest on screen and one collision box per item, with not a
+## single block laid. [Scale §4.1](../Docs/Scale.md) rung 2 -- furniture nobody
+## has touched, which is nearly all of it. Mutually exclusive with `active`: a
+## room is shut, drawn or real, and promotion from drawn to real is what
+## touching it does.
+var drawn := false
+## What drawing it takes, worked out once when it is drawn: a MultiMesh buffer
+## row per item part (`FurnitureMesh.STRIDE` floats each), and one box per
+## item in the chunk's own metres. Both empty while the room is not drawn.
+var drawn_buffer := PackedFloat32Array()
+var drawn_boxes: Array[AABB] = []
+## Real because a blast reached it, not because somebody walked in. Such a room
+## holds half-broken furniture, and a drawing can only show an item whole or
+## not at all -- so it stays real until the old sleep range rather than
+## demoting to drawn the moment the player steps back. Cleared when it closes,
+## which is when its diff is written.
+var hit := false
 ## Item index -> true, for the ones that are not coming back: destroyed, taken,
 ## or never placed because something was in the way. Interiors §2's diff, and
 ## the only thing about a room that has to be written down.
@@ -71,6 +88,13 @@ func has_opening() -> bool:
 
 func item_count() -> int:
 	return items.size()
+
+
+## Stop drawing it. The manifest and the diff stay; only the drawing goes.
+func clear_drawing() -> void:
+	drawn = false
+	drawn_buffer = PackedFloat32Array()
+	drawn_boxes = []
 
 
 ## The room's box in the building's local space, in metres.

@@ -5,7 +5,7 @@ the design is what it is lives in [Scale.md](Scale.md), [Interiors.md](Interiors
 and [Plan.md](Plan.md). This file is only **what is not done, in the order to
 do it**, and the traps waiting in each one.
 
-Last updated **2026-09-23**, after the lattice floor rewrite (`17b0127`).
+Last updated **2026-09-23**, after the drawn interior rung (§2.1).
 
 ---
 
@@ -20,8 +20,7 @@ green. Docs/Scale.md has the full account, including the three bugs it flushed
 out and the four things not to relearn.
 
 The **interior half is where the work is.** Rooms and their contents exist and
-are correct, but they only have two states: nothing, or every brick. That is
-the hole, and everything in §2 is about closing it.
+are correct, and now have three states: nothing, drawn, or every brick (§2.1).
 
 Already done and not to be redone:
 
@@ -36,32 +35,42 @@ Already done and not to be redone:
 
 ## 2. Next steps, in order
 
-### 2.1 The cheap interior rung — **start here**
+### 2.1 The cheap interior rung — **done**
 
-Scale.md §5.2 item 1 and §6 Stage 2. This is the largest single win left and
-nothing else depends on its internals.
+A room is now shut, **drawn** or real. Drawn is the manifest on screen
+(`RoomManifest.draw_items` → `FurnitureMesh.attach_drawn`) and one collision
+box per item on the building's furniture body, with no blocks laid. Everything
+within `ROOM_RANGE` is drawn; a room becomes bricks only when **touched** — a
+watched blast reaching it (`compromise_rooms`), or the player within
+`ROOM_REACH` (1.5 m) on its own storey — and goes back to drawn past
+`ROOM_REACH_RELEASE` (4 m), keeping its diff. A room a blast promoted
+(`Room.hit`) stays real until the old sleep range, because a drawing can only
+show an item whole or not at all. `interior_probe` checks the drawing is
+exactly the bricks it becomes, box for box.
 
-A room today is all-or-nothing: no bricks, or ~30 blocks an item with a
-collider on each. The missing rung is **drawn but not built**:
+Measured on the biggest `--big` building (204 rooms), `--interiors` arm E
+against arm B:
 
-* `FurnitureMesh` draws from the **manifest** — `RoomManifest.items_for` already
-  gives type, cell and yaw — with no blocks laid at all;
-* **one collider per item**, not per block;
-* a room promotes to real bricks when something **touches** it: a blast whose
-  radius reaches it, or the player within reach. **Not on distance** — distance
-  is what makes promotion cost what exists rather than what is used.
-* demotion runs the ladder backwards and keeps the diff (`Room.gone`).
+| every room… | bricks laid | collision boxes | time |
+|---|---|---|---|
+| real (B) | 1,587 | 1,587 | 8–10 ms |
+| drawn (E) | **0** | **493** | ~7 ms (+14 ms once per run: first node's pipeline) |
 
-**Measure:** a drawn room against 0.9 ms and ~30 blocks an item; a building with
-every room drawn against +25,537 collision boxes and 189 ms; and that a blast
-still destroys what it reaches.
+And the streaming pass standing inside it (arm D, 40 passes): mean 1.10 →
+1.02 ms, worst **15.4 → 6.5 ms**, rooms real afterwards **18 → 2**.
 
-**Watch for:** `Room.posts` is now populated, so a drawn item is already placed
-clear of the columns — do not re-derive that. And an item is decorative *at
-birth* (`place_block(..., true)`); marking it afterwards throws the chunk's
-face bake away, which is what made one room cost 225 ms.
+**Be honest about the size of this.** The numbers the old §2.1 asked to beat
+(+25,537 boxes, 189 ms) were from before the lattice rewrite; that rewrite cut
+the biggest building to 204 rooms, so the rung's win is 3× fewer boxes and no
+bricks, not 50×. What it really buys is §2.2: something that can come back
+without coming back as bricks.
 
-### 2.2 Delete, don't simulate, during a collapse
+Left over: a demotion still goes through `_close_room` → `_disable`, which
+un-merges the *building's* collision if it was merged (furniture blocks are in
+`add_chunk_shapes` too). Not seen in the measurements; watch for it if walking
+through a quiet building hitches.
+
+### 2.2 Delete, don't simulate, during a collapse — **start here**
 
 The explicit ask, still open: pieces that do not matter should be **deleted**
 when a building comes down and respawned later if they start to matter — not
@@ -132,14 +141,19 @@ Godot: `C:\Users\lbaun\Documents\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stab
 # every probe -- 26 of them, all should end "0 failed"
 for f in tools/*_probe.gd; do "$GODOT" --headless --path . --script "$f"; done
 
-# the city. NAME THE SCENE: main_scene is terrain_test.tscn in the working tree
-"$GODOT" --headless --path . res://scenes/city.tscn -- --shot
-"$GODOT" --headless --path . res://scenes/city.tscn -- --stress
-"$GODOT" --headless --path . res://scenes/city.tscn -- --big --shot
+# the city. NAME THE SCENE: main_scene is terrain_test.tscn in the working tree.
+# NOT headless: the passes save screenshots, and headless they wait forever.
+"$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --shot
+"$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --stress
+"$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --big --shot
+# and what the rooms cost, all four rungs of them (arms A-E)
+"$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --interiors --big
 ```
 
 `--big` on its own never quits; it needs `--shot` to take its measurement and
-exit.
+exit. The `--shot` pass's "settled wreckage is still breakable" check is
+flaky — it aims at one brick of whatever piece landed biggest — so rerun
+before believing a FAIL there.
 
 Numbers to beat, as of `17b0127`: 22 buildings in 22 ms (63 ms for `--big`),
 16,572 triangles of shell, and every one of the eleven shapes building with

@@ -29,6 +29,7 @@ func _init() -> void:
 	_check_a_manifest_is_a_function_of_its_seed()
 	_check_nothing_until_asked()
 	_check_activation()
+	_check_the_drawn_rung()
 	_check_the_diff()
 	_check_compromised()
 	_check_the_analytic_resolve()
@@ -183,6 +184,129 @@ func _check_activation() -> void:
 			"%d against %d" % [w.get_alive_block_count(chunk), before])
 	_ok("without the building counting it as damage",
 			w.get_dead_blocks(chunk).is_empty() and not reg.get_building(id).is_damaged())
+
+
+## Scale §4.1 rung 2: a room can be drawn -- on screen, one box an item -- with
+## nothing laid, and promoting it to bricks changes nothing anybody can see.
+func _check_the_drawn_rung() -> void:
+	print("\na room can be drawn without a single brick")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var reg := BuildingRegistry.new(w, res[1])
+	# Tall enough for two furnished rooms: the last checks need a second.
+	var id := _tower(reg, 48)
+	var index := _furnished_room(reg, id)
+	var room := reg.get_room(id, index)
+	_ok("a shell has nothing to draw into", reg.draw_room(id, index) == 0 and not room.drawn)
+
+	var chunk := reg.materialise(id)
+	var before := w.get_alive_block_count(chunk)
+	var drawn := reg.draw_room(id, index)
+	_ok("a drawn room draws its items", drawn > 0 and room.drawn, "%d items" % drawn)
+	_ok("one box an item", room.drawn_boxes.size() == room.items.size(),
+			"%d boxes, %d items" % [room.drawn_boxes.size(), room.items.size()])
+	_ok("and lays nothing", w.get_alive_block_count(chunk) == before)
+	_ok("nor opens anything", not room.active and reg.room_report().active == 0)
+	_ok("drawing it twice does nothing", reg.draw_room(id, index) == 0)
+	_ok("the registry knows it is drawn", reg.room_report().drawn == 1
+			and reg.drawn_rooms_of(id).size() == 1)
+
+	# Every part as a box, in the chunk's own metres -- which is exactly what
+	# the blocks will say about themselves once they are laid.
+	var drawn_parts := {}
+	var buf := room.drawn_buffer
+	@warning_ignore("integer_division")
+	var parts: int = buf.size() / FurnitureMesh.STRIDE
+	for k in parts:
+		var o := k * FurnitureMesh.STRIDE
+		var size := Vector3(buf[o], buf[o + 5], buf[o + 10])
+		var mid := Vector3(buf[o + 3], buf[o + 7], buf[o + 11])
+		drawn_parts[_box_key(mid - size * 0.5, size)] = true
+	var boxes := room.drawn_boxes.duplicate()
+
+	var placed := reg.activate_room(id, index)
+	_ok("promoting it lays the bricks", placed > 0 and room.active, "%d blocks" % placed)
+	_ok("and stops drawing it", not room.drawn and room.drawn_buffer.is_empty()
+			and reg.drawn_rooms_of(id).is_empty() and reg.room_report().drawn == 0)
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var laid_parts := {}
+	for item in room.items:
+		for block in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+			var ticks: Array = w.get_block_ticks(chunk, block)
+			laid_parts[_box_key(Vector3(ticks[0] as Vector3i) * tick_m,
+					Vector3(ticks[1] as Vector3i) * tick_m)] = true
+	var missing := 0
+	for key in laid_parts:
+		if not drawn_parts.has(key):
+			missing += 1
+	_ok("the drawing was every brick it became, where it became it",
+			missing == 0 and laid_parts.size() == drawn_parts.size(),
+			"%d laid, %d drawn, %d laid but not drawn" % [laid_parts.size(),
+			drawn_parts.size(), missing])
+	# And every item's box covers what that item laid.
+	var covered := true
+	var bi := 0
+	for i in room.items.size():
+		var blocks: PackedInt32Array = room.items[i].get("blocks", PackedInt32Array())
+		if blocks.is_empty():
+			continue
+		var box: AABB = boxes[bi]
+		bi += 1
+		for block in blocks:
+			var ticks: Array = w.get_block_ticks(chunk, block)
+			var lo := Vector3(ticks[0] as Vector3i) * tick_m
+			covered = covered and box.grow(0.001).encloses(
+					AABB(lo, Vector3(ticks[1] as Vector3i) * tick_m))
+	_ok("and each item's box covers its bricks", covered)
+
+	# Back down the ladder, keeping the diff.
+	var victim := -1
+	for i in room.items.size():
+		if not (room.items[i].get("blocks", PackedInt32Array()) as PackedInt32Array).is_empty():
+			victim = i
+			break
+	w.kill_blocks(chunk, room.items[victim].blocks)
+	reg.deactivate_room(id, index)
+	var redrawn := reg.draw_room(id, index)
+	_ok("drawn again after closing, without what was destroyed",
+			room.gone.has(victim) and redrawn == room.items.size() - room.gone.size(),
+			"%d drawn, %d gone of %d" % [redrawn, room.gone.size(), room.items.size()])
+
+	# A blast nobody is watching writes a drawn room off rather than laying it.
+	var b := reg.get_building(id)
+	var mid: Vector3 = b.xform * (room.local_box().position + room.local_box().size * 0.5)
+	reg.compromise_rooms(id, mid, 1.0, false)
+	_ok("an unwatched blast undraws it and writes it all off",
+			not room.drawn and not room.active and room.gone.size() == room.items.size())
+
+	# And a watched one promotes it, and says so.
+	var other := -1
+	for r in reg.rooms_of(id):
+		if r.id != index and not RoomManifest.items_for(r).is_empty():
+			other = r.id
+			break
+	_ok("there is a second furnished room", other >= 0)
+	if other < 0:
+		return
+	var room2 := reg.get_room(id, other)
+	reg.draw_room(id, other)
+	var mid2: Vector3 = b.xform * (room2.local_box().position + room2.local_box().size * 0.5)
+	reg.compromise_rooms(id, mid2, 1.0, true)
+	_ok("a watched blast promotes a drawn room, and marks it hit",
+			room2.active and not room2.drawn and room2.hit)
+	reg.deactivate_room(id, other)
+	_ok("which closing clears", not room2.hit)
+
+	# A topple: a drawn room has no bricks to ride the fall, so it spills.
+	reg.draw_room(id, other)
+	reg.mark_rooms_spilled(id)
+	_ok("a building coming down spills its drawn rooms",
+			room2.spilled and not room2.drawn and reg.room_report().drawn == 0)
+	_ok("and a spilled room will not draw", reg.draw_room(id, other) == 0)
+
+
+static func _box_key(lo: Vector3, size: Vector3) -> String:
+	return "%.3f,%.3f,%.3f/%.3f,%.3f,%.3f" % [lo.x, lo.y, lo.z, size.x, size.y, size.z]
 
 
 func _check_the_diff() -> void:

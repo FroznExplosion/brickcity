@@ -163,6 +163,17 @@ var _room_bodies := {}
 var _room_shapes := {}
 ## Buildings that have had a room laid in them. See _refresh_furniture.
 var _furnished := {}
+## The DRAWN rung (Scale §4.1 rung 2): building id -> the MultiMeshInstance3D
+## drawing its drawn rooms from their manifests, and building id -> {room index
+## -> the shape indices its item boxes hold on the building's furniture body}.
+## See _sync_drawn.
+var _drawn_furniture := {}
+var _drawn_shapes := {}
+## Building id -> shape indices on its furniture body that are switched off and
+## free to be handed out again. A room is drawn and undrawn every time the
+## player walks past it, and a body that only ever grows is one whose swap in
+## and out of the space gets dearer every time.
+var _spare_shapes := {}
 ## How a building's drawing is cut up. See BrickWorld::set_chunk_section_plates.
 ##
 ## Rebuilding a building's mesh is linear in the whole building however few
@@ -430,6 +441,23 @@ var _grid_view: MeshInstance3D
 ## before there is anything to notice, and a room costs 0.9 ms.
 const ROOM_RANGE := 40.0
 const ROOM_SLEEP_RANGE := 58.0
+## Everything inside ROOM_RANGE is DRAWN -- the manifest on screen, a box per
+## item, no blocks (Scale §4.1 rung 2). A room becomes REAL bricks only when it
+## is touched: a blast reaching it (compromise_rooms), or the player standing
+## within ROOM_REACH of it on its own storey. Scale §4.3: distance decides
+## drawn, interaction decides real -- promoting on distance is what made
+## interiors cost what exists rather than what is used.
+##
+## 1.5 m is inside the room, in its doorway, or hugging the wall it shares with
+## the next one. Only the player's own storey is asked: the room overhead is
+## 1.2 m from the eye, through a slab nobody can reach through.
+const ROOM_REACH := 1.5
+## And it goes back to drawn past this. The gap is the hysteresis that keeps a
+## player pacing a doorway from laying and lifting the same room every pass.
+const ROOM_REACH_RELEASE := 4.0
+## How many rooms a pass may DRAW. A drawn room is a manifest and a buffer --
+## tens of microseconds -- so this is a guard on a teleport, not a budget.
+const ROOM_DRAWS_PER_PASS := 96
 ## How many rooms a streaming pass may open, and how many milliseconds it may
 ## spend doing it.
 ##
@@ -483,6 +511,8 @@ var _room_scans := 0
 ## exists (Interiors section 4.1).
 var _wrecks := {}
 var _spilled_rooms := 0
+var _room_draws := 0
+var _room_draw_ms := 0.0
 var _room_opens := 0
 var _room_lay_ms := 0.0
 var _room_shape_ms := 0.0
@@ -824,8 +854,101 @@ func _close_room(id: int, index: int) -> void:
 	for item in room.items:
 		leaving.append_array(item.get("blocks", PackedInt32Array()) as PackedInt32Array)
 	_disable(id, leaving)
+	# Their shapes are free now, and so are the block ids: a chunk can hand a
+	# removed block's id out again, and a stale entry here would switch off
+	# whatever the next room laid under it.
+	var map: Dictionary = _room_shapes.get(id, {})
+	var spare: PackedInt32Array = _spare_shapes.get(id, PackedInt32Array())
+	for block in leaving:
+		if map.has(block):
+			spare.append_array(map[block] as PackedInt32Array)
+			map.erase(block)
+	_spare_shapes[id] = spare
 	registry.deactivate_room(id, index)
 	_refresh_furniture(id)
+
+
+## Real -> drawn: the bricks come out and the drawing goes back in, keeping
+## whatever the room lost while it was real. Scale §4.4, the ladder backwards.
+## The caller syncs the drawing (_sync_drawn), once for the pass.
+func _demote_room(id: int, index: int) -> void:
+	_close_room(id, index)
+	registry.draw_room(id, index)
+
+
+## Put a box on a building's furniture body, in a slot a closed room left if
+## there is one. The body must already be out of the space.
+func _take_shape(id: int, body: RID, size: Vector3, xform: Transform3D) -> int:
+	var spare: PackedInt32Array = _spare_shapes.get(id, PackedInt32Array())
+	if spare.is_empty():
+		var at := PhysicsServer3D.body_get_shape_count(body)
+		PhysicsServer3D.body_add_shape(body, _shape_rid(size), xform)
+		return at
+	var at: int = spare[spare.size() - 1]
+	spare.remove_at(spare.size() - 1)
+	_spare_shapes[id] = spare
+	PhysicsServer3D.body_set_shape(body, at, _shape_rid(size))
+	PhysicsServer3D.body_set_shape_transform(body, at, xform)
+	PhysicsServer3D.body_set_shape_disabled(body, at, false)
+	return at
+
+
+## Make a building's drawn furniture match what the registry says is drawn.
+##
+## The registry owns the state -- `Room.drawn` -- and everything that changes
+## it (drawing, promotion by a blast, a topple) leaves this to catch up. It is
+## a diff of room indices, so a pass that changed nothing costs a dictionary
+## walk and no physics at all.
+func _sync_drawn(id: int) -> void:
+	var b := registry.get_building(id)
+	if b == null:
+		return
+	var held: Dictionary = _drawn_shapes.get(id, {})
+	var want := {}
+	for index in b.drawn_rooms:
+		want[index] = true
+	var going := []
+	for index in held:
+		if not want.has(index):
+			going.append(index)
+	var coming := []
+	for index in want:
+		if not held.has(index):
+			coming.append(index)
+	if going.is_empty() and coming.is_empty():
+		return
+	var ft := Time.get_ticks_usec()
+	var body := _room_body(id) if b.is_materialised() else RID()
+	if body.is_valid():
+		PhysicsServer3D.body_set_space(body, RID())
+		var spare: PackedInt32Array = _spare_shapes.get(id, PackedInt32Array())
+		for index in going:
+			for shape in (held[index] as PackedInt32Array):
+				PhysicsServer3D.body_set_shape_disabled(body, shape, true)
+				spare.push_back(shape)
+		_spare_shapes[id] = spare
+		for index in coming:
+			var room := registry.get_room(id, index)
+			var mine := PackedInt32Array()
+			for box in room.drawn_boxes:
+				mine.push_back(_take_shape(id, body, box.size,
+						Transform3D(Basis(), box.position + box.size * 0.5)))
+			held[index] = mine
+		PhysicsServer3D.body_set_space(body, get_world_3d().space)
+	for index in going:
+		held.erase(index)
+	_drawn_shapes[id] = held
+	if _brick_nodes.has(id):
+		FurnitureMesh.attach_drawn(registry.drawn_rooms_of(id), _brick_nodes[id],
+				_drawn_furniture, id)
+	_drawn_ms += float(Time.get_ticks_usec() - ft) / 1000.0
+	_drawn_syncs += 1
+
+
+## Everything drawn for a building goes, with the bricks it was drawn in.
+func _drop_drawn(id: int) -> void:
+	FurnitureMesh.drop(id, _drawn_furniture)
+	_drawn_shapes.erase(id)
 
 
 ## Collision for what a room just laid, appended to the building's body.
@@ -845,6 +968,8 @@ var _phase_close := 0.0
 var _phase_spill := 0.0
 var _furniture_ms := 0.0
 var _furniture_calls := 0
+var _drawn_ms := 0.0
+var _drawn_syncs := 0
 
 
 func _refresh_furniture(id: int) -> void:
@@ -888,9 +1013,7 @@ func _add_room_shapes(id: int, index: int, batch: bool = false) -> void:
 				continue
 			var lo: Vector3 = Vector3(ticks[0] as Vector3i) * tick_m
 			var size: Vector3 = Vector3(ticks[1] as Vector3i) * tick_m
-			var at := PhysicsServer3D.body_get_shape_count(body)
-			PhysicsServer3D.body_add_shape(body, _shape_rid(size),
-					Transform3D(Basis(), lo + size * 0.5))
+			var at := _take_shape(id, body, size, Transform3D(Basis(), lo + size * 0.5))
 			var shapes: PackedInt32Array = map.get(block, PackedInt32Array())
 			shapes.push_back(at)
 			map[block] = shapes
@@ -939,6 +1062,8 @@ func _free_room_body(id: int) -> void:
 		PhysicsServer3D.free_rid(_room_bodies[id])
 		_room_bodies.erase(id)
 	_room_shapes.erase(id)
+	_drawn_shapes.erase(id)
+	_spare_shapes.erase(id)
 
 
 ## How far a point is from a box. AABB has `has_point` and nothing between, and
@@ -1018,8 +1143,15 @@ func _stream_rooms() -> void:
 	# whole cost of this pass. Walking every room of every building in view
 	# is tens of thousands of box tests fifteen times a second once buildings
 	# have four thousand rooms each, whether or not a single one opens.
-	var shut: Array = []
+	# Two lists out of one walk. Everything in range that is not drawn yet is
+	# drawn -- a manifest and a buffer, so all of it, nearest first. What the
+	# player is close enough to TOUCH is promoted to bricks, and only that
+	# (Scale §4.3). The walk used to promote everything it found, which is
+	# what made a building with its rooms open +25,537 collision boxes.
+	var undrawn: Array = []
+	var reach: Array = []
 	var here_buildings: Array = []
+	var cs := BrickWorld.get_cell_size()
 	for id in _near_buildings(here, ROOM_VIEW_RANGE):
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
@@ -1035,11 +1167,27 @@ func _stream_rooms() -> void:
 			if room == null or room.active:
 				continue
 			var d := room.local_distance(local)
-			if d <= ROOM_RANGE:
-				shut.append([d, id, room.id])
-	# Sorted, but only ever ROOMS_PER_PASS long: the pass opens a dozen and the
-	# rest of a thousand candidates are collected, sorted and thrown away.
-	shut.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+			if d > ROOM_RANGE:
+				continue
+			if not room.drawn and not room.spilled:
+				undrawn.append([d, id, room.id])
+			# Its own storey only: between its floor and its ceiling.
+			if d <= ROOM_REACH and local.y >= room.lo.y * cs.y \
+					and local.y <= (room.lo.y + room.size.y) * cs.y:
+				reach.append([d, id, room.id])
+	var by_distance := func(a, c) -> bool: return float(a[0]) < float(c[0])
+	var redraw := {}
+	var t_draw := Time.get_ticks_usec()
+	if undrawn.size() > ROOM_DRAWS_PER_PASS:
+		undrawn.sort_custom(by_distance)
+		undrawn.resize(ROOM_DRAWS_PER_PASS)
+	for cand in undrawn:
+		registry.draw_room(int(cand[1]), int(cand[2]))
+		redraw[int(cand[1])] = true
+	_room_draws += undrawn.size()
+	_room_draw_ms += float(Time.get_ticks_usec() - t_draw) / 1000.0
+
+	reach.sort_custom(by_distance)
 	# A room whose whole manifest is empty activates without laying anything, so
 	# it costs nothing and does not count against the pass -- but a handful of
 	# them in a row must not turn one pass into a walk over the district.
@@ -1051,7 +1199,7 @@ func _stream_rooms() -> void:
 	# shape count and the redraw walks every decorative block in the chunk --
 	# so paying them per room made opening a storey quadratic in the storey.
 	var touched := {}
-	for cand in shut:
+	for cand in reach:
 		if opened >= ROOMS_PER_PASS or tries >= ROOM_TRIES_PER_PASS:
 			break
 		if opened > 0 and Time.get_ticks_usec() >= until:
@@ -1063,6 +1211,9 @@ func _stream_rooms() -> void:
 			if body.is_valid():
 				PhysicsServer3D.body_set_space(body, RID())
 			touched[bid] = true
+		# Promotion takes the drawing away (activate_room), so this building's
+		# drawn furniture has to catch up as well.
+		redraw[bid] = true
 		if _open_room(bid, int(cand[2]), true) > 0:
 			opened += 1
 	for bid in touched:
@@ -1071,34 +1222,33 @@ func _stream_rooms() -> void:
 		_refresh_furniture(bid)
 
 	# Nothing close enough to walk into: a hole in a wall is a way to SEE into a
-	# room from further than anybody could walk to it. Second, because the scan
-	# for holes is the expensive half and there is no point paying for it while
-	# there is still a room at arm's length waiting to be laid.
-	if opened < ROOMS_PER_PASS:
-		var tested := 0
-		for b in here_buildings:
-			if opened >= ROOMS_PER_PASS or tested >= ROOM_VIEW_TESTS_PER_PASS:
+	# room from further than anybody could walk to it. Seeing a room needs it
+	# DRAWN, not built, so this draws it -- which is also what makes it cheap
+	# enough to ask of every window in view.
+	var tested := 0
+	for b in here_buildings:
+		if tested >= ROOM_VIEW_TESTS_PER_PASS:
+			break
+		# Out to the VIEW range -- but a SLICE of them, from a cursor that
+		# moves on. Standing inside one of the big shapes, every room in the
+		# building is within that range.
+		var candidates := registry.rooms_in_range(b.id, here, ROOM_VIEW_RANGE,
+				ROOM_VIEW_STOREY_SPAN)
+		if candidates.is_empty():
+			continue
+		for k in candidates.size():
+			if tested >= ROOM_VIEW_TESTS_PER_PASS:
 				break
-			# Out to the VIEW range, because a hole in a wall is a way to see
-			# into a room from further than anybody could walk to it -- but a
-			# SLICE of them, from a cursor that moves on. Standing inside one of
-			# the big shapes, every room in the building is within that range.
-			var candidates := registry.rooms_in_range(b.id, here, ROOM_VIEW_RANGE,
-					ROOM_VIEW_STOREY_SPAN)
-			if candidates.is_empty():
+			tested += 1
+			var index: int = candidates[(_view_cursor + k) % candidates.size()]
+			var room := registry.get_room(b.id, index)
+			if room == null or room.active or room.drawn or room.spilled:
 				continue
-			for k in candidates.size():
-				if opened >= ROOMS_PER_PASS or tested >= ROOM_VIEW_TESTS_PER_PASS:
-					break
-				tested += 1
-				var index: int = candidates[(_view_cursor + k) % candidates.size()]
-				var room := registry.get_room(b.id, index)
-				if room == null or room.active or not _can_see_into(b, room):
-					continue
-				if _open_room(b.id, index) > 0:
-					opened += 1
-					break
-		_view_cursor += ROOM_VIEW_TESTS_PER_PASS
+			if not _can_see_into(b, room):
+				continue
+			registry.draw_room(b.id, index)
+			redraw[b.id] = true
+	_view_cursor += ROOM_VIEW_TESTS_PER_PASS
 
 	# And the wreckage: a building that came down still has rooms, and what was
 	# in them is owed to whoever walks up to the pile.
@@ -1124,26 +1274,51 @@ func _stream_rooms() -> void:
 				opened += 1
 				break
 
-	# Only what is bricks: `_materialised` is the city's own list, so this is
-	# never O(the city) however many buildings there are.
-	# The OPEN ones, which the registry keeps a list of. Walking `rooms` to
-	# find them is a walk over everything that exists to reach a handful.
+	# The ladder backwards (Scale §4.4). Only what is bricks: `_materialised` is
+	# the city's own list, so this is never O(the city) however many buildings
+	# there are -- and within one, the registry's lists of what is open and
+	# what is drawn, which are a handful and a few hundred against thousands.
 	for id in _materialised:
 		var b := registry.get_building(id)
-		if b == null or b.open_rooms.is_empty() or not b.is_materialised():
+		if b == null or not b.is_materialised():
 			continue
+		if b.open_rooms.is_empty() and b.drawn_rooms.is_empty():
+			continue
+		var local: Vector3 = b.xform.affine_inverse() * here
+		# Real -> drawn once out of reach. A room a blast promoted stays real
+		# until the old sleep range, because what the blast did to it is
+		# half-broken furniture, and the drawing can only show an item whole
+		# or not at all.
 		for index in b.open_rooms.duplicate():
 			var room := registry.get_room(id, index)
 			if room == null or not room.active:
 				continue
-			if room.local_distance(b.xform.affine_inverse() * here) <= ROOM_SLEEP_RANGE:
+			var d := room.local_distance(local)
+			if room.hit:
+				if d <= ROOM_SLEEP_RANGE or _can_see_into(b, room):
+					continue
+				_close_room(id, index)
 				continue
-			# Still being looked into is what keeps it open past the range that
-			# would otherwise shut it: Interiors section 3's hysteresis, with
-			# visibility rather than a timer.
-			if _can_see_into(b, room):
+			if d <= ROOM_REACH_RELEASE:
 				continue
-			_close_room(b.id, room.id)
+			_demote_room(id, index)
+			redraw[id] = true
+		# Drawn -> shut past the sleep range, unless it is being looked into:
+		# Interiors section 3's hysteresis, with visibility rather than a timer.
+		for index in b.drawn_rooms.duplicate():
+			var room := registry.get_room(id, index)
+			if room == null or not room.drawn:
+				continue
+			if room.local_distance(local) <= ROOM_SLEEP_RANGE:
+				continue
+			# Out of rays is not the same as out of sight. A room this pass
+			# could not afford to look for is kept, not dropped and redrawn.
+			if _room_rays >= ROOM_RAYS_PER_PASS or _can_see_into(b, room):
+				continue
+			registry.undraw_room(id, index)
+			redraw[id] = true
+	for id in redraw:
+		_sync_drawn(id)
 
 
 ## The far tier: a shell mesh and five boxes. No bricks anywhere.
@@ -1413,6 +1588,11 @@ func _finish_promotions() -> void:
 		_remesh(id, true)
 		_remesh_frames(id)
 		_refresh_furniture(id)
+		# And what was drawn while it had no mesh node to hang from -- a
+		# building demeshed at range keeps its drawn rooms and their boxes.
+		if b.drawn_rooms.size() > 0 and _brick_nodes.has(id):
+			FurnitureMesh.attach_drawn(registry.drawn_rooms_of(id), _brick_nodes[id],
+					_drawn_furniture, id)
 		# The shell stays up until every band is built -- see _advance_bands.
 		# Dropping it here would leave a half-drawn building standing in the
 		# open for the few ticks the rest of the bands take.
@@ -1460,6 +1640,7 @@ func _topple(id: int) -> void:
 	# drawing furniture that has already been redrawn, forever. It is the
 	# floating brick over a building that has come down.
 	FurnitureMesh.drop(chunk, _furniture)
+	_drop_drawn(id)
 	# A banded building has no single mesh to hand over -- it has its bands,
 	# and they already hold the right geometry. The island draws them until
 	# the first thing that changes it, and becomes an ordinary one-mesh
@@ -1997,6 +2178,9 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		var watched_room: bool = camera != null 				and camera.global_position.distance_to(point) < ROOM_RANGE * 1.5
 		var t_room := Time.get_ticks_usec()
 		var woke: int = registry.compromise_rooms(b.id, point, radius, watched_room)
+		# A drawn room the blast reached was promoted -- or, unwatched, written
+		# off -- and either way it is not drawn any more.
+		_sync_drawn(b.id)
 		if woke > 0 and watched_room:
 			var fb := _room_body(b.id)
 			if fb.is_valid():
@@ -2444,6 +2628,8 @@ func _demesh(id: int) -> void:
 		# parent takes the node with it but leaves the map pointing at a freed
 		# object, and the next attach reads that as "already have one".
 		FurnitureMesh.drop(b.chunk, _furniture)
+		# The drawing only: the collision stays, as the building's does.
+		FurnitureMesh.drop(id, _drawn_furniture)
 		mi.queue_free()
 		_brick_nodes.erase(id)
 	_brick_meshes.erase(id)
@@ -2522,6 +2708,7 @@ func _demote(id: int, dist: float) -> void:
 	# furniture node is keyed on the chunk, not on the building.
 	var gone := registry.get_building(id)
 	FurnitureMesh.drop(gone.chunk if gone != null else -1, _furniture)
+	_drop_drawn(id)
 	_free_room_body(id)
 	_furnished.erase(id)
 	registry.dematerialise(id)
@@ -3887,7 +4074,75 @@ func _run_interiors_pass() -> void:
 			% [storeys, c_total / maxf(c_floors, 1),
 			storeys * (c_total / maxf(c_floors, 1)) / 1000.0])
 	await _frames(5)
-	
+
+	# --- E: the same building with every room DRAWN ---------------------------
+	# Scale §4.1 rung 2: the manifest on screen and one box an item, no blocks.
+	# The thing to beat is arm B -- every room real -- and what it is meant to
+	# cost is a few hundred boxes and no bricks at all.
+	chunk = await _fresh_bricks(biggest)
+	var e_blocks := world.get_alive_block_count(chunk)
+	var e_bare_mb := _world_mb()
+	var e_room_shapes := 0
+	var t_e := Time.get_ticks_usec()
+	var e_items := 0
+	for room in registry.rooms_of(biggest):
+		e_items += registry.draw_room(biggest, room.id)
+	var t_e_drawn := Time.get_ticks_usec()
+	_sync_drawn(biggest)
+	var t_e_synced := Time.get_ticks_usec()
+	if _room_bodies.has(biggest):
+		e_room_shapes = PhysicsServer3D.body_get_shape_count(_room_bodies[biggest])
+	var e_instances := 0
+	if _drawn_furniture.has(biggest):
+		e_instances = (_drawn_furniture[biggest] as MultiMeshInstance3D).multimesh.instance_count
+	var e_total := float(t_e_synced - t_e) / 1000.0
+	print("\n[interiors] E: the same building, every room DRAWN (rung 2)")
+	print("[interiors]   %d room(s), %d item(s), %.0f ms total, %.3f ms a room"
+			% [registry.rooms_of(biggest).size(), e_items, e_total,
+			e_total / maxf(registry.rooms_of(biggest).size(), 1)])
+	print("[interiors]   manifest + buffer %.0f ms + collision and drawing %.0f ms"
+			% [float(t_e_drawn - t_e) / 1000.0, float(t_e_synced - t_e_drawn) / 1000.0])
+	print("[interiors]   %d brick(s) laid, %d collision box(es), %d instance(s) drawn, %.1f MB (+%.1f)"
+			% [world.get_alive_block_count(chunk) - e_blocks, e_room_shapes, e_instances,
+			_world_mb(), _world_mb() - e_bare_mb])
+	await _frames(5)
+	await _save("interiors_drawn")
+	# And a blast still destroys what it reaches: the room it lands in is
+	# promoted to bricks first, then hit.
+	var target: Room = null
+	for index in host.drawn_rooms:
+		var r: Room = registry.get_room(biggest, index)
+		if not r.drawn_boxes.is_empty():
+			target = r
+			break
+	if target != null:
+		# The drawing is in the chunk's own space, as the furniture body is.
+		var aim: Vector3 = world.get_chunk_transform(chunk) * target.drawn_boxes[0].get_center()
+		# Near enough that somebody is watching: an unwatched blast writes a
+		# room off rather than laying it, which is the other half of the rule.
+		camera.global_position = aim + Vector3(0.0, 0.5, 3.0)
+		_blast(aim, 0.6)
+		var guard := 0
+		while not _damage_queue.is_empty() and guard < 120:
+			await _frames(1)
+			guard += 1
+		var dead := {}
+		for id in world.get_dead_blocks(chunk):
+			dead[id] = true
+		var lost := 0
+		for item in target.items:
+			for block in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+				if dead.has(block):
+					lost += 1
+		print("[interiors]   a blast into a drawn room: %s, %d of its bricks destroyed, %d room(s) still drawn"
+				% ["promoted" if target.active else "NOT PROMOTED", lost, host.drawn_rooms.size()])
+		print("[interiors]   %s" % ("ok    a blast still destroys what it reaches"
+				if target.active and lost > 0 else "FAIL  the blast went through drawn furniture"))
+	for room in registry.rooms_of(biggest):
+		registry.undraw_room(biggest, room.id)
+	_sync_drawn(biggest)
+	await _frames(5)
+
 	# --- D: what a streaming pass costs, which is what the player feels ----
 	# Arms A to C measure what OPENING a room costs. This measures what the
 	# pass costs when it is deciding -- the part that runs every tick whether
@@ -3993,11 +4248,14 @@ func _run_rooms_pass() -> void:
 			not nb.is_materialised())
 	_gate_ok("and it is holding nothing", _open_rooms_of(near_id) == 0)
 
-	camera.global_position = nmid + Vector3(0.0, 1.0, -2.0)
+	# Against its wall, OUTSIDE: two metres off the face at eye height. Its
+	# middle is inside a room, and standing in a room is touching it.
+	camera.global_position = nb.xform * (nbox.position
+			+ Vector3(nbox.size.x * 0.5, DebugCamera.EYE_HEIGHT, -2.0))
 	camera.look_at(nmid, Vector3.UP)
 	var walk_guard := 0
 	var near_laid := 0
-	while walk_guard < 900 and near_laid == 0:
+	while walk_guard < 900 and (not nb.is_materialised() or _drawn_rooms_of(near_id) == 0):
 		await _frames(1)
 		walk_guard += 1
 		near_laid = 0
@@ -4007,10 +4265,12 @@ func _run_rooms_pass() -> void:
 			for item in room.items:
 				near_laid += (item.get("blocks", PackedInt32Array()) as PackedInt32Array).size()
 	_gate_ok("standing against it makes it bricks, unshot", nb.is_materialised())
-	_gate_ok("and furnishes a room without anybody firing a thing",
-			_open_rooms_of(near_id) > 0, "%d open" % _open_rooms_of(near_id))
+	_gate_ok("and furnishes it without anybody firing a thing",
+			_drawn_rooms_of(near_id) > 0, "%d drawn" % _drawn_rooms_of(near_id))
 	_gate_ok("with the building still undamaged", not nb.is_damaged())
-	_gate_ok("which laid real bricks inside an intact building", near_laid > 0,
+	# Drawn, not built (Scale §4.1 rung 2): furniture nobody has touched is on
+	# screen and solid, and is not a single brick.
+	_gate_ok("and not a brick of it laid for being near", near_laid == 0,
 			"%d blocks" % near_laid)
 
 	# Shoot it: a building becomes bricks, and its rooms become askable.
@@ -4024,26 +4284,42 @@ func _run_rooms_pass() -> void:
 	var rooms := registry.rooms_of(0)
 	_gate_ok("a building that is bricks has rooms", rooms.size() > 0, "%d" % rooms.size())
 	_gate_ok("and none of them is holding anything from eighty metres away",
-			int(registry.room_report().active) == 0,
-			"%d open" % int(registry.room_report().active))
+			int(registry.room_report().active) == 0 and _drawn_rooms_of(0) == 0,
+			"%d open, %d drawn" % [int(registry.room_report().active), _drawn_rooms_of(0)])
 	var bare := world.get_alive_block_count(chunk)
 
-	# Walk up to it. The streamer opens one room a pass.
-	camera.global_position = mid + Vector3(0.0, 1.0, -2.0)
+	# Walk up to it. Near is DRAWN: the rooms around the player are on screen
+	# from their manifests, and nothing is laid.
+	camera.global_position = b.xform * (box.position
+			+ Vector3(box.size.x * 0.5, DebugCamera.EYE_HEIGHT, -2.0))
 	camera.look_at(mid, Vector3.UP)
 	# A furnished one: some rooms are generated empty on purpose, and an empty
-	# room opening is an empty room opening.
+	# room drawing is an empty room drawing.
 	var guard := 0
-	var opened: Room = null
-	while guard < 600 and opened == null:
+	var drawn_one: Room = null
+	while guard < 600 and drawn_one == null:
 		await _frames(1)
 		guard += 1
 		for room in rooms:
-			if room.active and room.item_count() > 0:
-				opened = room
+			if room.drawn and not room.drawn_boxes.is_empty():
+				drawn_one = room
 				break
-	_gate_ok("standing next to it opens a room with something in it", opened != null,
+	_gate_ok("standing next to it draws a room with something in it", drawn_one != null,
+			"%d drawn" % _drawn_rooms_of(0))
+	_gate_ok("without laying a brick", world.get_alive_block_count(chunk) == bare,
+			"%d against %d" % [world.get_alive_block_count(chunk), bare])
+	# Step into it: close enough to touch is what makes it bricks (Scale §4.3).
+	var rb := drawn_one.world_box(b.xform)
+	camera.global_position = rb.position + Vector3(0.4, rb.size.y * 0.55, 0.4)
+	camera.look_at(rb.get_center() - Vector3(0.0, rb.size.y * 0.3, 0.0), Vector3.UP)
+	guard = 0
+	while guard < 300 and not drawn_one.active:
+		await _frames(1)
+		guard += 1
+	var opened: Room = drawn_one if drawn_one.active else null
+	_gate_ok("standing in it makes it bricks", opened != null,
 			"%d open" % int(registry.room_report().active))
+	_gate_ok("and stops drawing it", not drawn_one.drawn)
 	_gate_ok("and its contents are bricks in the building",
 			world.get_alive_block_count(chunk) > bare,
 			"%d against %d" % [world.get_alive_block_count(chunk), bare])
@@ -4051,11 +4327,8 @@ func _run_rooms_pass() -> void:
 	for item in opened.items:
 		laid += (item.get("blocks", PackedInt32Array()) as PackedInt32Array).size()
 	_gate_ok("which laid real bricks", laid > 0, "%d blocks" % laid)
-	# Stand in the room and look across it, which is the only place the
-	# contents can be seen from -- they are inside a building.
-	var rb := opened.world_box(b.xform)
-	camera.global_position = rb.position + Vector3(0.4, rb.size.y * 0.55, 0.4)
-	camera.look_at(rb.get_center() - Vector3(0.0, rb.size.y * 0.3, 0.0), Vector3.UP)
+	# Standing in the room and looking across it already, which is the only
+	# place the contents can be seen from -- they are inside a building.
 	await _frames(40)
 	await _save("rooms_open")
 
@@ -4087,11 +4360,12 @@ func _run_rooms_pass() -> void:
 	camera.global_position = mid + Vector3(0.0, 20.0, -120.0)
 	camera.look_at(mid, Vector3.UP)
 	guard = 0
-	while guard < 300 and int(registry.room_report().active) > 0:
+	while guard < 300 and (int(registry.room_report().active) > 0 or _drawn_rooms_of(0) > 0):
 		await _frames(1)
 		guard += 1
 	rep = registry.room_report()
 	_gate_ok("walking away shuts the rooms", int(rep.active) == 0, "%d open" % int(rep.active))
+	_gate_ok("and stops drawing them", _drawn_rooms_of(0) == 0, "%d drawn" % _drawn_rooms_of(0))
 	_gate_ok("and what was destroyed is remembered", int(rep.changed) > 0,
 			"%d rooms with a diff" % int(rep.changed))
 	_gate_ok("the building is back to what it was, plus its damage",
@@ -4136,14 +4410,14 @@ func _run_rooms_pass() -> void:
 			_widest_opening(1, target.id) < 2.0,
 			"widest %.2f m" % _widest_opening(1, target.id))
 	guard = 0
-	while guard < 300 and _open_rooms_of(1) == 0:
+	while guard < 300 and _drawn_rooms_of(1) == 0:
 		await _frames(1)
 		guard += 1
-	_gate_ok("and looking in through one opens the room from sixty metres",
-			_open_rooms_of(1) > 0, "%d open" % _open_rooms_of(1))
-	for room in registry.rooms_of(1):
-		if room.active:
-			_close_room(1, room.id)
+	# DRAWN, which is what seeing needs. Bricks are for touching.
+	_gate_ok("and looking in through one draws the room from sixty metres",
+			_drawn_rooms_of(1) > 0 and _open_rooms_of(1) == 0,
+			"%d drawn, %d open" % [_drawn_rooms_of(1), _open_rooms_of(1)])
+	_shut_all_rooms(1)
 
 	# Blow one. The blast compromises the room, which is a different trigger --
 	# so it is shut again before the portal test is asked anything.
@@ -4153,33 +4427,32 @@ func _run_rooms_pass() -> void:
 		await _frames(1)
 		guard += 1
 	await _frames(20)
-	for room in registry.rooms_of(1):
-		if room.active:
-			_close_room(1, room.id)
+	_shut_all_rooms(1)
 	_gate_ok("there is a hole in the wall now",
 			not registry.openings_of(1, target.id).is_empty(),
 			"%d opening(s)" % registry.openings_of(1, target.id).size())
-	_gate_ok("and every room in it is shut again", _open_rooms_of(1) == 0,
-			"%d open" % _open_rooms_of(1))
+	_gate_ok("and every room in it is shut again",
+			_open_rooms_of(1) == 0 and _drawn_rooms_of(1) == 0,
+			"%d open, %d drawn" % [_open_rooms_of(1), _drawn_rooms_of(1)])
 
 	camera.global_position = stand
 	camera.look_at(wall, Vector3.UP)
 	guard = 0
-	while guard < 200 and _open_rooms_of(1) == 0:
+	while guard < 200 and _drawn_rooms_of(1) == 0:
 		await _frames(1)
 		guard += 1
-	_gate_ok("looking through it opens the room", _open_rooms_of(1) > 0,
-			"%d open" % _open_rooms_of(1))
+	_gate_ok("looking through it draws the room", _drawn_rooms_of(1) > 0,
+			"%d drawn" % _drawn_rooms_of(1))
 	await _save("rooms_portal")
 
 	# Look away: out of the cone, out of range, shut.
 	camera.look_at(stand + Vector3(0.0, 0.0, -50.0), Vector3.UP)
 	guard = 0
-	while guard < 300 and _open_rooms_of(1) > 0:
+	while guard < 300 and _drawn_rooms_of(1) > 0:
 		await _frames(1)
 		guard += 1
-	_gate_ok("turning away shuts it again", _open_rooms_of(1) == 0,
-			"%d open" % _open_rooms_of(1))
+	_gate_ok("turning away stops drawing it", _drawn_rooms_of(1) == 0,
+			"%d drawn" % _drawn_rooms_of(1))
 
 	# And the wreckage. A building comes down while nobody is inside it; what
 	# was in its rooms is owed to whoever walks up to the pile afterwards.
@@ -4598,6 +4871,22 @@ func _drawn_surfaces(id: int) -> int:
 		if mesh != null and (mesh as ArrayMesh).get_surface_count() > 0:
 			n += 1
 	return n
+
+
+func _drawn_rooms_of(id: int) -> int:
+	var b := registry.get_building(id)
+	return b.drawn_rooms.size() if b != null else 0
+
+
+## Shut every room of a building by hand, open or drawn, so the next check
+## starts from nothing.
+func _shut_all_rooms(id: int) -> void:
+	for room in registry.rooms_of(id):
+		if room.active:
+			_close_room(id, room.id)
+		if room.drawn:
+			registry.undraw_room(id, room.id)
+	_sync_drawn(id)
 
 
 func _open_rooms_of(id: int) -> int:

@@ -350,6 +350,7 @@ thousand instances and a few hundred boxes.
    collider per item. Promotion to rung 3 on damage-in-range or player-in-reach. This is the
    proposal, it is the largest single win available, and nothing in the current design fights it —
    the manifest already knows item type, cell and yaw, and the MultiMesh already draws boxes.
+   **Done, 2026-09-23** — [Status: Drawn, not built](Status.md#drawn-not-built-the-third-state-of-a-room).
 2. **A neighbour graph.** Replace "rooms within R metres" with "the room you are in, and the rooms
    it connects to". Storey-span was 90% of the win for 10% of the work; the graph is the rest of it,
    and it also replaces the raycast portal test with a walk.

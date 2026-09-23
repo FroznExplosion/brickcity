@@ -118,6 +118,9 @@ class Building:
 	## building of the big shapes has four thousand of them. The streaming pass
 	## asks this every tick; the answer is normally a handful.
 	var open_rooms: Array[int] = []
+	## And which are DRAWN -- on screen from the manifest, no blocks laid.
+	## Kept for the same reason `open_rooms` is.
+	var drawn_rooms: Array[int] = []
 
 	func is_damaged() -> bool:
 		if hit or not dead.is_empty():
@@ -142,6 +145,7 @@ var _materialise_ms := 0.0
 ## never wakes one is not nothing.
 var _fixture_parts := {}
 var _rooms_active := 0
+var _rooms_drawn := 0
 
 
 func _init(brick_world: BrickWorld, part_palette: Dictionary) -> void:
@@ -293,6 +297,10 @@ func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
 	var room := get_room(building_id, index)
 	if b == null or room == null or room.active:
 		return 0
+	# Promotion from drawn: the drawing goes and the bricks replace it. The
+	# caller that holds the drawing's collision reconciles against `drawn`.
+	if room.drawn:
+		undraw_room(building_id, index)
 	var into := chunk
 	if into < 0:
 		into = materialise(building_id)
@@ -324,6 +332,64 @@ func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
 		b.open_rooms.append(index)
 	_rooms_active += 1
 	return placed
+
+
+## Draw a room: its manifest on screen and one collision box per item, with no
+## blocks laid at all. [Scale §4.1](../Docs/Scale.md) rung 2, between shut and
+## real.
+##
+## Only for a building that is standing and is bricks. The drawing is in the
+## chunk's own space, because that is the space the building's mesh node and
+## its furniture body are in, and a building that is a shell has neither.
+## Returns how many items were drawn.
+func draw_room(building_id: int, index: int) -> int:
+	var b := get_building(building_id)
+	var room := get_room(building_id, index)
+	if b == null or room == null or room.active or room.drawn or room.spilled:
+		return 0
+	if b.toppled or b.is_build() or not b.is_materialised():
+		return 0
+	if not world.is_chunk_alive(b.chunk):
+		return 0
+	if room.items.is_empty():
+		room.items = RoomManifest.items_for(room)
+	var drawing := RoomManifest.draw_items(world, b.chunk, palette, room, _rebase_of(b))
+	room.drawn_buffer = drawing.buffer
+	room.drawn_boxes = drawing.boxes
+	room.drawn = true
+	b.drawn_rooms.append(index)
+	_rooms_drawn += 1
+	return room.drawn_boxes.size()
+
+
+## Stop drawing a room. There is nothing to take back out of the chunk and no
+## diff to write: nothing can happen to a drawn room without promoting it.
+func undraw_room(building_id: int, index: int) -> void:
+	var b := get_building(building_id)
+	var room := get_room(building_id, index)
+	if b == null or room == null or not room.drawn:
+		return
+	room.clear_drawing()
+	b.drawn_rooms.erase(index)
+	_rooms_drawn -= 1
+
+
+## Every drawn room of a building, for whoever draws them.
+func drawn_rooms_of(building_id: int) -> Array[Room]:
+	var out: Array[Room] = []
+	var b := get_building(building_id)
+	if b == null:
+		return out
+	for index in b.drawn_rooms:
+		out.append(b.rooms[index])
+	return out
+
+
+func _undraw_all(b: Building) -> void:
+	for index in b.drawn_rooms:
+		(b.rooms[index] as Room).clear_drawing()
+	_rooms_drawn -= b.drawn_rooms.size()
+	b.drawn_rooms.clear()
 
 
 ## Take a room's contents back out, keeping what changed.
@@ -359,6 +425,7 @@ func deactivate_room(building_id: int, index: int) -> void:
 				world.remove_block(chunk, id)
 		item["blocks"] = PackedInt32Array()
 	room.active = false
+	room.hit = false
 	b.open_rooms.erase(index)
 	_rooms_active -= 1
 
@@ -384,6 +451,8 @@ func mark_rooms_spilled(building_id: int) -> int:
 	# exactly the moment its rooms start to matter, whether or not anybody
 	# had looked inside it first -- and rooms are lazy, so without this a
 	# tower nobody had approached spilled nothing at all.
+	# A drawn room had no blocks to ride the fall, so it spills like a shut one.
+	_undraw_all(b)
 	var n := 0
 	for room in rooms_of(building_id):
 		if room.active or room.spilled:
@@ -476,13 +545,15 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 	var woken := 0
 	var local := b.xform.affine_inverse() * world_point
 	for room in rooms_of(building_id):
-		if room.active:
-			continue
 		if not room.local_box().grow(radius).has_point(local):
+			continue
+		if room.active:
+			room.hit = true
 			continue
 		if build:
 			if activate_room(building_id, room.id) > 0:
 				woken += 1
+			room.hit = room.active
 			continue
 		# Nobody is near enough to see it, so nothing is built. Interiors
 		# section 5.1: "rooms near the camera spawn full contents; distant ones
@@ -497,6 +568,8 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 		# the room's seed, so "all of them are gone" is writable without a list
 		# of what they were. `items_for` is deterministic, so the indices still
 		# line up if anybody ever does build it.
+		if room.drawn:
+			undraw_room(building_id, room.id)
 		var count: int = room.items.size() if not room.items.is_empty() 				else RoomManifest.item_count_for(room)
 		for i in count:
 			room.gone[i] = true
@@ -530,7 +603,8 @@ func room_report() -> Dictionary:
 		for room in b.rooms:
 			if room.is_changed():
 				changed += 1
-	return {"rooms": total, "active": _rooms_active, "changed": changed}
+	return {"rooms": total, "active": _rooms_active, "drawn": _rooms_drawn,
+			"changed": changed}
 
 
 # ---------------------------------------------------------------------------
@@ -724,10 +798,12 @@ func hand_over(id: int) -> void:
 	for room in b.rooms:
 		if room.active:
 			room.active = false
+			room.hit = false
 			_rooms_active -= 1
 			for item in room.items:
 				item["blocks"] = PackedInt32Array()
 	b.open_rooms.clear()
+	_undraw_all(b)
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
 	b.toppled = true
@@ -746,6 +822,7 @@ func dematerialise(id: int) -> void:
 	for room in b.rooms:
 		if room.active:
 			deactivate_room(id, room.id)
+	_undraw_all(b)
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
 	# The profile is expressed in the tower recipe's vertical bands, and a player

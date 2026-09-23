@@ -1032,6 +1032,28 @@ destroyed, a blast opens the rooms it reaches with nobody there, and a room on i
 contents to the new floor and does so the same way every time. `godot --path . -- --rooms` passes
 **13** in the scene: solid, destructible, streamed by distance, and remembered afterwards.
 
+### Drawn, not built: the third state of a room
+
+A room used to be nothing or every brick. It is now **shut, drawn or real**
+([Scale §4.1](Scale.md) rung 2). A drawn room is its manifest on screen and one collision box per
+item, with **no blocks laid**: `RoomManifest.draw_items` turns the manifest into a MultiMesh buffer
+row per part and a box per item, once, when the room is drawn, and `FurnitureMesh.attach_drawn`
+draws a building's drawn rooms by concatenating those buffers. The boxes go on the building's
+furniture body, into slots that closed rooms left behind rather than onto a body that only grows.
+
+**Distance decides drawn; touching decides real** (Scale §4.3). Everything within `ROOM_RANGE` is
+drawn, and so is a room seen through a window -- seeing needs a drawing, not bricks. A room is laid
+as bricks only when a watched blast reaches it or the player stands within 1.5 m of it on its own
+storey, and goes back to drawn past 4 m, keeping its diff. A room a blast promoted stays real until
+the old sleep range: its furniture is half-broken, and a drawing can only show an item whole.
+
+The drawing is the bricks it becomes, box for box -- `interior_probe` lays a drawn room and checks
+every block against the drawing (**97 checks**). On the biggest `--big` building, every room drawn
+is **0 bricks and 493 boxes** against 1,587 and 1,587 real; standing inside it, the streaming
+pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--interiors` arm E
+measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
+`--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
+
 ### Merged collision for standing buildings, and the cost that was not where it looked
 
 One box per brick is what a large body costs the solver, and a census settled who was actually
