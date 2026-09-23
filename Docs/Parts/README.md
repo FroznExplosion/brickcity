@@ -51,12 +51,12 @@ manual (2013). Section 3 says what the game does differently and why.
 |---|---|---|
 | stud pitch | 8.0 | centre to centre |
 | stud diameter | 4.8 | |
-| stud height | 1.7 | measured 1.7–1.8 |
+| stud height | 1.7 | measured 1.7–1.8; nominally 1 unit (1.6), varying by era |
 | stud centre from part edge | 3.9 | 4.0 on the grid, minus the 0.1 clearance |
 | clearance | 0.1 per side | a 1x1 is 7.8 across, a 2x4 is 15.8 x 31.8; the gap between neighbours is 0.2 |
 | plate / brick height | 3.2 / 9.6 | height has **no** clearance |
-| outer wall | 1.2 | |
-| top (ceiling) | 1.0 | |
+| outer wall | 1.2 | the unit system says 1 unit (1.6); measured parts are thinner |
+| top (ceiling) | 1.0 | the unit system says 1 unit (1.6); measured parts are thinner |
 | underside tube | Ø6.51 outer, Ø4.8 inner | where four studs' corners meet: centres at (8i, 8j) |
 | rib inside the wall | 0.8 wide (0.6 on the 2x4's end) | holds the stud from the side |
 | one-wide underside pin | *measure before relying on it* | commonly quoted ~3.2 mm; no calipered source found |
@@ -73,7 +73,7 @@ every side: model this for printing).
 | studs taper to 86% at the top, 8 sides | straight cylinder | the house style (spec §2); a print can keep a straight stud |
 | round parts and curves are octagons (45° facets) | round | low poly on purpose, matching the octagonal studs |
 | slope falls 2 plates over 1 stud: 38.7° | same angle | real "45°" slopes are not 45° either |
-| bracket side studs **5.6 mm** up (half a stud below the top) | ~5.7 mm (0.1 below a Technic hole's 5.8) | **Not a difference.** A part on the stud sits flush with the bracket's top and half a plate (1.6 mm, one tick) above its base: the real SNOT offset, and on the grid. Game, print and real brackets agree to 0.1 mm, inside print tolerance. |
+| bracket side studs **5.6 mm** up (half a stud below the top) | 5.6 mm: centred in the top 5 of the brick's 6 units, like a Technic hole or a headlight stud | **Not a difference.** A part on the stud sits flush with the bracket's top and one unit (1.6 mm, half a plate) above its base: the real SNOT offset, exactly on the grid. |
 
 ## 4. Blender setup
 
@@ -142,5 +142,4 @@ quarters of a building's bricks (Docs/Scale.md), so fewer floors pays for the ta
 - [Bartneck, LEGO Brick Dimensions and Measurements (2019)](https://www.bartneck.de/2019/04/21/lego-brick-dimensions-and-measurements/): calipered 2x4 drawing.
 - [LEGO brand manual, minifigure measurements (2013)](https://tongal.s3.amazonaws.com/custom-files/2020/08/13/MinifigureProportions.pdf).
 - [Brick Architect, figures in scale models](https://brickarchitect.com/scale/): a figure is 4 bricks without the head stud, 40 mm with it.
-- [BrickNerd, SNOT basics](https://bricknerd.com/home/snot-basics-geometry-techniques-and-pitfalls-3-18-2021): a side stud is 0.1 mm below a Technic hole's centre; Technic hole centre 5.8 mm ([Cailliau](https://www.cailliau.org/Alphabetical/L/Lego/Dimensions/More%20Dimensions/%20More%20Dimensions-en.html)).
-- [Zoe Blade, Lego brick dimensions](https://notebook.zoeblade.com/Lego_brick_dimensions.html): the 1.6 mm unit.
+- [Zoe Blade, Lego brick dimensions](https://notebook.zoeblade.com/Lego_brick_dimensions.html): the 1.6 mm unit, and Technic holes and headlight studs centred in a brick's top 5 units.

@@ -102,8 +102,7 @@ func _real_bricks() -> void:
 
 
 func _figure() -> void:
-	print("
-3. a four-brick figure, and buildings it fits in (size only, never the shape)")
+	print("\n3. a four-brick figure, and buildings it fits in (size only, never the shape)")
 	var cam: GDScript = load("res://scripts/debug_camera.gd")
 	var k := cam.get_script_constant_map()
 	var brick := BrickWorld.get_plate_metres() * 3.0

@@ -196,7 +196,8 @@ func _detail(part: String) -> PackedStringArray:
 				", ".join(side.map(func(v): return "(%s, %s, %s)" % [_mm(v.x), _mm(v.y), _mm(v.z)]))])
 		out.append("  - Centred half a stud (**4.0 mm**) below the top, so a part on them is flush with")
 		out.append("    the bracket's top and one half plate (1.6 mm) above its base -- the real part's")
-		out.append("    SNOT offset, to 0.1 mm. Same in game, in print and on a real bracket. See README.")
+		out.append("    SNOT offset, exactly: centred in the top 5 of its 6 units. Same in game, in print")
+		out.append("    and on a real bracket. See README.")
 	if BrickPalette.is_shaped(part):
 		out.append_array(_profile(part, rec))
 	out.append("- **Orientations:** %s" % ", ".join(BrickPalette.variants_of(part)))

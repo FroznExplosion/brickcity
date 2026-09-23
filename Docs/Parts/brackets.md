@@ -22,7 +22,8 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 - **Side studs** on the +X face (1, centres x, y, z): (8, 5.6, 4)
   - Centred half a stud (**4.0 mm**) below the top, so a part on them is flush with
     the bracket's top and one half plate (1.6 mm) above its base -- the real part's
-    SNOT offset, to 0.1 mm. Same in game, in print and on a real bracket. See README.
+    SNOT offset, exactly: centred in the top 5 of its 6 units. Same in game, in print
+    and on a real bracket. See README.
 - **Orientations:** bracket_1x1_y0, bracket_1x1_y0_i, bracket_1x1_y1, bracket_1x1_y1_i, bracket_1x1_y2, bracket_1x1_y2_i, bracket_1x1_y3, bracket_1x1_y3_i
 
 ## `bracket_1x2`
@@ -34,7 +35,8 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 - **Side studs** on the +X face (2, centres x, y, z): (8, 5.6, 4), (8, 5.6, 12)
   - Centred half a stud (**4.0 mm**) below the top, so a part on them is flush with
     the bracket's top and one half plate (1.6 mm) above its base -- the real part's
-    SNOT offset, to 0.1 mm. Same in game, in print and on a real bracket. See README.
+    SNOT offset, exactly: centred in the top 5 of its 6 units. Same in game, in print
+    and on a real bracket. See README.
 - **Orientations:** bracket_1x2_y0, bracket_1x2_y0_i, bracket_1x2_y1, bracket_1x2_y1_i, bracket_1x2_y2, bracket_1x2_y2_i, bracket_1x2_y3, bracket_1x2_y3_i
 
 ## `bracket_1x4`
@@ -46,7 +48,8 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 - **Side studs** on the +X face (4, centres x, y, z): (8, 5.6, 4), (8, 5.6, 12), (8, 5.6, 20), (8, 5.6, 28)
   - Centred half a stud (**4.0 mm**) below the top, so a part on them is flush with
     the bracket's top and one half plate (1.6 mm) above its base -- the real part's
-    SNOT offset, to 0.1 mm. Same in game, in print and on a real bracket. See README.
+    SNOT offset, exactly: centred in the top 5 of its 6 units. Same in game, in print
+    and on a real bracket. See README.
 - **Orientations:** bracket_1x4_y0, bracket_1x4_y0_i, bracket_1x4_y1, bracket_1x4_y1_i, bracket_1x4_y2, bracket_1x4_y2_i, bracket_1x4_y3, bracket_1x4_y3_i
 
 ## `bracket_2x2`
@@ -57,6 +60,7 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 - **Side studs** on the +X face (2, centres x, y, z): (16, 5.6, 4), (16, 5.6, 12)
   - Centred half a stud (**4.0 mm**) below the top, so a part on them is flush with
     the bracket's top and one half plate (1.6 mm) above its base -- the real part's
-    SNOT offset, to 0.1 mm. Same in game, in print and on a real bracket. See README.
+    SNOT offset, exactly: centred in the top 5 of its 6 units. Same in game, in print
+    and on a real bracket. See README.
 - **Orientations:** bracket_2x2_y0, bracket_2x2_y0_i, bracket_2x2_y1, bracket_2x2_y1_i, bracket_2x2_y2, bracket_2x2_y2_i, bracket_2x2_y3, bracket_2x2_y3_i
 
