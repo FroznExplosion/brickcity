@@ -3,6 +3,7 @@
 Godot 4.6.1 · Jolt · Forward+ · **Vulkan** · C++ GDExtension.
 Architecture and milestones: [Plan.md](Plan.md). Prior art: [Reference/](Reference/README.md).
 Networking feasibility: [Multiplayer.md](Multiplayer.md).
+**What is left and in what order: [Next.md](Next.md).**
 
 **M0 through M4 are in.** The 150 m performance gate is essentially met, the 5000-building memory
 gate is met outright, and the city scene holds a mean 19.4 ms frame through a 12-building collapse.
