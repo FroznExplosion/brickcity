@@ -149,12 +149,31 @@ func _init(brick_world: BrickWorld, part_palette: Dictionary) -> void:
 	palette = part_palette
 
 
+## Where a building may stand: on the SAME grid as everything else.
+##
+## The city, the terrain and the workshop all measure in one stud (0.35 m) and
+## one plate (0.14 m) from the world origin, and a building's own cells are that
+## grid only if its transform puts cell (0, 0, 0) on a grid point and turns it
+## by whole quarter turns. The city spaced its towers 13 m apart -- 37.14 studs
+## -- and dropped workshop builds in at 23 degrees, so every building's bricks
+## sat a fraction of a stud off the terrain's and off each other's. Snapped here,
+## at the one door every building comes in by, so no caller can get it wrong.
+static func on_grid(xform: Transform3D) -> Transform3D:
+	var yaw := xform.basis.get_euler().y
+	var quarter := int(round(yaw / (PI * 0.5)))
+	var o := xform.origin
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	return Transform3D(Basis(Vector3.UP, quarter * PI * 0.5),
+			Vector3(round(o.x / stud) * stud, round(o.y / plate) * plate, round(o.z / stud) * stud))
+
+
 ## Record a building. No chunk, no blocks, no mesh — just what it is and where.
 func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform3D) -> int:
 	var b := Building.new()
 	b.id = buildings.size()
 	b.recipe = {"footprint_x": footprint_x, "footprint_z": footprint_z, "courses": courses}
-	b.xform = xform
+	b.xform = on_grid(xform)
 	b.recipe_version = RECIPE_VERSION
 	buildings.append(b)
 	return b.id
@@ -174,7 +193,7 @@ func register_build(recipe: BuildRecipe, xform: Transform3D) -> int:
 	# Kept so anything reading footprint/courses gets a sane box rather than a
 	# missing key. A build has no courses, so this is its height in plates.
 	b.recipe = {"footprint_x": d.x, "footprint_z": d.z, "courses": 0, "kind": "build"}
-	b.xform = xform
+	b.xform = on_grid(xform)
 	b.recipe_version = RECIPE_VERSION
 	buildings.append(b)
 	# Whatever was fixed to it in the workshop comes with it, dormant. The cell

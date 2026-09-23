@@ -418,10 +418,13 @@ func _check_multi_frame_in_city() -> void:
 	var made := _panelled_house(w)
 	var r: BuildRecipe = made[0]
 
-	# Placed somewhere that is neither the origin nor axis-aligned, because a
-	# frame offset that only works at the origin is not an offset.
+	# Asked for somewhere that is neither the origin nor on the grid, because a
+	# frame offset that only works at the origin is not an offset. The registry
+	# puts it ON the grid (BuildingRegistry.on_grid), so everything below is
+	# measured against where it actually went.
 	var place := Transform3D(Basis(Vector3.UP, 0.7), Vector3(31.0, 0.0, -12.0))
 	var id := reg.register_build(r, place)
+	place = reg.get_building(id).xform
 	_ok("a multi-frame build registers", id >= 0)
 
 	var chunk := reg.materialise(id)
@@ -540,6 +543,7 @@ func _check_fixtures_in_the_recipe() -> void:
 	var reg := BuildingRegistry.new(w, res[1])
 	var place := Transform3D(Basis(Vector3.UP, 0.9), Vector3(-14.0, 0.0, 23.0))
 	var id := reg.register_build(r, place)
+	place = reg.get_building(id).xform   # snapped onto the grid
 	var b := reg.get_building(id)
 	_ok("the building carries the fixture", b.fixtures.size() == 1)
 	_ok("and lays no bricks for it until the building is built",

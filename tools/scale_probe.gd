@@ -82,6 +82,29 @@ func _one_grid() -> void:
 	_ok("the tick lattice: 5 a stud, 2 a plate", BrickWorld.ticks_per_stud() == 5
 			and BrickWorld.ticks_per_plate() == 2)
 
+	# Same grid is not enough: a building's cells line up with the terrain's,
+	# the workshop's and each other's only if it STANDS on the grid. The city
+	# used to place towers 13 m apart (37.14 studs) and builds at 23 degrees.
+	var w := BrickWorld.new()
+	var reg := BuildingRegistry.new(w, BrickPalette.bake(w))
+	var off := Transform3D(Basis(Vector3.UP, 0.4), Vector3(13.0, 0.05, -34.0))
+	var ids := [reg.register(24, 24, 18, off), reg.register_build(_one_brick(), off)]
+	for id in ids:
+		var x: Transform3D = reg.get_building(id).xform
+		var o := x.origin
+		var on := _near(fmod(absf(o.x), stud), 0.0, 1e-4) or _near(fmod(absf(o.x), stud), stud, 1e-4)
+		on = on and (_near(fmod(absf(o.z), stud), 0.0, 1e-4) or _near(fmod(absf(o.z), stud), stud, 1e-4))
+		on = on and (_near(fmod(absf(o.y), plate), 0.0, 1e-4) or _near(fmod(absf(o.y), plate), plate, 1e-4))
+		var quarter := x.basis.x.is_equal_approx(Vector3.RIGHT) or x.basis.x.is_equal_approx(Vector3.LEFT) 				or x.basis.x.is_equal_approx(Vector3.FORWARD) or x.basis.x.is_equal_approx(Vector3.BACK)
+		_ok("a building placed off the grid is put on it (building %d)" % id, on and quarter,
+				"%v, x axis %v" % [o, x.basis.x])
+
+
+func _one_brick() -> BuildRecipe:
+	var r := BuildRecipe.new()
+	r.add("brick_2x4_z", Vector3i(0, 1, 0), 4)
+	return r
+
 
 func _real_bricks() -> void:
 	print("\n2. the grid is a real brick's grid, x%s" % SCALE)
