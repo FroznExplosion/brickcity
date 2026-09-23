@@ -409,6 +409,20 @@ func frame_dims(frame: int) -> Vector3i:
 		var c := cell_of(i)
 		var sz := BrickPalette.size_of(part_of(i))
 		hi = Vector3i(maxi(hi.x, c.x + sz.x), maxi(hi.y, c.y + sz.y), maxi(hi.z, c.z + sz.z))
+	# Frame 0 has to hold the fixtures as well. They are authored in its grid
+	# and a multi-frame build is NOT rebased, so their cells go in as they
+	# stand -- no subtracting the min corner the way `chunk_dims` does.
+	#
+	# Leaving them out sized the chunk to the bricks and then dropped every
+	# fixture brick that reached past them, silently: a 12-stud house with a
+	# 10-stud stairwell at cell 4 kept three of its twelve steps and lost the
+	# rest to a chunk two studs too narrow. It only showed when a stairwell
+	# grew from 8 studs to 10 -- at 8 it fitted by exactly nothing.
+	if frame == 0:
+		for i in fixture_count():
+			var fb: Array = _fixture_bounds(fixture_at(i))
+			var fhi: Vector3i = (fb[0] as Vector3i) + (fb[1] as Vector3i)
+			hi = Vector3i(maxi(hi.x, fhi.x), maxi(hi.y, fhi.y), maxi(hi.z, fhi.z))
 	return Vector3i(maxi(hi.x, 1), maxi(hi.y, 1), maxi(hi.z, 1))
 
 

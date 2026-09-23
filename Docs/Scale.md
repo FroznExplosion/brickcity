@@ -410,7 +410,7 @@ than everything below, and nothing below touches it.
 
 So the order changed: **sections first**, then the drawn rung.
 
-### Floors are 75% of a building, and five attempts at fixing that
+### Floors were 75% of a building. Six attempts, and what the sixth got right
 
 Measured, on the shape the big city is built from:
 
@@ -460,23 +460,91 @@ strip fills with 2x2s that reach neither a column nor the wall, and every
 attempt to support it — a column at its far end, a column under every panel,
 requiring columns for wall-straddling panels — made some other shape worse.
 
-**The fix is almost certainly to stop stretching the lattice to fit the
-footprint and choose footprints that fit the lattice**: `2 * WALL_THICK + k *
-PANEL`. 22, 42, 62, 82 rather than 20, 40, 60, 80. Then there is no remainder,
-no fill, no strip, and the whole class of failure goes away. That is a change to
-the shape tables, not to the algorithm, and it should be made *first* next time
-rather than after the algorithm has been bent round the problem.
+**The fix was to stop stretching the lattice to fit the footprint and choose
+footprints that fit the lattice**: `2 * WALL_THICK + k * PANEL`. 24, 34, 44, 84
+rather than 20, 30, 40, 80. Then there is no remainder, no fill, no strip, and
+the whole class of failure goes away. It is a change to the shape tables, not to
+the algorithm, and making it *first* — before touching the algorithm again — is
+what made the sixth attempt land.
 
-Two smaller things learned and worth not relearning:
+#### What landed
 
+Conforming shape tables, then, in order, each checked on its own:
+
+1. **Footprints that divide.** `2 * WALL_THICK + k * PANEL`, minimum 24 — a
+   staircase is a whole lattice cell across and the interior of a 14-stud
+   building is 10.
+2. **One-plate floors, one `plate_10x10` per lattice cell**, with a column at
+   each panel's corner.
+3. **`StaircaseRecipe.DIAMETER = TowerRecipe.PANEL`**, so the stairwell IS a
+   cell: it is left out of the floor and the flight fills it, with the panels
+   around it to clip to. At 8 in a cell of 10 the steps touched nothing and
+   every one of them read as detached.
+4. **The base band ignores keep-outs.** A stairwell needs a hole in every floor
+   *above* it and none in the ground.
+5. **Interior walls on lattice lines**, `ROOM_PANELS` apart, with a doorway that
+   moves storey to storey and a solid top course.
+
+Result, against the same eleven shapes:
+
+| | before | after |
+|---|---|---|
+| biggest tower | 50,535 blocks | **34,215** |
+| stress failures | — | **0 on all eleven** |
+| detached blocks | — | **0 on all eleven** |
+| interior walls and rooms | none | included in the 34,215 |
+
+So a third fewer bricks *and* the rooms that were not there before.
+
+#### Three bugs it flushed out, all of the same shape
+
+Each was a case of **one thing sizing itself without asking what else was
+going in**, and each was invisible until the geometry changed:
+
+* **The lintel laid a brick across its own window.** Openings step by the brick
+  length, so a course laid from a brick boundary comes down exactly across one,
+  bridging nothing. Everywhere but the top of a tower the course above the slab
+  ties the stranded brick back in, so it only showed on shapes with
+  `courses % COURSES_PER_FLOOR == 0` — which is why five shapes were clean and
+  six shed 12 to 42 blocks apiece. Half a brick of lead on the lintel fixes it,
+  and the same lead is what bonds an interior wall.
+* **`frame_dims` sized frame 0 from its bricks and ignored its fixtures**, while
+  `chunk_dims` counted them. A 12-stud house with a 10-stud stairwell kept three
+  of its twelve steps and dropped the rest into a chunk two studs too narrow —
+  silently. At a diameter of 8 it had fitted by exactly nothing.
+* **`snap_keepouts` could not reach the last cell.** On a footprint that does
+  not divide, that cell is wider than `PANEL` and the lattice line before it is
+  a panel short of the wall, so the keep-out stopped short — and the fixture's
+  own carve then took out the columns under the floor the keep-out had spared.
+
+#### Four things learned and worth not relearning
+
+* **Hold up what the floor LAID, not what the grid says.** Columns follow the
+  panels. On a conforming footprint that is the same set — a cell is one
+  `plate_10x10` on one column — but the moment a footprint does not divide, the
+  leftover strip fills with parts the lattice knows nothing about, and plates
+  side by side in one layer are not joined to each other at all.
 * **Interior walls must not stand on floor panels.** A wall is four courses
   running the width of the building; resting it on a panel puts all of that
   through whichever column is under that panel. Walls want a column line of
   their own, which a lattice gives them for free.
 * **Rooms cost real bricks.** An interior wall is a run across the whole floor
   on every storey, so room size is a budget decision before it is a spatial one.
-  At three panels a room (~10 m) the interior walls of the big tower are roughly
-  10,000 blocks; at one panel they would cost more than the floors do.
+  At three panels a room (~10 m) the interior walls of the big tower are about
+  9,000 blocks; at one panel they would cost more than the floors do.
+* **A column stands IN a room**, from its floor to the next one. It is not
+  scenery to be drawn round: furniture placed on one does not place at all, and
+  three items in four landed on one the day the columns went in. `Room.posts`
+  is why that is now a question the manifest can answer.
+
+#### A probe that was measuring nothing
+
+`fallen_probe` undercut thirteen courses of what had been a nineteen-course
+tower and expected the rest to come loose. Once floors went from two plate
+layers to one, the tower got shorter, thirteen courses stopped covering its
+support face, and the top of that face held the whole thing up — so the check
+passed nothing and failed. The undercut is worked out from the recipe now.
+**A hard-coded extent in a probe is a check with a shelf life.**
 
 ### Stage 2 — The drawn rung
 

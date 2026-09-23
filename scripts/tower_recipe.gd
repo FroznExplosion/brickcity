@@ -31,8 +31,40 @@ const PLATES_PER_COURSE := 3
 ## changed -- the city's shapes kept their height and lost floors instead, and
 ## floors are three quarters of a building's bricks (Docs/Scale.md).
 const COURSES_PER_FLOOR := 6
-const SLAB_PLATES := 2
+const SLAB_PLATES := 1
 const SLAB_COLOUR := 2
+
+## THE LATTICE.
+##
+## A storey is laid on one grid, worked out before a block is placed: columns on
+## the lattice points, floor panels as the cells between them, interior walls
+## along the lines. Every panel then has a column at its corner and every
+## stretch of wall has one under it, by construction, with nothing cut around
+## anything.
+##
+## It only works if the footprint DIVIDES: `2 * WALL_THICK + k * PANEL`. Five
+## earlier attempts stretched the lattice to fit arbitrary footprints and every
+## one failed in the same place -- the strip left over at the far wall, too
+## narrow for a panel and too far from a column. The city's shape tables carry
+## conforming footprints now and the strip does not exist. Docs/Scale.md.
+##
+## PANEL is in studs, so a printed brick still lines up: this is a multiple of
+## the stud pitch, not a departure from it. The 10x10 panel is a structural
+## part rather than a real brick, which is allowed -- the building's frame is
+## not something anybody prints.
+const PANEL := 10
+## A column is six bricks, which is COURSES_PER_FLOOR of brickwork -- so it
+## stands on one floor and the next floor stands on it.
+const COLUMN_PLATES := COURSES_PER_FLOOR * PLATES_PER_COURSE
+const COLUMN_COLOUR := 3
+
+## How many panels wide a room is. It is a cost decision before it is a spatial
+## one: an interior wall is COURSES_PER_FLOOR of brickwork running the width of
+## the building on EVERY storey, so halving the room roughly doubles what the
+## interior costs. Three panels is about ten metres.
+const ROOM_PANELS := 3
+const ROOM_WALL_COLOUR := 2
+const DOOR_WIDE := 4         ## studs of doorway
 
 ## Windows: where a wall is deliberately missing.
 ##
@@ -73,6 +105,11 @@ const WINDOW_INSET := 4      ## solid wall to leave at each corner
 ## Three: a sill two bricks up and a head five up, under the lintel -- a window
 ## a four-brick figure looks out of rather than a slot at its feet.
 const WINDOW_COURSES := 3    ## how many courses tall, below the lintel course
+## A lintel has to LAND on the solid wall either side of its opening, and laid
+## from a multiple of the brick length it does not -- the openings are on that
+## same multiple, so a brick comes down exactly across one and bridges nothing.
+## Half a brick of lead shifts the joints off the opening edges.
+const LINTEL_LEAD := 2
 
 # Filament indices, matching brick_grid.h.
 const COURSE_COLOURS := [4, 5, 6, 11, 2, 8]  # red, orange, yellow, tan, grey, blue
@@ -173,6 +210,193 @@ static func chunk_dims(footprint_x: int, footprint_z: int, courses: int) -> Vect
 	return Vector3i(footprint_x, total_plates(courses) + 1, footprint_z)
 
 
+## The lattice lines along one axis: the inside face of the wall, then every
+## PANEL studs. On a conforming footprint the last line is exactly one panel
+## short of the far wall, so the cells tile the interior with nothing over.
+static func lattice(footprint: int) -> Array:
+	var out: Array = []
+	var at := WALL_THICK
+	while at + PANEL <= footprint - WALL_THICK:
+		out.append(at)
+		at += PANEL
+	return out
+
+
+## Where the interior walls run, and what they divide a storey into.
+##
+## Walls are on lattice lines and nowhere else, so every stretch of wall has a
+## column under it every PANEL studs by construction. An earlier version stood
+## the walls on the floor panels instead and put four courses of brickwork
+## through whichever single column happened to be under the panel they crossed:
+## 880 stress failures, 1,724 blocks shed.
+##
+## Pure arithmetic on two integers, so the builder and RoomManifest get the same
+## answer -- which is the point. Two descriptions of one layout is how every
+## item in the city came to be laid a plate above the floor.
+static func plan(footprint_x: int, footprint_z: int) -> Dictionary:
+	var key := Vector2i(footprint_x, footprint_z)
+	if _plans.has(key):
+		return _plans[key]
+	var built := _build_plan(footprint_x, footprint_z)
+	_plans[key] = built
+	return built
+
+
+static var _plans := {}
+
+
+static func _build_plan(footprint_x: int, footprint_z: int) -> Dictionary:
+	var t := WALL_THICK
+	var xs := lattice(footprint_x)
+	var zs := lattice(footprint_z)
+	# Where the floor's panels land, and so where the columns under them stand.
+	# Worked out here so that anything else that needs to know -- what a room
+	# has standing in it, for one -- reads the same answer instead of its own.
+	var panels: Array = []
+	for i in xs.size():
+		var px0: int = int(xs[i])
+		var px1: int = int(xs[i + 1]) if i + 1 < xs.size() else footprint_x - t
+		for j in zs.size():
+			var pz0: int = int(zs[j])
+			var pz1: int = int(zs[j + 1]) if j + 1 < zs.size() else footprint_z - t
+			for e in pack_cell(px1 - px0, pz1 - pz0):
+				var p: Vector3i = e
+				panels.append(Vector3i(px0 + p.x, pz0 + p.y, p.z))
+	var wall_x := _wall_lines(xs, footprint_x)
+	var wall_z := _wall_lines(zs, footprint_z)
+	# The rooms are what is left between the walls, inside the exterior band.
+	# A wall stands ON its line and is WALL_THICK thick, so the room after it
+	# starts past the wall, not at it.
+	var edges_x: Array = [t] + wall_x + [footprint_x - t]
+	var edges_z: Array = [t] + wall_z + [footprint_z - t]
+	var rects: Array[Rect2i] = []
+	for i in range(edges_x.size() - 1):
+		for j in range(edges_z.size() - 1):
+			var x0: int = int(edges_x[i]) + (t if i > 0 else 0)
+			var z0: int = int(edges_z[j]) + (t if j > 0 else 0)
+			var x1: int = int(edges_x[i + 1])
+			var z1: int = int(edges_z[j + 1])
+			if x1 - x0 >= 4 and z1 - z0 >= 4:
+				rects.append(Rect2i(x0, z0, x1 - x0, z1 - z0))
+	return {"xs": xs, "zs": zs, "wall_x": wall_x, "wall_z": wall_z,
+			"rooms": rects, "panels": panels}
+
+
+## How one lattice cell packs into panels, as (x, z, span) relative to the
+## cell. On a conforming footprint every cell is PANEL square and the answer is
+## a single `plate_10x10` at its corner; the odd cell a non-conforming footprint
+## leaves over breaks into 4x4s and 2x2s instead.
+##
+## Memoised on the cell's size, of which a city has two or three.
+static var _packs := {}
+
+
+static func pack_cell(w: int, l: int) -> Array:
+	var key := Vector2i(w, l)
+	if _packs.has(key):
+		return _packs[key]
+	var out: Array = []
+	var used := {}
+	var x := 0
+	while x < w:
+		var z := 0
+		while z < l:
+			for n in [PANEL, 4, 2, 1]:
+				if w - x < n or l - z < n:
+					continue
+				var clash := false
+				for dx in n:
+					for dz in n:
+						if used.has(Vector2i(x + dx, z + dz)):
+							clash = true
+							break
+					if clash:
+						break
+				if clash:
+					continue
+				for dx in n:
+					for dz in n:
+						used[Vector2i(x + dx, z + dz)] = true
+				out.append(Vector3i(x, z, n))
+				break
+			z += 1
+		x += 1
+	_packs[key] = out
+	return out
+
+
+## Every ROOM_PANELS-th lattice line carries a wall -- never the first, which is
+## the exterior wall itself, and never one so near the far wall that it divides
+## nothing. A footprint too narrow for that gets one wall down the middle
+## anyway, because a storey that is one room is a storey the room system has
+## nothing to say about.
+static func _wall_lines(lines: Array, footprint: int) -> Array:
+	var out: Array = []
+	var limit := footprint - WALL_THICK - PANEL / 2
+	for i in range(ROOM_PANELS, lines.size(), ROOM_PANELS):
+		if int(lines[i]) < limit:
+			out.append(int(lines[i]))
+	if out.is_empty() and lines.size() >= 2:
+		@warning_ignore("integer_division")
+		var mid: int = int(lines[lines.size() / 2])
+		if mid < limit:
+			out.append(mid)
+	return out
+
+
+## Does this footprint divide into whole panels? Everything below assumes so.
+static func conforming(footprint: int) -> bool:
+	return (footprint - WALL_THICK * 2) % PANEL == 0
+
+
+## Is this rectangle inside any keep-out?
+##
+## Keep-outs are where a FIXTURE is going. The recipe has to know before it lays
+## its columns: a stairwell is carved up the middle of a building and that is
+## exactly where the columns carrying the floor stand. Removing them afterwards
+## left the panel above holding on to nothing.
+static func _blocked(keepouts: Array, x: int, z: int, w: int, l: int) -> bool:
+	for k in keepouts:
+		var r: Rect2i = k
+		if (x < r.position.x + r.size.x and x + w > r.position.x
+				and z < r.position.y + r.size.y and z + l > r.position.y):
+			return true
+	return false
+
+
+## Grow each keep-out to the whole lattice cells it touches.
+##
+## A keep-out that cuts a cell in half takes that cell's corner column with it
+## and leaves the rest of the cell holding on to nothing. Whole cells in, whole
+## cells out.
+static func snap_keepouts(keepouts: Array, footprint_x: int, footprint_z: int) -> Array:
+	var out: Array = []
+	var t := WALL_THICK
+	for k in keepouts:
+		var r: Rect2i = k
+		var x0 := _snap(r.position.x, t, footprint_x, false)
+		var z0 := _snap(r.position.y, t, footprint_z, false)
+		var x1 := _snap(r.position.x + r.size.x, t, footprint_x, true)
+		var z1 := _snap(r.position.y + r.size.y, t, footprint_z, true)
+		out.append(Rect2i(x0, z0, maxi(x1 - x0, PANEL), maxi(z1 - z0, PANEL)))
+	return out
+
+
+static func _snap(at: int, t: int, footprint: int, up: bool) -> int:
+	var span := footprint - t * 2
+	var rel := clampi(at - t, 0, span)
+	@warning_ignore("integer_division")
+	var cell: int = (rel + (PANEL - 1 if up else 0)) / PANEL
+	# The interior edge, not the last whole panel. On a footprint that does not
+	# divide, the last cell is WIDER than PANEL and the lattice line before it
+	# is a panel short of the wall -- so clamping to lattice lines could not
+	# grow a keep-out over that last strip at all. It stayed out of the
+	# keep-out, kept its floor panels and its columns, and then the fixture's
+	# own carve took the columns out from under them anyway: eleven plates left
+	# hanging off the top floor of a 16-stud stair tower.
+	return mini(t + cell * PANEL, footprint - t)
+
+
 ## Hollow tower: one plate layer of base, then `courses` of bonded brickwork.
 ##
 ## Courses alternate which pair of walls owns the corners. On an even course the
@@ -186,17 +410,43 @@ static func chunk_dims(footprint_x: int, footprint_z: int, courses: int) -> Vect
 ##     wall never overlap at all -- they would stand and fall separately, which
 ##     is what the first version of this recipe did.
 static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		footprint_x: int, footprint_z: int, courses: int) -> void:
+		footprint_x: int, footprint_z: int, courses: int,
+		keepouts: Array = []) -> void:
 	var t := WALL_THICK
+	var clear := snap_keepouts(keepouts, footprint_x, footprint_z)
+	var pl := plan(footprint_x, footprint_z)
 
-	for band in layout(courses):
+	# Which floors carry interior walls, and which storey each one is. A floor
+	# with no courses above it is a roof, and a wall standing on a roof divides
+	# nothing.
+	var bands := layout(courses)
+	var walled := {}
+	for i in bands.size() - 1:
+		var b: Dictionary = bands[i]
+		if (b.kind == "base" or b.kind == "slab") and bands[i + 1].kind == "course":
+			walled[int(b.y)] = walled.size()
+
+	for band in bands:
 		match band.kind:
 			"base":
-				_lay_slab(world, chunk_id, palette, band.y, footprint_x, footprint_z, BASE_COLOUR)
+				# The base ignores the keep-outs. A stairwell needs a hole in every
+				# floor ABOVE it and none in the ground: without this the flight
+				# starts on nothing and every step in the building reads as
+				# detached.
+				_lay_slab(world, chunk_id, palette, band.y, footprint_x, footprint_z,
+						BASE_COLOUR, [], pl)
+				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
+						footprint_z, pl, clear, walled)
 			"slab":
 				# Full footprint, walls included. This is what ties the four
 				# walls together across the span AND what you see from outside.
-				_lay_slab(world, chunk_id, palette, band.y, footprint_x, footprint_z, SLAB_COLOUR)
+				var panels := _lay_slab(world, chunk_id, palette, band.y, footprint_x,
+						footprint_z, SLAB_COLOUR, clear, pl)
+				# The columns carrying it: one under each panel it just laid.
+				_lay_columns(world, chunk_id, palette, int(band.y) - COLUMN_PLATES,
+						panels, clear)
+				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
+						footprint_z, pl, clear, walled)
 			"course":
 				var colour: int = COURSE_COLOURS[int(band.index) % COURSE_COLOURS.size()]
 				var y: int = band.y
@@ -207,14 +457,19 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 				var lit := is_window_course(int(band.index), courses)
 				var gx: Array = window_gaps(footprint_x) if lit else []
 				var gz: Array = window_gaps(footprint_z) if lit else []
+				# Is this course the lintel of the openings below it? Only the
+				# runs that START on a brick boundary need shifting -- the ones
+				# starting at WALL_THICK are already half a brick off, which is
+				# what the alternating bond is for.
+				var lead := LINTEL_LEAD if int(band.index) > 0 						and is_window_course(int(band.index) - 1, courses) else 0
 				if int(band.index) % 2 == 0:
-					_run_x(world, chunk_id, palette, y, 0, footprint_x, 0, colour, gx)
-					_run_x(world, chunk_id, palette, y, 0, footprint_x, footprint_z - t, colour, gx)
+					_run_x(world, chunk_id, palette, y, 0, footprint_x, 0, colour, gx, lead)
+					_run_x(world, chunk_id, palette, y, 0, footprint_x, footprint_z - t, colour, gx, lead)
 					_run_z(world, chunk_id, palette, y, t, footprint_z - t, 0, colour, gz)
 					_run_z(world, chunk_id, palette, y, t, footprint_z - t, footprint_x - t, colour, gz)
 				else:
-					_run_z(world, chunk_id, palette, y, 0, footprint_z, 0, colour, gz)
-					_run_z(world, chunk_id, palette, y, 0, footprint_z, footprint_x - t, colour, gz)
+					_run_z(world, chunk_id, palette, y, 0, footprint_z, 0, colour, gz, lead)
+					_run_z(world, chunk_id, palette, y, 0, footprint_z, footprint_x - t, colour, gz, lead)
 					_run_x(world, chunk_id, palette, y, t, footprint_x - t, 0, colour, gx)
 					_run_x(world, chunk_id, palette, y, t, footprint_x - t, footprint_z - t, colour, gx)
 			"cornice":
@@ -222,48 +477,195 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					world.place_block(chunk_id, Vector3i(x, band.y, 0), palette.buttress_2x2, 1)
 
 
-## A floor: two full-footprint plate layers, the upper one offset by half a
-## plate so it bridges the seams of the lower one. See COURSES_PER_FLOOR for why
-## one layer is not a floor.
+## A floor: the exterior band, then one whole panel per lattice cell.
+##
+## One plate thick, standing on columns. It used to be two offset plate layers
+## -- plates side by side in one layer are not joined to each other at all, so a
+## single layer was held only at its edges and dropped out on the first solve --
+## and that fix cost **75% of every block in the building**: 30,855 plate_4x4
+## and 7,140 plate_2x2 of a 50,535-block tower.
+##
+## One panel per cell, and no fill anywhere, because the footprint divides. See
+## the lattice.
 static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, footprint_x: int, footprint_z: int, colour: int) -> void:
-	_plate_layer(world, chunk_id, palette, y, 0, footprint_x, footprint_z, colour)
-	if SLAB_PLATES > 1:
-		_plate_layer(world, chunk_id, palette, y + 1, 2, footprint_x, footprint_z, colour)
+		y: int, footprint_x: int, footprint_z: int, colour: int,
+		keepouts: Array, pl: Dictionary) -> Array:
+	var t := WALL_THICK
+	# The band the exterior walls stand on, all the way round. It needs no
+	# columns -- the wall below it is its column -- and no keep-outs either: a
+	# fixture sits in the middle of a floor, not in the masonry.
+	_fill_rect(world, chunk_id, palette, y, 0, 0, footprint_x, t, colour, [])
+	_fill_rect(world, chunk_id, palette, y, 0, footprint_z - t, footprint_x,
+			footprint_z, colour, [])
+	_fill_rect(world, chunk_id, palette, y, 0, t, t, footprint_z - t, colour, [])
+	_fill_rect(world, chunk_id, palette, y, footprint_x - t, t, footprint_x,
+			footprint_z - t, colour, [])
+
+	# Then one cell at a time. On a conforming footprint every cell is exactly
+	# PANEL square and `_fill_rect` lays it as a single `plate_10x10` -- one
+	# block where the old two-layer floor used fifty. On one that does not
+	# divide, the last cell is wider and fills with smaller parts instead;
+	# either way what comes back is what the columns have to hold up.
+	var laid: Array = []
+	var xs: Array = pl.xs
+	var zs: Array = pl.zs
+	for i in xs.size():
+		var x0: int = int(xs[i])
+		var x1: int = int(xs[i + 1]) if i + 1 < xs.size() else footprint_x - t
+		for j in zs.size():
+			var z0: int = int(zs[j])
+			var z1: int = int(zs[j + 1]) if j + 1 < zs.size() else footprint_z - t
+			laid.append_array(_fill_rect(world, chunk_id, palette, y, x0, z0,
+					x1, z1, colour, keepouts))
+	return laid
 
 
-## One layer of plates on a 4-stud grid starting at `offset`, closing the edges
-## with 2x2s so the footprint is covered whatever the offset leaves over.
-static func _plate_layer(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, offset: int, footprint_x: int, footprint_z: int, colour: int) -> void:
-	# The strip the offset leaves uncovered at the near edge.
-	if offset > 0:
-		_fill_2x2(world, chunk_id, palette, y, 0, offset, 0, footprint_z, colour)
-		_fill_2x2(world, chunk_id, palette, y, offset, footprint_x, 0, offset, colour)
-
-	var x := offset
-	while x < footprint_x:
-		var z := offset
-		while z < footprint_z:
-			if footprint_x - x >= 4 and footprint_z - z >= 4:
-				world.place_block(chunk_id, Vector3i(x, y, z), palette.plate_4x4, colour)
-				z += 4
-			else:
-				_fill_2x2(world, chunk_id, palette, y, x, mini(x + 4, footprint_x),
-						z, footprint_z, colour)
-				break
-		x += 4
-
-
-static func _fill_2x2(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, x0: int, x1: int, z0: int, z1: int, colour: int) -> void:
+## Fill a rectangle with the largest parts that fit, biggest first, and say
+## where each one went as (x, z, span).
+##
+## It steps by one stud rather than by the part it just laid. A strided version
+## left unfilled rectangles between the big parts and the far edge, and an
+## unfilled rectangle in a floor is a hole; the wasted probes are a few hundred
+## per floor against a bake that is measured in milliseconds.
+static func _fill_rect(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, x0: int, z0: int, x1: int, z1: int, colour: int,
+		keepouts: Array) -> Array:
+	var sizes := [[PANEL, palette.plate_10x10], [4, palette.plate_4x4],
+			[2, palette.plate_2x2], [1, palette.plate_1x1]]
+	var laid: Array = []
 	var x := x0
-	while x + 2 <= x1:
+	while x < x1:
 		var z := z0
-		while z + 2 <= z1:
-			world.place_block(chunk_id, Vector3i(x, y, z), palette.plate_2x2, colour)
-			z += 2
-		x += 2
+		while z < z1:
+			for entry in sizes:
+				var n: int = int(entry[0])
+				if x1 - x < n or z1 - z < n:
+					continue
+				if _blocked(keepouts, x, z, n, n):
+					continue
+				if world.place_block(chunk_id, Vector3i(x, y, z), entry[1], colour) >= 0:
+					laid.append(Vector3i(x, z, n))
+					break
+			z += 1
+		x += 1
+	return laid
+
+
+## A column under every floor panel.
+##
+## Driven by the panels the floor actually laid, not by the bare lattice -- and
+## on a conforming footprint those are the same thing, because a PANEL-square
+## cell is one `plate_10x10` standing on one column at its corner. They stop
+## being the same thing the moment a footprint does not divide: the strip left
+## at the far side fills with 4x4s and 2x2s that reach neither a column nor the
+## wall, and plates side by side in one layer are not joined to each other at
+## all, so the strip drops out on the first solve.
+##
+## So the rule is the panel's and not the grid's: hold up whatever the floor
+## laid. Conforming buildings come out unchanged; the rest pay columns in
+## proportion to how badly they fragment, which is the right price and a reason
+## to keep footprints conforming.
+static func _lay_columns(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, panels: Array, keepouts: Array) -> void:
+	if y < 0:
+		return
+	for entry in panels:
+		var p: Vector3i = entry   # (x, z, span)
+		var wide: bool = p.z >= 2
+		if _blocked(keepouts, p.x, p.y, 2 if wide else 1, 2 if wide else 1):
+			continue
+		world.place_block(chunk_id, Vector3i(p.x, y, p.y),
+				palette.column_2x2 if wide else palette.column_1x1, COLUMN_COLOUR)
+
+
+## The interior walls that make a storey into rooms.
+##
+## One wall line thick and COURSES_PER_FLOOR tall, so it reaches the slab above
+## and carries some of it: a room divider in a building that falls down has to
+## be part of why it stood up, or the first collapse leaves every floor hanging
+## on the columns alone.
+##
+## Walls run on lattice lines and nowhere else, so there is a column under every
+## PANEL studs of every one of them. An earlier version stood them on the floor
+## panels and put four courses of brickwork through whichever single column
+## happened to be under the panel they crossed: 880 stress failures, 1,724
+## blocks shed. See `plan`.
+static func _lay_room_walls(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		band: Dictionary, footprint_x: int, footprint_z: int, pl: Dictionary,
+		keepouts: Array, walled: Dictionary) -> void:
+	if not walled.has(int(band.y)):
+		return
+	var t := WALL_THICK
+	var y: int = int(band.y) + SLAB_PLATES
+	var storey: int = int(walled[int(band.y)])
+	for at in (pl.wall_x as Array):
+		_lay_wall_line(world, chunk_id, palette, y, t, footprint_z - t, int(at),
+				keepouts, storey, true)
+	for at in (pl.wall_z as Array):
+		_lay_wall_line(world, chunk_id, palette, y, t, footprint_x - t, int(at),
+				keepouts, storey, false)
+
+
+## One wall, course by course.
+##
+## The top course runs unbroken. That is what a lintel is, and without one the
+## course above a doorway is a brick laid across the opening with solid wall
+## nowhere under it -- the same fault that shed the top floor of every tower
+## tall enough to have one. A fixture's keep-out stays clear the whole height
+## instead, because a stairwell has to come through.
+static func _lay_wall_line(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, from: int, to: int, line: int, keepouts: Array, storey: int,
+		along_z: bool) -> void:
+	var blocked := _keepout_spans(keepouts, line, along_z)
+	var door := _door_span(from, to, storey, blocked)
+	for k in COURSES_PER_FLOOR:
+		var gaps: Array = blocked.duplicate()
+		if k < COURSES_PER_FLOOR - 1 and door != Vector2i.ZERO:
+			gaps.append(door)
+		# Alternate courses start half a brick over, so a wall is bonded rather
+		# than a row of independent four-brick stacks.
+		var lead := LINTEL_LEAD if k % 2 == 1 else 0
+		var at := y + k * PLATES_PER_COURSE
+		if along_z:
+			_run_z(world, chunk_id, palette, at, from, to, line, ROOM_WALL_COLOUR,
+					gaps, lead)
+		else:
+			_run_x(world, chunk_id, palette, at, from, to, line, ROOM_WALL_COLOUR,
+					gaps, lead)
+
+
+## Where a fixture crosses this wall line, in the line's own axis.
+static func _keepout_spans(keepouts: Array, line: int, along_z: bool) -> Array:
+	var out: Array = []
+	for k in keepouts:
+		var r: Rect2i = k
+		var across_lo: int = r.position.x if along_z else r.position.y
+		var across_hi: int = across_lo + (r.size.x if along_z else r.size.y)
+		if line < across_hi and line + WALL_THICK > across_lo:
+			var lo: int = r.position.y if along_z else r.position.x
+			out.append(Vector2i(lo, lo + (r.size.y if along_z else r.size.x)))
+	return out
+
+
+## One doorway per wall, moved storey to storey so a building does not read as
+## one floor stacked forty times. Zero if the wall is too short for one, or if
+## every position it would take is already a stairwell.
+static func _door_span(from: int, to: int, storey: int, blocked: Array) -> Vector2i:
+	var span := to - from
+	if span < DOOR_WIDE * 3:
+		return Vector2i.ZERO
+	for tries in 3:
+		@warning_ignore("integer_division")
+		var at: int = from + (span * ((storey + tries) % 3 + 1)) / 4 - LINTEL_LEAD
+		at = clampi(at, from + LINTEL_LEAD, to - DOOR_WIDE - LINTEL_LEAD)
+		var clash := false
+		for b in blocked:
+			if at < (b as Vector2i).y and at + DOOR_WIDE > (b as Vector2i).x:
+				clash = true
+				break
+		if not clash:
+			return Vector2i(at, at + DOOR_WIDE)
+	return Vector2i.ZERO
 
 
 ## Is this course one of the ones a window is cut through?
@@ -309,12 +711,30 @@ static func _gap_next(gaps: Array, at: int) -> int:
 	return best
 
 
+## Lay a short piece first, so this course's joints fall between the course
+## below's rather than on top of them. Returns how far it advanced.
+static func _lead(lead: int, gaps: Array, start: int, world: BrickWorld,
+		chunk_id: int, palette: Dictionary, y: int, x: int, z: int, colour: int,
+		part: int) -> int:
+	if lead <= 0:
+		return 0
+	# The main loop tests the openings; the lead runs before it and has to test
+	# them too, or a doorway gets a brick laid across its bottom corner.
+	if _gap_end(gaps, start) > start or _gap_next(gaps, start) < start + lead:
+		return 0
+	if world.place_block(chunk_id, Vector3i(x, y, z), part, colour) < 0:
+		return 0
+	return lead
+
+
 ## Lay a course along X. Largest piece that fits wins, so a run closes its ends
 ## with shorter bricks instead of leaving a gap -- and stops short of a window
 ## rather than laying a brick halfway across one.
 static func _run_x(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, x0: int, x1: int, z: int, colour: int, gaps: Array = []) -> void:
-	var x := x0
+		y: int, x0: int, x1: int, z: int, colour: int, gaps: Array = [],
+		lead: int = 0) -> void:
+	var x := x0 + _lead(lead, gaps, x0, world, chunk_id, palette, y, x0, z, colour,
+			palette.brick_2x2)
 	while x < x1:
 		var skip := _gap_end(gaps, x)
 		if skip > x:
@@ -332,8 +752,10 @@ static func _run_x(world: BrickWorld, chunk_id: int, palette: Dictionary,
 
 
 static func _run_z(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, z0: int, z1: int, x: int, colour: int, gaps: Array = []) -> void:
-	var z := z0
+		y: int, z0: int, z1: int, x: int, colour: int, gaps: Array = [],
+		lead: int = 0) -> void:
+	var z := z0 + _lead(lead, gaps, z0, world, chunk_id, palette, y, x, z0, colour,
+			palette.brick_2x2)
 	while z < z1:
 		var skip := _gap_end(gaps, z)
 		if skip > z:
@@ -348,38 +770,3 @@ static func _run_z(world: BrickWorld, chunk_id: int, palette: Dictionary,
 			z += 1
 		else:
 			z += 1
-
-
-## Rooms, as the recipe knows them. One per floor, the volume between slabs.
-## No contents, no doors, no stairs yet -- Docs/Interiors.md.
-static func rooms(footprint_x: int, footprint_z: int, courses: int) -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	var floor_index := 0
-	var lo_y := 1
-	for band in layout(courses):
-		if band.kind != "slab":
-			continue
-		out.append({
-			"id": floor_index,
-			"lo": Vector3i(WALL_THICK, lo_y, WALL_THICK),
-			"hi": Vector3i(footprint_x - WALL_THICK, int(band.y), footprint_z - WALL_THICK),
-		})
-		floor_index += 1
-		lo_y = int(band.y) + 1
-	return out
-## A slab across the interior, lapped onto the wall tops so the walls are tied
-## together rather than each standing alone.
-static func _lay_floor(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, footprint_x: int, footprint_z: int) -> void:
-	var colour := 2  # grey
-	var x := 0
-	while x < footprint_x:
-		var z := 0
-		while z < footprint_z:
-			var placed := false
-			if footprint_x - x >= 4 and footprint_z - z >= 4:
-				placed = world.place_block(chunk_id, Vector3i(x, y, z), palette.plate_4x4, colour) >= 0
-			if not placed and footprint_x - x >= 2 and footprint_z - z >= 2:
-				placed = world.place_block(chunk_id, Vector3i(x, y, z), palette.plate_2x2, colour) >= 0
-			z += 4 if footprint_z - z >= 4 else 2
-		x += 4 if footprint_x - x >= 4 else 2

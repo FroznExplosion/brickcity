@@ -130,3 +130,17 @@ static func _carve(world: BrickWorld, chunk: int, at: Vector3i, dims: Vector3i) 
 				if world.remove_block(chunk, found):
 					removed += 1
 	return removed
+
+
+## Where this fixture needs the building to leave room, in studs.
+##
+## Asked by TowerRecipe BEFORE it lays its columns. A staircase is a shaft the
+## full height of the building, and a shaft up the middle is exactly where the
+## columns carrying the floor want to stand -- removing them afterwards left the
+## panel above holding on to nothing.
+func footprint() -> Rect2i:
+	match kind:
+		"staircase":
+			return Rect2i(cell.x, cell.z,
+					StaircaseRecipe.DIAMETER, StaircaseRecipe.DIAMETER)
+	return Rect2i()

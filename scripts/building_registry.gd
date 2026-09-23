@@ -518,6 +518,21 @@ func room_report() -> Dictionary:
 # Fixtures (Docs/BuildMode.md section 9)
 # ---------------------------------------------------------------------------
 
+## The footprints a building's fixtures need clear of columns and floor.
+##
+## Asked BEFORE the recipe lays anything, because a stairwell is a shaft up the
+## middle of a building and that is exactly where the columns carrying its
+## floors want to stand. Taking them out afterwards left the panels above them
+## holding on to nothing. See `Fixture.footprint`.
+func _keepouts_of(b: Building) -> Array:
+	var out: Array = []
+	for f in b.fixtures:
+		var span: Rect2i = f.footprint()
+		if span.size.x > 0 and span.size.y > 0:
+			out.append(span)
+	return out
+
+
 ## Attach a fixture, in the building's OWN cells.
 ##
 ## It costs nothing until the building is built, because it is not a separate
@@ -637,8 +652,11 @@ func materialise(id: int) -> int:
 	else:
 		b.chunk = world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(
 				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses))
+		# What the fixtures need clear, before the columns go in. See
+		# Fixture.footprint.
 		TowerRecipe.build(world, b.chunk, palette,
-				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses)
+				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
+				_keepouts_of(b))
 	if b.frames.is_empty():
 		world.set_chunk_transform(b.chunk, b.xform)
 	# The staircases and everything else fixed to it, in the same grid and the

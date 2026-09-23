@@ -49,34 +49,26 @@ const BY_KIND := {
 	"empty": [],
 }
 
-## Studs of wall to keep clear of, so a room's contents are not inside the
-## masonry.
-const WALL_MARGIN := 3
+## Studs to keep clear of a wall, so a room's contents are not inside the
+## masonry. The walls themselves are already excluded -- this is the gap left
+## in front of them.
+const WALL_MARGIN := 1
 
 
-## How many studs across a room wants to be. A floor is cut into as many rooms
-## as fit at roughly this size, per axis.
+## The rooms a building's storeys are cut into, without building a single one.
 ##
-## The split used to be "1, or 2 if the footprint is at least 20 studs", which
-## is the same thing as saying every building in the city has four rooms a
-## storey however big it is. That is fine while the biggest tower is 28 studs
-## across and actively misleading past it: a 60-stud floor is not four rooms,
-## and pretending it is makes per-room streaming look cheaper than it is by
-## giving it a quarter of the work to do.
+## The cuts are **the recipe's own**: `TowerRecipe.plan` decides where the
+## interior walls go and this reads the same answer, so a room is the volume
+## between four walls that are actually there. It used to be a grid of this
+## file's own invention laid over an undivided floor, which made every room
+## boundary imaginary -- and two descriptions of one layout is how every item in
+## the city came to be laid a plate above the floor.
 ##
-## Seven keeps the existing city exactly as it was -- a 20-stud footprint is 14
-## studs inside its margins, which is two -- and scales from there.
-const ROOM_STUDS := 7
-
-
-## The lattice a building's rooms sit on, without building a single one of them.
-##
-## Rooms are a regular grid -- storeys, then `split_x` by `split_z` across each
-## floor, in that order -- so which room is where is arithmetic. Knowing that
-## without generating the rooms is the difference between a streaming pass that
-## costs what it opens and one that costs what EXISTS: the pass used to walk
-## every room of every building within seventy metres, and a building of the big
-## shapes has four thousand of them.
+## Rooms are ordered storey-major, so which room is where is still arithmetic.
+## Knowing that without generating them is the difference between a streaming
+## pass that costs what it opens and one that costs what EXISTS: the pass used
+## to walk every room of every building within seventy metres, and a building of
+## the big shapes has four thousand of them.
 ## Memoised. A lattice is a pure function of three integers, there are a
 ## handful of distinct shapes in a city, and working it out involves
 ## rebuilding the recipe's band layout -- a couple of hundred Dictionaries.
@@ -94,23 +86,29 @@ static func lattice_for(footprint_x: int, footprint_z: int, courses: int) -> Dic
 
 
 static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> Dictionary:
-	var inner_x := footprint_x - WALL_MARGIN * 2
-	var inner_z := footprint_z - WALL_MARGIN * 2
-	if inner_x < 4 or inner_z < 4:
-		return {"split_x": 0, "split_z": 0, "cell_x": 0, "cell_z": 0, "storeys": []}
-	@warning_ignore("integer_division")
-	var split_x: int = maxi(inner_x / ROOM_STUDS, 1)
-	@warning_ignore("integer_division")
-	var split_z: int = maxi(inner_z / ROOM_STUDS, 1)
-	@warning_ignore("integer_division")
-	var cell_x: int = inner_x / split_x
-	@warning_ignore("integer_division")
-	var cell_z: int = inner_z / split_z
-	return {
-		"split_x": split_x, "split_z": split_z,
-		"cell_x": cell_x, "cell_z": cell_z,
-		"storeys": storeys_of(courses),
-	}
+	var pl := TowerRecipe.plan(footprint_x, footprint_z)
+	# A column stands at the corner of each floor panel and is as wide as the
+	# part under it, which is two studs unless the panel itself is one.
+	var posts: Array[Rect2i] = []
+	for entry in (pl.panels as Array):
+		var p: Vector3i = entry
+		var n: int = 2 if p.z >= 2 else 1
+		posts.append(Rect2i(p.x, p.y, n, n))
+	var rects: Array[Rect2i] = []
+	var mine: Array = []
+	var m := WALL_MARGIN
+	for entry in (pl.rooms as Array):
+		var r: Rect2i = entry
+		var inset := Rect2i(r.position + Vector2i(m, m), r.size - Vector2i(m, m) * 2)
+		if inset.size.x < 4 or inset.size.y < 4:
+			continue
+		rects.append(inset)
+		var here: Array[Rect2i] = []
+		for q in posts:
+			if (q as Rect2i).intersects(inset):
+				here.append(q)
+		mine.append(here)
+	return {"rects": rects, "posts": mine, "storeys": storeys_of(courses)}
 
 
 ## Which rooms lie within `radius` metres of a point in the building's own
@@ -131,23 +129,23 @@ static func rooms_near(footprint_x: int, footprint_z: int, courses: int,
 		local: Vector3, radius: float, storey_span: int = -1) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var lat := lattice_for(footprint_x, footprint_z, courses)
-	var split_x: int = lat.split_x
-	var split_z: int = lat.split_z
-	if split_x <= 0 or split_z <= 0:
+	var rects: Array = lat.rects
+	if rects.is_empty():
 		return out
 	var cs := BrickWorld.get_cell_size()
-	var cell_x: int = lat.cell_x
-	var cell_z: int = lat.cell_z
-	# The grid index range that overlaps [local - radius, local + radius]. The
-	# lattice starts at WALL_MARGIN studs in, so the studs come off first.
-	var gx0 := int(floor(((local.x - radius) / cs.x - WALL_MARGIN) / float(cell_x)))
-	var gx1 := int(floor(((local.x + radius) / cs.x - WALL_MARGIN) / float(cell_x)))
-	var gz0 := int(floor(((local.z - radius) / cs.z - WALL_MARGIN) / float(cell_z)))
-	var gz1 := int(floor(((local.z + radius) / cs.z - WALL_MARGIN) / float(cell_z)))
-	gx0 = clampi(gx0, 0, split_x - 1)
-	gx1 = clampi(gx1, 0, split_x - 1)
-	gz0 = clampi(gz0, 0, split_z - 1)
-	gz1 = clampi(gz1, 0, split_z - 1)
+	# Which rooms of a storey the radius reaches, in plan. A handful per floor,
+	# so this is a loop rather than the index arithmetic it replaced -- and it
+	# runs once here instead of once per storey below.
+	var near := PackedInt32Array()
+	for ri in rects.size():
+		var r: Rect2i = rects[ri]
+		if (local.x + radius >= float(r.position.x) * cs.x
+				and local.x - radius <= float(r.position.x + r.size.x) * cs.x
+				and local.z + radius >= float(r.position.y) * cs.z
+				and local.z - radius <= float(r.position.y + r.size.y) * cs.z):
+			near.push_back(ri)
+	if near.is_empty():
+		return out
 	var storeys: Array = lat.storeys
 	# Which storey the point is standing on, for `storey_span`.
 	var on := -1
@@ -168,18 +166,13 @@ static func rooms_near(footprint_x: int, footprint_z: int, courses: int,
 		var y1: float = float(int(storey.floor_y) + int(storey.height)) * cs.y
 		if local.y + radius < y0 or local.y - radius > y1:
 			continue
-		for gx in range(gx0, gx1 + 1):
-			for gz in range(gz0, gz1 + 1):
-				out.push_back((si * split_x + gx) * split_z + gz)
+		for ri in near:
+			out.push_back(si * rects.size() + ri)
 	return out
 
 
-## The rooms of a generated building, in its own cells.
-##
-## A floor is cut into rooms of about ROOM_STUDS across, per axis, so a bigger
-## building has more rooms rather than bigger ones -- which is the whole of
-## "rooms come from the recipe" for a building whose recipe is four walls and a
-## floor every few courses.
+## The rooms of a generated building, in its own cells: one per storey per room
+## the recipe's interior walls cut that storey into.
 static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int) -> Array[Room]:
 	var out: Array[Room] = []
@@ -187,23 +180,20 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 	# Two would drift, and the last time two numbers described one layout here
 	# every item in the city was laid a plate above the floor.
 	var lat := lattice_for(footprint_x, footprint_z, courses)
-	var split_x: int = lat.split_x
-	var split_z: int = lat.split_z
-	if split_x <= 0 or split_z <= 0:
+	var rects: Array = lat.rects
+	if rects.is_empty():
 		return out
-	var cell_x: int = lat.cell_x
-	var cell_z: int = lat.cell_z
 	for storey in (lat.storeys as Array):
-		for gx in split_x:
-			for gz in split_z:
-				var r := Room.new()
-				r.id = out.size()
-				r.lo = Vector3i(WALL_MARGIN + gx * cell_x, int(storey.floor_y),
-						WALL_MARGIN + gz * cell_z)
-				r.size = Vector3i(cell_x, int(storey.height), cell_z)
-				r.room_seed = hash3(building_seed, r.id, 0x9E37)
-				r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
-				out.append(r)
+		for ri in rects.size():
+			var box: Rect2i = rects[ri]
+			var r := Room.new()
+			r.id = out.size()
+			r.lo = Vector3i(box.position.x, int(storey.floor_y), box.position.y)
+			r.size = Vector3i(box.size.x, int(storey.height), box.size.y)
+			r.posts = (lat.posts as Array)[ri]
+			r.room_seed = hash3(building_seed, r.id, 0x9E37)
+			r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
+			out.append(r)
 	return out
 
 
@@ -264,20 +254,73 @@ static func items_for(room: Room) -> Array:
 	# Two to five things. A room is furnished, not warehoused: the count is what
 	# keeps 5000 buildings x 20 rooms from being a million items even when
 	# every one of them is awake.
-	var n := 2 + int(hash3(room.room_seed, 11, 3) % 4)
+	var n := item_count_for(room)
+	# Each item gets a SLOT of the floor to itself and is jittered inside it,
+	# rather than being dropped at an independent random cell. Independent
+	# draws put two things in the same place often enough to matter -- and two
+	# items sharing cells is one item's bricks refusing to place and the other's
+	# damage record claiming both of them were destroyed. It got much more
+	# likely when rooms stopped being a 7-stud grid of this file's own invention
+	# and became whatever the recipe's interior walls cut the floor into.
+	var cols := int(ceil(sqrt(float(n))))
+	var rows := (n + cols - 1) / cols
+	@warning_ignore("integer_division")
+	var slot_x: int = maxi(room.size.x / cols, 1)
+	@warning_ignore("integer_division")
+	var slot_z: int = maxi(room.size.z / rows, 1)
 	for i in n:
 		var type: String = kinds[hash3(room.room_seed, i, 7) % kinds.size()]
 		var span: Vector3i = _item_span(type)
-		var free_x := maxi(room.size.x - span.x, 1)
-		var free_z := maxi(room.size.z - span.z, 1)
-		out.append({
-			"type": type,
-			"cell": room.lo + Vector3i(
-					int(hash3(room.room_seed, i, 19) % free_x), 0,
-					int(hash3(room.room_seed, i, 23) % free_z)),
-			"yaw": int(hash3(room.room_seed, i, 29) % 4),
-		})
+		@warning_ignore("integer_division")
+		var gz: int = i / cols
+		var free_x := maxi(slot_x - span.x, 1)
+		var free_z := maxi(slot_z - span.z, 1)
+		var at := Vector3i(
+				room.lo.x + (i % cols) * slot_x + int(hash3(room.room_seed, i, 19) % free_x),
+				room.lo.y,
+				room.lo.z + gz * slot_z + int(hash3(room.room_seed, i, 23) % free_z))
+		# A slot narrower than the item would otherwise push it through a wall.
+		at.x = mini(at.x, room.lo.x + maxi(room.size.x - span.x, 0))
+		at.z = mini(at.z, room.lo.z + maxi(room.size.z - span.z, 0))
+		at = _off_the_posts(room, at, span)
+		out.append({"type": type, "cell": at,
+				"yaw": int(hash3(room.room_seed, i, 29) % 4)})
 	return out
+
+
+## Slide an item off any column it landed on, along the room's own floor.
+##
+## A column runs from this room's floor to the next one, so an item inside one
+## does not place at all -- `place_block` refuses it and the room quietly comes
+## up short. On the shapes the city is built from a room has two to six of them
+## and they took three items in four.
+##
+## The walk is deterministic and bounded: the same room furnishes the same way
+## on the second visit and on another machine, which is the property the whole
+## tier rests on.
+static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i:
+	if room.posts.is_empty():
+		return at
+	var hi_x := room.lo.x + maxi(room.size.x - span.x, 0)
+	var hi_z := room.lo.z + maxi(room.size.z - span.z, 0)
+	for step in 12:
+		var box := Rect2i(at.x, at.z, span.x, span.z)
+		var hit := false
+		for q in room.posts:
+			if (q as Rect2i).intersects(box):
+				hit = true
+				break
+		if not hit:
+			return at
+		# Past the far side of whatever it is standing in, wrapping along the
+		# row and then down to the next one.
+		at.x += 2
+		if at.x > hi_x:
+			at.x = room.lo.x
+			at.z += 2
+			if at.z > hi_z:
+				at.z = room.lo.z
+	return at
 
 
 ## Lay one item's bricks into a chunk. Returns the block ids it produced, which
@@ -347,14 +390,26 @@ static func openings_for(world: BrickWorld, chunk: int, room: Room,
 	var cell := BrickWorld.get_cell_size()
 	var plates := TowerRecipe.PLATES_PER_COURSE
 	var inner := TowerRecipe.WALL_THICK
-	# Each side: the wall plane it sits in, and the axis that runs along it.
+	var m := WALL_MARGIN
+	# Each side: the wall plane it sits in, the axis that runs along it, and
+	# whether this room is actually against it. Since rooms became the volumes
+	# between real interior walls, most of them are not against any exterior
+	# wall at all -- and a room in the middle of a floor that reports the
+	# windows of the room two doors down is a room the streaming pass opens
+	# every time the player looks at the building from outside.
 	var sides := [
-		{"axis": "z", "at": inner - 1, "from": room.lo.x, "to": room.lo.x + room.size.x},
-		{"axis": "z", "at": footprint_z - inner, "from": room.lo.x, "to": room.lo.x + room.size.x},
-		{"axis": "x", "at": inner - 1, "from": room.lo.z, "to": room.lo.z + room.size.z},
-		{"axis": "x", "at": footprint_x - inner, "from": room.lo.z, "to": room.lo.z + room.size.z},
+		{"axis": "z", "at": inner - 1, "from": room.lo.x, "to": room.lo.x + room.size.x,
+			"touch": room.lo.z - m <= inner},
+		{"axis": "z", "at": footprint_z - inner, "from": room.lo.x, "to": room.lo.x + room.size.x,
+			"touch": room.lo.z + room.size.z + m >= footprint_z - inner},
+		{"axis": "x", "at": inner - 1, "from": room.lo.z, "to": room.lo.z + room.size.z,
+			"touch": room.lo.x - m <= inner},
+		{"axis": "x", "at": footprint_x - inner, "from": room.lo.z, "to": room.lo.z + room.size.z,
+			"touch": room.lo.x + room.size.x + m >= footprint_x - inner},
 	]
 	for side in sides:
+		if not bool(side.touch):
+			continue
 		# One pass along the side. A column of the wall either has a hole
 		# somewhere up it or does not; consecutive columns that do are one
 		# aperture, and the first solid column closes it.

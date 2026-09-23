@@ -28,6 +28,12 @@ var kind := "storeroom"
 ## Cells, in the building's own grid: the floor corner and the size.
 var lo := Vector3i.ZERO
 var size := Vector3i.ONE
+## The columns standing IN this room, in plan, in the building's own grid.
+##
+## A column runs the full height of the storey from this room's own floor, so
+## it is not scenery to be drawn round -- it is the room's furniture refusing to
+## place. Without this, three items in four landed inside one.
+var posts: Array[Rect2i] = []
 ## Named `room_seed`, not `seed`: the bare name shadows GDScript's own
 ## `seed()` and the warning is worth heeding — a call to it inside this class
 ## would silently hit the property instead.

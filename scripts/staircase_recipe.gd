@@ -21,10 +21,17 @@ class_name StaircaseRecipe
 
 ## Eight per revolution: 45 degrees, which divides 90.
 const STEPS_PER_TURN := 8
-## Outside diameter, in studs. 8 studs is 2.8 m across, which leaves a
-## three-stud tread -- just over a metre, for a figure a little under three
-## bricks tall.
-const DIAMETER := 8
+## Outside diameter, in studs. Exactly one floor panel, so the stairwell IS a
+## lattice cell: the cell is left out of the floor and the flight fills it, with
+## its outer edge against the panels around it to clip to.
+##
+## It was 8, which is a perfectly good stair and the wrong number. A shaft of 8
+## inside a cell of 10 touches nothing -- the steps hang on the newel alone and
+## every one of them reads as detached.
+##
+## 10 studs is 3.5 m across, leaving a four-stud tread: a metre and a half, for
+## a figure a little under three bricks tall.
+const DIAMETER := TowerRecipe.PANEL
 ## The central column every step carries a slice of, in studs. Two: wide enough
 ## to be a real load path with a stud joint between one step and the next,
 ## narrow enough to leave a three-stud tread to walk on.

@@ -129,8 +129,15 @@ func _check_tension_on_a_fallen_piece() -> void:
 	# Now undercut it. With grid -X down, the foundation is the low-X end; take
 	# a bite out of the far end's support and what is beyond it has no path to
 	# the ground any more.
+	# The WHOLE support face, worked out from the recipe rather than counted off
+	# by hand. Leaving any of it standing leaves the section above grounded
+	# through it, which is a test of nothing -- and a hard-coded thirteen
+	# courses stopped covering this tower the moment a floor went from two
+	# plate layers to one and the building got shorter.
+	@warning_ignore("integer_division")
+	var courses: int = TowerRecipe.total_plates(16) / TowerRecipe.PLATES_PER_COURSE + 1
 	var removed := 0
-	for y in range(0, 13):
+	for y in range(0, courses):
 		for z in range(0, 17, 2):
 			removed += w.apply_hit(c, xform * Vector3(1.0 * STUD, y * 3 * PLATE, z * STUD),
 					1.0).size()
