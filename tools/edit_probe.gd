@@ -211,7 +211,10 @@ func _check_tint_states() -> void:
 	# column is 12 plates tall, and a part that does not FIT reads as red
 	# rather than amber.
 	var c := _chunk(Vector3i(32, 32, 32))
-	_world.place_block(c, Vector3i(0, 0, 0), _a("plate_4x4"), 2)
+	# A floor panel under all of it, not a 4x4: a spiral stair piece is ten
+	# studs across and has nothing in its first four -- its newel and treads
+	# are in the middle and beyond -- so a 4x4 was neither inside it nor under it.
+	_world.place_block(c, Vector3i(0, 0, 0), _a("plate_10x10"), 2)
 
 	# Exactly one of the three, every time, for every part in the palette.
 	var red := 0

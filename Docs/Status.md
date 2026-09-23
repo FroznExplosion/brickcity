@@ -628,6 +628,46 @@ cell count is pinned by it to within the half-cell rule. In a real physics space
 slope's face at the slope's height rather than its cells', passes clean through an arch's opening
 and not its pillar, and misses the corner of a round brick's footprint.
 
+#### A spiral staircase you build, from one part turned four ways
+
+The prefab staircase (`K`, `StaircaseRecipe`) draws true arcs, and that is its trouble: studs stand
+on cells the arc only half covers, so they hang off the edge, and its octagonal newel is not the
+round 2x2 it sits beside. The direction is for the staircase to be **authored** -- built in the
+workshop from palette parts like anything else, and in time dropped into another build as a
+sub-assembly -- so the part comes first.
+
+`spiral_10x10` follows the real spiral stair step, whose inner end is a round 2x2 that stacks on
+the step below. The grid only turns in quarters, so one piece carries **two** steps of 45 degrees,
+and four pieces turned a quarter each make a revolution of eight. A piece is 10 studs across (one
+floor panel, like the stairwell) and 4 plates tall, and is three convex pieces
+(`ShapedParts._spiral`):
+
+| | |
+|---|---|
+| Newel | the same octagon as `round_2x2`, full height, studs on top and sockets under. Piece stacks on piece by four stud joints -- compression, the load path -- and a round 2x2 stacks on it too |
+| Lower tread | the 0-45 degree sector, floor to one rise (2 plates) |
+| Upper tread | 45-90 degrees, one rise to two. Tread thickness equals the rise, so the underside is continuous |
+
+Every tread edge runs along the grid or at exactly 45 degrees through grid points, and the outline is
+the octagon with its corners on the grid (a cut at x + z = 7 from the centre). A cell is therefore
+whole, empty or halved on its diagonal. **Studs** follow a stricter rule than cells, for every
+shaped part now: a stud stands on a column's highest solid cell (at any height -- the lower tread's
+studs are a rise below the piece's top, which is how the extension already reads `top_cells`) and
+only where its footprint is on the part, sampled at its centre and eight points round it. Half a
+cell is enough to connect through; it is not enough to stand a stud on. The earlier parts' stud
+masks came out identical under the new rule.
+
+**Headroom** is checked against the player, who is four bricks (12 plates) tall: a revolution is
+eight rises, 16 plates, less the 2-plate tread above, so every tread has 14 plates clear over it.
+
+`tools/shaped_probe.gd` passes **210 checks**. For the spiral: the newel's columns have studs and
+sockets, its octagon is exactly `round_2x2`'s, eight pieces turned a quarter each stack into two
+revolutions with four joints apiece, a round 2x2 stacks on top; and in a real physics space a ray
+lands on each of eight treads one rise above the last, the tread a revolution up clears 12 plates,
+and under every one of 132 drawn studs the part is solid out to the stud's rim -- no floating studs.
+
+The prefab `K` staircase is unchanged for now.
+
 #### What frames cost, and the one seam left open
 
 `BuildRecipe` now carries frames: a rotation and a tick offset per frame, and a frame index per

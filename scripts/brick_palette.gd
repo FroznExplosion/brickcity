@@ -186,6 +186,11 @@ const _PARTS := {
 	"round_2x2": Vector3i(2, 3, 2),
 	"arch_1x4": Vector3i(1, 3, 4),
 	"arch_1x6": Vector3i(1, 3, 6),
+	# A quarter-turn of spiral staircase: a round 2x2 newel and two steps of
+	# two plates each. Ten studs across fills one floor panel, as the stairwell
+	# does. Four of it, each turned a quarter and stacked on the last, make a
+	# revolution of eight steps (ShapedParts._spiral).
+	"spiral_10x10": Vector3i(10, 4, 10),
 }
 
 
@@ -205,6 +210,9 @@ const _SHAPED := {
 	"round_2x2": {"kind": "round"},
 	"arch_1x4": {"kind": "arch"},
 	"arch_1x6": {"kind": "arch"},
+	# Its "front" is where its first (lower) step is; each quarter turn is a
+	# different piece of the flight, so it has four orientations.
+	"spiral_10x10": {"kind": "spiral", "front": Vector3i(1, 0, 0)},
 }
 
 
@@ -291,7 +299,8 @@ static func is_shaped(part: String) -> bool:
 ## face the other way. Given only `_x` / `_z` it could be turned two ways and
 ## never the other two.
 static func is_directional(part: String) -> bool:
-	return is_bracket(part) or (_SHAPED.has(part) and (_SHAPED[part] as Dictionary).has("axis"))
+	return is_bracket(part) or (_SHAPED.has(part) and ((_SHAPED[part] as Dictionary).has("axis")
+			or (_SHAPED[part] as Dictionary).has("front")))
 
 
 ## A bracket also carries studs on one lateral face.
@@ -414,6 +423,8 @@ static func front_of(name: String) -> Vector3i:
 	var v: Vector3i
 	if is_bracket(part):
 		v = Vector3i(1, 0, 0)  # the side its studs are on; see _side_studs_for
+	elif (_SHAPED[part] as Dictionary).has("front"):
+		v = _SHAPED[part].front
 	else:
 		v = Vector3i(0, 0, -1) if _SHAPED[part].axis == "z" else Vector3i(-1, 0, 0)
 	var o := orientation_of(name)

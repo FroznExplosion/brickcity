@@ -97,6 +97,8 @@ static func _shape(kind: String, size: Vector3i, axis: String) -> Dictionary:
 			return {"draw": [p], "pieces": [p]}
 		"arch":
 			return _arch(size)
+		"spiral":
+			return _spiral(size)
 	push_error("ShapedParts: no shape '%s'" % kind)
 	var box := _prism(PackedVector2Array([Vector2(0, 0), Vector2(size.z * S, 0),
 			Vector2(size.z * S, size.y * P), Vector2(0, size.y * P)]), "zy", 0.0, size.x * S)
@@ -224,6 +226,55 @@ static func _arch(size: Vector3i) -> Dictionary:
 	return {"draw": [draw], "pieces": pieces}
 
 
+## A quarter of a spiral staircase: the newel, and two steps.
+##
+## The real part this follows is the spiral stair step, whose inner end is a
+## round 2x2 that stacks on the step below and turns on it. Here the turn is a
+## quarter -- the grid allows no other -- so one piece carries TWO steps, 45
+## degrees each, and four pieces make a revolution of eight. Each piece is:
+##
+##   * the newel, the full height of the piece: the same octagon as a
+##     `round_2x2`, centred in the footprint, with its studs on top and its
+##     sockets underneath. That is the load path -- piece stacks on piece by
+##     four stud joints, compression all the way down -- and a round brick
+##     stacks on it as well as on itself;
+##   * the lower tread, the sector from 0 to 45 degrees, from the floor to one
+##     rise; and the upper tread, 45 to 90 degrees, from one rise to two. Tread
+##     thickness equals the rise, so the flight is continuous underneath.
+##
+## Every tread edge runs along the grid or at exactly 45 degrees through grid
+## points, and the outline is the octagon whose corners are on the grid (a cut
+## at x + z = R + round(R (sqrt 2 - 1))). So a cell is whole, empty or cut
+## straight across its diagonal, and the stud rule -- a stud only where its
+## whole footprint is on the part -- leaves no stud hanging off a curve.
+##
+## Canonical winding: the lower tread is toward +X, the upper toward +Z, and
+## the next piece is this one turned a quarter (+X to +Z), one piece higher.
+static func _spiral(size: Vector3i) -> Dictionary:
+	var h := size.y * P
+	var rise := h * 0.5
+	var R := size.x * 0.5                              # radius, in studs
+	var c0 := roundf(R * (sqrt(2.0) - 1.0))
+	var m := (R + c0) * 0.5                            # where the cut meets the diagonal
+	var centre := Vector2(size.x * S * 0.5, size.z * S * 0.5)
+	var at := func(u: float, v: float) -> Vector2:
+		return centre + Vector2(u, v) * S
+	var newel: Dictionary = _round_prism(Vector3i(2, size.y, 2))
+	var np := PackedVector2Array()
+	for q in (newel.poly as PackedVector2Array):
+		np.append(q - Vector2(S, S) + centre)
+	newel.poly = np
+	var lower := _prism(PackedVector2Array([at.call(0, 0), at.call(R, 0), at.call(R, c0),
+			at.call(m, m)]), "xz", 0.0, rise)
+	var upper := _prism(PackedVector2Array([at.call(0, 0), at.call(m, m), at.call(c0, R),
+			at.call(0, R)]), "xz", rise, h)
+	# The treads run into the newel: three convex pieces whose union is the
+	# part, each one a collision hull. The overlap is inside the newel, where
+	# the faces it leaves are buried.
+	var pieces := [newel, lower, upper]
+	return {"draw": pieces, "pieces": pieces, "overlapping": true}
+
+
 # ---------------------------------------------------------------------------
 # Profile space <-> part space
 # ---------------------------------------------------------------------------
@@ -308,15 +359,43 @@ static func _mask(pieces: Array, size: Vector3i) -> Dictionary:
 				cells[x + size.x * (y + size.y * z)] = 1 if on else 0
 				solid += 1 if on else 0
 
+	# A stud stands on a column's highest solid cell -- at whatever height that
+	# is, which is how the extension reads it (a spiral piece's lower tread has
+	# studs a rise below its top) -- and only where the stud's whole footprint
+	# is on the part: its centre and eight points round it, just under the
+	# face. Half a cell is enough to CONNECT through; it is not enough to stand
+	# a stud on, which would hang off a curve or a slope.
 	var studs := _zeros(size.x * size.z)
 	var sockets := _zeros(size.x * size.z)
 	for z in size.z:
 		for x in size.x:
-			if cells[x + size.x * ((size.y - 1) + size.y * z)] != 0:
+			var top := -1
+			for y in size.y:
+				if cells[x + size.x * (y + size.y * z)] != 0:
+					top = y
+			if top >= 0 and _covered(pieces, x, z, (top + 1) * P - 1e-4):
 				studs[x + size.x * z] = 1
 			if cells[x + size.x * (size.y * z)] != 0:
 				sockets[x + size.x * z] = 1
 	return {"cells": cells, "studs": studs, "sockets": sockets, "solid": solid}
+
+
+## Is a stud's footprint on the part at height `y`, over column (x, z)? The
+## stud is 0.6 of a stud across; its inner 0.4 is what is sampled, which lets a
+## 2x2 round's corner studs stand on its octagon as a real one's do on its
+## circle.
+static func _covered(pieces: Array, x: int, z: int, y: float) -> bool:
+	for du in [-0.2, 0.0, 0.2]:
+		for dv in [-0.2, 0.0, 0.2]:
+			var v := Vector3((x + 0.5 + du) * S, y, (z + 0.5 + dv) * S)
+			var hit := false
+			for pr in pieces:
+				if _prism_has(pr, v):
+					hit = true
+					break
+			if not hit:
+				return false
+	return true
 
 
 ## Every face of the drawn prisms, as triangles with normals.

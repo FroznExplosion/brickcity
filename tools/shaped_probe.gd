@@ -35,6 +35,7 @@ func _init() -> void:
 	_check_masks()
 	_check_orientations()
 	_check_connections()
+	_check_spiral()
 	_setup_space()
 	physics_frame.connect(_tick)
 
@@ -147,9 +148,18 @@ func _check_geometry() -> void:
 					sgn = signf(c)
 				convex = convex and signf(c) == sgn
 		_ok("%s: every collision piece is convex" % part, convex)
-		_ok("%s: the pieces fill exactly what is drawn, no gap, no overlap" % part,
-				absf(pieces - drawn) < 1e-4, "%.5f vs %.5f" % [pieces, drawn])
+		# A shape made of pieces that overlap (the spiral's treads run into its
+		# newel) draws and collides as those same pieces, so there is no
+		# tiling to check -- its volume is their UNION, sampled.
+		var overlapping: bool = shape.get("overlapping", false)
+		if not overlapping:
+			_ok("%s: the pieces fill exactly what is drawn, no gap, no overlap" % part,
+					absf(pieces - drawn) < 1e-4, "%.5f vs %.5f" % [pieces, drawn])
+		else:
+			_ok("%s: draws and collides as the same pieces" % part, shape.draw == shape.pieces)
 		_ok("%s: one hull per piece" % part, sh.hulls.size() == shape.pieces.size())
+		var vol := drawn if not overlapping else _union_volume(shape.pieces, size)
+		var slack := 1e-4 if not overlapping else 0.02 * vol
 
 		# The cells are the shape, to the half-cell. Every solid cell is at least
 		# half full and every empty one at most half, so the volume is pinned
@@ -158,11 +168,26 @@ func _check_geometry() -> void:
 		var solid: int = sh.solid
 		var empty := size.x * size.y * size.z - solid
 		_ok("%s: solid cells track the volume" % part,
-				drawn >= solid * cell_v * 0.5 - 1e-4
-				and drawn <= (solid + empty * 0.5) * cell_v + 1e-4,
-				"%d cells = %.4f m3 vs %.4f" % [solid, solid * cell_v, drawn])
+				vol >= solid * cell_v * 0.5 - slack
+				and vol <= (solid + empty * 0.5) * cell_v + slack,
+				"%d cells = %.4f m3 vs %.4f" % [solid, solid * cell_v, vol])
 		_ok("%s: and the solid volume is less than the box" % part,
 				drawn < box.x * box.y * box.z - 1e-4)
+
+
+## The volume of a union of convex prisms, sampled at 5 x 5 x 5 a cell.
+func _union_volume(pieces: Array, size: Vector3i) -> float:
+	var n := 5
+	var hit := 0
+	for z in size.z * n:
+		for y in size.y * n:
+			for x in size.x * n:
+				var v := Vector3((x + 0.5) / n * S, (y + 0.5) / n * P, (z + 0.5) / n * S)
+				for pr in pieces:
+					if ShapedParts._prism_has(pr, v):
+						hit += 1
+						break
+	return hit * (S * P * S) / float(n * n * n)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +217,8 @@ func _check_masks() -> void:
 		"arch_1x6": {"studs": [1, 1, 1, 1, 1, 1], "sockets": [1, 0, 0, 0, 0, 1]},
 	}
 	for part in _shaped():
+		if not expect.has(part):
+			continue  # the spiral has checks of its own (_check_spiral)
 		var sh := _build(part)
 		_ok("%s: studs %s" % [part, expect[part].studs], _cols(sh.studs) == expect[part].studs,
 				"got %s" % [_cols(sh.studs)])
@@ -256,7 +283,10 @@ func _check_orientations() -> void:
 	# the BACK, so every stud column lies further back than every bare one.
 	print("\nthe front is where the bake put it")
 	for part in _shaped():
-		if not BrickPalette.is_directional(part) or not BrickPalette.has_studs(part):
+		# Slopes only: a spiral's "front" is where its first step is, not a
+		# low edge with the studs behind it.
+		if not (BrickPalette._SHAPED[part] as Dictionary).has("axis") \
+				or not BrickPalette.has_studs(part):
 			continue
 		for v in BrickPalette.variants_of(part):
 			var id: int = _p[v]
@@ -335,6 +365,61 @@ func _body(chunk: int, at: Vector3) -> void:
 	_bodies.append(b)
 
 
+# ---------------------------------------------------------------------------
+# The spiral staircase piece
+# ---------------------------------------------------------------------------
+
+## The player is four bricks tall (like the real figure): the least clearance
+## a stair may leave over any tread.
+const PLAYER_PLATES := 12
+
+var _spiral_chunk := -1
+
+
+func _check_spiral() -> void:
+	print("\nspiral: a newel and two steps a piece, four pieces a turn")
+	var size := BrickPalette.part_size("spiral_10x10")
+	var sh := _build("spiral_10x10")
+	var studs := _cols(sh.studs)
+	var sockets := _cols(sh.sockets)
+	var W := size.x
+	var ctr := W / 2
+	var newel_ok := true
+	for dz in [-1, 0]:
+		for dx in [-1, 0]:
+			var i: int = (ctr + dx) + W * (ctr + dz)
+			newel_ok = newel_ok and studs[i] == 1 and sockets[i] == 1
+	_ok("the newel's four columns carry studs on top and sockets underneath", newel_ok)
+	_ok("and both treads have studs (lower + upper)", studs.count(1) > 4 + 8,
+			"%d studs" % studs.count(1))
+
+	# The newel is a round 2x2: the same octagon, in the same place in a cell.
+	var shape: Dictionary = ShapedParts._shape("spiral", size, "z")
+	var newel: PackedVector2Array = (shape.pieces[0] as Dictionary).poly
+	var round: PackedVector2Array = ShapedParts._round_prism(Vector3i(2, 3, 2)).poly
+	var same := newel.size() == round.size()
+	var shift := Vector2((ctr - 1) * S, (ctr - 1) * S)
+	for i in mini(newel.size(), round.size()):
+		same = same and newel[i].is_equal_approx(round[i] + shift)
+	_ok("its newel is exactly a round_2x2's octagon", same)
+
+	# Two revolutions: eight pieces, each a quarter turned and one piece up.
+	var c := _w.create_chunk(Vector3i.ZERO, Vector3i(W, 8 * size.y + 8, W))
+	_spiral_chunk = c
+	var all := true
+	var joints_ok := true
+	for k in 8:
+		var arch: int = _p[BrickPalette.variant_name("spiral_10x10", k, false)]
+		var at := Vector3i(0, k * size.y, 0)
+		if k > 0:
+			joints_ok = joints_ok and _w.would_connect(c, at, arch) == 4
+		all = all and _w.place_block(c, at, arch, 4) >= 0
+	_ok("eight pieces, each turned a quarter, stack into two revolutions", all)
+	_ok("each held by the four newel studs of the one below", joints_ok)
+	var r := _w.would_connect(c, Vector3i(ctr - 1, 8 * size.y, ctr - 1), _p["round_2x2"])
+	_ok("and a round 2x2 stacks on the top of the newel", r == 4, "%d joints" % r)
+
+
 func _setup_space() -> void:
 	_space = root.get_world_3d().space
 	var c1 := _w.create_chunk(Vector3i.ZERO, Vector3i(8, 8, 8))
@@ -346,6 +431,7 @@ func _setup_space() -> void:
 	var c3 := _w.create_chunk(Vector3i.ZERO, Vector3i(8, 8, 8))
 	_w.place_block(c3, Vector3i.ZERO, _p["round_2x2"], 4)
 	_body(c3, Vector3(20, 0, 0))
+	_body(_spiral_chunk, Vector3(30, 0, 0))
 
 
 func _cast(from: Vector3, to: Vector3) -> Dictionary:
@@ -383,3 +469,57 @@ func _check_rays() -> void:
 	var on := _cast(mid, mid - Vector3(0, 2, 0))
 	_ok("its middle is solid, at its top", not on.is_empty()
 			and absf((on.position as Vector3).y - 3.0 * P) < 0.01)
+
+	_check_spiral_rays()
+
+
+func _check_spiral_rays() -> void:
+	print("\nspiral: rays")
+	var o := Vector3(30, 0, 0)
+	var size := BrickPalette.part_size("spiral_10x10")
+	var rise := size.y * 0.5 * P
+	var ctr := size.x * 0.5 * S
+	# Down onto the middle of each of the first eight treads, half way out.
+	var heights := []
+	var up_ok := true
+	var least := INF
+	for k in 8:
+		var a := (k + 0.5) * TAU / 8.0
+		var q := o + Vector3(ctr + cos(a) * 3.2 * S, 0, ctr + sin(a) * 3.2 * S)
+		# From the underside of the tread a revolution up, so the ray lands on
+		# this one.
+		var from := q + Vector3(0, (k + 1) * rise + 8 * rise - rise - 0.01, 0)
+		var hit := _cast(from, q - Vector3(0, 1, 0))
+		heights.append(snappedf((hit.position as Vector3).y, 0.001) if not hit.is_empty() else -1.0)
+		# And up from the tread's top to the underside of the one above it.
+		var top := q + Vector3(0, (k + 1) * rise + 0.01, 0)
+		var above := _cast(top, top + Vector3(0, 10, 0))
+		if above.is_empty():
+			up_ok = false
+		else:
+			least = minf(least, (above.position as Vector3).y - (k + 1) * rise)
+	var steps_ok := true
+	for k in 8:
+		steps_ok = steps_ok and absf(heights[k] - (k + 1) * rise) < 0.01
+	_ok("eight treads, each one rise above the last, round the turn", steps_ok, "%s" % [heights])
+	_ok("every tread has the one a revolution up over it", up_ok)
+	_ok("and a player (4 bricks, %d plates) fits under it" % PLAYER_PLATES,
+			least >= PLAYER_PLATES * P - 0.01, "%.2f plates" % (least / P))
+
+	# No floating studs: under every drawn stud, the part is solid right to the
+	# stud's edge.
+	var studs: PackedFloat32Array = _w.get_chunk_studs(_spiral_chunk)
+	var floating := 0
+	var n := 0
+	for i in range(0, studs.size(), 16):
+		var at := o + Vector3(studs[i + 3], studs[i + 7], studs[i + 11])
+		n += 1
+		for d in [Vector3(0.1, 0, 0), Vector3(-0.1, 0, 0), Vector3(0, 0, 0.1), Vector3(0, 0, -0.1),
+				Vector3.ZERO]:
+			var hit := _cast(at + d + Vector3(0, 0.02, 0), at + d - Vector3(0, 0.2, 0))
+			if hit.is_empty() or absf((hit.position as Vector3).y - at.y) > 0.01:
+				floating += 1
+				break
+	_ok("studs are drawn (%d)" % n, n > 0)
+	_ok("and none hangs off an edge: solid under every stud, out to its rim", floating == 0,
+			"%d of %d float" % [floating, n])

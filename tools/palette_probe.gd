@@ -110,6 +110,8 @@ func _check_names(palette: Dictionary) -> void:
 			expect_y = 3
 		elif bits[0] == "column":
 			expect_y = TowerRecipe.COLUMN_PLATES   # one storey: six courses
+		elif bits[0] == "spiral":
+			expect_y = 4   # two steps of two plates
 		_ok("%s: %s is %d plate(s) tall" % [part, bits[0], expect_y], size.y == expect_y,
 				"y = %d" % size.y)
 
@@ -254,7 +256,7 @@ func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 	print("\nstuds")
 	# Tall enough to stack two of the tallest part: a column is 18 plates. Two
 	# rows, because the palette no longer fits in one.
-	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 40, 16))
+	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(128, 40, 24))
 	var x := 0
 	var z := 0
 	var studded := 0
@@ -264,7 +266,7 @@ func _check_studs(w: BrickWorld, palette: Dictionary) -> void:
 		var size: Vector3i = BrickPalette.size_of(name)
 		if x + size.x > 128:
 			x = 0
-			z = 8
+			z = 12   # clear of the 10x10s in the first row
 		var lower := w.place_block(chunk, Vector3i(x, 0, z), palette[name], 0)
 		var upper := w.place_block(chunk, Vector3i(x, size.y, z), palette[name], 0)
 		_ok("%s: two of them stack" % part, lower >= 0 and upper >= 0)

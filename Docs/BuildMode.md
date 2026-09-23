@@ -1027,6 +1027,20 @@ half an octagon -- the same language as the octagonal studs. Octagons rather tha
 the grid is square: an octagon turned a quarter is itself, where a hexagon would give a round brick
 a front and four orientations. Facets shade flat; `ShapedParts.FACETED` turns smooth shading back on.
 
+### The spiral staircase, authored ✅ (the part) / next (the rest)
+
+A staircase should be built, not dropped in: the prefab's studs hang off its curved treads and its
+newel does not match the round 2x2. `spiral_10x10` is a quarter-turn piece in the palette -- a
+round-2x2 newel plus two 45-degree steps -- and four of it, each turned with `R` and stacked on the
+newel of the last, make a full turn. Grid-true edges, studs only where they stand on the part,
+14 plates of headroom for a 12-plate player. Status.md has the detail.
+
+Still to do: a mirrored piece for the other winding direction; the `K` fixture rebuilt from these
+pieces (or retired once an authored build can be added to another as a sub-assembly, which is the
+goal); and snapping that lines a piece up on the newel's studs rather than on whichever stud is
+aimed at, since a 10-stud part centred on one of the newel's four studs is out by one on three of
+them.
+
 ### Placement — aim at a stud, hold E to lock the plane, RMB deletes ✅
 
 Looking at a stud puts the part **on that stud**: the face picks the grid (a brick top keeps its
