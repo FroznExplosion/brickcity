@@ -332,6 +332,7 @@ static func pack_cell(w: int, l: int) -> Array:
 ## nothing to say about.
 static func _wall_lines(lines: Array, footprint: int) -> Array:
 	var out: Array = []
+	@warning_ignore("integer_division")
 	var limit := footprint - WALL_THICK - PANEL / 2
 	for i in range(ROOM_PANELS, lines.size(), ROOM_PANELS):
 		if int(lines[i]) < limit:
@@ -714,7 +715,7 @@ static func _gap_next(gaps: Array, at: int) -> int:
 ## Lay a short piece first, so this course's joints fall between the course
 ## below's rather than on top of them. Returns how far it advanced.
 static func _lead(lead: int, gaps: Array, start: int, world: BrickWorld,
-		chunk_id: int, palette: Dictionary, y: int, x: int, z: int, colour: int,
+		chunk_id: int, _palette: Dictionary, y: int, x: int, z: int, colour: int,
 		part: int) -> int:
 	if lead <= 0:
 		return 0

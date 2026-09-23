@@ -1778,12 +1778,14 @@ func _place_in_city() -> void:
 	var loose_frames := 0
 	if building.asm != null:
 		loose_frames = (building.asm.detached_frames().detached as Array).size()
+	# Fixtures are built with the building now (BuildingRegistry._build_fixtures),
+	# not woken afterwards, so what is worth reporting is that each laid bricks.
 	var fixtures: int = building.fixtures.size()
 	var awake := 0
 	for fx in building.fixtures:
-		if reg.wake_fixture(id, fx.id) >= 0:
+		if not fx.blocks.is_empty():
 			awake += 1
-	print("[workshop] placed in city: %d bricks across %d frame(s), %d weld(s), %d fixture(s) (%d woke); hit removed %d, %d group(s) came loose, %d frame(s) came off"
+	print("[workshop] placed in city: %d bricks across %d frame(s), %d weld(s), %d fixture(s) (%d built); hit removed %d, %d group(s) came loose, %d frame(s) came off"
 			% [before, building.chunks().size(),
 					building.asm.live_weld_count() if building.asm != null else 0,
 					fixtures, awake,

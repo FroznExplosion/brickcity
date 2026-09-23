@@ -67,7 +67,8 @@ func _one_grid() -> void:
 		"PieceMeshes": [PieceMeshes.STUD, PieceMeshes.PLATE],
 		"ShapedParts": [ShapedParts.S, ShapedParts.P],
 	}
-	for path in ["res://scripts/building_shell.gd", "res://scripts/build_shell.gd"]:
+	for path in ["res://scripts/building_shell.gd", "res://scripts/build_shell.gd",
+			"res://scripts/city_scene.gd"]:
 		var sc: GDScript = load(path)
 		var k := sc.get_script_constant_map()
 		copies[path.get_file()] = [k.get("STUD", -1.0), k.get("PLATE", -1.0)]

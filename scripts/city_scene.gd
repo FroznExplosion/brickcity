@@ -23,6 +23,12 @@ const BLAST_MIN := 0.5
 const BLAST_MAX := 12.0
 const BLAST_STEP := 1.2
 
+## The grid, from the palette rather than typed in again. The city used to
+## write 0.35 and 0.14 inline some twenty times; right every time, and one
+## grid change from being wrong in twenty places. tools/scale_probe.gd.
+const STUD := BrickPalette.STUD_M
+const PLATE := BrickPalette.PLATE_M
+
 ## Building shapes, chosen to give a skyline rather than a grid of clones.
 ##
 ## Footprints are LATTICE-CONFORMING: `2 * WALL_THICK + k * PANEL`, so 24, 34,
@@ -1839,9 +1845,9 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 	else:
 		for b in registry.buildings:
 			var local := b.xform.affine_inverse() * point
-			var size := Vector3(b.recipe.footprint_x * 0.35,
-					TowerRecipe.total_plates(b.recipe.courses) * 0.14,
-					b.recipe.footprint_z * 0.35)
+			var size := Vector3(b.recipe.footprint_x * STUD,
+					TowerRecipe.total_plates(b.recipe.courses) * PLATE,
+					b.recipe.footprint_z * STUD)
 			if AABB(Vector3.ZERO, size).grow(radius).has_point(local):
 				_shear_building(b.id, point, radius)
 
@@ -2882,11 +2888,14 @@ func _run_shot_pass() -> void:
 
 	# Inside an undamaged building: floors have to be visible from above AND
 	# below, and the walls have to read as brick before anything materialises.
+	# From a corner room at eye height, looking across the storey: the middle of
+	# the building is the stairwell, and a camera there saw only the flight.
 	var inside = registry.buildings[0]
-	camera.position = inside.xform.origin + Vector3(
-			inside.recipe.footprint_x * 0.5 * 0.35, 1.1,
-			inside.recipe.footprint_z * 0.5 * 0.35)
-	camera.rotation = Vector3(0.45, 0.6, 0.0)
+	# Mid-panel: columns stand on the lattice lines either side of it.
+	var corner := (float(TowerRecipe.WALL_THICK) + TowerRecipe.PANEL * 0.5) * STUD
+	camera.position = inside.xform.origin + Vector3(corner,
+			PLATE * TowerRecipe.SLAB_PLATES + DebugCamera.EYE_HEIGHT, corner)
+	camera.rotation = Vector3(0.15, -2.356, 0.0)
 	await _frames(2)
 	await _save("city_interior")
 	# And looking down at the floor you are standing on, which is the half that
@@ -2904,7 +2913,7 @@ func _run_shot_pass() -> void:
 	# because a slab was a single layer of plates and our connectivity is
 	# vertical only, so no plate in it touched any other.
 	var probe = registry.buildings[0]
-	_blast(probe.xform.origin + Vector3(probe.recipe.footprint_x * 0.5 * 0.35, 0.8, 0.3), 1.4)
+	_blast(probe.xform.origin + Vector3(probe.recipe.footprint_x * 0.5 * STUD, 0.8, 0.3), 1.4)
 	await _frames(2)
 	var standing := world.get_block_count(probe.chunk)
 	var loose := 0
@@ -2925,11 +2934,11 @@ func _run_shot_pass() -> void:
 	for b in registry.buildings:
 		if b.recipe.courses < 44:
 			continue
-		var w: float = b.recipe.footprint_x * 0.35
-		var d: float = b.recipe.footprint_z * 0.35
+		var w: float = b.recipe.footprint_x * STUD
+		var d: float = b.recipe.footprint_z * STUD
 		# Eat the -X half of the footprint over the bottom eight courses.
 		for course in range(0, 8):
-			var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * 0.14
+			var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
 			var px := 0.3
 			while px < w * 0.55:
 				var pz := 0.3
@@ -3218,11 +3227,11 @@ func _run_stress_pass() -> void:
 ## and the building comes down. A symmetric ring just lowers it onto what is
 ## left and nothing falls.
 func _stress_topple(b) -> int:
-	var w: float = b.recipe.footprint_x * 0.35
-	var d: float = b.recipe.footprint_z * 0.35
+	var w: float = b.recipe.footprint_x * STUD
+	var d: float = b.recipe.footprint_z * STUD
 	var fired := 0
 	for course in range(0, 8):
-		var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * 0.14
+		var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
 		var px := 0.3
 		while px < w * 0.55:
 			var pz := 0.3
@@ -3241,14 +3250,14 @@ func _stress_topple(b) -> int:
 ## at one building a frame -- so the queue stays level instead of growing. That
 ## is the whole difference between measuring a city and measuring a backlog.
 func _stress_wound(b) -> int:
-	var w: float = b.recipe.footprint_x * 0.35
-	var d: float = b.recipe.footprint_z * 0.35
+	var w: float = b.recipe.footprint_x * STUD
+	var d: float = b.recipe.footprint_z * STUD
 	var courses: int = b.recipe.courses
 	var fired := 0
 	# Two courses, two thirds of the way up.
 	for i in 2:
 		var course: int = maxi(1, int(courses * 0.66) + i)
-		var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * 0.14
+		var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
 		# Four points across one face, and only a quarter of the way in, so the
 		# opposite wall and the core are untouched.
 		for j in 4:
@@ -3268,9 +3277,9 @@ func _run_lod_pass() -> void:
 	print("[lod] de-mesh and back")
 	var target := registry.get_building(0)
 	var aim: Vector3 = target.xform.origin + Vector3(
-			target.recipe.footprint_x * 0.35 * 0.5,
-			target.recipe.courses * TowerRecipe.PLATES_PER_COURSE * 0.14 * 0.5,
-			target.recipe.footprint_z * 0.35 * 0.5)
+			target.recipe.footprint_x * STUD * 0.5,
+			target.recipe.courses * TowerRecipe.PLATES_PER_COURSE * PLATE * 0.5,
+			target.recipe.footprint_z * STUD * 0.5)
 
 	# An Array, not an int: a GDScript lambda captures locals BY VALUE, so
 	# `failures += 1` inside one updates a copy and the probe reports PASS over
@@ -3424,9 +3433,9 @@ func _ray_recipes(from: Vector3, to: Vector3) -> Dictionary:
 	for b in registry.buildings:
 		if b.toppled or b.is_materialised() or _shells.has(b.id):
 			continue
-		var size := Vector3(b.recipe.footprint_x * 0.35,
-				TowerRecipe.total_plates(b.recipe.courses) * 0.14,
-				b.recipe.footprint_z * 0.35)
+		var size := Vector3(b.recipe.footprint_x * STUD,
+				TowerRecipe.total_plates(b.recipe.courses) * PLATE,
+				b.recipe.footprint_z * STUD)
 		var inv := b.xform.affine_inverse()
 		var local_from: Vector3 = inv * from
 		var local_dir: Vector3 = inv.basis * dir
@@ -3453,9 +3462,9 @@ func _run_reach_pass() -> void:
 	print("[reach] how far can a building be shot?")
 	var target := registry.get_building(0)
 	var aim: Vector3 = target.xform.origin + Vector3(
-			target.recipe.footprint_x * 0.35 * 0.5,
-			target.recipe.courses * TowerRecipe.PLATES_PER_COURSE * 0.14 * 0.5,
-			target.recipe.footprint_z * 0.35 * 0.5)
+			target.recipe.footprint_x * STUD * 0.5,
+			target.recipe.courses * TowerRecipe.PLATES_PER_COURSE * PLATE * 0.5,
+			target.recipe.footprint_z * STUD * 0.5)
 
 	var furthest := 0.0
 	var first_miss := 0.0
@@ -3588,7 +3597,7 @@ func _run_chamfer_pass() -> void:
 
 	# Close enough to read a single brick: about a metre and a half off a wall,
 	# square on.
-	var wall: Vector3 = b.xform * Vector3(b.recipe.footprint_x * 0.35 * 0.5, 2.2, 0.0)
+	var wall: Vector3 = b.xform * Vector3(b.recipe.footprint_x * STUD * 0.5, 2.2, 0.0)
 	camera.global_position = wall - Vector3(0.0, 0.0, 1.6)
 	camera.look_at(wall, Vector3.UP)
 	await _frames(10)
@@ -4549,7 +4558,7 @@ func _slab_height(courses: int, fraction: float) -> float:
 		if absf(y - want) < gap:
 			gap = absf(y - want)
 			best = y
-	return best * 0.14
+	return best * PLATE
 
 
 ## How many of a building's bands actually hold a surface.
@@ -4794,8 +4803,8 @@ func _run_walk_pass() -> void:
 	# meets long before anything is made of bricks.
 	print("\na building's shell is solid to a walker and not to a flier")
 	var b := registry.get_building(0)
-	var w: float = b.recipe.footprint_x * 0.35
-	var d: float = b.recipe.footprint_z * 0.35
+	var w: float = b.recipe.footprint_x * STUD
+	var d: float = b.recipe.footprint_z * STUD
 	var centre: Vector3 = b.xform.origin + Vector3(w * 0.5, 0.0, d * 0.5)
 	var start := centre - Vector3(0.0, 0.0, d * 0.5 + 4.0)
 
@@ -4872,7 +4881,7 @@ func _run_walk_pass() -> void:
 				camera.global_position.z, room.z + 1.0, camera.is_crouched()])
 
 	# The same beam, with one brick course of floor under it.
-	var ledge := _test_block(room + Vector3(0.0, 0.21, 0.0), Vector3(6.0, 0.42, 6.0))
+	var ledge := _test_block(room + Vector3(0.0, PLATE * 1.5, 0.0), Vector3(6.0, PLATE * 3.0, 6.0))
 	camera.set_walking(false)
 	camera.global_position = room + Vector3(0.0, DebugCamera.EYE_HEIGHT, -5.0)
 	camera.look_at(Vector3(room.x, DebugCamera.EYE_HEIGHT, room.z + 6.0), Vector3.UP)
