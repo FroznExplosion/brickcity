@@ -117,6 +117,14 @@ const BIG_SHAPES := [
 @export_range(0, 2000) var debris_small_max := 80
 @export_range(0, 2000) var debris_large_max := 24
 @export_range(0, 4000) var debris_total_max := 96
+## What happens to the rooms nobody had touched when their building comes
+## down. Off: they are written off, every item gone (BuildingRegistry.
+## write_off_rooms). On: Interiors §4.1's spill -- the manifest laid into the
+## wreck when somebody walks up to it. Off by default, and measured: the spill
+## landed in wrecks that were still falling, every piece it laid was joined to
+## nothing, and all of it was deleted as small debris by the time the wreck
+## came to rest. See --interior-audit.
+@export var spill_interiors := false
 var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
@@ -511,6 +519,7 @@ var _room_scans := 0
 ## exists (Interiors section 4.1).
 var _wrecks := {}
 var _spilled_rooms := 0
+var _audit_spilled_moving := 0
 var _room_draws := 0
 var _room_draw_ms := 0.0
 var _room_opens := 0
@@ -557,6 +566,7 @@ var _build_mode := false
 var _fixture_mode := false
 var _dormant_mode := false
 var _rooms_mode := false
+var _audit_mode := false
 var _interiors_mode := false
 ## Set by the interiors pass. The streamers and the collision merge run on a
 ## timer and would rebuild the body underneath a measurement -- which they did,
@@ -627,6 +637,7 @@ func _ready() -> void:
 	_fixture_mode = "--fixture" in args
 	_dormant_mode = "--dormant" in args
 	_rooms_mode = "--rooms" in args
+	_audit_mode = "--interior-audit" in args
 	# The scene's settings first, the command line over the top of them.
 	_big = big_shapes or "--big" in args
 	_city_size = maxi(building_count, 1)
@@ -699,6 +710,8 @@ func _ready() -> void:
 		_run_dormant_pass()
 	elif _interiors_mode:
 		_run_interiors_pass()
+	elif _audit_mode:
+		_run_interior_audit_pass()
 	elif _rooms_mode:
 		_run_rooms_pass()
 	elif _chamfer_mode:
@@ -881,16 +894,16 @@ func _demote_room(id: int, index: int) -> void:
 func _take_shape(id: int, body: RID, size: Vector3, xform: Transform3D) -> int:
 	var spare: PackedInt32Array = _spare_shapes.get(id, PackedInt32Array())
 	if spare.is_empty():
-		var at := PhysicsServer3D.body_get_shape_count(body)
+		var added := PhysicsServer3D.body_get_shape_count(body)
 		PhysicsServer3D.body_add_shape(body, _shape_rid(size), xform)
-		return at
-	var at: int = spare[spare.size() - 1]
+		return added
+	var reused: int = spare[spare.size() - 1]
 	spare.remove_at(spare.size() - 1)
 	_spare_shapes[id] = spare
-	PhysicsServer3D.body_set_shape(body, at, _shape_rid(size))
-	PhysicsServer3D.body_set_shape_transform(body, at, xform)
-	PhysicsServer3D.body_set_shape_disabled(body, at, false)
-	return at
+	PhysicsServer3D.body_set_shape(body, reused, _shape_rid(size))
+	PhysicsServer3D.body_set_shape_transform(body, reused, xform)
+	PhysicsServer3D.body_set_shape_disabled(body, reused, false)
+	return reused
 
 
 ## Make a building's drawn furniture match what the registry says is drawn.
@@ -943,6 +956,42 @@ func _sync_drawn(id: int) -> void:
 				_drawn_furniture, id)
 	_drawn_ms += float(Time.get_ticks_usec() - ft) / 1000.0
 	_drawn_syncs += 1
+
+
+## A piece of this building just came away. Any drawn room with an item that
+## was standing on it is undrawn; the next streaming pass draws it again, and
+## drawing asks whether each item still has a floor (RoomManifest.draw_items).
+## Without this, a drawn room's furniture hung where its floor had been --
+## drawn from a manifest that had no way to know.
+func _recheck_drawn(id: int) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or b.drawn_rooms.is_empty():
+		return
+	var origin: Vector3i = world.get_chunk_origin(b.chunk)
+	var cs := BrickWorld.get_cell_size()
+	var changed := false
+	for index in b.drawn_rooms.duplicate():
+		var room := registry.get_room(id, index)
+		for item_box in room.drawn_boxes:
+			var cell := Vector3i(roundi(item_box.position.x / cs.x),
+					roundi(item_box.position.y / cs.y),
+					roundi(item_box.position.z / cs.z)) + origin
+			var sx := maxi(roundi(item_box.size.x / cs.x), 1)
+			var sz := maxi(roundi(item_box.size.z / cs.z), 1)
+			var held := false
+			for x in sx:
+				for z in sz:
+					if world.is_solid(b.chunk, Vector3i(cell.x + x, cell.y - 1, cell.z + z)):
+						held = true
+						break
+				if held:
+					break
+			if not held:
+				registry.undraw_room(id, index)
+				changed = true
+				break
+	if changed:
+		_sync_drawn(id)
 
 
 ## Everything drawn for a building goes, with the bricks it was drawn in.
@@ -1268,6 +1317,9 @@ func _stream_rooms() -> void:
 			var was: Transform3D = world.get_chunk_transform(wreck)
 			if _box_distance(room.world_box(was), here) > SPILL_RANGE:
 				continue
+			var wreck_isl := islands.find_by_chunk(wreck)
+			if wreck_isl != null and not wreck_isl.settled:
+				_audit_spilled_moving += 1
 			if registry.spill_room(id, room.id, wreck, SPILL_ITEMS) > 0:
 				_spilled_rooms += 1
 				islands.rebuild_chunk(wreck)
@@ -1665,13 +1717,16 @@ func _topple(id: int) -> void:
 	_pending_bricks.erase(id)
 
 	# What was in the rooms. An OPEN room's contents are bricks in this chunk
-	# already, so they ride it down (Interiors section 4.2). A shut one is
-	# marked spilled, and resolves into the wreck when somebody arrives -- which
-	# is section 5.1's rule: do not build, in the middle of a collapse, contents
-	# for rooms nobody may ever look at.
+	# already, so they ride it down (Interiors section 4.2). A shut or drawn
+	# one is written off -- or, with spill_interiors, marked spilled to resolve
+	# into the wreck when somebody arrives. Either way nothing is built in the
+	# middle of a collapse for rooms nobody may ever look at (section 5.1).
 	if not b.is_build():
-		registry.mark_rooms_spilled(id)
-		_wrecks[id] = chunk
+		if spill_interiors:
+			registry.mark_rooms_spilled(id)
+			_wrecks[id] = chunk
+		else:
+			registry.write_off_rooms(id)
 
 	# The sideways frames go with it, each as its own piece. A welded assembly
 	# coming down in one piece would need the solver to carry the welds, which
@@ -2350,6 +2405,13 @@ func _physics_process(_delta: float) -> void:
 			t = _mark("disable", t)
 			islands.spawn(b.chunk, before)
 			t = _mark("spawn", t)
+		# NOW the furniture is redrawn, from what is left. _disable redrew it
+		# too, but before the spawn took the blocks out of this chunk -- so the
+		# building went on drawing every piece that had just left it, a flat
+		# untextured ghost where the floor used to be, until the next hit on
+		# this building happened to redraw it again.
+		_refresh_furniture(b.id)
+		_recheck_drawn(b.id)
 		# Keep drawing those bricks until the piece that took them has come up.
 		# See IslandManager.OVERLAP_FRAMES.
 		# Start a hold, never extend one -- see the same guard in _shed.
@@ -4192,6 +4254,281 @@ func _run_interiors_pass() -> void:
 	get_tree().quit(0)
 
 
+## What an interior piece IS at every stage of a collapse, counted.
+##
+##     godot --path . --resolution 1280x720 res://scenes/city.tscn -- --interior-audit
+##
+## Floating furniture was reported by eye: untextured, hanging where a floor
+## used to be, and falling the moment something near it broke. This walks the
+## tallest building through what a player does to it -- walks up, touches a
+## couple of storeys, blows a floor out, cuts it down, walks to the wreck --
+## and after each step counts every way a piece can be in the wrong place.
+## See _audit_interiors for what each number means.
+func _run_interior_audit_pass() -> void:
+	print("[audit] what interior pieces do while a building comes down")
+	var target := -1
+	var tallest := 0
+	for b in registry.buildings:
+		if b.recipe != null and not b.is_build() and b.recipe.courses > tallest:
+			tallest = b.recipe.courses
+			target = b.id
+	var b := registry.get_building(target)
+	var box := registry.local_box(target)
+	var mid: Vector3 = b.xform * (box.position + box.size * 0.5)
+	var outside: Vector3 = b.xform * (box.position
+			+ Vector3(box.size.x * 0.5, DebugCamera.EYE_HEIGHT, -2.0))
+	print("[audit] building %d, %d courses, %d rooms" % [target, tallest,
+			registry.rooms_of(target).size()])
+
+	# 1. Walk up to it: bricks, and its near rooms drawn.
+	camera.global_position = outside
+	camera.look_at(mid, Vector3.UP)
+	var guard := 0
+	while guard < 900 and (not b.is_materialised() or b.drawn_rooms.is_empty()):
+		await _frames(1)
+		guard += 1
+	await _frames(30)
+	# And through its bottom two storeys, as a player walking the floors would:
+	# every room there touched, so real.
+	var storeys: int = RoomManifest.storeys_of(b.recipe.courses).size()
+	@warning_ignore("integer_division")
+	var per_storey: int = maxi(registry.rooms_of(target).size() / maxi(storeys, 1), 1)
+	var fb := _room_body(target)
+	PhysicsServer3D.body_set_space(fb, RID())
+	for index in mini(per_storey * 2, registry.rooms_of(target).size()):
+		_open_room(target, index, true)
+	PhysicsServer3D.body_set_space(fb, get_world_3d().space)
+	_refresh_furniture(target)
+	_sync_drawn(target)
+	# Keep them real for the rest of the pass: this is what a player who has
+	# been in there, or a blast that reached them, leaves behind.
+	for index in b.open_rooms:
+		registry.get_room(target, index).hit = true
+	await _frames(10)
+	_audit_interiors("walked up and through two storeys", target)
+
+	# 2. Blow the floor out from under a furnished real room on the upper of
+	# those storeys, leaving its walls standing.
+	var victim: Room = null
+	for index in b.open_rooms:
+		var r := registry.get_room(target, index)
+		if r.lo.y > 4 and r.items.size() > 0:
+			victim = r
+			break
+	if victim != null:
+		var cs := BrickWorld.get_cell_size()
+		var y := (victim.lo.y - 1) * cs.y
+		var x := victim.lo.x * cs.x + 0.5
+		while x < (victim.lo.x + victim.size.x) * cs.x:
+			var z := victim.lo.z * cs.z + 0.5
+			while z < (victim.lo.z + victim.size.z) * cs.z:
+				_blast(b.xform * Vector3(x, y, z), 0.9)
+				z += 1.0
+			x += 1.0
+		guard = 0
+		while not _damage_queue.is_empty() and guard < 300:
+			await _frames(1)
+			guard += 1
+		await _frames(40)
+		_audit_interiors("floor blown out under room %d" % victim.id, target)
+	else:
+		print("[audit] no furnished real room above the ground storey to undercut")
+
+	# 3. Cut it down: the -X half of its bottom courses, as --shot does.
+	var w: float = b.recipe.footprint_x * STUD
+	var d: float = b.recipe.footprint_z * STUD
+	for course in range(0, 8):
+		var cy := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
+		var px := 0.3
+		while px < w * 0.55:
+			var pz := 0.3
+			while pz < d:
+				_blast(b.xform * Vector3(px, cy, pz), 1.5)
+				pz += 2.0
+			px += 2.0
+	guard = 0
+	while not _damage_queue.is_empty() and guard < 900:
+		await _frames(1)
+		guard += 1
+	await _frames(10)
+	_audit_interiors("cut: just after", target)
+	await _frames(60)
+	_audit_interiors("cut: a second later", target)
+	guard = 0
+	while guard < 900:
+		var isl: Dictionary = islands.report()
+		if int(isl.islands) == int(isl.settled):
+			break
+		await _frames(10)
+		guard += 10
+	_audit_interiors("settled", target)
+
+	# 4. Walk to what is left of it.
+	camera.global_position = outside + Vector3(0.0, 0.0, -6.0)
+	camera.look_at(mid, Vector3.UP)
+	await _frames(120)
+	_audit_interiors("walked to the wreck", target)
+	await _save("interior_audit")
+	get_tree().quit(0)
+
+
+## One line of numbers about every interior piece in the city, and one about
+## the building being watched.
+##
+##   ghost      furniture DRAWN for a chunk that no longer holds those blocks:
+##              instances on a furniture MultiMesh beyond the chunk's live
+##              decorative blocks, or a MultiMesh for a chunk nothing owns
+##   loose      a real piece in a STANDING building that grounding does not
+##              reach -- it should already have been cut out and dropped
+##   hanging    a real piece that grounding reaches, with nothing solid under
+##              it: held up sideways, by a wall or a column or a neighbour
+##   drawn-air  a drawn item with nothing solid under its box
+##   islands    pieces riding islands; furniture-only islands; lone bricks
+func _audit_interiors(stage: String, focus: int) -> void:
+	var n := {"real": 0, "ghost": 0, "loose": 0, "hanging": 0, "drawn": 0,
+			"drawn_air": 0, "isl_pieces": 0, "isl_furniture_only": 0,
+			"isl_lone": 0, "isl_ghost": 0, "isl_hanging": 0, "isl_adrift": 0, "orphan": 0}
+	var owned := {}
+	for id in _materialised:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		var chunk := b.chunk
+		owned[chunk] = true
+		var decor: PackedInt32Array = world.get_decorative_blocks(chunk)
+		n.real += decor.size()
+		var node: MultiMeshInstance3D = _furniture.get(chunk)
+		if node != null and is_instance_valid(node) and node.visible:
+			n.ghost += maxi(node.multimesh.visible_instance_count - decor.size(), 0)
+		if not decor.is_empty():
+			var grounded: PackedByteArray = world.solve_grounded(chunk)
+			for block in decor:
+				if block >= grounded.size() or grounded[block] == 0:
+					n.loose += 1
+				elif not _audit_supported(chunk, block):
+					n.hanging += 1
+		for room in registry.drawn_rooms_of(id):
+			for item_box in room.drawn_boxes:
+				n.drawn += 1
+				if not _audit_box_supported(chunk, item_box):
+					n.drawn_air += 1
+	for chunk in _furniture:
+		var node: MultiMeshInstance3D = _furniture[chunk]
+		if not owned.has(chunk) and node != null and is_instance_valid(node):
+			n.orphan += node.multimesh.visible_instance_count
+	for id in _drawn_furniture:
+		var bd := registry.get_building(id)
+		var node: MultiMeshInstance3D = _drawn_furniture[id]
+		if (bd == null or not bd.is_materialised() or bd.toppled) and is_instance_valid(node):
+			n.orphan += node.multimesh.instance_count
+	for isl in islands.islands:
+		if not isl.is_valid():
+			continue
+		var decor: PackedInt32Array = world.get_decorative_blocks(isl.chunk)
+		if decor.is_empty():
+			continue
+		n.isl_pieces += decor.size()
+		var alive := world.get_alive_block_count(isl.chunk)
+		if alive == decor.size():
+			n.isl_furniture_only += 1
+		if alive == 1:
+			n.isl_lone += 1
+		var node: MultiMeshInstance3D = islands._furniture.get(isl.chunk)
+		if node != null and is_instance_valid(node):
+			n.isl_ghost += maxi(node.multimesh.visible_instance_count - decor.size(), 0)
+		# Hanging inside the piece: nothing under it along whatever is down
+		# for this piece now. It cannot fall -- it is welded into a rigid
+		# body -- so it floats for as long as the piece exists.
+		var down := RoomManifest.down_axis(isl.chunk_transform())
+		for block in decor:
+			if not _audit_supported(isl.chunk, block, down):
+				n.isl_hanging += 1
+		# Adrift: joined to no structure at all, only to other furniture or to
+		# nothing. That is not a chair clicked to a floor that is now a wall;
+		# it is a chair in mid-air that happens to share a rigid body.
+		for group in world.get_components(isl.chunk):
+			var structural := false
+			for block in (group as PackedInt32Array):
+				if not world.is_block_decorative(isl.chunk, block):
+					structural = true
+					break
+			if not structural:
+				n.isl_adrift += (group as PackedInt32Array).size()
+	var fb := registry.get_building(focus)
+	var st := {"shut": 0, "drawn": 0, "real": 0, "spilled": 0, "written_off": 0}
+	for room in registry.rooms_of(focus):
+		if room.active:
+			st.real += 1
+		elif room.drawn:
+			st.drawn += 1
+		elif room.spilled:
+			st.spilled += 1
+		else:
+			st.shut += 1
+		if room.items.size() > 0 and room.gone.size() >= room.items.size():
+			st.written_off += 1
+	print("\n[audit] %s" % stage)
+	print("[audit]   standing: %d real piece(s), %d ghost, %d loose, %d hanging; %d drawn item(s), %d over air"
+			% [n.real, n.ghost, n.loose, n.hanging, n.drawn, n.drawn_air])
+	print("[audit]   islands: %d piece(s) riding, %d with nothing under them, %d ADRIFT (joined to no structure), %d furniture-only island(s), %d lone brick(s), %d ghost; %d orphaned instance(s)"
+			% [n.isl_pieces, n.isl_hanging, n.isl_adrift, n.isl_furniture_only, n.isl_lone, n.isl_ghost, n.orphan])
+	print("[audit]   spilled so far: %d room(s), of which into a piece still moving: %d; furniture-only pieces deleted where they came loose: %d block(s)"
+			% [_spilled_rooms, _audit_spilled_moving, int(islands.report().furniture_deleted)])
+	var dormant: Dictionary = islands.dormant_report()
+	print("[audit]   dormant: %s" % str(dormant))
+	if _wrecks.has(focus):
+		var wk: int = _wrecks[focus]
+		var alive_wk := world.is_chunk_alive(wk)
+		print("[audit]   wreck chunk %d: alive %s, an island %s, %d furniture block(s) in it"
+				% [wk, alive_wk, islands.find_by_chunk(wk) != null,
+				world.get_decorative_blocks(wk).size() if alive_wk else 0])
+	else:
+		print("[audit]   no wreck recorded for building %d" % focus)
+	print("[audit]   building %d: %s, toppled %s -- rooms %d shut, %d drawn, %d real, %d spilled, %d written off"
+			% [focus, "bricks" if fb.is_materialised() else "not bricks", fb.toppled,
+			st.shut, st.drawn, st.real, st.spilled, st.written_off])
+
+
+## Is anything solid directly under this block, in its own chunk? "Under" is
+## `down` in the chunk's own grid, which for a standing building is -Y.
+func _audit_supported(chunk: int, block: int, down: Vector3i = Vector3i(0, -1, 0)) -> bool:
+	var ticks: Array = world.get_block_ticks(chunk, block)
+	if ticks.is_empty():
+		return true
+	var tpc := Vector3i(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(),
+			BrickWorld.ticks_per_stud())
+	var lo: Vector3i = ticks[0]
+	var size: Vector3i = ticks[1]
+	var origin: Vector3i = world.get_chunk_origin(chunk)
+	@warning_ignore("integer_division")
+	var cell := Vector3i(lo.x / tpc.x, lo.y / tpc.y, lo.z / tpc.z) + origin
+	@warning_ignore("integer_division")
+	var span := Vector3i(maxi(size.x / tpc.x, 1), maxi(size.y / tpc.y, 1), maxi(size.z / tpc.z, 1))
+	# The block's cells on its down face, and the cell one step past each.
+	for x in span.x:
+		for y in span.y:
+			for z in span.z:
+				var on_face := (down.x < 0 and x == 0) or (down.x > 0 and x == span.x - 1) 						or (down.y < 0 and y == 0) or (down.y > 0 and y == span.y - 1) 						or (down.z < 0 and z == 0) or (down.z > 0 and z == span.z - 1)
+				if on_face and world.is_solid(chunk, cell + Vector3i(x, y, z) + down):
+					return true
+	return false
+
+
+## The same question for a drawn item's box, in the chunk's own metres.
+func _audit_box_supported(chunk: int, item_box: AABB) -> bool:
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(chunk)
+	var lo := Vector3i(roundi(item_box.position.x / cs.x), roundi(item_box.position.y / cs.y),
+			roundi(item_box.position.z / cs.z)) + origin
+	var sx := maxi(roundi(item_box.size.x / cs.x), 1)
+	var sz := maxi(roundi(item_box.size.z / cs.z), 1)
+	for x in sx:
+		for z in sz:
+			if world.is_solid(chunk, Vector3i(lo.x + x, lo.y - 1, lo.z + z)):
+				return true
+	return false
+
+
 func _world_mb() -> float:
 	return float(world.get_memory_report().total_bytes as int) / 1048576.0
 
@@ -4464,46 +4801,37 @@ func _run_rooms_pass() -> void:
 	_promote(2)
 	await _frames(20)
 	_gate_ok("nobody opened anything in it", _open_rooms_of(2) == 0)
+	var fell_chunk := fell.chunk
 	_topple(2)
-	# Polled, not a fixed wait. Toppling hands the bricks to an island and
-	# the island may split again on the tick after that, so how many frames
-	# it takes for the wreck to be a chunk anybody can find depends on what
-	# else the scene is doing. A fixed thirty was enough until rooms began
-	# streaming twelve at a time, and then it was enough most runs.
 	var settle := 0
-	while settle < 240 and not world.is_chunk_alive(int(_wrecks.get(2, -1))):
+	while settle < 240 and islands.find_by_chunk(fell_chunk) == null:
 		await _frames(1)
 		settle += 1
 	await _frames(20)
-	var waiting := registry.spilled_rooms(2).size()
-	_gate_ok("its rooms are marked to spill rather than simulated", waiting > 0,
-			"%d waiting" % waiting)
-	_gate_ok("and nothing was built to do it from two hundred metres",
-			_open_rooms_of(2) == 0)
+	# Nobody had touched a room in it, so there is nothing to carry down and
+	# nothing owed to the pile: the rooms are written off where they stood.
+	# (spill_interiors turns Interiors 4.1's spill back on; --interior-audit
+	# is why it is off -- every piece it laid floated through the fall.)
+	var written := 0
+	for room in registry.rooms_of(2):
+		if room.is_changed():
+			written += 1
+	_gate_ok("its untouched rooms are written off, not spilled",
+			registry.spilled_rooms(2).size() == 0 and written > 0,
+			"%d spilled, %d written off" % [registry.spilled_rooms(2).size(), written])
+	_gate_ok("and nothing was built to do it", _open_rooms_of(2) == 0)
 
-	# Walk up to the pile.
-	var wreck: int = _wrecks.get(2, -1)
-	_gate_ok("the wreck is a chunk the city can still find",
-			wreck >= 0 and world.is_chunk_alive(wreck))
-	var pile: Vector3 = world.get_chunk_transform(wreck).origin
-	var bricks_before := world.get_alive_block_count(wreck)
+	# Walk up to the pile: nothing is laid into it.
+	_gate_ok("the wreck is a piece the city can still find",
+			islands.find_by_chunk(fell_chunk) != null)
+	var pile: Vector3 = world.get_chunk_transform(fell_chunk).origin
 	camera.global_position = pile + Vector3(0.0, 6.0, -12.0)
 	camera.look_at(pile, Vector3.UP)
-	guard = 0
-	while guard < 400 and registry.spilled_rooms(2).size() >= waiting:
-		await _frames(1)
-		guard += 1
-	_gate_ok("arriving spills a room into it",
-			registry.spilled_rooms(2).size() < waiting,
-			"%d waiting, was %d" % [registry.spilled_rooms(2).size(), waiting])
-	_gate_ok("and there are more bricks in the pile than there were",
-			world.get_alive_block_count(wreck) > bricks_before,
-			"%d against %d" % [world.get_alive_block_count(wreck), bricks_before])
-	_gate_ok("some of what spilled is broken",
-			world.get_dead_blocks(wreck).size() > 0,
-			"%d dead" % world.get_dead_blocks(wreck).size())
-	await _frames(20)
-	await _save("rooms_spilled")
+	await _frames(120)
+	var in_pile: int = world.get_decorative_blocks(fell_chunk).size() 			if world.is_chunk_alive(fell_chunk) else 0
+	_gate_ok("and arriving at it lays no furniture into it", in_pile == 0,
+			"%d furniture block(s)" % in_pile)
+	await _save("rooms_wreck")
 
 	# A room nowhere near anybody, in the path of a blast, resolves anyway.
 	var far := registry.get_building(registry.buildings.size() - 1)
@@ -5398,7 +5726,7 @@ func _build_scenery() -> void:
 	# which is why the reach probe reported misses at 40 m.
 	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
-			or _rooms_mode or _chamfer_mode or _interiors_mode)
+			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode)
 	# A scripted pass puts the camera where it wants it and must not be able to
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse

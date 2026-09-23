@@ -30,6 +30,7 @@ func _init() -> void:
 	_check_nothing_until_asked()
 	_check_activation()
 	_check_the_drawn_rung()
+	_check_nothing_stands_on_air()
 	_check_the_diff()
 	_check_compromised()
 	_check_the_analytic_resolve()
@@ -303,6 +304,74 @@ func _check_the_drawn_rung() -> void:
 	_ok("a building coming down spills its drawn rooms",
 			room2.spilled and not room2.drawn and reg.room_report().drawn == 0)
 	_ok("and a spilled room will not draw", reg.draw_room(id, other) == 0)
+
+
+## What floated, found by --interior-audit, and what stops it now.
+func _check_nothing_stands_on_air() -> void:
+	print("\nno furniture stands on nothing")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var reg := BuildingRegistry.new(w, res[1])
+	# A building with a stairwell, placed as the city places one: a shaft ten
+	# studs across with no floor in it on any storey.
+	var id := reg.register(44, 34, 78, Transform3D())
+	reg.add_fixture(id, "staircase", {"steps": StaircaseRecipe.steps_for_courses(78),
+			"colour": 11}, Vector3i(12, TowerRecipe.SLAB_PLATES, 12))
+	var chunk := reg.materialise(id)
+	var shaft := Rect2i(12, 12, StaircaseRecipe.DIAMETER, StaircaseRecipe.DIAMETER)
+	var in_shaft := 0
+	var on_air := 0
+	var items := 0
+	for room in reg.rooms_of(id):
+		for item in RoomManifest.items_for(room):
+			items += 1
+			var span := RoomManifest._item_span(str(item.type))
+			var cell: Vector3i = item.cell
+			if Rect2i(cell.x, cell.z, span.x, span.z).intersects(shaft):
+				in_shaft += 1
+			if not RoomManifest.item_supported(w, chunk, str(item.type), cell):
+				on_air += 1
+	_ok("nothing is generated in the stairwell", in_shaft == 0,
+			"%d of %d items" % [in_shaft, items])
+	_ok("and everything generated has a floor under it", on_air == 0,
+			"%d of %d items" % [on_air, items])
+
+	# Take a floor away from under a room nobody has opened: drawing it and
+	# opening it both leave what stood there out, and write it off.
+	var index := _furnished_room(reg, id)
+	var room := reg.get_room(id, index)
+	room.items = RoomManifest.items_for(room)
+	var victim: Dictionary = room.items[0]
+	var span0 := RoomManifest._item_span(str(victim.type))
+	var cell0: Vector3i = victim.cell
+	var under := PackedInt32Array()
+	for x in span0.x:
+		for z in span0.z:
+			var bid := w.block_at(chunk, Vector3i(cell0.x + x, cell0.y - 1, cell0.z + z))
+			if bid >= 0 and not under.has(bid):
+				under.push_back(bid)
+	w.kill_blocks(chunk, under)
+	reg.draw_room(id, index)
+	_ok("a drawn room leaves out an item whose floor is gone",
+			room.gone.has(0) and room.drawn_boxes.size() == room.items.size() - room.gone.size(),
+			"%d boxes, %d gone" % [room.drawn_boxes.size(), room.gone.size()])
+	room.gone.clear()
+	reg.activate_room(id, index)
+	var laid_victim: PackedInt32Array = room.items[0].get("blocks", PackedInt32Array())
+	_ok("and an opened one does not lay it", room.gone.has(0) and laid_victim.is_empty())
+
+	# The building comes down with nobody inside: its untouched rooms are
+	# written off rather than spilled into the wreck.
+	var other := reg.register(44, 34, 78, Transform3D(Basis(), Vector3(40, 0, 0)))
+	reg.materialise(other)
+	reg.draw_room(other, _furnished_room(reg, other))
+	var written := reg.write_off_rooms(other)
+	var all_gone := true
+	for r in reg.rooms_of(other):
+		all_gone = all_gone and (RoomManifest.item_count_for(r) == 0 or r.is_changed())
+	_ok("a building coming down writes its untouched rooms off",
+			written > 0 and all_gone and reg.spilled_rooms(other).is_empty()
+			and reg.get_building(other).drawn_rooms.is_empty())
 
 
 static func _box_key(lo: Vector3, size: Vector3) -> String:

@@ -231,6 +231,22 @@ func rooms_of(building_id: int) -> Array[Room]:
 		if not b.is_build():
 			b.rooms = RoomManifest.rooms_for(b.recipe.footprint_x, b.recipe.footprint_z,
 					b.recipe.courses, b.id * 2654435761)
+			# The stairwell is a shaft with no floor in it, on every storey,
+			# and furniture generated inside it stood on nothing: laid, it
+			# hung in the air until something nearby broke and the solve
+			# noticed. It is a keep-out exactly as a column is, so it goes
+			# where the columns go. Copied first: a room's posts are the
+			# lattice's own array, shared by every storey of every building
+			# of this shape.
+			var keep := _keepouts_of(b)
+			if not keep.is_empty():
+				for room in b.rooms:
+					var plan := Rect2i(room.lo.x, room.lo.z, room.size.x, room.size.z)
+					var mine: Array[Rect2i] = room.posts.duplicate()
+					for k in keep:
+						if (k as Rect2i).intersects(plan):
+							mine.append(k)
+					room.posts = mine
 	return b.rooms
 
 
@@ -316,6 +332,13 @@ func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
 			continue
 		var item: Dictionary = room.items[i]
 		var at := RoomManifest.resolved_cell(room, item, down, i)
+		# Standing, and its floor is gone: it went with the floor. Laying it
+		# anyway put a chair in mid-air that the next solve would drop, and
+		# until something nearby broke nothing asked the solve anything.
+		if down == Vector3i(0, -1, 0) and not RoomManifest.item_supported(
+				world, into, str(item.type), at - offset):
+			room.gone[i] = true
+			continue
 		var laid := RoomManifest.build_item(world, into, palette,
 				{"type": item.type, "cell": at, "yaw": item.yaw},
 				4 + int(i % 8), offset)
@@ -458,6 +481,36 @@ func mark_rooms_spilled(building_id: int) -> int:
 		if room.active or room.spilled:
 			continue
 		room.spilled = true
+		n += 1
+	return n
+
+
+## The host is coming down and its shut rooms are simply gone.
+##
+## The alternative to `mark_rooms_spilled`, and the default. Measured with
+## `--interior-audit`: every spill landed in a wreck that was still falling,
+## every item it laid was joined to no structure at all -- placed against
+## whatever face was "down" at that instant, at a seeded height, and a wall
+## margin clear of the walls -- and by the time the wreck came to rest all of
+## it had been split off as small debris and deleted. The spill paid for
+## furniture that floated for the whole fall and then did not exist.
+##
+## A room that was REAL rides the fall in its own bricks, as before; this only
+## decides what happens to the rooms nobody had touched. Their diff is written
+## -- every item gone -- so the building's record says what the collapse did.
+func write_off_rooms(building_id: int) -> int:
+	var b := get_building(building_id)
+	if b == null:
+		return 0
+	_undraw_all(b)
+	var n := 0
+	for room in rooms_of(building_id):
+		if room.active or room.spilled:
+			continue
+		var count: int = room.items.size() if not room.items.is_empty() \
+				else RoomManifest.item_count_for(room)
+		for i in count:
+			room.gone[i] = true
 		n += 1
 	return n
 

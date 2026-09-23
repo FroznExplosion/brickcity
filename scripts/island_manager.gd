@@ -62,6 +62,11 @@ const BREAK_THICKNESS := 0.42      ## one brick course
 
 ## Debris budget.
 const DEBRIS_MIN_BLOCKS := 10      ## under this, a piece is disposable
+## How close a piece that is nothing but furniture has to be to be allowed to
+## fall rather than be deleted where it came loose. Arm's length and a bit: a
+## chair tipping off a floor in front of you is worth a body; anywhere else it
+## is a floating cube for a second and small debris after that.
+const FURNITURE_FALL_RANGE := 6.0
 const DEBRIS_LIFETIME_MS := 2500   ## how long disposable debris lingers
 ## A piece has to be at least this big to shear anything it lands on. Two bricks
 ## of ABS weigh a few grams; at brick scale nothing that small arrives with
@@ -164,6 +169,7 @@ var impacts := 0
 var impact_blocks := 0
 var splits := 0
 var discarded := 0                 ## small pieces never spawned, because unseen
+var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
 ## uses it to damage whatever was underneath -- an island has no idea what it
@@ -376,6 +382,17 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	if count < DEBRIS_MIN_BLOCKS and not can_be_seen(at):
 		world.release_chunk(island_chunk)
 		discarded += count
+		return null
+	# Nor does a piece that is ONLY furniture, unless it is at arm's length.
+	# A chair whose floor went is not a chair the collapse needs: as a body it
+	# was a lone untextured cube in mid-air, or a brick that fell a beat after
+	# everything around it, and at the far end of a fall it was deleted as
+	# small debris anyway. Deleting it here, where it leaves, is the same
+	# outcome without the part everybody could see.
+	if world.get_decorative_blocks(island_chunk).size() == count \
+			and (camera == null or camera.global_position.distance_to(at) > FURNITURE_FALL_RANGE):
+		world.release_chunk(island_chunk)
+		furniture_deleted += count
 		return null
 
 	var isl := BrickIsland.new()
@@ -1012,6 +1029,12 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		_resolve_queue.append(isl)
 	if shed == 0:
 		return 0
+	# And redraw what is standing in it. Furniture is not in the face bake, so
+	# rebuilding the mesh leaves the furniture drawing alone -- and without
+	# this it went on drawing every piece that had just left, riding along in
+	# mid-air with the piece it used to belong to.
+	if _furniture.has(isl.chunk):
+		refresh_furniture(isl)
 
 	# The parent is lighter now. Without this it keeps the inertia of a building
 	# while carrying half of one, and behaves like it is full of lead.
@@ -1744,6 +1767,7 @@ func report() -> Dictionary:
 		"blocks": blocks,
 		"disposable": loose,
 		"discarded": discarded,
+		"furniture_deleted": furniture_deleted,
 		"dropped": dropped,
 		"breaks": breaks,
 		"band_breaks": band_breaks,

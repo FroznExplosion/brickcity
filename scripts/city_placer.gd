@@ -165,15 +165,15 @@ func _make_ghost() -> void:
 ## Where the build goes: a quarter-turned basis and an origin that puts the
 ## TURNED box's min corner on `_cell`. Both on the grid by construction.
 func placement() -> Transform3D:
-	var basis := Basis(Vector3.UP, _turn * PI * 0.5)
+	var turned := Basis(Vector3.UP, _turn * PI * 0.5)
 	var cell := BrickWorld.get_cell_size()
 	var size := Vector3(_dims.x * cell.x, 0.0, _dims.z * cell.z)
 	var lo := Vector3(INF, 0.0, INF)
 	for c in [Vector3.ZERO, Vector3(size.x, 0, 0), Vector3(0, 0, size.z), size]:
-		var p: Vector3 = basis * c
+		var p: Vector3 = turned * c
 		lo = Vector3(minf(lo.x, p.x), 0.0, minf(lo.z, p.z))
 	var at := BrickWorld.grid_to_world(_cell)
-	return BuildingRegistry.on_grid(Transform3D(basis, at - lo))
+	return BuildingRegistry.on_grid(Transform3D(turned, at - lo))
 
 
 # ---------------------------------------------------------------------------

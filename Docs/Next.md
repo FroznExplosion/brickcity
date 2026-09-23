@@ -70,13 +70,16 @@ un-merges the *building's* collision if it was merged (furniture blocks are in
 `add_chunk_shapes` too). Not seen in the measurements; watch for it if walking
 through a quiet building hitches.
 
-### 2.2 Delete, don't simulate, during a collapse — **start here**
+### 2.2 Delete, don't simulate, during a collapse — **half done**
 
-The explicit ask, still open: pieces that do not matter should be **deleted**
-when a building comes down and respawned later if they start to matter — not
-simulated through the collapse. The debris cap is the machinery for the first
-half; the second half needs the rung in §2.1 to exist, because "respawn later"
-means "come back drawn", not "come back as bricks".
+For furniture it is done (Status: "Floating furniture: four causes"):
+untouched rooms are written off when their building comes down, and a piece
+that is only furniture is deleted where it comes loose unless it is within 6 m
+of the player. `--interior-audit` counts what is left at every stage.
+
+Still open for structure: pieces of a building that do not matter should be
+deleted and respawned later if they start to matter, not simulated through
+the collapse. The debris cap is the machinery for the first half.
 
 ### 2.3 A room neighbour graph, replacing the radius
 
@@ -146,8 +149,10 @@ for f in tools/*_probe.gd; do "$GODOT" --headless --path . --script "$f"; done
 "$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --shot
 "$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --stress
 "$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --big --shot
-# and what the rooms cost, all four rungs of them (arms A-E)
+# and what the rooms cost, all four rungs of them (arms A-E); and every interior
+# piece counted through a collapse -- all zeros is the pass mark
 "$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --interiors --big
+"$GODOT" --path . --resolution 1280x720 res://scenes/city.tscn -- --interior-audit
 ```
 
 `--big` on its own never quits; it needs `--shot` to take its measurement and

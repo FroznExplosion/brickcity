@@ -263,6 +263,7 @@ static func items_for(room: Room) -> Array:
 	# likely when rooms stopped being a 7-stud grid of this file's own invention
 	# and became whatever the recipe's interior walls cut the floor into.
 	var cols := int(ceil(sqrt(float(n))))
+	@warning_ignore("integer_division")
 	var rows := (n + cols - 1) / cols
 	@warning_ignore("integer_division")
 	var slot_x: int = maxi(room.size.x / cols, 1)
@@ -283,6 +284,10 @@ static func items_for(room: Room) -> Array:
 		at.x = mini(at.x, room.lo.x + maxi(room.size.x - span.x, 0))
 		at.z = mini(at.z, room.lo.z + maxi(room.size.z - span.z, 0))
 		at = _off_the_posts(room, at, span)
+		if at == NOWHERE:
+			# Nowhere on this floor it fits -- a room that is mostly
+			# stairwell. Better one thing fewer than one thing in the shaft.
+			continue
 		out.append({"type": type, "cell": at,
 				"yaw": int(hash3(room.room_seed, i, 29) % 4)})
 	return out
@@ -303,14 +308,9 @@ static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i
 		return at
 	var hi_x := room.lo.x + maxi(room.size.x - span.x, 0)
 	var hi_z := room.lo.z + maxi(room.size.z - span.z, 0)
+	# A short walk first: a column is two studs, and a step or two clears it.
 	for step in 12:
-		var box := Rect2i(at.x, at.z, span.x, span.z)
-		var hit := false
-		for q in room.posts:
-			if (q as Rect2i).intersects(box):
-				hit = true
-				break
-		if not hit:
+		if not _on_a_post(room, at, span):
 			return at
 		# Past the far side of whatever it is standing in, wrapping along the
 		# row and then down to the next one.
@@ -320,7 +320,46 @@ static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i
 			at.z += 2
 			if at.z > hi_z:
 				at.z = room.lo.z
-	return at
+	# A stairwell is ten studs across, and twelve steps of two do not clear
+	# it. Every spot on the floor, then, from the room's corner -- and if none
+	# of them is clear, nowhere.
+	var z := room.lo.z
+	while z <= hi_z:
+		var x := room.lo.x
+		while x <= hi_x:
+			var here := Vector3i(x, at.y, z)
+			if not _on_a_post(room, here, span):
+				return here
+			x += 2
+		z += 2
+	return NOWHERE
+
+
+## Where an item that fits nowhere goes: not in the manifest.
+const NOWHERE := Vector3i(-1, -1, -1)
+
+
+static func _on_a_post(room: Room, at: Vector3i, span: Vector3i) -> bool:
+	var box := Rect2i(at.x, at.z, span.x, span.z)
+	for q in room.posts:
+		if (q as Rect2i).intersects(box):
+			return true
+	return false
+
+
+## Is there anything under this item, in the chunk it would be laid into?
+##
+## `cell` is in the chunk's grid, as `place_block` takes it. Any one cell of
+## live block under its footprint will do: that is the solve's own notion of
+## held up, so an item this passes is one grounding reaches.
+static func item_supported(world: BrickWorld, chunk: int, type: String,
+		cell: Vector3i) -> bool:
+	var span := _item_span(type)
+	for x in span.x:
+		for z in span.z:
+			if world.is_solid(chunk, Vector3i(cell.x + x, cell.y - 1, cell.z + z)):
+				return true
+	return false
 
 
 ## Lay one item's bricks into a chunk. Returns the block ids it produced, which
@@ -376,6 +415,12 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		if room.gone.has(i):
 			continue
 		var item: Dictionary = room.items[i]
+		# Its floor went while nobody was looking -- blown out, or fallen with
+		# a piece of the building. It went with it: written off, not drawn
+		# standing on nothing.
+		if not item_supported(world, chunk, str(item.type), (item.cell as Vector3i) - offset):
+			room.gone[i] = true
+			continue
 		var at: Vector3i = (item.cell as Vector3i) - offset - origin
 		var colour := 4 + int(i % 8)
 		var box := AABB()

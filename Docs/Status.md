@@ -1054,6 +1054,31 @@ pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--int
 measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
 `--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
 
+### Floating furniture: four causes, counted
+
+Reported by eye: furniture hanging untextured where a floor used to be, and dropping the moment
+something near it broke. `--interior-audit` walks the tallest building through a player's afternoon
+(walk up, walk two storeys, blow a floor out, cut it down, walk to the wreck) and after each step
+counts every way a piece can be in the wrong place. It found four, and not where the guesses were:
+
+* **Generated in the stairwell.** `Room.posts` knew the columns and not the staircase fixture, so
+  2-8% of items were placed over the open shaft -- laid, they hung until a nearby hit made the solve
+  look. The fixture's footprint is a keep-out now, the placement walk falls back to a full scan of
+  the floor, and an item that fits nowhere is left out rather than put in the shaft.
+* **Drawn after it had left.** A building shedding a piece redrew its furniture *before* the
+  blocks left its chunk, and an island shedding one never redrew at all -- both went on drawing
+  pieces that had gone. Both redraw after the split now.
+* **Laid or drawn over a floor that was gone.** An item with nothing under it is written off
+  instead (`RoomManifest.item_supported`), whether the room is being drawn or opened.
+* **Spilled into a falling wreck.** Every spill landed while the wreck was still moving, every item
+  it laid was joined to no structure at all, and all of it had been deleted as small debris by the
+  time the wreck stopped. Untouched rooms are now **written off** when their building comes down
+  (`write_off_rooms`); `spill_interiors` turns the old behaviour back on.
+
+And one gate so the fall stays cheap: a piece that is **nothing but furniture** is deleted where it
+comes loose unless it is within 6 m of the player (`IslandManager.FURNITURE_FALL_RANGE`). Audit
+after: 0 ghost, 0 loose, 0 hanging, 0 drawn over air, 0 adrift in any falling piece, at every stage.
+
 ### Merged collision for standing buildings, and the cost that was not where it looked
 
 One box per brick is what a large body costs the solver, and a census settled who was actually
