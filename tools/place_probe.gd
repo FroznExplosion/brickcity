@@ -48,6 +48,8 @@ func _tick() -> void:
 	_check_ghost_and_bracket_turns()
 	_check_rotate_last_and_undo()
 	_check_delete()
+	_check_spiral_flight("spiralcw_10x10", 1)
+	_check_spiral_flight("spiralccw_10x10", -1)
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -409,11 +411,65 @@ func _check_delete() -> void:
 	_ok("undo still takes back what is left", _ws._undo() and _ws.recipe.is_empty())
 	_ok("with nothing more to undo", not _ws._undo())
 
+	# A fixture as an older save carries one (the K key that dropped them in is
+	# gone -- staircases are built from spiral pieces now).
 	_ws._frame = 0
-	_ws._cell = Vector3i(12, 1, 12)
-	_ws._place_staircase()
+	_ws._add_fixture("staircase", Vector3i(12, 1, 12),
+			{"steps": StaircaseRecipe.STEPS_PER_TURN, "colour": 4})
 	@warning_ignore("integer_division")
 	var mid := 12 + StaircaseRecipe.DIAMETER / 2
 	_ok("RMB on a staircase deletes the whole fixture", _delete_down(mid, mid)
 			and _ws.recipe.fixture_count() == 0 and _ws._fixture_blocks.is_empty())
 	_ok("and its bricks", _ws.world.block_at(f0, Vector3i(mid, 1, mid)) < 0)
+
+
+## A staircase goes newel on newel. Aiming at any of the four newel studs of a
+## piece puts the next one squarely on it -- not a stud out, which centring a
+## ten-stud part on three of the four would -- and turns it to carry the flight
+## on, the way the part winds.
+func _check_spiral_flight(part: String, winds: int) -> void:
+	print("\n%s: aim at the newel, the next piece lands on it, turned" % part)
+	_reset()
+	var base := Vector3i(20, 1, 20)
+	_ok("a first piece on the floor", _put(part, base) == 1)
+	var first: String = _ws.recipe.part_of(_ws.recipe.size() - 1)
+	var newel := BrickPalette.newel_of(first)
+	var h := BrickPalette.part_size(part).y
+	var want := BrickPalette.variant_name(part, BrickPalette.orientation_of(first).x + winds, false)
+	var keep := BrickPalette.variant_name(part, 2, false)
+	for dz in 2:
+		for dx in 2:
+			_hold(part)
+			_ws._yaw = 2     # the player's own turn, which the newel overrides
+			var col := Vector2i(base.x + newel.position.x + dx, base.z + newel.position.y + dz)
+			_down(col.x, col.y)
+			_ok("newel stud (%d, %d): lands on the newel" % [dx, dz],
+					_ws._cell == base + Vector3i(0, h, 0), "%v" % _ws._cell)
+			_ok("newel stud (%d, %d): turned to continue the flight" % [dx, dz],
+					_ws._archetype_name() == want, _ws._archetype_name())
+			_ok("newel stud (%d, %d): held by all four newel studs" % [dx, dz], _ws._joints == 4,
+					"%d" % _ws._joints)
+	# A tread stud is not the newel: the player's own turn stands. The tread
+	# stud aimed at is one the piece really has, well away from the newel.
+	var faces: PackedByteArray = _ws.world.get_archetype_up_face(_ws.palette[first])
+	var size := BrickPalette.size_of(first)
+	var tread := Vector2i(-1, -1)
+	for z in size.z:
+		for x in size.x:
+			if faces[x + size.x * z] == BrickPalette.FACE_STUD and tread.x < 0 \
+					and not newel.grow(1).has_point(Vector2i(x, z)):
+				tread = Vector2i(x, z)
+	_ok("the piece has a tread stud to aim at", tread.x >= 0)
+	_hold(part)
+	_ws._yaw = 2
+	_down(base.x + tread.x, base.z + tread.y)
+	_ok("aimed at a tread instead, the player's turn is left alone",
+			_ws._archetype_name() == keep, _ws._archetype_name())
+
+	# A round 2x2 is a newel too: on the far stud of the four it still lands
+	# squarely on the newel, not a stud out.
+	_hold("round_2x2")
+	_down(base.x + newel.position.x + 1, base.z + newel.position.y + 1)
+	_ok("a round 2x2 aimed at any newel stud lands squarely on the newel",
+			_ws._cell == base + Vector3i(newel.position.x, h, newel.position.y), "%v" % _ws._cell)
+	_ws._hold_lock(false)

@@ -98,7 +98,9 @@ static func _shape(kind: String, size: Vector3i, axis: String) -> Dictionary:
 		"arch":
 			return _arch(size)
 		"spiral":
-			return _spiral(size)
+			return _spiral(size, false)
+		"spiral_ccw":
+			return _spiral(size, true)
 	push_error("ShapedParts: no shape '%s'" % kind)
 	var box := _prism(PackedVector2Array([Vector2(0, 0), Vector2(size.z * S, 0),
 			Vector2(size.z * S, size.y * P), Vector2(0, size.y * P)]), "zy", 0.0, size.x * S)
@@ -248,9 +250,14 @@ static func _arch(size: Vector3i) -> Dictionary:
 ## straight across its diagonal, and the stud rule -- a stud only where its
 ## whole footprint is on the part -- leaves no stud hanging off a curve.
 ##
-## Canonical winding: the lower tread is toward +X, the upper toward +Z, and
-## the next piece is this one turned a quarter (+X to +Z), one piece higher.
-static func _spiral(size: Vector3i) -> Dictionary:
+## Winding. Seen from above, +X to +Z is CLOCKWISE (a quarter turn about +Y
+## takes +X to -Z). The clockwise piece has its lower tread toward +X and its
+## upper toward +Z, and the next piece up is it turned one quarter (yaw + 1).
+## `ccw` mirrors it across the diagonal: lower toward +Z, upper toward +X, and
+## the next piece is turned the other way (yaw - 1). A mirror is not one of the
+## eight grid orientations -- a flip turns studs down -- so the two windings
+## are two parts, as the two hands of a real stair are.
+static func _spiral(size: Vector3i, ccw: bool) -> Dictionary:
 	var h := size.y * P
 	var rise := h * 0.5
 	var R := size.x * 0.5                              # radius, in studs
@@ -258,7 +265,7 @@ static func _spiral(size: Vector3i) -> Dictionary:
 	var m := (R + c0) * 0.5                            # where the cut meets the diagonal
 	var centre := Vector2(size.x * S * 0.5, size.z * S * 0.5)
 	var at := func(u: float, v: float) -> Vector2:
-		return centre + Vector2(u, v) * S
+		return centre + (Vector2(v, u) if ccw else Vector2(u, v)) * S
 	var newel: Dictionary = _round_prism(Vector3i(2, size.y, 2))
 	var np := PackedVector2Array()
 	for q in (newel.poly as PackedVector2Array):

@@ -14,3 +14,4 @@ change the part and re-run. Conventions and anatomy: [README](README.md).
 | [Curved slopes](curves.md) | 2 | A slope that bows outward; smooth all over, no studs. |
 | [Round bricks](rounds.md) | 2 | An octagonal brick, flats on the footprint edges. |
 | [Arches](archs.md) | 2 | Pillars at each end, a beam over an opening. |
+| [Spiral stairs](spirals.md) | 2 | A quarter turn of stair: a round-2x2 newel and two 45-degree steps. Clockwise (cw) or anticlockwise (ccw) seen from above. |

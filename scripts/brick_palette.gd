@@ -189,8 +189,11 @@ const _PARTS := {
 	# A quarter-turn of spiral staircase: a round 2x2 newel and two steps of
 	# two plates each. Ten studs across fills one floor panel, as the stairwell
 	# does. Four of it, each turned a quarter and stacked on the last, make a
-	# revolution of eight steps (ShapedParts._spiral).
-	"spiral_10x10": Vector3i(10, 4, 10),
+	# revolution of eight steps (ShapedParts._spiral). Two parts, because a
+	# stair winds one way or the other and a mirror is not a rotation: the
+	# names say which way it climbs, seen from above.
+	"spiralcw_10x10": Vector3i(10, 4, 10),
+	"spiralccw_10x10": Vector3i(10, 4, 10),
 }
 
 
@@ -212,7 +215,8 @@ const _SHAPED := {
 	"arch_1x6": {"kind": "arch"},
 	# Its "front" is where its first (lower) step is; each quarter turn is a
 	# different piece of the flight, so it has four orientations.
-	"spiral_10x10": {"kind": "spiral", "front": Vector3i(1, 0, 0)},
+	"spiralcw_10x10": {"kind": "spiral", "front": Vector3i(1, 0, 0), "winds": 1},
+	"spiralccw_10x10": {"kind": "spiral_ccw", "front": Vector3i(0, 0, 1), "winds": -1},
 }
 
 
@@ -435,6 +439,33 @@ static func front_of(name: String) -> Vector3i:
 	if o.y != 0:
 		v = Vector3i(v.x, -v.y, -v.z)
 	return v
+
+
+## A newel, as the columns of a part's footprint it stands on: a spiral stair
+## piece's (the same in every orientation: it is in the middle), or a round
+## 2x2, which IS one -- the same octagon. Rect2i() for anything else. The
+## workshop uses it to stand one newel squarely on another, whichever of the
+## four studs is aimed at.
+static func newel_of(name: String) -> Rect2i:
+	var part := part_of(name)
+	if part == "round_2x2":
+		return Rect2i(0, 0, 2, 2)
+	if part == "" or not (_SHAPED.get(part, {}) as Dictionary).has("winds"):
+		return Rect2i()
+	var s := size_of(name)
+	@warning_ignore("integer_division")
+	return Rect2i(s.x / 2 - 1, s.z / 2 - 1, 2, 2)
+
+
+## The piece that continues a flight from this one: the same part turned a
+## quarter the way it winds (yaw + 1 clockwise, - 1 anticlockwise), upright
+## or not as this one is. "" for anything that is not a spiral stair piece.
+static func next_in_flight(name: String) -> String:
+	var part := part_of(name)
+	if part == "" or not (_SHAPED.get(part, {}) as Dictionary).has("winds"):
+		return ""
+	var o := orientation_of(name)
+	return variant_name(part, o.x + int(_SHAPED[part].winds), o.y != 0)
 
 
 ## The same part, turned one more quarter about +Y. What the workshop's rotate

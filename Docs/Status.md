@@ -254,8 +254,8 @@ A two-frame demo build to place, for when nothing has been hand-built yet:
 godot --headless --path . --script tools/demo_build.gd
 ```
 
-Build mode -- the workshop. Place bricks, attach a staircase with `K`, undo, save, and drop the
-result into the city:
+Build mode -- the workshop. Place bricks (a staircase is built from spiral stair pieces), undo,
+save, and drop the result into the city:
 
 ```bash
 godot --path . --resolution 1280x720 res://scenes/workshop.tscn
@@ -637,7 +637,7 @@ round 2x2 it sits beside. The direction is for the staircase to be **authored** 
 workshop from palette parts like anything else, and in time dropped into another build as a
 sub-assembly -- so the part comes first.
 
-`spiral_10x10` follows the real spiral stair step, whose inner end is a round 2x2 that stacks on
+`spiralcw_10x10` (and its mirror, `spiralccw_10x10`) follows the real spiral stair step, whose inner end is a round 2x2 that stacks on
 the step below. The grid only turns in quarters, so one piece carries **two** steps of 45 degrees,
 and four pieces turned a quarter each make a revolution of eight. A piece is 10 studs across (one
 floor panel, like the stairwell) and 4 plates tall, and is three convex pieces
@@ -661,13 +661,29 @@ masks came out identical under the new rule.
 **Headroom** is checked against the player, who is four bricks (12 plates) tall: a revolution is
 eight rises, 16 plates, less the 2-plate tread above, so every tread has 14 plates clear over it.
 
-`tools/shaped_probe.gd` passes **210 checks**. For the spiral: the newel's columns have studs and
+`tools/shaped_probe.gd` passes **240 checks**. For each spiral winding: the newel's columns have studs and
 sockets, its octagon is exactly `round_2x2`'s, eight pieces turned a quarter each stack into two
 revolutions with four joints apiece, a round 2x2 stacks on top; and in a real physics space a ray
 lands on each of eight treads one rise above the last, the tread a revolution up clears 12 plates,
 and under every one of 132 drawn studs the part is solid out to the stud's rim -- no floating studs.
 
-The prefab `K` staircase is unchanged for now.
+**Both windings, snapping, and K retired.** A stair winds one way or the other and a mirror is not
+one of the grid's eight orientations (a flip turns studs down), so there are two parts:
+`spiralcw_10x10` climbs clockwise seen from above (the next piece is yaw + 1) and `spiralccw_10x10`
+anticlockwise (yaw - 1); `BrickPalette.next_in_flight` names the piece that continues either. In the
+workshop, aiming at a newel -- a spiral piece's, or a round 2x2, which is the same octagon -- with a
+newel-bearing part held puts it **squarely on that newel whichever of the four studs is aimed at**
+(`_newel_target`); centring a ten-stud part put it a stud out on three of the four, and "most
+joints" is no guide either, because a stud out the new tread also clips onto the old one and wins.
+Holding the same spiral part, the aim also **turns** it to be the next piece in the flight
+(`_continue_flight`), so a staircase is built by clicking on the newel eight times.
+
+`K` (drop a prefab staircase) is gone from the workshop. Fixtures still load, draw, undo and delete
+for recipes that already carry one (`_add_fixture`); the city's own stairwells still use
+`StaircaseRecipe`. `tools/place_probe.gd` covers the snapping for both windings -- every newel stud,
+the turn, four joints, a tread stud leaving the player's turn alone, a round 2x2 landing squarely --
+and the workshop gate now builds an eight-piece staircase by aiming, then checks a saved fixture
+still round-trips. The part sheets have a Spiral stairs page (`Docs/Parts/spirals.md`).
 
 #### What frames cost, and the one seam left open
 
@@ -878,8 +894,8 @@ figure standing on a tread it found by looking, shooting the flight damaging the
 toppling the building taking the whole flight with it -- and the workshop's own `-- --gate` passes
 **15** on the authoring end. `tools/build_probe.gd` is at **93** with the recipe format's share.
 
-**Authored in the workshop, not hard-coded into the city.** `K` drops a staircase where the ghost
-is, and `BuildRecipe` v3 carries it -- one record per fixture rather than a column, holding a kind,
+**Authored in the workshop, not hard-coded into the city.** `K` dropped a staircase where the ghost
+was (retired since: staircases are built from spiral stair pieces), and `BuildRecipe` v3 carries it -- one record per fixture rather than a column, holding a kind,
 a cell, a role and its parameters, in **frame 0's grid**, which is the same coordinates the bricks
 are in. That is what makes a fixture rebase with the build, and it is where the interesting bug
 would have been: a single-frame placement rebases the CELLS and a multi-frame one rebases the
@@ -3534,8 +3550,8 @@ the stress pass could not say" for why it prints all three.
 39. **A tread is a cantilever and will shed.** By design (§9.3), but it means a damaged staircase
 	loses treads before it loses its newel, and a flight with its treads gone is still a climbable
 	column of stumps.
-40. **The workshop offers one fixture and no choice about it.** `K` makes a decorative staircase;
-	the structural/decorative flag is not exposed, which is [BuildMode §9.2](BuildMode.md)'s own
+40. **The workshop no longer authors fixtures.** `K` is gone -- staircases are built from spiral
+	stair pieces -- and fixtures only arrive in recipes that already carry one. The structural/decorative flag is not exposed, which is [BuildMode §9.2](BuildMode.md)'s own
 	condition rather than an oversight, and railings, cornices and pipework are more masks on the
 	same machinery whenever they are wanted.
 41. **Occlusion is not wired up.** `OccluderInstance3D` (Interiors §3) would let a building's shell

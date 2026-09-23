@@ -110,7 +110,7 @@ func _check_names(palette: Dictionary) -> void:
 			expect_y = 3
 		elif bits[0] == "column":
 			expect_y = TowerRecipe.COLUMN_PLATES   # one storey: six courses
-		elif bits[0] == "spiral":
+		elif bits[0].begins_with("spiral"):
 			expect_y = 4   # two steps of two plates
 		_ok("%s: %s is %d plate(s) tall" % [part, bits[0], expect_y], size.y == expect_y,
 				"y = %d" % size.y)

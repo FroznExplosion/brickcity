@@ -373,16 +373,44 @@ func _body(chunk: int, at: Vector3) -> void:
 ## a stair may leave over any tread.
 const PLAYER_PLATES := 12
 
-var _spiral_chunk := -1
+## [part, ShapedParts kind, which way the next piece turns]. Clockwise seen
+## from above climbs yaw + 1; its mirror climbs yaw - 1.
+const SPIRALS := [
+	["spiralcw_10x10", "spiral", 1],
+	["spiralccw_10x10", "spiral_ccw", -1],
+]
+
+## part -> the chunk holding two revolutions of it.
+var _spiral_chunks := {}
 
 
 func _check_spiral() -> void:
-	print("\nspiral: a newel and two steps a piece, four pieces a turn")
-	var size := BrickPalette.part_size("spiral_10x10")
-	var sh := _build("spiral_10x10")
+	for sp in SPIRALS:
+		_check_one_spiral(sp[0], sp[1], sp[2])
+
+	# The two windings are one shape and its mirror: every cell of one is the
+	# other's across the diagonal, and so are its studs.
+	var cw := _build("spiralcw_10x10")
+	var ccw := _build("spiralccw_10x10")
+	var size := BrickPalette.part_size("spiralcw_10x10")
+	var mirror := true
+	for z in size.z:
+		for x in size.x:
+			mirror = mirror and cw.studs[x + size.x * z] == ccw.studs[z + size.x * x]
+			for y in size.y:
+				mirror = mirror and cw.cells[x + size.x * (y + size.y * z)] \
+						== ccw.cells[z + size.x * (y + size.y * x)]
+	_ok("the anticlockwise piece is exactly the clockwise one mirrored", mirror)
+
+
+func _check_one_spiral(part: String, kind: String, winds: int) -> void:
+	print("\n%s: a newel and two steps a piece, four pieces a turn" % part)
+	var size := BrickPalette.part_size(part)
+	var sh := _build(part)
 	var studs := _cols(sh.studs)
 	var sockets := _cols(sh.sockets)
 	var W := size.x
+	@warning_ignore("integer_division")
 	var ctr := W / 2
 	var newel_ok := true
 	for dz in [-1, 0]:
@@ -392,9 +420,11 @@ func _check_spiral() -> void:
 	_ok("the newel's four columns carry studs on top and sockets underneath", newel_ok)
 	_ok("and both treads have studs (lower + upper)", studs.count(1) > 4 + 8,
 			"%d studs" % studs.count(1))
+	var nr := BrickPalette.newel_of(BrickPalette.variants_of(part)[0])
+	_ok("the palette knows where its newel is", nr == Rect2i(ctr - 1, ctr - 1, 2, 2), "%s" % nr)
 
 	# The newel is a round 2x2: the same octagon, in the same place in a cell.
-	var shape: Dictionary = ShapedParts._shape("spiral", size, "z")
+	var shape: Dictionary = ShapedParts._shape(kind, size, "z")
 	var newel: PackedVector2Array = (shape.pieces[0] as Dictionary).poly
 	var round: PackedVector2Array = ShapedParts._round_prism(Vector3i(2, 3, 2)).poly
 	var same := newel.size() == round.size()
@@ -403,18 +433,26 @@ func _check_spiral() -> void:
 		same = same and newel[i].is_equal_approx(round[i] + shift)
 	_ok("its newel is exactly a round_2x2's octagon", same)
 
-	# Two revolutions: eight pieces, each a quarter turned and one piece up.
+	# Two revolutions: eight pieces, each a quarter turned the way it winds and
+	# one piece up -- each the palette's next_in_flight of the one below.
 	var c := _w.create_chunk(Vector3i.ZERO, Vector3i(W, 8 * size.y + 8, W))
-	_spiral_chunk = c
+	_spiral_chunks[part] = c
 	var all := true
 	var joints_ok := true
+	var chain_ok := true
+	var prev := ""
 	for k in 8:
-		var arch: int = _p[BrickPalette.variant_name("spiral_10x10", k, false)]
+		var name := BrickPalette.variant_name(part, k * winds, false)
+		if prev != "":
+			chain_ok = chain_ok and BrickPalette.next_in_flight(prev) == name
+		prev = name
+		var arch: int = _p[name]
 		var at := Vector3i(0, k * size.y, 0)
 		if k > 0:
 			joints_ok = joints_ok and _w.would_connect(c, at, arch) == 4
 		all = all and _w.place_block(c, at, arch, 4) >= 0
 	_ok("eight pieces, each turned a quarter, stack into two revolutions", all)
+	_ok("each is next_in_flight of the one below", chain_ok)
 	_ok("each held by the four newel studs of the one below", joints_ok)
 	var r := _w.would_connect(c, Vector3i(ctr - 1, 8 * size.y, ctr - 1), _p["round_2x2"])
 	_ok("and a round 2x2 stacks on the top of the newel", r == 4, "%d joints" % r)
@@ -431,7 +469,8 @@ func _setup_space() -> void:
 	var c3 := _w.create_chunk(Vector3i.ZERO, Vector3i(8, 8, 8))
 	_w.place_block(c3, Vector3i.ZERO, _p["round_2x2"], 4)
 	_body(c3, Vector3(20, 0, 0))
-	_body(_spiral_chunk, Vector3(30, 0, 0))
+	for k in SPIRALS.size():
+		_body(_spiral_chunks[SPIRALS[k][0]], Vector3(30 + 15 * k, 0, 0))
 
 
 func _cast(from: Vector3, to: Vector3) -> Dictionary:
@@ -474,17 +513,22 @@ func _check_rays() -> void:
 
 
 func _check_spiral_rays() -> void:
-	print("\nspiral: rays")
-	var o := Vector3(30, 0, 0)
-	var size := BrickPalette.part_size("spiral_10x10")
+	for k in SPIRALS.size():
+		_check_one_spiral_rays(SPIRALS[k][0], SPIRALS[k][2], Vector3(30 + 15 * k, 0, 0))
+
+
+func _check_one_spiral_rays(part: String, winds: int, o: Vector3) -> void:
+	print("\n%s: rays" % part)
+	var size := BrickPalette.part_size(part)
 	var rise := size.y * 0.5 * P
 	var ctr := size.x * 0.5 * S
 	# Down onto the middle of each of the first eight treads, half way out.
+	# Angles run from +X toward +Z clockwise, from +Z toward +X anticlockwise.
 	var heights := []
 	var up_ok := true
 	var least := INF
 	for k in 8:
-		var a := (k + 0.5) * TAU / 8.0
+		var a := (k + 0.5) * TAU / 8.0 if winds > 0 else TAU / 4.0 - (k + 0.5) * TAU / 8.0
 		var q := o + Vector3(ctr + cos(a) * 3.2 * S, 0, ctr + sin(a) * 3.2 * S)
 		# From the underside of the tread a revolution up, so the ray lands on
 		# this one.
@@ -508,7 +552,7 @@ func _check_spiral_rays() -> void:
 
 	# No floating studs: under every drawn stud, the part is solid right to the
 	# stud's edge.
-	var studs: PackedFloat32Array = _w.get_chunk_studs(_spiral_chunk)
+	var studs: PackedFloat32Array = _w.get_chunk_studs(_spiral_chunks[part])
 	var floating := 0
 	var n := 0
 	for i in range(0, studs.size(), 16):

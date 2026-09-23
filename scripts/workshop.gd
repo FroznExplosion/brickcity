@@ -6,9 +6,10 @@ extends Node3D
 ##
 ## What it proves is the loop: a part, a ghost, a grid snap, a placement, an
 ## undo, and a recipe that can be saved and dropped into the city to be shot at.
-## Sideways building is Stage 4's frames; fixtures are Stage 5's, and `K` drops
-## one in -- a staircase is authored HERE, in the build's own grid, and travels
-## with the recipe like everything else.
+## Sideways building is Stage 4's frames. A staircase is BUILT here, from the
+## palette's spiral stair pieces, like anything else; the prefab staircase `K`
+## used to drop in is gone from the keys, and a fixture only arrives in a saved
+## recipe that already has one (`_add_fixture`).
 ##
 ## Three things are deliberately NOT here:
 ##
@@ -36,7 +37,6 @@ const KEY_ROWS := [
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "", ""],
 	["", "I", "layer: structure / interior", "", ""],
-	["", "K", "spiral staircase at the ghost", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
 	["FILE", "F5 / F9", "save / load", "ENTER", "place in city, shoot it"],
 	["", "F1", "hide these", "", ""],
@@ -150,6 +150,9 @@ var _snapped := {}
 ## the held part has to cover, at the height it sits at. NO_STUD when the cursor
 ## is not on one.
 const NO_STUD := Vector3i(-1, -1, -1)
+## Where a newel-bearing part must go to stand on the newel aimed at (x and z
+## only), or NO_STUD. See `_newel_target`.
+var _newel_at := NO_STUD
 var _stud := NO_STUD
 ## The cells the part may cover to be on that stud; `_fit_over` takes any of them.
 var _studs := []
@@ -255,12 +258,13 @@ func _gate_ok(what: String, cond: bool, detail: String = "") -> void:
 		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
 
 
-## Authoring a fixture, driven through the same calls the keys make.
+## A staircase built from spiral pieces, driven through the same calls the
+## mouse makes; then a fixture as an older saved recipe carries one.
 ##
 ## The recipe half of this is `tools/build_probe.gd`; what needs the scene is
-## the preview, the undo stack shared with bricks, and the reload.
+## the aiming, the preview, the undo stack shared with bricks, and the reload.
 func _run_gate() -> void:
-	print("[workshop] fixtures, authored here (Stage 5)")
+	print("[workshop] a staircase, built here; fixtures, as saves carry them")
 	_save_path = "user://_workshop_gate.json"
 
 	# Two courses of a wall, through the real placement path.
@@ -274,37 +278,68 @@ func _run_gate() -> void:
 			placed += 1
 	_gate_ok("bricks go in", recipe.size() == placed, "%d of %d" % [recipe.size(), placed])
 
-	# A staircase where the ghost is.
-	_cell = Vector3i(12, 1, 12)
-	_place_staircase()
-	_gate_ok("K attaches a fixture to the recipe", recipe.fixture_count() == 1)
+	# A staircase, built: one spiral piece on the floor, then seven more, each
+	# placed by aiming straight down at a stud of the newel below -- a
+	# different one of its four each time. Every piece should land with its
+	# newel on that newel, turned to carry the flight on.
+	var part := "spiralcw_10x10"
+	var base := Vector3i(12, 1, 12)
+	_part_index = BrickPalette.parts().find(part)
+	_yaw = 0
+	_flip = false
+	_frame = 0
+	chunk = asm.frames[0]
+	_cell = base
+	_valid = true
+	_snapped = {}
+	_place()
+	var newel := BrickPalette.newel_of(BrickPalette.variant_name(part, 0, false))
+	var lined_up := true
+	var turned := true
+	var h := BrickPalette.part_size(part).y
+	for k in range(1, 8):
+		@warning_ignore("integer_division")
+		var col := Vector2i(newel.position.x + k % 2, newel.position.y + (k / 2) % 2)
+		var above := Vector3((base.x + col.x + 0.5) * 0.35, 20.0, (base.z + col.y + 0.5) * 0.35)
+		_aim_ray(above, Vector3(0, -1, 0))
+		_update_ghost()
+		lined_up = lined_up and _cell == base + Vector3i(0, k * h, 0)
+		turned = turned and _archetype_name() == BrickPalette.variant_name(part, k, false)
+		_place()
+	var pieces := recipe.size() - placed
+	_gate_ok("eight spiral pieces go in", pieces == 8, "%d" % pieces)
+	_gate_ok("each one's newel on the newel below, whichever stud was aimed at", lined_up)
+	_gate_ok("each one turned to carry the flight on", turned)
+	var stair_top := recipe.size()
+
+	# A fixture, as an older save carries one.
+	_cell = Vector3i(30, 1, 30)
+	_add_fixture("staircase", _cell, {"steps": StaircaseRecipe.STEPS_PER_TURN, "colour": _colour})
+	_gate_ok("a fixture in a recipe still builds", recipe.fixture_count() == 1)
 	var laid: PackedInt32Array = _fixture_blocks[0]
 	_gate_ok("as bricks in the build's own grid", laid.size() > 0, "%d blocks" % laid.size())
 	# The newel, not the corner of the bounding box: a wedge does not fill its
 	# own box, which is the whole reason it is a masked part.
 	@warning_ignore("integer_division")
-	var mid := Vector3i(12 + StaircaseRecipe.DIAMETER / 2, 1,
-			12 + StaircaseRecipe.DIAMETER / 2)
-	_gate_ok("standing where the ghost was",
+	var mid := Vector3i(30 + StaircaseRecipe.DIAMETER / 2, 1,
+			30 + StaircaseRecipe.DIAMETER / 2)
+	_gate_ok("standing where it says",
 			world.block_at(chunk, mid) == int(laid[0]),
 			"block %d at %v, %d laid first" % [world.block_at(chunk, mid), mid, int(laid[0])])
-	var steps: int = int((recipe.fixture_at(0).params as Dictionary).get("steps", 0))
-	_gate_ok("with a flight long enough to reach what is built above it",
-			steps >= StaircaseRecipe.STEPS_PER_TURN, "%d steps" % steps)
-	_gate_ok("and the bricks are untouched by it", recipe.size() == placed)
+	_gate_ok("and the bricks are untouched by it", recipe.size() == stair_top)
 
 	# Undo is one stack, bricks and fixtures together.
 	_undo()
 	_gate_ok("undo takes the fixture back", recipe.fixture_count() == 0)
 	_gate_ok("and its bricks with it", _fixture_blocks.is_empty()
 			and world.block_at(chunk, mid) < 0)
-	_gate_ok("without touching the bricks", recipe.size() == placed)
+	_gate_ok("without touching the bricks", recipe.size() == stair_top)
 	_undo()
-	_gate_ok("the next undo is a brick again", recipe.size() == placed - 1)
+	_gate_ok("the next undo is a brick again", recipe.size() == stair_top - 1)
 
 	# Save, then load, which starts over from the file.
-	_cell = Vector3i(12, 1, 12)
-	_place_staircase()
+	_add_fixture("staircase", Vector3i(30, 1, 30),
+			{"steps": StaircaseRecipe.STEPS_PER_TURN, "colour": _colour})
 	_save()
 	var bricks := recipe.size()
 	var fixtures := recipe.fixture_count()
@@ -317,15 +352,15 @@ func _run_gate() -> void:
 	_gate_ok("and the undo stack knows about both",
 			_edits.size() == bricks + fixtures, "%d entries" % _edits.size())
 
-	# A picture of it, because "the preview exists" and "the preview is a
-	# staircase" are different claims.
-	var look := Vector3(12.0 * 0.35, 0.0, 12.0 * 0.35)
+	# A picture of it, because "the pieces went in" and "it is a staircase"
+	# are different claims.
+	var look := Vector3(17.0 * 0.35, 0.0, 17.0 * 0.35)
 	_camera.global_position = look + Vector3(-6.0, 4.5, -6.0)
 	_camera.look_at(look + Vector3(0.0, 1.5, 0.0), Vector3.UP)
 	for i in 4:
 		await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("res://shots/workshop_fixture.png")
-	print("[workshop] shot written: workshop_fixture.png")
+	get_viewport().get_texture().get_image().save_png("res://shots/workshop_stair.png")
+	print("[workshop] shot written: workshop_stair.png")
 	await RenderingServer.frame_post_draw
 
 	# And the whole thing still goes into a city.
@@ -804,6 +839,7 @@ static func _round_axis(v: Vector3) -> Vector3i:
 ## Switches to the grid that matches the face, finds the stud column in it, and
 ## fits the part over that column.
 func _enter_face(face: Dictionary, hit: Dictionary) -> bool:
+	_newel_at = NO_STUD
 	if not _enter_stud_frame(face):
 		return false
 	var d := Vector3(face.dir as Vector3i)
@@ -823,6 +859,9 @@ func _enter_face(face: Dictionary, hit: Dictionary) -> bool:
 		if face.get("bottom", false):
 			# Under it: the part's TOP row is the one just below the face.
 			y = s.y - BrickPalette.size_of(_archetype_name()).y + 1
+		else:
+			_continue_flight(face, c)
+			_newel_at = _newel_target(face, c)
 		_studs = [Vector3i(c.x, y, c.z)]
 	_stud = _studs[0]
 	_cell = _fit_over(_studs)
@@ -840,6 +879,15 @@ func _fit_over(studs: Array) -> Vector3i:
 	var first: Vector3i = studs[0]
 	var centred := _clamp_cell(Vector3i(first.x - half.x, first.y, first.z - half.z), size)
 	var arch := _archetype()
+	# Newel on newel: aimed at a newel with a newel-bearing part held, the part
+	# goes squarely on it, whichever of its four studs was aimed at. Centring a
+	# ten-stud part would put it a stud out on three of the four, and the most
+	# joints is no guide either -- a stud out, the new tread clips onto the old
+	# one too and out-scores the newel.
+	if _newel_at != NO_STUD:
+		var c := Vector3i(_newel_at.x, first.y, _newel_at.z)
+		if c == _clamp_cell(c, size) and asm.can_place(chunk, c, arch):
+			return c
 	var best := centred
 	var best_d := -1
 	for stud: Vector3i in studs:
@@ -855,6 +903,43 @@ func _fit_over(studs: Array) -> Vector3i:
 					best = c
 					best_d = dist
 	return best
+
+
+## Where the held part goes to stand its newel squarely on the newel the
+## cursor is on -- a spiral stair piece's, or a round 2x2, which is one -- as
+## the x and z of its cell. NO_STUD when the held part has no newel, or the
+## cursor is not on the top of one.
+func _newel_target(face: Dictionary, column: Vector3i) -> Vector3i:
+	var held := BrickPalette.newel_of(_archetype_name())
+	if not held.has_area() or not face.get("top", false):
+		return NO_STUD
+	var rid := _recipe_id_at(asm.frames.find(face.frame), int(face.block))
+	if rid < 0 or rid >= recipe.size():
+		return NO_STUD
+	var below := BrickPalette.newel_of(recipe.part_of(rid))
+	var at := recipe.cell_of(rid)
+	if not below.has_point(Vector2i(column.x - at.x, column.z - at.z)):
+		return NO_STUD
+	return Vector3i(at.x + below.position.x - held.position.x, 0,
+			at.z + below.position.y - held.position.y)
+
+
+## Aiming at the top of a spiral stair piece's NEWEL while holding the same
+## part turns the held piece to be the next in the flight: a quarter the way
+## the part winds. Anywhere else, the turn is left as the player set it.
+func _continue_flight(face: Dictionary, column: Vector3i) -> void:
+	if not face.get("top", false):
+		return
+	var rid := _recipe_id_at(asm.frames.find(face.frame), int(face.block))
+	if rid < 0 or rid >= recipe.size():
+		return
+	var below := recipe.part_of(rid)
+	if BrickPalette.part_of(below) != _part():
+		return
+	var at := recipe.cell_of(rid)
+	if not BrickPalette.newel_of(below).has_point(Vector2i(column.x - at.x, column.z - at.z)):
+		return
+	_yaw = BrickPalette.orientation_of(BrickPalette.next_in_flight(below)).x
 
 
 ## Keep a part's cell inside the build volume.
@@ -1123,7 +1208,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
 		KEY_I: _toggle_layer()
-		KEY_K: _place_staircase()
 		KEY_Z: _undo()
 		KEY_V: _snap_on = not _snap_on
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
@@ -1178,46 +1262,18 @@ func _recipe_id_at(frame_index: int, block: int) -> int:
 	return -1
 
 
-## Drop a spiral staircase where the ghost is.
+## Add a fixture to the recipe and build its preview, as one undoable edit.
 ##
-## Docs/BuildMode.md section 9: a fixture is not built out of the parts on the
-## palette, it is a sub-assembly with a materialisation state of its own. So
-## this does not go through `_place` -- it adds a record to the recipe and a
-## preview to the scene, and the CITY is what decides when the bricks exist.
-##
-## Frame 0 only, and deliberately: a fixture's cell is in the build's own
-## upright grid so that it rebases with the build. Authoring one inside a
-## sideways frame would need a fixture-per-frame record for a case nothing
-## wants yet.
-func _place_staircase() -> void:
-	if _frame != 0:
-		print("[workshop] fixtures are authored in the upright grid (aim at an upright brick)")
-		return
-	var steps := _steps_above(_cell)
-	var at := Vector3i(_cell.x, _cell.y, _cell.z)
-	recipe.add_fixture("staircase", at, {"steps": steps, "colour": _colour})
+## Nothing in the workshop authors fixtures any more: a staircase is built from
+## the palette's spiral stair pieces (`K` used to drop a prefab one in). What is
+## left is what a recipe that already HAS a fixture needs -- an older save, or
+## a probe standing in for one -- so fixtures still load, draw, undo and delete.
+## Frame 0 only: a fixture's cell is in the build's own upright grid.
+func _add_fixture(kind: String, at: Vector3i, params: Dictionary) -> void:
+	recipe.add_fixture(kind, at, params)
 	_spawn_fixture(recipe.fixture_count() - 1)
 	_edits.append("fixture")
-	print("[workshop] staircase: %d steps at %v" % [steps, at])
 	_after_edit()
-
-
-## How tall a flight has to be to reach the top of what is built above it.
-##
-## A staircase to nowhere is the usual first draft, so the default is measured
-## rather than guessed: from the placement cell to the highest brick in frame 0,
-## at two plates a step, and never shorter than one revolution.
-func _steps_above(from: Vector3i) -> int:
-	var top: int = from.y
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
-			continue
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		top = maxi(top, c.y + size.y)
-	@warning_ignore("integer_division")
-	var rise: int = (top - from.y) / StaircaseRecipe.STEP_PLATES
-	return maxi(rise, StaircaseRecipe.STEPS_PER_TURN)
 
 
 ## Build the preview for fixture `i`: its own chunk, its own mesh, positioned in
@@ -1686,6 +1742,10 @@ func _load() -> void:
 	_frame_meshes.clear()
 	_clear_fixtures()
 	_edits.clear()
+	# And the placement list, which is indexed by recipe id: left standing, the
+	# new recipe's entries went on after the old ones, and every id read back
+	# from it -- undo, delete, turn, the newel aim -- was off by the old count.
+	_placed_at.clear()
 	asm = Assembly.new(world, palette)
 	_build_frames()
 	_frame = 0

@@ -981,7 +981,8 @@ checks**: `K` attaches a fixture and draws it as a chunk that is none of the bui
 takes it back without touching the bricks, a reload rebuilds both the record and the preview, and
 the result still places in a city.
 
-**And they are authored in the workshop.** `K` drops a staircase where the ghost is, and
+**And they were authored in the workshop.** `K` dropped a staircase where the ghost was (retired:
+see "The spiral staircase, built" below), and
 `BuildRecipe` v3 carries it: one record per fixture rather than a column, holding a kind, a cell, a
 role and its parameters. The cell is in **frame 0's grid**, the same coordinates the bricks are in,
 which is what makes it rebase with the build — and the two rebases had to be made to agree, because
@@ -1027,19 +1028,18 @@ half an octagon -- the same language as the octagonal studs. Octagons rather tha
 the grid is square: an octagon turned a quarter is itself, where a hexagon would give a round brick
 a front and four orientations. Facets shade flat; `ShapedParts.FACETED` turns smooth shading back on.
 
-### The spiral staircase, authored ✅ (the part) / next (the rest)
+### The spiral staircase, built ✅
 
-A staircase should be built, not dropped in: the prefab's studs hang off its curved treads and its
-newel does not match the round 2x2. `spiral_10x10` is a quarter-turn piece in the palette -- a
-round-2x2 newel plus two 45-degree steps -- and four of it, each turned with `R` and stacked on the
-newel of the last, make a full turn. Grid-true edges, studs only where they stand on the part,
-14 plates of headroom for a 12-plate player. Status.md has the detail.
+A staircase is built, not dropped in: the prefab's studs hung off its curved treads and its newel
+did not match the round 2x2. `spiralcw_10x10` and `spiralccw_10x10` are quarter-turn pieces -- a
+round-2x2 newel plus two 45-degree steps -- one for each winding. Aim at the newel of the last piece
+with the same part held and the next lands squarely on it, turned to carry the flight on: eight
+clicks make two revolutions. A round 2x2 lands squarely on a newel too. Grid-true edges, studs only
+where they stand on the part, 14 plates of headroom for a 12-plate player. `K` is retired; fixtures
+still load from recipes that have them. Status.md has the detail.
 
-Still to do: a mirrored piece for the other winding direction; the `K` fixture rebuilt from these
-pieces (or retired once an authored build can be added to another as a sub-assembly, which is the
-goal); and snapping that lines a piece up on the newel's studs rather than on whichever stud is
-aimed at, since a 10-stud part centred on one of the newel's four studs is out by one on three of
-them.
+Next, when it is wanted: adding an authored build (a staircase, say) to another build as a
+sub-assembly.
 
 ### Placement — aim at a stud, hold E to lock the plane, RMB deletes ✅
 

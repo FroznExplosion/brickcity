@@ -34,6 +34,9 @@ const FAMILIES := [
 	["curve", "Curved slopes", "A slope that bows outward; smooth all over, no studs."],
 	["round", "Round bricks", "An octagonal brick, flats on the footprint edges."],
 	["arch", "Arches", "Pillars at each end, a beam over an opening."],
+	# One sheet, two families: the two windings are the same part mirrored.
+	["spiral", "Spiral stairs", "A quarter turn of stair: a round-2x2 newel and two 45-degree steps. Clockwise (cw) or anticlockwise (ccw) seen from above.",
+			["spiralcw", "spiralccw"]],
 ]
 
 var _w: BrickWorld
@@ -47,7 +50,9 @@ func _init() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT + "profiles"))
 	var index := PackedStringArray()
 	for fam in FAMILIES:
-		var parts := BrickPalette.parts().filter(func(p): return p.begins_with(fam[0] + "_"))
+		var prefixes: Array = fam[3] if fam.size() > 3 else [fam[0]]
+		var parts := BrickPalette.parts().filter(func(p):
+			return prefixes.any(func(pre): return p.begins_with(pre + "_")))
 		if parts.is_empty():
 			continue
 		_write(OUT + fam[0] + "s.md", _family(fam, parts))
@@ -222,7 +227,10 @@ func _profile(part: String, rec: Dictionary) -> PackedStringArray:
 			poly.append(Vector2(v.x * k, v.y * k))
 		var axes: String = pr.plane
 		var extrude := "xyz".replace(axes[0], "").replace(axes[1], "")
-		var file := "profiles/%s.svg" % part
+		# One drawing per piece; numbered when a part has more than one (a
+		# spiral stair piece is a newel and two treads).
+		var file := "profiles/%s.svg" % part if shape.draw.size() == 1 \
+				else "profiles/%s_%d.svg" % [part, i]
 		_write(OUT + file, _svg(part, poly, axes))
 		profiles.append({"plane": axes, "extrude_axis": extrude,
 				"extrude_mm": [pr.lo * k, pr.hi * k],
