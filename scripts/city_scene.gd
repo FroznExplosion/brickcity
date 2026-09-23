@@ -121,6 +121,9 @@ var _big := false
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
 const BIG_SPACING := 46.0
+## The narrowest street between two buildings' footprints, in studs: what the
+## small city had at 13 m before its footprints grew (3.2 m).
+const STREET_STUDS := 9
 
 var world: BrickWorld
 var registry: BuildingRegistry
@@ -145,6 +148,7 @@ var _shader_toggles := {
 }
 var stats_label: Label
 var camera: DebugCamera
+var _placer: CityPlacer
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
@@ -641,6 +645,16 @@ func _ready() -> void:
 	_build_city()
 	if _build_path != "":
 		_place_build(_build_path)
+	# P picks up a saved workshop build and places it like a brick
+	# (scripts/city_placer.gd); what it places goes through the same
+	# index-and-shell path as `_place_build`.
+	_placer = CityPlacer.new()
+	_placer.name = "Placer"
+	add_child(_placer)
+	_placer.setup(registry, camera)
+	_placer.on_placed = func(id: int) -> void:
+		_index_building(id)
+		_make_shell(id)
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:
@@ -683,8 +697,19 @@ func _exit_tree() -> void:
 
 func _build_city() -> void:
 	var t0 := Time.get_ticks_usec()
-	var spacing := BIG_SPACING if _big else 13.0
 	var shapes: Array = BIG_SHAPES if _big else SHAPES
+	# In STUDS, so every building's corner is on the grid by construction
+	# rather than by BuildingRegistry.on_grid rounding it there: 13 m was
+	# 37.14 studs, and the rounding nudged each tower a different way.
+	#
+	# And never closer than the widest footprint plus a street. The lattice
+	# footprints (up to 44 studs, 15.4 m) outgrew the old 13 m pitch, and two
+	# pairs of towers stood 2.45 m inside each other.
+	var spacing := roundi((BIG_SPACING if _big else 13.0) / STUD)
+	var widest := 0
+	for s in shapes:
+		widest = maxi(widest, maxi(int(s.x), int(s.z)))
+	spacing = maxi(spacing, widest + STREET_STUDS)
 	var index := 0
 	var side := int(ceil(sqrt(float(_city_size))))
 	for row in side:
@@ -694,8 +719,10 @@ func _build_city() -> void:
 			var shape: Dictionary = shapes[(row * side + col) % shapes.size()]
 			# Close together on purpose: these have to be able to fall on each
 			# other, which is the whole point of the scene.
-			var half := (side - 1) * spacing * 0.5
-			var pos := Vector3(col * spacing - half, 0.0, row * spacing - half)
+			@warning_ignore("integer_division")
+			var half := (side - 1) * spacing / 2
+			var pos := BrickWorld.grid_to_world(
+					Vector3i(col * spacing - half, 0, row * spacing - half))
 			var id := registry.register(shape.x, shape.z, shape.courses,
 					Transform3D(Basis(), pos))
 			_add_staircase(id, shape.x, shape.z, shape.courses)
@@ -2597,7 +2624,7 @@ func _update_hud() -> void:
 		"",
 		"blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
-		"LMB fire · X big blast · WASD move · shift fast · G grids · B bevel · J overlap"
+		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · N respawn"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
@@ -2798,6 +2825,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("[city] buildings give their bricks back and take them again: %s"
 					% ("ON" if respawn_buildings else "OFF -- promoted once, resident for good"))
 			_update_hud()
+		KEY_P:
+			_placer.toggle(_build_path if _build_path != "" else DEFAULT_BUILD_PATH)
 		KEY_G:
 			_show_grids = not _show_grids
 			if _grid_view != null:
@@ -3554,7 +3583,8 @@ func _place_build(path: String) -> void:
 		push_warning("[city] %s holds no bricks" % path)
 		return
 	# Clear of the block of towers, between them and where the camera starts.
-	var at := Transform3D(Basis(Vector3.UP, 0.4), Vector3(-42.0, 0.0, -34.0))
+	# On the grid, square to it: -120 x -97 studs, no turn.
+	var at := Transform3D(Basis(), BrickWorld.grid_to_world(Vector3i(-120, 0, -97)))
 	var id := registry.register_build(recipe, at)
 	if id < 0:
 		return
