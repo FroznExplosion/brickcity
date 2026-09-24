@@ -14,6 +14,11 @@ extends RefCounted
 ## before the body joins a space.
 
 var chunk := -1
+## Which piece this is, the same number on every machine: the seq of the command
+## that created it (DamageLog.piece_id). -1 for a piece nothing recorded.
+var piece_id := -1
+## The building it came from.
+var owner := -1
 var body: RigidBody3D
 var mesh: MeshInstance3D
 ## The surface whose index bytes get patched in place. Held separately because
@@ -79,6 +84,9 @@ var blind_ticks := 0
 var hold_until := -1
 var fractures := 0   ## times damage split this island
 var impacts := 0     ## times it landed hard enough to lose blocks
+## Times it has come back from sleep. Diagnostic: a piece that has been through a
+## ChunkRecord round trip is the first suspect when it disagrees with a replay.
+var wakes := 0
 
 
 func is_valid() -> bool:

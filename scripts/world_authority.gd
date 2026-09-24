@@ -93,10 +93,25 @@ func request(kind: DamageLog.Kind, target: int, point: Vector3, radius: float,
 ## Only the host commits; a client's world changes through receive().
 func commit(tick: int, kind: DamageLog.Kind, target: int, point: Vector3,
 		radius: float, normal := Vector3.ZERO, limit := 0) -> DamageLog.Entry:
+	var e := DamageLog.Entry.new()
+	e.tick = tick
+	e.kind = kind
+	e.target = target
+	e.point = point
+	e.radius = radius
+	e.normal = normal
+	e.limit = limit
+	return commit_entry(e)
+
+
+## Host: commit an entry that is already built -- the piece commands, a
+## detachment's block list, a multi-frame hit's frame.
+func commit_entry(e: DamageLog.Entry) -> DamageLog.Entry:
 	if not is_host:
 		push_error("WorldAuthority: a client tried to commit a structural change")
 		return null
-	var e := commands.record(tick, kind, target, point, radius, normal, limit)
+	if commands.add(e) == null:
+		return null
 	var wire := e.to_array()
 	for deliver in _clients:
 		deliver.call(wire)

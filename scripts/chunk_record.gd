@@ -36,6 +36,12 @@ var xform := Transform3D()
 var cells := PackedInt32Array()
 var archetypes := PackedInt32Array()
 var colours := PackedByteArray()
+## Which blocks, by their index in this record, are furniture
+## (BrickWorld.set_blocks_decorative). Without it a piece that slept woke with its
+## furniture turned into structure: bearing load, holding things up, and named in
+## a DETACH as if every machine had it. A list, not a byte per block, because most
+## pieces carry none and a record is meant to cost 17 bytes a block.
+var decorative := PackedInt32Array()
 ## The grid's own orientation, which is authoring data and not the transform.
 var rotation := 0
 var origin_ticks := Vector3i.ZERO
@@ -50,11 +56,65 @@ func block_count() -> int:
 
 ## Bytes this record holds. What the tier is FOR, so it is measurable.
 func bytes() -> int:
-	return cells.size() * 4 + archetypes.size() * 4 + colours.size()
+	return cells.size() * 4 + archetypes.size() * 4 + colours.size() + decorative.size() * 4
 
 
-## Photograph a chunk. Dead and removed blocks are left out: what comes back is
-## what is standing, which is all a lump of rubble is.
+## For a save file (AreaSnapshot). Archetypes are written by NAME: fixture parts
+## are baked on first demand, so a stair step's archetype number depends on what
+## this session happened to build first, and the next session may number it
+## differently.
+func to_data(world: BrickWorld) -> Dictionary:
+	var names := PackedStringArray()
+	var index := {}
+	var refs := PackedInt32Array()
+	for a in archetypes:
+		if not index.has(a):
+			index[a] = names.size()
+			names.append(world.get_archetype_name(a))
+		refs.append(int(index[a]))
+	return {"dims": dims, "xform": xform, "cells": cells, "names": names, "refs": refs,
+			"colours": colours, "decorative": decorative, "rotation": rotation,
+			"origin_ticks": origin_ticks, "box": box}
+
+
+## Back from to_data, against this session's archetypes. Returns null if a part
+## it needs has not been baked here -- the caller builds the buildings (and so
+## their parts) first.
+static func from_data(world: BrickWorld, d: Dictionary) -> ChunkRecord:
+	var by_name := {}
+	for a in world.get_archetype_count():
+		by_name[world.get_archetype_name(a)] = a
+	var r := ChunkRecord.new()
+	r.dims = d.dims
+	r.xform = d.xform
+	r.cells = d.cells
+	r.colours = d.colours
+	r.decorative = d.get("decorative", PackedInt32Array())
+	r.rotation = int(d.rotation)
+	r.origin_ticks = d.origin_ticks
+	r.box = d.box
+	var names: PackedStringArray = d.names
+	for i in (d.refs as PackedInt32Array):
+		var n: String = names[i]
+		if not by_name.has(n):
+			push_warning("[record] no archetype called %s in this session" % n)
+			return null
+		r.archetypes.append(int(by_name[n]))
+	return r
+
+
+## Photograph a chunk. Only what is standing goes in: what comes back is what is
+## standing, which is all a lump of rubble is.
+##
+## "Standing" is ALIVE, not "not in get_dead_blocks". That list deliberately
+## leaves out DETACHED blocks -- the ones that left as a piece of their own --
+## because a building rebuilt from its recipe must not show them as holes. For a
+## record it is the wrong question: a piece that had shed bricks came back from
+## sleep with those bricks resurrected, standing in it again while the piece
+## they left on went on existing. Found chasing a piece that held 1,140 bricks
+## more than its replay in the city's log-replay check (Docs/AIPlan.md P0 step
+## 4); tools/dormant_probe.gd shows it directly -- 50 shed, 80 standing, and the
+## old rule kept 130.
 static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	var r := ChunkRecord.new()
 	if chunk < 0 or not world.is_chunk_alive(chunk):
@@ -64,16 +124,17 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	r.rotation = world.get_chunk_rotation(chunk)
 	r.origin_ticks = world.get_chunk_origin_ticks(chunk)
 
-	var dead := {}
-	for id in world.get_dead_blocks(chunk):
-		dead[id] = true
+	var standing := {}
+	for bx in world.get_block_boxes(chunk):
+		if bool((bx as Dictionary).get("alive", false)):
+			standing[int(bx.block)] = true
 	var t := BrickWorld.ticks_per_stud()
 	var pt := BrickWorld.ticks_per_plate()
 	var lo := Vector3(INF, INF, INF)
 	var hi := Vector3(-INF, -INF, -INF)
 	var cell := BrickWorld.get_cell_size()
 	for id in world.get_block_count(chunk):
-		if dead.has(id):
+		if not standing.has(id):
 			continue
 		# An empty box is a REMOVED block -- a tombstone that kept its id so
 		# that nothing keyed on ids has to move. It is not part of the shape.
@@ -87,6 +148,8 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 		r.cells.push_back(c.x)
 		r.cells.push_back(c.y)
 		r.cells.push_back(c.z)
+		if world.is_block_decorative(chunk, id):
+			r.decorative.push_back(r.archetypes.size())
 		r.archetypes.push_back(world.get_block_archetype(chunk, id))
 		r.colours.push_back(world.get_block_colour(chunk, id))
 		var a := Vector3(at) * (cell.x / float(t))
@@ -123,8 +186,15 @@ func restore(world: BrickWorld) -> int:
 		return -1
 	if rotation != 0 or origin_ticks != Vector3i.ZERO:
 		world.set_chunk_frame(chunk, rotation, origin_ticks)
+	var placed := PackedInt32Array()
 	for i in block_count():
-		world.place_block(chunk, Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
-				archetypes[i], colours[i])
+		placed.append(world.place_block(chunk, Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
+				archetypes[i], colours[i]))
+	var furniture := PackedInt32Array()
+	for i in decorative:
+		if i < placed.size() and placed[i] >= 0:
+			furniture.append(placed[i])
+	if not furniture.is_empty():
+		world.set_blocks_decorative(chunk, furniture, true)
 	world.set_chunk_transform(chunk, xform)
 	return chunk

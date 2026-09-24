@@ -108,16 +108,45 @@ client it is only requested, and applied when the host's committed entry comes b
 host's `seq` order. `tools/loopback_probe.gd` runs a host and a client over a wire that delays and
 reorders, and checks they end with the same world.
 
-The same recording is the wire format, the join-in-progress mechanism and a save file. Nothing about
-islands, transforms or velocities goes in it — that is physics state, it is allowed to differ, and
-replicating it is what both sources warn against.
+The same recording is the wire format, the join-in-progress mechanism and a save file.
 
-### Pieces are named by content
+### Every structural operation is a command, not only the hits
 
-`get_chunk_content_hash` is an FNV-1a over every living block's absolute cell and archetype, in
-sorted cell order. No float touches it and it does not depend on block ordering, so the same piece
-has the same name on every machine — regardless of the order the pieces happened to be cut out in,
-which is decided by wall-clock budgets and therefore by hardware.
+The log used to hold hits and nothing else, on the theory that everything downstream — the stress
+solve, what comes loose, what a landing breaks — follows deterministically. **It does not, because
+*when* each of those runs is decided by wall-clock budgets, and timing changes outcomes**: a blast
+that lands before a piece detaches kills bricks that on another machine already left on the piece.
+So the host now records every operation it performs, in order ([AIPlan](AIPlan.md) P0 step 4):
+
+| Kind | What |
+|---|---|
+| `BLAST`, `SHEAR`, `SEVER` | a building, world space; `frame` for a multi-frame build |
+| `SOLVE` | a building's stress solve, when it failed something |
+| `TOPPLE` | a building came off its foundation whole |
+| `DETACH` | blocks left a building, or a piece, as a new piece |
+| `PIECE_BLAST`, `PIECE_SHEAR`, `PIECE_SNAP`, `PIECE_SOLVE` | a piece, in its own local space; `PIECE_SOLVE` carries the gravity the host's body saw |
+
+A client never decides any of these for itself (`IslandManager.decides`, and the city tick's solve
+loop): it replays the host's stream (`StructureReplayer`). What still stays out is physics state —
+transforms and velocities — except once, in a save (`AreaSnapshot`).
+
+### Pieces are named by the command that made them
+
+A piece's id is `DamageLog.piece_id(seq)` of the DETACH or TOPPLE that created it. Every machine
+applies those in the same order, so the id is the same everywhere. This replaced naming by content
+hash, which fails twice over: **room contents are blocks in the building's own chunk and which rooms
+are open is per machine**, so the same piece hashes differently on two machines; and a piece that
+sleeps is rebuilt from a `ChunkRecord`, which renumbers its blocks and moves its grid origin.
+
+For the same two reasons a DETACH names a building's blocks by id (fixed by the recipe) but a
+piece's by **a cell each block fills** (`StructureReplayer.block_cell`) — not its box corner, which a
+stair step need not fill — and never names furniture at all: it weighs nothing in a solve, and each
+machine carries its own. Piece commands use chunk-local coordinates, applied with the chunk's
+transform set to identity so every machine hands the extension the same numbers.
+
+The city's `--shot` pass checks all of this where it is really made: after the collapse it replays
+its own log into fresh twins of every building it touched and compares structure brick for brick.
+First clean run: 1,698 commands, 0 missed, 4 of 4 buildings and 66 of 66 pieces identical.
 
 ### What the probe proves
 
@@ -165,10 +194,11 @@ The substrate is done. What remains is a networking layer, and it is deliberatel
    produces something a socket will take.
 2. **A priority queue and a bandwidth budget for physics state.** This is the hard part and the one
    with no shortcut — see §6.
-3. **Server authority over what counts as a hit** — *the seam is in* (`WorldAuthority`): `_blast`
-   asks before it queues, a client's ask is forwarded, and landings shear buildings only on the
-   host. Still missing: `_fire` hits on loose pieces, and island landing fractures, which each
-   machine still decides from its own physics ([AIPlan](AIPlan.md) P0 step 4).
+3. **Server authority over what counts as a hit** — *done at the world level*: `_blast` and shots
+   at loose pieces ask before they act, and every structural operation is the host's and a
+   command (§3). What is not built is the client's *scene*: something that takes the host's
+   commands and, as well as replaying them into the world, gives the pieces bodies and the
+   buildings their meshes. `StructureReplayer` is the world half of it.
 
 The three items that used to be here were done because they were nearly free today and expensive to
 retrofit — the same argument that got the seeded RNG in before anything needed it.
@@ -180,9 +210,19 @@ retrofit — the same argument that got the seeded RNG in before anything needed
 **Budgets are wall-clock, and wall-clock is not deterministic.** `WORK_BUDGET_MS`, `SPAWNS_PER_TICK`,
 `DAMAGE_PER_TICK` and friends decide *when* work happens. They do not change the settled outcome —
 the queues drain eventually and the same pieces come away — but they do change the order pieces are
-created in, and therefore their chunk ids. Content-derived identity is the answer and is in; it is
-worth knowing that this is *why* it is in, because a future refactor that reintroduces id-based
-identity would break multiplayer silently and only under load.
+created in, and therefore their chunk ids. The answer is that creation is a command: a piece is
+named by the seq of its DETACH or TOPPLE, which every machine applies in the same order (§3). It
+is worth knowing that this is *why*, because a future refactor that names pieces by chunk id — or
+creates one anywhere but through `record_detach` / `record_topple` — would break multiplayer
+silently and only under load.
+
+**Parts are baked on first demand, so archetype numbers are per session.** A stair step can be
+archetype 175 in one registry and 183 in another, in the same world. Nothing on the wire uses
+archetype numbers; a save's `ChunkRecord` writes them by name. Keep it that way.
+
+**Room contents are per machine.** They are blocks in the building's chunk, added when a room is
+opened near that machine's player. The structure never depends on them (they weigh nothing in a
+solve and ground as open air), but anything that names blocks across machines must skip them.
 
 **Physics state is large during a collapse and small at rest.** The bandwidth problem is
 concentrated in exactly the phase that is already the hardest — hundreds of pieces moving at once.

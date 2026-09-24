@@ -181,6 +181,38 @@ var tiny_deleted := 0              ## pieces of TINY_BLOCKS or fewer deleted, fa
 ## hit, and should not.
 var on_impact: Callable = Callable()
 
+## --- lifecycle -------------------------------------------------------------
+## Docs/AIPlan.md P0 step 3. What the AI (and anything else that keeps its own
+## picture of the wreckage) listens to, instead of walking `islands` every tick.
+## A building's own structural changes are WorldAuthority.committed.
+
+## A piece has come loose and has a body.
+signal piece_spawned(isl: BrickIsland)
+## It has stopped moving: frozen, merged, scenery that things land on.
+signal piece_settled(isl: BrickIsland)
+## It lost blocks, or had joints severed.
+signal piece_changed(isl: BrickIsland)
+## It is gone from the live set. `reason`: empty, swept, cap, slept.
+signal piece_removed(isl: BrickIsland, reason: StringName)
+## It was put away as a record: no body, no collision, still there.
+signal piece_slept(piece_id: int, record: ChunkRecord)
+## A record came back as a live piece.
+signal piece_woken(isl: BrickIsland)
+
+## --- authority -------------------------------------------------------------
+## Docs/AIPlan.md P0 step 4, and R5: only the host turns physics into structure.
+
+## Host: every structural operation performed on a piece, as a command, BEFORE
+## the next one. Called with a DamageLog.Entry; returns the seq it was given
+## (-1 if nothing recorded it). The scene routes it to WorldAuthority.
+var on_command := Callable()
+## Does this machine decide what breaks? False on a co-op client: its pieces
+## never fracture, shear or solve of their own accord -- those arrive as the
+## host's commands.
+var decides := true
+## Piece ids when nothing is recording: a tool or probe using this directly.
+var _local_seq := 0
+
 var _mesh_queue: Array[BrickIsland] = []
 ## Meshes the renderer may still be holding. See MeshRetirer.
 var _retirer := MeshRetirer.new()
@@ -285,6 +317,8 @@ var cap_worst_over := 0
 class Dormant:
 	var record: ChunkRecord
 	var slept_ms := 0
+	var piece_id := -1
+	var owner := -1
 
 
 ## Far enough that a piece is not part of the scene any more, and close enough
@@ -339,6 +373,89 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 
 
 # ---------------------------------------------------------------------------
+# Recording -- every structural operation, as the command it is
+# ---------------------------------------------------------------------------
+
+## Record an operation that has just been applied. Returns the seq it was given,
+## which is what a new piece's id is made from; with nothing recording, a
+## negative local number, which can never collide with a host's seq.
+func _record(e: DamageLog.Entry) -> int:
+	e.tick = Engine.get_physics_frames()
+	if on_command.is_valid():
+		var seq: Variant = on_command.call(e)
+		if seq != null and int(seq) >= 0:
+			return int(seq)
+	_local_seq += 1
+	return -_local_seq
+
+
+## A command aimed at this piece, not yet filled in.
+func _piece_entry(isl: BrickIsland, kind: DamageLog.Kind) -> DamageLog.Entry:
+	var e := DamageLog.Entry.new()
+	e.kind = kind
+	e.target = isl.piece_id
+	e.owner = isl.owner
+	return e
+
+
+func _touched(isl: BrickIsland) -> void:
+	isl.changed = true
+	piece_changed.emit(isl)
+
+
+## Record that `ids` are leaving `chunk` -- building `building`, or `source` if
+## it is a piece -- and return the id the new piece will have. Called BEFORE the
+## spawn that cuts them out, so the log holds the detach before anything that
+## happens to the piece.
+##
+## Structural blocks only. Furniture is in the building's own chunk, which rooms
+## a machine has open decides which furniture it has and what ids it got, and it
+## weighs nothing in a solve -- so each machine carries its own along and the
+## command names only what every machine agrees on. A group that is nothing but
+## furniture changes no structure and is not recorded at all.
+func record_detach(building: int, source: BrickIsland, chunk: int,
+		ids: PackedInt32Array) -> int:
+	var e := DamageLog.Entry.new()
+	e.kind = DamageLog.Kind.DETACH
+	if source != null:
+		e.target = source.piece_id
+		e.owner = source.owner
+		e.flags = DamageLog.FLAG_FROM_PIECE
+	else:
+		e.target = building
+		e.owner = building
+	for id in ids:
+		if world.is_block_decorative(chunk, id):
+			continue
+		if source == null:
+			# A building's block ids are fixed by its recipe on every machine.
+			e.blocks.append(id)
+			continue
+		# A PIECE's are not: going to sleep and waking up rebuilds it from a
+		# ChunkRecord, which keeps only the living blocks and so renumbers them --
+		# and each machine puts its own pieces to sleep. Its grid is what
+		# survives (measured: identical local geometry, same bricks killed by the
+		# same local hit), so a piece's blocks are named by a cell they fill.
+		var cell := StructureReplayer.block_cell(world, chunk, id)
+		if cell != StructureReplayer.NO_CELL:
+			e.points.append(Vector3(cell))
+	if e.blocks.is_empty() and e.points.is_empty():
+		_local_seq += 1
+		return DamageLog.piece_id(-_local_seq)
+	return DamageLog.piece_id(_record(e))
+
+
+## Record that building `building` has come off its foundation whole, and
+## return the id its root frame will have as a piece (frame i is id + i).
+func record_topple(building: int) -> int:
+	var e := DamageLog.Entry.new()
+	e.kind = DamageLog.Kind.TOPPLE
+	e.target = building
+	e.owner = building
+	return DamageLog.piece_id(_record(e))
+
+
+# ---------------------------------------------------------------------------
 # Visibility — the whole debris budget hangs off this one question
 # ---------------------------------------------------------------------------
 
@@ -370,8 +487,10 @@ func can_be_seen(point: Vector3) -> bool:
 
 ## Lift a group out of `source` and give it a chunk, a body and a way to be
 ## drawn. Returns null when the piece was small, unseen and therefore discarded.
+## `piece_id` comes from record_detach, which the caller runs first.
 func spawn(source: int, block_ids: PackedInt32Array,
-		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO) -> BrickIsland:
+		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
+		piece_id := -1, owner := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
 	if _delete_where_it_is(source, block_ids):
 		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
@@ -381,12 +500,15 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var _t := Time.get_ticks_usec()
 	if split.is_empty():
 		return null
+	carry_furniture(world, source, split)
 
 	var count := int(split.block_count)
 	var island_chunk := int(split.chunk)
 
 	var isl := BrickIsland.new()
 	isl.chunk = island_chunk
+	isl.piece_id = piece_id
+	isl.owner = owner
 	isl.local_com = split.local_com
 	isl.disposable = count < DEBRIS_MIN_BLOCKS
 
@@ -476,7 +598,31 @@ func spawn(source: int, block_ids: PackedInt32Array,
 			_mesh_queue.append(isl)
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
+	piece_spawned.emit(isl)
 	return isl
+
+
+## Keep furniture furniture across a split.
+##
+## BrickWorld.split_island lays each block into the new chunk with place_block's
+## default, which is NOT decorative -- so every time a piece broke, the furniture
+## riding it became structure in the new piece: bearing load, holding things up,
+## counted by every solve. Found by the city's log-replay check (Docs/AIPlan.md P0
+## step 4) as a piece holding a spilled crate's 14 bricks the replay never had.
+##
+## `source_blocks` is in the order the blocks were laid, and a fresh chunk
+## numbers its blocks from 0 in that order, so new block k was source block
+## source_blocks[k]. The flag is read from the source, where split_island marks
+## blocks detached but leaves the flag alone.
+static func carry_furniture(w: BrickWorld, source: int, split: Dictionary) -> int:
+	var taken: PackedInt32Array = split.get("source_blocks", PackedInt32Array())
+	var furniture := PackedInt32Array()
+	for k in taken.size():
+		if w.is_block_decorative(source, taken[k]):
+			furniture.append(k)
+	if furniture.is_empty():
+		return 0
+	return w.set_blocks_decorative(int(split.chunk), furniture, true)
 
 
 ## Should this piece never become a body at all? Decided BEFORE anything is
@@ -638,13 +784,16 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## 2,800 `place_block` calls and a second face bake. Here the chunk, its bake and
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
-		carried_bytes: int, carried_width: int, carried_bands: Array = []) -> BrickIsland:
+		carried_bytes: int, carried_width: int, carried_bands: Array = [],
+		piece_id := -1, owner := -1, announce := true) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_anchored(chunk, false)
 
 	var isl := BrickIsland.new()
 	isl.chunk = chunk
+	isl.piece_id = piece_id
+	isl.owner = owner
 	isl.local_com = world.get_chunk_com(chunk)
 	isl.disposable = false
 
@@ -700,6 +849,8 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.radius = _body_radius(isl)
 	islands.append(isl)
 	wake_near(isl.body.global_position, WAKE_RADIUS)
+	if announce:
+		piece_spawned.emit(isl)
 	return isl
 
 
@@ -813,7 +964,9 @@ func rebuild_chunk(chunk: int) -> bool:
 	var isl := find_by_chunk(chunk)
 	if isl == null:
 		return false
-	isl.changed = true
+	# Blocks ADDED to a piece -- a room's contents spilling into it. Not a
+	# command: it is furniture, and each machine carries its own (record_detach).
+	_touched(isl)
 	_reshape(isl, isl.settled)
 	rebuild_mesh(isl, true, true)
 	refresh_furniture(isl)
@@ -951,16 +1104,23 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	# staircases spent 9.7 ms a tick in exactly this.
 	if isl.disposable:
 		return
+	# Something landed on it: this machine's physics. The host's to decide.
+	if not decides:
+		return
 	wake(isl)
 	wake_near(world_point, WAKE_RADIUS)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_ensure_per_block(isl)
-	var loosened: PackedInt32Array = world.separate_near(isl.chunk, world_point, radius,
-			SHEAR_MAX_BLOCKS)
+	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SHEAR)
+	e.point = isl.world_to_chunk(world_point)
+	e.radius = radius
+	e.limit = SHEAR_MAX_BLOCKS
+	var loosened := DamageLog.apply_entry(world, isl.chunk, e)
 	if loosened.is_empty():
 		return
+	_record(e)
 	impact_blocks += loosened.size()
-	isl.changed = true
+	_touched(isl)
 	# Queued, not resolved here. Working out what the landing broke off means a
 	# stress solve, a connectivity walk and cutting the pieces out, and on a
 	# 2,000-brick tower that is hundreds of milliseconds in one indivisible
@@ -973,15 +1133,23 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 func damage(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	if not isl.is_valid():
 		return
+	# The scene only calls this on the host -- a client's shot is a request --
+	# but the rule belongs here as well as there.
+	if not decides:
+		return
 	wake(isl)
 	wake_near(world_point, WAKE_RADIUS)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_ensure_per_block(isl)
-	var killed: PackedInt32Array = world.apply_hit(isl.chunk, world_point, radius)
+	var e := _piece_entry(isl, DamageLog.Kind.PIECE_BLAST)
+	e.point = isl.world_to_chunk(world_point)
+	e.radius = radius
+	var killed := DamageLog.apply_entry(world, isl.chunk, e)
 	if killed.is_empty():
 		return
+	_record(e)
 	isl.disable_blocks(killed)
-	isl.changed = true
+	_touched(isl)
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
 	# disposable pieces costs a stress solve, a connectivity walk and a chunk
 	# per group, to produce more of what is already being swept up in two and a
@@ -1067,7 +1235,8 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		var moved: PackedInt32Array = g
 		if moved.is_empty():
 			continue
-		spawn(isl.chunk, moved, linear, angular)
+		var child := record_detach(isl.owner, isl, isl.chunk, moved)
+		spawn(isl.chunk, moved, linear, angular, child, isl.owner)
 		# Start a hold; never EXTEND one. A piece shedding on consecutive ticks
 		# would otherwise push its own deadline forward every tick and never
 		# rebuild at all, so its mesh would keep drawing bricks that had left
@@ -1075,7 +1244,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		# OVERLAP_FRAMES at a time and no longer.
 		if isl.hold_until <= Engine.get_process_frames():
 			isl.hold_until = Engine.get_process_frames() + OVERLAP_FRAMES
-		isl.changed = true
+		_touched(isl)
 		# Whether or not spawn() kept the piece, those blocks are out of this
 		# body. A discarded one is deleted, not left behind as ghost collision.
 		isl.disable_blocks(moved, RID())
@@ -1129,12 +1298,20 @@ func split_if_broken(isl: BrickIsland) -> void:
 func solve_island(isl: BrickIsland) -> void:
 	if not isl.is_valid() or world.get_alive_block_count(isl.chunk) == 0:
 		return
+	# Which way is down for a tumbled piece is this machine's physics. The host
+	# decides, and a client gets the answer as a PIECE_SOLVE with the gravity in.
+	if not decides:
+		return
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	var down: Vector3 = isl.body.global_transform.basis.inverse() * Vector3.DOWN
 	# Scaled to integers so the extension can see which component dominates.
-	world.set_chunk_gravity(isl.chunk, Vector3i(
-			roundi(down.x * 100.0), roundi(down.y * 100.0), roundi(down.z * 100.0)))
-	world.solve_stress(isl.chunk)
+	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SOLVE)
+	e.normal = Vector3(roundi(down.x * 100.0), roundi(down.y * 100.0), roundi(down.z * 100.0))
+	var res := DamageLog.apply_entry(world, isl.chunk, e)
+	# A solve that failed nothing changed nothing, so there is nothing to send.
+	# What comes loose afterwards travels as DETACH, with its blocks named.
+	if not res.is_empty() and res[0] > 0:
+		_record(e)
 	# Tension failure marks joints, it does not move bricks. What comes loose is
 	# whatever can no longer trace a path to the ground.
 	_shed(isl, world.find_detached_groups(isl.chunk))
@@ -1146,6 +1323,10 @@ func solve_island(isl: BrickIsland) -> void:
 ## (Docs/BrickFailure.md).
 func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	if _island_aabb(isl).size == Vector3.ZERO:
+		return
+	# A landing is this machine's physics. Only the host's landings break
+	# anything; a client gets the breaks as PIECE_SHEAR and PIECE_SNAP.
+	if not decides:
 		return
 	var radius := clampf(IMPACT_RADIUS * severity * 0.08, IMPACT_RADIUS, IMPACT_RADIUS_MAX)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
@@ -1179,11 +1360,19 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# you actually see. So the sweeps are capped tightly and the planes are not:
 	# each sweep walks its own cell box, and a dozen of them was 60 ms.
 	var loosened := PackedInt32Array()
+	var inv := isl.chunk_transform().affine_inverse()
 	for i in mini(contacts.size(), SHEAR_CONTACTS_MAX):
 		# peel: the struck region comes away as one clump rather than as a spray
 		# of single bricks. See BrickWorld::separate_near.
-		loosened.append_array(world.separate_near(isl.chunk,
-				(contacts[i] as Dictionary).point, radius, SHEAR_MAX_BLOCKS, true))
+		var e := _piece_entry(isl, DamageLog.Kind.PIECE_SHEAR)
+		e.point = inv * ((contacts[i] as Dictionary).point as Vector3)
+		e.radius = radius
+		e.limit = SHEAR_MAX_BLOCKS
+		e.flags = DamageLog.FLAG_PEEL
+		var got := DamageLog.apply_entry(world, isl.chunk, e)
+		if not got.is_empty():
+			_record(e)
+			loosened.append_array(got)
 	loosened.append_array(_snap_across(isl, contacts, severity))
 	if loosened.is_empty():
 		return
@@ -1191,7 +1380,7 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	isl.impacts += 1
 	impacts += 1
 	impact_blocks += loosened.size()
-	isl.changed = true
+	_touched(isl)
 	# Queued, not resolved here -- the same rule shear() follows. Cutting the
 	# pieces out means a connectivity walk and a spawn each, and doing it inline
 	# put a landing at 63 ms in one indivisible call.
@@ -1243,7 +1432,6 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		else:
 			local_axis = Vector3(0, 0, 1)
 			length = ls.z
-	var axis: Vector3 = (xf.basis * local_axis).normalized()
 	longest_landed = maxf(longest_landed, length)
 	if length < BREAK_MIN_LENGTH:
 		short_landings += 1
@@ -1271,11 +1459,13 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 	var inv_xf := xf.affine_inverse()
 	var planes := 0
 	var used: Array[float] = []
+	# In the piece's own space: what the command carries (DamageLog._apply_local).
 	var points := PackedVector3Array()
 	for c in contacts:
 		if planes >= BREAK_PLANES_MAX:
 			break
-		var at: float = (inv_xf * (c.point as Vector3)).dot(local_axis)
+		var local_point: Vector3 = inv_xf * (c.point as Vector3)
+		var at: float = local_point.dot(local_axis)
 		# Severing right at an end shaves a cap off rather than breaking the
 		# piece, and severing twice in one place is one break.
 		if at - lo < BREAK_MIN_PIECE or hi - at < BREAK_MIN_PIECE:
@@ -1287,17 +1477,23 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 				break
 		if crowded:
 			continue
-		points.push_back(c.point)
+		points.push_back(local_point)
 		used.append(at)
 		planes += 1
 	if planes > 0:
 		# A SEAM first: sever one course of downward joints and leave both sides
 		# solid, which is how a brick model comes apart. Tearing a band into
 		# loose brick is the fallback, for a cut across an axis that has no
-		# joints running along it -- see BrickWorld::sever_seams.
-		torn = world.sever_seams(isl.chunk, points, axis)
-		if torn.is_empty():
-			torn = world.separate_planes(isl.chunk, points, axis, BREAK_THICKNESS)
+		# joints running along it -- see BrickWorld::sever_seams. Both live in
+		# DamageLog._apply_local now, so a client snaps the same way.
+		var e := _piece_entry(isl, DamageLog.Kind.PIECE_SNAP)
+		e.points = points
+		e.normal = local_axis
+		e.radius = BREAK_THICKNESS
+		torn = DamageLog.apply_entry(world, isl.chunk, e)
+		if not torn.is_empty():
+			_record(e)
+		if e.flags & DamageLog.FLAG_BANDED:
 			band_breaks += planes
 		breaks += planes
 	return torn
@@ -1416,12 +1612,12 @@ func tick() -> void:
 		if isl.changed:
 			isl.changed = false
 			if world.get_alive_block_count(isl.chunk) == 0:
-				_retire(isl, i + 1)
+				_retire(isl, i + 1, &"empty")
 				continue
 
 		# Disposable debris is swept up after a few seconds, settled or not.
 		if isl.disposable and now - isl.born_ms > DEBRIS_LIFETIME_MS:
-			_retire(isl, i + 1)
+			_retire(isl, i + 1, &"swept")
 			continue
 
 		if isl.settled:
@@ -1439,7 +1635,8 @@ func tick() -> void:
 		isl.max_speed_lost = maxf(isl.max_speed_lost, lost)
 		isl.prev_speed = speed
 
-		if lost > IMPACT_DELTA and isl.prev_speed + lost > IMPACT_MIN_SPEED \
+		# A landing only breaks anything where this machine decides (see decides).
+		if decides and lost > IMPACT_DELTA and isl.prev_speed + lost > IMPACT_MIN_SPEED \
 				and isl.impacts < MAX_IMPACTS and not isl.fracture_queued:
 			peak_drop = maxf(peak_drop, lost)
 			isl.fracture_queued = true
@@ -1457,6 +1654,7 @@ func tick() -> void:
 			# Inert now: give the solver as few boxes as the shape allows.
 			_reshape(isl, true)
 			settled += 1
+			piece_settled.emit(isl)
 
 	_stream_dormancy()
 	# After dormancy, not before: what distance already put away does not
@@ -1647,13 +1845,13 @@ func _enforce_debris_cap() -> void:
 		if not isl.is_valid() or not isl.settled:
 			continue
 		if bool(entry[1]):
-			_retire(isl, at)
+			_retire(isl, at, &"cap")
 			cap_deleted += 1
 		elif _sleep(isl, at):
 			cap_slept += 1
 		else:
 			# Nothing to photograph, so there is nothing to keep either.
-			_retire(isl, at)
+			_retire(isl, at, &"cap")
 			cap_deleted += 1
 		done += 1
 
@@ -1705,9 +1903,12 @@ func _sleep(isl: BrickIsland, index: int) -> bool:
 	var d := Dormant.new()
 	d.record = record
 	d.slept_ms = Time.get_ticks_msec()
+	d.piece_id = isl.piece_id
+	d.owner = isl.owner
 	dormant.append(d)
 	slept += 1
-	_retire(isl, index)
+	piece_slept.emit(isl.piece_id, record)
+	_retire(isl, index, &"slept")
 	return true
 
 
@@ -1720,7 +1921,7 @@ func _wake_record(d: Dormant) -> BrickIsland:
 	var chunk := d.record.restore(world)
 	if chunk < 0:
 		return null
-	var isl := adopt(chunk, null, null, 0, 4)
+	var isl := adopt(chunk, null, null, 0, 4, [], d.piece_id, d.owner, false)
 	if isl == null:
 		world.release_chunk(chunk)
 		return null
@@ -1739,7 +1940,58 @@ func _wake_record(d: Dormant) -> BrickIsland:
 		world.bake_chunk_async(chunk)
 		_mesh_queue.append(isl)
 	woken += 1
+	isl.wakes += 1
+	piece_woken.emit(isl)
 	return isl
+
+
+## Give a piece loaded from a save its body back. Docs/AIPlan.md P0 step 2.
+##
+## `chunk` holds the piece's bricks already -- the save's log was replayed into
+## the world, which is what made them (StructureReplayer). What the log does not
+## hold is physics: where the piece is and how it is moving. That comes from
+## the save, and here it is put back.
+func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform3D,
+		linear: Vector3, angular: Vector3, at_rest: bool, is_disposable: bool) -> BrickIsland:
+	if chunk < 0 or not world.is_chunk_alive(chunk):
+		return null
+	world.set_chunk_transform(chunk, chunk_xform)
+	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner)
+	if isl == null:
+		return null
+	isl.disposable = is_disposable
+	if at_rest:
+		# The same state _wake_record builds: frozen, merged, not settling again.
+		isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+		isl.body.freeze = true
+		isl.settled = true
+		isl.settled_ms = Time.get_ticks_msec()
+		isl.settled_blocks = world.get_alive_block_count(isl.chunk)
+		settled += 1
+		_apply_layers(isl)
+		_reshape(isl, true)
+	else:
+		_apply_layers(isl)
+		isl.body.linear_velocity = linear
+		isl.body.angular_velocity = angular
+		isl.prev_speed = linear.length()
+	if world.get_alive_block_count(chunk) <= SYNC_MESH_MAX_BLOCKS:
+		rebuild_mesh(isl, true, true)
+	else:
+		world.bake_chunk_async(chunk)
+		_mesh_queue.append(isl)
+	return isl
+
+
+## Put a piece loaded from a save straight back to sleep: it was a record when
+## the save was taken, and it is a record now.
+func restore_dormant(record: ChunkRecord, piece_id: int, owner: int) -> void:
+	var d := Dormant.new()
+	d.record = record
+	d.slept_ms = Time.get_ticks_msec()
+	d.piece_id = piece_id
+	d.owner = owner
+	dormant.append(d)
 
 
 ## Wake anything dormant that this volume reaches, so that a blast lands on
@@ -1775,7 +2027,8 @@ func dormant_report() -> Dictionary:
 			"slept": slept, "woken": woken}
 
 
-func _retire(isl: BrickIsland, index: int) -> void:
+func _retire(isl: BrickIsland, index: int, reason: StringName = &"swept") -> void:
+	piece_removed.emit(isl, reason)
 	FurnitureMesh.drop(isl.chunk, _furniture)
 	_mesh_queue.erase(isl)
 	if isl.settled:

@@ -89,8 +89,52 @@ Nothing AI yet. These are the engine changes the review found the AI cannot stan
 `WorldAuthority` in `city_scene` (`_blast` asks, both record sites commit, landings shear only on
 the host); `tools/loopback_probe.gd` — 22 checks, host and client agree through a delaying,
 reordering wire, and a cheating client is caught. Baseline before it: 28 of 28 probes clean at
-`2445311`. Not yet covered: shots on loose pieces, island fractures (step 4), and the extra frames
-of a multi-frame build, whose hits are applied but not logged (step 2).
+`2445311`.
+
+Steps 2–4 done (2026-09-24), and step 4 grew. Sending only physics results was not enough:
+solves and detachments run on per-tick budgets, so *when* they happen differs between machines,
+and timing changes outcomes. So **every structural operation the host performs is a command** —
+`SOLVE`, `TOPPLE`, `DETACH` and four `PIECE_*` kinds alongside the hits — and a client (or a
+save being loaded) replays the stream exactly (`StructureReplayer`). Found on the way, each now
+handled and written into [Multiplayer.md](Multiplayer.md): room furniture is per machine, so
+pieces are named by the seq of the command that made them, not by content hash; a sleeping
+piece's block ids are renumbered, so a piece's blocks are named by a cell they fill; a stair step
+need not fill its own corner; fixture parts get different archetype numbers per registry.
+
+Two bugs in the dormant tier, found the same way and fixed — **they affect single-player too**:
+- **A piece that slept woke with the bricks it had shed standing in it again.** `ChunkRecord`
+  asked `get_dead_blocks`, which leaves detached blocks out on purpose, so they were captured and
+  restored — twice in the world. `dormant_probe`: 50 shed, 80 standing, the old rule kept 130.
+- **A piece's furniture woke up as structure**, bearing load. The record now keeps which blocks
+  are decorative.
+- **A piece's furniture became structure every time the piece broke.** `split_island` lays the
+  new piece's blocks with `place_block`'s default, which is not decorative.
+  `IslandManager.carry_furniture` puts the flag back (`dormant_probe`: a bare split keeps 0 of
+  25). Fixed in GDScript because the DLL holds another session's uncommitted C++; the real fix
+  belongs in `split_island`.
+- **Not fixed, noted:** `split_island` does not carry `support_broken` / `bottom_broken` either,
+  so joints severed inside a group heal when it becomes a piece. Every machine does the same, so
+  it is not a divergence — it is a fidelity bug for the next C++ pass.
+
+- **Step 4 gate:** the city `--shot` pass replays its own log into fresh twin buildings after the
+  collapse — 1,698 commands, 0 missed, 4 of 4 buildings and 66 of 66 pieces identical.
+- **Step 3:** `IslandManager` announces spawned / settled / changed / slept / woken / removed
+  (with a reason); `BuildingRegistry.handed_over`; building changes are `WorldAuthority.committed`.
+- **Step 2:** `AreaSnapshot` — the log plus each piece's transform, speed and rest, and sleeping
+  pieces as records with archetypes by name. `tools/snapshot_probe.gd`, 29 checks: a mid-fall
+  checkpoint and a later one with a piece asleep both load into a fresh world with every piece
+  back brick for brick, where it was, moving as it was.
+
+Not done, and why:
+- **No save key in the city scene yet.** Loading there also has to rebuild the buildings'
+  meshes and bodies and re-queue their solves; the world half is done and probed.
+- **Queued work at save time** (a landing waiting to fracture, a building waiting to solve) is not
+  carried: the structure is exact, but a pending decision is lost. The scene has to flush or
+  re-queue.
+- **Furniture riding a piece** is not in the log and does not come back on load.
+- A building dematerialised and rematerialised after pieces left it brings those blocks back
+  (`get_dead_blocks` skips detached ones) — pre-existing, and a replay would disagree with it.
+- Step 5 (debris classed by size, R2) is next.
 
 | Work | Where |
 |---|---|

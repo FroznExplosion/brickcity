@@ -20,31 +20,81 @@ extends RefCounted
 ##   * a save file, and a regression test (`tools/replay_probe.gd`) that proves
 ##     replaying a log reproduces the world it was recorded from.
 ##
-## What is deliberately NOT here: anything about islands, debris, transforms or
-## velocities. Those are physics state, they are allowed to differ between
-## machines, and replicating them is the thing both sources warn against.
+## ## Every operation, not only the weapons
+##
+## The log used to hold hits and nothing else, on the theory that everything
+## downstream of a hit -- the stress solve, what comes loose, what a landing
+## breaks -- would follow deterministically on every machine. It does not,
+## because WHEN each of those runs is decided by wall-clock budgets, and timing
+## changes outcomes: a blast that lands before a piece has detached kills bricks
+## that, on another machine, already left on the piece (Docs/AIPlan.md P0 step 4).
+## So the host records every structural operation it performs, in the order it
+## performs them, and a client -- or a save being loaded -- replays that stream
+## exactly. See StructureReplayer.
+##
+## A PIECE is addressed by the command that created it: `piece_id(seq, frame)` of
+## its DETACH or TOPPLE. Pieces are only ever created by those commands and every
+## machine applies them in the same order, so the id is the same everywhere --
+## unlike a chunk id, which depends on what else that machine allocated, and
+## unlike a content hash, which a room's furniture changes (room contents are
+## blocks in the building's own chunk, and which rooms are open is decided per
+## machine). For the same reason a DETACH lists STRUCTURAL blocks only;
+## furniture weighs nothing in a solve and each machine carries its own.
+## Piece commands carry CHUNK-LOCAL coordinates, because a piece's transform is
+## physics and differs between machines while its grid does not.
+##
+## What is still deliberately NOT here: transforms and velocities. Those are
+## physics state; replicating them continuously is what both sources warn
+## against. A save carries them once, for the pieces that exist (AreaSnapshot).
 
 enum Kind {
-	BLAST,     ## a weapon: destroys brick
-	SHEAR,     ## a collision: severs joints in a ball, destroys nothing
-	SEVER,     ## a collision: severs joints across a plane
+	BLAST,        ## a weapon: destroys brick. A building, world space
+	SHEAR,        ## a collision: severs joints in a ball, destroys nothing
+	SEVER,        ## a collision: severs joints across a plane
+	SOLVE,        ## a building's stress solve, run when it found failures
+	TOPPLE,       ## a building came off its foundation whole and became a piece
+	DETACH,       ## `blocks` left a building (or, with FLAG_FROM_PIECE, a piece)
+	PIECE_BLAST,  ## a weapon, on a piece. Chunk-local
+	PIECE_SHEAR,  ## joints severed in a ball on a piece. FLAG_PEEL for a landing
+	PIECE_SNAP,   ## a piece snapped across `normal` at `points`
+	PIECE_SOLVE,  ## a piece's stress solve, under gravity `normal` (integer)
 }
+
+## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
+const FLAG_PEEL := 1
+## DETACH: the source is piece `target`, not building `target`.
+const FLAG_FROM_PIECE := 2
+## PIECE_SNAP, informational: no seam ran that way, so a band was torn instead.
+## Set by whoever applies it; changes nothing about how it applies.
+const FLAG_BANDED := 4
+
+## A piece's id: the seq of the command that created it, and for a toppled
+## multi-frame build, which frame. The same on every machine.
+static func piece_id(seq: int, frame: int = 0) -> int:
+	return seq * 16 + frame
 
 ## One command. Plain data on purpose -- this has to survive being serialised.
 class Entry extends RefCounted:
 	var tick := 0
 	var kind := Kind.BLAST
-	var target := -1        ## building id, or -1 for "whatever is at the point"
+	## A building id; for a piece command, the piece's id (see piece_id).
+	var target := -1
 	var point := Vector3.ZERO
 	var radius := 0.0
-	var normal := Vector3.ZERO  ## SEVER only: the plane's normal
-	var limit := 0          ## SHEAR only: max blocks, 0 for no cap
+	var normal := Vector3.ZERO  ## SEVER / PIECE_SNAP: the axis. PIECE_SOLVE: gravity
+	var limit := 0          ## SHEAR kinds: max blocks, 0 for no cap
 	## Position in the host's log, 0-based; -1 until the host commits it. A client
 	## applies entries in this order and a gap means one went missing on the way.
 	var seq := -1
+	var frame := 0          ## which frame of a multi-frame build
+	var owner := -1         ## piece commands: the building a piece came from
+	var flags := 0
+	var points := PackedVector3Array()   ## PIECE_SNAP: where it snaps
+	var blocks := PackedInt32Array()     ## DETACH: the blocks that left
 
 	func to_array() -> Array:
-		return [tick, kind, target, point, radius, normal, limit, seq]
+		return [tick, kind, target, point, radius, normal, limit, seq,
+				frame, owner, flags, points, blocks]
 
 	static func from_array(a: Array) -> Entry:
 		var e := Entry.new()
@@ -56,7 +106,16 @@ class Entry extends RefCounted:
 		e.normal = a[5]
 		e.limit = int(a[6])
 		e.seq = int(a[7]) if a.size() > 7 else -1
+		if a.size() > 12:
+			e.frame = int(a[8])
+			e.owner = int(a[9])
+			e.flags = int(a[10])
+			e.points = a[11]
+			e.blocks = a[12]
 		return e
+
+	func is_piece() -> bool:
+		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 
 
 var entries: Array[Entry] = []
@@ -71,8 +130,6 @@ var recording := true
 ## recording.
 func record(tick: int, kind: Kind, target: int, point: Vector3, radius: float,
 		normal := Vector3.ZERO, limit := 0) -> Entry:
-	if not recording:
-		return null
 	var e := Entry.new()
 	e.tick = tick
 	e.kind = kind
@@ -81,14 +138,24 @@ func record(tick: int, kind: Kind, target: int, point: Vector3, radius: float,
 	e.radius = radius
 	e.normal = normal
 	e.limit = limit
+	return add(e)
+
+
+## Record a command that is already built. Gives it its place in the order.
+func add(e: Entry) -> Entry:
+	if not recording:
+		return null
 	e.seq = entries.size()
 	entries.append(e)
 	return e
 
 
 ## Apply one command to one chunk. The single definition of what each kind DOES
-## to a world -- replay, a client receiving the host's entries and the loopback
-## probe all come through here, so they cannot drift apart.
+## to a world -- the host acting, a client receiving, a replay and the probes all
+## come through here, so they cannot drift apart.
+##
+## DETACH and TOPPLE are not here: they create and hand over chunks, which is
+## bookkeeping the caller owns (StructureReplayer, IslandManager).
 static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
 	match e.kind:
 		Kind.BLAST:
@@ -99,7 +166,42 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return world.separate_near(chunk, e.point, e.radius, e.limit, true)
 		Kind.SEVER:
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)
+		Kind.SOLVE:
+			world.solve_stress(chunk)
+			return PackedInt32Array()
+		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE:
+			return _apply_local(world, chunk, e)
 	return PackedInt32Array()
+
+
+## A piece command, applied in the piece's own space. The chunk's transform is
+## set to identity for the duration, so the host and every client hand the
+## extension the SAME numbers -- not the same point expressed through two
+## transforms that agree only to the last bit or two.
+static func _apply_local(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
+	var saved := world.get_chunk_transform(chunk)
+	world.set_chunk_transform(chunk, Transform3D.IDENTITY)
+	var out := PackedInt32Array()
+	match e.kind:
+		Kind.PIECE_BLAST:
+			out = world.apply_hit(chunk, e.point, e.radius)
+		Kind.PIECE_SHEAR:
+			out = world.separate_near(chunk, e.point, e.radius, e.limit,
+					bool(e.flags & FLAG_PEEL))
+		Kind.PIECE_SNAP:
+			# A seam first, and a torn band only where there is no seam -- the
+			# same order IslandManager._snap_across has always used.
+			out = world.sever_seams(chunk, e.points, e.normal)
+			if out.is_empty():
+				out = world.separate_planes(chunk, e.points, e.normal, e.radius)
+				e.flags |= FLAG_BANDED
+		Kind.PIECE_SOLVE:
+			world.set_chunk_gravity(chunk, Vector3i(
+					roundi(e.normal.x), roundi(e.normal.y), roundi(e.normal.z)))
+			var res: Dictionary = world.solve_stress(chunk)
+			out = PackedInt32Array([int(res.get("failures", 0))])
+	world.set_chunk_transform(chunk, saved)
+	return out
 
 
 func clear() -> void:
@@ -126,15 +228,23 @@ static func from_data(data: Array) -> DamageLog:
 	return out
 
 
-## Apply the whole log to a world, in recorded order.
+## Apply the building commands of a log to a world, in recorded order.
 ##
 ## `resolve` maps a recorded target id to a live chunk id -- the caller owns
 ## that, because a replaying client materialises buildings on its own schedule.
-## Returns how many commands were applied.
+## Piece commands, detachments and topples are skipped: replaying those needs
+## StructureReplayer, which keeps track of the pieces. A resolver that takes a
+## second argument is also given the frame, for multi-frame builds; one that
+## does not is only asked about frame 0. Returns how many commands were applied.
 func replay(world: BrickWorld, resolve: Callable) -> int:
 	var applied := 0
+	var framed := resolve.get_argument_count() >= 2
 	for e in entries:
-		var chunk: int = resolve.call(e.target)
+		if e.kind == Kind.DETACH or e.kind == Kind.TOPPLE or e.is_piece():
+			continue
+		if e.frame != 0 and not framed:
+			continue
+		var chunk: int = resolve.call(e.target, e.frame) if framed else resolve.call(e.target)
 		if chunk < 0 or not world.is_chunk_alive(chunk):
 			continue
 		apply_entry(world, chunk, e)

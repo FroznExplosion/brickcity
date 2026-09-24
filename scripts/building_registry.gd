@@ -22,6 +22,13 @@ extends RefCounted
 ## to bricks that have moved.
 
 
+## A building's bricks have become a piece: it toppled whole. Its recipe points,
+## room graph and navmesh obstacle are gone with it (Docs/AI.md section 3.5).
+## Everything else a building does to its structure is a command, and arrives
+## as WorldAuthority.committed.
+signal handed_over(id: int)
+
+
 class Building:
 	var id := -1
 	var recipe := {}              ## parameters, not geometry
@@ -874,6 +881,7 @@ func hand_over(id: int) -> void:
 	b.frames = PackedInt32Array()
 	b.asm = null
 	_materialised -= 1
+	handed_over.emit(id)
 
 
 func dematerialise(id: int) -> void:
