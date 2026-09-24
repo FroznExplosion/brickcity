@@ -488,6 +488,13 @@ hesitate branch at the top of the tree.
 −0.4, retreat at 0.2) · callout relay · reload-opportunity response (an ally rushes or suppresses
 when a teammate reloads).
 
+> **Read against the code in [../AI.md §1.1](../AI.md#11-red-dawn-the-ideas-were-right-the-structure-did-not-hold)**:
+> the full list of ideas worth keeping (the squad code actually has eight tactics, not five, and
+> a commander with off-screen points battles), and five structural reasons it never came
+> together — a 67 KB combat state instead of a tree, string orders with no reply, the world
+> rediscovered by raycast, player-shaped rather than faction-shaped, and node references
+> everywhere.
+
 **Vehicles:** 6 types split between `VehicleBody3D` (jeep, APC) and `CharacterBody3D` with
 differential tracks (tank, IFV, helis). Damage-zone routing via `PhysicsPointQuery` on layer 3,
 **colour-coded components** (red = engine, yellow = fuel, cyan = tracks, orange = explosive),

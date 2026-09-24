@@ -12,10 +12,11 @@ after.
 |---|---|---|
 | [mvs-c.md](mvs-c.md) | `C:\Users\lbaun\Documents\mvs-c` | Open-world streaming, authored island, Gerstner water, vehicles, traffic, squad AI, wanted system, performance discipline, the build process |
 | [reddawn.md](reddawn.md) | `C:\Users\lbaun\Documents\reddawn` | Destructible buildings, fracture generation, structural stress, destruction LOD, Forge-style placement, C++ crowd sim, FPS feel |
+| [boomer-border.md](boomer-border.md) | `C:\Users\lbaun\Documents\boomer-border` | Titanfall-style mech (motor, embark, cockpit, AI brain), the pluggable-brain contract, the Borderlands gun/loot system **we are adopting**, layered elemental damage, the C++ horde |
 | [external.md](external.md) | Research in both projects | Third-party addons with verdicts, published techniques, and Godot engine landmines |
 
-Both source projects are Godot 4.6 · Jolt · Forward+ · D3D12 on Windows — the same stack as
-this one. Code lifts, not just ideas.
+All three source projects are Godot 4.6 · Jolt — the same stack as this one. Code lifts, not
+just ideas.
 
 What we actually chose off the back of this is recorded in [`../Plan.md`](../Plan.md).
 
@@ -37,6 +38,9 @@ Where to look when you open a section of [`printed-brick-city-spec.md`](../print
 | §6 Rendering — chunk meshing | [reddawn §3 Rendering](reddawn.md#3-the-target-architecture--bake-everything-flip-bits-at-impact) | Index-buffer compaction beats re-meshing; never rebuild a trimesh per hit |
 | §6 Rendering — studs | [mvs-c §4 Water LOD](mvs-c.md#4-water), [external — MultiMesh](external.md#godot-engine-specifics-and-landmines) | Instance→normal→flat LOD ladders that were measured |
 | §7 Guns — parts and sockets | [reddawn §8 Forge placement](reddawn.md#8-forge-style-placement-and-snapping) | Connector snapping is the same OBB corner/edge magnet problem |
+| §7 Guns — stats, loot, damage | [boomer-border §5–6](boomer-border.md#5-weapons--the-borderlands-system-we-are-adopting) | The weapon system we are using: classes, ammo, barrels, rarity, parts, elemental layers |
+| Mechs | [boomer-border §2–4](boomer-border.md#2-the-brain-contract--the-one-idea-to-take) | One intents struct, pluggable brains; the motor never knows who drives. Titan-scale nav map |
+| Enemy AI, squads, commander | [../AI.md](../AI.md), [reddawn §12](reddawn.md#12-fps-feel-ai-and-vehicles--inventory), [mvs-c §6](mvs-c.md#6-ai-squads-and-the-wanted-system) | Red Dawn's tactics and commander are the ideas; mvs-c's three squad rules are what held |
 | §8 Characters | [reddawn §9 Swarm engine](reddawn.md#9-swarm-engine--c-crowd-simulation), [mvs-c §6 Squads](mvs-c.md#6-ai-squads-and-the-wanted-system) | Rigid parts on bones + zero-node crowds is how thousands of brick figures get affordable |
 | §9 Build modes | [reddawn §8](reddawn.md#8-forge-style-placement-and-snapping), [§5 Orientation](reddawn.md#5-structural-orientation--walls-floors-ceilings-roofs) | Free 6-DOF magnetic placement, and why a rotated wall must become a floor. **Adopted in [../BuildMode.md](../BuildMode.md)** — the interaction transfers verbatim, the geometry does not (§4) |
 | §10 Asset pipeline | [reddawn §3 Pattern library](reddawn.md#3-the-target-architecture--bake-everything-flip-bits-at-impact) | Bake-time vs impact-time split applies to parts as well as fractures |

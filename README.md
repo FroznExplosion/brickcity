@@ -38,6 +38,8 @@ godot --path . --resolution 1280x720 res://scenes/workshop.tscn
 | [`Docs/BrickFailure.md`](Docs/BrickFailure.md) | Why joints fail in tension and never in compression, with the numbers |
 | [`Docs/Interiors.md`](Docs/Interiors.md) | Rooms, contents and visibility |
 | [`Docs/Multiplayer.md`](Docs/Multiplayer.md) | What the determinism substrate buys, and what is missing |
+| [`Docs/AI.md`](Docs/AI.md) | Enemy, squad and commander AI — the design, nothing built |
+| [`Docs/AIPlan.md`](Docs/AIPlan.md) | That design reviewed against the code, and the phased order to build it |
 | `gdextension/brick/src` | The grid, the solver, the face bake — C++ |
 | `tools/*_probe.gd` | Acceptance probes. Headless, no rendering, no physics |
 
