@@ -926,6 +926,26 @@ int BrickWorld::get_block_colour(int chunk_id, int block_id) const {
     return (block_id >= 0 && block_id < (int)c.blocks.size()) ? (int)c.blocks[block_id].colour : 0;
 }
 
+bool BrickWorld::set_block_colour(int chunk_id, int block_id, int colour) {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size() || c.blocks[block_id].removed) {
+        return false;
+    }
+    const uint8_t v = (uint8_t)std::clamp(colour, 0, 255);
+    if (c.blocks[block_id].colour == v) {
+        return true;
+    }
+    c.blocks[block_id].colour = v;
+    // The bake caches each face's colour; a stale bake would draw the old one.
+    if (c.bake.valid || bake_pending(chunk_id)) {
+        drop_chunk_bake(chunk_id);
+    }
+    return true;
+}
+
 bool BrickWorld::is_solid(int chunk_id, Vector3i cell) const {
     if (!valid_chunk(chunk_id)) {
         return false;
@@ -4195,6 +4215,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_block_archetype);
     ClassDB::bind_method(D_METHOD("get_block_colour", "chunk_id", "block_id"),
             &BrickWorld::get_block_colour);
+    ClassDB::bind_method(D_METHOD("set_block_colour", "chunk_id", "block_id", "colour"),
+            &BrickWorld::set_block_colour);
     ClassDB::bind_method(D_METHOD("is_solid", "chunk_id", "cell"), &BrickWorld::is_solid);
     ClassDB::bind_method(D_METHOD("block_at", "chunk_id", "cell"), &BrickWorld::block_at);
     ClassDB::bind_method(D_METHOD("get_block_count", "chunk_id"), &BrickWorld::get_block_count);

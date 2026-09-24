@@ -275,6 +275,16 @@ func colour_of(id: int) -> int:
 	return _colours[id]
 
 
+## Repaint block `id` -- the workshop's paint brush. A colour is not part of what
+## a block IS (its part, cell and frame are, and its id is its place in the
+## list), so repainting renumbers nothing and invalidates no damage record.
+func set_colour(id: int, colour: int) -> bool:
+	if id < 0 or id >= _colours.size():
+		return false
+	_colours[id] = clampi(colour, 0, 255)
+	return true
+
+
 ## Grid AABB of everything placed, as (min corner, size in cells). Size is zero
 ## for an empty recipe.
 func bounds() -> Array:

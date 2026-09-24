@@ -240,6 +240,10 @@ public:
 
     int get_block_archetype(int chunk_id, int block_id) const;
     int get_block_colour(int chunk_id, int block_id) const;
+    /// Repaint a placed block: the paint brush. Colour is only a vertex
+    /// attribute, so nothing structural changes -- but a face bake holds
+    /// colours, so the chunk's bake is dropped and rebuilds on next demand.
+    bool set_block_colour(int chunk_id, int block_id, int colour);
 
     bool is_solid(int chunk_id, Vector3i cell) const;
     int block_at(int chunk_id, Vector3i cell) const;

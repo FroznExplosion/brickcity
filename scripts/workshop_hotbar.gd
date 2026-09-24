@@ -11,6 +11,11 @@ extends CanvasLayer
 ## or a colour puts it in the selected slot. The hotbar is remembered between
 ## sessions.
 ##
+## Drag and drop, as in the creative inventory: drag a part from the browser
+## onto any slot; drag it across a colour on the way and it takes that colour;
+## drag a colour onto a slot to paint it; drag one slot onto another to swap
+## them.
+##
 ## It owns no placement. It says what is selected (`changed`), and the workshop
 ## sets its part and colour from that -- so everything that sets them directly
 ## (the probes, the stair builder) still works exactly as before.
@@ -56,6 +61,9 @@ var _icon_studs: MultiMeshInstance3D
 var _icon_cam: Camera3D
 var _slot_style: StyleBoxFlat
 var _slot_style_on: StyleBoxFlat
+## The picture following the cursor during a drag, so a colour it passes over
+## can tint it.
+var _drag_preview: TextureRect
 
 
 func _ready() -> void:
@@ -165,7 +173,12 @@ func _build_bar() -> void:
 		panel.custom_minimum_size = Vector2(SLOT_PX, SLOT_PX)
 		panel.mouse_filter = Control.MOUSE_FILTER_STOP
 		panel.gui_input.connect(_on_slot_input.bind(i))
+		panel.set_drag_forwarding(_drag_slot.bind(i), _can_drop_on_slot.bind(i),
+				_drop_on_slot.bind(i))
 		var stack := Control.new()
+		# Pass the mouse through to the panel: a plain Control stops it by
+		# default, and then neither a click nor a drop ever reaches the slot.
+		stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		panel.add_child(stack)
 		var icon := TextureRect.new()
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -195,6 +208,90 @@ func _build_bar() -> void:
 		_slot_nodes.append({"panel": panel, "icon": icon, "label": label})
 
 
+# ---------------------------------------------------------------------------
+# Drag and drop
+# ---------------------------------------------------------------------------
+
+## A drag carries {"kind": "part" | "slot" | "colour", ...}.
+func _preview(p: String, c: int) -> TextureRect:
+	var t := TextureRect.new()
+	t.texture = _icons.get(p)
+	t.modulate = BrickWorld.get_filament_colour(c)
+	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	t.size = Vector2(SLOT_PX, SLOT_PX)
+	t.position = -t.size * 0.5
+	var holder := Control.new()
+	holder.add_child(t)
+	_drag_preview = t
+	return t
+
+
+func _drag_part(_at: Vector2, p: String, source: Control) -> Variant:
+	var data := {"kind": "part", "part": p, "colour": colour()}
+	source.set_drag_preview(_preview(p, colour()).get_parent())
+	return data
+
+
+func _drag_slot(_at: Vector2, i: int) -> Variant:
+	var p := str(slots[i][0])
+	if p == "":
+		return null
+	var panel: Control = _slot_nodes[i].panel
+	panel.set_drag_preview(_preview(p, int(slots[i][1])).get_parent())
+	return {"kind": "slot", "from": i, "part": p, "colour": int(slots[i][1])}
+
+
+func _drag_colour(_at: Vector2, c: int, source: Control) -> Variant:
+	var r := ColorRect.new()
+	r.color = BrickWorld.get_filament_colour(c)
+	r.size = Vector2(28, 28)
+	r.position = -r.size * 0.5
+	var holder := Control.new()
+	holder.add_child(r)
+	source.set_drag_preview(holder)
+	return {"kind": "colour", "colour": c}
+
+
+func _can_drop_on_slot(_at: Vector2, data: Variant, _i: int) -> bool:
+	return data is Dictionary and data.get("kind", "") in ["part", "slot", "colour"]
+
+
+func _drop_on_slot(_at: Vector2, data: Variant, i: int) -> void:
+	match str(data.kind):
+		"part":
+			slots[i] = [str(data.part), int(data.colour)]
+		"colour":
+			if str(slots[i][0]) != "":
+				slots[i][1] = int(data.colour)
+		"slot":
+			var from: int = data.from
+			var held: Array = slots[i]
+			slots[i] = slots[from]
+			slots[from] = held
+	select(i)
+
+
+## Passing a part over a colour paints it: the picture under the cursor and
+## what will land in the slot both take the colour. Dropping it ON the colour
+## puts it in the selected slot, painted.
+func _can_drop_on_colour(_at: Vector2, data: Variant, c: int) -> bool:
+	if not (data is Dictionary and data.get("kind", "") in ["part", "slot"]):
+		return false
+	data.colour = c
+	if _drag_preview != null and is_instance_valid(_drag_preview):
+		_drag_preview.modulate = BrickWorld.get_filament_colour(c)
+	return true
+
+
+func _drop_on_colour(_at: Vector2, data: Variant, c: int) -> void:
+	if str(data.kind) == "slot":
+		slots[int(data.from)][1] = c
+		select(int(data.from))
+	else:
+		set_slot(str(data.part), c)
+
+
 func _on_slot_input(e: InputEvent, i: int) -> void:
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 		select(i)
@@ -211,7 +308,7 @@ func _refresh() -> void:
 		(n.icon as TextureRect).modulate = BrickWorld.get_filament_colour(int(slots[i][1]))
 		(n.label as Label).text = _short(p) if p != "" else ""
 	if _title != null:
-		_title.text = "Parts -- click one to put it in slot %d, or a colour to paint it. TAB closes." % (selected + 1)
+		_title.text = "Click a part for slot %d, or drag it to any slot -- across a colour to paint it. TAB closes." % (selected + 1)
 
 
 ## "2x4 slope" from "slope_2x4": what a slot has room to say.
@@ -281,6 +378,8 @@ func _build_browser() -> void:
 		b.add_theme_stylebox_override("pressed", hover)
 		b.tooltip_text = "colour %d" % c
 		b.pressed.connect(set_colour.bind(c))
+		b.set_drag_forwarding(_drag_colour.bind(c, b), _can_drop_on_colour.bind(c),
+				_drop_on_colour.bind(c))
 		swatches.add_child(b)
 
 
@@ -313,6 +412,7 @@ func _fill_grid() -> void:
 		b.tooltip_text = "%s  (%s)" % [p, BrickPalette.category_of(p)]
 		b.set_meta("part", p)
 		b.pressed.connect(set_part.bind(p))
+		b.set_drag_forwarding(_drag_part.bind(p, b), Callable(), Callable())
 		_grid.add_child(b)
 
 

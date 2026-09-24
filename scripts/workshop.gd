@@ -36,7 +36,7 @@ const KEY_ROWS := [
 	["", "MMB", "pick a placed brick", ", .", "colour of the slot"],
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
-	["", "V", "snap to side studs", "", ""],
+	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
 	["", "I", "layer: structure / interior", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
 	["FILE", "F5 / F9", "save / load", "ENTER", "place in city, shoot it"],
@@ -134,6 +134,18 @@ var _colour := 4
 var _hotbar: WorkshopHotbar
 ## archetype id -> an archetype name for it, for pick-block. Filled on first use.
 var _arch_names := {}
+
+## The paint brush (B). While it is on, LMB repaints placed bricks in the
+## selected slot's colour instead of placing one -- held and dragged, every
+## brick the dot passes over -- and the ghost becomes a box over the brick
+## that would be painted. A colour is only a vertex attribute and not part of a
+## brick's identity, so nothing is removed or renumbered.
+var _painting := false
+## The stroke under way, as [recipe id, colour it had] per brick, or null.
+var _stroke = null
+## Finished strokes, newest last, one per "paint" in `_edits`: what undo puts
+## back. A brick deleted since is -1 and is skipped.
+var _paints := []
 ## Quarter turns about +Y, 0..3. A brick only has two distinct orientations and
 ## reads this mod 2; a slope has a front, and all four are different parts.
 var _yaw := 1
@@ -608,6 +620,89 @@ func _pick_ray(from: Vector3, dir: Vector3) -> void:
 	_hotbar.set_slot(part, world.get_block_colour(hit.frame, hit.block))
 
 
+func _set_painting(on: bool) -> void:
+	if on and not world.has_method("set_block_colour"):
+		push_warning("[workshop] the paint brush needs the extension rebuilt (set_block_colour)")
+		return
+	_painting = on
+	_end_stroke()
+	_ghost_studs.visible = not on
+	_ghost.visible = true
+
+
+## Paint mode, each frame: the ghost boxes the brick under the dot, and a held
+## LMB keeps painting whatever it passes over.
+func _paint_process() -> void:
+	var ray := _mouse_ray()
+	var hit := _first_hit(ray[0], ray[1])
+	_ghost.visible = not hit.is_empty()
+	if hit.is_empty():
+		return
+	var box: Array = world.get_block_ticks(hit.frame, hit.block)
+	if box.is_empty():
+		return
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	var size := Vector3(box[1] as Vector3i) * tick
+	var mesh := BoxMesh.new()
+	mesh.size = size + Vector3.ONE * 0.02
+	_ghost.mesh = mesh
+	_ghost.transform = Transform3D(Basis(), Vector3(box[0] as Vector3i) * tick + size * 0.5)
+	var c := BrickWorld.get_filament_colour(_colour)
+	_ghost_material.albedo_color = Color(c.r, c.g, c.b, 0.55)
+	if _stroke != null:
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_paint_ray(ray[0], ray[1])
+		else:
+			_end_stroke()
+
+
+func _begin_stroke() -> void:
+	_stroke = []
+	var ray := _mouse_ray()
+	_paint_ray(ray[0], ray[1])
+
+
+## Paint the brick this ray hits first, into the stroke under way. Only bricks
+## the recipe owns: the baseplate is scenery and a fixture is one record, not
+## its bricks. Public-ish for the probe. Returns whether a brick changed.
+func _paint_ray(from: Vector3, dir: Vector3) -> bool:
+	if _stroke == null:
+		return false
+	var hit := _first_hit(from, dir)
+	if hit.is_empty():
+		return false
+	var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+	if rid < 0 or recipe.colour_of(rid) == _colour:
+		return false
+	for e in _stroke:
+		if int(e[0]) == rid:
+			return false
+	_stroke.append([rid, recipe.colour_of(rid)])
+	_repaint(rid, _colour)
+	_remesh()
+	return true
+
+
+func _end_stroke() -> void:
+	if _stroke != null and not _stroke.is_empty():
+		_paints.append(_stroke)
+		_edits.append("paint")
+	_stroke = null
+
+
+## One brick, in the world and in the recipe together.
+func _repaint(rid: int, colour: int) -> void:
+	if rid < 0 or rid >= _placed_at.size():
+		return
+	var at: Array = _placed_at[rid]
+	if int(at[0]) >= 0:
+		# call(), not a direct call: GDScript checks native method names when it
+		# parses, and an extension built before set_block_colour existed would
+		# stop the whole workshop loading rather than just the brush.
+		world.call("set_block_colour", asm.frames[at[0]], at[1], colour)
+	recipe.set_colour(rid, colour)
+
+
 func _place_keys() -> void:
 	if _keys_panel == null:
 		return
@@ -661,8 +756,11 @@ func _archetype() -> int:
 
 func _process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	_aim()
-	_update_ghost()
+	if _painting:
+		_paint_process()
+	else:
+		_aim()
+		_update_ghost()
 	_update_hud()
 	# A PanelContainer does not know its height until it has laid out, so the
 	# first placement lands short. Cheap to keep pinned rather than to guess.
@@ -1233,6 +1331,8 @@ func _update_hud() -> void:
 			state = "%d joints" % _joints
 	if not _lock.is_empty():
 		state += "  [plane locked -- E]"
+	if _painting:
+		state = "PAINT BRUSH (B) -- LMB paints in colour %d" % _colour
 	var worst := 0.0
 	for v in _stress.values():
 		worst = maxf(worst, v)
@@ -1257,7 +1357,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
-			MOUSE_BUTTON_LEFT: _place()
+			MOUSE_BUTTON_LEFT:
+				if _painting:
+					_begin_stroke()
+				else:
+					_place()
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
@@ -1281,6 +1385,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_I: _toggle_layer()
 		KEY_Z: _undo()
 		KEY_V: _snap_on = not _snap_on
+		KEY_B: _set_painting(not _painting)
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
 		KEY_F1: _keys_on = not _keys_on; _keys_panel.visible = _keys_on
 		KEY_H: _overlay_on = not _overlay_on; _stress_dirty = true; _refresh_overlay()
@@ -1384,6 +1489,13 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## of the middle would renumber every block after it and invalidate any damage
 ## record keyed on those ids.
 func _undo() -> bool:
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "paint":
+		_edits.pop_back()
+		var stroke: Array = _paints.pop_back()
+		for i in range(stroke.size() - 1, -1, -1):
+			_repaint(int(stroke[i][0]), int(stroke[i][1]))
+		_after_edit()
+		return true
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture":
 		if not recipe.pop_fixture():
 			return false
@@ -1426,6 +1538,12 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_placed_at.remove_at(rid)
 		recipe.remove_at(rid)
 		_drop_edit("brick", rid)
+		for stroke in _paints:
+			for e in stroke:
+				if int(e[0]) == rid:
+					e[0] = -1
+				elif int(e[0]) > rid:
+					e[0] = int(e[0]) - 1
 		_after_edit()
 		return true
 	if hit.frame != asm.frames[0]:
@@ -1843,6 +1961,8 @@ func _load() -> void:
 	_frame_meshes.clear()
 	_clear_fixtures()
 	_edits.clear()
+	_paints.clear()
+	_stroke = null
 	# And the placement list, which is indexed by recipe id: left standing, the
 	# new recipe's entries went on after the old ones, and every id read back
 	# from it -- undo, delete, turn, the newel aim -- was off by the old count.

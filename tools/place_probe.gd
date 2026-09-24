@@ -50,6 +50,8 @@ func _tick() -> void:
 	_check_delete()
 	_check_save_new()
 	_check_hotbar()
+	_check_drag_and_drop()
+	_check_paint_brush()
 	_check_spiral_flight("spiralcw_10x10", 1)
 	_check_spiral_flight("spiralccw_10x10", -1)
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -387,6 +389,60 @@ func _check_rotate_last_and_undo() -> void:
 	while _ws._undo():
 		undone += 1
 	_ok("undo takes all three back", undone == 3 and _ws.recipe.is_empty(), "%d" % undone)
+
+
+func _check_drag_and_drop() -> void:
+	print("\ndrag and drop: parts onto slots, across colours, slots onto slots")
+	_reset()
+	var hb: WorkshopHotbar = _ws._hotbar
+	hb.save_path = "user://_probe_hotbar.json"
+	hb._drop_on_slot(Vector2.ZERO, {"kind": "part", "part": "tile_2x4", "colour": 3}, 6)
+	_ok("a part dropped on a slot lands there, and that slot is selected",
+			hb.slots[6] == ["tile_2x4", 3] and hb.selected == 6, "%s %d" % [hb.slots[6], hb.selected])
+	var data := {"kind": "part", "part": "brick_1x2", "colour": 0}
+	hb._can_drop_on_colour(Vector2.ZERO, data, 5)
+	_ok("dragged across a colour, it takes that colour", int(data.colour) == 5)
+	hb._drop_on_slot(Vector2.ZERO, data, 2)
+	_ok("and lands in that colour", hb.slots[2] == ["brick_1x2", 5], "%s" % [hb.slots[2]])
+	hb._drop_on_slot(Vector2.ZERO, {"kind": "slot", "from": 2}, 6)
+	_ok("a slot dropped on a slot swaps them",
+			hb.slots[6] == ["brick_1x2", 5] and hb.slots[2] == ["tile_2x4", 3])
+	hb._drop_on_slot(Vector2.ZERO, {"kind": "colour", "colour": 9}, 6)
+	_ok("a colour dropped on a slot paints it", hb.slots[6] == ["brick_1x2", 9])
+	_ok("and the workshop is holding it", _ws._part() == "brick_1x2" and _ws._colour == 9)
+	DirAccess.remove_absolute("user://_probe_hotbar.json")
+
+
+func _check_paint_brush() -> void:
+	print("\nthe paint brush repaints placed bricks, and undo puts them back")
+	if not _ws.world.has_method("set_block_colour"):
+		print("  SKIP the extension predates set_block_colour -- rebuild it")
+		return
+	_reset()
+	_put("brick_2x4", Vector3i(10, 1, 10))    # colour 4 (whatever _put leaves)
+	_put("brick_2x4", Vector3i(20, 1, 10))
+	var f0: int = _ws.asm.frames[0]
+	var a: int = _ws.world.block_at(f0, Vector3i(10, 1, 10))
+	var before: int = _ws.recipe.colour_of(0)
+	_ws._set_painting(true)
+	_ws._colour = 7 if before != 7 else 8
+	var want: int = _ws._colour
+	_ws._stroke = []
+	var down := Vector3(0, -1, 0)
+	var changed: bool = _ws._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ok("LMB on a brick repaints it", changed and _ws.recipe.colour_of(0) == want
+			and _ws.world.get_block_colour(f0, a) == want,
+			"recipe %d world %d want %d" % [_ws.recipe.colour_of(0), _ws.world.get_block_colour(f0, a), want])
+	_ok("the same brick twice in one stroke is one change",
+			not _ws._paint_ray(Vector3(11.5 * STUD, 20.0, 10.5 * STUD), down))
+	_ws._paint_ray(Vector3(20.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ok("a drag paints every brick it passes", _ws.recipe.colour_of(1) == want)
+	_ok("the baseplate is not paintable", not _ws._paint_ray(Vector3(40.5 * STUD, 20.0, 40.5 * STUD), down))
+	_ws._end_stroke()
+	_ok("undo takes the whole stroke back", _ws._undo() and _ws.recipe.colour_of(0) == before
+			and _ws.recipe.colour_of(1) == before and _ws.world.get_block_colour(f0, a) == before)
+	_ws._set_painting(false)
+	_ok("and the bricks themselves are still there", _ws.recipe.size() == 2)
 
 
 func _check_hotbar() -> void:
