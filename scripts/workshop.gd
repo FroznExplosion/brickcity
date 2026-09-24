@@ -32,7 +32,8 @@ const KEY_ROWS := [
 	["", "alt", "slow", "", ""],
 	["BUILD", "LMB", "place on the stud aimed at", "RMB", "delete"],
 	["", "hold E", "lock height, slide anywhere", "Z", "undo last"],
-	["", "[ ]  wheel", "part", ", .", "colour"],
+	["", "1-9  wheel", "toolbar slot", "TAB", "all parts (creative)"],
+	["", "MMB", "pick a placed brick", ", .", "colour of the slot"],
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "", ""],
@@ -127,6 +128,12 @@ var _keys_on := true
 var _interior := false
 var _part_index := 0
 var _colour := 4
+## The toolbar and parts browser (scripts/workshop_hotbar.gd). It sets
+## `_part_index` and `_colour` when its selection changes; nothing reads it back,
+## so a probe or the stair builder setting them directly is unaffected.
+var _hotbar: WorkshopHotbar
+## archetype id -> an archetype name for it, for pick-block. Filled on first use.
+var _arch_names := {}
 ## Quarter turns about +Y, 0..3. A brick only has two distinct orientations and
 ## reads this mod 2; a slope has a front, and all four are different parts.
 var _yaw := 1
@@ -268,7 +275,12 @@ func _run_gate() -> void:
 	print("[workshop] a staircase, built here; fixtures, as saves carry them")
 	_save_path = "user://_workshop_gate.json"
 
-	# Two courses of a wall, through the real placement path.
+	# Two courses of a wall, through the real placement path. The part is named
+	# rather than whatever happens to be in hand: the toolbar remembers what the
+	# player last held, and a 2x4 laid every two studs overlaps half of itself.
+	_part_index = BrickPalette.parts().find("brick_2x2")
+	_yaw = 0
+	_flip = false
 	var placed := 0
 	for course in 2:
 		for x in range(0, 8, 2):
@@ -474,6 +486,17 @@ func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 
+	_hotbar = WorkshopHotbar.new()
+	_hotbar.name = "Hotbar"
+	# The icons are the ghost's own meshes, so an icon is the piece that lands.
+	_hotbar.mesh_for = func(p: String) -> Array:
+		return _ghost_shape(palette[BrickPalette.variant_name(p, 1, false)])
+	_hotbar.changed.connect(_on_hotbar)
+	_hotbar.browsing_changed.connect(func(on: bool) -> void:
+		if _camera.has_method("_set_captured"):
+			_camera.call("_set_captured", not on))
+	add_child(_hotbar)
+
 	_hud = Label.new()
 	_hud.position = Vector2(12, 10)
 	_style(_hud, Color(0.92, 0.94, 1.0))
@@ -548,11 +571,50 @@ func _style(l: Label, col: Color, size: int = 15) -> void:
 	l.add_theme_font_size_override("font_size", size)
 
 
+## The toolbar's selection became the part and colour in hand.
+func _on_hotbar(part: String, colour: int) -> void:
+	if part == "":
+		return
+	var i := _parts().find(part)
+	if i >= 0:
+		_part_index = i
+	_colour = colour
+
+
+## Middle click: the brick under the cursor, its part, turn and colour, into
+## the selected slot -- Minecraft's pick-block.
+func _pick_block() -> void:
+	var ray := _mouse_ray()
+	_pick_ray(ray[0], ray[1])
+
+
+## The same for any ray, so a probe can aim it exactly.
+func _pick_ray(from: Vector3, dir: Vector3) -> void:
+	var hit := _first_hit(from, dir)
+	if hit.is_empty():
+		return
+	var arch: int = world.get_block_archetype(hit.frame, hit.block)
+	if _arch_names.is_empty():
+		for n in palette:
+			if BrickPalette.part_of(n) != "" and not _arch_names.has(palette[n]):
+				_arch_names[palette[n]] = n
+	var arch_name: String = _arch_names.get(arch, "")
+	var part := BrickPalette.part_of(arch_name)
+	if part == "":
+		return
+	var o := BrickPalette.orientation_of(arch_name)
+	_yaw = o.x
+	_flip = o.y != 0
+	_hotbar.set_slot(part, world.get_block_colour(hit.frame, hit.block))
+
+
 func _place_keys() -> void:
 	if _keys_panel == null:
 		return
 	var h: float = get_viewport().get_visible_rect().size.y
-	_keys_panel.position = Vector2(12, h - _keys_panel.size.y - 12)
+	# Top right: the toolbar owns the bottom of the screen now.
+	var w: float = get_viewport().get_visible_rect().size.x
+	_keys_panel.position = Vector2(w - _keys_panel.size.x - 12, 12)
 
 
 # ---------------------------------------------------------------------------
@@ -1190,21 +1252,29 @@ func _update_hud() -> void:
 # ---------------------------------------------------------------------------
 
 func _unhandled_input(e: InputEvent) -> void:
+	# The browser is a menu: nothing is built through it.
+	if _hotbar != null and _hotbar.is_browsing():
+		return
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT: _place()
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
-			MOUSE_BUTTON_WHEEL_UP: _part_index = (_part_index + 1) % _parts().size()
-			MOUSE_BUTTON_WHEEL_DOWN: _part_index = (_part_index - 1 + _parts().size()) % _parts().size()
+			MOUSE_BUTTON_MIDDLE: _pick_block()
+			# Down is next, as in Minecraft.
+			MOUSE_BUTTON_WHEEL_DOWN: _hotbar.step(1)
+			MOUSE_BUTTON_WHEEL_UP: _hotbar.step(-1)
 	if not (e is InputEventKey and e.pressed and not e.echo):
 		return
+	if e.keycode >= KEY_1 and e.keycode <= KEY_9:
+		_hotbar.select(e.keycode - KEY_1)
+		return
 	match e.keycode:
-		KEY_BRACKETLEFT: _part_index = (_part_index - 1 + _parts().size()) % _parts().size()
-		KEY_BRACKETRIGHT: _part_index = (_part_index + 1) % _parts().size()
-		KEY_COMMA: _colour = (_colour - 1 + BrickWorld.get_filament_count()) % BrickWorld.get_filament_count()
-		KEY_PERIOD: _colour = (_colour + 1) % BrickWorld.get_filament_count()
+		KEY_BRACKETLEFT: _hotbar.step(-1)
+		KEY_BRACKETRIGHT: _hotbar.step(1)
+		KEY_COMMA: _hotbar.set_colour(_colour - 1)
+		KEY_PERIOD: _hotbar.set_colour(_colour + 1)
 		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()

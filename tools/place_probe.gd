@@ -49,6 +49,7 @@ func _tick() -> void:
 	_check_rotate_last_and_undo()
 	_check_delete()
 	_check_save_new()
+	_check_hotbar()
 	_check_spiral_flight("spiralcw_10x10", 1)
 	_check_spiral_flight("spiralccw_10x10", -1)
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -386,6 +387,54 @@ func _check_rotate_last_and_undo() -> void:
 	while _ws._undo():
 		undone += 1
 	_ok("undo takes all three back", undone == 3 and _ws.recipe.is_empty(), "%d" % undone)
+
+
+func _check_hotbar() -> void:
+	print("
+the toolbar: slots, colours, pick-block, and every part findable")
+	_reset()
+	var hb: WorkshopHotbar = _ws._hotbar
+	hb.save_path = "user://_probe_hotbar.json"
+	hb.select(3)
+	hb.set_part("slope_2x4")
+	hb.set_colour(8)
+	_ok("a slot's part and colour are what the workshop holds",
+			_ws._part() == "slope_2x4" and _ws._colour == 8, "%s %d" % [_ws._part(), _ws._colour])
+	hb.select(4)
+	hb.set_slot("brick_1x6", 2)
+	hb.select(3)
+	_ok("and switching back brings them back", _ws._part() == "slope_2x4" and _ws._colour == 8)
+	_ws._colour = 0
+	hb.set_colour(hb.colour() + 1)
+	_ok(", and . paint the slot", hb.colour() == 9 and _ws._colour == 9)
+	# Pick-block: a red 1x2 bracket turned twice, picked back into slot 5.
+	_hold("bracket_1x2")
+	_ws._yaw = 2
+	_ws._snapped = {}
+	_ws._cell = Vector3i(30, 1, 30)
+	_ws._colour = 4
+	_ws._update_ghost()
+	_ws._place()
+	hb.select(5)
+	_ws._yaw = 0
+	_ws._pick_ray(Vector3(30.5 * STUD, 20.0, 30.5 * STUD), Vector3(0, -1, 0))
+	_ok("middle click picks the part, its colour and its turn",
+			hb.part() == "bracket_1x2" and hb.colour() == 4 and _ws._yaw == 2,
+			"%s %d yaw %d" % [hb.part(), hb.colour(), _ws._yaw])
+	var cats := {}
+	var orphans := []
+	for p in BrickPalette.parts():
+		var c := BrickPalette.category_of(p)
+		cats[c] = true
+		if c == "Other" or not BrickPalette.parts_in(c).has(p):
+			orphans.append(p)
+	_ok("every part is in a named category", orphans.is_empty(), "%s" % [orphans])
+	hb._search.text = "2x4"
+	var found: Array = hb.shown_parts()
+	_ok("searching 2x4 finds every 2x4", found.has("brick_2x4") and found.has("plate_2x4")
+			and found.has("slope_2x4") and not found.has("brick_2x2"), "%s" % [found])
+	hb._search.text = ""
+	DirAccess.remove_absolute("user://_probe_hotbar.json")
 
 
 func _check_save_new() -> void:

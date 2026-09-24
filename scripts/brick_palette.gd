@@ -345,6 +345,64 @@ static func _side_studs_for(size: Vector3i) -> PackedInt32Array:
 	return out
 
 
+## How a player browses the parts: by what a piece DOES, the way the real
+## catalogue groups them, not by how the table above happens to be ordered.
+## Each entry is [label, families]; a family is a part name's first word
+## (`slope` in `slope_2x4`). A family not listed here lands in "Other", so a new
+## part is never unfindable, only unsorted.
+const CATEGORIES := [
+	["Bricks", ["brick"]],
+	["Plates", ["plate"]],
+	["Tiles", ["tile"]],
+	["Slopes", ["slope", "curve"]],
+	["Round", ["round"]],
+	["Arches", ["arch"]],
+	["Sideways", ["bracket"]],
+	["Structure", ["column", "spiralcw", "spiralccw"]],
+]
+
+
+## `slope` for `slope_2x4`.
+static func family_of(part: String) -> String:
+	return part.get_slice("_", 0)
+
+
+static func category_of(part: String) -> String:
+	var fam := family_of(part)
+	for c in CATEGORIES:
+		if (c[1] as Array).has(fam):
+			return c[0]
+	return "Other"
+
+
+## Every category label that has at least one part, in browsing order.
+static func categories() -> Array:
+	var out := []
+	for c in CATEGORIES:
+		if not parts_in(c[0]).is_empty():
+			out.append(c[0])
+	if not parts_in("Other").is_empty():
+		out.append("Other")
+	return out
+
+
+## The parts in a category, smallest footprint first, as a catalogue lists
+## them: 1x1, 1x2, 1x4 ... 2x2, 2x4 ... then by height.
+static func parts_in(category: String) -> Array:
+	var out := parts().filter(func(p): return category_of(p) == category)
+	out.sort_custom(func(a, b):
+		var sa := part_size(a)
+		var sb := part_size(b)
+		if sa.x * sa.z != sb.x * sb.z:
+			return sa.x * sa.z < sb.x * sb.z
+		if sa.x != sb.x:
+			return sa.x < sb.x
+		if sa.y != sb.y:
+			return sa.y < sb.y
+		return a < b)
+	return out
+
+
 ## The parts a player picks from. Build mode shows these, not archetypes.
 static func parts() -> Array:
 	return _PARTS.keys()
