@@ -20,6 +20,7 @@ func _init() -> void:
 	_check_intact_is_unchanged()
 	_check_damage_shows()
 	_check_profile_survives_dematerialise()
+	_check_windows()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -167,3 +168,99 @@ func _check_profile_survives_dematerialise() -> void:
 			w.get_alive_block_count(reg.get_building(id).chunk) < before,
 			"%d vs %d" % [w.get_alive_block_count(reg.get_building(id).chunk), before])
 	_ok("and the profile is still there", not reg.get_building(id).damage_profile.is_empty())
+
+
+# ---------------------------------------------------------------------------
+
+## A shell's windows: panes of glass over exactly the openings the bricks have,
+## each showing the kind of room really behind it.
+func _check_windows() -> void:
+	print("\nits windows are where the bricks' windows are")
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	var fx := 40
+	var fz := 30
+	var courses := 42
+	var id := reg.register(fx, fz, courses, Transform3D())
+	var seed := reg.room_seed_of(id)
+	var mesh := BuildingShell.build_window_mesh(fx, fz, courses, seed)
+	_ok("a shell has windows", mesh != null and mesh.get_surface_count() == 1)
+	if mesh == null:
+		return
+	var a := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+	var colours: PackedColorArray = a[Mesh.ARRAY_COLOR]
+	@warning_ignore("integer_division")
+	var panes: int = verts.size() / 4
+
+	# As many as the recipe cuts: every window course's storey, every gap, four
+	# sides.
+	var storeys := 0
+	for c in courses:
+		if c % TowerRecipe.COURSES_PER_FLOOR == TowerRecipe.COURSES_PER_FLOOR - 1 \
+				- TowerRecipe.WINDOW_COURSES and TowerRecipe.is_window_course(c, courses):
+			storeys += 1
+	var per_storey: int = 2 * TowerRecipe.window_gaps(fx).size() \
+			+ 2 * TowerRecipe.window_gaps(fz).size()
+	_ok("one pane for every window the bricks have", panes == storeys * per_storey,
+			"%d panes, %d storeys x %d" % [panes, storeys, per_storey])
+
+	# Proud of the wall, never inside the building.
+	var inside := 0
+	var wm := fx * BuildingShell.STUD
+	var dm := fz * BuildingShell.STUD
+	for v in verts:
+		if v.x > 0.0 and v.x < wm and v.z > 0.0 and v.z < dm:
+			inside += 1
+	_ok("every pane stands just proud of its wall", inside == 0, "%d corners inside" % inside)
+
+	# And over a real opening: the brick wall straight behind each pane's middle
+	# is not there.
+	var chunk := reg.materialise(id)
+	var solid := 0
+	for k in panes:
+		var mid := (verts[k * 4] + verts[k * 4 + 3]) * 0.5
+		var cell := Vector3i(floori(mid.x / BuildingShell.STUD),
+				floori(mid.y / BuildingShell.PLATE), floori(mid.z / BuildingShell.STUD))
+		cell.x = clampi(cell.x, 0, fx - 1)
+		cell.z = clampi(cell.z, 0, fz - 1)
+		if w.is_solid(chunk, cell):
+			solid += 1
+	_ok("and over a hole in the brick wall, not over brickwork", solid == 0,
+			"%d of %d panes over brick" % [solid, panes])
+
+	# The kind a pane paints is the kind of the room behind it.
+	var wrong := 0
+	for room in reg.rooms_of(id):
+		var at := Vector2(room.lo.x + room.size.x * 0.5, room.lo.z + room.size.z * 0.5)
+		var storey := -1
+		var list := RoomManifest.storeys_of(courses)
+		for si in list.size():
+			if int(list[si].floor_y) == room.lo.y:
+				storey = si
+		var kind := RoomManifest.kind_at(fx, fz, courses, seed, storey, at)
+		if kind != Room.KINDS.find(room.kind):
+			wrong += 1
+	_ok("the room kind a window paints is the room that is there", wrong == 0,
+			"%d rooms disagree" % wrong)
+	var kinds := {}
+	for c in colours:
+		kinds[int(round(c.a * 4.0))] = true
+	_ok("and a building's windows show more than one kind of room", kinds.size() > 1,
+			"%d kinds" % kinds.size())
+
+	# A damaged storey loses its panes: glass over a hole is glass in mid-air.
+	var bands := TowerRecipe.layout(courses)
+	var damaged_band := -1
+	for i in bands.size():
+		var band: Dictionary = bands[i]
+		if band.kind == "course" and TowerRecipe.is_window_course(int(band.index), courses):
+			damaged_band = i
+			break
+	var damage := {damaged_band: PackedInt32Array([0, -1, -1, -1])}
+	var hurt := BuildingShell.build_window_mesh(fx, fz, courses, seed, damage)
+	@warning_ignore("integer_division")
+	var left: int = (hurt.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 4
+	_ok("a damaged storey shows no glass", left == panes - per_storey,
+			"%d panes, expected %d" % [left, panes - per_storey])

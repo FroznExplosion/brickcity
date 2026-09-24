@@ -230,7 +230,7 @@ func rooms_of(building_id: int) -> Array[Room]:
 		b.rooms_built = true
 		if not b.is_build():
 			b.rooms = RoomManifest.rooms_for(b.recipe.footprint_x, b.recipe.footprint_z,
-					b.recipe.courses, b.id * 2654435761)
+					b.recipe.courses, room_seed_of(building_id))
 			# The stairwell is a shaft with no floor in it, on every storey,
 			# and furniture generated inside it stood on nothing: laid, it
 			# hung in the air until something nearby broke and the solve
@@ -251,6 +251,13 @@ func rooms_of(building_id: int) -> Array[Room]:
 							mine.append(k)
 					room.posts = mine
 	return b.rooms
+
+
+## The seed a building's rooms are generated from. One place, because a far
+## building's windows paint the kind of room that is really behind them
+## (BuildingShell.build_window_mesh) and have to ask with the same number.
+func room_seed_of(building_id: int) -> int:
+	return building_id * 2654435761
 
 
 func get_room(building_id: int, index: int) -> Room:

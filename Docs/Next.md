@@ -99,21 +99,19 @@ Now that walls and doorways are real geometry, the graph can be built from
 `_door_span` says where the holes in them are — instead of from a flood fill.
 That is cheaper than the design assumed and worth doing that way.
 
-### 2.4 Fake interiors for FAR buildings — **start here**
+### 2.4 Fake interiors for FAR buildings — **done**
 
-The fake rung is in for buildings that are bricks: every room against an
-outside wall, within 70 m, drawn unlit from its manifest with no collision
-(Status: "Fake interiors"). It replaced the per-window ray test outright.
+Shells have no openings, so a far building's windows are panes of glass over
+exactly where the bricks cut theirs (`BuildingShell.build_window_mesh`), drawn
+by `shaders/window_interior.gdshader`: interior mapping, the view ray followed
+into a box of a room behind the glass with furniture by the room's real kind
+(`RoomManifest.kind_at`). No geometry behind them, no rooms generated. Status:
+"Windows on far buildings". `--windows` photographs them close up.
 
-What is missing is buildings that are still SHELLS, and it is not a matter of
-parenting the fake to the shell: **shells have no windows**
-(`BuildingShell` draws solid bands), so boxes behind them would never be seen,
-and cutting real holes would mean building floors inside every shell as well.
-The plan is a window-glass shader on the shell's window courses that paints a
-room behind the glass (interior mapping -- the Spider-Man / Matrix Awakens
-technique): the room kind from a hash of building and window, no geometry, no
-per-room data. `TowerRecipe.window_gaps` / `is_window_course` say where the
-windows are, and the shell's UVs are already in metres.
+Worth doing next if it matters: the brick building's own windows (46-85 m,
+bricks but beyond the fake-box range) show nothing behind them, and the pane's
+room is one window pitch wide rather than the real room's width -- a long room
+reads as a row of small ones from outside.
 
 ### 2.5 Sections, not buildings, as the unit of materialisation
 

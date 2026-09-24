@@ -569,6 +569,7 @@ var _fixture_mode := false
 var _dormant_mode := false
 var _rooms_mode := false
 var _audit_mode := false
+var _windows_mode := false
 var _interiors_mode := false
 ## Set by the interiors pass. The streamers and the collision merge run on a
 ## timer and would rebuild the body underneath a measurement -- which they did,
@@ -640,6 +641,7 @@ func _ready() -> void:
 	_dormant_mode = "--dormant" in args
 	_rooms_mode = "--rooms" in args
 	_audit_mode = "--interior-audit" in args
+	_windows_mode = "--windows" in args
 	# The scene's settings first, the command line over the top of them.
 	_big = big_shapes or "--big" in args
 	_city_size = maxi(building_count, 1)
@@ -722,6 +724,8 @@ func _ready() -> void:
 		_run_interiors_pass()
 	elif _audit_mode:
 		_run_interior_audit_pass()
+	elif _windows_mode:
+		_run_windows_pass()
 	elif _rooms_mode:
 		_run_rooms_pass()
 	elif _chamfer_mode:
@@ -1418,6 +1422,21 @@ func _make_shell(id: int, coarse: bool = false) -> void:
 	add_child(mi)
 	_shells[id] = mi
 	_shell_coarse[id] = coarse
+	# Its windows, with a room painted behind each: a shell has no openings, so
+	# the fake rung cannot show through it. Not on the coarse tier -- past a
+	# hundred metres a window is a pixel -- and not on a player build, which
+	# has no recipe windows. A child of the shell, so it goes when the shell
+	# does, and with its own material so the brick material is untouched.
+	if not coarse and not b.is_build():
+		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
+				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
+				b.damage_profile)
+		if panes != null:
+			var glass := MeshInstance3D.new()
+			glass.mesh = panes
+			glass.material_override = BuildingShell.window_material()
+			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mi.add_child(glass)
 
 	var body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -4344,6 +4363,49 @@ func _run_interiors_pass() -> void:
 	get_tree().quit(0)
 
 
+## What a far building's windows look like: a shell, close up.
+##
+##     godot --path . --resolution 1280x720 res://scenes/city.tscn -- --windows
+##
+## Promotion is held off (`_measuring`), so the camera can walk right up to a
+## building that is still a shell -- which in play it never does, because a
+## building becomes bricks at PROMOTE_RANGE. That is the point of looking: the
+## panes have to hold up at the closest a player ever sees them, and further.
+func _run_windows_pass() -> void:
+	_measuring = true
+	print("[windows] a shell's windows, close up")
+	var panes := 0
+	var tris := 0
+	for id in _shells:
+		var shell: MeshInstance3D = _shells[id]
+		for child in shell.get_children():
+			if child is MeshInstance3D:
+				@warning_ignore("integer_division")
+				var n: int = (child as MeshInstance3D).mesh.get_faces().size() / 6
+				panes += n
+				tris += n * 2
+	print("[windows] %d pane(s) across %d shell(s), %d triangle(s)" % [panes, _shells.size(), tris])
+	var tallest := 0
+	var target := -1
+	for b in registry.buildings:
+		if b.recipe != null and not b.is_build() and b.recipe.courses > tallest:
+			tallest = b.recipe.courses
+			target = b.id
+	var b := registry.get_building(target)
+	var box := registry.local_box(target)
+	var face: Vector3 = b.xform * (box.position + Vector3(box.size.x * 0.5, 7.5, 0.0))
+	# In the street: the city's buildings are only a street apart, so anything
+	# much further out than this is inside the one across the road.
+	for view in [["windows_near", Vector3(0.0, 0.0, -5.0)],
+			["windows_angle", Vector3(-4.0, -1.5, -4.0)],
+			["windows_far", Vector3(0.0, 25.0, -40.0)]]:
+		camera.global_position = face + (view[1] as Vector3)
+		camera.look_at(face, Vector3.UP)
+		await _frames(8)
+		await _save(str(view[0]))
+	get_tree().quit(0)
+
+
 ## What an interior piece IS at every stage of a collapse, counted.
 ##
 ##     godot --path . --resolution 1280x720 res://scenes/city.tscn -- --interior-audit
@@ -5850,7 +5912,8 @@ func _build_scenery() -> void:
 	# which is why the reach probe reported misses at 40 m.
 	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
-			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode)
+			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode
+			or _windows_mode)
 	# A scripted pass puts the camera where it wants it and must not be able to
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse

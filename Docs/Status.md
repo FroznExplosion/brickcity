@@ -1054,6 +1054,24 @@ pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--int
 measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
 `--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
 
+### Windows on far buildings: a room behind the glass that is not there
+
+A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
+could not show through it. Its windows are now panes of glass laid over exactly where the brick
+recipe cuts its openings (`BuildingShell.build_window_mesh`, from `TowerRecipe.window_gaps` and
+`is_window_course`), a few millimetres proud of the wall, in a child mesh of the shell with its
+own material.
+
+`shaders/window_interior.gdshader` is interior mapping: the view ray is carried through the glass
+into a box of a room -- floor, ceiling, back and side walls, sized from the recipe -- and a few
+boxes of furniture by the room's **kind**, which the pane carries in its vertex colour and which is
+the kind of the room really behind it (`RoomManifest.kind_at`, pure arithmetic on the building's
+seed, no rooms generated). A storeroom's window shows crates, an office's a desk and chair, a
+kitchen's a counter and a table; one room in five has its lights off. Unshaded, no shadows, no
+textures. The whole default city is 1,956 panes and 3,912 triangles; a damaged storey gets none,
+because glass over a hole is glass in mid-air. `shell_probe` checks every pane is over a real
+opening in the bricks and paints the room that is there; `--windows` photographs them.
+
 ### Fake interiors: seen through a window, never touched
 
 A fourth rung under drawn ([Scale §4.1](Scale.md)). Every room against an outside wall of a building
@@ -1070,7 +1088,8 @@ biggest `--big` tower the streaming pass went from 1.02 ms (worst 6.5) to 0.29 m
 Faking that tower -- 151 of its 204 rooms, 1,595 boxes -- is 5.6 ms cold, spread over five passes
 of at most 48 rooms (`FAKE_ROOMS_PER_PASS`), and 0.2 ms to rebuild after a room changes.
 
-Only for buildings that are bricks: a shell has no windows to see a fake through. Next.md §2.4.
+Only for buildings that are bricks: a shell has no windows to see a fake through, so shells paint
+theirs instead (above).
 
 ### Floors are part of their walls
 

@@ -202,6 +202,37 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 	return out
 
 
+## What kind of room stands behind a point on a building's plan, on one storey,
+## as an index into Room.KINDS -- or -1 if no room does.
+##
+## Without generating a single Room. The kind is a pure function of the
+## building's seed and the room's id, and the id is storey-major lattice
+## arithmetic, so a far building's window can show the room that is really
+## behind it -- a storeroom's window shows crates, an office's a desk -- and a
+## city of five thousand buildings still holds no rooms at all.
+##
+## `building_seed` is the one `rooms_for` is given. The point is in studs; a
+## point on the wall itself is fine, it is matched to the nearest room.
+static func kind_at(footprint_x: int, footprint_z: int, courses: int,
+		building_seed: int, storey: int, plan: Vector2) -> int:
+	var lat := lattice_for(footprint_x, footprint_z, courses)
+	var rects: Array = lat.rects
+	if rects.is_empty() or storey < 0 or storey >= (lat.storeys as Array).size():
+		return -1
+	var best := -1
+	var best_d := INF
+	for ri in rects.size():
+		var r: Rect2i = rects[ri]
+		var dx := maxf(maxf(r.position.x - plan.x, plan.x - r.end.x), 0.0)
+		var dz := maxf(maxf(r.position.y - plan.y, plan.y - r.end.y), 0.0)
+		var d := dx * dx + dz * dz
+		if d < best_d:
+			best_d = d
+			best = ri
+	var id := storey * rects.size() + best
+	return hash3(building_seed, id, 0x9E37) % Room.KINDS.size()
+
+
 ## Every habitable storey of a tower: where its floor's TOP surface is, and how
 ## many plates of clear air stand on it before the next slab.
 ##
