@@ -268,6 +268,10 @@ static func items_for(room: Room) -> Array:
 	var slot_x: int = maxi(room.size.x / cols, 1)
 	@warning_ignore("integer_division")
 	var slot_z: int = maxi(room.size.z / rows, 1)
+	# What the items already placed stand on, in plan. A later item slid off a
+	# column must not slide onto one of THEM: a crate placed over a table lays
+	# nothing but its lid, and the lid hangs in the air above the tabletop.
+	var taken: Array[Rect2i] = []
 	for i in n:
 		var type: String = kinds[hash3(room.room_seed, i, 7) % kinds.size()]
 		var span: Vector3i = _item_span(type)
@@ -282,11 +286,12 @@ static func items_for(room: Room) -> Array:
 		# A slot narrower than the item would otherwise push it through a wall.
 		at.x = mini(at.x, room.lo.x + maxi(room.size.x - span.x, 0))
 		at.z = mini(at.z, room.lo.z + maxi(room.size.z - span.z, 0))
-		at = _off_the_posts(room, at, span)
+		at = _off_the_posts(room, at, span, taken)
 		if at == NOWHERE:
 			# Nowhere on this floor it fits -- a room that is mostly
 			# stairwell. Better one thing fewer than one thing in the shaft.
 			continue
+		taken.append(Rect2i(at.x, at.z, span.x, span.z))
 		out.append({"type": type, "cell": at,
 				"yaw": int(hash3(room.room_seed, i, 29) % 4)})
 	return out
@@ -302,14 +307,15 @@ static func items_for(room: Room) -> Array:
 ## The walk is deterministic and bounded: the same room furnishes the same way
 ## on the second visit and on another machine, which is the property the whole
 ## tier rests on.
-static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i:
-	if room.posts.is_empty():
+static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i,
+		taken: Array[Rect2i] = []) -> Vector3i:
+	if room.posts.is_empty() and taken.is_empty():
 		return at
 	var hi_x := room.lo.x + maxi(room.size.x - span.x, 0)
 	var hi_z := room.lo.z + maxi(room.size.z - span.z, 0)
 	# A short walk first: a column is two studs, and a step or two clears it.
 	for step in 12:
-		if not _on_a_post(room, at, span):
+		if not _on_a_post(room, at, span, taken):
 			return at
 		# Past the far side of whatever it is standing in, wrapping along the
 		# row and then down to the next one.
@@ -327,7 +333,7 @@ static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i
 		var x := room.lo.x
 		while x <= hi_x:
 			var here := Vector3i(x, at.y, z)
-			if not _on_a_post(room, here, span):
+			if not _on_a_post(room, here, span, taken):
 				return here
 			x += 2
 		z += 2
@@ -338,10 +344,14 @@ static func _off_the_posts(room: Room, at: Vector3i, span: Vector3i) -> Vector3i
 const NOWHERE := Vector3i(-1, -1, -1)
 
 
-static func _on_a_post(room: Room, at: Vector3i, span: Vector3i) -> bool:
+static func _on_a_post(room: Room, at: Vector3i, span: Vector3i,
+		taken: Array[Rect2i] = []) -> bool:
 	var box := Rect2i(at.x, at.z, span.x, span.z)
 	for q in room.posts:
 		if (q as Rect2i).intersects(box):
+			return true
+	for q in taken:
+		if q.intersects(box):
 			return true
 	return false
 
@@ -383,8 +393,14 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		# chair is what made one room cost 225 ms.
 		var id := world.place_block(chunk, at + (part[1] as Vector3i), palette[name],
 				(colour + int(part[2])) % BrickWorld.get_filament_count(), true)
-		if id >= 0:
-			out.push_back(id)
+		if id < 0:
+			# All of it or none of it. A part that is refused -- something is
+			# in the way -- takes the rest out with it: a crate whose bricks
+			# were refused and whose lid was not is a lid hanging in the air.
+			for laid in out:
+				world.remove_block(chunk, laid)
+			return PackedInt32Array()
+		out.push_back(id)
 	return out
 
 

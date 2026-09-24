@@ -585,18 +585,48 @@ wall**. Some of the saving is the smaller footprint (shorter walls); the rest is
 the wall ring and the columns the walls now replace. Laid on its side, a
 30x30 tower that shed 591 blocks under the old lattice sheds none.
 
-**1x4 walls were measured and are not the default.** `ROOM_WALL_THICK` (and
-`WALL_THICK`) can be 1:
+**Then 1x4 walls, inside and out — built, measured, and left as a switch.** The first
+measurement said no: with one-stud interior walls two big shapes shed 60 and 27
+blocks. The cause was ORDER, not thickness. A storey's interior walls were laid
+before its columns, and a wall on a lattice line takes the cells the column on
+that line's lattice point wants, so the column was refused; a two-stud wall
+straddling the seam had carried both panels anyway, a one-stud wall stands on
+one side of it and the panels on the other side lost their corner. Columns are
+laid first now (`_lay_storey_columns`), and the wall runs round each one, which
+stands in it as a pilaster. Doorways dodge the columns that actually stand —
+the first cut counted the ones the stairwell removes too, and quietly lost
+every door on the small shapes.
 
-| walls | blocks, biggest | panels fall, columns removed | shapes standing |
+| walls | columns | blocks, biggest | shapes standing |
 |---|---|---|---|
-| 2-stud (default) | 22,507 | 136 | 12 of 12 |
-| 1-stud interior | 22,909 | 408 | 10 of 12 |
-| 1-stud interior and exterior | 24,348 | 408 | 10 of 12 |
+| 2-stud | 2x2 | 22,507 | 12 of 12 |
+| 1-stud, walls first | 2x2 | 22,909 | 10 of 12 |
+| 1-stud, columns first | 2x2 | 23,938 | 12 of 12 |
+| 1-stud, columns first | 1x1 | 25,810 | 12 of 12 |
 
-A run costs the same number of bricks whatever its thickness, so thin walls
-save nothing — and a one-stud wall cannot straddle a seam, so it stops tying the
-floor together. Use it for the look if it is wanted, and add columns under it.
+One-stud walls cost 6% more blocks on the big tower and up to 17% on the small
+ones, and it is all 1x1s: the short exterior walls start one stud in, so window
+piers come out three and five studs long, and there is no 1x3. Half the plastic
+per stud of wall, though. **Columns stay 2x2**: a 2x2 centred on the point is the
+only part whose top reaches all four panel corners, and a 1x1 standing in a
+one-stud wall line splits the wall's runs into odd lengths — more blocks, not
+fewer. `WALL_THICK`, `ROOM_WALL_THICK` and `COLUMN_STUDS` are the switches.
+
+**And it is not the default, because of what it did to a collapse.** The stress
+pass, run back to back on a quiet machine (mean frame is vsync-bound at 16.7 ms
+in every run, so the columns that matter are the spikes and what is still
+moving when the pass ends):
+
+| build | physics | worst frame | boxes still falling at the end |
+|---|---|---|---|
+| 2-stud, walls first | 7.7-8.8 ms | 33-47 ms | 0 |
+| 2-stud, columns first | 11.2 ms | 47 ms | 289 |
+| 1-stud, columns first | 9.5-12.5 ms | **80-122 ms** | 877-901 |
+
+Thin wall fragments are planks: they rock and roll instead of lying down, and
+the worst frames are the physics step under them. So two-stud walls, laid
+before the columns, are the default; `ROOM_WALL_THICK < 2` switches the order
+to columns-first on its own, because a one-stud wall needs it.
 
 **Non-conforming footprints still stand, and one thing about them is worth
 knowing:** the leftover strip's plates reach neither a wall nor a lattice

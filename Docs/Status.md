@@ -1064,7 +1064,18 @@ Footprints are `k * PANEL` (the city's shapes are 30-80 studs), and a stairwell 
 the walls. Every shape stands, every edge panel is joined, the biggest tower went from 29,716
 blocks to 22,507, and removing every column drops 136 of its 1,646 panels instead of 1,020.
 Collapses shed far fewer loose floor panels as a result -- 51 islands in `--shot` against 140-176.
-1x4 walls were measured and left as a switch (`ROOM_WALL_THICK`); see Scale.md, "The seventh".
+1x4 walls inside and out were built and stand (columns are laid first for them, so each stands in
+the wall as a pilaster), and measured worse where it is felt -- worst frames of 80-122 ms against
+33-47 in the same collapse -- so they are a switch (`WALL_THICK` / `ROOM_WALL_THICK` = 1), not the
+default. Scale.md, "The seventh".
+
+**Small debris only where you are.** A piece of three bricks or fewer breaks off only within 30 m
+of the player and in view (`IslandManager.TINY_BLOCKS` / `TINY_RANGE`); anywhere else it is deleted
+before anything is built for it. Every deletion is decided before the piece gets a body -- and it is
+split out and freed rather than killed in place, because pieces that lost blocks to kills never
+went to sleep (13-15 ms of physics a frame on the stress pass, against 9). And an item of furniture
+is laid whole or not at all, and never onto another: a crate slid off a column onto a table laid
+only its lid, which hung in the air.
 
 ### Floating furniture: four causes, counted
 

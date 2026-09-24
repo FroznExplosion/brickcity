@@ -335,6 +335,29 @@ func _check_nothing_stands_on_air() -> void:
 				on_air += 1
 	_ok("nothing is generated in the stairwell", in_shaft == 0,
 			"%d of %d items" % [in_shaft, items])
+	# No two things in one room share floor: a crate placed over a table laid
+	# only its lid, and the lid hung in the air over the tabletop.
+	var overlaps := 0
+	for room in reg.rooms_of(id):
+		var boxes: Array[Rect2i] = []
+		for item in RoomManifest.items_for(room):
+			var sp := RoomManifest._item_span(str(item.type))
+			var r := Rect2i((item.cell as Vector3i).x, (item.cell as Vector3i).z, sp.x, sp.z)
+			for q in boxes:
+				if q.intersects(r):
+					overlaps += 1
+			boxes.append(r)
+	_ok("and no two items in a room share floor", overlaps == 0, "%d overlaps" % overlaps)
+	# And an item is laid whole or not at all: block one part of a crate and
+	# the rest of it is taken back out.
+	var probe_cell := Vector3i(sx + 3, 60, sz + 3)
+	var pal: Dictionary = res[1]
+	w.place_block(chunk, probe_cell + Vector3i(0, 3, 0), pal.brick_2x2, 1)
+	var before := w.get_alive_block_count(chunk)
+	var got := RoomManifest.build_item(w, chunk, pal, {"type": "crate", "cell": probe_cell}, 4)
+	_ok("an item that cannot be laid whole is not laid at all",
+			got.is_empty() and w.get_alive_block_count(chunk) == before,
+			"%d laid, %d alive against %d" % [got.size(), w.get_alive_block_count(chunk), before])
 	_ok("and everything generated has a floor under it", on_air == 0,
 			"%d of %d items" % [on_air, items])
 

@@ -7,6 +7,10 @@ class_name TowerRecipe
 ## (Docs/Plan.md section 2 / spec section 5). Keeping the generator pure and
 ## re-runnable from parameters is the whole trick, so it is written that way.
 
+## Two studs: walls are 2x4 bricks. One (1x4 bricks, with ROOM_WALL_THICK = 1
+## as well) is supported and stands, and measured worse where it is felt: the
+## same collapse had its worst frame at 80-122 ms against 33-47, and pieces
+## still falling when the pass ended. Docs/Scale.md.
 const WALL_THICK := 2        # studs
 const PLATES_PER_COURSE := 3
 ## Six brick courses, then a floor, then six more on top of it. The floor
@@ -56,6 +60,13 @@ const PANEL := 10
 ## A column is six bricks, which is COURSES_PER_FLOOR of brickwork -- so it
 ## stands on one floor and the next floor stands on it.
 const COLUMN_PLATES := COURSES_PER_FLOOR * PLATES_PER_COURSE
+## How wide a column is, in studs: 2 is `column_2x2`, 1 is `column_1x1`.
+##
+## Two, and not for the look: a column is centred on the point where four
+## floor panels meet, and a 2x2 is the smallest part whose top reaches all four
+## of their corners. A 1x1 can only stand under one of them, so the other three
+## are held by nothing but the walls. Measured in Docs/Scale.md.
+const COLUMN_STUDS := 2
 const COLUMN_COLOUR := 3
 
 ## How many panels wide a room is. It is a cost decision before it is a spatial
@@ -273,9 +284,12 @@ static func _build_plan(footprint_x: int, footprint_z: int) -> Dictionary:
 	# The columns: one centred on every point where four cells meet. The
 	# points on the outer face need none -- the wall is the column there.
 	var columns: Array[Rect2i] = []
+	@warning_ignore("integer_division")
+	var back: int = COLUMN_STUDS / 2
 	for i in range(1, xs.size()):
 		for j in range(1, zs.size()):
-			columns.append(Rect2i(int(xs[i]) - 1, int(zs[j]) - 1, 2, 2))
+			columns.append(Rect2i(int(xs[i]) - back, int(zs[j]) - back,
+					COLUMN_STUDS, COLUMN_STUDS))
 	# A footprint that does not divide leaves a strip of smaller plates. Any
 	# of them that reaches neither the wall nor a column gets one of its own
 	# at its corner, which is the old rule and the right price for not
@@ -494,11 +508,18 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 	# with no courses above it is a roof, and a wall standing on a roof divides
 	# nothing.
 	var bands := layout(courses)
+	# A two-stud wall straddles its seam and carries both panels, so it is laid
+	# first and takes the column's place. A one-stud wall stands on one side of
+	# the seam only, so the column has to come first and the wall run round it.
+	var columns_first := ROOM_WALL_THICK < 2
 	var walled := {}
+	var slabs := {}
 	for i in bands.size() - 1:
 		var b: Dictionary = bands[i]
 		if (b.kind == "base" or b.kind == "slab") and bands[i + 1].kind == "course":
 			walled[int(b.y)] = walled.size()
+		if b.kind == "slab":
+			slabs[int(b.y)] = true
 
 	for band in bands:
 		match band.kind:
@@ -509,18 +530,25 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 				# detached.
 				_lay_slab(world, chunk_id, palette, band.y, footprint_x, footprint_z,
 						BASE_COLOUR, [], pl)
+				if columns_first:
+					_lay_storey_columns(world, chunk_id, palette, int(band.y), pl, clear, slabs)
 				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
-						footprint_z, pl, clear, walled)
+						footprint_z, pl, clear, walled, columns_first)
 			"slab":
 				# Full footprint, walls included. This is what ties the four
 				# walls together across the span AND what you see from outside.
 				_lay_slab(world, chunk_id, palette, band.y, footprint_x,
 						footprint_z, SLAB_COLOUR, clear, pl)
-				# The columns carrying it, standing on the floor below.
-				_lay_columns(world, chunk_id, palette, int(band.y) - COLUMN_PLATES,
-						pl, clear)
+				if columns_first:
+					_lay_storey_columns(world, chunk_id, palette, int(band.y), pl, clear, slabs)
+				else:
+					# The columns carrying it, standing on the floor below --
+					# after that storey's walls, so a wall on a lattice line IS
+					# the column there.
+					_lay_columns(world, chunk_id, palette, int(band.y) - COLUMN_PLATES,
+							pl, clear)
 				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
-						footprint_z, pl, clear, walled)
+						footprint_z, pl, clear, walled, columns_first)
 			"course":
 				var colour: int = COURSE_COLOURS[int(band.index) % COURSE_COLOURS.size()]
 				var y: int = band.y
@@ -629,6 +657,23 @@ static func _fill_rect(world: BrickWorld, chunk_id: int, palette: Dictionary,
 ## A column the stairwell crosses is left out. It would only have clipped the
 ## shaft's corner, but the staircase clears its whole cell, and the panels round
 ## the shaft each keep three columns and the walls.
+## The columns of the storey standing on the floor at `floor_y`, if a slab
+## closes it -- a column under the cornice carries nothing.
+##
+## Laid BEFORE that storey's interior walls, and that order is the point. A
+## wall on a lattice line and a column on a lattice point want the same cells;
+## laid first, a wall took them and the column was refused, and with a one-stud
+## wall standing on one side of the seam the panels on the other side lost
+## their corner. Columns first, the wall runs round them and each one stands in
+## it as a pilaster, tying its four panels whatever the wall is doing.
+static func _lay_storey_columns(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		floor_y: int, pl: Dictionary, keepouts: Array, slabs: Dictionary) -> void:
+	var y := floor_y + SLAB_PLATES
+	if not slabs.has(y + COLUMN_PLATES):
+		return
+	_lay_columns(world, chunk_id, palette, y, pl, keepouts)
+
+
 static func _lay_columns(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		y: int, pl: Dictionary, keepouts: Array) -> void:
 	if y < 0:
@@ -655,18 +700,26 @@ static func _lay_columns(world: BrickWorld, chunk_id: int, palette: Dictionary,
 ## blocks shed. See `plan`.
 static func _lay_room_walls(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		band: Dictionary, footprint_x: int, footprint_z: int, pl: Dictionary,
-		keepouts: Array, walled: Dictionary) -> void:
+		keepouts: Array, walled: Dictionary, columns_first: bool = false) -> void:
 	if not walled.has(int(band.y)):
 		return
 	var t := WALL_THICK
 	var y: int = int(band.y) + SLAB_PLATES
 	var storey: int = int(walled[int(band.y)])
+	# The columns that actually stand: one the stairwell took is not in the way
+	# of a doorway.
+	var standing: Array = []
+	if columns_first:
+		for c in (pl.columns as Array):
+			var r: Rect2i = c
+			if not _blocked(keepouts, r.position.x, r.position.y, r.size.x, r.size.y):
+				standing.append(r)
 	for at in (pl.wall_x as Array):
 		_lay_wall_line(world, chunk_id, palette, y, t, footprint_z - t, int(at),
-				keepouts, storey, true, ROOM_WALL_THICK)
+				keepouts, storey, true, ROOM_WALL_THICK, standing)
 	for at in (pl.wall_z as Array):
 		_lay_wall_line(world, chunk_id, palette, y, t, footprint_x - t, int(at),
-				keepouts, storey, false, ROOM_WALL_THICK)
+				keepouts, storey, false, ROOM_WALL_THICK, standing)
 
 
 ## One wall, course by course.
@@ -678,9 +731,11 @@ static func _lay_room_walls(world: BrickWorld, chunk_id: int, palette: Dictionar
 ## instead, because a stairwell has to come through.
 static func _lay_wall_line(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		y: int, from: int, to: int, line: int, keepouts: Array, storey: int,
-		along_z: bool, thick: int = WALL_THICK) -> void:
+		along_z: bool, thick: int = WALL_THICK, columns: Array = []) -> void:
 	var blocked := _keepout_spans(keepouts, line, along_z, thick)
-	var door := _door_span(from, to, storey, blocked)
+	# A doorway does not go through a column standing in the wall.
+	var door := _door_span(from, to, storey,
+			blocked + _keepout_spans(columns, line, along_z, thick))
 	for k in COURSES_PER_FLOOR:
 		var gaps: Array = blocked.duplicate()
 		if k < COURSES_PER_FLOOR - 1 and door != Vector2i.ZERO:
@@ -722,14 +777,24 @@ static func _door_span(from: int, to: int, storey: int, blocked: Array) -> Vecto
 		@warning_ignore("integer_division")
 		var at: int = from + (span * ((storey + tries) % 3 + 1)) / 4 - LINTEL_LEAD
 		at = clampi(at, from + LINTEL_LEAD, to - DOOR_WIDE - LINTEL_LEAD)
-		var clash := false
-		for b in blocked:
-			if at < (b as Vector2i).y and at + DOOR_WIDE > (b as Vector2i).x:
-				clash = true
-				break
-		if not clash:
+		if not _door_clashes(at, blocked):
 			return Vector2i(at, at + DOOR_WIDE)
+	# All three spots are a stairwell or a column. Anywhere along the wall,
+	# then: a wall between two rooms with no way through it makes the room
+	# beyond it one you can only blow your way into.
+	var at := from + LINTEL_LEAD
+	while at + DOOR_WIDE + LINTEL_LEAD <= to:
+		if not _door_clashes(at, blocked):
+			return Vector2i(at, at + DOOR_WIDE)
+		at += 2
 	return Vector2i.ZERO
+
+
+static func _door_clashes(at: int, blocked: Array) -> bool:
+	for b in blocked:
+		if at < (b as Vector2i).y and at + DOOR_WIDE > (b as Vector2i).x:
+			return true
+	return false
 
 
 ## Is this course one of the ones a window is cut through?

@@ -67,6 +67,10 @@ const DEBRIS_MIN_BLOCKS := 10      ## under this, a piece is disposable
 ## chair tipping off a floor in front of you is worth a body; anywhere else it
 ## is a floating cube for a second and small debris after that.
 const FURNITURE_FALL_RANGE := 6.0
+## The smallest pieces -- a brick or three -- break off only this close to the
+## player, and in view. Anywhere else they are deleted where they came loose.
+const TINY_BLOCKS := 3
+const TINY_RANGE := 30.0
 const DEBRIS_LIFETIME_MS := 2500   ## how long disposable debris lingers
 ## A piece has to be at least this big to shear anything it lands on. Two bricks
 ## of ABS weigh a few grams; at brick scale nothing that small arrives with
@@ -170,6 +174,7 @@ var impact_blocks := 0
 var splits := 0
 var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
+var tiny_deleted := 0              ## pieces of TINY_BLOCKS or fewer deleted, far or unseen
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
 ## uses it to damage whatever was underneath -- an island has no idea what it
@@ -321,7 +326,8 @@ var soft_landings := 0  ## landings too gentle to snap anything
 var short_landings := 0 ## landings on a piece too short to snap
 var longest_landed := 0.0  ## longest piece that has landed, metres
 ## Microseconds spent in each part of spawn(), summed over the session.
-var spawn_prof := {"split": 0.0, "shapes": 0.0, "mesh": 0.0, "node": 0.0, "total": 0.0}
+var spawn_prof := {"split": 0.0, "shapes": 0.0, "mesh": 0.0, "node": 0.0, "total": 0.0,
+		"deleted": 0.0}
 var _multimesh := {}               ## box size -> MultiMeshInstance3D for single bricks
 var _mm_members := {}              ## box size -> Array[BrickIsland]
 
@@ -367,6 +373,9 @@ func can_be_seen(point: Vector3) -> bool:
 func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
+	if _delete_where_it_is(source, block_ids):
+		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
+		return null
 	var split: Dictionary = world.split_island(source, block_ids)
 	spawn_prof.split += float(Time.get_ticks_usec() - _t0) / 1000.0
 	var _t := Time.get_ticks_usec()
@@ -375,25 +384,6 @@ func spawn(source: int, block_ids: PackedInt32Array,
 
 	var count := int(split.block_count)
 	var island_chunk := int(split.chunk)
-	var at: Vector3 = split.com
-
-	# A small piece nobody can see never becomes anything. The bricks are
-	# already out of the source chunk, so this is a deletion, not a leak.
-	if count < DEBRIS_MIN_BLOCKS and not can_be_seen(at):
-		world.release_chunk(island_chunk)
-		discarded += count
-		return null
-	# Nor does a piece that is ONLY furniture, unless it is at arm's length.
-	# A chair whose floor went is not a chair the collapse needs: as a body it
-	# was a lone untextured cube in mid-air, or a brick that fell a beat after
-	# everything around it, and at the far end of a fall it was deleted as
-	# small debris anyway. Deleting it here, where it leaves, is the same
-	# outcome without the part everybody could see.
-	if world.get_decorative_blocks(island_chunk).size() == count \
-			and (camera == null or camera.global_position.distance_to(at) > FURNITURE_FALL_RANGE):
-		world.release_chunk(island_chunk)
-		furniture_deleted += count
-		return null
 
 	var isl := BrickIsland.new()
 	isl.chunk = island_chunk
@@ -487,6 +477,73 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
 	return isl
+
+
+## Should this piece never become a body at all? Decided BEFORE anything is
+## built for it: no body, no shapes, no mesh.
+##
+## Three rules, smallest first:
+##   * **TINY_BLOCKS or fewer** break off only within TINY_RANGE and in view. A
+##     brick or two falling in the distance is a body the physics pays for and
+##     nobody could see -- and a big collapse sheds hundreds of them.
+##   * **under DEBRIS_MIN_BLOCKS** break off only in view, as they always have.
+##   * **nothing but furniture** breaks off only within FURNITURE_FALL_RANGE: a
+##     chair whose floor went was a lone untextured cube in mid-air, then small
+##     debris deleted anyway at the bottom of the fall.
+func _delete_where_it_is(source: int, block_ids: PackedInt32Array) -> bool:
+	var n := block_ids.size()
+	if n == 0:
+		return false
+	var furniture := true
+	for id in block_ids:
+		if not world.is_block_decorative(source, id):
+			furniture = false
+			break
+	if n >= DEBRIS_MIN_BLOCKS and not furniture:
+		return false
+	var at := _centre_of(source, block_ids)
+	var dist := INF
+	if camera != null and is_instance_valid(camera):
+		dist = camera.global_position.distance_to(at)
+	var gone := false
+	if furniture:
+		gone = dist > FURNITURE_FALL_RANGE and dist < INF
+	elif n <= TINY_BLOCKS:
+		gone = (dist > TINY_RANGE and dist < INF) or not can_be_seen(at)
+	else:
+		gone = not can_be_seen(at)
+	if not gone:
+		return false
+	# Split out and freed, NOT killed in place. Killing is the obvious saving --
+	# no chunk, no copy -- and it measured worse: a piece that loses blocks to
+	# kills keeps them as dead blocks and never went to sleep. On the stress
+	# pass that left 2,400-5,000 collision boxes still falling at the end and
+	# physics at 13-15 ms a frame; split and freed, 0-900 and 9 ms.
+	var cut: Dictionary = world.split_island(source, block_ids)
+	if not cut.is_empty():
+		world.release_chunk(int(cut.chunk))
+	if furniture:
+		furniture_deleted += n
+	elif n <= TINY_BLOCKS:
+		tiny_deleted += n
+	else:
+		discarded += n
+	return true
+
+
+## Where a group of blocks is in the world, from their boxes. Only ever asked of
+## small groups, so the walk is a handful of blocks.
+func _centre_of(chunk: int, block_ids: PackedInt32Array) -> Vector3:
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var sum := Vector3.ZERO
+	var n := 0
+	for id in block_ids:
+		var ticks: Array = world.get_block_ticks(chunk, id)
+		if ticks.is_empty():
+			continue
+		sum += (Vector3(ticks[0] as Vector3i) + Vector3(ticks[1] as Vector3i) * 0.5) * tick_m
+		n += 1
+	return world.get_chunk_transform(chunk) * (sum / maxf(n, 1))
 
 
 ## Swap a piece's collision between one box per brick and as few boxes as the
@@ -1768,6 +1825,7 @@ func report() -> Dictionary:
 		"disposable": loose,
 		"discarded": discarded,
 		"furniture_deleted": furniture_deleted,
+		"tiny_deleted": tiny_deleted,
 		"dropped": dropped,
 		"breaks": breaks,
 		"band_breaks": band_breaks,

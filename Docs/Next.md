@@ -122,8 +122,9 @@ marking does not.
   one wall down the middle. Fine today; revisit if the city gets more small
   buildings.
 * **1x4 walls are a switch, not the default.** `ROOM_WALL_THICK` / `WALL_THICK`
-  = 1 builds them; measured, they save no blocks and stop tying the floor
-  together (Scale.md). If they are wanted for the look, they want columns.
+  = 1 builds them and every shape stands (columns go in first as pilasters),
+  but the worst frame of a collapse goes from 33-47 ms to 80-122 ms: thin wall
+  fragments rock instead of settling. Scale.md has the table.
 * **`ROOM_PANELS` is a budget decision.** An interior wall is four courses
   running the width of the building on *every* storey. At three panels (~10 m)
   the big tower's interior walls are about 9,000 blocks. At one panel they

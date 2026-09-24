@@ -3254,6 +3254,9 @@ func _run_shot_pass() -> void:
 		float(int(mem.total_bytes) - int(mem.occupancy_bytes) - int(mem.block_bytes)) / 1048576.0])
 	print("[city] islands: %d live (%d settled, %d loose), %d bricks discarded unseen" % [
 		isl.islands, isl.settled, isl.disposable, isl.discarded])
+	print("[city]   deleted where they came loose: %d brick(s) in pieces of %d or fewer, %d of furniture; %.0f ms deciding"
+			% [isl.tiny_deleted, IslandManager.TINY_BLOCKS, isl.furniture_deleted,
+			float(islands.spawn_prof.deleted)])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
@@ -3457,6 +3460,9 @@ func _run_stress_pass() -> void:
 	print("[stress] collision: %s" % _collision_report())
 	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
+	print("[stress] deleted where they came loose: %d brick(s) in pieces of %d or fewer, %d unseen small, %d of furniture"
+			% [int(islands.report().tiny_deleted), IslandManager.TINY_BLOCKS,
+			int(islands.report().discarded), int(islands.report().furniture_deleted)])
 	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
 			_band_builds, _band_cpp_ms, _band_upload_ms, _band_worst])
 	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
@@ -4394,6 +4400,8 @@ func _audit_interiors(stage: String, focus: int) -> void:
 			for block in decor:
 				if block >= grounded.size() or grounded[block] == 0:
 					n.loose += 1
+					if n.loose <= 3:
+						_audit_describe(chunk, block, "loose")
 				elif not _audit_supported(chunk, block):
 					n.hanging += 1
 		for room in registry.drawn_rooms_of(id):
@@ -4476,6 +4484,19 @@ func _audit_interiors(stage: String, focus: int) -> void:
 	print("[audit]   building %d: %s, toppled %s -- rooms %d shut, %d drawn, %d real, %d spilled, %d written off"
 			% [focus, "bricks" if fb.is_materialised() else "not bricks", fb.toppled,
 			st.shut, st.drawn, st.real, st.spilled, st.written_off])
+
+
+## One line about a misplaced piece: what it is, where, and what it touches.
+func _audit_describe(chunk: int, block: int, what: String) -> void:
+	var ticks: Array = world.get_block_ticks(chunk, block)
+	var parts := []
+	for nb in world.get_block_neighbours(chunk, block):
+		parts.append("%s%s" % [world.get_archetype_name(world.get_block_archetype(chunk, nb)),
+				" (furniture)" if world.is_block_decorative(chunk, nb) else ""])
+	print("[audit]     %s: %s at ticks %s size %s, touching %s" % [what,
+			world.get_archetype_name(world.get_block_archetype(chunk, block)),
+			str(ticks[0]) if not ticks.is_empty() else "?",
+			str(ticks[1]) if not ticks.is_empty() else "?", str(parts)])
 
 
 ## Is anything solid directly under this block, in its own chunk? "Under" is
