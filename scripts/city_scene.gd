@@ -691,12 +691,6 @@ func _ready() -> void:
 	authority.handle_request = func(e: DamageLog.Entry) -> void:
 		if e.kind == DamageLog.Kind.BLAST:
 			_damage_queue.append([e.point, e.radius])
-	# Everything the pieces do to themselves is a command too, and only the host
-	# lets them do it.
-	islands.decides = authority.may_decide()
-	islands.on_command = func(e: DamageLog.Entry) -> int:
-		var done := authority.commit_entry(e)
-		return done.seq if done != null else -1
 
 	_build_city()
 	# Loaded now rather than by the first building to come into view of a
@@ -1717,9 +1711,6 @@ func _topple(id: int) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.is_materialised():
 		return
-	# Recorded first: whatever happens to these bricks next happens to a piece,
-	# and the piece's id is this command's (DamageLog.piece_id).
-	var piece := islands.record_topple(id)
 	var chunk := b.chunk
 	var mi: MeshInstance3D = _brick_nodes.get(id)
 	# Captured before hand_over, which drops the building's claim on them.
@@ -1785,13 +1776,12 @@ func _topple(id: int) -> void:
 	# section 6.3 defers real joints), so what falls is the frames.
 	_free_frames(id, true)
 	registry.hand_over(id)
-	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands,
-			piece, id)
+	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands)
 	for i in range(1, extra_frames.size()):
 		if i - 1 >= extra_nodes.size():
 			break
 		var node: MeshInstance3D = extra_nodes[i - 1]
-		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
+		islands.adopt(extra_frames[i], node, null, 0, 4)
 
 
 ## Swap a building's collision between one box per brick and as few boxes as
@@ -2320,11 +2310,6 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 			_room_compromise_ms += dt
 			_room_open_worst = maxf(_room_open_worst, dt)
 		var killed: PackedInt32Array = world.apply_hit(chunk, point, radius)
-		# Committed as soon as it is applied, so the log's order is the order
-		# the world changed in.
-		if not killed.is_empty():
-			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
-					b.id, point, radius)
 		# Every other frame of a multi-frame build takes the same hit: a blast
 		# does not care which grid the brick it removed was authored in.
 		if b.frames.size() > 1:
@@ -2332,15 +2317,6 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 				var hit_frame: PackedInt32Array = world.apply_hit(b.frames[fi], point, radius)
 				if hit_frame.is_empty():
 					continue
-				# Each frame is its own grid, so each hit is its own command.
-				var fe := DamageLog.Entry.new()
-				fe.tick = Engine.get_physics_frames()
-				fe.kind = DamageLog.Kind.BLAST
-				fe.target = b.id
-				fe.frame = fi
-				fe.point = point
-				fe.radius = radius
-				authority.commit_entry(fe)
 				b.hit = true
 				_disable_frame(b.id, fi, hit_frame)
 				_mark_dirty(b.id)
@@ -2348,6 +2324,8 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		if killed.is_empty():
 			continue
 		b.hit = true
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
+				b.id, point, radius)
 		_mark_dirty(b.id)
 		# Both the collision update and the remesh are deferred to the end of
 		# the tick. _disable lifts the body out of its space and back, and
@@ -2396,9 +2374,6 @@ func _fire(radius: float) -> void:
 	# from the origin misses a toppled building you are standing next to.
 	var struck := islands.find_by_body(hit.collider)
 	if struck != null:
-		# A client asks; the host's blast finds the same piece by its volume.
-		if not authority.request(DamageLog.Kind.BLAST, -1, hit.position, radius):
-			return
 		islands.damage(struck, hit.position, radius)
 		islands.wake_near(hit.position, radius * 4.0)
 		return
@@ -2422,11 +2397,7 @@ func _physics_process(_delta: float) -> void:
 	var spawn_until := Time.get_ticks_usec() + int(SPAWN_BUDGET_MS * 1000.0)
 	var spawned := 0
 	var solved := 0
-	# Solving, toppling and detaching decide what a building does next, and on
-	# budgets whose timing differs machine to machine. The host decides; a client
-	# gets the SOLVE / TOPPLE / DETACH commands instead (AIPlan P0 step 4).
-	var decide_limit := SOLVES_PER_TICK if authority.may_decide() else 0
-	while solved < decide_limit and not _dirty.is_empty():
+	while solved < SOLVES_PER_TICK and not _dirty.is_empty():
 		var id: int = _dirty.pop_front()
 		solved += 1
 		var b := registry.get_building(id)
@@ -2436,10 +2407,6 @@ func _physics_process(_delta: float) -> void:
 		var res: Dictionary = world.solve_stress(b.chunk)
 		if int(res.get("failures", 0)) > 0:
 			quiet = false
-			# A solve that failed something changed the structure, and when it
-			# ran relative to the hits around it decides what it failed.
-			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE,
-					b.id, Vector3.ZERO, 0.0)
 		t = _mark("stress", t)
 
 		# Is what is left actually balanced on what holds it up? Stress cannot
@@ -2489,10 +2456,7 @@ func _physics_process(_delta: float) -> void:
 			# way the blocks have left this building.
 			_disable(b.id, before)
 			t = _mark("disable", t)
-			# The detach is a command: WHEN a group leaves is a budget, and timing
-			# changes what the next hit does (DamageLog, "Every operation").
-			var piece := islands.record_detach(b.id, null, b.chunk, before)
-			islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			islands.spawn(b.chunk, before)
 			t = _mark("spawn", t)
 		# NOW the furniture is redrawn, from what is left. _disable redrew it
 		# too, but before the spawn took the blocks out of this chunk -- so the
@@ -3375,11 +3339,10 @@ func _run_shot_pass() -> void:
 	print("[city] falling debris sheared %d brick(s) off what it landed on" % _impact_damage)
 	var kinds := {}
 	for e in authority.commands.entries:
-		var k: String = DamageLog.Kind.keys()[e.kind]
-		kinds[k] = int(kinds.get(k, 0)) + 1
-	print("[city] authority: %d command(s) committed -- %s" % [
-		authority.commands.size(), kinds])
-	_check_log_replays()
+		kinds[e.kind] = int(kinds.get(e.kind, 0)) + 1
+	print("[city] authority: %d command(s) committed -- %d blast, %d shear, %d sever" % [
+		authority.commands.size(), int(kinds.get(DamageLog.Kind.BLAST, 0)),
+		int(kinds.get(DamageLog.Kind.SHEAR, 0)), int(kinds.get(DamageLog.Kind.SEVER, 0))])
 
 	# --- measurement 2: is settled wreckage still breakable? -----------------
 	# A collapsed section is a frozen body whose origin is its centre of mass,
@@ -3415,116 +3378,6 @@ func _run_shot_pass() -> void:
 			_frame_sum / _frame_samples, _frame_worst, _frames_over_30, _frame_samples])
 	_report_profile()
 	get_tree().quit()
-
-
-## The host's own log, replayed into a fresh twin of every building it touched,
-## has to give the same structure -- the buildings AND the pieces that came off
-## them. AIPlan P0 step 4's gate, run where the commands are really made: by a
-## collapse with real physics, budgets and landings, not by a probe's script.
-##
-## Compared on STRUCTURAL blocks at their local cells. Furniture is each machine's
-## own (IslandManager.record_detach), and a piece that has slept has had its
-## block ids renumbered, so neither ids nor content hashes are the thing to
-## compare.
-func _check_log_replays() -> void:
-	var t0 := Time.get_ticks_msec()
-	var entries := authority.commands.entries
-	var touched := {}
-	for e in entries:
-		if not e.is_piece():
-			touched[e.target] = true
-
-	# The twins: same recipes, same places, same staircases, fresh bricks.
-	var twin := BuildingRegistry.new(world, palette)
-	var twin_of := {}
-	var skipped := 0
-	for id in touched:
-		var b := registry.get_building(int(id))
-		if b == null or b.is_build():
-			skipped += 1
-			continue
-		var tid := twin.register(b.recipe.footprint_x, b.recipe.footprint_z,
-				b.recipe.courses, b.xform)
-		for f in b.fixtures:
-			twin.add_fixture(tid, f.kind, f.params, f.cell, f.role)
-		twin_of[int(id)] = tid
-	var toppled := {}
-	var rep := StructureReplayer.new(world, func(id: int, frame: int) -> int:
-		if frame != 0 or not twin_of.has(id) or toppled.has(id):
-			return -1
-		return twin.materialise(int(twin_of[id])))
-	rep.on_toppled = func(id: int) -> void:
-		toppled[id] = true
-		twin.hand_over(int(twin_of[id]))
-	rep.apply_all(entries)
-
-	var b_ok := 0
-	var b_n := 0
-	for id in twin_of:
-		var b := registry.get_building(int(id))
-		if b.toppled or not b.is_materialised():
-			continue
-		b_n += 1
-		var tb := twin.get_building(int(twin_of[id]))
-		if _structure_of(b.chunk) == _structure_of(tb.chunk):
-			b_ok += 1
-	var p_ok := 0
-	var p_n := 0
-	var p_missing := 0
-	for isl in islands.islands:
-		if not isl.is_valid() or isl.piece_id < 0 or not twin_of.has(isl.owner):
-			continue
-		p_n += 1
-		var rc := rep.piece_chunk(isl.piece_id)
-		if rc < 0:
-			p_missing += 1
-		elif _structure_of(isl.chunk) == _structure_of(rc):
-			p_ok += 1
-
-	print("[city] log replay: %d command(s) into %d twin building(s) (%d skipped), %d missed, %.0f ms" % [
-		entries.size(), twin_of.size(), skipped, rep.missed, Time.get_ticks_msec() - t0])
-	print("[city]   buildings: %d of %d identical; pieces: %d of %d identical, %d missing" % [
-		b_ok, b_n, p_ok, p_n, p_missing])
-	for m in rep.miss_log:
-		print("[city]   missed: %s target %d seq %d -- %s" % m)
-	print("[city] %s" % ("ok    the log replays into the same structure"
-			if b_ok == b_n and p_ok == p_n and rep.missed == 0
-			else "FAIL  the log does not replay into the same structure"))
-
-	# Give the twins' bricks back: nothing after this should find them.
-	for id in rep.pieces:
-		var c := rep.piece_chunk(int(id))
-		if c >= 0:
-			world.release_chunk(c)
-	for id in twin_of:
-		twin.dematerialise(int(twin_of[id]))
-
-
-## A chunk's structure as something comparable: every living, structural block
-## as its local cell and archetype, sorted.
-func _structure_of(chunk: int) -> PackedStringArray:
-	var out := PackedStringArray()
-	if chunk < 0 or not world.is_chunk_alive(chunk):
-		return out
-	var origin := world.get_chunk_origin(chunk)
-	var t := BrickWorld.ticks_per_stud()
-	var pt := BrickWorld.ticks_per_plate()
-	for id in world.get_block_count(chunk):
-		if world.is_block_decorative(chunk, id):
-			continue
-		var ticks: Array = world.get_block_ticks(chunk, id)
-		if ticks.is_empty():
-			continue
-		var at: Vector3i = ticks[0]
-		@warning_ignore("integer_division")
-		var cell := origin + Vector3i(at.x / t, at.y / pt, at.z / t)
-		# Dead and detached blocks are not solid: they were destroyed, or they left
-		# with a piece. Only what is standing here counts.
-		if world.block_at(chunk, cell) != id or not world.is_solid(chunk, cell):
-			continue
-		out.append("%s:%d" % [at, world.get_block_archetype(chunk, id)])
-	out.sort()
-	return out
 
 
 ## Where the time actually went. `script_total` is everything this script did in
