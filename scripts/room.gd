@@ -54,6 +54,17 @@ var drawn := false
 ## item in the chunk's own metres. Both empty while the room is not drawn.
 var drawn_buffer := PackedFloat32Array()
 var drawn_boxes: Array[AABB] = []
+## Against an exterior wall, so it has windows and can be seen into from
+## outside. Only these are ever FAKED: a room in the middle of a floor is behind
+## walls from every direction and drawing it costs something for nobody.
+var outer := false
+## The FAKE rung: the same drawing as `drawn_buffer`, shown far off with no
+## collision and no lighting. Kept rather than rebuilt, because the fake set of a
+## building changes every time the player walks a room into or out of reach, and
+## redrawing from a cache is a concatenation. `fake_gone` is `gone.size()` when
+## it was worked out -- the diff only grows, so a changed count means stale.
+var fake_buffer := PackedFloat32Array()
+var fake_gone := -1
 ## Real because a blast reached it, not because somebody walked in. Such a room
 ## holds half-broken furniture, and a drawing can only show an item whole or
 ## not at all -- so it stays real until the old sleep range rather than

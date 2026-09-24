@@ -95,19 +95,24 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 		posts.append(entry)
 	var rects: Array[Rect2i] = []
 	var mine: Array = []
+	var outer: Array = []
 	var m := WALL_MARGIN
+	var t := TowerRecipe.WALL_THICK
 	for entry in (pl.rooms as Array):
 		var r: Rect2i = entry
 		var inset := Rect2i(r.position + Vector2i(m, m), r.size - Vector2i(m, m) * 2)
 		if inset.size.x < 4 or inset.size.y < 4:
 			continue
 		rects.append(inset)
+		# Against an exterior wall: the same test openings_for makes per side.
+		outer.append(inset.position.x - m <= t or inset.position.y - m <= t
+				or inset.end.x + m >= footprint_x - t or inset.end.y + m >= footprint_z - t)
 		var here: Array[Rect2i] = []
 		for q in posts:
 			if (q as Rect2i).intersects(inset):
 				here.append(q)
 		mine.append(here)
-	return {"rects": rects, "posts": mine, "storeys": storeys_of(courses)}
+	return {"rects": rects, "posts": mine, "outer": outer, "storeys": storeys_of(courses)}
 
 
 ## Which rooms lie within `radius` metres of a point in the building's own
@@ -190,6 +195,7 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 			r.lo = Vector3i(box.position.x, int(storey.floor_y), box.position.y)
 			r.size = Vector3i(box.size.x, int(storey.height), box.size.y)
 			r.posts = (lat.posts as Array)[ri]
+			r.outer = bool((lat.outer as Array)[ri])
 			r.room_seed = hash3(building_seed, r.id, 0x9E37)
 			r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
 			out.append(r)

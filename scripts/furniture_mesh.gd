@@ -144,13 +144,48 @@ const STRIDE := 16
 ## anything. `key` is the caller's key into `held` -- a building id, since a
 ## drawn room belongs to a standing building and never to an island.
 static func attach_drawn(rooms: Array, parent: Node3D, held: Dictionary, key: int) -> int:
+	var buffers: Array[PackedFloat32Array] = []
+	for room in rooms:
+		buffers.append((room as Room).drawn_buffer)
+	return _attach_buffers(buffers, parent, held, key, material())
+
+
+## The same for FAKED rooms: seen through a window from further off, drawn
+## unlit, with no collision anywhere. See shaders/fake_interior.gdshader.
+static func attach_fake(rooms: Array, parent: Node3D, held: Dictionary, key: int) -> int:
+	var buffers: Array[PackedFloat32Array] = []
+	for room in rooms:
+		buffers.append((room as Room).fake_buffer)
+	var n := _attach_buffers(buffers, parent, held, key, fake_material())
+	# No shadows: the fake rung is only ever seen through a window, and a
+	# shadow pass over furniture nobody can reach is the cost it exists to cut.
+	var node: MultiMeshInstance3D = held.get(key)
+	if node != null:
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return n
+
+
+static var _fake_material: ShaderMaterial
+
+
+static func fake_material() -> ShaderMaterial:
+	if _fake_material == null:
+		_fake_material = ShaderMaterial.new()
+		_fake_material.shader = load("res://shaders/fake_interior.gdshader")
+	return _fake_material
+
+
+## One MultiMesh from a list of buffers of STRIDE floats an instance, made,
+## refreshed or freed as they require.
+static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
+		held: Dictionary, key: int, mat: Material) -> int:
 	var node: MultiMeshInstance3D = held.get(key)
 	if node != null and not is_instance_valid(node):
 		held.erase(key)
 		node = null
 	var buffer := PackedFloat32Array()
-	for room in rooms:
-		buffer.append_array((room as Room).drawn_buffer)
+	for b in buffers:
+		buffer.append_array(b)
 	@warning_ignore("integer_division")
 	var count: int = buffer.size() / STRIDE
 	if count == 0:
@@ -171,7 +206,7 @@ static func attach_drawn(rooms: Array, parent: Node3D, held: Dictionary, key: in
 		node = MultiMeshInstance3D.new()
 		node.transform = Transform3D.IDENTITY
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		node.material_override = material()
+		node.material_override = mat
 		parent.add_child(node)
 		held[key] = node
 	elif node.get_parent() != parent:

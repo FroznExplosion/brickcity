@@ -351,6 +351,9 @@ thousand instances and a few hundred boxes.
    proposal, it is the largest single win available, and nothing in the current design fights it —
    the manifest already knows item type, cell and yaw, and the MultiMesh already draws boxes.
    **Done, 2026-09-23** — [Status: Drawn, not built](Status.md#drawn-not-built-the-third-state-of-a-room).
+   And a rung under it, **faked** — drawn unlit with no collision, for rooms seen through a window
+   from further than anybody can reach — which replaced the portal test ([Status: Fake
+   interiors](Status.md#fake-interiors-seen-through-a-window-never-touched)).
 2. **A neighbour graph.** Replace "rooms within R metres" with "the room you are in, and the rooms
    it connects to". Storey-span was 90% of the win for 10% of the work; the graph is the rest of it,
    and it also replaces the raycast portal test with a walk.

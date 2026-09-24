@@ -72,16 +72,20 @@ un-merges the *building's* collision if it was merged (furniture blocks are in
 `add_chunk_shapes` too). Not seen in the measurements; watch for it if walking
 through a quiet building hitches.
 
-### 2.2 Delete, don't simulate, during a collapse — **half done**
+### 2.2 Delete, don't simulate, during a collapse — **mostly done**
 
 For furniture it is done (Status: "Floating furniture: four causes"):
 untouched rooms are written off when their building comes down, and a piece
 that is only furniture is deleted where it comes loose unless it is within 6 m
 of the player. `--interior-audit` counts what is left at every stage.
 
-Still open for structure: pieces of a building that do not matter should be
-deleted and respawned later if they start to matter, not simulated through
-the collapse. The debris cap is the machinery for the first half.
+For small structure too: a piece of three bricks or fewer breaks off only
+within 30 m of the player and in view, and is deleted before it gets a body
+anywhere else (`IslandManager.TINY_BLOCKS` / `TINY_RANGE`).
+
+Still open: bigger pieces that do not matter should be deleted and respawned
+later if they start to matter, not simulated through the collapse. The debris
+cap is the machinery for the first half.
 
 ### 2.3 A room neighbour graph, replacing the radius
 
@@ -95,11 +99,21 @@ Now that walls and doorways are real geometry, the graph can be built from
 `_door_span` says where the holes in them are — instead of from a flood fill.
 That is cheaper than the design assumed and worth doing that way.
 
-### 2.4 Occlusion, so windows earn their keep
+### 2.4 Fake interiors for FAR buildings — **start here**
 
-Windows exist and rooms know their openings (`RoomManifest.openings_for`, now
-correctly reporting only walls a room actually touches). The portal test that
-was the point of having windows is still not wired to visibility.
+The fake rung is in for buildings that are bricks: every room against an
+outside wall, within 70 m, drawn unlit from its manifest with no collision
+(Status: "Fake interiors"). It replaced the per-window ray test outright.
+
+What is missing is buildings that are still SHELLS, and it is not a matter of
+parenting the fake to the shell: **shells have no windows**
+(`BuildingShell` draws solid bands), so boxes behind them would never be seen,
+and cutting real holes would mean building floors inside every shell as well.
+The plan is a window-glass shader on the shell's window courses that paints a
+room behind the glass (interior mapping -- the Spider-Man / Matrix Awakens
+technique): the room kind from a hash of building and window, no geometry, no
+per-room data. `TowerRecipe.window_gaps` / `is_window_course` say where the
+windows are, and the shell's UVs are already in metres.
 
 ### 2.5 Sections, not buildings, as the unit of materialisation
 

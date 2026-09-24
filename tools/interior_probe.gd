@@ -348,6 +348,21 @@ func _check_nothing_stands_on_air() -> void:
 					overlaps += 1
 			boxes.append(r)
 	_ok("and no two items in a room share floor", overlaps == 0, "%d overlaps" % overlaps)
+	# Which rooms can be seen into from outside: the ones against an exterior
+	# wall, and only those are ever faked.
+	var t := TowerRecipe.WALL_THICK
+	var m := RoomManifest.WALL_MARGIN
+	var wrong := 0
+	var outer_n := 0
+	for room in reg.rooms_of(id):
+		var against: bool = room.lo.x - m <= t or room.lo.z - m <= t 				or room.lo.x + room.size.x + m >= 40 - t or room.lo.z + room.size.z + m >= 30 - t
+		if against != room.outer:
+			wrong += 1
+		if room.outer:
+			outer_n += 1
+	_ok("a room is outer exactly when it is against an exterior wall",
+			wrong == 0 and outer_n > 0, "%d wrong, %d outer of %d" % [wrong, outer_n,
+			reg.rooms_of(id).size()])
 	# And an item is laid whole or not at all: block one part of a crate and
 	# the rest of it is taken back out.
 	var probe_cell := Vector3i(sx + 3, 60, sz + 3)

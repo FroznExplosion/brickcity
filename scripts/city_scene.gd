@@ -484,40 +484,37 @@ const ROOM_DRAWS_PER_PASS := 96
 const ROOMS_PER_PASS := 16
 const ROOM_BUDGET_MS := 3.0
 ## How many storeys either side of the player's own a room may be and still be
-## walked into, or seen into. One flight up or down for walking; a few floors
-## for looking in through a window from outside.
+## walked into: one flight up or down.
 const ROOM_STOREY_SPAN := 1
-const ROOM_VIEW_STOREY_SPAN := 3
-## How far "can see into" reaches. Interiors section 7 question 2 asks exactly
-## this -- a sniper looking through a window 300 m away technically activates a
-## room -- and a distance cap is the answer it expects.
-const ROOM_VIEW_RANGE := 70.0
-## How far off the view axis an opening can be and still count. A room seen out
-## of the corner of the eye is a room about to be looked at.
-const ROOM_VIEW_COS := 0.35
-## How many rooms may have their walls re-read in one pass. See _can_see_into.
-const ROOM_SCANS_PER_PASS := 2
-## How many rooms a pass may even ASK the portal question of.
+## How far a room can be seen into, and so how far its building's rooms are
+## FAKED: drawn unlit from the manifest with no collision at all (Scale §4.1).
+## Interiors section 7 question 2 asks exactly this -- a sniper looking through
+## a window 300 m away technically sees a room -- and a distance cap is the
+## answer it expects.
 ##
-## The question is cheap per room and there are four thousand rooms in a
-## building of the big shapes, which is not cheap at all -- and standing inside
-## one, every one of them is within ROOM_VIEW_RANGE. A pass looks at a slice and
-## the cursor moves on, so every room is asked within a second or so and no
-## single pass pays for the building.
-const ROOM_VIEW_TESTS_PER_PASS := 24
-## And how many RAYS all of those tests may cast between them. An opening
-## that passes the distance and the view-cone tests still has to be looked
-## through, and a room has four of them: twenty-four rooms is nearly a
-## hundred raycasts, which is the rest of what a pass used to cost.
-const ROOM_RAYS_PER_PASS := 16
-var _view_cursor := 0
-var _room_rays := 0
+## It used to be a portal test: a distance, a view cone and a ray through each
+## opening, twenty-four rooms and sixteen rays a pass, and a room seen into was
+## DRAWN, collision and all. Faking every outer room in range is cheaper than
+## asking which ones are being looked at, and it has no answer to get wrong.
+const ROOM_VIEW_RANGE := 70.0
+## And the range a building's fake is dropped at. The gap keeps a building on
+## the boundary from building and dropping it every pass.
+const ROOM_VIEW_RELEASE := 85.0
+## How many buildings a pass may (re)build the fake of. A fresh one runs the
+## manifest of every outer room in the building -- a few milliseconds for the
+## big shapes -- and walking into a district would otherwise pay for all of it
+## in one tick.
+const FAKE_BUILDS_PER_PASS := 1
+## And how many rooms' drawings it may work out doing so. A cold building of the
+## big shapes is 150 manifests and 15 ms; at this many a pass it fills in over
+## three or four passes instead, the rooms nearest the ground first -- a
+## quarter of a second at the edge of view, which is where it happens.
+const FAKE_ROOMS_PER_PASS := 48
 ## How many rooms a pass may ACTIVATE while trying to place ROOMS_PER_PASS of
 ## them. A room generated with nothing in it lays no bricks and costs no
 ## collision, so it should not spend the pass -- but it still must not be able
 ## to spend the whole district either.
 const ROOM_TRIES_PER_PASS := 6
-var _room_scans := 0
 ## Building id -> the chunk its bricks became when it came down. A room that
 ## was never opened is spilled into THAT, not into a building that no longer
 ## exists (Interiors section 4.1).
@@ -688,6 +685,9 @@ func _ready() -> void:
 	islands.on_impact = _on_island_impact
 
 	_build_city()
+	# Loaded now rather than by the first building to come into view of a
+	# window: the first fake paid for the shader on top of its own rooms.
+	FurnitureMesh.fake_material()
 	if _build_path != "":
 		_place_build(_build_path)
 	# P picks up a saved workshop build and places it like a brick
@@ -838,6 +838,7 @@ func _open_room(id: int, index: int, batch: bool = false) -> int:
 	# whole 225 ms this design exists to remove. What changed is the furniture,
 	# and that is its own MultiMesh over its own blocks.
 	_furnished[id] = true
+	_fake_dirty[id] = true
 	if not batch:
 		_refresh_furniture(id)
 	_room_opens += 1
@@ -868,6 +869,7 @@ func _close_room(id: int, index: int) -> void:
 	_spare_shapes[id] = spare
 	registry.deactivate_room(id, index)
 	_refresh_furniture(id)
+	_fake_dirty[id] = true
 
 
 ## Real -> drawn: the bricks come out and the drawing goes back in, keeping
@@ -945,6 +947,8 @@ func _sync_drawn(id: int) -> void:
 				_drawn_furniture, id)
 	_drawn_ms += float(Time.get_ticks_usec() - ft) / 1000.0
 	_drawn_syncs += 1
+	# A room that went to drawn leaves the fake; one that came back joins it.
+	_fake_dirty[id] = true
 
 
 ## A piece of this building just came away. Any drawn room with an item that
@@ -981,12 +985,109 @@ func _recheck_drawn(id: int) -> void:
 				break
 	if changed:
 		_sync_drawn(id)
+	# And the fake: every outer room's floor has to be asked again, so every
+	# cached drawing of this building is stale.
+	for room in registry.rooms_of(id):
+		room.fake_gone = -1
+	_fake_dirty[id] = true
 
 
 ## Everything drawn for a building goes, with the bricks it was drawn in.
 func _drop_drawn(id: int) -> void:
 	FurnitureMesh.drop(id, _drawn_furniture)
 	_drawn_shapes.erase(id)
+	_drop_fake(id)
+
+
+# ---------------------------------------------------------------------------
+# The fake rung (Docs/Scale.md section 4.1)
+# ---------------------------------------------------------------------------
+
+## Building id -> the MultiMeshInstance3D drawing its FAKED rooms, and building
+## id -> which room indices that drawing holds. See _sync_fake.
+var _fake_furniture := {}
+var _fake_rooms := {}
+## Buildings whose room sets have changed since their fake was built.
+var _fake_dirty := {}
+var _fake_ms := 0.0
+var _fake_builds := 0
+
+
+## Fake, or stop faking, the buildings around the player.
+##
+## Every outer room of a standing building that is bricks and within
+## ROOM_VIEW_RANGE, and that is not drawn or real already, is drawn from its
+## manifest with no collision and no lighting. Only buildings whose rooms have
+## changed are rebuilt, a building's at a time.
+func _stream_fake(here: Vector3) -> void:
+	var built := 0
+	var near := {}
+	for id in _near_buildings(here, ROOM_VIEW_RELEASE):
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
+			continue
+		if not _brick_nodes.has(id):
+			continue  # demeshed: nothing to hang it from until it is redrawn
+		var d := _box_distance(registry.local_box(id), b.xform.affine_inverse() * here)
+		if d > ROOM_VIEW_RELEASE:
+			continue
+		near[id] = true
+		var have := _fake_rooms.has(id)
+		if have and not _fake_dirty.has(id):
+			continue
+		if not have and d > ROOM_VIEW_RANGE:
+			continue
+		if built >= FAKE_BUILDS_PER_PASS:
+			continue
+		_sync_fake(id)
+		built += 1
+	for id in _fake_rooms.keys():
+		if not near.has(id):
+			_drop_fake(id)
+
+
+## Rebuild one building's fake from the rooms that want it.
+func _sync_fake(id: int) -> void:
+	var t0 := Time.get_ticks_usec()
+	_fake_dirty.erase(id)
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
+		_drop_fake(id)
+		return
+	var want: Array[Room] = []
+	var indices := PackedInt32Array()
+	var offset := Vector3i.ZERO
+	var worked := 0
+	var more := false
+	for room in registry.rooms_of(id):
+		if not room.outer or room.drawn or room.active or room.spilled:
+			continue
+		if room.fake_gone != room.gone.size() or room.fake_gone < 0:
+			if worked >= FAKE_ROOMS_PER_PASS:
+				more = true
+				continue
+			worked += 1
+			if room.items.is_empty():
+				room.items = RoomManifest.items_for(room)
+			room.fake_buffer = RoomManifest.draw_items(world, b.chunk, registry.palette,
+					room, offset).buffer
+			room.fake_gone = room.gone.size()
+		if room.fake_buffer.is_empty():
+			continue
+		want.append(room)
+		indices.push_back(room.id)
+	_fake_rooms[id] = indices
+	FurnitureMesh.attach_fake(want, _brick_nodes[id], _fake_furniture, id)
+	if more:
+		_fake_dirty[id] = true  # the rest next pass
+	_fake_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	_fake_builds += 1
+
+
+func _drop_fake(id: int) -> void:
+	FurnitureMesh.drop(id, _fake_furniture)
+	_fake_rooms.erase(id)
+	_fake_dirty.erase(id)
 
 
 ## Collision for what a room just laid, appended to the building's body.
@@ -1117,47 +1218,6 @@ static func _box_distance(box: AABB, point: Vector3) -> float:
 	return out.length()
 
 
-## Can the player see into this room through a hole in it?
-##
-## Interiors section 3's portal test. The openings are holes somebody blew,
-## which means an undamaged building has none and this costs nothing until one
-## does; and a room is an axis-aligned box, so the whole test is a distance, a
-## dot product and one ray per opening.
-func _can_see_into(b: BuildingRegistry.Building, room: Room) -> bool:
-	# Looking for holes is a walk over four wall planes -- about two hundred
-	# solidity queries a room -- so one room's walls are re-read per pass and
-	# the rest use what was found last time. Budgeted like everything else in
-	# this tick.
-	if _room_rays >= ROOM_RAYS_PER_PASS:
-		return false
-	var openings := registry.openings_of(b.id, room.id, _room_scans < ROOM_SCANS_PER_PASS)
-	if room.openings_at >= 0:
-		_room_scans += 1
-	if openings.is_empty():
-		return false
-	var eye := camera.global_position
-	var look := -camera.global_transform.basis.z
-	for opening in openings:
-		var at: Vector3 = b.xform * (opening.position + opening.size * 0.5)
-		var away := at - eye
-		var dist := away.length()
-		if dist > ROOM_VIEW_RANGE or dist < 0.01:
-			continue
-		if look.dot(away / dist) < ROOM_VIEW_COS:
-			continue
-		# And nothing in the way. The opening's centre is inside the hole, so a
-		# ray that reaches it went through the hole.
-		if _room_rays >= ROOM_RAYS_PER_PASS:
-			return false
-		_room_rays += 1
-		var q := PhysicsRayQueryParameters3D.create(eye, at)
-		q.collision_mask = Layers.HITSCAN_MASK
-		var hit := get_world_3d().direct_space_state.intersect_ray(q)
-		if hit.is_empty() or eye.distance_to(hit.position) > dist - 0.7:
-			return true
-	return false
-
-
 ## Which rooms are holding their contents, by how close the player is.
 ##
 ## Interiors section 3: test ROOMS, not items. They are few and they are
@@ -1165,8 +1225,6 @@ func _can_see_into(b: BuildingRegistry.Building, room: Room) -> bool:
 ## at all.
 func _stream_rooms() -> void:
 	var here := camera.global_position
-	_room_scans = 0
-	_room_rays = 0
 	var opened := 0
 	# The VIEW range, not the walking range: a hole in a wall is a way to see
 	# into a room from further than anybody could walk to it, and scoping this
@@ -1259,35 +1317,6 @@ func _stream_rooms() -> void:
 			PhysicsServer3D.body_set_space(_room_bodies[bid], get_world_3d().space)
 		_refresh_furniture(bid)
 
-	# Nothing close enough to walk into: a hole in a wall is a way to SEE into a
-	# room from further than anybody could walk to it. Seeing a room needs it
-	# DRAWN, not built, so this draws it -- which is also what makes it cheap
-	# enough to ask of every window in view.
-	var tested := 0
-	for b in here_buildings:
-		if tested >= ROOM_VIEW_TESTS_PER_PASS:
-			break
-		# Out to the VIEW range -- but a SLICE of them, from a cursor that
-		# moves on. Standing inside one of the big shapes, every room in the
-		# building is within that range.
-		var candidates := registry.rooms_in_range(b.id, here, ROOM_VIEW_RANGE,
-				ROOM_VIEW_STOREY_SPAN)
-		if candidates.is_empty():
-			continue
-		for k in candidates.size():
-			if tested >= ROOM_VIEW_TESTS_PER_PASS:
-				break
-			tested += 1
-			var index: int = candidates[(_view_cursor + k) % candidates.size()]
-			var room := registry.get_room(b.id, index)
-			if room == null or room.active or room.drawn or room.spilled:
-				continue
-			if not _can_see_into(b, room):
-				continue
-			registry.draw_room(b.id, index)
-			redraw[b.id] = true
-	_view_cursor += ROOM_VIEW_TESTS_PER_PASS
-
 	# And the wreckage: a building that came down still has rooms, and what was
 	# in them is owed to whoever walks up to the pile.
 	for id in _wrecks.keys():
@@ -1336,7 +1365,7 @@ func _stream_rooms() -> void:
 				continue
 			var d := room.local_distance(local)
 			if room.hit:
-				if d <= ROOM_SLEEP_RANGE or _can_see_into(b, room):
+				if d <= ROOM_SLEEP_RANGE:
 					continue
 				_close_room(id, index)
 				continue
@@ -1344,22 +1373,19 @@ func _stream_rooms() -> void:
 				continue
 			_demote_room(id, index)
 			redraw[id] = true
-		# Drawn -> shut past the sleep range, unless it is being looked into:
-		# Interiors section 3's hysteresis, with visibility rather than a timer.
+		# Drawn -> shut past the sleep range. Its outer rooms go on being seen
+		# through the windows -- as the fake, below.
 		for index in b.drawn_rooms.duplicate():
 			var room := registry.get_room(id, index)
 			if room == null or not room.drawn:
 				continue
 			if room.local_distance(local) <= ROOM_SLEEP_RANGE:
 				continue
-			# Out of rays is not the same as out of sight. A room this pass
-			# could not afford to look for is kept, not dropped and redrawn.
-			if _room_rays >= ROOM_RAYS_PER_PASS or _can_see_into(b, room):
-				continue
 			registry.undraw_room(id, index)
 			redraw[id] = true
 	for id in redraw:
 		_sync_drawn(id)
+	_stream_fake(here)
 
 
 ## The far tier: a shell mesh and five boxes. No bricks anywhere.
@@ -1634,6 +1660,8 @@ func _finish_promotions() -> void:
 		if b.drawn_rooms.size() > 0 and _brick_nodes.has(id):
 			FurnitureMesh.attach_drawn(registry.drawn_rooms_of(id), _brick_nodes[id],
 					_drawn_furniture, id)
+		# And the fake, which went with the mesh node; the next pass rebuilds it.
+		_fake_dirty[id] = true
 		# The shell stays up until every band is built -- see _advance_bands.
 		# Dropping it here would leave a half-drawn building standing in the
 		# open for the few ticks the rest of the bands take.
@@ -2223,8 +2251,11 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		var t_room := Time.get_ticks_usec()
 		var woke: int = registry.compromise_rooms(b.id, point, radius, watched_room)
 		# A drawn room the blast reached was promoted -- or, unwatched, written
-		# off -- and either way it is not drawn any more.
+		# off -- and either way it is not drawn any more. A faked one likewise:
+		# what the blast did to it is in its diff now.
 		_sync_drawn(b.id)
+		if woke > 0:
+			_fake_dirty[b.id] = true
 		if woke > 0 and watched_room:
 			var fb := _room_body(b.id)
 			if fb.is_valid():
@@ -2681,6 +2712,7 @@ func _demesh(id: int) -> void:
 		FurnitureMesh.drop(b.chunk, _furniture)
 		# The drawing only: the collision stays, as the building's does.
 		FurnitureMesh.drop(id, _drawn_furniture)
+		_drop_fake(id)
 		mi.queue_free()
 		_brick_nodes.erase(id)
 	_brick_meshes.erase(id)
@@ -4200,6 +4232,49 @@ func _run_interiors_pass() -> void:
 	_sync_drawn(biggest)
 	await _frames(5)
 
+	# --- F: the same building FAKED ------------------------------------------
+	# Every room against an outside wall drawn unlit from its manifest, with no
+	# collision and nothing laid: what a window shows from further than anybody
+	# can reach. Cold first -- every manifest and buffer worked out -- then warm,
+	# which is what a rebuild after a room changes costs.
+	chunk = await _fresh_bricks(biggest)
+	var f_blocks := world.get_alive_block_count(chunk)
+	var f_cold := 0.0
+	var f_worst := 0.0
+	var f_calls := 0
+	_fake_dirty[biggest] = true
+	while _fake_dirty.has(biggest) and f_calls < 50:
+		var t_c := Time.get_ticks_usec()
+		_sync_fake(biggest)
+		var dt_c := float(Time.get_ticks_usec() - t_c) / 1000.0
+		f_cold += dt_c
+		f_worst = maxf(f_worst, dt_c)
+		f_calls += 1
+	print("[interiors]   cold, %d pass(es) of up to %d rooms: worst pass %.1f ms"
+			% [f_calls, FAKE_ROOMS_PER_PASS, f_worst])
+	var t_f := Time.get_ticks_usec()
+	_sync_fake(biggest)
+	var f_warm := float(Time.get_ticks_usec() - t_f) / 1000.0
+	var faked: PackedInt32Array = _fake_rooms.get(biggest, PackedInt32Array())
+	var f_instances := 0
+	if _fake_furniture.has(biggest):
+		f_instances = (_fake_furniture[biggest] as MultiMeshInstance3D).multimesh.instance_count
+	var f_shapes: int = (_drawn_shapes.get(biggest, {}) as Dictionary).size() \
+			+ (_room_shapes.get(biggest, {}) as Dictionary).size()
+	print("\n[interiors] F: the same building, every outer room FAKED (no collision, unlit)")
+	print("[interiors]   %d of %d room(s) faked, %d instance(s), %.1f ms cold, %.2f ms warm"
+			% [faked.size(), registry.rooms_of(biggest).size(), f_instances, f_cold, f_warm])
+	print("[interiors]   %d brick(s) laid, %d room(s) holding collision"
+			% [world.get_alive_block_count(chunk) - f_blocks, f_shapes])
+	# Look at it: a few storeys up, from the street, twenty-five metres out.
+	var face: Vector3 = host.xform * (box.position + Vector3(box.size.x * 0.5, 12.0, 0.0))
+	camera.global_position = face + Vector3(0.0, -8.0, -25.0)
+	camera.look_at(face, Vector3.UP)
+	await _frames(10)
+	await _save("interiors_fake")
+	_drop_fake(biggest)
+	await _frames(5)
+
 	# --- D: what a streaming pass costs, which is what the player feels ----
 	# Arms A to C measure what OPENING a room costs. This measures what the
 	# pass costs when it is deciding -- the part that runs every tick whether
@@ -4382,7 +4457,8 @@ func _run_interior_audit_pass() -> void:
 func _audit_interiors(stage: String, focus: int) -> void:
 	var n := {"real": 0, "ghost": 0, "loose": 0, "hanging": 0, "drawn": 0,
 			"drawn_air": 0, "isl_pieces": 0, "isl_furniture_only": 0,
-			"isl_lone": 0, "isl_ghost": 0, "isl_hanging": 0, "isl_adrift": 0, "orphan": 0}
+			"isl_lone": 0, "isl_ghost": 0, "isl_hanging": 0, "isl_adrift": 0, "orphan": 0,
+			"fake": 0, "fake_stale": 0}
 	var owned := {}
 	for id in _materialised:
 		var b := registry.get_building(id)
@@ -4409,10 +4485,23 @@ func _audit_interiors(stage: String, focus: int) -> void:
 				n.drawn += 1
 				if not _audit_box_supported(chunk, item_box):
 					n.drawn_air += 1
+		# Faked rooms drawn from a cache that is out of date: what a collapse
+		# took may still be in the picture until the next rebuild.
+		if _fake_furniture.has(id):
+			n.fake += (_fake_furniture[id] as MultiMeshInstance3D).multimesh.instance_count
+		for index in (_fake_rooms.get(id, PackedInt32Array()) as PackedInt32Array):
+			var fr := registry.get_room(id, index)
+			if fr.fake_gone != fr.gone.size():
+				n.fake_stale += 1
 	for chunk in _furniture:
 		var node: MultiMeshInstance3D = _furniture[chunk]
 		if not owned.has(chunk) and node != null and is_instance_valid(node):
 			n.orphan += node.multimesh.visible_instance_count
+	for id in _fake_furniture:
+		var bf := registry.get_building(id)
+		var fnode: MultiMeshInstance3D = _fake_furniture[id]
+		if (bf == null or not bf.is_materialised() or bf.toppled) and is_instance_valid(fnode):
+			n.orphan += fnode.multimesh.instance_count
 	for id in _drawn_furniture:
 		var bd := registry.get_building(id)
 		var node: MultiMeshInstance3D = _drawn_furniture[id]
@@ -4465,8 +4554,8 @@ func _audit_interiors(stage: String, focus: int) -> void:
 		if room.items.size() > 0 and room.gone.size() >= room.items.size():
 			st.written_off += 1
 	print("\n[audit] %s" % stage)
-	print("[audit]   standing: %d real piece(s), %d ghost, %d loose, %d hanging; %d drawn item(s), %d over air"
-			% [n.real, n.ghost, n.loose, n.hanging, n.drawn, n.drawn_air])
+	print("[audit]   standing: %d real piece(s), %d ghost, %d loose, %d hanging; %d drawn item(s), %d over air; %d faked part(s), %d stale faked room(s)"
+			% [n.real, n.ghost, n.loose, n.hanging, n.drawn, n.drawn_air, n.fake, n.fake_stale])
 	print("[audit]   islands: %d piece(s) riding, %d with nothing under them, %d ADRIFT (joined to no structure), %d furniture-only island(s), %d lone brick(s), %d ghost; %d orphaned instance(s)"
 			% [n.isl_pieces, n.isl_hanging, n.isl_adrift, n.isl_furniture_only, n.isl_lone, n.isl_ghost, n.orphan])
 	print("[audit]   spilled so far: %d room(s), of which into a piece still moving: %d; furniture-only pieces deleted where they came loose: %d block(s)"
@@ -4719,55 +4808,62 @@ func _run_rooms_pass() -> void:
 			world.get_alive_block_count(chunk) <= bare,
 			"%d against %d" % [world.get_alive_block_count(chunk), bare])
 
-	# The portal test: an opening in a wall is a way to see in, from further
-	# than anybody could walk. Two kinds of opening now -- the windows the
-	# recipe cuts into every storey and the holes a blast makes -- and the
-	# test does not know the difference, which is the point of it.
+	# Seeing in: an opening in a wall is a way to see a room from further than
+	# anybody could walk. What is seen is the FAKE -- the manifest drawn unlit,
+	# with no collision and nothing laid -- for every room against an outside
+	# wall, whether or not anybody is looking at its window.
 	print("\n[rooms] an opening in the wall is a way in")
 	var host := registry.get_building(1)
 	_promote(1)
 	await _frames(20)
 	var target: Room = null
 	for room in registry.rooms_of(1):
-		if RoomManifest.items_for(room).size() > 0:
+		if room.outer and RoomManifest.items_for(room).size() > 0:
 			target = room
 			break
-	_gate_ok("there is a room to look into", target != null)
+	_gate_ok("there is a room against an outside wall to look into", target != null)
 	var rbox := target.world_box(host.xform)
 	var wall: Vector3 = Vector3(rbox.get_center().x, rbox.get_center().y,
 			host.xform.origin.z)
-	# Stand beyond the range that keeps a room open on proximity alone (42 m),
-	# and inside the range a hole can be seen through (70 m). Anything that
-	# happens here is the portal test and nothing else.
+	# Beyond reach of anything but seeing: sixty metres, inside the seventy a
+	# room can be seen into.
 	var stand := wall - Vector3(0.0, 0.0, 60.0)
 	camera.global_position = stand
 	camera.look_at(wall, Vector3.UP)
 	await _frames(20)
-	# Counted for THIS building: by now the first one has holes in it, and a
-	# hole in view is exactly what the test below is about to rely on.
 	# Its walls have windows: every storey with a slab over it is cut through
-	# in its top two courses. So the room OPENS from out here, on the portal
-	# test alone, with nothing having been fired at it -- which is the thing
-	# windows were added for. Before them the test could only fire on a
-	# building somebody had already shot, and a room could be walked into
-	# but never seen into.
+	# under its lintel course. Before them a room could be walked into but
+	# never seen into.
 	var windows: int = registry.openings_of(1, target.id).size()
 	_gate_ok("an undamaged wall has windows in it", windows > 0, "%d" % windows)
 	_gate_ok("each of them one window, not a box drawn round two",
 			_widest_opening(1, target.id) < 2.0,
 			"widest %.2f m" % _widest_opening(1, target.id))
 	guard = 0
-	while guard < 300 and _drawn_rooms_of(1) == 0:
+	while guard < 300 and not (_fake_rooms.get(1, PackedInt32Array()) as PackedInt32Array).has(target.id):
 		await _frames(1)
 		guard += 1
-	# DRAWN, which is what seeing needs. Bricks are for touching.
-	_gate_ok("and looking in through one draws the room from sixty metres",
-			_drawn_rooms_of(1) > 0 and _open_rooms_of(1) == 0,
+	var faked: PackedInt32Array = _fake_rooms.get(1, PackedInt32Array())
+	_gate_ok("from sixty metres the rooms behind its windows are faked",
+			faked.has(target.id), "%d faked" % faked.size())
+	_gate_ok("with nothing drawn, laid or opened for it",
+			_drawn_rooms_of(1) == 0 and _open_rooms_of(1) == 0,
 			"%d drawn, %d open" % [_drawn_rooms_of(1), _open_rooms_of(1)])
-	_shut_all_rooms(1)
+	# Held shapes, not the body's count: a body keeps its switched-off slots.
+	var room_shapes: int = (_drawn_shapes.get(1, {}) as Dictionary).size() 			+ (_room_shapes.get(1, {}) as Dictionary).size()
+	_gate_ok("and with no collision at all", room_shapes == 0,
+			"%d room(s) holding shapes" % room_shapes)
+	var inner_faked := 0
+	for index in faked:
+		if not registry.get_room(1, index).outer:
+			inner_faked += 1
+	_gate_ok("and only the rooms against an outside wall", inner_faked == 0 and faked.size() > 0,
+			"%d inner rooms faked" % inner_faked)
+	await _save("rooms_fake")
 
-	# Blow one. The blast compromises the room, which is a different trigger --
-	# so it is shut again before the portal test is asked anything.
+	# Blow a hole in it. The blast compromises the rooms it reaches, which is a
+	# different trigger -- so they are shut again by hand, and the fake comes
+	# back without what the blast took.
 	_blast(wall, 2.6)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
@@ -4781,25 +4877,23 @@ func _run_rooms_pass() -> void:
 	_gate_ok("and every room in it is shut again",
 			_open_rooms_of(1) == 0 and _drawn_rooms_of(1) == 0,
 			"%d open, %d drawn" % [_open_rooms_of(1), _drawn_rooms_of(1)])
-
-	camera.global_position = stand
-	camera.look_at(wall, Vector3.UP)
 	guard = 0
-	while guard < 200 and _drawn_rooms_of(1) == 0:
+	while guard < 200 and _fake_dirty.has(1):
 		await _frames(1)
 		guard += 1
-	_gate_ok("looking through it draws the room", _drawn_rooms_of(1) > 0,
-			"%d drawn" % _drawn_rooms_of(1))
+	_gate_ok("and the fake is rebuilt from what is left",
+			not _fake_dirty.has(1) and _fake_rooms.has(1),
+			"%d faked" % (_fake_rooms.get(1, PackedInt32Array()) as PackedInt32Array).size())
 	await _save("rooms_portal")
 
-	# Look away: out of the cone, out of range, shut.
-	camera.look_at(stand + Vector3(0.0, 0.0, -50.0), Vector3.UP)
+	# Walk away: past the release range the fake goes.
+	camera.global_position = wall - Vector3(0.0, 0.0, 120.0)
 	guard = 0
-	while guard < 300 and _drawn_rooms_of(1) > 0:
+	while guard < 300 and _fake_rooms.has(1):
 		await _frames(1)
 		guard += 1
-	_gate_ok("turning away stops drawing it", _drawn_rooms_of(1) == 0,
-			"%d drawn" % _drawn_rooms_of(1))
+	_gate_ok("walking away drops the fake", not _fake_rooms.has(1)
+			and not _fake_furniture.has(1))
 
 	# And the wreckage. A building comes down while nobody is inside it; what
 	# was in its rooms is owed to whoever walks up to the pile afterwards.

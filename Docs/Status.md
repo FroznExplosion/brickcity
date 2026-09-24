@@ -1054,6 +1054,24 @@ pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--int
 measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
 `--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
 
+### Fake interiors: seen through a window, never touched
+
+A fourth rung under drawn ([Scale §4.1](Scale.md)). Every room against an outside wall of a building
+that is bricks and within 70 m is **faked**: its manifest drawn as boxes with an unlit shader
+(`shaders/fake_interior.gdshader`, a fixed shade per face so a box still reads as a box), no
+collision anywhere, no shadows, one MultiMesh per building built from per-room buffers kept on the
+room. Within 40 m a room is drawn (collision, no bricks); touched, it is real; when its building
+comes down, the fake goes with the drawing.
+
+It **replaced the portal test**. That was a distance, a view cone and a ray per opening, twenty-four
+rooms and sixteen rays a pass, and a room seen into was drawn with collision. Faking every outer
+room in range is cheaper than working out which ones are being looked at: standing inside the
+biggest `--big` tower the streaming pass went from 1.02 ms (worst 6.5) to 0.29 ms (worst 1.9).
+Faking that tower -- 151 of its 204 rooms, 1,595 boxes -- is 5.6 ms cold, spread over five passes
+of at most 48 rooms (`FAKE_ROOMS_PER_PASS`), and 0.2 ms to rebuild after a room changes.
+
+Only for buildings that are bricks: a shell has no windows to see a fake through. Next.md §2.4.
+
 ### Floors are part of their walls
 
 `tools/structure_probe.gd` found that not one floor panel in the city was joined to an exterior
