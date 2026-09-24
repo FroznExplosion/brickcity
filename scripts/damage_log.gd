@@ -39,9 +39,12 @@ class Entry extends RefCounted:
 	var radius := 0.0
 	var normal := Vector3.ZERO  ## SEVER only: the plane's normal
 	var limit := 0          ## SHEAR only: max blocks, 0 for no cap
+	## Position in the host's log, 0-based; -1 until the host commits it. A client
+	## applies entries in this order and a gap means one went missing on the way.
+	var seq := -1
 
 	func to_array() -> Array:
-		return [tick, kind, target, point, radius, normal, limit]
+		return [tick, kind, target, point, radius, normal, limit, seq]
 
 	static func from_array(a: Array) -> Entry:
 		var e := Entry.new()
@@ -52,19 +55,24 @@ class Entry extends RefCounted:
 		e.radius = float(a[4])
 		e.normal = a[5]
 		e.limit = int(a[6])
+		e.seq = int(a[7]) if a.size() > 7 else -1
 		return e
 
 
 var entries: Array[Entry] = []
-## Off by default. Recording costs an allocation per hit, and a single-player
-## session that will never save has no use for it.
-var recording := false
+## On by default and meant to stay on. It used to be off to save an allocation
+## per hit in a session that would never save, but co-op and save-anywhere both
+## need it (Docs/AI.md A1, A17), and a log that only exists when somebody
+## remembered to switch it on is a log that is missing the hit that mattered.
+var recording := true
 
 
+## Record a command. Returns the entry, with its `seq`, or null when not
+## recording.
 func record(tick: int, kind: Kind, target: int, point: Vector3, radius: float,
-		normal := Vector3.ZERO, limit := 0) -> void:
+		normal := Vector3.ZERO, limit := 0) -> Entry:
 	if not recording:
-		return
+		return null
 	var e := Entry.new()
 	e.tick = tick
 	e.kind = kind
@@ -73,7 +81,25 @@ func record(tick: int, kind: Kind, target: int, point: Vector3, radius: float,
 	e.radius = radius
 	e.normal = normal
 	e.limit = limit
+	e.seq = entries.size()
 	entries.append(e)
+	return e
+
+
+## Apply one command to one chunk. The single definition of what each kind DOES
+## to a world -- replay, a client receiving the host's entries and the loopback
+## probe all come through here, so they cannot drift apart.
+static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
+	match e.kind:
+		Kind.BLAST:
+			return world.apply_hit(chunk, e.point, e.radius)
+		Kind.SHEAR:
+			# peel, matching every site that records a SHEAR -- a replay that
+			# sheared differently would not reproduce the world.
+			return world.separate_near(chunk, e.point, e.radius, e.limit, true)
+		Kind.SEVER:
+			return world.separate_plane(chunk, e.point, e.normal, e.radius)
+	return PackedInt32Array()
 
 
 func clear() -> void:
@@ -111,14 +137,6 @@ func replay(world: BrickWorld, resolve: Callable) -> int:
 		var chunk: int = resolve.call(e.target)
 		if chunk < 0 or not world.is_chunk_alive(chunk):
 			continue
-		match e.kind:
-			Kind.BLAST:
-				world.apply_hit(chunk, e.point, e.radius)
-			Kind.SHEAR:
-				# peel, matching every site that records a SHEAR -- a replay that
-				# sheared differently would not reproduce the world.
-				world.separate_near(chunk, e.point, e.radius, e.limit, true)
-			Kind.SEVER:
-				world.separate_plane(chunk, e.point, e.normal, e.radius)
+		apply_entry(world, chunk, e)
 		applied += 1
 	return applied

@@ -54,6 +54,7 @@ godot --headless --path . --script tools/build_probe.gd     # build mode, recipe
 godot --headless --path . --script tools/fixture_probe.gd   # fixtures
 godot --headless --path . --script tools/interior_probe.gd  # rooms and contents
 godot --headless --path . --script tools/dormant_probe.gd   # wreckage given back
+godot --headless --path . --script tools/loopback_probe.gd  # host and client agree
 ```
 
 And the ones that need a scene — add `--fixed-fps 60` if the window loses focus:

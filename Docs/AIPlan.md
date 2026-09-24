@@ -85,6 +85,13 @@ S (days), M (a week or two), L (several weeks).
 
 Nothing AI yet. These are the engine changes the review found the AI cannot stand on without.
 
+**Progress.** Step 1 done (2026-09-24): `DamageLog` always on with a host `seq`;
+`WorldAuthority` in `city_scene` (`_blast` asks, both record sites commit, landings shear only on
+the host); `tools/loopback_probe.gd` — 22 checks, host and client agree through a delaying,
+reordering wire, and a cheating client is caught. Baseline before it: 28 of 28 probes clean at
+`2445311`. Not yet covered: shots on loose pieces, island fractures (step 4), and the extra frames
+of a multi-frame build, whose hits are applied but not logged (step 2).
+
 | Work | Where |
 |---|---|
 | `DamageLog` always on (R22) | `city_scene.gd` |

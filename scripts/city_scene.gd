@@ -422,9 +422,10 @@ var _building_grid := {}
 ## building id -> its box in the world. See _world_box.
 var _world_boxes := {}
 var _near_promotions := 0
-## Every structural command, for replay, saving and eventually the wire.
-## Off unless something asks for it; see DamageLog.
-var damage_log := DamageLog.new()
+## The one door every structural change goes through, and the log of every
+## command that went through it -- for replay, saving and the wire. This scene
+## is always the host today; see WorldAuthority for what a client does instead.
+var authority := WorldAuthority.new()
 ## Buildings whose structure has changed and not yet been re-solved to rest.
 var _dirty: Array[int] = []
 var _impact_damage := 0
@@ -683,6 +684,11 @@ func _ready() -> void:
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
 	islands.on_impact = _on_island_impact
+	# A client's shot arrives as a request; the host takes it exactly as it takes
+	# its own. Shears are never requested -- they come from the host's physics.
+	authority.handle_request = func(e: DamageLog.Entry) -> void:
+		if e.kind == DamageLog.Kind.BLAST:
+			_damage_queue.append([e.point, e.radius])
 
 	_build_city()
 	# Loaded now rather than by the first building to come into view of a
@@ -2113,6 +2119,10 @@ func _disable_on(body: RID, map: Dictionary, ids: PackedInt32Array) -> void:
 ## across its neighbour and leave it untouched, which nobody believes.
 func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 		collider: RID = RID()) -> void:
+	# A landing is this machine's physics, and two machines never land a piece in
+	# quite the same place. Only the host turns one into structure (AIPlan R5).
+	if not authority.may_decide():
+		return
 	var radius := clampf(severity * 0.12, 0.9, 3.0)
 
 	# The collider the solver named is the answer when there is one. Falling
@@ -2145,7 +2155,7 @@ func _shear_building(id: int, point: Vector3, radius: float) -> void:
 			IslandManager.SHEAR_MAX_BLOCKS, true)
 	if loosened.is_empty():
 		return
-	damage_log.record(Engine.get_physics_frames(), DamageLog.Kind.SHEAR,
+	authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SHEAR,
 			id, point, radius, Vector3.ZERO, IslandManager.SHEAR_MAX_BLOCKS)
 	_impact_damage += loosened.size()
 	_mark_dirty(id)
@@ -2166,7 +2176,11 @@ func _building_for_body(body: RID) -> int:
 
 
 ## Queue a hit. Applying it is the next tick's problem; see DAMAGE_BUDGET_MS.
+## On a client the hit is only asked for: the host applies it and it comes back
+## as a committed command.
 func _blast(point: Vector3, radius: float) -> void:
+	if not authority.request(DamageLog.Kind.BLAST, -1, point, radius):
+		return
 	_damage_queue.append([point, radius])
 
 
@@ -2291,7 +2305,7 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		if killed.is_empty():
 			continue
 		b.hit = true
-		damage_log.record(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
 				b.id, point, radius)
 		_mark_dirty(b.id)
 		# Both the collision update and the remesh are deferred to the end of
@@ -3300,6 +3314,12 @@ func _run_shot_pass() -> void:
 	print("[city] promotions: %d in %.0f ms (%.1f ms each), %d of them for somebody walking up" % [
 		_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _near_promotions])
 	print("[city] falling debris sheared %d brick(s) off what it landed on" % _impact_damage)
+	var kinds := {}
+	for e in authority.commands.entries:
+		kinds[e.kind] = int(kinds.get(e.kind, 0)) + 1
+	print("[city] authority: %d command(s) committed -- %d blast, %d shear, %d sever" % [
+		authority.commands.size(), int(kinds.get(DamageLog.Kind.BLAST, 0)),
+		int(kinds.get(DamageLog.Kind.SHEAR, 0)), int(kinds.get(DamageLog.Kind.SEVER, 0))])
 
 	# --- measurement 2: is settled wreckage still breakable? -----------------
 	# A collapsed section is a frozen body whose origin is its centre of mass,

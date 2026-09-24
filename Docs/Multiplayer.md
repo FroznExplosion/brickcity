@@ -99,9 +99,14 @@ This is the same move Teardown made: destruction logic in fixed-point, floats ev
 
 ### Damage is a recordable command
 
-`DamageLog` (`scripts/damage_log.gd`) records `(tick, kind, target, point, radius, normal, limit)`
-and replays it into a world. `_apply_blast` and `_shear_building` write to it; it is **off by
-default**, because a single-player session that will never save has no use for the allocation.
+`DamageLog` (`scripts/damage_log.gd`) records `(tick, kind, target, point, radius, normal, limit,
+seq)` and replays it into a world. It is **always on** now: co-op and save-anywhere both need it
+([AI.md](AI.md) A1, A17). Nothing writes to it directly any more — `_apply_blast` and
+`_shear_building` commit through `WorldAuthority` (`scripts/world_authority.gd`), the one door every
+structural change goes through. On the host a change is applied, committed and published; on a
+client it is only requested, and applied when the host's committed entry comes back, in the
+host's `seq` order. `tools/loopback_probe.gd` runs a host and a client over a wire that delays and
+reorders, and checks they end with the same world.
 
 The same recording is the wire format, the join-in-progress mechanism and a save file. Nothing about
 islands, transforms or velocities goes in it — that is physics state, it is allowed to differ, and
@@ -160,9 +165,10 @@ The substrate is done. What remains is a networking layer, and it is deliberatel
    produces something a socket will take.
 2. **A priority queue and a bandwidth budget for physics state.** This is the hard part and the one
    with no shortcut — see §6.
-3. **Server authority over what counts as a hit.** Today `_fire` raycasts locally and applies
-   damage immediately. A server-authoritative version records the *request* and applies the
-   confirmed command.
+3. **Server authority over what counts as a hit** — *the seam is in* (`WorldAuthority`): `_blast`
+   asks before it queues, a client's ask is forwarded, and landings shear buildings only on the
+   host. Still missing: `_fire` hits on loose pieces, and island landing fractures, which each
+   machine still decides from its own physics ([AIPlan](AIPlan.md) P0 step 4).
 
 The three items that used to be here were done because they were nearly free today and expensive to
 retrofit — the same argument that got the seeded RNG in before anything needed it.
