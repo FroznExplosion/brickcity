@@ -48,6 +48,7 @@ func _tick() -> void:
 	_check_ghost_and_bracket_turns()
 	_check_rotate_last_and_undo()
 	_check_delete()
+	_check_save_new()
 	_check_spiral_flight("spiralcw_10x10", 1)
 	_check_spiral_flight("spiralccw_10x10", -1)
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -385,6 +386,31 @@ func _check_rotate_last_and_undo() -> void:
 	while _ws._undo():
 		undone += 1
 	_ok("undo takes all three back", undone == 3 and _ws.recipe.is_empty(), "%d" % undone)
+
+
+func _check_save_new() -> void:
+	print("\nshift F5 saves a NEW build to the library, never over an old one")
+	_reset()
+	var dir := "user://_probe_builds/"
+	for f in DirAccess.get_files_at(dir) if DirAccess.dir_exists_absolute(dir) else []:
+		DirAccess.remove_absolute(dir + f)
+	_ws._builds_dir = dir
+	_put("brick_2x4", Vector3i(10, 1, 10))
+	var first: String = _ws._save_new()
+	_put("brick_2x2", Vector3i(20, 1, 20))
+	var second: String = _ws._save_new()
+	_ok("two saves, two files", first == dir + "build_001.json" and second == dir + "build_002.json",
+			"%s, %s" % [first, second])
+	var a := BuildRecipe.load_from(first)
+	var b := BuildRecipe.load_from(second)
+	_ok("the first kept what it had then", a.size() == 1 and a.name == "Build 001",
+			"%d '%s'" % [a.size(), a.name])
+	_ok("the second has both", b.size() == 2 and b.name == "Build 002",
+			"%d '%s'" % [b.size(), b.name])
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + f)
+	DirAccess.remove_absolute(dir)
+	_ws._builds_dir = _ws.BUILDS_DIR
 
 
 func _check_delete() -> void:

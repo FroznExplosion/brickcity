@@ -39,6 +39,7 @@ const KEY_ROWS := [
 	["", "I", "layer: structure / interior", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
 	["FILE", "F5 / F9", "save / load", "ENTER", "place in city, shoot it"],
+	["", "shift F5", "save as a new build (city: P, wheel)", "", ""],
 	["", "F1", "hide these", "", ""],
 ]
 
@@ -1213,7 +1214,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
 		KEY_F1: _keys_on = not _keys_on; _keys_panel.visible = _keys_on
 		KEY_H: _overlay_on = not _overlay_on; _stress_dirty = true; _refresh_overlay()
-		KEY_F5: _save()
+		KEY_F5:
+			if e.shift_pressed:
+				_save_new()
+			else:
+				_save()
 		KEY_F9: _load()
 		KEY_ENTER, KEY_KP_ENTER: _place_in_city()
 
@@ -1725,6 +1730,32 @@ func _save() -> void:
 	var err := recipe.save_to(_save_path)
 	print("[workshop] saved %d bricks and %d fixture(s) to %s (%s)" % [
 			recipe.size(), recipe.fixture_count(), _save_path, error_string(err)])
+
+
+## Where Shift+F5 keeps builds: the player's half of the city placer's library
+## (CityPlacer.LIBRARY_DIRS), so every one saved here can be picked up with P
+## and chosen with the wheel. F5 still overwrites the one quick-save slot.
+const BUILDS_DIR := "user://builds/"
+var _builds_dir := BUILDS_DIR
+
+
+## Save the build as a NEW entry in the library, never over an old one: the
+## next free build_NNN.json, named "Build NNN" so the placer can say which.
+## Returns the path written, or "" if it failed.
+func _save_new() -> String:
+	if recipe.is_empty():
+		print("[workshop] nothing built yet")
+		return ""
+	DirAccess.make_dir_recursive_absolute(_builds_dir)
+	var n := 1
+	while FileAccess.file_exists(_builds_dir + "build_%03d.json" % n):
+		n += 1
+	var path := _builds_dir + "build_%03d.json" % n
+	recipe.name = "Build %03d" % n
+	var err := recipe.save_to(path)
+	print("[workshop] saved '%s': %d bricks and %d fixture(s) to %s (%s)" % [
+			recipe.name, recipe.size(), recipe.fixture_count(), path, error_string(err)])
+	return path if err == OK else ""
 
 
 func _load() -> void:
