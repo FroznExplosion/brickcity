@@ -141,8 +141,12 @@ sleeps is rebuilt from a `ChunkRecord`, which renumbers its blocks and moves its
 For the same two reasons a DETACH names a building's blocks by id (fixed by the recipe) but a
 piece's by **a cell each block fills** (`StructureReplayer.block_cell`) — not its box corner, which a
 stair step need not fill — and never names furniture at all: it weighs nothing in a solve, and each
-machine carries its own. Piece commands use chunk-local coordinates, applied with the chunk's
-transform set to identity so every machine hands the extension the same numbers.
+machine carries its own. Piece commands use **grid space** — metres in the grid the building was
+laid in, which `split_island` copies unchanged into every piece cut from it — applied with the
+chunk's transform set to `DamageLog.grid_frame` so every machine hands the extension the same
+numbers. Not chunk-local: a piece's local frame starts at the corner of the group it was cut as,
+and on the host that group included furniture a replay never has. A sleeping piece's record keeps
+its grid origin (and its severed joints) so it wakes in the same grid.
 
 The city's `--shot` pass checks all of this where it is really made: after the collapse it replays
 its own log into fresh twins of every building it touched and compares structure brick for brick.

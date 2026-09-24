@@ -13,14 +13,26 @@ extends RefCounted
 ##              whether it is at rest. The log cannot hold that and should not;
 ##              a save needs it once.
 ##
+## And three things that are neither, carried because a load without them is not
+## the situation that was saved:
+##
+##   FURNITURE  what rides each piece: a spilled room, a toppled building's
+##              contents. Never in the log -- which rooms are open is each
+##              machine's own, so furniture is too (IslandManager.record_detach) --
+##              but it is in the save, by absolute cell and part name.
+##   PENDING    decisions queued and not made yet: a landing waiting to break a
+##              piece, a piece waiting to be re-solved. The island manager's own
+##              (pending_state), re-queued on load.
+##   SCENE      the caller's own queue, opaque here: blasts not applied yet,
+##              buildings waiting for their solve. Handed back by restore() for the
+##              caller to queue again.
+##
 ## Pieces asleep when the save was taken are saved as their records, archetypes
 ## by name (ChunkRecord.to_data), and come back asleep.
 ##
-## What this does NOT restore, deliberately: furniture riding a piece (each
-## machine's own, never in the log -- IslandManager.record_detach), small debris
-## too insignificant to have been recorded, and anything a budgeted queue had not
-## got to yet -- the caller flushes those before capturing. See
-## Docs/AI.md section 12.3.
+## Small debris is not restored: it is presentation, deleted within moments on
+## any machine (IslandManager's class notes), and a load is the one time nobody is
+## watching it fall.
 
 ## DamageLog.to_data() of the whole area.
 var commands: Array = []
@@ -28,13 +40,22 @@ var commands: Array = []
 var pieces: Array = []
 ## [{id, owner, record (ChunkRecord.to_data)}]
 var dormant: Array = []
+## piece id -> [[absolute cell, part name, colour], ...]
+var furniture := {}
+## IslandManager.pending_state()
+var pending := {}
+## Whatever the caller passed to capture(); restore() hands it back.
+var scene := {}
 
-const VERSION := 1
+const VERSION := 2
 
 
-## Take a snapshot of `history` and of every recorded piece `islands` holds.
-static func capture(history: DamageLog, islands: IslandManager) -> AreaSnapshot:
+## Take a snapshot of `history`, of every recorded piece `islands` holds and of
+## what `islands` has queued. `scene_pending` is the caller's own queue.
+static func capture(history: DamageLog, islands: IslandManager,
+		scene_pending := {}) -> AreaSnapshot:
 	var s := AreaSnapshot.new()
+	var w := islands.world
 	s.commands = history.to_data()
 	for isl in islands.islands:
 		# A piece nothing recorded -- furniture that fell on its own -- is not
@@ -50,27 +71,59 @@ static func capture(history: DamageLog, islands: IslandManager) -> AreaSnapshot:
 			"at_rest": isl.settled,
 			"disposable": isl.disposable,
 		})
+		var riding := furniture_of(w, isl.chunk)
+		if not riding.is_empty():
+			s.furniture[isl.piece_id] = riding
 	for d in islands.dormant:
 		if d.piece_id < 0:
 			continue
 		s.dormant.append({"id": d.piece_id, "owner": d.owner,
-				"record": d.record.to_data(islands.world)})
+				"record": d.record.to_data(w)})
+	s.pending = islands.pending_state()
+	s.scene = scene_pending
 	return s
+
+
+## The furniture in a chunk, as what place_block needs to lay it again: the
+## block's absolute cell (its corner, in the building's grid -- see DamageLog on
+## grid space), its part by NAME (part numbers are per session) and its colour.
+static func furniture_of(w: BrickWorld, chunk: int) -> Array:
+	var out := []
+	var origin := w.get_chunk_origin(chunk)
+	var t := BrickWorld.ticks_per_stud()
+	var pt := BrickWorld.ticks_per_plate()
+	for id in w.get_decorative_blocks(chunk):
+		var ticks: Array = w.get_block_ticks(chunk, id)
+		if ticks.is_empty():
+			continue
+		var at: Vector3i = ticks[0]
+		@warning_ignore("integer_division")
+		var cell := origin + Vector3i(at.x / t, at.y / pt, at.z / t)
+		out.append([cell, w.get_archetype_name(w.get_block_archetype(chunk, id)),
+				w.get_block_colour(chunk, id)])
+	return out
 
 
 func to_bytes() -> PackedByteArray:
 	return var_to_bytes({"version": VERSION, "commands": commands, "pieces": pieces,
-			"dormant": dormant})
+			"dormant": dormant, "furniture": furniture, "pending": pending, "scene": scene})
 
 
+## Version 1 saves -- no furniture, nothing pending -- still load.
 static func from_bytes(bytes: PackedByteArray) -> AreaSnapshot:
 	var d: Variant = bytes_to_var(bytes)
-	if typeof(d) != TYPE_DICTIONARY or int((d as Dictionary).get("version", 0)) != VERSION:
+	if typeof(d) != TYPE_DICTIONARY:
+		return null
+	var version := int((d as Dictionary).get("version", 0))
+	if version < 1 or version > VERSION:
 		return null
 	var s := AreaSnapshot.new()
 	s.commands = d.commands
 	s.pieces = d.pieces
 	s.dormant = d.dormant
+	s.furniture = (d as Dictionary).get("furniture", {})
+	s.pending = (d as Dictionary).get("pending", {})
+	s.scene = (d as Dictionary).get("scene", {})
 	return s
 
 
@@ -80,7 +133,8 @@ static func from_bytes(bytes: PackedByteArray) -> AreaSnapshot:
 ## stops treating it as a building.
 ##
 ## Returns what happened: {commands, missed, pieces, pieces_missing, dormant,
-## dormant_failed, released}.
+## dormant_failed, released, furniture, furniture_failed, pending, scene}. `scene`
+## is what the caller passed to capture(): its own queue, to queue again.
 func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 		on_toppled := Callable()) -> Dictionary:
 	var history := DamageLog.from_data(commands)
@@ -88,14 +142,28 @@ func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 	rep.on_toppled = on_toppled
 	rep.apply_all(history.entries)
 
+	var parts := {}
+	for a in world.get_archetype_count():
+		parts[world.get_archetype_name(a)] = a
+
 	var kept := {}
 	var missing := 0
+	var laid := 0
+	var refused := 0
 	for p in pieces:
 		var id := int(p.id)
 		var chunk := rep.piece_chunk(id)
 		if chunk < 0:
 			missing += 1
 			continue
+		# Furniture first: it goes in as decorative blocks, which leave the
+		# piece's structure -- and so the shapes and mesh built next -- alone.
+		for f in furniture.get(id, []):
+			var part: int = int(parts.get(str(f[1]), -1))
+			if part >= 0 and world.place_block(chunk, f[0], part, int(f[2]), true) >= 0:
+				laid += 1
+			else:
+				refused += 1
 		if islands.restore_piece(chunk, id, int(p.owner), p.xform, p.linear, p.angular,
 				bool(p.at_rest), bool(p.disposable)) != null:
 			kept[id] = true
@@ -125,6 +193,10 @@ func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 			world.release_chunk(c)
 			released += 1
 
+	# Last, once every piece it names is back.
+	var queued := islands.restore_pending(pending)
+
 	return {"commands": history.size(), "missed": rep.missed, "pieces": kept.size(),
 			"pieces_missing": missing, "dormant": slept, "dormant_failed": failed,
-			"released": released}
+			"released": released, "furniture": laid, "furniture_failed": refused,
+			"pending": queued, "scene": scene}

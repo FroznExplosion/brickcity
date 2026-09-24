@@ -30,9 +30,13 @@ const FIXTURE := 1 << 6
 const HITSCAN_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | RUBBLE | FIXTURE
 
 ## What a character stands on and walks into: the ground, standing buildings,
-## and every piece of wreckage whatever state it is in. The same set as a
-## hitscan, which is the point -- you can stand on anything you can shoot.
-const PAWN_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | RUBBLE | FIXTURE
+## and every piece of wreckage big enough to matter -- but NOT rubble. A small
+## piece is presentation (IslandManager's class notes; Docs/AI.md A11): each
+## machine in a co-op game keeps or deletes its own, so a character that could
+## trip on one would trip on a brick that is not there on the other screen, and
+## the AI could never agree with the physics about where anyone can walk. Rubble
+## is swept up moments after it lands anyway. You can still shoot it.
+const PAWN_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | FIXTURE
 
 ## What a static building collides with. Rubble bounces off it; a falling
 ## section lands on it.

@@ -382,6 +382,17 @@ public:
     /// Every decorative block still alive, ascending. For probes and for saving.
     PackedInt32Array get_decorative_blocks(int chunk_id) const;
 
+    /// A block's severed joints, as bits: JOINT_SUPPORT_BROKEN (joined to
+    /// nothing) and JOINT_BOTTOM_BROKEN (cut from what is below it). For a
+    /// ChunkRecord to carry them through a piece's sleep -- without them every
+    /// joint a landing had severed was whole again when the piece woke.
+    static constexpr int JOINT_SUPPORT_BROKEN = 1;
+    static constexpr int JOINT_BOTTOM_BROKEN = 2;
+    int get_block_joints(int chunk_id, int block_id) const;
+    /// Restore a block's severed joints. Only ever sets what a record captured;
+    /// it is not a way to break or mend structure by hand.
+    void set_block_joints(int chunk_id, int block_id, int joints);
+
     /// Per-block readouts, for debug overlays and probes.
     float get_block_load(int chunk_id, int block_id) const;
     float get_block_capacity(int chunk_id, int block_id) const;

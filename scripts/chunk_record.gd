@@ -42,6 +42,14 @@ var colours := PackedByteArray()
 ## a DETACH as if every machine had it. A list, not a byte per block, because most
 ## pieces carry none and a record is meant to cost 17 bytes a block.
 var decorative := PackedInt32Array()
+## Where the chunk's grid starts, in the building's grid. A piece cut out of a
+## building keeps the absolute cells its bricks had, and those cells are how the
+## log names them (DamageLog, piece commands) -- so a piece has to wake up at the
+## same origin, not at zero, or every command after its sleep lands somewhere else.
+var origin := Vector3i.ZERO
+## Severed joints, sparse: [index, BrickWorld joint bits] pairs. A joint a landing
+## had cut used to be whole again when the piece woke.
+var joints := PackedInt32Array()
 ## The grid's own orientation, which is authoring data and not the transform.
 var rotation := 0
 var origin_ticks := Vector3i.ZERO
@@ -56,7 +64,8 @@ func block_count() -> int:
 
 ## Bytes this record holds. What the tier is FOR, so it is measurable.
 func bytes() -> int:
-	return cells.size() * 4 + archetypes.size() * 4 + colours.size() + decorative.size() * 4
+	return cells.size() * 4 + archetypes.size() * 4 + colours.size() + decorative.size() * 4 \
+			+ joints.size() * 4
 
 
 ## For a save file (AreaSnapshot). Archetypes are written by NAME: fixture parts
@@ -73,7 +82,8 @@ func to_data(world: BrickWorld) -> Dictionary:
 			names.append(world.get_archetype_name(a))
 		refs.append(int(index[a]))
 	return {"dims": dims, "xform": xform, "cells": cells, "names": names, "refs": refs,
-			"colours": colours, "decorative": decorative, "rotation": rotation,
+			"colours": colours, "decorative": decorative, "joints": joints,
+			"origin": origin, "rotation": rotation,
 			"origin_ticks": origin_ticks, "box": box}
 
 
@@ -90,6 +100,8 @@ static func from_data(world: BrickWorld, d: Dictionary) -> ChunkRecord:
 	r.cells = d.cells
 	r.colours = d.colours
 	r.decorative = d.get("decorative", PackedInt32Array())
+	r.joints = d.get("joints", PackedInt32Array())
+	r.origin = d.get("origin", Vector3i.ZERO)
 	r.rotation = int(d.rotation)
 	r.origin_ticks = d.origin_ticks
 	r.box = d.box
@@ -120,6 +132,7 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return r
 	r.dims = world.get_chunk_dims(chunk)
+	r.origin = world.get_chunk_origin(chunk)
 	r.xform = world.get_chunk_transform(chunk)
 	r.rotation = world.get_chunk_rotation(chunk)
 	r.origin_ticks = world.get_chunk_origin_ticks(chunk)
@@ -150,6 +163,10 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 		r.cells.push_back(c.z)
 		if world.is_block_decorative(chunk, id):
 			r.decorative.push_back(r.archetypes.size())
+		var cut := world.get_block_joints(chunk, id)
+		if cut != 0:
+			r.joints.push_back(r.archetypes.size())
+			r.joints.push_back(cut)
 		r.archetypes.push_back(world.get_block_archetype(chunk, id))
 		r.colours.push_back(world.get_block_colour(chunk, id))
 		var a := Vector3(at) * (cell.x / float(t))
@@ -181,14 +198,14 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 func restore(world: BrickWorld) -> int:
 	if block_count() == 0:
 		return -1
-	var chunk := world.create_chunk(Vector3i.ZERO, dims)
+	var chunk := world.create_chunk(origin, dims)
 	if chunk < 0:
 		return -1
 	if rotation != 0 or origin_ticks != Vector3i.ZERO:
 		world.set_chunk_frame(chunk, rotation, origin_ticks)
 	var placed := PackedInt32Array()
 	for i in block_count():
-		placed.append(world.place_block(chunk, Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
+		placed.append(world.place_block(chunk, origin + Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
 				archetypes[i], colours[i]))
 	var furniture := PackedInt32Array()
 	for i in decorative:
@@ -196,5 +213,9 @@ func restore(world: BrickWorld) -> int:
 			furniture.append(placed[i])
 	if not furniture.is_empty():
 		world.set_blocks_decorative(chunk, furniture, true)
+	for k in range(0, joints.size() - 1, 2):
+		var i := joints[k]
+		if i < placed.size() and placed[i] >= 0:
+			world.set_block_joints(chunk, placed[i], joints[k + 1])
 	world.set_chunk_transform(chunk, xform)
 	return chunk

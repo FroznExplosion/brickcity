@@ -15,10 +15,18 @@ extends Node3D
 ##     simply gone, because no one is there to notice the difference;
 ##   * a single brick that IS visible becomes a real body but is drawn from a
 ##     shared MultiMesh, one draw call per brick size rather than per brick;
-##   * anything under DEBRIS_MIN_BLOCKS is cleaned up after a few seconds.
+##   * a small piece is swept up moments after it comes to rest.
 ##
-## Big pieces are never touched by any of this. A section that stays intact is
-## the thing the whole model exists to produce.
+## "Small" is SIZE, not block count (Docs/AIPlan.md R2, AI.md A11): a floor panel
+## is one plate_10x10 block 3.5 m across, and it is not debris. A piece big
+## enough to hide behind or stand on is a LANDMARK (is_landmark_size): it is never
+## deleted, it collides with people, the AI takes cover behind it and every
+## machine in a co-op game has the same one. A small piece is presentation only --
+## no pawn collides with it (Layers.PAWN_MASK), each machine keeps or deletes its
+## own, and nothing but the eye ever depends on it.
+##
+## Landmarks are never touched by any of this. A section that stays intact is the
+## thing the whole model exists to produce.
 
 const MASS_SCALE := 10.0
 const SETTLE_MIN_MS := 900
@@ -60,18 +68,30 @@ const SHEAR_CONTACTS_MAX := 3
 const IMPACT_HANDOVERS_MAX := 2
 const BREAK_THICKNESS := 0.42      ## one brick course
 
-## Debris budget.
-const DEBRIS_MIN_BLOCKS := 10      ## under this, a piece is disposable
+## Debris budget -- by size. See the class notes.
+## A piece at least this long is a landmark whatever else it is: a beam, a floor
+## panel, a section of wall lying in the street.
+const LANDMARK_SPAN := 2.0
+## Or whose box is at least this big: a clump waist-high to a person, which is
+## cover. A single 2x4 brick is 0.41; three stacked are 1.23.
+const LANDMARK_VOLUME := 0.9
+## Past this many blocks a group is a landmark without being measured: walking the
+## blocks of a big group to prove it is big is the cost this exists to avoid.
+const LANDMARK_COUNT := 48
 ## How close a piece that is nothing but furniture has to be to be allowed to
 ## fall rather than be deleted where it came loose. Arm's length and a bit: a
 ## chair tipping off a floor in front of you is worth a body; anywhere else it
 ## is a floating cube for a second and small debris after that.
 const FURNITURE_FALL_RANGE := 6.0
-## The smallest pieces -- a brick or three -- break off only this close to the
-## player, and in view. Anywhere else they are deleted where they came loose.
-const TINY_BLOCKS := 3
-const TINY_RANGE := 30.0
-const DEBRIS_LIFETIME_MS := 2500   ## how long disposable debris lingers
+## A small piece breaks off only this close to the player, and in view. Anywhere
+## else it is deleted where it came loose. Per machine: small pieces are that
+## machine's presentation, so its own camera decides.
+const SMALL_KEEP_RANGE := 30.0
+## A small piece is swept up this long after it comes to rest -- moving slower
+## than RUBBLE_REST_SPEED -- and never lives longer than DEBRIS_LIFETIME_MS.
+const RUBBLE_REST_MS := 300
+const RUBBLE_REST_SPEED := 0.4
+const DEBRIS_LIFETIME_MS := 2500
 ## A piece has to be at least this big to shear anything it lands on. Two bricks
 ## of ABS weigh a few grams; at brick scale nothing that small arrives with
 ## enough energy to break a joint, and letting it try produced damage that
@@ -174,7 +194,8 @@ var impact_blocks := 0
 var splits := 0
 var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
-var tiny_deleted := 0              ## pieces of TINY_BLOCKS or fewer deleted, far or unseen
+var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
+var swept_at_rest := 0            ## small pieces swept up moments after landing
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
 ## uses it to damage whatever was underneath -- an island has no idea what it
@@ -287,8 +308,10 @@ var blind_count := 0
 ## what the player remembers doing. A SMALL piece is texture: hundreds of them
 ## are what fill the solver and nobody misses one.
 ##
-## So two caps with one eviction order -- oldest at rest first, within a class
-## -- and the classes differ in what eviction MEANS:
+## The classes are the size classes of the class notes: a landmark is LARGE,
+## anything else SMALL (small pieces are swept up at rest, so the small cap rarely
+## has anything left to do). Two caps, and the classes differ in what eviction
+## MEANS:
 ##
 ##     small, over its cap  ->  DELETED
 ##     large, over its cap  ->  SLEPT, into the dormant record that already
@@ -301,7 +324,13 @@ var blind_count := 0
 ##
 ## `total` sits over both: when it is exceeded the small class is spent first,
 ## down to `small_floor`, and only then does the large class begin to sleep.
-static var SMALL_BLOCKS := 24
+##
+## Small pieces go oldest-at-rest first. LARGE pieces go FARTHEST from anybody
+## first, and never one within CAP_KEEP_RANGE of an interest point: a piece put to
+## sleep has no collision, and somebody standing on it or behind it -- a player, or
+## later an AI agent in cover (Docs/AI.md section 3.5) -- must not have it vanish
+## under them.
+const CAP_KEEP_RANGE := 8.0
 var small_live_max := 220
 var large_live_max := 60
 var total_live_max := 240
@@ -372,6 +401,60 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 	camera = view
 
 
+## Where people are: every player in a co-op game, and later every AI agent that
+## counts (Docs/AI.md section 3.5). Returns a PackedVector3Array. Dormancy and the
+## debris cap ask this instead of the one camera -- a piece at the client player's
+## feet must stay awake on the host, which is the machine whose physics everyone
+## stands on. Unset, it is this machine's camera.
+var interest := Callable()
+
+
+func interest_points() -> PackedVector3Array:
+	if interest.is_valid():
+		return interest.call()
+	if camera != null and is_instance_valid(camera):
+		return PackedVector3Array([camera.global_position])
+	return PackedVector3Array()
+
+
+## How far a box is from the nearest interest point; INF when there are none.
+func _distance_to_interest(box: AABB, points: PackedVector3Array) -> float:
+	var best := INF
+	for p in points:
+		best = minf(best, _distance_to_box(box, p))
+	return best
+
+
+## Is a piece of this size a landmark -- something to hide behind or stand on --
+## or presentation? See the class notes; the numbers are LANDMARK_SPAN and
+## LANDMARK_VOLUME, and they are about people, not bricks.
+static func is_landmark_size(size: Vector3) -> bool:
+	return maxf(size.x, maxf(size.y, size.z)) >= LANDMARK_SPAN \
+			or size.x * size.y * size.z >= LANDMARK_VOLUME
+
+
+## Is this group, still in `source`, a landmark? Measured from the blocks' own
+## boxes, which is cheap for the small groups where the answer is in doubt; a big
+## group is a landmark without asking.
+func group_is_landmark(source: int, block_ids: PackedInt32Array) -> bool:
+	if block_ids.size() > LANDMARK_COUNT:
+		return true
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	var any := false
+	for id in block_ids:
+		var ticks: Array = world.get_block_ticks(source, id)
+		if ticks.is_empty():
+			continue
+		var a: Vector3i = ticks[0]
+		var b: Vector3i = a + (ticks[1] as Vector3i)
+		lo = Vector3i(mini(lo.x, a.x), mini(lo.y, a.y), mini(lo.z, a.z))
+		hi = Vector3i(maxi(hi.x, b.x), maxi(hi.y, b.y), maxi(hi.z, b.z))
+		any = true
+	return any and is_landmark_size(Vector3(hi - lo) * tick_m)
+
+
 # ---------------------------------------------------------------------------
 # Recording -- every structural operation, as the command it is
 # ---------------------------------------------------------------------------
@@ -381,6 +464,13 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 ## negative local number, which can never collide with a host's seq.
 func _record(e: DamageLog.Entry) -> int:
 	e.tick = Engine.get_physics_frames()
+	# A piece nothing recorded -- furniture that fell on its own (record_detach) --
+	# holds no structure and exists in no replay, so what happens to it is not a
+	# command either: sent, it would name a piece no machine can find. Found as
+	# twelve orphan commands once the probe's tower carried real furniture.
+	if e.is_piece() and e.target < 0:
+		_local_seq += 1
+		return -_local_seq
 	if on_command.is_valid():
 		var seq: Variant = on_command.call(e)
 		if seq != null and int(seq) >= 0:
@@ -401,6 +491,11 @@ func _piece_entry(isl: BrickIsland, kind: DamageLog.Kind) -> DamageLog.Entry:
 func _touched(isl: BrickIsland) -> void:
 	isl.changed = true
 	piece_changed.emit(isl)
+
+
+## A world point on this piece, in the grid space piece commands are written in.
+func _to_grid(isl: BrickIsland, world_point: Vector3) -> Vector3:
+	return DamageLog.grid_frame(world, isl.chunk) * isl.world_to_chunk(world_point)
 
 
 ## Record that `ids` are leaving `chunk` -- building `building`, or `source` if
@@ -438,7 +533,9 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 		# same local hit), so a piece's blocks are named by a cell they fill.
 		var cell := StructureReplayer.block_cell(world, chunk, id)
 		if cell != StructureReplayer.NO_CELL:
-			e.points.append(Vector3(cell))
+			# Absolute: the cell in the building's grid, which every piece cut from
+			# it keeps. See DamageLog on grid space.
+			e.points.append(Vector3(world.get_chunk_origin(chunk) + cell))
 	if e.blocks.is_empty() and e.points.is_empty():
 		_local_seq += 1
 		return DamageLog.piece_id(-_local_seq)
@@ -492,7 +589,10 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
 		piece_id := -1, owner := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
-	if _delete_where_it_is(source, block_ids):
+	# Measured while the blocks are still in the source: the size decides both
+	# whether it becomes a body at all and what kind of body it is.
+	var landmark := group_is_landmark(source, block_ids)
+	if _delete_where_it_is(source, block_ids, landmark):
 		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
 		return null
 	var split: Dictionary = world.split_island(source, block_ids)
@@ -500,7 +600,6 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var _t := Time.get_ticks_usec()
 	if split.is_empty():
 		return null
-	carry_furniture(world, source, split)
 
 	var count := int(split.block_count)
 	var island_chunk := int(split.chunk)
@@ -510,7 +609,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.piece_id = piece_id
 	isl.owner = owner
 	isl.local_com = split.local_com
-	isl.disposable = count < DEBRIS_MIN_BLOCKS
+	isl.landmark = landmark
+	isl.disposable = not landmark
 
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(float(split.mass) * MASS_SCALE, 0.5)
@@ -602,41 +702,20 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	return isl
 
 
-## Keep furniture furniture across a split.
-##
-## BrickWorld.split_island lays each block into the new chunk with place_block's
-## default, which is NOT decorative -- so every time a piece broke, the furniture
-## riding it became structure in the new piece: bearing load, holding things up,
-## counted by every solve. Found by the city's log-replay check (Docs/AIPlan.md P0
-## step 4) as a piece holding a spilled crate's 14 bricks the replay never had.
-##
-## `source_blocks` is in the order the blocks were laid, and a fresh chunk
-## numbers its blocks from 0 in that order, so new block k was source block
-## source_blocks[k]. The flag is read from the source, where split_island marks
-## blocks detached but leaves the flag alone.
-static func carry_furniture(w: BrickWorld, source: int, split: Dictionary) -> int:
-	var taken: PackedInt32Array = split.get("source_blocks", PackedInt32Array())
-	var furniture := PackedInt32Array()
-	for k in taken.size():
-		if w.is_block_decorative(source, taken[k]):
-			furniture.append(k)
-	if furniture.is_empty():
-		return 0
-	return w.set_blocks_decorative(int(split.chunk), furniture, true)
-
-
 ## Should this piece never become a body at all? Decided BEFORE anything is
 ## built for it: no body, no shapes, no mesh.
 ##
-## Three rules, smallest first:
-##   * **TINY_BLOCKS or fewer** break off only within TINY_RANGE and in view. A
+## Three rules:
+##   * **a landmark** is never deleted. It is structure somebody may hide behind
+##     or stand on, and every machine has it (see the class notes).
+##   * **a small piece** breaks off only within SMALL_KEEP_RANGE and in view. A
 ##     brick or two falling in the distance is a body the physics pays for and
 ##     nobody could see -- and a big collapse sheds hundreds of them.
-##   * **under DEBRIS_MIN_BLOCKS** break off only in view, as they always have.
 ##   * **nothing but furniture** breaks off only within FURNITURE_FALL_RANGE: a
 ##     chair whose floor went was a lone untextured cube in mid-air, then small
 ##     debris deleted anyway at the bottom of the fall.
-func _delete_where_it_is(source: int, block_ids: PackedInt32Array) -> bool:
+## The camera is this machine's: small pieces are its own presentation.
+func _delete_where_it_is(source: int, block_ids: PackedInt32Array, landmark: bool) -> bool:
 	var n := block_ids.size()
 	if n == 0:
 		return false
@@ -645,7 +724,7 @@ func _delete_where_it_is(source: int, block_ids: PackedInt32Array) -> bool:
 		if not world.is_block_decorative(source, id):
 			furniture = false
 			break
-	if n >= DEBRIS_MIN_BLOCKS and not furniture:
+	if landmark and not furniture:
 		return false
 	var at := _centre_of(source, block_ids)
 	var dist := INF
@@ -654,10 +733,9 @@ func _delete_where_it_is(source: int, block_ids: PackedInt32Array) -> bool:
 	var gone := false
 	if furniture:
 		gone = dist > FURNITURE_FALL_RANGE and dist < INF
-	elif n <= TINY_BLOCKS:
-		gone = (dist > TINY_RANGE and dist < INF) or not can_be_seen(at)
-	else:
-		gone = not can_be_seen(at)
+	var far := dist > SMALL_KEEP_RANGE and dist < INF
+	if not furniture:
+		gone = far or not can_be_seen(at)
 	if not gone:
 		return false
 	# Split out and freed, NOT killed in place. Killing is the obvious saving --
@@ -670,7 +748,7 @@ func _delete_where_it_is(source: int, block_ids: PackedInt32Array) -> bool:
 		world.release_chunk(int(cut.chunk))
 	if furniture:
 		furniture_deleted += n
-	elif n <= TINY_BLOCKS:
+	elif far:
 		tiny_deleted += n
 	else:
 		discarded += n
@@ -740,7 +818,7 @@ func _ensure_per_block(isl: BrickIsland) -> void:
 ##
 ## Three states, and the distinction is what makes a collapse affordable:
 ##
-##   * **rubble** -- under DEBRIS_MIN_BLOCKS. Lands on the ground, on buildings
+##   * **rubble** -- a small piece, not a landmark. Lands on the ground, on buildings
 ##     and on settled wreckage; passes through anything still falling, and
 ##     through other rubble. A handful of loose bricks deflecting a falling
 ##     tower is neither believable nor cheap, and rubble-against-rubble is the
@@ -759,6 +837,7 @@ func make_debris(isl: BrickIsland) -> void:
 	if isl == null or not isl.is_valid():
 		return
 	isl.disposable = true
+	isl.landmark = false
 	_apply_layers(isl)
 
 
@@ -785,7 +864,7 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		carried_bytes: int, carried_width: int, carried_bands: Array = [],
-		piece_id := -1, owner := -1, announce := true) -> BrickIsland:
+		piece_id := -1, owner := -1, announce := true, is_landmark := true) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_anchored(chunk, false)
@@ -795,7 +874,10 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.piece_id = piece_id
 	isl.owner = owner
 	isl.local_com = world.get_chunk_com(chunk)
-	isl.disposable = false
+	# A toppled building or a piece back from sleep: a landmark unless told
+	# otherwise (only a loaded save's small pieces are).
+	isl.landmark = is_landmark
+	isl.disposable = not is_landmark
 
 	isl.bands = carried_bands
 	isl.body = RigidBody3D.new()
@@ -1112,7 +1194,7 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_ensure_per_block(isl)
 	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SHEAR)
-	e.point = isl.world_to_chunk(world_point)
+	e.point = _to_grid(isl, world_point)
 	e.radius = radius
 	e.limit = SHEAR_MAX_BLOCKS
 	var loosened := DamageLog.apply_entry(world, isl.chunk, e)
@@ -1142,7 +1224,7 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_ensure_per_block(isl)
 	var e := _piece_entry(isl, DamageLog.Kind.PIECE_BLAST)
-	e.point = isl.world_to_chunk(world_point)
+	e.point = _to_grid(isl, world_point)
 	e.radius = radius
 	var killed := DamageLog.apply_entry(world, isl.chunk, e)
 	if killed.is_empty():
@@ -1360,7 +1442,8 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# you actually see. So the sweeps are capped tightly and the planes are not:
 	# each sweep walks its own cell box, and a dozen of them was 60 ms.
 	var loosened := PackedInt32Array()
-	var inv := isl.chunk_transform().affine_inverse()
+	# World to grid space, the space piece commands are written in.
+	var inv := DamageLog.grid_frame(world, isl.chunk) * isl.chunk_transform().affine_inverse()
 	for i in mini(contacts.size(), SHEAR_CONTACTS_MAX):
 		# peel: the struck region comes away as one clump rather than as a spray
 		# of single bricks. See BrickWorld::separate_near.
@@ -1477,7 +1560,7 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 				break
 		if crowded:
 			continue
-		points.push_back(local_point)
+		points.push_back(DamageLog.grid_frame(world, isl.chunk) * local_point)
 		used.append(at)
 		planes += 1
 	if planes > 0:
@@ -1616,9 +1699,24 @@ func tick() -> void:
 				continue
 
 		# Disposable debris is swept up after a few seconds, settled or not.
-		if isl.disposable and now - isl.born_ms > DEBRIS_LIFETIME_MS:
-			_retire(isl, i + 1, &"swept")
-			continue
+		if isl.disposable:
+			if now - isl.born_ms > DEBRIS_LIFETIME_MS:
+				_retire(isl, i + 1, &"swept")
+				continue
+			# And sooner: moments after it comes to rest. Small pieces are
+			# presentation (see the class notes); once one has landed there is
+			# nothing left for it to show. The birth grace is so a piece cut loose
+			# at a standstill has time to start falling before it counts as still.
+			if now - isl.born_ms > RUBBLE_REST_MS \
+					and isl.body.linear_velocity.length() < RUBBLE_REST_SPEED:
+				if isl.rest_since == 0:
+					isl.rest_since = now
+				elif now - isl.rest_since >= RUBBLE_REST_MS:
+					swept_at_rest += 1
+					_retire(isl, i + 1, &"swept")
+					continue
+			else:
+				isl.rest_since = 0
 
 		if isl.settled:
 			continue
@@ -1802,10 +1900,10 @@ func _enforce_debris_cap() -> void:
 		var isl: BrickIsland = islands[i]
 		if not isl.is_valid() or not isl.settled or isl.disposable:
 			continue
-		if isl.settled_blocks <= SMALL_BLOCKS:
-			small.append(i)
-		else:
+		if isl.landmark:
 			large.append(i)
+		else:
+			small.append(i)
 	var live := small.size() + large.size()
 	cap_worst_over = maxi(cap_worst_over, live - total_live_max)
 	var over_small := maxi(small.size() - small_live_max, 0)
@@ -1829,10 +1927,20 @@ func _enforce_debris_cap() -> void:
 		for k in mini(over_small, small.size()):
 			doomed.append([small[k], true])
 	if over_large > 0:
-		large.sort_custom(func(a, c) -> bool:
-				return islands[a].settled_ms < islands[c].settled_ms)
-		for k in mini(over_large, large.size()):
-			doomed.append([large[k], false])
+		# Farthest from anybody first, and nobody's cover or floor at all: a piece
+		# asleep has no collision (see CAP_KEEP_RANGE).
+		var points := interest_points()
+		var away := {}
+		var keep: Array = []
+		for k in large:
+			var d := _distance_to_interest(world_aabb(islands[k]), points)
+			if d < CAP_KEEP_RANGE:
+				continue
+			away[k] = d
+			keep.append(k)
+		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
+		for k in mini(over_large, keep.size()):
+			doomed.append([keep[k], false])
 	doomed.sort_custom(func(a, c) -> bool: return int(a[0]) > int(c[0]))
 	var done := 0
 	for entry in doomed:
@@ -1857,9 +1965,10 @@ func _enforce_debris_cap() -> void:
 
 
 func _stream_dormancy() -> void:
-	if camera == null:
+	# Everybody, not one camera: see interest_points.
+	var points := interest_points()
+	if points.is_empty():
 		return
-	var here := camera.global_position
 
 	# Waking first, always. Something the player is walking towards matters
 	# more than something they have walked away from.
@@ -1868,7 +1977,7 @@ func _stream_dormancy() -> void:
 		if woke >= WAKES_PER_TICK:
 			break
 		var d: Dormant = dormant[i]
-		if _distance_to_box(d.record.box, here) > WAKE_RANGE:
+		if _distance_to_interest(d.record.box, points) > WAKE_RANGE:
 			continue
 		if _wake_record(d) != null:
 			dormant.remove_at(i)
@@ -1888,7 +1997,10 @@ func _stream_dormancy() -> void:
 			continue
 		if now - isl.born_ms < SLEEP_AFTER_MS:
 			continue
-		if isl.body.global_position.distance_to(here) - isl.radius < SLEEP_RANGE:
+		var nearest := INF
+		for p in points:
+			nearest = minf(nearest, isl.body.global_position.distance_to(p))
+		if nearest - isl.radius < SLEEP_RANGE:
 			continue
 		if _sleep(isl, at):
 			put_away += 1
@@ -1956,10 +2068,9 @@ func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_transform(chunk, chunk_xform)
-	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner)
+	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner, true, not is_disposable)
 	if isl == null:
 		return null
-	isl.disposable = is_disposable
 	if at_rest:
 		# The same state _wake_record builds: frozen, merged, not settling again.
 		isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
@@ -1981,6 +2092,45 @@ func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform
 		world.bake_chunk_async(chunk)
 		_mesh_queue.append(isl)
 	return isl
+
+
+## Decisions queued here and not made yet: a landing waiting to break a piece, a
+## piece waiting to be re-solved after something sheared it. The structure is
+## exact without them -- they have not happened -- but a save that dropped them
+## would load a piece that never finishes breaking. By piece id, for AreaSnapshot.
+func pending_state() -> Dictionary:
+	var resolve := PackedInt32Array()
+	for isl in _resolve_queue:
+		if isl.is_valid() and isl.piece_id >= 0:
+			resolve.append(isl.piece_id)
+	var fracture := []
+	for entry in _fracture_queue:
+		var isl: BrickIsland = entry[0]
+		if isl.is_valid() and isl.piece_id >= 0:
+			fracture.append([isl.piece_id, float(entry[1])])
+	return {"resolve": resolve, "fracture": fracture}
+
+
+## Queue again what pending_state saved, against the pieces a load brought back.
+## Returns how many were queued.
+func restore_pending(d: Dictionary) -> int:
+	var by_id := {}
+	for isl in islands:
+		if isl.is_valid() and isl.piece_id >= 0:
+			by_id[isl.piece_id] = isl
+	var n := 0
+	for id in d.get("resolve", PackedInt32Array()):
+		var isl: BrickIsland = by_id.get(int(id))
+		if isl != null and not _resolve_queue.has(isl):
+			_resolve_queue.append(isl)
+			n += 1
+	for f in d.get("fracture", []):
+		var isl: BrickIsland = by_id.get(int(f[0]))
+		if isl != null and not isl.fracture_queued:
+			isl.fracture_queued = true
+			_fracture_queue.append([isl, float(f[1])])
+			n += 1
+	return n
 
 
 ## Put a piece loaded from a save straight back to sleep: it was a record when
@@ -2079,6 +2229,7 @@ func report() -> Dictionary:
 		"discarded": discarded,
 		"furniture_deleted": furniture_deleted,
 		"tiny_deleted": tiny_deleted,
+		"swept_at_rest": swept_at_rest,
 		"dropped": dropped,
 		"breaks": breaks,
 		"band_breaks": band_breaks,

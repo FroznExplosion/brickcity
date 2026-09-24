@@ -40,8 +40,13 @@ extends RefCounted
 ## blocks in the building's own chunk, and which rooms are open is decided per
 ## machine). For the same reason a DETACH lists STRUCTURAL blocks only;
 ## furniture weighs nothing in a solve and each machine carries its own.
-## Piece commands carry CHUNK-LOCAL coordinates, because a piece's transform is
-## physics and differs between machines while its grid does not.
+## Piece commands carry GRID coordinates -- metres in the grid the piece's bricks
+## were laid in, which split_island copies unchanged into every piece cut from
+## it. Not the world: a piece's transform is physics and differs between machines.
+## And not chunk-local either: a piece's local frame starts at the corner of the
+## group it was cut as, and on the host that group included furniture the replay
+## never has, so the two local frames need not agree. BrickWorld.grid_to_world of a
+## block's absolute cell is where it is in this space on every machine.
 ##
 ## What is still deliberately NOT here: transforms and velocities. Those are
 ## physics state; replicating them continuously is what both sources warn
@@ -54,7 +59,7 @@ enum Kind {
 	SOLVE,        ## a building's stress solve, run when it found failures
 	TOPPLE,       ## a building came off its foundation whole and became a piece
 	DETACH,       ## `blocks` left a building (or, with FLAG_FROM_PIECE, a piece)
-	PIECE_BLAST,  ## a weapon, on a piece. Chunk-local
+	PIECE_BLAST,  ## a weapon, on a piece. Grid space
 	PIECE_SHEAR,  ## joints severed in a ball on a piece. FLAG_PEEL for a landing
 	PIECE_SNAP,   ## a piece snapped across `normal` at `points`
 	PIECE_SOLVE,  ## a piece's stress solve, under gravity `normal` (integer)
@@ -174,13 +179,19 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 	return PackedInt32Array()
 
 
-## A piece command, applied in the piece's own space. The chunk's transform is
-## set to identity for the duration, so the host and every client hand the
+## The transform that makes a chunk's local space the grid space piece commands
+## are written in: its local origin sits at its grid origin's place in the grid.
+static func grid_frame(world: BrickWorld, chunk: int) -> Transform3D:
+	return Transform3D(Basis(), BrickWorld.grid_to_world(world.get_chunk_origin(chunk)))
+
+
+## A piece command, applied in grid space (see the class notes). For the duration
+## the chunk's transform is grid_frame, so the host and every client hand the
 ## extension the SAME numbers -- not the same point expressed through two
 ## transforms that agree only to the last bit or two.
 static func _apply_local(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
 	var saved := world.get_chunk_transform(chunk)
-	world.set_chunk_transform(chunk, Transform3D.IDENTITY)
+	world.set_chunk_transform(chunk, grid_frame(world, chunk))
 	var out := PackedInt32Array()
 	match e.kind:
 		Kind.PIECE_BLAST:

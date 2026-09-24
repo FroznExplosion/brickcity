@@ -3359,9 +3359,9 @@ func _run_shot_pass() -> void:
 		float(int(mem.total_bytes) - int(mem.occupancy_bytes) - int(mem.block_bytes)) / 1048576.0])
 	print("[city] islands: %d live (%d settled, %d loose), %d bricks discarded unseen" % [
 		isl.islands, isl.settled, isl.disposable, isl.discarded])
-	print("[city]   deleted where they came loose: %d brick(s) in pieces of %d or fewer, %d of furniture; %.0f ms deciding"
-			% [isl.tiny_deleted, IslandManager.TINY_BLOCKS, isl.furniture_deleted,
-			float(islands.spawn_prof.deleted)])
+	print("[city]   small pieces: %d brick(s) deleted where they came loose beyond %.0f m, %d swept up at rest; %d of furniture; %.0f ms deciding"
+			% [isl.tiny_deleted, IslandManager.SMALL_KEEP_RANGE, int(isl.get("swept_at_rest", 0)),
+			isl.furniture_deleted, float(islands.spawn_prof.deleted)])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
@@ -3521,8 +3521,8 @@ func _trace_piece(rep: StructureReplayer, entries: Array, isl: BrickIsland,
 	for s in host:
 		if not in_replay.has(s):
 			lost[s] = true
-	# Which replay piece holds them now? Cells are chunk-local, so only pieces cut
-	# from the same place line up -- this is a lead, not a proof.
+	# Which replay piece holds them now? Cells are absolute -- the building's grid,
+	# which every piece cut from it keeps -- so this is where they went.
 	var holders := {}
 	for id in rep.pieces:
 		var c := rep.piece_chunk(int(id))
@@ -3575,7 +3575,8 @@ func _explain_difference(what: String, host: PackedStringArray, replay: PackedSt
 
 
 ## A chunk's structure as something comparable: every living, structural block
-## as its local cell and archetype, sorted.
+## as its ABSOLUTE cell (the building's grid, kept by every piece cut from it and
+## now through sleep) and its archetype by name, sorted.
 func _structure_of(chunk: int) -> PackedStringArray:
 	var out := PackedStringArray()
 	if chunk < 0 or not world.is_chunk_alive(chunk):
@@ -3592,7 +3593,7 @@ func _structure_of(chunk: int) -> PackedStringArray:
 		# By NAME: fixture parts are baked on first demand, so the same stair step
 		# can hold a different archetype number in another registry -- or on
 		# another machine -- and still be the same brick.
-		out.append("%s:%s" % [cell, world.get_archetype_name(world.get_block_archetype(chunk, id))])
+		out.append("%s:%s" % [origin + cell, world.get_archetype_name(world.get_block_archetype(chunk, id))])
 	out.sort()
 	return out
 
@@ -3752,8 +3753,8 @@ func _run_stress_pass() -> void:
 	print("[stress] collision: %s" % _collision_report())
 	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
-	print("[stress] deleted where they came loose: %d brick(s) in pieces of %d or fewer, %d unseen small, %d of furniture"
-			% [int(islands.report().tiny_deleted), IslandManager.TINY_BLOCKS,
+	print("[stress] small pieces deleted where they came loose: %d brick(s) beyond %.0f m, %d unseen, %d of furniture"
+			% [int(islands.report().tiny_deleted), IslandManager.SMALL_KEEP_RANGE,
 			int(islands.report().discarded), int(islands.report().furniture_deleted)])
 	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
 			_band_builds, _band_cpp_ms, _band_upload_ms, _band_worst])

@@ -731,7 +731,7 @@ The fix, for large pieces only:
 
 1. **Only the host turns physics into structure** — landing fractures, island solves, and a falling piece shearing a standing building alike ([AIPlan R5](AIPlan.md#11--would-have-forced-a-rewrite)). **Only the host breaks large pieces after they come loose.** Landing fractures and island stress
    solves run on the host and are recorded as commands addressed to the piece — its content hash
-   plus **chunk-local** cells, never world points, because the piece's transform differs between
+   plus **grid-space** cells, never world points, because the piece's transform differs between
    machines. Clients apply those and never fracture large pieces themselves.
 2. **While falling:** transforms on the unreliable stream, visible pieces first (Multiplayer.md §4).
 3. **When the host's piece settles:** its final transform is sent once, reliably, keyed by content

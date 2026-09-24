@@ -107,14 +107,11 @@ Two bugs in the dormant tier, found the same way and fixed — **they affect sin
   restored — twice in the world. `dormant_probe`: 50 shed, 80 standing, the old rule kept 130.
 - **A piece's furniture woke up as structure**, bearing load. The record now keeps which blocks
   are decorative.
-- **A piece's furniture became structure every time the piece broke.** `split_island` lays the
-  new piece's blocks with `place_block`'s default, which is not decorative.
-  `IslandManager.carry_furniture` puts the flag back (`dormant_probe`: a bare split keeps 0 of
-  25). Fixed in GDScript because the DLL holds another session's uncommitted C++; the real fix
-  belongs in `split_island`.
-- **Not fixed, noted:** `split_island` does not carry `support_broken` / `bottom_broken` either,
-  so joints severed inside a group heal when it becomes a piece. Every machine does the same, so
-  it is not a divergence — it is a fidelity bug for the next C++ pass.
+- **A piece's furniture became structure every time the piece broke, and its severed joints
+  healed.** `split_island` laid each block fresh. Fixed in C++ (2026-09-24): it now carries the
+  decorative flag, `support_broken`, `bottom_broken` and `hp`. `dormant_probe` checks all of it,
+  and that a sleeping piece's record keeps severed joints (new `get_block_joints` /
+  `set_block_joints`) and its grid origin.
 
 - **Step 4 gate:** the city `--shot` pass replays its own log into fresh twin buildings after the
   collapse — 1,698 commands, 0 missed, 4 of 4 buildings and 66 of 66 pieces identical.
@@ -125,16 +122,36 @@ Two bugs in the dormant tier, found the same way and fixed — **they affect sin
   checkpoint and a later one with a piece asleep both load into a fresh world with every piece
   back brick for brick, where it was, moving as it was.
 
+**Step 5 done, and the three follow-ups (2026-09-24):**
+- **Debris by size (R2).** `IslandManager.is_landmark_size`: a piece at least 2.0 m long or 0.9 m³
+  of box is a *landmark* — never deleted, solid to people, the same on every machine. Anything
+  smaller is presentation: deleted where it came loose when unseen or beyond 30 m, otherwise swept
+  0.3 s after it comes to rest (2.5 s backstop), and `Layers.PAWN_MASK` no longer includes
+  `RUBBLE`. Dormancy and the debris cap ask `interest_points()` (every player, later AI agents)
+  instead of the camera; the cap sleeps landmarks farthest-first and never one within 8 m of
+  anybody. `tools/debris_probe.gd`, 20 checks.
+- **Piece commands are in grid space**, not chunk-local: a piece's local frame starts at the
+  corner of the group it was cut as, which on the host included furniture a replay never has.
+- **Queued work survives a save.** `AreaSnapshot` v2 carries the island manager's pending
+  re-solves and landings (`pending_state` / `restore_pending`) and hands the scene's own queue
+  back. `snapshot_probe`: saved with a re-solve queued, the host and the loaded copy each finish
+  into the same 13 pieces with the same ids.
+- **Furniture riding a piece comes back on load**, by absolute cell and part name.
+- **Found on the way:** commands for furniture-only pieces (which exist in no replay) were being
+  recorded — twelve orphans once the probe's tower had real furniture. Now not recorded.
+
+Measured on the worktree build (HEAD + these changes + the rebuilt DLL): 31 of 31 probes clean;
+city `--shot` log replay exact in 5 of 5 runs (up to 154 of 154 pieces, 2,074 commands); more
+pieces stay alive (83–154 against 56–73, the floor panels and clumps that used to be deleted) with
+frame time unchanged at 16.6 ms; `--stress` 200 mean 18.4 ms against 18.2.
+
 Not done, and why:
 - **No save key in the city scene yet.** Loading there also has to rebuild the buildings'
-  meshes and bodies and re-queue their solves; the world half is done and probed.
-- **Queued work at save time** (a landing waiting to fracture, a building waiting to solve) is not
-  carried: the structure is exact, but a pending decision is lost. The scene has to flush or
-  re-queue.
-- **Furniture riding a piece** is not in the log and does not come back on load.
+  meshes and bodies; the world half, the queues and the furniture are done and probed.
 - A building dematerialised and rematerialised after pieces left it brings those blocks back
   (`get_dead_blocks` skips detached ones) — pre-existing, and a replay would disagree with it.
-- Step 5 (debris classed by size, R2) is next.
+- The first one or two scene passes after an `--import` run 50–80 ms mean with the same code that
+  runs 16.6 ms afterwards. Suspected shader compilation; not established.
 
 | Work | Where |
 |---|---|

@@ -2728,6 +2728,32 @@ float BrickWorld::get_block_capacity(int chunk_id, int block_id) const {
     return contact_tension * stress[chunk_id].tension_per_stud;
 }
 
+int BrickWorld::get_block_joints(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    const Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size()) {
+        return 0;
+    }
+    const Block &b = c.blocks[block_id];
+    return (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
+            | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0);
+}
+
+void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size()) {
+        return;
+    }
+    Block &b = c.blocks[block_id];
+    b.support_broken = (joints & JOINT_SUPPORT_BROKEN) != 0;
+    b.bottom_broken = (joints & JOINT_BOTTOM_BROKEN) != 0;
+}
+
 bool BrickWorld::is_support_broken(int chunk_id, int block_id) const {
     if (!valid_chunk(chunk_id)) {
         return false;
@@ -3578,7 +3604,20 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
             continue;
         }
         const Block src_block = chunks[chunk_id].blocks[bid];
-        place_block(island_id, src_block.cell, src_block.archetype, src_block.colour);
+        // Everything a block IS goes with it, not only its shape. Laying it
+        // fresh used to reset three things, each a bug of its own: furniture
+        // came out as structure (bearing load, counted by every solve), a joint
+        // a landing had severed was whole again (so a sheared clump healed the
+        // moment it became a piece), and a damaged brick was new. Found by the
+        // city's log-replay check, Docs/AIPlan.md P0.
+        const int32_t nid = place_block(island_id, src_block.cell, src_block.archetype,
+                src_block.colour, src_block.decorative);
+        if (nid >= 0) {
+            Block &nb = chunks[island_id].blocks[nid];
+            nb.support_broken = src_block.support_broken;
+            nb.bottom_broken = src_block.bottom_broken;
+            nb.hp = src_block.hp;
+        }
         chunks[chunk_id].blocks[bid].alive = false;
         chunks[chunk_id].blocks[bid].detached = true;
         taken.push_back(bid);
@@ -4276,6 +4315,12 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_block_capacity);
     ClassDB::bind_method(D_METHOD("is_support_broken", "chunk_id", "block_id"),
             &BrickWorld::is_support_broken);
+    ClassDB::bind_method(D_METHOD("get_block_joints", "chunk_id", "block_id"),
+            &BrickWorld::get_block_joints);
+    ClassDB::bind_method(D_METHOD("set_block_joints", "chunk_id", "block_id", "joints"),
+            &BrickWorld::set_block_joints);
+    BIND_CONSTANT(JOINT_SUPPORT_BROKEN);
+    BIND_CONSTANT(JOINT_BOTTOM_BROKEN);
 
     ClassDB::bind_method(D_METHOD("apply_hit", "chunk_id", "world_point", "radius_m"),
             &BrickWorld::apply_hit);

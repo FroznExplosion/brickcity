@@ -202,17 +202,31 @@ func _check_furniture_stays_furniture() -> void:
 			"%d of %d" % [still, some.size()])
 
 
-## And when the piece carrying it breaks. split_island lays the new piece's
-## blocks as structure; IslandManager.carry_furniture puts the flag back.
+## And when the piece carrying it breaks. split_island used to lay the new
+## piece's blocks fresh -- furniture as structure, severed joints whole, damage
+## gone. It carries all three now; and so does a record, through a sleep.
 func _check_furniture_survives_a_split() -> void:
-	print("\nfurniture stays furniture when its piece breaks")
+	print("\nwhat a block is survives its piece breaking")
 	var res := _world()
 	var w: BrickWorld = res[0]
 	var furnished := func() -> Array:
 		var chunk := _rubble(w, res[1], 10)
 		w.separate_plane(chunk, w.get_chunk_transform(chunk) * Vector3(3.0, 5 * 3 * 0.14, 2.0),
 				w.get_chunk_transform(chunk).basis * Vector3.UP, 0.42)
-		var group: PackedInt32Array = w.get_components(chunk)[1]
+		# The piece above the cut: its grid cannot start at zero, which is what
+		# lets the sleep check below tell a kept origin from a reset one.
+		var group := PackedInt32Array()
+		var best := -1
+		for comp in w.get_components(chunk):
+			var ids: PackedInt32Array = comp
+			if ids.size() < 8:
+				continue
+			var lo := 1 << 30
+			for id in ids:
+				lo = mini(lo, (w.get_block_ticks(chunk, id)[0] as Vector3i).y)
+			if lo > best:
+				best = lo
+				group = ids
 		# Half of the group is furniture.
 		var marked := PackedInt32Array()
 		for k in range(0, group.size(), 2):
@@ -220,15 +234,50 @@ func _check_furniture_survives_a_split() -> void:
 		w.set_blocks_decorative(chunk, marked, true)
 		return [chunk, group, marked.size()]
 	var a: Array = furnished.call()
-	var raw: Dictionary = w.split_island(a[0], a[1])
-	var lost := w.get_decorative_blocks(int(raw.chunk)).size()
-	var b: Array = furnished.call()
-	var cut: Dictionary = w.split_island(b[0], b[1])
-	IslandManager.carry_furniture(w, b[0], cut)
+	var cut: Dictionary = w.split_island(a[0], a[1])
 	var kept := w.get_decorative_blocks(int(cut.chunk)).size()
-	print("  %d furniture block(s) in the group; a bare split keeps %d" % [int(b[2]), lost])
-	_ok("carried across the split, every one is still furniture", kept == int(b[2]),
-			"%d of %d" % [kept, int(b[2])])
+	# split_island used to lay every block as structure; it measured 0 of 25 kept.
+	_ok("every furniture block is still furniture after the split", kept == int(a[2]),
+			"%d of %d" % [kept, int(a[2])])
+
+	# Severed joints go with the blocks too. Cut some by hand, split, look.
+	var b: Array = furnished.call()
+	var group: PackedInt32Array = b[1]
+	var severed := {}
+	for k in range(1, group.size(), 3):
+		var joints := BrickWorld.JOINT_BOTTOM_BROKEN if k % 2 else BrickWorld.JOINT_SUPPORT_BROKEN
+		w.set_block_joints(b[0], group[k], joints)
+		severed[group[k]] = joints
+	var cut2: Dictionary = w.split_island(b[0], group)
+	var taken: PackedInt32Array = cut2.source_blocks
+	var same := 0
+	for k in taken.size():
+		if w.get_block_joints(int(cut2.chunk), k) == int(severed.get(taken[k], 0)):
+			same += 1
+	_ok("a joint severed before the split is still severed after it",
+			same == taken.size() and not severed.is_empty(),
+			"%d of %d blocks agree, %d severed" % [same, taken.size(), severed.size()])
+
+	# And through a sleep: the record keeps them, and keeps where the grid starts.
+	var piece := int(cut2.chunk)
+	var origin := w.get_chunk_origin(piece)
+	var before := {}
+	for id in w.get_block_count(piece):
+		before[id] = w.get_block_joints(piece, id)
+	var record := ChunkRecord.capture(w, piece)
+	w.release_chunk(piece)
+	var back := record.restore(w)
+	var kept_joints := 0
+	var n := 0
+	for id in before:
+		if int(before[id]) != 0:
+			n += 1
+			if w.get_block_joints(back, int(id)) == int(before[id]):
+				kept_joints += 1
+	_ok("and still severed after the piece sleeps and wakes", n > 0 and kept_joints == n,
+			"%d of %d" % [kept_joints, n])
+	_ok("which wakes at the grid origin it slept at", w.get_chunk_origin(back) == origin
+			and origin != Vector3i.ZERO, "%s" % w.get_chunk_origin(back))
 
 
 func _check_the_box_it_leaves_behind() -> void:

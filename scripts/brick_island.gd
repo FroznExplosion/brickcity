@@ -64,6 +64,12 @@ var settled_blocks := 0
 ## Small enough to be swept up after a few seconds. Big sections never are --
 ## a piece that stays intact is what the whole model exists to produce.
 var disposable := false
+## Big enough to hide behind or stand on (IslandManager.is_landmark_size). The
+## opposite of disposable except for a fixture made rubble on purpose.
+var landmark := false
+## When a small piece came to rest, for sweeping it up moments later; 0 while
+## it is moving.
+var rest_since := 0
 ## Non-zero when this island is a single brick drawn from a shared MultiMesh
 ## rather than its own MeshInstance3D. The key is the brick's box size.
 var mm_key := Vector3.ZERO

@@ -27,6 +27,8 @@ const TENSION := 9.3
 const FALL_FRAMES := 6
 ## Frames to wait for everything to settle.
 const SETTLE_FRAMES := 400
+## Ticks the host and a loaded copy each get to work through what was queued.
+const PENDING_TICKS := 12
 
 var _pass := 0
 var _fail := 0
@@ -44,6 +46,10 @@ var _snap_fall: PackedByteArray
 var _snap_rest: PackedByteArray
 var _expect_fall: Dictionary
 var _expect_rest: Dictionary
+var _snap_pending: PackedByteArray
+var _expect_pending: Dictionary
+## How many furniture blocks the toppling tower carries down.
+var _furnished := 0
 
 
 func _init() -> void:
@@ -182,6 +188,7 @@ func _tick() -> void:
 		3:
 			_check_load("mid-fall", _snap_fall, _expect_fall)
 			_check_load("settled, shot, one asleep", _snap_rest, _expect_rest)
+			_check_pending_load()
 			_finish()
 
 
@@ -204,6 +211,23 @@ func _collapse() -> void:
 		for z in 6:
 			for y in [0.4, 1.2]:
 				_blast(_host, ids[1], Vector3(14.0 + 0.4 + x * 1.0, y, 0.4 + z * 1.0), 1.0)
+	# Furniture in the toppling tower's rooms: laid as decorative blocks in empty
+	# cells, which is what a room's contents are (RoomManifest.build_item). It
+	# rides the piece down, is in no command, and a save still has to bring it
+	# back. ADDED, never converted: flagging the tower's own bricks as furniture
+	# would make the host's structure differ from every replay's, which is a
+	# different -- and false -- claim.
+	var w: BrickWorld = _host.world
+	var c1 := _chunk_of(_host, ids[1])
+	var one: int = (_host.registry as BuildingRegistry).palette["brick_1x1"]
+	var dims := w.get_chunk_dims(c1)
+	for y in range(dims.y - 12, 3, -9):
+		for z in range(3, dims.z - 3, 3):
+			for x in range(3, dims.x - 3, 4):
+				if _furnished < 12 and w.can_place(c1, Vector3i(x, y, z), one):
+					if w.place_block(c1, Vector3i(x, y, z), one, 5, true) >= 0:
+						_furnished += 1
+	_ok("the toppling tower has furniture in it", _furnished > 0, "%d block(s)" % _furnished)
 	for id in ids:
 		_settle_building(_host, id)
 	var islands: IslandManager = _host.islands
@@ -317,6 +341,30 @@ func _after_rest() -> void:
 	islands.wake_dormant_near(d.record.box.get_center(), 1.0)
 	_ok("woken, still the same piece", _woken_ids.has(id), "id %d, woken %s" % [id, _woken_ids])
 
+	# --- a decision waiting at the moment of the save --------------------------
+	# Shear a big piece: it is queued to be re-solved, and has not been. Save
+	# right then, and let the host finish; a load has to finish the same way.
+	var q: BrickIsland = null
+	for isl in islands.islands:
+		if isl.is_valid() and isl.piece_id >= 0 and isl.landmark \
+				and w.get_alive_block_count(isl.chunk) > 30:
+			q = isl
+			break
+	var loosened_before := islands.impact_blocks
+	if q != null:
+		islands.shear(q, _aim(w, q), 2.2)
+	print("  (shear: piece %s, %d block(s), loosened %d)" % [
+		q.piece_id if q != null else -1, w.get_alive_block_count(q.chunk) if q != null else 0,
+		islands.impact_blocks - loosened_before])
+	var waiting := islands.pending_state()
+	_ok("a piece is waiting to be re-solved when the save is taken",
+			(waiting.resolve as PackedInt32Array).size() > 0, str(waiting))
+	_snap_pending = AreaSnapshot.capture(authority.commands, islands,
+			{"dirty": [_host.ids[0]]}).to_bytes()
+	for i in PENDING_TICKS:
+		islands.tick()
+	_expect_pending = _expectations(_host)
+
 
 ## What a checkpoint has to bring back: every building's structure, and every
 ## recorded piece's structure, transform, speed and rest.
@@ -332,7 +380,7 @@ func _expectations(c: Dictionary) -> Dictionary:
 			continue
 		out.pieces[isl.piece_id] = {"structure": _structure_of(w, isl.chunk),
 				"xform": isl.chunk_transform(), "linear": isl.body.linear_velocity,
-				"at_rest": isl.settled}
+				"at_rest": isl.settled, "furniture": _furniture_of(w, isl.chunk)}
 		if isl.settled:
 			out.at_rest += 1
 		else:
@@ -388,6 +436,17 @@ func _check_load(label: String, bytes: PackedByteArray, want: Dictionary) -> voi
 			"%d of %d" % [placed, want.pieces.size()])
 	_ok("and a moving piece moving as it was", moving == int(want.moving),
 			"%d of %d" % [moving, int(want.moving)])
+	var furn_same := 0
+	var furn_n := 0
+	for id in want.pieces:
+		var p: Dictionary = want.pieces[id]
+		var isl: BrickIsland = got.get(id)
+		furn_n += (p.furniture as PackedStringArray).size()
+		if isl != null and _furniture_of(w, isl.chunk) == p.furniture:
+			furn_same += 1
+	_ok("and every piece carries the furniture it carried",
+			furn_same == want.pieces.size() and furn_n == int(report.furniture),
+			"%d of %d pieces, %d furniture block(s)" % [furn_same, want.pieces.size(), furn_n])
 	_ok("the pieces that were asleep are asleep",
 			(c.islands as IslandManager).dormant.size() == int(want.dormant),
 			"%d of %d" % [(c.islands as IslandManager).dormant.size(), int(want.dormant)])
@@ -414,6 +473,51 @@ func _aim(w: BrickWorld, isl: BrickIsland) -> Vector3:
 	return isl.body.global_position
 
 
+## A checkpoint taken while a piece was waiting to be re-solved. Loaded, and
+## given the same ticks the host had, it has to break the same way: the same
+## pieces, with the same ids -- which is the log continuing exactly where the
+## save stopped it.
+func _check_pending_load() -> void:
+	print("\nstep 2: load a checkpoint taken with a decision still queued")
+	var snap := AreaSnapshot.from_bytes(_snap_pending)
+	_ok("it reads back", snap != null)
+	if snap == null:
+		return
+	var c := _make_city(true)
+	var report := snap.restore(c.world, func(id: int, frame: int) -> int:
+		return _chunk_of(c, id) if frame == 0 else -1,
+		c.islands, func(id: int) -> void: (c.registry as BuildingRegistry).hand_over(id))
+	(c.authority as WorldAuthority).commands = DamageLog.from_data(snap.commands)
+	print("  %s" % report)
+	_ok("the queued decision is queued again", int(report.pending) > 0, "%d" % int(report.pending))
+	_ok("and the scene's own queue is handed back",
+			(report.scene as Dictionary).get("dirty", []) == [_host.ids[0]], str(report.scene))
+	for i in PENDING_TICKS:
+		(c.islands as IslandManager).tick()
+	var w: BrickWorld = c.world
+	var got := {}
+	for isl in (c.islands as IslandManager).islands:
+		if isl.is_valid() and isl.piece_id >= 0:
+			got[isl.piece_id] = isl
+	var same := 0
+	for id in _expect_pending.pieces:
+		var isl: BrickIsland = got.get(id)
+		if isl != null and _structure_of(w, isl.chunk) == _expect_pending.pieces[id].structure:
+			same += 1
+	_ok("it finishes breaking the way the host did, piece for piece",
+			same == _expect_pending.pieces.size() and got.size() == _expect_pending.pieces.size(),
+			"%d of %d host pieces matched, %d loaded" % [same, _expect_pending.pieces.size(), got.size()])
+	_free_city(c)
+
+
+## Furniture in a chunk, comparable: absolute cell and part name, sorted.
+func _furniture_of(w: BrickWorld, chunk: int) -> PackedStringArray:
+	var out := PackedStringArray()
+	for f in AreaSnapshot.furniture_of(w, chunk):
+		out.append("%s:%s" % [f[0], f[1]])
+	out.sort()
+	return out
+
 func _buildings_match(a: Dictionary, b: Dictionary) -> bool:
 	for id in a.ids:
 		var ba := (a.registry as BuildingRegistry).get_building(id)
@@ -438,7 +542,7 @@ func _structure_of(w: BrickWorld, chunk: int) -> PackedStringArray:
 		var cell := StructureReplayer.block_cell(w, chunk, id)
 		if cell == StructureReplayer.NO_CELL or not w.is_solid(chunk, origin + cell):
 			continue
-		out.append("%s:%s" % [cell, w.get_archetype_name(w.get_block_archetype(chunk, id))])
+		out.append("%s:%s" % [origin + cell, w.get_archetype_name(w.get_block_archetype(chunk, id))])
 	out.sort()
 	return out
 

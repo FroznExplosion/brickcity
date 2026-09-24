@@ -93,16 +93,12 @@ func apply(e: DamageLog.Entry) -> bool:
 			var ids := e.blocks
 			if from_piece:
 				ids = PackedInt32Array()
-				var origin := world.get_chunk_origin(source)
+				# Absolute cells, in the building's grid (DamageLog on grid space).
 				for p in e.points:
-					var id := world.block_at(source, origin + Vector3i(p))
+					var id := world.block_at(source, Vector3i(p))
 					if id >= 0:
 						ids.append(id)
 			var cut: Dictionary = world.split_island(source, ids)
-			if not cut.is_empty():
-				# Only structural blocks are named, so there is normally no furniture
-				# to carry; but a loaded save's pieces can hold some.
-				IslandManager.carry_furniture(world, source, cut)
 			if cut.is_empty():
 				var dead := 0
 				for id in ids:
@@ -132,9 +128,9 @@ func apply_all(entries: Array) -> void:
 const NO_CELL := Vector3i(-99999, -99999, -99999)
 
 
-## A cell this block actually fills, in its chunk's own grid (not offset by the
-## chunk's origin). How a piece's blocks are named, because their ids do not
-## survive the piece going to sleep (IslandManager.record_detach).
+## A cell this block actually fills, relative to its chunk's grid origin -- add
+## get_chunk_origin for the absolute cell. How a piece's blocks are named, because
+## their ids do not survive the piece going to sleep (IslandManager.record_detach).
 ##
 ## Not simply the corner of the block's box: a shaped part -- a wedge, a stair
 ## step -- need not fill its own corner, and a whole flight of stairs coming loose
