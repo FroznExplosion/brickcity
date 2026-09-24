@@ -259,7 +259,10 @@ static func _quad(verts: PackedVector3Array, normals: PackedVector3Array,
 	uvs.push_back(Vector2(size.x, 0))
 	uvs.push_back(Vector2(0, size.y))
 	uvs.push_back(Vector2(size.x, size.y))
-	# Corners run a, b, c, d with triangles (a,b,c) and (b,d,c), matching the
-	# brick mesher, so the seam shader reads a course as one band.
-	for i in [0, 1, 2, 1, 3, 2]:
+	# Corners run a, b, c, d, split along b-c like the brick mesher so the seam
+	# shader reads a course as one band -- but wound (a,c,b) and (b,c,d). The
+	# other way round, every face pointed INTO the build: back-face culling hid
+	# each outside wall and drew the inside of the far one, so a placed build
+	# looked hollow and inside-out until it was damaged and drew real bricks.
+	for i in [0, 2, 1, 1, 2, 3]:
 		indices.push_back(v0 + i)

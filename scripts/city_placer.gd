@@ -16,6 +16,7 @@ extends Node3D
 ##   LOCK (hold E).  The height the ghost is at is frozen and the ghost follows
 ##       the dot across that plane, red wherever it does not fit.
 ##   R turns it a quarter. LMB places it, and it stays in hand for another.
+##   The wheel steps through the library -- every saved build (`library`).
 ##   P or RMB puts it down without placing.
 ##
 ## The ghost is the build itself -- every frame's real mesh and studs, drawn
@@ -27,6 +28,10 @@ extends Node3D
 ## Called with the new building's id once it is registered, so the scene can
 ## index and shell it like any other building.
 var on_placed := Callable()
+
+## Where prebuilt structures live. `res://builds/` ships with the game
+## (tools/make_prebuilts.gd writes it); `user://builds/` is the player's.
+const LIBRARY_DIRS := ["res://builds/", "user://builds/"]
 
 var _registry: BuildingRegistry
 var _camera: Camera3D
@@ -43,6 +48,8 @@ var _cell := Vector3i.ZERO   ## where the turned box's min corner goes
 var _valid := false
 var _lock := {}              ## {"y": plates} while E is held
 var _target := Vector3i.ZERO ## the stud aimed at
+var _paths := PackedStringArray()   ## the library, as the wheel steps through it
+var _index := 0
 
 ## Pre-turn box sizes, so a quarter turn swaps x and z.
 func _turned_dims() -> Vector3i:
@@ -71,12 +78,46 @@ func setup(registry: BuildingRegistry, camera: Camera3D) -> void:
 	layer.add_child(_hud)
 
 
-## Pick up a saved build, or put the one in hand down.
+## Every build that can be placed: `first` (the workshop's last save) if it
+## exists, then each library folder's .json files in name order.
+static func library(first: String = "") -> PackedStringArray:
+	var out := PackedStringArray()
+	if first != "" and FileAccess.file_exists(first):
+		out.append(first)
+	for dir in LIBRARY_DIRS:
+		if not DirAccess.dir_exists_absolute(dir):
+			continue   # a player who has saved nothing has no folder yet
+		var files := DirAccess.get_files_at(dir)
+		files.sort()
+		for f in files:
+			var path: String = dir + f
+			if f.ends_with(".json") and not out.has(path):
+				out.append(path)
+	return out
+
+
+## Pick up a build, or put the one in hand down. The wheel then steps through
+## the rest of the library from wherever `path` is in it.
 func toggle(path: String) -> bool:
 	if is_active():
 		stop()
 		return false
-	return start(path)
+	_paths = library(path)
+	if _paths.is_empty():
+		push_warning("[place] nothing to place: save a build in the workshop with F5")
+		return false
+	_index = maxi(_paths.find(path), 0)
+	return start(_paths[_index])
+
+
+## Next (or previous) build in the library, keeping the turn.
+func cycle(step: int) -> void:
+	if _paths.size() < 2:
+		return
+	var keep := _turn
+	_index = posmod(_index + step, _paths.size())
+	if start(_paths[_index]):
+		_turn = keep
 
 
 func start(path: String) -> bool:
@@ -87,7 +128,8 @@ func start(path: String) -> bool:
 	if r.is_empty():
 		push_warning("[place] %s holds no bricks" % path)
 		return false
-	return hold(r, path.get_file())
+	var label := r.name if r.name != "" and r.name != "untitled" else path.get_file().get_basename()
+	return hold(r, label)
 
 
 ## Take a recipe in hand. Split from `start` so a probe can hand one over.
@@ -326,8 +368,9 @@ func _update() -> void:
 	if _ghost != null:
 		_ghost.transform = placement()
 	_material.albedo_color = Color(0.35, 0.9, 1.0, 0.4) if _valid else Color(1.0, 0.25, 0.22, 0.45)
-	_hud.text = "PLACING %s   %s%s\nLMB place   R turn   hold E lock height   P / RMB put down" % [
-			_name, "fits" if _valid else "BLOCKED", "   [height locked]" if not _lock.is_empty() else ""]
+	var which := (" (%d of %d)" % [_index + 1, _paths.size()]) if _paths.size() > 1 else ""
+	_hud.text = "PLACING %s%s   %s%s\nLMB place   wheel next build   R turn   hold E lock height   P / RMB put down" % [
+			_name, which, "fits" if _valid else "BLOCKED", "   [height locked]" if not _lock.is_empty() else ""]
 
 
 ## Register it where the ghost is. Returns the new building id, or -1.
@@ -354,6 +397,12 @@ func _unhandled_input(e: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			MOUSE_BUTTON_RIGHT:
 				stop()
+				get_viewport().set_input_as_handled()
+			MOUSE_BUTTON_WHEEL_UP:
+				cycle(1)
+				get_viewport().set_input_as_handled()
+			MOUSE_BUTTON_WHEEL_DOWN:
+				cycle(-1)
 				get_viewport().set_input_as_handled()
 	elif e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_R:
 		turn()

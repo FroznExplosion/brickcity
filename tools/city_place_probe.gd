@@ -113,5 +113,55 @@ func _init() -> void:
 	_ok("so a click there places nothing", p.place() < 0)
 	p._lock = {}
 
+	print("\nthe wheel steps through the library")
+	var lib := CityPlacer.library()
+	_ok("the shipped prebuilts are in it", lib.has("res://builds/cottage.json")
+			and lib.has("res://builds/watchtower.json"), "%s" % [lib])
+	p.stop()
+	p.toggle(lib[0])
+	var first := p._name
+	p.turn()
+	p.cycle(1)
+	_ok("the wheel picks the next build", p._name != first and p._index == 1,
+			"%s -> %s" % [first, p._name])
+	_ok("keeping the turn", p._turn == 1)
+	for i in lib.size():
+		p.cycle(1)
+	_ok("and comes back round", p._index == 1, "%d" % p._index)
+	p.stop()
+
+	print("\nthe shell a build draws before it is damaged faces OUT")
+	_check_shell_winding(w)
+
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+## Every triangle of a build's shell has to be wound the way the brick mesher
+## winds its own, or back-face culling hides the outside and draws the inside
+## -- which is what a placed build looked like until it was damaged.
+func _check_shell_winding(w: BrickWorld) -> void:
+	var sign_of := func(arrays: Array) -> Vector2i:
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var out := Vector2i.ZERO
+		for t in range(0, idx.size(), 3):
+			var a := v[idx[t]]
+			var face := (v[idx[t + 1]] - a).cross(v[idx[t + 2]] - a)
+			if face.dot(n[idx[t]]) > 0.0:
+				out.x += 1
+			else:
+				out.y += 1
+		return out
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(4, 3, 4))
+	w.place_block(c, Vector3i.ZERO, TowerRecipe.bake_palette(w)["brick_2x4_z"], 4)
+	var bricks: Vector2i = sign_of.call(w.build_chunk_mesh(c))
+	var r := BuildRecipe.load_from("res://builds/cottage.json")
+	var shell: Vector2i = sign_of.call(BuildShell.build_arrays(w, r))
+	var brick_sign := 1 if bricks.x > 0 else -1
+	var shell_sign := 1 if shell.x > 0 else -1
+	_ok("the brick mesher winds every triangle one way", bricks.x == 0 or bricks.y == 0,
+			"%v" % bricks)
+	_ok("and the shell winds every triangle the same way", (shell.x == 0 or shell.y == 0)
+			and shell_sign == brick_sign, "bricks %v, shell %v" % [bricks, shell])
