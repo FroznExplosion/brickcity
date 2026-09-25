@@ -25,8 +25,12 @@ not step on each other.
   then `git worktree remove`. A forced `git worktree remove` (or any recursive
   delete) follows the junction and empties the MAIN folder's godot-cpp --
   sources and built library -- which breaks every worktree's build. It
-  happened once (2026-09-25); the fix was `git submodule update --init
-  gdextension/brick/godot-cpp` and a full rebuild in the main folder.
+  happened once (2026-09-25). To restore it, CLONE it standalone
+  (`git clone https://github.com/godotengine/godot-cpp.git` into that folder,
+  then check out the commit `git submodule status` names) and run a full
+  `python -m SCons` in the main folder. Not `git submodule update --init`: that
+  leaves a `.git` FILE with a relative path, which breaks `git status` in every
+  worktree that reaches it through a junction.
 
 ## Areas
 

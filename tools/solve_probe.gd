@@ -25,6 +25,7 @@ func _init() -> void:
 	print("solve_structure is the three calls it replaces")
 	for c in _cases():
 		_check_same(c)
+	_check_template()
 	if args.has("--time"):
 		_time()
 	print("\n%d passed, %d failed" % [passed, failed])
@@ -130,6 +131,52 @@ func _check_same(c: Dictionary) -> void:
 			wb.kill_blocks(cb, g)
 
 
+## BuildingRegistry builds a recipe once and copies it after that
+## (BrickWorld.save_template / load_template). The copy has to be the building:
+## the same ids with the same bricks in the same cells, or every damage record
+## replays into the wrong bricks.
+func _check_template() -> void:
+	print("
+a template is the building it was saved from")
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var dims := TowerRecipe.chunk_dims(30, 20, 48)
+	var built := w.create_chunk(Vector3i.ZERO, dims)
+	TowerRecipe.build(w, built, palette, 30, 20, 48, [Rect2i(10, 10, 10, 10)])
+	var t := w.save_template(built)
+	var copy := w.create_chunk(Vector3i.ZERO, dims)
+	_ok("it loads into an empty chunk of the same shape", w.load_template(t, copy))
+	var other := w.create_chunk(Vector3i.ZERO, dims + Vector3i(1, 0, 0))
+	_ok("and not into one of another shape", not w.load_template(t, other))
+	_ok("and not twice into the same one", not w.load_template(t, copy))
+	var same := w.get_block_count(built) == w.get_block_count(copy)
+	var first_diff := -1
+	for id in w.get_block_count(built):
+		if w.get_block_ticks(built, id) != w.get_block_ticks(copy, id) 				or w.get_block_archetype(built, id) != w.get_block_archetype(copy, id) 				or w.get_block_colour(built, id) != w.get_block_colour(copy, id) 				or w.get_block_material(built, id) != w.get_block_material(copy, id) 				or w.is_block_decorative(built, id) != w.is_block_decorative(copy, id):
+			same = false
+			first_diff = id
+			break
+	_ok("every block the same, id for id", same, "first difference at %d" % first_diff)
+	# The grid too: a copy whose blocks match but whose cells were not claimed
+	# would take a second brick in the same place.
+	var cells_same := true
+	for x in dims.x:
+		for z in dims.z:
+			for y in range(0, dims.y, 3):
+				if w.block_at(built, Vector3i(x, y, z)) != w.block_at(copy, Vector3i(x, y, z)):
+					cells_same = false
+	_ok("and the same cells claimed", cells_same)
+	w.apply_hit(built, Vector3(4.0, 1.0, 0.3), 2.5)
+	w.apply_hit(copy, Vector3(4.0, 1.0, 0.3), 2.5)
+	var a: Dictionary = w.solve_structure(built)
+	var b: Dictionary = w.solve_structure(copy)
+	# Everything but the clock.
+	(a.stress as Dictionary).erase("solve_ms")
+	(b.stress as Dictionary).erase("solve_ms")
+	_ok("and it solves the same after the same hit", str(a) == str(b)
+			and _loads(w, built) == _loads(w, copy))
+
+
 func _loads(w: BrickWorld, chunk: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	for id in w.get_block_count(chunk):
@@ -150,7 +197,8 @@ func _digest(c: Dictionary) -> String:
 		var stab: Dictionary = s.stability
 		parts.append([st.failures, Array(st.separated).hash(), st.max_ratio, st.peak_load,
 				Array(_loads(w, chunk)).hash(), stab.get("stable"), stab.get("overhang"),
-				Array(stab.get("blocks", [])).hash(), str(s.groups).hash()])
+				Array(stab.get("blocks", [])).hash(), str(s.groups).hash(),
+				str(w.get_components(chunk)).hash()])
 		for g in s.groups:
 			w.kill_blocks(chunk, g)
 	# The hash, then failures and groups in each round, to see what was exercised.

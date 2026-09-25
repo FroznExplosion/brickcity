@@ -56,6 +56,22 @@ const SETTLE_SLOW_NEAR_MS := 1500
 ## and vibrating that never gets under SETTLE_SPEED at all.
 const SETTLE_MAX_MS := 12000
 const SETTLE_MAX_SPEED := 2.0
+## Farther than FRACTURE_RANGE from every player, a piece settles on a shorter
+## window: nobody is close enough to see it rock, and every tick it spends
+## rocking is a body the solver steps. Physics LOD, in the same terms as the
+## landing rule it sits beside.
+const SETTLE_SLOW_FAR_MS := 350
+## And it falls merged from this size, not MERGE_FALLING_BLOCKS: a far landing
+## breaks nothing (FRACTURE_RANGE), so nothing needs its bricks one box each
+## while it falls. A hit on it un-merges it first, as it does any merged piece.
+const FAR_MERGE_BLOCKS := 8
+## The hard cap on moving pieces (step 4 of the collapse plan). With this many
+## already moving, a LANDMARK that comes loose farther than FRACTURE_RANGE from
+## every player is cut out and dropped, on every machine: the host decides it
+## and says so in the DETACH (DamageLog.FLAG_GONE), so nobody's world differs.
+## Anything near a player still falls, however many are moving. Small pieces
+## are each machine's own and already go where nobody sees them.
+const MAX_MOVING := 48
 ## How many pieces may settle in one tick. A settle is a merged shape rebuild, a
 ## freeze and a recorded rest, and the rule above settles a heap all at once:
 ## measured, one tick spent 75 ms of its loop on it. The rest wait a tick --
@@ -405,6 +421,10 @@ const CAPTURE_BLOCKS_PER_TICK := 3000
 var cap_deleted := 0
 var cap_slept := 0
 var cap_worst_over := 0
+## The cap's plan (_plan_debris_cap) and when it was made.
+const CAP_REPLAN_TICKS := 15
+var _cap_plan: Array = []
+var _cap_planned := -1000
 
 
 class Dormant:
@@ -426,6 +446,8 @@ const SLEEP_AFTER_MS := 6000
 ## sleep is a capture and a release, a wake is a chunk, a bake and a mesh.
 const SLEEPS_PER_TICK := 1
 const WAKES_PER_TICK := 1
+const WAKE_SCAN_PER_TICK := 32
+var _wake_cursor := 0
 
 var dormant: Array[Dormant] = []
 var slept := 0
@@ -440,7 +462,20 @@ var _sleep_cursor := 0
 var _resolve_queue: Array[BrickIsland] = []  ## more to shed than one pass allowed
 var _work_until := 0
 ## Where tick() actually spends its time, summed over the session.
-var tick_prof := {"loop": 0.0, "resolve": 0.0, "fracture": 0.0, "mesh": 0.0, "mm": 0.0}
+var tick_prof := {"loop": 0.0, "resolve": 0.0, "fracture": 0.0, "mesh": 0.0, "mm": 0.0,
+		"pieces": 0.0, "dormancy": 0.0, "cap": 0.0}
+## What is in motion, tick by tick: pieces not yet settled, how many of them are
+## landmarks, and how many bricks they carry. Summed for a mean and kept at the
+## peak, for the report.
+var census := {"ticks": 0, "moving": 0, "moving_peak": 0, "landmarks": 0,
+		"landmarks_peak": 0, "blocks": 0, "blocks_peak": 0}
+## Every group that came loose, by what became of it: [bodies, bricks] each.
+var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
+		"capped": [0, 0]}
+## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
+var _moving_now := 0
+## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
+var _gone_pieces := {}
 var tick_worst := {}
 var _work_done := 0
 var _sync_meshes := 0
@@ -606,7 +641,56 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 	if e.blocks.is_empty() and e.points.is_empty():
 		_local_seq += 1
 		return DamageLog.piece_id(-_local_seq)
-	return DamageLog.piece_id(_record(e))
+	var gone := _over_the_cap(chunk, ids)
+	if gone:
+		e.flags |= DamageLog.FLAG_GONE
+	var pid := DamageLog.piece_id(_record(e))
+	if gone:
+		_gone_pieces[pid] = true
+	return pid
+
+
+## MAX_MOVING: is this group a landmark coming loose far from everybody while
+## the scene is already full of moving pieces? The host's question only; its
+## answer travels in the DETACH.
+func _over_the_cap(chunk: int, ids: PackedInt32Array) -> bool:
+	if not decides or _moving_now < MAX_MOVING:
+		return false
+	var points := interest_points()
+	if points.is_empty():
+		return false
+	# Small pieces are each machine's own business (_delete_where_it_is).
+	if not group_is_landmark(chunk, ids):
+		return false
+	return _nearest_interest(_sample_centre(chunk, ids), points) > FRACTURE_RANGE
+
+
+## Is this point farther than FRACTURE_RANGE from every player? False when there
+## is nobody to measure against -- a probe, a server with no players yet -- so
+## everything counts as near, as it always did.
+func far_from_everyone(at: Vector3) -> bool:
+	var points := interest_points()
+	return not points.is_empty() and _nearest_interest(at, points) > FRACTURE_RANGE
+
+
+func _nearest_interest(at: Vector3, points: PackedVector3Array) -> float:
+	var best := INF
+	for p in points:
+		best = minf(best, p.distance_to(at))
+	return best
+
+
+## Where a group is, from at most sixteen of its blocks. A big group asked
+## block by block is thousands of calls for a position that has to be good to
+## a few metres.
+func _sample_centre(chunk: int, ids: PackedInt32Array) -> Vector3:
+	if ids.size() <= 16:
+		return _centre_of(chunk, ids)
+	var some := PackedInt32Array()
+	var step := float(ids.size()) / 16.0
+	for k in 16:
+		some.append(ids[int(k * step)])
+	return _centre_of(chunk, some)
 
 
 ## Record that building `building` has come off its foundation whole, and
@@ -656,12 +740,27 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
 		piece_id := -1, owner := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
+	# The host said it goes (MAX_MOVING): cut out and let go, as every other
+	# machine does with the same DETACH.
+	if _gone_pieces.has(piece_id):
+		_gone_pieces.erase(piece_id)
+		var cut: Dictionary = world.split_island(source, block_ids)
+		if not cut.is_empty():
+			world.release_chunk(int(cut.chunk))
+		spawn_census.capped[0] += 1
+		spawn_census.capped[1] += block_ids.size()
+		return null
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
 	var landmark := group_is_landmark(source, block_ids)
 	if _delete_where_it_is(source, block_ids, landmark):
 		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
+		spawn_census.deleted[0] += 1
+		spawn_census.deleted[1] += block_ids.size()
 		return null
+	var cls: Array = spawn_census.landmark if landmark else spawn_census.small
+	cls[0] += 1
+	cls[1] += block_ids.size()
 	var split: Dictionary = world.split_island(source, block_ids)
 	spawn_prof.split += float(Time.get_ticks_usec() - _t0) / 1000.0
 	var _t := Time.get_ticks_usec()
@@ -693,8 +792,11 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# island out of a building cost.
 	# Merged from birth when it is big: see MERGE_FALLING_BLOCKS, which also
 	# says why this was once tried and reverted and what is different now.
-	# Small pieces stay one box per brick -- they have few to begin with.
-	var merge_now := count >= MERGE_FALLING_BLOCKS
+	# Small pieces stay one box per brick -- they have few to begin with --
+	# unless nobody is near enough for its landing to break it (FAR_MERGE_BLOCKS).
+	var merge_now := count >= MERGE_FALLING_BLOCKS or (count >= FAR_MERGE_BLOCKS
+			and not interest_points().is_empty()
+			and _nearest_interest(split.com, interest_points()) > FRACTURE_RANGE)
 	var built: Dictionary = world.add_chunk_shapes(
 			isl.body.get_rid(), isl.chunk, isl.local_com, true, merge_now)
 	isl.shape_map = built.map
@@ -749,6 +851,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Single bricks never reach rebuild_mesh, so the bound is set here too.
 	isl.radius = _body_radius(isl)
 	islands.append(isl)
+	_moving_now += 1
 	# No wake_near here. It is O(every island) and spawn is called once per
 	# piece shed -- 4,400 times in a heavy collapse, which made it O(n^2).
 	# _shed already wakes the region around the parent, which is the same
@@ -1021,6 +1124,15 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# drew nothing from two frames into its fall until something happened
 		# to rebuild it. New instances of the same band meshes, as `fresh` is.
 		isl.bands = _instance_bands(carried_bands, fresh)
+		# A building that toppled halfway through rebuilding its bands comes down
+		# with holes in it, and nothing rebuilt it until something changed it --
+		# which a landing nobody is near never does (FRACTURE_RANGE). One piece
+		# of 18,588 bricks was partly invisible for 422 ticks. It gets its one
+		# mesh as soon as the queue can build it; the bands it has draw till then.
+		if not isl.bands.is_empty() and not _draws_bands(isl):
+			if not world.bake_ready(chunk):
+				world.bake_chunk_async(chunk)
+			_mesh_queue.append(isl)
 		if mesh_node.get_parent() != null:
 			_ghosts.append([mesh_node, Engine.get_process_frames() + OVERLAP_FRAMES])
 		else:
@@ -1903,6 +2015,10 @@ func _slow_window(isl: BrickIsland) -> int:
 	if camera != null and is_instance_valid(camera) \
 			and camera.global_position.distance_to(isl.body.global_position) < SETTLE_NEAR:
 		return SETTLE_SLOW_NEAR_MS
+	var points := interest_points()
+	if not points.is_empty() \
+			and _nearest_interest(isl.body.global_position, points) - isl.radius > FRACTURE_RANGE:
+		return SETTLE_SLOW_FAR_MS
 	return SETTLE_SLOW_MS
 
 
@@ -1913,6 +2029,9 @@ func tick() -> void:
 	_sync_meshes = 0
 	var now := Time.get_ticks_msec()
 	var settles := 0
+	var moving := 0
+	var moving_landmarks := 0
+	var moving_blocks := 0
 	var i := islands.size() - 1
 	while i >= 0:
 		var isl := islands[i]
@@ -1960,6 +2079,10 @@ func tick() -> void:
 
 		if isl.settled:
 			continue
+		moving += 1
+		if isl.landmark:
+			moving_landmarks += 1
+		moving_blocks += isl.shape_count
 
 		var speed := isl.body.linear_velocity.length()
 		if speed > MAX_DEBRIS_SPEED:
@@ -2022,6 +2145,14 @@ func tick() -> void:
 				_record(rest)
 			piece_settled.emit(isl)
 
+	census.ticks += 1
+	census.moving += moving
+	census.landmarks += moving_landmarks
+	census.blocks += moving_blocks
+	census.moving_peak = maxi(census.moving_peak, moving)
+	census.landmarks_peak = maxi(census.landmarks_peak, moving_landmarks)
+	census.blocks_peak = maxi(census.blocks_peak, moving_blocks)
+	_moving_now = moving
 	var _tp := Time.get_ticks_usec()
 	_stream_dormancy()
 	var _td := Time.get_ticks_usec()
@@ -2031,6 +2162,9 @@ func tick() -> void:
 	_advance_sleep_jobs()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
+	tick_prof.pieces += float(_tp - _t_loop) / 1000.0
+	tick_prof.dormancy += float(_td - _tp) / 1000.0
+	tick_prof.cap += float(_tl - _td) / 1000.0
 	_count_meshless()
 	_retirer.drain()
 	# Meshes first. A piece that has left its building but has no mesh yet is
@@ -2041,6 +2175,7 @@ func tick() -> void:
 	var _tr := Time.get_ticks_usec()
 	tick_prof.resolve += float(_tr - _tl) / 1000.0
 	_drain_fracture_queue()
+	var _tfq := Time.get_ticks_usec()
 	# After everything that can change a falling piece's blocks this tick, and
 	# before the physics steps: one merged rebuild per piece that changed.
 	_flush_reshapes()
@@ -2060,6 +2195,8 @@ func tick() -> void:
 				"cap": float(_tl - _td) / 1000.0,
 				"resolve": float(_tr - _tl) / 1000.0,
 				"fracture": float(_tf - _tr) / 1000.0,
+				"landings": float(_tfq - _tr) / 1000.0,
+				"reshapes": float(_tf - _tfq) / 1000.0,
 				"mesh": float(_tm - _tf) / 1000.0,
 				"islands": islands.size()}
 
@@ -2171,63 +2308,32 @@ func _drain_mesh_queue() -> void:
 ## Only SETTLED pieces are ever evicted -- something still falling is something
 ## the player is watching, and the cap is about what is lying around afterwards.
 func _enforce_debris_cap() -> void:
-	var small: Array = []
-	var large: Array = []
-	for i in islands.size():
-		var isl: BrickIsland = islands[i]
+	# Counting is cheap and done every tick, so the cap answers at once when it
+	# is crossed; working out WHO goes is not, and is planned (_plan_debris_cap).
+	var small_n := 0
+	var large_n := 0
+	for isl in islands:
 		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
 			continue
 		if isl.landmark:
-			large.append(i)
+			large_n += 1
 		else:
-			small.append(i)
-	var live := small.size() + large.size()
-	cap_worst_over = maxi(cap_worst_over, live - total_live_max)
-	var over_small := maxi(small.size() - small_live_max, 0)
-	var over_large := maxi(large.size() - large_live_max, 0)
-	# The total, spent on the small class first and only then on the large one.
-	var over_total := maxi(live - total_live_max, 0)
-	if over_total > 0:
-		var spare_small := maxi(small.size() - small_floor, 0)
-		var from_small := mini(over_total, spare_small)
-		over_small = maxi(over_small, from_small)
-		over_large = maxi(over_large, over_total - from_small)
-	if over_small <= 0 and over_large <= 0:
+			small_n += 1
+	if small_n <= small_live_max and large_n <= large_live_max 			and small_n + large_n <= total_live_max:
+		_cap_plan.clear()
 		return
-
-	# Oldest at rest first, and evicted by index descending so that removing one
-	# cannot move another out from under the loop.
-	var doomed: Array = []
-	if over_small > 0:
-		small.sort_custom(func(a, c) -> bool:
-				return islands[a].settled_ms < islands[c].settled_ms)
-		for k in mini(over_small, small.size()):
-			doomed.append([small[k], true])
-	if over_large > 0:
-		# Farthest from anybody first, and nobody's cover or floor at all: a piece
-		# asleep has no collision (see CAP_KEEP_RANGE).
-		var points := interest_points()
-		var away := {}
-		var keep: Array = []
-		for k in large:
-			var d := _distance_to_interest(world_aabb(islands[k]), points)
-			if d < CAP_KEEP_RANGE:
-				continue
-			away[k] = d
-			keep.append(k)
-		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
-		for k in mini(over_large, keep.size()):
-			doomed.append([keep[k], false])
-	doomed.sort_custom(func(a, c) -> bool: return int(a[0]) > int(c[0]))
+	var tick := Engine.get_physics_frames()
+	if _cap_plan.is_empty() or tick - _cap_planned >= CAP_REPLAN_TICKS:
+		_cap_plan = _plan_debris_cap()
+		_cap_planned = tick
 	var done := 0
-	for entry in doomed:
-		if done >= EVICTIONS_PER_TICK:
-			break
-		var at: int = int(entry[0])
-		if at >= islands.size():
+	while done < EVICTIONS_PER_TICK and not _cap_plan.is_empty():
+		var entry: Array = _cap_plan.pop_front()
+		var isl: BrickIsland = entry[0]
+		if not isl.is_valid() or not isl.settled or isl.capturing:
 			continue
-		var isl: BrickIsland = islands[at]
-		if not isl.is_valid() or not isl.settled:
+		var at := islands.find(isl)
+		if at < 0:
 			continue
 		if bool(entry[1]):
 			_retire(isl, at, &"cap")
@@ -2244,6 +2350,59 @@ func _enforce_debris_cap() -> void:
 		done += 1
 
 
+## Who the cap would put away, in order: [island, small] each. Worked out every
+## CAP_REPLAN_TICKS rather than every tick -- sorting every settled landmark by
+## its distance to everybody, every tick, for three evictions a tick, was most of
+## what the cap cost: 2.4 ms a tick across a big collapse, with the scene over
+## the cap for most of it. A plan a quarter of a second old is as good; anything
+## in it that has woken or gone since is skipped.
+func _plan_debris_cap() -> Array:
+	var small: Array = []
+	var large: Array = []
+	for i in islands.size():
+		var isl: BrickIsland = islands[i]
+		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
+			continue
+		if isl.landmark:
+			large.append(isl)
+		else:
+			small.append(isl)
+	var live := small.size() + large.size()
+	cap_worst_over = maxi(cap_worst_over, live - total_live_max)
+	var over_small := maxi(small.size() - small_live_max, 0)
+	var over_large := maxi(large.size() - large_live_max, 0)
+	# The total, spent on the small class first and only then on the large one.
+	var over_total := maxi(live - total_live_max, 0)
+	if over_total > 0:
+		var spare_small := maxi(small.size() - small_floor, 0)
+		var from_small := mini(over_total, spare_small)
+		over_small = maxi(over_small, from_small)
+		over_large = maxi(over_large, over_total - from_small)
+	var plan: Array = []
+	# Oldest at rest first.
+	if over_small > 0:
+		small.sort_custom(func(a: BrickIsland, c: BrickIsland) -> bool:
+				return a.settled_ms < c.settled_ms)
+		for k in mini(over_small, small.size()):
+			plan.append([small[k], true])
+	if over_large > 0:
+		# Farthest from anybody first, and nobody's cover or floor at all: a piece
+		# asleep has no collision (see CAP_KEEP_RANGE).
+		var points := interest_points()
+		var away := {}
+		var keep: Array = []
+		for isl in large:
+			var d := _distance_to_interest(world_aabb(isl), points)
+			if d < CAP_KEEP_RANGE:
+				continue
+			away[isl] = d
+			keep.append(isl)
+		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
+		for k in mini(over_large, keep.size()):
+			plan.append([keep[k], false])
+	return plan
+
+
 func _stream_dormancy() -> void:
 	# Everybody, not one camera: see interest_points.
 	var points := interest_points()
@@ -2252,16 +2411,24 @@ func _stream_dormancy() -> void:
 
 	# Waking first, always. Something the player is walking towards matters
 	# more than something they have walked away from.
+	#
+	# A slice of the list a tick, not all of it: every sleeping piece's distance
+	# to everybody, every tick, was 1.7 ms a tick once a collapse had put a few
+	# hundred to sleep. At WAKE_SCAN_PER_TICK the whole list is looked at every
+	# few ticks, which is far faster than anyone walks into WAKE_RANGE.
 	var woke := 0
-	for i in range(dormant.size() - 1, -1, -1):
+	for k in mini(dormant.size(), WAKE_SCAN_PER_TICK):
 		if woke >= WAKES_PER_TICK:
 			break
-		var d: Dormant = dormant[i]
-		if _distance_to_interest(d.record.box, points) > WAKE_RANGE:
-			continue
-		if _wake_record(d) != null:
-			dormant.remove_at(i)
+		if _wake_cursor >= dormant.size():
+			_wake_cursor = 0
+		var d: Dormant = dormant[_wake_cursor]
+		if _distance_to_interest(d.record.box, points) <= WAKE_RANGE \
+				and _wake_record(d) != null:
+			dormant.remove_at(_wake_cursor)   # the next one shifts into its place
 			woke += 1
+		else:
+			_wake_cursor += 1
 
 	var now := Time.get_ticks_msec()
 	var put_away := 0
