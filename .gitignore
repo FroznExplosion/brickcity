@@ -25,3 +25,10 @@ addons/*/bin/*.locked-*
 # godot-cpp is a submodule, not a copy. Its own build output is not ours.
 gdextension/**/godot-cpp/bin/
 gdextension/**/godot-cpp/gen/
+
+# The engine library is BUILT, per checkout, not committed: each worktree
+# builds its own (python -m SCons in gdextension/brick), so one chat's rebuild
+# never lands in another's copy, and a binary never has to be merged.
+addons/brick/bin/*.dll
+addons/brick/bin/*.so
+addons/brick/bin/*.dylib
