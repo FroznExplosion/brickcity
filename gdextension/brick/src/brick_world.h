@@ -423,6 +423,18 @@ public:
     /// split_island so the building topples as one piece.
     Dictionary check_stability(int chunk_id);
 
+    /// solve_stress, check_stability and find_detached_groups, in that order --
+    /// the three questions a damaged building is asked every time it is
+    /// solved -- in one call, and with the answers those three calls would
+    /// give: {stress, stability, groups}.
+    ///
+    /// What it saves is the grounding walk. Each of the three starts with one,
+    /// a walk over every joint in the chunk, and a stress solve that broke
+    /// nothing changes nothing any of them can see: so the stability test and
+    /// the detach reuse the walk the stress solve already made. A stress solve
+    /// that did break a joint gets a fresh walk, as it always did.
+    Dictionary solve_structure(int chunk_id);
+
     // --- damage ------------------------------------------------------------
 
     /// Kill every block within radius_m of a world point. Returns the ids
@@ -775,6 +787,31 @@ private:
     // Scratch reused across solves so a collapse does not allocate per hit.
     std::vector<uint8_t> scratch_mark;
     std::vector<int32_t> scratch_queue;
+
+    // The joints each block met in the last grounding walk, when solve_stress
+    // asked for them: runs of (neighbour, calls in a row) in exactly the order
+    // for_each_neighbour fired them. The stress solve reads a block's joints
+    // twice -- to count its contact, then to share its load out -- and those
+    // were two more walks of the occupancy grid, per shared cell, on top of
+    // the grounding's own. scratch_adj_at[k] is where scratch_queue[k]'s runs
+    // start; one extra entry closes the last.
+    struct AdjRun {
+        int32_t nb;
+        int32_t count;
+    };
+    std::vector<AdjRun> scratch_adj;
+    std::vector<int32_t> scratch_adj_at;
+    bool record_adjacency = false;
+    std::vector<uint8_t> scratch_grounded;
+
+    // check_stability and find_detached_groups on the grounding already in
+    // scratch_depth, without walking it again. See solve_structure.
+    Dictionary stability_of_grounding(int chunk_id);
+
+    // A chunk's centre of mass (chunk space) and total mass, from its live
+    // blocks. What get_body_boxes reports as com and mass, without the boxes.
+    void body_mass(int chunk_id, Vector3 &com, float &mass) const;
+    Array detached_groups_of(int chunk_id, const uint8_t *grounded);
 
     /// A weld: two blocks in two frames, held rigidly together.
     ///

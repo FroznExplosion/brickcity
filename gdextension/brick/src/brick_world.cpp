@@ -2401,11 +2401,31 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
         }
     }
 
+    // Every joint the walk meets, kept for solve_stress (record_adjacency).
+    // Recorded before the walk's own tests, because the stress solve filters
+    // by depth, which is only final once the walk is done.
+    const bool record = record_adjacency;
+    if (record) {
+        scratch_adj.clear();
+        scratch_adj_at.clear();
+        scratch_adj_at.reserve(n + 1);
+    }
     for (size_t head = 0; head < scratch_queue.size(); ++head) {
         const int32_t bid = scratch_queue[head];
         ++ss.blocks_visited;
         const int32_t next_depth = scratch_depth[bid] + 1;
+        const size_t runs_from = scratch_adj.size();
+        if (record) {
+            scratch_adj_at.push_back((int32_t)runs_from);
+        }
         for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
+            if (record) {
+                if (scratch_adj.size() > runs_from && scratch_adj.back().nb == nb) {
+                    ++scratch_adj.back().count;
+                } else {
+                    scratch_adj.push_back(AdjRun{ nb, 1 });
+                }
+            }
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
                 return;
             }
@@ -2416,6 +2436,9 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
             scratch_depth[nb] = next_depth;
             scratch_queue.push_back(nb);
         });
+    }
+    if (record) {
+        scratch_adj_at.push_back((int32_t)scratch_adj.size());
     }
 
     for (size_t i = 0; i < n; ++i) {
@@ -2436,12 +2459,15 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
 }
 
 Array BrickWorld::find_detached_groups(int chunk_id) {
-    Array out;
     if (!valid_chunk(chunk_id)) {
-        return out;
+        return Array();
     }
-
     const PackedByteArray grounded = solve_grounded(chunk_id);
+    return detached_groups_of(chunk_id, grounded.ptr());
+}
+
+Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
+    Array out;
     Chunk &c = chunks[chunk_id];
     SolveStats &ss = solve_stats[chunk_id];
 
@@ -2450,7 +2476,7 @@ Array BrickWorld::find_detached_groups(int chunk_id) {
 
     std::vector<PackedInt32Array> groups;
     for (size_t i = 0; i < n; ++i) {
-        if (!c.blocks[i].alive || grounded[(int64_t)i] || scratch_mark[i]) {
+        if (!c.blocks[i].alive || grounded[i] || scratch_mark[i]) {
             continue;
         }
         // Second fill, this time confined to the ungrounded set, so each island
@@ -2465,7 +2491,7 @@ Array BrickWorld::find_detached_groups(int chunk_id) {
             // No joint test here: an island is what falls together, and a
             // crushed block falls with whatever was resting on it.
             for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
-                if (scratch_mark[nb] || grounded[(int64_t)nb]) {
+                if (scratch_mark[nb] || grounded[nb]) {
                     return;
                 }
                 scratch_mark[nb] = 1;
@@ -2535,7 +2561,9 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     // its weight travels sideways to the corners that still stand. An earlier
     // version flowed load strictly downward, so a wall hanging over a hole
     // transmitted nothing at all and the tower levitated.
+    record_adjacency = true;
     solve_grounded(chunk_id);
+    record_adjacency = false;
     const Vector3i up = -chunk_down[chunk_id];
 
     Chunk &c = chunks[chunk_id];
@@ -2566,7 +2594,10 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     //
     // for_each_neighbour fires once per shared cell, so counting its calls
     // gives the stud contact -- and sharing the load equally per call shares it
-    // by contact area.
+    // by contact area. The calls are the ones the grounding walk recorded, as
+    // runs (scratch_adj): the same calls in the same order, so the same sums
+    // and the same remainder handed to the same neighbours.
+    const AdjRun *runs = scratch_adj.data();
     for (int i = (int)scratch_queue.size() - 1; i >= 0; --i) {
         const int32_t bid = scratch_queue[i];
         Block &b = c.blocks[bid];
@@ -2576,6 +2607,8 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         if (depth <= 0) {
             continue; // resting on the foundation, carried by the ground
         }
+        const AdjRun *run_first = runs + scratch_adj_at[i];
+        const AdjRun *run_end = runs + scratch_adj_at[i + 1];
 
         // Split the supporting contact by which way the joint is loaded. A
         // supporter ABOVE this block is holding it up against gravity, which
@@ -2584,16 +2617,16 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         int contact = 0;
         int contact_tension = 0;
         const int my_height = height_along(b.cell, up);
-        for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
-            const int32_t nd = scratch_depth[nb];
+        for (const AdjRun *r = run_first; r != run_end; ++r) {
+            const int32_t nd = scratch_depth[r->nb];
             if (nd < 0 || nd >= depth) {
-                return;
+                continue;
             }
-            ++contact;
-            if (height_along(c.blocks[nb].cell, up) > my_height) {
-                ++contact_tension;
+            contact += r->count;
+            if (height_along(c.blocks[r->nb].cell, up) > my_height) {
+                contact_tension += r->count;
             }
-        });
+        }
         if (contact == 0) {
             continue; // reached only through equal-depth peers; nothing to load
         }
@@ -2620,19 +2653,19 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         // at a time in neighbour order. Integer division alone would quietly
         // destroy load -- a tall building would get lighter the further down it
         // went -- and the remainder has to go somewhere fixed, not anywhere.
+        //
+        // A run of k calls to one neighbour is k shares, and one unit of the
+        // remainder for each of those calls while any is left.
         const int64_t share = b.load / (int64_t)contact;
         int64_t remainder = b.load - share * (int64_t)contact;
-        for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
-            const int32_t nd = scratch_depth[nb];
+        for (const AdjRun *r = run_first; r != run_end; ++r) {
+            const int32_t nd = scratch_depth[r->nb];
             if (nd >= 0 && nd < depth) {
-                int64_t give = share;
-                if (remainder > 0) {
-                    ++give;
-                    --remainder;
-                }
-                c.blocks[nb].load += give;
+                const int64_t extra = std::min(remainder, (int64_t)r->count);
+                remainder -= extra;
+                c.blocks[r->nb].load += share * (int64_t)r->count + extra;
             }
-        });
+        }
     }
 
     // Nothing is destroyed. A released joint leaves both bricks whole -- the
@@ -2862,13 +2895,46 @@ static float hull_overhang(const std::vector<Vector2> &hull, const Vector2 &p) {
 }
 
 Dictionary BrickWorld::check_stability(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return Dictionary();
+    }
+    // The grounding pass tells us what is still standing and what it rests on.
+    solve_grounded(chunk_id);
+    return stability_of_grounding(chunk_id);
+}
+
+Dictionary BrickWorld::solve_structure(int chunk_id) {
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
     }
-    // The grounding pass tells us what is still standing and what it rests on.
-    solve_grounded(chunk_id);
+    const Dictionary stress_out = solve_stress(chunk_id);
+    // The stress solve changes support_broken on the joints it fails and on
+    // nothing else, and a block in the walk was never support_broken to begin
+    // with (the walk does not enter one) -- so no failures means the grounding
+    // it walked is still the grounding. A failure means a fresh walk.
+    if ((int)stress_out.get("failures", 0) > 0) {
+        solve_grounded(chunk_id);
+    }
+    const Dictionary stability = stability_of_grounding(chunk_id);
 
+    // solve_grounded's bytes, from the walk: reached, and alive.
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    scratch_grounded.assign(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        scratch_grounded[i] = (scratch_depth[i] >= 0 && c.blocks[i].alive) ? 1 : 0;
+    }
+    const Array groups = detached_groups_of(chunk_id, scratch_grounded.data());
+
+    out["stress"] = stress_out;
+    out["stability"] = stability;
+    out["groups"] = groups;
+    return out;
+}
+
+Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
+    Dictionary out;
     Chunk &c = chunks[chunk_id];
     const int floor_y = foundation_level[chunk_id];
     const Vector3 cs = cell_size();
@@ -3427,21 +3493,9 @@ Dictionary BrickWorld::get_body_boxes(int chunk_id) const {
     if (!valid_chunk(chunk_id)) {
         return out;
     }
-    const Chunk &c = chunks[chunk_id];
-
+    Vector3 com;
     float total_mass = 0.0f;
-    Vector3 weighted;
-    for (const Block &b : c.blocks) {
-        if (!b.alive) {
-            continue;
-        }
-        Vector3 centre, size;
-        block_extent(c, b, centre, size);
-        const float m = std::max(archetypes[b.archetype].mass, 0.0001f);
-        weighted += centre * m;
-        total_mass += m;
-    }
-    const Vector3 com = total_mass > 0.0f ? weighted / total_mass : Vector3();
+    body_mass(chunk_id, com, total_mass);
 
     Array boxes;
     const Array all = get_block_boxes(chunk_id);
@@ -3461,6 +3515,24 @@ Dictionary BrickWorld::get_body_boxes(int chunk_id) const {
     out["com"] = com;
     out["mass"] = total_mass;
     return out;
+}
+
+void BrickWorld::body_mass(int chunk_id, Vector3 &com, float &mass) const {
+    const Chunk &c = chunks[chunk_id];
+    float total_mass = 0.0f;
+    Vector3 weighted;
+    for (const Block &b : c.blocks) {
+        if (!b.alive) {
+            continue;
+        }
+        Vector3 centre, size;
+        block_extent(c, b, centre, size);
+        const float m = std::max(archetypes[b.archetype].mass, 0.0001f);
+        weighted += centre * m;
+        total_mass += m;
+    }
+    com = total_mass > 0.0f ? weighted / total_mass : Vector3();
+    mass = total_mass;
 }
 
 // --- chunks as movable things ----------------------------------------------
@@ -3724,11 +3796,17 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
         taken.push_back(bid);
     }
 
-    const Dictionary body = get_body_boxes(island_id);
+    // The mass and where its centre is -- NOT get_body_boxes, which also builds
+    // a Dictionary for every box and was thrown away here. A shaped part is a
+    // box per occupied CELL, so a staircase coming away whole (363 steps, a
+    // 10 x 726 x 10 grid) was 37 ms of dictionaries in one split.
+    Vector3 com;
+    float mass = 0.0f;
+    body_mass(island_id, com, mass);
     out["chunk"] = island_id;
-    out["local_com"] = body.get("com", Vector3());
-    out["com"] = chunks[island_id].xform.xform((Vector3)body.get("com", Vector3()));
-    out["mass"] = body.get("mass", 0.0);
+    out["local_com"] = com;
+    out["com"] = chunks[island_id].xform.xform(com);
+    out["mass"] = mass;
     out["block_count"] = counted;
     out["source_blocks"] = taken;
     return out;
@@ -4471,6 +4549,7 @@ void BrickWorld::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
+    ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
             &BrickWorld::set_tension_per_stud);
     ClassDB::bind_method(D_METHOD("get_tension_per_stud", "chunk_id"), &BrickWorld::get_tension_per_stud);
