@@ -55,6 +55,11 @@ var merged := false
 ## it `reshape_due`, and it is rebuilt merged once, at the end of the tick.
 var fly_merged := false
 var reshape_due := false
+## Bumped by every change to its blocks (IslandManager._touched). A capture
+## spread over several ticks is only good if nothing changed while it ran.
+var edits := 0
+## Being captured to go to sleep, a slice a tick. See IslandManager._sleep_or_begin.
+var capturing := false
 var prev_speed := 0.0
 var peak_speed := 0.0
 var max_speed_lost := 0.0
