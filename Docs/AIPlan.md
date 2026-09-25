@@ -295,8 +295,17 @@ brick mech is piloted with the ported motor. Loopback agrees.
   every live agent has a tier, a bullet finds one, a grenade kills a clump, deaths come back for
   effects, worst tick 0.71 ms. Note for P8: the horde ticks in `_process`, at render rate, which
   co-op will have to change.
-- **Still to do in P1:** the procedural creatures (Windows build of `creature_forge`) and loopback
-  with a player's gun.
+- **Stage 7 done (2026-09-25): the procedural creatures, and `MeshForge` built for Windows.**
+  The creature system (`scripts/creatures/`) and its native mesh builder, compiled into the brick
+  extension (`src/creature/`) since it shipped as a Linux `.so` only; docs and reference code in
+  [Creatures/](Creatures/README.md). `tools/creature_probe.gd` (BoomerBorder's smoke test) passes
+  whole: six seeds build valid skinned meshes, walk, step, IK and LOD2 gait, and the native path
+  matches GDScript to the vertex at 2.1× the speed. The gait ⇄ physics merge had never been run;
+  its first run here (`tools/creature_merge_draft.gd`, not a gate) is 6 of 13 — it builds,
+  walks and leaks nothing, but tracks at 5.7 cm against 5 and cannot stumble or recover yet.
+- **Still to do in P1:** loopback with a player's gun. And the city gates count frames, not
+  seconds: one run with the editor open failed `--play` and `--mech` on timing and passed clean
+  on the rerun.
 
 ### P2 — `AIWorld` core · M
 
