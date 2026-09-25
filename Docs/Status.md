@@ -1093,6 +1093,22 @@ moves. The big tower builds in 38 ms instead of 292; promotions average 24 ms in
 worst blast tick is 12 ms. What is left in the worst tick is the big building's structural solve
 (stress, stability, detach: ~120 ms) and the islands' own loop (~75 ms).
 
+**Then the islands' loop, and a big wreck going to sleep.** The loop's 75 ms was a heap settling
+all at once -- every settle is a merged shape rebuild, a freeze and a recorded rest -- so at most
+12 pieces settle in a tick now (`SETTLES_PER_TICK`) and the rest wait, still slow, where they were;
+a landing's rebuild of what it landed on is queued like a blast's. What was left was the debris
+cap putting a 14,000-brick wreck to sleep in one call: 68 ms, most of it asking every block's box
+to find out which were standing. `ChunkRecord` now asks for the dead and detached lists instead,
+and a piece over 2,000 bricks is captured a slice a tick (3,000 blocks a tick,
+`IslandManager._advance_sleep_jobs`) -- dropped, and the piece left awake, if anything touches it
+before the capture is done. `capture()` is the same three steps in one call, so a record captured
+in slices is the record captured whole (`dormant_probe`, worn bricks included). `--shot` breaks
+the loop down too (pieces / dormancy / debris cap). On `--big --shot` the cap's share of the
+worst tick went from 68 ms to 6; the mean frame stays at 33 ms.
+
+The worst script tick is now the structural solve alone -- stress 55, stability 14, detach 14 ms
+on one big building -- and that is C++.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

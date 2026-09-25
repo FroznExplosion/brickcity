@@ -20,6 +20,7 @@ var _fail := 0
 func _init() -> void:
 	print("dormant probe")
 	_check_round_trip()
+	_check_capture_in_slices()
 	_check_damage_is_not_history()
 	_check_what_it_saves()
 	_check_the_box_it_leaves_behind()
@@ -54,6 +55,37 @@ func _rubble(w: BrickWorld, palette: Dictionary, courses: int = 6) -> int:
 
 
 # ---------------------------------------------------------------------------
+
+## A piece too big to capture in one tick is captured a slice at a time
+## (IslandManager.CAPTURE_BLOCKS_PER_TICK). It has to be the SAME record.
+func _check_capture_in_slices() -> void:
+	print("
+a record captured in slices is the record captured whole")
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var chunk := _rubble(w, res[1])
+	# Worn bricks in it too: their indices are resolved at the end of a sliced
+	# capture, from ids seen in every slice.
+	var wear := PackedInt32Array()
+	for id in [3, w.get_block_count(chunk) >> 1, w.get_block_count(chunk) - 5]:
+		wear.push_back(id)
+		wear.push_back(1)
+	w.set_worn_blocks(chunk, wear)
+	var whole := ChunkRecord.capture(w, chunk)
+	var sliced := ChunkRecord.begin_capture(w, chunk)
+	var passes := 0
+	while not sliced.capture_some(w, chunk, 37):
+		passes += 1
+	sliced.finish_capture(w, chunk)
+	_ok("it took more than one slice", passes > 1, "%d" % passes)
+	_ok("and holds the same blocks, in the same order",
+			sliced.cells == whole.cells and sliced.archetypes == whole.archetypes
+			and sliced.colours == whole.colours and sliced.decorative == whole.decorative
+			and sliced.joints == whole.joints and sliced.worn == whole.worn,
+			"%d against %d" % [sliced.block_count(), whole.block_count()])
+	_ok("with the same box", sliced.box.is_equal_approx(whole.box))
+	_ok("worn bricks and all", whole.worn.size() > 0, "%d" % (whole.worn.size() >> 1))
+
 
 func _check_round_trip() -> void:
 	print("\na record is the piece, not a picture of it")

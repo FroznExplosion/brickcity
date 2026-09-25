@@ -253,6 +253,7 @@ var far_landings := 0             ## landings too far from anyone to break the p
 var far_shears := 0               ## things landed on too far from anyone to shear
 var merged_rebuilds := 0          ## falling pieces rebuilt merged after a change
 var _reshape_list: Array[BrickIsland] = []
+var _sleep_jobs: Array = []       ## [island, record, edits when begun, for the cap]
 var settled_by_age := 0           ## settled because SETTLE_MAX_MS ran out
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
@@ -396,6 +397,11 @@ var small_floor := 24
 ## How many pieces may be evicted in one tick. Deleting is cheap; sleeping
 ## captures a record, so it is budgeted like every other per-tick cost here.
 const EVICTIONS_PER_TICK := 3
+## A piece bigger than this is captured for sleep a slice at a time, and at most
+## this many blocks of captures run in one tick. Capture is ~4 us a block: the
+## debris cap put a 14,000-brick wreck to sleep in one call, 57 ms of one tick.
+const SLEEP_SYNC_BLOCKS := 2000
+const CAPTURE_BLOCKS_PER_TICK := 3000
 var cap_deleted := 0
 var cap_slept := 0
 var cap_worst_over := 0
@@ -550,6 +556,7 @@ func _piece_entry(isl: BrickIsland, kind: DamageLog.Kind) -> DamageLog.Entry:
 
 func _touched(isl: BrickIsland) -> void:
 	isl.changed = true
+	isl.edits += 1
 	piece_changed.emit(isl)
 
 
@@ -1938,10 +1945,13 @@ func tick() -> void:
 				_record(rest)
 			piece_settled.emit(isl)
 
+	var _tp := Time.get_ticks_usec()
 	_stream_dormancy()
+	var _td := Time.get_ticks_usec()
 	# After dormancy, not before: what distance already put away does not
 	# need the cap's attention.
 	_enforce_debris_cap()
+	_advance_sleep_jobs()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
 	_count_meshless()
@@ -1968,6 +1978,9 @@ func tick() -> void:
 	if _total > float(tick_worst.get("total", 0.0)):
 		tick_worst = {"total": _total,
 				"loop": float(_tl - _t_loop) / 1000.0,
+				"pieces": float(_tp - _t_loop) / 1000.0,
+				"dormancy": float(_td - _tp) / 1000.0,
+				"cap": float(_tl - _td) / 1000.0,
 				"resolve": float(_tr - _tl) / 1000.0,
 				"fracture": float(_tf - _tr) / 1000.0,
 				"mesh": float(_tm - _tf) / 1000.0,
@@ -2085,7 +2098,7 @@ func _enforce_debris_cap() -> void:
 	var large: Array = []
 	for i in islands.size():
 		var isl: BrickIsland = islands[i]
-		if not isl.is_valid() or not isl.settled or isl.disposable:
+		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
 			continue
 		if isl.landmark:
 			large.append(i)
@@ -2142,12 +2155,15 @@ func _enforce_debris_cap() -> void:
 		if bool(entry[1]):
 			_retire(isl, at, &"cap")
 			cap_deleted += 1
-		elif _sleep(isl, at):
-			cap_slept += 1
 		else:
-			# Nothing to photograph, so there is nothing to keep either.
-			_retire(isl, at, &"cap")
-			cap_deleted += 1
+			match _sleep_or_begin(isl, at, true):
+				SLEPT:
+					cap_slept += 1
+				NOTHING:
+					# Nothing to photograph, so there is nothing to keep either.
+					_retire(isl, at, &"cap")
+					cap_deleted += 1
+				# STARTED: counted when the capture finishes.
 		done += 1
 
 
@@ -2180,7 +2196,7 @@ func _stream_dormancy() -> void:
 		var at := _sleep_cursor
 		_sleep_cursor += 1
 		var isl: BrickIsland = islands[at]
-		if not isl.is_valid() or not isl.settled or isl.disposable:
+		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
 			continue
 		if now - isl.born_ms < SLEEP_AFTER_MS:
 			continue
@@ -2189,14 +2205,72 @@ func _stream_dormancy() -> void:
 			nearest = minf(nearest, isl.body.global_position.distance_to(p))
 		if nearest - isl.radius < SLEEP_RANGE:
 			continue
-		if _sleep(isl, at):
-			put_away += 1
-			_sleep_cursor = at   # the list shifted under the cursor
+		match _sleep_or_begin(isl, at, false):
+			SLEPT:
+				put_away += 1
+				_sleep_cursor = at   # the list shifted under the cursor
+			STARTED:
+				put_away += 1
 
 
 ## Photograph a piece and give everything else back.
 func _sleep(isl: BrickIsland, index: int) -> bool:
-	var record := ChunkRecord.capture(world, isl.chunk)
+	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk))
+
+
+enum { NOTHING, SLEPT, STARTED }
+
+
+## Put a piece to sleep now if it is small, or start capturing it a slice a
+## tick if it is not (CAPTURE_BLOCKS_PER_TICK). `for_cap` says who asked, for
+## the counters when it finishes.
+func _sleep_or_begin(isl: BrickIsland, index: int, for_cap: bool) -> int:
+	if isl.capturing:
+		return STARTED
+	if world.get_block_count(isl.chunk) <= SLEEP_SYNC_BLOCKS:
+		return SLEPT if _sleep(isl, index) else NOTHING
+	isl.capturing = true
+	_sleep_jobs.append([isl, ChunkRecord.begin_capture(world, isl.chunk), isl.edits, for_cap])
+	return STARTED
+
+
+## Advance the captures in progress, CAPTURE_BLOCKS_PER_TICK blocks a tick. One
+## that finishes puts its piece to sleep exactly as _sleep would have; one whose
+## piece changed underneath it -- hit, landed on, woken -- is dropped, and the
+## piece simply stays awake.
+func _advance_sleep_jobs() -> void:
+	var budget := CAPTURE_BLOCKS_PER_TICK
+	while budget > 0 and not _sleep_jobs.is_empty():
+		var job: Array = _sleep_jobs[0]
+		var isl: BrickIsland = job[0]
+		var record: ChunkRecord = job[1]
+		if not isl.is_valid() or not isl.settled or isl.edits != int(job[2]):
+			if isl.is_valid():
+				isl.capturing = false
+			_sleep_jobs.pop_front()
+			continue
+		var from := record.next
+		var done := record.capture_some(world, isl.chunk, budget)
+		budget -= record.next - from
+		if not done:
+			break
+		_sleep_jobs.pop_front()
+		record.finish_capture(world, isl.chunk)
+		isl.capturing = false
+		var at := islands.find(isl)
+		if at < 0:
+			continue
+		if _commit_sleep(isl, at, record):
+			if bool(job[3]):
+				cap_slept += 1
+		elif bool(job[3]):
+			_retire(isl, at, &"cap")
+			cap_deleted += 1
+
+
+## The part of going to sleep after the photograph: keep the record, let the
+## piece go.
+func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord) -> bool:
 	if record.block_count() == 0:
 		return false
 	var d := Dormant.new()

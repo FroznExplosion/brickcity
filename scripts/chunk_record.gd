@@ -60,6 +60,19 @@ var origin_ticks := Vector3i.ZERO
 ## this blast anywhere near you" without being rebuilt to do it.
 var box := AABB()
 
+## A capture in progress (begin_capture / capture_some / finish_capture). Not
+## part of the record -- nothing here is saved.
+var next := 0
+## The blocks that are NOT standing: dead, or cut out into another piece. A
+## removed block has no box and is skipped on its own. Asked of the world as two
+## short lists, where asking every block's box and keeping a set of the standing
+## ones was 70 ms of a big wreck's capture before a single block was recorded.
+var _gone := {}
+## Block id -> its index in this record, for the worn bricks at the end.
+var _index_of := {}
+var _lo := Vector3(INF, INF, INF)
+var _hi := Vector3(-INF, -INF, -INF)
+
 
 func block_count() -> int:
 	return archetypes.size()
@@ -132,6 +145,20 @@ static func from_data(world: BrickWorld, d: Dictionary) -> ChunkRecord:
 ## 4); tools/dormant_probe.gd shows it directly -- 50 shed, 80 standing, and the
 ## old rule kept 130.
 static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
+	var r := begin_capture(world, chunk)
+	if chunk < 0 or not world.is_chunk_alive(chunk):
+		return r
+	r.capture_some(world, chunk, 1 << 30)
+	r.finish_capture(world, chunk)
+	return r
+
+
+## The same capture, a slice at a time, for a piece too big to capture in one
+## tick (IslandManager.CAPTURE_BLOCKS_PER_TICK). begin, then capture_some until
+## it says done, then finish -- and the record is exactly what capture() makes,
+## because capture() is those three calls. The chunk must not change in
+## between; the caller checks.
+static func begin_capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	var r := ChunkRecord.new()
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return r
@@ -140,19 +167,27 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	r.xform = world.get_chunk_transform(chunk)
 	r.rotation = world.get_chunk_rotation(chunk)
 	r.origin_ticks = world.get_chunk_origin_ticks(chunk)
+	for id in world.get_dead_blocks(chunk):
+		r._gone[id] = true
+	for id in world.get_detached_blocks(chunk):
+		r._gone[id] = true
+	return r
 
-	var standing := {}
-	for bx in world.get_block_boxes(chunk):
-		if bool((bx as Dictionary).get("alive", false)):
-			standing[int(bx.block)] = true
+
+## Capture up to `count` more block ids. True when every block has been seen.
+func capture_some(world: BrickWorld, chunk: int, count: int) -> bool:
+	var r := self
+	var gone := _gone
+	var index_of := _index_of
 	var t := BrickWorld.ticks_per_stud()
 	var pt := BrickWorld.ticks_per_plate()
-	var lo := Vector3(INF, INF, INF)
-	var hi := Vector3(-INF, -INF, -INF)
+	var lo := _lo
+	var hi := _hi
 	var cell := BrickWorld.get_cell_size()
-	var index_of := {}
-	for id in world.get_block_count(chunk):
-		if not standing.has(id):
+	var n := world.get_block_count(chunk)
+	var end := mini(next + count, n)
+	for id in range(next, end):
+		if gone.has(id):
 			continue
 		# An empty box is a REMOVED block -- a tombstone that kept its id so
 		# that nothing keyed on ids has to move. It is not part of the shape.
@@ -179,11 +214,25 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 		var b := Vector3(at + size) * (cell.x / float(t))
 		lo = Vector3(minf(lo.x, a.x), minf(lo.y, a.y), minf(lo.z, a.z))
 		hi = Vector3(maxf(hi.x, b.x), maxf(hi.y, b.y), maxf(hi.z, b.z))
+	_lo = lo
+	_hi = hi
+	next = end
+	return next >= n
+
+
+## The worn bricks and the world box, once every block has been seen; and the
+## working state let go.
+func finish_capture(world: BrickWorld, chunk: int) -> void:
+	var r := self
+	var lo := _lo
+	var hi := _hi
 	var w := world.get_worn_blocks(chunk)
 	for k in range(0, w.size() - 1, 2):
-		if index_of.has(w[k]):
-			r.worn.push_back(int(index_of[w[k]]))
+		if _index_of.has(w[k]):
+			r.worn.push_back(int(_index_of[w[k]]))
 			r.worn.push_back(w[k + 1])
+	_gone = {}
+	_index_of = {}
 	if r.block_count() > 0:
 		# In WORLD space: the eight corners of the local box under the chunk's
 		# own transform, because a piece at rest is usually lying at an angle.
@@ -198,7 +247,6 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 				first = false
 			else:
 				r.box = r.box.expand(corner)
-	return r
 
 
 ## Build it again. Returns the new chunk, or -1.
