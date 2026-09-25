@@ -1212,6 +1212,37 @@ that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose
 Not done, on purpose: R2 says a floor panel is a landmark, so a one-brick floor plate falling
 anywhere is a body every machine keeps -- ~200 of those bodies in a `--big --shot` collapse were one
 to three bricks. Changing that is a game-design call (AI.md A11), not a performance one.
+*(Made, the same day -- next section.)*
+
+### Collapse plan, step 1: debris is what you can see
+
+The plan (agreed 2026-09-25, after the research in the conversation that produced it): split
+BREAKAGE (a shot, a blast, a landing on one spot -- local, close up, watched) from COLLAPSE
+(a building giving way), and split collapse by size: small buildings as now, and anything of
+8,000 bricks or more through a mega-collapse director that cuts it into a few big chunks along
+its floor lines, writes its interiors off except near players, budgets its pieces, and goes to
+a handful of chunks and dust with distance. Then fracture ahead of time for what is falling, and
+settled rubble merged back into static chunks. This is step 1.
+
+* **8 bricks or fewer is debris, however big** (`DEBRIS_MAX_BLOCKS`; AI.md A11 and AIPlan R2
+  revised). A lone floor panel is a sheet of plastic, not cover: RUBBLE layer, which no pawn
+  collides with, and each machine keeps or drops its own.
+* **Debris is kept while it can be seen.** It was deleted where it came loose if its CENTRE was
+  outside the frustum, and otherwise swept 0.3 s after landing or at 2.5 s, whatever the camera
+  was doing -- a brick vanishing in front of the player. Now the group's BOX is tested against the
+  frustum (within 60 m, from 30); a kept piece is asked every 4 ticks whether it can still be
+  seen; it goes a second after it cannot (`DEBRIS_UNSEEN_MS`); and when it must go in view --
+  older than 30 s, or the cap wants it -- it shrinks away over 0.6 s instead of popping. No
+  occlusion test: a piece behind a wall counts as seen, which only ever keeps something longer.
+* **The debris cap counts debris.** It skipped disposable pieces, which was harmless while
+  debris lived 2.5 s; it takes what is out of view first and shrinks what is in view.
+* Found on the way: a piece restored from a save, or a staircase made debris, had never been
+  "seen" and would have been swept on its first tick.
+
+`--big --shot`: 399 landmark bodies came loose (766-1,000 before), 14 debris bodies were kept
+because they were in view, 578 small groups never became bodies. `tools/debris_probe.gd` checks
+the new rules: kept in view past landing, shrunk rather than popped by the cap, gone ~1 s after
+the camera looks away.
 
 ### Windows on far buildings: a room behind the glass that is not there
 

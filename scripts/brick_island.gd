@@ -75,15 +75,19 @@ var settled_ms := 0
 ## Blocks it held when it settled. Cached because the cap sorts on it every
 ## time it runs and asking the world costs a call per island.
 var settled_blocks := 0
-## Small enough to be swept up after a few seconds. Big sections never are --
-## a piece that stays intact is what the whole model exists to produce.
+## Debris (IslandManager.DEBRIS_MAX_BLOCKS): kept while it can be seen, gone once
+## it cannot. Big sections never are -- a piece that stays intact is what the
+## whole model exists to produce.
 var disposable := false
 ## Big enough to hide behind or stand on (IslandManager.is_landmark_size). The
 ## opposite of disposable except for a fixture made rubble on purpose.
 var landmark := false
-## When a small piece came to rest, for sweeping it up moments later; 0 while
-## it is moving.
-var rest_since := 0
+## Debris only (disposable): when this machine's camera last had it in view, and
+## when it started shrinking away (0: it has not). See IslandManager.DEBRIS_UNSEEN_MS.
+var seen_ms := 0
+var fade_since := 0
+## 1 drawn at full size, 0 shrunk away.
+var fade := 1.0
 ## When this piece last dropped under IslandManager.SETTLE_SPEED and stayed
 ## there; 0 while it is moving faster. What settles it by rule rather than by
 ## waiting for the physics to call it asleep.

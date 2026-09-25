@@ -204,10 +204,12 @@ summary per large piece:
 | **Large, slept** | No body, **no collision**. The summary and the nav bake survive; its cover points are withdrawn from agents in reach |
 | **Large, woken** | Re-registered; same content hash, so the old summary is reused |
 
-**Small pieces (A11):** "small" is **physical size, not block count** — a floor panel is a single
-`plate_10x10` block 3.5 m across, and it is a landmark ([AIPlan R2](AIPlan.md#11--would-have-forced-a-rewrite)).
-Below the landmark size, pieces are deleted soon after they settle — a short
-fade, well under the current 2.5 s — and **pawns do not collide with the `RUBBLE` layer**, so they
+**Small pieces (A11):** a piece of **8 bricks or fewer is small, however big it is** — a lone floor
+panel included — and above that, "small" is **physical size** ([AIPlan R2](AIPlan.md#11--would-have-forced-a-rewrite)).
+*Revised 2026-09-25:* R2 made a single `plate_10x10` (3.5 m across) a landmark, and a big collapse
+turned hundreds of lone panels into bodies every machine kept. Small pieces are kept while the
+local camera can see them, go about a second after it cannot, and shrink away rather than pop when
+they have to go in view (`IslandManager.DEBRIS_*`) — and **pawns do not collide with the `RUBBLE` layer**, so they
 never affect movement, cover or navigation, on any machine. That makes them safe to differ between
 clients, and safe for the AI to ignore. It is a change to `Layers.PAWN_MASK`; the step height
 already walks over anything that small, so nothing is lost but a stumble.

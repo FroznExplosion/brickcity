@@ -15,15 +15,18 @@ extends Node3D
 ##     simply gone, because no one is there to notice the difference;
 ##   * a single brick that IS visible becomes a real body but is drawn from a
 ##     shared MultiMesh, one draw call per brick size rather than per brick;
-##   * a small piece is swept up moments after it comes to rest.
+##   * a small piece stays while it can be seen, goes a second after it cannot,
+##     and when it has to go in view it shrinks away rather than popping.
 ##
-## "Small" is SIZE, not block count (Docs/AIPlan.md R2, AI.md A11): a floor panel
-## is one plate_10x10 block 3.5 m across, and it is not debris. A piece big
-## enough to hide behind or stand on is a LANDMARK (is_landmark_size): it is never
-## deleted, it collides with people, the AI takes cover behind it and every
-## machine in a co-op game has the same one. A small piece is presentation only --
-## no pawn collides with it (Layers.PAWN_MASK), each machine keeps or deletes its
-## own, and nothing but the eye ever depends on it.
+## "Small" -- DEBRIS -- is DEBRIS_MAX_BLOCKS bricks or fewer, however big, and
+## above that it is size (Docs/AIPlan.md R2, AI.md A11, both as revised on
+## 2026-09-25: a lone floor panel was a landmark until then, and a collapse made
+## hundreds of them). A piece bigger than that and big enough to hide behind or
+## stand on is a LANDMARK (is_landmark_size): it is never deleted, it collides
+## with people, the AI takes cover behind it and every machine in a co-op game
+## has the same one. Debris is presentation only -- no pawn collides with it
+## (Layers.PAWN_MASK), each machine keeps or deletes its own by what ITS camera
+## can see, and nothing but the eye ever depends on it.
 ##
 ## Landmarks are never touched by any of this. A section that stays intact is the
 ## thing the whole model exists to produce.
@@ -154,12 +157,22 @@ const FURNITURE_FALL_RANGE := 6.0
 ## A small piece breaks off only this close to the player, and in view. Anywhere
 ## else it is deleted where it came loose. Per machine: small pieces are that
 ## machine's presentation, so its own camera decides.
-const SMALL_KEEP_RANGE := 30.0
-## A small piece is swept up this long after it comes to rest -- moving slower
-## than RUBBLE_REST_SPEED -- and never lives longer than DEBRIS_LIFETIME_MS.
-const RUBBLE_REST_MS := 300
-const RUBBLE_REST_SPEED := 0.4
-const DEBRIS_LIFETIME_MS := 2500
+const SMALL_KEEP_RANGE := 60.0
+## A group of this many bricks or fewer is DEBRIS, however far it spans: a floor
+## panel on its own is a sheet of plastic, not cover. Presentation only -- the
+## RUBBLE layer, which no pawn collides with -- and each machine keeps or drops
+## its own (AI.md A11, AIPlan R2, as revised 2026-09-25). Above it, size decides
+## (is_landmark_size).
+const DEBRIS_MAX_BLOCKS := 8
+## Debris is never removed while this machine's camera can see it. It goes once
+## it has been out of view this long...
+const DEBRIS_UNSEEN_MS := 1000
+## ...and, seen or not, it shrinks away once it is this old, over DEBRIS_FADE_MS --
+## never a pop. The debris cap shrinks what it takes that is in view, too.
+const DEBRIS_SEEN_MAX_MS := 30000
+const DEBRIS_FADE_MS := 600
+## Every how many ticks each piece of debris is asked whether it can be seen.
+const SEEN_EVERY := 4
 ## A piece has to be at least this big to shear anything it lands on. Two bricks
 ## of ABS weigh a few grams; at brick scale nothing that small arrives with
 ## enough energy to break a joint, and letting it try produced damage that
@@ -263,7 +276,6 @@ var splits := 0
 var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
 var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
-var swept_at_rest := 0            ## small pieces swept up moments after landing
 var settled_by_rule := 0          ## settled for staying slow, not for sleeping
 var far_landings := 0             ## landings too far from anyone to break the piece
 var far_shears := 0               ## things landed on too far from anyone to shear
@@ -472,6 +484,11 @@ var tick_prof := {"loop": 0.0, "resolve": 0.0, "fracture": 0.0, "mesh": 0.0, "mm
 var census := {"ticks": 0, "moving": 0, "moving_peak": 0, "landmarks": 0,
 		"landmarks_peak": 0, "blocks": 0, "blocks_peak": 0}
 ## Every group that came loose, by what became of it: [bodies, bricks] each.
+## Debris gone because nobody could see it, and debris shrunk away in view.
+var debris_unseen := 0
+var debris_faded := 0
+## The camera's frustum, refreshed every tick (_box_seen).
+var _frustum: Array[Plane] = []
 var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
 		"capped": [0, 0]}
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
@@ -542,6 +559,8 @@ static func is_landmark_size(size: Vector3) -> bool:
 func group_is_landmark(source: int, block_ids: PackedInt32Array) -> bool:
 	if block_ids.size() > LANDMARK_COUNT:
 		return true
+	if block_ids.size() <= DEBRIS_MAX_BLOCKS:
+		return false
 	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
@@ -723,6 +742,70 @@ func find_by_body(body: Node) -> BrickIsland:
 	return null
 
 
+## Can this machine's camera see any of this world box? Distance, then the box
+## against each frustum plane: it is out of view only if some plane has all of it
+## outside. No occlusion test -- a piece behind a wall counts as seen, which only
+## ever keeps something a little longer, never removes one somebody is looking at.
+## `planes` is the tick's cached frustum (_frustum) for the per-tick check; empty
+## asks the camera now -- which a detach does, because the camera may have moved
+## since the tick began.
+func _box_seen(box: AABB, planes: Array[Plane] = []) -> bool:
+	if camera == null or not is_instance_valid(camera):
+		return true
+	if _distance_to_box(box, camera.global_position) > VISIBLE_RANGE:
+		return false
+	if planes.is_empty():
+		planes = camera.get_frustum()
+	var lo := box.position
+	var hi := box.end
+	for plane in planes:
+		# The corner deepest on the inside of this plane (Godot's frustum planes
+		# face outward). If even that one is outside, all of the box is.
+		var n := plane.normal
+		var c := Vector3(lo.x if n.x > 0.0 else hi.x, lo.y if n.y > 0.0 else hi.y,
+				lo.z if n.z > 0.0 else hi.z)
+		if plane.is_point_over(c):
+			return false
+	return true
+
+
+## A group's world box, from its blocks, while they are still in `chunk`.
+func _group_box(chunk: int, block_ids: PackedInt32Array) -> AABB:
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	for id in block_ids:
+		var ticks: Array = world.get_block_ticks(chunk, id)
+		if ticks.is_empty():
+			continue
+		var a := Vector3(ticks[0] as Vector3i) * tick_m
+		var b := a + Vector3(ticks[1] as Vector3i) * tick_m
+		lo = Vector3(minf(lo.x, a.x), minf(lo.y, a.y), minf(lo.z, a.z))
+		hi = Vector3(maxf(hi.x, b.x), maxf(hi.y, b.y), maxf(hi.z, b.z))
+	if lo.x == INF:
+		return AABB()
+	return world.get_chunk_transform(chunk) * AABB(lo, hi - lo)
+
+
+## Start shrinking a piece of debris away (DEBRIS_FADE_MS). Idempotent.
+func _start_fade(isl: BrickIsland, now: int) -> void:
+	if isl.fade_since == 0:
+		isl.fade_since = now
+		debris_faded += 1
+
+
+## One step of the shrink. True once it has gone all the way.
+func _advance_fade(isl: BrickIsland, now: int) -> bool:
+	var t := clampf(float(now - isl.fade_since) / float(DEBRIS_FADE_MS), 0.0, 1.0)
+	isl.fade = 1.0 - t
+	if isl.mesh != null:
+		# About the centre of mass, which is the body's origin: the mesh node sits
+		# at -local_com under it, so the offset shrinks with the scale.
+		var s := maxf(isl.fade, 0.01)
+		isl.mesh.transform = Transform3D(Basis().scaled(Vector3.ONE * s), -isl.local_com * s)
+	return t >= 1.0
+
+
 func can_be_seen(point: Vector3) -> bool:
 	if camera == null or not is_instance_valid(camera):
 		return true
@@ -779,6 +862,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.local_com = split.local_com
 	isl.landmark = landmark
 	isl.disposable = not landmark
+	isl.seen_ms = Time.get_ticks_msec()
 
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(float(split.mass) * MASS_SCALE, 0.5)
@@ -898,16 +982,18 @@ func _delete_where_it_is(source: int, block_ids: PackedInt32Array, landmark: boo
 			break
 	if landmark and not furniture:
 		return false
-	var at := _centre_of(source, block_ids)
+	# Its BOX, not its centre: a floor panel whose middle is just off screen is
+	# still mostly on it, and deleting that is a slab of floor vanishing in view.
+	var box := _group_box(source, block_ids)
 	var dist := INF
 	if camera != null and is_instance_valid(camera):
-		dist = camera.global_position.distance_to(at)
+		dist = _distance_to_box(box, camera.global_position)
 	var gone := false
 	if furniture:
 		gone = dist > FURNITURE_FALL_RANGE and dist < INF
 	var far := dist > SMALL_KEEP_RANGE and dist < INF
 	if not furniture:
-		gone = far or not can_be_seen(at)
+		gone = far or not _box_seen(box)
 	if not gone:
 		return false
 	# Split out and freed, NOT killed in place. Killing is the obvious saving --
@@ -1031,8 +1117,8 @@ func _landing_matters(isl: BrickIsland) -> bool:
 ##   * **falling** -- a large section in motion. Everything except rubble.
 ##   * **settled** -- come to rest. Everything, rubble included, because now it
 ##     is scenery that things land on.
-## Treat a piece as debris rather than as structure: rubble layers, and swept up
-## on the debris timer like anything else too small to matter.
+## Treat a piece as debris rather than as structure: rubble layers, and the
+## debris rules -- kept while it can be seen, gone once it cannot.
 ##
 ## What a FIXTURE becomes the moment it comes loose. A staircase is not
 ## structure (Docs/BuildMode.md section 9.2), and once it is falling it should
@@ -1043,6 +1129,7 @@ func make_debris(isl: BrickIsland) -> void:
 		return
 	isl.disposable = true
 	isl.landmark = false
+	isl.seen_ms = Time.get_ticks_msec()
 	_apply_layers(isl)
 
 
@@ -1084,6 +1171,9 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	# otherwise (only a loaded save's small pieces are).
 	isl.landmark = is_landmark
 	isl.disposable = not is_landmark
+	# Counted as just seen: a piece back from a save or from sleep has not been
+	# looked for yet, and seen_ms 0 would sweep it on the first tick.
+	isl.seen_ms = Time.get_ticks_msec()
 
 	isl.band_bytes = carried_band_bytes
 	isl.body = RigidBody3D.new()
@@ -2076,6 +2166,9 @@ func _slow_window(isl: BrickIsland) -> int:
 
 func tick() -> void:
 	var _t_loop := Time.get_ticks_usec()
+	if camera != null and is_instance_valid(camera):
+		_frustum = camera.get_frustum()
+	var look := Engine.get_physics_frames() % SEEN_EVERY == 0
 	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
 	_work_done = 0
 	_sync_meshes = 0
@@ -2109,25 +2202,26 @@ func tick() -> void:
 				_retire(isl, i + 1, &"empty")
 				continue
 
-		# Disposable debris is swept up after a few seconds, settled or not.
+		# Debris is kept while it can be seen and goes once it cannot. It was
+		# swept 0.3 s after it landed or at 2.5 s whatever the camera was doing,
+		# which is a brick vanishing in front of the player -- the thing Just
+		# Cause 3 was taken to task for. Now: never removed in view; gone after
+		# DEBRIS_UNSEEN_MS out of it; and, when it must go in view (old, or the
+		# cap), shrunk away over DEBRIS_FADE_MS rather than popped.
 		if isl.disposable:
-			if now - isl.born_ms > DEBRIS_LIFETIME_MS:
-				_retire(isl, i + 1, &"swept")
-				continue
-			# And sooner: moments after it comes to rest. Small pieces are
-			# presentation (see the class notes); once one has landed there is
-			# nothing left for it to show. The birth grace is so a piece cut loose
-			# at a standstill has time to start falling before it counts as still.
-			if now - isl.born_ms > RUBBLE_REST_MS \
-					and isl.body.linear_velocity.length() < RUBBLE_REST_SPEED:
-				if isl.rest_since == 0:
-					isl.rest_since = now
-				elif now - isl.rest_since >= RUBBLE_REST_MS:
-					swept_at_rest += 1
-					_retire(isl, i + 1, &"swept")
+			if isl.fade_since > 0:
+				if _advance_fade(isl, now):
+					_retire(isl, i + 1, &"faded")
 					continue
 			else:
-				isl.rest_since = 0
+				if look and _box_seen(world_aabb(isl), _frustum):
+					isl.seen_ms = now
+				if now - isl.seen_ms > DEBRIS_UNSEEN_MS:
+					debris_unseen += 1
+					_retire(isl, i + 1, &"swept")
+					continue
+				if now - isl.born_ms > DEBRIS_SEEN_MAX_MS:
+					_start_fade(isl, now)
 
 		if isl.settled:
 			continue
@@ -2366,7 +2460,9 @@ func _enforce_debris_cap() -> void:
 	var small_n := 0
 	var large_n := 0
 	for isl in islands:
-		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
+		# Debris counts too, now that it lives as long as it is seen; what is
+		# already shrinking away is on its way out.
+		if not isl.is_valid() or not isl.settled or isl.capturing or isl.fade_since > 0:
 			continue
 		if isl.landmark:
 			large_n += 1
@@ -2389,7 +2485,11 @@ func _enforce_debris_cap() -> void:
 		if at < 0:
 			continue
 		if bool(entry[1]):
-			_retire(isl, at, &"cap")
+			if isl.disposable and Time.get_ticks_msec() - isl.seen_ms < DEBRIS_UNSEEN_MS:
+				# In view: it goes, but it shrinks away rather than popping.
+				_start_fade(isl, Time.get_ticks_msec())
+			else:
+				_retire(isl, at, &"cap")
 			cap_deleted += 1
 		else:
 			match _sleep_or_begin(isl, at, true):
@@ -2414,7 +2514,7 @@ func _plan_debris_cap() -> Array:
 	var large: Array = []
 	for i in islands.size():
 		var isl: BrickIsland = islands[i]
-		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
+		if not isl.is_valid() or not isl.settled or isl.capturing or isl.fade_since > 0:
 			continue
 		if isl.landmark:
 			large.append(isl)
@@ -2434,7 +2534,13 @@ func _plan_debris_cap() -> Array:
 	var plan: Array = []
 	# Oldest at rest first.
 	if over_small > 0:
+		# Out of view first, then oldest at rest.
+		var now_ms := Time.get_ticks_msec()
 		small.sort_custom(func(a: BrickIsland, c: BrickIsland) -> bool:
+				var a_seen := now_ms - a.seen_ms < DEBRIS_UNSEEN_MS
+				var c_seen := now_ms - c.seen_ms < DEBRIS_UNSEEN_MS
+				if a_seen != c_seen:
+					return not a_seen
 				return a.settled_ms < c.settled_ms)
 		for k in mini(over_small, small.size()):
 			plan.append([small[k], true])
@@ -2763,7 +2869,11 @@ func _update_multimeshes() -> void:
 			var isl: BrickIsland = members[i]
 			if not isl.is_valid():
 				continue
-			mm.set_instance_transform(i, isl.body.global_transform)
+			if isl.fade < 1.0:
+				mm.set_instance_transform(i, isl.body.global_transform
+						* Transform3D(Basis().scaled(Vector3.ONE * maxf(isl.fade, 0.01))))
+			else:
+				mm.set_instance_transform(i, isl.body.global_transform)
 			mm.set_instance_color(i, isl.mm_colour)
 
 
@@ -2794,7 +2904,8 @@ func report() -> Dictionary:
 		"discarded": discarded,
 		"furniture_deleted": furniture_deleted,
 		"tiny_deleted": tiny_deleted,
-		"swept_at_rest": swept_at_rest,
+		"debris_unseen": debris_unseen,
+		"debris_faded": debris_faded,
 		"dropped": dropped,
 		"breaks": breaks,
 		"band_breaks": band_breaks,

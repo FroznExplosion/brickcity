@@ -4076,9 +4076,9 @@ func _run_shot_pass() -> void:
 		float(int(mem.total_bytes) - int(mem.occupancy_bytes) - int(mem.block_bytes)) / 1048576.0])
 	print("[city] islands: %d live (%d settled, %d loose), %d bricks discarded unseen" % [
 		isl.islands, isl.settled, isl.disposable, isl.discarded])
-	print("[city]   small pieces: %d brick(s) deleted where they came loose beyond %.0f m, %d swept up at rest; %d of furniture; %.0f ms deciding"
-			% [isl.tiny_deleted, IslandManager.SMALL_KEEP_RANGE, int(isl.get("swept_at_rest", 0)),
-			isl.furniture_deleted, float(islands.spawn_prof.deleted)])
+	print("[city]   debris: %d brick(s) deleted where they came loose (beyond %.0f m or out of view); %d piece(s) gone once out of view, %d shrunk away in view; %d of furniture; %.0f ms deciding"
+			% [isl.tiny_deleted, IslandManager.SMALL_KEEP_RANGE, int(isl.get("debris_unseen", 0)),
+			int(isl.get("debris_faded", 0)), isl.furniture_deleted, float(islands.spawn_prof.deleted)])
 	var cen: Dictionary = islands.census
 	var sc: Dictionary = islands.spawn_census
 	var nt := maxi(int(cen.ticks), 1)
