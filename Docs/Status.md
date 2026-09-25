@@ -1277,6 +1277,33 @@ wall-clock time a stalled headless probe swept pieces that were in view.
 `--big --shot`: mega collapses came down in 61 chunks across 7 buildings (331 before the hold);
 landmark bodies 319 (399 after step 1); the log replays into the same structure, pieces included.
 
+### Collapse plan, step 4: the landing spike was a mesh upload, not a fracture
+
+The plan's step 4 was to break a falling piece ahead of its landing, so the big fracture is not
+paid for in the tick it lands. Measured first, and the fracture was never the cost: the snap
+across the piece is under 3 ms, and working out what came loose under 10. The spike -- 18-38 ms,
+the worst islands tick of a collapse -- was the **mesh queue**: a freshly cut piece getting its
+first mesh. The arrays come out of the worker's bake in under a millisecond, and handing them to
+the renderer is ~50 ns a vertex on the thread that does it: 120,000-260,000 vertices for a piece
+of 3,000-8,400 bricks, 5-35 ms. A **staircase** piece of 145 bricks is 90,000 vertices of spiral
+step, and every one that fell paid 7-15 ms. Godot's vertex compression was tried and is slower
+(the compression is CPU work).
+
+So a mesh of `THREAD_MESH_VERTS` (30,000) vertices or more is uploaded **on a worker thread**
+(`IslandManager._submit_mesh_job`) -- the renderer takes meshes built off the main thread, which
+is how threaded resource loading works -- and attached when it is done; the mesh it replaces goes
+on drawing until then, and anything asked of the piece's mesh meanwhile is done against the new
+one when it lands. The manager waits for its jobs when it leaves the tree (a job still running at
+shutdown was a crash on quit).
+
+`--big --shot`: worst islands tick 15-16 ms (35-39); worst script tick 44 ms; worst invisible
+stretch 4-5 ticks. What is left at the top of the worst tick: a mega building's first detach
+un-merging its collision (13 ms), band builds (10 ms), and the loop.
+
+Breaking ahead of the landing is not built: what it would move off the landing tick is now a few
+milliseconds. It becomes worth it if landings get more expensive again (more planes, bigger
+pieces near players).
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

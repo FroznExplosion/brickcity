@@ -87,6 +87,12 @@ var landmark := false
 ## milliseconds: a hitch longer than DEBRIS_UNSEEN_TICKS is not a second of
 ## nobody looking. See IslandManager.DEBRIS_UNSEEN_TICKS.
 var seen_tick := 0
+## A mesh being built for it on a worker (IslandManager._mesh_jobs): the task id,
+## or -1. Anything asked of its mesh meanwhile waits for it (mesh_again), since
+## the patches that follow are worked out against the mesh that job builds.
+var mesh_job := -1
+var mesh_again := false
+var mesh_again_full := false
 var fade_since := 0
 ## 1 drawn at full size, 0 shrunk away.
 var fade := 1.0

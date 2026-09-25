@@ -238,6 +238,14 @@ const WORK_BUDGET_MS := 4.0
 ## matters once it IS visible. Drawing a piece that already exists is the more
 ## urgent job of the two.
 const MESH_BUDGET_MS := 3.0
+## A mesh with at least this many vertices is uploaded on a worker, not in the
+## tick. The arrays come out of the bake in under a millisecond; handing them to
+## the renderer is ~50 ns a vertex on whichever thread does it -- 5-35 ms for a
+## piece of 3,000-8,400 bricks, or for a staircase of 150 (90,000 vertices of
+## spiral step), and that was the worst tick of a collapse every time a big
+## piece got its mesh. The renderer takes meshes built on other threads (it is
+## how threaded resource loading works); the main thread only attaches it.
+const THREAD_MESH_VERTS := 30000
 ## Always do at least one, however long it takes: a budget that can starve
 ## forever is a deadlock, and a single unit is bounded by the piece's size.
 const WORK_MIN := 1
@@ -361,6 +369,8 @@ var _furniture := {}
 static var OVERLAP_FRAMES := 2
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
+var _mesh_jobs: Array = []   ## [island, task id, [mesh], arrays]
+var mesh_jobs_done := 0
 var band_holes_filled := 0
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
@@ -1424,6 +1434,12 @@ func refresh_furniture(isl: BrickIsland) -> void:
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
 	if isl.mesh == null:
 		return
+	# Its mesh is being built on a worker. Whatever this call wanted is done
+	# when that lands (_harvest_mesh_jobs), against the mesh it builds.
+	if isl.mesh_job >= 0:
+		isl.mesh_again = true
+		isl.mesh_again_full = isl.mesh_again_full or force_full
+		return
 	# Band meshes carried down from a building that toppled whole: patched in
 	# place, the band a blast landed in and no other. Dropping them for one mesh
 	# here was a full build of the whole piece -- 10-22 ms for a toppled
@@ -1473,19 +1489,76 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 		return
 
 	var arrays: Array = world.build_chunk_mesh(isl.chunk)
+	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk)
+	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= THREAD_MESH_VERTS:
+		# Big: uploaded on a worker, attached when it is done. The mesh it
+		# replaces goes on drawing until then.
+		_submit_mesh_job(isl, arrays)
+		return
 	var mesh := ArrayMesh.new()
-	if not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk):
+	if ok:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_apply_mesh(isl, mesh, arrays)
+
+
+## Hang a finished mesh on a piece.
+func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array) -> void:
 	# Only a mesh that actually HAS a surface can be patched. A chunk with
 	# nothing left alive produces no arrays, and patching surface 0 of an empty
 	# ArrayMesh writes past the end of a buffer that is not there.
 	isl.radius = _body_radius(isl)
 	# The renderer may still be drawing the mesh this replaces.
 	_retirer.retire(isl.mesh.mesh)
-	isl.array_mesh = mesh if mesh.get_surface_count() > 0 else null
+	isl.array_mesh = mesh if mesh != null and mesh.get_surface_count() > 0 else null
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null else 0
 	isl.index_width = index_width(arrays)
 	isl.mesh.mesh = mesh
+
+
+## Upload `arrays` for `isl` on a worker (THREAD_MESH_VERTS). The arrays were
+## built on this thread from the bake; the worker only turns them into a mesh.
+func _submit_mesh_job(isl: BrickIsland, arrays: Array) -> void:
+	var holder := [null]
+	var task := WorkerThreadPool.add_task(func() -> void:
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		holder[0] = m, false, "island mesh")
+	isl.mesh_job = task
+	_mesh_jobs.append([isl, task, holder, arrays])
+
+
+## Every mesh job finished before the manager goes: a worker still building a
+## mesh while the renderer shuts down is a crash on quit.
+func _exit_tree() -> void:
+	for job in _mesh_jobs:
+		WorkerThreadPool.wait_for_task_completion(int(job[1]))
+		(job[2] as Array)[0] = null
+	_mesh_jobs.clear()
+
+
+## Attach the meshes the workers have finished, and do what was asked of those
+## pieces while they were being built.
+func _harvest_mesh_jobs() -> void:
+	var k := 0
+	while k < _mesh_jobs.size():
+		var job: Array = _mesh_jobs[k]
+		var task: int = job[1]
+		if not WorkerThreadPool.is_task_completed(task):
+			k += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(task)
+		_mesh_jobs.remove_at(k)
+		var isl: BrickIsland = job[0]
+		isl.mesh_job = -1
+		if not isl.is_valid() or isl.mesh == null:
+			continue
+		_apply_mesh(isl, job[2][0], job[3])
+		mesh_jobs_done += 1
+		if isl.mesh_again:
+			var full := isl.mesh_again_full
+			isl.mesh_again = false
+			isl.mesh_again_full = false
+			rebuild_mesh(isl, full)
 
 
 ## Re-index a banded piece and upload only the bands whose bytes moved --
@@ -2325,6 +2398,7 @@ func tick() -> void:
 	# Meshes first. A piece that has left its building but has no mesh yet is
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
+	_harvest_mesh_jobs()
 	_drain_mesh_queue()
 	_fill_band_holes()
 	_drain_resolve_queue()
