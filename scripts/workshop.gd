@@ -1488,7 +1488,7 @@ func _spawn_fixture(i: int) -> void:
 	if r.is_empty():
 		return
 	if _fixture_parts.is_empty():
-		_fixture_parts = StaircaseRecipe.bake_parts(world)
+		_fixture_parts = StaircaseRecipe.flight_parts(palette)
 	# The real thing, through the same class the city builds with: bricks in
 	# frame 0, a stairwell carved where they land on what is already there.
 	# Nothing is rebased -- the workshop's grid IS the recipe's coordinates.

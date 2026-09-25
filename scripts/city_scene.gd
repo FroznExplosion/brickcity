@@ -162,6 +162,8 @@ var _shader_toggles := {
 var stats_label: Label
 var camera: DebugCamera
 var _placer: CityPlacer
+## Hit marks, debris and sounds by material, and footsteps (material_fx.gd).
+var _material_fx: MaterialFx
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
@@ -745,6 +747,10 @@ func _ready() -> void:
 	_placer.on_placed = func(id: int) -> void:
 		_index_building(id)
 		_make_shell(id)
+	_material_fx = MaterialFx.new()
+	_material_fx.name = "MaterialFx"
+	add_child(_material_fx)
+	_material_fx.setup(world, registry, camera)
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:
@@ -2280,7 +2286,12 @@ func _setup_gun() -> void:
 	_gun.aim = camera
 	# What a bullet does to bricks is StructuralDamage's to say, and it goes
 	# through the same door as every other change to the world.
-	_gun.on_structure_hit = func(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+	_gun.on_structure_hit = func(point: Vector3, dir: Vector3, shot: Dictionary) -> void:
+		# The mark, debris and sound of whatever material was struck. Local
+		# and cosmetic, so not through the authority. No face normal comes
+		# with the hit; facing back up the shot is the mark's plane.
+		if _material_fx != null and dir.length() > 0.001:
+			_material_fx.impact_at(point, -dir.normalized())
 		if bool(shot.blast):
 			_blast(point, float(shot.radius))
 		else:
@@ -2647,6 +2658,10 @@ func _fire(radius: float) -> void:
 	# If the ray landed on wreckage, damage THAT piece directly. Settled debris
 	# is a frozen body whose origin is its centre of mass, so a proximity test
 	# from the origin misses a toppled building you are standing next to.
+	# The mark, the debris and the sound of what was hit, BEFORE the blast
+	# takes the brick away -- afterwards there is nothing there to ask.
+	if not _material_fx.impact_at(hit.position, hit.normal):
+		_material_fx.impact(hit.position, hit.normal, 0, Color(0.6, 0.6, 0.6))
 	var struck := islands.find_by_body(hit.collider)
 	if struck != null:
 		# A client asks; the host's blast finds the same piece by its volume.

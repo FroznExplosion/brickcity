@@ -234,24 +234,34 @@ struct BrickMaterialDef {
     const char *name;
     const NamedColour *variants;   // nullptr: the filament palette
     int variant_count;
+    // How much punishment a block of it takes, as a multiple of PLA's. A
+    // blast's damage falls off from 2x a PLA block's life at its centre to 1x
+    // at its rim (apply_hit), so PLA -- 1.0 -- dies anywhere inside a blast
+    // exactly as every block always has, and metal at 4.0 takes two hits at
+    // the centre and four at the edge.
+    float toughness;
 };
 
 inline const BrickMaterialDef BRICK_MATERIALS[] = {
-    {"PLA", nullptr, 0},
-    {"PLA matte", nullptr, 0},
-    {"PLA silk", nullptr, 0},
-    {"ABS", nullptr, 0},
-    {"PETG", nullptr, 0},
-    {"TPU", nullptr, 0},
-    {"Nylon", nullptr, 0},
-    {"Glow PLA", nullptr, 0},
-    {"Carbon PLA", nullptr, 0},
-    {"Wood PLA", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0]))},
-    {"Wood", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0]))},
-    {"Metal", METAL_VARIANTS, (int)(sizeof(METAL_VARIANTS) / sizeof(METAL_VARIANTS[0]))},
-    {"Stone", STONE_VARIANTS, (int)(sizeof(STONE_VARIANTS) / sizeof(STONE_VARIANTS[0]))},
+    {"PLA", nullptr, 0, 1.0f},
+    {"PLA matte", nullptr, 0, 1.0f},
+    {"PLA silk", nullptr, 0, 0.9f},
+    {"ABS", nullptr, 0, 1.3f},
+    {"PETG", nullptr, 0, 1.4f},
+    {"TPU", nullptr, 0, 1.8f},
+    {"Nylon", nullptr, 0, 1.6f},
+    {"Glow PLA", nullptr, 0, 0.9f},
+    {"Carbon PLA", nullptr, 0, 1.5f},
+    {"Wood PLA", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 0.9f},
+    {"Wood", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 1.6f},
+    {"Metal", METAL_VARIANTS, (int)(sizeof(METAL_VARIANTS) / sizeof(METAL_VARIANTS[0])), 4.0f},
+    {"Stone", STONE_VARIANTS, (int)(sizeof(STONE_VARIANTS) / sizeof(STONE_VARIANTS[0])), 2.5f},
 };
 constexpr int BRICK_MATERIAL_COUNT = (int)(sizeof(BRICK_MATERIALS) / sizeof(BRICK_MATERIALS[0]));
+
+inline float brick_material_toughness(int material) {
+    return (material >= 0 && material < BRICK_MATERIAL_COUNT) ? BRICK_MATERIALS[material].toughness : 1.0f;
+}
 
 inline int brick_material_colour_count(int material) {
     if (material < 0 || material >= BRICK_MATERIAL_COUNT) {

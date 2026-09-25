@@ -178,8 +178,9 @@ func _check_built_with_its_host() -> void:
 	var f := reg.get_fixture(id, 0)
 
 	_ok("the building materialised", chunk >= 0)
-	_ok("its staircase went in with it", f.blocks.size() == steps,
-			"%d of %d" % [f.blocks.size(), steps])
+	var pieces := StaircaseRecipe.flight_pieces(steps)
+	_ok("its staircase went in with it", f.blocks.size() == pieces,
+			"%d of %d" % [f.blocks.size(), pieces])
 	_ok("in the building's own chunk, not one of its own",
 			int(w.get_memory_report().chunks) == 1,
 			"%d chunks" % int(w.get_memory_report().chunks))
@@ -234,8 +235,9 @@ func _check_the_stairwell() -> void:
 	var made := _tower_with_stairs(reg)
 	var chunk := reg.materialise(made[0])
 	var f := reg.get_fixture(made[0], 0)
-	_ok("the flight went in whole, floors and all", f.blocks.size() == int(made[2]),
-			"%d of %d" % [f.blocks.size(), int(made[2])])
+	var pieces := StaircaseRecipe.flight_pieces(int(made[2]))
+	_ok("the flight went in whole, floors and all", f.blocks.size() == pieces,
+			"%d of %d" % [f.blocks.size(), pieces])
 	_ok("and the shaft cost the building some floor",
 			w.get_alive_block_count(chunk) != plain_alive + f.blocks.size(),
 			"%d vs %d" % [w.get_alive_block_count(chunk), plain_alive + f.blocks.size()])
