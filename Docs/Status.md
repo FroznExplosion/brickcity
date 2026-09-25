@@ -1193,9 +1193,13 @@ that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose
   distance every tick while over its limit (2.4 ms a tick); it counts every tick and plans who
   goes every 15 ticks. The wake scan looked at every sleeping piece every tick (1.7 ms); it looks
   at 32 a tick.
-* **A toppled building with holes in its bands** (it toppled halfway through rebuilding them) is
-  queued for its one mesh at once; before, nothing rebuilt it until something changed it, and one
-  piece of 18,588 bricks was partly invisible for 422 ticks.
+* **A toppled building with holes in its bands** (it toppled halfway through rebuilding them): the
+  missing bands are built one a tick from the bake it already has (`_fill_band_holes`), and a hit
+  meanwhile patches the bands it does have. Before, nothing rebuilt it until something changed it
+  -- one piece of 18,588 bricks was partly invisible for 422 ticks -- and when something did, it
+  was a full mesh of the whole piece inside the blast: 17-23 ms a piece, the worst tick's "loose
+  pieces" line (24-30 ms -> 3).
+* The `--walk` gate's script errors were `_gun.exclude` being handed an untyped array; fixed.
 
 | `--big --shot`, script side | before | after |
 |---|---|---|
@@ -1203,7 +1207,7 @@ that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose
 | boxes moving, mean / peak | 6,930 / 13,472 | **2,494 / 6,818** |
 | islands tick, mean | 8.1 ms | **2.3 ms** |
 | solve, mean per tick | 4.7 ms | **0.5 ms** |
-| worst script tick | 79-95 ms | **49 ms** |
+| worst script tick | 79-95 ms | **48 ms** |
 
 Not done, on purpose: R2 says a floor panel is a landmark, so a one-brick floor plate falling
 anywhere is a body every machine keeps -- ~200 of those bodies in a `--big --shot` collapse were one

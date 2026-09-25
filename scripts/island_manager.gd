@@ -347,6 +347,8 @@ var band_breaks := 0
 var _furniture := {}
 static var OVERLAP_FRAMES := 2
 var _ghosts: Array = []   ## [node, free on this process frame]
+var _band_holes: Array = []  ## toppled pieces with bands still to build
+var band_holes_filled := 0
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
 ## assumed. Each one is a piece's geometry drawn twice for two frames.
@@ -1127,12 +1129,11 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# A building that toppled halfway through rebuilding its bands comes down
 		# with holes in it, and nothing rebuilt it until something changed it --
 		# which a landing nobody is near never does (FRACTURE_RANGE). One piece
-		# of 18,588 bricks was partly invisible for 422 ticks. It gets its one
-		# mesh as soon as the queue can build it; the bands it has draw till then.
+		# of 18,588 bricks was partly invisible for 422 ticks. The missing bands
+		# are built one a tick (_fill_band_holes), slices of the bake it already
+		# has; the bands it has draw, and take patches, meanwhile.
 		if not isl.bands.is_empty() and not _draws_bands(isl):
-			if not world.bake_ready(chunk):
-				world.bake_chunk_async(chunk)
-			_mesh_queue.append(isl)
+			_band_holes.append(isl)
 		if mesh_node.get_parent() != null:
 			_ghosts.append([mesh_node, Engine.get_process_frames() + OVERLAP_FRAMES])
 		else:
@@ -1332,7 +1333,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	# section of 7,000-8,600 bricks -- inside the blast that hit it, once per
 	# piece the blast reached. Held like any other update while a child it
 	# shed is coming up (OVERLAP_FRAMES).
-	if not isl.bands.is_empty() and not force_full and _draws_bands(isl):
+	if not isl.bands.is_empty() and not force_full and _any_band(isl):
 		if isl.hold_until > Engine.get_process_frames():
 			if not _held.has(isl):
 				_held.append(isl)
@@ -1391,11 +1392,12 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 
 
 ## Re-index a banded piece and upload only the bands whose bytes moved --
-## CityScene._remesh's patch, for a building that has come down whole (and
-## whole in its bands: _draws_bands). False when it cannot: the bake is gone,
-## the sections no longer match, a band was built empty, or a band's buffer is
-## not the length it was built at. A band patched before the one that failed is
-## harmless -- the full rebuild that follows replaces them all.
+## CityScene._remesh's patch, for a building that has come down whole. A band
+## not built yet is skipped: it is built later from the bake as it is by then
+## (_fill_band_holes). False when it cannot: the bake is gone, the sections no
+## longer match, a band was built empty, or a band's buffer is not the length it
+## was built at. A band patched before the one that failed is harmless -- the
+## full rebuild that follows replaces them all.
 func _patch_bands(isl: BrickIsland) -> bool:
 	if isl.band_bytes.size() != isl.bands.size() or not world.bake_ready(isl.chunk) \
 			or world.get_chunk_sections(isl.chunk) != isl.bands.size():
@@ -1406,6 +1408,9 @@ func _patch_bands(isl: BrickIsland) -> bool:
 		var si := int(d.section)
 		if si < 0 or si >= isl.bands.size():
 			return false
+		if not is_instance_valid(isl.bands[si]):
+			continue   # a hole: it will be built from the bake as it now is
+		# A band that was empty cannot take a patch; the rebuild can.
 		var band: ArrayMesh = (isl.bands[si] as MeshInstance3D).mesh as ArrayMesh
 		if band == null or band.get_surface_count() == 0 \
 				or int(d.offset) + int(d.changed_bytes) > int(isl.band_bytes[si]):
@@ -1919,7 +1924,7 @@ func _count_meshless() -> void:
 		# An ArrayMesh with no surfaces is NOT null and draws nothing; count both.
 		# A toppled building draws through its bands and not its own mesh.
 		var m: Mesh = isl.mesh.mesh
-		if (m == null or m.get_surface_count() == 0) and not _draws_bands(isl):
+		if (m == null or m.get_surface_count() == 0) and not _any_band(isl):
 			isl.blind_ticks += 1
 			meshless_worst_blocks = maxi(meshless_worst_blocks,
 					world.get_alive_block_count(isl.chunk))
@@ -1928,6 +1933,53 @@ func _count_meshless() -> void:
 			blind_total += isl.blind_ticks
 			blind_count += 1
 			isl.blind_ticks = 0
+
+
+func _any_band(isl: BrickIsland) -> bool:
+	for node in isl.bands:
+		if is_instance_valid(node):
+			return true
+	return false
+
+
+## Build the bands a toppled building never got to, one a tick, from the bake
+## it already has: a slice of it each (build_chunk_mesh_section), where the one
+## mesh of the whole piece was 17-23 ms in a single call -- paid inside whatever
+## blast hit it first. A piece whose bake has gone, or that has become an
+## ordinary one-mesh island meanwhile, is left to rebuild_mesh.
+func _fill_band_holes() -> void:
+	while not _band_holes.is_empty():
+		var isl: BrickIsland = _band_holes[0]
+		if not isl.is_valid() or isl.mesh == null or isl.bands.is_empty() \
+				or not world.bake_ready(isl.chunk) \
+				or world.get_chunk_sections(isl.chunk) != isl.bands.size():
+			_band_holes.pop_front()
+			continue
+		var si := -1
+		for k in isl.bands.size():
+			if not is_instance_valid(isl.bands[k]):
+				si = k
+				break
+		if si < 0:
+			_band_holes.pop_front()
+			continue
+		var arrays: Array = world.build_chunk_mesh_section(isl.chunk, si)
+		var mesh := ArrayMesh.new()
+		if not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d band %d" % [isl.chunk, si]):
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var live := mesh.get_surface_count() > 0
+		var node := MeshInstance3D.new()
+		node.material_override = brick_material
+		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		node.mesh = mesh if live else null
+		# In the piece's own node's space, as its other bands are.
+		isl.mesh.add_child(node)
+		isl.bands[si] = node
+		while isl.band_bytes.size() < isl.bands.size():
+			isl.band_bytes.append(0)
+		isl.band_bytes[si] = index_patch_bytes(arrays) if live else 0
+		band_holes_filled += 1
+		return   # one a tick
 
 
 ## Is this piece drawn whole by the bands it came down with? Every slot: one
@@ -2171,6 +2223,7 @@ func tick() -> void:
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
 	_drain_mesh_queue()
+	_fill_band_holes()
 	_drain_resolve_queue()
 	var _tr := Time.get_ticks_usec()
 	tick_prof.resolve += float(_tr - _tl) / 1000.0

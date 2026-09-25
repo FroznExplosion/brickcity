@@ -2351,7 +2351,10 @@ func _setup_gun() -> void:
 	# The walker's own body is not something to shoot.
 	camera.mode_changed.connect(func(walking: bool) -> void:
 		var body := camera.body()
-		_gun.exclude = [body.get_rid()] if walking and body != null else [] as Array[RID])
+		var skip: Array[RID] = []
+		if walking and body != null:
+			skip.append(body.get_rid())
+		_gun.exclude = skip)
 
 
 ## Roll a gun of this class and put it in the player's hands.
