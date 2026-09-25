@@ -240,27 +240,43 @@ struct BrickMaterialDef {
     // exactly as every block always has, and metal at 4.0 takes two hits at
     // the centre and four at the edge.
     float toughness;
+    // Light passes through it. The mesher keeps an opaque face that a
+    // see-through block sits against (it is what is seen through it), and the
+    // brick shader draws the block itself in a blended pass of its own.
+    bool translucent;
 };
 
 inline const BrickMaterialDef BRICK_MATERIALS[] = {
-    {"PLA", nullptr, 0, 1.0f},
-    {"PLA matte", nullptr, 0, 1.0f},
-    {"PLA silk", nullptr, 0, 0.9f},
-    {"ABS", nullptr, 0, 1.3f},
-    {"PETG", nullptr, 0, 1.4f},
-    {"TPU", nullptr, 0, 1.8f},
-    {"Nylon", nullptr, 0, 1.6f},
-    {"Glow PLA", nullptr, 0, 0.9f},
-    {"Carbon PLA", nullptr, 0, 1.5f},
-    {"Wood PLA", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 0.9f},
-    {"Wood", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 1.6f},
-    {"Metal", METAL_VARIANTS, (int)(sizeof(METAL_VARIANTS) / sizeof(METAL_VARIANTS[0])), 4.0f},
-    {"Stone", STONE_VARIANTS, (int)(sizeof(STONE_VARIANTS) / sizeof(STONE_VARIANTS[0])), 2.5f},
+    {"PLA", nullptr, 0, 1.0f, false},
+    {"PLA matte", nullptr, 0, 1.0f, false},
+    {"PLA silk", nullptr, 0, 0.9f, false},
+    {"ABS", nullptr, 0, 1.3f, false},
+    {"PETG", nullptr, 0, 1.4f, true},
+    {"TPU", nullptr, 0, 1.8f, false},
+    {"Nylon", nullptr, 0, 1.6f, false},
+    {"Glow PLA", nullptr, 0, 0.9f, false},
+    {"Carbon PLA", nullptr, 0, 1.5f, false},
+    {"Wood PLA", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 0.9f, false},
+    {"Wood", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 1.6f, false},
+    {"Metal", METAL_VARIANTS, (int)(sizeof(METAL_VARIANTS) / sizeof(METAL_VARIANTS[0])), 4.0f, false},
+    {"Stone", STONE_VARIANTS, (int)(sizeof(STONE_VARIANTS) / sizeof(STONE_VARIANTS[0])), 2.5f, false},
 };
 constexpr int BRICK_MATERIAL_COUNT = (int)(sizeof(BRICK_MATERIALS) / sizeof(BRICK_MATERIALS[0]));
 
 inline float brick_material_toughness(int material) {
     return (material >= 0 && material < BRICK_MATERIAL_COUNT) ? BRICK_MATERIALS[material].toughness : 1.0f;
+}
+
+inline bool brick_material_translucent(int material) {
+    return material >= 0 && material < BRICK_MATERIAL_COUNT && BRICK_MATERIALS[material].translucent;
+}
+
+// Whether `neighbour` hides the face of `owner` it touches. A see-through block
+// hides nothing from an opaque one -- that face is what is seen through it --
+// but two see-through blocks still hide their shared face, so a wall of them
+// reads as one pane rather than a stack of boxes.
+inline bool brick_material_hides(int owner, int neighbour) {
+    return !brick_material_translucent(neighbour) || brick_material_translucent(owner);
 }
 
 inline int brick_material_colour_count(int material) {

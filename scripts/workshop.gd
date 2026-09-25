@@ -234,7 +234,7 @@ func _ready() -> void:
 	# drew bricks some other way would show a build the city never does.
 	var sm := ShaderMaterial.new()
 	sm.shader = load("res://shaders/brick.gdshader")
-	_material = sm
+	_material = BrickMaterials.add_glass(sm)
 
 	_ghost_material = StandardMaterial3D.new()
 	_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1759,7 +1759,7 @@ static func _stud_material() -> Material:
 		# brick has metal studs even where the terrain does not supply one.
 		var sm := ShaderMaterial.new()
 		sm.shader = load("res://shaders/printed.gdshader")
-		_studs_fallback = sm
+		_studs_fallback = BrickMaterials.add_glass(sm)
 	return _studs_fallback
 
 

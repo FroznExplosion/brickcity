@@ -591,6 +591,9 @@ public:
     static int get_material_colour_count(int material);
     /// Multiple of PLA's life a block of this material has (apply_hit).
     static float get_material_toughness(int material);
+    /// Light passes through it (PETG): drawn in the brick shader's blended
+    /// pass, and an opaque face against it is kept rather than culled.
+    static bool is_material_translucent(int material);
     /// What is left of a block, 0..255 of full; its material scales what full is.
     int get_block_hp(int chunk_id, int block_id) const;
     /// RGB resolved through the material; alpha carries the material to the

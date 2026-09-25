@@ -48,6 +48,9 @@ uniform vec4 tint : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float surface_roughness : hint_range(0.0, 1.0) = 0.42;
 uniform float surface_specular : hint_range(0.0, 1.0) = 0.55;
 uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
+// Set by BrickMaterials.add_glass, with printed_glass.gdshader as the second
+// pass that draws see-through studs.
+uniform bool glass_pass = false;
 
 varying vec3 v_local;
 varying vec3 v_colour;
@@ -59,6 +62,11 @@ void vertex() {
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
+    // A see-through brick is drawn by the glass pass, not here: collapsed to
+    // a point, its faces cost nothing and rasterise nothing.
+    if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
+        VERTEX = vec3(0.0);
+    }
 }
 
 const float TAU_F = 6.28318530718;
