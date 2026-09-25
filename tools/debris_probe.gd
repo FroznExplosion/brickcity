@@ -267,7 +267,7 @@ func _check_unseen() -> void:
 	var ms := int(float(_rubble2_gone_frame - _away_frame) / float(Engine.physics_ticks_per_second) * 1000.0)
 	_ok("once nobody can see it, it goes", _rubble2_gone_frame >= 0)
 	_ok("within a second or so, not at once and not never",
-			ms >= IslandManager.DEBRIS_UNSEEN_MS - 100 and ms <= IslandManager.DEBRIS_UNSEEN_MS + 400,
+			ms >= 900 and ms <= 1400,
 			"%d ms after the camera turned away" % ms)
 
 

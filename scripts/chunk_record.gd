@@ -262,10 +262,10 @@ func restore(world: BrickWorld) -> int:
 		return -1
 	if rotation != 0 or origin_ticks != Vector3i.ZERO:
 		world.set_chunk_frame(chunk, rotation, origin_ticks)
-	var placed := PackedInt32Array()
-	for i in block_count():
-		placed.append(world.place_block(chunk, origin + Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
-				archetypes[i], colours[i]))
+	# All of them in one call (BrickWorld.place_blocks): the same placements in
+	# the same order, where one call a block from script was most of what waking
+	# a big piece cost.
+	var placed := world.place_blocks(chunk, origin, cells, archetypes, colours)
 	var furniture := PackedInt32Array()
 	for i in decorative:
 		if i < placed.size() and placed[i] >= 0:

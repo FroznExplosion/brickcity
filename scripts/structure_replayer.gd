@@ -113,6 +113,8 @@ func apply(e: DamageLog.Entry) -> bool:
 				# Cut out, as on the host, and not kept (IslandManager.MAX_MOVING).
 				world.release_chunk(int(cut.chunk))
 			else:
+				if e.flags & DamageLog.FLAG_CHUNK:
+					world.heal_joints(int(cut.chunk))
 				_add_piece(DamageLog.piece_id(e.seq), int(cut.chunk), e.owner)
 		_:
 			var chunk := piece_chunk(e.target)

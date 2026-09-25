@@ -1231,7 +1231,7 @@ settled rubble merged back into static chunks. This is step 1.
   outside the frustum, and otherwise swept 0.3 s after landing or at 2.5 s, whatever the camera
   was doing -- a brick vanishing in front of the player. Now the group's BOX is tested against the
   frustum (within 60 m, from 30); a kept piece is asked every 4 ticks whether it can still be
-  seen; it goes a second after it cannot (`DEBRIS_UNSEEN_MS`); and when it must go in view --
+  seen; it goes a second after it cannot (`DEBRIS_UNSEEN_MS`, counted in physics ticks, so a hitch is not a second of nobody looking); and when it must go in view --
   older than 30 s, or the cap wants it -- it shrinks away over 0.6 s instead of popping. No
   occlusion test: a piece behind a wall counts as seen, which only ever keeps something longer.
 * **The debris cap counts debris.** It skipped disposable pieces, which was harmless while
@@ -1243,6 +1243,39 @@ settled rubble merged back into static chunks. This is step 1.
 because they were in view, 578 small groups never became bodies. `tools/debris_probe.gd` checks
 the new rules: kept in view past landing, shrunk rather than popped by the cap, gone ~1 s after
 the camera looks away.
+
+### Collapse plan, steps 2 and 3: breakage, collapse, and the mega director
+
+`scripts/collapse_director.gd`. Every group a building's solve lets go of is sorted first:
+
+* **Breakage** -- within 4 m of a hit on that building in the last 2 s (a blast, or something
+  landing on it), and no more than 200 bricks. It comes loose exactly as before.
+* **Collapse** on an ordinary building -- still one body a group.
+* **Collapse on a mega building** (8,000 bricks or more: the big city's four largest shapes).
+  * **Held while it is still growing.** What has given way stays in the building until the
+    cascade stops growing for two solves, or 1.5 s has passed. Released every tick, a cascade made
+    one small chunk a tick for as long as it ran -- 331 of them in one pass -- and the moment it
+    hangs before it goes is Red Faction's groan.
+  * **Then cut into a few chunks**, bottom to top, of a size set by how far the nearest player is:
+    1,500 bricks near (under 60 m), 4,000 mid, and beyond 150 m no more than three.
+  * **Each chunk is one piece until it lands.** A chunk is a union of groups that the stress solve
+    separated, and an island treats a failed joint as cut -- so the first thing to touch it took it
+    straight back apart into those groups and hundreds of single bricks (818,000 bricks' worth of
+    re-spawning in one pass). Its joints are mended when it is cut out (`BrickWorld.heal_joints`),
+    on every machine: the DETACH says so (`DamageLog.FLAG_CHUNK`).
+  * **Its furniture is written off**: taken out of the chunks into a group of its own, which the
+    furniture rule deletes unless somebody is right next to it.
+  * A placeholder dust cloud (`CollapseDust`) where a chunk breaks away. Effects are the weapons
+    and effects area's; this is so a collapse across the city reads as one meanwhile.
+
+Also: **waking a sleeping piece** placed its bricks one call at a time from script -- 11-16 ms for
+an 8,000-brick piece, and the worst islands tick more than once. `BrickWorld.place_blocks` does
+the same placements in one call. And debris "out of view for a second" counts physics ticks, not
+milliseconds (the project runs 30 a second): a hitch is not a second of nobody looking, and on
+wall-clock time a stalled headless probe swept pieces that were in view.
+
+`--big --shot`: mega collapses came down in 61 chunks across 7 buildings (331 before the hold);
+landmark bodies 319 (399 after step 1); the log replays into the same structure, pieces included.
 
 ### Windows on far buildings: a room behind the glass that is not there
 

@@ -403,6 +403,12 @@ public:
     /// Restore a block's severed joints. Only ever sets what a record captured;
     /// it is not a way to break or mend structure by hand.
     void set_block_joints(int chunk_id, int block_id, int joints);
+    /// Mend every severed joint in a chunk. What makes a CLUSTER: a mega
+    /// building's collapse is cut into a few chunks (CollapseDirector), and a
+    /// chunk falls as one piece and breaks where it lands -- not along the
+    /// joints the stress solve already failed, which would have taken it apart
+    /// the first time anything touched it. Returns how many blocks changed.
+    int heal_joints(int chunk_id);
 
     /// Per-block readouts, for debug overlays and probes.
     float get_block_load(int chunk_id, int block_id) const;
@@ -443,6 +449,13 @@ public:
     /// again. A city is a few recipes many times over; building the biggest
     /// block by block was 26 ms of every promotion. Returns a template id.
     int save_template(int chunk_id);
+    /// place_block for a whole list, in order: block i at origin + (cells[3i],
+    /// cells[3i+1], cells[3i+2]) with archetypes[i] and colours[i]. Returns each
+    /// one's id, or -1 where place_block would have refused it -- exactly what
+    /// the same calls one by one return. For ChunkRecord.restore, which made them
+    /// one by one from script: 11-16 ms to wake a sleeping 8,000-brick piece.
+    PackedInt32Array place_blocks(int chunk_id, Vector3i origin, const PackedInt32Array &cells,
+            const PackedInt32Array &archetype_ids, const PackedByteArray &colours);
     /// Give an EMPTY chunk, of the dims and origin the template was saved
     /// from, the template's blocks. The ids come out as they went in, so a
     /// damage record keyed on them replays the same. False, and nothing

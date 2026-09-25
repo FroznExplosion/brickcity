@@ -2880,6 +2880,23 @@ void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
     b.bottom_broken = (joints & JOINT_BOTTOM_BROKEN) != 0;
 }
 
+int BrickWorld::heal_joints(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    int healed = 0;
+    for (Block &b : chunks[chunk_id].blocks) {
+        if (b.support_broken || b.bottom_broken) {
+            b.support_broken = false;
+            b.bottom_broken = false;
+            ++healed;
+        }
+    }
+    // No cache to drop: the joint cache applies bottom_broken as it reads, and
+    // support_broken is not in it at all.
+    return healed;
+}
+
 bool BrickWorld::is_support_broken(int chunk_id, int block_id) const {
     if (!valid_chunk(chunk_id)) {
         return false;
@@ -3005,6 +3022,24 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     out["stress"] = stress_out;
     out["stability"] = stability;
     out["groups"] = groups;
+    return out;
+}
+
+PackedInt32Array BrickWorld::place_blocks(int chunk_id, Vector3i origin,
+        const PackedInt32Array &cells, const PackedInt32Array &archetype_ids,
+        const PackedByteArray &colours) {
+    PackedInt32Array out;
+    const int64_t n = archetype_ids.size();
+    if (!valid_chunk(chunk_id) || cells.size() < n * 3 || colours.size() < n) {
+        return out;
+    }
+    out.resize(n);
+    int32_t *ids = out.ptrw();
+    for (int64_t i = 0; i < n; ++i) {
+        ids[i] = place_block(chunk_id,
+                origin + Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
+                archetype_ids[i], colours[i], false);
+    }
     return out;
 }
 
@@ -4732,7 +4767,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
+    ClassDB::bind_method(D_METHOD("heal_joints", "chunk_id"), &BrickWorld::heal_joints);
     ClassDB::bind_method(D_METHOD("save_template", "chunk_id"), &BrickWorld::save_template);
+    ClassDB::bind_method(D_METHOD("place_blocks", "chunk_id", "origin", "cells", "archetype_ids", "colours"),
+            &BrickWorld::place_blocks);
     ClassDB::bind_method(D_METHOD("load_template", "template_id", "chunk_id"), &BrickWorld::load_template);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),

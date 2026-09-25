@@ -82,9 +82,11 @@ var disposable := false
 ## Big enough to hide behind or stand on (IslandManager.is_landmark_size). The
 ## opposite of disposable except for a fixture made rubble on purpose.
 var landmark := false
-## Debris only (disposable): when this machine's camera last had it in view, and
-## when it started shrinking away (0: it has not). See IslandManager.DEBRIS_UNSEEN_MS.
-var seen_ms := 0
+## Debris only (disposable): the physics tick this machine's camera last had it
+## in view on, and when it started shrinking away (0: it has not). Ticks, not
+## milliseconds: a hitch longer than DEBRIS_UNSEEN_TICKS is not a second of
+## nobody looking. See IslandManager.DEBRIS_UNSEEN_TICKS.
+var seen_tick := 0
 var fade_since := 0
 ## 1 drawn at full size, 0 shrunk away.
 var fade := 1.0

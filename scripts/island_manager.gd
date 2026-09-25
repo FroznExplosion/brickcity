@@ -165,7 +165,8 @@ const SMALL_KEEP_RANGE := 60.0
 ## (is_landmark_size).
 const DEBRIS_MAX_BLOCKS := 8
 ## Debris is never removed while this machine's camera can see it. It goes once
-## it has been out of view this long...
+## it has been out of view this long -- counted in physics TICKS (_unseen_ticks),
+## because a hitch longer than a second is not a second of nobody looking...
 const DEBRIS_UNSEEN_MS := 1000
 ## ...and, seen or not, it shrinks away once it is this old, over DEBRIS_FADE_MS --
 ## never a pop. The debris cap shrinks what it takes that is in view, too.
@@ -490,7 +491,7 @@ var debris_faded := 0
 ## The camera's frustum, refreshed every tick (_box_seen).
 var _frustum: Array[Plane] = []
 var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
-		"capped": [0, 0]}
+		"capped": [0, 0], "shed": [0, 0]}
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
 var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
@@ -632,13 +633,14 @@ func _to_grid(isl: BrickIsland, world_point: Vector3) -> Vector3:
 ## command names only what every machine agrees on. A group that is nothing but
 ## furniture changes no structure and is not recorded at all.
 func record_detach(building: int, source: BrickIsland, chunk: int,
-		ids: PackedInt32Array) -> int:
+		ids: PackedInt32Array, flags := 0) -> int:
 	var e := DamageLog.Entry.new()
 	e.kind = DamageLog.Kind.DETACH
+	e.flags = flags
 	if source != null:
 		e.target = source.piece_id
 		e.owner = source.owner
-		e.flags = DamageLog.FLAG_FROM_PIECE
+		e.flags |= DamageLog.FLAG_FROM_PIECE
 	else:
 		e.target = building
 		e.owner = building
@@ -787,6 +789,11 @@ func _group_box(chunk: int, block_ids: PackedInt32Array) -> AABB:
 	return world.get_chunk_transform(chunk) * AABB(lo, hi - lo)
 
 
+## DEBRIS_UNSEEN_MS in physics ticks, at whatever rate the project runs them.
+func _unseen_ticks() -> int:
+	return maxi(int(DEBRIS_UNSEEN_MS * Engine.physics_ticks_per_second / 1000.0), 1)
+
+
 ## Start shrinking a piece of debris away (DEBRIS_FADE_MS). Idempotent.
 func _start_fade(isl: BrickIsland, now: int) -> void:
 	if isl.fade_since == 0:
@@ -862,7 +869,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.local_com = split.local_com
 	isl.landmark = landmark
 	isl.disposable = not landmark
-	isl.seen_ms = Time.get_ticks_msec()
+	isl.seen_tick = Engine.get_physics_frames()
 
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(float(split.mass) * MASS_SCALE, 0.5)
@@ -1129,7 +1136,7 @@ func make_debris(isl: BrickIsland) -> void:
 		return
 	isl.disposable = true
 	isl.landmark = false
-	isl.seen_ms = Time.get_ticks_msec()
+	isl.seen_tick = Engine.get_physics_frames()
 	_apply_layers(isl)
 
 
@@ -1172,8 +1179,8 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.landmark = is_landmark
 	isl.disposable = not is_landmark
 	# Counted as just seen: a piece back from a save or from sleep has not been
-	# looked for yet, and seen_ms 0 would sweep it on the first tick.
-	isl.seen_ms = Time.get_ticks_msec()
+	# looked for yet, and seen_tick 0 would sweep it on the first tick.
+	isl.seen_tick = Engine.get_physics_frames()
 
 	isl.band_bytes = carried_band_bytes
 	isl.body = RigidBody3D.new()
@@ -1723,6 +1730,8 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		var moved: PackedInt32Array = g
 		if moved.is_empty():
 			continue
+		spawn_census.shed[0] += 1
+		spawn_census.shed[1] += moved.size()
 		var child := record_detach(isl.owner, isl, isl.chunk, moved)
 		spawn(isl.chunk, moved, linear, angular, child, isl.owner)
 		# Start a hold; never EXTEND one. A piece shedding on consecutive ticks
@@ -2215,8 +2224,8 @@ func tick() -> void:
 					continue
 			else:
 				if look and _box_seen(world_aabb(isl), _frustum):
-					isl.seen_ms = now
-				if now - isl.seen_ms > DEBRIS_UNSEEN_MS:
+					isl.seen_tick = Engine.get_physics_frames()
+				if Engine.get_physics_frames() - isl.seen_tick > _unseen_ticks():
 					debris_unseen += 1
 					_retire(isl, i + 1, &"swept")
 					continue
@@ -2485,7 +2494,7 @@ func _enforce_debris_cap() -> void:
 		if at < 0:
 			continue
 		if bool(entry[1]):
-			if isl.disposable and Time.get_ticks_msec() - isl.seen_ms < DEBRIS_UNSEEN_MS:
+			if isl.disposable and Engine.get_physics_frames() - isl.seen_tick < _unseen_ticks():
 				# In view: it goes, but it shrinks away rather than popping.
 				_start_fade(isl, Time.get_ticks_msec())
 			else:
@@ -2535,10 +2544,10 @@ func _plan_debris_cap() -> Array:
 	# Oldest at rest first.
 	if over_small > 0:
 		# Out of view first, then oldest at rest.
-		var now_ms := Time.get_ticks_msec()
+		var tick_now := Engine.get_physics_frames()
 		small.sort_custom(func(a: BrickIsland, c: BrickIsland) -> bool:
-				var a_seen := now_ms - a.seen_ms < DEBRIS_UNSEEN_MS
-				var c_seen := now_ms - c.seen_ms < DEBRIS_UNSEEN_MS
+				var a_seen: bool = tick_now - a.seen_tick < _unseen_ticks()
+				var c_seen: bool = tick_now - c.seen_tick < _unseen_ticks()
 				if a_seen != c_seen:
 					return not a_seen
 				return a.settled_ms < c.settled_ms)

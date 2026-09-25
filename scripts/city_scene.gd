@@ -141,6 +141,9 @@ const STREET_STUDS := 9
 var world: BrickWorld
 var registry: BuildingRegistry
 var islands: IslandManager
+## How a building comes apart: breakage or collapse, and a mega building's
+## collapse in a few big chunks (CollapseDirector).
+var director: CollapseDirector
 var palette := {}
 
 var brick_material: ShaderMaterial
@@ -735,6 +738,7 @@ func _ready() -> void:
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
 	islands.on_impact = _on_island_impact
+	director = CollapseDirector.new(world)
 	# A client's shot arrives as a request; the host takes it exactly as it takes
 	# its own. Shears are never requested -- they come from the host's physics.
 	authority.handle_request = func(e: DamageLog.Entry) -> void:
@@ -2280,6 +2284,7 @@ func _shear_building(id: int, point: Vector3, radius: float) -> void:
 	var chunk := _promote(id)
 	if chunk < 0:
 		return
+	director.note_hit(id, point)
 	# peel: masonry landing on a wall knocks a clump of it loose, not a cloud of
 	# individual bricks. See BrickWorld::separate_near.
 	var loosened: PackedInt32Array = world.separate_near(chunk, point, radius,
@@ -2997,6 +3002,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		# _remesh walks every baked face; doing either once per HIT meant a
 		# burst of fire paid for them over and over on the same building.
 		_last_hit[b.id] = Time.get_ticks_msec()
+		director.note_hit(b.id, point)
 		if not _pending_disable.has(b.id):
 			_pending_disable[b.id] = PackedInt32Array()
 		_pending_disable[b.id].append_array(killed)
@@ -3138,12 +3144,20 @@ func _physics_process(_delta: float) -> void:
 			_mark_dirty(b.id)
 			continue
 		_mark_dirty(b.id)
-		for g in groups:
-			if spawned >= SPAWNS_PER_TICK \
-					or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
-				break
-			spawned += 1
-			var before: PackedInt32Array = g
+		# Breakage as it always was; a mega building's collapse as a few big
+		# chunks, its furniture split out to be written off (CollapseDirector).
+		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
+				islands.interest_points())
+		for entry in plan:
+			var kind: StringName = entry[1]
+			# Furniture is deleted where it is unless somebody is right there:
+			# it costs next to nothing and is not held to the spawn budget.
+			if kind != &"furniture":
+				if spawned >= SPAWNS_PER_TICK \
+						or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
+					break
+				spawned += 1
+			var before: PackedInt32Array = entry[0]
 			# Parent first, island second -- see the note above the toppling
 			# spawn. spawn() returns null for debris discarded unseen; either
 			# way the blocks have left this building.
@@ -3151,8 +3165,13 @@ func _physics_process(_delta: float) -> void:
 			t = _mark("disable", t)
 			# The detach is a command: WHEN a group leaves is a budget, and timing
 			# changes what the next hit does (DamageLog, "Every operation").
-			var piece := islands.record_detach(b.id, null, b.chunk, before)
-			islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			var piece := islands.record_detach(b.id, null, b.chunk, before,
+					DamageLog.FLAG_CHUNK if kind == &"chunk" else 0)
+			var came := islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			if kind == &"chunk" and came != null:
+				# One piece until it lands: mended, as every client mends it.
+				world.heal_joints(came.chunk)
+				CollapseDust.puff(self, came.body.global_position, came.radius)
 			t = _mark("spawn", t)
 		# NOW the furniture is redrawn, from what is left. _disable redrew it
 		# too, but before the spawn took the blocks out of this chunk -- so the
@@ -4088,6 +4107,10 @@ func _run_shot_pass() -> void:
 	print("[city]   came loose: %d landmark bodies (%d bricks), %d small bodies (%d), %d deleted where they were (%d), %d dropped over the moving cap (%d)" % [
 			sc.landmark[0], sc.landmark[1], sc.small[0], sc.small[1], sc.deleted[0], sc.deleted[1],
 			sc.capped[0], sc.capped[1]])
+	print("[city]   of which pieces coming off pieces: %d (%d bricks)" % [sc.shed[0], sc.shed[1]])
+	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
+			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
+			director.breakage_out, director.furniture_out, director.collapsing.size()])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
