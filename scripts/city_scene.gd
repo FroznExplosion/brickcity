@@ -10,8 +10,9 @@ extends Node3D
 ##
 ## Keys: WASD fly · SPACE/Q up, down · shift fast · SPACE SPACE walk/fly
 ##       LMB fire · WHEEL blast size · X wider blast
-##       R re-shell everything · L seams · F1 stats · ESC mouse
-## Flags: `-- --shot` scripted capture
+##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
+##       F5 save · F9 load · ESC mouse
+## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
 const BIG_BLAST := 3.2
@@ -579,6 +580,17 @@ var _interiors_mode := false
 var _measuring := false
 var _chamfer_mode := false
 var _checkpoint_mode := false
+var _gun_mode := false
+## The player's gun (Docs/AIPlan.md P1): a generated BoomerBorder gun held by a
+## GunController. LMB fires it once 1 is pressed; 2 goes back to the debug blast.
+var _gun: GunController
+var _gun_armed := false
+var _gun_library: GunPartLibrary
+var _gun_class := 0
+## Combat's own seeded RNG -- spread, crits, procs. The host owns it (D9).
+var _combat_rng := RandomNumberGenerator.new()
+const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
+		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
 ## city. Empty means nothing was asked for.
 var _build_path := ""
@@ -651,6 +663,7 @@ func _ready() -> void:
 	_interiors_mode = "--interiors" in args
 	_chamfer_mode = "--chamfer" in args
 	_checkpoint_mode = "--checkpoint" in args
+	_gun_mode = "--gun" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -695,6 +708,8 @@ func _ready() -> void:
 	authority.handle_request = func(e: DamageLog.Entry) -> void:
 		if e.kind == DamageLog.Kind.BLAST:
 			_damage_queue.append([e.point, e.radius])
+		elif e.kind == DamageLog.Kind.CHIP:
+			_damage_queue.append([e.point, e.radius, e.limit])
 	# Everything the pieces do to themselves is a command too, and only the host
 	# lets them do it.
 	islands.decides = authority.may_decide()
@@ -702,6 +717,7 @@ func _ready() -> void:
 		var done := authority.commit_entry(e)
 		return done.seq if done != null else -1
 
+	_setup_gun()
 	_build_city()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
@@ -753,6 +769,8 @@ func _ready() -> void:
 		_run_chamfer_pass()
 	elif _checkpoint_mode:
 		_run_checkpoint_pass()
+	elif _gun_mode:
+		_run_gun_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -2240,6 +2258,196 @@ func _blast(point: Vector3, radius: float) -> void:
 	_damage_queue.append([point, radius])
 
 
+## A gun's hit on structure: wear, not destruction. `chip` hp off every brick in
+## `radius` and always the one `point` is in (StructuralDamage says how much). Goes
+## the same way as a blast -- a client asks, the host queues and commits.
+func chip(point: Vector3, radius: float, hp: int) -> void:
+	if hp <= 0:
+		return
+	if not authority.request(DamageLog.Kind.CHIP, -1, point, radius, Vector3.ZERO, hp):
+		return
+	_damage_queue.append([point, radius, hp])
+
+
+func _setup_gun() -> void:
+	_combat_rng.seed = 0xC0FFEE
+	DamageSystem.rng.seed = 0xC0FFEE + 1
+	_gun = GunController.new()
+	_gun.name = "Gun"
+	_gun.rng = _combat_rng
+	_gun.aim = camera
+	# What a bullet does to bricks is StructuralDamage's to say, and it goes
+	# through the same door as every other change to the world.
+	_gun.on_structure_hit = func(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+		if bool(shot.blast):
+			_blast(point, float(shot.radius))
+		else:
+			chip(point, float(shot.radius), int(shot.hp))
+	add_child(_gun)
+	# The walker's own body is not something to shoot.
+	camera.mode_changed.connect(func(walking: bool) -> void:
+		var body := camera.body()
+		_gun.exclude = [body.get_rid()] if walking and body != null else [] as Array[RID])
+
+
+## Roll a gun of this class and put it in the player's hands.
+func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(class_id), 1)
+	var gi := GunInstance.from_result(res)
+	if _gun.gun != null:
+		_gun.gun.queue_free()
+	camera.add_child(gi)
+	gi.position = Vector3(0.22, -0.2, -0.45)
+	_gun.equip(gi)
+	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
+	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
+			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
+			else ("%d hits a brick" % StructuralDamage.hits_per_brick(gi.weapon_class))])
+	return gi
+
+
+## The gate for the player's gun (Docs/AIPlan.md P1): a generated gun, fired at a
+## wall, wears bricks through the WorldAuthority and breaks one on the hit
+## StructuralDamage says; a living target takes the damage instead of the wall;
+## ordnance blasts; and the log -- CHIPs and all -- replays into the same city.
+func _run_gun_pass() -> void:
+	var b := registry.get_building(0)
+	_promote(0)
+	await _frames(20)
+	var chunk := b.chunk
+	# A structural brick in the outer wall at chest height -- not a window, which
+	# a round would go straight through into the room behind.
+	var xf := world.get_chunk_transform(chunk)
+	var face := Vector3.ZERO
+	var best := INF
+	var mid: float = b.recipe.footprint_x * 0.5 * STUD
+	for bx in world.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		var pos: Vector3 = d.pos
+		if not bool(d.alive) or world.is_block_decorative(chunk, int(d.block)) 				or pos.y < 1.2 or pos.y > 2.2:
+			continue
+		var score := pos.z * 10.0 + absf(pos.x - mid)
+		if score < best:
+			best = score
+			face = xf * pos
+	var out := xf.basis * Vector3(0.0, 0.0, -1.0)
+	camera.look_at_from_position(face + out * 6.0, face)
+	await _frames(2)
+	# Dead, not alive: a shot near a window opens the room behind it, and the
+	# furniture that puts in the chunk counts as alive.
+	var dead0 := world.get_dead_blocks(chunk).size()
+	var n0 := authority.commands.size()
+
+	_equip_gun(&"pistol", 7)
+	# Dead straight, so every round lands in the same brick.
+	_gun.gun.stats[&"accuracy"] = 1.0
+	var shots := [0]
+	var structural := [0]
+	var log_hits: Array = []
+	_gun.fired.connect(func(info: Dictionary) -> void:
+		shots[0] += 1
+		log_hits.append(info)
+		if bool(info.get("structure", false)):
+			structural[0] += 1)
+	await _shoot(1)
+	var chips := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chips += 1
+	print("[city] gun gate")
+	_gate_ok("one round is one CHIP, on the building it hit",
+			chips == 1 and authority.commands.entries[-1].target == 0,
+			"%d command(s)" % (authority.commands.size() - n0))
+	_gate_ok("and it breaks nothing", world.get_dead_blocks(chunk).size() == dead0)
+	await _shoot(StructuralDamage.hits_per_brick(WeaponClass.builtin(&"pistol")) - 1)
+	_gate_ok("the round StructuralDamage names breaks the brick",
+			world.get_dead_blocks(chunk).size() == dead0 + 1,
+			"%d dead -> %d" % [dead0, world.get_dead_blocks(chunk).size()])
+
+	# Something alive in the line of fire takes the bullet instead.
+	var target := StaticBody3D.new()
+	target.collision_layer = Layers.PAWN
+	var col := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = 0.45
+	capsule.height = 1.8
+	col.shape = capsule
+	target.add_child(col)
+	var pool := HealthPool.new()
+	pool.name = "HealthPool"
+	var layer := DefenseLayer.new()
+	layer.max_value = 1000.0
+	pool.layer_configs = [layer]
+	target.add_child(pool)
+	add_child(target)
+	target.global_position = face + out * 3.0 - Vector3(0.0, 0.2, 0.0)
+	await _frames(2)
+	var n1 := authority.commands.size()
+	var before := pool.total_current()
+	await _shoot(2)
+	_gate_ok("a living target takes the damage, and the wall none",
+			pool.total_current() < before and authority.commands.size() == n1,
+			"%.0f -> %.0f hp, %d command(s)" % [before, pool.total_current(),
+			authority.commands.size() - n1])
+	target.queue_free()
+	await _frames(2)
+
+	# An SMG held down: every round a command, none of them a whole brick.
+	_equip_gun(&"smg", 11)
+	var n2 := authority.commands.size()
+	var s0: int = shots[0]
+	log_hits.clear()
+	_gun.set_trigger(true)
+	await _frames(60)
+	_gun.set_trigger(false)
+	await _shoot(0)
+	var fired: int = shots[0] - s0
+	for info in log_hits:
+		if info.is_empty() or not bool(info.structure):
+			print("[city]   round: %s" % ("missed" if info.is_empty() else "hit %s at %v" % [info.collider, info.point]))
+	_gate_ok("a held trigger fires at the gun's rate, one command a round",
+			fired >= 5 and authority.commands.size() - n2 == fired,
+			"%d rounds, %d command(s), %.1f/s rated" % [fired, authority.commands.size() - n2,
+			_gun.gun.stats.get(&"fire_rate", 0.0)])
+
+	_equip_gun(&"rocket_launcher", 3)
+	_gun.gun.stats[&"accuracy"] = 1.0
+	var n3 := authority.commands.size()
+	log_hits.clear()
+	await _shoot(1)
+	var blasts := 0
+	for i in range(n3, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.BLAST:
+			blasts += 1
+	_gate_ok("ordnance blasts", blasts >= 1, "%d BLAST(s); rounds %s" % [blasts, log_hits])
+	await _frames(30)
+	await _save("city_gun")
+	_check_log_replays()
+	print("[city] gun gate: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Fire `n` single rounds, waiting out the gun's rate between them and the
+## damage queue after.
+func _shoot(n: int) -> void:
+	for i in n:
+		while _gun._cooldown > 0.0 or _gun.is_reloading():
+			await _frames(1)
+		# Held across two ticks: physics_frame is emitted BEFORE the nodes'
+		# _physics_process, so a trigger held for one resumption never fires.
+		_gun.set_trigger(true)
+		await get_tree().physics_frame
+		await get_tree().physics_frame
+		_gun.set_trigger(false)
+	var guard := 0
+	while not _damage_queue.is_empty() and guard < 120:
+		await _frames(1)
+		guard += 1
+	await _frames(2)
+
+
 ## Which buildings could a point at `radius` possibly touch. A grid lookup, so
 ## the answer does not get more expensive as the city grows.
 func _near_buildings(point: Vector3, radius: float) -> Array:
@@ -2294,17 +2502,20 @@ func _index_building(id: int) -> void:
 			(_building_grid[key] as Array).append(id)
 
 
-func _apply_blast(point: Vector3, radius: float) -> void:
+## `chip` > 0: a gun's wear instead of a blast (DamageLog.Kind.CHIP).
+func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
+	# A bullet has no radius, but it still has to find the building it struck.
+	var reach := maxf(radius, 0.25)
 	# Everything within the blast, not only what the ray touched — a rocket does
 	# not care which building it hit first.
-	for id in _near_buildings(point, radius):
+	for id in _near_buildings(point, reach):
 		var b := registry.get_building(id)
 		if b == null:
 			continue
 		var local := b.xform.affine_inverse() * point
 		# A player build has no footprint and no courses; its box comes from the
 		# frames it is actually made of.
-		var box := registry.local_box(b.id).grow(radius)
+		var box := registry.local_box(b.id).grow(reach)
 		if not box.has_point(local):
 			continue
 		var t_part := Time.get_ticks_usec()
@@ -2349,29 +2560,36 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 			_room_compromise_ms += dt
 			_room_open_worst = maxf(_room_open_worst, dt)
 		t_part = _part("dmg_rooms", t_part)
-		var killed: PackedInt32Array = world.apply_hit(chunk, point, radius)
+		var killed: PackedInt32Array = world.chip_hit(chunk, point, radius, chip_hp) 				if chip_hp > 0 else world.apply_hit(chunk, point, radius)
 		t_part = _part("dmg_hit", t_part)
 		# Committed as soon as it is applied, so the log's order is the order
-		# the world changed in.
-		if not killed.is_empty():
+		# the world changed in. A chip always: the hp it took is state even
+		# when no brick died.
+		if chip_hp > 0:
+			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.CHIP,
+					b.id, point, radius, Vector3.ZERO, chip_hp)
+		elif not killed.is_empty():
 			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
 					b.id, point, radius)
 		# Every other frame of a multi-frame build takes the same hit: a blast
 		# does not care which grid the brick it removed was authored in.
 		if b.frames.size() > 1:
 			for fi in range(1, b.frames.size()):
-				var hit_frame: PackedInt32Array = world.apply_hit(b.frames[fi], point, radius)
-				if hit_frame.is_empty():
+				var hit_frame: PackedInt32Array = 						world.chip_hit(b.frames[fi], point, radius, chip_hp) if chip_hp > 0 						else world.apply_hit(b.frames[fi], point, radius)
+				if hit_frame.is_empty() and chip_hp <= 0:
 					continue
 				# Each frame is its own grid, so each hit is its own command.
 				var fe := DamageLog.Entry.new()
 				fe.tick = Engine.get_physics_frames()
-				fe.kind = DamageLog.Kind.BLAST
+				fe.kind = DamageLog.Kind.CHIP if chip_hp > 0 else DamageLog.Kind.BLAST
 				fe.target = b.id
 				fe.frame = fi
 				fe.point = point
 				fe.radius = radius
+				fe.limit = chip_hp
 				authority.commit_entry(fe)
+				if hit_frame.is_empty():
+					continue
 				b.hit = true
 				_disable_frame(b.id, fi, hit_frame)
 				_mark_dirty(b.id)
@@ -2397,8 +2615,8 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 	# Loose pieces in range are damaged, and everything nearby is woken -- a
 	# settled section resting on a wall that has just gone must fall, not hang.
 	var t_pieces := Time.get_ticks_usec()
-	islands.damage_near(point, radius)
-	islands.wake_near(point, radius * 4.0)
+	islands.damage_near(point, radius, chip_hp)
+	islands.wake_near(point, reach * 4.0)
 	_part("dmg_pieces", t_pieces)
 
 
@@ -2559,7 +2777,7 @@ func _physics_process(_delta: float) -> void:
 			and hits < DAMAGE_PER_TICK \
 			and (hits == 0 or Time.get_ticks_usec() < damage_until):
 		var h: Array = _damage_queue.pop_front()
-		_apply_blast(h[0], h[1])
+		_apply_blast(h[0], h[1], int(h[2]) if h.size() > 2 else 0)
 		hits += 1
 	# One space lift per building per tick, however many hits landed on it.
 	var t_dis := Time.get_ticks_usec()
@@ -3008,8 +3226,12 @@ func _update_hud() -> void:
 		"rooms         %d  (%d open, %d with a diff, %d spilled into wreckage)" % [
 			rooms.rooms, rooms.active, rooms.changed, _spilled_rooms],
 		"",
-		"blast %.1f m (wheel)   %s (SPACE SPACE)" % [
-			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
+		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
+				"  reloading" if _gun.is_reloading() else "",
+				"WALKING" if camera.is_walking() else "FLYING"]) if _gun_armed and _gun.gun != null
+			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
+				_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
+		"1 gun · 2 blast · T next gun · R reload",
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · F5 save · F9 load · N respawn"
@@ -3150,10 +3372,15 @@ func _toggle_shader(param: String) -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
+		_gun.set_trigger(false)
 	if event is InputEventMouseButton and event.pressed:
 		match event.button_index:
 			MOUSE_BUTTON_LEFT:
-				_fire(_blast_radius)
+				if _gun_armed:
+					_gun.set_trigger(true)
+				else:
+					_fire(_blast_radius)
 				return
 			MOUSE_BUTTON_WHEEL_UP:
 				_set_blast_radius(_blast_radius * BLAST_STEP)
@@ -3168,6 +3395,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			_fire(BIG_BLAST)
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
+		KEY_1:
+			_gun_armed = true
+			if _gun.gun == null:
+				_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+			_gun.gun.visible = true
+		KEY_2:
+			_gun_armed = false
+			_gun.set_trigger(false)
+			if _gun.gun != null:
+				_gun.gun.visible = false
+		KEY_T:
+			_gun_class = (_gun_class + 1) % GUN_CLASSES.size()
+			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+			_gun_armed = true
+		KEY_R:
+			if _gun_armed:
+				_gun.reload()
 		KEY_F5:
 			save_checkpoint()
 		KEY_F9:
@@ -3911,6 +4155,8 @@ func _report_profile() -> void:
 		print("[prof] worst islands.tick %.1f ms = loop %.1f + resolve %.1f + fracture %.1f + mesh %.1f  (%d islands)" % [
 				float(tw.total), float(tw.loop), float(tw.resolve), float(tw.fracture),
 				float(tw.mesh), int(tw.islands)])
+		print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
+				float(tw.get("pieces", 0.0)), float(tw.get("dormancy", 0.0)), float(tw.get("cap", 0.0))])
 	var sp: Dictionary = islands.spawn_prof
 	var _bi: Dictionary = islands.report()
 	print("[prof] overlaps alive at once, worst: %d" % _bi.overlap_peak)

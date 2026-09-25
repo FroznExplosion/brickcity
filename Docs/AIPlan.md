@@ -209,6 +209,35 @@ Per the [porting checklist](Reference/boomer-border.md#0-porting-checklist--read
 and shoots bricks with a generated gun, and the damage goes through `WorldAuthority`; a greybox
 brick mech is piloted with the ported motor. Loopback agrees.
 
+**Progress.**
+- **Stage 1 done (8e7d63e, 2026-09-24): the code and docs are in.** Guns, loot, combat, elements,
+  status, effects, core, `ElementalTarget`/`FreezeVisual`, the three autoloads, the element FX;
+  specs in [Weapons/](Weapons/README.md). The two RNG fixes; `ElementalManager` stripped to FX and
+  `ElementalTarget`'s private health removed; no third-party assets. `test/core_test.tscn` and
+  `test/loot_range_test.tscn -- --probe` pass here as they do in BoomerBorder.
+- **Stage 2 done (2026-09-24): guns hurt bricks, through the authority.**
+  - **Bullets wear, they do not delete.** Every brick has 255 hp (`BrickWorld.chip_hit`, new);
+    a round takes hp off the brick it struck, and it dies at 0. Two new log kinds, `CHIP` and
+    `PIECE_CHIP`, recorded even when nothing died, because hp is state. Wear survives everything a
+    brick survives: the registry keeps it across dematerialise (`get_worn_blocks` /
+    `set_worn_blocks`), `ChunkRecord` across sleep and saves, `split_island` across breaking.
+  - **`StructuralDamage`** is the one mapping (R16). By class, never by tier, rarity or crit — a
+    wall is the same wall at every tier: a pistol breaks a brick in 3 hits, SMG 7, rifle 4, LMG 5,
+    DMR 2, sniper/shotgun/revolver 1; shells and sniper rounds wear a small ball, an explosive
+    gun 0.5 m. Ordnance is a real blast at 0.35 of its enemy radius, capped at 2 m.
+  - **`GunController`** fires a generated gun for any owner — player, mech, AI: rate, magazine,
+    reload, spread and crits from an injected RNG. Something with a `HealthPool` goes to
+    `DamageSystem`; anything else is structure and goes to the owner's callback, which in the city
+    is `chip()` / `_blast()` through `WorldAuthority`. City keys: `1` gun, `2` debug blast, `T`
+    next class, `R` reload.
+  - Gates: `tools/chip_probe.gd` 21 checks (wear, rebuild, sleep, save, split, replay, the
+    mapping); city `-- --gun` 6 checks (one round one CHIP; the third pistol round breaks the brick;
+    a living target takes the bullet and the wall nothing; a held SMG fires at its rate, one
+    command a round; a rocket blasts; the log replays).
+  - Found on the way: `StatusManager` named the `StatusTicker` autoload directly, which fails to
+    compile under `--script` — and every probe that loads the city scene now reaches it through
+    the gun. Looked up by path.
+
 ### P2 — `AIWorld` core · M
 
 In the brick extension (R1): `ai_world.{h,cpp}`, `ai_scheduler.{h,cpp}`.

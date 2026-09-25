@@ -28,6 +28,9 @@ const FIXTURE := 1 << 6
 ## What a projectile or an aim ray should be allowed to hit. Everything made of
 ## bricks, however small and whatever it is doing.
 const HITSCAN_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | RUBBLE | FIXTURE
+## A bullet: everything a hitscan hits, and the characters it is aimed at
+## (GunController). The debug blast leaves pawns out; a gun cannot.
+const GUN_MASK := HITSCAN_MASK | PAWN
 
 ## What a character stands on and walks into: the ground, standing buildings,
 ## and every piece of wreckage big enough to matter -- but NOT rubble. A small

@@ -126,6 +126,7 @@ So the host now records every operation it performs, in order ([AIPlan](AIPlan.m
 | `DETACH` | blocks left a building, or a piece, as a new piece |
 | `PIECE_BLAST`, `PIECE_SHEAR`, `PIECE_SNAP`, `PIECE_SOLVE` | a piece, in grid space (`DamageLog.grid_frame`); `PIECE_SOLVE` carries the gravity the host's body saw |
 | `PIECE_REST` | a landmark piece came to rest: its chunk transform, once per rest |
+| `CHIP`, `PIECE_CHIP` | a gun wore bricks down by `limit` hp (of 255) — recorded even when none died, because hp is state (`StructuralDamage`) |
 
 A client never decides any of these for itself (`IslandManager.decides`, and the city tick's solve
 loop): it replays the host's stream (`StructureReplayer`). What still stays out is physics state —
