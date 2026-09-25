@@ -283,8 +283,20 @@ brick mech is piloted with the ported motor. Loopback agrees.
   `BTMoveTo` (`scripts/ai/`) is the first task. Gate: `tools/limbo_probe.gd` 5 — the extension
   loads, a two-task tree walks a Pawn to one point and then runs to another by the Pawn's own
   motor, reports success and leaves the intents at rest.
-- **Still to do in P1:** `SwarmCore` into the build, the procedural creatures (Windows build of
-  `creature_forge`), and loopback with a player's gun.
+- **Stage 6 done (2026-09-25): SwarmCore is in the build** — compiled into the brick extension
+  (`gdextension/brick/src/swarm/`), not as an extension of its own: one godot-cpp, one DLL, and
+  horde code can read the brick grid directly, which a second extension could not (R1's reason
+  for AIWorld). It built against brick's newer godot-cpp unchanged. **Its seven global rolls**
+  (lane lateral offsets, lane picks, spawn scatter, point-damage picks) **now draw from its own
+  seeded splitmix64** (`SwarmCore.set_seed`), per D9. `SwarmPileMesh` and `SwarmAuthor` came with
+  it; `SwarmActors` (built around a third-party character model), `SwarmEffects` and
+  `SwarmPromoter` (built around BoomerBorder's test gun and ghosts) wait for P8 and our own brick
+  figure. Gate: `tools/swarm_probe.gd` 8 — loads, a 400-agent ring spawns and closes on the goal,
+  every live agent has a tier, a bullet finds one, a grenade kills a clump, deaths come back for
+  effects, worst tick 0.71 ms. Note for P8: the horde ticks in `_process`, at render rate, which
+  co-op will have to change.
+- **Still to do in P1:** the procedural creatures (Windows build of `creature_forge`) and loopback
+  with a player's gun.
 
 ### P2 — `AIWorld` core · M
 

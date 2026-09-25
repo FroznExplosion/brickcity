@@ -11,9 +11,12 @@ Build (SCons is pip-installed and not on PATH on this machine):
 
 env = SConscript("godot-cpp/SConstruct")
 
-env.Append(CPPPATH=["src/"])
+env.Append(CPPPATH=["src/", "src/swarm/"])
 
-sources = Glob("src/*.cpp")
+# SwarmCore -- BoomerBorder's C++ horde (Docs/AIPlan.md P1, R18) -- is built into
+# this library rather than as an extension of its own: one godot-cpp, one DLL, and
+# horde code can read the brick grid directly, which a second extension cannot.
+sources = Glob("src/*.cpp") + Glob("src/swarm/*.cpp")
 
 output_dir = "../../addons/brick/bin"
 
