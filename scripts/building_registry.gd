@@ -216,6 +216,9 @@ func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform
 ## grounded through the welds. Docs/BuildMode.md section 12 question 2 -- a
 ## Building used to hold one chunk and refuse anything sideways.
 func register_build(recipe: BuildRecipe, xform: Transform3D) -> int:
+	# A generated building inside a player build is parameters until it is
+	# placed (Docs/Workshop.md, Stage C). Everything below wants bricks.
+	recipe = TowerBlockout.flatten(recipe)
 	var b := Building.new()
 	b.id = buildings.size()
 	b.build = recipe

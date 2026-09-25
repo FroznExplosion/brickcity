@@ -37,9 +37,13 @@ const KEY_ROWS := [
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
-	["", "I", "layer: structure / interior", "", ""],
+	["", "I", "layer: structure / interior / detail", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
-	["FILE", "F5 / F9", "save / load", "ENTER", "place in city, shoot it"],
+	["FILE", "ESC", "free the mouse for the menus", "ctrl N / O", "new / open"],
+	["", "ctrl S", "save", "ctrl shift S", "save as"],
+	["INSERT", "ctrl I", "a build from the library", "ctrl G", "a generated building"],
+	["", "drag handles", "size a generated building", "", ""],
+	["", "F5 / F9", "quick save / load", "ENTER", "place in city, shoot it"],
 	["", "shift F5", "save as a new build (city: P, wheel)", "", ""],
 	["", "F1", "hide these", "", ""],
 ]
@@ -125,7 +129,13 @@ var _keys_on := true
 ## else about placing a brick is identical in both, deliberately: same parts,
 ## same grids, same snapping, same undo. The recipe carries one bit per block
 ## and the city reads it into Block::decorative.
-var _interior := false
+##
+## Three layers now (Docs/Workshop.md, Stage D): STRUCTURE, INTERIOR, and
+## DETAIL -- interior the city only lays with somebody in the room.
+var _role: int = BuildRecipe.Role.STRUCTURE
+var _interior: bool:
+	get:
+		return _role != BuildRecipe.Role.STRUCTURE
 var _part_index := 0
 var _colour := 4
 ## What the next brick is made of: an index into BrickWorld's materials. The
@@ -220,7 +230,10 @@ var _ghost_material: StandardMaterial3D
 func _ready() -> void:
 	world = BrickWorld.new()
 	world.set_seed(1)
-	palette = BrickPalette.bake(world)
+	# The generator's palette: the player's parts plus the cornice a generated
+	# building is finished with (Docs/Workshop.md, Stage C). Same ids for every
+	# part the player has, because the extra one is baked last.
+	palette = TowerRecipe.bake_palette(world)
 
 	asm = Assembly.new(world, palette)
 	_build_frames()
@@ -528,8 +541,13 @@ func _build_hud() -> void:
 			_camera.call("_set_captured", not on))
 	add_child(_hotbar)
 
+	_menu = WorkshopMenu.new()
+	_menu.name = "Menu"
+	_menu.action.connect(_on_menu)
+	layer.add_child(_menu)
+
 	_hud = Label.new()
-	_hud.position = Vector2(12, 10)
+	_hud.position = Vector2(12, 40)
 	_style(_hud, Color(0.92, 0.94, 1.0))
 	layer.add_child(_hud)
 
@@ -730,7 +748,8 @@ func _place_keys() -> void:
 	var h: float = get_viewport().get_visible_rect().size.y
 	# Top right: the toolbar owns the bottom of the screen now.
 	var w: float = get_viewport().get_visible_rect().size.x
-	_keys_panel.position = Vector2(w - _keys_panel.size.x - 12, 12)
+	var top := 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	_keys_panel.position = Vector2(w - _keys_panel.size.x - 12, top)
 
 
 # ---------------------------------------------------------------------------
@@ -777,9 +796,16 @@ func _archetype() -> int:
 
 func _process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	if _painting:
+	if not _drag.is_empty():
+		_drag_process()
+	_place_handles()
+	if _stamp != null:
+		_ghost.visible = false
+		_stamp_process()
+	elif _painting:
 		_paint_process()
 	else:
+		_ghost.visible = true
 		_aim()
 		_update_ghost()
 	_update_hud()
@@ -1332,6 +1358,9 @@ func _update_ghost() -> void:
 	var held := _joints > 0 or not _snapped.is_empty()
 	if not _valid:
 		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
+	elif _role == BuildRecipe.Role.DETAIL:
+		_ghost_material.albedo_color = Color(0.9, 0.5, 1.0, 0.42) if held \
+				else Color(0.9, 0.5, 1.0, 0.28)
 	elif _interior:
 		_ghost_material.albedo_color = Color(0.72, 1.0, 0.35, 0.40) if held \
 				else Color(0.72, 1.0, 0.35, 0.28)
@@ -1359,15 +1388,32 @@ func _update_hud() -> void:
 	for v in _stress.values():
 		worst = maxf(worst, v)
 	var interior := recipe.interior_count()
-	_hud.text = "%s  [%s%s]  %s   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s" % [
+	if _stamp != null:
+		state = "PLACING '%s' (%d bricks) -- LMB place, R turn, RMB cancel%s" % [
+				_stamp_label, _stamp.size(), "" if _stamp_ok else "  [does not fit]"]
+	elif _drag.size() > 0:
+		state = "sizing the generated building"
+	var gen := ""
+	for t in recipe.towers:
+		var tp := TowerBlockout.normalised(t.params)
+		@warning_ignore("integer_division")
+		var storeys: int = int(tp.courses) / TowerBlockout.STOREY
+		gen += "\ngenerated building %dx%d studs, %d storeys%s%s%s -- drag its handles" % [
+				tp.x, tp.z, storeys,
+				", rooms" if tp.rooms else "", ", stairs" if tp.stairs else "",
+				", windows" if tp.windows else ""]
+	_hud.text = "%s  [%s%s]  %s   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s%s" % [
 		_part(), _facing(), " inverted" if _flip else "",
 		"%s %s" % [BrickWorld.get_material_colour_name(_mat, _colour), BrickWorld.get_material_name(_mat)],
 		FRAME_NAMES[_frame] if _frame < FRAME_NAMES.size() else str(_frame),
-		"INTERIOR (I)  — weighs nothing, holds nothing up" if _interior
-				else "STRUCTURE (I)  — what holds the building up",
+		ROLE_TEXT[_role],
 		_cell, state, recipe.size(), recipe.size() - interior, interior,
 		(", %d fixture(s)" % recipe.fixture_count()) if recipe.fixture_count() > 0 else "",
+		gen,
 		("\nworst joint %.2f of capacity" % worst) if _overlay_on else ""]
+	if _menu != null:
+		_menu.set_title("%s%s  —  %s" % [recipe.name, " *" if _dirty else "",
+				WorkshopMenu.KIND_LABELS.get(recipe.kind, recipe.kind)])
 
 
 # ---------------------------------------------------------------------------
@@ -1377,6 +1423,15 @@ func _update_hud() -> void:
 func _unhandled_input(e: InputEvent) -> void:
 	# The browser is a menu: nothing is built through it.
 	if _hotbar != null and _hotbar.is_browsing():
+		return
+	# Nor through a dialog or an open menu.
+	if _menu != null and _menu.is_modal():
+		return
+	# CTRL chords are the menus' (WorkshopMenu shortcuts); CTRL alone is the
+	# camera's "down". Neither is a build key.
+	if e is InputEventKey and e.ctrl_pressed:
+		return
+	if _stamp != null and _stamp_input(e):
 		return
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
@@ -1441,7 +1496,7 @@ func _place() -> void:
 	# in the same order, so recipe index == block id, which is the contract
 	# BuildRecipe exists to keep.
 	var rid := recipe.size()
-	recipe.add(arch_name, _cell, _colour, _recipe_frame_for(_frame), _interior, _mat)
+	recipe.add(arch_name, _cell, _colour, _recipe_frame_for(_frame), _role, _mat)
 	_placed_at.append([_frame, placed])
 	# The weld goes in the RECIPE as well, or the build stands here and falls
 	# apart everywhere else: a saved file, a city placement and a replay all
@@ -1514,6 +1569,10 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## of the middle would renumber every block after it and invalidate any damage
 ## record keyed on those ids.
 func _undo() -> bool:
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "stamp":
+		return _undo_stamp()
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "tower":
+		return _undo_tower()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "paint":
 		_edits.pop_back()
 		var stroke: Array = _paints.pop_back()
@@ -1612,7 +1671,13 @@ func _baseplate_blocks() -> int:
 ## holds it up" and starts saying "this is what is in it" -- which is a fact
 ## only they have. See `_interior`.
 func _toggle_layer() -> void:
-	_interior = not _interior
+	_set_role((_role + 1) % 3)
+
+
+func _set_role(r: int) -> void:
+	_role = clampi(r, 0, BuildRecipe.Role.DETAIL)
+	if _menu != null:
+		_menu.set_role(_role)
 	_update_ghost()
 	_update_hud()
 
@@ -1649,7 +1714,7 @@ func _rotate_last() -> void:
 		return  # the last edit was a fixture; there is no brick to turn
 	# The layer travels with the brick, not with the cursor: turning a chair is
 	# not a way to make it load-bearing.
-	var was_interior := recipe.is_interior(id)
+	var was_interior := recipe.role_of(id)
 	if not _undo():
 		return
 	var placed := asm.place(asm.frames[af], cell, palette[turned], colour)
@@ -1696,7 +1761,17 @@ func _recipe_frame_for(asm_frame: int) -> int:
 
 
 func _after_edit() -> void:
+	_dirty = true
+	if _batch:
+		return
 	_stress_dirty = true
+	if _menu != null:
+		var i := _tower_sel()
+		if i >= 0:
+			var tp := TowerBlockout.normalised(recipe.towers[i].params)
+			_menu.set_tower_options(true, tp.rooms, tp.stairs, tp.windows)
+		else:
+			_menu.set_tower_options(false, false, false, false)
 	_remesh()
 	if _overlay_on:
 		_refresh_overlay()
@@ -1946,7 +2021,8 @@ var _save_path := SAVE_PATH
 
 
 func _save() -> void:
-	recipe.name = "workshop"
+	if recipe.name == "untitled":
+		recipe.name = "workshop"
 	var err := recipe.save_to(_save_path)
 	print("[workshop] saved %d bricks and %d fixture(s) to %s (%s)" % [
 			recipe.size(), recipe.fixture_count(), _save_path, error_string(err)])
@@ -1963,7 +2039,7 @@ var _builds_dir := BUILDS_DIR
 ## next free build_NNN.json, named "Build NNN" so the placer can say which.
 ## Returns the path written, or "" if it failed.
 func _save_new() -> String:
-	if recipe.is_empty():
+	if not recipe.has_content():
 		print("[workshop] nothing built yet")
 		return ""
 	DirAccess.make_dir_recursive_absolute(_builds_dir)
@@ -1980,11 +2056,21 @@ func _save_new() -> String:
 
 func _load() -> void:
 	var r := BuildRecipe.load_from(_save_path)
-	if r.is_empty():
+	if not r.has_content():
 		print("[workshop] nothing to load")
 		return
-	# Start over: drop every frame, not just the one being built in. A recipe
-	# carries no frames yet (Stage 5 work), so a load always lands in one.
+	_load_recipe(r)
+
+
+## Start over with nothing on the baseplate: every frame dropped and rebuilt
+## empty, every stack emptied. New, and the first half of every load.
+func _reset_space() -> void:
+	_cancel_stamp()
+	_drag = {}
+	_clear_towers()
+	_stamp_marks.clear()
+	_tower_undo.clear()
+	# Drop every frame, not just the one being built in.
 	for f in asm.frames:
 		world.release_chunk(f)
 		var mi: MeshInstance3D = _frame_meshes.get(f)
@@ -2002,9 +2088,19 @@ func _load() -> void:
 	asm = Assembly.new(world, palette)
 	_build_frames()
 	_frame = 0
+	_recipe_frames.clear()
 	_lay_baseplate()
 	world.set_foundation_level(chunk, 0)
+	recipe = BuildRecipe.new()
+
+
+## Load a recipe into a cleared space. The generated buildings go first, as the
+## city lays them first (TowerBlockout.flatten).
+func _load_recipe(r: BuildRecipe) -> void:
+	_reset_space()
 	recipe = r
+	for i in recipe.towers.size():
+		_spawn_tower(i)
 	# The six grids already exist, so match the recipe's frames onto them by
 	# (rotation, origin) rather than creating more. Cells are absolute in the
 	# workshop -- its grids ARE the recipe's coordinate space -- so nothing is
@@ -2049,7 +2145,10 @@ func _load() -> void:
 		_edits.append("fixture")
 	print("[workshop] loaded %d of %d bricks across %d frame(s), %d weld(s), %d fixture(s)"
 			% [placed, recipe.size(), recipe.frame_count(), welded, recipe.fixture_count()])
+	if _menu != null:
+		_menu.set_kind(recipe.kind)
 	_after_edit()
+	_dirty = false
 
 
 ## Which standing grid matches this (rotation, origin). -1 if none does, which
@@ -2066,13 +2165,15 @@ func _asm_frame_for(rot: int, ticks: Vector3i) -> int:
 ## a hole in it, and confirm it breaks like a generated building -- because it
 ## IS one. Section 8.1: the city places finished recipes, it does not author.
 func _place_in_city() -> void:
-	if recipe.is_empty():
+	if not recipe.has_content():
 		print("[workshop] nothing built yet")
 		return
 	var w := BrickWorld.new()
-	var pal := BrickPalette.bake(w)
+	var pal := TowerRecipe.bake_palette(w)
 	var reg := BuildingRegistry.new(w, pal)
-	var id := reg.register_build(recipe, Transform3D())
+	# What the city places: a generated building as bricks (TowerBlockout).
+	var flat := TowerBlockout.flatten(recipe)
+	var id := reg.register_build(flat, Transform3D())
 	if id < 0:
 		return
 	var c := reg.materialise(id)
@@ -2080,7 +2181,7 @@ func _place_in_city() -> void:
 	var before := 0
 	for f in building.chunks():
 		before += w.get_alive_block_count(f)
-	var b := recipe.bounds()
+	var b := flat.bounds()
 	var d: Vector3i = b[1]
 	@warning_ignore("integer_division")
 	var mid := BrickWorld.grid_to_world(Vector3i(d.x / 2, d.y / 2, d.z / 2))
@@ -2105,3 +2206,819 @@ func _place_in_city() -> void:
 					building.asm.live_weld_count() if building.asm != null else 0,
 					fixtures, awake,
 					before - after, groups.size(), loose_frames])
+
+
+# ---------------------------------------------------------------------------
+# Menus (Docs/Workshop.md, Stage A)
+# ---------------------------------------------------------------------------
+
+const ROLE_TEXT := [
+	"STRUCTURE (I)  — what holds the building up",
+	"INTERIOR (I)  — weighs nothing, holds nothing up",
+	"DETAIL (I)  — interior, only laid with somebody in the room",
+]
+
+var _menu: WorkshopMenu
+## Where Save writes without asking. "" until the build has been opened from or
+## saved to a file; the quick-save slot (F5) is not it.
+var _current_path := ""
+## Edited since it was last saved or loaded.
+var _dirty := false
+## While true, `_after_edit` does nothing: a stamp or its undo is hundreds of
+## edits and must remesh once, not once per brick.
+var _batch := false
+
+
+func _on_menu(what: String, arg: Variant) -> void:
+	match what:
+		"new": _new_build()
+		"open": _open_path(str(arg))
+		"save": _save_current()
+		"save_as": _save_as(str(arg.name), str(arg.get("room_kind", "")))
+		"quick_save": _save()
+		"quick_load": _load()
+		"city": _place_in_city()
+		"insert": _begin_stamp(str(arg))
+		"tower": _add_tower()
+		"bake_tower": _bake_tower()
+		"remove_tower": _remove_tower()
+		"tower_option": _set_tower_option(str(arg[0]), bool(arg[1]))
+		"kind":
+			recipe.kind = str(arg)
+			_menu.set_kind(recipe.kind)
+			_dirty = true
+		"role": _set_role(int(arg))
+
+
+## File > New: an empty baseplate, the same kind of build as before.
+func _new_build() -> void:
+	var kind := recipe.kind
+	_reset_space()
+	recipe.kind = kind
+	_current_path = ""
+	_after_edit()
+	_dirty = false
+	print("[workshop] new %s" % kind)
+
+
+func _open_path(path: String) -> bool:
+	var r := BuildRecipe.load_from(path)
+	if not r.has_content():
+		print("[workshop] %s holds nothing to load" % path)
+		return false
+	_load_recipe(r)
+	_current_path = path
+	_dirty = false
+	return true
+
+
+## Can this file be written? A shipped build (res://) can be while running
+## from the editor, which is how the shipped library gets made.
+static func _writable(path: String) -> bool:
+	return not path.begins_with("res://") or OS.has_feature("editor")
+
+
+## File > Save: over the file it came from, or ask for a name.
+func _save_current() -> void:
+	if _current_path == "" or not _writable(_current_path):
+		_menu.show_save_as(recipe.name if recipe.name != "untitled" else "",
+				str(recipe.meta.get("room_kind", "")))
+		return
+	_write(_current_path)
+
+
+## File > Save As: a named file in the library for this kind of build --
+## buildings where the city placer finds them, rooms filed by room kind.
+func _save_as(build_name: String, room_kind: String = "") -> String:
+	recipe.name = build_name
+	var dirs: Array = WorkshopMenu.DIRS.get(recipe.kind, WorkshopMenu.DIRS.building)
+	var dir: String = dirs[dirs.size() - 1]   # the player's, not the shipped one
+	if recipe.kind == "room":
+		if room_kind == "":
+			room_kind = str(recipe.meta.get("room_kind", Room.KINDS[0]))
+		recipe.meta["room_kind"] = room_kind
+		dir += room_kind + "/"
+	if _builds_dir != BUILDS_DIR:
+		dir = _builds_dir   # the gate writes somewhere a test cannot hurt
+	var path := dir + slug(build_name) + ".json"
+	return path if _write(path) else ""
+
+
+## A file name from a build name.
+static func slug(n: String) -> String:
+	var s := n.strip_edges().to_lower().replace(" ", "_").validate_filename()
+	return s if s != "" else "build"
+
+
+func _write(path: String) -> bool:
+	if recipe.kind == "room" or recipe.kind == "item":
+		# What the generator needs to choose a template without building it.
+		var b := recipe.bounds()
+		var d: Vector3i = b[1]
+		recipe.meta["size"] = [d.x, d.y, d.z]
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var err := recipe.save_to(path)
+	print("[workshop] saved '%s' (%s): %d bricks, %d fixture(s), %d generated building(s) to %s (%s)"
+			% [recipe.name, recipe.kind, recipe.size(), recipe.fixture_count(),
+			recipe.towers.size(), path, error_string(err)])
+	if err != OK:
+		return false
+	_current_path = path
+	_dirty = false
+	return true
+
+
+# ---------------------------------------------------------------------------
+# A build inside a build (Docs/Workshop.md, Stage B)
+# ---------------------------------------------------------------------------
+#
+# A COPY, with a group record saying where it came from -- never a reference.
+# Docs/Workshop.md section 0 has the reasons; the short one is that block id is
+# the damage contract and a reference renumbers every block after it whenever
+# its source is edited.
+
+var _stamp: BuildRecipe = null    ## what is in hand, already turned
+var _stamp_base: BuildRecipe = null   ## the same, unturned
+var _stamp_src := ""
+var _stamp_label := ""
+var _stamp_turn := 0
+var _stamp_at := Vector3i(-1, -1, -1)  ## where its box's min corner goes
+var _stamp_ok := false
+var _stamp_ghost: MeshInstance3D
+var _stamp_material: StandardMaterial3D
+## One per stamp (and per bake): what undo has to take back.
+##   {"first": recipe id, "fixtures": count before, "towers": count before,
+##    "tower": record to put back, "tower_index": where}
+var _stamp_marks := []
+
+
+## Insert > Build from library: pick it up.
+func _begin_stamp(path: String) -> bool:
+	var r := BuildRecipe.load_from(path)
+	if not r.has_content():
+		print("[workshop] %s holds nothing to insert" % path)
+		return false
+	return hold_stamp(r, path)
+
+
+## Take a recipe in hand to stamp. Split from `_begin_stamp` for the probe.
+func hold_stamp(r: BuildRecipe, source: String = "") -> bool:
+	_cancel_stamp()
+	_stamp_base = r
+	_stamp_src = source
+	_stamp_label = r.name if r.name != "untitled" else source.get_file().get_basename()
+	_stamp_turn = 0
+	_stamp = r
+	_stamp_at = Vector3i(-1, -1, -1)
+	_stamp_ok = false
+	_make_stamp_ghost()
+	return true
+
+
+func _cancel_stamp() -> void:
+	_stamp = null
+	_stamp_base = null
+	if _stamp_ghost != null:
+		_stamp_ghost.queue_free()
+		_stamp_ghost = null
+
+
+## A quarter turn of what is in hand. A multi-frame build cannot turn (its
+## sideways grids would each need a turn composed onto them), so it does not.
+func _turn_stamp() -> void:
+	var t := _stamp_base.turned(_stamp_turn + 1)
+	if t == null:
+		print("[workshop] a build with sideways parts only goes in facing the way it was built")
+		return
+	_stamp_turn = (_stamp_turn + 1) % 4
+	_stamp = t
+	_stamp_at = Vector3i(-1, -1, -1)
+	_make_stamp_ghost()
+
+
+## Keys and clicks while a build is in hand. True when used.
+func _stamp_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.pressed:
+		match e.button_index:
+			MOUSE_BUTTON_LEFT:
+				if _stamp_ok:
+					_commit_stamp()
+				return true
+			MOUSE_BUTTON_RIGHT:
+				_cancel_stamp()
+				return true
+	if e is InputEventKey and e.pressed and not e.echo:
+		match e.keycode:
+			KEY_R:
+				_turn_stamp()
+				return true
+			KEY_BACKSPACE, KEY_DELETE:
+				_cancel_stamp()
+				return true
+	return false
+
+
+## The box a stamp takes up in frame 0's cells: its bricks, fixtures and
+## generated buildings. [min corner, size].
+static func stamp_box(r: BuildRecipe) -> Array:
+	var b := r.bounds()
+	var lo: Vector3i = b[0]
+	var hi: Vector3i = lo + (b[1] as Vector3i)
+	var any := not r.is_empty()
+	for t in r.towers:
+		var c := BuildRecipe.cell_from(t.cell)
+		var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z)) if any else c
+		hi = Vector3i(maxi(hi.x, c.x + d.x), maxi(hi.y, c.y + d.y), maxi(hi.z, c.z + d.z)) \
+				if any else c + d
+		any = true
+	return [lo, hi - lo]
+
+
+## The held build's bricks, drawn as a ghost: built for real in a scratch
+## chunk and meshed, the way the ghost of one part is.
+func _make_stamp_ghost() -> void:
+	if _stamp_ghost != null:
+		_stamp_ghost.queue_free()
+	if _stamp_material == null:
+		_stamp_material = _ghost_material.duplicate() as StandardMaterial3D
+	_stamp_ghost = MeshInstance3D.new()
+	_stamp_ghost.material_override = _stamp_material
+	add_child(_stamp_ghost)
+	if _stamp.is_empty():
+		var bm := BoxMesh.new()   # only a generated building: its box
+		var box := stamp_box(_stamp)
+		bm.size = BrickWorld.grid_to_world(box[1])
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+		_stamp_ghost.mesh = m
+		_stamp_ghost.set_meta("centre", true)
+		return
+	var c := world.create_chunk(Vector3i.ZERO, _stamp.chunk_dims())
+	_stamp.build(world, c, palette, true)
+	var arrays := world.build_chunk_mesh(c)
+	world.release_chunk(c)
+	var m := ArrayMesh.new()
+	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_stamp_ghost.mesh = m
+
+
+## Each frame while a build is in hand: aim, fit, tint.
+func _stamp_process() -> void:
+	var ray := _mouse_ray()
+	var at := stamp_target(ray[0], ray[1])
+	if at.x < 0:
+		_stamp_ghost.visible = false
+		return
+	_stamp_ghost.visible = true
+	if at != _stamp_at:
+		_stamp_at = at
+		_stamp_ok = _stamp_fits(at)
+	var box := stamp_box(_stamp)
+	var lo: Vector3i = box[0]
+	var ghost_at := at
+	if not _stamp.is_empty():
+		# The ghost was rebased to its BRICKS' min corner, which may be inside
+		# the box when a generated building sticks out further.
+		ghost_at = at + ((_stamp.bounds()[0] as Vector3i) - lo)
+	var p := BrickWorld.grid_to_world(ghost_at)
+	if _stamp_ghost.has_meta("centre"):
+		p += BrickWorld.grid_to_world(box[1]) * 0.5
+	_stamp_ghost.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), p)
+	_stamp_material.albedo_color = Color(0.35, 0.9, 1.0, 0.40) if _stamp_ok \
+			else Color(1.0, 0.25, 0.22, 0.45)
+
+
+## Where the held build's box goes for this ray: its middle under the cursor,
+## its underside on whatever the cursor is on (the baseplate, or the top of the
+## brick aimed at), kept on the baseplate. x < 0 when the ray finds nothing.
+func stamp_target(from: Vector3, dir: Vector3) -> Vector3i:
+	var box := stamp_box(_stamp)
+	var d: Vector3i = box[1]
+	var hit := _first_hit(from, dir)
+	var p: Vector3
+	var y := 1
+	if not hit.is_empty():
+		var b: Array = world.get_block_ticks(hit.frame, hit.block)
+		@warning_ignore("integer_division")
+		y = ((b[0] as Vector3i).y + (b[1] as Vector3i).y) / BrickWorld.ticks_per_plate()
+		p = hit.point
+	else:
+		var t := _plane_distance(asm.frames[0], 1, from, dir)
+		if t == INF:
+			return Vector3i(-1, -1, -1)
+		p = from + dir * t
+	@warning_ignore("integer_division")
+	var x := int(floor(p.x / BrickPalette.STUD_M)) - d.x / 2
+	@warning_ignore("integer_division")
+	var z := int(floor(p.z / BrickPalette.STUD_M)) - d.z / 2
+	return Vector3i(clampi(x, 0, maxi(PLATE_STUDS - d.x, 0)),
+			clampi(y, 1, maxi(HEIGHT_PLATES - d.y, 1)),
+			clampi(z, 0, maxi(PLATE_STUDS - d.z, 0)))
+
+
+## Cell offset for each of the stamp's frames beyond 0, in that frame's own
+## grid, for a frame-0 move of `off`. {} if a frame has no standing grid here
+## or the move is not a whole number of its cells.
+func _frame_offsets(r: BuildRecipe, off: Vector3i) -> Dictionary:
+	var out := {}
+	var world_ticks := Vector3(off.x * BrickWorld.ticks_per_stud(),
+			off.y * BrickWorld.ticks_per_plate(), off.z * BrickWorld.ticks_per_stud())
+	for f in range(1, r.frame_count()):
+		var af := _asm_frame_for(r.frame_rotation(f), r.frame_ticks(f))
+		if af < 0:
+			return {}
+		var basis: Basis = world.get_chunk_transform(asm.frames[af]).basis
+		var lt: Vector3 = basis.inverse() * world_ticks
+		var cell := Vector3(lt.x / BrickWorld.ticks_per_stud(),
+				lt.y / BrickWorld.ticks_per_plate(), lt.z / BrickWorld.ticks_per_stud())
+		var ci := Vector3i(int(round(cell.x)), int(round(cell.y)), int(round(cell.z)))
+		if (cell - Vector3(ci)).length() > 0.001:
+			return {}
+		out[f] = ci
+	return out
+
+
+## Does every brick of the held build go in at `at`?
+func _stamp_fits(at: Vector3i) -> bool:
+	var off: Vector3i = at - (stamp_box(_stamp)[0] as Vector3i)
+	var fo := _frame_offsets(_stamp, off)
+	if _stamp.frame_count() > 1 and fo.is_empty():
+		return false
+	for i in _stamp.size():
+		var rf := _stamp.frame_of(i)
+		var af := 0 if rf == 0 else _asm_frame_for(_stamp.frame_rotation(rf), _stamp.frame_ticks(rf))
+		var pname := _stamp.part_of(i)
+		if af < 0 or not palette.has(pname):
+			return false
+		var move: Vector3i = off if rf == 0 else fo[rf]
+		if not asm.can_place(asm.frames[af], _stamp.cell_of(i) + move, palette[pname]):
+			return false
+	for t in _stamp.towers:
+		var c := BuildRecipe.cell_from(t.cell) + off
+		var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
+		if c.x < 0 or c.z < 0 or c.x + d.x > PLATE_STUDS or c.z + d.z > PLATE_STUDS \
+				or c.y + d.y > HEIGHT_PLATES:
+			return false
+	return true
+
+
+## Put the held build down: its bricks appended to this recipe in its own
+## order, into the world, and one group saying where they came from.
+func _commit_stamp() -> bool:
+	if _stamp == null or _stamp_at.x < 0:
+		return false
+	var off: Vector3i = _stamp_at - (stamp_box(_stamp)[0] as Vector3i)
+	var fo := _frame_offsets(_stamp, off)
+	var first := recipe.size()
+	var fix0 := recipe.fixture_count()
+	var tow0 := recipe.towers.size()
+	var weld0 := recipe.weld_count()
+	recipe.append(_stamp, off, fo)
+	_batch = true
+	for i in range(first, recipe.size()):
+		var rf := recipe.frame_of(i)
+		var af := 0 if rf == 0 else _asm_frame_for(recipe.frame_rotation(rf), recipe.frame_ticks(rf))
+		var bid := -1
+		if af >= 0 and palette.has(recipe.part_of(i)):
+			bid = asm.place(asm.frames[af], recipe.cell_of(i), palette[recipe.part_of(i)],
+					recipe.colour_of(i))
+		if bid >= 0:
+			if recipe.material_of(i) != 0:
+				world.set_block_material(asm.frames[af], bid, recipe.material_of(i))
+			if rf != 0:
+				_recipe_frames[af] = rf
+		_placed_at.append([af if bid >= 0 else -1, bid])
+		_edits.append("brick")
+	for i in range(weld0, recipe.weld_count()):
+		var w := recipe.weld_blocks(i)
+		var a: Array = _placed_at[w.x]
+		var b: Array = _placed_at[w.y]
+		if int(a[1]) >= 0 and int(b[1]) >= 0:
+			asm.weld(asm.frames[a[0]], a[1], asm.frames[b[0]], b[1])
+	for i in range(fix0, recipe.fixture_count()):
+		_spawn_fixture(i)
+		_edits.append("fixture")
+	for i in range(tow0, recipe.towers.size()):
+		_spawn_tower(i)
+	recipe.groups.append({
+		"source": _stamp_src, "name": _stamp_label,
+		"first": first, "count": recipe.size() - first,
+		"turn": _stamp_turn, "offset": [off.x, off.y, off.z],
+	})
+	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0})
+	_edits.append("stamp")
+	_batch = false
+	_after_edit()
+	# The cells it just filled are not free for the next one.
+	_stamp_at = Vector3i(-1, -1, -1)
+	print("[workshop] inserted '%s': %d bricks at %v, turned %d" % [
+			_stamp_label, recipe.size() - first, off, _stamp_turn])
+	return true
+
+
+## Undo of a stamp or a bake: everything it added, as one step.
+func _undo_stamp() -> bool:
+	_edits.pop_back()
+	var m: Dictionary = _stamp_marks.pop_back() if not _stamp_marks.is_empty() else {}
+	if m.is_empty():
+		return false
+	_batch = true
+	while not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture" \
+			and recipe.fixture_count() > int(m.fixtures):
+		_undo()
+	while not _edits.is_empty() and _edits[_edits.size() - 1] == "brick" \
+			and recipe.size() > int(m.first):
+		_undo()
+	var respawn := false
+	while recipe.towers.size() > int(m.towers):
+		recipe.towers.pop_back()
+		respawn = true
+	if m.has("tower"):
+		recipe.towers.insert(int(m.tower_index), m.tower)
+		respawn = true
+	if respawn:
+		_respawn_towers()
+	_batch = false
+	_after_edit()
+	return true
+
+
+# ---------------------------------------------------------------------------
+# A generated building (Docs/Workshop.md, Stage C)
+# ---------------------------------------------------------------------------
+#
+# TowerRecipe's parameters held as parameters, previewed as bricks in frame 0 so
+# anything can be built onto it, and sized by dragging three handles. The
+# bricks are the preview's, not the recipe's: the recipe holds one record and
+# the city builds it (TowerBlockout.flatten). Bake makes them the recipe's.
+
+## Frame-0 block ids each generated building laid, one entry per
+## recipe.towers entry.
+var _tower_blocks := []
+## Undo records for generated buildings: {"index", "before"} where before is
+## the record as it was, or null when the edit created it.
+var _tower_undo := []
+## The handle being dragged: {"handle", "index", "before", "grab"}.
+var _drag := {}
+var _handles := {}      ## name -> MeshInstance3D
+var _handle_material: StandardMaterial3D
+const HANDLE_M := 0.7
+const HANDLE_PICK_PX := 22.0
+
+
+func _tower_limit(cell: Vector3i) -> Vector3i:
+	return Vector3i(PLATE_STUDS - cell.x, HEIGHT_PLATES - cell.y, PLATE_STUDS - cell.z)
+
+
+## Insert > Generated building: three panels by three, two storeys, near the
+## baseplate's corner so it has room to be dragged bigger. Three panels is the
+## smallest with a stairwell (TowerRecipe.stair_line).
+const TOWER_AT := Vector3i(4, 1, 4)
+func _add_tower() -> int:
+	var p := TowerBlockout.normalised(TowerBlockout.defaults(), _tower_limit(TOWER_AT))
+	var at := TOWER_AT
+	var i := recipe.add_tower(at, p)
+	_spawn_tower(i)
+	_tower_undo.append({"index": i, "before": null})
+	_edits.append("tower")
+	_after_edit()
+	return i
+
+
+## The generated building the handles and the menu act on: the newest.
+func _tower_sel() -> int:
+	return recipe.towers.size() - 1
+
+
+## Lay generated building `i`'s preview bricks into frame 0.
+func _spawn_tower(i: int) -> void:
+	while _tower_blocks.size() <= i:
+		_tower_blocks.append(PackedInt32Array())
+	var t: Dictionary = recipe.towers[i]
+	var at := BuildRecipe.cell_from(t.cell)
+	var p := TowerBlockout.normalised(t.params)
+	var ids := PackedInt32Array()
+	var f0: int = asm.frames[0]
+	for b in TowerBlockout.bricks(world, palette, p):
+		var arch: int = palette.get(b[0], -1)
+		if arch < 0:
+			continue
+		var bid := world.place_block(f0, (b[1] as Vector3i) + at, arch, int(b[2]))
+		if bid >= 0:
+			ids.push_back(bid)
+	_tower_blocks[i] = ids
+
+
+func _clear_tower_blocks(i: int) -> void:
+	if i < 0 or i >= _tower_blocks.size():
+		return
+	for id in (_tower_blocks[i] as PackedInt32Array):
+		world.remove_block(asm.frames[0], id)
+	_tower_blocks[i] = PackedInt32Array()
+
+
+func _clear_towers() -> void:
+	for i in _tower_blocks.size():
+		_clear_tower_blocks(i)
+	_tower_blocks.clear()
+
+
+func _respawn_towers() -> void:
+	_clear_towers()
+	for i in recipe.towers.size():
+		_spawn_tower(i)
+
+
+## Change generated building `i` and rebuild its preview. Does not record undo.
+func _set_tower(i: int, cell: Vector3i, params: Dictionary) -> void:
+	var p := TowerBlockout.normalised(params, _tower_limit(cell))
+	recipe.towers[i] = {"cell": [cell.x, cell.y, cell.z], "params": p}
+	_clear_tower_blocks(i)
+	_spawn_tower(i)
+	_after_edit()
+
+
+func _record_tower(i: int, before) -> void:
+	_tower_undo.append({"index": i, "before": before})
+	_edits.append("tower")
+
+
+func _undo_tower() -> bool:
+	_edits.pop_back()
+	if _tower_undo.is_empty():
+		return false
+	var u: Dictionary = _tower_undo.pop_back()
+	var i := int(u.index)
+	if typeof(u.before) == TYPE_NIL:
+		if i < recipe.towers.size():
+			recipe.towers.remove_at(i)
+	elif u.get("removed", false):
+		recipe.towers.insert(i, u.before)
+	elif i < recipe.towers.size():
+		recipe.towers[i] = u.before
+	_respawn_towers()
+	_after_edit()
+	return true
+
+
+func _set_tower_option(key: String, on: bool) -> void:
+	var i := _tower_sel()
+	if i < 0:
+		return
+	var before: Dictionary = (recipe.towers[i] as Dictionary).duplicate(true)
+	var p: Dictionary = (before.params as Dictionary).duplicate()
+	p[key] = on
+	_set_tower(i, BuildRecipe.cell_from(before.cell), p)
+	_record_tower(i, before)
+
+
+## Insert > Remove generated building.
+func _remove_tower() -> void:
+	var i := _tower_sel()
+	if i < 0:
+		return
+	var before: Dictionary = (recipe.towers[i] as Dictionary).duplicate(true)
+	recipe.towers.remove_at(i)
+	_respawn_towers()
+	_tower_undo.append({"index": i, "before": before, "removed": true})
+	_edits.append("tower")
+	_after_edit()
+
+
+## Insert > Bake: the generated building's preview bricks become the recipe's
+## own, to be edited brick by brick. Undo puts the generated building back.
+func _bake_tower() -> int:
+	var i := _tower_sel()
+	if i < 0:
+		return 0
+	var ids: PackedInt32Array = _tower_blocks[i]
+	var first := recipe.size()
+	var f0: int = asm.frames[0]
+	var ts := BrickWorld.ticks_per_stud()
+	var tp := BrickWorld.ticks_per_plate()
+	var names := TowerBlockout.names_of(palette)
+	for bid in ids:
+		var box: Array = world.get_block_ticks(f0, bid)
+		if box.is_empty():
+			continue
+		var lo: Vector3i = box[0]
+		@warning_ignore("integer_division")
+		var cell := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
+		recipe.add(names.get(world.get_block_archetype(f0, bid), ""), cell,
+				world.get_block_colour(f0, bid))
+		_placed_at.append([0, bid])
+		_edits.append("brick")
+	var rec: Dictionary = recipe.towers[i]
+	recipe.towers.remove_at(i)
+	_tower_blocks.remove_at(i)   # the bricks stay: they are the recipe's now
+	recipe.groups.append({"source": "generated", "name": "generated building",
+			"first": first, "count": recipe.size() - first, "turn": 0,
+			"offset": rec.cell})
+	_stamp_marks.append({"first": first, "fixtures": recipe.fixture_count(),
+			"towers": recipe.towers.size(), "tower": rec, "tower_index": i})
+	_edits.append("stamp")
+	_after_edit()
+	print("[workshop] baked a generated building into %d bricks" % (recipe.size() - first))
+	return recipe.size() - first
+
+
+# --- the handles -------------------------------------------------------------
+
+## Where each handle of generated building `i` is, and which way it pulls.
+## {name: [world position, axis]}; "move" slides on the ground, axis ZERO.
+func _handle_spots(i: int) -> Dictionary:
+	var t: Dictionary = recipe.towers[i]
+	var at := BuildRecipe.cell_from(t.cell)
+	var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
+	var xf: Transform3D = world.get_chunk_transform(asm.frames[0])
+	var o := BrickWorld.grid_to_world(at)
+	var s := BrickWorld.grid_to_world(d)
+	var gap := HANDLE_M
+	return {
+		"x": [xf * (o + Vector3(s.x + gap, s.y * 0.5, s.z * 0.5)), Vector3.RIGHT],
+		"z": [xf * (o + Vector3(s.x * 0.5, s.y * 0.5, s.z + gap)), Vector3.BACK],
+		"y": [xf * (o + Vector3(s.x * 0.5, s.y + gap, s.z * 0.5)), Vector3.UP],
+		"move": [xf * (o + Vector3(-gap, HANDLE_M * 0.5, -gap)), Vector3.ZERO],
+	}
+
+
+func _place_handles() -> void:
+	var i := _tower_sel()
+	if _handle_material == null:
+		_handle_material = StandardMaterial3D.new()
+		_handle_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_handle_material.no_depth_test = true
+		_handle_material.albedo_color = Color(1.0, 0.62, 0.1)
+		_handle_material.render_priority = 10
+	if i < 0 or _stamp != null:
+		for h in _handles.values():
+			(h as Node3D).visible = false
+		return
+	var spots := _handle_spots(i)
+	for hname in spots:
+		var h: MeshInstance3D = _handles.get(hname)
+		if h == null:
+			h = MeshInstance3D.new()
+			var bm: Mesh
+			if hname == "move":
+				bm = SphereMesh.new()
+				(bm as SphereMesh).radius = HANDLE_M * 0.5
+				(bm as SphereMesh).height = HANDLE_M
+			else:
+				bm = BoxMesh.new()
+				(bm as BoxMesh).size = Vector3.ONE * HANDLE_M
+			h.mesh = bm
+			h.material_override = _handle_material
+			h.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(h)
+			_handles[hname] = h
+		h.visible = true
+		h.global_position = spots[hname][0]
+		var hot: bool = not _drag.is_empty() and _drag.handle == hname
+		h.scale = Vector3.ONE * (1.35 if hot else 1.0)
+
+
+## The screen point the aim ray goes through: the cursor, or the middle while
+## the mouse is captured to look.
+func _aim_point() -> Vector2:
+	var vp := get_viewport()
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		return vp.get_visible_rect().size * 0.5
+	return vp.get_mouse_position()
+
+
+## The handle under the aim point, or "".
+func _handle_under() -> String:
+	var i := _tower_sel()
+	if i < 0 or _camera == null:
+		return ""
+	var m := _aim_point()
+	var best := ""
+	var best_d := HANDLE_PICK_PX
+	var spots := _handle_spots(i)
+	for hname in spots:
+		var p: Vector3 = spots[hname][0]
+		if _camera.is_position_behind(p):
+			continue
+		var d := _camera.unproject_position(p).distance_to(m)
+		if d < best_d:
+			best_d = d
+			best = hname
+	return best
+
+
+## Handles take the click before anything else does -- ahead of the camera,
+## which would otherwise capture the mouse, and of placement.
+func _input(e: InputEvent) -> void:
+	if not (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT):
+		return
+	if _menu != null and _menu.is_modal():
+		return
+	if _hotbar != null and _hotbar.is_browsing():
+		return
+	if e.pressed:
+		if _stamp != null or _painting or recipe.towers.is_empty():
+			return
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED \
+				and _aim_point().y < _menu.bar_height():
+			return
+		var h := _handle_under()
+		if h == "":
+			return
+		begin_drag(h)
+		get_viewport().set_input_as_handled()
+	elif not _drag.is_empty():
+		end_drag()
+		get_viewport().set_input_as_handled()
+
+
+func begin_drag(handle: String) -> void:
+	var i := _tower_sel()
+	var t: Dictionary = recipe.towers[i]
+	_drag = {"handle": handle, "index": i, "before": t.duplicate(true), "grab": Vector3.ZERO}
+	if handle == "move":
+		var ray := _mouse_ray()
+		var p := _ray_on_ground(ray[0], ray[1], BuildRecipe.cell_from(t.cell).y)
+		if p != Vector3.INF:
+			_drag.grab = p - BrickWorld.grid_to_world(BuildRecipe.cell_from(t.cell))
+
+
+func end_drag() -> void:
+	if _drag.is_empty():
+		return
+	var i := int(_drag.index)
+	if i < recipe.towers.size() and recipe.towers[i] != _drag.before:
+		_record_tower(i, _drag.before)
+	_drag = {}
+
+
+func _drag_process() -> void:
+	var ray := _mouse_ray()
+	drag_ray(ray[0], ray[1])
+
+
+## Resize or move the dragged generated building for this aim ray. Split out so
+## a probe can drive it with exact rays.
+func drag_ray(from: Vector3, dir: Vector3) -> void:
+	var i := int(_drag.index)
+	if i >= recipe.towers.size():
+		_drag = {}
+		return
+	var t: Dictionary = recipe.towers[i]
+	var at := BuildRecipe.cell_from(t.cell)
+	var p: Dictionary = (t.params as Dictionary).duplicate()
+	var o := BrickWorld.grid_to_world(at)
+	var new_at := at
+	match str(_drag.handle):
+		"x", "z", "y":
+			var axis: Vector3 = _handle_spots(i)[_drag.handle][1]
+			var along := _closest_on_axis(o, axis, from, dir) - HANDLE_M
+			match str(_drag.handle):
+				"x": p.x = int(round(along / BrickPalette.STUD_M))
+				"z": p.z = int(round(along / BrickPalette.STUD_M))
+				"y": p.courses = _courses_for_plates(along / BrickPalette.PLATE_M, p)
+		"move":
+			var g := _ray_on_ground(from, dir, at.y)
+			if g == Vector3.INF:
+				return
+			var c := g - (_drag.grab as Vector3)
+			var d := TowerBlockout.dims(TowerBlockout.normalised(p))
+			new_at = Vector3i(
+					clampi(int(round(c.x / BrickPalette.STUD_M)), 0, PLATE_STUDS - d.x),
+					at.y,
+					clampi(int(round(c.z / BrickPalette.STUD_M)), 0, PLATE_STUDS - d.z))
+	var np := TowerBlockout.normalised(p, _tower_limit(new_at))
+	if np != TowerBlockout.normalised(t.params) or new_at != at:
+		_set_tower(i, new_at, np)
+
+
+## Distance from `o` along `axis` to the point on that line nearest the ray.
+static func _closest_on_axis(o: Vector3, axis: Vector3, from: Vector3, dir: Vector3) -> float:
+	var w0 := o - from
+	var b := axis.dot(dir)
+	var den := 1.0 - b * b
+	if absf(den) < 0.0001:
+		return 0.0
+	return (b * dir.dot(w0) - axis.dot(w0)) / den
+
+
+## The storey count whose height is nearest `plates`.
+static func _courses_for_plates(plates: float, p: Dictionary) -> int:
+	var best := TowerBlockout.STOREY
+	var best_d := INF
+	for st in range(1, 40):
+		var q := p.duplicate()
+		q.courses = st * TowerBlockout.STOREY
+		var h := TowerBlockout.dims(TowerBlockout.normalised(q)).y
+		if absf(h - plates) < best_d:
+			best_d = absf(h - plates)
+			best = st * TowerBlockout.STOREY
+	return best
+
+
+## Where a ray meets the horizontal plane at plate `y`, or INF.
+func _ray_on_ground(from: Vector3, dir: Vector3, y: int) -> Vector3:
+	var t := _plane_distance(asm.frames[0], y, from, dir)
+	return from + dir * t if t != INF else Vector3.INF
