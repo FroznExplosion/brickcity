@@ -576,6 +576,7 @@ var _interiors_mode := false
 ## 30 merges and 28 un-merges deep into the first run of it.
 var _measuring := false
 var _chamfer_mode := false
+var _checkpoint_mode := false
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
 ## city. Empty means nothing was asked for.
 var _build_path := ""
@@ -647,6 +648,7 @@ func _ready() -> void:
 	_city_size = maxi(building_count, 1)
 	_interiors_mode = "--interiors" in args
 	_chamfer_mode = "--chamfer" in args
+	_checkpoint_mode = "--checkpoint" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -702,6 +704,13 @@ func _ready() -> void:
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
 	FurnitureMesh.fake_material()
+	# F9 reloaded the scene to get here: the city is recipes again, and the
+	# checkpoint goes on top of them.
+	var root := get_tree().root
+	if root.has_meta(CHECKPOINT_META):
+		var path: String = root.get_meta(CHECKPOINT_META)
+		root.remove_meta(CHECKPOINT_META)
+		_restore_checkpoint(path)
 	if _build_path != "":
 		_place_build(_build_path)
 	# P picks up a saved workshop build and places it like a brick
@@ -736,6 +745,8 @@ func _ready() -> void:
 		_run_rooms_pass()
 	elif _chamfer_mode:
 		_run_chamfer_pass()
+	elif _checkpoint_mode:
+		_run_checkpoint_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -1516,6 +1527,16 @@ func _promote(id: int, solve: bool = true) -> int:
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
 	world.set_tension_per_stud(chunk, 9.3)
+	_dress(id, chunk, solve)
+	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	return chunk
+
+
+## Everything a materialised building needs to be seen and stood on: its bands,
+## its bake, its static body and its mesh node. Split from _promote so a loaded
+## checkpoint can replay the damage into the bricks FIRST and dress the building
+## after -- the bake and the shapes then start from the damaged building.
+func _dress(id: int, chunk: int, solve: bool) -> void:
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -1561,8 +1582,6 @@ func _promote(id: int, solve: bool = true) -> int:
 	if solve:
 		_mark_dirty(id)
 	_promotions += 1
-	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
-	return chunk
 
 
 ## Bodies and meshes for the frames beyond the root of a multi-frame build.
@@ -2965,7 +2984,7 @@ func _update_hud() -> void:
 			_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
-F1 stats · F2 profiler · F3 reset worst · N respawn"
+F1 stats · F2 profiler · F3 reset worst · F5 save · F9 load · N respawn"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
 
@@ -3121,6 +3140,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_fire(BIG_BLAST)
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
+		KEY_F5:
+			save_checkpoint()
+		KEY_F9:
+			load_checkpoint()
 		KEY_L:
 			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:
@@ -3426,6 +3449,232 @@ func _run_shot_pass() -> void:
 ## own (IslandManager.record_detach), and a piece that has slept has had its
 ## block ids renumbered, so neither ids nor content hashes are the thing to
 ## compare.
+## Where F5 writes the checkpoint and F9 reads it. Docs/AIPlan.md P0 step 5.
+const CHECKPOINT_PATH := "user://checkpoint.area"
+## Set on the tree's root, which outlives reload_current_scene: the path the
+## scene about to load has to restore.
+const CHECKPOINT_META := &"city_checkpoint"
+## The --checkpoint gate's expectations, carried across the reload the same way.
+const CHECKPOINT_GATE_META := &"city_checkpoint_gate"
+
+
+## Save the area exactly as it is -- the log, every piece where it is and how it
+## is moving, what is asleep, what is queued -- to CHECKPOINT_PATH.
+func save_checkpoint() -> bool:
+	var scene := {"damage": _damage_queue.duplicate(true), "dirty": Array(_dirty),
+			"camera": camera.global_transform}
+	var bytes := AreaSnapshot.capture(authority.commands, islands, scene).to_bytes()
+	var f := FileAccess.open(CHECKPOINT_PATH, FileAccess.WRITE)
+	if f == null:
+		push_error("[city] checkpoint: cannot write %s" % CHECKPOINT_PATH)
+		return false
+	f.store_buffer(bytes)
+	f.close()
+	print("[city] checkpoint saved: %d command(s), %d piece(s), %d asleep, %d KB" % [
+		authority.commands.size(), islands.islands.size(), islands.dormant.size(),
+		bytes.size() / 1024])
+	return true
+
+
+## Throw the area away and build it again from CHECKPOINT_PATH. The scene is
+## reloaded rather than unpicked: every building back to its recipe, every body
+## and node gone, and _ready restores the checkpoint on top.
+func load_checkpoint() -> void:
+	if not FileAccess.file_exists(CHECKPOINT_PATH):
+		print("[city] no checkpoint to load (F5 saves one)")
+		return
+	get_tree().root.set_meta(CHECKPOINT_META, CHECKPOINT_PATH)
+	get_tree().reload_current_scene()
+
+
+func _restore_checkpoint(path: String) -> Dictionary:
+	var t0 := Time.get_ticks_msec()
+	var snap := AreaSnapshot.from_bytes(FileAccess.get_file_as_bytes(path))
+	if snap == null:
+		push_error("[city] checkpoint: %s does not read back" % path)
+		return {}
+	# A building that comes down whole in the log is its bricks and nothing else:
+	# no body, no mesh, no bake -- the piece it becomes is given those.
+	var toppling := {}
+	for e in DamageLog.from_data(snap.commands).entries:
+		if e.kind == DamageLog.Kind.TOPPLE:
+			toppling[e.target] = true
+	var shown: Array[int] = []
+	var resolve := func(id: int, frame: int) -> int:
+		var b := registry.get_building(id)
+		if b == null or b.toppled:
+			return -1
+		if not b.is_materialised():
+			var chunk := registry.materialise(id)
+			if chunk < 0:
+				return -1
+			world.set_tension_per_stud(chunk, 9.3)
+			if not toppling.has(id):
+				shown.append(id)
+		var cs := b.chunks()
+		return cs[frame] if frame < cs.size() else -1
+	var on_toppled := func(id: int) -> void:
+		var b := registry.get_building(id)
+		_free_shell(id)
+		_drop_drawn(id)
+		if b != null and not b.is_build():
+			if spill_interiors:
+				registry.mark_rooms_spilled(id)
+				_wrecks[id] = b.chunk
+			else:
+				registry.write_off_rooms(id)
+		registry.hand_over(id)
+	var report := snap.restore(world, resolve, islands, on_toppled)
+	# New commands follow the loaded ones.
+	authority.commands = DamageLog.from_data(snap.commands)
+	# Dressed AFTER the replay, so the bake and the collision start from the
+	# damaged building rather than being patched from an intact one.
+	for id in shown:
+		var b := registry.get_building(id)
+		if b == null or b.toppled or not b.is_materialised():
+			continue
+		b.hit = true
+		_dress(id, b.chunk, true)
+	var scene: Dictionary = report.get("scene", {})
+	for h in scene.get("damage", []):
+		_damage_queue.append(h)
+	for id in scene.get("dirty", []):
+		_mark_dirty(int(id))
+	if scene.has("camera"):
+		camera.global_transform = scene.camera
+	print("[city] checkpoint loaded in %d ms: %s" % [Time.get_ticks_msec() - t0, report])
+	return report
+
+
+## The gate for F5/F9. Knock the city about, save partway through the collapse
+## -- pieces still falling, some at rest -- reload the scene from the save, and
+## check it is the same area: every damaged building brick for brick, every
+## piece brick for brick, where it was, moving or not as it was. Then let the
+## loaded city carry on and check the log still replays into it.
+func _run_checkpoint_pass() -> void:
+	var root := get_tree().root
+	if root.has_meta(CHECKPOINT_GATE_META):
+		var want: Dictionary = root.get_meta(CHECKPOINT_GATE_META)
+		root.remove_meta(CHECKPOINT_GATE_META)
+		await _check_checkpoint(want)
+		return
+	camera.position = Vector3(-52.0, 34.0, -52.0)
+	camera.rotation = Vector3(-0.42, -2.36, 0.0)
+	await _frames(4)
+	var probe = registry.buildings[0]
+	_blast(probe.xform.origin + Vector3(probe.recipe.footprint_x * 0.5 * STUD, 0.8, 0.3), 1.4)
+	for b in registry.buildings:
+		if b.recipe.courses < 44:
+			continue
+		var w: float = b.recipe.footprint_x * STUD
+		var d: float = b.recipe.footprint_z * STUD
+		for course in range(0, 8):
+			var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
+			var px := 0.3
+			while px < w * 0.55:
+				var pz := 0.3
+				while pz < d:
+					_blast(b.xform.origin + Vector3(px, y, pz), 1.5)
+					pz += 2.0
+				px += 2.0
+	var guard := 0
+	while not _damage_queue.is_empty() and guard < 600:
+		await _frames(1)
+		guard += 1
+	await _frames(45)
+
+	var want := {"buildings": {}, "pieces": {}, "dormant": 0, "moving": 0, "settled": 0}
+	var touched := {}
+	for e in authority.commands.entries:
+		if not e.is_piece():
+			touched[e.target] = true
+	for id in touched:
+		var b := registry.get_building(int(id))
+		if b != null and not b.toppled and b.is_materialised():
+			want.buildings[int(id)] = _structure_of(b.chunk)
+	for isl in islands.islands:
+		if not isl.is_valid() or isl.piece_id < 0:
+			continue
+		want.pieces[isl.piece_id] = {"structure": _structure_of(isl.chunk),
+				"xform": isl.chunk_transform(), "at_rest": isl.settled,
+				"linear": isl.body.linear_velocity}
+		if isl.settled:
+			want.settled += 1
+		else:
+			want.moving += 1
+	for dm in islands.dormant:
+		if dm.piece_id >= 0:
+			want.dormant += 1
+	want["commands"] = authority.commands.size()
+	print("[city] checkpoint: saving %d command(s), %d damaged building(s), %d piece(s) (%d moving, %d at rest), %d asleep" % [
+		want.commands, want.buildings.size(), want.pieces.size(), want.moving, want.settled, want.dormant])
+	if not save_checkpoint():
+		get_tree().quit(1)
+		return
+	root.set_meta(CHECKPOINT_GATE_META, want)
+	load_checkpoint()
+
+
+func _check_checkpoint(want: Dictionary) -> void:
+	print("[city] checkpoint gate: the loaded area against the saved one")
+	_gate_ok("every command came back", authority.commands.size() == int(want.commands),
+			"%d of %d" % [authority.commands.size(), int(want.commands)])
+	var same_b := 0
+	for id in want.buildings:
+		var b := registry.get_building(int(id))
+		if b != null and not b.toppled and b.is_materialised() \
+				and _structure_of(b.chunk) == want.buildings[id]:
+			same_b += 1
+	_gate_ok("every damaged building, brick for brick",
+			same_b == want.buildings.size() and same_b > 0,
+			"%d of %d" % [same_b, want.buildings.size()])
+	var got := {}
+	for isl in islands.islands:
+		if isl.is_valid() and isl.piece_id >= 0:
+			got[isl.piece_id] = isl
+	var same := 0
+	var placed := 0
+	var moving := 0
+	var drawn := 0
+	for id in want.pieces:
+		var p: Dictionary = want.pieces[id]
+		var isl: BrickIsland = got.get(id)
+		if isl == null:
+			continue
+		if _structure_of(isl.chunk) == p.structure:
+			same += 1
+		if isl.chunk_transform().is_equal_approx(p.xform) and isl.settled == bool(p.at_rest):
+			placed += 1
+		else:
+			print("  piece %d: at rest %s -> %s, %.3f m out" % [int(id), p.at_rest,
+					isl.settled, isl.chunk_transform().origin.distance_to(p.xform.origin)])
+		if not isl.settled and not bool(p.at_rest) \
+				and isl.body.linear_velocity.is_equal_approx(p.linear):
+			moving += 1
+		# Something to draw into, or an array of bricks nobody can see.
+		if isl.mesh != null or isl.mm_key != Vector3.ZERO:
+			drawn += 1
+	var n: int = want.pieces.size()
+	_gate_ok("every piece, brick for brick", same == n and n > 0, "%d of %d" % [same, n])
+	_gate_ok("where it was, at rest or not as it was", placed == n, "%d of %d" % [placed, n])
+	_gate_ok("a moving piece still moving", moving == int(want.moving) and moving > 0,
+			"%d of %d" % [moving, int(want.moving)])
+	_gate_ok("every piece has a node to draw into", drawn == n, "%d of %d" % [drawn, n])
+	_gate_ok("everything asleep is still asleep",
+			islands.dormant.size() == int(want.dormant),
+			"%d of %d" % [islands.dormant.size(), int(want.dormant)])
+	await _frames(20)
+	await _save("city_checkpoint_loaded")
+	# And it carries on: the collapse finishes, and the log -- the loaded part
+	# and what was added after -- still replays into what is standing.
+	await _frames(240)
+	_gate_ok("the loaded city carries on", authority.commands.size() >= int(want.commands),
+			"%d command(s) now" % authority.commands.size())
+	_check_log_replays()
+	print("[city] checkpoint gate: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
 func _check_log_replays() -> void:
 	var t0 := Time.get_ticks_msec()
 	var entries := authority.commands.entries
@@ -3475,6 +3724,8 @@ func _check_log_replays() -> void:
 	var p_ok := 0
 	var p_n := 0
 	var p_missing := 0
+	var rest_ok := 0
+	var rest_n := 0
 	for isl in islands.islands:
 		if not isl.is_valid() or isl.piece_id < 0 or not twin_of.has(isl.owner):
 			continue
@@ -3483,6 +3734,11 @@ func _check_log_replays() -> void:
 		if rc < 0:
 			p_missing += 1
 			continue
+		# A landmark at rest has to lie where the host's lies (PIECE_REST).
+		if isl.settled and isl.landmark:
+			rest_n += 1
+			if world.get_chunk_transform(rc).is_equal_approx(isl.chunk_transform()):
+				rest_ok += 1
 		var hp := _structure_of(isl.chunk)
 		var rp := _structure_of(rc)
 		if hp == rp:
@@ -3493,12 +3749,12 @@ func _check_log_replays() -> void:
 
 	print("[city] log replay: %d command(s) into %d twin building(s) (%d skipped), %d missed, %.0f ms" % [
 		entries.size(), twin_of.size(), skipped, rep.missed, Time.get_ticks_msec() - t0])
-	print("[city]   buildings: %d of %d identical; pieces: %d of %d identical, %d missing" % [
-		b_ok, b_n, p_ok, p_n, p_missing])
+	print("[city]   buildings: %d of %d identical; pieces: %d of %d identical, %d missing; %d of %d at rest where the host's are" % [
+		b_ok, b_n, p_ok, p_n, p_missing, rest_ok, rest_n])
 	for m in rep.miss_log:
 		print("[city]   missed: %s target %d seq %d -- %s" % m)
 	print("[city] %s" % ("ok    the log replays into the same structure"
-			if b_ok == b_n and p_ok == p_n and rep.missed == 0
+			if b_ok == b_n and p_ok == p_n and rep.missed == 0 and rest_ok == rest_n
 			else "FAIL  the log does not replay into the same structure"))
 
 	# Give the twins' bricks back: nothing after this should find them.

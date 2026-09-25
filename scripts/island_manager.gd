@@ -394,6 +394,8 @@ const WAKES_PER_TICK := 1
 var dormant: Array[Dormant] = []
 var slept := 0
 var woken := 0
+## Set while restore_piece adopts a piece from a save. See adopt.
+var _restoring := false
 ## Where the sleep scan got to. Walking every island every tick to ask how far
 ## away it is would be the same O(islands) mistake the settle loop already
 ## learned not to make.
@@ -943,6 +945,17 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 			_ghosts.append([mesh_node, Engine.get_process_frames() + OVERLAP_FRAMES])
 		else:
 			mesh_node.queue_free()
+	else:
+		# Nothing carried: a piece back from sleep or from a save. It still needs
+		# a node to be drawn into, or rebuild_mesh and the mesh queue have nowhere
+		# to put what they build and the piece is solid but invisible. The same
+		# node spawn makes.
+		isl.mesh = MeshInstance3D.new()
+		isl.mesh.material_override = brick_material
+		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		isl.mesh.position = -isl.local_com
+		isl.body.add_child(isl.mesh)
+		FurnitureMesh.attach(world, chunk, isl.mesh, _furniture)
 
 	isl.body.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), isl.local_com)
@@ -958,7 +971,10 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.born_ms = Time.get_ticks_msec()
 	isl.radius = _body_radius(isl)
 	islands.append(isl)
-	wake_near(isl.body.global_position, WAKE_RADIUS)
+	# Not while a save is being put back: what lies next to this piece is
+	# exactly as the save had it, asleep or not, and waking it is a difference.
+	if not _restoring:
+		wake_near(isl.body.global_position, WAKE_RADIUS)
 	if announce:
 		piece_spawned.emit(isl)
 	return isl
@@ -1803,6 +1819,13 @@ func tick() -> void:
 			# Inert now: give the solver as few boxes as the shape allows.
 			_reshape(isl, true)
 			settled += 1
+			# Where a landmark came to rest is the one piece of physics every
+			# machine has to agree on (DamageLog.Kind.PIECE_REST). Small pieces are
+			# presentation and are not sent.
+			if isl.landmark and isl.piece_id >= 0 and decides:
+				var rest := _piece_entry(isl, DamageLog.Kind.PIECE_REST)
+				rest.points = DamageLog.rest_points(isl.chunk_transform())
+				_record(rest)
 			piece_settled.emit(isl)
 
 	_stream_dormancy()
@@ -2119,7 +2142,9 @@ func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_transform(chunk, chunk_xform)
+	_restoring = true
 	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner, true, not is_disposable)
+	_restoring = false
 	if isl == null:
 		return null
 	if at_rest:

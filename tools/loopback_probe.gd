@@ -9,8 +9,11 @@ extends SceneTree
 ## same pieces. That is the claim every later phase of the AI work is checked
 ## against, twice: once as a host alone and once with a client beside it.
 ##
-## What is deliberately not here yet: loose pieces. A landing fracture on an
-## island is still decided by each machine's own physics (AIPlan R5, P0 step 4).
+## Then the same with pieces, and real physics: a host city collapses -- a
+## tower sheds, another topples, the pieces land and break -- and a client that
+## never decides anything follows it through the wire. The client has to end with
+## the same buildings, every piece brick for brick, and every piece that came to
+## rest lying where the host's lies. That is the Docs/AIPlan.md P0 gate.
 
 const STUD := 0.35
 const PLATE := 0.14
@@ -33,6 +36,11 @@ func _init() -> void:
 	_rng.seed = 7
 	_check_roles()
 	_check_agreement()
+	_start_pieces()
+	physics_frame.connect(_tick_pieces)
+
+
+func _finish() -> void:
 	print("")
 	if failures == 0:
 		print("[probe] PASS")
@@ -300,3 +308,235 @@ func _compare(a: BrickWorld, ca: int, b: BrickWorld, cb: int, label: String) -> 
 				same = false
 				break
 	_ok("%s: same pieces" % label, same, "%d vs %d" % [pa.size(), pb.size()])
+
+# ===========================================================================
+# Pieces, with real physics
+# ===========================================================================
+
+const PIECE_COURSES := 14
+const TENSION := 9.3
+## Deliver the wire every this many physics frames, reordered: a transport
+## that is late and out of order, all the way through a collapse.
+const WIRE_EVERY := 4
+const SETTLE_FRAMES := 450
+
+var _p_host: Dictionary
+var _p_client: Dictionary
+var _p_host_auth: WorldAuthority
+var _p_client_auth: WorldAuthority
+var _p_rep: StructureReplayer
+var _p_wire: Array = []
+var _p_frame := 0
+var _p_done := false
+
+
+## Two towers in a world. Building ids are the same on every machine -- the city
+## is generated the same everywhere -- but everse builds the bricks of the
+## second one first, so the CHUNK ids differ, which is what a command must not
+## depend on.
+func _piece_city(reverse: bool) -> Dictionary:
+	var w := BrickWorld.new()
+	w.set_seed(4)
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	var ids := []
+	for i in 2:
+		ids.append(reg.register(FOOT_X, FOOT_Z, PIECE_COURSES,
+				Transform3D(Basis(), Vector3(i * 14.0, 0.0, 0.0))))
+	if reverse:
+		reg.materialise(ids[1])
+		reg.materialise(ids[0])
+	return {"world": w, "registry": reg, "ids": ids}
+
+
+func _p_chunk(c: Dictionary, id: int) -> int:
+	var reg: BuildingRegistry = c.registry
+	var b := reg.get_building(id)
+	if b == null or b.toppled:
+		return -1
+	var chunk := reg.materialise(id)
+	(c.world as BrickWorld).set_tension_per_stud(chunk, TENSION)
+	return chunk
+
+
+func _start_pieces() -> void:
+	print("pieces, with real physics, over the wire")
+	_p_host = _piece_city(false)
+	_p_client = _piece_city(true)
+
+	var ground := StaticBody3D.new()
+	ground.collision_layer = Layers.WORLD
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(200.0, 1.0, 200.0)
+	shape.shape = box
+	shape.position = Vector3(0.0, -0.5, 0.0)
+	ground.add_child(shape)
+	root.add_child(ground)
+
+	_p_host_auth = WorldAuthority.new()
+	var islands := IslandManager.new()
+	root.add_child(islands)
+	islands.setup(_p_host.world, null, null)
+	islands.on_command = func(e: DamageLog.Entry) -> int:
+		var done := _p_host_auth.commit_entry(e)
+		return done.seq if done != null else -1
+	_p_host["islands"] = islands
+
+	# The client: it decides nothing, it has no bodies, it applies what arrives.
+	_p_client_auth = WorldAuthority.new()
+	_p_client_auth.is_host = false
+	_p_rep = StructureReplayer.new(_p_client.world, func(id: int, frame: int) -> int:
+		return _p_chunk(_p_client, id) if frame == 0 else -1)
+	_p_rep.on_toppled = func(id: int) -> void: (_p_client.registry as BuildingRegistry).hand_over(id)
+	_p_client_auth.apply_entry = func(e: DamageLog.Entry) -> void: _p_rep.apply(e)
+	_p_host_auth.add_client(func(wire: Array) -> void:
+		_p_wire.append(bytes_to_var(var_to_bytes(wire))))
+
+
+## On the first physics frame, not in _init: the manager is only in the tree by
+## then, and a piece placed before that has no global transform to be placed at.
+func _p_fight() -> void:
+	# Knock the base out of one tower so it sheds, and out from under most of the
+	# other so it topples -- the host's own decisions, every one a command.
+	var ids: Array = _p_host.ids
+	for x in 5:
+		_p_blast(ids[0], Vector3(0.6 + x * 1.4, 1.6, 0.2), 1.3)
+		_p_blast(ids[0], Vector3(0.6 + x * 1.4, 1.6, FOOT_Z * STUD - 0.2), 1.3)
+	for x in 5:
+		for z in 6:
+			for y in [0.4, 1.2]:
+				_p_blast(ids[1], Vector3(14.0 + 0.4 + x * 1.0, y, 0.4 + z * 1.0), 1.0)
+	for id in ids:
+		_p_settle(id)
+
+
+func _p_blast(id: int, point: Vector3, radius: float) -> void:
+	var chunk := _p_chunk(_p_host, id)
+	if chunk < 0:
+		return
+	if not (_p_host.world as BrickWorld).apply_hit(chunk, point, radius).is_empty():
+		_p_host_auth.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST, id, point, radius)
+
+
+## What the city does as host after damage: solve, topple or shed.
+func _p_settle(id: int) -> void:
+	var w: BrickWorld = _p_host.world
+	var islands: IslandManager = _p_host.islands
+	var chunk := _p_chunk(_p_host, id)
+	if chunk < 0:
+		return
+	if int((w.solve_stress(chunk) as Dictionary).get("failures", 0)) > 0:
+		_p_host_auth.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE, id, Vector3.ZERO, 0.0)
+	if not bool((w.check_stability(chunk) as Dictionary).get("stable", true)):
+		var piece := islands.record_topple(id)
+		(_p_host.registry as BuildingRegistry).hand_over(id)
+		islands.adopt(chunk, null, null, 0, 4, [], piece, id)
+		return
+	for g in w.find_detached_groups(chunk):
+		var piece := islands.record_detach(id, null, chunk, g)
+		islands.spawn(chunk, g, Vector3.ZERO, Vector3.ZERO, piece, id)
+
+
+func _p_deliver() -> void:
+	var out := _p_wire.duplicate()
+	_p_wire.clear()
+	for i in range(out.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		var tmp = out[i]
+		out[i] = out[j]
+		out[j] = tmp
+	for wire in out:
+		_p_client_auth.receive(wire)
+
+
+func _tick_pieces() -> void:
+	if _p_done:
+		return
+	_p_frame += 1
+	if _p_frame == 1:
+		_p_fight()
+	var islands: IslandManager = _p_host.islands
+	islands.tick()
+	if _p_frame % WIRE_EVERY == 0:
+		_p_deliver()
+	var moving := 0
+	for isl in islands.islands:
+		if isl.is_valid() and not isl.settled:
+			moving += 1
+	if (moving == 0 and _p_frame > 30) or _p_frame > SETTLE_FRAMES:
+		_p_done = true
+		_p_deliver()
+		_p_compare()
+		_p_client_auth.apply_entry = Callable()
+		_p_host_auth._clients.clear()
+		islands.on_command = Callable()
+		_finish()
+
+
+func _p_compare() -> void:
+	var hw: BrickWorld = _p_host.world
+	var cw: BrickWorld = _p_client.world
+	var islands: IslandManager = _p_host.islands
+	var kinds := {}
+	for e in _p_host_auth.commands.entries:
+		var k: String = DamageLog.Kind.keys()[e.kind]
+		kinds[k] = int(kinds.get(k, 0)) + 1
+	print("  %d frame(s), %d command(s): %s" % [_p_frame, _p_host_auth.commands.size(), kinds])
+	_ok("the collapse detached, toppled and came to rest",
+			kinds.has("DETACH") and kinds.has("TOPPLE") and kinds.has("PIECE_REST"), str(kinds))
+	_ok("the client applied every command, in the host's order, through a reordering wire",
+			_p_client_auth.entries_applied == _p_host_auth.commands.size()
+			and _p_client_auth.held_count() == 0 and _p_client_auth.gaps_seen > 0,
+			"%d of %d, %d gap(s)" % [_p_client_auth.entries_applied, _p_host_auth.commands.size(),
+			_p_client_auth.gaps_seen])
+	_ok("and found everything each one named", _p_rep.missed == 0, "%d missed" % _p_rep.missed)
+
+	var same_b := 0
+	var n_b := 0
+	for id in _p_host.ids:
+		var hb := (_p_host.registry as BuildingRegistry).get_building(id)
+		var cb := (_p_client.registry as BuildingRegistry).get_building(id)
+		if hb.toppled != cb.toppled:
+			continue
+		n_b += 1
+		if hb.toppled or _structure(hw, hb.chunk) == _structure(cw, cb.chunk):
+			same_b += 1
+	_ok("the same buildings, standing or toppled", same_b == 2 and n_b == 2,
+			"%d of 2" % same_b)
+
+	var same := 0
+	var n := 0
+	var rest_ok := 0
+	var rest_n := 0
+	for isl in islands.islands:
+		if not isl.is_valid() or isl.piece_id < 0:
+			continue
+		n += 1
+		var rc := _p_rep.piece_chunk(isl.piece_id)
+		if rc >= 0 and _structure(hw, isl.chunk) == _structure(cw, rc):
+			same += 1
+		if isl.settled and isl.landmark:
+			rest_n += 1
+			if rc >= 0 and cw.get_chunk_transform(rc).is_equal_approx(isl.chunk_transform()):
+				rest_ok += 1
+	_ok("every piece, brick for brick", n > 0 and same == n, "%d of %d" % [same, n])
+	_ok("and every landmark at rest lies where the host's lies", rest_n > 0 and rest_ok == rest_n,
+			"%d of %d" % [rest_ok, rest_n])
+
+
+## Structural blocks by absolute cell and part name. See city_scene._structure_of.
+func _structure(w: BrickWorld, chunk: int) -> PackedStringArray:
+	var out := PackedStringArray()
+	if chunk < 0 or not w.is_chunk_alive(chunk):
+		return out
+	var origin := w.get_chunk_origin(chunk)
+	for id in w.get_block_count(chunk):
+		if w.is_block_decorative(chunk, id):
+			continue
+		var cell := StructureReplayer.block_cell(w, chunk, id)
+		if cell == StructureReplayer.NO_CELL or not w.is_solid(chunk, origin + cell):
+			continue
+		out.append("%s:%s" % [origin + cell, w.get_archetype_name(w.get_block_archetype(chunk, id))])
+	out.sort()
+	return out

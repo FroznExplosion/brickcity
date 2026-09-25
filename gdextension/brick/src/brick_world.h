@@ -228,6 +228,12 @@ public:
     /// a lightly damaged building, and the only thing that has to survive
     /// de-materialisation.
     PackedInt32Array get_dead_blocks(int chunk_id) const;
+    /// Ids of every block that left this chunk as part of a piece of its own
+    /// (split_island): not destroyed, not here. The other half of what a
+    /// building rebuilt from its recipe must not grow back -- get_dead_blocks
+    /// leaves these out on purpose, and a record of damage alone brought them
+    /// back while the piece they left on still existed.
+    PackedInt32Array get_detached_blocks(int chunk_id) const;
     /// How many blocks this chunk has lost to damage, without building the
     /// list of them.
     ///

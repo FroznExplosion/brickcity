@@ -47,6 +47,12 @@ class Building:
 	## keyed on block id, stable across de-materialisation, per frame because a
 	## block id only means anything inside one chunk.
 	var dead_frames := {}
+	## frame -> ids of blocks that LEFT as part of a piece of their own. Not damage
+	## (get_dead_blocks leaves them out on purpose) and not here: a building rebuilt
+	## from its recipe has to leave them out, or every brick that fell off it grows
+	## back while the piece it fell on still lies in the street. Found in the AI
+	## work's P0 review; the stress pass trims a hundred buildings a run.
+	var gone := {}
 	## Local bounds of everything this building occupies, frames included. Empty
 	## until it has been materialised once; `BuildingRegistry.local_box` is what
 	## reads it, and falls back to the parametric footprint until then.
@@ -109,6 +115,10 @@ class Building:
 			dead = ids
 		else:
 			dead_frames[frame] = ids
+
+	## What left one frame as pieces. See gone.
+	func gone_in(frame: int) -> PackedInt32Array:
+		return gone.get(frame, PackedInt32Array())
 
 	## How many blocks this building has lost, and the frame that was counted on.
 	##
@@ -841,10 +851,15 @@ func materialise(id: int) -> int:
 				% [b.id, b.recipe_version, RECIPE_VERSION])
 		b.dead = PackedInt32Array()
 		b.dead_frames = {}
+		b.gone = {}
 		b.recipe_version = RECIPE_VERSION
 	var cs := b.chunks()
 	for i in cs.size():
 		world.kill_blocks(cs[i], b.dead_in(i))
+		# And what left as pieces, which are still out there. Taken out as dead:
+		# the bricks are not in this building any more, which is all a rebuilt
+		# building has to know, and the next record lists them with the damage.
+		world.kill_blocks(cs[i], b.gone_in(i))
 
 	b.materialised_at = Time.get_ticks_msec()
 	_materialised += 1
@@ -918,6 +933,7 @@ func _record_damage(b: Building) -> void:
 	var cs := b.chunks()
 	for i in cs.size():
 		b.set_dead_in(i, world.get_dead_blocks(cs[i]))
+		b.gone[i] = world.get_detached_blocks(cs[i])
 
 
 ## The whole thing's local bounds, frames included -- what a blast has to test

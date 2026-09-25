@@ -910,6 +910,20 @@ PackedInt32Array BrickWorld::get_dead_blocks(int chunk_id) const {
     return out;
 }
 
+PackedInt32Array BrickWorld::get_detached_blocks(int chunk_id) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        if (c.blocks[i].detached && !c.blocks[i].removed) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
 int BrickWorld::get_block_archetype(int chunk_id, int block_id) const {
     if (!valid_chunk(chunk_id)) {
         return -1;
@@ -4248,6 +4262,8 @@ void BrickWorld::_bind_methods() {
                     "segments", "bands"),
             &BrickWorld::build_damage_profile);
     ClassDB::bind_method(D_METHOD("get_dead_blocks", "chunk_id"), &BrickWorld::get_dead_blocks);
+    ClassDB::bind_method(D_METHOD("get_detached_blocks", "chunk_id"),
+            &BrickWorld::get_detached_blocks);
     ClassDB::bind_method(D_METHOD("get_dead_block_count", "chunk_id"),
             &BrickWorld::get_dead_block_count);
     ClassDB::bind_method(D_METHOD("get_block_archetype", "chunk_id", "block_id"),

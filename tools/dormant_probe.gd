@@ -181,6 +181,32 @@ func _check_what_left_stays_gone() -> void:
 	var back := record.restore(w)
 	_ok("and wakes with exactly that", w.get_alive_block_count(back) == alive,
 			"%d of %d" % [w.get_alive_block_count(back), alive])
+	_check_rebuilt_building_stays_cut()
+
+
+## The same for a standing building the registry lets go of and builds again
+## from its recipe: what left it as a piece must not grow back (BuildingRegistry
+## Building.gone).
+func _check_rebuilt_building_stays_cut() -> void:
+	var res := _world()
+	var w: BrickWorld = res[0]
+	var reg := BuildingRegistry.new(w, res[1])
+	var id := reg.register(12, 12, 10, Transform3D(Basis(), Vector3(11.0, 0.0, -4.0)))
+	var chunk := reg.materialise(id)
+	w.separate_plane(chunk, w.get_chunk_transform(chunk) * Vector3(3.0, 5 * 3 * 0.14, 2.0),
+			Vector3.UP, 0.42)
+	var comps: Array = w.get_components(chunk)
+	if comps.size() < 2:
+		_ok("the building's cut made a piece to shed", false, "%d component(s)" % comps.size())
+		return
+	var cut: Dictionary = w.split_island(chunk, comps[1])
+	var alive := w.get_alive_block_count(chunk)
+	reg.dematerialise(id)
+	var again := reg.materialise(id)
+	_ok("a rebuilt building does not grow back what left it",
+			again >= 0 and w.get_alive_block_count(again) == alive,
+			"%d standing, %d after the rebuild, %d shed" % [alive,
+			w.get_alive_block_count(again) if again >= 0 else -1, int(cut.block_count)])
 
 
 ## Furniture rides a piece as decorative blocks: weightless in a solve, open air

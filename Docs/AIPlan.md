@@ -145,11 +145,33 @@ city `--shot` log replay exact in 5 of 5 runs (up to 154 of 154 pieces, 2,074 co
 pieces stay alive (83–154 against 56–73, the floor panels and clumps that used to be deleted) with
 frame time unchanged at 16.6 ms; `--stress` 200 mean 18.4 ms against 18.2.
 
-Not done, and why:
-- **No save key in the city scene yet.** Loading there also has to rebuild the buildings'
-  meshes and bodies; the world half, the queues and the furniture are done and probed.
-- A building dematerialised and rematerialised after pieces left it brings those blocks back
-  (`get_dead_blocks` skips detached ones) — pre-existing, and a replay would disagree with it.
+**P0 complete (2026-09-24).** The last four pieces:
+- **Where a landmark comes to rest is a command** (`PIECE_REST`: the chunk transform, once per
+  rest, host only). Every machine — and a late joiner or a replay — has the wreckage the AI hides
+  behind in the same place. The city `--shot` replay check and `loopback_probe` both compare it.
+- **`loopback_probe` has a pieces phase:** real physics on the host, a client with no bodies
+  applying the stream through a reordering wire, chunk ids deliberately different. Detach, topple,
+  shear and rest all arrive; every piece identical, every landmark at rest where the host's is.
+- **F5 saves the city, F9 loads it** (`user://checkpoint.area`). Load reloads the scene and
+  replays the save into the recipes; damaged buildings get their bake and bodies *after* the
+  replay, so they start from the damaged building. Gate: city `-- --checkpoint` saves 45 frames
+  into a collapse (1,718 commands, 92 pieces, 73 of them still falling), reloads, and checks every
+  damaged building and every piece brick for brick, where it was, moving as it was, with a node to
+  draw into — then lets it run 4 s and replays the whole log against it: 8 of 8.
+- **A rebuilt building no longer regrows what left it as pieces.** The registry records detached
+  blocks (`get_detached_blocks`, new) alongside the damage. `dormant_probe` checks it.
+- **Found on the way:** a piece woken from sleep or loaded from a save had no mesh node — solid
+  but invisible (`IslandManager.adopt` only made one when a building's node was handed over). And
+  a loaded piece woke the settled pieces around it.
+
+Measured on the worktree build (origin/main 984fce0 + these changes + the rebuilt DLL): 31 of 31
+probes clean; `--checkpoint` 8 of 8; `--shot` log replay exact twice (151 and 94 pieces); `--stress`
+200 clean (96 buildings trimmed and rebuilt). Frame times not compared: other Godot processes were
+running. `N RID allocations of type 'P10JoltBody3D' were leaked at exit` shows on every city pass,
+before these changes too.
+
+Still open:
+- A player build placed with P is not in a save: the load rebuilds the city from its recipes.
 - The first one or two scene passes after an `--import` run 50–80 ms mean with the same code that
   runs 16.6 ms afterwards. Suspected shader compilation; not established.
 

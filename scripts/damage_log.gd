@@ -63,6 +63,12 @@ enum Kind {
 	PIECE_SHEAR,  ## joints severed in a ball on a piece. FLAG_PEEL for a landing
 	PIECE_SNAP,   ## a piece snapped across `normal` at `points`
 	PIECE_SOLVE,  ## a piece's stress solve, under gravity `normal` (integer)
+	## A landmark piece came to rest here: its chunk transform, as `points` [origin,
+	## x, y, z]. The one piece of physics the log carries, and only once per rest:
+	## the AI hides behind wreckage and people stand on it, so every machine has to
+	## have it in the same place (Docs/AI.md section 12.1), and a late joiner or a
+	## replay gets it from the same stream as everything else.
+	PIECE_REST,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -176,7 +182,21 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return PackedInt32Array()
 		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE:
 			return _apply_local(world, chunk, e)
+		Kind.PIECE_REST:
+			world.set_chunk_transform(chunk, rest_transform(e))
+			return PackedInt32Array()
 	return PackedInt32Array()
+
+
+## A resting transform as PIECE_REST carries it, and back.
+static func rest_points(xf: Transform3D) -> PackedVector3Array:
+	return PackedVector3Array([xf.origin, xf.basis.x, xf.basis.y, xf.basis.z])
+
+
+static func rest_transform(e: Entry) -> Transform3D:
+	if e.points.size() < 4:
+		return Transform3D()
+	return Transform3D(Basis(e.points[1], e.points[2], e.points[3]), e.points[0])
 
 
 ## The transform that makes a chunk's local space the grid space piece commands

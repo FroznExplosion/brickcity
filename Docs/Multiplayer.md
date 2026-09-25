@@ -124,11 +124,13 @@ So the host now records every operation it performs, in order ([AIPlan](AIPlan.m
 | `SOLVE` | a building's stress solve, when it failed something |
 | `TOPPLE` | a building came off its foundation whole |
 | `DETACH` | blocks left a building, or a piece, as a new piece |
-| `PIECE_BLAST`, `PIECE_SHEAR`, `PIECE_SNAP`, `PIECE_SOLVE` | a piece, in its own local space; `PIECE_SOLVE` carries the gravity the host's body saw |
+| `PIECE_BLAST`, `PIECE_SHEAR`, `PIECE_SNAP`, `PIECE_SOLVE` | a piece, in grid space (`DamageLog.grid_frame`); `PIECE_SOLVE` carries the gravity the host's body saw |
+| `PIECE_REST` | a landmark piece came to rest: its chunk transform, once per rest |
 
 A client never decides any of these for itself (`IslandManager.decides`, and the city tick's solve
 loop): it replays the host's stream (`StructureReplayer`). What still stays out is physics state —
-transforms and velocities — except once, in a save (`AreaSnapshot`).
+transforms and velocities — except twice: where a landmark comes to rest (`PIECE_REST`, because
+the AI takes cover behind it and people stand on it), and everything, in a save (`AreaSnapshot`).
 
 ### Pieces are named by the command that made them
 
