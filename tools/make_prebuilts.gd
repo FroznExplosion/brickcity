@@ -5,7 +5,8 @@ extends SceneTree
 ##     godot --headless --path . --script tools/make_prebuilts.gd
 ##
 ## Generated rather than hand-saved, so they are always made of the current
-## palette and follow the current rules: a four-brick figure, six-course storeys,
+## palette -- and its MATERIALS, stone and wood and metal -- and follow the
+## current rules: a four-brick figure, six-course storeys,
 ## doorways four studs wide and five bricks clear under a lintel course, windows
 ## three courses tall from a sill two bricks up (Docs/Parts/README.md section 6).
 ## Walls are laid in running bond -- every other course starts half a brick
@@ -43,9 +44,12 @@ func _cottage() -> BuildRecipe:
 	var r := _named("Cottage")
 	var w := 12
 	var d := 8
-	_box(r, w, d, 0, 0, 11, {"front": [Vector2i(4, 4 + DOOR)]},
+	_box(r, w, d, 0, 0, 5, {"front": [Vector2i(4, 4 + DOOR)]},
 			{"left": [Vector2i(3, 5)], "right": [Vector2i(3, 5)], "back": [Vector2i(5, 7)]})
-	_slab(r, w, d, STOREY * 3, 4)
+	_made_of(r, 0, "Stone")                  # sandstone walls
+	var roof := r.size()
+	_slab(r, w, d, STOREY * 3, 1)
+	_made_of(r, roof, "Wood")                # a walnut roof
 	return r
 
 
@@ -62,8 +66,12 @@ func _watchtower() -> BuildRecipe:
 		if s > 0:
 			windows["front"] = [Vector2i(3, 5)]
 		var y := s * (STOREY * 3 + 1)
+		var walls := r.size()
 		_box(r, n, n, y, s * STOREY, 2, doors, windows)
-		_slab(r, n, n, y + STOREY * 3, 3)
+		_made_of(r, walls, "Stone")          # grey granite
+		var floor_at := r.size()
+		_slab(r, n, n, y + STOREY * 3, 0)
+		_made_of(r, floor_at, "Wood")        # oak floors
 	return r
 
 
@@ -72,8 +80,11 @@ func _kiosk() -> BuildRecipe:
 	var r := _named("Kiosk")
 	var w := 8
 	var d := 8
-	_box(r, w, d, 0, 0, 6, {"front": [Vector2i(1, w - 1)]}, {})
-	_slab(r, w, d, STOREY * 3, 4)
+	_box(r, w, d, 0, 0, 10, {"front": [Vector2i(1, w - 1)]}, {})
+	_made_of(r, 0, "Wood")                   # cedar
+	var roof := r.size()
+	_slab(r, w, d, STOREY * 3, 0)
+	_made_of(r, roof, "Metal")               # a steel roof
 	return r
 
 
@@ -82,11 +93,26 @@ func _garden_wall() -> BuildRecipe:
 	var r := _named("Garden wall")
 	var l := 16
 	for c in 2:
-		_run(r, "x", 1, l - 1, 0, c * 3, c, 4, [])
+		_run(r, "x", 1, l - 1, 0, c * 3, c, 11, [])
+	_made_of(r, 0, "Stone")                  # travertine
+	var posts := r.size()
 	for c in 2:
-		r.add("round_1x1", Vector3i(0, c * 3, 0), 3)
-		r.add("round_1x1", Vector3i(l - 1, c * 3, 0), 3)
+		r.add("round_1x1", Vector3i(0, c * 3, 0), 12)
+		r.add("round_1x1", Vector3i(l - 1, c * 3, 0), 12)
+	_made_of(r, posts, "Metal")              # gunmetal posts
 	return r
+
+
+## Everything added from block `first` on is made of `material` (by name), its
+## colour index now naming one of that material's own kinds.
+func _made_of(r: BuildRecipe, first: int, material: String) -> void:
+	var m := -1
+	for i in BrickWorld.get_material_count():
+		if BrickWorld.get_material_name(i) == material:
+			m = i
+	assert(m >= 0, "no material called " + material)
+	for i in range(first, r.size()):
+		r.set_material(i, m)
 
 
 # ---------------------------------------------------------------------------

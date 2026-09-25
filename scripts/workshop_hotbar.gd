@@ -12,16 +12,22 @@ extends CanvasLayer
 ## sessions.
 ##
 ## Drag and drop, as in the creative inventory: drag a part from the browser
-## onto any slot; drag it across a colour on the way and it takes that colour;
-## drag a colour onto a slot to paint it; drag one slot onto another to swap
-## them.
+## onto any slot; drag it across a MATERIAL or a colour on the way and it takes
+## them; drag a colour or a material onto a slot to repaint it; drag one slot
+## onto another to swap them.
+##
+## A slot is a part, a MATERIAL and a colour. What the colour means depends on
+## the material (BrickWorld.get_material_colour): a filament -- PLA, ABS, TPU --
+## takes any colour off the filament palette; wood, metal and stone have their
+## own lists, oak to ebony, steel to gold. The colour row shows whichever list
+## the selected slot's material has.
 ##
 ## It owns no placement. It says what is selected (`changed`), and the workshop
 ## sets its part and colour from that -- so everything that sets them directly
 ## (the probes, the stair builder) still works exactly as before.
 
 ## Emitted whenever the selected slot or what is in it changes.
-signal changed(part: String, colour: int)
+signal changed(part: String, colour: int, material: int)
 ## The browser opened or closed: the workshop frees or recaptures the mouse.
 signal browsing_changed(on: bool)
 
@@ -39,7 +45,7 @@ const DEFAULTS := [
 	["arch_1x4", 5],
 ]
 
-var slots := []          ## [[part, colour], ...], SLOTS long; part "" is empty
+var slots := []          ## [[part, colour, material], ...]; part "" is empty
 var selected := 0
 
 ## Called with a part name, returns [ArrayMesh, MultiMesh] of it: the workshop's
@@ -64,6 +70,9 @@ var _slot_style_on: StyleBoxFlat
 ## The picture following the cursor during a drag, so a colour it passes over
 ## can tint it.
 var _drag_preview: TextureRect
+var _swatches: GridContainer
+var _materials: HBoxContainer
+var _swatch_label: Label
 
 
 func _ready() -> void:
@@ -75,7 +84,7 @@ func _ready() -> void:
 	for p in BrickPalette.parts():
 		_icon_queue.append(p)
 	_refresh()
-	changed.emit(part(), colour())
+	changed.emit(part(), colour(), material())
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +99,28 @@ func colour() -> int:
 	return int(slots[selected][1])
 
 
+func material() -> int:
+	return int(slots[selected][2])
+
+
+## A slot's colour as it will be drawn, opaque: the material's alpha is for the
+## shaders, and a UI tinted with it would come out see-through.
+static func rgb(m: int, c: int) -> Color:
+	var x := BrickWorld.get_material_colour(m, c)
+	x.a = 1.0
+	return x
+
+
+static func _count(m: int) -> int:
+	return maxi(BrickWorld.get_material_colour_count(m), 1)
+
+
 func select(i: int) -> void:
 	selected = posmod(i, SLOTS)
+	_rebuild_swatches()
 	_refresh()
 	_save()
-	changed.emit(part(), colour())
+	changed.emit(part(), colour(), material())
 
 
 func step(d: int) -> void:
@@ -106,22 +132,35 @@ func set_part(p: String) -> void:
 	slots[selected][0] = p
 	_refresh()
 	_save()
-	changed.emit(part(), colour())
+	changed.emit(part(), colour(), material())
 
 
 func set_colour(c: int) -> void:
-	slots[selected][1] = posmod(c, BrickWorld.get_filament_count())
+	slots[selected][1] = posmod(c, _count(material()))
 	_refresh()
 	_save()
-	changed.emit(part(), colour())
+	changed.emit(part(), colour(), material())
 
 
-## Both at once: what pick-block does.
-func set_slot(p: String, c: int) -> void:
-	slots[selected] = [p, posmod(c, BrickWorld.get_filament_count())]
+## Change what the selected slot is made of. Its colour index is kept where
+## the new material's list is long enough, and wrapped into it where not.
+func set_material(m: int) -> void:
+	slots[selected][2] = clampi(m, 0, BrickWorld.get_material_count() - 1)
+	slots[selected][1] = posmod(int(slots[selected][1]), _count(material()))
+	_rebuild_swatches()
 	_refresh()
 	_save()
-	changed.emit(part(), colour())
+	changed.emit(part(), colour(), material())
+
+
+## All three at once: what pick-block does. A material of -1 keeps the slot's.
+func set_slot(p: String, c: int, m: int = -1) -> void:
+	var mat := material() if m < 0 else m
+	slots[selected] = [p, posmod(c, _count(mat)), mat]
+	_rebuild_swatches()
+	_refresh()
+	_save()
+	changed.emit(part(), colour(), material())
 
 
 func is_browsing() -> bool:
@@ -212,11 +251,13 @@ func _build_bar() -> void:
 # Drag and drop
 # ---------------------------------------------------------------------------
 
-## A drag carries {"kind": "part" | "slot" | "colour", ...}.
-func _preview(p: String, c: int) -> TextureRect:
+## A drag carries {"kind": "part" | "slot" | "colour" | "material", ...}; a
+## part or slot drag also carries the colour and material it will land with,
+## which passing over a swatch or a material button changes.
+func _preview(p: String, c: int, m: int) -> TextureRect:
 	var t := TextureRect.new()
 	t.texture = _icons.get(p)
-	t.modulate = BrickWorld.get_filament_colour(c)
+	t.modulate = rgb(m, c)
 	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	t.size = Vector2(SLOT_PX, SLOT_PX)
@@ -227,9 +268,14 @@ func _preview(p: String, c: int) -> TextureRect:
 	return t
 
 
+func _tint_preview(data: Dictionary) -> void:
+	if _drag_preview != null and is_instance_valid(_drag_preview):
+		_drag_preview.modulate = rgb(int(data.material), int(data.colour))
+
+
 func _drag_part(_at: Vector2, p: String, source: Control) -> Variant:
-	var data := {"kind": "part", "part": p, "colour": colour()}
-	source.set_drag_preview(_preview(p, colour()).get_parent())
+	var data := {"kind": "part", "part": p, "colour": colour(), "material": material()}
+	source.set_drag_preview(_preview(p, colour(), material()).get_parent())
 	return data
 
 
@@ -238,32 +284,47 @@ func _drag_slot(_at: Vector2, i: int) -> Variant:
 	if p == "":
 		return null
 	var panel: Control = _slot_nodes[i].panel
-	panel.set_drag_preview(_preview(p, int(slots[i][1])).get_parent())
-	return {"kind": "slot", "from": i, "part": p, "colour": int(slots[i][1])}
+	panel.set_drag_preview(_preview(p, int(slots[i][1]), int(slots[i][2])).get_parent())
+	return {"kind": "slot", "from": i, "part": p, "colour": int(slots[i][1]),
+			"material": int(slots[i][2])}
 
 
-func _drag_colour(_at: Vector2, c: int, source: Control) -> Variant:
+func _drag_chip(source: Control, col: Color) -> void:
 	var r := ColorRect.new()
-	r.color = BrickWorld.get_filament_colour(c)
+	r.color = col
 	r.size = Vector2(28, 28)
 	r.position = -r.size * 0.5
 	var holder := Control.new()
 	holder.add_child(r)
 	source.set_drag_preview(holder)
-	return {"kind": "colour", "colour": c}
+
+
+func _drag_colour(_at: Vector2, c: int, m: int, source: Control) -> Variant:
+	_drag_chip(source, rgb(m, c))
+	return {"kind": "colour", "colour": c, "material": m}
+
+
+func _drag_material(_at: Vector2, m: int, source: Control) -> Variant:
+	_drag_chip(source, rgb(m, 0))
+	return {"kind": "material", "material": m}
 
 
 func _can_drop_on_slot(_at: Vector2, data: Variant, _i: int) -> bool:
-	return data is Dictionary and data.get("kind", "") in ["part", "slot", "colour"]
+	return data is Dictionary and data.get("kind", "") in ["part", "slot", "colour", "material"]
 
 
 func _drop_on_slot(_at: Vector2, data: Variant, i: int) -> void:
 	match str(data.kind):
 		"part":
-			slots[i] = [str(data.part), int(data.colour)]
+			slots[i] = [str(data.part), int(data.colour), int(data.material)]
 		"colour":
 			if str(slots[i][0]) != "":
 				slots[i][1] = int(data.colour)
+				slots[i][2] = int(data.material)
+		"material":
+			if str(slots[i][0]) != "":
+				slots[i][2] = int(data.material)
+				slots[i][1] = posmod(int(slots[i][1]), _count(int(data.material)))
 		"slot":
 			var from: int = data.from
 			var held: Array = slots[i]
@@ -273,23 +334,42 @@ func _drop_on_slot(_at: Vector2, data: Variant, i: int) -> void:
 
 
 ## Passing a part over a colour paints it: the picture under the cursor and
-## what will land in the slot both take the colour. Dropping it ON the colour
-## puts it in the selected slot, painted.
-func _can_drop_on_colour(_at: Vector2, data: Variant, c: int) -> bool:
+## what will land in the slot both take the colour -- and the material that
+## colour belongs to. Dropping it ON the colour puts it in the selected slot.
+func _can_drop_on_colour(_at: Vector2, data: Variant, c: int, m: int) -> bool:
 	if not (data is Dictionary and data.get("kind", "") in ["part", "slot"]):
 		return false
 	data.colour = c
-	if _drag_preview != null and is_instance_valid(_drag_preview):
-		_drag_preview.modulate = BrickWorld.get_filament_colour(c)
+	data.material = m
+	_tint_preview(data)
 	return true
 
 
-func _drop_on_colour(_at: Vector2, data: Variant, c: int) -> void:
+func _drop_on_colour(_at: Vector2, data: Variant, c: int, m: int) -> void:
 	if str(data.kind) == "slot":
 		slots[int(data.from)][1] = c
+		slots[int(data.from)][2] = m
 		select(int(data.from))
 	else:
-		set_slot(str(data.part), c)
+		set_slot(str(data.part), c, m)
+
+
+## The same for a material: passing over it makes the dragged part that.
+func _can_drop_on_material(_at: Vector2, data: Variant, m: int) -> bool:
+	if not (data is Dictionary and data.get("kind", "") in ["part", "slot"]):
+		return false
+	data.material = m
+	data.colour = posmod(int(data.colour), _count(m))
+	_tint_preview(data)
+	return true
+
+
+func _drop_on_material(_at: Vector2, data: Variant, m: int) -> void:
+	if str(data.kind) == "slot":
+		select(int(data.from))
+		set_material(m)
+	else:
+		set_slot(str(data.part), int(data.colour), m)
 
 
 func _on_slot_input(e: InputEvent, i: int) -> void:
@@ -305,10 +385,13 @@ func _refresh() -> void:
 		(n.panel as PanelContainer).add_theme_stylebox_override("panel",
 				_slot_style_on if i == selected else _slot_style)
 		(n.icon as TextureRect).texture = _icons.get(p)
-		(n.icon as TextureRect).modulate = BrickWorld.get_filament_colour(int(slots[i][1]))
+		(n.icon as TextureRect).modulate = rgb(int(slots[i][2]), int(slots[i][1]))
 		(n.label as Label).text = _short(p) if p != "" else ""
+		(n.panel as PanelContainer).tooltip_text = "%s %s %s" % [
+				BrickWorld.get_material_colour_name(int(slots[i][2]), int(slots[i][1])),
+				BrickWorld.get_material_name(int(slots[i][2])), p] if p != "" else ""
 	if _title != null:
-		_title.text = "Click a part for slot %d, or drag it to any slot -- across a colour to paint it. TAB closes." % (selected + 1)
+		_title.text = "Click a part for slot %d, or drag it to any slot -- across a material or colour to change it. TAB closes." % (selected + 1)
 
 
 ## "2x4 slope" from "slope_2x4": what a slot has room to say.
@@ -352,7 +435,9 @@ func _build_browser() -> void:
 	v.add_child(_tabs)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(8 * 84, 3 * 104)
+	# Two and a half rows: with 64 colours below it, three pushed the panel
+	# down over the toolbar.
+	scroll.custom_minimum_size = Vector2(8 * 84, 2.5 * 104)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(scroll)
 	_grid = GridContainer.new()
@@ -361,14 +446,49 @@ func _build_browser() -> void:
 	_grid.add_theme_constant_override("v_separation", 6)
 	scroll.add_child(_grid)
 
-	var swatches := HBoxContainer.new()
-	swatches.add_theme_constant_override("separation", 4)
-	v.add_child(swatches)
-	for c in BrickWorld.get_filament_count():
+	_materials = HBoxContainer.new()
+	_materials.add_theme_constant_override("separation", 4)
+	v.add_child(_materials)
+	for m in BrickWorld.get_material_count():
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(36, 28)
+		b.text = BrickWorld.get_material_name(m)
+		b.toggle_mode = true
+		b.add_theme_font_size_override("font_size", 12)
+		b.tooltip_text = "%s -- %s" % [BrickWorld.get_material_name(m),
+				"any colour" if BrickWorld.is_filament_material(m)
+				else "%d kinds" % BrickWorld.get_material_colour_count(m)]
+		b.pressed.connect(set_material.bind(m))
+		b.set_drag_forwarding(_drag_material.bind(m, b), _can_drop_on_material.bind(m),
+				_drop_on_material.bind(m))
+		_materials.add_child(b)
+	_swatch_label = Label.new()
+	_swatch_label.add_theme_font_size_override("font_size", 12)
+	v.add_child(_swatch_label)
+	_swatches = GridContainer.new()
+	_swatches.columns = 16
+	_swatches.add_theme_constant_override("h_separation", 4)
+	_swatches.add_theme_constant_override("v_separation", 4)
+	v.add_child(_swatches)
+	_rebuild_swatches()
+
+
+## The colours the selected slot's material offers: the whole filament palette,
+## or that material's own kinds, each named in its tooltip.
+func _rebuild_swatches() -> void:
+	if _swatches == null:
+		return
+	for child in _swatches.get_children():
+		child.queue_free()
+	var m := material()
+	for i in _materials.get_child_count():
+		(_materials.get_child(i) as Button).button_pressed = i == m
+	_swatch_label.text = "%s colours" % BrickWorld.get_material_name(m) \
+			if BrickWorld.is_filament_material(m) else "%s kinds" % BrickWorld.get_material_name(m)
+	for c in BrickWorld.get_material_colour_count(m):
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(36, 26)
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = BrickWorld.get_filament_colour(c)
+		sb.bg_color = rgb(m, c)
 		sb.set_corner_radius_all(4)
 		b.add_theme_stylebox_override("normal", sb)
 		var hover := sb.duplicate()
@@ -376,12 +496,11 @@ func _build_browser() -> void:
 		hover.border_color = Color(1, 1, 1)
 		b.add_theme_stylebox_override("hover", hover)
 		b.add_theme_stylebox_override("pressed", hover)
-		b.tooltip_text = "colour %d" % c
+		b.tooltip_text = BrickWorld.get_material_colour_name(m, c)
 		b.pressed.connect(set_colour.bind(c))
-		b.set_drag_forwarding(_drag_colour.bind(c, b), _can_drop_on_colour.bind(c),
-				_drop_on_colour.bind(c))
-		swatches.add_child(b)
-
+		b.set_drag_forwarding(_drag_colour.bind(c, m, b), _can_drop_on_colour.bind(c, m),
+				_drop_on_colour.bind(c, m))
+		_swatches.add_child(b)
 
 ## The parts the current tab and search allow, in catalogue order.
 func shown_parts() -> Array:
@@ -494,7 +613,7 @@ func _render_icon(p: String) -> void:
 func _load() -> void:
 	slots = []
 	for d in DEFAULTS:
-		slots.append([d[0], d[1]])
+		slots.append([d[0], d[1], 0])
 	if not FileAccess.file_exists(save_path):
 		return
 	var data = JSON.parse_string(FileAccess.get_file_as_string(save_path))
@@ -505,7 +624,9 @@ func _load() -> void:
 		var s: Array = saved[i]
 		var p := str(s[0])
 		if p == "" or BrickPalette.parts().has(p):
-			slots[i] = [p, int(s[1])]
+			# A toolbar saved before materials is PLA, which it was.
+			var m := clampi(int(s[2]) if s.size() > 2 else 0, 0, BrickWorld.get_material_count() - 1)
+			slots[i] = [p, posmod(int(s[1]), _count(m)), m]
 	selected = clampi(int(data.get("selected", 0)), 0, SLOTS - 1)
 
 

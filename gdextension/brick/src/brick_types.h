@@ -262,6 +262,9 @@ struct Block {
     Vector3i cell;            // min corner, grid coords absolute
     int32_t archetype = -1;
     uint8_t colour = 0;
+    // Index into brick::BRICK_MATERIALS. What `colour` means depends on it (a
+    // filament palette entry, or one of the material's own variants).
+    uint8_t material = 0;
     uint8_t hp = 255;         // quantised, the determinism substrate
     bool alive = true;
 

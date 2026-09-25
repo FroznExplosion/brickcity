@@ -250,6 +250,11 @@ public:
     /// attribute, so nothing structural changes -- but a face bake holds
     /// colours, so the chunk's bake is dropped and rebuilds on next demand.
     bool set_block_colour(int chunk_id, int block_id, int colour);
+    /// Materials (brick_grid.h BRICK_MATERIALS): what a block is made of. The colour
+    /// byte is read through it, so repainting a material keeps its colour
+    /// index -- which may name a different colour in the new material's list.
+    int get_block_material(int chunk_id, int block_id) const;
+    bool set_block_material(int chunk_id, int block_id, int material);
 
     bool is_solid(int chunk_id, Vector3i cell) const;
     int block_at(int chunk_id, Vector3i cell) const;
@@ -553,6 +558,14 @@ public:
     static float get_plate_metres();
     static Color get_filament_colour(int index);
     static int get_filament_count();
+    static int get_material_count();
+    static String get_material_name(int material);
+    static bool is_filament_material(int material);
+    static int get_material_colour_count(int material);
+    /// RGB resolved through the material; alpha carries the material to the
+    /// shaders (1.0 = material 0). See brick_grid.h block_rgba.
+    static Color get_material_colour(int material, int colour);
+    static String get_material_colour_name(int material, int colour);
 
     // --- determinism (Plan.md D9) -----------------------------------------
 

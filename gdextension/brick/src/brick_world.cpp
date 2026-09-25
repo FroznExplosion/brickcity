@@ -515,7 +515,9 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     Block b;
     b.cell = cell;
     b.archetype = archetype_id;
-    b.colour = (uint8_t)std::clamp(colour, 0, FILAMENT_COUNT - 1);
+    // Up to 255, not the palette size: for a variant material (wood, metal)
+    // the byte picks one of ITS list, which block_rgba resolves.
+    b.colour = (uint8_t)std::clamp(colour, 0, 255);
     b.decorative = decorative;
     c.blocks.push_back(b);
 
@@ -724,7 +726,9 @@ PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
         out.push_back(1.0f); out.push_back(0.0f); out.push_back(0.0f); out.push_back(px);
         out.push_back(0.0f); out.push_back(sy);   out.push_back(0.0f); out.push_back(py);
         out.push_back(0.0f); out.push_back(0.0f); out.push_back(sy);   out.push_back(pz);
-        out.push_back(col.r); out.push_back(col.g); out.push_back(col.b); out.push_back(1.0f);
+        // Alpha is the material (block_rgba), so a stud is shaded as what its
+        // brick is made of: a steel brick has steel studs.
+        out.push_back(col.r); out.push_back(col.g); out.push_back(col.b); out.push_back(col.a);
     };
 
     for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
@@ -734,7 +738,7 @@ PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
         }
         const Archetype &a = archetypes[b.archetype];
         const Vector3i base = b.cell - c.origin;
-        const Color col = filament_colour(b.colour);
+        const Color col = block_rgba(b.material, b.colour);
 
         for (const Archetype::SurfaceCell &sc : a.top_cells) {
             if (a.up_at(sc.x, sc.z) != FACE_STUD) {
@@ -1069,7 +1073,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         }
         const Archetype &a = parts[b.archetype];
         const Vector3i base = b.cell - c.origin;
-        const Color col = filament_colour(b.colour);
+        const Color col = block_rgba(b.material, b.colour);
         const Vector3 block_origin(base.x * cs.x, base.y * cs.y, base.z * cs.z);
         const int asize[3] = { a.size.x, a.size.y, a.size.z };
 
@@ -2130,7 +2134,7 @@ Array BrickWorld::build_mesh_internal(Chunk &c, MeshStats &st,
 
         const Vector3i asize = archetypes[b.archetype].size;
         const Vector3i base = b.cell - c.origin;
-        const Color col = filament_colour(b.colour);
+        const Color col = block_rgba(b.material, b.colour);
 
         // Where this block starts, in chunk-local metres. Every face vertex is
         // written relative to it so the shader can find the BLOCK's outline --
@@ -3631,6 +3635,7 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
             nb.support_broken = src_block.support_broken;
             nb.bottom_broken = src_block.bottom_broken;
             nb.hp = src_block.hp;
+            nb.material = src_block.material;   // a steel beam falls as steel
         }
         chunks[chunk_id].blocks[bid].alive = false;
         chunks[chunk_id].blocks[bid].detached = true;
@@ -3674,7 +3679,59 @@ Color BrickWorld::get_filament_colour(int index) {
 }
 
 int BrickWorld::get_filament_count() {
-    return FILAMENT_COUNT;
+    return FILAMENT_PALETTE_SIZE;
+}
+
+int BrickWorld::get_material_count() {
+    return BRICK_MATERIAL_COUNT;
+}
+
+String BrickWorld::get_material_name(int material) {
+    return (material >= 0 && material < BRICK_MATERIAL_COUNT) ? String(BRICK_MATERIALS[material].name) : String();
+}
+
+bool BrickWorld::is_filament_material(int material) {
+    return material >= 0 && material < BRICK_MATERIAL_COUNT && BRICK_MATERIALS[material].variants == nullptr;
+}
+
+int BrickWorld::get_material_colour_count(int material) {
+    return brick_material_colour_count(material);
+}
+
+Color BrickWorld::get_material_colour(int material, int colour) {
+    return block_rgba(material, colour);
+}
+
+String BrickWorld::get_material_colour_name(int material, int colour) {
+    return String(brick_material_colour_entry(material, colour).name);
+}
+
+int BrickWorld::get_block_material(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    const Chunk &c = chunks[chunk_id];
+    return (block_id >= 0 && block_id < (int)c.blocks.size()) ? (int)c.blocks[block_id].material : 0;
+}
+
+bool BrickWorld::set_block_material(int chunk_id, int block_id, int material) {
+    if (!valid_chunk(chunk_id) || material < 0 || material >= BRICK_MATERIAL_COUNT) {
+        return false;
+    }
+    Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size() || c.blocks[block_id].removed) {
+        return false;
+    }
+    if (c.blocks[block_id].material == (uint8_t)material) {
+        return true;
+    }
+    c.blocks[block_id].material = (uint8_t)material;
+    // Same reason as set_block_colour: the bake holds each face's colour, and
+    // the material rides in that colour's alpha.
+    if (c.bake.valid || bake_pending(chunk_id)) {
+        drop_chunk_bake(chunk_id);
+    }
+    return true;
 }
 
 // --- determinism -----------------------------------------------------------
@@ -4272,6 +4329,16 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_block_colour);
     ClassDB::bind_method(D_METHOD("set_block_colour", "chunk_id", "block_id", "colour"),
             &BrickWorld::set_block_colour);
+    ClassDB::bind_method(D_METHOD("get_block_material", "chunk_id", "block_id"),
+            &BrickWorld::get_block_material);
+    ClassDB::bind_method(D_METHOD("set_block_material", "chunk_id", "block_id", "material"),
+            &BrickWorld::set_block_material);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_count"), &BrickWorld::get_material_count);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_name", "material"), &BrickWorld::get_material_name);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("is_filament_material", "material"), &BrickWorld::is_filament_material);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_count", "material"), &BrickWorld::get_material_colour_count);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour", "material", "colour"), &BrickWorld::get_material_colour);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_name", "material", "colour"), &BrickWorld::get_material_colour_name);
     ClassDB::bind_method(D_METHOD("is_solid", "chunk_id", "cell"), &BrickWorld::is_solid);
     ClassDB::bind_method(D_METHOD("block_at", "chunk_id", "cell"), &BrickWorld::block_at);
     ClassDB::bind_method(D_METHOD("get_block_count", "chunk_id"), &BrickWorld::get_block_count);

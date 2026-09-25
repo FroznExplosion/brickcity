@@ -40,7 +40,9 @@ const COARSE := Vector3i(4, 9, 4)
 const SEAM_UNIT := Vector2(2.0 * STUD, 3.0 * PLATE)
 
 
-## Voxelise a recipe. Returns voxel coordinate -> filament colour index.
+## Voxelise a recipe. Returns voxel coordinate -> colour | material << 8: the
+## block's colour index and what it is made of, which together say how it is
+## drawn (BrickWorld.get_material_colour).
 ##
 ## `dead` is one entry per frame: a Dictionary of block ids that are gone. Pass
 ## nothing for an intact build.
@@ -77,7 +79,7 @@ static func voxels(world: BrickWorld, recipe: BuildRecipe, dead: Array = [],
 		var c: Vector3i = _rot(b, hi) + shift
 		var box_lo := Vector3i(mini(a.x, c.x), mini(a.y, c.y), mini(a.z, c.z))
 		var box_hi := Vector3i(maxi(a.x, c.x), maxi(a.y, c.y), maxi(a.z, c.z))
-		var colour := recipe.colour_of(i)
+		var colour := recipe.colour_of(i) | (recipe.material_of(i) << 8)
 		for vy in range(_floor_div(box_lo.y, vs.y), _ceil_div(box_hi.y, vs.y)):
 			for vz in range(_floor_div(box_lo.z, vs.z), _ceil_div(box_hi.z, vs.z)):
 				for vx in range(_floor_div(box_lo.x, vs.x), _ceil_div(box_hi.x, vs.x)):
@@ -103,7 +105,10 @@ static func build_arrays(world: BrickWorld, recipe: BuildRecipe, dead: Array = [
 
 	for key in filled:
 		var at: Vector3i = key
-		var col := BrickWorld.get_filament_colour(int(filled[key]))
+		var packed := int(filled[key])
+		# Material in the alpha, as the brick mesher writes it, so the shell of
+		# an oak build is oak from across the city too.
+		var col := BrickWorld.get_material_colour(packed >> 8, packed & 255)
 		var o := Vector3(at.x * s.x, at.y * s.y, at.z * s.z)
 		# -X, +X, -Y, +Y, -Z, +Z
 		if not filled.has(at + Vector3i(-1, 0, 0)):

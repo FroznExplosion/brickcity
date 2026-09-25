@@ -17,10 +17,11 @@ extends RefCounted
 ## order inside one BrickWorld and mean nothing across a save; names are the
 ## stable identity (Docs/Status.md, the part palette).
 
-const VERSION := 4
+const VERSION := 5
 ## Every older version means the same thing in a newer one, because each bump
 ## has only ADDED a column: v2 added welds, v3 added fixtures, v4 added the
-## structure/interior role per block. So an old recipe loads rather than being
+## structure/interior role per block, v5 the material per block (a file
+## without one is PLA all through, which is what everything was). So an old recipe loads rather than being
 ## refused, and it comes back with exactly what it was saved with -- a v1
 ## sideways build with nothing holding its frames on, a v2 build with no
 ## staircase in it, a v3 build that is structure all the way through, which is
@@ -56,6 +57,10 @@ var _frames := PackedInt32Array()  ## which frame each block is in
 ## an authored flag on a frame and said so; it is a flag on a BLOCK, which is
 ## the unit the city's own interiors turned out to need (Block::decorative).
 var _decor := PackedByteArray()
+## What each block is made of: an index into the extension's material list
+## (BrickWorld.get_material_name). The colour byte is read THROUGH it -- a
+## filament material takes the filament palette, wood or metal their own list.
+var _materials := PackedByteArray()
 
 ## Welds, as 2 ints per weld: the two BLOCK IDS joined.
 ##
@@ -97,7 +102,7 @@ func is_empty() -> bool:
 ## Append a block. Returns the block id it will have when built, which is also
 ## its index here -- the two are the same number by construction.
 func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0,
-		interior: bool = false) -> int:
+		interior: bool = false, material: int = 0) -> int:
 	var pi := parts.find(archetype_name)
 	if pi < 0:
 		pi = parts.size()
@@ -110,6 +115,7 @@ func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0,
 	_colours.push_back(clampi(colour, 0, 255))
 	_frames.push_back(maxi(frame, 0))
 	_decor.push_back(1 if interior else 0)
+	_materials.push_back(clampi(material, 0, 255))
 	return id
 
 
@@ -250,6 +256,7 @@ func remove_at(id: int) -> bool:
 	_colours.remove_at(id)
 	_frames.remove_at(id)
 	_decor.remove_at(id)
+	_materials.remove_at(id)
 	# A weld to a block that no longer exists is not a weld, and every weld to
 	# a block after it follows that block down.
 	var kept := PackedInt32Array()
@@ -273,6 +280,18 @@ func part_of(id: int) -> String:
 
 func colour_of(id: int) -> int:
 	return _colours[id]
+
+
+func material_of(id: int) -> int:
+	return _materials[id] if id >= 0 and id < _materials.size() else 0
+
+
+## Change what block `id` is made of -- the paint brush with a material in it.
+func set_material(id: int, material: int) -> bool:
+	if id < 0 or id >= _materials.size():
+		return false
+	_materials[id] = clampi(material, 0, 255)
+	return true
 
 
 ## Repaint block `id` -- the workshop's paint brush. A colour is not part of what
@@ -373,6 +392,8 @@ func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		if got >= 0:
 			placed += 1
 			built[i] = got
+			if material_of(i) != 0:
+				world.set_block_material(chunk_id, got, material_of(i))
 	apply_roles(world, built, func(_f: int) -> int: return chunk_id)
 	return placed
 
@@ -471,6 +492,8 @@ func build_into(asm: Assembly, palette: Dictionary, dims: Vector3i = Vector3i.ZE
 		if got >= 0:
 			placed += 1
 			built[i] = got
+			if material_of(i) != 0:
+				asm.world.set_block_material(asm.frames[f], got, material_of(i))
 	for i in weld_count():
 		var w := weld_blocks(i)
 		if not (built.has(w.x) and built.has(w.y)):
@@ -506,6 +529,7 @@ func to_dict() -> Dictionary:
 		"colours": _plain(_colours),
 		"block_frames": _plain(_frames),
 		"interior": _plain(_decor),
+		"materials": _plain(_materials),
 		"frame_rot": _plain(_frame_rot),
 		"frame_ticks": _plain(_frame_ticks),
 		"welds": _plain(_welds),
@@ -529,6 +553,8 @@ static func from_dict(d: Dictionary) -> BuildRecipe:
 	# A file written before the workshop had two layers has no role column, and
 	# it means what it always meant: all of it is structure.
 	r._decor = _bytes(d.get("interior", []))
+	# Before v5 there were no materials: everything was PLA, which is 0.
+	r._materials = _bytes(d.get("materials", []))
 	r._frame_rot = _ints(d.get("frame_rot", []))
 	r._frame_ticks = _ints(d.get("frame_ticks", []))
 	# A v1 file has no weld column at all. Missing is not the same as empty
@@ -560,6 +586,8 @@ static func from_dict(d: Dictionary) -> BuildRecipe:
 		r._frames.fill(0)
 	if r._decor.size() != r._parts.size():
 		r._decor.resize(r._parts.size())
+	if r._materials.size() != r._parts.size():
+		r._materials.resize(r._parts.size())
 	if r._cells.size() != r._parts.size() * 3 or r._colours.size() != r._parts.size() \
 			or r._frames.size() != r._parts.size() \
 			or r._frame_ticks.size() != r._frame_rot.size() * 3:

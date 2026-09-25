@@ -52,6 +52,7 @@ func _tick() -> void:
 	_check_hotbar()
 	_check_drag_and_drop()
 	_check_paint_brush()
+	_check_materials()
 	_check_spiral_flight("spiralcw_10x10", 1)
 	_check_spiral_flight("spiralccw_10x10", -1)
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -396,20 +397,84 @@ func _check_drag_and_drop() -> void:
 	_reset()
 	var hb: WorkshopHotbar = _ws._hotbar
 	hb.save_path = "user://_probe_hotbar.json"
-	hb._drop_on_slot(Vector2.ZERO, {"kind": "part", "part": "tile_2x4", "colour": 3}, 6)
+	hb._drop_on_slot(Vector2.ZERO, {"kind": "part", "part": "tile_2x4", "colour": 3, "material": 0}, 6)
 	_ok("a part dropped on a slot lands there, and that slot is selected",
-			hb.slots[6] == ["tile_2x4", 3] and hb.selected == 6, "%s %d" % [hb.slots[6], hb.selected])
-	var data := {"kind": "part", "part": "brick_1x2", "colour": 0}
-	hb._can_drop_on_colour(Vector2.ZERO, data, 5)
+			hb.slots[6] == ["tile_2x4", 3, 0] and hb.selected == 6, "%s %d" % [hb.slots[6], hb.selected])
+	var data := {"kind": "part", "part": "brick_1x2", "colour": 0, "material": 0}
+	hb._can_drop_on_colour(Vector2.ZERO, data, 5, 0)
 	_ok("dragged across a colour, it takes that colour", int(data.colour) == 5)
 	hb._drop_on_slot(Vector2.ZERO, data, 2)
-	_ok("and lands in that colour", hb.slots[2] == ["brick_1x2", 5], "%s" % [hb.slots[2]])
+	_ok("and lands in that colour", hb.slots[2] == ["brick_1x2", 5, 0], "%s" % [hb.slots[2]])
 	hb._drop_on_slot(Vector2.ZERO, {"kind": "slot", "from": 2}, 6)
 	_ok("a slot dropped on a slot swaps them",
-			hb.slots[6] == ["brick_1x2", 5] and hb.slots[2] == ["tile_2x4", 3])
-	hb._drop_on_slot(Vector2.ZERO, {"kind": "colour", "colour": 9}, 6)
-	_ok("a colour dropped on a slot paints it", hb.slots[6] == ["brick_1x2", 9])
+			hb.slots[6] == ["brick_1x2", 5, 0] and hb.slots[2] == ["tile_2x4", 3, 0])
+	hb._drop_on_slot(Vector2.ZERO, {"kind": "colour", "colour": 9, "material": 0}, 6)
+	_ok("a colour dropped on a slot paints it", hb.slots[6] == ["brick_1x2", 9, 0])
 	_ok("and the workshop is holding it", _ws._part() == "brick_1x2" and _ws._colour == 9)
+	DirAccess.remove_absolute("user://_probe_hotbar.json")
+
+
+func _check_materials() -> void:
+	print("\nmaterials: any colour of a filament, the kinds of wood or metal")
+	_reset()
+	var hb: WorkshopHotbar = _ws._hotbar
+	hb.save_path = "user://_probe_hotbar.json"
+	var metal := -1
+	var tpu := -1
+	for m in BrickWorld.get_material_count():
+		match BrickWorld.get_material_name(m):
+			"Metal": metal = m
+			"TPU": tpu = m
+	_ok("there is a metal and a TPU", metal > 0 and tpu > 0)
+	_ok("a filament takes the whole palette, metal its own list",
+			BrickWorld.get_material_colour_count(tpu) == BrickWorld.get_filament_count()
+			and BrickWorld.get_material_colour_count(metal) < BrickWorld.get_filament_count()
+			and not BrickWorld.is_filament_material(metal))
+	hb.select(0)
+	hb.set_part("brick_2x4")
+	hb.set_material(metal)
+	hb.set_colour(7)
+	_ok("the slot holds the material, and the workshop does", _ws._mat == metal and _ws._colour == 7)
+	_put("brick_2x4", Vector3i(10, 1, 10))
+	var f0: int = _ws.asm.frames[0]
+	var bid: int = _ws.world.block_at(f0, Vector3i(10, 1, 10))
+	_ok("placed as metal, in the world and the recipe",
+			_ws.world.get_block_material(f0, bid) == metal and _ws.recipe.material_of(0) == metal)
+	# The mesh carries it to the shader, in the vertex colour's alpha.
+	var arrays: Array = _ws.world.build_chunk_mesh(f0)
+	var cols: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var want := 1.0 - float(metal) / 255.0
+	var found := false
+	for c in cols:
+		if absf(c.a - want) < 0.002:
+			found = true
+			break
+	_ok("its faces carry the material in alpha, the baseplate still PLA (1.0)",
+			found and cols.size() > 0)
+	var d: Dictionary = _ws.recipe.to_dict()
+	var back := BuildRecipe.from_dict(d)
+	_ok("saved and loaded, it is still metal", back.material_of(0) == metal and back.colour_of(0) == 7)
+	d.erase("materials")
+	d["version"] = 4
+	_ok("a save from before materials loads as PLA", BuildRecipe.from_dict(d).material_of(0) == 0)
+	# Pick-block and the brush both carry it.
+	hb.select(3)
+	hb.set_slot("plate_1x1", 0, 0)
+	_ws._pick_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
+	_ok("middle click picks the material too", hb.material() == metal and hb.colour() == 7)
+	hb.set_slot("brick_2x4", 3, tpu)
+	_ws._set_painting(true)
+	_ws._stroke = []
+	_ws._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
+	_ws._end_stroke()
+	_ok("the brush paints the material", _ws.recipe.material_of(0) == tpu
+			and _ws.world.get_block_material(f0, bid) == tpu)
+	_ok("and undo puts the metal back", _ws._undo() and _ws.recipe.material_of(0) == metal)
+	_ws._set_painting(false)
+	var data := {"kind": "part", "part": "brick_1x2", "colour": 40, "material": 0}
+	hb._can_drop_on_material(Vector2.ZERO, data, metal)
+	_ok("a part dragged across a material becomes it, its colour wrapped into that list",
+			int(data.material) == metal and int(data.colour) < BrickWorld.get_material_colour_count(metal))
 	DirAccess.remove_absolute("user://_probe_hotbar.json")
 
 

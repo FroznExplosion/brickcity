@@ -128,6 +128,9 @@ var _keys_on := true
 var _interior := false
 var _part_index := 0
 var _colour := 4
+## What the next brick is made of: an index into BrickWorld's materials. The
+## colour is read through it (a filament palette entry, or a wood or metal).
+var _mat := 0
 ## The toolbar and parts browser (scripts/workshop_hotbar.gd). It sets
 ## `_part_index` and `_colour` when its selection changes; nothing reads it back,
 ## so a probe or the stair builder setting them directly is unaffected.
@@ -210,7 +213,7 @@ var _overlay_on := false
 var _stress_dirty := true
 var _stress := {}           ## block id -> load / capacity, for the overlay
 
-var _material: StandardMaterial3D
+var _material: Material
 var _ghost_material: StandardMaterial3D
 
 
@@ -226,9 +229,12 @@ func _ready() -> void:
 	_lay_baseplate()
 	world.set_foundation_level(chunk, 0)
 
-	_material = StandardMaterial3D.new()
-	_material.vertex_color_use_as_albedo = true
-	_material.roughness = 0.75
+	# The city's brick shader, not a plain material: seams, printed layers and
+	# the MATERIALS (wood, metal, TPU ...) all live there, and a workshop that
+	# drew bricks some other way would show a build the city never does.
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/brick.gdshader")
+	_material = sm
 
 	_ghost_material = StandardMaterial3D.new()
 	_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -476,6 +482,19 @@ func _build_lights() -> void:
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.5, 0.55, 0.62)
 	e.ambient_light_energy = 0.55
+	# Something to REFLECT, behind the plain background. A metal brick is lit
+	# almost entirely by what it mirrors, and with nothing but a flat colour
+	# around it every steel and brass brick came out black. The city has a
+	# procedural sky for the same job.
+	var sky := Sky.new()
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.38, 0.48, 0.62)
+	sky_mat.sky_horizon_color = Color(0.72, 0.76, 0.80)
+	sky_mat.ground_horizon_color = Color(0.55, 0.55, 0.56)
+	sky_mat.ground_bottom_color = Color(0.25, 0.25, 0.27)
+	sky.sky_material = sky_mat
+	e.sky = sky
+	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.environment = e
 	add_child(env)
 
@@ -584,13 +603,14 @@ func _style(l: Label, col: Color, size: int = 15) -> void:
 
 
 ## The toolbar's selection became the part and colour in hand.
-func _on_hotbar(part: String, colour: int) -> void:
+func _on_hotbar(part: String, colour: int, material: int) -> void:
 	if part == "":
 		return
 	var i := _parts().find(part)
 	if i >= 0:
 		_part_index = i
 	_colour = colour
+	_mat = material
 
 
 ## Middle click: the brick under the cursor, its part, turn and colour, into
@@ -617,13 +637,11 @@ func _pick_ray(from: Vector3, dir: Vector3) -> void:
 	var o := BrickPalette.orientation_of(arch_name)
 	_yaw = o.x
 	_flip = o.y != 0
-	_hotbar.set_slot(part, world.get_block_colour(hit.frame, hit.block))
+	_hotbar.set_slot(part, world.get_block_colour(hit.frame, hit.block),
+			world.get_block_material(hit.frame, hit.block))
 
 
 func _set_painting(on: bool) -> void:
-	if on and not world.has_method("set_block_colour"):
-		push_warning("[workshop] the paint brush needs the extension rebuilt (set_block_colour)")
-		return
 	_painting = on
 	_end_stroke()
 	_ghost_studs.visible = not on
@@ -672,13 +690,13 @@ func _paint_ray(from: Vector3, dir: Vector3) -> bool:
 	if hit.is_empty():
 		return false
 	var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
-	if rid < 0 or recipe.colour_of(rid) == _colour:
+	if rid < 0 or (recipe.colour_of(rid) == _colour and recipe.material_of(rid) == _mat):
 		return false
 	for e in _stroke:
 		if int(e[0]) == rid:
 			return false
-	_stroke.append([rid, recipe.colour_of(rid)])
-	_repaint(rid, _colour)
+	_stroke.append([rid, recipe.colour_of(rid), recipe.material_of(rid)])
+	_repaint(rid, _colour, _mat)
 	_remesh()
 	return true
 
@@ -691,15 +709,14 @@ func _end_stroke() -> void:
 
 
 ## One brick, in the world and in the recipe together.
-func _repaint(rid: int, colour: int) -> void:
+func _repaint(rid: int, colour: int, material: int) -> void:
 	if rid < 0 or rid >= _placed_at.size():
 		return
 	var at: Array = _placed_at[rid]
 	if int(at[0]) >= 0:
-		# call(), not a direct call: GDScript checks native method names when it
-		# parses, and an extension built before set_block_colour existed would
-		# stop the whole workshop loading rather than just the brush.
-		world.call("set_block_colour", asm.frames[at[0]], at[1], colour)
+		world.set_block_material(asm.frames[at[0]], at[1], material)
+		world.set_block_colour(asm.frames[at[0]], at[1], colour)
+	recipe.set_material(rid, material)
 	recipe.set_colour(rid, colour)
 
 
@@ -1332,14 +1349,16 @@ func _update_hud() -> void:
 	if not _lock.is_empty():
 		state += "  [plane locked -- E]"
 	if _painting:
-		state = "PAINT BRUSH (B) -- LMB paints in colour %d" % _colour
+		state = "PAINT BRUSH (B) -- LMB paints %s %s" % [
+				BrickWorld.get_material_colour_name(_mat, _colour), BrickWorld.get_material_name(_mat)]
 	var worst := 0.0
 	for v in _stress.values():
 		worst = maxf(worst, v)
 	var interior := recipe.interior_count()
-	_hud.text = "%s  [%s%s]  colour %d   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s" % [
+	_hud.text = "%s  [%s%s]  %s   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s" % [
 		_part(), _facing(), " inverted" if _flip else "",
-		_colour, FRAME_NAMES[_frame] if _frame < FRAME_NAMES.size() else str(_frame),
+		"%s %s" % [BrickWorld.get_material_colour_name(_mat, _colour), BrickWorld.get_material_name(_mat)],
+		FRAME_NAMES[_frame] if _frame < FRAME_NAMES.size() else str(_frame),
 		"INTERIOR (I)  — weighs nothing, holds nothing up" if _interior
 				else "STRUCTURE (I)  — what holds the building up",
 		_cell, state, recipe.size(), recipe.size() - interior, interior,
@@ -1403,6 +1422,8 @@ func _place() -> void:
 		return
 	var arch_name := _archetype_name()
 	var placed := asm.place(chunk, _cell, palette[arch_name], _colour)
+	if placed >= 0 and _mat != 0:
+		world.set_block_material(chunk, placed, _mat)
 	if placed < 0:
 		return
 	# A brick put onto a side stud is held by that stud, and a cross-frame join
@@ -1416,7 +1437,7 @@ func _place() -> void:
 	# in the same order, so recipe index == block id, which is the contract
 	# BuildRecipe exists to keep.
 	var rid := recipe.size()
-	recipe.add(arch_name, _cell, _colour, _recipe_frame_for(_frame), _interior)
+	recipe.add(arch_name, _cell, _colour, _recipe_frame_for(_frame), _interior, _mat)
 	_placed_at.append([_frame, placed])
 	# The weld goes in the RECIPE as well, or the build stands here and falls
 	# apart everywhere else: a saved file, a city placement and a replay all
@@ -1493,7 +1514,7 @@ func _undo() -> bool:
 		_edits.pop_back()
 		var stroke: Array = _paints.pop_back()
 		for i in range(stroke.size() - 1, -1, -1):
-			_repaint(int(stroke[i][0]), int(stroke[i][1]))
+			_repaint(int(stroke[i][0]), int(stroke[i][1]), int(stroke[i][2]))
 		_after_edit()
 		return true
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture":
@@ -1610,6 +1631,7 @@ func _rotate_last() -> void:
 
 	var cell := recipe.cell_of(id)
 	var colour := recipe.colour_of(id)
+	var mat := recipe.material_of(id)
 	var rf := recipe.frame_of(id)
 	var at: Array = _placed_at[_placed_at.size() - 1]
 	var af: int = at[0]
@@ -1631,12 +1653,14 @@ func _rotate_last() -> void:
 		# It does not fit turned. Put the original back rather than losing it.
 		var back := asm.place(asm.frames[af], cell, palette[arch_name], colour)
 		if back >= 0:
-			recipe.add(arch_name, cell, colour, rf, was_interior)
+			world.set_block_material(asm.frames[af], back, mat)
+			recipe.add(arch_name, cell, colour, rf, was_interior, mat)
 			_placed_at.append([af, back])
 			_edits.append("brick")
 		_after_edit()
 		return
-	recipe.add(turned, cell, colour, rf, was_interior)
+	world.set_block_material(asm.frames[af], placed, mat)
+	recipe.add(turned, cell, colour, rf, was_interior, mat)
 	_placed_at.append([af, placed])
 	_edits.append("brick")
 	_after_edit()
@@ -1717,7 +1741,7 @@ func _remesh() -> void:
 ## A direct call is a PARSE error wherever that work is not present, and a parse
 ## error takes the whole workshop down with it -- which is what the first commit
 ## attempt of this found, building from a clean checkout.
-static var _studs_fallback: StandardMaterial3D = null
+static var _studs_fallback: Material = null
 
 static func _stud_material() -> Material:
 	var terrain: Script = load("res://scripts/terrain_tile.gd")
@@ -1726,9 +1750,12 @@ static func _stud_material() -> Material:
 			if m.name == "stud_material":
 				return terrain.call("stud_material")
 	if _studs_fallback == null:
-		_studs_fallback = StandardMaterial3D.new()
-		_studs_fallback.vertex_color_use_as_albedo = true
-		_studs_fallback.roughness = 0.75
+		# The printed stud shader, not a plain material: it reads the material
+		# a stud's brick is made of (brick_materials.gdshaderinc), so a metal
+		# brick has metal studs even where the terrain does not supply one.
+		var sm := ShaderMaterial.new()
+		sm.shader = load("res://shaders/printed.gdshader")
+		_studs_fallback = sm
 	return _studs_fallback
 
 
@@ -1772,7 +1799,8 @@ func _side_stud_instances(frame_chunk: int) -> PackedFloat32Array:
 	for at in _placed_at:
 		if int(at[0]) != fi or int(at[1]) < 0:
 			continue
-		var col := BrickWorld.get_filament_colour(world.get_block_colour(frame_chunk, int(at[1])))
+		var col := BrickWorld.get_material_colour(world.get_block_material(frame_chunk, int(at[1])),
+				world.get_block_colour(frame_chunk, int(at[1])))
 		out.append_array(_side_stud_floats(frame_chunk, int(at[1]), inv, col))
 	return out
 
@@ -1785,7 +1813,7 @@ func _side_stud_floats(frame_chunk: int, block: int, inv: Transform3D,
 		var b := inv.basis * _basis_up(Vector3(st.dir as Vector3i))
 		var o: Vector3 = inv * (st.centre as Vector3)
 		for v in [b.x.x, b.y.x, b.z.x, o.x, b.x.y, b.y.y, b.z.y, o.y,
-				b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, 1.0]:
+				b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, col.a]:
 			out.push_back(v)
 	return out
 
@@ -1993,6 +2021,8 @@ func _load() -> void:
 				palette[recipe.part_of(i)], recipe.colour_of(i))
 		if bid >= 0:
 			placed += 1
+			if recipe.material_of(i) != 0:
+				world.set_block_material(asm.frames[af], bid, recipe.material_of(i))
 		_placed_at.append([af, bid])
 		_edits.append("brick")
 		if rf != 0:
