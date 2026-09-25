@@ -20,6 +20,13 @@ not step on each other.
 - Stage only your own files. Never commit another area's half-finished work.
 - Temporary worktrees for experiments go in your scratchpad and are removed
   when done (`git worktree remove`).
+- **Remove the godot-cpp junction FIRST** (see Building):
+  `cmd /c rmdir <worktree>\gdextension\brick\godot-cpp`, check it is gone,
+  then `git worktree remove`. A forced `git worktree remove` (or any recursive
+  delete) follows the junction and empties the MAIN folder's godot-cpp --
+  sources and built library -- which breaks every worktree's build. It
+  happened once (2026-09-25); the fix was `git submodule update --init
+  gdextension/brick/godot-cpp` and a full rebuild in the main folder.
 
 ## Areas
 
