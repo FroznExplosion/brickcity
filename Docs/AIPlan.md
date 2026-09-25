@@ -237,6 +237,54 @@ brick mech is piloted with the ported motor. Loopback agrees.
   - Found on the way: `StatusManager` named the `StatusTicker` autoload directly, which fails to
     compile under `--script` — and every probe that loads the city scene now reaches it through
     the gun. Looked up by path.
+- **Stage 3 done (2026-09-25): a player on the `Pawn` component (D7).**
+  - **`PawnIntents`** is the brain contract for characters, BoomerBorder's one idea: a brain
+    fills it, the motor reads it and never knows which brain it has — move (world direction),
+    look, run, crouch, fire, and edge-triggered jump and reload.
+  - **`Pawn`** is a component under a `CharacterBody3D`, never a base class. Its motor is the
+    debug walker's rules (walk/run/crouch speeds in bricks per second, auto-crouch along the
+    motion, step over one course, jump one course) moved onto the physics tick, so the same
+    intents make the same move for every brain and on every machine. It carries a team, a
+    `HealthPool` where a bullet finds it, and a `GunController` it feeds `fire`/`reload`.
+  - **`PlayerController`** turns keys and mouse into intents and puts the camera on the pawn's
+    interpolated eye; look is whatever the camera points at. In the city, **`V`** stands a
+    player pawn where the camera is and hands it the gun; `V` again leaves. The debug walker
+    (SPACE SPACE) is untouched — Terrain and water have swimming in progress in it.
+  - Gates: `tools/pawn_probe.gd` 7 (scripted intents, as an AI will send them: walks, steps a
+    kerb, runs, crouches, strafes at crouch speed, jumps and lands; **two pawns given the same
+    intents walk the same path to 0.00000 m over 150 ticks**); city `-- --play` 9 (lands, eye
+    at `EYE_HEIGHT`, kerb yes and wall no, ducks a beam from a brick floor, holding the mouse
+    fires the pawn's gun into a wall through the authority and never into itself, V leaves).
+  - Found: the debug walker puts the eye a plate under the crown (1.54 m) where its own
+    `EYE_HEIGHT` says 1.42 m, and `--walk`'s beam (1.40 m underside) predates the figure being
+    resized — 3 of its checks fail on main. The pawn uses the head's middle and a beam at
+    1.75 m. And `--shot`'s "settled wreckage is still breakable" fails on current main without
+    any of this (a blast hits 3 settled pieces and removes nothing) — from another area's merge.
+- **Stage 4 done (2026-09-25): a greybox mech, piloted with the ported motor.**
+  - BoomerBorder's `TitanMotor` and `TitanIntents` are copied unchanged (`scripts/mech/`) apart
+    from the step height, restated as three brick courses. `titan.gd` (3,460 lines of scene,
+    cockpit, exits and summon built around Synty meshes), `TitanWeapon` and the AI brain stayed
+    behind: the arm is a `GunController` like every other gun, and the brain belongs to the AI
+    phases on LimboAI.
+  - **`Mech`** is a component like `Pawn`: the motor, a body sized on the grid (16 courses tall,
+    5 studs of radius, cockpit 10 courses up — BoomerBorder's 6.9 × 1.7 m titan and its 4.2 m
+    torso, which lands on a course exactly), a 2,500 hp `HealthPool`, a greybox, and **the arm:
+    yaw ±55° of the torso, pitch free to ±89° (A15)**, converging on where the crosshair lands.
+  - **`MechPilot`** is the pilot brain: WASD relative to the torso, look from the camera, SHIFT
+    sprint, Q dash, LMB fire, R reload; the camera rides the interpolated cockpit. In the city
+    **`M`** boards (spawning a mech ahead of the camera if there is none) and leaves.
+  - Gate: city `-- --mech` 13 — stands, cockpit at 4.2 m, walks at 9 m/s, sprints faster, stops,
+    dashes on a charge, the torso lags the look then arrives and the legs follow, steps a metre of
+    cover and not a storey, the arm pitches past 40° and its rounds wear a wall high above the
+    cockpit through the authority, M leaves it parked, and the log replays.
+- **Stage 5 done (2026-09-25): LimboAI v1.7.0** (`addons/limboai`, MIT), from Red Dawn's copy:
+  Windows and Linux x86_64 only, 19 MB, the descriptor trimmed to match. Used as AI.md says:
+  **a behaviour tree is a brain that fills `PawnIntents`**, never a second way to move a body.
+  `BTMoveTo` (`scripts/ai/`) is the first task. Gate: `tools/limbo_probe.gd` 5 — the extension
+  loads, a two-task tree walks a Pawn to one point and then runs to another by the Pawn's own
+  motor, reports success and leaves the intents at rest.
+- **Still to do in P1:** `SwarmCore` into the build, the procedural creatures (Windows build of
+  `creature_forge`), and loopback with a player's gun.
 
 ### P2 — `AIWorld` core · M
 
