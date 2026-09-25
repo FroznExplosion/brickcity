@@ -11,12 +11,14 @@ Build (SCons is pip-installed and not on PATH on this machine):
 
 env = SConscript("godot-cpp/SConstruct")
 
-env.Append(CPPPATH=["src/", "src/swarm/"])
+env.Append(CPPPATH=["src/", "src/swarm/", "src/creature/"])
 
 # SwarmCore -- BoomerBorder's C++ horde (Docs/AIPlan.md P1, R18) -- is built into
 # this library rather than as an extension of its own: one godot-cpp, one DLL, and
 # horde code can read the brick grid directly, which a second extension cannot.
-sources = Glob("src/*.cpp") + Glob("src/swarm/*.cpp")
+# MeshForge -- the procedural creatures' native mesh builder (BoomerBorder's
+# creature_forge, AIPlan P1, R20) -- likewise: it shipped as a Linux-only library.
+sources = Glob("src/*.cpp") + Glob("src/swarm/*.cpp") + Glob("src/creature/*.cpp")
 
 output_dir = "../../addons/brick/bin"
 

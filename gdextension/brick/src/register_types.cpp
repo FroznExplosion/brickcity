@@ -1,6 +1,7 @@
 #include "register_types.h"
 #include "brick_world.h"
 #include "brick_terrain.h"
+#include "creature/mesh_forge.h"
 #include "swarm/flow_grid.h"
 #include "swarm/lane_graph.h"
 #include "swarm/swarm_core.h"
@@ -22,6 +23,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();
     ClassDB::register_class<FlowGrid>();
+    // MeshForge, the procedural creatures' mesh builder (src/creature/).
+    ClassDB::register_class<MeshForge>();
 }
 
 void uninitialize_brick_module(ModuleInitializationLevel p_level) {
