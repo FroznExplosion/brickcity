@@ -1,6 +1,9 @@
 #include "register_types.h"
 #include "brick_world.h"
 #include "brick_terrain.h"
+#include "swarm/flow_grid.h"
+#include "swarm/lane_graph.h"
+#include "swarm/swarm_core.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/defs.hpp>
@@ -15,6 +18,10 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<BrickWorld>();
     ClassDB::register_class<BrickTerrain>();
     ClassDB::register_class<BrickWave>();
+    // SwarmCore, from BoomerBorder (src/swarm/).
+    ClassDB::register_class<SwarmCore>();
+    ClassDB::register_class<LaneGraph>();
+    ClassDB::register_class<FlowGrid>();
 }
 
 void uninitialize_brick_module(ModuleInitializationLevel p_level) {
