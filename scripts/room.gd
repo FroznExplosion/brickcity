@@ -21,7 +21,22 @@ extends RefCounted
 
 ## What the room is for. Drives the manifest, so what you find in a room is
 ## consistent with what the room is.
-const KINDS := ["storeroom", "office", "kitchen", "empty"]
+##
+## APPEND ONLY. A room's kind is an index drawn from its seed, and the first
+## four are what every generated building has had since rooms existed: a
+## building with no program still draws from those four alone
+## (`LEGACY_KINDS`), so adding a kind here changes no room anybody has seen.
+## The rest are reached through a program (Docs/Workshop.md, Stage F).
+const KINDS := ["storeroom", "office", "kitchen", "empty",
+		"bedroom", "living", "bathroom", "lab", "shop"]
+const LEGACY_KINDS := 4
+## How a far window draws a room of each kind: an index into the drawings
+## shaders/window_interior.gdshader has (storeroom, office, kitchen, empty).
+## A new kind borrows the nearest one until it gets a drawing of its own.
+const WINDOW_STYLE := {
+	"storeroom": 0, "office": 1, "kitchen": 2, "empty": 3,
+	"bedroom": 1, "living": 2, "bathroom": 3, "lab": 1, "shop": 0,
+}
 
 var id := -1
 var kind := "storeroom"

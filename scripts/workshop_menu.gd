@@ -66,6 +66,7 @@ var _role := 0
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
 enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
 enum { G_ROOMS, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
+enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE }
 
 
 func _ready() -> void:
@@ -157,6 +158,15 @@ func _build_bar() -> void:
 		[],
 		["Test in city (Enter)", F_CITY, 0],
 	], _on_file)
+
+	_menu(row, "Edit", [
+		["Undo (Z)", E_UNDO, 0],
+		[],
+		["Select inserted build under cursor (X)", E_SELECT, 0],
+		["Move selected (M)", E_MOVE, 0],
+		["Copy selected (C)", E_COPY, 0],
+		["Delete selected (Del)", E_DELETE, 0],
+	], _on_edit)
 
 	_insert = _menu(row, "Insert", [
 		["Build from library…", I_BUILD, KEY_MASK_CTRL | KEY_I],
@@ -253,6 +263,15 @@ func _on_file(id: int) -> void:
 		F_QUICK_SAVE: action.emit("quick_save", null)
 		F_QUICK_LOAD: action.emit("quick_load", null)
 		F_CITY: action.emit("city", null)
+
+
+func _on_edit(id: int) -> void:
+	match id:
+		E_UNDO: action.emit("undo", null)
+		E_SELECT: action.emit("select_group", null)
+		E_MOVE: action.emit("move_group", null)
+		E_COPY: action.emit("copy_group", null)
+		E_DELETE: action.emit("delete_group", null)
 
 
 func _on_insert(id: int) -> void:

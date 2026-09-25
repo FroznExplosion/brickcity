@@ -39,6 +39,27 @@ const ITEMS := {
 		["brick_1x4_z", Vector3i(0, 4, 0), 0],
 		["plate_1x4_z", Vector3i(0, 7, 0), 1],
 	],
+	# Four legs, two 4x4 plates for the mattress, a headboard along one end.
+	"bed": [
+		["brick_1x1", Vector3i(0, 0, 0), 0],
+		["brick_1x1", Vector3i(3, 0, 0), 0],
+		["brick_1x1", Vector3i(0, 0, 7), 0],
+		["brick_1x1", Vector3i(3, 0, 7), 0],
+		["plate_4x4", Vector3i(0, 3, 0), 1],
+		["plate_4x4", Vector3i(0, 3, 4), 1],
+		["brick_1x4_x", Vector3i(0, 4, 0), 0],
+	],
+	# A low block with a seat plate: sofa, bench, counter stool.
+	"bench": [
+		["brick_2x4_x", Vector3i(0, 0, 0), 0],
+		["plate_2x4_x", Vector3i(0, 3, 0), 1],
+	],
+	# Waist-high, long: a counter or a workbench.
+	"counter": [
+		["brick_2x4_x", Vector3i(0, 0, 0), 0],
+		["brick_2x4_x", Vector3i(0, 3, 0), 0],
+		["tile_2x4_x", Vector3i(0, 6, 0), 1],
+	],
 }
 
 ## What each kind of room is likely to hold. Repeats are weights.
@@ -47,6 +68,12 @@ const BY_KIND := {
 	"office": ["table", "chair", "chair", "shelf"],
 	"kitchen": ["table", "chair", "crate", "crate"],
 	"empty": [],
+	# Reached only through a program: see Room.LEGACY_KINDS.
+	"bedroom": ["bed", "shelf", "chair"],
+	"living": ["bench", "bench", "table", "shelf"],
+	"bathroom": ["counter", "shelf"],
+	"lab": ["counter", "counter", "table", "shelf", "crate"],
+	"shop": ["shelf", "shelf", "counter", "crate"],
 }
 
 ## Studs to keep clear of a wall, so a room's contents are not inside the
@@ -246,7 +273,8 @@ static func kind_index(room_seed: int, program: Dictionary = {}) -> int:
 	for k in Room.KINDS:
 		total += maxi(int(program.get(k, 0)), 0)
 	if total <= 0:
-		return posmod(room_seed, n)
+		# No program: the four kinds every building has always had.
+		return posmod(room_seed, Room.LEGACY_KINDS)
 	var v := posmod(room_seed, total)
 	for i in n:
 		var w := maxi(int(program.get(Room.KINDS[i], 0)), 0)

@@ -325,6 +325,40 @@ static func _turn_box(rel: Vector3i, size: Vector3i, d: Vector3i, k: int) -> Vec
 	return r
 
 
+## Blocks `first` .. `first + count - 1` as a recipe of their own, in their
+## own cells: what a group IS, lifted out to be moved or copied. Welds with
+## both ends inside come along; fixtures and generated buildings are not
+## blocks and are not in a group.
+func extract(first: int, count: int) -> BuildRecipe:
+	var out := BuildRecipe.new()
+	out.name = name
+	out.kind = kind
+	var last := mini(first + count, size())
+	var fmap := {0: 0}
+	for i in range(first, last):
+		var rf := frame_of(i)
+		if not fmap.has(rf):
+			fmap[rf] = out.add_frame(frame_rotation(rf), frame_ticks(rf))
+		out.add(part_of(i), cell_of(i), colour_of(i), fmap[rf], role_of(i), material_of(i))
+	for i in weld_count():
+		var w := weld_blocks(i)
+		if w.x >= first and w.x < last and w.y >= first and w.y < last:
+			out.add_weld(w.x - first, w.y - first)
+	return out
+
+
+## The innermost group holding block `id`, as an index into `groups`, or -1.
+func group_of(id: int) -> int:
+	var best := -1
+	for g in groups.size():
+		var first := int(groups[g].first)
+		var count := int(groups[g].count)
+		if id >= first and id < first + count:
+			if best < 0 or count < int(groups[best].count):
+				best = g
+	return best
+
+
 ## A cell as JSON keeps it: three plain numbers.
 static func _plain_cell(c: Vector3i) -> Array:
 	return [c.x, c.y, c.z]
