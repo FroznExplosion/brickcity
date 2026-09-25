@@ -1082,6 +1082,17 @@ carried 80% of every collision box, one per brick, and almost nothing ever settl
 The default city's stress pass: physics 12.4 -> 9.4 ms a frame. The trade to know about: a city
 watched from far off breaks less where its towers land.
 
+**And the worst single tick was a promotion.** `--shot` breaks the damage phase down now (promote,
+rooms, hit, loose pieces, collision update), and the 345 ms tick was 334 ms of turning a big tower
+from shell into bricks in the tick a blast hit it -- 292 ms of that laying its bricks. `_fill_rect`
+walked every stud of every floor trying every plate size, ~300 failed placements per lattice cell
+after laying its one panel. A cell that is one panel is now laid directly, a cell a keep-out
+swallows is skipped, and the wall band is only walked when a keep-out reaches it -- **the same
+blocks in the same order** (every city shape fingerprinted before and after), so no damage record
+moves. The big tower builds in 38 ms instead of 292; promotions average 24 ms instead of 116; the
+worst blast tick is 12 ms. What is left in the worst tick is the big building's structural solve
+(stress, stability, detach: ~120 ms) and the islands' own loop (~75 ms).
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

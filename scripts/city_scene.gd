@@ -2207,7 +2207,9 @@ func _shear_building(id: int, point: Vector3, radius: float) -> void:
 			id, point, radius, Vector3.ZERO, IslandManager.SHEAR_MAX_BLOCKS)
 	_impact_damage += loosened.size()
 	_mark_dirty(id)
-	_remesh(id)
+	# Queued, as a blast's is: a landing is inside the islands' own tick, and a
+	# rebuild there is paid in the worst tick of a collapse.
+	_queue_remesh(id)
 
 
 ## Which building owns a physics body -- shell tier or brick tier, either counts.
@@ -2299,7 +2301,9 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 		var box := registry.local_box(b.id).grow(radius)
 		if not box.has_point(local):
 			continue
+		var t_part := Time.get_ticks_usec()
 		var chunk := _promote(b.id)
+		t_part = _part("dmg_promote", t_part)
 		if chunk < 0:
 			continue
 		# A COMPROMISED room resolves before the hit lands, whether or not
@@ -2338,7 +2342,9 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 			var dt := float(Time.get_ticks_usec() - t_room) / 1000.0
 			_room_compromise_ms += dt
 			_room_open_worst = maxf(_room_open_worst, dt)
+		t_part = _part("dmg_rooms", t_part)
 		var killed: PackedInt32Array = world.apply_hit(chunk, point, radius)
+		t_part = _part("dmg_hit", t_part)
 		# Committed as soon as it is applied, so the log's order is the order
 		# the world changed in.
 		if not killed.is_empty():
@@ -2384,8 +2390,10 @@ func _apply_blast(point: Vector3, radius: float) -> void:
 
 	# Loose pieces in range are damaged, and everything nearby is woken -- a
 	# settled section resting on a wall that has just gone must fall, not hang.
+	var t_pieces := Time.get_ticks_usec()
 	islands.damage_near(point, radius)
 	islands.wake_near(point, radius * 4.0)
+	_part("dmg_pieces", t_pieces)
 
 
 func _fire(radius: float) -> void:
@@ -2427,6 +2435,14 @@ func _fire(radius: float) -> void:
 # ---------------------------------------------------------------------------
 # Per-tick: collapse whatever is materialised
 # ---------------------------------------------------------------------------
+
+## Time a PART of a phase, into the same per-tick record, so the worst tick can
+## say what inside `damage` it was: see _report_profile.
+func _part(key: String, t0: int) -> int:
+	var now := Time.get_ticks_usec()
+	_prof[key] = float(_prof.get(key, 0.0)) + float(now - t0) / 1000.0
+	return now
+
 
 func _mark(phase: String, t0: int) -> int:
 	var now := Time.get_ticks_usec()
@@ -2536,9 +2552,11 @@ func _physics_process(_delta: float) -> void:
 		_apply_blast(h[0], h[1])
 		hits += 1
 	# One space lift per building per tick, however many hits landed on it.
+	var t_dis := Time.get_ticks_usec()
 	for id in _pending_disable:
 		_disable(id, _pending_disable[id])
 	_pending_disable.clear()
+	_part("dmg_disable", t_dis)
 	t = _mark("damage", t)
 
 	_retirer.drain()
@@ -3872,6 +3890,10 @@ func _report_profile() -> void:
 	for k in keys:
 		line += "%s %.1f  " % [k, float(_prof_worst.get(k, 0.0))]
 	print("[prof]   " + line)
+	print("[prof]   of which damage: promote %.1f  rooms %.1f  hit %.1f  loose pieces %.1f  collision update %.1f"
+			% [float(_prof_worst.get("dmg_promote", 0.0)), float(_prof_worst.get("dmg_rooms", 0.0)),
+			float(_prof_worst.get("dmg_hit", 0.0)), float(_prof_worst.get("dmg_pieces", 0.0)),
+			float(_prof_worst.get("dmg_disable", 0.0))])
 	print("[prof] %d building meshes rebuilt from scratch (the rest were index patches)"
 			% _full_rebuilds)
 	var tw: Dictionary = islands.tick_worst

@@ -56,6 +56,11 @@ const SETTLE_SLOW_NEAR_MS := 1500
 ## and vibrating that never gets under SETTLE_SPEED at all.
 const SETTLE_MAX_MS := 12000
 const SETTLE_MAX_SPEED := 2.0
+## How many pieces may settle in one tick. A settle is a merged shape rebuild, a
+## freeze and a recorded rest, and the rule above settles a heap all at once:
+## measured, one tick spent 75 ms of its loop on it. The rest wait a tick --
+## still slow, still where they were.
+const SETTLES_PER_TICK := 12
 ## Pieces at least this big fall with MERGED collision -- as few boxes as the
 ## shape allows -- rather than one box per brick. The --big census had ~23
 ## pieces of a thousand bricks and more carrying 80% of every collision box in
@@ -1813,6 +1818,7 @@ func tick() -> void:
 	_work_done = 0
 	_sync_meshes = 0
 	var now := Time.get_ticks_msec()
+	var settles := 0
 	var i := islands.size() - 1
 	while i >= 0:
 		var isl := islands[i]
@@ -1882,20 +1888,27 @@ func tick() -> void:
 			continue
 
 		var rested := isl.body.sleeping
+		var by_rule := false
+		var by_age := false
 		if not rested and now - isl.born_ms >= SETTLE_MIN_MS:
 			if speed < SETTLE_SPEED and spin < SETTLE_SPIN:
 				if isl.slow_since == 0:
 					isl.slow_since = now
 				elif now - isl.slow_since >= _slow_window(isl):
 					rested = true
-					settled_by_rule += 1
+					by_rule = true
 			else:
 				isl.slow_since = 0
 			if not rested and now - isl.born_ms >= SETTLE_MAX_MS \
 					and speed < SETTLE_MAX_SPEED:
 				rested = true
+				by_age = true
+		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK:
+			settles += 1
+			if by_rule:
+				settled_by_rule += 1
+			elif by_age:
 				settled_by_age += 1
-		if now - isl.born_ms >= SETTLE_MIN_MS and rested:
 			isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 			isl.body.freeze = true
 			isl.settled = true

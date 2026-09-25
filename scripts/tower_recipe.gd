@@ -610,7 +610,16 @@ static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 	# A cell left out -- a stairwell against a wall -- still has wall standing
 	# on its edge above and below. That strip is laid anyway, and only that:
 	# everywhere else the band is already panel, and placing there fails.
-	if not keepouts.is_empty():
+	# Only a keep-out that reaches the band can have left any of it bare, and a
+	# stairwell never does (TowerRecipe.stair_line): walking the whole perimeter
+	# to find nothing to lay was ~1,100 failed placements a floor.
+	var touches_band := false
+	for k in keepouts:
+		var r: Rect2i = k
+		if r.position.x < t or r.position.y < t or r.end.x > footprint_x - t \
+				or r.end.y > footprint_z - t:
+			touches_band = true
+	if touches_band:
 		_fill_rect(world, chunk_id, palette, y, 0, 0, footprint_x, t, colour, [])
 		_fill_rect(world, chunk_id, palette, y, 0, footprint_z - t, footprint_x,
 				footprint_z, colour, [])
@@ -630,6 +639,23 @@ static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 static func _fill_rect(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		y: int, x0: int, z0: int, x1: int, z1: int, colour: int,
 		keepouts: Array) -> Array:
+	# The two cases that are nearly every call, answered without the probe
+	# walk -- and with EXACTLY what it would have laid, in the same order,
+	# because a block id is what the damage record keys on. The walk put a whole
+	# panel's worth of failed placements (~300) into every lattice cell after
+	# laying its one panel, and a big tower's floors are four hundred cells:
+	# 292 ms of a promotion was this.
+	#
+	# A cell that is one panel: the walk's first try, at the corner, lays it,
+	# and every try after that finds the cell full.
+	if x1 - x0 == PANEL and z1 - z0 == PANEL and not _blocked(keepouts, x0, z0, PANEL, PANEL):
+		if world.place_block(chunk_id, Vector3i(x0, y, z0), palette.plate_10x10, colour) >= 0:
+			return [Vector3i(x0, z0, PANEL)]
+	# A cell a keep-out swallows whole: every size is blocked everywhere.
+	for k in keepouts:
+		var r: Rect2i = k
+		if r.encloses(Rect2i(x0, z0, x1 - x0, z1 - z0)):
+			return []
 	var sizes := [[PANEL, palette.plate_10x10], [4, palette.plate_4x4],
 			[2, palette.plate_2x2], [1, palette.plate_1x1]]
 	var laid: Array = []
