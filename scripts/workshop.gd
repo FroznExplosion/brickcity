@@ -556,6 +556,9 @@ func _build_hud() -> void:
 	# On a dark panel rather than outlined text alone: the bricks behind it are
 	# whatever colour the player chose, so contrast cannot be assumed.
 	_keys_panel = PanelContainer.new()
+	# A label, not a control: let the mouse through. A panel stops it by
+	# default, and one over the middle of the window ate mouse-look.
+	_keys_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.07, 0.08, 0.11, 0.72)
 	style.corner_radius_top_left = 6
@@ -575,6 +578,7 @@ func _build_hud() -> void:
 	# the height in the next, with the same settings. A grid aligns by cell, in
 	# the default font, and has nothing to tune.
 	_keys = GridContainer.new()
+	_keys.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_keys.columns = 5
 	_keys.add_theme_constant_override("h_separation", 14)
 	_keys.add_theme_constant_override("v_separation", 0)

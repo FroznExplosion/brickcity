@@ -186,6 +186,14 @@ func _input(e: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## While the browser is open it is a menu: a click or a scroll that misses it
+## goes nowhere. Left to fall through, it reached the camera, which took the
+## mouse and hid the cursor with the menu still up.
+func _unhandled_input(e: InputEvent) -> void:
+	if is_browsing() and e is InputEventMouseButton:
+		get_viewport().set_input_as_handled()
+
+
 # ---------------------------------------------------------------------------
 # The bar
 # ---------------------------------------------------------------------------

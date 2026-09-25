@@ -126,12 +126,23 @@ func _set_captured(on: bool) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
 
 
-func _unhandled_input(event: InputEvent) -> void:
+## Mouse-look in `_input`, ahead of the GUI. With the mouse captured its
+## position is pinned to the middle of the window, and any Control that
+## happens to sit there -- a HUD panel, at some window size -- would otherwise
+## take every motion event first, and looking around simply stopped.
+func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _captured:
 		_yaw -= event.relative.x * LOOK_SENSITIVITY
 		_pitch = clampf(_pitch - event.relative.y * LOOK_SENSITIVITY, -1.5, 1.5)
 		rotation = Vector3(_pitch, _yaw, 0.0)
-	elif event is InputEventMouseButton and event.pressed and not _captured:
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# A CLICK takes the mouse, not the wheel: scrolling a menu past its end
+	# used to fall through to here, capture the mouse and hide the cursor with
+	# the menu still open.
+	if event is InputEventMouseButton and event.pressed and not _captured \
+			and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		_set_captured(true)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
