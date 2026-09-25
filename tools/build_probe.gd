@@ -567,8 +567,9 @@ func _check_fixtures_in_the_recipe() -> void:
 	# multi-frame one moves the TRANSFORM.
 	var chunk: int = reg.materialise(id)
 	var built := reg.get_fixture(id, 0)
-	_ok("the flight goes in with the house", built.blocks.size() == 12,
-			"%d of 12" % built.blocks.size())
+	# Twelve steps: six of the workshop's spiral pieces.
+	_ok("the flight goes in with the house", built.blocks.size() == 6,
+			"%d of 6" % built.blocks.size())
 	_ok("into the building's own chunk", int(w.get_memory_report().chunks) == 1,
 			"%d chunks" % int(w.get_memory_report().chunks))
 

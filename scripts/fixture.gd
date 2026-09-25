@@ -92,7 +92,9 @@ func build_into(world: BrickWorld, chunk: int, parts: PackedInt32Array,
 			var at := cell - offset
 			_carve(world, chunk, at, StaircaseRecipe.chunk_dims(steps))
 			var first := world.get_block_count(chunk)
-			var placed := StaircaseRecipe.build(world, chunk, parts,
+			# The workshop's spiral pieces, stacked: `parts` is
+			# StaircaseRecipe.flight_parts. One staircase in the game.
+			var placed := StaircaseRecipe.build_flight(world, chunk, parts,
 					steps, int(params.get("colour", 11)), at)
 			for i in range(first, world.get_block_count(chunk)):
 				blocks.push_back(i)

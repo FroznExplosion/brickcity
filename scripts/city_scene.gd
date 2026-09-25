@@ -161,6 +161,8 @@ var _shader_toggles := {
 var stats_label: Label
 var camera: DebugCamera
 var _placer: CityPlacer
+## Hit marks, debris and sounds by material, and footsteps (material_fx.gd).
+var _material_fx: MaterialFx
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
@@ -723,6 +725,10 @@ func _ready() -> void:
 	_placer.on_placed = func(id: int) -> void:
 		_index_building(id)
 		_make_shell(id)
+	_material_fx = MaterialFx.new()
+	_material_fx.name = "MaterialFx"
+	add_child(_material_fx)
+	_material_fx.setup(world, registry, camera)
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:
@@ -2421,6 +2427,10 @@ func _fire(radius: float) -> void:
 	# If the ray landed on wreckage, damage THAT piece directly. Settled debris
 	# is a frozen body whose origin is its centre of mass, so a proximity test
 	# from the origin misses a toppled building you are standing next to.
+	# The mark, the debris and the sound of what was hit, BEFORE the blast
+	# takes the brick away -- afterwards there is nothing there to ask.
+	if not _material_fx.impact_at(hit.position, hit.normal):
+		_material_fx.impact(hit.position, hit.normal, 0, Color(0.6, 0.6, 0.6))
 	var struck := islands.find_by_body(hit.collider)
 	if struck != null:
 		# A client asks; the host's blast finds the same piece by its volume.

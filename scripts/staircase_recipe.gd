@@ -52,6 +52,60 @@ const STEPS_PER_COURSE := 1.5
 ## Eight explicit masks rather than one mask in four yaws: the sectors are
 ## authored from the angle directly, so which way the flight winds is a
 ## property of this file rather than of the extension's rotation enumeration.
+## THE staircase: the workshop's own spiral stair piece (spiralcw_10x10), the
+## one a player builds a flight out of by aiming at the newel below, stacked
+## the way that aim stacks it -- each piece the next one's quarter turn
+## (BrickPalette.next_in_flight). A city tower's stair and a saved build's
+## stair fixture are built from it too, so there is one staircase in the game,
+## not a player's one and an older generated one beside it.
+##
+## Returns the four turns of the piece, in flight order, as archetype ids from
+## `palette` (BrickPalette.bake's name -> id).
+const FLIGHT_PART := "spiralcw_10x10"
+
+
+static func flight_parts(palette: Dictionary) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var name := BrickPalette.variant_name(FLIGHT_PART, 0, false)
+	for i in 4:
+		if not palette.has(name):
+			push_error("StaircaseRecipe: no '%s' in the palette" % name)
+			return PackedInt32Array()
+		out.push_back(palette[name])
+		name = BrickPalette.next_in_flight(name)
+	return out
+
+
+## Plates a flight piece climbs: two steps of STEP_PLATES.
+static func flight_piece_plates() -> int:
+	return BrickPalette.part_size(FLIGHT_PART).y
+
+
+## Pieces a flight of `steps` steps takes: a piece is two steps, rounded up.
+static func flight_pieces(steps: int) -> int:
+	var rise := flight_piece_plates()
+	@warning_ignore("integer_division")
+	return (steps * STEP_PLATES + rise - 1) / rise
+
+
+## Lay a flight of `steps` steps at `at`: one spiral piece per two steps,
+## stacked and turning. Same shaft and height as the old wedge flight
+## (`chunk_dims`), so a stairwell carved for one fits the other.
+static func build_flight(world: BrickWorld, chunk: int, parts: PackedInt32Array,
+		steps: int, colour: int = 11, at: Vector3i = Vector3i.ZERO) -> int:
+	if parts.size() < 4:
+		push_error("StaircaseRecipe: the flight pieces are missing")
+		return 0
+	var rise := flight_piece_plates()
+	var placed := 0
+	for i in flight_pieces(steps):
+		if world.place_block(chunk, at + Vector3i(0, i * rise, 0), parts[i % 4], colour) >= 0:
+			placed += 1
+	return placed
+
+
+## The old generated flight's step wedges. Nothing in the game builds with them
+## any more (see flight_parts); kept for the probes that pin their shape.
 static func bake_parts(world: BrickWorld) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	for s in STEPS_PER_TURN:
@@ -259,9 +313,10 @@ static func steps_for_courses(courses: int) -> int:
 	return maxi(int(round(float(courses) * STEPS_PER_COURSE)), STEPS_PER_TURN)
 
 
-## The chunk a flight of this many steps needs, with its foot at the origin.
+## The chunk a flight of this many steps needs, with its foot at the origin:
+## whole spiral pieces, so an odd flight's top piece has its room carved too.
 static func chunk_dims(steps: int) -> Vector3i:
-	return Vector3i(DIAMETER, maxi(steps, 1) * STEP_PLATES, DIAMETER)
+	return Vector3i(DIAMETER, maxi(flight_pieces(steps), 1) * flight_piece_plates(), DIAMETER)
 
 
 ## Local bounds of the flight, in metres, for the volume tests that wake it.

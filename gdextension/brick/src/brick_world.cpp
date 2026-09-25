@@ -3000,6 +3000,10 @@ PackedInt32Array BrickWorld::apply_hit(int chunk_id, Vector3 world_point, float 
     const Vector3i hi = brick::world_to_grid(centre_local + r3);
     const float r2 = radius_m * radius_m;
 
+    // Each block is hit ONCE, at the distance of its nearest cell: a block
+    // covers many cells, and charging it per cell would make a 2x4 eight
+    // times weaker than a 1x1.
+    std::vector<std::pair<int32_t, float>> nearest;
     for (int x = lo.x; x <= hi.x; ++x) {
         for (int y = lo.y; y <= hi.y; ++y) {
             for (int z = lo.z; z <= hi.z; ++z) {
@@ -3009,25 +3013,42 @@ PackedInt32Array BrickWorld::apply_hit(int chunk_id, Vector3 world_point, float 
                     continue;
                 }
                 const Vector3 cell_centre((x + 0.5f) * cs.x, (y + 0.5f) * cs.y, (z + 0.5f) * cs.z);
-                if (cell_centre.distance_squared_to(centre_local) > r2) {
+                const float d2 = cell_centre.distance_squared_to(centre_local);
+                if (d2 > r2) {
                     continue;
                 }
-                c.blocks[bid].alive = false;
-                c.blocks[bid].hp = 0;
-                killed.push_back(bid);
+                nearest.push_back({bid, d2});
             }
         }
     }
+    std::sort(nearest.begin(), nearest.end());   // by id, then distance: nearest first
 
-    // One block covers many cells, so the same id can land here repeatedly.
-    killed.sort();
-    int write = 0;
-    for (int i = 0; i < killed.size(); ++i) {
-        if (i == 0 || killed[i] != killed[i - 1]) {
-            killed.set(write++, killed[i]);
+    // Damage falls off from twice a PLA block's life at the centre to once
+    // at the rim. A block's life is its hp (a fraction of full, 0..255) times
+    // its material's toughness, so PLA -- toughness 1 -- dies anywhere in the
+    // blast, which is what every block did before materials; a tougher one
+    // may survive with less hp, and the next hit finds it weaker. Integer and
+    // order-fixed, so a replayed hit lands the same (Docs/AIPlan.md P0).
+    for (size_t i = 0; i < nearest.size(); ++i) {
+        if (i > 0 && nearest[i].first == nearest[i - 1].first) {
+            continue;   // this block's nearest cell has already been charged
         }
+        Block &b = c.blocks[nearest[i].first];
+        const float d = std::sqrt(nearest[i].second) / radius_m;
+        const float damage = 255.0f * (2.0f - std::min(d, 1.0f));
+        const float toughness = std::max(brick_material_toughness(b.material), 0.05f);
+        const float left = (float)b.hp * toughness - damage;
+        if (left > 0.0f) {
+            // Rounded DOWN (and never to 0 while alive): rounding up handed
+            // back a sliver each hit, and a hit that should have finished a
+            // brick left it two points of life.
+            b.hp = (uint8_t)std::clamp((int)std::floor(left / toughness), 1, 255);
+            continue;
+        }
+        b.alive = false;
+        b.hp = 0;
+        killed.push_back(nearest[i].first);
     }
-    killed.resize(write);
     return killed;
 }
 
@@ -3694,6 +3715,18 @@ bool BrickWorld::is_filament_material(int material) {
     return material >= 0 && material < BRICK_MATERIAL_COUNT && BRICK_MATERIALS[material].variants == nullptr;
 }
 
+float BrickWorld::get_material_toughness(int material) {
+    return brick_material_toughness(material);
+}
+
+int BrickWorld::get_block_hp(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    const Chunk &c = chunks[chunk_id];
+    return (block_id >= 0 && block_id < (int)c.blocks.size()) ? (int)c.blocks[block_id].hp : 0;
+}
+
 int BrickWorld::get_material_colour_count(int material) {
     return brick_material_colour_count(material);
 }
@@ -4337,6 +4370,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_name", "material"), &BrickWorld::get_material_name);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("is_filament_material", "material"), &BrickWorld::is_filament_material);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_count", "material"), &BrickWorld::get_material_colour_count);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_toughness", "material"), &BrickWorld::get_material_toughness);
+    ClassDB::bind_method(D_METHOD("get_block_hp", "chunk_id", "block_id"), &BrickWorld::get_block_hp);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour", "material", "colour"), &BrickWorld::get_material_colour);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_name", "material", "colour"), &BrickWorld::get_material_colour_name);
     ClassDB::bind_method(D_METHOD("is_solid", "chunk_id", "cell"), &BrickWorld::is_solid);

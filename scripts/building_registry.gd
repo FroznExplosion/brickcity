@@ -747,7 +747,7 @@ func fixture_parts(kind: String) -> PackedInt32Array:
 	var parts := PackedInt32Array()
 	match kind:
 		"staircase":
-			parts = StaircaseRecipe.bake_parts(world)
+			parts = StaircaseRecipe.flight_parts(palette)
 		_:
 			push_error("BuildingRegistry: no parts for fixture kind '%s'" % kind)
 	_fixture_parts[kind] = parts

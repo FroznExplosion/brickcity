@@ -32,3 +32,6 @@ gdextension/**/godot-cpp/gen/
 addons/brick/bin/*.dll
 addons/brick/bin/*.so
 addons/brick/bin/*.dylib
+
+# Chats work in their own worktrees here (CLAUDE.md).
+.claude/worktrees/

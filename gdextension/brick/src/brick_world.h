@@ -562,6 +562,10 @@ public:
     static String get_material_name(int material);
     static bool is_filament_material(int material);
     static int get_material_colour_count(int material);
+    /// Multiple of PLA's life a block of this material has (apply_hit).
+    static float get_material_toughness(int material);
+    /// What is left of a block, 0..255 of full; its material scales what full is.
+    int get_block_hp(int chunk_id, int block_id) const;
     /// RGB resolved through the material; alpha carries the material to the
     /// shaders (1.0 = material 0). See brick_grid.h block_rgba.
     static Color get_material_colour(int material, int colour);
