@@ -595,6 +595,11 @@ var _gun_library: GunPartLibrary
 var _gun_class := 0
 ## Combat's own seeded RNG -- spread, crits, procs. The host owns it (D9).
 var _combat_rng := RandomNumberGenerator.new()
+## V puts a player pawn where the camera is and hands it the controls and the
+## gun; V again leaves it. The debug walker (SPACE SPACE) stays a debug tool.
+var _player := PlayerController.new()
+var _player_pawn: Pawn
+var _play_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -670,6 +675,7 @@ func _ready() -> void:
 	_chamfer_mode = "--chamfer" in args
 	_checkpoint_mode = "--checkpoint" in args
 	_gun_mode = "--gun" in args
+	_play_mode = "--play" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -777,6 +783,8 @@ func _ready() -> void:
 		_run_checkpoint_pass()
 	elif _gun_mode:
 		_run_gun_pass()
+	elif _play_mode:
+		_run_play_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -2442,6 +2450,152 @@ func _run_gun_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## Put the gun in the player's hands, rolling one if there is none.
+func _arm_gun() -> void:
+	_gun_armed = true
+	if _gun.gun == null:
+		_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+	_gun.gun.visible = true
+
+
+func _mode_word() -> String:
+	if _player.is_possessing():
+		return "PLAYING (V leaves)"
+	return "WALKING" if camera.is_walking() else "FLYING"
+
+
+## Stand a player pawn with its feet at `feet` and take its controls. The camera
+## stops flying and rides the pawn's eye; the gun goes into its hands.
+func _enter_pawn(feet: Vector3) -> void:
+	if camera.is_walking():
+		camera.set_walking(false)
+	if _player_pawn == null or not is_instance_valid(_player_pawn):
+		_player_pawn = Pawn.spawn(self, feet, 0)
+	else:
+		_player_pawn.place(feet)
+	if _player.get_parent() == null:
+		_player.name = "Player"
+		add_child(_player)
+	camera.set_process(false)
+	camera.allow_walk = false
+	_player.possess(_player_pawn, camera)
+	_arm_gun()
+	_player_pawn.gun = _gun
+	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	print("[city] playing: pawn at %v" % feet)
+
+
+func _leave_pawn() -> void:
+	_player.release()
+	camera.set_process(true)
+	camera.allow_walk = camera.capture_mouse
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		_player_pawn.gun = null
+		_player_pawn.body.queue_free()
+	_player_pawn = null
+	_gun.set_trigger(false)
+	_gun.exclude = [] as Array[RID]
+
+
+## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
+## lands, walks, steps a kerb and not a wall, ducks a beam from a brick floor --
+## the debug walker's rules, now on the physics tick -- and shoots a wall from its
+## own eye, through the authority, without shooting itself.
+func _run_play_pass() -> void:
+	print("[play] a player pawn, driven by the keys")
+	_player.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 0.0)
+	camera.rotation = Vector3.ZERO
+	_enter_pawn(open + Vector3(0.0, 4.0, 0.0))
+	await _frames(90)
+	var pawn := _player_pawn
+	_gate_ok("it falls to the ground and stands on it", pawn.is_on_floor(),
+			"feet at %.2f" % pawn.feet().y)
+	_gate_ok("and the camera is at its eye (%.2f m)" % camera.global_position.y,
+			absf(camera.global_position.y - Pawn.EYE_HEIGHT) < 0.12)
+
+	# A kerb is stepped over, a wall is not. Facing +Z: the camera looks down -Z.
+	camera.rotation = Vector3(0.0, PI, 0.0)
+	var here := pawn.feet()
+	var kerb := _test_block(Vector3(here.x, 0.15, here.z + 3.0), Vector3(6.0, 0.3, 1.0))
+	_key(KEY_W, true)
+	await _frames(90)
+	_key(KEY_W, false)
+	await _frames(10)
+	_gate_ok("a kerb is walked over", pawn.feet().z > here.z + 3.5 and pawn.feet().y < 0.2,
+			"z %.2f, feet %.2f" % [pawn.feet().z, pawn.feet().y])
+	kerb.queue_free()
+	here = pawn.feet()
+	var wall := _test_block(Vector3(here.x, 0.75, here.z + 2.5), Vector3(8.0, 1.5, 1.0))
+	await _frames(4)
+	_key(KEY_W, true)
+	await _frames(90)
+	_key(KEY_W, false)
+	await _frames(10)
+	_gate_ok("a wall is not", pawn.feet().z < here.z + 2.0 and pawn.feet().z > here.z + 0.5,
+			"z %.2f, face at %.2f" % [pawn.feet().z, here.z + 2.0])
+	wall.queue_free()
+
+	# The debug walker's headroom bug, on the pawn: a beam that clears a figure
+	# on the ground stops one standing on a brick, and ducking gets past it. Its
+	# underside at 1.75 m: over a standing figure's 1.68, under the 2.10 of one
+	# standing on a brick, over the 1.68 of one crouched on it. (The --walk gate's
+	# beam sits at 1.40, from before the figure was resized, and fails.)
+	var room := Vector3(open.x + 30.0, 0.0, open.z)
+	var beam := _test_block(room + Vector3(0.0, 1.85, 0.0), Vector3(6.0, 0.2, 1.2))
+	var ledge := _test_block(room + Vector3(0.0, PLATE * 1.5, 0.0), Vector3(6.0, PLATE * 3.0, 6.0))
+	pawn.place(room + Vector3(0.0, 0.0, -5.0))
+	await _frames(20)
+	var ducked := false
+	_key(KEY_W, true)
+	for i in 180:
+		await _frames(1)
+		ducked = ducked or pawn.is_auto_crouched()
+	_key(KEY_W, false)
+	await _frames(6)
+	_gate_ok("standing on a brick it ducks under the beam and gets past",
+			ducked and pawn.feet().z > room.z + 1.0 and pawn.feet().y > 0.3,
+			"ducked %s, z %.2f, feet %.2f" % [ducked, pawn.feet().z, pawn.feet().y])
+	beam.queue_free()
+	ledge.queue_free()
+	await _frames(20)
+	_gate_ok("and stands up again", not pawn.is_crouched())
+
+	# Shooting from the pawn: face a building's wall from close and hold LMB.
+	var b := registry.get_building(0)
+	var face := b.xform * Vector3(b.recipe.footprint_x * 0.5 * STUD, 0.0, 0.0)
+	var out := b.xform.basis * Vector3(0.0, 0.0, -1.0)
+	pawn.place(face + out * 5.0)
+	await _frames(30)
+	camera.look_at(face + Vector3.UP * 1.2, Vector3.UP)
+	await _frames(2)
+	var n0 := authority.commands.size()
+	var hp := pawn.health.total_current()
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.parse_input_event(click)
+	await _frames(30)
+	click = click.duplicate()
+	click.pressed = false
+	Input.parse_input_event(click)
+	await _shoot(0)
+	var chips := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chips += 1
+	_gate_ok("holding the button fires the pawn's gun into the wall",
+			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
+	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
+	_leave_pawn()
+	await _frames(4)
+	_gate_ok("V leaves: the camera flies again", camera.is_processing() and _player_pawn == null)
+	_check_log_replays()
+	print("[play] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
 ## Fire `n` single rounds, waiting out the gun's rate between them and the
 ## damage queue after.
 func _shoot(n: int) -> void:
@@ -3244,9 +3398,9 @@ func _update_hud() -> void:
 		"",
 		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
 				"  reloading" if _gun.is_reloading() else "",
-				"WALKING" if camera.is_walking() else "FLYING"]) if _gun_armed and _gun.gun != null
+				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
-				_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
+				_blast_radius, _mode_word()],
 		"1 gun · 2 blast · T next gun · R reload",
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
@@ -3412,15 +3566,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_1:
-			_gun_armed = true
-			if _gun.gun == null:
-				_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
-			_gun.gun.visible = true
+			_arm_gun()
 		KEY_2:
+			if _player.is_possessing():
+				return
 			_gun_armed = false
 			_gun.set_trigger(false)
 			if _gun.gun != null:
 				_gun.gun.visible = false
+		KEY_V:
+			if _player.is_possessing():
+				_leave_pawn()
+			else:
+				_enter_pawn(camera.global_position - Vector3.UP * Pawn.EYE_HEIGHT)
 		KEY_T:
 			_gun_class = (_gun_class + 1) % GUN_CLASSES.size()
 			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
