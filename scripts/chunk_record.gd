@@ -50,6 +50,9 @@ var origin := Vector3i.ZERO
 ## Severed joints, sparse: [index, BrickWorld joint bits] pairs. A joint a landing
 ## had cut used to be whole again when the piece woke.
 var joints := PackedInt32Array()
+## Bricks a gun has worn down, sparse: [index, hp] pairs (BrickWorld.chip_hit). A
+## piece that slept used to wake with every brick back at full strength.
+var worn := PackedInt32Array()
 ## The grid's own orientation, which is authoring data and not the transform.
 var rotation := 0
 var origin_ticks := Vector3i.ZERO
@@ -65,7 +68,7 @@ func block_count() -> int:
 ## Bytes this record holds. What the tier is FOR, so it is measurable.
 func bytes() -> int:
 	return cells.size() * 4 + archetypes.size() * 4 + colours.size() + decorative.size() * 4 \
-			+ joints.size() * 4
+			+ joints.size() * 4 + worn.size() * 4
 
 
 ## For a save file (AreaSnapshot). Archetypes are written by NAME: fixture parts
@@ -82,7 +85,7 @@ func to_data(world: BrickWorld) -> Dictionary:
 			names.append(world.get_archetype_name(a))
 		refs.append(int(index[a]))
 	return {"dims": dims, "xform": xform, "cells": cells, "names": names, "refs": refs,
-			"colours": colours, "decorative": decorative, "joints": joints,
+			"colours": colours, "decorative": decorative, "joints": joints, "worn": worn,
 			"origin": origin, "rotation": rotation,
 			"origin_ticks": origin_ticks, "box": box}
 
@@ -101,6 +104,7 @@ static func from_data(world: BrickWorld, d: Dictionary) -> ChunkRecord:
 	r.colours = d.colours
 	r.decorative = d.get("decorative", PackedInt32Array())
 	r.joints = d.get("joints", PackedInt32Array())
+	r.worn = d.get("worn", PackedInt32Array())
 	r.origin = d.get("origin", Vector3i.ZERO)
 	r.rotation = int(d.rotation)
 	r.origin_ticks = d.origin_ticks
@@ -146,6 +150,7 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	var lo := Vector3(INF, INF, INF)
 	var hi := Vector3(-INF, -INF, -INF)
 	var cell := BrickWorld.get_cell_size()
+	var index_of := {}
 	for id in world.get_block_count(chunk):
 		if not standing.has(id):
 			continue
@@ -167,12 +172,18 @@ static func capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 		if cut != 0:
 			r.joints.push_back(r.archetypes.size())
 			r.joints.push_back(cut)
+		index_of[id] = r.archetypes.size()
 		r.archetypes.push_back(world.get_block_archetype(chunk, id))
 		r.colours.push_back(world.get_block_colour(chunk, id))
 		var a := Vector3(at) * (cell.x / float(t))
 		var b := Vector3(at + size) * (cell.x / float(t))
 		lo = Vector3(minf(lo.x, a.x), minf(lo.y, a.y), minf(lo.z, a.z))
 		hi = Vector3(maxf(hi.x, b.x), maxf(hi.y, b.y), maxf(hi.z, b.z))
+	var w := world.get_worn_blocks(chunk)
+	for k in range(0, w.size() - 1, 2):
+		if index_of.has(w[k]):
+			r.worn.push_back(int(index_of[w[k]]))
+			r.worn.push_back(w[k + 1])
 	if r.block_count() > 0:
 		# In WORLD space: the eight corners of the local box under the chunk's
 		# own transform, because a piece at rest is usually lying at an angle.
@@ -217,5 +228,13 @@ func restore(world: BrickWorld) -> int:
 		var i := joints[k]
 		if i < placed.size() and placed[i] >= 0:
 			world.set_block_joints(chunk, placed[i], joints[k + 1])
+	var hp := PackedInt32Array()
+	for k in range(0, worn.size() - 1, 2):
+		var i := worn[k]
+		if i < placed.size() and placed[i] >= 0:
+			hp.push_back(placed[i])
+			hp.push_back(worn[k + 1])
+	if not hp.is_empty():
+		world.set_worn_blocks(chunk, hp)
 	world.set_chunk_transform(chunk, xform)
 	return chunk

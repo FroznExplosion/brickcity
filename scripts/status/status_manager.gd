@@ -46,7 +46,12 @@ func apply(effect: StatusEffect) -> void:
 	effect.bind(self, _pool)
 	# The global StatusTicker (autoload) drives per-frame ticking — not each effect's
 	# own _physics_process. It auto-prunes freed/expired effects (INTEGRATION §1).
-	StatusTicker.register(effect)
+	# Found by path, not by its global name: brickcity's --script probes load the
+	# city scene, which holds a gun, which reaches this -- and autoload names do not
+	# exist for a --script main loop, so naming it here failed the whole compile.
+	var ticker := get_node_or_null(^"/root/StatusTicker")
+	if ticker != null:
+		ticker.call(&"register", effect)
 
 
 ## Remove every active status (used on death/respawn so a revived enemy starts clean).

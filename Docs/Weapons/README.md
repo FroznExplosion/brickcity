@@ -28,6 +28,13 @@ for a `--script` main loop:
     godot --headless --path . res://test/core_test.tscn
     godot --headless --path . res://test/loot_range_test.tscn -- --probe
 
+## Guns and bricks
+
+A bullet that hits something with a `HealthPool` goes through `DamageSystem` as here. A bullet
+that hits anything else hits the city, and the city has its own rule: `StructuralDamage`
+(`scripts/combat/structural_damage.gd`) — wear by weapon class, blind to tier, rarity and crits.
+`GunController` (`scripts/combat/gun_controller.gd`) is what fires a gun for any owner.
+
 ## What changed on the way in
 
 Per the [porting checklist](../Reference/boomer-border.md#0-porting-checklist--read-before-copying-anything):
