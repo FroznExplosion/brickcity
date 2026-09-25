@@ -4613,8 +4613,10 @@ func _physics_census(label: String) -> void:
 		r.bricks += n
 	# Jolt answers the server's active-object and pair counts with zero, so the
 	# census counts for itself; the physics time is the engine's own monitor.
-	print("[census] %s: physics %.1f ms this frame" % [label,
-			Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0])
+	var rep: Dictionary = islands.report()
+	print("[census] %s: physics %.1f ms this frame; settled so far %d (%d by staying slow, %d by age)"
+			% [label, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+			int(rep.settled), int(rep.settled_by_rule), int(rep.settled_by_age)])
 	for i in names.size():
 		var r: Dictionary = rows[i]
 		if int(r.moving) + int(r.settled) == 0:

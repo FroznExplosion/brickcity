@@ -30,6 +30,32 @@ extends Node3D
 
 const MASS_SCALE := 10.0
 const SETTLE_MIN_MS := 900
+## A piece settles when it has stayed this slow for this long, whether or not
+## Jolt has put it to sleep.
+##
+## Settling used to wait for sleep alone -- under 0.06 m/s for 0.3 s -- and in
+## a big collapse almost nothing got there: pieces resting in a heap nudge each
+## other forever, and once the solver runs out of contact slots it DROPS
+## contacts, so they jitter as well. The --big census had ~390 pieces still
+## moving five seconds in, carrying ~180,000 collision boxes, and settled is
+## where a piece stops costing anything (frozen static, merged boxes).
+##
+## Nothing in free fall can pass this: falling pieces have 1.6x gravity, so
+## half a metre a second is left behind in a thirtieth of a second. What stays
+## this slow for this long is being held up by something.
+const SETTLE_SPEED := 0.5       ## m/s
+const SETTLE_SPIN := 0.5        ## rad/s
+const SETTLE_SLOW_MS := 700
+## Closer than this to the player, a piece gets longer to finish rocking or
+## tipping over -- the settle is a freeze, and a freeze you are looking at from
+## three metres should not come a beat early.
+const SETTLE_NEAR := 20.0
+const SETTLE_SLOW_NEAR_MS := 1500
+## And whatever it is doing, a piece this old that is not actually falling --
+## slower than this -- is frozen where it is. The backstop for something wedged
+## and vibrating that never gets under SETTLE_SPEED at all.
+const SETTLE_MAX_MS := 12000
+const SETTLE_MAX_SPEED := 2.0
 const WAKE_RADIUS := 6.0
 
 ## Impact shear. A landing releases joints; it destroys nothing.
@@ -196,6 +222,8 @@ var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
 var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
 var swept_at_rest := 0            ## small pieces swept up moments after landing
+var settled_by_rule := 0          ## settled for staying slow, not for sleeping
+var settled_by_age := 0           ## settled because SETTLE_MAX_MS ran out
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
 ## uses it to damage whatever was underneath -- an island has no idea what it
@@ -1667,6 +1695,15 @@ func _process(_delta: float) -> void:
 
 
 
+## How long a piece has to stay slow before it settles: longer where the
+## player can see it happen from close by.
+func _slow_window(isl: BrickIsland) -> int:
+	if camera != null and is_instance_valid(camera) \
+			and camera.global_position.distance_to(isl.body.global_position) < SETTLE_NEAR:
+		return SETTLE_SLOW_NEAR_MS
+	return SETTLE_SLOW_MS
+
+
 func tick() -> void:
 	var _t_loop := Time.get_ticks_usec()
 	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
@@ -1741,7 +1778,21 @@ func tick() -> void:
 			_fracture_queue.append([isl, lost])
 			continue
 
-		if now - isl.born_ms >= SETTLE_MIN_MS and isl.body.sleeping:
+		var rested := isl.body.sleeping
+		if not rested and now - isl.born_ms >= SETTLE_MIN_MS:
+			if speed < SETTLE_SPEED and spin < SETTLE_SPIN:
+				if isl.slow_since == 0:
+					isl.slow_since = now
+				elif now - isl.slow_since >= _slow_window(isl):
+					rested = true
+					settled_by_rule += 1
+			else:
+				isl.slow_since = 0
+			if not rested and now - isl.born_ms >= SETTLE_MAX_MS \
+					and speed < SETTLE_MAX_SPEED:
+				rested = true
+				settled_by_age += 1
+		if now - isl.born_ms >= SETTLE_MIN_MS and rested:
 			isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 			isl.body.freeze = true
 			isl.settled = true
@@ -2224,6 +2275,8 @@ func report() -> Dictionary:
 		"slept": slept,
 		"woken": woken,
 		"settled": settled,
+		"settled_by_rule": settled_by_rule,
+		"settled_by_age": settled_by_age,
 		"blocks": blocks,
 		"disposable": loose,
 		"discarded": discarded,

@@ -70,6 +70,10 @@ var landmark := false
 ## When a small piece came to rest, for sweeping it up moments later; 0 while
 ## it is moving.
 var rest_since := 0
+## When this piece last dropped under IslandManager.SETTLE_SPEED and stayed
+## there; 0 while it is moving faster. What settles it by rule rather than by
+## waiting for the physics to call it asleep.
+var slow_since := 0
 ## Non-zero when this island is a single brick drawn from a shared MultiMesh
 ## rather than its own MeshInstance3D. The key is the brick's box size.
 var mm_key := Vector3.ZERO
