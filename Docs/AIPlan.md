@@ -303,9 +303,18 @@ brick mech is piloted with the ported motor. Loopback agrees.
   matches GDScript to the vertex at 2.1× the speed. The gait ⇄ physics merge had never been run;
   its first run here (`tools/creature_merge_draft.gd`, not a gate) is 6 of 13 — it builds,
   walks and leaks nothing, but tracks at 5.7 cm against 5 and cannot stumble or recover yet.
-- **Still to do in P1:** loopback with a player's gun. And the city gates count frames, not
-  seconds: one run with the editor open failed `--play` and `--mech` on timing and passed clean
-  on the rerun.
+- **Stage 8 done (2026-09-25): loopback agrees with a player's gun in it.** `loopback_probe`'s
+  fight now has pistol rounds from both machines — CHIPs, 30 of them, the client's as requests
+  the host answers — and checks the wear arrives intact: same bricks worn by the same amount on
+  the client and for a late joiner replaying the log. (Found on the way: a stray carriage return
+  from an earlier edit sat in one of its comments.)
+
+**P1 complete (2026-09-25).** Every line of the gate holds: BoomerBorder's suites green here; a
+player walks the city and wears bricks with a generated gun through `WorldAuthority`; a greybox
+mech is piloted with the ported motor; loopback agrees. Carried forward: the city gates count
+frames, not seconds (one run with the editor open failed `--play` and `--mech` on timing and
+passed clean on the rerun); `SwarmActors` and the horde's promotion wait for our own brick figure
+(P8); the creature physics merge is 6 of 13 on its first run.
 
 ### P2 — `AIWorld` core · M
 
