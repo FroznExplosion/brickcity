@@ -348,6 +348,12 @@ const BUILDING_CELL := 32.0
 ## against 1 ms across 22. Structure only changes when something hits it, so the
 ## solve is driven by that instead, and budgeted like everything else.
 const SOLVES_PER_TICK := 4
+##
+## A count, not a clock like spawns. A solve put off to the next tick meets more
+## damage: on the big city a 6 ms budget turned towers that toppled as
+## 6,000-brick sections into one 21,000-brick piece and doubled the mean frame.
+## Four big solves are affordable because the solve got cheaper instead
+## (BrickWorld.solve_structure: a 23,000-brick tower in 4 ms, not 15).
 const TRIM_AFTER_MS := 12000
 const TRIM_RADIUS := 90.0
 ## How often the trim runs, and how much it may do when it does.
@@ -1791,6 +1797,8 @@ func _topple(id: int) -> void:
 	# and they already hold the right geometry. The island draws them until
 	# the first thing that changes it, and becomes an ordinary one-mesh
 	# island then. See BrickIsland.bands.
+	# And each band's index size, so the piece can go on patching them.
+	var carried_band_bytes: Array = (_brick_band_bytes.get(id, []) as Array).duplicate()
 	var carried_bands: Array = _take_bands(id)
 	_brick_bodies.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
@@ -1829,7 +1837,7 @@ func _topple(id: int) -> void:
 	_free_frames(id, true)
 	registry.hand_over(id)
 	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands,
-			piece, id)
+			piece, id, true, true, carried_band_bytes)
 	for i in range(1, extra_frames.size()):
 		if i - 1 >= extra_nodes.size():
 			break
@@ -2701,21 +2709,25 @@ func _physics_process(_delta: float) -> void:
 		if b == null or not b.is_materialised():
 			continue
 		var quiet := true
-		var res: Dictionary = world.solve_stress(b.chunk)
+		# Stress, then balance, then what has come loose -- one call, which
+		# walks the building's joints once where the three calls walked them
+		# three times, and answers exactly as they did (BrickWorld.solve_structure,
+		# tools/solve_probe.gd).
+		var solve: Dictionary = world.solve_structure(b.chunk)
+		t = _mark("solve", t)
+		var res: Dictionary = solve.stress
 		if int(res.get("failures", 0)) > 0:
 			quiet = false
 			# A solve that failed something changed the structure, and when it
 			# ran relative to the hits around it decides what it failed.
 			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE,
 					b.id, Vector3.ZERO, 0.0)
-		t = _mark("stress", t)
 
 		# Is what is left actually balanced on what holds it up? Stress cannot
 		# answer that -- toppling is a rigid-body question. Without this a tower
 		# with half its base gone stands forever, because standing structure is
 		# a static body and only a DETACHED piece is ever dynamic.
-		var stability: Dictionary = world.check_stability(b.chunk)
-		t = _mark("stability", t)
+		var stability: Dictionary = solve.stability
 		if not bool(stability.get("stable", true)):
 			quiet = false
 		if not bool(stability.get("stable", true)) and not _toppling.has(b.id) \
@@ -2735,8 +2747,7 @@ func _physics_process(_delta: float) -> void:
 				t = _mark("spawn", t)
 				continue
 
-		var groups: Array = world.find_detached_groups(b.chunk)
-		t = _mark("detach", t)
+		var groups: Array = solve.groups
 		if groups.is_empty():
 			# Nothing failed, nothing is falling, nothing is unbalanced: this
 			# building is at rest and does not need looking at again until
@@ -4137,7 +4148,7 @@ func _structure_of(chunk: int) -> PackedStringArray:
 func _report_profile() -> void:
 	if _prof_worst.is_empty():
 		return
-	var keys := ["stress", "stability", "detach", "disable", "spawn", "remesh",
+	var keys := ["solve", "disable", "spawn", "remesh",
 			"bands", "retire", "damage", "promote", "promote_finish", "stream",
 			"islands", "hud"]
 	if _frame_samples > 0:

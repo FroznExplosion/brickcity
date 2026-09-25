@@ -1109,6 +1109,48 @@ worst tick went from 68 ms to 6; the mean frame stays at 33 ms.
 The worst script tick is now the structural solve alone -- stress 55, stability 14, detach 14 ms
 on one big building -- and that is C++.
 
+**So the solve walks a building once, not five times.** A dirty building was asked three
+questions -- stress, balance, what has come loose -- and each began with its own grounding walk
+over every joint in the chunk, and the stress solve walked the joints twice more to count contact
+and share load. The walk now records each block's joints as it goes (runs of neighbour and cells,
+in the order they fired), the stress passes read those, and `BrickWorld.solve_structure` answers
+all three questions from one walk when the stress solve broke nothing (a fresh walk when it did).
+The answers are bit for bit what they were: `tools/solve_probe.gd` checks the one call against
+the three on eight damage cases (up to 17 failures and 46 groups, two rounds each), and its
+`--digest` matched the old build's exactly -- every block's load, the failures, the stability,
+the groups.
+
+| 80 x 60 x 204 tower, 23,000 bricks | before | after |
+|---|---|---|
+| stress | 8.6 ms | 4.0 ms |
+| stress + stability + detach | 15.0 ms | **3.8 ms** (`solve_structure`) |
+
+In the city it is 6-14 ms a building (a solve with failures walks twice, and the renderer is
+running), and up to four a tick. The worst tick's solve went from 89-100 ms to 33-52; the mean per
+tick from 14.2 ms to 5.6. A clock on solves was tried and taken out again: a solve put off a tick
+meets more damage, and towers that fell as 6,000-brick sections came down as one 21,000-brick
+piece.
+
+**Two more things a blast on a fallen piece paid for inline.**
+
+* `split_island` asked `get_body_boxes` for a centre of mass -- which builds a Dictionary per box,
+  and a shaped part is a box per occupied *cell*. A staircase coming away whole (363 steps in a
+  10 x 726 x 10 grid) was 37 ms of dictionaries thrown away. It computes the mass directly now.
+* A toppled building dropped its band meshes and built one mesh of the whole piece the first time
+  anything touched it: 10-22 ms for a section of 7,000-8,600 bricks, per piece a blast reached.
+  It patches its bands now, band by band, the way a standing building does.
+
+And a bug the second one turned up: the bands hung off the building's node, which `adopt` frees
+two frames after the topple -- so **a toppled building drew nothing** from two frames into its
+fall until something happened to rebuild it. The piece gets its own instances of the band meshes
+now (nothing is copied). The blind-piece count knows about bands too, so it no longer counts
+every toppled building as invisible.
+
+On measuring: `--big --shot` has two regimes on this machine, and runs of the SAME build land in
+either. One is ~900 frames at 24-40 ms; the other ~600 frames at ~105 ms with 200-350 ms of "idle
+process" a frame -- the renderer, not the script. Compare script-side figures (worst tick, mean
+per tick), or runs with the same frame count.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

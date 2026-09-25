@@ -964,7 +964,8 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		carried_bytes: int, carried_width: int, carried_bands: Array = [],
-		piece_id := -1, owner := -1, announce := true, is_landmark := true) -> BrickIsland:
+		piece_id := -1, owner := -1, announce := true, is_landmark := true,
+		carried_band_bytes: Array = []) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_anchored(chunk, false)
@@ -979,7 +980,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.landmark = is_landmark
 	isl.disposable = not is_landmark
 
-	isl.bands = carried_bands
+	isl.band_bytes = carried_band_bytes
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(world.get_chunk_mass(chunk) * MASS_SCALE, 0.5)
 	isl.body.contact_monitor = true
@@ -1015,6 +1016,11 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		isl.body.add_child(fresh)
 		fresh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		fresh.transform = Transform3D(Basis(), -isl.local_com)
+		# The bands too. They hang off the building's node, which goes as a
+		# ghost just below and takes its children with it: a toppled building
+		# drew nothing from two frames into its fall until something happened
+		# to rebuild it. New instances of the same band meshes, as `fresh` is.
+		isl.bands = _instance_bands(carried_bands, fresh)
 		if mesh_node.get_parent() != null:
 			_ghosts.append([mesh_node, Engine.get_process_frames() + OVERLAP_FRAMES])
 		else:
@@ -1052,6 +1058,27 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	if announce:
 		piece_spawned.emit(isl)
 	return isl
+
+
+## A piece's own instances of a building's band meshes, in the same slots. An
+## instance of an ArrayMesh copies nothing. A slot the building never got to
+## (it toppled halfway through rebuilding its bands) stays empty -- a hole
+## _draws_bands knows about -- and a band built empty stays built and empty.
+func _instance_bands(bands: Array, parent: MeshInstance3D) -> Array:
+	var out: Array = []
+	for node in bands:
+		if not is_instance_valid(node):
+			out.append(null)
+			continue
+		var src := node as MeshInstance3D
+		var copy := MeshInstance3D.new()
+		copy.mesh = src.mesh
+		copy.material_override = src.material_override
+		copy.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		copy.transform = src.transform
+		parent.add_child(copy)
+		out.append(copy)
+	return out
 
 
 func _join_multimesh(isl: BrickIsland, block_ids: PackedInt32Array) -> void:
@@ -1187,9 +1214,21 @@ func refresh_furniture(isl: BrickIsland) -> void:
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
 	if isl.mesh == null:
 		return
-	# Band meshes carried down from a building that toppled whole. They were
-	# right until something changed, and something has: drop them and build the
-	# one mesh an island uses.
+	# Band meshes carried down from a building that toppled whole: patched in
+	# place, the band a blast landed in and no other. Dropping them for one mesh
+	# here was a full build of the whole piece -- 10-22 ms for a toppled
+	# section of 7,000-8,600 bricks -- inside the blast that hit it, once per
+	# piece the blast reached. Held like any other update while a child it
+	# shed is coming up (OVERLAP_FRAMES).
+	if not isl.bands.is_empty() and not force_full and _draws_bands(isl):
+		if isl.hold_until > Engine.get_process_frames():
+			if not _held.has(isl):
+				_held.append(isl)
+			return
+		if _patch_bands(isl):
+			return
+	# Something a patch cannot carry: drop the bands and build the one mesh an
+	# island uses.
 	if not isl.bands.is_empty():
 		for node in isl.bands:
 			if is_instance_valid(node):
@@ -1237,6 +1276,31 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null else 0
 	isl.index_width = index_width(arrays)
 	isl.mesh.mesh = mesh
+
+
+## Re-index a banded piece and upload only the bands whose bytes moved --
+## CityScene._remesh's patch, for a building that has come down whole (and
+## whole in its bands: _draws_bands). False when it cannot: the bake is gone,
+## the sections no longer match, a band was built empty, or a band's buffer is
+## not the length it was built at. A band patched before the one that failed is
+## harmless -- the full rebuild that follows replaces them all.
+func _patch_bands(isl: BrickIsland) -> bool:
+	if isl.band_bytes.size() != isl.bands.size() or not world.bake_ready(isl.chunk) \
+			or world.get_chunk_sections(isl.chunk) != isl.bands.size():
+		return false
+	var moved: Array = world.update_index_regions(isl.chunk, isl.index_width)
+	for entry in moved:
+		var d: Dictionary = entry
+		var si := int(d.section)
+		if si < 0 or si >= isl.bands.size():
+			return false
+		var band: ArrayMesh = (isl.bands[si] as MeshInstance3D).mesh as ArrayMesh
+		if band == null or band.get_surface_count() == 0 \
+				or int(d.offset) + int(d.changed_bytes) > int(isl.band_bytes[si]):
+			return false
+		RenderingServer.mesh_surface_update_index_region(band.get_rid(), 0,
+				int(d.offset), d.data)
+	return true
 
 
 # ---------------------------------------------------------------------------
@@ -1741,8 +1805,9 @@ func _count_meshless() -> void:
 		if not isl.is_valid() or isl.mesh == null:
 			continue
 		# An ArrayMesh with no surfaces is NOT null and draws nothing; count both.
+		# A toppled building draws through its bands and not its own mesh.
 		var m: Mesh = isl.mesh.mesh
-		if m == null or m.get_surface_count() == 0:
+		if (m == null or m.get_surface_count() == 0) and not _draws_bands(isl):
 			isl.blind_ticks += 1
 			meshless_worst_blocks = maxi(meshless_worst_blocks,
 					world.get_alive_block_count(isl.chunk))
@@ -1751,6 +1816,18 @@ func _count_meshless() -> void:
 			blind_total += isl.blind_ticks
 			blind_count += 1
 			isl.blind_ticks = 0
+
+
+## Is this piece drawn whole by the bands it came down with? Every slot: one
+## the building never built, or that has gone, is a hole in the piece. (A band
+## built EMPTY is a node with no mesh, and is not a hole.)
+func _draws_bands(isl: BrickIsland) -> bool:
+	if isl.bands.is_empty():
+		return false
+	for node in isl.bands:
+		if not is_instance_valid(node):
+			return false
+	return true
 
 
 ## The island's live contact manifold: world-space points, and the RID of what

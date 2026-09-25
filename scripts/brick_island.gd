@@ -27,10 +27,13 @@ var mesh: MeshInstance3D
 var array_mesh: ArrayMesh
 ## Band meshes inherited from a building that toppled whole (city_scene
 ## SECTION_PLATES). They already hold the right geometry, so a piece that has
-## just come down draws for nothing -- and the FIRST time it needs rebuilding
-## they are freed and it becomes an ordinary one-mesh island. Sectioning is for
-## standing buildings, which are the ones that get rebuilt over and over.
+## just come down draws for nothing; damage PATCHES them, band by band, as it
+## does a standing building's (IslandManager._patch_bands). Only a change a
+## patch cannot carry frees them and makes it an ordinary one-mesh island.
 var bands: Array = []
+## Each band's index buffer size in bytes, as the building had it: a band can
+## be patched only while its buffer is the length it was built at.
+var band_bytes: Array = []
 ## Size of that surface's index buffer, in bytes. A patch is only valid
 ## while the buffer is the length it was built at.
 var index_bytes := 0
