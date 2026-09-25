@@ -277,8 +277,14 @@ brick mech is piloted with the ported motor. Loopback agrees.
     dashes on a charge, the torso lags the look then arrives and the legs follow, steps a metre of
     cover and not a storey, the arm pitches past 40° and its rounds wear a wall high above the
     cockpit through the authority, M leaves it parked, and the log replays.
-  - **Still to do in P1:** `SwarmCore` into the build, LimboAI 1.7, the procedural creatures
-    (Windows build of `creature_forge`), and loopback with a player's gun.
+- **Stage 5 done (2026-09-25): LimboAI v1.7.0** (`addons/limboai`, MIT), from Red Dawn's copy:
+  Windows and Linux x86_64 only, 19 MB, the descriptor trimmed to match. Used as AI.md says:
+  **a behaviour tree is a brain that fills `PawnIntents`**, never a second way to move a body.
+  `BTMoveTo` (`scripts/ai/`) is the first task. Gate: `tools/limbo_probe.gd` 5 — the extension
+  loads, a two-task tree walks a Pawn to one point and then runs to another by the Pawn's own
+  motor, reports success and leaves the intents at rest.
+- **Still to do in P1:** `SwarmCore` into the build, the procedural creatures (Windows build of
+  `creature_forge`), and loopback with a player's gun.
 
 ### P2 — `AIWorld` core · M
 
