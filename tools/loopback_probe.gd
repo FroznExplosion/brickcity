@@ -22,6 +22,8 @@ const FOOT_Z := 16
 const COURSES := 20
 ## Building 1 sits this many studs along x from building 0.
 const SPACING := 40
+## One pistol round's wear on a brick (StructuralDamage) -- what a player's gun sends.
+var _pistol := StructuralDamage.chip_hp(WeaponClass.builtin(&"pistol"))
 
 var failures := 0
 
@@ -176,6 +178,16 @@ func _check_agreement() -> void:
 			if host.may_decide():
 				_host_act(host, hw, hc, DamageLog.Kind.SHEAR, id, shear_at, 2.0,
 						Vector3.ZERO, 14)
+		# Gunfire: wear, not blasts (StructuralDamage). Three pistol rounds into one
+		# spot kill its brick, two leave it worn to a third -- from the host or the
+		# client -- and the hp each is left with has to arrive intact.
+		var round_at := _wall_point(id, 12 + (i % 3), 5.0 + (i % 4) * 0.35)
+		for r in (3 if i % 2 == 0 else 2):
+			if (i + r) % 2 == 0:
+				client.request(DamageLog.Kind.CHIP, -1, round_at, 0.0, Vector3.ZERO, _pistol)
+			else:
+				_host_act(host, hw, hc, DamageLog.Kind.CHIP, -1, round_at, 0.0,
+						Vector3.ZERO, _pistol)
 		if i % 5 == 4:
 			_pump(host, client, true)
 
@@ -206,6 +218,13 @@ func _check_agreement() -> void:
 
 	for id in [0, 1]:
 		_compare(hw, int(hc[id]), cw, int(cc[id]), "building %d" % id)
+	var chips := 0
+	for e in host.commands.entries:
+		if e.kind == DamageLog.Kind.CHIP:
+			chips += 1
+	var worn := (hw.get_worn_blocks(int(hc[0])).size() + hw.get_worn_blocks(int(hc[1])).size()) / 2
+	_ok("gunfire went over the wire as CHIPs, from both machines, and left wear",
+			chips >= 24 and worn > 0, "%d CHIP(s), %d brick(s) worn" % [chips, worn])
 
 	# And a player who joins now gets the same world from the log alone.
 	var late := _city(false)
@@ -218,6 +237,9 @@ func _check_agreement() -> void:
 	_ok("a late joiner replaying the log gets the host's world",
 			lw.get_chunk_content_hash(int(lc[0])) == hw.get_chunk_content_hash(int(hc[0]))
 			and lw.get_chunk_content_hash(int(lc[1])) == hw.get_chunk_content_hash(int(hc[1])))
+	_ok("worn down exactly as far, brick for brick",
+			lw.get_worn_blocks(int(lc[0])) == hw.get_worn_blocks(int(hc[0]))
+			and lw.get_worn_blocks(int(lc[1])) == hw.get_worn_blocks(int(hc[1])))
 
 	# The comparison has to be able to fail, or every ok above is decoration. A
 	# client that applies its own shot instead of asking is exactly the bug the
@@ -251,8 +273,9 @@ func _host_act(host: WorldAuthority, hw: BrickWorld, hc: Dictionary,
 	e.limit = limit
 	var changed := DamageLog.apply_entry(hw, int(hc[id]), e)
 	_tick += 1
-	# The scene commits only what changed something; so does this.
-	if not changed.is_empty():
+	# The scene commits only what changed something; so does this. A CHIP always
+	# changed something -- the hp it took -- whether or not a brick died.
+	if not changed.is_empty() or kind == DamageLog.Kind.CHIP:
 		host.commit(_tick, kind, id, point, radius, normal, limit)
 
 
@@ -308,6 +331,9 @@ func _compare(a: BrickWorld, ca: int, b: BrickWorld, cb: int, label: String) -> 
 				same = false
 				break
 	_ok("%s: same pieces" % label, same, "%d vs %d" % [pa.size(), pb.size()])
+	var wa := a.get_worn_blocks(ca)
+	_ok("%s: the same bricks worn by the same amount" % label,
+			wa == b.get_worn_blocks(cb), "%d worn" % (wa.size() / 2))
 
 # ===========================================================================
 # Pieces, with real physics
@@ -331,7 +357,7 @@ var _p_done := false
 
 
 ## Two towers in a world. Building ids are the same on every machine -- the city
-## is generated the same everywhere -- but everse builds the bricks of the
+## is generated the same everywhere -- but `reverse` builds the bricks of the
 ## second one first, so the CHUNK ids differ, which is what a command must not
 ## depend on.
 func _piece_city(reverse: bool) -> Dictionary:
