@@ -199,10 +199,16 @@ static func on_grid(xform: Transform3D) -> Transform3D:
 
 
 ## Record a building. No chunk, no blocks, no mesh — just what it is and where.
-func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform3D) -> int:
+##
+## `program` is which rooms it has, as {room kind: weight} (Docs/Workshop.md,
+## Stage F); empty is every kind alike.
+func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform3D,
+		program: Dictionary = {}) -> int:
 	var b := Building.new()
 	b.id = buildings.size()
 	b.recipe = {"footprint_x": footprint_x, "footprint_z": footprint_z, "courses": courses}
+	if not program.is_empty():
+		b.recipe["program"] = program.duplicate()
 	b.xform = on_grid(xform)
 	b.recipe_version = RECIPE_VERSION
 	buildings.append(b)
@@ -216,6 +222,9 @@ func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform
 ## grounded through the welds. Docs/BuildMode.md section 12 question 2 -- a
 ## Building used to hold one chunk and refuse anything sideways.
 func register_build(recipe: BuildRecipe, xform: Transform3D) -> int:
+	# A generated building inside a player build is parameters until it is
+	# placed (Docs/Workshop.md, Stage C). Everything below wants bricks.
+	recipe = TowerBlockout.flatten(recipe)
 	var b := Building.new()
 	b.id = buildings.size()
 	b.build = recipe
@@ -256,7 +265,8 @@ func rooms_of(building_id: int) -> Array[Room]:
 		b.rooms_built = true
 		if not b.is_build():
 			b.rooms = RoomManifest.rooms_for(b.recipe.footprint_x, b.recipe.footprint_z,
-					b.recipe.courses, room_seed_of(building_id))
+					b.recipe.courses, room_seed_of(building_id),
+					b.recipe.get("program", {}))
 			# The stairwell is a shaft with no floor in it, on every storey,
 			# and furniture generated inside it stood on nothing: laid, it
 			# hung in the air until something nearby broke and the solve

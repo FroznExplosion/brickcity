@@ -497,9 +497,16 @@ static func _snap(at: int, lines: Array, footprint: int, up: bool) -> int:
 ##     to overlap in XZ, and with a fixed corner the front wall and the side
 ##     wall never overlap at all -- they would stand and fall separately, which
 ##     is what the first version of this recipe did.
+##
+## `options` switches parts of the building off for the workshop's generated
+## building (Docs/Workshop.md, Stage C): {"rooms": false} lays no interior
+## walls, {"windows": false} cuts no windows. Missing means on, which is every
+## building the city has ever generated.
 static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		footprint_x: int, footprint_z: int, courses: int,
-		keepouts: Array = []) -> void:
+		keepouts: Array = [], options: Dictionary = {}) -> void:
+	var rooms := bool(options.get("rooms", true))
+	var windows := bool(options.get("windows", true))
 	var t := WALL_THICK
 	var clear := snap_keepouts(keepouts, footprint_x, footprint_z)
 	var pl := plan(footprint_x, footprint_z)
@@ -532,8 +539,9 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 						BASE_COLOUR, [], pl)
 				if columns_first:
 					_lay_storey_columns(world, chunk_id, palette, int(band.y), pl, clear, slabs)
-				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
-						footprint_z, pl, clear, walled, columns_first)
+				if rooms:
+					_lay_room_walls(world, chunk_id, palette, band, footprint_x,
+							footprint_z, pl, clear, walled, columns_first)
 			"slab":
 				# Full footprint, walls included. This is what ties the four
 				# walls together across the span AND what you see from outside.
@@ -547,8 +555,9 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					# the column there.
 					_lay_columns(world, chunk_id, palette, int(band.y) - COLUMN_PLATES,
 							pl, clear)
-				_lay_room_walls(world, chunk_id, palette, band, footprint_x,
-						footprint_z, pl, clear, walled, columns_first)
+				if rooms:
+					_lay_room_walls(world, chunk_id, palette, band, footprint_x,
+							footprint_z, pl, clear, walled, columns_first)
 			"course":
 				var colour: int = COURSE_COLOURS[int(band.index) % COURSE_COLOURS.size()]
 				var y: int = band.y
@@ -556,14 +565,14 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 				# same openings whichever pair of walls owns the corners this
 				# course. That is what makes a window a rectangle instead of two
 				# staggered slots.
-				var lit := is_window_course(int(band.index), courses)
+				var lit := windows and is_window_course(int(band.index), courses)
 				var gx: Array = window_gaps(footprint_x) if lit else []
 				var gz: Array = window_gaps(footprint_z) if lit else []
 				# Is this course the lintel of the openings below it? Only the
 				# runs that START on a brick boundary need shifting -- the ones
 				# starting at WALL_THICK are already half a brick off, which is
 				# what the alternating bond is for.
-				var lead := LINTEL_LEAD if int(band.index) > 0 						and is_window_course(int(band.index) - 1, courses) else 0
+				var lead := LINTEL_LEAD if windows and int(band.index) > 0 						and is_window_course(int(band.index) - 1, courses) else 0
 				if int(band.index) % 2 == 0:
 					_run_x(world, chunk_id, palette, y, 0, footprint_x, 0, colour, gx, lead)
 					_run_x(world, chunk_id, palette, y, 0, footprint_x, footprint_z - t, colour, gx, lead)

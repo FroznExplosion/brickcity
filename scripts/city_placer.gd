@@ -125,7 +125,7 @@ func start(path: String) -> bool:
 		push_warning("[place] no build at %s -- save one in the workshop with F5" % path)
 		return false
 	var r := BuildRecipe.load_from(path)
-	if r.is_empty():
+	if not r.has_content():
 		push_warning("[place] %s holds no bricks" % path)
 		return false
 	var label := r.name if r.name != "" and r.name != "untitled" else path.get_file().get_basename()
@@ -134,7 +134,8 @@ func start(path: String) -> bool:
 
 ## Take a recipe in hand. Split from `start` so a probe can hand one over.
 func hold(r: BuildRecipe, label: String = "build") -> bool:
-	_recipe = r
+	# A generated building in it is parameters until now (Docs/Workshop.md).
+	_recipe = TowerBlockout.flatten(r)
 	_name = label
 	_dims = r.chunk_dims()
 	_turn = 0
@@ -169,7 +170,9 @@ func _make_ghost() -> void:
 	_ghost = Node3D.new()
 	add_child(_ghost)
 	var w := BrickWorld.new()
-	var pal := BrickPalette.bake(w)
+	# The generator's palette, not the player's: a build with a generated
+	# building in it carries the generator's cornice part.
+	var pal := TowerRecipe.bake_palette(w)
 	var asm := Assembly.new(w, pal)
 	_recipe.build_into(asm, pal)
 	var cell := BrickWorld.get_cell_size()
