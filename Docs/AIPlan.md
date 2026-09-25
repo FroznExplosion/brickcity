@@ -237,6 +237,29 @@ brick mech is piloted with the ported motor. Loopback agrees.
   - Found on the way: `StatusManager` named the `StatusTicker` autoload directly, which fails to
     compile under `--script` — and every probe that loads the city scene now reaches it through
     the gun. Looked up by path.
+- **Stage 3 done (2026-09-25): a player on the `Pawn` component (D7).**
+  - **`PawnIntents`** is the brain contract for characters, BoomerBorder's one idea: a brain
+    fills it, the motor reads it and never knows which brain it has — move (world direction),
+    look, run, crouch, fire, and edge-triggered jump and reload.
+  - **`Pawn`** is a component under a `CharacterBody3D`, never a base class. Its motor is the
+    debug walker's rules (walk/run/crouch speeds in bricks per second, auto-crouch along the
+    motion, step over one course, jump one course) moved onto the physics tick, so the same
+    intents make the same move for every brain and on every machine. It carries a team, a
+    `HealthPool` where a bullet finds it, and a `GunController` it feeds `fire`/`reload`.
+  - **`PlayerController`** turns keys and mouse into intents and puts the camera on the pawn's
+    interpolated eye; look is whatever the camera points at. In the city, **`V`** stands a
+    player pawn where the camera is and hands it the gun; `V` again leaves. The debug walker
+    (SPACE SPACE) is untouched — Terrain and water have swimming in progress in it.
+  - Gates: `tools/pawn_probe.gd` 7 (scripted intents, as an AI will send them: walks, steps a
+    kerb, runs, crouches, strafes at crouch speed, jumps and lands; **two pawns given the same
+    intents walk the same path to 0.00000 m over 150 ticks**); city `-- --play` 9 (lands, eye
+    at `EYE_HEIGHT`, kerb yes and wall no, ducks a beam from a brick floor, holding the mouse
+    fires the pawn's gun into a wall through the authority and never into itself, V leaves).
+  - Found: the debug walker puts the eye a plate under the crown (1.54 m) where its own
+    `EYE_HEIGHT` says 1.42 m, and `--walk`'s beam (1.40 m underside) predates the figure being
+    resized — 3 of its checks fail on main. The pawn uses the head's middle and a beam at
+    1.75 m. And `--shot`'s "settled wreckage is still breakable" fails on current main without
+    any of this (a blast hits 3 settled pieces and removes nothing) — from another area's merge.
 
 ### P2 — `AIWorld` core · M
 
