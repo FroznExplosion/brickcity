@@ -27,7 +27,9 @@ func _initialize() -> void:
 	_recipe_checks()
 	_turn_checks()
 	_flatten_checks()
+	_template_checks()
 	await _workshop_checks()
+	RoomTemplates.reload()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -163,6 +165,135 @@ func _flatten_checks() -> void:
 		alive += cw.get_alive_block_count(c)
 	_ok("the city builds it from the record", alive >= flat.size() - 5,
 			"%d of %d" % [alive, flat.size()])
+
+
+## Authored rooms and items as the generator reads them, the detail rule, and a
+## building's room mix. Docs/Workshop.md stages D, E, F.
+func _template_checks() -> void:
+	print("[probe] room templates, items, detail and the room mix")
+	RoomTemplates.reload()
+	RoomTemplates._loaded = true   # this probe's templates only, not the player's
+	var t := BuildRecipe.new()
+	t.kind = "room"
+	t.meta = {"room_kind": "office"}
+	t.add("brick_2x4_z", Vector3i(0, 1, 0), 2)                    # a wall stub: structure
+	t.add("brick_1x1", Vector3i(4, 1, 4), 11, 0, true)            # table leg
+	t.add("brick_1x1", Vector3i(7, 1, 4), 11, 0, true)
+	t.add("plate_4x4", Vector3i(4, 4, 4), 5, 0, true)             # table top
+	t.add("plate_1x1", Vector3i(5, 5, 5), 1, 0, BuildRecipe.Role.DETAIL)   # a cup on it
+	t.add("brick_1x1", Vector3i(12, 1, 4), 6, 0, true)            # a stool, apart
+	_ok("a room template registers", RoomTemplates.add_room("probe_office", t))
+	var tpl := RoomTemplates.room_for("office", Vector3i(30, 19, 30), 0)
+	_ok("its furniture is two pieces: table-with-cup and stool",
+			(tpl.get("types", []) as Array).size() == 2, "%s" % [tpl.get("types")])
+	_ok("the wall stub is not furniture", tpl.size.x == 9 and tpl.size.z == 4,
+			"size %v" % tpl.get("size"))
+	_ok("a room too small for it gets none", RoomTemplates.room_for("office",
+			Vector3i(3, 19, 3), 0).is_empty())
+	var long := RoomTemplates.room_for("office", Vector3i(4, 19, 30), 0)
+	_ok("a long thin room takes it turned", not long.is_empty() and long.size.x <= 4,
+			"%s" % [long.get("size")])
+
+	var room := Room.new()
+	room.kind = "office"
+	room.lo = Vector3i(10, 1, 10)
+	room.size = Vector3i(30, 19, 30)
+	room.room_seed = 77
+	var items := RoomManifest.items_for(room)
+	_ok("an office is furnished from the template", items.size() == 2
+			and str(items[0].type).begins_with("room:probe_office"),
+			"%s" % [items])
+	_ok("and counted as such", RoomManifest.item_count_for(room) == 2)
+
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(60, 30, 60))
+	for x in range(0, 60, 4):
+		for z in range(0, 60, 4):
+			w.place_block(c, Vector3i(x, 0, z), pal["plate_4x4"], 2)
+	var table_item: Dictionary = items[0]
+	var roles := []
+	var ids := RoomManifest.build_item(w, c, pal, table_item, 4, Vector3i.ZERO, roles)
+	_ok("the real rung lays every part, detail included", ids.size() == 4, "%d" % ids.size())
+	_ok("and says which one is detail", roles.count(BuildRecipe.Role.DETAIL) == 1
+			and roles.count(BuildRecipe.Role.INTERIOR) == 3, "%s" % [roles])
+	_ok("in the author's own colours", w.get_block_colour(c, ids[0]) == 11)
+	for id in ids:
+		w.remove_block(c, id)
+	room.items = items
+	var drawn := RoomManifest.draw_items(w, c, pal, room)
+	_ok("the drawn rung leaves detail out", int(drawn.parts) == 4, "%d parts" % drawn.parts)
+
+	var lamp := BuildRecipe.new()
+	lamp.kind = "item"
+	lamp.meta = {"room_kind": "storeroom"}
+	lamp.add("brick_1x1", Vector3i(3, 1, 3), 6)
+	lamp.add("tile_1x1", Vector3i(3, 4, 3), 1, 0, BuildRecipe.Role.DETAIL)
+	var lt := RoomTemplates.add_item("probe_lamp", lamp)
+	_ok("an item registers for its room kind",
+			RoomTemplates.items_for_kind("storeroom").has(lt)
+			and not RoomTemplates.items_for_kind("office").has(lt))
+	_ok("its parts start at its own corner",
+			(RoomTemplates.parts(lt)[0][1] as Vector3i) == Vector3i.ZERO)
+
+	# The mix.
+	var same := true
+	for sd in 64:
+		same = same and RoomManifest.kind_index(sd, {}) == sd % Room.KINDS.size()
+	_ok("no program draws exactly what the city always drew", same)
+	var kitchens := RoomManifest.rooms_for(40, 30, 18, 5, {"kitchen": 1})
+	var all_k := not kitchens.is_empty()
+	for r in kitchens:
+		all_k = all_k and r.kind == "kitchen"
+	_ok("a program of kitchens is all kitchens", all_k, "%d rooms" % kitchens.size())
+	var mixed := RoomManifest.rooms_for(40, 30, 60, 9, {"office": 3, "storeroom": 1})
+	var n_office := 0
+	var others := 0
+	for r in mixed:
+		if r.kind == "office":
+			n_office += 1
+		elif r.kind != "storeroom":
+			others += 1
+	_ok("weights are weights", others == 0 and n_office > mixed.size() / 2,
+			"%d offices of %d" % [n_office, mixed.size()])
+	var agree := true
+	var prog := {"office": 2, "kitchen": 1}
+	var rs := RoomManifest.rooms_for(40, 30, 18, 3, prog)
+	var lat := RoomManifest.lattice_for(40, 30, 18)
+	var per: int = (lat.rects as Array).size()
+	for r in rs:
+		@warning_ignore("integer_division")
+		var st: int = r.id / per
+		var k := RoomManifest.kind_at(40, 30, 18, 3, st,
+				Vector2(r.lo.x + r.size.x * 0.5, r.lo.z + r.size.z * 0.5), prog)
+		agree = agree and Room.KINDS[k] == r.kind
+	_ok("a far window shows the room the program put there", agree)
+
+	# A furnished generated building.
+	var gp := TowerBlockout.normalised({"program": {"office": 1}})
+	var bw := BrickWorld.new()
+	var bpal := TowerRecipe.bake_palette(bw)
+	var furnished := TowerBlockout.bricks(bw, bpal, gp)
+	var n_int := 0
+	var n_det := 0
+	for b in furnished:
+		if int(b[3]) == BuildRecipe.Role.INTERIOR:
+			n_int += 1
+		elif int(b[3]) == BuildRecipe.Role.DETAIL:
+			n_det += 1
+	_ok("a furnished generated building has furniture in it", n_int > 0, "%d interior" % n_int)
+	_ok("from the office template, cup and all", n_det > 0, "%d detail" % n_det)
+	gp.furnish = false
+	var bare := TowerBlockout.bricks(bw, bpal, gp)
+	var any_int := false
+	for b in bare:
+		any_int = any_int or int(b[3]) != BuildRecipe.Role.STRUCTURE
+	_ok("unfurnished has none", not any_int)
+	var rr := BuildRecipe.new()
+	rr.add_tower(Vector3i.ZERO, TowerBlockout.normalised({"program": {"office": 1}}))
+	var flat := TowerBlockout.flatten(rr)
+	_ok("the city gets the furniture with its roles", flat.interior_count() == n_int + n_det
+			and flat.detail_count() == n_det, "%d / %d" % [flat.interior_count(), flat.detail_count()])
 
 
 # ---------------------------------------------------------------------------

@@ -11,8 +11,14 @@ extends RefCounted
 ## the SAME generator the city's own buildings come from, so its floors, walls,
 ## columns and stairwell are the ones already measured to stand.
 ##
-##   {"cell": [x, y, z], "params": {"x": 20, "z": 20, "courses": 12,
-##    "rooms": true, "stairs": true, "windows": true}}
+##   {"cell": [x, y, z], "params": {"x": 30, "z": 30, "courses": 12,
+##    "rooms": true, "stairs": true, "windows": true,
+##    "furnish": true, "program": {kind: weight}, "seed": 1}}
+##
+## FURNISHED means its rooms are cut and filled by the city's own manifest
+## (RoomManifest.rooms_for / items_for), authored room templates and items
+## included, with the room mix its `program` asks for (Stage F). The
+## furniture comes out INTERIOR or DETAIL, as the manifest lays it.
 ##
 ## Footprints are whole panels and heights whole storeys. TowerRecipe only
 ## stands when its footprint divides into panels (see its lattice notes), and
@@ -28,7 +34,8 @@ const MIN_STOREYS := 1
 
 static func defaults() -> Dictionary:
 	return {"x": 3 * PANEL, "z": 3 * PANEL, "courses": 2 * STOREY,
-			"rooms": true, "stairs": true, "windows": true}
+			"rooms": true, "stairs": true, "windows": true,
+			"furnish": true, "program": {}, "seed": 1}
 
 
 ## The same parameters, snapped to what the generator can build and clamped to
@@ -54,6 +61,14 @@ static func normalised(p: Dictionary, limit: Vector3i = Vector3i.ZERO) -> Dictio
 	out.rooms = bool(out.rooms)
 	out.stairs = bool(out.stairs)
 	out.windows = bool(out.windows)
+	out.furnish = bool(out.furnish)
+	out.seed = int(out.seed)
+	var prog := {}
+	if typeof(out.program) == TYPE_DICTIONARY:
+		for k in (out.program as Dictionary):
+			if Room.KINDS.has(str(k)) and int(out.program[k]) > 0:
+				prog[str(k)] = int(out.program[k])
+	out.program = prog
 	return out
 
 
@@ -75,7 +90,8 @@ static func stair_rect(p: Dictionary) -> Rect2i:
 
 
 ## Every brick the generator lays, in the order it lays them:
-## [[archetype name, cell, colour], ...], cells from the building's own origin.
+## [[archetype name, cell, colour, role, material], ...], cells from the
+## building's own origin.
 ##
 ## Built for real into a scratch chunk and read back, rather than re-deriving
 ## the generator's rules here: there is exactly one description of how a
@@ -97,6 +113,9 @@ static func bricks(world: BrickWorld, palette: Dictionary, p: Dictionary) -> Arr
 		f.cell = Vector3i(stair.position.x, TowerRecipe.SLAB_PLATES, stair.position.y)
 		f.params = {"steps": StaircaseRecipe.steps_for_courses(int(p.courses)), "colour": 11}
 		f.build_into(world, c, StaircaseRecipe.flight_parts(palette))
+	var roles := {}
+	if bool(p.get("furnish", false)):
+		roles = _furnish(world, c, palette, p, keep)
 	var names := names_of(palette)
 	var out := []
 	var ts := BrickWorld.ticks_per_stud()
@@ -109,8 +128,39 @@ static func bricks(world: BrickWorld, palette: Dictionary, p: Dictionary) -> Arr
 		@warning_ignore("integer_division")
 		var cell := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
 		out.append([names.get(world.get_block_archetype(c, id), ""), cell,
-				world.get_block_colour(c, id)])
+				world.get_block_colour(c, id), int(roles.get(id, BuildRecipe.Role.STRUCTURE)),
+				world.get_block_material(c, id)])
 	world.release_chunk(c)
+	return out
+
+
+## Cut the building into the city's rooms and lay what the manifest puts in
+## them. Returns block id -> role for everything laid. The stairwell is a
+## keep-out exactly as BuildingRegistry.rooms_of makes it one, so nothing is
+## put down the shaft.
+static func _furnish(world: BrickWorld, c: int, palette: Dictionary, p: Dictionary,
+		keep: Array) -> Dictionary:
+	var out := {}
+	var fx := int(p.x)
+	var fz := int(p.z)
+	var snapped := TowerRecipe.snap_keepouts(keep, fx, fz)
+	var rooms := RoomManifest.rooms_for(fx, fz, int(p.courses), int(p.seed),
+			p.get("program", {}))
+	for room in rooms:
+		if not snapped.is_empty():
+			var plan := Rect2i(room.lo.x, room.lo.z, room.size.x, room.size.z)
+			var mine: Array[Rect2i] = room.posts.duplicate()
+			for k in snapped:
+				if (k as Rect2i).intersects(plan):
+					mine.append(k)
+			room.posts = mine
+		var items := RoomManifest.items_for(room)
+		for i in items.size():
+			var roles := []
+			var ids := RoomManifest.build_item(world, c, palette, items[i], 4 + int(i % 8),
+					Vector3i.ZERO, roles)
+			for k in ids.size():
+				out[ids[k]] = roles[k]
 	return out
 
 
@@ -145,7 +195,7 @@ static func flatten(r: BuildRecipe) -> BuildRecipe:
 	for t in r.towers:
 		var at := BuildRecipe.cell_from(t.cell)
 		for b in bricks(w, pal, normalised(t.params)):
-			out.add(b[0], (b[1] as Vector3i) + at, int(b[2]))
+			out.add(b[0], (b[1] as Vector3i) + at, int(b[2]), 0, int(b[3]), int(b[4]))
 	out.append(r, Vector3i.ZERO)
 	out.towers.clear()   # built above; append copied the records as well
 	return out

@@ -122,28 +122,77 @@ cell against the baked masks (slopes and curves included), flatten, the drag
 handles driven by exact rays, save/open/new, bake and its undo, a stamp and its
 undo, the detail layer, and a room template's metadata.
 
-### Stage D — the detail class
-Role byte per block: 0 structure, 1 interior, **2 detail**. `I` cycles the
-three. Detail is interior (decorative: weighs nothing, holds nothing up) with
-one more rule: the city never draws or lays it in the *drawn* room rung, only
-when the room is **real** — the player inside it or touching it. Old files read
-0/1 exactly as before.
+### Stage D — the detail class ✅
+Role byte per block: 0 structure, 1 interior, **2 detail**. `I` (or Layer)
+cycles the three; the ghost is purple on detail. Detail is interior
+(decorative: weighs nothing, holds nothing up) with one more rule: **the drawn
+room rung never draws it** (`RoomManifest.draw_items` skips it), and the real
+rung — the player within `ROOM_REACH` on the room's storey, or a blast
+touching it — lays it with everything else. So a cup on a desk costs nothing
+until somebody is standing at the desk. Old files read 0/1 exactly as before.
 
-### Stage E — room and item templates
-Type = Room template or Item, then save. A room template is a build whose
-interior/detail bricks are the furniture, stored in `user://rooms/<kind>/`, with
-a size in panels and a kind tag. An item is a small build in `user://items/`.
-`RoomManifest` prefers an authored template of the room's kind that fits,
-chosen by the room's seed, and falls back to the built-in `ITEMS`.
+Not yet: a player build's own detail bricks. A placed build has no rooms (its
+recipe is bricks, not a lattice), so its detail is laid with the build. That
+needs rooms for builds, which is §3.
 
-### Stage F — a building's program
-Which room kinds a generated building has: a **program** (weights per kind) on
-the tower record and on the city's shapes, read by `RoomManifest.rooms_for`
-instead of the fixed hash. The workshop's generated building exposes it.
+### Stage E — room and item templates ✅
+**Type → Room template**, build the furniture on the Interior and Detail
+layers (structure bricks are ignored — build walls to see it in context, they
+do not come along), **Save As**, pick the room kind. It lands in
+`user://rooms/<kind>/`. **Type → Item** saves to `user://items/`, optionally
+for one room kind. Shipped ones go in `res://rooms/` and `res://items/`.
+
+`RoomTemplates` (`scripts/room_templates.gd`) reads them once and hands the
+generator item parts in `RoomManifest.ITEMS`' own shape plus role, the
+author's colour and material:
+
+* A **room template** is split into **pieces** — connected clusters of bricks
+  (a table with a cup on it is one; a stool beside it is another). Each piece is
+  one manifest item, so it is placed, slid off a column, refused or spilled on
+  its own, exactly as a built-in crate is. All four turns are registered, so a
+  long thin room takes a template turned to fit.
+* `RoomManifest.items_for` **prefers a template** of the room's kind that fits
+  (chosen by the room's seed, centred in the room) and falls back to the
+  built-in manifest. Authored **items** join the built-in weights for the kinds
+  they are meant for.
+
+This is the one reference in the system (§0): rooms name templates, nothing is
+stored per room, and editing a template refurnishes every untouched room.
+
+### Stage F — a building's program ✅
+Which room kinds a generated building has: a **program**, `{kind: weight}`.
+`RoomManifest.kind_index` picks a room's kind from its seed under the weights,
+and `rooms_for` and `kind_at` (the far windows) both go through it, so a window
+cannot show a different room from the one behind it. An empty program is
+`seed % kinds` — the city draws exactly what it always drew.
+`BuildingRegistry.register(..., program)` stores it.
+
+In the workshop the generated building has **Generated → Furnish rooms**,
+**Room mix…** (a weight per room kind) and **Reroll furniture** (another seed).
+Furnished, its preview and its city placement are cut into the city's own rooms
+and filled by the city's own manifest — templates and items included — as
+INTERIOR/DETAIL bricks.
 
 ---
 
-## 3. What is deliberately not here
+## 3. Next, and what is deliberately not here
+
+Next, in order:
+
+1. **City shapes carry a program.** `city_scene.gd` registers towers without
+   one; its `SHAPES` rows want a `program` (an office block, a warehouse) passed
+   to `register` and to `BuildingShell.build_window_mesh` → `kind_at`. Left for
+   when `city_scene.gd` has no uncommitted work in the main folder.
+2. **Rooms for placed builds.** A generated building inside a player build is
+   furnished at placement as bricks; the city's room streaming (drawn/real
+   rungs, detail on demand) only knows generated towers. Registering a build's
+   towers' rooms with `BuildingRegistry.rooms_of`, offset by the tower's cell,
+   plus `rooms_near` for builds, would give them the rungs.
+3. **More room kinds.** `Room.KINDS` is four, and the far-window shader packs the
+   kind as `index / 4`. More kinds (bedroom, bathroom, lab) need that widened.
+4. **Select and move a stamped group** by its group record.
+
+Deliberately not here:
 
 * Mechs, guns, vehicles, aircraft — listed in the Type menu, disabled. They need
   BuildMode §6's articulated links, which stay deferred.

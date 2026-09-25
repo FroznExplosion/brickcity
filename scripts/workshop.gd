@@ -1398,10 +1398,14 @@ func _update_hud() -> void:
 		var tp := TowerBlockout.normalised(t.params)
 		@warning_ignore("integer_division")
 		var storeys: int = int(tp.courses) / TowerBlockout.STOREY
-		gen += "\ngenerated building %dx%d studs, %d storeys%s%s%s -- drag its handles" % [
+		var mix := ""
+		for k in (tp.program as Dictionary):
+			mix += "%s%s %d" % [", " if mix != "" else "", k, tp.program[k]]
+		gen += "\ngenerated building %dx%d studs, %d storeys%s%s%s%s -- drag its handles" % [
 				tp.x, tp.z, storeys,
 				", rooms" if tp.rooms else "", ", stairs" if tp.stairs else "",
-				", windows" if tp.windows else ""]
+				", windows" if tp.windows else "",
+				(", furnished (%s)" % (mix if mix != "" else "any rooms")) if tp.furnish else ""]
 	_hud.text = "%s  [%s%s]  %s   grid: %s\nlayer: %s\ncell %v   %s\n%d brick(s): %d structure, %d interior%s%s%s" % [
 		_part(), _facing(), " inverted" if _flip else "",
 		"%s %s" % [BrickWorld.get_material_colour_name(_mat, _colour), BrickWorld.get_material_name(_mat)],
@@ -1769,9 +1773,9 @@ func _after_edit() -> void:
 		var i := _tower_sel()
 		if i >= 0:
 			var tp := TowerBlockout.normalised(recipe.towers[i].params)
-			_menu.set_tower_options(true, tp.rooms, tp.stairs, tp.windows)
+			_menu.set_tower_options(true, tp.rooms, tp.stairs, tp.windows, tp.furnish)
 		else:
-			_menu.set_tower_options(false, false, false, false)
+			_menu.set_tower_options(false, false, false, false, false)
 	_remesh()
 	if _overlay_on:
 		_refresh_overlay()
@@ -2243,6 +2247,12 @@ func _on_menu(what: String, arg: Variant) -> void:
 		"bake_tower": _bake_tower()
 		"remove_tower": _remove_tower()
 		"tower_option": _set_tower_option(str(arg[0]), bool(arg[1]))
+		"tower_program": _set_tower_param("program", arg)
+		"reroll": _reroll_tower()
+		"program_dialog":
+			var i := _tower_sel()
+			if i >= 0:
+				_menu.show_program(TowerBlockout.normalised(recipe.towers[i].params).program)
 		"kind":
 			recipe.kind = str(arg)
 			_menu.set_kind(recipe.kind)
@@ -2298,6 +2308,12 @@ func _save_as(build_name: String, room_kind: String = "") -> String:
 			room_kind = str(recipe.meta.get("room_kind", Room.KINDS[0]))
 		recipe.meta["room_kind"] = room_kind
 		dir += room_kind + "/"
+	elif recipe.kind == "item":
+		# Which rooms the generator may put it in (RoomTemplates._kinds_meant).
+		if room_kind == "" or room_kind == "any":
+			recipe.meta.erase("room_kind")
+		else:
+			recipe.meta["room_kind"] = room_kind
 	if _builds_dir != BUILDS_DIR:
 		dir = _builds_dir   # the gate writes somewhere a test cannot hurt
 	var path := dir + slug(build_name) + ".json"
@@ -2318,6 +2334,9 @@ func _write(path: String) -> bool:
 		recipe.meta["size"] = [d.x, d.y, d.z]
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	var err := recipe.save_to(path)
+	if recipe.kind == "room" or recipe.kind == "item":
+		# The generator reads templates once; this one is new.
+		RoomTemplates.reload()
 	print("[workshop] saved '%s' (%s): %d bricks, %d fixture(s), %d generated building(s) to %s (%s)"
 			% [recipe.name, recipe.kind, recipe.size(), recipe.fixture_count(),
 			recipe.towers.size(), path, error_string(err)])
@@ -2657,6 +2676,8 @@ func _undo_stamp() -> bool:
 ## Frame-0 block ids each generated building laid, one entry per
 ## recipe.towers entry.
 var _tower_blocks := []
+## The role each of those was laid with: furniture comes out INTERIOR or DETAIL.
+var _tower_roles := []
 ## Undo records for generated buildings: {"index", "before"} where before is
 ## the record as it was, or null when the edit created it.
 var _tower_undo := []
@@ -2699,7 +2720,10 @@ func _spawn_tower(i: int) -> void:
 	var t: Dictionary = recipe.towers[i]
 	var at := BuildRecipe.cell_from(t.cell)
 	var p := TowerBlockout.normalised(t.params)
+	while _tower_roles.size() <= i:
+		_tower_roles.append(PackedByteArray())
 	var ids := PackedInt32Array()
+	var roles := PackedByteArray()
 	var f0: int = asm.frames[0]
 	for b in TowerBlockout.bricks(world, palette, p):
 		var arch: int = palette.get(b[0], -1)
@@ -2707,8 +2731,12 @@ func _spawn_tower(i: int) -> void:
 			continue
 		var bid := world.place_block(f0, (b[1] as Vector3i) + at, arch, int(b[2]))
 		if bid >= 0:
+			if int(b[4]) != 0:
+				world.set_block_material(f0, bid, int(b[4]))
 			ids.push_back(bid)
+			roles.push_back(int(b[3]))
 	_tower_blocks[i] = ids
+	_tower_roles[i] = roles
 
 
 func _clear_tower_blocks(i: int) -> void:
@@ -2723,6 +2751,7 @@ func _clear_towers() -> void:
 	for i in _tower_blocks.size():
 		_clear_tower_blocks(i)
 	_tower_blocks.clear()
+	_tower_roles.clear()
 
 
 func _respawn_towers() -> void:
@@ -2764,14 +2793,26 @@ func _undo_tower() -> bool:
 
 
 func _set_tower_option(key: String, on: bool) -> void:
+	_set_tower_param(key, on)
+
+
+## Change one parameter of the newest generated building, as one undoable edit.
+func _set_tower_param(key: String, value: Variant) -> void:
 	var i := _tower_sel()
 	if i < 0:
 		return
 	var before: Dictionary = (recipe.towers[i] as Dictionary).duplicate(true)
-	var p: Dictionary = (before.params as Dictionary).duplicate()
-	p[key] = on
+	var p: Dictionary = (before.params as Dictionary).duplicate(true)
+	p[key] = value
 	_set_tower(i, BuildRecipe.cell_from(before.cell), p)
 	_record_tower(i, before)
+
+
+## Generated > Reroll furniture: the same rooms, furnished from another seed.
+func _reroll_tower() -> void:
+	var i := _tower_sel()
+	if i >= 0:
+		_set_tower_param("seed", int(TowerBlockout.normalised(recipe.towers[i].params).seed) + 1)
 
 
 ## Insert > Remove generated building.
@@ -2794,12 +2835,14 @@ func _bake_tower() -> int:
 	if i < 0:
 		return 0
 	var ids: PackedInt32Array = _tower_blocks[i]
+	var roles: PackedByteArray = _tower_roles[i] if i < _tower_roles.size() else PackedByteArray()
 	var first := recipe.size()
 	var f0: int = asm.frames[0]
 	var ts := BrickWorld.ticks_per_stud()
 	var tp := BrickWorld.ticks_per_plate()
 	var names := TowerBlockout.names_of(palette)
-	for bid in ids:
+	for k in ids.size():
+		var bid := ids[k]
 		var box: Array = world.get_block_ticks(f0, bid)
 		if box.is_empty():
 			continue
@@ -2807,12 +2850,15 @@ func _bake_tower() -> int:
 		@warning_ignore("integer_division")
 		var cell := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
 		recipe.add(names.get(world.get_block_archetype(f0, bid), ""), cell,
-				world.get_block_colour(f0, bid))
+				world.get_block_colour(f0, bid), 0, roles[k] if k < roles.size() else 0,
+				world.get_block_material(f0, bid))
 		_placed_at.append([0, bid])
 		_edits.append("brick")
 	var rec: Dictionary = recipe.towers[i]
 	recipe.towers.remove_at(i)
 	_tower_blocks.remove_at(i)   # the bricks stay: they are the recipe's now
+	if i < _tower_roles.size():
+		_tower_roles.remove_at(i)
 	recipe.groups.append({"source": "generated", "name": "generated building",
 			"first": first, "count": recipe.size() - first, "turn": 0,
 			"offset": rec.cell})

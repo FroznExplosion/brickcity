@@ -55,6 +55,9 @@ var _save_room_row: HBoxContainer
 
 var _clear_dialog: ConfirmationDialog
 
+var _program_dialog: ConfirmationDialog
+var _program_spins := {}    ## room kind -> SpinBox
+
 var _kind := "building"
 var _role := 0
 
@@ -62,7 +65,7 @@ var _role := 0
 ## back from id_pressed.
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
 enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
-enum { G_ROOMS, G_STAIRS, G_WINDOWS }
+enum { G_ROOMS, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
 
 
 func _ready() -> void:
@@ -72,11 +75,12 @@ func _ready() -> void:
 	_build_open_dialog()
 	_build_save_dialog()
 	_build_clear_dialog()
+	_build_program_dialog()
 
 
 ## Is any dialog up? The workshop builds nothing through one.
 func is_modal() -> bool:
-	for d in [_open_dialog, _save_dialog, _clear_dialog]:
+	for d in [_open_dialog, _save_dialog, _clear_dialog, _program_dialog]:
 		if d != null and d.visible:
 			return true
 	for m in [_file, _insert, _type, _layer, _gen]:
@@ -110,12 +114,14 @@ func set_role(r: int) -> void:
 
 
 ## Tick the generated-building options to match the one in the build.
-func set_tower_options(has_tower: bool, rooms: bool, stairs: bool, windows: bool) -> void:
+func set_tower_options(has_tower: bool, rooms: bool, stairs: bool, windows: bool,
+		furnish: bool = false) -> void:
 	var p := _gen.get_popup()
 	_gen.disabled = not has_tower
 	p.set_item_checked(p.get_item_index(G_ROOMS), rooms)
 	p.set_item_checked(p.get_item_index(G_STAIRS), stairs)
 	p.set_item_checked(p.get_item_index(G_WINDOWS), windows)
+	p.set_item_checked(p.get_item_index(G_FURNISH), furnish)
 	var ip := _insert.get_popup()
 	ip.set_item_disabled(ip.get_item_index(I_BAKE), not has_tower)
 	ip.set_item_disabled(ip.get_item_index(I_REMOVE_TOWER), not has_tower)
@@ -186,7 +192,15 @@ func _build_bar() -> void:
 		["Interior walls", G_ROOMS, 0],
 		["Stairs", G_STAIRS, 0],
 		["Windows", G_WINDOWS, 0],
+		["Furnish rooms", G_FURNISH, 0],
+		[],
+		["Room mix…", G_PROGRAM, 0],
+		["Reroll furniture", G_REROLL, 0],
 	], _on_gen, true)
+	# The last two are actions, not options: no tick.
+	var gp := _gen.get_popup()
+	gp.set_item_as_radio_checkable(gp.get_item_index(G_PROGRAM), false)
+	gp.set_item_as_radio_checkable(gp.get_item_index(G_REROLL), false)
 	_gen.disabled = true
 
 	var spacer := Control.new()
@@ -255,6 +269,12 @@ func _on_type(id: int) -> void:
 
 
 func _on_gen(id: int) -> void:
+	if id == G_PROGRAM:
+		action.emit("program_dialog", null)
+		return
+	if id == G_REROLL:
+		action.emit("reroll", null)
+		return
 	var p := _gen.get_popup()
 	var i := p.get_item_index(id)
 	var on := not p.is_item_checked(i)
@@ -263,6 +283,7 @@ func _on_gen(id: int) -> void:
 		G_ROOMS: action.emit("tower_option", ["rooms", on])
 		G_STAIRS: action.emit("tower_option", ["stairs", on])
 		G_WINDOWS: action.emit("tower_option", ["windows", on])
+		G_FURNISH: action.emit("tower_option", ["furnish", on])
 
 
 # ---------------------------------------------------------------------------
@@ -402,13 +423,18 @@ func _build_save_dialog() -> void:
 	_save_room_kind = OptionButton.new()
 	for k in Room.KINDS:
 		_save_room_kind.add_item(k)
+	_save_room_kind.add_item("any")   # items only: every kind of room
 	_save_room_row.add_child(_save_room_kind)
 	_save_dialog.confirmed.connect(_save_chosen)
 
 
 func show_save_as(current_name: String, room_kind: String = "") -> void:
 	_save_name.text = current_name
-	_save_room_row.visible = _kind == "room"
+	_save_room_row.visible = _kind == "room" or _kind == "item"
+	# "any" is for an item; a room template IS one kind of room.
+	_save_room_kind.set_item_disabled(_save_room_kind.item_count - 1, _kind == "room")
+	if _kind == "item" and room_kind == "":
+		room_kind = "any"
 	for i in _save_room_kind.item_count:
 		if _save_room_kind.get_item_text(i) == room_kind:
 			_save_room_kind.select(i)
@@ -423,7 +449,7 @@ func _save_chosen() -> void:
 	if n == "":
 		return
 	var arg := {"name": n}
-	if _kind == "room":
+	if _kind == "room" or _kind == "item":
 		arg["room_kind"] = _save_room_kind.get_item_text(_save_room_kind.selected)
 	action.emit("save_as", arg)
 
@@ -439,3 +465,45 @@ func _build_clear_dialog() -> void:
 	_clear_dialog.ok_button_text = "Clear"
 	add_child(_clear_dialog)
 	_clear_dialog.confirmed.connect(func() -> void: action.emit("new", null))
+
+
+# ---------------------------------------------------------------------------
+# Room mix (Docs/Workshop.md, Stage F)
+# ---------------------------------------------------------------------------
+
+func _build_program_dialog() -> void:
+	_program_dialog = ConfirmationDialog.new()
+	_program_dialog.title = "Room mix"
+	_program_dialog.ok_button_text = "Apply"
+	add_child(_program_dialog)
+	var box := VBoxContainer.new()
+	_program_dialog.add_child(box)
+	var l := Label.new()
+	l.text = "How often each kind of room comes up (0 = never).\nAll zero is every kind alike."
+	box.add_child(l)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	box.add_child(grid)
+	for k in Room.KINDS:
+		var kl := Label.new()
+		kl.text = k
+		grid.add_child(kl)
+		var sp := SpinBox.new()
+		sp.min_value = 0
+		sp.max_value = 20
+		sp.step = 1
+		grid.add_child(sp)
+		_program_spins[k] = sp
+	_program_dialog.confirmed.connect(func() -> void:
+		var prog := {}
+		for k in _program_spins:
+			var v := int((_program_spins[k] as SpinBox).value)
+			if v > 0:
+				prog[k] = v
+		action.emit("tower_program", prog))
+
+
+func show_program(program: Dictionary) -> void:
+	for k in _program_spins:
+		(_program_spins[k] as SpinBox).value = int(program.get(k, 0 if not program.is_empty() else 1))
+	_program_dialog.popup_centered()

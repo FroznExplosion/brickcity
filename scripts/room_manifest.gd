@@ -177,8 +177,12 @@ static func rooms_near(footprint_x: int, footprint_z: int, courses: int,
 
 ## The rooms of a generated building, in its own cells: one per storey per room
 ## the recipe's interior walls cut that storey into.
+##
+## `program` is the building's mix of rooms (Docs/Workshop.md, Stage F):
+## {kind: weight}. Empty is every kind equally, which is what every building
+## had before programs existed -- and draws the same kinds it always drew.
 static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
-		building_seed: int) -> Array[Room]:
+		building_seed: int, program: Dictionary = {}) -> Array[Room]:
 	var out: Array[Room] = []
 	# One description of the lattice, read by the generator and by rooms_near.
 	# Two would drift, and the last time two numbers described one layout here
@@ -197,7 +201,7 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 			r.posts = (lat.posts as Array)[ri]
 			r.outer = bool((lat.outer as Array)[ri])
 			r.room_seed = hash3(building_seed, r.id, 0x9E37)
-			r.kind = Room.KINDS[r.room_seed % Room.KINDS.size()]
+			r.kind = Room.KINDS[kind_index(r.room_seed, program)]
 			out.append(r)
 	return out
 
@@ -214,7 +218,7 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 ## `building_seed` is the one `rooms_for` is given. The point is in studs; a
 ## point on the wall itself is fine, it is matched to the nearest room.
 static func kind_at(footprint_x: int, footprint_z: int, courses: int,
-		building_seed: int, storey: int, plan: Vector2) -> int:
+		building_seed: int, storey: int, plan: Vector2, program: Dictionary = {}) -> int:
 	var lat := lattice_for(footprint_x, footprint_z, courses)
 	var rects: Array = lat.rects
 	if rects.is_empty() or storey < 0 or storey >= (lat.storeys as Array).size():
@@ -230,7 +234,44 @@ static func kind_at(footprint_x: int, footprint_z: int, courses: int,
 			best_d = d
 			best = ri
 	var id := storey * rects.size() + best
-	return hash3(building_seed, id, 0x9E37) % Room.KINDS.size()
+	return kind_index(hash3(building_seed, id, 0x9E37), program)
+
+
+## Which of Room.KINDS a room with this seed is, under a program of weights.
+## One function for `rooms_for` and `kind_at`, so a far building's window and
+## the room behind it cannot disagree.
+static func kind_index(room_seed: int, program: Dictionary = {}) -> int:
+	var n := Room.KINDS.size()
+	var total := 0
+	for k in Room.KINDS:
+		total += maxi(int(program.get(k, 0)), 0)
+	if total <= 0:
+		return posmod(room_seed, n)
+	var v := posmod(room_seed, total)
+	for i in n:
+		var w := maxi(int(program.get(Room.KINDS[i], 0)), 0)
+		if v < w:
+			return i
+		v -= w
+	return n - 1
+
+
+## Parts of an item type: the built-in ITEMS, or one authored in the workshop
+## (RoomTemplates). Rows are [part, offset, colour offset] for a built-in and
+## carry [.., role, colour, material] as well for an authored one.
+static func parts_of(type: String) -> Array:
+	if ITEMS.has(type):
+		return ITEMS[type]
+	return RoomTemplates.parts(type)
+
+
+## The authored room template this room is furnished from, or {} to use the
+## built-in manifest. Chosen by the room's seed among every template of its
+## kind that fits.
+static func template_for(room: Room) -> Dictionary:
+	if not RoomTemplates.has_rooms(room.kind):
+		return {}
+	return RoomTemplates.room_for(room.kind, room.size, hash3(room.room_seed, 3, 37))
 
 
 ## Every habitable storey of a tower: where its floor's TOP surface is, and how
@@ -273,9 +314,20 @@ static func storeys_of(courses: int) -> Array:
 ## thousands of rooms it will never build, and each of those used to generate a
 ## manifest purely to count it.
 static func item_count_for(room: Room) -> int:
-	if (BY_KIND.get(room.kind, []) as Array).is_empty():
+	var tpl := template_for(room)
+	if not tpl.is_empty():
+		return (tpl.types as Array).size()
+	if _kinds_for(room.kind).is_empty():
 		return 0
 	return 2 + int(hash3(room.room_seed, 11, 3) % 4)
+
+
+## The item types a room of this kind draws from: the built-in list, and every
+## authored item meant for it once each.
+static func _kinds_for(kind: String) -> Array:
+	var out: Array = (BY_KIND.get(kind, []) as Array).duplicate()
+	out.append_array(RoomTemplates.items_for_kind(kind))
+	return out
 
 
 ## The manifest: what is in this room. A pure function of its seed.
@@ -283,8 +335,25 @@ static func item_count_for(room: Room) -> int:
 ## Returns a list of {type, cell, yaw}. The cell is in the BUILDING's grid, on
 ## the room's floor, which is where the item's own blocks are laid from.
 static func items_for(room: Room) -> Array:
-	var kinds: Array = BY_KIND.get(room.kind, [])
 	var out := []
+	# An authored room first: its pieces where its author put them, centred
+	# in the room, each slid off a column as a built-in item would be.
+	var tpl := template_for(room)
+	if not tpl.is_empty():
+		var spare: Vector3i = room.size - (tpl.size as Vector3i)
+		@warning_ignore("integer_division")
+		var base := room.lo + Vector3i(spare.x / 2, 0, spare.z / 2)
+		var placed: Array[Rect2i] = []
+		for k in (tpl.types as Array).size():
+			var type: String = tpl.types[k]
+			var span := _item_span(type)
+			var at := _off_the_posts(room, base + (tpl.offsets[k] as Vector3i), span, placed)
+			if at == NOWHERE:
+				continue
+			placed.append(Rect2i(at.x, at.z, span.x, span.z))
+			out.append({"type": type, "cell": at, "yaw": 0})
+		return out
+	var kinds := _kinds_for(room.kind)
 	if kinds.is_empty():
 		return out
 	# Two to five things. A room is furnished, not warehoused: the count is what
@@ -408,15 +477,33 @@ static func item_supported(world: BrickWorld, chunk: int, type: String,
 	return false
 
 
+## A part row's colour: the author's own when it has one, the room's otherwise.
+static func _part_colour(part: Array, colour: int, filaments: int) -> int:
+	if part.size() > 4 and int(part[4]) >= 0:
+		return int(part[4])
+	return (colour + int(part[2])) % filaments
+
+
+## Is this part row DETAIL -- laid only when the room is real?
+static func is_detail(part: Array) -> bool:
+	return part.size() > 3 and int(part[3]) == BuildRecipe.Role.DETAIL
+
+
 ## Lay one item's bricks into a chunk. Returns the block ids it produced, which
 ## is what the room keeps so that it can take them out again.
 ##
 ## `offset` is the host's own rebase, the same argument `Fixture.build_into`
 ## takes and for the same reason.
+##
+## `roles`, when given, gets one BuildRecipe.Role per block laid, in order: an
+## authored item's DETAIL parts are laid here like any other (this is the real
+## rung) and the caller may want to know which they were.
 static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
-		item: Dictionary, colour: int, offset: Vector3i = Vector3i.ZERO) -> PackedInt32Array:
+		item: Dictionary, colour: int, offset: Vector3i = Vector3i.ZERO,
+		roles: Array = []) -> PackedInt32Array:
 	var out := PackedInt32Array()
-	var parts: Array = ITEMS.get(str(item.type), [])
+	var parts: Array = parts_of(str(item.type))
+	var first_role := roles.size()
 	var at: Vector3i = (item.cell as Vector3i) - offset
 	for part in parts:
 		var name: String = part[0]
@@ -429,15 +516,19 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		# bake away by then, and re-baking a 50,000-brick building to add a
 		# chair is what made one room cost 225 ms.
 		var id := world.place_block(chunk, at + (part[1] as Vector3i), palette[name],
-				(colour + int(part[2])) % BrickWorld.get_filament_count(), true)
+				_part_colour(part, colour, BrickWorld.get_filament_count()), true)
 		if id < 0:
 			# All of it or none of it. A part that is refused -- something is
 			# in the way -- takes the rest out with it: a crate whose bricks
 			# were refused and whose lid was not is a lid hanging in the air.
 			for laid in out:
 				world.remove_block(chunk, laid)
+			roles.resize(first_role)
 			return PackedInt32Array()
+		if part.size() > 5 and int(part[5]) != 0:
+			world.set_block_material(chunk, id, int(part[5]))
 		out.push_back(id)
+		roles.append(BuildRecipe.Role.DETAIL if is_detail(part) else BuildRecipe.Role.INTERIOR)
 	return out
 
 
@@ -477,13 +568,20 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		var colour := 4 + int(i % 8)
 		var box := AABB()
 		var any := false
-		for part in (ITEMS.get(str(item.type), []) as Array):
+		for part in parts_of(str(item.type)):
 			var name: String = part[0]
 			if not palette.has(name):
 				continue
+			# DETAIL is never drawn: it exists only with somebody in the room
+			# (Docs/Workshop.md, Stage D), and the drawn rung is for rooms
+			# nobody is in.
+			if is_detail(part):
+				continue
 			var size := Vector3(world.get_archetype_size(palette[name])) * cs
 			var lo := Vector3(at + (part[1] as Vector3i)) * cs
-			var c := BrickWorld.get_filament_colour((colour + int(part[2])) % filaments)
+			var pc := _part_colour(part, colour, filaments)
+			var c := BrickWorld.get_filament_colour(pc) if part.size() <= 5 or int(part[5]) == 0 \
+					else BrickWorld.get_material_colour(int(part[5]), pc)
 			var mid := lo + size * 0.5
 			# MultiMesh's own row layout: the basis by rows with the origin at
 			# the end of each, then the colour.
@@ -503,8 +601,8 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 ## than through its wall.
 static func _item_span(type: String) -> Vector3i:
 	var hi := Vector3i.ONE
-	for part in (ITEMS.get(type, []) as Array):
-		var size := BrickPalette.size_of(part[0])
+	for part in parts_of(type):
+		var size := BuildRecipe.part_size(part[0])
 		var at: Vector3i = part[1]
 		hi = Vector3i(maxi(hi.x, at.x + size.x), maxi(hi.y, at.y + size.y),
 				maxi(hi.z, at.z + size.z))
