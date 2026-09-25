@@ -83,6 +83,12 @@ For small structure too: a piece of three bricks or fewer breaks off only
 within 30 m of the player and in view, and is deleted before it gets a body
 anywhere else (`IslandManager.TINY_BLOCKS` / `TINY_RANGE`).
 
+And for the big pieces: they settle by rule, fall with merged collision and
+land whole beyond 60 m of every player (Status: "A big collapse, made
+affordable"). Left of that plan: a hard cap on how many pieces may be moving at
+once, and the worst single ticks -- a blast into a freshly built big tower
+(~300 ms of `damage`) and the largest landings (~130 ms of fracture).
+
 Still open: bigger pieces that do not matter should be deleted and respawned
 later if they start to matter, not simulated through the collapse. The debris
 cap is the machinery for the first half.

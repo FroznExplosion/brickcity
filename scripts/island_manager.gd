@@ -56,6 +56,27 @@ const SETTLE_SLOW_NEAR_MS := 1500
 ## and vibrating that never gets under SETTLE_SPEED at all.
 const SETTLE_MAX_MS := 12000
 const SETTLE_MAX_SPEED := 2.0
+## Pieces at least this big fall with MERGED collision -- as few boxes as the
+## shape allows -- rather than one box per brick. The --big census had ~23
+## pieces of a thousand bricks and more carrying 80% of every collision box in
+## the collapse, one per brick, all of them moving.
+##
+## It was tried once before and reverted: a merged piece had to be rebuilt one
+## box per brick the moment it landed, so every landing paid for two shape
+## builds. Nothing converts a falling piece back now. Landing, shearing, shedding
+## and blasting work on the bricks' own joints, and the piece is rebuilt merged
+## once at the end of the tick (_flush_reshapes) -- one build, not two, and far
+## fewer boxes to build.
+const MERGE_FALLING_BLOCKS := 200
+## A landing further than this from every player does not break the piece that
+## landed: it lands whole. What it landed ON still takes the hit, so a tower
+## coming down on a building still wrecks the building.
+##
+## The pieces a landing breaks off are mostly landmarks -- big enough to stand
+## on -- and landmarks are never deleted, because every machine has to have
+## them. So the only way to have fewer of them far away is not to make them.
+## The host decides, and what it decides is recorded, so every machine agrees.
+const FRACTURE_RANGE := 60.0
 const WAKE_RADIUS := 6.0
 
 ## Impact shear. A landing releases joints; it destroys nothing.
@@ -223,6 +244,10 @@ var furniture_deleted := 0         ## furniture-only pieces deleted where they c
 var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
 var swept_at_rest := 0            ## small pieces swept up moments after landing
 var settled_by_rule := 0          ## settled for staying slow, not for sleeping
+var far_landings := 0             ## landings too far from anyone to break the piece
+var far_shears := 0               ## things landed on too far from anyone to shear
+var merged_rebuilds := 0          ## falling pieces rebuilt merged after a change
+var _reshape_list: Array[BrickIsland] = []
 var settled_by_age := 0           ## settled because SETTLE_MAX_MS ran out
 
 ## Called when an island lands hard: (island, world_point, severity). The scene
@@ -654,16 +679,16 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Shapes are built inside the extension: one call instead of one per block
 	# across the script/engine boundary, which was a third of what cutting an
 	# island out of a building cost.
-	# Per block, NOT merged. Merging a piece at birth was tried and reverted:
-	# a falling piece is hit almost at once (its own landing), `_ensure_per_block`
-	# has to rebuild the shapes there and then, and the scene ends up paying for
-	# two shape builds instead of one -- 35,000 boxes rebuilt against 839 saved.
-	# It also wrecked the settled phase, 16.7 ms to 69.5. Merging is worth it
-	# once a piece has stopped, and only then.
+	# Merged from birth when it is big: see MERGE_FALLING_BLOCKS, which also
+	# says why this was once tried and reverted and what is different now.
+	# Small pieces stay one box per brick -- they have few to begin with.
+	var merge_now := count >= MERGE_FALLING_BLOCKS
 	var built: Dictionary = world.add_chunk_shapes(
-			isl.body.get_rid(), isl.chunk, isl.local_com, true)
+			isl.body.get_rid(), isl.chunk, isl.local_com, true, merge_now)
 	isl.shape_map = built.map
 	isl.shape_count = int(built.count)
+	isl.merged = merge_now
+	isl.fly_merged = merge_now
 	spawn_prof.shapes += float(Time.get_ticks_usec() - _t) / 1000.0
 	_t = Time.get_ticks_usec()
 
@@ -808,8 +833,8 @@ func _centre_of(chunk: int, block_ids: PackedInt32Array) -> Vector3:
 ## makes the physics solver pay for. The merged boxes ignore block identity, so
 ## nothing can be disabled on its own -- which is fine until the piece is hit,
 ## at which point this runs the other way first.
-func _reshape(isl: BrickIsland, merged: bool) -> void:
-	if not isl.is_valid() or isl.merged == merged:
+func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
+	if not isl.is_valid() or (isl.merged == merged and not force):
 		return
 	var rid := isl.body.get_rid()
 	# Out of the space first: shape calls on a body IN a space cost time
@@ -839,9 +864,42 @@ func _reshape(isl: BrickIsland, merged: bool) -> void:
 
 
 ## About to damage this piece, so it needs shapes it can disable one at a time.
+##
+## Unless it is FALLING merged: then it is rebuilt merged once, at the end of the
+## tick, from whatever its blocks are by then -- one shape build instead of the
+## per-block rebuild this used to force at every landing, which on a toppled
+## building was the 285 ms tick.
 func _ensure_per_block(isl: BrickIsland) -> void:
+	if isl.merged and isl.fly_merged and not isl.settled:
+		if not isl.reshape_due:
+			isl.reshape_due = true
+			_reshape_list.append(isl)
+		return
 	if isl.merged:
 		_reshape(isl, false)
+
+
+## Rebuild, merged, every falling piece whose blocks changed this tick.
+func _flush_reshapes() -> void:
+	for isl in _reshape_list:
+		if not isl.is_valid() or not isl.reshape_due:
+			continue
+		isl.reshape_due = false
+		if isl.settled:
+			continue  # settling already rebuilt it
+		_reshape(isl, true, true)
+		merged_rebuilds += 1
+	_reshape_list.clear()
+
+
+## Is anybody close enough to a landing for it to break the piece that landed?
+## With nobody to measure against -- a probe, a server with no players yet --
+## everything matters, as it always did.
+func _landing_matters(isl: BrickIsland) -> bool:
+	var points := interest_points()
+	if points.is_empty():
+		return true
+	return _distance_to_interest(world_aabb(isl), points) <= FRACTURE_RANGE
 
 
 ## What this piece collides with, given how big it is and what it is doing.
@@ -917,11 +975,15 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.body.gravity_scale = DEBRIS_GRAVITY
 	_apply_layers(isl)
 
-	# Shapes before the body joins a space, as always.
+	# Shapes before the body joins a space, as always. Merged: a whole building
+	# coming down is the biggest piece there is (MERGE_FALLING_BLOCKS).
+	var merge_now := world.get_alive_block_count(chunk) >= MERGE_FALLING_BLOCKS
 	var built: Dictionary = world.add_chunk_shapes(
-			isl.body.get_rid(), chunk, isl.local_com, true)
+			isl.body.get_rid(), chunk, isl.local_com, true, merge_now)
 	isl.shape_map = built.map
 	isl.shape_count = int(built.count)
+	isl.merged = merge_now
+	isl.fly_merged = merge_now
 
 	# The building's mesh becomes the island's mesh. It already holds the right
 	# geometry, so there is nothing to bake and nothing to upload.
@@ -1093,7 +1155,10 @@ func rebuild_chunk(chunk: int) -> bool:
 	# Blocks ADDED to a piece -- a room's contents spilling into it. Not a
 	# command: it is furniture, and each machine carries its own (record_detach).
 	_touched(isl)
-	_reshape(isl, isl.settled)
+	if isl.fly_merged and not isl.settled:
+		_reshape(isl, true, true)
+	else:
+		_reshape(isl, isl.settled)
 	rebuild_mesh(isl, true, true)
 	refresh_furniture(isl)
 	return true
@@ -1232,6 +1297,10 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 		return
 	# Something landed on it: this machine's physics. The host's to decide.
 	if not decides:
+		return
+	# Nobody near: it takes the landing without coming apart. FRACTURE_RANGE.
+	if not _landing_matters(isl):
+		far_shears += 1
 		return
 	wake(isl)
 	wake_near(world_point, WAKE_RADIUS)
@@ -1457,10 +1526,14 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	var radius := clampf(IMPACT_RADIUS * severity * 0.08, IMPACT_RADIUS, IMPACT_RADIUS_MAX)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 
+	# Nobody near enough to see it break: it lands whole (FRACTURE_RANGE). What
+	# it landed on still takes the hit, below.
+	var near := _landing_matters(isl)
 	# Where it actually touched. The solver already knows; asking it beats
 	# guessing from a bounding box, which for a toppled building meant shearing
 	# a band up the side rather than across the face that landed.
-	_ensure_per_block(isl)
+	if near:
+		_ensure_per_block(isl)
 	var contacts := _contact_points(isl)
 	var box := world_aabb(isl)
 	if contacts.is_empty():
@@ -1488,7 +1561,7 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	var loosened := PackedInt32Array()
 	# World to grid space, the space piece commands are written in.
 	var inv := DamageLog.grid_frame(world, isl.chunk) * isl.chunk_transform().affine_inverse()
-	for i in mini(contacts.size(), SHEAR_CONTACTS_MAX):
+	for i in (mini(contacts.size(), SHEAR_CONTACTS_MAX) if near else 0):
 		# peel: the struck region comes away as one clump rather than as a spray
 		# of single bricks. See BrickWorld::separate_near.
 		var e := _piece_entry(isl, DamageLog.Kind.PIECE_SHEAR)
@@ -1500,8 +1573,17 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 		if not got.is_empty():
 			_record(e)
 			loosened.append_array(got)
-	loosened.append_array(_snap_across(isl, contacts, severity))
+	if near:
+		loosened.append_array(_snap_across(isl, contacts, severity))
+	else:
+		# Counted as a landing all the same, so a piece bouncing in the
+		# distance is not queued again every bounce (MAX_IMPACTS).
+		far_landings += 1
+		isl.impacts += 1
+	if loosened.is_empty() and near:
+		return
 	if loosened.is_empty():
+		_hand_over(isl, contacts, severity)
 		return
 
 	isl.impacts += 1
@@ -1521,6 +1603,11 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# ONE event, and each hand-over shears every loose piece within reach -- so
 	# six contacts a few centimetres apart meant doing that six times over.
 	# Two bricks bounce: see MIN_IMPACT_BLOCKS.
+	_hand_over(isl, contacts, severity)
+
+
+## Give whatever a landing piece hit the other half of the collision.
+func _hand_over(isl: BrickIsland, contacts: Array, severity: float) -> void:
 	if on_impact.is_valid() and world.get_alive_block_count(isl.chunk) >= MIN_IMPACT_BLOCKS:
 		for i in mini(contacts.size(), IMPACT_HANDOVERS_MAX):
 			var c: Dictionary = contacts[i]
@@ -1844,6 +1931,9 @@ func tick() -> void:
 	var _tr := Time.get_ticks_usec()
 	tick_prof.resolve += float(_tr - _tl) / 1000.0
 	_drain_fracture_queue()
+	# After everything that can change a falling piece's blocks this tick, and
+	# before the physics steps: one merged rebuild per piece that changed.
+	_flush_reshapes()
 	var _tf := Time.get_ticks_usec()
 	tick_prof.fracture += float(_tf - _tr) / 1000.0
 	_stream_island_meshes()
@@ -2301,6 +2391,9 @@ func report() -> Dictionary:
 		"woken": woken,
 		"settled": settled,
 		"settled_by_rule": settled_by_rule,
+		"far_landings": far_landings,
+		"far_shears": far_shears,
+		"merged_rebuilds": merged_rebuilds,
 		"settled_by_age": settled_by_age,
 		"blocks": blocks,
 		"disposable": loose,

@@ -49,6 +49,12 @@ var shape_count := 0
 ## be disabled on its own. Anything that damages this piece has to rebuild
 ## the shapes per block first.
 var merged := false
+## It FALLS with merged collision: a big piece carries as few boxes as its shape
+## allows from the moment it breaks off, not one per brick (IslandManager.
+## MERGE_FALLING_BLOCKS). Whatever changes its blocks while it is moving marks
+## it `reshape_due`, and it is rebuilt merged once, at the end of the tick.
+var fly_merged := false
+var reshape_due := false
 var prev_speed := 0.0
 var peak_speed := 0.0
 var max_speed_lost := 0.0
@@ -127,6 +133,11 @@ func world_to_chunk(world_point: Vector3) -> Vector3:
 ## stalled the game.
 func disable_blocks(ids: PackedInt32Array, space: RID = RID()) -> void:
 	if ids.is_empty():
+		return
+	# Merged boxes span blocks, so there is no one block's shape to switch
+	# off. A piece that is merged at this point is falling merged, and is
+	# rebuilt whole at the end of the tick (IslandManager._flush_reshapes).
+	if merged:
 		return
 	var rid := body.get_rid()
 	var was_space := PhysicsServer3D.body_get_space(rid) if space == RID() else space

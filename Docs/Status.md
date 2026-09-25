@@ -1054,6 +1054,34 @@ pass's worst went from 15.4 ms to 6.5 ms with 2 rooms real instead of 18. `--int
 measures it and fires a blast into a drawn room to show it still destroys what it reaches. The
 `--rooms` gate now asks for drawn where it used to ask for open, and passes **38 checks**.
 
+### A big collapse, made affordable: settle by rule, fall merged, land whole far away
+
+`--shot` now prints a physics census through the collapse -- pieces moving and settled by size, and
+the collision boxes each size carries. On `--big` it said ~23 pieces of a thousand bricks and more
+carried 80% of every collision box, one per brick, and almost nothing ever settled. Three changes:
+
+* **Settle by rule.** A piece freezes once it has stayed under 0.5 m/s for 0.7 s (1.5 s within
+  20 m of the player), or at 12 s old if it is not really falling -- rather than waiting for Jolt to
+  call it asleep, which pieces heaped on each other never reached. Jolt's contact limits doubled,
+  because past them it drops contacts and pieces jitter.
+* **Fall merged.** A piece of 200 bricks or more, and a whole toppled building, falls with merged
+  collision. Landing, shearing and shedding work on the bricks' joints; the piece is rebuilt merged
+  once at the end of the tick (`_flush_reshapes`), never back to a box per brick mid-fall.
+* **Land whole far away.** A landing more than 60 m from every player (`FRACTURE_RANGE`) does not
+  break the piece that landed; what it landed on still takes the hit. Those pieces are mostly
+  landmarks, which are never deleted, so the way to have fewer is not to make them. The host
+  decides and records it, so every machine agrees.
+
+| `--big --shot` | before | settle | + merged, far landings |
+|---|---|---|---|
+| mean frame | 100.8 ms | 45.6 ms | **33.6 ms** |
+| pieces alive at the end | 399 | 169-191 | **98** |
+| moving boxes in 1000+ pieces | ~150,000 | 11,000-29,000 | **~4,500** |
+| worst landing tick | 285 ms | 325 ms | **132 ms** |
+
+The default city's stress pass: physics 12.4 -> 9.4 ms a frame. The trade to know about: a city
+watched from far off breaks less where its towers land.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
