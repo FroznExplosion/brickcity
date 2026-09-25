@@ -65,7 +65,7 @@ static func voxels(world: BrickWorld, recipe: BuildRecipe, dead: Array = [],
 		if f < dead.size() and (dead[f] as Dictionary).has(i):
 			continue
 		var cell := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
+		var size := BuildRecipe.part_size(recipe.part_of(i))
 		if size == Vector3i.ZERO:
 			continue
 		# The block's box in its OWN frame, in ticks.
