@@ -2278,7 +2278,12 @@ func _setup_gun() -> void:
 	_gun.aim = camera
 	# What a bullet does to bricks is StructuralDamage's to say, and it goes
 	# through the same door as every other change to the world.
-	_gun.on_structure_hit = func(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+	_gun.on_structure_hit = func(point: Vector3, dir: Vector3, shot: Dictionary) -> void:
+		# The mark, debris and sound of whatever material was struck. Local
+		# and cosmetic, so not through the authority. No face normal comes
+		# with the hit; facing back up the shot is the mark's plane.
+		if _material_fx != null and dir.length() > 0.001:
+			_material_fx.impact_at(point, -dir.normalized())
 		if bool(shot.blast):
 			_blast(point, float(shot.radius))
 		else:

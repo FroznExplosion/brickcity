@@ -89,6 +89,24 @@ func _damage() -> void:
 	w.apply_hit(c, Vector3(3.5 * 0.35, 4.5 * 0.14, 3.5 * 0.35), 0.3)
 	var hp := w.get_block_hp(c, bid)
 	_ok("a metal brick that survives is left with less", hp > 0 and hp < 255, "hp %d" % hp)
+	# Bullets wear (chip_hit) rather than blast: metal wears four times slower.
+	var pistol := StructuralDamage.chip_hp(WeaponClass.builtin(&"pistol"))
+	var chips := {}
+	for m in [0, _mat("Metal")]:
+		var cw := BrickWorld.new()
+		var cp := BrickPalette.bake(cw)
+		var cc := cw.create_chunk(Vector3i.ZERO, Vector3i(8, 8, 8))
+		var cb := cw.place_block(cc, Vector3i(3, 3, 3), cp["brick_1x1"], 0)
+		cw.set_block_material(cc, cb, m)
+		for n in range(1, 40):
+			if cw.chip_hit(cc, Vector3(3.5 * 0.35, 4.5 * 0.14, 3.5 * 0.35), 0.0, pistol).has(cb):
+				chips[m] = n
+				break
+	_ok("a pistol breaks PLA in three, as StructuralDamage says", int(chips.get(0, -1)) == 3,
+			"%d" % int(chips.get(0, -1)))
+	# 85 hp a hit on PLA is 21 on metal: thirteen hits, a little over four times.
+	_ok("and metal in thirteen", int(chips.get(_mat("Metal"), -1)) == 13,
+			"%d" % int(chips.get(_mat("Metal"), -1)))
 	# The same hits, replayed, land the same.
 	_ok("and the same hits decide the same thing again",
 			_hits_to_kill(_mat("Metal"), true) == metal_rim)

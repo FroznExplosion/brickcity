@@ -3091,7 +3091,11 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
     hit.erase(std::unique(hit.begin(), hit.end()), hit.end());
     for (int32_t bid : hit) {
         Block &b = c.blocks[bid];
-        b.hp = b.hp > dmg ? (uint8_t)(b.hp - dmg) : (uint8_t)0;
+        // A tougher material wears slower: the damage divided by its
+        // toughness, in tenths so it stays integer (metal 4.0 -> a quarter).
+        const int t10 = std::max(1, (int)std::lround(brick_material_toughness(b.material) * 10.0f));
+        const uint8_t wear = (uint8_t)std::max(1, ((int)dmg * 10 + t10 / 2) / t10);
+        b.hp = b.hp > wear ? (uint8_t)(b.hp - wear) : (uint8_t)0;
         if (b.hp == 0) {
             b.alive = false;
             killed.push_back(bid);
