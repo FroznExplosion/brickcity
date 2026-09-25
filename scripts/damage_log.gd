@@ -69,6 +69,13 @@ enum Kind {
 	## have it in the same place (Docs/AI.md section 12.1), and a late joiner or a
 	## replay gets it from the same stream as everything else.
 	PIECE_REST,
+	## A gun: wears bricks down by `limit` hp (of 255) in a ball of `radius` -- and
+	## always the brick the point is in -- killing those it takes to 0. A building,
+	## world space. Recorded whether or not anything died: the hp it took is state.
+	## StructuralDamage decides the numbers.
+	CHIP,
+	## CHIP on a piece. Grid space.
+	PIECE_CHIP,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -93,7 +100,7 @@ class Entry extends RefCounted:
 	var point := Vector3.ZERO
 	var radius := 0.0
 	var normal := Vector3.ZERO  ## SEVER / PIECE_SNAP: the axis. PIECE_SOLVE: gravity
-	var limit := 0          ## SHEAR kinds: max blocks, 0 for no cap
+	var limit := 0          ## SHEAR kinds: max blocks, 0 for no cap. CHIP kinds: hp taken
 	## Position in the host's log, 0-based; -1 until the host commits it. A client
 	## applies entries in this order and a gap means one went missing on the way.
 	var seq := -1
@@ -126,6 +133,8 @@ class Entry extends RefCounted:
 		return e
 
 	func is_piece() -> bool:
+		if kind == Kind.CHIP:
+			return false
 		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 
 
@@ -180,7 +189,9 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 		Kind.SOLVE:
 			world.solve_stress(chunk)
 			return PackedInt32Array()
-		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE:
+		Kind.CHIP:
+			return world.chip_hit(chunk, e.point, e.radius, e.limit)
+		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
 			return _apply_local(world, chunk, e)
 		Kind.PIECE_REST:
 			world.set_chunk_transform(chunk, rest_transform(e))
@@ -216,6 +227,8 @@ static func _apply_local(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32
 	match e.kind:
 		Kind.PIECE_BLAST:
 			out = world.apply_hit(chunk, e.point, e.radius)
+		Kind.PIECE_CHIP:
+			out = world.chip_hit(chunk, e.point, e.radius, e.limit)
 		Kind.PIECE_SHEAR:
 			out = world.separate_near(chunk, e.point, e.radius, e.limit,
 					bool(e.flags & FLAG_PEEL))

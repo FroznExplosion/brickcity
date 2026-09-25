@@ -1330,7 +1330,9 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 		_resolve_queue.append(isl)
 
 
-func damage(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
+## `chip` > 0 wears bricks by that much hp instead of destroying them
+## (DamageLog.Kind.PIECE_CHIP, StructuralDamage).
+func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) -> void:
 	if not isl.is_valid():
 		return
 	# The scene only calls this on the host -- a client's shot is a request --
@@ -1341,13 +1343,19 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	wake_near(world_point, WAKE_RADIUS)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_ensure_per_block(isl)
-	var e := _piece_entry(isl, DamageLog.Kind.PIECE_BLAST)
+	var e := _piece_entry(isl,
+			DamageLog.Kind.PIECE_CHIP if chip > 0 else DamageLog.Kind.PIECE_BLAST)
 	e.point = _to_grid(isl, world_point)
 	e.radius = radius
+	e.limit = chip
 	var killed := DamageLog.apply_entry(world, isl.chunk, e)
+	# A chip that killed nothing still took hp, and hp is state.
+	if chip > 0:
+		_record(e)
 	if killed.is_empty():
 		return
-	_record(e)
+	if chip <= 0:
+		_record(e)
 	isl.disable_blocks(killed)
 	_touched(isl)
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
@@ -1361,10 +1369,12 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 
 ## Damage every loose piece whose volume reaches the blast, not every piece
 ## whose origin happens to sit near it. Returns how many were hit.
-func damage_near(point: Vector3, radius: float) -> int:
+func damage_near(point: Vector3, radius: float, chip := 0) -> int:
 	var hit := 0
+	# A bullet has no radius but still has to find the piece it struck.
+	var reach := maxf(radius, 0.25) if chip > 0 else radius
 	# What is asleep is still there to be hit.
-	wake_dormant_near(point, radius)
+	wake_dormant_near(point, reach)
 	# Walk by index up to the count we started with: damaging a piece can
 	# append new ones, and copying the list per call is itself O(islands).
 	var n := islands.size()
@@ -1374,10 +1384,10 @@ func damage_near(point: Vector3, radius: float) -> int:
 			continue
 		if not isl.is_valid():
 			continue
-		if isl.body.global_position.distance_to(point) > isl.radius + radius:
+		if isl.body.global_position.distance_to(point) > isl.radius + reach:
 			continue
-		if world_aabb(isl).grow(radius).has_point(point):
-			damage(isl, point, radius)
+		if world_aabb(isl).grow(reach).has_point(point):
+			damage(isl, point, radius, chip)
 			hit += 1
 	return hit
 

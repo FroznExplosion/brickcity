@@ -429,6 +429,21 @@ public:
     /// killed, in ascending order.
     PackedInt32Array apply_hit(int chunk_id, Vector3 world_point, float radius_m);
 
+    /// Wear bricks down rather than destroy them: every block with a cell
+    /// centre within radius_m of a world point -- and always the block whose
+    /// cell holds the point itself, so a bullet with no radius still hits what
+    /// it hit -- loses `damage` of its 255 hp. Integer, so every machine agrees
+    /// to the last point. Returns the ids that reached 0 and died, ascending.
+    /// The gun -> brick mapping is StructuralDamage (GDScript); this is its
+    /// only door into the grid.
+    PackedInt32Array chip_hit(int chunk_id, Vector3 world_point, float radius_m, int damage);
+    /// Every living block below full hp, as flat [id, hp, id, hp, ...]. What a
+    /// chunk has to carry across being dematerialised or put to sleep, since a
+    /// rebuild from a recipe or a record starts every brick at 255.
+    PackedInt32Array get_worn_blocks(int chunk_id) const;
+    /// Put hp back from get_worn_blocks' list. Ids that are gone are skipped.
+    void set_worn_blocks(int chunk_id, const PackedInt32Array &worn);
+
     /// Shear the joints near a world point WITHOUT destroying anything.
     ///
     /// This is what a hard landing does. A brick does not vaporise on impact --
