@@ -512,6 +512,31 @@ struct Chunk {
     }
 };
 
+/// A chunk's stud joints, cached. for_each_neighbour asks the occupancy grid
+/// about every cell of a block's top and bottom faces -- a 10 x 10 plate is two
+/// hundred lookups and joint tests -- and every grounding walk, stress pass,
+/// detach fill and component split asked again, of every block, every time.
+/// What it finds only changes when a block is PLACED or REMOVED (a dead or
+/// detached block keeps its cells), so it is worked out once per chunk and
+/// kept until one is. What does change as a building comes apart -- a
+/// neighbour dying, a joint being cut -- is applied as the joints are read
+/// (BrickWorld::for_each_joint), exactly as for_each_neighbour applied it.
+///
+/// A run is consecutive calls to the same neighbour through the same face, so
+/// `count` is the contact area in cells, in the order the calls came.
+struct JointRun {
+    int32_t nb;
+    uint16_t count;
+    uint8_t up;    ///< 1: the block above, whose bottom_broken cuts it; 0: below
+    uint8_t pad;
+};
+
+struct JointCache {
+    bool valid = false;
+    std::vector<int32_t> at;       ///< per block, where its runs start; one more closes the last
+    std::vector<JointRun> runs;
+};
+
 } // namespace brick
 
 #endif // BRICK_TYPES_H

@@ -276,7 +276,15 @@ const PROMOTIONS_PER_FRAME := 1
 ## six metres is over a second, which is many times what a promotion needs.
 ## Raising it further was tried and reverted -- it promotes buildings nobody
 ## is near, and it is rooms that pop in, not buildings.
-const PROMOTE_RANGE := 46.0
+##
+## And then lowered, from 46 to 28: a building is bricks when somebody could be
+## at its door in a few seconds, not whenever they are in the same block. Every
+## building in a 46 m radius was a full promotion -- up to 60 ms for the big
+## city's tallest -- plus its bake and its body, for rooms the window shader
+## already fakes from outside (BuildingShell's panes). What is given up is the
+## band between 28 and 46 m where real rooms could be drawn through real
+## openings; a shell's windows show a room there instead.
+const PROMOTE_RANGE := 28.0
 ## Nearest first, two a pass, fifteen passes a second. Promotion is already
 ## rate-limited downstream -- the queue drains at PROMOTIONS_PER_FRAME and the
 ## face bake finishes one building a tick -- so this only decides how fast the
@@ -355,7 +363,10 @@ const SOLVES_PER_TICK := 4
 ## Four big solves are affordable because the solve got cheaper instead
 ## (BrickWorld.solve_structure: a 23,000-brick tower in 4 ms, not 15).
 const TRIM_AFTER_MS := 12000
-const TRIM_RADIUS := 90.0
+## From 90: promotion comes in at PROMOTE_RANGE (28 m from the box) now, and a
+## building's origin is at most ~20 m inside its box, so 70 m from the origin is
+## still well clear of anything the trim could take back straight away.
+const TRIM_RADIUS := 70.0
 ## How often the trim runs, and how much it may do when it does.
 ##
 ## This used to be two buildings every 120 physics frames -- one every two
@@ -621,6 +632,9 @@ var _promote_ms := 0.0
 var _frame_worst := 0.0
 var _frame_sum := 0.0
 var _frame_samples := 0
+## Physics ticks sampled. The per-tick means divide by THIS: a slow frame runs
+## several ticks, and dividing tick sums by frames overstated every mean.
+var _tick_samples := 0
 var _frames_over_30 := 0
 var _sampling := false
 ## The live profiler. F2.
@@ -850,6 +864,10 @@ func _build_city() -> void:
 			_make_shell(id)
 			index += 1
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	# Each tower shape's bricks, built once now so no promotion builds them
+	# (BuildingRegistry.prepare_templates).
+	var template_ms := registry.prepare_templates()
+	print("[city] %d tower template(s) in %.0f ms" % [world.get_template_count(), template_ms])
 
 	var mem: Dictionary = world.get_memory_report()
 	print("[city] %d buildings in %.0f ms — BrickWorld holds %.2f MB across %d chunks" % [
@@ -1561,7 +1579,13 @@ func _shape_rid(size: Vector3) -> RID:
 ## every brick in it would all return "nothing happened". The proximity path
 ## passes `b.is_damaged()`, so a building that was hit, trimmed and has now been
 ## walked back up to still gets its solve.
-func _promote(id: int, solve: bool = true) -> int:
+## `merged`: start with merged collision, for a building made bricks because
+## somebody is walking up to it rather than because something hit it. One box
+## per brick is what a hit needs and what a walk-up does not; for the biggest
+## tower it was 9-15 ms of shapes and 8-10 ms putting them in the space, at
+## every walk-up, for buildings that mostly are never shot. The first hit
+## un-merges it (_ensure_building_per_block), as it does a quiet one.
+func _promote(id: int, solve: bool = true, merged: bool = false) -> int:
 	var b := registry.get_building(id)
 	if b == null:
 		return -1
@@ -1573,7 +1597,7 @@ func _promote(id: int, solve: bool = true) -> int:
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
 	world.set_tension_per_stud(chunk, 9.3)
-	_dress(id, chunk, solve)
+	_dress(id, chunk, solve, merged and MERGE_SHAPES)
 	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	return chunk
 
@@ -1582,7 +1606,7 @@ func _promote(id: int, solve: bool = true) -> int:
 ## its bake, its static body and its mesh node. Split from _promote so a loaded
 ## checkpoint can replay the damage into the bricks FIRST and dress the building
 ## after -- the bake and the shapes then start from the damaged building.
-func _dress(id: int, chunk: int, solve: bool) -> void:
+func _dress(id: int, chunk: int, solve: bool, merged: bool = false) -> void:
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -1601,7 +1625,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
 	# See IslandManager.spawn: the shapes are built inside the extension, dead
 	# blocks disabled as they go.
-	var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, false)
+	var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, merged, merged)
 	var map: Dictionary = built.map
 	# The CHUNK's transform, not the building's. They are the same thing for a
 	# generated tower, and they are not for a build: a multi-frame placement
@@ -1612,6 +1636,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 	_brick_bodies[id] = body
 	_brick_shapes[id] = map
+	_brick_merged[id] = merged
 
 	var mi := MeshInstance3D.new()
 	mi.material_override = brick_material
@@ -2220,6 +2245,13 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 	if not authority.may_decide():
 		return
 	var radius := clampf(severity * 0.12, 0.9, 3.0)
+	# A building that is still a shell is not made bricks for a landing nobody is
+	# near -- the same line the piece that landed was held to (FRACTURE_RANGE:
+	# it came down whole). Promoting a tower 70 m away to knock three bricks
+	# loose, and giving the bricks back when the trim came round, was a
+	# promotion and a demotion per landing: the same building, three times in one
+	# collapse. A building already in bricks still takes the hit.
+	var far := islands.far_from_everyone(point)
 
 	# The collider the solver named is the answer when there is one. Falling
 	# back to "which building's bounding box contains this point" was what made
@@ -2227,9 +2259,12 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 	# counts as inside depends on which side of the skin the solver put it.
 	var named := _building_for_body(collider)
 	if named >= 0:
-		_shear_building(named, point, radius)
+		if not (far and not registry.get_building(named).is_materialised()):
+			_shear_building(named, point, radius)
 	else:
 		for b in registry.buildings:
+			if far and not b.is_materialised():
+				continue
 			var local := b.xform.affine_inverse() * point
 			var size := Vector3(b.recipe.footprint_x * STUD,
 					TowerRecipe.total_plates(b.recipe.courses) * PLATE,
@@ -2316,7 +2351,10 @@ func _setup_gun() -> void:
 	# The walker's own body is not something to shoot.
 	camera.mode_changed.connect(func(walking: bool) -> void:
 		var body := camera.body()
-		_gun.exclude = [body.get_rid()] if walking and body != null else [] as Array[RID])
+		var skip: Array[RID] = []
+		if walking and body != null:
+			skip.append(body.get_rid())
+		_gun.exclude = skip)
 
 
 ## Roll a gun of this class and put it in the player's hands.
@@ -3180,17 +3218,20 @@ func _physics_process(_delta: float) -> void:
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
 		var pb := registry.get_building(pid)
-		_promote(pid, pb == null or pb.is_damaged())
+		_promote(pid, pb == null or pb.is_damaged(), true)
 		promoted += 1
 	t = _mark("promote", t)
 
 	# M4: buildings that have been quiet and are far away give their bricks
 	# back. The damage record stays, so the holes are still there next time.
 	if not _measuring:
+		var t_st := Time.get_ticks_usec()
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 			_trim_quiet()
+		t_st = _part("st_trim", t_st)
 		if Engine.get_physics_frames() % 8 == 5:
 			_merge_quiet_buildings()
+		t_st = _part("st_merge", t_st)
 		# Still every fourth tick. A pass now opens up to ROOMS_PER_PASS rooms
 		# rather than one, which is where the speed comes from; running the
 		# pass twice as often as well cost the stress pass 2 ms of mean frame
@@ -3198,14 +3239,19 @@ func _physics_process(_delta: float) -> void:
 		# every room of every building in view.
 		if camera != null and Engine.get_physics_frames() % 4 == 3:
 			_stream_rooms()
+		t_st = _part("st_rooms", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 2:
 			_stream_detail()
+		t_st = _part("st_detail", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 1:
 			_stream_residency()
+		t_st = _part("st_residency", t_st)
 	# Every fourth tick is fifteen times a second: far faster than anyone can
 	# cross an LOD band, and a quarter of the cost.
+	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	_part("st_shells", t_sh)
 	if _show_grids:
 		_draw_grids()
 	t = _mark("stream", t)
@@ -3221,6 +3267,7 @@ func _physics_process(_delta: float) -> void:
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
 	if _sampling:
+		_tick_samples += 1
 		for k in _prof:
 			_prof_sum[k] = float(_prof_sum.get(k, 0.0)) + float(_prof[k])
 		if tick_total > _prof_worst_ms:
@@ -3478,7 +3525,7 @@ func _trim_quiet() -> void:
 ##
 ## The caller owns `_materialised`: the trim walks it backwards and removes by
 ## index, which is not this function's business.
-func _demote(id: int, dist: float) -> void:
+func _demote(id: int, _dist: float) -> void:
 	var _ta := Time.get_ticks_usec()
 	# Before dematerialising, which is what takes the chunk id away: the
 	# furniture node is keyed on the chunk, not on the building.
@@ -3516,7 +3563,12 @@ func _demote(id: int, dist: float) -> void:
 	# _stream_shells would have given a coarse one anyway. That was most of the
 	# 5.4 ms a trim cost, and the reason the budget only ever allowed one of
 	# them per run.
-	_make_shell(id, dist > SHELL_DETAIL_RANGE)
+	#
+	# And coarse whatever the distance, now: the trim runs from TRIM_RADIUS
+	# (70 m), inside SHELL_DETAIL_RANGE, and a detailed shell was 7-13 ms of the
+	# same tick as the release. _stream_shells swaps in the detailed one on its
+	# own budget, a pass or two later.
+	_make_shell(id, true)
 	_trim_split.shell += float(Time.get_ticks_usec() - _ta) / 1000.0
 
 
@@ -4027,6 +4079,15 @@ func _run_shot_pass() -> void:
 	print("[city]   small pieces: %d brick(s) deleted where they came loose beyond %.0f m, %d swept up at rest; %d of furniture; %.0f ms deciding"
 			% [isl.tiny_deleted, IslandManager.SMALL_KEEP_RANGE, int(isl.get("swept_at_rest", 0)),
 			isl.furniture_deleted, float(islands.spawn_prof.deleted)])
+	var cen: Dictionary = islands.census
+	var sc: Dictionary = islands.spawn_census
+	var nt := maxi(int(cen.ticks), 1)
+	print("[city]   in motion: mean %.1f piece(s) (%.1f landmarks, %.0f boxes), peak %d (%d landmarks, %d boxes)" % [
+			float(cen.moving) / nt, float(cen.landmarks) / nt, float(cen.blocks) / nt,
+			int(cen.moving_peak), int(cen.landmarks_peak), int(cen.blocks_peak)])
+	print("[city]   came loose: %d landmark bodies (%d bricks), %d small bodies (%d), %d deleted where they were (%d), %d dropped over the moving cap (%d)" % [
+			sc.landmark[0], sc.landmark[1], sc.small[0], sc.small[1], sc.deleted[0], sc.deleted[1],
+			sc.capped[0], sc.capped[1]])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
@@ -4518,6 +4579,10 @@ func _report_profile() -> void:
 			% [float(_prof_worst.get("dmg_promote", 0.0)), float(_prof_worst.get("dmg_rooms", 0.0)),
 			float(_prof_worst.get("dmg_hit", 0.0)), float(_prof_worst.get("dmg_pieces", 0.0)),
 			float(_prof_worst.get("dmg_disable", 0.0))])
+	print("[prof]   of which stream: trim %.1f  merge %.1f  rooms %.1f  detail %.1f  residency %.1f  shells %.1f"
+			% [float(_prof_worst.get("st_trim", 0.0)), float(_prof_worst.get("st_merge", 0.0)),
+			float(_prof_worst.get("st_rooms", 0.0)), float(_prof_worst.get("st_detail", 0.0)),
+			float(_prof_worst.get("st_residency", 0.0)), float(_prof_worst.get("st_shells", 0.0))])
 	print("[prof] %d building meshes rebuilt from scratch (the rest were index patches)"
 			% _full_rebuilds)
 	var tw: Dictionary = islands.tick_worst
@@ -4525,7 +4590,9 @@ func _report_profile() -> void:
 		print("[prof] worst islands.tick %.1f ms = loop %.1f + resolve %.1f + fracture %.1f + mesh %.1f  (%d islands)" % [
 				float(tw.total), float(tw.loop), float(tw.resolve), float(tw.fracture),
 				float(tw.mesh), int(tw.islands)])
-		print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
+		print("[prof]   of which fracture: landings %.1f + merged rebuilds %.1f" % [
+			float(tw.get("landings", 0.0)), float(tw.get("reshapes", 0.0))])
+	print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
 				float(tw.get("pieces", 0.0)), float(tw.get("dormancy", 0.0)), float(tw.get("cap", 0.0))])
 	var sp: Dictionary = islands.spawn_prof
 	var _bi: Dictionary = islands.report()
@@ -4537,8 +4604,13 @@ func _report_profile() -> void:
 	if _frame_samples > 0:
 		line = ""
 		for k in keys:
-			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / _frame_samples]
+			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / maxi(_tick_samples, 1)]
 		print("[prof] mean per tick: " + line)
+		var tp: Dictionary = islands.tick_prof
+		var n := maxi(int(islands.census.ticks), 1)
+		print("[prof] islands per tick, whole run: loop %.2f (pieces %.2f, dormancy %.2f, cap %.2f)  resolve %.2f  fracture %.2f  mesh %.2f  multimesh %.2f" % [
+				float(tp.loop) / n, float(tp.pieces) / n, float(tp.dormancy) / n, float(tp.cap) / n,
+				float(tp.resolve) / n, float(tp.fracture) / n, float(tp.mesh) / n, float(tp.mm) / n])
 
 
 ## Sustained destruction across a whole city, with rendering on.

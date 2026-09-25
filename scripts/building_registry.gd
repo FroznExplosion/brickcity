@@ -706,6 +706,70 @@ func room_report() -> Dictionary:
 ## middle of a building and that is exactly where the columns carrying its
 ## floors want to stand. Taking them out afterwards left the panels above them
 ## holding on to nothing. See `Fixture.footprint`.
+## A generated tower's bricks, its staircase's included, by what decides them:
+## recipe + fixtures -> [BrickWorld template id, each fixture's block ids]. The
+## biggest tower of the big city was 26 ms of laying bricks and 4 ms of stairs at
+## every promotion; copying the first one built takes a few. Built for every
+## shape when the city is laid out (prepare_templates), so not even the first
+## promotion of a shape -- often the one a hit forces, mid-fight -- pays for it.
+var _templates := {}
+
+
+func _template_key(b: Building) -> String:
+	var key := "%d,%d,%d" % [b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses]
+	for f in b.fixtures:
+		key += "|%s %s %s %d" % [f.kind, var_to_str(f.params), f.cell, f.role]
+	return key
+
+
+## Lay a generated tower and its fixtures into an empty chunk: from the template
+## when there is one, and saving one when there is not. Returns true, having
+## laid the fixtures too.
+func _lay_tower(b: Building, chunk: int) -> bool:
+	var key := _template_key(b)
+	var t: Array = _templates.get(key, [])
+	if not t.is_empty() and world.load_template(int(t[0]), chunk):
+		var lists: Array = t[1]
+		for i in b.fixtures.size():
+			b.fixtures[i].blocks = (lists[i] as PackedInt32Array).duplicate()
+		return true
+	# What the fixtures need clear, before the columns go in. See
+	# Fixture.footprint.
+	TowerRecipe.build(world, chunk, palette,
+			b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses, _keepouts_of(b))
+	# Straight after the building's own blocks, as materialise always laid
+	# them: a block id has to mean the same brick every time (_build_fixtures).
+	var offset := _rebase_of(b)
+	var lists := []
+	for f in b.fixtures:
+		f.build_into(world, chunk, fixture_parts(f.kind), offset)
+		lists.append(f.blocks.duplicate())
+	_templates[key] = [world.save_template(chunk), lists]
+	return true
+
+
+## Build the template of every tower shape in the city now, while it is being
+## laid out, rather than at the first promotion of each. Returns milliseconds.
+func prepare_templates() -> float:
+	var t0 := Time.get_ticks_usec()
+	for b in buildings:
+		if b == null or b.is_build() or b.is_materialised() or b.toppled:
+			continue
+		if _templates.has(_template_key(b)):
+			continue
+		var chunk := world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(
+				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses))
+		# The fixtures' block lists are the building's own; put them back after.
+		var kept := []
+		for f in b.fixtures:
+			kept.append(f.blocks)
+		_lay_tower(b, chunk)
+		for i in b.fixtures.size():
+			b.fixtures[i].blocks = kept[i]
+		world.release_chunk(chunk)
+	return float(Time.get_ticks_usec() - t0) / 1000.0
+
+
 func _keepouts_of(b: Building) -> Array:
 	var out: Array = []
 	for f in b.fixtures:
@@ -801,6 +865,7 @@ func materialise(id: int) -> int:
 		return -1  # its bricks are an island now; building them again would double it
 
 	var t0 := Time.get_ticks_usec()
+	var fixtures_laid := false
 	if b.is_build() and not b.build.is_single_frame():
 		# One chunk per frame, at the tick offset the author built it at, with
 		# the welds rebuilt from the recipe. Nothing is rebased: a frame's
@@ -834,17 +899,13 @@ func materialise(id: int) -> int:
 	else:
 		b.chunk = world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(
 				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses))
-		# What the fixtures need clear, before the columns go in. See
-		# Fixture.footprint.
-		TowerRecipe.build(world, b.chunk, palette,
-				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
-				_keepouts_of(b))
+		fixtures_laid = _lay_tower(b, b.chunk)
 	if b.frames.is_empty():
 		world.set_chunk_transform(b.chunk, b.xform)
 	# The staircases and everything else fixed to it, in the same grid and the
 	# same chunk. A fixture is not a separate object standing inside a building
 	# (Fixture's own notes on why that was wrong); it is part of the building.
-	if not b.fixtures.is_empty():
+	if not b.fixtures.is_empty() and not fixtures_laid:
 		_build_fixtures(b)
 	b.blocks = 0
 	for c in b.chunks():

@@ -435,6 +435,21 @@ public:
     /// that did break a joint gets a fresh walk, as it always did.
     Dictionary solve_structure(int chunk_id);
 
+    // --- templates ---------------------------------------------------------
+
+    /// Remember a chunk's blocks exactly as they are -- ids, cells, parts,
+    /// colours, materials, roles, and the joints between them -- so that
+    /// another chunk of the same shape can be given them without being built
+    /// again. A city is a few recipes many times over; building the biggest
+    /// block by block was 26 ms of every promotion. Returns a template id.
+    int save_template(int chunk_id);
+    /// Give an EMPTY chunk, of the dims and origin the template was saved
+    /// from, the template's blocks. The ids come out as they went in, so a
+    /// damage record keyed on them replays the same. False, and nothing
+    /// changed, if the chunk does not fit.
+    bool load_template(int template_id, int chunk_id);
+    int get_template_count() const;
+
     // --- damage ------------------------------------------------------------
 
     /// Kill every block within radius_m of a world point. Returns the ids
@@ -792,20 +807,17 @@ private:
     std::vector<uint8_t> scratch_mark;
     std::vector<int32_t> scratch_queue;
 
-    // The joints each block met in the last grounding walk, when solve_stress
-    // asked for them: runs of (neighbour, calls in a row) in exactly the order
-    // for_each_neighbour fired them. The stress solve reads a block's joints
-    // twice -- to count its contact, then to share its load out -- and those
-    // were two more walks of the occupancy grid, per shared cell, on top of
-    // the grounding's own. scratch_adj_at[k] is where scratch_queue[k]'s runs
-    // start; one extra entry closes the last.
-    struct AdjRun {
-        int32_t nb;
-        int32_t count;
+    // One per chunk, built the first time a chunk is solved and dropped when a
+    // block is placed in it or removed from it. See brick::JointCache.
+    std::vector<brick::JointCache> joint_cache;
+    struct ChunkTemplate {
+        Vector3i origin;
+        Vector3i dims;
+        std::vector<brick::Block> blocks;
+        brick::JointCache joints;
     };
-    std::vector<AdjRun> scratch_adj;
-    std::vector<int32_t> scratch_adj_at;
-    bool record_adjacency = false;
+    std::vector<ChunkTemplate> templates;
+    const brick::JointCache &joints_of(int chunk_id);
     std::vector<uint8_t> scratch_grounded;
 
     // check_stability and find_detached_groups on the grounding already in

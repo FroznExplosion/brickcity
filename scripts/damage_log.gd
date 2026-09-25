@@ -85,6 +85,10 @@ const FLAG_FROM_PIECE := 2
 ## PIECE_SNAP, informational: no seam ran that way, so a band was torn instead.
 ## Set by whoever applies it; changes nothing about how it applies.
 const FLAG_BANDED := 4
+## DETACH: the blocks left, and never became a piece -- on any machine. The host
+## sets it when too many pieces are already moving and this one came loose far
+## from every player (IslandManager.MAX_MOVING).
+const FLAG_GONE := 8
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
