@@ -1149,7 +1149,69 @@ every toppled building as invisible.
 On measuring: `--big --shot` has two regimes on this machine, and runs of the SAME build land in
 either. One is ~900 frames at 24-40 ms; the other ~600 frames at ~105 ms with 200-350 ms of "idle
 process" a frame -- the renderer, not the script. Compare script-side figures (worst tick, mean
-per tick), or runs with the same frame count.
+per tick), or runs with the same frame count. (It is almost certainly Windows throttling the
+window when it is not visible -- a locked screen, or covered: a steady ~10 fps with the time
+outside the script.) And "mean per tick" divided tick sums by FRAMES until now, which in the slow
+regime -- several ticks a frame -- overstated every mean; it divides by ticks.
+
+### Fewer pieces, fewer upgrades
+
+A pass on the collapse's steady costs rather than its spikes, with a census first: `--shot` now
+prints what is moving (mean and peak pieces, landmarks and boxes) and what became of everything
+that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose was a landmark
+(R2 by span or volume), 60-150+ m from the camera, and ~58 were moving at any moment.
+
+* **The joints are cached.** A chunk's stud joints -- what `for_each_neighbour` found by asking the
+  occupancy grid about every cell of every face, on every walk -- only change when a block is
+  placed or removed, so they are worked out once per chunk (`brick::JointCache`) and the tests that
+  do change as a building comes apart (a dead neighbour, a cut joint) are applied as they are read.
+  Grounding, stress, detach, the component split and the seeded walk all read it, bit for bit as
+  before (`solve_probe --digest`, components included). The 23,000-brick tower solves in **1.1 ms**
+  (3.8 before, 15 at the start of the week); the city's mean solve per tick went 4.7 -> 0.5 ms.
+* **Towers are copied, not built.** `BrickWorld.save_template` / `load_template`: the first tower of
+  a shape is built brick by brick, staircase and all, and every promotion after copies its blocks,
+  cells and cached joints -- the same ids, which is what the damage record keys on (`solve_probe`
+  checks it block by block and solve by solve; `--shot`'s log replay into freshly built twins
+  agrees). Every shape is templated when the city is laid out (6 shapes, 99 ms), so not even the
+  first promotion of a shape builds. Promotions average ~8 ms, from 14-16.
+* **Promotion is rarer and lighter.** `PROMOTE_RANGE` 46 -> 28 m (a shell's window panes fake the
+  rooms beyond that), `TRIM_RADIUS` 90 -> 70 m, and a building made bricks for a walk-up starts
+  with MERGED collision -- one box per brick was 9-15 ms of shapes and 8-10 ms of space insertion
+  for the biggest tower, at every walk-up. The first hit un-merges it, as it does a quiet one.
+* **No promotion for a far landing.** A piece landing on a SHELL farther than `FRACTURE_RANGE`
+  from every player leaves it a shell (the piece itself already came down whole under that rule).
+  One building was promoted and trimmed three times in one collapse by debris landing on it. The
+  trim makes a coarse shell now and lets `_stream_shells` swap the detailed one in later; a
+  detailed one was 7-13 ms of the same tick as the release.
+* **Physics LOD.** Farther than `FRACTURE_RANGE` from everybody, a piece falls merged from 8 bricks
+  (`FAR_MERGE_BLOCKS`, not 200) and settles on a 350 ms window, not 700.
+* **The hard cap (step 4).** `MAX_MOVING` = 48: with that many already moving, a landmark coming
+  loose farther than `FRACTURE_RANGE` from every player is cut out and dropped, on every machine --
+  the host decides and the DETACH says so (`DamageLog.FLAG_GONE`; `StructureReplayer` cuts and
+  releases instead of adding a piece). Anything near a player always falls. `tools/cap_probe.gd`.
+* **The steady costs of the islands tick.** The debris cap re-sorted every settled landmark by
+  distance every tick while over its limit (2.4 ms a tick); it counts every tick and plans who
+  goes every 15 ticks. The wake scan looked at every sleeping piece every tick (1.7 ms); it looks
+  at 32 a tick.
+* **A toppled building with holes in its bands** (it toppled halfway through rebuilding them): the
+  missing bands are built one a tick from the bake it already has (`_fill_band_holes`), and a hit
+  meanwhile patches the bands it does have. Before, nothing rebuilt it until something changed it
+  -- one piece of 18,588 bricks was partly invisible for 422 ticks -- and when something did, it
+  was a full mesh of the whole piece inside the blast: 17-23 ms a piece, the worst tick's "loose
+  pieces" line (24-30 ms -> 3).
+* The `--walk` gate's script errors were `_gun.exclude` being handed an untyped array; fixed.
+
+| `--big --shot`, script side | before | after |
+|---|---|---|
+| pieces moving, mean / peak | 58.8 / 112 | **20.3 / 53** |
+| boxes moving, mean / peak | 6,930 / 13,472 | **2,494 / 6,818** |
+| islands tick, mean | 8.1 ms | **2.3 ms** |
+| solve, mean per tick | 4.7 ms | **0.5 ms** |
+| worst script tick | 79-95 ms | **48 ms** |
+
+Not done, on purpose: R2 says a floor panel is a landmark, so a one-brick floor plate falling
+anywhere is a body every machine keeps -- ~200 of those bodies in a `--big --shot` collapse were one
+to three bricks. Changing that is a game-design call (AI.md A11), not a performance one.
 
 ### Windows on far buildings: a room behind the glass that is not there
 

@@ -463,6 +463,7 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     c.anchored = true;
     chunks.push_back(std::move(c));
     chunk_live.push_back(1);
+    joint_cache.push_back(brick::JointCache());
     stats.push_back(MeshStats());
     solve_stats.push_back(SolveStats());
     stress.push_back(StressState());
@@ -520,6 +521,7 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     b.colour = (uint8_t)std::clamp(colour, 0, 255);
     b.decorative = decorative;
     c.blocks.push_back(b);
+    joint_cache[chunk_id].valid = false;
 
     for (int x = 0; x < a.size.x; ++x) {
         for (int y = 0; y < a.size.y; ++y) {
@@ -584,6 +586,7 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
                 if (c.in_bounds(l) && c.occupancy[c.index_of(l)] == block_id) {
                     c.occupancy[c.index_of(l)] = -1;
+                    joint_cache[chunk_id].valid = false;
                 }
             }
         }
@@ -1777,7 +1780,7 @@ void BrickWorld::fill_indices(Chunk &c, MeshStats &st, PackedInt32Array &out) {
 
 Dictionary BrickWorld::get_memory_report() const {
     Dictionary d;
-    int64_t occupancy = 0, blocks = 0, bake_verts = 0, bake_topology = 0, indices = 0;
+    int64_t occupancy = 0, blocks = 0, bake_verts = 0, bake_topology = 0, indices = 0, joints = 0;
     int live = 0, baked = 0, total_blocks = 0, total_faces = 0;
 
     for (size_t i = 0; i < chunks.size(); ++i) {
@@ -1800,9 +1803,13 @@ Dictionary BrickWorld::get_memory_report() const {
             bake_topology += faces * 2 * (int64_t)sizeof(int32_t);
         }
         indices += (int64_t)c.live_indices.size() * sizeof(int32_t);
+        if (i < joint_cache.size()) {
+            joints += (int64_t)joint_cache[i].runs.capacity() * sizeof(brick::JointRun)
+                    + (int64_t)joint_cache[i].at.capacity() * sizeof(int32_t);
+        }
     }
 
-    const int64_t total = occupancy + blocks + bake_verts + bake_topology + indices;
+    const int64_t total = occupancy + blocks + bake_verts + bake_topology + indices + joints;
     d["chunks"] = live;
     d["chunks_baked"] = baked;
     d["blocks"] = total_blocks;
@@ -1812,6 +1819,7 @@ Dictionary BrickWorld::get_memory_report() const {
     d["bake_vertex_bytes"] = bake_verts;
     d["bake_topology_bytes"] = bake_topology;
     d["index_bytes"] = indices;
+    d["joint_bytes"] = joints;
     d["total_bytes"] = total;
     d["bytes_per_block"] = total_blocks > 0 ? (double)total / total_blocks : 0.0;
     return d;
@@ -2323,6 +2331,86 @@ static void for_each_neighbour(const Chunk &c, const std::vector<Archetype> &arc
     }
 }
 
+/// Every joint for_each_neighbour would find, before the tests that change as a
+/// building comes apart. See brick::JointCache.
+const brick::JointCache &BrickWorld::joints_of(int chunk_id) {
+    brick::JointCache &jc = joint_cache[chunk_id];
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    if (jc.valid && jc.at.size() == n + 1) {
+        return jc;
+    }
+    jc.at.clear();
+    jc.runs.clear();
+    jc.at.reserve(n + 1);
+    for (size_t i = 0; i < n; ++i) {
+        jc.at.push_back((int32_t)jc.runs.size());
+        const Block &b = c.blocks[i];
+        if (b.removed) {
+            continue; // its cells are someone else's, or nobody's
+        }
+        const int32_t bid = (int32_t)i;
+        const Vector3i base = b.cell - c.origin;
+        const Archetype &a = archetypes[b.archetype];
+        const size_t from = jc.runs.size();
+        auto add = [&](int32_t nb, uint8_t up) {
+            if (jc.runs.size() > from && jc.runs.back().nb == nb && jc.runs.back().up == up
+                    && jc.runs.back().count < 0xFFFF) {
+                ++jc.runs.back().count;
+            } else {
+                jc.runs.push_back(brick::JointRun{ nb, 1, up, 0 });
+            }
+        };
+        for (const Archetype::SurfaceCell &sc : a.top_cells) {
+            const int32_t upb = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y + 1, base.z + sc.z));
+            if (upb >= 0 && upb != bid
+                    && joint_exists(c, archetypes, bid, upb, b.cell.x + sc.x, b.cell.z + sc.z)) {
+                add(upb, 1);
+            }
+        }
+        for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
+            const int32_t down = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y - 1, base.z + sc.z));
+            if (down >= 0 && down != bid
+                    && joint_exists(c, archetypes, down, bid, b.cell.x + sc.x, b.cell.z + sc.z)) {
+                add(down, 0);
+            }
+        }
+    }
+    jc.at.push_back((int32_t)jc.runs.size());
+    jc.valid = true;
+    return jc;
+}
+
+/// for_each_neighbour, from the cache: the same neighbours in the same order,
+/// once per RUN with its cell count rather than once per cell. The tests that
+/// change as a building comes apart are applied here, as for_each_neighbour
+/// applied them: a dead neighbour is no joint, a block cut from what is below
+/// (bottom_broken) has no joints downward, and one above it that is cut from
+/// what is below has none to it.
+template <typename F>
+static inline void for_each_joint(const Chunk &c, const brick::JointCache &jc,
+        int32_t bid, F &&fn) {
+    const Block &b = c.blocks[bid];
+    const brick::JointRun *r = jc.runs.data() + jc.at[bid];
+    const brick::JointRun *end = jc.runs.data() + jc.at[bid + 1];
+    for (; r != end; ++r) {
+        const Block &o = c.blocks[r->nb];
+        if (r->up) {
+            if (!o.alive || o.bottom_broken) {
+                continue;
+            }
+        } else {
+            if (b.bottom_broken) {
+                return; // the downward runs are all after the upward ones
+            }
+            if (!o.alive) {
+                continue;
+            }
+        }
+        fn(r->nb, (int)r->count);
+    }
+}
+
 PackedInt32Array BrickWorld::get_block_neighbours(int chunk_id, int block_id) const {
     PackedInt32Array out;
     if (!valid_chunk(chunk_id)) {
@@ -2410,31 +2498,15 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
         }
     }
 
-    // Every joint the walk meets, kept for solve_stress (record_adjacency).
-    // Recorded before the walk's own tests, because the stress solve filters
-    // by depth, which is only final once the walk is done.
-    const bool record = record_adjacency;
-    if (record) {
-        scratch_adj.clear();
-        scratch_adj_at.clear();
-        scratch_adj_at.reserve(n + 1);
-    }
+    // Once per run rather than once per cell: the first call marks the block
+    // or rejects it for a reason the next call to it would give again, so the
+    // queue comes out in the same order.
+    const brick::JointCache &jc = joints_of(chunk_id);
     for (size_t head = 0; head < scratch_queue.size(); ++head) {
         const int32_t bid = scratch_queue[head];
         ++ss.blocks_visited;
         const int32_t next_depth = scratch_depth[bid] + 1;
-        const size_t runs_from = scratch_adj.size();
-        if (record) {
-            scratch_adj_at.push_back((int32_t)runs_from);
-        }
-        for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
-            if (record) {
-                if (scratch_adj.size() > runs_from && scratch_adj.back().nb == nb) {
-                    ++scratch_adj.back().count;
-                } else {
-                    scratch_adj.push_back(AdjRun{ nb, 1 });
-                }
-            }
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
                 return;
             }
@@ -2445,9 +2517,6 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
             scratch_depth[nb] = next_depth;
             scratch_queue.push_back(nb);
         });
-    }
-    if (record) {
-        scratch_adj_at.push_back((int32_t)scratch_adj.size());
     }
 
     for (size_t i = 0; i < n; ++i) {
@@ -2477,6 +2546,7 @@ Array BrickWorld::find_detached_groups(int chunk_id) {
 
 Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
     Array out;
+    const brick::JointCache &jc = joints_of(chunk_id);
     Chunk &c = chunks[chunk_id];
     SolveStats &ss = solve_stats[chunk_id];
 
@@ -2499,7 +2569,7 @@ Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
             group.push_back(bid);
             // No joint test here: an island is what falls together, and a
             // crushed block falls with whatever was resting on it.
-            for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
+            for_each_joint(c, jc, bid, [&](int32_t nb, int) {
                 if (scratch_mark[nb] || grounded[nb]) {
                     return;
                 }
@@ -2570,9 +2640,7 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     // its weight travels sideways to the corners that still stand. An earlier
     // version flowed load strictly downward, so a wall hanging over a hole
     // transmitted nothing at all and the tower levitated.
-    record_adjacency = true;
     solve_grounded(chunk_id);
-    record_adjacency = false;
     const Vector3i up = -chunk_down[chunk_id];
 
     Chunk &c = chunks[chunk_id];
@@ -2603,10 +2671,10 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     //
     // for_each_neighbour fires once per shared cell, so counting its calls
     // gives the stud contact -- and sharing the load equally per call shares it
-    // by contact area. The calls are the ones the grounding walk recorded, as
-    // runs (scratch_adj): the same calls in the same order, so the same sums
-    // and the same remainder handed to the same neighbours.
-    const AdjRun *runs = scratch_adj.data();
+    // by contact area. The calls come from the joint cache as runs of calls to
+    // one neighbour (for_each_joint): the same calls in the same order, so the
+    // same sums and the same remainder handed to the same neighbours.
+    const brick::JointCache &jc = joints_of(chunk_id);
     for (int i = (int)scratch_queue.size() - 1; i >= 0; --i) {
         const int32_t bid = scratch_queue[i];
         Block &b = c.blocks[bid];
@@ -2616,8 +2684,6 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         if (depth <= 0) {
             continue; // resting on the foundation, carried by the ground
         }
-        const AdjRun *run_first = runs + scratch_adj_at[i];
-        const AdjRun *run_end = runs + scratch_adj_at[i + 1];
 
         // Split the supporting contact by which way the joint is loaded. A
         // supporter ABOVE this block is holding it up against gravity, which
@@ -2626,16 +2692,16 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         int contact = 0;
         int contact_tension = 0;
         const int my_height = height_along(b.cell, up);
-        for (const AdjRun *r = run_first; r != run_end; ++r) {
-            const int32_t nd = scratch_depth[r->nb];
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            const int32_t nd = scratch_depth[nb];
             if (nd < 0 || nd >= depth) {
-                continue;
+                return;
             }
-            contact += r->count;
-            if (height_along(c.blocks[r->nb].cell, up) > my_height) {
-                contact_tension += r->count;
+            contact += count;
+            if (height_along(c.blocks[nb].cell, up) > my_height) {
+                contact_tension += count;
             }
-        }
+        });
         if (contact == 0) {
             continue; // reached only through equal-depth peers; nothing to load
         }
@@ -2667,14 +2733,14 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         // remainder for each of those calls while any is left.
         const int64_t share = b.load / (int64_t)contact;
         int64_t remainder = b.load - share * (int64_t)contact;
-        for (const AdjRun *r = run_first; r != run_end; ++r) {
-            const int32_t nd = scratch_depth[r->nb];
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            const int32_t nd = scratch_depth[nb];
             if (nd >= 0 && nd < depth) {
-                const int64_t extra = std::min(remainder, (int64_t)r->count);
+                const int64_t extra = std::min(remainder, (int64_t)count);
                 remainder -= extra;
-                c.blocks[r->nb].load += share * (int64_t)r->count + extra;
+                c.blocks[nb].load += share * (int64_t)count + extra;
             }
-        }
+        });
     }
 
     // Nothing is destroyed. A released joint leaves both bricks whole -- the
@@ -2940,6 +3006,66 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     out["stability"] = stability;
     out["groups"] = groups;
     return out;
+}
+
+int BrickWorld::save_template(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return -1;
+    }
+    ChunkTemplate t;
+    const Chunk &c = chunks[chunk_id];
+    t.origin = c.origin;
+    t.dims = c.dims;
+    t.blocks = c.blocks;
+    // Worked out now if it was not already: the chunk that loads this is solved
+    // the moment it is dressed, and the cache is the first thing that solve
+    // would have built.
+    t.joints = joints_of(chunk_id);
+    templates.push_back(std::move(t));
+    return (int)templates.size() - 1;
+}
+
+bool BrickWorld::load_template(int template_id, int chunk_id) {
+    if (template_id < 0 || template_id >= (int)templates.size() || !valid_chunk(chunk_id)) {
+        return false;
+    }
+    const ChunkTemplate &t = templates[template_id];
+    Chunk &c = chunks[chunk_id];
+    if (c.dims != t.dims || c.origin != t.origin || !c.blocks.empty()) {
+        return false;
+    }
+    // The blocks as they were, and the cells each one claims -- what
+    // place_block writes, for every block at once. A removed block claims
+    // nothing, as it claimed nothing when the template was saved.
+    c.blocks = t.blocks;
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        c.occupancy[c.index_of(Vector3i(base.x + x, base.y + y, base.z + z))]
+                                = (int32_t)i;
+                    }
+                }
+            }
+        }
+    }
+    joint_cache[chunk_id] = t.joints;
+    c.bake.valid = false;
+    if (!bake_jobs.empty() && bake_pending(chunk_id)) {
+        settle_bake_job(chunk_id, false);
+    }
+    return true;
+}
+
+int BrickWorld::get_template_count() const {
+    return (int)templates.size();
 }
 
 Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
@@ -3699,6 +3825,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     settle_bake_job(chunk_id, false);
     chunks[chunk_id] = Chunk();
     chunk_live[chunk_id] = 0;
+    joint_cache[chunk_id] = brick::JointCache();
 }
 
 // --- islands ---------------------------------------------------------------
@@ -3708,6 +3835,7 @@ Array BrickWorld::get_components(int chunk_id) {
     if (!valid_chunk(chunk_id)) {
         return out;
     }
+    const brick::JointCache &jc = joints_of(chunk_id);
     Chunk &c = chunks[chunk_id];
     const size_t n = c.blocks.size();
     scratch_mark.assign(n, 0);
@@ -3724,7 +3852,7 @@ Array BrickWorld::get_components(int chunk_id) {
         for (size_t head = 0; head < scratch_queue.size(); ++head) {
             const int32_t bid = scratch_queue[head];
             group.push_back(bid);
-            for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
+            for_each_joint(c, jc, bid, [&](int32_t nb, int) {
                 if (scratch_mark[nb]) {
                     return;
                 }
@@ -4392,6 +4520,7 @@ PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32A
     scratch_queue.reserve(n);
     scratch_depth.assign(n, -1);
     const Vector3i up = -chunk_down[chunk_id];
+    const brick::JointCache &jc = joints_of(chunk_id);
 
     for (int i = 0; i < seeds.size(); ++i) {
         const int32_t bid = seeds[i];
@@ -4411,7 +4540,7 @@ PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32A
         const int32_t bid = scratch_queue[head];
         ++ss.blocks_visited;
         const int32_t next_depth = scratch_depth[bid] + 1;
-        for_each_neighbour(c, archetypes, bid, [&](int32_t nb) {
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
                 return;
             }
@@ -4603,6 +4732,9 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
+    ClassDB::bind_method(D_METHOD("save_template", "chunk_id"), &BrickWorld::save_template);
+    ClassDB::bind_method(D_METHOD("load_template", "template_id", "chunk_id"), &BrickWorld::load_template);
+    ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
             &BrickWorld::set_tension_per_stud);
     ClassDB::bind_method(D_METHOD("get_tension_per_stud", "chunk_id"), &BrickWorld::get_tension_per_stud);

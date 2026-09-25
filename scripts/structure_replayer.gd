@@ -109,7 +109,11 @@ func apply(e: DamageLog.Entry) -> bool:
 					maxi(e.blocks.size(), e.points.size()), ids.size(), dead,
 					world.get_alive_block_count(source), world.get_block_count(source),
 					world.get_chunk_origin(source)])
-			_add_piece(DamageLog.piece_id(e.seq), int(cut.chunk), e.owner)
+			if e.flags & DamageLog.FLAG_GONE:
+				# Cut out, as on the host, and not kept (IslandManager.MAX_MOVING).
+				world.release_chunk(int(cut.chunk))
+			else:
+				_add_piece(DamageLog.piece_id(e.seq), int(cut.chunk), e.owner)
 		_:
 			var chunk := piece_chunk(e.target)
 			if chunk < 0:

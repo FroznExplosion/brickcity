@@ -61,6 +61,9 @@ grants no trademark rights (§7(e)), and none are granted here — see §4 below
   commit recorded in `.gitmodules`. Nothing in this repository relicenses it.
 - **Godot Engine** — MIT, and not distributed here.
 - `addons/copy-errors` — under its own licence as published by its author.
+- **LimboAI** v1.7.0 (`addons/limboai`) — MIT, © Serhii Snitsaruk and the LimboAI contributors;
+  its licence is `addons/limboai/LICENSE.md` and its logo's `LOGO_LICENSE.md`. The prebuilt
+  Windows and Linux x86_64 libraries are included as published. Nothing here relicenses it.
 
 ---
 

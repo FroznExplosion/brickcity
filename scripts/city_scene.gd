@@ -276,7 +276,15 @@ const PROMOTIONS_PER_FRAME := 1
 ## six metres is over a second, which is many times what a promotion needs.
 ## Raising it further was tried and reverted -- it promotes buildings nobody
 ## is near, and it is rooms that pop in, not buildings.
-const PROMOTE_RANGE := 46.0
+##
+## And then lowered, from 46 to 28: a building is bricks when somebody could be
+## at its door in a few seconds, not whenever they are in the same block. Every
+## building in a 46 m radius was a full promotion -- up to 60 ms for the big
+## city's tallest -- plus its bake and its body, for rooms the window shader
+## already fakes from outside (BuildingShell's panes). What is given up is the
+## band between 28 and 46 m where real rooms could be drawn through real
+## openings; a shell's windows show a room there instead.
+const PROMOTE_RANGE := 28.0
 ## Nearest first, two a pass, fifteen passes a second. Promotion is already
 ## rate-limited downstream -- the queue drains at PROMOTIONS_PER_FRAME and the
 ## face bake finishes one building a tick -- so this only decides how fast the
@@ -355,7 +363,10 @@ const SOLVES_PER_TICK := 4
 ## Four big solves are affordable because the solve got cheaper instead
 ## (BrickWorld.solve_structure: a 23,000-brick tower in 4 ms, not 15).
 const TRIM_AFTER_MS := 12000
-const TRIM_RADIUS := 90.0
+## From 90: promotion comes in at PROMOTE_RANGE (28 m from the box) now, and a
+## building's origin is at most ~20 m inside its box, so 70 m from the origin is
+## still well clear of anything the trim could take back straight away.
+const TRIM_RADIUS := 70.0
 ## How often the trim runs, and how much it may do when it does.
 ##
 ## This used to be two buildings every 120 physics frames -- one every two
@@ -595,6 +606,16 @@ var _gun_library: GunPartLibrary
 var _gun_class := 0
 ## Combat's own seeded RNG -- spread, crits, procs. The host owns it (D9).
 var _combat_rng := RandomNumberGenerator.new()
+## V puts a player pawn where the camera is and hands it the controls and the
+## gun; V again leaves it. The debug walker (SPACE SPACE) stays a debug tool.
+var _player := PlayerController.new()
+var _player_pawn: Pawn
+var _play_mode := false
+## M boards a mech (spawning one ahead of the camera if there is none) and M
+## again climbs out; the mech stays where it was parked.
+var _pilot := MechPilot.new()
+var _mech: Mech
+var _mech_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -611,6 +632,9 @@ var _promote_ms := 0.0
 var _frame_worst := 0.0
 var _frame_sum := 0.0
 var _frame_samples := 0
+## Physics ticks sampled. The per-tick means divide by THIS: a slow frame runs
+## several ticks, and dividing tick sums by frames overstated every mean.
+var _tick_samples := 0
 var _frames_over_30 := 0
 var _sampling := false
 ## The live profiler. F2.
@@ -670,6 +694,8 @@ func _ready() -> void:
 	_chamfer_mode = "--chamfer" in args
 	_checkpoint_mode = "--checkpoint" in args
 	_gun_mode = "--gun" in args
+	_play_mode = "--play" in args
+	_mech_mode = "--mech" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -777,6 +803,10 @@ func _ready() -> void:
 		_run_checkpoint_pass()
 	elif _gun_mode:
 		_run_gun_pass()
+	elif _play_mode:
+		_run_play_pass()
+	elif _mech_mode:
+		_run_mech_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -834,6 +864,10 @@ func _build_city() -> void:
 			_make_shell(id)
 			index += 1
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	# Each tower shape's bricks, built once now so no promotion builds them
+	# (BuildingRegistry.prepare_templates).
+	var template_ms := registry.prepare_templates()
+	print("[city] %d tower template(s) in %.0f ms" % [world.get_template_count(), template_ms])
 
 	var mem: Dictionary = world.get_memory_report()
 	print("[city] %d buildings in %.0f ms — BrickWorld holds %.2f MB across %d chunks" % [
@@ -1545,7 +1579,13 @@ func _shape_rid(size: Vector3) -> RID:
 ## every brick in it would all return "nothing happened". The proximity path
 ## passes `b.is_damaged()`, so a building that was hit, trimmed and has now been
 ## walked back up to still gets its solve.
-func _promote(id: int, solve: bool = true) -> int:
+## `merged`: start with merged collision, for a building made bricks because
+## somebody is walking up to it rather than because something hit it. One box
+## per brick is what a hit needs and what a walk-up does not; for the biggest
+## tower it was 9-15 ms of shapes and 8-10 ms putting them in the space, at
+## every walk-up, for buildings that mostly are never shot. The first hit
+## un-merges it (_ensure_building_per_block), as it does a quiet one.
+func _promote(id: int, solve: bool = true, merged: bool = false) -> int:
 	var b := registry.get_building(id)
 	if b == null:
 		return -1
@@ -1557,7 +1597,7 @@ func _promote(id: int, solve: bool = true) -> int:
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
 	world.set_tension_per_stud(chunk, 9.3)
-	_dress(id, chunk, solve)
+	_dress(id, chunk, solve, merged and MERGE_SHAPES)
 	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	return chunk
 
@@ -1566,7 +1606,7 @@ func _promote(id: int, solve: bool = true) -> int:
 ## its bake, its static body and its mesh node. Split from _promote so a loaded
 ## checkpoint can replay the damage into the bricks FIRST and dress the building
 ## after -- the bake and the shapes then start from the damaged building.
-func _dress(id: int, chunk: int, solve: bool) -> void:
+func _dress(id: int, chunk: int, solve: bool, merged: bool = false) -> void:
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -1585,7 +1625,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
 	# See IslandManager.spawn: the shapes are built inside the extension, dead
 	# blocks disabled as they go.
-	var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, false)
+	var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, merged, merged)
 	var map: Dictionary = built.map
 	# The CHUNK's transform, not the building's. They are the same thing for a
 	# generated tower, and they are not for a build: a multi-frame placement
@@ -1596,6 +1636,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 	_brick_bodies[id] = body
 	_brick_shapes[id] = map
+	_brick_merged[id] = merged
 
 	var mi := MeshInstance3D.new()
 	mi.material_override = brick_material
@@ -2204,6 +2245,13 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 	if not authority.may_decide():
 		return
 	var radius := clampf(severity * 0.12, 0.9, 3.0)
+	# A building that is still a shell is not made bricks for a landing nobody is
+	# near -- the same line the piece that landed was held to (FRACTURE_RANGE:
+	# it came down whole). Promoting a tower 70 m away to knock three bricks
+	# loose, and giving the bricks back when the trim came round, was a
+	# promotion and a demotion per landing: the same building, three times in one
+	# collapse. A building already in bricks still takes the hit.
+	var far := islands.far_from_everyone(point)
 
 	# The collider the solver named is the answer when there is one. Falling
 	# back to "which building's bounding box contains this point" was what made
@@ -2211,9 +2259,12 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 	# counts as inside depends on which side of the skin the solver put it.
 	var named := _building_for_body(collider)
 	if named >= 0:
-		_shear_building(named, point, radius)
+		if not (far and not registry.get_building(named).is_materialised()):
+			_shear_building(named, point, radius)
 	else:
 		for b in registry.buildings:
+			if far and not b.is_materialised():
+				continue
 			var local := b.xform.affine_inverse() * point
 			var size := Vector3(b.recipe.footprint_x * STUD,
 					TowerRecipe.total_plates(b.recipe.courses) * PLATE,
@@ -2300,7 +2351,10 @@ func _setup_gun() -> void:
 	# The walker's own body is not something to shoot.
 	camera.mode_changed.connect(func(walking: bool) -> void:
 		var body := camera.body()
-		_gun.exclude = [body.get_rid()] if walking and body != null else [] as Array[RID])
+		var skip: Array[RID] = []
+		if walking and body != null:
+			skip.append(body.get_rid())
+		_gun.exclude = skip)
 
 
 ## Roll a gun of this class and put it in the player's hands.
@@ -2439,6 +2493,333 @@ func _run_gun_pass() -> void:
 	await _save("city_gun")
 	_check_log_replays()
 	print("[city] gun gate: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Put the gun in the player's hands, rolling one if there is none.
+func _arm_gun() -> void:
+	_gun_armed = true
+	if _gun.gun == null:
+		_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+	_gun.gun.visible = true
+
+
+func _mode_word() -> String:
+	if _pilot.is_piloting():
+		return "PILOTING (M leaves) · Q dash"
+	if _player.is_possessing():
+		return "PLAYING (V leaves)"
+	return "WALKING" if camera.is_walking() else "FLYING"
+
+
+## Stand a player pawn with its feet at `feet` and take its controls. The camera
+## stops flying and rides the pawn's eye; the gun goes into its hands.
+func _enter_pawn(feet: Vector3) -> void:
+	if camera.is_walking():
+		camera.set_walking(false)
+	if _player_pawn == null or not is_instance_valid(_player_pawn):
+		_player_pawn = Pawn.spawn(self, feet, 0)
+	else:
+		_player_pawn.place(feet)
+	if _player.get_parent() == null:
+		_player.name = "Player"
+		add_child(_player)
+	camera.set_process(false)
+	camera.allow_walk = false
+	_player.possess(_player_pawn, camera)
+	_arm_gun()
+	_player_pawn.gun = _gun
+	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	print("[city] playing: pawn at %v" % feet)
+
+
+func _leave_pawn() -> void:
+	_player.release()
+	camera.set_process(true)
+	camera.allow_walk = camera.capture_mouse
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		_player_pawn.gun = null
+		_player_pawn.body.queue_free()
+	_player_pawn = null
+	_gun.set_trigger(false)
+	_gun.exclude = [] as Array[RID]
+
+
+## Climb into the mech -- spawning one on the ground ahead of the camera if there
+## is none -- and take its controls. Its arm gets a gun of its own.
+func _board_mech() -> void:
+	if _player.is_possessing():
+		_leave_pawn()
+	if camera.is_walking():
+		camera.set_walking(false)
+	if _mech == null or not is_instance_valid(_mech):
+		var ahead := camera.global_position - camera.global_transform.basis.z * 12.0
+		var q := PhysicsRayQueryParameters3D.create(ahead + Vector3.UP * 50.0,
+				ahead - Vector3.UP * 200.0, Layers.PAWN_MASK)
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		var feet: Vector3 = hit.position if not hit.is_empty() else Vector3(ahead.x, 0.0, ahead.z)
+		_spawn_mech(feet, camera.global_rotation.y)
+	if _pilot.get_parent() == null:
+		_pilot.name = "Pilot"
+		add_child(_pilot)
+	camera.set_process(false)
+	camera.allow_walk = false
+	_pilot.board(_mech, camera)
+	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
+
+
+func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
+	_mech = Mech.spawn(self, feet, yaw, 0)
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var res := GunGenerator.generate(_gun_library, _combat_rng.randi(),
+			WeaponClass.builtin(&"lmg"), 1)
+	var gi := GunInstance.from_result(res)
+	gi.visible = false  # the arm's greybox is the gun, for now
+	_mech.arm.add_child(gi)
+	_mech.gun.equip(gi)
+	_mech.gun.rng = _combat_rng
+	_mech.gun.on_structure_hit = _gun.on_structure_hit
+	return _mech
+
+
+func _leave_mech() -> void:
+	_pilot.leave()
+	camera.set_process(true)
+	camera.allow_walk = camera.capture_mouse
+
+
+## The gate for the mech (Docs/AIPlan.md P1): BoomerBorder's motor under a body
+## sized in bricks, piloted by the keys -- walks at its speed, sprints faster,
+## dashes on a charge, its torso follows the look at its own pace, it steps over a
+## figure's cover and not a storey -- and its arm aims UP as far as the player can
+## (A15) and puts rounds into a wall high above through the authority.
+func _run_mech_pass() -> void:
+	print("[mech] a greybox mech, piloted")
+	_pilot.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 12.0)
+	camera.rotation = Vector3.ZERO
+	_spawn_mech(open, 0.0)
+	_board_mech()
+	await _frames(60)
+	var m := _mech
+	_gate_ok("it stands on the ground", m.body.is_on_floor() and absf(m.feet().y) < 0.1,
+			"feet %.2f" % m.feet().y)
+	_gate_ok("the camera is in the cockpit, ten courses up",
+			absf(camera.global_position.y - Mech.COCKPIT_Y) < 0.15,
+			"%.2f m" % camera.global_position.y)
+
+	_key(KEY_W, true)
+	await _frames(90)
+	var walk := m.motor.planar_speed()
+	_key(KEY_SHIFT, true)
+	await _frames(90)
+	var sprint := m.motor.planar_speed()
+	_key(KEY_SHIFT, false)
+	_key(KEY_W, false)
+	await _frames(60)
+	_gate_ok("it walks at the motor's speed", absf(walk - m.motor.max_speed) < 0.6,
+			"%.1f m/s" % walk)
+	_gate_ok("and sprints faster", sprint > walk * 1.3, "%.1f m/s" % sprint)
+	_gate_ok("and stops when let go", m.motor.planar_speed() < 0.5)
+
+	var charges := m.motor.charges()
+	_key(KEY_W, true)
+	_key(KEY_Q, true)
+	await _frames(4)
+	var dashing := m.motor.is_dashing()
+	_key(KEY_Q, false)
+	_key(KEY_W, false)
+	await _frames(60)
+	_gate_ok("Q dashes on a charge", dashing and m.motor.charges() == charges - 1,
+			"%d -> %d charges" % [charges, m.motor.charges()])
+
+	# The look turns at once; the torso follows at its own pace, the legs after.
+	camera.rotation = Vector3(0.0, PI * 0.5, 0.0)
+	await _frames(2)
+	var lag := absf(wrapf(m.motor.torso_yaw - PI * 0.5, -PI, PI))
+	await _frames(60)
+	var settled := absf(wrapf(m.motor.torso_yaw - PI * 0.5, -PI, PI))
+	_gate_ok("the torso chases the look, heavy but arriving",
+			lag > 0.2 and settled < deg_to_rad(3.0),
+			"%.0f deg behind, then %.1f" % [rad_to_deg(lag), rad_to_deg(settled)])
+	_gate_ok("and the legs follow it round",
+			absf(wrapf(m.motor.legs_yaw - m.motor.torso_yaw, -PI, PI)) < deg_to_rad(40.0))
+
+	# Cover a figure hides behind is a step; a storey is a wall. Facing -Z again.
+	camera.rotation = Vector3.ZERO
+	await _frames(60)
+	var here := m.feet()
+	var cover := _test_block(here + Vector3(0.0, 0.5, -6.0), Vector3(8.0, 1.0, 2.0))
+	_key(KEY_W, true)
+	await _frames(120)
+	_key(KEY_W, false)
+	await _frames(30)
+	_gate_ok("it walks over a metre of cover", m.feet().z < here.z - 8.0,
+			"z %.2f, cover at %.2f" % [m.feet().z, here.z - 6.0])
+	cover.queue_free()
+	here = m.feet()
+	var storey := _test_block(here + Vector3(0.0, 1.5, -6.0), Vector3(10.0, 3.0, 2.0))
+	await _frames(4)
+	_key(KEY_W, true)
+	await _frames(120)
+	_key(KEY_W, false)
+	await _frames(30)
+	_gate_ok("and not over a storey", m.feet().z > here.z - 5.0 - Mech.RADIUS + 0.5
+			and m.feet().z < here.z - 1.0, "z %.2f, face at %.2f" % [m.feet().z, here.z - 5.0])
+	storey.queue_free()
+
+	# Aim UP (A15): stand back from the tallest building and fire at its wall well
+	# above the cockpit.
+	var tall := registry.get_building(0)
+	for b in registry.buildings:
+		if b.recipe.courses > tall.recipe.courses:
+			tall = b
+	var face := tall.xform * Vector3(tall.recipe.footprint_x * 0.5 * STUD, 0.0, 0.0)
+	var out := tall.xform.basis * Vector3(0.0, 0.0, -1.0)
+	_leave_mech()
+	m.body.global_position = face + out * 6.0 + Vector3.UP * Mech.HEIGHT * 0.5
+	m.body.reset_physics_interpolation()
+	_board_mech()
+	await _frames(60)
+	var high := face + Vector3.UP * minf(tall.recipe.courses * Mech.COURSE * 0.9, 30.0)
+	print("[mech]   tallest: %d courses; aiming at %.1f m from 6 m out" % [tall.recipe.courses, high.y])
+	camera.look_at(high, Vector3.UP)
+	await _frames(30)
+	var n0 := authority.commands.size()
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.parse_input_event(click)
+	await _frames(40)
+	click = click.duplicate()
+	click.pressed = false
+	Input.parse_input_event(click)
+	await _shoot(0)
+	var top := 0.0
+	var chips := 0
+	for i in range(n0, authority.commands.size()):
+		var e: DamageLog.Entry = authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.CHIP:
+			chips += 1
+			top = maxf(top, e.point.y)
+	_gate_ok("the arm aims up as far as the player can (A15)",
+			m.arm_pitch > deg_to_rad(40.0), "%.0f deg" % rad_to_deg(m.arm_pitch))
+	_gate_ok("and its rounds wear the wall high above the cockpit",
+			chips > 0 and top > Mech.COCKPIT_Y + 4.0, "%d CHIP(s), highest %.1f m" % [chips, top])
+
+	_leave_mech()
+	await _frames(30)
+	_gate_ok("M leaves: the camera flies and the mech stays parked",
+			camera.is_processing() and is_instance_valid(m) and m.motor.planar_speed() < 0.5)
+	# From above the street: the blocks are 13 m apart, so anywhere level with the
+	# mech and a few metres off is inside a building.
+	camera.global_position = m.feet() + out * 3.0 + out.cross(Vector3.UP) * 3.0 + Vector3.UP * 13.0
+	camera.look_at(m.feet() + Vector3.UP * 3.5, Vector3.UP)
+	await _frames(3)
+	await _save("city_mech")
+	_check_log_replays()
+	print("[mech] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
+## lands, walks, steps a kerb and not a wall, ducks a beam from a brick floor --
+## the debug walker's rules, now on the physics tick -- and shoots a wall from its
+## own eye, through the authority, without shooting itself.
+func _run_play_pass() -> void:
+	print("[play] a player pawn, driven by the keys")
+	_player.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 0.0)
+	camera.rotation = Vector3.ZERO
+	_enter_pawn(open + Vector3(0.0, 4.0, 0.0))
+	await _frames(90)
+	var pawn := _player_pawn
+	_gate_ok("it falls to the ground and stands on it", pawn.is_on_floor(),
+			"feet at %.2f" % pawn.feet().y)
+	_gate_ok("and the camera is at its eye (%.2f m)" % camera.global_position.y,
+			absf(camera.global_position.y - Pawn.EYE_HEIGHT) < 0.12)
+
+	# A kerb is stepped over, a wall is not. Facing +Z: the camera looks down -Z.
+	camera.rotation = Vector3(0.0, PI, 0.0)
+	var here := pawn.feet()
+	var kerb := _test_block(Vector3(here.x, 0.15, here.z + 3.0), Vector3(6.0, 0.3, 1.0))
+	_key(KEY_W, true)
+	await _frames(90)
+	_key(KEY_W, false)
+	await _frames(10)
+	_gate_ok("a kerb is walked over", pawn.feet().z > here.z + 3.5 and pawn.feet().y < 0.2,
+			"z %.2f, feet %.2f" % [pawn.feet().z, pawn.feet().y])
+	kerb.queue_free()
+	here = pawn.feet()
+	var wall := _test_block(Vector3(here.x, 0.75, here.z + 2.5), Vector3(8.0, 1.5, 1.0))
+	await _frames(4)
+	_key(KEY_W, true)
+	await _frames(90)
+	_key(KEY_W, false)
+	await _frames(10)
+	_gate_ok("a wall is not", pawn.feet().z < here.z + 2.0 and pawn.feet().z > here.z + 0.5,
+			"z %.2f, face at %.2f" % [pawn.feet().z, here.z + 2.0])
+	wall.queue_free()
+
+	# The debug walker's headroom bug, on the pawn: a beam that clears a figure
+	# on the ground stops one standing on a brick, and ducking gets past it. Its
+	# underside at 1.75 m: over a standing figure's 1.68, under the 2.10 of one
+	# standing on a brick, over the 1.68 of one crouched on it. (The --walk gate's
+	# beam sits at 1.40, from before the figure was resized, and fails.)
+	var room := Vector3(open.x + 30.0, 0.0, open.z)
+	var beam := _test_block(room + Vector3(0.0, 1.85, 0.0), Vector3(6.0, 0.2, 1.2))
+	var ledge := _test_block(room + Vector3(0.0, PLATE * 1.5, 0.0), Vector3(6.0, PLATE * 3.0, 6.0))
+	pawn.place(room + Vector3(0.0, 0.0, -5.0))
+	await _frames(20)
+	var ducked := false
+	_key(KEY_W, true)
+	for i in 180:
+		await _frames(1)
+		ducked = ducked or pawn.is_auto_crouched()
+	_key(KEY_W, false)
+	await _frames(6)
+	_gate_ok("standing on a brick it ducks under the beam and gets past",
+			ducked and pawn.feet().z > room.z + 1.0 and pawn.feet().y > 0.3,
+			"ducked %s, z %.2f, feet %.2f" % [ducked, pawn.feet().z, pawn.feet().y])
+	beam.queue_free()
+	ledge.queue_free()
+	await _frames(20)
+	_gate_ok("and stands up again", not pawn.is_crouched())
+
+	# Shooting from the pawn: face a building's wall from close and hold LMB.
+	var b := registry.get_building(0)
+	var face := b.xform * Vector3(b.recipe.footprint_x * 0.5 * STUD, 0.0, 0.0)
+	var out := b.xform.basis * Vector3(0.0, 0.0, -1.0)
+	pawn.place(face + out * 5.0)
+	await _frames(30)
+	camera.look_at(face + Vector3.UP * 1.2, Vector3.UP)
+	await _frames(2)
+	var n0 := authority.commands.size()
+	var hp := pawn.health.total_current()
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.parse_input_event(click)
+	await _frames(30)
+	click = click.duplicate()
+	click.pressed = false
+	Input.parse_input_event(click)
+	await _shoot(0)
+	var chips := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chips += 1
+	_gate_ok("holding the button fires the pawn's gun into the wall",
+			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
+	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
+	_leave_pawn()
+	await _frames(4)
+	_gate_ok("V leaves: the camera flies again", camera.is_processing() and _player_pawn == null)
+	_check_log_replays()
+	print("[play] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
@@ -2837,17 +3218,20 @@ func _physics_process(_delta: float) -> void:
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
 		var pb := registry.get_building(pid)
-		_promote(pid, pb == null or pb.is_damaged())
+		_promote(pid, pb == null or pb.is_damaged(), true)
 		promoted += 1
 	t = _mark("promote", t)
 
 	# M4: buildings that have been quiet and are far away give their bricks
 	# back. The damage record stays, so the holes are still there next time.
 	if not _measuring:
+		var t_st := Time.get_ticks_usec()
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 			_trim_quiet()
+		t_st = _part("st_trim", t_st)
 		if Engine.get_physics_frames() % 8 == 5:
 			_merge_quiet_buildings()
+		t_st = _part("st_merge", t_st)
 		# Still every fourth tick. A pass now opens up to ROOMS_PER_PASS rooms
 		# rather than one, which is where the speed comes from; running the
 		# pass twice as often as well cost the stress pass 2 ms of mean frame
@@ -2855,14 +3239,19 @@ func _physics_process(_delta: float) -> void:
 		# every room of every building in view.
 		if camera != null and Engine.get_physics_frames() % 4 == 3:
 			_stream_rooms()
+		t_st = _part("st_rooms", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 2:
 			_stream_detail()
+		t_st = _part("st_detail", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 1:
 			_stream_residency()
+		t_st = _part("st_residency", t_st)
 	# Every fourth tick is fifteen times a second: far faster than anyone can
 	# cross an LOD band, and a quarter of the cost.
+	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	_part("st_shells", t_sh)
 	if _show_grids:
 		_draw_grids()
 	t = _mark("stream", t)
@@ -2878,6 +3267,7 @@ func _physics_process(_delta: float) -> void:
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
 	if _sampling:
+		_tick_samples += 1
 		for k in _prof:
 			_prof_sum[k] = float(_prof_sum.get(k, 0.0)) + float(_prof[k])
 		if tick_total > _prof_worst_ms:
@@ -3135,7 +3525,7 @@ func _trim_quiet() -> void:
 ##
 ## The caller owns `_materialised`: the trim walks it backwards and removes by
 ## index, which is not this function's business.
-func _demote(id: int, dist: float) -> void:
+func _demote(id: int, _dist: float) -> void:
 	var _ta := Time.get_ticks_usec()
 	# Before dematerialising, which is what takes the chunk id away: the
 	# furniture node is keyed on the chunk, not on the building.
@@ -3173,7 +3563,12 @@ func _demote(id: int, dist: float) -> void:
 	# _stream_shells would have given a coarse one anyway. That was most of the
 	# 5.4 ms a trim cost, and the reason the budget only ever allowed one of
 	# them per run.
-	_make_shell(id, dist > SHELL_DETAIL_RANGE)
+	#
+	# And coarse whatever the distance, now: the trim runs from TRIM_RADIUS
+	# (70 m), inside SHELL_DETAIL_RANGE, and a detailed shell was 7-13 ms of the
+	# same tick as the release. _stream_shells swaps in the detailed one on its
+	# own budget, a pass or two later.
+	_make_shell(id, true)
 	_trim_split.shell += float(Time.get_ticks_usec() - _ta) / 1000.0
 
 
@@ -3244,9 +3639,9 @@ func _update_hud() -> void:
 		"",
 		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
 				"  reloading" if _gun.is_reloading() else "",
-				"WALKING" if camera.is_walking() else "FLYING"]) if _gun_armed and _gun.gun != null
+				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
-				_blast_radius, "WALKING" if camera.is_walking() else "FLYING"],
+				_blast_radius, _mode_word()],
 		"1 gun · 2 blast · T next gun · R reload",
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
@@ -3412,15 +3807,26 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_1:
-			_gun_armed = true
-			if _gun.gun == null:
-				_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
-			_gun.gun.visible = true
+			_arm_gun()
 		KEY_2:
+			if _player.is_possessing():
+				return
 			_gun_armed = false
 			_gun.set_trigger(false)
 			if _gun.gun != null:
 				_gun.gun.visible = false
+		KEY_M:
+			if _pilot.is_piloting():
+				_leave_mech()
+			else:
+				_board_mech()
+		KEY_V:
+			if _pilot.is_piloting():
+				return
+			if _player.is_possessing():
+				_leave_pawn()
+			else:
+				_enter_pawn(camera.global_position - Vector3.UP * Pawn.EYE_HEIGHT)
 		KEY_T:
 			_gun_class = (_gun_class + 1) % GUN_CLASSES.size()
 			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
@@ -3673,6 +4079,15 @@ func _run_shot_pass() -> void:
 	print("[city]   small pieces: %d brick(s) deleted where they came loose beyond %.0f m, %d swept up at rest; %d of furniture; %.0f ms deciding"
 			% [isl.tiny_deleted, IslandManager.SMALL_KEEP_RANGE, int(isl.get("swept_at_rest", 0)),
 			isl.furniture_deleted, float(islands.spawn_prof.deleted)])
+	var cen: Dictionary = islands.census
+	var sc: Dictionary = islands.spawn_census
+	var nt := maxi(int(cen.ticks), 1)
+	print("[city]   in motion: mean %.1f piece(s) (%.1f landmarks, %.0f boxes), peak %d (%d landmarks, %d boxes)" % [
+			float(cen.moving) / nt, float(cen.landmarks) / nt, float(cen.blocks) / nt,
+			int(cen.moving_peak), int(cen.landmarks_peak), int(cen.blocks_peak)])
+	print("[city]   came loose: %d landmark bodies (%d bricks), %d small bodies (%d), %d deleted where they were (%d), %d dropped over the moving cap (%d)" % [
+			sc.landmark[0], sc.landmark[1], sc.small[0], sc.small[1], sc.deleted[0], sc.deleted[1],
+			sc.capped[0], sc.capped[1]])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
@@ -4164,6 +4579,10 @@ func _report_profile() -> void:
 			% [float(_prof_worst.get("dmg_promote", 0.0)), float(_prof_worst.get("dmg_rooms", 0.0)),
 			float(_prof_worst.get("dmg_hit", 0.0)), float(_prof_worst.get("dmg_pieces", 0.0)),
 			float(_prof_worst.get("dmg_disable", 0.0))])
+	print("[prof]   of which stream: trim %.1f  merge %.1f  rooms %.1f  detail %.1f  residency %.1f  shells %.1f"
+			% [float(_prof_worst.get("st_trim", 0.0)), float(_prof_worst.get("st_merge", 0.0)),
+			float(_prof_worst.get("st_rooms", 0.0)), float(_prof_worst.get("st_detail", 0.0)),
+			float(_prof_worst.get("st_residency", 0.0)), float(_prof_worst.get("st_shells", 0.0))])
 	print("[prof] %d building meshes rebuilt from scratch (the rest were index patches)"
 			% _full_rebuilds)
 	var tw: Dictionary = islands.tick_worst
@@ -4171,7 +4590,9 @@ func _report_profile() -> void:
 		print("[prof] worst islands.tick %.1f ms = loop %.1f + resolve %.1f + fracture %.1f + mesh %.1f  (%d islands)" % [
 				float(tw.total), float(tw.loop), float(tw.resolve), float(tw.fracture),
 				float(tw.mesh), int(tw.islands)])
-		print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
+		print("[prof]   of which fracture: landings %.1f + merged rebuilds %.1f" % [
+			float(tw.get("landings", 0.0)), float(tw.get("reshapes", 0.0))])
+	print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
 				float(tw.get("pieces", 0.0)), float(tw.get("dormancy", 0.0)), float(tw.get("cap", 0.0))])
 	var sp: Dictionary = islands.spawn_prof
 	var _bi: Dictionary = islands.report()
@@ -4183,8 +4604,13 @@ func _report_profile() -> void:
 	if _frame_samples > 0:
 		line = ""
 		for k in keys:
-			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / _frame_samples]
+			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / maxi(_tick_samples, 1)]
 		print("[prof] mean per tick: " + line)
+		var tp: Dictionary = islands.tick_prof
+		var n := maxi(int(islands.census.ticks), 1)
+		print("[prof] islands per tick, whole run: loop %.2f (pieces %.2f, dormancy %.2f, cap %.2f)  resolve %.2f  fracture %.2f  mesh %.2f  multimesh %.2f" % [
+				float(tp.loop) / n, float(tp.pieces) / n, float(tp.dormancy) / n, float(tp.cap) / n,
+				float(tp.resolve) / n, float(tp.fracture) / n, float(tp.mesh) / n, float(tp.mm) / n])
 
 
 ## Sustained destruction across a whole city, with rendering on.
