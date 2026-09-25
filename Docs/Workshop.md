@@ -173,6 +173,28 @@ Furnished, its preview and its city placement are cut into the city's own rooms
 and filled by the city's own manifest — templates and items included — as
 INTERIOR/DETAIL bricks.
 
+### Stage G — groups, room kinds, the room guide ✅
+
+* **Groups are editable as one thing.** `X` selects the inserted build under
+  the cursor (yellow box), `M` lifts it into hand to put somewhere else (RMB
+  puts it back where it was), `C` copies it, `DEL` deletes it; also under
+  **Edit**. Deleting or moving takes the bricks out of the middle of the
+  recipe (`BuildRecipe.extract`, then `remove_at`), which is safe at authoring
+  time for the same reason RMB is; undo puts them back on the END, as a group.
+  A move is two undo steps: the placement, then the lift.
+* **Five more room kinds**: bedroom, living, bathroom, lab, shop, with
+  built-in furniture for them (`bed`, `bench`, `counter` join `ITEMS`).
+  `Room.KINDS` is **append only**: with no program a building still draws
+  from the first four (`Room.LEGACY_KINDS`), so no existing room changes. The
+  new kinds are reached through a program. A far window draws a new kind in the
+  nearest existing style (`Room.WINDOW_STYLE`) — the shader is unchanged.
+* **Room guide.** With Type = Room template, a green box on the baseplate is a
+  real city room (25×25 studs by 18 plates; `U` cycles through 15×25, 15×15,
+  25×5, 5×5 — the sizes the city's shapes actually cut), and the HUD says how
+  big the furniture is and which of those rooms it fits.
+
+`tools/workshop_probe.gd` — **96 checks**.
+
 ---
 
 ## 3. Next, and what is deliberately not here
@@ -188,9 +210,8 @@ Next, in order:
    rungs, detail on demand) only knows generated towers. Registering a build's
    towers' rooms with `BuildingRegistry.rooms_of`, offset by the tower's cell,
    plus `rooms_near` for builds, would give them the rungs.
-3. **More room kinds.** `Room.KINDS` is four, and the far-window shader packs the
-   kind as `index / 4`. More kinds (bedroom, bathroom, lab) need that widened.
-4. **Select and move a stamped group** by its group record.
+3. **Window drawings for the new room kinds** in
+   `shaders/window_interior.gdshader` (they borrow an old one today).
 
 Deliberately not here:
 

@@ -37,6 +37,9 @@ const KEY_ROWS := [
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
+	["GROUP", "X", "select the inserted build aimed at", "M", "move it"],
+	["", "C", "copy it", "DEL", "delete it"],
+	["ROOM", "U", "room template: guide size", "", ""],
 	["", "I", "layer: structure / interior / detail", "", ""],
 	["VIEW", "G", "grid", "H", "stress overlay"],
 	["FILE", "ESC", "free the mouse for the menus", "ctrl N / O", "new / open"],
@@ -1394,6 +1397,9 @@ func _update_hud() -> void:
 	elif _drag.size() > 0:
 		state = "sizing the generated building"
 	var gen := ""
+	if recipe.kind == "room":
+		gen += "
+" + _guide_text()
 	for t in recipe.towers:
 		var tp := TowerBlockout.normalised(t.params)
 		@warning_ignore("integer_division")
@@ -1465,6 +1471,13 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
 		KEY_I: _toggle_layer()
+		KEY_X:
+			var ray := _mouse_ray()
+			select_group_ray(ray[0], ray[1])
+		KEY_M: move_group()
+		KEY_U: _cycle_guide()
+		KEY_C: copy_group()
+		KEY_DELETE, KEY_BACKSPACE: delete_group()
 		KEY_Z: _undo()
 		KEY_V: _snap_on = not _snap_on
 		KEY_B: _set_painting(not _painting)
@@ -1577,6 +1590,8 @@ func _undo() -> bool:
 		return _undo_stamp()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "tower":
 		return _undo_tower()
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "ungroup":
+		return _undo_ungroup()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "paint":
 		_edits.pop_back()
 		var stroke: Array = _paints.pop_back()
@@ -1768,6 +1783,8 @@ func _after_edit() -> void:
 	_dirty = true
 	if _batch:
 		return
+	_select_group(_selected)   # ids move under it; redraw or drop the box
+	_update_guide()
 	_stress_dirty = true
 	if _menu != null:
 		var i := _tower_sel()
@@ -2070,6 +2087,9 @@ func _load() -> void:
 ## empty, every stack emptied. New, and the first half of every load.
 func _reset_space() -> void:
 	_cancel_stamp()
+	_stamp_moving = false
+	_select_group(-1)
+	_ungrouped.clear()
 	_drag = {}
 	_clear_towers()
 	_stamp_marks.clear()
@@ -2257,7 +2277,15 @@ func _on_menu(what: String, arg: Variant) -> void:
 			recipe.kind = str(arg)
 			_menu.set_kind(recipe.kind)
 			_dirty = true
+			_update_guide()
 		"role": _set_role(int(arg))
+		"select_group":
+			var ray := _mouse_ray()
+			select_group_ray(ray[0], ray[1])
+		"move_group": move_group()
+		"undo": _undo()
+		"copy_group": copy_group()
+		"delete_group": delete_group()
 
 
 ## File > New: an empty baseplate, the same kind of build as before.
@@ -2424,7 +2452,7 @@ func _stamp_input(e: InputEvent) -> bool:
 					_commit_stamp()
 				return true
 			MOUSE_BUTTON_RIGHT:
-				_cancel_stamp()
+				_abort_stamp()
 				return true
 	if e is InputEventKey and e.pressed and not e.echo:
 		match e.keycode:
@@ -2432,7 +2460,7 @@ func _stamp_input(e: InputEvent) -> bool:
 				_turn_stamp()
 				return true
 			KEY_BACKSPACE, KEY_DELETE:
-				_cancel_stamp()
+				_abort_stamp()
 				return true
 	return false
 
@@ -2596,6 +2624,28 @@ func _commit_stamp() -> bool:
 	var weld0 := recipe.weld_count()
 	recipe.append(_stamp, off, fo)
 	_batch = true
+	_realise_appended(first, fix0, tow0, weld0)
+	recipe.groups.append({
+		"source": _stamp_src, "name": _stamp_label,
+		"first": first, "count": recipe.size() - first,
+		"turn": _stamp_turn, "offset": [off.x, off.y, off.z],
+	})
+	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0})
+	_edits.append("stamp")
+	_batch = false
+	_stamp_moving = false
+	_after_edit()
+	# The cells it just filled are not free for the next one.
+	_stamp_at = Vector3i(-1, -1, -1)
+	print("[workshop] inserted '%s': %d bricks at %v, turned %d" % [
+			_stamp_label, recipe.size() - first, off, _stamp_turn])
+	return true
+
+
+## Put into the world whatever was just appended to the recipe: blocks from
+## `first`, welds from `weld0`, fixtures from `fix0`, generated buildings from
+## `tow0`. The recipe is the record and the world its preview, in one order.
+func _realise_appended(first: int, fix0: int, tow0: int, weld0: int) -> void:
 	for i in range(first, recipe.size()):
 		var rf := recipe.frame_of(i)
 		var af := 0 if rf == 0 else _asm_frame_for(recipe.frame_rotation(rf), recipe.frame_ticks(rf))
@@ -2621,20 +2671,6 @@ func _commit_stamp() -> bool:
 		_edits.append("fixture")
 	for i in range(tow0, recipe.towers.size()):
 		_spawn_tower(i)
-	recipe.groups.append({
-		"source": _stamp_src, "name": _stamp_label,
-		"first": first, "count": recipe.size() - first,
-		"turn": _stamp_turn, "offset": [off.x, off.y, off.z],
-	})
-	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0})
-	_edits.append("stamp")
-	_batch = false
-	_after_edit()
-	# The cells it just filled are not free for the next one.
-	_stamp_at = Vector3i(-1, -1, -1)
-	print("[workshop] inserted '%s': %d bricks at %v, turned %d" % [
-			_stamp_label, recipe.size() - first, off, _stamp_turn])
-	return true
 
 
 ## Undo of a stamp or a bake: everything it added, as one step.
@@ -3068,3 +3104,242 @@ static func _courses_for_plates(plates: float, p: Dictionary) -> int:
 func _ray_on_ground(from: Vector3, dir: Vector3, y: int) -> Vector3:
 	var t := _plane_distance(asm.frames[0], y, from, dir)
 	return from + dir * t if t != INF else Vector3.INF
+
+
+# ---------------------------------------------------------------------------
+# Groups: an inserted build, as one thing (Docs/Workshop.md, Stage G)
+# ---------------------------------------------------------------------------
+
+var _selected := -1          ## index into recipe.groups, or -1
+var _sel_box: MeshInstance3D
+var _stamp_moving := false   ## the build in hand was lifted out of this one
+## What delete and move took out, for undo: [{"recipe", "group"}].
+var _ungrouped := []
+
+
+## X: the group of the brick aimed at, or nothing. Again on the same group lets
+## it go.
+func select_group_ray(from: Vector3, dir: Vector3) -> int:
+	var hit := _first_hit(from, dir)
+	var g := -1
+	if not hit.is_empty():
+		var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+		if rid >= 0:
+			g = recipe.group_of(rid)
+	_select_group(-1 if g == _selected else g)
+	if _selected >= 0:
+		var gr: Dictionary = recipe.groups[_selected]
+		print("[workshop] selected '%s' (%d bricks): M move, C copy, DEL delete"
+				% [gr.get("name", "group"), int(gr.count)])
+	return _selected
+
+
+func _select_group(g: int) -> void:
+	_selected = g if g >= 0 and g < recipe.groups.size() else -1
+	if _sel_box == null:
+		_sel_box = MeshInstance3D.new()
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.no_depth_test = true
+		m.vertex_color_use_as_albedo = true
+		_sel_box.material_override = m
+		add_child(_sel_box)
+	_sel_box.visible = _selected >= 0
+	if _selected < 0:
+		return
+	var gr: Dictionary = recipe.groups[_selected]
+	var sub := recipe.extract(int(gr.first), int(gr.count))
+	var b := sub.bounds()
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var lo := BrickWorld.grid_to_world(b[0])
+	var size := BrickWorld.grid_to_world(b[1])
+	_wire_box(im, lo + size * 0.5, size + Vector3.ONE * 0.04, Color(1.0, 0.85, 0.2))
+	im.surface_end()
+	_sel_box.mesh = im
+	_sel_box.transform = world.get_chunk_transform(asm.frames[0])
+
+
+## Take group `g`'s bricks out of the build and the world, as one undoable
+## edit. Returns them as a recipe in their own cells.
+func _lift_group(g: int) -> BuildRecipe:
+	var gr: Dictionary = (recipe.groups[g] as Dictionary).duplicate(true)
+	var first := int(gr.first)
+	var count := int(gr.count)
+	var sub := recipe.extract(first, count)
+	sub.name = str(gr.get("name", "group"))
+	_batch = true
+	for rid in range(first + count - 1, first - 1, -1):
+		_remove_rid(rid)
+	# remove_at dropped the group with its last brick; make sure.
+	for k in range(recipe.groups.size() - 1, -1, -1):
+		if int(recipe.groups[k].count) <= 0:
+			recipe.groups.remove_at(k)
+	_batch = false
+	_ungrouped.append({"recipe": sub, "group": gr})
+	_edits.append("ungroup")
+	_select_group(-1)
+	_after_edit()
+	return sub
+
+
+## One recipe block out of the middle: world, recipe, placement list, undo
+## stack and paint strokes, all renumbered together (as RMB does).
+func _remove_rid(rid: int) -> void:
+	var at: Array = _placed_at[rid]
+	if int(at[0]) >= 0:
+		world.remove_block(asm.frames[at[0]], at[1])
+	_placed_at.remove_at(rid)
+	recipe.remove_at(rid)
+	_drop_edit("brick", rid)
+	for stroke in _paints:
+		for e in stroke:
+			if int(e[0]) == rid:
+				e[0] = -1
+			elif int(e[0]) > rid:
+				e[0] = int(e[0]) - 1
+
+
+## Undo of a delete (or of the lifting half of a move): the bricks go back
+## where they were, on the END of the build -- the middle is append-only -- and
+## the group comes back with them.
+func _undo_ungroup() -> bool:
+	_edits.pop_back()
+	if _ungrouped.is_empty():
+		return false
+	var u: Dictionary = _ungrouped.pop_back()
+	var sub: BuildRecipe = u.recipe
+	var first := recipe.size()
+	var weld0 := recipe.weld_count()
+	recipe.append(sub, Vector3i.ZERO, _identity_frames(sub))
+	_batch = true
+	_realise_appended(first, recipe.fixture_count(), recipe.towers.size(), weld0)
+	var gr: Dictionary = u.group
+	gr.first = first
+	gr.count = recipe.size() - first
+	recipe.groups.append(gr)
+	_batch = false
+	_after_edit()
+	return true
+
+
+## Zero offset for every frame beyond 0: a lifted group goes back where it was.
+static func _identity_frames(r: BuildRecipe) -> Dictionary:
+	var out := {}
+	for f in range(1, r.frame_count()):
+		out[f] = Vector3i.ZERO
+	return out
+
+
+## DEL: the selected group, gone. Undo brings it back.
+func delete_group() -> bool:
+	if _selected < 0:
+		return false
+	var sub := _lift_group(_selected)
+	print("[workshop] deleted '%s' (%d bricks)" % [sub.name, sub.size()])
+	return true
+
+
+## M: pick the selected group up to put somewhere else. Cancelling (RMB) puts
+## it back where it was.
+func move_group() -> bool:
+	if _selected < 0:
+		return false
+	var gr: Dictionary = recipe.groups[_selected]
+	var src := str(gr.get("source", ""))
+	var sub := _lift_group(_selected)
+	hold_stamp(sub, src)
+	_stamp_moving = true
+	return true
+
+
+## C: a copy of the selected group in hand; the original stays.
+func copy_group() -> bool:
+	if _selected < 0:
+		return false
+	var gr: Dictionary = recipe.groups[_selected]
+	var sub := recipe.extract(int(gr.first), int(gr.count))
+	sub.name = str(gr.get("name", "group"))
+	hold_stamp(sub, str(gr.get("source", "")))
+	return true
+
+
+## RMB with a build in hand: drop it, and if it was being MOVED, put it back.
+func _abort_stamp() -> void:
+	var moving := _stamp_moving
+	_cancel_stamp()
+	_stamp_moving = false
+	if moving and not _edits.is_empty() and _edits[_edits.size() - 1] == "ungroup":
+		_undo_ungroup()
+
+
+# ---------------------------------------------------------------------------
+# Room template guide (Docs/Workshop.md, Stage E)
+# ---------------------------------------------------------------------------
+#
+# A template furnishes every generated room its furniture FITS (studs across,
+# studs deep, plates high, either way round). The guide is a real city room's
+# floor, drawn on the baseplate, so the author can see what they are filling.
+
+## The room sizes the city's shapes actually cut, commonest first
+## (RoomManifest.rooms_for over city_scene's SHAPES and BIG_SHAPES).
+const ROOM_GUIDES := [Vector3i(25, 18, 25), Vector3i(15, 18, 25),
+		Vector3i(15, 18, 15), Vector3i(25, 18, 5), Vector3i(5, 18, 5)]
+const GUIDE_AT := Vector3i(4, 1, 4)
+var _guide_i := 0
+var _guide: MeshInstance3D
+
+
+func _cycle_guide() -> void:
+	if recipe.kind != "room":
+		return
+	_guide_i = (_guide_i + 1) % ROOM_GUIDES.size()
+	_update_guide()
+
+
+func _update_guide() -> void:
+	if _guide == null:
+		_guide = MeshInstance3D.new()
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.vertex_color_use_as_albedo = true
+		_guide.material_override = m
+		add_child(_guide)
+	_guide.visible = recipe.kind == "room"
+	if not _guide.visible:
+		return
+	var d: Vector3i = ROOM_GUIDES[_guide_i]
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var lo := BrickWorld.grid_to_world(GUIDE_AT)
+	var size := BrickWorld.grid_to_world(d)
+	_wire_box(im, lo + size * 0.5, size, Color(0.45, 1.0, 0.6))
+	im.surface_end()
+	_guide.mesh = im
+	_guide.transform = world.get_chunk_transform(asm.frames[0])
+
+
+## The furniture's size, and which of the city's room sizes it fits.
+func _guide_text() -> String:
+	var g: Vector3i = ROOM_GUIDES[_guide_i]
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	var any := false
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0 or recipe.role_of(i) == BuildRecipe.Role.STRUCTURE:
+			continue
+		var c := recipe.cell_of(i)
+		var sz := BuildRecipe.part_size(recipe.part_of(i))
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x + sz.x), maxi(hi.y, c.y + sz.y), maxi(hi.z, c.z + sz.z))
+		any = true
+	var head := "room guide %dx%d studs, %d plates high (U)" % [g.x, g.z, g.y]
+	if not any:
+		return head + " -- build the furniture on the Interior / Detail layers"
+	var f := hi - lo
+	var fits := PackedStringArray()
+	for r in ROOM_GUIDES:
+		if f.y <= r.y and ((f.x <= r.x and f.z <= r.z) or (f.z <= r.x and f.x <= r.z)):
+			fits.append("%dx%d" % [r.x, r.z])
+	return "%s -- furniture %dx%dx%d fits: %s" % [head, f.x, f.z, f.y,
+			", ".join(fits) if not fits.is_empty() else "NO city room"]

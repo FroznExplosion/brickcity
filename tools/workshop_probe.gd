@@ -239,8 +239,20 @@ func _template_checks() -> void:
 	# The mix.
 	var same := true
 	for sd in 64:
-		same = same and RoomManifest.kind_index(sd, {}) == sd % Room.KINDS.size()
+		same = same and RoomManifest.kind_index(sd, {}) == sd % 4
 	_ok("no program draws exactly what the city always drew", same)
+	var legacy := true
+	for r in RoomManifest.rooms_for(60, 40, 162, 4):
+		legacy = legacy and Room.KINDS.find(r.kind) < Room.LEGACY_KINDS
+	_ok("no program never draws a new kind", legacy)
+	var beds := RoomManifest.rooms_for(40, 30, 18, 5, {"bedroom": 1})
+	var bed_items := 0
+	for r in beds:
+		for it in RoomManifest.items_for(r):
+			if it.type == "bed":
+				bed_items += 1
+	_ok("a program of bedrooms has beds in it", beds[0].kind == "bedroom" and bed_items > 0,
+			"%d beds" % bed_items)
 	var kitchens := RoomManifest.rooms_for(40, 30, 18, 5, {"kitchen": 1})
 	var all_k := not kitchens.is_empty()
 	for r in kitchens:
@@ -406,6 +418,59 @@ func _workshop_checks() -> void:
 	_ok("one undo takes the whole stamp back", ws.recipe.size() == 0
 			and ws.recipe.groups.is_empty()
 			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
+
+	# --- a group: select, delete, undo, move, copy
+	ws.hold_stamp(cottage, "res://builds/cottage.json")
+	ws._stamp_at = Vector3i(2, 1, 2)
+	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
+	ws._commit_stamp()
+	ws._cancel_stamp()
+	var n := cottage.size()
+	var cb: Array = ws.recipe.bounds()
+	var mid: Vector3 = BrickWorld.grid_to_world(cb[0]) + BrickWorld.grid_to_world(cb[1]) * 0.5
+	var down := func() -> Array: return [Vector3(mid.x, 30.0, mid.z), Vector3(0, -1, 0)]
+	var r0: Array = down.call()
+	_ok("X on an inserted build selects it", ws.select_group_ray(r0[0], r0[1]) == 0)
+	_ok("X on the baseplate selects nothing", ws.select_group_ray(
+			Vector3(47.5 * STUD, 30.0, 47.5 * STUD), Vector3(0, -1, 0)) == -1)
+	ws.select_group_ray(r0[0], r0[1])
+	ws.delete_group()
+	_ok("DEL takes the whole group out", ws.recipe.size() == 0 and ws.recipe.groups.is_empty()
+			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
+	ws._undo()
+	_ok("undo puts it back, as a group", ws.recipe.size() == n and ws.recipe.groups.size() == 1
+			and ws.recipe.cell_of(0) == cottage.cell_of(0) + (Vector3i(2, 1, 2) - (ws.stamp_box(cottage)[0] as Vector3i)))
+	ws.select_group_ray(r0[0], r0[1])
+	ws.move_group()
+	_ok("M lifts it into hand", ws._stamp != null and ws.recipe.size() == 0)
+	ws._abort_stamp()
+	_ok("and RMB puts it back where it was", ws._stamp == null and ws.recipe.size() == n
+			and ws.recipe.groups.size() == 1)
+	ws.select_group_ray(r0[0], r0[1])
+	ws.move_group()
+	ws._stamp_at = Vector3i(26, 1, 26)
+	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
+	_ok("a lifted build fits its own old place's neighbour", ws._stamp_ok)
+	ws._commit_stamp()
+	ws._cancel_stamp()
+	_ok("placed elsewhere, still one group of the same bricks", ws.recipe.size() == n
+			and ws.recipe.groups.size() == 1 and ws.recipe.groups[0].source == "res://builds/cottage.json")
+	ws._select_group(0)
+	ws.copy_group()
+	ws._stamp_at = Vector3i(2, 1, 2)
+	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
+	ws._commit_stamp()
+	ws._cancel_stamp()
+	_ok("C copies it: two groups, twice the bricks", ws.recipe.size() == 2 * n
+			and ws.recipe.groups.size() == 2)
+	ws._new_build()
+
+	# --- the room guide
+	ws._on_menu("kind", "room")
+	_ok("a room template shows a guide", ws._guide != null and ws._guide.visible)
+	_ok("and says what is on it", ws._guide_text().contains("25x25"))
+	ws._on_menu("kind", "building")
+	_ok("a building does not", not ws._guide.visible)
 
 	# --- the detail layer
 	ws._set_role(BuildRecipe.Role.DETAIL)

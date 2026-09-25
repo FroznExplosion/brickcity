@@ -489,13 +489,14 @@ const GLASS_PROUD := 0.004
 
 ## What a pane knows about its room, packed in a vertex colour: r and b are
 ## seeds for layout, g is how brightly the room is lit, a is the room's kind as
-## an index into Room.KINDS, divided by four.
+## the room's window style (Room.WINDOW_STYLE), divided by four.
 static func _pane_colour(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int, storey: int, plan: Vector2, side: int, gap: Vector2i) -> Color:
 	var kind := RoomManifest.kind_at(footprint_x, footprint_z, courses, building_seed,
 			storey, plan)
 	if kind < 0:
 		kind = Room.KINDS.find("empty")
+	kind = int(Room.WINDOW_STYLE.get(Room.KINDS[kind], 3))
 	var h := RoomManifest.hash3(building_seed, storey * 4 + side, gap.x)
 	var h2 := RoomManifest.hash3(h, 17, 31)
 	# One room in five has its lights off.
