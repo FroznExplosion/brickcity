@@ -21,7 +21,7 @@
 //    1  PLA matte    yes      flat, soft highlight
 //    2  PLA silk     yes      glossy, metallic sheen that follows the view
 //    3  ABS          yes      a touch glossier, finer layers
-//    4  PETG         yes      glossy, the lines half-melted away
+//    4  PETG         yes      clear: brick_glass.gdshader, blended
 //    5  TPU          yes      rubbery matte, wide soft beads
 //    6  Nylon        yes      matte with a fine fibrous grain
 //    7  Glow PLA     yes      lit from inside
@@ -47,6 +47,10 @@ const float MAT_GROOVE[13]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
 // 7 nylon fibre, 8 wood-fill banding.
 const int MAT_TEX[13]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3);
+// Light passes through (brick_grid.h `translucent`). With a glass pass on the
+// material these are drawn there instead; without one -- a material nobody
+// gave a second pass -- they draw here, glossy and solid.
+const float MAT_TRANSLUCENT[13] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
 int brick_material_id(float alpha) {
     return clamp(int(round((1.0 - alpha) * 255.0)), 0, MAT_COUNT - 1);

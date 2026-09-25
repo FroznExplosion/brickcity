@@ -139,6 +139,10 @@ uniform float surface_roughness : hint_range(0.0, 1.0) = 0.42;
 uniform float surface_specular : hint_range(0.0, 1.0) = 0.55;
 uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 
+// Set by BrickMaterials.add_glass, which also gives this material its
+// second pass (brick_glass.gdshader) for see-through bricks.
+uniform bool glass_pass = false;
+
 varying vec2 v_uv;
 varying vec2 v_face;
 varying vec3 v_local;
@@ -149,6 +153,11 @@ void vertex() {
     v_face = UV2;
     v_local = VERTEX;
     v_local_normal = normalize(NORMAL);
+    // A see-through brick is drawn by the glass pass, not here: collapsed to
+    // a point, its faces cost nothing and rasterise nothing.
+    if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
+        VERTEX = vec3(0.0);
+    }
 }
 
 const float TAU_F = 6.28318530718;

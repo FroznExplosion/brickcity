@@ -7140,6 +7140,7 @@ func _build_scenery() -> void:
 
 	brick_material = ShaderMaterial.new()
 	brick_material.shader = load("res://shaders/brick.gdshader")
+	BrickMaterials.add_glass(brick_material)
 	for key in _shader_toggles:
 		brick_material.set_shader_parameter(key, _shader_toggles[key])
 

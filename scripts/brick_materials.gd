@@ -30,6 +30,11 @@ const FAMILY_OF := {
 
 const RATE := 22050
 
+const _GLASS_FOR := {
+	"res://shaders/brick.gdshader": "res://shaders/brick_glass.gdshader",
+	"res://shaders/printed.gdshader": "res://shaders/printed_glass.gdshader",
+}
+
 static var _sounds := {}     ## "family:kind:variant" -> AudioStreamWAV
 static var _holes := {}      ## family -> ImageTexture
 
@@ -43,6 +48,19 @@ static func family(material: int) -> String:
 ## Multiple of PLA's life (the extension's number: it is what apply_hit uses).
 static func toughness(material: int) -> float:
 	return BrickWorld.get_material_toughness(material)
+
+
+## Give a brick or stud material its see-through pass: PETG bricks are then
+## drawn blended by the second pass and skipped by the first. A material
+## without it still draws PETG, solid. Returns `mat`.
+static func add_glass(mat: ShaderMaterial) -> ShaderMaterial:
+	if mat == null or mat.shader == null or not _GLASS_FOR.has(mat.shader.resource_path):
+		return mat
+	var glass := ShaderMaterial.new()
+	glass.shader = load(_GLASS_FOR[mat.shader.resource_path])
+	mat.next_pass = glass
+	mat.set_shader_parameter("glass_pass", true)
+	return mat
 
 
 # ---------------------------------------------------------------------------

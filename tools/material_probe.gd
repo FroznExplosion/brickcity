@@ -29,6 +29,7 @@ func _init() -> void:
 	print("material probe")
 	_toughness()
 	_damage()
+	_see_through()
 	_sounds_and_marks()
 	_where()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -110,6 +111,44 @@ func _damage() -> void:
 	# The same hits, replayed, land the same.
 	_ok("and the same hits decide the same thing again",
 			_hits_to_kill(_mat("Metal"), true) == metal_rim)
+
+
+## Faces drawn for two 1x1 bricks stacked, of these materials, bottom first.
+func _stack_faces(lower: int, upper: int) -> int:
+	var w := BrickWorld.new()
+	var pal := BrickPalette.bake(w)
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(4, 8, 4))
+	var a := w.place_block(c, Vector3i(1, 0, 1), pal["brick_1x1"], 0)
+	var b := w.place_block(c, Vector3i(1, 3, 1), pal["brick_1x1"], 0)
+	w.set_block_material(c, a, lower)
+	w.set_block_material(c, b, upper)
+	w.build_chunk_mesh(c)
+	return int(w.get_mesh_stats(c).faces_emitted)
+
+
+func _see_through() -> void:
+	print("\nsee-through PETG")
+	var petg := _mat("PETG")
+	var only := true
+	for m in BrickWorld.get_material_count():
+		if BrickWorld.is_material_translucent(m) != (m == petg):
+			only = false
+	_ok("PETG is see-through, and nothing else is", only)
+	var solid := _stack_faces(0, 0)
+	_ok("an opaque top under PETG is kept -- it is what shows through",
+			_stack_faces(0, petg) == solid + 1, "%d vs %d" % [_stack_faces(0, petg), solid])
+	_ok("PETG on PETG still hides the face between, one pane",
+			_stack_faces(petg, petg) == solid)
+	_ok("and so is an opaque brick's underside, seen up through PETG",
+			_stack_faces(petg, 0) == solid + 1, "%d" % _stack_faces(petg, 0))
+	var mat := BrickMaterials.add_glass(ShaderMaterial.new())
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/brick.gdshader")
+	BrickMaterials.add_glass(sm)
+	_ok("the brick material gets its glass pass", sm.next_pass != null
+			and (sm.next_pass as ShaderMaterial).shader.resource_path.ends_with("brick_glass.gdshader")
+			and bool(sm.get_shader_parameter("glass_pass")))
+	_ok("and a material with no shader is left alone", mat.next_pass == null)
 
 
 func _sounds_and_marks() -> void:

@@ -1120,7 +1120,8 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             base.z + (int)std::floor(probe.z / cs.z));
                         const int32_t nb = c.block_at(nc);
                         if (nb >= 0 && nb != (int32_t)bi && !c.blocks[nb].decorative
-                                && parts[c.blocks[nb].archetype].mesh.empty()) {
+                                && parts[c.blocks[nb].archetype].mesh.empty()
+                                && brick_material_hides(b.material, c.blocks[nb].material)) {
                             other = nb;
                         }
                     }
@@ -1207,6 +1208,11 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                         // buried wherever the shape does cover it and costs a
                         // quad there.
                         if (other >= 0 && !parts[c.blocks[other].archetype].mesh.empty()) {
+                            other = -1;
+                        }
+                        // And a see-through one, to an opaque face: that face
+                        // is what is seen through it (brick_material_hides).
+                        if (other >= 0 && !brick_material_hides(b.material, c.blocks[other].material)) {
                             other = -1;
                         }
                         mask[m] = other;
@@ -2121,9 +2127,12 @@ Array BrickWorld::build_mesh_internal(Chunk &c, MeshStats &st,
     // whatever we are meshing. Inside a detached group that means the break
     // surface gets faces, because the blocks it tore away from are outside the
     // mask.
-    auto occludes = [&](const Vector3i &l) -> bool {
+    auto occludes = [&](const Vector3i &l, int owner_material) -> bool {
         const int32_t nb = c.block_at(l);
         if (nb < 0 || !c.blocks[nb].alive) {
+            return false;
+        }
+        if (!brick_material_hides(owner_material, c.blocks[nb].material)) {
             return false;
         }
         return mask == nullptr || (*mask)[nb] != 0;
@@ -2164,7 +2173,7 @@ Array BrickWorld::build_mesh_internal(Chunk &c, MeshStats &st,
                         // neighbouring cell is empty or dead. That covers both
                         // a block's own interior and the seam between two
                         // touching blocks (spec section 6).
-                        if (occludes(local + FACE_DIR[f])) {
+                        if (occludes(local + FACE_DIR[f], b.material)) {
                             ++st.faces_culled;
                             continue;
                         }
@@ -4011,6 +4020,10 @@ float BrickWorld::get_material_toughness(int material) {
     return brick_material_toughness(material);
 }
 
+bool BrickWorld::is_material_translucent(int material) {
+    return brick_material_translucent(material);
+}
+
 int BrickWorld::get_block_hp(int chunk_id, int block_id) const {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -4664,6 +4677,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_static_method("BrickWorld", D_METHOD("is_filament_material", "material"), &BrickWorld::is_filament_material);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_count", "material"), &BrickWorld::get_material_colour_count);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_toughness", "material"), &BrickWorld::get_material_toughness);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("is_material_translucent", "material"), &BrickWorld::is_material_translucent);
     ClassDB::bind_method(D_METHOD("get_block_hp", "chunk_id", "block_id"), &BrickWorld::get_block_hp);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour", "material", "colour"), &BrickWorld::get_material_colour);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("get_material_colour_name", "material", "colour"), &BrickWorld::get_material_colour_name);
