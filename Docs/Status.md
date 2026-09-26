@@ -1293,7 +1293,8 @@ So a mesh of `THREAD_MESH_VERTS` (30,000) vertices or more is uploaded **on a wo
 (`IslandManager._submit_mesh_job`) -- the renderer takes meshes built off the main thread, which
 is how threaded resource loading works -- and attached when it is done; the mesh it replaces goes
 on drawing until then, and anything asked of the piece's mesh meanwhile is done against the new
-one when it lands. The manager waits for its jobs when it leaves the tree (a job still running at
+one when it lands. (About two thirds of the upload: the renderer still makes the buffers on the main
+thread -- see the next section.) The manager waits for its jobs when it leaves the tree (a job still running at
 shutdown was a crash on quit).
 
 `--big --shot`: worst islands tick 15-16 ms (35-39); worst script tick 44 ms; worst invisible
@@ -1303,6 +1304,60 @@ un-merging its collision (13 ms), band builds (10 ms), and the loop.
 Breaking ahead of the landing is not built: what it would move off the landing tick is now a few
 milliseconds. It becomes worth it if landings get more expensive again (more planes, bigger
 pieces near players).
+
+### The worst tick of a big collapse, taken apart again
+
+What step 4 left at the top of the worst tick, one thing at a time (`--big --shot`, script side):
+
+* **A building's collision is a body a band** (`BuildingCollision`). It was one static body for the
+  whole building, and every change rebuilt the physics shape of all of it: the first hit un-merging
+  it was 14-23 ms on an 80x60x204 tower, switching a blast's bricks off 7-13 ms. Now it is one body
+  per band of the mesh (the bands `set_chunk_section_plates` already cuts, at most 16), and a change
+  touches only its bands. A band is **merged from promotion on and never un-merged**: one that loses
+  bricks is marked stale and merged again without them once, at the end of the tick, however many
+  pieces came out of it -- the physics steps after the tick, so nothing is simulated in between.
+  One band is 0.1-0.7 ms, several are one walk over the building's blocks (`add_band_shapes`), and
+  the merge grid is only as tall as the band. At most `FLUSH_BANDS_PER_TICK` a tick: one chunk cut
+  out of a mega tower left fifteen stale in one tick. The rest are **parked** out of the space until
+  their turn (a tick or two), since their stale boxes would overlap the piece just cut out and the
+  solver throws a piece it finds overlapping. Furniture is in no band -- it has its own body -- so
+  shutting a room rebuilds nothing. `tools/building_collision_probe.gd`, 30 checks.
+* **A building made bricks drops its shell's boxes at once**; the shell's mesh still waits for the
+  bands. Both bodies in the space was a solid box where the building's insides are, for as long as
+  the bands took to draw.
+* **Band meshes upload on a worker**, as a big piece's mesh already did. Measured windowed, what that
+  buys: for 62,000 vertices, 3-4 ms built on the main thread against 1-1.5 ms there when built on a
+  worker -- the worker packs the arrays, but the renderer still creates the buffers on the main
+  thread at its next call. So about a third of an upload stays on it wherever the mesh is built
+  (step 4's pieces included). `BAND_VERTS_PER_TICK` bounds how much of that one tick takes on, and
+  a piece's mesh goes ahead of a band's on the pool: a piece without a mesh is a hole, a band waiting
+  for its new one still draws the old.
+* **A piece's sleep record is captured in one call** (`BrickWorld.capture_blocks`): five calls a brick
+  from script was ~4 us a brick, a 2,000-brick piece put to sleep 8 ms of one tick. 0.1-0.2 us a
+  brick now, the same records (checked in all four frame rotations with dead, cut-out, removed, worn,
+  furniture and severed-joint bricks).
+* **The debris cap no longer fights waking.** A piece the cap put to sleep woke the next tick for being
+  inside `WAKE_RANGE` -- next to a big collapse, everything is -- and was put back to sleep, over and
+  over: 1.25 ms a tick of dormancy across a whole run, a 15 ms wake at the top of the worst tick, and
+  wreckage blinking out and back. It now wakes when the cap has room (`CAP_WAKE_SPARE`) or to trade
+  places with a piece much farther off (`CAP_SWAP`), and a wake bakes on a worker however small the
+  piece is: a staircase of 146 bricks is 90,000 vertices.
+* **Furniture is redrawn once a tick** per building, not once per piece cut out of it.
+
+The fixture gate's "a figure dropped onto the flight comes to rest on it" had been passing by luck:
+it put the eye a metre above the tread, which is the figure's feet half a metre inside it, and
+whether the solver pushed it out upwards depended on the box it was stuck in. It now drops the figure
+from above the tread and waits for the floor.
+
+`--big --shot`, across the runs: worst script tick 44-46 ms -> 32-36; "disable" 7-8 -> under 1;
+"collision update" 7 -> 0; merging bands again, 2.7 ms for six in the worst tick; dormancy 1.25 ms a
+tick -> 0.04; mean pieces tick 3.5 -> 2.0-2.4 ms. At the top of the worst tick now: the structural
+solve of a mega building (8-11 ms), a spawn (6-7 ms), attaching band meshes (4-6 ms -- the
+renderer's share of the uploads), and the pieces' own resolve. The worst invisible stretch of a
+piece is still anywhere from 3 to 18 ticks from run to run, as it was before any of this (3-38).
+
+Next in line: **room streaming** is the same shape of problem as the building body was -- one
+furniture body per building, rebuilt whole when a room opens, 13-14 ms in some runs.
 
 ### Windows on far buildings: a room behind the glass that is not there
 

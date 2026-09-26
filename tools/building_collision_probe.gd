@@ -7,9 +7,10 @@ extends SceneTree
 ##     godot --headless --path . --script tools/building_collision_probe.gd
 ##
 ## Checks the bands hold exactly what one body held -- every brick's box in one
-## band and only one, the band BrickWorld says it is in -- that a hit un-merges
-## and switches off only the bands it touched, and that a quiet building merges
-## back a band at a time. `-- --time` adds what the old whole-building rebuild
+## band and only one, the band BrickWorld says it is in -- that a hit rebuilds
+## only the bands it touched (a merged band merged again at flush, a band of a
+## box a brick switched off at once), and that a quiet building merges back a
+## band at a time. `-- --time` adds what the old whole-building rebuild
 ## and the band rebuild cost on the big city's tower sizes.
 
 var passed := 0
@@ -23,6 +24,7 @@ func _init() -> void:
 	_check_small()
 	_check_bands()
 	_check_hit()
+	_check_furniture()
 	if OS.get_cmdline_user_args().has("--time"):
 		_time()
 	print("\n%d passed, %d failed" % [passed, failed])
@@ -138,71 +140,152 @@ func _check_bands() -> void:
 
 
 func _check_hit() -> void:
-	print("\na hit un-merges and switches off only the bands it touched")
+	print("
+a hit rebuilds only the bands it touched")
 	var r := _tower(20, 16, 60)
 	var w: BrickWorld = r[0]
 	var chunk: int = r[1]
 	var n := w.get_chunk_sections(chunk)
+	var pos_of := {}
+	for box in w.get_block_boxes(chunk):
+		pos_of[int(box.block)] = box.pos
+
+	# Merged: the band goes stale, and is merged again at flush.
 	var col := BuildingCollision.new(w, chunk, _space, Transform3D.IDENTITY, true)
 	# Low on one wall: the ground floor's band.
 	var killed: PackedInt32Array = w.apply_hit(chunk, Vector3(3.0, 1.0, 0.2), 1.5)
 	_ok("the hit killed bricks", killed.size() > 0, "%d" % killed.size())
 	var bands := col.bands_of(killed)
 	col.disable(killed)
-	var unmerged := 0
+	var stale := 0
 	for si in n:
-		if not col.merged[si]:
-			unmerged += 1
-	_ok("only the bands it landed in were un-merged", unmerged == bands.size() and unmerged < n,
-			"%d un-merged, hit %d of %d" % [unmerged, bands.size(), n])
-	_ok("so one rebuild a band, not the building", col.reshapes == bands.size(),
-			"%d rebuilds" % col.reshapes)
-	# The dead have no live box: none at all (built skip_dead), or switched off.
-	var pos_of := {}
-	for box in w.get_block_boxes(chunk):
-		pos_of[int(box.block)] = box.pos
-	var live := _live_boxes(col, killed, pos_of)
-	_ok("the dead bricks have no live box", live == 0, "%d live" % live)
+		if col.stale[si]:
+			stale += 1
+	_ok("a merged band hit is marked stale, not rebuilt on the spot",
+			stale == bands.size() and col.reshapes == 0, "%d stale, %d rebuilds" % [stale, col.reshapes])
+	col.flush()
+	_ok("flush merges again only the bands it landed in", col.reshapes == bands.size()
+			and col.all_merged() and not col.any_stale(), "%d rebuilds for %d bands" % [col.reshapes, bands.size()])
+	_ok("the dead bricks are not solid any more", _solid(col, killed, pos_of) == 0,
+			"%d solid" % _solid(col, killed, pos_of))
 	# And the query can see a box at all: a brick nobody touched is solid.
 	var sample := PackedInt32Array()
-	for bid in (col.maps[bands[0]] as Dictionary):
-		if not killed.has(bid):
+	var said := w.get_block_sections(chunk, PackedInt32Array(range(w.get_block_count(chunk))))
+	for bid in w.get_block_count(chunk):
+		if said[bid] == bands[0] and not killed.has(bid) and w.get_block_hp(chunk, bid) > 0:
 			sample.append(bid)
-			break
-	_ok("a brick nobody touched is still solid", _live_boxes(col, sample, pos_of) == 1)
+			if sample.size() >= 5:
+				break
+	_ok("bricks nobody touched are still solid", _solid(col, sample, pos_of) == sample.size(),
+			"%d of %d" % [_solid(col, sample, pos_of), sample.size()])
 
-	# A second hit in the same band: already a box a brick, so no rebuild --
-	# switched off shape by shape.
+	# A piece cut out of a merged band: stale until flush, by when the piece
+	# has taken its bricks, and they are left out.
 	var before := col.reshapes
-	var killed2: PackedInt32Array = w.apply_hit(chunk, Vector3(5.0, 1.0, 0.2), 1.5)
-	# Detached-group style: bricks still alive, handed over to a piece.
+	col.disable(sample)
+	w.split_island(chunk, sample)
+	col.flush()
+	_ok("a piece cut out of a merged band is one rebuild of that band", col.reshapes == before + 1,
+			"%d rebuilds" % (col.reshapes - before))
+	_ok("and its bricks are not solid in the building any more", _solid(col, sample, pos_of) == 0)
+
+	# More stale than the budget: the rest are parked out of the space until
+	# their turn, so their stale boxes cannot overlap a piece cut out of them.
+	for si in n:
+		col.stale[si] = true
+	var done := col.flush(2)
+	var out := 0
+	for si in n:
+		if not PhysicsServer3D.body_get_space(col.bodies[si]).is_valid():
+			out += 1
+	_ok("a flush over budget merges the budget's worth", done == 2, "%d" % done)
+	_ok("and parks the rest out of the space", out == n - 2 and col.parked.count(true) == n - 2,
+			"%d out, %d parked" % [out, col.parked.count(true)])
+	col.flush()
+	out = 0
+	for si in n:
+		if not PhysicsServer3D.body_get_space(col.bodies[si]).is_valid():
+			out += 1
+	_ok("which go back in when their turn comes", out == 0 and not col.any_stale()
+			and not col.parked.has(true), "%d still out" % out)
+	col.free_bodies()
+
+	# A box a brick (a building made bricks by a hit): switched off at once.
+	var r2 := _tower(20, 16, 60)
+	var w2: BrickWorld = r2[0]
+	var c2: int = r2[1]
+	var per := BuildingCollision.new(w2, c2, _space, Transform3D.IDENTITY, false)
+	var k2: PackedInt32Array = w2.apply_hit(c2, Vector3(3.0, 1.0, 0.2), 1.5)
+	per.disable(k2)
+	_ok("a band a box a brick is not rebuilt for a hit", per.reshapes == 0 and not per.any_stale(),
+			"%d rebuilds" % per.reshapes)
+	_ok("its dead bricks are switched off at once", _live_boxes(per, k2, pos_of) == 0)
 	var alive_ids := PackedInt32Array()
-	var map0: Dictionary = col.maps[bands[0]]
+	var map0: Dictionary = per.maps[per.bands_of(k2)[0]]
 	for bid in map0:
 		if alive_ids.size() >= 20:
 			break
-		if w.get_block_hp(chunk, bid) > 0:
+		if w2.get_block_hp(c2, bid) > 0:
 			alive_ids.append(bid)
-	col.disable(killed2)
-	col.disable(alive_ids)
-	_ok("a band already a box a brick is not rebuilt again", col.reshapes == before,
-			"%d rebuilds" % (col.reshapes - before))
-	_ok("the probe found bricks still alive to cut out", alive_ids.size() > 0)
-	var still := _live_boxes(col, alive_ids, pos_of)
-	_ok("bricks cut out alive are switched off one at a time", still == 0,
-			"%d of %d still solid" % [still, alive_ids.size()])
+	per.disable(alive_ids)
+	_ok("bricks cut out alive are switched off one at a time",
+			alive_ids.size() > 0 and _live_boxes(per, alive_ids, pos_of) == 0,
+			"%d of %d still solid" % [_live_boxes(per, alive_ids, pos_of), alive_ids.size()])
 
 	# Quiet again: merged back one band a call.
 	var steps := 0
-	while col.merge_next():
+	while per.merge_next():
 		steps += 1
-	_ok("a quiet building merges back a band at a time", steps == unmerged and col.all_merged(),
-			"%d steps for %d bands" % [steps, unmerged])
+	_ok("a quiet building merges back a band at a time", steps == n and per.all_merged(),
+			"%d steps for %d bands" % [steps, n])
 	var owns := true
-	for body in col.bodies:
-		owns = owns and col.owns(body)
-	_ok("it knows its own bodies", owns and not col.owns(RID()))
+	for body in per.bodies:
+		owns = owns and per.owns(body)
+	_ok("it knows its own bodies", owns and not per.owns(RID()))
+	per.free_bodies()
+
+
+## Furniture has a body of its own (CityScene._room_body): it is in no band, and
+## shutting a room does not rebuild the band it stood in.
+func _check_furniture() -> void:
+	print("\nfurniture is not the building's collision")
+	var r := _tower(20, 16, 60)
+	var w: BrickWorld = r[0]
+	var chunk: int = r[1]
+	var pos_of := {}
+	for box in w.get_block_boxes(chunk):
+		pos_of[int(box.block)] = box.pos
+	# Stand-ins for a room's contents: some of the building's own bricks,
+	# marked as furniture.
+	var chairs := PackedInt32Array()
+	for bid in range(200, 212):
+		chairs.append(bid)
+	w.set_blocks_decorative(chunk, chairs, true)
+	var col := BuildingCollision.new(w, chunk, _space, Transform3D.IDENTITY, true)
+	_ok("furniture is in no band", _solid(col, chairs, pos_of) == 0,
+			"%d solid" % _solid(col, chairs, pos_of))
+	col.disable(chairs)
+	_ok("so taking it away leaves every band as it was",
+			not col.any_stale() and col.reshapes == 0)
 	col.free_bodies()
+
+
+## How many of these blocks a point query at the block's centre finds any of
+## the building's boxes at -- merged or not.
+func _solid(col: BuildingCollision, ids: PackedInt32Array, pos_of: Dictionary) -> int:
+	var state := PhysicsServer3D.space_get_direct_state(_space)
+	var solid := 0
+	for bid in ids:
+		if not pos_of.has(bid):
+			continue
+		var q := PhysicsPointQueryParameters3D.new()
+		q.position = pos_of[bid]
+		q.collision_mask = Layers.STRUCTURE
+		for hit in state.intersect_point(q, 64):
+			if col.owns(hit.rid):
+				solid += 1
+				break
+	return solid
 
 
 ## How many of these blocks' own boxes a point query at the block still finds:
@@ -263,14 +346,20 @@ func _time() -> void:
 		var t_old_dis := Time.get_ticks_usec()
 		PhysicsServer3D.free_rid(body)
 
-		# New: a body a band, merged; the hit un-merges its band.
+		# New: a body a band, merged; the hit merges its band again.
 		var col := BuildingCollision.new(w, chunk, _space, Transform3D.IDENTITY, true)
 		var t3 := Time.get_ticks_usec()
 		col.disable(killed)
+		col.flush()
 		var t_new := Time.get_ticks_usec()
+		col.free_bodies()
+		# And a box a brick, switching 30 off.
+		col = BuildingCollision.new(w, chunk, _space, Transform3D.IDENTITY, false)
+		var t_per := Time.get_ticks_usec()
 		col.disable(probe_ids)
 		var t_new_dis := Time.get_ticks_usec()
-		print("  %dx%dx%d, %5d blocks, %2d bands: un-merge whole %5.1f ms (shapes %4.1f + space %4.1f), band %4.1f ms; switch 30 off: whole %4.1f ms, band %4.1f ms" % [
+		t_new_dis -= t_per - t_new
+		print("  %dx%dx%d, %5d blocks, %2d bands: un-merge whole %5.1f ms (shapes %4.1f + space %4.1f), band re-merged %4.1f ms; switch 30 off: whole %4.1f ms, band %4.1f ms" % [
 				s[0], s[1], s[2], w.get_block_count(chunk), col.bodies.size(),
 				float(t_old - t) / 1000.0, float(t_add - t) / 1000.0, float(t_old - t_add) / 1000.0,
 				float(t_new - t3) / 1000.0,

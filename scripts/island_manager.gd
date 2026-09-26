@@ -240,11 +240,14 @@ const WORK_BUDGET_MS := 4.0
 const MESH_BUDGET_MS := 3.0
 ## A mesh with at least this many vertices is uploaded on a worker, not in the
 ## tick. The arrays come out of the bake in under a millisecond; handing them to
-## the renderer is ~50 ns a vertex on whichever thread does it -- 5-35 ms for a
-## piece of 3,000-8,400 bricks, or for a staircase of 150 (90,000 vertices of
-## spiral step), and that was the worst tick of a collapse every time a big
-## piece got its mesh. The renderer takes meshes built on other threads (it is
-## how threaded resource loading works); the main thread only attaches it.
+## the renderer is ~50 ns a vertex -- 5-35 ms for a piece of 3,000-8,400 bricks,
+## or for a staircase of 150 (90,000 vertices of spiral step), and that was the
+## worst tick of a collapse every time a big piece got its mesh. The worker
+## packs the arrays, which is about two thirds of it; the renderer still creates
+## the buffers on the main thread at the next call into it (measured: 3-4 ms for
+## 62,000 vertices built here, 1-1.5 ms attached from a worker). High priority
+## on the pool: a piece waiting for its mesh is invisible, a building band
+## waiting for its new one is not (CityScene.BAND_THREAD_VERTS).
 const THREAD_MESH_VERTS := 30000
 ## Always do at least one, however long it takes: a budget that can starve
 ## forever is a deadlock, and a single unit is bounded by the piece's size.
@@ -448,6 +451,22 @@ const CAPTURE_BLOCKS_PER_TICK := 12000
 var cap_deleted := 0
 var cap_slept := 0
 var cap_worst_over := 0
+## A piece the CAP put to sleep does not wake just for being in WAKE_RANGE. It
+## did, and next to a big collapse -- where the cap is full and everything is
+## inside 120 m -- the cap slept a piece, the stream woke it the next tick, and
+## the cap slept it again: 1.25 ms a tick of dormancy across a whole big-city
+## run, a 15 ms wake at the top of the worst tick, and wreckage blinking out and
+## back in. So it wakes when the cap has room again (CAP_WAKE_SPARE under every
+## limit, so the one it wakes does not tip it straight back over), or when it is
+## clearly nearer than the farthest piece still awake (CAP_SWAP): that one is
+## the cap's next choice, and the two trade places once rather than every tick.
+const CAP_WAKE_SPARE := 8
+const CAP_SWAP := 0.6
+var _cap_room := true
+## How far from anybody the farthest landmark the cap left awake is, at the
+## last plan.
+var _cap_far := INF
+var cap_woken := 0
 ## The cap's plan (_plan_debris_cap) and when it was made.
 const CAP_REPLAN_TICKS := 15
 var _cap_plan: Array = []
@@ -459,6 +478,8 @@ class Dormant:
 	var slept_ms := 0
 	var piece_id := -1
 	var owner := -1
+	## Put to sleep by the debris cap, not by distance. See CAP_WAKE_SPARE.
+	var by_cap := false
 
 
 ## Far enough that a piece is not part of the scene any more, and close enough
@@ -509,6 +530,9 @@ var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
+## The worst single shape rebuild of a piece: [ms, bricks, boxes, building the
+## shapes ms, putting the body back in the space ms].
+var reshape_worst := [0.0, 0, 0, 0.0, 0.0]
 ## This tick's dormancy, split: waking pieces, and putting them to sleep. And
 ## the single worst of each over the session, with how many bricks it was.
 var _dorm_wake_ms := 0.0
@@ -1064,6 +1088,7 @@ func _centre_of(chunk: int, block_ids: PackedInt32Array) -> Vector3:
 func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
 	if not isl.is_valid() or (isl.merged == merged and not force):
 		return
+	var _t0 := Time.get_ticks_usec()
 	var rid := isl.body.get_rid()
 	# Out of the space first: shape calls on a body IN a space cost time
 	# proportional to its shape count.
@@ -1076,8 +1101,13 @@ func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
 	isl.shape_map = built.map
 	isl.shape_count = int(built.count)
 	isl.merged = merged
+	var _t1 := Time.get_ticks_usec()
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, space)
+	var _t2 := Time.get_ticks_usec()
+	if float(_t2 - _t0) / 1000.0 > float(reshape_worst[0]):
+		reshape_worst = [float(_t2 - _t0) / 1000.0, world.get_alive_block_count(isl.chunk),
+				isl.shape_count, float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0]
 		# See BrickIsland.disable_blocks: rejoining a space resets the body's
 		# interpolation history, and swapping shapes is the other half of the
 		# damage path that does it.
@@ -1530,7 +1560,7 @@ func _submit_mesh_job(isl: BrickIsland, arrays: Array) -> void:
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var m := ArrayMesh.new()
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		holder[0] = m, false, "island mesh")
+		holder[0] = m, true, "island mesh")
 	isl.mesh_job = task
 	_mesh_jobs.append([isl, task, holder, arrays])
 
@@ -2563,7 +2593,11 @@ func _enforce_debris_cap() -> void:
 			large_n += 1
 		else:
 			small_n += 1
-	if small_n <= small_live_max and large_n <= large_live_max 			and small_n + large_n <= total_live_max:
+	_cap_room = small_n <= small_live_max - CAP_WAKE_SPARE \
+			and large_n <= large_live_max - CAP_WAKE_SPARE \
+			and small_n + large_n <= total_live_max - CAP_WAKE_SPARE
+	if small_n <= small_live_max and large_n <= large_live_max \
+			and small_n + large_n <= total_live_max:
 		_cap_plan.clear()
 		return
 	var tick := Engine.get_physics_frames()
@@ -2654,6 +2688,8 @@ func _plan_debris_cap() -> Array:
 		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
 		for k in mini(over_large, keep.size()):
 			plan.append([keep[k], false])
+		# What is still awake after this plan, the farthest of it.
+		_cap_far = float(away[keep[over_large]]) if over_large < keep.size() else 0.0
 	return plan
 
 
@@ -2678,13 +2714,16 @@ func _stream_dormancy() -> void:
 		if _wake_cursor >= dormant.size():
 			_wake_cursor = 0
 		var d: Dormant = dormant[_wake_cursor]
-		if _distance_to_interest(d.record.box, points) > WAKE_RANGE:
+		var dist := _distance_to_interest(d.record.box, points)
+		if dist > WAKE_RANGE or (d.by_cap and not _cap_room and dist >= _cap_far * CAP_SWAP):
 			_wake_cursor += 1
 			continue
 		var _t1 := Time.get_ticks_usec()
 		if _wake_record(d) != null:
 			dormant.remove_at(_wake_cursor)   # the next one shifts into its place
 			woke += 1
+			if d.by_cap:
+				cap_woken += 1
 			var cost := float(Time.get_ticks_usec() - _t1) / 1000.0
 			if cost > float(wake_worst[0]):
 				wake_worst = [cost, d.record.block_count()]
@@ -2727,8 +2766,8 @@ func _stream_dormancy() -> void:
 
 
 ## Photograph a piece and give everything else back.
-func _sleep(isl: BrickIsland, index: int) -> bool:
-	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk))
+func _sleep(isl: BrickIsland, index: int, by_cap := false) -> bool:
+	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk), by_cap)
 
 
 enum { NOTHING, SLEPT, STARTED }
@@ -2741,7 +2780,7 @@ func _sleep_or_begin(isl: BrickIsland, index: int, for_cap: bool) -> int:
 	if isl.capturing:
 		return STARTED
 	if world.get_block_count(isl.chunk) <= SLEEP_SYNC_BLOCKS:
-		return SLEPT if _sleep(isl, index) else NOTHING
+		return SLEPT if _sleep(isl, index, for_cap) else NOTHING
 	isl.capturing = true
 	_sleep_jobs.append([isl, ChunkRecord.begin_capture(world, isl.chunk), isl.edits, for_cap])
 	return STARTED
@@ -2773,7 +2812,7 @@ func _advance_sleep_jobs() -> void:
 		var at := islands.find(isl)
 		if at < 0:
 			continue
-		if _commit_sleep(isl, at, record):
+		if _commit_sleep(isl, at, record, bool(job[3])):
 			if bool(job[3]):
 				cap_slept += 1
 		elif bool(job[3]):
@@ -2783,11 +2822,12 @@ func _advance_sleep_jobs() -> void:
 
 ## The part of going to sleep after the photograph: keep the record, let the
 ## piece go.
-func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord) -> bool:
+func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord, by_cap := false) -> bool:
 	if record.block_count() == 0:
 		return false
 	var d := Dormant.new()
 	d.record = record
+	d.by_cap = by_cap
 	d.slept_ms = Time.get_ticks_msec()
 	d.piece_id = isl.piece_id
 	d.owner = isl.owner
@@ -2819,12 +2859,12 @@ func _wake_record(d: Dormant) -> BrickIsland:
 	settled += 1
 	_apply_layers(isl)
 	_reshape(isl, true)
-	# Small enough to bake here, or queued like any other big piece.
-	if d.record.block_count() <= SYNC_MESH_MAX_BLOCKS:
-		rebuild_mesh(isl, true, true)
-	else:
-		world.bake_chunk_async(chunk)
-		_mesh_queue.append(isl)
+	# Baked on a worker and drawn a tick or two later, however small: a piece
+	# waking is one nobody was looking at, and bricks are a poor measure of a
+	# bake -- a staircase piece of 146 is 90,000 vertices of spiral step, and
+	# baking one here was a 15 ms wake.
+	world.bake_chunk_async(chunk)
+	_mesh_queue.append(isl)
 	woken += 1
 	isl.wakes += 1
 	piece_woken.emit(isl)

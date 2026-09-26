@@ -1442,34 +1442,94 @@ Vector3i BrickWorld::get_chunk_gravity(int chunk_id) const {
 /// possible. Block identity is deliberately ignored: this is for pieces that
 /// have stopped moving and will not be damaged until something hits them, at
 /// which point the caller rebuilds per block.
-Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section) {
+Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section,
+        bool skip_decorative) {
     Dictionary out;
-    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     const Chunk &c = chunks[chunk_id];
+    std::vector<const Block *> blocks;
+    blocks.reserve(c.blocks.size());
+    for (const Block &b : c.blocks) {
+        if (b.alive && !(skip_decorative && b.decorative)
+                && (section < 0 || c.section_of_y(b.cell.y) == section)) {
+            blocks.push_back(&b);
+        }
+    }
+    out["map"] = Dictionary();
+    out["count"] = merge_blocks_into(body, c, offset, blocks);
+    out["merged"] = true;
+    return out;
+}
+
+PackedInt32Array BrickWorld::add_band_shapes(const Array &bodies, int chunk_id, Vector3 offset,
+        const PackedInt32Array &sections, bool skip_decorative) {
+    PackedInt32Array counts;
+    counts.resize(sections.size());
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        counts.set(i, 0);
+    }
+    if (!valid_chunk(chunk_id) || bodies.size() != sections.size()) {
+        return counts;
+    }
+    const Chunk &c = chunks[chunk_id];
+    // Which slot of the request each band is, and the blocks of each, in one
+    // walk over the chunk.
+    std::vector<int> slot((size_t)std::max(c.sections(), 1), -1);
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        const int s = sections[i];
+        if (s >= 0 && s < (int)slot.size()) {
+            slot[(size_t)s] = (int)i;
+        }
+    }
+    std::vector<std::vector<const Block *>> lists((size_t)sections.size());
+    for (const Block &b : c.blocks) {
+        if (!b.alive || (skip_decorative && b.decorative)) {
+            continue;
+        }
+        const int k = slot[(size_t)c.section_of_y(b.cell.y)];
+        if (k >= 0) {
+            lists[(size_t)k].push_back(&b);
+        }
+    }
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        counts.set(i, merge_blocks_into((RID)bodies[i], c, offset, lists[(size_t)i]));
+    }
+    return counts;
+}
+
+int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
+        const std::vector<const Block *> &blocks) {
+    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     const Vector3i d = c.dims;
     const Vector3 cs = cell_size();
     const int64_t n = (int64_t)d.x * d.y * d.z;
     if (n <= 0) {
-        out["map"] = Dictionary();
-        out["count"] = 0;
-        out["merged"] = true;
-        return out;
+        return 0;
     }
 
-    std::vector<uint8_t> solid((size_t)n, 0);
+    // The grid is only as tall as what is being merged: one band of a tall
+    // chunk is a few dozen of its hundreds of rows, and allocating and scanning
+    // the whole chunk's grid for every band was most of a band's rebuild.
+    int w_lo = d.y, w_hi = -1;
+    for (const Block *b : blocks) {
+        const int y0 = b->cell.y - c.origin.y;
+        const int y1 = y0 + archetypes[b->archetype].size.y - 1;
+        w_lo = y0 < w_lo ? y0 : w_lo;
+        w_hi = y1 > w_hi ? y1 : w_hi;
+    }
+    w_lo = w_lo < 0 ? 0 : w_lo;
+    w_hi = w_hi >= d.y ? d.y - 1 : w_hi;
+    const int wy = w_hi >= w_lo ? w_hi - w_lo + 1 : 0;
+    std::vector<uint8_t> solid((size_t)d.x * (size_t)wy * (size_t)d.z, 0);
+    auto at = [&](int x, int y, int z) -> uint8_t & {
+        return solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)(y - w_lo) + (int64_t)wy * z))];
+    };
     // Parts with authored hulls are kept out of the merge -- their cells are not
     // what they collide as -- and get their own shapes after it.
     std::vector<const Block *> hulled;
-    // The rows anything was marked in: one band of a tall chunk is a few dozen
-    // of its hundreds, and the scan below need not walk the rest.
+    // The rows anything was marked in.
     int y_lo = d.y, y_hi = -1;
-    for (const Block &b : c.blocks) {
-        if (!b.alive) {
-            continue;
-        }
-        if (section >= 0 && c.section_of_y(b.cell.y) != section) {
-            continue;
-        }
+    for (const Block *bp : blocks) {
+        const Block &b = *bp;
         const Archetype &a = archetypes[b.archetype];
         if (!a.hulls.empty()) {
             hulled.push_back(&b);
@@ -1483,20 +1543,16 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset,
                         continue;
                     }
                     const int x = base.x + lx, y = base.y + ly, z = base.z + lz;
-                    if (x < 0 || y < 0 || z < 0 || x >= d.x || y >= d.y || z >= d.z) {
+                    if (x < 0 || y < w_lo || z < 0 || x >= d.x || y > w_hi || z >= d.z) {
                         continue;
                     }
-                    solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z))] = 1;
+                    at(x, y, z) = 1;
                     y_lo = y < y_lo ? y : y_lo;
                     y_hi = y > y_hi ? y : y_hi;
                 }
             }
         }
     }
-
-    auto at = [&](int x, int y, int z) -> uint8_t & {
-        return solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z))];
-    };
 
     int count = 0;
     for (int z = 0; z < d.z; ++z) {
@@ -1564,10 +1620,7 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset,
         }
     }
 
-    out["map"] = Dictionary();
-    out["count"] = count;
-    out["merged"] = true;
-    return out;
+    return count;
 }
 
 RID BrickWorld::box_shape_for(const Vector3 &size) {
@@ -1587,7 +1640,7 @@ RID BrickWorld::box_shape_for(const Vector3 &size) {
 }
 
 Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, bool skip_dead,
-        bool merge, int section) {
+        bool merge, int section, bool skip_decorative) {
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -1596,7 +1649,7 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
     const Chunk &c = chunks[chunk_id];
 
     if (merge) {
-        return add_merged_shapes(body, chunk_id, offset, section);
+        return add_merged_shapes(body, chunk_id, offset, section, skip_decorative);
     }
 
     Dictionary map;
@@ -1607,6 +1660,9 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
             continue;
         }
         if (section >= 0 && c.section_of_y(b.cell.y) != section) {
+            continue;
+        }
+        if (skip_decorative && b.decorative) {
             continue;
         }
         const Archetype &a = archetypes[b.archetype];
@@ -1671,7 +1727,7 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
 }
 
 PackedInt32Array BrickWorld::get_block_sections(int chunk_id,
-        const PackedInt32Array &block_ids) const {
+        const PackedInt32Array &block_ids, bool skip_decorative) const {
     PackedInt32Array out;
     out.resize(block_ids.size());
     for (int64_t i = 0; i < block_ids.size(); ++i) {
@@ -1683,7 +1739,8 @@ PackedInt32Array BrickWorld::get_block_sections(int chunk_id,
     const Chunk &c = chunks[chunk_id];
     for (int64_t i = 0; i < block_ids.size(); ++i) {
         const int32_t bid = block_ids[i];
-        if (bid >= 0 && bid < (int32_t)c.blocks.size()) {
+        if (bid >= 0 && bid < (int32_t)c.blocks.size()
+                && !(skip_decorative && c.blocks[(size_t)bid].decorative)) {
             out.set(i, c.section_of_y(c.blocks[(size_t)bid].cell.y));
         }
     }
@@ -4834,9 +4891,12 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_content_hash", "chunk_id"),
             &BrickWorld::get_chunk_content_hash);
     ClassDB::bind_method(D_METHOD("add_chunk_shapes", "body", "chunk_id", "offset", "skip_dead", "merge",
-            "section"), &BrickWorld::add_chunk_shapes, DEFVAL(false), DEFVAL(-1));
-    ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids"),
-            &BrickWorld::get_block_sections);
+            "section", "skip_decorative"), &BrickWorld::add_chunk_shapes, DEFVAL(false), DEFVAL(-1),
+            DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids", "skip_decorative"),
+            &BrickWorld::get_block_sections, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("add_band_shapes", "bodies", "chunk_id", "offset", "sections",
+            "skip_decorative"), &BrickWorld::add_band_shapes, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("capture_blocks", "chunk_id", "from", "count"),
             &BrickWorld::capture_blocks);
     ClassDB::bind_method(D_METHOD("set_chunk_gravity", "chunk_id", "down"), &BrickWorld::set_chunk_gravity);

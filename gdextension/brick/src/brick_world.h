@@ -687,12 +687,27 @@ public:
     /// mesh's bands, `set_chunk_section_plates`; a block is in the band its
     /// lowest cell is in). A standing building's collision is one body a band,
     /// so a hit rebuilds the band it landed in rather than the whole tower.
+    ///
+    /// `skip_decorative` leaves furniture out: a standing building's furniture
+    /// collides through a body of its own (CityScene._room_body), and a piece's
+    /// carries its furniture in its own shapes.
     Dictionary add_chunk_shapes(RID body, int chunk_id, Vector3 offset, bool skip_dead,
-            bool merge = false, int section = -1);
+            bool merge = false, int section = -1, bool skip_decorative = false);
+
+    /// Merged shapes for several bands at once: bodies[i] gets band
+    /// sections[i]'s, as add_chunk_shapes(bodies[i], ..., true, true,
+    /// sections[i]) would give it. One walk over the chunk's blocks for all of
+    /// them, where a call a band walked every block of the building twice --
+    /// a mega tower's worst tick merged 15 bands again. Returns each body's
+    /// shape count.
+    PackedInt32Array add_band_shapes(const Array &bodies, int chunk_id, Vector3 offset,
+            const PackedInt32Array &sections, bool skip_decorative = false);
 
     /// The band (`section` above) each of these blocks is in, -1 for an id
-    /// that is not a block of the chunk.
-    PackedInt32Array get_block_sections(int chunk_id, const PackedInt32Array &block_ids) const;
+    /// that is not a block of the chunk -- or, with `skip_decorative`, one that
+    /// is furniture.
+    PackedInt32Array get_block_sections(int chunk_id, const PackedInt32Array &block_ids,
+            bool skip_decorative = false) const;
 
     /// A stable name for what a chunk HOLDS, independent of how it came to
     /// hold it.
@@ -903,7 +918,13 @@ private:
     RID hull_shape_for(int archetype_id, int hull);
     void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
-    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1);
+    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1,
+            bool skip_decorative = false);
+    /// The merge itself, over the blocks given (alive ones): as few boxes as
+    /// cover their solid cells, and a hull shape each for authored parts.
+    /// Returns the shape count.
+    int merge_blocks_into(RID body, const brick::Chunk &c, Vector3 offset,
+            const std::vector<const brick::Block *> &blocks);
 
     BakeJob *find_bake_job(int chunk_id);
     /// Join a chunk's bake if one is running. `adopt` takes the result; without
