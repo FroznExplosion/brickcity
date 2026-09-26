@@ -90,8 +90,9 @@ void fragment() {
 		col = wall_colour * 0.82;
 	}
 
-	// Furniture, by the room's kind: Room.KINDS order.
-	float kind = floor(COLOR.a * 4.0 + 0.5);
+	// Furniture, by the room's window style (Room.WINDOW_STYLE), packed as
+	// style / 16 by BuildingShell._pane_colour.
+	float kind = floor(COLOR.a * 16.0 + 0.5);
 	float s1 = COLOR.r;
 	float s2 = COLOR.b;
 	float y0 = -sill;
@@ -140,6 +141,101 @@ void fragment() {
 		if (tb < t) {
 			t = tb;
 			col = furniture_shade(PALETTE[int(s1 * 5.99)], n);
+		}
+	} else if (kind > 3.5 && kind < 4.5) {
+		// Bedroom: a bed running back from one side wall, its headboard
+		// against the far wall, and a nightstand beside it.
+		float x = s1 < 0.5 ? -side + 0.1 : size.x + side - 1.5;
+		tb = box_hit(o, d, vec3(x, y0, depth - 2.1), vec3(x + 1.4, y0 + 0.5, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(mix(vec3(0.92), PALETTE[int(s2 * 5.99)], 0.35), n);
+		}
+		tb = box_hit(o, d, vec3(x, y0, depth - 0.15), vec3(x + 1.4, y0 + 1.0, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(PALETTE[3], n);
+		}
+		float nx = s1 < 0.5 ? x + 1.5 : x - 0.6;
+		tb = box_hit(o, d, vec3(nx, y0, depth - 0.5), vec3(nx + 0.5, y0 + 0.55, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(PALETTE[3] * 0.8, n);
+		}
+	} else if (kind > 4.5 && kind < 5.5) {
+		// Living room: a sofa against the far wall -- seat and back -- and a
+		// low table in front of it.
+		float x = -side + 0.2 + s1 * max(room_w.x - 2.6, 0.1);
+		vec3 sofa = PALETTE[int(s2 * 5.99)];
+		tb = box_hit(o, d, vec3(x, y0, depth - 0.9), vec3(x + 2.2, y0 + 0.45, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(sofa, n);
+		}
+		tb = box_hit(o, d, vec3(x, y0, depth - 0.25), vec3(x + 2.2, y0 + 0.85, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(sofa * 0.85, n);
+		}
+		tb = box_hit(o, d, vec3(x + 0.5, y0, depth - 1.9), vec3(x + 1.7, y0 + 0.4, depth - 1.3), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(PALETTE[3], n);
+		}
+	} else if (kind > 5.5 && kind < 6.5) {
+		// Bathroom: a tub along the far wall and a basin on one side, all
+		// white, so a lit bathroom reads as tiles and porcelain.
+		tb = box_hit(o, d, vec3(-side, y0, depth - 0.8), vec3(-side + 1.7, y0 + 0.55, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(vec3(0.95, 0.95, 0.97), n);
+		}
+		tb = box_hit(o, d, vec3(size.x + side - 0.6, y0, 1.2), vec3(size.x + side, y0 + 0.85, 1.9), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(vec3(0.9, 0.92, 0.95), n);
+		}
+		// Tiles: the far wall's lower half, paler and cooler.
+		vec3 q = o + d * t;
+		if (t == tf.z && q.y < y0 + 1.2) {
+			col = vec3(0.82, 0.88, 0.9) * (0.92 + 0.08 * step(0.5, fract(q.x * 5.0) + fract(q.y * 5.0) - 0.5));
+		}
+	} else if (kind > 6.5 && kind < 7.5) {
+		// Lab: two long benches in rows and a tall cabinet at the back.
+		for (int i = 0; i < 2; i++) {
+			float z = 1.0 + float(i) * 1.3;
+			tb = box_hit(o, d, vec3(-side + 0.2, y0, z), vec3(size.x + side - 0.2, y0 + 0.9, z + 0.6), n);
+			if (tb < t) {
+				t = tb;
+				col = furniture_shade(i == 0 ? vec3(0.85, 0.87, 0.9) : PALETTE[4], n);
+			}
+		}
+		float x = -side + 0.2 + s1 * max(room_w.x - 1.2, 0.1);
+		tb = box_hit(o, d, vec3(x, y0, depth - 0.5), vec3(x + 0.9, y0 + 1.9, depth), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(vec3(0.7, 0.74, 0.78), n);
+		}
+	} else if (kind > 7.5 && kind < 8.5) {
+		// Shop: shelving along the far wall and one side, stocked in stripes,
+		// and a counter just inside the window.
+		tb = box_hit(o, d, vec3(-side, y0, depth - 0.45), vec3(size.x + side, y0 + 1.8, depth), n);
+		if (tb < t) {
+			t = tb;
+			vec3 q = o + d * t;
+			int band = int(floor((q.y - y0) / 0.36));
+			col = furniture_shade(PALETTE[(band + int(s1 * 5.99)) % 6], n);
+		}
+		float sx = s2 < 0.5 ? -side : size.x + side - 0.45;
+		tb = box_hit(o, d, vec3(sx, y0, 0.8), vec3(sx + 0.45, y0 + 1.8, depth - 0.45), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(PALETTE[4], n);
+		}
+		tb = box_hit(o, d, vec3(-side + 0.3, y0, 0.5), vec3(-side + 0.3 + min(room_w.x * 0.5, 1.8), y0 + 0.9, 1.0), n);
+		if (tb < t) {
+			t = tb;
+			col = furniture_shade(PALETTE[3], n);
 		}
 	}
 

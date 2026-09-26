@@ -186,8 +186,8 @@ INTERIOR/DETAIL bricks.
   built-in furniture for them (`bed`, `bench`, `counter` join `ITEMS`).
   `Room.KINDS` is **append only**: with no program a building still draws
   from the first four (`Room.LEGACY_KINDS`), so no existing room changes. The
-  new kinds are reached through a program. A far window draws a new kind in the
-  nearest existing style (`Room.WINDOW_STYLE`) — the shader is unchanged.
+  new kinds are reached through a program. A far window draws each kind its
+  own way (`Room.WINDOW_STYLE`; see §3 item 3).
 * **Room guide.** With Type = Room template, a green box on the baseplate is a
   real city room (25×25 studs by 18 plates; `U` cycles through 15×25, 15×15,
   25×5, 5×5 — the sizes the city's shapes actually cut), and the HUD says how
@@ -212,8 +212,10 @@ Next, in order:
    rungs, detail on demand) only knows generated towers. Registering a build's
    towers' rooms with `BuildingRegistry.rooms_of`, offset by the tower's cell,
    plus `rooms_near` for builds, would give them the rungs.
-3. **Window drawings for the new room kinds** in
-   `shaders/window_interior.gdshader` (they borrow an old one today).
+3. ✅ **Window drawings for the new room kinds.** Each kind has its own
+   (bed and nightstand; sofa and low table; tub, basin and tiles; lab benches
+   and cabinet; stocked shelving and a counter). The pane packs the style as
+   `style / 16` now, room for sixteen. `--windows --programs` photographs them.
 
 Deliberately not here:
 

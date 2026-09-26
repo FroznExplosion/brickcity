@@ -492,7 +492,7 @@ const GLASS_PROUD := 0.004
 
 ## What a pane knows about its room, packed in a vertex colour: r and b are
 ## seeds for layout, g is how brightly the room is lit, a is the room's kind as
-## the room's window style (Room.WINDOW_STYLE), divided by four.
+## the room's window style (Room.WINDOW_STYLE), divided by sixteen.
 static func _pane_colour(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int, storey: int, plan: Vector2, side: int, gap: Vector2i,
 		program: Dictionary = {}) -> Color:
@@ -506,7 +506,7 @@ static func _pane_colour(footprint_x: int, footprint_z: int, courses: int,
 	# One room in five has its lights off.
 	var lit := 0.3 if h2 % 5 == 0 else 0.8 + float((h2 >> 8) % 100) / 400.0
 	return Color(float(h % 1000) / 1000.0, lit, float(h2 % 1000) / 1000.0,
-			float(kind) / 4.0)
+			float(kind) / 16.0)
 
 
 ## One pane: corners a, b, c, d as `_quad` takes them, UV in metres across the
