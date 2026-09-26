@@ -331,6 +331,45 @@ In the brick extension (R1): `ai_world.{h,cpp}`, `ai_scheduler.{h,cpp}`.
 a hand count; 10,000 cover queries inside budget; scheduler holds its budget under a synthetic
 flood; arbiter steps AI down during a `--stress` collapse and back up after.
 
+**Done (2026-09-25).**
+- **`AIWorld`** (`src/ai/ai_world.*`, in the brick extension with `friend` access to the chunk
+  grids — R1). Broad phase: a 2D hash of every live chunk's world AABB, walked along the segment
+  by a 2D DDA, so a long sight line costs the cells it crosses. Narrow phase: into the chunk's own
+  frame, into cell units, and a 3D integer DDA through its occupancy — counting distinct live
+  structural blocks (furniture is not cover), metres of solid, the first brick and its chunk.
+  **Proxies** stand in for bricks nobody has built: the city registers every pristine building's
+  five shell boxes (one brick per stud of travel) and drops them when the bricks arrive — an AI
+  query never materialises a building (AI.md 3.2). **Smoke** as spheres blocks sight but is not
+  cover; **danger** boxes are every big piece still falling, refreshed each tick.
+- **Cover is seconds** (AI.md 3.7): `cover_seconds(threat, target, hp_per_hit, rate)` sums, brick by
+  brick, the rounds `BrickWorld.chip_hit` will actually need — each brick's own hp and material,
+  the same integer wear rule — so a worn wall is shorter cover and a steel one longer. Batched for
+  a squad's search.
+- **`AIScheduler`** (`src/ai/ai_scheduler.*`): jobs by subsystem and priority, best-first inside
+  the budget, the budget checked before each job so the overrun is at most one; waiting jobs age so
+  nothing starves; `must_run` (evade, firing) runs whatever the budget. **The arbiter** is fed this
+  script's own tick — destruction's spend — and steps the AI down a five-level ladder (budget
+  2.5 → 0.75 ms; `rate_scale` thins directed trees, then rays, then smart agents, then the
+  commander, AI.md 10.3 rule 7) on a streak of heavy ticks, and back up on quiet ones. Heavy and
+  quiet are **relative to the city's own normal**, which falls fast and rises slowly: a
+  200-building city ticks at several ms doing nothing, and single periodic spikes are not a
+  collapse. The city syncs and runs it every tick (`--no-ai` turns it off to measure).
+- **F4** shows the AI overlay: level, budget, sync and run ms, the city's normal, indexed chunks,
+  proxies, danger, smoke, queries and their mean cost, and per subsystem ms / ran / deferred.
+- Gates: **`tools/ai_world_probe.gd` 35** — hand counts through a wall (3 bricks, 1.05 m), a slab
+  tilted 30° (1 brick along its normal, 10 along its plane), two chunks (3 + 2), a hole (0) and
+  beside it (3); **200 random rays through four chunks at random rotations agree with a
+  millimetre brute force, 200 of 200**; cover life to the round, worn and not, pistol and sniper;
+  proxies, smoke, danger; **10,000 cover queries through six materialised towers in 6.1 ms —
+  0.44 µs each in C++, 0.61 with the call**; a 2,000-job flood served 2.5 ms a frame with no frame
+  more than a job over; importance first; nothing starves; evade always; the ladder down under a
+  collapse, held, back up, and a sustained load taken as the new normal. **`--stress 200`**: level
+  0 under fire, 4 while the queue drains and the city collapses, back to 0 in the trimmed phase;
+  the AI's tick is 0.25 ms. `--gun` checks the overlay.
+- Found: at rest the 200-building city spends ~20 ms on one physics tick in thirty (periodic city
+  work, not destruction), and its settled and trimmed phases now run 19–21 ms a frame with the AI
+  off too, against 16.7 this morning — a regression from another area's merge today, not this.
+
 ### P3 — Navigation · L
 
 | Work | Where |

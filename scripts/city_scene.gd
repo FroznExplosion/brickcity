@@ -616,6 +616,20 @@ var _play_mode := false
 var _pilot := MechPilot.new()
 var _mech: Mech
 var _mech_mode := false
+## The AI's view of the city (Docs/AIPlan.md P2): what stands between two points,
+## how long cover lasts, where not to stand. Synced once a tick; it reads the
+## bricks and never changes them.
+var ai_world := AIWorld.new()
+## The AI's one budget, and the arbiter that shares the frame with destruction:
+## fed this script's own tick time, it steps the AI down during a collapse.
+var ai_sched := AIScheduler.new()
+var _ai_label: Label
+var _ai_sync_ms := 0.0
+var _ai_run_ms := 0.0
+## The deepest the ladder went in each --stress phase.
+var _ai_phase_level := {}
+## `-- --no-ai`: the city without the AI's tick, to measure what it costs.
+var _no_ai := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -696,6 +710,7 @@ func _ready() -> void:
 	_gun_mode = "--gun" in args
 	_play_mode = "--play" in args
 	_mech_mode = "--mech" in args
+	_no_ai = "--no-ai" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -750,6 +765,11 @@ func _ready() -> void:
 		return done.seq if done != null else -1
 
 	_setup_gun()
+	ai_world.set_world(world)
+	ai_sched.set_base_budget_ms(2.5)
+	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
+	ai_sched.set_thresholds(8.0, 4.0)
+	ai_sched.set_hysteresis(3, 45)
 	_build_city()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
@@ -1529,6 +1549,13 @@ func _make_shell(id: int, coarse: bool = false) -> void:
 					b.recipe.courses))
 	for box in boxes:
 		PhysicsServer3D.body_add_shape(body, _shape_rid(box.size), Transform3D(Basis(), box.pos))
+	# The same boxes stand in for the bricks with the AI (AIWorld proxies) while
+	# the building has none -- one brick of wall per stud of travel. An AI query
+	# never materialises a building (Docs/AI.md 3.2); it asks the shell.
+	if not b.is_materialised():
+		for k in boxes.size():
+			ai_world.set_proxy(_proxy_id(id, k), b.xform * Transform3D(Basis(), boxes[k].pos),
+					boxes[k].size, 1.0 / STUD)
 	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, b.xform)
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 	if PhysicsServer3D.body_get_shape_count(body) > 0:
@@ -1607,6 +1634,8 @@ func _promote(id: int, solve: bool = true, merged: bool = false) -> int:
 ## checkpoint can replay the damage into the bricks FIRST and dress the building
 ## after -- the bake and the shapes then start from the damaged building.
 func _dress(id: int, chunk: int, solve: bool, merged: bool = false) -> void:
+	# Bricks now: the AI asks them, not the shell.
+	_drop_proxies(id)
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -2490,6 +2519,14 @@ func _run_gun_pass() -> void:
 			blasts += 1
 	_gate_ok("ordnance blasts", blasts >= 1, "%d BLAST(s); rounds %s" % [blasts, log_hits])
 	await _frames(30)
+	# The AI overlay (F4) draws, and says something.
+	_ai_label.visible = true
+	_update_ai_label()
+	_gate_ok("the AI overlay reports the AI's world and budget",
+			_ai_label.text.begins_with("AI (F4)") and _ai_label.text.contains("chunks"),
+			_ai_label.text.get_slice("
+", 0))
+	await _frames(12)
 	await _save("city_gun")
 	_check_log_replays()
 	print("[city] gun gate: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
@@ -2722,6 +2759,65 @@ func _run_mech_pass() -> void:
 	_check_log_replays()
 	print("[mech] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Shell box `k` of building `id`, as an AIWorld proxy id. A shell is five boxes
+## for a tower; a player build's shell can be more.
+func _proxy_id(id: int, k: int) -> int:
+	return id * 64 + k
+
+
+func _drop_proxies(id: int) -> void:
+	for k in 64:
+		ai_world.remove_proxy(_proxy_id(id, k))
+
+
+## Once a physics tick, after everything else the city did: bring the AI's view
+## up to date, tell the arbiter what destruction just cost, and serve the AI's
+## queue inside what is left.
+func _ai_tick(destruction_ms: float) -> void:
+	if _no_ai:
+		return
+	var t0 := Time.get_ticks_usec()
+	ai_world.sync()
+	# Where not to stand: anything big still falling, as its box and a margin.
+	ai_world.clear_danger()
+	for isl in islands.islands:
+		if isl.is_valid() and not isl.settled and not isl.disposable:
+			ai_world.set_danger(isl.chunk, islands.world_aabb(isl).grow(1.0))
+	var t1 := Time.get_ticks_usec()
+	_ai_sync_ms = float(t1 - t0) / 1000.0
+	ai_sched.report_destruction_ms(destruction_ms)
+	ai_sched.run()
+	_ai_run_ms = float(Time.get_ticks_usec() - t1) / 1000.0
+	_prof["ai"] = _ai_sync_ms + _ai_run_ms
+	if _phase != "":
+		_ai_phase_level[_phase] = maxi(int(_ai_phase_level.get(_phase, 0)), ai_sched.get_level())
+		var k := "tick:" + _phase
+		_ai_phase_level[k] = float(_ai_phase_level.get(k, 0.0)) + destruction_ms
+		_ai_phase_level["n:" + _phase] = int(_ai_phase_level.get("n:" + _phase, 0)) + 1
+	if _ai_label != null and _ai_label.visible and Engine.get_physics_frames() % 10 == 0:
+		_update_ai_label()
+
+
+func _update_ai_label() -> void:
+	var w: Dictionary = ai_world.get_stats()
+	var s: Dictionary = ai_sched.get_stats()
+	var lines := [
+		"AI (F4)   level %d of %d   budget %.2f ms   sync %.2f ms   run %.2f ms   city normal %.1f ms" % [
+			ai_sched.get_level(), AIScheduler.LEVEL_MAX, ai_sched.get_budget_ms(),
+			_ai_sync_ms, _ai_run_ms, ai_sched.get_baseline_ms()],
+		"world     %d chunks  %d proxies  %d danger  %d smoke  %d queries, %.2f us mean" % [
+			int(w.indexed_chunks), int(w.proxies), int(w.danger), int(w.smoke),
+			int(w.queries), float(w.mean_usec)],
+		"queue     %d waiting, %d ran last tick, %.2f ms over" % [
+			int(s.queued), int(s.ran), float(s.overrun_ms)],
+	]
+	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
+		var d: Dictionary = s[sub]
+		lines.append("  %-11s %5.2f ms  %3d ran  %3d deferred" % [sub, float(d.ms),
+				int(d.ran), int(d.deferred)])
+	_ai_label.text = "\n".join(lines)
 
 
 ## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
@@ -3266,6 +3362,7 @@ func _physics_process(_delta: float) -> void:
 
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
+	_ai_tick(tick_total)
 	if _sampling:
 		_tick_samples += 1
 		for k in _prof:
@@ -3284,6 +3381,7 @@ func _physics_process(_delta: float) -> void:
 
 
 func _free_shell(id: int) -> void:
+	_drop_proxies(id)
 	_shell_coarse.erase(id)
 	if _shells.has(id):
 		(_shells[id] as MeshInstance3D).queue_free()
@@ -3645,7 +3743,7 @@ func _update_hud() -> void:
 		"1 gun · 2 blast · T next gun · R reload",
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
-F1 stats · F2 profiler · F3 reset worst · F5 save · F9 load · N respawn"
+F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · N respawn"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
 
@@ -3834,6 +3932,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_R:
 			if _gun_armed:
 				_gun.reload()
+		KEY_F4:
+			_ai_label.visible = not _ai_label.visible
+			_update_ai_label()
 		KEY_F5:
 			save_checkpoint()
 		KEY_F9:
@@ -4708,6 +4809,18 @@ func _run_stress_pass() -> void:
 	for b in registry.buildings:
 		if b.toppled:
 			toppled += 1
+	# The arbiter (AIPlan R14): the AI stepped down while the city came apart,
+	# and back up once it was quiet again.
+	var ladder := ""
+	for ph in ["under fire", "damage queue draining", "collapsing", "settled", "trimmed"]:
+		ladder += "%s %d (tick %.1f ms)  " % [ph, int(_ai_phase_level.get(ph, 0)),
+				float(_ai_phase_level.get("tick:" + ph, 0.0)) / maxi(int(_ai_phase_level.get("n:" + ph, 0)), 1)]
+	print("[stress] AI ladder, deepest level per phase: %s-> now %d (deepest %d); AI sync+run %.2f ms a tick" % [
+			ladder, ai_sched.get_level(), ai_sched.get_max_level_seen(),
+			float(_prof_sum.get("ai", 0.0)) / maxi(_tick_samples, 1)])
+	print("[stress] %s  the AI stepped down under the collapse and back up after" % (
+			"ok   " if ai_sched.get_max_level_seen() >= 1 and ai_sched.get_level() == 0
+			else "FAIL "))
 	print("[stress] %d shot(s) at %d building(s); %d meant to come down" % [
 			shots, target, toppled_on_purpose])
 	print("[stress] %d of %d buildings took a hit, %d actually toppled" % [
@@ -7167,6 +7280,16 @@ func _build_scenery() -> void:
 	camera.mode_changed.connect(func(_walking: bool) -> void: _update_hud())
 
 	var layer := CanvasLayer.new()
+	# The AI overlay, beside F1's stats, off until F4 (AIPlan P2).
+	_ai_label = Label.new()
+	_ai_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_ai_label.position = Vector2(14, -250)
+	_ai_label.add_theme_font_override("font", ThemeDB.fallback_font)
+	_ai_label.add_theme_color_override("font_color", Color(0.7, 0.95, 1.0))
+	_ai_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_ai_label.add_theme_constant_override("outline_size", 4)
+	_ai_label.visible = false
+	layer.add_child(_ai_label)
 	stats_label = Label.new()
 	stats_label.position = Vector2(14, 12)
 	stats_label.add_theme_color_override("font_color", Color(0.95, 0.96, 0.98))
