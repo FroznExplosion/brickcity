@@ -1265,6 +1265,9 @@ static func mesh_arrays_ok(arrays: Array, who: String) -> bool:
 const INDEX16_MAX_VERTS := 65536
 
 static func index_width(arrays: Array) -> int:
+	# A chunk that baked to nothing hands back an empty array, not a surface.
+	if arrays.size() <= Mesh.ARRAY_VERTEX:
+		return 2
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	return 2 if verts.size() <= INDEX16_MAX_VERTS else 4
 

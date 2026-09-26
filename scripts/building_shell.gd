@@ -374,8 +374,11 @@ static func build_mesh(footprint_x: int, footprint_z: int, courses: int,
 ## A band that has been damaged gets no panes: its wall has holes the shell
 ## draws as missing, and glass over a hole is glass in mid-air. Null if the
 ## building has no windows at all.
+##
+## `program` is the building's room mix (RoomManifest.kind_index), so a window
+## shows the kind of room the program really put behind it.
 static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
-		building_seed: int, damage: Dictionary = {}) -> ArrayMesh:
+		building_seed: int, damage: Dictionary = {}, program: Dictionary = {}) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var tangents := PackedFloat32Array()
@@ -424,12 +427,12 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 					Vector3(a, y0, -GLASS_PROUD), Vector3(b, y0, -GLASS_PROUD),
 					Vector3(a, y1, -GLASS_PROUD), Vector3(b, y1, -GLASS_PROUD),
 					Vector3(0, 0, -1), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(mid, reach), 0, g))
+					building_seed, storey, Vector2(mid, reach), 0, g, program))
 			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 					Vector3(b, y0, d + GLASS_PROUD), Vector3(a, y0, d + GLASS_PROUD),
 					Vector3(b, y1, d + GLASS_PROUD), Vector3(a, y1, d + GLASS_PROUD),
 					Vector3(0, 0, 1), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(mid, footprint_z - reach), 1, g))
+					building_seed, storey, Vector2(mid, footprint_z - reach), 1, g, program))
 		for g in gz:
 			var a: float = (g as Vector2i).x * STUD
 			var b: float = (g as Vector2i).y * STUD
@@ -438,12 +441,12 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 					Vector3(-GLASS_PROUD, y0, b), Vector3(-GLASS_PROUD, y0, a),
 					Vector3(-GLASS_PROUD, y1, b), Vector3(-GLASS_PROUD, y1, a),
 					Vector3(-1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(reach, mid), 2, g))
+					building_seed, storey, Vector2(reach, mid), 2, g, program))
 			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 					Vector3(w + GLASS_PROUD, y0, a), Vector3(w + GLASS_PROUD, y0, b),
 					Vector3(w + GLASS_PROUD, y1, a), Vector3(w + GLASS_PROUD, y1, b),
 					Vector3(1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(footprint_x - reach, mid), 3, g))
+					building_seed, storey, Vector2(footprint_x - reach, mid), 3, g, program))
 	if verts.is_empty():
 		return null
 	var arrays := []
@@ -491,9 +494,10 @@ const GLASS_PROUD := 0.004
 ## seeds for layout, g is how brightly the room is lit, a is the room's kind as
 ## the room's window style (Room.WINDOW_STYLE), divided by four.
 static func _pane_colour(footprint_x: int, footprint_z: int, courses: int,
-		building_seed: int, storey: int, plan: Vector2, side: int, gap: Vector2i) -> Color:
+		building_seed: int, storey: int, plan: Vector2, side: int, gap: Vector2i,
+		program: Dictionary = {}) -> Color:
 	var kind := RoomManifest.kind_at(footprint_x, footprint_z, courses, building_seed,
-			storey, plan)
+			storey, plan, program)
 	if kind < 0:
 		kind = Room.KINDS.find("empty")
 	kind = int(Room.WINDOW_STYLE.get(Room.KINDS[kind], 3))

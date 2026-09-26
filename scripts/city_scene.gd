@@ -80,6 +80,30 @@ const BIG_SHAPES := [
 	{"x": 80, "z": 60, "courses": 204},
 	{"x": 30, "z": 30, "courses": 246},
 ]
+## What each building's rooms are for (Docs/Workshop.md, Stage F). A shape row
+## may carry its own "program"; otherwise, with `--programs` (or the export
+## below), buildings take these mixes in turn. Off by default: with no
+## program a building draws the four kinds it always has, and every
+## measurement taken of the city stays comparable.
+const PROGRAMS := [
+	{"office": 4, "storeroom": 1, "kitchen": 1},          # office block
+	{"bedroom": 3, "living": 2, "kitchen": 1, "bathroom": 1},   # apartments
+	{"shop": 2, "storeroom": 2, "office": 1},             # shops, stock above
+	{"lab": 3, "office": 2, "storeroom": 1},              # labs
+]
+@export var room_programs := false
+
+
+## The room mix for building `index` of this shape: its own, a rotation
+## through PROGRAMS, or none.
+func _program_for(shape: Dictionary, index: int) -> Dictionary:
+	if shape.has("program"):
+		return shape.program
+	if room_programs or "--programs" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		return PROGRAMS[index % PROGRAMS.size()]
+	return {}
+
+
 ## Set in the SCENE as well as on the command line, so that
 ## `scenes/big_city.tscn` is something you open and press play on rather than a
 ## flag you have to remember. `--big` still works and still wins: a scripted
@@ -858,7 +882,7 @@ func _build_city() -> void:
 			var pos := BrickWorld.grid_to_world(
 					Vector3i(col * spacing - half, 0, row * spacing - half))
 			var id := registry.register(shape.x, shape.z, shape.courses,
-					Transform3D(Basis(), pos))
+					Transform3D(Basis(), pos), _program_for(shape, index))
 			_add_staircase(id, shape.x, shape.z, shape.courses)
 			_index_building(id)
 			_make_shell(id)
@@ -1511,7 +1535,7 @@ func _make_shell(id: int, coarse: bool = false) -> void:
 	if not coarse and not b.is_build():
 		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
 				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				b.damage_profile)
+				b.damage_profile, b.recipe.get("program", {}))
 		if panes != null:
 			var glass := MeshInstance3D.new()
 			glass.mesh = panes

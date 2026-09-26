@@ -201,10 +201,12 @@ INTERIOR/DETAIL bricks.
 
 Next, in order:
 
-1. **City shapes carry a program.** `city_scene.gd` registers towers without
-   one; its `SHAPES` rows want a `program` (an office block, a warehouse) passed
-   to `register` and to `BuildingShell.build_window_mesh` → `kind_at`. Left for
-   when `city_scene.gd` has no uncommitted work in the main folder.
+1. ✅ **City buildings carry a program.** `city_scene.gd` passes one to
+   `register` and to `BuildingShell.build_window_mesh`, so far windows agree.
+   A `SHAPES` row may set `"program"`; `--programs` (or `room_programs` on the
+   scene) rotates buildings through `PROGRAMS` — office block, apartments,
+   shops, labs. Off by default, so the city and every measurement of it are
+   unchanged. `--rooms --programs` passes 39.
 2. **Rooms for placed builds.** A generated building inside a player build is
    furnished at placement as bricks; the city's room streaming (drawn/real
    rungs, detail on demand) only knows generated towers. Registering a build's
