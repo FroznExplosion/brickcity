@@ -672,8 +672,17 @@ public:
     /// box per brick is what a collapse makes the solver pay for; a merged box
     /// cannot be disabled per block, so anything that damages the piece has to
     /// rebuild its shapes un-merged first.
+    ///
+    /// `section` >= 0 builds only the blocks of that band of the chunk (the
+    /// mesh's bands, `set_chunk_section_plates`; a block is in the band its
+    /// lowest cell is in). A standing building's collision is one body a band,
+    /// so a hit rebuilds the band it landed in rather than the whole tower.
     Dictionary add_chunk_shapes(RID body, int chunk_id, Vector3 offset, bool skip_dead,
-            bool merge = false);
+            bool merge = false, int section = -1);
+
+    /// The band (`section` above) each of these blocks is in, -1 for an id
+    /// that is not a block of the chunk.
+    PackedInt32Array get_block_sections(int chunk_id, const PackedInt32Array &block_ids) const;
 
     /// A stable name for what a chunk HOLDS, independent of how it came to
     /// hold it.
@@ -884,7 +893,7 @@ private:
     RID hull_shape_for(int archetype_id, int hull);
     void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
-    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset);
+    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1);
 
     BakeJob *find_bake_job(int chunk_id);
     /// Join a chunk's bake if one is running. `adopt` takes the result; without

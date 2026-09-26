@@ -218,8 +218,21 @@ var _band_worst := 0.0
 ## How much band building a tick may do. A band of one of the big shapes is a
 ## few milliseconds; the point is that a building's worth of them is not one
 ## frame's problem.
-const BANDS_PER_TICK := 2
+const BANDS_PER_TICK := 4
 const BAND_BUDGET_MS := 6.0
+## A band with at least this many vertices is uploaded on a worker, as a big
+## piece's mesh is (IslandManager.THREAD_MESH_VERTS). Of what a band cost,
+## four fifths was handing the arrays to the renderer -- 98 ms of 120 across a
+## stress pass, a band of a big tower 3-7 ms, two a tick -- and the arrays
+## themselves come out of the bake in a fraction of a millisecond. The band's
+## old mesh goes on drawing until the new one is attached.
+const BAND_THREAD_VERTS := 4000
+## Bands being uploaded: [building id, band, task id, [mesh], arrays, pass].
+var _band_jobs: Array = []
+## building id -> which rebuild of its bands is current. A job from an older
+## pass is thrown away when it lands, not attached over a newer band.
+var _band_pass := {}
+var band_jobs_done := 0
 var _brick_bands := {}
 var _brick_band_meshes := {}
 var _brick_band_bytes := {}
@@ -228,8 +241,9 @@ var _brick_meshes := {}    ## building id -> the ArrayMesh whose indices we patc
 var _retirer := MeshRetirer.new()
 var _brick_index_bytes := {}  ## building id -> that surface's index buffer length
 var _brick_index_width := {} ## building id -> 2 or 4, that surface's index width
-var _brick_bodies := {}    ## building id -> RID
-## Buildings whose collision has been merged down, and when each was last hit.
+## building id -> its collision, a static body a band (BuildingCollision).
+var _brick_cols := {}
+## How a building's collision is merged down, and when each was last hit.
 ##
 ## A standing building carries ONE BOX PER BRICK, and measured on the
 ## 200-building stress pass that is 112,321 boxes across 37 buildings against
@@ -242,18 +256,18 @@ var _brick_bodies := {}    ## building id -> RID
 ## first hit has to undo it, and the scene pays for two shape builds instead of
 ## one. A building is materialised BECAUSE something hit it, so merging it then
 ## would walk into exactly that. It merges when the shooting has moved on.
-var _brick_merged := {}
+##
+## A band at a time (BuildingCollision): the first hit un-merges the band it
+## landed in, and a quiet building is merged back one band a tick.
 var _last_hit := {}
-## How long a building has to have been quiet, and how many may be merged in
-## one tick. A merge is one `add_chunk_shapes` over the whole chunk, which is
-## the same call promotion makes, so it is budgeted like promotion.
+## How long a building has to have been quiet, and how many bands may be
+## merged in one tick. A merge is one `add_chunk_shapes` over the band.
 const MERGE_AFTER_MS := 10000
 const MERGES_PER_TICK := 1
 ## The experiment's other arm: rebuild the body exactly as a merge does, but
 ## per block. If the cost is the same either way, it is the REBUILD and not the
 ## merged geometry.
 const MERGE_SHAPES := true
-var _brick_shapes := {}    ## building id -> { block id -> PackedInt32Array }
 var _shape_cache := {}
 var _materialised: Array[int] = []
 var _toppling := {}   ## building id -> already handed to physics
@@ -453,12 +467,6 @@ var authority := WorldAuthority.new()
 var _dirty: Array[int] = []
 var _impact_damage := 0
 var _full_rebuilds := 0
-var _merges := 0
-var _unmerges := 0
-var _merged_boxes := 0
-var _merge_ms := 0.0
-var _merge_worst := 0.0
-var _unmerge_ms := 0.0
 var _show_grids := false
 var _grid_count := 0
 var _grid_view: MeshInstance3D
@@ -818,13 +826,18 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	# A band still uploading on a worker at shutdown was a crash on quit, as a
+	# piece's was (IslandManager._exit_tree).
+	for job in _band_jobs:
+		WorkerThreadPool.wait_for_task_completion(int(job[2]))
+	_band_jobs.clear()
 	for bodies in _frame_bodies.values():
 		for rid in (bodies as Array):
 			PhysicsServer3D.free_rid(rid)
 	for rid in _shell_bodies.values():
 		PhysicsServer3D.free_rid(rid)
-	for rid in _brick_bodies.values():
-		PhysicsServer3D.free_rid(rid)
+	for col in _brick_cols.values():
+		(col as BuildingCollision).free_bodies()
 	for rid in _shape_cache.values():
 		PhysicsServer3D.free_rid(rid)
 
@@ -1231,7 +1244,7 @@ func _refresh_furniture(id: int) -> void:
 func _add_room_shapes(id: int, index: int, batch: bool = false) -> void:
 	var b := registry.get_building(id)
 	var room := registry.get_room(id, index)
-	if b == null or room == null or not _brick_bodies.has(id):
+	if b == null or room == null or not _brick_cols.has(id):
 		return
 	var body := _room_body(id)
 	if not body.is_valid():
@@ -1588,7 +1601,7 @@ func _shape_rid(size: Vector3) -> RID:
 ## per brick is what a hit needs and what a walk-up does not; for the biggest
 ## tower it was 9-15 ms of shapes and 8-10 ms putting them in the space, at
 ## every walk-up, for buildings that mostly are never shot. The first hit
-## un-merges it (_ensure_building_per_block), as it does a quiet one.
+## un-merges the bands it lands in (BuildingCollision.disable).
 func _promote(id: int, solve: bool = true, merged: bool = false) -> int:
 	var b := registry.get_building(id)
 	if b == null:
@@ -1623,24 +1636,14 @@ func _dress(id: int, chunk: int, solve: bool, merged: bool = false) -> void:
 	# that vanishes for a frame. See _finish_promotions.
 	world.bake_chunk_async(chunk)
 
-	var body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
-	PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
-	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
-	# See IslandManager.spawn: the shapes are built inside the extension, dead
-	# blocks disabled as they go.
-	var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, merged, merged)
-	var map: Dictionary = built.map
 	# The CHUNK's transform, not the building's. They are the same thing for a
 	# generated tower, and they are not for a build: a multi-frame placement
 	# rebases the whole assembly in its transform so the author's lowest brick
 	# lands on the ground (BuildingRegistry.materialise).
 	var root_x: Transform3D = world.get_chunk_transform(chunk)
-	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, root_x)
-	PhysicsServer3D.body_set_space(body, get_world_3d().space)
-	_brick_bodies[id] = body
-	_brick_shapes[id] = map
-	_brick_merged[id] = merged
+	# A static body a band -- the bands set just above -- so a hit rebuilds
+	# the band it lands in, not the building (BuildingCollision).
+	_brick_cols[id] = BuildingCollision.new(world, chunk, get_world_3d().space, root_x, merged)
 
 	var mi := MeshInstance3D.new()
 	mi.material_override = brick_material
@@ -1790,7 +1793,7 @@ func _finish_promotions() -> void:
 		# The shell stays up until every band is built -- see _advance_bands.
 		# Dropping it here would leave a half-drawn building standing in the
 		# open for the few ticks the rest of the bands take.
-		if not _band_cursor.has(id):
+		if not _bands_building(id):
 			_free_shell(id)
 		done += 1
 
@@ -1827,8 +1830,8 @@ func _topple(id: int) -> void:
 	# falling out of it would lodge inside the shell and get pushed upwards.
 	_free_shell(id)
 
-	if _brick_bodies.has(id):
-		PhysicsServer3D.free_rid(_brick_bodies[id])
+	if _brick_cols.has(id):
+		(_brick_cols[id] as BuildingCollision).free_bodies()
 	var carried_mesh: ArrayMesh = _brick_meshes.get(id)
 	var carried_bytes: int = int(_brick_index_bytes.get(id, 0))
 	var carried_width: int = int(_brick_index_width.get(id, 4))
@@ -1845,7 +1848,7 @@ func _topple(id: int) -> void:
 	# And each band's index size, so the piece can go on patching them.
 	var carried_band_bytes: Array = (_brick_band_bytes.get(id, []) as Array).duplicate()
 	var carried_bands: Array = _take_bands(id)
-	_brick_bodies.erase(id)
+	_brick_cols.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
 	# decorative block is in the chunk like any other.
@@ -1855,8 +1858,6 @@ func _topple(id: int) -> void:
 	_brick_meshes.erase(id)
 	_brick_index_bytes.erase(id)
 	_brick_index_width.erase(id)
-	_brick_shapes.erase(id)
-	_brick_merged.erase(id)
 	_last_hit.erase(id)
 	_materialised.erase(id)
 	_dirty.erase(id)
@@ -1890,50 +1891,9 @@ func _topple(id: int) -> void:
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
 
 
-## Swap a building's collision between one box per brick and as few boxes as
-## the shape allows.
-##
-## The merged form cannot disable a single block -- a box spans several -- so
-## anything about to damage this building calls `_ensure_building_per_block`
-## first, exactly as the islands do.
-func _reshape_building(id: int, merged: bool) -> void:
-	var b := registry.get_building(id)
-	if b == null or not b.is_materialised() or not _brick_bodies.has(id):
-		return
-	if bool(_brick_merged.get(id, false)) == merged:
-		return
-	var _t_reshape := Time.get_ticks_usec()
-	var body: RID = _brick_bodies[id]
-	var space := PhysicsServer3D.body_get_space(body)
-	# Out of the space first: a shape call on a body IN a space costs time
-	# proportional to its shape count, and this body has thousands.
-	if space.is_valid():
-		PhysicsServer3D.body_set_space(body, RID())
-	PhysicsServer3D.body_clear_shapes(body)
-	# skip_dead now, where promotion cannot: by this point the holes are known,
-	# so a dead brick costs no box at all rather than a disabled one.
-	var built: Dictionary = world.add_chunk_shapes(body, b.chunk, Vector3.ZERO, true,
-			merged and MERGE_SHAPES)
-	_brick_shapes[id] = built.map
-	_brick_merged[id] = merged
-	if space.is_valid():
-		PhysicsServer3D.body_set_space(body, space)
-	var cost := float(Time.get_ticks_usec() - _t_reshape) / 1000.0
-	if merged:
-		_merges += 1
-		_merged_boxes += int(built.count)
-		_merge_ms += cost
-		_merge_worst = maxf(_merge_worst, cost)
-	else:
-		_unmerges += 1
-		_unmerge_ms += cost
-
-
-## About to damage this building, so it needs shapes it can disable one at a
-## time.
-func _ensure_building_per_block(id: int) -> void:
-	if bool(_brick_merged.get(id, false)):
-		_reshape_building(id, false)
+## Whether every band of a building's collision is merged.
+func _building_merged(id: int) -> bool:
+	return _brick_cols.has(id) and (_brick_cols[id] as BuildingCollision).all_merged()
 
 
 ## Merge the collision of buildings the fighting has moved on from.
@@ -1956,12 +1916,14 @@ func _merge_quiet_buildings() -> void:
 	var isl: Dictionary = islands.report()
 	if int(isl.islands) != int(isl.settled):
 		return
+	if not MERGE_SHAPES:
+		return
 	var merged := 0
 	var now := Time.get_ticks_msec()
 	for id in _materialised:
 		if merged >= MERGES_PER_TICK:
 			break
-		if bool(_brick_merged.get(id, false)) or _toppling.has(id):
+		if not _brick_cols.has(id) or _building_merged(id) or _toppling.has(id):
 			continue
 		if _dirty.has(id) or _remesh_queue.has(id) or _pending_disable.has(id):
 			continue
@@ -1970,7 +1932,8 @@ func _merge_quiet_buildings() -> void:
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
 			continue
-		_reshape_building(id, true)
+		# One band, not the building: the next tick does the next one.
+		(_brick_cols[id] as BuildingCollision).merge_next()
 		merged += 1
 
 
@@ -2031,7 +1994,7 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# fails the patch, because the bands it has not reached yet hold no mesh
 	# to patch, and the cursor goes back to zero. One more pass is queued
 	# instead, and it runs when this one is done.
-	if _band_cursor.has(id):
+	if _bands_building(id):
 		_band_redo[id] = true
 		return
 	var bands: Array = _brick_bands.get(id, [])
@@ -2100,6 +2063,7 @@ func _rebuild_bands(id: int, chunk: int) -> void:
 	_brick_band_meshes[id] = meshes
 	_brick_band_bytes[id] = bytes
 	_band_cursor[id] = 0
+	_band_pass[id] = int(_band_pass.get(id, 0)) + 1
 	# The parent draws nothing itself; it is the transform the bands hang off
 	# and the node the furniture is parented to.
 	_retirer.retire(parent.mesh)
@@ -2128,33 +2092,25 @@ func _build_one_band(id: int) -> bool:
 		if not world.bake_pending(b.chunk):
 			world.bake_chunk_async(b.chunk)
 		return true
-	var parent: MeshInstance3D = _brick_nodes[id]
 	var _t0 := Time.get_ticks_usec()
 	var arrays: Array = world.build_chunk_mesh_section(b.chunk, at)
 	var _t1 := Time.get_ticks_usec()
-	var mesh := ArrayMesh.new()
-	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at]):
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var ok := not arrays.is_empty() \
+			and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at])
+	if ok:
 		_brick_index_width[id] = IslandManager.index_width(arrays)
+	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= BAND_THREAD_VERTS:
+		_submit_band_job(id, at, arrays)
+	else:
+		var mesh := ArrayMesh.new()
+		if ok:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		_apply_band(id, at, mesh, arrays)
 	var _t2 := Time.get_ticks_usec()
 	_band_cpp_ms += float(_t1 - _t0) / 1000.0
 	_band_upload_ms += float(_t2 - _t1) / 1000.0
 	_band_builds += 1
 	_band_worst = maxf(_band_worst, float(_t2 - _t0) / 1000.0)
-	var node: MeshInstance3D = nodes[at]
-	if node == null or not is_instance_valid(node):
-		node = MeshInstance3D.new()
-		node.material_override = brick_material
-		# In the parent's space, which already carries the chunk transform.
-		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		parent.add_child(node)
-		nodes[at] = node
-	else:
-		_retirer.retire(node.mesh)
-	var live := mesh.get_surface_count() > 0
-	node.mesh = mesh if live else null
-	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
-	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
 	_band_cursor[id] = at + 1
 	if at + 1 >= nodes.size():
 		_band_cursor.erase(id)
@@ -2162,8 +2118,99 @@ func _build_one_band(id: int) -> bool:
 	return true
 
 
+## Hang a finished band mesh in its slot.
+func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
+	var nodes: Array = _brick_bands.get(id, [])
+	if at >= nodes.size() or not _brick_nodes.has(id):
+		_retirer.retire(mesh)
+		return
+	var node: MeshInstance3D = nodes[at]
+	if node == null or not is_instance_valid(node):
+		node = MeshInstance3D.new()
+		node.material_override = brick_material
+		# In the parent's space, which already carries the chunk transform.
+		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		(_brick_nodes[id] as MeshInstance3D).add_child(node)
+		nodes[at] = node
+	else:
+		_retirer.retire(node.mesh)
+	var live := mesh != null and mesh.get_surface_count() > 0
+	node.mesh = mesh if live else null
+	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
+	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
+
+
+## Upload a band's arrays on a worker (BAND_THREAD_VERTS). Attached by
+## _harvest_band_jobs when it is done.
+func _submit_band_job(id: int, at: int, arrays: Array) -> void:
+	var holder := [null]
+	var task := WorkerThreadPool.add_task(func() -> void:
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		holder[0] = m, false, "building band mesh")
+	_band_jobs.append([id, at, task, holder, arrays, int(_band_pass.get(id, 0))])
+
+
+## Whether a building's bands are still on their way: being built, or built
+## and still being uploaded.
+func _bands_building(id: int) -> bool:
+	if _band_cursor.has(id):
+		return true
+	for job in _band_jobs:
+		if int(job[0]) == id:
+			return true
+	return false
+
+
+## Attach the band meshes the workers have finished. `wait_for` >= 0 waits for
+## that building's jobs instead of leaving them for the next tick -- for a
+## building about to hand its bands on (_take_bands).
+func _harvest_band_jobs(wait_for: int = -1) -> void:
+	var finished: Array[int] = []
+	var k := 0
+	while k < _band_jobs.size():
+		var job: Array = _band_jobs[k]
+		var id: int = job[0]
+		var task: int = job[2]
+		# Waiting for one building: only its jobs, the rest are next tick's.
+		if (wait_for >= 0 and id != wait_for) \
+				or (wait_for < 0 and not WorkerThreadPool.is_task_completed(task)):
+			k += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(task)
+		_band_jobs.remove_at(k)
+		var mesh: ArrayMesh = job[3][0]
+		# A pass since superseded, or a building since gone: not attached.
+		if int(job[5]) != int(_band_pass.get(id, 0)) or not _brick_bands.has(id):
+			_retirer.retire(mesh)
+			continue
+		_apply_band(id, int(job[1]), mesh, job[4])
+		band_jobs_done += 1
+		if not finished.has(id):
+			finished.append(id)
+	if wait_for >= 0:
+		return
+	for id in finished:
+		if not _bands_building(id):
+			_bands_done(id)
+
+
+## A building's bands are all built and attached.
+func _bands_done(id: int) -> void:
+	if _band_redo.has(id):
+		# Something hit it on the way through. Go round once more.
+		_band_redo.erase(id)
+		var rb := registry.get_building(id)
+		if rb != null and rb.is_materialised():
+			_rebuild_bands(id, rb.chunk)
+	else:
+		# Finished: the shell it was hiding behind can go.
+		_free_shell(id)
+
+
 ## Drain the band work, a budget at a time.
 func _advance_bands() -> void:
+	_harvest_band_jobs()
 	if _band_cursor.is_empty():
 		return
 	var until := Time.get_ticks_usec() + int(BAND_BUDGET_MS * 1000.0)
@@ -2172,22 +2219,18 @@ func _advance_bands() -> void:
 		var id: int = _band_cursor.keys()[0]
 		_build_one_band(id)
 		built += 1
-		if not _band_cursor.has(id):
-			if _band_redo.has(id):
-				# Something hit it on the way through. Go round once more.
-				_band_redo.erase(id)
-				var rb := registry.get_building(id)
-				if rb != null and rb.is_materialised():
-					_rebuild_bands(id, rb.chunk)
-			else:
-				# Finished: the shell it was hiding behind can go.
-				_free_shell(id)
+		if not _bands_building(id):
+			_bands_done(id)
 		if Time.get_ticks_usec() >= until:
 			break
 
 
 ## Drop a building's band nodes, returning them so a caller can hand them on.
 func _take_bands(id: int) -> Array:
+	# Whatever is being uploaded for it lands first: a piece carrying these
+	# bands away patches them, and a slot still waiting holds nothing to patch.
+	_harvest_band_jobs(id)
+	_band_pass.erase(id)
 	var nodes: Array = _brick_bands.get(id, [])
 	_band_cursor.erase(id)
 	_band_redo.erase(id)
@@ -2198,15 +2241,14 @@ func _take_bands(id: int) -> Array:
 
 
 func _disable(id: int, ids: PackedInt32Array) -> void:
-	if ids.is_empty() or not _brick_bodies.has(id):
+	if ids.is_empty() or not _brick_cols.has(id):
 		return
-	# Merged boxes span blocks, so there is nothing to disable one at a time
-	# until the shapes are per block again.
-	_ensure_building_per_block(id)
 	# Interiors are drawn from their own blocks rather than from the face
 	# bake, so a blast that takes a chair out has to be told to redraw one.
 	_refresh_furniture(id)
-	_disable_on(_brick_bodies[id], _brick_shapes.get(id, {}), ids)
+	# Only the bands these blocks are in -- un-merged first if they were, since
+	# a merged box spans blocks and cannot be switched off one at a time.
+	(_brick_cols[id] as BuildingCollision).disable(ids)
 	# And the furniture body, if this building has one. A blast does not
 	# know which of the two a block it killed was on, so both are asked.
 	if _room_bodies.has(id):
@@ -2304,8 +2346,8 @@ func _shear_building(id: int, point: Vector3, radius: float) -> void:
 func _building_for_body(body: RID) -> int:
 	if not body.is_valid():
 		return -1
-	for id in _brick_bodies:
-		if _brick_bodies[id] == body:
+	for id in _brick_cols:
+		if (_brick_cols[id] as BuildingCollision).owns(body):
 			return id
 	for id in _shell_bodies:
 		if _shell_bodies[id] == body:
@@ -3556,9 +3598,9 @@ func _demote(id: int, _dist: float) -> void:
 	registry.dematerialise(id)
 	_trim_split.demat += float(Time.get_ticks_usec() - _ta) / 1000.0
 	_ta = Time.get_ticks_usec()
-	if _brick_bodies.has(id):
-		PhysicsServer3D.free_rid(_brick_bodies[id])
-		_brick_bodies.erase(id)
+	if _brick_cols.has(id):
+		(_brick_cols[id] as BuildingCollision).free_bodies()
+		_brick_cols.erase(id)
 	if _brick_nodes.has(id):
 		(_brick_nodes[id] as MeshInstance3D).queue_free()
 		_brick_nodes.erase(id)
@@ -3568,8 +3610,6 @@ func _demote(id: int, _dist: float) -> void:
 	_brick_meshes.erase(id)
 	_brick_index_bytes.erase(id)
 	_brick_index_width.erase(id)
-	_brick_shapes.erase(id)
-	_brick_merged.erase(id)
 	_last_hit.erase(id)
 	_dirty.erase(id)
 	_remesh_queue.erase(id)
@@ -3737,8 +3777,8 @@ func _update_live_prof(delta: float) -> void:
 	# The census in one line rather than the full sentence _collision_report
 	# writes: this label is 430 pixels wide.
 	var boxes := 0
-	for bid in _brick_bodies:
-		boxes += PhysicsServer3D.body_get_shape_count(_brick_bodies[bid])
+	for bid in _brick_cols:
+		boxes += (_brick_cols[bid] as BuildingCollision).shape_count()
 	lines.append("collision boxes %d standing · %d falling · %d settled" % [
 			boxes, int(isl.get("loose_boxes", 0)), int(isl.get("settled_boxes", 0))])
 	_live_label.text = "\n".join(lines)
@@ -4930,8 +4970,7 @@ func _run_lod_pass() -> void:
 		# Either of building 0's own bodies counts -- de-meshed, it is drawn
 		# by a shell and collided by its bricks, and both are in the space.
 		var struck_rid: RID = seen.get("rid", RID())
-		if not seen.is_empty() and (struck_rid == _brick_bodies.get(0, RID())
-				or struck_rid == _shell_bodies.get(0, RID())):
+		if not seen.is_empty() and _building_for_body(struck_rid) == 0:
 			clear_line = true
 			break
 	check.call("there is a clear line to it from 200 m", clear_line, "")
@@ -5042,16 +5081,15 @@ func _run_reach_pass() -> void:
 		var b := registry.get_building(0)
 		if b.is_materialised():
 			registry.dematerialise(0)
-			if _brick_bodies.has(0):
-				PhysicsServer3D.free_rid(_brick_bodies[0])
-				_brick_bodies.erase(0)
+			if _brick_cols.has(0):
+				(_brick_cols[0] as BuildingCollision).free_bodies()
+				_brick_cols.erase(0)
 			if _brick_nodes.has(0):
 				(_brick_nodes[0] as MeshInstance3D).queue_free()
 				_brick_nodes.erase(0)
 			_brick_meshes.erase(0)
 			_brick_index_bytes.erase(0)
 			_brick_index_width.erase(0)
-			_brick_shapes.erase(0)
 			_materialised.erase(0)
 			_dirty.erase(0)
 		b.hit = false
@@ -5299,7 +5337,7 @@ func _run_interiors_pass() -> void:
 	var chunk := await _fresh_bricks(biggest)
 	var bare_blocks := world.get_alive_block_count(chunk)
 	var bare_mb := _world_mb()
-	var bare_shapes := PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest])
+	var bare_shapes := (_brick_cols[biggest] as BuildingCollision).shape_count()
 	var bare_bake := _bake_and_wait(chunk)
 	print("[interiors] the building: %d brick(s), %d collision box(es), %.1f MB, one face bake %.0f ms"
 			% [bare_blocks, bare_shapes, bare_mb, bare_bake])
@@ -5349,8 +5387,8 @@ func _run_interiors_pass() -> void:
 			% [rooms.size(), per_room, rooms.size() * per_room / 1000.0])
 	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
 			% [_world_mb(), _world_mb() - bare_mb,
-			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]),
-			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]) - bare_shapes])
+			(_brick_cols[biggest] as BuildingCollision).shape_count(),
+			(_brick_cols[biggest] as BuildingCollision).shape_count() - bare_shapes])
 	await _save("interiors_room")
 
 	# --- B: the same building, all of it at once ------------------------------
@@ -5359,7 +5397,7 @@ func _run_interiors_pass() -> void:
 	# and ONE mesh upload rather than one of each per room.
 	chunk = await _fresh_bricks(biggest)
 	var b_bare_mb := _world_mb()
-	var b_bare_shapes := PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest])
+	var b_bare_shapes := (_brick_cols[biggest] as BuildingCollision).shape_count()
 	var t_all := Time.get_ticks_usec()
 	var all_laid := 0
 	for room in registry.rooms_of(biggest):
@@ -5386,8 +5424,8 @@ func _run_interiors_pass() -> void:
 			% [bl, bs, bm])
 	print("[interiors]   %.1f MB (+%.1f), %d collision box(es) (+%d)"
 			% [_world_mb(), _world_mb() - b_bare_mb,
-			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]),
-			PhysicsServer3D.body_get_shape_count(_brick_bodies[biggest]) - b_bare_shapes])
+			(_brick_cols[biggest] as BuildingCollision).shape_count(),
+			(_brick_cols[biggest] as BuildingCollision).shape_count() - b_bare_shapes])
 	print("[interiors]   %.0f ms once, against %.0f s of work spread a room at a time"
 			% [b_total, rooms.size() * per_room / 1000.0])
 	await _frames(10)
@@ -5992,7 +6030,6 @@ func _fresh_bricks(id: int) -> int:
 	while _pending_bricks.has(id) and guard < 1200:
 		await _frames(1)
 		guard += 1
-	_brick_merged[id] = false
 	return chunk
 
 
@@ -7061,8 +7098,8 @@ func _collision_report() -> String:
 	var building_shapes := 0
 	var building_blocks := 0
 	for id in _materialised:
-		if _brick_bodies.has(id):
-			building_shapes += PhysicsServer3D.body_get_shape_count(_brick_bodies[id])
+		if _brick_cols.has(id):
+			building_shapes += (_brick_cols[id] as BuildingCollision).shape_count()
 		var b := registry.get_building(id)
 		if b != null and b.is_materialised():
 			building_blocks += world.get_alive_block_count(b.chunk)
@@ -7082,12 +7119,13 @@ func _collision_report() -> String:
 		furniture += PhysicsServer3D.body_get_shape_count(_room_bodies[fid])
 	return ("%d box(es) in %d standing building(s) (%d bricks), %d on open room contents, "
 			+ "%d in pieces still falling, "
-			+ "%d in settled wreckage; buildings merged %d time(s) (%.1f ms total, worst %.1f) "
-			+ "and un-merged %d (%.1f ms); "
+			+ "%d in settled wreckage; building bands merged %d time(s) (%.1f ms total, worst %.1f) "
+			+ "and un-merged %d (%.1f ms, worst %.1f); "
 			+ "islands merged %d time(s), %d boxes against %d unmerged") % [
 			building_shapes, _materialised.size(), building_blocks, furniture,
 			falling, settled_boxes,
-			_merges, _merge_ms, _merge_worst, _unmerges, _unmerge_ms,
+			BuildingCollision.merges, BuildingCollision.merge_ms, BuildingCollision.merge_worst,
+			BuildingCollision.unmerges, BuildingCollision.unmerge_ms, BuildingCollision.unmerge_worst,
 			islands.merged_shapes, islands.merged_boxes, islands.unmerged_boxes]
 
 
