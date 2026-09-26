@@ -227,6 +227,10 @@ const ISLAND_LOD_PER_TICK := 2
 ## 24 only ever covered gravel. The pieces that actually show the gap are the
 ## small-to-middling ones a wall sheds -- exactly the range between 24 and here.
 const SYNC_MESH_MAX_BLOCKS := 200
+## And few enough authored triangles (BrickWorld.get_chunk_authored_tris): a
+## staircase piece is under 200 bricks and 90,000 vertices, and baking one here
+## was a 9.5 ms spawn -- the worst of a big-city run.
+const SYNC_MESH_MAX_TRIS := 2000
 ## However cheap one bake is, not an unbounded number of them per tick.
 const SYNC_MESH_PER_TICK := 6
 
@@ -249,6 +253,20 @@ const MESH_BUDGET_MS := 3.0
 ## on the pool: a piece waiting for its mesh is invisible, a building band
 ## waiting for its new one is not (CityScene.BAND_THREAD_VERTS).
 const THREAD_MESH_VERTS := 30000
+## And how many vertices of those may be handed over in one tick. The worker
+## packs a mesh's arrays, but the renderer makes its buffers on the main thread,
+## at whatever next calls into it -- a node being made, a mesh being set -- about
+## 25 ns a vertex (62,000 vertices, 1-1.5 ms). Unbudgeted, what the workers
+## finished together was paid together, wherever that landed: a spawn's "node"
+## step at 7-11 ms, band meshes at 4-7. What is over waits a tick with its arrays
+## kept; the first of a tick always goes, since a mesh cannot be split.
+const UPLOAD_VERTS_PER_TICK := 150000
+## Meshes built on a worker are built compressed (16-bit positions and UVs,
+## octahedral normals): the worker's half takes twice as long, and the main
+## thread's -- the buffers the renderer makes -- about a third less (62,000
+## vertices: 1.1 ms -> 0.7). Rendered side by side with the plain mesh, 0.14% of
+## pixels differ, all of them brick edges moved by a pixel.
+const UPLOAD_COMPRESS := Mesh.ARRAY_FLAG_COMPRESS_ATTRIBUTES
 ## Always do at least one, however long it takes: a budget that can starve
 ## forever is a deadlock, and a single unit is bounded by the piece's size.
 const WORK_MIN := 1
@@ -373,6 +391,10 @@ static var OVERLAP_FRAMES := 2
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
 var _mesh_jobs: Array = []   ## [island, task id, [mesh], arrays]
+var _upload_waiting: Array = []  ## [island, arrays] over this tick's budget
+var _upload_tick := -1
+var _upload_used := 0
+var uploads_waited := 0
 var mesh_jobs_done := 0
 var band_holes_filled := 0
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
@@ -530,6 +552,30 @@ var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
+## The worst single spawn: [ms, split, shapes, node, mesh, bricks].
+var spawn_worst := [0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0]
+## The worst single landing or re-solve of a piece, by part, for the report.
+var unit_worst := {}
+var _unit := {}
+
+
+func _upart(key: String, t0: int) -> int:
+	var now := Time.get_ticks_usec()
+	_unit[key] = float(_unit.get(key, 0.0)) + float(now - t0) / 1000.0
+	return now
+
+
+func _unit_done(kind: String, isl: BrickIsland, t0: int) -> void:
+	var total := float(Time.get_ticks_usec() - t0) / 1000.0
+	if total > float(unit_worst.get("total", 0.0)):
+		unit_worst = _unit.duplicate()
+		unit_worst["total"] = total
+		unit_worst["kind"] = kind
+		unit_worst["bricks"] = world.get_alive_block_count(isl.chunk) if isl.is_valid() else -1
+		unit_worst["merged"] = isl.merged if isl.is_valid() else false
+	_unit = {}
+## The longest invisible stretch, by what the piece was waiting for each tick.
+var blind_worst_stages := {}
 ## The worst single shape rebuild of a piece: [ms, bricks, boxes, building the
 ## shapes ms, putting the body back in the space ms].
 var reshape_worst := [0.0, 0, 0, 0.0, 0.0]
@@ -898,6 +944,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var split: Dictionary = world.split_island(source, block_ids)
 	spawn_prof.split += float(Time.get_ticks_usec() - _t0) / 1000.0
 	var _t := Time.get_ticks_usec()
+	var _w := [0.0, float(_t - _t0) / 1000.0, 0.0, 0.0, 0.0, block_ids.size(), 0.0, 0.0, 0]
 	if split.is_empty():
 		return null
 
@@ -939,6 +986,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.merged = merge_now
 	isl.fly_merged = merge_now
 	spawn_prof.shapes += float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[2] = float(Time.get_ticks_usec() - _t) / 1000.0
 	_t = Time.get_ticks_usec()
 
 	# One brick is drawn from a shared MultiMesh; anything bigger gets its own
@@ -963,9 +1011,12 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		# furniture rides the collapse without anything here tracking it, which
 		# is Interiors section 4.2 and the reason interiors are blocks in the
 		# host's grid in the first place.
+		var _tf := Time.get_ticks_usec()
 		FurnitureMesh.attach(world, isl.chunk, isl.mesh, _furniture)
+		_w[6] = float(Time.get_ticks_usec() - _tf) / 1000.0
 
 	var island_xform: Transform3D = world.get_chunk_transform(isl.chunk)
+	var _ta := Time.get_ticks_usec()
 	isl.body.transform = island_xform * Transform3D(Basis(), isl.local_com)
 
 	add_child(isl.body)
@@ -976,7 +1027,10 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.body.reset_physics_interpolation()
 	if isl.mesh != null:
 		isl.mesh.reset_physics_interpolation()
+	_w[7] = float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[8] = isl.shape_count
 	spawn_prof.node += float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[3] = float(Time.get_ticks_usec() - _t) / 1000.0
 	_t = Time.get_ticks_usec()
 	isl.body.set_meta("spawn_pos", isl.body.position)
 	isl.body.linear_velocity = inherit_linear
@@ -992,7 +1046,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# _shed already wakes the region around the parent, which is the same
 	# region every child of that parent occupies.
 	if isl.mesh != null:
-		if count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK:
+		if count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
+				and world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS:
 			# Small enough to bake here and now, so it is never invisible.
 			_sync_meshes += 1
 			rebuild_mesh(isl, true, true)
@@ -1003,6 +1058,10 @@ func spawn(source: int, block_ids: PackedInt32Array,
 			_mesh_queue.append(isl)
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
+	_w[4] = float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[0] = float(Time.get_ticks_usec() - _t0) / 1000.0
+	if float(_w[0]) > float(spawn_worst[0]):
+		spawn_worst = _w
 	piece_spawned.emit(isl)
 	return isl
 
@@ -1474,7 +1533,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 		return
 	# Its mesh is being built on a worker. Whatever this call wanted is done
 	# when that lands (_harvest_mesh_jobs), against the mesh it builds.
-	if isl.mesh_job >= 0:
+	if isl.mesh_job >= 0 or isl.upload_waiting:
 		isl.mesh_again = true
 		isl.mesh_again_full = isl.mesh_again_full or force_full
 		return
@@ -1531,6 +1590,11 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= THREAD_MESH_VERTS:
 		# Big: uploaded on a worker, attached when it is done. The mesh it
 		# replaces goes on drawing until then.
+		if not _upload_ok((arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()):
+			isl.upload_waiting = true
+			_upload_waiting.append([isl, arrays])
+			uploads_waited += 1
+			return
 		_submit_mesh_job(isl, arrays)
 		return
 	var mesh := ArrayMesh.new()
@@ -1548,9 +1612,40 @@ func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array) -> void:
 	# The renderer may still be drawing the mesh this replaces.
 	_retirer.retire(isl.mesh.mesh)
 	isl.array_mesh = mesh if mesh != null and mesh.get_surface_count() > 0 else null
+	if isl.array_mesh != null:
+		isl.lod_dropped = false
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null else 0
 	isl.index_width = index_width(arrays)
 	isl.mesh.mesh = mesh
+
+
+## Room in this tick's upload budget for `verts` more (UPLOAD_VERTS_PER_TICK),
+## taken if there is.
+func _upload_ok(verts: int) -> bool:
+	var tick := Engine.get_physics_frames()
+	if tick != _upload_tick:
+		_upload_tick = tick
+		_upload_used = 0
+	if _upload_used > 0 and _upload_used + verts > UPLOAD_VERTS_PER_TICK:
+		return false
+	_upload_used += verts
+	return true
+
+
+## Send what waited for the budget, oldest first, as far as this tick's goes.
+func _drain_upload_waiting() -> void:
+	while not _upload_waiting.is_empty():
+		var entry: Array = _upload_waiting[0]
+		var isl: BrickIsland = entry[0]
+		if not isl.is_valid() or isl.mesh == null:
+			_upload_waiting.pop_front()
+			continue
+		var arrays: Array = entry[1]
+		if not _upload_ok((arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()):
+			return
+		_upload_waiting.pop_front()
+		isl.upload_waiting = false
+		_submit_mesh_job(isl, arrays)
 
 
 ## Upload `arrays` for `isl` on a worker (THREAD_MESH_VERTS). The arrays were
@@ -1559,7 +1654,10 @@ func _submit_mesh_job(isl: BrickIsland, arrays: Array) -> void:
 	var holder := [null]
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var m := ArrayMesh.new()
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		# Compressed (UPLOAD_COMPRESS), on the worker where it costs nothing
+		# anyone waits for.
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+				UPLOAD_COMPRESS)
 		holder[0] = m, true, "island mesh")
 	isl.mesh_job = task
 	_mesh_jobs.append([isl, task, holder, arrays])
@@ -1572,6 +1670,7 @@ func _exit_tree() -> void:
 		WorkerThreadPool.wait_for_task_completion(int(job[1]))
 		(job[2] as Array)[0] = null
 	_mesh_jobs.clear()
+	_upload_waiting.clear()
 
 
 ## Attach the meshes the workers have finished, and do what was asked of those
@@ -1831,7 +1930,9 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	var space := PhysicsServer3D.body_get_space(rid)
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, RID())
+	var _tu := Time.get_ticks_usec()
 	_ensure_per_block(isl)
+	_upart("shed: per block", _tu)
 	var shed := 0
 	var more := false
 	for g in groups:
@@ -1844,7 +1945,9 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		spawn_census.shed[0] += 1
 		spawn_census.shed[1] += moved.size()
 		var child := record_detach(isl.owner, isl, isl.chunk, moved)
+		var _ts := Time.get_ticks_usec()
 		spawn(isl.chunk, moved, linear, angular, child, isl.owner)
+		_upart("shed: spawns", _ts)
 		# Start a hold; never EXTEND one. A piece shedding on consecutive ticks
 		# would otherwise push its own deadline forward every tick and never
 		# rebuild at all, so its mesh would keep drawing bricks that had left
@@ -1857,8 +1960,10 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		# body. A discarded one is deleted, not left behind as ghost collision.
 		isl.disable_blocks(moved, RID())
 		shed += 1
+	var _tb := Time.get_ticks_usec()
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, space)
+	_upart("shed: body back", _tb)
 	if more and not _resolve_queue.has(isl):
 		_resolve_queue.append(isl)
 	if shed == 0:
@@ -1915,15 +2020,21 @@ func solve_island(isl: BrickIsland) -> void:
 	# Scaled to integers so the extension can see which component dominates.
 	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SOLVE)
 	e.normal = Vector3(roundi(down.x * 100.0), roundi(down.y * 100.0), roundi(down.z * 100.0))
+	var _tu := Time.get_ticks_usec()
 	var res := DamageLog.apply_entry(world, isl.chunk, e)
+	_tu = _upart("stress", _tu)
 	# A solve that failed nothing changed nothing, so there is nothing to send.
 	# What comes loose afterwards travels as DETACH, with its blocks named.
 	if not res.is_empty() and res[0] > 0:
 		_record(e)
 	# Tension failure marks joints, it does not move bricks. What comes loose is
 	# whatever can no longer trace a path to the ground.
-	_shed(isl, world.find_detached_groups(isl.chunk))
+	var groups := world.find_detached_groups(isl.chunk)
+	_tu = _upart("groups", _tu)
+	_shed(isl, groups)
+	_tu = _upart("shed", _tu)
 	split_if_broken(isl)
+	_upart("split", _tu)
 
 
 ## A hard landing SHEARS the joints in the contact band. It destroys nothing --
@@ -1945,8 +2056,10 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# Where it actually touched. The solver already knows; asking it beats
 	# guessing from a bounding box, which for a toppled building meant shearing
 	# a band up the side rather than across the face that landed.
+	var _tu := Time.get_ticks_usec()
 	if near:
 		_ensure_per_block(isl)
+	_tu = _upart("land: per block", _tu)
 	var contacts := _contact_points(isl)
 	var box := world_aabb(isl)
 	if contacts.is_empty():
@@ -1986,8 +2099,10 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 		if not got.is_empty():
 			_record(e)
 			loosened.append_array(got)
+	_tu = _upart("land: shear", _tu)
 	if near:
 		loosened.append_array(_snap_across(isl, contacts, severity))
+		_tu = _upart("land: snap", _tu)
 	else:
 		# Counted as a landing all the same, so a piece bouncing in the
 		# distance is not queued again every bounce (MAX_IMPACTS).
@@ -2016,7 +2131,9 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# ONE event, and each hand-over shears every loose piece within reach -- so
 	# six contacts a few centimetres apart meant doing that six times over.
 	# Two bricks bounce: see MIN_IMPACT_BLOCKS.
+	_tu = _upart("land: rest", _tu)
 	_hand_over(isl, contacts, severity)
+	_upart("land: what it hit", _tu)
 
 
 ## Give whatever a landing piece hit the other half of the collision.
@@ -2134,11 +2251,31 @@ func _count_meshless() -> void:
 		# An ArrayMesh with no surfaces is NOT null and draws nothing; count both.
 		# A toppled building draws through its bands and not its own mesh.
 		var m: Mesh = isl.mesh.mesh
-		if (m == null or m.get_surface_count() == 0) and not _any_band(isl):
+		if (m == null or m.get_surface_count() == 0) and not _any_band(isl) \
+				and not isl.lod_dropped:
 			isl.blind_ticks += 1
 			meshless_worst_blocks = maxi(meshless_worst_blocks,
 					world.get_alive_block_count(isl.chunk))
+			var stage := "orphan"
+			if isl.upload_waiting:
+				stage = "upload budget"
+			elif isl.mesh_job >= 0:
+				stage = "upload"
+			elif _mesh_queue.has(isl):
+				stage = "queued" if world.bake_ready(isl.chunk) else \
+						("baking" if world.bake_pending(isl.chunk) else "no bake")
+			elif _band_holes.has(isl):
+				stage = "band holes"
+			isl.blind_stages[stage] = int(isl.blind_stages.get(stage, 0)) + 1
 		elif isl.blind_ticks > 0:
+			if isl.blind_ticks > blind_worst:
+				blind_worst_stages = isl.blind_stages.duplicate()
+				blind_worst_stages["bricks"] = world.get_alive_block_count(isl.chunk)
+				blind_worst_stages["settled"] = isl.settled
+				blind_worst_stages["landmark"] = isl.landmark
+				blind_worst_stages["bands"] = isl.bands.size()
+				blind_worst_stages["mesh"] = str(isl.mesh.mesh)
+			isl.blind_stages = {}
 			blind_worst = maxi(blind_worst, isl.blind_ticks)
 			blind_total += isl.blind_ticks
 			blind_count += 1
@@ -2439,6 +2576,7 @@ func tick() -> void:
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
 	_harvest_mesh_jobs()
+	_drain_upload_waiting()
 	_drain_mesh_queue()
 	_fill_band_holes()
 	_drain_resolve_queue()
@@ -2485,8 +2623,13 @@ func _drain_resolve_queue() -> void:
 		var isl: BrickIsland = _resolve_queue.pop_front()
 		if not isl.is_valid():
 			continue
+		var t0 := Time.get_ticks_usec()
+		_unit = {}
 		solve_island(isl)
+		var t1 := Time.get_ticks_usec()
 		rebuild_mesh(isl)
+		_upart("mesh", t1)
+		_unit_done("resolve", isl, t0)
 		_work_done += 1
 
 
@@ -2500,7 +2643,10 @@ func _drain_fracture_queue() -> void:
 		if not isl.is_valid():
 			continue
 		isl.fracture_queued = false
+		var t0 := Time.get_ticks_usec()
+		_unit = {}
 		fracture_on_impact(isl, float(entry[1]))
+		_unit_done("landing", isl, t0)
 		_work_done += 1
 
 
@@ -2520,15 +2666,29 @@ func _stream_island_meshes() -> void:
 		var isl: BrickIsland = islands[_lod_cursor % islands.size()]
 		_lod_cursor += 1
 		looked += 1
-		if not isl.is_valid() or isl.mesh == null or not isl.settled:
+		if not isl.is_valid() or isl.mesh == null:
 			continue
 		var dist := isl.body.global_position.distance_to(here)
 		var has_mesh: bool = isl.array_mesh != null
+		if not isl.settled:
+			# Dropped for distance while it lay still, and something has woken
+			# it since. It left this ladder when it stopped being settled, and
+			# nothing else was going to give its mesh back: the piece was drawn
+			# again only when something hit it, and one was invisible for 422
+			# frames, walked right up to.
+			if isl.lod_dropped and not has_mesh and dist < ISLAND_MESH_RANGE \
+					and isl.mesh_job < 0 and not isl.upload_waiting:
+				world.bake_chunk_async(isl.chunk)
+				if not _mesh_queue.has(isl):
+					_mesh_queue.append(isl)
+				budget -= 1
+			continue
 		if has_mesh and dist > ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS:
 			_retirer.retire(isl.mesh.mesh)
 			isl.mesh.mesh = null
 			isl.array_mesh = null
 			isl.index_bytes = 0
+			isl.lod_dropped = true
 			world.drop_chunk_bake(isl.chunk)
 			dropped += 1
 			budget -= 1

@@ -440,6 +440,11 @@ public:
     /// the detach reuse the walk the stress solve already made. A stress solve
     /// that did break a joint gets a fresh walk, as it always did.
     Dictionary solve_structure(int chunk_id);
+    /// solve_structure for several chunks at once, one thread each (up to
+    /// SOLVE_SLOTS), results in the order given. The chunks must be different:
+    /// each solve reads and writes its own chunk only, so the answers are
+    /// exactly what calling solve_structure on each in turn gives.
+    Array solve_structures(const PackedInt32Array &chunk_ids);
 
     // --- templates ---------------------------------------------------------
 
@@ -481,6 +486,12 @@ public:
     /// chunk has to carry across being dematerialised or put to sleep, since a
     /// rebuild from a recipe or a record starts every brick at 255.
     PackedInt32Array get_worn_blocks(int chunk_id) const;
+
+    /// How many authored triangles the chunk's living blocks draw (a curved
+    /// stair tread's `mesh`, against a brick's handful of voxel faces). Bricks
+    /// are a poor measure of a bake: a staircase piece of 146 of them is
+    /// 90,000 vertices of spiral step. O(blocks), no bake needed.
+    int get_chunk_authored_tris(int chunk_id) const;
 
     /// What ChunkRecord keeps of blocks [from, from + count) of a chunk, in id
     /// order, for every block still standing in it (alive, not cut out into
@@ -842,20 +853,33 @@ private:
     };
     std::vector<StressState> stress;
 
-    // The support DAG from the last grounding solve: scratch_queue holds the
-    // BFS visit order and scratch_depth how many joints each block is from the
-    // ground. Load flows from a block to every neighbour of strictly lower
-    // depth, shared by contact area -- NOT down a spanning tree, which would
-    // funnel a whole building through one edge, and not straight down either,
-    // which leaves an undercut wall transmitting nothing.
-    std::vector<int32_t> scratch_depth;
+    // Scratch for the structural solve, one set per thread that solves
+    // (solve_structures runs several buildings' solves at once). Slot 0 is the
+    // calling thread's, so everything that solves on the main thread and then
+    // reads the result back (get_block_capacity) sees what it always saw.
+    //
+    // depth: the support DAG from the last grounding solve, how many joints
+    // each block is from the ground, with queue its BFS visit order. Load
+    // flows from a block to every neighbour of strictly lower depth, shared by
+    // contact area -- NOT down a spanning tree, which would funnel a whole
+    // building through one edge, and not straight down either, which leaves an
+    // undercut wall transmitting nothing. mark and grounded are reused across
+    // solves so a collapse does not allocate per hit.
+    struct SolveScratch {
+        std::vector<int32_t> depth;
+        std::vector<uint8_t> mark;
+        std::vector<int32_t> queue;
+        std::vector<uint8_t> grounded;
+    };
+    static constexpr int SOLVE_SLOTS = 8;
+    SolveScratch scratch_slots[SOLVE_SLOTS];
+    static thread_local int scratch_slot;
+    SolveScratch &solve_scratch() { return scratch_slots[scratch_slot]; }
+    const SolveScratch &solve_scratch() const { return scratch_slots[scratch_slot]; }
 
     int64_t rng_seed = 0;
     uint64_t rng_state = 0;
 
-    // Scratch reused across solves so a collapse does not allocate per hit.
-    std::vector<uint8_t> scratch_mark;
-    std::vector<int32_t> scratch_queue;
 
     // One per chunk, built the first time a chunk is solved and dropped when a
     // block is placed in it or removed from it. See brick::JointCache.
@@ -868,7 +892,6 @@ private:
     };
     std::vector<ChunkTemplate> templates;
     const brick::JointCache &joints_of(int chunk_id);
-    std::vector<uint8_t> scratch_grounded;
 
     // check_stability and find_detached_groups on the grounding already in
     // scratch_depth, without walking it again. See solve_structure.

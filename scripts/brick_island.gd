@@ -91,6 +91,12 @@ var seen_tick := 0
 ## or -1. Anything asked of its mesh meanwhile waits for it (mesh_again), since
 ## the patches that follow are worked out against the mesh that job builds.
 var mesh_job := -1
+## Its mesh is built and waiting for the upload budget
+## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
+var upload_waiting := false
+## Its mesh was dropped on purpose for distance (IslandManager's LOD ladder),
+## not lost: not counted as a piece gone invisible.
+var lod_dropped := false
 var mesh_again := false
 var mesh_again_full := false
 var fade_since := 0
@@ -115,6 +121,8 @@ var fracture_queued := false
 ## Physics ticks this piece has existed with a MeshInstance3D and nothing in it
 ## -- i.e. ticks spent invisible. Reset when it finally gets geometry.
 var blind_ticks := 0
+## Of those ticks, what it was waiting for (IslandManager._count_meshless).
+var blind_stages := {}
 ## Do not rebuild this piece's mesh before this process frame: a child it shed
 ## is still coming up, and until it has, these bricks are drawn by nobody else.
 var hold_until := -1

@@ -1359,6 +1359,58 @@ piece is still anywhere from 3 to 18 ticks from run to run, as it was before any
 Next in line: **room streaming** is the same shape of problem as the building body was -- one
 furniture body per building, rebuilt whole when a room opens, 13-14 ms in some runs.
 
+### The open issues after that, measured and taken one at a time
+
+Instrumented first (`--big --shot` prints each of these now), because three of the guesses were
+wrong: the 13 ms "room streaming" was the fake rung, the 10 ms "solve" was four buildings' solves
+in one tick, and the "node" step of a spawn was not the node.
+
+* **Pieces going invisible.** A settled piece past `ISLAND_MESH_RANGE` gives its mesh back on
+  purpose; if anything then woke it, it had left the ladder that gives meshes back (that only looks
+  at settled pieces), and it stayed meshless until something hit it -- walked right up to. That is
+  the 18,000-brick piece invisible for 422 frames. A woken piece whose mesh was dropped now gets it
+  back within range, and the "went blind" count no longer counts pieces not drawn on purpose.
+  Worst invisible stretch: 18-21 ticks -> 3-4.
+* **The renderer's share of a worker upload.** A mesh built on a worker still has its buffers made
+  on the main thread -- by whatever next calls into the renderer. That was a spawn's "node" step at
+  7-12 ms, a 90-brick piece's "mesh" at 8, a band's attach at 4-7. Now: one explicit flush at the
+  top of the tick (a cheap query answers only after the queue is flushed; it shows as "render");
+  a piece's big meshes held to `UPLOAD_VERTS_PER_TICK` a tick (over it waits a tick, arrays kept)
+  and bands to `BAND_VERTS_PER_TICK`; and meshes built on a worker are built compressed
+  (`UPLOAD_COMPRESS`: the worker's half twice as long, the main thread's a third shorter; rendered
+  side by side, 0.14% of pixels differ, all brick edges moved by a pixel).
+* **Staircase pieces baked on the spot.** A piece of under 200 bricks was baked in the tick, and a
+  staircase piece is 146 bricks and 90,000 vertices of spiral step -- a 9.5 ms spawn. It is now
+  also held to `SYNC_MESH_MAX_TRIS` authored triangles (`BrickWorld.get_chunk_authored_tris`).
+* **The fake rung.** Working out a room's drawing is 0.1-0.25 ms and a pass allowed 48 of them:
+  now a 2 ms clock over those too (`FAKE_BUDGET_MS`). And the building's whole fake drawing (3-4 ms
+  for one of the big shapes) is rebuilt once its rooms are all worked out, not on every pass that
+  added a few.
+* **Solves side by side.** `BrickWorld.solve_structures` runs the tick's solves of different
+  buildings on a thread each (scratch buffers per thread; slot 0 is the caller's, so a solve read
+  back on the main thread is what it always was). Answers identical, brick by brick
+  (`tools/solve_probe.gd`). In the big city the queue rarely holds two at once, so it matters less
+  than expected; the worst single solve of a 22,000-brick tower is 3-6 ms, and the high end is the
+  joint cache being rebuilt after a room laid its furniture.
+* **Giving a building back.** Every open room re-walked the whole building for its dead bricks and
+  removed its furniture a block at a time from a chunk about to be released; now one walk, and
+  nothing removed (`deactivate_room(..., dead, releasing)`). And no second building is started once
+  a trim run has had `TRIM_START_MS` -- the clock was only looked at after each one.
+* **A piece cut out of a piece** is copied into its new chunk directly (`split_island`), not a
+  `place_block` at a time: that checked every cell twice and looked for a bake in flight once a
+  brick, 4.2 ms for 7,000 bricks.
+
+`--big --shot`: worst script tick 32-36 ms -> 22-27 (22.4 on the last full run); worst invisible
+stretch 18-21 ticks -> 3-4. At the top of the worst tick now: loose pieces taking a blast (7 ms),
+giving one big building back (8 ms: its shell 4, its release 4), and a piece re-solve cutting out
+a big piece (7-9 ms).
+
+Still open: the solve's joint cache is rebuilt whole when a room lays furniture (the high end of a
+mega solve); settled wreckage past 145 m is not drawn at all (`ISLAND_MESH_RANGE`, a memory
+trade-off that pops at the range); and the renderer's share of uploads is only bounded, not gone --
+the project's rendering thread model ("Separate") would move it off the main thread entirely, a
+project setting to try deliberately.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

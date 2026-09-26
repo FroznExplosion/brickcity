@@ -225,8 +225,10 @@ const BAND_BUDGET_MS := 6.0
 ## but the renderer creates the buffers on the main thread, at the next call
 ## into it -- measured on a 62,000-vertex mesh, 3-4 ms built here against 1-1.5
 ## attached from a worker. So what the workers finish in one tick is paid in
-## one tick, and this keeps that bounded.
-const BAND_VERTS_PER_TICK := 120000
+## one tick, and this keeps that bounded. Lower than a piece's
+## (IslandManager.UPLOAD_VERTS_PER_TICK): a band waiting still draws its old
+## mesh, and a piece waiting draws nothing.
+const BAND_VERTS_PER_TICK := 60000
 ## A band with at least this many vertices is uploaded on a worker, as a big
 ## piece's mesh is (IslandManager.THREAD_MESH_VERTS). Of what a band cost,
 ## four fifths was handing the arrays to the renderer -- 98 ms of 120 across a
@@ -240,6 +242,9 @@ const BAND_THREAD_VERTS := 4000
 ## Bands being uploaded: [building id, band, task id, [mesh], arrays, pass].
 var _band_jobs: Array = []
 var _band_verts_now := 0
+## A mesh with nothing in it, to ask the renderer something cheap. See
+## _physics_process.
+var _flush_mesh := ArrayMesh.new()
 ## building id -> which rebuild of its bands is current. A job from an older
 ## pass is thrown away when it lands, not attached over a newer band.
 var _band_pass := {}
@@ -415,6 +420,8 @@ const TRIM_RADIUS := 70.0
 const TRIM_EVERY := 30
 const TRIM_PER_RUN := 8
 const TRIM_BUDGET_MS := 6.0
+## And no second building started after this much of a run.
+const TRIM_START_MS := 2.0
 ## M4 streaming, far tier. Beyond SHELL_RANGE a registered building has no node,
 ## no mesh and no collider -- it is a recipe and a damage record, and costs what
 ## those cost. The hysteresis band stops a building on the line from building
@@ -468,10 +475,17 @@ var _demesh_ms := 0.0
 var _demeshed := 0
 var _remeshed_back := 0
 var _trim_split := {"demat": 0.0, "free": 0.0, "shell": 0.0}
+var _demote_worst := [0.0, 0.0, 0.0, 0.0, 0]
 var _trim_ms := 0.0
 var _trims := 0
 var _damage_queue: Array = []
 var _pending_disable := {}
+## Solves of mega buildings [count, ms], and the worst single solve
+## [ms, blocks, groups, collapsing].
+var _solve_mega := [0, 0.0]
+var _solve_worst := [0.0, 0, 0, false]
+var _solve_batches := 0
+var _solve_batch_worst := 0.0
 ## Buildings whose furniture has to be redrawn at the end of the tick.
 var _furniture_due := {}
 ## Lookup grid cell -> building ids whose footprint touches it.
@@ -562,6 +576,10 @@ const FAKE_BUILDS_PER_PASS := 1
 ## three or four passes instead, the rooms nearest the ground first -- a
 ## quarter of a second at the edge of view, which is where it happens.
 const FAKE_ROOMS_PER_PASS := 48
+## And a clock over those: a room's manifest is 0.1-0.25 ms, so 48 of them was
+## up to 12 ms of one pass -- the worst "stream" tick of a big-city run. What is
+## over the clock is done the next pass, as what is over the count always was.
+const FAKE_BUDGET_MS := 2.0
 ## How many rooms a pass may ACTIVATE while trying to place ROOMS_PER_PASS of
 ## them. A room generated with nothing in it lays no bricks and costs no
 ## collision, so it should not spend the pass -- but it still must not be able
@@ -1187,11 +1205,13 @@ func _sync_fake(id: int) -> void:
 	var offset := Vector3i.ZERO
 	var worked := 0
 	var more := false
+	var until := t0 + int(FAKE_BUDGET_MS * 1000.0)
 	for room in registry.rooms_of(id):
 		if not room.outer or room.drawn or room.active or room.spilled:
 			continue
 		if room.fake_gone != room.gone.size() or room.fake_gone < 0:
-			if worked >= FAKE_ROOMS_PER_PASS:
+			if worked >= FAKE_ROOMS_PER_PASS \
+					or (worked > 0 and Time.get_ticks_usec() >= until):
 				more = true
 				continue
 			worked += 1
@@ -1204,10 +1224,19 @@ func _sync_fake(id: int) -> void:
 			continue
 		want.append(room)
 		indices.push_back(room.id)
-	_fake_rooms[id] = indices
-	FurnitureMesh.attach_fake(want, _brick_nodes[id], _fake_furniture, id)
+	var _tfa := _part("fk_rooms", t0)
 	if more:
-		_fake_dirty[id] = true  # the rest next pass
+		# The rest next pass -- and the drawing is rebuilt once they are all
+		# worked out, not every pass on the way. Rebuilding it is the whole
+		# building's buffer (3-4 ms for one of the big shapes), and a building
+		# with more rooms than one pass's clock rebuilt it three or four times
+		# in a row to add a few each time.
+		_fake_dirty[id] = true
+	else:
+		_fake_rooms[id] = indices
+		FurnitureMesh.attach_fake(want, _brick_nodes[id], _fake_furniture, id)
+		_part("fk_attach", _tfa)
+		_prof["fk_count"] = float(want.size())
 	_fake_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 	_fake_builds += 1
 
@@ -1289,23 +1318,6 @@ func _add_room_shapes(id: int, index: int, batch: bool = false) -> void:
 		PhysicsServer3D.body_set_space(body, get_world_3d().space)
 
 
-## The static body a building's OPEN ROOMS put their collision on.
-##
-## Not the building's own body, and the reason is the same one that took
-## interiors out of the face bake. Adding a room's shapes means lifting the
-## body out of the physics space and putting it back, and that call is priced
-## by the body's shape count -- on a 50,000-brick tower that is 56,000 shapes,
-## and it measured **22 ms for one room**. A separate body carries hundreds.
-##
-## One per building rather than one per room, because the swap is what costs,
-## not the shapes: a building with twenty rooms open is one body of a few
-## thousand boxes, and opening the twenty-first pays for those rather than for
-## the tower.
-##
-## It never has to ride anything. A building that comes apart hands its blocks
-## to an island, and an island builds its collision from the CHUNK -- decorative
-## blocks included -- so the furniture is covered there by a body that already
-## exists. This one exists only while the building is standing.
 ## What is straight under a figure, for a gate's failure message: which body,
 ## and how far down.
 func _what_is_under(body: CharacterBody3D) -> String:
@@ -1336,6 +1348,23 @@ func _what_is_under(body: CharacterBody3D) -> String:
 			body.global_position.y - (hit.position as Vector3).y]
 
 
+## The static body a building's OPEN ROOMS put their collision on.
+##
+## Not the building's own body, and the reason is the same one that took
+## interiors out of the face bake. Adding a room's shapes means lifting the
+## body out of the physics space and putting it back, and that call is priced
+## by the body's shape count -- on a 50,000-brick tower that is 56,000 shapes,
+## and it measured **22 ms for one room**. A separate body carries hundreds.
+##
+## One per building rather than one per room, because the swap is what costs,
+## not the shapes: a building with twenty rooms open is one body of a few
+## thousand boxes, and opening the twenty-first pays for those rather than for
+## the tower.
+##
+## It never has to ride anything. A building that comes apart hands its blocks
+## to an island, and an island builds its collision from the CHUNK -- decorative
+## blocks included -- so the furniture is covered there by a body that already
+## exists. This one exists only while the building is standing.
 func _room_body(id: int) -> RID:
 	if _room_bodies.has(id):
 		return _room_bodies[id]
@@ -1382,6 +1411,7 @@ static func _box_distance(box: AABB, point: Vector3) -> float:
 ## volumes, so this is a handful of box tests for the buildings that are bricks
 ## at all.
 func _stream_rooms() -> void:
+	var _t_rooms_start := Time.get_ticks_usec()
 	var here := camera.global_position
 	var opened := 0
 	# The VIEW range, not the walking range: a hole in a wall is a way to see
@@ -1432,6 +1462,7 @@ func _stream_rooms() -> void:
 	var by_distance := func(a, c) -> bool: return float(a[0]) < float(c[0])
 	var redraw := {}
 	var t_draw := Time.get_ticks_usec()
+	var t_rm := _part("rm_scan", _t_rooms_start)
 	if undrawn.size() > ROOM_DRAWS_PER_PASS:
 		undrawn.sort_custom(by_distance)
 		undrawn.resize(ROOM_DRAWS_PER_PASS)
@@ -1440,6 +1471,7 @@ func _stream_rooms() -> void:
 		redraw[int(cand[1])] = true
 	_room_draws += undrawn.size()
 	_room_draw_ms += float(Time.get_ticks_usec() - t_draw) / 1000.0
+	t_rm = _part("rm_draw", t_rm)
 
 	reach.sort_custom(by_distance)
 	# A room whose whole manifest is empty activates without laying anything, so
@@ -1470,10 +1502,14 @@ func _stream_rooms() -> void:
 		redraw[bid] = true
 		if _open_room(bid, int(cand[2]), true) > 0:
 			opened += 1
+	t_rm = _part("rm_open", t_rm)
 	for bid in touched:
 		if _room_bodies.has(bid):
 			PhysicsServer3D.body_set_space(_room_bodies[bid], get_world_3d().space)
+	t_rm = _part("rm_swap", t_rm)
+	for bid in touched:
 		_refresh_furniture(bid)
+	t_rm = _part("rm_redraw", t_rm)
 
 	# And the wreckage: a building that came down still has rooms, and what was
 	# in them is owed to whoever walks up to the pile.
@@ -1502,6 +1538,7 @@ func _stream_rooms() -> void:
 				opened += 1
 				break
 
+	t_rm = _part("rm_wreck", t_rm)
 	# The ladder backwards (Scale §4.4). Only what is bricks: `_materialised` is
 	# the city's own list, so this is never O(the city) however many buildings
 	# there are -- and within one, the registry's lists of what is open and
@@ -1541,9 +1578,12 @@ func _stream_rooms() -> void:
 				continue
 			registry.undraw_room(id, index)
 			redraw[id] = true
+	t_rm = _part("rm_ladder", t_rm)
 	for id in redraw:
 		_sync_drawn(id)
+	t_rm = _part("rm_sync", t_rm)
 	_stream_fake(here)
+	_part("rm_fake", t_rm)
 
 
 ## The far tier: a shell mesh and five boxes. No bricks anywhere.
@@ -2209,7 +2249,8 @@ func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 	var holder := [null]
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var m := ArrayMesh.new()
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+				IslandManager.UPLOAD_COMPRESS)
 		holder[0] = m, false, "building band mesh")
 	_band_jobs.append([id, at, task, holder, arrays, int(_band_pass.get(id, 0))])
 
@@ -3211,6 +3252,14 @@ func _physics_process(_delta: float) -> void:
 	_prof = {}
 	var t_tick := Time.get_ticks_usec()
 	var t := t_tick
+	# What the workers finished uploading since the last call into the
+	# renderer, paid here and measured, rather than by whatever next makes a
+	# node or sets a mesh -- which is where it landed: a spawn's "node" step at
+	# 7-12 ms, a small piece's mesh at 8. Any call that answers flushes the
+	# renderer's queue; asking a tiny mesh its surface count is the cheapest.
+	# See IslandManager.UPLOAD_VERTS_PER_TICK.
+	RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
+	t = _mark("render", t)
 	var spawn_until := Time.get_ticks_usec() + int(SPAWN_BUDGET_MS * 1000.0)
 	var spawned := 0
 	var solved := 0
@@ -3218,6 +3267,30 @@ func _physics_process(_delta: float) -> void:
 	# budgets whose timing differs machine to machine. The host decides; a client
 	# gets the SOLVE / TOPPLE / DETACH commands instead (AIPlan P0 step 4).
 	var decide_limit := SOLVES_PER_TICK if authority.may_decide() else 0
+	# The buildings this loop is about to solve, solved at once, a thread each
+	# (BrickWorld.solve_structures): four in turn were up to 10 ms of the worst
+	# tick of a big collapse. Each solve reads and writes only its own building,
+	# and handling one building's answer touches no other building's bricks, so
+	# the answers are the ones solving them in turn gave. One the loop comes
+	# back to in the same tick -- re-marked while it was handled -- is solved
+	# again then, as it always was.
+	var ahead := {}
+	if decide_limit > 1 and _dirty.size() > 1:
+		var ids: Array[int] = []
+		var chunks := PackedInt32Array()
+		for k in mini(decide_limit, _dirty.size()):
+			var ab := registry.get_building(_dirty[k])
+			if ab != null and ab.is_materialised():
+				ids.append(_dirty[k])
+				chunks.append(ab.chunk)
+		if ids.size() > 1:
+			var _tb := Time.get_ticks_usec()
+			var answers: Array = world.solve_structures(chunks)
+			var _batch_ms := float(Time.get_ticks_usec() - _tb) / 1000.0
+			_solve_batches += 1
+			_solve_batch_worst = maxf(_solve_batch_worst, _batch_ms)
+			for k in ids.size():
+				ahead[ids[k]] = answers[k]
 	while solved < decide_limit and not _dirty.is_empty():
 		var id: int = _dirty.pop_front()
 		solved += 1
@@ -3229,7 +3302,21 @@ func _physics_process(_delta: float) -> void:
 		# walks the building's joints once where the three calls walked them
 		# three times, and answers exactly as they did (BrickWorld.solve_structure,
 		# tools/solve_probe.gd).
-		var solve: Dictionary = world.solve_structure(b.chunk)
+		var solve: Dictionary
+		if ahead.has(id):
+			solve = ahead[id]
+			ahead.erase(id)
+		else:
+			var _ts := Time.get_ticks_usec()
+			solve = world.solve_structure(b.chunk)
+			var _solve_ms := float(Time.get_ticks_usec() - _ts) / 1000.0
+			var _blocks := world.get_block_count(b.chunk)
+			if _blocks >= CollapseDirector.MEGA_BLOCKS:
+				_solve_mega[0] += 1
+				_solve_mega[1] += _solve_ms
+			if _solve_ms > float(_solve_worst[0]):
+				_solve_worst = [_solve_ms, _blocks, int(solve.groups.size()),
+						director.collapsing.has(b.id)]
 		t = _mark("solve", t)
 		var res: Dictionary = solve.stress
 		if int(res.get("failures", 0)) > 0:
@@ -3680,6 +3767,11 @@ func _trim_quiet() -> void:
 			continue
 		if Time.get_ticks_msec() - b.materialised_at < TRIM_AFTER_MS:
 			continue
+		# Not another once this run has had its share: the clock below is
+		# looked at AFTER a building goes, and a big one is 5-10 ms by itself,
+		# so two in a row was a 10 ms trim.
+		if freed > 0 and Time.get_ticks_usec() >= t0 + int(TRIM_START_MS * 1000.0):
+			break
 		_demote(id, dist)
 		_materialised.remove_at(i)
 		freed += 1
@@ -3701,6 +3793,11 @@ func _trim_quiet() -> void:
 ## index, which is not this function's business.
 func _demote(id: int, _dist: float) -> void:
 	var _ta := Time.get_ticks_usec()
+	var _t_all := _ta
+	var _w := [0.0, 0.0, 0.0, 0.0, 0]
+	var _gb := registry.get_building(id)
+	if _gb != null and _gb.is_materialised():
+		_w[4] = world.get_block_count(_gb.chunk)
 	# Before dematerialising, which is what takes the chunk id away: the
 	# furniture node is keyed on the chunk, not on the building.
 	var gone := registry.get_building(id)
@@ -3710,6 +3807,7 @@ func _demote(id: int, _dist: float) -> void:
 	_furnished.erase(id)
 	registry.dematerialise(id)
 	_trim_split.demat += float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[1] = float(Time.get_ticks_usec() - _ta) / 1000.0
 	_ta = Time.get_ticks_usec()
 	if _brick_cols.has(id):
 		(_brick_cols[id] as BuildingCollision).free_bodies()
@@ -3728,6 +3826,7 @@ func _demote(id: int, _dist: float) -> void:
 	_remesh_queue.erase(id)
 	_pending_bricks.erase(id)
 	_trim_split.free += float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[2] = float(Time.get_ticks_usec() - _ta) / 1000.0
 	_ta = Time.get_ticks_usec()
 	# At the detail the distance calls for. This built a FULL shell for every
 	# building it trimmed, and everything it trims is by definition past
@@ -3742,6 +3841,10 @@ func _demote(id: int, _dist: float) -> void:
 	# own budget, a pass or two later.
 	_make_shell(id, true)
 	_trim_split.shell += float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[3] = float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[0] = float(Time.get_ticks_usec() - _t_all) / 1000.0
+	if float(_w[0]) > float(_demote_worst[0]):
+		_demote_worst = _w
 
 
 func _process(delta: float) -> void:
@@ -4741,7 +4844,7 @@ func _structure_of(chunk: int) -> PackedStringArray:
 func _report_profile() -> void:
 	if _prof_worst.is_empty():
 		return
-	var keys := ["solve", "disable", "spawn", "remesh",
+	var keys := ["render", "solve", "disable", "spawn", "remesh",
 			"bands", "retire", "damage", "promote", "promote_finish", "stream", "collision",
 			"islands", "hud"]
 	if _frame_samples > 0:
@@ -4760,6 +4863,28 @@ func _report_profile() -> void:
 	print("[prof]   of which collision: %d band(s) merged again, the worst building's %d in %.1f ms" % [
 			int(_prof_worst.get("col_bands", 0.0)), int(_prof_worst.get("col_worst_bands", 0.0)),
 			float(_prof_worst.get("col_worst", 0.0))])
+	print("[prof]   of which rooms: scan %.1f  draw %.1f  open %.1f  body back %.1f  redraw %.1f  wrecks %.1f  shut %.1f  sync drawn %.1f  fake %.1f" % [
+			float(_prof_worst.get("rm_scan", 0.0)), float(_prof_worst.get("rm_draw", 0.0)),
+			float(_prof_worst.get("rm_open", 0.0)), float(_prof_worst.get("rm_swap", 0.0)),
+			float(_prof_worst.get("rm_redraw", 0.0)), float(_prof_worst.get("rm_wreck", 0.0)),
+			float(_prof_worst.get("rm_ladder", 0.0)), float(_prof_worst.get("rm_sync", 0.0)),
+			float(_prof_worst.get("rm_fake", 0.0))])
+	print("[prof]   of which fake: rooms worked out %.1f, drawing rebuilt %.1f (%d rooms in it)" % [
+			float(_prof_worst.get("fk_rooms", 0.0)), float(_prof_worst.get("fk_attach", 0.0)),
+			int(_prof_worst.get("fk_count", 0.0))])
+	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
+			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
+			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
+	var sw: Array = islands.spawn_worst
+	print("[prof] worst single spawn %.1f ms (%d bricks): split %.1f  shapes %.1f  node %.1f (furniture %.1f, into the scene %.1f, %d boxes)  mesh %.1f" % [
+			float(sw[0]), int(sw[5]), float(sw[1]), float(sw[2]), float(sw[3]), float(sw[6]),
+			float(sw[7]), int(sw[8]), float(sw[4])])
+	print("[prof] worst single piece landing / re-solve: %s" % [islands.unit_worst])
+	print("[prof] worst single building given back %.1f ms (%d bricks): dematerialise %.1f  free %.1f  shell %.1f; %d piece upload(s) waited a tick" % [
+			float(_demote_worst[0]), int(_demote_worst[4]), float(_demote_worst[1]),
+			float(_demote_worst[2]), float(_demote_worst[3]), islands.uploads_waited])
+	var bw: Dictionary = islands.blind_worst_stages
+	print("[prof] the longest invisible stretch, tick by tick: %s" % [bw])
 	print("[prof]   of which disable: collision %.1f  furniture bodies %.1f; furniture redraw %.1f (in retire)" % [
 			float(_prof_worst.get("dis_collision", 0.0)), float(_prof_worst.get("dis_rooms", 0.0)),
 			float(_prof_worst.get("furniture", 0.0))])

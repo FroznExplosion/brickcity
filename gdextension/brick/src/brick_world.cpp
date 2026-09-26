@@ -2552,6 +2552,9 @@ static inline bool grounding_flows(const Chunk &c, const std::vector<Archetype> 
 }
 
 PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -2633,6 +2636,9 @@ Array BrickWorld::find_detached_groups(int chunk_id) {
 }
 
 Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<uint8_t> &scratch_mark = scratch.mark;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Array out;
     const brick::JointCache &jc = joints_of(chunk_id);
     Chunk &c = chunks[chunk_id];
@@ -2717,6 +2723,9 @@ Dictionary BrickWorld::get_solve_stats(int chunk_id) const {
 // before it received anything.
 
 Dictionary BrickWorld::solve_stress(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -2917,6 +2926,8 @@ float BrickWorld::get_block_load(int chunk_id, int block_id) const {
 }
 
 float BrickWorld::get_block_capacity(int chunk_id, int block_id) const {
+    const SolveScratch &scratch = solve_scratch();
+    const std::vector<int32_t> &scratch_depth = scratch.depth;
     if (!valid_chunk(chunk_id)) {
         return 0.0f;
     }
@@ -3084,6 +3095,9 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
 }
 
 Dictionary BrickWorld::solve_structure(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<uint8_t> &scratch_grounded = scratch.grounded;
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -3110,6 +3124,37 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     out["stress"] = stress_out;
     out["stability"] = stability;
     out["groups"] = groups;
+    return out;
+}
+
+Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids) {
+    const int n = (int)chunk_ids.size();
+    std::vector<Dictionary> results((size_t)n);
+    // The first on this thread, in slot 0 like any other solve here; each of
+    // the rest on a thread of its own with a slot of its own. More than there
+    // are slots are solved here afterwards, in turn.
+    const int par = std::min(n, (int)SOLVE_SLOTS);
+    std::vector<std::thread> workers;
+    for (int i = 1; i < par; ++i) {
+        const int chunk = chunk_ids[i];
+        workers.emplace_back([this, &results, i, chunk]() {
+            scratch_slot = i;
+            results[(size_t)i] = solve_structure(chunk);
+        });
+    }
+    if (n > 0) {
+        results[0] = solve_structure(chunk_ids[0]);
+    }
+    for (std::thread &t : workers) {
+        t.join();
+    }
+    for (int i = par; i < n; ++i) {
+        results[(size_t)i] = solve_structure(chunk_ids[i]);
+    }
+    Array out;
+    for (const Dictionary &d : results) {
+        out.push_back(d);
+    }
     return out;
 }
 
@@ -3192,6 +3237,8 @@ int BrickWorld::get_template_count() const {
 }
 
 Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
     Dictionary out;
     Chunk &c = chunks[chunk_id];
     const int floor_y = foundation_level[chunk_id];
@@ -3426,6 +3473,19 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
         }
     }
     return killed;
+}
+
+int BrickWorld::get_chunk_authored_tris(int chunk_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    int n = 0;
+    for (const Block &b : chunks[chunk_id].blocks) {
+        if (b.alive) {
+            n += (int)archetypes[b.archetype].mesh.size();
+        }
+    }
+    return n;
 }
 
 PackedInt32Array BrickWorld::get_worn_blocks(int chunk_id) const {
@@ -3953,7 +4013,12 @@ void BrickWorld::release_chunk(int chunk_id) {
 
 // --- islands ---------------------------------------------------------------
 
+thread_local int BrickWorld::scratch_slot = 0;
+
 Array BrickWorld::get_components(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<uint8_t> &scratch_mark = scratch.mark;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -4060,26 +4125,49 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
                 || !chunks[chunk_id].blocks[bid].alive) {
             continue;
         }
-        const Block src_block = chunks[chunk_id].blocks[bid];
+        const Block &src_block = chunks[chunk_id].blocks[bid];
         // Everything a block IS goes with it, not only its shape. Laying it
         // fresh used to reset three things, each a bug of its own: furniture
         // came out as structure (bearing load, counted by every solve), a joint
         // a landing had severed was whole again (so a sheared clump healed the
         // moment it became a piece), and a damaged brick was new. Found by the
         // city's log-replay check, Docs/AIPlan.md P0.
-        const int32_t nid = place_block(island_id, src_block.cell, src_block.archetype,
-                src_block.colour, src_block.decorative);
-        if (nid >= 0) {
-            Block &nb = chunks[island_id].blocks[nid];
-            nb.support_broken = src_block.support_broken;
-            nb.bottom_broken = src_block.bottom_broken;
-            nb.hp = src_block.hp;
-            nb.material = src_block.material;   // a steel beam falls as steel
+        //
+        // And straight into the new chunk, without place_block's questions: it
+        // is empty and has no bake, and cells that were one block's in the
+        // source are nobody else's in a copy of the same layout. place_block
+        // checked every cell twice and looked for a bake in flight once a
+        // block -- 4.2 ms for a 7,000-brick piece cut out of another piece.
+        Chunk &isl = chunks[island_id];
+        const Archetype &a = archetypes[src_block.archetype];
+        const int32_t nid = (int32_t)isl.blocks.size();
+        Block nb;
+        nb.cell = src_block.cell;
+        nb.archetype = src_block.archetype;
+        nb.colour = src_block.colour;
+        nb.decorative = src_block.decorative;
+        nb.support_broken = src_block.support_broken;
+        nb.bottom_broken = src_block.bottom_broken;
+        nb.hp = src_block.hp;
+        nb.material = src_block.material;   // a steel beam falls as steel
+        isl.blocks.push_back(nb);
+        const Vector3i base = nb.cell - isl.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        isl.occupancy[isl.index_of(Vector3i(base.x + x, base.y + y, base.z + z))]
+                                = nid;
+                    }
+                }
+            }
         }
         chunks[chunk_id].blocks[bid].alive = false;
         chunks[chunk_id].blocks[bid].detached = true;
         taken.push_back(bid);
     }
+    joint_cache[island_id].valid = false;
+    chunks[island_id].bake.valid = false;
 
     // The mass and where its centre is -- NOT get_body_boxes, which also builds
     // a Dictionary for every box and was thrown away here. A shaped part is a
@@ -4681,6 +4769,9 @@ bool BrickWorld::remove_weld(int weld_id) {
 // --- grounding from a seed set ---------------------------------------------
 
 PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32Array &seeds) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -4893,6 +4984,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_chunk_shapes", "body", "chunk_id", "offset", "skip_dead", "merge",
             "section", "skip_decorative"), &BrickWorld::add_chunk_shapes, DEFVAL(false), DEFVAL(-1),
             DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("get_chunk_authored_tris", "chunk_id"),
+            &BrickWorld::get_chunk_authored_tris);
+    ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids"),
+            &BrickWorld::solve_structures);
     ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids", "skip_decorative"),
             &BrickWorld::get_block_sections, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("add_band_shapes", "bodies", "chunk_id", "offset", "sections",
