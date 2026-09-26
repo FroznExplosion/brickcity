@@ -441,6 +441,47 @@ inside the AI budget. Windowed `--shot` of the same.
 **This is the first vertical slice:** a soldier fighting in the destructible city, with a
 checkpoint save and a loopback client that agrees.
 
+**Done (2026-09-26).**
+- **`Soldier`** (`scripts/ai/soldier.gd`), a component under a Pawn's body like Pawn itself: a
+  rifle on a `GunController` aimed down the pawn's new **eye** node (turned to the intents' look
+  every tick), a LimboAI brain, and the services every task needs. **Sensing** at 5 Hz is a
+  PERCEPTION job on the scheduler: range, a 70° cone (or anyone within 4 m), a physics ray, then
+  AIWorld's **smoke**, which physics cannot see — into the side's **`FactionKnowledge`**
+  (`scripts/ai/faction_knowledge.gd`: contacts seen, heard, searched; shared inside a side, never
+  across). **Noise** — every round fired — is heard within 40 m by the other side, as a place, not a
+  who. **Thinking** at 10 Hz is a TREES job. **Aim and fire** run every tick and are never
+  deferred: **`AimModel`** (`scripts/ai/aim_model.gd`) puts the error where AI.md 5.1 says — a
+  0.35 s reaction, a cone from 7° tightening to 1.2° over 1.6 s of tracking — and a round goes only
+  if AIWorld says the line to the target is clear *this tick*, since sensing is 5 Hz. **Moving**
+  follows AINav paths requested through the queue, re-requested on `nav_changed` or when stuck.
+- **The tree** (`scripts/ai/soldier_tree.gd`, tasks in `scripts/ai/bt/`), built in code, thin
+  tasks writing `PawnIntents`: a dynamic selector of Evade (a falling piece's danger box) → Engage
+  (a contact seen or heard in the last 2.5 s: FindCover → PeekAndFire, else FireInOpen) → Search (a
+  contact up to 25 s old and not yet searched: go where it was, look round) → Idle. Seen again while
+  searching, it is fighting again the same tick.
+- **Cover is found, not baked** (the plan said tactical points baked per recipe). AIWorld already
+  answers what an arc stands for — whether *these* bricks hide a body from *that* eye, and for how
+  long — against the actual threat, in a city where a baked arc is wrong the moment the wall is
+  shot. **`AINav.find_cover`** (C++; the GDScript first version was 2.9 ms a search) rings the
+  soldier with candidates, rejects open ground with one DDA, and rates the rest: LOW cover hides a
+  crouched body (peek by standing), HIGH a standing one (peek by stepping to its side), scored by
+  cover seconds, distance, range and how close the body is to what covers it — a wall's shadow six
+  metres back is cover on paper only. 150–180 µs a search, 1.4 ms at worst in the shadow of a big
+  block on first reading its columns. Corners and openings wait for P6's stack-and-clear.
+- Gates: **`tools/soldier_probe.gd` 8** in an arena — first round at 1.1–2.0 s; **hidden behind
+  the wall on the side away from the player on every one of 151–216 hiding ticks**; five peeks,
+  firing only while peeking; the player gone behind a block, searched for to within 0.5–2.9 m of
+  the last sighting; back and firing, re-acquired in 0.5–1.3 s; blinded by smoke, no rounds into
+  it; **0 of 35–72 rounds with bricks in the line**; AI 0.02–0.14 ms a tick on average, **worst
+  1.45–1.6 ms** (judged headless; `-- --shot` runs it windowed and writes `soldier_cover.png` and
+  `soldier.png`). **City `-- --soldier` 3** — the vertical slice: a soldier in a street against the
+  player's pawn, firing, its misses wearing the buildings as CHIPs through the authority, never
+  through a wall, and the log replaying into the same city. `K` puts a soldier 20 m ahead of the
+  camera.
+- **Not yet:** a soldier's own state in a checkpoint and on a loopback client (its effect on the
+  city is in both — the CHIPs — but the pawn itself is P10's save-anywhere and replication);
+  grenades; interiors (towers are sealed, P3) and stack-and-clear (P6).
+
 ### P5 — The city fights back · L
 
 Event invalidation of tactical points; **wreck summaries**; cover life in decisions; nav links from

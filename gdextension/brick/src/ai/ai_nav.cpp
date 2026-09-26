@@ -43,6 +43,11 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("clear_cache"), &AINav::clear_cache);
     ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::snap);
     ClassDB::bind_method(D_METHOD("can_stand", "point"), &AINav::can_stand);
+    ClassDB::bind_method(D_METHOD("find_cover", "from", "threat_eye", "hp_per_hit",
+                                 "hits_per_second", "ideal_range"),
+            &AINav::find_cover);
+    ClassDB::bind_method(D_METHOD("rate_cover", "p", "threat_eye", "hp_per_hit", "hits_per_second"),
+            &AINav::rate_cover);
     ClassDB::bind_method(D_METHOD("get_stats"), &AINav::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AINav::reset_stats);
 
@@ -110,7 +115,8 @@ const AINav::Column &AINav::_column(int x, int z) {
         const float cz = (z + 0.5f) * STUD;
         const float top = ai->top_at(cx, cz);
         const int ymax = std::isfinite(top) ? std::max(0, (int)std::ceil(top / PLATE)) : 0;
-        std::vector<char> solid(ymax + 1, 0);
+        std::vector<char> &solid = column_scratch;
+        solid.assign(ymax + 1, 0);
         ai->column_solid(cx, cz, solid);
         for (int y = 0; y <= ymax; ++y) {
             const bool below = y == 0 || solid[y - 1];
@@ -170,13 +176,13 @@ Vector3 AINav::_node_point(const Node &n) const {
     return Vector3((n.x + 1) * STUD, n.y * PLATE, (n.z + 1) * STUD);
 }
 
-bool AINav::_snap_node(const Vector3 &p, Node &out) {
+bool AINav::_snap_node(const Vector3 &p, Node &out, int max_r) {
     const int ax = (int)std::lround(p.x / STUD) - 1;
     const int az = (int)std::lround(p.z / STUD) - 1;
     const int py = (int)std::floor(p.y / PLATE + 0.5f);
     float best_d = std::numeric_limits<float>::infinity();
     bool found = false;
-    for (int r = 0; r <= 4 && !found; ++r) {
+    for (int r = 0; r <= max_r && !found; ++r) {
         for (int dx = -r; dx <= r; ++dx) {
             for (int dz = -r; dz <= r; ++dz) {
                 if (std::max(std::abs(dx), std::abs(dz)) != r) {
@@ -503,6 +509,119 @@ void AINav::clear_cache() {
     columns.clear();
     node_memo.clear();
     revision++;
+}
+
+namespace {
+// Heights above the feet (Pawn): a crouched chest and eye, a standing eye.
+constexpr float CROUCH_CHEST = 0.78f;
+constexpr float CROUCH_EYE = 1.0f;
+constexpr float STAND_EYE = 1.42f;
+constexpr float RING_STEP = 1.5f;
+constexpr int RINGS = 9;
+constexpr int PER_RING = 16;
+constexpr float MIN_LIFE = 0.8f;
+} // namespace
+
+Dictionary AINav::rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second) {
+    Dictionary out;
+    if (ai.is_null()) {
+        return out;
+    }
+    AIWorld *w = ai.ptr();
+    const Vector3 up(0, 1, 0);
+    if (w->bricks_between(threat_eye, p + up * CROUCH_EYE) == 0
+            || w->bricks_between(threat_eye, p + up * CROUCH_CHEST) == 0) {
+        return out;
+    }
+    const float life = w->cover_seconds(threat_eye, p + up * CROUCH_CHEST, hp_per_hit, hits_per_second);
+    if (life < MIN_LIFE) {
+        return out;
+    }
+    // How far the body is from what covers it: the first brick on the line.
+    const Dictionary first = w->trace(threat_eye, p + up * CROUCH_EYE);
+    const Vector3 at = first["point"];
+    const float hug = Vector2(p.x - at.x, p.z - at.z).length();
+    out["cover"] = p;
+    out["life"] = life;
+    out["hug"] = hug;
+    if (w->bricks_between(threat_eye, p + up * STAND_EYE) == 0) {
+        out["kind"] = "low";
+        out["peek"] = p;
+        return out;
+    }
+    // High: a step or two to the side that sees round it.
+    // Same floor, a node the body fits at: tested directly, not snapped -- near
+    // a big structure a snap's ring search is thousands of node checks.
+    const int py = (int)std::lround(p.y / PLATE);
+    const float radii[3] = { 0.7f, 1.05f, 1.4f };
+    for (float rr : radii) {
+        for (int k = 0; k < 8; ++k) {
+            const float a = (float)Math_TAU * k / 8.0f;
+            const Vector3 want = p + Vector3(std::cos(a) * rr, 0.0f, std::sin(a) * rr);
+            const int ax = (int)std::lround(want.x / STUD) - 1;
+            const int az = (int)std::lround(want.z / STUD) - 1;
+            if (_node_head(ax, az, py) < 0) {
+                continue;
+            }
+            const Vector3 q = _node_point(Node{ ax, az, py });
+            if (w->bricks_between(threat_eye, q + up * STAND_EYE) == 0) {
+                out["kind"] = "high";
+                out["peek"] = q;
+                return out;
+            }
+        }
+    }
+    return Dictionary();
+}
+
+Dictionary AINav::find_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second, float ideal_range) {
+    Dictionary best;
+    if (ai.is_null()) {
+        return best;
+    }
+    AIWorld *w = ai.ptr();
+    const Vector3 up(0, 1, 0);
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (int ring = 0; ring < RINGS; ++ring) {
+        const float r = RING_STEP * (ring + 1);
+        for (int k = 0; k < PER_RING; ++k) {
+            const float a = (float)Math_TAU * ((float)k + 0.5f * (ring % 2)) / PER_RING;
+            const Vector3 want = from + Vector3(std::cos(a) * r, 0.0f, std::sin(a) * r);
+            // The cheap test first: most of the ring is open ground.
+            if (w->bricks_between(threat_eye, want + up * CROUCH_EYE) == 0) {
+                continue;
+            }
+            Node n;
+            if (!_snap_node(want + up * 0.3f, n, 0) && !_snap_node(want + up * 0.3f, n, 1)) {
+                continue;
+            }
+            const Vector3 p = _node_point(n);
+            if (p.distance_to(want) > 1.0f || std::fabs(p.y - from.y) > 1.0f) {
+                continue;
+            }
+            const Dictionary spot = rate_cover(p, threat_eye, hp_per_hit, hits_per_second);
+            if (spot.is_empty()) {
+                continue;
+            }
+            const float d = p.distance_to(threat_eye);
+            const float life = spot["life"];
+            const float hug = spot["hug"];
+            // Hugged, not stood six metres behind: a wall's shadow on open ground
+            // is cover on paper and a bad place to fight from.
+            float score = std::min(life, 10.0f) - from.distance_to(p) * 0.5f
+                    - std::fabs(d - ideal_range) * 0.1f - std::max(hug - 1.0f, 0.0f) * 1.5f;
+            if (w->danger_distance(p) < 2.0f) {
+                score -= 20.0f;
+            }
+            if (score > best_score) {
+                best_score = score;
+                best = spot;
+            }
+        }
+    }
+    return best;
 }
 
 Dictionary AINav::get_stats() const {

@@ -640,6 +640,11 @@ var _nav_worst_us := 0
 var _nav_mode := false
 ## Fights in progress: their buildings are held materialised (R3).
 var _encounters: Array[Encounter] = []
+## What every agent shares (AIServices): built from this city's own AI world,
+## nav and scheduler; an agent's missed rounds go through the authority.
+var ai_services: AIServices
+var soldiers: Array[Soldier] = []
+var _soldier_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -722,6 +727,7 @@ func _ready() -> void:
 	_mech_mode = "--mech" in args
 	_no_ai = "--no-ai" in args
 	_nav_mode = "--nav" in args
+	_soldier_mode = "--soldier" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -786,6 +792,11 @@ func _ready() -> void:
 	islands.piece_removed.connect(func(isl: BrickIsland, _reason: StringName) -> void:
 		if isl.is_valid():
 			ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5)))
+	ai_services = AIServices.new()
+	ai_services.ai_world = ai_world
+	ai_services.ai_nav = ai_nav
+	ai_services.sched = ai_sched
+	ai_services.rng.seed = 0x50DD1E4
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
 	ai_sched.set_thresholds(8.0, 4.0)
@@ -849,6 +860,8 @@ func _ready() -> void:
 		_run_mech_pass()
 	elif _nav_mode:
 		_run_nav_pass()
+	elif _soldier_mode:
+		_run_soldier_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -2588,6 +2601,8 @@ func _enter_pawn(feet: Vector3) -> void:
 	camera.set_process(false)
 	camera.allow_walk = false
 	_player.possess(_player_pawn, camera)
+	if not ai_services.pawns.has(_player_pawn):
+		ai_services.pawns.append(_player_pawn)
 	_arm_gun()
 	_player_pawn.gun = _gun
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
@@ -3073,6 +3088,65 @@ func _draw_path(p: PackedVector3Array, col: Color) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = im
 	add_child(mi)
+
+
+## A soldier at `feet`, with a rifle, on the other side (K ahead of the camera).
+func _spawn_soldier(feet: Vector3) -> Soldier:
+	if ai_services.world3d == null:
+		ai_services.world3d = get_world_3d()
+		ai_services.on_structure_hit = _gun.on_structure_hit
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var gun := GunInstance.from_result(GunGenerator.generate(_gun_library,
+			_combat_rng.randi(), WeaponClass.builtin(&"rifle"), 1))
+	var so := Soldier.spawn(ai_services, self, feet, 1, gun)
+	soldiers.append(so)
+	print("[city] soldier at %v" % feet)
+	return so
+
+
+## The vertical slice (AIPlan P4): a soldier in the city, against the player's
+## pawn in a street. It sees and fires; its misses wear the buildings through the
+## WorldAuthority like anybody's; it never fires through a wall; and the log --
+## its rounds in it -- still replays into the same city.
+func _run_soldier_pass() -> void:
+	print("[soldier] one soldier in the city")
+	var b := registry.get_building(0)
+	var fx: float = b.recipe.footprint_x * STUD
+	var street := ai_nav.snap(b.xform * Vector3(fx * 0.5, 0.0, -3.0))
+	camera.global_position = street + Vector3(0.0, 6.0, 0.0)
+	_enter_pawn(street)
+	_player.drive_uncaptured = true
+	_player_pawn.health.layer_configs[0].max_value = 100000.0
+	_player_pawn.health.reset()
+	camera.rotation = Vector3(0.0, 0.0, 0.0)   # the player looks down -Z, out of the street
+	await _frames(20)
+	var spot := ai_nav.snap(street + Vector3(0.0, 0.0, -18.0))
+	var so := _spawn_soldier(spot)
+	so.pawn.intents.look_yaw = PI   # toward the player
+	var n0 := authority.commands.size()
+	var hp0 := _player_pawn.health.total_current()
+	var t0 := Engine.get_physics_frames()
+	while Engine.get_physics_frames() - t0 < 30 * 16:
+		await get_tree().physics_frame
+	var chips := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chips += 1
+	_gate_ok("the soldier sees the player's pawn and fires", so.shots > 5
+			and _player_pawn.health.total_current() < hp0,
+			"%d round(s); %.0f hp taken; now %s" % [so.shots, hp0 - _player_pawn.health.total_current(), so.state])
+	_gate_ok("its misses wear the city through the authority", chips > 0, "%d CHIP(s)" % chips)
+	_gate_ok("it never fired through a wall", so.blocked_shots == 0,
+			"%d of %d" % [so.blocked_shots, so.shots])
+	_leave_pawn()
+	camera.global_position = spot + Vector3(-4.0, 3.0, -6.0)
+	camera.look_at(street + Vector3.UP, Vector3.UP)
+	await _frames(10)
+	await _save("city_soldier")
+	_check_log_replays()
+	print("[soldier] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
@@ -4171,6 +4245,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_gun.set_trigger(false)
 			if _gun.gun != null:
 				_gun.gun.visible = false
+		KEY_K:
+			var ahead := camera.global_position - camera.global_transform.basis.z * 20.0
+			_spawn_soldier(ai_nav.snap(Vector3(ahead.x, 0.0, ahead.z)))
 		KEY_M:
 			if _pilot.is_piloting():
 				_leave_mech()

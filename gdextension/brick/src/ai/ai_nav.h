@@ -80,6 +80,23 @@ public:
     Vector3 snap(const Vector3 &point);
     bool can_stand(const Vector3 &point);
 
+    // --- cover (Docs/AI.md 3.7, 6.1) -------------------------------------------
+    //
+    // Found on demand against the actual threat rather than baked: AIWorld says
+    // whether the bricks between the threat's eye and a spot hide a body there,
+    // and for how long. LOW cover hides a crouched body (peek by standing); HIGH
+    // hides a standing one (peek by stepping to its side). C++ because it loops:
+    // a ring search is a hundred-odd candidates (AI.md 10.3 rule 8).
+
+    /// The best cover near `from` against a threat whose eye is at `threat_eye`,
+    /// carrying `hp_per_hit` at `hits_per_second`: {cover, kind, peek, life, hug}
+    /// or {}.
+    Dictionary find_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second, float ideal_range);
+    /// Is `p` cover against that threat, and how good: as find_cover, or {}.
+    Dictionary rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second);
+
     Dictionary get_stats() const;
     void reset_stats();
 
@@ -116,6 +133,7 @@ private:
 
     Ref<AIWorld> ai;
     std::unordered_map<int64_t, Column> columns;
+    std::vector<char> column_scratch;
     // Node fit, memoised per ANCHOR column: (floor y, head) pairs. Keyed by
     // column so an invalidation forgets only the region it touched.
     std::unordered_map<int64_t, std::vector<std::pair<int16_t, int16_t>>> node_memo;
@@ -143,7 +161,7 @@ private:
     /// The head room of a node standing on floor `y` of column (x, z): the least
     /// over its 2x2, or -1 when it does not fit there at all.
     int _node_head(int x, int z, int y);
-    bool _snap_node(const Vector3 &p, Node &out);
+    bool _snap_node(const Vector3 &p, Node &out, int max_r = 4);
     Vector3 _node_point(const Node &n) const;
     /// Run a search until done or `until_usec` passes. Returns true when done.
     bool _advance(Search &s, uint64_t until_usec);
