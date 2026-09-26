@@ -481,6 +481,16 @@ public:
     /// chunk has to carry across being dematerialised or put to sleep, since a
     /// rebuild from a recipe or a record starts every brick at 255.
     PackedInt32Array get_worn_blocks(int chunk_id) const;
+
+    /// What ChunkRecord keeps of blocks [from, from + count) of a chunk, in id
+    /// order, for every block still standing in it (alive, not cut out into
+    /// another piece, not removed): "cells" (3 ints a block, its world tick
+    /// origin in cells), "archetypes", "colours", "decorative" (indices into
+    /// this slice), "joints" and "worn" ([index into this slice, value] pairs),
+    /// "count", and "lo"/"hi", the slice's box in the chunk's metres. One call
+    /// where the record asked five a block from script: ~4 us a block, and a
+    /// piece of 2,000 put to sleep was 8 ms of one tick.
+    Dictionary capture_blocks(int chunk_id, int from, int count) const;
     /// Put hp back from get_worn_blocks' list. Ids that are gone are skipped.
     void set_worn_blocks(int chunk_id, const PackedInt32Array &worn);
 

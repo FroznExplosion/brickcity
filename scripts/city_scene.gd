@@ -4655,8 +4655,12 @@ func _report_profile() -> void:
 				float(tw.mesh), int(tw.islands)])
 		print("[prof]   of which fracture: landings %.1f + merged rebuilds %.1f" % [
 			float(tw.get("landings", 0.0)), float(tw.get("reshapes", 0.0))])
-	print("[prof]   of which the loop: pieces %.1f + dormancy %.1f + debris cap %.1f" % [
-				float(tw.get("pieces", 0.0)), float(tw.get("dormancy", 0.0)), float(tw.get("cap", 0.0))])
+	print("[prof]   of which the loop: pieces %.1f + dormancy %.1f (wake %.1f, sleep %.1f) + debris cap %.1f" % [
+				float(tw.get("pieces", 0.0)), float(tw.get("dormancy", 0.0)),
+				float(tw.get("wake", 0.0)), float(tw.get("sleep", 0.0)), float(tw.get("cap", 0.0))])
+	print("[prof]   worst single wake %.1f ms (%d bricks), worst single sleep %.1f ms (%d bricks)" % [
+				float(islands.wake_worst[0]), int(islands.wake_worst[1]),
+				float(islands.sleep_worst[0]), int(islands.sleep_worst[1])])
 	var sp: Dictionary = islands.spawn_prof
 	var _bi: Dictionary = islands.report()
 	print("[prof] overlaps alive at once, worst: %d" % _bi.overlap_peak)

@@ -4432,6 +4432,63 @@ Array BrickWorld::get_block_ticks(int chunk_id, int block_id) const {
     return out;
 }
 
+Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
+    Dictionary out;
+    PackedInt32Array cells, archs, decorative, joints, worn;
+    PackedByteArray colours;
+    Vector3 lo(INFINITY, INFINITY, INFINITY), hi(-INFINITY, -INFINITY, -INFINITY);
+    int n = 0;
+    if (valid_chunk(chunk_id)) {
+        const Chunk &c = chunks[chunk_id];
+        const int total = (int)c.blocks.size();
+        const int start = std::max(from, 0);
+        const int end = std::min(total, start + std::max(count, 0));
+        const real_t metres = get_cell_size().x / (real_t)TICKS_STUD;
+        for (int id = start; id < end; ++id) {
+            const Block &b = c.blocks[(size_t)id];
+            if (b.removed || b.detached || !b.alive) {
+                continue;
+            }
+            Vector3i llo, lhi, wlo, whi;
+            local_ticks(b.cell - c.origin, archetypes[b.archetype].size, llo, lhi);
+            world_ticks(c.frame_rotation, c.frame_ticks, llo, lhi, wlo, whi);
+            cells.push_back(wlo.x / TICKS_STUD);
+            cells.push_back(wlo.y / TICKS_PLATE);
+            cells.push_back(wlo.z / TICKS_STUD);
+            if (b.decorative) {
+                decorative.push_back(n);
+            }
+            const int cut = (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
+                    | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0);
+            if (cut != 0) {
+                joints.push_back(n);
+                joints.push_back(cut);
+            }
+            if (b.hp < 255) {
+                worn.push_back(n);
+                worn.push_back((int32_t)b.hp);
+            }
+            archs.push_back(b.archetype);
+            colours.push_back(b.colour);
+            const Vector3 a = Vector3(wlo) * metres;
+            const Vector3 z = Vector3(whi) * metres;
+            lo = Vector3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+            hi = Vector3(std::max(hi.x, z.x), std::max(hi.y, z.y), std::max(hi.z, z.z));
+            ++n;
+        }
+    }
+    out["cells"] = cells;
+    out["archetypes"] = archs;
+    out["colours"] = colours;
+    out["decorative"] = decorative;
+    out["joints"] = joints;
+    out["worn"] = worn;
+    out["count"] = n;
+    out["lo"] = lo;
+    out["hi"] = hi;
+    return out;
+}
+
 PackedInt32Array BrickWorld::get_frame_overlaps(int chunk_id, int block_id,
         int other_chunk) const {
     PackedInt32Array out;
@@ -4780,6 +4837,8 @@ void BrickWorld::_bind_methods() {
             "section"), &BrickWorld::add_chunk_shapes, DEFVAL(false), DEFVAL(-1));
     ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids"),
             &BrickWorld::get_block_sections);
+    ClassDB::bind_method(D_METHOD("capture_blocks", "chunk_id", "from", "count"),
+            &BrickWorld::capture_blocks);
     ClassDB::bind_method(D_METHOD("set_chunk_gravity", "chunk_id", "down"), &BrickWorld::set_chunk_gravity);
     ClassDB::bind_method(D_METHOD("get_chunk_gravity", "chunk_id"), &BrickWorld::get_chunk_gravity);
 

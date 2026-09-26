@@ -439,10 +439,12 @@ var small_floor := 24
 ## captures a record, so it is budgeted like every other per-tick cost here.
 const EVICTIONS_PER_TICK := 3
 ## A piece bigger than this is captured for sleep a slice at a time, and at most
-## this many blocks of captures run in one tick. Capture is ~4 us a block: the
-## debris cap put a 14,000-brick wreck to sleep in one call, 57 ms of one tick.
-const SLEEP_SYNC_BLOCKS := 2000
-const CAPTURE_BLOCKS_PER_TICK := 3000
+## this many blocks of captures run in one tick. Capture was ~4 us a block from
+## script -- the debris cap put a 14,000-brick wreck to sleep in one call, 57 ms
+## of one tick, and a 2,000-brick piece slept in one go was still 8 ms. It is
+## one call into the world now (BrickWorld.capture_blocks), 0.1-0.2 us a block.
+const SLEEP_SYNC_BLOCKS := 6000
+const CAPTURE_BLOCKS_PER_TICK := 12000
 var cap_deleted := 0
 var cap_slept := 0
 var cap_worst_over := 0
@@ -507,6 +509,12 @@ var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
+## This tick's dormancy, split: waking pieces, and putting them to sleep. And
+## the single worst of each over the session, with how many bricks it was.
+var _dorm_wake_ms := 0.0
+var _dorm_sleep_ms := 0.0
+var wake_worst := [0.0, 0]
+var sleep_worst := [0.0, 0]
 var _work_done := 0
 var _sync_meshes := 0
 var dropped := 0     ## islands that have given their mesh back
@@ -2382,6 +2390,8 @@ func tick() -> void:
 	census.blocks_peak = maxi(census.blocks_peak, moving_blocks)
 	_moving_now = moving
 	var _tp := Time.get_ticks_usec()
+	_dorm_wake_ms = 0.0
+	_dorm_sleep_ms = 0.0
 	_stream_dormancy()
 	var _td := Time.get_ticks_usec()
 	# After dormancy, not before: what distance already put away does not
@@ -2422,6 +2432,8 @@ func tick() -> void:
 				"loop": float(_tl - _t_loop) / 1000.0,
 				"pieces": float(_tp - _t_loop) / 1000.0,
 				"dormancy": float(_td - _tp) / 1000.0,
+				"wake": _dorm_wake_ms,
+				"sleep": _dorm_sleep_ms,
 				"cap": float(_tl - _td) / 1000.0,
 				"resolve": float(_tr - _tl) / 1000.0,
 				"fracture": float(_tf - _tr) / 1000.0,
@@ -2659,18 +2671,27 @@ func _stream_dormancy() -> void:
 	# hundred to sleep. At WAKE_SCAN_PER_TICK the whole list is looked at every
 	# few ticks, which is far faster than anyone walks into WAKE_RANGE.
 	var woke := 0
+	var _tw := Time.get_ticks_usec()
 	for k in mini(dormant.size(), WAKE_SCAN_PER_TICK):
 		if woke >= WAKES_PER_TICK:
 			break
 		if _wake_cursor >= dormant.size():
 			_wake_cursor = 0
 		var d: Dormant = dormant[_wake_cursor]
-		if _distance_to_interest(d.record.box, points) <= WAKE_RANGE \
-				and _wake_record(d) != null:
+		if _distance_to_interest(d.record.box, points) > WAKE_RANGE:
+			_wake_cursor += 1
+			continue
+		var _t1 := Time.get_ticks_usec()
+		if _wake_record(d) != null:
 			dormant.remove_at(_wake_cursor)   # the next one shifts into its place
 			woke += 1
+			var cost := float(Time.get_ticks_usec() - _t1) / 1000.0
+			if cost > float(wake_worst[0]):
+				wake_worst = [cost, d.record.block_count()]
 		else:
 			_wake_cursor += 1
+	var _ts := Time.get_ticks_usec()
+	_dorm_wake_ms = float(_ts - _tw) / 1000.0
 
 	var now := Time.get_ticks_msec()
 	var put_away := 0
@@ -2691,12 +2712,18 @@ func _stream_dormancy() -> void:
 			nearest = minf(nearest, isl.body.global_position.distance_to(p))
 		if nearest - isl.radius < SLEEP_RANGE:
 			continue
+		var _t1 := Time.get_ticks_usec()
+		var blocks := world.get_block_count(isl.chunk)
 		match _sleep_or_begin(isl, at, false):
 			SLEPT:
 				put_away += 1
 				_sleep_cursor = at   # the list shifted under the cursor
+				var cost := float(Time.get_ticks_usec() - _t1) / 1000.0
+				if cost > float(sleep_worst[0]):
+					sleep_worst = [cost, blocks]
 			STARTED:
 				put_away += 1
+	_dorm_sleep_ms = float(Time.get_ticks_usec() - _ts) / 1000.0
 
 
 ## Photograph a piece and give everything else back.
