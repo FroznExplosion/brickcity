@@ -98,6 +98,21 @@ public:
     /// with none.
     float danger_distance(const Vector3 &point) const;
 
+    // --- points, for navigation ----------------------------------------------
+
+    /// Is anything solid at this world point: a live brick of any chunk
+    /// (furniture included -- bodies stand on it and walk round it), or inside
+    /// a proxy.
+    bool solid_at(const Vector3 &point);
+    /// The highest top of anything that could be solid over this XZ, or -INF
+    /// with nothing there. Navigation scans a column no higher than this.
+    float top_at(float x, float z);
+    /// A whole column at once: out[y] = 1 where plate y (0..out.size()-1) of the
+    /// column through (x, z) is solid. One pass per chunk down its own Y axis --
+    /// navigation reads columns two hundred plates tall, and asking solid_at for
+    /// each plate was a hash lookup a plate.
+    void column_solid(float x, float z, std::vector<char> &out);
+
     // --- measuring ----------------------------------------------------------
 
     Dictionary get_stats() const;

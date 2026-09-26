@@ -630,6 +630,16 @@ var _ai_run_ms := 0.0
 var _ai_phase_level := {}
 ## `-- --no-ai`: the city without the AI's tick, to measure what it costs.
 var _no_ai := false
+## Where a figure can walk, read from the bricks (AIPlan P3). Paths are
+## requested and served from the scheduler's NAV share; columns are forgotten
+## where the structure changes, by the same commands that change it.
+var ai_nav := AINav.new()
+## AI.md 10.1: paths and nav, half a millisecond a frame.
+const NAV_BUDGET_US := 500
+var _nav_worst_us := 0
+var _nav_mode := false
+## Fights in progress: their buildings are held materialised (R3).
+var _encounters: Array[Encounter] = []
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -711,6 +721,7 @@ func _ready() -> void:
 	_play_mode = "--play" in args
 	_mech_mode = "--mech" in args
 	_no_ai = "--no-ai" in args
+	_nav_mode = "--nav" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -766,6 +777,15 @@ func _ready() -> void:
 
 	_setup_gun()
 	ai_world.set_world(world)
+	ai_nav.set_ai_world(ai_world)
+	# NavChange (R17): the commands that change structure are the ones that say
+	# where navigation is stale.
+	authority.committed.connect(_nav_on_command)
+	islands.piece_settled.connect(func(isl: BrickIsland) -> void:
+		ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5)))
+	islands.piece_removed.connect(func(isl: BrickIsland, _reason: StringName) -> void:
+		if isl.is_valid():
+			ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5)))
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
 	ai_sched.set_thresholds(8.0, 4.0)
@@ -827,6 +847,8 @@ func _ready() -> void:
 		_run_play_pass()
 	elif _mech_mode:
 		_run_mech_pass()
+	elif _nav_mode:
+		_run_nav_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _shot_mode:
@@ -1556,6 +1578,7 @@ func _make_shell(id: int, coarse: bool = false) -> void:
 		for k in boxes.size():
 			ai_world.set_proxy(_proxy_id(id, k), b.xform * Transform3D(Basis(), boxes[k].pos),
 					boxes[k].size, 1.0 / STUD)
+		_nav_touch(id)
 	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, b.xform)
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 	if PhysicsServer3D.body_get_shape_count(body) > 0:
@@ -1636,6 +1659,7 @@ func _promote(id: int, solve: bool = true, merged: bool = false) -> int:
 func _dress(id: int, chunk: int, solve: bool, merged: bool = false) -> void:
 	# Bricks now: the AI asks them, not the shell.
 	_drop_proxies(id)
+	_nav_touch(id)
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -2772,6 +2796,48 @@ func _drop_proxies(id: int) -> void:
 		ai_world.remove_proxy(_proxy_id(id, k))
 
 
+## Navigation is stale where a command changed structure: a hit's ball, a
+## building's whole box for a solve, a topple or a cut-out.
+func _nav_on_command(e: DamageLog.Entry) -> void:
+	if e.is_piece():
+		return  # pieces are re-read when they settle or go
+	match e.kind:
+		DamageLog.Kind.BLAST, DamageLog.Kind.CHIP, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
+			var r := Vector3.ONE * (e.radius + 1.0)
+			ai_nav.invalidate_box(AABB(e.point - r, r * 2.0))
+		_:
+			_nav_touch(e.target)
+
+
+## A building changed what it is to the AI -- shell to bricks, bricks to shell.
+func _nav_touch(id: int) -> void:
+	var b := registry.get_building(id)
+	if b != null:
+		ai_nav.invalidate_box(_world_box(b).grow(1.0))
+
+
+func _nav_service() -> void:
+	var t0 := Time.get_ticks_usec()
+	ai_nav.service(int(NAV_BUDGET_US * ai_sched.rate_scale(AIScheduler.NAV)))
+	_nav_worst_us = maxi(_nav_worst_us, Time.get_ticks_usec() - t0)
+
+
+## Start a fight here: the buildings in `zone` are materialised over the next
+## ticks and held that way (R3). Returns the encounter.
+func start_encounter(zone: AABB) -> Encounter:
+	var enc := Encounter.new()
+	enc.setup(registry, zone, func(id: int) -> AABB: return _world_box(registry.get_building(id)))
+	_encounters.append(enc)
+	return enc
+
+
+func _pinned(id: int) -> bool:
+	for enc in _encounters:
+		if enc.holds(id):
+			return true
+	return false
+
+
 ## Once a physics tick, after everything else the city did: bring the AI's view
 ## up to date, tell the arbiter what destruction just cost, and serve the AI's
 ## queue inside what is left.
@@ -2785,6 +2851,10 @@ func _ai_tick(destruction_ms: float) -> void:
 	for isl in islands.islands:
 		if isl.is_valid() and not isl.settled and not isl.disposable:
 			ai_world.set_danger(isl.chunk, islands.world_aabb(isl).grow(1.0))
+	for enc in _encounters:
+		enc.step(func(id: int) -> void: _promote(id, false))
+	if ai_nav.pending() > 0:
+		ai_sched.submit(AIScheduler.NAV, 5.0, _nav_service)
 	var t1 := Time.get_ticks_usec()
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
@@ -2812,12 +2882,197 @@ func _update_ai_label() -> void:
 			int(w.queries), float(w.mean_usec)],
 		"queue     %d waiting, %d ran last tick, %.2f ms over" % [
 			int(s.queued), int(s.ran), float(s.overrun_ms)],
+		"nav       %d columns  %d pending  %d paths  %d failed  %.1f ms searching  worst tick %d us" % [
+			int(ai_nav.get_stats().columns_cached), int(ai_nav.get_stats().pending),
+			int(ai_nav.get_stats().paths), int(ai_nav.get_stats().failed),
+			float(ai_nav.get_stats().search_ms), _nav_worst_us],
 	]
 	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
 		var d: Dictionary = s[sub]
 		lines.append("  %-11s %5.2f ms  %3d ran  %3d deferred" % [sub, float(d.ms),
 				int(d.ran), int(d.deferred)])
 	_ai_label.text = "\n".join(lines)
+
+
+## The gate for navigation (Docs/AIPlan.md P3): an encounter brings a tower and
+## its neighbours in; a path from the street into a room two storeys up, found
+## through the queue; a wall blown out on the far side makes a new way out that
+## is taken within a few ticks of the blast; paths round pristine buildings
+## materialise nothing; fifty requesters are served inside the budget.
+func _run_nav_pass() -> void:
+	print("[nav] paths through a city that falls down")
+	var b := registry.get_building(0)
+	for c in registry.buildings:
+		if c.recipe.courses >= 24 and not c.is_build():
+			b = c
+			break
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5, 30.0, -25.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 4.0, fz * 0.5), Vector3.UP)
+	await _frames(4)
+
+	# The encounter: the tower and whatever else its zone touches.
+	var zone := _world_box(b).grow(6.0)
+	var enc := start_encounter(zone)
+	var guard := 0
+	while not enc.is_ready() and guard < 300:
+		await _frames(1)
+		guard += 1
+	await _frames(30)
+	var all_in := true
+	for id in enc.buildings:
+		if not registry.get_building(id).is_materialised():
+			all_in = false
+	_gate_ok("an encounter brings its buildings in", all_in and enc.buildings.size() >= 1,
+			"%d building(s) in %d tick(s)" % [enc.buildings.size(), guard])
+
+	# From the street in front of the tower to a room two storeys up.
+	var street := b.xform * Vector3(fx * 0.5, 0.0, -4.0)
+	var storey_y := (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * PLATE
+	var room := ai_nav.snap(b.xform * Vector3(fx * 0.3, storey_y + 0.05, fz * 0.3))
+	_gate_ok("there is floor to stand on two storeys up", absf(room.y - storey_y) < 0.3,
+			"snapped to %.2f m, the floor is at %.2f" % [room.y, storey_y])
+	# A tower is sealed at street level: no door, and its sills are four plates
+	# up -- over a course, which nobody steps and nobody jumps. The way in is
+	# made, not found (AI.md 3.8, "make a door").
+	var sealed := ai_nav.find_path(street, room, 20000)
+	_gate_ok("a sealed tower has no way in from the street", sealed.is_empty())
+	var breach := b.xform * Vector3(fx * 0.5, 1.0, 0.2)
+	var id_in := await _path_after_blast(breach, street, room)
+	var path_in := ai_nav.get_path(id_in)
+	var inside := false
+	var top := 0.0
+	var box := _world_box(b)
+	for p in path_in:
+		if box.grow(-0.4).has_point(p + Vector3.UP * 0.5) and p.y < 1.0:
+			inside = true
+		top = maxf(top, p.y)
+	_gate_ok("breached, a path from the street through the hole and up to the room",
+			ai_nav.get_status(id_in) == AINav.DONE and path_in[-1].distance_to(room) < 0.8
+			and inside and top >= room.y - 0.2 and _passes(path_in, breach),
+			"%d corners, %.0f m, %d tick(s) from the blast" % [path_in.size(),
+			_path_len(path_in), _last_wait])
+	_draw_path(path_in, Color(1.0, 0.9, 0.2))
+
+	# Out the far side: back down and out through the breach, the long way...
+	var far := b.xform * Vector3(fx * 0.5, 0.0, fz + 4.0)
+	var before := ai_nav.find_path(room, far)
+	# ...until the far wall is blown open too.
+	var hole := b.xform * Vector3(fx * 0.5, 1.0, fz - 0.2)
+	var id_out := await _path_after_blast(hole, room, far)
+	var after := ai_nav.get_path(id_out)
+	_gate_ok("a wall shot out on the far side is the new way out",
+			not after.is_empty() and _passes(after, hole)
+			and (before.is_empty() or _path_len(after) < _path_len(before) - 2.0),
+			"%.0f m, was %s; %d tick(s) from the blast to the new path" % [
+			_path_len(after), ("%.0f m" % _path_len(before)) if not before.is_empty() else "none",
+			_last_wait])
+	_draw_path(after, Color(0.3, 1.0, 0.4))
+
+	# Paths round pristine buildings, far from the encounter: they ask the
+	# shells, and nothing is materialised to answer them.
+	var mat0: int = registry.report().materialised
+	var promos := _promotions
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var found := 0
+	for i in 20:
+		var a := Vector3(rng.randf_range(-120.0, 120.0), 0.0, rng.randf_range(-120.0, 120.0))
+		var z := Vector3(rng.randf_range(-120.0, 120.0), 0.0, rng.randf_range(-120.0, 120.0))
+		if not ai_nav.find_path(a, z, 30000).is_empty():
+			found += 1
+	_gate_ok("paths across the city materialise nothing",
+			registry.report().materialised == mat0 and _promotions == promos and found >= 15,
+			"%d of 20 found, %d materialised before and after" % [found, mat0])
+
+	# Fifty requesters at once, served from the scheduler's share.
+	_nav_worst_us = 0
+	ai_nav.reset_stats()
+	var ids := []
+	for i in 50:
+		var a := street + Vector3(rng.randf_range(-40.0, 40.0), 0.0, rng.randf_range(-40.0, 0.0))
+		var z := street + Vector3(rng.randf_range(-40.0, 40.0), 0.0, rng.randf_range(-40.0, 0.0))
+		ids.append(ai_nav.request_path(a, z, rng.randf() * 10.0))
+	var frames := 0
+	while ai_nav.pending() > 0 and frames < 600:
+		await get_tree().physics_frame
+		frames += 1
+	var answered := 0
+	for id in ids:
+		if ai_nav.get_status(id) != AINav.PENDING:
+			answered += 1
+	print("[nav]   %s" % ai_nav.get_stats())
+	_gate_ok("fifty requesters answered inside the nav budget",
+			answered == 50 and _nav_worst_us < NAV_BUDGET_US + 400,
+			"%d answered in %d tick(s); worst tick %d us against %d" % [answered, frames,
+			_nav_worst_us, NAV_BUDGET_US])
+	_ai_label.visible = true
+	_update_ai_label()
+	camera.position = b.xform * Vector3(fx * 0.5 + 18.0, 20.0, fz + 14.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 3.0, fz * 0.5), Vector3.UP)
+	await _frames(20)
+	await _save("city_nav")
+	print("[nav] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+var _last_wait := 0
+
+
+## Blow a hole at `at`, and once the blast has been committed (and the columns
+## it touched forgotten), queue a path. Returns the request once it is answered.
+func _path_after_blast(at: Vector3, from: Vector3, to: Vector3) -> int:
+	var n0 := authority.commands.size()
+	_blast(at, 1.3)
+	var id := -1
+	_last_wait = 0
+	while _last_wait < 600:
+		await get_tree().physics_frame
+		_last_wait += 1
+		if id < 0 and _damage_queue.is_empty() and authority.commands.size() > n0:
+			id = ai_nav.request_path(from, to, 5.0)
+		if id >= 0 and ai_nav.get_status(id) != AINav.PENDING:
+			break
+	return id
+
+
+func _passes(p: PackedVector3Array, point: Vector3) -> bool:
+	for i in range(1, p.size()):
+		var a: Vector3 = p[i - 1]
+		var b: Vector3 = p[i]
+		var ab := Vector2(b.x - a.x, b.z - a.z)
+		var t := 0.0
+		if ab.length_squared() > 0.0:
+			t = clampf(Vector2(point.x - a.x, point.z - a.z).dot(ab) / ab.length_squared(), 0.0, 1.0)
+		var q := a.lerp(b, t)
+		if Vector2(q.x - point.x, q.z - point.z).length() < 1.6 and q.y < 1.5:
+			return true
+	return false
+
+
+func _path_len(p: PackedVector3Array) -> float:
+	var total := 0.0
+	for i in range(1, p.size()):
+		total += p[i - 1].distance_to(p[i])
+	return total
+
+
+func _draw_path(p: PackedVector3Array, col: Color) -> void:
+	if p.size() < 2:
+		return
+	var im := ImmediateMesh.new()
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = col
+	mat.no_depth_test = true
+	im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, mat)
+	for q in p:
+		im.surface_add_vertex(q + Vector3.UP * 0.3)
+	im.surface_end()
+	var mi := MeshInstance3D.new()
+	mi.mesh = im
+	add_child(mi)
 
 
 ## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
@@ -3382,6 +3637,7 @@ func _physics_process(_delta: float) -> void:
 
 func _free_shell(id: int) -> void:
 	_drop_proxies(id)
+	_nav_touch(id)
 	_shell_coarse.erase(id)
 	if _shells.has(id):
 		(_shells[id] as MeshInstance3D).queue_free()
@@ -3599,6 +3855,8 @@ func _trim_quiet() -> void:
 			continue
 		if _toppling.has(id):
 			continue  # still coming apart
+		if _pinned(id):
+			continue  # an encounter is being fought in it
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue

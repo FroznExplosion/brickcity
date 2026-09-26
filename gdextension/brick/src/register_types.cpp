@@ -1,6 +1,7 @@
 #include "register_types.h"
 #include "brick_world.h"
 #include "brick_terrain.h"
+#include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
 #include "creature/mesh_forge.h"
@@ -30,6 +31,7 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     // The AI's view of the city and its one budget (src/ai/, AIPlan P2).
     ClassDB::register_class<AIWorld>();
     ClassDB::register_class<AIScheduler>();
+    ClassDB::register_class<AINav>();
 }
 
 void uninitialize_brick_module(ModuleInitializationLevel p_level) {

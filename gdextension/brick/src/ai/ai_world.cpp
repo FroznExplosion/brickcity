@@ -60,6 +60,8 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("clear_danger"), &AIWorld::clear_danger);
     ClassDB::bind_method(D_METHOD("in_danger", "point"), &AIWorld::in_danger);
     ClassDB::bind_method(D_METHOD("danger_distance", "point"), &AIWorld::danger_distance);
+    ClassDB::bind_method(D_METHOD("solid_at", "point"), &AIWorld::solid_at);
+    ClassDB::bind_method(D_METHOD("top_at", "x", "z"), &AIWorld::top_at);
     ClassDB::bind_method(D_METHOD("get_stats"), &AIWorld::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AIWorld::reset_stats);
 }
@@ -467,6 +469,165 @@ float AIWorld::danger_distance(const Vector3 &point) const {
         best = std::min(best, q.distance_to(point));
     }
     return best;
+}
+
+bool AIWorld::solid_at(const Vector3 &p) {
+    if (proxies_dirty) {
+        _rebuild_proxies();
+    }
+    const int64_t k = key((int)std::floor(p.x / HASH_CELL), (int)std::floor(p.z / HASH_CELL));
+    auto it = hash.find(k);
+    if (it != hash.end() && world.is_valid()) {
+        const Vector3 cs = brick::cell_size();
+        for (int index : it->second) {
+            const ChunkEntry &e = chunk_entries[index];
+            if (!e.box.has_point(p)) {
+                continue;
+            }
+            const Vector3 l = e.inv.xform(p);
+            const Vector3i cell((int)std::floor(l.x / cs.x), (int)std::floor(l.y / cs.y),
+                    (int)std::floor(l.z / cs.z));
+            const brick::Chunk &c = world->chunks[e.chunk];
+            if (!c.in_bounds(cell)) {
+                continue;
+            }
+            const int32_t bid = c.occupancy[c.index_of(cell)];
+            if (bid >= 0 && c.blocks[bid].alive) {
+                return true;
+            }
+        }
+    }
+    auto pit = proxy_hash.find(k);
+    if (pit != proxy_hash.end()) {
+        for (int index : pit->second) {
+            const Proxy &pr = proxy_list[index];
+            if (!pr.box.has_point(p)) {
+                continue;
+            }
+            const Vector3 l = pr.inv.xform(p);
+            if (std::fabs(l.x) <= pr.half.x && std::fabs(l.y) <= pr.half.y
+                    && std::fabs(l.z) <= pr.half.z) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void AIWorld::column_solid(float x, float z, std::vector<char> &out) {
+    std::fill(out.begin(), out.end(), 0);
+    if (out.empty()) {
+        return;
+    }
+    if (proxies_dirty) {
+        _rebuild_proxies();
+    }
+    const int n = (int)out.size();
+    const float plate = brick::PLATE_M;
+    const int64_t k = key((int)std::floor(x / HASH_CELL), (int)std::floor(z / HASH_CELL));
+    auto it = hash.find(k);
+    if (it != hash.end() && world.is_valid()) {
+        const Vector3 cs = brick::cell_size();
+        for (int index : it->second) {
+            const ChunkEntry &e = chunk_entries[index];
+            const AABB &b = e.box;
+            if (x < b.position.x || x > b.position.x + b.size.x || z < b.position.z
+                    || z > b.position.z + b.size.z) {
+                continue;
+            }
+            const brick::Chunk &c = world->chunks[e.chunk];
+            const int y0 = std::max(0, (int)std::floor(b.position.y / plate));
+            const int y1 = std::min(n - 1, (int)std::ceil((b.position.y + b.size.y) / plate));
+            const Basis &basis = e.inv.basis;
+            const bool upright = basis.get_column(1).is_equal_approx(Vector3(0, 1, 0))
+                    && std::fabs(basis.get_column(0).y) < 1e-5f && std::fabs(basis.get_column(2).y) < 1e-5f;
+            if (upright) {
+                // Y in the world is Y in the chunk: fix the cell's x and z once
+                // and walk its occupancy straight up.
+                const Vector3 l0 = e.inv.xform(Vector3(x, 0.0f, z));
+                const int lx = (int)std::floor(l0.x / cs.x);
+                const int lz = (int)std::floor(l0.z / cs.z);
+                if (lx < 0 || lz < 0 || lx >= c.dims.x || lz >= c.dims.z) {
+                    continue;
+                }
+                for (int y = y0; y <= y1; ++y) {
+                    const int ly = (int)std::floor((l0.y + (y + 0.5f) * plate) / cs.y);
+                    if (ly < 0 || ly >= c.dims.y) {
+                        continue;
+                    }
+                    const int32_t bid = c.occupancy[c.index_of(Vector3i(lx, ly, lz))];
+                    if (bid >= 0 && c.blocks[bid].alive) {
+                        out[y] = 1;
+                    }
+                }
+            } else {
+                for (int y = y0; y <= y1; ++y) {
+                    if (out[y]) {
+                        continue;
+                    }
+                    const Vector3 l = e.inv.xform(Vector3(x, (y + 0.5f) * plate, z));
+                    const Vector3i cell((int)std::floor(l.x / cs.x), (int)std::floor(l.y / cs.y),
+                            (int)std::floor(l.z / cs.z));
+                    if (!c.in_bounds(cell)) {
+                        continue;
+                    }
+                    const int32_t bid = c.occupancy[c.index_of(cell)];
+                    if (bid >= 0 && c.blocks[bid].alive) {
+                        out[y] = 1;
+                    }
+                }
+            }
+        }
+    }
+    auto pit = proxy_hash.find(k);
+    if (pit != proxy_hash.end()) {
+        for (int index : pit->second) {
+            const Proxy &pr = proxy_list[index];
+            const AABB &b = pr.box;
+            if (x < b.position.x || x > b.position.x + b.size.x || z < b.position.z
+                    || z > b.position.z + b.size.z) {
+                continue;
+            }
+            const int y0 = std::max(0, (int)std::floor(b.position.y / plate));
+            const int y1 = std::min(n - 1, (int)std::ceil((b.position.y + b.size.y) / plate));
+            for (int y = y0; y <= y1; ++y) {
+                const Vector3 l = pr.inv.xform(Vector3(x, (y + 0.5f) * plate, z));
+                if (std::fabs(l.x) <= pr.half.x && std::fabs(l.y) <= pr.half.y
+                        && std::fabs(l.z) <= pr.half.z) {
+                    out[y] = 1;
+                }
+            }
+        }
+    }
+}
+
+float AIWorld::top_at(float x, float z) {
+    if (proxies_dirty) {
+        _rebuild_proxies();
+    }
+    float top = -std::numeric_limits<float>::infinity();
+    const int64_t k = key((int)std::floor(x / HASH_CELL), (int)std::floor(z / HASH_CELL));
+    auto it = hash.find(k);
+    if (it != hash.end()) {
+        for (int index : it->second) {
+            const AABB &b = chunk_entries[index].box;
+            if (x >= b.position.x && x <= b.position.x + b.size.x && z >= b.position.z
+                    && z <= b.position.z + b.size.z) {
+                top = std::max(top, b.position.y + b.size.y);
+            }
+        }
+    }
+    auto pit = proxy_hash.find(k);
+    if (pit != proxy_hash.end()) {
+        for (int index : pit->second) {
+            const AABB &b = proxy_list[index].box;
+            if (x >= b.position.x && x <= b.position.x + b.size.x && z >= b.position.z
+                    && z <= b.position.z + b.size.z) {
+                top = std::max(top, b.position.y + b.size.y);
+            }
+        }
+    }
+    return top;
 }
 
 Dictionary AIWorld::get_stats() const {

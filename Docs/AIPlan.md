@@ -386,6 +386,48 @@ flood; arbiter steps AI down during a `--stress` collapse and back up after.
 wall shot out makes a new route within the rebake budget; **zero materialisations from queries**;
 path queue holds its budget with 50 requesters.
 
+**Done (2026-09-26), grid-native rather than a navmesh.** The table above planned Recast tiles and
+per-recipe storey regions. What was built reads navigation **straight from the bricks**, for the
+same reason AIWorld lives in the brick extension (R1):
+- **`AINav`** (`src/ai/ai_nav.*`). A *column* is one stud square; a *floor* in it is a plate a body
+  stands on — solid below, air above — read in one pass per chunk down its own Y axis
+  (`AIWorld.column_solid`), over every chunk at any rotation and every proxy. A node is the
+  **2×2 studs** a 0.525 m figure needs, allowed to overhang lower ground (how a drop starts) or the
+  foot of a step it is about to climb. Eight neighbours; up one course (`STEP_UP` 3 plates, the
+  Pawn's own step), down three (`MAX_DROP` 9); stand in 12 plates of air, crouch in 9 at double
+  cost. A* with the octile heuristic (exact on this grid), resumable, served from a queue
+  best-first inside a budget.
+- **Destruction needs no rebake.** A hole a body fits through is walkable the moment its columns
+  are re-read. The city forgets columns (and memoised node fits, per column) under every
+  committed hit's ball, a building's box for a solve, topple or cut-out, the box of a piece that
+  settles or goes, and a building that turns shell ⇄ bricks — and `nav_changed(box)` goes out for
+  path followers (**NavChange, R17**).
+- **Queries never materialise** (AI.md 3.2): a pristine building is its shell's proxy boxes — a wall
+  — so a path round it costs nothing. **`Encounter`** (`scripts/ai/encounter.gd`, **R3**) is the one
+  sanctioned way to bricks: its zone's buildings are promoted two a tick and pinned against the trim.
+- **Budget:** the city queues `AINav.service` as a NAV job on the scheduler at 0.5 ms a tick (AI.md
+  10.1), scaled by the arbiter's ladder. The caches are reserved up front: a rehash of a 60k-entry
+  map was a 6.6 ms search step, now 281 µs at worst.
+- Gates: **`tools/nav_probe.gd` 21** — open ground straight; a one-stud door lets nobody in, three
+  do; nobody under 8 plates, crouching under 10, standing under 13; up one course, not two without
+  a step, two with one; off three courses, not four; a room entered round by its door, then
+  through a hole shot in its back wall 79 µs after the change was announced; a proxy walked round;
+  50 requesters answered in 27 frames, 0.5 ms a frame, the important first. **City `-- --nav` 7** —
+  an encounter brings its buildings in; there is floor two storeys up; **a tower is sealed at
+  street level**; breached, the path runs from the street through the hole and up the stairs to the
+  room; a wall blown out on the far side is the new way out; 20 paths across the city materialise
+  nothing; 50 requesters inside the budget.
+- **Found: towers have no street doors,** and their ground-floor sills are four plates up — more
+  than a course, which nobody steps and nobody jumps. The way into a tower is made (AI.md 3.8,
+  *make a door*), for the AI and for the player alike. A level wanting enterable buildings needs
+  a recipe with doors.
+- **Not built, and why:** per-recipe storey regions and stair/door links (the grid has them already);
+  the room graph and the abstract route graph — a path across the city is about 1 ms of A* here,
+  so the hierarchy waits for a measurement that needs it (P5/P6, many agents, long routes); flyer
+  and mech maps belong to P7. Not yet handled: walking ON settled wreckage at an angle (it is an
+  obstacle and, where flat enough, a floor, but untested), and releasing finished requests is the
+  caller's job (`release(id)`).
+
 ### P4 — One soldier · M
 
 `Pawn` + `Intents` + BT brain; perception (budgeted rays + smoke), faction knowledge; one infantry
