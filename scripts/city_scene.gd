@@ -783,6 +783,9 @@ func _ready() -> void:
 	islands.name = "Islands"
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
+	# This scene starts the pieces' mesh jobs itself, after everything else in
+	# its tick (IslandManager._submit_mesh_job).
+	islands.defer_job_start = true
 	islands.on_impact = _on_island_impact
 	director = CollapseDirector.new(world)
 	# A client's shot arrives as a request; the host takes it exactly as it takes
@@ -867,7 +870,8 @@ func _exit_tree() -> void:
 	# A band still uploading on a worker at shutdown was a crash on quit, as a
 	# piece's was (IslandManager._exit_tree).
 	for job in _band_jobs:
-		WorkerThreadPool.wait_for_task_completion(int(job[2]))
+		if int(job[2]) >= 0:
+			WorkerThreadPool.wait_for_task_completion(int(job[2]))
 	_band_jobs.clear()
 	for bodies in _frame_bodies.values():
 		for rid in (bodies as Array):
@@ -2245,14 +2249,23 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 
 ## Upload a band's arrays on a worker (BAND_THREAD_VERTS). Attached by
 ## _harvest_band_jobs when it is done.
+## Started at the end of the tick, as a piece's are (IslandManager.
+## _submit_mesh_job says why).
 func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 	var holder := [null]
-	var task := WorkerThreadPool.add_task(func() -> void:
+	var work := func() -> void:
 		var m := ArrayMesh.new()
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
 				IslandManager.UPLOAD_COMPRESS)
-		holder[0] = m, false, "building band mesh")
-	_band_jobs.append([id, at, task, holder, arrays, int(_band_pass.get(id, 0))])
+		holder[0] = m
+	_band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
+			int(_band_pass.get(id, 0)), work])
+
+
+func _start_band_jobs() -> void:
+	for job in _band_jobs:
+		if int(job[2]) == IslandManager.JOB_NOT_STARTED:
+			job[2] = WorkerThreadPool.add_task(job[6] as Callable, false, "building band mesh")
 
 
 ## Whether a building's bands are still on their way: being built, or built
@@ -2278,10 +2291,14 @@ func _harvest_band_jobs(wait_for: int = -1) -> void:
 		var task: int = job[2]
 		# Waiting for one building: only its jobs, the rest are next tick's.
 		if (wait_for >= 0 and id != wait_for) \
-				or (wait_for < 0 and not WorkerThreadPool.is_task_completed(task)):
+				or (wait_for < 0 and (task < 0 or not WorkerThreadPool.is_task_completed(task))):
 			k += 1
 			continue
-		WorkerThreadPool.wait_for_task_completion(task)
+		if task < 0:
+			# Waited for before it was started: done here and now.
+			(job[6] as Callable).call()
+		else:
+			WorkerThreadPool.wait_for_task_completion(task)
 		_band_jobs.remove_at(k)
 		var mesh: ArrayMesh = job[3][0]
 		# A pass since superseded, or a building since gone: not attached.
@@ -3384,6 +3401,11 @@ func _physics_process(_delta: float) -> void:
 			var piece := islands.record_detach(b.id, null, b.chunk, before,
 					DamageLog.FLAG_CHUNK if kind == &"chunk" else 0)
 			var came := islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			if came == null:
+				# Deleted where it stood -- debris, furniture, a far chunk over the
+				# moving cap: whatever settled on it has nothing under it now.
+				islands.support_gone(world.get_chunk_transform(b.chunk)
+						* world.get_blocks_box(b.chunk, before))
 			if kind == &"chunk" and came != null:
 				# One piece until it lands: mended, as every client mends it.
 				world.heal_joints(came.chunk)
@@ -3520,6 +3542,11 @@ func _physics_process(_delta: float) -> void:
 	if Engine.get_physics_frames() % 10 == 0:
 		_update_hud()
 	_mark("hud", t)
+	# Last: the tick's mesh uploads go to the workers now, so they finish
+	# during the frame rather than halfway through this tick (see
+	# IslandManager._submit_mesh_job).
+	islands.start_mesh_jobs()
+	_start_band_jobs()
 
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
@@ -4369,6 +4396,8 @@ func _run_shot_pass() -> void:
 			director.breakage_out, director.furniture_out, director.collapsing.size()])
 	print("[city]   sleep: %d piece(s) put to sleep (%d by the cap), %d woken (%d of the cap's), %d asleep now" % [
 			islands.slept, islands.cap_slept, islands.woken, islands.cap_woken, islands.dormant.size()])
+	print("[city]   support: %d settled piece(s) woken because what held them went, %d because something landed on them; %d nudged down instead of settling with nothing under them; %d jolt(s) not taken for landings" % [
+			islands.ripple_woken, islands.touch_woken, islands.unsupported_nudges, islands.jolts_ignored])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [

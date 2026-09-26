@@ -97,6 +97,18 @@ var upload_waiting := false
 ## Its mesh was dropped on purpose for distance (IslandManager's LOD ladder),
 ## not lost: not counted as a piece gone invisible.
 var lod_dropped := false
+## Where it was when it was woken or cut out, and whether it has started to
+## move since. Once it moves, what was resting on it there is woken
+## (IslandManager.support_gone) -- not before: something woken that stays put
+## was holding up what it held up, and still is.
+var ripple_box := AABB()
+var ripple_pending := false
+## Times it was about to settle with nothing under it and was nudged instead
+## (IslandManager.SUPPORT_TRIES).
+var unsupported_tries := 0
+## Ticks in a row it has been going faster than IMPACT_MIN_SPEED, up to the
+## last one: what makes a speed drop a landing rather than a jolt.
+var fall_ticks := 0
 var mesh_again := false
 var mesh_again_full := false
 var fade_since := 0

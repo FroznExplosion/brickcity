@@ -1411,6 +1411,42 @@ trade-off that pops at the range); and the renderer's share of uploads is only b
 the project's rendering thread model ("Separate") would move it off the main thread entirely, a
 project setting to try deliberately.
 
+### Floating wreckage: a piece frozen on something that went
+
+A piece that has stayed slow long enough is frozen -- static scenery, woken only by damage near it.
+So a piece that settled resting on something that later went stayed where it was, in mid-air: on a
+part of a building a mega collapse was still holding and then let go, on a piece that woke and slid
+off, on one the debris cap deleted, on a group deleted where it stood. And a piece that broke off
+but was held by friction against the bricks it came away from (its faces lie exactly against them)
+went to sleep there, in the side of a building. What fell next landed on the floater and stuck,
+jittering, every jolt taken for a landing that broke it up and sheared the building under it.
+
+* **Support gone** (`IslandManager.support_gone`): where something that may have held pieces up
+  goes -- a piece removed (not one put to sleep for distance: what rests on it sleeps too, and both
+  come back together), a group deleted where it stood, and any piece that starts to move after being
+  woken or cut out, a toppled building and a released chunk included -- every settled piece resting
+  on or wedged against that spot is woken, and settles again if still held. A stack wakes a layer at
+  a time, as each one actually starts to fall. A dormant record whose support went wakes free to
+  fall.
+* **Nothing under it, no settling** (`_supported_below`): nine rays down from a piece's underside
+  before it freezes; nothing within `SUPPORT_REACH` and it is nudged down instead, up to
+  `SUPPORT_TRIES` times (a beam wedged across a gap is held, and settles).
+* **Landed on** (`_wake_touched`): a falling piece that lands on, or comes to rest on, a frozen piece
+  with nothing under it wakes that piece, which falls under the load. Not one that is held up -- that
+  woke whole piles at every landing, a third more pieces moving.
+* **A landing needs a fall** (`IMPACT_FALL_TICKS`): a speed drop counts only after three ticks over
+  `IMPACT_MIN_SPEED`, so a piece jittering in place no longer breaks itself and what it is stuck on.
+* A piece whose mesh was dropped for distance had a zero box, so the blast that took its floor never
+  found it: its grid's box now.
+
+Mesh jobs start at the end of the tick, not mid-tick: one that finished halfway through a tick had
+its buffers made by whatever next called the renderer in it (the loose bricks' MultiMesh at 24 ms).
+Now that cost is the "render" flush at the top of the tick, or the frame's.
+
+`tools/float_probe.gd`, 20 checks. `--big --shot`: 114 nudges instead of mid-air settles, 24 pieces
+woken for lost support and 5 for being landed on; more pieces in motion (mean 36, from ~26) because
+they fall now; worst script tick 32 ms, of which 12 the upload flush.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung

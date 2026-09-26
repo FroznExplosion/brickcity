@@ -493,6 +493,11 @@ public:
     /// 90,000 vertices of spiral step. O(blocks), no bake needed.
     int get_chunk_authored_tris(int chunk_id) const;
 
+    /// The box these blocks fill, in the chunk's own metres (what
+    /// get_chunk_transform maps to the world), alive or not -- a group just cut
+    /// out of the chunk still has a box. Empty for no blocks.
+    AABB get_blocks_box(int chunk_id, const PackedInt32Array &block_ids) const;
+
     /// What ChunkRecord keeps of blocks [from, from + count) of a chunk, in id
     /// order, for every block still standing in it (alive, not cut out into
     /// another piece, not removed): "cells" (3 ints a block, its world tick

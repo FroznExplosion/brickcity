@@ -3475,6 +3475,36 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
     return killed;
 }
 
+AABB BrickWorld::get_blocks_box(int chunk_id, const PackedInt32Array &block_ids) const {
+    if (!valid_chunk(chunk_id)) {
+        return AABB();
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    bool any = false;
+    Vector3 lo, hi;
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        if (bid < 0 || bid >= (int32_t)c.blocks.size() || c.blocks[(size_t)bid].removed) {
+            continue;
+        }
+        const Block &b = c.blocks[(size_t)bid];
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i sz = archetypes[b.archetype].size;
+        const Vector3 a(base.x * cs.x, base.y * cs.y, base.z * cs.z);
+        const Vector3 z((base.x + sz.x) * cs.x, (base.y + sz.y) * cs.y, (base.z + sz.z) * cs.z);
+        if (!any) {
+            lo = a;
+            hi = z;
+            any = true;
+        } else {
+            lo = Vector3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+            hi = Vector3(std::max(hi.x, z.x), std::max(hi.y, z.y), std::max(hi.z, z.z));
+        }
+    }
+    return any ? AABB(lo, hi - lo) : AABB();
+}
+
 int BrickWorld::get_chunk_authored_tris(int chunk_id) const {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -4986,6 +5016,8 @@ void BrickWorld::_bind_methods() {
             DEFVAL(false));
     ClassDB::bind_method(D_METHOD("get_chunk_authored_tris", "chunk_id"),
             &BrickWorld::get_chunk_authored_tris);
+    ClassDB::bind_method(D_METHOD("get_blocks_box", "chunk_id", "block_ids"),
+            &BrickWorld::get_blocks_box);
     ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids"),
             &BrickWorld::solve_structures);
     ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids", "skip_decorative"),
