@@ -895,3 +895,1510 @@ Why it survived so long, and the lesson:
 the stored normal, so a backwards quad can never be silent again. **When geometry is missing,
 check winding before reasoning about which faces ought to be culled** — an occlusion argument
 cannot explain a face that is in the buffer.
+
+### 17.11 Where real geometry goes, and where it does not
+
+A 13 mm chamfer subtends `17.8 / distance` pixels: 8.9 px at 2 m, 2.2 px at 8 m, 1.0 px at 18 m.
+So real bevel geometry only earns anything inside about three metres, and inside that only on
+edges that are actually SILHOUETTES — against sky or a distant surface. On a flat floor almost
+every edge is interior, and there the shaded bevel is not an approximation, it is the correct
+answer: the eye reads the lighting.
+
+That splits cleanly, and the split is the rule:
+
+| | cost | verdict |
+|---|---|---|
+| **Shared, instanced, few** — debris brick, stud, scatter | paid ONCE for the whole field | **real geometry.** `PieceMeshes.chamfered_box` is 44 tris; the stud's rim bevel took it 22 → 38 |
+| **Baked, many** — the chunk mesh | 685k → 4.8M on one tower, and a vertex-buffer rebuild on a distance test, which is M2c's 175 ms trap driven by camera movement instead of damage | **shaded.** `brick.gdshader`, and now `terrain.gdshader`, which was missing the chamfer entirely |
+
+`_tri_n` decides winding at runtime from the outward normal rather than by hand. That is a direct
+response to the mask mesher's inverted faces: hand-derived sign parity is exactly how that
+happened, and it was invisible for four rounds.
+
+**And the thing the captures settled.** `shots/geometry_only.png` turns every painted effect off
+(F7 in the test scene). What is left is a flat tan slab with studs standing on it. There is no
+geometry under the brick outlines at all — two touching coplanar faces are meshed as two touching
+coplanar quads. **The seam is not decorating a division that exists; it IS the division**, which
+is why "switch the grid off and rely on the real geometry" has nothing to fall back on, and why
+the chamfer is hard to see against it: they are the same edge at two fidelities, crevice and lit
+facet.
+
+#### 9. `NORMAL` is in VIEW space, and a world-space vector written into it does nothing
+
+The chamfer was visible on studs and invisible on bricks, and the reason is one line.
+
+Studs are real geometry, so their bevel is triangles and is always right. The brick bevel is
+shaded — and the first terrain version built its tilt as a world-space, Y-up vector
+(`vec3(on.x * dir.x, 1.0, on.y * dir.y)`) and assigned it straight into `NORMAL`. `NORMAL` in a
+Godot fragment shader is in **view** space, so that bends the normal in an arbitrary direction
+relative to the camera. It is not subtle-but-present; it is noise, and on a vertical face the
+Y-up assumption is meaningless as well.
+
+`brick.gdshader` had this right all along: it derives a tangent frame from screen-space
+derivatives of `VERTEX` against `UV`, which lands in the same space as `NORMAL` and works
+whatever direction the face points or however the chunk is tumbling. `terrain.gdshader` now uses
+the same frame, and so does its stud dome, which had the identical bug — and so does the water
+shader's dome, which had it too.
+
+**Rule: any normal perturbation must be built in the frame `NORMAL` lives in.** If you catch
+yourself writing a literal `1.0` in the Y slot of a normal, that is the bug.
+
+#### 10. A ramp is a wedge, but the voxel under it is a full column
+
+Three reported symptoms, one cause: angled pieces culled wrongly, faces beside them missing, and
+a flat square standing behind every slope.
+
+The ramp draws a tilted quad. The mask mesher only knows about CELLS, and the cells under that
+quad are a full, solid brick — so it drew the flat wall the wedge was supposed to replace, a
+rectangle standing exactly where the slope is. That rectangle is the square; the z-fighting where
+it overlaps the tilted quad is the faces that looked missing.
+
+`ramp_faces()` used to handle this and was deleted when the mask mesher replaced the
+height-comparison skirts. Nothing replaced what it did.
+
+The fix is smaller than the symptom: **skip every lateral mask face inside the wedge's brick.**
+That is safe rather than approximate, because a ramp is *defined* as having exactly one lower
+neighbour — its other three sides face solid rock and were interior already — so the one side
+that was open is the one the tilted quad covers. A tile went 3,686 to 3,652 triangles, which is
+the duplicate walls leaving.
+
+`shots/terrain_ramp.png` finds the nearest ramp in the field and photographs it from its low
+side, which is the angle all three symptoms showed from.
+
+#### 11. A running editor keeps the shader it compiled at load
+
+Worth knowing when a shader fix looks like it did nothing: Godot compiles a material's shader when
+it first loads it, and an already-running instance does not pick up an edit to the `.gdshader` on
+disk. Two rounds were spent looking at a stale compiled chamfer. Restart before concluding a
+shader change failed — and the measured gate (`--shot` prints the terrain chamfer's changed-pixel
+percentage) is a better answer than looking, for the same reason the winding gate is.
+
+### 17.12 Chamfer: two brick assets, streamed near — the right shape
+
+Chamfering FACES was the wrong decomposition and the captures show why. Two coplanar pieces each
+inset their top, and the V-groove between them has **no bottom**, because the terrain mesh is a
+skin and there is no brick body under it. At convex corners the opposite fault: only one of the
+two faces can own the 45-degree facet without z-fighting, so the other side leaves a notch.
+
+Measured anyway, for the record: 70,426 to **202,862 triangles** over 25 tiles, 22 to 27 ms a
+frame. Left behind the `G` toggle, default off, labelled broken.
+
+**A chamfered BRICK does not have either fault, because it is a closed solid.**
+`PieceMeshes.chamfered_box` is already watertight; a groove between two of them has a bottom
+because each one has a body. So the unit to chamfer is the piece, not the face — which is what
+"real assets with the chamfer, real assets without, stream the chamfered ones nearby" says.
+
+How it lands on each surface, and neither needs the vertex-buffer rebuild M2c forbids:
+
+| | mechanism | cost |
+|---|---|---|
+| **Terrain tiles** | build BOTH meshes when the tile loads — flat faces, and chamfered piece solids — and swap with `visibility_range`. No runtime rebuild at all, the same pattern the stud and scatter tiers already use | ~2x tile build time, ~3x tile VRAM; only near tiles draw the heavy one |
+| **City chunks** | exclude the near blocks' face ranges from the baked index buffer and draw those blocks from a per-size chamfered `MultiMesh`. **M2c already implements exactly this**: faces are baked once and damage flips index slots, so excluding a face is O(1) and never re-uploads vertices | index flips on a camera crossing, plus a small instance buffer |
+
+Within 8 m that is ~330 pieces; at 44 triangles a chamfered solid, ~14k triangles. The reason
+this is cheap where the face version was not is that only the SURFACE pieces near the camera
+become solids, and everything else stays exactly as it is.
+
+The open question before building it is how much of the near surface becomes solids: the packed
+top pieces alone, or the exposed mask cells (terrace and cave walls) as well. Tops alone is far
+cheaper and covers the case the eye actually reads — a floor seen at a grazing angle.
+
+### 17.13 Built: a near chamfer tier at ~10 bricks
+
+All faces — floor, walls, roof, cave ceilings — get real 45-degree chamfer geometry inside
+**12 m**, and flat faces beyond it. `G` toggles the tier; `F7` strips the painted effects so the
+geometry can be judged on its own.
+
+**What fixed the open groove.** The earlier face chamfer skipped a strip on two of every four
+edges, under a rule that assumed the other half of each edge belonged to a PERPENDICULAR face.
+Most edges on this surface are shared with a COPLANAR neighbour instead, where there is no second
+face at all — so the V between two pieces had nothing under it. With all four strips emitted, two
+coplanar neighbours meet at the shared rim one bevel down and the groove has a bottom. A convex
+corner still leaves a 13 mm notch where the strip stops short of the perpendicular face; small
+enough to read as part of the bevel, and it goes away when walls are packed into pieces (V2).
+
+**The tile is the granularity, not a sphere.** A true per-metre radius would rebuild tile meshes
+as you walk — ~11 ms a tile, which is the trap M2c exists to avoid. Instead BOTH meshes are built
+when the tile loads and Godot's `visibility_range` swaps them, so walking costs nothing. This is
+the same pattern the stud and scatter tiers already use.
+
+Measured, 25 tiles, 56 m field:
+
+| | |
+|---|---|
+| Held | 70,426 flat + **352,130 chamfered** |
+| Drawn | only tiles inside 12 m carry the chamfered mesh — about 3.6 of 25, so ~50k of that 352k |
+| Tile build | 297 ms to 436 ms for the field, because each tile is meshed twice |
+| Frame | 22 ms to 26 ms |
+
+The build cost is the honest weak point: each tile samples and packs twice to produce two meshes.
+Emitting both from one pass is the obvious fix and was not done.
+
+### 17.14 Generated chamfer or prebuilt chamfered assets?
+
+Both, and the line between them is not "which is better" — it is **what kind of surface it is**.
+
+| | use | why |
+|---|---|---|
+| **Generated in the mesher** — two mesh variants a tile, swapped by range | terrain, and any procedural surface | the packer emits 1x1 through 2x6 in both orientations, merged wall quads of ARBITRARY size, ramps and overlay courses. No asset library covers a merged quad whose size was decided at runtime. And the chamfered mesh *replaces* the flat one, so there is no face-exclusion or z-fighting problem to solve |
+| **Prebuilt chamfered asset, instanced** | debris bricks, studs, scatter | discrete, repeated, a handful of sizes. `PieceMeshes.chamfered_box` caches per size and 44 triangles are paid once for the whole debris field |
+
+Trying to use assets for terrain lands back in the same place anyway: to stop the flat faces
+showing through the inset asset you must exclude them, and for a tile that means a second mesh
+variant — which is what the generated route already is, minus the asset pipeline.
+
+The one thing assets would give that generation currently does not is a clean convex corner; the
+generated strips stop a bevel short of the perpendicular face and leave a 13 mm notch. Emitting
+corner triangles in the mesher fixes that and is far less work than an asset set.
+
+#### The winding gate did not cover the geometry added after it
+
+Every chamfer facet was wound backwards — visible from behind the surface, invisible from in
+front. `_check_winding` existed and passed, because it only ever ran `build_tile` with the bevel
+at its default of zero, so not one of the 128,770 chamfer triangles was ever looked at.
+
+It now runs both variants: **154,524 triangles checked, up from 25,754.**
+
+**A gate that does not cover the geometry added after it is not a gate.** This is the fourth
+hand-derived winding error in this system and the second time the gate for it was present and
+inapplicable. When new geometry is added, widen the gate in the same change.
+
+#### The convex corner, filled — and no, it did not need assets
+
+The pinwheel of light and dark wedges at every terrace corner was not the chamfer overshooting.
+Three faces meet at a convex corner, each one's strip stops a bevel short of the other two, and
+the triangular hole between them shows **the backs of the surrounding facets** — which is why it
+reads as alternating wedges rather than as a solid overhang.
+
+The hole is the triangle joining the three faces' pulled-back rim points. All three faces can
+compute it, because the other two normals are simply this face's two edge-outward directions, so
+exactly one must own it — and since the three normals lie on three different axes, "lowest axis
+index wins" picks one and only one.
+
+About twenty lines, against an asset pipeline plus the face-exclusion problem that comes with it.
+352,130 to 391,354 chamfered triangles held, so the corners are ~11%.
+
+`tri_facing()` **corrects** the winding to match the given normal rather than trusting a
+hand-derived vertex order. The corner fan has eight sign cases, and hand-deriving those is
+precisely how the previous three winding bugs happened. `shots/terrain_corner.png` finds the
+nearest convex corner in the field and photographs it close, which is the only view the artefact
+appears in.
+
+#### "The chamfers extend too far" — they were slopes, not chamfers
+
+The wide angled bands at every terrace step are the **ramp layer**, not the bevel. The decisive
+test is one frame: `shots/terrain_corner_off.png` is the same camera with the chamfer OFF, and
+every wide angled surface is still there.
+
+A ramp is a 1x1 slope dropping one brick (0.42 m) over one stud (0.35 m) — a 50-degree face a
+third of a metre across. Up close that is twenty times the width of a 13 mm chamfer and reads as
+one, which is why four rounds of screenshots kept pointing at the bevel.
+
+Measured, one tile, at a 13 mm setting: **16,696 chamfer facets, every one 0.0225 m**, no spread
+at all. The expected figure is `cut * sqrt(3)`, not `sqrt(2)` — the strip runs from a corner
+inset along BOTH in-plane edge axes to a rim pushed back along the normal, so all three axes
+contribute. The first version of this check asserted sqrt(2) and would have failed correct
+geometry.
+
+It also reported a "0.324 m chamfer", which was **76 ramp tops**: a slope's tilted face has a
+diagonal normal too, and the check classified facets by normal alone. A measurement that cannot
+tell a slope from a bevel is not a measurement of the bevel.
+
+So the remaining question is not a bug, it is a design choice: **do terraces get slope pieces at
+all?** They exist to make a 0.42 m step walkable (section 6.1, section 4), spec section 2 wants
+slope bricks, and a 1x1 slope is a real part. Dropping them gives sharp brick terraces and puts
+the walkability on the character's step-up height instead.
+
+### 17.15 Slopes off, tiles up
+
+`RAMPS_ENABLED = false`. A 1x1 slope is a 50-degree face a third of a metre across and at close
+range it made the ground read as melted rather than built; walkability moves to the character's
+step-up height, which already exists. The cells that were ramps do not vanish — they are terrace
+edges, so they are not flat plates, so the packer lays them as TILES.
+
+`TILE_CHANCE = 0.22` puts some flat pieces down smooth as well, because ground that is
+wall-to-wall studs reads as one material.
+
+| | before | after |
+|---|---|---|
+| Surface by area | brick 78%, tile 15%, ramp 7% | **brick 62%, tile 38%** |
+| Pieces / tris | 8,204 / 70,426 | 6,799 / 67,026 |
+| Studs | 15,310 | 12,377 |
+
+A tile takes no studs and nothing clips to it, so this is a BUILD rule as much as a look: you
+cannot build on a tiled patch (section 7.6). `ramp_dir` now returns -1 when slopes are off, or
+the query would report a ramp where the mesher lays a tile.
+
+### 17.16 The chamfer's corner cases are combinatorial — and solids are not
+
+The olive slots along every terrace lip were **not** the corner notch diagnosed earlier. They
+were a continuous open slot the length of every convex edge: a top face's half-facet stops one
+bevel below the rim, the wall's stops one bevel inside it, and the strip between them was drawn
+by neither.
+
+Fixed with a per-edge `convex` mask — one bit an edge, set when a perpendicular face meets this
+one, cleared when the neighbour is coplanar. The two cases need different geometry and no single
+formula serves both:
+
+- **coplanar**: each face emits HALF, down to the shared rim one bevel back. The halves meet and
+  the groove has a floor.
+- **convex**: the facet runs from our inset edge to theirs, and exactly one of the two draws all
+  of it.
+
+Facets went 16,696 to 13,002 and the slots closed. **A small sliver still shows where one edge of
+a corner is convex and the other coplanar** — the two meet at different depths and leave a
+triangle. That is the third distinct corner case, after convex/convex and coplanar/coplanar.
+
+That is the finding worth recording. Chamfering FACES has a combinatorial tail: every pair of
+edge kinds, times ownership, is its own geometry. Four rounds have each fixed one case and
+exposed the next.
+
+**A closed chamfered SOLID per piece has none of them**, because a solid's corners are modelled
+rather than negotiated between faces that cannot see each other. The reason to reject it was
+cost, and that reason no longer holds:
+
+| | triangles |
+|---|---|
+| Face chamfer, whole field | 306,828 |
+| Closed solids, 6,799 pieces x 44 | **~299,000** |
+
+Same cost, no corner cases. The recommendation is now to switch the near tier to solids — which
+is what was proposed several rounds ago and talked out of on a cost argument that was wrong.
+
+### 17.17 Built: the near tier is closed chamfered solids
+
+`piece_solid()` lays each surface piece as a **closed chamfered brick** rather than a chamfered
+top face. The implementation is smaller than the thing it replaces: every edge of a box is
+convex, so it is the six faces emitted through `quad()` with `convex` set on all four edges, and
+the ownership rule hands each of the twelve edges and eight corners to exactly one face. No new
+geometry code. The bottom face is skipped — a piece sits in the ground.
+
+The mask must then skip **every** face of the piece's brick, not only the top: a flush wall a
+bevel outside the chamfered one hides it.
+
+Why this ends the problem rather than fixing one more case: **a solid's corners are modelled.** A
+face chamfer has to negotiate each corner between two faces that cannot see each other, and that
+negotiation has a case per pair of edge kinds times ownership. Four rounds each fixed one and
+exposed the next — convex/convex, then coplanar/coplanar, then the long convex slot, then
+convex/coplanar. Two adjacent solids touch at the full cell boundary, so their chamfers form a V
+whose bottom is the boundary itself: closed by construction, not by agreement.
+
+| | triangles held |
+|---|---|
+| Flat | 67,026 |
+| Face chamfer | 306,828 |
+| **Closed solids** | **447,077** |
+
+The estimate for solids was ~299k and the truth is 447k, because a solid emits five faces with
+every edge convex where the face version emitted one face with most edges coplanar. It is 46%
+more than the face chamfer, not the wash predicted. Only tiles inside 12 m draw it — about 3.6
+of 25, so roughly 64k drawn — and the frame is 27.4 ms against 25.3 ms flat.
+
+Both cost estimates in this argument were wrong in opposite directions, which is the reminder
+worth keeping: the triangle count of a decomposition is not guessable from the shape of it.
+
+#### The convex facet was degenerate, not reversed
+
+Convex edges came out MISSING, and the cause was a wrong idea about where the facet ends rather
+than a winding error.
+
+The facet always runs from a face's inset edge to **the rim pushed back along that face's own
+normal**, because that point IS the neighbouring face's inset edge — true whether the neighbour
+is coplanar or perpendicular. Pushing it along `out` instead put the far edge exactly on top of
+the near one: a zero-area quad, so the edge simply was not there.
+
+So convexity changes **nothing** about the geometry. Its only job is ownership: two coplanar
+faces each draw their half and meet at the bottom of the V, while two perpendicular faces would
+each draw the whole facet, so one stands down. That is a much smaller rule than the one it
+replaced.
+
+The corner fan was wrong the same way — `rim - n*cut` and friends make a triangle twice the size
+that does not line up with the facets bounding the hole. The three vertices are where each PAIR
+of the corner's facets meet: `rim - (o1+o2)*cut`, `rim - (n+o2)*cut`, `rim - (n+o1)*cut`.
+
+Winding-checked triangles went 135,821 to 184,513 — the corner fans had been degenerate and were
+being skipped by the gate's zero-area test, so they passed by not existing.
+
+### 17.18 Authored assets, or generated solids?
+
+We DO lay bricks as closed chamfered solids now. What we do not do is author them as mesh files,
+and the reason is that the sizes are not known until runtime:
+
+- the packer emits 1x1 through 2x6 in both orientations, chosen per cell by hash
+- wall and cave faces are greedy-merged quads of arbitrary size
+- a tile's mix changes the moment anything is carved
+
+An authored set would need a file per size and still could not cover a merged quad. `piece_solid`
+generates the same geometry from the size it is handed, and costs one function.
+
+Authored assets remain right where the part is **discrete and repeated**: the debris brick, the
+stud, scatter. Those are `PieceMeshes`, cached per size, and the bevel is paid once for the whole
+field. That is the same rule as section 17.11, now with the terrain case decided:
+
+| | |
+|---|---|
+| Procedural, size known at runtime | generate the solid |
+| Discrete, repeated, few sizes | author or build one mesh and instance it |
+
+### 17.19 The gaps and the messy corners: two causes, and neither wanted a bigger face
+
+**The gaps were the solid's BOTTOM chamfer.** A brick bevelled on its bottom edges is correct —
+on a real model it sits on another brick and that groove is the join. Ours sits on terrain that
+is not meshed, so the bevel opened a 13 mm slot round every piece with unlit nothing behind it.
+The bottom edges are square now; the bottom face was already skipped, and its edges are too.
+
+**The messy corners were coincident faces.** Two neighbouring bricks each drew the face they
+share, back to back in the same plane, and the pair z-fought into a checkerboard of light and
+dark triangles along every shared edge. A side abutting a neighbour at the same height is not
+drawn at all now — the neighbour's body is already there.
+
+Extending the faces to close the gaps, which was the instinct, is the wrong fix: it means
+deliberately overlapping geometry, and deliberate overlap is what produced the checkerboard.
+
+The two interact, and that is the part worth keeping. If a side face is not drawn but the top
+still marks that edge CONVEX, the side owns a facet it is no longer drawing and the edge
+vanishes — the exact bug of the round before. So both now read the same drop-away test: level
+neighbour means coplanar, and the two tops each emit half a facet and meet in the groove. One
+test, two consumers, no way for them to drift.
+
+| | |
+|---|---|
+| Chamfered triangles held | 447,077 to **296,135** |
+| Facet triangles | 15,760 to 12,104 |
+| Frame | 26.9 ms |
+
+`shots/brick_join.png` looks along flat ground where several pieces meet, which is the view the
+gaps were reported from and which no existing capture covered — the wide shots average the
+artefact away and the corner shot looks at a terrace instead.
+
+### 17.20 Check the binary before asking anyone to look
+
+Three rounds of this work were spent looking at stale artefacts: twice a DLL whose link had
+failed with "Access is denied", once a shader the running editor had already compiled. Each time
+the reasoning went to the geometry instead of to what was actually loaded.
+
+A link that fails leaves the previous DLL in place and Godot loads it happily. **Before saying a
+fix is testable, confirm the built file is newer than the source it came from.** It is one `ls`
+and it would have saved three test cycles.
+
+### 17.21 Approach C: a brick on a backing, and why the facet approach was abandoned
+
+Six rounds of chamfered-FACE geometry each found a real bug — inverted winding, degenerate
+facets, an open slot the length of every convex edge, coincident faces between neighbours, a
+missing third edge state — and the artefacts survived all of them. That is not a queue of cases;
+it is the wrong decomposition.
+
+**The structural reason.** A face chamfer requires every facet to agree with the facet on the
+other side of its edge. The other side may belong to the packer, to the greedy mask, or to
+nothing at all, because the volume behind the surface is not meshed. Three parties, no shared
+knowledge, and an agreement demanded at every edge of every face.
+
+**Approach C removes the agreement instead of getting it right.**
+
+| | |
+|---|---|
+| The brick | a CLOSED box, every edge convex against air. The same geometry `PieceMeshes.chamfered_box` uses for debris — the one chamfer that has never produced an artefact in any capture |
+| The gap | each brick is pulled back `BRICK_GAP` (8 mm) on any side that has a neighbour, so the join is a real physical gap rather than a negotiated V. A side where the ground DROPS AWAY keeps its full extent: no neighbour to leave a gap against, and that face is the cliff |
+| The backing | the piece's footprint again, `BACKING_DROP` (30 mm) below the surface, with no bevel of any kind. Every gap shows backing |
+
+The property that matters is not that it is prettier. It is that **a wrong inset is now a
+cosmetic gap width and can no longer be a hole.** Nothing is drawn against anything, so nothing
+can disagree.
+
+| | |
+|---|---|
+| Chamfered triangles held | 229,795 to **438,029** |
+| Frame | 28.1 ms |
+
+The cost went UP, and honestly: a closed box emits six faces with every edge chamfered, where
+the face version emitted one face with most edges needing nothing. Robustness was bought with
+triangles. The obvious reductions, neither done: skip the brick's hidden bottom face, and merge
+the backing across adjacent pieces instead of one quad each.
+
+### 17.22 Heightfield mode, and §17's decision taken back
+
+`scenes/heightfield_test.tscn` — plate-quantised heightmap, no voxels, no caves, no
+destruction. `BrickTerrain.set_flat_mode(true)` is the whole of it: `solid_at` stops consulting
+the cave noise and the edit store, and the surface is exactly `nominal_height`. Everything above
+the field — the packer, the 2x4-dominant mix, the stud tiers, the scatter, the collision merge —
+is untouched and does not know the difference.
+
+Kept as a FLAG rather than by deleting the volumetric path, because the two differ only in what
+one function answers, and §17.1's table is still true about what this gives up: overhangs, caves,
+digging, and undercut cliffs that fall.
+
+Measured, same 25-tile field:
+
+| | volumetric | heightfield |
+|---|---|---|
+| Triangles | 67,026 | **21,986** |
+| Build | ~400 ms | **156 ms** |
+| Frame | 27 ms | **18.6 ms** |
+| Pieces | 6,799 | 6,045 |
+
+Three times cheaper, because there are no cave interiors to mesh and no subsurface mask to walk.
+
+**Tiles on studs** are the piece overlay (§6, `OVERLAY_CHANCE`): a smooth tile laid one plate
+above the brick it sits on, exactly as a real tile clips over studs. `F5` toggles them so the
+studded-everywhere version can be compared, and `hf_close.png` is the shot — smooth raised plates
+among studded ground, which is what a brick floor actually looks like and what wall-to-wall studs
+was missing.
+
+**The geometry chamfer is off in this scene.** §17.21's brick-on-a-backing works, but six rounds
+of artefacts came out of geometric chamfering and the shaded bevel has produced none, at a
+measured 7.6% of pixels changed. `TerrainTile.bevel_enabled = false` and the shader does it.
+
+### 17.23 Seams that did not line up, and half-brick steps
+
+**The seams.** A brick's top and its side were divided in different places, because they came
+from different systems: the top from the packer, the side from the greedy mask, whose merge
+lattice knows nothing about where the packer put piece boundaries. So a 2x4 on top had its side
+cut somewhere else entirely.
+
+Fixed by letting a piece draw **its own brick's side faces**, not just its top, and having the
+mask skip the piece's brick whether it is bevelled or not. The side of a brick is now the same
+brick as its top by construction rather than by coincidence.
+
+**Half-brick steps.** `set_plate_steps(true)` quantises the generated surface to plates (0.14 m)
+instead of bricks (0.42 m). The grid was already in plates, so it is one multiplier in the
+generator — and `top_plate` is now the primary field function with the brick height derived from
+it, rather than the other way round. Flatness also had to become plate-exact: comparing bricks
+called a one-plate step flat, which under plate quantisation is most of the terrain.
+
+Measured, 25 tiles, heightfield mode:
+
+| | brick steps | plate steps |
+|---|---|---|
+| Pieces | 6,045 | **9,508** |
+| Studs per piece | 4.2 | 2.7 |
+| Triangles | 21,986 | 35,494 |
+| Studs | 12,597 | 8,280 |
+| Build | 159 ms | 427 ms |
+
+Smoother terrain costs 60% more triangles and a third of the studs, because finer height
+variation breaks the packing into smaller pieces and fewer cells qualify as flat. `F6` toggles
+it; which reads better is a look decision, not a technical one.
+
+---
+
+### 17.24 Regional plate steps, and the tops-only chamfer, built
+
+Two of §18's entries moved out of "planned" in the same pass.
+
+**Plate steps are regional.** Quantising the whole field to plates (0.14 m) instead of bricks
+(0.42 m) reads better where the ground is gentle, and everywhere at once costs ~60% more
+triangles and a third of the studs — a one-plate step is not flat, so `stud_at` says no
+(§17.23). A low-frequency mask, `value_noise(x·0.004, z·0.004) > 0`, puts it on about half the
+map in patches ~250 studs across: big enough to read as different ground rather than as noise.
+`set_plate_steps` is now the switch for "allow it at all", and the mask decides where.
+
+**The chamfer is tops-only** (§18.1 option 2), and it replaced the brick-on-backing. The four
+top edges of a piece meet the piece's *own* side faces, so there is no second party to agree
+with, which is the property every previous version lacked. The top quad is emitted coplanar on
+all four edges — level neighbours meet in the groove between them, and at a drop the strip runs
+down the piece's own side. The sides are emitted **square**: no bevel, nothing to negotiate.
+That is the whole change, and it removes the backing quad as well.
+
+### 17.25 The print pass, and the mask that was never a mask
+
+Two things got measured in the same pass and one of them was a bug that had
+been sitting in the "regional" plate steps since they were written.
+
+**A mask whose wavelength exceeds the world is a constant.** The plate-step
+mask ran `value_noise(x * 0.004, z * 0.004)`, which is a 250-stud patch — and
+the whole test field is 160 studs, so the entire map sat inside ONE noise cell
+and "about half the map" was, every time, all of it or none of it. The curved-
+ground mask was written the same way (0.0035) and came out **100% curved** on
+its first run, which is what exposed it. Both are 0.012–0.015 now, a 67–83
+stud patch, and the probe measures the share rather than trusting the maths:
+a mask that returns 0% or 100% fails the gate.
+
+**Layer lines got the treatment they were missing.**
+
+| | before | now |
+|---|---|---|
+| Studs | a `StandardMaterial3D` — **no print lines at all**, on the most numerous object in the world | `printed.gdshader`: layer bands on the sides, concentric **octagon** loops on top |
+| Brick tops | a 45° raster in world space, running straight through piece seams as if the ground were one printed object | loops following the PIECE's outline, from `UV`/`UV2`, which the mesher already hands over |
+| Stud tops | concentric **circles** | octagons — `PieceMeshes.SIDES` is 8, and circles were visibly the wrong shape |
+| Relief | a dark hairline | the bead is a ridge: the normal leans along the direction the bead count grows in and back again, so it catches light |
+| Groove | antialiased to one pixel | a third of a bead wide, because a printed surface is beads with shadow between them |
+
+The relief normal needs the bead count to be CONTINUOUS — the lean comes from
+its screen-space gradient, and `fract()` in front of that puts a cliff in the
+gradient once a bead.
+
+#### The three things that were wrong with it
+
+**The lines crawled.** Reported as z-fighting, and it is the same symptom from
+a different cause: a bead is 8.75 mm, and seen edge-on or past a few metres
+more than one of them lands in a pixel. A pattern sampled below its own
+frequency does not fade — it re-picks which beads hit which pixels on every
+small camera move, so the surface looks like it is fighting itself. The
+DISTANCE fade could never fix it, because a grazing angle compresses the beads
+at any distance. What fixes it is filtering on `fwidth` of the bead count:
+the pattern, and the relief with it, dissolves toward its own average as soon
+as a bead approaches a pixel. Drawing detail you cannot resolve is worse than
+drawing none.
+
+**The top paths were loops all the way in.** Nested rectangles are four sets
+of parallel lines with a mitre seam running out of every corner, and that is
+exactly what they looked like — creases, not a path. A slicer walks the
+outline two or three times and then rasters the middle, so that is what the
+shader does now, with the raster in PIECE space and its diagonal hashed per
+piece, so neighbouring bricks read as separately printed parts rather than as
+one object with a grid drawn on it.
+
+**Most of the shimmer was the SEAM, and it took an A/B to find.** The seam
+was widened to a minimum of one pixel (`w = max(seam_width, aa)`) so it would
+stay visible at range, and kept at full contrast. At a grazing angle `d`
+changes fast along an edge, so which pixels that widened line landed in
+shifted with every small camera move: the seam broke into DASHES that
+crawled. Dimming it by its coverage helped and did not fix it.
+
+The seam is now **analytic coverage** — how much of this pixel the band
+`d < seam_width` actually covers, one clamp — with no widening at all. Sub-
+pixel seams fall off by themselves.
+
+Finding it needed captures that turn one thing off at a time:
+`hf_curves_noprint`, `hf_curves_noseam`, `hf_curves_bare`, all from the same
+camera. Print off with seams on still dashed; seams off with print on was
+clean. Two suspects, one capture each, no argument.
+
+`P` toggles the whole print pass in both test scenes, so "is that the layer
+lines or the seams" is one keypress rather than an argument.
+
+**The crawl that survived the filter was in the NORMALS, not the bands.**
+Filtering the albedo stops it aliasing; filtering a normal the same way does
+not, because a half-resolved ridge still swings the specular highlight a long
+way for a small camera move — and a bright speckle moving over a surface
+reads exactly like z-fighting. Normals have to give up earlier than colour,
+so the relief fades with `resolved²`, and the roughness takes over what the
+normal drops: a bead that is no longer resolved has not gone away, it is
+sub-pixel roughness now, and saying so is what stops the highlight sparkling
+where the ridges used to be. (This is Toksvig's argument in one line.)
+
+**A 0.2 mm layer is one pixel, and the filter was right to bin it.** With the
+filtering in place the print vanished almost everywhere, and that was correct:
+0.2 mm at 1:43.75 is 8.75 mm, and at two metres on a 1152-wide frame that is
+about one pixel. The pattern was never resolvable — it had only ever been
+*visible* as the crawl. So the print itself got coarser: **0.46 mm layers
+through a 0.55 mm nozzle**, which is 20 mm and 24 mm at this scale, twenty-one
+layers a course. Still a real print, and one you can see.
+
+The diagnosis took a red-channel dump of `resolved` to reach, after two
+rounds of "the block must not be running". It was running; it was resolving
+to nothing.
+
+**The stud contact shadow fought the beads.** Two dark patterns multiplied
+into the same pixels is noise, not detail, so the ink is damped by 70% of the
+shadow. The ground was also drawing the painted stud's octagon paths
+UNDERNEATH the geometry stud inside the near tier — two sets of loops in the
+same pixels — and now only draws them where the painted stud is the one being
+shown.
+
+City bricks run it too, and they were the last surface in the world still
+coming out of the mould smooth. One difference from the ground: the layer
+axis is `UV.y`, the height WITHIN THE BLOCK, not a world or object height.
+The chunk mesher emits vertices in world metres, so on a tower a hundred
+metres out the bead count ran into the thousands and `fwidth` of it came back
+larger than a bead — the pattern filtered itself away completely. Per-block
+UV is precise, tumbles with a falling chunk, and restarts the layers at each
+brick's own base, which is what a separately printed brick does anyway.
+
+Debris runs the same shader. A brick that has just come off the ground is the
+same printed plastic the ground is, and it was a matte `StandardMaterial3D`
+with no lines at all. A single mesh carries no vertex colours, so the shader
+takes a `tint` uniform and multiplies: a MultiMesh leaves it white and writes
+COLOR per instance, a lone mesh leaves COLOR white and sets the tint.
+
+`printed.gdshader` evaluates in OBJECT space, the ground shader in world
+space, and the difference is not an oversight: a stud is one mesh drawn 8,300
+times and a tumbling brick is that mesh with a different transform, so the
+paths have to belong to the part. The ground never moves, and world space is
+what keeps its layers continuous across a seam.
+
+### 17.26c "Curves cause the z-fighting" — half true, and the half was useful
+
+Turning curves off did clean the ground up, which pointed at the mixed
+surface. Two real things came out of following it, and neither was overlapping
+geometry:
+
+**Curve-to-curve skirts were redundant geometry inside the surface.** Two
+neighbouring curve cells SHARE their corner vertices, so their surfaces
+already meet exactly — but a skirt was emitted anyway, sized from the
+neighbour's COLUMN (`(tp + 1) × plate`), which is not where a curve is drawn.
+Where that came out above the neighbour's real surface the skirt stood up
+through it. A curve only needs a wall against BRICK. 4,308 triangles a field
+removed with it (63.4k → 59.1k).
+
+**A curve's pattern has nothing to reset on.** A piece restarts its nozzle
+path every 0.35–1.4 m, so the near-Nyquist band — a bead about a pixel wide,
+still at full contrast — is broken into short stretches and reads as texture.
+Curved ground is one raster running unbroken across the whole field, and the
+same band becomes a sheet of moiré that swims with the camera. Curves now
+treat themselves as less resolvable than they are (`aa × 1.7`) and draw
+fainter.
+
+And the invariant that should have existed from the start: **every cell has
+exactly one top surface**, `curve_cells + owned_cells == TILE²`, checked over
+nine tiles. A cell drawn twice is z-fighting and a cell drawn by neither is a
+hole, and neither shows up in a triangle count.
+
+### 17.26b F8 is Godot's Stop
+
+The curved-ground toggle was bound to F8, which is the editor's "stop the
+running game" and is taken even while the game has focus — so the key that
+was supposed to turn curves off quit instead. It is `C` now. Worth checking
+any new binding against the editor's own list; F5, F6 and F7 are Play,
+Play Scene and Pause in the editor, and only survive here because the game
+window has focus and the editor does not treat those as global.
+
+### 17.26 Scatter stopped standing on curved ground, and nothing said so
+
+Turning curves on took scatter from 492 pieces a field to 146. Nothing
+errored; the terrain simply had fewer boulders on it, which reads as "the
+generator changed" rather than as a bug.
+
+`footprint_ok` required every cell under a boulder to belong to a
+`PIECE_BRICK`, and curved ground has no piece at all — so every tuft and
+every pebble on a curve was refused. The test now accepts a curved cell as
+well as a studded brick. Tiles and ramps still refuse, for the reasons they
+always did: nothing clips to a smooth tile, and a ramp is not flat. Measured
+back up to **719**.
+
+The general shape of this: when a new surface bypasses a system, everything
+that asked that system a question quietly gets "no". Studs were checked and
+fixed in the same pass; scatter was not, because it asks through
+`owner`/`pieces` rather than through the sample.
+
+## 18. Planned, not built
+
+### 18.1 Real chamfer geometry: the option that has not been tried
+
+> **Built.** Option 2 (top edges only) is what the mesher now emits — see §17.24. Kept here for
+> the reasoning.
+
+Two are available, and the second is new:
+
+1. **Brick on a backing** (§17.21) works and is probe-verified; it is off in the heightfield
+   scene only because confidence in geometric chamfer was spent. `TerrainTile.bevel_enabled` is
+   the flag.
+2. **Top edges only.** Every artefact in six rounds came from a facet negotiating with a
+   neighbour — a wall, another piece, or unmeshed space. A bevel on the piece's four TOP edges
+   alone never touches another system: those edges meet the piece's own side faces, which the
+   piece now draws itself (§17.23). Four strips per piece, ~8 triangles, no corner cases with
+   anything outside the brick.
+
+   On a floor seen at a grazing angle the top edge is the only one that reads anyway, which is
+   where this began.
+
+### 18.2 Water as bricks that never despawn
+
+> **Built**, and with tall waves, a shore taper, submerged column collapse and swimming on top
+> of it — Water.md §3.6, §3.7 and §7.2.
+
+The proposal — 1x1 flat-topped bricks that bob, colour shifting to show the wave, white tops at
+the crest, nothing ever created or destroyed — is **simpler than what is built and should
+replace it**. `water.gdshader` currently packs pieces in the vertex shader, walks a cut lattice
+and collapses non-origin instances, and that machinery exists only to make varied piece sizes.
+Fixed 1x1 pieces delete all of it.
+
+| | |
+|---|---|
+| Geometry | one 1x1 flat-topped brick, one MultiMesh, instance count fixed forever |
+| Motion | Y from the shared wave function, snapped to a brick step, per-row stop-motion hold (Water §3.4) |
+| Waves | **colour, not geometry** — tint by height above the mean, white at the crest. A crest reads as a moving band of pale bricks, which is the brick-film look and costs one lerp |
+| Despawn | never. A piece below its neighbours is hidden by their columns; at the shore it scales to zero (§3.4) |
+| Surf | white tops where `height > threshold`, which also gives foam for free |
+
+Keeps: the one wave function in `BrickWave` (D9), the seabed texture for shore culling and
+absorption, the brick-step quantisation. Deletes: the GPU packer, the cut lattice in the shader,
+the bonding logic.
+
+### 18.3 Plastic, and materials later
+
+Flat filament colour with `roughness 0.9` is why it reads as matte card. Plastic needs three
+things, none of them textures:
+
+1. **Roughness 0.35-0.45** and a real specular. ABS is glossy.
+2. **A tight specular highlight that MOVES** — that is what says "hard shiny surface", and it is
+   why the chamfer matters: a bevel catches a moving highlight along every edge.
+3. **Slight subsurface/backlight tint.** Thin ABS glows at the edges. `SSS` or a cheap rim term.
+
+Materials become a **material id per block**, not a texture per block, driving a small table:
+
+| | roughness | specular | rim | grain |
+|---|---|---|---|---|
+| ABS / PLA | 0.40 | 0.5 | slight | layer lines |
+| Wood-fill | 0.85 | 0.1 | none | layer lines + long grain streaks |
+| Metal-fill | 0.30 | 0.9, metallic | none | layer lines, coarser |
+| TPU | 0.55 | 0.4 | strong | layer lines, softer |
+
+One `uint8` per block, one branch in the shader. Filament colour already works this way, so the
+material id sits beside it.
+
+### 18.4 Layer lines and print paths: procedural, with one authored exception
+
+**Procedural, and it is not close.** Spec §2 already says so and the reasons hold:
+
+- Layer lines are a function of `print_axis` and world position. A texture would have to be
+  unwrapped per part, at a density that changes with part size, and would swim on debris as it
+  tumbles. The shader evaluates it in object space and it tumbles correctly for free.
+- Every part is a different size. A brick, a 2x6, a stud and a boulder share one procedural
+  rule and would need four textures.
+- Spec §2's whole memory argument: no texture memory for parts.
+
+Three effects, all from the same object-space coordinate:
+
+1. **Layer lines** — bands perpendicular to `print_axis`, ~0.2 mm at print scale. Fade with
+   `fwidth` like the seam already does.
+2. **Top-surface print paths** — the nozzle's infill. Concentric rings on a stud (which is
+   exactly how a printer does a small cylinder) and a raster or gyroid on a flat top. A polar
+   coordinate around the stud centre for rings, a rotated stripe for infill, chosen by whether
+   the fragment is inside a stud disc — and the shader already computes that for the dome.
+3. **The seam line** — a printer's layer-change seam is a faint vertical scar. One per part, at
+   a hashed angle.
+
+**The one authored case:** a part whose print path is genuinely irregular, like a sculpted
+outcrop. Those are prefabs (§6.6), and a prefab can carry a texture if it earns one. Nothing on
+the procedural path should.
+
+### 18.5 Smooth heightfield AND bricks — BUILT
+
+> **Built, and OFF.** `BrickTerrain.set_smooth_terrain` is off everywhere,
+> including in `heightfield_test`, where `C` turns it on. What follows is the
+> design; what differed in the building is at the end.
+>
+> It works — regional, genuinely curved, studs and tiles standing on it — and
+> it is not what the game is made of. Curved ground has no PIECES in it, so
+> wherever it goes the packed 2x4s and the smooth tiles go with it, and the
+> ground stops reading as laid brick. That is the whole look. It stays as a
+> thing the generator CAN do, for dunes, a moor, a golf course, whatever
+> later wants ground that is not built out of bricks.
+
+#### The design
+
+A smooth curved surface with studs standing on the flat parts is not an alternative to the brick
+mesher; it is **the same data with a different top face**. Both read `tp` per column.
+
+- **Smooth**: emit one vertex per column at its exact height and let the GPU interpolate. No
+  packing, no terraces, no side faces. Studs stay exactly as they are — `stud_at` already asks
+  "are my four neighbours at my height", which on a smooth field means "am I on a flat spot".
+- **Bricks**: what exists now.
+
+So it is a per-biome or per-region switch, not a fork: sand dunes and hills smooth, built ground
+and cliffs bricked, and the stud layer identical over both. The honest cost is that collision
+needs a `HeightMapShape3D` for smooth regions instead of merged boxes — twenty lines, and it was
+the original plan in §6 before the terraces existed.
+
+#### Driven by biome AND steepness — yes, and steepness is the cheaper half
+
+The switch wants to be a **per-column float**, `smooth01`, not a bool, and it takes both inputs:
+
+```
+smooth01 = clamp(biome_smoothness + steepness_bias · slope, 0, 1)
+```
+
+* **Steepness** is free. `top_plate` is already sampled for the four neighbours of every column
+  (that is what `plate[]` is), so `slope = max |Δtp|` costs nothing new. Steep ground going
+  *bricked* is the useful direction: a cliff made of stacked courses looks built, and a smooth
+  one at 45° is where a heightfield looks most like a heightfield. Flat ground can go either way
+  — which is what the biome term decides.
+* **Biome** is one more low-frequency noise field, exactly like the plate-step mask that was
+  just built, so the machinery exists. Dunes and moor smooth, quarry and built ground bricked.
+
+Two things have to be true for a mixed field not to crack open:
+
+1. **The boundary has to be a seam, not a gap.** A smooth column adjacent to a bricked one meets
+   a vertical face of up to one brick. The bricked side must draw that face — the same test the
+   mesher already runs for "my neighbour is lower", with `tp` compared against the *smooth*
+   height rather than the quantised one.
+2. **`smooth01` must be hysteretic or quantised per region**, not thresholded per column, or
+   the boundary dances between neighbours and every frame of a moving camera re-seams. Snapping
+   the decision to a coarse grid (say 8 studs) is the cheap fix, and it matches how the plate
+   mask already works.
+
+The plate-step mask (§17.24) is the same shape of decision at a third of the ambition, so it is
+the thing to generalise: mask → region field, bool → float, one quantiser → two surfaces.
+
+#### One thing or the other, over an area you can walk across
+
+The decision started per column and so did every test in it — which meant the
+steepness test, whose input varies fast, speckled. Measured: slope median
+0.17, p90 0.50, so a 0.30 threshold rejected about a third of the columns
+INSIDE a curved patch, and each rejection came back as a single brick standing
+in the middle of smooth ground. From a low camera the ground read as brick
+slabs half-buried in a smooth field, which is neither of the two things it is
+supposed to be.
+
+Which tests may be per column is the whole answer:
+
+| test | scope | why |
+|---|---|---|
+| a step over two plates | **column** | a wall is a wall whatever is around it |
+| steepness | **region**, 8 studs | its input varies fast; per column it speckles |
+| biome | **column** | a smooth field, so its contour IS the organic edge |
+
+Only the tests that can flip between neighbours had to become regional. The
+biome boundary stays per column, which is what keeps the edge between smooth
+ground and laid brick from being a rectangle.
+
+Measured over 19,600 columns after the change: **zero** lone bricks inside
+curved ground and **zero** lone curves inside brick. That is the number worth
+keeping — not the share, which moved to 54% as a side effect of the looser
+steepness gate, but the count of cells that disagree with everything around
+them. A region test that still speckles has not been made regional.
+
+Curved ground also lays some of its flat patches SMOOTH — the same one in five
+the packer tiles a brick floor with, off the same hash, so a curve gets the
+mix of studded and smooth ground that brick already has. A curve has no
+pieces, so a tile there is simply a cell that takes no stud.
+
+#### The curve has to come from the UNQUANTISED field
+
+The first version averaged the four `tp` values round a corner. `tp` IS the
+staircase, and the mean of four steps is another step with a bevel on it — so
+on gentle plate-quantised ground, where the four columns usually agree, the
+"curve" was the same flat quad the bricks would have drawn. The ground lost
+its 2x4s and its smooth tiles wherever curves went and gained nothing visible
+in exchange. Turning curves on made the terrain worse and no curve was
+findable anywhere, which is exactly how it was reported.
+
+A corner is now the mean of `raw_plate` at its four columns — the surface
+before the floor — plus half a plate, so the curve runs through the middle of
+the staircase it replaces rather than along its top. Against brick it still
+snaps to the brick's exact top, which is what keeps the seam shut.
+
+Everything that STANDS on a curve moved with it. A stud or a boulder at
+`(tp + 1) × plate` floats or sinks by up to half a plate once the curve stops
+agreeing with the column, so studs, scatter and the collision box all read
+`cell_surface()`, the mean of the cell's four drawn corners. One helper, four
+callers, no second opinion about where the ground is.
+
+`BrickTerrain.surface_raw(x, z)` exposes the continuous surface, because
+nothing outside the mesher could otherwise predict where a curve is — the
+probe included, which is how this got measured.
+
+The share came down with it: bias 0.35 instead of 0.0, so curves are ~35–40%
+of the map rather than 63%. Curved ground has no PIECES in it; wherever it
+goes, the packed 2x4s and the smooth tiles go with it. Curves are the odd
+hillside, not the default surface.
+
+#### What differed in the building
+
+* **Steepness has to be measured on the UNQUANTISED surface.** On plate-quantised ground every
+  slope between 0.1 and 0.9 plates a stud measures as exactly one plate, so a steepness test on
+  `top_plate` can only ever answer "1 or 0" and does nothing. `Field::raw_plate` returns the
+  surface before the floor, and the test is a central difference on that. Measured on the test
+  field: median 0.17 plates a stud, p90 0.50, max 0.67 — so the threshold is 0.30, which keeps
+  the flats and hands the valley sides back to the bricks.
+* **...and on the quantised one as well.** A column can be gentle and still sit where the
+  plate-step mask changes quantisation, and the drawn step there is a whole brick. The probe
+  found a 3-plate cliff under a curve on its first run. Both tests now apply.
+* **It is still a bool, not the float the plan asked for.** `smooth01` as a blend needs the two
+  surfaces to be interpolable and they are not — one has side walls. The decision is per column
+  and the seam is handled instead of avoided.
+* **The seam is handled by giving the curve the brick's exact height.** A corner vertex is the
+  mean of the four columns that meet there, unless one of them is bricked, in which case it takes
+  that brick's top exactly. The curve then lands ON the brick's top edge rather than near it.
+  Where the neighbouring column is lower, the curve draws its own skirt down to it — the same
+  rule the brick mesher already follows, so the two surfaces meet without either knowing much
+  about the other.
+* **Studs needed no change at all**, which was the claim: `plate` already means "my four
+  neighbours are at my exact height", and on a curve that is "I am on a flat spot". A flat cell's
+  four corners are all at its own height, so a stud sits exactly on the surface.
+* **UV2 = (0, 0) means "not a piece"** to the shader: no seam outline, and the nozzle rasters in
+  world space instead of walking a perimeter, because a curve is not a moulded part with edges.
+  Without that test `mod(UV, 0)` takes the whole surface to NaN.
+* **Collision follows the curve, and stays boxes.** A curved cell's box top is the mean of its
+  four drawn corners, not its column — `HeightMapShape3D` was the plan, but a heightmap cannot
+  hold the vertical walls the bricked half of the same tile needs, and two shape types over one
+  tile is worse than one. The trick that keeps it affordable is **quantising the box top to a
+  quarter plate**: the greedy merge joins cells of EQUAL height, continuous heights are never
+  equal, and an unquantised curve hands back one box a cell — 1,024 a tile, which is the 813 ms
+  scene build that merge exists to prevent. Measured: **0.018 m off the drawn surface** (was
+  0.07 against the column), 209 boxes on a mixed tile.
+
+  That probe check has now measured the feature instead of the defect twice: first comparing the
+  box against the COLUMN (0.175 m), then still rebuilding the surface out of `surface_plate`
+  after the curve moved to the unquantised field (0.28 m). A mirror of a calculation is a second
+  implementation and goes stale exactly like one.
+
+  The first version of that probe check compared the box against the COLUMN and reported 0.175 m
+  of error. It was measuring the curve doing its job. A check needs the right reference or it
+  fails the feature instead of the bug.
+
+Measured, `heightfield_test` at seed 20260921: 66% of columns curved, 2,769 pieces where
+all-brick was 9,186, 65.9k triangles against 34.2k. **Curves cost about twice the triangles of
+packed brick** — one quad a cell against one quad a 2x4 — which is the price of the look and the
+reason it is a region and not the whole map.
+
+---
+
+## 19. View distance, and what it actually costs
+
+Measured, not guessed. `heightfield_test.tscn -- --bench --tiles=N` turns one
+layer off at a time and reports drawn triangles, draw calls and mean frame
+time with vsync disabled. Debug build, Radeon iGPU, 1152x648.
+
+| field | square | built | baked | drawn tris | calls | GPU frame |
+|---|---|---|---|---|---|---|
+| 9x9 | 101 m | 318 ms | 26 ms | 518k | 161 | 3.2 ms |
+| 13x13 | 146 m | 739 ms | 57 ms | 636k | 244 | 3.8 ms |
+| 21x21 | 235 m | 1,609 ms | 146 ms | 884k | 451 | 4.1 ms |
+| 31x31 | 347 m | 3,599 ms | 308 ms | 1.20M | 707 | 5.5 ms |
+
+**The frame is not the problem and never was.** Six times the view distance
+costs 1.7x the frame time. A 347 m field draws in 5.5 ms on an integrated
+GPU in a debug build; 60 fps allows 16.7 and 144 fps allows 6.9.
+
+### 19.1 What the frame is made of
+
+At 13x13, turning layers off one at a time:
+
+| layer | tris | cost |
+|---|---|---|
+| water | 264k | 1.2 ms |
+| studs and scatter | 106k | 0.9 ms |
+| shadow pass | 183k | 0.5 ms |
+| terrain surface | 82k | the rest |
+
+**Water is the biggest single consumer of triangles in the world** — 26,450
+pieces at ten triangles each, regardless of field size, because it follows the
+camera. The terrain mesh is 82k for a 146 m square: about 9 triangles a square
+metre of ground, which is nothing.
+
+So: no, the terrain does not use too many triangles. If anything it is
+under-drawn — there is room for the real chamfer geometry (§18.1) near the
+camera.
+
+### 19.2 The thing that actually limits view distance is BUILD time
+
+At 21x21 the field took **4.2 seconds** to build, and the C++ that does the
+real work — sample, pack, mesh, merge the collider — was 100% of one core
+while fifteen others idled.
+
+Two changes, both measured:
+
+* **Bake in parallel.** `build_tile` only reads the field and returns fresh
+  arrays, so a `WorkerThreadPool` group task can run every tile at once.
+  4,156 ms → **146 ms** at 21x21 on 16 threads. Node assembly stays on the
+  main thread, because it has to.
+* **Collision through the physics server, not nodes.** A `CollisionShape3D`
+  per merged box was 200-300 nodes a tile, ~100,000 across a 21x21 field.
+  One server body a tile with shared box shapes: total build 3,394 ms →
+  **1,609 ms**. `brick_sandbox.gd` had done this since M3; terrain never did.
+
+Box shapes are shared by size, and freed when the last tile leaves the tree —
+Jolt reported 305 leaked shapes the first time, because a static cache of RIDs
+has no owner.
+
+A ray-cast check runs with the bench (40 rays, 40 hits, worst 0.14 m off the
+surface — one plate, which is the merge doing its job). A collider with no
+node behind it is invisible to the scene tree, so it needs a test that is not
+"look at the remote".
+
+### 19.3 To go further
+
+In the order the numbers justify:
+
+1. **Stream tiles instead of building them all** — 1.6 s at startup is a
+   loading screen, and it is all main-thread node assembly (ArrayMesh upload,
+   MultiMesh buffers). Building a ring of tiles a frame as the camera moves
+   turns it into nothing.
+2. **A coarse tier per tile.** Draw calls grow linearly with the field (161 at
+   101 m, 707 at 347 m). One merged quad per 4x4 block for tiles past ~120 m
+   would cut both calls and triangles by an order of magnitude, and at that
+   range the pieces are sub-pixel anyway — the same argument the stud tiers
+   already make.
+3. **Water tier 2.** The sea is a fixed 26,450 pieces whatever the view
+   distance; past the 80 m ring there is nothing at all.
+
+Budgets worth holding to, for a stylised game on mid hardware: **1-2M
+triangles and under ~2,000 draw calls a frame**, with the CPU side under
+~4 ms. Everything above sits inside that today.
+
+### 19.4 The far tier, built
+
+`BrickTerrain::build_coarse(tx0, tz0, span, step)` — a block of `span x span`
+tiles as ONE mesh, sampling the surface every `step` studs. No packing, no
+pieces, no studs, no scatter, no collider, and it does not cast shadows: the
+shadow of a hill 300 m away lands on ground nobody can see.
+
+It is deliberately not the same mesher. Everything the near tier exists for —
+the seam around a 2x4, the nozzle path, the stud — is under a pixel out there.
+
+Two details decide whether it holds together:
+
+* **Sample the CORNERS, not cell middles.** Two neighbouring blocks then read
+  the same number on their shared edge and cannot disagree about where the
+  ground is.
+* **A cell takes the MAX of its four corners.** A coarse cell stands in for up
+  to `step²` columns and the tallest is what the silhouette should follow;
+  averaging sinks the mesh into the hills and the near tier pokes through the
+  join.
+
+**The ring.** A coarse block is kept only if none of its tiles are inside the
+detailed square — half a block would draw over real ground — and skipping
+whole blocks left a band up to `FAR_SPAN` tiles wide with nothing in it. The
+first capture had a 45 m black moat around the detailed ground. Whatever the
+block lattice misses now gets a one-tile coarse mesh.
+
+#### One coarse level does not scale, and the numbers say so plainly
+
+At a fixed 1.4 m sample: 560 m held 2.9M triangles, 1.12 km held 10.7M, and
+2.24 km held **40.9M and drew at 80 ms**. Constant density over a disc is
+quadratic in the radius, and no amount of culling fixes quadratic.
+
+So the tier **cascades**: every doubling of the radius doubles the block and
+doubles the sample spacing. A block then always holds the same
+`(span x TILE / step)²` cells, so each ring costs what the one inside it
+costs, and the whole tier is linear in the NUMBER of rings — logarithmic in
+distance.
+
+Placement is a greedy fill, not a lattice sweep: walk every uncovered tile,
+ask which ring its radius puts it in, lay the LARGEST aligned block that
+fits, halving until one does. Two attempts at "sweep each ring and skip
+blocks that overlap" both left bands a whole block wide — a tile exactly on a
+ring boundary belongs to neither sweep — and 2,500 one-tile fills with them.
+A fill that terminates at span 1 cannot leave a hole.
+
+Two details the measurements forced:
+
+* **Cap the levels at what the reach needs.** Rounding a 560 m field up to
+  the six-level lattice drew 1.4 km of ground nobody asked for.
+* **Round the reach up to the coarsest span in use.** A block must fit
+  entirely inside the reach or the fill drops a level, so a reach off the
+  lattice frays the whole rim to one-tile blocks — 3,212 of them at 9 km.
+
+| view | held | drawn | calls | GPU frame | build |
+|---|---|---|---|---|---|
+| 56 m, no far tier | — | 425k | 91 | 3.0 ms | 116 ms |
+| 560 m (**default**) | 988k | 559k | 274 | 2.9 ms | 346 ms |
+| 2.24 km | 1.91M | 882k | 439 | 4.3 ms | 718 ms |
+| 8.96 km | 3.62M | 1.40M | 1,157 | 6.4 ms | 8,890 ms |
+
+**Ten times the view distance for nothing**, and 160 times it for about twice
+the frame. The near tier is untouched throughout — the ground you can walk on
+is still packed 2x4s with studs and a collider.
+
+The wall is no longer triangles. At 9 km it is **build time** (8.9 s, which
+streaming fixes) and **draw calls** (1,157, which merging whole rings into one
+mesh fixes). Both are ordinary work; the quadratic was not.
+
+`FAR_TILES` defaults to 50 — 560 m — and `-- --far=N` overrides it. Water is
+off by default in this scene: the sea is a fixed 26,450 pieces and ~264k
+triangles whatever the terrain does, and it dominates a measurement it is not
+the subject of.
+
+### 19.5 Against the city, which is the half that actually costs
+
+The same bench, `city.tscn -- --bench --buildings=N`, from three viewpoints.
+Building shells, nothing materialised into live bricks yet.
+
+| | drawn | calls | GPU frame |
+|---|---|---|---|
+| city, 22 buildings | 164k | 118 | 1.4 ms |
+| big_city, 22 | 957k | 179 | 3.0 ms |
+| big_city, 60 | 686k | 229 | 3.3 ms |
+| big_city, 150 | **3.34M** | 437 | **10.0 ms** |
+| terrain, 560 m | 1.22M | 352 | 6.8 ms |
+
+Worst viewpoint each, debug build, Radeon iGPU, 1152x648.
+
+**The city is the expensive half and terrain is not close.** 150 buildings
+cost 3.3M triangles where a 560 m terrain costs 1.2M, and the city's number
+climbs with building count while the terrain's is nearly flat in view
+distance once the far tier exists.
+
+Added together — and they do add, they are the same frame — a 150-building
+city on 560 m of ground is roughly **4.5M triangles, ~790 draw calls, ~17 ms**
+in a DEBUG build. That is the 60 fps line exactly, before:
+
+* a release build, which is typically 1.5-2x on the CPU side
+* materialised buildings, which replace shells with real bricks and cost more
+* the water, which is another 264k and 1.2 ms
+* a GPU that is not integrated
+
+So the shape of the budget is clear: **terrain can have its view distance and
+the city cannot have unlimited buildings.** The next lever is not more terrain
+LOD, it is building impostors past ~150 m, which `SHELL_RANGE` already half
+implements.
+
+### 19.6 Streaming, for a world that has edges
+
+This terrain is an **authored size per world**, not an infinite field, so the
+streamer is not a chunk loader and does not pretend to be one. The coarse tier
+covers the whole world and is built once. What streams is the near tier, which
+is the expensive half: packed pieces, studs, scatter and a collider.
+
+`TerrainStreamer` keeps a square of detailed tiles around the camera, drops
+what falls behind, and never builds past `world_half` — the world ends and the
+code knows where.
+
+Three rules, and the middle one is the point:
+
+1. **Bake on worker threads.** `build_tile` only reads the field.
+2. **Assemble on the main thread under a TIME BUDGET.** Node creation and mesh
+   upload cannot leave the main thread, so the only lever is how much of it
+   happens in one frame.
+3. **Drop with hysteresis** — `keep_radius` two tiles beyond `near_radius`, or
+   walking a boundary rebuilds the same tile every step.
+
+#### A budget cannot split one piece of work, so the pieces had to get smaller
+
+The first version budgeted 3 ms a frame and still hitched at 16.5 ms, because
+the budget is only checked BETWEEN tiles and one tile took **54 ms**. Measured
+by phase:
+
+| phase | worst |
+|---|---|
+| surface mesh | 0.5 ms |
+| studs and scatter (3 MultiMesh uploads) | 4.2 ms |
+| collider (200-300 boxes through the server) | 5.6 ms |
+
+So a tile is three phases now, taken a frame at a time, and the collider is
+only built within `collide_radius` — you cannot stand on a tile four away, and
+it is the most expensive phase and the only one nobody can see.
+
+Sprinting at 14 m/s across six tiles: **worst frame 11.2 ms**, 30 tiles built
+and 20 dropped, nothing above the 16.7 ms a 60 fps frame allows.
+
+Then the collider spiked to 18.9 ms on its own at a wider detail radius, for
+the same reason one tile did: a budget checked BETWEEN units of work cannot
+help with one big unit. So the collider goes in **32 boxes at a time** across
+frames, and the budget came down to 1.5 ms.
+
+#### Shadows are the other half of what a detail radius costs
+
+Pushing full detail from 56 m to 145 m took the frame from 3.0 ms to 9.1 —
+and 6.5 of that was the SHADOW PASS: 290k triangles and 167 of the 429 draw
+calls. A brick terrace a hundred metres away casts almost nothing anyone can
+see on ground this gentle, so tiles past `shadow_radius` (3, about 34 m) do
+not cast at all.
+
+Settled, with detail at 101 m and the coarse tier at 560 m:
+
+| | |
+|---|---|
+| steady frame | 5.7 ms |
+| sprinting at 14 m/s, worst frame | **9.8 ms** |
+| worst single phase | 3.7 ms (instances), 1.5 ms (collider) |
+| detail resident | ~81 tiles |
+
+#### "The smooth terrain is on and C will not turn it off"
+
+It was not. Curves default to off, `C` toggles them correctly, and a direct
+measurement says so: 0 curve cells a tile with the default, 992 with curves
+on, 0 again when turned back off.
+
+What was being seen is the COARSE TIER, which at a 56 m detail radius began
+close enough to walk up to — and coarse ground is exactly what smooth ground
+looks like. `C` has no effect on it, correctly, because it is LOD and not a
+generator setting.
+
+The fix was not a toggle: full detail now reaches **101 m**, which the shadow
+and collider work above paid for. Worth remembering as a diagnosis — when two
+systems can produce the same appearance, the report will name whichever one
+has a button.
+
+### 19.7 The coarse tier has to know where the detail IS
+
+Reported as "the LOD levels never remove even when the player goes near". They
+did not, and the reason is that the coarse tier was built once with a hole
+where the detail happened to start, while the detail moved. Everywhere the
+detail went after that, it streamed in ON TOP of coarse ground — two surfaces
+in the same place, the coarse one poking through wherever its max-of-cell
+height beat the real surface.
+
+Three attempts, because each fix exposed the next assumption:
+
+1. **Hole at build time.** The detail moves, the hole does not: walking away
+   from the origin left a black pit behind.
+2. **Build everywhere, hide what the detail region covers.** The region fills
+   at a couple of tiles a frame, so hiding against WANTED tiles opened a pit
+   the size of the detail square every time the camera jumped.
+3. **Hide only where every tile of a block is BUILT.** Correct, and it needs
+   the two tiers on one lattice: the streamer snaps its region out to the
+   coarse tier's smallest block (4 tiles), so a block is covered or it is
+   not. Unaligned, a half-covered block can neither be hidden (hole) nor kept
+   (poke-through).
+
+Only the smallest blocks are ever tested; anything bigger is further out than
+the detail reaches, so a 128-tile block never walks its tiles.
+
+The alignment made streaming cheaper as well: the resident region changes in
+whole blocks instead of one row at a time, and the worst frame while sprinting
+went from 9.8 ms to 6.6.
+
+### 19.8 Elevation, and one height function
+
+The relief was `fbm x 7 bricks` — **2.9 m of total range**, the whole world
+inside a two-storey building, which is why every view looked like a textured
+plain. It is three octaves now:
+
+| octave | wavelength | amplitude |
+|---|---|---|
+| landform | ~400 studs (140 m) | 90 bricks (38 m) |
+| relief | ~100 studs (35 m) | 9 bricks |
+| detail | ~29 studs (10 m) | 1.5 bricks |
+
+Measured over 1.7 km: **48.7 m of range**, median slope 0.25, p90 0.47, max
+0.90. A tile costs the same as before (328 pieces, 1,224 triangles), because
+the mesher does not care how high the ground is.
+
+`raw_plate` and `top_plate` were two copies of the same expression and drifted
+apart the moment the relief changed; `top_plate` now quantises `raw_plate`.
+The material bands moved with it — at 7 bricks they were tuned for a world
+eight courses tall, and with a landform octave that put stone on everything.
+
+Two probe gates failed on the new world and **both were measuring the world's
+shape, not a defect**: the tile share (a piece takes studs only where the
+ground is flat, so more relief necessarily means more smooth ground — 56%, and
+the gate said 55%) and the shore taper (it fixed the sea at 1.9 m, which the
+new terrain is entirely above, so it reported "the sea gets no swell" about a
+world with no sea in it — it picks a level from the sampled ground now).
+
+### 19.9 Baked sun shadows, because the ground does not move
+
+The ground is a static heightfield, so which of it the sun reaches is a
+property of the world and not of the frame. `set_sun_direction` makes the
+mesher march the field along the sun — 24 samples a piece, at build time, on
+worker threads — and darken what the sun cannot see. The terrain then stops
+casting into the shadow map altogether.
+
+| | frame | calls |
+|---|---|---|
+| terrain casting (radius 3) | 4.9 ms | 347 |
+| baked, terrain never casts | **3.3 ms** | 285 |
+
+and the worst frame while sprinting went from 15.6 ms to **5.8**.
+
+Everything else was already audited off: studs and scatter never cast (they
+have a painted contact shadow instead, §7.4), the coarse tier never casts,
+water never casts. The sun still has a shadow map — for everything that stands
+ON the ground, which is all of the city.
+
+**The sun had to come down to 30 degrees for any of it to matter.** Measured
+against this terrain: at 44 degrees, the angle the scene had, NOTHING is in
+shadow, because the steepest ground is a 42-degree slope. At 30 it is 8% of
+columns and at 12 it is 26%. A feature that bakes a shadow nothing casts is
+indistinguishable from a broken one, and the only way to tell was to count.
+
+### 19.10 Sea level is a property of the terrain, not a constant
+
+Raising the relief broke the water in both scenes and neither said so: the
+heightfield scene had sea level 2.8 m against ground with a 3.4 m median, and
+the volumetric one reported a seabed **15 m above** its sea. A capture aimed
+at "the deepest water" put the camera inside a hill.
+
+A metre value is a guess about a generator. The number that survives a change
+of relief is **how much of the world is under water**, so `TerrainWorld.
+sea_level_for(half_tiles, drowned)` samples the ground on a coarse lattice and
+takes that percentile. 30% drowned gives a coast on any seed.
+
+It has to be sampled over the ground the scene actually BUILDS. The volumetric
+scene builds a fixed 5x5 tiles and never streams; a sea derived from a wider
+sample left it dry, because the wider sample included valleys it does not
+contain.
+
+And the captures that hunt for water now say so when there is none, instead of
+photographing the inside of a hill.
+
+### 19.11 Coarsest first, merged rings, and a gate that finally watches
+
+**Place the big blocks first.** A block per uncovered tile, at that tile's own
+level, fragments: a big block is refused whenever any of its cells was already
+taken, so the scan produced 471 blocks where the ring arithmetic says 140.
+Laying the coarsest first and letting the fine ones fill around them is the
+same greedy idea with the order that works — 471 blocks became 195, and at
+4.5 km 2,488 became 339.
+
+**Merge each ring into one mesh.** Only the smallest blocks are ever hidden
+under detail, so everything bigger can share a mesh. Draw calls at 4.5 km:
+**832 → 371**, frame 11.1 → 6.9 ms.
+
+A merged block cannot be removed on its own, which matters because of the next
+part: retiring one rebuilds its ring. A ring is ~48 blocks and re-bakes in
+parallel, so it costs a few milliseconds and happens only when the detail
+walks somewhere new.
+
+**The detail can be ANYWHERE, so any block may need splitting.** The rings are
+laid out from the origin, so a block far out is 16, 64 or 128 tiles across and
+the detail square is 12: walking far from the origin lands inside a block too
+big to hide, and both tiers draw the same ground. A quadtree split fixes it and
+is cheap because only the children that touch the detail recurse — a 128-tile
+block becomes about fifteen smaller ones, not a thousand.
+
+#### The gate
+
+`coverage: N tiles, N drawn twice, N drawn by nothing`, from four camera
+positions including one at the world's rim. A tile drawn twice is z-fighting; a
+tile drawn by neither is a hole; neither shows up in a triangle count.
+
+It failed on its first run — 129 doubles, 21 holes — and every one was real:
+
+* the coarse fill still skipped the ORIGIN square, from before the detail
+  streamed, so those tiles were drawn by nothing once the camera left
+* the streamer kept tiles two beyond its region, off the block lattice, so
+  they drew on top of coarse ground no block could be hidden against
+* blocks straddling the WORLD EDGE waited forever for tiles outside the world
+  to be built, and stayed visible under real detail
+
+Three bugs that had each been looked at and pronounced fine.
+
+### 19.12 Authored pads, and buildings that stand on them
+
+The terrain is an authored size with authored buildings, so a building site is
+a decision rather than a noise function. `BrickTerrain.add_pad(x, z, radius,
+skirt, height)` flattens the field to one height inside `radius` studs and
+eases back over `skirt` more.
+
+It goes in the **field**, not in the mesher, and that is the whole point:
+the detailed tier, the coarse tier, the collider, the stud test, the seabed
+texture and the buoyancy solver all read the same surface and agree about the
+pad without being told it exists. Flattening ground under a building after the
+fact is what produces a building with a cliff behind it.
+
+Chebyshev distance, not Euclidean: a building is a rectangle on a square
+lattice, and a round pad under a square building leaves the corners hanging.
+
+`TerrainWorld.SITES` holds this world's five sites and `heightfield_test`
+stands a blocky shell on each. That is the terrain half of the contract — the
+real buildings are `city_scene.gd`, with their own streaming, damage and
+rooms.
+
+### 19.13 Closing out: materials, the volumetric bench, and building shadows
+
+**The material table.** Colour says which filament; it says nothing about
+what the thing is MADE of. Two spools of the same grey behave nothing alike —
+filled plastics are rough and dead, polished ABS is glossy, TPU is soft — and
+none of that lives in the albedo.
+
+The mesher writes the terrain material per vertex into **ARRAY_CUSTOM0.r**,
+one byte, and the shader indexes a table of (roughness, specular, rim)
+multipliers with it. Grass and dirt go matte, sand brightens slightly, road
+is the glossiest ground there is. One draw call, one material, no second
+surface.
+
+Two things that cost a build each:
+
+* A custom channel is ignored unless the surface DECLARES its format, so
+  `ARRAY_CUSTOM_RGBA8_UNORM << ARRAY_FORMAT_CUSTOM0_SHIFT` travels with every
+  terrain upload — the tiles, the coarse blocks and the merged rings.
+* `CUSTOM0` does not exist in a fragment shader. It is read in the vertex
+  stage and passed as a **flat** varying, which is also what it wants: a
+  material index has no business being interpolated, and half-stone is not a
+  material.
+
+**The volumetric bench keeps its fixed field** and gets the parallel bake
+instead. It is the DESTRUCTION fixture: `_tile_at` has to hold every tile for
+a carve to find what it dirtied, and 56 m is the point of it. What it did not
+need was one core building tiles in series.
+
+**Buildings cast, ground does not.** The ground bakes its own sun shadow
+(§19.9) and never enters the shadow map; the buildings standing on it are a
+handful of meshes and cast normally. The first capture of a site reported "no
+shadows" — the camera was standing on the wrong side of the building. The
+capture stands DOWN-SUN now, which is the only place a shadow can be seen
+from.
+
+One HUD bug fell out of the same shot: the curved-ground percentage divided
+by a fixed 5x5 field that stopped existing when streaming went in, and read
+122%.
+
+---
+
+## 20. Editing terrain is a LEVEL EDITING job
+
+Nothing in this section is reachable from gameplay. The game loads a world and
+never writes one; an author writes worlds and never plays them from here.
+
+### 20.1 An edit goes into the FIELD
+
+`scenes/terrain_editor.tscn` edits **pads** (§19.12), not meshes and not a
+heightmap. That is the whole reason it is a short script: a pad goes into the
+generator, and the detailed tier, the coarse tier, the collider, the stud
+test, the seabed texture and the buoyancy solver all agree about it without
+being told. An editor that pushed vertices around would have to tell every one
+of them, forever, and would have to keep telling them as new consumers
+appeared.
+
+| | |
+|---|---|
+| LEFT CLICK | place a pad under the cursor, or select the one already there |
+| DELETE | remove the selected pad |
+| `[` `]` | radius · `,` `.` skirt · `-` `=` height, a brick at a time |
+| CTRL+S / CTRL+O | save the world / reload it |
+
+Placement raycasts against the terrain's OWN collider, so what gets hit is
+exactly what is drawn — the same body the player stands on (§19.2).
+
+Pads are drawn as flat discs over the ground, because the ground only shows
+the RESULT of a pad, which is a flat spot that looks like every other flat
+spot. An author has to be able to see the thing being edited.
+
+### 20.2 Rebuild what the edit touched
+
+An edit changes the field, so every tile over it is stale — and only those. A
+pad is tens of studs across and the world is thousands, so
+`TerrainStreamer.invalidate(rect)` drops that rectangle and lets it stream
+back. The difference between an editor that answers a keypress and one that
+stops for a second each time.
+
+Resizing rebuilds the OLD bounds as well as the new. Shrinking a pad otherwise
+leaves the ground it used to flatten exactly as it was, and the author is left
+with a flat spot nothing explains.
+
+### 20.3 A world is a seed and a short list of edits
+
+`worlds/<name>.json`: version, seed, the drowned fraction the sea is derived
+from (§19.10), and the pads. Small, diffable, mergeable, and hand-editable —
+which a baked heightfield never is.
+
+A missing world file is **not an error**: a level that has never been edited
+is a seed and nothing else, and the editor says so rather than refusing to
+open.
+
+The probe gates the round trip — save, clear, load, and every pad comes back
+the same pad — because a world file is the only thing here that outlives the
+session.
+
+### 20.4 Three tools, because a level has three kinds of edit
+
+| key | tool | what it is |
+|---|---|---|
+| 1 | PAD | flatten ground to a height — where something stands |
+| 2 | PAINT | say what the ground is MADE of, whatever the noise thinks |
+| 3 | SITE | a building: a pad, plus how many storeys stand on it |
+
+**Painted material is dithered, not blended.** A pad's skirt interpolates
+because height is a number and half way up is a height. Material is a
+CATEGORY: half sand is not a material. So the skirt decides per column, by a
+hash, with the odds falling off with distance — a hard edge would draw a
+visible circle on the ground, and breaking the boundary up is what a hand
+with a brush does. The probe checks both materials appear across the skirt,
+because a dither that has gone hard is still a circle.
+
+**Sites own pads, and pads all live in one list**, because the FIELD only has
+one kind of flat spot — the editor is what knows which pad a site cut. Moving
+or resizing a site re-cuts them, taking the hand-placed pads out first and
+putting them back.
+
+**The buildings are the city's own.** `BuildingShell.build_coarse_mesh` is
+what `city_scene` draws before a building materialises into real bricks, and
+a site here uses the same call with the same `brick.gdshader` — same course
+banding, same seams, same print pass. Testing the terrain half of the
+contract against a placeholder box proves nothing about the real article.
+Footprints snap to `TowerRecipe.PANEL`, because a building off that grid has
+its columns in the wrong places.
+
+### 20.5 One editor, any level
+
+`-- --world=<name>` picks the file, for the editor and the game scene alike.
+A world is a file, not a scene, so there is nothing to duplicate to make a
+second level — and `TerrainWorld.list_worlds()` enumerates what exists.
+
+The world file is version 2 now: seed, drowned fraction, pads, **paints** and
+**sites**. `TerrainWorld.SITES` is no longer where the sites live; it is only
+what a brand new world starts with.

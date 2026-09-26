@@ -45,12 +45,34 @@ const RUN_SPEED := BRICK_M * 13.3
 const CROUCH_SPEED := BRICK_M * 2.9
 ## Clears one course and no more, at this gravity.
 const JUMP_SPEED := 4.2
+
+## Swimming, also in courses a second. Slower than a walk in every direction,
+## which is most of what makes water read as water.
+const SWIM_SPEED := BRICK_M * 4.3
+const SWIM_RISE := BRICK_M * 3.6
+## How fast the body reaches the speed it is asking for. Low, so a swimmer
+## coasts: the drag IS the feel of being in water.
+const SWIM_DRAG := 4.5
+## Chest deep. Below this the feet still have the floor and the figure wades;
+## above it, walking stops meaning anything and it swims.
+const WADE_DEPTH := BODY_HEIGHT * 0.72
+## Where an idle swimmer settles, measured down from the surface to the body's
+## centre: head out, shoulders awash.
+const FLOAT_SINK := BODY_HEIGHT * 0.35
 const GRAVITY := 20.0
 ## Exactly one brick course, plus a hair. A city full of rubble is a city full
 ## of kerbs, and a body that stops dead on any of them cannot cross its own
 ## debris -- so a step up to one course is walked over rather than jumped.
 const STEP_HEIGHT := BRICK_M + 0.03
 const DOUBLE_TAP_MS := 300
+
+## Where the water surface is, if this world has one: a Callable taking a
+## Vector3 and returning the surface height in metres at that point. Left
+## unset the world is dry and none of the swimming below ever runs.
+##
+## A Callable rather than a reference to the water node, because this camera
+## is a debug tool and must not know that `WaterSurface` exists.
+var water_probe := Callable()
 
 ## Off for automated screenshot runs, which must not steal the mouse.
 var capture_mouse := true
@@ -81,6 +103,7 @@ var _height := BODY_HEIGHT
 ## True while the body is crouched because it had to be, rather than because
 ## anyone asked. Read by the HUD, and by the gate.
 var _auto_crouched := false
+var _swimming := false
 
 
 func _ready() -> void:
@@ -98,6 +121,11 @@ func _ready() -> void:
 
 func is_walking() -> bool:
 	return _walking
+
+
+## Feet off the bottom, water over the chest.
+func is_swimming() -> bool:
+	return _swimming
 
 
 func is_crouched() -> bool:
@@ -281,6 +309,19 @@ func _fly(delta: float) -> void:
 func _walk(delta: float) -> void:
 	if _body == null:
 		return
+
+	# Water first: in it, none of the walking below applies -- no gravity, no
+	# step-over, no crouch, and the body steers where it is LOOKING rather
+	# than along the ground plane.
+	var surface := -INF
+	if water_probe.is_valid():
+		surface = float(water_probe.call(_body.global_position))
+	var feet := _body.global_position.y - _height * 0.5
+	_swimming = surface - feet > WADE_DEPTH
+	if _swimming:
+		_swim(delta, surface)
+		return
+
 	var wish := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W): wish -= basis.z
 	if Input.is_key_pressed(KEY_S): wish += basis.z
@@ -329,6 +370,46 @@ func _walk(delta: float) -> void:
 		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
 			_step_over(wanted)
 
+	global_position = _body.global_position + Vector3.UP * _eye_offset()
+
+
+## Swimming. Gravity off, drag on, and the whole body aimed down the look
+## direction -- W under water goes where you are pointed, which is the one
+## control difference that makes a dive feel like a dive.
+##
+## Buoyancy is a spring to a target depth rather than a force and a volume.
+## The figure is a capsule of unknown density in a sea made of bricks; what
+## matters is that letting go of the keys leaves it bobbing at the surface
+## with its head out, and a spring does that in one line.
+func _swim(delta: float, surface: float) -> void:
+	_set_height(BODY_HEIGHT)
+
+	var wish := Vector3.ZERO
+	if Input.is_key_pressed(KEY_W): wish -= basis.z
+	if Input.is_key_pressed(KEY_S): wish += basis.z
+	if Input.is_key_pressed(KEY_A): wish -= basis.x
+	if Input.is_key_pressed(KEY_D): wish += basis.x
+	var rise := 0.0
+	if Input.is_key_pressed(KEY_SPACE) or (e_climbs and Input.is_key_pressed(KEY_E)): rise += 1.0
+	if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_Q): rise -= 1.0
+
+	var target := Vector3.ZERO
+	if wish != Vector3.ZERO:
+		target = wish.normalized() * SWIM_SPEED
+	if rise != 0.0:
+		target.y = rise * SWIM_RISE
+	elif wish == Vector3.ZERO or absf(target.y) < 0.01:
+		# Nobody is asking for a depth, so float to one.
+		var want_y := surface - FLOAT_SINK
+		target.y += clampf((want_y - _body.global_position.y) * 2.0, -SWIM_RISE, SWIM_RISE)
+	# Never swim out of the sea. Above the surface this would be a jump, and a
+	# figure that can hover a metre over the water by holding SPACE is the
+	# thing that stops it reading as water at all.
+	if _body.global_position.y > surface - FLOAT_SINK * 0.5:
+		target.y = minf(target.y, 0.0)
+
+	_body.velocity = _body.velocity.lerp(target, clampf(SWIM_DRAG * delta, 0.0, 1.0))
+	_body.move_and_slide()
 	global_position = _body.global_position + Vector3.UP * _eye_offset()
 
 
