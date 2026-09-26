@@ -639,6 +639,19 @@ func _run_shot_pass() -> void:
 	await _settle_frames(4)
 	await _save("%s_intact" % tag)
 
+	# Nose to the wall: seams, the shaded chamfer and the PRINT PASS, which
+	# city bricks were the last surface in the world not to have. All three
+	# are near-field effects and none of them read from the intact shot.
+	var was_pos := camera.position
+	var was_rot := camera.rotation
+	camera.position = Vector3(1.1, 2.2, 1.1)
+	camera.rotation = Vector3(-0.15, -2.36, 0.0)
+	await _settle_frames(4)
+	await _save("%s_print" % tag)
+	camera.position = was_pos
+	camera.rotation = was_rot
+	await _settle_frames(2)
+
 	# Cut a ring right around the building near the top.
 	#
 	# Slotting ONE wall isolates nothing: courses alternate which pair of walls
