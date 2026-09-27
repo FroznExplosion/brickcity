@@ -451,6 +451,9 @@ func _update_hud() -> void:
 			float(cells) / maxf(float(pieces), 1.0)],
 		"         %d tris   %d studs   %d scatter   built %.1f ms" % [
 			tris, studs, scatter, _build_ms],
+		"authored %d pads  %d paints  %d sites" % [
+			BrickTerrain.pad_count(), BrickTerrain.paint_count(),
+			World.sites.size()],
 		"water    %d instances  %s  sea %.1f m  %s" % [
 			_water.instance_count() + _water_far.instance_count(),
 			("stepped, terrace %.1f studs" % BrickWave.terrace_studs())

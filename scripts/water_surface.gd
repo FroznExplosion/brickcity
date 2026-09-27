@@ -43,11 +43,16 @@ var _pitch := STUD
 @export var inner_radius := 0.0
 ## Painted studs. Off: the water is flat-topped brick.
 @export var studs := false
+## Give the surface near the camera real collision, so a dropped brick rests
+## on a crest instead of being pushed by a force (Water §7.1).
+@export var collide := true
 
 var _mat: ShaderMaterial = null
 var _side := 0
 var _time := 0.0
 var _camera_y := 0.0
+const WaterColliderFx := preload("res://scripts/water_collider.gd")
+var _collider = null
 
 
 func _ready() -> void:
@@ -92,6 +97,12 @@ func _ready() -> void:
 	# sees an empty AABB and throws the whole thing away.
 	custom_aabb = AABB(Vector3(-radius, -40.0, -radius),
 		Vector3(radius * 2.0, 80.0, radius * 2.0))
+
+	if collide:
+		_collider = WaterColliderFx.new()
+		_collider.name = "WaterCollision"
+		add_child(_collider)
+		_collider.setup(get_world_3d().space)
 
 
 ## The ground height in metres over a world rectangle, as an Rf image.
@@ -152,6 +163,8 @@ func follow(camera_xz: Vector2, delta: float, camera_y: float = 0.0) -> void:
 	_mat.set_shader_parameter("wave_time", _time)
 	_mat.set_shader_parameter("camera_submerged",
 			submerged_at(Vector3(camera_xz.x, _camera_y, camera_xz.y)))
+	if _collider != null:
+		_collider.follow(camera_xz, _time, delta)
 	global_position = Vector3.ZERO
 
 
