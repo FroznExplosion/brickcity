@@ -30,12 +30,13 @@ extends RefCounted
 const KINDS := ["storeroom", "office", "kitchen", "empty",
 		"bedroom", "living", "bathroom", "lab", "shop"]
 const LEGACY_KINDS := 4
-## How a far window draws a room of each kind: an index into the drawings
-## shaders/window_interior.gdshader has (storeroom, office, kitchen, empty).
-## A new kind borrows the nearest one until it gets a drawing of its own.
+## How a far window draws a room of each kind: which of the drawings in
+## shaders/window_interior.gdshader it gets. One each today; a kind added later
+## can borrow another's until it has its own. At most 16 (the pane packs it in
+## a vertex colour channel as style / 16).
 const WINDOW_STYLE := {
 	"storeroom": 0, "office": 1, "kitchen": 2, "empty": 3,
-	"bedroom": 1, "living": 2, "bathroom": 3, "lab": 1, "shop": 0,
+	"bedroom": 4, "living": 5, "bathroom": 6, "lab": 7, "shop": 8,
 }
 
 var id := -1
