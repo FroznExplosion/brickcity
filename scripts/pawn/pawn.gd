@@ -59,6 +59,9 @@ var body: CharacterBody3D
 var health: HealthPool
 ## Its gun, when it holds one. The motor passes `fire` and `reload` on.
 var gun: GunController
+## Where it looks from, turned to `intents.look_yaw` / `look_pitch` every tick: a
+## gun held by a brain aims down this (a player's gun aims down the camera).
+var eye: Node3D
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
@@ -88,6 +91,11 @@ static func spawn(parent: Node, feet: Vector3, p_team := 0, with_health := true,
 	p.team = p_team
 	p._capsule = capsule
 	b.add_child(p)
+	var e := Node3D.new()
+	e.name = "Eye"
+	e.position = Vector3.UP * (BODY_HEIGHT * 0.5 - HEAD_HEIGHT * 0.5)
+	b.add_child(e)
+	p.eye = e
 	if with_health:
 		var pool := HealthPool.new()
 		pool.name = "HealthPool"
@@ -126,6 +134,12 @@ func place(feet: Vector3) -> void:
 	body.reset_physics_interpolation()
 
 
+## The middle of the body: what somebody aiming at this pawn aims at.
+func chest() -> Vector3:
+	# Six tenths of the way up, standing or crouched.
+	return feet() + Vector3.UP * _height * 0.62
+
+
 func feet() -> Vector3:
 	return body.global_position - Vector3.UP * _height * 0.5
 
@@ -162,6 +176,9 @@ func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
 	step(delta)
+	if eye != null:
+		eye.position = Vector3.UP * eye_offset()
+		eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
 	if gun != null:
 		gun.set_trigger(intents.fire)
 		if intents.reload:

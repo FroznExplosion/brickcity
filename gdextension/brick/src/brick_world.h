@@ -750,6 +750,10 @@ public:
     int64_t get_seed() const;
 
 private:
+    // AIWorld walks chunk occupancy cell by cell and has to read it directly --
+    // that is the whole reason it lives in this extension (AIPlan R1). It reads;
+    // it never writes.
+    friend class AIWorld;
     std::vector<brick::Archetype> archetypes;
     // A deque, not a vector, for one reason: the face bake runs on a worker
     // thread holding a reference to its chunk, and creating another chunk
