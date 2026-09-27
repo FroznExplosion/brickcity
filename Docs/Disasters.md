@@ -3,7 +3,8 @@
 Design and plan for the disaster system: four built now (**meteor shower, lightning storm, fire,
 tornado**), the rest deferred with what each one is waiting on.
 
-Written 2026-09-26. Nothing here is built yet; [Status](Status.md) will say when it is.
+Written 2026-09-26. **D0 is built** (director, context, base class, `H` / `Shift+H`, banner,
+`--disaster=`, probe); the four disasters are not yet (§7).
 
 Decisions this document is written against:
 
@@ -311,7 +312,7 @@ Each stage merges on its own, small (repo CLAUDE.md).
 
 | Stage | What | Done when |
 |---|---|---|
-| **D0** | Director, context, base class, `H` / `Shift+H`, banner, `--disaster=`, probe skeleton. Small city only | `H` rolls and runs a do-nothing disaster through all four phases; big city has no director |
+| **D0** ✅ | Director, context, base class, `H` / `Shift+H`, banner, `--disaster=`, probe skeleton. Small city only | `H` rolls and runs a do-nothing disaster through all four phases; big city has no director |
 | **D1** | Meteor shower | Probe: N meteors → N committed blasts; frame budget within the damage queue's |
 | **D2** | Lightning storm (sky dim, bolt, thunder delay, rain, shock damage) | Probe: strikes land on the tallest recipe near the roll ≥ 70% |
 | **D3** | Fire service + "a building catches"; meteors and lightning ignite | Probe: fire spreads up, dies out, **never exceeds 48 cells**; metal stops it |
@@ -324,10 +325,18 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 
 ## 8. Testing
 
-`tools/disaster_probe.gd` loads the small city headless and, for each kind with a fixed seed:
+`tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
+`-- --also-big` to also check the big city has no director) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
 tick's damage time, and asserts the per-stage gate above. `--shot` captures a frame at peak for
 each, so a change to the look is reviewable. Run it with the probes the city already has
 (`city_probe`, `debris_probe`, `cap_probe`) before each merge.
+
+Until D1 the roll holds only the **drill** (`drill_disaster.gd`): every phase, a light tremor, no
+brick changed. It stays forceable with `--disaster=drill` once real kinds join the roll.
+
+The city's own gates (`-- --gun` etc.) are scene passes: run them windowed
+(`--path . --resolution 1280x720 res://scenes/city.tscn -- --gun`), never `--headless` — their
+screenshots wait forever without a window.
 
 Measure frame times on a quiet machine — an open editor inflates them several times over.
