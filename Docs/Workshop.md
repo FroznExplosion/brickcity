@@ -186,8 +186,8 @@ INTERIOR/DETAIL bricks.
   built-in furniture for them (`bed`, `bench`, `counter` join `ITEMS`).
   `Room.KINDS` is **append only**: with no program a building still draws
   from the first four (`Room.LEGACY_KINDS`), so no existing room changes. The
-  new kinds are reached through a program. A far window draws a new kind in the
-  nearest existing style (`Room.WINDOW_STYLE`) — the shader is unchanged.
+  new kinds are reached through a program. A far window draws each kind its
+  own way (`Room.WINDOW_STYLE`; see §3 item 3).
 * **Room guide.** With Type = Room template, a green box on the baseplate is a
   real city room (25×25 studs by 18 plates; `U` cycles through 15×25, 15×15,
   25×5, 5×5 — the sizes the city's shapes actually cut), and the HUD says how
@@ -201,17 +201,21 @@ INTERIOR/DETAIL bricks.
 
 Next, in order:
 
-1. **City shapes carry a program.** `city_scene.gd` registers towers without
-   one; its `SHAPES` rows want a `program` (an office block, a warehouse) passed
-   to `register` and to `BuildingShell.build_window_mesh` → `kind_at`. Left for
-   when `city_scene.gd` has no uncommitted work in the main folder.
+1. ✅ **City buildings carry a program.** `city_scene.gd` passes one to
+   `register` and to `BuildingShell.build_window_mesh`, so far windows agree.
+   A `SHAPES` row may set `"program"`; `--programs` (or `room_programs` on the
+   scene) rotates buildings through `PROGRAMS` — office block, apartments,
+   shops, labs. Off by default, so the city and every measurement of it are
+   unchanged. `--rooms --programs` passes 39.
 2. **Rooms for placed builds.** A generated building inside a player build is
    furnished at placement as bricks; the city's room streaming (drawn/real
    rungs, detail on demand) only knows generated towers. Registering a build's
    towers' rooms with `BuildingRegistry.rooms_of`, offset by the tower's cell,
    plus `rooms_near` for builds, would give them the rungs.
-3. **Window drawings for the new room kinds** in
-   `shaders/window_interior.gdshader` (they borrow an old one today).
+3. ✅ **Window drawings for the new room kinds.** Each kind has its own
+   (bed and nightstand; sofa and low table; tub, basin and tiles; lab benches
+   and cabinet; stocked shelving and a counter). The pane packs the style as
+   `style / 16` now, room for sixteen. `--windows --programs` photographs them.
 
 Deliberately not here:
 

@@ -55,6 +55,9 @@ here so nobody later tries to make a boat bob on a ripple.
 
 ## 2. Brick steps, not plate steps
 
+> **Superseded for tier 0 by §2.2** — the pieces bob smoothly and snap to nothing. Kept because
+> the arithmetic still governs `brick_steps` mode and the wave-gain gate.
+
 Terrain quantises to plates (0.14 m). Water must not, and the arithmetic says why.
 
 A wave of amplitude **A = 1 m** and wavelength **λ = 12 m** has a mean surface slope of
@@ -71,6 +74,99 @@ because skirts only exist where a step happens (§3.2).
 
 Over ±1 m of wave that is about five terraces from trough to crest — enough to read as a stack,
 few enough to read as one wave.
+
+### 2.2 Superseded for tier 0 — the pieces bob SMOOTHLY
+
+> Everything in §2 is about *where to snap the surface*. Tier 0 no longer snaps it at all.
+
+Each 1x1 keeps its flat top and its level attitude and rides the wave continuously, so the sea
+is a field of bricks at slightly different heights rather than a staircase locked to 0.42 m.
+This is the one place in the project where the grid should not win: nothing is ever stacked *on*
+the water, so nothing needs a piece to land on a course.
+
+What that changes:
+
+* **Nothing is created or destroyed** — still true, and still the point.
+* **The drawn surface and `BrickWave.height_at` are now the same number.** The 0.42 m
+  disagreement `stepped_at` exists to describe only comes back with `brick_steps` on. A swimmer
+  floats exactly at the surface being drawn.
+* **Stop-motion goes with the steps.** A 12 Hz hold on a continuous height is a stutter, not a
+  brick-film look — that look comes from the pieces being bricks, not from the clock. The two
+  are one flag (`WaterSurface.set_brick_steps`, `V` in both test scenes).
+* **Terrace width is now a steepness diagnostic, not a design target.** The number still gates
+  the wave gain in the probe, because slope is what sets the riser height below.
+
+#### The risers, and why they were the only visible cost
+
+A smooth surface cut into 1x1 cells shows a riser wherever it slopes away from the eye, as tall
+as the height change across one stud — **about 3 cm** at this sea state, measured. In world
+terms nothing; on screen, everything: at grazing incidence from a metre above the water a 3 cm
+face covers twenty-odd pixels and hides the rows behind it, and the sea read as hard dark
+stripes. (Shadows were the first suspect and are not involved — the stripes are identical with
+the sun's shadow map off. Measuring beat guessing here, twice.)
+
+Two fixes, both in shading rather than geometry, because the geometry is correct:
+
+1. **Side faces are shaded 85% of the way toward the surface they belong to.** Lighting a 3 cm
+   riser as a wall is what made it look like one.
+2. **Foam reaches the risers too**, at 0.75 strength. Foam started as a top-face effect, which
+   made the stripes a *colour* problem as well as a lighting one — a white crest over mid-blue
+   risers is a hard edge no normal shading can hide.
+
+Tilting each piece to the local gradient would remove the risers outright. Not taken: a brick
+that does not sit level stops reading as a brick.
+
+#### And the same problem from below: no sides at all
+
+Four attempts, and each one was the previous one's fix taken too far:
+
+1. **A full brick of skirt on every piece** — from underwater, a wall of brick
+   sides in every direction.
+2. **A plate of skirt** — better, and still wrong: a side face one plate tall
+   is still a side face, and underwater you are looking ALONG the sheet, so
+   every piece showed its edge as a stripe.
+3. **No column at all** — the sides collapse into the top plane and stop
+   existing. Clean, and it opened a GAP wherever two pieces sat at different
+   heights, which on a swell is everywhere.
+4. **One seal for the piece** — the drop to the *lowest* neighbour. Closed,
+   and wrong in a way that is obvious once seen: all four sides hang to the
+   depth only one of them needed.
+5. **Per face, per corner** — each bottom corner reaching for its own
+   neighbour and for the diagonal. Exact, and it slanted the bottom edge of
+   every side, so from below the sheet was a mesh of wedges. A brick has no
+   sloped bottom.
+6. **Per face, flat.** Both bottom corners of a face go to the same depth:
+   the drop to the neighbour that face looks at. Rectangles, no angles.
+
+The diagonal is not a hole in practice. Four pieces meet at a corner POINT
+and each wall beside it drops to its own neighbour, so what stays open there
+is a slit of zero width. A wedge you can see beats a slit you cannot.
+
+The floor under it is 5 mm rather than zero: the drop is computed from a
+float wave and the two pieces either side of a seam do not agree to the last
+bit. Above the waterline the floor is a full plate, so the sea still reads as
+bricks from a boat.
+
+That needs the top face to be visible from below, and the piece mesh has no
+bottom face — it is a top and four sides. So the water draws `cull_disabled`
+and flips the normal on back faces. The cost is the back faces of a thin
+sheet; the alternative was adding a bottom face to every piece, which is the
+same triangles permanently instead of only while submerged.
+
+#### Why the sheet is a PLATE thick and not a brick
+
+Seen from underwater the sheet was a wall of brick sides in every direction, because the minimum
+column depth was a full 0.42 m and every piece hung that skirt whether it needed it or not.
+
+The rule that matters is the one already there — a piece reaches down to its lowest neighbour and
+no further — and the floor under it is what was wrong. One plate (0.14 m) instead: the sheet is
+still sealed wherever the surface slopes, because the drop to the neighbour is what sets the
+depth, but where the sea is level there is nothing to see edge-on. Floating bricks are not
+stacked ones; only the part under the water has to be there.
+
+The diagonal neighbours are not sampled — that would be eight wave evaluations a vertex — but a
+diagonal can only be as far down as the two axis drops put together, so the depth is
+`drop_x + drop_z`, a bound rather than a guess, and exact for a plane.
 
 ### 2.1 Slopes add, so a stepped sea carries two or three components, not a spectrum
 
@@ -119,7 +215,30 @@ a flat patch costs a flat plate and only step edges pay for a wall.
 **Undersides** get the rib grid as geometry in the bottom cap, enabled only when the camera is
 below the surface — a shader branch on a uniform, so the above-water case never pays.
 
-### 3.1 Tier 1 — stepped mesh with shader studs, 20–120 m
+### 3.1 Tier 1 — BUILT, as a coarse ring of the same pieces
+
+> The plan below was a separate stepped mesh. What got built is simpler: the
+> **same shader, the same wave, the same MultiMesh path**, with the piece
+> scaled to four studs and everything inside tier 0's radius dropped.
+
+One sheet that stops at 20 m is a disc of water with a cliff round it, and it
+was in every wide shot. The ring runs 19–80 m at 4 studs a piece: 13,225
+instances, the same count as tier 0, for sixteen times the area. Painted
+studs are off out there — a stud is under a pixel past 20 m, which is the
+same argument §7.2 of Terrain makes for the ground's stud tiers.
+
+Three uniforms carry it: `piece_scale` (the piece is a 1x1 plate mesh scaled
+in the vertex shader), `inner_radius` (tier 0 covers the join, so the cut is
+never seen), and `stud`, which was already the grid pitch. The tier's origin
+snaps to its OWN pitch, or the two sheets slide against each other as the
+camera moves.
+
+What it does not do is tier 2 or the horizon. 80 m is where the ring stops
+and the sky starts.
+
+#### The original plan
+
+### 3.1b Tier 1 — stepped mesh with shader studs, 20–120 m
 
 Fixed-topology grid mesh, camera-following and stud-snapped, **one independent quad per cell plus
 four skirt quads**. The skirts collapse to degenerate triangles in the vertex shader when the
@@ -145,6 +264,40 @@ band to 3-stud cells, or pull tier 2 inward).
 A coarse grid, one quad per ~4 m, no quantisation in geometry. The brick steps come back as
 **colour banding** in the fragment shader — `floor(height / 0.42)` picked off a small ramp. At
 120 m a 0.42 m step is under a pixel tall, so drawing it as geometry is drawing nothing.
+
+### 3.2 Tier 2 — BUILT: one sheet to the world's edge
+
+Tier 0 is real 1x1 bricks to 20 m, tier 1 coarse bricks to 80 m, and past
+that the sea simply stopped. Invisible while the terrain stopped at 56 m, and
+glaring the moment it reached 560: from any hilltop the ocean ended in
+mid-air.
+
+It is NOT bricks. At 80 m a 0.35 m piece is under a pixel and a brick tier
+out there would cost 64k instances to say "blue". It is a static mesh whose
+cells double with distance — the same cascade the terrain's coarse tier uses
+— displaced in the vertex shader by the one wave function, with no steps, no
+studs and no print. **7,224 triangles** for everything from 76 m to the
+horizon.
+
+Built once, because the world has edges: the sheet has edges too and neither
+has to follow the camera.
+
+#### The seabed texture covered 28 m of a 1,120 m world
+
+Every water tier asks that texture where the shore is, and outside it the
+answer is "dry land". It was built over the old fixed 5x5 field — ±28 m —
+while tier 1 reaches 80 m and tier 2 reaches the horizon, so both were culled
+everywhere except around the origin. **There was no sea in the world and
+nothing reported an error.**
+
+It covers the whole authored world now at one texel per 8 studs: a 3,200-stud
+world in a 400x400 image. The shoreline is a cull mask and an absorption
+depth; neither needs stud resolution.
+
+The hunt for that took three wrong turns, and the last one is worth writing
+down: the water is hidden by default in the terrain scene, and the captures
+that go looking for water never turned it on. Some of "there is no sea
+anywhere" was a switched-off ocean.
 
 ### 3.3 Tier 3 — the horizon
 
@@ -261,6 +414,155 @@ water is a flat rectangle and only the studs suggest it is a brick at all.
 
 ---
 
+### 3.6 Tall waves, and the one place the amplitude is allowed to live
+
+Tall waves are wanted, and the brick step is what makes them cheap: a 3 m swell is seven steps of
+existing geometry, not a ramp that needs more vertices. Raising the swell needs two things that
+are easy to get wrong in opposite directions.
+
+**A taller swell is also a longer one.** The gain scales wavelength as well as amplitude, so
+wave steepness — and with it the terrace width, which is §2's whole argument — does not move.
+Scaling amplitude alone at gain 2.2 tripled the surface slope and cut the terraces from 2.1
+studs to **1.0**: every cell on a different step, the sea reading as a field of sheer walls
+rather than as a swell, and precisely the failure §2 warned about for plate quantisation. It is
+also the physical answer, since real swell holds H/L roughly constant. Speed follows for free,
+because omega comes from the wavelength. The probe now measures the terrace at the gain the
+scenes actually run, not only at gain 1.
+
+**The gain belongs to `BrickWave`, not to the shader.** It was added as a `wave_gain` uniform
+first, which drew a sea 2.2x taller than the one `BrickWave::height_at` reports — so the drawn
+crest and the surface a swimmer floats on were a metre apart, and every buoyancy sample was
+wrong. §1's rule is not decoration: anything that changes the surface has to change the one
+function. `set_wave_gain` now scales the amplitudes inside `height_at` *and* inside
+`uniform_array`, and the shader has no amplitude knob at all. The probe catches the divergence
+because it reconstructs the surface from the packed uniforms and compares.
+
+**The shore taper stops the swell driving through the beach.** Amplitude is scaled by
+`clamp(depth / 2.5 m, 0, 1)`, so the surf is half height a couple of metres out and flat at the
+waterline. Both sides compute it: the shader from the seabed texture, C++ from
+`(BrickTerrain::height_at + 1) * brick`, which is the same quantity the texture is built from.
+They agree to within the texture's own quantisation rather than by construction, which is the
+honest description — `BrickWave::shore_gain` exposes the CPU side so a caller (and the probe)
+can reproduce the drawn surface exactly.
+
+One consequence measured immediately: the terrain generator's floor sits barely under the old
+1.1 m sea, so the test field's deepest water was **0.82 m**, the taper cut every wave to a third,
+and a system built for tall waves had nowhere to put one. Sea level is now a world knob
+(`set_sea_level`). A sea that cannot be moved is a generator constant pretending to be a design
+one.
+
+The right level is a property of the **seed**, not of the water, and is worth measuring rather
+than guessing. Sampled inland on a 140-stud grid:
+
+| seed | min | median | 1.9 m | 2.4 m | 3.0 m |
+|---|---|---|---|---|---|
+| 20260919 (terrain_test) | 0.42 m | 2.10 m | floods 37% | 53% | 79% |
+| 20260921 (heightfield_test) | 1.54 m | 3.08 m | floods 3% | 22% | 47% |
+
+So terrain_test runs at 1.9 m and heightfield_test at 2.8 m, and both get a coast. At 1.9 m the
+second seed had 8 cm of water in it.
+
+### 3.6b Two colour fixes the captures forced
+
+**The crest is normalised against the LOCAL wave height, not the open-sea one.** Against the
+open-sea amplitude a tapered shore wave never left the middle of the range, so inshore water had
+no crest tint and no foam at all — and the surf is exactly where foam belongs. Dividing by
+`amplitude × taper` puts a white top on a half-metre shore wave and on a three-metre swell
+alike.
+
+**Foam is gated on the ABSOLUTE wave height**, not the normalised one:
+`clamp((local amplitude − half a brick) / brick, 0, 1)`. Normalising the crest and then foaming
+off it whitened every millpond — a 5 cm ripple reaches "1.0 of its own height" and went white,
+and the heightfield bay was a sheet of foam. No whitecaps under half a brick of swell.
+
+**Water stops at the edge of the seabed texture** unless `water_outside_field` says otherwise.
+For a streaming world the texture is a window onto an infinite field and there is sea beyond it;
+for a bounded one — every test scene — there is not, and saying yes drew water hovering over the
+void past the last tile with the sky's ground colour under it. The default is the bounded case,
+because that is the one that renders wrong.
+
+**Depth drives absorption**, which is the seabed texture's second job (§5). Without it a bay and
+an open ocean are the same flat blue, which is most of what makes a brick sea read as a painted
+floor. `mix(albedo, deep_tint, clamp(depth / 6 m, 0, 0.75))`, and in the top-down capture the
+shallow bay and the off-field deep water separate immediately.
+
+### 3.7 Under the surface: the column collapses, and the whole view is fogged
+
+Tall water looks like it has one real objection: a column tall enough to make a good crest is,
+seen from below, a forest of brick sides filling the screen. **It does not, and the fix for it
+was worse than the thing it fixed.**
+
+A column only ever reaches its *lowest neighbour*, never the seabed, so from below what shows is
+the underside of a sheet with risers at the steps — a ceiling, not a forest. Collapsing every
+column to one brick when the camera went under, which was the first answer, opened a hole at
+every step instead: the underwater capture was a shredded ceiling with sky through it. The
+column rule is now the same above and below, and the submerged view is the tint alone.
+
+That handles the water. It does not handle the *view*, and this is the part that gives the trick
+away: below the surface the sky is still bright, the horizon is still crisp, and the ground 40 m
+off is still sharp, so the camera reads as having moved below a pane of glass. §6 planned a
+waterline post-process for this. What is built is smaller and needed no pass of its own:
+`Underwater` (scripts/underwater.gd) switches the `Environment` to exponential fog at 0.085
+density in a green-blue tint, with `fog_sky_affect` at 1 so the sky fogs to the same colour as the
+far water. **Removing the horizon is the whole trick.** Ambient goes to a flat underwater colour
+and saturation drops slightly. Caustics and light shafts from §6 are still not built.
+
+The split-screen waterline of §6 — the near plane crossing the surface, half the image fogged —
+is still not built either. It matters only for the moment the eye is exactly at the surface.
+
+### 3.8 The pieces were 2.9x oversized for six passes
+
+`PieceMeshes.unit_plate()` is a UNIT plate — one METRE on a side, because it
+is a mesh and not a brick. The grid it sits on is one stud, 0.35 m. The
+vertex shader placed each piece at its cell and never scaled it, so every
+piece of water overlapped its neighbours three deep in each direction.
+
+Nothing about that was visible head-on. The studs are painted in WORLD space
+from `floor(xz / 0.35)`, so they stayed exactly where they belonged whatever
+size the pieces were, and the surface read as correct water. What it actually
+explains is a run of symptoms that got treated one at a time:
+
+* the "risers" that read as hard dark stripes and needed their normals shaded
+  flat — those were overlapping pieces cutting through each other
+* the underside being a thicket of sides no matter how thin the sheet got
+* every seal fix helping and never quite finishing
+
+The fix is one line: the piece is `stud` across, which is this tier's pitch in
+metres and therefore exactly the size a piece should be. `piece_scale` is gone
+with it — tier 1's pieces are 1.4 m because its `stud` is 1.4 m.
+
+**The lesson is the one this file keeps relearning: a world-space pattern will
+hide a geometry error indefinitely.** The studs looked right, so the pieces
+were assumed right.
+
+### 3.8b The piece grid sat half a cell off the stud lattice
+
+`grid_side` is odd, so `grid_side * 0.5` ends in .5 and every piece was placed
+half a cell off the world lattice. The painted studs run on that lattice —
+`floor(xz / stud)` — so each stud straddled the corner of four pieces. One
+`floor()` on the half-extent.
+
+The studs were right and the pieces were wrong, which is the same shape of
+mistake as §3.8: a world-space pattern is not evidence that the geometry
+under it is placed correctly.
+
+Water studs are **off** now regardless — a flat-topped water brick is what
+this wants, and studs on water say "you could build on this" about a surface
+that is a wave. The uniform stays, because the lattice they run on is still
+what proves the pieces are aligned.
+
+### 3.9 The water prints too
+
+Nozzle paths across the top of each piece, layer lines down its sides, the
+same numbers and the same analytic filter as the ground. Albedo only — no
+bead relief, because a ridged normal on a surface this specular is a field of
+moving highlights, which is the one thing water does not need more of.
+
+The layers are measured DOWN FROM THE PIECE'S OWN TOP rather than from world
+zero, so they ride with the piece as it bobs instead of swimming through it.
+The top is loops all the way in: a part one stud across has no room for
+infill.
+
 ## 4. Studs on water
 
 Same rule and same dome shader as [Terrain §7](Terrain.md), with two deliberate differences.
@@ -351,6 +653,31 @@ Their stated con for A — that rigid bodies will not bounce or rest on steps wi
 — is accurate, and §7 accepts it: debris floats by buoyancy force, not by contact. The case that
 actually needs B is something a player can **stand** on, which a brick sea makes plausible in a
 way a smooth one does not. That is an open question, not a settled one.
+
+---
+
+### 7.2 Swimming, built
+
+`DebugCamera` takes a `water_probe: Callable` — given a point, return the surface height there —
+and a world with no water simply never sets one. The camera does not know `WaterSurface` exists.
+
+Three things make it read as water rather than as flying:
+
+* **Wade, then swim.** Swimming starts when the surface is more than 0.72 body heights above the
+  feet — chest deep. Below that the feet still have the floor and the normal walk runs, which is
+  what a beach needs.
+* **Steering is the look direction**, not the ground plane. W under water goes where you are
+  pointed; that single difference is most of what makes a dive feel like a dive.
+* **Buoyancy is a spring, not a force and a volume.** The figure is a capsule of unknown density
+  in a sea made of bricks. What matters is that letting go of the keys leaves it bobbing with its
+  head out, and a spring to `surface − 0.35 × body height` does that in one line. Velocity is
+  lerped toward the target rather than set, and the lag *is* the feel of being in water.
+
+Swimming cannot leave the sea: upward velocity is clamped to zero above the float line, because a
+figure that can hover a metre over the water by holding SPACE stops the water reading as water.
+
+The continuous surface is what gameplay asks (`WaterSurface.surface_at` → `BrickWave.height_at`),
+never the stepped one — a swimmer must not teleport 0.42 m when the bricks take a step.
 
 ---
 

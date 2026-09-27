@@ -1528,7 +1528,7 @@ static func mesh_arrays_ok(arrays: Array, who: String) -> bool:
 const INDEX16_MAX_VERTS := 65536
 
 static func index_width(arrays: Array) -> int:
-	# No arrays at all: a chunk with nothing to draw -- nothing alive, or only
+	# No arrays at all: a chunk that baked to nothing -- nothing alive, or only
 	# furniture, which is drawn apart from the faces. A piece of furniture put
 	# to sleep and woken again built exactly that, and this read the vertex
 	# array of nothing.

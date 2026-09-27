@@ -30,17 +30,34 @@ static var _tuft: ArrayMesh = null
 static var _pebble: ArrayMesh = null
 
 
-## An 8-sided tapered stud with a fan cap and no bottom face. 22 triangles.
+## An 8-sided tapered stud with a 45-degree rim bevel and a fan cap.
+## 38 triangles, no bottom face.
 ##
 ## No bottom because a stud is always sitting on something. That is a third of
-## the triangles gone for nothing, and at 8.3k instances (Terrain §7.2) a third
-## is 60k triangles a frame.
+## the triangles gone for nothing, and at 8.3k instances (Terrain section 7.2)
+## a third is 60k triangles a frame.
+##
+## The RIM BEVEL is the second half of the same argument `chamfered_box` makes.
+## A stud is the most numerous geometry on screen, but it is also entirely
+## silhouette -- it sticks up off the surface, so every one of its edges is
+## against something else -- and it is ONE shared mesh. 16 extra triangles are
+## paid once, not 8,300 times. The sharp top rim was the last hard 90-degree
+## corner left on anything the player gets close to.
+##
+## Spec section 2 asks for a small rounded fillet on top edges. A one-segment
+## 45-degree cut is the cheap version of a fillet and is what a printer
+## actually produces at this size.
 static func stud() -> ArrayMesh:
 	if _stud != null:
 		return _stud
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var top_r := STUD_R * STUD_TAPER
+	# The bevel eats the last slice of height and the last sliver of radius.
+	var bev: float = minf(0.013, minf(top_r * 0.34, STUD_H * 0.34))
+	var rim_y := STUD_H - bev
+	var cap_r := top_r - bev
+
 	for i in SIDES:
 		var a0 := TAU * float(i) / float(SIDES)
 		var a1 := TAU * float(i + 1) / float(SIDES)
@@ -49,20 +66,23 @@ static func stud() -> ArrayMesh:
 		var n := (Vector3(c0.x + c1.x, 0.0, c0.y + c1.y)).normalized()
 		var b0 := Vector3(c0.x * STUD_R, 0.0, c0.y * STUD_R)
 		var b1 := Vector3(c1.x * STUD_R, 0.0, c1.y * STUD_R)
-		var t0 := Vector3(c0.x * top_r, STUD_H, c0.y * top_r)
-		var t1 := Vector3(c1.x * top_r, STUD_H, c1.y * top_r)
-		_tri(st, n, b0, t0, t1)
-		_tri(st, n, b0, t1, b1)
-	# Cap, as a fan from the centre.
+		var t0 := Vector3(c0.x * top_r, rim_y, c0.y * top_r)
+		var t1 := Vector3(c1.x * top_r, rim_y, c1.y * top_r)
+		_quad_n(st, n, b0, b1, t1, t0)
+		# The 45-degree rim: halfway between the side normal and straight up.
+		var r0 := Vector3(c0.x * cap_r, STUD_H, c0.y * cap_r)
+		var r1 := Vector3(c1.x * cap_r, STUD_H, c1.y * cap_r)
+		_quad_n(st, (n + Vector3.UP).normalized(), t0, t1, r1, r0)
+
 	var up := Vector3.UP
 	for i in range(1, SIDES - 1):
-		var a0 := TAU * 0.0
+		var a0 := 0.0
 		var a1 := TAU * float(i) / float(SIDES)
 		var a2 := TAU * float(i + 1) / float(SIDES)
-		_tri(st, up,
-			Vector3(cos(a0) * top_r, STUD_H, sin(a0) * top_r),
-			Vector3(cos(a1) * top_r, STUD_H, sin(a1) * top_r),
-			Vector3(cos(a2) * top_r, STUD_H, sin(a2) * top_r))
+		_tri_n(st, up,
+			Vector3(cos(a0) * cap_r, STUD_H, sin(a0) * cap_r),
+			Vector3(cos(a1) * cap_r, STUD_H, sin(a1) * cap_r),
+			Vector3(cos(a2) * cap_r, STUD_H, sin(a2) * cap_r))
 	_stud = st.commit()
 	return _stud
 
