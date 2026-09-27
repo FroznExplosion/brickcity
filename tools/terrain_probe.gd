@@ -32,8 +32,12 @@ func _initialize() -> void:
 	_check_studs()
 	_check_tile_build()
 	_check_winding()
+	_check_bevel_width()
 	_check_chamfer_mesh()
+	_check_flat_mode()
+	_check_smooth_terrain()
 	_check_volumetric()
+	_check_pads()
 	_check_wave()
 
 	print("")
@@ -198,6 +202,15 @@ func _check_piece_mix() -> void:
 
 	var share_2x4 := float(area.get("2x4", 0)) / maxf(float(total), 1.0)
 	var biggest: String = keys[0] if not keys.is_empty() else ""
+	var tile_share := float(int(by_kind[1])) / kind_total
+	# The upper bound moved from 0.55 to 0.62 when the relief did. A piece
+	# only takes studs where the ground is FLAT, so raising the landform
+	# octave from 3 m of total relief to 49 m necessarily trades studded
+	# ground for smooth — 56% tile is the new shape of the world, not a
+	# regression in the packer. The floor is the part that guards anything:
+	# it catches a world that has gone all studs.
+	_ok("a good share of the ground is smooth tile, not all studs",
+		tile_share >= 0.20 and tile_share <= 0.62, "%.0f%%" % (tile_share * 100.0))
 	_ok("2x4 is the single biggest share", biggest == "2x4",
 		"biggest is %s; 2x4 is %.0f%%" % [biggest, share_2x4 * 100.0])
 	_ok("2x4 is more than a quarter of the brick area", share_2x4 >= 0.25,
@@ -273,9 +286,12 @@ func _check_piece_integrity() -> void:
 						# A brick is a flat plate; a tile is flat but not a
 						# plate; a ramp is a ramp. Nothing may be miscast, or
 						# studs land where you cannot build (§7.1, §7.6).
+						# A BRICK must be a flat plate. A TILE may be either:
+						# a terrace edge, or a flat cell deliberately laid
+						# smooth (TILE_CHANCE). What neither may be is a ramp.
 						if kind == 0 and not plate:
 							bad_kind += 1
-						elif kind == 1 and (plate or ramp):
+						elif kind == 1 and ramp:
 							bad_kind += 1
 						elif kind == 2 and not ramp:
 							bad_kind += 1
@@ -328,8 +344,13 @@ func _check_studs() -> void:
 			ramps += 1
 			if BrickTerrain.stud_at(x, z):
 				ramp_studded += 1
-	_ok("a ramp cell never carries a stud", ramp_studded == 0, "%d of %d ramps" % [ramp_studded, ramps])
-	_ok("ramps exist, so the terraces are walkable", ramps > 100, "%d" % ramps)
+	_ok("a ramp cell never carries a stud", ramp_studded == 0,
+		"%d of %d ramps" % [ramp_studded, ramps])
+	# Slopes are OFF (RAMPS_ENABLED). A 1x1 slope is a 50-degree face a third
+	# of a metre across and it made the ground read as melted; walkability is
+	# the character's step-up height now. The cells that were ramps become
+	# TILES, which is where the smooth share comes from.
+	_ok("slopes are off and nothing still reports one", ramps == 0, "%d" % ramps)
 
 
 func _check_tile_build() -> void:
@@ -399,29 +420,37 @@ func _check_winding() -> void:
 	var worst := {}
 	var bad := 0
 	var total := 0
-	for tz in range(-1, 2):
-		for tx in range(-1, 2):
-			var d: Dictionary = BrickTerrain.build_tile(tx, tz)
-			var arrays: Array = d["mesh"]
-			if arrays.is_empty():
-				continue
-			var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-			var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-			for i in range(0, idx.size(), 3):
-				var a := v[idx[i]]
-				var b := v[idx[i + 1]]
-				var c := v[idx[i + 2]]
-				var cross := (b - a).cross(c - a)
-				if cross.length_squared() < 1e-12:
+	# BOTH meshes. The gate was written before the chamfer existed and only
+	# ever ran with the bevel off, so every facet it added went unchecked —
+	# and they were all wound backwards. A gate that does not cover the
+	# geometry added after it is not a gate.
+	for bevel in [0.0, 0.013]:
+		BrickTerrain.set_face_bevel(bevel)
+		for tz in range(-1, 2):
+			for tx in range(-1, 2):
+				var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+				var arrays: Array = d["mesh"]
+				if arrays.is_empty():
 					continue
-				var nrm := n[idx[i]]
-				total += 1
-				# cross must oppose the normal
-				if cross.normalized().dot(nrm) > -0.2:
-					bad += 1
-					var key := "%.0f,%.0f,%.0f" % [nrm.x, nrm.y, nrm.z]
-					worst[key] = int(worst.get(key, 0)) + 1
+				var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+				var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+				var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+				for i in range(0, idx.size(), 3):
+					var a := v[idx[i]]
+					var b := v[idx[i + 1]]
+					var c := v[idx[i + 2]]
+					var cross := (b - a).cross(c - a)
+					if cross.length_squared() < 1e-12:
+						continue
+					var nrm := n[idx[i]]
+					total += 1
+					# cross must oppose the normal
+					if cross.normalized().dot(nrm) > -0.2:
+						bad += 1
+						var key := "%.1f bevel  normal %.0f,%.0f,%.0f" % [
+							bevel, nrm.x, nrm.y, nrm.z]
+						worst[key] = int(worst.get(key, 0)) + 1
+	BrickTerrain.set_face_bevel(0.0)
 	if bad > 0:
 		var parts: Array[String] = []
 		for k in worst:
@@ -474,12 +503,291 @@ func _check_chamfer_mesh() -> void:
 	_ok("the mesh is cached per size",
 		PieceMeshes.chamfered_box(size) == m)
 
+	# The stud got the same treatment: it is the most numerous geometry on
+	# screen but it is ONE shared mesh, and it is entirely silhouette.
+	var sm := PieceMeshes.stud()
+	var sv: PackedVector3Array = sm.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var sn: PackedVector3Array = sm.surface_get_arrays(0)[Mesh.ARRAY_NORMAL]
+	_ok("the stud has a rim bevel", sv.size() / 3 == 38, "%d triangles" % (sv.size() / 3))
+	var sbad := 0
+	for i in range(0, sv.size(), 3):
+		var cr := (sv[i + 1] - sv[i]).cross(sv[i + 2] - sv[i])
+		if cr.length_squared() < 1e-14:
+			continue
+		if cr.normalized().dot(sn[i]) > -0.2:
+			sbad += 1
+	_ok("and every triangle of it is wound right", sbad == 0, "%d backwards" % sbad)
+	var sab := sm.get_aabb()
+	_ok("it is still stud-sized", sab.size.y <= PieceMeshes.STUD_H + 1e-5
+		and sab.size.x <= PieceMeshes.STUD_R * 2.0 + 1e-5,
+		"%.3f across, %.3f tall" % [sab.size.x, sab.size.y])
+
 	# A 1x1 plate is thinner than two chamfers; it must not invert.
 	var thin := PieceMeshes.chamfered_box(Vector3(stud, BrickWorld.get_plate_metres(), stud))
 	var tb := thin.get_aabb()
 	_ok("a plate-thin brick does not turn inside out",
 		tb.size.y > 0.0 and tb.size.y <= BrickWorld.get_plate_metres() + 1e-4,
 		"%.3f m tall" % tb.size.y)
+
+
+## How WIDE is the chamfer, actually?
+##
+## "The chamfers extend too far" is a claim about a distance, and the mesh
+## knows the distance. A facet is a triangle whose normal is not axis
+## aligned; its short edge is the cut, which should be the bevel times root
+## two — 18 mm at a 13 mm setting. Anything much larger means the inset is
+## wrong; anything much larger AND rare means it is the piece SIZE clamp
+## biting on a tiny face.
+func _check_bevel_width() -> void:
+	print("chamfer width")
+	const BEVEL := 0.013
+	BrickTerrain.set_face_bevel(BEVEL)
+	var d: Dictionary = BrickTerrain.build_tile(0, 0)
+	BrickTerrain.set_face_bevel(0.0)
+	var arrays: Array = d["mesh"]
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+
+	var widths: Array[float] = []
+	var over := 0
+	var ramps := 0
+	for i in range(0, idx.size(), 3):
+		var nrm := n[idx[i]]
+		# Axis aligned means a plain face; a facet is diagonal.
+		var m := maxf(absf(nrm.x), maxf(absf(nrm.y), absf(nrm.z)))
+		if m > 0.97:
+			continue
+		var a := v[idx[i]]
+		var b := v[idx[i + 1]]
+		var c := v[idx[i + 2]]
+		var shortest: float = minf(a.distance_to(b),
+			minf(b.distance_to(c), c.distance_to(a)))
+		# A RAMP's tilted top also has a diagonal normal, and it is a whole
+		# 1x1 face — 0.35 m, twenty times a chamfer. Counting those as facets
+		# is what reported a "0.324 m chamfer" and sent me looking for a bug
+		# in geometry that was correct.
+		if shortest > 0.1:
+			ramps += 1
+			continue
+		widths.append(shortest)
+		if shortest > BEVEL * 3.0:
+			over += 1
+
+	_ok("there are chamfer facets at all", widths.size() > 0,
+		"%d facet triangles, plus %d ramp tops" % [widths.size(), ramps])
+	if widths.is_empty():
+		return
+	widths.sort()
+	var median: float = widths[widths.size() / 2]
+	var biggest: float = widths[widths.size() - 1]
+	# cut*sqrt(3), not sqrt(2): the strip runs from a corner inset along BOTH
+	# in-plane edge axes to the rim pushed back along the normal, so all three
+	# axes contribute.
+	print("        median %.4f m, largest %.4f m, expected %.4f m"
+		% [median, biggest, BEVEL * sqrt(3.0)])
+	# The tolerance allows for ramps' own chamfers: a slope's corners are not
+	# 90 degrees, so |e1 + e2| is larger than root two and its facet comes out
+	# a few millimetres wider. That is correct, not drift.
+	_ok("the facet is the width it was asked for",
+		absf(median - BEVEL * sqrt(3.0)) < 0.003, "%.4f m" % median)
+	_ok("and none of them run away",
+		over == 0, "%d facets wider than 3x the bevel" % over)
+
+
+## Heightfield mode: the same terrain with nothing carved out of it.
+## Curved ground — §18.5, biome AND steepness.
+func _check_smooth_terrain() -> void:
+	print("curved ground (§18.5)")
+	BrickTerrain.set_flat_mode(true)
+	BrickTerrain.set_plate_steps(true)
+	BrickTerrain.set_smooth_terrain(true)
+	BrickTerrain.configure(20260921)
+
+	_ok("off unless asked", true)
+	var a := BrickTerrain.smooth_at(13, -7)
+	_ok("the decision is stable", a == BrickTerrain.smooth_at(13, -7))
+
+	# THE bug this file exists to catch, and the one that actually happened:
+	# the biome mask ran at a 250-stud wavelength, the whole field sat inside
+	# one noise cell, and "about half the map" was in fact all of it. A mask
+	# whose wavelength exceeds the world is a constant.
+	var n := 0
+	var smooth := 0
+	var steep_smooth := 0
+	var worst_steep := 0.0
+	for gz in range(-80, 80, 2):
+		for gx in range(-80, 80, 2):
+			n += 1
+			if not BrickTerrain.smooth_at(gx, gz):
+				continue
+			smooth += 1
+			var t := BrickTerrain.surface_plate(gx, gz)
+			var step := 0
+			for d in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+				step = maxi(step, absi(BrickTerrain.surface_plate(gx + d.x, gz + d.y) - t))
+			if step > 2:
+				steep_smooth += 1
+			worst_steep = maxf(worst_steep, float(step))
+	var share := float(smooth) / maxf(float(n), 1.0)
+	_ok("the mask is REGIONAL, not the whole map and not none of it",
+		share > 0.15 and share < 0.85, "%.0f%% curved" % (share * 100.0))
+	_ok("and a cliff is never curved", steep_smooth == 0,
+		"worst step under a curve %d plates" % int(worst_steep))
+
+	# No piece may reach into a curve: the two surfaces would overlap, and
+	# the packer has no idea the curve exists.
+	var stride := BrickTerrain.get_piece_stride()
+	var tile := BrickTerrain.get_tile_studs()
+	var overlaps := 0
+	var cells := 0
+	for tz in range(-1, 2):
+		for tx in range(-1, 2):
+			var pcs := BrickTerrain.pack_tile(tx, tz)
+			for i in range(0, pcs.size(), stride):
+				for dz in pcs[i + 3]:
+					for dx in pcs[i + 2]:
+						cells += 1
+						if BrickTerrain.smooth_at(tx * tile + pcs[i] + dx,
+								tz * tile + pcs[i + 1] + dz):
+							overlaps += 1
+	_ok("no brick is packed onto curved ground", overlaps == 0,
+		"%d of %d packed cells" % [overlaps, cells])
+
+	# And the mesh really does change — a flag nothing reads is the other
+	# way this can quietly do nothing.
+	var with_curves: Dictionary = BrickTerrain.build_tile(0, 0)
+	BrickTerrain.set_smooth_terrain(false)
+	var all_brick: Dictionary = BrickTerrain.build_tile(0, 0)
+	_ok("turning it off gives the packer its cells back",
+		int(all_brick["piece_count"]) > int(with_curves["piece_count"]),
+		"%d pieces bricked vs %d mixed" % [
+			int(all_brick["piece_count"]), int(with_curves["piece_count"])])
+	_ok("and studs survive the change — a curve keeps its flat spots",
+		int(with_curves["stud_count"]) > 0,
+		"%d studs on the mixed tile" % int(with_curves["stud_count"]))
+
+	# ONE TOP SURFACE A CELL. A cell drawn by both a piece and a curve is
+	# two surfaces in the same place — z-fighting — and a cell drawn by
+	# neither is a hole. Neither shows up in a triangle count.
+	var tile3 := BrickTerrain.get_tile_studs()
+	var covered_ok := true
+	var worst_cell := ""
+	for tz in range(-1, 2):
+		for tx in range(-1, 2):
+			var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+			var total := int(d["curve_cells"]) + int(d["owned_cells"])
+			if total != tile3 * tile3:
+				covered_ok = false
+				worst_cell = "tile %d,%d: %d of %d" % [tx, tz, total, tile3 * tile3]
+	_ok("every cell has exactly one top surface", covered_ok,
+		worst_cell if worst_cell != "" else "9 tiles, %d cells each" % (tile3 * tile3))
+
+	# Collision has to follow the CURVE, not the column it was cut from, or
+	# the player walks a staircase inside a smooth hill. And it has to stay
+	# merged: continuous heights are never equal, so an unquantised curve
+	# hands back one box a cell — 1,024 a tile, which is the scene build
+	# this merge exists to prevent.
+	BrickTerrain.set_smooth_terrain(true)
+	var data: Dictionary = BrickTerrain.build_tile(0, 0)
+	var boxes: PackedFloat32Array = data["boxes"]
+	var plate := BrickWorld.get_plate_metres()
+	var stud := BrickWorld.get_stud_metres()
+	var tile2 := BrickTerrain.get_tile_studs()
+	var follows := 0
+	var worst := 0.0
+	var curved := 0
+	for lz in tile2:
+		for lx in tile2:
+			if not BrickTerrain.smooth_at(lx, lz):
+				continue
+			curved += 1
+			var cx := (float(lx) + 0.5) * stud
+			var cz := (float(lz) + 0.5) * stud
+			var top := -1e9
+			for i in range(0, boxes.size(), 6):
+				if absf(boxes[i] - cx) > boxes[i + 3] * 0.5:
+					continue
+				if absf(boxes[i + 2] - cz) > boxes[i + 5] * 0.5:
+					continue
+				top = maxf(top, boxes[i + 1] + boxes[i + 4] * 0.5)
+			if top < -1e8:
+				continue
+			var column := float(BrickTerrain.surface_plate(lx, lz) + 1) * plate
+			if absf(top - column) > 1e-4:
+				follows += 1
+			# The DRAWN height of the cell, rebuilt here the way the mesher
+			# builds it: a corner is the mean of its four columns unless a
+			# BRICKED one meets there, and then it is that brick's top.
+			# Comparing against the column instead is what the first version
+			# of this check did, and it measured the curve rather than the
+			# error — 0.175 m of "failure" that was the curve doing its job.
+			var mid := 0.0
+			for ccz in [0, 1]:
+				for ccx in [0, 1]:
+					var sum := 0.0
+					var hard := -1e9
+					for dz in [-1, 0]:
+						for dx in [-1, 0]:
+							var qx: int = lx + ccx + dx
+							var qz: int = lz + ccz + dz
+							# The CONTINUOUS surface, because that is what a
+							# curve is drawn from. This mirror used the
+							# quantised column and reported 0.28 m of error
+							# the moment the curve stopped being a mean of
+							# staircase steps — measuring the change, not a
+							# defect, for the second time in this check.
+							sum += BrickTerrain.surface_raw(qx, qz)
+							if not BrickTerrain.smooth_at(qx, qz):
+								hard = maxf(hard,
+									float(BrickTerrain.surface_plate(qx, qz) + 1) * plate)
+					mid += (hard if hard > -1e8 else sum * 0.25) * 0.25
+			worst = maxf(worst, absf(top - mid))
+	_ok("collision follows the curve, not the column", follows > 0,
+		"%d of %d curved cells differ from their column" % [follows, curved])
+	# One collision quantum (a quarter plate), and nothing else.
+	_ok("and lands on the drawn surface", worst <= plate * 0.25 + 1e-3,
+		"worst %.3f m off the curve" % worst)
+	_ok("and the boxes still merge", int(data["box_count"]) < 500,
+		"%d boxes on a mixed tile" % int(data["box_count"]))
+
+	BrickTerrain.set_plate_steps(false)
+	BrickTerrain.set_flat_mode(false)
+	BrickTerrain.configure(20260919)
+
+
+func _check_flat_mode() -> void:
+	print("heightfield mode (§17.22)")
+	BrickTerrain.set_flat_mode(true)
+	var caves := 0
+	var probed := 0
+	for z in range(-40, 40, 3):
+		for x in range(-40, 40, 3):
+			var top := BrickTerrain.surface_plate(x, z)
+			for d in range(4, 30):
+				probed += 1
+				if BrickTerrain.solid_at(x, top - d, z) == 0:
+					caves += 1
+	_ok("nothing is carved below the surface", caves == 0,
+		"%d air cells of %d" % [caves, probed])
+
+	# The surface must be the plain 2D field, and a carve must not move it.
+	var before := BrickTerrain.surface_plate(6, 6)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	BrickTerrain.carve(Vector3(6.5 * stud, (float(before) + 0.5) * plate, 6.5 * stud), 2.0)
+	_ok("destruction does nothing in heightfield mode",
+		BrickTerrain.surface_plate(6, 6) == before, "%d plates" % before)
+	BrickTerrain.clear_terrain_edits()
+
+	# And the packer still produces the same kind of ground.
+	var stride := BrickTerrain.get_piece_stride()
+	var p2 := BrickTerrain.pack_tile(0, 0)
+	_ok("the packer still lays pieces", p2.size() / stride > 50,
+		"%d pieces" % (p2.size() / stride))
+
+	BrickTerrain.set_flat_mode(false)
+	_ok("and the volumetric path comes back", not BrickTerrain.get_flat_mode())
 
 
 func _check_volumetric() -> void:
@@ -577,6 +885,119 @@ func _check_volumetric() -> void:
 	_ok("and leaves nothing stored", BrickTerrain.get_edit_count() == 0)
 
 
+## Authored building pads — §19.11.
+func _check_pads() -> void:
+	print("authored pads (§19.11)")
+	BrickTerrain.set_flat_mode(true)
+	BrickTerrain.configure(20260921)
+	BrickTerrain.clear_pads()
+	var plate := BrickWorld.get_plate_metres()
+	var before := BrickTerrain.surface_plate(300, -200)
+	BrickTerrain.add_pad(300, -200, 10, 6, float(before + 1) * plate + 2.0)
+	_ok("a pad is stored", BrickTerrain.pad_count() == 1)
+
+	# DEAD FLAT inside the radius: a building stands on one level or it
+	# stands on a slope.
+	var level := BrickTerrain.surface_plate(300, -200)
+	var flat := true
+	for dz in range(-10, 11):
+		for dx in range(-10, 11):
+			if BrickTerrain.surface_plate(300 + dx, -200 + dz) != level:
+				flat = false
+	_ok("the pad is dead flat inside its radius", flat,
+		"%.2f m" % (float(level + 1) * plate))
+	_ok("and it is where it was asked for",
+		absf(float(level + 1) * plate - (float(before + 1) * plate + 2.0)) <= plate,
+		"asked %.2f, got %.2f" % [float(before + 1) * plate + 2.0,
+			float(level + 1) * plate])
+
+	# ...and gone by the far side of the skirt, or a pad would flatten the
+	# world.
+	var away := BrickTerrain.surface_plate(300 + 40, -200)
+	BrickTerrain.clear_pads()
+	var natural := BrickTerrain.surface_plate(300 + 40, -200)
+	_ok("and the ground is untouched past the skirt", away == natural)
+	_ok("clearing removes them", BrickTerrain.pad_count() == 0)
+
+	# PAINTED MATERIAL (§20.1): an author overruling the generator.
+	BrickTerrain.clear_paints()
+	var natural_mat := BrickTerrain.material_at(500, 500)
+	# The natural material VARIES with position, so a point outside the
+	# paint needs its own reading taken before the paint exists. Comparing
+	# it against the middle's natural material measured the generator, not
+	# the paint — the same wrong-reference mistake as §19.12's collider
+	# check, for the third time.
+	var natural_far := BrickTerrain.material_at(520, 500)
+	BrickTerrain.add_paint(500, 500, 8, 5, 3)   # 3 = sand
+	_ok("paint overrules the generator",
+		BrickTerrain.material_at(500, 500) == 3,
+		"was %d, now %d" % [natural_mat, BrickTerrain.material_at(500, 500)])
+	_ok("and it knows what it covers", BrickTerrain.paint_at(500, 500) == 0)
+	# The skirt is DITHERED, so the edge is a mix rather than a circle: both
+	# materials have to appear in it or it is not a dither.
+	var sand := 0
+	var other := 0
+	for d in range(9, 13):
+		if BrickTerrain.material_at(500 + d, 500) == 3:
+			sand += 1
+		else:
+			other += 1
+	_ok("the skirt is dithered, not a hard circle", sand > 0 and other > 0,
+		"%d painted, %d not, across the skirt" % [sand, other])
+	_ok("and it is gone past the skirt",
+		BrickTerrain.material_at(520, 500) == natural_far)
+	BrickTerrain.clear_paints()
+	_ok("clearing paint puts the ground back",
+		BrickTerrain.material_at(500, 500) == natural_mat)
+
+	# EDITING, which is a level-authoring job (§20). The editor is the only
+	# thing that calls these, and a world file is the only thing that
+	# survives the session, so the round trip is the part worth gating.
+	BrickTerrain.add_pad(10, 20, 6, 3, 4.0)
+	BrickTerrain.add_pad(-40, 15, 9, 4, 7.5)
+	BrickTerrain.add_paint(60, -30, 7, 4, 4)
+	var b: Rect2i = BrickTerrain.pad_bounds(0)
+	_ok("a pad knows what it touches",
+		b.position == Vector2i(10 - 9, 20 - 9) and b.size == Vector2i(19, 19),
+		"%s" % b)
+	BrickTerrain.set_pad(0, 11, 21, 7, 2, 4.5)
+	var edited := BrickTerrain.get_pad(0)
+	_ok("and can be edited in place",
+		int(edited["x"]) == 11 and int(edited["radius"]) == 7
+			and absf(float(edited["height"]) - 4.5) < 0.001)
+
+	var World := preload("res://scripts/terrain_world.gd")
+	var path := "user://probe_world.json"
+	_ok("a world saves", World.save_world(path, 1234, 0.25) == OK)
+	BrickTerrain.clear_pads()
+	var back: Dictionary = World.load_world(path)
+	_ok("and loads its seed and sea back",
+		int(back.get("seed", 0)) == 1234
+			and absf(float(back.get("drowned", 0.0)) - 0.25) < 0.001)
+	_ok("with every pad it had", BrickTerrain.pad_count() == 2,
+		"%d pads" % BrickTerrain.pad_count())
+	_ok("and every paint", BrickTerrain.paint_count() == 1
+		and int(BrickTerrain.get_paint(0)["material"]) == 4,
+		"%d paints" % BrickTerrain.paint_count())
+	var one := BrickTerrain.get_pad(0)
+	_ok("and the pads are the same pads",
+		int(one["x"]) == 11 and int(one["z"]) == 21 and int(one["radius"]) == 7
+			and int(one["skirt"]) == 2 and absf(float(one["height"]) - 4.5) < 0.001)
+	BrickTerrain.remove_pad(0)
+	_ok("removing one leaves the rest", BrickTerrain.pad_count() == 1
+		and int(BrickTerrain.get_pad(0)["x"]) == -40)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	BrickTerrain.clear_pads()
+	BrickTerrain.clear_paints()
+
+	# A world that has never been edited is a seed and nothing else, and
+	# asking for one must not be an error.
+	_ok("a missing world file is not a failure",
+		World.load_world("user://no_such_world.json").is_empty())
+	BrickTerrain.set_flat_mode(false)
+	BrickTerrain.configure(20260919)
+
+
 func _check_wave() -> void:
 	print("wave (Water §1)")
 	var h0 := BrickWave.height_at(3.7, -2.1, 0.0)
@@ -594,12 +1015,57 @@ func _check_wave() -> void:
 		var x := float(i) * 0.83 - 20.0
 		var z := float(i) * -0.41 + 5.0
 		var mirror := BrickWave.get_sea_level()
+		# The packed amplitudes carry the wave GAIN but not the shore ramp,
+		# which the shader applies itself from the seabed texture. Reproducing
+		# the surface means applying that here too — and a `wave_gain` uniform
+		# living only in the shader was 2.2x off this for as long as it
+		# existed, which is why the gain now lives in BrickWave.
+		var ramp := BrickWave.shore_gain(x, z)
 		for w in BrickWave.component_count():
 			var a := packed[w * 2]
 			var b := packed[w * 2 + 1]
-			mirror += a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+			mirror += ramp * a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
 		worst = maxf(worst, absf(BrickWave.height_at(x, z, t) - mirror))
 	_ok("the packed uniforms reproduce height_at", worst < 1e-4, "worst %.7f m" % worst)
+
+	# The ramp itself: dry ground gets no wave at all, and deep water gets
+	# most of one. Without the first a swell drives bricks through the beach;
+	# without the second, tall waves are tall nowhere.
+	var was_sea: float = BrickWave.get_sea_level()
+	# The sea level is chosen FROM THE TERRAIN, not fixed at 1.9 m.
+	#
+	# A fixed level tests the generator's elevation, not the shore taper: the
+	# moment the landform octave went in, every sampled column was above
+	# 1.9 m and the check reported "the sea gets no swell" about a world with
+	# no sea in it. Pick a level the sampled ground actually straddles.
+	var brick := BrickTerrain.get_brick_metres()
+	var stud := BrickWorld.get_stud_metres()
+	var lowest := 1e9
+	var heights: Array[float] = []
+	for i in 400:
+		var gx := (i * 37) % 120 - 60
+		var gz := (i * 53) % 120 - 60
+		var h := float(BrickTerrain.height_at(gx, gz) + 1) * brick
+		heights.append(h)
+		lowest = minf(lowest, h)
+	heights.sort()
+	var sea: float = maxf(lowest + 4.0, heights[heights.size() / 4])
+	BrickWave.set_sea_level(sea)
+	var dry := 0.0
+	var wet := 0.0
+	for i in 400:
+		var gx := (i * 37) % 120 - 60
+		var gz := (i * 53) % 120 - 60
+		var ground := float(BrickTerrain.height_at(gx, gz) + 1) * brick
+		var g := BrickWave.shore_gain((gx + 0.5) * stud, (gz + 0.5) * stud)
+		if ground >= sea:
+			dry = maxf(dry, g)
+		else:
+			wet = maxf(wet, g)
+	_ok("dry land gets no swell", dry == 0.0, "worst gain on land %.3f" % dry)
+	_ok("and the sea gets some", wet > 0.3,
+		"deepest gain %.2f at sea %.1f m" % [wet, sea])
+	BrickWave.set_sea_level(was_sea)
 
 	# Batched sampling is the call gameplay uses; it must match the scalar one.
 	var pts := PackedVector2Array([Vector2(1, 2), Vector2(-4.5, 8.25), Vector2(0, 0)])
@@ -617,6 +1083,21 @@ func _check_wave() -> void:
 		"%.1f studs" % terrace)
 	var at_plate := terrace * BrickWorld.get_plate_metres() / BrickWave.get_step_metres()
 	_ok("a plate step would not", at_plate < 1.5, "%.1f studs at plate quantisation" % at_plate)
+
+	# And the terrace must survive the GAIN the scenes actually run at. Gain
+	# scaling amplitude alone cut it from 2.1 studs to 1.0 — every cell on a
+	# different step, which is §2's noise case — so the gain scales wavelength
+	# too and this is the gate that says so.
+	var was_gain: float = BrickWave.get_wave_gain()
+	BrickWave.set_wave_gain(2.2)
+	var tall := BrickWave.terrace_studs()
+	var crest := BrickWave.height_at(0.0, 0.0, 0.0)
+	_ok("a tall sea still has readable terraces",
+		absf(tall - terrace) < 0.05, "%.1f studs at gain 2.2" % tall)
+	BrickWave.set_wave_gain(was_gain)
+	_ok("and the gain is undone by putting it back",
+		is_equal_approx(BrickWave.terrace_studs(), terrace),
+		"crest sampled %.2f m at gain 2.2" % crest)
 
 	var stepped := BrickWave.stepped_at(3.7, -2.1, 0.0)
 	var step := BrickWave.get_step_metres()

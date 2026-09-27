@@ -603,6 +603,9 @@ var _shells_freed := 0
 var _shells_swapped := 0
 
 var _shot_mode := false
+## Frame-cost measurement, the same reading `heightfield_test -- --bench`
+## takes, so the city and the terrain can be compared on one scale.
+var _bench_mode := false
 var _stress_mode := false
 var _reach_mode := false
 var _lod_mode := false
@@ -696,6 +699,7 @@ var _prof_sum := {}
 func _ready() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	_shot_mode = "--shot" in args
+	_bench_mode = "--bench" in args
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
 	_lod_mode = "--lod" in args
@@ -833,6 +837,8 @@ func _ready() -> void:
 		_run_mech_pass()
 	elif _stress_mode:
 		_run_stress_pass()
+	elif _bench_mode:
+		_run_bench()
 	elif _shot_mode:
 		_run_shot_pass()
 
@@ -3988,6 +3994,48 @@ func _wire_box(im: ImmediateMesh, xform: Transform3D, size: Vector3, col: Color)
 # ---------------------------------------------------------------------------
 # Automated capture
 # ---------------------------------------------------------------------------
+
+## What the city costs a frame, from three viewpoints.
+##
+##     godot --path . scenes/city.tscn -- --bench
+##
+## Vsync off, or every reading is the monitor. See Docs/Terrain.md 19.5 for
+## the comparison against terrain.
+func _run_bench() -> void:
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+	await _frames(30)
+	var rep: Dictionary = registry.report()
+	print("[bench] city: %d buildings, %d live bricks" % [
+		rep.buildings, rep.live_blocks])
+
+	await _bench_at("over the city", Vector3(-52.0, 34.0, -52.0),
+			Vector3(-0.42, -2.36, 0.0))
+	await _bench_at("street level", Vector3(-8.0, 1.7, -8.0),
+			Vector3(-0.05, -2.36, 0.0))
+	await _bench_at("high and far", Vector3(-140.0, 90.0, -140.0),
+			Vector3(-0.42, -2.36, 0.0))
+	get_tree().quit()
+
+
+func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
+	camera.position = pos
+	camera.rotation = rot
+	var samples: Array[float] = []
+	for i in 90:
+		await RenderingServer.frame_post_draw
+		samples.append(get_process_delta_time() * 1000.0)
+	var sum := 0.0
+	for i in range(samples.size() / 2, samples.size()):
+		sum += samples[i]
+	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms" % [
+		label,
+		RenderingServer.get_rendering_info(
+			RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME),
+		RenderingServer.get_rendering_info(
+			RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
+		sum / float(samples.size() / 2)])
+
 
 func _run_shot_pass() -> void:
 	camera.position = Vector3(-52.0, 34.0, -52.0)
