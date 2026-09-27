@@ -191,6 +191,8 @@ var camera: DebugCamera
 var _placer: CityPlacer
 ## Hit marks, debris and sounds by material, and footsteps (material_fx.gd).
 var _material_fx: MaterialFx
+## Natural disasters (Docs/Disasters.md): the small city only, null with --big.
+var disasters: DisasterDirector
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
@@ -1002,6 +1004,11 @@ func _ready() -> void:
 	_material_fx.name = "MaterialFx"
 	add_child(_material_fx)
 	_material_fx.setup(world, registry, camera)
+	if not _big:
+		disasters = DisasterDirector.new()
+		disasters.name = "Disasters"
+		add_child(disasters)
+		disasters.setup(self)
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:
@@ -5051,7 +5058,7 @@ func _update_hud() -> void:
 				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload",
+		"1 gun · 2 blast · T next gun · R reload" + (" · H disaster (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · N respawn"
@@ -5213,6 +5220,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	match event.keycode:
 		KEY_X:
 			_fire(BIG_BLAST)
+		KEY_H:
+			if disasters != null:
+				disasters.on_key(event.shift_pressed)
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_1:
