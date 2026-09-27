@@ -37,6 +37,19 @@ extends Node3D
 ## The authored world, in tiles either side of the origin. Nothing is built
 ## outside it — this world has edges and knows where they are.
 @export var world_half := 50
+## Hold the WHOLE world resident, wherever the camera is.
+##
+## For an authored place small enough to afford it — a city is 96 m across —
+## and it buys two things streaming cannot: the ground a collapse lands on is
+## never half-built, and the hole in the coarse tier never moves, so the far
+## tier can be baked once and never thought about again.
+##
+## It also fixes a failure that is easy to miss. The region is centred on the
+## CAMERA, so a camera standing outside the world looking in — which is where
+## every scripted pass puts it — asks for the near half and no more: the big
+## city got 144 of its 625 tiles and the far half of it stood on coarse
+## ground.
+@export var whole_world := false
 ## How long assembly may take in one frame. Three milliseconds of a sixteen
 ## millisecond frame is a fifth of the budget and invisible in practice.
 @export var budget_ms := 1.5
@@ -46,6 +59,9 @@ extends Node3D
 ## Tiles within this many of the camera get a COLLIDER. Collision is the most
 ## expensive phase and the only one nobody can see; you cannot stand on a
 ## tile four away from you.
+##
+## NEGATIVE means every resident tile, for a small world held whole: debris
+## from a collapse two streets away still has to land on something.
 @export var collide_radius := 2
 ## Tiles within this many of the camera cast into the sun's shadow map.
 ##
@@ -154,6 +170,20 @@ func has_tile(c: Vector2i) -> bool:
 	return _tiles.has(c)
 
 
+## The coordinates of every resident tile. For the gate, which has to ask
+## what IS built rather than what was asked for.
+func tiles_at() -> Array:
+	return _tiles.keys()
+
+
+func built_count() -> int:
+	return _built
+
+
+func worst_phase_ms() -> float:
+	return _worst_tile_ms
+
+
 func tile_count() -> int:
 	return _tiles.size()
 
@@ -177,6 +207,9 @@ func region(cx: int, cz: int) -> Rect2i:
 	# Snapping the RADIUS out instead turned a 9-tile square into a 20-tile
 	# one — four times the tiles — because both edges rounded away from the
 	# centre independently.
+	if whole_world:
+		return Rect2i(-world_half, -world_half,
+				world_half * 2 + 1, world_half * 2 + 1)
 	var pad: int = int(ceil(float(near_radius) / float(align))) * align
 	var lo := Vector2i(_snap_down(cx) - pad, _snap_down(cz) - pad)
 	var size := Vector2i.ONE * (align + pad * 2)
@@ -301,7 +334,8 @@ func _finish(t0: int) -> void:
 			_worst_tile_ms = maxf(_worst_tile_ms, ms)
 		# Collision only where you could stand. It is the most expensive phase
 		# and the only one nobody can see.
-		if absi(c.x - _centre.x) <= collide_radius and absi(c.y - _centre.y) <= collide_radius:
+		if collide_radius < 0 or (absi(c.x - _centre.x) <= collide_radius
+				and absi(c.y - _centre.y) <= collide_radius):
 			var t2 := Time.get_ticks_usec()
 			tile.add_collision(shapes_per_frame)
 			var cms := float(Time.get_ticks_usec() - t2) / 1000.0

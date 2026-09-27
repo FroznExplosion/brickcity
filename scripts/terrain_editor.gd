@@ -24,6 +24,7 @@ extends Node3D
 ## Keys:
 ##   1 / 2 / 3    pick the tool
 ##   LEFT CLICK   place under the cursor, or select what is already there
+##   G            grab the selection; it follows the cursor, click to drop
 ##   DELETE       remove the selection
 ##   [ / ]        radius        , / .   skirt
 ##   - / =        height (pad, site) or material (paint)
@@ -36,9 +37,10 @@ const World := preload("res://scripts/terrain_world.gd")
 var _world_path := "res://worlds/heightfield.json"
 
 enum Tool { PAD, PAINT, SITE }
-## The terrain materials an author can paint with, in the generator's order.
-const MATERIALS: Array[String] = ["air", "grass", "dirt", "sand", "stone",
-		"dark stone", "road"]
+## The terrain materials an author can paint with, ASKED FOR rather than
+## written out: a hand-copied list is one rename away from painting stone
+## and labelling it sand.
+static var MATERIALS: PackedStringArray = BrickTerrain.material_names()
 const WORLD_SEED := 20260921
 const DRY_AMBIENT := 0.6
 const NEAR_TILES := 4
@@ -54,6 +56,13 @@ var _markers: Node3D = null
 var _tool: Tool = Tool.PAD
 var _selected := -1
 var _paint_material := 3        ## sand, a visible default
+## Grab mode: the selection follows the cursor until the next click.
+##
+## A drag, in a scene where the mouse is captured for looking. There is no
+## cursor to drag WITH, so "grab, aim, drop" is the shape the camera
+## already has — the same gesture a modelling package uses for the same
+## reason.
+var _grabbing := false
 var _drowned := 0.30
 var _dirty := false
 var _shot_mode := false
@@ -157,7 +166,41 @@ func _build_terrain() -> void:
 func _process(_delta: float) -> void:
 	if _streamer != null:
 		_streamer.follow(Vector2(_camera.global_position.x, _camera.global_position.z))
+	if _grabbing:
+		_drag_marker()
 	_update_hud()
+
+
+## While grabbing, the MARKER follows the cursor and the ground does not.
+##
+## Rebuilding terrain every frame of a drag would be a slideshow — a pad is
+## tens of studs and a rebuild is tens of tiles — so the ground catches up
+## on the drop. The marker is what the author is aiming with anyway.
+func _drag_marker() -> void:
+	var hit := _aim()
+	if hit.is_empty() or _markers.get_child_count() == 0:
+		return
+	var idx := _marker_index()
+	if idx < 0 or idx >= _markers.get_child_count():
+		return
+	var p: Vector3 = hit["position"]
+	var plate := BrickWorld.get_plate_metres()
+	var node := _markers.get_child(idx) as MeshInstance3D
+	node.position = Vector3(p.x, p.y + plate * 2.0, p.z)
+
+
+## Where the selected thing's marker sits in the marker list, which is built
+## pads first, then paints, then sites.
+func _marker_index() -> int:
+	if _selected < 0:
+		return -1
+	match _tool:
+		Tool.PAD:
+			return _selected
+		Tool.PAINT:
+			return BrickTerrain.pad_count() + _selected
+		_:
+			return BrickTerrain.pad_count() + BrickTerrain.paint_count() + _selected
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +237,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_tool(Tool.PAINT)
 		KEY_3:
 			_set_tool(Tool.SITE)
+		KEY_G:
+			if _selected < 0:
+				_status = "nothing selected to grab"
+			else:
+				_grabbing = not _grabbing
+				_status = "grabbed — aim and click to drop" if _grabbing 						else "dropped"
+		KEY_ESCAPE:
+			if _grabbing:
+				_grabbing = false
+				_status = "grab cancelled"
 		KEY_DELETE:
 			_delete_selected()
 		KEY_BRACKETLEFT:
@@ -271,6 +324,12 @@ func _click() -> void:
 	var gx := int(floor(p.x / stud))
 	var gz := int(floor(p.z / stud))
 
+	# A click while grabbing DROPS, rather than placing another one.
+	if _grabbing:
+		_grabbing = false
+		_move_selected(gx, gz)
+		return
+
 	var brick := BrickTerrain.get_brick_metres()
 	var level := roundf(p.y / brick) * brick
 	var tile := BrickTerrain.get_tile_studs()
@@ -316,6 +375,43 @@ func _click() -> void:
 			World.sites.append({"tile": t, "radius": 12, "storeys": 5})
 			_selected = World.sites.size() - 1
 			_status = "placed site %d" % _selected
+			_dirty = true
+			_restamp_sites()
+
+
+## Move the selection to a column, rebuilding what it left as well as what
+## it arrived at — the same both-ends rule resizing needs.
+func _move_selected(gx: int, gz: int) -> void:
+	if _selected < 0:
+		return
+	var tile := BrickTerrain.get_tile_studs()
+	match _tool:
+		Tool.PAD:
+			if _selected >= BrickTerrain.pad_count():
+				return
+			var pad := BrickTerrain.get_pad(_selected)
+			var was: Rect2i = BrickTerrain.pad_bounds(_selected)
+			BrickTerrain.set_pad(_selected, gx, gz, int(pad["radius"]),
+				int(pad["skirt"]), float(pad["height"]))
+			_status = "moved pad %d" % _selected
+			_dirty = true
+			_rebuild_around(was.merge(BrickTerrain.pad_bounds(_selected)))
+		Tool.PAINT:
+			if _selected >= BrickTerrain.paint_count():
+				return
+			var q := BrickTerrain.get_paint(_selected)
+			var wasp: Rect2i = BrickTerrain.paint_bounds(_selected)
+			BrickTerrain.set_paint(_selected, gx, gz, int(q["radius"]),
+				int(q["skirt"]), int(q["material"]))
+			_status = "moved paint %d" % _selected
+			_dirty = true
+			_rebuild_around(wasp.merge(BrickTerrain.paint_bounds(_selected)))
+		Tool.SITE:
+			if _selected >= World.sites.size():
+				return
+			World.sites[_selected]["tile"] = Vector2i(
+				floori(float(gx) / float(tile)), floori(float(gz) / float(tile)))
+			_status = "moved site %d" % _selected
 			_dirty = true
 			_restamp_sites()
 
@@ -538,7 +634,9 @@ func _update_hud() -> void:
 	else:
 		lines.append("             nothing selected")
 	lines.append("             %s" % _streamer.report())
-	lines.append("1 pad  2 paint  3 site   LEFT CLICK place/select   DEL remove")
+	if _grabbing:
+		lines.append(">>> GRABBED — aim and click to drop, ESC to cancel")
+	lines.append("1 pad  2 paint  3 site   LEFT CLICK place/select   G grab   DEL remove")
 	lines.append("[ ] radius   , . skirt   - = height/material   PGUP/PGDN storeys")
 	lines.append("CTRL+S save   CTRL+O reload   SPACE SPACE walk")
 	_label.text = "\n".join(lines)
@@ -605,6 +703,24 @@ func _run_shots() -> void:
 	get_viewport().get_texture().get_image().save_png("res://shots/editor_site.png")
 	print("[editor] shot written: editor_site.png  (%d sites, %d pads)" % [
 		World.sites.size(), BrickTerrain.pad_count()])
+
+	# MOVE: the same call a grab makes when it drops.
+	_set_tool(Tool.PAD)
+	BrickTerrain.add_pad(gx, gz, 10, 5, level)
+	_selected = BrickTerrain.pad_count() - 1
+	_rebuild_around(BrickTerrain.pad_bounds(_selected))
+	var from_here: Vector2i = Vector2i(int(BrickTerrain.get_pad(_selected)["x"]),
+			int(BrickTerrain.get_pad(_selected)["z"]))
+	_move_selected(gx + 26, gz + 10)
+	var now_here: Vector2i = Vector2i(int(BrickTerrain.get_pad(_selected)["x"]),
+			int(BrickTerrain.get_pad(_selected)["z"]))
+	var stud2 := BrickWorld.get_stud_metres()
+	_camera.position = Vector3((gx + 13) * stud2, level + 22.0, (gz + 5) * stud2 + 24.0)
+	_camera.look_at(Vector3((gx + 13) * stud2, level, (gz + 5) * stud2), Vector3.UP)
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/editor_moved.png")
+	print("[editor] shot written: editor_moved.png  (pad %s -> %s, ground rebuilt both ends)"
+			% [from_here, now_here])
 
 	# And the world file, round trip, which is the only thing that outlives
 	# the session.

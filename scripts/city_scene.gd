@@ -606,6 +606,39 @@ var _shot_mode := false
 ## Frame-cost measurement, the same reading `heightfield_test -- --bench`
 ## takes, so the city and the terrain can be compared on one scale.
 var _bench_mode := false
+
+## THE CITY ON GROUND. `-- --terrain`.
+##
+## Off by default. Every measurement, probe and capture this scene has ever
+## taken was taken against a flat grey plane at y=0, and a hill under a
+## collapse test is a variable nobody asked for.
+##
+## On, the plane goes and the city stands on the heightfield. Each building
+## stamps a PAD into the field BEFORE any ground is built, so the terrain is
+## flat exactly where a building needs it and rolls everywhere else
+## (Docs/Terrain.md §19.12) — the generator is told first rather than the
+## ground being flattened afterwards, which is the whole point of authored
+## pads. The building's floor is then read back out of the field, so the two
+## cannot disagree.
+var _terrain_mode := false
+## How far the coarse tier reaches, in tiles. 40 is 448 m — about the grey
+## plane it replaces, and far enough that the city has a horizon.
+const TERRAIN_REACH_TILES := 40
+## Which world the city is cut into. Its own, not the heightfield scene's:
+## that seed was chosen for a landscape to look at, this one for ground a
+## city can stand on.
+const TERRAIN_SEED := 20260921
+var _terrain_streamer: TerrainStreamer = null
+# Preloaded rather than named: a brand new `class_name` is not in the global
+# class cache until the editor has scanned for it, and a headless run of this
+# scene must not depend on that having happened.
+const TerrainCoarseScript := preload("res://scripts/terrain_coarse.gd")
+var _terrain_coarse: TerrainCoarseScript = null
+var _terrain_mat: ShaderMaterial = null
+## Kept so terrain mode can drop it, and so the baked sun shadow can be taken
+## from the light that actually shines rather than from a constant.
+var _ground_plane: StaticBody3D = null
+var _sun: DirectionalLight3D = null
 var _stress_mode := false
 var _reach_mode := false
 var _lod_mode := false
@@ -737,6 +770,7 @@ func _ready() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	_shot_mode = "--shot" in args
 	_bench_mode = "--bench" in args
+	_terrain_mode = "--terrain" in args
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
 	_lod_mode = "--lod" in args
@@ -850,7 +884,16 @@ func _ready() -> void:
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
 	ai_sched.set_thresholds(8.0, 4.0)
 	ai_sched.set_hysteresis(3, 45)
+	# The field first: `_build_city` asks it how high each building stands,
+	# and a question asked before the field is configured is answered by the
+	# wrong world.
+	if _terrain_mode:
+		_setup_terrain_field()
 	_build_city()
+	# And the ground last, because every pad the city stamped is part of the
+	# field now and a tile built before them would be the wrong shape.
+	if _terrain_mode:
+		_build_terrain_ground()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
 	FurnitureMesh.fake_material()
@@ -965,6 +1008,8 @@ func _build_city() -> void:
 			var half := (side - 1) * spacing / 2
 			var pos := BrickWorld.grid_to_world(
 					Vector3i(col * spacing - half, 0, row * spacing - half))
+			if _terrain_mode:
+				pos.y = _stamp_pad(pos, maxi(int(shape.x), int(shape.z)))
 			var id := registry.register(shape.x, shape.z, shape.courses,
 					Transform3D(Basis(), pos), _program_for(shape, index))
 			_add_staircase(id, shape.x, shape.z, shape.courses)
@@ -988,6 +1033,114 @@ func _build_city() -> void:
 	print("[city] shells: %d triangles total, %.0f per building" % [
 		tris, float(tris) / maxf(registry.buildings.size(), 1)])
 	_update_hud()
+
+
+## The field this city is cut into. Before anything asks it a question.
+func _setup_terrain_field() -> void:
+	# HEIGHTFIELD mode: a city wants ground to stand on, not caves under it.
+	BrickTerrain.set_flat_mode(true)
+	# Half-brick steps: a slope in three shallow stairs rather than one.
+	BrickTerrain.set_plate_steps(true)
+	# Curved ground has no PIECES in it, and this scene is about laid brick.
+	BrickTerrain.set_smooth_terrain(false)
+	BrickTerrain.configure(TERRAIN_SEED)
+	# This city's pads and nobody else's: the pad list is global and a scene
+	# reload would otherwise stamp a second set on top of the first.
+	BrickTerrain.clear_pads()
+	# Taken FROM THE LIGHT, so the baked shadow and the lit ground can never
+	# disagree. A DirectionalLight3D shines along its own -Z.
+	BrickTerrain.set_sun_direction(_sun.global_transform.basis.z)
+
+
+## Cut a pad for one building and hand back the height it stands at.
+##
+## The pad is the footprint plus a step of margin — ground to stand on rather
+## than ground exactly its own size — and a skirt half as wide again blends
+## back to the hillside. Neighbours see each other's pads, because a pad is
+## in the field the moment it is stamped, which is why a row of buildings
+## terraces instead of each one carving its own island.
+func _stamp_pad(pos: Vector3, footprint: int) -> float:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var brick := BrickTerrain.get_brick_metres()
+	# `pos` is the building's MIN CORNER — that is where a recipe builds from
+	# — and the pad wants its middle.
+	var gx := int(floor(pos.x / stud)) + footprint / 2
+	var gz := int(floor(pos.z / stud)) + footprint / 2
+	var here := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
+	# Snapped to a COURSE: a building standing between two courses has its
+	# ground floor half a brick into the hill.
+	var level := roundf(here / brick) * brick
+	var radius: int = footprint / 2 + 4
+	BrickTerrain.add_pad(gx, gz, radius, radius / 2 + 2, level)
+	return level
+
+
+## The ground the city stands on, when it stands on ground.
+##
+## The detail tier covers the CITY and stops there: this is an authored place
+## of a known size, not an infinite world, so `world_half` is a real edge and
+## the resident square never moves. Everything out to the horizon is the
+## coarse tier, with a static hole cut for the city (TerrainCoarse).
+func _build_terrain_ground() -> void:
+	var t0 := Time.get_ticks_usec()
+	var stud := BrickWorld.get_stud_metres()
+	var tile_m := float(BrickTerrain.get_tile_studs()) * stud
+
+	# How far the city actually reaches, from the buildings themselves rather
+	# than from a constant: --big is 240 m across where the default is 96.
+	var reach := 0.0
+	for b in registry.buildings:
+		var o := b.xform.origin
+		var w := float(maxi(int(b.recipe.footprint_x), int(b.recipe.footprint_z))) * stud
+		reach = maxf(reach, maxf(absf(o.x), absf(o.z)) + w)
+	var half: int = int(ceil(reach / tile_m)) + 1
+
+	_terrain_mat = ShaderMaterial.new()
+	_terrain_mat.shader = load("res://shaders/terrain.gdshader")
+	_terrain_mat.set_shader_parameter("stud_pitch", stud)
+	_terrain_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
+	_terrain_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
+	_terrain_mat.set_shader_parameter("sun_dir", -_sun.global_transform.basis.z)
+
+	_terrain_streamer = TerrainStreamer.new()
+	_terrain_streamer.name = "TerrainStreamer"
+	# THE WHOLE CITY, RESIDENT. Not a camera-centred square: a scripted pass
+	# stands outside the city looking in, and a camera-centred region would
+	# leave the far half of it standing on coarse ground.
+	_terrain_streamer.world_half = half
+	_terrain_streamer.whole_world = true
+	# COLLISION EVERYWHERE IN THE CITY, not just under the camera. Debris from
+	# a collapse two streets away still has to land on something.
+	_terrain_streamer.collide_radius = -1
+	add_child(_terrain_streamer)
+	_terrain_streamer.setup(_terrain_mat)
+	# The camera can start inside a hill: its position was chosen against a
+	# plane at y=0 and the field has 48 m of relief.
+	var ground_y := float(BrickTerrain.surface_plate(
+			int(floor(camera.position.x / stud)),
+			int(floor(camera.position.z / stud)) ) + 1) * BrickWorld.get_plate_metres()
+	camera.position.y = maxf(camera.position.y, ground_y + 12.0)
+	_terrain_streamer.settle(Vector2(camera.position.x, camera.position.z))
+	var detail_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+
+	_terrain_coarse = TerrainCoarseScript.new()
+	_terrain_coarse.name = "TerrainCoarse"
+	add_child(_terrain_coarse)
+	_terrain_coarse.build(Rect2i(-half, -half, half * 2 + 1, half * 2 + 1),
+			TERRAIN_REACH_TILES, _terrain_mat)
+
+	var lo := 1e9
+	var hi := -1e9
+	for b in registry.buildings:
+		lo = minf(lo, b.xform.origin.y)
+		hi = maxf(hi, b.xform.origin.y)
+	print("[city] terrain: %d pads, floors %.1f..%.1f m, %d detail tiles in %.0f ms" % [
+		BrickTerrain.pad_count(), lo, hi, _terrain_streamer.tile_count(), detail_ms])
+	print("[city] terrain: coarse %d blocks in %d ring(s), %d triangles, %.0f ms total" % [
+		_terrain_coarse.block_count(), _terrain_coarse.ring_count(),
+		_terrain_coarse.triangle_count(),
+		float(Time.get_ticks_usec() - t0) / 1000.0])
 
 
 ## A spiral staircase up the middle, dormant.
@@ -4210,6 +4363,9 @@ func _demote(id: int, _dist: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if _terrain_streamer != null:
+		_terrain_streamer.follow(Vector2(camera.global_position.x,
+				camera.global_position.z))
 	_update_reticle()
 	_update_live_prof(delta)
 	if not _sampling:
@@ -7820,27 +7976,33 @@ func _build_scenery() -> void:
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -35, 0)
+	# A raking sun in terrain mode: at 50 degrees nothing on the ground is in
+	# shadow, because the steepest slope the field makes is 42, and the baked
+	# shadow is a no-op that reads as flat lighting (Docs/Terrain.md §19.7).
+	sun.rotation_degrees = Vector3(-30 if _terrain_mode else -50, -35, 0)
 	sun.light_energy = 1.1
 	sun.shadow_enabled = true
 	add_child(sun)
+	_sun = sun
 
-	var ground := StaticBody3D.new()
-	ground.collision_layer = Layers.WORLD
-	ground.collision_mask = Layers.STRUCTURE_MASK
-	var gcs := CollisionShape3D.new()
-	gcs.shape = WorldBoundaryShape3D.new()
-	ground.add_child(gcs)
-	var gmesh := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(800, 800)
-	gmesh.mesh = plane
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.34, 0.35, 0.33)
-	gmat.roughness = 1.0
-	gmesh.material_override = gmat
-	ground.add_child(gmesh)
-	add_child(ground)
+	if not _terrain_mode:
+		var ground := StaticBody3D.new()
+		ground.collision_layer = Layers.WORLD
+		ground.collision_mask = Layers.STRUCTURE_MASK
+		var gcs := CollisionShape3D.new()
+		gcs.shape = WorldBoundaryShape3D.new()
+		ground.add_child(gcs)
+		var gmesh := MeshInstance3D.new()
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(800, 800)
+		gmesh.mesh = plane
+		var gmat := StandardMaterial3D.new()
+		gmat.albedo_color = Color(0.34, 0.35, 0.33)
+		gmat.roughness = 1.0
+		gmesh.material_override = gmat
+		ground.add_child(gmesh)
+		add_child(ground)
+		_ground_plane = ground
 
 	brick_material = ShaderMaterial.new()
 	brick_material.shader = load("res://shaders/brick.gdshader")
