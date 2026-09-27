@@ -18,13 +18,17 @@ signal ended(kind: String)
 const KINDS := {
 	"drill": preload("res://scripts/disasters/drill_disaster.gd"),
 	"meteor": preload("res://scripts/disasters/meteor_shower.gd"),
+	"lightning": preload("res://scripts/disasters/lightning_storm.gd"),
+	"fire": preload("res://scripts/disasters/building_fire.gd"),
 }
 ## What H rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor"]
+const ROLL := ["meteor", "lightning", "fire"]
 
 const BASE_SEED := 0xD15A5
 
 var ctx: DisasterContext
+## Fire outlives what lit it, so it is the director's, not a disaster's.
+var fire: FireSpread
 var current: Disaster
 var current_kind := ""
 ## How many disasters this run has started. The N-th one's seed is the same
@@ -48,6 +52,15 @@ func setup(city: Node3D) -> void:
 		elif a.begins_with("--disaster-seed="):
 			_base_seed = int(a.split("=", true, 1)[1])
 	_roll_rng.seed = _base_seed
+	fire = FireSpread.new()
+	fire.name = "Fire"
+	add_child(fire)
+	fire.material_at = ctx.material_at
+	fire.chip = ctx.chip
+	fire.damage = ctx.damage_pawns
+	fire.raining = func() -> bool: return ctx.raining
+	fire.setup(hash([_base_seed, "fire"]))
+	ctx.fire = fire
 	_build_banner()
 
 
@@ -134,9 +147,15 @@ func _build_banner() -> void:
 func _update_banner() -> void:
 	if _banner == null:
 		return
+	var burning := ""
+	if fire != null and fire.is_burning():
+		burning = "FIRE — %d burning" % fire.count()
 	if current == null:
-		_banner.visible = false
+		_banner.visible = burning != ""
+		_banner.text = burning
 		return
 	_banner.visible = true
 	_banner.text = "%s — %s  %ds   (Shift+H to end)" % [current.title.to_upper(),
 			Disaster.phase_name(current.phase), ceili(current.seconds_left())]
+	if burning != "" and current_kind != "fire":
+		_banner.text += "\n" + burning
