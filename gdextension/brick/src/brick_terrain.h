@@ -530,6 +530,13 @@ public:
     /// The paint covering a column, or -1.
     static int paint_at(int x, int z);
 
+    /// The generator's material names, in its own order.
+    ///
+    /// The editor had this list written out by hand, which is one rename
+    /// away from painting stone and labelling it sand. The names live where
+    /// the enum lives.
+    static PackedStringArray material_names();
+
     /// Is this column in the sun? The same march the mesher bakes with.
     static bool sunlit(int x, int z);
 

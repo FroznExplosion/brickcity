@@ -1154,6 +1154,18 @@ Rect2i BrickTerrain::paint_bounds(int index) {
 
 int BrickTerrain::paint_at(int x, int z) { return painted_at(x, z, g_field.seed); }
 
+PackedStringArray BrickTerrain::material_names() {
+    PackedStringArray out;
+    out.push_back("air");
+    out.push_back("grass");
+    out.push_back("dirt");
+    out.push_back("sand");
+    out.push_back("stone");
+    out.push_back("dark stone");
+    out.push_back("road");
+    return out;
+}
+
 void BrickTerrain::set_sun_direction(Vector3 to_sun) { g_sun_dir = to_sun; }
 Vector3 BrickTerrain::get_sun_direction() { return g_sun_dir; }
 bool BrickTerrain::sunlit(int x, int z) { return sun_reaches(x, z); }
@@ -2917,6 +2929,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::paint_bounds);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("paint_at", "x", "z"),
         &BrickTerrain::paint_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("material_names"),
+        &BrickTerrain::material_names);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_sun_direction", "to_sun"),
         &BrickTerrain::set_sun_direction);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sun_direction"),

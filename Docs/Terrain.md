@@ -2402,3 +2402,85 @@ second level — and `TerrainWorld.list_worlds()` enumerates what exists.
 The world file is version 2 now: seed, drowned fraction, pads, **paints** and
 **sites**. `TerrainWorld.SITES` is no longer where the sites live; it is only
 what a brand new world starts with.
+
+## 21. The city on the terrain
+
+Everything above is terrain with placeholders standing on it. This is the
+city — `city_scene.gd`, with its registry, its damage, its rooms, its
+collapse — standing on the field instead of on a grey plane at y=0.
+
+    godot --path . scenes/city.tscn -- --terrain
+    godot --path . scenes/big_city.tscn -- --terrain
+
+### 21.1 The generator is told first
+
+A building does not get put on the terrain; the terrain is told a building is
+coming. `_build_city` stamps a PAD (§19.12) at each building's middle before
+any ground exists, then reads the floor height back out of the field:
+
+    pos.y = _stamp_pad(pos, footprint)      # cuts the pad, returns the level
+
+The pad is the footprint plus four studs of margin — ground to stand on, not
+ground exactly its own size — with a skirt half as wide again, and its height
+is the natural surface rounded to a COURSE, because a building standing
+between two courses has its ground floor half a brick into the hill.
+
+Two consequences worth stating:
+
+**Neighbours see each other's pads.** A pad is in the field the moment it is
+stamped, so the next building's `surface_plate` already includes it. A row
+terraces instead of each tower carving its own island out of the same slope.
+
+**Nothing is flattened afterwards.** There is no pass that pushes terrain out
+of the way once a building is placed, and no building that hovers while the
+ground catches up: there is one height function, and both the tower and the
+tile under it read it. Measured at the default city: 22 pads, floors between
+17.6 and 21.8 m — four metres of terracing across the precinct. At `--big`,
+which is 240 m across, 2.1 to 27.3 m.
+
+### 21.2 The city holds all its ground
+
+A city is an authored place of a known size, so its detail tier is not
+streamed around the camera — it IS the city, resident, all of it, from the
+first frame (`TerrainStreamer.whole_world`). That buys two things:
+
+  * the ground a collapse lands on is never half-built, and debris two
+    streets away lands on collision rather than falling through
+    (`collide_radius = -1`, every resident tile);
+  * the hole in the coarse tier never moves, so the far ground can be baked
+    once — no per-frame coverage test, no quadtree, no per-block hiding, all
+    of which §19.7 and §19.11 needed only because the detail square moves.
+
+`TerrainCoarse` is that simpler far tier: the same cascade of doubling blocks
+and doubling sample steps, a static hole cut for the city, one merged mesh a
+ring. 203 blocks in 4 rings, 643k triangles, out to 448 m.
+
+This is also where a camera-centred region turned out to be wrong in a way
+that is easy to miss. `region()` is built around the camera's tile, and every
+scripted pass stands OUTSIDE the city looking in: the big city asked for 144
+of its 625 tiles and the far half of it stood on coarse ground. It looked
+fine from the camera that caused it, which is the worst kind of bug.
+
+### 21.3 What it costs
+
+| | detail tiles | settle | coarse | total |
+|---|---|---|---|---|
+| `city` | 169 | 1.66 s | 203 blocks, 643k tris | 1.86 s |
+| `big_city` | 625 | 12.9 s | 242 blocks, 502k tris | 13.5 s |
+
+Load time, once, and it is collision-dominated: every tile in the city gets a
+collider because anywhere in the city is somewhere a tower can fall. The
+default city pays 1.9 s for that; `--big` pays 13.5 s for four times the
+ground, which is the price of holding 240 m of city whole and is why the
+flag is opt-in.
+
+### 21.4 What this does NOT do yet
+
+  * **The layout is still a grid.** Buildings sit on the same lattice they
+    always did, now at the height the ground gives them. `TerrainWorld.sites`
+    — authored positions, radius and storeys, saved in the world file — is
+    what the city should eventually read instead.
+  * **Navigation does not know about slopes.** `ai_nav` was written against
+    a floor at y=0 outside the buildings.
+  * **No water in the city.** The sea exists in `heightfield_test`; a city
+    with a shoreline needs the two to agree about the sea level first.

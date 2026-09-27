@@ -993,6 +993,8 @@ func _run_bench() -> void:
 
 	_report_collision()
 	_report_coverage()
+	_report_streaming()
+	await _report_water_collision()
 	if FAR_TILES > 0:
 		print("[bench] far tier: %d blocks in %d meshes, %s tris, out to %.0f m" % [
 			_far_blocks, _far_nodes.size() + _far_rings, _thousands(_far_tris),
@@ -1025,6 +1027,131 @@ func _run_bench() -> void:
 
 	await _bench_walk()
 	get_tree().quit()
+
+
+## CAN A BRICK FLOAT?
+##
+## Water is not a body (§7) and buoyancy is a force, which is right for a
+## swimmer and wrong for a barrel: a force pushes, and a barrel wants to sit
+## on a crest and stay there. So the surface near the camera also exists as
+## collision — and a collider nothing can be dropped onto is indistinguishable
+## from no collider at all, which is what this drops something to find out.
+func _report_water_collision() -> void:
+	var sea: float = BrickWave.get_sea_level()
+	var stud := BrickWorld.get_stud_metres()
+	# Somewhere with water under it.
+	var edge := FAR_TILES * BrickTerrain.get_tile_studs()
+	var best := Vector2i(0, 0)
+	var deepest := 1 << 30
+	for gz in range(-edge, edge, 16):
+		for gx in range(-edge, edge, 16):
+			var yp := BrickTerrain.surface_plate(gx, gz)
+			if yp < deepest:
+				deepest = yp
+				best = Vector2i(gx, gz)
+	var here := Vector3((best.x + 0.5) * stud, 0.0, (best.y + 0.5) * stud)
+	_water.visible = true
+	_water_far.visible = true
+	_camera.position = Vector3(here.x, sea + 12.0, here.z)
+	await _frames(8)
+
+	var want: float = BrickWave.height_at(here.x, here.z, _water.time())
+	var from := Vector3(here.x, want + 8.0, here.z)
+	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 16.0)
+	q.collision_mask = Layers.WORLD
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var found: bool = not hit.is_empty()
+	var off: float = absf(float(hit["position"].y) - want) if found else 99.0
+	print("[bench]   %s  water collision: a ray lands on the sea%s" % [
+		"ok  " if found and off < 0.6 else "FAIL",
+		"  %.2f m from where the wave says" % off if found else "  nothing hit"])
+	_water.visible = false
+	_water_far.visible = false
+
+
+## THE STREAMER ITSELF.
+##
+## Coverage (below) checks what the two tiers DRAW. This checks the thing
+## that decides it: residency, dropping, hysteresis and the world's edge.
+## It is the most load-bearing part of the terrain and the easiest to break
+## silently — every one of these properties is invisible in a screenshot,
+## and all of them change the moment somebody edits a radius.
+func _report_streaming() -> void:
+	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	# A one-element array, because a GDScript lambda captures by VALUE: the
+	# first version counted into two locals and reported "0 checks, 0
+	# failed" under five printed results.
+	var tally := [0, 0]
+
+	var gate := func(label: String, ok: bool, detail: String) -> void:
+		tally[0] += 1
+		if not ok:
+			tally[1] += 1
+		print("[bench]   %s  streaming: %s%s" % ["ok  " if ok else "FAIL",
+			label, ("  " + detail) if detail != "" else ""])
+
+	# 1. SETTLED MEANS SETTLED. Everything the region asks for is built.
+	var spot := Vector2(180.0, -140.0)
+	_streamer.settle(spot)
+	var r := _streamer.current_region()
+	var missing := 0
+	for dz in r.size.y:
+		for dx in r.size.x:
+			var c := r.position + Vector2i(dx, dz)
+			if absi(c.x) > FAR_TILES or absi(c.y) > FAR_TILES:
+				continue
+			if not _streamer.has_tile(c):
+				missing += 1
+	gate.call("settle leaves nothing unbuilt", missing == 0,
+		"%d of %d missing" % [missing, r.size.x * r.size.y])
+
+	# 2. AND NOTHING BEYOND THE WORLD. An authored world has edges.
+	var outside := 0
+	for c in _streamer.tiles_at():
+		if absi(c.x) > FAR_TILES or absi(c.y) > FAR_TILES:
+			outside += 1
+	gate.call("nothing is built outside the world", outside == 0,
+		"%d beyond +/-%d tiles" % [outside, FAR_TILES])
+
+	# 3. DROPPING. Walk far away and the old ground must go, or a long
+	#    session is a memory leak with a view.
+	var resident_before := _streamer.tile_count()
+	_streamer.settle(spot + Vector2(tile_m * 40.0, tile_m * 40.0))
+	var stale := 0
+	for c in _streamer.tiles_at():
+		if absi(c.x - int(spot.x / tile_m)) <= 2 and absi(c.y - int(spot.y / tile_m)) <= 2:
+			stale += 1
+	gate.call("walking away drops what is behind you", stale == 0,
+		"%d tiles from the old spot still resident, was %d" % [stale, resident_before])
+
+	# 4. HYSTERESIS. Cross a block boundary back and forth. The FIRST pass
+	#    legitimately builds new ground — the region moves a whole block —
+	#    so the warm-up is two crossings, and after that the keep margin
+	#    should mean nothing is built again. Counting the warm-up as a
+	#    failure is what the first version of this check did: 48 tiles, all
+	#    of them honest.
+	var base := Vector2(tile_m * 4.5, tile_m * 4.5)
+	var step := Vector2(tile_m * 0.6, 0.0)
+	_streamer.settle(base)
+	for i in 2:
+		_streamer.settle(base + (step if i % 2 == 0 else -step))
+	_streamer.reset_stats()
+	for i in 4:
+		_streamer.settle(base + (step if i % 2 == 0 else -step))
+	gate.call("crossing a boundary does not rebuild the same ground",
+		_streamer.built_count() == 0,
+		"%d tiles rebuilt over four crossings" % _streamer.built_count())
+
+	# 5. THE BUDGET, in the steady state. `settle` deliberately ignores it —
+	#    a capture must not photograph a half-built world — so the reading
+	#    has to come from ordinary frames, which is what `follow` is.
+	_streamer.reset_stats()
+	for i in 40:
+		_streamer.follow(base + Vector2(float(i) * 0.4, 0.0))
+	gate.call("no phase costs more than a frame", _streamer.worst_phase_ms() < 16.0,
+		"worst phase %.1f ms while walking" % _streamer.worst_phase_ms())
+
+	print("[bench] streaming: %d checks, %d failed" % [tally[0], tally[1]])
 
 
 ## ONE SURFACE PER TILE, across the two tiers.
