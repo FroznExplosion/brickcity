@@ -58,6 +58,9 @@ func _ready() -> void:
 		if arg == "--shot":
 			_shot_mode = true
 
+	# This bench is where the geometry chamfer is measured, so it is on here
+	# and nowhere else (TerrainTile.bevel_enabled).
+	TerrainTile.bevel_enabled = true
 	BrickTerrain.configure(WORLD_SEED)
 	# The generator's floor sits barely under the default 1.1 m sea, so the
 	# map had puddles and no sea at all: the deepest water in the field

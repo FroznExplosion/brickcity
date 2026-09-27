@@ -26,7 +26,16 @@ extends Node3D
 ## zero-runtime-cost pattern the stud and scatter tiers already use.
 const BEVEL_RANGE := 12.0
 const BEVEL := 0.013
-static var bevel_enabled := true
+## OFF by default, and ON only in the volumetric bench that measures it.
+##
+## Two meshes a tile means a cross-fade, and Godot's FADE_SELF makes BOTH
+## meshes part-transparent through the fade band -- they do not add up to an
+## opaque surface. So everything 6 to 18 m from the camera was see-through:
+## a dug pad showed the hillside behind it through its own walls, and a
+## sculpted spire read as glass (Docs/Terrain.md §20.8). The heightfield
+## scene had it off since §17.22; the editor and the city never did. The
+## shader's shaded bevel is the chamfer everywhere else.
+static var bevel_enabled := false
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
 const SCATTER_RANGE := 30.0   ## §8.
