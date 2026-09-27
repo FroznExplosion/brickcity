@@ -15,15 +15,18 @@ extends Node3D
 ##     simply gone, because no one is there to notice the difference;
 ##   * a single brick that IS visible becomes a real body but is drawn from a
 ##     shared MultiMesh, one draw call per brick size rather than per brick;
-##   * a small piece is swept up moments after it comes to rest.
+##   * a small piece stays while it can be seen, goes a second after it cannot,
+##     and when it has to go in view it shrinks away rather than popping.
 ##
-## "Small" is SIZE, not block count (Docs/AIPlan.md R2, AI.md A11): a floor panel
-## is one plate_10x10 block 3.5 m across, and it is not debris. A piece big
-## enough to hide behind or stand on is a LANDMARK (is_landmark_size): it is never
-## deleted, it collides with people, the AI takes cover behind it and every
-## machine in a co-op game has the same one. A small piece is presentation only --
-## no pawn collides with it (Layers.PAWN_MASK), each machine keeps or deletes its
-## own, and nothing but the eye ever depends on it.
+## "Small" -- DEBRIS -- is DEBRIS_MAX_BLOCKS bricks or fewer, however big, and
+## above that it is size (Docs/AIPlan.md R2, AI.md A11, both as revised on
+## 2026-09-25: a lone floor panel was a landmark until then, and a collapse made
+## hundreds of them). A piece bigger than that and big enough to hide behind or
+## stand on is a LANDMARK (is_landmark_size): it is never deleted, it collides
+## with people, the AI takes cover behind it and every machine in a co-op game
+## has the same one. Debris is presentation only -- no pawn collides with it
+## (Layers.PAWN_MASK), each machine keeps or deletes its own by what ITS camera
+## can see, and nothing but the eye ever depends on it.
 ##
 ## Landmarks are never touched by any of this. A section that stays intact is the
 ## thing the whole model exists to produce.
@@ -77,6 +80,40 @@ const MAX_MOVING := 48
 ## measured, one tick spent 75 ms of its loop on it. The rest wait a tick --
 ## still slow, still where they were.
 const SETTLES_PER_TICK := 12
+## A settled piece is frozen: it is scenery until something wakes it, and it
+## was only ever woken by damage near it. So a piece that settled resting on
+## something -- a part of the building a mega collapse was still holding, a
+## piece that later woke and slid off, one the debris cap deleted -- stayed where
+## it was when that went, in mid-air, and what fell next landed on it and stuck,
+## jittering and breaking more with every bounce.
+##
+## Now: where support goes away (support_gone), every settled piece resting on
+## or wedged against that spot is woken, and settles again if it is still held.
+## A piece that is woken or cut out ripples once it actually starts to move, so
+## a stack wakes a layer at a time as each one falls, not all at once. A piece
+## that comes to rest on, or lands on, a settled piece wakes that too: a
+## floater falls under the load instead of holding it up.
+##
+## RIPPLE_MARGIN: how far past the box a resting piece may be and still count
+## as touching it. RIPPLE_START_SPEED: how fast a woken piece has to be going to
+## count as having moved off what it was holding.
+const RIPPLE_MARGIN := 0.35
+## And before a piece settles at all: is anything under it? A piece is cut out
+## of a grid, so its faces lie exactly against the bricks it came away from, and
+## friction on those can hold it where it was until it goes to sleep -- a piece
+## that "broke off and stayed there" in the side of a building. Rays down from
+## its underside (SUPPORT_REACH): nothing under it, and it is nudged down instead
+## of frozen. SUPPORT_TRIES times at most -- a beam genuinely wedged across a gap
+## is held, and settles on the next try.
+const SUPPORT_REACH := 1.5
+const SUPPORT_TRIES := 3
+const SUPPORT_NUDGE := 1.5
+var unsupported_nudges := 0
+const RIPPLE_START_SPEED := 0.6
+const RIPPLES_PER_TICK := 16
+var _ripples: Array[AABB] = []
+var ripple_woken := 0
+var touch_woken := 0
 ## Pieces at least this big fall with MERGED collision -- as few boxes as the
 ## shape allows -- rather than one box per brick. The --big census had ~23
 ## pieces of a thousand bricks and more carrying 80% of every collision box in
@@ -106,6 +143,14 @@ const IMPACT_DELTA := 2.5
 const IMPACT_RADIUS := 0.8
 const IMPACT_RADIUS_MAX := 2.6
 const MAX_IMPACTS := 4
+## And only after falling -- over IMPACT_MIN_SPEED for this many ticks in a row
+## since the last landing. A piece wedged on something and jittering swings its
+## speed by metres a second from one tick to the next, and every swing counted
+## as a landing: it broke itself up and sheared whatever it was stuck on --
+## the building under it included -- MAX_IMPACTS times, where it had not
+## fallen anywhere at all.
+const IMPACT_FALL_TICKS := 3
+var jolts_ignored := 0
 ## How many contact points the solver is asked to keep per island. Four is
 ## enough to tell a corner strike from a flat landing and cheap enough to leave
 ## on permanently.
@@ -154,12 +199,23 @@ const FURNITURE_FALL_RANGE := 6.0
 ## A small piece breaks off only this close to the player, and in view. Anywhere
 ## else it is deleted where it came loose. Per machine: small pieces are that
 ## machine's presentation, so its own camera decides.
-const SMALL_KEEP_RANGE := 30.0
-## A small piece is swept up this long after it comes to rest -- moving slower
-## than RUBBLE_REST_SPEED -- and never lives longer than DEBRIS_LIFETIME_MS.
-const RUBBLE_REST_MS := 300
-const RUBBLE_REST_SPEED := 0.4
-const DEBRIS_LIFETIME_MS := 2500
+const SMALL_KEEP_RANGE := 60.0
+## A group of this many bricks or fewer is DEBRIS, however far it spans: a floor
+## panel on its own is a sheet of plastic, not cover. Presentation only -- the
+## RUBBLE layer, which no pawn collides with -- and each machine keeps or drops
+## its own (AI.md A11, AIPlan R2, as revised 2026-09-25). Above it, size decides
+## (is_landmark_size).
+const DEBRIS_MAX_BLOCKS := 8
+## Debris is never removed while this machine's camera can see it. It goes once
+## it has been out of view this long -- counted in physics TICKS (_unseen_ticks),
+## because a hitch longer than a second is not a second of nobody looking...
+const DEBRIS_UNSEEN_MS := 1000
+## ...and, seen or not, it shrinks away once it is this old, over DEBRIS_FADE_MS --
+## never a pop. The debris cap shrinks what it takes that is in view, too.
+const DEBRIS_SEEN_MAX_MS := 30000
+const DEBRIS_FADE_MS := 600
+## Every how many ticks each piece of debris is asked whether it can be seen.
+const SEEN_EVERY := 4
 ## A piece has to be at least this big to shear anything it lands on. Two bricks
 ## of ABS weigh a few grams; at brick scale nothing that small arrives with
 ## enough energy to break a joint, and letting it try produced damage that
@@ -213,6 +269,10 @@ const ISLAND_LOD_PER_TICK := 2
 ## 24 only ever covered gravel. The pieces that actually show the gap are the
 ## small-to-middling ones a wall sheds -- exactly the range between 24 and here.
 const SYNC_MESH_MAX_BLOCKS := 200
+## And few enough authored triangles (BrickWorld.get_chunk_authored_tris): a
+## staircase piece is under 200 bricks and 90,000 vertices, and baking one here
+## was a 9.5 ms spawn -- the worst of a big-city run.
+const SYNC_MESH_MAX_TRIS := 2000
 ## However cheap one bake is, not an unbounded number of them per tick.
 const SYNC_MESH_PER_TICK := 6
 
@@ -224,6 +284,37 @@ const WORK_BUDGET_MS := 4.0
 ## matters once it IS visible. Drawing a piece that already exists is the more
 ## urgent job of the two.
 const MESH_BUDGET_MS := 3.0
+## A mesh with at least this many vertices is uploaded on a worker, not in the
+## tick. The arrays come out of the bake in under a millisecond; handing them to
+## the renderer is ~50 ns a vertex -- 5-35 ms for a piece of 3,000-8,400 bricks,
+## or for a staircase of 150 (90,000 vertices of spiral step), and that was the
+## worst tick of a collapse every time a big piece got its mesh. The worker
+## packs the arrays, which is about two thirds of it; the renderer still creates
+## the buffers on the main thread at the next call into it (measured: 3-4 ms for
+## 62,000 vertices built here, 1-1.5 ms attached from a worker). High priority
+## on the pool: a piece waiting for its mesh is invisible, a building band
+## waiting for its new one is not (CityScene.BAND_THREAD_VERTS).
+const THREAD_MESH_VERTS := 30000
+## And how many vertices of those may be handed over in one tick. The worker
+## packs a mesh's arrays, but the renderer makes its buffers on the main thread,
+## at whatever next calls into it -- a node being made, a mesh being set -- about
+## 25 ns a vertex (62,000 vertices, 1-1.5 ms). Unbudgeted, what the workers
+## finished together was paid together, wherever that landed: a spawn's "node"
+## step at 7-11 ms, band meshes at 4-7. What is over waits a tick with its arrays
+## kept; the first of a tick always goes, since a mesh cannot be split.
+const UPLOAD_VERTS_PER_TICK := 150000
+## Meshes built on a worker are built compressed (16-bit positions and UVs,
+## octahedral normals): the worker's half takes twice as long, and the main
+## thread's -- the buffers the renderer makes -- about a third less (62,000
+## vertices: 1.1 ms -> 0.7). Rendered side by side with the plain mesh, 0.14% of
+## pixels differ, all of them brick edges moved by a pixel.
+const UPLOAD_COMPRESS := Mesh.ARRAY_FLAG_COMPRESS_ATTRIBUTES
+## A mesh job submitted and not yet started (start_mesh_jobs). BrickIsland's
+## mesh_job is -1 for none, this for one waiting to start, a task id otherwise.
+const JOB_NOT_STARTED := -2
+## Set by a scene that ticks this manager and then does more: it starts the
+## jobs itself, after all of it (see _submit_mesh_job).
+var defer_job_start := false
 ## Always do at least one, however long it takes: a budget that can starve
 ## forever is a deadlock, and a single unit is bounded by the piece's size.
 const WORK_MIN := 1
@@ -263,7 +354,6 @@ var splits := 0
 var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
 var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
-var swept_at_rest := 0            ## small pieces swept up moments after landing
 var settled_by_rule := 0          ## settled for staying slow, not for sleeping
 var far_landings := 0             ## landings too far from anyone to break the piece
 var far_shears := 0               ## things landed on too far from anyone to shear
@@ -348,6 +438,12 @@ var _furniture := {}
 static var OVERLAP_FRAMES := 2
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
+var _mesh_jobs: Array = []   ## [island, task id, [mesh], arrays]
+var _upload_waiting: Array = []  ## [island, arrays] over this tick's budget
+var _upload_tick := -1
+var _upload_used := 0
+var uploads_waited := 0
+var mesh_jobs_done := 0
 var band_holes_filled := 0
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
@@ -416,13 +512,31 @@ var small_floor := 24
 ## captures a record, so it is budgeted like every other per-tick cost here.
 const EVICTIONS_PER_TICK := 3
 ## A piece bigger than this is captured for sleep a slice at a time, and at most
-## this many blocks of captures run in one tick. Capture is ~4 us a block: the
-## debris cap put a 14,000-brick wreck to sleep in one call, 57 ms of one tick.
-const SLEEP_SYNC_BLOCKS := 2000
-const CAPTURE_BLOCKS_PER_TICK := 3000
+## this many blocks of captures run in one tick. Capture was ~4 us a block from
+## script -- the debris cap put a 14,000-brick wreck to sleep in one call, 57 ms
+## of one tick, and a 2,000-brick piece slept in one go was still 8 ms. It is
+## one call into the world now (BrickWorld.capture_blocks), 0.1-0.2 us a block.
+const SLEEP_SYNC_BLOCKS := 6000
+const CAPTURE_BLOCKS_PER_TICK := 12000
 var cap_deleted := 0
 var cap_slept := 0
 var cap_worst_over := 0
+## A piece the CAP put to sleep does not wake just for being in WAKE_RANGE. It
+## did, and next to a big collapse -- where the cap is full and everything is
+## inside 120 m -- the cap slept a piece, the stream woke it the next tick, and
+## the cap slept it again: 1.25 ms a tick of dormancy across a whole big-city
+## run, a 15 ms wake at the top of the worst tick, and wreckage blinking out and
+## back in. So it wakes when the cap has room again (CAP_WAKE_SPARE under every
+## limit, so the one it wakes does not tip it straight back over), or when it is
+## clearly nearer than the farthest piece still awake (CAP_SWAP): that one is
+## the cap's next choice, and the two trade places once rather than every tick.
+const CAP_WAKE_SPARE := 8
+const CAP_SWAP := 0.6
+var _cap_room := true
+## How far from anybody the farthest landmark the cap left awake is, at the
+## last plan.
+var _cap_far := INF
+var cap_woken := 0
 ## The cap's plan (_plan_debris_cap) and when it was made.
 const CAP_REPLAN_TICKS := 15
 var _cap_plan: Array = []
@@ -434,6 +548,10 @@ class Dormant:
 	var slept_ms := 0
 	var piece_id := -1
 	var owner := -1
+	## Put to sleep by the debris cap, not by distance. See CAP_WAKE_SPARE.
+	var by_cap := false
+	## What it rested on went while it slept (IslandManager.support_gone).
+	var unsure := false
 
 
 ## Far enough that a piece is not part of the scene any more, and close enough
@@ -472,13 +590,51 @@ var tick_prof := {"loop": 0.0, "resolve": 0.0, "fracture": 0.0, "mesh": 0.0, "mm
 var census := {"ticks": 0, "moving": 0, "moving_peak": 0, "landmarks": 0,
 		"landmarks_peak": 0, "blocks": 0, "blocks_peak": 0}
 ## Every group that came loose, by what became of it: [bodies, bricks] each.
+## Debris gone because nobody could see it, and debris shrunk away in view.
+var debris_unseen := 0
+var debris_faded := 0
+## The camera's frustum, refreshed every tick (_box_seen).
+var _frustum: Array[Plane] = []
 var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
-		"capped": [0, 0]}
+		"capped": [0, 0], "shed": [0, 0]}
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
 var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
+## The worst single spawn: [ms, split, shapes, node, mesh, bricks].
+var spawn_worst := [0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0]
+## The worst single landing or re-solve of a piece, by part, for the report.
+var unit_worst := {}
+var _unit := {}
+
+
+func _upart(key: String, t0: int) -> int:
+	var now := Time.get_ticks_usec()
+	_unit[key] = float(_unit.get(key, 0.0)) + float(now - t0) / 1000.0
+	return now
+
+
+func _unit_done(kind: String, isl: BrickIsland, t0: int) -> void:
+	var total := float(Time.get_ticks_usec() - t0) / 1000.0
+	if total > float(unit_worst.get("total", 0.0)):
+		unit_worst = _unit.duplicate()
+		unit_worst["total"] = total
+		unit_worst["kind"] = kind
+		unit_worst["bricks"] = world.get_alive_block_count(isl.chunk) if isl.is_valid() else -1
+		unit_worst["merged"] = isl.merged if isl.is_valid() else false
+	_unit = {}
+## The longest invisible stretch, by what the piece was waiting for each tick.
+var blind_worst_stages := {}
+## The worst single shape rebuild of a piece: [ms, bricks, boxes, building the
+## shapes ms, putting the body back in the space ms].
+var reshape_worst := [0.0, 0, 0, 0.0, 0.0]
+## This tick's dormancy, split: waking pieces, and putting them to sleep. And
+## the single worst of each over the session, with how many bricks it was.
+var _dorm_wake_ms := 0.0
+var _dorm_sleep_ms := 0.0
+var wake_worst := [0.0, 0]
+var sleep_worst := [0.0, 0]
 var _work_done := 0
 var _sync_meshes := 0
 var dropped := 0     ## islands that have given their mesh back
@@ -542,6 +698,8 @@ static func is_landmark_size(size: Vector3) -> bool:
 func group_is_landmark(source: int, block_ids: PackedInt32Array) -> bool:
 	if block_ids.size() > LANDMARK_COUNT:
 		return true
+	if block_ids.size() <= DEBRIS_MAX_BLOCKS:
+		return false
 	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
@@ -613,13 +771,14 @@ func _to_grid(isl: BrickIsland, world_point: Vector3) -> Vector3:
 ## command names only what every machine agrees on. A group that is nothing but
 ## furniture changes no structure and is not recorded at all.
 func record_detach(building: int, source: BrickIsland, chunk: int,
-		ids: PackedInt32Array) -> int:
+		ids: PackedInt32Array, flags := 0) -> int:
 	var e := DamageLog.Entry.new()
 	e.kind = DamageLog.Kind.DETACH
+	e.flags = flags
 	if source != null:
 		e.target = source.piece_id
 		e.owner = source.owner
-		e.flags = DamageLog.FLAG_FROM_PIECE
+		e.flags |= DamageLog.FLAG_FROM_PIECE
 	else:
 		e.target = building
 		e.owner = building
@@ -723,6 +882,75 @@ func find_by_body(body: Node) -> BrickIsland:
 	return null
 
 
+## Can this machine's camera see any of this world box? Distance, then the box
+## against each frustum plane: it is out of view only if some plane has all of it
+## outside. No occlusion test -- a piece behind a wall counts as seen, which only
+## ever keeps something a little longer, never removes one somebody is looking at.
+## `planes` is the tick's cached frustum (_frustum) for the per-tick check; empty
+## asks the camera now -- which a detach does, because the camera may have moved
+## since the tick began.
+func _box_seen(box: AABB, planes: Array[Plane] = []) -> bool:
+	if camera == null or not is_instance_valid(camera):
+		return true
+	if _distance_to_box(box, camera.global_position) > VISIBLE_RANGE:
+		return false
+	if planes.is_empty():
+		planes = camera.get_frustum()
+	var lo := box.position
+	var hi := box.end
+	for plane in planes:
+		# The corner deepest on the inside of this plane (Godot's frustum planes
+		# face outward). If even that one is outside, all of the box is.
+		var n := plane.normal
+		var c := Vector3(lo.x if n.x > 0.0 else hi.x, lo.y if n.y > 0.0 else hi.y,
+				lo.z if n.z > 0.0 else hi.z)
+		if plane.is_point_over(c):
+			return false
+	return true
+
+
+## A group's world box, from its blocks, while they are still in `chunk`.
+func _group_box(chunk: int, block_ids: PackedInt32Array) -> AABB:
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	for id in block_ids:
+		var ticks: Array = world.get_block_ticks(chunk, id)
+		if ticks.is_empty():
+			continue
+		var a := Vector3(ticks[0] as Vector3i) * tick_m
+		var b := a + Vector3(ticks[1] as Vector3i) * tick_m
+		lo = Vector3(minf(lo.x, a.x), minf(lo.y, a.y), minf(lo.z, a.z))
+		hi = Vector3(maxf(hi.x, b.x), maxf(hi.y, b.y), maxf(hi.z, b.z))
+	if lo.x == INF:
+		return AABB()
+	return world.get_chunk_transform(chunk) * AABB(lo, hi - lo)
+
+
+## DEBRIS_UNSEEN_MS in physics ticks, at whatever rate the project runs them.
+func _unseen_ticks() -> int:
+	return maxi(int(DEBRIS_UNSEEN_MS * Engine.physics_ticks_per_second / 1000.0), 1)
+
+
+## Start shrinking a piece of debris away (DEBRIS_FADE_MS). Idempotent.
+func _start_fade(isl: BrickIsland, now: int) -> void:
+	if isl.fade_since == 0:
+		isl.fade_since = now
+		debris_faded += 1
+
+
+## One step of the shrink. True once it has gone all the way.
+func _advance_fade(isl: BrickIsland, now: int) -> bool:
+	var t := clampf(float(now - isl.fade_since) / float(DEBRIS_FADE_MS), 0.0, 1.0)
+	isl.fade = 1.0 - t
+	if isl.mesh != null:
+		# About the centre of mass, which is the body's origin: the mesh node sits
+		# at -local_com under it, so the offset shrinks with the scale.
+		var s := maxf(isl.fade, 0.01)
+		isl.mesh.transform = Transform3D(Basis().scaled(Vector3.ONE * s), -isl.local_com * s)
+	return t >= 1.0
+
+
 func can_be_seen(point: Vector3) -> bool:
 	if camera == null or not is_instance_valid(camera):
 		return true
@@ -740,7 +968,7 @@ func can_be_seen(point: Vector3) -> bool:
 ## `piece_id` comes from record_detach, which the caller runs first.
 func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
-		piece_id := -1, owner := -1) -> BrickIsland:
+		piece_id := -1, owner_id := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
 	# The host said it goes (MAX_MOVING): cut out and let go, as every other
 	# machine does with the same DETACH.
@@ -766,6 +994,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var split: Dictionary = world.split_island(source, block_ids)
 	spawn_prof.split += float(Time.get_ticks_usec() - _t0) / 1000.0
 	var _t := Time.get_ticks_usec()
+	var _w := [0.0, float(_t - _t0) / 1000.0, 0.0, 0.0, 0.0, block_ids.size(), 0.0, 0.0, 0]
 	if split.is_empty():
 		return null
 
@@ -775,10 +1004,11 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var isl := BrickIsland.new()
 	isl.chunk = island_chunk
 	isl.piece_id = piece_id
-	isl.owner = owner
+	isl.owner = owner_id
 	isl.local_com = split.local_com
 	isl.landmark = landmark
 	isl.disposable = not landmark
+	isl.seen_tick = Engine.get_physics_frames()
 
 	isl.body = RigidBody3D.new()
 	isl.body.mass = maxf(float(split.mass) * MASS_SCALE, 0.5)
@@ -806,6 +1036,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.merged = merge_now
 	isl.fly_merged = merge_now
 	spawn_prof.shapes += float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[2] = float(Time.get_ticks_usec() - _t) / 1000.0
 	_t = Time.get_ticks_usec()
 
 	# One brick is drawn from a shared MultiMesh; anything bigger gets its own
@@ -830,9 +1061,12 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		# furniture rides the collapse without anything here tracking it, which
 		# is Interiors section 4.2 and the reason interiors are blocks in the
 		# host's grid in the first place.
+		var _tf := Time.get_ticks_usec()
 		FurnitureMesh.attach(world, isl.chunk, isl.mesh, _furniture)
+		_w[6] = float(Time.get_ticks_usec() - _tf) / 1000.0
 
 	var island_xform: Transform3D = world.get_chunk_transform(isl.chunk)
+	var _ta := Time.get_ticks_usec()
 	isl.body.transform = island_xform * Transform3D(Basis(), isl.local_com)
 
 	add_child(isl.body)
@@ -843,9 +1077,17 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.body.reset_physics_interpolation()
 	if isl.mesh != null:
 		isl.mesh.reset_physics_interpolation()
+	_w[7] = float(Time.get_ticks_usec() - _ta) / 1000.0
+	_w[8] = isl.shape_count
 	spawn_prof.node += float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[3] = float(Time.get_ticks_usec() - _t) / 1000.0
 	_t = Time.get_ticks_usec()
 	isl.body.set_meta("spawn_pos", isl.body.position)
+	# Where it came from: once it starts to move, what rested on it there is
+	# woken (support_gone). A chunk a mega collapse held and then let go is the
+	# case this is for.
+	isl.ripple_box = world_aabb(isl)
+	isl.ripple_pending = true
 	isl.body.linear_velocity = inherit_linear
 	isl.body.angular_velocity = inherit_angular
 	isl.born_ms = Time.get_ticks_msec()
@@ -859,7 +1101,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# _shed already wakes the region around the parent, which is the same
 	# region every child of that parent occupies.
 	if isl.mesh != null:
-		if count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK:
+		if count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
+				and world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS:
 			# Small enough to bake here and now, so it is never invisible.
 			_sync_meshes += 1
 			rebuild_mesh(isl, true, true)
@@ -870,6 +1113,10 @@ func spawn(source: int, block_ids: PackedInt32Array,
 			_mesh_queue.append(isl)
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
+	_w[4] = float(Time.get_ticks_usec() - _t) / 1000.0
+	_w[0] = float(Time.get_ticks_usec() - _t0) / 1000.0
+	if float(_w[0]) > float(spawn_worst[0]):
+		spawn_worst = _w
 	piece_spawned.emit(isl)
 	return isl
 
@@ -898,16 +1145,18 @@ func _delete_where_it_is(source: int, block_ids: PackedInt32Array, landmark: boo
 			break
 	if landmark and not furniture:
 		return false
-	var at := _centre_of(source, block_ids)
+	# Its BOX, not its centre: a floor panel whose middle is just off screen is
+	# still mostly on it, and deleting that is a slab of floor vanishing in view.
+	var box := _group_box(source, block_ids)
 	var dist := INF
 	if camera != null and is_instance_valid(camera):
-		dist = camera.global_position.distance_to(at)
+		dist = _distance_to_box(box, camera.global_position)
 	var gone := false
 	if furniture:
 		gone = dist > FURNITURE_FALL_RANGE and dist < INF
 	var far := dist > SMALL_KEEP_RANGE and dist < INF
 	if not furniture:
-		gone = far or not can_be_seen(at)
+		gone = far or not _box_seen(box)
 	if not gone:
 		return false
 	# Split out and freed, NOT killed in place. Killing is the obvious saving --
@@ -953,6 +1202,7 @@ func _centre_of(chunk: int, block_ids: PackedInt32Array) -> Vector3:
 func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
 	if not isl.is_valid() or (isl.merged == merged and not force):
 		return
+	var _t0 := Time.get_ticks_usec()
 	var rid := isl.body.get_rid()
 	# Out of the space first: shape calls on a body IN a space cost time
 	# proportional to its shape count.
@@ -965,8 +1215,13 @@ func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
 	isl.shape_map = built.map
 	isl.shape_count = int(built.count)
 	isl.merged = merged
+	var _t1 := Time.get_ticks_usec()
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, space)
+	var _t2 := Time.get_ticks_usec()
+	if float(_t2 - _t0) / 1000.0 > float(reshape_worst[0]):
+		reshape_worst = [float(_t2 - _t0) / 1000.0, world.get_alive_block_count(isl.chunk),
+				isl.shape_count, float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0]
 		# See BrickIsland.disable_blocks: rejoining a space resets the body's
 		# interpolation history, and swapping shapes is the other half of the
 		# damage path that does it.
@@ -1031,8 +1286,8 @@ func _landing_matters(isl: BrickIsland) -> bool:
 ##   * **falling** -- a large section in motion. Everything except rubble.
 ##   * **settled** -- come to rest. Everything, rubble included, because now it
 ##     is scenery that things land on.
-## Treat a piece as debris rather than as structure: rubble layers, and swept up
-## on the debris timer like anything else too small to matter.
+## Treat a piece as debris rather than as structure: rubble layers, and the
+## debris rules -- kept while it can be seen, gone once it cannot.
 ##
 ## What a FIXTURE becomes the moment it comes loose. A staircase is not
 ## structure (Docs/BuildMode.md section 9.2), and once it is falling it should
@@ -1043,6 +1298,7 @@ func make_debris(isl: BrickIsland) -> void:
 		return
 	isl.disposable = true
 	isl.landmark = false
+	isl.seen_tick = Engine.get_physics_frames()
 	_apply_layers(isl)
 
 
@@ -1069,7 +1325,7 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		carried_bytes: int, carried_width: int, carried_bands: Array = [],
-		piece_id := -1, owner := -1, announce := true, is_landmark := true,
+		piece_id := -1, owner_id := -1, announce := true, is_landmark := true,
 		carried_band_bytes: Array = []) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
@@ -1078,12 +1334,15 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	var isl := BrickIsland.new()
 	isl.chunk = chunk
 	isl.piece_id = piece_id
-	isl.owner = owner
+	isl.owner = owner_id
 	isl.local_com = world.get_chunk_com(chunk)
 	# A toppled building or a piece back from sleep: a landmark unless told
 	# otherwise (only a loaded save's small pieces are).
 	isl.landmark = is_landmark
 	isl.disposable = not is_landmark
+	# Counted as just seen: a piece back from a save or from sleep has not been
+	# looked for yet, and seen_tick 0 would sweep it on the first tick.
+	isl.seen_tick = Engine.get_physics_frames()
 
 	isl.band_bytes = carried_band_bytes
 	isl.body = RigidBody3D.new()
@@ -1163,6 +1422,10 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.body.set_meta("spawn_pos", isl.body.position)
 	isl.born_ms = Time.get_ticks_msec()
 	isl.radius = _body_radius(isl)
+	# A building that toppled whole: once it moves, what had settled on it is
+	# woken (support_gone).
+	isl.ripple_box = world_aabb(isl)
+	isl.ripple_pending = true
 	islands.append(isl)
 	# Not while a save is being put back: what lies next to this piece is
 	# exactly as the save had it, asleep or not, and waking it is a difference.
@@ -1265,9 +1528,12 @@ static func mesh_arrays_ok(arrays: Array, who: String) -> bool:
 const INDEX16_MAX_VERTS := 65536
 
 static func index_width(arrays: Array) -> int:
-	# A chunk that baked to nothing hands back an empty array, not a surface.
-	if arrays.size() <= Mesh.ARRAY_VERTEX:
-		return 2
+	# No arrays at all: a chunk that baked to nothing -- nothing alive, or only
+	# furniture, which is drawn apart from the faces. A piece of furniture put
+	# to sleep and woken again built exactly that, and this read the vertex
+	# array of nothing.
+	if arrays.size() <= Mesh.ARRAY_VERTEX or arrays[Mesh.ARRAY_VERTEX] == null:
+		return 4
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	return 2 if verts.size() <= INDEX16_MAX_VERTS else 4
 
@@ -1330,6 +1596,12 @@ func refresh_furniture(isl: BrickIsland) -> void:
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
 	if isl.mesh == null:
 		return
+	# Its mesh is being built on a worker. Whatever this call wanted is done
+	# when that lands (_harvest_mesh_jobs), against the mesh it builds.
+	if isl.mesh_job != -1 or isl.upload_waiting:
+		isl.mesh_again = true
+		isl.mesh_again_full = isl.mesh_again_full or force_full
+		return
 	# Band meshes carried down from a building that toppled whole: patched in
 	# place, the band a blast landed in and no other. Dropping them for one mesh
 	# here was a full build of the whole piece -- 10-22 ms for a toppled
@@ -1379,19 +1651,137 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 		return
 
 	var arrays: Array = world.build_chunk_mesh(isl.chunk)
+	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk)
+	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= THREAD_MESH_VERTS:
+		# Big: uploaded on a worker, attached when it is done. The mesh it
+		# replaces goes on drawing until then.
+		if not _upload_ok((arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()):
+			isl.upload_waiting = true
+			_upload_waiting.append([isl, arrays])
+			uploads_waited += 1
+			return
+		_submit_mesh_job(isl, arrays)
+		return
 	var mesh := ArrayMesh.new()
-	if not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk):
+	if ok:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_apply_mesh(isl, mesh, arrays)
+
+
+## Hang a finished mesh on a piece.
+func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array) -> void:
 	# Only a mesh that actually HAS a surface can be patched. A chunk with
 	# nothing left alive produces no arrays, and patching surface 0 of an empty
 	# ArrayMesh writes past the end of a buffer that is not there.
 	isl.radius = _body_radius(isl)
 	# The renderer may still be drawing the mesh this replaces.
 	_retirer.retire(isl.mesh.mesh)
-	isl.array_mesh = mesh if mesh.get_surface_count() > 0 else null
+	isl.array_mesh = mesh if mesh != null and mesh.get_surface_count() > 0 else null
+	if isl.array_mesh != null:
+		isl.lod_dropped = false
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null else 0
 	isl.index_width = index_width(arrays)
 	isl.mesh.mesh = mesh
+
+
+## Room in this tick's upload budget for `verts` more (UPLOAD_VERTS_PER_TICK),
+## taken if there is.
+func _upload_ok(verts: int) -> bool:
+	var now_tick := Engine.get_physics_frames()
+	if now_tick != _upload_tick:
+		_upload_tick = now_tick
+		_upload_used = 0
+	if _upload_used > 0 and _upload_used + verts > UPLOAD_VERTS_PER_TICK:
+		return false
+	_upload_used += verts
+	return true
+
+
+## Send what waited for the budget, oldest first, as far as this tick's goes.
+func _drain_upload_waiting() -> void:
+	while not _upload_waiting.is_empty():
+		var entry: Array = _upload_waiting[0]
+		var isl: BrickIsland = entry[0]
+		if not isl.is_valid() or isl.mesh == null:
+			_upload_waiting.pop_front()
+			continue
+		var arrays: Array = entry[1]
+		if not _upload_ok((arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()):
+			return
+		_upload_waiting.pop_front()
+		isl.upload_waiting = false
+		_submit_mesh_job(isl, arrays)
+
+
+## Upload `arrays` for `isl` on a worker (THREAD_MESH_VERTS). The arrays were
+## built on this thread from the bake; the worker only turns them into a mesh.
+##
+## Not started here: at the end of the tick (start_mesh_jobs). A worker that
+## finishes mid-tick has its buffers made by whatever next calls into the
+## renderer in that same tick -- the loose bricks' MultiMesh at 24 ms, a
+## 3-brick spawn's node at 7 -- where one started after the tick finishes
+## during the frame, and is paid by the frame or by the flush at the top of
+## the next tick.
+func _submit_mesh_job(isl: BrickIsland, arrays: Array) -> void:
+	var holder := [null]
+	var work := func() -> void:
+		var m := ArrayMesh.new()
+		# Compressed (UPLOAD_COMPRESS), on the worker where it costs nothing
+		# anyone waits for.
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+				UPLOAD_COMPRESS)
+		holder[0] = m
+	isl.mesh_job = JOB_NOT_STARTED
+	_mesh_jobs.append([isl, JOB_NOT_STARTED, holder, arrays, work])
+
+
+## Start the mesh jobs submitted this tick. The tick's own last act, or the
+## scene's (defer_job_start) when it has more to do after this manager's tick.
+func start_mesh_jobs() -> void:
+	for job in _mesh_jobs:
+		if int(job[1]) != JOB_NOT_STARTED:
+			continue
+		var task := WorkerThreadPool.add_task(job[4] as Callable, true, "island mesh")
+		job[1] = task
+		var isl: BrickIsland = job[0]
+		if isl.is_valid():
+			isl.mesh_job = task
+
+
+## Every mesh job finished before the manager goes: a worker still building a
+## mesh while the renderer shuts down is a crash on quit.
+func _exit_tree() -> void:
+	for job in _mesh_jobs:
+		if int(job[1]) >= 0:
+			WorkerThreadPool.wait_for_task_completion(int(job[1]))
+		(job[2] as Array)[0] = null
+	_mesh_jobs.clear()
+	_upload_waiting.clear()
+
+
+## Attach the meshes the workers have finished, and do what was asked of those
+## pieces while they were being built.
+func _harvest_mesh_jobs() -> void:
+	var k := 0
+	while k < _mesh_jobs.size():
+		var job: Array = _mesh_jobs[k]
+		var task: int = job[1]
+		if task < 0 or not WorkerThreadPool.is_task_completed(task):
+			k += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(task)
+		_mesh_jobs.remove_at(k)
+		var isl: BrickIsland = job[0]
+		isl.mesh_job = -1
+		if not isl.is_valid() or isl.mesh == null:
+			continue
+		_apply_mesh(isl, job[2][0], job[3])
+		mesh_jobs_done += 1
+		if isl.mesh_again:
+			var full := isl.mesh_again_full
+			isl.mesh_again = false
+			isl.mesh_again_full = false
+			rebuild_mesh(isl, full)
 
 
 ## Re-index a banded piece and upload only the bands whose bytes moved --
@@ -1433,6 +1823,8 @@ func _patch_bands(isl: BrickIsland) -> bool:
 func wake(isl: BrickIsland) -> void:
 	if not isl.is_valid() or not isl.settled:
 		return
+	isl.ripple_box = world_aabb(isl)
+	isl.ripple_pending = true
 	isl.body.freeze = false
 	isl.settled = false
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
@@ -1467,6 +1859,114 @@ func wake_near(origin: Vector3, radius: float) -> void:
 			continue
 		if world_aabb(other).grow(radius).has_point(origin):
 			wake(other)
+
+
+## Something that may have been holding pieces up is gone from this world box.
+## The settled pieces resting on it or wedged against it are woken next tick
+## (RIPPLES_PER_TICK boxes a tick). See RIPPLE_MARGIN.
+func support_gone(box: AABB) -> void:
+	if box.size == Vector3.ZERO:
+		return
+	_ripples.append(box)
+
+
+func _drain_ripples() -> void:
+	var n := 0
+	while n < RIPPLES_PER_TICK and not _ripples.is_empty():
+		_wake_resting_on(_ripples.pop_front())
+		n += 1
+
+
+## Wake the settled pieces that could have been resting on what was in `box`:
+## touching it, and not wholly below it -- what is under a thing is holding it
+## up, not held by it. Dormant records the same, marked to come back free to fall.
+func _wake_resting_on(box: AABB) -> void:
+	var grown := box.grow(RIPPLE_MARGIN)
+	var centre := grown.get_center()
+	var reach := grown.size.length() * 0.5
+	for other in islands:
+		if not other.is_valid() or not other.settled:
+			continue
+		if other.body.global_position.distance_to(centre) > other.radius + reach:
+			continue
+		var ob := world_aabb(other)
+		if not ob.intersects(grown) or ob.position.y < box.position.y - RIPPLE_MARGIN:
+			continue
+		wake(other)
+		ripple_woken += 1
+	for d in dormant:
+		var rb: AABB = d.record.box
+		if rb.intersects(grown) and rb.position.y >= box.position.y - RIPPLE_MARGIN:
+			d.unsure = true
+
+
+## Is there anything under this piece -- ground, a building, another piece --
+## within SUPPORT_REACH of its underside? Nine rays down from its world box's
+## floor: the corners, the middle, and halfway between. Any hit is support; a
+## piece leaning on its edge is found by the ray nearest that edge.
+func _supported_below(isl: BrickIsland) -> bool:
+	if not isl.is_valid() or not isl.body.is_inside_tree():
+		return true
+	var box := world_aabb(isl)
+	if box.size == Vector3.ZERO:
+		return true
+	var space := isl.body.get_world_3d().direct_space_state
+	var y := box.position.y + 0.1
+	var skip: Array[RID] = [isl.body.get_rid()]
+	for fx in [0.02, 0.5, 0.98]:
+		for fz in [0.02, 0.5, 0.98]:
+			var at := Vector3(box.position.x + box.size.x * fx, y,
+					box.position.z + box.size.z * fz)
+			var q := PhysicsRayQueryParameters3D.create(at, at + Vector3.DOWN * (SUPPORT_REACH + 0.1),
+					isl.body.collision_mask, skip)
+			if not space.intersect_ray(q).is_empty():
+				return true
+	return false
+
+
+## Freeze a piece where it is: what the tick does to one that has stayed slow
+## long enough (SETTLE_SLOW_MS), and what a probe does to put one there.
+func settle_now(isl: BrickIsland) -> void:
+	if not isl.is_valid() or isl.settled:
+		return
+	isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+	isl.body.freeze = true
+	isl.settled = true
+	isl.ripple_pending = false
+	isl.settled_ms = Time.get_ticks_msec()
+	isl.settled_blocks = world.get_alive_block_count(isl.chunk)
+	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
+	_apply_layers(isl)
+	# Inert now: give the solver as few boxes as the shape allows.
+	_reshape(isl, true)
+	settled += 1
+	# Where a landmark came to rest is the one piece of physics every
+	# machine has to agree on (DamageLog.Kind.PIECE_REST). Small pieces are
+	# presentation and are not sent.
+	if isl.landmark and isl.piece_id >= 0 and decides:
+		var rest := _piece_entry(isl, DamageLog.Kind.PIECE_REST)
+		rest.points = DamageLog.rest_points(isl.chunk_transform())
+		_record(rest)
+	piece_settled.emit(isl)
+
+
+## Wake the settled pieces this one is touching that have nothing under them. A
+## falling piece that lands on, or comes to rest on, a frozen floater: it falls
+## under the load now instead of holding the load up in mid-air.
+func _wake_touched(isl: BrickIsland) -> void:
+	for c in _contact_points(isl):
+		var rid: RID = (c as Dictionary).collider
+		if not rid.is_valid():
+			continue
+		for other in islands:
+			if other.settled and other.is_valid() and other.body.get_rid() == rid:
+				# Only a floater: a piece in a pile that has something under it
+				# is holding the new one up, and waking it was the whole pile
+				# jostling at every landing -- a third more pieces moving.
+				if not _supported_below(other):
+					wake(other)
+					touch_woken += 1
+				break
 
 
 ## The island's AABB in world space. Rotating an AABB gives the box around the
@@ -1626,7 +2126,9 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	var space := PhysicsServer3D.body_get_space(rid)
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, RID())
+	var _tu := Time.get_ticks_usec()
 	_ensure_per_block(isl)
+	_upart("shed: per block", _tu)
 	var shed := 0
 	var more := false
 	for g in groups:
@@ -1636,8 +2138,15 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		var moved: PackedInt32Array = g
 		if moved.is_empty():
 			continue
+		spawn_census.shed[0] += 1
+		spawn_census.shed[1] += moved.size()
 		var child := record_detach(isl.owner, isl, isl.chunk, moved)
-		spawn(isl.chunk, moved, linear, angular, child, isl.owner)
+		var _ts := Time.get_ticks_usec()
+		if spawn(isl.chunk, moved, linear, angular, child, isl.owner) == null:
+			# Deleted where it was, or dropped over the moving cap: gone, and
+			# anything resting on it with it.
+			support_gone(isl.chunk_transform() * world.get_blocks_box(isl.chunk, moved))
+		_upart("shed: spawns", _ts)
 		# Start a hold; never EXTEND one. A piece shedding on consecutive ticks
 		# would otherwise push its own deadline forward every tick and never
 		# rebuild at all, so its mesh would keep drawing bricks that had left
@@ -1650,8 +2159,10 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		# body. A discarded one is deleted, not left behind as ghost collision.
 		isl.disable_blocks(moved, RID())
 		shed += 1
+	var _tb := Time.get_ticks_usec()
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, space)
+	_upart("shed: body back", _tb)
 	if more and not _resolve_queue.has(isl):
 		_resolve_queue.append(isl)
 	if shed == 0:
@@ -1708,15 +2219,21 @@ func solve_island(isl: BrickIsland) -> void:
 	# Scaled to integers so the extension can see which component dominates.
 	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SOLVE)
 	e.normal = Vector3(roundi(down.x * 100.0), roundi(down.y * 100.0), roundi(down.z * 100.0))
+	var _tu := Time.get_ticks_usec()
 	var res := DamageLog.apply_entry(world, isl.chunk, e)
+	_tu = _upart("stress", _tu)
 	# A solve that failed nothing changed nothing, so there is nothing to send.
 	# What comes loose afterwards travels as DETACH, with its blocks named.
 	if not res.is_empty() and res[0] > 0:
 		_record(e)
 	# Tension failure marks joints, it does not move bricks. What comes loose is
 	# whatever can no longer trace a path to the ground.
-	_shed(isl, world.find_detached_groups(isl.chunk))
+	var groups := world.find_detached_groups(isl.chunk)
+	_tu = _upart("groups", _tu)
+	_shed(isl, groups)
+	_tu = _upart("shed", _tu)
 	split_if_broken(isl)
+	_upart("split", _tu)
 
 
 ## A hard landing SHEARS the joints in the contact band. It destroys nothing --
@@ -1738,9 +2255,14 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# Where it actually touched. The solver already knows; asking it beats
 	# guessing from a bounding box, which for a toppled building meant shearing
 	# a band up the side rather than across the face that landed.
+	var _tu := Time.get_ticks_usec()
 	if near:
 		_ensure_per_block(isl)
+	_tu = _upart("land: per block", _tu)
 	var contacts := _contact_points(isl)
+	# What it landed on, if that is a settled piece, is woken: a floater falls
+	# under the load instead of holding it up (see RIPPLE_MARGIN).
+	_wake_touched(isl)
 	var box := world_aabb(isl)
 	if contacts.is_empty():
 		# No manifold -- the body has already come to rest, or the landing was
@@ -1779,8 +2301,10 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 		if not got.is_empty():
 			_record(e)
 			loosened.append_array(got)
+	_tu = _upart("land: shear", _tu)
 	if near:
 		loosened.append_array(_snap_across(isl, contacts, severity))
+		_tu = _upart("land: snap", _tu)
 	else:
 		# Counted as a landing all the same, so a piece bouncing in the
 		# distance is not queued again every bounce (MAX_IMPACTS).
@@ -1809,7 +2333,9 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# ONE event, and each hand-over shears every loose piece within reach -- so
 	# six contacts a few centimetres apart meant doing that six times over.
 	# Two bricks bounce: see MIN_IMPACT_BLOCKS.
+	_tu = _upart("land: rest", _tu)
 	_hand_over(isl, contacts, severity)
+	_upart("land: what it hit", _tu)
 
 
 ## Give whatever a landing piece hit the other half of the collision.
@@ -1927,11 +2453,31 @@ func _count_meshless() -> void:
 		# An ArrayMesh with no surfaces is NOT null and draws nothing; count both.
 		# A toppled building draws through its bands and not its own mesh.
 		var m: Mesh = isl.mesh.mesh
-		if (m == null or m.get_surface_count() == 0) and not _any_band(isl):
+		if (m == null or m.get_surface_count() == 0) and not _any_band(isl) \
+				and not isl.lod_dropped:
 			isl.blind_ticks += 1
 			meshless_worst_blocks = maxi(meshless_worst_blocks,
 					world.get_alive_block_count(isl.chunk))
+			var stage := "orphan"
+			if isl.upload_waiting:
+				stage = "upload budget"
+			elif isl.mesh_job != -1:
+				stage = "upload"
+			elif _mesh_queue.has(isl):
+				stage = "queued" if world.bake_ready(isl.chunk) else \
+						("baking" if world.bake_pending(isl.chunk) else "no bake")
+			elif _band_holes.has(isl):
+				stage = "band holes"
+			isl.blind_stages[stage] = int(isl.blind_stages.get(stage, 0)) + 1
 		elif isl.blind_ticks > 0:
+			if isl.blind_ticks > blind_worst:
+				blind_worst_stages = isl.blind_stages.duplicate()
+				blind_worst_stages["bricks"] = world.get_alive_block_count(isl.chunk)
+				blind_worst_stages["settled"] = isl.settled
+				blind_worst_stages["landmark"] = isl.landmark
+				blind_worst_stages["bands"] = isl.bands.size()
+				blind_worst_stages["mesh"] = str(isl.mesh.mesh)
+			isl.blind_stages = {}
 			blind_worst = maxi(blind_worst, isl.blind_ticks)
 			blind_total += isl.blind_ticks
 			blind_count += 1
@@ -2027,8 +2573,14 @@ func _body_radius(isl: BrickIsland) -> float:
 
 
 func _island_aabb(isl: BrickIsland) -> AABB:
-	if isl.mesh != null:
+	if isl.mesh != null and isl.mesh.mesh != null:
 		return isl.mesh.get_aabb()
+	# No mesh to ask -- dropped for distance, or not built yet: its grid's box.
+	# A zero box here was a piece nothing could find by volume, so a far piece
+	# with its mesh dropped was never woken by the shot that took its floor.
+	if isl.mesh != null and isl.chunk >= 0 and world.is_chunk_alive(isl.chunk):
+		return AABB(Vector3.ZERO, Vector3(world.get_chunk_dims(isl.chunk))
+				* BrickWorld.get_cell_size())
 	# A single brick drawn from a MultiMesh has no MeshInstance3D of its own.
 	# local_com is its centre in chunk space, so the box starts half a brick
 	# before that.
@@ -2079,6 +2631,9 @@ func _slow_window(isl: BrickIsland) -> int:
 
 func tick() -> void:
 	var _t_loop := Time.get_ticks_usec()
+	if camera != null and is_instance_valid(camera):
+		_frustum = camera.get_frustum()
+	var look := Engine.get_physics_frames() % SEEN_EVERY == 0
 	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
 	_work_done = 0
 	_sync_meshes = 0
@@ -2112,25 +2667,26 @@ func tick() -> void:
 				_retire(isl, i + 1, &"empty")
 				continue
 
-		# Disposable debris is swept up after a few seconds, settled or not.
+		# Debris is kept while it can be seen and goes once it cannot. It was
+		# swept 0.3 s after it landed or at 2.5 s whatever the camera was doing,
+		# which is a brick vanishing in front of the player -- the thing Just
+		# Cause 3 was taken to task for. Now: never removed in view; gone after
+		# DEBRIS_UNSEEN_MS out of it; and, when it must go in view (old, or the
+		# cap), shrunk away over DEBRIS_FADE_MS rather than popped.
 		if isl.disposable:
-			if now - isl.born_ms > DEBRIS_LIFETIME_MS:
-				_retire(isl, i + 1, &"swept")
-				continue
-			# And sooner: moments after it comes to rest. Small pieces are
-			# presentation (see the class notes); once one has landed there is
-			# nothing left for it to show. The birth grace is so a piece cut loose
-			# at a standstill has time to start falling before it counts as still.
-			if now - isl.born_ms > RUBBLE_REST_MS \
-					and isl.body.linear_velocity.length() < RUBBLE_REST_SPEED:
-				if isl.rest_since == 0:
-					isl.rest_since = now
-				elif now - isl.rest_since >= RUBBLE_REST_MS:
-					swept_at_rest += 1
-					_retire(isl, i + 1, &"swept")
+			if isl.fade_since > 0:
+				if _advance_fade(isl, now):
+					_retire(isl, i + 1, &"faded")
 					continue
 			else:
-				isl.rest_since = 0
+				if look and _box_seen(world_aabb(isl), _frustum):
+					isl.seen_tick = Engine.get_physics_frames()
+				if Engine.get_physics_frames() - isl.seen_tick > _unseen_ticks():
+					debris_unseen += 1
+					_retire(isl, i + 1, &"swept")
+					continue
+				if now - isl.born_ms > DEBRIS_SEEN_MAX_MS:
+					_start_fade(isl, now)
 
 		if isl.settled:
 			continue
@@ -2151,13 +2707,23 @@ func tick() -> void:
 		isl.max_speed_lost = maxf(isl.max_speed_lost, lost)
 		isl.prev_speed = speed
 
+		var fell := isl.fall_ticks
+		isl.fall_ticks = isl.fall_ticks + 1 if speed > IMPACT_MIN_SPEED else 0
 		# A landing only breaks anything where this machine decides (see decides).
 		if decides and lost > IMPACT_DELTA and isl.prev_speed + lost > IMPACT_MIN_SPEED \
 				and isl.impacts < MAX_IMPACTS and not isl.fracture_queued:
-			peak_drop = maxf(peak_drop, lost)
-			isl.fracture_queued = true
-			_fracture_queue.append([isl, lost])
-			continue
+			if fell < IMPACT_FALL_TICKS:
+				jolts_ignored += 1
+			else:
+				peak_drop = maxf(peak_drop, lost)
+				isl.fracture_queued = true
+				isl.fall_ticks = 0
+				_fracture_queue.append([isl, lost])
+				continue
+
+		if isl.ripple_pending and not isl.settled and speed > RIPPLE_START_SPEED:
+			isl.ripple_pending = false
+			support_gone(isl.ripple_box)
 
 		var rested := isl.body.sleeping
 		var by_rule := false
@@ -2166,6 +2732,10 @@ func tick() -> void:
 			if speed < SETTLE_SPEED and spin < SETTLE_SPIN:
 				if isl.slow_since == 0:
 					isl.slow_since = now
+					# Coming to rest: on what? A frozen piece under it is woken,
+					# and falls if nothing holds it (see RIPPLE_MARGIN).
+					if not isl.disposable:
+						_wake_touched(isl)
 				elif now - isl.slow_since >= _slow_window(isl):
 					rested = true
 					by_rule = true
@@ -2175,30 +2745,24 @@ func tick() -> void:
 					and speed < SETTLE_MAX_SPEED:
 				rested = true
 				by_age = true
+		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK \
+				and isl.unsupported_tries < SUPPORT_TRIES and not isl.disposable \
+				and not _supported_below(isl):
+			# Nothing under it: held by friction against what it came away from.
+			# A nudge down, and it is asked again when it is slow again.
+			isl.unsupported_tries += 1
+			unsupported_nudges += 1
+			isl.slow_since = 0
+			isl.body.sleeping = false
+			isl.body.linear_velocity += Vector3.DOWN * SUPPORT_NUDGE
+			continue
 		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK:
 			settles += 1
 			if by_rule:
 				settled_by_rule += 1
 			elif by_age:
 				settled_by_age += 1
-			isl.body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
-			isl.body.freeze = true
-			isl.settled = true
-			isl.settled_ms = Time.get_ticks_msec()
-			isl.settled_blocks = world.get_alive_block_count(isl.chunk)
-			world.set_chunk_transform(isl.chunk, isl.chunk_transform())
-			_apply_layers(isl)
-			# Inert now: give the solver as few boxes as the shape allows.
-			_reshape(isl, true)
-			settled += 1
-			# Where a landmark came to rest is the one piece of physics every
-			# machine has to agree on (DamageLog.Kind.PIECE_REST). Small pieces are
-			# presentation and are not sent.
-			if isl.landmark and isl.piece_id >= 0 and decides:
-				var rest := _piece_entry(isl, DamageLog.Kind.PIECE_REST)
-				rest.points = DamageLog.rest_points(isl.chunk_transform())
-				_record(rest)
-			piece_settled.emit(isl)
+			settle_now(isl)
 
 	census.ticks += 1
 	census.moving += moving
@@ -2208,7 +2772,10 @@ func tick() -> void:
 	census.landmarks_peak = maxi(census.landmarks_peak, moving_landmarks)
 	census.blocks_peak = maxi(census.blocks_peak, moving_blocks)
 	_moving_now = moving
+	_drain_ripples()
 	var _tp := Time.get_ticks_usec()
+	_dorm_wake_ms = 0.0
+	_dorm_sleep_ms = 0.0
 	_stream_dormancy()
 	var _td := Time.get_ticks_usec()
 	# After dormancy, not before: what distance already put away does not
@@ -2225,6 +2792,8 @@ func tick() -> void:
 	# Meshes first. A piece that has left its building but has no mesh yet is
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
+	_harvest_mesh_jobs()
+	_drain_upload_waiting()
 	_drain_mesh_queue()
 	_fill_band_holes()
 	_drain_resolve_queue()
@@ -2241,6 +2810,8 @@ func tick() -> void:
 	var _tm := Time.get_ticks_usec()
 	tick_prof.mesh += float(_tm - _tf) / 1000.0
 	_update_multimeshes()
+	if not defer_job_start:
+		start_mesh_jobs()
 	tick_prof.mm += float(Time.get_ticks_usec() - _tm) / 1000.0
 	var _total := float(Time.get_ticks_usec() - _t_loop) / 1000.0
 	if _total > float(tick_worst.get("total", 0.0)):
@@ -2248,6 +2819,8 @@ func tick() -> void:
 				"loop": float(_tl - _t_loop) / 1000.0,
 				"pieces": float(_tp - _t_loop) / 1000.0,
 				"dormancy": float(_td - _tp) / 1000.0,
+				"wake": _dorm_wake_ms,
+				"sleep": _dorm_sleep_ms,
 				"cap": float(_tl - _td) / 1000.0,
 				"resolve": float(_tr - _tl) / 1000.0,
 				"fracture": float(_tf - _tr) / 1000.0,
@@ -2269,8 +2842,13 @@ func _drain_resolve_queue() -> void:
 		var isl: BrickIsland = _resolve_queue.pop_front()
 		if not isl.is_valid():
 			continue
+		var t0 := Time.get_ticks_usec()
+		_unit = {}
 		solve_island(isl)
+		var t1 := Time.get_ticks_usec()
 		rebuild_mesh(isl)
+		_upart("mesh", t1)
+		_unit_done("resolve", isl, t0)
 		_work_done += 1
 
 
@@ -2284,7 +2862,10 @@ func _drain_fracture_queue() -> void:
 		if not isl.is_valid():
 			continue
 		isl.fracture_queued = false
+		var t0 := Time.get_ticks_usec()
+		_unit = {}
 		fracture_on_impact(isl, float(entry[1]))
+		_unit_done("landing", isl, t0)
 		_work_done += 1
 
 
@@ -2304,15 +2885,29 @@ func _stream_island_meshes() -> void:
 		var isl: BrickIsland = islands[_lod_cursor % islands.size()]
 		_lod_cursor += 1
 		looked += 1
-		if not isl.is_valid() or isl.mesh == null or not isl.settled:
+		if not isl.is_valid() or isl.mesh == null:
 			continue
 		var dist := isl.body.global_position.distance_to(here)
 		var has_mesh: bool = isl.array_mesh != null
+		if not isl.settled:
+			# Dropped for distance while it lay still, and something has woken
+			# it since. It left this ladder when it stopped being settled, and
+			# nothing else was going to give its mesh back: the piece was drawn
+			# again only when something hit it, and one was invisible for 422
+			# frames, walked right up to.
+			if isl.lod_dropped and not has_mesh and dist < ISLAND_MESH_RANGE \
+					and isl.mesh_job == -1 and not isl.upload_waiting:
+				world.bake_chunk_async(isl.chunk)
+				if not _mesh_queue.has(isl):
+					_mesh_queue.append(isl)
+				budget -= 1
+			continue
 		if has_mesh and dist > ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS:
 			_retirer.retire(isl.mesh.mesh)
 			isl.mesh.mesh = null
 			isl.array_mesh = null
 			isl.index_bytes = 0
+			isl.lod_dropped = true
 			world.drop_chunk_bake(isl.chunk)
 			dropped += 1
 			budget -= 1
@@ -2369,19 +2964,25 @@ func _enforce_debris_cap() -> void:
 	var small_n := 0
 	var large_n := 0
 	for isl in islands:
-		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
+		# Debris counts too, now that it lives as long as it is seen; what is
+		# already shrinking away is on its way out.
+		if not isl.is_valid() or not isl.settled or isl.capturing or isl.fade_since > 0:
 			continue
 		if isl.landmark:
 			large_n += 1
 		else:
 			small_n += 1
-	if small_n <= small_live_max and large_n <= large_live_max 			and small_n + large_n <= total_live_max:
+	_cap_room = small_n <= small_live_max - CAP_WAKE_SPARE \
+			and large_n <= large_live_max - CAP_WAKE_SPARE \
+			and small_n + large_n <= total_live_max - CAP_WAKE_SPARE
+	if small_n <= small_live_max and large_n <= large_live_max \
+			and small_n + large_n <= total_live_max:
 		_cap_plan.clear()
 		return
-	var tick := Engine.get_physics_frames()
-	if _cap_plan.is_empty() or tick - _cap_planned >= CAP_REPLAN_TICKS:
+	var now_tick := Engine.get_physics_frames()
+	if _cap_plan.is_empty() or now_tick - _cap_planned >= CAP_REPLAN_TICKS:
 		_cap_plan = _plan_debris_cap()
-		_cap_planned = tick
+		_cap_planned = now_tick
 	var done := 0
 	while done < EVICTIONS_PER_TICK and not _cap_plan.is_empty():
 		var entry: Array = _cap_plan.pop_front()
@@ -2392,7 +2993,11 @@ func _enforce_debris_cap() -> void:
 		if at < 0:
 			continue
 		if bool(entry[1]):
-			_retire(isl, at, &"cap")
+			if isl.disposable and Engine.get_physics_frames() - isl.seen_tick < _unseen_ticks():
+				# In view: it goes, but it shrinks away rather than popping.
+				_start_fade(isl, Time.get_ticks_msec())
+			else:
+				_retire(isl, at, &"cap")
 			cap_deleted += 1
 		else:
 			match _sleep_or_begin(isl, at, true):
@@ -2417,7 +3022,7 @@ func _plan_debris_cap() -> Array:
 	var large: Array = []
 	for i in islands.size():
 		var isl: BrickIsland = islands[i]
-		if not isl.is_valid() or not isl.settled or isl.disposable or isl.capturing:
+		if not isl.is_valid() or not isl.settled or isl.capturing or isl.fade_since > 0:
 			continue
 		if isl.landmark:
 			large.append(isl)
@@ -2437,7 +3042,13 @@ func _plan_debris_cap() -> Array:
 	var plan: Array = []
 	# Oldest at rest first.
 	if over_small > 0:
+		# Out of view first, then oldest at rest.
+		var tick_now := Engine.get_physics_frames()
 		small.sort_custom(func(a: BrickIsland, c: BrickIsland) -> bool:
+				var a_seen: bool = tick_now - a.seen_tick < _unseen_ticks()
+				var c_seen: bool = tick_now - c.seen_tick < _unseen_ticks()
+				if a_seen != c_seen:
+					return not a_seen
 				return a.settled_ms < c.settled_ms)
 		for k in mini(over_small, small.size()):
 			plan.append([small[k], true])
@@ -2456,6 +3067,8 @@ func _plan_debris_cap() -> Array:
 		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
 		for k in mini(over_large, keep.size()):
 			plan.append([keep[k], false])
+		# What is still awake after this plan, the farthest of it.
+		_cap_far = float(away[keep[over_large]]) if over_large < keep.size() else 0.0
 	return plan
 
 
@@ -2473,18 +3086,30 @@ func _stream_dormancy() -> void:
 	# hundred to sleep. At WAKE_SCAN_PER_TICK the whole list is looked at every
 	# few ticks, which is far faster than anyone walks into WAKE_RANGE.
 	var woke := 0
+	var _tw := Time.get_ticks_usec()
 	for k in mini(dormant.size(), WAKE_SCAN_PER_TICK):
 		if woke >= WAKES_PER_TICK:
 			break
 		if _wake_cursor >= dormant.size():
 			_wake_cursor = 0
 		var d: Dormant = dormant[_wake_cursor]
-		if _distance_to_interest(d.record.box, points) <= WAKE_RANGE \
-				and _wake_record(d) != null:
+		var dist := _distance_to_interest(d.record.box, points)
+		if dist > WAKE_RANGE or (d.by_cap and not _cap_room and dist >= _cap_far * CAP_SWAP):
+			_wake_cursor += 1
+			continue
+		var _t1 := Time.get_ticks_usec()
+		if _wake_record(d) != null:
 			dormant.remove_at(_wake_cursor)   # the next one shifts into its place
 			woke += 1
+			if d.by_cap:
+				cap_woken += 1
+			var cost := float(Time.get_ticks_usec() - _t1) / 1000.0
+			if cost > float(wake_worst[0]):
+				wake_worst = [cost, d.record.block_count()]
 		else:
 			_wake_cursor += 1
+	var _ts := Time.get_ticks_usec()
+	_dorm_wake_ms = float(_ts - _tw) / 1000.0
 
 	var now := Time.get_ticks_msec()
 	var put_away := 0
@@ -2505,17 +3130,23 @@ func _stream_dormancy() -> void:
 			nearest = minf(nearest, isl.body.global_position.distance_to(p))
 		if nearest - isl.radius < SLEEP_RANGE:
 			continue
+		var _t1 := Time.get_ticks_usec()
+		var blocks := world.get_block_count(isl.chunk)
 		match _sleep_or_begin(isl, at, false):
 			SLEPT:
 				put_away += 1
 				_sleep_cursor = at   # the list shifted under the cursor
+				var cost := float(Time.get_ticks_usec() - _t1) / 1000.0
+				if cost > float(sleep_worst[0]):
+					sleep_worst = [cost, blocks]
 			STARTED:
 				put_away += 1
+	_dorm_sleep_ms = float(Time.get_ticks_usec() - _ts) / 1000.0
 
 
 ## Photograph a piece and give everything else back.
-func _sleep(isl: BrickIsland, index: int) -> bool:
-	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk))
+func _sleep(isl: BrickIsland, index: int, by_cap := false) -> bool:
+	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk), by_cap)
 
 
 enum { NOTHING, SLEPT, STARTED }
@@ -2528,7 +3159,7 @@ func _sleep_or_begin(isl: BrickIsland, index: int, for_cap: bool) -> int:
 	if isl.capturing:
 		return STARTED
 	if world.get_block_count(isl.chunk) <= SLEEP_SYNC_BLOCKS:
-		return SLEPT if _sleep(isl, index) else NOTHING
+		return SLEPT if _sleep(isl, index, for_cap) else NOTHING
 	isl.capturing = true
 	_sleep_jobs.append([isl, ChunkRecord.begin_capture(world, isl.chunk), isl.edits, for_cap])
 	return STARTED
@@ -2560,7 +3191,7 @@ func _advance_sleep_jobs() -> void:
 		var at := islands.find(isl)
 		if at < 0:
 			continue
-		if _commit_sleep(isl, at, record):
+		if _commit_sleep(isl, at, record, bool(job[3])):
 			if bool(job[3]):
 				cap_slept += 1
 		elif bool(job[3]):
@@ -2570,11 +3201,12 @@ func _advance_sleep_jobs() -> void:
 
 ## The part of going to sleep after the photograph: keep the record, let the
 ## piece go.
-func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord) -> bool:
+func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord, by_cap := false) -> bool:
 	if record.block_count() == 0:
 		return false
 	var d := Dormant.new()
 	d.record = record
+	d.by_cap = by_cap
 	d.slept_ms = Time.get_ticks_msec()
 	d.piece_id = isl.piece_id
 	d.owner = isl.owner
@@ -2606,12 +3238,16 @@ func _wake_record(d: Dormant) -> BrickIsland:
 	settled += 1
 	_apply_layers(isl)
 	_reshape(isl, true)
-	# Small enough to bake here, or queued like any other big piece.
-	if d.record.block_count() <= SYNC_MESH_MAX_BLOCKS:
-		rebuild_mesh(isl, true, true)
-	else:
-		world.bake_chunk_async(chunk)
-		_mesh_queue.append(isl)
+	# What it rested on went while it slept (support_gone): it wakes free to
+	# fall, and settles again if something still holds it.
+	if d.unsure:
+		wake(isl)
+	# Baked on a worker and drawn a tick or two later, however small: a piece
+	# waking is one nobody was looking at, and bricks are a poor measure of a
+	# bake -- a staircase piece of 146 is 90,000 vertices of spiral step, and
+	# baking one here was a 15 ms wake.
+	world.bake_chunk_async(chunk)
+	_mesh_queue.append(isl)
 	woken += 1
 	isl.wakes += 1
 	piece_woken.emit(isl)
@@ -2624,13 +3260,13 @@ func _wake_record(d: Dormant) -> BrickIsland:
 ## the world, which is what made them (StructureReplayer). What the log does not
 ## hold is physics: where the piece is and how it is moving. That comes from
 ## the save, and here it is put back.
-func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform3D,
+func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transform3D,
 		linear: Vector3, angular: Vector3, at_rest: bool, is_disposable: bool) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_transform(chunk, chunk_xform)
 	_restoring = true
-	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner, true, not is_disposable)
+	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner_id, true, not is_disposable)
 	_restoring = false
 	if isl == null:
 		return null
@@ -2698,12 +3334,12 @@ func restore_pending(d: Dictionary) -> int:
 
 ## Put a piece loaded from a save straight back to sleep: it was a record when
 ## the save was taken, and it is a record now.
-func restore_dormant(record: ChunkRecord, piece_id: int, owner: int) -> void:
+func restore_dormant(record: ChunkRecord, piece_id: int, owner_id: int) -> void:
 	var d := Dormant.new()
 	d.record = record
 	d.slept_ms = Time.get_ticks_msec()
 	d.piece_id = piece_id
-	d.owner = owner
+	d.owner = owner_id
 	dormant.append(d)
 
 
@@ -2741,6 +3377,11 @@ func dormant_report() -> Dictionary:
 
 
 func _retire(isl: BrickIsland, index: int, reason: StringName = &"swept") -> void:
+	# Whatever was resting on it is resting on nothing now -- unless it is only
+	# going to sleep: then what rests on it sleeps too, and both come back
+	# where they were.
+	if reason != &"slept" and isl.is_valid():
+		support_gone(world_aabb(isl))
 	piece_removed.emit(isl, reason)
 	FurnitureMesh.drop(isl.chunk, _furniture)
 	_mesh_queue.erase(isl)
@@ -2766,7 +3407,11 @@ func _update_multimeshes() -> void:
 			var isl: BrickIsland = members[i]
 			if not isl.is_valid():
 				continue
-			mm.set_instance_transform(i, isl.body.global_transform)
+			if isl.fade < 1.0:
+				mm.set_instance_transform(i, isl.body.global_transform
+						* Transform3D(Basis().scaled(Vector3.ONE * maxf(isl.fade, 0.01))))
+			else:
+				mm.set_instance_transform(i, isl.body.global_transform)
 			mm.set_instance_color(i, isl.mm_colour)
 
 
@@ -2797,7 +3442,8 @@ func report() -> Dictionary:
 		"discarded": discarded,
 		"furniture_deleted": furniture_deleted,
 		"tiny_deleted": tiny_deleted,
-		"swept_at_rest": swept_at_rest,
+		"debris_unseen": debris_unseen,
+		"debris_faded": debris_faded,
 		"dropped": dropped,
 		"breaks": breaks,
 		"band_breaks": band_breaks,

@@ -97,6 +97,10 @@ const FLAG_BANDED := 4
 ## sets it when too many pieces are already moving and this one came loose far
 ## from every player (IslandManager.MAX_MOVING).
 const FLAG_GONE := 8
+## DETACH: the piece is a collapse CHUNK (CollapseDirector) -- its severed joints
+## are mended once it is cut out (BrickWorld.heal_joints), on every machine, so it
+## falls as one piece and breaks where it lands.
+const FLAG_CHUNK := 16
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.

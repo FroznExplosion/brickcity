@@ -9,6 +9,10 @@ extends SceneTree
 ## DETACH says so (DamageLog.FLAG_GONE), so a client that applies it drops the
 ## same bricks and makes no piece either. Anything near a player still falls,
 ## and below the cap everything does.
+##
+## And the DEBRIS cap's sleepers (IslandManager.CAP_WAKE_SPARE): a piece the cap
+## put to sleep stays asleep while the cap is full, however near it is, and
+## wakes when there is room or to trade places with a piece much farther away.
 
 const BUILDING := 7
 
@@ -130,5 +134,46 @@ func _run() -> void:
 	_ok("and, being far, it falls merged", body != null and body.merged,
 			"%d blocks" % ug.size())
 
+	_check_cap_sleepers()
+
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+## A record of a small wreck, lying where the manager's somebody is standing.
+func _sleeper(w: BrickWorld, by_cap: bool) -> IslandManager.Dormant:
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(8, 8, 3))
+	TowerRecipe.build(w, c, TowerRecipe.bake_palette(w), 8, 8, 3)
+	w.set_chunk_transform(c, Transform3D.IDENTITY)
+	var d := IslandManager.Dormant.new()
+	d.record = ChunkRecord.capture(w, c)
+	d.by_cap = by_cap
+	w.release_chunk(c)
+	return d
+
+
+func _check_cap_sleepers() -> void:
+	var w := BrickWorld.new()
+	var m := _manager(w, [], true)   # somebody at (4, 4, 4): well inside WAKE_RANGE
+	m.dormant.append(_sleeper(w, true))
+	m._cap_room = false
+	m._cap_far = 1.0
+	for k in 5:
+		m._stream_dormancy()
+	_ok("a piece the cap slept stays asleep while the cap is full, however near",
+			m.dormant.size() == 1)
+	m._cap_far = 1000.0
+	m._stream_dormancy()
+	_ok("it wakes to trade places with a piece much farther away",
+			m.dormant.is_empty() and m.cap_woken == 1)
+
+	m.dormant.append(_sleeper(w, true))
+	m._cap_far = 1.0
+	m._cap_room = true
+	m._stream_dormancy()
+	_ok("and when the cap has room again", m.dormant.is_empty() and m.cap_woken == 2)
+
+	m.dormant.append(_sleeper(w, false))
+	m._cap_room = false
+	m._stream_dormancy()
+	_ok("a piece slept for distance wakes on distance alone", m.dormant.is_empty())

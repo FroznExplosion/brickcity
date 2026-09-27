@@ -26,6 +26,7 @@ func _init() -> void:
 	for c in _cases():
 		_check_same(c)
 	_check_template()
+	_check_parallel()
 	if args.has("--time"):
 		_time()
 	print("\n%d passed, %d failed" % [passed, failed])
@@ -66,6 +67,12 @@ func _cases() -> Array:
 func _build(c: Dictionary) -> Array:
 	var w := BrickWorld.new()
 	var palette := TowerRecipe.bake_palette(w)
+	return [w, _build_into(w, palette, c)]
+
+
+## One case's tower, damaged, as a chunk of `w` -- several cases can share a
+## world, which is what solve_structures is asked about.
+func _build_into(w: BrickWorld, palette: Dictionary, c: Dictionary) -> int:
 	var chunk := w.create_chunk(Vector3i.ZERO,
 			TowerRecipe.chunk_dims(int(c.x), int(c.z), int(c.courses)))
 	TowerRecipe.build(w, chunk, palette, int(c.x), int(c.z), int(c.courses))
@@ -88,7 +95,57 @@ func _build(c: Dictionary) -> Array:
 			if plate >= int(c.cut[0]) and plate < int(c.cut[1]):
 				gone.push_back(id)
 		w.kill_blocks(chunk, gone)
-	return [w, chunk]
+	return chunk
+
+
+## solve_structures solves several buildings at once, a thread each. It has to
+## answer exactly what solve_structure on each in turn does -- every case, two
+## rounds, the loads brick by brick -- and take about as long as the slowest.
+func _check_parallel() -> void:
+	print("\nsolve_structures is solve_structure on each, at once")
+	var wa := BrickWorld.new()
+	var wb := BrickWorld.new()
+	var pa := TowerRecipe.bake_palette(wa)
+	var pb := TowerRecipe.bake_palette(wb)
+	var ca := PackedInt32Array()
+	var cb := PackedInt32Array()
+	for c in _cases():
+		ca.append(_build_into(wa, pa, c))
+		cb.append(_build_into(wb, pb, c))
+	for round in 2:
+		var one: Array = []
+		for chunk in ca:
+			one.append(wa.solve_structure(chunk))
+		var all: Array = wb.solve_structures(cb)
+		_ok("round %d: an answer for every chunk, in order" % (round + 1), all.size() == ca.size())
+		var same := true
+		var loads := true
+		var first := ""
+		for k in mini(all.size(), one.size()):
+			var a: Dictionary = one[k]
+			var b: Dictionary = all[k]
+			(a.stress as Dictionary).erase("solve_ms")
+			(b.stress as Dictionary).erase("solve_ms")
+			if str(a) != str(b):
+				same = false
+				if first.is_empty():
+					first = _cases()[k].name
+			if _loads(wa, ca[k]) != _loads(wb, cb[k]):
+				loads = false
+		_ok("round %d: the same answers" % (round + 1), same, "first differs: %s" % first)
+		_ok("round %d: the same loads, block by block" % (round + 1), loads)
+		for k in ca.size():
+			for g in (one[k] as Dictionary).groups:
+				wa.kill_blocks(ca[k], g)
+			for g in (all[k] as Dictionary).groups:
+				wb.kill_blocks(cb[k], g)
+	# And the workshop's reading of the last solve on this thread still works:
+	# slot 0 is the caller's.
+	wb.solve_structure(cb[0])
+	var cap := 0.0
+	for id in wb.get_block_count(cb[0]):
+		cap = maxf(cap, wb.get_block_capacity(cb[0], id))
+	_ok("a solve on this thread can still be read back (get_block_capacity)", cap > 0.0)
 
 
 func _separately(w: BrickWorld, chunk: int) -> Dictionary:
@@ -225,3 +282,21 @@ func _time() -> void:
 			best1 = minf(best1, float(Time.get_ticks_usec() - t) / 1000.0)
 		print("  %dx%dx%d, %5d blocks: three calls %5.1f ms, solve_structure %5.1f ms" % [
 				s[0], s[1], s[2], w.get_block_count(chunk), best3, best1])
+	# Four big towers in one world: in turn, and at once.
+	var w4 := BrickWorld.new()
+	var p4 := TowerRecipe.bake_palette(w4)
+	var four := PackedInt32Array()
+	for k in 4:
+		four.append(_build_into(w4, p4, {"name": "", "x": 60, "z": 40, "courses": 162,
+				"tension": 0.0, "hits": [[Vector3(1.0 + k, 1.0, 0.3), 3.2]]}))
+	var seq := INF
+	var par := INF
+	for i in 3:
+		var t := Time.get_ticks_usec()
+		for chunk in four:
+			w4.solve_structure(chunk)
+		seq = minf(seq, float(Time.get_ticks_usec() - t) / 1000.0)
+		t = Time.get_ticks_usec()
+		w4.solve_structures(four)
+		par = minf(par, float(Time.get_ticks_usec() - t) / 1000.0)
+	print("  four 60x40x162 towers: in turn %.1f ms, at once %.1f ms" % [seq, par])

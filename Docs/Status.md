@@ -1212,6 +1212,240 @@ that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose
 Not done, on purpose: R2 says a floor panel is a landmark, so a one-brick floor plate falling
 anywhere is a body every machine keeps -- ~200 of those bodies in a `--big --shot` collapse were one
 to three bricks. Changing that is a game-design call (AI.md A11), not a performance one.
+*(Made, the same day -- next section.)*
+
+### Collapse plan, step 1: debris is what you can see
+
+The plan (agreed 2026-09-25, after the research in the conversation that produced it): split
+BREAKAGE (a shot, a blast, a landing on one spot -- local, close up, watched) from COLLAPSE
+(a building giving way), and split collapse by size: small buildings as now, and anything of
+8,000 bricks or more through a mega-collapse director that cuts it into a few big chunks along
+its floor lines, writes its interiors off except near players, budgets its pieces, and goes to
+a handful of chunks and dust with distance. Then fracture ahead of time for what is falling, and
+settled rubble merged back into static chunks. This is step 1.
+
+* **8 bricks or fewer is debris, however big** (`DEBRIS_MAX_BLOCKS`; AI.md A11 and AIPlan R2
+  revised). A lone floor panel is a sheet of plastic, not cover: RUBBLE layer, which no pawn
+  collides with, and each machine keeps or drops its own.
+* **Debris is kept while it can be seen.** It was deleted where it came loose if its CENTRE was
+  outside the frustum, and otherwise swept 0.3 s after landing or at 2.5 s, whatever the camera
+  was doing -- a brick vanishing in front of the player. Now the group's BOX is tested against the
+  frustum (within 60 m, from 30); a kept piece is asked every 4 ticks whether it can still be
+  seen; it goes a second after it cannot (`DEBRIS_UNSEEN_MS`, counted in physics ticks, so a hitch is not a second of nobody looking); and when it must go in view --
+  older than 30 s, or the cap wants it -- it shrinks away over 0.6 s instead of popping. No
+  occlusion test: a piece behind a wall counts as seen, which only ever keeps something longer.
+* **The debris cap counts debris.** It skipped disposable pieces, which was harmless while
+  debris lived 2.5 s; it takes what is out of view first and shrinks what is in view.
+* Found on the way: a piece restored from a save, or a staircase made debris, had never been
+  "seen" and would have been swept on its first tick.
+
+`--big --shot`: 399 landmark bodies came loose (766-1,000 before), 14 debris bodies were kept
+because they were in view, 578 small groups never became bodies. `tools/debris_probe.gd` checks
+the new rules: kept in view past landing, shrunk rather than popped by the cap, gone ~1 s after
+the camera looks away.
+
+### Collapse plan, steps 2 and 3: breakage, collapse, and the mega director
+
+`scripts/collapse_director.gd`. Every group a building's solve lets go of is sorted first:
+
+* **Breakage** -- within 4 m of a hit on that building in the last 2 s (a blast, or something
+  landing on it), and no more than 200 bricks. It comes loose exactly as before.
+* **Collapse** on an ordinary building -- still one body a group.
+* **Collapse on a mega building** (8,000 bricks or more: the big city's four largest shapes).
+  * **Held while it is still growing.** What has given way stays in the building until the
+    cascade stops growing for two solves, or 1.5 s has passed. Released every tick, a cascade made
+    one small chunk a tick for as long as it ran -- 331 of them in one pass -- and the moment it
+    hangs before it goes is Red Faction's groan.
+  * **Then cut into a few chunks**, bottom to top, of a size set by how far the nearest player is:
+    1,500 bricks near (under 60 m), 4,000 mid, and beyond 150 m no more than three.
+  * **Each chunk is one piece until it lands.** A chunk is a union of groups that the stress solve
+    separated, and an island treats a failed joint as cut -- so the first thing to touch it took it
+    straight back apart into those groups and hundreds of single bricks (818,000 bricks' worth of
+    re-spawning in one pass). Its joints are mended when it is cut out (`BrickWorld.heal_joints`),
+    on every machine: the DETACH says so (`DamageLog.FLAG_CHUNK`).
+  * **Its furniture is written off**: taken out of the chunks into a group of its own, which the
+    furniture rule deletes unless somebody is right next to it.
+  * A placeholder dust cloud (`CollapseDust`) where a chunk breaks away. Effects are the weapons
+    and effects area's; this is so a collapse across the city reads as one meanwhile.
+
+Also: **waking a sleeping piece** placed its bricks one call at a time from script -- 11-16 ms for
+an 8,000-brick piece, and the worst islands tick more than once. `BrickWorld.place_blocks` does
+the same placements in one call. And debris "out of view for a second" counts physics ticks, not
+milliseconds (the project runs 30 a second): a hitch is not a second of nobody looking, and on
+wall-clock time a stalled headless probe swept pieces that were in view.
+
+`--big --shot`: mega collapses came down in 61 chunks across 7 buildings (331 before the hold);
+landmark bodies 319 (399 after step 1); the log replays into the same structure, pieces included.
+
+### Collapse plan, step 4: the landing spike was a mesh upload, not a fracture
+
+The plan's step 4 was to break a falling piece ahead of its landing, so the big fracture is not
+paid for in the tick it lands. Measured first, and the fracture was never the cost: the snap
+across the piece is under 3 ms, and working out what came loose under 10. The spike -- 18-38 ms,
+the worst islands tick of a collapse -- was the **mesh queue**: a freshly cut piece getting its
+first mesh. The arrays come out of the worker's bake in under a millisecond, and handing them to
+the renderer is ~50 ns a vertex on the thread that does it: 120,000-260,000 vertices for a piece
+of 3,000-8,400 bricks, 5-35 ms. A **staircase** piece of 145 bricks is 90,000 vertices of spiral
+step, and every one that fell paid 7-15 ms. Godot's vertex compression was tried and is slower
+(the compression is CPU work).
+
+So a mesh of `THREAD_MESH_VERTS` (30,000) vertices or more is uploaded **on a worker thread**
+(`IslandManager._submit_mesh_job`) -- the renderer takes meshes built off the main thread, which
+is how threaded resource loading works -- and attached when it is done; the mesh it replaces goes
+on drawing until then, and anything asked of the piece's mesh meanwhile is done against the new
+one when it lands. (About two thirds of the upload: the renderer still makes the buffers on the main
+thread -- see the next section.) The manager waits for its jobs when it leaves the tree (a job still running at
+shutdown was a crash on quit).
+
+`--big --shot`: worst islands tick 15-16 ms (35-39); worst script tick 44 ms; worst invisible
+stretch 4-5 ticks. What is left at the top of the worst tick: a mega building's first detach
+un-merging its collision (13 ms), band builds (10 ms), and the loop.
+
+Breaking ahead of the landing is not built: what it would move off the landing tick is now a few
+milliseconds. It becomes worth it if landings get more expensive again (more planes, bigger
+pieces near players).
+
+### The worst tick of a big collapse, taken apart again
+
+What step 4 left at the top of the worst tick, one thing at a time (`--big --shot`, script side):
+
+* **A building's collision is a body a band** (`BuildingCollision`). It was one static body for the
+  whole building, and every change rebuilt the physics shape of all of it: the first hit un-merging
+  it was 14-23 ms on an 80x60x204 tower, switching a blast's bricks off 7-13 ms. Now it is one body
+  per band of the mesh (the bands `set_chunk_section_plates` already cuts, at most 16), and a change
+  touches only its bands. A band is **merged from promotion on and never un-merged**: one that loses
+  bricks is marked stale and merged again without them once, at the end of the tick, however many
+  pieces came out of it -- the physics steps after the tick, so nothing is simulated in between.
+  One band is 0.1-0.7 ms, several are one walk over the building's blocks (`add_band_shapes`), and
+  the merge grid is only as tall as the band. At most `FLUSH_BANDS_PER_TICK` a tick: one chunk cut
+  out of a mega tower left fifteen stale in one tick. The rest are **parked** out of the space until
+  their turn (a tick or two), since their stale boxes would overlap the piece just cut out and the
+  solver throws a piece it finds overlapping. Furniture is in no band -- it has its own body -- so
+  shutting a room rebuilds nothing. `tools/building_collision_probe.gd`, 30 checks.
+* **A building made bricks drops its shell's boxes at once**; the shell's mesh still waits for the
+  bands. Both bodies in the space was a solid box where the building's insides are, for as long as
+  the bands took to draw.
+* **Band meshes upload on a worker**, as a big piece's mesh already did. Measured windowed, what that
+  buys: for 62,000 vertices, 3-4 ms built on the main thread against 1-1.5 ms there when built on a
+  worker -- the worker packs the arrays, but the renderer still creates the buffers on the main
+  thread at its next call. So about a third of an upload stays on it wherever the mesh is built
+  (step 4's pieces included). `BAND_VERTS_PER_TICK` bounds how much of that one tick takes on, and
+  a piece's mesh goes ahead of a band's on the pool: a piece without a mesh is a hole, a band waiting
+  for its new one still draws the old.
+* **A piece's sleep record is captured in one call** (`BrickWorld.capture_blocks`): five calls a brick
+  from script was ~4 us a brick, a 2,000-brick piece put to sleep 8 ms of one tick. 0.1-0.2 us a
+  brick now, the same records (checked in all four frame rotations with dead, cut-out, removed, worn,
+  furniture and severed-joint bricks).
+* **The debris cap no longer fights waking.** A piece the cap put to sleep woke the next tick for being
+  inside `WAKE_RANGE` -- next to a big collapse, everything is -- and was put back to sleep, over and
+  over: 1.25 ms a tick of dormancy across a whole run, a 15 ms wake at the top of the worst tick, and
+  wreckage blinking out and back. It now wakes when the cap has room (`CAP_WAKE_SPARE`) or to trade
+  places with a piece much farther off (`CAP_SWAP`), and a wake bakes on a worker however small the
+  piece is: a staircase of 146 bricks is 90,000 vertices.
+* **Furniture is redrawn once a tick** per building, not once per piece cut out of it.
+
+The fixture gate's "a figure dropped onto the flight comes to rest on it" had been passing by luck:
+it put the eye a metre above the tread, which is the figure's feet half a metre inside it, and
+whether the solver pushed it out upwards depended on the box it was stuck in. It now drops the figure
+from above the tread and waits for the floor.
+
+`--big --shot`, across the runs: worst script tick 44-46 ms -> 32-36; "disable" 7-8 -> under 1;
+"collision update" 7 -> 0; merging bands again, 2.7 ms for six in the worst tick; dormancy 1.25 ms a
+tick -> 0.04; mean pieces tick 3.5 -> 2.0-2.4 ms. At the top of the worst tick now: the structural
+solve of a mega building (8-11 ms), a spawn (6-7 ms), attaching band meshes (4-6 ms -- the
+renderer's share of the uploads), and the pieces' own resolve. The worst invisible stretch of a
+piece is still anywhere from 3 to 18 ticks from run to run, as it was before any of this (3-38).
+
+Next in line: **room streaming** is the same shape of problem as the building body was -- one
+furniture body per building, rebuilt whole when a room opens, 13-14 ms in some runs.
+
+### The open issues after that, measured and taken one at a time
+
+Instrumented first (`--big --shot` prints each of these now), because three of the guesses were
+wrong: the 13 ms "room streaming" was the fake rung, the 10 ms "solve" was four buildings' solves
+in one tick, and the "node" step of a spawn was not the node.
+
+* **Pieces going invisible.** A settled piece past `ISLAND_MESH_RANGE` gives its mesh back on
+  purpose; if anything then woke it, it had left the ladder that gives meshes back (that only looks
+  at settled pieces), and it stayed meshless until something hit it -- walked right up to. That is
+  the 18,000-brick piece invisible for 422 frames. A woken piece whose mesh was dropped now gets it
+  back within range, and the "went blind" count no longer counts pieces not drawn on purpose.
+  Worst invisible stretch: 18-21 ticks -> 3-4.
+* **The renderer's share of a worker upload.** A mesh built on a worker still has its buffers made
+  on the main thread -- by whatever next calls into the renderer. That was a spawn's "node" step at
+  7-12 ms, a 90-brick piece's "mesh" at 8, a band's attach at 4-7. Now: one explicit flush at the
+  top of the tick (a cheap query answers only after the queue is flushed; it shows as "render");
+  a piece's big meshes held to `UPLOAD_VERTS_PER_TICK` a tick (over it waits a tick, arrays kept)
+  and bands to `BAND_VERTS_PER_TICK`; and meshes built on a worker are built compressed
+  (`UPLOAD_COMPRESS`: the worker's half twice as long, the main thread's a third shorter; rendered
+  side by side, 0.14% of pixels differ, all brick edges moved by a pixel).
+* **Staircase pieces baked on the spot.** A piece of under 200 bricks was baked in the tick, and a
+  staircase piece is 146 bricks and 90,000 vertices of spiral step -- a 9.5 ms spawn. It is now
+  also held to `SYNC_MESH_MAX_TRIS` authored triangles (`BrickWorld.get_chunk_authored_tris`).
+* **The fake rung.** Working out a room's drawing is 0.1-0.25 ms and a pass allowed 48 of them:
+  now a 2 ms clock over those too (`FAKE_BUDGET_MS`). And the building's whole fake drawing (3-4 ms
+  for one of the big shapes) is rebuilt once its rooms are all worked out, not on every pass that
+  added a few.
+* **Solves side by side.** `BrickWorld.solve_structures` runs the tick's solves of different
+  buildings on a thread each (scratch buffers per thread; slot 0 is the caller's, so a solve read
+  back on the main thread is what it always was). Answers identical, brick by brick
+  (`tools/solve_probe.gd`). In the big city the queue rarely holds two at once, so it matters less
+  than expected; the worst single solve of a 22,000-brick tower is 3-6 ms, and the high end is the
+  joint cache being rebuilt after a room laid its furniture.
+* **Giving a building back.** Every open room re-walked the whole building for its dead bricks and
+  removed its furniture a block at a time from a chunk about to be released; now one walk, and
+  nothing removed (`deactivate_room(..., dead, releasing)`). And no second building is started once
+  a trim run has had `TRIM_START_MS` -- the clock was only looked at after each one.
+* **A piece cut out of a piece** is copied into its new chunk directly (`split_island`), not a
+  `place_block` at a time: that checked every cell twice and looked for a bake in flight once a
+  brick, 4.2 ms for 7,000 bricks.
+
+`--big --shot`: worst script tick 32-36 ms -> 22-27 (22.4 on the last full run); worst invisible
+stretch 18-21 ticks -> 3-4. At the top of the worst tick now: loose pieces taking a blast (7 ms),
+giving one big building back (8 ms: its shell 4, its release 4), and a piece re-solve cutting out
+a big piece (7-9 ms).
+
+Still open: the solve's joint cache is rebuilt whole when a room lays furniture (the high end of a
+mega solve); settled wreckage past 145 m is not drawn at all (`ISLAND_MESH_RANGE`, a memory
+trade-off that pops at the range); and the renderer's share of uploads is only bounded, not gone --
+the project's rendering thread model ("Separate") would move it off the main thread entirely, a
+project setting to try deliberately.
+
+### Floating wreckage: a piece frozen on something that went
+
+A piece that has stayed slow long enough is frozen -- static scenery, woken only by damage near it.
+So a piece that settled resting on something that later went stayed where it was, in mid-air: on a
+part of a building a mega collapse was still holding and then let go, on a piece that woke and slid
+off, on one the debris cap deleted, on a group deleted where it stood. And a piece that broke off
+but was held by friction against the bricks it came away from (its faces lie exactly against them)
+went to sleep there, in the side of a building. What fell next landed on the floater and stuck,
+jittering, every jolt taken for a landing that broke it up and sheared the building under it.
+
+* **Support gone** (`IslandManager.support_gone`): where something that may have held pieces up
+  goes -- a piece removed (not one put to sleep for distance: what rests on it sleeps too, and both
+  come back together), a group deleted where it stood, and any piece that starts to move after being
+  woken or cut out, a toppled building and a released chunk included -- every settled piece resting
+  on or wedged against that spot is woken, and settles again if still held. A stack wakes a layer at
+  a time, as each one actually starts to fall. A dormant record whose support went wakes free to
+  fall.
+* **Nothing under it, no settling** (`_supported_below`): nine rays down from a piece's underside
+  before it freezes; nothing within `SUPPORT_REACH` and it is nudged down instead, up to
+  `SUPPORT_TRIES` times (a beam wedged across a gap is held, and settles).
+* **Landed on** (`_wake_touched`): a falling piece that lands on, or comes to rest on, a frozen piece
+  with nothing under it wakes that piece, which falls under the load. Not one that is held up -- that
+  woke whole piles at every landing, a third more pieces moving.
+* **A landing needs a fall** (`IMPACT_FALL_TICKS`): a speed drop counts only after three ticks over
+  `IMPACT_MIN_SPEED`, so a piece jittering in place no longer breaks itself and what it is stuck on.
+* A piece whose mesh was dropped for distance had a zero box, so the blast that took its floor never
+  found it: its grid's box now.
+
+Mesh jobs start at the end of the tick, not mid-tick: one that finished halfway through a tick had
+its buffers made by whatever next called the renderer in it (the loose bricks' MultiMesh at 24 ms).
+Now that cost is the "render" flush at the top of the tick, or the frame's.
+
+`tools/float_probe.gd`, 20 checks. `--big --shot`: 114 nudges instead of mid-air settles, 24 pieces
+woken for lost support and 5 for being landed on; more pieces in motion (mean 36, from ~26) because
+they fall now; worst script tick 32 ms, of which 12 the upload flush.
 
 ### Windows on far buildings: a room behind the glass that is not there
 

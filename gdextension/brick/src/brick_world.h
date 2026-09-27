@@ -403,6 +403,12 @@ public:
     /// Restore a block's severed joints. Only ever sets what a record captured;
     /// it is not a way to break or mend structure by hand.
     void set_block_joints(int chunk_id, int block_id, int joints);
+    /// Mend every severed joint in a chunk. What makes a CLUSTER: a mega
+    /// building's collapse is cut into a few chunks (CollapseDirector), and a
+    /// chunk falls as one piece and breaks where it lands -- not along the
+    /// joints the stress solve already failed, which would have taken it apart
+    /// the first time anything touched it. Returns how many blocks changed.
+    int heal_joints(int chunk_id);
 
     /// Per-block readouts, for debug overlays and probes.
     float get_block_load(int chunk_id, int block_id) const;
@@ -447,6 +453,11 @@ public:
     /// the detach reuse the walk the stress solve already made. A stress solve
     /// that did break a joint gets a fresh walk, as it always did.
     Dictionary solve_structure(int chunk_id);
+    /// solve_structure for several chunks at once, one thread each (up to
+    /// SOLVE_SLOTS), results in the order given. The chunks must be different:
+    /// each solve reads and writes its own chunk only, so the answers are
+    /// exactly what calling solve_structure on each in turn gives.
+    Array solve_structures(const PackedInt32Array &chunk_ids);
 
     // --- templates ---------------------------------------------------------
 
@@ -456,6 +467,13 @@ public:
     /// again. A city is a few recipes many times over; building the biggest
     /// block by block was 26 ms of every promotion. Returns a template id.
     int save_template(int chunk_id);
+    /// place_block for a whole list, in order: block i at origin + (cells[3i],
+    /// cells[3i+1], cells[3i+2]) with archetypes[i] and colours[i]. Returns each
+    /// one's id, or -1 where place_block would have refused it -- exactly what
+    /// the same calls one by one return. For ChunkRecord.restore, which made them
+    /// one by one from script: 11-16 ms to wake a sleeping 8,000-brick piece.
+    PackedInt32Array place_blocks(int chunk_id, Vector3i origin, const PackedInt32Array &cells,
+            const PackedInt32Array &archetype_ids, const PackedByteArray &colours);
     /// Give an EMPTY chunk, of the dims and origin the template was saved
     /// from, the template's blocks. The ids come out as they went in, so a
     /// damage record keyed on them replays the same. False, and nothing
@@ -481,6 +499,27 @@ public:
     /// chunk has to carry across being dematerialised or put to sleep, since a
     /// rebuild from a recipe or a record starts every brick at 255.
     PackedInt32Array get_worn_blocks(int chunk_id) const;
+
+    /// How many authored triangles the chunk's living blocks draw (a curved
+    /// stair tread's `mesh`, against a brick's handful of voxel faces). Bricks
+    /// are a poor measure of a bake: a staircase piece of 146 of them is
+    /// 90,000 vertices of spiral step. O(blocks), no bake needed.
+    int get_chunk_authored_tris(int chunk_id) const;
+
+    /// The box these blocks fill, in the chunk's own metres (what
+    /// get_chunk_transform maps to the world), alive or not -- a group just cut
+    /// out of the chunk still has a box. Empty for no blocks.
+    AABB get_blocks_box(int chunk_id, const PackedInt32Array &block_ids) const;
+
+    /// What ChunkRecord keeps of blocks [from, from + count) of a chunk, in id
+    /// order, for every block still standing in it (alive, not cut out into
+    /// another piece, not removed): "cells" (3 ints a block, its world tick
+    /// origin in cells), "archetypes", "colours", "decorative" (indices into
+    /// this slice), "joints" and "worn" ([index into this slice, value] pairs),
+    /// "count", and "lo"/"hi", the slice's box in the chunk's metres. One call
+    /// where the record asked five a block from script: ~4 us a block, and a
+    /// piece of 2,000 put to sleep was 8 ms of one tick.
+    Dictionary capture_blocks(int chunk_id, int from, int count) const;
     /// Put hp back from get_worn_blocks' list. Ids that are gone are skipped.
     void set_worn_blocks(int chunk_id, const PackedInt32Array &worn);
 
@@ -672,8 +711,32 @@ public:
     /// box per brick is what a collapse makes the solver pay for; a merged box
     /// cannot be disabled per block, so anything that damages the piece has to
     /// rebuild its shapes un-merged first.
+    ///
+    /// `section` >= 0 builds only the blocks of that band of the chunk (the
+    /// mesh's bands, `set_chunk_section_plates`; a block is in the band its
+    /// lowest cell is in). A standing building's collision is one body a band,
+    /// so a hit rebuilds the band it landed in rather than the whole tower.
+    ///
+    /// `skip_decorative` leaves furniture out: a standing building's furniture
+    /// collides through a body of its own (CityScene._room_body), and a piece's
+    /// carries its furniture in its own shapes.
     Dictionary add_chunk_shapes(RID body, int chunk_id, Vector3 offset, bool skip_dead,
-            bool merge = false);
+            bool merge = false, int section = -1, bool skip_decorative = false);
+
+    /// Merged shapes for several bands at once: bodies[i] gets band
+    /// sections[i]'s, as add_chunk_shapes(bodies[i], ..., true, true,
+    /// sections[i]) would give it. One walk over the chunk's blocks for all of
+    /// them, where a call a band walked every block of the building twice --
+    /// a mega tower's worst tick merged 15 bands again. Returns each body's
+    /// shape count.
+    PackedInt32Array add_band_shapes(const Array &bodies, int chunk_id, Vector3 offset,
+            const PackedInt32Array &sections, bool skip_decorative = false);
+
+    /// The band (`section` above) each of these blocks is in, -1 for an id
+    /// that is not a block of the chunk -- or, with `skip_decorative`, one that
+    /// is furniture.
+    PackedInt32Array get_block_sections(int chunk_id, const PackedInt32Array &block_ids,
+            bool skip_decorative = false) const;
 
     /// A stable name for what a chunk HOLDS, independent of how it came to
     /// hold it.
@@ -816,20 +879,33 @@ private:
     };
     std::vector<StressState> stress;
 
-    // The support DAG from the last grounding solve: scratch_queue holds the
-    // BFS visit order and scratch_depth how many joints each block is from the
-    // ground. Load flows from a block to every neighbour of strictly lower
-    // depth, shared by contact area -- NOT down a spanning tree, which would
-    // funnel a whole building through one edge, and not straight down either,
-    // which leaves an undercut wall transmitting nothing.
-    std::vector<int32_t> scratch_depth;
+    // Scratch for the structural solve, one set per thread that solves
+    // (solve_structures runs several buildings' solves at once). Slot 0 is the
+    // calling thread's, so everything that solves on the main thread and then
+    // reads the result back (get_block_capacity) sees what it always saw.
+    //
+    // depth: the support DAG from the last grounding solve, how many joints
+    // each block is from the ground, with queue its BFS visit order. Load
+    // flows from a block to every neighbour of strictly lower depth, shared by
+    // contact area -- NOT down a spanning tree, which would funnel a whole
+    // building through one edge, and not straight down either, which leaves an
+    // undercut wall transmitting nothing. mark and grounded are reused across
+    // solves so a collapse does not allocate per hit.
+    struct SolveScratch {
+        std::vector<int32_t> depth;
+        std::vector<uint8_t> mark;
+        std::vector<int32_t> queue;
+        std::vector<uint8_t> grounded;
+    };
+    static constexpr int SOLVE_SLOTS = 8;
+    SolveScratch scratch_slots[SOLVE_SLOTS];
+    static thread_local int scratch_slot;
+    SolveScratch &solve_scratch() { return scratch_slots[scratch_slot]; }
+    const SolveScratch &solve_scratch() const { return scratch_slots[scratch_slot]; }
 
     int64_t rng_seed = 0;
     uint64_t rng_state = 0;
 
-    // Scratch reused across solves so a collapse does not allocate per hit.
-    std::vector<uint8_t> scratch_mark;
-    std::vector<int32_t> scratch_queue;
 
     // One per chunk, built the first time a chunk is solved and dropped when a
     // block is placed in it or removed from it. See brick::JointCache.
@@ -842,7 +918,6 @@ private:
     };
     std::vector<ChunkTemplate> templates;
     const brick::JointCache &joints_of(int chunk_id);
-    std::vector<uint8_t> scratch_grounded;
 
     // check_stability and find_detached_groups on the grounding already in
     // scratch_depth, without walking it again. See solve_structure.
@@ -892,7 +967,13 @@ private:
     RID hull_shape_for(int archetype_id, int hull);
     void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
-    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset);
+    Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1,
+            bool skip_decorative = false);
+    /// The merge itself, over the blocks given (alive ones): as few boxes as
+    /// cover their solid cells, and a hull shape each for authored parts.
+    /// Returns the shape count.
+    int merge_blocks_into(RID body, const brick::Chunk &c, Vector3 offset,
+            const std::vector<const brick::Block *> &blocks);
 
     BakeJob *find_bake_job(int chunk_id);
     /// Join a chunk's bake if one is running. `adopt` takes the result; without
