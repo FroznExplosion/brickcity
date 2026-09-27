@@ -196,6 +196,21 @@ wreckage on the ground is landed on")
 	await _ticks(2)
 	_ok("a piece on the ground is supported", _m._supported_below(rest))
 
+	# --- a piece that is only furniture ----------------------------------------------
+	print("
+a piece that is only furniture has nothing to draw")
+	_ok("an empty mesh has an index width", IslandManager.index_width([]) == 4)
+	var chairs := _piece(Vector3(180.0, 0.05, 0.0))
+	var all := PackedInt32Array()
+	for id in _w.get_block_count(chairs.chunk):
+		all.append(id)
+	_w.set_blocks_decorative(chairs.chunk, all, true)
+	# Its faces were baked as bricks; furniture is not in the bake.
+	_w.drop_chunk_bake(chairs.chunk)
+	_m.rebuild_mesh(chairs, true, true)
+	_ok("and builds as nothing, not as an error", chairs.array_mesh == null
+			and chairs.index_width == 4)
+
 	# --- support_gone on its own ----------------------------------------------------
 	print("\nsupport_gone wakes what is on the box, not what is under it")
 	var under := _piece(Vector3(100.0, 0.05, 0.0))

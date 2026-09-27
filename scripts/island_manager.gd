@@ -968,7 +968,7 @@ func can_be_seen(point: Vector3) -> bool:
 ## `piece_id` comes from record_detach, which the caller runs first.
 func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
-		piece_id := -1, owner := -1) -> BrickIsland:
+		piece_id := -1, owner_id := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
 	# The host said it goes (MAX_MOVING): cut out and let go, as every other
 	# machine does with the same DETACH.
@@ -1004,7 +1004,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var isl := BrickIsland.new()
 	isl.chunk = island_chunk
 	isl.piece_id = piece_id
-	isl.owner = owner
+	isl.owner = owner_id
 	isl.local_com = split.local_com
 	isl.landmark = landmark
 	isl.disposable = not landmark
@@ -1325,7 +1325,7 @@ func _apply_layers(isl: BrickIsland) -> void:
 ## its mesh node move across as they are, and the only new thing is the body.
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		carried_bytes: int, carried_width: int, carried_bands: Array = [],
-		piece_id := -1, owner := -1, announce := true, is_landmark := true,
+		piece_id := -1, owner_id := -1, announce := true, is_landmark := true,
 		carried_band_bytes: Array = []) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
@@ -1334,7 +1334,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	var isl := BrickIsland.new()
 	isl.chunk = chunk
 	isl.piece_id = piece_id
-	isl.owner = owner
+	isl.owner = owner_id
 	isl.local_com = world.get_chunk_com(chunk)
 	# A toppled building or a piece back from sleep: a landmark unless told
 	# otherwise (only a loaded save's small pieces are).
@@ -1528,6 +1528,12 @@ static func mesh_arrays_ok(arrays: Array, who: String) -> bool:
 const INDEX16_MAX_VERTS := 65536
 
 static func index_width(arrays: Array) -> int:
+	# No arrays at all: a chunk with nothing to draw -- nothing alive, or only
+	# furniture, which is drawn apart from the faces. A piece of furniture put
+	# to sleep and woken again built exactly that, and this read the vertex
+	# array of nothing.
+	if arrays.size() <= Mesh.ARRAY_VERTEX or arrays[Mesh.ARRAY_VERTEX] == null:
+		return 4
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	return 2 if verts.size() <= INDEX16_MAX_VERTS else 4
 
@@ -1681,9 +1687,9 @@ func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array) -> void:
 ## Room in this tick's upload budget for `verts` more (UPLOAD_VERTS_PER_TICK),
 ## taken if there is.
 func _upload_ok(verts: int) -> bool:
-	var tick := Engine.get_physics_frames()
-	if tick != _upload_tick:
-		_upload_tick = tick
+	var now_tick := Engine.get_physics_frames()
+	if now_tick != _upload_tick:
+		_upload_tick = now_tick
 		_upload_used = 0
 	if _upload_used > 0 and _upload_used + verts > UPLOAD_VERTS_PER_TICK:
 		return false
@@ -2973,10 +2979,10 @@ func _enforce_debris_cap() -> void:
 			and small_n + large_n <= total_live_max:
 		_cap_plan.clear()
 		return
-	var tick := Engine.get_physics_frames()
-	if _cap_plan.is_empty() or tick - _cap_planned >= CAP_REPLAN_TICKS:
+	var now_tick := Engine.get_physics_frames()
+	if _cap_plan.is_empty() or now_tick - _cap_planned >= CAP_REPLAN_TICKS:
 		_cap_plan = _plan_debris_cap()
-		_cap_planned = tick
+		_cap_planned = now_tick
 	var done := 0
 	while done < EVICTIONS_PER_TICK and not _cap_plan.is_empty():
 		var entry: Array = _cap_plan.pop_front()
@@ -3254,13 +3260,13 @@ func _wake_record(d: Dormant) -> BrickIsland:
 ## the world, which is what made them (StructureReplayer). What the log does not
 ## hold is physics: where the piece is and how it is moving. That comes from
 ## the save, and here it is put back.
-func restore_piece(chunk: int, piece_id: int, owner: int, chunk_xform: Transform3D,
+func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transform3D,
 		linear: Vector3, angular: Vector3, at_rest: bool, is_disposable: bool) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_transform(chunk, chunk_xform)
 	_restoring = true
-	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner, true, not is_disposable)
+	var isl := adopt(chunk, null, null, 0, 4, [], piece_id, owner_id, true, not is_disposable)
 	_restoring = false
 	if isl == null:
 		return null
@@ -3328,12 +3334,12 @@ func restore_pending(d: Dictionary) -> int:
 
 ## Put a piece loaded from a save straight back to sleep: it was a record when
 ## the save was taken, and it is a record now.
-func restore_dormant(record: ChunkRecord, piece_id: int, owner: int) -> void:
+func restore_dormant(record: ChunkRecord, piece_id: int, owner_id: int) -> void:
 	var d := Dormant.new()
 	d.record = record
 	d.slept_ms = Time.get_ticks_msec()
 	d.piece_id = piece_id
-	d.owner = owner
+	d.owner = owner_id
 	dormant.append(d)
 
 

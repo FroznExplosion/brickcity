@@ -810,10 +810,10 @@ static func _door_span(from: int, to: int, storey: int, blocked: Array) -> Vecto
 		return Vector2i.ZERO
 	for tries in 3:
 		@warning_ignore("integer_division")
-		var at: int = from + (span * ((storey + tries) % 3 + 1)) / 4 - LINTEL_LEAD
-		at = clampi(at, from + LINTEL_LEAD, to - DOOR_WIDE - LINTEL_LEAD)
-		if not _door_clashes(at, blocked):
-			return Vector2i(at, at + DOOR_WIDE)
+		var spot: int = from + (span * ((storey + tries) % 3 + 1)) / 4 - LINTEL_LEAD
+		spot = clampi(spot, from + LINTEL_LEAD, to - DOOR_WIDE - LINTEL_LEAD)
+		if not _door_clashes(spot, blocked):
+			return Vector2i(spot, spot + DOOR_WIDE)
 	# All three spots are a stairwell or a column. Anywhere along the wall,
 	# then: a wall between two rooms with no way through it makes the room
 	# beyond it one you can only blow your way into.

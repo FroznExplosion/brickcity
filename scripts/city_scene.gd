@@ -4485,7 +4485,7 @@ func save_checkpoint() -> bool:
 	f.close()
 	print("[city] checkpoint saved: %d command(s), %d piece(s), %d asleep, %d KB" % [
 		authority.commands.size(), islands.islands.size(), islands.dormant.size(),
-		bytes.size() / 1024])
+		int(bytes.size() / 1024.0)])
 	return true
 
 
@@ -4567,9 +4567,9 @@ func _restore_checkpoint(path: String) -> Dictionary:
 func _run_checkpoint_pass() -> void:
 	var root := get_tree().root
 	if root.has_meta(CHECKPOINT_GATE_META):
-		var want: Dictionary = root.get_meta(CHECKPOINT_GATE_META)
+		var saved_want: Dictionary = root.get_meta(CHECKPOINT_GATE_META)
 		root.remove_meta(CHECKPOINT_GATE_META)
-		await _check_checkpoint(want)
+		await _check_checkpoint(saved_want)
 		return
 	camera.position = Vector3(-52.0, 34.0, -52.0)
 	camera.rotation = Vector3(-0.42, -2.36, 0.0)
@@ -5729,7 +5729,7 @@ func _run_interiors_pass() -> void:
 	var c_rooms := 0
 	var c_floors: int = mini(storeys, 4)
 	for f in c_floors:
-		var t_f := Time.get_ticks_usec()
+		var t_storey := Time.get_ticks_usec()
 		for k in per_storey:
 			var idx: int = f * per_storey + k
 			if idx >= registry.rooms_of(biggest).size():
@@ -5738,7 +5738,7 @@ func _run_interiors_pass() -> void:
 				_add_room_shapes(biggest, idx)
 				c_rooms += 1
 		_refresh_furniture(biggest)
-		c_total += float(Time.get_ticks_usec() - t_f) / 1000.0
+		c_total += float(Time.get_ticks_usec() - t_storey) / 1000.0
 		await _frames(1)
 	print("\n[interiors] C: a storey at a time")
 	print("[interiors]   %d storey(s), %d room(s), %.0f ms total, %.0f ms a storey"

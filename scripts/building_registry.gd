@@ -744,9 +744,9 @@ func _lay_tower(b: Building, chunk: int) -> bool:
 	var key := _template_key(b)
 	var t: Array = _templates.get(key, [])
 	if not t.is_empty() and world.load_template(int(t[0]), chunk):
-		var lists: Array = t[1]
+		var saved: Array = t[1]
 		for i in b.fixtures.size():
-			b.fixtures[i].blocks = (lists[i] as PackedInt32Array).duplicate()
+			b.fixtures[i].blocks = (saved[i] as PackedInt32Array).duplicate()
 		return true
 	# What the fixtures need clear, before the columns go in. See
 	# Fixture.footprint.
