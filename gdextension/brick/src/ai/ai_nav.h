@@ -76,6 +76,14 @@ public:
     void invalidate_box(const AABB &box);
     void clear_cache();
 
+    /// The sea, in metres: a floor deeper under it than WADE is not a floor.
+    /// -INF (the default) is no sea. Forgets every column, so set it once.
+    void set_water_level(float metres);
+    float get_water_level() const { return water_level; }
+    /// How deep a figure wades before the water is somewhere it cannot go.
+    static constexpr float WADE = 0.5f;
+    float get_wade() const { return WADE; }
+
     /// Where a body would stand nearest `point`, or `point` itself with none.
     Vector3 snap(const Vector3 &point);
     bool can_stand(const Vector3 &point);
@@ -132,6 +140,7 @@ private:
     };
 
     Ref<AIWorld> ai;
+    float water_level = -1e30f;
     std::unordered_map<int64_t, Column> columns;
     std::vector<char> column_scratch;
     // Node fit, memoised per ANCHOR column: (floor y, head) pairs. Keyed by

@@ -639,6 +639,22 @@ var _terrain_mat: ShaderMaterial = null
 ## from the light that actually shines rather than from a constant.
 var _ground_plane: StaticBody3D = null
 var _sun: DirectionalLight3D = null
+## The world the city is cut into: seed, sea and the SITES its buildings stand
+## on (Docs/Terrain.md §21.5). `worlds/city.json`, or `big_city.json` with
+## --big; `-- --world=<name>` picks another. A missing file is the street grid.
+const TerrainWorldScript := preload("res://scripts/terrain_world.gd")
+const WaterSeaScript := preload("res://scripts/water_sea.gd")
+## How much of the ground round the city is under water (TerrainWorld's
+## drowned fraction), for a city with no world file yet. A fifth puts the sea
+## at 10.3 m on this seed: the default city (ground 12.5 m and up) stays dry,
+## and the big one, which reaches down to -13 m, has a shore.
+const CITY_DROWNED := 0.20
+var _terrain_world_path := ""
+var _terrain_drowned := CITY_DROWNED
+var _sea = null
+## `--buildings=` was on the command line. With a world file the SITES decide
+## how many buildings there are, and this caps them only when asked to.
+var _buildings_arg := false
 var _stress_mode := false
 var _reach_mode := false
 var _lod_mode := false
@@ -803,6 +819,7 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--buildings="):
 			_city_size = maxi(1, int(a.split("=")[1]))
+			_buildings_arg = true
 		elif a.begins_with("--debris-small="):
 			debris_small_max = maxi(0, int(a.split("=")[1]))
 		elif a.begins_with("--debris-large="):
@@ -872,6 +889,18 @@ func _ready() -> void:
 	# And the ground last, because every pad the city stamped is part of the
 	# field now and a tile built before them would be the wrong shape.
 	if _terrain_mode:
+		# `--save-world`: write the layout the city was just built from --
+		# the street grid, the first time -- to its world file, and stop.
+		# That file is what the terrain editor opens (`--world=city`) and
+		# what the city reads from then on.
+		if "--save-world" in args:
+			var err := TerrainWorldScript.save_world(_terrain_world_path,
+					int(BrickTerrain.get_seed()), _terrain_drowned)
+			print("[city] terrain: %s %s (%d sites, %d pads)" % [
+				"wrote" if err == OK else "COULD NOT WRITE", _terrain_world_path,
+				TerrainWorldScript.sites.size(), BrickTerrain.pad_count()])
+			get_tree().quit(0 if err == OK else 1)
+			return
 		_build_terrain_ground()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
@@ -959,40 +988,27 @@ func _exit_tree() -> void:
 
 func _build_city() -> void:
 	var t0 := Time.get_ticks_usec()
-	var shapes: Array = BIG_SHAPES if _big else SHAPES
-	# In STUDS, so every building's corner is on the grid by construction
-	# rather than by BuildingRegistry.on_grid rounding it there: 13 m was
-	# 37.14 studs, and the rounding nudged each tower a different way.
-	#
-	# And never closer than the widest footprint plus a street. The lattice
-	# footprints (up to 44 studs, 15.4 m) outgrew the old 13 m pitch, and two
-	# pairs of towers stood 2.45 m inside each other.
-	var spacing := roundi((BIG_SPACING if _big else 13.0) / STUD)
-	var widest := 0
-	for s in shapes:
-		widest = maxi(widest, maxi(int(s.x), int(s.z)))
-	spacing = maxi(spacing, widest + STREET_STUDS)
-	var index := 0
-	var side := int(ceil(sqrt(float(_city_size))))
-	for row in side:
-		for col in side:
-			if index >= _city_size:
-				break
-			var shape: Dictionary = shapes[(row * side + col) % shapes.size()]
-			# Close together on purpose: these have to be able to fall on each
-			# other, which is the whole point of the scene.
-			@warning_ignore("integer_division")
-			var half := (side - 1) * spacing / 2
-			var pos := BrickWorld.grid_to_world(
-					Vector3i(col * spacing - half, 0, row * spacing - half))
-			if _terrain_mode:
-				pos.y = _stamp_pad(pos, maxi(int(shape.x), int(shape.z)))
-			var id := registry.register(shape.x, shape.z, shape.courses,
-					Transform3D(Basis(), pos), _program_for(shape, index))
-			_add_staircase(id, shape.x, shape.z, shape.courses)
-			_index_building(id)
-			_make_shell(id)
-			index += 1
+	if _terrain_mode:
+		_build_city_on_sites()
+	else:
+		var shapes: Array = BIG_SHAPES if _big else SHAPES
+		var spacing := _grid_spacing(shapes)
+		var index := 0
+		var side := int(ceil(sqrt(float(_city_size))))
+		for row in side:
+			for col in side:
+				if index >= _city_size:
+					break
+				var shape: Dictionary = shapes[(row * side + col) % shapes.size()]
+				# Close together on purpose: these have to be able to fall on
+				# each other, which is the whole point of the scene.
+				@warning_ignore("integer_division")
+				var half := (side - 1) * spacing / 2
+				var pos := BrickWorld.grid_to_world(
+						Vector3i(col * spacing - half, 0, row * spacing - half))
+				_place_building(shape.x, shape.z, shape.courses, pos,
+						_program_for(shape, index))
+				index += 1
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
 	# Each tower shape's bricks, built once now so no promotion builds them
 	# (BuildingRegistry.prepare_templates).
@@ -1012,6 +1028,123 @@ func _build_city() -> void:
 	_update_hud()
 
 
+## Studs between one building's corner and the next on the street grid.
+##
+## In STUDS, so every building's corner is on the grid by construction rather
+## than by BuildingRegistry.on_grid rounding it there: 13 m was 37.14 studs,
+## and the rounding nudged each tower a different way.
+##
+## And never closer than the widest footprint plus a street. The lattice
+## footprints (up to 44 studs, 15.4 m) outgrew the old 13 m pitch, and two
+## pairs of towers stood 2.45 m inside each other.
+func _grid_spacing(shapes: Array) -> int:
+	var spacing := roundi((BIG_SPACING if _big else 13.0) / STUD)
+	var widest := 0
+	for s in shapes:
+		widest = maxi(widest, maxi(int(s.x), int(s.z)))
+	return maxi(spacing, widest + STREET_STUDS)
+
+
+## One building into the registry, with its stair, its index and its shell.
+func _place_building(fx: int, fz: int, courses: int, pos: Vector3,
+		program: Dictionary) -> int:
+	var id := registry.register(fx, fz, courses, Transform3D(Basis(), pos), program)
+	_add_staircase(id, fx, fz, courses)
+	_index_building(id)
+	_make_shell(id)
+	return id
+
+
+## THE CITY FROM ITS SITES (Docs/Terrain.md §21.5).
+##
+## On terrain the layout is the world's, not a lattice this script makes up:
+## each site is a centre, a footprint, a pad and a number of storeys, saved
+## in the world file and moved in the terrain editor. A world with no sites
+## yet gets the street grid AS sites, so there is one path either way and the
+## grid is only ever a starting point.
+func _build_city_on_sites() -> void:
+	var sites: Array[Dictionary] = TerrainWorldScript.sites
+	if sites.is_empty():
+		sites = _grid_sites()
+		TerrainWorldScript.sites = sites
+		# The pads, in order: each one sees the ones before it, so a row
+		# terraces instead of each tower carving its own island.
+		TerrainWorldScript.stamp_sites_only(sites)
+		print("[city] terrain: no sites in %s; %d from the street grid" % [
+			_terrain_world_path, sites.size()])
+	else:
+		print("[city] terrain: %d sites from %s" % [sites.size(), _terrain_world_path])
+	var index := 0
+	for site in sites:
+		if _buildings_arg and index >= _city_size:
+			break
+		var fp := TerrainWorldScript.site_footprint(site)
+		var corner := TerrainWorldScript.site_corner(site)
+		var courses: int = int(site["storeys"]) * TowerRecipe.COURSES_PER_FLOOR
+		# The floor is READ from the field, after every pad is in: there is
+		# one height function, and both the tower and the ground under it
+		# read it (§21.1).
+		var pos := BrickWorld.grid_to_world(Vector3i(corner.x, 0, corner.y))
+		pos.y = TerrainWorldScript.site_level(site)
+		var program: Dictionary = site["program"] if site.has("program") \
+				else _program_for({}, index)
+		_place_building(fp.x, fp.y, courses, pos, program)
+		index += 1
+
+
+## The street grid, as sites: the same lattice `_build_city` lays on the flat
+## plane, one site per building, each carrying its own centre and footprint
+## because a street is nine studs and a tile is 32.
+##
+## Except where the grid lands in the SEA. A building does not stand in the
+## water, and leaving those cells empty is what gives a city on low ground
+## its shoreline; a site on ground just above the water gets a quay instead
+## (TerrainWorld.FREEBOARD_BRICKS).
+func _grid_sites() -> Array[Dictionary]:
+	var shapes: Array = BIG_SHAPES if _big else SHAPES
+	var spacing := _grid_spacing(shapes)
+	var plate := BrickWorld.get_plate_metres()
+	var tile := BrickTerrain.get_tile_studs()
+	var out: Array[Dictionary] = []
+	var index := 0
+	var drowned := 0
+	var side := int(ceil(sqrt(float(_city_size))))
+	for row in side:
+		for col in side:
+			if index >= _city_size:
+				break
+			var shape: Dictionary = shapes[(row * side + col) % shapes.size()]
+			index += 1
+			@warning_ignore("integer_division")
+			var half := (side - 1) * spacing / 2
+			@warning_ignore("integer_division")
+			var centre := Vector2i(col * spacing - half + int(shape.x) / 2,
+					row * spacing - half + int(shape.z) / 2)
+			var ground := float(BrickTerrain.surface_plate(centre.x, centre.y) + 1) * plate
+			if ground < TerrainWorldScript.sea_level:
+				drowned += 1
+				continue
+			# The pad is the footprint plus a step of margin -- ground to
+			# stand on, not ground exactly its own size -- with a skirt half
+			# as wide again back to the hillside.
+			@warning_ignore("integer_division")
+			var radius: int = maxi(int(shape.x), int(shape.z)) / 2 + 4
+			var site := {
+				"tile": Vector2i(floori(float(centre.x) / tile), floori(float(centre.y) / tile)),
+				"centre": centre,
+				"footprint": Vector2i(int(shape.x), int(shape.z)),
+				"radius": radius,
+				"skirt": radius / 2 + 2,
+				"storeys": int(shape.courses) / TowerRecipe.COURSES_PER_FLOOR,
+			}
+			if shape.has("program"):
+				site["program"] = shape.program
+			out.append(site)
+	if drowned > 0:
+		print("[city] terrain: %d grid cell(s) are sea, left empty" % drowned)
+	return out
+
+
 ## The field this city is cut into. Before anything asks it a question.
 func _setup_terrain_field() -> void:
 	# HEIGHTFIELD mode: a city wants ground to stand on, not caves under it.
@@ -1021,36 +1154,30 @@ func _setup_terrain_field() -> void:
 	# Curved ground has no PIECES in it, and this scene is about laid brick.
 	BrickTerrain.set_smooth_terrain(false)
 	BrickTerrain.configure(TERRAIN_SEED)
-	# This city's pads and nobody else's: the pad list is global and a scene
-	# reload would otherwise stamp a second set on top of the first.
-	BrickTerrain.clear_pads()
+	# The world file: its sea, its pads and its sites. Loading clears the pad
+	# list first -- it is global, and a scene reload would otherwise stamp a
+	# second set on top of the first -- and settles the sea on the field as
+	# generated, before any pad is cut (TerrainWorld.sea_level).
+	_terrain_world_path = TerrainWorldScript.world_path("big_city" if _big else "city")
+	var loaded: Dictionary = TerrainWorldScript.load_world(_terrain_world_path)
+	var file_seed := int(loaded.get("seed", TERRAIN_SEED))
+	if not loaded.is_empty() and file_seed != 0 and file_seed != TERRAIN_SEED:
+		BrickTerrain.configure(file_seed)
+		loaded = TerrainWorldScript.load_world(_terrain_world_path)
+	if loaded.is_empty():
+		BrickTerrain.clear_pads()
+		BrickTerrain.clear_paints()
+		TerrainWorldScript.sites = []
+		TerrainWorldScript.settle_sea(CITY_DROWNED)
+	else:
+		_terrain_drowned = float(loaded.get("drowned", CITY_DROWNED))
 	# Taken FROM THE LIGHT, so the baked shadow and the lit ground can never
 	# disagree. A DirectionalLight3D shines along its own -Z.
 	BrickTerrain.set_sun_direction(_sun.global_transform.basis.z)
-
-
-## Cut a pad for one building and hand back the height it stands at.
-##
-## The pad is the footprint plus a step of margin — ground to stand on rather
-## than ground exactly its own size — and a skirt half as wide again blends
-## back to the hillside. Neighbours see each other's pads, because a pad is
-## in the field the moment it is stamped, which is why a row of buildings
-## terraces instead of each one carving its own island.
-func _stamp_pad(pos: Vector3, footprint: int) -> float:
-	var stud := BrickWorld.get_stud_metres()
-	var plate := BrickWorld.get_plate_metres()
-	var brick := BrickTerrain.get_brick_metres()
-	# `pos` is the building's MIN CORNER — that is where a recipe builds from
-	# — and the pad wants its middle.
-	var gx := int(floor(pos.x / stud)) + footprint / 2
-	var gz := int(floor(pos.z / stud)) + footprint / 2
-	var here := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
-	# Snapped to a COURSE: a building standing between two courses has its
-	# ground floor half a brick into the hill.
-	var level := roundf(here / brick) * brick
-	var radius: int = footprint / 2 + 4
-	BrickTerrain.add_pad(gx, gz, radius, radius / 2 + 2, level)
-	return level
+	# The AI's ground is the field too (§21.7): a column's first floor is on
+	# the hillside, a crest blocks a sight line, and the sea is not a floor.
+	ai_world.set_terrain_ground(true)
+	ai_nav.set_water_level(TerrainWorldScript.sea_level)
 
 
 ## The ground the city stands on, when it stands on ground.
@@ -1118,6 +1245,39 @@ func _build_terrain_ground() -> void:
 		_terrain_coarse.block_count(), _terrain_coarse.ring_count(),
 		_terrain_coarse.triangle_count(),
 		float(Time.get_ticks_usec() - t0) / 1000.0])
+	_build_sea(tile_m)
+
+
+## THE SEA, at the level the world settled (§21.6), out as far as the coarse
+## ground goes. Only if there is any: a world whose sea is under all of its
+## ground has nothing to draw, and the brick tiers are not free.
+func _build_sea(tile_m: float) -> void:
+	var t0 := Time.get_ticks_usec()
+	_sea = WaterSeaScript.new()
+	_sea.name = "Sea"
+	add_child(_sea)
+	_sea.build(TERRAIN_REACH_TILES * BrickTerrain.get_tile_studs(),
+			float(TERRAIN_REACH_TILES) * tile_m + 200.0)
+	if not _sea.has_water():
+		print("[city] terrain: sea %.2f m is under all the ground; no water" % [
+			TerrainWorldScript.sea_level])
+		_sea.queue_free()
+		_sea = null
+		return
+	camera.water_probe = func(p: Vector3) -> float: return _sea.surface_at(p)
+	print("[city] terrain: sea at %.2f m, %d wet cells, built in %.0f ms" % [
+		TerrainWorldScript.sea_level, _sea._wet_count,
+		float(Time.get_ticks_usec() - t0) / 1000.0])
+
+
+## Where the ground is under (x, z): the field on terrain, 0 on the plane.
+func _ground_y(x: float, z: float) -> float:
+	return ai_world.ground_at(x, z)
+
+
+## A point put down on the ground, keeping its x and z.
+func _on_ground(p: Vector3) -> Vector3:
+	return Vector3(p.x, _ground_y(p.x, p.z), p.z)
 
 
 ## A spiral staircase up the middle, dormant.
@@ -3097,6 +3257,115 @@ func _update_ai_label() -> void:
 ## through the queue; a wall blown out on the far side makes a new way out that
 ## is taken within a few ticks of the blast; paths round pristine buildings
 ## materialise nothing; fifty requesters are served inside the budget.
+## A point on dry ground within `half` metres of the origin: on terrain the
+## sea is not somewhere a path can start or end, and a random point can land
+## in it.
+func _dry_point(rng: RandomNumberGenerator, half: float) -> Vector3:
+	var p := Vector3.ZERO
+	for attempt in 64:
+		p = _on_ground(Vector3(rng.randf_range(-half, half), 0.0, rng.randf_range(-half, half)))
+		if not _terrain_mode or p.y >= ai_nav.get_water_level() + ai_nav.get_wade():
+			return p
+	return p
+
+
+## A point on dry ground in the 80 x 40 m in front of `street`. On the plane
+## that is the first draw, every time, so the flat pass asks exactly what it
+## always asked.
+func _dry_near(rng: RandomNumberGenerator, street: Vector3) -> Vector3:
+	var p := street
+	for attempt in 64:
+		p = _on_ground(street + Vector3(rng.randf_range(-40.0, 40.0), 0.0,
+				rng.randf_range(-40.0, 0.0)))
+		if not _terrain_mode or p.y >= ai_nav.get_water_level() + ai_nav.get_wade():
+			return p
+	return p
+
+
+## What navigation has to get right on a hillside (Docs/Terrain.md §21.7).
+func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
+	# Up the hill: from in front of the lowest building to in front of the
+	# highest, which on this seed is metres of climb across the city.
+	var lo_b := registry.get_building(0)
+	var hi_b := lo_b
+	for c in registry.buildings:
+		if c.xform.origin.y < lo_b.xform.origin.y:
+			lo_b = c
+		if c.xform.origin.y > hi_b.xform.origin.y:
+			hi_b = c
+	var a := _on_ground(lo_b.xform * Vector3(lo_b.recipe.footprint_x * STUD * 0.5, 0.0, -3.0))
+	var z := _on_ground(hi_b.xform * Vector3(hi_b.recipe.footprint_x * STUD * 0.5, 0.0, -3.0))
+	var climb := ai_nav.find_path(a, z, 120000)
+	# Every corner of it is ON the ground (or on bricks above it), never
+	# under it: a path that tunnels through a hill is a y=0 path in disguise.
+	var worst_under := 0.0
+	var top := -INF
+	var bottom := INF
+	for q in climb:
+		worst_under = maxf(worst_under, _ground_y(q.x, q.z) - q.y)
+		top = maxf(top, q.y)
+		bottom = minf(bottom, q.y)
+	# A corner is where four columns meet and stands on ONE of them, so the
+	# ground next to it can be a step higher: a step is the tolerance.
+	var step_m := float(AINav.STEP_UP) * PLATE + 0.05
+	_gate_ok("a path climbs the hillside from the lowest building to the highest",
+			not climb.is_empty() and worst_under <= step_m
+			and absf(climb[0].y - a.y) <= step_m and absf(climb[-1].y - z.y) <= step_m,
+			("%.1f m to %.1f m: %.0f m long, spans %.1f m, never more than %.2f m under the ground" % [
+			a.y, z.y, _path_len(climb), top - bottom, worst_under]) if not climb.is_empty()
+			else "none, %.1f m to %.1f m" % [a.y, z.y])
+	_draw_path(climb, Color(0.3, 0.7, 1.0))
+
+	# A hill hides a body. Two points either side of a crest, eye height, and
+	# the AI's own line of sight says so -- as physics does, which is what
+	# the soldiers' eyes use.
+	var hidden := 0
+	var tried := 0
+	var physics_agrees := 0
+	var space := get_world_3d().direct_space_state
+	for i in 4000:
+		if tried >= 12:
+			break
+		var p := _dry_point(rng, 110.0)
+		var dir := Vector3.FORWARD.rotated(Vector3.UP, rng.randf() * TAU)
+		var q := _on_ground(p + dir * rng.randf_range(20.0, 60.0))
+		var mid := _on_ground((p + q) * 0.5)
+		var eye_p := p + Vector3.UP * 1.6
+		var eye_q := q + Vector3.UP * 1.6
+		# A metre of ground over the sight line between two eyes: a crest,
+		# not a bump the line grazes.
+		if mid.y < (eye_p.y + eye_q.y) * 0.5 + 1.0:
+			continue
+		tried += 1
+		if not ai_world.line_clear(eye_p, eye_q) \
+				and is_inf(ai_world.cover_seconds(eye_p, eye_q, 30, 10.0)):
+			hidden += 1
+		var ray := PhysicsRayQueryParameters3D.create(eye_p, eye_q, Layers.HITSCAN_MASK)
+		if not space.intersect_ray(ray).is_empty():
+			physics_agrees += 1
+	_gate_ok("a crest blocks the AI's sight and is cover no gun wears away",
+			tried > 0 and hidden == tried,
+			"%d of %d lines over a crest blocked (physics: %d)" % [hidden, tried, physics_agrees])
+
+	# And nobody walks into the sea.
+	var sea := ai_nav.get_water_level()
+	var wet := Vector3.INF
+	for i in 400:
+		var w := _on_ground(Vector3(rng.randf_range(-200.0, 200.0), 0.0,
+				rng.randf_range(-200.0, 200.0)))
+		if w.y < sea - 1.0:
+			wet = w
+			break
+	if wet == Vector3.INF:
+		print("[nav]   (no ground under the sea within 200 m; the sea gate is skipped)")
+	else:
+		var swim := ai_nav.find_path(a, wet, 40000)
+		_gate_ok("the sea is not somewhere a path goes",
+				not ai_nav.can_stand(wet) and (swim.is_empty()
+				or swim[-1].y >= sea - ai_nav.get_wade() - 0.05),
+				"seabed %.1f m under a %.1f m sea" % [wet.y, sea])
+
+
 func _run_nav_pass() -> void:
 	print("[nav] paths through a city that falls down")
 	var b := registry.get_building(0)
@@ -3125,12 +3394,16 @@ func _run_nav_pass() -> void:
 	_gate_ok("an encounter brings its buildings in", all_in and enc.buildings.size() >= 1,
 			"%d building(s) in %d tick(s)" % [enc.buildings.size(), guard])
 
-	# From the street in front of the tower to a room two storeys up.
-	var street := b.xform * Vector3(fx * 0.5, 0.0, -4.0)
+	# From the street in front of the tower to a room two storeys up. On
+	# terrain the tower stands on its pad and the street is wherever the
+	# hillside is, so both are measured from the ground rather than from 0.
+	var floor0 := b.xform.origin.y
+	var street := _on_ground(b.xform * Vector3(fx * 0.5, 0.0, -4.0))
 	var storey_y := (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * PLATE
 	var room := ai_nav.snap(b.xform * Vector3(fx * 0.3, storey_y + 0.05, fz * 0.3))
-	_gate_ok("there is floor to stand on two storeys up", absf(room.y - storey_y) < 0.3,
-			"snapped to %.2f m, the floor is at %.2f" % [room.y, storey_y])
+	_gate_ok("there is floor to stand on two storeys up",
+			absf(room.y - floor0 - storey_y) < 0.3,
+			"snapped to %.2f m, the floor is at %.2f" % [room.y, floor0 + storey_y])
 	# A tower is sealed at street level: no door, and its sills are four plates
 	# up -- over a course, which nobody steps and nobody jumps. The way in is
 	# made, not found (AI.md 3.8, "make a door").
@@ -3143,7 +3416,7 @@ func _run_nav_pass() -> void:
 	var top := 0.0
 	var box := _world_box(b)
 	for p in path_in:
-		if box.grow(-0.4).has_point(p + Vector3.UP * 0.5) and p.y < 1.0:
+		if box.grow(-0.4).has_point(p + Vector3.UP * 0.5) and p.y < floor0 + 1.0:
 			inside = true
 		top = maxf(top, p.y)
 	_gate_ok("breached, a path from the street through the hole and up to the room",
@@ -3154,7 +3427,7 @@ func _run_nav_pass() -> void:
 	_draw_path(path_in, Color(1.0, 0.9, 0.2))
 
 	# Out the far side: back down and out through the breach, the long way...
-	var far := b.xform * Vector3(fx * 0.5, 0.0, fz + 4.0)
+	var far := _on_ground(b.xform * Vector3(fx * 0.5, 0.0, fz + 4.0))
 	var before := ai_nav.find_path(room, far)
 	# ...until the far wall is blown open too.
 	var hole := b.xform * Vector3(fx * 0.5, 1.0, fz - 0.2)
@@ -3176,21 +3449,23 @@ func _run_nav_pass() -> void:
 	rng.seed = 11
 	var found := 0
 	for i in 20:
-		var a := Vector3(rng.randf_range(-120.0, 120.0), 0.0, rng.randf_range(-120.0, 120.0))
-		var z := Vector3(rng.randf_range(-120.0, 120.0), 0.0, rng.randf_range(-120.0, 120.0))
+		var a := _dry_point(rng, 120.0)
+		var z := _dry_point(rng, 120.0)
 		if not ai_nav.find_path(a, z, 30000).is_empty():
 			found += 1
 	_gate_ok("paths across the city materialise nothing",
 			registry.report().materialised == mat0 and _promotions == promos and found >= 15,
 			"%d of 20 found, %d materialised before and after" % [found, mat0])
+	if _terrain_mode:
+		_nav_terrain_gates(rng)
 
 	# Fifty requesters at once, served from the scheduler's share.
 	_nav_worst_us = 0
 	ai_nav.reset_stats()
 	var ids := []
 	for i in 50:
-		var a := street + Vector3(rng.randf_range(-40.0, 40.0), 0.0, rng.randf_range(-40.0, 0.0))
-		var z := street + Vector3(rng.randf_range(-40.0, 40.0), 0.0, rng.randf_range(-40.0, 0.0))
+		var a := _dry_near(rng, street)
+		var z := _dry_near(rng, street)
 		ids.append(ai_nav.request_path(a, z, rng.randf() * 10.0))
 	var frames := 0
 	while ai_nav.pending() > 0 and frames < 600:
@@ -3201,10 +3476,14 @@ func _run_nav_pass() -> void:
 		if ai_nav.get_status(id) != AINav.PENDING:
 			answered += 1
 	print("[nav]   %s" % ai_nav.get_stats())
+	var found_paths := 0
+	for id in ids:
+		if ai_nav.get_status(id) == AINav.DONE:
+			found_paths += 1
 	_gate_ok("fifty requesters answered inside the nav budget",
 			answered == 50 and _nav_worst_us < NAV_BUDGET_US + 400,
-			"%d answered in %d tick(s); worst tick %d us against %d" % [answered, frames,
-			_nav_worst_us, NAV_BUDGET_US])
+			"%d answered (%d found) in %d tick(s); worst tick %d us against %d" % [
+			answered, found_paths, frames, _nav_worst_us, NAV_BUDGET_US])
 	_ai_label.visible = true
 	_update_ai_label()
 	camera.position = b.xform * Vector3(fx * 0.5 + 18.0, 20.0, fz + 14.0)
@@ -3244,7 +3523,9 @@ func _passes(p: PackedVector3Array, point: Vector3) -> bool:
 		if ab.length_squared() > 0.0:
 			t = clampf(Vector2(point.x - a.x, point.z - a.z).dot(ab) / ab.length_squared(), 0.0, 1.0)
 		var q := a.lerp(b, t)
-		if Vector2(q.x - point.x, q.z - point.z).length() < 1.6 and q.y < 1.5:
+		# Through the hole, not over it: within half a metre of its height,
+		# which on terrain is wherever the building's floor is.
+		if Vector2(q.x - point.x, q.z - point.z).length() < 1.6 and q.y < point.y + 0.5:
 			return true
 	return false
 
@@ -4189,6 +4470,8 @@ func _process(delta: float) -> void:
 	if _terrain_streamer != null:
 		_terrain_streamer.follow(Vector2(camera.global_position.x,
 				camera.global_position.z))
+	if _sea != null:
+		_sea.follow(camera.global_position, delta)
 	_update_reticle()
 	_update_live_prof(delta)
 	if not _sampling:
@@ -4433,7 +4716,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_gun.gun.visible = false
 		KEY_K:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 20.0
-			_spawn_soldier(ai_nav.snap(Vector3(ahead.x, 0.0, ahead.z)))
+			_spawn_soldier(ai_nav.snap(_on_ground(ahead)))
 		KEY_M:
 			if _pilot.is_piloting():
 				_leave_mech()

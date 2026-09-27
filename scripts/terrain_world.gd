@@ -35,6 +35,31 @@ static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
 	return heights[i] + brick * 0.5
 
 
+## THE sea level of the loaded world, in metres. -INF until a world is loaded
+## or stamped.
+##
+## One number that every consumer reads — the water, the pads, navigation —
+## so they cannot disagree about where the shore is (§21.6). It is a property
+## of the WORLD: its seed and its drowned fraction, sampled over a fixed
+## `SEA_TILES` around the origin on the field as generated, BEFORE any pad is
+## cut. Sampled after, it would move every time an author moved a building,
+## and a scene sampling a different area would put the sea somewhere else.
+static var sea_level := -INF
+## How much ground the drowned fraction is measured over, in tiles each way.
+## What the heightfield scene has always used (max(NEAR_TILES, 8)).
+const SEA_TILES := 8
+## A site's pad never sits lower than this above the sea: a building stands
+## on a quay, not in the water.
+const FREEBOARD_BRICKS := 1
+
+
+## Measure the sea for this world. On the RAW field: call with no pads in it.
+static func settle_sea(drowned: float) -> float:
+	sea_level = sea_level_for(SEA_TILES, drowned)
+	BrickWave.set_sea_level(sea_level)
+	return sea_level
+
+
 ## The authored sites for this world: where a building stands, how big its
 ## pad is, and how many storeys it gets.
 ##
@@ -58,8 +83,9 @@ static var sites: Array[Dictionary] = []
 
 ## Cut the pads into the field. Before anything is built, because a pad is
 ## part of what the world IS.
-static func stamp_sites() -> void:
+static func stamp_sites(drowned := 0.30) -> void:
 	BrickTerrain.clear_pads()
+	settle_sea(drowned)
 	sites = SITES.duplicate(true)
 	stamp_sites_only(sites)
 
@@ -71,27 +97,67 @@ static func stamp_sites() -> void:
 ## FIELD only has one kind of flat spot. The editor is what knows which pad
 ## came from a site.
 static func stamp_sites_only(site_list: Array[Dictionary]) -> void:
-	var tile := BrickTerrain.get_tile_studs()
 	var plate := BrickWorld.get_plate_metres()
+	var brick := BrickTerrain.get_brick_metres()
 	for site in site_list:
-		var c: Vector2i = site["tile"]
-		var gx: int = c.x * tile + tile / 2
-		var gz: int = c.y * tile + tile / 2
+		var c := site_centre(site)
 		# The pad sits at the natural height of its middle, rounded to a
 		# course: a building stands ON the brick grid, not between two of it.
-		var here := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
-		var brick := BrickTerrain.get_brick_metres()
+		var here := float(BrickTerrain.surface_plate(c.x, c.y) + 1) * plate
 		var level := roundf(here / brick) * brick
-		BrickTerrain.add_pad(gx, gz, site["radius"], site["radius"] / 2, level)
+		# And never in the sea (§21.6): a site on low ground gets a quay.
+		if sea_level > -INF:
+			level = maxf(level, ceilf(sea_level / brick + FREEBOARD_BRICKS) * brick)
+		BrickTerrain.add_pad(c.x, c.y, int(site["radius"]), site_skirt(site), level)
 
 
 ## Where a site's floor ended up, in metres. Read AFTER stamp_sites.
 static func site_level(site: Dictionary) -> float:
-	var tile := BrickTerrain.get_tile_studs()
 	var plate := BrickWorld.get_plate_metres()
+	var c := site_centre(site)
+	return float(BrickTerrain.surface_plate(c.x, c.y) + 1) * plate
+
+
+## The column a site's middle stands on, in studs.
+##
+## A site placed in the editor is addressed by TILE and stands in the tile's
+## middle. A site that came from somewhere with a finer lattice — the city's
+## street grid — carries its own `centre`, because a tile is 32 studs and a
+## street is nine.
+static func site_centre(site: Dictionary) -> Vector2i:
+	if site.has("centre"):
+		return site["centre"]
+	var tile := BrickTerrain.get_tile_studs()
 	var c: Vector2i = site["tile"]
-	return float(BrickTerrain.surface_plate(c.x * tile + tile / 2,
-			c.y * tile + tile / 2) + 1) * plate
+	@warning_ignore("integer_division")
+	return Vector2i(c.x * tile + tile / 2, c.y * tile + tile / 2)
+
+
+## A site's footprint in studs, X by Z.
+##
+## Its own when it has one (the city's shapes are not square), otherwise one
+## that FILLS the pad, snapped to the city's panel grid:
+## `TowerRecipe.conforming` is what the recipe tables assume, and a building
+## off that grid has columns standing in the wrong places.
+static func site_footprint(site: Dictionary) -> Vector2i:
+	if site.has("footprint"):
+		return site["footprint"]
+	var want: int = int(site["radius"]) * 2
+	var f: int = maxi(TowerRecipe.PANEL,
+			int(float(want) / float(TowerRecipe.PANEL)) * TowerRecipe.PANEL)
+	return Vector2i(f, f)
+
+
+## A site's footprint MIN CORNER, in studs — where a recipe builds from.
+static func site_corner(site: Dictionary) -> Vector2i:
+	var f := site_footprint(site)
+	@warning_ignore("integer_division")
+	return site_centre(site) - Vector2i(f.x / 2, f.y / 2)
+
+
+static func site_skirt(site: Dictionary) -> int:
+	@warning_ignore("integer_division")
+	return int(site.get("skirt", int(site["radius"]) / 2))
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +208,23 @@ static func to_dict(seed_value: int, drowned: float) -> Dictionary:
 	var site_list: Array[Dictionary] = []
 	for site in sites:
 		var c: Vector2i = site["tile"]
-		site_list.append({
+		var row := {
 			"tile_x": c.x, "tile_z": c.y,
 			"radius": int(site["radius"]), "storeys": int(site["storeys"]),
-		})
+		}
+		# Only what a site says for itself: an editor site is a tile, a
+		# radius and storeys, and its file entry stays that small.
+		if site.has("centre"):
+			row["x"] = site["centre"].x
+			row["z"] = site["centre"].y
+		if site.has("footprint"):
+			row["footprint_x"] = site["footprint"].x
+			row["footprint_z"] = site["footprint"].y
+		if site.has("skirt"):
+			row["skirt"] = int(site["skirt"])
+		if site.has("program"):
+			row["program"] = site["program"]
+		site_list.append(row)
 	return {
 		"version": 2,
 		"seed": seed_value,
@@ -164,6 +243,8 @@ static func from_dict(d: Dictionary) -> Dictionary:
 	var seed_value := int(d.get("seed", 0))
 	BrickTerrain.clear_pads()
 	BrickTerrain.clear_paints()
+	# The sea BEFORE the pads: it is measured on the field as generated.
+	settle_sea(float(d.get("drowned", 0.30)))
 	sites = []
 	for p in d.get("pads", []):
 		BrickTerrain.add_pad(int(p.get("x", 0)), int(p.get("z", 0)),
@@ -174,11 +255,24 @@ static func from_dict(d: Dictionary) -> Dictionary:
 			int(p.get("radius", 8)), int(p.get("skirt", 4)),
 			int(p.get("material", 1)))
 	for site in d.get("sites", []):
-		sites.append({
+		var row := {
 			"tile": Vector2i(int(site.get("tile_x", 0)), int(site.get("tile_z", 0))),
 			"radius": int(site.get("radius", 10)),
 			"storeys": int(site.get("storeys", 4)),
-		})
+		}
+		if site.has("x"):
+			row["centre"] = Vector2i(int(site["x"]), int(site["z"]))
+		if site.has("footprint_x"):
+			row["footprint"] = Vector2i(int(site["footprint_x"]), int(site["footprint_z"]))
+		if site.has("skirt"):
+			row["skirt"] = int(site["skirt"])
+		if site.has("program"):
+			# JSON has no integers; a room count is one.
+			var program := {}
+			for k in site["program"]:
+				program[k] = int(site["program"][k])
+			row["program"] = program
+		sites.append(row)
 	return {"seed": seed_value, "drowned": float(d.get("drowned", 0.30))}
 
 
