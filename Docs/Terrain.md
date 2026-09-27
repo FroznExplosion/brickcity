@@ -2445,6 +2445,33 @@ Three things made it feel like a brush rather than a slideshow:
 `-- --shot` in the editor drags a raise stroke and a flatten across open
 ground (`editor_raised.png`, `editor_flattened.png`) and undoes both.
 
+### 20.7 The paint brush: material AND colour, a stud at a time
+
+Tool 8. The PAINT tool (2) places a disc of one material with a dithered
+edge; the paint BRUSH is held and dragged like the sculpting brushes, and
+lays both what the ground is MADE of and what COLOUR it is:
+
+| | |
+|---|---|
+| palette | a row of ground materials (plus KEEP, and NATURAL to put the generator's back) and every filament colour (plus the material's OWN, and KEEP) — `scripts/paint_palette.gd`, the same one the workshop's brick brush uses |
+| `,` `.` / PAGE UP, DOWN | step the colour / the material without the mouse |
+| P | take the material and colour of the ground under the cursor |
+| `[` `]`, CTRL+Z | radius, and undo a stroke, as for every brush |
+
+It lives in the same copy-on-write tiles and undo strokes as the sculpt
+(§20.6): per column, a material byte and a colour byte, 255 for "not
+painted". A painted material wins over PAINT discs and over the noise; a
+painted colour is what the mesher draws the column in, and **pieces are cut
+where it changes**, as they are at a material change — otherwise a 2x4 half
+in the stroke is all one colour or the other. The coarse tier reads it too,
+so a painted road reads as a road from the far hills. The world file carries
+it beside the heights (`"paint"`, base64, per touched tile).
+
+`BrickTerrain.paint_surface(x, z, radius, material, colour)`: -1 leaves
+that half alone, -2 resets it. `colour_at` answers the filament a column is
+drawn in. The probe gates set, KEEP/RESET, undo, clear and the round trip;
+`-- --shot` in the editor paints a red sand stripe (`editor_paint_brush.png`).
+
 ## 21. The city on the terrain
 
 Everything above is terrain with placeholders standing on it. This is the

@@ -261,6 +261,9 @@ struct TileSample {
     /// plates above the rock with nothing under it.
     std::vector<int16_t> tp;
     std::vector<uint8_t> mat;
+    /// A painted COLOUR (filament index) for the column, 255 = its
+    /// material's own. Pieces are cut where it changes, like material.
+    std::vector<uint8_t> col;
     std::vector<uint8_t> plate;
     std::vector<uint8_t> ramp;   ///< 255 = not a ramp, else 0=-X 1=+X 2=-Z 3=+Z
     /// This column is drawn as a CURVED surface rather than packed into
@@ -556,6 +559,22 @@ public:
     static Array sculpt_tiles();
     static PackedFloat32Array get_sculpt_tile(int tx, int tz);
     static void set_sculpt_tile(int tx, int tz, const PackedFloat32Array &metres);
+
+    /// SURFACE PAINT: a brush that says what the ground under it is MADE of
+    /// and what COLOUR it is, a stud column at a time (Docs/Terrain.md
+    /// 20.7). Kept in the same copy-on-write tiles and undo strokes as the
+    /// sculpt. `material` is a terrain material, `colour` a filament index;
+    /// -1 leaves that half alone, -2 puts it back to what the ground was.
+    /// Round, hard-edged, `radius` studs. Returns the stud rectangle touched.
+    static Rect2i paint_surface(int x, int z, double radius, int material, int colour);
+    /// What a column was painted: (material, colour), 255 for "not painted".
+    static Vector2i surface_paint_at(int x, int z);
+    /// The filament a column is drawn in: its painted colour, else its
+    /// material's.
+    static int colour_at(int x, int z);
+    /// For the world file: TILE*TILE materials then TILE*TILE colours.
+    static PackedByteArray get_surface_paint_tile(int tx, int tz);
+    static void set_surface_paint_tile(int tx, int tz, const PackedByteArray &bytes);
 
     static void add_paint(int x, int z, int radius, int skirt, int material);
     static void clear_paints();
