@@ -9,10 +9,11 @@ extends BTAction
 const HIDE := [0.8, 1.6]
 const PEEK := [1.2, 2.0]
 const LOST := 3.0
+## Seconds of cover left against the threat's gun at which to go.
+const LEAVE := 0.8
 
 var _peeking := false
 var _until := 0.0
-var _next_life_check := 0.0
 
 
 func _enter() -> void:
@@ -43,12 +44,15 @@ func _tick(_delta: float) -> Status:
 		so.look_at_point(threat)
 		var r := so.move_to(at, true)
 		return FAILURE if r == -1 else RUNNING
-	# In it. Is it still cover?
-	if now >= _next_life_check:
-		_next_life_check = now + 0.5
-		if CoverSearch.life_at(s, at, threat) < 0.5:
-			so.fire_ok = false
-			return FAILURE
+	# In it. Is it still cover? Checked every think -- one DDA -- and left while
+	# it still has LEAVE seconds in it: a soldier moves when its cover is being
+	# shot away, not after it is gone (AI.md 6.1, AIPlan P5).
+	if CoverSearch.life_at(s, at, threat) < LEAVE:
+		so.fire_ok = false
+		so.cover_left_with = CoverSearch.life_at(s, at, threat)
+		so.relocations += 1
+		blackboard.set_var(&"cover", {})
+		return FAILURE
 	if now >= _until:
 		_peeking = not _peeking
 		var span: Array = PEEK if _peeking else HIDE

@@ -2628,6 +2628,54 @@ Dictionary BrickWorld::get_solve_stats(int chunk_id) const {
 // two supporters at different depths, and the deeper one would be visited
 // before it received anything.
 
+void BrickWorld::set_load(int chunk_id, int owner, const PackedInt32Array &block_ids, float mass_each) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    std::vector<std::pair<int32_t, int64_t>> v;
+    const int64_t units = brick::to_mass_units(std::max(mass_each, 0.0f));
+    for (int i = 0; i < block_ids.size(); ++i) {
+        v.push_back({ block_ids[i], units });
+    }
+    StressState &sx = stress[chunk_id];
+    if (v.empty()) {
+        sx.loads.erase(owner);
+    } else {
+        sx.loads[owner] = std::move(v);
+    }
+}
+
+void BrickWorld::clear_load(int chunk_id, int owner) {
+    if (valid_chunk(chunk_id)) {
+        stress[chunk_id].loads.erase(owner);
+    }
+}
+
+float BrickWorld::get_external_load(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0.0f;
+    }
+    int64_t sum = 0;
+    for (const auto &owner : stress[chunk_id].loads) {
+        for (const auto &l : owner.second) {
+            if (l.first == block_id) {
+                sum += l.second;
+            }
+        }
+    }
+    return (float)((double)sum / (double)brick::to_mass_units(1.0f));
+}
+
+PackedInt32Array BrickWorld::get_load_owners(int chunk_id) const {
+    PackedInt32Array out;
+    if (valid_chunk(chunk_id)) {
+        for (const auto &owner : stress[chunk_id].loads) {
+            out.push_back(owner.first);
+        }
+    }
+    return out;
+}
+
 Dictionary BrickWorld::solve_stress(int chunk_id) {
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
@@ -2656,6 +2704,14 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         b.load = (b.alive && !b.decorative)
                 ? std::max((int64_t)1, brick::to_mass_units(archetypes[b.archetype].mass))
                 : (int64_t)0;
+    }
+    // And what is resting on it from outside: wreckage (set_load).
+    for (const auto &owner : sx.loads) {
+        for (const auto &l : owner.second) {
+            if (l.first >= 0 && l.first < (int32_t)n && c.blocks[l.first].alive) {
+                c.blocks[l.first].load += l.second;
+            }
+        }
     }
 
     sx.max_ratio = 0.0f;
@@ -4751,6 +4807,12 @@ void BrickWorld::_bind_methods() {
     BIND_CONSTANT(JOINT_SUPPORT_BROKEN);
     BIND_CONSTANT(JOINT_BOTTOM_BROKEN);
 
+    ClassDB::bind_method(D_METHOD("set_load", "chunk_id", "owner", "block_ids", "mass_each"),
+            &BrickWorld::set_load);
+    ClassDB::bind_method(D_METHOD("clear_load", "chunk_id", "owner"), &BrickWorld::clear_load);
+    ClassDB::bind_method(D_METHOD("get_external_load", "chunk_id", "block_id"),
+            &BrickWorld::get_external_load);
+    ClassDB::bind_method(D_METHOD("get_load_owners", "chunk_id"), &BrickWorld::get_load_owners);
     ClassDB::bind_method(D_METHOD("chip_hit", "chunk_id", "world_point", "radius_m", "damage"),
             &BrickWorld::chip_hit);
     ClassDB::bind_method(D_METHOD("get_worn_blocks", "chunk_id"), &BrickWorld::get_worn_blocks);

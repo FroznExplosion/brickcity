@@ -406,6 +406,19 @@ public:
 
     /// Per-block readouts, for debug overlays and probes.
     float get_block_load(int chunk_id, int block_id) const;
+
+    /// Weight resting on this chunk from outside it -- settled wreckage lying on
+    /// a building (Docs/AI.md 3.10). `mass_each` on each of `block_ids`, under
+    /// `owner` (the piece's id), replacing whatever that owner had here before.
+    /// Every solve adds it to the blocks' own weight, so a hanging section under
+    /// it can give way and a floor on columns does not. Loads are commands
+    /// (DamageLog LOAD / UNLOAD): a load one machine has and another does not
+    /// changes how the next blast breaks (AIPlan R5).
+    void set_load(int chunk_id, int owner, const PackedInt32Array &block_ids, float mass_each);
+    void clear_load(int chunk_id, int owner);
+    /// The external weight on one block, all owners together. For probes.
+    float get_external_load(int chunk_id, int block_id) const;
+    PackedInt32Array get_load_owners(int chunk_id) const;
     float get_block_capacity(int chunk_id, int block_id) const;
     bool is_support_broken(int chunk_id, int block_id) const;
 
@@ -796,6 +809,10 @@ private:
         float tension_per_stud = 400.0f;
         float max_ratio = 0.0f;
         int failures = 0;
+        // Weight resting on this chunk from outside it, in mass units: owner (a
+        // piece's id) -> (block, units) pairs. Every solve adds it to the blocks'
+        // own weight. Ordered, so two machines sum in the same order.
+        std::map<int32_t, std::vector<std::pair<int32_t, int64_t>>> loads;
     };
     std::vector<StressState> stress;
 
