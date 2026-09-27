@@ -17,10 +17,10 @@ signal ended(kind: String)
 ## Kind name -> script. Every kind here can be forced with --disaster=.
 const KINDS := {
 	"drill": preload("res://scripts/disasters/drill_disaster.gd"),
+	"meteor": preload("res://scripts/disasters/meteor_shower.gd"),
 }
-## What H rolls from. The drill is only here until a real disaster is built:
-## a key that does nothing is worse than one that runs a drill.
-const ROLL := ["drill"]
+## What H rolls from. The drill is not in it; --disaster=drill still runs one.
+const ROLL := ["meteor"]
 
 const BASE_SEED := 0xD15A5
 
