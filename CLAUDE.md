@@ -42,6 +42,7 @@ change in another area is that area's job.
 | Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`), `Docs/Parts/`, `builds/` |
 | Terrain and water | `brick_terrain.*`, `terrain_*.gd`, `water_*.gd`, `underwater.gd`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
 | Weapons and effects | `weapons/`, `fx/`, `autoload/`, `loot/` |
+| Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/disaster_probe.gd`, `Docs/Disasters.md` |
 | City and buildings (shared) | `city_scene.gd`, `building_registry.gd`, `tower_recipe.gd`, `room*.gd`, `island_manager.gd` — small changes by anyone, merged soon |
 
 ## Building
