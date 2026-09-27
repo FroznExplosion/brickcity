@@ -2472,6 +2472,25 @@ that half alone, -2 resets it. `colour_at` answers the filament a column is
 drawn in. The probe gates set, KEEP/RESET, undo, clear and the round trip;
 `-- --shot` in the editor paints a red sand stripe (`editor_paint_brush.png`).
 
+### 20.8 See-through ground, and why
+
+Reported from the editor: a dug pad and a sculpted spire looked like glass —
+the hillside behind showed through the ground in front.
+
+Each tile could carry TWO surface meshes: the bevelled one (§17.21's real
+chamfer geometry) out to 12 m and the flat one from there, swapped by
+Godot's visibility range with a 6 m fade. FADE_SELF fades both by making
+them part-transparent, and two part-transparent copies of a surface do not
+add up to an opaque one — so everything 6 to 18 m from the camera was
+see-through. The heightfield scene had turned the bevel mesh off long ago
+(§17.22, the shader draws the chamfer); `TerrainTile.bevel_enabled` still
+DEFAULTED to on, so the editor and the city both had it.
+
+It defaults to off now. The volumetric bench, which is where the geometry
+chamfer is measured, turns it on for itself. Rendered A/B at one view over a
+6 m pit: with it on, the near hill is glass and the pit shows through it;
+off, solid.
+
 ## 21. The city on the terrain
 
 Everything above is terrain with placeholders standing on it. This is the
