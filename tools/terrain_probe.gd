@@ -1044,6 +1044,87 @@ func _check_pads() -> void:
 		"ground %.2f, sea %.2f, floor %.2f" % [low_y, sea, World.site_level(wet_site[0])])
 	BrickTerrain.clear_pads()
 	World.sites = []
+
+	# SCULPT (§20.6): brush strokes in the field, under the pads.
+	var plate_m := BrickWorld.get_plate_metres()
+	var top := func(x: int, z: int) -> float:
+		return float(BrickTerrain.surface_plate(x, z) + 1) * plate_m
+	BrickTerrain.clear_sculpt()
+	var sx := 300
+	var sz := 300
+	var before_c: float = top.call(sx, sz)
+	var before_far: float = top.call(sx + 20, sz)
+	BrickTerrain.sculpt_begin_stroke()
+	for i in 4:
+		BrickTerrain.sculpt(sx, sz, 8.0, 0, 0.5, 0.0)
+	_ok("a raise stroke lifts the ground under the brush",
+		top.call(sx, sz) >= before_c + 1.8 and absf(top.call(sx + 20, sz) - before_far) < 0.01,
+		"%.2f -> %.2f m; 20 studs away %.2f -> %.2f" % [before_c, top.call(sx, sz),
+		before_far, top.call(sx + 20, sz)])
+	var back_rect: Rect2i = BrickTerrain.sculpt_undo()
+	_ok("and undo puts it back exactly",
+		absf(top.call(sx, sz) - before_c) < 0.001 and back_rect.has_point(Vector2i(sx, sz)),
+		"%.2f m" % top.call(sx, sz))
+	var target := before_c + 3.0
+	BrickTerrain.sculpt_begin_stroke()
+	for i in 6:
+		BrickTerrain.sculpt(sx, sz, 10.0, 1, 1.0, target - plate_m * 0.5)
+	_ok("a flatten stroke brings the middle to the height it started from",
+		absf(top.call(sx, sz) - target) <= plate_m * 3.01,
+		"wanted %.2f, got %.2f" % [target, top.call(sx, sz)])
+	# The steepest step across the plateau's edge: a slope smoothed is the
+	# same rise over more ground, so its worst step is what gets smaller.
+	var rough := 0.0
+	var smooth := 0.0
+	for i in 12:
+		rough = maxf(rough, absf(top.call(sx + 6 + i, sz) - top.call(sx + 7 + i, sz)))
+	BrickTerrain.sculpt_begin_stroke()
+	for i in 12:
+		BrickTerrain.sculpt(sx + 12, sz, 8.0, 2, 1.0, 0.0)
+	for i in 12:
+		smooth = maxf(smooth, absf(top.call(sx + 6 + i, sz) - top.call(sx + 7 + i, sz)))
+	_ok("a smooth stroke evens out the edge of it",
+		smooth < rough, "steepest step %.2f m -> %.2f" % [rough, smooth])
+	var pad_h: float = roundf((before_c - 1.0) / BrickTerrain.get_brick_metres()) \
+			* BrickTerrain.get_brick_metres()
+	BrickTerrain.add_pad(sx, sz, 3, 2, pad_h)
+	_ok("a pad wins over the sculpt under it", absf(top.call(sx, sz) - pad_h) < 0.001,
+		"pad %.2f, ground %.2f" % [pad_h, top.call(sx, sz)])
+	BrickTerrain.clear_pads()
+	var carved := BrickTerrain.sculpt_at(sx, sz)
+	World.sites = []
+	World.save_world(path, 20260921, 0.30)
+	BrickTerrain.clear_sculpt()
+	World.load_world(path)
+	_ok("a world keeps its sculpt", absf(BrickTerrain.sculpt_at(sx, sz) - carved) < 0.001
+		and absf(carved) > 0.5, "%.2f m" % BrickTerrain.sculpt_at(sx, sz))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	BrickTerrain.clear_sculpt()
+	BrickTerrain.clear_pads()
+
+	# PADS the shape of a building: a rectangle, and dead flat at exactly
+	# its height wherever the ground would otherwise be quantised.
+	BrickTerrain.add_pad(0, 0, 10, 4, 21.0, 5)
+	var w_in := BrickTerrain.pad_at(9, 0) == 0
+	var w_out := BrickTerrain.pad_at(0, 9) == -1
+	_ok("a pad can be a rectangle", w_in and w_out)
+	BrickTerrain.clear_pads()
+	var brick_m := BrickTerrain.get_brick_metres()
+	var bad := 0
+	var cols := 0
+	for i in 24:
+		var px := i * 97 - 1100
+		var pz := (i * 53) % 900 - 450
+		var h := roundf(top.call(px, pz) / brick_m) * brick_m
+		BrickTerrain.add_pad(px, pz, 12, 6, h, 8)
+		for dz in range(-8, 9):
+			for dx in range(-12, 13):
+				cols += 1
+				if absf(top.call(px + dx, pz + dz) - h) > 0.001:
+					bad += 1
+		BrickTerrain.clear_pads()
+	_ok("a pad is flat at its height on plate-step AND brick-step ground",
+		bad == 0, "%d of %d columns off" % [bad, cols])
 	BrickTerrain.set_flat_mode(false)
 	BrickTerrain.configure(20260919)
 

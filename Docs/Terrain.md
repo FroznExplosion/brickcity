@@ -2403,6 +2403,48 @@ The world file is version 2 now: seed, drowned fraction, pads, **paints** and
 **sites**. `TerrainWorld.SITES` is no longer where the sites live; it is only
 what a brand new world starts with.
 
+### 20.6 Brushes: sculpting, the way smooth terrain is edited
+
+Pads, paints and sites are PLACED. Shaping a hillside is not placing
+anything — it is dragging a brush across it — so the editor has four:
+
+| key | brush | while the left button is held |
+|---|---|---|
+| 4 | RAISE | lifts the ground under it, `strength` metres a second at the middle |
+| 5 | LOWER | the same, down |
+| 6 | FLATTEN | pulls the ground towards the height where the stroke BEGAN |
+| 7 | SMOOTH | pulls each column towards its neighbours' average |
+
+`[` `]` is the radius (2–64 studs), `-` `=` the strength, CTRL+Z undoes a
+whole stroke (64 deep). A yellow ring shows where it lands.
+
+**A stroke goes into the field**, like a pad (§20.1): `BrickTerrain.sculpt`
+adds a height offset per stud column to the noise, UNDER the pads — so a
+building's pad stays dead flat whatever is painted round it, and every
+consumer (tiles, coarse tier, colliders, seabed, the AI's ground) agrees
+without being told. The offsets live per tile and are saved in the world file
+(`"sculpt"`, base64 float32 per touched tile; version 3). The sea is measured
+before them (§21.6): digging a lake does not move the ocean.
+
+Three things made it feel like a brush rather than a slideshow:
+
+* **Copy-on-write storage.** Tiles bake on worker threads while the editor
+  paints, so a stroke publishes a new map (untouched tiles shared, touched
+  ones cloned) and a bake keeps whichever it started with. Readers hold a
+  thread-local pointer and reload only when the generation moves.
+* **`TerrainStreamer.refresh(rect)`**, not `invalidate`. The old tile stays on
+  screen while its replacement bakes and is swapped when ready; a bake that
+  started before the edit is thrown away and done again. A replacement gets
+  its collider at once — ground under something must never go a frame
+  without one. Ten refreshes a second; the dabs themselves are every frame.
+* **The brush aims at the field, not the colliders.** A ray against ground
+  that is mid-swap fell through it: the first stroke raised 0.07 m where it
+  should have raised a metre and a half. Marching `surface_plate` along the
+  view ray is exact and never mid-swap.
+
+`-- --shot` in the editor drags a raise stroke and a flatten across open
+ground (`editor_raised.png`, `editor_flattened.png`) and undoes both.
+
 ## 21. The city on the terrain
 
 Everything above is terrain with placeholders standing on it. This is the
@@ -2605,14 +2647,50 @@ its own:
 | a path climbs from the lowest building to the highest, never under the ground | 17.9 → 21.0 m, 27 m long, at most 0.42 m (one step, at a corner) under it |
 | a crest blocks the AI's sight and is cover no gun wears away | 12 of 12 |
 | the sea is not somewhere a path goes | a point on the seabed does not stand, and no path reaches it |
+| every building on the stud grid and flush with the ground (§21.8) | 22 buildings, 0 of 23,100 columns off |
+| a build placed on the hillside gets ground at its floor (§21.8) | 0 columns off |
 
-and the pass's own gates on terrain: 10 of 10; fifty requesters, 50 found,
+and the pass's own gates on terrain: 12 of 12; fifty requesters, 50 found,
 none failed, inside the budget.
 
-**One gap left open, on purpose.** The soldiers SEE with physics rays, and
-the terrain only has colliders where the city's detail tier is. Of the 12
-crests above, physics saw 8: the other 4 were outside the city, on coarse
-ground, which has no collision. Inside the city — where anyone fights —
-the two agree. A fight on the hills outside would want either colliders out
-there or the soldiers' `can_see` to ask `AIWorld.line_clear` as well, which
-already knows about every crest.
+**The soldiers' own eyes agree.** They see with physics rays, and the
+terrain only has colliders where the city's detail tier is: of the 12 crests
+above, physics alone saw 8 — the other 4 were out on coarse ground with no
+collision. `Soldier.can_see` now also asks `AIWorld.ground_blocks`, the
+terrain half of `line_clear`, which knows every crest; the gate requires both
+to see all 12.
+
+### 21.8 Buildings stand ON the ground, on the world's grid
+
+A building's footprint is on the stud grid by construction (a site's corner
+is its centre minus half its footprint, in whole studs) and its floor on a
+course. What was not true until now is that the GROUND under it was at its
+floor:
+
+* **A pad is a rectangle.** `add_pad(..., radius_z)`. A site's pad is its
+  footprint plus its margin all round, not a square sized for the long side.
+* **On a pad the ground's top IS the pad's height.** The field quantises in
+  two ways — plate steps in some patches, whole bricks in others — and a
+  footprint straddling the two stood a plate off on one side and three on
+  the other. Where a pad is flat, `top_plate` now returns its height exactly.
+  Pad heights are snapped to 1/64 plate as well: 18.06000007689 m came back
+  as 128.99999 plates and floored to the plate below the floor.
+* **A pad's flat beats every other pad's skirt.** Neighbours' skirts reached
+  under each other's buildings: 718 of the default city's 23,100 footprint
+  columns were off. Neighbours at different heights now meet at the edge of
+  the higher flat — a terrace step.
+* **A site's floor can be set** (`-` `=` on a selected site in the editor,
+  a course at a time; `"level"` in the world file). The building stays on the
+  grid and the ground comes to it — a plinth when raised, a cut when lowered.
+* **A build placed with P lands on the hillside** at the course nearest the
+  ground it was aimed at, and the city cuts a pad for it at its floor — the
+  building never moves to suit the hill; the hill gives
+  (`city_scene._ground_building`). Only on the ground: a build set on a roof
+  or at a height held with E cuts nothing.
+
+A building that has taken damage is whatever its bricks are; none of this
+touches a piece that has fallen.
+
+`-- --terrain --nav` gates both: every building on the stud and plate grid
+with 0 of 23,100 footprint columns off the floor, and a cottage placed on the
+hillside flush in every column.

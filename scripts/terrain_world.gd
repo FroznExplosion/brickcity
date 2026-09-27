@@ -85,6 +85,7 @@ static var sites: Array[Dictionary] = []
 ## part of what the world IS.
 static func stamp_sites(drowned := 0.30) -> void:
 	BrickTerrain.clear_pads()
+	BrickTerrain.clear_sculpt()
 	settle_sea(drowned)
 	sites = SITES.duplicate(true)
 	stamp_sites_only(sites)
@@ -105,10 +106,18 @@ static func stamp_sites_only(site_list: Array[Dictionary]) -> void:
 		# course: a building stands ON the brick grid, not between two of it.
 		var here := float(BrickTerrain.surface_plate(c.x, c.y) + 1) * plate
 		var level := roundf(here / brick) * brick
+		# Unless the author set the floor (the editor's - / =): then the
+		# ground comes to the building, up or down.
+		if site.has("level"):
+			level = roundf(float(site["level"]) / brick) * brick
 		# And never in the sea (§21.6): a site on low ground gets a quay.
 		if sea_level > -INF:
 			level = maxf(level, ceilf(sea_level / brick + FREEBOARD_BRICKS) * brick)
-		BrickTerrain.add_pad(c.x, c.y, int(site["radius"]), site_skirt(site), level)
+		# A RECTANGLE, the footprint plus the site's margin all round: the
+		# ground is flattened where the building and its pavement are, not
+		# over a square of hillside sized for its long side.
+		var half := site_pad_half(site)
+		BrickTerrain.add_pad(c.x, c.y, half.x, site_skirt(site), level, half.y)
 
 
 ## Where a site's floor ended up, in metres. Read AFTER stamp_sites.
@@ -153,6 +162,17 @@ static func site_corner(site: Dictionary) -> Vector2i:
 	var f := site_footprint(site)
 	@warning_ignore("integer_division")
 	return site_centre(site) - Vector2i(f.x / 2, f.y / 2)
+
+
+## A site's pad, as half-extents in studs: the footprint's half plus the
+## margin its radius gives over the footprint's long side. A square site (an
+## editor's) is `radius` each way, as it always was.
+static func site_pad_half(site: Dictionary) -> Vector2i:
+	var f := site_footprint(site)
+	@warning_ignore("integer_division")
+	var margin: int = maxi(int(site["radius"]) - maxi(f.x, f.y) / 2, 0)
+	@warning_ignore("integer_division")
+	return Vector2i(f.x / 2 + margin, f.y / 2 + margin)
 
 
 static func site_skirt(site: Dictionary) -> int:
@@ -224,15 +244,44 @@ static func to_dict(seed_value: int, drowned: float) -> Dictionary:
 			row["skirt"] = int(site["skirt"])
 		if site.has("program"):
 			row["program"] = site["program"]
+		if site.has("level"):
+			row["level"] = float(site["level"])
 		site_list.append(row)
 	return {
-		"version": 2,
+		"version": 3,
 		"seed": seed_value,
 		"drowned": drowned,
 		"pads": pads,
 		"paints": paints,
 		"sites": site_list,
+		"sculpt": sculpt_to_list(),
 	}
+
+
+## The sculpted strokes (§20.6), a tile at a time: its offsets in metres as
+## base64 float32. Only tiles something was painted on, and not those whose
+## strokes cancelled out.
+static func sculpt_to_list() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for t in BrickTerrain.sculpt_tiles():
+		var c: Vector2i = t
+		var data: PackedFloat32Array = BrickTerrain.get_sculpt_tile(c.x, c.y)
+		var any := false
+		for v in data:
+			if absf(v) > 1e-4:
+				any = true
+				break
+		if any:
+			out.append({"tx": c.x, "tz": c.y,
+				"data": Marshalls.raw_to_base64(data.to_byte_array())})
+	return out
+
+
+static func sculpt_from_list(list: Array) -> void:
+	for t in list:
+		var bytes := Marshalls.base64_to_raw(String(t.get("data", "")))
+		BrickTerrain.set_sculpt_tile(int(t.get("tx", 0)), int(t.get("tz", 0)),
+				bytes.to_float32_array())
 
 
 ## Put the world back, pads and all. Returns the seed.
@@ -243,13 +292,16 @@ static func from_dict(d: Dictionary) -> Dictionary:
 	var seed_value := int(d.get("seed", 0))
 	BrickTerrain.clear_pads()
 	BrickTerrain.clear_paints()
-	# The sea BEFORE the pads: it is measured on the field as generated.
+	BrickTerrain.clear_sculpt()
+	# The sea BEFORE the sculpt and the pads: it is measured on the field as
+	# generated, so digging a lake does not move the ocean.
 	settle_sea(float(d.get("drowned", 0.30)))
+	sculpt_from_list(d.get("sculpt", []))
 	sites = []
 	for p in d.get("pads", []):
 		BrickTerrain.add_pad(int(p.get("x", 0)), int(p.get("z", 0)),
 			int(p.get("radius", 8)), int(p.get("skirt", 4)),
-			float(p.get("height", 0.0)))
+			float(p.get("height", 0.0)), int(p.get("radius_z", -1)))
 	for p in d.get("paints", []):
 		BrickTerrain.add_paint(int(p.get("x", 0)), int(p.get("z", 0)),
 			int(p.get("radius", 8)), int(p.get("skirt", 4)),
@@ -266,6 +318,8 @@ static func from_dict(d: Dictionary) -> Dictionary:
 			row["footprint"] = Vector2i(int(site["footprint_x"]), int(site["footprint_z"]))
 		if site.has("skirt"):
 			row["skirt"] = int(site["skirt"])
+		if site.has("level"):
+			row["level"] = float(site["level"])
 		if site.has("program"):
 			# JSON has no integers; a room count is one.
 			var program := {}

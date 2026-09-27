@@ -66,6 +66,7 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_terrain_ground", "on"), &AIWorld::set_terrain_ground);
     ClassDB::bind_method(D_METHOD("get_terrain_ground"), &AIWorld::get_terrain_ground);
     ClassDB::bind_method(D_METHOD("ground_at", "x", "z"), &AIWorld::ground_at);
+    ClassDB::bind_method(D_METHOD("ground_blocks", "from", "to"), &AIWorld::ground_blocks);
     ClassDB::bind_method(D_METHOD("get_stats"), &AIWorld::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AIWorld::reset_stats);
 }
@@ -663,6 +664,11 @@ float AIWorld::top_at(float x, float z) {
         top = std::max(top, ground_at(x, z));
     }
     return top;
+}
+
+bool AIWorld::ground_blocks(const Vector3 &from, const Vector3 &to) {
+    float t = 0.0f;
+    return _terrain_hit(from, to, t);
 }
 
 void AIWorld::set_terrain_ground(bool on) {
