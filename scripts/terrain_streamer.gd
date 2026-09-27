@@ -76,6 +76,10 @@ extends Node3D
 var _material: Material = null
 var _tiles := {}          ## Vector2i -> TerrainTile
 var _tasks := {}          ## Vector2i -> slot index
+## Resident tiles an edit made stale: shown until their replacement lands.
+var _dirty := {}
+## Bakes in flight that started before an edit over them: thrown away.
+var _stale := {}
 var _slot_task: Array[int] = []
 var _slot_coord: Array[Vector2i] = []
 var _slots: Array[Dictionary] = []
@@ -135,6 +139,22 @@ func settle(camera_xz: Vector2, rounds := 4000) -> void:
 			return
 
 
+## Rebuild the tiles over a rectangle WITHOUT taking them away first.
+##
+## For a brush stroke: `invalidate` leaves a hole until the new tile lands,
+## and a stroke refreshes the same ground ten times a second. Here the old
+## tile stays on screen, a new one bakes behind it, and it is swapped in
+## when ready. A bake already in flight over the rectangle read the field
+## BEFORE the edit, so its result is thrown away and it bakes again.
+func refresh(rect: Rect2i) -> void:
+	for c in _tiles:
+		if rect.has_point(c):
+			_dirty[c] = true
+	for c in _tasks:
+		if rect.has_point(c):
+			_stale[c] = true
+
+
 ## Throw away the tiles over a rectangle so they are built again.
 ##
 ## For the level EDITOR: an edit changes the field, so every tile over it is
@@ -146,6 +166,9 @@ func invalidate(rect: Rect2i) -> void:
 	for c in _tiles:
 		if rect.has_point(c):
 			gone.append(c)
+	for c in _tasks:
+		if rect.has_point(c):
+			_stale[c] = true
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
@@ -253,7 +276,7 @@ func _collect(cx: int, cz: int) -> void:
 			var c := Vector2i(r.position.x + dx, r.position.y + dz)
 			if absi(c.x) > world_half or absi(c.y) > world_half:
 				continue   # the world ends here
-			if _tiles.has(c) or _tasks.has(c):
+			if (_tiles.has(c) and not _dirty.has(c)) or _tasks.has(c):
 				continue
 			want.append(c)
 	if want.is_empty():
@@ -292,6 +315,18 @@ func _assemble() -> void:
 		_slots[slot] = {}
 		_free_slots.append(slot)
 		_tasks.erase(c)
+		if _stale.has(c):
+			# Baked from the field as it was before an edit: bake it again.
+			_stale.erase(c)
+			if _tiles.has(c):
+				_dirty[c] = true
+			continue
+		var replacing := _tiles.has(c)
+		if replacing:
+			# A refresh: the new tile replaces the old one only now it exists.
+			(_tiles[c] as TerrainTile).queue_free()
+			_tiles.erase(c)
+		_dirty.erase(c)
 
 		var t1 := Time.get_ticks_usec()
 		var tile := TerrainTile.new()
@@ -299,6 +334,11 @@ func _assemble() -> void:
 		tile.phases = true          # surface now, the rest on later frames
 		add_child(tile)
 		tile.build(c.x, c.y, _material, data)
+		if replacing:
+			# The ground under something that is standing on it -- a
+			# building, the brush's own aim, debris -- must not go a frame
+			# without collision. The studs can wait; the collider cannot.
+			tile.add_collision()
 		_tiles[c] = tile
 		_built += 1
 		# The budget can only stop the NEXT piece of work, so ONE piece is

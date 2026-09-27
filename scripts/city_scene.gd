@@ -998,8 +998,17 @@ func _ready() -> void:
 	add_child(_placer)
 	_placer.setup(registry, camera)
 	_placer.on_placed = func(id: int) -> void:
+		if _terrain_mode and _placer.on_ground:
+			_ground_building(id)
 		_index_building(id)
 		_make_shell(id)
+	if _terrain_mode:
+		# The ground a build is aimed at is the terrain's own collider, so
+		# the ghost stands where the ground is drawn.
+		_placer.ground_ray = func(from: Vector3, dir: Vector3) -> Vector3:
+			var q := PhysicsRayQueryParameters3D.create(from, from + dir * 800.0, Layers.WORLD)
+			var hit := get_world_3d().direct_space_state.intersect_ray(q)
+			return Vector3.INF if hit.is_empty() else hit["position"]
 	_material_fx = MaterialFx.new()
 	_material_fx.name = "MaterialFx"
 	add_child(_material_fx)
@@ -1256,6 +1265,7 @@ func _setup_terrain_field() -> void:
 	if loaded.is_empty():
 		BrickTerrain.clear_pads()
 		BrickTerrain.clear_paints()
+		BrickTerrain.clear_sculpt()
 		TerrainWorldScript.sites = []
 		TerrainWorldScript.settle_sea(CITY_DROWNED)
 	else:
@@ -1382,6 +1392,41 @@ func _shot_shore() -> void:
 	camera.look_at(Vector3(wet.x, sea, wet.z) - inland, Vector3.UP)
 	await _frames(8)
 	await _save("city_shore")
+
+
+## A build placed on the ground: the ground comes to ITS floor (§21.8).
+##
+## A pad the shape of its footprint plus a pavement, at exactly the height the
+## placer put the floor, cut into the field; the tiles over it rebuild behind
+## the ones on screen, and the AI forgets the ground it had read there. The
+## building never moves to suit the hill -- it is on the stud grid where it
+## was aimed, and the hill is what gives.
+const PLACED_MARGIN := 2
+const PLACED_SKIRT := 8
+func _ground_building(id: int) -> void:
+	var b := registry.get_building(id)
+	var box: AABB = CityPlacer.box_of(b)
+	var cx := int(floor((box.position.x + box.size.x * 0.5) / STUD))
+	var cz := int(floor((box.position.z + box.size.z * 0.5) / STUD))
+	var hx := int(ceil(box.size.x / STUD * 0.5)) + PLACED_MARGIN
+	var hz := int(ceil(box.size.z / STUD * 0.5)) + PLACED_MARGIN
+	BrickTerrain.add_pad(cx, cz, hx, PLACED_SKIRT, box.position.y, hz)
+	var studs: Rect2i = BrickTerrain.pad_bounds(BrickTerrain.pad_count() - 1)
+	_reground(studs)
+
+
+## The field changed over these studs: rebuild the ground there, and make the
+## AI read it again.
+func _reground(studs: Rect2i) -> void:
+	var tile := BrickTerrain.get_tile_studs()
+	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
+	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
+	if _terrain_streamer != null:
+		_terrain_streamer.refresh(Rect2i(lo, hi - lo + Vector2i.ONE))
+	# The AI caches the ground per column; this drops the cache.
+	ai_world.set_terrain_ground(true)
+	ai_nav.invalidate_box(AABB(Vector3(studs.position.x * STUD, -100.0, studs.position.y * STUD),
+			Vector3(studs.size.x * STUD, 400.0, studs.size.y * STUD)))
 
 
 ## Where the ground is under (x, z): the field on terrain, 0 on the plane.
@@ -3633,8 +3678,73 @@ func _dry_near(rng: RandomNumberGenerator, street: Vector3) -> Vector3:
 	return p
 
 
+## Buildings on the terrain (Docs/Terrain.md §21.8): on the world's stud and
+## plate grid, and the ground flush with the floor under every column of the
+## footprint -- and a build placed on a hillside gets the same.
+func _ground_gates() -> void:
+	var off_grid := 0
+	var off_ground := 0
+	var cols := 0
+	for b in registry.buildings:
+		var o: Vector3 = b.xform.origin
+		if absf(o.x / STUD - roundf(o.x / STUD)) > 1e-3 				or absf(o.z / STUD - roundf(o.z / STUD)) > 1e-3 				or absf(o.y / PLATE - roundf(o.y / PLATE)) > 1e-3:
+			off_grid += 1
+		off_ground += _unflush(b)
+		cols += int(b.recipe.footprint_x) * int(b.recipe.footprint_z)
+	print("[nav]   grid: %d building(s), %d off the stud grid, %d of %d footprint columns not flush" % [
+		registry.buildings.size(), off_grid, off_ground, cols])
+	_gate_ok("every building is on the stud grid and flush with the ground",
+			off_grid == 0 and off_ground == 0)
+
+	# A saved build, aimed at open hillside, placed like the player does.
+	var path := "res://builds/cottage.json"
+	var spot := _dry_point(RandomNumberGenerator.new(), 30.0)
+	for attempt in 40:
+		var clear := true
+		for b in registry.buildings:
+			if _world_box(b).grow(12.0).has_point(Vector3(spot.x, b.xform.origin.y + 1.0, spot.z)):
+				clear = false
+		if clear:
+			break
+		spot = _on_ground(spot + Vector3(9.0, 0.0, 5.0))
+	if not _placer.start(path):
+		_gate_ok("a build placed on the hillside gets ground at its floor", false, "no " + path)
+		return
+	var eye := spot + Vector3(0.0, 30.0, 12.0)
+	_placer.aim_ray(eye, (spot - eye).normalized())
+	var before_y := _ground_y(spot.x, spot.z)
+	var id := _placer.place()
+	_placer.stop()
+	await _frames(20)
+	var ok := id >= 0 and _placer.on_ground
+	var unflush := -1
+	var pb = null
+	if id >= 0:
+		pb = registry.get_building(id)
+		unflush = _unflush(pb)
+	print("[nav]   placed: %s at %s, ground was %.2f m, floor %.2f m, %d column(s) not flush" % [
+		path.get_file(), spot, before_y, pb.xform.origin.y if pb != null else 0.0, unflush])
+	_gate_ok("a build placed on the hillside gets ground at its floor",
+			ok and unflush == 0)
+
+
+## Footprint columns of a building whose ground is not at its floor.
+func _unflush(b) -> int:
+	var box: AABB = CityPlacer.box_of(b)
+	var n := 0
+	var x0 := int(roundf(box.position.x / STUD))
+	var z0 := int(roundf(box.position.z / STUD))
+	for dz in int(roundf(box.size.z / STUD)):
+		for dx in int(roundf(box.size.x / STUD)):
+			var gy := float(BrickTerrain.surface_plate(x0 + dx, z0 + dz) + 1) * PLATE
+			if absf(gy - box.position.y) > 1e-3:
+				n += 1
+	return n
+
+
 ## What navigation has to get right on a hillside (Docs/Terrain.md §21.7).
 func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
+	await _ground_gates()
 	# Up the hill: from in front of the lowest building to in front of the
 	# highest, which on this seed is metres of climb across the city.
 	var lo_b := registry.get_building(0)
@@ -3692,13 +3802,15 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 		if not ai_world.line_clear(eye_p, eye_q) \
 				and is_inf(ai_world.cover_seconds(eye_p, eye_q, 30, 10.0)):
 			hidden += 1
+		# What a soldier's own eyes do (Soldier.can_see): a physics ray, and
+		# the field where there are no colliders.
 		var ray := PhysicsRayQueryParameters3D.create(eye_p, eye_q, Layers.HITSCAN_MASK)
-		if not space.intersect_ray(ray).is_empty():
+		if not space.intersect_ray(ray).is_empty() or ai_world.ground_blocks(eye_p, eye_q):
 			physics_agrees += 1
-	print("[nav]   crest: %d of %d lines over a crest blocked (physics: %d)" % [
+	print("[nav]   crest: %d of %d lines over a crest blocked (a soldier's eyes: %d)" % [
 			hidden, tried, physics_agrees])
 	_gate_ok("a crest blocks the AI's sight and is cover no gun wears away",
-			tried > 0 and hidden == tried,
+			tried > 0 and hidden == tried and physics_agrees == tried,
 			"%d of %d lines over a crest blocked (physics: %d)" % [hidden, tried, physics_agrees])
 
 	# And nobody walks into the sea.
@@ -3814,7 +3926,7 @@ func _run_nav_pass() -> void:
 			registry.report().materialised == mat0 and _promotions == promos and found >= 15,
 			"%d of 20 found, %d materialised before and after" % [found, mat0])
 	if _terrain_mode:
-		_nav_terrain_gates(rng)
+		await _nav_terrain_gates(rng)
 
 	# Fifty requesters at once, served from the scheduler's share.
 	_nav_worst_us = 0

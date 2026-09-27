@@ -126,6 +126,10 @@ public:
     bool get_terrain_ground() const { return terrain_ground; }
     /// The top of the ground over (x, z) in metres: 0 without terrain.
     float ground_at(float x, float z);
+    /// Does the ground rise between two points? The terrain half of
+    /// line_clear, for eyes that see bricks some other way (physics rays):
+    /// the field is everywhere, its colliders only where the detail tier is.
+    bool ground_blocks(const Vector3 &from, const Vector3 &to);
 
     // --- measuring ----------------------------------------------------------
 

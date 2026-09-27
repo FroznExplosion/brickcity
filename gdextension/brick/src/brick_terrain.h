@@ -179,6 +179,8 @@ struct Field {
     /// every slope from 0.1 to 0.9 plates a stud measures as exactly the
     /// same "one", and a steepness test on it can only ever say "1 or 0".
     float raw_plate(int x, int z) const;
+    /// The same before the pads: noise plus sculpt. What a brush paints on.
+    float base_plate(int x, int z) const;
 
     /// The topmost solid PLATE the 2D noise alone would give. An upper bound
     /// on the real surface once caves are carved out of it.
@@ -493,7 +495,13 @@ public:
     ///
     /// Call before anything is built. Pads are not damage; they are part of
     /// what the world IS.
-    static void add_pad(int x, int z, int radius, int skirt, double height_m);
+    ///
+    /// `radius_z` makes it a RECTANGLE: `radius` studs each way in X and
+    /// `radius_z` in Z (-1: the same as `radius`). A building is rarely
+    /// square, and a square pad under a 40 x 30 footprint flattens ten
+    /// studs of hillside nobody asked for.
+    static void add_pad(int x, int z, int radius, int skirt, double height_m,
+            int radius_z = -1);
     static void clear_pads();
     static int pad_count();
     /// The pad a column belongs to, or -1.
@@ -505,7 +513,8 @@ public:
     ///
     /// A pad as a Dictionary: x, z, radius, skirt, height (metres).
     static Dictionary get_pad(int index);
-    static void set_pad(int index, int x, int z, int radius, int skirt, double height_m);
+    static void set_pad(int index, int x, int z, int radius, int skirt, double height_m,
+            int radius_z = -1);
     static void remove_pad(int index);
     /// The stud rectangle a pad affects, as (min_x, min_z, max_x, max_z).
     /// What a rebuild has to cover after an edit.
@@ -520,6 +529,34 @@ public:
     /// category, and half sand is not a material — so the skirt decides per
     /// column, by a hash, and the boundary breaks up instead of drawing a
     /// circle on the ground.
+    /// SCULPTING. Brush strokes that raise, lower, flatten and smooth the
+    /// ground, the way a smooth-terrain editor does -- held and dragged over
+    /// the ground rather than placed. Docs/Terrain.md 20.6.
+    ///
+    /// A stroke goes into the FIELD, like a pad: a height offset per stud
+    /// column, added to the noise and under the pads (so a building's pad
+    /// still wins where it stands). Stored per tile, copy-on-write, because
+    /// tiles bake on worker threads while the editor paints.
+    ///
+    /// `mode`: 0 RAISE (`amount` metres at the middle, negative lowers),
+    /// 1 FLATTEN (towards `target_m`, `amount` 0..1 of the way), 2 SMOOTH
+    /// (towards the neighbours' average, `amount` 0..1). `radius` in studs,
+    /// round, with a smoothstep falloff. Returns the stud rectangle touched.
+    static Rect2i sculpt(int x, int z, double radius, int mode, double amount, double target_m);
+    /// Undo groups: every sculpt between two begin_stroke calls is one undo.
+    static void sculpt_begin_stroke();
+    /// Put the last stroke back. Returns what it touched (empty: nothing).
+    static Rect2i sculpt_undo();
+    static int sculpt_undo_depth();
+    static void clear_sculpt();
+    /// The offset at a column, in metres.
+    static double sculpt_at(int x, int z);
+    /// For the world file: which tiles hold a sculpt, and each one's
+    /// TILE x TILE offsets in metres, row-major (z then x).
+    static Array sculpt_tiles();
+    static PackedFloat32Array get_sculpt_tile(int tx, int tz);
+    static void set_sculpt_tile(int tx, int tz, const PackedFloat32Array &metres);
+
     static void add_paint(int x, int z, int radius, int skirt, int material);
     static void clear_paints();
     static int paint_count();

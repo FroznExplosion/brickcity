@@ -15,19 +15,30 @@ extends Node3D
 ## without being told. An editor that pushed vertices around would have to
 ## tell every one of them, forever.
 ##
-## Three tools, because a level has three kinds of terrain edit in it:
+## Placed edits, because a level has three kinds of thing placed in it:
 ##
 ##   1 PAD     flatten ground to a height — where a building stands
 ##   2 PAINT   say what the ground is made of, whatever the noise thinks
 ##   3 SITE    a building: a pad, plus how many storeys stand on it
 ##
+## And BRUSHES, held and dragged across the ground the way a smooth-terrain
+## editor sculpts (§20.6). Hold the left button and look across the ground:
+##
+##   4 RAISE   5 LOWER   6 FLATTEN (to the height where the stroke began)
+##   7 SMOOTH
+##
+## A brush goes into the field UNDER the pads, so a building's pad stays
+## flat whatever is painted round it, and the ground meets its floor.
+##
 ## Keys:
-##   1 / 2 / 3    pick the tool
+##   1 .. 7       pick the tool
 ##   LEFT CLICK   place under the cursor, or select what is already there
+##                (brushes: hold and drag)
+##   CTRL+Z       undo the last brush stroke
 ##   G            grab the selection; it follows the cursor, click to drop
 ##   DELETE       remove the selection
-##   [ / ]        radius        , / .   skirt
-##   - / =        height (pad, site) or material (paint)
+##   [ / ]        radius (brushes too)    , / .   skirt
+##   - / =        height (pad, site floor), material (paint), strength (brush)
 ##   PAGE UP/DN   storeys, on a site
 ##   CTRL+S       save the world       CTRL+O   reload it
 ##   SPACE SPACE  walk/fly
@@ -36,7 +47,8 @@ const World := preload("res://scripts/terrain_world.gd")
 ## `-- --world=<name>` opens a different level.
 var _world_path := "res://worlds/heightfield.json"
 
-enum Tool { PAD, PAINT, SITE }
+enum Tool { PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH }
+const TOOL_NAMES := ["PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH"]
 ## The terrain materials an author can paint with, ASKED FOR rather than
 ## written out: a hand-copied list is one rename away from painting stone
 ## and labelling it sand.
@@ -67,6 +79,21 @@ var _paint_material := 3        ## sand, a visible default
 ## reason.
 var _grabbing := false
 var _drowned := 0.30
+
+## THE BRUSH. Radius in studs; rate in metres a second for raise and lower,
+## and the fraction of the way a second for flatten and smooth.
+var _brush_radius := 10.0
+var _brush_rate := 1.5
+var _stroking := false
+var _flatten_to := 0.0
+## What the stroke has touched since the tiles were last told, in studs.
+var _pending := Rect2i()
+var _refresh_in := 0.0
+## Ten refreshes a second: a dab is microseconds, a tile rebake is not.
+const REFRESH_EVERY := 0.1
+var _ring: MeshInstance3D = null
+var _shells: Node3D = null
+var _shell_mat: ShaderMaterial = null
 var _dirty := false
 var _shot_mode := false
 var _status := "loaded"
@@ -145,6 +172,29 @@ func _build_scenery() -> void:
 	_markers = Node3D.new()
 	_markers.name = "PadMarkers"
 	add_child(_markers)
+	_shells = Node3D.new()
+	_shells.name = "SiteBuildings"
+	add_child(_shells)
+	_shell_mat = ShaderMaterial.new()
+	_shell_mat.shader = load("res://shaders/brick.gdshader")
+
+	# The brush: a flat ring, one metre across, scaled to the radius.
+	_ring = MeshInstance3D.new()
+	_ring.name = "BrushRing"
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.96
+	torus.outer_radius = 1.0
+	torus.rings = 48
+	_ring.mesh = torus
+	var rm := StandardMaterial3D.new()
+	rm.albedo_color = Color(1.0, 0.9, 0.3, 0.8)
+	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm.no_depth_test = true
+	_ring.material_override = rm
+	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ring.visible = false
+	add_child(_ring)
 
 	var layer := CanvasLayer.new()
 	_label = Label.new()
@@ -174,12 +224,96 @@ func _build_terrain() -> void:
 	_streamer.settle(Vector2(_camera.position.x, _camera.position.z))
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _streamer != null:
 		_streamer.follow(Vector2(_camera.global_position.x, _camera.global_position.z))
 	if _grabbing:
 		_drag_marker()
+	_brush_tick(delta)
 	_update_hud()
+
+
+func _is_brush() -> bool:
+	return int(_tool) >= int(Tool.RAISE)
+
+
+## The brush, every frame: the ring under the cursor, and a dab while held.
+func _brush_tick(delta: float) -> void:
+	if _ring == null:
+		return
+	var hit := _aim_field() if _is_brush() else {}
+	_ring.visible = not hit.is_empty()
+	if hit.is_empty():
+		return
+	var p: Vector3 = hit["position"]
+	var stud := BrickWorld.get_stud_metres()
+	_ring.position = p + Vector3.UP * 0.05
+	_ring.scale = Vector3.ONE * (_brush_radius * stud)
+	if not _stroking:
+		return
+	var gx := int(floor(p.x / stud))
+	var gz := int(floor(p.z / stud))
+	var mode := 0
+	var amount := 0.0
+	match _tool:
+		Tool.RAISE:
+			amount = _brush_rate * delta
+		Tool.LOWER:
+			amount = -_brush_rate * delta
+		Tool.FLATTEN:
+			mode = 1
+			amount = clampf(_brush_rate * 2.0 * delta, 0.0, 1.0)
+		Tool.SMOOTH:
+			mode = 2
+			amount = clampf(_brush_rate * 2.0 * delta, 0.0, 1.0)
+	var touched: Rect2i = BrickTerrain.sculpt(gx, gz, _brush_radius, mode, amount, _flatten_to)
+	_pending = touched if _pending.size.x <= 0 else _pending.merge(touched)
+	_dirty = true
+	_refresh_in -= delta
+	if _refresh_in <= 0.0:
+		_flush_brush()
+
+
+func _begin_stroke() -> void:
+	var hit := _aim_field()
+	if hit.is_empty():
+		_status = "nothing under the cursor"
+		return
+	BrickTerrain.sculpt_begin_stroke()
+	# Half a plate under the surface that was clicked: the field's height is
+	# the TOP solid plate, and the surface is the plate above it.
+	_flatten_to = float(hit["position"].y) - BrickWorld.get_plate_metres() * 0.5
+	_stroking = true
+	_refresh_in = 0.0
+	_status = "%s stroke" % TOOL_NAMES[int(_tool)].to_lower()
+
+
+func _end_stroke() -> void:
+	if not _stroking:
+		return
+	_stroking = false
+	_flush_brush()
+	_refresh_markers()
+	_status = "stroke done (%d to undo)" % BrickTerrain.sculpt_undo_depth()
+
+
+## Tell the tiles under what the brush touched. They rebake behind the ones
+## on screen (TerrainStreamer.refresh), so the ground never opens up.
+func _flush_brush() -> void:
+	_refresh_in = REFRESH_EVERY
+	if _pending.size.x <= 0:
+		return
+	_streamer.refresh(_tiles_over(_pending))
+	_pending = Rect2i()
+
+
+func _tiles_over(studs: Rect2i) -> Rect2i:
+	var tile := BrickTerrain.get_tile_studs()
+	var lo := Vector2i(floori(float(studs.position.x) / float(tile)),
+			floori(float(studs.position.y) / float(tile)))
+	var hi := Vector2i(floori(float(studs.end.x) / float(tile)),
+			floori(float(studs.end.y) / float(tile)))
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
 
 
 ## While grabbing, the MARKER follows the cursor and the ground does not.
@@ -218,9 +352,16 @@ func _marker_index() -> int:
 # Editing
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed \
+	if event is InputEventMouseButton \
 			and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-		_click()
+		if _is_brush() and not _grabbing:
+			if event.pressed:
+				_begin_stroke()
+			else:
+				_end_stroke()
+			return
+		if event.pressed:
+			_click()
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
@@ -240,6 +381,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				_dirty = false
 				_status = "reloaded %s" % _world_path
 				_rebuild_all()
+			KEY_Z:
+				var back: Rect2i = BrickTerrain.sculpt_undo()
+				if back.size.x > 0:
+					_streamer.refresh(_tiles_over(back))
+					_dirty = true
+					_status = "undone (%d left)" % BrickTerrain.sculpt_undo_depth()
+				else:
+					_status = "nothing to undo"
 		return
 	match key:
 		KEY_1:
@@ -248,6 +397,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_tool(Tool.PAINT)
 		KEY_3:
 			_set_tool(Tool.SITE)
+		KEY_4:
+			_set_tool(Tool.RAISE)
+		KEY_5:
+			_set_tool(Tool.LOWER)
+		KEY_6:
+			_set_tool(Tool.FLATTEN)
+		KEY_7:
+			_set_tool(Tool.SMOOTH)
 		KEY_G:
 			if _selected < 0:
 				_status = "nothing selected to grab"
@@ -279,15 +436,23 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _set_tool(t: Tool) -> void:
+	_end_stroke()
 	_tool = t
 	_selected = -1
-	_status = "tool: %s" % ["pad", "paint", "site"][int(t)]
+	_status = "tool: %s" % TOOL_NAMES[int(t)].to_lower()
 	_refresh_markers()
 
 
 ## `-` and `=` mean different things per tool, because the thing they change
 ## is what that tool is FOR: a pad is a height, a paint is a material.
 func _step_value(dir: int) -> void:
+	if _is_brush():
+		_brush_rate = clampf(_brush_rate * (1.25 if dir > 0 else 0.8), 0.1, 20.0)
+		_status = "strength %.2f" % _brush_rate
+		return
+	if _tool == Tool.SITE:
+		_step_site_floor(dir)
+		return
 	if _tool == Tool.PAINT:
 		if _selected >= 0:
 			var q := BrickTerrain.get_paint(_selected)
@@ -303,6 +468,21 @@ func _step_value(dir: int) -> void:
 			_status = "brush: %s" % MATERIALS[_paint_material]
 		return
 	_nudge_selected(0, 0, float(dir) * BrickTerrain.get_brick_metres())
+
+
+## A site's FLOOR, a course at a time. The building stays on the brick grid
+## and the ground comes to meet it: the pad is cut at the floor, so raising
+## it builds a plinth of ground and lowering it digs the building in.
+func _step_site_floor(dir: int) -> void:
+	if _selected < 0 or _selected >= World.sites.size():
+		return
+	var site: Dictionary = World.sites[_selected]
+	var brick := BrickTerrain.get_brick_metres()
+	var now := float(site.get("level", World.site_level(site)))
+	site["level"] = roundf(now / brick) * brick + float(dir) * brick
+	_dirty = true
+	_status = "site floor %.2f m" % float(site["level"])
+	_restamp_sites()
 
 
 func _step_storeys(dir: int) -> void:
@@ -323,6 +503,40 @@ func _aim() -> Dictionary:
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.collision_mask = Layers.WORLD
 	return get_world_3d().direct_space_state.intersect_ray(q)
+
+
+## Where the camera is pointing, on the FIELD rather than on its collider.
+##
+## A brush rebuilds the tiles it paints ten times a second, and a ray that
+## asks the colliders asks about ground that is mid-swap. The field is the
+## truth the tiles are built from, so the brush marches it: half a metre a
+## step, then halved down to a couple of centimetres.
+func _aim_field() -> Dictionary:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var from := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	var ground := func(p: Vector3) -> float:
+		return float(BrickTerrain.surface_plate(int(floor(p.x / stud)),
+				int(floor(p.z / stud))) + 1) * plate
+	var step := 0.5
+	var t := 0.0
+	while t < 400.0:
+		var p := from + dir * (t + step)
+		if p.y <= ground.call(p):
+			var lo := t
+			var hi := t + step
+			for i in 5:
+				var mid := (lo + hi) * 0.5
+				var q := from + dir * mid
+				if q.y <= ground.call(q):
+					hi = mid
+				else:
+					lo = mid
+			var at := from + dir * hi
+			return {"position": Vector3(at.x, ground.call(at), at.z)}
+		t += step
+	return {}
 
 
 func _click() -> void:
@@ -434,6 +648,10 @@ func _move_selected(gx: int, gz: int) -> void:
 
 
 func _nudge_selected(d_radius: int, d_skirt: int, d_height: float) -> void:
+	if _is_brush():
+		_brush_radius = clampf(_brush_radius + float(d_radius), 2.0, 64.0)
+		_status = "brush radius %d studs" % int(_brush_radius)
+		return
 	if _selected < 0:
 		return
 	if _tool == Tool.PAINT:
@@ -533,7 +751,7 @@ func _restamp_sites() -> void:
 	World.stamp_sites_only(World.sites)
 	for pad in loose:
 		BrickTerrain.add_pad(int(pad["x"]), int(pad["z"]), int(pad["radius"]),
-			int(pad["skirt"]), float(pad["height"]))
+			int(pad["skirt"]), float(pad["height"]), int(pad.get("radius_z", -1)))
 	_rebuild_all()
 
 
@@ -561,6 +779,7 @@ func _refresh_markers() -> void:
 	for child in _markers.get_children():
 		_markers.remove_child(child)
 		child.queue_free()
+	_refresh_shells()
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
 	for i in BrickTerrain.pad_count():
@@ -593,6 +812,27 @@ func _refresh_markers() -> void:
 			_tool == Tool.SITE and i == _selected)
 
 
+## The building on each site, as the city draws it before it materialises
+## (BuildingShell), on its floor and its footprint: so an author sees the
+## ground meet the building, not a disc where one will go.
+func _refresh_shells() -> void:
+	if _shells == null:
+		return
+	for child in _shells.get_children():
+		_shells.remove_child(child)
+		child.queue_free()
+	var stud := BrickWorld.get_stud_metres()
+	for site in World.sites:
+		var fp := World.site_footprint(site)
+		var corner := World.site_corner(site)
+		var body := MeshInstance3D.new()
+		body.mesh = BuildingShell.build_coarse_mesh(fp.x, fp.y,
+				int(site["storeys"]) * TowerRecipe.COURSES_PER_FLOOR)
+		body.material_override = _shell_mat
+		body.position = Vector3(corner.x * stud, World.site_level(site), corner.y * stud)
+		_shells.add_child(body)
+
+
 ## A flat disc over an edit, so an author can see what they are editing —
 ## the ground only shows the RESULT, which looks like ordinary ground.
 func _marker(at: Vector3, width: float, tint: Color, selected: bool) -> void:
@@ -621,8 +861,11 @@ func _update_hud() -> void:
 		"world        %d pads   %d paints   %d sites" % [
 			BrickTerrain.pad_count(), BrickTerrain.paint_count(),
 			World.sites.size()],
-		"tool         %s%s" % [["PAD", "PAINT", "SITE"][int(_tool)],
-			"   brush: %s" % MATERIALS[_paint_material] if _tool == Tool.PAINT else ""],
+		"tool         %s%s" % [TOOL_NAMES[int(_tool)],
+			("   brush: %s" % MATERIALS[_paint_material]) if _tool == Tool.PAINT
+			else ("   radius %d studs   strength %.2f   %d stroke(s) to undo" % [
+				int(_brush_radius), _brush_rate, BrickTerrain.sculpt_undo_depth()])
+			if _is_brush() else ""],
 		"status       %s" % _status,
 	]
 	if _tool == Tool.PAD and _selected >= 0 and _selected < BrickTerrain.pad_count():
@@ -637,14 +880,16 @@ func _update_hud() -> void:
 			int(q["skirt"]), MATERIALS[int(q["material"])]])
 	elif _tool == Tool.SITE and _selected >= 0 and _selected < World.sites.size():
 		var site: Dictionary = World.sites[_selected]
-		lines.append("site %d       tile %s   radius %d   %d storeys" % [
-			_selected, site["tile"], int(site["radius"]), int(site["storeys"])])
+		lines.append("site %d       tile %s   radius %d   %d storeys   floor %.2f m" % [
+			_selected, site["tile"], int(site["radius"]), int(site["storeys"]),
+			World.site_level(site)])
 	else:
 		lines.append("             nothing selected")
 	lines.append("             %s" % _streamer.report())
 	if _grabbing:
 		lines.append(">>> GRABBED — aim and click to drop, ESC to cancel")
 	lines.append("1 pad  2 paint  3 site   LEFT CLICK place/select   G grab   DEL remove")
+	lines.append("4 raise  5 lower  6 flatten  7 smooth   HOLD LEFT and drag   CTRL+Z undo")
 	lines.append("[ ] radius   , . skirt   - = height/material   PGUP/PGDN storeys")
 	lines.append("CTRL+S save   CTRL+O reload   SPACE SPACE walk")
 	_label.text = "\n".join(lines)
@@ -729,6 +974,48 @@ func _run_shots() -> void:
 	get_viewport().get_texture().get_image().save_png("res://shots/editor_moved.png")
 	print("[editor] shot written: editor_moved.png  (pad %s -> %s, ground rebuilt both ends)"
 			% [from_here, now_here])
+
+	# BRUSHES (§20.6): a raise stroke dragged across open ground, then a
+	# flatten from where it began, rebuilt behind the tiles on screen. The
+	# stroke is driven the way a held button drives it, a frame at a time.
+	var bx := gx + 150
+	var bz := gz - 120
+	var ground_y := float(BrickTerrain.surface_plate(bx, bz) + 1) * BrickWorld.get_plate_metres()
+	_camera.position = Vector3(bx * stud2 + 4.0, ground_y + 14.0, bz * stud2 + 22.0)
+	_camera.look_at(Vector3(bx * stud2, ground_y, bz * stud2), Vector3.UP)
+	await _frames(4)
+	_set_tool(Tool.RAISE)
+	_brush_radius = 12.0
+	_brush_rate = 4.0
+	_begin_stroke()
+	for i in 40:
+		# Drag: sweep the aim a little each frame.
+		_camera.look_at(Vector3((bx + i * 0.6) * stud2, ground_y, bz * stud2), Vector3.UP)
+		_brush_tick(1.0 / 30.0)
+		await get_tree().process_frame
+	_end_stroke()
+	var raised := BrickTerrain.sculpt_at(bx + 12, bz)
+	_streamer.settle(Vector2(_camera.global_position.x, _camera.global_position.z))
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/editor_raised.png")
+	_set_tool(Tool.FLATTEN)
+	_camera.look_at(Vector3((bx + 30) * stud2, ground_y, bz * stud2), Vector3.UP)
+	_begin_stroke()
+	for i in 30:
+		_camera.look_at(Vector3((bx + 30 - i) * stud2, ground_y, bz * stud2), Vector3.UP)
+		_brush_tick(1.0 / 30.0)
+		await get_tree().process_frame
+	_end_stroke()
+	_streamer.settle(Vector2(_camera.global_position.x, _camera.global_position.z))
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/editor_flattened.png")
+	print("[editor] shot written: editor_raised.png, editor_flattened.png  (raised %.2f m, %d stroke(s) to undo)" % [
+		raised, BrickTerrain.sculpt_undo_depth()])
+	var undo_rect: Rect2i = BrickTerrain.sculpt_undo()
+	BrickTerrain.sculpt_undo()
+	print("[editor] undo: both strokes back, %.2f m left at the middle" % BrickTerrain.sculpt_at(bx + 12, bz))
+	_streamer.refresh(_tiles_over(undo_rect))
+	_set_tool(Tool.PAD)
 
 	# And the world file, round trip, which is the only thing that outlives
 	# the session.

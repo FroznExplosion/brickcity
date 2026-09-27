@@ -174,6 +174,11 @@ func can_see(h: Pawn) -> bool:
 			[pawn.body.get_rid(), h.body.get_rid()] as Array[RID])
 	if not services.world3d.direct_space_state.intersect_ray(q).is_empty():
 		return false
+	# The ground has colliders only where the terrain's detail tier is; the
+	# field is everywhere, so a hill out past the city still hides a body
+	# (Docs/Terrain.md §21.7). Free when there is no terrain.
+	if services.ai_world.ground_blocks(eye, aim_at):
+		return false
 	# Physics cannot see smoke; AIWorld can.
 	return not services.ai_world.smoke_blocks(eye, aim_at)
 

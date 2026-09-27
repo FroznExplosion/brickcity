@@ -7,7 +7,10 @@
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <memory>
 #include <unordered_map>
 #include <set>
 #include <climits>
@@ -92,7 +95,8 @@ float value_noise3(float x, float y, float z, uint32_t seed) {
 /// An authored flat spot. See BrickTerrain::add_pad.
 struct Pad {
     int x = 0, z = 0;
-    int radius = 0;     ///< studs of dead flat
+    int radius = 0;     ///< studs of dead flat, in X
+    int radius_z = 0;   ///< and in Z: a pad is a rectangle
     int skirt = 0;      ///< studs of blend back to the natural ground
     float plates = 0.0f;
 };
@@ -225,19 +229,66 @@ static bool g_plate_steps = false;
 /// Chebyshev distance, not Euclidean: a building is a rectangle on a square
 /// lattice, and a round pad under a square building leaves corners hanging.
 static float pad_weight(const Pad &p, int x, int z) {
-    const int d = std::max(std::abs(x - p.x), std::abs(z - p.z));
-    if (d <= p.radius) {
+    // How far outside the flat RECTANGLE, Chebyshev: 0 inside it.
+    const int d = std::max(std::abs(x - p.x) - p.radius, std::abs(z - p.z) - p.radius_z);
+    if (d <= 0) {
         return 1.0f;
     }
-    if (d >= p.radius + p.skirt || p.skirt <= 0) {
+    if (d >= p.skirt || p.skirt <= 0) {
         return 0.0f;
     }
-    const float t = (float)(d - p.radius) / (float)p.skirt;
+    const float t = (float)d / (float)p.skirt;
     // Smoothstep, so the skirt meets the natural ground without a crease.
     return 1.0f - (t * t * (3.0f - 2.0f * t));
 }
 
-float Field::raw_plate(int x, int z) const {
+// --- sculpt ------------------------------------------------------------------
+//
+// A height offset per stud column, in plates, stored per tile. Tiles bake on
+// worker threads while the editor paints, so the map is COPY-ON-WRITE: a
+// writer builds a new map (tile pointers copied, touched tiles cloned) and
+// publishes it; a reader holds whichever map it loaded for as long as it
+// likes. Readers keep a thread-local pointer and reload only when the
+// generation moves, so a bake does not touch the shared pointer per column.
+
+struct SculptTile {
+    float v[TILE * TILE] = {};
+};
+using SculptMap = std::unordered_map<int64_t, std::shared_ptr<const SculptTile>>;
+static std::shared_ptr<const SculptMap> g_sculpt = std::make_shared<SculptMap>();
+static std::atomic<uint64_t> g_sculpt_gen{ 1 };
+static std::atomic<bool> g_sculpt_any{ false };
+
+static inline int64_t sculpt_key(int tx, int tz) {
+    return ((int64_t)tx << 32) ^ (int64_t)(uint32_t)tz;
+}
+
+static const SculptMap &sculpt_map() {
+    thread_local uint64_t gen = 0;
+    thread_local std::shared_ptr<const SculptMap> held;
+    const uint64_t now = g_sculpt_gen.load(std::memory_order_acquire);
+    if (gen != now) {
+        held = std::atomic_load(&g_sculpt);
+        gen = now;
+    }
+    return *held;
+}
+
+static float sculpt_plates(int x, int z) {
+    if (!g_sculpt_any.load(std::memory_order_acquire)) {
+        return 0.0f;
+    }
+    const SculptMap &m = sculpt_map();
+    const int tx = floor_div(x, TILE);
+    const int tz = floor_div(z, TILE);
+    auto it = m.find(sculpt_key(tx, tz));
+    if (it == m.end()) {
+        return 0.0f;
+    }
+    return it->second->v[(z - tz * TILE) * TILE + (x - tx * TILE)];
+}
+
+float Field::base_plate(int x, int z) const {
     const float landform = fbm((float)x * 0.0025f, (float)z * 0.0025f, seed + 5501U,
             3, 2.0f, 0.5f);
     const float relief = fbm((float)x * 0.010f, (float)z * 0.010f, seed, 3, 2.0f, 0.5f);
@@ -248,23 +299,52 @@ float Field::raw_plate(int x, int z) const {
     // relief, because three octaves of fBm over value noise sit well inside
     // their nominal range: 34 measured only 9.8 m across 140 m of ground.
     const float bricks = landform * 90.0f + relief * 9.0f + detail * 1.5f + 14.0f;
-    float plates = bricks * (float)PLATES_PER_CELL;
-    // Authored pads last: they are a statement about the world that the
-    // noise does not get to overrule.
+    // Sculpted strokes on the noise, under the pads (§20.6).
+    return bricks * (float)PLATES_PER_CELL + sculpt_plates(x, z);
+}
+
+// Authored pads last: they are a statement about the world that the noise
+// does not get to overrule. `flat` says whether the column ends up on some
+// pad's dead-flat part (no later pad's skirt over it).
+//
+// A pad's FLAT part beats every other pad's skirt: a building stands on its
+// pad, and a neighbour's skirt reaching under it tilted 718 of the default
+// city's 23,100 footprint columns (§21.8). Two neighbours at different heights
+// now meet at the edge of the higher one's flat -- a terrace step, which is
+// what a row of buildings on a hillside has.
+static float apply_pads(float plates, int x, int z, bool *flat) {
+    const Pad *on = nullptr;
     for (const Pad &p : g_pads) {
         const float w = pad_weight(p, x, z);
-        if (w > 0.0f) {
+        if (w >= 1.0f) {
+            on = &p;   // the last pad flat here is the one standing here
+        } else if (w > 0.0f) {
             plates = plates + (p.plates - plates) * w;
         }
     }
-    return plates;
+    if (flat != nullptr) {
+        *flat = on != nullptr;
+    }
+    return on != nullptr ? on->plates : plates;
+}
+
+float Field::raw_plate(int x, int z) const {
+    return apply_pads(base_plate(x, z), x, z, nullptr);
 }
 
 int Field::top_plate(int x, int z) const {
     // ONE height function, quantised two ways. This used to be a second copy
     // of the expression in `raw_plate` and the two drifted apart the moment
     // the relief changed.
-    const float plates = raw_plate(x, z);
+    bool flat = false;
+    const float plates = apply_pads(base_plate(x, z), x, z, &flat);
+    // ON A PAD the ground's top IS the pad's height, whatever the region
+    // would quantise it to: a building's floor is read off the field, and a
+    // footprint straddling a plate-step patch and a brick-step one stood a
+    // plate on one side and three on the other (§21.8).
+    if (flat) {
+        return (int)std::lround(plates) - 1;
+    }
     // Plate steps are REGIONAL, not global. Everywhere at once cost 60% more
     // triangles and a third of the studs (section 17.23) for a smoothness
     // that only some ground wants; a low-frequency mask puts it on about
@@ -1031,13 +1111,17 @@ static bool sun_reaches(int x, int z) {
     return true;
 }
 
-void BrickTerrain::add_pad(int x, int z, int radius, int skirt, double height_m) {
+void BrickTerrain::add_pad(int x, int z, int radius, int skirt, double height_m,
+        int radius_z) {
     Pad p;
     p.x = x;
     p.z = z;
     p.radius = std::max(radius, 0);
+    p.radius_z = radius_z < 0 ? p.radius : radius_z;
     p.skirt = std::max(skirt, 0);
-    p.plates = (float)(height_m / (double)PLATE_M);
+    // Snapped to 1/64 plate: a height that came back through a float as
+    // 128.99999 plates floored to the plate below the building's floor.
+    p.plates = (float)(std::round(height_m / (double)PLATE_M * 64.0) / 64.0);
     g_pads.push_back(p);
 }
 
@@ -1062,13 +1146,14 @@ Dictionary BrickTerrain::get_pad(int index) {
     d["x"] = p.x;
     d["z"] = p.z;
     d["radius"] = p.radius;
+    d["radius_z"] = p.radius_z;
     d["skirt"] = p.skirt;
     d["height"] = (double)p.plates * (double)PLATE_M;
     return d;
 }
 
 void BrickTerrain::set_pad(int index, int x, int z, int radius, int skirt,
-        double height_m) {
+        double height_m, int radius_z) {
     if (index < 0 || index >= (int)g_pads.size()) {
         return;
     }
@@ -1076,8 +1161,11 @@ void BrickTerrain::set_pad(int index, int x, int z, int radius, int skirt,
     p.x = x;
     p.z = z;
     p.radius = std::max(radius, 0);
+    p.radius_z = radius_z < 0 ? p.radius : radius_z;
     p.skirt = std::max(skirt, 0);
-    p.plates = (float)(height_m / (double)PLATE_M);
+    // Snapped to 1/64 plate: a height that came back through a float as
+    // 128.99999 plates floored to the plate below the building's floor.
+    p.plates = (float)(std::round(height_m / (double)PLATE_M * 64.0) / 64.0);
 }
 
 void BrickTerrain::remove_pad(int index) {
@@ -1092,8 +1180,202 @@ Rect2i BrickTerrain::pad_bounds(int index) {
         return Rect2i();
     }
     const Pad &p = g_pads[(size_t)index];
-    const int r = p.radius + p.skirt;
-    return Rect2i(p.x - r, p.z - r, r * 2 + 1, r * 2 + 1);
+    const int rx = p.radius + p.skirt;
+    const int rz = p.radius_z + p.skirt;
+    return Rect2i(p.x - rx, p.z - rz, rx * 2 + 1, rz * 2 + 1);
+}
+
+// --- sculpt, the writing half --------------------------------------------------
+
+namespace {
+struct Stroke {
+    // The tiles as they were before the stroke first touched them; null for a
+    // tile that did not exist.
+    std::unordered_map<int64_t, std::shared_ptr<const SculptTile>> before;
+    Rect2i bounds;
+};
+std::vector<Stroke> g_strokes;
+constexpr size_t MAX_STROKES = 64;
+
+void publish(std::shared_ptr<const SculptMap> m) {
+    const bool any = !m->empty();
+    std::atomic_store(&g_sculpt, std::move(m));
+    g_sculpt_any.store(any, std::memory_order_release);
+    g_sculpt_gen.fetch_add(1, std::memory_order_acq_rel);
+}
+
+Rect2i merge_rect(const Rect2i &a, const Rect2i &b) {
+    if (a.size.x <= 0) {
+        return b;
+    }
+    return a.merge(b);
+}
+} // namespace
+
+Rect2i BrickTerrain::sculpt(int x, int z, double radius, int mode, double amount, double target_m) {
+    const float r = (float)std::max(radius, 0.5);
+    const int ri = (int)std::ceil(r);
+    const Rect2i box(x - ri, z - ri, ri * 2 + 1, ri * 2 + 1);
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+
+    // The surface BEFORE this dab: noise plus sculpt, no pads. Read once for
+    // the box (and a margin, for smoothing) so every column of the dab sees
+    // the same ground.
+    const int m = 1;
+    const int w = box.size.x + 2 * m;
+    std::vector<float> before((size_t)w * (size_t)(box.size.y + 2 * m));
+    // Without the pads: the offset is measured against the ground the stroke
+    // paints, not against a building's flat spot over it. `base_plate` reads
+    // the PUBLISHED sculpt, which is what `next` was copied from.
+    for (int dz = 0; dz < box.size.y + 2 * m; ++dz) {
+        for (int dx = 0; dx < w; ++dx) {
+            const int cx = box.position.x - m + dx;
+            const int cz = box.position.y - m + dz;
+            before[(size_t)dz * w + dx] = g_field.base_plate(cx, cz);
+        }
+    }
+    auto h_at = [&](int cx, int cz) {
+        return before[(size_t)(cz - box.position.y + m) * w + (cx - box.position.x + m)];
+    };
+
+    Stroke *stroke = g_strokes.empty() ? nullptr : &g_strokes.back();
+    const float target = (float)(target_m / (double)PLATE_M);
+    const float raise = (float)(amount / (double)PLATE_M);
+    const float k = (float)std::clamp(amount, 0.0, 1.0);
+    std::unordered_map<int64_t, std::shared_ptr<SculptTile>> writable;
+    for (int cz = box.position.y; cz < box.position.y + box.size.y; ++cz) {
+        for (int cx = box.position.x; cx < box.position.x + box.size.x; ++cx) {
+            const float d = std::sqrt((float)((cx - x) * (cx - x) + (cz - z) * (cz - z)));
+            if (d > r) {
+                continue;
+            }
+            const float t = d / r;
+            const float fall = 1.0f - t * t * (3.0f - 2.0f * t);
+            float delta = 0.0f;
+            if (mode == 0) {
+                delta = raise * fall;
+            } else if (mode == 1) {
+                delta = (target - h_at(cx, cz)) * k * fall;
+            } else {
+                float sum = 0.0f;
+                for (int oz = -1; oz <= 1; ++oz) {
+                    for (int ox = -1; ox <= 1; ++ox) {
+                        sum += h_at(cx + ox, cz + oz);
+                    }
+                }
+                delta = (sum / 9.0f - h_at(cx, cz)) * k * fall;
+            }
+            if (delta == 0.0f) {
+                continue;
+            }
+            const int tx = floor_div(cx, TILE);
+            const int tz = floor_div(cz, TILE);
+            const int64_t key = sculpt_key(tx, tz);
+            auto wit = writable.find(key);
+            if (wit == writable.end()) {
+                auto old = next->find(key);
+                std::shared_ptr<const SculptTile> was = old == next->end() ? nullptr : old->second;
+                if (stroke != nullptr && stroke->before.find(key) == stroke->before.end()) {
+                    stroke->before.emplace(key, was);
+                }
+                auto fresh = was ? std::make_shared<SculptTile>(*was) : std::make_shared<SculptTile>();
+                wit = writable.emplace(key, fresh).first;
+                (*next)[key] = fresh;
+            }
+            wit->second->v[(cz - tz * TILE) * TILE + (cx - tx * TILE)] += delta;
+        }
+    }
+    publish(std::move(next));
+    if (stroke != nullptr) {
+        stroke->bounds = merge_rect(stroke->bounds, box);
+    }
+    return box;
+}
+
+void BrickTerrain::sculpt_begin_stroke() {
+    if (!g_strokes.empty() && g_strokes.back().before.empty()) {
+        return;   // the last one never touched anything: reuse it
+    }
+    g_strokes.emplace_back();
+    if (g_strokes.size() > MAX_STROKES) {
+        g_strokes.erase(g_strokes.begin());
+    }
+}
+
+Rect2i BrickTerrain::sculpt_undo() {
+    while (!g_strokes.empty() && g_strokes.back().before.empty()) {
+        g_strokes.pop_back();
+    }
+    if (g_strokes.empty()) {
+        return Rect2i();
+    }
+    Stroke s = std::move(g_strokes.back());
+    g_strokes.pop_back();
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    for (auto &kv : s.before) {
+        if (kv.second) {
+            (*next)[kv.first] = kv.second;
+        } else {
+            next->erase(kv.first);
+        }
+    }
+    publish(std::move(next));
+    return s.bounds;
+}
+
+int BrickTerrain::sculpt_undo_depth() {
+    int n = 0;
+    for (const Stroke &s : g_strokes) {
+        n += s.before.empty() ? 0 : 1;
+    }
+    return n;
+}
+
+void BrickTerrain::clear_sculpt() {
+    g_strokes.clear();
+    publish(std::make_shared<SculptMap>());
+}
+
+double BrickTerrain::sculpt_at(int x, int z) {
+    return (double)sculpt_plates(x, z) * (double)PLATE_M;
+}
+
+Array BrickTerrain::sculpt_tiles() {
+    Array out;
+    for (const auto &kv : *std::atomic_load(&g_sculpt)) {
+        const int tx = (int)(kv.first >> 32);
+        const int tz = (int)(int32_t)(uint32_t)(kv.first & 0xFFFFFFFF);
+        out.append(Vector2i(tx, tz));
+    }
+    return out;
+}
+
+PackedFloat32Array BrickTerrain::get_sculpt_tile(int tx, int tz) {
+    PackedFloat32Array out;
+    auto m = std::atomic_load(&g_sculpt);
+    auto it = m->find(sculpt_key(tx, tz));
+    if (it == m->end()) {
+        return out;
+    }
+    out.resize(TILE * TILE);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        out.set(i, it->second->v[i] * PLATE_M);
+    }
+    return out;
+}
+
+void BrickTerrain::set_sculpt_tile(int tx, int tz, const PackedFloat32Array &metres) {
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    if (metres.size() != TILE * TILE) {
+        next->erase(sculpt_key(tx, tz));
+    } else {
+        auto t = std::make_shared<SculptTile>();
+        for (int i = 0; i < TILE * TILE; ++i) {
+            t->v[i] = metres[i] / PLATE_M;
+        }
+        (*next)[sculpt_key(tx, tz)] = t;
+    }
+    publish(std::move(next));
 }
 
 void BrickTerrain::add_paint(int x, int z, int radius, int skirt, int material) {
@@ -2894,8 +3176,28 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_terrain"),
         &BrickTerrain::get_smooth_terrain);
     ClassDB::bind_static_method("BrickTerrain",
-        D_METHOD("add_pad", "x", "z", "radius", "skirt", "height_m"),
-        &BrickTerrain::add_pad);
+        D_METHOD("add_pad", "x", "z", "radius", "skirt", "height_m", "radius_z"),
+        &BrickTerrain::add_pad, DEFVAL(-1));
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("sculpt", "x", "z", "radius", "mode", "amount", "target_m"),
+        &BrickTerrain::sculpt);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_begin_stroke"),
+        &BrickTerrain::sculpt_begin_stroke);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_undo"),
+        &BrickTerrain::sculpt_undo);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_undo_depth"),
+        &BrickTerrain::sculpt_undo_depth);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_sculpt"),
+        &BrickTerrain::clear_sculpt);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_at", "x", "z"),
+        &BrickTerrain::sculpt_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_tiles"),
+        &BrickTerrain::sculpt_tiles);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sculpt_tile", "tx", "tz"),
+        &BrickTerrain::get_sculpt_tile);
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("set_sculpt_tile", "tx", "tz", "metres"),
+        &BrickTerrain::set_sculpt_tile);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_pads"),
         &BrickTerrain::clear_pads);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("pad_count"),
@@ -2905,8 +3207,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_pad", "index"),
         &BrickTerrain::get_pad);
     ClassDB::bind_static_method("BrickTerrain",
-        D_METHOD("set_pad", "index", "x", "z", "radius", "skirt", "height_m"),
-        &BrickTerrain::set_pad);
+        D_METHOD("set_pad", "index", "x", "z", "radius", "skirt", "height_m", "radius_z"),
+        &BrickTerrain::set_pad, DEFVAL(-1));
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("remove_pad", "index"),
         &BrickTerrain::remove_pad);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("pad_bounds", "index"),

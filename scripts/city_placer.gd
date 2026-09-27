@@ -28,6 +28,15 @@ extends Node3D
 ## Called with the new building's id once it is registered, so the scene can
 ## index and shell it like any other building.
 var on_placed := Callable()
+## Where the GROUND is along a ray, when it is not the plane y = 0: a city on
+## terrain hands in `func(from, dir) -> Vector3` (Vector3.INF for a miss). The
+## ghost then stands on the hillside, at the COURSE nearest it, and the scene
+## cuts a pad for it when it lands (`on_ground`).
+var ground_ray := Callable()
+## Whether the last aim put the build on the ground -- rather than on top of a
+## building, or on a height held with E. Only a build on the ground gets the
+## terrain shaped to its floor.
+var on_ground := false
 
 ## Where prebuilt structures live. `res://builds/` ships with the game
 ## (tools/make_prebuilts.gd writes it); `user://builds/` is the player's.
@@ -263,12 +272,14 @@ func aim_ray(from: Vector3, dir: Vector3) -> void:
 		var p := from + dir * t
 		_target = Vector3i(int(floor(p.x / cell.x)), int(_lock.y), int(floor(p.z / cell.z)))
 		_cell = Vector3i(_target.x - half.x, _target.y, _target.z - half.z)
+		on_ground = false
 		_update()
 		return
 	var hit := _first_surface(from, dir)
 	if hit.is_empty():
 		return
 	_target = hit.cell
+	on_ground = bool(hit.get("ground", false))
 	_cell = _fit_over(_target, d, half)
 	_update()
 
@@ -292,11 +303,21 @@ func _first_surface(from: Vector3, dir: Vector3) -> Dictionary:
 			best_t = t
 			best = {"cell": Vector3i(int(floor(q.x / cell.x)),
 					int(round(box.end.y / cell.y)), int(floor(q.z / cell.z)))}
-	if absf(dir.y) > 1e-4:
+	if ground_ray.is_valid():
+		var g: Vector3 = ground_ray.call(from, dir)
+		if g != Vector3.INF and from.distance_to(g) < best_t:
+			# On the course nearest the ground: a building's floor is a whole
+			# brick up, like every site's pad (TerrainWorld.stamp_sites_only).
+			var per := roundi(BrickTerrain.get_brick_metres() / cell.y)
+			var y := roundi(g.y / (cell.y * per)) * per
+			best = {"cell": Vector3i(int(floor(g.x / cell.x)), y, int(floor(g.z / cell.z))),
+					"ground": true}
+	elif absf(dir.y) > 1e-4:
 		var tg := -from.y / dir.y
 		if tg > 0.0 and tg < best_t:
 			var g := from + dir * tg
-			best = {"cell": Vector3i(int(floor(g.x / cell.x)), 0, int(floor(g.z / cell.z)))}
+			best = {"cell": Vector3i(int(floor(g.x / cell.x)), 0, int(floor(g.z / cell.z))),
+					"ground": true}
 	return best
 
 
