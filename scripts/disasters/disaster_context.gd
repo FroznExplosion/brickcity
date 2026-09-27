@@ -12,6 +12,10 @@ extends RefCounted
 var city: Node3D
 var registry: BuildingRegistry
 var islands: IslandManager
+## The fire service (fire_spread.gd), set by the director. ignite() goes here.
+var fire: FireSpread
+## True while it rains. Fire reads it: rain halves spread and slows heating.
+var raining := false
 
 ## Camera shake still owed, in metres of offset; decays in step().
 var _shake := 0.0
@@ -103,11 +107,10 @@ func building_boxes() -> Array[AABB]:
 	return out
 
 
-## Start a fire at `point`. Fire is D3 (Docs/Disasters.md section 5): until it
-## exists this does nothing, but callers roll for it now so their seeds do not
-## shift when it arrives.
-func ignite(_point: Vector3, _heat: float) -> void:
-	pass
+## Start a fire at `point` with `heat` 0..1 (Docs/Disasters.md section 5). Does
+## nothing where there is nothing to burn.
+func ignite(point: Vector3, heat: float) -> bool:
+	return fire != null and fire.ignite(point, heat)
 
 
 ## Material index of the brick at `point`, -1 for none. Walks every building:
@@ -134,6 +137,37 @@ func wake_near(point: Vector3, radius: float) -> void:
 func impact_fx(point: Vector3, normal: Vector3) -> void:
 	if city._material_fx != null and not city._material_fx.impact_at(point, normal):
 		city._material_fx.impact(point, normal, 0, Color(0.6, 0.6, 0.6))
+
+
+# --- People ------------------------------------------------------------------
+
+## Every living pawn: the soldiers', and the player's when the player is in one.
+func pawns() -> Array[Pawn]:
+	var out: Array[Pawn] = []
+	for so in city.soldiers:
+		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
+			out.append(so.pawn)
+	var mine: Pawn = city._player_pawn
+	if mine != null and is_instance_valid(mine) and city._player.is_possessing():
+		out.append(mine)
+	return out
+
+
+## Hurt every pawn within `radius` of `point` by `amount`, through the damage
+## system like a round (no element: none exist as resources yet). Returns how
+## many were hurt.
+func damage_pawns(point: Vector3, radius: float, amount: float) -> int:
+	var hurt := 0
+	var r2 := radius * radius
+	for p in pawns():
+		if p.chest().distance_squared_to(point) > r2:
+			continue
+		var packet := DamagePacket.new(amount, null, city)
+		packet.hit_position = point
+		# The pool itself: resolve() takes a HealthPool as its own root.
+		if p.health != null and DamageSystem.resolve(packet, p.health).dealt > 0.0:
+			hurt += 1
+	return hurt
 
 
 # --- The player ---------------------------------------------------------------
@@ -169,7 +203,7 @@ func step(delta: float) -> void:
 ## the given colours in full. Disasters ease `amount` up in WARNING and back
 ## down in ENDING; at 0 every value is put back exactly as it was.
 func set_sky(amount: float, sun_colour: Color, top: Color, horizon: Color,
-		sun_energy_mul: float) -> void:
+		sun_energy_mul: float, flash := 0.0) -> void:
 	var sun: DirectionalLight3D = city._sun
 	var mat := _sky_material()
 	if _sky_base.is_empty():
@@ -180,7 +214,8 @@ func set_sky(amount: float, sun_colour: Color, top: Color, horizon: Color,
 			_sky_base.ground_horizon = mat.ground_horizon_color
 	var a := clampf(amount, 0.0, 1.0)
 	sun.light_color = (_sky_base.sun_colour as Color).lerp(sun_colour, a)
-	sun.light_energy = float(_sky_base.sun_energy) * lerpf(1.0, sun_energy_mul, a)
+	# `flash` lights the whole scene for a lightning stroke, on top of the mood.
+	sun.light_energy = float(_sky_base.sun_energy) * (lerpf(1.0, sun_energy_mul, a) + flash)
 	if mat != null:
 		mat.sky_top_color = (_sky_base.top as Color).lerp(top, a)
 		mat.sky_horizon_color = (_sky_base.horizon as Color).lerp(horizon, a)
