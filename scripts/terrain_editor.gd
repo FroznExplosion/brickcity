@@ -42,6 +42,9 @@ enum Tool { PAD, PAINT, SITE }
 ## and labelling it sand.
 static var MATERIALS: PackedStringArray = BrickTerrain.material_names()
 const WORLD_SEED := 20260921
+## The seed actually in use: the world file's own when it names one, so a
+## level cut from a different seed (the city's) is edited on ITS ground.
+var _seed := WORLD_SEED
 const DRY_AMBIENT := 0.6
 const NEAR_TILES := 4
 const FAR_TILES := 50
@@ -83,8 +86,15 @@ func _ready() -> void:
 	# A level that has never been edited is a seed and nothing else.
 	_world_path = World.world_path()
 	var loaded := World.load_world(_world_path)
+	var file_seed := int(loaded.get("seed", WORLD_SEED))
+	if not loaded.is_empty() and file_seed != 0 and file_seed != WORLD_SEED:
+		# Loaded against the wrong field: the sea and every pad height were
+		# read off ground this world is not. Again, on its own.
+		_seed = file_seed
+		BrickTerrain.configure(_seed)
+		loaded = World.load_world(_world_path)
 	if loaded.is_empty():
-		World.stamp_sites()
+		World.stamp_sites(_drowned)
 		_status = "no world file; seeded from TerrainWorld.SITES"
 	else:
 		_drowned = float(loaded.get("drowned", 0.30))
@@ -92,7 +102,8 @@ func _ready() -> void:
 
 	_build_scenery()
 	BrickTerrain.set_sun_direction(_sun.global_transform.basis.z)
-	BrickWave.set_sea_level(World.sea_level_for(maxi(NEAR_TILES, 8), _drowned))
+	# The sea was settled by the load, on the field before its pads
+	# (TerrainWorld.sea_level).
 	_build_terrain()
 	_refresh_markers()
 	if _shot_mode:
@@ -217,7 +228,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Input.is_key_pressed(KEY_CTRL):
 		match key:
 			KEY_S:
-				var err := World.save_world(_world_path, WORLD_SEED, _drowned)
+				var err := World.save_world(_world_path, _seed, _drowned)
 				_status = "saved %s" % _world_path if err == OK else "SAVE FAILED"
 				_dirty = err != OK
 				print("[editor] %s" % _status)
@@ -363,11 +374,13 @@ func _click() -> void:
 			_dirty = true
 			_rebuild_around(BrickTerrain.paint_bounds(_selected))
 		Tool.SITE:
-			# A site is addressed by TILE, because a building stands on one.
+			# Clicking a site's pad selects it; clicking open ground places a
+			# new one, addressed by TILE, because a building stands on one.
 			var t := Vector2i(floori(float(gx) / float(tile)),
 					floori(float(gz) / float(tile)))
 			for i in World.sites.size():
-				if World.sites[i]["tile"] == t:
+				var c := World.site_centre(World.sites[i])
+				if maxi(absi(gx - c.x), absi(gz - c.y)) <= int(World.sites[i]["radius"]):
 					_selected = i
 					_status = "selected site %d" % i
 					_refresh_markers()
@@ -411,6 +424,10 @@ func _move_selected(gx: int, gz: int) -> void:
 				return
 			World.sites[_selected]["tile"] = Vector2i(
 				floori(float(gx) / float(tile)), floori(float(gz) / float(tile)))
+			# A site with its own centre (the city's) moves to the stud; an
+			# editor site moves a tile at a time.
+			if World.sites[_selected].has("centre"):
+				World.sites[_selected]["centre"] = Vector2i(gx, gz)
 			_status = "moved site %d" % _selected
 			_dirty = true
 			_restamp_sites()
@@ -512,11 +529,8 @@ func _restamp_sites() -> void:
 	for i in BrickTerrain.pad_count():
 		if not _is_site_pad(i):
 			loose.append(BrickTerrain.get_pad(i))
-	var keep := World.sites.duplicate(true)
-	World.stamp_sites()
-	World.sites = keep
 	BrickTerrain.clear_pads()
-	World.stamp_sites_only(keep)
+	World.stamp_sites_only(World.sites)
 	for pad in loose:
 		BrickTerrain.add_pad(int(pad["x"]), int(pad["z"]), int(pad["radius"]),
 			int(pad["skirt"]), float(pad["height"]))
@@ -526,12 +540,9 @@ func _restamp_sites() -> void:
 ## Is this pad one a site cut, rather than one an author placed by hand?
 func _is_site_pad(index: int) -> bool:
 	var pad := BrickTerrain.get_pad(index)
-	var tile := BrickTerrain.get_tile_studs()
 	for site in World.sites:
-		var c: Vector2i = site["tile"]
-		@warning_ignore("integer_division")
-		if int(pad["x"]) == c.x * tile + tile / 2 \
-				and int(pad["z"]) == c.y * tile + tile / 2:
+		var c := World.site_centre(site)
+		if int(pad["x"]) == c.x and int(pad["z"]) == c.y:
 			return true
 	return false
 
@@ -552,7 +563,6 @@ func _refresh_markers() -> void:
 		child.queue_free()
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
-	var tile := BrickTerrain.get_tile_studs()
 	for i in BrickTerrain.pad_count():
 		var pad := BrickTerrain.get_pad(i)
 		_marker(Vector3((int(pad["x"]) + 0.5) * stud, float(pad["height"]) + plate,
@@ -572,11 +582,9 @@ func _refresh_markers() -> void:
 			_tool == Tool.PAINT and i == _selected)
 	for i in World.sites.size():
 		var site: Dictionary = World.sites[i]
-		var c: Vector2i = site["tile"]
-		@warning_ignore("integer_division")
-		var gx2: int = c.x * tile + tile / 2
-		@warning_ignore("integer_division")
-		var gz2: int = c.y * tile + tile / 2
+		var c := World.site_centre(site)
+		var gx2: int = c.x
+		var gz2: int = c.y
 		_marker(Vector3((gx2 + 0.5) * stud,
 				float(BrickTerrain.surface_plate(gx2, gz2) + 1) * plate + plate * 2.0,
 				(gz2 + 0.5) * stud),
@@ -608,7 +616,7 @@ func _update_hud() -> void:
 		return
 	var lines: Array[String] = [
 		"TERRAIN EDITOR   %s   seed %d%s" % [
-			_world_path.get_file().get_basename(), WORLD_SEED,
+			_world_path.get_file().get_basename(), _seed,
 			"  *UNSAVED*" if _dirty else ""],
 		"world        %d pads   %d paints   %d sites" % [
 			BrickTerrain.pad_count(), BrickTerrain.paint_count(),
@@ -725,7 +733,7 @@ func _run_shots() -> void:
 	# And the world file, round trip, which is the only thing that outlives
 	# the session.
 	var path := "user://editor_shot_world.json"
-	var err := World.save_world(path, WORLD_SEED, _drowned)
+	var err := World.save_world(path, _seed, _drowned)
 	var pads_before := BrickTerrain.pad_count()
 	var paints_before := BrickTerrain.paint_count()
 	var sites_before := World.sites.size()

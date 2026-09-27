@@ -1,0 +1,406 @@
+{
+	"drowned": 0.2,
+	"pads": [
+		{
+			"height": 18.06000007689,
+			"radius": 19,
+			"skirt": 11,
+			"x": -83,
+			"z": -83
+		},
+		{
+			"height": 20.1600000858307,
+			"radius": 24,
+			"skirt": 14,
+			"x": -29,
+			"z": -83
+		},
+		{
+			"height": 19.7400000840425,
+			"radius": 19,
+			"skirt": 11,
+			"x": 15,
+			"z": -83
+		},
+		{
+			"height": 18.06000007689,
+			"radius": 24,
+			"skirt": 14,
+			"x": 64,
+			"z": -78
+		},
+		{
+			"height": 19.7400000840425,
+			"radius": 24,
+			"skirt": 14,
+			"x": 118,
+			"z": -83
+		},
+		{
+			"height": 19.3200000822544,
+			"radius": 19,
+			"skirt": 11,
+			"x": -83,
+			"z": -34
+		},
+		{
+			"height": 18.4800000786781,
+			"radius": 19,
+			"skirt": 11,
+			"x": -34,
+			"z": -34
+		},
+		{
+			"height": 18.06000007689,
+			"radius": 24,
+			"skirt": 14,
+			"x": 20,
+			"z": -34
+		},
+		{
+			"height": 17.6400011432171,
+			"radius": 19,
+			"skirt": 11,
+			"x": 64,
+			"z": -34
+		},
+		{
+			"height": 20.5800000876188,
+			"radius": 24,
+			"skirt": 14,
+			"x": 113,
+			"z": -29
+		},
+		{
+			"height": 19.3200000822544,
+			"radius": 24,
+			"skirt": 14,
+			"x": -78,
+			"z": 15
+		},
+		{
+			"height": 18.4800000786781,
+			"radius": 19,
+			"skirt": 11,
+			"x": -34,
+			"z": 15
+		},
+		{
+			"height": 17.6400011432171,
+			"radius": 19,
+			"skirt": 11,
+			"x": 15,
+			"z": 15
+		},
+		{
+			"height": 18.9000000804663,
+			"radius": 24,
+			"skirt": 14,
+			"x": 69,
+			"z": 15
+		},
+		{
+			"height": 20.5800000876188,
+			"radius": 19,
+			"skirt": 11,
+			"x": 113,
+			"z": 15
+		},
+		{
+			"height": 18.4800000786781,
+			"radius": 24,
+			"skirt": 14,
+			"x": -83,
+			"z": 69
+		},
+		{
+			"height": 20.5800000876188,
+			"radius": 24,
+			"skirt": 14,
+			"x": -29,
+			"z": 64
+		},
+		{
+			"height": 21.8400000929832,
+			"radius": 19,
+			"skirt": 11,
+			"x": 15,
+			"z": 64
+		},
+		{
+			"height": 18.4800000786781,
+			"radius": 19,
+			"skirt": 11,
+			"x": 64,
+			"z": 64
+		},
+		{
+			"height": 18.9000000804663,
+			"radius": 24,
+			"skirt": 14,
+			"x": 118,
+			"z": 64
+		},
+		{
+			"height": 19.3200000822544,
+			"radius": 19,
+			"skirt": 11,
+			"x": -83,
+			"z": 113
+		},
+		{
+			"height": 21.4200000911951,
+			"radius": 24,
+			"skirt": 14,
+			"x": -34,
+			"z": 118
+		}
+	],
+	"paints": [],
+	"seed": 20260921,
+	"sites": [
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 3,
+			"tile_x": -3,
+			"tile_z": -3,
+			"x": -83,
+			"z": -83
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 5,
+			"tile_x": -1,
+			"tile_z": -3,
+			"x": -29,
+			"z": -83
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 7,
+			"tile_x": 0,
+			"tile_z": -3,
+			"x": 15,
+			"z": -83
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": 2,
+			"tile_z": -3,
+			"x": 64,
+			"z": -78
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 4,
+			"tile_x": 3,
+			"tile_z": -3,
+			"x": 118,
+			"z": -83
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 13,
+			"tile_x": -3,
+			"tile_z": -2,
+			"x": -83,
+			"z": -34
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 3,
+			"tile_x": -2,
+			"tile_z": -2,
+			"x": -34,
+			"z": -34
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 5,
+			"tile_x": 0,
+			"tile_z": -2,
+			"x": 20,
+			"z": -34
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 7,
+			"tile_x": 2,
+			"tile_z": -2,
+			"x": 64,
+			"z": -34
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": 3,
+			"tile_z": -1,
+			"x": 113,
+			"z": -29
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 4,
+			"tile_x": -3,
+			"tile_z": 0,
+			"x": -78,
+			"z": 15
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 13,
+			"tile_x": -2,
+			"tile_z": 0,
+			"x": -34,
+			"z": 15
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 3,
+			"tile_x": 0,
+			"tile_z": 0,
+			"x": 15,
+			"z": 15
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 5,
+			"tile_x": 2,
+			"tile_z": 0,
+			"x": 69,
+			"z": 15
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 7,
+			"tile_x": 3,
+			"tile_z": 0,
+			"x": 113,
+			"z": 15
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": -3,
+			"tile_z": 2,
+			"x": -83,
+			"z": 69
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 4,
+			"tile_x": -1,
+			"tile_z": 2,
+			"x": -29,
+			"z": 64
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 13,
+			"tile_x": 0,
+			"tile_z": 2,
+			"x": 15,
+			"z": 64
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 3,
+			"tile_x": 2,
+			"tile_z": 2,
+			"x": 64,
+			"z": 64
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 5,
+			"tile_x": 3,
+			"tile_z": 2,
+			"x": 118,
+			"z": 64
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 7,
+			"tile_x": -3,
+			"tile_z": 3,
+			"x": -83,
+			"z": 113
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": -2,
+			"tile_z": 3,
+			"x": -34,
+			"z": 118
+		}
+	],
+	"version": 2
+}

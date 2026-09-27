@@ -41,6 +41,9 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("pending"), &AINav::pending);
     ClassDB::bind_method(D_METHOD("invalidate_box", "box"), &AINav::invalidate_box);
     ClassDB::bind_method(D_METHOD("clear_cache"), &AINav::clear_cache);
+    ClassDB::bind_method(D_METHOD("set_water_level", "metres"), &AINav::set_water_level);
+    ClassDB::bind_method(D_METHOD("get_water_level"), &AINav::get_water_level);
+    ClassDB::bind_method(D_METHOD("get_wade"), &AINav::get_wade);
     ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::snap);
     ClassDB::bind_method(D_METHOD("can_stand", "point"), &AINav::can_stand);
     ClassDB::bind_method(D_METHOD("find_cover", "from", "threat_eye", "hp_per_hit",
@@ -96,7 +99,9 @@ AINav::Node AINav::unkey(int64_t k) {
 }
 
 // Read a column once and keep it until something invalidates it. The ground is
-// the plane y = 0 (terrain, when the city has it, is a height here instead).
+// whatever AIWorld says is solid: the plane y = 0 by default, the terrain's
+// field when the city stands on it (AIWorld::set_terrain_ground) -- every plate
+// under the hillside is solid, so the first floor of the column is ON it.
 const AINav::Column &AINav::_column(int x, int z) {
     const int64_t k = ckey(x, z);
     auto it = columns.find(k);
@@ -128,7 +133,10 @@ const AINav::Column &AINav::_column(int x, int z) {
                 r++;
             }
             const int16_t head = (y + r > ymax) ? SKY : (int16_t)r;
-            if (head >= HEAD_CROUCH) {
+            // Under the sea is not a floor. The bricks and the seabed agree
+            // about where the water is, so this is the one place it is asked.
+            const bool drowned = (float)y * PLATE < water_level - WADE;
+            if (head >= HEAD_CROUCH && !drowned) {
                 col.floors.push_back(Floor{ (int16_t)y, head });
             }
         }
@@ -233,11 +241,24 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
     // Octile distance: exact on an eight-way grid with nothing in the way, so
     // open ground is walked straight rather than flooded. A hair over 1 breaks
     // ties toward the goal.
-    auto h = [&s](const Node &n) {
+    // On a hillside, WEIGHTED: every stud of it is a plate or two up or down,
+    // the cheapest route over it is a hair cheaper than a hundred others, and
+    // an exact A* expands them all -- 30,000 nodes for a 100 m walk, against
+    // ~300 at 1.2. A path at most a fifth longer than the best is a path a
+    // soldier takes without anyone noticing; a search that eats the nav budget
+    // is not (Docs/Terrain.md §21.7). A hair over 1 on the plane, where the
+    // heuristic is exact and only ties need breaking.
+    const float weight = ai.is_valid() && ai->get_terrain_ground() ? 1.2f : 1.001f;
+    auto h = [&s, weight](const Node &n) {
         const float dx = (float)std::abs(n.x - s.goal.x);
         const float dz = (float)std::abs(n.z - s.goal.z);
         const float oct = std::max(dx, dz) + 0.41421356f * std::min(dx, dz);
-        return (oct * STUD + std::abs(n.y - s.goal.y) * PLATE) * 1.001f;
+        // Only the net CLIMB: going down is paid for by the drop penalty,
+        // not by height, so a path that dips and rises again pays for the
+        // rise once. Charging both ways made every one-plate bump of a
+        // hillside cost height the heuristic could not see, and A* flooded
+        // the slope (Docs/Terrain.md §21.7).
+        return (oct * STUD + std::max(0, s.goal.y - n.y) * PLATE) * weight;
     };
     if (!s.started) {
         s.started = true;
@@ -328,7 +349,7 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
                     continue;
                 }
             }
-            float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::abs(best_y - n.y) * PLATE;
+            float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::max(0, best_y - n.y) * PLATE;
             if (best_head < HEAD_STAND) {
                 step *= 2.0f;   // crouching is slow
             }
@@ -509,6 +530,11 @@ void AINav::clear_cache() {
     columns.clear();
     node_memo.clear();
     revision++;
+}
+
+void AINav::set_water_level(float metres) {
+    water_level = metres;
+    clear_cache();
 }
 
 namespace {

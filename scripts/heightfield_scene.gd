@@ -148,14 +148,14 @@ func _ready() -> void:
 	# the generator's default sites only if this level has never been
 	# edited. `-- --world=<name>` picks the level.
 	if World.load_world(World.world_path()).is_empty():
-		World.stamp_sites()
+		World.stamp_sites(DROWNED)
 	# Shaded chamfer only. The geometry tier is what six rounds of artefacts
 	# were about (§17.21); the shaded bevel has never produced one and is
 	# measured at 7.6% of pixels changed.
 	TerrainTile.bevel_enabled = false
 
-	# Chosen from the terrain, not from a constant — see TerrainWorld.
-	BrickWave.set_sea_level(World.sea_level_for(maxi(NEAR_TILES, 8), DROWNED))
+	# The sea was chosen from the terrain by loading the world, before its
+	# pads were cut — TerrainWorld.sea_level, the one every scene agrees on.
 	_build_scenery()
 	# The sun, for BAKED shadows, taken FROM THE LIGHT so the two can never
 	# disagree: a light rotated after the bake would leave the ground shaded
@@ -682,13 +682,8 @@ func _brick_material() -> ShaderMaterial:
 
 func _build_sites() -> void:
 	var stud := BrickWorld.get_stud_metres()
-	var tile := BrickTerrain.get_tile_studs()
 	for site in World.sites:
-		var c: Vector2i = site["tile"]
-		@warning_ignore("integer_division")
-		var gx: int = c.x * tile + tile / 2
-		@warning_ignore("integer_division")
-		var gz: int = c.y * tile + tile / 2
+		var c := World.site_centre(site)
 		var floor_y: float = World.site_level(site)
 		var storeys: int = site["storeys"]
 		# The CITY's own shell mesh, not a box.
@@ -698,22 +693,19 @@ func _build_sites() -> void:
 		# the city would put there — banded courses, a slab cap, the right
 		# proportions — and the terrain half of the contract is tested
 		# against the real article instead of a placeholder.
-		# A footprint that FILLS the pad, snapped to the city's panel grid:
-		# `TowerRecipe.conforming` is what the recipe tables assume, and a
-		# building off that grid has columns standing in the wrong places.
-		var want: int = int(site["radius"]) * 2
-		var footprint: int = maxi(TowerRecipe.PANEL,
-				int(float(want) / float(TowerRecipe.PANEL)) * TowerRecipe.PANEL)
+		# A footprint that FILLS the pad, snapped to the city's panel grid
+		# (TerrainWorld.site_footprint).
+		var fp := World.site_footprint(site)
+		var corner := World.site_corner(site)
 		var courses: int = storeys * TowerRecipe.COURSES_PER_FLOOR
 		var body := MeshInstance3D.new()
 		body.name = "Site_%d_%d" % [c.x, c.y]
-		body.mesh = BuildingShell.build_coarse_mesh(footprint, footprint, courses)
+		body.mesh = BuildingShell.build_coarse_mesh(fp.x, fp.y, courses)
 		# The city's own brick material, for the city's own mesh.
 		body.material_override = _brick_material()
 		# The shell is built from its own corner, so it stands on the pad by
 		# being placed at the corner rather than centred on it.
-		body.position = Vector3((gx + 0.5) * stud - float(footprint) * stud * 0.5,
-				floor_y, (gz + 0.5) * stud - float(footprint) * stud * 0.5)
+		body.position = Vector3(corner.x * stud, floor_y, corner.y * stud)
 		add_child(body)
 		_sites.append(body)
 
@@ -1318,14 +1310,9 @@ func _shot_site() -> void:
 	if _sites.is_empty():
 		return
 	var stud := BrickWorld.get_stud_metres()
-	var tile := BrickTerrain.get_tile_studs()
 	var site: Dictionary = World.sites[0]
-	var c: Vector2i = site["tile"]
-	@warning_ignore("integer_division")
-	var gx: int = c.x * tile + tile / 2
-	@warning_ignore("integer_division")
-	var gz: int = c.y * tile + tile / 2
-	var here := Vector3((gx + 0.5) * stud, World.site_level(site), (gz + 0.5) * stud)
+	var c := World.site_centre(site)
+	var here := Vector3((c.x + 0.5) * stud, World.site_level(site), (c.y + 0.5) * stud)
 	# Standing DOWN-SUN of the building, so its shadow falls toward the
 	# camera. The first version stood wherever and reported "no shadows" on
 	# a scene whose only shadow was behind the thing casting it.

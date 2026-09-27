@@ -1,0 +1,262 @@
+{
+	"drowned": 0.2,
+	"pads": [
+		{
+			"height": 15.1200011324883,
+			"radius": 24,
+			"skirt": 14,
+			"x": -111,
+			"z": -116
+		},
+		{
+			"height": 19.7400000840425,
+			"radius": 24,
+			"skirt": 14,
+			"x": 20,
+			"z": -111
+		},
+		{
+			"height": 25.2000001072884,
+			"radius": 34,
+			"skirt": 19,
+			"x": 161,
+			"z": -111
+		},
+		{
+			"height": 15.5400011342764,
+			"radius": 29,
+			"skirt": 16,
+			"x": 287,
+			"z": -106
+		},
+		{
+			"height": 19.3200000822544,
+			"radius": 19,
+			"skirt": 11,
+			"x": -116,
+			"z": 15
+		},
+		{
+			"height": 17.6400011432171,
+			"radius": 24,
+			"skirt": 14,
+			"x": 20,
+			"z": 15
+		},
+		{
+			"height": 20.5800000876188,
+			"radius": 24,
+			"skirt": 14,
+			"x": 151,
+			"z": 20
+		},
+		{
+			"height": 25.2000001072884,
+			"radius": 34,
+			"skirt": 19,
+			"x": 292,
+			"z": 20
+		},
+		{
+			"height": 23.1000000983477,
+			"radius": 44,
+			"skirt": 24,
+			"x": -91,
+			"z": 161
+		},
+		{
+			"height": 21.4200000911951,
+			"radius": 19,
+			"skirt": 11,
+			"x": 15,
+			"z": 146
+		},
+		{
+			"height": 21.000000089407,
+			"radius": 24,
+			"skirt": 14,
+			"x": 151,
+			"z": 146
+		},
+		{
+			"height": 17.220001141429,
+			"radius": 24,
+			"skirt": 14,
+			"x": 282,
+			"z": 151
+		},
+		{
+			"height": 12.180000051856,
+			"radius": 34,
+			"skirt": 19,
+			"x": -232,
+			"z": 282
+		},
+		{
+			"height": 27.3000001162291,
+			"radius": 29,
+			"skirt": 16,
+			"x": -106,
+			"z": 287
+		}
+	],
+	"paints": [],
+	"seed": 20260921,
+	"sites": [
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": -4,
+			"tile_z": -4,
+			"x": -111,
+			"z": -116
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 20,
+			"tile_x": 0,
+			"tile_z": -4,
+			"x": 20,
+			"z": -111
+		},
+		{
+			"footprint_x": 60,
+			"footprint_z": 40,
+			"radius": 34,
+			"skirt": 19,
+			"storeys": 27,
+			"tile_x": 5,
+			"tile_z": -4,
+			"x": 161,
+			"z": -111
+		},
+		{
+			"footprint_x": 50,
+			"footprint_z": 50,
+			"radius": 29,
+			"skirt": 16,
+			"storeys": 17,
+			"tile_x": 8,
+			"tile_z": -4,
+			"x": 287,
+			"z": -106
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 41,
+			"tile_x": -4,
+			"tile_z": 0,
+			"x": -116,
+			"z": 15
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": 0,
+			"tile_z": 0,
+			"x": 20,
+			"z": 15
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 20,
+			"tile_x": 4,
+			"tile_z": 0,
+			"x": 151,
+			"z": 20
+		},
+		{
+			"footprint_x": 60,
+			"footprint_z": 40,
+			"radius": 34,
+			"skirt": 19,
+			"storeys": 27,
+			"tile_x": 9,
+			"tile_z": 0,
+			"x": 292,
+			"z": 20
+		},
+		{
+			"footprint_x": 80,
+			"footprint_z": 60,
+			"radius": 44,
+			"skirt": 24,
+			"storeys": 34,
+			"tile_x": -3,
+			"tile_z": 5,
+			"x": -91,
+			"z": 161
+		},
+		{
+			"footprint_x": 30,
+			"footprint_z": 30,
+			"radius": 19,
+			"skirt": 11,
+			"storeys": 41,
+			"tile_x": 0,
+			"tile_z": 4,
+			"x": 15,
+			"z": 146
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 30,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 10,
+			"tile_x": 4,
+			"tile_z": 4,
+			"x": 151,
+			"z": 146
+		},
+		{
+			"footprint_x": 40,
+			"footprint_z": 40,
+			"radius": 24,
+			"skirt": 14,
+			"storeys": 20,
+			"tile_x": 8,
+			"tile_z": 4,
+			"x": 282,
+			"z": 151
+		},
+		{
+			"footprint_x": 60,
+			"footprint_z": 40,
+			"radius": 34,
+			"skirt": 19,
+			"storeys": 27,
+			"tile_x": -8,
+			"tile_z": 8,
+			"x": -232,
+			"z": 282
+		},
+		{
+			"footprint_x": 50,
+			"footprint_z": 50,
+			"radius": 29,
+			"skirt": 16,
+			"storeys": 17,
+			"tile_x": -4,
+			"tile_z": 8,
+			"x": -106,
+			"z": 287
+		}
+	],
+	"version": 2
+}

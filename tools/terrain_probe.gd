@@ -994,6 +994,56 @@ func _check_pads() -> void:
 	# asking for one must not be an error.
 	_ok("a missing world file is not a failure",
 		World.load_world("user://no_such_world.json").is_empty())
+
+	# SITES the city reads (§21.5): a street-grid site carries its own
+	# centre, footprint, skirt and room program, and all of it has to come
+	# back, because the city builds from nothing else.
+	World.sites = [
+		{"tile": Vector2i(0, 0), "radius": 14, "storeys": 6},
+		{"tile": Vector2i(1, 0), "centre": Vector2i(37, -5),
+			"footprint": Vector2i(40, 30), "radius": 24, "skirt": 14,
+			"storeys": 5, "program": {"office": 4, "kitchen": 1}},
+	]
+	World.save_world(path, 1234, 0.25)
+	World.sites = []
+	World.load_world(path)
+	var s0: Dictionary = World.sites[0] if World.sites.size() == 2 else {}
+	var s1: Dictionary = World.sites[1] if World.sites.size() == 2 else {}
+	_ok("an editor site stays a tile, a radius and storeys",
+		not s0.is_empty() and not s0.has("centre") and not s0.has("footprint")
+			and World.site_centre(s0) == Vector2i(16, 16))
+	_ok("a city site keeps its centre, footprint, skirt and program",
+		not s1.is_empty() and World.site_centre(s1) == Vector2i(37, -5)
+			and World.site_footprint(s1) == Vector2i(40, 30)
+			and World.site_skirt(s1) == 14
+			and int(s1.get("program", {}).get("office", 0)) == 4,
+		"%s" % s1)
+	_ok("and builds from its corner", World.site_corner(s1) == Vector2i(17, -20),
+		"%s" % World.site_corner(s1))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+	# THE SEA is the world's (§21.6): measured before the pads, so cutting
+	# one does not move it, and a site on low ground stands on a quay.
+	BrickTerrain.clear_pads()
+	var sea := World.settle_sea(0.30)
+	var low := Vector2i.ZERO
+	var low_y := INF
+	for gz in range(-256, 257, 16):
+		for gx in range(-256, 257, 16):
+			var y := float(BrickTerrain.surface_plate(gx, gz) + 1) * BrickWorld.get_plate_metres()
+			if y < low_y:
+				low_y = y
+				low = Vector2i(gx, gz)
+	var wet_site: Array[Dictionary] = [{"tile": Vector2i.ZERO, "centre": low,
+		"radius": 8, "storeys": 2}]
+	World.stamp_sites_only(wet_site)
+	_ok("the sea is the same after a pad is cut",
+		absf(World.sea_level - sea) < 0.001 and absf(BrickWave.get_sea_level() - sea) < 0.001)
+	_ok("a site on the seabed stands on a quay above the sea",
+		low_y < sea and World.site_level(wet_site[0]) >= sea + BrickTerrain.get_brick_metres() - 0.01,
+		"ground %.2f, sea %.2f, floor %.2f" % [low_y, sea, World.site_level(wet_site[0])])
+	BrickTerrain.clear_pads()
+	World.sites = []
 	BrickTerrain.set_flat_mode(false)
 	BrickTerrain.configure(20260919)
 

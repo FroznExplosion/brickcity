@@ -2474,13 +2474,145 @@ default city pays 1.9 s for that; `--big` pays 13.5 s for four times the
 ground, which is the price of holding 240 m of city whole and is why the
 flag is opt-in.
 
-### 21.4 What this does NOT do yet
+### 21.4 What this did not do, and now does
 
-  * **The layout is still a grid.** Buildings sit on the same lattice they
-    always did, now at the height the ground gives them. `TerrainWorld.sites`
-    — authored positions, radius and storeys, saved in the world file — is
-    what the city should eventually read instead.
-  * **Navigation does not know about slopes.** `ai_nav` was written against
-    a floor at y=0 outside the buildings.
-  * **No water in the city.** The sea exists in `heightfield_test`; a city
-    with a shoreline needs the two to agree about the sea level first.
+The first cut of §21 left three things open. All three are closed below:
+
+  * the layout was a grid — the city now reads its **sites** (§21.5);
+  * the sea was the heightfield scene's alone — it is now **the world's**,
+    and the city has a coast (§21.6);
+  * navigation assumed a floor at y = 0 — the AI's ground is now **the
+    field** (§21.7).
+
+### 21.5 The city is built from its sites
+
+On terrain the layout is the WORLD's, not a lattice `city_scene` makes up.
+`worlds/city.json` (and `worlds/big_city.json` with `--big`) holds the
+city's sites, and `_build_city_on_sites` builds one building per site:
+
+| site key | meaning |
+|---|---|
+| `tile_x`, `tile_z` | the tile it is in — how the editor addresses a site |
+| `x`, `z` | its middle, in studs, when it has a finer one than a tile's |
+| `footprint_x`, `footprint_z` | its footprint, when it is not the square that fills the pad |
+| `radius`, `skirt` | the pad it cuts (§19.12); `skirt` defaults to half the radius |
+| `storeys` | × `TowerRecipe.COURSES_PER_FLOOR` courses |
+| `program` | the room mix (Docs/Workshop.md, Stage F), when it has its own |
+
+A site the editor places is a tile, a radius and storeys, and its file entry
+stays that small. The city's grid needs the rest: a tile is 32 studs and a
+street is nine, and the city's shapes are not square. `TerrainWorld.
+site_centre / site_footprint / site_corner / site_skirt` answer for both, so
+the heightfield scene, the editor and the city ask one set of questions.
+
+**A world with no sites gets the street grid AS sites** (`_grid_sites`), so
+there is one path either way and the grid is a starting point rather than a
+second layout. `-- --terrain --save-world` writes whatever the city was just
+built from to its world file and quits; that is how the two files in
+`worlds/` were made, and it is how to reset one.
+
+    godot --path . scenes/city.tscn -- --terrain --save-world
+    godot --path . scenes/terrain_editor.tscn -- --world=city
+
+The editor opens a city world on the city's own seed (it takes the seed from
+the file now, not from a constant), selects a site by clicking anywhere on
+its pad, and moves a city site to the stud rather than to the tile.
+`--buildings=N` still caps a city built from sites, but only when it is on
+the command line: with a world file, the sites decide how many buildings
+there are.
+
+The floor is read back OUT of the field after every pad is in — one height
+function, which both the tower and the tile under it read (§21.1).
+
+### 21.6 One sea, and it is the world's
+
+The sea used to be chosen per scene: `sea_level_for(half_tiles, drowned)`
+over whatever area the scene sampled, AFTER its pads were cut. Two scenes on
+one seed could put the water at two heights, and an author moving a building
+moved the sea.
+
+**`TerrainWorld.sea_level` is now a property of the world**: its seed and its
+drowned fraction, sampled over a fixed `SEA_TILES` (8 tiles each way — what
+the heightfield scene always used) on the field as generated, BEFORE any pad.
+Loading a world settles it (`settle_sea`, which also sets `BrickWave`), and
+everything that cares reads that one number: the water tiers, the pads, and
+navigation.
+
+| world | drowned | sea | |
+|---|---|---|---|
+| `heightfield` (default) | 0.30 | 14.91 m | unchanged from before |
+| `city` | 0.20 | 10.29 m | the default city's ground is 12.5 m and up: dry |
+| `big_city` | 0.20 | 10.29 m | its ground reaches −13 m: a coast |
+
+**A pad never sits in the sea.** `stamp_sites_only` raises a site whose
+ground is low to `FREEBOARD_BRICKS` (one course) above the water: a quay. And
+the street grid leaves out the cells that ARE sea — a building does not stand
+in the water, and leaving those cells empty is what gives a city on low
+ground a shoreline. The big city keeps 14 of its 22 buildings; the other 8
+grid cells were under water.
+
+**The water itself** is `scripts/water_sea.gd`: the heightfield scene's three
+tiers (studded pieces round the camera, four-stud pieces to 80 m, one sheet
+to the horizon) as one node, over a seabed texture that reaches as far as the
+coarse ground (448 m). The brick tiers are 26k pieces whatever is under them,
+so they are shown only where a coarse WET map (64-stud cells) says there is
+water within their reach; on the default city the camera never sees them.
+The near tier carries the water collider (§Water 7.1), and the city camera
+swims in it. Built in 64–97 ms.
+
+### 21.7 The AI stands on the field
+
+`AIWorld.set_terrain_ground(true)` makes the ground a thing the AI can ask
+about. Every plate under the field's surface is solid to every question
+above it:
+
+  * **navigation** — `column_solid` fills the column up to the ground, so a
+    column's first floor is ON the hillside, not at y = 0. Nothing in
+    `AINav` had to learn what terrain is; it asks AIWorld what is solid, as
+    it always did;
+  * **sight and cover** — `line_clear`, `trace`, `bricks_between` and
+    `cover_seconds` march the segment a stud at a time against the field, so
+    a crest blocks a line and is cover no gun wears away (`cover_seconds`
+    is INF, `bricks_between` counts it as 1,000 bricks). Half a brick of
+    slack, so a line from a figure's feet on a slope is not blocked by the
+    slope. The soldiers' own eyes are physics rays, which already hit the
+    terrain collider;
+  * `ground_at(x, z)` — the city's `_on_ground()` puts script points (a
+    street, a spawn) on the ground instead of at y = 0.
+
+The field is a noise function, so the ground under each stud column is
+cached (the city's pads are all cut before anything asks).
+
+**The sea is not a floor.** `AINav.set_water_level(sea)`: a floor more than
+`WADE` (0.5 m) under the surface is not somewhere a body stands, so a path
+never goes into the water and a point in it does not snap.
+
+**On a hillside the search is weighted (1.2).** The heuristic now counts
+only net CLIMB, and only climbing costs height — a path that dips and rises
+again pays for the rise once. That alone did little: every stud of a
+hillside is a plate up or down, the cheapest route is a hair cheaper than a
+hundred others, and exact A* expanded all of them — 30,000 nodes for a
+100 m walk. Weighted at 1.2 it is ~300, for a path at most a fifth longer
+than the best. The flat city keeps its 1.001 (its heuristic is exact there
+and only ties need breaking) and measured the same as before: 3,999
+expansions for the pass, 7 of 7.
+
+`-- --terrain --nav` runs the nav pass on the hillside, with three gates of
+its own:
+
+| gate | measured |
+|---|---|
+| a path climbs from the lowest building to the highest, never under the ground | 17.9 → 21.0 m, 27 m long, at most 0.42 m (one step, at a corner) under it |
+| a crest blocks the AI's sight and is cover no gun wears away | 12 of 12 |
+| the sea is not somewhere a path goes | a point on the seabed does not stand, and no path reaches it |
+
+and the pass's own gates on terrain: 10 of 10; fifty requesters, 50 found,
+none failed, inside the budget.
+
+**One gap left open, on purpose.** The soldiers SEE with physics rays, and
+the terrain only has colliders where the city's detail tier is. Of the 12
+crests above, physics saw 8: the other 4 were outside the city, on coarse
+ground, which has no collision. Inside the city — where anyone fights —
+the two agree. A fight on the hills outside would want either colliders out
+there or the soldiers' `can_see` to ask `AIWorld.line_clear` as well, which
+already knows about every crest.

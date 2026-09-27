@@ -113,6 +113,20 @@ public:
     /// each plate was a hash lookup a plate.
     void column_solid(float x, float z, std::vector<char> &out);
 
+    // --- the ground ---------------------------------------------------------
+    //
+    // Off, the ground is the plane y = 0 and nothing here knows about it: plate
+    // 0 of a column is a floor because nothing is below it. On, the ground is
+    // BrickTerrain's field (Docs/Terrain.md §21.5): every plate under its
+    // surface is solid to every question above -- a column has its floor on the
+    // hillside, a sight line over a crest is blocked by the crest, and a body
+    // behind a hill is in cover the gun cannot wear away.
+
+    void set_terrain_ground(bool on);
+    bool get_terrain_ground() const { return terrain_ground; }
+    /// The top of the ground over (x, z) in metres: 0 without terrain.
+    float ground_at(float x, float z);
+
     // --- measuring ----------------------------------------------------------
 
     Dictionary get_stats() const;
@@ -165,6 +179,15 @@ private:
     std::unordered_map<int, AABB> danger;
     uint32_t query_stamp = 0;
     std::vector<int32_t> seen;   // blocks already counted in this chunk walk
+
+    // The ground, as the first free plate over each stud column. Cached: the
+    // field is a noise function, a sight line asks it once a stud, and nothing
+    // in play changes it (pads are cut before the city is built).
+    bool terrain_ground = false;
+    std::unordered_map<int64_t, int32_t> ground_cache;
+    int _ground_plate(int gx, int gz);
+    /// Does the ground rise above the segment anywhere? `t` is where, 0..1.
+    bool _terrain_hit(const Vector3 &from, const Vector3 &to, float &t);
 
     // stats
     uint64_t queries = 0;

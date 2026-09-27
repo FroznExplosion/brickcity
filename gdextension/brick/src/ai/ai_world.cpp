@@ -1,6 +1,7 @@
 #include "ai_world.h"
 
 #include "../brick_grid.h"
+#include "../brick_terrain.h"
 
 #include <godot_cpp/core/class_db.hpp>
 
@@ -62,6 +63,9 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("danger_distance", "point"), &AIWorld::danger_distance);
     ClassDB::bind_method(D_METHOD("solid_at", "point"), &AIWorld::solid_at);
     ClassDB::bind_method(D_METHOD("top_at", "x", "z"), &AIWorld::top_at);
+    ClassDB::bind_method(D_METHOD("set_terrain_ground", "on"), &AIWorld::set_terrain_ground);
+    ClassDB::bind_method(D_METHOD("get_terrain_ground"), &AIWorld::get_terrain_ground);
+    ClassDB::bind_method(D_METHOD("ground_at", "x", "z"), &AIWorld::ground_at);
     ClassDB::bind_method(D_METHOD("get_stats"), &AIWorld::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AIWorld::reset_stats);
 }
@@ -337,23 +341,34 @@ void AIWorld::_rebuild_proxies() {
 Dictionary AIWorld::trace(const Vector3 &from, const Vector3 &to) {
     Accum acc;
     _walk(from, to, 0, acc);
+    float t_ground = 2.0f;
+    const bool ground = _terrain_hit(from, to, t_ground);
     Dictionary out;
     out["bricks"] = acc.bricks;
     out["hp"] = acc.hp;
     out["solid_m"] = acc.solid_m;
     out["proxy_bricks"] = acc.proxy_bricks;
-    const bool hit = acc.first_t <= 1.0f;
+    // The ground is a hit like a brick is, and the first of the two is THE hit.
+    const float first = std::min(acc.first_t, t_ground);
+    const bool hit = first <= 1.0f;
     out["hit"] = hit;
-    out["point"] = hit ? from + (to - from) * acc.first_t : to;
-    out["chunk"] = acc.first_chunk;
+    out["point"] = hit ? from + (to - from) * first : to;
+    out["chunk"] = ground && t_ground < acc.first_t ? -1 : acc.first_chunk;
+    out["ground"] = ground;
     out["smoke"] = smoke_blocks(from, to);
     return out;
 }
 
+// What the ground counts as, in bricks: more than any wall, because no gun
+// wears a hill away.
+static constexpr int GROUND_BRICKS = 1000;
+
 int AIWorld::bricks_between(const Vector3 &from, const Vector3 &to) {
     Accum acc;
     _walk(from, to, 0, acc);
-    return acc.bricks + (int)std::ceil(acc.proxy_bricks - 1e-3f);
+    float t = 0.0f;
+    const int ground = _terrain_hit(from, to, t) ? GROUND_BRICKS : 0;
+    return acc.bricks + (int)std::ceil(acc.proxy_bricks - 1e-3f) + ground;
 }
 
 bool AIWorld::line_clear(const Vector3 &from, const Vector3 &to) {
@@ -362,12 +377,20 @@ bool AIWorld::line_clear(const Vector3 &from, const Vector3 &to) {
     }
     Accum acc;
     _walk(from, to, 0, acc);
-    return acc.bricks == 0 && acc.proxy_bricks <= 1e-3f;
+    if (acc.bricks != 0 || acc.proxy_bricks > 1e-3f) {
+        return false;
+    }
+    float t = 0.0f;
+    return !_terrain_hit(from, to, t);
 }
 
 float AIWorld::cover_seconds(const Vector3 &from, const Vector3 &to, int hp_per_hit,
         float hits_per_second) {
     if (hits_per_second <= 0.0f || hp_per_hit <= 0) {
+        return std::numeric_limits<float>::infinity();
+    }
+    float t = 0.0f;
+    if (_terrain_hit(from, to, t)) {
         return std::numeric_limits<float>::infinity();
     }
     Accum acc;
@@ -475,6 +498,9 @@ bool AIWorld::solid_at(const Vector3 &p) {
     if (proxies_dirty) {
         _rebuild_proxies();
     }
+    if (terrain_ground && p.y < ground_at(p.x, p.z)) {
+        return true;
+    }
     const int64_t k = key((int)std::floor(p.x / HASH_CELL), (int)std::floor(p.z / HASH_CELL));
     auto it = hash.find(k);
     if (it != hash.end() && world.is_valid()) {
@@ -524,6 +550,12 @@ void AIWorld::column_solid(float x, float z, std::vector<char> &out) {
     }
     const int n = (int)out.size();
     const float plate = brick::PLATE_M;
+    if (terrain_ground) {
+        // Under the ground is solid, whatever stands on it.
+        const int g = std::min(n, _ground_plate((int)std::floor(x / brick::STUD_M),
+                (int)std::floor(z / brick::STUD_M)));
+        std::fill(out.begin(), out.begin() + std::max(0, g), (char)1);
+    }
     const int64_t k = key((int)std::floor(x / HASH_CELL), (int)std::floor(z / HASH_CELL));
     auto it = hash.find(k);
     if (it != hash.end() && world.is_valid()) {
@@ -627,7 +659,64 @@ float AIWorld::top_at(float x, float z) {
             }
         }
     }
+    if (terrain_ground) {
+        top = std::max(top, ground_at(x, z));
+    }
     return top;
+}
+
+void AIWorld::set_terrain_ground(bool on) {
+    terrain_ground = on;
+    ground_cache.clear();
+}
+
+int AIWorld::_ground_plate(int gx, int gz) {
+    const int64_t k = key(gx, gz);
+    auto it = ground_cache.find(k);
+    if (it != ground_cache.end()) {
+        return it->second;
+    }
+    if (ground_cache.size() >= (1u << 20)) {
+        ground_cache.clear();
+    }
+    // The first plate of AIR: `surface_plate` is the top solid one. Never below
+    // plate 0 -- navigation counts plates up from there, and a seabed below
+    // the city's datum is somewhere nobody walks anyway.
+    const int g = std::max(0, BrickTerrain::surface_plate(gx, gz) + 1);
+    ground_cache.emplace(k, g);
+    return g;
+}
+
+float AIWorld::ground_at(float x, float z) {
+    if (!terrain_ground) {
+        return 0.0f;
+    }
+    return (float)_ground_plate((int)std::floor(x / brick::STUD_M),
+                   (int)std::floor(z / brick::STUD_M))
+            * brick::PLATE_M;
+}
+
+// A march at one stud a step over the segment's ground shadow. A crest is
+// wider than a stud, so nothing a figure could hide behind slips between two
+// samples. Half a brick of slack, so a line that starts or ends at a figure's
+// feet on a slope is not blocked by the slope it is standing on.
+bool AIWorld::_terrain_hit(const Vector3 &from, const Vector3 &to, float &t) {
+    if (!terrain_ground) {
+        return false;
+    }
+    const Vector3 d = to - from;
+    const float run = std::sqrt(d.x * d.x + d.z * d.z);
+    const int n = std::max(1, (int)std::ceil(run / brick::STUD_M));
+    const float slack = brick::PLATE_M * 1.5f;
+    for (int i = 0; i <= n; ++i) {
+        const float s = (float)i / (float)n;
+        const Vector3 p = from + d * s;
+        if (p.y < ground_at(p.x, p.z) - slack) {
+            t = s;
+            return true;
+        }
+    }
+    return false;
 }
 
 Dictionary AIWorld::get_stats() const {
