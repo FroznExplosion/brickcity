@@ -76,6 +76,14 @@ enum Kind {
 	CHIP,
 	## CHIP on a piece. Grid space.
 	PIECE_CHIP,
+	## Settled wreckage resting on a building (Docs/AI.md 3.10): `radius` mass on
+	## each block whose absolute cell is in `points`, under `owner` (the piece's
+	## id), replacing what that piece had on this building before. Every later
+	## solve of the building carries it, so it is a command: a load one machine
+	## has and another does not changes how the next blast breaks (AIPlan R5).
+	LOAD,
+	## The piece `owner` no longer rests on building `target`.
+	UNLOAD,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -89,6 +97,10 @@ const FLAG_BANDED := 4
 ## sets it when too many pieces are already moving and this one came loose far
 ## from every player (IslandManager.MAX_MOVING).
 const FLAG_GONE := 8
+## DETACH: the piece is a collapse CHUNK (CollapseDirector) -- its severed joints
+## are mended once it is cut out (BrickWorld.heal_joints), on every machine, so it
+## falls as one piece and breaks where it lands.
+const FLAG_CHUNK := 16
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -137,7 +149,7 @@ class Entry extends RefCounted:
 		return e
 
 	func is_piece() -> bool:
-		if kind == Kind.CHIP:
+		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD:
 			return false
 		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 
@@ -195,6 +207,17 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return PackedInt32Array()
 		Kind.CHIP:
 			return world.chip_hit(chunk, e.point, e.radius, e.limit)
+		Kind.LOAD:
+			var ids := PackedInt32Array()
+			for p in e.points:
+				var id := world.block_at(chunk, Vector3i(p))
+				if id >= 0:
+					ids.append(id)
+			world.set_load(chunk, e.owner, ids, e.radius)
+			return PackedInt32Array()
+		Kind.UNLOAD:
+			world.clear_load(chunk, e.owner)
+			return PackedInt32Array()
 		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
 			return _apply_local(world, chunk, e)
 		Kind.PIECE_REST:

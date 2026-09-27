@@ -1442,28 +1442,94 @@ Vector3i BrickWorld::get_chunk_gravity(int chunk_id) const {
 /// possible. Block identity is deliberately ignored: this is for pieces that
 /// have stopped moving and will not be damaged until something hits them, at
 /// which point the caller rebuilds per block.
-Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset) {
+Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section,
+        bool skip_decorative) {
     Dictionary out;
-    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     const Chunk &c = chunks[chunk_id];
+    std::vector<const Block *> blocks;
+    blocks.reserve(c.blocks.size());
+    for (const Block &b : c.blocks) {
+        if (b.alive && !(skip_decorative && b.decorative)
+                && (section < 0 || c.section_of_y(b.cell.y) == section)) {
+            blocks.push_back(&b);
+        }
+    }
+    out["map"] = Dictionary();
+    out["count"] = merge_blocks_into(body, c, offset, blocks);
+    out["merged"] = true;
+    return out;
+}
+
+PackedInt32Array BrickWorld::add_band_shapes(const Array &bodies, int chunk_id, Vector3 offset,
+        const PackedInt32Array &sections, bool skip_decorative) {
+    PackedInt32Array counts;
+    counts.resize(sections.size());
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        counts.set(i, 0);
+    }
+    if (!valid_chunk(chunk_id) || bodies.size() != sections.size()) {
+        return counts;
+    }
+    const Chunk &c = chunks[chunk_id];
+    // Which slot of the request each band is, and the blocks of each, in one
+    // walk over the chunk.
+    std::vector<int> slot((size_t)std::max(c.sections(), 1), -1);
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        const int s = sections[i];
+        if (s >= 0 && s < (int)slot.size()) {
+            slot[(size_t)s] = (int)i;
+        }
+    }
+    std::vector<std::vector<const Block *>> lists((size_t)sections.size());
+    for (const Block &b : c.blocks) {
+        if (!b.alive || (skip_decorative && b.decorative)) {
+            continue;
+        }
+        const int k = slot[(size_t)c.section_of_y(b.cell.y)];
+        if (k >= 0) {
+            lists[(size_t)k].push_back(&b);
+        }
+    }
+    for (int64_t i = 0; i < sections.size(); ++i) {
+        counts.set(i, merge_blocks_into((RID)bodies[i], c, offset, lists[(size_t)i]));
+    }
+    return counts;
+}
+
+int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
+        const std::vector<const Block *> &blocks) {
+    PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     const Vector3i d = c.dims;
     const Vector3 cs = cell_size();
     const int64_t n = (int64_t)d.x * d.y * d.z;
     if (n <= 0) {
-        out["map"] = Dictionary();
-        out["count"] = 0;
-        out["merged"] = true;
-        return out;
+        return 0;
     }
 
-    std::vector<uint8_t> solid((size_t)n, 0);
+    // The grid is only as tall as what is being merged: one band of a tall
+    // chunk is a few dozen of its hundreds of rows, and allocating and scanning
+    // the whole chunk's grid for every band was most of a band's rebuild.
+    int w_lo = d.y, w_hi = -1;
+    for (const Block *b : blocks) {
+        const int y0 = b->cell.y - c.origin.y;
+        const int y1 = y0 + archetypes[b->archetype].size.y - 1;
+        w_lo = y0 < w_lo ? y0 : w_lo;
+        w_hi = y1 > w_hi ? y1 : w_hi;
+    }
+    w_lo = w_lo < 0 ? 0 : w_lo;
+    w_hi = w_hi >= d.y ? d.y - 1 : w_hi;
+    const int wy = w_hi >= w_lo ? w_hi - w_lo + 1 : 0;
+    std::vector<uint8_t> solid((size_t)d.x * (size_t)wy * (size_t)d.z, 0);
+    auto at = [&](int x, int y, int z) -> uint8_t & {
+        return solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)(y - w_lo) + (int64_t)wy * z))];
+    };
     // Parts with authored hulls are kept out of the merge -- their cells are not
     // what they collide as -- and get their own shapes after it.
     std::vector<const Block *> hulled;
-    for (const Block &b : c.blocks) {
-        if (!b.alive) {
-            continue;
-        }
+    // The rows anything was marked in.
+    int y_lo = d.y, y_hi = -1;
+    for (const Block *bp : blocks) {
+        const Block &b = *bp;
         const Archetype &a = archetypes[b.archetype];
         if (!a.hulls.empty()) {
             hulled.push_back(&b);
@@ -1477,22 +1543,20 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset)
                         continue;
                     }
                     const int x = base.x + lx, y = base.y + ly, z = base.z + lz;
-                    if (x < 0 || y < 0 || z < 0 || x >= d.x || y >= d.y || z >= d.z) {
+                    if (x < 0 || y < w_lo || z < 0 || x >= d.x || y > w_hi || z >= d.z) {
                         continue;
                     }
-                    solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z))] = 1;
+                    at(x, y, z) = 1;
+                    y_lo = y < y_lo ? y : y_lo;
+                    y_hi = y > y_hi ? y : y_hi;
                 }
             }
         }
     }
 
-    auto at = [&](int x, int y, int z) -> uint8_t & {
-        return solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z))];
-    };
-
     int count = 0;
     for (int z = 0; z < d.z; ++z) {
-        for (int y = 0; y < d.y; ++y) {
+        for (int y = y_lo; y <= y_hi; ++y) {
             for (int x = 0; x < d.x; ++x) {
                 if (!at(x, y, z)) {
                     continue;
@@ -1502,7 +1566,7 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset)
                     ++x1;
                 }
                 int y1 = y;
-                while (y1 + 1 < d.y) {
+                while (y1 + 1 <= y_hi) {
                     bool row = true;
                     for (int xx = x; xx <= x1 && row; ++xx) {
                         row = at(xx, y1 + 1, z) != 0;
@@ -1556,10 +1620,7 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset)
         }
     }
 
-    out["map"] = Dictionary();
-    out["count"] = count;
-    out["merged"] = true;
-    return out;
+    return count;
 }
 
 RID BrickWorld::box_shape_for(const Vector3 &size) {
@@ -1579,7 +1640,7 @@ RID BrickWorld::box_shape_for(const Vector3 &size) {
 }
 
 Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, bool skip_dead,
-        bool merge) {
+        bool merge, int section, bool skip_decorative) {
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -1588,7 +1649,7 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
     const Chunk &c = chunks[chunk_id];
 
     if (merge) {
-        return add_merged_shapes(body, chunk_id, offset);
+        return add_merged_shapes(body, chunk_id, offset, section, skip_decorative);
     }
 
     Dictionary map;
@@ -1596,6 +1657,12 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
     for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
         const Block &b = c.blocks[bi];
         if (b.removed || (skip_dead && !b.alive)) {
+            continue;
+        }
+        if (section >= 0 && c.section_of_y(b.cell.y) != section) {
+            continue;
+        }
+        if (skip_decorative && b.decorative) {
             continue;
         }
         const Archetype &a = archetypes[b.archetype];
@@ -1656,6 +1723,27 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
     }
     out["map"] = map;
     out["count"] = next;
+    return out;
+}
+
+PackedInt32Array BrickWorld::get_block_sections(int chunk_id,
+        const PackedInt32Array &block_ids, bool skip_decorative) const {
+    PackedInt32Array out;
+    out.resize(block_ids.size());
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        out.set(i, -1);
+    }
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        if (bid >= 0 && bid < (int32_t)c.blocks.size()
+                && !(skip_decorative && c.blocks[(size_t)bid].decorative)) {
+            out.set(i, c.section_of_y(c.blocks[(size_t)bid].cell.y));
+        }
+    }
     return out;
 }
 
@@ -2464,6 +2552,9 @@ static inline bool grounding_flows(const Chunk &c, const std::vector<Archetype> 
 }
 
 PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -2545,6 +2636,9 @@ Array BrickWorld::find_detached_groups(int chunk_id) {
 }
 
 Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<uint8_t> &scratch_mark = scratch.mark;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Array out;
     const brick::JointCache &jc = joints_of(chunk_id);
     Chunk &c = chunks[chunk_id];
@@ -2628,7 +2722,58 @@ Dictionary BrickWorld::get_solve_stats(int chunk_id) const {
 // two supporters at different depths, and the deeper one would be visited
 // before it received anything.
 
+void BrickWorld::set_load(int chunk_id, int owner, const PackedInt32Array &block_ids, float mass_each) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    std::vector<std::pair<int32_t, int64_t>> v;
+    const int64_t units = brick::to_mass_units(std::max(mass_each, 0.0f));
+    for (int i = 0; i < block_ids.size(); ++i) {
+        v.push_back({ block_ids[i], units });
+    }
+    StressState &sx = stress[chunk_id];
+    if (v.empty()) {
+        sx.loads.erase(owner);
+    } else {
+        sx.loads[owner] = std::move(v);
+    }
+}
+
+void BrickWorld::clear_load(int chunk_id, int owner) {
+    if (valid_chunk(chunk_id)) {
+        stress[chunk_id].loads.erase(owner);
+    }
+}
+
+float BrickWorld::get_external_load(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0.0f;
+    }
+    int64_t sum = 0;
+    for (const auto &owner : stress[chunk_id].loads) {
+        for (const auto &l : owner.second) {
+            if (l.first == block_id) {
+                sum += l.second;
+            }
+        }
+    }
+    return (float)((double)sum / (double)brick::to_mass_units(1.0f));
+}
+
+PackedInt32Array BrickWorld::get_load_owners(int chunk_id) const {
+    PackedInt32Array out;
+    if (valid_chunk(chunk_id)) {
+        for (const auto &owner : stress[chunk_id].loads) {
+            out.push_back(owner.first);
+        }
+    }
+    return out;
+}
+
 Dictionary BrickWorld::solve_stress(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -2656,6 +2801,14 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         b.load = (b.alive && !b.decorative)
                 ? std::max((int64_t)1, brick::to_mass_units(archetypes[b.archetype].mass))
                 : (int64_t)0;
+    }
+    // And what is resting on it from outside: wreckage (set_load).
+    for (const auto &owner : sx.loads) {
+        for (const auto &l : owner.second) {
+            if (l.first >= 0 && l.first < (int32_t)n && c.blocks[l.first].alive) {
+                c.blocks[l.first].load += l.second;
+            }
+        }
     }
 
     sx.max_ratio = 0.0f;
@@ -2829,6 +2982,8 @@ float BrickWorld::get_block_load(int chunk_id, int block_id) const {
 }
 
 float BrickWorld::get_block_capacity(int chunk_id, int block_id) const {
+    const SolveScratch &scratch = solve_scratch();
+    const std::vector<int32_t> &scratch_depth = scratch.depth;
     if (!valid_chunk(chunk_id)) {
         return 0.0f;
     }
@@ -2878,6 +3033,23 @@ void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
     Block &b = c.blocks[block_id];
     b.support_broken = (joints & JOINT_SUPPORT_BROKEN) != 0;
     b.bottom_broken = (joints & JOINT_BOTTOM_BROKEN) != 0;
+}
+
+int BrickWorld::heal_joints(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    int healed = 0;
+    for (Block &b : chunks[chunk_id].blocks) {
+        if (b.support_broken || b.bottom_broken) {
+            b.support_broken = false;
+            b.bottom_broken = false;
+            ++healed;
+        }
+    }
+    // No cache to drop: the joint cache applies bottom_broken as it reads, and
+    // support_broken is not in it at all.
+    return healed;
 }
 
 bool BrickWorld::is_support_broken(int chunk_id, int block_id) const {
@@ -2979,6 +3151,9 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
 }
 
 Dictionary BrickWorld::solve_structure(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<uint8_t> &scratch_grounded = scratch.grounded;
     Dictionary out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -3005,6 +3180,55 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     out["stress"] = stress_out;
     out["stability"] = stability;
     out["groups"] = groups;
+    return out;
+}
+
+Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids) {
+    const int n = (int)chunk_ids.size();
+    std::vector<Dictionary> results((size_t)n);
+    // The first on this thread, in slot 0 like any other solve here; each of
+    // the rest on a thread of its own with a slot of its own. More than there
+    // are slots are solved here afterwards, in turn.
+    const int par = std::min(n, (int)SOLVE_SLOTS);
+    std::vector<std::thread> workers;
+    for (int i = 1; i < par; ++i) {
+        const int chunk = chunk_ids[i];
+        workers.emplace_back([this, &results, i, chunk]() {
+            scratch_slot = i;
+            results[(size_t)i] = solve_structure(chunk);
+        });
+    }
+    if (n > 0) {
+        results[0] = solve_structure(chunk_ids[0]);
+    }
+    for (std::thread &t : workers) {
+        t.join();
+    }
+    for (int i = par; i < n; ++i) {
+        results[(size_t)i] = solve_structure(chunk_ids[i]);
+    }
+    Array out;
+    for (const Dictionary &d : results) {
+        out.push_back(d);
+    }
+    return out;
+}
+
+PackedInt32Array BrickWorld::place_blocks(int chunk_id, Vector3i origin,
+        const PackedInt32Array &cells, const PackedInt32Array &archetype_ids,
+        const PackedByteArray &colours) {
+    PackedInt32Array out;
+    const int64_t n = archetype_ids.size();
+    if (!valid_chunk(chunk_id) || cells.size() < n * 3 || colours.size() < n) {
+        return out;
+    }
+    out.resize(n);
+    int32_t *ids = out.ptrw();
+    for (int64_t i = 0; i < n; ++i) {
+        ids[i] = place_block(chunk_id,
+                origin + Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
+                archetype_ids[i], colours[i], false);
+    }
     return out;
 }
 
@@ -3069,6 +3293,8 @@ int BrickWorld::get_template_count() const {
 }
 
 Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
     Dictionary out;
     Chunk &c = chunks[chunk_id];
     const int floor_y = foundation_level[chunk_id];
@@ -3303,6 +3529,49 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
         }
     }
     return killed;
+}
+
+AABB BrickWorld::get_blocks_box(int chunk_id, const PackedInt32Array &block_ids) const {
+    if (!valid_chunk(chunk_id)) {
+        return AABB();
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    bool any = false;
+    Vector3 lo, hi;
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        if (bid < 0 || bid >= (int32_t)c.blocks.size() || c.blocks[(size_t)bid].removed) {
+            continue;
+        }
+        const Block &b = c.blocks[(size_t)bid];
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i sz = archetypes[b.archetype].size;
+        const Vector3 a(base.x * cs.x, base.y * cs.y, base.z * cs.z);
+        const Vector3 z((base.x + sz.x) * cs.x, (base.y + sz.y) * cs.y, (base.z + sz.z) * cs.z);
+        if (!any) {
+            lo = a;
+            hi = z;
+            any = true;
+        } else {
+            lo = Vector3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+            hi = Vector3(std::max(hi.x, z.x), std::max(hi.y, z.y), std::max(hi.z, z.z));
+        }
+    }
+    return any ? AABB(lo, hi - lo) : AABB();
+}
+
+int BrickWorld::get_chunk_authored_tris(int chunk_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    int n = 0;
+    for (const Block &b : chunks[chunk_id].blocks) {
+        if (b.alive) {
+            n += (int)archetypes[b.archetype].mesh.size();
+        }
+    }
+    return n;
 }
 
 PackedInt32Array BrickWorld::get_worn_blocks(int chunk_id) const {
@@ -3830,7 +4099,12 @@ void BrickWorld::release_chunk(int chunk_id) {
 
 // --- islands ---------------------------------------------------------------
 
+thread_local int BrickWorld::scratch_slot = 0;
+
 Array BrickWorld::get_components(int chunk_id) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<uint8_t> &scratch_mark = scratch.mark;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -3937,26 +4211,49 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
                 || !chunks[chunk_id].blocks[bid].alive) {
             continue;
         }
-        const Block src_block = chunks[chunk_id].blocks[bid];
+        const Block &src_block = chunks[chunk_id].blocks[bid];
         // Everything a block IS goes with it, not only its shape. Laying it
         // fresh used to reset three things, each a bug of its own: furniture
         // came out as structure (bearing load, counted by every solve), a joint
         // a landing had severed was whole again (so a sheared clump healed the
         // moment it became a piece), and a damaged brick was new. Found by the
         // city's log-replay check, Docs/AIPlan.md P0.
-        const int32_t nid = place_block(island_id, src_block.cell, src_block.archetype,
-                src_block.colour, src_block.decorative);
-        if (nid >= 0) {
-            Block &nb = chunks[island_id].blocks[nid];
-            nb.support_broken = src_block.support_broken;
-            nb.bottom_broken = src_block.bottom_broken;
-            nb.hp = src_block.hp;
-            nb.material = src_block.material;   // a steel beam falls as steel
+        //
+        // And straight into the new chunk, without place_block's questions: it
+        // is empty and has no bake, and cells that were one block's in the
+        // source are nobody else's in a copy of the same layout. place_block
+        // checked every cell twice and looked for a bake in flight once a
+        // block -- 4.2 ms for a 7,000-brick piece cut out of another piece.
+        Chunk &isl = chunks[island_id];
+        const Archetype &a = archetypes[src_block.archetype];
+        const int32_t nid = (int32_t)isl.blocks.size();
+        Block nb;
+        nb.cell = src_block.cell;
+        nb.archetype = src_block.archetype;
+        nb.colour = src_block.colour;
+        nb.decorative = src_block.decorative;
+        nb.support_broken = src_block.support_broken;
+        nb.bottom_broken = src_block.bottom_broken;
+        nb.hp = src_block.hp;
+        nb.material = src_block.material;   // a steel beam falls as steel
+        isl.blocks.push_back(nb);
+        const Vector3i base = nb.cell - isl.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        isl.occupancy[isl.index_of(Vector3i(base.x + x, base.y + y, base.z + z))]
+                                = nid;
+                    }
+                }
+            }
         }
         chunks[chunk_id].blocks[bid].alive = false;
         chunks[chunk_id].blocks[bid].detached = true;
         taken.push_back(bid);
     }
+    joint_cache[island_id].valid = false;
+    chunks[island_id].bake.valid = false;
 
     // The mass and where its centre is -- NOT get_body_boxes, which also builds
     // a Dictionary for every box and was thrown away here. A shaped part is a
@@ -4366,6 +4663,63 @@ Array BrickWorld::get_block_ticks(int chunk_id, int block_id) const {
     return out;
 }
 
+Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
+    Dictionary out;
+    PackedInt32Array cells, archs, decorative, joints, worn;
+    PackedByteArray colours;
+    Vector3 lo(INFINITY, INFINITY, INFINITY), hi(-INFINITY, -INFINITY, -INFINITY);
+    int n = 0;
+    if (valid_chunk(chunk_id)) {
+        const Chunk &c = chunks[chunk_id];
+        const int total = (int)c.blocks.size();
+        const int start = std::max(from, 0);
+        const int end = std::min(total, start + std::max(count, 0));
+        const real_t metres = get_cell_size().x / (real_t)TICKS_STUD;
+        for (int id = start; id < end; ++id) {
+            const Block &b = c.blocks[(size_t)id];
+            if (b.removed || b.detached || !b.alive) {
+                continue;
+            }
+            Vector3i llo, lhi, wlo, whi;
+            local_ticks(b.cell - c.origin, archetypes[b.archetype].size, llo, lhi);
+            world_ticks(c.frame_rotation, c.frame_ticks, llo, lhi, wlo, whi);
+            cells.push_back(wlo.x / TICKS_STUD);
+            cells.push_back(wlo.y / TICKS_PLATE);
+            cells.push_back(wlo.z / TICKS_STUD);
+            if (b.decorative) {
+                decorative.push_back(n);
+            }
+            const int cut = (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
+                    | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0);
+            if (cut != 0) {
+                joints.push_back(n);
+                joints.push_back(cut);
+            }
+            if (b.hp < 255) {
+                worn.push_back(n);
+                worn.push_back((int32_t)b.hp);
+            }
+            archs.push_back(b.archetype);
+            colours.push_back(b.colour);
+            const Vector3 a = Vector3(wlo) * metres;
+            const Vector3 z = Vector3(whi) * metres;
+            lo = Vector3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+            hi = Vector3(std::max(hi.x, z.x), std::max(hi.y, z.y), std::max(hi.z, z.z));
+            ++n;
+        }
+    }
+    out["cells"] = cells;
+    out["archetypes"] = archs;
+    out["colours"] = colours;
+    out["decorative"] = decorative;
+    out["joints"] = joints;
+    out["worn"] = worn;
+    out["count"] = n;
+    out["lo"] = lo;
+    out["hi"] = hi;
+    return out;
+}
+
 PackedInt32Array BrickWorld::get_frame_overlaps(int chunk_id, int block_id,
         int other_chunk) const {
     PackedInt32Array out;
@@ -4501,6 +4855,9 @@ bool BrickWorld::remove_weld(int weld_id) {
 // --- grounding from a seed set ---------------------------------------------
 
 PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32Array &seeds) {
+    SolveScratch &scratch = solve_scratch();
+    std::vector<int32_t> &scratch_depth = scratch.depth;
+    std::vector<int32_t> &scratch_queue = scratch.queue;
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -4710,8 +5067,21 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_mass", "chunk_id"), &BrickWorld::get_chunk_mass);
     ClassDB::bind_method(D_METHOD("get_chunk_content_hash", "chunk_id"),
             &BrickWorld::get_chunk_content_hash);
-    ClassDB::bind_method(D_METHOD("add_chunk_shapes", "body", "chunk_id", "offset", "skip_dead", "merge"),
-            &BrickWorld::add_chunk_shapes, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("add_chunk_shapes", "body", "chunk_id", "offset", "skip_dead", "merge",
+            "section", "skip_decorative"), &BrickWorld::add_chunk_shapes, DEFVAL(false), DEFVAL(-1),
+            DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("get_chunk_authored_tris", "chunk_id"),
+            &BrickWorld::get_chunk_authored_tris);
+    ClassDB::bind_method(D_METHOD("get_blocks_box", "chunk_id", "block_ids"),
+            &BrickWorld::get_blocks_box);
+    ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids"),
+            &BrickWorld::solve_structures);
+    ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids", "skip_decorative"),
+            &BrickWorld::get_block_sections, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("add_band_shapes", "bodies", "chunk_id", "offset", "sections",
+            "skip_decorative"), &BrickWorld::add_band_shapes, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("capture_blocks", "chunk_id", "from", "count"),
+            &BrickWorld::capture_blocks);
     ClassDB::bind_method(D_METHOD("set_chunk_gravity", "chunk_id", "down"), &BrickWorld::set_chunk_gravity);
     ClassDB::bind_method(D_METHOD("get_chunk_gravity", "chunk_id"), &BrickWorld::get_chunk_gravity);
 
@@ -4732,7 +5102,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
+    ClassDB::bind_method(D_METHOD("heal_joints", "chunk_id"), &BrickWorld::heal_joints);
     ClassDB::bind_method(D_METHOD("save_template", "chunk_id"), &BrickWorld::save_template);
+    ClassDB::bind_method(D_METHOD("place_blocks", "chunk_id", "origin", "cells", "archetype_ids", "colours"),
+            &BrickWorld::place_blocks);
     ClassDB::bind_method(D_METHOD("load_template", "template_id", "chunk_id"), &BrickWorld::load_template);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
@@ -4751,6 +5124,12 @@ void BrickWorld::_bind_methods() {
     BIND_CONSTANT(JOINT_SUPPORT_BROKEN);
     BIND_CONSTANT(JOINT_BOTTOM_BROKEN);
 
+    ClassDB::bind_method(D_METHOD("set_load", "chunk_id", "owner", "block_ids", "mass_each"),
+            &BrickWorld::set_load);
+    ClassDB::bind_method(D_METHOD("clear_load", "chunk_id", "owner"), &BrickWorld::clear_load);
+    ClassDB::bind_method(D_METHOD("get_external_load", "chunk_id", "block_id"),
+            &BrickWorld::get_external_load);
+    ClassDB::bind_method(D_METHOD("get_load_owners", "chunk_id"), &BrickWorld::get_load_owners);
     ClassDB::bind_method(D_METHOD("chip_hit", "chunk_id", "world_point", "radius_m", "damage"),
             &BrickWorld::chip_hit);
     ClassDB::bind_method(D_METHOD("get_worn_blocks", "chunk_id"), &BrickWorld::get_worn_blocks);

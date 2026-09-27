@@ -63,13 +63,6 @@ var box := AABB()
 ## A capture in progress (begin_capture / capture_some / finish_capture). Not
 ## part of the record -- nothing here is saved.
 var next := 0
-## The blocks that are NOT standing: dead, or cut out into another piece. A
-## removed block has no box and is skipped on its own. Asked of the world as two
-## short lists, where asking every block's box and keeping a set of the standing
-## ones was 70 ms of a big wreck's capture before a single block was recorded.
-var _gone := {}
-## Block id -> its index in this record, for the worn bricks at the end.
-var _index_of := {}
 var _lo := Vector3(INF, INF, INF)
 var _hi := Vector3(-INF, -INF, -INF)
 
@@ -167,72 +160,47 @@ static func begin_capture(world: BrickWorld, chunk: int) -> ChunkRecord:
 	r.xform = world.get_chunk_transform(chunk)
 	r.rotation = world.get_chunk_rotation(chunk)
 	r.origin_ticks = world.get_chunk_origin_ticks(chunk)
-	for id in world.get_dead_blocks(chunk):
-		r._gone[id] = true
-	for id in world.get_detached_blocks(chunk):
-		r._gone[id] = true
 	return r
 
 
 ## Capture up to `count` more block ids. True when every block has been seen.
+##
+## The standing blocks -- not dead, not cut out into another piece, not a
+## removed block's tombstone -- in id order, from one call into the world
+## (BrickWorld.capture_blocks). It was five calls a block from here, ~4 us a
+## block: a piece of 2,000 put to sleep was 8 ms of one tick.
 func capture_some(world: BrickWorld, chunk: int, count: int) -> bool:
-	var r := self
-	var gone := _gone
-	var index_of := _index_of
-	var t := BrickWorld.ticks_per_stud()
-	var pt := BrickWorld.ticks_per_plate()
-	var lo := _lo
-	var hi := _hi
-	var cell := BrickWorld.get_cell_size()
 	var n := world.get_block_count(chunk)
 	var end := mini(next + count, n)
-	for id in range(next, end):
-		if gone.has(id):
-			continue
-		# An empty box is a REMOVED block -- a tombstone that kept its id so
-		# that nothing keyed on ids has to move. It is not part of the shape.
-		var ticks: Array = world.get_block_ticks(chunk, id)
-		if ticks.is_empty():
-			continue
-		var at: Vector3i = ticks[0]
-		var size: Vector3i = ticks[1]
-		@warning_ignore("integer_division")
-		var c := Vector3i(at.x / t, at.y / pt, at.z / t)
-		r.cells.push_back(c.x)
-		r.cells.push_back(c.y)
-		r.cells.push_back(c.z)
-		if world.is_block_decorative(chunk, id):
-			r.decorative.push_back(r.archetypes.size())
-		var cut := world.get_block_joints(chunk, id)
-		if cut != 0:
-			r.joints.push_back(r.archetypes.size())
-			r.joints.push_back(cut)
-		index_of[id] = r.archetypes.size()
-		r.archetypes.push_back(world.get_block_archetype(chunk, id))
-		r.colours.push_back(world.get_block_colour(chunk, id))
-		var a := Vector3(at) * (cell.x / float(t))
-		var b := Vector3(at + size) * (cell.x / float(t))
-		lo = Vector3(minf(lo.x, a.x), minf(lo.y, a.y), minf(lo.z, a.z))
-		hi = Vector3(maxf(hi.x, b.x), maxf(hi.y, b.y), maxf(hi.z, b.z))
-	_lo = lo
-	_hi = hi
+	var got: Dictionary = world.capture_blocks(chunk, next, end - next)
+	var base := archetypes.size()
+	cells.append_array(got.cells)
+	archetypes.append_array(got.archetypes)
+	colours.append_array(got.colours)
+	for i in (got.decorative as PackedInt32Array):
+		decorative.push_back(base + i)
+	var cut: PackedInt32Array = got.joints
+	for k in range(0, cut.size() - 1, 2):
+		joints.push_back(base + cut[k])
+		joints.push_back(cut[k + 1])
+	var hp: PackedInt32Array = got.worn
+	for k in range(0, hp.size() - 1, 2):
+		worn.push_back(base + hp[k])
+		worn.push_back(hp[k + 1])
+	if int(got.count) > 0:
+		var a: Vector3 = got.lo
+		var b: Vector3 = got.hi
+		_lo = Vector3(minf(_lo.x, a.x), minf(_lo.y, a.y), minf(_lo.z, a.z))
+		_hi = Vector3(maxf(_hi.x, b.x), maxf(_hi.y, b.y), maxf(_hi.z, b.z))
 	next = end
 	return next >= n
 
 
-## The worn bricks and the world box, once every block has been seen; and the
-## working state let go.
-func finish_capture(world: BrickWorld, chunk: int) -> void:
+## The world box, once every block has been seen.
+func finish_capture(_world: BrickWorld, _chunk: int) -> void:
 	var r := self
 	var lo := _lo
 	var hi := _hi
-	var w := world.get_worn_blocks(chunk)
-	for k in range(0, w.size() - 1, 2):
-		if _index_of.has(w[k]):
-			r.worn.push_back(int(_index_of[w[k]]))
-			r.worn.push_back(w[k + 1])
-	_gone = {}
-	_index_of = {}
 	if r.block_count() > 0:
 		# In WORLD space: the eight corners of the local box under the chunk's
 		# own transform, because a piece at rest is usually lying at an angle.
@@ -262,10 +230,10 @@ func restore(world: BrickWorld) -> int:
 		return -1
 	if rotation != 0 or origin_ticks != Vector3i.ZERO:
 		world.set_chunk_frame(chunk, rotation, origin_ticks)
-	var placed := PackedInt32Array()
-	for i in block_count():
-		placed.append(world.place_block(chunk, origin + Vector3i(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]),
-				archetypes[i], colours[i]))
+	# All of them in one call (BrickWorld.place_blocks): the same placements in
+	# the same order, where one call a block from script was most of what waking
+	# a big piece cost.
+	var placed := world.place_blocks(chunk, origin, cells, archetypes, colours)
 	var furniture := PackedInt32Array()
 	for i in decorative:
 		if i < placed.size() and placed[i] >= 0:

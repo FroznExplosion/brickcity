@@ -5,7 +5,7 @@ extends RefCounted
 ##   DynamicSelector                     -- re-checked every tick, top first
 ##     DynamicSequence  InDanger > Evade       -- a falling piece beats everything
 ##     DynamicSequence  HasContact(2.5 s) >    -- a live fight
-##         Selector
+##         DynamicSelector
 ##           Sequence  FindCover > PeekAndFire
 ##           FireInOpen                        -- no cover anywhere: stand and shoot
 ##     DynamicSequence  HasContact(25 s, unsearched) > Search  -- lost it: go and look
@@ -27,7 +27,10 @@ static func build() -> BehaviorTree:
 	var fresh := BTHasContact.new()
 	fresh.max_age = 2.5
 	engage.add_child(fresh)
-	var how := BTSelector.new()
+	# Dynamic: cover is tried again every think, so a soldier that had to stand
+	# in the open -- its cover shot away, or none in reach -- takes cover the moment
+	# there is some, instead of standing there as long as it can see its enemy.
+	var how := BTDynamicSelector.new()
 	var cover := BTSequence.new()
 	cover.add_child(BTFindCover.new())
 	cover.add_child(BTPeekAndFire.new())

@@ -75,15 +75,45 @@ var settled_ms := 0
 ## Blocks it held when it settled. Cached because the cap sorts on it every
 ## time it runs and asking the world costs a call per island.
 var settled_blocks := 0
-## Small enough to be swept up after a few seconds. Big sections never are --
-## a piece that stays intact is what the whole model exists to produce.
+## Debris (IslandManager.DEBRIS_MAX_BLOCKS): kept while it can be seen, gone once
+## it cannot. Big sections never are -- a piece that stays intact is what the
+## whole model exists to produce.
 var disposable := false
 ## Big enough to hide behind or stand on (IslandManager.is_landmark_size). The
 ## opposite of disposable except for a fixture made rubble on purpose.
 var landmark := false
-## When a small piece came to rest, for sweeping it up moments later; 0 while
-## it is moving.
-var rest_since := 0
+## Debris only (disposable): the physics tick this machine's camera last had it
+## in view on, and when it started shrinking away (0: it has not). Ticks, not
+## milliseconds: a hitch longer than DEBRIS_UNSEEN_TICKS is not a second of
+## nobody looking. See IslandManager.DEBRIS_UNSEEN_TICKS.
+var seen_tick := 0
+## A mesh being built for it on a worker (IslandManager._mesh_jobs): the task id,
+## or -1. Anything asked of its mesh meanwhile waits for it (mesh_again), since
+## the patches that follow are worked out against the mesh that job builds.
+var mesh_job := -1
+## Its mesh is built and waiting for the upload budget
+## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
+var upload_waiting := false
+## Its mesh was dropped on purpose for distance (IslandManager's LOD ladder),
+## not lost: not counted as a piece gone invisible.
+var lod_dropped := false
+## Where it was when it was woken or cut out, and whether it has started to
+## move since. Once it moves, what was resting on it there is woken
+## (IslandManager.support_gone) -- not before: something woken that stays put
+## was holding up what it held up, and still is.
+var ripple_box := AABB()
+var ripple_pending := false
+## Times it was about to settle with nothing under it and was nudged instead
+## (IslandManager.SUPPORT_TRIES).
+var unsupported_tries := 0
+## Ticks in a row it has been going faster than IMPACT_MIN_SPEED, up to the
+## last one: what makes a speed drop a landing rather than a jolt.
+var fall_ticks := 0
+var mesh_again := false
+var mesh_again_full := false
+var fade_since := 0
+## 1 drawn at full size, 0 shrunk away.
+var fade := 1.0
 ## When this piece last dropped under IslandManager.SETTLE_SPEED and stayed
 ## there; 0 while it is moving faster. What settles it by rule rather than by
 ## waiting for the physics to call it asleep.
@@ -103,6 +133,8 @@ var fracture_queued := false
 ## Physics ticks this piece has existed with a MeshInstance3D and nothing in it
 ## -- i.e. ticks spent invisible. Reset when it finally gets geometry.
 var blind_ticks := 0
+## Of those ticks, what it was waiting for (IslandManager._count_meshless).
+var blind_stages := {}
 ## Do not rebuild this piece's mesh before this process frame: a child it shed
 ## is still coming up, and until it has, these bricks are drawn by nobody else.
 var hold_until := -1

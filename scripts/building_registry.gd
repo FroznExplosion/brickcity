@@ -466,16 +466,21 @@ func _undraw_all(b: Building) -> void:
 ## Interiors section 3: deactivating frees the objects and keeps the diff. The
 ## diff is one thing -- which items are gone -- because everything else about a
 ## room regenerates from its seed.
-func deactivate_room(building_id: int, index: int) -> void:
+## `dead` and `releasing` are for dematerialise, shutting every room at once:
+## the dead asked once for all of them, and nothing removed from a chunk that is
+## about to be released anyway.
+func deactivate_room(building_id: int, index: int, dead: Dictionary = {},
+		releasing: bool = false) -> void:
 	var b := get_building(building_id)
 	var room := get_room(building_id, index)
 	if b == null or room == null or not room.active:
 		return
 	var chunk := b.chunk
-	var dead := {}
-	if chunk >= 0 and world.is_chunk_alive(chunk):
+	var dead_set := dead
+	if dead.is_empty() and not releasing and chunk >= 0 and world.is_chunk_alive(chunk):
+		dead_set = {}
 		for id in world.get_dead_blocks(chunk):
-			dead[id] = true
+			dead_set[id] = true
 	for i in room.items.size():
 		var item: Dictionary = room.items[i]
 		var blocks: PackedInt32Array = item.get("blocks", PackedInt32Array())
@@ -483,13 +488,13 @@ func deactivate_room(building_id: int, index: int) -> void:
 			continue
 		var lost := false
 		for id in blocks:
-			if dead.has(id):
+			if dead_set.has(id):
 				lost = true
 				break
 		if lost:
 			# Shot, crushed, or taken down with the wall it stood against.
 			room.gone[i] = true
-		elif chunk >= 0 and world.is_chunk_alive(chunk):
+		elif not releasing and chunk >= 0 and world.is_chunk_alive(chunk):
 			for id in blocks:
 				world.remove_block(chunk, id)
 		item["blocks"] = PackedInt32Array()
@@ -739,9 +744,9 @@ func _lay_tower(b: Building, chunk: int) -> bool:
 	var key := _template_key(b)
 	var t: Array = _templates.get(key, [])
 	if not t.is_empty() and world.load_template(int(t[0]), chunk):
-		var lists: Array = t[1]
+		var saved: Array = t[1]
 		for i in b.fixtures.size():
-			b.fixtures[i].blocks = (lists[i] as PackedInt32Array).duplicate()
+			b.fixtures[i].blocks = (saved[i] as PackedInt32Array).duplicate()
 		return true
 	# What the fixtures need clear, before the columns go in. See
 	# Fixture.footprint.
@@ -986,10 +991,16 @@ func dematerialise(id: int) -> void:
 	if b == null or not b.is_materialised():
 		return
 	# A room's contents are bricks in this chunk. They go when it goes, and what
-	# they leave behind is the diff.
+	# they leave behind is the diff. The dead asked once for all of them, and
+	# nothing taken out of a chunk that is about to be released: each room used
+	# to walk the whole building for its dead and remove its furniture a block
+	# at a time, which was most of giving a big building back (5-6 ms).
+	var dead := {}
+	for dead_id in world.get_dead_blocks(b.chunk):
+		dead[dead_id] = true
 	for room in b.rooms:
 		if room.active:
-			deactivate_room(id, room.id)
+			deactivate_room(id, room.id, dead, true)
 	_undraw_all(b)
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
