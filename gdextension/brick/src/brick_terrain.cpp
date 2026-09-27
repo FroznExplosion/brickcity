@@ -253,6 +253,13 @@ static float pad_weight(const Pad &p, int x, int z) {
 
 struct SculptTile {
     float v[TILE * TILE] = {};
+    /// Surface paint (§20.7): material and colour per column, 255 = none.
+    uint8_t mat[TILE * TILE];
+    uint8_t col[TILE * TILE];
+    SculptTile() {
+        std::fill(std::begin(mat), std::end(mat), (uint8_t)0xFF);
+        std::fill(std::begin(col), std::end(col), (uint8_t)0xFF);
+    }
 };
 using SculptMap = std::unordered_map<int64_t, std::shared_ptr<const SculptTile>>;
 static std::shared_ptr<const SculptMap> g_sculpt = std::make_shared<SculptMap>();
@@ -272,6 +279,33 @@ static const SculptMap &sculpt_map() {
         gen = now;
     }
     return *held;
+}
+
+static const SculptTile *layer_tile(int x, int z, int &i) {
+    if (!g_sculpt_any.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+    const SculptMap &m = sculpt_map();
+    const int tx = floor_div(x, TILE);
+    const int tz = floor_div(z, TILE);
+    auto it = m.find(sculpt_key(tx, tz));
+    if (it == m.end()) {
+        return nullptr;
+    }
+    i = (z - tz * TILE) * TILE + (x - tx * TILE);
+    return it->second.get();
+}
+
+static int layer_material(int x, int z) {
+    int i = 0;
+    const SculptTile *t = layer_tile(x, z, i);
+    return t == nullptr ? 0xFF : t->mat[i];
+}
+
+static int layer_colour(int x, int z) {
+    int i = 0;
+    const SculptTile *t = layer_tile(x, z, i);
+    return t == nullptr ? 0xFF : t->col[i];
 }
 
 static float sculpt_plates(int x, int z) {
@@ -392,6 +426,11 @@ static int painted_at(int x, int z, uint32_t seed) {
 }
 
 int Field::material_at(int x, int z, int h) const {
+    // A brush-painted column first: the most specific thing an author said.
+    const int brushed = layer_material(x, z);
+    if (brushed != 0xFF) {
+        return brushed;
+    }
     // Authored paint wins over anything the noise has to say.
     const int painted = painted_at(x, z, seed);
     if (painted >= 0) {
@@ -684,6 +723,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     out.h.assign(SPAN * SPAN, 0);
     out.tp.assign(SPAN * SPAN, 0);
     out.mat.assign(SPAN * SPAN, 0);
+    out.col.assign(SPAN * SPAN, 0xFF);
     out.plate.assign(SPAN * SPAN, 0);
     out.ramp.assign(SPAN * SPAN, 255);
     out.smooth.assign(SPAN * SPAN, 0);
@@ -704,6 +744,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
             out.mat[i] = (uint8_t)(yp >= out.y0
                     ? out.vox[out.vidx(lx, yp, lz)]
                     : (uint8_t)MAT_STONE);
+            out.col[i] = (uint8_t)layer_colour(tx * TILE + lx, tz * TILE + lz);
         }
     }
 
@@ -918,6 +959,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         const int16_t h0 = s.h[i0];
         const int16_t tp0 = s.tp[i0];
         const uint8_t m0 = s.mat[i0];
+        const uint8_t c0 = s.col[i0];
         for (int dz = 0; dz < sz; ++dz) {
             for (int dx = 0; dx < sx; ++dx) {
                 const int cx = ox + dx;
@@ -937,7 +979,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                 // Same exact top PLATE, not merely the same brick: two
                 // columns whose bricks match but whose crater-cut tops differ
                 // are not one flat piece.
-                if (s.tp[i] != tp0 || s.h[i] != h0 || s.mat[i] != m0) {
+                if (s.tp[i] != tp0 || s.h[i] != h0 || s.mat[i] != m0 || s.col[i] != c0) {
                     return false;
                 }
             }
@@ -1364,17 +1406,103 @@ PackedFloat32Array BrickTerrain::get_sculpt_tile(int tx, int tz) {
     return out;
 }
 
+Rect2i BrickTerrain::paint_surface(int x, int z, double radius, int material, int colour) {
+    const float r = (float)std::max(radius, 0.5);
+    const int ri = (int)std::ceil(r);
+    const Rect2i box(x - ri, z - ri, ri * 2 + 1, ri * 2 + 1);
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    Stroke *stroke = g_strokes.empty() ? nullptr : &g_strokes.back();
+    std::unordered_map<int64_t, std::shared_ptr<SculptTile>> writable;
+    auto code = [](int v, int was) {
+        return v == -1 ? was : (v == -2 ? 0xFF : std::clamp(v, 0, 254));
+    };
+    for (int cz = box.position.y; cz < box.position.y + box.size.y; ++cz) {
+        for (int cx = box.position.x; cx < box.position.x + box.size.x; ++cx) {
+            const float d2 = (float)((cx - x) * (cx - x) + (cz - z) * (cz - z));
+            if (d2 > r * r) {
+                continue;
+            }
+            const int tx = floor_div(cx, TILE);
+            const int tz = floor_div(cz, TILE);
+            const int64_t key = sculpt_key(tx, tz);
+            const int i = (cz - tz * TILE) * TILE + (cx - tx * TILE);
+            auto wit = writable.find(key);
+            if (wit == writable.end()) {
+                auto old = next->find(key);
+                std::shared_ptr<const SculptTile> was = old == next->end() ? nullptr : old->second;
+                const int m_was = was ? was->mat[i] : 0xFF;
+                const int c_was = was ? was->col[i] : 0xFF;
+                if (code(material, m_was) == m_was && code(colour, c_was) == c_was) {
+                    continue;   // nothing to change, and no tile worth cloning
+                }
+                if (stroke != nullptr && stroke->before.find(key) == stroke->before.end()) {
+                    stroke->before.emplace(key, was);
+                }
+                auto fresh = was ? std::make_shared<SculptTile>(*was) : std::make_shared<SculptTile>();
+                wit = writable.emplace(key, fresh).first;
+                (*next)[key] = fresh;
+            }
+            SculptTile &t = *wit->second;
+            t.mat[i] = (uint8_t)code(material, t.mat[i]);
+            t.col[i] = (uint8_t)code(colour, t.col[i]);
+        }
+    }
+    publish(std::move(next));
+    if (stroke != nullptr) {
+        stroke->bounds = merge_rect(stroke->bounds, box);
+    }
+    return box;
+}
+
+Vector2i BrickTerrain::surface_paint_at(int x, int z) {
+    return Vector2i(layer_material(x, z), layer_colour(x, z));
+}
+
+int BrickTerrain::colour_at(int x, int z) {
+    const int painted = layer_colour(x, z);
+    return painted != 0xFF ? painted : brick::material_filament(material_at(x, z));
+}
+
+PackedByteArray BrickTerrain::get_surface_paint_tile(int tx, int tz) {
+    PackedByteArray out;
+    auto m = std::atomic_load(&g_sculpt);
+    auto it = m->find(sculpt_key(tx, tz));
+    if (it == m->end()) {
+        return out;
+    }
+    out.resize(TILE * TILE * 2);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        out.set(i, it->second->mat[i]);
+        out.set(TILE * TILE + i, it->second->col[i]);
+    }
+    return out;
+}
+
+void BrickTerrain::set_surface_paint_tile(int tx, int tz, const PackedByteArray &bytes) {
+    if (bytes.size() != TILE * TILE * 2) {
+        return;
+    }
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    auto old = next->find(sculpt_key(tx, tz));
+    auto t = old == next->end() ? std::make_shared<SculptTile>()
+                                : std::make_shared<SculptTile>(*old->second);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        t->mat[i] = bytes[i];
+        t->col[i] = bytes[TILE * TILE + i];
+    }
+    (*next)[sculpt_key(tx, tz)] = t;
+    publish(std::move(next));
+}
+
 void BrickTerrain::set_sculpt_tile(int tx, int tz, const PackedFloat32Array &metres) {
     auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
-    if (metres.size() != TILE * TILE) {
-        next->erase(sculpt_key(tx, tz));
-    } else {
-        auto t = std::make_shared<SculptTile>();
-        for (int i = 0; i < TILE * TILE; ++i) {
-            t->v[i] = metres[i] / PLATE_M;
-        }
-        (*next)[sculpt_key(tx, tz)] = t;
+    auto old = next->find(sculpt_key(tx, tz));
+    auto t = old == next->end() ? std::make_shared<SculptTile>()
+                                : std::make_shared<SculptTile>(*old->second);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        t->v[i] = metres.size() == TILE * TILE ? metres[i] / PLATE_M : 0.0f;
     }
+    (*next)[sculpt_key(tx, tz)] = t;
     publish(std::move(next));
 }
 
@@ -2016,7 +2144,8 @@ void piece_brick(MeshBuf &m, const Color &col, float x0, float y0, float z0,
 /// never spans the plate/non-plate boundary -- the packer forces a cut there --
 /// so one flag a piece is exact rather than an approximation.
 Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
-    Color c = filament_colour(material_filament(mat));
+    const int painted = s.col[TileSample::idx(ox, oz)];
+    Color c = filament_colour(painted != 0xFF ? painted : material_filament(mat));
     const float t = piece_tint(g_field.seed, s.tx * TILE + ox, s.tz * TILE + oz);
     return Color(c.r * t, c.g * t, c.b * t, studded ? 1.0f : 0.0f);
 }
@@ -2058,7 +2187,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     // above it read as the same rock rather than as two materials.
     auto cell_colour = [&](int lx, int yp, int lz) {
         const int mat = s.voxel(lx, yp, lz);
-        Color c = filament_colour(material_filament(mat));
+        const bool inside = lx >= -MARGIN && lz >= -MARGIN && lx < TILE + MARGIN && lz < TILE + MARGIN;
+        const int painted = inside ? s.col[TileSample::idx(lx, lz)] : 0xFF;
+        Color c = filament_colour(painted != 0xFF ? painted : material_filament(mat));
         const float t = piece_tint(seed, s.tx * TILE + lx, s.tz * TILE + lz);
         return Color(c.r * t, c.g * t, c.b * t, 0.0f);
     };
@@ -2425,7 +2556,10 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
             const float y = cell[(size_t)cx + (size_t)N * cz];
             const float x0 = (float)cx * cs, x1 = x0 + cs;
             const float z0 = (float)cz * cs, z1 = z0 + cs;
-            Color col = filament_colour(material_filament(
+            const int pcx = gx0 + cx * step + step / 2;
+            const int pcz = gz0 + cz * step + step / 2;
+            const int painted_c = layer_colour(pcx, pcz);
+            Color col = filament_colour(painted_c != 0xFF ? painted_c : material_filament(
                     g_field.material_at(gx0 + cx * step + step / 2,
                             gz0 + cz * step + step / 2,
                             floor_div(surface_plate(gx0 + cx * step + step / 2,
@@ -3198,6 +3332,18 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("set_sculpt_tile", "tx", "tz", "metres"),
         &BrickTerrain::set_sculpt_tile);
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("paint_surface", "x", "z", "radius", "material", "colour"),
+        &BrickTerrain::paint_surface);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("surface_paint_at", "x", "z"),
+        &BrickTerrain::surface_paint_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("colour_at", "x", "z"),
+        &BrickTerrain::colour_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_surface_paint_tile", "tx", "tz"),
+        &BrickTerrain::get_surface_paint_tile);
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("set_surface_paint_tile", "tx", "tz", "bytes"),
+        &BrickTerrain::set_surface_paint_tile);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_pads"),
         &BrickTerrain::clear_pads);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("pad_count"),

@@ -509,6 +509,31 @@ func _check_paint_brush() -> void:
 	_ws._set_painting(false)
 	_ok("and the bricks themselves are still there", _ws.recipe.size() == 2)
 
+	# A wider brush: every brick within reach of the dot, in one dab.
+	_put("brick_2x4", Vector3i(14, 1, 10))
+	_put("brick_2x4", Vector3i(30, 1, 10))
+	_ws._set_painting(true)
+	_ok("the paint palette shows while the brush is in hand", _ws._paint_palette.visible)
+	_ws._colour = 11
+	_ws._paint_radius = 3
+	_ws._stroke = []
+	_ws._paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ws._end_stroke()
+	_ok("a wide brush paints the bricks in reach and not the one out of it",
+			_ws.recipe.colour_of(0) == 11 and _ws.recipe.colour_of(2) == 11
+			and _ws.recipe.colour_of(3) != 11,
+			"%d %d %d %d" % [_ws.recipe.colour_of(0), _ws.recipe.colour_of(1),
+			_ws.recipe.colour_of(2), _ws.recipe.colour_of(3)])
+	_ws._paint_radius = 0
+	# MMB with the brush: a brick's paint, and nothing else, into the slot.
+	var part_before: String = _ws._hotbar.part()
+	_ws._hotbar.set_colour(2)
+	_ws._pick_paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ok("the eyedropper takes a brick's colour and material, not its part",
+			_ws._colour == 11 and _ws._hotbar.part() == part_before)
+	_ws._set_painting(false)
+	_ok("and the palette goes with the brush", not _ws._paint_palette.visible)
+
 
 func _check_hotbar() -> void:
 	print("

@@ -26,12 +26,15 @@ extends Node3D
 ##
 ##   4 RAISE   5 LOWER   6 FLATTEN (to the height where the stroke began)
 ##   7 SMOOTH
+##   8 PAINT BRUSH  what the ground is made of AND its colour, a stud at a
+##                  time (§20.7). The palette picks both; P picks them up
+##                  from the ground under the cursor.
 ##
 ## A brush goes into the field UNDER the pads, so a building's pad stays
 ## flat whatever is painted round it, and the ground meets its floor.
 ##
 ## Keys:
-##   1 .. 7       pick the tool
+##   1 .. 8       pick the tool
 ##   LEFT CLICK   place under the cursor, or select what is already there
 ##                (brushes: hold and drag)
 ##   CTRL+Z       undo the last brush stroke
@@ -47,8 +50,14 @@ const World := preload("res://scripts/terrain_world.gd")
 ## `-- --world=<name>` opens a different level.
 var _world_path := "res://worlds/heightfield.json"
 
-enum Tool { PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH }
-const TOOL_NAMES := ["PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH"]
+enum Tool { PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH }
+const TOOL_NAMES := ["PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH",
+		"PAINT BRUSH"]
+const PaintPalette := preload("res://scripts/paint_palette.gd")
+## What the paint brush lays: a terrain material (or KEEP / NATURAL) and a
+## filament colour (or KEEP / the material's OWN). BrickTerrain.paint_surface.
+const KEEP := -1
+const RESET := -2
 ## The terrain materials an author can paint with, ASKED FOR rather than
 ## written out: a hand-copied list is one rename away from painting stone
 ## and labelling it sand.
@@ -92,6 +101,9 @@ var _refresh_in := 0.0
 ## Ten refreshes a second: a dab is microseconds, a tile rebake is not.
 const REFRESH_EVERY := 0.1
 var _ring: MeshInstance3D = null
+var _palette = null
+var _brush_material := 3        ## sand
+var _brush_colour := RESET      ## the material's own colour
 var _shells: Node3D = null
 var _shell_mat: ShaderMaterial = null
 var _dirty := false
@@ -196,6 +208,7 @@ func _build_scenery() -> void:
 	_ring.visible = false
 	add_child(_ring)
 
+
 	var layer := CanvasLayer.new()
 	_label = Label.new()
 	_label.position = Vector2(14, 12)
@@ -204,6 +217,21 @@ func _build_scenery() -> void:
 	_label.add_theme_constant_override("outline_size", 4)
 	layer.add_child(_label)
 	add_child(layer)
+
+	# The paint brush's palette (§20.7), shown while that brush is in hand.
+	# Click it with the mouse free (ESC); or , . for colour, PAGE UP/DOWN
+	# for material.
+	_palette = PaintPalette.new()
+	_palette.name = "PaintPalette"
+	_palette.visible = false
+	layer.add_child(_palette)
+	_palette.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_palette.position = Vector2(14, 440)
+	_palette.setup(_palette_materials(), _palette_colours, _brush_material, _brush_colour)
+	_palette.picked.connect(func(m: int, c: int) -> void:
+		_brush_material = m
+		_brush_colour = c
+		_status = "paint: %s" % _paint_name())
 
 
 func _build_terrain() -> void:
@@ -231,6 +259,65 @@ func _process(delta: float) -> void:
 		_drag_marker()
 	_brush_tick(delta)
 	_update_hud()
+
+
+## The ground materials an author can paint, plus KEEP (colour only) and
+## NATURAL (back to what the noise said). Air is not a material to paint.
+func _palette_materials() -> Array:
+	var out: Array = [{"value": KEEP, "name": "keep"}]
+	for m in range(1, MATERIALS.size()):
+		out.append({"value": m, "name": MATERIALS[m]})
+	out.append({"value": RESET, "name": "natural"})
+	return out
+
+
+## Any material takes any filament: the ground is printed, and a spool is a
+## spool. First its own colour, and KEEP for material-only strokes.
+func _palette_colours(m: int) -> Array:
+	var own := Color(0.5, 0.5, 0.5)
+	if m >= 1:
+		own = BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(m))
+	var out: Array = [
+		{"value": RESET, "name": "the material's own colour", "color": own, "mark": "M"},
+		{"value": KEEP, "name": "keep the colour", "color": Color(0.2, 0.2, 0.22), "mark": "-"},
+	]
+	for i in BrickWorld.get_filament_count():
+		var col := BrickWorld.get_filament_colour(i)
+		col.a = 1.0
+		out.append({"value": i, "name": _filament_name(i), "color": col})
+	return out
+
+
+## A filament's name, as the workshop names it: the colours of any brick
+## material that takes every spool.
+static func _filament_name(i: int) -> String:
+	for m in BrickWorld.get_material_count():
+		if BrickWorld.is_filament_material(m) and i < BrickWorld.get_material_colour_count(m):
+			return BrickWorld.get_material_colour_name(m, i)
+	return "filament %d" % i
+
+
+func _paint_name() -> String:
+	var m := "keep" if _brush_material == KEEP else ("natural" if _brush_material == RESET
+			else MATERIALS[_brush_material])
+	var c := "own colour" if _brush_colour == RESET else ("keep colour" if _brush_colour == KEEP
+			else _filament_name(_brush_colour))
+	return "%s, %s" % [m, c]
+
+
+## P: take the material and colour of the ground under the cursor.
+func _pick_paint() -> void:
+	var hit := _aim_field()
+	if hit.is_empty():
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var p: Vector3 = hit["position"]
+	var gx := int(floor(p.x / stud))
+	var gz := int(floor(p.z / stud))
+	_brush_material = BrickTerrain.material_at(gx, gz)
+	_brush_colour = BrickTerrain.colour_at(gx, gz)
+	_palette.show_pick(_brush_material, _brush_colour)
+	_status = "picked %s" % _paint_name()
 
 
 func _is_brush() -> bool:
@@ -266,7 +353,12 @@ func _brush_tick(delta: float) -> void:
 		Tool.SMOOTH:
 			mode = 2
 			amount = clampf(_brush_rate * 2.0 * delta, 0.0, 1.0)
-	var touched: Rect2i = BrickTerrain.sculpt(gx, gz, _brush_radius, mode, amount, _flatten_to)
+	var touched: Rect2i
+	if _tool == Tool.PAINT_BRUSH:
+		touched = BrickTerrain.paint_surface(gx, gz, _brush_radius,
+				_brush_material, _brush_colour)
+	else:
+		touched = BrickTerrain.sculpt(gx, gz, _brush_radius, mode, amount, _flatten_to)
 	_pending = touched if _pending.size.x <= 0 else _pending.merge(touched)
 	_dirty = true
 	_refresh_in -= delta
@@ -405,6 +497,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_tool(Tool.FLATTEN)
 		KEY_7:
 			_set_tool(Tool.SMOOTH)
+		KEY_8:
+			_set_tool(Tool.PAINT_BRUSH)
+		KEY_P:
+			if _tool == Tool.PAINT_BRUSH:
+				_pick_paint()
 		KEY_G:
 			if _selected < 0:
 				_status = "nothing selected to grab"
@@ -422,22 +519,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_BRACKETRIGHT:
 			_nudge_selected(2, 0, 0.0)
 		KEY_COMMA:
-			_nudge_selected(0, -1, 0.0)
+			if _tool == Tool.PAINT_BRUSH:
+				_palette.step_colour(-1)
+			else:
+				_nudge_selected(0, -1, 0.0)
 		KEY_PERIOD:
-			_nudge_selected(0, 1, 0.0)
+			if _tool == Tool.PAINT_BRUSH:
+				_palette.step_colour(1)
+			else:
+				_nudge_selected(0, 1, 0.0)
 		KEY_MINUS:
 			_step_value(-1)
 		KEY_EQUAL:
 			_step_value(1)
 		KEY_PAGEUP:
-			_step_storeys(1)
+			if _tool == Tool.PAINT_BRUSH:
+				_palette.step_material(1)
+			else:
+				_step_storeys(1)
 		KEY_PAGEDOWN:
-			_step_storeys(-1)
+			if _tool == Tool.PAINT_BRUSH:
+				_palette.step_material(-1)
+			else:
+				_step_storeys(-1)
 
 
 func _set_tool(t: Tool) -> void:
 	_end_stroke()
 	_tool = t
+	if _palette != null:
+		_palette.visible = t == Tool.PAINT_BRUSH
 	_selected = -1
 	_status = "tool: %s" % TOOL_NAMES[int(t)].to_lower()
 	_refresh_markers()
@@ -889,7 +1000,9 @@ func _update_hud() -> void:
 	if _grabbing:
 		lines.append(">>> GRABBED — aim and click to drop, ESC to cancel")
 	lines.append("1 pad  2 paint  3 site   LEFT CLICK place/select   G grab   DEL remove")
-	lines.append("4 raise  5 lower  6 flatten  7 smooth   HOLD LEFT and drag   CTRL+Z undo")
+	lines.append("4 raise  5 lower  6 flatten  7 smooth  8 paint brush   HOLD LEFT and drag   CTRL+Z undo")
+	if _tool == Tool.PAINT_BRUSH:
+		lines.append("painting %s   , . colour   PGUP/PGDN material   P pick from ground   ESC mouse for the palette" % _paint_name())
 	lines.append("[ ] radius   , . skirt   - = height/material   PGUP/PGDN storeys")
 	lines.append("CTRL+S save   CTRL+O reload   SPACE SPACE walk")
 	_label.text = "\n".join(lines)
@@ -1011,6 +1124,25 @@ func _run_shots() -> void:
 	get_viewport().get_texture().get_image().save_png("res://shots/editor_flattened.png")
 	print("[editor] shot written: editor_raised.png, editor_flattened.png  (raised %.2f m, %d stroke(s) to undo)" % [
 		raised, BrickTerrain.sculpt_undo_depth()])
+	# THE PAINT BRUSH (§20.7): a stripe of sand in a loud colour across the
+	# same ground, with its palette up.
+	_set_tool(Tool.PAINT_BRUSH)
+	_brush_material = 3
+	_brush_colour = 4
+	_palette.show_pick(_brush_material, _brush_colour)
+	_brush_radius = 5.0
+	_begin_stroke()
+	for i in 40:
+		_camera.look_at(Vector3((bx - 10 + i) * stud2, ground_y, (bz - 6) * stud2), Vector3.UP)
+		_brush_tick(1.0 / 30.0)
+		await get_tree().process_frame
+	_end_stroke()
+	_streamer.settle(Vector2(_camera.global_position.x, _camera.global_position.z))
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/editor_paint_brush.png")
+	print("[editor] shot written: editor_paint_brush.png  (%s)" % _paint_name())
+	BrickTerrain.sculpt_undo()
+
 	var undo_rect: Rect2i = BrickTerrain.sculpt_undo()
 	BrickTerrain.sculpt_undo()
 	print("[editor] undo: both strokes back, %.2f m left at the middle" % BrickTerrain.sculpt_at(bx + 12, bz))

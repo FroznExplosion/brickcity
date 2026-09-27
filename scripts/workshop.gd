@@ -37,6 +37,8 @@ const KEY_ROWS := [
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "", ""],
 	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
+	["PAINT", "palette", "material + colour (ESC, click)", "- =", "brush size"],
+	["", "MMB", "take a brick's material + colour", "PGUP/DN", "material"],
 	["GROUP", "X", "select the inserted build aimed at", "M", "move it"],
 	["", "C", "copy it", "DEL", "delete it"],
 	["ROOM", "U", "room template: guide size", "", ""],
@@ -157,6 +159,15 @@ var _arch_names := {}
 ## that would be painted. A colour is only a vertex attribute and not part of a
 ## brick's identity, so nothing is removed or renumbered.
 var _painting := false
+## Studs round the dot the brush reaches: 0 is the one brick under it, more
+## is every brick of the build within that distance -- a wall in one pass.
+var _paint_radius := 0
+const PAINT_RADIUS_MAX := 12
+## What the brush lays, picked in one place (scripts/paint_palette.gd): the
+## selected slot's material and colour, which is what the brush has always
+## painted with -- the palette is a nearer way to change them.
+const PaintPalette := preload("res://scripts/paint_palette.gd")
+var _paint_palette = null
 ## The stroke under way, as [recipe id, colour it had] per brick, or null.
 var _stroke = null
 ## Finished strokes, newest last, one per "paint" in `_edits`: what undo puts
@@ -544,6 +555,18 @@ func _build_hud() -> void:
 			_camera.call("_set_captured", not on))
 	add_child(_hotbar)
 
+	_paint_palette = PaintPalette.new()
+	_paint_palette.name = "PaintPalette"
+	_paint_palette.visible = false
+	layer.add_child(_paint_palette)
+	_paint_palette.position = Vector2(12, 150)
+	_paint_palette.setup(_paint_materials(), _paint_colours, _mat, _colour)
+	_paint_palette.picked.connect(func(m: int, c: int) -> void:
+		if m != _mat:
+			_hotbar.set_material(m)
+		_hotbar.set_colour(c))
+	_paint_palette.info = _paint_info()
+
 	_menu = WorkshopMenu.new()
 	_menu.name = "Menu"
 	_menu.action.connect(_on_menu)
@@ -636,13 +659,51 @@ func _on_hotbar(part: String, colour: int, material: int) -> void:
 		_part_index = i
 	_colour = colour
 	_mat = material
+	if _paint_palette != null:
+		_paint_palette.show_pick(_mat, _colour)
+
+
+## Every brick material, for the paint palette.
+func _paint_materials() -> Array:
+	var out: Array = []
+	for m in BrickWorld.get_material_count():
+		out.append({"value": m, "name": BrickWorld.get_material_name(m)})
+	return out
+
+
+## A material's colours -- every filament, or its own kinds -- named as the
+## toolbar names them.
+func _paint_colours(m: int) -> Array:
+	var out: Array = []
+	for c in BrickWorld.get_material_colour_count(m):
+		out.append({"value": c, "name": BrickWorld.get_material_colour_name(m, c),
+				"color": WorkshopHotbar.rgb(m, c)})
+	return out
+
+
+func _paint_info() -> String:
+	return "brush: %s   (- = size)   MMB takes a brick's paint" % (
+			"one brick" if _paint_radius == 0 else "%d studs round the dot" % _paint_radius)
 
 
 ## Middle click: the brick under the cursor, its part, turn and colour, into
 ## the selected slot -- Minecraft's pick-block.
 func _pick_block() -> void:
 	var ray := _mouse_ray()
+	if _painting:
+		_pick_paint_ray(ray[0], ray[1])
+		return
 	_pick_ray(ray[0], ray[1])
+
+
+## The eyedropper: a brick's material and colour into the brush, and nothing
+## else -- the part in hand stays the part in hand.
+func _pick_paint_ray(from: Vector3, dir: Vector3) -> void:
+	var hit := _first_hit(from, dir)
+	if hit.is_empty():
+		return
+	_hotbar.set_material(world.get_block_material(hit.frame, hit.block))
+	_hotbar.set_colour(world.get_block_colour(hit.frame, hit.block))
 
 
 ## The same for any ray, so a probe can aim it exactly.
@@ -668,6 +729,9 @@ func _pick_ray(from: Vector3, dir: Vector3) -> void:
 
 func _set_painting(on: bool) -> void:
 	_painting = on
+	if _paint_palette != null:
+		_paint_palette.visible = on
+		_paint_palette.show_pick(_mat, _colour)
 	_end_stroke()
 	_ghost_studs.visible = not on
 	_ghost.visible = true
@@ -686,10 +750,19 @@ func _paint_process() -> void:
 		return
 	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
 	var size := Vector3(box[1] as Vector3i) * tick
-	var mesh := BoxMesh.new()
-	mesh.size = size + Vector3.ONE * 0.02
-	_ghost.mesh = mesh
-	_ghost.transform = Transform3D(Basis(), Vector3(box[0] as Vector3i) * tick + size * 0.5)
+	if _paint_radius > 0:
+		# The brush's reach, as a ball round the dot.
+		var ball := SphereMesh.new()
+		var r := float(_paint_radius) * BrickPalette.STUD_M
+		ball.radius = r
+		ball.height = r * 2.0
+		_ghost.mesh = ball
+		_ghost.transform = Transform3D(Basis(), hit.point)
+	else:
+		var mesh := BoxMesh.new()
+		mesh.size = size + Vector3.ONE * 0.02
+		_ghost.mesh = mesh
+		_ghost.transform = Transform3D(Basis(), Vector3(box[0] as Vector3i) * tick + size * 0.5)
 	var c := BrickWorld.get_filament_colour(_colour)
 	_ghost_material.albedo_color = Color(c.r, c.g, c.b, 0.55)
 	if _stroke != null:
@@ -715,6 +788,21 @@ func _paint_ray(from: Vector3, dir: Vector3) -> bool:
 	if hit.is_empty():
 		return false
 	var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+	var targets: Array[int] = []
+	if _paint_radius <= 0:
+		targets.append(rid)
+	else:
+		targets = _bricks_near(hit.point, float(_paint_radius) * BrickPalette.STUD_M)
+	var changed := false
+	for r in targets:
+		changed = _paint_one(r) or changed
+	if changed:
+		_remesh()
+	return changed
+
+
+## One brick into the stroke, if it is the build's and not this paint already.
+func _paint_one(rid: int) -> bool:
 	if rid < 0 or (recipe.colour_of(rid) == _colour and recipe.material_of(rid) == _mat):
 		return false
 	for e in _stroke:
@@ -722,8 +810,28 @@ func _paint_ray(from: Vector3, dir: Vector3) -> bool:
 			return false
 	_stroke.append([rid, recipe.colour_of(rid), recipe.material_of(rid)])
 	_repaint(rid, _colour, _mat)
-	_remesh()
 	return true
+
+
+## The build's bricks within `reach` metres of a point, measured to each
+## brick's box -- so a wide brick is painted when any part of it is in reach.
+func _bricks_near(point: Vector3, reach: float) -> Array[int]:
+	var out: Array[int] = []
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	for rid in _placed_at.size():
+		var at: Array = _placed_at[rid]
+		if int(at[0]) < 0:
+			continue
+		var box: Array = world.get_block_ticks(asm.frames[at[0]], at[1])
+		if box.is_empty():
+			continue
+		var lo := Vector3(box[0] as Vector3i) * tick
+		var hi := lo + Vector3(box[1] as Vector3i) * tick
+		var q := Vector3(clampf(point.x, lo.x, hi.x), clampf(point.y, lo.y, hi.y),
+				clampf(point.z, lo.z, hi.z))
+		if q.distance_to(point) <= reach:
+			out.append(rid)
+	return out
 
 
 func _end_stroke() -> void:
@@ -1467,6 +1575,14 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _hotbar.step(1)
 		KEY_COMMA: _hotbar.set_colour(_colour - 1)
 		KEY_PERIOD: _hotbar.set_colour(_colour + 1)
+		KEY_MINUS, KEY_EQUAL:
+			if _painting:
+				_paint_radius = clampi(_paint_radius + (1 if e.keycode == KEY_EQUAL else -1),
+						0, PAINT_RADIUS_MAX)
+				_paint_palette.info = _paint_info()
+		KEY_PAGEUP, KEY_PAGEDOWN:
+			if _painting:
+				_paint_palette.step_material(1 if e.keycode == KEY_PAGEUP else -1)
 		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()

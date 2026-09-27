@@ -197,6 +197,23 @@ INTERIOR/DETAIL bricks.
 
 ---
 
+### Stage H — a paint palette for the brush ✅
+
+`B` has always repainted placed bricks with the selected slot's material and
+colour, held and dragged. Choosing that paint meant the TAB browser. Now the
+brush brings its own palette (`scripts/paint_palette.gd`, shared with the
+terrain editor's paint brush, Docs/Terrain.md §20.7): every brick material
+in a row, the chosen material's colours under it. ESC frees the mouse to
+click it; `,` `.` step the colour and PAGE UP / DOWN the material without
+it. It edits the selected slot, so what the brush paints and what LMB would
+place stay one thing.
+
+Two more: `-` `=` widen the brush (0 is the one brick under the dot; up to
+12 studs paints every brick of the build within reach, measured to each
+brick's box — a wall in one pass, still one undo), and MMB with the brush in
+hand takes a brick's material and colour and leaves the part alone.
+`place_probe` gates the palette, the wide brush and the eyedropper.
+
 ## 3. Next, and what is deliberately not here
 
 Next, in order:

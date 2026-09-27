@@ -258,30 +258,39 @@ static func to_dict(seed_value: int, drowned: float) -> Dictionary:
 	}
 
 
-## The sculpted strokes (§20.6), a tile at a time: its offsets in metres as
-## base64 float32. Only tiles something was painted on, and not those whose
-## strokes cancelled out.
+## The sculpted strokes (§20.6) and the surface paint (§20.7), a tile at a
+## time: heights in metres as base64 float32, paint as base64 bytes
+## (materials, then colours; 255 = not painted). Only what a tile carries.
 static func sculpt_to_list() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for t in BrickTerrain.sculpt_tiles():
 		var c: Vector2i = t
+		var row := {"tx": c.x, "tz": c.y}
 		var data: PackedFloat32Array = BrickTerrain.get_sculpt_tile(c.x, c.y)
-		var any := false
 		for v in data:
 			if absf(v) > 1e-4:
-				any = true
+				row["data"] = Marshalls.raw_to_base64(data.to_byte_array())
 				break
-		if any:
-			out.append({"tx": c.x, "tz": c.y,
-				"data": Marshalls.raw_to_base64(data.to_byte_array())})
+		var paint: PackedByteArray = BrickTerrain.get_surface_paint_tile(c.x, c.y)
+		for v in paint:
+			if v != 255:
+				row["paint"] = Marshalls.raw_to_base64(paint)
+				break
+		if row.size() > 2:
+			out.append(row)
 	return out
 
 
 static func sculpt_from_list(list: Array) -> void:
 	for t in list:
-		var bytes := Marshalls.base64_to_raw(String(t.get("data", "")))
-		BrickTerrain.set_sculpt_tile(int(t.get("tx", 0)), int(t.get("tz", 0)),
-				bytes.to_float32_array())
+		var tx := int(t.get("tx", 0))
+		var tz := int(t.get("tz", 0))
+		if t.has("data"):
+			BrickTerrain.set_sculpt_tile(tx, tz,
+					Marshalls.base64_to_raw(String(t["data"])).to_float32_array())
+		if t.has("paint"):
+			BrickTerrain.set_surface_paint_tile(tx, tz,
+					Marshalls.base64_to_raw(String(t["paint"])))
 
 
 ## Put the world back, pads and all. Returns the seed.

@@ -1102,6 +1102,40 @@ func _check_pads() -> void:
 	BrickTerrain.clear_sculpt()
 	BrickTerrain.clear_pads()
 
+	# SURFACE PAINT (§20.7): material and colour, a stud column at a time.
+	var px0 := 600
+	var pz0 := -200
+	var nat_mat := BrickTerrain.material_at(px0, pz0)
+	var nat_col := BrickTerrain.colour_at(px0, pz0)
+	var paint_mat := 3 if nat_mat != 3 else 1
+	var paint_col := (nat_col + 5) % BrickWorld.get_filament_count()
+	BrickTerrain.sculpt_begin_stroke()
+	BrickTerrain.paint_surface(px0, pz0, 5.0, paint_mat, paint_col)
+	_ok("a paint stroke sets the material and the colour",
+		BrickTerrain.material_at(px0, pz0) == paint_mat
+			and BrickTerrain.colour_at(px0, pz0) == paint_col
+			and BrickTerrain.material_at(px0 + 9, pz0) != paint_mat
+			or BrickTerrain.surface_paint_at(px0 + 9, pz0) == Vector2i(255, 255),
+		"material %d -> %d, colour %d -> %d" % [nat_mat, BrickTerrain.material_at(px0, pz0),
+		nat_col, BrickTerrain.colour_at(px0, pz0)])
+	BrickTerrain.sculpt_begin_stroke()
+	BrickTerrain.paint_surface(px0, pz0, 5.0, -1, -2)
+	_ok("KEEP leaves the material, RESET gives the colour back to it",
+		BrickTerrain.material_at(px0, pz0) == paint_mat
+			and BrickTerrain.colour_at(px0, pz0)
+				== BrickTerrain.material_filament_index(paint_mat))
+	BrickTerrain.sculpt_undo()
+	_ok("undo puts the painted colour back", BrickTerrain.colour_at(px0, pz0) == paint_col)
+	World.save_world(path, 20260921, 0.30)
+	BrickTerrain.clear_sculpt()
+	_ok("clearing takes the paint off", BrickTerrain.material_at(px0, pz0) == nat_mat
+		and BrickTerrain.colour_at(px0, pz0) == nat_col)
+	World.load_world(path)
+	_ok("a world keeps its paint", BrickTerrain.material_at(px0, pz0) == paint_mat
+		and BrickTerrain.colour_at(px0, pz0) == paint_col)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	BrickTerrain.clear_sculpt()
+
 	# PADS the shape of a building: a rectangle, and dead flat at exactly
 	# its height wherever the ground would otherwise be quantised.
 	BrickTerrain.add_pad(0, 0, 10, 4, 21.0, 5)
