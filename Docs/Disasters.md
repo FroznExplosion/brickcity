@@ -3,8 +3,9 @@
 Design and plan for the disaster system: four built now (**meteor shower, lightning storm, fire,
 tornado**), the rest deferred with what each one is waiting on.
 
-Written 2026-09-26. **D0 and D1 are built**: the director and the meteor shower (§2.1 has what
-was measured and what changed from the plan). Lightning, fire and the tornado are not yet (§7).
+Written 2026-09-26. **D0–D3 are built**: the director, the meteor shower, the lightning storm and
+fire (§2.1, §3.1, §5.5 have what was measured and what changed from the plan). The tornado is
+not yet (§7).
 
 Decisions this document is written against:
 
@@ -156,8 +157,10 @@ firing `X` twice — already measured.
 * **No craters in the ground.** The city's blasts do not touch terrain (the flat plane has none,
   and heightfield mode does not route blasts to its chunks). A ground strike is a blast on
   whatever stands there. Craters wait for the terrain area to take a blast.
-* **Fire is rolled, not lit.** Each meteor rolls its 20% now and calls `ctx.ignite`, which does
-  nothing until D3 — so a seed's shower does not change when fire arrives.
+* **Fire was rolled before it existed.** Each meteor rolled its 20% from D1 on, so a seed's
+  shower did not change when D3 made `ctx.ignite` real. It did change the cost: with fires
+  burning after the strikes, the shower's worst tick went from 17 ms to ~45 ms headless (mean
+  3.1 → 4.3 ms) — fire's chips on top of the blasts.
 * **The tint is mild.** The first pass washed the bricks red; a player has to read what is being
   hit. Sun `(1, 0.8, 0.66)` at 85%, sky towards a dusty mauve.
 * **The trail runs every frame** (`fixed_fps = 0`) with puffs wider than a frame's travel. At the
@@ -196,6 +199,23 @@ ribbon with an emissive shader, visible 0.25 s with two re-flashes. One mesh, re
 
 **Rain.** A GPUParticles box that follows the camera (never a world-sized emitter). While it rains,
 fire spread probability is halved (§5.2). Wet streaks on bricks are deferred (§7).
+
+### 3.1 Built — what differs, and what was measured
+
+* **No element on the shock.** No `Element` resources exist yet, so a stroke hurts pawns with a
+  plain kinetic `DamagePacket` (60 within 3 m) through `DamageSystem.resolve` — handed the pawn's
+  `HealthPool` directly, because the lookup from the pawn root did not find it. No overlay.
+* **Metal is not preferred.** Strokes go for the tallest standing building near the roll, at a
+  roof corner. Preferring metal waits for buildings that have metal on top.
+* **The sky flash is the sun.** `ctx.set_sky(..., flash)` adds to the sun's energy while a stroke
+  is lit, plus a 60 m omni light at the strike; the flicker is three flashes over 0.3 s.
+* **Rain from halfway through the warning.** `ctx.raining` is true from then until 70% through
+  the ending; fire reads it.
+
+Probe: **15 strokes over 45 s, every one landed; 4 of 4 aimed at the tallest nearby hit it;
+4 committed BLASTs** (a blast is committed only when it kills a brick, so a stroke on a corner
+already taken can commit nothing — the gate asks for most, not all); a soldier beside a stroke
+100 → 40 hp, one 10 m off untouched; sky dark and back.
 
 ---
 
@@ -301,6 +321,25 @@ furniture and player builds bring wood. That is honest and fine for v1.
 * Actors inside a burning cell: `FIRE` damage and overlay.
 * A burning **piece** (an island) carries its fire: v2. In v1 fire lives on building cells only.
 
+### 5.5 Built — what differs, and what was measured
+
+* **The spread is 0.06, not 0.25.** At 0.25 every cell set about nine others alight: a 1,089-cell
+  block of PLA burnt 1,037 of them, the fire sat at the cap, and the city took 2,677 CHIPs in
+  48 s. At 0.06 a PLA cell sets about 1.5 alight — a fire grows, climbs, and runs out of building.
+* **Fire is the director's, not a disaster's.** It outlives the storm or shower that lit it. The
+  banner shows `FIRE — n burning` whenever cells burn. Ending "Fire" (`Shift+H`) douses:
+  no more spread, fuel cut, out in a couple of seconds.
+* **Flames vent.** A cell's flames are drawn at its face onto open air (a flammability-0
+  neighbour), so fire in a room shows at the window. Chips still land at the cell's centre.
+* **An unmaterialised building reads as solid PLA.** `material_at` answers PLA for any point in a
+  recipe building's box until its bricks exist; the first chip materialises it and later samples
+  are real. The cache keeps the early answer. Harmless so far; worth knowing.
+* **No char yet** (§5.4, still v2).
+
+Probe, fire alone (a block of PLA 11 × 9 × 11 cells): **37 caught, peak 13 of 48, 36 above the
+spark and 0 below, out in 43 s, a metal storey stops it, 2 caught in rain against 37 dry.** In
+the city, "a building catches": peak 15 cells, 49 caught, out in 43 s, 487 CHIPs.
+
 ---
 
 ## 6. Deferred — what else fits, and what each is waiting on
@@ -335,8 +374,8 @@ Each stage merges on its own, small (repo CLAUDE.md).
 |---|---|---|
 | **D0** ✅ | Director, context, base class, `H` / `Shift+H`, banner, `--disaster=`, probe skeleton. Small city only | `H` rolls and runs a do-nothing disaster through all four phases; big city has no director |
 | **D1** ✅ | Meteor shower | Probe: N meteors → N committed blasts; frame budget within the damage queue's |
-| **D2** | Lightning storm (sky dim, bolt, thunder delay, rain, shock damage) | Probe: strikes land on the tallest recipe near the roll ≥ 70% |
-| **D3** | Fire service + "a building catches"; meteors and lightning ignite | Probe: fire spreads up, dies out, **never exceeds 48 cells**; metal stops it |
+| **D2** ✅ | Lightning storm (sky dim, bolt, thunder delay, rain, shock damage) | Probe: strikes land on the tallest recipe near the roll ≥ 70% |
+| **D3** ✅ | Fire service + "a building catches"; meteors and lightning ignite | Probe: fire spreads up, dies out, **never exceeds 48 cells**; metal stops it |
 | **D4** | Tornado (islands, facade chip, actors, funnel, orbiting bricks) | Probe: pieces near the path gain speed ≤ `MAX_DEBRIS_SPEED`; facades lose bricks along the path only |
 
 The city change is limited to D0: create the director when `not _big`, pass it a context, route
@@ -348,7 +387,7 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 
 `tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
 `-- --also-big` to also check the big city has no director, `-- --disaster-shot` windowed for
-captures) loads the small city headless and, for each kind with a fixed seed:
+captures, `-- --only=meteor,fire,lightning,pawn` for sections) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
 tick's damage time, and asserts the per-stage gate above. `--shot` captures a frame at peak for
 each, so a change to the look is reviewable. Run it with the probes the city already has
