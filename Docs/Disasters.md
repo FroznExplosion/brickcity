@@ -3,8 +3,8 @@
 Design and plan for the disaster system: four built now (**meteor shower, lightning storm, fire,
 tornado**), the rest deferred with what each one is waiting on.
 
-Written 2026-09-26. **D0 is built** (director, context, base class, `H` / `Shift+H`, banner,
-`--disaster=`, probe); the four disasters are not yet (§7).
+Written 2026-09-26. **D0 and D1 are built**: the director and the meteor shower (§2.1 has what
+was measured and what changed from the plan). Lightning, fire and the tornado are not yet (§7).
 
 Decisions this document is written against:
 
@@ -150,6 +150,27 @@ GPUParticles trail, both from a pool of 8 — no instantiating mid-shower.
 **Budget.** A burst of 10 in 2 s is 10 blasts; the damage queue already spreads them at 6 ms a
 tick. The worst case is two large ones on the same tower in one tick, which is the same as a player
 firing `X` twice — already measured.
+
+### 2.1 Built — what differs from the plan above, and what was measured
+
+* **No craters in the ground.** The city's blasts do not touch terrain (the flat plane has none,
+  and heightfield mode does not route blasts to its chunks). A ground strike is a blast on
+  whatever stands there. Craters wait for the terrain area to take a blast.
+* **Fire is rolled, not lit.** Each meteor rolls its 20% now and calls `ctx.ignite`, which does
+  nothing until D3 — so a seed's shower does not change when fire arrives.
+* **The tint is mild.** The first pass washed the bricks red; a player has to read what is being
+  hit. Sun `(1, 0.8, 0.66)` at 85%, sky towards a dusty mauve.
+* **The trail runs every frame** (`fixed_fps = 0`) with puffs wider than a frame's travel. At the
+  default 30 fps a 120 m/s meteor left a row of dots 4 m apart.
+* **The ring's glow has its own texture**, premultiplied. Decal emission ignores alpha, so the
+  shared texture lit the decal's whole square.
+* **A hit on a building is found by box** (`ctx.building_at`), not by the collider's layer: the
+  city's structure bodies are server RIDs, so the ray's collider is not a node.
+
+Probe (seed as the director rolls it, #4): **31 meteors in 3 bursts, all landed, 17 on buildings,
+18 committed BLASTs, nearest to the player 21.8 m**; physics tick mean 3.1 ms, worst 17.3 ms
+headless. Windowed with captures the worst tick is ~94 ms — the ticks a screenshot is saved on.
+`-- --disaster-shot` (windowed) frames the first meteor and saves `shots/disaster_meteor_*.png`.
 
 ---
 
@@ -313,7 +334,7 @@ Each stage merges on its own, small (repo CLAUDE.md).
 | Stage | What | Done when |
 |---|---|---|
 | **D0** ✅ | Director, context, base class, `H` / `Shift+H`, banner, `--disaster=`, probe skeleton. Small city only | `H` rolls and runs a do-nothing disaster through all four phases; big city has no director |
-| **D1** | Meteor shower | Probe: N meteors → N committed blasts; frame budget within the damage queue's |
+| **D1** ✅ | Meteor shower | Probe: N meteors → N committed blasts; frame budget within the damage queue's |
 | **D2** | Lightning storm (sky dim, bolt, thunder delay, rain, shock damage) | Probe: strikes land on the tallest recipe near the roll ≥ 70% |
 | **D3** | Fire service + "a building catches"; meteors and lightning ignite | Probe: fire spreads up, dies out, **never exceeds 48 cells**; metal stops it |
 | **D4** | Tornado (islands, facade chip, actors, funnel, orbiting bricks) | Probe: pieces near the path gain speed ≤ `MAX_DEBRIS_SPEED`; facades lose bricks along the path only |
@@ -326,14 +347,19 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 ## 8. Testing
 
 `tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
-`-- --also-big` to also check the big city has no director) loads the small city headless and, for each kind with a fixed seed:
+`-- --also-big` to also check the big city has no director, `-- --disaster-shot` windowed for
+captures) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
 tick's damage time, and asserts the per-stage gate above. `--shot` captures a frame at peak for
 each, so a change to the look is reviewable. Run it with the probes the city already has
 (`city_probe`, `debris_probe`, `cap_probe`) before each merge.
 
-Until D1 the roll holds only the **drill** (`drill_disaster.gd`): every phase, a light tremor, no
-brick changed. It stays forceable with `--disaster=drill` once real kinds join the roll.
+The roll holds only built kinds. The **drill** (`drill_disaster.gd`): every phase, a light tremor, no
+brick changed) is not in it, but `--disaster=drill` still runs one.
+
+**Flag names must not collide with the city's.** The probe's first `--big` and `--shot` were read
+by `city_scene` too and turned the small city into the big one / started its own capture pass.
+The probe's flags are `--also-big` and `--disaster-shot` for that reason.
 
 The city's own gates (`-- --gun` etc.) are scene passes: run them windowed
 (`--path . --resolution 1280x720 res://scenes/city.tscn -- --gun`), never `--headless` — their
