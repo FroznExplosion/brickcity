@@ -1352,6 +1352,31 @@ func _build_sea(tile_m: float) -> void:
 		float(Time.get_ticks_usec() - t0) / 1000.0])
 
 
+## The city's shore (§21.6): standing on dry ground a little inland of the
+## nearest water, looking out over it, so the brick tiers, the sheet and the
+## seabed's shallows are all in one picture.
+func _shot_shore() -> void:
+	var sea: float = TerrainWorldScript.sea_level
+	var wet := Vector3.INF
+	for r in range(20, 400, 8):
+		for k in 48:
+			var a := TAU * float(k) / 48.0
+			var p := _on_ground(Vector3(cos(a) * r, 0.0, sin(a) * r))
+			if p.y < sea - 0.5:
+				wet = p
+				break
+		if wet != Vector3.INF:
+			break
+	if wet == Vector3.INF:
+		return
+	var inland := Vector3(wet.x, 0.0, wet.z).normalized() * -18.0
+	var stand := _on_ground(wet + inland)
+	camera.position = Vector3(stand.x, maxf(stand.y, sea) + 6.0, stand.z)
+	camera.look_at(Vector3(wet.x, sea, wet.z) - inland, Vector3.UP)
+	await _frames(8)
+	await _save("city_shore")
+
+
 ## Where the ground is under (x, z): the field on terrain, 0 on the plane.
 func _ground_y(x: float, z: float) -> float:
 	return ai_world.ground_at(x, z)
@@ -3627,12 +3652,13 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 	# A corner is where four columns meet and stands on ONE of them, so the
 	# ground next to it can be a step higher: a step is the tolerance.
 	var step_m := float(AINav.STEP_UP) * PLATE + 0.05
+	var climb_detail := ("%.1f m to %.1f m: %.0f m long, spans %.1f m, never more than %.2f m under the ground" % [
+			a.y, z.y, _path_len(climb), top - bottom, worst_under]) if not climb.is_empty() 			else "none, %.1f m to %.1f m" % [a.y, z.y]
+	print("[nav]   climb: %s" % climb_detail)
 	_gate_ok("a path climbs the hillside from the lowest building to the highest",
 			not climb.is_empty() and worst_under <= step_m
 			and absf(climb[0].y - a.y) <= step_m and absf(climb[-1].y - z.y) <= step_m,
-			("%.1f m to %.1f m: %.0f m long, spans %.1f m, never more than %.2f m under the ground" % [
-			a.y, z.y, _path_len(climb), top - bottom, worst_under]) if not climb.is_empty()
-			else "none, %.1f m to %.1f m" % [a.y, z.y])
+			climb_detail)
 	_draw_path(climb, Color(0.3, 0.7, 1.0))
 
 	# A hill hides a body. Two points either side of a crest, eye height, and
@@ -3662,6 +3688,8 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 		var ray := PhysicsRayQueryParameters3D.create(eye_p, eye_q, Layers.HITSCAN_MASK)
 		if not space.intersect_ray(ray).is_empty():
 			physics_agrees += 1
+	print("[nav]   crest: %d of %d lines over a crest blocked (physics: %d)" % [
+			hidden, tried, physics_agrees])
 	_gate_ok("a crest blocks the AI's sight and is cover no gun wears away",
 			tried > 0 and hidden == tried,
 			"%d of %d lines over a crest blocked (physics: %d)" % [hidden, tried, physics_agrees])
@@ -3679,6 +3707,9 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 		print("[nav]   (no ground under the sea within 200 m; the sea gate is skipped)")
 	else:
 		var swim := ai_nav.find_path(a, wet, 40000)
+		print("[nav]   sea: seabed %.1f m under a %.1f m sea; can stand %s, path %s" % [
+				wet.y, sea, ai_nav.can_stand(wet),
+				"none" if swim.is_empty() else "ends at %.2f m" % swim[-1].y])
 		_gate_ok("the sea is not somewhere a path goes",
 				not ai_nav.can_stand(wet) and (swim.is_empty()
 				or swim[-1].y >= sea - ai_nav.get_wade() - 0.05),
@@ -5396,6 +5427,8 @@ func _run_shot_pass() -> void:
 	camera.rotation = Vector3(-0.42, -2.36, 0.0)
 	await _frames(4)
 	await _save("city_intact")
+	if _sea != null:
+		await _shot_shore()
 
 	# Inside an undamaged building: floors have to be visible from above AND
 	# below, and the walls have to read as brick before anything materialises.
@@ -5411,7 +5444,7 @@ func _run_shot_pass() -> void:
 	await _save("city_interior")
 	# And looking down at the floor you are standing on, which is the half that
 	# was missing.
-	camera.position.y = 2.4
+	camera.position.y = inside.xform.origin.y + 2.4
 	camera.rotation = Vector3(-0.6, 0.6, 0.0)
 	await _frames(2)
 	await _save("city_interior_down")
