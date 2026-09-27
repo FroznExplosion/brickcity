@@ -671,7 +671,15 @@ var _encounters: Array[Encounter] = []
 ## nav and scheduler; an agent's missed rounds go through the authority.
 var ai_services: AIServices
 var soldiers: Array[Soldier] = []
+## Settled wreckage resting on buildings (AI.md 3.10): piece id -> the building
+## ids it loads. Loads are LOAD / UNLOAD commands, so a client has them too.
+var _wreck_loads := {}
+## Loads as last committed: piece id -> {building id: [cells, mass each]}, so a
+## re-check that finds the same thing commits nothing.
+var _wreck_state := {}
+var _wreck_dirty := {}
 var _soldier_mode := false
+var _wreck_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -756,6 +764,7 @@ func _ready() -> void:
 	_no_ai = "--no-ai" in args
 	_nav_mode = "--nav" in args
 	_soldier_mode = "--soldier" in args
+	_wreck_mode = "--wreck" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -816,8 +825,20 @@ func _ready() -> void:
 	# where navigation is stale.
 	authority.committed.connect(_nav_on_command)
 	islands.piece_settled.connect(func(isl: BrickIsland) -> void:
-		ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5)))
+		ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5))
+		_wreck_settled(isl))
+	islands.piece_woken.connect(func(isl: BrickIsland) -> void:
+		if isl.settled:
+			_wreck_settled(isl))
+	islands.piece_changed.connect(func(isl: BrickIsland) -> void:
+		# Lost bricks: what it weighs, and what it rests on, may have changed.
+		# Looked at once a tick, not once a bullet.
+		if _wreck_loads.has(isl.piece_id):
+			_wreck_dirty[isl.piece_id] = isl)
+	islands.piece_slept.connect(func(piece_id: int, _record: ChunkRecord) -> void:
+		_wreck_unload(piece_id))
 	islands.piece_removed.connect(func(isl: BrickIsland, _reason: StringName) -> void:
+		_wreck_unload(isl.piece_id)
 		if isl.is_valid():
 			ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5)))
 	ai_services = AIServices.new()
@@ -890,6 +911,8 @@ func _ready() -> void:
 		_run_nav_pass()
 	elif _soldier_mode:
 		_run_soldier_pass()
+	elif _wreck_mode:
+		_run_wreck_pass()
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _bench_mode:
@@ -2841,11 +2864,106 @@ func _drop_proxies(id: int) -> void:
 		ai_world.remove_proxy(_proxy_id(id, k))
 
 
+## A large piece has come to rest: what is it lying on? Every standing brick just
+## under one of its own takes a share of its weight -- a LOAD command per
+## building, applied here and replayed on every client -- and that building is
+## solved again, so a hanging section under it can give way (AI.md 3.10). Host
+## only: the loads are how a client learns of them.
+func _wreck_settled(isl: BrickIsland) -> void:
+	if not authority.may_decide() or not isl.is_valid() or not isl.landmark or isl.piece_id < 0:
+		return
+	var xf := isl.chunk_transform()
+	var cell := BrickWorld.get_cell_size()
+	var contacts := {}   # building id -> Array of absolute cells
+	var total := 0
+	for bx in world.get_block_boxes(isl.chunk):
+		var d: Dictionary = bx
+		if not bool(d.alive):
+			continue
+		var size: Vector3 = d.size
+		var centre: Vector3 = xf * (d.pos as Vector3)
+		# The block's vertical half-extent in the world, at whatever angle it lies.
+		var hy := absf(xf.basis.x.y) * size.x * 0.5 + absf(xf.basis.y.y) * size.y * 0.5 \
+				+ absf(xf.basis.z.y) * size.z * 0.5
+		var under := centre - Vector3.UP * (hy + 0.05)
+		for id in _near_buildings(under, 0.3):
+			var b := registry.get_building(id)
+			if b == null or not b.is_materialised():
+				continue
+			var local := world.get_chunk_transform(b.chunk).affine_inverse() * under
+			var at := world.get_chunk_origin(b.chunk) + Vector3i(floori(local.x / cell.x),
+					floori(local.y / cell.y), floori(local.z / cell.z))
+			if world.is_solid(b.chunk, at) and world.block_at(b.chunk, at) >= 0:
+				if not contacts.has(id):
+					contacts[id] = []
+				if not (contacts[id] as Array).has(at):
+					contacts[id].append(at)
+					total += 1
+	var before: Array = _wreck_loads.get(isl.piece_id, [])
+	var was: Dictionary = _wreck_state.get(isl.piece_id, {})
+	for id in before:
+		if not contacts.has(id):
+			_wreck_unload_one(isl.piece_id, int(id))
+	if total == 0:
+		_wreck_loads.erase(isl.piece_id)
+		_wreck_state.erase(isl.piece_id)
+		return
+	var mass_each := world.get_chunk_mass(isl.chunk) / float(total)
+	var now_state := {}
+	for id in contacts:
+		now_state[id] = [contacts[id], mass_each]
+		# The same cells under the same weight: nothing to say.
+		if was.has(id) and was[id][0] == contacts[id] and is_equal_approx(float(was[id][1]), mass_each):
+			continue
+		var e := DamageLog.Entry.new()
+		e.tick = Engine.get_physics_frames()
+		e.kind = DamageLog.Kind.LOAD
+		e.target = int(id)
+		e.owner = isl.piece_id
+		e.radius = mass_each
+		for at in contacts[id]:
+			e.points.append(Vector3(at))
+		DamageLog.apply_entry(world, registry.get_building(int(id)).chunk, e)
+		authority.commit_entry(e)
+		_mark_dirty(int(id))
+	_wreck_loads[isl.piece_id] = contacts.keys()
+	_wreck_state[isl.piece_id] = now_state
+	_wreck_load_count += 1
+
+
+var _wreck_load_count := 0
+
+
+func _wreck_unload(piece_id: int) -> void:
+	if piece_id < 0 or not _wreck_loads.has(piece_id):
+		return
+	for id in _wreck_loads[piece_id]:
+		_wreck_unload_one(piece_id, int(id))
+	_wreck_loads.erase(piece_id)
+	_wreck_state.erase(piece_id)
+
+
+func _wreck_unload_one(piece_id: int, id: int) -> void:
+	var b := registry.get_building(id)
+	if b == null or not authority.may_decide():
+		return
+	if b.is_materialised():
+		world.clear_load(b.chunk, piece_id)
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.UNLOAD
+	e.target = id
+	e.owner = piece_id
+	authority.commit_entry(e)
+
+
 ## Navigation is stale where a command changed structure: a hit's ball, a
 ## building's whole box for a solve, a topple or a cut-out.
 func _nav_on_command(e: DamageLog.Entry) -> void:
 	if e.is_piece():
 		return  # pieces are re-read when they settle or go
+	if e.kind == DamageLog.Kind.LOAD or e.kind == DamageLog.Kind.UNLOAD:
+		return   # weight, not shape
 	match e.kind:
 		DamageLog.Kind.BLAST, DamageLog.Kind.CHIP, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
 			var r := Vector3.ONE * (e.radius + 1.0)
@@ -2891,11 +3009,20 @@ func _ai_tick(destruction_ms: float) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	ai_world.sync()
-	# Where not to stand: anything big still falling, as its box and a margin.
-	ai_world.clear_danger()
-	for isl in islands.islands:
-		if isl.is_valid() and not isl.settled and not isl.disposable:
-			ai_world.set_danger(isl.chunk, islands.world_aabb(isl).grow(1.0))
+	# Where not to stand: anything big still falling, swept to where it is going.
+	Danger.update(ai_world, islands)
+	# Wreckage that lost bricks since last tick: re-weigh it, a few a tick.
+	var n_wreck := 0
+	for pid in _wreck_dirty.keys():
+		var isl: BrickIsland = _wreck_dirty[pid]
+		_wreck_dirty.erase(pid)
+		if is_instance_valid(isl.body) and isl.is_valid() and isl.settled:
+			_wreck_settled(isl)
+		else:
+			_wreck_unload(int(pid))
+		n_wreck += 1
+		if n_wreck >= 4:
+			break
 	for enc in _encounters:
 		enc.step(func(id: int) -> void: _promote(id, false))
 	if ai_nav.pending() > 0:
@@ -3176,6 +3303,56 @@ func _run_soldier_pass() -> void:
 	await _save("city_soldier")
 	_check_log_replays()
 	print("[soldier] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The gate for wreckage weight in the city (Docs/AIPlan.md P5): a tower's top
+## cut free comes to rest on what is left of it, and its weight goes onto the
+## bricks it lies on -- a LOAD command, applied and solved on the host, replayed
+## by the twin buildings of the log check like everything else.
+func _run_wreck_pass() -> void:
+	print("[wreck] a piece resting on a building loads it")
+	var b := registry.get_building(0)
+	for c in registry.buildings:
+		if c.recipe.courses >= 24 and not c.is_build():
+			b = c
+			break
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5 + 20.0, 25.0, -20.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 8.0, fz * 0.5), Vector3.UP)
+	_promote(b.id)
+	await _frames(20)
+	# Cut the tower through at a storey's slab, as a collision would.
+	# On the joint plane between the second storey's slab and the course above.
+	var cut := b.xform * Vector3(fx * 0.5, (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * PLATE, fz * 0.5)
+	if authority.request(DamageLog.Kind.SEVER, b.id, cut, 0.14, Vector3.UP):
+		world.separate_plane(b.chunk, cut, Vector3.UP, 0.14)
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SEVER, b.id, cut, 0.14,
+				Vector3.UP)
+		_mark_dirty(b.id)
+	var n0 := authority.commands.size()
+	var load: DamageLog.Entry = null
+	var waited := 0
+	while load == null and waited < 30 * 20:
+		await get_tree().physics_frame
+		waited += 1
+		for i in range(n0, authority.commands.size()):
+			var e: DamageLog.Entry = authority.commands.entries[i]
+			if e.kind == DamageLog.Kind.LOAD and e.target == b.id:
+				load = e
+				break
+	_gate_ok("the cut-free top comes to rest on the tower and loads it", load != null,
+			"%s" % ("%d brick(s) under %.1f each, after %d tick(s)" % [load.points.size(),
+			load.radius, waited] if load != null else "no LOAD in %d tick(s)" % waited))
+	if load != null:
+		_gate_ok("the load is on the building's solve",
+				world.get_load_owners(b.chunk).has(load.owner) and b.is_materialised(),
+				"owners %s" % [world.get_load_owners(b.chunk)])
+	await _frames(30)
+	await _save("city_wreck")
+	_check_log_replays()
+	print("[wreck] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
@@ -4958,8 +5135,15 @@ func _check_log_replays() -> void:
 			_explain_difference("piece %d (owner %d, woke %d time(s))" % [isl.piece_id, isl.owner, isl.wakes], hp, rp)
 			_trace_piece(rep, entries, isl, hp, rp)
 
-	print("[city] log replay: %d command(s) into %d twin building(s) (%d skipped), %d missed, %.0f ms" % [
-		entries.size(), twin_of.size(), skipped, rep.missed, Time.get_ticks_msec() - t0])
+	var loads := 0
+	var unloads := 0
+	for e in entries:
+		if e.kind == DamageLog.Kind.LOAD:
+			loads += 1
+		elif e.kind == DamageLog.Kind.UNLOAD:
+			unloads += 1
+	print("[city] log replay: %d command(s) into %d twin building(s) (%d skipped), %d missed, %.0f ms; wreckage %d LOAD, %d UNLOAD" % [
+		entries.size(), twin_of.size(), skipped, rep.missed, Time.get_ticks_msec() - t0, loads, unloads])
 	print("[city]   buildings: %d of %d identical; pieces: %d of %d identical, %d missing; %d of %d at rest where the host's are" % [
 		b_ok, b_n, p_ok, p_n, p_missing, rest_ok, rest_n])
 	for m in rep.miss_log:

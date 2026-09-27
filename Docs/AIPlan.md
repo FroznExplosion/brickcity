@@ -494,6 +494,47 @@ soldiers hide behind and walk over the wreck; nobody stands under a falling piec
 toppled across another loads it — a hanging section under it gives way, a floor over columns does
 not — and the loopback client agrees on both.
 
+**Done (2026-09-26).**
+- **Wreckage weighs on buildings** (AI.md 3.10, R5). `BrickWorld.set_load / clear_load`: weight
+  resting on a chunk from outside it, per owner (the piece), in the solver's integer mass units,
+  added to the blocks' own weight by every `solve_stress` — so the existing tension rule decides:
+  weight hanging from a joint can pull it apart, weight in compression cannot. Two new commands,
+  **`LOAD`** (mass on each block named by absolute cell, under the piece's id, replacing what that
+  piece had on the building) and **`UNLOAD`**, applied by `DamageLog.apply_entry` and the
+  replayer. The city, as host, commits them: when a large piece settles it finds every standing
+  brick just under one of its own, shares the piece's mass across them per building, and queues
+  the building's solve; a piece that loses bricks is re-weighed once a tick (and commits nothing
+  if nothing changed); one that is woken, slept, removed or moved takes its load with it.
+  **All loads are logged**, not only those on finite-headroom blocks: settling large pieces are a
+  handful per collapse, so the headroom filter (and headroom baked per recipe, R6/R7) waits for
+  pawn weight in P7, where the per-step lookup is what matters.
+- **Danger volumes project the fall** (`scripts/ai/danger.gd`): a moving large piece's box swept
+  along its velocity and gravity over 1.5 s, stopped at the ground, so a soldier under a piece
+  ten metres up moves before it has picked up speed.
+- **Cover life in decisions:** a soldier in cover checks it every think and leaves with 0.8 s still
+  in it against the threat's gun (`BTPeekAndFire.LEAVE`); the engage selector is dynamic, so a
+  soldier standing in the open takes cover the moment there is some, and a search that found
+  nothing is not repeated for 1.5 s.
+- **What was already there:** event invalidation of tactical points is moot — cover is found
+  against the current bricks (P4); nav links from holes are the grid (P3); wreck *summaries* are
+  not needed for cover or navigation, because AIWorld and AINav read a settled piece's own chunk at
+  its own angle — they wait for the flyer height field and the commander's grid (P7, P9).
+  Destruction-as-verb actions (shoot through, take cover away, make a door, make cover) are
+  deferred to P6, where squads have a reason to use them.
+- Gates: **`tools/wreck_load_probe.gd` 9** — a floor plate over a column holds 500 of wreckage; a
+  balcony hung from one 2×2 brick under 60 gives way and comes away while the loaded floor stands;
+  a piece that moves takes its load; a client replaying LOAD, SOLVE and UNLOAD has the same joints
+  broken and the same loads. **`tools/fights_back_probe.gd` 5** — shot at, its cover worn away, a
+  soldier leaves with 0.67 s of cover left, and 16 of 18 rounds fired while it hid went into the
+  wall (a three-course wall is exactly a crouched figure's height, so a skimming round can clip a
+  head); after a collapse it hides behind a fallen wall section lying at 35° (85 ticks with the
+  wreck in the player's line), and walks over a slab of wreck lying across its lane; under a piece
+  dropped from ten metres it is 3.5 m clear when it lands. **City `-- --wreck` 2** — a tower's top
+  cut free settles on its base, its weight goes onto the building as a LOAD, and the log's twin
+  buildings replay it.
+- Found on the way: a probe arena must disable a dead brick's collision as the city does, or
+  rounds stop at bricks that are not there.
+
 ### P6 — Squads, tactics, aggro · L
 
 Order / Assignment / Report with ids; squad `BTPlayer`s with blackboard scopes; plays (advance from

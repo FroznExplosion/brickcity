@@ -46,6 +46,10 @@ var fire_ok := false
 var shots := 0
 var blocked_shots := 0
 var peeks := 0
+## Times it left cover because the cover was being shot away, and how many
+## seconds the cover had left when it went.
+var relocations := 0
+var cover_left_with := -1.0
 
 var _next_sense := -INF
 var _next_think := -INF
