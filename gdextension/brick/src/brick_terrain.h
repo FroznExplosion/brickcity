@@ -738,6 +738,11 @@ public:
     /// run parallel to every coast and roll in toward it whatever the swell
     /// is doing. (amplitude, radians per metre, omega, band reach in metres).
     static Vector4 shore_band_uniform();
+    /// How the swell is steered (Water.md 9.8): within `x` metres of a shore
+    /// it travels TOWARD the nearest shore (phased on distance), past `y` it
+    /// is the open-ocean directional swell, blended between. `z` is the drift
+    /// that keeps crests off perfect contour lines. (near, far, drift, 0).
+    static Vector4 swell_blend_uniform();
     /// Build the field the band reads: the ground and the distance to the
     /// nearest dry ground, one sample every `step` studs over +/-`half_studs`,
     /// on the SAME lattice as the water's seabed texture. Returns the samples

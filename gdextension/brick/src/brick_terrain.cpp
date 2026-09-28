@@ -3619,6 +3619,16 @@ constexpr double BAND_PERIOD = 6.0;       ///< seconds between crests
 constexpr double BAND_REACH = 70.0;       ///< metres out from the shore
 constexpr int BAND_LATTICE = 8;           ///< studs between seabed samples
 
+/// THE SWELL IS STEERED TO THE SHORE. Within SWELL_NEAR metres of land each
+/// swell component is phased on distance to the nearest shore -- crests
+/// parallel to the coast, moving in -- so on a lake or a bay the sea rolls
+/// out from the middle toward every shore rather than all one way. Past
+/// SWELL_FAR, in open ocean, it is the directional swell again, which is
+/// what an ocean with no coast in reach looks like.
+constexpr double SWELL_NEAR = 250.0;
+constexpr double SWELL_FAR = 400.0;
+constexpr double SWELL_DRIFT = 1.0;
+
 /// The field the band reads: (ground, distance) per lattice corner.
 std::vector<float> g_shore;
 int g_shore_n = 0;
@@ -3756,11 +3766,16 @@ double field_distance(double x, double z) {
             + (d(i0, j0 + 1) + (d(i0 + 1, j0 + 1) - d(i0, j0 + 1)) * fx) * fz;
 }
 
-/// How much of the swell survives near a coast: 15% at the waterline, all of
-/// it by the band's reach. The sea is calm where it meets the beach and rough
-/// out where it is open (Water.md 9.7).
+/// How much of the swell survives near a coast: 45% at the waterline, all of
+/// it by the band's reach. 15% read as a dead calm at every beach (9.8).
 double swell_near_shore(double dist) {
-    return 0.15 + 0.85 * smoothstep_d(0.0, BAND_REACH, dist);
+    return 0.45 + 0.55 * smoothstep_d(0.0, BAND_REACH, dist);
+}
+
+/// A slow wobble per swell component, so shore-steered crests are not
+/// perfect contour lines of the distance field.
+double swell_drift(int i, double x, double z) {
+    return SWELL_DRIFT * (std::sin(0.017 * x + 1.3 * (double)i) + std::sin(0.014 * z + 0.7 * (double)i));
 }
 
 double band_value(double x, double z, double t) {
@@ -3769,9 +3784,9 @@ double band_value(double x, double z, double t) {
         return 0.0;
     }
     const double dist = field_distance(x, z);
-    // Small at the waterline and growing OUT to sea -- a beach gets ripples,
-    // the approach gets rollers -- then gone past the reach.
-    const double wgt = smoothstep_d(2.0, 35.0, dist)
+    // A third at the waterline and growing out to sea -- a beach gets small
+    // rollers, the approach bigger ones -- then gone past the reach.
+    const double wgt = (0.35 + 0.65 * smoothstep_d(0.0, 20.0, dist))
             * (1.0 - smoothstep_d(0.6 * BAND_REACH, BAND_REACH, dist))
             * smoothstep_d(0.2, 1.0, depth);
     if (wgt <= 0.0) {
@@ -3859,6 +3874,10 @@ PackedVector4Array BrickWave::group_uniform_array() {
     return out;
 }
 
+Vector4 BrickWave::swell_blend_uniform() {
+    return Vector4((float)SWELL_NEAR, (float)SWELL_FAR, (float)SWELL_DRIFT, 0.0f);
+}
+
 Vector4 BrickWave::shore_band_uniform() {
     return Vector4((float)(BAND_AMP * g_wave_gain), (float)(Math_TAU / BAND_WAVELENGTH),
         (float)(Math_TAU / BAND_PERIOD), (float)BAND_REACH);
@@ -3869,18 +3888,25 @@ double BrickWave::height_at(double x, double z, double t) {
     // where there used to be none, so this is a per-BODY call and not a
     // per-vertex one -- which is what `sample_heights` is for.
     const double taper = shore_taper(x, z);
+    const double dist = field_distance(x, z);
+    // 0 near land (steered to the shore), 1 in open ocean (directional).
+    const double open = smoothstep_d(SWELL_NEAR, SWELL_FAR, dist);
     double swell = 0.0;
     for (int i = 0; i < WAVE_COUNT; ++i) {
         const WaveComponent &w = WAVES[i];
         const double len = w.wavelength * g_wave_gain;
         const double k = Math_TAU / len;
-        swell += w.amplitude * g_wave_gain
-                * std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
+        const double directional = std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
                 - omega(len) * t + w.phase);
+        // + omega t: the phase is constant where k dist + w t is, so the
+        // crest moves to smaller distance -- toward the shore.
+        const double steered = std::sin(k * std::min(dist, SWELL_FAR) + omega(len) * t + w.phase
+                + swell_drift(i, x, z));
+        swell += w.amplitude * g_wave_gain * (steered * (1.0 - open) + directional * open);
     }
     // The swell, shaped by the groups and dying in the shallows, and the
     // shore band on top of it: the same expression the shader draws.
-    return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(field_distance(x, z)) * swell
+    return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(dist) * swell
             + band_value(x, z, t);
 }
 
@@ -3955,6 +3981,8 @@ void BrickWave::_bind_methods() {
         &BrickWave::group_uniform_array);
     ClassDB::bind_static_method("BrickWave", D_METHOD("shore_band_uniform"),
         &BrickWave::shore_band_uniform);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("swell_blend_uniform"),
+        &BrickWave::swell_blend_uniform);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_depth", "x", "z"),
         &BrickWave::band_depth);
     ClassDB::bind_static_method("BrickWave", D_METHOD("shore_distance", "x", "z"),

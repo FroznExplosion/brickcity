@@ -133,6 +133,8 @@ func follow(camera: Vector3, delta: float) -> void:
 	# The hole a few metres INSIDE the studded tier's edge: the two overlap
 	# there, the sheet a little lower (water.gdshader seam_sink), so the seam
 	# between them is water whichever way the waves lean.
+	# The centre is passed always: the sheet's wave LOD is by distance from
+	# it, hole or no hole.
 	sheet.follow(near.time(), xz, near.centre_for(xz),
 			maxf(near.radius - SEAM_OVERLAP, 0.0) if near.visible else 0.0)
 

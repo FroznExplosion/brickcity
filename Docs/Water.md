@@ -827,6 +827,36 @@ middle distance and fully leaned ones drew none.
 the terrain's lattice) over the studded tier AND the sheet, anti-aliased, and
 faded out where a stud is under ~6 pixels so it never turns to moiré.
 
+## 9.8 A cone under the feet, ring seams, and a sea that rolls to its shores
+
+**The cone.** A sheet vertex over dry land was collapsed to the node's
+origin — harmless while the sheet sat at the world's origin, and since the
+sheet follows the camera, that origin is under the player's feet: every
+shoreline triangle stretched down to one point below the camera, a cone seen
+from underwater. Dry vertices now sink 3 m below the sea WHERE THEY ARE, inside
+the terrain.
+
+**Seams at the ring borders.** Each ring faded waves by its own spacing, so
+at a border the finer ring kept waves the coarser one had dropped and the two
+edges stood at different heights. The fade is now by DISTANCE from the camera
+(`lod_base_cell`, `lod_inner_radius` — the same spacing the rings step through,
+but continuous), so both sides of a border draw the same height; and every
+ring but the last hangs a 1.5 m skirt from its outer edge, which covers the
+T-junction cracks where the coarser ring has half the vertices.
+
+**Not still at the beach.** The swell keeps 45% at the waterline (15% read as
+a pond) and the shore band a third of its height there. Probe: 0.77 m moving
+3–8 m from shore against 1.59 m 60–70 m out.
+
+**The swell rolls toward the shore.** Within 250 m of land each swell
+component is phased on distance to the nearest shore — `sin(k·s + ω·t + φ +
+drift)` — so on a lake or a bay the sea rolls out from its middle toward every
+shore, crests parallel to the coast; past 400 m, in open ocean with no coast in
+reach, it is the directional swell, blended between
+(`BrickWave.swell_blend_uniform`). A slow per-component drift keeps crests off
+exact contour lines. CPU and shader are the same formula; the probe reproduces
+the CPU surface from the shader's uniforms to 1e-7 m.
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and
