@@ -1,10 +1,16 @@
 @tool
 class_name BTPeekAndFire
 extends BTAction
-## Into cover, then hide and peek in turn (F.E.A.R., Docs/AI.md 6.1): low cover,
-## crouch to hide and stand to shoot; high cover, step out to its side to shoot
-## and back to hide. Leaves when the cover is nearly shot through, or when the
-## enemy has not been seen for a while -- the tree then searches.
+## Into cover, then hide and peek in turn (F.E.A.R., Docs/AI.md 6.1). Nobody
+## crouches (A21): cover hides a standing body, and a peek is a step out to its
+## side to shoot and a step back to hide. Leaves when the cover is nearly shot
+## through, or when the enemy has not been seen for a while -- the tree then
+## searches.
+##
+## For the tactics that use cover (CombatPolicy): TAKE_COVER and FALL_BACK peek
+## and fire; COVER_RELOAD hides, reloads, and when the magazine is full says the
+## tactic is done so the next one is chosen. Whatever the tactic, a soldier
+## reloading does not peek.
 
 const HIDE := [0.8, 1.6]
 const PEEK := [1.2, 2.0]
@@ -28,11 +34,11 @@ func _tick(_delta: float) -> Status:
 	var cover: Dictionary = blackboard.get_var(&"cover", {}, false)
 	var threat: Vector3 = blackboard.get_var(&"threat_eye", Vector3.ZERO, false)
 	if cover.is_empty():
+		so.tactic_done = true
 		return FAILURE
 	var c := so.contact()
 	if c == null or now - c.seen_at > LOST:
 		so.fire_ok = false
-		so.pawn.intents.crouch = false
 		return FAILURE
 	var at: Vector3 = cover.cover
 	var feet := so.pawn.feet()
@@ -40,7 +46,6 @@ func _tick(_delta: float) -> Status:
 	if not _peeking and Vector2(feet.x - at.x, feet.z - at.z).length() > 0.5:
 		so.state = "to cover"
 		so.fire_ok = false
-		so.pawn.intents.crouch = false
 		so.look_at_point(threat)
 		var r := so.move_to(at, true)
 		if r == -1 or so.stuck >= Soldier.MAX_STUCK:
@@ -49,6 +54,7 @@ func _tick(_delta: float) -> Status:
 			so.stuck = 0
 			blackboard.set_var(&"cover", {})
 			blackboard.set_var(&"cover_fail_at", now)
+			so.tactic_done = true
 			return FAILURE
 		return RUNNING
 	# In it. Is it still cover? Checked every think -- one DDA -- and left while
@@ -59,8 +65,21 @@ func _tick(_delta: float) -> Status:
 		so.cover_left_with = CoverSearch.life_at(s, at, threat)
 		so.relocations += 1
 		blackboard.set_var(&"cover", {})
+		so.tactic_done = true
 		return FAILURE
-	if now >= _until:
+	var g := so.pawn.gun
+	var reloading := g != null and g.is_reloading()
+	if so.tactic == CombatPolicy.Tactic.COVER_RELOAD and g != null:
+		if not reloading and g.ammo < g.mag_size():
+			g.reload()
+			reloading = g.is_reloading()
+		elif not reloading:
+			# Full again: what now is the policy's to say.
+			so.tactic_done = true
+	if reloading:
+		_peeking = false
+		_until = now + 0.3
+	elif now >= _until:
 		_peeking = not _peeking
 		var span: Array = PEEK if _peeking else HIDE
 		_until = now + s.rng.randf_range(span[0], span[1])
@@ -70,15 +89,13 @@ func _tick(_delta: float) -> Status:
 	if _peeking:
 		so.state = "peek"
 		so.fire_ok = true
-		so.pawn.intents.crouch = false
 		if cover.kind == "high":
 			so.move_to(cover.peek)
 		else:
 			so.stop()
 	else:
-		so.state = "hide"
+		so.state = "reload in cover" if reloading else "hide"
 		so.fire_ok = false
-		so.pawn.intents.crouch = cover.kind == "low"
 		if cover.kind == "high":
 			so.move_to(at)
 		else:
@@ -90,4 +107,3 @@ func _exit() -> void:
 	var so := SoldierTree.soldier_of(agent)
 	if so != null:
 		so.fire_ok = false
-		so.pawn.intents.crouch = false

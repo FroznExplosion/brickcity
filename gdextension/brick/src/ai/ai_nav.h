@@ -105,6 +105,12 @@ public:
     Dictionary rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
             float hits_per_second);
 
+    /// Nobody crouches (Docs/AI.md A21): cover has to hide a STANDING body, and
+    /// every spot is "high" -- peeked by stepping to its side. On by default;
+    /// off brings back low cover that hides a crouched body.
+    void set_stand_only(bool on) { stand_only = on; }
+    bool get_stand_only() const { return stand_only; }
+
     Dictionary get_stats() const;
     void reset_stats();
 
@@ -144,6 +150,7 @@ private:
 
     Ref<AIWorld> ai;
     float water_level = -1e30f;
+    bool stand_only = true;
     std::unordered_map<int64_t, Column> columns;
     std::vector<char> column_scratch;
     // Node fit, memoised per ANCHOR column: (floor y, head) pairs. Keyed by

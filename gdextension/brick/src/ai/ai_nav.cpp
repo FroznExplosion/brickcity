@@ -42,6 +42,8 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("invalidate_box", "box"), &AINav::invalidate_box);
     ClassDB::bind_method(D_METHOD("clear_cache"), &AINav::clear_cache);
     ClassDB::bind_method(D_METHOD("set_water_level", "metres"), &AINav::set_water_level);
+    ClassDB::bind_method(D_METHOD("set_stand_only", "on"), &AINav::set_stand_only);
+    ClassDB::bind_method(D_METHOD("get_stand_only"), &AINav::get_stand_only);
     ClassDB::bind_method(D_METHOD("get_water_level"), &AINav::get_water_level);
     ClassDB::bind_method(D_METHOD("get_wade"), &AINav::get_wade);
     ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::snap);
@@ -560,6 +562,8 @@ namespace {
 constexpr float CROUCH_CHEST = 0.78f;
 constexpr float CROUCH_EYE = 1.0f;
 constexpr float STAND_EYE = 1.42f;
+// A standing chest: what a gun is aimed at when nobody crouches.
+constexpr float STAND_CHEST = 1.1f;
 constexpr float RING_STEP = 1.5f;
 constexpr int RINGS = 9;
 constexpr int PER_RING = 16;
@@ -574,16 +578,20 @@ Dictionary AINav::rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp
     }
     AIWorld *w = ai.ptr();
     const Vector3 up(0, 1, 0);
-    if (w->bricks_between(threat_eye, p + up * CROUCH_EYE) == 0
-            || w->bricks_between(threat_eye, p + up * CROUCH_CHEST) == 0) {
+    // What has to be hidden: a crouched body, or with nobody crouching a
+    // standing one -- its eye and its chest both.
+    const float eye_h = stand_only ? STAND_EYE : CROUCH_EYE;
+    const float chest_h = stand_only ? STAND_CHEST : CROUCH_CHEST;
+    if (w->bricks_between(threat_eye, p + up * eye_h) == 0
+            || w->bricks_between(threat_eye, p + up * chest_h) == 0) {
         return out;
     }
-    const float life = w->cover_seconds(threat_eye, p + up * CROUCH_CHEST, hp_per_hit, hits_per_second);
+    const float life = w->cover_seconds(threat_eye, p + up * chest_h, hp_per_hit, hits_per_second);
     if (life < MIN_LIFE) {
         return out;
     }
     // How far the body is from what covers it: the first brick on the line.
-    const Dictionary first = w->trace(threat_eye, p + up * CROUCH_EYE);
+    const Dictionary first = w->trace(threat_eye, p + up * eye_h);
     const Vector3 at = first["point"];
     const float hug = Vector2(p.x - at.x, p.z - at.z).length();
     out["cover"] = p;
@@ -634,7 +642,7 @@ Dictionary AINav::find_cover(const Vector3 &from, const Vector3 &threat_eye, int
             const float a = (float)Math_TAU * ((float)k + 0.5f * (ring % 2)) / PER_RING;
             const Vector3 want = from + Vector3(std::cos(a) * r, 0.0f, std::sin(a) * r);
             // The cheap test first: most of the ring is open ground.
-            if (w->bricks_between(threat_eye, want + up * CROUCH_EYE) == 0) {
+            if (w->bricks_between(threat_eye, want + up * (stand_only ? STAND_EYE : CROUCH_EYE)) == 0) {
                 continue;
             }
             Node n;

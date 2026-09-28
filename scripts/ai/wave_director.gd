@@ -100,8 +100,11 @@ var _floors: Array[Vector3] = []
 var _encounter: Encounter
 var _start := Vector3.ZERO
 var feedback: CombatFeedback
+var voice: ArenaVoice
 ## The body of the last soldier to die (instance id), for the gate.
 var last_dead_id := 0
+## Ticks any soldier spent crouched, for the gate (nobody crouches, A21).
+var _crouched := 0
 var _player_dead_at := -1.0
 var _rng := RandomNumberGenerator.new()
 var _label: Label
@@ -135,6 +138,11 @@ func setup(p_city: Node3D) -> void:
 	feedback.name = "Feedback"
 	add_child(feedback)
 	feedback.setup(city)
+	voice = ArenaVoice.new()
+	voice.name = "Voice"
+	add_child(voice)
+	voice.setup(city)
+	city.ai_services.on_say = voice.say
 	city._gun.fired.connect(_on_player_fired)
 
 
@@ -191,6 +199,9 @@ func _physics_process(_delta: float) -> void:
 	var now := _now()
 	_reap(now)
 	_settle_check()
+	for so in alive:
+		if so.pawn.intents.crouch:
+			_crouched += 1
 	_check_focus()
 	_player_tick(now)
 	if _left_to_spawn <= 0 and alive.is_empty() and now >= _next_wave:
@@ -276,6 +287,7 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	var hp := HP_STANDARD if wave >= 3 and _rng.randi() % 3 == 0 else HP_TRASH
 	so.pawn.health.layer_configs[0].max_value = hp
 	so.pawn.health.reset()
+	so.max_health = hp
 	# In its hands where it can be seen: its muzzle flash and its tracers are
 	# how the player tells who is shooting and from where.
 	gun.visible = true
@@ -667,6 +679,29 @@ func run_gate() -> void:
 	var sank := second.filter(func(s): return is_nan(float(s.drop)) or float(s.drop) > 0.3)
 	ok.call("and none of them sinks into what it was put on", sank.is_empty(),
 			"%s" % [sank.map(func(s): return [s.feet, s.drop])])
+	# The engage decision: logged, varied, never crouching, and a stuck soldier
+	# calls for help.
+	var d: Array[Dictionary] = city.ai_services.decisions
+	var kinds := {}
+	for e in d:
+		kinds[int(e.tactic)] = true
+	ok.call("soldiers face to face with the player decide what to do: %d decision(s), %d kind(s)"
+			% [d.size(), kinds.size()],
+			d.size() > 0 and kinds.size() >= 2 and (d[0].obs as PackedFloat32Array).size() == CombatPolicy.Obs.COUNT)
+	ok.call("nobody crouches", _crouched == 0, "%d tick(s) crouched" % _crouched)
+	var pair := alive.slice(0, 2)
+	if pair.size() == 2:
+		var caller: Soldier = pair[0]
+		var buddy: Soldier = pair[1]
+		buddy.state = "search"
+		caller._called_help_at = -INF
+		var said0 := int(voice.said.get("stuck", 0))
+		caller.call_for_help()
+		ok.call("a stuck soldier shouts for help and a buddy comes",
+				int(voice.said.get("stuck", 0)) > said0 and buddy.help_point.distance_to(caller.pawn.feet()) < 0.5,
+				"said %s, help at %v" % [voice.said, buddy.help_point])
+	ok.call("the player hears what they say", not voice.shown.is_empty(), "said %s" % [voice.said])
+
 	# The player goes down and comes back in the street.
 	invulnerable = false
 	var p := _player()
@@ -723,12 +758,43 @@ func run_watch() -> void:
 			last[k] = f
 			states[so.state] = int(states.get(so.state, 0)) + 1
 			var c := so.contact()
-			line += " | %s %.1fm vis %s path %d/%d st %d" % [so.state, float(moved.get(k, 0.0)),
+			line += " | %s/%s %.1fm vis %s path %d/%d st %d" % [
+					CombatPolicy.TACTIC_NAMES[so.tactic] if so.tactic >= 0 else "-", so.state,
+					float(moved.get(k, 0.0)),
 					c.visible if c != null else false, so._wp, so._path.size(),
 					city.ai_nav.get_status(so._path_id) if so._path_id >= 0 else -9]
 		print(line)
+	var chosen := {}
+	for d in city.ai_services.decisions:
+		var n: String = CombatPolicy.TACTIC_NAMES[int(d.tactic)]
+		chosen[n] = int(chosen.get(n, 0)) + 1
+	print("[watch] tactics chosen %s" % [chosen])
+	print("[watch] lines said %s" % [voice.said])
 	print("[watch] states %s" % [states])
 	print("[watch] metres moved %s" % [moved.values()])
+
+
+## The engage decisions taken, as JSON lines (`-- --log-decisions=PATH`): the
+## imitation data a model is first trained on (CombatPolicy, AI.md 11.3). One
+## header line with the contract, then {t, who, obs, tactic, policy} each.
+func write_decisions(path: String) -> int:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		push_warning("[arena] cannot write %s" % path)
+		return 0
+	f.store_line(JSON.stringify({"contract": CombatPolicy.CONTRACT}))
+	for d in city.ai_services.decisions:
+		f.store_line(JSON.stringify({"t": d.t, "who": d.who, "obs": Array(d.obs),
+				"tactic": d.tactic, "policy": d.policy}))
+	f.close()
+	print("[arena] %d decision(s) written to %s" % [city.ai_services.decisions.size(), path])
+	return city.ai_services.decisions.size()
+
+
+func _exit_tree() -> void:
+	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		if a.begins_with("--log-decisions="):
+			write_decisions(a.split("=", true, 1)[1])
 
 
 func _of_wave(n: int) -> Array[Dictionary]:
@@ -773,6 +839,15 @@ func _update_label() -> void:
 			else:
 				outside += 1
 	lines.append("spawned this wave: %d on its floors, %d outside" % [inside, outside])
+	var tactics := {}
+	for so in alive:
+		var t: String = CombatPolicy.TACTIC_NAMES[so.tactic] if so.tactic >= 0 else so.state
+		tactics[t] = int(tactics.get(t, 0)) + 1
+	if not tactics.is_empty():
+		var parts := []
+		for k in tactics:
+			parts.append("%s %d" % [k.replace("_", " "), tactics[k]])
+		lines.append("doing: " + ", ".join(parts))
 	if not survey.refused.is_empty():
 		var parts := []
 		for k in survey.refused:

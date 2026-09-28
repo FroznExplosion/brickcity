@@ -57,6 +57,31 @@ var cover_left_with := -1.0
 var stuck := 0
 const MAX_STUCK := 2
 
+## The engage decision (CombatPolicy): the tactic it is carrying out, when it
+## was chosen, and until when it is held unless something happens. `tactic_done`
+## is set by a task that finished it or could not do it: decide again.
+var tactic := -1
+var tactic_at := -INF
+var tactic_until := -INF
+var tactic_done := false
+## Health it has at full, when it was last hurt, and what it had then.
+var max_health := 100.0
+var hurt_at := -INF
+var _hp_seen := -1.0
+## When its gun last fired.
+var last_shot_at := -INF
+## A buddy's call for help: where to go, and until when it is worth going.
+var help_point := Vector3.INF
+var help_until := -INF
+var _called_help_at := -INF
+## Seconds between calls for help from the same soldier.
+const HELP_EVERY := 8.0
+## How far a call for help carries to its own side.
+const HELP_RANGE := 30.0
+const HELP_LINES: Array[String] = ["I'm stuck! Somebody get over here!",
+		"Can't get through -- need help!", "I'm pinned in here, cover me!",
+		"No way out this side! Help!"]
+
 var _next_sense := -INF
 var _next_think := -INF
 var _last_think := 0.0
@@ -78,6 +103,7 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		gun: GunInstance) -> Soldier:
 	var p := Pawn.spawn(parent, feet, p_team, true, 100.0)
 	var so := Soldier.new()
+	so.max_health = 100.0
 	so.name = "Soldier"
 	so.services = s
 	so.pawn = p
@@ -161,6 +187,10 @@ func _think() -> void:
 	_next_think = now + 1.0 / (THINK_HZ * services.sched.rate_scale(AIScheduler.TREES))
 	var dt := now - _last_think if _last_think > 0.0 else 1.0 / THINK_HZ
 	_last_think = now
+	var hp := pawn.health.total_current()
+	if _hp_seen >= 0.0 and hp < _hp_seen:
+		hurt_at = now
+	_hp_seen = hp
 	brain.update(dt)
 
 
@@ -218,6 +248,7 @@ func _burst(now: float) -> bool:
 
 func _on_fired(info: Dictionary) -> void:
 	shots += 1
+	last_shot_at = services.now()
 	# The gate's check, from the gun's side: was the line to what it was aimed
 	# at clear when the round left?
 	if _aim_target != null and is_instance_valid(_aim_target):
@@ -273,7 +304,36 @@ func move_to(goal: Vector3, run := false) -> int:
 	elif now - _stuck_at > STUCK_SECONDS:
 		_repath = true
 		stuck += 1
+		if stuck >= MAX_STUCK:
+			call_for_help()
 	return 0
+
+
+## Stuck: shout for help (AI.md 6.5), and the side's soldiers in earshot who
+## are not in a fight of their own come to it.
+func call_for_help() -> void:
+	var now := services.now()
+	if now - _called_help_at < HELP_EVERY:
+		return
+	_called_help_at = now
+	services.say(pawn, "stuck", HELP_LINES[services.rng.randi() % HELP_LINES.size()],
+			AIServices.SHOUT)
+	for ally in allies():
+		if ally.pawn.feet().distance_to(pawn.feet()) <= HELP_RANGE and ally.state in ["idle", "search"]:
+			ally.help_point = pawn.feet()
+			ally.help_until = now + 20.0
+
+
+## The other living soldiers of its side.
+func allies() -> Array[Soldier]:
+	var out: Array[Soldier] = []
+	for p in services.pawns:
+		if not is_instance_valid(p) or p == pawn or p.team != team:
+			continue
+		var so := p.body.get_node_or_null(^"Soldier") as Soldier
+		if so != null and not so.is_dead():
+			out.append(so)
+	return out
 
 
 func stop() -> void:
@@ -301,6 +361,12 @@ func _on_died() -> void:
 	_dead = true
 	fire_ok = false
 	knowledge().forget_seer(self)
+	# Somebody near says so.
+	for ally in allies():
+		if ally.pawn.feet().distance_to(pawn.feet()) < 25.0:
+			services.say(ally.pawn, "man_down", ["Man down!", "We lost one!", "Man down, man down!"][
+					services.rng.randi() % 3], AIServices.SHOUT)
+			break
 	pawn.intents.clear()
 	pawn.intents.fire = false
 	state = "dead"
