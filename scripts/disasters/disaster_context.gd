@@ -17,6 +17,18 @@ var fire: FireSpread
 ## True while it rains. Fire reads it: rain halves spread and slows heating.
 var raining := false
 
+## Where soldiers must not stand, by the disaster that said so: id -> AABB
+## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
+## because the city clears the AI's danger boxes each tick before its own.
+var hazards := {}
+## Smoke ids this context set on the AI world last push, to take back.
+var _smoke_ids: Array[int] = []
+## Danger and smoke ids are the AI world's, shared with falling pieces (chunk
+## ids, 0 and up): disasters take negative ones.
+const HAZARD_BASE := -1000
+const FIRE_HAZARD_BASE := -100000
+const SMOKE_BASE := -1000
+
 ## Camera shake still owed, in metres of offset; decays in step().
 var _shake := 0.0
 const SHAKE_DECAY := 6.0       ## per second, exponential
@@ -133,6 +145,27 @@ func wake_near(point: Vector3, radius: float) -> void:
 	islands.wake_near(point, radius)
 
 
+## Wake one settled piece so it can be moved again.
+func wake_piece(isl: BrickIsland) -> void:
+	if isl.is_valid() and isl.settled:
+		islands.wake(isl)
+
+
+## How many bricks a piece still has.
+func piece_bricks(isl: BrickIsland) -> int:
+	return city.world.get_alive_block_count(isl.chunk) if isl.is_valid() else 0
+
+
+## The box every standing building fits in; an empty AABB for none.
+func city_bounds() -> AABB:
+	var out := AABB()
+	var first := true
+	for box in building_boxes():
+		out = box if first else out.merge(box)
+		first = false
+	return out
+
+
 ## The mark, debris and sound of whatever is struck at `point`. Cosmetic, local.
 func impact_fx(point: Vector3, normal: Vector3) -> void:
 	if city._material_fx != null and not city._material_fx.impact_at(point, normal):
@@ -235,3 +268,39 @@ func _sky_material() -> ProceduralSkyMaterial:
 		if c is WorldEnvironment and c.environment != null and c.environment.sky != null:
 			return c.environment.sky.sky_material as ProceduralSkyMaterial
 	return null
+
+
+# --- What soldiers should keep away from ----------------------------------------
+
+## Mark `box` as somewhere not to stand, under `id` (0, 1, 2 ... per disaster;
+## the context makes it negative). Stays until cleared.
+func set_hazard(id: int, box: AABB) -> void:
+	hazards[HAZARD_BASE - id] = box
+
+
+func clear_hazard(id: int) -> void:
+	hazards.erase(HAZARD_BASE - id)
+
+
+## The city calls this every AI tick, right after its own danger boxes are
+## rebuilt: every hazard a disaster has set, every burning cell, and the fire's
+## smoke (which blocks sight, not bullets).
+func push_hazards(ai_world: AIWorld) -> void:
+	for id in hazards:
+		ai_world.set_danger(id, hazards[id])
+	if fire == null:
+		return
+	var i := 0
+	for c in fire.cells:
+		var lo := Vector3(c.key) * FireSpread.CELL
+		ai_world.set_danger(FIRE_HAZARD_BASE - i, AABB(lo, FireSpread.CELL).grow(0.8))
+		i += 1
+	for id in _smoke_ids:
+		ai_world.remove_smoke(id)
+	_smoke_ids.clear()
+	var k := 0
+	for spot in fire.smoke_spots:
+		var id := SMOKE_BASE - k
+		ai_world.set_smoke(id, spot[0], spot[1])
+		_smoke_ids.append(id)
+		k += 1

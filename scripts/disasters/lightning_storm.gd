@@ -93,6 +93,7 @@ func _on_phase(p: Phase) -> void:
 			_sky_from = _sky
 		Phase.DONE:
 			ctx.raining = false
+			ctx.clear_hazard(0)
 			_sky = 0.0
 			_flash = 0.0
 			_apply_sky()
@@ -178,12 +179,16 @@ func _aim(s: Dictionary) -> void:
 		target = hit.position if not hit.is_empty() else p
 	s.target = target
 	s.stage = 1
+	# A soldier on that roof has 0.6 s: it may not make it, but it tries.
+	ctx.set_hazard(0, AABB((target as Vector3) - Vector3(SHOCK_RADIUS, 1.0, SHOCK_RADIUS),
+			Vector3(SHOCK_RADIUS * 2.0, 4.0, SHOCK_RADIUS * 2.0)))
 	_leader.global_position = (target as Vector3) + Vector3.UP * 2.0
 	_leader_until = _clock + LEADER_S
 
 
 func _strike(s: Dictionary) -> void:
 	s.stage = 2
+	ctx.clear_hazard(0)
 	var target: Vector3 = s.target
 	# The stroke comes down on whatever is on top now -- the roof may have gone.
 	var hit := ctx.ray(target + Vector3.UP * 60.0, target + Vector3.DOWN * 30.0)

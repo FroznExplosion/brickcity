@@ -66,6 +66,11 @@ var eye: Node3D
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
 var _auto_crouched := false
+## A push from outside -- wind, for now (Docs/Disasters.md, the tornado). Added
+## to the walk each step and bled off, so whoever sets it sets it every tick
+## they are pushing. Its y lifts: the body rises at least that fast.
+var shove := Vector3.ZERO
+const SHOVE_DECAY := 3.0
 var _was_on_floor := true
 
 
@@ -217,12 +222,15 @@ func step(delta: float) -> void:
 			body.velocity.y = JUMP_SPEED
 
 	var before := body.global_position
-	body.velocity.x = wish.x * speed
-	body.velocity.z = wish.z * speed
-	if body.is_on_floor() and body.velocity.y <= 0.0:
+	body.velocity.x = wish.x * speed + shove.x
+	body.velocity.z = wish.z * speed + shove.z
+	if shove.y > 0.0 and body.velocity.y < shove.y:
+		body.velocity.y = shove.y
+	elif body.is_on_floor() and body.velocity.y <= 0.0:
 		body.velocity.y = 0.0
 	else:
 		body.velocity.y -= GRAVITY * delta
+	shove *= exp(-SHOVE_DECAY * delta)
 	body.move_and_slide()
 
 	# Stopped dead by something low -- a kerb of rubble, a course of brick, the lip

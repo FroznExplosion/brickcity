@@ -126,6 +126,9 @@ func _on_phase(p: Phase) -> void:
 			_sky_from = _sky
 		Phase.DONE:
 			_set_sky(0.0)
+			for m in meteors:
+				if m.has("hazard"):
+					ctx.clear_hazard(int(m.hazard))
 			if _rumble != null:
 				_rumble.stop()
 
@@ -214,6 +217,11 @@ func _mark(m: Dictionary) -> void:
 		aim = _ground_point(m, player)
 	m.aim = aim
 	m.stage = Stage.MARKED
+	# Soldiers see the ring too, and get out of it.
+	var reach := float(m.radius) + 1.5
+	m.hazard = meteors.find(m)
+	ctx.set_hazard(int(m.hazard), AABB((aim as Vector3) - Vector3(reach, 1.0, reach),
+			Vector3(reach * 2.0, 6.0, reach * 2.0)))
 	m.marker = _take_marker()
 	if m.marker != null:
 		var d: Decal = m.marker
@@ -278,6 +286,8 @@ func _impact(m: Dictionary, pos: Vector3, normal: Vector3, structure: bool) -> v
 	if m.marker != null:
 		_give_marker(m.marker)
 		m.marker = null
+	if m.has("hazard"):
+		ctx.clear_hazard(int(m.hazard))
 	var r := float(m.radius)
 	ctx.blast(pos, r)
 	ctx.impact_fx(pos, normal)

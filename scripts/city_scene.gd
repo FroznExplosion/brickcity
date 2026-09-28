@@ -3593,6 +3593,9 @@ func _ai_tick(destruction_ms: float) -> void:
 	ai_world.sync()
 	# Where not to stand: anything big still falling, swept to where it is going.
 	Danger.update(ai_world, islands)
+	# And whatever a disaster has marked: a meteor's ring, a funnel, a fire.
+	if disasters != null:
+		disasters.ctx.push_hazards(ai_world)
 	# Wreckage that lost bricks since last tick: re-weigh it, a few a tick.
 	var n_wreck := 0
 	for pid in _wreck_dirty.keys():

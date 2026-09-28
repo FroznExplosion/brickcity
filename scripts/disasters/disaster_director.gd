@@ -20,9 +20,10 @@ const KINDS := {
 	"meteor": preload("res://scripts/disasters/meteor_shower.gd"),
 	"lightning": preload("res://scripts/disasters/lightning_storm.gd"),
 	"fire": preload("res://scripts/disasters/building_fire.gd"),
+	"tornado": preload("res://scripts/disasters/tornado.gd"),
 }
 ## What H rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire"]
+const ROLL := ["meteor", "lightning", "fire", "tornado"]
 
 const BASE_SEED := 0xD15A5
 
