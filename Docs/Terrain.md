@@ -2360,6 +2360,19 @@ Two more, after 19.15:
 
 The dev menu fits its window now (it scrolls; it ran off shorter screens).
 
+### 19.17 Coarse skirts deep enough for the next ring, from both sides
+
+Blocky-to-smooth and smooth-to-smooth borders still gapped on steep ground:
+the next ring out samples twice as far apart, and on a hill two samples that
+far apart differ by metres, not the fixed 1.68 m the skirt hung. A coarse
+block's edge skirt is now `max(1.68 m, 2 x its sample spacing)` — 2.8 m on
+LOD 1, 5.6 m on LOD 2, 11.2 m on LOD 3 — and drawn from both sides, since a
+border is looked at from either level.
+
+Cost, bench view: far tier 807k → 1,246k triangles built, 546k → 657k drawn,
+3.3 → 3.6 ms. Most of it is 19.16's LOD 1 ring round the detail (more blocky
+blocks); the skirts are under 100k of it.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and
