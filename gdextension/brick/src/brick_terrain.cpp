@@ -3613,7 +3613,7 @@ const int GROUP_COUNT = (int)(sizeof(GROUPS) / sizeof(GROUPS[0]));
 /// crammed into a strip a few metres wide at the waterline and the open sea
 /// moving one way was all anyone saw. Distance spaces the crests evenly
 /// however steep the seabed is.
-constexpr double BAND_AMP = 0.55;
+constexpr double BAND_AMP = 0.35;
 constexpr double BAND_WAVELENGTH = 15.0;  ///< metres between crests
 constexpr double BAND_PERIOD = 6.0;       ///< seconds between crests
 constexpr double BAND_REACH = 70.0;       ///< metres out from the shore
@@ -3756,10 +3756,11 @@ double field_distance(double x, double z) {
             + (d(i0, j0 + 1) + (d(i0 + 1, j0 + 1) - d(i0, j0 + 1)) * fx) * fz;
 }
 
-/// How much of the swell survives near a coast: MvsC's shore keeps 35%, so
-/// the band rolling in is what the eye follows there.
+/// How much of the swell survives near a coast: 15% at the waterline, all of
+/// it by the band's reach. The sea is calm where it meets the beach and rough
+/// out where it is open (Water.md 9.7).
 double swell_near_shore(double dist) {
-    return 0.35 + 0.65 * smoothstep_d(15.0, BAND_REACH, dist);
+    return 0.15 + 0.85 * smoothstep_d(0.0, BAND_REACH, dist);
 }
 
 double band_value(double x, double z, double t) {
@@ -3768,9 +3769,10 @@ double band_value(double x, double z, double t) {
         return 0.0;
     }
     const double dist = field_distance(x, z);
-    // Up from nothing at the waterline, full a few metres out, gone past
-    // the reach.
-    const double wgt = smoothstep_d(1.0, 8.0, dist) * (1.0 - smoothstep_d(0.6 * BAND_REACH, BAND_REACH, dist))
+    // Small at the waterline and growing OUT to sea -- a beach gets ripples,
+    // the approach gets rollers -- then gone past the reach.
+    const double wgt = smoothstep_d(2.0, 35.0, dist)
+            * (1.0 - smoothstep_d(0.6 * BAND_REACH, BAND_REACH, dist))
             * smoothstep_d(0.2, 1.0, depth);
     if (wgt <= 0.0) {
         return 0.0;

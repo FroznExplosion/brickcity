@@ -36,6 +36,8 @@ var enabled := true
 ## How far the studded tier reaches. 20 m read as a small blocky island in
 ## a smooth sea; 40 m is where a brick is ~2 px at 1080p.
 const NEAR_RADIUS := 40.0
+## How far the sheet runs under the studded tier's edge.
+const SEAM_OVERLAP := 3.0
 var _seabed: ImageTexture = null
 var _half_studs := 0
 var _step := 8
@@ -128,8 +130,11 @@ func follow(camera: Vector3, delta: float) -> void:
 	near.follow(xz, delta, camera.y)
 	# The sheet leaves a hole exactly where the studded tier draws, and none
 	# when it does not -- so there is never water twice, or none.
+	# The hole a few metres INSIDE the studded tier's edge: the two overlap
+	# there, the sheet a little lower (water.gdshader seam_sink), so the seam
+	# between them is water whichever way the waves lean.
 	sheet.follow(near.time(), xz, near.centre_for(xz),
-			near.radius if near.visible else 0.0)
+			maxf(near.radius - SEAM_OVERLAP, 0.0) if near.visible else 0.0)
 
 
 func set_lod_debug(on: bool) -> void:

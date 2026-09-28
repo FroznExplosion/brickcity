@@ -1181,15 +1181,15 @@ func _mirror_band(x: float, z: float, t: float) -> float:
 	if depth <= 0.0 or u.x <= 0.0:
 		return 0.0
 	var dist := BrickWave.shore_distance(x, z)
-	var w := smoothstep(1.0, 8.0, dist) * (1.0 - smoothstep(0.6 * u.w, u.w, dist)) 			* smoothstep(0.2, 1.0, depth)
+	var w := smoothstep(2.0, 35.0, dist) * (1.0 - smoothstep(0.6 * u.w, u.w, dist)) 			* smoothstep(0.2, 1.0, depth)
 	var drift := 1.2 * sin(0.013 * x + 0.7) + 1.2 * sin(0.011 * z + 2.1)
 	return u.x * w * sin(u.y * dist + u.z * t + drift)
 
 
-## water.gdshader's calm factor: near a coast the swell keeps 35%.
+## water.gdshader's calm factor: 15% of the swell at the waterline.
 func _mirror_calm(x: float, z: float) -> float:
 	var u := BrickWave.shore_band_uniform()
-	return 0.35 + 0.65 * smoothstep(15.0, maxf(u.w, 16.0), BrickWave.shore_distance(x, z))
+	return 0.15 + 0.85 * smoothstep(0.0, maxf(u.w, 1.0), BrickWave.shore_distance(x, z))
 
 
 func _check_wave() -> void:
@@ -1287,6 +1287,26 @@ func _check_wave() -> void:
 			back += absf(here - BrickWave.band_at(q1.x, q1.y, tt - lag))
 		crest_d = [fwd / 20.0, back / 20.0]
 		rolled = crest_d[0] < crest_d[1] * 0.3
+	# And calmer at the beach than out at sea: the biggest the surface gets
+	# 3-8 m from a shore against 60-70 m out.
+	var near_amp := 0.0
+	var far_amp := 0.0
+	var sea_h := BrickWave.get_sea_level()
+	for gx in range(-1500, 1500, 5):
+		for gz in [30, -200, 400, -600]:
+			var p := Vector2(float(gx) * 0.35, float(gz) * 0.35)
+			var dd := BrickWave.shore_distance(p.x, p.y)
+			if not ((dd > 3.0 and dd < 8.0) or (dd > 60.0 and dd < 70.0)):
+				continue
+			var amp := 0.0
+			for n in 6:
+				amp = maxf(amp, absf(BrickWave.height_at(p.x, p.y, 0.9 * float(n)) - sea_h))
+			if dd < 8.0:
+				near_amp = maxf(near_amp, amp)
+			else:
+				far_amp = maxf(far_amp, amp)
+	_ok("the sea is calm at the beach and rough out at sea", near_amp < far_amp * 0.4,
+		"worst %.2f m near the shore, %.2f m 60-70 m out" % [near_amp, far_amp])
 	_ok("the shore band rolls in toward the shore", rolled,
 		"what is further out arrives nearer %.3f m off later, %.3f m off earlier" % [crest_d[0], crest_d[1]])
 

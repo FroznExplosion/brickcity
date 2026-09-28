@@ -796,6 +796,37 @@ further out arrives nearer (s₂ − s₁)·k/ω seconds later, to 1 cm.
 (Ground blocks split to sit next to the detail are level 1 whatever ring they
 came from.)
 
+## 9.7 The waterline, the seam, calmer shores, leaning tiles and a tile grid
+
+**The waterline.** A studded piece was drawn only where the seabed texel
+under its middle was below the sea, and a texel is 2.8 m: the water stopped
+short of the sand in places and was cut mid-tile in others. Now a piece (and
+a sheet vertex) is dropped only where every seabed corner round it is more
+than a metre above the sea. Whole pieces run under the beach, the terrain
+hides them, and the waterline is exactly where the ground meets the water.
+
+**The seam between the studded tier and the sheet.** The sheet's hole is now
+3 m INSIDE the studded tier's edge, and the sheet sinks 0.18 m there
+(`seam_sink`), fading back over the next few metres: the two overlap, and any
+slit between them shows water rather than the seabed.
+
+**Calm at the beach.** The swell keeps 15% at the waterline, growing to all
+of it by the band's reach (70 m), and the shore band now GROWS out to sea
+(ripples at the beach, rollers on the approach) at 0.35 m × gain. Measured by
+the probe: the surface moves at most 0.29 m 3–8 m from a shore, 1.53 m 60–70 m
+out.
+
+**Leaning tiles** (`tile_tilt`, 0.6). A studded tile's top leans toward the
+wave at each corner, and two neighbours share a corner, so the step between
+them shrinks by the same factor and the sides are cut to it. It leans fully
+(1.0) by 10 m from the camera: past a few metres a riser is under a pixel and a
+field of them is moiré — rendered A/B, flat tiles drew rings of dots across the
+middle distance and fully leaned ones drew none.
+
+**The tile grid** (`grid_lines`). A thin line on every stud boundary (0.35 m,
+the terrain's lattice) over the studded tier AND the sheet, anti-aliased, and
+faded out where a stud is under ~6 pixels so it never turns to moiré.
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and
