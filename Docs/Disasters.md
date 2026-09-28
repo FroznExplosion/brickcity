@@ -3,9 +3,10 @@
 Design and plan for the disaster system: four built now (**meteor shower, lightning storm, fire,
 tornado**), the rest deferred with what each one is waiting on.
 
-Written 2026-09-26. **D0–D5 are built**: the director, the meteor shower, the lightning storm,
-fire, the tornado, and soldiers who get out of the way (§2.1, §3.1, §4.1, §5.5 and §9 have what
-was measured and what changed from the plan).
+Written 2026-09-26. **D0–D6 are built**: the director, the meteor shower, the lightning storm,
+fire, the tornado, soldiers who get out of the way, and — D6, 2026-09-27 — a disaster menu with
+intensity, a stronger tornado, and an **earthquake with collapse caps** (§2.1, §3.1, §4.1, §4.2,
+§5.5, §9, §10, §11 have what was measured and what changed from the plan).
 
 Decisions this document is written against:
 
@@ -59,8 +60,8 @@ Disaster visuals live here, not in `fx/` (Weapons and effects' area) — they ca
 
 ### 1.1 The director
 
-* **`H`** — start a random disaster. Free in the city, camera, pawn and mech bindings (checked).
-  Ignored while one is running.
+* **`H`** — open the disaster menu (§11). Free in the city, camera, pawn and mech bindings
+  (checked). (Until D6 it started a random disaster straight away.)
 * **`Shift+H`** — end the running disaster now (its `ending` phase still plays, so fires go out
   rather than vanish).
 * **`--disaster=meteor|lightning|fire|tornado`** — force the roll, for probes and captures.
@@ -270,6 +271,15 @@ Probe: **143 m at 5.0 m/s; passes 0.5 m from the player; 12 loose pieces pulled,
 16 m/s; 310 facade chips, every one inside the funnel, all committed CHIPs; the soldier ran
 (§9)**; physics tick mean 4.5 ms, worst 14.6 ms headless.
 
+### 4.2 Stronger (D6)
+
+The first tornado was too weak to see work: it only chipped facades, so there was little loose for
+it to lift, and it left pieces over 800 bricks alone. Now, at Medium: 30 m reach, 24 m/s round,
+lift 14 m/s, pieces up to 2,500 bricks, and **half its facade hits tear a clump off whole**
+(`ctx.shear` → the city's own `_shear_building`, a SHEAR command) — those clumps are what it
+throws. Above 38 m pieces are flung outward and fall. Radii scale with √intensity, forces and
+damage with intensity; the funnel and the orbiting bricks widen with it.
+
 ---
 
 ## 5. Fire
@@ -365,7 +375,7 @@ the city, "a building catches": peak 15 cells, 49 caught, out in 43 s, 487 CHIPs
 
 | Disaster | Why it fits | Waiting on |
 |---|---|---|
-| **Earthquake** | The best fit of all: shaking loads joints in tension, towers snap at a course and topple — the brick-film look ([BrickFailure](BrickFailure.md)) | Sideways load in `solve_stress` (C++): an acceleration vector per solve, not just gravity. Plus a ground-motion curve, fissures, and camera shake |
+| **Earthquake** (v1 built, §10) | The best fit of all: shaking loads joints in tension, towers snap at a course and topple — the brick-film look ([BrickFailure](BrickFailure.md)) | Sideways load in `solve_stress` (C++): an acceleration vector per solve, not just gravity. Plus a ground-motion curve, fissures, and camera shake |
 | **Sinkhole** | Ground opens, a whole building tips into it | Volumetric terrain destruction exists (Terrain §17.10); needs the heightfield city on, and a spreading carve pattern. Cheapest of the deferred ones |
 | **Hurricane / wind storm** | A tornado without a funnel: a whole city leaning | The same sideways-load work as the earthquake |
 | **Flood / tsunami** | Water through the lower storeys, floating debris | Water area: a moving wave front and a water level over the city; buoyancy for pieces; sideways push |
@@ -455,3 +465,67 @@ its smoke blocks a sightline through it; both are gone when the fire is. The tor
 ran every time it was measured — faster than the funnel walks, so the shove gate accepts "shoved
 or got clear", and the shove itself is checked on its own (6 m along, 2.1 m up in 20 ticks).
 `city.tscn -- --soldier` and `-- --play` still pass.
+
+
+---
+
+## 10. Earthquake (D6)
+
+The concern that shaped it: an earthquake hits every building at once, and every building
+collapsing together would be the worst tick the game has. So the design splits it:
+
+* **The shaking is cheap and city-wide.** Camera shake; every loose piece jolted every 6 ticks;
+  pawns stumble (`Pawn.shove`); a few bricks a quarter-second shaken off buildings within 80 m —
+  60% chips, 40% clumps torn loose (SHEAR) that fall.
+* **Collapses are rationed.** At the start each building within 120 m rolls whether it fails and
+  when; tall, slender buildings are likelier (risk = 0.12 × intensity × height/width × a roll).
+  Two caps from the menu: **max collapsing at once** (a collapse counts until its building has
+  toppled and come to rest, or 14 s) and **max collapses in total**. A failure that finds the cap
+  full waits for a slot; if the shaking ends first it never happens.
+* **A failure is a soft storey** — how real buildings go down in quakes. A band of blasts goes
+  through the ground storey on one side, over 60% of the depth. The city's own stability test
+  then sees the centre of mass past what still holds it up, and **the whole building topples as
+  one piece through the city's normal topple path** (TOPPLE), with rooms, collision and debris
+  handled as any topple is. If it still stands after 3 s the band is cut to 80%; after 7 s it
+  counts as survived.
+
+**Tried first and dropped:** cut the tower through at a storey's slab (SEVER, as the wreck gate
+does) and tip the freed top over. Tops of 1,100 bricks would not turn — 0.00 rad/s every tick
+under any push, about their centre or about their bottom edge — while an 852-brick one went
+over. Freeing the upper rooms' furniture bodies did not change it. The cause was not found;
+undermining and letting the city's own rules decide worked at once, so that is what shipped.
+
+**Not the real thing.** A true quake is a sideways load in the stress solver, and buildings would
+fail where their joints do. That is still the C++ work in §6; this gets the look and, above all,
+the cost under control first.
+
+Probe (Extreme, 1 at once, 3 in all): **3 failures, never more than 1 falling at a time, 7 held
+back by the total cap; all 3 toppled (32–42°, leaning on their stumps), 69 BLAST + 3 TOPPLE
+commands; 308 chips and 199 clumps shed; with 0 at once nothing topples.** More intensity plans
+more failures: 2 / 5 / 8 at Low / Medium / Extreme. Frame time, measured with other Godot
+processes running so read it as rough: shaking alone ~6–15 ms mean; with collapses capped at one
+at a time, worst ticks 38–60 ms — the collapses are the cost, which is why the cap is the knob.
+
+---
+
+## 11. The menu and intensity (D6)
+
+`H` opens a menu (centre of the screen, mouse freed; closing gives the mouse back to the camera
+only if it had it): **Disaster** (Random or any of the five), **Intensity** (a slider 0.25–3 that
+snaps to Low 0.5 / Medium 1 / High 1.6 / Extreme 2.5), and the earthquake's two caps (greyed
+unless Random or Earthquake is chosen). **Start** or Enter runs it; Stop ends the running one;
+Esc or H closes. The choice is remembered. The banner shows the intensity, and for a quake
+`collapsing n/cap · k of total so far`.
+
+Intensity at 1 is exactly what each disaster was before; at other values:
+
+| Disaster | What scales |
+|---|---|
+| Meteor shower | count × i, radius × √i, big-meteor chance × i, fire chance × i (≤ 80%) |
+| Lightning storm | strokes come i× as often, strike radius × √i, shock × i, fire chance × i (≤ 90%) |
+| Building fire | sparks × i, spread × i while it lasts |
+| Tornado | §4.2 |
+| Earthquake | risk × i, length 14 + 6i s, shaking and shedding × i |
+
+A seed at intensity 1 is the same disaster it always was; at another intensity it is its own,
+still deterministic, disaster — more meteors draw more numbers.

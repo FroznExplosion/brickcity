@@ -57,6 +57,29 @@ func chip(point: Vector3, radius: float, hp: int) -> void:
 	city.chip(point, radius, hp)
 
 
+## Knock a clump of bricks loose from the building at `point`, whole -- they
+## become a piece, and fall -- rather than destroying them. The city's own
+## shear, as falling masonry does it. Host only (it commits directly, like the
+## city's landings do). False where there is no building or nothing came loose.
+func shear(point: Vector3, radius: float) -> bool:
+	if not city.authority.may_decide():
+		return false
+	var id := building_at(point, 0.3)
+	if id < 0:
+		return false
+	var before: int = city.authority.commands.size()
+	city._shear_building(id, point, radius)
+	return city.authority.commands.size() > before
+
+
+## How many storeys a building has, by its box.
+func storeys_of(id: int) -> int:
+	var b = registry.get_building(id)
+	if b == null or b.is_build():
+		return 0
+	return int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+
+
 # --- Asking about the world -------------------------------------------------
 
 ## First thing a segment hits: a physics body on the hitscan layers, or a
@@ -108,6 +131,15 @@ func building_at(point: Vector3, margin := 0.3) -> int:
 		if not b.toppled and CityPlacer.box_of(b).grow(margin).has_point(point):
 			return b.id
 	return -1
+
+
+## Standing buildings as [id, box] pairs, in registry order.
+func buildings() -> Array:
+	var out := []
+	for b in registry.buildings:
+		if not b.toppled:
+			out.append([b.id, CityPlacer.box_of(b)])
+	return out
 
 
 ## Every building's box, standing ones only. For picking targets.

@@ -29,6 +29,7 @@ func _on_phase(p: Phase) -> void:
 		Phase.ENDING:
 			if ctx.fire != null:
 				ctx.fire.douse()
+				ctx.fire.spread_mul = 1.0
 
 
 func _tick_active(_dt: float) -> void:
@@ -66,8 +67,13 @@ func _light() -> void:
 		_: p = Vector3(lerpf(box.position.x, box.end.x, along), y, box.end.z - inset)
 	var step := FireSpread.CELL.x * (Vector3(0, 0, 1) if side < 2 else Vector3(1, 0, 0))
 	var any := false
-	for i in SPARKS:
-		any = ctx.ignite(p + step * (i - SPARKS / 2), 0.6) or any
+	# Intensity: more of the storey caught at once, and a fire that spreads
+	# harder while this disaster lasts.
+	var sparks := maxi(1, int(round(SPARKS * intensity)))
+	if ctx.fire != null:
+		ctx.fire.spread_mul = intensity
+	for i in sparks:
+		any = ctx.ignite(p + step * (i - sparks / 2), 0.6) or any
 	if any:
 		var out: Vector3 = [Vector3.LEFT, Vector3.RIGHT, Vector3.FORWARD, Vector3.BACK][side]
 		lit = {"building": ctx.building_at(p), "point": p, "out": out}

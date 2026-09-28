@@ -24,20 +24,28 @@ extends Disaster
 ## the physics tick. Where it bends toward the player is resolved when ACTIVE
 ## begins, from numbers rolled in begin().
 
-const LIFT_RADIUS := 25.0
-const LIFT_MAX_BRICKS := 800      ## heavier pieces are left to lie
-const LIFT_REF_BRICKS := 60.0     ## a piece this size takes the full pull
-const SPIN := 18.0                ## m/s round the axis at the funnel wall
-const INFLOW := 6.0
-const LIFT := 11.0
-const TOP := 38.0                 ## m: above this a piece is let fall out
-const PULL := 0.18                ## share of the gap to the target velocity closed per tick
-const PAWN_RADIUS := 12.0
-const PAWN_SPIN := 9.0
-const PAWN_LIFT := 3.5
+## At intensity 1. Radii grow with its square root, forces and damage with it.
+## The first tornado was too weak to see work: 25 m, 18 m/s, only rubble under
+## 800 bricks, and nothing torn off a building -- it chipped facades and there
+## was little loose for it to lift. Now it tears CLUMPS off (SHEAR) as well, and
+## those are what it throws.
+const LIFT_RADIUS := 30.0
+const LIFT_MAX_BRICKS := 2500     ## heavier pieces are left to lie
+const LIFT_REF_BRICKS := 80.0     ## a piece this size takes the full pull
+const SPIN := 24.0                ## m/s round the axis at the funnel wall
+const INFLOW := 7.0
+const LIFT := 14.0
+const TOP := 38.0                 ## m: above this a piece is flung out
+const FLING := 10.0               ## m/s outward, above TOP
+const PULL := 0.3                 ## share of the gap to the target velocity closed per tick
+const PAWN_RADIUS := 14.0
+const PAWN_SPIN := 11.0
+const PAWN_LIFT := 4.5
 const CHIP_EVERY := 0.25          ## s
-const CHIP_HP := 140
+const CHIP_HP := 180
 const CHIP_RADIUS := 0.6
+const SHEAR_SHARE := 0.5          ## of facade hits, how many tear a clump off
+const SHEAR_RADIUS := 0.9
 const FORM_S := 4.0               ## s to form at the start of ACTIVE
 const WALK := 5.0                 ## m/s along its path
 const HAZARD := 0                 ## this disaster's hazard id
@@ -73,6 +81,18 @@ var _sky := 0.0
 var _sky_from := 0.0
 var _form := 0.0
 
+## The constants above, scaled by intensity in begin().
+var _lift_r := LIFT_RADIUS
+var _max_bricks := LIFT_MAX_BRICKS
+var _spin := SPIN
+var _lift := LIFT
+var _pawn_r := PAWN_RADIUS
+var _chip_hp := CHIP_HP
+var _shear_r := SHEAR_RADIUS
+var _rays := 1.0
+var _size := 1.0
+var shears := 0
+
 var _funnel: MeshInstance3D
 var _funnel_mat: ShaderMaterial
 var _orbit: MultiMeshInstance3D
@@ -92,6 +112,16 @@ func _on_begin() -> void:
 	_entry = rng.randf() * TAU
 	_exit = _entry + PI + rng.randf_range(-0.6, 0.6)
 	_bend = Vector2(rng.randf_range(0.45, 0.85), rng.randf_range(0.45, 0.85))
+	var k := maxf(intensity, 0.1)
+	_size = sqrt(k)
+	_lift_r = LIFT_RADIUS * _size
+	_pawn_r = PAWN_RADIUS * _size
+	_shear_r = SHEAR_RADIUS * _size
+	_spin = SPIN * _size
+	_lift = LIFT * _size
+	_max_bricks = int(LIFT_MAX_BRICKS * k)
+	_chip_hp = int(CHIP_HP * k)
+	_rays = k
 	_plan(false)
 	pos = path[0]
 	_build()
@@ -207,7 +237,8 @@ func _walk(dt: float) -> void:
 	var pl := ctx.player_pos()
 	nearest_player = minf(nearest_player, Vector2(pl.x - pos.x, pl.z - pos.z).length())
 	# Soldiers: the funnel, and where it will be in two seconds.
-	var here := AABB(pos - Vector3(14.0, 1.0, 14.0), Vector3(28.0, TOP, 28.0))
+	var half := 14.0 * _size
+	var here := AABB(pos - Vector3(half, 1.0, half), Vector3(half * 2.0, TOP, half * 2.0))
 	var ahead := here
 	ahead.position += vel * 2.0
 	ctx.set_hazard(HAZARD, here.merge(ahead))
@@ -228,27 +259,31 @@ func _act(dt: float) -> void:
 
 func _pull_pieces() -> void:
 	var wake_now := Engine.get_physics_frames() % 15 == 0
-	for isl in ctx.islands_near(pos, LIFT_RADIUS + 10.0):
+	for isl in ctx.islands_near(pos, _lift_r + 10.0):
 		if not isl.is_valid() or not is_instance_valid(isl.body):
 			continue
 		var body := isl.body
 		var rel := body.global_position - pos
 		var r := Vector2(rel.x, rel.z).length()
-		if r > LIFT_RADIUS or rel.y > TOP + 10.0:
+		if r > _lift_r or rel.y > TOP + 20.0:
 			continue
 		var bricks := ctx.piece_bricks(isl)
-		if bricks <= 0 or bricks > LIFT_MAX_BRICKS:
+		if bricks <= 0 or bricks > _max_bricks:
 			continue
 		if isl.settled:
 			if wake_now:
 				ctx.wake_piece(isl)
 			continue
-		var f := strength * (1.0 - r / LIFT_RADIUS)
+		var f := strength * (1.0 - r / _lift_r)
 		var flat := Vector3(rel.x, 0.0, rel.z)
 		var inward := -flat.normalized() if r > 0.01 else Vector3.ZERO
 		var swirl := Vector3(-rel.z, 0.0, rel.x).normalized() if r > 0.01 else Vector3.ZERO
-		var up := LIFT if rel.y < TOP else -LIFT * 0.5
-		var want := (swirl * SPIN + inward * INFLOW + Vector3.UP * up) * f
+		var want: Vector3
+		if rel.y < TOP:
+			want = (swirl * _spin + inward * INFLOW + Vector3.UP * _lift) * f
+		else:
+			# Out of the top: thrown clear, and it falls where it lands.
+			want = (swirl * _spin * 0.5 - inward * FLING) * f + Vector3.DOWN * 2.0
 		var k := clampf(LIFT_REF_BRICKS / float(bricks), 0.05, 1.0) * PULL
 		var v := body.linear_velocity.lerp(want, k)
 		var cap := IslandManager.MAX_DEBRIS_SPEED * 0.9
@@ -264,29 +299,36 @@ func _shove_pawns() -> void:
 	for p in ctx.pawns():
 		var rel := p.chest() - pos
 		var r := Vector2(rel.x, rel.z).length()
-		if r > PAWN_RADIUS:
+		if r > _pawn_r:
 			continue
-		var f := strength * (1.0 - r / PAWN_RADIUS)
+		var f := strength * (1.0 - r / _pawn_r)
 		var swirl := Vector3(-rel.z, 0.0, rel.x).normalized() if r > 0.01 else Vector3.ZERO
 		var inward := -Vector3(rel.x, 0.0, rel.z).normalized() if r > 0.01 else Vector3.ZERO
-		p.shove = (swirl * PAWN_SPIN + inward * 2.0 + Vector3.UP * PAWN_LIFT) * f
+		p.shove = (swirl * PAWN_SPIN * _size + inward * 2.0 + Vector3.UP * PAWN_LIFT * _size) * f
 		pawns_shoved += 1
 
 
 ## A few rays out from the axis; whatever building face they meet inside the
 ## funnel loses its skin.
 func _strip_facades() -> void:
-	var n := rng.randi_range(3, 6)
+	var n := int(round(rng.randi_range(4, 7) * _rays))
 	for i in n:
 		var ang := rng.randf() * TAU
 		var h := rng.randf_range(0.5, 25.0)
-		var reach := 5.0 + h * 0.25 + 2.0
+		var tear := rng.randf() < SHEAR_SHARE
+		var reach := (5.0 + h * 0.25) * _size + 2.0
 		var from := pos + Vector3.UP * h
 		var to := from + Vector3(cos(ang), 0.0, sin(ang)) * reach
 		var hit := ctx.ray(from, to)
 		if hit.is_empty() or ctx.building_at(hit.position) < 0:
 			continue
-		var hp := int(round(CHIP_HP * strength))
+		if tear and strength > 0.5:
+			# A clump torn off whole: it becomes a piece, and the funnel has it.
+			if ctx.shear(hit.position, _shear_r):
+				shears += 1
+				chips.append({"point": hit.position, "axis": pos})
+			continue
+		var hp := int(round(_chip_hp * strength))
 		if hp <= 0:
 			continue
 		ctx.chip(hit.position, CHIP_RADIUS, hp)
@@ -304,11 +346,12 @@ func _place_visuals() -> void:
 	_orbit.visible = _funnel.visible
 	if _funnel.visible:
 		# Grows up out of the dust as it forms; thins and narrows as it ropes out.
-		_funnel.scale = Vector3(lerpf(0.3, 1.0, form), maxf(form, 0.05), lerpf(0.3, 1.0, form))
+		var wide := lerpf(0.3, 1.0, form) * _size
+		_funnel.scale = Vector3(wide, maxf(form, 0.05), wide)
 		_funnel.global_position = ground + Vector3.UP * 25.0 * maxf(form, 0.05)
 		_funnel_mat.set_shader_parameter("density", 1.1 * form)
 		_orbit.global_position = ground
-		_orbit.scale = Vector3.ONE * maxf(form, 0.05)
+		_orbit.scale = Vector3(_size, 1.0, _size) * maxf(form, 0.05)
 	if _roar != null:
 		_roar.global_position = ground + Vector3.UP * 5.0
 		if show and not _roar.playing:

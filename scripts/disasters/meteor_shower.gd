@@ -86,18 +86,20 @@ func _on_begin() -> void:
 
 ## The whole shower, from the rng alone.
 func _roll_schedule() -> void:
-	var count := rng.randi_range(25, 40)
+	# Intensity: more of them, and bigger. At 1 the count is exactly as drawn.
+	var count := clampi(int(round(rng.randi_range(25, 40) * intensity)), 6, 120)
 	bursts = rng.randi_range(3, 4)
+	var grow := sqrt(maxf(intensity, 0.1))
 	meteors.clear()
 	for i in count:
 		var b := i * bursts / count
 		var centre := active_s * (b + 0.5) / bursts
-		var big := rng.randf() < BIG_CHANCE
+		var big := rng.randf() < BIG_CHANCE * intensity
 		meteors.append({
 			"t": clampf(centre + rng.randf_range(-3.0, 3.0), MARK_LEAD + 0.5, active_s - 0.5),
-			"radius": BIG_RADIUS if big else rng.randf_range(RADIUS_MIN, RADIUS_MAX),
+			"radius": (BIG_RADIUS if big else rng.randf_range(RADIUS_MIN, RADIUS_MAX)) * grow,
 			"big": big,
-			"ignite": rng.randf() < IGNITE_CHANCE,
+			"ignite": rng.randf() < minf(IGNITE_CHANCE * intensity, 0.8),
 			"to_building": rng.randf() < BUILDING_SHARE,
 			"u": rng.randf(), "v": rng.randf(), "w": rng.randf(),
 			"burst": b,

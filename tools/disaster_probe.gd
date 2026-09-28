@@ -24,7 +24,12 @@ extends SceneTree
 ## D5: soldiers run out of a hazard (a meteor's ring), a burning cell is danger
 ## and its smoke blocks sight, and both go when the fire does.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,tornado,soldiers
+## Menu: H opens it, Start runs its choice. Intensity scales meteors (count,
+## size) and the names read right. Earthquake: more intensity plans more
+## failures; at Extreme with 1 at once / 3 in all, never more than that, the
+## failures undermine and topple buildings; with 0 at once nothing falls.
+##
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,intensity,quake
 
 var _pass := 0
 var _fail := 0
@@ -63,7 +68,7 @@ func _run() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.split("=", true, 1)[1]
-	if only == "":
+	if only == "" or "director" in only:
 		await _check_director(city, dir)
 	if only == "" or "meteor" in only:
 		await _check_meteor(city, dir)
@@ -79,6 +84,10 @@ func _run() -> void:
 	if only == "" or "soldiers" in only:
 		await _check_soldiers(city, dir)
 		await _check_shove(city)
+	if only == "" or "intensity" in only:
+		_check_intensity(dir)
+	if only == "" or "quake" in only:
+		await _check_quake(city, dir)
 	if only == "" or "tornado" in only:
 		await _check_tornado(city, dir)
 	root.remove_child(city)
@@ -127,9 +136,14 @@ func _check_director(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("and it is over after the ending", not dir.is_running())
 	_ok("the director counted both", dir.count == 2)
 
-	# H with nothing running starts one.
+	# H opens the menu; Start runs what it holds -- Random by default.
 	dir.on_key(false)
-	_ok("H starts a rolled disaster", dir.is_running(), "kind '%s'" % dir.current_kind)
+	_ok("H opens the disaster menu", dir.is_menu_open())
+	await _ticks(3)
+	await _save_shot("menu")
+	dir.menu_kind = ""
+	_ok("Start runs a rolled disaster, and closes it", dir.start_from_menu() and dir.is_running()
+			and not dir.is_menu_open(), "kind '%s'" % dir.current_kind)
 	dir.stop()
 	await _until_over(dir)
 
@@ -432,6 +446,12 @@ func _check_tornado(city: Node3D, dir: DisasterDirector) -> void:
 		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
 			logged += 1
 	_ok("through CHIP commands", logged > 0, "%d CHIP(s)" % logged)
+	var sheared := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.SHEAR:
+			sheared += 1
+	_ok("and tears clumps off whole (SHEAR) for the funnel to throw", sheared > 0,
+			"%d SHEAR(s)" % sheared)
 	# The soldier runs (D5), usually faster than the funnel walks: shoved only
 	# if it is caught. Either is right; standing still in it is not.
 	_ok("a soldier near it runs from it", evaded)
@@ -507,6 +527,146 @@ func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 	await _ticks(20)
 	_ok("once out, neither is left", not w.in_danger(cell) and dir.fire.smoke_spots.is_empty())
+
+
+func _check_intensity(dir: DisasterDirector) -> void:
+	print("intensity")
+	var low := MeteorShower.new()
+	low.intensity = 0.5
+	low.begin(dir.ctx, 99)
+	var mid := MeteorShower.new()
+	mid.begin(dir.ctx, 99)
+	var high := MeteorShower.new()
+	high.intensity = 2.5
+	high.begin(dir.ctx, 99)
+	_ok("more intensity, more meteors", low.meteors.size() < mid.meteors.size()
+			and mid.meteors.size() < high.meteors.size(),
+			"%d / %d / %d at Low / Medium / Extreme" % [low.meteors.size(), mid.meteors.size(),
+			high.meteors.size()])
+	var r_mid := 0.0
+	var r_high := 0.0
+	for m in mid.meteors:
+		r_mid += float(m.radius) / mid.meteors.size()
+	for m in high.meteors:
+		r_high += float(m.radius) / high.meteors.size()
+	_ok("and bigger", r_high > r_mid, "mean radius %.1f -> %.1f m" % [r_mid, r_high])
+	low.free()
+	mid.free()
+	high.free()
+	_ok("the names", DisasterDirector.intensity_name(1.0) == "Medium"
+			and DisasterDirector.intensity_name(2.5) == "Extreme")
+
+
+func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
+	print("earthquake")
+	await _until_out(dir)
+	# Who would fail, by intensity -- the plan alone, nothing shaken.
+	var sizes := []
+	for k in [0.5, 1.0, 2.5]:
+		var q := Earthquake.new()
+		q.intensity = k
+		q.begin(dir.ctx, 4242)
+		q._plan()
+		sizes.append(q.plan.size())
+		q.free()
+	_ok("more intensity, more buildings fail", sizes[0] <= sizes[1] and sizes[1] <= sizes[2]
+			and sizes[2] > 0, "%s at Low / Medium / Extreme" % [sizes])
+
+	# The caps: one at a time, three in all, at Extreme.
+	var n0: int = city.authority.commands.size()
+	_ok("a quake starts", dir.start("earthquake", 2.5,
+			{"max_collapse_at_once": 1, "max_collapse_total": 3}))
+	var q: Earthquake = dir.current
+	var worst := 0.0
+	var total := 0.0
+	var ticks := 0
+	var over := false
+	var stats := {}
+	var shot := false
+	while dir.is_running() and ticks < 30 * 90:
+		await physics_frame
+		ticks += 1
+		var ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		worst = maxf(worst, ms)
+		total += ms
+		if is_instance_valid(q):
+			over = over or q.active_collapses() > q.max_collapse_at_once
+			var toppled := 0
+			var went_over := 0
+			var survived := 0
+			var tilts := []
+			for c in q.collapses:
+				toppled += 1 if c.toppled else 0
+				went_over += 1 if c.tilt >= 25.0 else 0
+				survived += 1 if c.survived else 0
+				tilts.append("%d deg, %d blasts" % [int(c.tilt), int(c.blasts)])
+			stats = {"collapses": q.collapses.size(), "peak": q.peak_at_once, "held": q.held,
+					"dropped": q.dropped, "chips": q.facade_chips, "shears": q.facade_shears,
+					"toppled": toppled, "over": went_over, "survived": survived, "plan": q.plan.size(),
+					"tilts": tilts}
+			if not shot and q.collapses.size() > 0 and "--disaster-shot" in OS.get_cmdline_user_args():
+				var c: Dictionary = q.collapses[0]
+				if c.toppled:
+					shot = true
+					var box: AABB = c.box
+					var cam := Camera3D.new()
+					cam.far = 2000.0
+					city.add_child(cam)
+					var d: Vector3 = c.dir
+					cam.look_at_from_position(box.get_center() + d.cross(Vector3.UP) * 70.0 - d * 20.0
+							+ Vector3.UP * 40.0, box.get_center() + Vector3.UP * 4.0)
+					cam.make_current()
+					await _ticks(75)
+					await _save_shot("earthquake")
+					cam.queue_free()
+					city.camera.make_current()
+	_ok("it ends", not dir.is_running(), "%.0f s" % (ticks / 30.0))
+	_ok("buildings fail", int(stats.collapses) > 0, "%s" % [stats])
+	_ok("never more than the cap at once", not over and int(stats.peak) <= 1,
+			"peak %d" % stats.peak)
+	_ok("never more than the cap in all", int(stats.collapses) <= 3)
+	_ok("undermined, most of them topple", int(stats.toppled) * 2 >= int(stats.collapses),
+			"%d of %d toppled, %d survived" % [stats.toppled, stats.collapses, stats.survived])
+	_ok("and go over (25 degrees or more: past standing, most lean on their stump)", int(stats.over) >= int(stats.toppled) and int(stats.over) > 0,
+			"%s" % [stats.tilts])
+	_ok("facades shed bricks", int(stats.chips) + int(stats.shears) > 0,
+			"%d chip(s), %d clump(s)" % [stats.chips, stats.shears])
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 600:
+		await physics_frame
+		wait += 1
+	var kinds := {}
+	for i in range(n0, city.authority.commands.size()):
+		var k: int = city.authority.commands.entries[i].kind
+		kinds[k] = int(kinds.get(k, 0)) + 1
+	_ok("the failures are blasts and topples through the authority",
+			int(kinds.get(DamageLog.Kind.BLAST, 0)) > 0 and int(kinds.get(DamageLog.Kind.TOPPLE, 0)) > 0,
+			"%d BLAST, %d TOPPLE" % [kinds.get(DamageLog.Kind.BLAST, 0), kinds.get(DamageLog.Kind.TOPPLE, 0)])
+	_ok("no hazard left behind", dir.ctx.hazards.is_empty())
+	print("  --   physics tick during the quake: mean %.2f ms, worst %.1f ms" % [
+			total / maxf(ticks, 1), worst])
+
+	# Zero at once: it shakes, and nothing falls.
+	var n1: int = city.authority.commands.size()
+	dir.start("earthquake", 2.5, {"max_collapse_at_once": 0, "max_collapse_total": 5})
+	var q0: Earthquake = dir.current
+	var worst0 := 0.0
+	var total0 := 0.0
+	for i in 30 * 12:
+		await physics_frame
+		var ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		worst0 = maxf(worst0, ms)
+		total0 += ms
+	var none: bool = q0.collapses.is_empty()
+	print("  --   shaking alone, no collapses, 12 s: mean %.2f ms, worst %.1f ms; %d chip(s), %d clump(s)" % [
+			total0 / (30 * 12), worst0, q0.facade_chips, q0.facade_shears])
+	dir.stop()
+	await _until_over(dir)
+	var topples0 := 0
+	for i in range(n1, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.TOPPLE:
+			topples0 += 1
+	_ok("with 0 at once, nothing collapses", none and topples0 == 0)
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:

@@ -23,6 +23,14 @@ var warning_s := 5.0
 var active_s := 30.0
 var ending_s := 5.0
 
+## How hard, 1 the default (Low 0.5 ... Extreme 2.5). Set by the director
+## before begin(); each disaster reads it there. At 1 every disaster is exactly
+## what it was before intensity existed; a seed at another intensity is its own
+## (still deterministic) disaster -- more meteors draw more numbers.
+var intensity := 1.0
+## Per-kind settings from the menu (the earthquake's collapse caps).
+var options := {}
+
 var ctx: DisasterContext
 var rng := RandomNumberGenerator.new()
 var phase := Phase.WARNING
