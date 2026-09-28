@@ -72,6 +72,14 @@ var _auto_crouched := false
 var shove := Vector3.ZERO
 const SHOVE_DECAY := 3.0
 var _was_on_floor := true
+## Falls: dropping further than SAFE_FALL hurts, FALL_DAMAGE hp a metre past it
+## (Docs/Collapse.md 4.4) -- one storey (2.66 m) is ~30 hp, four storeys kill.
+const SAFE_FALL := 1.5
+const FALL_DAMAGE := 26.0
+var _fall_from := 0.0
+var _placed := false
+## How far the last landing dropped, for the probe.
+var last_fall := 0.0
 
 
 ## A standing pawn with its feet at `feet`, under `parent`. Returns the pawn;
@@ -129,6 +137,8 @@ func _ready() -> void:
 func place(feet: Vector3) -> void:
 	if body == null:
 		body = get_parent() as CharacterBody3D
+	# Put here, not fallen here: the drop to the first floor below is free.
+	_placed = true
 	# Before the tree is running (a probe's _init) there is no global transform
 	# yet; the parent is then taken to sit at the origin.
 	if body.is_inside_tree():
@@ -242,7 +252,25 @@ func step(delta: float) -> void:
 			_step_over(wanted)
 
 	var on_floor := body.is_on_floor()
+	# Where a fall started: the highest the feet were since they left a floor.
+	var feet_y := body.global_position.y
+	if on_floor and _was_on_floor:
+		_placed = false   # placed standing: the next fall is a real one
+	if _was_on_floor and not on_floor:
+		_fall_from = feet_y
+	elif not on_floor:
+		_fall_from = maxf(_fall_from, feet_y)
 	if on_floor and not _was_on_floor:
+		var drop := _fall_from - feet_y
+		last_fall = drop
+		# A storey is 2.66 m and the AI may now choose to drop one (AINav
+		# MAX_DROP): it lands hurt, not dead. A jump off a roof does not.
+		var placed := _placed
+		_placed = false
+		if drop > SAFE_FALL and not placed and health != null and not health.is_dead():
+			var packet := DamagePacket.new((drop - SAFE_FALL) * FALL_DAMAGE, null, null)
+			packet.hit_position = feet()
+			DamageSystem.resolve(packet, health)
 		landed.emit()
 	_was_on_floor = on_floor
 

@@ -51,7 +51,15 @@ public:
     /// Plates it steps up without a jump: one brick course (Pawn.STEP_HEIGHT).
     static constexpr int STEP_UP = 3;
     /// Plates it steps down off an edge rather than going round.
-    static constexpr int MAX_DROP = 9;
+    ///
+    /// It was 9 (1.26 m), and a storey is 19: a soldier whose staircase was shot
+    /// out had no way off its floor and stood there for the rest of the fight
+    /// (Docs/Collapse.md 4.3). One storey and a little is allowed now, and a
+    /// drop past SAFE_DROP -- which hurts (Pawn.SAFE_FALL) -- costs HURT_DROP_COST
+    /// metres of walking, so it is taken when there is no other way down.
+    static constexpr int MAX_DROP = 21;
+    static constexpr int SAFE_DROP = 9;
+    static constexpr float HURT_DROP_COST = 12.0f;
 
     void set_ai_world(const Ref<AIWorld> &ai);
 

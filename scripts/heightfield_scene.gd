@@ -95,6 +95,13 @@ var _drowned := DROWNED
 var _load_status := ""
 ## L: tint the ground and the sea by LOD level.
 var _lod_debug := false
+## F10: the dev menu (terrain_dev_menu.gd). Freeze LOD lives here so the
+## scene can hold its tiers still while the camera flies over to a border.
+const DevMenu := preload("res://scripts/terrain_dev_menu.gd")
+var _dev_menu = null
+var _lod_frozen := false
+var _frozen_at := Vector3.ZERO
+var _hud_layer: CanvasLayer = null
 var _env: Environment = null
 var _under := UnderwaterFx.new()
 var _camera: DebugCamera = null
@@ -267,6 +274,7 @@ func _build_scenery() -> void:
 	_label.add_theme_constant_override("outline_size", 4)
 	layer.add_child(_label)
 	add_child(layer)
+	_hud_layer = layer
 
 
 func _build_terrain() -> void:
@@ -524,6 +532,94 @@ func terrain_changed(studs: Rect2i) -> void:
 		_sea.refresh_seabed()
 
 
+# ---------------------------------------------------------------------------
+# Dev menu hooks (terrain_dev_menu.gd, Terrain.md 20.10)
+
+func _toggle_dev_menu() -> void:
+	var opening: bool = _dev_menu == null
+	if not opening:
+		_dev_menu.queue_free()
+		_dev_menu = null
+	else:
+		# Built fresh each time, so every control shows the state as it is
+		# NOW (L pressed, a value changed elsewhere).
+		_dev_menu = DevMenu.new()
+		_dev_menu.name = "DevMenu"
+		_hud_layer.add_child(_dev_menu)
+		_dev_menu.setup(self)
+		# Under the scene's readout, and never past the window's bottom.
+		_dev_menu.fit(300.0)
+		if not get_viewport().size_changed.is_connected(_refit_dev_menu):
+			get_viewport().size_changed.connect(_refit_dev_menu)
+	# The mouse is the menu's while it is open.
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", not opening)
+
+
+func _refit_dev_menu() -> void:
+	if _dev_menu != null and is_instance_valid(_dev_menu):
+		_dev_menu.fit(300.0)
+
+
+func set_lod_frozen(on: bool) -> void:
+	_lod_frozen = on
+	_frozen_at = _camera.global_position
+
+
+func set_lod_view(on: bool) -> void:
+	_lod_debug = on
+	_mat.set_shader_parameter("lod_debug", on)
+	if _sea != null:
+		_sea.set_lod_debug(on)
+
+
+func set_detail_radius(tiles: int) -> void:
+	_streamer.near_radius = tiles
+	_streamer.keep_radius = tiles + 2
+	if _lod_frozen:
+		# One step at the frozen spot, so the change is seen while frozen.
+		_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
+		_hide_covered_far()
+
+
+func set_water_param(param: String, value: Variant) -> void:
+	if _sea == null:
+		return
+	for tier in [_sea.near, _sea.sheet]:
+		if tier != null and tier._mat != null:
+			tier._mat.set_shader_parameter(param, value)
+
+
+## The far tier from scratch: after the smooth step changed, or to see a
+## border as the build lays it out.
+func rebuild_far() -> void:
+	for node in _far_nodes:
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+	for span in _ring_nodes:
+		var mi = _ring_nodes[span]
+		if is_instance_valid(mi):
+			mi.queue_free()
+	_far_nodes.clear()
+	_far_rects.clear()
+	_all_rects.clear()
+	_all_steps.clear()
+	_all_owner.clear()
+	_all_node.clear()
+	_ring_members.clear()
+	_ring_nodes.clear()
+	_far_hidden = 0
+	_far_tris = 0
+	_far_blocks = 0
+	_far_rings = 0
+	_build_far()
+	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
+	_refine_for(_streamer.current_region().grow(_streamer.align))
+	_hide_covered_far()
+	print("[heightfield] far tier rebuilt: %d blocks, %d tris, smooth from step %d (at %s)" % [
+		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
+
+
 ## A coarse block's LOD level from its sample step: the detailed tiles are 0,
 ## a block sampled every FAR_STEP studs is 1, and each doubling one more.
 ## A float, because the shader's `lod_level` is one: an int handed to a float
@@ -545,7 +641,7 @@ static func _lod_of_step(step: int) -> float:
 func _hide_covered_far() -> void:
 	if _far_nodes.is_empty():
 		return
-	_refine_for(_streamer.current_region())
+	_refine_for(_streamer.current_region().grow(_streamer.align))
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:
@@ -861,12 +957,16 @@ func _set_water(on: bool) -> void:
 
 func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
+	# Frozen, the tiers are laid out for where the camera WAS: the detail
+	# square, the far tier's hiding and the water rings all hold still.
+	var lod_at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
 	if _streamer != null:
-		_streamer.follow(Vector2(_camera.global_position.x, _camera.global_position.z))
+		if not _lod_frozen:
+			_streamer.follow(Vector2(lod_at.x, lod_at.z))
+			_hide_covered_far()
 		_tiles.assign(_streamer.tiles())
-		_hide_covered_far()
 	if _sea != null and _sea.enabled:
-		_sea.follow(_camera.global_position, delta)
+		_sea.follow(lod_at, delta)
 		_under.set_submerged(_env, _sea.submerged_at(_camera.global_position),
 				DRY_AMBIENT)
 	elif _sea != null:
@@ -902,9 +1002,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F7:
 			_set_water(not _sea.enabled)
 		KEY_L:
-			_lod_debug = not _lod_debug
-			_mat.set_shader_parameter("lod_debug", _lod_debug)
-			_sea.set_lod_debug(_lod_debug)
+			set_lod_view(not _lod_debug)
+		KEY_F10:
+			_toggle_dev_menu()
 		# C, not F8: F8 is Godot's own "stop the running game", and the
 		# editor takes it even while the game has focus -- so the curves
 		# toggle quit the game instead of toggling anything.
@@ -1010,7 +1110,8 @@ func _update_hud() -> void:
 			if _lod_debug else ""),
 		"F1 seams  F2 studs  F3 shadows  F4 stud geometry",
 		"F5 tiles on studs  F6 plate steps  F7 water",
-		"C curves  P print  V wave steps  L LOD view",
+		"C curves  P print  V wave steps  L LOD view  F10 dev menu%s" % [
+			"   LOD FROZEN" if _lod_frozen else ""],
 	])
 
 

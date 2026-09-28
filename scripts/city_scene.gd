@@ -789,6 +789,20 @@ var _encounters: Array[Encounter] = []
 ## nav and scheduler; an agent's missed rounds go through the authority.
 var ai_services: AIServices
 var soldiers: Array[Soldier] = []
+## Pieces hurt the pawns they fall on and push out the ones inside them
+## (Docs/Collapse.md 4.4).
+var crush := Crush.new()
+
+
+## Every living pawn: the soldiers', and the player's when the player is in one.
+func _all_pawns() -> Array[Pawn]:
+	var out: Array[Pawn] = []
+	for so in soldiers:
+		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
+			out.append(so.pawn)
+	if _player_pawn != null and is_instance_valid(_player_pawn) and _player.is_possessing():
+		out.append(_player_pawn)
+	return out
 ## Settled wreckage resting on buildings (AI.md 3.10): piece id -> the building
 ## ids it loads. Loads are LOAD / UNLOAD commands, so a client has them too.
 var _wreck_loads := {}
@@ -2531,6 +2545,68 @@ func _topple(id: int) -> void:
 			break
 		var node: MeshInstance3D = extra_nodes[i - 1]
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
+
+
+## The staircase goes with the floors it serves (Docs/Collapse.md 2.1). Its
+## blocks have no joint to any slab -- they are grounded by their own column,
+## down to the ground -- so a section breaking off left them standing, and fell
+## threaded on them: the shaft fits the stairwell exactly, and the section
+## caught on it and hung. Every live stair block inside the height of a group
+## leaving the building leaves with it -- if the group is a SECTION: a storey
+## tall at least, STAIR_SECTION_BLOCKS or more, and over the stairwell. Debris
+## coming off a wall must not take the stairs of floors still standing (it did,
+## a brick at a time, and left soldiers no way down).
+const STAIR_SECTION_BLOCKS := 150
+
+
+func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> PackedInt32Array:
+	if b.is_build() or b.fixtures.is_empty() or group.size() < STAIR_SECTION_BLOCKS:
+		return group
+	var box := world.get_blocks_box(b.chunk, group)
+	if box.size.y < (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M:
+		return group
+	var leaving := {}
+	for bid in group:
+		leaving[bid] = true
+	# Dead, or cut out already -- a detached block still has a box.
+	var gone := {}
+	for bid in world.get_dead_blocks(b.chunk):
+		gone[bid] = true
+	for bid in world.get_detached_blocks(b.chunk):
+		gone[bid] = true
+	var stairs := {}
+	var candidates := PackedInt32Array()
+	for f in b.fixtures:
+		if f.kind != "staircase":
+			continue
+		for bid in f.blocks:
+			stairs[bid] = true
+			if leaving.has(bid) or gone.has(bid):
+				continue
+			# Wholly inside the section's height: a flight piece is most of a
+			# storey tall, and one reaching below the section serves a floor
+			# that is still there.
+			var sb := world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+			if sb.position.y >= box.position.y - 0.1 and sb.end.y <= box.end.y + 0.1:
+				candidates.append(bid)
+	if candidates.is_empty():
+		return group
+	# Will anything still stand round the shaft, from the section's bottom up,
+	# once it has gone? If so the stairs serve floors that are still there and
+	# stay, all of them. Only a shaft left with nothing round it -- the column a
+	# section would hang on -- goes with the section.
+	var shaft := world.get_blocks_box(b.chunk, candidates).grow(1.2)
+	shaft.position.y = box.position.y
+	for bx in world.get_block_boxes(b.chunk):
+		var d: Dictionary = bx
+		var bid := int(d.block)
+		if not bool(d.alive) or stairs.has(bid) or leaving.has(bid) or gone.has(bid):
+			continue
+		if shaft.has_point(d.pos as Vector3):
+			return group
+	var out := group.duplicate()
+	out.append_array(candidates)
+	return out
 
 
 ## A piece has just left building `id`: watch the hand-over (_handovers).
@@ -4739,6 +4815,8 @@ func _physics_process(_delta: float) -> void:
 		for entry in plan:
 			var kind: StringName = entry[1]
 			var before: PackedInt32Array = entry[0]
+			if kind != &"furniture":
+				before = _with_stairs(b, before)
 			# Furniture is deleted where it is unless somebody is right there:
 			# it costs next to nothing and is not held to the spawn budget.
 			if kind != &"furniture":
@@ -4916,6 +4994,9 @@ func _physics_process(_delta: float) -> void:
 
 	islands.tick()
 	t = _mark("islands", t)
+	# Falling masonry hurts, and nobody is left inside it (Crush).
+	crush.tick(islands, _all_pawns())
+	t = _mark("crush", t)
 	# Nobody can read it at 60 Hz, and at 400 islands it was costing more than
 	# the stress solve.
 	if Engine.get_physics_frames() % 10 == 0:

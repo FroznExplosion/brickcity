@@ -35,7 +35,10 @@ var _wet_count := 0
 var enabled := true
 ## How far the studded tier reaches. 20 m read as a small blocky island in
 ## a smooth sea; 40 m is where a brick is ~2 px at 1080p.
-const NEAR_RADIUS := 40.0
+var near_radius := 40.0
+## The wave height gain the tiers are built with (BrickWave.set_wave_gain).
+var wave_gain := 2.2
+var _outer_metres := 600.0
 ## How far the sheet runs under the studded tier's edge.
 const SEAM_OVERLAP := 3.0
 var _seabed: ImageTexture = null
@@ -49,6 +52,7 @@ var _step := 8
 func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	var stud := BrickWorld.get_stud_metres()
 	_half_studs = half_studs
+	_outer_metres = outer_metres
 	_step = step
 	var seabed := ImageTexture.create_from_image(_seabed_image())
 	_seabed = seabed
@@ -58,7 +62,8 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	near = WaterSurface.new()
 	near.name = "Water"
 	# LOD 0: studded bricks to 40 m round the camera; the smooth sheet past it.
-	near.radius = NEAR_RADIUS
+	near.radius = near_radius
+	near.wave_gain = wave_gain
 	add_child(near)
 	near.set_seabed(seabed, origin, extent)
 
@@ -137,6 +142,30 @@ func follow(camera: Vector3, delta: float) -> void:
 	# it, hole or no hole.
 	sheet.follow(near.time(), xz, near.centre_for(xz),
 			maxf(near.radius - SEAM_OVERLAP, 0.0) if near.visible else 0.0)
+
+
+## Build the tiers again: a new studded radius. The seabed is kept.
+func rebuild() -> void:
+	var lod_on := false
+	if near != null:
+		lod_on = bool(near._mat.get_shader_parameter("lod_debug"))
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
+	near = null
+	sheet = null
+	build(_half_studs, _outer_metres, _step)
+	set_lod_debug(lod_on)
+
+
+## The sea state changed (gain, shore strength, steering): into both tiers.
+func push_waves() -> void:
+	BrickWave.set_wave_gain(wave_gain)
+	if near != null:
+		near.wave_gain = wave_gain
+		near.push_waves()
+	if sheet != null:
+		sheet.push_waves()
 
 
 func set_lod_debug(on: bool) -> void:

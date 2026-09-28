@@ -2510,6 +2510,12 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 } // namespace
 
 static int g_coarse_smooth_step = 8;
+
+/// How far every edge of a terrain LOD piece hangs down: the detail tiles'
+/// outer skirt, a coarse block's edge walls and a smooth block's skirt. Deep
+/// enough to cover the step between two levels on the steepest ground the
+/// field makes over one coarse cell (Terrain.md 19.15).
+constexpr float EDGE_SKIRT_M = 4.0f * BRICK_M;
 void BrickTerrain::set_coarse_smooth_step(int step) { g_coarse_smooth_step = std::max(step, 0); }
 int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
 
@@ -2578,14 +2584,19 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         }
     }
     // The skirt: each edge vertex, and a copy two bricks below it.
-    const float drop = 2.0f * BRICK_M;
+    const float drop = EDGE_SKIRT_M;
     auto skirt = [&](int ax, int az, int bx, int bz, const Vector3 &out) {
         const Vector3 pa = m.verts[ax + V * az];
         const Vector3 pb = m.verts[bx + V * bz];
         const Color ca = m.colours[ax + V * az];
         const Color cb = m.colours[bx + V * bz];
         m.material = (uint8_t)m.custom0[(ax + V * az) * 4];
-        m.raw_quad(out, ca.lerp(cb, 0.5f), Vector2(0, 0),
+        // Lit like the ground it hangs from, not like a wall: where the next
+        // level is lower this skirt is SEEN, and a dark wall there read as a
+        // gap (Terrain.md 19.16). `out` is kept for the winding only.
+        (void)out;
+        const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
+        m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
             Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
     };
@@ -2650,7 +2661,12 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
             const float b = corner[(size_t)(cx + 1) + (size_t)(N + 1) * cz];
             const float c = corner[(size_t)(cx + 1) + (size_t)(N + 1) * (cz + 1)];
             const float d = corner[(size_t)cx + (size_t)(N + 1) * (cz + 1)];
-            cell[(size_t)cx + (size_t)N * cz] = std::max(std::max(a, b), std::max(c, d));
+            // The MIN of the four corners, not the max (Terrain.md 19.15). A
+            // coarse cell stands in for up to step^2 columns, and the max
+            // put it ABOVE the detailed ground at every border -- a step up
+            // into the far tier, with a slit of water or sky under it. At or
+            // below, the nearer level's skirt covers the join from above.
+            cell[(size_t)cx + (size_t)N * cz] = std::min(std::min(a, b), std::min(c, d));
         }
     }
 
@@ -2697,7 +2713,9 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                 const int nx = cx + e.dx, nz = cz + e.dz;
                 float ny;
                 if (nx < 0 || nz < 0 || nx >= N || nz >= N) {
-                    ny = y - BRICK_M;
+                    // The block's edge: deep enough to meet whatever the
+                    // neighbouring level stands at, finer or coarser.
+                    ny = y - EDGE_SKIRT_M;
                 } else {
                     ny = cell[(size_t)nx + (size_t)N * nz];
                 }
@@ -2705,7 +2723,10 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                     continue;
                 }
                 const Vector2 wall(cs, y - ny);
-                m.raw_quad(e.n, col, face,
+                // A block-EDGE wall is a skirt over the next level: lit like
+                // ground (19.16). Walls inside the block are real steps.
+                const bool edge = nx < 0 || nz < 0 || nx >= N || nz >= N;
+                m.raw_quad(edge ? Vector3(0, 1, 0) : e.n, col, face,
                     Vector3(e.ax, ny, e.az), Vector3(e.bx, ny, e.bz),
                     Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
                     Vector2(0, wall.y), Vector2(wall.x, wall.y),
@@ -3338,6 +3359,41 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
+    // THE EDGE SKIRT (Terrain.md 19.15): a strip hanging from the tile's
+    // outer edge, one stud a quad at that column's own top. Where the
+    // neighbouring tile is detail too, it is inside that tile's ground and
+    // never seen; where the neighbour is the coarse tier, which now sits at or
+    // below the real ground, it closes the step between them. Heightfield
+    // ground only: the volumetric bench cuts its field open on purpose.
+    if (g_flat_mode) {
+        const Vector2 no_seam(0.0f, 0.0f);
+        for (int k = 0; k < TILE; ++k) {
+            struct Edge { int lx, lz; Vector3 n; float ax, az, bx, bz; };
+            const float x0 = (float)k * STUD_M, x1 = x0 + STUD_M;
+            const float e0 = 0.0f, e1 = (float)TILE * STUD_M;
+            const Edge edges[4] = {
+                { k, 0, Vector3(0, 0, -1), x0, e0, x1, e0 },
+                { k, TILE - 1, Vector3(0, 0, 1), x1, e1, x0, e1 },
+                { 0, k, Vector3(-1, 0, 0), e0, x1, e0, x0 },
+                { TILE - 1, k, Vector3(1, 0, 0), e1, x0, e1, x1 },
+            };
+            for (const Edge &e : edges) {
+                const int i = TileSample::idx(e.lx, e.lz);
+                const float y = (float)(s.tp[i] + 1) * PLATE_M;
+                const float yb = y - EDGE_SKIRT_M;
+                m.material = s.mat[i];
+                const Color col = piece_colour(s, e.lx, e.lz, s.mat[i], false);
+                // Lit like the ground (19.16): seen only where the next level
+                // is lower, and a dark wall there read as a gap.
+                m.raw_quad(Vector3(0, 1, 0), col, no_seam,
+                    Vector3(e.ax, yb, e.az), Vector3(e.bx, yb, e.bz),
+                    Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
+                    Vector2(0, EDGE_SKIRT_M), Vector2(STUD_M, EDGE_SKIRT_M),
+                    Vector2(STUD_M, 0), Vector2(0, 0));
+            }
+        }
+    }
+
     Array mesh;
     if (!m.verts.is_empty()) {
         mesh.resize(Mesh::ARRAY_MAX);
@@ -3628,8 +3684,8 @@ constexpr int BAND_LATTICE = 8;           ///< studs between seabed samples
 /// out from the middle toward every shore rather than all one way. Past
 /// SWELL_FAR, in open ocean, it is the directional swell again, which is
 /// what an ocean with no coast in reach looks like.
-constexpr double SWELL_NEAR = 250.0;
-constexpr double SWELL_FAR = 400.0;
+double SWELL_NEAR = 250.0;
+double SWELL_FAR = 400.0;
 constexpr double SWELL_DRIFT = 1.0;
 
 /// The field the band reads: (ground, distance) per lattice corner.
@@ -3771,8 +3827,8 @@ double field_distance(double x, double z) {
 /// middle of the water, dying down as it travels in, a quarter of it where it
 /// meets the beach (9.9). There is no depth clamp any more -- that is what
 /// read as the sea being cut off at the shore.
-constexpr double SHORE_FADE = 150.0;
-constexpr double SHORE_STRENGTH = 0.25;
+double SHORE_FADE = 150.0;
+double SHORE_STRENGTH = 0.25;
 double swell_near_shore(double dist) {
     return SHORE_STRENGTH + (1.0 - SHORE_STRENGTH) * smoothstep_d(0.0, SHORE_FADE, dist);
 }
@@ -3877,6 +3933,20 @@ PackedVector4Array BrickWave::group_uniform_array() {
         out.push_back(Vector4((float)(k * group_speed), (float)g.phase, 0.0f, 0.0f));
     }
     return out;
+}
+
+void BrickWave::set_swell_steer(double near_m, double far_m) {
+    SWELL_NEAR = std::max(near_m, 0.0);
+    SWELL_FAR = std::max(far_m, SWELL_NEAR + 1.0);
+}
+
+void BrickWave::set_shore_calm(double strength, double fade_m) {
+    SHORE_STRENGTH = std::clamp(strength, 0.0, 1.0);
+    SHORE_FADE = std::max(fade_m, 1.0);
+}
+
+Vector2 BrickWave::shore_calm_uniform() {
+    return Vector2((float)SHORE_STRENGTH, (float)SHORE_FADE);
 }
 
 Vector4 BrickWave::swell_blend_uniform() {
@@ -3988,6 +4058,12 @@ void BrickWave::_bind_methods() {
         &BrickWave::shore_band_uniform);
     ClassDB::bind_static_method("BrickWave", D_METHOD("swell_blend_uniform"),
         &BrickWave::swell_blend_uniform);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("set_swell_steer", "near_m", "far_m"),
+        &BrickWave::set_swell_steer);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("set_shore_calm", "strength", "fade_m"),
+        &BrickWave::set_shore_calm);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("shore_calm_uniform"),
+        &BrickWave::shore_calm_uniform);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_depth", "x", "z"),
         &BrickWave::band_depth);
     ClassDB::bind_static_method("BrickWave", D_METHOD("shore_distance", "x", "z"),

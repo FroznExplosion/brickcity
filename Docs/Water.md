@@ -857,6 +857,33 @@ reach, it is the directional swell, blended between
 exact contour lines. CPU and shader are the same formula; the probe reproduces
 the CPU surface from the shader's uniforms to 1e-7 m.
 
+## 9.9 Seams that were a missing row, the world's edge, flat tiles, strength by distance
+
+**The seams at every LOD border were a missing row.** The sheet keeps a cell
+in a ring if its nearest corner is outside the ring's inner edge — and
+-358.4 + 16 × 11.2 lands a hair INSIDE 179.2 in floating point, so the whole
+first row of every ring was dropped: a band of nothing one coarse cell wide.
+A tolerance fixes it. Where a ring's outer edge has a vertex the next ring
+lacks, the shader gives it the middle of its two neighbours — the line the
+next ring draws — so the edges agree exactly, the way the studded tiles'
+sides agree with their neighbours. The skirts are gone.
+
+**Past the world's edge is open sea** (`water_outside_field` on both tiers).
+It read as dry land, so from the edge looking out the water sank out of sight
+— the "gaps one way, fine the other" report.
+
+**Tiles are flat** and only move up and down (`tile_tilt` 0). Past ~10 m a
+tile's sides are lit like its top: a side is a pixel or two tall there, and
+lit as a wall a field of them is moiré.
+
+**Wave strength by distance to the shore, and nothing else.** No depth
+clamp and no shore band (both read as the sea being cut off at the beach):
+full in the middle of the water, a quarter where it meets the beach, rising
+over 150 m. The swell is still steered toward the nearest shore within 250 m
+(9.8). Probe: 0.43 m moving 3–8 m from shore against 0.88 m 60–70 m out; the
+swell rolls shoreward — what is a metre further out now is a metre nearer a
+moment later to 1.7 cm, against 33 cm the other way.
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and

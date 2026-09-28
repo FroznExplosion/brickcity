@@ -743,6 +743,13 @@ public:
     /// is the open-ocean directional swell, blended between. `z` is the drift
     /// that keeps crests off perfect contour lines. (near, far, drift, 0).
     static Vector4 swell_blend_uniform();
+    /// TUNING (the dev menu, Terrain.md 20.10). Where the swell turns from
+    /// shore-steered to directional, in metres from the shore.
+    static void set_swell_steer(double near_m, double far_m);
+    /// Wave strength at the waterline (0..1) and how far out it reaches full.
+    static void set_shore_calm(double strength, double fade_m);
+    /// (strength, fade) for the shader.
+    static Vector2 shore_calm_uniform();
     /// Build the field the band reads: the ground and the distance to the
     /// nearest dry ground, one sample every `step` studs over +/-`half_studs`,
     /// on the SAME lattice as the water's seabed texture. Returns the samples

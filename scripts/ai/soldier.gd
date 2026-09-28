@@ -25,6 +25,9 @@ const SIGHT_CONE_DEG := 70.0
 ## Close enough to feel someone behind you.
 const NEAR_SENSE := 4.0
 const WAYPOINT_REACHED := 0.35
+## How far above or below a waypoint still counts as at it: more than a step
+## up (0.42 m), less than any drop that matters.
+const WAYPOINT_LEVEL := 1.0
 const STUCK_SECONDS := 1.6
 ## Bursts: seconds on, seconds off.
 const BURST_ON := 0.5
@@ -82,6 +85,14 @@ const HELP_RANGE := 30.0
 const HELP_LINES: Array[String] = ["I'm stuck! Somebody get over here!",
 		"Can't get through -- need help!", "I'm pinned in here, cover me!",
 		"No way out this side! Help!"]
+## No way anywhere, several times running: cut off (see _path_failed).
+var trapped := false
+const TRAP_FAILS := 3
+const TRAP_WINDOW := 10.0
+const TRAP_RETRY := 5.0
+var _fails: Array[float] = []
+var _trap_retry_at := 0.0
+var _trapped_since := 0.0
 
 var _next_sense := -INF
 var _next_think := -INF
@@ -272,6 +283,15 @@ func _on_fired(info: Dictionary) -> void:
 func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
 	var nav := services.ai_nav
+	# Trapped (no way anywhere, several times running): stop asking until it is
+	# time to look again -- rubble may have made a way down since.
+	if trapped:
+		if now < _trap_retry_at:
+			pawn.intents.move = Vector3.ZERO
+			return -1
+		# Time to look again: one fresh request. Failing, it traps again.
+		trapped = false
+		_repath = true
 	if _goal == Vector3.INF or goal.distance_to(_goal) > 0.5 or _repath:
 		_repath = false
 		_goal = goal
@@ -289,13 +309,21 @@ func move_to(goal: Vector3, run := false) -> int:
 			return 0
 		if st != AINav.DONE:
 			pawn.intents.move = Vector3.ZERO
+			_path_failed(now)
 			return -1
 		_path = nav.get_path(_path_id)
+		if not _fails.is_empty() and _fails.size() >= TRAP_FAILS:
+			print("[soldier] a way out after %.0f s trapped" % (now - _trapped_since))
+		_fails.clear()
 		_wp = 1 if _path.size() > 1 else 0
 	var feet := pawn.feet()
 	while _wp < _path.size():
 		var w: Vector3 = _path[_wp]
-		if Vector2(w.x - feet.x, w.z - feet.z).length() > WAYPOINT_REACHED:
+		# Level with it too: the far side of a drop is a step away across and a
+		# storey down, and counting it reached from the top sent a soldier on
+		# to "arrive" a floor above its goal (Docs/Collapse.md 4.3).
+		if Vector2(w.x - feet.x, w.z - feet.z).length() > WAYPOINT_REACHED \
+				or absf(w.y - feet.y) > WAYPOINT_LEVEL:
 			break
 		_wp += 1
 	if _wp >= _path.size():
@@ -322,12 +350,20 @@ func move_to(goal: Vector3, run := false) -> int:
 ## are not in a fight of their own come to it.
 func call_for_help() -> void:
 	var now := services.now()
+	# A helper stuck on its way gives the errand up rather than calling in
+	# turn: two stuck soldiers sending each other to help went nowhere at all.
+	if help_point != Vector3.INF:
+		help_point = Vector3.INF
+		return
 	if now - _called_help_at < HELP_EVERY:
 		return
 	_called_help_at = now
 	services.say(pawn, "stuck", HELP_LINES[services.rng.randi() % HELP_LINES.size()],
 			AIServices.SHOUT)
 	for ally in allies():
+		# Not one that needs help itself: stuck and calling, or cut off.
+		if ally.trapped or now - ally._called_help_at < HELP_EVERY * 2.0:
+			continue
 		if ally.pawn.feet().distance_to(pawn.feet()) <= HELP_RANGE and ally.state in ["idle", "search"]:
 			ally.help_point = pawn.feet()
 			ally.help_until = now + 20.0
@@ -343,6 +379,25 @@ func allies() -> Array[Soldier]:
 		if so != null and not so.is_dead():
 			out.append(so)
 	return out
+
+
+## A path request came back with no way. TRAP_FAILS of them inside TRAP_WINDOW
+## and the soldier is TRAPPED (Docs/Collapse.md 4.3-4.4): cut off -- its stairs
+## shot out, the only drop too far -- and it stops wandering. It holds where it
+## is and fights from there (the tasks treat -1 as "stay"), and asks for a way
+## out again every TRAP_RETRY seconds.
+func _path_failed(now: float) -> void:
+	_fails.append(now)
+	while not _fails.is_empty() and now - _fails[0] > TRAP_WINDOW:
+		_fails.remove_at(0)
+	if _fails.size() >= TRAP_FAILS:
+		if not trapped:
+			_trapped_since = now
+			# Cut off: say so, and whoever is near and free comes.
+			call_for_help()
+		trapped = true
+		_trap_retry_at = now + TRAP_RETRY
+		state = "trapped"
 
 
 func stop() -> void:

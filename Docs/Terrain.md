@@ -2327,6 +2327,39 @@ next to the detail stay blocky, so the ground the eye can resolve is still
 laid brick. Measured: the heightfield far tier 1,152k → 807k triangles; the
 city's 643k → 426k.
 
+### 19.15 LOD borders: the farther level sits lower, the nearer one hangs a skirt
+
+The water's rule, applied to the ground. Blocky coarse cells took the MAX of
+their four corners, so at every border the far tier stood ABOVE the detailed
+ground: a step up into the next level, and where the step was more than the
+one brick its edge wall dropped, a slit through to the water or the sky.
+
+  * coarse cells take the MIN of their corners — at or below the real ground;
+  * every LOD piece's outer edge hangs 4 bricks (1.68 m, `EDGE_SKIRT_M`): the
+    detailed tiles gain a one-stud-a-quad skirt round their edge (hidden
+    inside the neighbour's ground when the neighbour is detail too), the
+    blocky blocks' edge walls and the smooth blocks' skirts go that deep.
+
+Seen with the dev menu's Freeze LOD at the detail/LOD 1 and LOD 1/LOD 2
+borders: no slit, no step up. Cost: ~5k triangles more drawn in the bench
+view (541k → 546k).
+
+### 19.16 The borders that were still open
+
+Two more, after 19.15:
+
+  * **The detail could border LOD 2 directly.** A far block is split to
+    LOD 1 only where it touches the detail square, so a block just outside
+    it stayed a 16-tile smooth block — a coarse, much lower surface right
+    against the detail edge. The split region is now the detail square grown
+    by one block lattice step, so the detail is always ringed by LOD 1.
+  * **Skirts read as gaps.** An edge skirt is only SEEN where the next level
+    is lower, and lit as a vertical wall it was a dark band. Edge skirts
+    (detail tiles, blocky block edges, smooth block skirts) are now lit like
+    the ground they hang from. Inner steps of a blocky block are still walls.
+
+The dev menu fits its window now (it scrolls; it ran off shorter screens).
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and
@@ -2543,6 +2576,28 @@ earlier split was split again and freed, but stayed in `_far_nodes`, and the
 next frame set `visible` on a freed node — 105 errors over a scripted 1 km
 flight on the old code (the editor's debugger stops on the first). Retired
 blocks are let go of now; the same flight is clean.
+
+### 20.10 The dev menu (F10)
+
+F10 in heightfield_test (and the terrain editor, the same scene) opens a
+menu on the left; the mouse is the menu's while it is open and the world keeps
+running. `scripts/terrain_dev_menu.gd`:
+
+| control | does |
+|---|---|
+| Freeze LOD streaming | the detail square, the far tier's hiding and the water rings stop following the camera: fly over to a border and look at it |
+| LOD colour view | the L tint |
+| Detail radius | tiles of full detail round the camera |
+| Smooth far terrain from + Rebuild far terrain | the coarse step past which far ground is smooth; rebuilds the far tier |
+| Wave height | the wave gain (height and length together) |
+| Strength at the shore, Full strength by | the wave strength at the waterline and how far out it reaches full |
+| Swell rolls to shore within | how far from land the swell is steered to the shore |
+| Studded water radius | how far the brick water reaches; rebuilds the sea |
+| Tile lean, Grid lines | the studded tiles' look |
+
+The wave settings are live in `BrickWave` (`set_wave_gain`, `set_shore_calm`,
+`set_swell_steer`), so swimming, floating and the collider follow them, not
+only the picture. Nothing is saved: a session's tuning ends with it.
 
 ## 21. The city on the terrain
 

@@ -9,6 +9,8 @@ extends SceneTree
 ## fake   (2) a room's fake is redrawn when its building's structure changes:
 ##        a floor taken out while nobody was near, the building given back and
 ##        rebuilt, and no faked item is left standing on air.
+## stairs (4) a tower whose ground storey is gone but for its staircase does not
+##        stand on the staircase: nothing above is grounded through it.
 ## handover (3) sections cut off buildings -- some just promoted, bands still
 ##        building; some long built -- and no tick where a piece that left
 ##        draws nothing while its building has stopped (gap), nor where it
@@ -17,6 +19,12 @@ extends SceneTree
 var _pass := 0
 var _fail := 0
 var city: Node3D
+## Building id -> its staircase's box in its chunk, taken before the cut.
+var _shafts := {}
+## Buildings a section has used: later sections want untouched ones, or they
+## meet the rubble of earlier ones (a trapped soldier found a way down through
+## the last section's wreckage).
+var _touched: Array = []
 
 
 func _initialize() -> void:
@@ -53,6 +61,8 @@ func _only(name: String) -> bool:
 
 func _run() -> void:
 	print("collapse probe")
+	if _only("stairs"):
+		_check_stairs()
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
 	await _ticks(30)
@@ -62,16 +72,100 @@ func _run() -> void:
 		await _check_fake()
 	if _only("handover"):
 		await _check_handover()
+	if _only("crush"):
+		await _check_crush()
+	if _only("fall"):
+		await _check_fall()
+	if _only("trapped"):
+		await _check_trapped()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+# --- (5) ------------------------------------------------------------------------
+
+## A slab of brick as a falling piece in the city's world, its corner at `at`.
+func _drop(at: Vector3, fx: int, fz: int, courses: int) -> BrickIsland:
+	var w: BrickWorld = city.world
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
+	TowerRecipe.build(w, c, city.palette, fx, fz, courses)
+	w.set_chunk_transform(c, Transform3D(Basis(), at))
+	var ids := PackedInt32Array()
+	for id in w.get_block_count(c):
+		ids.append(id)
+	return city.islands.spawn(c, ids, Vector3.ZERO, Vector3.ZERO, -1, -1)
+
+
+func _soldier_at(p: Vector3, hp := 500.0) -> Soldier:
+	var so: Soldier = city._spawn_soldier(city.ai_nav.snap(p))
+	if hp > 0.0:
+		so.pawn.health.layer_configs[0].max_value = hp
+		so.pawn.health.reset()
+	return so
+
+
+func _check_crush() -> void:
+	print("crush: what falls on a soldier hurts it, and nobody is left inside a piece")
+	var open := Vector3(-80.0, 0.0, -80.0)
+	city.camera.global_position = open + Vector3(10.0, 8.0, 10.0)
+
+	var so := _soldier_at(open)
+	await _ticks(20)
+	so.stop()
+	var hp0: float = so.pawn.health.total_current()
+	var f := so.pawn.feet()
+	# Watched: a small piece nobody can see is deleted where it would spawn.
+	city.camera.look_at_from_position(f + Vector3(10.0, 6.0, 10.0), f)
+	var piece := _drop(f + Vector3(-0.7, 5.0, -0.7), 4, 4, 2)
+	await _ticks(60)
+	var hp1: float = so.pawn.health.total_current()
+	_ok("a small piece dropped on a soldier hurts it", hp1 < hp0 and not so.pawn.health.is_dead(),
+			"%.0f -> %.0f hp" % [hp0, hp1])
+
+	var big := _soldier_at(open + Vector3(30.0, 0.0, 0.0), -1.0)
+	await _ticks(20)
+	# Held still: a thinking soldier walks out from under a falling piece (it
+	# did, even from 2 m) -- this is about what happens when one cannot.
+	big.brain.active = false
+	big.stop()
+	var bf := big.pawn.feet()
+	city.camera.look_at_from_position(bf + Vector3(16.0, 8.0, 16.0), bf)
+	var hp_big: float = big.pawn.health.total_current()
+	# A wall of it straight down on the soldier (a hollow slab's middle is air),
+	# from low enough that it cannot get out from under it: soldiers evade a
+	# piece they see falling, which is the AI doing its job.
+	var slab := _drop(bf + Vector3(-3.0, 2.2, -0.35), 18, 18, 6)
+	await _ticks(90)
+	print("  --   big piece %s, %d bricks; soldier %.0f -> %.0f hp; crush hits %d kills %d" % [slab,
+			city.world.get_alive_block_count(slab.chunk) if slab != null and slab.is_valid() else -1,
+			hp_big, big.pawn.health.total_current(), city.crush.hits, city.crush.kills])
+	_ok("a big one kills it", big.pawn.health.is_dead(), "%d kill(s)" % city.crush.kills)
+
+	var stuck := _soldier_at(open + Vector3(0.0, 0.0, 30.0))
+	await _ticks(20)
+	stuck.stop()
+	var sf := stuck.pawn.feet()
+	city.camera.look_at_from_position(sf + Vector3(10.0, 6.0, 10.0), sf)
+	# Around it, at rest: a piece born where it stands.
+	# One of its walls through the soldier: the corner just behind it, the
+	# wall along x (a hollow slab's middle is air).
+	var pushes0: int = city.crush.pushes
+	var ring := _drop(sf + Vector3(-1.4, 0.05, -0.35), 8, 8, 2)
+	await _ticks(60)
+	var was_inside: bool = city.crush.pushes > pushes0
+	var still: bool = city.crush._inside(ring, [stuck.pawn.feet() + Vector3.UP * 0.3,
+			stuck.pawn.chest(), stuck.pawn.feet() + Vector3.UP * 1.55])
+	_ok("a soldier inside a piece is pushed out of it", was_inside and not still,
+			"inside at first %s, after 2 s %s; %d push tick(s)" % [was_inside, still, city.crush.pushes])
 
 
 ## A generated building, not a player build, not toppled, of at least `storeys`.
 func _tower(storeys := 4, skip: Array = []) -> int:
 	for b in city.registry.buildings:
-		if b.is_build() or b.toppled or skip.has(b.id):
+		if b.is_build() or b.toppled or skip.has(b.id) or _touched.has(b.id) or b.is_damaged():
 			continue
 		if int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR >= storeys:
+			_touched.append(b.id)
 			return b.id
 	return -1
 
@@ -191,11 +285,26 @@ func _check_fake() -> void:
 func _undercut(id: int) -> void:
 	var box := _box(id)
 	var y := box.position.y + (1 + 1 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M + 1.2
+	# Round the stairwell, not through it: a cut that spares the staircase is the
+	# one that left a section hanging on it (Docs/Collapse.md 2.1).
+	var shaft := AABB()
+	var b = city.registry.get_building(id)
+	if b.is_materialised():
+		var ids := PackedInt32Array()
+		for f in b.fixtures:
+			ids.append_array(f.blocks)
+		if not ids.is_empty():
+			shaft = city.world.get_chunk_transform(b.chunk) * city.world.get_blocks_box(b.chunk, ids)
+			_shafts[id] = city.world.get_blocks_box(b.chunk, ids)
+			shaft = shaft.grow(1.6)
 	var x := box.position.x + 0.6
 	while x < box.end.x:
 		var z := box.position.z + 0.6
 		while z < box.end.z:
-			city._blast(Vector3(x, y, z), 1.3)
+			var p := Vector3(x, y, z)
+			if shaft.size == Vector3.ZERO or not (p.x > shaft.position.x and p.x < shaft.end.x
+					and p.z > shaft.position.z and p.z < shaft.end.z):
+				city._blast(p, 1.3)
 			z += 2.0
 		x += 2.0
 
@@ -228,6 +337,49 @@ func _check_handover() -> void:
 		city._promote(id)
 		_undercut(id)
 	await _ticks(30 * 12)
+	# (4) in the city: no stair block is left standing above an undercut.
+	var stairs_left := 0
+	var stairless := 0
+	for id in used:
+		var b = city.registry.get_building(id)
+		if b.toppled or not b.is_materialised():
+			continue
+		var cut_y := (1 + 1 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M + 2.5
+		var dead := {}
+		for bid in city.world.get_dead_blocks(b.chunk):
+			dead[bid] = true
+		# Cut out into a piece: gone from here, though it still has a box.
+		for bid in city.world.get_detached_blocks(b.chunk):
+			dead[bid] = true
+		var stair := {}
+		var here := 0
+		for f in b.fixtures:
+			for bid in f.blocks:
+				stair[bid] = true
+				var sb: AABB = city.world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+				if not dead.has(bid) and sb.size != Vector3.ZERO and sb.get_center().y > cut_y:
+					here += 1
+		# And the floors round the stairwell: anything but stairs still standing
+		# above the cut next to the shaft? (Floors on the far side of the
+		# building do not make a flight in an empty shaft usable.)
+		var near: AABB = (_shafts.get(id, AABB()) as AABB).grow(1.2)
+		var floors := 0
+		for bx in city.world.get_block_boxes(b.chunk):
+			var d: Dictionary = bx
+			var p: Vector3 = d.pos
+			if bool(d.alive) and not stair.has(int(d.block)) and p.y > cut_y and near.has_point(p):
+				floors += 1
+		print("  --   building %d: %d stair block(s), %d other box(es) round the stairwell above the cut" % [id, here, floors])
+		# Stairs above floors still standing are where they belong; stairs with
+		# nothing left round them are the column a section hung on.
+		if floors == 0:
+			stairs_left += here
+		elif here == 0:
+			stairless += 1
+	_ok("no staircase left standing alone where its floors fell", stairs_left == 0,
+			"%d stair block(s) above the cut" % stairs_left)
+	_ok("and floors still standing keep their stairs", stairless == 0,
+			"%d building(s) with floors and no stairs above the cut" % stairless)
 	var hs: Dictionary = city.handover_stats
 	print("  --   %s" % [hs])
 	_ok("pieces left buildings", int(hs.count) > 0, "%d hand-over(s)" % hs.count)
@@ -235,3 +387,184 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+# --- (4) ------------------------------------------------------------------------
+
+## A tower of `courses` with its staircase, alone in a world of its own, built.
+func _stair_tower(courses: int) -> Array:
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	var fx := 30
+	var fz := 30
+	var id := reg.register(fx, fz, courses, Transform3D())
+	var sx := TowerRecipe.stair_line(fx)
+	var sz := TowerRecipe.stair_line(fz)
+	reg.add_fixture(id, "staircase", {"steps": StaircaseRecipe.steps_for_courses(courses),
+			"colour": 11}, Vector3i(sx, TowerRecipe.SLAB_PLATES, sz))
+	var chunk := reg.materialise(id)
+	return [w, reg, id, chunk]
+
+
+func _check_stairs() -> void:
+	print("stairs: a staircase does not hold a building up")
+	var t := _stair_tower(30)
+	var w: BrickWorld = t[0]
+	var reg: BuildingRegistry = t[1]
+	var chunk: int = t[3]
+	var stair := {}
+	for f in reg.get_building(t[2]).fixtures:
+		for bid in f.blocks:
+			stair[bid] = true
+	_ok("the tower has a staircase", stair.size() > 0, "%d stair blocks" % stair.size())
+	# Everything in the ground storey but the stairs, gone.
+	var storey := (1 + TowerRecipe.COURSES_PER_FLOOR * 3) * BrickPalette.PLATE_M
+	var kill := PackedInt32Array()
+	var above := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		if not bool(d.alive):
+			continue
+		var bid := int(d.block)
+		var y: float = (d.pos as Vector3).y
+		if y < storey - 0.2 and y > 0.2 and not stair.has(bid):
+			kill.append(bid)
+		elif y > storey + 0.5 and not stair.has(bid):
+			above += 1
+	w.kill_blocks(chunk, kill)
+	var grounded := w.solve_grounded(chunk)
+	var held := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		var bid := int(d.block)
+		if bool(d.alive) and not stair.has(bid) and (d.pos as Vector3).y > storey + 0.5 				and bid < grounded.size() and grounded[bid] != 0:
+			held += 1
+	_ok("with the ground storey gone but for the stairs, nothing above is grounded through them",
+			held == 0, "%d of %d block(s) above still grounded" % [held, above])
+	var stair_left := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		var bid := int(d.block)
+		if bool(d.alive) and stair.has(bid) and bid < grounded.size() and grounded[bid] != 0:
+			stair_left += 1
+	print("  --   stair blocks still grounded: %d of %d" % [stair_left, stair.size()])
+
+
+# --- (6) ------------------------------------------------------------------------
+
+func _check_fall() -> void:
+	print("fall: a drop past 1.5 m hurts; being put somewhere does not")
+	var so := _soldier_at(Vector3(-80.0, 0.0, -110.0))
+	await _ticks(30)
+	so.stop()
+	var hp0: float = so.pawn.health.total_current()
+	# Lifted 5 m without place(): it falls, as off a ledge.
+	so.pawn.body.global_position += Vector3.UP * 5.0
+	await _ticks(60)
+	var hp1: float = so.pawn.health.total_current()
+	_ok("a 5 m fall hurts", hp1 < hp0 and so.pawn.last_fall > 4.0,
+			"fell %.1f m, %.0f -> %.0f hp" % [so.pawn.last_fall, hp0, hp1])
+	var hp2 := hp1
+	so.pawn.place(so.pawn.feet() + Vector3.UP * 5.0)
+	await _ticks(60)
+	_ok("being placed 5 m up does not", absf(so.pawn.health.total_current() - hp2) < 0.01,
+			"%.0f -> %.0f hp" % [hp2, so.pawn.health.total_current()])
+
+
+## Stairs gone: cut off, then a hole in the wall and a storey's drop out.
+func _check_trapped() -> void:
+	print("trapped: stairs gone, a soldier is cut off -- until a drop opens")
+	var id := _tower(4, [])
+	var box := _box(id)
+	city.camera.global_position = box.get_center() + Vector3(-40.0, 10.0, 0.0)
+	var chunk: int = city._promote(id)
+	await _ticks(30)
+	var b = city.registry.get_building(id)
+	var ids := PackedInt32Array()
+	for f in b.fixtures:
+		ids.append_array(f.blocks)
+	city.world.kill_blocks(chunk, ids)
+	city._mark_dirty(id)
+	await _drain()
+	await _ticks(30)
+	var storey_h := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	# The SECOND floor: with the stairs dead the shaft is an open drop, but from
+	# here it is two storeys -- further than anyone drops.
+	var floor_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var cz := box.get_center().z
+	var inside: Vector3 = city.ai_nav.snap(Vector3(box.position.x + 2.2, floor_y + 0.2, cz))
+	var below: Vector3 = city.ai_nav.snap(Vector3(box.position.x + 2.2, box.position.y + 0.4, cz + 2.0))
+	_ok("the soldier's spot is on the second floor, the goal on the ground floor",
+			absf(inside.y - floor_y) < 0.6 and below.y < 1.0,
+			"%.2f against %.2f; below at %.2f" % [inside.y, floor_y, below.y])
+	var none: PackedVector3Array = city.ai_nav.find_path(inside, below, 60000)
+	_ok("stairs gone, from the second floor there is no way down (the shaft is two storeys)",
+			none.is_empty(), "%d waypoints" % none.size())
+	var so: Soldier = city._spawn_soldier(inside)
+	await _ticks(10)
+	so.brain.active = false
+	var n := 0
+	while not so.trapped and n < 30 * 20:
+		so.move_to(below)
+		await physics_frame
+		n += 1
+	_ok("it asks, finds no way, and is trapped", so.trapped, "%.1f s" % (n / 30.0))
+
+	# A hole in its floor a few metres off -- to the side, clear of the stairwell
+	# in the middle of the building, which is open all the way down: a storey to
+	# the first floor, then the open shaft.
+	city._blast(Vector3(box.position.x + 2.2, floor_y, cz + 3.5), 1.0)
+	await _drain()
+	await _ticks(30)
+	var way: PackedVector3Array = city.ai_nav.find_path(so.pawn.feet(), below, 60000)
+	var drops := 0
+	for i in range(1, way.size()):
+		if way[i - 1].y - way[i].y > AINav.SAFE_DROP * BrickPalette.PLATE_M:
+			drops += 1
+	_ok("a hole in the floor, and there is a way down, a storey's drop at a time",
+			not way.is_empty() and drops >= 1, "%d drop(s) over %d waypoints" % [drops, way.size()])
+	var hp0: float = so.pawn.health.total_current()
+	n = 0
+	var r := 0
+	while n < 30 * 30:
+		r = so.move_to(below)
+		await physics_frame
+		n += 1
+		if r == 1:
+			break
+	_ok("it looks again, follows it down, and lands hurt", r == 1 and so.pawn.feet().y < 1.0
+			and so.pawn.health.total_current() < hp0 and not so.trapped,
+			"move_to %d after %.1f s; feet %.2f; %.0f -> %.0f hp" % [r, n / 30.0,
+			so.pawn.feet().y, hp0, so.pawn.health.total_current()])
+
+	# Trapped: somewhere there is no way to at all -- another tower's sealed
+	# ground floor -- asked for again and again.
+	var other := _tower(3, [id])
+	var ob := _box(other)
+	city._promote(other)
+	await _ticks(20)
+	var sealed: Vector3 = city.ai_nav.snap(Vector3(ob.get_center().x, ob.position.y + 0.4, ob.get_center().z))
+	# On open ground well away from every earlier section's rubble.
+	var cut := _soldier_at(Vector3(-110.0, 0.0, -150.0))
+	await _ticks(10)
+	cut.brain.active = false
+	n = 0
+	while not cut.trapped and n < 30 * 20:
+		cut.move_to(sealed)
+		await physics_frame
+		n += 1
+	_ok("asked again and again for a way there is not, it is trapped", cut.trapped,
+			"%.1f s" % (n / 30.0))
+	# A few steps from where it stands: there is surely a way there.
+	var free: Vector3 = city.ai_nav.snap(cut.pawn.feet() + Vector3(-3.0, 0.0, 0.0))
+	n = 0
+	var found := false
+	while n < 30 * 12:
+		cut.move_to(free)
+		await physics_frame
+		n += 1
+		if not cut.trapped and cut._path.size() > 0:
+			found = true
+			break
+	_ok("and when it looks again with a way to go, it is not", found, "%.1f s" % (n / 30.0))
