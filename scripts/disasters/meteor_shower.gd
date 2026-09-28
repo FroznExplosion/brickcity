@@ -346,6 +346,8 @@ func _burst(pos: Vector3, r: float, big: bool) -> void:
 func _set_sky(a: float) -> void:
 	_sky = a
 	ctx.set_sky(a, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
+	# Dust in the air and the ground jumping: a little.
+	ctx.set_weather(a, 0.95, 1.3, intensity)
 
 
 func _rumble_to(db: float) -> void:
