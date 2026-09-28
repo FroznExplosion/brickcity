@@ -3603,15 +3603,27 @@ const GroupEnvelope GROUPS[] = {
 };
 const int GROUP_COUNT = (int)(sizeof(GROUPS) / sizeof(GROUPS[0]));
 
-/// THE SHORE BAND. Phased on depth -- A(d) sin(k d + w t + drift) -- so a
-/// crest is a line of equal depth, and since the phase is constant where
-/// k d + w t is, the crest moves to SHALLOWER water as t grows: every band
-/// rolls in toward its own shore. Alive from 0.3 m deep, full by 1.5 m, gone
-/// past 9 m: the surf zone, not the open sea.
-constexpr double BAND_AMP = 0.45;
-constexpr double BAND_K = 1.6;         ///< radians per metre of depth
-constexpr double BAND_PERIOD = 6.5;    ///< seconds between crests
-constexpr int BAND_LATTICE = 8;        ///< studs between seabed samples
+/// THE SHORE BAND. Phased on DISTANCE to the nearest dry ground --
+/// A(s) sin(k s + w t + drift) -- so a crest is a line parallel to the coast,
+/// and since the phase is constant where k s + w t is, it moves to smaller
+/// s as t grows: every crest rolls in toward its own shore.
+///
+/// It was phased on DEPTH first (MvsC's choice), and on this terrain that was
+/// invisible: the ground drops steeply, so every line of equal depth was
+/// crammed into a strip a few metres wide at the waterline and the open sea
+/// moving one way was all anyone saw. Distance spaces the crests evenly
+/// however steep the seabed is.
+constexpr double BAND_AMP = 0.55;
+constexpr double BAND_WAVELENGTH = 15.0;  ///< metres between crests
+constexpr double BAND_PERIOD = 6.0;       ///< seconds between crests
+constexpr double BAND_REACH = 70.0;       ///< metres out from the shore
+constexpr int BAND_LATTICE = 8;           ///< studs between seabed samples
+
+/// The field the band reads: (ground, distance) per lattice corner.
+std::vector<float> g_shore;
+int g_shore_n = 0;
+int g_shore_half = 0;
+int g_shore_step = BAND_LATTICE;
 
 /// Depth over which the swell is throttled to nothing. 2.5 m is a little
 /// under two full-gain wave heights, so the surf is already half its size a
@@ -3725,22 +3737,108 @@ double band_drift(double x, double z) {
     return 1.2 * std::sin(0.013 * x + 0.7) + 1.2 * std::sin(0.011 * z + 2.1);
 }
 
+/// Bilinear over the shore field's distance channel; 1e9 outside it.
+double field_distance(double x, double z) {
+    if (g_shore_n <= 1) {
+        return 1.0e9;
+    }
+    const double q = (x / (double)STUD_M + (double)g_shore_half) / (double)g_shore_step;
+    const double r = (z / (double)STUD_M + (double)g_shore_half) / (double)g_shore_step;
+    const int i0 = (int)std::floor(q);
+    const int j0 = (int)std::floor(r);
+    if (i0 < 0 || j0 < 0 || i0 + 1 >= g_shore_n || j0 + 1 >= g_shore_n) {
+        return 1.0e9;
+    }
+    const double fx = q - (double)i0;
+    const double fz = r - (double)j0;
+    auto d = [](int i, int j) { return (double)g_shore[((size_t)j * g_shore_n + i) * 2 + 1]; };
+    return (d(i0, j0) + (d(i0 + 1, j0) - d(i0, j0)) * fx) * (1.0 - fz)
+            + (d(i0, j0 + 1) + (d(i0 + 1, j0 + 1) - d(i0, j0 + 1)) * fx) * fz;
+}
+
+/// How much of the swell survives near a coast: MvsC's shore keeps 35%, so
+/// the band rolling in is what the eye follows there.
+double swell_near_shore(double dist) {
+    return 0.35 + 0.65 * smoothstep_d(15.0, BAND_REACH, dist);
+}
+
 double band_value(double x, double z, double t) {
     const double depth = g_sea_level - lattice_ground(x, z);
     if (depth <= 0.0) {
         return 0.0;
     }
-    const double wgt = smoothstep_d(0.3, 1.5, depth) * (1.0 - smoothstep_d(4.0, 9.0, depth));
+    const double dist = field_distance(x, z);
+    // Up from nothing at the waterline, full a few metres out, gone past
+    // the reach.
+    const double wgt = smoothstep_d(1.0, 8.0, dist) * (1.0 - smoothstep_d(0.6 * BAND_REACH, BAND_REACH, dist))
+            * smoothstep_d(0.2, 1.0, depth);
     if (wgt <= 0.0) {
         return 0.0;
     }
     return BAND_AMP * g_wave_gain * wgt
-            * std::sin(BAND_K * depth + (Math_TAU / BAND_PERIOD) * t + band_drift(x, z));
+            * std::sin((Math_TAU / BAND_WAVELENGTH) * dist + (Math_TAU / BAND_PERIOD) * t
+            + band_drift(x, z));
 }
 
 } // namespace
 
 double BrickWave::band_depth(double x, double z) { return g_sea_level - lattice_ground(x, z); }
+double BrickWave::shore_distance(double x, double z) { return field_distance(x, z); }
+
+PackedFloat32Array BrickWave::build_shore_field(int half_studs, int step) {
+    step = std::max(step, 1);
+    const int n = std::max(2 * half_studs / step, 2);
+    g_shore.assign((size_t)n * n * 2, 0.0f);
+    std::vector<float> dist((size_t)n * n);
+    const float INF = 1.0e9f;
+    for (int iz = 0; iz < n; ++iz) {
+        for (int ix = 0; ix < n; ++ix) {
+            const int gx = ix * step - half_studs;
+            const int gz = iz * step - half_studs;
+            const float ground = (float)(BrickTerrain::surface_plate(gx, gz) + 1) * PLATE_M;
+            const size_t k = (size_t)iz * n + ix;
+            g_shore[k * 2] = ground;
+            dist[k] = ground < (float)g_sea_level ? INF : 0.0f;
+        }
+    }
+    // Two-pass chamfer distance, in cells: a close enough Euclidean for
+    // spacing wave crests, and 160k cells in a couple of milliseconds.
+    const float D1 = 1.0f, D2 = 1.41421356f;
+    for (int iz = 0; iz < n; ++iz) {
+        for (int ix = 0; ix < n; ++ix) {
+            float &v = dist[(size_t)iz * n + ix];
+            if (ix > 0) v = std::min(v, dist[(size_t)iz * n + ix - 1] + D1);
+            if (iz > 0) {
+                v = std::min(v, dist[(size_t)(iz - 1) * n + ix] + D1);
+                if (ix > 0) v = std::min(v, dist[(size_t)(iz - 1) * n + ix - 1] + D2);
+                if (ix + 1 < n) v = std::min(v, dist[(size_t)(iz - 1) * n + ix + 1] + D2);
+            }
+        }
+    }
+    for (int iz = n - 1; iz >= 0; --iz) {
+        for (int ix = n - 1; ix >= 0; --ix) {
+            float &v = dist[(size_t)iz * n + ix];
+            if (ix + 1 < n) v = std::min(v, dist[(size_t)iz * n + ix + 1] + D1);
+            if (iz + 1 < n) {
+                v = std::min(v, dist[(size_t)(iz + 1) * n + ix] + D1);
+                if (ix + 1 < n) v = std::min(v, dist[(size_t)(iz + 1) * n + ix + 1] + D2);
+                if (ix > 0) v = std::min(v, dist[(size_t)(iz + 1) * n + ix - 1] + D2);
+            }
+        }
+    }
+    const float cell_m = (float)step * STUD_M;
+    for (size_t k = 0; k < dist.size(); ++k) {
+        // Open sea with no shore in the field reads as far out.
+        g_shore[k * 2 + 1] = dist[k] >= INF * 0.5f ? 10000.0f : dist[k] * cell_m;
+    }
+    g_shore_n = n;
+    g_shore_half = half_studs;
+    g_shore_step = step;
+    PackedFloat32Array out;
+    out.resize((int64_t)g_shore.size());
+    std::copy(g_shore.begin(), g_shore.end(), out.ptrw());
+    return out;
+}
 double BrickWave::group_at(double x, double z, double t) { return group_factor(x, z, t); }
 double BrickWave::band_at(double x, double z, double t) { return band_value(x, z, t); }
 
@@ -3760,8 +3858,8 @@ PackedVector4Array BrickWave::group_uniform_array() {
 }
 
 Vector4 BrickWave::shore_band_uniform() {
-    return Vector4((float)(BAND_AMP * g_wave_gain), (float)BAND_K,
-        (float)(Math_TAU / BAND_PERIOD), 0.0f);
+    return Vector4((float)(BAND_AMP * g_wave_gain), (float)(Math_TAU / BAND_WAVELENGTH),
+        (float)(Math_TAU / BAND_PERIOD), (float)BAND_REACH);
 }
 
 double BrickWave::height_at(double x, double z, double t) {
@@ -3780,7 +3878,8 @@ double BrickWave::height_at(double x, double z, double t) {
     }
     // The swell, shaped by the groups and dying in the shallows, and the
     // shore band on top of it: the same expression the shader draws.
-    return g_sea_level + taper * group_factor(x, z, t) * swell + band_value(x, z, t);
+    return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(field_distance(x, z)) * swell
+            + band_value(x, z, t);
 }
 
 /// The surface as the pieces actually sit. Gameplay uses the CONTINUOUS height
@@ -3856,6 +3955,10 @@ void BrickWave::_bind_methods() {
         &BrickWave::shore_band_uniform);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_depth", "x", "z"),
         &BrickWave::band_depth);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("shore_distance", "x", "z"),
+        &BrickWave::shore_distance);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("build_shore_field", "half_studs", "step"),
+        &BrickWave::build_shore_field);
     ClassDB::bind_static_method("BrickWave", D_METHOD("group_at", "x", "z", "t"),
         &BrickWave::group_at);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_at", "x", "z", "t"),

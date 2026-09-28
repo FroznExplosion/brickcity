@@ -1,6 +1,11 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
+// L in heightfield_test: tint every piece of ground by its LOD level. 0 is
+// the detailed tiles; a coarse block says its own level per instance.
+uniform bool lod_debug = false;
+instance uniform float lod_level = 0.0;
+
 // Brick ground. brick.gdshader's seam, plus the two things terrain adds:
 // painted studs and their faked contact shadow.
 //
@@ -198,6 +203,16 @@ float seg_dist(vec2 p, vec2 a, vec2 b) {
     float len2 = max(dot(ab, ab), 1e-8);
     float t = clamp(dot(p - a, ab) / len2, 0.0, 1.0);
     return length(p - (a + ab * t));
+}
+
+// The LOD debug palette: 0 red, 1 orange, 2 yellow, 3 green, 4 cyan, 5 blue,
+// 6 purple, 7+ magenta.
+vec3 lod_colour(float lod) {
+    int i = clamp(int(floor(lod + 0.5)), 0, 7);
+    vec3 c[8] = vec3[8](vec3(0.95, 0.15, 0.12), vec3(1.0, 0.55, 0.1), vec3(0.95, 0.9, 0.15),
+        vec3(0.2, 0.85, 0.25), vec3(0.15, 0.85, 0.9), vec3(0.2, 0.35, 1.0),
+        vec3(0.6, 0.25, 0.95), vec3(0.95, 0.2, 0.8));
+    return c[i];
 }
 
 void fragment() {
@@ -493,6 +508,9 @@ void fragment() {
         mtl = MATERIAL_TABLE[clamp(mi, 0, 6)];
     }
 
+    if (lod_debug) {
+        albedo = mix(albedo, lod_colour(lod_level), 0.65);
+    }
     ALBEDO = albedo;
     ROUGHNESS = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
             0.0, 1.0);

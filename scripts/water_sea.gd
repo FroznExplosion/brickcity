@@ -33,6 +33,9 @@ var _wet := {}
 var _wet_count := 0
 ## Off hides every tier (heightfield_test's F7, and the bench's "water off").
 var enabled := true
+## How far the studded tier reaches. 20 m read as a small blocky island in
+## a smooth sea; 40 m is where a brick is ~2 px at 1080p.
+const NEAR_RADIUS := 40.0
 var _seabed: ImageTexture = null
 var _half_studs := 0
 var _step := 8
@@ -52,7 +55,8 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 
 	near = WaterSurface.new()
 	near.name = "Water"
-	near.radius = 20.0
+	# LOD 0: studded bricks to 40 m round the camera; the smooth sheet past it.
+	near.radius = NEAR_RADIUS
 	add_child(near)
 	near.set_seabed(seabed, origin, extent)
 
@@ -63,26 +67,24 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	sheet.build(seabed, origin, extent)
 
 
-## The ground under the water, one texel every `_step` studs, and the WET
-## map beside it.
+## The ground under the water (R) and the distance to the nearest dry
+## ground (G), one texel every `_step` studs, and the WET map beside it.
+##
+## Built in C++ (BrickWave.build_shore_field), which keeps the same field for
+## the CPU's wave: the shore band is phased on that distance, and the swimmer
+## and the drawn sea have to agree about where its crests are.
 func _seabed_image() -> Image:
-	var plate := BrickWorld.get_plate_metres()
 	var sea := BrickWave.get_sea_level()
+	var field: PackedFloat32Array = BrickWave.build_shore_field(_half_studs, _step)
 	@warning_ignore("integer_division")
 	var n: int = maxi(2 * _half_studs / _step, 2)
-	var img := Image.create_empty(n, n, false, Image.FORMAT_RF)
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_RGF, field.to_byte_array())
 	_wet.clear()
 	for iz in n:
 		for ix in n:
-			var gx := ix * _step - _half_studs
-			var gz := iz * _step - _half_studs
-			# `surface_plate`, not `height_at`: on a plate-quantised field the
-			# brick height rounds a plate step DOWN and the shoreline would
-			# sit a plate inside the sand.
-			var y := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
-			img.set_pixel(ix, iz, Color(y, 0.0, 0.0))
-			if y < sea:
-				_wet[Vector2i(floori(float(gx) / WET_CELL), floori(float(gz) / WET_CELL))] = true
+			if field[(iz * n + ix) * 2] < sea:
+				_wet[Vector2i(floori(float(ix * _step - _half_studs) / WET_CELL),
+						floori(float(iz * _step - _half_studs) / WET_CELL))] = true
 	_wet_count = _wet.size()
 	return img
 
@@ -128,6 +130,13 @@ func follow(camera: Vector3, delta: float) -> void:
 	# when it does not -- so there is never water twice, or none.
 	sheet.follow(near.time(), xz, near.centre_for(xz),
 			near.radius if near.visible else 0.0)
+
+
+func set_lod_debug(on: bool) -> void:
+	if near != null:
+		near.set_lod_debug(on)
+	if sheet != null:
+		sheet.set_lod_debug(on)
 
 
 func surface_at(p: Vector3) -> float:
