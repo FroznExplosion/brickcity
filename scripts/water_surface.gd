@@ -91,6 +91,9 @@ func _ready() -> void:
 	_mat.set_shader_parameter("shore_taper_depth", BrickWave.get_shore_taper_depth())
 	set_brick_steps(brick_steps)
 	_mat.set_shader_parameter("grid_side", _side)
+	# Past the edge of the seabed map is OPEN SEA, not dry land: it was dry,
+	# so from the world's edge looking out the water sank out of sight.
+	_mat.set_shader_parameter("water_outside_field", true)
 	_mat.set_shader_parameter("fade_radius", radius)
 	material_override = _mat
 
