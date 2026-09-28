@@ -287,6 +287,17 @@ func set_storm(on: bool) -> void:
 		city.ai_services.storm = on
 
 
+## The weather's effect on the AI (AIServices.sight_mul, aim_mul): `amount` 0
+## is clear, 1 is `sight` and `aim` in full, and intensity scales how far from
+## clear they go. Sight never drops below 60%.
+func set_weather(amount: float, sight: float, aim: float, intensity := 1.0) -> void:
+	if city.ai_services == null:
+		return
+	var k := clampf(amount, 0.0, 1.0) * maxf(intensity, 0.0)
+	city.ai_services.sight_mul = clampf(1.0 - (1.0 - sight) * k, 0.6, 1.0)
+	city.ai_services.aim_mul = maxf(1.0, 1.0 + (aim - 1.0) * k)
+
+
 ## Soldiers within `radius` of `point` get low for `seconds` (Soldier.duck): a
 ## stroke is about to land there.
 func duck_near(point: Vector3, radius: float, seconds: float) -> int:

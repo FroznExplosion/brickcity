@@ -78,6 +78,10 @@ func _run() -> void:
 		await _check_far()
 	if _only("shelter"):
 		await _check_shelter()
+	if _only("weather"):
+		await _check_weather()
+	if _only("carried"):
+		await _check_carried()
 	if _only("fall"):
 		await _check_fall()
 	if _only("trapped"):
@@ -683,3 +687,99 @@ func _check_shelter() -> void:
 			"%d ducked, crouched %s" % [ducked, so.pawn.is_crouched()])
 	await _ticks(60)
 	_ok("and stands again after", not so.pawn.is_crouched())
+
+
+# --- Weather and riding ---------------------------------------------------------
+
+func _check_weather() -> void:
+	print("weather: eyes a little, hands a lot")
+	var s: AIServices = city.ai_services
+	var ctx: DisasterContext = city.disasters.ctx
+	var a := _soldier_at(Vector3(-100.0, 0.0, -180.0))
+	var b := _soldier_at(Vector3(-100.0, 0.0, -125.0))
+	await _ticks(20)
+	a.brain.active = false
+	b.brain.active = false
+	a.stop()
+	b.stop()
+	var to := b.pawn.chest() - a.eye_pos()
+	a.pawn.intents.look_yaw = atan2(-to.x, -to.z)
+	await _ticks(5)
+	var d := a.eye_pos().distance_to(b.pawn.chest())
+	var clear_sees: bool = a.can_see(b.pawn)
+	ctx.set_weather(1.0, 0.85, 2.2)
+	var storm_sees: bool = a.can_see(b.pawn)
+	_ok("at %.0f m it sees in clear weather, not in a storm (%.0f m sight)" % [d, 60.0 * s.sight_mul],
+			clear_sees and not storm_sees)
+	var aim := AimModel.new(RandomNumberGenerator.new())
+	aim.track(b.pawn, 0.0)
+	var clear_cone := aim.cone_deg(0.5)
+	aim.weather = s.aim_mul
+	_ok("its aim is much worse", absf(aim.cone_deg(0.5) - clear_cone * 2.2) < 0.01,
+			"cone %.1f -> %.1f deg" % [clear_cone, aim.cone_deg(0.5)])
+	ctx.set_weather(0.0, 1.0, 1.0)
+	_ok("and clear again, all as it was", s.sight_mul == 1.0 and s.aim_mul == 1.0)
+	# A real storm sets it, and leaves it clear.
+	city.disasters.start("lightning")
+	var st: Disaster = city.disasters.current
+	var n := 0
+	while st.phase != Disaster.Phase.ACTIVE and n < 30 * 10:
+		await physics_frame
+		n += 1
+	await _ticks(10)
+	var mid := [s.sight_mul, s.aim_mul]
+	city.disasters.stop()
+	n = 0
+	while city.disasters.is_running() and n < 30 * 15:
+		await physics_frame
+		n += 1
+	_ok("a lightning storm: sight %.2f, aim x%.1f while it rages; clear when it is over" % mid,
+			float(mid[0]) < 0.9 and float(mid[1]) > 2.0 and s.sight_mul == 1.0 and s.aim_mul == 1.0)
+	await _until_quiet()
+
+
+func _until_quiet() -> void:
+	if city.disasters.fire.is_burning():
+		city.disasters.fire.douse()
+	var n := 0
+	while city.disasters.fire.is_burning() and n < 30 * 20:
+		await physics_frame
+		n += 1
+
+
+func _check_carried() -> void:
+	print("carried: a soldier on something moving goes with it, and is thrown when it stops")
+	var at := Vector3(-140.0, 0.0, -200.0)
+	city.camera.look_at_from_position(at + Vector3(12.0, 8.0, 12.0), at)
+	var slab := _drop(at + Vector3(-2.1, 0.02, -2.1), 12, 12, 1)
+	await _ticks(40)
+	var top: float = city.islands.world_aabb(slab).end.y
+	var so := _soldier_at(Vector3(at.x, 0.0, at.z))
+	so.pawn.place(Vector3(at.x, top + 0.05, at.z))
+	await _ticks(20)
+	so.brain.active = false
+	so.stop()
+	# Awake, and kept from settling while it is pushed (it had frozen at rest).
+	city.islands.hold_awake(slab, 5000)
+	await _ticks(2)
+	var p0: Vector3 = slab.body.global_position
+	var s0: Vector3 = so.pawn.feet()
+	for i in 45:
+		slab.body.linear_velocity = Vector3(4.0, 0.0, 0.0)
+		slab.body.sleeping = false
+		await physics_frame
+	var moved: float = slab.body.global_position.x - p0.x
+	var carried: float = so.pawn.feet().x - s0.x
+	_ok("it moves with the slab under it", moved > 3.0 and carried > moved * 0.6,
+			"slab %.1f m, soldier %.1f m, %d ride tick(s)" % [moved, carried, city.crush.rides])
+	# Stopped dead: the soldier is not.
+	var throws0: int = city.crush.throws
+	slab.body.linear_velocity = Vector3.ZERO
+	await _ticks(1)
+	var kept: Vector3 = so.pawn.shove
+	var s1: Vector3 = so.pawn.feet()
+	await _ticks(10)
+	# (How far it then goes is up to what is in the way -- this slab has a rim.)
+	_ok("stopped dead, it keeps going: thrown with what it was carried at",
+			city.crush.throws > throws0 and kept.x > 3.0,
+			"shove %.1f m/s after the stop; %.1f m on" % [kept.x, so.pawn.feet().x - s1.x])

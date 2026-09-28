@@ -220,7 +220,7 @@ func can_see(h: Pawn) -> bool:
 	var eye := eye_pos()
 	var aim_at := h.chest()
 	var d := eye.distance_to(aim_at)
-	if d > SIGHT_RANGE:
+	if d > SIGHT_RANGE * services.sight_mul:
 		return false
 	if d > NEAR_SENSE:
 		var look := -Basis(Vector3.UP, pawn.intents.look_yaw).z
@@ -249,6 +249,7 @@ func _aim_and_fire(now: float) -> void:
 		aim.track(c.pawn, now)
 		var eye := eye_pos()
 		var at := c.pawn.chest()
+		aim.weather = services.aim_mul
 		var ang := aim.aim(eye, at, now)
 		it.look_yaw = ang.x
 		it.look_pitch = ang.y
