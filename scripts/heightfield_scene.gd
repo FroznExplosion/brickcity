@@ -423,6 +423,7 @@ func _refine_for(detail: Rect2i) -> void:
 	baked.resize(new_rects.size())
 	var task := WorkerThreadPool.add_group_task(
 		func(k: int) -> void:
+			@warning_ignore("integer_division")
 			baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
 				new_rects[k].position.y, new_rects[k].size.x,
 				FAR_STEP * (new_rects[k].size.x / FAR_SPAN)),
@@ -447,6 +448,7 @@ func _refine_for(detail: Rect2i) -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		_all_rects.append(new_rects[k])
+		@warning_ignore("integer_division")
 		_all_steps.append(FAR_STEP * (new_rects[k].size.x / FAR_SPAN))
 		_all_owner.append(_far_nodes.size())
 		_all_node[_all_rects.size() - 1] = mi
@@ -896,7 +898,6 @@ func _unhandled_input(event: InputEvent) -> void:
 					TerrainTile.tuft_material()]:
 				mat.set_shader_parameter("print_lines_enabled", on)
 			_water.set_print_lines(on)
-			_water_far.set_print_lines(on)
 			print("[heightfield] print lines: %s" % ("ON" if on else "OFF"))
 		KEY_C:
 			BrickTerrain.set_smooth_terrain(not BrickTerrain.get_smooth_terrain())
@@ -906,7 +907,6 @@ func _unhandled_input(event: InputEvent) -> void:
 					% ("ON" if BrickTerrain.get_smooth_terrain() else "OFF"))
 		KEY_V:
 			_water.set_brick_steps(not _water.brick_steps)
-			_water_far.set_brick_steps(_water.brick_steps)
 			print("[heightfield] water: %s" % ("brick steps + stop motion"
 					if _water.brick_steps else "smooth bob"))
 		KEY_F5:
@@ -971,7 +971,7 @@ func _update_hud() -> void:
 			_far_blocks - _far_hidden, _far_tris],
 		"water        %s  %d instances  %s  sea %.1f m  %s" % [
 			"ON" if _sea.enabled else "OFF (F7)",
-			_water.instance_count() + _water_far.instance_count(),
+			_water.instance_count(),
 			"stepped" if _water.brick_steps else "smooth",
 			BrickWave.get_sea_level(),
 			"SWIMMING" if _camera.is_swimming()

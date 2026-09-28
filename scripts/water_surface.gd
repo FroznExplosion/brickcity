@@ -79,6 +79,9 @@ func _ready() -> void:
 	BrickWave.set_wave_gain(wave_gain)
 	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
 	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
+	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
+	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() / 2)
+	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
 	_mat.set_shader_parameter("sea_level", BrickWave.get_sea_level())
 	_mat.set_shader_parameter("step_m", BrickWave.get_step_metres())
 	_mat.set_shader_parameter("stud", _pitch)
@@ -166,6 +169,12 @@ func follow(camera_xz: Vector2, delta: float, camera_y: float = 0.0) -> void:
 	if _collider != null:
 		_collider.follow(camera_xz, _time, delta)
 	global_position = Vector3.ZERO
+
+
+## The middle of this tier for a camera: its pieces are alive within
+## `radius` of here (the sheet's hole).
+func centre_for(camera_xz: Vector2) -> Vector2:
+	return Vector2(round(camera_xz.x / _pitch) * _pitch, round(camera_xz.y / _pitch) * _pitch)
 
 
 func time() -> float:

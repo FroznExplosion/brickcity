@@ -2509,10 +2509,116 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 
 } // namespace
 
+static int g_coarse_smooth_step = 8;
+void BrickTerrain::set_coarse_smooth_step(int step) { g_coarse_smooth_step = std::max(step, 0); }
+int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
+
+/// A coarse block as a SMOOTH grid: one vertex a sample, heights at the
+/// sample, a colour and a material a vertex. Neighbouring blocks sample the
+/// same corners on their shared edge, so they meet exactly; a skirt round the
+/// edge hides the join against a blocky neighbour, whose tops sit at the MAX
+/// of a cell and so can stand above this edge.
+static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint64_t t0) {
+    const int W = span * TILE;
+    const int N = std::max(W / step, 1);
+    const int gx0 = tx0 * TILE;
+    const int gz0 = tz0 * TILE;
+    const int R = N + 3;   // one sample of margin each way, for normals
+    std::vector<float> hgt((size_t)R * R);
+    for (int cz = -1; cz <= N + 1; ++cz) {
+        for (int cx = -1; cx <= N + 1; ++cx) {
+            hgt[(size_t)(cx + 1) + (size_t)R * (cz + 1)] =
+                    (float)(BrickTerrain::surface_plate(gx0 + cx * step, gz0 + cz * step) + 1) * PLATE_M;
+        }
+    }
+    auto H = [&](int cx, int cz) { return hgt[(size_t)(cx + 1) + (size_t)R * (cz + 1)]; };
+    const float cs = (float)step * STUD_M;
+    MeshBuf m;
+    const int V = N + 1;
+    m.verts.resize(V * V);
+    m.normals.resize(V * V);
+    m.colours.resize(V * V);
+    m.uvs.resize(V * V);
+    m.uv2s.resize(V * V);
+    m.custom0.resize(V * V * 4);
+    for (int cz = 0; cz <= N; ++cz) {
+        for (int cx = 0; cx <= N; ++cx) {
+            const int i = cx + V * cz;
+            const int gx = gx0 + cx * step;
+            const int gz = gz0 + cz * step;
+            m.verts.set(i, Vector3((float)cx * cs, H(cx, cz), (float)cz * cs));
+            const Vector3 n = Vector3(H(cx - 1, cz) - H(cx + 1, cz), 2.0f * cs,
+                    H(cx, cz - 1) - H(cx, cz + 1)).normalized();
+            m.normals.set(i, n);
+            const int surf = BrickTerrain::surface_plate(gx, gz);
+            const int mat = g_field.material_at(gx, gz, floor_div(surf, PLATES_PER_CELL));
+            const int painted = layer_colour(gx, gz);
+            Color col = filament_colour(painted != 0xFF ? painted : material_filament(mat));
+            if (!sun_reaches(gx, gz)) {
+                col = Color(col.r * SUN_SHADE, col.g * SUN_SHADE, col.b * SUN_SHADE, col.a);
+            }
+            col.a = 0.0f;   // takes no studs
+            m.colours.set(i, col);
+            m.uvs.set(i, Vector2((float)cx * cs, (float)cz * cs));
+            m.uv2s.set(i, Vector2(0.0f, 0.0f));   // no piece: no seam
+            m.custom0.set(i * 4 + 0, (uint8_t)mat);
+            m.custom0.set(i * 4 + 1, 0);
+            m.custom0.set(i * 4 + 2, 0);
+            m.custom0.set(i * 4 + 3, 255);
+        }
+    }
+    for (int cz = 0; cz < N; ++cz) {
+        for (int cx = 0; cx < N; ++cx) {
+            const int a = cx + V * cz;
+            const int b = a + 1;
+            const int d = a + V;
+            const int e = d + 1;
+            m.indices.push_back(a); m.indices.push_back(b); m.indices.push_back(e);
+            m.indices.push_back(a); m.indices.push_back(e); m.indices.push_back(d);
+        }
+    }
+    // The skirt: each edge vertex, and a copy two bricks below it.
+    const float drop = 2.0f * BRICK_M;
+    auto skirt = [&](int ax, int az, int bx, int bz, const Vector3 &out) {
+        const Vector3 pa = m.verts[ax + V * az];
+        const Vector3 pb = m.verts[bx + V * bz];
+        const Color ca = m.colours[ax + V * az];
+        const Color cb = m.colours[bx + V * bz];
+        m.material = (uint8_t)m.custom0[(ax + V * az) * 4];
+        m.raw_quad(out, ca.lerp(cb, 0.5f), Vector2(0, 0),
+            Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
+            Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
+    };
+    for (int k = 0; k < N; ++k) {
+        skirt(k + 1, 0, k, 0, Vector3(0, 0, -1));
+        skirt(k, N, k + 1, N, Vector3(0, 0, 1));
+        skirt(0, k, 0, k + 1, Vector3(-1, 0, 0));
+        skirt(N, k + 1, N, k, Vector3(1, 0, 0));
+    }
+    Array mesh;
+    mesh.resize(Mesh::ARRAY_MAX);
+    mesh[Mesh::ARRAY_VERTEX] = m.verts;
+    mesh[Mesh::ARRAY_NORMAL] = m.normals;
+    mesh[Mesh::ARRAY_COLOR] = m.colours;
+    mesh[Mesh::ARRAY_TEX_UV] = m.uvs;
+    mesh[Mesh::ARRAY_TEX_UV2] = m.uv2s;
+    mesh[Mesh::ARRAY_INDEX] = m.indices;
+    mesh[Mesh::ARRAY_CUSTOM0] = m.custom0;
+    Dictionary out;
+    out["mesh"] = mesh;
+    out["triangle_count"] = m.indices.size() / 3;
+    out["smooth"] = true;
+    out["build_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+    return out;
+}
+
 Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     span = std::max(span, 1);
     step = std::max(step, 1);
+    if (g_coarse_smooth_step > 0 && step >= g_coarse_smooth_step) {
+        return build_coarse_smooth(tx0, tz0, span, step, t0);
+    }
 
     const int W = span * TILE;          // studs across the block
     const int N = std::max(W / step, 1); // coarse cells across the block
@@ -3424,6 +3530,10 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("build_coarse", "tx0", "tz0", "span", "step"),
         &BrickTerrain::build_coarse);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_coarse_smooth_step", "step"),
+        &BrickTerrain::set_coarse_smooth_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
+        &BrickTerrain::get_coarse_smooth_step);
 
     // Plain integer constants rather than BIND_ENUM_CONSTANT: the enum lives
     // in namespace brick, outside the class, and binding it as a real enum
@@ -3476,6 +3586,32 @@ const int WAVE_COUNT = (int)(sizeof(WAVES) / sizeof(WAVES[0]));
 
 double g_sea_level = 1.1;
 double g_wave_gain = 1.0;
+
+/// Wave GROUPS: long envelopes over the swell, travelling with it at group
+/// speed (half the phase speed, deep water). Two, at 170 m and 240 m as MvsC
+/// found worked, each +/-15%, so together +/-30%: a heaped stretch, then a
+/// calm one, rather than the same sea everywhere.
+struct GroupEnvelope {
+    double fraction;
+    double length;
+    int follows;      ///< which swell component it rides with
+    double phase;
+};
+const GroupEnvelope GROUPS[] = {
+    { 0.15, 170.0, 0, 0.3 },
+    { 0.15, 240.0, 1, 2.2 },
+};
+const int GROUP_COUNT = (int)(sizeof(GROUPS) / sizeof(GROUPS[0]));
+
+/// THE SHORE BAND. Phased on depth -- A(d) sin(k d + w t + drift) -- so a
+/// crest is a line of equal depth, and since the phase is constant where
+/// k d + w t is, the crest moves to SHALLOWER water as t grows: every band
+/// rolls in toward its own shore. Alive from 0.3 m deep, full by 1.5 m, gone
+/// past 9 m: the surf zone, not the open sea.
+constexpr double BAND_AMP = 0.45;
+constexpr double BAND_K = 1.6;         ///< radians per metre of depth
+constexpr double BAND_PERIOD = 6.5;    ///< seconds between crests
+constexpr int BAND_LATTICE = 8;        ///< studs between seabed samples
 
 /// Depth over which the swell is throttled to nothing. 2.5 m is a little
 /// under two full-gain wave heights, so the surf is already half its size a
@@ -3546,21 +3682,105 @@ double BrickWave::get_step_metres() { return (double)BRICK_M; }
 
 double BrickWave::shore_gain(double x, double z) { return shore_taper(x, z); }
 
+namespace {
+
+inline double smoothstep_d(double a, double b, double x) {
+    const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+/// The ground under a point, bilinear over the seabed lattice -- the same
+/// corners the seabed texture holds, so CPU and shader read one surface.
+double lattice_ground(double x, double z) {
+    const double xs = x / (double)STUD_M / (double)BAND_LATTICE;
+    const double zs = z / (double)STUD_M / (double)BAND_LATTICE;
+    const int i0 = (int)std::floor(xs);
+    const int j0 = (int)std::floor(zs);
+    const double fx = xs - (double)i0;
+    const double fz = zs - (double)j0;
+    auto g = [](int i, int j) {
+        return (double)(BrickTerrain::surface_plate(i * BAND_LATTICE, j * BAND_LATTICE) + 1)
+                * (double)PLATE_M;
+    };
+    const double a = g(i0, j0), b = g(i0 + 1, j0), cc = g(i0, j0 + 1), d = g(i0 + 1, j0 + 1);
+    return (a + (b - a) * fx) * (1.0 - fz) + (cc + (d - cc) * fx) * fz;
+}
+
+double group_factor(double x, double z, double t) {
+    double f = 1.0;
+    for (int j = 0; j < GROUP_COUNT; ++j) {
+        const GroupEnvelope &g = GROUPS[j];
+        const WaveComponent &w = WAVES[g.follows];
+        const double swell_len = w.wavelength * g_wave_gain;
+        const double group_speed = 0.5 * std::sqrt(G * swell_len / Math_TAU);
+        const double len = g.length * g_wave_gain;
+        const double k = Math_TAU / len;
+        f += g.fraction * std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
+                - k * group_speed * t + g.phase);
+    }
+    return f;
+}
+
+double band_drift(double x, double z) {
+    return 1.2 * std::sin(0.013 * x + 0.7) + 1.2 * std::sin(0.011 * z + 2.1);
+}
+
+double band_value(double x, double z, double t) {
+    const double depth = g_sea_level - lattice_ground(x, z);
+    if (depth <= 0.0) {
+        return 0.0;
+    }
+    const double wgt = smoothstep_d(0.3, 1.5, depth) * (1.0 - smoothstep_d(4.0, 9.0, depth));
+    if (wgt <= 0.0) {
+        return 0.0;
+    }
+    return BAND_AMP * g_wave_gain * wgt
+            * std::sin(BAND_K * depth + (Math_TAU / BAND_PERIOD) * t + band_drift(x, z));
+}
+
+} // namespace
+
+double BrickWave::band_depth(double x, double z) { return g_sea_level - lattice_ground(x, z); }
+double BrickWave::group_at(double x, double z, double t) { return group_factor(x, z, t); }
+double BrickWave::band_at(double x, double z, double t) { return band_value(x, z, t); }
+
+PackedVector4Array BrickWave::group_uniform_array() {
+    PackedVector4Array out;
+    for (int j = 0; j < GROUP_COUNT; ++j) {
+        const GroupEnvelope &g = GROUPS[j];
+        const WaveComponent &w = WAVES[g.follows];
+        const double swell_len = w.wavelength * g_wave_gain;
+        const double group_speed = 0.5 * std::sqrt(G * swell_len / Math_TAU);
+        const double k = Math_TAU / (g.length * g_wave_gain);
+        out.push_back(Vector4((float)g.fraction, (float)k,
+            (float)std::cos(w.angle), (float)std::sin(w.angle)));
+        out.push_back(Vector4((float)(k * group_speed), (float)g.phase, 0.0f, 0.0f));
+    }
+    return out;
+}
+
+Vector4 BrickWave::shore_band_uniform() {
+    return Vector4((float)(BAND_AMP * g_wave_gain), (float)BAND_K,
+        (float)(Math_TAU / BAND_PERIOD), 0.0f);
+}
+
 double BrickWave::height_at(double x, double z, double t) {
     // One field query a sample, for the shore ramp. That is an fBm evaluation
     // where there used to be none, so this is a per-BODY call and not a
     // per-vertex one -- which is what `sample_heights` is for.
     const double taper = shore_taper(x, z);
-    double h = g_sea_level;
+    double swell = 0.0;
     for (int i = 0; i < WAVE_COUNT; ++i) {
         const WaveComponent &w = WAVES[i];
         const double len = w.wavelength * g_wave_gain;
         const double k = Math_TAU / len;
-        h += w.amplitude * g_wave_gain * taper
+        swell += w.amplitude * g_wave_gain
                 * std::sin((std::cos(w.angle) * x + std::sin(w.angle) * z) * k
                 - omega(len) * t + w.phase);
     }
-    return h;
+    // The swell, shaped by the groups and dying in the shallows, and the
+    // shore band on top of it: the same expression the shader draws.
+    return g_sea_level + taper * group_factor(x, z, t) * swell + band_value(x, z, t);
 }
 
 /// The surface as the pieces actually sit. Gameplay uses the CONTINUOUS height
@@ -3630,5 +3850,15 @@ void BrickWave::_bind_methods() {
     ClassDB::bind_static_method("BrickWave", D_METHOD("sample_heights", "points", "t"),
         &BrickWave::sample_heights);
     ClassDB::bind_static_method("BrickWave", D_METHOD("uniform_array"), &BrickWave::uniform_array);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("group_uniform_array"),
+        &BrickWave::group_uniform_array);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("shore_band_uniform"),
+        &BrickWave::shore_band_uniform);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("band_depth", "x", "z"),
+        &BrickWave::band_depth);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("group_at", "x", "z", "t"),
+        &BrickWave::group_at);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("band_at", "x", "z", "t"),
+        &BrickWave::band_at);
     ClassDB::bind_static_method("BrickWave", D_METHOD("terrace_studs"), &BrickWave::terrace_studs);
 }

@@ -30,6 +30,11 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 group_uniforms wave;
 uniform vec4 waves[8];
 uniform int wave_count = 2;
+// Wave GROUPS and the SHORE BAND (Water.md §8): BrickWave.group_uniform_array()
+// and shore_band_uniform(), the same numbers BrickWave::height_at uses.
+uniform vec4 groups[4];
+uniform int group_count = 0;
+uniform vec4 shore_band = vec4(0.0);
 uniform float wave_time = 0.0;
 uniform float sea_level = 1.1;
 uniform float step_m = 0.42;
@@ -83,6 +88,10 @@ uniform float inner_radius = 0.0;
 // straight onto the continuous wave. Past 80 m a 0.42 m step is under a
 // pixel, and a smooth sheet cannot crack against the tier inside it.
 uniform bool sheet_mode = false;
+// The sheet FOLLOWS the camera now; inside this circle round the studded
+// tier's centre it draws nothing, because the studded tier is there.
+uniform vec2 hole_centre = vec2(0.0);
+uniform float hole_radius = 0.0;
 
 group_uniforms seabed;
 uniform sampler2D seabed_tex : hint_default_black, filter_nearest;
@@ -166,14 +175,34 @@ float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-float wave_raw(vec2 p, float t) {
+// The swell. `cell_m` is the spacing of the vertices drawing it: a wave under
+// ~4 samples a wavelength lands between vertices and the surface boils, so on
+// the coarse rings of the sheet the short waves fade out (MvsC's
+// max_wave_number). The studded tier passes 0 and keeps everything.
+float wave_raw_lod(vec2 p, float t, float cell_m) {
     float h = 0.0;
     for (int i = 0; i < wave_count; i++) {
         vec4 a = waves[i * 2];
         vec4 b = waves[i * 2 + 1];
-        h += a.x * sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
+        float len = 6.2831853 / max(a.y, 1e-4);
+        float keep = cell_m > 0.0 ? smoothstep(4.0 * cell_m, 6.0 * cell_m, len) : 1.0;
+        h += keep * a.x * sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
     }
     return h;
+}
+
+float wave_raw(vec2 p, float t) {
+    return wave_raw_lod(p, t, 0.0);
+}
+
+float group_factor(vec2 p, float t) {
+    float f = 1.0;
+    for (int j = 0; j < group_count; j++) {
+        vec4 a = groups[j * 2];
+        vec4 b = groups[j * 2 + 1];
+        f += a.x * sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
+    }
+    return f;
 }
 
 float total_amplitude() {
@@ -194,6 +223,51 @@ float seabed_at(vec2 cell) {
     return water_outside_field ? -open_sea_depth : 1.0e6;
 }
 
+/// The ground BILINEAR over the seabed lattice: the same corners the texture
+/// holds and BrickWave::band_depth reads, so the band's crests are where the
+/// CPU says they are. Nearest (seabed_at) is fine for a cull mask; a crest
+/// phased on it would come out in 2.8 m blocks.
+float lattice_ground(vec2 p) {
+    vec2 size = vec2(textureSize(seabed_tex, 0));
+    vec2 q = (p - seabed_origin) / seabed_extent * size;
+    ivec2 i0 = ivec2(floor(q));
+    vec2 f = q - vec2(i0);
+    if (i0.x < 0 || i0.y < 0 || i0.x + 1 >= int(size.x) || i0.y + 1 >= int(size.y)) {
+        return water_outside_field ? -open_sea_depth : 1.0e6;
+    }
+    float a = texelFetch(seabed_tex, i0, 0).r;
+    float b = texelFetch(seabed_tex, i0 + ivec2(1, 0), 0).r;
+    float c = texelFetch(seabed_tex, i0 + ivec2(0, 1), 0).r;
+    float d = texelFetch(seabed_tex, i0 + ivec2(1, 1), 0).r;
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+/// The shore band: phased on DEPTH, so crests are lines of equal depth and
+/// they roll in toward the shore. BrickWave::band_at, restated.
+float shore_wave(vec2 p, float t) {
+    if (shore_band.x <= 0.0) {
+        return 0.0;
+    }
+    float depth = sea_level - lattice_ground(p);
+    if (depth <= 0.0) {
+        return 0.0;
+    }
+    float w = smoothstep(0.3, 1.5, depth) * (1.0 - smoothstep(4.0, 9.0, depth));
+    float drift = 1.2 * sin(0.013 * p.x + 0.7) + 1.2 * sin(0.011 * p.y + 2.1);
+    return shore_band.x * w * sin(shore_band.y * depth + shore_band.z * t + drift);
+}
+
+/// The whole surface above still water: swell shaped by the groups and dying
+/// in the shallows, plus the band. BrickWave::height_at minus sea_level.
+float surface_offset(vec2 p, float t, float taper, float cell_m) {
+    float band = shore_wave(p, t);
+    // The band is short in distance; only the finest rings can draw it.
+    if (cell_m > 0.0) {
+        band *= 1.0 - smoothstep(2.0, 6.0, cell_m);
+    }
+    return wave_raw_lod(p, t, cell_m) * taper * group_factor(p, t) + band;
+}
+
 /// Where this cell's brick sits, in metres.
 ///
 /// SMOOTH by default: the piece rides the wave continuously and only its
@@ -202,18 +276,20 @@ float seabed_at(vec2 cell) {
 /// 0.42 m. `brick_steps` puts the quantiser back for comparison.
 float surface_top(vec2 cell, float t) {
     float taper = clamp((sea_level - seabed_at(cell)) / shore_taper_depth, 0.0, 1.0);
-    float h = sea_level + wave_raw(cell, t) * taper;
+    float h = sea_level + surface_offset(cell, t, taper, 0.0);
     return brick_steps ? floor(h / step_m) * step_m : h;
 }
 
 void vertex() {
     if (sheet_mode) {
-        vec2 cell = VERTEX.xz;
+        // World position: the sheet node follows the camera in X and Z.
+        vec2 cell = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
         float ground = seabed_at(cell);
         float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
-        float raw = wave_raw(cell, wave_time) * taper;
+        // UV2.x carries this ring's vertex spacing (WaterSheet._ring_mesh).
+        float raw = surface_offset(cell, wave_time, taper, UV2.x);
         VERTEX.y = sea_level + raw;
-        v_world = VERTEX;
+        v_world = vec3(cell.x, VERTEX.y, cell.y);
         v_height01 = clamp(raw / (total_amplitude() * max(taper, 1e-3))
                 * 0.5 + 0.5, 0.0, 1.0);
         v_depth = sea_level - ground;
@@ -250,7 +326,7 @@ void vertex() {
 
     float ground = seabed_at(cell);
     float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
-    float raw = wave_raw(cell, t) * taper;
+    float raw = surface_offset(cell, t, taper, 0.0);
     float top = sea_level + raw;
     if (brick_steps) {
         top = floor(top / step_m) * step_m;
@@ -344,6 +420,9 @@ void vertex() {
 }
 
 void fragment() {
+    if (sheet_mode && hole_radius > 0.0 && distance(v_world.xz, hole_centre) < hole_radius) {
+        discard;
+    }
     // Seen from below -- which is now a thing that happens, see the cull
     // mode -- the top face's normal points away from the viewer.
     if (!FRONT_FACING) {

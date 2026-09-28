@@ -143,14 +143,14 @@ static func _furnish(world: BrickWorld, c: int, palette: Dictionary, p: Dictiona
 	var out := {}
 	var fx := int(p.x)
 	var fz := int(p.z)
-	var snapped := TowerRecipe.snap_keepouts(keep, fx, fz)
+	var keepout_rects := TowerRecipe.snap_keepouts(keep, fx, fz)
 	var rooms := RoomManifest.rooms_for(fx, fz, int(p.courses), int(p.seed),
 			p.get("program", {}))
 	for room in rooms:
-		if not snapped.is_empty():
+		if not keepout_rects.is_empty():
 			var plan := Rect2i(room.lo.x, room.lo.z, room.size.x, room.size.z)
 			var mine: Array[Rect2i] = room.posts.duplicate()
-			for k in snapped:
+			for k in keepout_rects:
 				if (k as Rect2i).intersects(plan):
 					mine.append(k)
 			room.posts = mine
