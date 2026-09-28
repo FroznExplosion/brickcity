@@ -127,6 +127,12 @@ func _program_for(shape: Dictionary, index: int) -> Dictionary:
 ## and nothing reappears. It costs memory -- that is what the trim was for --
 ## and it is the switch to reach for when something is fighting the physics.
 @export var respawn_buildings := true
+## The city on the terrain field rather than the flat plane (`--terrain`), set in
+## a scene so it can be opened and played.
+@export var terrain_ground := false
+## The combat arena (WaveDirector, scenes/combat_arena.tscn): the player's pawn
+## and waves of soldiers in and round one building. `--arena` does the same.
+@export var combat_arena := false
 ## The debris cap (Docs/Scale.md section 4.8, IslandManager). Exported because
 ## it is a player setting in the end -- Teardown ships exactly this pair, and
 ## the honest thing is to admit the cap exists rather than hide it.
@@ -779,6 +785,8 @@ var _wreck_loads := {}
 var _wreck_state := {}
 var _wreck_dirty := {}
 var _soldier_mode := false
+var _arena_mode := false
+var arena: WaveDirector
 var _wreck_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
@@ -837,7 +845,7 @@ func _ready() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	_shot_mode = "--shot" in args
 	_bench_mode = "--bench" in args
-	_terrain_mode = "--terrain" in args
+	_terrain_mode = terrain_ground or "--terrain" in args
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
 	_lod_mode = "--lod" in args
@@ -865,6 +873,7 @@ func _ready() -> void:
 	_no_ai = "--no-ai" in args
 	_nav_mode = "--nav" in args
 	_soldier_mode = "--soldier" in args
+	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
@@ -1054,6 +1063,8 @@ func _ready() -> void:
 		_run_soldier_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
+	elif _arena_mode:
+		_start_arena("--gate" in args)
 	elif _stress_mode:
 		_run_stress_pass()
 	elif _bench_mode:
@@ -4083,6 +4094,27 @@ func _run_soldier_pass() -> void:
 	_check_log_replays()
 	print("[soldier] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The combat arena: waves of soldiers in and round a building (WaveDirector).
+## With `--gate`, the scripted check of where they are put, and quit.
+func _start_arena(gate: bool) -> void:
+	# A building an encounter is fought in stays bricks; one that comes down
+	# must not come back as a shell over its own rubble.
+	respawn_buildings = false
+	arena = WaveDirector.new()
+	arena.name = "Arena"
+	add_child(arena)
+	arena.setup(self)
+	if gate:
+		arena.invulnerable = true
+		_player.drive_uncaptured = true
+		await arena.begin()
+		await arena.run_gate()
+		print("[arena] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1 if _gate_fail > 0 else 0)
+	else:
+		arena.begin()
 
 
 ## The gate for wreckage weight in the city (Docs/AIPlan.md P5): a tower's top

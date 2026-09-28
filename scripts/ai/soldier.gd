@@ -144,9 +144,9 @@ func _sense() -> void:
 	var k := knowledge()
 	for h in services.hostiles_of(team):
 		if can_see(h):
-			k.saw(h, h.feet(), now)
+			k.saw(h, h.feet(), now, self)
 		else:
-			k.lost_sight(h)
+			k.lost_sight(h, self)
 
 
 func _think() -> void:
@@ -292,6 +292,7 @@ func _on_nav_changed(box: AABB) -> void:
 func _on_died() -> void:
 	_dead = true
 	fire_ok = false
+	knowledge().forget_seer(self)
 	pawn.intents.clear()
 	pawn.intents.fire = false
 	state = "dead"
