@@ -5966,6 +5966,9 @@ func _run_bench() -> void:
 func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 	camera.position = pos
 	camera.rotation = rot
+	# The shell tier streams a few buildings a tick; sampling before it has
+	# caught up with the jump measured a different city on every run.
+	await _far_settle()
 	var samples: Array[float] = []
 	for i in 90:
 		await RenderingServer.frame_post_draw
