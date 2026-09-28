@@ -77,12 +77,7 @@ func _ready() -> void:
 	_mat.shader = load("res://shaders/water.gdshader")
 	# Before uniform_array(), which bakes the gain into the amplitudes.
 	BrickWave.set_wave_gain(wave_gain)
-	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
-	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
-	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
-	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
-	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
-	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
+	push_waves()
 	_mat.set_shader_parameter("sea_level", BrickWave.get_sea_level())
 	_mat.set_shader_parameter("step_m", BrickWave.get_step_metres())
 	_mat.set_shader_parameter("stud", _pitch)
@@ -181,6 +176,20 @@ func follow(camera_xz: Vector2, delta: float, camera_y: float = 0.0) -> void:
 	if _collider != null:
 		_collider.follow(camera_xz, _time, delta)
 	global_position = Vector3.ZERO
+
+
+## The sea state into this tier's material, from BrickWave: at setup, and
+## again whenever the dev menu changes it (Terrain.md 20.10).
+func push_waves() -> void:
+	if _mat == null:
+		return
+	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
+	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
+	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
+	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
+	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
+	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
+	_mat.set_shader_parameter("shore_calm", BrickWave.shore_calm_uniform())
 
 
 func set_lod_debug(on: bool) -> void:

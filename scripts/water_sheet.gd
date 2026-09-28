@@ -45,12 +45,7 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	mesh = _ring_mesh()
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/water.gdshader")
-	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
-	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
-	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
-	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
-	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
-	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
+	push_waves()
 	_mat.set_shader_parameter("lod_base_cell", base_cell)
 	_mat.set_shader_parameter("lod_inner_radius", inner_radius)
 	_mat.set_shader_parameter("sea_level", BrickWave.get_sea_level())
@@ -71,6 +66,20 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	# Displaced in the vertex shader, so Godot's own bounds are wrong.
 	custom_aabb = AABB(Vector3(-outer_radius, -60.0, -outer_radius),
 		Vector3(outer_radius * 2.0, 200.0, outer_radius * 2.0))
+
+
+## The sea state into this tier's material, from BrickWave: at setup, and
+## again whenever the dev menu changes it (Terrain.md 20.10).
+func push_waves() -> void:
+	if _mat == null:
+		return
+	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
+	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
+	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
+	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
+	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
+	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
+	_mat.set_shader_parameter("shore_calm", BrickWave.shore_calm_uniform())
 
 
 func set_lod_debug(on: bool) -> void:
