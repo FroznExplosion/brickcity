@@ -75,11 +75,12 @@ func _on_begin() -> void:
 		strikes.append({
 			"t": t,
 			"tall": rng.randf() < TALL_SHARE,
-			"ignite": rng.randf() < IGNITE_CHANCE,
+			"ignite": rng.randf() < minf(IGNITE_CHANCE * intensity, 0.9),
 			"u": rng.randf(), "v": rng.randf(), "w": rng.randf(),
 			"stage": 0,
 		})
-		t += rng.randf_range(1.5, 4.0)
+		# Intensity: strokes come faster.
+		t += rng.randf_range(1.5, 4.0) / maxf(intensity, 0.25)
 	_build()
 
 
@@ -194,10 +195,10 @@ func _strike(s: Dictionary) -> void:
 	var hit := ctx.ray(target + Vector3.UP * 60.0, target + Vector3.DOWN * 30.0)
 	var pos: Vector3 = hit.position if not hit.is_empty() else target
 	var normal: Vector3 = hit.normal if not hit.is_empty() else Vector3.UP
-	ctx.blast(pos, STRIKE_RADIUS)
+	ctx.blast(pos, STRIKE_RADIUS * sqrt(maxf(intensity, 0.1)))
 	ctx.impact_fx(pos, normal)
 	ctx.shake(pos, 0.35)
-	var hurt := ctx.damage_pawns(pos, SHOCK_RADIUS, SHOCK_DAMAGE)
+	var hurt := ctx.damage_pawns(pos, SHOCK_RADIUS, SHOCK_DAMAGE * intensity)
 	if s.ignite:
 		ctx.ignite(pos, 0.8)
 	var player := ctx.player_pos()

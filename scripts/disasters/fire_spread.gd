@@ -67,6 +67,8 @@ var damage: Callable
 var raining: Callable
 
 var rng := RandomNumberGenerator.new()
+## Scales SPREAD: "a building catches" sets it to its intensity while it runs.
+var spread_mul := 1.0
 ## Burning cells in the order they caught.
 var cells: Array[Cell] = []
 var _by_key := {}
@@ -217,7 +219,7 @@ func _step(c: Cell, wet: bool) -> void:
 			if f <= 0.0:
 				continue
 			var bias := BIAS_UP if d.y > 0 else (BIAS_DOWN if d.y < 0 else BIAS_SIDE)
-			var p := f * c.heat * bias * SPREAD * (0.5 if wet else 1.0)
+			var p := f * c.heat * bias * SPREAD * spread_mul * (0.5 if wet else 1.0)
 			if rng.randf() < p:
 				_catch(n, 0.3)
 	c.fuel -= STEP_S * c.heat * 2.0

@@ -4,9 +4,10 @@ extends Node3D
 ## Starts natural disasters in the small city and runs one at a time
 ## (Docs/Disasters.md section 1.1).
 ##
-##   H         start a random disaster (ignored while one runs)
+##   H         open / close the disaster menu: which disaster (or Random), how
+##             hard, and the earthquake's collapse caps; Start (or Enter) runs it
 ##   Shift+H   end the running one; its ENDING phase still plays
-##   --disaster=<kind>       roll this kind instead of a random one
+##   --disaster=<kind>       what Random rolls, forced
 ##   --disaster-seed=<n>     base seed for the roll and each disaster
 ##
 ## The city creates this only when it is not --big.
@@ -21,9 +22,20 @@ const KINDS := {
 	"lightning": preload("res://scripts/disasters/lightning_storm.gd"),
 	"fire": preload("res://scripts/disasters/building_fire.gd"),
 	"tornado": preload("res://scripts/disasters/tornado.gd"),
+	"earthquake": preload("res://scripts/disasters/earthquake.gd"),
 }
-## What H rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire", "tornado"]
+## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
+const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake"]
+## The menu's names, in the menu's order.
+const TITLES := {
+	"meteor": "Meteor shower",
+	"lightning": "Lightning storm",
+	"fire": "Building fire",
+	"tornado": "Tornado",
+	"earthquake": "Earthquake",
+}
+## Intensity steps the slider snaps to, with their names.
+const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]
 
 const BASE_SEED := 0xD15A5
 
@@ -36,10 +48,25 @@ var current_kind := ""
 ## every run, so a disaster seen once can be seen again.
 var count := 0
 
+## What the menu will start: "" for Random. Kept between openings.
+var menu_kind := ""
+var menu_intensity := 1.0
+var menu_options := {"max_collapse_at_once": 2, "max_collapse_total": 6}
+
 var _forced := ""
 var _base_seed := BASE_SEED
 var _roll_rng := RandomNumberGenerator.new()
 var _banner: Label
+var _layer: CanvasLayer
+var _menu: PanelContainer
+var _kind_pick: OptionButton
+var _intensity: HSlider
+var _intensity_label: Label
+var _at_once: SpinBox
+var _total: SpinBox
+var _quake_box: VBoxContainer
+var _status: Label
+var _recapture := false
 
 
 func setup(city: Node3D) -> void:
@@ -62,7 +89,11 @@ func setup(city: Node3D) -> void:
 	fire.raining = func() -> bool: return ctx.raining
 	fire.setup(hash([_base_seed, "fire"]))
 	ctx.fire = fire
+	_layer = CanvasLayer.new()
+	_layer.layer = 5
+	add_child(_layer)
 	_build_banner()
+	_build_menu()
 
 
 ## True when a disaster is running (any phase before DONE).
@@ -70,8 +101,9 @@ func is_running() -> bool:
 	return current != null
 
 
-## Start `kind`, or a rolled one when empty. False if one is already running.
-func start(kind: String = "") -> bool:
+## Start `kind` -- or a rolled one when empty -- at `intensity`, with `options`
+## for the kinds that take them. False if one is already running.
+func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
 	if current != null:
 		return false
 	if kind == "":
@@ -81,16 +113,25 @@ func start(kind: String = "") -> bool:
 		return false
 	var d: Disaster = KINDS[kind].new()
 	d.name = "Disaster_%s" % kind
+	d.intensity = intensity
+	d.options = options.duplicate()
 	add_child(d)
 	current = d
 	current_kind = kind
 	d.finished.connect(_on_finished)
 	d.begin(ctx, hash([_base_seed, count]))
 	count += 1
-	print("[disaster] %s begins (#%d)" % [d.title, count])
+	print("[disaster] %s begins (#%d, intensity %.2f)" % [d.title, count, intensity])
 	started.emit(kind)
 	_update_banner()
 	return true
+
+
+## Start what the menu has chosen.
+func start_from_menu() -> bool:
+	var ok := start(menu_kind, menu_intensity, menu_options)
+	close_menu()
+	return ok
 
 
 ## End the running disaster: straight to its ENDING phase.
@@ -104,8 +145,47 @@ func stop() -> void:
 func on_key(shift: bool) -> void:
 	if shift:
 		stop()
+	elif is_menu_open():
+		close_menu()
 	else:
-		start()
+		open_menu()
+
+
+func is_menu_open() -> bool:
+	return _menu != null and _menu.visible
+
+
+func open_menu() -> void:
+	_sync_menu()
+	_menu.visible = true
+	# The mouse is the camera's while captured; give it to the menu, and give
+	# it back on close only if it was the camera's before.
+	var cam = ctx.city.camera
+	_recapture = cam._captured
+	if _recapture:
+		cam._set_captured(false)
+	_kind_pick.grab_focus()
+
+
+func close_menu() -> void:
+	if _menu == null or not _menu.visible:
+		return
+	_menu.visible = false
+	if _recapture:
+		ctx.city.camera._set_captured(true)
+	_recapture = false
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not is_menu_open():
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			start_from_menu()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ESCAPE:
+			close_menu()
+			get_viewport().set_input_as_handled()
 
 
 func _physics_process(delta: float) -> void:
@@ -116,6 +196,9 @@ func _physics_process(delta: float) -> void:
 func _process(delta: float) -> void:
 	ctx.step(delta)
 	_update_banner()
+	if is_menu_open():
+		_status.text = ("Running: %s — Shift+H or Stop to end it" % current.title) \
+				if current != null else "Nothing running."
 
 
 func _on_finished() -> void:
@@ -128,9 +211,9 @@ func _on_finished() -> void:
 	_update_banner()
 
 
+# --- The banner ---------------------------------------------------------------------
+
 func _build_banner() -> void:
-	var layer := CanvasLayer.new()
-	layer.layer = 5
 	_banner = Label.new()
 	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -141,8 +224,7 @@ func _build_banner() -> void:
 	_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	_banner.add_theme_constant_override("outline_size", 6)
 	_banner.visible = false
-	layer.add_child(_banner)
-	add_child(layer)
+	_layer.add_child(_banner)
 
 
 func _update_banner() -> void:
@@ -156,7 +238,148 @@ func _update_banner() -> void:
 		_banner.text = burning
 		return
 	_banner.visible = true
-	_banner.text = "%s — %s  %ds   (Shift+H to end)" % [current.title.to_upper(),
-			Disaster.phase_name(current.phase), ceili(current.seconds_left())]
+	_banner.text = "%s (%s) — %s  %ds   (Shift+H to end)" % [current.title.to_upper(),
+			intensity_name(current.intensity), Disaster.phase_name(current.phase),
+			ceili(current.seconds_left())]
+	if current is Earthquake:
+		var q: Earthquake = current
+		_banner.text += "\ncollapsing %d/%d · %d of %d so far" % [q.active_collapses(),
+				q.max_collapse_at_once, q.collapses.size(), q.max_collapse_total]
 	if burning != "" and current_kind != "fire":
 		_banner.text += "\n" + burning
+
+
+static func intensity_name(v: float) -> String:
+	var best := ""
+	var gap := INF
+	for pair in INTENSITY_NAMES:
+		if absf(float(pair[0]) - v) < gap:
+			gap = absf(float(pair[0]) - v)
+			best = pair[1]
+	return best if gap < 0.01 else "%s-ish, %.2f" % [best, v]
+
+
+# --- The menu ---------------------------------------------------------------------------
+
+func _build_menu() -> void:
+	_menu = PanelContainer.new()
+	_menu.set_anchors_preset(Control.PRESET_CENTER)
+	_menu.position = Vector2(-190, -150)
+	_menu.custom_minimum_size = Vector2(380, 0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.09, 0.1, 0.9)
+	style.border_color = Color(1.0, 0.78, 0.35, 0.8)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(14)
+	_menu.add_theme_stylebox_override("panel", style)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	_menu.add_child(v)
+
+	var head := Label.new()
+	head.text = "DISASTERS"
+	head.add_theme_font_size_override("font_size", 20)
+	head.add_theme_color_override("font_color", Color(1.0, 0.78, 0.35))
+	v.add_child(head)
+
+	_kind_pick = OptionButton.new()
+	_kind_pick.add_item("Random", 0)
+	var i := 1
+	for kind in ROLL:
+		_kind_pick.add_item(TITLES[kind], i)
+		i += 1
+	_kind_pick.item_selected.connect(func(idx: int) -> void:
+		menu_kind = "" if idx == 0 else String(ROLL[idx - 1])
+		_quake_box.modulate.a = 1.0 if menu_kind in ["", "earthquake"] else 0.45)
+	v.add_child(_row("Disaster", _kind_pick))
+
+	var ih := HBoxContainer.new()
+	_intensity = HSlider.new()
+	_intensity.min_value = 0.25
+	_intensity.max_value = 3.0
+	_intensity.step = 0.05
+	_intensity.value = menu_intensity
+	_intensity.custom_minimum_size = Vector2(170, 0)
+	_intensity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_intensity_label = Label.new()
+	_intensity_label.custom_minimum_size = Vector2(80, 0)
+	_intensity.value_changed.connect(func(value: float) -> void:
+		# Snap to the named steps when close to one.
+		for pair in INTENSITY_NAMES:
+			if absf(value - float(pair[0])) < 0.06 and value != float(pair[0]):
+				_intensity.set_value_no_signal(float(pair[0]))
+				value = float(pair[0])
+		menu_intensity = value
+		_intensity_label.text = intensity_name(value))
+	ih.add_child(_intensity)
+	ih.add_child(_intensity_label)
+	v.add_child(_row("Intensity", ih))
+
+	_quake_box = VBoxContainer.new()
+	var qh := Label.new()
+	qh.text = "Earthquake — keep the collapses in hand"
+	qh.add_theme_color_override("font_color", Color(0.8, 0.82, 0.86))
+	_quake_box.add_child(qh)
+	_at_once = SpinBox.new()
+	_at_once.min_value = 0
+	_at_once.max_value = 8
+	_at_once.value = menu_options.max_collapse_at_once
+	_at_once.tooltip_text = "Buildings falling at the same moment. Each is a big physics event: " \
+			+ "more at once is more spectacle and a longer worst frame. 0: none collapse."
+	_at_once.value_changed.connect(func(value: float) -> void:
+		menu_options.max_collapse_at_once = int(value))
+	_quake_box.add_child(_row("Max collapsing at once", _at_once))
+	_total = SpinBox.new()
+	_total.min_value = 0
+	_total.max_value = 30
+	_total.value = menu_options.max_collapse_total
+	_total.tooltip_text = "Buildings the whole quake may bring down."
+	_total.value_changed.connect(func(value: float) -> void:
+		menu_options.max_collapse_total = int(value))
+	_quake_box.add_child(_row("Max collapses in total", _total))
+	v.add_child(_quake_box)
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	var go := Button.new()
+	go.text = "Start  (Enter)"
+	go.pressed.connect(start_from_menu)
+	var halt := Button.new()
+	halt.text = "Stop"
+	halt.pressed.connect(stop)
+	var shut := Button.new()
+	shut.text = "Close  (H)"
+	shut.pressed.connect(close_menu)
+	buttons.add_child(go)
+	buttons.add_child(halt)
+	buttons.add_child(shut)
+	v.add_child(buttons)
+
+	_status = Label.new()
+	_status.add_theme_color_override("font_color", Color(0.7, 0.72, 0.75))
+	v.add_child(_status)
+	_menu.visible = false
+	_layer.add_child(_menu)
+	_sync_menu()
+
+
+func _row(label: String, control: Control) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	var l := Label.new()
+	l.text = label
+	l.custom_minimum_size = Vector2(150, 0)
+	h.add_child(l)
+	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(control)
+	return h
+
+
+## Put the controls where the remembered choice is.
+func _sync_menu() -> void:
+	_kind_pick.select(0 if menu_kind == "" else ROLL.find(menu_kind) + 1)
+	_intensity.set_value_no_signal(menu_intensity)
+	_intensity_label.text = intensity_name(menu_intensity)
+	_at_once.set_value_no_signal(menu_options.max_collapse_at_once)
+	_total.set_value_no_signal(menu_options.max_collapse_total)
+	_quake_box.modulate.a = 1.0 if menu_kind in ["", "earthquake"] else 0.45
