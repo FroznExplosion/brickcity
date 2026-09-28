@@ -547,10 +547,18 @@ func _toggle_dev_menu() -> void:
 		_dev_menu.name = "DevMenu"
 		_hud_layer.add_child(_dev_menu)
 		_dev_menu.setup(self)
-		_dev_menu.position = Vector2(14, 300)
+		# Under the scene's readout, and never past the window's bottom.
+		_dev_menu.fit(300.0)
+		if not get_viewport().size_changed.is_connected(_refit_dev_menu):
+			get_viewport().size_changed.connect(_refit_dev_menu)
 	# The mouse is the menu's while it is open.
 	if _camera.has_method("_set_captured"):
 		_camera.call("_set_captured", not opening)
+
+
+func _refit_dev_menu() -> void:
+	if _dev_menu != null and is_instance_valid(_dev_menu):
+		_dev_menu.fit(300.0)
 
 
 func set_lod_frozen(on: bool) -> void:
@@ -606,7 +614,7 @@ func rebuild_far() -> void:
 	_far_rings = 0
 	_build_far()
 	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
-	_refine_for(_streamer.current_region())
+	_refine_for(_streamer.current_region().grow(_streamer.align))
 	_hide_covered_far()
 	print("[heightfield] far tier rebuilt: %d blocks, %d tris, smooth from step %d (at %s)" % [
 		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
@@ -633,7 +641,7 @@ static func _lod_of_step(step: int) -> float:
 func _hide_covered_far() -> void:
 	if _far_nodes.is_empty():
 		return
-	_refine_for(_streamer.current_region())
+	_refine_for(_streamer.current_region().grow(_streamer.align))
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:
