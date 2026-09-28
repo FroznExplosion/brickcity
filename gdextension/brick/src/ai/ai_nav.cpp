@@ -355,9 +355,24 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             if (best_y < 0) {
                 continue;
             }
-            // No cutting a corner the body would not fit round.
+            // No cutting a corner the body would not fit round. A body going
+            // diagonally sweeps across BOTH side neighbours, so both have to take
+            // it -- at the height it leaves from or the one it steps to (a stair
+            // turns under it). Either one used to be enough, and the capsule caught
+            // the corner block and stood against it: the combat arena's soldier
+            // that never left its room.
+            // A drop is different: the body goes over air, not round a corner,
+            // and there the old rule stands -- one side open is enough.
             if (d >= 4) {
-                if (_node_head(n.x + DX[d], n.z, n.y) < 0 && _node_head(n.x, n.z + DZ[d], n.y) < 0) {
+                const int ax = n.x + DX[d], az = n.z;
+                const int bx = n.x, bz = n.z + DZ[d];
+                if (std::abs(best_y - n.y) <= STEP_UP) {
+                    const bool a_ok = _node_head(ax, az, n.y) >= 0 || _node_head(ax, az, best_y) >= 0;
+                    const bool b_ok = _node_head(bx, bz, n.y) >= 0 || _node_head(bx, bz, best_y) >= 0;
+                    if (!a_ok || !b_ok) {
+                        continue;
+                    }
+                } else if (_node_head(ax, az, n.y) < 0 && _node_head(bx, bz, n.y) < 0) {
                     continue;
                 }
             }

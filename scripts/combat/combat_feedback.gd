@@ -37,6 +37,12 @@ var _hurt_dir_left := 0.0
 var _numbers: Array = []   # [Label3D, born, velocity]
 var _flashes := {}         # MeshInstance3D -> [material it had, until]
 var _flash_mat: StandardMaterial3D
+var _hit_snd: AudioStreamPlayer
+var _crit_snd: AudioStreamPlayer
+var _kill_snd: AudioStreamPlayer
+var _hurt_snd: AudioStreamPlayer
+## Sounds played, for gates.
+var sounds_played := 0
 
 
 func setup(p_city: Node3D) -> void:
@@ -49,6 +55,13 @@ func setup(p_city: Node3D) -> void:
 	_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_hud)
+	# Sounds, made here: there are no audio assets yet, and a hit you cannot
+	# hear is half a hit. A short high tick for a hit, a two-note chime for the
+	# kill, a low thump for being hurt -- replace with real ones when there are.
+	_hit_snd = _player_for(_tone([2400.0], 0.035, 90.0, 0.35))
+	_crit_snd = _player_for(_tone([3100.0, 1550.0], 0.05, 70.0, 0.4))
+	_kill_snd = _player_for(_tone([880.0, 1320.0], 0.16, 18.0, 0.45))
+	_hurt_snd = _player_for(_tone([110.0, 165.0], 0.12, 25.0, 0.6))
 	_flash_mat = StandardMaterial3D.new()
 	_flash_mat.albedo_color = Color(1.0, 1.0, 1.0)
 	_flash_mat.emission_enabled = true
@@ -73,6 +86,7 @@ func on_player_shot(info: Dictionary) -> void:
 		_mark_len = MARK_SECONDS
 		_mark_colour = Color(1.0, 0.85, 0.2) if r.was_crit else Color.WHITE
 		_mark_size = 9.0
+	_play(_kill_snd if r.killed else (_crit_snd if r.was_crit else _hit_snd))
 	if r.dealt > 0.0:
 		_number(info.point, r.dealt, r.was_crit, r.killed)
 	var body := info.get("collider") as Node
@@ -83,6 +97,7 @@ func on_player_shot(info: Dictionary) -> void:
 ## The player was hurt by `amount`, from `from` (world, or INF).
 func player_hurt(amount: float, from: Vector3) -> void:
 	_hurt = clampf(_hurt + amount / 40.0, 0.0, 1.0)
+	_play(_hurt_snd)
 	var cam: Camera3D = city.camera
 	if from != Vector3.INF and cam != null:
 		var to := cam.global_transform.affine_inverse() * from
@@ -118,6 +133,46 @@ func burst(where: Vector3, colour: Color) -> void:
 	p.global_position = where + Vector3.UP * 0.8
 	p.emitting = true
 	get_tree().create_timer(p.lifetime + 0.3).timeout.connect(p.queue_free)
+
+
+func _play(p: AudioStreamPlayer) -> void:
+	if p == null:
+		return
+	sounds_played += 1
+	p.play()
+
+
+func _player_for(stream: AudioStream) -> AudioStreamPlayer:
+	var p := AudioStreamPlayer.new()
+	p.stream = stream
+	p.max_polyphony = 4
+	add_child(p)
+	return p
+
+
+## A short tone: `freqs` played one after another (evenly split over
+## `seconds`), each decaying at `decay` per second, at `gain`. 16-bit mono.
+static func _tone(freqs: Array, seconds: float, decay: float, gain: float) -> AudioStreamWAV:
+	const RATE := 22050
+	var n := int(seconds * RATE)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	@warning_ignore("integer_division")
+	var per := maxi(n / freqs.size(), 1)
+	for i in n:
+		@warning_ignore("integer_division")
+		var k := mini(i / per, freqs.size() - 1)
+		var t := float(i - k * per) / RATE
+		# A few samples of fade-in: no click at the start of each note.
+		var attack := minf(float(i - k * per) / 40.0, 1.0)
+		var v := sin(TAU * float(freqs[k]) * t) * exp(-decay * t) * gain * attack
+		data.encode_s16(i * 2, int(clampf(v, -1.0, 1.0) * 32767.0))
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = RATE
+	w.stereo = false
+	w.data = data
+	return w
 
 
 func _number(at: Vector3, dealt: float, crit: bool, killed: bool) -> void:

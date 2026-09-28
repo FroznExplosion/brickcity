@@ -193,6 +193,10 @@ func check(feet: Vector3, inside: int, player: Pawn, others: Array) -> Dictionar
 		return _refuse("floor not where it was")
 	if not _city.ai_nav.can_stand(feet):
 		return _refuse("no room to stand")
+	# The bricks say there is room; the collision has to agree, or the body
+	# is born inside a wall it cannot get out of.
+	if not Soldier.body_fits(_city.get_world_3d(), feet):
+		return _refuse("inside solid (physics)")
 	if _city.ai_world.in_danger(feet + Vector3.UP * 0.9):
 		return _refuse("danger marked")
 	if player != null and is_instance_valid(player) and feet.distance_to(player.feet()) < MIN_FROM_PLAYER:

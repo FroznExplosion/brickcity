@@ -26,7 +26,7 @@ func _tick(_delta: float) -> Status:
 		var away := Vector3(feet.x - threat.x, 0.0, feet.z - threat.z)
 		if away.length() > 0.01:
 			var back := s.ai_nav.snap(feet + away.normalized() * FALL_BACK)
-			var found := CoverSearch.find(s, back, threat)
+			var found := CoverSearch.find_for(so, back, threat)
 			if not found.is_empty() and (found.cover as Vector3).distance_to(threat) \
 					> feet.distance_to(threat) + 2.0:
 				cover = found
@@ -47,7 +47,7 @@ func _tick(_delta: float) -> Status:
 			and threat.distance_to(blackboard.get_var(&"cover_threat", threat, false)) < 3.0:
 		return FAILURE
 	so.state = "find cover"
-	var found := CoverSearch.find(s, so.pawn.feet(), threat)
+	var found := CoverSearch.find_for(so, so.pawn.feet(), threat)
 	if found.is_empty():
 		blackboard.set_var(&"cover_fail_at", now)
 		# A tactic that needs cover and has none: decide again.

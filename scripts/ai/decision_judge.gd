@@ -46,10 +46,27 @@ const GOOD := ["kill", "flank_paid_off", "reloaded_in_cover", "traded_up"]
 var episodes: Array[Dictionary] = []
 const KEPT := 4000
 var _open := {}   # soldier instance id -> episode
+## While paused nothing is judged, and what was open is dropped unscored: a
+## test that blows a building down or kills a wave by hand is not the
+## soldiers' doing, and scoring it as their decisions skews every mean.
+var paused := false
+var dropped := 0
+
+
+func pause() -> void:
+	paused = true
+	dropped += _open.size()
+	_open.clear()
+
+
+func resume() -> void:
+	paused = false
 
 
 ## A decision was taken: close the soldier's last episode and open the next.
 func open(so: Soldier, obs: PackedFloat32Array, tactic: int, decision: Dictionary) -> void:
+	if paused:
+		return
 	close(so, "decided again")
 	var c := so.contact()
 	_open[so.get_instance_id()] = {
@@ -78,7 +95,10 @@ func watch(so: Soldier, dt: float) -> void:
 	var g := so.pawn.gun
 	var reloading := g != null and g.is_reloading()
 	var in_cover := so.state in ["hide", "reload in cover"]
-	if so.stuck > 0:
+	# Stuck is trying to go somewhere and not going: legs asked to move, body
+	# not moving. Not a counter that may be left over from a move given up.
+	var v := so.pawn.body.velocity
+	if so.pawn.intents.move.length() > 0.1 and Vector2(v.x, v.z).length() < 0.2:
 		ep.stuck_s = float(ep.stuck_s) + dt
 	if s.ai_world.in_danger(so.pawn.feet() + Vector3.UP * 0.9):
 		ep.danger_s = float(ep.danger_s) + dt

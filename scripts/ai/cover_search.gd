@@ -33,6 +33,16 @@ static func find(s: AIServices, from: Vector3, threat_eye: Vector3) -> Dictionar
 	return s.ai_nav.find_cover(from, threat_eye, THREAT_HP, THREAT_RATE, IDEAL_RANGE)
 
 
+## find(), for one soldier: cover it has lately given up on (Soldier.bad_cover)
+## is no cover. The search itself cannot leave spots out, and without this it
+## handed back the spot the soldier had just abandoned, a second and a half on.
+static func find_for(so: Soldier, from: Vector3, threat_eye: Vector3) -> Dictionary:
+	var found := find(so.services, from, threat_eye)
+	if not found.is_empty() and so.is_bad_cover(found.cover):
+		return {}
+	return found
+
+
 ## Is `p` cover against a threat whose eye is at `threat_eye`, and how good.
 static func rate(s: AIServices, p: Vector3, threat_eye: Vector3) -> Dictionary:
 	return s.ai_nav.rate_cover(p, threat_eye, THREAT_HP, THREAT_RATE)

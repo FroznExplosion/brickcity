@@ -54,8 +54,12 @@ func _tick(_delta: float) -> Status:
 		so.look_at_point(threat)
 		var r := so.move_to(at, true)
 		if r == -1 or so.stuck >= Soldier.MAX_STUCK:
-			# No way there, or a way the body cannot follow: this cover is out,
-			# and the search does not hand the same spot straight back.
+			# No way there, or a way the body cannot follow: this cover is out.
+			# Only the second is remembered as bad: "no way" can be the nav
+			# re-reading ground a wreck just settled on, and blacklisting the
+			# only cover there is for that left a soldier with none.
+			if so.stuck >= Soldier.MAX_STUCK:
+				so.mark_bad_cover(at)
 			so.stuck = 0
 			blackboard.set_var(&"cover", {})
 			blackboard.set_var(&"cover_fail_at", now)
@@ -69,6 +73,7 @@ func _tick(_delta: float) -> Status:
 		so.fire_ok = false
 		so.cover_left_with = CoverSearch.life_at(s, at, threat)
 		so.relocations += 1
+		so.mark_bad_cover(at)
 		blackboard.set_var(&"cover", {})
 		so.tactic_done = true
 		return FAILURE

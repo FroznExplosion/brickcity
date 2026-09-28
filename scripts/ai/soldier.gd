@@ -59,6 +59,8 @@ var cover_left_with := -1.0
 ## the same every time; a task watching this gives the goal up (MAX_STUCK).
 var stuck := 0
 const MAX_STUCK := 2
+## Times it was pinned for good and put on the nearest free spot (_unstick).
+var unsticks := 0
 
 ## The engage decision (CombatPolicy): the tactic it is carrying out, when it
 ## was chosen, and until when it is held unless something happens. `tactic_done`
@@ -74,6 +76,10 @@ var _hp_seen := -1.0
 ## When its gun last fired, and the damage its rounds have done in all.
 var last_shot_at := -INF
 var dealt := 0.0
+## Cover given up on -- no way there, or shot through -- as [spot, until]: not
+## to be taken again for BAD_COVER_SECONDS (CoverSearch.find_for).
+var bad_cover: Array = []
+const BAD_COVER_SECONDS := 10.0
 ## A buddy's call for help: where to go, and until when it is worth going.
 var help_point := Vector3.INF
 var help_until := -INF
@@ -308,12 +314,16 @@ func move_to(goal: Vector3, run := false) -> int:
 		_path_id = nav.request_path(pawn.feet(), goal, importance, 20000)
 		_path = PackedVector3Array()
 		_wp = 0
-		_stuck_from = pawn.feet()
-		_stuck_at = now
+		# Not a reset of the stuck clock: a body pinned in place that keeps
+		# picking new places to go (a strafe every second or two) is still
+		# pinned, and resetting here meant it was never counted stuck at all.
 	if _path.is_empty():
 		var st := nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			pawn.intents.move = Vector3.ZERO
+			# Waiting for a path is not being stuck.
+			_stuck_from = pawn.feet()
+			_stuck_at = now
 			return 0
 		if st != AINav.DONE:
 			pawn.intents.move = Vector3.ZERO
@@ -336,6 +346,9 @@ func move_to(goal: Vector3, run := false) -> int:
 		_wp += 1
 	if _wp >= _path.size():
 		pawn.intents.move = Vector3.ZERO
+		stuck = 0
+		_stuck_from = feet
+		_stuck_at = now
 		return 1
 	var next: Vector3 = _path[_wp]
 	var dir := Vector3(next.x - feet.x, 0.0, next.z - feet.z)
@@ -359,9 +372,59 @@ func move_to(goal: Vector3, run := false) -> int:
 	elif now - _stuck_at > STUCK_SECONDS:
 		_repath = true
 		stuck += 1
+		_stuck_at = now
 		if stuck >= MAX_STUCK:
 			call_for_help()
+		if stuck > MAX_STUCK:
+			_unstick(next)
 	return 0
+
+
+## Pinned for good -- a corner the path swears it can pass, a collider that
+## does not match the bricks: put the body on the nearest spot it fits, toward
+## where it was going first. The last resort, and what every shooter does.
+func _unstick(toward: Vector3) -> void:
+	var feet := pawn.feet()
+	var ahead := Vector3(toward.x - feet.x, 0.0, toward.z - feet.z)
+	var a0 := atan2(ahead.z, ahead.x) if ahead.length() > 0.01 else 0.0
+	for r in [0.35, 0.6, 0.9, 1.3]:
+		for k in 8:
+			# Toward the goal first, then fanning out either side.
+			@warning_ignore("integer_division")
+			var turn := (k + 1) / 2 * (PI / 4.0) * (1.0 if k % 2 == 0 else -1.0)
+			var a: float = a0 + turn
+			var p := services.ai_nav.snap(feet + Vector3(cos(a), 0.0, sin(a)) * r)
+			if absf(p.y - feet.y) > 0.5 or not services.ai_nav.can_stand(p):
+				continue
+			if not body_fits(services.world3d, p, pawn.body.get_rid()):
+				continue
+			pawn.place(p)
+			unsticks += 1
+			stuck = 0
+			_stuck_from = p
+			_stuck_at = services.now()
+			_repath = true
+			return
+
+
+## Does a standing body fit with its feet at `feet`, as physics sees it -- the
+## capsule itself, against everything a pawn collides with? The bricks can say
+## a spot is clear while a building's collision says it is not.
+static func body_fits(space_world: World3D, feet: Vector3, skip: RID = RID()) -> bool:
+	if space_world == null:
+		return true
+	var cap := CapsuleShape3D.new()
+	cap.radius = Pawn.BODY_RADIUS
+	cap.height = Pawn.BODY_HEIGHT
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = cap
+	# A hair above the floor, and a hair thinner: touching is not overlapping.
+	q.transform = Transform3D(Basis(), feet + Vector3.UP * (Pawn.BODY_HEIGHT * 0.5 + 0.04))
+	q.margin = -0.02
+	q.collision_mask = Layers.PAWN_MASK
+	if skip.is_valid():
+		q.exclude = [skip] as Array[RID]
+	return space_world.direct_space_state.intersect_shape(q, 1).is_empty()
 
 
 ## Stuck: shout for help (AI.md 6.5), and the side's soldiers in earshot who
@@ -385,6 +448,29 @@ func call_for_help() -> void:
 		if ally.pawn.feet().distance_to(pawn.feet()) <= HELP_RANGE and ally.state in ["idle", "search"]:
 			ally.help_point = pawn.feet()
 			ally.help_until = now + 20.0
+
+
+## A cover spot failed. Two strikes and it is out: one failure is often
+## passing -- rubble underfoot that the next path gets over -- and a spot that
+## was the only cover there is gets its second try.
+func mark_bad_cover(p: Vector3) -> void:
+	var now := services.now()
+	for e in bad_cover:
+		if (e[0] as Vector3).distance_to(p) < 1.0 and now <= float(e[1]):
+			e[1] = now + BAD_COVER_SECONDS
+			e[2] = int(e[2]) + 1
+			return
+	bad_cover.append([p, now + BAD_COVER_SECONDS, 1])
+
+
+func is_bad_cover(p: Vector3) -> bool:
+	var now := services.now()
+	for i in range(bad_cover.size() - 1, -1, -1):
+		if now > float(bad_cover[i][1]):
+			bad_cover.remove_at(i)
+		elif (bad_cover[i][0] as Vector3).distance_to(p) < 1.0 and int(bad_cover[i][2]) >= 2:
+			return true
+	return false
 
 
 ## The other living soldiers of its side.
@@ -428,6 +514,12 @@ func duck(seconds: float) -> void:
 func stop() -> void:
 	pawn.intents.move = Vector3.ZERO
 	pawn.intents.run = false
+	# Standing still on purpose is not being stuck. The count only ever reset
+	# on moving again, so a soldier that stopped to hide stayed "stuck" as
+	# long as it hid, and the judge said so.
+	stuck = 0
+	_stuck_from = pawn.feet()
+	_stuck_at = services.now()
 
 
 ## Point the head at something, when there is nothing in sight to aim at.
