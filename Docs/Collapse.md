@@ -294,3 +294,22 @@ Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier
    * Probe: stairs gone, from the second floor no way down (the empty shaft is two storeys) —
      trapped in 0.2 s; a hole in its floor 3.5 m off — it looks again, drops a storey, then down the
      shaft, and reaches the ground floor at 44 of 100 hp.
+   * Following a drop: the foot of a drop is often a step across from its top, and a soldier
+     walked to it stood with its centre over the point and its rim still on the ledge. While the
+     next waypoint is below, it keeps walking the way it came until it falls (full run: second
+     floor to ground, two drops, 100 → 62 hp).
+7. **Far collapse is coarse.** `CollapseDirector.plan` sends any building whose nearest player
+   is beyond `FAR_RANGE` (150 m) down its mega-building path, whatever its size: the cascade held
+   until it stops growing, then a few big chunks, furniture split out to be deleted.
+   `far_collapses` counts it. Probe: the same undercut from 260 m came down in **2 pieces**,
+   against **13** watched from close by.
+8. **Weather.** `AIServices.storm` is set while a lightning storm rages. `BTShelter` sits above
+   Idle: a soldier with nothing to fight and no roof within 10 m over its head looks for a covered
+   spot in rings out to 20 m on its own level and goes there. `Soldier.duck(s)` crouches it
+   whatever its task; a stroke's leader ducks everyone within 12 m. Probe: a soldier on a top
+   storey with its roof blown open is under the roof again in 0.9 s; a leader beside it and it
+   crouches, and stands after.
+
+Still open from §4: weather does not change sight or aim (rain, smoke apart from fire's, dark);
+a pawn inside a building that topples is caught by crush, not carried and thrown. Sheltering
+covers the storm only.

@@ -47,6 +47,9 @@ static func build() -> BehaviorTree:
 	search.add_child(BTSearch.new())
 	root.add_child(search)
 
+	# Weather: in a storm, with nothing else to do, get under a roof.
+	root.add_child(BTShelter.new())
+
 	root.add_child(BTIdle.new())
 
 	var bt := BehaviorTree.new()

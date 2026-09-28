@@ -280,6 +280,24 @@ func damage_pawns(point: Vector3, radius: float, amount: float) -> int:
 	return hurt
 
 
+## Tell the AI a storm is raging (AIServices.storm): soldiers with nothing to
+## fight get under a roof (BTShelter).
+func set_storm(on: bool) -> void:
+	if city.ai_services != null:
+		city.ai_services.storm = on
+
+
+## Soldiers within `radius` of `point` get low for `seconds` (Soldier.duck): a
+## stroke is about to land there.
+func duck_near(point: Vector3, radius: float, seconds: float) -> int:
+	var n := 0
+	for so in city.soldiers:
+		if is_instance_valid(so) and so.pawn != null and not so.is_dead() 				and so.pawn.feet().distance_to(point) <= radius:
+			so.duck(seconds)
+			n += 1
+	return n
+
+
 # --- The player ---------------------------------------------------------------
 
 ## Where the player is looking from: the camera, whatever it is attached to.

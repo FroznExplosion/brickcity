@@ -68,6 +68,8 @@ const TRAP_RETRY := 5.0
 var _fails: Array[float] = []
 var _trap_retry_at := 0.0
 var _trapped_since := 0.0
+var _duck_until := 0.0
+var _ducking := false
 
 var _next_sense := -INF
 var _next_think := -INF
@@ -146,6 +148,12 @@ func _physics_process(_delta: float) -> void:
 	if _dead or pawn == null:
 		return
 	var now := services.now()
+	# Ducking (duck()): low, whatever the task wants, until it is over.
+	if now < _duck_until:
+		pawn.intents.crouch = true
+	elif _ducking:
+		_ducking = false
+		pawn.intents.crouch = false
 	if now >= _next_sense and not _sense_queued:
 		_sense_queued = true
 		services.sched.submit(AIScheduler.PERCEPTION, importance, _sense)
@@ -292,6 +300,16 @@ func move_to(goal: Vector3, run := false) -> int:
 		return 1
 	var next: Vector3 = _path[_wp]
 	var dir := Vector3(next.x - feet.x, 0.0, next.z - feet.z)
+	# The foot of a drop is often a step across from its top, and a body walked
+	# to it stops with its centre over the point and its rim still on the ledge
+	# -- stood there for good. Keep walking the way it came until it falls.
+	if next.y < feet.y - WAYPOINT_LEVEL:
+		var from: Vector3 = _path[_wp - 1] if _wp > 0 else feet
+		var way := Vector3(next.x - from.x, 0.0, next.z - from.z)
+		if way.length() < 0.01:
+			way = dir
+		if way.length() > 0.01:
+			dir = way
 	pawn.intents.move = dir.normalized() if dir.length() > 0.01 else Vector3.ZERO
 	pawn.intents.run = run
 	# Going nowhere: something is in the way that was not when the path was made.
@@ -320,6 +338,13 @@ func _path_failed(now: float) -> void:
 		trapped = true
 		_trap_retry_at = now + TRAP_RETRY
 		state = "trapped"
+
+
+## Get low for `seconds`: the ground is about to be struck nearby (a lightning
+## stroke's leader, Docs/Collapse.md 4.4).
+func duck(seconds: float) -> void:
+	_duck_until = maxf(_duck_until, services.now() + seconds)
+	_ducking = true
 
 
 func stop() -> void:
