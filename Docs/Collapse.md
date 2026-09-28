@@ -325,3 +325,22 @@ Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier
     keeps what it had — thrown — and the fall does the rest. Probe: a soldier on a sliding slab
     goes 6.0 m with the slab's 5.2; stopped dead, it keeps 3.6 m/s. (Tested on a slab, not yet
     on a whole building toppling with a soldier inside.)
+
+### 6.1 Follow-ups (2026-09-29)
+
+* **The tops that would not turn — found.** Not physics and not a lock: the **staircase**. A top cut
+  free kept the building-below's staircase running up through its stairwell, a rod through a
+  bead (18 stair blocks up to 13 m in one tower, 27 to 18 m in another), and turned 0.00° under
+  any push. `_with_stairs` missed it twice over: it only took stair blocks wholly inside the
+  section, and it looked for "anything left round the shaft" from the section's very bottom —
+  where the stump's own top course sits. It now takes any stair block reaching into the section,
+  and looks from half a storey up. The same tops now turn 25–28° in a second's push. This is
+  very likely what held collapses up in play. (Earlier notes here that blamed friction and energy
+  were wrong.)
+* **The earthquake tips its failures over.** A building topples the moment its centre is past
+  what is left — often barely, coming to rest at 7°. While the ground shakes, `Earthquake.tip`
+  turns it about its undermined edge until it is past 50°. Tilts at rest: 53°, 76°, 94° (were
+  32–43°).
+* **A soldier inside a building that topples** (`collapse_probe` "inside"): it rides it (Crush),
+  is not left inside it, and is hurt by what it falls — measured: carried 7.1 m, thrown 8.4 m, dead;
+  in another building carried 2.3 m and crushed.
