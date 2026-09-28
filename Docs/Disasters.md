@@ -3,9 +3,9 @@
 Design and plan for the disaster system: four built now (**meteor shower, lightning storm, fire,
 tornado**), the rest deferred with what each one is waiting on.
 
-Written 2026-09-26. **D0–D3 are built**: the director, the meteor shower, the lightning storm and
-fire (§2.1, §3.1, §5.5 have what was measured and what changed from the plan). The tornado is
-not yet (§7).
+Written 2026-09-26. **D0–D5 are built**: the director, the meteor shower, the lightning storm,
+fire, the tornado, and soldiers who get out of the way (§2.1, §3.1, §4.1, §5.5 and §9 have what
+was measured and what changed from the plan).
 
 Decisions this document is written against:
 
@@ -251,6 +251,25 @@ shader — **cosmetic**, never physics bodies. Dust ring at the base: one GPUPar
 **Budget.** The island loop is bounded by the debris cap (96 pieces). The facade rays are 3–6
 every quarter second. The chips go through the damage queue.
 
+### 4.1 Built — what differs, and what was measured
+
+* **It walks at 5 m/s and ACTIVE follows the path**, not the other way round: the small city's
+  crossing is ~143 m, so ACTIVE is ~30 s (clamped 25–75). Fitting the speed to a fixed 60 s made
+  it crawl at 2.5 m/s.
+* **Pieces over 800 bricks are left alone**, and a settled small piece is woken first (every
+  0.5 s) — frozen bodies ignore velocity. The pull closes 18% of the gap to the wanted velocity per
+  tick, scaled by `60 / bricks`, capped at 90% of `MAX_DEBRIS_SPEED`.
+* **Pawns have a `shove`** (`Pawn.gd`): a velocity added to the walk each step, lifting when its y
+  is positive, bled off at 3/s. The tornado sets it every tick a pawn is inside 12 m. A small
+  change in the pawn's area; nothing else sets it yet.
+* **The funnel** is `shaders/disaster_funnel.gdshader` on an open cylinder (2.5 m at the foot,
+  16 m at 50 m up) that grows out of the dust as it forms; the bricks round it are a 300-instance
+  MultiMesh spun by `shaders/disaster_orbit.gdshader`. Its sky is a green-grey.
+
+Probe: **143 m at 5.0 m/s; passes 0.5 m from the player; 12 loose pieces pulled, fastest
+16 m/s; 310 facade chips, every one inside the funnel, all committed CHIPs; the soldier ran
+(§9)**; physics tick mean 4.5 ms, worst 14.6 ms headless.
+
 ---
 
 ## 5. Fire
@@ -360,7 +379,8 @@ And deferred parts of the four built now:
 * **Char as a committed command** (`SCORCH`) and burning pieces (§5.4).
 * **Wet bricks** in rain (a shader parameter, city-wide).
 * **Wind pushing standing buildings** (§4) — after the sideways-load solver.
-* **AI reactions:** soldiers take cover from a storm, flee fire and a funnel ([AI.md](AI.md)).
+* **AI, beyond getting out of the way** (§9): taking shelter from a storm indoors, and
+  choosing to fight near a fire because its smoke hides them.
 * **Scheduling:** disasters as match events or objectives rather than a key.
 * **Multiplayer:** the host rolls and sends `(kind, seed, start tick)`; clients play the visuals.
 
@@ -376,7 +396,8 @@ Each stage merges on its own, small (repo CLAUDE.md).
 | **D1** ✅ | Meteor shower | Probe: N meteors → N committed blasts; frame budget within the damage queue's |
 | **D2** ✅ | Lightning storm (sky dim, bolt, thunder delay, rain, shock damage) | Probe: strikes land on the tallest recipe near the roll ≥ 70% |
 | **D3** ✅ | Fire service + "a building catches"; meteors and lightning ignite | Probe: fire spreads up, dies out, **never exceeds 48 cells**; metal stops it |
-| **D4** | Tornado (islands, facade chip, actors, funnel, orbiting bricks) | Probe: pieces near the path gain speed ≤ `MAX_DEBRIS_SPEED`; facades lose bricks along the path only |
+| **D4** ✅ | Tornado (islands, facade chip, actors, funnel, orbiting bricks) | Probe: pieces near the path gain speed ≤ `MAX_DEBRIS_SPEED`; facades lose bricks along the path only |
+| **D5** ✅ | Soldiers react (§9): hazards into the AI's danger boxes, fire smoke blocks sight | Probe: a soldier leaves a meteor's ring; burning cells are danger; smoke blocks sight; all gone when the fire is |
 
 The city change is limited to D0: create the director when `not _big`, pass it a context, route
 `H`. Everything after that is inside `scripts/disasters/`.
@@ -387,7 +408,7 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 
 `tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
 `-- --also-big` to also check the big city has no director, `-- --disaster-shot` windowed for
-captures, `-- --only=meteor,fire,lightning,pawn` for sections) loads the small city headless and, for each kind with a fixed seed:
+captures, `-- --only=meteor,fire,lightning,pawn,soldiers,tornado` for sections) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
 tick's damage time, and asserts the per-stage gate above. `--shot` captures a frame at peak for
 each, so a change to the look is reviewable. Run it with the probes the city already has
@@ -405,3 +426,32 @@ The city's own gates (`-- --gun` etc.) are scene passes: run them windowed
 screenshots wait forever without a window.
 
 Measure frame times on a quiet machine — an open editor inflates them several times over.
+
+
+---
+
+## 9. Soldiers react (D5)
+
+The AI already had the mechanism: `AIWorld` holds **danger boxes**, and the soldier's tree puts
+`InDanger > Evade` above everything, fighting included ([AI.md](AI.md) 3.5 — it was built for
+falling pieces). Disasters now feed it.
+
+* **`ctx.set_hazard(id, box)` / `clear_hazard(id)`**, pushed to the AI by
+  `ctx.push_hazards(ai_world)` — which the city calls every AI tick right after
+  `Danger.update`, because that clears every danger box first. Disaster ids are negative so they
+  never meet a chunk id.
+* **What is marked:** a meteor's ring (its blast radius + 1.5 m, from the ring appearing to the
+  strike); a lightning stroke's 3 m for its 0.6 s leader (a soldier on that roof may not make it,
+  but tries); the tornado's funnel, 28 m across and 38 m high, swept 2 s ahead; every burning
+  fire cell, grown 0.8 m.
+* **Smoke:** each cluster of burning cells puts a smoke sphere over itself in the AI's world
+  (`set_smoke`) — it blocks sight, not bullets, so a fire changes a fight.
+* **`BTEvade` looks further**, a small change in the AI's area: a second ring of candidates at
+  14 m besides the 6 m one, and it picks again when it arrives still inside. With only 6 m and no
+  re-pick a soldier stood still inside anything as big as a funnel.
+
+Probe: a soldier inside a ring is clear of it (2.1 m out) in 1.3 s; a burning cell is danger and
+its smoke blocks a sightline through it; both are gone when the fire is. The tornado's soldier
+ran every time it was measured — faster than the funnel walks, so the shove gate accepts "shoved
+or got clear", and the shove itself is checked on its own (6 m along, 2.1 m up in 20 ticks).
+`city.tscn -- --soldier` and `-- --play` still pass.

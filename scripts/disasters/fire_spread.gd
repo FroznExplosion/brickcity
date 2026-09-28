@@ -77,6 +77,13 @@ var _flam := {}
 var _tick := 0
 var _douse := 0.0
 
+## Clusters of burning cells, regrouped twice a second: [sum of centres, count,
+## highest centre y]. Smoke, light and sound gather per cluster.
+var _groups: Array = []
+## Where the smoke is, for the AI (it blocks sight): [centre, radius] per
+## cluster, above the fire.
+var smoke_spots: Array = []
+
 ## Counters for the probe and the HUD.
 var caught := 0
 var chips := 0
@@ -162,6 +169,14 @@ func _physics_process(_delta: float) -> void:
 func tick() -> void:
 	_tick += 1
 	if cells.is_empty():
+		# Out: nothing left to group, so no smoke for the AI or the eye.
+		if not _groups.is_empty():
+			_groups = []
+			smoke_spots = []
+			if _visuals:
+				for i in _smoke.size():
+					_smoke[i].emitting = false
+					_lights[i].visible = false
 		return
 	var slices := maxi(1, int(round(STEP_S * Engine.physics_ticks_per_second)))
 	_douse = maxf(0.0, _douse - 1.0 / Engine.physics_ticks_per_second)
@@ -177,6 +192,8 @@ func tick() -> void:
 			_die(i)
 		i -= 1
 	peak = maxi(peak, cells.size())
+	if _tick % 15 == 0:
+		_regroup()
 	if _visuals:
 		_update_visuals()
 
@@ -262,19 +279,7 @@ func _update_visuals() -> void:
 			c.emitter.amount_ratio = 0.3 + 0.7 * c.heat
 	if _tick % 15 != 0:
 		return
-	var groups: Array = []   # [sum, n, top]
-	for c in cells:
-		var p := centre_of(c.key)
-		var joined := false
-		for g in groups:
-			if (g[0] / float(g[1])).distance_to(p) < 12.0:
-				g[0] += p
-				g[1] += 1
-				g[2] = maxf(g[2], p.y)
-				joined = true
-				break
-		if not joined:
-			groups.append([p, 1, p.y])
+	var groups := _groups
 	for i in _smoke.size():
 		var on := i < groups.size()
 		_smoke[i].emitting = on
@@ -293,6 +298,28 @@ func _update_visuals() -> void:
 			_roar.volume_db = -6.0 + minf(8.0, cells.size() * 0.3)
 			if not _roar.playing:
 				_roar.play()
+
+
+func _regroup() -> void:
+	_groups = []
+	for c in cells:
+		var p := centre_of(c.key)
+		var joined := false
+		for g in _groups:
+			if (g[0] / float(g[1])).distance_to(p) < 12.0:
+				g[0] += p
+				g[1] += 1
+				g[2] = maxf(g[2], p.y)
+				joined = true
+				break
+		if not joined:
+			_groups.append([p, 1, p.y])
+	smoke_spots = []
+	for g in _groups:
+		var centre: Vector3 = g[0] / float(g[1])
+		# A column of smoke over the fire, bigger as the fire is.
+		smoke_spots.append([Vector3(centre.x, float(g[2]) + CELL.y * 1.5, centre.z),
+				3.0 + minf(5.0, float(g[1]) * 0.3)])
 
 
 func _process(_delta: float) -> void:

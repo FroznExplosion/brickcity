@@ -18,8 +18,13 @@ extends SceneTree
 ## never passes MAX_CELLS, burns out, and burns less in rain. In the city: a
 ## building catches, spreads, wears bricks through CHIP commands, and goes out.
 ## A pawn in reach of a stroke is hurt.
+## D4: a tornado crosses the city past the player, pulls loose pieces (never past
+## the debris cap), strips facades only inside its funnel through CHIPs, shoves
+## a soldier, and leaves no hazard behind.
+## D5: soldiers run out of a hazard (a meteor's ring), a burning cell is danger
+## and its smoke blocks sight, and both go when the fire does.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn   run just those sections
+##     ... -- --only=meteor,lightning,fire,pawn,tornado,soldiers
 
 var _pass := 0
 var _fail := 0
@@ -71,6 +76,11 @@ func _run() -> void:
 		await _until_out(dir)
 	if only == "" or "pawn" in only:
 		_check_pawn(city, dir)
+	if only == "" or "soldiers" in only:
+		await _check_soldiers(city, dir)
+		await _check_shove(city)
+	if only == "" or "tornado" in only:
+		await _check_tornado(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -332,6 +342,171 @@ func _check_pawn(city: Node3D, dir: DisasterDirector) -> void:
 	var far := dir.ctx.damage_pawns(so.pawn.chest() + Vector3(10, 0, 0), LightningStorm.SHOCK_RADIUS,
 			LightningStorm.SHOCK_DAMAGE)
 	_ok("and one 10 m off does not", far == 0)
+
+
+func _check_tornado(city: Node3D, dir: DisasterDirector) -> void:
+	print("tornado")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	# Stand the player in the middle of the city, so the path bends through it,
+	# and make some rubble there for it to pick up.
+	var bounds := ctx.city_bounds()
+	var mid := bounds.get_center()
+	var home: Transform3D = city.camera.global_transform
+	city.camera.global_position = Vector3(mid.x, 20.0, mid.z)
+	var near: Array = []
+	for b in city.registry.buildings:
+		if not b.toppled:
+			var c := CityPlacer.box_of(b).get_center()
+			near.append([Vector2(c.x - mid.x, c.z - mid.z).length(), b])
+	near.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	for i in mini(3, near.size()):
+		var box := CityPlacer.box_of(near[i][1])
+		city._blast(Vector3(box.position.x, 3.0, box.get_center().z), 3.2)
+		city._blast(Vector3(box.get_center().x, box.end.y - 2.0, box.position.z), 3.2)
+	await _ticks(90)
+	var feet: Vector3 = city.ai_nav.snap(Vector3(mid.x + 4.0, 0.0, mid.z + 4.0))
+	var so: Soldier = city._spawn_soldier(feet)
+	var n0: int = city.authority.commands.size()
+	var base: Color = ctx.sky_base().sun_colour
+	_ok("a tornado starts", dir.start("tornado"))
+	var t: Tornado = dir.current
+	var evaded := false
+	var shoved := false
+	var worst := 0.0
+	var total := 0.0
+	var ticks := 0
+	var shot := false
+	var stats := {}
+	while dir.is_running() and ticks < 30 * 90:
+		await physics_frame
+		ticks += 1
+		var ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		worst = maxf(worst, ms)
+		total += ms
+		if is_instance_valid(so) and not so.is_dead():
+			evaded = evaded or so.state == "evade"
+			shoved = shoved or so.pawn.shove.length() > 1.0
+		if is_instance_valid(t):
+			stats = {"nearest": t.nearest_player, "pulled": t.pieces_pulled.size(),
+					"fastest": t.fastest_piece, "chips": t.chips, "shoved": t.pawns_shoved,
+					"speed": t.speed, "length": t._along[t._along.size() - 1]}
+			if not shot and t.phase == Disaster.Phase.ACTIVE and t.phase_t > 12.0 \
+					and "--disaster-shot" in OS.get_cmdline_user_args():
+				shot = true
+				# A camera of the probe's own: the city's may be walking, and a
+				# walking camera falls wherever it is put.
+				var side := t.vel.normalized().cross(Vector3.UP)
+				var cam := Camera3D.new()
+				cam.far = 2000.0
+				city.add_child(cam)
+				cam.look_at_from_position(t.pos + side * 80.0 + Vector3.UP * 22.0,
+						t.pos + Vector3.UP * 22.0)
+				cam.make_current()
+				await _ticks(3)
+				await _save_shot("tornado")
+				cam.queue_free()
+				city.camera.make_current()
+	_ok("it walks across and ends", not dir.is_running(),
+			"%.0f m at %.1f m/s, %.0f s" % [stats.length, stats.speed, ticks / 30.0])
+	_ok("its path bends past the player", float(stats.nearest) <= 30.0,
+			"nearest %.1f m" % stats.nearest)
+	_ok("it picks up loose pieces", int(stats.pulled) > 0,
+			"%d piece(s), fastest %.1f m/s" % [stats.pulled, stats.fastest])
+	_ok("none faster than the debris cap", float(stats.fastest) <= IslandManager.MAX_DEBRIS_SPEED)
+	var chips: Array = stats.chips
+	var far := 0
+	for c in chips:
+		var p: Vector3 = c.point
+		var a: Vector3 = c.axis
+		if Vector2(p.x - a.x, p.z - a.z).length() > 5.0 + 25.0 * 0.25 + 2.0 + 1.0:
+			far += 1
+	_ok("it strips facades, only inside the funnel", chips.size() > 0 and far == 0,
+			"%d chip(s), %d outside" % [chips.size(), far])
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 600:
+		await physics_frame
+		wait += 1
+	var logged := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			logged += 1
+	_ok("through CHIP commands", logged > 0, "%d CHIP(s)" % logged)
+	# The soldier runs (D5), usually faster than the funnel walks: shoved only
+	# if it is caught. Either is right; standing still in it is not.
+	_ok("a soldier near it runs from it", evaded)
+	_ok("and is shoved if caught, or gets clear", shoved or evaded,
+			"%d pawn-tick(s) shoved" % stats.shoved)
+	_ok("sky back, and no hazard left behind", (city._sun as DirectionalLight3D).light_color == base
+			and ctx.hazards.is_empty())
+	print("  --   physics tick during the tornado: mean %.2f ms, worst %.1f ms" % [
+			total / maxf(ticks, 1), worst])
+	city.camera.global_transform = home
+
+
+## The wind itself: a shove moves a pawn along it and lifts it, and bleeds off.
+func _check_shove(city: Node3D) -> void:
+	var feet: Vector3 = city.ai_nav.snap(Vector3(30.0, 0.0, 40.0))
+	var so: Soldier = city._spawn_soldier(feet)
+	await _ticks(10)
+	so.stop()
+	var from := so.pawn.feet()
+	var rose := 0.0
+	for i in 20:
+		so.pawn.shove = Vector3(9.0, 3.5, 0.0)
+		await physics_frame
+		rose = maxf(rose, so.pawn.feet().y - from.y)
+	var moved := so.pawn.feet() - from
+	_ok("a shove carries a pawn along it and off its feet", moved.x > 2.0 and rose > 0.3,
+			"%.1f m along, %.1f m up" % [moved.x, rose])
+	await _ticks(30)
+	_ok("and bleeds off once the wind stops", so.pawn.shove.length() < 0.5)
+
+
+func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
+	print("soldiers react")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	var w: AIWorld = city.ai_world
+	var feet: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0))
+	var so: Soldier = city._spawn_soldier(feet)
+	await _ticks(10)
+	# A meteor's ring on top of it: the same hazard the shower sets.
+	ctx.set_hazard(900, AABB(so.pawn.feet() - Vector3(4.0, 1.0, 4.0), Vector3(8.0, 6.0, 8.0)))
+	var evaded := false
+	var n := 0
+	while n < 30 * 8:
+		await physics_frame
+		n += 1
+		evaded = evaded or so.state == "evade"
+		if evaded and w.danger_distance(so.pawn.feet()) > 2.0:
+			break
+	_ok("a soldier in a meteor's ring runs out of it", evaded and w.danger_distance(so.pawn.feet()) > 2.0,
+			"%.1f m clear after %.1f s" % [w.danger_distance(so.pawn.feet()), n / 30.0])
+	ctx.clear_hazard(900)
+	await _ticks(2)
+	_ok("and the ring is gone from the AI's world once it lands", not w.in_danger(feet))
+
+	# A fire: burning cells are danger, and its smoke blocks sight.
+	var fire_at := Vector3.INF
+	for b in city.registry.buildings:
+		if not b.toppled:
+			var box := CityPlacer.box_of(b)
+			fire_at = Vector3(box.position.x + 0.8, box.position.y + FireSpread.CELL.y * 1.5,
+					box.get_center().z)
+			break
+	var lit := ctx.ignite(fire_at, 0.8)
+	await _ticks(20)
+	var cell := FireSpread.centre_of(FireSpread.key_of(fire_at))
+	_ok("a burning cell is somewhere not to stand", lit and w.in_danger(cell))
+	var smoky := false
+	for spot in dir.fire.smoke_spots:
+		var c: Vector3 = spot[0]
+		smoky = smoky or w.smoke_blocks(c + Vector3(-20, 0, 0), c + Vector3(20, 0, 0))
+	_ok("and its smoke blocks a soldier's sight", smoky, "%d smoke column(s)" % dir.fire.smoke_spots.size())
+	await _until_out(dir)
+	await _ticks(20)
+	_ok("once out, neither is left", not w.in_danger(cell) and dir.fire.smoke_spots.is_empty())
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
