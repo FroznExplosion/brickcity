@@ -614,7 +614,7 @@ func rebuild_far() -> void:
 	_far_rings = 0
 	_build_far()
 	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
-	_refine_for(_streamer.current_region().grow(_streamer.align))
+	_refine_for(_streamer.current_region())
 	_hide_covered_far()
 	print("[heightfield] far tier rebuilt: %d blocks, %d tris, smooth from step %d (at %s)" % [
 		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
@@ -641,7 +641,7 @@ static func _lod_of_step(step: int) -> float:
 func _hide_covered_far() -> void:
 	if _far_nodes.is_empty():
 		return
-	_refine_for(_streamer.current_region().grow(_streamer.align))
+	_refine_for(_streamer.current_region())
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:
