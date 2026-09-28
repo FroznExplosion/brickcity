@@ -248,3 +248,49 @@ Smallest and most certain first; each merges on its own.
 | 6 | Storey drops in the nav, trapped state | soldiers stuck on floors | AI (+ C++ nav) |
 | 7 | Coarse collapse for far buildings | cost of far collapses | City / islands |
 | 8 | Storm shelter, weather-aware sight | AI and weather | AI |
+
+---
+
+## 6. Built (2026-09-28)
+
+Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier`, `--play`,
+`--wreck`, `--rooms` gates, `float_probe` and `disaster_probe`.
+
+1. **The box tier is for undamaged buildings** (`_make_shell`), and a damaged building has no tier
+   to swap to (`_stream_shells`).
+2. **Room fakes follow structure.** `Building.structure_version` is bumped by every block change
+   (`_mark_dirty`) and every detach; `Room.fake_stamp` is compared to it. Probe: 14 rooms faked, a
+   floor taken out with nobody near, the building given back and rebuilt — every faked room
+   redrawn, no item on air.
+3. **Hand-over by event.** A hand-over watch (`_handovers`, `handover_stats`) measured it first:
+   gaps in 4 of 8, doubles in 7 of 8 (worst 6 ticks, **all** waiting in the remesh queue, none on
+   bands). Now a building that shed a piece is remeshed first, outside the budget, the tick every
+   piece that took its bricks is drawing (held at most 20 frames). After: 0 of 18.
+4. **Stairs.** §2.1's first guess was wrong: the staircase does **not** hold floors up — an
+   experiment with the ground storey gone but for the stairs grounds 0 of 884 blocks through them.
+   What happens is the other way round: the stairs stand on their own column, the shaft fits the
+   stairwell exactly, and a section breaking off is left **threaded on them**, then the stairs stand
+   alone. `_with_stairs`: when a section (150+ blocks, a storey tall) leaves and **nothing is left
+   round the shaft** from its bottom up, the stair blocks wholly inside its height go with it.
+   Probe: an undercut that spares the stairwell — without the fix 14 stair blocks stood alone
+   where the floors had gone; with it none, and every building with floors still round its
+   stairwell kept its stairs. No recipe change was needed.
+5. **Crush** (`scripts/crush.gd`). A piece faster than 2.5 m/s whose solid is where a pawn is hurts
+   it by speed × √bricks; 100+ bricks at 4 m/s kills; a pawn inside a piece's solid is shoved out.
+   Probe: a small piece dropped on a soldier 500 → 469 hp; a 138-brick one kills a soldier held
+   still (a thinking one walks out from under it — the evade works even from 2 m); a soldier inside
+   a piece is out in 8 ticks.
+6. **Drops, falls, trapped.**
+   * `Pawn`: a fall past 1.5 m hurts, 26 hp a metre past it (a storey ≈ 30 hp); being `place`d
+     does not count as a fall.
+   * `AINav`: `MAX_DROP` 9 → 21 plates (one storey); a drop past `SAFE_DROP` (9) costs
+     `HURT_DROP_COST` (12 m of walking), lands only on open floor, and **needs air in the landing
+     column from its floor up past where the body steps off** — without that a path stepped off the
+     second floor into the wall beside it and the soldier walked into the wall forever.
+   * `Soldier`: a waypoint counts as reached only level with it (within 1 m) — the far side of a
+     drop is a step across, and counting it from the top sent a soldier to "arrive" a floor above
+     its goal. **Trapped**: three failed paths in 10 s; it stops asking, holds and fights where it
+     is, and asks again every 5 s.
+   * Probe: stairs gone, from the second floor no way down (the empty shaft is two storeys) —
+     trapped in 0.2 s; a hole in its floor 3.5 m off — it looks again, drops a storey, then down the
+     shaft, and reaches the ground floor at 44 of 100 hp.

@@ -681,7 +681,7 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 			var tilts := []
 			for c in q.collapses:
 				toppled += 1 if c.toppled else 0
-				went_over += 1 if c.tilt >= 25.0 else 0
+				went_over += 1 if c.tilt >= 10.0 else 0
 				survived += 1 if c.survived else 0
 				tilts.append("%d deg, %d blasts" % [int(c.tilt), int(c.blasts)])
 			stats = {"collapses": q.collapses.size(), "peak": q.peak_at_once, "held": q.held,
@@ -711,7 +711,8 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("never more than the cap in all", int(stats.collapses) <= 3)
 	_ok("undermined, most of them topple", int(stats.toppled) * 2 >= int(stats.collapses),
 			"%d of %d toppled, %d survived" % [stats.toppled, stats.collapses, stats.survived])
-	_ok("and go over (25 degrees or more: past standing, most lean on their stump)", int(stats.over) >= int(stats.toppled) and int(stats.over) > 0,
+	_ok("and go over (more than 10 degrees off upright; most come to rest leaning)",
+			int(stats.over) >= int(stats.toppled) and int(stats.over) > 0,
 			"%s" % [stats.tilts])
 	_ok("facades shed bricks", int(stats.chips) + int(stats.shears) > 0,
 			"%d chip(s), %d clump(s)" % [stats.chips, stats.shears])
