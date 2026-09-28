@@ -734,14 +734,20 @@ public:
     /// heaped and the next is calm. Two vec4 a group: (fraction, wavenumber,
     /// dir.x, dir.z) then (omega, phase, 0, 0).
     static PackedVector4Array group_uniform_array();
-    /// THE SHORE BAND: a wave phased on DEPTH rather than on a direction, so
-    /// its crests are lines of equal depth and it always rolls in toward the
-    /// shore whatever the swell is doing. (amplitude, radians per metre of
-    /// depth, omega, 0).
+    /// THE SHORE BAND: a wave phased on DISTANCE TO THE SHORE, so its crests
+    /// run parallel to every coast and roll in toward it whatever the swell
+    /// is doing. (amplitude, radians per metre, omega, band reach in metres).
     static Vector4 shore_band_uniform();
-    /// The still-water depth the shore band reads: the ground bilinear over
-    /// the seabed lattice (one sample every 8 studs), which is exactly what
-    /// the shader reads from the seabed texture.
+    /// Build the field the band reads: the ground and the distance to the
+    /// nearest dry ground, one sample every `step` studs over +/-`half_studs`,
+    /// on the SAME lattice as the water's seabed texture. Returns the samples
+    /// interleaved (ground, distance) row by row -- the texture's own layout,
+    /// so the water uploads it as it is.
+    static PackedFloat32Array build_shore_field(int half_studs, int step);
+    /// Metres from a point to the nearest dry ground, bilinear over that
+    /// field; very large where no field has been built.
+    static double shore_distance(double x, double z);
+    /// The still-water depth, bilinear over the seabed lattice.
     static double band_depth(double x, double z);
     /// The two halves of the surface, for the probe that checks the shader's
     /// copy of the formula: the group factor at a point and the band.

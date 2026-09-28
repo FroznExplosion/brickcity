@@ -88,6 +88,8 @@ uniform float inner_radius = 0.0;
 // straight onto the continuous wave. Past 80 m a 0.42 m step is under a
 // pixel, and a smooth sheet cannot crack against the tier inside it.
 uniform bool sheet_mode = false;
+// L in heightfield_test: tint by LOD level (0 = studded tier, 1+ = sheet rings).
+uniform bool lod_debug = false;
 // The sheet FOLLOWS the camera now; inside this circle round the studded
 // tier's centre it draws nothing, because the studded tier is there.
 uniform vec2 hole_centre = vec2(0.0);
@@ -170,6 +172,7 @@ varying float v_depth;   // still-water depth under this piece, in metres
 varying float v_wave;    // local wave height here, in metres, after the taper
 varying vec2 v_cell;     // position within this piece, in metres
 varying float v_top;     // this piece's own top, in metres
+varying float v_lod;     // LOD level, for the debug view
 
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -242,9 +245,27 @@ float lattice_ground(vec2 p) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-/// The shore band: phased on DEPTH, so crests are lines of equal depth and
-/// they roll in toward the shore. BrickWave::band_at, restated.
-float shore_wave(vec2 p, float t) {
+/// Metres to the nearest dry ground: the seabed texture's G channel
+/// (BrickWave.build_shore_field), bilinear like the ground.
+float lattice_distance(vec2 p) {
+    vec2 size = vec2(textureSize(seabed_tex, 0));
+    vec2 q = (p - seabed_origin) / seabed_extent * size;
+    ivec2 i0 = ivec2(floor(q));
+    vec2 f = q - vec2(i0);
+    if (i0.x < 0 || i0.y < 0 || i0.x + 1 >= int(size.x) || i0.y + 1 >= int(size.y)) {
+        return 1.0e4;
+    }
+    float a = texelFetch(seabed_tex, i0, 0).g;
+    float b = texelFetch(seabed_tex, i0 + ivec2(1, 0), 0).g;
+    float c = texelFetch(seabed_tex, i0 + ivec2(0, 1), 0).g;
+    float d = texelFetch(seabed_tex, i0 + ivec2(1, 1), 0).g;
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+/// The shore band: phased on DISTANCE TO THE SHORE, so crests run along
+/// every coast and roll in toward it. BrickWave::band_at, restated.
+/// shore_band = (amplitude, radians per metre, omega, reach).
+float shore_wave(vec2 p, float t, float dist) {
     if (shore_band.x <= 0.0) {
         return 0.0;
     }
@@ -252,20 +273,26 @@ float shore_wave(vec2 p, float t) {
     if (depth <= 0.0) {
         return 0.0;
     }
-    float w = smoothstep(0.3, 1.5, depth) * (1.0 - smoothstep(4.0, 9.0, depth));
+    float reach = shore_band.w;
+    float w = smoothstep(1.0, 8.0, dist) * (1.0 - smoothstep(0.6 * reach, reach, dist))
+            * smoothstep(0.2, 1.0, depth);
     float drift = 1.2 * sin(0.013 * p.x + 0.7) + 1.2 * sin(0.011 * p.y + 2.1);
-    return shore_band.x * w * sin(shore_band.y * depth + shore_band.z * t + drift);
+    return shore_band.x * w * sin(shore_band.y * dist + shore_band.z * t + drift);
 }
 
 /// The whole surface above still water: swell shaped by the groups and dying
 /// in the shallows, plus the band. BrickWave::height_at minus sea_level.
 float surface_offset(vec2 p, float t, float taper, float cell_m) {
-    float band = shore_wave(p, t);
-    // The band is short in distance; only the finest rings can draw it.
+    float dist = lattice_distance(p);
+    float band = shore_wave(p, t, dist);
+    // The band's crests are 15 m apart; rings too coarse to carry 4 samples
+    // of it leave it out.
     if (cell_m > 0.0) {
-        band *= 1.0 - smoothstep(2.0, 6.0, cell_m);
+        band *= 1.0 - smoothstep(3.0, 5.0, cell_m);
     }
-    return wave_raw_lod(p, t, cell_m) * taper * group_factor(p, t) + band;
+    // Near a coast the swell keeps 35%, so the band rolling in is what shows.
+    float calm = 0.35 + 0.65 * smoothstep(15.0, max(shore_band.w, 16.0), dist);
+    return wave_raw_lod(p, t, cell_m) * taper * group_factor(p, t) * calm + band;
 }
 
 /// Where this cell's brick sits, in metres.
@@ -288,6 +315,8 @@ void vertex() {
         float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
         // UV2.x carries this ring's vertex spacing (WaterSheet._ring_mesh).
         float raw = surface_offset(cell, wave_time, taper, UV2.x);
+        // LOD 1 is the finest ring (2.8 m cells, WaterSheet.base_cell).
+        v_lod = 1.0 + log2(max(UV2.x, 2.8) / 2.8);
         VERTEX.y = sea_level + raw;
         v_world = vec3(cell.x, VERTEX.y, cell.y);
         v_height01 = clamp(raw / (total_amplitude() * max(taper, 1e-3))
@@ -328,6 +357,7 @@ void vertex() {
     float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
     float raw = surface_offset(cell, t, taper, 0.0);
     float top = sea_level + raw;
+    v_lod = 0.0;
     if (brick_steps) {
         top = floor(top / step_m) * step_m;
     }
@@ -417,6 +447,16 @@ void vertex() {
         v_top = 0.0;
     }
     }
+}
+
+// The LOD debug palette: 0 red, 1 orange, 2 yellow, 3 green, 4 cyan, 5 blue,
+// 6 purple, 7+ magenta.
+vec3 lod_colour(float lod) {
+    int i = clamp(int(floor(lod + 0.5)), 0, 7);
+    vec3 c[8] = vec3[8](vec3(0.95, 0.15, 0.12), vec3(1.0, 0.55, 0.1), vec3(0.95, 0.9, 0.15),
+        vec3(0.2, 0.85, 0.25), vec3(0.15, 0.85, 0.9), vec3(0.2, 0.35, 1.0),
+        vec3(0.6, 0.25, 0.95), vec3(0.95, 0.2, 0.8));
+    return c[i];
 }
 
 void fragment() {
@@ -527,6 +567,9 @@ void fragment() {
         }
     }
 
+    if (lod_debug) {
+        albedo = mix(albedo, lod_colour(v_lod), 0.7);
+    }
     ALBEDO = albedo;
     ROUGHNESS = water_roughness;
     METALLIC = 0.0;

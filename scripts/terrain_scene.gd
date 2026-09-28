@@ -203,15 +203,14 @@ func _build_water() -> void:
 ## so one 160x160 image covers it and costs 100 KB.
 func _build_seabed() -> ImageTexture:
 	var tile := BrickTerrain.get_tile_studs()
-	var brick := BrickTerrain.get_brick_metres()
 	var n := TILES * tile
 	@warning_ignore("integer_division")
 	var half := n / 2
-	var img := Image.create_empty(n, n, false, Image.FORMAT_RF)
-	for iz in n:
-		for ix in n:
-			var h := BrickTerrain.height_at(ix - half, iz - half)
-			img.set_pixel(ix, iz, Color(float(h + 1) * brick, 0.0, 0.0))
+	# Ground (R) and distance to the shore (G), from the same C++ field the
+	# CPU wave reads (BrickWave.build_shore_field): the shore band is phased
+	# on that distance (Water.md 9.6).
+	var field: PackedFloat32Array = BrickWave.build_shore_field(half, 1)
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_RGF, field.to_byte_array())
 	return ImageTexture.create_from_image(img)
 
 

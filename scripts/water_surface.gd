@@ -163,12 +163,25 @@ func follow(camera_xz: Vector2, delta: float, camera_y: float = 0.0) -> void:
 		round(camera_xz.x / _pitch) * _pitch,
 		round(camera_xz.y / _pitch) * _pitch)
 	_mat.set_shader_parameter("snapped_origin", origin_xz)
+	# The culling box goes WITH the pieces. They are placed in the vertex
+	# shader round the camera, but the box was set once round the world's
+	# origin: away from it the engine culled the whole tier whenever that
+	# box was off screen -- the near water vanishing, and coming back when
+	# the camera turned toward the origin.
+	var sea := BrickWave.get_sea_level()
+	custom_aabb = AABB(Vector3(origin_xz.x - radius, sea - 40.0, origin_xz.y - radius),
+		Vector3(radius * 2.0, 80.0, radius * 2.0))
 	_mat.set_shader_parameter("wave_time", _time)
 	_mat.set_shader_parameter("camera_submerged",
 			submerged_at(Vector3(camera_xz.x, _camera_y, camera_xz.y)))
 	if _collider != null:
 		_collider.follow(camera_xz, _time, delta)
 	global_position = Vector3.ZERO
+
+
+func set_lod_debug(on: bool) -> void:
+	if _mat != null:
+		_mat.set_shader_parameter("lod_debug", on)
 
 
 ## The middle of this tier for a camera: its pieces are alive within

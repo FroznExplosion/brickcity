@@ -93,6 +93,8 @@ var _world_path := ""
 var _seed := WORLD_SEED
 var _drowned := DROWNED
 var _load_status := ""
+## L: tint the ground and the sea by LOD level.
+var _lod_debug := false
 var _env: Environment = null
 var _under := UnderwaterFx.new()
 var _camera: DebugCamera = null
@@ -366,6 +368,8 @@ func _rebuild_ring(span: int) -> void:
 	mi.name = "CoarseRing_%d" % span
 	mi.mesh = mesh
 	mi.material_override = _mat
+	@warning_ignore("integer_division")
+	mi.set_instance_shader_parameter("lod_level", _lod_of_step(FAR_STEP * span / FAR_SPAN))
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	_ring_nodes[span] = mi
@@ -443,6 +447,9 @@ func _refine_for(detail: Rect2i) -> void:
 		mi.name = "CoarseSplit_%d_%d" % [new_rects[k].position.x, new_rects[k].position.y]
 		mi.mesh = mesh
 		mi.material_override = _mat
+		@warning_ignore("integer_division")
+		mi.set_instance_shader_parameter("lod_level",
+				_lod_of_step(FAR_STEP * (new_rects[k].size.x / FAR_SPAN)))
 		mi.position = Vector3(new_rects[k].position.x * tile_studs * stud, 0.0,
 				new_rects[k].position.y * tile_studs * stud)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -515,6 +522,14 @@ func terrain_changed(studs: Rect2i) -> void:
 		_rebuild_ring(span)
 	if _sea != null:
 		_sea.refresh_seabed()
+
+
+## A coarse block's LOD level from its sample step: the detailed tiles are 0,
+## a block sampled every FAR_STEP studs is 1, and each doubling one more.
+## A float, because the shader's `lod_level` is one: an int handed to a float
+## instance uniform is dropped without a word, and every block read as 0.
+static func _lod_of_step(step: int) -> float:
+	return float(1 + maxi(0, roundi(log(float(step) / float(FAR_STEP)) / log(2.0))))
 
 
 ## A coarse block under the detailed tier is hidden.
@@ -742,6 +757,7 @@ func _build_far() -> void:
 		mi.name = "Coarse_%d_%d" % [blocks[i].x, blocks[i].y]
 		mi.mesh = mesh
 		mi.material_override = _mat
+		mi.set_instance_shader_parameter("lod_level", _lod_of_step(steps[i]))
 		mi.position = origin
 		# Far ground does not cast: the shadow of a hill 300 m away lands on
 		# ground the player cannot see, and the shadow pass was 183k
@@ -885,6 +901,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					% ("ON (0.14 m)" if BrickTerrain.get_plate_steps() else "OFF (0.42 m)"))
 		KEY_F7:
 			_set_water(not _sea.enabled)
+		KEY_L:
+			_lod_debug = not _lod_debug
+			_mat.set_shader_parameter("lod_debug", _lod_debug)
+			_sea.set_lod_debug(_lod_debug)
 		# C, not F8: F8 is Godot's own "stop the running game", and the
 		# editor takes it even while the game has focus -- so the curves
 		# toggle quit the game instead of toggling anything.
@@ -986,9 +1006,11 @@ func _update_hud() -> void:
 			RenderingServer.get_rendering_info(
 				RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)],
 		"frame        %.1f ms" % _frame_ms,
+		("LOD          0 red  1 orange  2 yellow  3 green  4 cyan  5 blue  6 purple"
+			if _lod_debug else ""),
 		"F1 seams  F2 studs  F3 shadows  F4 stud geometry",
 		"F5 tiles on studs  F6 plate steps  F7 water",
-		"C curves  P print  V wave steps",
+		"C curves  P print  V wave steps  L LOD view",
 	])
 
 

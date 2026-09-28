@@ -26,12 +26,14 @@ extends MeshInstance3D
 ## waves too short for it -- under ~4 samples a wavelength a crest lands
 ## between vertices and the surface boils.
 
-## Where the finest ring ends. It starts at the middle.
-@export var inner_radius := 40.0
+## Where the finest ring ends. It starts at the middle, but the studded tier
+## covers the first 40 m, so this ring is only SEEN from 40 to 80.
+@export var inner_radius := 80.0
 ## How far the sheet reaches, in metres.
 @export var outer_radius := 600.0
-## The finest cell. Four studs: what the old coarse tier was, as a surface.
-@export var base_cell := 1.4
+## The finest cell: eight studs. Still over four samples a crest for the
+## shore band (15 m) and the swell.
+@export var base_cell := 2.8
 ## How many doublings past the first ring.
 @export var levels := 6
 
@@ -63,6 +65,11 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	# Displaced in the vertex shader, so Godot's own bounds are wrong.
 	custom_aabb = AABB(Vector3(-outer_radius, -60.0, -outer_radius),
 		Vector3(outer_radius * 2.0, 200.0, outer_radius * 2.0))
+
+
+func set_lod_debug(on: bool) -> void:
+	if _mat != null:
+		_mat.set_shader_parameter("lod_debug", on)
 
 
 ## Every frame: the clock, where the camera is, and the hole the studded tier

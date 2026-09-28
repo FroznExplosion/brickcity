@@ -757,6 +757,45 @@ Not done yet from the reference: **exposure** (swell reduced behind land,
 eight rays per 32 m grid corner) — the next step if sheltered bays should be
 calmer than open coast.
 
+## 9.6 Near water that vanished, a band phased on distance, and a LOD view
+
+**The near water vanished**, and came back when the camera turned. The
+studded tier draws its pieces round the camera in the vertex shader, but its
+culling box was set once, round the world's ORIGIN. Anywhere else the engine
+culled the whole tier whenever that box was off screen — and the sheet still
+left its hole, so there was no water at all. The box now moves with the
+pieces (`WaterSurface.follow`). Four headings over open water 300 m from the
+origin all draw it.
+
+**The studded tier is 40 m now** (`WaterSea.NEAR_RADIUS`), up from 20: 52k
+pieces. The sheet's finest ring starts at 2.8 m cells and reaches 80 m,
+since the studded tier covers the first 40.
+
+**The shore band is phased on DISTANCE to the shore**, not depth. Depth was
+MvsC's choice and on this terrain it was invisible: the seabed drops steeply,
+every line of equal depth was crammed into a few metres at the waterline, and
+the swell moving one way was all anyone saw. `BrickWave.build_shore_field`
+builds the distance to the nearest dry ground on the seabed lattice (a
+two-pass chamfer, into the seabed texture's G channel), and the band is
+`A(s) sin(k s + ω t + drift)`: crests 15 m apart parallel to every coast,
+rolling in, reaching 70 m out. Within that reach the swell keeps 35%, so the
+band is what the eye follows near a coast. The probe checks the roll: what is
+further out arrives nearer (s₂ − s₁)·k/ω seconds later, to 1 cm.
+
+**L** in heightfield_test tints the ground and the sea by LOD level:
+
+| level | ground | sea |
+|---|---|---|
+| 0 red | the detailed tiles, ±4 tiles round the camera (~±50 m), kept to ±6 | studded bricks, 0–40 m |
+| 1 orange | coarse, blocky, a sample every 4 studs (1.4 m), out to 16 tiles (179 m) | sheet, 2.8 m cells, to 80 m |
+| 2 yellow | smooth, every 8 studs, 16–32 tiles (179–358 m) | 5.6 m, to 160 m |
+| 3 green | smooth, every 16 studs, 32 tiles to the world's edge (560 m) | 11.2 m, to 320 m |
+| 4 cyan | — | 22.4 m, to 640 m |
+| 5 blue | — | 44.8 m, to the horizon |
+
+(Ground blocks split to sit next to the detail are level 1 whatever ring they
+came from.)
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and
