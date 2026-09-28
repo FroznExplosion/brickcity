@@ -62,19 +62,19 @@ func follow(centre_xz: Vector2, time: float, delta: float) -> void:
 	var w := float(cell_studs) * stud
 	# Snapped to the cell lattice, so the boxes do not crawl with the
 	# camera — the same reason the water grid snaps (§3.4).
-	var snapped := Vector2(round(centre_xz.x / w) * w, round(centre_xz.y / w) * w)
-	if _next_refit > 0.0 and snapped == _centre:
+	var at := Vector2(round(centre_xz.x / w) * w, round(centre_xz.y / w) * w)
+	if _next_refit > 0.0 and at == _centre:
 		return
 	_next_refit = 1.0 / maxf(refit_hz, 1.0)
-	_centre = snapped
+	_centre = at
 
 	var half := float(cells) * 0.5 - 0.5
 	for i in cells * cells:
 		@warning_ignore("integer_division")
 		var cz := i / cells
 		var cx := i % cells
-		var x := snapped.x + (float(cx) - half) * w
-		var z := snapped.y + (float(cz) - half) * w
+		var x := at.x + (float(cx) - half) * w
+		var z := at.y + (float(cz) - half) * w
 		# The CONTINUOUS surface, because that is what the shader draws
 		# (Water §2.2). If the water is switched back to brick steps, this
 		# follows, because both read the one wave function.

@@ -1,6 +1,5 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://scripts/terrain_editor.gd" id="1_editor"]
+[ext_resource type="PackedScene" path="res://scenes/heightfield_test.tscn" id="1_hf"]
 
-[node name="TerrainEditor" type="Node3D"]
-script = ExtResource("1_editor")
+[node name="TerrainEditor" instance=ExtResource("1_hf")]

@@ -21,6 +21,7 @@ extends RefCounted
 static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
 	var brick := BrickTerrain.get_brick_metres()
 	var half := half_tiles * BrickTerrain.get_tile_studs()
+	@warning_ignore("integer_division")
 	var step: int = maxi(1, half / 12)
 	var heights: Array[float] = []
 	for gz in range(-half, half + 1, step):

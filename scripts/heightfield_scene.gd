@@ -73,10 +73,26 @@ const DROWNED := 0.30
 const World := preload("res://scripts/terrain_world.gd")
 
 var _tiles: Array[TerrainTile] = []
+## The sea, as one node (water_sea.gd): the three tiers, the seabed they share,
+## and the brick tiers shown only where there is water to draw.
+const WaterSeaScript := preload("res://scripts/water_sea.gd")
+var _sea = null
+## Its tiers, by the names the bench and the toggles have always used.
 var _water: WaterSurface = null
 var _water_far: WaterSurface = null
-const WaterSheetFx := preload("res://scripts/water_sheet.gd")
 var _water_sheet = null
+## THE LEVEL EDITOR lives in this scene (Docs/Terrain.md §20.9): the tools are
+## a node on top of the same terrain, far tier, water and sites, so what is
+## edited is exactly what is looked at. `scenes/terrain_editor.tscn` is this
+## scene under its old name.
+const EditTools := preload("res://scripts/terrain_editor.gd")
+var _editor = null
+var _edit_shot := false
+## The level: which file, which seed, how much of it is sea.
+var _world_path := ""
+var _seed := WORLD_SEED
+var _drowned := DROWNED
+var _load_status := ""
 var _env: Environment = null
 var _under := UnderwaterFx.new()
 var _camera: DebugCamera = null
@@ -99,6 +115,9 @@ var _sites: Array[MeshInstance3D] = []
 ## Every coarse block's tile rect, and which node draws it (-1 = a merged
 ## ring, which is always drawn). The coverage check needs both.
 var _all_rects: Array[Rect2i] = []
+## Each block's sample step, beside its rect: an edit re-bakes a block at the
+## step it was built with.
+var _all_steps: Array[int] = []
 var _all_owner: Array[int] = []
 ## Block index -> its own node, for blocks that have one.
 var _all_node := {}
@@ -129,6 +148,8 @@ func _ready() -> void:
 			FAR_TILES = maxi(0, int(arg.split("=")[1]))
 		elif arg.begins_with("--near="):
 			NEAR_TILES = maxi(1, int(arg.split("=")[1]))
+		elif arg == "--editshot":
+			_edit_shot = true
 
 	# The whole difference between this scene and the volumetric one.
 	BrickTerrain.set_flat_mode(true)
@@ -144,11 +165,24 @@ func _ready() -> void:
 	# the ground the game is made of.
 	BrickTerrain.set_smooth_terrain(false)
 	BrickTerrain.configure(WORLD_SEED)
-	# The world file first — pads, painted material and building sites — and
-	# the generator's default sites only if this level has never been
-	# edited. `-- --world=<name>` picks the level.
-	if World.load_world(World.world_path()).is_empty():
+	# The world file first — pads, painted material, sculpt and building
+	# sites — and the generator's default sites only if this level has never
+	# been edited. `-- --world=<name>` picks the level.
+	_world_path = World.world_path()
+	var loaded := World.load_world(_world_path)
+	var file_seed := int(loaded.get("seed", WORLD_SEED))
+	if not loaded.is_empty() and file_seed != 0 and file_seed != WORLD_SEED:
+		# Loaded against the wrong field: the sea and every pad height were
+		# read off ground this world is not. Again, on its own.
+		_seed = file_seed
+		BrickTerrain.configure(_seed)
+		loaded = World.load_world(_world_path)
+	if loaded.is_empty():
 		World.stamp_sites(DROWNED)
+		_load_status = "no world file; seeded from TerrainWorld.SITES"
+	else:
+		_drowned = float(loaded.get("drowned", DROWNED))
+		_load_status = "loaded %s" % _world_path
 	# Shaded chamfer only. The geometry tier is what six rounds of artefacts
 	# were about (§17.21); the shaded bevel has never produced one and is
 	# measured at 7.6% of pixels changed.
@@ -165,6 +199,13 @@ func _ready() -> void:
 	_build_terrain()
 	_build_water()
 	_build_sites()
+	# The editing tools, on everything above. Not in a bench or a capture:
+	# those measure and photograph the terrain, not an editor's markers.
+	if not _bench_mode and not _shot_mode:
+		_editor = EditTools.new()
+		_editor.name = "Editor"
+		add_child(_editor)
+		_editor.setup(self)
 	_update_hud()
 	if _bench_mode:
 		_run_bench()
@@ -304,7 +345,7 @@ func _rebuild_ring(span: int) -> void:
 			func(k: int) -> void:
 				baked[k] = BrickTerrain.build_coarse(_all_rects[live[k]].position.x,
 					_all_rects[live[k]].position.y, span,
-					FAR_STEP * span / FAR_SPAN),
+					_all_steps[live[k]]),
 			live.size(), -1, true, "coarse ring")
 		WorkerThreadPool.wait_for_group_task_completion(task)
 
@@ -359,6 +400,12 @@ func _refine_for(detail: Rect2i) -> void:
 	var dirty_rings := {}
 	for i in todo:
 		_split(_all_rects[i], detail, new_rects)
+		# A block that came from an EARLIER split is in `_far_nodes` too, and
+		# freeing it without letting go of it there left `_hide_covered_far`
+		# setting `visible` on a freed node the next frame -- the crash
+		# flying out over the far ground found.
+		if _all_owner[i] >= 0:
+			_far_nodes[_all_owner[i]] = null
 		_all_owner[i] = -2                # retired; its children cover it
 		if _all_node.has(i):
 			(_all_node[i] as MeshInstance3D).queue_free()
@@ -378,7 +425,7 @@ func _refine_for(detail: Rect2i) -> void:
 		func(k: int) -> void:
 			baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
 				new_rects[k].position.y, new_rects[k].size.x,
-				FAR_STEP * new_rects[k].size.x / FAR_SPAN),
+				FAR_STEP * (new_rects[k].size.x / FAR_SPAN)),
 		new_rects.size(), -1, true, "coarse refine")
 	WorkerThreadPool.wait_for_group_task_completion(task)
 
@@ -400,6 +447,7 @@ func _refine_for(detail: Rect2i) -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		_all_rects.append(new_rects[k])
+		_all_steps.append(FAR_STEP * (new_rects[k].size.x / FAR_SPAN))
 		_all_owner.append(_far_nodes.size())
 		_all_node[_all_rects.size() - 1] = mi
 		_far_nodes.append(mi)
@@ -421,6 +469,52 @@ func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
 				out.append(child)
 
 
+## The field changed over these studs (an edit): make everything that was
+## baked from it agree again.
+##
+## The detailed tier is the editor's to refresh -- it knows which tiles its
+## brush is under. This is the rest: the coarse blocks over the rectangle,
+## re-baked at the step each was built with (a merged ring as a whole, since
+## a ring is one mesh), and the seabed the water reads its shore from.
+func terrain_changed(studs: Rect2i) -> void:
+	var tile := BrickTerrain.get_tile_studs()
+	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
+	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
+	var tiles := Rect2i(lo, hi - lo + Vector2i.ONE)
+	var dirty_rings := {}
+	var nodes: Array[int] = []
+	for i in _all_rects.size():
+		if _all_owner[i] == -2 or not _all_rects[i].intersects(tiles):
+			continue
+		if _all_node.has(i):
+			nodes.append(i)
+		else:
+			dirty_rings[_all_rects[i].size.x] = true
+	var baked: Array[Dictionary] = []
+	baked.resize(nodes.size())
+	if not nodes.is_empty():
+		var task := WorkerThreadPool.add_group_task(
+			func(k: int) -> void:
+				var r: Rect2i = _all_rects[nodes[k]]
+				baked[k] = BrickTerrain.build_coarse(r.position.x, r.position.y,
+					r.size.x, _all_steps[nodes[k]]),
+			nodes.size(), -1, true, "coarse edit")
+		WorkerThreadPool.wait_for_group_task_completion(task)
+	for k in nodes.size():
+		var arrays: Array = baked[k]["mesh"]
+		var mi := _all_node[nodes[k]] as MeshInstance3D
+		if arrays.is_empty() or not is_instance_valid(mi):
+			continue
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+				TerrainTile.CUSTOM0_FLAGS)
+		mi.mesh = mesh
+	for span in dirty_rings:
+		_rebuild_ring(span)
+	if _sea != null:
+		_sea.refresh_seabed()
+
+
 ## A coarse block under the detailed tier is hidden.
 ##
 ## The coarse tier is built once for the whole world and never rebuilt, so
@@ -437,6 +531,8 @@ func _hide_covered_far() -> void:
 	_refine_for(_streamer.current_region())
 	_far_hidden = 0
 	for i in _far_nodes.size():
+		if _far_nodes[i] == null:
+			continue                      # retired by a later split
 		var rect := _far_rects[i]
 		# Only the smallest blocks can ever be covered — anything bigger is
 		# further out than the detail reaches — so only they are checked,
@@ -478,7 +574,6 @@ func _build_far() -> void:
 	# the origin left a black pit behind. Coverage is a property of where
 	# the camera IS, so it has to be decided every frame, not at build.
 	@warning_ignore("integer_division")
-	var half := TILES / 2
 
 	# CASCADED BLOCKS: the further out, the bigger the block and the coarser
 	# the samples inside it.
@@ -622,6 +717,7 @@ func _build_far() -> void:
 		var origin := Vector3(blocks[i].x * tile_studs * stud, 0.0,
 				blocks[i].y * tile_studs * stud)
 		_all_rects.append(Rect2i(blocks[i], Vector2i(spans[i], spans[i])))
+		_all_steps.append(steps[i])
 		if spans[i] > _streamer.align:
 			# -1: lives in a merged ring and is therefore always drawn. A
 			# block like this cannot be hidden on its own — splitting is the
@@ -680,7 +776,16 @@ func _brick_material() -> ShaderMaterial:
 	return _brick_mat
 
 
+## The sites again, after an edit moved, resized or re-floored one.
+func rebuild_sites() -> void:
+	_build_sites()
+
+
 func _build_sites() -> void:
+	for old in _sites:
+		if is_instance_valid(old):
+			old.queue_free()
+	_sites.clear()
 	var stud := BrickWorld.get_stud_metres()
 	for site in World.sites:
 		var c := World.site_centre(site)
@@ -711,69 +816,29 @@ func _build_sites() -> void:
 
 
 func _build_water() -> void:
-	_water = WaterSurface.new()
-	_water.name = "Water"
-	_water.radius = 20.0
-	add_child(_water)
-	# Tier 1: the same wave at four studs a piece, from tier 0's edge out to
-	# 80 m. Without it the sea is a 20 m disc with a cliff round it.
-	_water_far = WaterSurface.new()
-	_water_far.name = "WaterFar"
-	_water_far.radius = 80.0
-	_water_far.pitch_studs = 4
-	_water_far.inner_radius = 19.0
-	_water_far.studs = false
-	add_child(_water_far)
+	# THE WHOLE WORLD's seabed, one texel every 8 studs: how every tier knows
+	# where the shore is (a cull mask and an absorption depth, neither of
+	# which needs a stud). water_sea.gd holds the three tiers.
+	_sea = WaterSeaScript.new()
+	_sea.name = "Sea"
+	add_child(_sea)
+	_sea.build(FAR_TILES * BrickTerrain.get_tile_studs(), _far_metres() + 200.0)
+	_water = _sea.near
+	_water_far = _sea.far
+	_water_sheet = _sea.sheet
+	_camera.water_probe = func(p: Vector3) -> float: return _sea.surface_at(p)
+	# ON by default now: the scene is also the level editor, and a level's
+	# sea is part of it. The brick tiers only draw where there is water in
+	# their reach, so a dry hilltop pays for none of it; F7 still hides it,
+	# and the bench measures with and without.
 
-	# One Rf texel a stud cell, holding the top of the ground in metres. On a
-	# plate-quantised field that is `surface_plate`, not `height_at` -- the
-	# brick height rounds a plate step DOWN and the shoreline would sit a
-	# plate inside the sand.
-	# THE WHOLE WORLD, coarsely — not the old 5x5 field.
-	#
-	# This texture is how every water tier knows where the shore is, and it
-	# covered ±28 m while the water reaches 80 m and the sheet reaches the
-	# horizon. Outside it, `seabed_at` answers "dry land", so tier 1 and
-	# tier 2 were culled everywhere except around the origin: there was no
-	# sea in the world and no error to say so.
-	#
-	# One texel every 8 studs (2.8 m) puts a 3,200-stud world in a 400x400
-	# image. The shoreline is a cull mask and an absorption depth, neither
-	# of which needs stud resolution.
-	var plate := BrickWorld.get_plate_metres()
-	var stud := BrickWorld.get_stud_metres()
-	var step := 8
-	var half_studs := FAR_TILES * BrickTerrain.get_tile_studs()
-	@warning_ignore("integer_division")
-	var n: int = maxi(2 * half_studs / step, 2)
-	var img := Image.create_empty(n, n, false, Image.FORMAT_RF)
-	for iz in n:
-		for ix in n:
-			var yp := BrickTerrain.surface_plate(ix * step - half_studs,
-					iz * step - half_studs)
-			img.set_pixel(ix, iz, Color(float(yp + 1) * plate, 0.0, 0.0))
-	var seabed := ImageTexture.create_from_image(img)
-	var origin := Vector2(-half_studs * stud, -half_studs * stud)
-	var extent := Vector2(2 * half_studs * stud, 2 * half_studs * stud)
-	_water.set_seabed(seabed, origin, extent)
-	_water_far.set_seabed(seabed, origin, extent)
 
-	# Tier 2: one sheet from the brick tiers to the world's edge, so the sea
-	# does not stop in mid-air at 80 m now the ground reaches 560.
-	_water_sheet = WaterSheetFx.new()
-	_water_sheet.name = "WaterSheet"
-	_water_sheet.inner_radius = _water_far.radius - 4.0
-	_water_sheet.outer_radius = _far_metres() + 200.0
-	add_child(_water_sheet)
-	_water_sheet.build(seabed, origin, extent)
-	_camera.water_probe = func(p: Vector3) -> float: return _water.surface_at(p)
-	# OFF by default (F7). This scene is for looking at ground, and the sea
-	# is a fixed 26,450 pieces and ~264k triangles whatever the terrain is
-	# doing — it dominates a measurement it is not the subject of.
-	_water.visible = false
-	_water_far.visible = false
-	if _water_sheet != null:
-		_water_sheet.visible = false
+## Water on or off, every tier, and the underwater look with it.
+func _set_water(on: bool) -> void:
+	if _sea == null:
+		return
+	_sea.enabled = on
+	_sea.follow(_camera.global_position, 0.0)
 
 
 func _process(delta: float) -> void:
@@ -782,16 +847,11 @@ func _process(delta: float) -> void:
 		_streamer.follow(Vector2(_camera.global_position.x, _camera.global_position.z))
 		_tiles.assign(_streamer.tiles())
 		_hide_covered_far()
-	if _water != null and _water.visible:
-		_water.follow(Vector2(_camera.global_position.x, _camera.global_position.z),
-				delta, _camera.global_position.y)
-		_water_far.follow(Vector2(_camera.global_position.x, _camera.global_position.z),
-				delta, _camera.global_position.y)
-		if _water_sheet != null:
-			_water_sheet.follow(_water.time())
-		_under.set_submerged(_env, _water.submerged_at(_camera.global_position),
+	if _sea != null and _sea.enabled:
+		_sea.follow(_camera.global_position, delta)
+		_under.set_submerged(_env, _sea.submerged_at(_camera.global_position),
 				DRY_AMBIENT)
-	elif _water != null:
+	elif _sea != null:
 		# Hiding the water has to take the underwater look with it. It did
 		# not, and every capture taken after a submerged one came out fogged
 		# green with the sea switched off.
@@ -822,10 +882,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("[heightfield] plate steps: %s"
 					% ("ON (0.14 m)" if BrickTerrain.get_plate_steps() else "OFF (0.42 m)"))
 		KEY_F7:
-			_water.visible = not _water.visible
-			_water_far.visible = _water.visible
-			if _water_sheet != null:
-				_water_sheet.visible = _water.visible
+			_set_water(not _sea.enabled)
 		# C, not F8: F8 is Godot's own "stop the running game", and the
 		# editor takes it even while the game has focus -- so the curves
 		# toggle quit the game instead of toggling anything.
@@ -912,7 +969,8 @@ func _update_hud() -> void:
 			roundi(100.0 * float(curved) / maxf(float(_tiles.size()
 				* tile_studs * tile_studs), 1.0)),
 			_far_blocks - _far_hidden, _far_tris],
-		"water        %d instances  %s  sea %.1f m  %s" % [
+		"water        %s  %d instances  %s  sea %.1f m  %s" % [
+			"ON" if _sea.enabled else "OFF (F7)",
 			_water.instance_count() + _water_far.instance_count(),
 			"stepped" if _water.brick_steps else "smooth",
 			BrickWave.get_sea_level(),
@@ -928,7 +986,9 @@ func _update_hud() -> void:
 			RenderingServer.get_rendering_info(
 				RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)],
 		"frame        %.1f ms" % _frame_ms,
-		"F1 seams  F2 studs  F3 shadows  F4 stud geometry  F5 tiles on studs  F6 plate steps  F7 water  C curves  P print  V wave steps",
+		"F1 seams  F2 studs  F3 shadows  F4 stud geometry",
+		"F5 tiles on studs  F6 plate steps  F7 water",
+		"C curves  P print  V wave steps",
 	])
 
 
@@ -998,10 +1058,7 @@ func _run_bench() -> void:
 		OS.get_processor_count()])
 	await _bench_case("everything")
 
-	_water.visible = false
-	_water_far.visible = false
-	if _water_sheet != null:
-		_water_sheet.visible = false
+	_set_water(false)
 	await _bench_case("water off")
 
 	for tile in _tiles:
@@ -1015,7 +1072,7 @@ func _run_bench() -> void:
 	# The GROUND bakes its own sun shadow, so it never casts — but the light
 	# still needs a shadow map for everything that stands ON the ground.
 	_sun.shadow_enabled = true
-	_water.visible = false
+	_set_water(false)
 
 	await _bench_walk()
 	get_tree().quit()
@@ -1042,8 +1099,7 @@ func _report_water_collision() -> void:
 				deepest = yp
 				best = Vector2i(gx, gz)
 	var here := Vector3((best.x + 0.5) * stud, 0.0, (best.y + 0.5) * stud)
-	_water.visible = true
-	_water_far.visible = true
+	_set_water(true)
 	_camera.position = Vector3(here.x, sea + 12.0, here.z)
 	await _frames(8)
 
@@ -1057,8 +1113,7 @@ func _report_water_collision() -> void:
 	print("[bench]   %s  water collision: a ray lands on the sea%s" % [
 		"ok  " if found and off < 0.6 else "FAIL",
 		"  %.2f m from where the wave says" % off if found else "  nothing hit"])
-	_water.visible = false
-	_water_far.visible = false
+	_set_water(false)
 
 
 ## THE STREAMER ITSELF.
@@ -1180,10 +1235,10 @@ func _report_coverage() -> void:
 				for i in _all_rects.size():
 					if not _all_rects[i].has_point(c):
 						continue
-					var owner := _all_owner[i]
-					if owner == -2:
+					var owner_i := _all_owner[i]
+					if owner_i == -2:
 						continue            # retired by a split
-					if owner < 0 or _far_nodes[owner].visible:
+					if owner_i < 0 or _far_nodes[owner_i].visible:
 						n += 1
 				if n > 1:
 					worst_double += 1
@@ -1504,10 +1559,7 @@ func _shot_water() -> void:
 	# water has to turn it on, which the first version of this did not —
 	# and every "no water anywhere" hunt that followed was chasing a
 	# switched-off ocean.
-	_water.visible = true
-	_water_far.visible = true
-	if _water_sheet != null:
-		_water_sheet.visible = true
+	_set_water(true)
 	if seabed >= sea:
 		print("[heightfield] no water within %d studs; skipping the water shots" % edge)
 		return
@@ -1530,10 +1582,7 @@ func _shot_water() -> void:
 	get_viewport().get_texture().get_image().save_png("res://shots/hf_sea.png")
 	print("[heightfield] shot written: hf_sea.png  (sheet %d tris)"
 			% (_water_sheet.triangle_count() if _water_sheet != null else 0))
-	_water.visible = false
-	_water_far.visible = false
-	if _water_sheet != null:
-		_water_sheet.visible = false
+	_set_water(false)
 
 	_camera.position = Vector3(here.x,
 			maxf(float(deepest + 1) * plate + 0.45, sea - 1.2), here.z)
