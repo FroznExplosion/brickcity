@@ -310,6 +310,18 @@ Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier
    storey with its roof blown open is under the roof again in 0.9 s; a leader beside it and it
    crouches, and stands after.
 
-Still open from §4: weather does not change sight or aim (rain, smoke apart from fire's, dark);
-a pawn inside a building that topples is caught by crush, not carried and thrown. Sheltering
-covers the storm only.
+9. **Weather on eyes and hands.** `AIServices.sight_mul` and `aim_mul`, set by the running
+   disaster through `ctx.set_weather(amount, sight, aim, intensity)` and cleared when it ends.
+   Sight a little, aim a lot: a storm is sight ×0.85 and aim ×2.2, the tornado ×0.9 / ×1.8, a
+   meteor shower ×0.95 / ×1.3, an earthquake leaves sight alone and aim up to ×3 while it
+   shakes; intensity scales the distance from clear, sight never below 60%. The sight range
+   (60 m) takes `sight_mul`; `AimModel.weather` multiplies the error cone. Probe: at 55 m a
+   soldier sees in clear weather and not in a storm (51 m); its cone 5.2° → 11.4°; a real storm
+   sets 0.85 / ×2.2 and leaves it clear.
+10. **Carried and thrown** (`Crush._ride`). A pawn touching a moving piece goes with it: on its
+    floor Godot's character body already follows a moving floor, so that is only recorded;
+    against a wall, or in a room tipping over with no floor under it, the pawn takes the piece's
+    velocity where it stands as a shove. When that velocity drops by 2 m/s in a tick the pawn
+    keeps what it had — thrown — and the fall does the rest. Probe: a soldier on a sliding slab
+    goes 6.0 m with the slab's 5.2; stopped dead, it keeps 3.6 m/s. (Tested on a slab, not yet
+    on a whole building toppling with a soldier inside.)

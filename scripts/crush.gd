@@ -29,7 +29,14 @@ const COOLDOWN_MS := 400
 const PUSH := 4.0                 ## m/s out of the piece
 const PUSH_UP := 1.5
 
+const RIDE_SPEED := 0.8           ## m/s: slower than this a piece carries nobody
+const RIDE_SPIN := 0.3            ## rad/s
+const THROW_DELTA := 2.0          ## m/s lost in a tick: the piece hit something
+
 ## For the probe and the HUD.
+var rides := 0
+var throws := 0
+var _riding := {}                 ## "pawn:chunk" -> the velocity it was carried at
 var hits := 0
 var kills := 0
 var pushes := 0
@@ -49,9 +56,12 @@ func tick(islands: IslandManager, pawns: Array[Pawn]) -> void:
 			if p.health == null or p.health.is_dead():
 				continue
 			var feet := p.feet()
-			if not box.has_point(feet + Vector3.UP * 0.9):
+			# In its box, or standing on top of it.
+			if not box.has_point(feet + Vector3.UP * 0.9) and not box.has_point(feet + Vector3.UP * 0.05):
 				continue
 			if not _inside(isl, [feet + Vector3.UP * 0.3, p.chest(), feet + Vector3.UP * 1.55]):
+				# Not in its solid, but on it or against it while it moves: carried.
+				_ride(isl, p)
 				continue
 			var speed := isl.body.linear_velocity.length()
 			if speed >= MIN_SPEED:
@@ -63,6 +73,44 @@ func tick(islands: IslandManager, pawns: Array[Pawn]) -> void:
 				away = Vector3.FORWARD
 			p.shove = away.normalized() * PUSH + Vector3.UP * PUSH_UP
 			pushes += 1
+
+
+## A pawn touching a moving piece goes with it, and is thrown when it stops.
+##
+## Standing on its FLOOR, the character body already goes with it (Godot
+## carries a body on a moving floor); against its wall, or in a room tipping
+## over with no floor under its feet, nothing does, so the pawn takes the
+## piece's velocity where it stands as a shove (Pawn.shove). Either way, when
+## the piece's velocity there drops by THROW_DELTA in a tick -- it has hit
+## something -- the pawn keeps what it had: thrown, and the fall does the rest
+## (Pawn.SAFE_FALL). Rigid bodies do not push character bodies; this does.
+func _ride(isl: BrickIsland, p: Pawn) -> void:
+	var body := isl.body
+	var key := "%d:%d" % [p.get_instance_id(), isl.chunk]
+	var at := p.chest() - body.global_position
+	var v := body.linear_velocity + body.angular_velocity.cross(at)
+	var touching := false
+	var on_floor := false
+	for i in p.body.get_slide_collision_count():
+		var c := p.body.get_slide_collision(i)
+		if c.get_collider() == body:
+			touching = true
+			if c.get_normal().y > 0.7:
+				on_floor = true
+	var was: Vector3 = _riding.get(key, Vector3.ZERO)
+	# Thrown: it was riding, and the piece stopped under it.
+	if was.length() - v.length() > THROW_DELTA:
+		p.shove = was
+		throws += 1
+		_riding.erase(key)
+		return
+	if not touching or (v.length() < RIDE_SPEED and body.angular_velocity.length() < RIDE_SPIN):
+		_riding.erase(key)
+		return
+	_riding[key] = v
+	rides += 1
+	if not on_floor and v.length() > p.shove.length():
+		p.shove = v
 
 
 ## Is any of `points` in this piece's solid?
