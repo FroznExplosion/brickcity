@@ -54,13 +54,18 @@ func _init() -> void:
 	s.ai_nav = AINav.new()
 	s.ai_nav.set_ai_world(s.ai_world)
 	s.sched = AIScheduler.new()
+	# The cover mechanics, not the engage decision's dice: the base policy
+	# always takes cover (CombatPolicy; the choice has its own probe).
+	s.policy = CombatPolicy.new()
 	s.world3d = root.get_world_3d()
 	s.on_structure_hit = _structure_hit
 	_build_arena()
 	s.ai_world.sync()
 	var lib := GunPlaceholderParts.build_library()
 	var gun := GunInstance.from_result(GunGenerator.generate(lib, 7, WeaponClass.builtin(&"rifle"), 1))
-	soldier = Soldier.spawn(s, root, Vector3(0.0, 0.0, 2.0), 1, gun)
+	# Off the wall's end, so the player is in sight past it; the cover is then
+	# behind the wall, peeked round that end.
+	soldier = Soldier.spawn(s, root, Vector3(9.0, 0.0, 2.0), 1, gun)
 	soldier.pawn.intents.look_yaw = 0.0   # facing -Z, toward the player
 	player = Pawn.spawn(root, _p0, 0, true, 100000.0)
 	s.pawns.append(player)
@@ -99,11 +104,12 @@ func _build_arena() -> void:
 	shape.position = Vector3(0.0, -0.5, 0.0)
 	ground.add_child(shape)
 	root.add_child(ground)
-	# The low wall: 20 studs wide (7 m), one stud thick, 9 plates (1.26 m) tall --
-	# over a crouching figure's eye (1.0 m), under a standing one's (1.42).
+	# The wall: 20 studs wide (7 m), one stud thick, 13 plates (1.82 m) tall --
+	# over a standing figure's eye (1.42 m): nobody crouches (Docs/AI.md A21),
+	# so cover is what hides somebody standing, peeked round its end.
 	var wall_lo := Vector3i(-10, 0, -12)
-	var wall := w.create_chunk(wall_lo, Vector3i(20, 9, 1))
-	_fill(wall, wall_lo, Vector3i(20, 9, 1))
+	var wall := w.create_chunk(wall_lo, Vector3i(20, 13, 1))
+	_fill(wall, wall_lo, Vector3i(20, 13, 1))
 	chunks.append(wall)
 	# The block the player hides behind: 12 x 10 studs, three storeys high.
 	var blk_lo := Vector3i(14, 0, -100)
@@ -167,7 +173,12 @@ func _watch(now: float) -> void:
 	var t := now - _t_start
 	if _first_shot < 0.0 and soldier.shots > 0:
 		_first_shot = t
-	if soldier.state == "hide" and soldier.pawn.is_crouched():
+	# Hiding is standing ON the cover spot: with nobody crouching, a peek is a
+	# step out to the side and back, and the step back is not hiding yet.
+	var cover: Dictionary = soldier.brain.blackboard.get_var(&"cover", {}, false)
+	var on_spot := not cover.is_empty() and Vector2(soldier.pawn.feet().x - cover.cover.x,
+			soldier.pawn.feet().z - cover.cover.z).length() < 0.3
+	if soldier.state == "hide" and on_spot:
 		_hide_ticks += 1
 		if s.ai_world.bricks_between(player.eye.global_position, soldier.pawn.chest()) > 0:
 			_hidden_seen += 1
