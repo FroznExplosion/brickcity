@@ -104,6 +104,7 @@ func _ring_mesh() -> ArrayMesh:
 	var m := st.commit()
 	_tris = 0
 	if m.get_surface_count() > 0:
+		@warning_ignore("integer_division")
 		_tris = m.surface_get_array_len(0) / 3
 	return m
 

@@ -2,8 +2,13 @@ extends Node3D
 
 ## Terrain LEVEL EDITOR. [Docs/Terrain.md](../Docs/Terrain.md) §20.
 ##
-##     godot --path . scenes/terrain_editor.tscn
-##     godot --path . scenes/terrain_editor.tscn -- --shot
+##     godot --path . scenes/heightfield_test.tscn
+##     godot --path . scenes/heightfield_test.tscn -- --editshot
+##
+## The TOOLS, not a scene. heightfield_scene.gd adds this node on top of its
+## own terrain, far tier, water and sites (§20.9), so what is edited is exactly
+## what is looked at and there is one terrain scene rather than two that
+## drifted apart. `scenes/terrain_editor.tscn` is that same scene.
 ##
 ## Editing terrain is an authoring job, not a gameplay one. Nothing here is
 ## reachable from the game: the game loads a world file and never writes one.
@@ -27,13 +32,14 @@ extends Node3D
 ##   4 RAISE   5 LOWER   6 FLATTEN (to the height where the stroke began)
 ##   7 SMOOTH
 ##   8 PAINT BRUSH  what the ground is made of AND its colour, a stud at a
-##                  time (§20.7). The palette picks both; P picks them up
+##                  time (§20.7). The palette picks both; I picks them up
 ##                  from the ground under the cursor.
 ##
 ## A brush goes into the field UNDER the pads, so a building's pad stays
 ## flat whatever is painted round it, and the ground meets its floor.
 ##
 ## Keys:
+##   0            LOOK: no tool, so a click only takes the mouse
 ##   1 .. 8       pick the tool
 ##   LEFT CLICK   place under the cursor, or select what is already there
 ##                (brushes: hold and drag)
@@ -50,8 +56,8 @@ const World := preload("res://scripts/terrain_world.gd")
 ## `-- --world=<name>` opens a different level.
 var _world_path := "res://worlds/heightfield.json"
 
-enum Tool { PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH }
-const TOOL_NAMES := ["PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH",
+enum Tool { LOOK, PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH }
+const TOOL_NAMES := ["LOOK", "PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH",
 		"PAINT BRUSH"]
 const PaintPalette := preload("res://scripts/paint_palette.gd")
 ## What the paint brush lays: a terrain material (or KEEP / NATURAL) and a
@@ -66,9 +72,11 @@ const WORLD_SEED := 20260921
 ## The seed actually in use: the world file's own when it names one, so a
 ## level cut from a different seed (the city's) is edited on ITS ground.
 var _seed := WORLD_SEED
-const DRY_AMBIENT := 0.6
-const NEAR_TILES := 4
-const FAR_TILES := 50
+## The scene the tools stand in (heightfield_scene.gd): its camera, its
+## streamer, its far tier and water to tell about an edit.
+var _host = null
+## What the last stroke touched, for the far tier and the seabed at its end.
+var _stroke_rect := Rect2i()
 
 var _streamer: TerrainStreamer = null
 var _mat: ShaderMaterial = null
@@ -77,7 +85,7 @@ var _sun: DirectionalLight3D = null
 var _label: Label = null
 var _markers: Node3D = null
 
-var _tool: Tool = Tool.PAD
+var _tool: Tool = Tool.LOOK
 var _selected := -1
 var _paint_material := 3        ## sand, a visible default
 ## Grab mode: the selection follows the cursor until the next click.
@@ -104,91 +112,33 @@ var _ring: MeshInstance3D = null
 var _palette = null
 var _brush_material := 3        ## sand
 var _brush_colour := RESET      ## the material's own colour
-var _shells: Node3D = null
-var _shell_mat: ShaderMaterial = null
 var _dirty := false
 var _shot_mode := false
 var _status := "loaded"
 
 
-func _ready() -> void:
-	for arg in OS.get_cmdline_user_args():
-		if arg == "--shot":
-			_shot_mode = true
-
-	BrickTerrain.set_flat_mode(true)
-	BrickTerrain.set_plate_steps(true)
-	BrickTerrain.set_smooth_terrain(false)
-	BrickTerrain.configure(WORLD_SEED)
-
-	# The world file first, then the generator's own sites if there is none.
-	# A level that has never been edited is a seed and nothing else.
-	_world_path = World.world_path()
-	var loaded := World.load_world(_world_path)
-	var file_seed := int(loaded.get("seed", WORLD_SEED))
-	if not loaded.is_empty() and file_seed != 0 and file_seed != WORLD_SEED:
-		# Loaded against the wrong field: the sea and every pad height were
-		# read off ground this world is not. Again, on its own.
-		_seed = file_seed
-		BrickTerrain.configure(_seed)
-		loaded = World.load_world(_world_path)
-	if loaded.is_empty():
-		World.stamp_sites(_drowned)
-		_status = "no world file; seeded from TerrainWorld.SITES"
-	else:
-		_drowned = float(loaded.get("drowned", 0.30))
-		_status = "loaded %s" % _world_path
-
+## Stand the tools in a scene that already has its terrain.
+func setup(host) -> void:
+	_host = host
+	_camera = host._camera
+	_streamer = host._streamer
+	_sun = host._sun
+	_mat = host._mat
+	_world_path = host._world_path
+	_seed = host._seed
+	_drowned = host._drowned
+	_status = host._load_status
+	_shot_mode = host._edit_shot
 	_build_scenery()
-	BrickTerrain.set_sun_direction(_sun.global_transform.basis.z)
-	# The sea was settled by the load, on the field before its pads
-	# (TerrainWorld.sea_level).
-	_build_terrain()
 	_refresh_markers()
 	if _shot_mode:
 		_run_shots()
 
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.36, 0.54, 0.78)
-	sky_mat.sky_horizon_color = Color(0.74, 0.80, 0.84)
-	sky_mat.ground_bottom_color = Color(0.28, 0.30, 0.28)
-	sky_mat.ground_horizon_color = Color(0.74, 0.80, 0.84)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = DRY_AMBIENT
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	_sun = DirectionalLight3D.new()
-	_sun.rotation_degrees = Vector3(-30, -36, 0)
-	_sun.light_energy = 1.15
-	_sun.shadow_enabled = true
-	add_child(_sun)
-
-	_camera = DebugCamera.new()
-	_camera.name = "DebugCamera"
-	_camera.capture_mouse = not _shot_mode
-	_camera.allow_walk = not _shot_mode
-	_camera.far = 1200.0
-	_camera.position = Vector3(-14.0, 26.0, -14.0)
-	_camera.rotation = Vector3(-0.55, -2.36, 0.0)
-	add_child(_camera)
-
 	_markers = Node3D.new()
 	_markers.name = "PadMarkers"
 	add_child(_markers)
-	_shells = Node3D.new()
-	_shells.name = "SiteBuildings"
-	add_child(_shells)
-	_shell_mat = ShaderMaterial.new()
-	_shell_mat.shader = load("res://shaders/brick.gdshader")
 
 	# The brush: a flat ring, one metre across, scaled to the radius.
 	_ring = MeshInstance3D.new()
@@ -211,7 +161,11 @@ func _build_scenery() -> void:
 
 	var layer := CanvasLayer.new()
 	_label = Label.new()
-	_label.position = Vector2(14, 12)
+	# Top RIGHT: the scene's own readout has the top left.
+	_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_label.position = Vector2(-14, 12)
 	_label.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_label.add_theme_constant_override("outline_size", 4)
@@ -234,27 +188,9 @@ func _build_scenery() -> void:
 		_status = "paint: %s" % _paint_name())
 
 
-func _build_terrain() -> void:
-	_mat = ShaderMaterial.new()
-	_mat.shader = load("res://shaders/terrain.gdshader")
-	_mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
-	_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
-	_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
-	_mat.set_shader_parameter("sun_dir", -_sun.global_transform.basis.z)
-
-	_streamer = TerrainStreamer.new()
-	_streamer.name = "Streamer"
-	_streamer.near_radius = NEAR_TILES
-	_streamer.keep_radius = NEAR_TILES + 2
-	_streamer.world_half = FAR_TILES
-	add_child(_streamer)
-	_streamer.setup(_mat)
-	_streamer.settle(Vector2(_camera.position.x, _camera.position.z))
-
-
 func _process(delta: float) -> void:
-	if _streamer != null:
-		_streamer.follow(Vector2(_camera.global_position.x, _camera.global_position.z))
+	if _host == null:
+		return
 	if _grabbing:
 		_drag_marker()
 	_brush_tick(delta)
@@ -360,6 +296,7 @@ func _brush_tick(delta: float) -> void:
 	else:
 		touched = BrickTerrain.sculpt(gx, gz, _brush_radius, mode, amount, _flatten_to)
 	_pending = touched if _pending.size.x <= 0 else _pending.merge(touched)
+	_stroke_rect = touched if _stroke_rect.size.x <= 0 else _stroke_rect.merge(touched)
 	_dirty = true
 	_refresh_in -= delta
 	if _refresh_in <= 0.0:
@@ -385,6 +322,11 @@ func _end_stroke() -> void:
 		return
 	_stroking = false
 	_flush_brush()
+	# The far tier and the seabed once a stroke, not ten times a second:
+	# a merged ring is one mesh, and re-baking it is milliseconds.
+	if _stroke_rect.size.x > 0:
+		_host.terrain_changed(_stroke_rect)
+	_stroke_rect = Rect2i()
 	_refresh_markers()
 	_status = "stroke done (%d to undo)" % BrickTerrain.sculpt_undo_depth()
 
@@ -477,12 +419,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				var back: Rect2i = BrickTerrain.sculpt_undo()
 				if back.size.x > 0:
 					_streamer.refresh(_tiles_over(back))
+					_host.terrain_changed(back)
 					_dirty = true
 					_status = "undone (%d left)" % BrickTerrain.sculpt_undo_depth()
 				else:
 					_status = "nothing to undo"
 		return
 	match key:
+		KEY_0:
+			_set_tool(Tool.LOOK)
 		KEY_1:
 			_set_tool(Tool.PAD)
 		KEY_2:
@@ -499,7 +444,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_tool(Tool.SMOOTH)
 		KEY_8:
 			_set_tool(Tool.PAINT_BRUSH)
-		KEY_P:
+		KEY_I:
 			if _tool == Tool.PAINT_BRUSH:
 				_pick_paint()
 		KEY_G:
@@ -651,6 +596,8 @@ func _aim_field() -> Dictionary:
 
 
 func _click() -> void:
+	if _tool == Tool.LOOK and not _grabbing:
+		return
 	var hit := _aim()
 	if hit.is_empty():
 		_status = "nothing under the cursor"
@@ -844,6 +791,7 @@ func _rebuild_around(bounds: Rect2i) -> void:
 			floori(float(bounds.end.y) / float(tile)))
 	_streamer.invalidate(Rect2i(lo, hi - lo + Vector2i.ONE))
 	_streamer.settle(Vector2(_camera.global_position.x, _camera.global_position.z))
+	_host.terrain_changed(bounds)
 	_refresh_markers()
 
 
@@ -877,8 +825,11 @@ func _is_site_pad(index: int) -> bool:
 
 
 func _rebuild_all() -> void:
-	_streamer.invalidate(Rect2i(-FAR_TILES, -FAR_TILES,
-		FAR_TILES * 2 + 1, FAR_TILES * 2 + 1))
+	var far: int = _host.get_script().FAR_TILES
+	_streamer.invalidate(Rect2i(-far, -far, far * 2 + 1, far * 2 + 1))
+	var tile := BrickTerrain.get_tile_studs()
+	_host.terrain_changed(Rect2i(-far * tile, -far * tile, (far * 2 + 1) * tile,
+		(far * 2 + 1) * tile))
 	_streamer.settle(Vector2(_camera.global_position.x, _camera.global_position.z))
 	_refresh_markers()
 
@@ -927,22 +878,8 @@ func _refresh_markers() -> void:
 ## (BuildingShell), on its floor and its footprint: so an author sees the
 ## ground meet the building, not a disc where one will go.
 func _refresh_shells() -> void:
-	if _shells == null:
-		return
-	for child in _shells.get_children():
-		_shells.remove_child(child)
-		child.queue_free()
-	var stud := BrickWorld.get_stud_metres()
-	for site in World.sites:
-		var fp := World.site_footprint(site)
-		var corner := World.site_corner(site)
-		var body := MeshInstance3D.new()
-		body.mesh = BuildingShell.build_coarse_mesh(fp.x, fp.y,
-				int(site["storeys"]) * TowerRecipe.COURSES_PER_FLOOR)
-		body.material_override = _shell_mat
-		body.position = Vector3(corner.x * stud, World.site_level(site), corner.y * stud)
-		_shells.add_child(body)
-
+	if _host != null:
+		_host.rebuild_sites()
 
 ## A flat disc over an edit, so an author can see what they are editing —
 ## the ground only shows the RESULT, which looks like ordinary ground.
@@ -974,8 +911,9 @@ func _update_hud() -> void:
 			World.sites.size()],
 		"tool         %s%s" % [TOOL_NAMES[int(_tool)],
 			("   brush: %s" % MATERIALS[_paint_material]) if _tool == Tool.PAINT
-			else ("   radius %d studs   strength %.2f   %d stroke(s) to undo" % [
-				int(_brush_radius), _brush_rate, BrickTerrain.sculpt_undo_depth()])
+			else ("   radius %d%s   %d to undo" % [int(_brush_radius),
+				"" if _tool == Tool.PAINT_BRUSH else "   strength %.2f" % _brush_rate,
+				BrickTerrain.sculpt_undo_depth()])
 			if _is_brush() else ""],
 		"status       %s" % _status,
 	]
@@ -996,15 +934,19 @@ func _update_hud() -> void:
 			World.site_level(site)])
 	else:
 		lines.append("             nothing selected")
-	lines.append("             %s" % _streamer.report())
 	if _grabbing:
 		lines.append(">>> GRABBED — aim and click to drop, ESC to cancel")
-	lines.append("1 pad  2 paint  3 site   LEFT CLICK place/select   G grab   DEL remove")
-	lines.append("4 raise  5 lower  6 flatten  7 smooth  8 paint brush   HOLD LEFT and drag   CTRL+Z undo")
+	lines.append("0 look  1 pad  2 paint  3 site   CLICK place/select")
+	lines.append("G grab  DEL remove")
+	lines.append("4 raise  5 lower  6 flatten  7 smooth  8 paint")
+	lines.append("brushes: HOLD LEFT and drag   CTRL+Z undo")
 	if _tool == Tool.PAINT_BRUSH:
-		lines.append("painting %s   , . colour   PGUP/PGDN material   P pick from ground   ESC mouse for the palette" % _paint_name())
-	lines.append("[ ] radius   , . skirt   - = height/material   PGUP/PGDN storeys")
-	lines.append("CTRL+S save   CTRL+O reload   SPACE SPACE walk")
+		lines.append("painting %s" % _paint_name())
+		lines.append(", . colour   PGUP/PGDN material   I pick from ground")
+		lines.append("ESC frees the mouse for the palette")
+	lines.append("[ ] radius   , . skirt   - = height, material, strength")
+	lines.append("PGUP/PGDN storeys")
+	lines.append("CTRL+S save   CTRL+O reload")
 	_label.text = "\n".join(lines)
 
 

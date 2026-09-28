@@ -2491,6 +2491,41 @@ chamfer is measured, turns it on for itself. Rendered A/B at one view over a
 6 m pit: with it on, the near hill is glass and the pit shows through it;
 off, solid.
 
+### 20.9 One terrain scene, with the sea in it
+
+There were two scenes on the same ground: `heightfield_test` (the far tier,
+the water, the sites, the bench and the captures) and `terrain_editor` (the
+tools, with a streamer, camera and sun of its own). They had drifted: the
+editor had no far tier and no sea, so an edit was made on ground that did
+not look like the ground it was for.
+
+Now there is one. `heightfield_scene.gd` is the scene, and
+`terrain_editor.gd` is the TOOLS — a node it adds on top of its own terrain,
+far tier, water and sites (not in `--bench` or `--shot`, which measure and
+photograph the terrain rather than an editor's markers).
+`scenes/terrain_editor.tscn` is the same scene under its old name.
+
+* **Tool 0, LOOK, is the default**, so the click that takes the mouse never
+  places anything. 1–8 as before. The eyedropper is `I` (P is the print
+  pass). The editor's readout is top right, the scene's top left.
+* **An edit reaches everything baked from the field.** The tools refresh
+  the detailed tiles; `terrain_changed(rect)` re-bakes the coarse blocks over
+  the edit at the step each was built with (a merged ring as a whole) and
+  re-reads the seabed the water takes its shore from. Once a stroke, not per
+  dab.
+* **The world is loaded the editor's way**: the file's own seed, drowned
+  fraction and sculpt.
+* **The sea is ON by default** (`water_sea.gd`, the city's): its brick tiers
+  draw only where there is water within their reach, so a dry hilltop pays
+  nothing for them. F7 still hides it; the bench measures with and without.
+* `-- --editshot` runs the editor's capture pass in this scene.
+
+**The crash flying out over the far ground.** A coarse block made by an
+earlier split was split again and freed, but stayed in `_far_nodes`, and the
+next frame set `visible` on a freed node — 105 errors over a scripted 1 km
+flight on the old code (the editor's debugger stops on the first). Retired
+blocks are let go of now; the same flight is clean.
+
 ## 21. The city on the terrain
 
 Everything above is terrain with placeholders standing on it. This is the

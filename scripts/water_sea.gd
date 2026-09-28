@@ -29,32 +29,22 @@ var sheet = null
 const WET_CELL := 64
 var _wet := {}
 var _wet_count := 0
+## Off hides every tier (heightfield_test's F7, and the bench's "water off").
+var enabled := true
+var _seabed: ImageTexture = null
+var _half_studs := 0
+var _step := 8
 
 
 ## Build the tiers over a square `half_studs` each way of the origin, with the
 ## sheet reaching `outer_metres`. The seabed is sampled every `step` studs:
 ## it is a cull mask and an absorption depth, neither of which needs a stud.
 func build(half_studs: int, outer_metres: float, step := 8) -> void:
-	var plate := BrickWorld.get_plate_metres()
 	var stud := BrickWorld.get_stud_metres()
-	var sea := BrickWave.get_sea_level()
-	@warning_ignore("integer_division")
-	var n: int = maxi(2 * half_studs / step, 2)
-	var img := Image.create_empty(n, n, false, Image.FORMAT_RF)
-	_wet.clear()
-	for iz in n:
-		for ix in n:
-			var gx := ix * step - half_studs
-			var gz := iz * step - half_studs
-			# `surface_plate`, not `height_at`: on a plate-quantised field the
-			# brick height rounds a plate step DOWN and the shoreline would
-			# sit a plate inside the sand (heightfield_scene._build_water).
-			var y := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
-			img.set_pixel(ix, iz, Color(y, 0.0, 0.0))
-			if y < sea:
-				_wet[Vector2i(floori(float(gx) / WET_CELL), floori(float(gz) / WET_CELL))] = true
-	_wet_count = _wet.size()
-	var seabed := ImageTexture.create_from_image(img)
+	_half_studs = half_studs
+	_step = step
+	var seabed := ImageTexture.create_from_image(_seabed_image())
+	_seabed = seabed
 	var origin := Vector2(-half_studs * stud, -half_studs * stud)
 	var extent := Vector2(2 * half_studs * stud, 2 * half_studs * stud)
 
@@ -80,6 +70,37 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	sheet.outer_radius = outer_metres
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
+
+
+## The ground under the water, one texel every `_step` studs, and the WET
+## map beside it.
+func _seabed_image() -> Image:
+	var plate := BrickWorld.get_plate_metres()
+	var sea := BrickWave.get_sea_level()
+	@warning_ignore("integer_division")
+	var n: int = maxi(2 * _half_studs / _step, 2)
+	var img := Image.create_empty(n, n, false, Image.FORMAT_RF)
+	_wet.clear()
+	for iz in n:
+		for ix in n:
+			var gx := ix * _step - _half_studs
+			var gz := iz * _step - _half_studs
+			# `surface_plate`, not `height_at`: on a plate-quantised field the
+			# brick height rounds a plate step DOWN and the shoreline would
+			# sit a plate inside the sand.
+			var y := float(BrickTerrain.surface_plate(gx, gz) + 1) * plate
+			img.set_pixel(ix, iz, Color(y, 0.0, 0.0))
+			if y < sea:
+				_wet[Vector2i(floori(float(gx) / WET_CELL), floori(float(gz) / WET_CELL))] = true
+	_wet_count = _wet.size()
+	return img
+
+
+## The ground changed (an edit): read the seabed again. One texture is
+## shared by every tier, so updating it in place reaches all of them.
+func refresh_seabed() -> void:
+	if _seabed != null:
+		_seabed.update(_seabed_image())
 
 
 ## Is there sea anywhere in what was built?
@@ -108,8 +129,9 @@ func follow(camera: Vector3, delta: float) -> void:
 	var xz := Vector2(camera.x, camera.z)
 	# The sheet is flat rings and cheap; the brick tiers are not, and are shown
 	# only where there is water inside their reach.
-	near.visible = wet_near(camera, near.radius)
-	far.visible = wet_near(camera, far.radius)
+	near.visible = enabled and wet_near(camera, near.radius)
+	far.visible = enabled and wet_near(camera, far.radius)
+	sheet.visible = enabled
 	# Followed even hidden: each tier keeps its own wave clock, and one that
 	# skipped frames would come back out of phase with the others. It is two
 	# uniform writes.
