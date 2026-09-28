@@ -503,6 +503,18 @@ var _remesh_queue: Array[int] = []
 var _pending_bricks: Array[int] = []
 ## building id -> process frame before which its remesh must wait.
 var _remesh_hold := {}
+## Hand-overs in flight (Docs/Collapse.md 2.4): building id -> {pieces, born,
+## gap, double}. A piece leaving a building has to start drawing its bricks the
+## same frame the building stops. GAP: a tick the building no longer draws them
+## and a piece that took them draws nothing -- the flicker. DOUBLE: a tick the
+## pieces all draw and the building still draws them too -- a section seen
+## falling and still standing.
+var _handovers := {}
+const HANDOVERS_PER_TICK := 3
+const HANDOVER_MAX_FRAMES := 20
+var handover_stats := {"count": 0, "gap_ticks": 0, "gap_worst": 0, "gap_handovers": 0,
+		"double_ticks": 0, "double_worst": 0, "double_handovers": 0,
+		"double_queued": 0, "double_bands": 0}
 var _demesh_ms := 0.0
 var _demeshed := 0
 var _remeshed_back := 0
@@ -1722,7 +1734,7 @@ func _sync_fake(id: int) -> void:
 	for room in registry.rooms_of(id):
 		if not room.outer or room.drawn or room.active or room.spilled:
 			continue
-		if room.fake_gone != room.gone.size() or room.fake_gone < 0:
+		if room.fake_gone != room.gone.size() or room.fake_gone < 0 				or room.fake_stamp != b.structure_version:
 			if worked >= FAKE_ROOMS_PER_PASS \
 					or (worked > 0 and Time.get_ticks_usec() >= until):
 				more = true
@@ -1733,6 +1745,7 @@ func _sync_fake(id: int) -> void:
 			room.fake_buffer = RoomManifest.draw_items(world, b.chunk, registry.palette,
 					room, offset).buffer
 			room.fake_gone = room.gone.size()
+			room.fake_stamp = b.structure_version
 		if room.fake_buffer.is_empty():
 			continue
 		want.append(room)
@@ -2105,6 +2118,11 @@ func _stream_rooms() -> void:
 ## building you can shoot, however few triangles it is drawn with.
 func _make_shell(id: int, coarse: bool = false) -> void:
 	var b := registry.get_building(id)
+	# The coarse tier is a plain box: it cannot show damage, so a damaged
+	# building never gets it -- it keeps the banded shell, which reads the damage
+	# profile, at any distance a shell is drawn (Docs/Collapse.md 2.3). A tower
+	# with its top blown off was drawn whole from 110 m out.
+	coarse = coarse and not b.is_damaged()
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2515,6 +2533,66 @@ func _topple(id: int) -> void:
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
 
 
+## A piece has just left building `id`: watch the hand-over (_handovers).
+func _note_handover(id: int, isl: BrickIsland) -> void:
+	if not _handovers.has(id):
+		_handovers[id] = {"pieces": [], "born": Engine.get_process_frames(), "gap": 0, "double": 0}
+		handover_stats.count += 1
+	(_handovers[id].pieces as Array).append(isl)
+
+
+## Must building `id` keep drawing what it shed? Yes for OVERLAP_FRAMES (the
+## newborn instance), and after that while any piece that took the bricks draws
+## nothing -- up to HANDOVER_MAX_FRAMES, so a stalled bake cannot hold it for good.
+func _handover_waiting(id: int, now: int) -> bool:
+	var h: Dictionary = _handovers[id]
+	var age := now - int(h.born)
+	if age <= IslandManager.OVERLAP_FRAMES:
+		return true
+	if age > HANDOVER_MAX_FRAMES:
+		return false
+	for isl in h.pieces:
+		if islands.is_blind(isl):
+			return true
+	return false
+
+
+## Is building `id` still drawing bricks it has shed? Its remesh is queued or
+## held, or deferred behind bands still building -- with its whole shell up.
+func _parent_stale(id: int) -> bool:
+	return _remesh_queue.has(id) or _band_redo.has(id) \
+			or (_shells.has(id) and _bands_building(id))
+
+
+## Once a tick: score every hand-over in flight, and close the finished ones.
+func _watch_handovers() -> void:
+	var now := Engine.get_process_frames()
+	for id in _handovers.keys():
+		var h: Dictionary = _handovers[id]
+		var blind := false
+		for isl in h.pieces:
+			if islands.is_blind(isl):
+				blind = true
+				break
+		var stale := _parent_stale(id)
+		if blind and not stale:
+			h.gap += 1
+		elif stale and not blind and now - int(h.born) > IslandManager.OVERLAP_FRAMES:
+			h.double += 1
+			if _remesh_queue.has(id):
+				handover_stats.double_queued += 1
+			else:
+				handover_stats.double_bands += 1
+		if (not blind and not stale) or now - int(h.born) > 600:
+			handover_stats.gap_ticks += int(h.gap)
+			handover_stats.double_ticks += int(h.double)
+			handover_stats.gap_worst = maxi(handover_stats.gap_worst, int(h.gap))
+			handover_stats.double_worst = maxi(handover_stats.double_worst, int(h.double))
+			handover_stats.gap_handovers += 1 if int(h.gap) > 0 else 0
+			handover_stats.double_handovers += 1 if int(h.double) > 0 else 0
+			_handovers.erase(id)
+
+
 ## Whether every band of a building's collision is merged.
 func _building_merged(id: int) -> bool:
 	return _brick_cols.has(id) and (_brick_cols[id] as BuildingCollision).all_merged()
@@ -2565,6 +2643,11 @@ func _merge_quiet_buildings() -> void:
 func _mark_dirty(id: int) -> void:
 	if not _dirty.has(id):
 		_dirty.append(id)
+	# Its blocks changed: anything drawn from them is stale (Room.fake_stamp).
+	var b := registry.get_building(id)
+	if b != null:
+		b.structure_version += 1
+		_fake_dirty[id] = true
 
 
 func _queue_remesh(id: int) -> void:
@@ -4673,6 +4756,8 @@ func _physics_process(_delta: float) -> void:
 			var piece := islands.record_detach(b.id, null, b.chunk, before,
 					DamageLog.FLAG_CHUNK if kind == &"chunk" else 0)
 			var came := islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			if came != null:
+				_note_handover(b.id, came)
 			if came == null:
 				# Deleted where it stood -- debris, furniture, a far chunk over the
 				# moving cap: whatever settled on it has nothing under it now.
@@ -4690,6 +4775,9 @@ func _physics_process(_delta: float) -> void:
 		# this building happened to redraw it again.
 		_refresh_furniture(b.id)
 		_recheck_drawn(b.id)
+		# Blocks just left it: a fake drawn since the hit is stale again.
+		b.structure_version += 1
+		_fake_dirty[b.id] = true
 		# Keep drawing those bricks until the piece that took them has come up.
 		# See IslandManager.OVERLAP_FRAMES.
 		# Start a hold, never extend one -- see the same guard in _shed.
@@ -4724,6 +4812,24 @@ func _physics_process(_delta: float) -> void:
 	var remeshed := 0
 	var now_frame := Engine.get_process_frames()
 	var remesh_until := Time.get_ticks_usec() + int(REMESH_BUDGET_MS * 1000.0)
+	# Hand-overs first, and outside the budget (Docs/Collapse.md 2.4). A building
+	# that shed a piece stops drawing those bricks the tick every piece that
+	# took them is drawing -- not two frames after the split whatever the piece
+	# is doing (the flicker: a piece's mesh is baked on a worker and was up to 2
+	# ticks late), and not whenever the queue gets round to it (the double: 6 of
+	# 7 hand-overs, up to 6 ticks, all waiting in this queue). A patch is
+	# microseconds; HANDOVERS_PER_TICK bounds the odd full rebuild.
+	var handed := 0
+	var hi := 0
+	while hi < _remesh_queue.size() and handed < HANDOVERS_PER_TICK:
+		var hid: int = _remesh_queue[hi]
+		if not _handovers.has(hid) or _handover_waiting(hid, now_frame):
+			hi += 1
+			continue
+		_remesh_queue.remove_at(hi)
+		_remesh_hold.erase(hid)
+		_remesh(hid)
+		handed += 1
 	var ri := 0
 	while remeshed < REMESHES_PER_TICK and ri < _remesh_queue.size():
 		# A count is the wrong budget when the items differ by two orders of
@@ -4735,7 +4841,7 @@ func _physics_process(_delta: float) -> void:
 			break
 		var rid_b: int = _remesh_queue[ri]
 		# Held: a piece this building just shed has not come up yet.
-		if int(_remesh_hold.get(rid_b, -1)) > now_frame:
+		if int(_remesh_hold.get(rid_b, -1)) > now_frame or _handovers.has(rid_b):
 			ri += 1
 			continue
 		_remesh_queue.remove_at(ri)
@@ -4743,6 +4849,7 @@ func _physics_process(_delta: float) -> void:
 		_remesh(rid_b)
 		remeshed += 1
 	t = _mark("remesh", t)
+	_watch_handovers()
 
 	var promoted := 0
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
@@ -4951,6 +5058,10 @@ func _stream_shells() -> void:
 		# Tier swap, with the same hysteresis band so a building on the line
 		# does not rebuild its mesh every tick.
 		var coarse: bool = _shell_coarse.get(b.id, false)
+		# A damaged building is never coarse (see _make_shell), so it has no
+		# tier to swap to: without this it rebuilt its banded shell every pass.
+		if not coarse and b.is_damaged():
+			continue
 		if coarse and dist < SHELL_DETAIL_RANGE - SHELL_HYSTERESIS:
 			_free_shell(b.id)
 			_make_shell(b.id, false)
