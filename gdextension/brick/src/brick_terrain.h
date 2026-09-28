@@ -654,6 +654,12 @@ public:
     ///
     /// Returns: mesh (ARRAY_MAX arrays), triangle_count, build_ms.
     static Dictionary build_coarse(int tx0, int tz0, int span, int step);
+    /// Coarse blocks sampled this coarsely or more are built SMOOTH: one
+    /// vertex a sample, no flat tops and walls (Terrain.md §19.14). At that
+    /// distance a brick course is under a pixel, so the steps are paid for
+    /// and never seen. 0 turns it off.
+    static void set_coarse_smooth_step(int step);
+    static int get_coarse_smooth_step();
 };
 
 // ---------------------------------------------------------------------------
@@ -722,6 +728,25 @@ public:
     /// Two vec4 a component: (amplitude, wavenumber, dir.x, dir.z) then
     /// (omega, phase, 0, 0). Handed straight to the shader.
     static PackedVector4Array uniform_array();
+
+    /// WAVE GROUPS (Docs/Water.md §8, after MvsC): two long envelopes that
+    /// travel with the swell and scale it +/-30%, so one stretch of sea is
+    /// heaped and the next is calm. Two vec4 a group: (fraction, wavenumber,
+    /// dir.x, dir.z) then (omega, phase, 0, 0).
+    static PackedVector4Array group_uniform_array();
+    /// THE SHORE BAND: a wave phased on DEPTH rather than on a direction, so
+    /// its crests are lines of equal depth and it always rolls in toward the
+    /// shore whatever the swell is doing. (amplitude, radians per metre of
+    /// depth, omega, 0).
+    static Vector4 shore_band_uniform();
+    /// The still-water depth the shore band reads: the ground bilinear over
+    /// the seabed lattice (one sample every 8 studs), which is exactly what
+    /// the shader reads from the seabed texture.
+    static double band_depth(double x, double z);
+    /// The two halves of the surface, for the probe that checks the shader's
+    /// copy of the formula: the group factor at a point and the band.
+    static double group_at(double x, double z, double t);
+    static double band_at(double x, double z, double t);
 
     /// Terrace width in studs at the current sea state -- the number
     /// section 3.5 uses to decide whether varied piece shapes are worth

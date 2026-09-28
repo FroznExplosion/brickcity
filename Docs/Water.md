@@ -711,6 +711,52 @@ yes, unchanged — at 20–40 m visibility they are only ever seen close.
 
 ---
 
+## 9.5 Two tiers, a sea that follows you, and waves that come ashore
+
+Reported: smooth water near the camera, then a ring of blocky water, then
+smooth again — and the water "disappearing" constantly.
+
+**What it was.** Three tiers: studded bricks to 20 m, four-stud blocks to
+80 m, and a sheet beyond. The sheet was built once round the world's ORIGIN,
+hole and fine rings included, and never moved. Anywhere else, the sheet and
+the brick tiers drew the same water in the same place and fought for the
+pixels; the four-stud tier was the blocky donut; and the tiers were being
+switched on and off by the wet-area check as the camera moved.
+
+**Now two tiers.** The studded bricks to 20 m (LOD 0), and the sheet for
+everything else (LOD 1 on): no block tier between them. The sheet FOLLOWS the
+camera, snapped to its finest cell (1.4 m, out to 40 m, doubling outward), is
+filled to the middle, and leaves a hole in the shader exactly where the
+studded tier draws — none when that tier is hidden — so there is never water
+twice, or none. Rings meet on the coarser ring's lattice; they used to
+overlap by up to a cell. Measured at one shore view away from the origin:
+671k triangles drawn before, 399k after; the heightfield bench view 814k →
+541k and 4.3 → 3.0 ms.
+
+**Waves, after MvsC** (`Docs/Reference/mvs-c.md` §4). One formula, in
+`BrickWave::height_at` for swimmers, buoyancy and the collider, and restated
+in `water.gdshader`; the probe reproduces the CPU surface from the shader's
+uniforms to 1e-7 m.
+
+  * **Groups.** Two long envelopes, 170 m and 240 m, travel with the swell at
+    group speed and scale it ±15% each: one stretch heaped, the next calm.
+    (The probe measures 0.70 .. 1.28.)
+  * **The shore band.** `A(d) · sin(k·d + ω·t + drift)`, phased on DEPTH, not
+    on a direction: a crest is a line of equal depth, so it runs along every
+    shore and rolls IN toward it whatever the swell is doing. Alive from
+    0.3 m deep, full from 1.5 m, gone past 9 m. Depth is the ground BILINEAR
+    over the seabed lattice (8 studs), the same corners the texture holds, so
+    CPU and shader agree. The probe checks the motion: what is in deeper
+    water now is in shallower water (d₂ − d₁)·k/ω seconds later, to 2 mm.
+  * **Far LOD caps the wave number.** Each sheet vertex carries its ring's
+    spacing; a wave shorter than ~4 samples fades out (and the band, which is
+    short, only draws on the finest rings). Under that a crest lands between
+    vertices and the surface boils.
+
+Not done yet from the reference: **exposure** (swell reduced behind land,
+eight rays per 32 m grid corner) — the next step if sheltered bays should be
+calmer than open coast.
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and

@@ -2309,6 +2309,24 @@ by a fixed 5x5 field that stopped existing when streaming went in, and read
 
 ---
 
+### 19.14 Smooth far ground, from LOD 2 out
+
+The coarse tier drew every sample as a flat-topped column with walls down to
+its neighbours: four to six triangles a sample, for steps a brick high that
+are under a pixel past ~150 m. It was the largest single cost in the scene.
+
+Blocks sampled every 8 studs or coarser (`BrickTerrain.set_coarse_smooth_step`,
+default 8) are now built SMOOTH: one vertex a sample, heights at the samples,
+a colour, a material and a baked sun a vertex, and a skirt round the edge.
+Neighbouring blocks sample the same corners on their shared edge and meet
+exactly; the skirt hides the join against a blocky neighbour, whose tops stand
+at the max of a cell.
+
+That is ring 1 and out (LOD 2+, ~180 m). Ring 0 and every block split to sit
+next to the detail stay blocky, so the ground the eye can resolve is still
+laid brick. Measured: the heightfield far tier 1,152k → 807k triangles; the
+city's 643k → 426k.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

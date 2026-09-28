@@ -314,9 +314,9 @@ func turned(k: int) -> BuildRecipe:
 ## Min corner of a box of `size` at `rel` inside a box `d`, after `k` quarter
 ## turns of the outer box about +Y -- the same turn as BrickPalette.front_of:
 ## (x, z) goes to (-z, x), then moved back into positive cells.
-static func _turn_box(rel: Vector3i, size: Vector3i, d: Vector3i, k: int) -> Vector3i:
+static func _turn_box(rel: Vector3i, box_size: Vector3i, d: Vector3i, k: int) -> Vector3i:
 	var r := rel
-	var s := size
+	var s := box_size
 	var dd := d
 	for q in k:
 		r = Vector3i(dd.z - r.z - s.z, r.y, r.x)
@@ -433,10 +433,10 @@ func frame_ticks(frame: int) -> Vector3i:
 
 
 ## Attach a fixture, in frame 0's coordinates. Returns its index.
-func add_fixture(kind: String, cell: Vector3i, params: Dictionary,
+func add_fixture(fixture_kind: String, cell: Vector3i, params: Dictionary,
 		role: int = Fixture.Role.DECORATIVE) -> int:
 	_fixtures.append({
-		"kind": kind,
+		"kind": fixture_kind,
 		"cell": [cell.x, cell.y, cell.z],
 		"role": int(role),
 		"params": params.duplicate(true),

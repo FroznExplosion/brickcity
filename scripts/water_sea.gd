@@ -17,9 +17,11 @@ const WaterSheetFx := preload("res://scripts/water_sheet.gd")
 
 ## Tier 0: brick pieces a stud across, round the camera.
 var near: WaterSurface = null
-## Tier 1: the same wave at four studs a piece, out to 80 m.
+## There is no tier 1 any more: the four-stud blocks between the studded
+## water and the sheet were the blocky donut round the camera, and cost more
+## than the sheet (Water.md §8). Kept as a name, always null.
 var far: WaterSurface = null
-## Tier 2: one sheet from the brick tiers to the horizon.
+## Tier 1 now: the smooth sheet, from the studded tier to the horizon.
 var sheet = null
 
 ## Stud columns per WET-map cell, and the map itself: whether any ground in
@@ -52,21 +54,10 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	near.name = "Water"
 	near.radius = 20.0
 	add_child(near)
-	far = WaterSurface.new()
-	far.name = "WaterFar"
-	far.radius = 80.0
-	far.pitch_studs = 4
-	far.inner_radius = 19.0
-	far.studs = false
-	# One collider is enough, and it belongs to the tier under the camera.
-	far.collide = false
-	add_child(far)
 	near.set_seabed(seabed, origin, extent)
-	far.set_seabed(seabed, origin, extent)
 
 	sheet = WaterSheetFx.new()
 	sheet.name = "WaterSheet"
-	sheet.inner_radius = far.radius - 4.0
 	sheet.outer_radius = outer_metres
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
@@ -130,14 +121,13 @@ func follow(camera: Vector3, delta: float) -> void:
 	# The sheet is flat rings and cheap; the brick tiers are not, and are shown
 	# only where there is water inside their reach.
 	near.visible = enabled and wet_near(camera, near.radius)
-	far.visible = enabled and wet_near(camera, far.radius)
 	sheet.visible = enabled
-	# Followed even hidden: each tier keeps its own wave clock, and one that
-	# skipped frames would come back out of phase with the others. It is two
-	# uniform writes.
+	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
-	far.follow(xz, delta, camera.y)
-	sheet.follow(near.time())
+	# The sheet leaves a hole exactly where the studded tier draws, and none
+	# when it does not -- so there is never water twice, or none.
+	sheet.follow(near.time(), xz, near.centre_for(xz),
+			near.radius if near.visible else 0.0)
 
 
 func surface_at(p: Vector3) -> float:

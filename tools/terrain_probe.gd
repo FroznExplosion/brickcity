@@ -1163,6 +1163,28 @@ func _check_pads() -> void:
 	BrickTerrain.configure(20260919)
 
 
+## water.gdshader's group_factor, from BrickWave.group_uniform_array().
+func _mirror_group(x: float, z: float, t: float) -> float:
+	var g := BrickWave.group_uniform_array()
+	var f := 1.0
+	for j in g.size() / 2:
+		var a := g[j * 2]
+		var b := g[j * 2 + 1]
+		f += a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+	return f
+
+
+## water.gdshader's shore_wave, from BrickWave.shore_band_uniform().
+func _mirror_band(x: float, z: float, t: float) -> float:
+	var u := BrickWave.shore_band_uniform()
+	var depth := BrickWave.band_depth(x, z)
+	if depth <= 0.0 or u.x <= 0.0:
+		return 0.0
+	var w := smoothstep(0.3, 1.5, depth) * (1.0 - smoothstep(4.0, 9.0, depth))
+	var drift := 1.2 * sin(0.013 * x + 0.7) + 1.2 * sin(0.011 * z + 2.1)
+	return u.x * w * sin(u.y * depth + u.z * t + drift)
+
+
 func _check_wave() -> void:
 	print("wave (Water §1)")
 	var h0 := BrickWave.height_at(3.7, -2.1, 0.0)
@@ -1186,12 +1208,83 @@ func _check_wave() -> void:
 		# living only in the shader was 2.2x off this for as long as it
 		# existed, which is why the gain now lives in BrickWave.
 		var ramp := BrickWave.shore_gain(x, z)
+		var swell := 0.0
 		for w in BrickWave.component_count():
 			var a := packed[w * 2]
 			var b := packed[w * 2 + 1]
-			mirror += ramp * a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+			swell += a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+		mirror += ramp * _mirror_group(x, z, t) * swell + _mirror_band(x, z, t)
 		worst = maxf(worst, absf(BrickWave.height_at(x, z, t) - mirror))
 	_ok("the packed uniforms reproduce height_at", worst < 1e-4, "worst %.7f m" % worst)
+
+	# Groups and the shore band, from THEIR packed uniforms, the way the
+	# shader has them (water.gdshader group_factor / shore_wave).
+	var worst_g := 0.0
+	var worst_b := 0.0
+	for i in 200:
+		var x := float(i) * 7.3 - 700.0
+		var z := float(i) * -3.1 + 250.0
+		worst_g = maxf(worst_g, absf(BrickWave.group_at(x, z, t) - _mirror_group(x, z, t)))
+		worst_b = maxf(worst_b, absf(BrickWave.band_at(x, z, t) - _mirror_band(x, z, t)))
+	_ok("the group and shore-band uniforms reproduce the CPU surface",
+		worst_g < 1e-4 and worst_b < 1e-4, "worst %.7f / %.7f m" % [worst_g, worst_b])
+
+	# GROUPS make one stretch heaped and the next calm.
+	var glo := INF
+	var ghi := -INF
+	for i in 400:
+		var g := BrickWave.group_at(float(i) * 1.5, float(i) * 0.4, 0.0)
+		glo = minf(glo, g)
+		ghi = maxf(ghi, g)
+	_ok("wave groups vary the sea by about +/-30%", ghi - glo > 0.4 and ghi < 1.31 and glo > 0.69,
+		"%.2f .. %.2f" % [glo, ghi])
+
+	# The BAND rolls in: along a line out from a shore, the nearest crest to
+	# the beach is in shallower water a moment later.
+	var shore_line: Array[Vector2] = []
+	for gx in range(-1200, 1200, 24):
+		var p0 := Vector2(float(gx) * 0.35, 30.0)
+		var d0 := BrickWave.band_depth(p0.x, p0.y)
+		if d0 > 0.2 and d0 < 0.6:
+			shore_line.append(p0)
+			break
+	var rolled := false
+	var crest_d := [0.0, 0.0]
+	if not shore_line.is_empty():
+		var p0 := shore_line[0]
+		# Out to sea: the direction the depth grows fastest.
+		var dirs := [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
+		var best: Vector2 = dirs[0]
+		var bestd := -INF
+		for d in dirs:
+			var dd := BrickWave.band_depth(p0.x + d.x * 6.0, p0.y + d.y * 6.0)
+			if dd > bestd:
+				bestd = dd
+				best = d
+		# Where the band is at full strength (1.5 to 4 m deep): walk out to it.
+		var q1 := p0
+		for j in 2000:
+			q1 = p0 + best * float(j) * 0.05
+			if BrickWave.band_depth(q1.x, q1.y) >= 2.2:
+				break
+		var q2: Vector2 = q1 + best * 0.6
+		var d1 := BrickWave.band_depth(q1.x, q1.y)
+		var d2 := BrickWave.band_depth(q2.x, q2.y)
+		var u := BrickWave.shore_band_uniform()
+		# What is at the deeper point now should be at the shallower point
+		# (d2 - d1) * k / omega seconds LATER -- not that long earlier.
+		var lag := (d2 - d1) * u.y / u.z
+		var fwd := 0.0
+		var back := 0.0
+		for n in 20:
+			var tt := 0.37 * float(n)
+			var here := BrickWave.band_at(q2.x, q2.y, tt)
+			fwd += absf(here - BrickWave.band_at(q1.x, q1.y, tt + lag))
+			back += absf(here - BrickWave.band_at(q1.x, q1.y, tt - lag))
+		crest_d = [fwd / 20.0, back / 20.0]
+		rolled = crest_d[0] < crest_d[1] * 0.3
+	_ok("the shore band rolls in toward the shore", rolled,
+		"deep water arrives shallower %.3f m off later, %.3f m off earlier" % [crest_d[0], crest_d[1]])
 
 	# The ramp itself: dry ground gets no wave at all, and deep water gets
 	# most of one. Without the first a swell drives bricks through the beach;
