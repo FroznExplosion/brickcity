@@ -267,7 +267,7 @@ func _make_bolt(to: Vector3) -> void:
 		main = next
 	_bolt_pts = [main]
 	for b in randi_range(1, 2):
-		var at := randi_range(4, main.size() / 2)
+		var at := randi_range(4, floori(main.size() / 2.0))
 		var branch := PackedVector3Array([main[at]])
 		var dir := Vector3(randf_range(-1, 1), -1.2, randf_range(-1, 1)).normalized()
 		for i in 5:

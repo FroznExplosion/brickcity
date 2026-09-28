@@ -85,6 +85,6 @@ func _light() -> void:
 	if ctx.fire != null:
 		ctx.fire.spread_mul = intensity
 	for i in sparks:
-		any = ctx.ignite(p + step * (i - sparks / 2), 0.6) or any
+		any = ctx.ignite(p + step * (i - floori(sparks / 2.0)), 0.6) or any
 	if any:
 		lit = {"building": ctx.building_at(p), "point": p, "out": out}

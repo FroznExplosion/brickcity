@@ -113,7 +113,7 @@ static func _synth_loop(seed_value: int, a: float, b: float, gain: float, swell:
 ## Cross-fade the tail into the head so a loop does not click at its seam.
 static func _loop_ends(out: PackedFloat32Array) -> PackedFloat32Array:
 	var n := out.size()
-	var fade := RATE / 10
+	var fade := floori(RATE / 10.0)
 	for i in fade:
 		var k := float(i) / fade
 		out[i] = out[i] * k + out[n - fade + i] * (1.0 - k)
@@ -157,7 +157,7 @@ static func _synth_rumble() -> AudioStreamWAV:
 		var swell := 0.7 + 0.3 * sin(TAU * 0.5 * t)
 		out[i] = clampf(lp2 * 14.0 * swell, -1.0, 1.0)
 	# Cross-fade the ends so the loop point does not click.
-	var fade := RATE / 10
+	var fade := floori(RATE / 10.0)
 	for i in fade:
 		var a := float(i) / fade
 		out[i] = out[i] * a + out[n - fade + i] * (1.0 - a)

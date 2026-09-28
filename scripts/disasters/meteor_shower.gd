@@ -92,7 +92,7 @@ func _roll_schedule() -> void:
 	var grow := sqrt(maxf(intensity, 0.1))
 	meteors.clear()
 	for i in count:
-		var b := i * bursts / count
+		var b := floori(float(i * bursts) / count)
 		var centre := active_s * (b + 0.5) / bursts
 		var big := rng.randf() < BIG_CHANCE * intensity
 		meteors.append({
