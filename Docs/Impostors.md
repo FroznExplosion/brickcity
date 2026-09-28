@@ -221,6 +221,39 @@ coloured boxes (no facade yet). Instance written when a building enters the far 
 **Measure:** `city.tscn -- --bench --buildings=150` from the three §19.5 viewpoints — calls, drawn,
 GPU frame, before and after. Screenshot the skyline from the worst viewpoint.
 
+**Done (2026-09-28).** As planned, with one rule added: **far things show what they are.** A box is
+the true shape of an intact recipe building only. So past `SHELL_RANGE`:
+
+* an intact recipe building → its far box;
+* a **damaged** recipe building or **any player build** → keeps its shell, drawing only, with no
+  body (`_shell_far`). Its damage and its shape stay exact at every distance. Stages 3 and 4 move
+  these to cheaper forms.
+
+`_ray_recipes` now skips buildings with a shell *body* rather than any shell, so a shot still lands
+on a far shell. The far box's colour is the coarse shell's (every recipe building is the same
+colour, `BuildingShell.build_coarse_arrays`, which answers §9's colour question), lit like
+`brick.gdshader`'s PLA, so there is no colour step at 260 m.
+
+Gate: `big_city.tscn -- --far --buildings=150` — no building undrawn or drawn twice; a far
+building shot at 500 m swaps to a body-less shell, takes a shot, and gets its body back inside the
+range. 9 ok. `--reach` lands to 480 m; `collapse_probe` 34 ok.
+
+The bench now waits for the shell streamer to settle at each viewpoint. Before this, it sampled
+while the 150 placement-time shells were still being freed, and "over the city" swung between
+0.66M and 1.7M tris from run to run. Settled, on `big_city`, 150 buildings (ms are noisy: the
+editor was open):
+
+| viewpoint | before: tris / calls | after: tris / calls | far boxes |
+|---|---|---|---|
+| over the city | 3.83M / 257 | 3.83M / 258 | 34 |
+| street level | 493k / 171 | 493k / 172 | 37 |
+| high and far | 54.5k / 148 | 55.3k / 149 | 73 |
+
+One call and under 1k triangles for up to 73 buildings that used to be missing. Settled, the worst
+viewpoint is "over the city" at 3.8M triangles. A coarse shell is about ten triangles, so nearly
+all of that is the < 110 m banded shells. Stage 2 can only save draw calls, one per coarse shell;
+the triangle weight sits in near-shell detail, which this plan does not touch.
+
 ### Stage 2 — The coarse tier joins the MultiMesh
 
 `_make_shell(id, coarse = true)` stops making a `MeshInstance3D` and shows the building's far

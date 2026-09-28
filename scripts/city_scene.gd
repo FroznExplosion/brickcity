@@ -666,6 +666,7 @@ var _frame_nodes := {}    ## building id -> Array[MeshInstance3D], frame 1 first
 var _frame_bodies := {}   ## building id -> Array[RID]
 var _frame_shapes := {}   ## building id -> Array[Dictionary] block id -> shapes
 var _shell_coarse := {}    ## building id -> drawn with the far-far tier
+var _shell_far := {}       ## building id -> a shell past SHELL_RANGE, drawn with no body
 var _stream_cursor := 0
 var _shells_made := 0
 var _shells_freed := 0
@@ -726,6 +727,7 @@ var _sea = null
 var _buildings_arg := false
 var _stress_mode := false
 var _reach_mode := false
+var _far_mode := false
 var _lod_mode := false
 var _walk_mode := false
 var _no_fixtures := false
@@ -874,6 +876,7 @@ func _ready() -> void:
 	_terrain_mode = terrain_ground or "--terrain" in args
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
+	_far_mode = "--far" in args
 	_lod_mode = "--lod" in args
 	_walk_mode = "--walk" in args
 	# For measurement: the same city with nothing fixed to its buildings, so a
@@ -1057,6 +1060,8 @@ func _ready() -> void:
 		_run_lod_pass()
 	elif _reach_mode:
 		_run_reach_pass()
+	elif _far_mode:
+		_run_far_pass()
 	elif _walk_mode:
 		_run_walk_pass()
 	elif _build_mode:
@@ -2130,7 +2135,12 @@ func _stream_rooms() -> void:
 ## `coarse` picks the far-far tier: a box and a cap instead of a course-banded
 ## hollow shell. Same collision either way, because a building you can see is a
 ## building you can shoot, however few triangles it is drawn with.
-func _make_shell(id: int, coarse: bool = false) -> void:
+##
+## `far` is a shell past SHELL_RANGE: drawn, but with no body. Out there a shot
+## resolves against recipes (_ray_recipes), as it does for any far building.
+## Only a building the far MultiMesh cannot draw truthfully gets one -- see
+## _needs_far_shell.
+func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	var b := registry.get_building(id)
 	# The coarse tier is a plain box: it cannot show damage, so a damaged
 	# building never gets it -- it keeps the banded shell, which reads the damage
@@ -2170,7 +2180,18 @@ func _make_shell(id: int, coarse: bool = false) -> void:
 			glass.material_override = BuildingShell.window_material()
 			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			mi.add_child(glass)
+	# A shell and a far box would be the same building drawn twice.
+	_far_hide(id)
+	if far:
+		_shell_far[id] = true
+		return
+	_make_shell_body(id)
 
+
+## The collision boxes of a shell, and the AI's proxies of them.
+func _make_shell_body(id: int) -> void:
+	_shell_far.erase(id)
+	var b := registry.get_building(id)
 	# No boxes for a building that is bricks already: its bricks collide
 	# (see _free_shell_body).
 	if _brick_cols.has(id):
@@ -5032,6 +5053,7 @@ func _free_shell(id: int) -> void:
 	_drop_proxies(id)
 	_nav_touch(id)
 	_shell_coarse.erase(id)
+	_shell_far.erase(id)
 	if _shells.has(id):
 		(_shells[id] as MeshInstance3D).queue_free()
 		_shells.erase(id)
@@ -5121,38 +5143,206 @@ func _stream_shells() -> void:
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
 		looked += 1
-		if b.is_materialised() or b.toppled:
-			continue
-		var dist: float = b.xform.origin.distance_to(here)
-		var has_shell: bool = _shells.has(b.id)
-		if not has_shell:
-			if dist < SHELL_RANGE:
-				_make_shell(b.id, dist > SHELL_DETAIL_RANGE)
-				_shells_made += 1
-				budget -= 1
-			continue
-		if dist > SHELL_RANGE + SHELL_HYSTERESIS:
+		budget -= _stream_shell(b, here)
+		# After the shell's own step, so a building whose shell just went
+		# gets its far box in the same tick rather than a pass later.
+		_far_sync(b)
+
+
+## One building's step of _stream_shells. Returns how much of the budget it used.
+func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
+	if b.is_materialised() or b.toppled:
+		return 0
+	var dist: float = b.xform.origin.distance_to(here)
+	if not _shells.has(b.id):
+		if dist < SHELL_RANGE or _needs_far_shell(b):
+			_make_shell(b.id, dist > SHELL_DETAIL_RANGE, dist >= SHELL_RANGE)
+			_shells_made += 1
+			return 1
+		return 0
+	if dist > SHELL_RANGE + SHELL_HYSTERESIS:
+		if not _needs_far_shell(b):
 			_free_shell(b.id)
 			_shells_freed += 1
-			budget -= 1
-			continue
-		# Tier swap, with the same hysteresis band so a building on the line
-		# does not rebuild its mesh every tick.
-		var coarse: bool = _shell_coarse.get(b.id, false)
-		# A damaged building is never coarse (see _make_shell), so it has no
-		# tier to swap to: without this it rebuilt its banded shell every pass.
-		if not coarse and b.is_damaged():
-			continue
-		if coarse and dist < SHELL_DETAIL_RANGE - SHELL_HYSTERESIS:
-			_free_shell(b.id)
-			_make_shell(b.id, false)
-			_shells_swapped += 1
-			budget -= 1
-		elif not coarse and dist > SHELL_DETAIL_RANGE + SHELL_HYSTERESIS:
-			_free_shell(b.id)
-			_make_shell(b.id, true)
-			_shells_swapped += 1
-			budget -= 1
+			return 1
+		if not _shell_far.has(b.id):
+			# Drawn on, but past the range anything collides with.
+			_drop_proxies(b.id)
+			_nav_touch(b.id)
+			_free_shell_body(b.id)
+			_shell_far[b.id] = true
+			return 1
+		return 0
+	if _shell_far.has(b.id) and dist < SHELL_RANGE:
+		_make_shell_body(b.id)
+		return 1
+	# Tier swap, with the same hysteresis band so a building on the line
+	# does not rebuild its mesh every tick.
+	var coarse: bool = _shell_coarse.get(b.id, false)
+	# A damaged building is never coarse (see _make_shell), so it has no
+	# tier to swap to: without this it rebuilt its banded shell every pass.
+	if not coarse and b.is_damaged():
+		return 0
+	if coarse and dist < SHELL_DETAIL_RANGE - SHELL_HYSTERESIS:
+		_free_shell(b.id)
+		_make_shell(b.id, false)
+		_shells_swapped += 1
+		return 1
+	if not coarse and dist > SHELL_DETAIL_RANGE + SHELL_HYSTERESIS:
+		_free_shell(b.id)
+		_make_shell(b.id, true)
+		_shells_swapped += 1
+		return 1
+	return 0
+
+
+# ---------------------------------------------------------------------------
+# The far city (Docs/Impostors.md, Stage 1)
+# ---------------------------------------------------------------------------
+#
+# Past SHELL_RANGE an intact recipe building is one instance of a unit box in
+# one MultiMesh: the whole far city in one draw call, where it used to draw
+# nothing at all out to camera.far. A recipe building IS a box, so the box is
+# its true shape; the shell's course banding is thinner than a pixel out there.
+#
+# What a box cannot draw truthfully keeps its shell instead, drawing only
+# (_needs_far_shell): a damaged building, whose damage has to show at every
+# distance (Docs/Collapse.md 2.3), and a player build, which can be any shape.
+
+## Room for this many far instances before the buffer has to grow.
+const FAR_INITIAL_CAPACITY := 256
+var _far: MultiMeshInstance3D = null
+var _far_slot := {}   ## building id -> its instance in the far MultiMesh
+var _far_on := {}     ## building id -> true while its far box is drawn
+
+
+## A building past SHELL_RANGE the far box would draw wrongly: it keeps a shell.
+func _needs_far_shell(b: BuildingRegistry.Building) -> bool:
+	return b.is_build() or b.is_damaged()
+
+
+## Show or hide one building's far box to match what else draws it.
+func _far_sync(b: BuildingRegistry.Building) -> void:
+	var want: bool = not (b.toppled or b.is_materialised() or _shells.has(b.id)
+			or _needs_far_shell(b))
+	if want == _far_on.has(b.id):
+		return
+	if not want:
+		_far_hide(b.id)
+		return
+	var mm := _far_multimesh()
+	var slot := _far_slot_of(b.id)
+	var box := registry.local_box(b.id)
+	mm.set_instance_transform(slot,
+			b.xform * Transform3D(Basis.from_scale(box.size), box.position))
+	_far_on[b.id] = true
+
+
+## Hide a building's far box, if it has one drawn. Zero scale rather than a
+## compacted buffer: slots never move, so nothing else has to be rewritten.
+func _far_hide(id: int) -> void:
+	if not _far_on.has(id):
+		return
+	_far_on.erase(id)
+	_far.multimesh.set_instance_transform(int(_far_slot[id]),
+			Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+
+
+func _far_slot_of(id: int) -> int:
+	if _far_slot.has(id):
+		return _far_slot[id]
+	var mm := _far.multimesh
+	var slot := _far_slot.size()
+	if slot >= mm.instance_count:
+		_far_grow(mm.instance_count * 2)
+	_far_slot[id] = slot
+	mm.visible_instance_count = slot + 1
+	return slot
+
+
+## A bigger buffer with the same contents: setting instance_count clears it.
+func _far_grow(capacity: int) -> void:
+	var mm := _far.multimesh
+	var old := mm.buffer
+	var used := mm.visible_instance_count
+	var first_new := mm.instance_count
+	mm.instance_count = capacity
+	var buf := mm.buffer
+	for i in old.size():
+		buf[i] = old[i]
+	mm.buffer = buf
+	for i in range(first_new, capacity):
+		mm.set_instance_color(i, _far_wall)
+	mm.visible_instance_count = used
+
+
+## Every recipe building is the same colour (BuildingShell.build_coarse_arrays),
+## so one wall colour for all of them, in the per-instance slot the facade
+## shader will want anyway.
+var _far_wall := Color.WHITE
+
+
+func _far_multimesh() -> MultiMesh:
+	if _far != null:
+		return _far.multimesh
+	@warning_ignore("integer_division")
+	_far_wall = BrickWorld.get_filament_colour(
+			TowerRecipe.COURSE_COLOURS[TowerRecipe.COURSE_COLOURS.size() / 2])
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = _far_box_mesh()
+	mm.instance_count = FAR_INITIAL_CAPACITY
+	mm.visible_instance_count = 0
+	for i in mm.instance_count:
+		mm.set_instance_color(i, _far_wall)
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/city_far.gdshader")
+	var roof := BrickWorld.get_filament_colour(TowerRecipe.SLAB_COLOUR)
+	mat.set_shader_parameter("roof_colour", Vector3(roof.r, roof.g, roof.b))
+	_far = MultiMeshInstance3D.new()
+	_far.name = "FarCity"
+	_far.multimesh = mm
+	_far.material_override = mat
+	# Past SHELL_RANGE is far outside the directional shadow distance.
+	_far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_far)
+	return mm
+
+
+## A box from (0,0,0) to (1,1,1), four walls and a roof, white. The instance
+## transform scales it to the building; the underside is never seen.
+static func _far_box_mesh() -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	# Each face's corners run anticlockwise seen from outside.
+	var faces := [
+		[Vector3(0, 0, 1), [Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)]],
+		[Vector3(0, 0, -1), [Vector3(1, 0, 0), Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, 0)]],
+		[Vector3(1, 0, 0), [Vector3(1, 0, 1), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(1, 1, 1)]],
+		[Vector3(-1, 0, 0), [Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(0, 1, 0)]],
+		[Vector3(0, 1, 0), [Vector3(0, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 0), Vector3(0, 1, 0)]],
+	]
+	var indices := PackedInt32Array()
+	for f in faces:
+		var base := verts.size()
+		for c in f[1]:
+			verts.append(c)
+			normals.append(f[0])
+		# Godot's front face is clockwise, so the triangles run backwards.
+		indices.append_array([base, base + 2, base + 1, base, base + 3, base + 2])
+	var colours := PackedColorArray()
+	colours.resize(verts.size())
+	colours.fill(Color.WHITE)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colours
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
 ## Drop the mesh of resident buildings nobody can see the bricks of, and put it
@@ -5776,6 +5966,9 @@ func _run_bench() -> void:
 func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 	camera.position = pos
 	camera.rotation = rot
+	# The shell tier streams a few buildings a tick; sampling before it has
+	# caught up with the jump measured a different city on every run.
+	await _far_settle()
 	var samples: Array[float] = []
 	for i in 90:
 		await RenderingServer.frame_post_draw
@@ -5783,13 +5976,13 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 	var sum := 0.0
 	for i in range(samples.size() / 2, samples.size()):
 		sum += samples[i]
-	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms" % [
+	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms  (%d shells, %d far boxes)" % [
 		label,
 		RenderingServer.get_rendering_info(
 			RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME),
 		RenderingServer.get_rendering_info(
 			RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
-		sum / float(samples.size() / 2)])
+		sum / float(samples.size() / 2), _shells.size(), _far_on.size()])
 
 
 func _run_shot_pass() -> void:
@@ -6867,7 +7060,9 @@ func _ray_recipes(from: Vector3, to: Vector3) -> Dictionary:
 	var best := {}
 	var best_d := span
 	for b in registry.buildings:
-		if b.toppled or b.is_materialised() or _shells.has(b.id):
+		# A far shell is drawing only (_make_shell): no body, so the recipe
+		# is what a shot hits.
+		if b.toppled or b.is_materialised() or _shell_bodies.has(b.id):
 			continue
 		var size := Vector3(b.recipe.footprint_x * STUD,
 				TowerRecipe.total_plates(b.recipe.courses) * PLATE,
@@ -6884,6 +7079,106 @@ func _ray_recipes(from: Vector3, to: Vector3) -> Dictionary:
 			best_d = d
 			best = {"position": world_at, "building": b.id}
 	return best
+
+
+## The far city's gate (Docs/Impostors.md, Stage 1).
+##
+##     godot --path . scenes/big_city.tscn -- --far --buildings=150
+##
+## Every building is drawn by exactly one thing at every distance; a damaged
+## building out past SHELL_RANGE keeps a shell that shows the damage, with no
+## body, and a shot still lands on it; walking back in gives the body back.
+func _run_far_pass() -> void:
+	print("[far] the city past SHELL_RANGE")
+	# Outside the corner, low enough to see a skyline rather than a map.
+	var span := _world_box(registry.buildings[registry.buildings.size() - 1]).end
+	var corner := Vector3(-120.0, 40.0, -120.0)
+	camera.global_position = corner
+	camera.look_at(Vector3(span.x, 0.0, span.z) * 0.5, Vector3.UP)
+	await _far_settle()
+
+	var here := camera.global_position
+	var undrawn := 0
+	var twice := 0
+	var past := 0
+	for b in registry.buildings:
+		if b.toppled or b.is_materialised():
+			continue
+		if b.xform.origin.distance_to(here) > SHELL_RANGE + SHELL_HYSTERESIS:
+			past += 1
+		var shell: bool = _shells.has(b.id)
+		var box: bool = _far_on.has(b.id)
+		if shell and box:
+			twice += 1
+		elif not shell and not box:
+			undrawn += 1
+	print("[far] %d buildings, %d past the shell range, %d shells, %d far boxes" % [
+		registry.buildings.size(), past, _shells.size(), _far_on.size()])
+	_gate_ok("there is a far city to draw", past > 0)
+	_gate_ok("every building past the shell range is a far box", _far_on.size() >= past,
+			"%d boxes for %d" % [_far_on.size(), past])
+	_gate_ok("no building is left undrawn", undrawn == 0, "%d undrawn" % undrawn)
+	_gate_ok("no building is drawn twice", twice == 0, "%d twice" % twice)
+	await _save("far_skyline")
+	if _far_on.is_empty():
+		# Nothing out there to shoot: a city too small for this pass.
+		print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+
+	# The farthest far box, shot and left to settle the way the trim leaves one.
+	var far_id := -1
+	var far_d := 0.0
+	for id in _far_on:
+		var d := registry.get_building(id).xform.origin.distance_to(here)
+		if d > far_d:
+			far_d = d
+			far_id = id
+	var fb := registry.get_building(far_id)
+	var box := registry.local_box(far_id)
+	var top := fb.xform * (box.position + Vector3(box.size.x * 0.5, box.size.y * 0.9, 0.0))
+	_promote(far_id)
+	await _frames(20)
+	registry.damage(far_id, top, 3.0)
+	await _frames(2)
+	_demote(far_id, far_d)
+	await _far_settle()
+	print("[far] shot building %d at %.0f m" % [far_id, far_d])
+	_gate_ok("a damaged far building keeps a shell", _shells.has(far_id))
+	_gate_ok("  drawn only: no body out there", _shell_far.has(far_id)
+			and not _shell_bodies.has(far_id))
+	_gate_ok("  and no far box on top of it", not _far_on.has(far_id))
+	var centre := fb.xform * (box.position + box.size * Vector3(0.5, 0.5, 0.5))
+	# From straight above it, so no nearer building stands in the way.
+	var hit := _ray_recipes(centre + Vector3(0.0, box.size.y + 30.0, 0.0), centre)
+	_gate_ok("  a shot at it still lands", int(hit.get("building", -1)) == far_id,
+			str(hit))
+	await _save("far_damaged")
+
+	# Walk up to it: inside the shell range it is solid again.
+	var aim := fb.xform * (box.position + box.size * 0.5)
+	camera.global_position = aim + Vector3(0.0, 20.0, -(SHELL_RANGE - 80.0))
+	camera.look_at(aim, Vector3.UP)
+	await _far_settle()
+	_gate_ok("closer in, it has its body back", _shell_bodies.has(far_id)
+			and not _shell_far.has(far_id))
+
+	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Frames until the shell streamer has had a full quiet pass over the register.
+func _far_settle() -> void:
+	var last := -1
+	var quiet := 0
+	for i in 1200:
+		await RenderingServer.frame_post_draw
+		var n := _shells_made + _shells_freed + _shells_swapped + _far_on.size() \
+				+ _shell_far.size() + _shell_bodies.size()
+		quiet = quiet + 1 if n == last else 0
+		last = n
+		if quiet >= 90:
+			return
 
 
 ## How far away can a building be shot?
@@ -9057,7 +9352,7 @@ func _build_scenery() -> void:
 	# Every scripted pass drives the camera itself. Leaving the debug camera
 	# captured let it keep applying its own movement and mouse-look on top,
 	# which is why the reach probe reported misses at 40 m.
-	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _lod_mode
+	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
 			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode
 			or _windows_mode)
