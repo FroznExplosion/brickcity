@@ -64,6 +64,7 @@ void AINav::_bind_methods() {
     BIND_CONSTANT(HEAD_CROUCH);
     BIND_CONSTANT(STEP_UP);
     BIND_CONSTANT(MAX_DROP);
+    BIND_CONSTANT(SAFE_DROP);
 }
 
 // The caches are hash maps that grow to tens of thousands of entries, and a
@@ -358,12 +359,39 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
                     continue;
                 }
             }
+            // A drop that hurts lands on open floor: the columns either side of
+            // the landing stand at its height too. A column is a stud and a body
+            // is two, and a one-stud slot -- a window sill in a wall's thickness --
+            // took a path it could not follow, stuck on the floor above.
+            if (best_y < n.y - SAFE_DROP) {
+                // And the body has to get there: air in the landing column from
+                // the landing floor all the way up past where it steps off, plus
+                // a crouch. A short drop never needed this -- a body is taller
+                // than 9 plates -- but a storey's did: without it a path stepped
+                // off the second floor INTO the wall beside it, onto the sill of
+                // the window below, and the soldier walked into the wall forever.
+                if (best_head < (n.y - best_y) + HEAD_CROUCH) {
+                    continue;
+                }
+                bool open = true;
+                for (int e = 0; e < 4 && open; ++e) {
+                    if (_node_head(nx + DX[e], nz + DZ[e], best_y) < HEAD_CROUCH) {
+                        open = false;
+                    }
+                }
+                if (!open) {
+                    continue;
+                }
+            }
             float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::max(0, best_y - n.y) * PLATE;
             if (best_head < HEAD_STAND) {
                 step *= 2.0f;   // crouching is slow
             }
             if (best_y < n.y - STEP_UP) {
                 step += 0.5f;   // a drop is a commitment
+            }
+            if (best_y < n.y - SAFE_DROP) {
+                step += HURT_DROP_COST;   // and one that hurts, a last resort
             }
             const int64_t nk = nkey(nx, nz, best_y);
             const float ng = gn + step;
