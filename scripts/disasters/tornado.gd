@@ -194,6 +194,7 @@ func _on_phase(p: Phase) -> void:
 		Phase.DONE:
 			_sky = 0.0
 			ctx.set_sky(0.0, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
+			ctx.set_weather(0.0, 1.0, 1.0)
 			ctx.clear_hazard(HAZARD)
 			_wind.stop()
 			_roar.stop()
@@ -247,6 +248,8 @@ func _walk(dt: float) -> void:
 
 
 func _act(dt: float) -> void:
+	# Wind and dust, city-wide while it is on the ground.
+	ctx.set_weather(strength, 0.9, 1.8, intensity)
 	if strength <= 0.01:
 		return
 	_pull_pieces()

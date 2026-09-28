@@ -14,6 +14,8 @@ var cone_min := 1.2
 var settle := 1.6
 ## How often the error point wanders, seconds.
 var wander := 0.25
+## The weather's hand on the aim (AIServices.aim_mul): the cone, times this.
+var weather := 1.0
 
 var rng: RandomNumberGenerator
 var _tracking: Pawn
@@ -35,7 +37,7 @@ func track(target: Pawn, now: float) -> void:
 
 func cone_deg(now: float) -> float:
 	var t := clampf((now - _since) / settle, 0.0, 1.0)
-	return lerpf(cone_start, cone_min, t)
+	return lerpf(cone_start, cone_min, t) * weather
 
 
 func ready_to_fire(now: float) -> bool:
