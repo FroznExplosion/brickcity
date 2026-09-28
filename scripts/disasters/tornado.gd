@@ -345,8 +345,8 @@ func _place_visuals() -> void:
 	var ground := pos
 	_dust.global_position = ground + Vector3.UP * 0.5
 	var form := _form if phase != Phase.ENDING else strength
-	var show := phase == Phase.ACTIVE or phase == Phase.ENDING
-	_funnel.visible = show and form > 0.02
+	var showing := phase == Phase.ACTIVE or phase == Phase.ENDING
+	_funnel.visible = showing and form > 0.02
 	_orbit.visible = _funnel.visible
 	if _funnel.visible:
 		# Grows up out of the dust as it forms; thins and narrows as it ropes out.
@@ -358,9 +358,9 @@ func _place_visuals() -> void:
 		_orbit.scale = Vector3(_size, 1.0, _size) * maxf(form, 0.05)
 	if _roar != null:
 		_roar.global_position = ground + Vector3.UP * 5.0
-		if show and not _roar.playing:
+		if showing and not _roar.playing:
 			_roar.play()
-		_roar.volume_db = lerpf(-30.0, 4.0, form if show else 0.0)
+		_roar.volume_db = lerpf(-30.0, 4.0, form if showing else 0.0)
 
 
 func _loop(p: AudioStreamPlayer, db: float) -> void:

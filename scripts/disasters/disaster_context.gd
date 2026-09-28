@@ -77,7 +77,7 @@ func storeys_of(id: int) -> int:
 	var b = registry.get_building(id)
 	if b == null or b.is_build():
 		return 0
-	return int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+	return floori(float(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR)
 
 
 # --- Asking about the world -------------------------------------------------
