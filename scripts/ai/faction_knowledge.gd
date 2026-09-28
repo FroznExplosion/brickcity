@@ -11,10 +11,13 @@ class Contact:
 	var pos := Vector3.ZERO
 	var seen_at := -INF
 	var heard_at := -INF
-	## Seen this sensing pass.
+	## Seen by somebody on the side this sensing pass.
 	var visible := false
 	## A search of its last known position has been made and found nothing.
 	var searched := false
+	## Who on the side has it in sight: seer instance id -> true. One soldier
+	## losing sight of it does not blind the soldier beside him who still has it.
+	var seen_by := {}
 
 	func age(now: float) -> float:
 		return now - maxf(seen_at, heard_at)
@@ -23,18 +26,30 @@ class Contact:
 var contacts := {}   # pawn instance id (or -1 for an unknown noise) -> Contact
 
 
-func saw(pawn: Pawn, pos: Vector3, now: float) -> void:
+func saw(pawn: Pawn, pos: Vector3, now: float, seer: Object = null) -> void:
 	var c := _contact(pawn)
 	c.pos = pos
 	c.seen_at = now
 	c.visible = true
 	c.searched = false
+	c.seen_by[seer.get_instance_id() if seer != null else 0] = true
 
 
-func lost_sight(pawn: Pawn) -> void:
+func lost_sight(pawn: Pawn, seer: Object = null) -> void:
 	var key := pawn.get_instance_id()
 	if contacts.has(key):
-		(contacts[key] as Contact).visible = false
+		var c: Contact = contacts[key]
+		c.seen_by.erase(seer.get_instance_id() if seer != null else 0)
+		c.visible = not c.seen_by.is_empty()
+
+
+## A seer is gone (dead, removed): whatever it alone had in sight is out of sight.
+func forget_seer(seer: Object) -> void:
+	var id := seer.get_instance_id()
+	for k in contacts:
+		var c: Contact = contacts[k]
+		if c.seen_by.erase(id):
+			c.visible = not c.seen_by.is_empty()
 
 
 func heard(pawn: Pawn, pos: Vector3, now: float) -> void:
