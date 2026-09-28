@@ -2533,6 +2533,39 @@ func _topple(id: int) -> void:
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
 
 
+## The staircase goes with the floors it serves (Docs/Collapse.md 2.1). Its
+## blocks have no joint to any slab -- they are grounded by their own column,
+## down to the ground -- so a section breaking off left them standing, and fell
+## threaded on them: the shaft fits the stairwell exactly, and the section
+## caught on it and hung. Every live stair block inside the height of a group
+## leaving the building leaves with it.
+func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> PackedInt32Array:
+	if b.is_build() or b.fixtures.is_empty() or group.is_empty():
+		return group
+	var box := world.get_blocks_box(b.chunk, group)
+	var have := {}
+	for bid in group:
+		have[bid] = true
+	var dead := {}
+	for bid in world.get_dead_blocks(b.chunk):
+		dead[bid] = true
+	var out := group.duplicate()
+	for f in b.fixtures:
+		if f.kind != "staircase":
+			continue
+		for bid in f.blocks:
+			if have.has(bid) or dead.has(bid):
+				continue
+			var sb := world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+			if sb.size == Vector3.ZERO:
+				continue   # cut out already
+			var mid := sb.get_center().y
+			if mid >= box.position.y - 0.1 and mid <= box.end.y + 0.1:
+				out.append(bid)
+				have[bid] = true
+	return out
+
+
 ## A piece has just left building `id`: watch the hand-over (_handovers).
 func _note_handover(id: int, isl: BrickIsland) -> void:
 	if not _handovers.has(id):
@@ -4739,6 +4772,8 @@ func _physics_process(_delta: float) -> void:
 		for entry in plan:
 			var kind: StringName = entry[1]
 			var before: PackedInt32Array = entry[0]
+			if kind != &"furniture":
+				before = _with_stairs(b, before)
 			# Furniture is deleted where it is unless somebody is right there:
 			# it costs next to nothing and is not held to the spawn budget.
 			if kind != &"furniture":

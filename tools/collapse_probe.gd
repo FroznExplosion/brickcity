@@ -9,6 +9,8 @@ extends SceneTree
 ## fake   (2) a room's fake is redrawn when its building's structure changes:
 ##        a floor taken out while nobody was near, the building given back and
 ##        rebuilt, and no faked item is left standing on air.
+## stairs (4) a tower whose ground storey is gone but for its staircase does not
+##        stand on the staircase: nothing above is grounded through it.
 ## handover (3) sections cut off buildings -- some just promoted, bands still
 ##        building; some long built -- and no tick where a piece that left
 ##        draws nothing while its building has stopped (gap), nor where it
@@ -53,6 +55,8 @@ func _only(name: String) -> bool:
 
 func _run() -> void:
 	print("collapse probe")
+	if _only("stairs"):
+		_check_stairs()
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
 	await _ticks(30)
@@ -228,6 +232,23 @@ func _check_handover() -> void:
 		city._promote(id)
 		_undercut(id)
 	await _ticks(30 * 12)
+	# (4) in the city: no stair block is left standing above an undercut.
+	var stairs_left := 0
+	for id in used:
+		var b = city.registry.get_building(id)
+		if b.toppled or not b.is_materialised():
+			continue
+		var cut_y := (1 + 1 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M + 2.5
+		var dead := {}
+		for bid in city.world.get_dead_blocks(b.chunk):
+			dead[bid] = true
+		for f in b.fixtures:
+			for bid in f.blocks:
+				var sb: AABB = city.world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+				if not dead.has(bid) and sb.size != Vector3.ZERO and sb.get_center().y > cut_y:
+					stairs_left += 1
+	_ok("no stair left standing above a cut-off section", stairs_left == 0,
+			"%d stair block(s) above the cut" % stairs_left)
 	var hs: Dictionary = city.handover_stats
 	print("  --   %s" % [hs])
 	_ok("pieces left buildings", int(hs.count) > 0, "%d hand-over(s)" % hs.count)
@@ -235,3 +256,65 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+# --- (4) ------------------------------------------------------------------------
+
+## A tower of `courses` with its staircase, alone in a world of its own, built.
+func _stair_tower(courses: int) -> Array:
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	var fx := 30
+	var fz := 30
+	var id := reg.register(fx, fz, courses, Transform3D())
+	var sx := TowerRecipe.stair_line(fx)
+	var sz := TowerRecipe.stair_line(fz)
+	reg.add_fixture(id, "staircase", {"steps": StaircaseRecipe.steps_for_courses(courses),
+			"colour": 11}, Vector3i(sx, TowerRecipe.SLAB_PLATES, sz))
+	var chunk := reg.materialise(id)
+	return [w, reg, id, chunk]
+
+
+func _check_stairs() -> void:
+	print("stairs: a staircase does not hold a building up")
+	var t := _stair_tower(30)
+	var w: BrickWorld = t[0]
+	var reg: BuildingRegistry = t[1]
+	var chunk: int = t[3]
+	var stair := {}
+	for f in reg.get_building(t[2]).fixtures:
+		for bid in f.blocks:
+			stair[bid] = true
+	_ok("the tower has a staircase", stair.size() > 0, "%d stair blocks" % stair.size())
+	# Everything in the ground storey but the stairs, gone.
+	var storey := (1 + TowerRecipe.COURSES_PER_FLOOR * 3) * BrickPalette.PLATE_M
+	var kill := PackedInt32Array()
+	var above := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		if not bool(d.alive):
+			continue
+		var bid := int(d.block)
+		var y: float = (d.pos as Vector3).y
+		if y < storey - 0.2 and y > 0.2 and not stair.has(bid):
+			kill.append(bid)
+		elif y > storey + 0.5 and not stair.has(bid):
+			above += 1
+	w.kill_blocks(chunk, kill)
+	var grounded := w.solve_grounded(chunk)
+	var held := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		var bid := int(d.block)
+		if bool(d.alive) and not stair.has(bid) and (d.pos as Vector3).y > storey + 0.5 				and bid < grounded.size() and grounded[bid] != 0:
+			held += 1
+	_ok("with the ground storey gone but for the stairs, nothing above is grounded through them",
+			held == 0, "%d of %d block(s) above still grounded" % [held, above])
+	var stair_left := 0
+	for bx in w.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		var bid := int(d.block)
+		if bool(d.alive) and stair.has(bid) and bid < grounded.size() and grounded[bid] != 0:
+			stair_left += 1
+	print("  --   stair blocks still grounded: %d of %d" % [stair_left, stair.size()])
