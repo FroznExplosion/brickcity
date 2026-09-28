@@ -81,6 +81,12 @@ var outer := false
 ## it was worked out -- the diff only grows, so a changed count means stale.
 var fake_buffer := PackedFloat32Array()
 var fake_gone := -1
+## The building's structure_version when the fake was drawn. The gone count
+## alone missed a floor that fell out from under a room: items are only written
+## off (their floor gone) BY a redraw, so the count never moved, the cache was
+## kept, and the room's furniture was drawn standing on air -- through the
+## building being given back and rebuilt, too.
+var fake_stamp := -1
 ## Real because a blast reached it, not because somebody walked in. Such a room
 ## holds half-broken furniture, and a drawing can only show an item whole or
 ## not at all -- so it stays real until the old sleep range rather than

@@ -71,6 +71,11 @@ class Building:
 	## -- for a save file, or a rebuild mode -- but nothing may materialise or
 	## shell it again, because the bricks already exist somewhere in the world.
 	var toppled := false
+	## Bumped by every change to its blocks -- a hit, a detach, a cut. Caches
+	## drawn from its structure (a room's fake) are stamped with it and redrawn
+	## when it moves on. Kept across being given back and rebuilt, because the
+	## damage is (Docs/Collapse.md 2.2).
+	var structure_version := 0
 	var recipe_version := 0
 	var blocks := 0               ## what the recipe would produce, known after one build
 	var materialised_at := 0      ## msec, for LRU de-materialisation
