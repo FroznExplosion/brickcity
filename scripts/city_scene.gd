@@ -7120,6 +7120,11 @@ func _run_far_pass() -> void:
 	_gate_ok("no building is left undrawn", undrawn == 0, "%d undrawn" % undrawn)
 	_gate_ok("no building is drawn twice", twice == 0, "%d twice" % twice)
 	await _save("far_skyline")
+	if _far_on.is_empty():
+		# Nothing out there to shoot: a city too small for this pass.
+		print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
 
 	# The farthest far box, shot and left to settle the way the trim leaves one.
 	var far_id := -1
