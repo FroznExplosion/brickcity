@@ -59,6 +59,35 @@ func _init() -> void:
 			h[T.PUSH] < 0.03 and h[T.TAKE_COVER] + h[T.FALL_BACK] + h[T.COVER_RELOAD] > 0.6, _show(h))
 	_ok("and it is a draw, not a rule: more than one answer to the same situation",
 			h.filter(func(v): return v > 0.02).size() >= 2, _show(h))
+	# The judge (DecisionJudge.score), on made-up episodes.
+	var J := DecisionJudge
+	var calm := _ep(T.TAKE_COVER, {"has_cover": 1, "health": 1.0}, {"dealt": 30.0, "taken": 5.0})
+	var v := J.score(calm)
+	_ok("a call that dealt more than it took, cleanly, is good with a positive reward",
+			v.verdict == "good" and float(v.reward) > 0.0 and "traded_up" in v.flags, "%s" % [v])
+	var exposed := _ep(T.FIGHT_OPEN, {"has_cover": 1, "health": 0.8},
+			{"exposed_reload_s": 2.0, "taken": 20.0})
+	v = J.score(exposed)
+	_ok("reloading in sight of the enemy with cover to hand is stupid",
+			v.verdict == "stupid" and "reloaded_exposed" in v.flags, "%s" % [v])
+	var no_cover := _ep(T.FIGHT_OPEN, {"has_cover": 0, "health": 0.8},
+			{"exposed_reload_s": 2.0, "taken": 20.0})
+	v = J.score(no_cover)
+	_ok("the same with no cover anywhere is not called stupid, only costly",
+			not ("reloaded_exposed" in v.flags) and float(v.reward) < 0.0, "%s" % [v])
+	var rash := _ep(T.PUSH, {"has_cover": 1, "health": 0.2}, {"dealt": 0.0, "taken": 25.0, "died": true})
+	v = J.score(rash)
+	_ok("pushing at 20% health and dying is stupid, and dying costs more than any trade",
+			v.verdict == "stupid" and "pushed_hurt_or_alone" in v.flags
+			and float(v.reward) < -J.DEATH + 1.0, "%s" % [v])
+	var held := _ep(T.TAKE_COVER, {"has_cover": 1, "health": 1.0}, {"held_fire_s": 2.5})
+	v = J.score(held)
+	_ok("holding fire with the enemy point blank is stupid", "held_fire_point_blank" in v.flags,
+			"%s" % [v])
+	var flank := _ep(T.FLANK, {"has_cover": 1, "health": 0.9, "friends_shooting": 0.5},
+			{"dealt": 20.0, "taken": 0.0})
+	v = J.score(flank)
+	_ok("a flank that drew blood and lived paid off", "flank_paid_off" in v.flags, "%s" % [v])
 	print("[policy] %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -70,6 +99,17 @@ func _obs(vals: Dictionary) -> PackedFloat32Array:
 	for k in vals:
 		o[CombatPolicy.OBS_NAMES.find(k)] = float(vals[k])
 	return o
+
+
+## A closed episode as DecisionJudge.close leaves it: `obs` by name, the rest
+## defaulting to a quiet few seconds.
+func _ep(tactic: int, obs: Dictionary, got: Dictionary) -> Dictionary:
+	var ep := {"tactic": tactic, "obs": _obs(obs), "dealt": 0.0, "taken": 0.0, "died": false,
+			"seconds": 3.0, "stuck_s": 0.0, "danger_s": 0.0, "exposed_reload_s": 0.0,
+			"reloaded_in_cover": false, "held_fire_s": 0.0, "still_hit_s": 0.0,
+			"reloading_in_open_at_end": false, "kill": false}
+	ep.merge(got, true)
+	return ep
 
 
 ## Share of each tactic over many draws.

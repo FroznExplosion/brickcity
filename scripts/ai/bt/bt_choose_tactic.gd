@@ -36,19 +36,32 @@ func _tick(_delta: float) -> Status:
 	var threat := c.pos + Vector3.UP * CoverSearch.STAND_EYE
 	# The cover search is the expensive part of the observation, and the cover
 	# tactics use its answer: kept for them (BTFindCover reads it).
-	var cover := CoverSearch.find(s, so.pawn.feet(), threat)
+	# Cover it already has that still stands against much the same threat is
+	# kept -- one rating, not a ring search -- so a soldier re-deciding does not
+	# run off to new cover it did not need, and the decision stays in budget.
+	var cover: Dictionary = blackboard.get_var(&"cover", {}, false)
+	var kept := false
+	if not cover.is_empty() and threat.distance_to(blackboard.get_var(&"cover_threat", threat, false)) < 3.0:
+		var again := CoverSearch.rate(s, cover.cover, threat)
+		if not again.is_empty():
+			cover = again
+			kept = true
+	if not kept:
+		cover = CoverSearch.find(s, so.pawn.feet(), threat)
+		blackboard.set_var(&"cover_at", now)
+		if cover.is_empty():
+			blackboard.set_var(&"cover_fail_at", now)
 	blackboard.set_var(&"cover", cover)
-	blackboard.set_var(&"cover_at", now)
 	blackboard.set_var(&"cover_threat", threat)
-	if cover.is_empty():
-		blackboard.set_var(&"cover_fail_at", now)
 	var obs := CombatPolicy.observe(so, c, cover)
 	var was := so.tactic
 	so.tactic = s.policy.decide(obs, s.rng)
 	so.tactic_at = now
 	so.tactic_until = now + s.rng.randf_range(HOLD[0], HOLD[1])
 	so.tactic_done = false
-	s.log_decision(so, obs, so.tactic)
+	var logged := s.log_decision(so, obs, so.tactic)
+	if s.judge != null:
+		s.judge.open(so, obs, so.tactic, logged)
 	if so.tactic != was and LINES.has(so.tactic) and s.rng.randf() < 0.7:
 		var lines: Array = LINES[so.tactic]
 		s.say(so.pawn, CombatPolicy.TACTIC_NAMES[so.tactic], lines[s.rng.randi() % lines.size()])

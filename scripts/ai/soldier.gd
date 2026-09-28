@@ -68,8 +68,9 @@ var tactic_done := false
 var max_health := 100.0
 var hurt_at := -INF
 var _hp_seen := -1.0
-## When its gun last fired.
+## When its gun last fired, and the damage its rounds have done in all.
 var last_shot_at := -INF
+var dealt := 0.0
 ## A buddy's call for help: where to go, and until when it is worth going.
 var help_point := Vector3.INF
 var help_until := -INF
@@ -192,6 +193,8 @@ func _think() -> void:
 		hurt_at = now
 	_hp_seen = hp
 	brain.update(dt)
+	if services.judge != null:
+		services.judge.watch(self, dt)
 
 
 func can_see(h: Pawn) -> bool:
@@ -232,7 +235,11 @@ func _aim_and_fire(now: float) -> void:
 		it.look_pitch = ang.y
 		# The line has to be clear THIS tick -- sensing is 5 Hz, and a target
 		# that stepped behind a wall 150 ms ago is behind a wall.
+		# And from where the eye will be when the gun steps: on the move, the
+		# round leaves a tick later from a hand's breadth on -- past a wall's edge.
+		var next_eye := eye + pawn.body.velocity / float(Engine.physics_ticks_per_second)
 		var clear := services.ai_world.bricks_between(eye, at) == 0 \
+				and services.ai_world.bricks_between(next_eye, at) == 0 \
 				and not services.ai_world.smoke_blocks(eye, at)
 		it.fire = fire_ok and clear and aim.ready_to_fire(now) and _burst(now)
 	else:
@@ -249,6 +256,8 @@ func _burst(now: float) -> bool:
 func _on_fired(info: Dictionary) -> void:
 	shots += 1
 	last_shot_at = services.now()
+	if not info.is_empty() and info.get("result") != null:
+		dealt += (info.result as DamageSystem.DamageResult).dealt
 	# The gate's check, from the gun's side: was the line to what it was aimed
 	# at clear when the round left?
 	if _aim_target != null and is_instance_valid(_aim_target):
@@ -360,6 +369,8 @@ func _on_nav_changed(box: AABB) -> void:
 func _on_died() -> void:
 	_dead = true
 	fire_ok = false
+	if services.judge != null:
+		services.judge.close(self, "died")
 	knowledge().forget_seer(self)
 	# Somebody near says so.
 	for ally in allies():

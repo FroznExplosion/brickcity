@@ -17,6 +17,8 @@ const PEEK := [1.2, 2.0]
 const LOST := 3.0
 ## Seconds of cover left against the threat's gun at which to go.
 const LEAVE := 0.8
+## Closer than this, a soldier running for cover shoots as it goes.
+const FIRE_ON_THE_MOVE := 12.0
 
 var _peeking := false
 var _until := 0.0
@@ -42,10 +44,13 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	var at: Vector3 = cover.cover
 	var feet := so.pawn.feet()
-	# Not there yet: run for it, not firing.
+	# Not there yet: run for it -- and with the enemy in sight and close, firing
+	# on the move. Running nine metres past somebody three metres away without
+	# a shot is the kind of thing the judge calls stupid (DecisionJudge); at
+	# range, a run to cover is a run.
 	if not _peeking and Vector2(feet.x - at.x, feet.z - at.z).length() > 0.5:
 		so.state = "to cover"
-		so.fire_ok = false
+		so.fire_ok = c.visible and feet.distance_to(c.pos) < FIRE_ON_THE_MOVE
 		so.look_at_point(threat)
 		var r := so.move_to(at, true)
 		if r == -1 or so.stuck >= Soldier.MAX_STUCK:

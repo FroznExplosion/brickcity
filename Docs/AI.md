@@ -38,6 +38,8 @@ Prior art, read before this: [Reference/reddawn.md §12](Reference/reddawn.md#12
 | A18 | **Callouts are subtitles for now, with a talking marker over the speaker** when the player can both hear and see them. **Enemies: never through walls** (a possible upgrade later). **Friendlies: marked through walls** | §6.5 |
 | A19 | **A summoned mech landing on a building does massive damage** — the fall rule runs to the ground, no cap | §3.11 |
 | A20 | **Anything that damages or lands on a building activates it** — materialises it first, then breaks it | §3.2 |
+| A21 | **Nobody crouches.** Cover is what hides a standing body; a peek is a step out to its side. `AINav.set_stand_only`, on by default | §6.1 |
+| A22 | **The engage decision is a policy** — a versioned observation row in, one of six tactics out — scripted and weighted-random now, an ONNX model later. **Every decision is judged**: an outcome reward and a checklist of blunders | §11.4 |
 
 ---
 
@@ -713,6 +715,42 @@ limits — reaction delay, accuracy cap, attack tokens — so difficulty stays a
 - **Godot RL Agents** for the training loop; it trains, our extension infers.
 - **Train in an arena, not the city:** headless, high time scale, destruction as grid operations
   only, many instances. **Imitation first, reinforcement second.**
+
+---
+
+### 11.4 The engage decision, and how it is judged (A22)
+
+The first thing built for a model to take over, in the combat arena (`scenes/combat_arena.tscn`).
+Face to face with an enemy, a soldier asks `CombatPolicy` what to do: it hands over an
+**observation** — 14 numbers, each about 0..1 (cover found, how far, how long it lasts, already
+in cover, ammo, reloading, health, hurt just now, range, in sight, since seen, friends shooting,
+friends seeing, alone) — and gets back one of six **tactics**: fight in the open, take cover,
+reload in cover, push, flank, fall back. The tree does the tactic (§11.2: the model chooses, the
+tree clamps) and asks again when it is done, fails, the soldier is hurt, or its magazine runs low.
+
+- **The contract is `CombatPolicy.CONTRACT`**, versioned (`SPEC_VERSION`). `CombatPolicy.create()`
+  refuses a model whose declared contract differs and runs the scripted twin, loudly (§11.3).
+- **Scripted now: `ScriptedCombatPolicy`.** A score per tactic from a few readable rules, then a
+  weighted-random draw (softmax, `TEMPERATURE`), so the same situation does not always get the same
+  answer. `tools/combat_policy_probe.gd` checks the rules lean the right way over 2,000 draws.
+- **Every decision is logged** (`AIServices.decisions`; `-- --log-decisions=PATH` writes JSON lines
+  with the contract in the first): the imitation data (§11.3, "imitation first").
+
+**Good or stupid** (`DecisionJudge`). Each decision is an episode, closed at the next decision,
+death, or the end of the fight, and scored two ways:
+
+1. **Reward — what came of it**, in hit points: dealt − taken − 60 for dying − a little per second
+   stuck or reloading in sight. It is what happened, not an opinion, and what reinforcement
+   learning trains on. Noisy one decision at a time; read it as a mean per tactic over many.
+2. **Flags — what was wrong whatever the dice said**, judged on what the soldier knew when it chose.
+   *Blunders:* reloaded exposed with cover to hand, held fire at point blank, pushed hurt or alone,
+   stood in the open under fire with cover to hand, stuck, stood in marked danger, died reloading in
+   the open. *Good:* kill, flank paid off, reloaded in cover unhurt, traded up. A blunder makes the
+   verdict "stupid" — the decisions to leave out of imitation data, and a pointer to the rule to
+   retune. The same act with no better option (reloading in the open with no cover anywhere) only
+   costs reward.
+
+The arena HUD shows the running count; `--watch` and `--gate` print the table per tactic.
 
 ---
 

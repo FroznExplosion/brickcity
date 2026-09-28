@@ -22,6 +22,9 @@ var policy: CombatPolicy = CombatPolicy.create()
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []
+## What came of each one, and whether it was a stupid call (DecisionJudge).
+## Null turns judging off.
+var judge: DecisionJudge = DecisionJudge.new()
 const DECISIONS_KEPT := 4000
 ## What agents say (Docs/AI.md 6.5): (speaker: Pawn, key, text, range) -> void.
 ## Whoever shows lines to a player sets it; nothing is said with it unset.
@@ -57,11 +60,14 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 		on_say.call(speaker, key, text, range_m)
 
 
-func log_decision(who: Node, obs: PackedFloat32Array, tactic: int) -> void:
-	decisions.append({"t": now(), "who": who.get_instance_id(), "obs": obs,
-			"tactic": tactic, "policy": policy.policy_name()})
+## Log a decision; the judge fills in its reward and flags when it closes.
+func log_decision(who: Node, obs: PackedFloat32Array, tactic: int) -> Dictionary:
+	var d := {"t": now(), "who": who.get_instance_id(), "obs": obs,
+			"tactic": tactic, "policy": policy.policy_name()}
+	decisions.append(d)
 	if decisions.size() > DECISIONS_KEPT:
 		decisions = decisions.slice(decisions.size() - DECISIONS_KEPT)
+	return d
 
 
 ## A gunshot, an explosion, a collapse: everyone within `radius` of `point` on
