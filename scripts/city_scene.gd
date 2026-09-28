@@ -3557,12 +3557,23 @@ func _nav_on_command(e: DamageLog.Entry) -> void:
 		return  # pieces are re-read when they settle or go
 	if e.kind == DamageLog.Kind.LOAD or e.kind == DamageLog.Kind.UNLOAD:
 		return   # weight, not shape
+	# A chip is committed whether or not a brick died -- the hp it took is
+	# state -- and one that broke nothing changed nowhere anybody can walk.
+	# The hit itself says where it did break something (_nav_chip_broke).
+	if e.kind == DamageLog.Kind.CHIP:
+		return
 	match e.kind:
-		DamageLog.Kind.BLAST, DamageLog.Kind.CHIP, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
+		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
 			var r := Vector3.ONE * (e.radius + 1.0)
 			ai_nav.invalidate_box(AABB(e.point - r, r * 2.0))
 		_:
 			_nav_touch(e.target)
+
+
+## A round broke a brick: navigation is stale round it.
+func _nav_chip_broke(point: Vector3, radius: float) -> void:
+	var r := Vector3.ONE * (radius + 1.0)
+	ai_nav.invalidate_box(AABB(point - r, r * 2.0))
 
 
 ## A building changed what it is to the AI -- shell to bricks, bricks to shell.
@@ -4106,7 +4117,13 @@ func _start_arena(gate: bool) -> void:
 	arena.name = "Arena"
 	add_child(arena)
 	arena.setup(self)
-	if gate:
+	if "--watch" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		arena.invulnerable = true
+		_player.drive_uncaptured = true
+		await arena.begin()
+		await arena.run_watch()
+		get_tree().quit(0)
+	elif gate:
 		arena.invulnerable = true
 		_player.drive_uncaptured = true
 		await arena.begin()
@@ -4427,12 +4444,16 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 				authority.commit_entry(fe)
 				if hit_frame.is_empty():
 					continue
+				if chip_hp > 0:
+					_nav_chip_broke(point, radius)
 				b.hit = true
 				_disable_frame(b.id, fi, hit_frame)
 				_mark_dirty(b.id)
 				_queue_remesh(b.id)
 		if killed.is_empty():
 			continue
+		if chip_hp > 0:
+			_nav_chip_broke(point, radius)
 		b.hit = true
 		_mark_dirty(b.id)
 		# Both the collision update and the remesh are deferred to the end of

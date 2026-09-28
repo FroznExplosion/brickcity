@@ -278,6 +278,10 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             stat_failed++;
             return true;
         }
+        s.lo_x = std::min(s.start.x, s.goal.x) - 1;
+        s.hi_x = std::max(s.start.x, s.goal.x) + 2;
+        s.lo_z = std::min(s.start.z, s.goal.z) - 1;
+        s.hi_z = std::max(s.start.z, s.goal.z) + 2;
         const int64_t k0 = nkey(s.start.x, s.start.z, s.start.y);
         s.g[k0] = 0.0f;
         s.open.push_back(Open{ h(s.start), k0 });
@@ -310,6 +314,11 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             break;
         }
         stat_expansions++;
+        // A node reads its 2x2 and its neighbours' 2x2s.
+        s.lo_x = std::min(s.lo_x, n.x - 1);
+        s.hi_x = std::max(s.hi_x, n.x + 2);
+        s.lo_z = std::min(s.lo_z, n.z - 1);
+        s.hi_z = std::max(s.hi_z, n.z + 2);
         const uint64_t t_exp = now_usec();
         const int hn = _node_head(n.x, n.z, n.y);
         for (int d = 0; d < 8; ++d) {
@@ -517,11 +526,20 @@ void AINav::invalidate_box(const AABB &box) {
         }
     }
     revision++;
-    // A search that may have read those columns starts again.
+    // A search that may have read those columns starts again -- only one that
+    // may have. Restarting every search on every change starved the queue in a
+    // firefight: each round that broke a brick anywhere sent every path back to
+    // its first node, and one that needed more than a frame's budget never
+    // finished (the combat arena's soldiers stood still for want of one).
     for (auto &kv : searches) {
-        if (kv.second.status == PENDING && kv.second.started) {
-            kv.second.started = false;
+        Search &s = kv.second;
+        if (s.status != PENDING || !s.started) {
+            continue;
         }
+        if (x1 < s.lo_x || x0 > s.hi_x || z1 < s.lo_z || z0 > s.hi_z) {
+            continue;
+        }
+        s.started = false;
     }
     emit_signal("nav_changed", box);
 }

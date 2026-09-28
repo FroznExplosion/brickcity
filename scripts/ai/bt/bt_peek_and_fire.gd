@@ -43,7 +43,14 @@ func _tick(_delta: float) -> Status:
 		so.pawn.intents.crouch = false
 		so.look_at_point(threat)
 		var r := so.move_to(at, true)
-		return FAILURE if r == -1 else RUNNING
+		if r == -1 or so.stuck >= Soldier.MAX_STUCK:
+			# No way there, or a way the body cannot follow: this cover is out,
+			# and the search does not hand the same spot straight back.
+			so.stuck = 0
+			blackboard.set_var(&"cover", {})
+			blackboard.set_var(&"cover_fail_at", now)
+			return FAILURE
+		return RUNNING
 	# In it. Is it still cover? Checked every think -- one DDA -- and left while
 	# it still has LEAVE seconds in it: a soldier moves when its cover is being
 	# shot away, not after it is gone (AI.md 6.1, AIPlan P5).

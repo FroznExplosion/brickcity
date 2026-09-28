@@ -51,6 +51,12 @@ var peeks := 0
 var relocations := 0
 var cover_left_with := -1.0
 
+## Times in a row the current move has stopped getting anywhere and been
+## re-pathed. A path the nav believes in and the body cannot follow comes back
+## the same every time; a task watching this gives the goal up (MAX_STUCK).
+var stuck := 0
+const MAX_STUCK := 2
+
 var _next_sense := -INF
 var _next_think := -INF
 var _last_think := 0.0
@@ -263,8 +269,10 @@ func move_to(goal: Vector3, run := false) -> int:
 	if feet.distance_to(_stuck_from) > 0.4:
 		_stuck_from = feet
 		_stuck_at = now
+		stuck = 0
 	elif now - _stuck_at > STUCK_SECONDS:
 		_repath = true
+		stuck += 1
 	return 0
 
 
