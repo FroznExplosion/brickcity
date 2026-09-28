@@ -38,6 +38,9 @@ uniform vec4 shore_band = vec4(0.0);
 // BrickWave.swell_blend_uniform(): (near, far, drift, 0). Within `near` m of
 // a shore the swell rolls toward it; past `far` it is directional.
 uniform vec4 swell_blend = vec4(250.0, 400.0, 1.0, 0.0);
+// BrickWave.shore_calm_uniform(): wave strength at the waterline, and the
+// distance out at which it is full.
+uniform vec2 shore_calm = vec2(0.25, 150.0);
 // The sheet's wave LOD, by DISTANCE from the camera rather than by the ring a
 // vertex is in: two rings meeting at a border then draw the same height
 // there. The effective spacing is base_cell until inner_radius, and grows in
@@ -339,7 +342,7 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     // The wave strength by distance to the shore only: full out in the
     // water, a quarter at the beach (BrickWave swell_near_shore). No depth
     // clamp -- `taper` is 1.
-    float calm = 0.25 + 0.75 * smoothstep(0.0, 150.0, dist);
+    float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
     return wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band;
 }
 
