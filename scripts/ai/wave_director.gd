@@ -13,12 +13,21 @@ extends Node
 ## come down, or on a section that is still falling. When the focus is no
 ## longer fit to stand in, the fight moves to the nearest building that is.
 ##
-## The side's knowledge is told where the player is every few seconds -- the
-## wave has been sent at somebody -- so soldiers who cannot see the player go and
-## look (BTSearch) rather than standing where they appeared.
+## The soldiers are not told where the player is. A wave is SENT: when it starts
+## the side is given a rough fix (TIP_SPREAD metres out), and after that it
+## knows what it sees and hears -- and the player's gun is heard (PLAYER_NOISE).
+## Only if nobody on the side has had any contact for LOST_SECONDS is another
+## rough fix given, so a player who hides and stays quiet is looked for rather
+## than waited for.
+##
+## What a hit looks like is CombatFeedback's: hitmarkers, numbers, the flash,
+## the hurt edge, and the burst a body goes out in -- it does not stay.
 ##
 ## Keys: F7 the spawn survey overlay (green a spot taken, red one refused)
 ##       F8 the next wave now
+##
+## `-- --gate` is the scripted check; `-- --watch` prints what each soldier of a
+## wave is doing, second by second for 30 s, against a player standing still.
 
 const PLAYER_TEAM := 0
 const ENEMY_TEAM := 1
@@ -32,10 +41,28 @@ const INSIDE_SHARE := 0.6
 const SPAWN_EVERY := 0.6
 const BETWEEN_WAVES := 6.0
 const FIRST_WAVE_AFTER := 4.0
-const BODY_LINGER := 5.0
 const PLAYER_RESPAWN := 3.0
-const TELL_EVERY := 2.5
+## A rough fix on the player: this far out, and dated so that it is older than
+## the fight branch's 2.5 s (SoldierTree) -- a soldier goes to look, rather than
+## taking cover from somebody it has never seen.
+const TIP_SPREAD := 8.0
 const TIP_AGE := 3.0
+## Nobody on the side has seen or heard the player for this long: another fix.
+const LOST_SECONDS := 15.0
+## How far the player's gunfire carries (a soldier's is 40 m).
+const PLAYER_NOISE := 40.0
+## The arena's soldiers are slower on the trigger and looser than the AI's
+## defaults (AimModel): 0.35 s, 7 -> 1.2 degrees over 1.6 s.
+const AIM_REACTION := 0.7
+const AIM_CONE_START := 10.0
+const AIM_CONE_MIN := 2.6
+const AIM_SETTLE := 2.6
+## Health on the weapon specs' scale (GUN_QUALITY_NAMING_SPEC 7.2: gun damage
+## and enemy HP were divided by the same 10): a trash soldier takes about five
+## level-1 rifle rounds, a standard one about twelve. Pawn's default 100 is the
+## old scale's number, and made every soldier a sponge.
+const HP_TRASH := 45.0
+const HP_STANDARD := 113.0
 ## Ticks after a spawn its drop is measured at.
 const SETTLE_TICKS := 15
 ## Half a street out from a face.
@@ -68,12 +95,13 @@ var _wave_size := 0
 var _put_inside := 0
 var _next_spawn := 0.0
 var _next_wave := 0.0
-var _next_tell := 0.0
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
 var _start := Vector3.ZERO
-var _dead: Array = []   # [soldier, when]
+var feedback: CombatFeedback
+## The body of the last soldier to die (instance id), for the gate.
+var last_dead_id := 0
 var _player_dead_at := -1.0
 var _rng := RandomNumberGenerator.new()
 var _label: Label
@@ -103,6 +131,11 @@ func setup(p_city: Node3D) -> void:
 	var layer := CanvasLayer.new()
 	layer.add_child(_label)
 	add_child(layer)
+	feedback = CombatFeedback.new()
+	feedback.name = "Feedback"
+	add_child(feedback)
+	feedback.setup(city)
+	city._gun.fired.connect(_on_player_fired)
 
 
 ## Pick the focus, hold it as bricks, and put the player in the street.
@@ -128,6 +161,10 @@ func begin() -> void:
 		guard += 1
 	for i in 10:
 		await get_tree().physics_frame
+	# A rifle to start with (T still cycles): the pistol is the weakest thing
+	# in the game, and the first thing a player should hold is a fair fight.
+	city._gun_class = city.GUN_CLASSES.find(&"rifle")
+	city._equip_gun(&"rifle", city._combat_rng.randi())
 	city._enter_pawn(_start + Vector3.UP * 0.3)
 	_player().health.died.connect(_on_player_died)
 	_resurvey()
@@ -163,14 +200,10 @@ func _physics_process(_delta: float) -> void:
 			_resurvey()
 		_spawn_one()
 		_next_spawn = now + SPAWN_EVERY
-	if now >= _next_tell:
-		_next_tell = now + TELL_EVERY
-		var p := _player()
-		if p != null and not p.health.is_dead():
-			# Second-hand, and dated so: older than the fight branch's 2.5 s
-			# (SoldierTree), so a soldier who cannot see the player goes to look
-			# rather than taking cover from somebody it has never seen.
-			city.ai_services.knowledge_of(ENEMY_TEAM).heard(p, p.feet(), now - TIP_AGE)
+	if not alive.is_empty():
+		var c: FactionKnowledge.Contact = city.ai_services.knowledge_of(ENEMY_TEAM).of(_player())
+		if c == null or now - maxf(c.seen_at, c.heard_at) > LOST_SECONDS + TIP_AGE:
+			_tip()
 	if Engine.get_physics_frames() % 10 == 0:
 		_update_label()
 
@@ -182,6 +215,7 @@ func _start_wave() -> void:
 	_put_inside = 0
 	_next_spawn = _now()
 	survey.reset_counts()
+	_tip()
 	_resurvey()
 	print("[arena] wave %d: %d soldier(s), %d floor spot(s) in building %d" % [
 		wave, _left_to_spawn, _floors.size(), focus])
@@ -191,7 +225,8 @@ func _spawn_one() -> void:
 	# A quota, not a coin: inside while fewer than the share of those spawned
 	# so far (this one included) have been, so a wave mixes from its start.
 	var done := _wave_size - _left_to_spawn
-	var want_inside := not _floors.is_empty() 			and float(_put_inside) < INSIDE_SHARE * float(done + 1) - 0.01
+	var want_inside := not _floors.is_empty() \
+			and float(_put_inside) < INSIDE_SHARE * float(done + 1) - 0.01
 	var others: Array = []
 	for so in alive:
 		others.append(so.pawn)
@@ -234,6 +269,18 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
 			city._combat_rng.randi(), WeaponClass.builtin(cls), maxi(1, wave)))
 	var so := Soldier.spawn(city.ai_services, city, feet + Vector3.UP * 0.02, ENEMY_TEAM, gun)
+	so.aim.reaction = AIM_REACTION
+	so.aim.cone_start = AIM_CONE_START
+	so.aim.cone_min = AIM_CONE_MIN
+	so.aim.settle = AIM_SETTLE
+	var hp := HP_STANDARD if wave >= 3 and _rng.randi() % 3 == 0 else HP_TRASH
+	so.pawn.health.layer_configs[0].max_value = hp
+	so.pawn.health.reset()
+	# In its hands where it can be seen: its muzzle flash and its tracers are
+	# how the player tells who is shooting and from where.
+	gun.visible = true
+	gun.position = Vector3(0.2, -0.28, -0.3)
+	so.pawn.gun.fired.connect(_on_soldier_fired.bind(so))
 	var p := _player()
 	if p != null:
 		var to := p.feet() - feet
@@ -261,30 +308,60 @@ func _settle_check() -> void:
 			continue
 		var so: Soldier = s.soldier
 		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
-			s.drop = (s.feet as Vector3).y - so.pawn.feet().y
+			var now_at := so.pawn.feet()
+			var at: Vector3 = s.feet
+			# One that has walked off is not one that sank: its brain starts on
+			# its first tick, and a step down a kerb in half a second is a walk.
+			s.drop = 0.0 if Vector2(now_at.x - at.x, now_at.z - at.z).length() > 0.4 else at.y - now_at.y
 
 
 func _on_soldier_died(so: Soldier) -> void:
 	kills += 1
 	alive.erase(so)
-	_dead.append([so, _now()])
+	# Gone at once, in a burst of its own colour: a body that stood where it
+	# died read as a soldier still standing there.
+	feedback.burst(so.pawn.feet(), Color(0.75, 0.25, 0.2))
+	last_dead_id = so.pawn.body.get_instance_id()
+	city.ai_services.pawns.erase(so.pawn)
+	city.soldiers.erase(so)
+	if so._path_id >= 0:
+		city.ai_nav.release(so._path_id)
+	so.pawn.body.call_deferred("queue_free")
 	if _left_to_spawn <= 0 and alive.is_empty():
 		_next_wave = _now() + BETWEEN_WAVES
 		print("[arena] wave %d cleared, %d kill(s)" % [wave, kills])
 
 
-## Bodies go after a while; the list of who can be seen loses them at once.
-func _reap(now: float) -> void:
-	for i in range(_dead.size() - 1, -1, -1):
-		var so: Soldier = _dead[i][0]
-		if now - float(_dead[i][1]) < BODY_LINGER:
-			continue
-		_dead.remove_at(i)
-		if not is_instance_valid(so):
-			continue
-		city.ai_services.pawns.erase(so.pawn)
-		city.soldiers.erase(so)
-		so.pawn.body.queue_free()
+## A soldier's round: what struck the player is shown, and from where.
+func _on_soldier_fired(info: Dictionary, so: Soldier) -> void:
+	var p := _player()
+	if info.is_empty() or info.get("result") == null or p == null:
+		return
+	if info.get("collider") == p.body and is_instance_valid(so):
+		var r: DamageSystem.DamageResult = info.result
+		feedback.player_hurt(r.dealt, so.eye_pos())
+
+
+## The player's round: the marks, and the noise -- it is heard where it is fired.
+func _on_player_fired(info: Dictionary) -> void:
+	feedback.on_player_shot(info)
+	var p := _player()
+	if p != null and city._player.is_possessing():
+		city.ai_services.noise(p.eye.global_position, PLAYER_NOISE, p)
+
+
+## A rough fix on the player for the side: TIP_SPREAD out, and TIP_AGE old.
+func _tip() -> void:
+	var p := _player()
+	if p == null or p.health.is_dead():
+		return
+	var a := _rng.randf() * TAU
+	var off := Vector3(cos(a), 0.0, sin(a)) * _rng.randf_range(0.0, TIP_SPREAD)
+	var at: Vector3 = city.ai_nav.snap(p.feet() + off)
+	city.ai_services.knowledge_of(ENEMY_TEAM).heard(p, at, _now() - TIP_AGE)
+
+
+func _reap(_now_s: float) -> void:
 	# Anyone who fell out of the world is dead too.
 	for so in alive.duplicate():
 		if not is_instance_valid(so) or so.pawn == null or not is_instance_valid(so.pawn):
@@ -471,27 +548,56 @@ func run_gate() -> void:
 	# They were sent at the player: somebody finds them and fires.
 	await _until(func() -> bool:
 		return first.any(func(s): return is_instance_valid(s.soldier) and (s.soldier as Soldier).shots > 0),
-		20.0)
+		40.0)
 	var shots := 0
 	for s in first:
 		if is_instance_valid(s.soldier):
 			shots += (s.soldier as Soldier).shots
 	ok.call("the wave hunts the player and fires at it", shots > 0, "%d round(s)" % shots)
-	# And the player's gun works on them: aim at one in sight and hold.
+	# They move: off their spawn point, to cover, across the line in the open.
+	await _frames(300)
+	var moved := []
+	var stayed := []
+	for sp in first:
+		var so: Soldier = sp.soldier
+		if not is_instance_valid(so) or so.is_dead():
+			continue
+		var f := so.pawn.feet()
+		var at: Vector3 = sp.feet
+		var d := Vector2(f.x - at.x, f.z - at.z).length()
+		(moved if d > 2.0 else stayed).append(snappedf(d, 0.1))
+	ok.call("they move: %d of %d are more than 2 m from where they appeared" % [
+			moved.size(), moved.size() + stayed.size()],
+			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,
+			"moved %s, stayed %s" % [moved, stayed])
+	# And the player's gun works on them, and says so: fire at whoever is in
+	# sight until one drops.
 	await _until(func() -> bool: return _soldier_in_sight() != null, 20.0)
+	var marks := feedback.hits
+	var numbers := feedback.numbers_shown
+	var kills0 := feedback.kills_shown
+	var t_fire := _now()
 	var target := _soldier_in_sight()
 	if target != null:
-		var hp := target.pawn.health.total_current()
-		city.camera.look_at(target.pawn.chest(), Vector3.UP)
-		city._gun.set_trigger(true)
-		for i in 40:
-			if not is_instance_valid(target) or target.is_dead():
-				break
-			city.camera.look_at(target.pawn.chest(), Vector3.UP)
+		var shot_hit := false
+		_mouse(true)
+		while feedback.kills_shown == kills0 and _now() - t_fire < 12.0:
+			var t := _soldier_in_sight()
+			if t != null:
+				city.camera.look_at(t.pawn.chest(), Vector3.UP)
 			await get_tree().physics_frame
-		city._gun.set_trigger(false)
-		var now_hp := target.pawn.health.total_current() if is_instance_valid(target) else 0.0
-		ok.call("the player's gun hurts a soldier", now_hp < hp, "%.0f -> %.0f" % [hp, now_hp])
+			if feedback.hits - marks == 2 and not shot_hit and DirAccess.dir_exists_absolute("res://shots"):
+				shot_hit = true
+				await city._save("arena_hit")
+		_mouse(false)
+		ok.call("the player's gun kills a soldier", feedback.kills_shown > kills0,
+				"%d hit(s) in %.1f s" % [feedback.hits - marks, _now() - t_fire])
+		ok.call("each hit shows a hitmarker and a number",
+				feedback.hits > marks and feedback.numbers_shown - numbers == feedback.hits - marks,
+				"%d marker(s), %d number(s)" % [feedback.hits - marks, feedback.numbers_shown - numbers])
+		await _frames(3)
+		ok.call("the dead soldier is gone, not standing where it died",
+				last_dead_id != 0 and instance_from_id(last_dead_id) == null)
 		await _frames(10)
 		if DirAccess.dir_exists_absolute("res://shots"):
 			await city._save("arena_fight")
@@ -574,6 +680,15 @@ func run_gate() -> void:
 	print("[arena] refused on the way: %s" % [survey.refused])
 
 
+## The left button, as the OS would press it: PlayerController reads the
+## button every frame, so a trigger set any other way is let go at once.
+func _mouse(down: bool) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_LEFT
+	e.pressed = down
+	Input.parse_input_event(e)
+
+
 ## A living soldier the player's eye has a clear line to, or null.
 func _soldier_in_sight() -> Soldier:
 	var p := _player()
@@ -588,6 +703,32 @@ func _soldier_in_sight() -> Soldier:
 		if city.get_world_3d().direct_space_state.intersect_ray(q).is_empty():
 			return so
 	return null
+
+
+## `-- --arena --watch`: what the soldiers do, second by second, for a
+## wave against a player who stands still.
+func run_watch() -> void:
+	_next_wave = 0.0
+	var last := {}
+	var moved := {}
+	var states := {}
+	for sec in 30:
+		await _frames(30)
+		var line := "t%02d" % sec
+		for so in alive:
+			var k := so.get_instance_id()
+			var f := so.pawn.feet()
+			if last.has(k):
+				moved[k] = float(moved.get(k, 0.0)) + Vector2(f.x - last[k].x, f.z - last[k].z).length()
+			last[k] = f
+			states[so.state] = int(states.get(so.state, 0)) + 1
+			var c := so.contact()
+			line += " | %s %.1fm vis %s path %d/%d st %d" % [so.state, float(moved.get(k, 0.0)),
+					c.visible if c != null else false, so._wp, so._path.size(),
+					city.ai_nav.get_status(so._path_id) if so._path_id >= 0 else -9]
+		print(line)
+	print("[watch] states %s" % [states])
+	print("[watch] metres moved %s" % [moved.values()])
 
 
 func _of_wave(n: int) -> Array[Dictionary]:

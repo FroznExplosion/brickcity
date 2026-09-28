@@ -137,6 +137,9 @@ private:
         int max_expansions = 60000;
         PackedVector3Array path;
         uint32_t revision = 0;
+        // The columns it has read so far, as a box: an invalidation outside it
+        // cannot have changed anything this search knows.
+        int lo_x = 0, hi_x = -1, lo_z = 0, hi_z = -1;
     };
 
     Ref<AIWorld> ai;

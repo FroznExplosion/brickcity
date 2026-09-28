@@ -75,6 +75,10 @@ func best(now: float) -> Contact:
 	return out
 
 
+func of(pawn: Pawn) -> Contact:
+	return contacts.get(pawn.get_instance_id() if pawn != null else -1)
+
+
 func _contact(pawn: Pawn) -> Contact:
 	var key := pawn.get_instance_id() if pawn != null else -1
 	if not contacts.has(key):
