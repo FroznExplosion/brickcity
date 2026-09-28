@@ -2516,6 +2516,14 @@ static int g_coarse_smooth_step = 8;
 /// enough to cover the step between two levels on the steepest ground the
 /// field makes over one coarse cell (Terrain.md 19.15).
 constexpr float EDGE_SKIRT_M = 4.0f * BRICK_M;
+
+/// A coarse block's edge skirt, scaled to its sample spacing (19.17): the
+/// next ring out samples twice as far apart, and on a 45-degree hill two
+/// samples that far apart differ by that much in height. 1.68 m fixed left
+/// gaps at every blocky-to-smooth and smooth-to-smooth border on steep ground.
+static inline float coarse_skirt_m(int step) {
+    return std::max(EDGE_SKIRT_M, 2.0f * (float)step * STUD_M);
+}
 void BrickTerrain::set_coarse_smooth_step(int step) { g_coarse_smooth_step = std::max(step, 0); }
 int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
 
@@ -2584,7 +2592,7 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         }
     }
     // The skirt: each edge vertex, and a copy two bricks below it.
-    const float drop = EDGE_SKIRT_M;
+    const float drop = coarse_skirt_m(step);
     auto skirt = [&](int ax, int az, int bx, int bz, const Vector3 &out) {
         const Vector3 pa = m.verts[ax + V * az];
         const Vector3 pb = m.verts[bx + V * bz];
@@ -2598,6 +2606,10 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
         m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
             Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
+            Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
+        // And from the other side: a border is looked at from both levels.
+        m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
+            Vector3(pb.x, pb.y - drop, pb.z), Vector3(pa.x, pa.y - drop, pa.z), pa, pb,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
     };
     for (int k = 0; k < N; ++k) {
@@ -2715,7 +2727,7 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                 if (nx < 0 || nz < 0 || nx >= N || nz >= N) {
                     // The block's edge: deep enough to meet whatever the
                     // neighbouring level stands at, finer or coarser.
-                    ny = y - EDGE_SKIRT_M;
+                    ny = y - coarse_skirt_m(step);
                 } else {
                     ny = cell[(size_t)nx + (size_t)N * nz];
                 }
@@ -2731,6 +2743,15 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                     Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
                     Vector2(0, wall.y), Vector2(wall.x, wall.y),
                     Vector2(wall.x, 0), Vector2(0, 0));
+                if (edge) {
+                    // The block's edge is a skirt over the next level, and a
+                    // border is looked at from both sides.
+                    m.raw_quad(Vector3(0, 1, 0), col, face,
+                        Vector3(e.bx, ny, e.bz), Vector3(e.ax, ny, e.az),
+                        Vector3(e.ax, y, e.az), Vector3(e.bx, y, e.bz),
+                        Vector2(0, wall.y), Vector2(wall.x, wall.y),
+                        Vector2(wall.x, 0), Vector2(0, 0));
+                }
             }
         }
     }
