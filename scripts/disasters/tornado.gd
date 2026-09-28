@@ -48,6 +48,7 @@ const SHEAR_SHARE := 0.5          ## of facade hits, how many tear a clump off
 const SHEAR_RADIUS := 0.9
 const FORM_S := 4.0               ## s to form at the start of ACTIVE
 const WALK := 5.0                 ## m/s along its path
+const HOLD_MS := 1500             ## a piece the wind has let go of may settle this long after
 const HAZARD := 0                 ## this disaster's hazard id
 
 const SKY_SUN := Color(0.78, 0.82, 0.72)
@@ -272,7 +273,7 @@ func _pull_pieces() -> void:
 			continue
 		if isl.settled:
 			if wake_now:
-				ctx.wake_piece(isl)
+				ctx.hold_awake(isl, HOLD_MS)
 			continue
 		var f := strength * (1.0 - r / _lift_r)
 		var flat := Vector3(rel.x, 0.0, rel.z)
@@ -292,6 +293,9 @@ func _pull_pieces() -> void:
 		body.linear_velocity = v
 		body.sleeping = false
 		pieces_pulled[isl.chunk] = true
+		# In the wind it is slow at the top of its climb and touching nothing:
+		# not at rest. It may not settle until the wind has let it go.
+		ctx.hold_awake(isl, HOLD_MS)
 		fastest_piece = maxf(fastest_piece, v.length())
 
 

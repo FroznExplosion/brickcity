@@ -529,3 +529,45 @@ Intensity at 1 is exactly what each disaster was before; at other values:
 
 A seed at intensity 1 is the same disaster it always was; at another intensity it is its own,
 still deterministic, disaster — more meteors draw more numbers.
+
+---
+
+## 12. Real bricks, and pieces that sleep in mid-air (2026-09-28)
+
+**Lightning went for the recipe.** "Tallest nearby" read the recipe's box, so a building with its
+top half blown away still had its roof, and the stroke's ray down only reached 30 m below that —
+it hit the air. Now `ctx.top_of(box)` rays straight down at the middle and near the four corners
+and takes the highest thing hit; `tallest_near` compares those real tops; the stroke rays from
+above its target all the way to the ground. Probe: the tallest tower cut in half reads 15.1 m (its
+roof was 35.1 m), lightning aims there, and a stroke from above lands on bricks.
+
+**Fire burned the air.** Two causes. `MaterialFx.brick_at` answered PLA for any point inside a
+materialised building's box, bricks or not — fixed there (it also served impact sounds). And a
+building the city had given its bricks back to — far away, damage kept in its record — read as
+whole from its recipe. Fire's `ctx.material_at` now counts a brick only where building collision
+(`Layers.STRUCTURE`) is: the damage lives in the collision either way. Fire's cached flammability
+expires after 4 s, and "a building catches" finds a real wall by a ray in from the facade,
+dropping a storey at a time if the one it rolled is gone.
+
+**Pieces frozen in mid-air.** The settle rule was: slow for 0.7 s, then rays down from the
+underside — nothing under it, a nudge down instead of a freeze, but after `SUPPORT_TRIES` (3) it
+settled anyway, so that a beam wedged across a gap could rest. A tornado holds a piece slow at the
+top of its climb with nothing under it: three tries, frozen, left hanging when the wind moved on.
+Three changes in `IslandManager`:
+
+1. **Touching nothing is never settling.** The wedged-beam allowance now needs the piece to be
+   touching something — one box query, `TOUCH_MARGIN` 0.15 m round its box. A piece touching
+   nothing is nudged down again and again until it lands (`floating_refused` counts these).
+2. **`hold_awake(piece, ms)`**: something outside physics holding a piece up — the tornado's wind —
+   keeps it from settling until the hold runs out (1.5 s after the wind lets go), and wakes it if it
+   had settled. `BrickIsland.hold_until_ms`.
+3. **A watchdog.** `AUDIT_PER_TICK` (4) settled pieces a tick, round-robin, are asked the same two
+   questions — anything under it? anything touching it? — and a piece that answers no to both is
+   woken and falls (`audit_woken`). It catches every other way support goes without a ripple.
+
+`tools/float_probe.gd` checks all three: a piece held still in the air past its tries is not
+frozen, and falls and settles on the ground once let go; the watchdog finds a piece frozen 15 m up
+and it falls, while one frozen on the ground is left alone; a held piece does not settle until the
+hold runs out. After a tornado the disaster probe finds **0 of 31 settled pieces floating** — with
+`hold_awake` in, the tornado never got as far as a refused settle or a watchdog wake in that run,
+so the direct evidence for (1) and (3) is `float_probe`'s.

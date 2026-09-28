@@ -104,10 +104,13 @@ func ray(from: Vector3, to: Vector3) -> Dictionary:
 	return {"position": hit.position, "normal": hit.normal, "layer": layer}
 
 
-## The tallest standing building whose footprint centre is within `radius` of
-## `point` (on the ground plane). {} when there is none; otherwise
-## {"building": id, "box": AABB, "top": the roof's centre}. Reads recipes, so it
-## costs nothing and materialises nothing.
+## The standing building whose REAL top is highest, of those whose footprint
+## centre is within `radius` of `point` (on the ground plane). {} for none;
+## otherwise {"building": id, "box": AABB, "top": its highest brick}.
+##
+## Real, not the recipe's: a building half blown away is as tall as what is
+## left of it. The recipe box was the first answer, and lightning went for the
+## roof of a building that no longer had one -- and hit the air.
 func tallest_near(point: Vector3, radius: float) -> Dictionary:
 	var best := {}
 	var best_top := -INF
@@ -119,9 +122,34 @@ func tallest_near(point: Vector3, radius: float) -> Dictionary:
 		var c := box.get_center()
 		if Vector2(c.x - point.x, c.z - point.z).length_squared() > r2:
 			continue
-		if box.end.y > best_top:
-			best_top = box.end.y
-			best = {"building": b.id, "box": box, "top": Vector3(c.x, box.end.y, c.z)}
+		if box.end.y <= best_top:
+			continue   # cannot beat it even whole
+		var top := top_of(box)
+		if not top.is_empty() and (top.position as Vector3).y > best_top:
+			best_top = (top.position as Vector3).y
+			best = {"building": b.id, "box": box, "top": top.position}
+	return best
+
+
+## The highest thing on a footprint, by rays straight down at its middle and
+## near its four corners: {"position", "normal"}, or {} if every ray reached
+## the ground. An intact building answers its roof (through its recipe if it
+## has no bricks yet); a broken one, whatever is left standing highest.
+func top_of(box: AABB) -> Dictionary:
+	var best := {}
+	var best_y := -INF
+	var c := box.get_center()
+	var hx := box.size.x * 0.5 - 0.6
+	var hz := box.size.z * 0.5 - 0.6
+	for off in [Vector2.ZERO, Vector2(-hx, -hz), Vector2(hx, -hz), Vector2(-hx, hz), Vector2(hx, hz)]:
+		var from := Vector3(c.x + off.x, box.end.y + 5.0, c.z + off.y)
+		var hit := ray(from, Vector3(from.x, box.position.y + 0.3, from.z))
+		if hit.is_empty():
+			continue
+		var y: float = (hit.position as Vector3).y
+		if y > best_y:
+			best_y = y
+			best = hit
 	return best
 
 
@@ -159,7 +187,18 @@ func ignite(point: Vector3, heat: float) -> bool:
 
 ## Material index of the brick at `point`, -1 for none. Walks every building:
 ## callers that ask often must cache (Docs/Disasters.md section 5.3).
+##
+## A brick only where building collision actually is. The lookup alone answers
+## PLA anywhere in a building whose bricks are not loaded -- and the city gives
+## a far building's bricks back, damage and all, so a building with its top
+## blown off read as whole to fire, which caught in the air. Collision is what
+## the damage is kept in either way (bricks, or the damaged shell).
 func material_at(point: Vector3) -> int:
+	var q := PhysicsPointQueryParameters3D.new()
+	q.position = point
+	q.collision_mask = Layers.STRUCTURE
+	if city.get_world_3d().direct_space_state.intersect_point(q, 1).is_empty():
+		return -1
 	return city._material_fx.material_at(point)
 
 
@@ -175,6 +214,12 @@ func islands_near(point: Vector3, radius: float) -> Array[BrickIsland]:
 
 func wake_near(point: Vector3, radius: float) -> void:
 	islands.wake_near(point, radius)
+
+
+## Keep a piece from settling for `ms` -- it is being held up by wind, not by
+## anything under it -- waking it if it has settled. IslandManager.hold_awake.
+func hold_awake(isl: BrickIsland, ms: int) -> void:
+	islands.hold_awake(isl, ms)
 
 
 ## Wake one settled piece so it can be moved again.

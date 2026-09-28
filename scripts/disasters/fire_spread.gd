@@ -74,8 +74,11 @@ var cells: Array[Cell] = []
 var _by_key := {}
 ## Cells that have burnt out: they do not catch again.
 var _burnt := {}
-## Flammability per cell key, sampled once (material_at walks every building).
+## Flammability per cell key: [flammability, the tick it was sampled]. Kept
+## FLAM_TTL ticks -- material_at walks every building, but what was a wall a
+## moment ago may be air now, and air does not burn.
 var _flam := {}
+const FLAM_TTL := 120
 var _tick := 0
 var _douse := 0.0
 
@@ -151,15 +154,15 @@ static func flammability(material: int) -> float:
 ## How well cell `k` burns: the most flammable brick among a few points in it --
 ## the middle, the floor, and the four walls' planes -- or 0 for none.
 func flam_at(k: Vector3i) -> float:
-	if _flam.has(k):
-		return _flam[k]
+	if _flam.has(k) and _tick - int(_flam[k][1]) < FLAM_TTL:
+		return float(_flam[k][0])
 	var c := centre_of(k)
 	var h := CELL * 0.5
 	var best := 0.0
 	for off in [Vector3.ZERO, Vector3(0, -h.y + 0.1, 0), Vector3(h.x - 0.2, 0, 0),
 			Vector3(-h.x + 0.2, 0, 0), Vector3(0, 0, h.z - 0.2), Vector3(0, 0, -h.z + 0.2)]:
 		best = maxf(best, flammability(int(material_at.call(c + off))))
-	_flam[k] = best
+	_flam[k] = [best, _tick]
 	return best
 
 

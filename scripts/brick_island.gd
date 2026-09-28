@@ -106,6 +106,11 @@ var ripple_pending := false
 ## Times it was about to settle with nothing under it and was nudged instead
 ## (IslandManager.SUPPORT_TRIES).
 var unsupported_tries := 0
+## Something outside physics is holding this piece up or pushing it about --
+## a tornado's wind -- until this time (Time.get_ticks_msec). It does not settle
+## before then, however slow it is: slow in the wind is not at rest.
+## IslandManager.hold_awake.
+var hold_until_ms := 0
 ## Ticks in a row it has been going faster than IMPACT_MIN_SPEED, up to the
 ## last one: what makes a speed drop a landing rather than a jolt.
 var fall_ticks := 0

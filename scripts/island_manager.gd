@@ -108,6 +108,20 @@ const RIPPLE_MARGIN := 0.35
 const SUPPORT_REACH := 1.5
 const SUPPORT_TRIES := 3
 const SUPPORT_NUDGE := 1.5
+## ...but SUPPORT_TRIES is only for a piece that is TOUCHING something. Past its
+## tries a piece with nothing under it used to settle anyway -- right for a beam
+## wedged across a gap, wrong for a piece held up by nothing at all. A tornado
+## holds pieces slow in mid-air; they ran out of tries there, froze, and hung
+## in the sky once it had gone. Now a piece that touches nothing -- no body
+## within TOUCH_MARGIN of its box -- is never frozen, however many tries: it is
+## nudged down again and again until it lands on something.
+const TOUCH_MARGIN := 0.15
+## And the WATCHDOG, for everything else that takes support away without a
+## ripple: every tick AUDIT_PER_TICK settled pieces, round-robin, are asked the
+## same two questions -- anything under it? anything touching it? -- and a
+## piece that answers no to both is woken, and falls. Ten rays and a box query
+## each; a city's worth of settled pieces is audited every few seconds.
+const AUDIT_PER_TICK := 4
 var unsupported_nudges := 0
 const RIPPLE_START_SPEED := 0.6
 const RIPPLES_PER_TICK := 16
@@ -358,6 +372,12 @@ var settled_by_rule := 0          ## settled for staying slow, not for sleeping
 var far_landings := 0             ## landings too far from anyone to break the piece
 var far_shears := 0               ## things landed on too far from anyone to shear
 var merged_rebuilds := 0          ## falling pieces rebuilt merged after a change
+var floating_refused := 0         ## settles refused: nothing under, nothing touching
+var audit_woken := 0              ## settled pieces the watchdog found floating and woke
+var _audit_at := 0
+## Off only for probes that test another way of waking a floater.
+var audit_enabled := true
+var _touch_shape := BoxShape3D.new()
 var _reshape_list: Array[BrickIsland] = []
 var _sleep_jobs: Array = []       ## [island, record, edits when begun, for the cap]
 var settled_by_age := 0           ## settled because SETTLE_MAX_MS ran out
@@ -1924,6 +1944,58 @@ func _supported_below(isl: BrickIsland) -> bool:
 	return false
 
 
+## Is any other body within TOUCH_MARGIN of this piece's world box? One box
+## query. The box is axis-aligned round a piece that may be turned, so this
+## errs towards "touching" -- which only ever lets a wedged piece settle, never
+## freezes a floating one.
+func _touching_anything(isl: BrickIsland) -> bool:
+	if not isl.is_valid() or not isl.body.is_inside_tree():
+		return true
+	var box := world_aabb(isl)
+	if box.size == Vector3.ZERO:
+		return true
+	box = box.grow(TOUCH_MARGIN)
+	_touch_shape.size = box.size
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = _touch_shape
+	q.transform = Transform3D(Basis(), box.get_center())
+	q.collision_mask = isl.body.collision_mask | Layers.WORLD | Layers.STRUCTURE
+	q.exclude = [isl.body.get_rid()]
+	return not isl.body.get_world_3d().direct_space_state.intersect_shape(q, 1).is_empty()
+
+
+## The watchdog (AUDIT_PER_TICK): a few settled pieces a tick, round-robin.
+## Nothing under it and nothing touching it: it is not resting on anything, so
+## it is woken -- and falls, and settles again wherever it lands.
+func _audit_settled() -> void:
+	var n := islands.size()
+	if n == 0 or not audit_enabled:
+		return
+	var asked := 0
+	var looked := 0
+	while asked < AUDIT_PER_TICK and looked < n:
+		_audit_at = (_audit_at + 1) % n
+		looked += 1
+		var isl := islands[_audit_at]
+		if not isl.is_valid() or not isl.settled:
+			continue
+		asked += 1
+		if not _supported_below(isl) and not _touching_anything(isl):
+			wake(isl)
+			audit_woken += 1
+
+
+## Keep a piece from settling for `ms`: something outside physics -- wind -- is
+## holding it up or pushing it, and slow in the wind is not at rest. Wakes it if
+## it has settled already. See BrickIsland.hold_until_ms.
+func hold_awake(isl: BrickIsland, ms: int) -> void:
+	if not isl.is_valid():
+		return
+	isl.hold_until_ms = maxi(isl.hold_until_ms, Time.get_ticks_msec() + ms)
+	if isl.settled:
+		wake(isl)
+
+
 ## Freeze a piece where it is: what the tick does to one that has stayed slow
 ## long enough (SETTLE_SLOW_MS), and what a probe does to put one there.
 func settle_now(isl: BrickIsland) -> void:
@@ -2725,6 +2797,12 @@ func tick() -> void:
 			isl.ripple_pending = false
 			support_gone(isl.ripple_box)
 
+		# Held by something outside physics (hold_awake): not at rest, whatever
+		# its speed says.
+		if isl.hold_until_ms > 0 and now < isl.hold_until_ms:
+			isl.slow_since = 0
+			continue
+
 		var rested := isl.body.sleeping
 		var by_rule := false
 		var by_age := false
@@ -2746,10 +2824,14 @@ func tick() -> void:
 				rested = true
 				by_age = true
 		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK \
-				and isl.unsupported_tries < SUPPORT_TRIES and not isl.disposable \
-				and not _supported_below(isl):
+				and not isl.disposable and not _supported_below(isl) \
+				and (isl.unsupported_tries < SUPPORT_TRIES or not _touching_anything(isl)):
 			# Nothing under it: held by friction against what it came away from.
-			# A nudge down, and it is asked again when it is slow again.
+			# A nudge down, and it is asked again when it is slow again. Past its
+			# tries only if it touches something: a piece touching nothing is
+			# never frozen (TOUCH_MARGIN).
+			if isl.unsupported_tries >= SUPPORT_TRIES:
+				floating_refused += 1
 			isl.unsupported_tries += 1
 			unsupported_nudges += 1
 			isl.slow_since = 0
@@ -2772,6 +2854,7 @@ func tick() -> void:
 	census.landmarks_peak = maxi(census.landmarks_peak, moving_landmarks)
 	census.blocks_peak = maxi(census.blocks_peak, moving_blocks)
 	_moving_now = moving
+	_audit_settled()
 	_drain_ripples()
 	var _tp := Time.get_ticks_usec()
 	_dorm_wake_ms = 0.0

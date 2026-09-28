@@ -11,6 +11,9 @@ extends SceneTree
 ## removed, or that starts to move, is woken; a piece put to sleep for distance
 ## keeps what rests on it asleep too; a falling piece that lands on a frozen one
 ## wakes it; and a piece with no mesh still has a box to be found by.
+## A piece touching nothing is never frozen, however many support tries it has
+## used; the watchdog wakes one frozen in mid-air; hold_awake keeps a piece in
+## the wind from settling until it is let go.
 
 var _pass := 0
 var _fail := 0
@@ -128,6 +131,9 @@ func _run() -> void:
 
 	# --- a frozen piece in mid-air, landed on ------------------------------------
 	print("\na floater is landed on")
+	# The watchdog would find this floater on its own; off here, so it is the
+	# landing that has to wake it.
+	_m.audit_enabled = false
 	var floater := _piece(Vector3(60.0, 3.0, 0.0))
 	_m.settle_now(floater)
 	var fy := _y(floater)
@@ -141,6 +147,7 @@ func _run() -> void:
 	_ok("and it falls under the load instead of holding it up", _y(floater) < fy - 1.0,
 			"%.2f from %.2f" % [_y(floater), fy])
 	_ok("counted", _m.touch_woken >= 1, "%d" % _m.touch_woken)
+	_m.audit_enabled = true
 
 	# --- a piece on the ground, landed on -------------------------------------------
 	print("
@@ -195,6 +202,68 @@ wreckage on the ground is landed on")
 	var rest := _piece(Vector3(140.0, 0.05, 0.0))
 	await _ticks(2)
 	_ok("a piece on the ground is supported", _m._supported_below(rest))
+
+	# --- held up by nothing at all, past every try -----------------------------------
+	print("\na piece touching nothing is never frozen, however long it hangs")
+	var hung := _piece(Vector3(0.0, 20.0, 60.0))
+	await _ticks(2)
+	_ok("nothing touches it", not _m._touching_anything(hung))
+	hung.born_ms -= 20000
+	var refused0 := _m.floating_refused
+	var tries_seen := 0
+	for k in 30 * 6:
+		# Held still, as the wind holds a piece at the top of its climb.
+		hung.body.gravity_scale = 0.0
+		hung.body.linear_velocity = Vector3.ZERO
+		hung.body.angular_velocity = Vector3.ZERO
+		await _ticks(1)
+		tries_seen = maxi(tries_seen, hung.unsupported_tries)
+	_ok("past its SUPPORT_TRIES it is still not frozen", not hung.settled
+			and tries_seen > IslandManager.SUPPORT_TRIES and _m.floating_refused > refused0,
+			"%d tries, %d refused, settled %s" % [tries_seen, _m.floating_refused - refused0, hung.settled])
+	hung.body.gravity_scale = 1.0
+	var g4 := 0
+	while not hung.settled and g4 < 300:
+		await _ticks(1)
+		g4 += 1
+	_ok("let go, it falls and settles on the ground", hung.settled and _y(hung) < 3.0,
+			"y %.2f, settled %s after %d ticks" % [_y(hung), hung.settled, g4])
+
+	# --- frozen in mid-air: the watchdog ------------------------------------------------
+	print("\nthe watchdog wakes a piece frozen in mid-air")
+	var frozen := _piece(Vector3(20.0, 15.0, 60.0))
+	await _ticks(1)
+	_m.settle_now(frozen)
+	var woken0 := _m.audit_woken
+	var fz := _y(frozen)
+	var g5 := 0
+	while frozen.settled and g5 < 300:
+		await _ticks(1)
+		g5 += 1
+	_ok("it is found and woken", not frozen.settled and _m.audit_woken > woken0, "%d ticks" % g5)
+	await _ticks(60)
+	_ok("and falls", _y(frozen) < fz - 3.0, "%.2f from %.2f" % [_y(frozen), fz])
+	var ground_piece := _piece(Vector3(40.0, 0.05, 60.0))
+	await _ticks(30)
+	_m.settle_now(ground_piece)
+	await _ticks(90)
+	_ok("while a piece resting on the ground is left asleep", ground_piece.settled)
+
+	# --- held awake by wind --------------------------------------------------------------
+	print("\na piece held awake does not settle until let go")
+	var windy := _piece(Vector3(60.0, 0.05, 60.0))
+	await _ticks(30)
+	_m.hold_awake(windy, 2500)
+	await _ticks(45)
+	_ok("resting, but held: not settled", not windy.settled)
+	var g6 := 0
+	while not windy.settled and g6 < 180:
+		await _ticks(1)
+		g6 += 1
+	_ok("and settles once the hold runs out", windy.settled, "%d more ticks" % g6)
+	_m.settle_now(windy)
+	_m.hold_awake(windy, 500)
+	_ok("holding a settled piece wakes it", not windy.settled)
 
 	# --- a piece that is only furniture ----------------------------------------------
 	print("

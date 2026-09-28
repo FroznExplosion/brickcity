@@ -159,6 +159,10 @@ func brick_at(point: Vector3) -> Dictionary:
 					var m := world.get_block_material(f, bid)
 					return {"material": m,
 							"colour": BrickWorld.get_material_colour(m, world.get_block_colour(f, bid))}
+			# Its bricks exist, and none is here: this is air -- a room, or where
+			# a wall was blown out. Answering PLA for it let fire burn the air of
+			# a half-destroyed building. Another building's box may still hold it.
+			continue
 		elif b.is_build():
 			var r: BuildRecipe = b.build
 			var local: Vector3 = b.xform.affine_inverse() * point
@@ -171,6 +175,9 @@ func brick_at(point: Vector3) -> Dictionary:
 				if c.x >= at.x and c.y >= at.y and c.z >= at.z 						and c.x < at.x + sz.x and c.y < at.y + sz.y and c.z < at.z + sz.z:
 					var m := r.material_of(i)
 					return {"material": m, "colour": BrickWorld.get_material_colour(m, r.colour_of(i))}
+			continue
+		# A generated building with no bricks yet is intact, and solid as far as
+		# anyone can tell from its recipe.
 		return {"material": 0, "colour": BrickWorld.get_material_colour(0, 2)}
 	return {}
 
