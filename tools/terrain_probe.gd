@@ -1322,10 +1322,44 @@ func _check_wave() -> void:
 	_ok("the sea is calmer at the beach than out at sea, and not still",
 		near_amp < far_amp * 0.75 and near_amp > far_amp * 0.2,
 		"worst %.2f m near the shore, %.2f m 60-70 m out" % [near_amp, far_amp])
-	# (The shore band is off since 9.9 -- the swell itself is steered to the
-	# shore and dies down on the way in -- so its roll-in check is gone.)
-	if rolled:
-		pass
+	# The SWELL rolls in (9.9): near land it is phased on distance to the
+	# shore, so what is a metre further out now is a metre nearer a moment
+	# later -- the main component's lag, dist * k / omega. Measured on the
+	# full surface, where the smaller component and the groups only add noise.
+	var roll_fwd := 0.0
+	var roll_back := 0.0
+	var roll_at := Vector2.INF
+	for gx in range(-1500, 1500, 3):
+		for gz in [30, -200, 400, -600]:
+			var p := Vector2(float(gx) * 0.35, float(gz) * 0.35)
+			var dd := BrickWave.shore_distance(p.x, p.y)
+			if dd > 90.0 and dd < 110.0 and BrickWave.band_depth(p.x, p.y) > 2.0:
+				roll_at = p
+				break
+		if roll_at != Vector2.INF:
+			break
+	if roll_at != Vector2.INF:
+		var out_dir := Vector2.RIGHT
+		var best_d := -INF
+		for a in 16:
+			var dir := Vector2.RIGHT.rotated(TAU * float(a) / 16.0)
+			var dd := BrickWave.shore_distance(roll_at.x + dir.x * 3.0, roll_at.y + dir.y * 3.0)
+			if dd > best_d:
+				best_d = dd
+				out_dir = dir
+		var r2: Vector2 = roll_at + out_dir * 1.0
+		var ds := BrickWave.shore_distance(r2.x, r2.y) - BrickWave.shore_distance(roll_at.x, roll_at.y)
+		var wv := BrickWave.uniform_array()
+		var lag := ds * wv[0].y / wv[1].x
+		for n in 30:
+			var tt := 0.41 * float(n)
+			var there := BrickWave.height_at(r2.x, r2.y, tt)
+			roll_fwd += absf(there - BrickWave.height_at(roll_at.x, roll_at.y, tt + lag))
+			roll_back += absf(there - BrickWave.height_at(roll_at.x, roll_at.y, tt - lag))
+	rolled = roll_at != Vector2.INF and roll_fwd < roll_back * 0.5
+	_ok("the swell rolls in toward the shore", rolled,
+		"further out now vs nearer later %.3f m, vs nearer earlier %.3f m" % [
+		roll_fwd / 30.0, roll_back / 30.0])
 
 	# The ramp itself: dry ground gets no wave at all, and deep water gets
 	# most of one. Without the first a swell drives bricks through the beach;
