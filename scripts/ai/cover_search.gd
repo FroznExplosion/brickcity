@@ -18,6 +18,8 @@ extends RefCounted
 const CROUCH_CHEST := 0.78
 const CROUCH_EYE := 1.0
 const STAND_EYE := 1.42
+## A standing chest: what cover has to hide when nobody crouches (A21).
+const STAND_CHEST := 1.1
 ## What the threat is assumed to carry, when nobody knows: a rifle.
 const THREAT_HP := 68
 const THREAT_RATE := 7.5
@@ -39,4 +41,5 @@ static func rate(s: AIServices, p: Vector3, threat_eye: Vector3) -> Dictionary:
 ## Seconds the cover at `p` still has against the threat: what a soldier in it
 ## watches, and leaves before it runs out.
 static func life_at(s: AIServices, p: Vector3, threat_eye: Vector3) -> float:
-	return s.ai_world.cover_seconds(threat_eye, p + Vector3.UP * CROUCH_CHEST, THREAT_HP, THREAT_RATE)
+	var chest := STAND_CHEST if s.ai_nav.get_stand_only() else CROUCH_CHEST
+	return s.ai_world.cover_seconds(threat_eye, p + Vector3.UP * chest, THREAT_HP, THREAT_RATE)

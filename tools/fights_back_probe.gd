@@ -48,6 +48,9 @@ func _init() -> void:
 	s.ai_nav = AINav.new()
 	s.ai_nav.set_ai_world(s.ai_world)
 	s.sched = AIScheduler.new()
+	# The cover mechanics, not the engage decision's dice: the base policy
+	# always takes cover (CombatPolicy; the choice has its own probe).
+	s.policy = CombatPolicy.new()
 	s.world3d = root.get_world_3d()
 	s.on_structure_hit = _structure_hit
 	lib = GunPlaceholderParts.build_library()
@@ -72,7 +75,7 @@ func _init() -> void:
 	player_gun.fired.connect(func(info: Dictionary) -> void:
 		# In its first cover, while the wall is still a wall; once it has been
 		# shot full of holes, rounds through them are fair.
-		if so != null and is_instance_valid(so) and _stage == 0 and so.relocations == 0 				and so.state == "hide" and so.pawn.is_crouched():
+		if so != null and is_instance_valid(so) and _stage == 0 and so.relocations == 0 				and so.state == "hide":
 			_log["hide_rounds"] = int(_log.get("hide_rounds", 0)) + 1
 			if not info.is_empty() and info.result != null:
 				_log["hide_hits"] = int(_log.get("hide_hits", 0)) + 1)
@@ -155,9 +158,11 @@ func _retire(o: Soldier) -> void:
 # --- 1: cover shot away ----------------------------------------------------------
 
 func _stage_cover() -> void:
-	# A low wall three studs thick, three courses (1.26 m) high.
-	_bricks(Vector3i(-10, 0, -14), Vector3i(20, 3, 3))
-	so = _soldier(Vector3(0, 0, 1), 0.0)
+	# A wall three studs thick, five courses (2.1 m) high: cover for somebody
+	# standing (nobody crouches, Docs/AI.md A21).
+	_bricks(Vector3i(-10, 0, -14), Vector3i(20, 5, 3))
+	# Off the wall's end, the player in sight past it.
+	so = _soldier(Vector3(11, 0, 1), 0.0)
 	_log["hide_hp_lost"] = 0.0
 	_log["hide_ticks"] = 0
 
@@ -169,7 +174,7 @@ func _tick_cover(t: float) -> void:
 	player.intents.look_yaw = atan2(-to.x, -to.z)
 	player.intents.look_pitch = atan2(to.y, Vector2(to.x, to.z).length())
 	player.intents.fire = t > 3.0
-	if so.state == "hide" and so.pawn.is_crouched():
+	if so.state == "hide":
 		_log.hide_ticks = int(_log.hide_ticks) + 1
 		var hp := so.pawn.health.total_current()
 		if _log.has("hp_prev"):

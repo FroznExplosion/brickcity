@@ -60,6 +60,31 @@ var cover_left_with := -1.0
 var stuck := 0
 const MAX_STUCK := 2
 
+## The engage decision (CombatPolicy): the tactic it is carrying out, when it
+## was chosen, and until when it is held unless something happens. `tactic_done`
+## is set by a task that finished it or could not do it: decide again.
+var tactic := -1
+var tactic_at := -INF
+var tactic_until := -INF
+var tactic_done := false
+## Health it has at full, when it was last hurt, and what it had then.
+var max_health := 100.0
+var hurt_at := -INF
+var _hp_seen := -1.0
+## When its gun last fired, and the damage its rounds have done in all.
+var last_shot_at := -INF
+var dealt := 0.0
+## A buddy's call for help: where to go, and until when it is worth going.
+var help_point := Vector3.INF
+var help_until := -INF
+var _called_help_at := -INF
+## Seconds between calls for help from the same soldier.
+const HELP_EVERY := 8.0
+## How far a call for help carries to its own side.
+const HELP_RANGE := 30.0
+const HELP_LINES: Array[String] = ["I'm stuck! Somebody get over here!",
+		"Can't get through -- need help!", "I'm pinned in here, cover me!",
+		"No way out this side! Help!"]
 ## No way anywhere, several times running: cut off (see _path_failed).
 var trapped := false
 const TRAP_FAILS := 3
@@ -68,6 +93,8 @@ const TRAP_RETRY := 5.0
 var _fails: Array[float] = []
 var _trap_retry_at := 0.0
 var _trapped_since := 0.0
+var _duck_until := 0.0
+var _ducking := false
 
 var _next_sense := -INF
 var _next_think := -INF
@@ -90,6 +117,7 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		gun: GunInstance) -> Soldier:
 	var p := Pawn.spawn(parent, feet, p_team, true, 100.0)
 	var so := Soldier.new()
+	so.max_health = 100.0
 	so.name = "Soldier"
 	so.services = s
 	so.pawn = p
@@ -146,6 +174,12 @@ func _physics_process(_delta: float) -> void:
 	if _dead or pawn == null:
 		return
 	var now := services.now()
+	# Ducking (duck()): low, whatever the task wants, until it is over.
+	if now < _duck_until:
+		pawn.intents.crouch = true
+	elif _ducking:
+		_ducking = false
+		pawn.intents.crouch = false
 	if now >= _next_sense and not _sense_queued:
 		_sense_queued = true
 		services.sched.submit(AIScheduler.PERCEPTION, importance, _sense)
@@ -173,7 +207,13 @@ func _think() -> void:
 	_next_think = now + 1.0 / (THINK_HZ * services.sched.rate_scale(AIScheduler.TREES))
 	var dt := now - _last_think if _last_think > 0.0 else 1.0 / THINK_HZ
 	_last_think = now
+	var hp := pawn.health.total_current()
+	if _hp_seen >= 0.0 and hp < _hp_seen:
+		hurt_at = now
+	_hp_seen = hp
 	brain.update(dt)
+	if services.judge != null:
+		services.judge.watch(self, dt)
 
 
 func can_see(h: Pawn) -> bool:
@@ -214,7 +254,11 @@ func _aim_and_fire(now: float) -> void:
 		it.look_pitch = ang.y
 		# The line has to be clear THIS tick -- sensing is 5 Hz, and a target
 		# that stepped behind a wall 150 ms ago is behind a wall.
+		# And from where the eye will be when the gun steps: on the move, the
+		# round leaves a tick later from a hand's breadth on -- past a wall's edge.
+		var next_eye := eye + pawn.body.velocity / float(Engine.physics_ticks_per_second)
 		var clear := services.ai_world.bricks_between(eye, at) == 0 \
+				and services.ai_world.bricks_between(next_eye, at) == 0 \
 				and not services.ai_world.smoke_blocks(eye, at)
 		it.fire = fire_ok and clear and aim.ready_to_fire(now) and _burst(now)
 	else:
@@ -230,6 +274,9 @@ func _burst(now: float) -> bool:
 
 func _on_fired(info: Dictionary) -> void:
 	shots += 1
+	last_shot_at = services.now()
+	if not info.is_empty() and info.get("result") != null:
+		dealt += (info.result as DamageSystem.DamageResult).dealt
 	# The gate's check, from the gun's side: was the line to what it was aimed
 	# at clear when the round left?
 	if _aim_target != null and is_instance_valid(_aim_target):
@@ -292,6 +339,16 @@ func move_to(goal: Vector3, run := false) -> int:
 		return 1
 	var next: Vector3 = _path[_wp]
 	var dir := Vector3(next.x - feet.x, 0.0, next.z - feet.z)
+	# The foot of a drop is often a step across from its top, and a body walked
+	# to it stops with its centre over the point and its rim still on the ledge
+	# -- stood there for good. Keep walking the way it came until it falls.
+	if next.y < feet.y - WAYPOINT_LEVEL:
+		var from: Vector3 = _path[_wp - 1] if _wp > 0 else feet
+		var way := Vector3(next.x - from.x, 0.0, next.z - from.z)
+		if way.length() < 0.01:
+			way = dir
+		if way.length() > 0.01:
+			dir = way
 	pawn.intents.move = dir.normalized() if dir.length() > 0.01 else Vector3.ZERO
 	pawn.intents.run = run
 	# Going nowhere: something is in the way that was not when the path was made.
@@ -302,7 +359,44 @@ func move_to(goal: Vector3, run := false) -> int:
 	elif now - _stuck_at > STUCK_SECONDS:
 		_repath = true
 		stuck += 1
+		if stuck >= MAX_STUCK:
+			call_for_help()
 	return 0
+
+
+## Stuck: shout for help (AI.md 6.5), and the side's soldiers in earshot who
+## are not in a fight of their own come to it.
+func call_for_help() -> void:
+	var now := services.now()
+	# A helper stuck on its way gives the errand up rather than calling in
+	# turn: two stuck soldiers sending each other to help went nowhere at all.
+	if help_point != Vector3.INF:
+		help_point = Vector3.INF
+		return
+	if now - _called_help_at < HELP_EVERY:
+		return
+	_called_help_at = now
+	services.say(pawn, "stuck", HELP_LINES[services.rng.randi() % HELP_LINES.size()],
+			AIServices.SHOUT)
+	for ally in allies():
+		# Not one that needs help itself: stuck and calling, or cut off.
+		if ally.trapped or now - ally._called_help_at < HELP_EVERY * 2.0:
+			continue
+		if ally.pawn.feet().distance_to(pawn.feet()) <= HELP_RANGE and ally.state in ["idle", "search"]:
+			ally.help_point = pawn.feet()
+			ally.help_until = now + 20.0
+
+
+## The other living soldiers of its side.
+func allies() -> Array[Soldier]:
+	var out: Array[Soldier] = []
+	for p in services.pawns:
+		if not is_instance_valid(p) or p == pawn or p.team != team:
+			continue
+		var so := p.body.get_node_or_null(^"Soldier") as Soldier
+		if so != null and not so.is_dead():
+			out.append(so)
+	return out
 
 
 ## A path request came back with no way. TRAP_FAILS of them inside TRAP_WINDOW
@@ -317,9 +411,18 @@ func _path_failed(now: float) -> void:
 	if _fails.size() >= TRAP_FAILS:
 		if not trapped:
 			_trapped_since = now
+			# Cut off: say so, and whoever is near and free comes.
+			call_for_help()
 		trapped = true
 		_trap_retry_at = now + TRAP_RETRY
 		state = "trapped"
+
+
+## Get low for `seconds`: the ground is about to be struck nearby (a lightning
+## stroke's leader, Docs/Collapse.md 4.4).
+func duck(seconds: float) -> void:
+	_duck_until = maxf(_duck_until, services.now() + seconds)
+	_ducking = true
 
 
 func stop() -> void:
@@ -346,7 +449,15 @@ func _on_nav_changed(box: AABB) -> void:
 func _on_died() -> void:
 	_dead = true
 	fire_ok = false
+	if services.judge != null:
+		services.judge.close(self, "died")
 	knowledge().forget_seer(self)
+	# Somebody near says so.
+	for ally in allies():
+		if ally.pawn.feet().distance_to(pawn.feet()) < 25.0:
+			services.say(ally.pawn, "man_down", ["Man down!", "We lost one!", "Man down, man down!"][
+					services.rng.randi() % 3], AIServices.SHOUT)
+			break
 	pawn.intents.clear()
 	pawn.intents.fire = false
 	state = "dead"

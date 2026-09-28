@@ -5,14 +5,21 @@ extends RefCounted
 ##   DynamicSelector                     -- re-checked every tick, top first
 ##     DynamicSequence  InDanger > Evade       -- a falling piece beats everything
 ##     DynamicSequence  HasContact(2.5 s) >    -- a live fight
+##         ChooseTactic                        -- the policy's call (CombatPolicy)
 ##         DynamicSelector
-##           Sequence  FindCover > PeekAndFire
-##           FireInOpen                        -- no cover anywhere: stand and shoot
+##           Sequence  TacticIs(cover, cover reload, fall back) > FindCover > PeekAndFire
+##           Sequence  TacticIs(push, flank) > Manoeuvre
+##           FireInOpen                        -- fight open, or a tactic that failed
+##     GoHelp                                   -- a buddy is stuck and called
 ##     DynamicSequence  HasContact(25 s, unsearched) > Search  -- lost it: go and look
 ##     Idle
 ##
 ## A higher branch pre-empts a lower one the tick its condition holds: seen again
 ## while searching, the soldier is fighting again.
+##
+## The fight's WHAT is ChooseTactic's, asked of a policy that a model can
+## replace; the HOW -- finding cover, paths, peeks, when a line is clear -- stays
+## in the tree, where it is clamped (AI.md 11.2).
 
 
 static func build() -> BehaviorTree:
@@ -27,17 +34,29 @@ static func build() -> BehaviorTree:
 	var fresh := BTHasContact.new()
 	fresh.max_age = 2.5
 	engage.add_child(fresh)
-	# Dynamic: cover is tried again every think, so a soldier that had to stand
-	# in the open -- its cover shot away, or none in reach -- takes cover the moment
-	# there is some, instead of standing there as long as it can see its enemy.
+	engage.add_child(BTChooseTactic.new())
+	# Dynamic: re-tried every think, so a tactic chosen again takes over at once,
+	# and one that fails falls through to fighting in the open.
 	var how := BTDynamicSelector.new()
 	var cover := BTSequence.new()
+	var wants_cover := BTTacticIs.new()
+	wants_cover.tactics = [CombatPolicy.Tactic.TAKE_COVER, CombatPolicy.Tactic.COVER_RELOAD,
+			CombatPolicy.Tactic.FALL_BACK]
+	cover.add_child(wants_cover)
 	cover.add_child(BTFindCover.new())
 	cover.add_child(BTPeekAndFire.new())
 	how.add_child(cover)
+	var move := BTSequence.new()
+	var wants_move := BTTacticIs.new()
+	wants_move.tactics = [CombatPolicy.Tactic.PUSH, CombatPolicy.Tactic.FLANK]
+	move.add_child(wants_move)
+	move.add_child(BTManoeuvre.new())
+	how.add_child(move)
 	how.add_child(BTFireInOpen.new())
 	engage.add_child(how)
 	root.add_child(engage)
+
+	root.add_child(BTGoHelp.new())
 
 	var search := BTDynamicSequence.new()
 	var stale := BTHasContact.new()
@@ -46,6 +65,9 @@ static func build() -> BehaviorTree:
 	search.add_child(stale)
 	search.add_child(BTSearch.new())
 	root.add_child(search)
+
+	# Weather: in a storm, with nothing else to do, get under a roof.
+	root.add_child(BTShelter.new())
 
 	root.add_child(BTIdle.new())
 

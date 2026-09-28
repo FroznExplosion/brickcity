@@ -56,6 +56,7 @@ var _hits := {}
 var rounds := 0
 var groups_in := 0
 var chunks_out := 0
+var far_collapses := 0            ## rounds a far building came down coarse
 var breakage_out := 0
 var furniture_out := 0
 ## building id -> true, for the buildings a mega collapse has begun in (dust).
@@ -84,6 +85,17 @@ func note_hit(id: int, point: Vector3) -> void:
 	_hits[id] = kept
 
 
+## Is every player further than FAR_RANGE from this building? Then it comes
+## down coarse, whatever its size (plan).
+static func is_far(box: AABB, points: PackedVector3Array) -> bool:
+	if points.is_empty():
+		return false
+	for p in points:
+		if _distance_to_box(box, p) < FAR_RANGE:
+			return false
+	return true
+
+
 static func is_mega(blocks: int) -> bool:
 	return blocks >= MEGA_BLOCKS
 
@@ -105,10 +117,17 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 			collapse.append(ids)
 	if collapse.is_empty():
 		return out
-	if not is_mega(blocks):
+	# Mega buildings, and ANY building collapsing where nobody is near
+	# (FAR_RANGE): a few big chunks, furniture written off, no debris of its
+	# own (Docs/Collapse.md 3). Nobody watches a collapse across the city
+	# closely enough to miss the small pieces, and every one of them was a
+	# body stepped, meshed and slept.
+	if not is_mega(blocks) and not is_far(box, points):
 		for ids in collapse:
 			out.append([ids, &"group"])
 		return out
+	if not is_mega(blocks):
+		far_collapses += 1
 
 	# Held until there is a chunk's worth, or until it has hung long enough.
 	var bricks := 0
