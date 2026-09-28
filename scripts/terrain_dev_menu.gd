@@ -162,10 +162,10 @@ func _slider(text: String, lo: float, hi: float, step: float, value: float,
 	s.value = value
 	s.focus_mode = Control.FOCUS_NONE
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var show := func(v: float) -> void:
+	var show_value := func(v: float) -> void:
 		l.text = "%s   %s" % [text, str(snappedf(v, step))]
-	show.call(value)
-	s.value_changed.connect(show)
+	show_value.call(value)
+	s.value_changed.connect(show_value)
 	# On release -- a drag or a click on the track both end in one.
 	s.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventMouseButton and not e.pressed \
