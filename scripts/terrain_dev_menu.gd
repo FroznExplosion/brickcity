@@ -24,6 +24,7 @@ extends PanelContainer
 
 var host = null
 var _rows: VBoxContainer
+var _scroll: ScrollContainer
 var _smooth_step := 8
 
 
@@ -36,7 +37,8 @@ func setup(p_host) -> void:
 	add_theme_stylebox_override("panel", style)
 	custom_minimum_size = Vector2(440, 0)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(440, 560)
+	_scroll = scroll
+	scroll.custom_minimum_size = Vector2(440, 200)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(scroll)
 	_rows = VBoxContainer.new()
@@ -88,6 +90,15 @@ func setup(p_host) -> void:
 		host.set_water_param("tile_tilt", v))
 	_check("Grid lines", true, func(on: bool) -> void:
 		host.set_water_param("grid_lines", on))
+
+
+## Fit the window: from where the menu sits down to 14 px off the bottom,
+## scrolling for the rest. A fixed height ran off shorter windows.
+func fit(top: float) -> void:
+	var h: float = get_viewport().get_visible_rect().size.y
+	position = Vector2(14, top)
+	_scroll.custom_minimum_size = Vector2(440, maxf(h - top - 14.0 - 24.0, 160.0))
+	size = Vector2.ZERO
 
 
 func _title(text: String) -> void:

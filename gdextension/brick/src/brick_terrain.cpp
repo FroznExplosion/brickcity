@@ -2591,7 +2591,12 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         const Color ca = m.colours[ax + V * az];
         const Color cb = m.colours[bx + V * bz];
         m.material = (uint8_t)m.custom0[(ax + V * az) * 4];
-        m.raw_quad(out, ca.lerp(cb, 0.5f), Vector2(0, 0),
+        // Lit like the ground it hangs from, not like a wall: where the next
+        // level is lower this skirt is SEEN, and a dark wall there read as a
+        // gap (Terrain.md 19.16). `out` is kept for the winding only.
+        (void)out;
+        const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
+        m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
             Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
     };
@@ -2718,7 +2723,10 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                     continue;
                 }
                 const Vector2 wall(cs, y - ny);
-                m.raw_quad(e.n, col, face,
+                // A block-EDGE wall is a skirt over the next level: lit like
+                // ground (19.16). Walls inside the block are real steps.
+                const bool edge = nx < 0 || nz < 0 || nx >= N || nz >= N;
+                m.raw_quad(edge ? Vector3(0, 1, 0) : e.n, col, face,
                     Vector3(e.ax, ny, e.az), Vector3(e.bx, ny, e.bz),
                     Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
                     Vector2(0, wall.y), Vector2(wall.x, wall.y),
@@ -3375,7 +3383,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 const float yb = y - EDGE_SKIRT_M;
                 m.material = s.mat[i];
                 const Color col = piece_colour(s, e.lx, e.lz, s.mat[i], false);
-                m.raw_quad(e.n, col, no_seam,
+                // Lit like the ground (19.16): seen only where the next level
+                // is lower, and a dark wall there read as a gap.
+                m.raw_quad(Vector3(0, 1, 0), col, no_seam,
                     Vector3(e.ax, yb, e.az), Vector3(e.bx, yb, e.bz),
                     Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
                     Vector2(0, EDGE_SKIRT_M), Vector2(STUD_M, EDGE_SKIRT_M),

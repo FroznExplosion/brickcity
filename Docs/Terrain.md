@@ -2344,6 +2344,22 @@ Seen with the dev menu's Freeze LOD at the detail/LOD 1 and LOD 1/LOD 2
 borders: no slit, no step up. Cost: ~5k triangles more drawn in the bench
 view (541k → 546k).
 
+### 19.16 The borders that were still open
+
+Two more, after 19.15:
+
+  * **The detail could border LOD 2 directly.** A far block is split to
+    LOD 1 only where it touches the detail square, so a block just outside
+    it stayed a 16-tile smooth block — a coarse, much lower surface right
+    against the detail edge. The split region is now the detail square grown
+    by one block lattice step, so the detail is always ringed by LOD 1.
+  * **Skirts read as gaps.** An edge skirt is only SEEN where the next level
+    is lower, and lit as a vertical wall it was a dark band. Edge skirts
+    (detail tiles, blocky block edges, smooth block skirts) are now lit like
+    the ground they hang from. Inner steps of a blocky block are still walls.
+
+The dev menu fits its window now (it scrolls; it ran off shorter screens).
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and
