@@ -102,7 +102,7 @@ uniform bool lod_debug = false;
 // How far a studded tile's top leans toward the wave: 0 flat bricks, 1 a
 // smooth surface cut into tiles. Part-way keeps the tile and shrinks the
 // step between neighbours, so a swell reads as a slope of tiles.
-uniform float tile_tilt : hint_range(0.0, 1.0) = 0.6;
+uniform float tile_tilt : hint_range(0.0, 1.0) = 0.0;
 // Thin lines on the stud grid over ALL water, studded and smooth, so the sea
 // reads as tiles laid on the same lattice as the terrain.
 uniform bool grid_lines = true;
@@ -336,9 +336,10 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     if (cell_m > 0.0) {
         band *= 1.0 - smoothstep(3.0, 5.0, cell_m);
     }
-    // Calmer at the beach: 45% of the swell at the waterline, all of it by
-    // the band's reach (BrickWave swell_near_shore).
-    float calm = 0.45 + 0.55 * smoothstep(0.0, max(shore_band.w, 1.0), dist);
+    // The wave strength by distance to the shore only: full out in the
+    // water, a quarter at the beach (BrickWave swell_near_shore). No depth
+    // clamp -- `taper` is 1.
+    float calm = 0.25 + 0.75 * smoothstep(0.0, 150.0, dist);
     return wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band;
 }
 
@@ -349,7 +350,7 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
 /// bricks at slightly different levels rather than a staircase locked to
 /// 0.42 m. `brick_steps` puts the quantiser back for comparison.
 float surface_top(vec2 cell, float t) {
-    float taper = clamp((sea_level - seabed_at(cell)) / shore_taper_depth, 0.0, 1.0);
+    float taper = 1.0;
     float h = sea_level + surface_offset(cell, t, taper, 0.0);
     return brick_steps ? floor(h / step_m) * step_m : h;
 }
@@ -359,7 +360,7 @@ void vertex() {
         // World position: the sheet node follows the camera in X and Z.
         vec2 cell = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
         float ground = seabed_at(cell);
-        float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
+        float taper = 1.0;
         // The wave LOD from the distance to the camera, continuous across ring
         // borders (a ring's own spacing, UV2.x, changes in jumps there).
         float rr_cam = distance(cell, hole_centre);
@@ -373,10 +374,23 @@ void vertex() {
         if (hole_radius > 0.0) {
             VERTEX.y -= seam_sink * (1.0 - smoothstep(hole_radius + 3.0, hole_radius + 8.0, rr_cam));
         }
-        // A SKIRT vertex (UV2.y = 1): the bottom of the strip hanging from a
-        // ring's outer edge, so a crack where two rings meet shows water.
-        if (UV2.y > 0.5) {
-            VERTEX.y -= 1.5;
+        // STITCHED edges (UV2.y = 2 along X, 3 along Z): a vertex on a ring's
+        // outer edge that the next ring does not have takes the height the
+        // next ring draws there -- the middle of its two neighbours -- so the
+        // edges are the same line and there is no crack. The tile sides
+        // agree with their neighbours the same way.
+        if (UV2.y > 1.5) {
+            vec2 along = UV2.y < 2.5 ? vec2(UV2.x, 0.0) : vec2(0.0, UV2.x);
+            vec2 pa = cell - along;
+            vec2 pb = cell + along;
+            float ca = lod_base_cell * max(1.0, distance(pa, hole_centre) / lod_inner_radius);
+            float cb = lod_base_cell * max(1.0, distance(pb, hole_centre) / lod_inner_radius);
+            raw = 0.5 * (surface_offset(pa, wave_time, taper, ca)
+                    + surface_offset(pb, wave_time, taper, cb));
+            VERTEX.y = sea_level + raw;
+            if (hole_radius > 0.0) {
+                VERTEX.y -= seam_sink * (1.0 - smoothstep(hole_radius + 3.0, hole_radius + 8.0, rr_cam));
+            }
         }
         v_world = vec3(cell.x, VERTEX.y, cell.y);
         v_height01 = clamp(raw / (total_amplitude() * max(taper, 1e-3))
@@ -419,7 +433,7 @@ void vertex() {
         : wave_time;
 
     float ground = seabed_at(cell);
-    float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
+    float taper = 1.0;
     float raw = surface_offset(cell, t, taper, 0.0);
     float top = sea_level + raw;
     v_lod = 0.0;
@@ -499,10 +513,12 @@ void vertex() {
         // tiles is under a pixel, and a field of sub-pixel risers is moire,
         // not tiles. By the tier's far half the tops follow the wave fully
         // and the grid lines carry the tiling.
-        float tilt = mix(tile_tilt, 1.0, smoothstep(3.0, 10.0, r));
+        // FLAT tiles that move up and down (9.9): the lean is off unless a
+        // scene asks for it.
+        float tilt = tile_tilt;
         float lean = top;
         if (tilt > 0.0) {
-            float tc = clamp((sea_level - seabed_at(corner)) / shore_taper_depth, 0.0, 1.0);
+            float tc = 1.0;
             lean = mix(top, sea_level + surface_offset(corner, t, tc, 0.0), tilt);
         }
         if (VERTEX.y < -0.5) {
@@ -524,6 +540,10 @@ void vertex() {
         v_wave = total_amplitude() * taper;
         v_top = top;
         v_up = step(0.5, NORMAL.y);
+        // Past ~10 m a tile's side is a pixel or two tall; lit as a wall it is
+        // a dark dot, and a sea of them is moire. Lit like the top there, the
+        // tiles stay flat and the steps stop flickering (Water.md 9.9).
+        NORMAL = normalize(mix(NORMAL, vec3(0.0, 1.0, 0.0), smoothstep(6.0, 14.0, r)));
     } else {
         VERTEX = vec3(0.0);
         v_world = vec3(0.0);

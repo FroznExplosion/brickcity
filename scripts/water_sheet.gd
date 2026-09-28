@@ -58,6 +58,9 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	_mat.set_shader_parameter("shore_taper_depth", BrickWave.get_shore_taper_depth())
 	# The sheet is already in world space, so the instancing path is off.
 	_mat.set_shader_parameter("sheet_mode", true)
+	# Past the edge of the seabed map is OPEN SEA, not dry land: it was dry,
+	# so from the world's edge looking out the water sank out of sight.
+	_mat.set_shader_parameter("water_outside_field", true)
 	_mat.set_shader_parameter("studs_enabled", false)
 	_mat.set_shader_parameter("print_lines_enabled", false)
 	_mat.set_shader_parameter("seabed_tex", seabed)
@@ -132,23 +135,16 @@ func _ring_mesh() -> ArrayMesh:
 				# inside it owns everything closer.
 				var near_x: float = 0.0 if x0 <= 0.0 and x1 >= 0.0 else minf(absf(x0), absf(x1))
 				var near_z: float = 0.0 if z0 <= 0.0 and z1 >= 0.0 else minf(absf(z0), absf(z1))
-				if maxf(near_x, near_z) < lo:
+				# With a tolerance: -358.4 + 16 * 11.2 lands a hair INSIDE 179.2
+				# in floating point, and without it the whole first row of
+				# every ring was dropped -- a band of nothing one coarse cell
+				# wide at each ring border (Water.md 9.9).
+				if maxf(near_x, near_z) < lo - cell * 0.01:
 					continue
-				_quad(st, x0, z0, x1, z1, cell)
-		# THE SKIRT: a strip hanging from this ring's outer edge. The next
-		# ring's vertices are twice as far apart, so between two of them this
-		# ring's edge has a vertex the next one does not -- a T-junction, and
-		# a crack whenever the wave bends there. The strip fills it with
-		# water. Not on the last ring: nothing lies beyond it.
-		if level < levels:
-			var k := int((hi + hi) / cell)
-			for i in k:
-				var a0 := -hi + float(i) * cell
-				var a1 := a0 + cell
-				_skirt(st, Vector3(a0, 0.0, -hi), Vector3(a1, 0.0, -hi), cell)
-				_skirt(st, Vector3(a0, 0.0, hi), Vector3(a1, 0.0, hi), cell)
-				_skirt(st, Vector3(-hi, 0.0, a0), Vector3(-hi, 0.0, a1), cell)
-				_skirt(st, Vector3(hi, 0.0, a0), Vector3(hi, 0.0, a1), cell)
+				# The outer edge, where the next ring (twice the cell) meets
+				# this one: its vertices off the next ring's lattice are
+				# stitched to it in the shader.
+				_quad(st, x0, z0, x1, z1, cell, hi if level < levels else -1.0)
 		inner = hi
 		cell *= 2.0
 	# Normals are set per vertex (straight up); the shader lights the wave.
@@ -160,19 +156,8 @@ func _ring_mesh() -> ArrayMesh:
 	return m
 
 
-## One skirt quad under an edge from `a` to `b`: the top at the surface, the
-## bottom flagged (UV2.y = 1) for the shader to drop.
-func _skirt(st: SurfaceTool, a: Vector3, b: Vector3, cell: float) -> void:
-	for v in [[a, 0.0], [b, 0.0], [b, 1.0], [a, 0.0], [b, 1.0], [a, 1.0]]:
-		var p: Vector3 = v[0]
-		st.set_normal(Vector3.UP)
-		st.set_uv(Vector2(p.x, p.z))
-		st.set_uv2(Vector2(cell, v[1]))
-		st.add_vertex(p)
-
-
 func _quad(st: SurfaceTool, x0: float, z0: float, x1: float, z1: float,
-		cell: float) -> void:
+		cell: float, edge := -1.0) -> void:
 	var a := Vector3(x0, 0.0, z0)
 	var b := Vector3(x1, 0.0, z0)
 	var c := Vector3(x1, 0.0, z1)
@@ -180,6 +165,18 @@ func _quad(st: SurfaceTool, x0: float, z0: float, x1: float, z1: float,
 	for v in [a, b, c, a, c, d]:
 		st.set_normal(Vector3.UP)
 		st.set_uv(Vector2(v.x, v.z))
-		# This ring's vertex spacing, for the shader's wave LOD.
-		st.set_uv2(Vector2(cell, 0.0))
+		# This ring's vertex spacing, and whether the vertex is on the ring's
+		# outer edge between two of the next ring's vertices: 2 along X, 3
+		# along Z.
+		var flag := 0.0
+		if edge > 0.0:
+			var on_x := absf(absf(v.z) - edge) < 1e-3
+			var on_z := absf(absf(v.x) - edge) < 1e-3
+			var odd_x := absf(fposmod(v.x, cell * 2.0) - cell) < 1e-3
+			var odd_z := absf(fposmod(v.z, cell * 2.0) - cell) < 1e-3
+			if on_x and odd_x:
+				flag = 2.0
+			elif on_z and odd_z:
+				flag = 3.0
+		st.set_uv2(Vector2(cell, flag))
 		st.add_vertex(v)
