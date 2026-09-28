@@ -25,6 +25,9 @@ const SHOCK_DAMAGE := 60.0
 const IGNITE_CHANCE := 0.35
 const SOUND_SPEED := 343.0
 const BOLT_WIDTH := 0.45
+const DUCK_RADIUS := 12.0
+## Soldiers told to get low, for the probe.
+var ducked := 0
 
 const SKY_SUN := Color(0.62, 0.66, 0.76)
 const SKY_TOP := Color(0.2, 0.22, 0.26)
@@ -90,10 +93,12 @@ func _on_phase(p: Phase) -> void:
 			ctx.raining = false
 		Phase.ACTIVE:
 			ctx.raining = true
+			ctx.set_storm(true)
 		Phase.ENDING:
 			_sky_from = _sky
 		Phase.DONE:
 			ctx.raining = false
+			ctx.set_storm(false)
 			ctx.clear_hazard(0)
 			_sky = 0.0
 			_flash = 0.0
@@ -175,7 +180,9 @@ func _aim(s: Dictionary) -> void:
 		target = hit.position if not hit.is_empty() else p
 	s.target = target
 	s.stage = 1
-	# A soldier on that roof has 0.6 s: it may not make it, but it tries.
+	# Anybody near gets low; a soldier on that roof has 0.6 s: it may not make
+	# it, but it tries.
+	ducked += ctx.duck_near(target, DUCK_RADIUS, LEADER_S + 1.0)
 	ctx.set_hazard(0, AABB((target as Vector3) - Vector3(SHOCK_RADIUS, 1.0, SHOCK_RADIUS),
 			Vector3(SHOCK_RADIUS * 2.0, 4.0, SHOCK_RADIUS * 2.0)))
 	_leader.global_position = (target as Vector3) + Vector3.UP * 2.0

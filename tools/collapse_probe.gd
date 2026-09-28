@@ -74,6 +74,10 @@ func _run() -> void:
 		await _check_handover()
 	if _only("crush"):
 		await _check_crush()
+	if _only("far"):
+		await _check_far()
+	if _only("shelter"):
+		await _check_shelter()
 	if _only("fall"):
 		await _check_fall()
 	if _only("trapped"):
@@ -533,6 +537,18 @@ func _check_trapped() -> void:
 		n += 1
 		if r == 1:
 			break
+	if r != 1:
+		var sp: Vector3 = so.pawn.feet()
+		print("  --   stuck at %v, wp %d of %s" % [sp, so._wp, so._path])
+		if so._wp < so._path.size():
+			var nxt: Vector3 = so._path[so._wp]
+			var flat := Vector3(nxt.x - sp.x, 0.0, nxt.z - sp.z)
+			for hgt in [0.2, 0.9, 1.5]:
+				var q := PhysicsRayQueryParameters3D.create(sp + Vector3.UP * hgt,
+						sp + Vector3.UP * hgt + flat.normalized() * (flat.length() + 0.6))
+				q.exclude = [so.pawn.body.get_rid()]
+				var hit := city.get_world_3d().direct_space_state.intersect_ray(q)
+				print("  --     toward it at +%.1f m: %s" % [hgt, hit.get("position", "clear")])
 	_ok("it looks again, follows it down, and lands hurt", r == 1 and so.pawn.feet().y < 1.0
 			and so.pawn.health.total_current() < hp0 and not so.trapped,
 			"move_to %d after %.1f s; feet %.2f; %.0f -> %.0f hp" % [r, n / 30.0,
@@ -568,3 +584,102 @@ func _check_trapped() -> void:
 			found = true
 			break
 	_ok("and when it looks again with a way to go, it is not", found, "%.1f s" % (n / 30.0))
+
+
+# --- (7) ------------------------------------------------------------------------
+
+func _spawned() -> int:
+	var c: Dictionary = city.islands.spawn_census
+	return int(c.landmark[0]) + int(c.small[0])
+
+
+## Bring building `id` down (cut through its second storey) with the camera at
+## `eye`, and count the pieces it became.
+func _bring_down(id: int, eye: Vector3) -> Dictionary:
+	city.camera.global_position = eye
+	city.camera.look_at(_box(id).get_center())
+	city._promote(id)
+	await _ticks(20)
+	var s0 := _spawned()
+	var f0: int = city.director.far_collapses
+	_undercut(id)
+	await _ticks(30 * 10)
+	return {"pieces": _spawned() - s0, "far": city.director.far_collapses - f0}
+
+
+func _check_far() -> void:
+	print("far: a building coming down where nobody is near comes down coarse")
+	var near_id := _tower(5, [])
+	var far_id := _tower(5, [])
+	var nb := _box(near_id)
+	var near := await _bring_down(near_id, nb.get_center() + Vector3(-30.0, 15.0, -30.0))
+	var fb := _box(far_id)
+	var away := (fb.get_center() - nb.get_center())
+	away.y = 0.0
+	var far := await _bring_down(far_id, fb.get_center() + away.normalized() * 260.0 + Vector3.UP * 40.0)
+	print("  --   near: %s   far: %s" % [near, far])
+	_ok("the far one takes the coarse path", int(far.far) > 0 and int(near.far) == 0)
+	_ok("and comes down in a few big pieces, far fewer than close by",
+			int(far.pieces) <= 4 and int(far.pieces) < int(near.pieces),
+			"%d piece(s) far, %d near" % [far.pieces, near.pieces])
+
+
+# --- (8) ------------------------------------------------------------------------
+
+func _check_shelter() -> void:
+	print("shelter: in a storm, soldiers get under a roof and duck the strokes")
+	var s: AIServices = city.ai_services
+	# The city fills this in with its first soldier; none has been made yet.
+	if s.world3d == null:
+		s.world3d = city.get_world_3d()
+	var id := _tower(4, [])
+	var box := _box(id)
+	city.camera.global_position = box.get_center() + Vector3(-35.0, 12.0, 0.0)
+	city._promote(id)
+	# Its brick collision up, every band of it: the top bands come last.
+	var w := 0
+	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+		await physics_frame
+		w += 1
+	# The TOP storey: only its roof is over it. (Lower down, any slab above
+	# counts, and rightly -- a floor two up still keeps the lightning off.)
+	var storeys := ceili(float(city.registry.get_building(id).recipe.courses) / TowerRecipe.COURSES_PER_FLOOR)
+	var storey_h := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	var floor_y := box.position.y + (1 + (storeys - 1) * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var cz := box.get_center().z
+	# A top-storey spot with its roof over it: the first of a few that has one
+	# (the roof has openings -- the shaft, a light well -- so do not assume).
+	var spot := Vector3.INF
+	for off in [Vector2(2.2, 3.0), Vector2(2.2, -3.0), Vector2(3.5, 0.0), Vector2(2.2, 1.5),
+			Vector2(4.5, 3.0), Vector2(4.5, -3.0)]:
+		var p: Vector3 = city.ai_nav.snap(Vector3(box.position.x + off.x, floor_y + 0.2, cz + off.y))
+		if absf(p.y - floor_y) < 0.5 and BTShelter.covered(s, p):
+			spot = p
+			break
+	var street: Vector3 = city.ai_nav.snap(Vector3(box.position.x - 6.0, 0.0, cz))
+	_ok("a top-storey room has a roof over it; the street has none",
+			spot != Vector3.INF and not BTShelter.covered(s, street), "spot %s" % [spot])
+	if spot == Vector3.INF:
+		return
+	# Its roof blown open over the soldier.
+	city._blast(Vector3(spot.x, floor_y + storey_h, spot.z), 1.6)
+	await _drain()
+	await _ticks(60)
+	_ok("with its roof blown open, the spot is under the sky", not BTShelter.covered(s, spot))
+	var so: Soldier = city._spawn_soldier(spot)
+	await _ticks(30)
+	s.storm = true
+	var n := 0
+	while n < 30 * 15 and not BTShelter.covered(s, so.pawn.feet()):
+		await physics_frame
+		n += 1
+	_ok("in a storm, a soldier under the sky moves under a roof", BTShelter.covered(s, so.pawn.feet()),
+			"%.1f s, state '%s', moved %.1f m" % [n / 30.0, so.state, so.pawn.feet().distance_to(spot)])
+	s.storm = false
+	# Ducking: a stroke about to land beside it.
+	var ducked: int = city.disasters.ctx.duck_near(so.pawn.feet() + Vector3(3.0, 0.0, 0.0), 12.0, 1.5)
+	await _ticks(6)
+	_ok("a stroke's leader beside it: it gets low", ducked == 1 and so.pawn.is_crouched(),
+			"%d ducked, crouched %s" % [ducked, so.pawn.is_crouched()])
+	await _ticks(60)
+	_ok("and stands again after", not so.pawn.is_crouched())

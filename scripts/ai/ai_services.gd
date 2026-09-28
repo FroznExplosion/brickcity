@@ -10,6 +10,9 @@ var ai_nav: AINav
 var sched: AIScheduler
 ## The physics space sight rays are cast in.
 var world3d: World3D
+## The weather (Docs/Collapse.md 4.4): true while a storm is raging -- a soldier
+## with nothing to fight gets under a roof (BTShelter).
+var storm := false
 ## Everything that can be seen and shot at: players and agents alike.
 var pawns: Array[Pawn] = []
 ## What a gun does to structure (StructuralDamage's shot): the city routes it
