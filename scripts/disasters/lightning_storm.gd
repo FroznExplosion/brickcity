@@ -164,13 +164,8 @@ func _aim(s: Dictionary) -> void:
 		var around := player + Vector3(cos(ang), 0.0, sin(ang)) * float(s.v) * ROLL_RANGE
 		var tall := ctx.tallest_near(around, TALL_SEARCH)
 		if not tall.is_empty():
-			var box: AABB = tall.box
-			# Near a roof edge: that is what sticks up. A corner's worth of
-			# roof, picked by w.
-			var corner := int(float(s.w) * 4.0) % 4
-			var x := box.position.x + 0.6 if corner % 2 == 0 else box.end.x - 0.6
-			var z := box.position.z + 0.6 if corner < 2 else box.end.z - 0.6
-			target = Vector3(x, box.end.y, z)
+			# The highest brick it still has: what sticks up most.
+			target = tall.top
 			s.aimed = int(tall.building)
 	if target == null:
 		var d := lerpf(GROUND_MIN, ROLL_RANGE, float(s.v))
@@ -191,8 +186,9 @@ func _strike(s: Dictionary) -> void:
 	s.stage = 2
 	ctx.clear_hazard(0)
 	var target: Vector3 = s.target
-	# The stroke comes down on whatever is on top now -- the roof may have gone.
-	var hit := ctx.ray(target + Vector3.UP * 60.0, target + Vector3.DOWN * 30.0)
+	# The stroke comes down on whatever is on top now -- the roof may have gone
+	# since the leader, and the building with it: all the way to the ground.
+	var hit := ctx.ray(target + Vector3.UP * 60.0, Vector3(target.x, -50.0, target.z))
 	var pos: Vector3 = hit.position if not hit.is_empty() else target
 	var normal: Vector3 = hit.normal if not hit.is_empty() else Vector3.UP
 	ctx.blast(pos, STRIKE_RADIUS * sqrt(maxf(intensity, 0.1)))

@@ -24,12 +24,15 @@ extends SceneTree
 ## D5: soldiers run out of a hazard (a meteor's ring), a burning cell is danger
 ## and its smoke blocks sight, and both go when the fire does.
 ##
+## Real bricks: with the tallest building's top half blown away, its top is
+## where its bricks end, lightning aims there, and fire finds air where the
+## roof was. After the tornado nothing is left frozen in mid-air.
 ## Menu: H opens it, Start runs its choice. Intensity scales meteors (count,
 ## size) and the names read right. Earthquake: more intensity plans more
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,intensity,quake
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake
 
 var _pass := 0
 var _fail := 0
@@ -84,6 +87,8 @@ func _run() -> void:
 	if only == "" or "soldiers" in only:
 		await _check_soldiers(city, dir)
 		await _check_shove(city)
+	if only == "" or "real" in only:
+		await _check_real_bricks(city, dir)
 	if only == "" or "intensity" in only:
 		_check_intensity(dir)
 	if only == "" or "quake" in only:
@@ -459,6 +464,19 @@ func _check_tornado(city: Node3D, dir: DisasterDirector) -> void:
 			"%d pawn-tick(s) shoved" % stats.shoved)
 	_ok("sky back, and no hazard left behind", (city._sun as DirectionalLight3D).light_color == base
 			and ctx.hazards.is_empty())
+	# Nothing it carried is left hanging: give it a few seconds to come down,
+	# then no settled piece may have nothing under it and nothing touching it.
+	await _ticks(30 * 6)
+	var floating := 0
+	var settled := 0
+	for isl in city.islands.islands:
+		if isl.is_valid() and isl.settled:
+			settled += 1
+			if not city.islands._supported_below(isl) and not city.islands._touching_anything(isl):
+				floating += 1
+	_ok("nothing it carried is left frozen in mid-air", floating == 0,
+			"%d of %d settled piece(s) floating; %d settle(s) refused, %d woken by the watchdog" % [
+			floating, settled, city.islands.floating_refused, city.islands.audit_woken])
 	print("  --   physics tick during the tornado: mean %.2f ms, worst %.1f ms" % [
 			total / maxf(ticks, 1), worst])
 	city.camera.global_transform = home
@@ -527,6 +545,72 @@ func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 	await _ticks(20)
 	_ok("once out, neither is left", not w.in_danger(cell) and dir.fire.smoke_spots.is_empty())
+
+
+## Lightning and fire go for bricks that exist, not for the recipe's box.
+func _check_real_bricks(city: Node3D, dir: DisasterDirector) -> void:
+	print("real bricks, not the recipe")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	# The tallest building, its top half blown away.
+	var tall_id := -1
+	var tall_box := AABB()
+	for pair in ctx.buildings():
+		var box: AABB = pair[1]
+		if box.size.y > tall_box.size.y:
+			tall_box = box
+			tall_id = int(pair[0])
+	var cut := tall_box.position.y + tall_box.size.y * 0.5
+	var y := tall_box.end.y - 1.0
+	while y > cut:
+		var x := tall_box.position.x + 1.0
+		while x < tall_box.end.x:
+			var z := tall_box.position.z + 1.0
+			while z < tall_box.end.z:
+				city._blast(Vector3(x, y, z), 3.2)
+				z += 4.0
+			x += 4.0
+		y -= 4.0
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 30 * 30:
+		await physics_frame
+		wait += 1
+	await _ticks(60)
+	var b = city.registry.get_building(tall_id)
+	if b == null or b.toppled:
+		_ok("the tall building still stands, cut down", false, "it toppled -- pick another")
+		return
+	var top := ctx.top_of(tall_box)
+	var top_y: float = (top.position as Vector3).y if not top.is_empty() else -INF
+	_ok("its top is where its bricks now end, not its recipe's roof",
+			not top.is_empty() and top_y < tall_box.end.y - 3.0,
+			"%.1f m, roof was %.1f m" % [top_y, tall_box.end.y])
+	var c := tall_box.get_center()
+	var near := ctx.tallest_near(c, 2.0)
+	_ok("and that is what lightning aims at", not near.is_empty() and int(near.building) == tall_id
+			and absf((near.top as Vector3).y - top_y) < 0.01)
+	var hit_y := top_y
+	var landed := ctx.ray(Vector3(c.x, tall_box.end.y + 60.0, c.z), Vector3(c.x, -50.0, c.z))
+	_ok("a stroke from above comes down on something real", not landed.is_empty(),
+			"at %.1f m" % ((landed.position as Vector3).y if not landed.is_empty() else -INF))
+	var air := Vector3(c.x, tall_box.end.y - 1.0, c.z)
+	_ok("where the roof was is air to fire (was PLA)", ctx.material_at(air) == -1,
+			"material %d" % ctx.material_at(air))
+	_ok("and the bricks still standing are not", ctx.material_at(
+			(top.position as Vector3) + Vector3.DOWN * 0.1) >= 0 if not top.is_empty() else false)
+	var caught_air := ctx.ignite(air + Vector3.UP * 2.0, 0.8) or ctx.ignite(air, 0.8)
+	var why := ""
+	for cell in dir.fire.cells:
+		var cc := FireSpread.centre_of(cell.key)
+		var h := FireSpread.CELL * 0.5
+		for off in [Vector3.ZERO, Vector3(0, -h.y + 0.1, 0), Vector3(h.x - 0.2, 0, 0),
+				Vector3(-h.x + 0.2, 0, 0), Vector3(0, 0, h.z - 0.2), Vector3(0, 0, -h.z + 0.2)]:
+			var bk: Dictionary = city._material_fx.brick_at(cc + off)
+			if not bk.is_empty():
+				why += " %v -> %s (building %d);" % [cc + off, bk, ctx.building_at(cc + off, 0.0)]
+	_ok("so fire will not catch in the air", not caught_air,
+			"%d burning:%s" % [dir.fire.count(), why])
+	await _until_out(dir)
 
 
 func _check_intensity(dir: DisasterDirector) -> void:
