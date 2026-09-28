@@ -2518,6 +2518,16 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 
 
 ## How many pieces are invisible right now, and how big the biggest one is.
+## Is this piece drawing nothing -- no surfaces and no bands? What
+## _count_meshless counts, asked of one piece. A piece with no mesh node at all
+## is drawn some other way (the shared single-brick MultiMesh) and is not blind.
+func is_blind(isl: BrickIsland) -> bool:
+	if not isl.is_valid() or isl.mesh == null or isl.lod_dropped:
+		return false
+	var m: Mesh = isl.mesh.mesh
+	return (m == null or m.get_surface_count() == 0) and not _any_band(isl)
+
+
 func _count_meshless() -> void:
 	for isl in islands:
 		if not isl.is_valid() or isl.mesh == null:
