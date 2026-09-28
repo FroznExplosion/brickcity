@@ -35,6 +35,15 @@ uniform int wave_count = 2;
 uniform vec4 groups[4];
 uniform int group_count = 0;
 uniform vec4 shore_band = vec4(0.0);
+// BrickWave.swell_blend_uniform(): (near, far, drift, 0). Within `near` m of
+// a shore the swell rolls toward it; past `far` it is directional.
+uniform vec4 swell_blend = vec4(250.0, 400.0, 1.0, 0.0);
+// The sheet's wave LOD, by DISTANCE from the camera rather than by the ring a
+// vertex is in: two rings meeting at a border then draw the same height
+// there. The effective spacing is base_cell until inner_radius, and grows in
+// step with the rings after (WaterSheet).
+uniform float lod_base_cell = 2.8;
+uniform float lod_inner_radius = 80.0;
 uniform float wave_time = 0.0;
 uniform float sea_level = 1.1;
 uniform float step_m = 0.42;
@@ -194,20 +203,21 @@ float hash21(vec2 p) {
 // ~4 samples a wavelength lands between vertices and the surface boils, so on
 // the coarse rings of the sheet the short waves fade out (MvsC's
 // max_wave_number). The studded tier passes 0 and keeps everything.
-float wave_raw_lod(vec2 p, float t, float cell_m) {
+float wave_raw_lod(vec2 p, float t, float cell_m, float dist) {
+    // 0 near land (rolling toward the shore), 1 in open ocean (directional).
+    float open = smoothstep(swell_blend.x, swell_blend.y, dist);
     float h = 0.0;
     for (int i = 0; i < wave_count; i++) {
         vec4 a = waves[i * 2];
         vec4 b = waves[i * 2 + 1];
         float len = 6.2831853 / max(a.y, 1e-4);
         float keep = cell_m > 0.0 ? smoothstep(4.0 * cell_m, 6.0 * cell_m, len) : 1.0;
-        h += keep * a.x * sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
+        float directional = sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
+        float drift = swell_blend.z * (sin(0.017 * p.x + 1.3 * float(i)) + sin(0.014 * p.y + 0.7 * float(i)));
+        float steered = sin(a.y * min(dist, swell_blend.y) + b.x * t + b.y + drift);
+        h += keep * a.x * (steered * (1.0 - open) + directional * open);
     }
     return h;
-}
-
-float wave_raw(vec2 p, float t) {
-    return wave_raw_lod(p, t, 0.0);
 }
 
 float group_factor(vec2 p, float t) {
@@ -310,7 +320,7 @@ float shore_wave(vec2 p, float t, float dist) {
         return 0.0;
     }
     float reach = shore_band.w;
-    float w = smoothstep(2.0, 35.0, dist) * (1.0 - smoothstep(0.6 * reach, reach, dist))
+    float w = (0.35 + 0.65 * smoothstep(0.0, 20.0, dist)) * (1.0 - smoothstep(0.6 * reach, reach, dist))
             * smoothstep(0.2, 1.0, depth);
     float drift = 1.2 * sin(0.013 * p.x + 0.7) + 1.2 * sin(0.011 * p.y + 2.1);
     return shore_band.x * w * sin(shore_band.y * dist + shore_band.z * t + drift);
@@ -326,10 +336,10 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     if (cell_m > 0.0) {
         band *= 1.0 - smoothstep(3.0, 5.0, cell_m);
     }
-    // Calm at the beach: 15% of the swell at the waterline, all of it by
+    // Calmer at the beach: 45% of the swell at the waterline, all of it by
     // the band's reach (BrickWave swell_near_shore).
-    float calm = 0.15 + 0.85 * smoothstep(0.0, max(shore_band.w, 1.0), dist);
-    return wave_raw_lod(p, t, cell_m) * taper * group_factor(p, t) * calm + band;
+    float calm = 0.45 + 0.55 * smoothstep(0.0, max(shore_band.w, 1.0), dist);
+    return wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band;
 }
 
 /// Where this cell's brick sits, in metres.
@@ -350,16 +360,23 @@ void vertex() {
         vec2 cell = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
         float ground = seabed_at(cell);
         float taper = clamp((sea_level - ground) / shore_taper_depth, 0.0, 1.0);
-        // UV2.x carries this ring's vertex spacing (WaterSheet._ring_mesh).
-        float raw = surface_offset(cell, wave_time, taper, UV2.x);
+        // The wave LOD from the distance to the camera, continuous across ring
+        // borders (a ring's own spacing, UV2.x, changes in jumps there).
+        float rr_cam = distance(cell, hole_centre);
+        float eff_cell = lod_base_cell * max(1.0, rr_cam / lod_inner_radius);
+        float raw = surface_offset(cell, wave_time, taper, eff_cell);
         // LOD 1 is the finest ring (2.8 m cells, WaterSheet.base_cell).
         v_lod = 1.0 + log2(max(UV2.x, 2.8) / 2.8);
         VERTEX.y = sea_level + raw;
         // Under the studded tier's edge the sheet carries on, a little lower:
         // any slit between the two tiers shows water, not the seabed.
         if (hole_radius > 0.0) {
-            float rr = distance(cell, hole_centre);
-            VERTEX.y -= seam_sink * (1.0 - smoothstep(hole_radius + 3.0, hole_radius + 8.0, rr));
+            VERTEX.y -= seam_sink * (1.0 - smoothstep(hole_radius + 3.0, hole_radius + 8.0, rr_cam));
+        }
+        // A SKIRT vertex (UV2.y = 1): the bottom of the strip hanging from a
+        // ring's outer edge, so a crack where two rings meet shows water.
+        if (UV2.y > 0.5) {
+            VERTEX.y -= 1.5;
         }
         v_world = vec3(cell.x, VERTEX.y, cell.y);
         v_height01 = clamp(raw / (total_amplitude() * max(taper, 1e-3))
@@ -370,9 +387,13 @@ void vertex() {
         v_cell = vec2(0.0);
         v_top = VERTEX.y;
         // Dry land gets no sheet -- ALL of it, not a texel: the sheet runs
-        // under the beach and the terrain draws where they meet.
+        // under the beach and the terrain draws where they meet. SUNK where it
+        // stands, not collapsed: collapsing to the node's origin put that
+        // point under the camera (the sheet follows it), and every shoreline
+        // triangle stretched down to it -- a cone under the player's feet.
         if (lattice_ground_min(cell) > sea_level + 1.0) {
-            VERTEX = vec3(0.0);
+            VERTEX.y = sea_level - 3.0;
+            v_world.y = VERTEX.y;
         }
     } else {
     int id = INSTANCE_ID;

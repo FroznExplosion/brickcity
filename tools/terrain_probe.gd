@@ -1181,15 +1181,32 @@ func _mirror_band(x: float, z: float, t: float) -> float:
 	if depth <= 0.0 or u.x <= 0.0:
 		return 0.0
 	var dist := BrickWave.shore_distance(x, z)
-	var w := smoothstep(2.0, 35.0, dist) * (1.0 - smoothstep(0.6 * u.w, u.w, dist)) 			* smoothstep(0.2, 1.0, depth)
+	var w := (0.35 + 0.65 * smoothstep(0.0, 20.0, dist)) * (1.0 - smoothstep(0.6 * u.w, u.w, dist)) 			* smoothstep(0.2, 1.0, depth)
 	var drift := 1.2 * sin(0.013 * x + 0.7) + 1.2 * sin(0.011 * z + 2.1)
 	return u.x * w * sin(u.y * dist + u.z * t + drift)
 
 
-## water.gdshader's calm factor: 15% of the swell at the waterline.
+## water.gdshader's calm factor: 45% of the swell at the waterline.
 func _mirror_calm(x: float, z: float) -> float:
 	var u := BrickWave.shore_band_uniform()
-	return 0.15 + 0.85 * smoothstep(0.0, maxf(u.w, 1.0), BrickWave.shore_distance(x, z))
+	return 0.45 + 0.55 * smoothstep(0.0, maxf(u.w, 1.0), BrickWave.shore_distance(x, z))
+
+
+## water.gdshader's wave_raw_lod at full detail: each component steered to
+## the nearest shore near land, directional in open ocean.
+func _mirror_swell(packed: PackedVector4Array, x: float, z: float, t: float) -> float:
+	var sb := BrickWave.swell_blend_uniform()
+	var dist := BrickWave.shore_distance(x, z)
+	var open := smoothstep(sb.x, sb.y, dist)
+	var h := 0.0
+	for w in BrickWave.component_count():
+		var a := packed[w * 2]
+		var b := packed[w * 2 + 1]
+		var directional := sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+		var drift := sb.z * (sin(0.017 * x + 1.3 * float(w)) + sin(0.014 * z + 0.7 * float(w)))
+		var steered := sin(a.y * minf(dist, sb.y) + b.x * t + b.y + drift)
+		h += a.x * (steered * (1.0 - open) + directional * open)
+	return h
 
 
 func _check_wave() -> void:
@@ -1218,11 +1235,7 @@ func _check_wave() -> void:
 		# living only in the shader was 2.2x off this for as long as it
 		# existed, which is why the gain now lives in BrickWave.
 		var ramp := BrickWave.shore_gain(x, z)
-		var swell := 0.0
-		for w in BrickWave.component_count():
-			var a := packed[w * 2]
-			var b := packed[w * 2 + 1]
-			swell += a.x * sin((a.z * x + a.w * z) * a.y - b.x * t + b.y)
+		var swell := _mirror_swell(packed, x, z, t)
 		mirror += ramp * _mirror_group(x, z, t) * _mirror_calm(x, z) * swell + _mirror_band(x, z, t)
 		worst = maxf(worst, absf(BrickWave.height_at(x, z, t) - mirror))
 	_ok("the packed uniforms reproduce height_at", worst < 1e-4, "worst %.7f m" % worst)
@@ -1305,7 +1318,9 @@ func _check_wave() -> void:
 				near_amp = maxf(near_amp, amp)
 			else:
 				far_amp = maxf(far_amp, amp)
-	_ok("the sea is calm at the beach and rough out at sea", near_amp < far_amp * 0.4,
+	# Calmer, not dead: 15% read as a still pond at every beach.
+	_ok("the sea is calmer at the beach than out at sea, and not still",
+		near_amp < far_amp * 0.75 and near_amp > far_amp * 0.2,
 		"worst %.2f m near the shore, %.2f m 60-70 m out" % [near_amp, far_amp])
 	_ok("the shore band rolls in toward the shore", rolled,
 		"what is further out arrives nearer %.3f m off later, %.3f m off earlier" % [crest_d[0], crest_d[1]])

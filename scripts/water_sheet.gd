@@ -50,6 +50,9 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
 	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
 	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
+	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
+	_mat.set_shader_parameter("lod_base_cell", base_cell)
+	_mat.set_shader_parameter("lod_inner_radius", inner_radius)
 	_mat.set_shader_parameter("sea_level", BrickWave.get_sea_level())
 	_mat.set_shader_parameter("step_m", BrickWave.get_step_metres())
 	_mat.set_shader_parameter("shore_taper_depth", BrickWave.get_shore_taper_depth())
@@ -132,15 +135,40 @@ func _ring_mesh() -> ArrayMesh:
 				if maxf(near_x, near_z) < lo:
 					continue
 				_quad(st, x0, z0, x1, z1, cell)
+		# THE SKIRT: a strip hanging from this ring's outer edge. The next
+		# ring's vertices are twice as far apart, so between two of them this
+		# ring's edge has a vertex the next one does not -- a T-junction, and
+		# a crack whenever the wave bends there. The strip fills it with
+		# water. Not on the last ring: nothing lies beyond it.
+		if level < levels:
+			var k := int((hi + hi) / cell)
+			for i in k:
+				var a0 := -hi + float(i) * cell
+				var a1 := a0 + cell
+				_skirt(st, Vector3(a0, 0.0, -hi), Vector3(a1, 0.0, -hi), cell)
+				_skirt(st, Vector3(a0, 0.0, hi), Vector3(a1, 0.0, hi), cell)
+				_skirt(st, Vector3(-hi, 0.0, a0), Vector3(-hi, 0.0, a1), cell)
+				_skirt(st, Vector3(hi, 0.0, a0), Vector3(hi, 0.0, a1), cell)
 		inner = hi
 		cell *= 2.0
-	st.generate_normals()
+	# Normals are set per vertex (straight up); the shader lights the wave.
 	var m := st.commit()
 	_tris = 0
 	if m.get_surface_count() > 0:
 		@warning_ignore("integer_division")
 		_tris = m.surface_get_array_len(0) / 3
 	return m
+
+
+## One skirt quad under an edge from `a` to `b`: the top at the surface, the
+## bottom flagged (UV2.y = 1) for the shader to drop.
+func _skirt(st: SurfaceTool, a: Vector3, b: Vector3, cell: float) -> void:
+	for v in [[a, 0.0], [b, 0.0], [b, 1.0], [a, 0.0], [b, 1.0], [a, 1.0]]:
+		var p: Vector3 = v[0]
+		st.set_normal(Vector3.UP)
+		st.set_uv(Vector2(p.x, p.z))
+		st.set_uv2(Vector2(cell, v[1]))
+		st.add_vertex(p)
 
 
 func _quad(st: SurfaceTool, x0: float, z0: float, x1: float, z1: float,
