@@ -48,7 +48,7 @@ func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	_mat.set_shader_parameter("waves", BrickWave.uniform_array())
 	_mat.set_shader_parameter("wave_count", BrickWave.component_count())
 	_mat.set_shader_parameter("groups", BrickWave.group_uniform_array())
-	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() / 2)
+	_mat.set_shader_parameter("group_count", BrickWave.group_uniform_array().size() >> 1)
 	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
 	_mat.set_shader_parameter("sea_level", BrickWave.get_sea_level())
 	_mat.set_shader_parameter("step_m", BrickWave.get_step_metres())

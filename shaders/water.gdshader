@@ -90,6 +90,18 @@ uniform float inner_radius = 0.0;
 uniform bool sheet_mode = false;
 // L in heightfield_test: tint by LOD level (0 = studded tier, 1+ = sheet rings).
 uniform bool lod_debug = false;
+// How far a studded tile's top leans toward the wave: 0 flat bricks, 1 a
+// smooth surface cut into tiles. Part-way keeps the tile and shrinks the
+// step between neighbours, so a swell reads as a slope of tiles.
+uniform float tile_tilt : hint_range(0.0, 1.0) = 0.6;
+// Thin lines on the stud grid over ALL water, studded and smooth, so the sea
+// reads as tiles laid on the same lattice as the terrain.
+uniform bool grid_lines = true;
+uniform float grid_line_width = 0.012;
+uniform float grid_line_darken : hint_range(0.0, 1.0) = 0.35;
+// The sheet sinks this much where it runs under the studded tier's edge, so
+// the seam is covered by water rather than open to the seabed.
+uniform float seam_sink = 0.18;
 // The sheet FOLLOWS the camera now; inside this circle round the studded
 // tier's centre it draws nothing, because the studded tier is there.
 uniform vec2 hole_centre = vec2(0.0);
@@ -245,6 +257,30 @@ float lattice_ground(vec2 p) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+/// The world's stud, whatever this tier's piece size is: the grid lines are on
+/// the terrain's lattice.
+float stud_pitch_m() {
+    return 0.35;
+}
+
+/// The LOWEST of the four seabed corners round a point: the cull test. A
+/// piece or a sheet vertex is dropped only where every corner is dry land,
+/// so the water runs under the beach and the terrain draws the shoreline,
+/// instead of a 2.8 m texel deciding it and leaving gaps and jags.
+float lattice_ground_min(vec2 p) {
+    vec2 size = vec2(textureSize(seabed_tex, 0));
+    vec2 q = (p - seabed_origin) / seabed_extent * size;
+    ivec2 i0 = ivec2(floor(q));
+    if (i0.x < 0 || i0.y < 0 || i0.x + 1 >= int(size.x) || i0.y + 1 >= int(size.y)) {
+        return water_outside_field ? -open_sea_depth : 1.0e6;
+    }
+    float a = texelFetch(seabed_tex, i0, 0).r;
+    float b = texelFetch(seabed_tex, i0 + ivec2(1, 0), 0).r;
+    float c = texelFetch(seabed_tex, i0 + ivec2(0, 1), 0).r;
+    float d = texelFetch(seabed_tex, i0 + ivec2(1, 1), 0).r;
+    return min(min(a, b), min(c, d));
+}
+
 /// Metres to the nearest dry ground: the seabed texture's G channel
 /// (BrickWave.build_shore_field), bilinear like the ground.
 float lattice_distance(vec2 p) {
@@ -274,7 +310,7 @@ float shore_wave(vec2 p, float t, float dist) {
         return 0.0;
     }
     float reach = shore_band.w;
-    float w = smoothstep(1.0, 8.0, dist) * (1.0 - smoothstep(0.6 * reach, reach, dist))
+    float w = smoothstep(2.0, 35.0, dist) * (1.0 - smoothstep(0.6 * reach, reach, dist))
             * smoothstep(0.2, 1.0, depth);
     float drift = 1.2 * sin(0.013 * p.x + 0.7) + 1.2 * sin(0.011 * p.y + 2.1);
     return shore_band.x * w * sin(shore_band.y * dist + shore_band.z * t + drift);
@@ -290,8 +326,9 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     if (cell_m > 0.0) {
         band *= 1.0 - smoothstep(3.0, 5.0, cell_m);
     }
-    // Near a coast the swell keeps 35%, so the band rolling in is what shows.
-    float calm = 0.35 + 0.65 * smoothstep(15.0, max(shore_band.w, 16.0), dist);
+    // Calm at the beach: 15% of the swell at the waterline, all of it by
+    // the band's reach (BrickWave swell_near_shore).
+    float calm = 0.15 + 0.85 * smoothstep(0.0, max(shore_band.w, 1.0), dist);
     return wave_raw_lod(p, t, cell_m) * taper * group_factor(p, t) * calm + band;
 }
 
@@ -318,6 +355,12 @@ void vertex() {
         // LOD 1 is the finest ring (2.8 m cells, WaterSheet.base_cell).
         v_lod = 1.0 + log2(max(UV2.x, 2.8) / 2.8);
         VERTEX.y = sea_level + raw;
+        // Under the studded tier's edge the sheet carries on, a little lower:
+        // any slit between the two tiers shows water, not the seabed.
+        if (hole_radius > 0.0) {
+            float rr = distance(cell, hole_centre);
+            VERTEX.y -= seam_sink * (1.0 - smoothstep(hole_radius + 3.0, hole_radius + 8.0, rr));
+        }
         v_world = vec3(cell.x, VERTEX.y, cell.y);
         v_height01 = clamp(raw / (total_amplitude() * max(taper, 1e-3))
                 * 0.5 + 0.5, 0.0, 1.0);
@@ -326,8 +369,9 @@ void vertex() {
         v_up = 1.0;
         v_cell = vec2(0.0);
         v_top = VERTEX.y;
-        // Dry land gets no sheet, the same test the brick tiers use.
-        if (sea_level <= ground) {
+        // Dry land gets no sheet -- ALL of it, not a texel: the sheet runs
+        // under the beach and the terrain draws where they meet.
+        if (lattice_ground_min(cell) > sea_level + 1.0) {
             VERTEX = vec3(0.0);
         }
     } else {
@@ -384,7 +428,11 @@ void vertex() {
     float hzp = surface_top(cell + vec2(0.0, stud), t);
 
     float r = length(cell - snapped_origin);
-    bool alive = r < fade_radius && r >= inner_radius && top > ground;
+    // Whole pieces, under the beach too: only a cell whose every seabed
+    // corner is well above the sea is dropped. The terrain hides what runs
+    // under it, and the waterline is where the ground meets the water.
+    bool alive = r < fade_radius && r >= inner_radius
+            && lattice_ground_min(cell) < sea_level + 1.0;
     if (alive) {
         // A side is a RECTANGLE: both bottom corners of a face go to the
         // same depth, the drop to the neighbour that face looks at.
@@ -421,9 +469,28 @@ void vertex() {
         // `stud` is this tier's pitch in metres, so it is also exactly the
         // size a piece should be.
         vec2 local = VERTEX.xz * stud;
-        VERTEX.y = -depth;
-        VERTEX.xz = cell + local;
-        VERTEX.y += top;
+        // The corner this vertex sits on, and the wave there: the top leans
+        // toward it by `tile_tilt`. Two neighbours share the corner, so the
+        // step between them shrinks by the same factor, and the sides are
+        // cut to that smaller step.
+        vec2 corner = cell + local;
+        // And they lean MORE with distance: past a few metres a riser between two
+        // tiles is under a pixel, and a field of sub-pixel risers is moire,
+        // not tiles. By the tier's far half the tops follow the wave fully
+        // and the grid lines carry the tiling.
+        float tilt = mix(tile_tilt, 1.0, smoothstep(3.0, 10.0, r));
+        float lean = top;
+        if (tilt > 0.0) {
+            float tc = clamp((sea_level - seabed_at(corner)) / shore_taper_depth, 0.0, 1.0);
+            lean = mix(top, sea_level + surface_offset(corner, t, tc, 0.0), tilt);
+        }
+        if (VERTEX.y < -0.5) {
+            float least = camera_submerged ? seam_seal : sheet_thickness;
+            VERTEX.y = lean - max(depth * (1.0 - tilt), least);
+        } else {
+            VERTEX.y = lean;
+        }
+        VERTEX.xz = corner;
         v_cell = local;
         v_world = VERTEX;
         // Normalised against the LOCAL wave height, not the open-sea one.
@@ -462,6 +529,19 @@ vec3 lod_colour(float lod) {
 void fragment() {
     if (sheet_mode && hole_radius > 0.0 && distance(v_world.xz, hole_centre) < hole_radius) {
         discard;
+    }
+    // THE TILE GRID: a thin line on every stud boundary, on the studded tier
+    // and the sheet alike, anti-aliased, and faded out where a stud is under
+    // a few pixels -- past that the lines are moire, not tiles.
+    float grid = 0.0;
+    if (grid_lines) {
+        vec2 g = v_world.xz / stud_pitch_m();
+        vec2 fw = max(fwidth(g), vec2(1e-5));
+        vec2 dist_to = min(fract(g), 1.0 - fract(g));
+        vec2 w = grid_line_width / stud_pitch_m() / fw;
+        vec2 line = 1.0 - smoothstep(w * 0.5, w * 0.5 + 1.0, dist_to / fw);
+        float fade = 1.0 - smoothstep(0.06, 0.16, max(fw.x, fw.y));
+        grid = max(line.x, line.y) * fade;
     }
     // Seen from below -- which is now a thing that happens, see the cull
     // mode -- the top face's normal points away from the viewer.
@@ -567,6 +647,7 @@ void fragment() {
         }
     }
 
+    albedo *= 1.0 - grid * grid_line_darken;
     if (lod_debug) {
         albedo = mix(albedo, lod_colour(v_lod), 0.7);
     }
