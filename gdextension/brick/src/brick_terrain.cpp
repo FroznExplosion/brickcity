@@ -3613,7 +3613,10 @@ const int GROUP_COUNT = (int)(sizeof(GROUPS) / sizeof(GROUPS[0]));
 /// crammed into a strip a few metres wide at the waterline and the open sea
 /// moving one way was all anyone saw. Distance spaces the crests evenly
 /// however steep the seabed is.
-constexpr double BAND_AMP = 0.35;
+/// Off (Water.md 9.9): a second wave laid over the swell near the shore read
+/// as the sea being clamped at the beach. The swell itself now carries the
+/// shore, dying down with distance. Kept at 0 so the uniform layout holds.
+constexpr double BAND_AMP = 0.0;
 constexpr double BAND_WAVELENGTH = 15.0;  ///< metres between crests
 constexpr double BAND_PERIOD = 6.0;       ///< seconds between crests
 constexpr double BAND_REACH = 70.0;       ///< metres out from the shore
@@ -3684,14 +3687,12 @@ namespace {
 /// (height + 1) * brick -- so the CPU surface and the drawn one agree to
 /// within the texture's own quantisation rather than by construction.
 double shore_taper(double x, double z) {
+    // No depth RAMP (9.9): the strength comes from the distance to the shore,
+    // in swell_near_shore. Dry land is still 0 -- nothing to wave there.
     const int gx = (int)std::floor(x / (double)STUD_M);
     const int gz = (int)std::floor(z / (double)STUD_M);
     const double ground = (double)(BrickTerrain::height_at(gx, gz) + 1) * (double)BRICK_M;
-    const double depth = g_sea_level - ground;
-    if (depth <= 0.0) {
-        return 0.0;
-    }
-    return std::min(depth / SHORE_TAPER_DEPTH, OPEN_SEA_TAPER);
+    return g_sea_level - ground > 0.0 ? 1.0 : 0.0;
 }
 
 } // namespace
@@ -3766,10 +3767,14 @@ double field_distance(double x, double z) {
             + (d(i0, j0 + 1) + (d(i0 + 1, j0 + 1) - d(i0, j0 + 1)) * fx) * fz;
 }
 
-/// How much of the swell survives near a coast: 45% at the waterline, all of
-/// it by the band's reach. 15% read as a dead calm at every beach (9.8).
+/// THE WAVE STRENGTH, by distance to the shore and nothing else: full in the
+/// middle of the water, dying down as it travels in, a quarter of it where it
+/// meets the beach (9.9). There is no depth clamp any more -- that is what
+/// read as the sea being cut off at the shore.
+constexpr double SHORE_FADE = 150.0;
+constexpr double SHORE_STRENGTH = 0.25;
 double swell_near_shore(double dist) {
-    return 0.45 + 0.55 * smoothstep_d(0.0, BAND_REACH, dist);
+    return SHORE_STRENGTH + (1.0 - SHORE_STRENGTH) * smoothstep_d(0.0, SHORE_FADE, dist);
 }
 
 /// A slow wobble per swell component, so shore-steered crests are not

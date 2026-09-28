@@ -1189,7 +1189,7 @@ func _mirror_band(x: float, z: float, t: float) -> float:
 ## water.gdshader's calm factor: 45% of the swell at the waterline.
 func _mirror_calm(x: float, z: float) -> float:
 	var u := BrickWave.shore_band_uniform()
-	return 0.45 + 0.55 * smoothstep(0.0, maxf(u.w, 1.0), BrickWave.shore_distance(x, z))
+	return 0.25 + 0.75 * smoothstep(0.0, 150.0, BrickWave.shore_distance(x, z))
 
 
 ## water.gdshader's wave_raw_lod at full detail: each component steered to
@@ -1318,12 +1318,14 @@ func _check_wave() -> void:
 				near_amp = maxf(near_amp, amp)
 			else:
 				far_amp = maxf(far_amp, amp)
-	# Calmer, not dead: 15% read as a still pond at every beach.
+	# Calmer, not dead: a quarter of the open-water strength at the beach.
 	_ok("the sea is calmer at the beach than out at sea, and not still",
 		near_amp < far_amp * 0.75 and near_amp > far_amp * 0.2,
 		"worst %.2f m near the shore, %.2f m 60-70 m out" % [near_amp, far_amp])
-	_ok("the shore band rolls in toward the shore", rolled,
-		"what is further out arrives nearer %.3f m off later, %.3f m off earlier" % [crest_d[0], crest_d[1]])
+	# (The shore band is off since 9.9 -- the swell itself is steered to the
+	# shore and dies down on the way in -- so its roll-in check is gone.)
+	if rolled:
+		pass
 
 	# The ramp itself: dry ground gets no wave at all, and deep water gets
 	# most of one. Without the first a swell drives bricks through the beach;
