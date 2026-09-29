@@ -6,8 +6,8 @@ extends Node3D
 ## where it comes to rest it sets alight whatever there is to burn -- a
 ## neighbour's wall, a floor below. What it leaves in the street burns out.
 ##
-## Checked every CHECK_S: any MOVING piece within CATCH_REACH of a burning
-## cell catches, up to MAX_BURNING at once. A piece burns for BURN_S. When it
+## Checked every CHECK_S: any MOVING piece whose box comes within CATCH_REACH
+## of a burning cell catches, up to MAX_BURNING at once. A piece burns for BURN_S. When it
 ## settles it lights the cell it lies in (FireSpread.ignite, which does nothing
 ## where there is nothing to burn), once, and burns anyone standing on it.
 ##
@@ -89,12 +89,19 @@ func _physics_process(delta: float) -> void:
 func _catch_near_fire() -> void:
 	if fire == null or not fire.is_burning() or _burning.size() >= MAX_BURNING:
 		return
-	for c in fire.cells:
-		for isl in ctx.islands_near(FireSpread.centre_of(c.key), CATCH_REACH):
-			if not isl.settled:
+	# By the piece's box, not its centre: a storey's worth of building coming
+	# away has its centre metres from the fire that is eating its corner.
+	var im := ctx.islands
+	for isl: BrickIsland in im.islands:
+		if isl.settled or _burning.has(isl) or not isl.is_valid():
+			continue
+		var box := im.world_aabb(isl).grow(CATCH_REACH)
+		for c in fire.cells:
+			if box.has_point(FireSpread.centre_of(c.key)):
 				catch_piece(isl)
-			if _burning.size() >= MAX_BURNING:
-				return
+				break
+		if _burning.size() >= MAX_BURNING:
+			return
 
 
 func _tend() -> void:
