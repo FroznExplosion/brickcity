@@ -182,5 +182,48 @@ func _run() -> void:
 		await process_frame
 	get_root().get_texture().get_image().save_png("res://shots/impostor_items.png")
 
+	# Areas: the field of 240 trees spans several 128 m squares.
+	print("[impostor]   %d trees in %d area(s)" % [lod.count(), lod.chunk_count()])
+	_check("copies are kept in areas", lod.chunk_count() > 1)
+
+	# A node kind: an assembled thing with its own materials, drawn by its
+	# owner up close and by a card past NEAR.
+	var model := Node3D.new()
+	var body := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.12, 0.2, 0.7)
+	body.mesh = bm
+	var red := StandardMaterial3D.new()
+	red.albedo_color = Color(0.8, 0.1, 0.1)
+	body.material_override = red
+	model.add_child(body)
+	var grip := MeshInstance3D.new()
+	var gm := BoxMesh.new()
+	gm.size = Vector3(0.1, 0.25, 0.1)
+	grip.mesh = gm
+	grip.position = Vector3(0.0, -0.2, 0.2)
+	model.add_child(grip)
+	var node_kind := items.kind_from_node("model", model)
+	var mh := items.add("model", Transform3D(Basis(), base + Vector3(40.0, 0.3, 40.0)))
+	items.update()
+	_check("a node kind stays its owner's until its card is baked", items.tier_of(mh) == 1)
+	guard = 0
+	while node_kind.bake.is_empty() and guard < 300:
+		await process_frame
+		guard += 1
+	items.update()
+	items.update()
+	_check("then, past NEAR, the card stands in", not node_kind.bake.is_empty()
+			and items.tier_of(mh) == 2, "tier %d" % items.tier_of(mh))
+	var node_img: Image = (node_kind.bake.albedo as Texture2D).get_image() if not node_kind.bake.is_empty() else null
+	var reddish := 0
+	if node_img != null:
+		for y in range(0, node_img.get_height(), 2):
+			for x in range(0, node_img.get_width(), 2):
+				var px := node_img.get_pixel(x, y)
+				if px.a > 0.5 and px.r > px.g * 2.0:
+					reddish += 1
+	_check("  baked in its own material's colour", reddish > 0)
+
 	print("[impostor] %d ok, %d FAIL" % [_ok, _fail])
 	quit(1 if _fail > 0 else 0)
