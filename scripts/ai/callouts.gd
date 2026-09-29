@@ -167,12 +167,30 @@ func _view(l: Listener, world3d: World3D, ai_world: AIWorld) -> void:
 		l.views.append(v)
 
 
+## `p` is inside the camera's view. From its field of view and the viewport's
+## shape, not Camera3D.is_position_in_frustum, which needs a drawn viewport and
+## is wrong in a headless run.
+static func in_view(cam: Camera3D, p: Vector3) -> bool:
+	var l := cam.global_transform.affine_inverse() * p
+	if l.z > -cam.near:
+		return false
+	var size := cam.get_viewport().get_visible_rect().size if cam.get_viewport() != null else Vector2.ZERO
+	var aspect := size.x / size.y if size.y > 0.0 else 16.0 / 9.0
+	var tv := tan(deg_to_rad(cam.fov) * 0.5)
+	var th := tv * aspect
+	if cam.keep_aspect == Camera3D.KEEP_WIDTH:
+		th = tan(deg_to_rad(cam.fov) * 0.5)
+		tv = th / aspect
+	var d := -l.z
+	return absf(l.x) <= th * d and absf(l.y) <= tv * d
+
+
 ## The listener's eye reaches the speaker: in the view, a sight ray on the
 ## hitscan mask (the same as perception's) gets there, and no smoke between.
 static func can_see(l: Listener, speaker: Pawn, world3d: World3D, ai_world: AIWorld) -> bool:
 	var cam := l.camera
 	var head := speaker.eye.global_position
-	if not cam.is_position_in_frustum(head) and not cam.is_position_in_frustum(speaker.chest()):
+	if not in_view(cam, head) and not in_view(cam, speaker.chest()):
 		return false
 	var ex: Array[RID] = [speaker.body.get_rid()]
 	if l.pawn != null and is_instance_valid(l.pawn):
