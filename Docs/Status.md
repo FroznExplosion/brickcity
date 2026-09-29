@@ -3942,6 +3942,30 @@ fully drained, and a final phase held past `TRIM_AFTER_MS` to see what is handed
 many buildings took a hit and how many toppled, and warns if any hits were left queued -- see "What
 the stress pass could not say" for why it prints all three.
 
+### Natural disasters
+
+Every city, the big one included, has a disaster director ([Disasters.md](Disasters.md)). `H`
+opens a menu -- which disaster or Random, an intensity (Low / Medium / High / Extreme), and the
+earthquake's collapse caps -- and `Shift+H` ends the running one. Six are built: **meteor
+shower, lightning storm, building fire, tornado, earthquake, acid rain**. Everything they do to
+bricks goes through the world authority as committed commands -- blasts, chips, shears, seams,
+and a new colour-only SCORCH for char -- so a replay or a co-op client sees the same city.
+
+* **The earthquake is a sideways load in the solver** (`BrickWorld.lateral_check`): buildings near
+  the player fail where their joints do -- a soft storey, found by the numbers -- are cut there
+  and go over. Slender towers fall in a medium quake, squat blocks hold past 3 g. Far buildings
+  take a rolled, cheap undermining. The tornado pushes standing buildings over with the same load.
+* **Fire** burns on a coarse cell grid, spreads up, chars the walls it burns and throws burning
+  debris that lights what it lands on; plastic burns, metal and stone stop it.
+* **Acid rain** wears roofs through by material -- PLA first, metal and stone never.
+* **Soldiers react:** they run from meteor rings, funnels and fire, lose sight in smoke, shelter
+  from storms, and aim worse in weather; rain and dust reach the screen too.
+* **Co-op:** the host sends each disaster as a small event and clients replay the look from the
+  same seed, deciding nothing.
+
+Deferred (a heightfield-only game): blizzard, flood, landslide, volcano, hurricane. Dropped:
+sinkhole and meteor craters in the ground, which need destructible terrain.
+
 ## Known limitations
 
 1. **Two single-item spikes remain**, and they are what the worst frames are made of: one
