@@ -58,6 +58,9 @@ class Building:
 	## hp, and a building that forgot its chips would take more shots to break than
 	## the same building on a machine that never let go of it.
 	var worn := {}
+	## frame -> ids of living blocks fire has charred (BrickWorld.scorch_hit): a
+	## rebuild from the recipe paints every brick its own colour again.
+	var scorched := {}
 	## Local bounds of everything this building occupies, frames included. Empty
 	## until it has been materialised once; `BuildingRegistry.local_box` is what
 	## reads it, and falls back to the parametric footprint until then.
@@ -133,6 +136,9 @@ class Building:
 	## What a gun has worn down in one frame. See worn.
 	func worn_in(frame: int) -> PackedInt32Array:
 		return worn.get(frame, PackedInt32Array())
+
+	func scorched_in(frame: int) -> PackedInt32Array:
+		return scorched.get(frame, PackedInt32Array())
 
 	## How many blocks this building has lost, and the frame that was counted on.
 	##
@@ -943,6 +949,7 @@ func materialise(id: int) -> int:
 		b.dead_frames = {}
 		b.gone = {}
 		b.worn = {}
+		b.scorched = {}
 		b.recipe_version = RECIPE_VERSION
 	var cs := b.chunks()
 	for i in cs.size():
@@ -952,6 +959,7 @@ func materialise(id: int) -> int:
 		# building has to know, and the next record lists them with the damage.
 		world.kill_blocks(cs[i], b.gone_in(i))
 		world.set_worn_blocks(cs[i], b.worn_in(i))
+		world.set_scorched_blocks(cs[i], b.scorched_in(i))
 
 	b.materialised_at = Time.get_ticks_msec()
 	_materialised += 1
@@ -1033,6 +1041,7 @@ func _record_damage(b: Building) -> void:
 		b.set_dead_in(i, world.get_dead_blocks(cs[i]))
 		b.gone[i] = world.get_detached_blocks(cs[i])
 		b.worn[i] = world.get_worn_blocks(cs[i])
+		b.scorched[i] = world.get_scorched_blocks(cs[i])
 
 
 ## The whole thing's local bounds, frames included -- what a blast has to test

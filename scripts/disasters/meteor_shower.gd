@@ -18,6 +18,7 @@ extends Disaster
 const SPEED := 120.0            ## m/s
 const SPAWN_DIST := 250.0       ## m back along the path from the aim point
 const MARK_LEAD := 2.5          ## s the ring shows before impact
+const SCORCH_RIM := 1.0         ## m of blackened brick round a crater
 const POOL := 8                 ## meteors drawn at once; more still land, unseen
 const GROUND_MIN := 8.0         ## m from the player, never closer
 const GROUND_MAX := 80.0
@@ -296,6 +297,8 @@ func _impact(m: Dictionary, pos: Vector3, normal: Vector3, structure: bool) -> v
 	if m.has("hazard"):
 		ctx.clear_hazard(int(m.hazard))
 	var r := float(m.radius)
+	# Char first: the crater's rim is left black (SCORCH), its middle blown away.
+	ctx.scorch(pos, r + SCORCH_RIM)
 	ctx.blast(pos, r)
 	ctx.impact_fx(pos, normal)
 	ctx.shake(pos, 0.5 if m.big else 0.25)

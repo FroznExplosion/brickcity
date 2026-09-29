@@ -297,6 +297,23 @@ inline const NamedColour &brick_material_colour_entry(int material, int colour) 
             % FILAMENT_PALETTE_SIZE];
 }
 
+/// The darkest colour a material has -- what fire leaves of it. Black for
+/// filament; the darkest of its own variants for wood, metal and stone.
+inline int brick_material_darkest(int material) {
+    const int n = brick_material_colour_count(material);
+    int best = 0;
+    float best_l = 1e9f;
+    for (int i = 0; i < n; ++i) {
+        const NamedColour &e = brick_material_colour_entry(material, i);
+        const float l = e.r * 0.299f + e.g * 0.587f + e.b * 0.114f;
+        if (l < best_l) {
+            best_l = l;
+            best = i;
+        }
+    }
+    return best;
+}
+
 inline Color filament_colour(int index) {
     if (index < 0 || index >= FILAMENT_PALETTE_SIZE) {
         return Color(1.0f, 0.0f, 1.0f); // missing-colour magenta

@@ -499,6 +499,16 @@ public:
     /// chunk has to carry across being dematerialised or put to sleep, since a
     /// rebuild from a recipe or a record starts every brick at 255.
     PackedInt32Array get_worn_blocks(int chunk_id) const;
+    /// Char bricks: every living block whose cell centre is within radius_m of
+    /// a world point (and always the one the point is in) takes its material's
+    /// darkest colour (brick_material_darkest). Nothing dies, no joint changes.
+    /// Returns the ids newly scorched, ascending; the caller remeshes.
+    PackedInt32Array scorch_hit(int chunk_id, Vector3 world_point, float radius_m);
+    /// Every living scorched block's id -- what a chunk carries across being
+    /// dematerialised, like get_worn_blocks.
+    PackedInt32Array get_scorched_blocks(int chunk_id) const;
+    /// Char these blocks again. Ids that are gone are skipped.
+    void set_scorched_blocks(int chunk_id, const PackedInt32Array &ids);
 
     /// How many authored triangles the chunk's living blocks draw (a curved
     /// stair tread's `mesh`, against a brick's handful of voxel faces). Bricks

@@ -40,6 +40,10 @@ const BIAS_DOWN := 0.3
 const FUEL_BASE := 4.0           ## steps' worth, plus FUEL_PER_FLAM * flammability
 const FUEL_PER_FLAM := 8.0
 const PAWN_DAMAGE := 6.0         ## per step at full heat, to anyone in the cell
+## A cell chars its walls once, when its heat first passes this; SCORCH_RADIUS
+## reaches the corners of the cell.
+const SCORCH_HEAT := 0.5
+const SCORCH_RADIUS := 1.5
 
 ## Burn, per material index -- append-only, like the table it mirrors.
 ## PLA, PLA matte, PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA,
@@ -56,6 +60,7 @@ class Cell:
 	var fuel := 0.0
 	var flam := 0.0
 	var steps := 0
+	var scorched := false
 	var emitter: GPUParticles3D
 
 ## What the world is, as callables so the probe can run fire without a city:
@@ -63,6 +68,9 @@ class Cell:
 ## damage(Vector3, float, float) -> int; raining() -> bool.
 var material_at: Callable
 var chip: Callable
+## scorch(Vector3, float) -> int: blacken the bricks round a cell, once, as it
+## takes hold (SCORCH_HEAT). Optional.
+var scorch: Callable
 var damage: Callable
 var raining: Callable
 
@@ -92,6 +100,7 @@ var smoke_spots: Array = []
 ## Counters for the probe and the HUD.
 var caught := 0
 var chips := 0
+var scorches := 0
 var peak := 0
 var capped := 0                  ## catches refused at the cap
 
@@ -207,6 +216,10 @@ func _step(c: Cell, wet: bool) -> void:
 	c.steps += 1
 	c.heat = minf(1.0, c.heat + HEAT_RATE * (0.5 if wet else 1.0))
 	var centre := centre_of(c.key)
+	if not c.scorched and c.heat >= SCORCH_HEAT and scorch.is_valid():
+		c.scorched = true
+		scorch.call(centre, SCORCH_RADIUS)
+		scorches += 1
 	var hp := int(round(CHIP_HP * c.heat * (0.5 + c.flam)))
 	if hp > 0 and chip.is_valid():
 		chip.call(centre, CHIP_RADIUS, hp)

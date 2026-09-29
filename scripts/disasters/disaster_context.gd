@@ -59,6 +59,11 @@ func chip(point: Vector3, radius: float, hp: int) -> void:
 	city.chip(point, radius, hp)
 
 
+## Blacken the bricks in a ball: fire's mark, colour only (DamageLog SCORCH).
+func scorch(point: Vector3, radius: float) -> int:
+	return city.scorch(point, radius)
+
+
 ## Knock a clump of bricks loose from the building at `point`, whole -- they
 ## become a piece, and fall -- rather than destroying them. The city's own
 ## shear, as falling masonry does it. Host only (it commits directly, like the
