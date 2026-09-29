@@ -681,6 +681,9 @@ var _shot_mode := false
 ## Frame-cost measurement, the same reading `heightfield_test -- --bench`
 ## takes, so the city and the terrain can be compared on one scale.
 var _bench_mode := false
+## `--bench --with-bricks`: let the viewpoints promote what is beside them, to
+## measure what brick buildings cost (the shadow pass, section 7.2).
+var _bench_bricks := false
 
 ## THE CITY ON GROUND. `-- --terrain`.
 ##
@@ -733,6 +736,7 @@ var _buildings_arg := false
 var _stress_mode := false
 var _reach_mode := false
 var _far_mode := false
+var _tree_mode := false
 var _lod_mode := false
 var _walk_mode := false
 var _no_fixtures := false
@@ -878,10 +882,12 @@ func _ready() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	_shot_mode = "--shot" in args
 	_bench_mode = "--bench" in args
+	_bench_bricks = "--with-bricks" in args
 	_terrain_mode = terrain_ground or "--terrain" in args
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
 	_far_mode = "--far" in args
+	_tree_mode = "--trees" in args
 	_lod_mode = "--lod" in args
 	_walk_mode = "--walk" in args
 	# For measurement: the same city with nothing fixed to its buildings, so a
@@ -1021,6 +1027,8 @@ func _ready() -> void:
 			get_tree().quit(0 if err == OK else 1)
 			return
 		_build_terrain_ground()
+		if not "--no-trees" in args:
+			_place_trees()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
 	FurnitureMesh.fake_material()
@@ -1068,6 +1076,8 @@ func _ready() -> void:
 		_run_reach_pass()
 	elif _far_mode:
 		_run_far_pass()
+	elif _tree_mode:
+		_run_tree_pass()
 	elif _walk_mode:
 		_run_walk_pass()
 	elif _build_mode:
@@ -1355,6 +1365,7 @@ func _build_terrain_ground() -> void:
 		var w := float(maxi(int(b.recipe.footprint_x), int(b.recipe.footprint_z))) * stud
 		reach = maxf(reach, maxf(absf(o.x), absf(o.z)) + w)
 	var half: int = int(ceil(reach / tile_m)) + 1
+	_terrain_half = half
 
 	_terrain_mat = ShaderMaterial.new()
 	_terrain_mat.shader = load("res://shaders/terrain.gdshader")
@@ -2176,6 +2187,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		# every "has a shell" question still has its answer, with no mesh and
 		# so no draw call of its own.
 		_shell_box[id] = true
+	elif _inst_ok(b):
+		# Drawn by its instanced set (a tree): the same, for the same reason.
+		_shell_inst[id] = true
 	elif b.is_build():
 		mi.mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), coarse)
 	else:
@@ -2204,8 +2218,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			mi.add_child(glass)
 	# A shell and a far box would be the same building drawn twice -- unless
-	# the far box IS this shell's drawing.
+	# the far box IS this shell's drawing. So would a shell and a tree's copy.
 	_far_sync(b)
+	_inst_sync(b)
 	if far:
 		_shell_far[id] = true
 		return
@@ -2968,6 +2983,9 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node.material_override = brick_material
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		# Casting as the building does: a shadow shell may be standing in
+		# for its bricks (_stream_shadows).
+		node.cast_shadow = (_brick_nodes[id] as MeshInstance3D).cast_shadow
 		(_brick_nodes[id] as MeshInstance3D).add_child(node)
 		nodes[at] = node
 	else:
@@ -5057,6 +5075,10 @@ func _physics_process(_delta: float) -> void:
 	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	if camera != null and Engine.get_physics_frames() % 8 == 2:
+		_stream_shadows()
+	if camera != null and Engine.get_physics_frames() % 4 == 1:
+		_inst_update()
 	_part("st_shells", t_sh)
 	if _show_grids:
 		_draw_grids()
@@ -5126,6 +5148,10 @@ func _free_shell(id: int) -> void:
 	_shell_far.erase(id)
 	_shell_box.erase(id)
 	_far_hide(id)
+	_shell_inst.erase(id)
+	var fb := registry.get_building(id)
+	if fb != null:
+		_inst_sync(fb)
 	if _shells.has(id):
 		(_shells[id] as MeshInstance3D).queue_free()
 		_shells.erase(id)
@@ -5171,7 +5197,7 @@ func _stream_residency() -> void:
 	# The bench measures shells (Docs/Terrain.md 19.5). A street-level
 	# viewpoint promoting the buildings beside it, at whatever tick it got
 	# round to them, made every reading after it a different city.
-	if _bench_mode:
+	if _bench_mode and not _bench_bricks:
 		return
 	# NOT gated on respawn_buildings. Turning that off means a building never
 	# gives its bricks BACK -- it was never meant to stop one getting them in
@@ -5215,7 +5241,10 @@ func _stream_shells() -> void:
 		return
 	var budget := SHELLS_PER_TICK
 	var looked := 0
-	var slice := mini(count, SHELLS_PER_TICK * 16)
+	# A full pass over the register every eight, however many there are: with
+	# trees in it the register is ten times the city, and a fixed slice left a
+	# building waiting seconds for its tier.
+	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, count / 8 + 1))
 	while looked < slice and budget > 0:
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
@@ -5224,6 +5253,7 @@ func _stream_shells() -> void:
 		# After the shell's own step, so a building whose shell just went
 		# gets its far box in the same tick rather than a pass later.
 		_far_sync(b)
+		_inst_sync(b)
 	_far_dmg_upload()
 
 
@@ -5276,6 +5306,259 @@ func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Instanced builds: trees, and later items (Docs/Impostors.md 8)
+# ---------------------------------------------------------------------------
+#
+# A tree is a registered build, so it is destructible like any building: shot,
+# it materialises, sheds pieces, topples (Trees). But hundreds of them each
+# with a shell mesh would be hundreds of draw calls. So an INTACT one is drawn
+# by the ImpostorLod of its recipe -- its real bricks instanced up close, an
+# octahedral card further out, two draw calls for every tree of that kind --
+# and its shell node, inside SHELL_RANGE, has no mesh: only its collision.
+# Once it is damaged or holds bricks, it draws itself the ordinary way.
+
+## Nearer than this a tree is its real bricks (instanced); further, a card.
+const TREE_NEAR := 45.0
+## Trees at most, and how far out from the middle they grow, in studs. Past
+## the city's own detailed ground: the city stands on rock, and the grass is
+## round it. A tree out there stands on the coarse ring, whose surface is the
+## field's height within a plate or two.
+const TREE_MAX := 800
+const TREE_REACH_STUDS := 1200
+
+var _inst_sets := {}      ## impostor key -> ImpostorLod
+var _inst_handle := {}    ## building id -> its handle in that set
+var _shell_inst := {}     ## building id -> its shell is drawn by the set
+var _trees_placed := 0
+var _terrain_half := 0   ## tiles each way the detailed ground reaches
+
+
+## The key of the instanced set a build belongs to, or "" if it draws itself.
+func _inst_key(b: BuildingRegistry.Building) -> String:
+	if not b.is_build():
+		return ""
+	return str(b.build.meta.get("impostor_key", ""))
+
+
+## Can its set draw it: one of a set, and exactly as its recipe says.
+func _inst_ok(b: BuildingRegistry.Building) -> bool:
+	return _inst_key(b) != "" and not b.is_damaged() and not b.is_materialised() \
+			and not b.toppled
+
+
+## Show or hide a building's copy in its set to match what else draws it.
+func _inst_sync(b: BuildingRegistry.Building) -> void:
+	if not _inst_handle.has(b.id):
+		return
+	var set_: ImpostorLod = _inst_sets[_inst_key(b)]
+	var want: bool
+	if _shell_inst.has(b.id):
+		# As the far box does for a coarse shell (_far_sync): kept while the
+		# placeholder is, so a tree shot and materialising is never undrawn.
+		want = not b.toppled
+	else:
+		want = _inst_ok(b) and not _shells.has(b.id)
+	set_.set_wanted(int(_inst_handle[b.id]), want)
+
+
+func _inst_set(key: String, recipe: BuildRecipe) -> ImpostorLod:
+	if _inst_sets.has(key):
+		return _inst_sets[key]
+	var s := ImpostorLod.new()
+	s.name = "Inst_%s" % key
+	add_child(s)
+	s.setup(RecipeMesh.build(recipe, key), brick_material, TREE_NEAR)
+	_inst_sets[key] = s
+	return s
+
+
+## Trees over the detailed ground (Trees.scatter), each a registered build.
+## Shells are left to _stream_shells: a tree past SHELL_RANGE never needs one.
+func _place_trees() -> void:
+	var t0 := Time.get_ticks_usec()
+	var span := maxi(_terrain_half * BrickTerrain.get_tile_studs(), TREE_REACH_STUDS)
+	var spots: Array = Trees.scatter(Rect2i(-span, -span, span * 2, span * 2),
+			int(BrickTerrain.get_seed()), TREE_MAX)
+	for s in spots:
+		var variant: int = s.variant
+		var recipe := Trees.recipe(variant)
+		var id := registry.register_build(recipe, Trees.placement(s.cell, variant))
+		if id < 0:
+			continue
+		_index_building(id)
+		var b := registry.get_building(id)
+		var set_ := _inst_set(_inst_key(b), recipe)
+		_inst_handle[id] = set_.add(b.xform, false)
+		_inst_sync(b)
+		_trees_placed += 1
+	print("[city] trees: %d placed in %.0f ms (%d kinds)" % [
+		_trees_placed, float(Time.get_ticks_usec() - t0) / 1000.0, _inst_sets.size()])
+
+
+func _inst_update() -> void:
+	var here := camera.global_position
+	for s in _inst_sets.values():
+		(s as ImpostorLod).update(here)
+
+
+# ---------------------------------------------------------------------------
+# Shadow LOD (Docs/Impostors.md section 7.2)
+# ---------------------------------------------------------------------------
+#
+# The directional light draws every caster again into each of its cascades, and
+# a building's brick mesh is a million triangles: three brick buildings in view
+# were 3.3M triangles of shadow pass alone (section 7.1). But a big thing's
+# shadow is big, and seen from far off, so it cannot just be switched off.
+#
+# So what casts is chosen by size and distance, not dropped:
+#
+#   * a materialised building casts with a shadow-only SHELL of itself --
+#     BuildingShell from the live damage profile, or BuildShell for a build --
+#     about three thousand triangles, the right shape, holes included -- and
+#     only the bands of its bricks within BRICK_SHADOW_RANGE cast as well;
+#   * a big piece of wreckage (an island wider than SMALL_ISLAND_RADIUS) casts
+#     at any range; a small one only inside SMALL_SHADOW_RANGE, where its
+#     shadow is more than a few pixels;
+#   * a far box casts (the far MultiMesh), so a tower past the shell range
+#     still throws its long shadow into view.
+
+const BRICK_SHADOW_RANGE := 15.0
+## Proxies built or rebuilt per pass: a profile and a shell are ~0.5 ms.
+const SHADOW_PROXIES_PER_PASS := 2
+## A piece of wreckage up to this radius is "small" (metres, BrickIsland.radius).
+const SMALL_ISLAND_RADIUS := 2.5
+const SMALL_SHADOW_RANGE := 30.0
+## Directional shadows reach this far, so a tower's shadow does too. The splits
+## keep the first cascades as tight as the 100 m default had them.
+const SUN_SHADOW_DISTANCE := 400.0
+
+var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
+var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
+var _shadow_stats := {"proxies": 0, "bricks_casting": 0, "small_quiet": 0}
+
+
+func _setup_sun_shadows(sun: DirectionalLight3D) -> void:
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = SUN_SHADOW_DISTANCE
+	# Fractions of the distance: 10, 36 and 120 m, against 10, 20 and 50 m of
+	# the default at 100 m. The first cascade, the one a figure's feet are
+	# in, is exactly as sharp as it was.
+	sun.directional_shadow_split_1 = 0.025
+	sun.directional_shadow_split_2 = 0.09
+	sun.directional_shadow_split_3 = 0.3
+	sun.directional_shadow_blend_splits = true
+	sun.directional_shadow_fade_start = 0.9
+
+
+## Every so often: who casts what. Cheap -- a distance per brick building and
+## per island, and a proxy mesh only when one changes tier or is shot.
+func _stream_shadows() -> void:
+	var here := camera.global_position
+	var built := 0
+	var casting := 0
+	# Proxies whose building has no bricks drawn any more.
+	for id in _shadow_proxy.keys():
+		if not _brick_nodes.has(id):
+			_drop_shadow_proxy(id)
+	for id in _brick_nodes:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		var stale: bool = not _shadow_proxy.has(id) or int(_shadow_proxy_alive.get(id, -1)) 				!= world.get_alive_block_count(b.chunk)
+		if stale and built < SHADOW_PROXIES_PER_PASS and _make_shadow_proxy(b):
+			built += 1
+		casting += _set_brick_shadows_near(id, here)
+	var quiet := 0
+	for isl in islands.islands:
+		if isl == null or not is_instance_valid(isl.mesh):
+			continue
+		var cast := isl.radius > SMALL_ISLAND_RADIUS \
+				or isl.mesh.global_position.distance_to(here) < SMALL_SHADOW_RANGE + isl.radius
+		isl.mesh.cast_shadow = (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast
+				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+		if not cast:
+			quiet += 1
+	_shadow_stats = {"proxies": _shadow_proxy.size(), "bricks_casting": casting,
+			"small_quiet": quiet}
+
+
+## Which of a building's bricks cast. Without a shadow shell, all of them.
+## With one, only the bands (and extra frames) within BRICK_SHADOW_RANGE of the
+## camera: a tower beside you is mostly far above you, and the part that is
+## not is where a stud's shadow can be seen. Where both cast, the shadow is the
+## same. Returns how many brick nodes cast.
+func _set_brick_shadows_near(id: int, here: Vector3) -> int:
+	var all: bool = not _shadow_proxy.has(id)
+	var nodes: Array = []
+	var mi = _brick_nodes.get(id)
+	if is_instance_valid(mi):
+		nodes.append(mi)
+		nodes.append_array((mi as Node).get_children())
+	nodes.append_array(_frame_nodes.get(id, []))
+	var casting := 0
+	for node in nodes:
+		if not is_instance_valid(node) or not (node is GeometryInstance3D):
+			continue
+		var g := node as GeometryInstance3D
+		var on := all
+		if not on and g is MeshInstance3D and (g as MeshInstance3D).mesh != null:
+			var box: AABB = g.global_transform * (g as MeshInstance3D).get_aabb()
+			on = _box_distance(box, here) < BRICK_SHADOW_RANGE
+		g.cast_shadow = (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
+				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+		if on:
+			casting += 1
+	return casting
+
+
+func _set_brick_shadows(id: int, on: bool) -> void:
+	var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
+			else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+	var mi = _brick_nodes.get(id)
+	if is_instance_valid(mi):
+		(mi as MeshInstance3D).cast_shadow = mode
+		for band in (mi as Node).get_children():
+			if band is GeometryInstance3D:
+				(band as GeometryInstance3D).cast_shadow = mode
+	for node in _frame_nodes.get(id, []):
+		if is_instance_valid(node) and node is GeometryInstance3D:
+			(node as GeometryInstance3D).cast_shadow = mode
+
+
+## A shadow-only shell of a materialised building, from what is standing now.
+func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
+	var mesh: Mesh
+	if b.is_build():
+		mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
+	else:
+		mesh = BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z,
+				b.recipe.courses, registry.live_damage_profile(b.id))
+	if mesh == null:
+		return false
+	var mi: MeshInstance3D = _shadow_proxy.get(b.id)
+	if mi == null:
+		mi = MeshInstance3D.new()
+		mi.name = "ShadowProxy_%d" % b.id
+		mi.material_override = brick_material
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		mi.transform = b.xform
+		add_child(mi)
+		_shadow_proxy[b.id] = mi
+	mi.mesh = mesh
+	_shadow_proxy_alive[b.id] = world.get_alive_block_count(b.chunk)
+	return true
+
+
+func _drop_shadow_proxy(id: int) -> void:
+	var mi = _shadow_proxy.get(id)
+	if is_instance_valid(mi):
+		(mi as Node).queue_free()
+	_shadow_proxy.erase(id)
+	_shadow_proxy_alive.erase(id)
+	_set_brick_shadows(id, true)
+
+
+# ---------------------------------------------------------------------------
 # The far city (Docs/Impostors.md, Stages 1-3)
 # ---------------------------------------------------------------------------
 #
@@ -5314,7 +5597,8 @@ var _far_dmg_dirty := false
 
 ## A building past SHELL_RANGE the far box would draw wrongly: it keeps a shell.
 func _needs_far_shell(b: BuildingRegistry.Building) -> bool:
-	return b.is_build()
+	# An intact tree is drawn by its instanced set out there instead.
+	return b.is_build() and not _inst_ok(b)
 
 
 ## Can the far box stand in for this building's coarse shell (Stage 2)? A
@@ -5334,7 +5618,7 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 		want = not b.toppled
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
-				or _needs_far_shell(b))
+				or b.is_build())
 	if want == _far_on.has(b.id):
 		return
 	if not want:
@@ -5482,8 +5766,9 @@ func _far_multimesh() -> MultiMesh:
 	_far.name = "FarCity"
 	_far.multimesh = mm
 	_far.material_override = mat
-	# Past SHELL_RANGE is far outside the directional shadow distance.
-	_far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Casts: a tower's shadow is long and seen from far off (section 7.2).
+	# Ten triangles a building, and the cascades cut away what is out of reach.
+	_far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(_far)
 	return mm
 
@@ -6169,13 +6454,14 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 		else:
 			detailed += 1
 	@warning_ignore("integer_division")
-	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms  (%d banded shells, %d coarse meshes, %d far boxes)" % [
+	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms  (%d banded shells, %d coarse meshes, %d far boxes; %d brick buildings, %d brick nodes casting, %d shadow shells)" % [
 		label,
 		RenderingServer.get_rendering_info(
 			RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME),
 		RenderingServer.get_rendering_info(
 			RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
-		sum / float(samples.size() / 2), detailed, meshed_coarse, _far_on.size()])
+		sum / float(samples.size() / 2), detailed, meshed_coarse, _far_on.size(),
+		_brick_nodes.size(), int(_shadow_stats.bricks_casting), int(_shadow_stats.proxies)])
 
 
 func _run_shot_pass() -> void:
@@ -7272,6 +7558,93 @@ func _ray_recipes(from: Vector3, to: Vector3) -> Dictionary:
 			best_d = d
 			best = {"position": world_at, "building": b.id}
 	return best
+
+
+## Trees in the city (Docs/Impostors.md 8).
+##
+##     godot --path . scenes/city.tscn -- --terrain --trees
+##
+## They are there, drawn by their sets and nothing else; one materialised
+## whole stands up on its own; one shot through the trunk comes down.
+func _run_tree_pass() -> void:
+	print("[trees] brick trees on the ground")
+	await _frames(30)
+	_gate_ok("trees were placed", _trees_placed > 0, "%d" % _trees_placed)
+	if _trees_placed == 0:
+		print("[trees] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+	# The nearest tree to the middle of the city, and the camera by it.
+	var trees: Array = _inst_handle.keys()
+	var pick: int = trees[0]
+	var best := INF
+	for id in trees:
+		var d := registry.get_building(id).xform.origin.length()
+		if d < best:
+			best = d
+			pick = id
+	var tb := registry.get_building(pick)
+	var base := tb.xform * (registry.local_box(pick).get_center() * Vector3(1, 0, 1))
+	camera.global_position = base + Vector3(10.0, 5.0, 14.0)
+	camera.look_at(base + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+	await _far_settle()
+	for i in 20:
+		await RenderingServer.frame_post_draw
+	var near := 0
+	var far := 0
+	for s in _inst_sets.values():
+		near += (s as ImpostorLod).near_count
+		far += (s as ImpostorLod).far_count
+	var meshed := 0
+	for id in trees:
+		if _shells.has(id) and (_shells[id] as MeshInstance3D).mesh != null:
+			meshed += 1
+	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
+		_trees_placed, _inst_sets.size(), near, far, meshed])
+	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
+			"%d of %d" % [near + far, _trees_placed])
+	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
+	var baked := 0
+	for s in _inst_sets.values():
+		if not (s as ImpostorLod).bake.is_empty():
+			baked += 1
+	_gate_ok("every kind has its impostor baked", baked == _inst_sets.size(),
+			"%d of %d" % [baked, _inst_sets.size()])
+	_gate_ok("a tree in reach has collision", _shell_bodies.has(pick))
+	await _save("trees_near")
+
+	# Materialised whole, it has to stand: the canopy rests on the trunk.
+	var chunk := _promote(pick)
+	await _frames(90)
+	var alive := world.get_alive_block_count(chunk) if chunk >= 0 else -1
+	_gate_ok("a tree materialised whole stands", chunk >= 0 and not tb.toppled
+			and alive == tb.build.size(), "%d of %d bricks, toppled %s" % [
+				alive, tb.build.size(), tb.toppled])
+	_gate_ok("  and its copy is not drawn over its bricks",
+			not (_inst_sets[_inst_key(tb)] as ImpostorLod).is_drawn(int(_inst_handle[pick])))
+
+	# Shot through the trunk, low: it comes down.
+	var islands_before := islands.islands.size()
+	_blast(base + Vector3(0.35, 0.6, 0.35), 0.9)
+	var fell := false
+	for i in 240:
+		await RenderingServer.frame_post_draw
+		if tb.toppled or islands.islands.size() > islands_before:
+			fell = true
+			break
+	await _save("trees_shot")
+	_gate_ok("a tree shot through the trunk comes down", fell,
+			"toppled %s, islands %d -> %d" % [tb.toppled, islands_before, islands.islands.size()])
+
+	# From the edge of the city: the cards.
+	camera.global_position = base + Vector3(0.0, 40.0, 160.0)
+	camera.look_at(base, Vector3.UP)
+	await _far_settle()
+	for i in 20:
+		await RenderingServer.frame_post_draw
+	await _save("trees_far")
+	print("[trees] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## The far city's gate (Docs/Impostors.md, Stage 1).
@@ -9569,6 +9942,7 @@ func _build_scenery() -> void:
 	sun.rotation_degrees = Vector3(-30 if _terrain_mode else -50, -35, 0)
 	sun.light_energy = 1.1
 	sun.shadow_enabled = true
+	_setup_sun_shadows(sun)
 	add_child(sun)
 	_sun = sun
 
@@ -9602,7 +9976,7 @@ func _build_scenery() -> void:
 	# Every scripted pass drives the camera itself. Leaving the debug camera
 	# captured let it keep applying its own movement and mouse-look on top,
 	# which is why the reach probe reported misses at 40 m.
-	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _lod_mode
+	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _tree_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
 			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode
 			or _windows_mode)
