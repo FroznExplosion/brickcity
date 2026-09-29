@@ -212,10 +212,13 @@ func set_walking(on: bool) -> void:
 	mode_changed.emit(_walking)
 
 
-## Distance from the body's centre -- a capsule's origin -- up to the eye. The
-## eye sits a plate below the top of the head, whatever height the body is.
+## Distance from the body's centre -- a capsule's origin -- up to the eye: the
+## middle of the head, whatever height the body is -- EYE_HEIGHT above the feet
+## standing, a brick lower crouched. It was a plate below the crown, the rule
+## from before the figure was resized to four bricks with a head of a brick and
+## a quarter: 1.54 m, where EYE_HEIGHT (and Pawn.eye_offset) say 1.42.
 func _eye_offset() -> float:
-	return _height * 0.5 - PLATE_M
+	return _height * 0.5 - HEAD_HEIGHT * 0.5
 
 
 ## Resize the capsule with the FEET planted. A capsule grows about its centre,

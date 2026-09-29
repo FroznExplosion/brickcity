@@ -785,6 +785,16 @@ var _ai_sync_ms := 0.0
 var _ai_run_ms := 0.0
 ## The deepest the ladder went in each --stress phase.
 var _ai_phase_level := {}
+## The arbiter's line (AIPlan R14): destruction over AI_HEAVY_MS for
+## AI_HEAVY_TICKS ticks running is a collapse, and the AI steps down for it.
+const AI_HEAVY_MS := 8.0
+const AI_QUIET_MS := 4.0
+const AI_HEAVY_TICKS := 3
+## The longest run of ticks the destruction spent over AI_HEAVY_MS, and its
+## worst tick: what tells the stress gate whether a step down was called for.
+var _ai_heavy_run := 0
+var _ai_heavy_run_max := 0
+var _ai_destruction_peak := 0.0
 ## `-- --no-ai`: the city without the AI's tick, to measure what it costs.
 var _no_ai := false
 ## Where a figure can walk, read from the bricks (AIPlan P3). Paths are
@@ -1015,8 +1025,8 @@ func _ready() -> void:
 	ai_services.on_breach = _blast
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
-	ai_sched.set_thresholds(8.0, 4.0)
-	ai_sched.set_hysteresis(3, 45)
+	ai_sched.set_thresholds(AI_HEAVY_MS, AI_QUIET_MS)
+	ai_sched.set_hysteresis(AI_HEAVY_TICKS, 45)
 	# The field first: `_build_city` asks it how high each building stands,
 	# and a question asked before the field is configured is answered by the
 	# wrong world.
@@ -3947,6 +3957,9 @@ func _ai_tick(destruction_ms: float) -> void:
 	var t1 := Time.get_ticks_usec()
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
+	_ai_heavy_run = _ai_heavy_run + 1 if destruction_ms > AI_HEAVY_MS else 0
+	_ai_heavy_run_max = maxi(_ai_heavy_run_max, _ai_heavy_run)
+	_ai_destruction_peak = maxf(_ai_destruction_peak, destruction_ms)
 	ai_sched.run()
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
@@ -7494,8 +7507,20 @@ func _run_stress_pass() -> void:
 	print("[stress] AI ladder, deepest level per phase: %s-> now %d (deepest %d); AI sync+run %.2f ms a tick" % [
 			ladder, ai_sched.get_level(), ai_sched.get_max_level_seen(),
 			float(_prof_sum.get("ai", 0.0)) / maxi(_tick_samples, 1)])
-	print("[stress] %s  the AI stepped down under the collapse and back up after" % (
-			"ok   " if ai_sched.get_max_level_seen() >= 1 and ai_sched.get_level() == 0
+	# Stepped down when the collapse was heavy enough to call for it -- a run of
+	# AI_HEAVY_TICKS ticks over AI_HEAVY_MS -- and back up after, either way.
+	# The check used to require a step down, full stop, and failed once the
+	# collapse itself got cheap enough never to need one (its worst ticks well
+	# under 8 ms, one at a time): the arbiter doing nothing was the right answer.
+	# The ladder itself, driven by a load that does call for it, is
+	# tools/ai_world_probe.gd's.
+	var called_for := _ai_heavy_run_max >= AI_HEAVY_TICKS
+	print("[stress] destruction for the arbiter: worst tick %.1f ms, longest run over %.0f ms %d tick(s) -- a step down %s" % [
+			_ai_destruction_peak, AI_HEAVY_MS, _ai_heavy_run_max,
+			"was called for" if called_for else "was not called for"])
+	print("[stress] %s  the AI stepped down under the collapse if it was heavy, and back up after" % (
+			"ok   " if (ai_sched.get_max_level_seen() >= 1 or not called_for)
+					and ai_sched.get_level() == 0
 			else "FAIL "))
 	print("[stress] %d shot(s) at %d building(s); %d meant to come down" % [
 			shots, target, toppled_on_purpose])
@@ -9499,19 +9524,22 @@ func _run_dormant_pass() -> void:
 	var target: IslandManager.Dormant = islands.dormant[0]
 	var at: Vector3 = target.record.box.get_center()
 	var held := target.record.block_count()
+	var slept_id := target.piece_id
 	_blast(at, 3.0)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
 		await _frames(1)
 		guard += 1
 	await _frames(10)
+	# THAT piece, by its id -- not every piece within 20 m of the blast, which
+	# counted its neighbours' bricks too (2,814 "left" of a 1,421-brick piece).
 	var woke := false
 	var left := 0
 	for isl in islands.islands:
-		if isl.is_valid() and isl.body.global_position.distance_to(at) < 20.0:
+		if isl.is_valid() and isl.piece_id == slept_id:
 			woke = true
-			left += world.get_alive_block_count(isl.chunk)
-	_gate_ok("a blast wakes what it reaches", woke)
+			left = world.get_alive_block_count(isl.chunk)
+	_gate_ok("a blast wakes what it reaches", woke, "piece %d" % slept_id)
 	_gate_ok("and takes bricks out of it", left > 0 and left < held,
 			"%d of %d left" % [left, held])
 
@@ -9555,8 +9583,12 @@ func _run_fixture_pass() -> void:
 	var steps: int = int(f.params.get("steps", 0))
 	_gate_ok("the building builds its staircase with itself", not f.blocks.is_empty(),
 			"%d blocks" % f.blocks.size())
-	_gate_ok("every step is there", f.blocks.size() == steps,
-			"%d of %d" % [f.blocks.size(), steps])
+	# One spiral piece per two steps (StaircaseRecipe.build_flight): the count
+	# is pieces. It was steps, from before the flight was built from spiral
+	# pieces, and 27 steps are 14 pieces.
+	var pieces := StaircaseRecipe.flight_pieces(steps)
+	_gate_ok("every step is there", f.blocks.size() == pieces,
+			"%d pieces of %d for %d steps" % [f.blocks.size(), pieces, steps])
 	_gate_ok("in the SAME chunk as the building", chunk == b.chunk)
 	_gate_ok("so the city holds one chunk for the building, not two",
 			int(world.get_memory_report().chunks) == 1,
@@ -9599,13 +9631,11 @@ func _run_fixture_pass() -> void:
 	var tread: Vector3 = (found.position as Vector3) if not found.is_empty() else over
 	camera.allow_walk = true
 	camera.drive_uncaptured = true
-	# DROPPED: feet a little above the tread. The eye is a plate under the top
-	# of the head, so it goes a body's height less a plate above the feet. It
+	# DROPPED: feet a little above the tread, the eye EYE_HEIGHT above them. It
 	# was put a metre above the tread, which is the figure half a metre INTO it,
 	# and whether the solver pushed it out upwards or let it sink through was
 	# down to the shape of the box it was stuck in.
-	camera.global_position = tread + Vector3(0.0,
-			DebugCamera.BODY_HEIGHT - DebugCamera.PLATE_M + 0.3, 0.0)
+	camera.global_position = tread + Vector3(0.0, DebugCamera.EYE_HEIGHT + 0.3, 0.0)
 	camera.set_walking(true)
 	var body := camera.body()
 	var landed := 0
@@ -9637,7 +9667,6 @@ func _run_fixture_pass() -> void:
 	camera.global_position = mid + Vector3(0.0, 1.0, -9.0)
 	camera.look_at(mid, Vector3.UP)
 	await _frames(6)
-	var before := world.get_alive_block_count(chunk)
 	var stairs_before := _alive_of(chunk, f.blocks)
 	_blast(mid, 2.0)
 	var guard := 0
@@ -9648,8 +9677,16 @@ func _run_fixture_pass() -> void:
 	_gate_ok("shooting the flight takes steps out of it",
 			_alive_of(chunk, f.blocks) < stairs_before,
 			"%d of %d left" % [_alive_of(chunk, f.blocks), stairs_before])
+	# In the BUILDING's own dead list -- the steps it lost are its bricks. Not
+	# "fewer bricks than before": the rooms around the camera open while this
+	# waits and lay their furniture, and the count went up (638 -> 647).
+	var dead_steps := 0
+	for id in world.get_dead_blocks(chunk):
+		if f.blocks.has(id):
+			dead_steps += 1
 	_gate_ok("and the building is the thing that is damaged",
-			registry.get_building(0).is_damaged() and world.get_alive_block_count(chunk) < before)
+			registry.get_building(0).is_damaged() and dead_steps > 0,
+			"%d dead steps in the building's record" % dead_steps)
 
 	# The whole point: when the building comes down, the staircase goes with it.
 	var stairs_standing := _alive_of(chunk, f.blocks)
@@ -10054,15 +10091,24 @@ func _run_walk_pass() -> void:
 	print("\na brick floor costs headroom, and ducking gets it back")
 	camera.set_walking(false)
 	var room := Vector3(open.x + 30.0, 0.0, open.z)
-	# A beam with 1.40 m under it: clear standing from the ground, not clear
-	# standing on one brick course.
-	var beam := _test_block(room + Vector3(0.0, 1.5, 0.0), Vector3(6.0, 0.2, 1.2))
+	# A beam with 1.90 m under it: clear standing from the ground (the figure is
+	# four bricks, 1.68 m), not clear standing on one brick course (2.10 m), and
+	# clear again crouched on it (a brick shorter, 1.68 m). It was 1.40 m, sized
+	# for the old three-brick figure, which a four-brick one could not get under
+	# on the ground or crouched on the brick.
+	var beam := _test_block(room + Vector3(0.0, 2.0, 0.0), Vector3(6.0, 0.2, 1.2))
 	camera.global_position = room + Vector3(0.0, DebugCamera.EYE_HEIGHT, -4.0)
 	camera.look_at(Vector3(room.x, DebugCamera.EYE_HEIGHT, room.z + 6.0), Vector3.UP)
 	camera.set_walking(true)
 	await _frames(40)
+	# Until it is past the beam, in physics ticks, ten seconds at most. It was
+	# 150 drawn frames, which at a few hundred frames a second is half a second
+	# of walking -- a metre and a half of the five it had to cover.
 	_key(KEY_W, true)
-	await _frames(150)
+	var walk_ticks := 0
+	while walk_ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		walk_ticks += 1
 	_key(KEY_W, false)
 	await _frames(6)
 	_gate_ok("from the ground it walks under the beam standing",
@@ -10079,8 +10125,11 @@ func _run_walk_pass() -> void:
 	await _frames(40)
 	var ducked := false
 	_key(KEY_W, true)
-	for i in 240:
-		await _frames(1)
+	# Physics ticks, as above: until past the beam, ten seconds at most.
+	var ticks := 0
+	while ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		ticks += 1
 		ducked = ducked or camera.is_auto_crouched()
 	_key(KEY_W, false)
 	await _frames(6)
