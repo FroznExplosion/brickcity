@@ -425,13 +425,6 @@ static int painted_at(int x, int z, uint32_t seed) {
     return -1;
 }
 
-/// The sea level the BEACHES are drawn against, metres; below -1e8 means no
-/// sea. Set with the water's own (BrickWave::set_sea_level), so the sand is
-/// always where the water meets the land.
-static double g_beach_sea = -1.0e9;
-/// Ground up to this far above the sea is sand, give or take the noise.
-constexpr double BEACH_M = 1.3;
-
 int Field::material_at(int x, int z, int h) const {
     // A brush-painted column first: the most specific thing an author said.
     const int brushed = layer_material(x, z);
@@ -446,14 +439,6 @@ int Field::material_at(int x, int z, int h) const {
     const float d = value_noise((float)x * 0.021f, (float)z * 0.021f, seed + 4241U);
     if (h <= 1) {
         return MAT_SAND;
-    }
-    // BEACHES: the ground just above the sea, and the seabed under it, is
-    // sand. The edge wanders with the same noise so it is not a contour line.
-    if (g_beach_sea > -1.0e8) {
-        const double top = (double)(h + 1) * (double)BRICK_M;
-        if (top <= g_beach_sea + BEACH_M + ((double)d - 0.5) * 1.2) {
-            return MAT_SAND;
-        }
     }
     // The bands moved with the relief. At 7 bricks they were tuned for a
     // world 8 bricks tall; with a landform octave that put stone on almost
@@ -3772,10 +3757,7 @@ inline double omega(double wavelength) {
 
 int BrickWave::component_count() { return WAVE_COUNT; }
 
-void BrickWave::set_sea_level(double m) {
-    g_sea_level = m;
-    g_beach_sea = m;
-}
+void BrickWave::set_sea_level(double m) { g_sea_level = m; }
 double BrickWave::get_sea_level() { return g_sea_level; }
 
 /// A TALLER SWELL IS ALSO A LONGER ONE.
