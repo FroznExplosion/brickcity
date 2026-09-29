@@ -120,14 +120,14 @@ So the host now records every operation it performs, in order ([AIPlan](AIPlan.m
 
 | Kind | What |
 |---|---|
-| `BLAST`, `SHEAR`, `SEVER` | a building, world space; `frame` for a multi-frame build |
+| `BLAST`, `SHEAR`, `SEVER` | a building, world space; `frame` for a multi-frame build. `SHEAR` with `FLAG_WHOLE`: every block in the ball lets go on its own -- a floor a mech came down on (the fall rule, AI.md 3.11) |
 | `SOLVE` | a building's stress solve, when it failed something |
 | `TOPPLE` | a building came off its foundation whole |
 | `DETACH` | blocks left a building, or a piece, as a new piece |
 | `PIECE_BLAST`, `PIECE_SHEAR`, `PIECE_SNAP`, `PIECE_SOLVE` | a piece, in grid space (`DamageLog.grid_frame`); `PIECE_SOLVE` carries the gravity the host's body saw |
 | `PIECE_REST` | a landmark piece came to rest: its chunk transform, once per rest |
 | `CHIP`, `PIECE_CHIP` | a gun wore bricks down by `limit` hp (of 255) — recorded even when none died, because hp is state (`StructuralDamage`) |
-| `LOAD`, `UNLOAD` | settled wreckage resting on a building: mass `radius` on each block named by absolute cell in `points`, under piece `owner` — every later solve carries it (AIPlan R5) |
+| `LOAD`, `UNLOAD` | weight resting on a building: mass `radius` on each block named by absolute cell in `points`, under `owner` — a piece of settled wreckage (its id), or a pawn or mech standing on a block with finite headroom (a negative id, WeightTracker) — every later solve carries it (AIPlan R5) |
 
 A client never decides any of these for itself (`IslandManager.decides`, and the city tick's solve
 loop): it replays the host's stream (`StructureReplayer`). What still stays out is physics state —

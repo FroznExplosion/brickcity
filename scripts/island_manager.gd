@@ -2311,6 +2311,36 @@ func solve_island(isl: BrickIsland) -> void:
 ## A hard landing SHEARS the joints in the contact band. It destroys nothing --
 ## a brick that hits the ground comes loose, it does not cease to exist
 ## (Docs/BrickFailure.md).
+## Landings already decided (Docs/AI.md 3.11, AIPlan R9): a floor a mech came
+## down on falls with it, and the mech's fall rule -- not the plate landing first
+## -- decides what the next floor does. Pieces landing within `radius` of `point`
+## in the next `seconds` break nothing. [point, radius, until (physics tick)]
+var _quiet: Array = []
+
+
+func quiet_landings(point: Vector3, radius: float, seconds: float) -> void:
+	_quiet.append([point, radius,
+			Engine.get_physics_frames() + int(seconds * Engine.physics_ticks_per_second)])
+
+
+func _is_quiet(isl: BrickIsland) -> bool:
+	if _quiet.is_empty():
+		return false
+	var now := Engine.get_physics_frames()
+	var c := world_aabb(isl).get_center()
+	var keep: Array = []
+	var quiet := false
+	for q in _quiet:
+		if int(q[2]) < now:
+			continue
+		keep.append(q)
+		var p: Vector3 = q[0]
+		if Vector2(c.x - p.x, c.z - p.z).length() <= float(q[1]):
+			quiet = true
+	_quiet = keep
+	return quiet
+
+
 func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	if _island_aabb(isl).size == Vector3.ZERO:
 		return
@@ -2793,7 +2823,7 @@ func tick() -> void:
 		isl.fall_ticks = isl.fall_ticks + 1 if speed > IMPACT_MIN_SPEED else 0
 		# A landing only breaks anything where this machine decides (see decides).
 		if decides and lost > IMPACT_DELTA and isl.prev_speed + lost > IMPACT_MIN_SPEED \
-				and isl.impacts < MAX_IMPACTS and not isl.fracture_queued:
+				and isl.impacts < MAX_IMPACTS and not isl.fracture_queued and not _is_quiet(isl):
 			if fell < IMPACT_FALL_TICKS:
 				jolts_ignored += 1
 			else:

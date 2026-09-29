@@ -65,6 +65,15 @@ public:
 
     void set_ai_world(const Ref<AIWorld> &ai);
 
+    /// Who walks this map (the constants above are the figure's, the default).
+    /// A mech map (Docs/AI.md 3.6, AIPlan R8) is another AINav with a mech's
+    /// numbers: `span` columns square (its footprint in studs), plates of air it
+    /// stands in and squeezes through, plates it steps up, drops off an edge,
+    /// and drops without harm. Forgets every column.
+    void set_agent(int span, int head_stand, int head_crouch, int step_up, int max_drop,
+            int safe_drop);
+    int get_span() const { return span; }
+
     /// A path now, whatever it costs, up to `max_expansions` nodes. Empty if none.
     PackedVector3Array find_path(const Vector3 &from, const Vector3 &to, int max_expansions);
 
@@ -159,6 +168,13 @@ private:
     };
 
     Ref<AIWorld> ai;
+    // The agent (set_agent). Defaults: the figure.
+    int span = 2;
+    int head_stand = HEAD_STAND;
+    int head_crouch = HEAD_CROUCH;
+    int step_up = STEP_UP;
+    int max_drop = MAX_DROP;
+    int safe_drop = SAFE_DROP;
     float water_level = -1e30f;
     bool stand_only = true;
     std::unordered_map<int64_t, Column> columns;

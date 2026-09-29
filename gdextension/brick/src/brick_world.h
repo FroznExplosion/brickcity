@@ -445,6 +445,16 @@ public:
     void clear_load(int chunk_id, int owner);
     /// The external weight on one block, all owners together. For probes.
     float get_external_load(int chunk_id, int block_id) const;
+
+    /// How much more mass (archetype units) could rest on a block before a
+    /// joint on its way to the ground fails, from the last solve_stress
+    /// (Docs/AI.md 3.10, AIPlan R6/R7). INF where every way down is
+    /// compression -- almost every block of a standing building. Worst case
+    /// by design: the whole added mass is taken to reach every joint below,
+    /// where the solve would share it, so a mistake costs a needless solve
+    /// and never a missed break. -1 when the chunk has not been solved since
+    /// the block existed: ask for a solve.
+    float get_headroom(int chunk_id, int block_id) const;
     PackedInt32Array get_load_owners(int chunk_id) const;
     float get_block_capacity(int chunk_id, int block_id) const;
     bool is_support_broken(int chunk_id, int block_id) const;
@@ -907,6 +917,11 @@ private:
         // piece's id) -> (block, units) pairs. Every solve adds it to the blocks'
         // own weight. Ordered, so two machines sum in the same order.
         std::map<int32_t, std::vector<std::pair<int32_t, int64_t>>> loads;
+        // Per block, from the last solve: how much more mass could rest on it
+        // before a tension joint on its way to the ground lets go. INT64_MAX
+        // for a block whose every way down is compression (Docs/AI.md 3.10).
+        // Empty until the chunk has been solved.
+        std::vector<int64_t> headroom;
     };
     std::vector<StressState> stress;
 
