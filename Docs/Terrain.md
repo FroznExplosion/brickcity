@@ -2006,6 +2006,15 @@ Building shells, nothing materialised into live bricks yet.
 
 Worst viewpoint each, debug build, Radeon iGPU, 1152x648.
 
+> **Correction (2026-09-29, Docs/Impostors.md §7.1).** These city rows were not shells. The bench
+> sampled while the streamer was still settling, and its street-level viewpoint promoted the
+> buildings beside it into live bricks at whatever tick it got to them. Most of the millions were
+> those bricks, drawn again in every shadow cascade. The bench now settles each viewpoint and does
+> not promote (`--with-bricks` puts that back). Shells only, big_city, 150 buildings, worst
+> viewpoint: **~250–300k tris, ~100 calls**. With three brick buildings beside the camera: 2.1M
+> tris, 145 calls after the shadow LOD. So the conclusion below still holds, but for a different
+> reason: the city is the expensive half because of **materialised bricks**, not shells.
+
 **The city is the expensive half and terrain is not close.** 150 buildings
 cost 3.3M triangles where a 560 m terrain costs 1.2M, and the city's number
 climbs with building count while the terrain's is nearly flat in view

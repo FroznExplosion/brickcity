@@ -37,14 +37,29 @@ static func frame_basis(d: Vector3) -> Basis:
 	return Basis(right, up, d)
 
 
-## Bake `mesh`. Needs a node in the tree to hang the viewport from, and a
-## renderer: headless, it returns an empty Dictionary and callers keep the
-## real mesh. Otherwise {albedo, normal: Texture2D, centre: Vector3,
-## radius: float, grid: int}.
-static func bake(host: Node, mesh: Mesh, grid: int = GRID, tile: int = TILE) -> Dictionary:
-	if DisplayServer.get_name() == "headless" or mesh == null or mesh.get_surface_count() == 0:
+## Bake `what` -- a Mesh, or a Node3D such as an assembled gun. Needs a node
+## in the tree to hang the viewport from, and a renderer: headless, it returns
+## an empty Dictionary and callers keep the real thing. Otherwise {albedo,
+## normal: Texture2D, centre: Vector3, radius: float, grid: int}.
+##
+## A MESH carries its colour in its vertices (every brick mesh does) and the
+## colour pass draws that, unlit. A NODE brings its own materials, so its
+## colour pass draws them lit by a flat white ambient and nothing else -- as
+## near to their albedo as a lit render gets. The normal pass is the same for
+## both: the geometry, whatever it is dressed in.
+static func bake(host: Node, what: Variant, grid: int = GRID, tile: int = TILE) -> Dictionary:
+	if DisplayServer.get_name() == "headless" or what == null:
 		return {}
-	var box := mesh.get_aabb()
+	var is_node: bool = what is Node3D
+	var box: AABB
+	if is_node:
+		box = _node_aabb(what as Node3D)
+	else:
+		if (what as Mesh).get_surface_count() == 0:
+			return {}
+		box = (what as Mesh).get_aabb()
+	if box.size == Vector3.ZERO:
+		return {}
 	var centre := box.get_center()
 	var r := box.size.length() * 0.5
 	var vp := SubViewport.new()
@@ -56,7 +71,10 @@ static func bake(host: Node, mesh: Mesh, grid: int = GRID, tile: int = TILE) -> 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_CLEAR_COLOR
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_DISABLED
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color.WHITE
+	env.ambient_light_energy = 1.0
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	var we := WorldEnvironment.new()
 	we.environment = env
 	vp.add_child(we)
@@ -69,13 +87,22 @@ static func bake(host: Node, mesh: Mesh, grid: int = GRID, tile: int = TILE) -> 
 	vp.add_child(cam)
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/impostor_bake.gdshader")
+	var dressed: Array[GeometryInstance3D] = []
 	for j in grid:
 		for i in grid:
 			var d := decode(Vector2(float(i), float(j)) / float(grid - 1))
 			var turn := frame_basis(d).inverse()
-			var copy := MeshInstance3D.new()
-			copy.mesh = mesh
-			copy.material_override = mat
+			var copy: Node3D
+			if is_node:
+				copy = (what as Node3D).duplicate()
+				# A picture of it, not another one of it: no script running.
+				copy.set_script(null)
+				_collect(copy, dressed)
+			else:
+				var mi := MeshInstance3D.new()
+				mi.mesh = what
+				mi.material_override = mat
+				copy = mi
 			# Row j = 0 at the TOP of the image, so it is row 0 of the atlas.
 			var cx := (float(i) + 0.5 - grid * 0.5) * 2.0 * r
 			var cy := (float(grid - 1 - j) + 0.5 - grid * 0.5) * 2.0 * r
@@ -86,6 +113,9 @@ static func bake(host: Node, mesh: Mesh, grid: int = GRID, tile: int = TILE) -> 
 	var out := {"centre": centre, "radius": r, "grid": grid}
 	for pass_mode in 2:
 		mat.set_shader_parameter("mode", pass_mode)
+		if is_node and pass_mode == 1:
+			for g in dressed:
+				g.material_override = mat
 		await RenderingServer.frame_post_draw
 		await RenderingServer.frame_post_draw
 		var img := vp.get_texture().get_image()
@@ -93,3 +123,31 @@ static func bake(host: Node, mesh: Mesh, grid: int = GRID, tile: int = TILE) -> 
 		out["albedo" if pass_mode == 0 else "normal"] = ImageTexture.create_from_image(img)
 	vp.queue_free()
 	return out
+
+
+## Everything a node draws, in its own space.
+static func _node_aabb(n: Node3D) -> AABB:
+	var out := AABB()
+	var first := true
+	var stack: Array = [[n, Transform3D()]]
+	while not stack.is_empty():
+		var top: Array = stack.pop_back()
+		var node: Node = top[0]
+		var xf: Transform3D = top[1]
+		if node is VisualInstance3D:
+			var b: AABB = xf * (node as VisualInstance3D).get_aabb()
+			out = b if first else out.merge(b)
+			first = false
+		for ch in node.get_children():
+			if ch is Node3D:
+				stack.append([ch, xf * (ch as Node3D).transform])
+	return out
+
+
+static func _collect(n: Node, into: Array[GeometryInstance3D]) -> void:
+	if n is GeometryInstance3D:
+		into.append(n)
+	for ch in n.get_children():
+		_collect(ch, into)
+
+
