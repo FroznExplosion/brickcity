@@ -1159,6 +1159,17 @@ func report() -> Dictionary:
 ## Only called for a DAMAGED building, and only at de-materialisation. The bands
 ## partition the building's height, so the whole profile is one pass over the
 ## chunk however many bands there are.
+## A building's damage as shell segment masks, from its bricks if it has them.
+## For drawing a stand-in of a building that is still bricks (its shadow).
+func live_damage_profile(id: int) -> Dictionary:
+	var b := get_building(id)
+	if b == null or b.is_build():
+		return {}
+	if not b.is_materialised():
+		return b.damage_profile
+	return _build_damage_profile(b)
+
+
 func _build_damage_profile(b: Building) -> Dictionary:
 	# The walk itself is in C++ (BrickWorld::build_damage_profile). It used to
 	# be here, and it cost 3.4 ms a building -- 128 rectangle scans per band
