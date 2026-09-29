@@ -447,6 +447,27 @@ func _measure_masked() -> void:
 # --- moving, for the tasks --------------------------------------------------------
 
 ## Walk to `goal`. 1 arrived, 0 on the way (or waiting for a path), -1 no way.
+## Walk straight at `p`, no path: for a line already known to be walkable (a
+## leader's trail). 1 there, 0 on the way, -1 stuck against something.
+func walk_toward(p: Vector3, run := false) -> int:
+	var feet := pawn.feet()
+	var d := Vector3(p.x - feet.x, 0.0, p.z - feet.z)
+	if d.length() <= WAYPOINT_REACHED and absf(p.y - feet.y) <= WAYPOINT_LEVEL:
+		pawn.intents.move = Vector3.ZERO
+		return 1
+	pawn.intents.move = d.normalized()
+	pawn.intents.run = run
+	var now := services.now()
+	if feet.distance_to(_stuck_from) > 0.4:
+		_stuck_from = feet
+		_stuck_at = now
+	elif now - _stuck_at > STUCK_SECONDS:
+		_stuck_from = feet
+		_stuck_at = now
+		return -1
+	return 0
+
+
 func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
 	var nav := services.ai_nav
@@ -500,6 +521,13 @@ func move_to(goal: Vector3, run := false) -> int:
 				or absf(w.y - feet.y) > WAYPOINT_LEVEL:
 			break
 		_wp += 1
+	if _wp >= _path.size() and _path.size() > 0 \
+			and Vector2(_path[_path.size() - 1].x - feet.x, _path[_path.size() - 1].z - feet.z).length() > 1.0:
+		# The path is walked but the body is not there: it was put somewhere
+		# else (placed, unstuck, shoved). A path from where it is now.
+		_repath = true
+		pawn.intents.move = Vector3.ZERO
+		return 0
 	if _wp >= _path.size():
 		pawn.intents.move = Vector3.ZERO
 		stuck = 0

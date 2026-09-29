@@ -7,6 +7,7 @@ extends RefCounted
 ##     DynamicSequence  Broken > FallBack           -- morale gone: back to rally cover
 ##     DynamicSequence  Order(CLEAR_ROOM) > ClearRoom
 ##     DynamicSequence  Order(ADVANCE) > Advance   -- bounding overwatch, masked moves
+##     DynamicSequence  Order(MOVE) > Travel         -- in file: the leader paths, the rest follow
 ##     DynamicSequence  LostContact > SearchPairs
 ##     Idle                                         -- members fight on their own trees
 
@@ -29,6 +30,12 @@ static func build() -> BehaviorTree:
 	adv.add_child(oa)
 	adv.add_child(BTPlayAdvance.new())
 	root.add_child(adv)
+	var travel := BTDynamicSequence.new()
+	var om := BTSquadOrder.new()
+	om.kind = SquadMsg.OrderKind.MOVE
+	travel.add_child(om)
+	travel.add_child(BTPlayTravel.new())
+	root.add_child(travel)
 	var search := BTDynamicSequence.new()
 	search.add_child(BTSquadLostContact.new())
 	search.add_child(BTPlaySearchPairs.new())

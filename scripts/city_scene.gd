@@ -3451,10 +3451,11 @@ func _enter_pawn(feet: Vector3) -> void:
 	camera.set_process(false)
 	camera.allow_walk = false
 	_player.possess(_player_pawn, camera)
-	if not ai_services.pawns.has(_player_pawn):
-		ai_services.pawns.append(_player_pawn)
 	_arm_gun()
 	_player_pawn.gun = _gun
+	# After the gun: add_pawn arms it, so its rounds suppress, are heard and
+	# earn aggro (AIServices).
+	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
 	print("[city] playing: pawn at %v" % feet)
 
@@ -3842,6 +3843,8 @@ func _ai_tick(destruction_ms: float) -> void:
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
 	ai_sched.run()
+	# Aggro and callouts (AIServices.tick): never ran in the city before.
+	ai_services.tick()
 	_ai_run_ms = float(Time.get_ticks_usec() - t1) / 1000.0
 	_prof["ai"] = _ai_sync_ms + _ai_run_ms
 	if _phase != "":

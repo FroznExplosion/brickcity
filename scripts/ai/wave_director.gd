@@ -15,7 +15,12 @@ extends Node
 ##
 ## The soldiers are not told where the player is. A wave is SENT: when it starts
 ## the side is given a rough fix (TIP_SPREAD metres out), and after that it
-## knows what it sees and hears -- and the player's gun is heard (PLAYER_NOISE).
+## knows what it sees and hears -- and the player's gun is heard (AIServices).
+##
+## WHAT comes, and when, and what the squads are told to do, is the COMMANDER's
+## (Commander): it buys squads with points and asks for them here
+## (request_squad); this puts them on the floors and round the walls, as the
+## survey allows, and hands each squad back to it.
 ## Only if nobody on the side has had any contact for LOST_SECONDS is another
 ## rough fix given, so a player who hides and stays quiet is looked for rather
 ## than waited for.
@@ -31,15 +36,12 @@ extends Node
 
 const PLAYER_TEAM := 0
 const ENEMY_TEAM := 1
-## Wave n (from 1) has BASE + PER_WAVE * (n - 1) soldiers, no more than ALIVE_CAP
-## of them up at once (Docs/AI.md A2: about ten smart agents).
-const BASE := 4
-const PER_WAVE := 2
+## A reinforcement (a "wave") is one squad, Commander.SQUAD_SIZE strong; no more
+## than ALIVE_CAP up at once (Docs/AI.md A2: about ten smart agents).
+const BASE := Commander.SQUAD_SIZE
 const ALIVE_CAP := 8
 ## The share of a wave put inside the focus building, when it has floors.
-const INSIDE_SHARE := 0.6
 const SPAWN_EVERY := 0.6
-const BETWEEN_WAVES := 6.0
 const FIRST_WAVE_AFTER := 4.0
 const PLAYER_RESPAWN := 3.0
 ## A rough fix on the player: this far out, and dated so that it is older than
@@ -49,8 +51,6 @@ const TIP_SPREAD := 8.0
 const TIP_AGE := 3.0
 ## Nobody on the side has seen or heard the player for this long: another fix.
 const LOST_SECONDS := 15.0
-## How far the player's gunfire carries (a soldier's is 40 m).
-const PLAYER_NOISE := 40.0
 ## The arena's soldiers are slower on the trigger and looser than the AI's
 ## defaults (AimModel): 0.35 s, 7 -> 1.2 degrees over 1.6 s.
 const AIM_REACTION := 0.7
@@ -94,13 +94,21 @@ var _left_to_spawn := 0
 var _wave_size := 0
 var _put_inside := 0
 var _next_spawn := 0.0
-var _next_wave := 0.0
+## The commander, and the squad now being put down with the kinds it asked for.
+var commander: Commander
+var _queue: Array[StringName] = []
+var _wave_squad: Squad
+var _next_profile := 0.0
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
 var _start := Vector3.ZERO
 var feedback: CombatFeedback
-var voice: ArenaVoice
+## The player's view of what the soldiers say (Callouts, AI.md 6.5).
+var listener: Callouts.Listener
+var callout_hud: CalloutHud
+## Physics ticks on which the player had at least one line in front of them.
+var heard_ticks := 0
 ## The body of the last soldier to die (instance id), for the gate.
 var last_dead_id := 0
 ## Metres each soldier has walked since it appeared (instance id -> metres).
@@ -141,12 +149,12 @@ func setup(p_city: Node3D) -> void:
 	feedback.name = "Feedback"
 	add_child(feedback)
 	feedback.setup(city)
-	voice = ArenaVoice.new()
-	voice.name = "Voice"
-	add_child(voice)
-	voice.setup(city)
-	city.ai_services.on_say = voice.say
 	city._gun.fired.connect(_on_player_fired)
+	commander = Commander.new()
+	commander.name = "Commander"
+	add_child(commander)
+	commander.alive_cap = ALIVE_CAP
+	commander.spawner = request_squad
 
 
 ## Pick the focus, hold it as bricks, and put the player in the street.
@@ -177,9 +185,17 @@ func begin() -> void:
 	city._gun_class = city.GUN_CLASSES.find(&"rifle")
 	city._equip_gun(&"rifle", city._combat_rng.randi())
 	city._enter_pawn(_start + Vector3.UP * 0.3)
+	listener = city.ai_services.callouts.listen(city.camera, PLAYER_TEAM, _player())
+	callout_hud = CalloutHud.new()
+	callout_hud.name = "Callouts"
+	callout_hud.setup(city.ai_services.callouts, listener)
+	add_child(callout_hud)
 	_player().health.died.connect(_on_player_died)
 	_resurvey()
-	_next_wave = _now() + FIRST_WAVE_AFTER
+	commander.setup(city.ai_services, ENEMY_TEAM)
+	commander.rally = city._world_box(city.registry.get_building(focus)).get_center()
+	# The first squad a few seconds in: the commander's clock, set back.
+	commander.hold_until(_now() + FIRST_WAVE_AFTER)
 	_ready_to_fight = true
 	print("[arena] focus building %d, player at %v, %d floor spot(s) in it" % [
 		focus, _start, _floors.size()])
@@ -201,6 +217,8 @@ func _physics_process(_delta: float) -> void:
 		return
 	var now := _now()
 	_reap(now)
+	if listener != null and not listener.views.is_empty():
+		heard_ticks += 1
 	_settle_check()
 	for so in alive:
 		var k := so.get_instance_id()
@@ -214,8 +232,15 @@ func _physics_process(_delta: float) -> void:
 			_crouched += 1
 	_check_focus()
 	_player_tick(now)
-	if _left_to_spawn <= 0 and alive.is_empty() and now >= _next_wave:
-		_start_wave()
+	if now >= _next_profile:
+		# What the commander learns of the player: how close it fights.
+		_next_profile = now + 1.0
+		var p := _player()
+		if p != null and not alive.is_empty():
+			var near := INF
+			for so in alive:
+				near = minf(near, so.pawn.feet().distance_to(p.feet()))
+			commander.profile.sample(near, 1.0)
 	if _left_to_spawn > 0 and now >= _next_spawn and alive.size() < ALIVE_CAP:
 		if now >= _next_survey:
 			_resurvey()
@@ -229,17 +254,24 @@ func _physics_process(_delta: float) -> void:
 		_update_label()
 
 
-func _start_wave() -> void:
+## The commander's spawner: put down a squad of these kinds. False while one is
+## still going down, or before the fight is set up.
+func request_squad(kinds: Array[StringName]) -> bool:
+	if not _ready_to_fight or _left_to_spawn > 0 or kinds.is_empty():
+		return false
 	wave += 1
-	_left_to_spawn = BASE + PER_WAVE * (wave - 1)
+	_queue = kinds.duplicate()
+	_left_to_spawn = kinds.size()
 	_wave_size = _left_to_spawn
 	_put_inside = 0
+	_wave_squad = null
 	_next_spawn = _now()
 	survey.reset_counts()
 	_tip()
 	_resurvey()
-	print("[arena] wave %d: %d soldier(s), %d floor spot(s) in building %d" % [
-		wave, _left_to_spawn, _floors.size(), focus])
+	print("[arena] reinforcement %d: %s, %d floor spot(s) in building %d" % [
+		wave, ", ".join(kinds), _floors.size(), focus])
+	return true
 
 
 func _spawn_one() -> void:
@@ -247,7 +279,7 @@ func _spawn_one() -> void:
 	# so far (this one included) have been, so a wave mixes from its start.
 	var done := _wave_size - _left_to_spawn
 	var want_inside := not _floors.is_empty() \
-			and float(_put_inside) < INSIDE_SHARE * float(done + 1) - 0.01
+			and float(_put_inside) < commander.doctrine.inside_share * float(done + 1) - 0.01
 	var others: Array = []
 	for so in alive:
 		others.append(so.pawn)
@@ -282,19 +314,20 @@ func _spawn_one() -> void:
 
 
 func _spawn_at(feet: Vector3, inside: int) -> void:
-	var cls: StringName = &"rifle"
-	if wave >= 3:
-		cls = [&"rifle", &"rifle", &"smg", &"shotgun"][_rng.randi() % 4]
+	# What the commander asked for: its weapon and its health (UnitCatalog).
+	var kind: StringName = _queue.pop_front() if not _queue.is_empty() else &"rifleman"
+	var unit := UnitCatalog.get_unit(kind)
 	if city._gun_library == null:
 		city._gun_library = GunPlaceholderParts.build_library()
 	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
-			city._combat_rng.randi(), WeaponClass.builtin(cls), maxi(1, wave)))
+			city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
 	var so := Soldier.spawn(city.ai_services, city, feet + Vector3.UP * 0.02, ENEMY_TEAM, gun)
 	so.aim.reaction = AIM_REACTION
 	so.aim.cone_start = AIM_CONE_START
 	so.aim.cone_min = AIM_CONE_MIN
 	so.aim.settle = AIM_SETTLE
-	var hp := HP_STANDARD if wave >= 3 and _rng.randi() % 3 == 0 else HP_TRASH
+	so.set_meta(&"unit", kind)
+	var hp := float(unit.hp)
 	so.pawn.health.layer_configs[0].max_value = hp
 	so.pawn.health.reset()
 	so.max_health = hp
@@ -314,8 +347,15 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	if inside >= 0:
 		_put_inside += 1
 	spawned.append({"feet": feet, "inside": inside, "on": int(under.on), "wave": wave,
-			"soldier": so, "frame": Engine.get_physics_frames(), "drop": NAN})
+			"soldier": so, "frame": Engine.get_physics_frames(), "drop": NAN, "unit": kind})
 	_left_to_spawn -= 1
+	# Into this reinforcement's squad, and under the commander.
+	if _wave_squad == null or not is_instance_valid(_wave_squad):
+		_wave_squad = Squad.make(city.ai_services, city, [so] as Array[Soldier], ENEMY_TEAM)
+		commander.adopt(_wave_squad)
+	else:
+		_wave_squad.add(so)
+		commander.joined(_wave_squad, so)
 
 
 ## How far each new soldier dropped in its first ticks -- before it has walked
@@ -352,8 +392,7 @@ func _on_soldier_died(so: Soldier) -> void:
 		city.ai_nav.release(so._path_id)
 	so.pawn.body.call_deferred("queue_free")
 	if _left_to_spawn <= 0 and alive.is_empty():
-		_next_wave = _now() + BETWEEN_WAVES
-		print("[arena] wave %d cleared, %d kill(s)" % [wave, kills])
+		print("[arena] all down after reinforcement %d, %d kill(s)" % [wave, kills])
 
 
 ## A soldier's round: what struck the player is shown, and from where.
@@ -369,9 +408,13 @@ func _on_soldier_fired(info: Dictionary, so: Soldier) -> void:
 ## The player's round: the marks, and the noise -- it is heard where it is fired.
 func _on_player_fired(info: Dictionary) -> void:
 	feedback.on_player_shot(info)
+	# And the commander's read on the player: range, hits, kills, what it breaks.
 	var p := _player()
-	if p != null and city._player.is_possessing():
-		city.ai_services.noise(p.eye.global_position, PLAYER_NOISE, p)
+	if p == null or info.is_empty():
+		return
+	var r = info.get("result")
+	commander.profile.note_shot(r != null, p.eye.global_position.distance_to(info.point),
+			r != null and r.killed, 1 if bool(info.get("structure", false)) else 0)
 
 
 ## A rough fix on the player for the side: TIP_SPREAD out, and TIP_AGE old.
@@ -542,8 +585,8 @@ func run_gate() -> void:
 			"refused %s" % [survey.refused])
 	if focus < 0:
 		return
-	# Wave one, all of it.
-	_next_wave = 0.0
+	# The first reinforcement, all of it: the commander's to send.
+	commander.force_reinforce()
 	await _until(func() -> bool: return wave >= 1 and _left_to_spawn <= 0, 30.0)
 	var first := _of_wave(1)
 	var n_in := 0
@@ -560,6 +603,23 @@ func run_gate() -> void:
 				wrong.append(s)
 	ok.call("wave 1 comes in: %d on the building's floors, %d round it" % [n_in, n_out],
 			first.size() == BASE and n_in > 0 and n_out > 0, "%d spawned" % first.size())
+	# The commander's: one squad, under it, of units the game has.
+	var sq: Squad = null
+	var one_squad := true
+	var built_only := true
+	for sp in first:
+		if not is_instance_valid(sp.soldier):
+			continue
+		var so: Soldier = sp.soldier
+		if sq == null:
+			sq = so.squad
+		if so.squad == null or so.squad != sq:
+			one_squad = false
+		if not bool(UnitCatalog.get_unit(StringName(sp.get("unit", &"rifleman"))).built):
+			built_only = false
+	ok.call("the reinforcement is one squad, under the commander, of units the game has",
+			one_squad and sq != null and commander.squads.has(sq) and built_only,
+			"%s" % [first.map(func(sp): return sp.get("unit", "?"))])
 	ok.call("each one on what the survey said it would be", wrong.is_empty(),
 			"%s" % [wrong.map(func(s): return "%v on %s" % [s.feet, SpawnSurvey.ON_NAMES[s.on]])])
 	await _frames(SETTLE_TICKS + 2)
@@ -602,6 +662,18 @@ func run_gate() -> void:
 			moved.size(), moved.size() + stayed.size()],
 			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,
 			"moved %s, stayed %s" % [moved, stayed])
+	# Each squad has an order -- or is already on the enemy, where an advance
+	# has nothing to add and the commander leaves it to fight.
+	var unled := []
+	var ck: FactionKnowledge.Contact = city.ai_services.knowledge_of(ENEMY_TEAM).best(_now())
+	for q in commander.squads:
+		if not is_instance_valid(q) or q.alive().is_empty() or q.order != null or q.broken:
+			continue
+		if ck == null or q.center().distance_to(ck.pos) >= Commander.ADVANCE_FROM:
+			unled.append(q.id)
+	ok.call("the commander leaves no squad without a purpose", unled.is_empty(),
+			"squads %s with no order and away from the fight; orders %s; %s" % [unled,
+			commander.orders_given, commander.log.slice(maxi(commander.log.size() - 4, 0))])
 	# And the player's gun works on them, and says so: fire at whoever is in
 	# sight until one drops.
 	await _until(func() -> bool: return _soldier_in_sight() != null, 20.0)
@@ -701,7 +773,8 @@ func run_gate() -> void:
 	var w := wave
 	await _frames(2)
 	(city.ai_services.judge as DecisionJudge).resume()
-	_next_wave = 0.0
+	await _frames(2)
+	commander.force_reinforce()
 	await _until(func() -> bool: return wave > w and _left_to_spawn <= 0, 40.0)
 	var second := _of_wave(w + 1)
 	var in_old := second.filter(func(s): return int(s.inside) == old)
@@ -758,7 +831,8 @@ func run_gate() -> void:
 				is_equal_approx(caller._called_help_at, t_call) and buddy.help_point.distance_to(at) < 0.5,
 				"called at %.2f (now %.2f), help at %v, caller at %v" % [caller._called_help_at, t_call,
 				buddy.help_point, at])
-	ok.call("the player hears what they say", not voice.shown.is_empty(), "said %s" % [voice.said])
+	ok.call("the player hears what they say", heard_ticks > 0,
+			"%d tick(s) with a line up; said %s" % [heard_ticks, _said_keys()])
 
 	# The player goes down and comes back in the street.
 	invulnerable = false
@@ -801,7 +875,7 @@ func _soldier_in_sight() -> Soldier:
 ## `-- --arena --watch`: what the soldiers do, second by second, for a
 ## wave against a player who stands still.
 func run_watch() -> void:
-	_next_wave = 0.0
+	commander.force_reinforce()
 	var last := {}
 	var moved := {}
 	var states := {}
@@ -827,7 +901,10 @@ func run_watch() -> void:
 		var n: String = CombatPolicy.TACTIC_NAMES[int(d.tactic)]
 		chosen[n] = int(chosen.get(n, 0)) + 1
 	print("[watch] tactics chosen %s" % [chosen])
-	print("[watch] lines said %s" % [voice.said])
+	print("[watch] lines said %s" % [_said_keys()])
+	print("[watch] commander: %s" % [commander.orders_given])
+	for l in commander.log:
+		print("[watch]   " + l)
 	print_judgement()
 	print("[watch] states %s" % [states])
 	print("[watch] metres moved %s" % [moved.values()])
@@ -866,6 +943,14 @@ func print_judgement() -> void:
 		print("[judge]   %-13s %3d  mean %+6.1f  stupid %2d  good %2d" % [n, b.n, b.mean,
 				b.stupid, b.good])
 	print("[judge]   flags %s" % [sm.flags])
+
+
+## Every line said so far, by key and count.
+func _said_keys() -> Dictionary:
+	var out := {}
+	for l in city.ai_services.callouts.said:
+		out[l[2]] = int(out.get(l[2], 0)) + 1
+	return out
 
 
 func _of_wave(n: int) -> Array[Dictionary]:
@@ -910,6 +995,17 @@ func _update_label() -> void:
 			else:
 				outside += 1
 	lines.append("spawned this wave: %d on its floors, %d outside" % [inside, outside])
+	var cm := commander
+	lines.append("commander   %.0f pts banked, wants %.1f up   desperation %.0f%%   answering %s   aggression %.2f" % [
+			cm.budget, cm.want_strength(), cm.desperation * 100.0, cm.doctrine.answering,
+			cm.doctrine.aggression])
+	for q in cm.squads:
+		if is_instance_valid(q):
+			lines.append("  squad %d  %d up  %s%s%s" % [q.id, q.alive().size(), q.play,
+					("  order " + SquadMsg.OrderKind.keys()[q.order.kind]) if q.order != null else "",
+					"  BROKEN" if q.broken else ""])
+	if not cm.log.is_empty():
+		lines.append("  " + cm.log[cm.log.size() - 1])
 	var tactics := {}
 	for so in alive:
 		var t: String = CombatPolicy.TACTIC_NAMES[so.tactic] if so.tactic >= 0 else so.state
@@ -996,12 +1092,4 @@ func _unhandled_input(event: InputEvent) -> void:
 			_draw_overlay()
 		KEY_F8:
 			if _ready_to_fight:
-				_left_to_spawn = 0
-				_next_wave = 0.0
-				if alive.is_empty():
-					_start_wave()
-				else:
-					wave += 1
-					_left_to_spawn = BASE + PER_WAVE * (wave - 1)
-					_wave_size = _left_to_spawn
-					_put_inside = 0
+				commander.force_reinforce()

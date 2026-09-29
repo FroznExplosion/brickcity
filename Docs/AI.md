@@ -39,6 +39,7 @@ Prior art, read before this: [Reference/reddawn.md §12](Reference/reddawn.md#12
 | A19 | **A summoned mech landing on a building does massive damage** — the fall rule runs to the ground, no cap | §3.11 |
 | A20 | **Anything that damages or lands on a building activates it** — materialises it first, then breaks it | §3.2 |
 | A21 | **Nobody crouches.** Cover is what hides a standing body; a peek is a step out to its side. `AINav.set_stand_only`, on by default | §6.1 |
+| A23 | **Squads and the commander are built** (2026-09-29): P6's squads, plays, aggro and callouts adopted from the `ai-p6` worktree; squads travel in file (the leader paths, the rest walk its trail); a per-encounter **commander** buys squads with points and orders them. Vehicles and mechs are catalogued, not yet built | §9, §4.3, [AIVehicles.md](AIVehicles.md) |
 | A22 | **The engage decision is a policy** — a versioned observation row in, one of six tactics out — scripted and weighted-random now, an ONNX model later. **Every decision is judged**: an outcome reward and a checklist of blunders | §11.4 |
 
 ---
@@ -411,6 +412,11 @@ enemies knowing where your mech saw you, which is cheating the player can feel.
 2. **Squads path once.** The leader (or the squad's anchor point) paths; members follow the
    corridor at their formation offsets, snapped to the navmesh by a closest-point query. mvs-c's
    formation rule, and ten times fewer path queries.
+   *Built* (`BTPlayTravel`, order `MOVE`): only the leader asks for a path; each follower walks the
+   leader's breadcrumb trail -- a line a body has already walked -- to its place in the file,
+   with no search at all, and only paths to rejoin if knocked off it. Measured
+   (`tools/squad_travel_probe.gd`): a squad of four over a zigzag course, **1 path and 4,796
+   expansions against 4 paths and 18,390 alone (26 %)**, the file within 4.5 m of its middle.
 3. **Flow fields when many go to one place.** Directed agents and swarms converging on a player or
    an objective read one field per `(goal, agent class)`, regenerated when the goal moves past a
    threshold. Five hundred rats cost one field.
@@ -610,6 +616,31 @@ and mission progress:
 These feed **doctrine** (how units behave) and **roster** (what spawns). They are clamped so no
 counter is a hard counter, and they decay so a player who changes style is followed, not punished.
 
+### 9.1 What is built (2026-09-29)
+
+`scripts/ai/commander/`, run in the combat arena (`WaveDirector` is its host), checked by
+`tools/commander_probe.gd`:
+
+- **`UnitCatalog`** — every unit, its **points** (Red Dawn's scale: rifleman 1 ... tank 20),
+  mobility, role, weapon and health; `built` says which exist. Vehicles and mechs are in it and
+  never fielded until built ([AIVehicles.md](AIVehicles.md)).
+- **`ThreatProfile`** — the player's destructiveness, range, closeness, lethality and accuracy,
+  decaying with a 90 s half-life; `style()` is sniper / rusher / demolisher / balanced (Red Dawn's
+  classifier); `to_dict` for the character save (A14).
+- **`Doctrine`** — aggression, the share of a reinforcement put inside a building, and roster
+  weights, each clamped to x0.5..x2 of base: against a sniper, close-range troops and bolder;
+  against a rusher, breachers and veterans and it holds; against a demolisher, fewer inside.
+  Desperation (points lost against points fielded) makes it bolder early, careful when bleeding.
+- **`Commander`** — per side per encounter; event-driven (squad reports, losses) plus a 1 s tick.
+  **Orders**: a squad with the enemy in sight but not on it is sent to ADVANCE as readily as the
+  doctrine says; one with only a stale contact far off is sent to MOVE there in file; a broken
+  squad falls back on its own. **Reinforcements**: income over time, a wanted strength in points,
+  a squad's roster drawn from the doctrine's weights within the budget, asked of its host.
+
+Not yet: the sector grid, off-screen fights by points, a killable commander and radio, CLEAR_ROOM
+orders against the city's rooms (the play exists; the commander does not yet build a
+`RoomTactics` from a city building), and vehicles.
+
 ---
 
 ## 10. Performance: allowed to be slightly stupid (A10)
@@ -754,17 +785,10 @@ The arena HUD shows the running count; `--watch` and `--gate` print the table pe
 pauses the judge (`DecisionJudge.pause`) while it blows buildings down and kills a wave by hand —
 those are not the soldiers' decisions.
 
-**For the P6 squad work, merging over this** (branch `ai-p6`, uncommitted when this landed):
-
-- `FactionKnowledge` already has `seen_by`, `forget_seer` and `of(pawn)` in the same shape as P6's;
-  keep P6's file.
-- `SoldierTree` gained the engage decision (`ChooseTactic`, `TacticIs`, `Manoeuvre`) and `GoHelp`;
-  the disasters work added `BTShelter`. P6's assignment branch goes alongside, above the engage
-  branch or inside it — a squad assignment can override the tactic by setting `Soldier.tactic`.
-- `AIServices.on_say(speaker, key, text, range)` is the one seam for lines. `ArenaVoice` is a stand-in
-  that follows §6.5; point `on_say` at `Callouts.say` and delete it.
-- `Soldier` gained tactic, health, help and bad-cover state and `allies()`; nothing of P6's is
-  renamed.
+**P6 is merged** (A23): the `ai-p6` worktree's squads, plays, aggro and callouts were brought
+onto main with the engage policy. A squad's assignment branch sits above the engage decision in
+`SoldierTree`; every line goes through `AIServices.say` to `Callouts` (the arena's stand-in is
+gone). The `ai-p6` worktree itself was left as it was — its copy is now superseded.
 
 ---
 

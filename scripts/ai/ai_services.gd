@@ -66,6 +66,10 @@ const DECISIONS_KEPT := 4000
 var on_say := Callable()
 const SHOUT := 35.0
 const TALK := 15.0
+## A soldier with no squad speaks as a squad of one, numbered from here.
+const LONE_SQUAD := 1000000
+## Lines that jump the queue.
+const URGENT_LINES := ["man_down", "stuck", "grenade"]
 var callouts := Callouts.new()
 ## Every flash: [point, radius, time], for gates.
 var flashes: Array = []
@@ -107,8 +111,16 @@ func hostiles_of(team: int) -> Array[Pawn]:
 	return out
 
 
-## A line spoken by `speaker` (AI.md 6.5), heard out to `range_m`.
+## A line spoken by `speaker` (AI.md 6.5), heard out to `range_m`: through
+## Callouts, under its squad's rate limits -- or, for a soldier with no squad,
+## under its own. `on_say` hears every line too, for whoever wants them.
 func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> void:
+	if speaker == null or not is_instance_valid(speaker):
+		return
+	var so := speaker.body.get_node_or_null(^"Soldier") as Soldier
+	var squad_id: int = so.squad.id if so != null and so.squad != null \
+			else LONE_SQUAD + int(speaker.get_instance_id() % 1000000)
+	callouts.say(squad_id, speaker, key, text, now(), key in URGENT_LINES, range_m)
 	if on_say.is_valid():
 		on_say.call(speaker, key, text, range_m)
 
