@@ -84,6 +84,9 @@ class Assignment:
 	## path search (BTPlayTravel).
 	var trail := PackedVector3Array()
 	var upto := -1
+	## The squad's play generation it was handed out in (Squad.begin_play): a
+	## play leaving clears only its own, never the next play's.
+	var generation := 0
 
 	static func make(p_task: int, p_point: Vector3) -> Assignment:
 		var a := Assignment.new()

@@ -1,9 +1,14 @@
 class_name Commander
 extends Node
 ## The commander of one side in one encounter (Docs/AI.md 9, AIPlan P9; Red
-## Dawn's CommanderAI). Not a soldier: nobody sees it and nothing shoots it
-## (its radio and a killable commander are later). It never pathfinds and never
-## aims. It decides two things, from what its side knows:
+## Dawn's CommanderAI). It is not in the fight: it never pathfinds and never
+## aims. But it has a body and a radio in the world, if its host gives it an HQ
+## (the arena puts an officer and a radio in a building): kill the officer and
+## nothing more is decided; destroy the radio and it can call nobody -- no
+## reinforcements, and orders only to squads within shouting distance of the
+## HQ. Both, and the side has lost its coordination: its points count for 40 %
+## less in any fight resolved off-screen (PointsBattle), as Red Dawn's did.
+## It decides two things, from what its side knows:
 ##
 ##   WHAT THE SQUADS DO -- Orders, answered by Reports (SquadMsg). A squad with
 ##     the enemy in sight is sent to ADVANCE on it (bounding overwatch) as
@@ -58,6 +63,14 @@ var spawner := Callable()
 var alive_cap := 8
 ## Where the fight is, when nobody knows where the enemy is (the arena's focus).
 var rally := Vector3.INF
+## (point) -> {"room": RoomTactics, "opening": ...} or {}: the room a point is in,
+## from the host (CityRooms.at in the city). Unset, no room is ever cleared.
+var room_at := Callable()
+## Rooms given up on: room id -> times a clear of it failed.
+var _room_fails := {}
+const ROOM_TRIES := 2
+## A squad this strong, at least, is sent in to clear a room.
+const CLEAR_WITH := 3
 ## The last few things it decided, newest last, for the HUD and gates.
 var log: Array[String] = []
 var orders_given := {}   # OrderKind name -> count
@@ -70,7 +83,60 @@ var _last_reinforce := -INF
 var _waiting_spawn := false
 var _hold_until := -INF
 var _last_order_at := {}   # squad id -> time
+var _clearing := {}        # CLEAR_ROOM order id -> room id
+var rooms_cleared := 0
 var _rng := RandomNumberGenerator.new()
+## Where its own have died, where the enemy has been seen, how strong it is where
+## (SectorGrid): the host asks it which spawn spot is safest.
+var sectors := SectorGrid.new()
+## Fights nobody is watching, resolved in points (PointsBattle.Front).
+var fronts: Array = []
+signal front_resolved(front)
+## () -> Array[Vector3]: where the players are, for a front to go real-time.
+var players_at := Callable()
+## The HQ: whether its officer lives and its radio stands, and where it is.
+var commander_up := true
+var radio_up := true
+var hq := Vector3.INF
+## Radio down, a squad this near the HQ still hears an order shouted.
+const SHOUT_RANGE := 40.0
+## The share of its points a side without coordination fights with.
+const LEADERLESS := 0.6
+
+
+## The HQ's officer is dead: nothing more is decided. Squads fight on as they are.
+func commander_killed() -> void:
+	if not commander_up:
+		return
+	commander_up = false
+	_note("the commander is dead -- no more orders, no more reinforcements")
+
+
+## The radio is down: nobody can be called, and only squads near the HQ hear orders.
+func radio_destroyed() -> void:
+	if not radio_up:
+		return
+	radio_up = false
+	_note("the radio is down -- no reinforcements; orders only within %d m of the HQ" % SHOUT_RANGE)
+
+
+func coordinated() -> bool:
+	return commander_up or radio_up
+
+
+## Open a fight at `where` for PointsBattle to resolve if nobody comes near.
+## `ours_attacking`: which of the two is this commander's side.
+func open_front(where: Vector3, attacker: float, defender: float, fortified := false,
+		ours_attacking := false) -> PointsBattle.Front:
+	var f := PointsBattle.Front.new()
+	f.where = where
+	f.attacker = attacker
+	f.defender = defender
+	f.fortified = fortified
+	f.ours_attacker = ours_attacking
+	f.started = services.now() if services != null else 0.0
+	fronts.append(f)
+	return f
 
 
 func setup(p_services: AIServices, p_team: int, seed := 0x0C0DE) -> void:
@@ -102,12 +168,13 @@ func joined(q: Squad, so: Soldier) -> void:
 func _count_in(so: Soldier) -> void:
 	var pts := UnitCatalog.points(StringName(so.get_meta(&"unit", &"rifleman")))
 	fielded_points += pts
-	if not so.pawn.health.died.is_connected(_on_lost):
-		so.pawn.health.died.connect(_on_lost.bind(pts))
+	so.pawn.health.died.connect(_on_lost.bind(pts, so))
 
 
-func _on_lost(pts: float) -> void:
+func _on_lost(pts: float, so: Soldier) -> void:
 	lost_points += pts
+	if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
+		sectors.note_loss(so.pawn.feet(), pts)
 	_update_desperation()
 
 
@@ -116,6 +183,13 @@ func _on_report(r: SquadMsg.Report, q: Squad) -> void:
 		return
 	_note("squad %d: order %s%s" % [q.id, SquadMsg.ReportKind.keys()[r.kind],
 			(" (" + r.reason + ")") if r.reason else ""])
+	if _clearing.has(r.order_id):
+		var rid: int = _clearing[r.order_id]
+		_clearing.erase(r.order_id)
+		if r.kind == SquadMsg.ReportKind.FAILED:
+			_room_fails[rid] = int(_room_fails.get(rid, 0)) + 1
+		else:
+			rooms_cleared += 1
 	# Think again soon: the squad is free.
 	_next_think = minf(_next_think, services.now() + 0.25)
 
@@ -146,14 +220,49 @@ func _physics_process(_delta: float) -> void:
 
 
 func think(dt: float) -> void:
-	budget = minf(budget + INCOME * dt, BUDGET_CAP)
 	profile.decay(dt)
+	sectors.decay(dt)
+	squads = squads.filter(func(q): return is_instance_valid(q) and not q.alive().is_empty())
+	# What the map says: where its own stand, where the enemy is in sight.
+	var ours := []
+	for q in squads:
+		for m in q.alive():
+			ours.append([m.pawn.feet(), UnitCatalog.points(StringName(m.get_meta(&"unit", &"rifleman")))])
+	sectors.set_ours(ours)
+	var now := services.now()
+	var c := services.knowledge_of(team).best(now)
+	if c != null and c.visible:
+		sectors.note_threat(c.pos, dt)
+	_step_fronts(now)
+	if not commander_up:
+		return   # nobody left to decide
+	budget = minf(budget + INCOME * dt, BUDGET_CAP)
 	_update_desperation()
 	doctrine.update(profile, desperation, difficulty)
-	squads = squads.filter(func(q): return is_instance_valid(q) and not q.alive().is_empty())
 	for q in squads:
-		_command(q)
-	_reinforce(false)
+		if radio_up or hq == Vector3.INF or q.center().distance_to(hq) <= SHOUT_RANGE:
+			_command(q)
+	if radio_up:
+		_reinforce(false)
+
+
+func _step_fronts(now: float) -> void:
+	var players: Array = players_at.call() if players_at.is_valid() else []
+	for f in fronts:
+		var front: PointsBattle.Front = f
+		if not front.result.is_empty():
+			continue
+		if not coordinated() and not front.get_meta(&"leaderless", false):
+			# Coordination lost: its side fights with less, from now on.
+			front.set_meta(&"leaderless", true)
+			if front.ours_attacker:
+				front.attacker *= LEADERLESS
+			else:
+				front.defender *= LEADERLESS
+		if front.step(now, players):
+			_note("front at %v: %s (%.1f vs %.1f left)" % [front.where, front.result.name,
+					front.attacker, front.defender])
+			front_resolved.emit(front)
 
 
 func _update_desperation() -> void:
@@ -170,6 +279,25 @@ func _command(q: Squad) -> void:
 	if c != null and c.age(now) < FRESH:
 		if busy:
 			return
+		if now - float(_last_order_at.get(q.id, -INF)) < ORDER_GAP:
+			return
+		# In a room: clear it (AI.md 6.2) -- stack, flash, enter, sweep. The
+		# play makes its own door when there is none to walk through.
+		if room_at.is_valid() and q.alive().size() >= CLEAR_WITH:
+			var r: Dictionary = room_at.call(c.pos)
+			# One squad to a room: two stacking on one door jam each other's
+			# slots and neither gets in.
+			if not r.is_empty() and int(_room_fails.get((r.room as RoomTactics).id, 0)) < ROOM_TRIES \
+					and not _clearing.values().has((r.room as RoomTactics).id):
+				var oc := SquadMsg.Order.make(SquadMsg.OrderKind.CLEAR_ROOM)
+				oc.room = r.room
+				oc.opening = r.opening
+				oc.wall_thick = TowerRecipe.WALL_THICK * BrickWorld.get_stud_metres()
+				_clearing[oc.id] = (r.room as RoomTactics).id
+				_give(q, oc, "CLEAR_ROOM %s (%s)" % [r.room.id,
+						"through the hole in its wall" if not (r.opening as Dictionary).is_empty()
+						else "making a door"])
+				return
 		# Already as close as an advance goes (BTPlayAdvance.STOP), or told
 		# lately: leave it to fight. Re-ordering a squad that is already there
 		# was an order and a DONE every second.
@@ -209,7 +337,8 @@ func _give(q: Squad, o: SquadMsg.Order, why: String) -> void:
 ## Buy and field a squad, if the side is short and can pay. `now_please`: the
 ## timing does not apply (the budget still does).
 func _reinforce(now_please: bool) -> bool:
-	if not spawner.is_valid():
+	# Nobody to decide it, or no radio to call it in.
+	if not spawner.is_valid() or not commander_up or not radio_up:
 		return false
 	var now := services.now()
 	# A squad asked for and not yet down -- unless it never came.
