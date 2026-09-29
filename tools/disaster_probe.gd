@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid
 
 var _pass := 0
 var _fail := 0
@@ -95,6 +95,8 @@ func _run() -> void:
 		await _check_quake(city, dir)
 	if only == "" or "tornado" in only:
 		await _check_tornado(city, dir)
+	if only == "" or "acid" in only:
+		await _check_acid(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -763,6 +765,63 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 		if city.authority.commands.entries[i].kind == DamageLog.Kind.TOPPLE:
 			topples0 += 1
 	_ok("with 0 at once, nothing collapses", none and topples0 == 0)
+
+
+## Acid rain (Docs/Disasters.md 14): it wears plastic, as committed CHIPs,
+## leaves metal and stone alone, and burns whoever is out in it.
+func _check_acid(city: Node3D, dir: DisasterDirector) -> void:
+	print("acid rain")
+	_ok("acid minds PLA most, nylon less, metal and stone not at all",
+			AcidRain.susceptibility(0) == 1.0 and AcidRain.susceptibility(6) < 0.5
+			and AcidRain.susceptibility(11) == 0.0 and AcidRain.susceptibility(12) == 0.0)
+	var s: AIServices = city.ai_services
+	var feet: Vector3 = city.ai_nav.snap(Vector3(0.0, 0.0, -40.0))
+	var so: Soldier = city._spawn_soldier(feet)
+	so.brain.active = false   # stay out in it
+	await _ticks(5)
+	var open_sky := not BTShelter.covered(s, so.pawn.feet())
+	var before: float = so.pawn.health.total_current()
+	var n0: int = city.authority.commands.size()
+	_ok("acid rain starts", dir.start("acid"))
+	var ar: AcidRain = dir.current
+	var stormy := false
+	var sight := 1.0
+	var aim := 1.0
+	var screen := 0.0
+	var ticks := 0
+	var got := [0, 0, 0, 0]   # drops, worn, spared, burnt: the rain is freed when done
+	while dir.is_running() and ticks < 30 * 70:
+		await physics_frame
+		ticks += 1
+		if is_instance_valid(ar):
+			got = [ar.drops, ar.worn, ar.spared, ar.burnt]
+		if is_instance_valid(ar) and ar.phase == Disaster.Phase.ACTIVE:
+			stormy = stormy or s.storm
+			sight = minf(sight, s.sight_mul)
+			aim = maxf(aim, s.aim_mul)
+			if dir.ctx.screen != null:
+				screen = maxf(screen, float(dir.ctx.screen.get_shader_parameter("rain")))
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 600:
+		await physics_frame
+		wait += 1
+	var chips := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chips += 1
+	_ok("drops fell, and wore bricks", got[0] > 100 and got[1] > 20,
+			"%d drop(s), %d wore a brick, %d on metal or stone" % [got[0], got[1], got[2]])
+	_ok("the wear is committed CHIPs", chips >= got[1], "%d CHIP(s)" % chips)
+	_ok("a soldier out in it is burnt", open_sky and got[3] > 0
+			and so.pawn.health.total_current() < before,
+			"%.0f -> %.0f" % [before, so.pawn.health.total_current()])
+	_ok("the AI shelters, sees a little less and aims a lot worse",
+			stormy and sight < 1.0 and sight >= 0.85 and aim > 1.2, "sight %.2f, aim %.2f" % [sight, aim])
+	var lens := dir.ctx.screen
+	_ok("the lens streaks", lens != null and screen > 0.5)
+	_ok("and it all clears", not dir.is_running() and not s.storm and s.sight_mul == 1.0
+			and s.aim_mul == 1.0 and not dir.ctx.raining
+			and (lens == null or float(lens.get_shader_parameter("rain")) == 0.0))
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
