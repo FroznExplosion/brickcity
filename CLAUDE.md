@@ -67,6 +67,19 @@ The engine library is **not committed**; each worktree builds its own.
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
 - Run the probes your change could affect before merging.
 
+### Know what a test measures, and prune what no longer matters
+
+- Before running a probe or pass (or trusting its result), read what each
+  check is FOR -- its comment and the doc section it cites -- not just its name.
+- If a check measures something the game no longer has or needs (a removed
+  feature, a replaced approach, a number nobody uses), remove that check (or
+  that part of the pass) in the same change that made it obsolete, and say in
+  the commit message why it went.
+- Pruning is not a way to make a failing test pass: a check that fails on
+  something still wanted is a bug to fix, not a check to delete.
+- Stay in your area: prune checks in the files your area owns (Areas table);
+  for another area's tests, tell the user which check looks obsolete and why.
+
 ### Performance measurements need the editor closed
 
 Frame times, `--bench`, `--stress`, `--lod` and any other timing pass are only
