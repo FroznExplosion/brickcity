@@ -102,7 +102,18 @@ func _run() -> void:
 		var big: Node3D = load("res://scenes/big_city.tscn").instantiate()
 		root.add_child(big)
 		await _ticks(5)
-		_ok("the big city has none", big.disasters == null)
+		_ok("the big city has disasters too", big.disasters != null)
+		if big.disasters != null:
+			big.disasters.start("meteor")
+			var bm: MeteorShower = big.disasters.current
+			var bn := 0
+			var landed := 0
+			while big.disasters.is_running() and bn < 30 * 50:
+				await physics_frame
+				bn += 1
+				if is_instance_valid(bm):
+					landed = bm.impacts.size()
+			_ok("and a meteor shower lands there", landed > 0, "%d meteor(s) in %.0f s" % [landed, bn / 30.0])
 		root.remove_child(big)
 		big.free()
 	_finish()

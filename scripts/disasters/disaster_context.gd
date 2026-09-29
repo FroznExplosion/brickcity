@@ -21,6 +21,8 @@ var raining := false
 ## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
 ## because the city clears the AI's danger boxes each tick before its own.
 var hazards := {}
+## The weather on the lens (director's overlay); null when there is no screen.
+var screen: ShaderMaterial
 ## Smoke ids this context set on the AI world last push, to take back.
 var _smoke_ids: Array[int] = []
 ## Danger and smoke ids are the AI world's, shared with falling pieces (chunk
@@ -296,6 +298,15 @@ func set_weather(amount: float, sight: float, aim: float, intensity := 1.0) -> v
 	var k := clampf(amount, 0.0, 1.0) * maxf(intensity, 0.0)
 	city.ai_services.sight_mul = clampf(1.0 - (1.0 - sight) * k, 0.6, 1.0)
 	city.ai_services.aim_mul = maxf(1.0, 1.0 + (aim - 1.0) * k)
+
+
+## Rain streaking the view and dust hazing it, 0..1 each; `dust_colour` tints it.
+func set_screen(rain: float, dust: float, dust_colour := Color(0.6, 0.55, 0.48)) -> void:
+	if screen == null:
+		return
+	screen.set_shader_parameter("rain", clampf(rain, 0.0, 1.0))
+	screen.set_shader_parameter("dust", clampf(dust, 0.0, 1.0))
+	screen.set_shader_parameter("dust_colour", dust_colour)
 
 
 ## Soldiers within `radius` of `point` get low for `seconds` (Soldier.duck): a
