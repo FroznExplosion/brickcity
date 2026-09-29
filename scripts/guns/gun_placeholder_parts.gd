@@ -190,4 +190,6 @@ static func _pack(root: Node3D) -> PackedScene:
 	var err := ps.pack(root)
 	if err != OK:
 		push_error("GunPlaceholderParts: pack failed for %s (%d)" % [root.name, err])
+	# The scene holds a copy; the template, never in a tree, would outlive the game.
+	root.free()
 	return ps

@@ -23,9 +23,10 @@ const KINDS := {
 	"fire": preload("res://scripts/disasters/building_fire.gd"),
 	"tornado": preload("res://scripts/disasters/tornado.gd"),
 	"earthquake": preload("res://scripts/disasters/earthquake.gd"),
+	"acid": preload("res://scripts/disasters/acid_rain.gd"),
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake"]
+const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid"]
 ## The menu's names, in the menu's order.
 const TITLES := {
 	"meteor": "Meteor shower",
@@ -33,6 +34,7 @@ const TITLES := {
 	"fire": "Building fire",
 	"tornado": "Tornado",
 	"earthquake": "Earthquake",
+	"acid": "Acid rain",
 }
 ## Intensity steps the slider snaps to, with their names.
 const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]
@@ -43,6 +45,8 @@ var ctx: DisasterContext
 ## Fire outlives what lit it, so it is the director's, not a disaster's.
 var fire: FireSpread
 var current: Disaster
+## Pieces carrying fire off a burning building (BurningDebris).
+var debris: BurningDebris
 var current_kind := ""
 ## How many disasters this run has started. The N-th one's seed is the same
 ## every run, so a disaster seen once can be seen again.
@@ -86,10 +90,15 @@ func setup(city: Node3D) -> void:
 	add_child(fire)
 	fire.material_at = ctx.material_at
 	fire.chip = ctx.chip
+	fire.scorch = ctx.scorch
 	fire.damage = ctx.damage_pawns
 	fire.raining = func() -> bool: return ctx.raining
 	fire.setup(hash([_base_seed, "fire"]))
 	ctx.fire = fire
+	debris = BurningDebris.new()
+	debris.name = "BurningDebris"
+	add_child(debris)
+	debris.setup(ctx, fire)
 	_layer = CanvasLayer.new()
 	_layer.layer = 5
 	add_child(_layer)

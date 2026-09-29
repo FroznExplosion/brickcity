@@ -59,6 +59,11 @@ func chip(point: Vector3, radius: float, hp: int) -> void:
 	city.chip(point, radius, hp)
 
 
+## Blacken the bricks in a ball: fire's mark, colour only (DamageLog SCORCH).
+func scorch(point: Vector3, radius: float) -> int:
+	return city.scorch(point, radius)
+
+
 ## Knock a clump of bricks loose from the building at `point`, whole -- they
 ## become a piece, and fall -- rather than destroying them. The city's own
 ## shear, as falling masonry does it. Host only (it commits directly, like the
@@ -301,12 +306,14 @@ func set_weather(amount: float, sight: float, aim: float, intensity := 1.0) -> v
 
 
 ## Rain streaking the view and dust hazing it, 0..1 each; `dust_colour` tints it.
-func set_screen(rain: float, dust: float, dust_colour := Color(0.6, 0.55, 0.48)) -> void:
+func set_screen(rain: float, dust: float, dust_colour := Color(0.6, 0.55, 0.48),
+		rain_colour := Color(0.78, 0.84, 0.92)) -> void:
 	if screen == null:
 		return
 	screen.set_shader_parameter("rain", clampf(rain, 0.0, 1.0))
 	screen.set_shader_parameter("dust", clampf(dust, 0.0, 1.0))
 	screen.set_shader_parameter("dust_colour", dust_colour)
+	screen.set_shader_parameter("rain_colour", rain_colour)
 
 
 ## Soldiers within `radius` of `point` get low for `seconds` (Soldier.duck): a

@@ -84,6 +84,10 @@ enum Kind {
 	LOAD,
 	## The piece `owner` no longer rests on building `target`.
 	UNLOAD,
+	## Fire blackened the bricks in a ball of `radius` (BrickWorld.scorch_hit):
+	## colour only -- nothing dies, no joint changes. A building, world space.
+	## A command because every machine should see the same charred walls.
+	SCORCH,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -149,7 +153,7 @@ class Entry extends RefCounted:
 		return e
 
 	func is_piece() -> bool:
-		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD:
+		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD or kind == Kind.SCORCH:
 			return false
 		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 
@@ -217,6 +221,10 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return PackedInt32Array()
 		Kind.UNLOAD:
 			world.clear_load(chunk, e.owner)
+			return PackedInt32Array()
+		Kind.SCORCH:
+			# Nothing died: what it returns is not the caller's business.
+			world.scorch_hit(chunk, e.point, e.radius)
 			return PackedInt32Array()
 		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
 			return _apply_local(world, chunk, e)

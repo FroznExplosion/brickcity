@@ -18,7 +18,7 @@ extends RefCounted
 ## The number that means something across any relief is "how much of the
 ## ground is under water", so that is what is asked for. Sampled on a coarse
 ## lattice over the play area — a few hundred field queries, once.
-static func sea_level_for(half_tiles: int, drowned := DEFAULT_DROWNED) -> float:
+static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
 	var brick := BrickTerrain.get_brick_metres()
 	var half := half_tiles * BrickTerrain.get_tile_studs()
 	@warning_ignore("integer_division")
@@ -36,10 +36,15 @@ static func sea_level_for(half_tiles: int, drowned := DEFAULT_DROWNED) -> float:
 	return heights[i] + brick * 0.5
 
 
-## How much of a new world is under water, when its file does not say. 0.22
-## puts this seed's sea at 11.6 m (it was 0.30, 14.9 m: the water sat high up
-## the hills with no beaches), and the sand band runs along its shore.
-const DEFAULT_DROWNED := 0.22
+## A new world's sea sits AT THE SAND: the generator makes ground at or below
+## 0.84 m sand, so a sea three bricks under that (-0.76 m) leaves most of the
+## sand dry as beach, the lowest of it wet, and## the seabed sand under it. A drowned fraction of 0 means this; a world file
+## that names a fraction (the city's 0.20) keeps its own.
+##
+## It was 0.30 of the ground round the origin, which on this seed put the sea
+## at 14.9 m, 14 m above every beach the terrain has (Water.md 9.10).
+const DEFAULT_DROWNED := 0.0
+const SEA_AT_SAND := -0.76
 
 ## THE sea level of the loaded world, in metres. -INF until a world is loaded
 ## or stamped.
@@ -61,7 +66,7 @@ const FREEBOARD_BRICKS := 1
 
 ## Measure the sea for this world. On the RAW field: call with no pads in it.
 static func settle_sea(drowned: float) -> float:
-	sea_level = sea_level_for(SEA_TILES, drowned)
+	sea_level = SEA_AT_SAND if drowned <= 0.0 else sea_level_for(SEA_TILES, drowned)
 	BrickWave.set_sea_level(sea_level)
 	return sea_level
 

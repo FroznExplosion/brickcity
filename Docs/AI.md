@@ -750,7 +750,21 @@ death, or the end of the fight, and scored two ways:
    retune. The same act with no better option (reloading in the open with no cover anywhere) only
    costs reward.
 
-The arena HUD shows the running count; `--watch` and `--gate` print the table per tactic.
+The arena HUD shows the running count; `--watch` and `--gate` print the table per tactic. The gate
+pauses the judge (`DecisionJudge.pause`) while it blows buildings down and kills a wave by hand —
+those are not the soldiers' decisions.
+
+**For the P6 squad work, merging over this** (branch `ai-p6`, uncommitted when this landed):
+
+- `FactionKnowledge` already has `seen_by`, `forget_seer` and `of(pawn)` in the same shape as P6's;
+  keep P6's file.
+- `SoldierTree` gained the engage decision (`ChooseTactic`, `TacticIs`, `Manoeuvre`) and `GoHelp`;
+  the disasters work added `BTShelter`. P6's assignment branch goes alongside, above the engage
+  branch or inside it — a squad assignment can override the tactic by setting `Soldier.tactic`.
+- `AIServices.on_say(speaker, key, text, range)` is the one seam for lines. `ArenaVoice` is a stand-in
+  that follows §6.5; point `on_say` at `Callouts.say` and delete it.
+- `Soldier` gained tactic, health, help and bad-cover state and `allies()`; nothing of P6's is
+  renamed.
 
 ---
 

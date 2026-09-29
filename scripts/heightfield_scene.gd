@@ -128,6 +128,8 @@ var _all_rects: Array[Rect2i] = []
 ## Each block's sample step, beside its rect: an edit re-bakes a block at the
 ## step it was built with.
 var _all_steps: Array[int] = []
+## The camera tile the small far blocks were last re-LODded for.
+var _relod_at := Vector2i(1 << 30, 0)
 var _all_owner: Array[int] = []
 ## Block index -> its own node, for blocks that have one.
 var _all_node := {}
@@ -632,6 +634,63 @@ func rebuild_far() -> void:
 		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
 
 
+## THE SMALL FAR BLOCKS FOLLOW THE CAMERA'S LOD (Terrain.md 19.19).
+##
+## Ring 0 of the far tier is laid out round the world's ORIGIN, and blocks
+## split to sit beside the detail are kept once split -- so the ground round
+## the origin (where the sites are) and everywhere the camera had passed stayed
+## LOD 1, blocky, however far away the camera went. Each such block is re-baked
+## at the step its distance from the camera calls for -- the same rings the
+## far tier is laid out in, measured from the camera instead of the origin --
+## whenever the camera enters a new tile. Smooth past LOD 1, as the rest is.
+func _relod_far(at: Vector3) -> void:
+	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(at.x / tile_m), floori(at.z / tile_m))
+	if c == _relod_at:
+		return
+	_relod_at = c
+	var redo: Array[int] = []
+	var want: Array[int] = []
+	for i in _all_rects.size():
+		if _all_owner[i] < 0 or not _all_node.has(i):
+			continue
+		var r: Rect2i = _all_rects[i]
+		var dx: int = maxi(0, maxi(r.position.x - c.x, c.x - (r.end.x - 1)))
+		var dz: int = maxi(0, maxi(r.position.y - c.y, c.y - (r.end.y - 1)))
+		var d: int = maxi(dx, dz)
+		var level := 0
+		while level < FAR_LEVELS - 1 and d >= (FAR_FIRST << level):
+			level += 1
+		# A block is never sampled coarser than it is wide.
+		var step: int = maxi(FAR_STEP << level, 1)
+		step = mini(step, r.size.x * BrickTerrain.get_tile_studs())
+		if step != _all_steps[i]:
+			redo.append(i)
+			want.append(step)
+	if redo.is_empty():
+		return
+	var baked: Array[Dictionary] = []
+	baked.resize(redo.size())
+	var task := WorkerThreadPool.add_group_task(
+		func(k: int) -> void:
+			var r: Rect2i = _all_rects[redo[k]]
+			baked[k] = BrickTerrain.build_coarse(r.position.x, r.position.y, r.size.x, want[k]),
+		redo.size(), -1, true, "coarse relod")
+	WorkerThreadPool.wait_for_group_task_completion(task)
+	for k in redo.size():
+		var i: int = redo[k]
+		var mi := _all_node[i] as MeshInstance3D
+		var arrays: Array = baked[k]["mesh"]
+		if not is_instance_valid(mi) or arrays.is_empty():
+			continue
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+				TerrainTile.CUSTOM0_FLAGS)
+		mi.mesh = mesh
+		mi.set_instance_shader_parameter("lod_level", _lod_of_step(want[k]))
+		_all_steps[i] = want[k]
+
+
 ## A coarse block's LOD level from its sample step: the detailed tiles are 0,
 ## a block sampled every FAR_STEP studs is 1, and each doubling one more.
 ## A float, because the shader's `lod_level` is one: an int handed to a float
@@ -978,6 +1037,7 @@ func _process(delta: float) -> void:
 		if not _lod_frozen:
 			_streamer.follow(Vector2(lod_at.x, lod_at.z))
 			_hide_covered_far()
+			_relod_far(lod_at)
 		_tiles.assign(_streamer.tiles())
 	if _sea != null and _sea.enabled:
 		_sea.follow(lod_at, delta)

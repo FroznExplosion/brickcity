@@ -17,6 +17,12 @@ extends Node
 ##   * MOVING, for the tasks: a path from AINav, requested through the queue,
 ##     followed a waypoint at a time, re-requested when the city changes under it
 ##     or the pawn stops getting anywhere.
+##
+## In a SQUAD (P6) it also carries the squad's Assignment and answers it with
+## Status; a MASKED move is held, every physics tick, whenever Masking says the
+## enemy could see it go; a SUPPRESS point is fired at when there is nothing to
+## aim at; and it fires at a target only while it holds one of the target's
+## attack tokens, never with a squadmate in the line.
 
 const SENSE_HZ := 5.0
 const THINK_HZ := 10.0
@@ -59,6 +65,8 @@ var cover_left_with := -1.0
 ## the same every time; a task watching this gives the goal up (MAX_STUCK).
 var stuck := 0
 const MAX_STUCK := 2
+## Times it was pinned for good and put on the nearest free spot (_unstick).
+var unsticks := 0
 
 ## The engage decision (CombatPolicy): the tactic it is carrying out, when it
 ## was chosen, and until when it is held unless something happens. `tactic_done`
@@ -74,6 +82,10 @@ var _hp_seen := -1.0
 ## When its gun last fired, and the damage its rounds have done in all.
 var last_shot_at := -INF
 var dealt := 0.0
+## Cover given up on -- no way there, or shot through -- as [spot, until]: not
+## to be taken again for BAD_COVER_SECONDS (CoverSearch.find_for).
+var bad_cover: Array = []
+const BAD_COVER_SECONDS := 10.0
 ## A buddy's call for help: where to go, and until when it is worth going.
 var help_point := Vector3.INF
 var help_until := -INF
@@ -95,6 +107,29 @@ var _trap_retry_at := 0.0
 var _trapped_since := 0.0
 var _duck_until := 0.0
 var _ducking := false
+## Its squad (P6), when it has one, and what the squad has told it to do.
+var squad: Squad
+var assignment: SquadMsg.Assignment
+## Set by the assignment task: the current move goes only while masked.
+var masked_move := false
+## Fire at this when there is no target in sight (suppression). INF: none.
+var suppress_point := Vector3.INF
+## Why the last masked-move check let it go, "" if it did not (Masking).
+var mask_state := ""
+## For gates: ticks a masked move was held, metres moved while it should have
+## been, metres moved while masked.
+var held_ticks := 0
+var unmasked_moved := 0.0
+var masked_moved := 0.0
+var friendly_holds := 0
+var _want_move := Vector3.ZERO
+var _was_held := false
+## Ticks in a row it has been held: the first is the tick the hold was decided,
+## and the body's step for it was already under way (_measure_masked).
+var _held_ticks_run := 0
+var _was_masked_moving := false
+var _last_feet := Vector3.INF
+var _replied := {}
 
 var _next_sense := -INF
 var _next_think := -INF
@@ -116,6 +151,8 @@ var _dead := false
 static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		gun: GunInstance) -> Soldier:
 	var p := Pawn.spawn(parent, feet, p_team, true, 100.0)
+	# Nobody crouches (A21), whatever a task, a play or a duck asks for.
+	p.no_crouch = true
 	var so := Soldier.new()
 	so.max_health = 100.0
 	so.name = "Soldier"
@@ -140,13 +177,14 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		g.equip(gun)
 	p.gun = g
 	g.fired.connect(so._on_fired)
+	g.reload_started.connect(so._on_reload)
 	so.brain = BTPlayer.new()
 	so.brain.name = "Brain"
 	so.brain.update_mode = BTPlayer.MANUAL
 	so.brain.behavior_tree = SoldierTree.build()
 	so.brain.set_scene_root_hint(p.body)
 	p.body.add_child(so.brain)
-	s.pawns.append(p)
+	s.add_pawn(p)
 	s.ai_nav.nav_changed.connect(so._on_nav_changed)
 	p.health.died.connect(so._on_died)
 	return so
@@ -164,6 +202,30 @@ func contact() -> FactionKnowledge.Contact:
 	return knowledge().best(services.now())
 
 
+## This soldier has `c` in its own sight (not only somebody on its side).
+func sees(c: FactionKnowledge.Contact) -> bool:
+	return c != null and c.visible and c.seen_by.has(get_instance_id())
+
+
+## The squad's order for this soldier, or null to fight on its own.
+func set_assignment(a: SquadMsg.Assignment) -> void:
+	assignment = a
+	if a == null:
+		masked_move = false
+		suppress_point = Vector3.INF
+
+
+## Reply to the current assignment -- once per kind.
+func report(kind: int) -> void:
+	if assignment == null or squad == null:
+		return
+	var key := assignment.id * 8 + kind
+	if _replied.has(key):
+		return
+	_replied[key] = true
+	squad.on_status(self, assignment.id, kind)
+
+
 func eye_pos() -> Vector3:
 	return pawn.eye.global_position
 
@@ -176,16 +238,23 @@ func _physics_process(_delta: float) -> void:
 	var now := services.now()
 	# Ducking (duck()): low, whatever the task wants, until it is over.
 	if now < _duck_until:
+		# The one crouch let through (A21 says nobody crouches): a duck from a
+		# lightning stroke (Docs/Collapse.md), the disasters area's -- a rule
+		# for the two to settle, not one to break silently.
+		pawn.no_crouch = false
 		pawn.intents.crouch = true
 	elif _ducking:
 		_ducking = false
 		pawn.intents.crouch = false
+		pawn.no_crouch = true
 	if now >= _next_sense and not _sense_queued:
 		_sense_queued = true
 		services.sched.submit(AIScheduler.PERCEPTION, importance, _sense)
 	if now >= _next_think and not _think_queued:
 		_think_queued = true
 		services.sched.submit(AIScheduler.TREES, importance, _think)
+	_measure_masked()
+	_gate_masked()
 	_aim_and_fire(now)
 
 
@@ -196,7 +265,11 @@ func _sense() -> void:
 	var k := knowledge()
 	for h in services.hostiles_of(team):
 		if can_see(h):
+			var before := k.of(h)
+			var known := before != null and (before.visible or now - before.seen_at < 6.0)
 			k.saw(h, h.feet(), now, self)
+			if not known and squad != null:
+				squad.say(self, "contact", "Contact!")
 		else:
 			k.lost_sight(h, self)
 
@@ -244,28 +317,63 @@ func can_see(h: Pawn) -> bool:
 func _aim_and_fire(now: float) -> void:
 	var c := contact()
 	var it := pawn.intents
-	if c != null and c.visible and c.pawn != null and is_instance_valid(c.pawn):
+	var eye := eye_pos()
+	# Only so many shoot one target at once (AI.md 5.1): a token is asked for only
+	# when it would fire, and without one it aims and waits -- or, told to
+	# suppress, suppresses.
+	# The line has to be clear THIS tick -- sensing is 5 Hz, and a target that
+	# stepped behind a wall 150 ms ago is behind a wall. And a soldier that cannot
+	# shoot does not take a token another could use.
+	var seen := c != null and c.visible and c.pawn != null and is_instance_valid(c.pawn)
+	var at := c.pawn.chest() if seen else Vector3.ZERO
+	# And from where the eye will be when the gun steps: on the move, the
+	# round leaves a tick later from a hand's breadth on -- past a wall's edge.
+	var next_eye := eye + pawn.body.velocity / float(Engine.physics_ticks_per_second)
+	var clear := seen and services.ai_world.bricks_between(eye, at) == 0 \
+			and services.ai_world.bricks_between(next_eye, at) == 0 \
+			and not services.ai_world.smoke_blocks(eye, at)
+	var mine := clear and fire_ok and services.token(c.pawn, self)
+	if seen and (mine or suppress_point == Vector3.INF):
 		_aim_target = c.pawn
 		aim.track(c.pawn, now)
-		var eye := eye_pos()
-		var at := c.pawn.chest()
 		aim.weather = services.aim_mul
 		var ang := aim.aim(eye, at, now)
 		it.look_yaw = ang.x
 		it.look_pitch = ang.y
-		# The line has to be clear THIS tick -- sensing is 5 Hz, and a target
-		# that stepped behind a wall 150 ms ago is behind a wall.
-		# And from where the eye will be when the gun steps: on the move, the
-		# round leaves a tick later from a hand's breadth on -- past a wall's edge.
-		var next_eye := eye + pawn.body.velocity / float(Engine.physics_ticks_per_second)
-		var clear := services.ai_world.bricks_between(eye, at) == 0 \
-				and services.ai_world.bricks_between(next_eye, at) == 0 \
-				and not services.ai_world.smoke_blocks(eye, at)
-		it.fire = fire_ok and clear and aim.ready_to_fire(now) and _burst(now)
+		it.fire = fire_ok and clear and mine and aim.ready_to_fire(now) and _burst(now) \
+				and not _friend_in_line(eye, at)
+	elif suppress_point != Vector3.INF:
+		# Suppression: rounds into where the enemy is, not at a body -- over its
+		# cover, round its head. Still never through bricks, nor through a friend.
+		_aim_target = null
+		aim.track(null, now)
+		var ang := aim.aim(eye, suppress_point, now)
+		it.look_yaw = ang.x
+		it.look_pitch = ang.y
+		it.fire = fire_ok and services.ai_world.bricks_between(eye, suppress_point) == 0 \
+				and _burst(now) and not _friend_in_line(eye, suppress_point)
 	else:
 		_aim_target = null
 		aim.track(null, now)
 		it.fire = false
+
+
+## A squadmate (or anyone on the side) close to the line of fire, nearer than
+## what is aimed at.
+func _friend_in_line(eye: Vector3, at: Vector3) -> bool:
+	var d := eye.distance_to(at)
+	for p in services.pawns:
+		if p == pawn or not is_instance_valid(p) or p.team != team or p.health == null \
+				or p.health.is_dead():
+			continue
+		var ch := p.chest()
+		if eye.distance_to(ch) > d:
+			continue
+		var q := Geometry3D.get_closest_point_to_segment(ch, eye, at)
+		if Vector2(q.x - ch.x, q.z - ch.z).length() < 0.6 and absf(q.y - ch.y) < 0.9:
+			friendly_holds += 1
+			return true
+	return false
 
 
 func _burst(now: float) -> bool:
@@ -279,11 +387,61 @@ func _on_fired(info: Dictionary) -> void:
 	if not info.is_empty() and info.get("result") != null:
 		dealt += (info.result as DamageSystem.DamageResult).dealt
 	# The gate's check, from the gun's side: was the line to what it was aimed
-	# at clear when the round left?
+	# at clear when the round left? (The noise, the suppression and the aggro a
+	# round makes are AIServices', for every gun alike.)
 	if _aim_target != null and is_instance_valid(_aim_target):
 		if services.ai_world.bricks_between(eye_pos(), _aim_target.chest()) > 0:
 			blocked_shots += 1
-	services.noise(eye_pos(), 40.0, pawn)
+
+
+func _on_reload(_seconds: float) -> void:
+	if squad != null:
+		squad.say(self, "reload", "Reloading!")
+
+
+# --- masked moves --------------------------------------------------------------
+
+## A masked move goes only while Masking says so; otherwise the soldier stops
+## where it is, down. Checked here every physics tick and in move_to, so it holds
+## whichever runs first.
+func _gate_masked() -> void:
+	if not masked_move or _dead:
+		mask_state = ""
+		_was_held = false
+		_held_ticks_run = 0
+		_was_masked_moving = false
+		return
+	var why := Masking.why(services, pawn, contact())
+	mask_state = why
+	if why == Masking.NONE:
+		pawn.intents.move = Vector3.ZERO
+		pawn.intents.run = false
+		pawn.intents.crouch = true
+		held_ticks += 1
+		_was_held = true
+		_held_ticks_run += 1
+		_was_masked_moving = false
+	else:
+		pawn.intents.move = _want_move
+		pawn.intents.crouch = false
+		_was_held = false
+		_held_ticks_run = 0
+		_was_masked_moving = _want_move != Vector3.ZERO
+
+
+## How far it went last tick, and whether it was meant to be held then.
+func _measure_masked() -> void:
+	var f := pawn.feet()
+	if _last_feet != Vector3.INF:
+		var d := Vector2(f.x - _last_feet.x, f.z - _last_feet.z).length()
+		# From the second held tick on: on the first, the hold was decided with
+		# the body already stepping -- a tick of reaction, not a move it made
+		# while it knew to stay (0.19 m at a run, once per unmasking).
+		if _was_held and _held_ticks_run >= 2:
+			unmasked_moved += d
+		elif _was_masked_moving:
+			masked_moved += d
+	_last_feet = f
 
 
 # --- moving, for the tasks --------------------------------------------------------
@@ -306,15 +464,22 @@ func move_to(goal: Vector3, run := false) -> int:
 		_goal = goal
 		if _path_id >= 0:
 			nav.release(_path_id)
-		_path_id = nav.request_path(pawn.feet(), goal, importance, 20000)
+		# What it may cost, by how far: a spot eight metres off does not get
+		# twenty thousand nodes to prove it cannot be reached.
+		var budget := clampi(int(pawn.feet().distance_to(goal) * 500.0), 3000, 20000)
+		_path_id = nav.request_path(pawn.feet(), goal, importance, budget)
 		_path = PackedVector3Array()
 		_wp = 0
-		_stuck_from = pawn.feet()
-		_stuck_at = now
+		# Not a reset of the stuck clock: a body pinned in place that keeps
+		# picking new places to go (a strafe every second or two) is still
+		# pinned, and resetting here meant it was never counted stuck at all.
 	if _path.is_empty():
 		var st := nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			pawn.intents.move = Vector3.ZERO
+			# Waiting for a path is not being stuck.
+			_stuck_from = pawn.feet()
+			_stuck_at = now
 			return 0
 		if st != AINav.DONE:
 			pawn.intents.move = Vector3.ZERO
@@ -337,6 +502,10 @@ func move_to(goal: Vector3, run := false) -> int:
 		_wp += 1
 	if _wp >= _path.size():
 		pawn.intents.move = Vector3.ZERO
+		stuck = 0
+		_stuck_from = feet
+		_stuck_at = now
+		_want_move = Vector3.ZERO
 		return 1
 	var next: Vector3 = _path[_wp]
 	var dir := Vector3(next.x - feet.x, 0.0, next.z - feet.z)
@@ -352,6 +521,14 @@ func move_to(goal: Vector3, run := false) -> int:
 			dir = way
 	pawn.intents.move = dir.normalized() if dir.length() > 0.01 else Vector3.ZERO
 	pawn.intents.run = run
+	_want_move = pawn.intents.move
+	if masked_move:
+		_gate_masked()
+		if mask_state == Masking.NONE:
+			# Held is not stuck.
+			_stuck_from = feet
+			_stuck_at = now
+			return 0
 	# Going nowhere: something is in the way that was not when the path was made.
 	if feet.distance_to(_stuck_from) > 0.4:
 		_stuck_from = feet
@@ -360,9 +537,59 @@ func move_to(goal: Vector3, run := false) -> int:
 	elif now - _stuck_at > STUCK_SECONDS:
 		_repath = true
 		stuck += 1
+		_stuck_at = now
 		if stuck >= MAX_STUCK:
 			call_for_help()
+		if stuck > MAX_STUCK:
+			_unstick(next)
 	return 0
+
+
+## Pinned for good -- a corner the path swears it can pass, a collider that
+## does not match the bricks: put the body on the nearest spot it fits, toward
+## where it was going first. The last resort, and what every shooter does.
+func _unstick(toward: Vector3) -> void:
+	var feet := pawn.feet()
+	var ahead := Vector3(toward.x - feet.x, 0.0, toward.z - feet.z)
+	var a0 := atan2(ahead.z, ahead.x) if ahead.length() > 0.01 else 0.0
+	for r in [0.35, 0.6, 0.9, 1.3]:
+		for k in 8:
+			# Toward the goal first, then fanning out either side.
+			@warning_ignore("integer_division")
+			var turn := (k + 1) / 2 * (PI / 4.0) * (1.0 if k % 2 == 0 else -1.0)
+			var a: float = a0 + turn
+			var p := services.ai_nav.snap(feet + Vector3(cos(a), 0.0, sin(a)) * r)
+			if absf(p.y - feet.y) > 0.5 or not services.ai_nav.can_stand(p):
+				continue
+			if not body_fits(services.world3d, p, pawn.body.get_rid()):
+				continue
+			pawn.place(p)
+			unsticks += 1
+			stuck = 0
+			_stuck_from = p
+			_stuck_at = services.now()
+			_repath = true
+			return
+
+
+## Does a standing body fit with its feet at `feet`, as physics sees it -- the
+## capsule itself, against everything a pawn collides with? The bricks can say
+## a spot is clear while a building's collision says it is not.
+static func body_fits(space_world: World3D, feet: Vector3, skip: RID = RID()) -> bool:
+	if space_world == null:
+		return true
+	var cap := CapsuleShape3D.new()
+	cap.radius = Pawn.BODY_RADIUS
+	cap.height = Pawn.BODY_HEIGHT
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = cap
+	# A hair above the floor, and a hair thinner: touching is not overlapping.
+	q.transform = Transform3D(Basis(), feet + Vector3.UP * (Pawn.BODY_HEIGHT * 0.5 + 0.04))
+	q.margin = -0.02
+	q.collision_mask = Layers.PAWN_MASK
+	if skip.is_valid():
+		q.exclude = [skip] as Array[RID]
+	return space_world.direct_space_state.intersect_shape(q, 1).is_empty()
 
 
 ## Stuck: shout for help (AI.md 6.5), and the side's soldiers in earshot who
@@ -386,6 +613,29 @@ func call_for_help() -> void:
 		if ally.pawn.feet().distance_to(pawn.feet()) <= HELP_RANGE and ally.state in ["idle", "search"]:
 			ally.help_point = pawn.feet()
 			ally.help_until = now + 20.0
+
+
+## A cover spot failed. Two strikes and it is out: one failure is often
+## passing -- rubble underfoot that the next path gets over -- and a spot that
+## was the only cover there is gets its second try.
+func mark_bad_cover(p: Vector3) -> void:
+	var now := services.now()
+	for e in bad_cover:
+		if (e[0] as Vector3).distance_to(p) < 1.0 and now <= float(e[1]):
+			e[1] = now + BAD_COVER_SECONDS
+			e[2] = int(e[2]) + 1
+			return
+	bad_cover.append([p, now + BAD_COVER_SECONDS, 1])
+
+
+func is_bad_cover(p: Vector3) -> bool:
+	var now := services.now()
+	for i in range(bad_cover.size() - 1, -1, -1):
+		if now > float(bad_cover[i][1]):
+			bad_cover.remove_at(i)
+		elif (bad_cover[i][0] as Vector3).distance_to(p) < 1.0 and int(bad_cover[i][2]) >= 2:
+			return true
+	return false
 
 
 ## The other living soldiers of its side.
@@ -429,6 +679,13 @@ func duck(seconds: float) -> void:
 func stop() -> void:
 	pawn.intents.move = Vector3.ZERO
 	pawn.intents.run = false
+	# Standing still on purpose is not being stuck. The count only ever reset
+	# on moving again, so a soldier that stopped to hide stayed "stuck" as
+	# long as it hid, and the judge said so.
+	stuck = 0
+	_stuck_from = pawn.feet()
+	_stuck_at = services.now()
+	_want_move = Vector3.ZERO
 
 
 ## Point the head at something, when there is nothing in sight to aim at.
@@ -459,9 +716,12 @@ func _on_died() -> void:
 			services.say(ally.pawn, "man_down", ["Man down!", "We lost one!", "Man down, man down!"][
 					services.rng.randi() % 3], AIServices.SHOUT)
 			break
+	masked_move = false
+	suppress_point = Vector3.INF
 	pawn.intents.clear()
 	pawn.intents.fire = false
 	state = "dead"
+	knowledge().forget_seer(self)
 
 
 static func _greybox(p: Pawn, p_team: int) -> void:

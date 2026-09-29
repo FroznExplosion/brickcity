@@ -884,18 +884,18 @@ over 150 m. The swell is still steered toward the nearest shore within 250 m
 swell rolls shoreward — what is a metre further out now is a metre nearer a
 moment later to 1.7 cm, against 33 cm the other way.
 
-## 9.10 A lower sea and sandy beaches
+## 9.10 The sea at the sand
 
-A new world's drowned fraction is 0.22 (`TerrainWorld.DEFAULT_DROWNED`), down
-from 0.30: this seed's sea drops from 14.9 m to 11.6 m. The city's worlds keep
-their own (0.20, 10.3 m).
+The generator's natural sand is all ground at or below 0.84 m — and the sea
+was at 14.9 m (30% of the ground round the origin), 14 m above every beach the
+terrain has. A new world's sea now sits AT THE SAND: 0.5 m
+(`TerrainWorld.SEA_AT_SAND`, chosen by a drowned fraction of 0), leaving a
+strip of sand above the water and the rest of it as seabed. About a third of
+the world's ground is still under it. A world file that names its own
+fraction keeps it (the city's worlds, 0.20, 10.3 m).
 
-Sand used to appear only below one brick of height — under the sea, on any
-world — so there were no beaches. Now ground up to 1.3 m above the sea, and
-the seabed under it, is sand, the edge wandering ±0.6 m with the ground's
-material noise so it is not a contour line (`Field::material_at`). The
-threshold is the water's own sea level (`BrickWave.set_sea_level` sets it), so
-the beach is always where the water meets the land. Paint wins over it.
+(A first attempt drew a new sand band 1.3 m above wherever the sea was; that
+moved the sand instead of the water, and is gone.)
 
 ## 10. Order of work
 

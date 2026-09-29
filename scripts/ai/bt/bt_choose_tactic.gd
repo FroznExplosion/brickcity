@@ -47,7 +47,7 @@ func _tick(_delta: float) -> Status:
 			cover = again
 			kept = true
 	if not kept:
-		cover = CoverSearch.find(s, so.pawn.feet(), threat)
+		cover = CoverSearch.find_for(so, so.pawn.feet(), threat)
 		blackboard.set_var(&"cover_at", now)
 		if cover.is_empty():
 			blackboard.set_var(&"cover_fail_at", now)

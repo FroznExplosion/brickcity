@@ -4,6 +4,7 @@ extends RefCounted
 ##
 ##   DynamicSelector                     -- re-checked every tick, top first
 ##     DynamicSequence  InDanger > Evade       -- a falling piece beats everything
+##     DynamicSequence  HasAssignment > DoAssignment  -- the squad's plan (P6)
 ##     DynamicSequence  HasContact(2.5 s) >    -- a live fight
 ##         ChooseTactic                        -- the policy's call (CombatPolicy)
 ##         DynamicSelector
@@ -29,6 +30,11 @@ static func build() -> BehaviorTree:
 	evade.add_child(BTInDanger.new())
 	evade.add_child(BTEvade.new())
 	root.add_child(evade)
+
+	var order := BTDynamicSequence.new()
+	order.add_child(BTHasAssignment.new())
+	order.add_child(BTDoAssignment.new())
+	root.add_child(order)
 
 	var engage := BTDynamicSequence.new()
 	var fresh := BTHasContact.new()
