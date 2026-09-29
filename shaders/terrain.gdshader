@@ -14,6 +14,8 @@ uniform bool far_courses = true;
 uniform float far_course_m = 0.42;
 uniform float far_course_line : hint_range(0.0, 1.0) = 0.35;
 uniform float far_course_shade : hint_range(0.0, 0.5) = 0.10;
+// How dark a ramp between two shelves is against a shelf's top.
+uniform float far_ramp_shade : hint_range(0.3, 1.0) = 0.72;
 
 // Brick ground. brick.gdshader's seam, plus the two things terrain adds:
 // painted studs and their faked contact shadow.
@@ -519,6 +521,17 @@ void fragment() {
         mtl = MATERIAL_TABLE[clamp(mi, 0, 6)];
     }
 
+    if (v_smooth_far > 0.5) {
+        // FLAT PER TRIANGLE (19.20): a shelf is lit as a brick top and a
+        // ramp between shelves as a step face, darker, as a blocky wall is.
+        vec3 fn = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
+        if (dot(fn, NORMAL) < 0.0) {
+            fn = -fn;
+        }
+        NORMAL = fn;
+        float up = (INV_VIEW_MATRIX * vec4(fn, 0.0)).y;
+        albedo *= mix(far_ramp_shade, 1.0, smoothstep(0.75, 0.97, up));
+    }
     if (far_courses && v_smooth_far > 0.5) {
         float c = v_world.y / far_course_m;
         float fw = max(fwidth(c), 1e-4);
