@@ -152,7 +152,8 @@ func player(feet: Vector3, hp := 1e7, armed := true, player_index := 0) -> Pawn:
 		g.exclude = [p.body.get_rid()] as Array[RID]
 		g.on_structure_hit = structure_hit
 		p.body.add_child(g)
-		var gun := rifle(99 + player_index)
+		# The same rifle for every player: a gate compares what they do with it.
+		var gun := rifle(99)
 		gun.visible = false
 		p.eye.add_child(gun)
 		g.equip(gun)
