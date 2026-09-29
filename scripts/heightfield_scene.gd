@@ -66,7 +66,7 @@ const UnderwaterFx := preload("res://scripts/underwater.gd")
 ## deepest water is 8 cm. 2.8 m floods ~40% and gets to 1.3 m, which is a
 ## coast. The number is a property of the seed, not of the water.
 ## How much of the world is under water. World.sea_level_for.
-const DROWNED := 0.30
+const DROWNED := World.DEFAULT_DROWNED
 ## Preloaded, not reached for by class name: a new `class_name` is not in the
 ## global class cache until the editor rescans, and a headless run reads that
 ## cache off disk. Same reason as UnderwaterFx.
