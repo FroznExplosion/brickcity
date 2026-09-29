@@ -734,6 +734,10 @@ var _sea = null
 ## `--buildings=` was on the command line. With a world file the SITES decide
 ## how many buildings there are, and this caps them only when asked to.
 var _buildings_arg := false
+## The buildings stood on the world's SITES: what the flush-with-the-ground
+## gate checks. The registry also holds trees and small items now, which are
+## not on pads and are not the gate's business.
+var _site_ids: Array[int] = []
 var _stress_mode := false
 var _reach_mode := false
 var _far_mode := false
@@ -1293,7 +1297,7 @@ func _build_city_on_sites() -> void:
 		pos.y = TerrainWorldScript.site_level(site)
 		var program: Dictionary = site["program"] if site.has("program") \
 				else _program_for({}, index)
-		_place_building(fp.x, fp.y, courses, pos, program)
+		_site_ids.append(_place_building(fp.x, fp.y, courses, pos, program))
 		index += 1
 
 
@@ -4278,15 +4282,16 @@ func _ground_gates() -> void:
 	var off_grid := 0
 	var off_ground := 0
 	var cols := 0
-	for b in registry.buildings:
+	for id in _site_ids:
+		var b := registry.get_building(id)
 		var o: Vector3 = b.xform.origin
 		if absf(o.x / STUD - roundf(o.x / STUD)) > 1e-3 				or absf(o.z / STUD - roundf(o.z / STUD)) > 1e-3 				or absf(o.y / PLATE - roundf(o.y / PLATE)) > 1e-3:
 			off_grid += 1
 		off_ground += _unflush(b)
 		cols += int(b.recipe.footprint_x) * int(b.recipe.footprint_z)
 	print("[nav]   grid: %d building(s), %d off the stud grid, %d of %d footprint columns not flush" % [
-		registry.buildings.size(), off_grid, off_ground, cols])
-	_gate_ok("every building is on the stud grid and flush with the ground",
+		_site_ids.size(), off_grid, off_ground, cols])
+	_gate_ok("every site building is on the stud grid and flush with the ground",
 			off_grid == 0 and off_ground == 0)
 
 	# A saved build, aimed at open hillside, placed like the player does.
