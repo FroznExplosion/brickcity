@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop
 
 var _pass := 0
 var _fail := 0
@@ -99,6 +99,8 @@ func _run() -> void:
 		await _check_acid(city, dir)
 	if only == "" or "char" in only:
 		await _check_char(city, dir)
+	if only == "" or "coop" in only:
+		await _check_coop(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -832,19 +834,48 @@ func _check_acid(city: Node3D, dir: DisasterDirector) -> void:
 func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 	print("charred bricks, burning debris")
 	await _until_out(dir)
+	# A wall no fire has been at: earlier sections burn and char the city, and
+	# a burnt-out cell never catches again. Undamaged buildings first.
 	var b: BuildingRegistry.Building = null
-	# Undamaged if any is left (earlier sections wreck the city), else any.
+	var wall := Vector3.INF
+	var order: Array = []
 	for c in city.registry.buildings:
-		if not c.toppled and (b == null or (b.is_damaged() and not c.is_damaged())):
+		if not c.toppled:
+			order.append(c)
+	order.sort_custom(func(x, y) -> bool: return not x.is_damaged() and y.is_damaged())
+	for c in order:
+		var cbox := CityPlacer.box_of(c)
+		# Collision is only streamed in near the camera, and material_at needs it.
+		city.camera.global_position = Vector3(cbox.position.x - 15.0, cbox.position.y + 6.0,
+				cbox.get_center().z)
+		if c.chunk < 0:
+			city._promote(c.id)
+		await _ticks(15)
+		if c.chunk < 0:
+			continue
+		for k in range(1, 6):
+			var y := cbox.position.y + 1.3 + FireSpread.CELL.y * k
+			if y > cbox.end.y - 3.0:
+				break
+			# In from the -x side, to the first brick of this building.
+			var from := Vector3(cbox.position.x - 4.0, y, cbox.get_center().z + 0.4)
+			var hit := dir.ctx.ray(from, Vector3(cbox.get_center().x, y, from.z))
+			if hit.is_empty() or hit.has("building") or dir.ctx.building_at(hit.position, 0.3) != c.id:
+				continue
+			var at: Vector3 = (hit.position as Vector3) + Vector3(0.2, 0.0, 0.0)
+			var ok := dir.ctx.material_at(at) >= 0
+			for q in [at]:
+				ok = ok and not dir.fire._burnt.has(FireSpread.key_of(q)) and not dir.fire._by_key.has(FireSpread.key_of(q))
+			if ok:
+				wall = at
+				break
+		if wall != Vector3.INF:
 			b = c
-	if b != null and b.chunk < 0:
-		city._promote(b.id)
-		await _ticks(5)
+			break
 	_ok("a standing building with its bricks in", b != null and b.chunk >= 0)
 	if b == null:
 		return
 	var box := CityPlacer.box_of(b)
-	var wall := Vector3(box.position.x + 0.3, box.position.y + 4.0, box.get_center().z)
 	var world: BrickWorld = city.world
 	var n0: int = city.authority.commands.size()
 	var before := world.get_scorched_blocks(b.chunk).size()
@@ -868,7 +899,7 @@ func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 
 	# A fire chars as it takes hold.
 	var s0 := dir.fire.scorches
-	dir.ctx.ignite(wall + Vector3(0.0, 3.0, 0.0), 0.8)
+	dir.ctx.ignite(wall, 0.8)
 	var t := 0
 	while dir.fire.scorches == s0 and t < 30 * 10:
 		await physics_frame
@@ -877,14 +908,19 @@ func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 
 	# A clump knocked off the burning wall takes the fire with it.
 	var caught0 := dir.debris.caught
-	var lit_at := wall + Vector3(0.0, 3.0, 0.0)
-	var pieces0: int = city.islands.islands.size()
-	var sheared := dir.ctx.shear(lit_at, 1.2)
-	print("  --   shear %s; %d fire cell(s), first at %s; pieces %d" % [sheared, dir.fire.cells.size(),
-			FireSpread.centre_of(dir.fire.cells[0].key) if not dir.fire.cells.is_empty() else Vector3.INF,
-			pieces0])
+	var lit_at := wall
+	# Cut the storey under the fire right through: what is above comes away
+	# as pieces, the burning wall with them.
+	var cut_y := lit_at.y - 1.2
+	var fx := box.position.x
+	while fx <= box.end.x:
+		var fz := box.position.z
+		while fz <= box.end.z:
+			dir.ctx.blast(Vector3(fx, cut_y, fz), 1.3)
+			fz += 1.6
+		fx += 1.6
 	t = 0
-	while dir.debris.caught == caught0 and t < 30 * 3:
+	while dir.debris.caught == caught0 and t < 30 * 8:
 		await physics_frame
 		t += 1
 	_ok("a piece off a burning building catches", dir.debris.caught > caught0,
@@ -900,6 +936,89 @@ func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 			"%.0f s; %d lit where it landed, %d caught in all" % [
 			t / 30.0, dir.debris.landed_lit, dir.debris.caught - caught0])
 	dir.debris.douse()
+	await _until_out(dir)
+
+
+## Co-op (Docs/Disasters.md 16): the host sends a start, a client plays the
+## same disaster from the same seed, caught up to the host's tick, and changes
+## nothing itself. A second director in the same city stands in for the client;
+## the "wire" is two arrays, as in the loopback probe.
+func _check_coop(city: Node3D, dir: DisasterDirector) -> void:
+	print("co-op")
+	await _until_out(dir)
+	var cd := DisasterDirector.new()
+	cd.name = "ClientDisasters"
+	city.add_child(cd)
+	cd.setup(city)
+	var up: Array = []     # client -> host
+	var down: Array = []   # host -> client
+	cd.set_client(func(m: Array) -> void: up.append(m))
+	dir.add_client(func(m: Array) -> void: down.append(m))
+
+	_ok("the host sends a start", dir.start("meteor", 1.0) and down.size() == 1
+			and down[0][0] == "start" and down[0][1] == "meteor", str(down))
+	await _ticks(30 * 9)   # joins late: the shower is well under way
+	cd.receive(down[0])
+	var h: Disaster = dir.current
+	var c: Disaster = cd.current
+	_ok("the client plays the same disaster, caught up to the host's tick",
+			c != null and c.phase == h.phase and absf(c.phase_t - h.phase_t) < 0.05
+			and c.rng.state == h.rng.state,
+			"host %s %.2f s, client %s %.2f s" % [Disaster.phase_name(h.phase), h.phase_t,
+			Disaster.phase_name(c.phase) if c != null else "-", c.phase_t if c != null else 0.0])
+	var late: Array = []
+	dir.add_client(func(m: Array) -> void: late.append(m))
+	_ok("a client joining mid-way is sent the running one", late.size() == 1 and late[0][0] == "start")
+
+	var feet: Vector3 = city.ai_nav.snap(Vector3(0.0, 0.0, -40.0))
+	var so: Soldier = city._spawn_soldier(feet)
+	so.brain.active = false
+	await _ticks(2)
+	# Measured round the client's calls alone: the host's meteors land meanwhile.
+	var q0: int = city._damage_queue.size()
+	var n0: int = city.authority.commands.size()
+	var wall := CityPlacer.box_of(city.registry.buildings[0]).get_center()
+	cd.ctx.blast(wall, 2.0)
+	cd.ctx.chip(wall, 1.0, 100)
+	var lit := cd.ctx.ignite(wall, 1.0)
+	var charred := cd.ctx.scorch(wall, 1.0)
+	var hurt := cd.ctx.damage_pawns(so.pawn.chest(), 2.0, 50.0)
+	_ok("and changes nothing itself: no blast, chip, fire, char or wound",
+			city._damage_queue.size() == q0 and city.authority.commands.size() == n0
+			and not lit and charred == 0 and hurt == 0)
+
+	dir.stop()
+	_ok("the host's stop reaches the client", down.size() == 2 and down[1][0] == "stop")
+	cd.receive(down[1])
+	_ok("and ends its disaster too", cd.current != null and cd.current.phase == Disaster.Phase.ENDING)
+	var t := 0
+	while (dir.is_running() or cd.is_running()) and t < 30 * 30:
+		await physics_frame
+		t += 1
+	_ok("both are over", not dir.is_running() and not cd.is_running())
+
+	# The client asks; the host decides and tells it.
+	var d0 := down.size()
+	_ok("a client's request goes to the host", cd.start("lightning", 1.6) and up.size() == 1
+			and up[0][0] == "request" and not cd.is_running())
+	dir.receive(up[0])
+	_ok("the host starts it and sends the start back", dir.current_kind == "lightning"
+			and down.size() == d0 + 1 and down[d0][1] == "lightning" and float(down[d0][4]) == 1.6)
+	cd.receive(down[d0])
+	_ok("the client plays it, at the intensity asked", cd.current_kind == "lightning"
+			and is_equal_approx(cd.current.intensity, 1.6))
+	cd.stop()
+	dir.receive(up[up.size() - 1])
+	cd.receive(down[down.size() - 1])
+	_ok("its stop request stops the host's, and so its own",
+			dir.current != null and dir.current.phase == Disaster.Phase.ENDING
+			and cd.current != null and cd.current.phase == Disaster.Phase.ENDING)
+	t = 0
+	while (dir.is_running() or cd.is_running()) and t < 30 * 30:
+		await physics_frame
+		t += 1
+	city.remove_child(cd)
+	cd.free()
 	await _until_out(dir)
 
 

@@ -11,6 +11,16 @@ extends Node3D
 ##   --disaster-seed=<n>     base seed for the roll and each disaster
 ##
 ## Every city has one, the big city included.
+##
+## Co-op (Docs/Disasters.md 16): the host decides, clients watch. The host
+## sends each client a small event -- ["start", kind, seed, start tick,
+## intensity, options], ["stop", tick] -- and a client runs the same disaster
+## from the same seed, caught up to the host's tick, for the sky, the rain,
+## the meteors in the air and the funnel. It changes nothing: its context does
+## not decide (DisasterContext.decides), and what the disaster does to bricks
+## and people arrives as the host's commands like any other. A client that
+## asks for a disaster (the menu, H) sends ["request", ...] to the host.
+## Transport-free, like WorldAuthority: the owner fills in the Callables.
 
 signal started(kind: String)
 signal ended(kind: String)
@@ -56,6 +66,18 @@ var count := 0
 var menu_kind := ""
 var menu_intensity := 1.0
 var menu_options := {"max_collapse_at_once": 2, "max_collapse_total": 6}
+
+## Co-op. The host publishes to every add_client(); a client (set_client)
+## sends its requests through send_to_host.
+var is_host := true
+var send_to_host := Callable()
+var events_sent := 0
+var events_received := 0
+var _clients: Array[Callable] = []
+## The running disaster's start event, for a client that joins mid-way.
+var _start_event: Array = []
+## Most ticks a joining client runs to catch up (a whole disaster's worth).
+const MAX_CATCHUP := 30 * 120
 
 var _forced := ""
 var _base_seed := BASE_SEED
@@ -115,7 +137,15 @@ func is_running() -> bool:
 
 ## Start `kind` -- or a rolled one when empty -- at `intensity`, with `options`
 ## for the kinds that take them. False if one is already running.
+##
+## On a client this asks the host instead, and returns whether it could ask.
 func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
+	if not is_host:
+		if not send_to_host.is_valid():
+			return false
+		send_to_host.call(["request", kind, intensity, options.duplicate(true)])
+		events_sent += 1
+		return true
 	if current != null:
 		return false
 	if kind == "":
@@ -123,6 +153,16 @@ func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
 	if not KINDS.has(kind):
 		push_warning("[disaster] unknown kind '%s'" % kind)
 		return false
+	var seed_value := hash([_base_seed, count])
+	var at := Engine.get_physics_frames()
+	_begin(kind, seed_value, intensity, options)
+	_start_event = ["start", kind, seed_value, at, intensity, options.duplicate(true)]
+	_publish(_start_event)
+	return true
+
+
+## Make the disaster and set it going. Both sides come through here.
+func _begin(kind: String, seed_value: int, intensity: float, options: Dictionary) -> void:
 	var d: Disaster = KINDS[kind].new()
 	d.name = "Disaster_%s" % kind
 	d.intensity = intensity
@@ -131,12 +171,73 @@ func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
 	current = d
 	current_kind = kind
 	d.finished.connect(_on_finished)
-	d.begin(ctx, hash([_base_seed, count]))
+	d.begin(ctx, seed_value)
 	count += 1
-	print("[disaster] %s begins (#%d, intensity %.2f)" % [d.title, count, intensity])
+	print("[disaster] %s begins (#%d, intensity %.2f)%s" % [d.title, count, intensity,
+			"" if is_host else " -- the host's"])
 	started.emit(kind)
 	_update_banner()
-	return true
+
+
+# --- Co-op ------------------------------------------------------------------------
+
+## Host: send every event to this client from now on -- and the running
+## disaster's start at once, so a client joining mid-storm sees the storm.
+## Called with the event's wire form (plain arrays: they have to serialise).
+func add_client(deliver: Callable) -> void:
+	_clients.append(deliver)
+	if not _start_event.is_empty():
+		deliver.call(_start_event.duplicate(true))
+		events_sent += 1
+
+
+## Make this director a client: it plays the host's disasters and decides
+## nothing. `send` carries its requests to the host.
+func set_client(send: Callable) -> void:
+	is_host = false
+	send_to_host = send
+	ctx.decides = false
+	fire.douse()
+
+
+## An event from the other side.
+func receive(msg: Array) -> void:
+	events_received += 1
+	match String(msg[0]):
+		"start":
+			if is_host:
+				return
+			if current != null:
+				current.queue_free()   # the host's word is final
+				current = null
+			var kind := String(msg[1])
+			if not KINDS.has(kind):
+				push_warning("[disaster] the host started '%s', which this build does not know" % kind)
+				return
+			_begin(kind, int(msg[2]), float(msg[4]), msg[5])
+			# Catch up to the host: the disaster's clock runs on physics ticks.
+			var behind := mini(Engine.get_physics_frames() - int(msg[3]), MAX_CATCHUP)
+			var dt := 1.0 / Engine.physics_ticks_per_second
+			for i in maxi(behind, 0):
+				if current == null or current.phase == Disaster.Phase.DONE:
+					break
+				current.tick(dt)
+		"stop":
+			if not is_host and current != null:
+				current.end_now()
+				_update_banner()
+		"request":
+			if is_host:
+				start(String(msg[1]), float(msg[2]), msg[3])
+		"request_stop":
+			if is_host:
+				stop()
+
+
+func _publish(msg: Array) -> void:
+	for c in _clients:
+		c.call(msg.duplicate(true))
+		events_sent += 1
 
 
 ## Start what the menu has chosen.
@@ -148,9 +249,15 @@ func start_from_menu() -> bool:
 
 ## End the running disaster: straight to its ENDING phase.
 func stop() -> void:
+	if not is_host:
+		if send_to_host.is_valid():
+			send_to_host.call(["request_stop"])
+			events_sent += 1
+		return
 	if current != null:
 		current.end_now()
 		_update_banner()
+		_publish(["stop", Engine.get_physics_frames()])
 
 
 ## The city's key handler hands H here.
@@ -219,6 +326,7 @@ func _on_finished() -> void:
 	current.queue_free()
 	current = null
 	current_kind = ""
+	_start_event = []
 	ended.emit(kind)
 	_update_banner()
 

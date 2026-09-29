@@ -10,6 +10,11 @@ extends RefCounted
 ## something new, the call goes here.
 
 var city: Node3D
+## May this machine change the world? False on a co-op client: it plays the
+## host's disaster for the look of it (DisasterDirector.receive), and every
+## brick, fire and wound arrives as the host's commands instead. Bricks also
+## ask the authority; this is the door for what does not go through it.
+var decides := true
 var registry: BuildingRegistry
 var islands: IslandManager
 ## The fire service (fire_spread.gd), set by the director. ignite() goes here.
@@ -51,17 +56,21 @@ func _init(city_node: Node3D) -> void:
 
 ## Destroy bricks in a ball. Queued; applied on a later tick.
 func blast(point: Vector3, radius: float) -> void:
-	city._blast(point, radius)
+	# Not requested from a client: the host runs the same disaster and blasts
+	# the same place itself.
+	if decides:
+		city._blast(point, radius)
 
 
 ## Wear bricks in a ball by `hp`: weakens, kills only what runs out.
 func chip(point: Vector3, radius: float, hp: int) -> void:
-	city.chip(point, radius, hp)
+	if decides:
+		city.chip(point, radius, hp)
 
 
 ## Blacken the bricks in a ball: fire's mark, colour only (DamageLog SCORCH).
 func scorch(point: Vector3, radius: float) -> int:
-	return city.scorch(point, radius)
+	return city.scorch(point, radius) if decides else 0
 
 
 ## Knock a clump of bricks loose from the building at `point`, whole -- they
@@ -69,7 +78,7 @@ func scorch(point: Vector3, radius: float) -> int:
 ## shear, as falling masonry does it. Host only (it commits directly, like the
 ## city's landings do). False where there is no building or nothing came loose.
 func shear(point: Vector3, radius: float) -> bool:
-	if not city.authority.may_decide():
+	if not decides or not city.authority.may_decide():
 		return false
 	var id := building_at(point, 0.3)
 	if id < 0:
@@ -189,7 +198,7 @@ func building_boxes() -> Array[AABB]:
 ## Start a fire at `point` with `heat` 0..1 (Docs/Disasters.md section 5). Does
 ## nothing where there is nothing to burn.
 func ignite(point: Vector3, heat: float) -> bool:
-	return fire != null and fire.ignite(point, heat)
+	return decides and fire != null and fire.ignite(point, heat)
 
 
 ## Material index of the brick at `point`, -1 for none. Walks every building:
@@ -274,6 +283,8 @@ func pawns() -> Array[Pawn]:
 ## system like a round (no element: none exist as resources yet). Returns how
 ## many were hurt.
 func damage_pawns(point: Vector3, radius: float, amount: float) -> int:
+	if not decides:
+		return 0   # wounds are the host's to deal
 	var hurt := 0
 	var r2 := radius * radius
 	for p in pawns():
