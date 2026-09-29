@@ -267,6 +267,9 @@ struct Block {
     uint8_t material = 0;
     uint8_t hp = 255;         // quantised, the determinism substrate
     bool alive = true;
+    // Blackened by fire (BrickWorld::scorch_hit): `colour` is its material's
+    // darkest. Kept so a building rebuilt from its recipe can be charred again.
+    bool scorched = false;
 
     // Left the chunk as part of a falling cluster rather than being destroyed.
     // Both states mesh and collide as nothing; they differ in what they mean,

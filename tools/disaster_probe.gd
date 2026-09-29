@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char
 
 var _pass := 0
 var _fail := 0
@@ -97,6 +97,8 @@ func _run() -> void:
 		await _check_tornado(city, dir)
 	if only == "" or "acid" in only:
 		await _check_acid(city, dir)
+	if only == "" or "char" in only:
+		await _check_char(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -822,6 +824,83 @@ func _check_acid(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("and it all clears", not dir.is_running() and not s.storm and s.sight_mul == 1.0
 			and s.aim_mul == 1.0 and not dir.ctx.raining
 			and (lens == null or float(lens.get_shader_parameter("rain")) == 0.0))
+
+
+## Charred bricks and burning debris (Docs/Disasters.md 15): fire blackens
+## what it burns, as committed SCORCH commands the building keeps across being
+## handed back; a piece that breaks off a burning building carries the fire.
+func _check_char(city: Node3D, dir: DisasterDirector) -> void:
+	print("charred bricks, burning debris")
+	await _until_out(dir)
+	var b: BuildingRegistry.Building = null
+	# Undamaged if any is left (earlier sections wreck the city), else any.
+	for c in city.registry.buildings:
+		if not c.toppled and (b == null or (b.is_damaged() and not c.is_damaged())):
+			b = c
+	if b != null and b.chunk < 0:
+		city._promote(b.id)
+		await _ticks(5)
+	_ok("a standing building with its bricks in", b != null and b.chunk >= 0)
+	if b == null:
+		return
+	var box := CityPlacer.box_of(b)
+	var wall := Vector3(box.position.x + 0.3, box.position.y + 4.0, box.get_center().z)
+	var world: BrickWorld = city.world
+	var n0: int = city.authority.commands.size()
+	var before := world.get_scorched_blocks(b.chunk).size()
+	var got := dir.ctx.scorch(wall, 1.0)
+	var after := world.get_scorched_blocks(b.chunk).size()
+	var scorches := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.SCORCH:
+			scorches += 1
+	_ok("a scorch blackens bricks, as a committed SCORCH", got > 0 and after > before and scorches == got,
+			"%d -> %d scorched, %d SCORCH" % [before, after, scorches])
+	var again := dir.ctx.scorch(wall, 1.0)
+	_ok("and scorching them twice changes nothing, and says nothing", again == 0)
+	city.registry._record_damage(b)
+	_ok("the building keeps it for when its bricks come back", b.scorched_in(0).size() == after)
+	if "--disaster-shot" in OS.get_cmdline_user_args():
+		dir.ctx.scorch(wall + Vector3(0.0, 1.5, 1.5), 1.6)
+		city.camera.look_at_from_position(wall + Vector3(-9.0, 2.0, 1.0), wall + Vector3(0.0, 1.0, 0.8))
+		await _ticks(90)   # the recolour: a full rebuild of the bands, a few a tick
+		await _save_shot("char")
+
+	# A fire chars as it takes hold.
+	var s0 := dir.fire.scorches
+	dir.ctx.ignite(wall + Vector3(0.0, 3.0, 0.0), 0.8)
+	var t := 0
+	while dir.fire.scorches == s0 and t < 30 * 10:
+		await physics_frame
+		t += 1
+	_ok("a burning cell chars its walls", dir.fire.scorches > s0, "after %.1f s" % [t / 30.0])
+
+	# A clump knocked off the burning wall takes the fire with it.
+	var caught0 := dir.debris.caught
+	var lit_at := wall + Vector3(0.0, 3.0, 0.0)
+	var pieces0: int = city.islands.islands.size()
+	var sheared := dir.ctx.shear(lit_at, 1.2)
+	print("  --   shear %s; %d fire cell(s), first at %s; pieces %d" % [sheared, dir.fire.cells.size(),
+			FireSpread.centre_of(dir.fire.cells[0].key) if not dir.fire.cells.is_empty() else Vector3.INF,
+			pieces0])
+	t = 0
+	while dir.debris.caught == caught0 and t < 30 * 3:
+		await physics_frame
+		t += 1
+	_ok("a piece off a burning building catches", dir.debris.caught > caught0,
+			"%d piece(s) burning; %d piece(s) now, near: %d" % [dir.debris.count(),
+			city.islands.islands.size(), dir.ctx.islands_near(lit_at, 5.0).size()])
+	# That piece burns out; others off the same fire may still be catching.
+	var first: BrickIsland = dir.debris._burning.keys()[0] if dir.debris.count() > 0 else null
+	t = 0
+	while first != null and dir.debris.is_burning(first) and t < 30 * 20:
+		await physics_frame
+		t += 1
+	_ok("and burns out", first != null and not dir.debris.is_burning(first),
+			"%.0f s; %d lit where it landed, %d caught in all" % [
+			t / 30.0, dir.debris.landed_lit, dir.debris.caught - caught0])
+	dir.debris.douse()
+	await _until_out(dir)
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:

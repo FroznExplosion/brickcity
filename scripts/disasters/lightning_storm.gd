@@ -16,6 +16,7 @@ extends Disaster
 
 const LEADER_S := 0.6
 const STRIKE_RADIUS := 0.8
+const SCORCH_RIM := 0.7         ## m of blackened brick round a stroke's hole
 const TALL_SHARE := 0.7
 const TALL_SEARCH := 40.0       ## m around the rolled point to look for the tallest
 const ROLL_RANGE := 60.0        ## m from the player a stroke is rolled
@@ -198,7 +199,9 @@ func _strike(s: Dictionary) -> void:
 	var hit := ctx.ray(target + Vector3.UP * 60.0, Vector3(target.x, -50.0, target.z))
 	var pos: Vector3 = hit.position if not hit.is_empty() else target
 	var normal: Vector3 = hit.normal if not hit.is_empty() else Vector3.UP
-	ctx.blast(pos, STRIKE_RADIUS * sqrt(maxf(intensity, 0.1)))
+	var r := STRIKE_RADIUS * sqrt(maxf(intensity, 0.1))
+	ctx.scorch(pos, r + SCORCH_RIM)   # the stroke's black mark round its hole
+	ctx.blast(pos, r)
 	ctx.impact_fx(pos, normal)
 	ctx.shake(pos, 0.35)
 	var hurt := ctx.damage_pawns(pos, SHOCK_RADIUS, SHOCK_DAMAGE * intensity)

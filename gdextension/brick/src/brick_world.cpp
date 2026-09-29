@@ -3608,6 +3608,91 @@ void BrickWorld::set_worn_blocks(int chunk_id, const PackedInt32Array &worn) {
     }
 }
 
+PackedInt32Array BrickWorld::scorch_hit(int chunk_id, Vector3 world_point, float radius_m) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    const Vector3 centre_local = c.xform.affine_inverse().xform(world_point);
+    const float r = std::max(radius_m, 0.0f);
+    const Vector3 r3(r, r, r);
+    const Vector3i lo = brick::world_to_grid(centre_local - r3);
+    const Vector3i hi = brick::world_to_grid(centre_local + r3);
+    const Vector3i own = brick::world_to_grid(centre_local);
+    const float r2 = r * r;
+    std::vector<int32_t> hit;
+    for (int x = lo.x; x <= hi.x; ++x) {
+        for (int y = lo.y; y <= hi.y; ++y) {
+            for (int z = lo.z; z <= hi.z; ++z) {
+                const Vector3i l(x, y, z);
+                const int32_t bid = c.block_at(l);
+                if (bid < 0 || !c.blocks[bid].alive || c.blocks[bid].scorched) {
+                    continue;
+                }
+                const Vector3 cell_centre((x + 0.5f) * cs.x, (y + 0.5f) * cs.y, (z + 0.5f) * cs.z);
+                if (l != own && cell_centre.distance_squared_to(centre_local) > r2) {
+                    continue;
+                }
+                hit.push_back(bid);
+            }
+        }
+    }
+    std::sort(hit.begin(), hit.end());
+    hit.erase(std::unique(hit.begin(), hit.end()), hit.end());
+    for (int32_t bid : hit) {
+        Block &b = c.blocks[bid];
+        b.scorched = true;
+        b.colour = (uint8_t)brick_material_darkest(b.material);
+        out.push_back(bid);
+    }
+    // The bake caches each face's colour (set_block_colour).
+    if (!hit.empty() && (c.bake.valid || bake_pending(chunk_id))) {
+        drop_chunk_bake(chunk_id);
+    }
+    return out;
+}
+
+PackedInt32Array BrickWorld::get_scorched_blocks(int chunk_id) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.alive && !b.removed && b.scorched) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
+void BrickWorld::set_scorched_blocks(int chunk_id, const PackedInt32Array &ids) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    Chunk &c = chunks[chunk_id];
+    bool any = false;
+    for (int64_t i = 0; i < ids.size(); ++i) {
+        const int32_t id = ids[i];
+        if (id < 0 || id >= (int32_t)c.blocks.size()) {
+            continue;
+        }
+        Block &b = c.blocks[id];
+        if (!b.alive || b.removed) {
+            continue;
+        }
+        b.scorched = true;
+        b.colour = (uint8_t)brick_material_darkest(b.material);
+        any = true;
+    }
+    if (any && (c.bake.valid || bake_pending(chunk_id))) {
+        drop_chunk_bake(chunk_id);
+    }
+}
+
 PackedInt32Array BrickWorld::separate_near(int chunk_id, Vector3 world_point, float radius_m,
         int max_blocks, bool peel) {
     PackedInt32Array loosened;
@@ -4236,6 +4321,7 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
         nb.bottom_broken = src_block.bottom_broken;
         nb.hp = src_block.hp;
         nb.material = src_block.material;   // a steel beam falls as steel
+        nb.scorched = src_block.scorched;
         isl.blocks.push_back(nb);
         const Vector3i base = nb.cell - isl.origin;
         for (int x = 0; x < a.size.x; ++x) {
@@ -5133,6 +5219,11 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("chip_hit", "chunk_id", "world_point", "radius_m", "damage"),
             &BrickWorld::chip_hit);
     ClassDB::bind_method(D_METHOD("get_worn_blocks", "chunk_id"), &BrickWorld::get_worn_blocks);
+    ClassDB::bind_method(D_METHOD("scorch_hit", "chunk_id", "world_point", "radius_m"),
+            &BrickWorld::scorch_hit);
+    ClassDB::bind_method(D_METHOD("get_scorched_blocks", "chunk_id"), &BrickWorld::get_scorched_blocks);
+    ClassDB::bind_method(D_METHOD("set_scorched_blocks", "chunk_id", "ids"),
+            &BrickWorld::set_scorched_blocks);
     ClassDB::bind_method(D_METHOD("set_worn_blocks", "chunk_id", "worn"),
             &BrickWorld::set_worn_blocks);
     ClassDB::bind_method(D_METHOD("apply_hit", "chunk_id", "world_point", "radius_m"),

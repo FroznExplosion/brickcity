@@ -62,7 +62,8 @@ func piece_chunk(id: int) -> int:
 func apply(e: DamageLog.Entry) -> bool:
 	match e.kind:
 		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER, \
-				DamageLog.Kind.SOLVE, DamageLog.Kind.CHIP, DamageLog.Kind.LOAD, DamageLog.Kind.UNLOAD:
+				DamageLog.Kind.SOLVE, DamageLog.Kind.CHIP, DamageLog.Kind.LOAD, DamageLog.Kind.UNLOAD, \
+				DamageLog.Kind.SCORCH:
 			var chunk := _building_chunk(e.target, e.frame)
 			if chunk < 0:
 				return _miss(e, "no building")

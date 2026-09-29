@@ -498,6 +498,11 @@ const SHELL_DETAIL_RANGE := 110.0
 const SHELLS_PER_TICK := 4
 var _promote_queue: Array[int] = []
 var _remesh_queue: Array[int] = []
+## Buildings fire has charred -> the physics frame their bands are rebuilt on
+## (scorch). A colour is in the vertices, which an index patch never touches,
+## so it takes a full rebuild; RECOLOUR_TICKS gathers a fire's scorches into one.
+var _recolour := {}
+const RECOLOUR_TICKS := 15
 ## Materialised, collidable, still drawn by its shell: waiting on a worker to
 ## finish baking its faces.
 var _pending_bricks: Array[int] = []
@@ -2916,7 +2921,9 @@ func _build_one_band(id: int) -> bool:
 	# A band built against a stale bake re-bakes the WHOLE chunk on this
 	# thread -- measured at 55 ms against 2.6 for an ordinary band, and it
 	# lands in one frame. Wait for the worker instead.
-	if not world.has_bake(b.chunk):
+	# bake_ready, not has_bake: it is what adopts a finished job. Asking only
+	# has_bake waited forever on a bake nobody else collected (a recolour).
+	if not world.bake_ready(b.chunk):
 		if not world.bake_pending(b.chunk):
 			world.bake_chunk_async(b.chunk)
 		return true
@@ -3242,6 +3249,38 @@ func chip(point: Vector3, radius: float, hp: int) -> void:
 	if not authority.request(DamageLog.Kind.CHIP, -1, point, radius, Vector3.ZERO, hp):
 		return
 	_damage_queue.append([point, radius, hp])
+
+
+## Char the bricks in a ball (DamageLog.Kind.SCORCH): fire's mark. Host only,
+## like the fire that calls it, and only on bricks that are here -- a building
+## out of reach is not materialised for a colour. Returns how many blackened.
+func scorch(point: Vector3, radius: float) -> int:
+	if not authority.may_decide():
+		return 0
+	var n := 0
+	for id in _near_buildings(point, radius):
+		var b := registry.get_building(id)
+		if b == null or b.chunk < 0:
+			continue
+		var cs := b.chunks()
+		var here := 0
+		for fi in cs.size():
+			if world.scorch_hit(cs[fi], point, radius).is_empty():
+				continue
+			here += 1
+			var e := DamageLog.Entry.new()
+			e.tick = Engine.get_physics_frames()
+			e.kind = DamageLog.Kind.SCORCH
+			e.target = b.id
+			e.frame = fi
+			e.point = point
+			e.radius = radius
+			authority.commit_entry(e)
+		if here > 0:
+			n += here
+			if not _recolour.has(b.id):
+				_recolour[b.id] = Engine.get_physics_frames() + RECOLOUR_TICKS
+	return n
 
 
 func _setup_gun() -> void:
@@ -3759,8 +3798,9 @@ func _wreck_unload_one(piece_id: int, id: int) -> void:
 func _nav_on_command(e: DamageLog.Entry) -> void:
 	if e.is_piece():
 		return  # pieces are re-read when they settle or go
-	if e.kind == DamageLog.Kind.LOAD or e.kind == DamageLog.Kind.UNLOAD:
-		return   # weight, not shape
+	if e.kind == DamageLog.Kind.LOAD or e.kind == DamageLog.Kind.UNLOAD \
+			or e.kind == DamageLog.Kind.SCORCH:
+		return   # weight or colour, not shape
 	# A chip is committed whether or not a brick died -- the hp it took is
 	# state -- and one that broke nothing changed nowhere anybody can walk.
 	# The hit itself says where it did break something (_nav_chip_broke).
@@ -4971,6 +5011,12 @@ func _physics_process(_delta: float) -> void:
 		_remesh_hold.erase(rid_b)
 		_remesh(rid_b)
 		remeshed += 1
+	if not _recolour.is_empty():
+		var pf := Engine.get_physics_frames()
+		for cid in _recolour.keys():
+			if int(_recolour[cid]) <= pf:
+				_recolour.erase(cid)
+				_remesh(int(cid), true)
 	t = _mark("remesh", t)
 	_watch_handovers()
 
