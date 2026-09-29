@@ -2429,6 +2429,28 @@ far ground".
 **The sea is three bricks lower** (`SEA_AT_SAND` −0.76 m): 0.5 m covered
 nearly all the sand.
 
+### 19.20 Smooth far ground that reads as brick
+
+The switch from blocky LOD 1 to smooth LOD 2 was easy to see, for three
+reasons, each now fixed at no triangle cost (far tier 547,548 triangles before
+and after):
+
+  * **Colour bled.** A smooth vertex was shared by four cells, so material
+    colours blended into blobs. Each cell now has its own four vertices: one
+    flat colour, a hard edge, as a blocky cell has. Heights still come from the
+    shared corners, so there are no cracks.
+  * **Slopes were continuous.** Corner heights are snapped to a brick course
+    (0.42 m): gentle ground becomes flat shelves joined by short ramps.
+  * **Lighting was smooth.** The shader lights smooth far ground flat per
+    triangle (normal from screen-space derivatives), and darkens ramps
+    (`far_ramp_shade` 0.72) the way a blocky wall is darker than its top.
+
+With the course lines (19.19) the far ground now reads as terraces of brick.
+
+The `--terrain --nav` flush gate now checks only the site buildings: the
+registry also holds brick trees and small items since the impostor work (822
+entries), and those do not stand on pads.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

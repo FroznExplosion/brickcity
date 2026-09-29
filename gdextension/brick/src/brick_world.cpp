@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <limits>
 #include <cstring>
 
 using namespace godot;
@@ -2760,6 +2761,20 @@ float BrickWorld::get_external_load(int chunk_id, int block_id) const {
     return (float)((double)sum / (double)brick::to_mass_units(1.0f));
 }
 
+float BrickWorld::get_headroom(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return -1.0f;
+    }
+    const std::vector<int64_t> &h = stress[chunk_id].headroom;
+    if (block_id < 0 || block_id >= (int)h.size()) {
+        return -1.0f;
+    }
+    if (h[block_id] == std::numeric_limits<int64_t>::max()) {
+        return std::numeric_limits<float>::infinity();
+    }
+    return (float)((double)h[block_id] / (double)brick::MASS_FIXED);
+}
+
 PackedInt32Array BrickWorld::get_load_owners(int chunk_id) const {
     PackedInt32Array out;
     if (valid_chunk(chunk_id)) {
@@ -2894,6 +2909,51 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
                 c.blocks[nb].load += share * (int64_t)count + extra;
             }
         });
+    }
+
+    // Headroom, walking the same order FORWARD: a block's supporters are
+    // shallower, so theirs is known by the time it is reached. A joint fails
+    // when load * tension_contact > tension_contact * capacity * contact, that
+    // is when the block's load passes capacity * contact -- so what it can
+    // still take is the difference. Mass added to a block reaches the joints
+    // under it too; the least over every supporter takes it all to each of
+    // them (R7's worst case), where the solve would share it.
+    {
+        constexpr int64_t INF_ROOM = std::numeric_limits<int64_t>::max();
+        sx.headroom.assign(n, 0);
+        for (size_t qi = 0; qi < scratch_queue.size(); ++qi) {
+            const int32_t bid = scratch_queue[qi];
+            const Block &b = c.blocks[bid];
+            const int32_t depth = scratch_depth[bid];
+            if (depth <= 0) {
+                sx.headroom[bid] = INF_ROOM;
+                continue;
+            }
+            if (b.support_broken) {
+                continue;   // already let go: no room at all
+            }
+            int contact = 0;
+            int contact_tension = 0;
+            int64_t below = INF_ROOM;
+            const int my_height = height_along(b.cell, up);
+            for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+                const int32_t nd = scratch_depth[nb];
+                if (nd < 0 || nd >= depth) {
+                    return;
+                }
+                contact += count;
+                if (height_along(c.blocks[nb].cell, up) > my_height) {
+                    contact_tension += count;
+                }
+                below = std::min(below, sx.headroom[nb]);
+            });
+            int64_t room = below;
+            if (contact_tension > 0) {
+                room = std::min(room, std::max((int64_t)0,
+                        capacity_per_stud * (int64_t)contact - b.load));
+            }
+            sx.headroom[bid] = room;
+        }
     }
 
     // Nothing is destroyed. A released joint leaves both bricks whole -- the
@@ -5357,6 +5417,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_external_load", "chunk_id", "block_id"),
             &BrickWorld::get_external_load);
     ClassDB::bind_method(D_METHOD("get_load_owners", "chunk_id"), &BrickWorld::get_load_owners);
+    ClassDB::bind_method(D_METHOD("get_headroom", "chunk_id", "block_id"), &BrickWorld::get_headroom);
     ClassDB::bind_method(D_METHOD("chip_hit", "chunk_id", "world_point", "radius_m", "damage"),
             &BrickWorld::chip_hit);
     ClassDB::bind_method(D_METHOD("get_worn_blocks", "chunk_id"), &BrickWorld::get_worn_blocks);

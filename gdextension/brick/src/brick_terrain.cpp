@@ -2533,89 +2533,91 @@ int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
 /// edge hides the join against a blocky neighbour, whose tops sit at the MAX
 /// of a cell and so can stand above this edge.
 static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint64_t t0) {
+    // SMOOTH FAR GROUND THAT READS AS BRICK (Terrain.md 19.20):
+    //   * corner heights snapped to a brick COURSE, so gentle ground is flat
+    //     shelves joined by short ramps -- terraces, not a rubber sheet;
+    //   * each cell its OWN four vertices, so its colour and material are one
+    //     flat patch with a hard edge, like a blocky cell, not blended blobs
+    //     (same triangles; four vertices a cell instead of one). Neighbours
+    //     read the same corner heights, so the surface has no cracks;
+    //   * the shader lights each triangle flat, so a shelf is a brick top and a
+    //     ramp is a step face.
     const int W = span * TILE;
     const int N = std::max(W / step, 1);
     const int gx0 = tx0 * TILE;
     const int gz0 = tz0 * TILE;
-    const int R = N + 3;   // one sample of margin each way, for normals
-    std::vector<float> hgt((size_t)R * R);
-    for (int cz = -1; cz <= N + 1; ++cz) {
-        for (int cx = -1; cx <= N + 1; ++cx) {
-            hgt[(size_t)(cx + 1) + (size_t)R * (cz + 1)] =
-                    (float)(BrickTerrain::surface_plate(gx0 + cx * step, gz0 + cz * step) + 1) * PLATE_M;
-        }
-    }
-    auto H = [&](int cx, int cz) { return hgt[(size_t)(cx + 1) + (size_t)R * (cz + 1)]; };
-    const float cs = (float)step * STUD_M;
-    MeshBuf m;
     const int V = N + 1;
-    m.verts.resize(V * V);
-    m.normals.resize(V * V);
-    m.colours.resize(V * V);
-    m.uvs.resize(V * V);
-    m.uv2s.resize(V * V);
-    m.custom0.resize(V * V * 4);
+    std::vector<float> hq((size_t)V * V);
     for (int cz = 0; cz <= N; ++cz) {
         for (int cx = 0; cx <= N; ++cx) {
-            const int i = cx + V * cz;
-            const int gx = gx0 + cx * step;
-            const int gz = gz0 + cz * step;
-            m.verts.set(i, Vector3((float)cx * cs, H(cx, cz), (float)cz * cs));
-            const Vector3 n = Vector3(H(cx - 1, cz) - H(cx + 1, cz), 2.0f * cs,
-                    H(cx, cz - 1) - H(cx, cz + 1)).normalized();
-            m.normals.set(i, n);
-            const int surf = BrickTerrain::surface_plate(gx, gz);
-            const int mat = g_field.material_at(gx, gz, floor_div(surf, PLATES_PER_CELL));
-            const int painted = layer_colour(gx, gz);
+            const float h = (float)(BrickTerrain::surface_plate(gx0 + cx * step, gz0 + cz * step) + 1) * PLATE_M;
+            hq[(size_t)cx + (size_t)V * cz] = std::round(h / BRICK_M) * BRICK_M;
+        }
+    }
+    auto H = [&](int cx, int cz) { return hq[(size_t)cx + (size_t)V * cz]; };
+    const float cs = (float)step * STUD_M;
+    MeshBuf m;
+    const Vector2 no_seam(0.0f, 0.0f);
+    std::vector<Color> ccol((size_t)N * N);
+    std::vector<uint8_t> cmat((size_t)N * N);
+    for (int cz = 0; cz < N; ++cz) {
+        for (int cx = 0; cx < N; ++cx) {
+            // The cell's own colour and material, from its middle.
+            const int px = gx0 + cx * step + step / 2;
+            const int pz = gz0 + cz * step + step / 2;
+            const int mat = g_field.material_at(px, pz,
+                    floor_div(BrickTerrain::surface_plate(px, pz), PLATES_PER_CELL));
+            const int painted = layer_colour(px, pz);
             Color col = filament_colour(painted != 0xFF ? painted : material_filament(mat));
-            if (!sun_reaches(gx, gz)) {
+            if (!sun_reaches(px, pz)) {
                 col = Color(col.r * SUN_SHADE, col.g * SUN_SHADE, col.b * SUN_SHADE, col.a);
             }
             col.a = 0.0f;   // takes no studs
-            m.colours.set(i, col);
-            m.uvs.set(i, Vector2((float)cx * cs, (float)cz * cs));
-            m.uv2s.set(i, Vector2(0.0f, 0.0f));   // no piece: no seam
-            m.custom0.set(i * 4 + 0, (uint8_t)mat);
-            m.custom0.set(i * 4 + 1, 255);   // G: this is smooth far ground
-            m.custom0.set(i * 4 + 2, 0);
-            m.custom0.set(i * 4 + 3, 255);
+            ccol[(size_t)cx + (size_t)N * cz] = col;
+            cmat[(size_t)cx + (size_t)N * cz] = (uint8_t)mat;
+            const float x0 = (float)cx * cs, x1 = x0 + cs;
+            const float z0 = (float)cz * cs, z1 = z0 + cs;
+            const Vector3 v[4] = {
+                Vector3(x0, H(cx, cz), z0), Vector3(x1, H(cx + 1, cz), z0),
+                Vector3(x1, H(cx + 1, cz + 1), z1), Vector3(x0, H(cx, cz + 1), z1),
+            };
+            const int base = m.verts.size();
+            for (int k = 0; k < 4; ++k) {
+                m.verts.push_back(v[k]);
+                m.normals.push_back(Vector3(0, 1, 0));   // the shader lights it flat
+                m.colours.push_back(col);
+                m.uvs.push_back(Vector2(v[k].x, v[k].z));
+                m.uv2s.push_back(no_seam);
+                m.custom0.push_back((uint8_t)mat);
+                m.custom0.push_back(255);   // G: smooth far ground
+                m.custom0.push_back(0);
+                m.custom0.push_back(255);
+            }
+            m.indices.push_back(base); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
+            m.indices.push_back(base); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
         }
     }
-    for (int cz = 0; cz < N; ++cz) {
-        for (int cx = 0; cx < N; ++cx) {
-            const int a = cx + V * cz;
-            const int b = a + 1;
-            const int d = a + V;
-            const int e = d + 1;
-            m.indices.push_back(a); m.indices.push_back(b); m.indices.push_back(e);
-            m.indices.push_back(a); m.indices.push_back(e); m.indices.push_back(d);
-        }
-    }
-    // The skirt: each edge vertex, and a copy two bricks below it.
+    // The skirt round the block's edge, facing out of it (19.17/19.18).
     const float drop = coarse_skirt_m(step);
-    auto skirt = [&](int ax, int az, int bx, int bz, const Vector3 &out) {
-        const Vector3 pa = m.verts[ax + V * az];
-        const Vector3 pb = m.verts[bx + V * bz];
-        const Color ca = m.colours[ax + V * az];
-        const Color cb = m.colours[bx + V * bz];
-        m.material = (uint8_t)m.custom0[(ax + V * az) * 4];
-        // Lit like the ground it hangs from, not like a wall: where the next
-        // level is lower this skirt is SEEN, and a dark wall there read as a
-        // gap (Terrain.md 19.16). `out` is kept for the winding only.
-        (void)out;
-        const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
-        m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
-            // Wound to face OUT of the block (clockwise seen from outside).
-            // It was the other way round, so the skirt faced into its own
-            // block and was culled from the only side it can be seen from.
+    auto skirt = [&](int ax, int az, int bx, int bz, int ccx, int ccz) {
+        const Vector3 pa((float)ax * cs, H(ax, az), (float)az * cs);
+        const Vector3 pb((float)bx * cs, H(bx, bz), (float)bz * cs);
+        const size_t c = (size_t)ccx + (size_t)N * ccz;
+        m.material = cmat[c];
+        m.raw_quad(Vector3(0, 1, 0), ccol[c], no_seam,
             Vector3(pb.x, pb.y - drop, pb.z), Vector3(pa.x, pa.y - drop, pa.z), pa, pb,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
+        // raw_quad wrote CUSTOM0.g = 0: flag these as smooth far ground too.
+        const int n = m.custom0.size();
+        for (int k = 0; k < 4; ++k) {
+            m.custom0.set(n - 16 + k * 4 + 1, 255);
+        }
     };
     for (int k = 0; k < N; ++k) {
-        skirt(k + 1, 0, k, 0, Vector3(0, 0, -1));
-        skirt(k, N, k + 1, N, Vector3(0, 0, 1));
-        skirt(0, k, 0, k + 1, Vector3(-1, 0, 0));
-        skirt(N, k + 1, N, k, Vector3(1, 0, 0));
+        skirt(k + 1, 0, k, 0, k, 0);
+        skirt(k, N, k + 1, N, k, N - 1);
+        skirt(0, k, 0, k + 1, 0, k);
+        skirt(N, k + 1, N, k, N - 1, k);
     }
     Array mesh;
     mesh.resize(Mesh::ARRAY_MAX);

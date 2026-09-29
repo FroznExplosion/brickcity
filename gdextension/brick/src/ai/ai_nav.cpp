@@ -67,6 +67,9 @@ void AINav::_bind_methods() {
     BIND_CONSTANT(STEP_UP);
     BIND_CONSTANT(MAX_DROP);
     BIND_CONSTANT(SAFE_DROP);
+    ClassDB::bind_method(D_METHOD("set_agent", "span", "head_stand", "head_crouch", "step_up",
+            "max_drop", "safe_drop"), &AINav::set_agent);
+    ClassDB::bind_method(D_METHOD("get_span"), &AINav::get_span);
 }
 
 // The caches are hash maps that grow to tens of thousands of entries, and a
@@ -139,7 +142,7 @@ const AINav::Column &AINav::_column(int x, int z) {
             // Under the sea is not a floor. The bricks and the seabed agree
             // about where the water is, so this is the one place it is asked.
             const bool drowned = (float)y * PLATE < water_level - WADE;
-            if (head >= HEAD_CROUCH && !drowned) {
+            if (head >= head_crouch && !drowned) {
                 col.floors.push_back(Floor{ (int16_t)y, head });
             }
         }
@@ -161,19 +164,19 @@ int AINav::_node_head(int x, int z, int y) {
         }
     }
     int head = std::numeric_limits<int>::max();
-    for (int i = 0; i < 4 && head >= 0; ++i) {
-        const int cx = x + (i & 1);
-        const int cz = z + (i >> 1);
+    for (int i = 0; i < span * span && head >= 0; ++i) {
+        const int cx = x + i % span;
+        const int cz = z + i / span;
         const Column &col = _column(cx, cz);
         int best = -1;
         for (const Floor &f : col.floors) {
-            if (i == 0 ? f.y != y : f.y > y + STEP_UP) {
+            if (i == 0 ? f.y != y : f.y > y + step_up) {
                 continue;
             }
             // Its air runs from its ground up; the body needs it from its own
             // feet (or that ground, if higher) to a crouch above them.
             const int air = (int)f.y + (int)f.head - y;
-            if (air >= HEAD_CROUCH && (i == 0 || f.y + f.head >= std::max((int)f.y, y) + HEAD_CROUCH)) {
+            if (air >= head_crouch && (i == 0 || f.y + f.head >= std::max((int)f.y, y) + head_crouch)) {
                 best = std::max(best, air);
             }
         }
@@ -184,12 +187,12 @@ int AINav::_node_head(int x, int z, int y) {
 }
 
 Vector3 AINav::_node_point(const Node &n) const {
-    return Vector3((n.x + 1) * STUD, n.y * PLATE, (n.z + 1) * STUD);
+    return Vector3((n.x + span * 0.5f) * STUD, n.y * PLATE, (n.z + span * 0.5f) * STUD);
 }
 
 bool AINav::_snap_node(const Vector3 &p, Node &out, int max_r) {
-    const int ax = (int)std::lround(p.x / STUD) - 1;
-    const int az = (int)std::lround(p.z / STUD) - 1;
+    const int ax = (int)std::lround(p.x / STUD) - span / 2;
+    const int az = (int)std::lround(p.z / STUD) - span / 2;
     const int py = (int)std::floor(p.y / PLATE + 0.5f);
     float best_d = std::numeric_limits<float>::infinity();
     bool found = false;
@@ -206,7 +209,7 @@ bool AINav::_snap_node(const Vector3 &p, Node &out, int max_r) {
                 // above it.
                 int pick = -1;
                 for (const Floor &f : col.floors) {
-                    if (f.y <= py + STEP_UP && f.y > pick) {
+                    if (f.y <= py + step_up && f.y > pick) {
                         pick = f.y;
                     }
                 }
@@ -232,8 +235,8 @@ Vector3 AINav::snap(const Vector3 &point) {
 }
 
 bool AINav::can_stand(const Vector3 &point) {
-    const int ax = (int)std::lround(point.x / STUD) - 1;
-    const int az = (int)std::lround(point.z / STUD) - 1;
+    const int ax = (int)std::lround(point.x / STUD) - span / 2;
+    const int az = (int)std::lround(point.z / STUD) - span / 2;
     const int py = (int)std::floor(point.y / PLATE + 0.5f);
     return _node_head(ax, az, py) >= 0;
 }
@@ -282,9 +285,9 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             return true;
         }
         s.lo_x = std::min(s.start.x, s.goal.x) - 1;
-        s.hi_x = std::max(s.start.x, s.goal.x) + 2;
+        s.hi_x = std::max(s.start.x, s.goal.x) + span;
         s.lo_z = std::min(s.start.z, s.goal.z) - 1;
-        s.hi_z = std::max(s.start.z, s.goal.z) + 2;
+        s.hi_z = std::max(s.start.z, s.goal.z) + span;
         const int64_t k0 = nkey(s.start.x, s.start.z, s.start.y);
         s.g[k0] = 0.0f;
         s.open.push_back(Open{ h(s.start), k0 });
@@ -319,9 +322,9 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
         stat_expansions++;
         // A node reads its 2x2 and its neighbours' 2x2s.
         s.lo_x = std::min(s.lo_x, n.x - 1);
-        s.hi_x = std::max(s.hi_x, n.x + 2);
+        s.hi_x = std::max(s.hi_x, n.x + span);
         s.lo_z = std::min(s.lo_z, n.z - 1);
-        s.hi_z = std::max(s.hi_z, n.z + 2);
+        s.hi_z = std::max(s.hi_z, n.z + span);
         const uint64_t t_exp = now_usec();
         const int hn = _node_head(n.x, n.z, n.y);
         for (int d = 0; d < 8; ++d) {
@@ -334,14 +337,14 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             int best_dy = std::numeric_limits<int>::max();
             for (const Floor &f : col.floors) {
                 const int dy = f.y - n.y;
-                if (dy > STEP_UP || -dy > MAX_DROP) {
+                if (dy > step_up || -dy > max_drop) {
                     continue;
                 }
                 if (std::abs(dy) >= best_dy) {
                     continue;
                 }
                 // Stepping up needs the air to rise into.
-                if (dy > 0 && hn < dy + HEAD_CROUCH) {
+                if (dy > 0 && hn < dy + head_crouch) {
                     continue;
                 }
                 const int hh = _node_head(nx, nz, f.y);
@@ -366,7 +369,7 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             if (d >= 4) {
                 const int ax = n.x + DX[d], az = n.z;
                 const int bx = n.x, bz = n.z + DZ[d];
-                if (std::abs(best_y - n.y) <= STEP_UP) {
+                if (std::abs(best_y - n.y) <= step_up) {
                     const bool a_ok = _node_head(ax, az, n.y) >= 0 || _node_head(ax, az, best_y) >= 0;
                     const bool b_ok = _node_head(bx, bz, n.y) >= 0 || _node_head(bx, bz, best_y) >= 0;
                     if (!a_ok || !b_ok) {
@@ -380,19 +383,19 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             // the landing stand at its height too. A column is a stud and a body
             // is two, and a one-stud slot -- a window sill in a wall's thickness --
             // took a path it could not follow, stuck on the floor above.
-            if (best_y < n.y - SAFE_DROP) {
+            if (best_y < n.y - safe_drop) {
                 // And the body has to get there: air in the landing column from
                 // the landing floor all the way up past where it steps off, plus
                 // a crouch. A short drop never needed this -- a body is taller
                 // than 9 plates -- but a storey's did: without it a path stepped
                 // off the second floor INTO the wall beside it, onto the sill of
                 // the window below, and the soldier walked into the wall forever.
-                if (best_head < (n.y - best_y) + HEAD_CROUCH) {
+                if (best_head < (n.y - best_y) + head_crouch) {
                     continue;
                 }
                 bool open = true;
                 for (int e = 0; e < 4 && open; ++e) {
-                    if (_node_head(nx + DX[e], nz + DZ[e], best_y) < HEAD_CROUCH) {
+                    if (_node_head(nx + DX[e], nz + DZ[e], best_y) < head_crouch) {
                         open = false;
                     }
                 }
@@ -401,13 +404,13 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
                 }
             }
             float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::max(0, best_y - n.y) * PLATE;
-            if (best_head < HEAD_STAND) {
+            if (best_head < head_stand) {
                 step *= 2.0f;   // crouching is slow
             }
-            if (best_y < n.y - STEP_UP) {
+            if (best_y < n.y - step_up) {
                 step += 0.5f;   // a drop is a commitment
             }
-            if (best_y < n.y - SAFE_DROP) {
+            if (best_y < n.y - safe_drop) {
                 step += HURT_DROP_COST;   // and one that hurts, a last resort
             }
             const int64_t nk = nkey(nx, nz, best_y);
@@ -548,9 +551,9 @@ int AINav::pending() const {
 
 void AINav::invalidate_box(const AABB &box) {
     stat_invalidations++;
-    const int x0 = (int)std::floor(box.position.x / STUD) - 2;
+    const int x0 = (int)std::floor(box.position.x / STUD) - span;
     const int x1 = (int)std::floor((box.position.x + box.size.x) / STUD) + 1;
-    const int z0 = (int)std::floor(box.position.z / STUD) - 2;
+    const int z0 = (int)std::floor(box.position.z / STUD) - span;
     const int z1 = (int)std::floor((box.position.z + box.size.z) / STUD) + 1;
     if ((int64_t)(x1 - x0 + 1) * (int64_t)(z1 - z0 + 1) > (int64_t)columns.size()) {
         // A big box: cheaper to walk the cache than the box.
@@ -597,6 +600,17 @@ void AINav::invalidate_box(const AABB &box) {
         s.started = false;
     }
     emit_signal("nav_changed", box);
+}
+
+void AINav::set_agent(int p_span, int p_head_stand, int p_head_crouch, int p_step_up,
+        int p_max_drop, int p_safe_drop) {
+    span = std::max(1, p_span);
+    head_stand = std::max(1, p_head_stand);
+    head_crouch = std::max(1, std::min(p_head_crouch, head_stand));
+    step_up = std::max(0, p_step_up);
+    max_drop = std::max(step_up, p_max_drop);
+    safe_drop = std::max(0, std::min(p_safe_drop, max_drop));
+    clear_cache();
 }
 
 void AINav::clear_cache() {
@@ -664,8 +678,8 @@ Dictionary AINav::rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp
         for (int k = 0; k < 8; ++k) {
             const float a = (float)Math_TAU * k / 8.0f;
             const Vector3 want = p + Vector3(std::cos(a) * rr, 0.0f, std::sin(a) * rr);
-            const int ax = (int)std::lround(want.x / STUD) - 1;
-            const int az = (int)std::lround(want.z / STUD) - 1;
+            const int ax = (int)std::lround(want.x / STUD) - span / 2;
+            const int az = (int)std::lround(want.z / STUD) - span / 2;
             if (_node_head(ax, az, py) < 0) {
                 continue;
             }
