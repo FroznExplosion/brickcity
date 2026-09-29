@@ -270,6 +270,56 @@ on every `damage_profile` change.
 **Gate:** a tower with its top blown off reads as blown off from 110 m, 260 m and 1 km (Collapse.md
 2.3's own failure case). Same window pattern either side of the 110 m swap.
 
+**Stages 2 and 3 done (2026-09-28), built together.** What changed from the plan:
+
+* **Damage is a texture, not `INSTANCE_CUSTOM`.** A shell's damage is BuildingShell's segment mask:
+  per band, per side, 32 bits. That is up to 128 bits a band, and a tall tower has 240 bands. One
+  bit per band would have wiped a whole storey for one hole. So `damage_tex` is RGBA8, one row per
+  damaged building, one texel per (band, side) whose bytes are the mask. `INSTANCE_CUSTOM` carries
+  courses, the damage row (−1 intact) and the window seed. The profile only changes when a
+  building gives its bricks back, and a building with bricks has no far box, so the row is
+  written when the box is shown and is never stale.
+* **Holes are cut with alpha scissor, not `discard`.** With a raw `discard`, binding the damage
+  texture made the whole MultiMesh stop drawing — every building, intact ones included — on the
+  Radeon iGPU, with no error printed. `ALPHA` + `ALPHA_SCISSOR_THRESHOLD` draws correctly.
+* **Box-filtered, not faded.** Courses, slabs and windows are drawn from running integrals of the
+  pattern over each pixel's footprint. A course thinner than a pixel blends into its neighbours
+  instead of shimmering, and storeys and windows stay visible as far as they are a pixel or more.
+  No LOD switch.
+* **The coarse tier takes damaged buildings too** (Stage 2). The old coarse mesh could not show
+  damage; the far box can. A coarse recipe shell keeps its node and collision body, but the node
+  has no mesh, so the far box draws it (`_shell_box`). What still needs real geometry keeps it:
+  a player build, and a *materialised* building, whose damage is in live bricks the profile does
+  not have yet.
+* **No colour step at 110 m or 260 m any more.** The old coarse tier was one flat tan; the facade
+  draws the shell's own course colours.
+* The damage profile records **window openings as missing segments** in every damaged band that
+  has windows. The shell draws them as holes, and so does the facade.
+
+Gate, `big_city.tscn -- --far --buildings=150`, 11 ok: one drawer per building; 64 coarse shells
+drawn by the far box, all with collision; a tower shot at 500 m with its crown taken off (bands 210–239
+of 240 gone) stays a far box with a damage row, takes a shot, is a coarse box with a body at 180 m and
+a banded shell inside 80 m. Screenshots `shots/far_top_{130,300,1000}.png`. `--reach` lands to
+480 m; `collapse_probe` 50; `--lod`, `--buildshot` 21, `--rooms` 39 pass.
+
+**Measured** (bench, 150 buildings, calls and triangles only: the editor was open, so no frame
+times). The bench no longer promotes buildings — a street-level viewpoint materialising its
+neighbours at whatever tick made every run a different city — so these are shells only, as
+Terrain.md §19.5 defines the bench:
+
+| viewpoint | Stage 1: tris / calls | Stages 2–3: tris / calls |
+|---|---|---|
+| over the city | 247k / 182 | 247k / 95 |
+| street level | 58k / 136 | 45–62k / 56–62 |
+| high and far | 71k / 151 | 71–194k / 60–109 |
+
+The ranges are the 110–140 m hysteresis band: which tier a building there holds depends on the path
+the camera took, and the bench's three viewpoints are a path.
+
+**What this says about §2's budget.** With nothing materialised, the worst viewpoint is 247k
+triangles, not 3.3–3.8M. The millions in §19.5 were brick meshes of buildings the bench happened to
+promote, not shells. The expensive thing in this city is materialised bricks; see §7.1.
+
 ### Stage 4 — The baker, for player builds
 
 `scripts/impostor_baker.gd`: `SubViewport`, orthographic camera, five faces into one atlas;
