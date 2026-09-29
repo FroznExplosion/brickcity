@@ -121,6 +121,7 @@ var _far_tris := 0
 var _far_blocks := 0
 var _far_rings := 0
 var _sites: Array[MeshInstance3D] = []
+var _trees: TerrainTrees = null
 ## Every coarse block's tile rect, and which node draws it (-1 = a merged
 ## ring, which is always drawn). The coverage check needs both.
 var _all_rects: Array[Rect2i] = []
@@ -208,6 +209,15 @@ func _ready() -> void:
 	_build_terrain()
 	_build_water()
 	_build_sites()
+	# Brick trees (TerrainTrees, Docs/Impostors.md 8). Not in a bench: it
+	# measures the terrain, and its numbers are compared across months.
+	if not _bench_mode and not "--no-trees" in OS.get_cmdline_user_args():
+		_trees = TerrainTrees.new()
+		_trees.name = "Trees"
+		add_child(_trees)
+		_trees.setup(_camera, _brick_material())
+		var half := maxi(FAR_TILES, NEAR_TILES) * BrickTerrain.get_tile_studs()
+		_trees.build(Rect2i(-half, -half, half * 2, half * 2), _seed)
 	# The editing tools, on everything above. Not in a bench or a capture:
 	# those measure and photograph the terrain, not an editor's markers.
 	if not _bench_mode and not _shot_mode:
@@ -494,6 +504,8 @@ func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
 ## re-baked at the step each was built with (a merged ring as a whole, since
 ## a ring is one mesh), and the seabed the water reads its shore from.
 func terrain_changed(studs: Rect2i) -> void:
+	if _trees != null:
+		_trees.rebuild_soon()
 	var tile := BrickTerrain.get_tile_studs()
 	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
@@ -893,6 +905,8 @@ func _brick_material() -> ShaderMaterial:
 ## The sites again, after an edit moved, resized or re-floored one.
 func rebuild_sites() -> void:
 	_build_sites()
+	if _trees != null:
+		_trees.rebuild_soon()
 
 
 func _build_sites() -> void:

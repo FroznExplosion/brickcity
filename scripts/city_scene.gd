@@ -731,6 +731,7 @@ var _buildings_arg := false
 var _stress_mode := false
 var _reach_mode := false
 var _far_mode := false
+var _tree_mode := false
 var _lod_mode := false
 var _walk_mode := false
 var _no_fixtures := false
@@ -881,6 +882,7 @@ func _ready() -> void:
 	_stress_mode = "--stress" in args
 	_reach_mode = "--reach" in args
 	_far_mode = "--far" in args
+	_tree_mode = "--trees" in args
 	_lod_mode = "--lod" in args
 	_walk_mode = "--walk" in args
 	# For measurement: the same city with nothing fixed to its buildings, so a
@@ -1020,6 +1022,8 @@ func _ready() -> void:
 			get_tree().quit(0 if err == OK else 1)
 			return
 		_build_terrain_ground()
+		if not "--no-trees" in args:
+			_place_trees()
 	# Loaded now rather than by the first building to come into view of a
 	# window: the first fake paid for the shader on top of its own rooms.
 	FurnitureMesh.fake_material()
@@ -1067,6 +1071,8 @@ func _ready() -> void:
 		_run_reach_pass()
 	elif _far_mode:
 		_run_far_pass()
+	elif _tree_mode:
+		_run_tree_pass()
 	elif _walk_mode:
 		_run_walk_pass()
 	elif _build_mode:
@@ -1354,6 +1360,7 @@ func _build_terrain_ground() -> void:
 		var w := float(maxi(int(b.recipe.footprint_x), int(b.recipe.footprint_z))) * stud
 		reach = maxf(reach, maxf(absf(o.x), absf(o.z)) + w)
 	var half: int = int(ceil(reach / tile_m)) + 1
+	_terrain_half = half
 
 	_terrain_mat = ShaderMaterial.new()
 	_terrain_mat.shader = load("res://shaders/terrain.gdshader")
@@ -2175,6 +2182,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		# every "has a shell" question still has its answer, with no mesh and
 		# so no draw call of its own.
 		_shell_box[id] = true
+	elif _inst_ok(b):
+		# Drawn by its instanced set (a tree): the same, for the same reason.
+		_shell_inst[id] = true
 	elif b.is_build():
 		mi.mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), coarse)
 	else:
@@ -2203,8 +2213,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			mi.add_child(glass)
 	# A shell and a far box would be the same building drawn twice -- unless
-	# the far box IS this shell's drawing.
+	# the far box IS this shell's drawing. So would a shell and a tree's copy.
 	_far_sync(b)
+	_inst_sync(b)
 	if far:
 		_shell_far[id] = true
 		return
@@ -5020,6 +5031,8 @@ func _physics_process(_delta: float) -> void:
 		_stream_shells()
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
 		_stream_shadows()
+	if camera != null and Engine.get_physics_frames() % 4 == 1:
+		_inst_update()
 	_part("st_shells", t_sh)
 	if _show_grids:
 		_draw_grids()
@@ -5089,6 +5102,10 @@ func _free_shell(id: int) -> void:
 	_shell_far.erase(id)
 	_shell_box.erase(id)
 	_far_hide(id)
+	_shell_inst.erase(id)
+	var fb := registry.get_building(id)
+	if fb != null:
+		_inst_sync(fb)
 	if _shells.has(id):
 		(_shells[id] as MeshInstance3D).queue_free()
 		_shells.erase(id)
@@ -5178,7 +5195,10 @@ func _stream_shells() -> void:
 		return
 	var budget := SHELLS_PER_TICK
 	var looked := 0
-	var slice := mini(count, SHELLS_PER_TICK * 16)
+	# A full pass over the register every eight, however many there are: with
+	# trees in it the register is ten times the city, and a fixed slice left a
+	# building waiting seconds for its tier.
+	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, count / 8 + 1))
 	while looked < slice and budget > 0:
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
@@ -5187,6 +5207,7 @@ func _stream_shells() -> void:
 		# After the shell's own step, so a building whose shell just went
 		# gets its far box in the same tick rather than a pass later.
 		_far_sync(b)
+		_inst_sync(b)
 	_far_dmg_upload()
 
 
@@ -5236,6 +5257,102 @@ func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
 		_shells_swapped += 1
 		return 1
 	return 0
+
+
+# ---------------------------------------------------------------------------
+# Instanced builds: trees, and later items (Docs/Impostors.md 8)
+# ---------------------------------------------------------------------------
+#
+# A tree is a registered build, so it is destructible like any building: shot,
+# it materialises, sheds pieces, topples (Trees). But hundreds of them each
+# with a shell mesh would be hundreds of draw calls. So an INTACT one is drawn
+# by the ImpostorLod of its recipe -- its real bricks instanced up close, an
+# octahedral card further out, two draw calls for every tree of that kind --
+# and its shell node, inside SHELL_RANGE, has no mesh: only its collision.
+# Once it is damaged or holds bricks, it draws itself the ordinary way.
+
+## Nearer than this a tree is its real bricks (instanced); further, a card.
+const TREE_NEAR := 45.0
+## Trees at most, and how far out from the middle they grow, in studs. Past
+## the city's own detailed ground: the city stands on rock, and the grass is
+## round it. A tree out there stands on the coarse ring, whose surface is the
+## field's height within a plate or two.
+const TREE_MAX := 800
+const TREE_REACH_STUDS := 1200
+
+var _inst_sets := {}      ## impostor key -> ImpostorLod
+var _inst_handle := {}    ## building id -> its handle in that set
+var _shell_inst := {}     ## building id -> its shell is drawn by the set
+var _trees_placed := 0
+var _terrain_half := 0   ## tiles each way the detailed ground reaches
+
+
+## The key of the instanced set a build belongs to, or "" if it draws itself.
+func _inst_key(b: BuildingRegistry.Building) -> String:
+	if not b.is_build():
+		return ""
+	return str(b.build.meta.get("impostor_key", ""))
+
+
+## Can its set draw it: one of a set, and exactly as its recipe says.
+func _inst_ok(b: BuildingRegistry.Building) -> bool:
+	return _inst_key(b) != "" and not b.is_damaged() and not b.is_materialised() \
+			and not b.toppled
+
+
+## Show or hide a building's copy in its set to match what else draws it.
+func _inst_sync(b: BuildingRegistry.Building) -> void:
+	if not _inst_handle.has(b.id):
+		return
+	var set_: ImpostorLod = _inst_sets[_inst_key(b)]
+	var want: bool
+	if _shell_inst.has(b.id):
+		# As the far box does for a coarse shell (_far_sync): kept while the
+		# placeholder is, so a tree shot and materialising is never undrawn.
+		want = not b.toppled
+	else:
+		want = _inst_ok(b) and not _shells.has(b.id)
+	set_.set_wanted(int(_inst_handle[b.id]), want)
+
+
+func _inst_set(key: String, recipe: BuildRecipe) -> ImpostorLod:
+	if _inst_sets.has(key):
+		return _inst_sets[key]
+	var s := ImpostorLod.new()
+	s.name = "Inst_%s" % key
+	add_child(s)
+	s.setup(RecipeMesh.build(recipe, key), brick_material, TREE_NEAR)
+	_inst_sets[key] = s
+	return s
+
+
+## Trees over the detailed ground (Trees.scatter), each a registered build.
+## Shells are left to _stream_shells: a tree past SHELL_RANGE never needs one.
+func _place_trees() -> void:
+	var t0 := Time.get_ticks_usec()
+	var span := maxi(_terrain_half * BrickTerrain.get_tile_studs(), TREE_REACH_STUDS)
+	var spots: Array = Trees.scatter(Rect2i(-span, -span, span * 2, span * 2),
+			int(BrickTerrain.get_seed()), TREE_MAX)
+	for s in spots:
+		var variant: int = s.variant
+		var recipe := Trees.recipe(variant)
+		var id := registry.register_build(recipe, Trees.placement(s.cell, variant))
+		if id < 0:
+			continue
+		_index_building(id)
+		var b := registry.get_building(id)
+		var set_ := _inst_set(_inst_key(b), recipe)
+		_inst_handle[id] = set_.add(b.xform, false)
+		_inst_sync(b)
+		_trees_placed += 1
+	print("[city] trees: %d placed in %.0f ms (%d kinds)" % [
+		_trees_placed, float(Time.get_ticks_usec() - t0) / 1000.0, _inst_sets.size()])
+
+
+func _inst_update() -> void:
+	var here := camera.global_position
+	for s in _inst_sets.values():
+		(s as ImpostorLod).update(here)
 
 
 # ---------------------------------------------------------------------------
@@ -5434,7 +5551,8 @@ var _far_dmg_dirty := false
 
 ## A building past SHELL_RANGE the far box would draw wrongly: it keeps a shell.
 func _needs_far_shell(b: BuildingRegistry.Building) -> bool:
-	return b.is_build()
+	# An intact tree is drawn by its instanced set out there instead.
+	return b.is_build() and not _inst_ok(b)
 
 
 ## Can the far box stand in for this building's coarse shell (Stage 2)? A
@@ -5454,7 +5572,7 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 		want = not b.toppled
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
-				or _needs_far_shell(b))
+				or b.is_build())
 	if want == _far_on.has(b.id):
 		return
 	if not want:
@@ -7394,6 +7512,93 @@ func _ray_recipes(from: Vector3, to: Vector3) -> Dictionary:
 			best_d = d
 			best = {"position": world_at, "building": b.id}
 	return best
+
+
+## Trees in the city (Docs/Impostors.md 8).
+##
+##     godot --path . scenes/city.tscn -- --terrain --trees
+##
+## They are there, drawn by their sets and nothing else; one materialised
+## whole stands up on its own; one shot through the trunk comes down.
+func _run_tree_pass() -> void:
+	print("[trees] brick trees on the ground")
+	await _frames(30)
+	_gate_ok("trees were placed", _trees_placed > 0, "%d" % _trees_placed)
+	if _trees_placed == 0:
+		print("[trees] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+	# The nearest tree to the middle of the city, and the camera by it.
+	var trees: Array = _inst_handle.keys()
+	var pick: int = trees[0]
+	var best := INF
+	for id in trees:
+		var d := registry.get_building(id).xform.origin.length()
+		if d < best:
+			best = d
+			pick = id
+	var tb := registry.get_building(pick)
+	var base := tb.xform * (registry.local_box(pick).get_center() * Vector3(1, 0, 1))
+	camera.global_position = base + Vector3(10.0, 5.0, 14.0)
+	camera.look_at(base + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+	await _far_settle()
+	for i in 20:
+		await RenderingServer.frame_post_draw
+	var near := 0
+	var far := 0
+	for s in _inst_sets.values():
+		near += (s as ImpostorLod).near_count
+		far += (s as ImpostorLod).far_count
+	var meshed := 0
+	for id in trees:
+		if _shells.has(id) and (_shells[id] as MeshInstance3D).mesh != null:
+			meshed += 1
+	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
+		_trees_placed, _inst_sets.size(), near, far, meshed])
+	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
+			"%d of %d" % [near + far, _trees_placed])
+	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
+	var baked := 0
+	for s in _inst_sets.values():
+		if not (s as ImpostorLod).bake.is_empty():
+			baked += 1
+	_gate_ok("every kind has its impostor baked", baked == _inst_sets.size(),
+			"%d of %d" % [baked, _inst_sets.size()])
+	_gate_ok("a tree in reach has collision", _shell_bodies.has(pick))
+	await _save("trees_near")
+
+	# Materialised whole, it has to stand: the canopy rests on the trunk.
+	var chunk := _promote(pick)
+	await _frames(90)
+	var alive := world.get_alive_block_count(chunk) if chunk >= 0 else -1
+	_gate_ok("a tree materialised whole stands", chunk >= 0 and not tb.toppled
+			and alive == tb.build.size(), "%d of %d bricks, toppled %s" % [
+				alive, tb.build.size(), tb.toppled])
+	_gate_ok("  and its copy is not drawn over its bricks",
+			not (_inst_sets[_inst_key(tb)] as ImpostorLod).is_drawn(int(_inst_handle[pick])))
+
+	# Shot through the trunk, low: it comes down.
+	var islands_before := islands.islands.size()
+	_blast(base + Vector3(0.35, 0.6, 0.35), 0.9)
+	var fell := false
+	for i in 240:
+		await RenderingServer.frame_post_draw
+		if tb.toppled or islands.islands.size() > islands_before:
+			fell = true
+			break
+	await _save("trees_shot")
+	_gate_ok("a tree shot through the trunk comes down", fell,
+			"toppled %s, islands %d -> %d" % [tb.toppled, islands_before, islands.islands.size()])
+
+	# From the edge of the city: the cards.
+	camera.global_position = base + Vector3(0.0, 40.0, 160.0)
+	camera.look_at(base, Vector3.UP)
+	await _far_settle()
+	for i in 20:
+		await RenderingServer.frame_post_draw
+	await _save("trees_far")
+	print("[trees] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## The far city's gate (Docs/Impostors.md, Stage 1).
@@ -9725,7 +9930,7 @@ func _build_scenery() -> void:
 	# Every scripted pass drives the camera itself. Leaving the debug camera
 	# captured let it keep applying its own movement and mouse-look on top,
 	# which is why the reach probe reported misses at 40 m.
-	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _lod_mode
+	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _tree_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
 			or _rooms_mode or _chamfer_mode or _interiors_mode or _audit_mode
 			or _windows_mode)
