@@ -2187,7 +2187,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		# every "has a shell" question still has its answer, with no mesh and
 		# so no draw call of its own.
 		_shell_box[id] = true
-	elif _inst_ok(b):
+	elif _inst_ok(b) and _inst_near(b):
 		# Drawn by its instanced set (a tree): the same, for the same reason.
 		_shell_inst[id] = true
 	elif b.is_build():
@@ -2199,6 +2199,12 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 						b.damage_profile))
 	mi.material_override = brick_material
 	mi.transform = b.xform
+	# Stage 5: a banded shell dithers out over the fade band while the far box
+	# dithers in over the same pixels (city_far.gdshader, `crossfade`), so the
+	# swap at SHELL_DETAIL_RANGE is a blend rather than a pop.
+	var fades := not coarse and not b.is_build() and not b.is_materialised()
+	if fades:
+		_fade_out(mi)
 	add_child(mi)
 	_shells[id] = mi
 	_shell_coarse[id] = coarse
@@ -2216,6 +2222,8 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 			glass.mesh = panes
 			glass.material_override = BuildingShell.window_material()
 			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if fades:
+				_fade_out(glass)
 			mi.add_child(glass)
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
@@ -5292,7 +5300,10 @@ func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
 	# banded shell every pass.
 	if not coarse and b.is_damaged() and not _far_draws_coarse(b):
 		return 0
-	if coarse and dist < SHELL_DETAIL_RANGE - SHELL_HYSTERESIS:
+	# In at FADE_IN_AT, out past the far end of the fade band: the crossfade
+	# covers the whole band, so the old wide hysteresis is not needed to hide
+	# a pop, only to stop a building on the line rebuilding every pass.
+	if coarse and dist < FADE_IN_AT:
 		_free_shell(b.id)
 		_make_shell(b.id, false)
 		_shells_swapped += 1
@@ -5327,6 +5338,7 @@ const TREE_MAX := 800
 const TREE_REACH_STUDS := 1200
 
 var _inst_sets := {}      ## impostor key -> ImpostorLod
+var _recipe_keys := {}    ## recipe instance id -> its impostor key
 var _inst_handle := {}    ## building id -> its handle in that set
 var _shell_inst := {}     ## building id -> its shell is drawn by the set
 var _trees_placed := 0
@@ -5334,10 +5346,25 @@ var _terrain_half := 0   ## tiles each way the detailed ground reaches
 
 
 ## The key of the instanced set a build belongs to, or "" if it draws itself.
+## A tree names its own; any other build is keyed by what it is made of, so
+## two copies of the same watchtower share one bake (Stage 4).
 func _inst_key(b: BuildingRegistry.Building) -> String:
 	if not b.is_build():
 		return ""
-	return str(b.build.meta.get("impostor_key", ""))
+	var k := str(b.build.meta.get("impostor_key", ""))
+	if k != "":
+		return k
+	var rid := b.build.get_instance_id()
+	if not _recipe_keys.has(rid):
+		_recipe_keys[rid] = "build_%x" % str(b.build.to_dict()).hash()
+	return _recipe_keys[rid]
+
+
+## Drawn by its set up close too (instanced bricks), not only past SHELL_RANGE:
+## small, many and identical -- a tree. A player build keeps its own shell
+## inside SHELL_RANGE, where it may be the thing somebody is looking at.
+func _inst_near(b: BuildingRegistry.Building) -> bool:
+	return b.is_build() and b.build.meta.has("impostor_key")
 
 
 ## Can its set draw it: one of a set, and exactly as its recipe says.
@@ -5349,7 +5376,13 @@ func _inst_ok(b: BuildingRegistry.Building) -> bool:
 ## Show or hide a building's copy in its set to match what else draws it.
 func _inst_sync(b: BuildingRegistry.Building) -> void:
 	if not _inst_handle.has(b.id):
-		return
+		# A build placed any other way than _place_trees gets its copy the
+		# first time it is asked about, and only once it is far enough out
+		# to need one: meshing a big build for its bake is not free.
+		if not b.is_build() or _inst_key(b) == "" or _shells.has(b.id) or not _inst_ok(b):
+			return
+		var s := _inst_set(_inst_key(b), b.build, _inst_near(b))
+		_inst_handle[b.id] = s.add(b.xform, false)
 	var set_: ImpostorLod = _inst_sets[_inst_key(b)]
 	var want: bool
 	if _shell_inst.has(b.id):
@@ -5361,13 +5394,14 @@ func _inst_sync(b: BuildingRegistry.Building) -> void:
 	set_.set_wanted(int(_inst_handle[b.id]), want)
 
 
-func _inst_set(key: String, recipe: BuildRecipe) -> ImpostorLod:
+func _inst_set(key: String, recipe: BuildRecipe, near := true) -> ImpostorLod:
 	if _inst_sets.has(key):
 		return _inst_sets[key]
 	var s := ImpostorLod.new()
 	s.name = "Inst_%s" % key
 	add_child(s)
-	s.setup(RecipeMesh.build(recipe, key), brick_material, TREE_NEAR)
+	# A player build is only ever a card here: up close it is its own shell.
+	s.setup(RecipeMesh.build(recipe, key), brick_material, TREE_NEAR if near else -1.0)
 	_inst_sets[key] = s
 	return s
 
@@ -5579,6 +5613,23 @@ func _drop_shadow_proxy(id: int) -> void:
 
 ## Room for this many far instances before the buffer has to grow.
 const FAR_INITIAL_CAPACITY := 256
+## Stage 5, the crossfade. A banded shell is fully drawn nearer than FADE_NEAR
+## and gone at FADE_FAR, dithered in between; the far box is the complement.
+## Coarse -> banded at FADE_IN_AT; banded -> coarse past FADE_FAR (the old
+## SHELL_DETAIL_RANGE + SHELL_HYSTERESIS), where the shell has faded out.
+const FADE_NEAR := 80.0
+const FADE_FAR := 140.0
+const FADE_IN_AT := 130.0
+var _far_fade := {}   ## building id -> 1.0 while its box crossfades with a shell
+
+
+## Godot's own visibility-range fade, over the band: it dithers the shell out
+## with the same interleaved-gradient noise city_far.gdshader dithers the box
+## in with, so the two are each other's complement pixel for pixel.
+func _fade_out(g: GeometryInstance3D) -> void:
+	g.visibility_range_end = FADE_FAR
+	g.visibility_range_end_margin = FADE_FAR - FADE_NEAR
+	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 ## Rows of damage before the texture has to grow.
 const FAR_DMG_INITIAL_ROWS := 16
 var _far: MultiMeshInstance3D = null
@@ -5619,7 +5670,14 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
 				or b.is_build())
-	if want == _far_on.has(b.id):
+	# Under a banded shell that is fading (Stage 5), drawn too, flagged to
+	# dither in where the shell dithers out.
+	var fade := 0.0
+	if not want and _shells.has(b.id) and not b.is_build() and not b.is_materialised() \
+			and not b.toppled and not _shell_coarse.get(b.id, false):
+		want = true
+		fade = 1.0
+	if want == _far_on.has(b.id) and fade == float(_far_fade.get(b.id, 0.0)):
 		return
 	if not want:
 		_far_hide(b.id)
@@ -5634,9 +5692,13 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 			(TowerRecipe.total_plates(int(r.courses)) - TowerRecipe.PLATES_PER_COURSE) * PLATE,
 			int(r.footprint_z) * STUD)
 	mm.set_instance_transform(slot, b.xform * Transform3D(Basis.from_scale(size), Vector3.ZERO))
+	if _far_dmg_row.has(b.id):
+		_far_dmg_free.append(int(_far_dmg_row[b.id]))
+		_far_dmg_row.erase(b.id)
 	mm.set_instance_custom_data(slot, Color(float(r.courses), float(_far_dmg_write(b)),
-			float(b.id), 0.0))
+			float(b.id), fade))
 	_far_on[b.id] = true
+	_far_fade[b.id] = fade
 
 
 ## Hide a building's far box, if it has one drawn. Zero scale rather than a
@@ -5645,6 +5707,7 @@ func _far_hide(id: int) -> void:
 	if not _far_on.has(id):
 		return
 	_far_on.erase(id)
+	_far_fade.erase(id)
 	_far.multimesh.set_instance_transform(int(_far_slot[id]),
 			Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 	if _far_dmg_row.has(id):
@@ -5762,6 +5825,8 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("course_colours", courses)
 	mat.set_shader_parameter("base_colour", _far_rgb(TowerRecipe.BASE_COLOUR))
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
+	mat.set_shader_parameter("fade_near", FADE_NEAR)
+	mat.set_shader_parameter("fade_far", FADE_FAR)
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
 	_far.multimesh = mm
@@ -7677,7 +7742,9 @@ func _run_far_pass() -> void:
 		var box: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
-		if shell and box:
+		# A box under a banded shell that is fading (Stage 5) is its
+		# complement, dithered on the other pixels: one drawer, not two.
+		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
 		elif not shell and not box:
 			undrawn += 1
@@ -7768,9 +7835,85 @@ func _run_far_pass() -> void:
 	camera.global_position = aim + Vector3(0.0, 0.0, -(SHELL_DETAIL_RANGE - 70.0))
 	camera.look_at(aim, Vector3.UP)
 	await _far_settle()
-	_gate_ok("closer still, a banded shell and no far box", _shells.has(far_id)
-			and not _shell_box.has(far_id) and not _far_on.has(far_id)
-			and _shell_bodies.has(far_id))
+	# Its far box is still there, flagged to dither in only where the banded
+	# shell dithers out (Stage 5) -- inside FADE_NEAR, nowhere.
+	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
+			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
+			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
+
+	# Stage 4: player builds out there are cards, one bake for identical ones.
+	var tower := BuildRecipe.load_from("res://builds/watchtower.json")
+	var far_at := here + Vector3(-600.0, 0.0, -600.0)
+	var b1 := registry.register_build(tower, Transform3D(Basis(), BrickWorld.grid_to_world(
+			Vector3i(int(far_at.x / STUD), 0, int(far_at.z / STUD)))))
+	var b2 := registry.register_build(tower, Transform3D(Basis(), BrickWorld.grid_to_world(
+			Vector3i(int(far_at.x / STUD) + 60, 0, int(far_at.z / STUD)))))
+	_index_building(b1)
+	_index_building(b2)
+	camera.global_position = here
+	camera.look_at(far_at, Vector3.UP)
+	await _far_settle()
+	var bb1 := registry.get_building(b1)
+	var key := _inst_key(bb1)
+	var set_: ImpostorLod = _inst_sets.get(key)
+	_gate_ok("Stage 4: a far player build has no shell", not _shells.has(b1) and not _shells.has(b2))
+	_gate_ok("  both are drawn by one set", set_ != null and _inst_key(registry.get_building(b2)) == key
+			and set_.is_drawn(int(_inst_handle.get(b1, -1)))
+			and set_.is_drawn(int(_inst_handle.get(b2, -1))))
+	var baked_guard := 0
+	while set_ != null and set_.bake.is_empty() and baked_guard < 300:
+		await RenderingServer.frame_post_draw
+		baked_guard += 1
+	_gate_ok("  as a card, baked once for both", set_ != null and not set_.bake.is_empty()
+			and set_.tier_of(int(_inst_handle[b1])) == 2)
+	await _save_crop("far_builds", 0.25)
+	camera.global_position = bb1.xform.origin + Vector3(40.0, 30.0, 150.0)
+	camera.look_at(bb1.xform.origin, Vector3.UP)
+	await _far_settle()
+	_gate_ok("  closer in, its own shell and no card", _shells.has(b1)
+			and (_shells[b1] as MeshInstance3D).mesh != null
+			and not set_.is_drawn(int(_inst_handle[b1])))
+	# Damaged, it keeps its exact shell even out there.
+	var bb2 := registry.get_building(b2)
+	_promote(b2)
+	await _frames(20)
+	var lb := registry.local_box(b2)
+	for f in [Vector3(0.5, 0.1, 0.0), Vector3(0.0, 0.1, 0.5), Vector3(0.5, 0.5, 0.5)]:
+		registry.damage(b2, bb2.xform * (lb.position + lb.size * f), 1.5)
+	await _frames(2)
+	_demote(b2, 400.0)
+	camera.global_position = here
+	camera.look_at(far_at, Vector3.UP)
+	await _far_settle()
+	print("[far]   damaged build: damaged %s, shell %s, far shell %s, card %s, bricks %s" % [
+		bb2.is_damaged(), _shells.has(b2), _shell_far.has(b2),
+		set_.is_drawn(int(_inst_handle[b2])), bb2.is_materialised()])
+	_gate_ok("  a damaged one keeps its shell out there, without the card",
+			_shells.has(b2) and _shell_far.has(b2) and not set_.is_drawn(int(_inst_handle[b2])))
+
+	# Stage 5: across the fade band a banded shell and its box are both drawn,
+	# the shell fading out and the box flagged to fade in.
+	var mid_id := -1
+	for ob in registry.buildings:
+		if not ob.is_build() and not ob.toppled and not ob.is_materialised():
+			mid_id = ob.id
+			break
+	var mb := registry.get_building(mid_id)
+	var mc := _world_box(mb).get_center()
+	camera.global_position = mc + Vector3(0.0, 10.0, -(FADE_NEAR + FADE_FAR) * 0.5)
+	camera.look_at(mc, Vector3.UP)
+	await _far_settle()
+	var banded: bool = _shells.has(mid_id) and not _shell_coarse.get(mid_id, true)
+	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_end == FADE_FAR
+	_gate_ok("Stage 5: in the fade band, a banded shell that fades out", faded,
+			"banded %s" % banded)
+	_gate_ok("  and its far box, flagged to fade in", _far_on.has(mid_id)
+			and float(_far_fade.get(mid_id, 0.0)) > 0.0)
+	for d in [70.0, 100.0, 125.0, 150.0]:
+		camera.global_position = mc + Vector3(0.0, 10.0, -d)
+		camera.look_at(mc, Vector3.UP)
+		await _far_settle()
+		await _save_crop("fade_%d" % int(d), 0.5)
 
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
