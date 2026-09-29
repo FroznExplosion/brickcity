@@ -15,7 +15,14 @@ extends BTAction
 ##   CLEAR   when every member has swept and nothing is in sight in the room: the
 ##           room is marked cleared, called, and the order reported DONE.
 
-const STACK_TIMEOUT := 25.0
+## A city tower's way in can be the far side of the building from a squad on
+## its upper floors: out, round and up to the door is 40 s in the arena.
+const STACK_TIMEOUT := 60.0
+## Two stacked this long, the rest are not waited for.
+const STRAGGLE := 10.0
+var _stacked_from := -1.0
+## Members that have been given a spare slot once.
+var _retried := {}
 const TIMEOUT := 90.0
 const FUSE := 1.0
 const FLASH_FUSE := 1.2
@@ -33,10 +40,16 @@ var _started := 0.0
 var _at := 0.0
 var _flash_point := Vector3.ZERO
 
+## This play's generation (Squad.begin_play).
+var _gen := 0
+
 
 func _enter() -> void:
+	_gen = (agent as Squad).begin_play()
 	_phase = "plan"
 	_team.clear()
+	_stacked_from = -1.0
+	_retried.clear()
 
 
 func _tick(_delta: float) -> Status:
@@ -56,6 +69,54 @@ func _tick(_delta: float) -> Status:
 		"plan":
 			return _plan(q, room, o, now)
 		"stack":
+			# The dead are freed at once in the arena: out of the team first.
+			_team.assign(_team.filter(func(m) -> bool: return is_instance_valid(m) and not m.is_dead()))
+			if _team.is_empty():
+				q.finish(SquadMsg.ReportKind.FAILED, "nobody left")
+				return FAILURE
+			# One that cannot reach its slot (BLOCKED) is left out of the entry:
+			# it covers from where it is, and the rest go in. Waiting on its
+			# REACHED waited out the stack's timeout.
+			# First, though, a slot it cannot reach may just be the wrong slot: a
+			# spare one (the stack has one per member it planned for) is tried.
+			for m in _team.duplicate():
+				if not q.replied(m, SquadMsg.StatusKind.BLOCKED) or _retried.has(m.get_instance_id()):
+					continue
+				var spare := _spare_slot(q)
+				if spare >= 0:
+					_retried[m.get_instance_id()] = true
+					_stack_move(q, m, spare)
+			for m in _team.duplicate():
+				if not q.replied(m, SquadMsg.StatusKind.BLOCKED):
+					continue
+				if _team.size() <= 2:
+					# Two would be one going in: not a clear. Say so now, not in a
+					# minute, so the commander can send it round another way.
+					q.finish(SquadMsg.ReportKind.FAILED, "could not stack")
+					return FAILURE
+				if _team.size() > 2:
+					_team.erase(m)
+					var hold := SquadMsg.Assignment.make(SquadMsg.Task.HOLD, m.pawn.feet())
+					var inn: Vector3 = _opening.inward
+					hold.yaw = atan2(-inn.x, -inn.z)
+					hold.role = "cover the door"
+					q.assign(m, hold)
+			# Nor wait on a straggler: two stacked and waiting STRAGGLE seconds,
+			# whoever is not there yet covers from where it is.
+			var there := _team.filter(func(m: Soldier) -> bool:
+				return q.replied(m, SquadMsg.StatusKind.REACHED))
+			if there.size() >= 2 and _team.size() > there.size():
+				if _stacked_from < 0.0:
+					_stacked_from = now
+				elif now - _stacked_from > STRAGGLE:
+					for m in _team.duplicate():
+						if not there.has(m):
+							_team.erase(m)
+							var cover := SquadMsg.Assignment.make(SquadMsg.Task.HOLD, m.pawn.feet())
+							var inw: Vector3 = _opening.inward
+							cover.yaw = atan2(-inw.x, -inw.z)
+							cover.role = "cover the door"
+							q.assign(m, cover)
 			if q.all_replied(SquadMsg.StatusKind.REACHED, _team):
 				q.events["stacked"] = now
 				if _breach:
@@ -131,7 +192,6 @@ func _plan(q: Squad, room: RoomTactics, o: SquadMsg.Order, now: float) -> Status
 			and s.ai_world.bricks_between(defender_eye,
 				RoomTactics.entry_point(door) + Vector3.UP * 1.1) == 0
 	_breach = door.is_empty() or watched or o.breach
-	print("[clear %d] contact %s in room %s eye %s watched %s" % [q.id, c.pos if c else null, room.contains(c.pos) if c else false, defender_eye, watched])
 	_opening = door
 	if _breach:
 		var avoid := [door.center] if not door.is_empty() else []
@@ -179,6 +239,20 @@ func _stack_move(q: Squad, so: Soldier, i: int) -> void:
 	q.assign(so, a)
 
 
+## A stack slot nobody in the team is heading for, or -1.
+func _spare_slot(q: Squad) -> int:
+	var taken := {}
+	for m in _team:
+		if m.assignment != null and m.assignment.task == SquadMsg.Task.MOVE:
+			for i in _slots.size():
+				if m.assignment.point.distance_to(_slots[i]) < 0.3:
+					taken[i] = true
+	for i in _slots.size():
+		if not taken.has(i):
+			return i
+	return -1
+
+
 func _lead() -> Soldier:
 	return _team[0]
 
@@ -217,4 +291,4 @@ func _enter_room(q: Squad, room: RoomTactics, now: float) -> void:
 func _exit() -> void:
 	var q := agent as Squad
 	if q != null:
-		q.clear_assignments()
+		q.clear_assignments(_gen)

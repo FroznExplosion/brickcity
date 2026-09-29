@@ -13,8 +13,12 @@ const TIMEOUT := 25.0
 var _sweeping := false
 var _started := 0.0
 
+## This play's generation (Squad.begin_play).
+var _gen := 0
+
 
 func _enter() -> void:
+	_gen = (agent as Squad).begin_play()
 	var q := agent as Squad
 	var s := q.services
 	_sweeping = false
@@ -72,4 +76,4 @@ func _tick(_delta: float) -> Status:
 func _exit() -> void:
 	var q := agent as Squad
 	if q != null:
-		q.clear_assignments()
+		q.clear_assignments(_gen)

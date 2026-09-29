@@ -34,8 +34,12 @@ var _arrived_at := -1.0
 ## Set by _place: the last crumb before the place it just worked out.
 var _place_index := 0
 
+## This play's generation (Squad.begin_play).
+var _gen := 0
+
 
 func _enter() -> void:
+	_gen = (agent as Squad).begin_play()
 	var q := agent as Squad
 	_started = q.services.now()
 	_arrived_at = -1.0
@@ -176,4 +180,4 @@ func _heading() -> Vector3:
 func _exit() -> void:
 	var q := agent as Squad
 	if q != null:
-		q.clear_assignments()
+		q.clear_assignments(_gen)
