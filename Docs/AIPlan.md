@@ -625,6 +625,69 @@ section drops it, on a floor over columns does not; an enemy mech breaches a bui
 infantry; the player's mech follows, holds, and attacks an aimed area. Loopback agrees on every
 break.
 
+**Done (2026-09-29).**
+- **Headroom** (AI.md 3.10, R6/R7): every `solve_stress` now also leaves, per block, how much
+  more mass could rest on it before a tension joint on its way down lets go — worked out in the
+  same pass order, forward: a joint fails when a block's load passes `capacity × contact`, so its
+  own room is the difference, and a block's headroom is the least of its own and its supporters'
+  (R7's worst case: the whole added mass reaches every joint below). `INF` where every way down is
+  compression — almost every block of a standing building. `BrickWorld.get_headroom`; −1 where
+  the chunk has not been solved (R6: rather than baking per recipe, the lookup asks for a solve —
+  the city already solves every building it promotes).
+- **Weight for everything that stands on bricks** (`scripts/ai/weight_tracker.gd`, A16): the host
+  looks up each bearer's foot block when it changes (`AIWorld.block_at`, new): headroom `INF` —
+  nothing; finite — a `LOAD` is logged (R5: it takes part in every later solve) and, if the
+  bearer is heavier, a solve; stepping off — `UNLOAD`. A person is 1.0 (a 2×4 brick is 2.4), a
+  mech 45. Owner ids are negative so they never meet a piece's. The player's pawn, every soldier
+  and every mech are bearers in the city.
+- **The fall rule** (`scripts/mech/fall_rule.gd`, AI.md 3.11, A12): energy in bricks of fall —
+  the height from the top of the fall, so a dash off a roof counts as a drop — against T = 6 (3 on
+  a floor with finite headroom); a break costs A = 8.5 and the rest is CARRIED, possibly negative,
+  to the next floor, judged on it plus the height fallen since. The break is a `SHEAR` with the
+  new `FLAG_WHOLE` (every block in the ball lets go on its own, not a peeled clump), over the
+  mech's whole footprint plus half a metre — a hole it does not fit through is a hole it lands on
+  the rim of. **R9:** building collision is off from the broken floor down to the next building
+  floor under it (posts and walls under a floor are where its feet were), pieces that come off
+  under it are collision exceptions, the rule ignores pieces when it looks for the floor, and the
+  pieces land quietly (`IslandManager.quiet_landings`). A building still in its shell is made
+  bricks when a mech lands on it (A20).
+- **The mech map** (R8): `AINav.set_agent(span, head, crouch, step, drop, safe_drop)` — the
+  navigation that was hard-coded to a two-stud figure takes any footprint; a mech's is 10 studs,
+  48 plates of head, 9 of step, 17 of drop (a drop past that is the fall rule's). The city keeps a
+  second AINav with those numbers, invalidated by everything that invalidates the figure's.
+- **Mechs with brains** (`scripts/mech/mech_brain.gd`, `mech_tree.gd`, `bt/`): the brain half of
+  the titan contract — it fills the same TitanIntents the pilot's keys do. It senses from the
+  cockpit, fires every tick at the nearest hostile it sees with a clear line (never through a
+  wall, never with a friend in the way), and walks the mech map, steering torso-local every tick
+  as the torso turns. **The enemy's mech:** in sight — hold range and shoot; known, behind bricks —
+  **breach**: a launcher (ordnance: a `BLAST` through `on_structure_hit`) into the first brick on
+  the line from its cockpit to them until it sees them (AI.md 6.4). **The player's mech:** on the
+  one button (`mech_command.gd`, A4) — tap FOLLOW ↔ HOLD, held while aiming ATTACK_AREA at the aim
+  ray's point; it fights back whatever the order. Its brain is off while piloted.
+- **City:** weight on the host; the fall rule on every mech; **Y** spawns an enemy mech 40 m
+  ahead; **F** on foot is the mech's button (out of the cockpit it holds where it stands).
+- Gates: **`tools/mech_fall_probe.gd` 4** — five-storey towers: from 5 bricks it lands (energy
+  5.0), from 6 it breaks the roof and stops (6.0 → 3.9), from 12 three floors (12.0 → 9.9 → 7.7 →
+  5.5); a client applying the log lets the same 44 blocks go. **`tools/pawn_weight_probe.gd` 6** —
+  headroom is the solve's (one unit under it holds, one over it breaks; a floor on a column
+  `INF`); a balcony left 0.5 of room by wreckage: a person on the floor over the column changes
+  nothing, a person on the balcony drops it and falls with it, an UNLOAD on the ground; the client
+  agrees. **`tools/mech_ai_probe.gd` 6** — the enemy's mech breaches a roofed building (one
+  rocket, 66 bricks) and drops both infantry in 8.8 s, no round through a wall, the client agrees
+  on 1,732 blocks; the player's mech follows a 22 m walk (6.1 m at the end, 8.8 m at most), holds
+  while the pilot walks 22 m off, and sent to an area behind a 6 m wall goes round it and drops the
+  enemy there. **City `-- --mechfall` 2** — twelve bricks onto a tower's roof: three floors, three
+  SHEARs, standing three storeys down; the log replays.
+- **Found on the way:** a mech's capsule is as wide as a floor plate, so it came to rest on the
+  posts under the plate it broke, then on the plate itself, then wedged in a hole narrower than
+  itself — each a case R9 had in words. And a roof has openings: the gate measures the surface
+  under the whole footprint, not under its middle.
+- **Not done:** the mech is not a `Pawn`, so soldiers do not shoot at it and aggro's mech row is a
+  stand-in until it is; the mech body is still greybox (the brick-built mech); weight is by the
+  one block under a bearer's middle (a mech spans many — allowed to be slightly stupid, A10); no
+  mech-rated storeys or deliberate drop-through yet; the enemy mech has no dash, evade or melee;
+  the one button is gated in the arena, not in the city.
+
 ### P8 — Many · L
 
 Tiers as HSM states; importance budget (max over players, R23); shared squad paths and flow fields;
