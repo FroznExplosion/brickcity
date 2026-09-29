@@ -1120,10 +1120,16 @@ func _exit_tree() -> void:
 		(col as BuildingCollision).free_bodies()
 	for rid in _shape_cache.values():
 		PhysicsServer3D.free_rid(rid)
-
-
-# ---------------------------------------------------------------------------
-# The city
+	# The furniture bodies too: the one Jolt body every run leaked at exit.
+	for rid in _room_bodies.values():
+		PhysicsServer3D.free_rid(rid)
+	_room_bodies.clear()
+	# And the player's controller and the mech pilot, which are only in the tree
+	# while possessing or piloting -- otherwise nothing frees them ("2 resources
+	# still in use at exit": their scripts).
+	for n in [_player, _pilot]:
+		if is_instance_valid(n) and not (n as Node).is_inside_tree():
+			(n as Node).free()
 # ---------------------------------------------------------------------------
 
 func _build_city() -> void:
@@ -1271,6 +1277,7 @@ func _grid_sites() -> Array[Dictionary]:
 			# as wide again back to the hillside.
 			@warning_ignore("integer_division")
 			var radius: int = maxi(int(shape.x), int(shape.z)) / 2 + 4
+			@warning_ignore("integer_division")
 			var site := {
 				"tile": Vector2i(floori(float(centre.x) / tile), floori(float(centre.y) / tile)),
 				"centre": centre,
@@ -4356,22 +4363,22 @@ func _run_wreck_pass() -> void:
 				Vector3.UP)
 		_mark_dirty(b.id)
 	var n0 := authority.commands.size()
-	var load: DamageLog.Entry = null
+	var landed: DamageLog.Entry = null
 	var waited := 0
-	while load == null and waited < 30 * 20:
+	while landed == null and waited < 30 * 20:
 		await get_tree().physics_frame
 		waited += 1
 		for i in range(n0, authority.commands.size()):
 			var e: DamageLog.Entry = authority.commands.entries[i]
 			if e.kind == DamageLog.Kind.LOAD and e.target == b.id:
-				load = e
+				landed = e
 				break
-	_gate_ok("the cut-free top comes to rest on the tower and loads it", load != null,
-			"%s" % ("%d brick(s) under %.1f each, after %d tick(s)" % [load.points.size(),
-			load.radius, waited] if load != null else "no LOAD in %d tick(s)" % waited))
-	if load != null:
-		_gate_ok("the load is on the building's solve",
-				world.get_load_owners(b.chunk).has(load.owner) and b.is_materialised(),
+	_gate_ok("the cut-free top comes to rest on the tower and loads it", landed != null,
+			"%s" % ("%d brick(s) under %.1f each, after %d tick(s)" % [landed.points.size(),
+			landed.radius, waited] if landed != null else "no LOAD in %d tick(s)" % waited))
+	if landed != null:
+		_gate_ok("the landed is on the building's solve",
+				world.get_load_owners(b.chunk).has(landed.owner) and b.is_materialised(),
 				"owners %s" % [world.get_load_owners(b.chunk)])
 	await _frames(30)
 	await _save("city_wreck")
@@ -6114,6 +6121,7 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 			meshed_coarse += 1
 		else:
 			detailed += 1
+	@warning_ignore("integer_division")
 	print("[bench]   %-16s %10d tris  %5d calls  %5.1f ms  (%d banded shells, %d coarse meshes, %d far boxes)" % [
 		label,
 		RenderingServer.get_rendering_info(

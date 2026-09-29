@@ -196,17 +196,17 @@ func disable(ids: PackedInt32Array) -> void:
 		if not any:
 			continue
 		var body := bodies[si]
-		var space := PhysicsServer3D.body_get_space(body)
+		var was_space := PhysicsServer3D.body_get_space(body)
 		# Lifting the body out of the space first: each shape call costs time
 		# proportional to the body's shape count, so in a loop it is quadratic.
-		if space.is_valid():
+		if was_space.is_valid():
 			PhysicsServer3D.body_set_space(body, RID())
 		for bid in ids:
 			if map.has(bid):
 				for shape_index in map[bid]:
 					PhysicsServer3D.body_set_shape_disabled(body, shape_index, true)
-		if space.is_valid():
-			PhysicsServer3D.body_set_space(body, space)
+		if was_space.is_valid():
+			PhysicsServer3D.body_set_space(body, was_space)
 
 
 ## Merge again up to `budget` of the bands that have lost bricks since they

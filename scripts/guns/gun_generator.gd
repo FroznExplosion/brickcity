@@ -33,6 +33,8 @@ const NAME_NOUNS: Array[String] = [
 
 
 class Result:
+	# A public field (saves, the wire, every caller): the name stays.
+	@warning_ignore("shadowed_global_identifier")
 	var seed: int
 	var rarity: int
 	var recipe: Dictionary                       # Slot -> GunPartDef
