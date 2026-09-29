@@ -161,6 +161,10 @@ func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 	so.pawn.intents.crouch = false
 	so.masked_move = a.masked
 	so.state = "bound" if a.masked else "move"
+	# A bounding mover runs; the covering half does the shooting. (Its own rounds
+	# round the enemy would be the suppression that lets it go.)
+	if a.masked:
+		so.fire_ok = false
 	var r := so.move_to(to, a.run)
 	if r == 1 or not _far(so, to, ARRIVED):
 		_arrived_at = now

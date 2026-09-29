@@ -12,6 +12,7 @@ extends Node3D
 ##       LMB fire · WHEEL blast size · X wider blast
 ##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
 ##       F5 save · F9 load · ESC mouse
+##       V on foot · K a soldier · U a squad (advances on you when on foot)
 ## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
@@ -800,6 +801,12 @@ var _encounters: Array[Encounter] = []
 ## nav and scheduler; an agent's missed rounds go through the authority.
 var ai_services: AIServices
 var soldiers: Array[Soldier] = []
+## Squads (AIPlan P6): U spawns one; the --squad gate clears a room with one.
+var squads: Array[Squad] = []
+## The player's callouts and aggro meter, made the first time a pawn is entered.
+var _callout_hud: CalloutHud
+var _aggro_layer: CanvasLayer
+var _aggro_meter: AggroMeter
 ## Pieces hurt the pawns they fall on and push out the ones inside them
 ## (Docs/Collapse.md 4.4).
 var crush := Crush.new()
@@ -825,6 +832,7 @@ var _soldier_mode := false
 var _arena_mode := false
 var arena: WaveDirector
 var _wreck_mode := false
+var _squad_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -915,6 +923,7 @@ func _ready() -> void:
 	_soldier_mode = "--soldier" in args
 	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
+	_squad_mode = "--squad" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -1001,6 +1010,9 @@ func _ready() -> void:
 	ai_services.ai_nav = ai_nav
 	ai_services.sched = ai_sched
 	ai_services.rng.seed = 0x50DD1E4
+	# A squad's breaching charge is a blast like any other: asked for, queued,
+	# committed by the host, replayed by clients.
+	ai_services.on_breach = _blast
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
 	ai_sched.set_thresholds(8.0, 4.0)
@@ -1110,6 +1122,8 @@ func _ready() -> void:
 		_run_soldier_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
+	elif _squad_mode:
+		_run_squad_pass()
 	elif _arena_mode:
 		_start_arena("--gate" in args)
 	elif _stress_mode:
@@ -3522,6 +3536,7 @@ func _enter_pawn(feet: Vector3) -> void:
 	# earn aggro (AIServices).
 	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	_player_hud()
 	print("[city] playing: pawn at %v" % feet)
 
 
@@ -3535,6 +3550,30 @@ func _leave_pawn() -> void:
 	_player_pawn = null
 	_gun.set_trigger(false)
 	_gun.exclude = [] as Array[RID]
+	if _aggro_layer != null:
+		_aggro_layer.visible = false
+
+
+## What the player is shown of the fight (AI.md 6.5, 8): the callouts it can hear
+## -- markers over the speakers it can see, over friendlies always -- and the
+## enemy's aggro meter. Heard from the camera, which is the player's eye.
+func _player_hud() -> void:
+	if _callout_hud == null:
+		var l := ai_services.callouts.listen(camera, 0, _player_pawn)
+		_callout_hud = CalloutHud.new()
+		_callout_hud.name = "Callouts"
+		_callout_hud.setup(ai_services.callouts, l)
+		add_child(_callout_hud)
+		_aggro_layer = CanvasLayer.new()
+		_aggro_layer.name = "Aggro"
+		_aggro_layer.layer = 5
+		_aggro_meter = AggroMeter.new()
+		_aggro_meter.table = ai_services.aggro_of(1)
+		_aggro_meter.position = Vector2(20.0, 180.0)
+		_aggro_layer.add_child(_aggro_meter)
+		add_child(_aggro_layer)
+	_callout_hud.listener.pawn = _player_pawn
+	_aggro_layer.visible = true
 
 
 ## Climb into the mech -- spawning one on the ground ahead of the camera if there
@@ -4334,6 +4373,118 @@ func _spawn_soldier(feet: Vector3) -> Soldier:
 	soldiers.append(so)
 	print("[city] soldier at %v" % feet)
 	return so
+
+
+## A squad of four at `at`, on the other side (U, 30 m ahead of the camera). With
+## the player on foot, it is ordered to advance on the player; otherwise it
+## fights as its members find things.
+func _spawn_squad(at: Vector3) -> Squad:
+	var members: Array[Soldier] = []
+	for i in 4:
+		members.append(_spawn_soldier(ai_nav.snap(at + Vector3((i % 2) * 1.4 - 0.7, 0.0,
+				(i / 2) * 1.4 - 0.7))))
+	var q := Squad.make(ai_services, self, members, 1)
+	squads.append(q)
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+		o.point = _player_pawn.feet()
+		for m in members:
+			m.knowledge().heard(_player_pawn, _player_pawn.feet(), ai_services.now())
+		q.give(o)
+	print("[city] squad %d at %v" % [q.id, at])
+	return q
+
+
+## The squad gate (AIPlan P6): a tower is sealed at street level, so a squad told
+## to clear a ground-floor room blows its own door (mouse-holing, AI.md 6.2)
+## through the authority, stacks either side of it, flashes the room, goes in
+## crisscross, drops whoever is in there, and reports the room clear. The blast
+## is in the log, so the twins replay the hole.
+func _run_squad_pass() -> void:
+	print("[squad] a squad clears a room in a sealed tower")
+	var b := registry.get_building(0)
+	for c in registry.buildings:
+		if c.recipe.courses >= 24 and not c.is_build():
+			b = c
+			break
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5, 14.0, -16.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 1.0, 2.0), Vector3.UP)
+	var enc := start_encounter(_world_box(b).grow(6.0))
+	var guard := 0
+	while not enc.is_ready() and guard < 300:
+		await _frames(1)
+		guard += 1
+	await _frames(20)
+	# A ground-storey room against the street wall (-Z).
+	var cell := BrickWorld.get_cell_size()
+	var pick: Room = null
+	for r in registry.rooms_of(b.id):
+		if r.lo.z > TowerRecipe.WALL_THICK + RoomManifest.WALL_MARGIN:
+			continue
+		if pick == null or r.lo.y < pick.lo.y or (r.lo.y == pick.lo.y and r.size.x > pick.size.x):
+			pick = r
+	_gate_ok("the tower has a ground-storey room on the street", pick != null)
+	if pick == null:
+		get_tree().quit(1)
+		return
+	var box := AABB(Vector3(pick.lo) * cell, Vector3(pick.size) * cell)
+	var room := RoomTactics.make(b.xform, box, pick.id)
+	# Somebody in there, whom nobody has seen.
+	var inside := ai_nav.snap(b.xform * (box.position + box.size * Vector3(0.5, 0.0, 0.7)))
+	var defender := Pawn.spawn(self, inside, 0, true, 100.0)
+	Soldier._greybox(defender, 0)
+	ai_services.add_pawn(defender)
+	var street := _on_ground(b.xform * Vector3(box.get_center().x, 0.0, -9.0))
+	var q := _spawn_squad(street)
+	await _frames(10)
+	var n0 := authority.commands.size()
+	var o := SquadMsg.Order.make(SquadMsg.OrderKind.CLEAR_ROOM)
+	o.room = room
+	o.wall_thick = TowerRecipe.WALL_THICK * STUD
+	var oid := q.give(o)
+	var t0 := Engine.get_physics_frames()
+	var inside_n := {}
+	var done: SquadMsg.Report = null
+	while done == null and Engine.get_physics_frames() - t0 < 30 * 90:
+		await get_tree().physics_frame
+		for m in q.members:
+			if room.contains(m.pawn.feet()):
+				inside_n[m.get_instance_id()] = true
+		for r in q.reports:
+			if r.order_id == oid and r.kind != SquadMsg.ReportKind.ACCEPTED:
+				done = r
+	var secs := float(Engine.get_physics_frames() - t0) / 30.0
+	var blasts := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.BLAST:
+			blasts += 1
+	print("[squad] events %s" % [q.events.keys()])
+	_gate_ok("no door, so it makes one: a BLAST through the authority",
+			bool(q.events.get("breach", false)) and q.events.has("breached") and blasts >= 1,
+			"%d BLAST(s)" % blasts)
+	_gate_ok("it stacks, flashes the room and goes in", q.events.has("stacked")
+			and q.events.has("flashed") and inside_n.size() >= 3,
+			"%d of 4 went in" % inside_n.size())
+	_gate_ok("the room is cleared and the order reported DONE",
+			done != null and done.kind == SquadMsg.ReportKind.DONE and defender.health.is_dead(),
+			"%s in %.1f s; defender %s" % [done, secs, "down" if defender.health.is_dead() else "UP"])
+	var said := {}
+	for l in ai_services.callouts.said:
+		said[l[2]] = true
+	print("[squad] said %s" % [said.keys()])
+	# The picture: the hole it made, from the street.
+	var hole: Vector3 = q.events.get("opening", street)
+	var back := street - hole
+	back.y = 0.0
+	camera.position = hole + back.normalized() * 7.0 + Vector3.UP * 2.5
+	camera.look_at(hole + Vector3.UP * 0.9, Vector3.UP)
+	await _frames(30)
+	await _save("city_squad")
+	_check_log_replays()
+	print("[squad] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## The vertical slice (AIPlan P4): a soldier in the city, against the player's
@@ -6144,7 +6295,7 @@ func _update_hud() -> void:
 				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload" + (" · H disasters (shift: end)" if disasters != null else ""),
+		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · N respawn"
@@ -6323,6 +6474,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_K:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 20.0
 			_spawn_soldier(ai_nav.snap(_on_ground(ahead)))
+		KEY_U:
+			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
+			_spawn_squad(_on_ground(ahead))
 		KEY_M:
 			if _pilot.is_piloting():
 				_leave_mech()

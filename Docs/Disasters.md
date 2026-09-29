@@ -373,26 +373,29 @@ the city, "a building catches": peak 15 cells, 49 caught, out in 43 s, 487 CHIPs
 
 ## 6. Deferred — what else fits, and what each is waiting on
 
-| Disaster | Why it fits | Waiting on |
+The game's terrain is a **heightfield** and stays one: nothing that needs destructible terrain
+is planned. That drops the **sinkhole** and **meteor craters** in the ground (a meteor still
+craters buildings). Deferred by decision (2026-09-28), not blocked:
+
+| Disaster | Why it fits | What it would need |
 |---|---|---|
-| **Earthquake** (v1 built, §10) | The best fit of all: shaking loads joints in tension, towers snap at a course and topple — the brick-film look ([BrickFailure](BrickFailure.md)) | Sideways load in `solve_stress` (C++): an acceleration vector per solve, not just gravity. Plus a ground-motion curve, fissures, and camera shake |
-| **Sinkhole** | Ground opens, a whole building tips into it | Volumetric terrain destruction exists (Terrain §17.10); needs the heightfield city on, and a spreading carve pattern. Cheapest of the deferred ones |
-| **Hurricane / wind storm** | A tornado without a funnel: a whole city leaning | The same sideways-load work as the earthquake |
-| **Flood / tsunami** | Water through the lower storeys, floating debris | Water area: a moving wave front and a water level over the city; buoyancy for pieces; sideways push |
-| **Acid rain** | Printed-city twist: dissolves PLA, spares metal and stone | The `ACID` element exists for actors; bricks need a slow chip over roofs by material. Close to fire's cells — cheap after fire |
+| **Hurricane / wind storm** | A tornado without a funnel: a whole city leaning | Little now: the sideways load exists (§17). A city-wide wind field over it, rain, and a cap like the quake's |
+| **Flood / tsunami** | Water through the lower storeys, floating debris | A moving water level over the city; buoyancy for pieces; the sideways load for the push |
 | **Blizzard / freeze** | Frozen bricks turn brittle and shatter | A per-building toughness multiplier while frozen; the `ICE` look exists |
-| **Volcano / lava** | Lava melts everything it reaches | Lava flow over terrain, a heat source for fire; large |
-| **Landslide** | Hillside comes down onto the city | Terrain pieces as islands at scale; heightfield city |
+| **Volcano / lava** | Lava melts everything it reaches | Lava flow over the heightfield, a heat source for fire; large |
+| **Landslide** | Hillside comes down onto the city | Terrain pieces as islands at scale — against the heightfield rule; would have to be rubble thrown down a slope instead |
 
-And deferred parts of the four built now:
+Built since this table was first written: the earthquake's sideways load (§17), acid rain
+(§14), char and burning debris (§15), wind pushing standing buildings (§17), soldiers
+sheltering from storms, meteors and the tornado, weather on the AI's aim (§13), and co-op (§16).
 
-* **Char as a committed command** (`SCORCH`) and burning pieces (§5.4).
+Still deferred:
+
 * **Wet bricks** in rain (a shader parameter, city-wide).
-* **Wind pushing standing buildings** (§4) — after the sideways-load solver.
-* **AI, beyond getting out of the way** (§9): taking shelter from a storm indoors, and
-  choosing to fight near a fire because its smoke hides them.
+* **Fire in co-op:** a client sees what fire does to bricks (the host's commands) but not its
+  flames; the fire service would have to send its cells.
+* **AI choosing to fight near a fire** because its smoke hides them.
 * **Scheduling:** disasters as match events or objectives rather than a key.
-* **Multiplayer:** the host rolls and sends `(kind, seed, start tick)`; clients play the visuals.
 
 ---
 
@@ -418,7 +421,7 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 
 `tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
 `-- --also-big` to also check the big city has no director, `-- --disaster-shot` windowed for
-captures, `-- --only=meteor,fire,lightning,pawn,soldiers,tornado` for sections) loads the small city headless and, for each kind with a fixed seed:
+captures, `-- --only=meteor,fire,lightning,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop` for sections) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
 tick's damage time, and asserts the per-stage gate above. `--shot` captures a frame at peak for
 each, so a change to the look is reviewable. Run it with the probes the city already has
@@ -489,15 +492,14 @@ collapsing together would be the worst tick the game has. So the design splits i
   handled as any topple is. If it still stands after 3 s the band is cut to 80%; after 7 s it
   counts as survived.
 
-**Tried first and dropped:** cut the tower through at a storey's slab (SEVER, as the wreck gate
-does) and tip the freed top over. Tops of 1,100 bricks would not turn — 0.00 rad/s every tick
-under any push, about their centre or about their bottom edge — while an 852-brick one went
-over. Freeing the upper rooms' furniture bodies did not change it. The cause was not found;
-undermining and letting the city's own rules decide worked at once, so that is what shipped.
+**Tried first and dropped (then revived in §17):** cut the tower through at a storey's slab
+(SEVER) and tip the freed top over. Tops of 1,100 bricks would not turn — 0.00 rad/s under any
+push. Undermining worked at once, so that is what shipped then.
 
-**Not the real thing.** A true quake is a sideways load in the stress solver, and buildings would
-fail where their joints do. That is still the C++ work in §6; this gets the look and, above all,
-the cost under control first.
+**Superseded for near buildings by §17:** a building whose bricks are in now fails where its
+joints do, from a sideways load in the solver. The rolled soft storey above is still how a
+building out of reach fails. (The tops that would not turn: the staircase threading through the
+cut — [Collapse](Collapse.md); `CityScene._with_stairs` takes the stairs with the piece now.)
 
 Probe (Extreme, 1 at once, 3 in all): **3 failures, never more than 1 falling at a time, 7 held
 back by the total cap; all 3 toppled (32–42°, leaning on their stumps), 69 BLAST + 3 TOPPLE
@@ -511,7 +513,7 @@ at a time, worst ticks 38–60 ms — the collapses are the cost, which is why t
 ## 11. The menu and intensity (D6)
 
 `H` opens a menu (centre of the screen, mouse freed; closing gives the mouse back to the camera
-only if it had it): **Disaster** (Random or any of the five), **Intensity** (a slider 0.25–3 that
+only if it had it): **Disaster** (Random or any of the six), **Intensity** (a slider 0.25–3 that
 snaps to Low 0.5 / Medium 1 / High 1.6 / Extreme 2.5), and the earthquake's two caps (greyed
 unless Random or Earthquake is chosen). **Start** or Enter runs it; Stop ends the running one;
 Esc or H closes. The choice is remembered. The banner shows the intensity, and for a quake
@@ -525,7 +527,8 @@ Intensity at 1 is exactly what each disaster was before; at other values:
 | Lightning storm | strokes come i× as often, strike radius × √i, shock × i, fire chance × i (≤ 90%) |
 | Building fire | sparks × i, spread × i while it lasts |
 | Tornado | §4.2 |
-| Earthquake | risk × i, length 14 + 6i s, shaking and shedding × i |
+| Earthquake | ground acceleration × i (§17), risk × i for far buildings, length 14 + 6i s, shaking and shedding × i |
+| Acid rain | drops × i, wear × i, burn × i |
 
 A seed at intensity 1 is the same disaster it always was; at another intensity it is its own,
 still deterministic, disaster — more meteors draw more numbers.
@@ -571,3 +574,130 @@ and it falls, while one frozen on the ground is left alone; a held piece does no
 hold runs out. After a tornado the disaster probe finds **0 of 31 settled pieces floating** — with
 `hold_awake` in, the tornado never got as far as a refused settle or a watchdog wake in that run,
 so the direct evidence for (1) and (3) is `float_probe`'s.
+
+---
+
+## 13. Weather on the lens, and on the AI (2026-09-28)
+
+**The lens.** `shaders/disaster_screen.gdshader`, a full-screen overlay under the HUD and over the
+3D view: rain streaks (three layers, slanted) and a dust haze thick at the edges and low down.
+`ctx.set_screen(rain, dust, dust_colour, rain_colour)`; both dials at 0 draw nothing. The
+lightning storm rains on it, the meteor shower and tornado raise dust (the tornado's thicker the
+nearer the funnel), the earthquake a little dust with the shaking, acid rain rains green.
+
+**The AI.** `ctx.set_weather(amount, sight, aim, intensity)` sets `AIServices.sight_mul` and
+`aim_mul`: soldiers see somewhat less (never below 60%) and aim a good deal worse — a storm is
+0.85 sight / 2.2x spread, the quake 1.0 / 3x (nobody shoots straight on moving ground), acid rain
+0.9 / 1.3x. `ctx.set_storm(true)` sends soldiers with nothing to fight under a roof (`BTShelter`:
+the nearest standable spot with something solid overhead). Meteor showers and the tornado set it
+too. All cleared at DONE.
+
+---
+
+## 14. Acid rain
+
+A printed city's own weather: it eats filament. `acid_rain.gd`, 40 s active.
+
+* Every 0.3 s, 5 × intensity drops round the player (55 m); each is followed straight down to the
+  first thing it meets and wears the brick there by **how much its material minds acid** — PLA 1.0,
+  ABS 0.7, PETG 0.5, TPU 0.4, nylon 0.3, wood 0.2, metal and stone 0. A CHIP of 60 hp × that ×
+  intensity: wear through the authority, never blasts.
+* **Rain pools.** Most drops (65%) land in one of up to 24 puddles earlier drops found on a roof,
+  so a roof thins in places and then holes, rather than every brick losing a little.
+* Anyone with no roof over them loses 1 hp a second (40 over the storm at intensity 1 — the first
+  number, 2 per round, killed a soldier in the open outright). Soldiers shelter; aim 1.3x worse.
+
+Probe: 670 drops, 284 wore a brick (284 CHIPs), 144 fell on metal or stone and did nothing; a
+soldier held in the open went 100 → 60; sight 0.90, aim 1.30; the lens streaks; all clear after.
+
+Also found: `GunPlaceholderParts._pack` never freed the template node it packed — 101 orphan
+MeshInstance3Ds leaked at exit whenever a soldier was armed.
+
+---
+
+## 15. Char, and burning debris
+
+**Char is a command.** `BrickWorld.scorch_hit(chunk, point, radius)` gives every brick in a ball
+its material's **darkest colour** (black filament, the darkest wood, metal or stone variant) and
+marks it `scorched`. The city commits it as **`DamageLog.Kind.SCORCH`** — colour only, nothing dies,
+no joint changes — replayed like a CHIP, so every machine sees the same black walls. The registry
+keeps the scorched ids (`Building.scorched`) across a building being handed back, as it keeps
+wear. A split copies the colour, so a piece off a charred wall is charred.
+
+* Fire chars a cell's walls once, when its heat first passes 0.5 (radius 1.5 m).
+* A meteor chars 1 m past its crater, a lightning stroke 0.7 m past its hole.
+* Only a building whose bricks are in: a colour is not worth materialising a building for.
+
+**A colour is in the vertices**, which the city's usual index patch never touches, so a charred
+building gets a full band rebuild, gathered over `RECOLOUR_TICKS` (15) so a fire's many scorches
+are one rebuild. Finding this also found a latent stall: a band build that met a dropped bake
+waited on `has_bake`, which never adopts a finished async bake — it waited forever. It asks
+`bake_ready` now.
+
+**Burning debris** (`burning_debris.gd`): every 0.5 s, any moving piece whose box comes within
+2.5 m of a burning cell catches — by its box, since a storey coming away has its centre metres
+from the fire at its corner. Flames ride it for 12 s (counted on the physics tick), up to 8 at
+once. Where it comes to rest it lights what it lies against (`ignite`, which does nothing where
+nothing burns), and it burns anyone within 1.8 m.
+
+Probe: 5–7 bricks blacken per 1 m scorch, as one SCORCH; again changes nothing; the record keeps
+them; a new fire chars within a tick of taking hold; with the storey under a burning wall cut
+through, the falling pieces caught (8 in all), burned out after 12 s, and lit 3 fires where they
+landed.
+
+---
+
+## 16. Co-op
+
+The host decides, clients watch — the same rule as the world authority, and like it
+transport-free: the owner fills in the Callables.
+
+* **Host:** `start()` rolls, then sends every `add_client()`
+  `["start", kind, seed, start tick, intensity, options]`; `stop()` sends `["stop", tick]`. A
+  client added mid-disaster is sent the running one's start at once.
+* **Client** (`set_client(send)`): `receive(event)` runs the same disaster from the same seed and
+  **catches up** to the host's tick by ticking it (up to 120 s' worth). Its context does not decide
+  (`DisasterContext.decides`): blast, chip, scorch, shear, sever, ignite and pawn damage do nothing
+  there. What the disaster does to bricks and people arrives as the host's commands like
+  everything else; what the client plays is the sky, the rain, the meteors in the air, the funnel.
+* A client's menu, `H` and `Shift+H` send `["request", kind, intensity, options]` /
+  `["request_stop"]`; the host starts or stops it and tells everyone.
+
+Probe (a second director in the same city as the client, the wire two arrays): joining 9 s late,
+the client's shower is in the same phase at the same time with the same rng state; a late client
+is sent the running one; the client's context changes nothing; stop reaches it; its request
+starts the host's lightning at the intensity asked, and its stop request stops both.
+
+---
+
+## 17. The sideways load: a true earthquake, and wind on buildings
+
+**`BrickWorld.lateral_check(chunk, accel_g, dir)`** — a pure query. At every course boundary above
+the foundation it weighs what is above: the inertial force a·W at its centre of mass tries to
+overturn it about the **toe** (the last contact on the far side), and two things hold it —
+gravity (W times how far the centre of mass is behind the toe) and **the studs across the
+boundary**, each carrying `tension_per_stud` at its own lever from the toe. A block that runs
+through a boundary instead of meeting at it holds like 4 studs a cell. It returns the worst
+boundary's demand / capacity, and where it is. ~0.1 ms for a 2,800-brick tower.
+
+The small city at 1 g (demand / capacity, worst direction): 8.5 m blocks 0.3, 11–14 m 0.5–0.7,
+19 m 1.1, 27 m 1.2–1.8, 35 m 2.5 — all failing at the ground storey's first course boundary
+(1.8 m): a soft storey found by the numbers rather than assumed.
+
+**The earthquake** puts **PGA 0.45 g × intensity × shaking** to every building within 120 m whose
+bricks are in, once a second, along the quake's seeded axis both ways. Medium takes the 35 m
+towers, High the 27 m ones, Extreme the 19 m ones; a tower already shot through fails sooner
+because its studs are gone. A failure is cut at that boundary — **`SEVER` with `FLAG_SEAM`**
+(`BrickWorld.sever_seams`: both sides stay whole, not a band of loose brick) — and the freed top is
+tipped over its toe (`Earthquake.tip`) for 4 s. The caps are unchanged. A building out of reach,
+or one whose bricks went while it waited for a slot, fails the old way (§10).
+
+**The tornado** puts up to **0.45 g × intensity** at the funnel wall, falling to 0 at 0.6 of its
+lift radius, along the swirl (snapped to the building's grid), once a second; a building that
+gives is cut and tipped downwind, up to 3 × intensity in a tornado.
+
+Probe: at 0.6 g the tallest tower fails (1.48) and the squattest holds (0.17), at 1.8 m; Extreme
+quake, 1 at once, 3 in all — all 3 cut by the solver (≈290 checks), one SEVER seam each, all 3
+over (22–133°); the tornado pushed 1 over, one seam. Full probe 115 / 115. Run alone the quake
+passed every time; one earlier full run (before §17) saw a top come to rest at 8° — physics, with
+the city already wrecked round it.
