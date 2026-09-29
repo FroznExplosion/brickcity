@@ -624,6 +624,7 @@ func run_gate() -> void:
 	# A floor shot out from under a spot: the spot is refused.
 	var spots := survey.floors_of(focus)
 	if not spots.is_empty():
+		@warning_ignore("integer_division")
 		var f: Vector3 = spots[spots.size() / 2]
 		var before := survey.check(f, focus, null, [])
 		city._blast(f - Vector3.UP * 0.1, 1.2)

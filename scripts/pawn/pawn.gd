@@ -84,7 +84,7 @@ var last_fall := 0.0
 
 ## A standing pawn with its feet at `feet`, under `parent`. Returns the pawn;
 ## its body is `pawn.body`.
-static func spawn(parent: Node, feet: Vector3, p_team := 0, with_health := true,
+static func spawn(parent: Node, at_feet: Vector3, p_team := 0, with_health := true,
 		max_health := 100.0) -> Pawn:
 	var b := CharacterBody3D.new()
 	b.name = "PawnBody"
@@ -118,7 +118,7 @@ static func spawn(parent: Node, feet: Vector3, p_team := 0, with_health := true,
 		b.add_child(pool)
 		p.health = pool
 	parent.add_child(b)
-	p.place(feet)
+	p.place(at_feet)
 	return p
 
 
@@ -134,7 +134,7 @@ func _ready() -> void:
 
 ## Put the feet here, still. A teleport: interpolation is told so, or it would
 ## blend the body in from wherever it was.
-func place(feet: Vector3) -> void:
+func place(at_feet: Vector3) -> void:
 	if body == null:
 		body = get_parent() as CharacterBody3D
 	# Put here, not fallen here: the drop to the first floor below is free.
@@ -142,9 +142,9 @@ func place(feet: Vector3) -> void:
 	# Before the tree is running (a probe's _init) there is no global transform
 	# yet; the parent is then taken to sit at the origin.
 	if body.is_inside_tree():
-		body.global_position = feet + Vector3.UP * _height * 0.5
+		body.global_position = at_feet + Vector3.UP * _height * 0.5
 	else:
-		body.position = feet + Vector3.UP * _height * 0.5
+		body.position = at_feet + Vector3.UP * _height * 0.5
 	body.velocity = Vector3.ZERO
 	body.reset_physics_interpolation()
 
