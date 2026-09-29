@@ -2615,11 +2615,11 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 			stairs[bid] = true
 			if leaving.has(bid) or gone.has(bid):
 				continue
-			# Wholly inside the section's height: a flight piece is most of a
-			# storey tall, and one reaching below the section serves a floor
-			# that is still there.
+			# Any stair block reaching up into the section: one left standing
+			# with its top in the section's shaft is a rod through it. (Only
+			# taken when nothing stands round the shaft above -- below.)
 			var sb := world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
-			if sb.position.y >= box.position.y - 0.1 and sb.end.y <= box.end.y + 0.1:
+			if sb.end.y > box.position.y + 0.3 and sb.position.y < box.end.y:
 				candidates.append(bid)
 	if candidates.is_empty():
 		return group
@@ -2627,8 +2627,13 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 	# once it has gone? If so the stairs serve floors that are still there and
 	# stay, all of them. Only a shaft left with nothing round it -- the column a
 	# section would hang on -- goes with the section.
+	# From half a storey above the section's bottom: below that is the stump's
+	# own top course, which the section sat on -- not a floor beside the stairs.
+	# (It held every cut-free top on its staircase: Docs/Collapse.md 6.)
 	var shaft := world.get_blocks_box(b.chunk, candidates).grow(1.2)
-	shaft.position.y = box.position.y
+	var from_y := box.position.y + (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M * 0.5
+	shaft = AABB(Vector3(shaft.position.x, from_y, shaft.position.z),
+			Vector3(shaft.size.x, maxf(box.end.y + 1.0 - from_y, 0.1), shaft.size.z))
 	for bx in world.get_block_boxes(b.chunk):
 		var d: Dictionary = bx
 		var bid := int(d.block)
