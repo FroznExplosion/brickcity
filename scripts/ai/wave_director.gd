@@ -748,11 +748,16 @@ func run_gate() -> void:
 		# that up rather than call).
 		caller.help_point = Vector3.INF
 		caller._called_help_at = -INF
-		var said0 := int(voice.said.get("stuck", 0))
+		# Near enough to hear it, and the call judged by what it did -- the
+		# display rate-limits repeated lines, so a count of shown lines is not.
+		buddy.pawn.place(city.ai_nav.snap(caller.pawn.feet() + Vector3(3.0, 0.0, 0.0)))
+		var at := caller.pawn.feet()
+		var t_call := _now()
 		caller.call_for_help()
 		ok.call("a stuck soldier shouts for help and a buddy comes",
-				int(voice.said.get("stuck", 0)) > said0 and buddy.help_point.distance_to(caller.pawn.feet()) < 0.5,
-				"said %s, help at %v" % [voice.said, buddy.help_point])
+				is_equal_approx(caller._called_help_at, t_call) and buddy.help_point.distance_to(at) < 0.5,
+				"called at %.2f (now %.2f), help at %v, caller at %v" % [caller._called_help_at, t_call,
+				buddy.help_point, at])
 	ok.call("the player hears what they say", not voice.shown.is_empty(), "said %s" % [voice.said])
 
 	# The player goes down and comes back in the street.

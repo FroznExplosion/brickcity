@@ -24,6 +24,9 @@ class Contact:
 
 
 var contacts := {}   # pawn instance id (or -1 for an unknown noise) -> Contact
+## The side's aggro table (AI.md 8), when it has one: the contact to fight is the
+## one holding the side's attention, not merely the freshest.
+var aggro: AggroTable
 
 
 func saw(pawn: Pawn, pos: Vector3, now: float, seer: Object = null) -> void:
@@ -62,14 +65,21 @@ func heard(pawn: Pawn, pos: Vector3, now: float) -> void:
 	c.heard_at = now
 
 
-## The contact to fight: the freshest.
+## The contact to fight. The one the side's aggro is on, if it is fresh (known
+## within FRESH seconds); otherwise the freshest.
+const FRESH := 2.5
+
+
 func best(now: float) -> Contact:
 	var out: Contact = null
+	var focus: Object = aggro.focus() if aggro != null else null
 	for k in contacts:
 		var c: Contact = contacts[k]
 		if c.pawn != null and (not is_instance_valid(c.pawn) or c.pawn.health == null
 				or c.pawn.health.is_dead()):
 			continue
+		if focus != null and c.pawn == focus and c.age(now) <= FRESH:
+			return c
 		if out == null or c.age(now) < out.age(now):
 			out = c
 	return out

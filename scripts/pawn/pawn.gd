@@ -66,6 +66,10 @@ var eye: Node3D
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
 var _auto_crouched := false
+## Asking to crouch does nothing (Docs/AI.md A21: no soldier crouches). Ducking
+## under something too low to stand under still happens: that is the body, not
+## a choice.
+var no_crouch := false
 ## A push from outside -- wind, for now (Docs/Disasters.md, the tornado). Added
 ## to the walk each step and bled off, so whoever sets it sets it every tick
 ## they are pushing. Its y lifts: the body rises at least that fast.
@@ -212,7 +216,7 @@ func step(delta: float) -> void:
 	# walking at a beam ducks under it instead of stopping dead in front of it.
 	var probe := wish * WALK_SPEED * delta
 	_auto_crouched = false
-	if intents.crouch:
+	if intents.crouch and not no_crouch:
 		_set_height(CROUCH_HEIGHT)
 	elif _fits(BODY_HEIGHT, probe):
 		_set_height(BODY_HEIGHT)
