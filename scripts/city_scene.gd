@@ -13,6 +13,8 @@ extends Node3D
 ##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
 ##       F5 save · F9 load · ESC mouse
 ##       V on foot · K a soldier · U a squad (advances on you when on foot)
+##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
+##       SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload
 ## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
@@ -772,6 +774,13 @@ var _combat_rng := RandomNumberGenerator.new()
 var _player := PlayerController.new()
 var _player_pawn: Pawn
 var _play_mode := false
+## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
+## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
+var _view: PlayerView
+var _fps_hud: PlayerHud
+var _stats_were_visible := false
+## Hitmarkers and numbers outside the arena, which has its own.
+var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
@@ -3392,9 +3401,12 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	if _gun.gun != null:
 		_gun.gun.queue_free()
-	camera.add_child(gi)
-	gi.position = Vector3(0.22, -0.2, -0.45)
 	_gun.equip(gi)
+	if _view != null:
+		_view.hold(gi)
+	else:
+		camera.add_child(gi)
+		gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
@@ -3554,6 +3566,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		camera.set_walking(false)
 	if _player_pawn == null or not is_instance_valid(_player_pawn):
 		_player_pawn = Pawn.spawn(self, feet, 0)
+		_player_pawn.moves = PawnMoves.new(_player_pawn)
 	else:
 		_player_pawn.place(feet)
 	if _player.get_parent() == null:
@@ -3574,10 +3587,53 @@ func _enter_pawn(feet: Vector3) -> void:
 	if _mech_cmd != null:
 		_mech_cmd.brain.leader = _player_pawn
 	_player_hud()
+	_fps_on()
 	print("[city] playing: pawn at %v" % feet)
 
 
+## The gun into the view's hands, its HUD up, the debug overlays away.
+func _fps_on() -> void:
+	if _view == null:
+		_view = PlayerView.new()
+		_view.name = "PlayerView"
+		add_child(_view)
+		_view.setup(camera, _player_pawn, _gun)
+	_player.view = _view
+	if _fps_hud == null:
+		_fps_hud = PlayerHud.new()
+		_fps_hud.name = "PlayerHud"
+		add_child(_fps_hud)
+		_fps_hud.setup(_player_pawn, _gun, _view)
+	if _feedback == null and arena == null:
+		_feedback = CombatFeedback.new()
+		_feedback.name = "Feedback"
+		add_child(_feedback)
+		_feedback.setup(self)
+		_gun.fired.connect(_feedback.on_player_shot)
+	if stats_label != null:
+		_stats_were_visible = stats_label.visible
+		stats_label.visible = false
+	if _reticle != null:
+		_reticle.visible = false
+
+
+func _fps_off() -> void:
+	_player.view = null
+	if _view != null:
+		_view.teardown()
+		_view.queue_free()
+		_view = null
+	if _fps_hud != null:
+		_fps_hud.queue_free()
+		_fps_hud = null
+	if stats_label != null:
+		stats_label.visible = _stats_were_visible
+	if _reticle != null:
+		_reticle.visible = camera.capture_mouse
+
+
 func _leave_pawn() -> void:
+	_fps_off()
 	_player.release()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
@@ -6784,10 +6840,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					_fire(_blast_radius)
 				return
 			MOUSE_BUTTON_WHEEL_UP:
-				_set_blast_radius(_blast_radius * BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius * BLAST_STEP)
 				return
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_set_blast_radius(_blast_radius / BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius / BLAST_STEP)
 				return
 	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
 	# HOLD, held while aiming sends it to attack where the crosshair is.
