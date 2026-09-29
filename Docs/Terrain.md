@@ -2394,6 +2394,11 @@ Bench view: far tier 1,246k → 686k triangles built, 657k → 469k drawn,
 3.6 → 3.1 ms. City far ground 426k → 370k. Borders checked with LOD frozen at
 the origin, at 179 m, and 390 m out where the detail meets LOD 2 directly.
 
+**Fixed after (reported):** the smooth blocks' skirts were wound backwards — they
+faced INTO their own block, so they were culled from the one side they can be
+seen from and showed from behind. Wound clockwise from outside now; the blocky
+blocks' walls were already right.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

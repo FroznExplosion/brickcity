@@ -2605,7 +2605,10 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         (void)out;
         const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
         m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
-            Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
+            // Wound to face OUT of the block (clockwise seen from outside).
+            // It was the other way round, so the skirt faced into its own
+            // block and was culled from the only side it can be seen from.
+            Vector3(pb.x, pb.y - drop, pb.z), Vector3(pa.x, pa.y - drop, pa.z), pa, pb,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
     };
     for (int k = 0; k < N; ++k) {
