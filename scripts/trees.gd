@@ -168,11 +168,14 @@ static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Arr
 
 ## Where a tree's placed recipe (rebased to its min corner) goes so its trunk
 ## corner lands on `cell` -- a Transform3D for BuildingRegistry.register_build.
-static func placement(cell: Vector3i, variant: int) -> Transform3D:
+## `ground_m`, if given, is the height it stands at instead of the cell's: the
+## ground that is DRAWN there, where that is a coarse tier (TerrainCoarse.height_at).
+static func placement(cell: Vector3i, variant: int, ground_m: float = NAN) -> Transform3D:
 	var off := trunk_offset(variant)
 	var c := cell - off
 	var size := BrickWorld.get_cell_size()
-	return Transform3D(Basis(), Vector3(c.x * size.x, c.y * size.y, c.z * size.z))
+	var y := c.y * size.y if is_nan(ground_m) else ground_m - off.y * size.y
+	return Transform3D(Basis(), Vector3(c.x * size.x, y, c.z * size.z))
 
 
 static func _hash(s: int, x: int, z: int) -> float:

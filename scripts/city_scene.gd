@@ -5901,7 +5901,13 @@ func _place_trees() -> void:
 	for s in spots:
 		var variant: int = s.variant
 		var recipe := Trees.recipe(variant)
-		var id := registry.register_build(recipe, Trees.placement(s.cell, variant))
+		# Past the detail square the ground drawn is the coarse tier's, which
+		# is not the field's height: stand on what is drawn.
+		var cell: Vector3i = s.cell
+		var ground := NAN
+		if _terrain_coarse != null:
+			ground = _terrain_coarse.height_at(cell.x, cell.z)
+		var id := registry.register_build(recipe, Trees.placement(cell, variant, ground))
 		if id < 0:
 			continue
 		_index_building(id)
@@ -8416,6 +8422,43 @@ func _run_far_pass() -> void:
 		await _far_settle()
 		await _save_crop("fade_%d" % int(d), 0.5)
 
+	# The crossfade leaves no holes. It rests on Godot's visibility fade
+	# dithering with the same noise and the same linear distance the box's
+	# shader uses; if an engine update changes either, this is what fails.
+	# In the middle of the band, from low down so the building stands on sky:
+	#   A  the crossfade as it runs;
+	#   B  the shell alone, not fading -- the reference;
+	#   C  the shell fading with no box under it -- holes at the fade's rate.
+	# Holes are pixels of the building far from B. Complementary dithers make
+	# A nearly B; independent ones would leave half of C's holes.
+	camera.global_position = mc + Vector3(0.0, -mc.y + 1.5, -(FADE_NEAR + FADE_FAR) * 0.5)
+	camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
+	await _far_settle()
+	var shell_mi: MeshInstance3D = _shells.get(mid_id)
+	if shell_mi != null and _far_on.has(mid_id):
+		var rect := _screen_rect(_world_box(mb))
+		var img_a := await _grab()
+		var ranged: Array[GeometryInstance3D] = [shell_mi]
+		for ch in shell_mi.get_children():
+			if ch is GeometryInstance3D:
+				ranged.append(ch)
+		for g in ranged:
+			g.visibility_range_end = 0.0
+		var img_b := await _grab()
+		for g in ranged:
+			_fade_out(g)
+		_far.visible = false
+		var img_c := await _grab()
+		_far.visible = true
+		var holes_a := _holes(img_a, img_b, rect)
+		var holes_c := _holes(img_c, img_b, rect)
+		print("[far]   crossfade: %.1f%% of the building off its reference, against %.1f%% with no box" % [
+			holes_a * 100.0, holes_c * 100.0])
+		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
+				"%.3f vs %.3f" % [holes_a, holes_c])
+	else:
+		_gate_ok("Stage 5: the crossfade leaves no holes", false, "no fading shell to look at")
+
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
@@ -8432,6 +8475,47 @@ func _save_crop(shot_name: String, frac: float) -> void:
 	img.resize(full.x, full.y, Image.INTERPOLATE_NEAREST)
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
+
+
+## The screen rectangle a world box covers, clamped to the view.
+func _screen_rect(box: AABB) -> Rect2i:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for i in 8:
+		var p := box.position + box.size * Vector3(i & 1, (i >> 1) & 1, (i >> 2) & 1)
+		if camera.is_position_behind(p):
+			continue
+		var s := camera.unproject_position(p)
+		lo = lo.min(s)
+		hi = hi.max(s)
+	var view := Vector2(get_viewport().get_visible_rect().size)
+	lo = lo.clamp(Vector2.ZERO, view)
+	hi = hi.clamp(Vector2.ZERO, view)
+	return Rect2i(Vector2i(lo), Vector2i(hi - lo))
+
+
+func _grab() -> Image:
+	for i in 3:
+		await RenderingServer.frame_post_draw
+	return get_viewport().get_texture().get_image()
+
+
+## Share of `rect`, shrunk a little off its edges, where `img` is far from
+## `ref`: a hole shows what is behind, and here that is sky.
+static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
+	var r := rect.grow(-maxi(rect.size.x, rect.size.y) / 12)
+	if r.size.x <= 0 or r.size.y <= 0:
+		return 0.0
+	var off := 0
+	var n := 0
+	for y in range(r.position.y, r.end.y, 2):
+		for x in range(r.position.x, r.end.x, 2):
+			n += 1
+			var a := img.get_pixel(x, y)
+			var b := ref.get_pixel(x, y)
+			if absf(a.get_luminance() - b.get_luminance()) > 0.2:
+				off += 1
+	return float(off) / maxf(n, 1)
 
 
 ## Frames until the shell streamer has had a full quiet pass over the register.
