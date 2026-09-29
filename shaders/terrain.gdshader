@@ -5,6 +5,15 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 // the detailed tiles; a coarse block says its own level per instance.
 uniform bool lod_debug = false;
 instance uniform float lod_level = 0.0;
+// SMOOTH FAR GROUND DRAWN AS COURSES (Terrain.md 19.19): a smooth coarse block
+// has no bricks in it, so the shader draws what a brick hillside would show
+// at that distance -- a darker line at every course (0.42 m) and each course
+// a touch lighter at its top than its foot -- and the far ground reads as
+// terraced rather than as a rubber sheet. Only on smooth far ground.
+uniform bool far_courses = true;
+uniform float far_course_m = 0.42;
+uniform float far_course_line : hint_range(0.0, 1.0) = 0.35;
+uniform float far_course_shade : hint_range(0.0, 0.5) = 0.10;
 
 // Brick ground. brick.gdshader's seam, plus the two things terrain adds:
 // painted studs and their faked contact shadow.
@@ -166,6 +175,7 @@ varying vec3 v_flat_normal;
 // shader, and a material index has no business being interpolated across a
 // triangle anyway — half-stone is not a material.
 varying flat float v_material;
+varying float v_smooth_far;
 
 void vertex() {
     v_uv = UV;
@@ -174,6 +184,7 @@ void vertex() {
     v_studded = COLOR.a;
     v_flat_normal = normalize(NORMAL);
     v_material = CUSTOM0.r;
+    v_smooth_far = CUSTOM0.g;
 }
 
 const float TAU_F = 6.28318530718;
@@ -508,6 +519,17 @@ void fragment() {
         mtl = MATERIAL_TABLE[clamp(mi, 0, 6)];
     }
 
+    if (far_courses && v_smooth_far > 0.5) {
+        float c = v_world.y / far_course_m;
+        float fw = max(fwidth(c), 1e-4);
+        float f = fract(c);
+        // The course's foot: an anti-aliased line, as wide as a pixel allows.
+        float line = 1.0 - smoothstep(0.0, 1.5 * fw, min(f, 1.0 - f));
+        // Gone where a course is under ~2 px: past that it is moire.
+        line *= 1.0 - smoothstep(0.25, 0.5, fw);
+        albedo *= 1.0 - line * far_course_line;
+        albedo *= 1.0 - far_course_shade + 2.0 * far_course_shade * f;
+    }
     if (lod_debug) {
         albedo = mix(albedo, lod_colour(lod_level), 0.65);
     }

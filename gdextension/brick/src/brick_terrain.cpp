@@ -2576,7 +2576,7 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
             m.uvs.set(i, Vector2((float)cx * cs, (float)cz * cs));
             m.uv2s.set(i, Vector2(0.0f, 0.0f));   // no piece: no seam
             m.custom0.set(i * 4 + 0, (uint8_t)mat);
-            m.custom0.set(i * 4 + 1, 0);
+            m.custom0.set(i * 4 + 1, 255);   // G: this is smooth far ground
             m.custom0.set(i * 4 + 2, 0);
             m.custom0.set(i * 4 + 3, 255);
         }
