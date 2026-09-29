@@ -58,6 +58,8 @@ public:
     /// drop past SAFE_DROP -- which hurts (Pawn.SAFE_FALL) -- costs HURT_DROP_COST
     /// metres of walking, so it is taken when there is no other way down.
     static constexpr int MAX_DROP = 21;
+    /// One search's turn in service() before the queue is looked at again.
+    static constexpr uint64_t SLICE_USEC = 150;
     static constexpr int SAFE_DROP = 9;
     static constexpr float HURT_DROP_COST = 12.0f;
 

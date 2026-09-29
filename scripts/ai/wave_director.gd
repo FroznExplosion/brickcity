@@ -103,6 +103,9 @@ var feedback: CombatFeedback
 var voice: ArenaVoice
 ## The body of the last soldier to die (instance id), for the gate.
 var last_dead_id := 0
+## Metres each soldier has walked since it appeared (instance id -> metres).
+var travelled := {}
+var _last_at := {}
 ## Ticks any soldier spent crouched, for the gate (nobody crouches, A21).
 var _crouched := 0
 var _player_dead_at := -1.0
@@ -199,6 +202,13 @@ func _physics_process(_delta: float) -> void:
 	var now := _now()
 	_reap(now)
 	_settle_check()
+	for so in alive:
+		var k := so.get_instance_id()
+		var at := so.pawn.feet()
+		if _last_at.has(k):
+			var was: Vector3 = _last_at[k]
+			travelled[k] = float(travelled.get(k, 0.0)) + Vector2(at.x - was.x, at.z - was.z).length()
+		_last_at[k] = at
 	for so in alive:
 		if so.pawn.intents.crouch:
 			_crouched += 1
@@ -317,6 +327,8 @@ func _settle_check() -> void:
 		if f - int(s.frame) > SETTLE_TICKS + 30:
 			break
 		if not is_nan(float(s.drop)) or f - int(s.frame) < SETTLE_TICKS:
+			continue
+		if not is_instance_valid(s.soldier):
 			continue
 		var so: Soldier = s.soldier
 		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
@@ -571,19 +583,22 @@ func run_gate() -> void:
 	var moved := []
 	var stayed := []
 	for sp in first:
-		var so: Soldier = sp.soldier
-		if not is_instance_valid(so) or so.is_dead():
+		if not is_instance_valid(sp.soldier):
 			continue
-		var f := so.pawn.feet()
-		var at: Vector3 = sp.feet
-		var d := Vector2(f.x - at.x, f.z - at.z).length()
+		var so: Soldier = sp.soldier
+		if so.is_dead():
+			continue
+		# Metres walked since it appeared, not how far it is from there now: a
+		# soldier that ran to cover and back out to fight can be standing a
+		# metre from its spawn point having gone thirty.
+		var d := float(travelled.get(so.get_instance_id(), 0.0))
 		# Standing still is fine in cover that happened to be next to where it
 		# appeared; standing still anywhere else is what this is here to catch.
-		if d > 2.0 or so.state in ["hide", "peek", "reload in cover"]:
+		if d > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
 			moved.append("%.1f m, %s" % [d, so.state])
 		else:
 			stayed.append("%.1f m, %s" % [d, so.state])
-	ok.call("they move: %d of %d left their spawn point or are working a cover spot" % [
+	ok.call("they move: %d of %d walked more than 3 m or are working a cover spot" % [
 			moved.size(), moved.size() + stayed.size()],
 			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,
 			"moved %s, stayed %s" % [moved, stayed])
@@ -592,6 +607,7 @@ func run_gate() -> void:
 	await _until(func() -> bool: return _soldier_in_sight() != null, 20.0)
 	var marks := feedback.hits
 	var numbers := feedback.numbers_shown
+	var sounds0 := feedback.sounds_played
 	var kills0 := feedback.kills_shown
 	var t_fire := _now()
 	var target := _soldier_in_sight()
@@ -609,6 +625,8 @@ func run_gate() -> void:
 		_mouse(false)
 		ok.call("the player's gun kills a soldier", feedback.kills_shown > kills0,
 				"%d hit(s) in %.1f s" % [feedback.hits - marks, _now() - t_fire])
+		ok.call("and makes a sound", feedback.sounds_played > sounds0,
+				"%d sound(s)" % (feedback.sounds_played - sounds0))
 		ok.call("each hit shows a hitmarker and a number",
 				feedback.hits > marks and feedback.numbers_shown - numbers == feedback.hits - marks,
 				"%d marker(s), %d number(s)" % [feedback.hits - marks, feedback.numbers_shown - numbers])
@@ -621,11 +639,22 @@ func run_gate() -> void:
 	else:
 		ok.call("a soldier comes into the player's sight", false)
 
+	# From here the gate blows floors out and a building down and kills the
+	# wave by hand: not the soldiers' decisions, so not judged.
+	(city.ai_services.judge as DecisionJudge).pause()
 	# A floor shot out from under a spot: the spot is refused.
 	var spots := survey.floors_of(focus)
 	if not spots.is_empty():
+		# A spot the survey takes now (bricks and physics both), from the middle
+		# of the list out.
 		@warning_ignore("integer_division")
 		var f: Vector3 = spots[spots.size() / 2]
+		for i in spots.size():
+			@warning_ignore("integer_division")
+			var g: Vector3 = spots[(spots.size() / 2 + i) % spots.size()]
+			if bool(survey.check(g, focus, null, []).ok):
+				f = g
+				break
 		var before := survey.check(f, focus, null, [])
 		city._blast(f - Vector3.UP * 0.1, 1.2)
 		await _frames(45)
@@ -670,6 +699,8 @@ func run_gate() -> void:
 	for so in alive.duplicate():
 		so.pawn.health.apply_impact(1e9, &"")
 	var w := wave
+	await _frames(2)
+	(city.ai_services.judge as DecisionJudge).resume()
 	_next_wave = 0.0
 	await _until(func() -> bool: return wave > w and _left_to_spawn <= 0, 40.0)
 	var second := _of_wave(w + 1)
@@ -708,7 +739,14 @@ func run_gate() -> void:
 	if pair.size() == 2:
 		var caller: Soldier = pair[0]
 		var buddy: Soldier = pair[1]
+		# A buddy free to come: searching, not stuck or cut off itself.
 		buddy.state = "search"
+		buddy._called_help_at = -INF
+		buddy.trapped = false
+		buddy.help_point = Vector3.INF
+		# And a caller that is not itself off helping someone (it would give
+		# that up rather than call).
+		caller.help_point = Vector3.INF
 		caller._called_help_at = -INF
 		var said0 := int(voice.said.get("stuck", 0))
 		caller.call_for_help()
