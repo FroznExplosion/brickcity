@@ -547,6 +547,73 @@ aggro table and meter**.
 completes in the arena; a squad advances only while masked; the aggro meter moves with damage and
 holds with hysteresis; callout markers appear only when heard and seen.
 
+**Done (2026-09-29).** Built in the ai-p6 worktree; the squad code was adopted onto main mid-way
+(93dcac2, merged there with the engage policy, A21's no-crouch rule, and morale that recovers
+only out of the enemy's sight), and the rest — the city, two of the four gates, the docs — came
+after on ai-p6b.
+- **The layers talk in messages** (`scripts/ai/squad/squad_msg.gd`, AI.md 2): `Order` → `Report`
+  (ACCEPTED at once, then DONE or FAILED with a reason; a replaced order is FAILED "superseded"),
+  `Assignment` → `Status` (REACHED, BLOCKED, DONE), every one with an id. A `Squad` node
+  (`squad/squad.gd`) runs its own LimboAI tree (`SquadTree`) as a TACTICAL job; its blackboard is
+  every member's parent scope, so the play and target live one level up. Members have an Order
+  branch above their own fight (`BTHasAssignment` › `BTDoAssignment`); with no assignment a member
+  fights on its own tree.
+- **Clearing a room** (`bt_play_clear_room.gd`, `room_tactics.gd`): stack slots either side of the
+  way in, and the play waits on every REACHED (the reply barrier); a flashbang in; entry
+  crisscross, 0.6 s apart — the first through crosses to the far corner, the second to the near one
+  on the other side, the rest buttonhook; each sweeps its sector, firing at what shows; clear when
+  all have swept and nothing is in sight in the room. The points are worked out from the room's box
+  and its opening when needed, not baked — a hole the squad blew is as good a way in as a door.
+- **Mouse-holing:** no door, or the door watched by a known defender, and the squad makes its own:
+  along the walls facing it, clear of corners and the door, the point with the fewest bricks
+  through and the least in the defender's view. The breacher sets the charge, rejoins the stack,
+  "Breaching!", and the blast goes through `AIServices.on_breach` — in the city the host's `_blast`,
+  a logged `BLAST` that clients replay.
+- **Masked moves** (`squad/masking.gd`): a mover goes only while the enemy is suppressed (a hostile
+  round within 1.6 m of it in the last 0.8 s), looking elsewhere (outside a 50° cone, or
+  reloading), or blind to it (bricks, smoke). Checked every physics tick and inside `move_to`. A
+  bounding mover holds its fire: the covering half shoots, or a mover's own rounds would be the
+  suppression that lets it go.
+- **Plays:** bounding overwatch, search in pairs, fall back (and, since the adoption, travel in
+  formation for the commander). **Morale:** −0.35 per member lost, and losing half the squad breaks
+  it; −0.04/s per member pinned. **Attack tokens:** two shooters per target, asked for only by a
+  soldier that would fire this tick with a clear line. **Suppression fire** over the enemy's cover,
+  never through bricks or with a squadmate within 0.6 m of the line.
+- **Aggro** (`aggro_table.gd`, `aggro_meter.gd`, AI.md 8): per enemy side, a row per player-side
+  entity — hp dealt to the side, rounds fired in earshot, seconds seen, seconds within 10 m —
+  halving every 8 s; the focus moves only when another row leads by 25 % and by 15, and
+  `FactionKnowledge.best` returns it while it is fresh, so the soldiers aim at whoever holds it. The
+  meter shows a player's pilot and mech shares and marks the holder; a pawn with meta
+  `aggro_kind = "mech"` stands in for the mech until P7 gives it a body.
+- **Callouts** (`callouts.gd`, `callout_hud.gd`, AI.md 6.5, A18): heard within 35 m of the
+  listener's camera; an enemy speaker in sight gets a named subtitle and a depth-tested marker,
+  unseen only an unattributed subtitle; a friendly is always named and marked through walls. One
+  line per squad every 1.5 s, the same line not within 6 s, a line waiting over 2 s dropped, urgent
+  lines first. "In view" is worked out from the camera's FOV: `Camera3D.is_position_in_frustum`
+  needs a drawn viewport and is wrong headless.
+- **City:** the breach hook is `_blast`; entering a pawn (V) shows the callouts and the aggro meter;
+  **U** spawns a squad of four 30 m ahead, ordered to advance on the player when on foot.
+- Gates: **`tools/room_clear_probe.gd` 15** — two squads, two rooms: in through the door, the hidden
+  defender dropped, DONE; with the door watched, a hole along the wall and in through it; both
+  crisscross into four corners, nothing through a wall, nobody hit by a squadmate.
+  **`tools/squad_advance_probe.gd` 10** — 124 m moved masked and 0.00 m unmasked; with every
+  suppressor reloading the movers hold (917 → 1103 held mover-ticks); never more than two
+  shooting the player; searched for in pairs (2 and 2); two dropped, the rest fall back from 10 to
+  34 m and hold. **`tools/aggro_probe.gd` 7** — the table's margin and half-life; player 1 shoots
+  and takes the focus (share 0.33 → 0.98) and both soldiers aim at it; player 2 shooting as hard
+  does not take it; player 1 stops and it moves; the mech's share shows. **`tools/callout_probe.gd`
+  9** — the six cases of AI.md 6.5, the subtitles on screen, the rate limits. **City `-- --squad`
+  4** — in a sealed tower a squad blows its own door (a BLAST in the log), stacks, flashes, goes in,
+  drops the defender, reports DONE, and the log still replays.
+- **Found, not fixed:** sight and aim test the chest only, so a player standing behind a wall that
+  hides the chest but not the head is not seen; the advance probe's walls are sized round it. A
+  head test (the chest, then the head) was tried in the ai-p6 worktree (commit 95461fa) and left
+  out here so as not to shift the engage policy's tuning under it.
+- **Deferred:** flank, flush and bait (flush needs grenades; flank needs a path cost for time in
+  the enemy's view), the orderly advance in file, slicing corners, blind fire. Perception is still
+  per soldier, not per squad round-robin (AI.md 4.2); the faction's radio delay waits for the
+  commander. The flash has no effect on a player's view yet — `AIServices.flashed` is the hook.
+
 ### P7 — Mechs and weight · L
 
 Brick-built mech on the ported motor, in studs; mech map with clearance (R8) and breach links;

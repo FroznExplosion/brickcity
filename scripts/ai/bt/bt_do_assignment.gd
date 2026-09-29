@@ -13,12 +13,26 @@ extends BTAction
 ##            sector for SWEEP_TIME, reply DONE, and keep watching it
 ##   FLASH    face the point, throw, reply DONE (the squad times the bang)
 ##   BREACH   go to the wall, set the charge, reply DONE
+##   FOLLOW   keep to the point the squad keeps moving (a place in its file,
+##            BTPlayTravel); no reply -- the squad knows where the file is
 
 const SWEEP_HALF := 0.75
 const SWEEP_TIME := 1.8
 const THROW := 0.4
 const PLACE := 0.8
 const ARRIVED := 0.45
+## Stuck this near its point, a member is there as far as the squad cares.
+const NEAR_ENOUGH := 2.5
+## A follower this close to its place in the file stands, rather than
+## re-pathing to a point that moves a hand's breadth every think.
+const FOLLOW_SLACK := 0.9
+## A crumb this near is passed; a trail further than FOLLOW_JOIN is rejoined
+## by a path first.
+const FOLLOW_CRUMB := 0.6
+const FOLLOW_JOIN := 2.5
+
+var _crumb := -1
+var _off_trail := false
 
 var _id := -1
 var _arrived_at := -1.0
@@ -34,6 +48,8 @@ func _tick(_delta: float) -> Status:
 	var now := so.services.now()
 	if a.id != _id:
 		_id = a.id
+		_crumb = -1
+		_off_trail = false
 		_arrived_at = -1.0
 		_via_done = a.via == Vector3.INF
 		_started = now
@@ -83,6 +99,9 @@ func _tick(_delta: float) -> Status:
 				it.look_pitch = 0.0
 			if now - _arrived_at >= SWEEP_TIME and not seen:
 				so.report(SquadMsg.StatusKind.DONE)
+		SquadMsg.Task.FOLLOW:
+			so.masked_move = false
+			_follow(so, a, seen)
 		SquadMsg.Task.FLASH:
 			so.stop()
 			so.look_at_point(a.point)
@@ -102,10 +121,50 @@ func _tick(_delta: float) -> Status:
 	return RUNNING
 
 
+## Along the leader's trail, crumb by crumb, to this member's place in the file
+## -- no path search. Off the trail or stuck on it: a path to the place.
+func _follow(so: Soldier, a: SquadMsg.Assignment, seen: bool) -> void:
+	var feet := so.pawn.feet()
+	if a.trail.is_empty() or a.upto < 0:
+		so.stop()
+		return
+	if _crumb < 0 or _crumb >= a.trail.size():
+		# Join the trail at the nearest crumb not past this member's place.
+		var best := INF
+		for i in mini(a.upto + 1, a.trail.size()):
+			var d := feet.distance_to(a.trail[i])
+			if d < best:
+				best = d
+				_crumb = i
+		_off_trail = best > FOLLOW_JOIN
+	if _off_trail:
+		so.state = "rejoin"
+		var r := so.move_to(a.trail[_crumb], a.run)
+		if r != 0:
+			_off_trail = false
+		return
+	# Up the trail as far as its place; then to the place itself.
+	while _crumb < a.upto and feet.distance_to(a.trail[_crumb]) < FOLLOW_CRUMB:
+		_crumb += 1
+	if _crumb >= a.upto and not _far(so, a.point, FOLLOW_SLACK):
+		so.stop()
+		so.state = "in file"
+		_face(so, a.yaw, seen)
+		return
+	var to: Vector3 = a.trail[_crumb] if _crumb < a.upto else a.point
+	so.state = a.role if a.role else "follow"
+	if so.walk_toward(to, a.run) == -1:
+		_off_trail = true
+
+
 func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 	so.pawn.intents.crouch = false
 	so.masked_move = a.masked
 	so.state = "bound" if a.masked else "move"
+	# A bounding mover runs; the covering half does the shooting. (Its own rounds
+	# round the enemy would be the suppression that lets it go.)
+	if a.masked:
+		so.fire_ok = false
 	var r := so.move_to(to, a.run)
 	if r == 1 or not _far(so, to, ARRIVED):
 		_arrived_at = now
@@ -117,6 +176,16 @@ func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 		so.masked_move = false
 		so.stop()
 		so.report(SquadMsg.StatusKind.BLOCKED)
+	elif so.stuck >= Soldier.MAX_STUCK:
+		# Stuck short of it -- a squadmate on the next slot, a corner the body
+		# will not take: near enough counts as there, further is blocked. Either
+		# way the squad hears back; silence held a stack's barrier for good.
+		_arrived_at = now
+		so.masked_move = false
+		var near := not _far(so, to, NEAR_ENOUGH)
+		so.stuck = 0
+		so.stop()
+		so.report(SquadMsg.StatusKind.REACHED if near else SquadMsg.StatusKind.BLOCKED)
 
 
 func _hold(so: Soldier, a: SquadMsg.Assignment, seen: bool) -> void:

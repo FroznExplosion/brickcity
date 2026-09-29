@@ -2909,6 +2909,145 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
     return out;
 }
 
+Dictionary BrickWorld::lateral_check(int chunk_id, float accel_g, Vector3 world_dir) {
+    Dictionary out;
+    out["ratio"] = 0.0;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const Vector3i up = -chunk_down[chunk_id];
+    if (up != Vector3i(0, 1, 0)) {
+        return out; // a toppled chunk is a piece: physics has it, not this
+    }
+    // Which grid axis, and which way along it, the load pushes.
+    const Vector3 local_dir = c.xform.basis.inverse().xform(world_dir);
+    const bool along_x = std::abs(local_dir.x) >= std::abs(local_dir.z);
+    const float sgn = (along_x ? local_dir.x : local_dir.z) >= 0.0f ? 1.0f : -1.0f;
+    const Vector3 cs = cell_size();
+    const double hcell = along_x ? cs.x : cs.z;
+    const double vcell = cs.y;
+    const double cap = (double)std::max((int64_t)1,
+            brick::to_mass_units(stress[chunk_id].tension_per_stud));
+    constexpr double SOLID_STUDS = 4.0;
+
+    // Heights span [lo, hi) over the living structural blocks.
+    int lo = INT32_MAX;
+    int hi = INT32_MIN;
+    int x0 = INT32_MAX, x1 = INT32_MIN, z0 = INT32_MAX, z1 = INT32_MIN;
+    const size_t n = c.blocks.size();
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.decorative) {
+            continue;
+        }
+        const Vector3i bs = archetypes[b.archetype].size;
+        lo = std::min(lo, b.cell.y);
+        hi = std::max(hi, b.cell.y + bs.y);
+        x0 = std::min(x0, b.cell.x);
+        x1 = std::max(x1, b.cell.x + bs.x);
+        z0 = std::min(z0, b.cell.z);
+        z1 = std::max(z1, b.cell.z + bs.z);
+    }
+    if (lo >= hi) {
+        return out;
+    }
+    const int layers = hi - lo + 1;
+    // Per boundary h (index h - lo): mass whose bottom is at h, its moments;
+    // stud contact meeting at h; solid cells running through h; the toe.
+    std::vector<double> m(layers, 0.0), mx(layers, 0.0), my(layers, 0.0);
+    std::vector<double> j(layers, 0.0), jx(layers, 0.0);
+    std::vector<double> toe(layers, -1e30);
+    // Along the push, in metres, signed so that "further" is always larger.
+    auto along = [&](double cells) { return sgn * cells * hcell; };
+    const brick::JointCache &jc = joints_of(chunk_id);
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.decorative) {
+            continue;
+        }
+        const Vector3i sz = archetypes[b.archetype].size;
+        const double a0 = along_x ? b.cell.x : b.cell.z;
+        const double a1 = a0 + (along_x ? sz.x : sz.z);
+        const double lo_m = std::min(along(a0), along(a1));
+        const double hi_m = std::max(along(a0), along(a1));
+        const double mid = (lo_m + hi_m) * 0.5;
+        const double mass = (double)std::max((int64_t)1,
+                brick::to_mass_units(archetypes[b.archetype].mass));
+        const int bot = b.cell.y;
+        const int top = b.cell.y + sz.y;
+        m[bot - lo] += mass;
+        mx[bot - lo] += mass * mid;
+        my[bot - lo] += mass * (bot + top) * 0.5 * vcell;
+        // Solid through every boundary strictly inside it.
+        const double cells = (double)sz.x * (double)sz.z;
+        for (int h = bot + 1; h < top; ++h) {
+            j[h - lo] += cells * SOLID_STUDS;
+            jx[h - lo] += cells * SOLID_STUDS * mid;
+            toe[h - lo] = std::max(toe[h - lo], hi_m);
+        }
+        if (b.support_broken || b.bottom_broken) {
+            continue;
+        }
+        // Joints meeting at its bottom: to the blocks it stands on.
+        const int32_t bid = (int32_t)i;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            const Block &o = c.blocks[nb];
+            if (o.decorative || o.cell.y + archetypes[o.archetype].size.y != bot) {
+                return;
+            }
+            const Vector3i osz = archetypes[o.archetype].size;
+            const double b0 = along_x ? o.cell.x : o.cell.z;
+            const double b1 = b0 + (along_x ? osz.x : osz.z);
+            const double olo = std::max(lo_m, std::min(along(b0), along(b1)));
+            const double ohi = std::min(hi_m, std::max(along(b0), along(b1)));
+            j[bot - lo] += count;
+            jx[bot - lo] += count * (olo + ohi) * 0.5;
+            toe[bot - lo] = std::max(toe[bot - lo], ohi);
+        });
+    }
+
+    // Top down: what is above boundary h is every block whose bottom is >= h.
+    const int floor_y = foundation_level[chunk_id];
+    double W = 0.0, WX = 0.0, WY = 0.0;
+    double best = 0.0;
+    int best_h = -1;
+    double best_w = 0.0;
+    int boundaries = 0;
+    for (int h = hi; h > lo; --h) {
+        const int k = h - lo;
+        W += m[k];
+        WX += mx[k];
+        WY += my[k];
+        if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
+            continue; // the foundation, or nothing meets here
+        }
+        ++boundaries;
+        const double xc = WX / W;
+        const double yc = WY / W;
+        const double T = toe[k];
+        const double hm = h * vcell;
+        const double demand = (double)accel_g * W * std::max(0.0, yc - hm);
+        const double hold = W * (T - xc) + cap * (j[k] * T - jx[k]);
+        const double ratio = hold > 0.0 ? demand / hold : (demand > 0.0 ? 1e9 : 0.0);
+        if (ratio > best) {
+            best = ratio;
+            best_h = h;
+            best_w = W;
+        }
+    }
+    out["ratio"] = best;
+    out["boundaries"] = boundaries;
+    if (best_h >= 0) {
+        // The boundary's plane, at the middle of the chunk's footprint.
+        const Vector3 local((x0 + x1) * 0.5f * cs.x, best_h * vcell, (z0 + z1) * 0.5f * cs.z);
+        out["level"] = c.xform.xform(local);
+        out["level_cell"] = best_h;
+        out["mass_above"] = best_w / (double)brick::MASS_FIXED;
+    }
+    return out;
+}
+
 int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on) {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -5186,6 +5325,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_solve_stats", "chunk_id"), &BrickWorld::get_solve_stats);
 
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
+    ClassDB::bind_method(D_METHOD("lateral_check", "chunk_id", "accel_g", "world_dir"),
+            &BrickWorld::lateral_check);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
     ClassDB::bind_method(D_METHOD("heal_joints", "chunk_id"), &BrickWorld::heal_joints);

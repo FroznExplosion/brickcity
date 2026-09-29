@@ -23,8 +23,12 @@ var _suppress_at := Vector3.INF
 var _first := true
 var bounds := 0
 
+## This play's generation (Squad.begin_play).
+var _gen := 0
+
 
 func _enter() -> void:
+	_gen = (agent as Squad).begin_play()
 	_movers.clear()
 	_cover.clear()
 	_first = true
@@ -122,4 +126,4 @@ func _suppress(q: Squad, at: Vector3) -> void:
 func _exit() -> void:
 	var q := agent as Squad
 	if q != null:
-		q.clear_assignments()
+		q.clear_assignments(_gen)

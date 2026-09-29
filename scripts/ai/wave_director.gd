@@ -15,7 +15,12 @@ extends Node
 ##
 ## The soldiers are not told where the player is. A wave is SENT: when it starts
 ## the side is given a rough fix (TIP_SPREAD metres out), and after that it
-## knows what it sees and hears -- and the player's gun is heard (PLAYER_NOISE).
+## knows what it sees and hears -- and the player's gun is heard (AIServices).
+##
+## WHAT comes, and when, and what the squads are told to do, is the COMMANDER's
+## (Commander): it buys squads with points and asks for them here
+## (request_squad); this puts them on the floors and round the walls, as the
+## survey allows, and hands each squad back to it.
 ## Only if nobody on the side has had any contact for LOST_SECONDS is another
 ## rough fix given, so a player who hides and stays quiet is looked for rather
 ## than waited for.
@@ -31,15 +36,19 @@ extends Node
 
 const PLAYER_TEAM := 0
 const ENEMY_TEAM := 1
-## Wave n (from 1) has BASE + PER_WAVE * (n - 1) soldiers, no more than ALIVE_CAP
-## of them up at once (Docs/AI.md A2: about ten smart agents).
-const BASE := 4
-const PER_WAVE := 2
+## A reinforcement (a "wave") is one squad, Commander.SQUAD_SIZE strong; no more
+## than ALIVE_CAP up at once (Docs/AI.md A2: about ten smart agents).
+const BASE := Commander.SQUAD_SIZE
 const ALIVE_CAP := 8
+## Spots that pass the survey the commander chooses between, per soldier.
+const SPOT_CHOICES := 3
+## The HQ goes in a standing building at most this far from the focus.
+const HQ_WITHIN := 70.0
+const RADIO_HP := 120.0
+## The HQ is at least this far from the focus: out of its collapse.
+const HQ_CLEAR := 25.0
 ## The share of a wave put inside the focus building, when it has floors.
-const INSIDE_SHARE := 0.6
 const SPAWN_EVERY := 0.6
-const BETWEEN_WAVES := 6.0
 const FIRST_WAVE_AFTER := 4.0
 const PLAYER_RESPAWN := 3.0
 ## A rough fix on the player: this far out, and dated so that it is older than
@@ -49,8 +58,6 @@ const TIP_SPREAD := 8.0
 const TIP_AGE := 3.0
 ## Nobody on the side has seen or heard the player for this long: another fix.
 const LOST_SECONDS := 15.0
-## How far the player's gunfire carries (a soldier's is 40 m).
-const PLAYER_NOISE := 40.0
 ## The arena's soldiers are slower on the trigger and looser than the AI's
 ## defaults (AimModel): 0.35 s, 7 -> 1.2 degrees over 1.6 s.
 const AIM_REACTION := 0.7
@@ -94,13 +101,25 @@ var _left_to_spawn := 0
 var _wave_size := 0
 var _put_inside := 0
 var _next_spawn := 0.0
-var _next_wave := 0.0
+## The commander, and the squad now being put down with the kinds it asked for.
+var commander: Commander
+var _queue: Array[StringName] = []
+var _wave_squad: Squad
+var _next_profile := 0.0
+## The commander's HQ: its officer, its radio, and the building they are in.
+var hq_officer: Soldier
+var hq_radio: StaticBody3D
+var hq_building := -1
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
 var _start := Vector3.ZERO
 var feedback: CombatFeedback
-var voice: ArenaVoice
+## The player's view of what the soldiers say (Callouts, AI.md 6.5).
+var listener: Callouts.Listener
+var callout_hud: CalloutHud
+## Physics ticks on which the player had at least one line in front of them.
+var heard_ticks := 0
 ## The body of the last soldier to die (instance id), for the gate.
 var last_dead_id := 0
 ## Metres each soldier has walked since it appeared (instance id -> metres).
@@ -141,12 +160,13 @@ func setup(p_city: Node3D) -> void:
 	feedback.name = "Feedback"
 	add_child(feedback)
 	feedback.setup(city)
-	voice = ArenaVoice.new()
-	voice.name = "Voice"
-	add_child(voice)
-	voice.setup(city)
-	city.ai_services.on_say = voice.say
 	city._gun.fired.connect(_on_player_fired)
+	commander = Commander.new()
+	commander.name = "Commander"
+	add_child(commander)
+	commander.alive_cap = ALIVE_CAP
+	commander.spawner = request_squad
+	commander.room_at = func(p: Vector3) -> Dictionary: return CityRooms.at(city, p)
 
 
 ## Pick the focus, hold it as bricks, and put the player in the street.
@@ -177,9 +197,21 @@ func begin() -> void:
 	city._gun_class = city.GUN_CLASSES.find(&"rifle")
 	city._equip_gun(&"rifle", city._combat_rng.randi())
 	city._enter_pawn(_start + Vector3.UP * 0.3)
+	listener = city.ai_services.callouts.listen(city.camera, PLAYER_TEAM, _player())
+	callout_hud = CalloutHud.new()
+	callout_hud.name = "Callouts"
+	callout_hud.setup(city.ai_services.callouts, listener)
+	add_child(callout_hud)
 	_player().health.died.connect(_on_player_died)
 	_resurvey()
-	_next_wave = _now() + FIRST_WAVE_AFTER
+	commander.setup(city.ai_services, ENEMY_TEAM)
+	commander.rally = city._world_box(city.registry.get_building(focus)).get_center()
+	# The first squad a few seconds in: the commander's clock, set back.
+	commander.hold_until(_now() + FIRST_WAVE_AFTER)
+	commander.players_at = func() -> Array:
+		var p := _player()
+		return [p.feet()] if p != null else []
+	_set_up_hq()
 	_ready_to_fight = true
 	print("[arena] focus building %d, player at %v, %d floor spot(s) in it" % [
 		focus, _start, _floors.size()])
@@ -201,6 +233,8 @@ func _physics_process(_delta: float) -> void:
 		return
 	var now := _now()
 	_reap(now)
+	if listener != null and not listener.views.is_empty():
+		heard_ticks += 1
 	_settle_check()
 	for so in alive:
 		var k := so.get_instance_id()
@@ -210,12 +244,27 @@ func _physics_process(_delta: float) -> void:
 			travelled[k] = float(travelled.get(k, 0.0)) + Vector2(at.x - was.x, at.z - was.z).length()
 		_last_at[k] = at
 	for so in alive:
-		if so.pawn.intents.crouch:
+		# The body, not the ask: plays still ask for it (P6's assignments), and
+		# Pawn.no_crouch refuses. Ducking under a beam is the body, not a choice.
+		# The rule, not the body: crouching is never allowed a soldier (Pawn.
+		# no_crouch), outside a disaster's duck, let through for now (AI.md A21).
+		# A body squeezed where it can neither stand nor fit crouched stays low,
+		# and that is the body, not a crouch.
+		if not so.pawn.no_crouch and not so._ducking and _now() - so._duck_until > 0.5:
 			_crouched += 1
 	_check_focus()
+	if Engine.get_physics_frames() % 15 == 7:
+		_check_hq()
 	_player_tick(now)
-	if _left_to_spawn <= 0 and alive.is_empty() and now >= _next_wave:
-		_start_wave()
+	if now >= _next_profile:
+		# What the commander learns of the player: how close it fights.
+		_next_profile = now + 1.0
+		var p := _player()
+		if p != null and not alive.is_empty():
+			var near := INF
+			for so in alive:
+				near = minf(near, so.pawn.feet().distance_to(p.feet()))
+			commander.profile.sample(near, 1.0)
 	if _left_to_spawn > 0 and now >= _next_spawn and alive.size() < ALIVE_CAP:
 		if now >= _next_survey:
 			_resurvey()
@@ -229,17 +278,32 @@ func _physics_process(_delta: float) -> void:
 		_update_label()
 
 
-func _start_wave() -> void:
+## The commander's spawner: put down a squad of these kinds. False while one is
+## still going down, or before the fight is set up.
+func request_squad(kinds: Array[StringName]) -> bool:
+	if not _ready_to_fight or kinds.is_empty():
+		return false
+	# A batch still going down when the next is asked for -- its spots kept
+	# failing (a building came down under them) -- is given up: the commander's
+	# new call is the one that counts, and waiting on the old one refused every
+	# call after it.
+	if _left_to_spawn > 0:
+		print("[arena] reinforcement %d abandoned with %d still to come" % [wave, _left_to_spawn])
+		_left_to_spawn = 0
+		_queue.clear()
 	wave += 1
-	_left_to_spawn = BASE + PER_WAVE * (wave - 1)
+	_queue = kinds.duplicate()
+	_left_to_spawn = kinds.size()
 	_wave_size = _left_to_spawn
 	_put_inside = 0
+	_wave_squad = null
 	_next_spawn = _now()
 	survey.reset_counts()
 	_tip()
 	_resurvey()
-	print("[arena] wave %d: %d soldier(s), %d floor spot(s) in building %d" % [
-		wave, _left_to_spawn, _floors.size(), focus])
+	print("[arena] reinforcement %d: %s, %d floor spot(s) in building %d" % [
+		wave, ", ".join(kinds), _floors.size(), focus])
+	return true
 
 
 func _spawn_one() -> void:
@@ -247,18 +311,24 @@ func _spawn_one() -> void:
 	# so far (this one included) have been, so a wave mixes from its start.
 	var done := _wave_size - _left_to_spawn
 	var want_inside := not _floors.is_empty() \
-			and float(_put_inside) < INSIDE_SHARE * float(done + 1) - 0.01
+			and float(_put_inside) < commander.doctrine.inside_share * float(done + 1) - 0.01
 	var others: Array = []
 	for so in alive:
 		others.append(so.pawn)
 	# A few tries: a spot that fails the check is dropped and the next tried.
-	for attempt in 8:
+	# Of the spots that pass, the commander's map picks the one where its men
+	# have not been dying and the enemy has not been seen (SectorGrid).
+	var good: Array = []
+	var inside := focus if want_inside else -1
+	for attempt in 12:
+		if good.size() >= SPOT_CHOICES:
+			break
 		var feet: Vector3
-		var inside := -1
-		if want_inside and not _floors.is_empty():
+		if want_inside:
+			if _floors.is_empty():
+				break
 			var i := _rng.randi() % _floors.size()
 			feet = _floors[i]
-			inside = focus
 			var r := survey.check(feet, inside, _player(), others)
 			if not bool(r.ok):
 				_floors.remove_at(i)
@@ -273,28 +343,32 @@ func _spawn_one() -> void:
 			if not bool(r.ok):
 				_note(feet, false)
 				continue
-		_note(feet, true)
-		_spawn_at(feet, inside)
+		good.append(feet)
+	if good.is_empty():
+		# Nothing inside would do: the rest of this wave comes from outside.
+		if want_inside:
+			_floors.clear()
 		return
-	# Nothing inside would do: the rest of this wave comes from outside.
-	if want_inside:
-		_floors.clear()
+	var pick: Vector3 = commander.sectors.safest(good)
+	_note(pick, true)
+	_spawn_at(pick, inside)
 
 
 func _spawn_at(feet: Vector3, inside: int) -> void:
-	var cls: StringName = &"rifle"
-	if wave >= 3:
-		cls = [&"rifle", &"rifle", &"smg", &"shotgun"][_rng.randi() % 4]
+	# What the commander asked for: its weapon and its health (UnitCatalog).
+	var kind: StringName = _queue.pop_front() if not _queue.is_empty() else &"rifleman"
+	var unit := UnitCatalog.get_unit(kind)
 	if city._gun_library == null:
 		city._gun_library = GunPlaceholderParts.build_library()
 	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
-			city._combat_rng.randi(), WeaponClass.builtin(cls), maxi(1, wave)))
+			city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
 	var so := Soldier.spawn(city.ai_services, city, feet + Vector3.UP * 0.02, ENEMY_TEAM, gun)
 	so.aim.reaction = AIM_REACTION
 	so.aim.cone_start = AIM_CONE_START
 	so.aim.cone_min = AIM_CONE_MIN
 	so.aim.settle = AIM_SETTLE
-	var hp := HP_STANDARD if wave >= 3 and _rng.randi() % 3 == 0 else HP_TRASH
+	so.set_meta(&"unit", kind)
+	var hp := float(unit.hp)
 	so.pawn.health.layer_configs[0].max_value = hp
 	so.pawn.health.reset()
 	so.max_health = hp
@@ -314,8 +388,15 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	if inside >= 0:
 		_put_inside += 1
 	spawned.append({"feet": feet, "inside": inside, "on": int(under.on), "wave": wave,
-			"soldier": so, "frame": Engine.get_physics_frames(), "drop": NAN})
+			"soldier": so, "frame": Engine.get_physics_frames(), "drop": NAN, "unit": kind})
 	_left_to_spawn -= 1
+	# Into this reinforcement's squad, and under the commander.
+	if _wave_squad == null or not is_instance_valid(_wave_squad):
+		_wave_squad = Squad.make(city.ai_services, city, [so] as Array[Soldier], ENEMY_TEAM)
+		commander.adopt(_wave_squad)
+	else:
+		_wave_squad.add(so)
+		commander.joined(_wave_squad, so)
 
 
 ## How far each new soldier dropped in its first ticks -- before it has walked
@@ -352,8 +433,7 @@ func _on_soldier_died(so: Soldier) -> void:
 		city.ai_nav.release(so._path_id)
 	so.pawn.body.call_deferred("queue_free")
 	if _left_to_spawn <= 0 and alive.is_empty():
-		_next_wave = _now() + BETWEEN_WAVES
-		print("[arena] wave %d cleared, %d kill(s)" % [wave, kills])
+		print("[arena] all down after reinforcement %d, %d kill(s)" % [wave, kills])
 
 
 ## A soldier's round: what struck the player is shown, and from where.
@@ -369,9 +449,13 @@ func _on_soldier_fired(info: Dictionary, so: Soldier) -> void:
 ## The player's round: the marks, and the noise -- it is heard where it is fired.
 func _on_player_fired(info: Dictionary) -> void:
 	feedback.on_player_shot(info)
+	# And the commander's read on the player: range, hits, kills, what it breaks.
 	var p := _player()
-	if p != null and city._player.is_possessing():
-		city.ai_services.noise(p.eye.global_position, PLAYER_NOISE, p)
+	if p == null or info.is_empty():
+		return
+	var r = info.get("result")
+	commander.profile.note_shot(r != null, p.eye.global_position.distance_to(info.point),
+			r != null and r.killed, 1 if bool(info.get("structure", false)) else 0)
 
 
 ## A rough fix on the player for the side: TIP_SPREAD out, and TIP_AGE old.
@@ -542,8 +626,8 @@ func run_gate() -> void:
 			"refused %s" % [survey.refused])
 	if focus < 0:
 		return
-	# Wave one, all of it.
-	_next_wave = 0.0
+	# The first reinforcement, all of it: the commander's to send.
+	commander.force_reinforce()
 	await _until(func() -> bool: return wave >= 1 and _left_to_spawn <= 0, 30.0)
 	var first := _of_wave(1)
 	var n_in := 0
@@ -560,6 +644,23 @@ func run_gate() -> void:
 				wrong.append(s)
 	ok.call("wave 1 comes in: %d on the building's floors, %d round it" % [n_in, n_out],
 			first.size() == BASE and n_in > 0 and n_out > 0, "%d spawned" % first.size())
+	# The commander's: one squad, under it, of units the game has.
+	var sq: Squad = null
+	var one_squad := true
+	var built_only := true
+	for sp in first:
+		if not is_instance_valid(sp.soldier):
+			continue
+		var so: Soldier = sp.soldier
+		if sq == null:
+			sq = so.squad
+		if so.squad == null or so.squad != sq:
+			one_squad = false
+		if not bool(UnitCatalog.get_unit(StringName(sp.get("unit", &"rifleman"))).built):
+			built_only = false
+	ok.call("the reinforcement is one squad, under the commander, of units the game has",
+			one_squad and sq != null and commander.squads.has(sq) and built_only,
+			"%s" % [first.map(func(sp): return sp.get("unit", "?"))])
 	ok.call("each one on what the survey said it would be", wrong.is_empty(),
 			"%s" % [wrong.map(func(s): return "%v on %s" % [s.feet, SpawnSurvey.ON_NAMES[s.on]])])
 	await _frames(SETTLE_TICKS + 2)
@@ -602,6 +703,18 @@ func run_gate() -> void:
 			moved.size(), moved.size() + stayed.size()],
 			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,
 			"moved %s, stayed %s" % [moved, stayed])
+	# Each squad has an order -- or is already on the enemy, where an advance
+	# has nothing to add and the commander leaves it to fight.
+	var unled := []
+	var ck: FactionKnowledge.Contact = city.ai_services.knowledge_of(ENEMY_TEAM).best(_now())
+	for q in commander.squads:
+		if not is_instance_valid(q) or q.alive().is_empty() or q.order != null or q.broken:
+			continue
+		if ck == null or q.center().distance_to(ck.pos) >= Commander.ADVANCE_FROM:
+			unled.append(q.id)
+	ok.call("the commander leaves no squad without a purpose", unled.is_empty(),
+			"squads %s with no order and away from the fight; orders %s; %s" % [unled,
+			commander.orders_given, commander.log.slice(maxi(commander.log.size() - 4, 0))])
 	# And the player's gun works on them, and says so: fire at whoever is in
 	# sight until one drops.
 	await _until(func() -> bool: return _soldier_in_sight() != null, 20.0)
@@ -614,7 +727,8 @@ func run_gate() -> void:
 	if target != null:
 		var shot_hit := false
 		_mouse(true)
-		while feedback.kills_shown == kills0 and _now() - t_fire < 12.0:
+		# A veteran takes about thirteen rifle rounds (113 hp): time for them.
+		while feedback.kills_shown == kills0 and _now() - t_fire < 20.0:
 			var t := _soldier_in_sight()
 			if t != null:
 				city.camera.look_at(t.pawn.chest(), Vector3.UP)
@@ -701,13 +815,16 @@ func run_gate() -> void:
 	var w := wave
 	await _frames(2)
 	(city.ai_services.judge as DecisionJudge).resume()
-	_next_wave = 0.0
+	await _frames(2)
+	commander.force_reinforce()
 	await _until(func() -> bool: return wave > w and _left_to_spawn <= 0, 40.0)
 	var second := _of_wave(w + 1)
 	var in_old := second.filter(func(s): return int(s.inside) == old)
 	ok.call("wave %d comes in (%d) and puts nobody in the fallen building" % [w + 1, second.size()],
 			second.size() > 0 and in_old.is_empty(),
-			"%d in building %d" % [in_old.size(), old])
+			"%d in building %d; commander: radio %s, officer %s, budget %.1f, %d up of %d, log %s" % [
+			in_old.size(), old, commander.radio_up, commander.commander_up, commander.budget,
+			alive.size(), ALIVE_CAP, commander.log.slice(maxi(commander.log.size() - 4, 0))])
 	var in_new := second.filter(func(s): return int(s.inside) >= 0)
 	ok.call("its inside spawns are on the new focus's floors",
 			in_new.all(func(s): return int(s.inside) == focus and int(s.on) == SpawnSurvey.On.BUILDING),
@@ -750,7 +867,9 @@ func run_gate() -> void:
 		caller._called_help_at = -INF
 		# Near enough to hear it, and the call judged by what it did -- the
 		# display rate-limits repeated lines, so a count of shown lines is not.
-		buddy.pawn.place(city.ai_nav.snap(caller.pawn.feet() + Vector3(3.0, 0.0, 0.0)))
+		# Beside it, on its floor -- a snap can land on the ground floor of the
+		# building, thirty metres down and out of earshot.
+		buddy.pawn.place(caller.pawn.feet() + Vector3(0.8, 0.0, 0.0))
 		var at := caller.pawn.feet()
 		var t_call := _now()
 		caller.call_for_help()
@@ -758,7 +877,65 @@ func run_gate() -> void:
 				is_equal_approx(caller._called_help_at, t_call) and buddy.help_point.distance_to(at) < 0.5,
 				"called at %.2f (now %.2f), help at %v, caller at %v" % [caller._called_help_at, t_call,
 				buddy.help_point, at])
-	ok.call("the player hears what they say", not voice.shown.is_empty(), "said %s" % [voice.said])
+	ok.call("the player hears what they say", heard_ticks > 0,
+			"%d tick(s) with a line up; said %s" % [heard_ticks, _said_keys()])
+
+	# The player takes to a room of the focus: the commander sends a squad in.
+	# A squad strong enough to clear one first (Commander.CLEAR_WITH): what is
+	# left of the fight so far may be twos, and twos are not sent into rooms.
+	(city.ai_services.judge as DecisionJudge).pause()
+	for so in alive.duplicate():
+		so.pawn.health.apply_impact(1e9, &"")
+	await _frames(3)
+	(city.ai_services.judge as DecisionJudge).resume()
+	commander.force_reinforce()
+	await _until(func() -> bool: return _left_to_spawn <= 0 and alive.size() >= Commander.CLEAR_WITH, 30.0)
+	var spot := _room_spot()
+	var cleared0 := int(commander.orders_given.get("CLEAR_ROOM", 0))
+	var stacked := false
+	if spot != Vector3.INF:
+		_player().place(spot)
+		# It fires from in there, and is heard: the side knows the room, not a
+		# rough fix eight metres off.
+		await _frames(2)
+		var me := _player()
+		city.ai_services.noise(me.eye.global_position, 40.0, me)
+		await _until(func() -> bool:
+			return int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0, 30.0)
+		await _until(func() -> bool:
+			return commander.squads.any(func(q): return is_instance_valid(q) and q.events.has("stacked")),
+			60.0)
+		stacked = commander.squads.any(func(q): return is_instance_valid(q) and q.events.has("stacked"))
+	ok.call("the player in a room: the commander sends a squad in to clear it",
+			int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0,
+			"room spot %v; %s" % [spot, commander.log.slice(maxi(commander.log.size() - 5, 0))])
+	# Either it gets to the door, or it says it cannot (a city tower's slots
+	# can all be walled off) and the commander hears so -- never silence.
+	var could_not := commander.log.any(func(l: String) -> bool: return "could not stack" in l)
+	ok.call("and the squad stacks on the way in -- or reports it cannot",
+			stacked or could_not, _clear_detail())
+	print("[arena] room clear: %s" % ("stacked" if stacked else "could not stack, reported"))
+
+	# The HQ: shoot the radio and nobody can be called; kill the officer and
+	# nothing more is decided.
+	ok.call("the commander has an HQ: an officer and a radio in building %d" % hq_building,
+			hq_officer != null and is_instance_valid(hq_officer) and hq_radio != null)
+	if hq_radio != null and is_instance_valid(hq_radio):
+		(hq_radio.get_node("HealthPool") as HealthPool).apply_impact(1e9, &"")
+		await _frames(3)
+		ok.call("the radio shot out: no more reinforcements can be called",
+				not commander.radio_up and not commander.force_reinforce(),
+				"radio %s" % commander.radio_up)
+	if hq_officer != null and is_instance_valid(hq_officer):
+		hq_officer.pawn.health.apply_impact(1e9, &"")
+		await _frames(3)
+		var given := commander.log.size()
+		await _frames(120)
+		# Decisions, not the squads' reports still coming in to a dead man.
+		var after := commander.log.slice(given).filter(func(l: String) -> bool:
+			return not (": order " in l))
+		ok.call("the officer killed: the commander decides nothing more",
+				not commander.commander_up and after.is_empty(), "%s" % [after])
 
 	# The player goes down and comes back in the street.
 	invulnerable = false
@@ -801,7 +978,7 @@ func _soldier_in_sight() -> Soldier:
 ## `-- --arena --watch`: what the soldiers do, second by second, for a
 ## wave against a player who stands still.
 func run_watch() -> void:
-	_next_wave = 0.0
+	commander.force_reinforce()
 	var last := {}
 	var moved := {}
 	var states := {}
@@ -827,7 +1004,10 @@ func run_watch() -> void:
 		var n: String = CombatPolicy.TACTIC_NAMES[int(d.tactic)]
 		chosen[n] = int(chosen.get(n, 0)) + 1
 	print("[watch] tactics chosen %s" % [chosen])
-	print("[watch] lines said %s" % [voice.said])
+	print("[watch] lines said %s" % [_said_keys()])
+	print("[watch] commander: %s" % [commander.orders_given])
+	for l in commander.log:
+		print("[watch]   " + l)
 	print_judgement()
 	print("[watch] states %s" % [states])
 	print("[watch] metres moved %s" % [moved.values()])
@@ -866,6 +1046,175 @@ func print_judgement() -> void:
 		print("[judge]   %-13s %3d  mean %+6.1f  stupid %2d  good %2d" % [n, b.n, b.mean,
 				b.stupid, b.good])
 	print("[judge]   flags %s" % [sm.flags])
+
+
+## What each squad clearing a room is doing, member by member, for a failed check.
+func _clear_detail() -> String:
+	var out := []
+	for q in commander.squads:
+		if not is_instance_valid(q):
+			continue
+		var parts := []
+		for m in q.alive():
+			var asg := m.assignment
+			parts.append("%s/%s R%s B%s d%.1f stuck%d path%d/%d nav%d" % [m.state,
+					(SquadMsg.Task.keys()[asg.task] + ":" + asg.role) if asg else "-",
+					q.replied(m, SquadMsg.StatusKind.REACHED), q.replied(m, SquadMsg.StatusKind.BLOCKED),
+					m.pawn.feet().distance_to(asg.point) if asg else -1.0, m.stuck, m._wp, m._path.size(),
+					city.ai_nav.get_status(m._path_id)])
+		out.append("squad %d %s %s [%s]" % [q.id, q.play, q.events.keys(), "; ".join(parts)])
+	return " || ".join(out)
+
+
+# --- the HQ -------------------------------------------------------------------------
+
+## The commander's HQ (Commander, Docs/AI.md 9): its officer on the top floor of
+## the nearest other standing building, holding there, and its radio beside him.
+## Shoot the radio and nobody can be called in; kill the officer and nothing more
+## is decided. A building that comes down with the HQ in it takes the radio.
+func _set_up_hq() -> void:
+	var here: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
+	var best := -1
+	var best_d := HQ_WITHIN
+	for b in city.registry.buildings:
+		if b.id == focus or b.toppled or b.is_build():
+			continue
+		if not bool(survey.building_fit(b.id).ok):
+			continue
+		var d: float = city._world_box(b).get_center().distance_to(here)
+		# Not next door: what brings the focus down would bring the HQ with it.
+		if d < HQ_CLEAR:
+			continue
+		if d < best_d:
+			best_d = d
+			best = b.id
+	if best < 0:
+		print("[arena] no building for an HQ within %.0f m" % HQ_WITHIN)
+		return
+	var spots := survey.floors_of(best)
+	if spots.size() < 2:
+		return
+	# Top floor first; the radio a stride from him on the same floor.
+	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.y > y.y)
+	var at: Vector3 = spots[0]
+	var beside: Vector3 = spots[1]
+	for s in spots:
+		if absf(s.y - at.y) < 0.2 and s.distance_to(at) > 1.0 and s.distance_to(at) < 3.0:
+			beside = s
+			break
+	if city._gun_library == null:
+		city._gun_library = GunPlaceholderParts.build_library()
+	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
+			city._combat_rng.randi(), WeaponClass.builtin(&"pistol"), 1))
+	hq_officer = Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ENEMY_TEAM, gun)
+	hq_officer.set_meta(&"unit", &"officer")
+	hq_officer.pawn.health.layer_configs[0].max_value = 113.0
+	hq_officer.pawn.health.reset()
+	hq_officer.max_health = 113.0
+	gun.visible = true
+	gun.position = Vector3(0.2, -0.28, -0.3)
+	# Gold, so he can be picked out from his men.
+	for c in hq_officer.pawn.body.get_children():
+		if c is MeshInstance3D:
+			var m := StandardMaterial3D.new()
+			m.albedo_color = Color(0.95, 0.75, 0.2)
+			(c as MeshInstance3D).material_override = m
+	var hold := SquadMsg.Assignment.make(SquadMsg.Task.HOLD, at)
+	hold.role = "HQ"
+	hq_officer.set_assignment(hold)
+	hq_officer.pawn.health.died.connect(_on_officer_died)
+	hq_radio = _make_radio(beside)
+	hq_building = best
+	commander.hq = at
+	print("[arena] HQ in building %d: officer at %v, radio at %v" % [best, at, beside])
+
+
+## A radio set you can shoot: a box on the floor with an aerial, and health.
+func _make_radio(at: Vector3) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.name = "Radio"
+	# On the pawn layer: guns hit it (Layers.GUN_MASK), sight lines do not stop.
+	body.collision_layer = Layers.PAWN
+	body.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.55, 0.8, 0.4)
+	shape.shape = box
+	shape.position = Vector3.UP * 0.4
+	body.add_child(shape)
+	var mesh := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = box.size
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 0.36, 0.22)
+	bm.material = mat
+	mesh.mesh = bm
+	mesh.position = Vector3.UP * 0.4
+	body.add_child(mesh)
+	var aerial := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.015
+	cm.bottom_radius = 0.02
+	cm.height = 1.3
+	aerial.mesh = cm
+	aerial.position = Vector3(0.18, 1.45, 0.0)
+	body.add_child(aerial)
+	var pool := HealthPool.new()
+	pool.name = "HealthPool"
+	var layer := DefenseLayer.new()
+	layer.max_value = RADIO_HP
+	pool.layer_configs = [layer]
+	body.add_child(pool)
+	city.add_child(body)
+	body.global_position = at
+	pool.died.connect(_on_radio_destroyed)
+	return body
+
+
+func _on_radio_destroyed() -> void:
+	if hq_radio != null and is_instance_valid(hq_radio):
+		feedback.burst(hq_radio.global_position, Color(0.3, 0.36, 0.22))
+		hq_radio.call_deferred("queue_free")
+	hq_radio = null
+	commander.radio_destroyed()
+	city.ai_services.say(hq_officer.pawn if hq_officer != null and is_instance_valid(hq_officer)
+			and not hq_officer.is_dead() else null, "radio", "The radio's gone!", AIServices.SHOUT)
+
+
+func _on_officer_died() -> void:
+	if hq_officer == null or not is_instance_valid(hq_officer):
+		return
+	feedback.burst(hq_officer.pawn.feet(), Color(0.95, 0.75, 0.2))
+	city.ai_services.pawns.erase(hq_officer.pawn)
+	hq_officer.pawn.body.call_deferred("queue_free")
+	commander.commander_killed()
+
+
+## The HQ's building no longer stands: the radio goes with it.
+func _check_hq() -> void:
+	if hq_building < 0 or hq_radio == null or not is_instance_valid(hq_radio):
+		return
+	var fit := survey.building_fit(hq_building)
+	if not bool(fit.ok) and fit.why != "not bricks yet":
+		(hq_radio.get_node("HealthPool") as HealthPool).apply_impact(1e9, &"")
+
+
+## A floor spot in a room of the focus, lowest storey first, or INF.
+func _room_spot() -> Vector3:
+	var spots := survey.floors_of(focus)
+	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.y < y.y)
+	for f in spots:
+		if not CityRooms.at(city, f).is_empty():
+			return f
+	return Vector3.INF
+
+
+## Every line said so far, by key and count.
+func _said_keys() -> Dictionary:
+	var out := {}
+	for l in city.ai_services.callouts.said:
+		out[l[2]] = int(out.get(l[2], 0)) + 1
+	return out
 
 
 func _of_wave(n: int) -> Array[Dictionary]:
@@ -910,6 +1259,22 @@ func _update_label() -> void:
 			else:
 				outside += 1
 	lines.append("spawned this wave: %d on its floors, %d outside" % [inside, outside])
+	var cm := commander
+	lines.append("commander   %.0f pts banked, wants %.1f up   desperation %.0f%%   answering %s   aggression %.2f" % [
+			cm.budget, cm.want_strength(), cm.desperation * 100.0, cm.doctrine.answering,
+			cm.doctrine.aggression])
+	if hq_building >= 0:
+		var me := _player()
+		lines.append("HQ   building %d   officer %s   radio %s%s" % [hq_building,
+				"up" if cm.commander_up else "DEAD", "up" if cm.radio_up else "DOWN",
+				("   %.0f m" % me.feet().distance_to(cm.hq)) if me != null else ""])
+	for q in cm.squads:
+		if is_instance_valid(q):
+			lines.append("  squad %d  %d up  %s%s%s" % [q.id, q.alive().size(), q.play,
+					("  order " + SquadMsg.OrderKind.keys()[q.order.kind]) if q.order != null else "",
+					"  BROKEN" if q.broken else ""])
+	if not cm.log.is_empty():
+		lines.append("  " + cm.log[cm.log.size() - 1])
 	var tactics := {}
 	for so in alive:
 		var t: String = CombatPolicy.TACTIC_NAMES[so.tactic] if so.tactic >= 0 else so.state
@@ -996,12 +1361,4 @@ func _unhandled_input(event: InputEvent) -> void:
 			_draw_overlay()
 		KEY_F8:
 			if _ready_to_fight:
-				_left_to_spawn = 0
-				_next_wave = 0.0
-				if alive.is_empty():
-					_start_wave()
-				else:
-					wave += 1
-					_left_to_spawn = BASE + PER_WAVE * (wave - 1)
-					_wave_size = _left_to_spawn
-					_put_inside = 0
+				commander.force_reinforce()
