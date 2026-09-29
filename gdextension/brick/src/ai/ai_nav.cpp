@@ -490,22 +490,32 @@ int AINav::service(int budget_usec) {
     const uint64_t until = now_usec() + (uint64_t)std::max(budget_usec, 0);
     int finished = 0;
     while (now_usec() < until) {
-        // Best first: the most important pending request, oldest on a tie.
+        // Best first: the most important pending request -- and among equals,
+        // the one that has done the LEAST work, not the oldest. Oldest-first let
+        // one hopeless search (a goal it cannot reach, 20,000 expansions to find
+        // that out) hold the queue for seconds while every soldier behind it
+        // stood waiting for a path that would have taken a hundred nodes. Least
+        // work first serves the short ones at once and grinds the long one in
+        // the gaps; each gets a SLICE and goes back in the running.
         Search *best = nullptr;
         for (auto &kv : searches) {
             Search &s = kv.second;
             if (s.status != PENDING) {
                 continue;
             }
+            const int work = s.started ? s.expansions : -1;
+            const int best_work = best == nullptr ? 0 : (best->started ? best->expansions : -1);
             if (best == nullptr || s.priority > best->priority
-                    || (s.priority == best->priority && s.id < best->id)) {
+                    || (s.priority == best->priority && (work < best_work
+                            || (work == best_work && s.id < best->id)))) {
                 best = &s;
             }
         }
         if (best == nullptr) {
             break;
         }
-        if (_advance(*best, until)) {
+        const uint64_t slice_end = std::min(until, now_usec() + SLICE_USEC);
+        if (_advance(*best, slice_end)) {
             finished++;
         }
     }

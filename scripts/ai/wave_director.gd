@@ -328,6 +328,8 @@ func _settle_check() -> void:
 			break
 		if not is_nan(float(s.drop)) or f - int(s.frame) < SETTLE_TICKS:
 			continue
+		if not is_instance_valid(s.soldier):
+			continue
 		var so: Soldier = s.soldier
 		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
 			var now_at := so.pawn.feet()
@@ -581,8 +583,10 @@ func run_gate() -> void:
 	var moved := []
 	var stayed := []
 	for sp in first:
+		if not is_instance_valid(sp.soldier):
+			continue
 		var so: Soldier = sp.soldier
-		if not is_instance_valid(so) or so.is_dead():
+		if so.is_dead():
 			continue
 		# Metres walked since it appeared, not how far it is from there now: a
 		# soldier that ran to cover and back out to fight can be standing a
@@ -738,6 +742,9 @@ func run_gate() -> void:
 		buddy._called_help_at = -INF
 		buddy.trapped = false
 		buddy.help_point = Vector3.INF
+		# And a caller that is not itself off helping someone (it would give
+		# that up rather than call).
+		caller.help_point = Vector3.INF
 		caller._called_help_at = -INF
 		var said0 := int(voice.said.get("stuck", 0))
 		caller.call_for_help()

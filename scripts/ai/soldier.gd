@@ -311,7 +311,10 @@ func move_to(goal: Vector3, run := false) -> int:
 		_goal = goal
 		if _path_id >= 0:
 			nav.release(_path_id)
-		_path_id = nav.request_path(pawn.feet(), goal, importance, 20000)
+		# What it may cost, by how far: a spot eight metres off does not get
+		# twenty thousand nodes to prove it cannot be reached.
+		var budget := clampi(int(pawn.feet().distance_to(goal) * 500.0), 3000, 20000)
+		_path_id = nav.request_path(pawn.feet(), goal, importance, budget)
 		_path = PackedVector3Array()
 		_wp = 0
 		# Not a reset of the stuck clock: a body pinned in place that keeps
