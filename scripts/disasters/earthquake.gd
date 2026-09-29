@@ -9,29 +9,30 @@ extends Disaster
 ## jolted, pawns stumbling, bricks shaken off facades a few at a time -- and
 ## COLLAPSES are rationed:
 ##
-##   * each building near the player rolls, at the start, whether it will fail
-##     and when -- tall, slender buildings are likelier;
-##   * a failure is a SOFT STOREY, which is how real buildings go down in
-##     quakes: the ground storey gives way on one side -- a band of blasts
-##     through it, over most of the building's depth -- and the city's own
-##     topple takes it from there. Its stability test sees the centre of mass
-##     past what is left holding it up, and the whole building goes over as one
-##     piece, with its rooms, collision and debris handled as any topple is.
-##     If it still stands after UNDERMINE_WAIT, the band is cut deeper once.
+##   * a building whose bricks are in fails where its JOINTS do. Every
+##     PULSE_S the ground's acceleration -- PGA g at intensity 1, full shaking,
+##     along the quake's axis, both ways -- is put to it as a sideways load
+##     (BrickWorld.lateral_check): at each course boundary, the overturning
+##     moment of everything above against what holds it, gravity and the
+##     studs across the boundary. Where that fails, the building is cut there
+##     -- a clean seam, a committed SEVER -- and the freed top is tipped over
+##     its toe on the side it was thrown toward. Tall, slender towers go in a
+##     medium quake; squat ones need an extreme one; a tower already shot
+##     through fails sooner, because its studs are gone.
+##   * a building out of reach has no bricks to ask. It rolls, at the start,
+##     whether it will fail and when -- slender ones likelier -- and fails as a
+##     SOFT STOREY, the cheap way: a band of blasts through the ground storey
+##     on one side, and the city's own topple takes it over whole. If it still
+##     stands after UNDERMINE_WAIT, the band is cut deeper once.
 ##
-##     (Tried first and dropped: cut the tower through at a storey's slab and
-##     tip the freed top over. Big tops would not turn -- 1,100 bricks at
-##     0.00 rad/s under any push, about their centre or their edge -- while a
-##     smaller one went over. Pushing physics about from outside is the wrong
-##     end; undermining lets the city's own rules decide.)
+##     (Big tops once would not turn when tipped -- 1,100 bricks at 0.00 rad/s.
+##     That was the staircase threading through the cut; CityScene._with_stairs
+##     takes the stairs with the piece now, and they turn.)
 ##   * no more than `max_collapse_at_once` are falling at a time (a collapse
 ##     counts until its piece has come to rest), and no more than
 ##     `max_collapse_total` in the whole quake. A failure that finds the cap
 ##     full waits for a slot; if the shaking ends first, it never happens.
 ##
-## Not the real thing: a true quake is a sideways load in the stress solver,
-## and buildings would fail where their joints do. That is C++ work (section 6);
-## this gets the look and, more importantly, the cost under control first.
 
 const RANGE := 120.0              ## m from the player a building may fail
 const FACADE_RANGE := 80.0
@@ -54,6 +55,13 @@ const TIP_ANGLE := 50.0           ## degrees: past this its centre is over the e
 const TIP_SPIN := 0.5             ## rad/s over the edge
 const PUSH_S := 4.0               ## s it is helped over after it starts to topple
 const HAZARD_BASE := 20
+## Peak ground acceleration, in g, at intensity 1 and full shaking. Calibrated
+## on the small city: its 35 m towers fail from ~0.4 g, the 27 m ones from
+## ~0.55-0.8, 19 m from ~0.9, and the 8 m blocks hold past 3 g.
+const PGA := 0.45
+const PULSE_S := 1.0
+## A cut's top must be at least this many bricks to be the piece that tips.
+const TOP_MIN_BRICKS := 100
 
 var max_collapse_at_once := 2
 var max_collapse_total := 6
@@ -74,6 +82,14 @@ var facade_shears := 0
 var amplitude := 0.0
 
 var _next_facade := 0.0
+var _next_pulse := 0.0
+## The axis the ground moves along, both ways. From the seed.
+var axis := Vector3.RIGHT
+## Buildings failing or already failed, by id: one failure each.
+var _failing := {}
+## For the probe: solver checks, and the failures they found.
+var lateral_checks := 0
+var lateral_fails := 0
 var _rumble: AudioStreamPlayer
 var _booms: Array[AudioStreamPlayer3D] = []
 var _boom_i := 0
@@ -95,6 +111,7 @@ func _on_begin() -> void:
 	for i in ctx.registry.buildings.size():
 		_rolls.append({"u": rng.randf(), "fail": rng.randf(), "t": rng.randf(),
 				"storey": rng.randf(), "side": rng.randi_range(0, 3)})
+	axis = Vector3.RIGHT if rng.randf() < 0.5 else Vector3.BACK
 	_build()
 
 
@@ -152,8 +169,46 @@ func _tick_active(dt: float) -> void:
 	amplitude = rise * fall
 	_shake()
 	_facades(dt)
+	_pulse(dt)
 	_fail()
 	_follow()
+
+
+## The ground's push, put to every building whose bricks are in: those whose
+## joints give way go into the plan now, cut where they failed.
+func _pulse(dt: float) -> void:
+	_next_pulse -= dt
+	if _next_pulse > 0.0:
+		return
+	_next_pulse += PULSE_S
+	var accel := PGA * intensity * amplitude
+	if accel < 0.02:
+		return
+	var player := ctx.player_pos()
+	var due := false
+	for b in ctx.registry.buildings:
+		if b.toppled or b.is_build() or b.chunk < 0 or _failing.has(b.id):
+			continue
+		var c := CityPlacer.box_of(b).get_center()
+		if Vector2(c.x - player.x, c.z - player.z).length() > RANGE:
+			continue
+		var worst := {}
+		var worst_dir := axis
+		for d in [axis, -axis]:
+			var r := ctx.lateral(b.id, accel, d)
+			lateral_checks += 1
+			if not r.is_empty() and (worst.is_empty() or float(r.ratio) > float(worst.ratio)):
+				worst = r
+				worst_dir = d
+		if worst.is_empty() or float(worst.ratio) < 1.0 or not worst.has("level"):
+			continue
+		lateral_fails += 1
+		_failing[b.id] = true
+		plan.append({"id": b.id, "t": phase_t, "lateral": true, "dir": worst_dir,
+				"level": worst.level, "ratio": float(worst.ratio)})
+		due = true
+	if due:
+		plan.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.t < b.t)
 
 
 func _tick_ending(dt: float) -> void:
@@ -248,6 +303,12 @@ func _fail() -> void:
 			held += 1
 			return
 		var f: Dictionary = plan.pop_front()
+		if not f.get("lateral", false):
+			var rb = ctx.registry.get_building(int(f.id))
+			# Its bricks are in: its joints decide (_pulse), not its roll.
+			if rb == null or rb.chunk >= 0 or _failing.has(int(f.id)):
+				continue
+			_failing[int(f.id)] = true
 		_collapse(f)
 
 
@@ -256,14 +317,26 @@ func _collapse(f: Dictionary) -> void:
 	var b = ctx.registry.get_building(id)
 	if b == null or b.toppled:
 		return
-	var dir: Vector3 = [Vector3.LEFT, Vector3.RIGHT, Vector3.FORWARD, Vector3.BACK][int(f.side)]
+	var lateral: bool = f.get("lateral", false)
+	var dir: Vector3 = f.dir if lateral \
+			else [Vector3.LEFT, Vector3.RIGHT, Vector3.FORWARD, Vector3.BACK][int(f.side)]
 	var box := CityPlacer.box_of(b)
+	# Its bricks went while it waited for a slot (handed back, far now): no
+	# joints to cut, so it goes the cheap way.
+	if lateral and not ctx.sever(id, f.level):
+		lateral = false
+	if lateral:
+		var level: Vector3 = f.level
+		# From the cut up: the piece that goes over, and the edge it turns on.
+		box = AABB(Vector3(box.position.x, level.y, box.position.z),
+				Vector3(box.size.x, box.end.y - level.y, box.size.z))
 	var c := {"id": id, "dir": dir, "box": box,
 			"at": phase_t if phase == Phase.ACTIVE else active_s + phase_t,
-			"deeper": false, "toppled": false, "toppled_at": 0.0, "piece": null, "tilt": 0.0,
-			"done": false, "survived": false, "blasts": 0}
+			"deeper": lateral, "toppled": lateral, "toppled_at": 0.0, "piece": null, "tilt": 0.0,
+			"done": false, "survived": false, "blasts": 0, "lateral": lateral}
 	collapses.append(c)
-	c.blasts = _undermine(box, dir, 0.0, UNDERMINE_DEPTH)
+	if not lateral:
+		c.blasts = _undermine(box, dir, 0.0, UNDERMINE_DEPTH)
 	ctx.set_hazard(HAZARD_BASE + collapses.size() - 1, box.grow(8.0))
 	peak_at_once = maxi(peak_at_once, active_collapses())
 	var base := Vector3(box.get_center().x, box.position.y + 1.0, box.get_center().z)
@@ -371,7 +444,8 @@ static func tip(isl: BrickIsland, dir: Vector3, box: AABB, strength := 1.0) -> v
 func _find_piece(c: Dictionary) -> BrickIsland:
 	var box: AABB = c.box
 	var best: BrickIsland = null
-	var most := 0
+	# A cut's top, not a clump shaken off a facade beside it.
+	var most := TOP_MIN_BRICKS - 1 if c.get("lateral", false) else 0
 	for isl in ctx.islands_near(box.get_center(), box.size.length()):
 		if not isl.is_valid() or not is_instance_valid(isl.body):
 			continue

@@ -366,6 +366,27 @@ public:
     /// find_detached_groups afterwards.
     Dictionary solve_stress(int chunk_id);
 
+    /// A sideways load: the ground accelerating at `accel_g` (in g) toward
+    /// `world_dir`, as an earthquake or a gale does. Pure query -- it changes
+    /// nothing; the caller cuts where it says (a SEVER command) so the result
+    /// is a command like every other change.
+    ///
+    /// At every course boundary above the foundation it weighs what is above:
+    /// the inertial force a * W at its centre of mass tries to overturn it
+    /// about the TOE -- the last contact on the far side, in `world_dir` --
+    /// and two things hold it: gravity (W times how far the centre of mass is
+    /// behind the toe) and the studs across the boundary, each carrying
+    /// tension_per_stud at its own lever from the toe. A block that runs
+    /// through the boundary rather than meeting at it is solid plastic there
+    /// and holds like SOLID_STUDS studs per cell.
+    ///
+    /// Returns {ratio, level (world point on the boundary at the building's
+    /// centre), level_cell (grid y), mass_above (mass units), boundaries}
+    /// for the boundary with the worst demand / capacity. ratio >= 1: it goes
+    /// there. Grid-aligned: `world_dir` is snapped to the chunk's nearest
+    /// horizontal axis.
+    Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
+
     /// What one cell of stud contact can carry IN TENSION, in the same mass
     /// units archetypes use. This is a real quantity, not a tuning knob: a
     /// brick connection releases at 3-5 N, a brick weighs about 2.5 g, so a

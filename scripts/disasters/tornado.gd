@@ -16,9 +16,11 @@ extends Disaster
 ##     tornado does not crater.
 ##   * PAWNS within PAWN_RADIUS are shoved round and off their feet (Pawn.shove).
 ##   * SOLDIERS are told where not to be: the funnel, swept two seconds ahead.
-##
-## It cannot push a standing building over: that is a sideways load on the
-## structure, the same solver work as the earthquake (section 6).
+##   * STANDING BUILDINGS within PUSH_REACH of the funnel take the wind as a
+##     sideways load, the earthquake's (BrickWorld.lateral_check): up to WIND_G
+##     at the funnel wall, along the swirl. One whose joints give way is cut
+##     there (a SEVER seam) and its top is tipped over downwind -- no more than
+##     MAX_PUSHED in a tornado. Once a second, for buildings whose bricks are in.
 ##
 ## Deterministic: the path's shape and every facade ray come from the rng on
 ## the physics tick. Where it bends toward the player is resolved when ACTIVE
@@ -50,6 +52,13 @@ const FORM_S := 4.0               ## s to form at the start of ACTIVE
 const WALK := 5.0                 ## m/s along its path
 const HOLD_MS := 1500             ## a piece the wind has let go of may settle this long after
 const HAZARD := 0                 ## this disaster's hazard id
+## The wind on a standing building, as the g of sideways load it puts on it at
+## the funnel wall at intensity 1. A medium tornado takes the tallest towers;
+## an extreme one the mid-rise too.
+const WIND_G := 0.45
+const PUSH_REACH := 0.6           ## of the lift radius, from the axis to the building
+const PUSH_EVERY := 1.0           ## s
+const MAX_PUSHED := 3             ## at intensity 1
 
 const SKY_SUN := Color(0.78, 0.82, 0.72)
 const SKY_TOP := Color(0.3, 0.33, 0.3)
@@ -93,6 +102,9 @@ var _shear_r := SHEAR_RADIUS
 var _rays := 1.0
 var _size := 1.0
 var shears := 0
+## Buildings the wind put over: {id, box (from the cut up), dir, t, piece}.
+var pushed: Array[Dictionary] = []
+var _next_push := 0.0
 
 var _funnel: MeshInstance3D
 var _funnel_mat: ShaderMaterial
@@ -265,6 +277,11 @@ func _act(dt: float) -> void:
 	if _next_chip <= 0.0:
 		_next_chip += CHIP_EVERY
 		_strip_facades()
+	_next_push -= dt
+	if _next_push <= 0.0:
+		_next_push += PUSH_EVERY
+		_push_buildings()
+	_tip_pushed()
 	ctx.shake(pos, 0.035 * strength)
 
 
@@ -307,6 +324,64 @@ func _pull_pieces() -> void:
 		# not at rest. It may not settle until the wind has let it go.
 		ctx.hold_awake(isl, HOLD_MS)
 		fastest_piece = maxf(fastest_piece, v.length())
+
+
+## Put the wind to each standing building in reach; cut the one that gives.
+func _push_buildings() -> void:
+	var cap := maxi(1, int(round(MAX_PUSHED * intensity)))
+	if pushed.size() >= cap:
+		return
+	var reach := _lift_r * PUSH_REACH
+	for pair in ctx.buildings():
+		var id: int = pair[0]
+		var box: AABB = pair[1]
+		var done := false
+		for p in pushed:
+			done = done or int(p.id) == id
+		if done:
+			continue
+		# From the axis to the nearest point of the building's footprint.
+		var near := Vector3(clampf(pos.x, box.position.x, box.end.x), 0.0,
+				clampf(pos.z, box.position.z, box.end.z))
+		var d := Vector2(near.x - pos.x, near.z - pos.z).length()
+		if d > reach:
+			continue
+		var rel := box.get_center() - pos
+		if Vector2(rel.x, rel.z).length() < 0.01:
+			continue
+		var swirl := Vector3(-rel.z, 0.0, rel.x).normalized()
+		# Snapped to the building's grid: it tips over one of its edges.
+		var dir := Vector3(signf(swirl.x), 0.0, 0.0) if absf(swirl.x) >= absf(swirl.z) \
+				else Vector3(0.0, 0.0, signf(swirl.z))
+		var accel := WIND_G * intensity * strength * (1.0 - d / reach)
+		var r := ctx.lateral(id, accel, dir)
+		if r.is_empty() or float(r.ratio) < 1.0 or not r.has("level"):
+			continue
+		var level: Vector3 = r.level
+		if not ctx.sever(id, level):
+			continue
+		pushed.append({"id": id, "dir": dir, "t": phase_t, "piece": null,
+				"box": AABB(Vector3(box.position.x, level.y, box.position.z),
+						Vector3(box.size.x, box.end.y - level.y, box.size.z))})
+		if pushed.size() >= cap:
+			return
+
+
+## Help each freed top over its downwind edge for Earthquake.PUSH_S.
+func _tip_pushed() -> void:
+	for p in pushed:
+		if phase_t - float(p.t) > Earthquake.PUSH_S:
+			continue
+		var box: AABB = p.box
+		if p.piece == null:
+			var most := Earthquake.TOP_MIN_BRICKS - 1
+			for isl in ctx.islands_near(box.get_center(), box.size.length()):
+				if isl.is_valid() and is_instance_valid(isl.body) and ctx.piece_bricks(isl) > most:
+					most = ctx.piece_bricks(isl)
+					p.piece = isl
+		var isl: BrickIsland = p.piece
+		if isl != null and isl.is_valid() and is_instance_valid(isl.body):
+			Earthquake.tip(isl, p.dir, box, intensity)
 
 
 func _shove_pawns() -> void:

@@ -426,7 +426,8 @@ func _check_tornado(city: Node3D, dir: DisasterDirector) -> void:
 		if is_instance_valid(t):
 			stats = {"nearest": t.nearest_player, "pulled": t.pieces_pulled.size(),
 					"fastest": t.fastest_piece, "chips": t.chips, "shoved": t.pawns_shoved,
-					"speed": t.speed, "length": t._along[t._along.size() - 1]}
+					"speed": t.speed, "length": t._along[t._along.size() - 1],
+					"pushed": t.pushed.size(), "cap": maxi(1, int(round(Tornado.MAX_PUSHED * t.intensity)))}
 			if not shot and t.phase == Disaster.Phase.ACTIVE and t.phase_t > 12.0 \
 					and "--disaster-shot" in OS.get_cmdline_user_args():
 				shot = true
@@ -474,6 +475,14 @@ func _check_tornado(city: Node3D, dir: DisasterDirector) -> void:
 			sheared += 1
 	_ok("and tears clumps off whole (SHEAR) for the funnel to throw", sheared > 0,
 			"%d SHEAR(s)" % sheared)
+	var seams := 0
+	for i in range(n0, city.authority.commands.size()):
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.SEVER and e.flags & DamageLog.FLAG_SEAM:
+			seams += 1
+	_ok("the buildings it pushes over are cut where their joints give (a SEVER seam each), to its cap",
+			seams == int(stats.pushed) and int(stats.pushed) <= int(stats.cap),
+			"%d pushed over, %d seam(s), cap %d" % [stats.pushed, seams, stats.cap])
 	# The soldier runs (D5), usually faster than the funnel walks: shoved only
 	# if it is caught. Either is right; standing still in it is not.
 	_ok("a soldier near it runs from it", evaded)
@@ -673,6 +682,30 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("more intensity, more buildings fail", sizes[0] <= sizes[1] and sizes[1] <= sizes[2]
 			and sizes[2] > 0, "%s at Low / Medium / Extreme" % [sizes])
 
+	# The sideways load (BrickWorld.lateral_check): slender fails before squat.
+	var tall = null
+	var squat = null
+	for b in city.registry.buildings:
+		if b.toppled or b.is_build() or b.is_damaged():
+			continue
+		var h := CityPlacer.box_of(b).size.y
+		if tall == null or h > CityPlacer.box_of(tall).size.y:
+			tall = b
+		if squat == null or h < CityPlacer.box_of(squat).size.y:
+			squat = b
+	for b in [tall, squat]:
+		if b != null and b.chunk < 0:
+			city._promote(b.id)
+	var rt := dir.ctx.lateral(tall.id, 0.6, Vector3.RIGHT) if tall != null else {}
+	var rs := dir.ctx.lateral(squat.id, 0.6, Vector3.RIGHT) if squat != null else {}
+	_ok("at 0.6 g the tallest tower fails and the squattest block holds",
+			not rt.is_empty() and not rs.is_empty() and float(rt.ratio) >= 1.0 and float(rs.ratio) < 1.0,
+			"%.2f / %.2f" % [float(rt.get("ratio", 0.0)), float(rs.get("ratio", 0.0))])
+	_ok("and it fails above its foundation, low down", not rt.is_empty() and rt.has("level")
+			and (rt.level as Vector3).y > CityPlacer.box_of(tall).position.y + 0.5
+			and (rt.level as Vector3).y < CityPlacer.box_of(tall).get_center().y,
+			"at %.1f m" % [(rt.get("level", Vector3.ZERO) as Vector3).y])
+
 	# The caps: one at a time, three in all, at Extreme.
 	var n0: int = city.authority.commands.size()
 	_ok("a quake starts", dir.start("earthquake", 2.5,
@@ -695,8 +728,10 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 			var toppled := 0
 			var went_over := 0
 			var survived := 0
+			var lateral := 0
 			var tilts := []
 			for c in q.collapses:
+				lateral += 1 if c.lateral else 0
 				toppled += 1 if c.toppled else 0
 				went_over += 1 if c.tilt >= 10.0 else 0
 				survived += 1 if c.survived else 0
@@ -704,7 +739,7 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 			stats = {"collapses": q.collapses.size(), "peak": q.peak_at_once, "held": q.held,
 					"dropped": q.dropped, "chips": q.facade_chips, "shears": q.facade_shears,
 					"toppled": toppled, "over": went_over, "survived": survived, "plan": q.plan.size(),
-					"tilts": tilts}
+					"tilts": tilts, "lateral": lateral, "checks": q.lateral_checks}
 			if not shot and q.collapses.size() > 0 and "--disaster-shot" in OS.get_cmdline_user_args():
 				var c: Dictionary = q.collapses[0]
 				if c.toppled:
@@ -726,7 +761,10 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("never more than the cap at once", not over and int(stats.peak) <= 1,
 			"peak %d" % stats.peak)
 	_ok("never more than the cap in all", int(stats.collapses) <= 3)
-	_ok("undermined, most of them topple", int(stats.toppled) * 2 >= int(stats.collapses),
+	_ok("buildings near fail where their joints do (the solver), far ones by roll",
+			int(stats.lateral) > 0, "%d of %d by the solver, %d check(s)" % [stats.lateral,
+			stats.collapses, stats.checks])
+	_ok("cut or undermined, most of them topple", int(stats.toppled) * 2 >= int(stats.collapses),
 			"%d of %d toppled, %d survived" % [stats.toppled, stats.collapses, stats.survived])
 	_ok("and go over (more than 10 degrees off upright; most come to rest leaning)",
 			int(stats.over) >= int(stats.toppled) and int(stats.over) > 0,
@@ -741,9 +779,17 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	for i in range(n0, city.authority.commands.size()):
 		var k: int = city.authority.commands.entries[i].kind
 		kinds[k] = int(kinds.get(k, 0)) + 1
-	_ok("the failures are blasts and topples through the authority",
-			int(kinds.get(DamageLog.Kind.BLAST, 0)) > 0 and int(kinds.get(DamageLog.Kind.TOPPLE, 0)) > 0,
-			"%d BLAST, %d TOPPLE" % [kinds.get(DamageLog.Kind.BLAST, 0), kinds.get(DamageLog.Kind.TOPPLE, 0)])
+	var seams := 0
+	for i in range(n0, city.authority.commands.size()):
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.SEVER and e.flags & DamageLog.FLAG_SEAM:
+			seams += 1
+	var undermined := int(stats.collapses) - int(stats.lateral)
+	_ok("the failures go through the authority: a SEVER seam per cut, blasts and topples per undermining",
+			seams == int(stats.lateral) and (undermined == 0
+			or (int(kinds.get(DamageLog.Kind.BLAST, 0)) > 0 and int(kinds.get(DamageLog.Kind.TOPPLE, 0)) > 0)),
+			"%d seam(s), %d BLAST, %d TOPPLE" % [seams, kinds.get(DamageLog.Kind.BLAST, 0),
+			kinds.get(DamageLog.Kind.TOPPLE, 0)])
 	_ok("no hazard left behind", dir.ctx.hazards.is_empty())
 	print("  --   physics tick during the quake: mean %.2f ms, worst %.1f ms" % [
 			total / maxf(ticks, 1), worst])
@@ -766,7 +812,8 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_over(dir)
 	var topples0 := 0
 	for i in range(n1, city.authority.commands.size()):
-		if city.authority.commands.entries[i].kind == DamageLog.Kind.TOPPLE:
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.TOPPLE or (e.kind == DamageLog.Kind.SEVER and e.flags & DamageLog.FLAG_SEAM):
 			topples0 += 1
 	_ok("with 0 at once, nothing collapses", none and topples0 == 0)
 
