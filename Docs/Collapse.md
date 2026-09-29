@@ -310,6 +310,37 @@ Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier
    storey with its roof blown open is under the roof again in 0.9 s; a leader beside it and it
    crouches, and stands after.
 
-Still open from §4: weather does not change sight or aim (rain, smoke apart from fire's, dark);
-a pawn inside a building that topples is caught by crush, not carried and thrown. Sheltering
-covers the storm only.
+9. **Weather on eyes and hands.** `AIServices.sight_mul` and `aim_mul`, set by the running
+   disaster through `ctx.set_weather(amount, sight, aim, intensity)` and cleared when it ends.
+   Sight a little, aim a lot: a storm is sight ×0.85 and aim ×2.2, the tornado ×0.9 / ×1.8, a
+   meteor shower ×0.95 / ×1.3, an earthquake leaves sight alone and aim up to ×3 while it
+   shakes; intensity scales the distance from clear, sight never below 60%. The sight range
+   (60 m) takes `sight_mul`; `AimModel.weather` multiplies the error cone. Probe: at 55 m a
+   soldier sees in clear weather and not in a storm (51 m); its cone 5.2° → 11.4°; a real storm
+   sets 0.85 / ×2.2 and leaves it clear.
+10. **Carried and thrown** (`Crush._ride`). A pawn touching a moving piece goes with it: on its
+    floor Godot's character body already follows a moving floor, so that is only recorded;
+    against a wall, or in a room tipping over with no floor under it, the pawn takes the piece's
+    velocity where it stands as a shove. When that velocity drops by 2 m/s in a tick the pawn
+    keeps what it had — thrown — and the fall does the rest. Probe: a soldier on a sliding slab
+    goes 6.0 m with the slab's 5.2; stopped dead, it keeps 3.6 m/s. (Tested on a slab, not yet
+    on a whole building toppling with a soldier inside.)
+
+### 6.1 Follow-ups (2026-09-29)
+
+* **The tops that would not turn — found.** Not physics and not a lock: the **staircase**. A top cut
+  free kept the building-below's staircase running up through its stairwell, a rod through a
+  bead (18 stair blocks up to 13 m in one tower, 27 to 18 m in another), and turned 0.00° under
+  any push. `_with_stairs` missed it twice over: it only took stair blocks wholly inside the
+  section, and it looked for "anything left round the shaft" from the section's very bottom —
+  where the stump's own top course sits. It now takes any stair block reaching into the section,
+  and looks from half a storey up. The same tops now turn 25–28° in a second's push. This is
+  very likely what held collapses up in play. (Earlier notes here that blamed friction and energy
+  were wrong.)
+* **The earthquake tips its failures over.** A building topples the moment its centre is past
+  what is left — often barely, coming to rest at 7°. While the ground shakes, `Earthquake.tip`
+  turns it about its undermined edge until it is past 50°. Tilts at rest: 53°, 76°, 94° (were
+  32–43°).
+* **A soldier inside a building that topples** (`collapse_probe` "inside"): it rides it (Crush),
+  is not left inside it, and is hurt by what it falls — measured: carried 7.1 m, thrown 8.4 m, dead;
+  in another building carried 2.3 m and crushed.

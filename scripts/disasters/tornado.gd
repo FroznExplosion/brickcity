@@ -189,11 +189,16 @@ func _on_phase(p: Phase) -> void:
 			_plan(true)
 			pos = path[0]
 			_travel = 0.0
+			# Out of the open and under a roof, as in a storm (BTShelter).
+			ctx.set_storm(true)
 		Phase.ENDING:
 			_sky_from = _sky
 		Phase.DONE:
+			ctx.set_storm(false)
 			_sky = 0.0
 			ctx.set_sky(0.0, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
+			ctx.set_weather(0.0, 1.0, 1.0)
+			ctx.set_screen(0.0, 0.0)
 			ctx.clear_hazard(HAZARD)
 			_wind.stop()
 			_roar.stop()
@@ -247,6 +252,11 @@ func _walk(dt: float) -> void:
 
 
 func _act(dt: float) -> void:
+	# Wind and dust, city-wide while it is on the ground.
+	ctx.set_weather(strength, 0.9, 1.8, intensity)
+	# Dust, thicker the nearer the funnel.
+	var near := clampf(1.0 - Vector2(ctx.player_pos().x - pos.x, ctx.player_pos().z - pos.z).length() / 80.0, 0.0, 1.0)
+	ctx.set_screen(0.0, strength * (0.25 + 0.5 * near), Color(0.46, 0.46, 0.4))
 	if strength <= 0.01:
 		return
 	_pull_pieces()

@@ -884,6 +884,19 @@ over 150 m. The swell is still steered toward the nearest shore within 250 m
 swell rolls shoreward — what is a metre further out now is a metre nearer a
 moment later to 1.7 cm, against 33 cm the other way.
 
+## 9.10 A lower sea and sandy beaches
+
+A new world's drowned fraction is 0.22 (`TerrainWorld.DEFAULT_DROWNED`), down
+from 0.30: this seed's sea drops from 14.9 m to 11.6 m. The city's worlds keep
+their own (0.20, 10.3 m).
+
+Sand used to appear only below one brick of height — under the sea, on any
+world — so there were no beaches. Now ground up to 1.3 m above the sea, and
+the seabed under it, is sand, the edge wandering ±0.6 m with the ground's
+material noise so it is not a contour line (`Field::material_at`). The
+threshold is the water's own sea level (`BrickWave.set_sea_level` sets it), so
+the beach is always where the water meets the land. Paint wins over it.
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and

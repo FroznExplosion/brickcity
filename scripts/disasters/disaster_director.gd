@@ -10,7 +10,7 @@ extends Node3D
 ##   --disaster=<kind>       what Random rolls, forced
 ##   --disaster-seed=<n>     base seed for the roll and each disaster
 ##
-## The city creates this only when it is not --big.
+## Every city has one, the big city included.
 
 signal started(kind: String)
 signal ended(kind: String)
@@ -67,6 +67,7 @@ var _total: SpinBox
 var _quake_box: VBoxContainer
 var _status: Label
 var _recapture := false
+var _screen: ShaderMaterial
 
 
 func setup(city: Node3D) -> void:
@@ -94,6 +95,8 @@ func setup(city: Node3D) -> void:
 	add_child(_layer)
 	_build_banner()
 	_build_menu()
+	_build_screen()
+	ctx.screen = _screen
 
 
 ## True when a disaster is running (any phase before DONE).
@@ -209,6 +212,23 @@ func _on_finished() -> void:
 	current_kind = ""
 	ended.emit(kind)
 	_update_banner()
+
+
+# --- The weather on the lens -------------------------------------------------------
+
+## A full-screen overlay, under the HUD and over the 3D (layer -1): rain and dust,
+## both 0 until a disaster sets them (DisasterContext.set_screen).
+func _build_screen() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = -1
+	var rect := ColorRect.new()
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_screen = ShaderMaterial.new()
+	_screen.shader = load("res://shaders/disaster_screen.gdshader")
+	rect.material = _screen
+	layer.add_child(rect)
+	add_child(layer)
 
 
 # --- The banner ---------------------------------------------------------------------

@@ -2360,6 +2360,45 @@ Two more, after 19.15:
 
 The dev menu fits its window now (it scrolls; it ran off shorter screens).
 
+### 19.17 Coarse skirts deep enough for the next ring, from both sides
+
+Blocky-to-smooth and smooth-to-smooth borders still gapped on steep ground:
+the next ring out samples twice as far apart, and on a hill two samples that
+far apart differ by metres, not the fixed 1.68 m the skirt hung. A coarse
+block's edge skirt is now `max(1.68 m, 2 x its sample spacing)` — 2.8 m on
+LOD 1, 5.6 m on LOD 2, 11.2 m on LOD 3 — and drawn from both sides, since a
+border is looked at from either level.
+
+Cost, bench view: far tier 807k → 1,246k triangles built, 546k → 657k drawn,
+3.3 → 3.6 ms. Most of it is 19.16's LOD 1 ring round the detail (more blocky
+blocks); the skirts are under 100k of it.
+
+### 19.18 Fewer triangles: merged blocky faces, one-sided skirts, a smaller LOD 1 ring
+
+* **Merged blocky faces.** A blocky coarse block drew a top and up to four
+  walls per cell. Runs of cells with the same height, material and colour now
+  share one top quad (along X), and runs of walls with the same drop share one
+  wall quad (along the wall).
+* **Skirts face one way.** A skirt is only seen from outside its own block, and
+  the GPU drops the back face for free, so 19.17's second copies are gone. One
+  skirt per border is NOT enough: the rings are laid out from the world's
+  origin, not the camera, so away from it you look across some borders from
+  the coarser side — each block keeps its own outward skirt.
+* **No skirt on the detail tiles.** The detail square always surrounds the
+  camera, so a skirt facing out of it is never seen.
+* **LOD 1 only where it touches the detail** (19.16's ring grown by a lattice
+  step is undone). The deep coarse skirts (19.17) now cover the border where
+  the detail meets a coarser block.
+
+Bench view: far tier 1,246k → 686k triangles built, 657k → 469k drawn,
+3.6 → 3.1 ms. City far ground 426k → 370k. Borders checked with LOD frozen at
+the origin, at 179 m, and 390 m out where the detail meets LOD 2 directly.
+
+**Fixed after (reported):** the smooth blocks' skirts were wound backwards — they
+faced INTO their own block, so they were culled from the one side they can be
+seen from and showed from behind. Wound clockwise from outside now; the blocky
+blocks' walls were already right.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

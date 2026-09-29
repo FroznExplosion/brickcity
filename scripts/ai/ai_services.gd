@@ -10,9 +10,17 @@ var ai_nav: AINav
 var sched: AIScheduler
 ## The physics space sight rays are cast in.
 var world3d: World3D
-## The weather (Docs/Collapse.md 4.4): true while a storm is raging -- a soldier
-## with nothing to fight gets under a roof (BTShelter).
+## The weather (Docs/Collapse.md 4.4): true while the sky is dangerous -- a
+## lightning storm, a meteor shower, a tornado -- and a soldier with nothing to
+## fight gets under a roof (BTShelter).
 var storm := false
+## What the weather does to eyes and hands (Docs/Collapse.md 4.4), set by the
+## disaster that is running: SIGHT_MUL scales how far a soldier sees (a little:
+## rain and dust do not blind anybody at fifty metres), AIM_MUL scales its
+## error cone (a lot: wind, rain in the eyes and the ground moving are what
+## spoil a shot).
+var sight_mul := 1.0
+var aim_mul := 1.0
 ## Everything that can be seen and shot at: players and agents alike.
 var pawns: Array[Pawn] = []
 ## What a gun does to structure (StructuralDamage's shot): the city routes it

@@ -95,7 +95,7 @@ var _paint_material := 3        ## sand, a visible default
 ## already has — the same gesture a modelling package uses for the same
 ## reason.
 var _grabbing := false
-var _drowned := 0.30
+var _drowned := World.DEFAULT_DROWNED
 
 ## THE BRUSH. Radius in studs; rate in metres a second for raise and lower,
 ## and the fraction of the way a second for flatten and smooth.
@@ -410,7 +410,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_O:
 				var again := World.load_world(_world_path)
 				if not again.is_empty():
-					_drowned = float(again.get("drowned", 0.30))
+					_drowned = float(again.get("drowned", World.DEFAULT_DROWNED))
 				_selected = -1
 				_dirty = false
 				_status = "reloaded %s" % _world_path

@@ -255,6 +255,9 @@ func _process(delta: float) -> void:
 
 func _apply_sky() -> void:
 	ctx.set_sky(_sky, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL, _flash)
+	# Rain and dark: a little shorter sight, a much worse shot.
+	ctx.set_weather(_sky, 0.85, 2.2, intensity)
+	ctx.set_screen(_sky, 0.0)
 
 
 ## A jagged path from high above down to `to`, by midpoint displacement, and one

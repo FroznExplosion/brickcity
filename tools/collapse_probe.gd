@@ -78,6 +78,14 @@ func _run() -> void:
 		await _check_far()
 	if _only("shelter"):
 		await _check_shelter()
+	if _only("tops"):
+		await _check_tops()
+	if _only("inside"):
+		await _check_inside_topple()
+	if _only("weather"):
+		await _check_weather()
+	if _only("carried"):
+		await _check_carried()
 	if _only("fall"):
 		await _check_fall()
 	if _only("trapped"):
@@ -683,3 +691,324 @@ func _check_shelter() -> void:
 			"%d ducked, crouched %s" % [ducked, so.pawn.is_crouched()])
 	await _ticks(60)
 	_ok("and stands again after", not so.pawn.is_crouched())
+
+
+# --- Weather and riding ---------------------------------------------------------
+
+func _check_weather() -> void:
+	print("weather: eyes a little, hands a lot")
+	var s: AIServices = city.ai_services
+	var ctx: DisasterContext = city.disasters.ctx
+	var a := _soldier_at(Vector3(-100.0, 0.0, -180.0))
+	var b := _soldier_at(Vector3(-100.0, 0.0, -125.0))
+	await _ticks(20)
+	a.brain.active = false
+	b.brain.active = false
+	a.stop()
+	b.stop()
+	var to := b.pawn.chest() - a.eye_pos()
+	a.pawn.intents.look_yaw = atan2(-to.x, -to.z)
+	await _ticks(5)
+	var d := a.eye_pos().distance_to(b.pawn.chest())
+	var clear_sees: bool = a.can_see(b.pawn)
+	ctx.set_weather(1.0, 0.85, 2.2)
+	var storm_sees: bool = a.can_see(b.pawn)
+	_ok("at %.0f m it sees in clear weather, not in a storm (%.0f m sight)" % [d, 60.0 * s.sight_mul],
+			clear_sees and not storm_sees)
+	var aim := AimModel.new(RandomNumberGenerator.new())
+	aim.track(b.pawn, 0.0)
+	var clear_cone := aim.cone_deg(0.5)
+	aim.weather = s.aim_mul
+	_ok("its aim is much worse", absf(aim.cone_deg(0.5) - clear_cone * 2.2) < 0.01,
+			"cone %.1f -> %.1f deg" % [clear_cone, aim.cone_deg(0.5)])
+	ctx.set_weather(0.0, 1.0, 1.0)
+	_ok("and clear again, all as it was", s.sight_mul == 1.0 and s.aim_mul == 1.0)
+	# A real storm sets it, and leaves it clear.
+	city.disasters.start("lightning")
+	var st: Disaster = city.disasters.current
+	var n := 0
+	while st.phase != Disaster.Phase.ACTIVE and n < 30 * 10:
+		await physics_frame
+		n += 1
+	await _ticks(10)
+	var mid := [s.sight_mul, s.aim_mul]
+	city.disasters.stop()
+	n = 0
+	while city.disasters.is_running() and n < 30 * 15:
+		await physics_frame
+		n += 1
+	_ok("a lightning storm: sight %.2f, aim x%.1f while it rages; clear when it is over" % mid,
+			float(mid[0]) < 0.9 and float(mid[1]) > 2.0 and s.sight_mul == 1.0 and s.aim_mul == 1.0)
+	await _until_quiet()
+	# Meteors and the tornado send soldiers under a roof too.
+	for kind in ["meteor", "tornado"]:
+		city.disasters.start(kind)
+		var dd: Disaster = city.disasters.current
+		n = 0
+		while dd.phase != Disaster.Phase.ACTIVE and n < 30 * 12:
+			await physics_frame
+			n += 1
+		await _ticks(5)
+		var during: bool = s.storm
+		city.disasters.stop()
+		n = 0
+		while city.disasters.is_running() and n < 30 * 15:
+			await physics_frame
+			n += 1
+		_ok("%s: soldiers take shelter while it lasts, and not after" % kind, during and not s.storm)
+		await _until_quiet()
+
+
+func _until_quiet() -> void:
+	if city.disasters.fire.is_burning():
+		city.disasters.fire.douse()
+	var n := 0
+	while city.disasters.fire.is_burning() and n < 30 * 20:
+		await physics_frame
+		n += 1
+
+
+func _check_carried() -> void:
+	print("carried: a soldier on something moving goes with it, and is thrown when it stops")
+	var at := Vector3(-140.0, 0.0, -200.0)
+	city.camera.look_at_from_position(at + Vector3(12.0, 8.0, 12.0), at)
+	var slab := _drop(at + Vector3(-2.1, 0.02, -2.1), 12, 12, 1)
+	await _ticks(40)
+	var top: float = city.islands.world_aabb(slab).end.y
+	var so := _soldier_at(Vector3(at.x, 0.0, at.z))
+	so.pawn.place(Vector3(at.x, top + 0.05, at.z))
+	await _ticks(20)
+	so.brain.active = false
+	so.stop()
+	# Awake, and kept from settling while it is pushed (it had frozen at rest).
+	city.islands.hold_awake(slab, 5000)
+	await _ticks(2)
+	var p0: Vector3 = slab.body.global_position
+	var s0: Vector3 = so.pawn.feet()
+	for i in 45:
+		slab.body.linear_velocity = Vector3(4.0, 0.0, 0.0)
+		slab.body.sleeping = false
+		await physics_frame
+	var moved: float = slab.body.global_position.x - p0.x
+	var carried: float = so.pawn.feet().x - s0.x
+	_ok("it moves with the slab under it", moved > 3.0 and carried > moved * 0.6,
+			"slab %.1f m, soldier %.1f m, %d ride tick(s)" % [moved, carried, city.crush.rides])
+	# Stopped dead: the soldier is not.
+	var throws0: int = city.crush.throws
+	slab.body.linear_velocity = Vector3.ZERO
+	await _ticks(1)
+	var kept: Vector3 = so.pawn.shove
+	var s1: Vector3 = so.pawn.feet()
+	await _ticks(10)
+	# (How far it then goes is up to what is in the way -- this slab has a rim.)
+	_ok("stopped dead, it keeps going: thrown with what it was carried at",
+			city.crush.throws > throws0 and kept.x > 3.0,
+			"shove %.1f m/s after the stop; %.1f m on" % [kept.x, so.pawn.feet().x - s1.x])
+
+
+# --- Cut-free tops ------------------------------------------------------------------
+
+## Cut tower `id` through at the joint over storey `storey`, as a SEVER.
+func _sever(id: int, storey: int) -> float:
+	var b = city.registry.get_building(id)
+	var chunk: int = city._promote(id)
+	var fx := float(b.recipe.footprint_x) * BrickPalette.STUD_M
+	var fz := float(b.recipe.footprint_z) * BrickPalette.STUD_M
+	var y := (1 + storey * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var cut: Vector3 = b.xform * Vector3(fx * 0.5, y, fz * 0.5)
+	city.world.separate_plane(chunk, cut, Vector3.UP, 0.14)
+	city.authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SEVER, id, cut, 0.14, Vector3.UP)
+	city._mark_dirty(id)
+	return cut.y
+
+
+## The biggest piece above `cut_y` inside `box`.
+func _top_piece(box: AABB, cut_y: float) -> BrickIsland:
+	var best: BrickIsland = null
+	var most := 0
+	for isl in city.islands.islands:
+		if not isl.is_valid() or not is_instance_valid(isl.body):
+			continue
+		var p: Vector3 = isl.body.global_position
+		if p.y < cut_y or not box.grow(1.0).has_point(p):
+			continue
+		var n: int = city.world.get_alive_block_count(isl.chunk)
+		if n > most:
+			most = n
+			best = isl
+	return best
+
+
+## How many of a piece's bricks are inside some OTHER static body.
+func _overlaps(isl: BrickIsland) -> Dictionary:
+	var xf: Transform3D = city.world.get_chunk_transform(isl.chunk)
+	var q := PhysicsPointQueryParameters3D.new()
+	q.collision_mask = 0xFFFFFFFF
+	q.exclude = [isl.body.get_rid()]
+	var sp := city.get_world_3d().direct_space_state
+	var n := 0
+	var hit := 0
+	var what := {}
+	for bx in city.world.get_block_boxes(isl.chunk):
+		var d: Dictionary = bx
+		if not bool(d.alive):
+			continue
+		n += 1
+		if n % 7 != 0:
+			continue
+		q.position = xf * (d.pos as Vector3)
+		for h in sp.intersect_point(q, 4):
+			hit += 1
+			var c = h.collider
+			var name := str(c.name) if c is Node else "rid"
+			what[name] = int(what.get(name, 0)) + 1
+			break
+	return {"sampled": n / 7, "inside_other": hit, "what": what}
+
+
+func _check_tops() -> void:
+	print("tops: a tower cut through at a slab -- does the freed top move?")
+	for storeys in [5, 7]:
+		var id := _tower(storeys, [])
+		if id < 0:
+			continue
+		var box := _box(id)
+		city.camera.look_at_from_position(box.get_center() + Vector3(-40.0, 15.0, -40.0), box.get_center())
+		city._promote(id)
+		var w := 0
+		while (city._bands_building(id) or w < 30) and w < 30 * 20:
+			await physics_frame
+			w += 1
+		var cut_y := _sever(id, 1)
+		var top: BrickIsland = null
+		var n := 0
+		while top == null and n < 30 * 3:
+			await physics_frame
+			n += 1
+			top = _top_piece(box, cut_y)
+		if top == null:
+			_ok("building %d: a top came free" % id, false)
+			continue
+		await _ticks(5)
+		var ov := _overlaps(top)
+		var bricks: int = city.world.get_alive_block_count(top.chunk)
+		print("  --   building %d (%d storeys): top %d bricks, merged %s, settled %s, inside other bodies: %s" % [
+				id, storeys, bricks, top.merged, top.settled, ov])
+		# Stairs of the building below reaching up into the freed top's shaft?
+		var b_now = city.registry.get_building(id)
+		var gone := {}
+		for bid in city.world.get_dead_blocks(b_now.chunk):
+			gone[bid] = true
+		for bid in city.world.get_detached_blocks(b_now.chunk):
+			gone[bid] = true
+		var up_into := 0
+		var up_top := -INF
+		var bxf: Transform3D = city.world.get_chunk_transform(b_now.chunk)
+		for f in b_now.fixtures:
+			for bid in f.blocks:
+				if gone.has(bid):
+					continue
+				var sb: AABB = bxf * city.world.get_blocks_box(b_now.chunk, PackedInt32Array([bid]))
+				if sb.end.y > cut_y + 0.3:
+					up_into += 1
+					up_top = maxf(up_top, sb.end.y)
+		_ok("building %d: none of the staircase below reaches up into the freed top" % id, up_into == 0,
+				"%d stair block(s) up to %.1f m, cut at %.1f" % [up_into, up_top, cut_y])
+		# What would be OUR bug: the top overlapping the building it came off
+		# (stale collision), frozen, or its rotation locked. None of these.
+		var bd: RigidBody3D = top.body
+		_ok("building %d: its %d-brick top is free -- overlaps nothing, not frozen, no locked axis" % [
+				id, bricks], int(ov.inside_other) == 0 and not bd.freeze and not bd.lock_rotation
+				and not (bd.axis_lock_angular_x or bd.axis_lock_angular_y or bd.axis_lock_angular_z),
+				"%s" % [ov])
+		# And pushed, it turns. It did not, at all, for as long as the staircase
+		# of the building below ran up through its stairwell -- a rod through a
+		# bead (Docs/Collapse.md 6).
+		var tilt := 0.0
+		city.islands.hold_awake(top, 3000)
+		for k in 30:
+			bd.angular_velocity = Vector3(0, 0, -0.6)
+			bd.sleeping = false
+			await physics_frame
+			tilt = maxf(tilt, rad_to_deg(acos(clampf(bd.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+		_ok("building %d: pushed over, it turns" % id, tilt > 10.0, "%.1f deg in a second" % tilt)
+
+
+# --- A soldier inside a building that topples --------------------------------------
+
+func _check_inside_topple() -> void:
+	print("inside: a soldier in a building that topples is carried, thrown, hurt -- never left in it")
+	var id := _tower(5, [])
+	var box := _box(id)
+	var c := box.get_center()
+	city.camera.look_at_from_position(c + Vector3(-45.0, 20.0, -45.0), c)
+	city._promote(id)
+	var w := 0
+	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+		await physics_frame
+		w += 1
+	var floor_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	# Off the middle: the stairwell is there, open to the ground.
+	var at: Vector3 = city.ai_nav.snap(Vector3(c.x - box.size.x * 0.3, floor_y + 0.2, c.z + box.size.z * 0.3))
+	_ok("the soldier stands on the second floor", absf(at.y - floor_y) < 0.5, "%.2f / %.2f" % [at.y, floor_y])
+	var so: Soldier = city._spawn_soldier(at)
+	await _ticks(10)
+	so.brain.active = false
+	so.stop()
+	var start: Vector3 = so.pawn.feet()
+	var hp0: float = so.pawn.health.total_current()
+	var rides0: int = city.crush.rides
+	# The earthquake's soft storey: the ground storey blasted out on one side,
+	# most of the way across -- the city's own topple does the rest.
+	var y := box.position.y + 0.7
+	var dd := 0.0
+	while dd <= box.size.x * 0.85:
+		var zz := -box.size.z * 0.5 + 0.4
+		while zz <= box.size.z * 0.5 - 0.4:
+			city._blast(Vector3(box.end.x - 0.3 - dd, y, c.z + zz), 1.1)
+			zz += 1.5
+		dd += 1.5
+	var b = city.registry.get_building(id)
+	var n := 0
+	while not b.toppled and n < 30 * 10:
+		await physics_frame
+		n += 1
+	_ok("the building topples", b.toppled, "%.1f s" % (n / 30.0))
+	# Over its undermined (+x) edge, as the earthquake helps it (Earthquake.tip).
+	var piece: BrickIsland = null
+	var most := 0
+	for isl in city.islands.islands:
+		if isl.is_valid() and is_instance_valid(isl.body) and box.grow(4.0).has_point(isl.body.global_position):
+			var k: int = city.world.get_alive_block_count(isl.chunk)
+			if k > most:
+				most = k
+				piece = isl
+	var pushed := 0.0
+	for k in 30 * 4:
+		if piece == null or not piece.is_valid():
+			break
+		pushed = maxf(pushed, rad_to_deg(acos(clampf(piece.body.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+		if rad_to_deg(acos(clampf(piece.body.global_basis.y.dot(Vector3.UP), -1.0, 1.0))) > Earthquake.TIP_ANGLE:
+			break
+		city.islands.hold_awake(piece, 500)
+		Earthquake.tip(piece, Vector3.RIGHT, box)
+		await physics_frame
+	await _ticks(30 * 6)
+	var tilt := 0.0
+	for isl in city.islands.islands:
+		if isl.is_valid() and is_instance_valid(isl.body) and city.world.get_alive_block_count(isl.chunk) > 500 				and box.grow(12.0).has_point(isl.body.global_position):
+			tilt = maxf(tilt, rad_to_deg(acos(clampf(isl.body.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+	print("  --   pushed to %.0f deg; soldier now at %v (started %v)" % [pushed, so.pawn.feet(), start])
+	var moved: float = so.pawn.feet().distance_to(start)
+	var embedded := false
+	for isl in city.islands.islands:
+		if isl.is_valid() and is_instance_valid(isl.body) and not so.is_dead() 				and city.crush._inside(isl, [so.pawn.feet() + Vector3.UP * 0.3, so.pawn.chest()]):
+			embedded = true
+	_ok("the soldier rode it as it went over", city.crush.rides > rides0 and moved > 1.0,
+			"moved %.1f m, %d ride tick(s)" % [moved, city.crush.rides - rides0])
+	var fell := start.y - so.pawn.feet().y
+	var should_hurt := so.pawn.last_fall > Pawn.SAFE_FALL + 0.3
+	_ok("and was not left inside it; hurt if it fell far enough to be",
+			not embedded and (not should_hurt or so.is_dead() or so.pawn.health.total_current() < hp0),
+			"dropped %.1f m (last fall %.1f m), %.0f -> %.0f hp, dead %s, inside %s" % [fell,
+			so.pawn.last_fall, hp0, so.pawn.health.total_current(), so.is_dead(), embedded])

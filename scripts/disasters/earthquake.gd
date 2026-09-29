@@ -49,6 +49,10 @@ const GIVE_UP_S := 7.0            ## s: still standing, it survived
 const BAND_STEP := 1.5            ## m between blasts in the band
 const BAND_RADIUS := 1.1
 const COLLAPSE_MAX_S := 14.0      ## a collapse stops counting after this, settled or not
+const TIP_ANGLE := 50.0           ## degrees: past this its centre is over the edge (~37 for a
+                                  ## five-storey block) and gravity has it
+const TIP_SPIN := 0.5             ## rad/s over the edge
+const PUSH_S := 4.0               ## s it is helped over after it starts to topple
 const HAZARD_BASE := 20
 
 var max_collapse_at_once := 2
@@ -103,6 +107,8 @@ func _on_phase(p: Phase) -> void:
 			plan.clear()
 		Phase.DONE:
 			_rumble.stop()
+			ctx.set_weather(0.0, 1.0, 1.0)
+			ctx.set_screen(0.0, 0.0)
 			for i in collapses.size():
 				ctx.clear_hazard(HAZARD_BASE + i)
 
@@ -161,6 +167,9 @@ func _tick_ending(dt: float) -> void:
 
 func _shake() -> void:
 	var a := amplitude * intensity
+	# Nobody shoots straight on moving ground; eyes are fine.
+	ctx.set_weather(amplitude, 1.0, 3.0, intensity)
+	ctx.set_screen(0.0, amplitude * 0.3, Color(0.62, 0.6, 0.56))
 	ctx.shake(ctx.player_pos(), 0.008 + 0.02 * a)
 	_rumble.volume_db = lerpf(-40.0, 2.0, clampf(amplitude, 0.0, 1.0))
 	if not _rumble.playing:
@@ -323,7 +332,16 @@ func _follow() -> void:
 			if isl != null and isl.is_valid() and is_instance_valid(isl.body):
 				var tilt := rad_to_deg(acos(clampf(isl.body.global_basis.y.dot(Vector3.UP), -1.0, 1.0)))
 				c.tilt = maxf(float(c.tilt), tilt)
-				if isl.settled and age - float(c.toppled_at) > 2.0:
+				# It topples the moment its centre is past what is left -- often
+				# barely, and it came to rest leaning at 7 degrees. While the
+				# ground still shakes it is tipped on over its undermined edge,
+				# until gravity has it.
+				if tilt < TIP_ANGLE and age - float(c.toppled_at) < PUSH_S:
+					if isl.settled:
+						ctx.hold_awake(isl, 1000)
+					else:
+						tip(isl, c.dir, c.box, intensity)
+				elif isl.settled and age - float(c.toppled_at) > 2.0:
 					c.done = true
 			elif c.piece != null:
 				c.done = true
@@ -331,6 +349,22 @@ func _follow() -> void:
 			c.done = true
 		if c.done:
 			ctx.clear_hazard(HAZARD_BASE + i)
+
+
+## Tip `isl` over the bottom edge of `box` on side `dir`: a rigid turn about
+## that edge -- its centre rises and moves out as it turns, which is how a
+## building goes over. (About its centre it cannot turn at all while it rests
+## flat.) Only ever helps: one already going over faster is left alone.
+static func tip(isl: BrickIsland, dir: Vector3, box: AABB, strength := 1.0) -> void:
+	var body := isl.body
+	var half := (box.size.x if absf(dir.x) > 0.5 else box.size.z) * 0.5
+	var pivot := Vector3(box.get_center().x, box.position.y, box.get_center().z) + dir * half
+	var w := Vector3.UP.cross(dir) * TIP_SPIN * sqrt(maxf(strength, 0.1))
+	if body.angular_velocity.dot(w) >= w.length_squared():
+		return
+	body.angular_velocity = w
+	body.linear_velocity = w.cross(body.global_position - pivot)
+	body.sleeping = false
 
 
 ## The toppled building: the biggest piece near where it stood.

@@ -124,9 +124,14 @@ func _roll_streaks() -> void:
 
 func _on_phase(p: Phase) -> void:
 	match p:
+		Phase.ACTIVE:
+			# Things falling out of the sky: soldiers with nothing to fight get
+			# under a roof (BTShelter), as in a storm.
+			ctx.set_storm(true)
 		Phase.ENDING:
 			_sky_from = _sky
 		Phase.DONE:
+			ctx.set_storm(false)
 			_set_sky(0.0)
 			for m in meteors:
 				if m.has("hazard"):
@@ -346,6 +351,9 @@ func _burst(pos: Vector3, r: float, big: bool) -> void:
 func _set_sky(a: float) -> void:
 	_sky = a
 	ctx.set_sky(a, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
+	# Dust in the air and the ground jumping: a little.
+	ctx.set_weather(a, 0.95, 1.3, intensity)
+	ctx.set_screen(0.0, a * 0.35, Color(0.75, 0.52, 0.38))
 
 
 func _rumble_to(db: float) -> void:

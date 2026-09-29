@@ -647,8 +647,10 @@ func run_gate() -> void:
 	if not spots.is_empty():
 		# A spot the survey takes now (bricks and physics both), from the middle
 		# of the list out.
+		@warning_ignore("integer_division")
 		var f: Vector3 = spots[spots.size() / 2]
 		for i in spots.size():
+			@warning_ignore("integer_division")
 			var g: Vector3 = spots[(spots.size() / 2 + i) % spots.size()]
 			if bool(survey.check(g, focus, null, []).ok):
 				f = g

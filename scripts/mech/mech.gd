@@ -60,7 +60,7 @@ var arm_pitch := 0.0
 
 
 ## A standing mech with its feet at `feet`, facing `yaw`.
-static func spawn(parent: Node, feet: Vector3, yaw := 0.0, p_team := 0) -> Mech:
+static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Mech:
 	var b := CharacterBody3D.new()
 	b.name = "MechBody"
 	b.collision_layer = Layers.PAWN
@@ -92,9 +92,9 @@ static func spawn(parent: Node, feet: Vector3, yaw := 0.0, p_team := 0) -> Mech:
 	m._build_greybox()
 	parent.add_child(b)
 	if b.is_inside_tree():
-		b.global_position = feet + Vector3.UP * HEIGHT * 0.5
+		b.global_position = at_feet + Vector3.UP * HEIGHT * 0.5
 	else:
-		b.position = feet + Vector3.UP * HEIGHT * 0.5
+		b.position = at_feet + Vector3.UP * HEIGHT * 0.5
 	b.reset_physics_interpolation()
 	mo.reset(yaw)
 	m.intents.clear(yaw)

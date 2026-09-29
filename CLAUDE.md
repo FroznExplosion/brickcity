@@ -66,3 +66,35 @@ The engine library is **not committed**; each worktree builds its own.
   `place_probe`, `city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`;
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
 - Run the probes your change could affect before merging.
+
+### Know what a test measures, and prune what no longer matters
+
+- Before running a probe or pass (or trusting its result), read what each
+  check is FOR -- its comment and the doc section it cites -- not just its name.
+- If a check measures something the game no longer has or needs (a removed
+  feature, a replaced approach, a number nobody uses), remove that check (or
+  that part of the pass) in the same change that made it obsolete, and say in
+  the commit message why it went.
+- Pruning is not a way to make a failing test pass: a check that fails on
+  something still wanted is a bug to fix, not a check to delete.
+- Stay in your area: prune checks in the files your area owns (Areas table);
+  for another area's tests, tell the user which check looks obsolete and why.
+
+### Performance measurements need the editor closed
+
+Frame times, `--bench`, `--stress`, `--lod` and any other timing pass are only
+trustworthy with the user's Godot EDITOR closed (an open editor inflates frame
+times several-fold). Correctness probes and gates are fine with it open.
+
+- Before a timing run, check for the editor: a Godot process whose command
+  line has `--editor` (PowerShell:
+  `Get-CimInstance Win32_Process -Filter "name like 'Godot%'" | Select CommandLine`).
+- If it is open and there is other work left, **skip the timing run and carry
+  on** with the next task; come back to it later.
+- If the timing run is the LAST thing left, wait **30 minutes** (a background
+  wait, not a sleep loop) and check once more. Still open: stop, do not keep
+  retrying, and say in chat that the measurement was not taken because the
+  editor was open.
+- Never close the user's editor yourself.
+- Report numbers taken with other test runs going (other chats' Godot
+  processes) as unreliable, and say so.

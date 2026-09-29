@@ -103,8 +103,8 @@ func step(delta: float) -> void:
 func _fire_one() -> void:
 	if aim == null or not aim.is_inside_tree():
 		return
-	var basis := aim.global_transform.basis
-	var dir := _spread(-basis.z, basis)
+	var aim_basis := aim.global_transform.basis
+	var dir := _spread(-aim_basis.z, aim_basis)
 	var from := aim.global_position
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * range_m, collision_mask, exclude)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -157,7 +157,7 @@ func _hit_living(target: Node, point: Vector3, normal: Vector3) -> DamageSystem.
 	return DamageSystem.resolve(p, target)
 
 
-func _spread(forward: Vector3, basis: Basis) -> Vector3:
+func _spread(forward: Vector3, aim_basis: Basis) -> Vector3:
 	var acc := clampf(_stat(&"accuracy", 1.0), 0.0, 1.0)
 	var cone := deg_to_rad(MAX_SPREAD_DEG) * (1.0 - acc)
 	if cone <= 0.0:
@@ -166,7 +166,7 @@ func _spread(forward: Vector3, basis: Basis) -> Vector3:
 	# Uniform over the cone's disc, not its angle, so shots do not bunch in the middle.
 	var radius := sqrt(r.randf()) * tan(cone)
 	var theta := r.randf() * TAU
-	return (forward + basis.x * cos(theta) * radius + basis.y * sin(theta) * radius).normalized()
+	return (forward + aim_basis.x * cos(theta) * radius + aim_basis.y * sin(theta) * radius).normalized()
 
 
 func _roll() -> RandomNumberGenerator:

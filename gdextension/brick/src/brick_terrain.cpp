@@ -425,6 +425,13 @@ static int painted_at(int x, int z, uint32_t seed) {
     return -1;
 }
 
+/// The sea level the BEACHES are drawn against, metres; below -1e8 means no
+/// sea. Set with the water's own (BrickWave::set_sea_level), so the sand is
+/// always where the water meets the land.
+static double g_beach_sea = -1.0e9;
+/// Ground up to this far above the sea is sand, give or take the noise.
+constexpr double BEACH_M = 1.3;
+
 int Field::material_at(int x, int z, int h) const {
     // A brush-painted column first: the most specific thing an author said.
     const int brushed = layer_material(x, z);
@@ -439,6 +446,14 @@ int Field::material_at(int x, int z, int h) const {
     const float d = value_noise((float)x * 0.021f, (float)z * 0.021f, seed + 4241U);
     if (h <= 1) {
         return MAT_SAND;
+    }
+    // BEACHES: the ground just above the sea, and the seabed under it, is
+    // sand. The edge wanders with the same noise so it is not a contour line.
+    if (g_beach_sea > -1.0e8) {
+        const double top = (double)(h + 1) * (double)BRICK_M;
+        if (top <= g_beach_sea + BEACH_M + ((double)d - 0.5) * 1.2) {
+            return MAT_SAND;
+        }
     }
     // The bands moved with the relief. At 7 bricks they were tuned for a
     // world 8 bricks tall; with a landform octave that put stone on almost
@@ -2516,6 +2531,14 @@ static int g_coarse_smooth_step = 8;
 /// enough to cover the step between two levels on the steepest ground the
 /// field makes over one coarse cell (Terrain.md 19.15).
 constexpr float EDGE_SKIRT_M = 4.0f * BRICK_M;
+
+/// A coarse block's edge skirt, scaled to its sample spacing (19.17): the
+/// next ring out samples twice as far apart, and on a 45-degree hill two
+/// samples that far apart differ by that much in height. 1.68 m fixed left
+/// gaps at every blocky-to-smooth and smooth-to-smooth border on steep ground.
+static inline float coarse_skirt_m(int step) {
+    return std::max(EDGE_SKIRT_M, 2.0f * (float)step * STUD_M);
+}
 void BrickTerrain::set_coarse_smooth_step(int step) { g_coarse_smooth_step = std::max(step, 0); }
 int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
 
@@ -2584,7 +2607,7 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         }
     }
     // The skirt: each edge vertex, and a copy two bricks below it.
-    const float drop = EDGE_SKIRT_M;
+    const float drop = coarse_skirt_m(step);
     auto skirt = [&](int ax, int az, int bx, int bz, const Vector3 &out) {
         const Vector3 pa = m.verts[ax + V * az];
         const Vector3 pb = m.verts[bx + V * bz];
@@ -2597,7 +2620,10 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         (void)out;
         const Vector3 up = (m.normals[ax + V * az] + m.normals[bx + V * bz]).normalized();
         m.raw_quad(up, ca.lerp(cb, 0.5f), Vector2(0, 0),
-            Vector3(pa.x, pa.y - drop, pa.z), Vector3(pb.x, pb.y - drop, pb.z), pb, pa,
+            // Wound to face OUT of the block (clockwise seen from outside).
+            // It was the other way round, so the skirt faced into its own
+            // block and was culled from the only side it can be seen from.
+            Vector3(pb.x, pb.y - drop, pb.z), Vector3(pa.x, pa.y - drop, pa.z), pa, pb,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
     };
     for (int k = 0; k < N; ++k) {
@@ -2673,64 +2699,124 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
     MeshBuf m;
     const float cs = (float)step * STUD_M;
     const Vector2 face(0.0f, 0.0f);   // no piece, so no seam and no perimeter
+
+    // Each cell's colour and material first, so neighbours can be compared:
+    // runs of cells that agree are drawn as ONE quad (Terrain.md 19.18).
+    std::vector<Color> ccol((size_t)N * N);
+    std::vector<uint8_t> cmat((size_t)N * N);
     for (int cz = 0; cz < N; ++cz) {
         for (int cx = 0; cx < N; ++cx) {
-            const float y = cell[(size_t)cx + (size_t)N * cz];
-            const float x0 = (float)cx * cs, x1 = x0 + cs;
-            const float z0 = (float)cz * cs, z1 = z0 + cs;
-            const int pcx = gx0 + cx * step + step / 2;
-            const int pcz = gz0 + cz * step + step / 2;
-            const int painted_c = layer_colour(pcx, pcz);
-            Color col = filament_colour(painted_c != 0xFF ? painted_c : material_filament(
-                    g_field.material_at(gx0 + cx * step + step / 2,
-                            gz0 + cz * step + step / 2,
-                            floor_div(surface_plate(gx0 + cx * step + step / 2,
-                                    gz0 + cz * step + step / 2), PLATES_PER_CELL))));
-            m.material = (uint8_t)g_field.material_at(
-                    gx0 + cx * step + step / 2, gz0 + cz * step + step / 2,
-                    floor_div(surface_plate(gx0 + cx * step + step / 2,
-                            gz0 + cz * step + step / 2), PLATES_PER_CELL));
-            if (!sun_reaches(gx0 + cx * step + step / 2, gz0 + cz * step + step / 2)) {
+            const int px = gx0 + cx * step + step / 2;
+            const int pz = gz0 + cz * step + step / 2;
+            const int mat = g_field.material_at(px, pz,
+                    floor_div(surface_plate(px, pz), PLATES_PER_CELL));
+            const int painted_c = layer_colour(px, pz);
+            Color col = filament_colour(painted_c != 0xFF ? painted_c : material_filament(mat));
+            if (!sun_reaches(px, pz)) {
                 col = Color(col.r * SUN_SHADE, col.g * SUN_SHADE, col.b * SUN_SHADE, col.a);
             }
-            m.raw_quad(Vector3(0, 1, 0), col, face,
+            ccol[(size_t)cx + (size_t)N * cz] = col;
+            cmat[(size_t)cx + (size_t)N * cz] = (uint8_t)mat;
+        }
+    }
+    auto Y = [&](int cx, int cz) { return cell[(size_t)cx + (size_t)N * cz]; };
+    auto same = [&](int a, int b) {
+        return cell[a] == cell[b] && cmat[a] == cmat[b] && ccol[a] == ccol[b];
+    };
+    // The height a cell's side drops to: the neighbour, or at the block's
+    // edge a skirt deep enough to meet the next level.
+    auto drop_to = [&](int cx, int cz, int dx, int dz) {
+        const int nx = cx + dx, nz = cz + dz;
+        if (nx < 0 || nz < 0 || nx >= N || nz >= N) {
+            return Y(cx, cz) - coarse_skirt_m(step);
+        }
+        return Y(nx, nz);
+    };
+    auto is_edge = [&](int cx, int cz, int dx, int dz) {
+        const int nx = cx + dx, nz = cz + dz;
+        return nx < 0 || nz < 0 || nx >= N || nz >= N;
+    };
+
+    // TOPS: runs along X.
+    for (int cz = 0; cz < N; ++cz) {
+        int cx = 0;
+        while (cx < N) {
+            const int a = cx + N * cz;
+            int e = cx + 1;
+            while (e < N && same(a, e + N * cz)) {
+                ++e;
+            }
+            const float y = cell[a];
+            const float x0 = (float)cx * cs, x1 = (float)e * cs;
+            const float z0 = (float)cz * cs, z1 = z0 + cs;
+            m.material = cmat[a];
+            m.raw_quad(Vector3(0, 1, 0), ccol[a], face,
                 Vector3(x0, y, z0), Vector3(x1, y, z0),
                 Vector3(x1, y, z1), Vector3(x0, y, z1),
-                Vector2(0, 0), Vector2(cs, 0), Vector2(cs, cs), Vector2(0, cs));
+                Vector2(0, 0), Vector2(x1 - x0, 0), Vector2(x1 - x0, cs), Vector2(0, cs));
+            cx = e;
+        }
+    }
 
-            // Skirts, down to whichever neighbour is lower. At the block
-            // edge there is no neighbour to ask, so it drops a brick --
-            // enough to cover the step against the next block, and hidden
-            // behind it either way.
-            struct Side { int dx, dz; Vector3 n; float ax, az, bx, bz; };
-            const Side sides[4] = {
-                { 0, -1, Vector3(0, 0, -1), x0, z0, x1, z0 },
-                { 0,  1, Vector3(0, 0,  1), x1, z1, x0, z1 },
-                { -1, 0, Vector3(-1, 0, 0), x0, z1, x0, z0 },
-                {  1, 0, Vector3(1, 0,  0), x1, z0, x1, z1 },
-            };
-            for (const Side &e : sides) {
-                const int nx = cx + e.dx, nz = cz + e.dz;
-                float ny;
-                if (nx < 0 || nz < 0 || nx >= N || nz >= N) {
-                    // The block's edge: deep enough to meet whatever the
-                    // neighbouring level stands at, finer or coarser.
-                    ny = y - EDGE_SKIRT_M;
-                } else {
-                    ny = cell[(size_t)nx + (size_t)N * nz];
-                }
+    // WALLS, one direction at a time, merged along the wall's own length
+    // while the cells agree and drop to the same height. A block-EDGE wall is
+    // a skirt over the next level and lit like ground (19.16); it faces out
+    // of the block, which is the only side it can be seen from (19.18).
+    struct Dir { int dx, dz; Vector3 n; };
+    const Dir dirs[4] = {
+        { 0, -1, Vector3(0, 0, -1) }, { 0, 1, Vector3(0, 0, 1) },
+        { -1, 0, Vector3(-1, 0, 0) }, { 1, 0, Vector3(1, 0, 0) },
+    };
+    for (const Dir &d : dirs) {
+        const bool along_x = d.dz != 0;   // a Z-facing wall runs along X
+        for (int row = 0; row < N; ++row) {
+            int k = 0;
+            while (k < N) {
+                const int cx = along_x ? k : row;
+                const int cz = along_x ? row : k;
+                const int a = cx + N * cz;
+                const float y = cell[a];
+                const float ny = drop_to(cx, cz, d.dx, d.dz);
                 if (ny >= y - 1e-4f) {
+                    ++k;
                     continue;
                 }
-                const Vector2 wall(cs, y - ny);
-                // A block-EDGE wall is a skirt over the next level: lit like
-                // ground (19.16). Walls inside the block are real steps.
-                const bool edge = nx < 0 || nz < 0 || nx >= N || nz >= N;
-                m.raw_quad(edge ? Vector3(0, 1, 0) : e.n, col, face,
-                    Vector3(e.ax, ny, e.az), Vector3(e.bx, ny, e.bz),
-                    Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
-                    Vector2(0, wall.y), Vector2(wall.x, wall.y),
-                    Vector2(wall.x, 0), Vector2(0, 0));
+                const bool edge = is_edge(cx, cz, d.dx, d.dz);
+                int e = k + 1;
+                while (e < N) {
+                    const int ex = along_x ? e : row;
+                    const int ez = along_x ? row : e;
+                    const int b = ex + N * ez;
+                    if (!same(a, b) || drop_to(ex, ez, d.dx, d.dz) != ny
+                            || is_edge(ex, ez, d.dx, d.dz) != edge) {
+                        break;
+                    }
+                    ++e;
+                }
+                // The wall's two ends, wound to face along d.n.
+                const float lo = (float)k * cs, hi = (float)e * cs;
+                Vector3 pa, pb;
+                if (d.dz == -1) {
+                    const float z = (float)cz * cs;
+                    pa = Vector3(lo, 0, z); pb = Vector3(hi, 0, z);
+                } else if (d.dz == 1) {
+                    const float z = (float)(cz + 1) * cs;
+                    pa = Vector3(hi, 0, z); pb = Vector3(lo, 0, z);
+                } else if (d.dx == -1) {
+                    const float x = (float)cx * cs;
+                    pa = Vector3(x, 0, hi); pb = Vector3(x, 0, lo);
+                } else {
+                    const float x = (float)(cx + 1) * cs;
+                    pa = Vector3(x, 0, lo); pb = Vector3(x, 0, hi);
+                }
+                const float len = hi - lo;
+                m.material = cmat[a];
+                m.raw_quad(edge ? Vector3(0, 1, 0) : d.n, ccol[a], face,
+                    Vector3(pa.x, ny, pa.z), Vector3(pb.x, ny, pb.z),
+                    Vector3(pb.x, y, pb.z), Vector3(pa.x, y, pa.z),
+                    Vector2(0, y - ny), Vector2(len, y - ny),
+                    Vector2(len, 0), Vector2(0, 0));
+                k = e;
             }
         }
     }
@@ -3359,40 +3445,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
-    // THE EDGE SKIRT (Terrain.md 19.15): a strip hanging from the tile's
-    // outer edge, one stud a quad at that column's own top. Where the
-    // neighbouring tile is detail too, it is inside that tile's ground and
-    // never seen; where the neighbour is the coarse tier, which now sits at or
-    // below the real ground, it closes the step between them. Heightfield
-    // ground only: the volumetric bench cuts its field open on purpose.
-    if (g_flat_mode) {
-        const Vector2 no_seam(0.0f, 0.0f);
-        for (int k = 0; k < TILE; ++k) {
-            struct Edge { int lx, lz; Vector3 n; float ax, az, bx, bz; };
-            const float x0 = (float)k * STUD_M, x1 = x0 + STUD_M;
-            const float e0 = 0.0f, e1 = (float)TILE * STUD_M;
-            const Edge edges[4] = {
-                { k, 0, Vector3(0, 0, -1), x0, e0, x1, e0 },
-                { k, TILE - 1, Vector3(0, 0, 1), x1, e1, x0, e1 },
-                { 0, k, Vector3(-1, 0, 0), e0, x1, e0, x0 },
-                { TILE - 1, k, Vector3(1, 0, 0), e1, x0, e1, x1 },
-            };
-            for (const Edge &e : edges) {
-                const int i = TileSample::idx(e.lx, e.lz);
-                const float y = (float)(s.tp[i] + 1) * PLATE_M;
-                const float yb = y - EDGE_SKIRT_M;
-                m.material = s.mat[i];
-                const Color col = piece_colour(s, e.lx, e.lz, s.mat[i], false);
-                // Lit like the ground (19.16): seen only where the next level
-                // is lower, and a dark wall there read as a gap.
-                m.raw_quad(Vector3(0, 1, 0), col, no_seam,
-                    Vector3(e.ax, yb, e.az), Vector3(e.bx, yb, e.bz),
-                    Vector3(e.bx, y, e.bz), Vector3(e.ax, y, e.az),
-                    Vector2(0, EDGE_SKIRT_M), Vector2(STUD_M, EDGE_SKIRT_M),
-                    Vector2(STUD_M, 0), Vector2(0, 0));
-            }
-        }
-    }
+    // No edge skirt on the detail tiles (19.18): the detail square always
+    // surrounds the camera, so a skirt facing out of it is never seen, and
+    // the coarse tier's own skirts face back in to cover every border.
 
     Array mesh;
     if (!m.verts.is_empty()) {
@@ -3717,7 +3772,10 @@ inline double omega(double wavelength) {
 
 int BrickWave::component_count() { return WAVE_COUNT; }
 
-void BrickWave::set_sea_level(double m) { g_sea_level = m; }
+void BrickWave::set_sea_level(double m) {
+    g_sea_level = m;
+    g_beach_sea = m;
+}
 double BrickWave::get_sea_level() { return g_sea_level; }
 
 /// A TALLER SWELL IS ALSO A LONGER ONE.

@@ -66,7 +66,7 @@ const UnderwaterFx := preload("res://scripts/underwater.gd")
 ## deepest water is 8 cm. 2.8 m floods ~40% and gets to 1.3 m, which is a
 ## coast. The number is a property of the seed, not of the water.
 ## How much of the world is under water. World.sea_level_for.
-const DROWNED := 0.30
+const DROWNED := World.DEFAULT_DROWNED
 ## Preloaded, not reached for by class name: a new `class_name` is not in the
 ## global class cache until the editor rescans, and a headless run reads that
 ## cache off disk. Same reason as UnderwaterFx.
@@ -614,7 +614,7 @@ func rebuild_far() -> void:
 	_far_rings = 0
 	_build_far()
 	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
-	_refine_for(_streamer.current_region().grow(_streamer.align))
+	_refine_for(_streamer.current_region())
 	_hide_covered_far()
 	print("[heightfield] far tier rebuilt: %d blocks, %d tris, smooth from step %d (at %s)" % [
 		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
@@ -641,7 +641,7 @@ static func _lod_of_step(step: int) -> float:
 func _hide_covered_far() -> void:
 	if _far_nodes.is_empty():
 		return
-	_refine_for(_streamer.current_region().grow(_streamer.align))
+	_refine_for(_streamer.current_region())
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:

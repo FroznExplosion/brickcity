@@ -221,6 +221,39 @@ coloured boxes (no facade yet). Instance written when a building enters the far 
 **Measure:** `city.tscn -- --bench --buildings=150` from the three §19.5 viewpoints — calls, drawn,
 GPU frame, before and after. Screenshot the skyline from the worst viewpoint.
 
+**Done (2026-09-28).** As planned, with one rule added: **far things show what they are.** A box is
+the true shape of an intact recipe building only. So past `SHELL_RANGE`:
+
+* an intact recipe building → its far box;
+* a **damaged** recipe building or **any player build** → keeps its shell, drawing only, with no
+  body (`_shell_far`). Its damage and its shape stay exact at every distance. Stages 3 and 4 move
+  these to cheaper forms.
+
+`_ray_recipes` now skips buildings with a shell *body* rather than any shell, so a shot still lands
+on a far shell. The far box's colour is the coarse shell's (every recipe building is the same
+colour, `BuildingShell.build_coarse_arrays`, which answers §9's colour question), lit like
+`brick.gdshader`'s PLA, so there is no colour step at 260 m.
+
+Gate: `big_city.tscn -- --far --buildings=150` — no building undrawn or drawn twice; a far
+building shot at 500 m swaps to a body-less shell, takes a shot, and gets its body back inside the
+range. 9 ok. `--reach` lands to 480 m; `collapse_probe` 34 ok.
+
+The bench now waits for the shell streamer to settle at each viewpoint. Before this, it sampled
+while the 150 placement-time shells were still being freed, and "over the city" swung between
+0.66M and 1.7M tris from run to run. Settled, on `big_city`, 150 buildings (ms are noisy: the
+editor was open):
+
+| viewpoint | before: tris / calls | after: tris / calls | far boxes |
+|---|---|---|---|
+| over the city | 3.83M / 257 | 3.83M / 258 | 34 |
+| street level | 493k / 171 | 493k / 172 | 37 |
+| high and far | 54.5k / 148 | 55.3k / 149 | 73 |
+
+One call and under 1k triangles for up to 73 buildings that used to be missing. Settled, the worst
+viewpoint is "over the city" at 3.8M triangles. A coarse shell is about ten triangles, so nearly
+all of that is the < 110 m banded shells. Stage 2 can only save draw calls, one per coarse shell;
+the triangle weight sits in near-shell detail, which this plan does not touch.
+
 ### Stage 2 — The coarse tier joins the MultiMesh
 
 `_make_shell(id, coarse = true)` stops making a `MeshInstance3D` and shows the building's far
@@ -236,6 +269,85 @@ on every `damage_profile` change.
 
 **Gate:** a tower with its top blown off reads as blown off from 110 m, 260 m and 1 km (Collapse.md
 2.3's own failure case). Same window pattern either side of the 110 m swap.
+
+**Stages 2 and 3 done (2026-09-28), built together.** What changed from the plan:
+
+* **Damage is a texture, not `INSTANCE_CUSTOM`.** A shell's damage is BuildingShell's segment mask:
+  per band, per side, 32 bits. That is up to 128 bits a band, and a tall tower has 240 bands. One
+  bit per band would have wiped a whole storey for one hole. So `damage_tex` is RGBA8, one row per
+  damaged building, one texel per (band, side) whose bytes are the mask. `INSTANCE_CUSTOM` carries
+  courses, the damage row (−1 intact) and the window seed. The profile only changes when a
+  building gives its bricks back, and a building with bricks has no far box, so the row is
+  written when the box is shown and is never stale.
+* **Holes are cut with alpha scissor, not `discard`.** With a raw `discard`, binding the damage
+  texture made the whole MultiMesh stop drawing — every building, intact ones included — on the
+  Radeon iGPU, with no error printed. `ALPHA` + `ALPHA_SCISSOR_THRESHOLD` draws correctly.
+* **Box-filtered, not faded.** Courses, slabs and windows are drawn from running integrals of the
+  pattern over each pixel's footprint. A course thinner than a pixel blends into its neighbours
+  instead of shimmering, and storeys and windows stay visible as far as they are a pixel or more.
+  No LOD switch.
+* **The coarse tier takes damaged buildings too** (Stage 2). The old coarse mesh could not show
+  damage; the far box can. A coarse recipe shell keeps its node and collision body, but the node
+  has no mesh, so the far box draws it (`_shell_box`). What still needs real geometry keeps it:
+  a player build, and a *materialised* building, whose damage is in live bricks the profile does
+  not have yet.
+* **No colour step at 110 m or 260 m any more.** The old coarse tier was one flat tan; the facade
+  draws the shell's own course colours.
+* The damage profile records **window openings as missing segments** in every damaged band that
+  has windows. The shell draws them as holes, and so does the facade.
+
+Gate, `big_city.tscn -- --far --buildings=150`, 11 ok: one drawer per building; 64 coarse shells
+drawn by the far box, all with collision; a tower shot at 500 m with its crown taken off (bands 210–239
+of 240 gone) stays a far box with a damage row, takes a shot, is a coarse box with a body at 180 m and
+a banded shell inside 80 m. Screenshots `shots/far_top_{130,300,1000}.png`. `--reach` lands to
+480 m; `collapse_probe` 50; `--lod`, `--buildshot` 21, `--rooms` 39 pass.
+
+**Measured** (bench, 150 buildings, calls and triangles only: the editor was open, so no frame
+times). The bench no longer promotes buildings — a street-level viewpoint materialising its
+neighbours at whatever tick made every run a different city — so these are shells only, as
+Terrain.md §19.5 defines the bench:
+
+| viewpoint | Stage 1: tris / calls | Stages 2–3: tris / calls |
+|---|---|---|
+| over the city | 247k / 182 | 247k / 95 |
+| street level | 58k / 136 | 45–62k / 56–62 |
+| high and far | 71k / 151 | 71–194k / 60–109 |
+
+The ranges are the 110–140 m hysteresis band: which tier a building there holds depends on the path
+the camera took, and the bench's three viewpoints are a path.
+
+**What this says about §2's budget.** With nothing materialised, the worst viewpoint is 247k
+triangles, not 3.3–3.8M. The millions in §19.5 were brick meshes of buildings the bench happened to
+promote, not shells. The expensive thing in this city is materialised bricks; see §7.1.
+
+### 7.1 Where the triangles really are (measured 2026-09-28)
+
+After Stages 1–3 the question was whether the < 110 m banded shells were the next lever. They are
+not. Bench, `big_city`, 150 buildings, worst viewpoint ("over the city"), calls and triangles only
+(the editor was open, so no frame times):
+
+| what is drawn | tris | calls |
+|---|---|---|
+| shells only (bench, no promotions) | 247k | 95 |
+| the same, sun shadows off | 122k | 88 |
+| with 3 materialised buildings nearby (22k + 2 × 6.8k blocks) | 3.83M | 171 |
+| the same, sun shadows off | 506k | 79 |
+| the same, shadows on with 2 cascades instead of 4 | 2.10M | 124 |
+
+* **A banded shell is cheap:** ~2.7k wall and ~1k window-pane triangles, 2 draw calls. The 20–26
+  in view come to about 96k triangles. Moving the intact ones between 75 and 110 m onto the far box
+  would save perhaps 25 calls. Not worth doing yet.
+* **Materialised bricks in the shadow pass are the cost.** Three brick buildings add ~3.6M drawn
+  triangles, and ~3.3M of that is the directional light's shadow cascades drawing their brick
+  meshes again, once per cascade (the default is 4). Some of it is the mesher's degenerate
+  triangles: a hidden face is kept as a zero-area triangle so a band can be patched in place
+  (`brick_world.cpp`). The rasteriser throws them away, but their vertices are still shaded in
+  every pass.
+* Levers, for whoever owns them: two shadow cascades (−1.7M, a visible change to distant shadow
+  quality — a decision, not a fix); a shadow-only proxy for materialised buildings (the brick
+  mesh draws no shadow, a shell-shaped caster does), whose damage would show in the shadow only
+  once the building gives its bricks back; compacting the degenerates out of a brick mesh once it
+  has been quiet for a while.
 
 ### Stage 4 — The baker, for player builds
 
