@@ -88,6 +88,41 @@ func shear(point: Vector3, radius: float) -> bool:
 	return city.authority.commands.size() > before
 
 
+## A sideways load on a standing building (BrickWorld.lateral_check): the
+## ground, or the wind, accelerating it at `accel_g` toward `dir`. {} where its
+## bricks are not in -- a far building has no joints to ask.
+func lateral(id: int, accel_g: float, dir: Vector3) -> Dictionary:
+	var b = registry.get_building(id)
+	if b == null or b.toppled or b.chunk < 0 or b.frames.size() > 1:
+		return {}
+	return city.world.lateral_check(b.chunk, accel_g, dir)
+
+
+## Cut a building through on the horizontal plane at `point` (a course
+## boundary lateral() named): what is above comes away whole, as the host's
+## SEVER command. False where it may not, or there is nothing to cut.
+func sever(id: int, point: Vector3) -> bool:
+	if not decides or not city.authority.may_decide():
+		return false
+	var b = registry.get_building(id)
+	if b == null or b.toppled or b.chunk < 0:
+		return false
+	if not city.authority.request(DamageLog.Kind.SEVER, id, point, 0.0, Vector3.UP):
+		return false
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.SEVER
+	e.target = id
+	e.point = point
+	e.normal = Vector3.UP
+	e.flags = DamageLog.FLAG_SEAM
+	if DamageLog.apply_entry(city.world, b.chunk, e).is_empty():
+		return false
+	city.authority.commit_entry(e)
+	city._mark_dirty(id)
+	return true
+
+
 ## How many storeys a building has, by its box.
 func storeys_of(id: int) -> int:
 	var b = registry.get_building(id)

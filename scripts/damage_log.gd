@@ -105,6 +105,10 @@ const FLAG_GONE := 8
 ## are mended once it is cut out (BrickWorld.heal_joints), on every machine, so it
 ## falls as one piece and breaks where it lands.
 const FLAG_CHUNK := 16
+## SEVER: a clean seam at the course boundary nearest `point`
+## (BrickWorld.sever_seams) -- both sides stay whole -- not a band of loose
+## brick. An earthquake's cut (Docs/Disasters.md 10).
+const FLAG_SEAM := 32
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -205,6 +209,8 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			# sheared differently would not reproduce the world.
 			return world.separate_near(chunk, e.point, e.radius, e.limit, true)
 		Kind.SEVER:
+			if e.flags & FLAG_SEAM:
+				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)
 		Kind.SOLVE:
 			world.solve_stress(chunk)
