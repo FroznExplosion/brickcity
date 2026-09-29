@@ -58,6 +58,8 @@ func setup(p_host) -> void:
 	_option("Smooth far terrain from", ["off", "every 8 studs (LOD 2+)", "every 16 studs (LOD 3+)",
 			"every 4 studs (LOD 1+)"], [0, 8, 16, 4].find(_smooth_step),
 		func(i: int) -> void: _smooth_step = [0, 8, 16, 4][i])
+	_check("Course lines on smooth far ground", true, func(on: bool) -> void:
+		host._mat.set_shader_parameter("far_courses", on))
 	_button("Rebuild far terrain", func() -> void:
 		BrickTerrain.set_coarse_smooth_step(_smooth_step)
 		host.rebuild_far())

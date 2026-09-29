@@ -2399,6 +2399,27 @@ faced INTO their own block, so they were culled from the one side they can be
 seen from and showed from behind. Wound clockwise from outside now; the blocky
 blocks' walls were already right.
 
+### 19.19 Small far blocks follow the camera's LOD; courses drawn on smooth ground
+
+**Always blocky round the origin.** Ring 0 of the far tier (LOD 1, blocky) is
+laid out round the world's origin — where the sites are — and blocks split to
+sit beside the detail were kept once split. So the ground round the buildings,
+and everywhere the camera had passed, stayed LOD 1 wherever the camera went.
+Now every small far block is re-baked at the step its distance from the CAMERA
+calls for (the same 16/32/64-tile rings, measured from the camera tile)
+whenever the camera enters a new tile — smooth past LOD 1, as the rest is
+(`_relod_far`). The big merged rings still follow the origin's layout.
+
+**Smooth far ground drawn as courses.** A smooth coarse block has no bricks,
+so the terrain shader draws what a brick hillside shows at that distance: a
+darker line at every course (0.42 m) and each course a touch lighter at its
+top than its foot, faded where a course is under ~2 px. Only on smooth far
+ground (the mesher flags it in CUSTOM0.g). Dev menu: "Course lines on smooth
+far ground".
+
+**The sea is three bricks lower** (`SEA_AT_SAND` −0.76 m): 0.5 m covered
+nearly all the sand.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

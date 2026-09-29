@@ -37,14 +37,14 @@ static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
 
 
 ## A new world's sea sits AT THE SAND: the generator makes ground at or below
-## 0.84 m sand, so a sea at 0.5 m leaves a strip of beach above the water and
-## the seabed sand under it. A drowned fraction of 0 means this; a world file
+## 0.84 m sand, so a sea three bricks under that (-0.76 m) leaves most of the
+## sand dry as beach, the lowest of it wet, and## the seabed sand under it. A drowned fraction of 0 means this; a world file
 ## that names a fraction (the city's 0.20) keeps its own.
 ##
 ## It was 0.30 of the ground round the origin, which on this seed put the sea
 ## at 14.9 m, 14 m above every beach the terrain has (Water.md 9.10).
 const DEFAULT_DROWNED := 0.0
-const SEA_AT_SAND := 0.5
+const SEA_AT_SAND := -0.76
 
 ## THE sea level of the loaded world, in metres. -INF until a world is loaded
 ## or stamped.
