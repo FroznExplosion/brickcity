@@ -320,6 +320,35 @@ the camera took, and the bench's three viewpoints are a path.
 triangles, not 3.3–3.8M. The millions in §19.5 were brick meshes of buildings the bench happened to
 promote, not shells. The expensive thing in this city is materialised bricks; see §7.1.
 
+### 7.1 Where the triangles really are (measured 2026-09-28)
+
+After Stages 1–3 the question was whether the < 110 m banded shells were the next lever. They are
+not. Bench, `big_city`, 150 buildings, worst viewpoint ("over the city"), calls and triangles only
+(the editor was open, so no frame times):
+
+| what is drawn | tris | calls |
+|---|---|---|
+| shells only (bench, no promotions) | 247k | 95 |
+| the same, sun shadows off | 122k | 88 |
+| with 3 materialised buildings nearby (22k + 2 × 6.8k blocks) | 3.83M | 171 |
+| the same, sun shadows off | 506k | 79 |
+| the same, shadows on with 2 cascades instead of 4 | 2.10M | 124 |
+
+* **A banded shell is cheap:** ~2.7k wall and ~1k window-pane triangles, 2 draw calls. The 20–26
+  in view come to about 96k triangles. Moving the intact ones between 75 and 110 m onto the far box
+  would save perhaps 25 calls. Not worth doing yet.
+* **Materialised bricks in the shadow pass are the cost.** Three brick buildings add ~3.6M drawn
+  triangles, and ~3.3M of that is the directional light's shadow cascades drawing their brick
+  meshes again, once per cascade (the default is 4). Some of it is the mesher's degenerate
+  triangles: a hidden face is kept as a zero-area triangle so a band can be patched in place
+  (`brick_world.cpp`). The rasteriser throws them away, but their vertices are still shaded in
+  every pass.
+* Levers, for whoever owns them: two shadow cascades (−1.7M, a visible change to distant shadow
+  quality — a decision, not a fix); a shadow-only proxy for materialised buildings (the brick
+  mesh draws no shadow, a shell-shaped caster does), whose damage would show in the shadow only
+  once the building gives its bricks back; compacting the degenerates out of a brick mesh once it
+  has been quiet for a while.
+
 ### Stage 4 — The baker, for player builds
 
 `scripts/impostor_baker.gd`: `SubViewport`, orthographic camera, five faces into one atlas;
