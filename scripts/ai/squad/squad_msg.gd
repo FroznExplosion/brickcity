@@ -7,7 +7,9 @@ extends RefCounted
 ##   Commander --Order-->      Squad --Assignment-->      Brain
 ##   Commander <--Report--     Squad <--Status--          Brain
 
-enum OrderKind { CLEAR_ROOM, ADVANCE, HOLD, SEARCH, FALL_BACK }
+## MOVE: travel to `point` in formation -- the leader paths, the rest follow.
+## New kinds go on the END: saved orders and logs carry these as numbers.
+enum OrderKind { CLEAR_ROOM, ADVANCE, HOLD, SEARCH, FALL_BACK, MOVE }
 enum ReportKind { ACCEPTED, DONE, FAILED }
 ## What a member is told to do.
 enum Task {
@@ -17,6 +19,7 @@ enum Task {
 	SWEEP,      ## take `point` (a room corner) and sweep `yaw` +- SWEEP_HALF
 	FLASH,      ## throw a flashbang to `point`
 	BREACH,     ## set a charge at `point` and blow it
+	FOLLOW,     ## keep to `point` as the squad moves it (a place in a file); no reply
 }
 enum StatusKind { REACHED, BLOCKED, DONE, DOWN }
 
@@ -76,6 +79,11 @@ class Assignment:
 	## Given up on after this time.
 	var until := INF
 	var role := ""
+	## FOLLOW: the leader's trail, crumb by crumb, and how far along it this
+	## member's place is. A line a body has already walked: followed without a
+	## path search (BTPlayTravel).
+	var trail := PackedVector3Array()
+	var upto := -1
 
 	static func make(p_task: int, p_point: Vector3) -> Assignment:
 		var a := Assignment.new()

@@ -39,7 +39,10 @@ func _process(_delta: float) -> void:
 func refresh() -> void:
 	if listener == null:
 		return
-	var views := listener.views
+	# A speaker can be gone between Callouts' tick and this frame -- a body is
+	# freed the moment it dies (the combat arena): its line goes with it.
+	var views := listener.views.filter(func(v: Callouts.View) -> bool:
+		return v.line != null and is_instance_valid(v.line.speaker))
 	while _labels.size() < views.size():
 		var lb := Label.new()
 		lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -66,18 +69,21 @@ func refresh() -> void:
 			m.modulate = lb.modulate
 			shown[v.line.speaker.get_instance_id()] = true
 	for id in _markers.keys():
-		var m: Label3D = _markers[id]
-		if not is_instance_valid(m):
+		# Untyped first: a marker rides on its speaker's body, and a body freed
+		# with it cannot be assigned to a typed variable at all.
+		var held = _markers[id]
+		if not is_instance_valid(held):
 			_markers.erase(id)
 		elif not shown.has(id):
-			m.visible = false
+			(held as Label3D).visible = false
 
 
 ## The marker over `speaker`, made the first time it talks.
 func _marker(speaker: Pawn) -> Label3D:
 	var id := speaker.get_instance_id()
-	var m: Label3D = _markers.get(id)
-	if m == null or not is_instance_valid(m):
+	var held = _markers.get(id)
+	var m: Label3D = held if held != null and is_instance_valid(held) else null
+	if m == null:
 		m = Label3D.new()
 		m.name = "TalkMarker"
 		m.text = "(( ))"
@@ -95,9 +101,10 @@ func _marker(speaker: Pawn) -> Label3D:
 ## For gates: the marker over `speaker` is showing, and whether through walls.
 ## {} when there is none.
 func marker_state(speaker: Pawn) -> Dictionary:
-	var m: Label3D = _markers.get(speaker.get_instance_id())
-	if m == null or not is_instance_valid(m) or not m.visible:
+	var held = _markers.get(speaker.get_instance_id())
+	if held == null or not is_instance_valid(held) or not (held as Label3D).visible:
 		return {}
+	var m: Label3D = held
 	return {"through_walls": m.no_depth_test}
 
 
