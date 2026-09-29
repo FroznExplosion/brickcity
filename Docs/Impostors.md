@@ -349,31 +349,106 @@ not. Bench, `big_city`, 150 buildings, worst viewpoint ("over the city"), calls 
   once the building gives its bricks back; compacting the degenerates out of a brick mesh once it
   has been quiet for a while.
 
-### Stage 4 — The baker, for player builds
+### 7.2 Shadow LOD (done 2026-09-29)
 
-`scripts/impostor_baker.gd`: `SubViewport`, orthographic camera, five faces into one atlas;
-queued, one face per frame, cached by build id. `BuildShell` builds past 110 m draw as baked boxes.
+Big things keep correct shadows at every distance; small things cast cheaply or only near.
 
-**Measure:** bake time per face, atlas memory with 20 builds in the city.
+* **Sun:** shadows reach 400 m (was the 100 m default), 4 cascades split at 10 / 36 / 120 m, so the
+  first cascade is as sharp as before and a tower's long shadow is drawn from far off.
+* **Brick buildings:** a materialised building casts with a **shadow-only shell** of itself
+  (BuildingShell from the *live* damage profile, or BuildShell for a build), ~3k triangles, holes
+  included. Only the bands of its bricks within 15 m of the camera also cast. The decision is per
+  band because a tower beside you is mostly far above you. Rebuilt when its alive-brick count
+  changes, two a pass.
+* **Wreckage:** a piece wider than 2.5 m casts at any range; smaller pieces only inside 30 m.
+* **Far boxes** cast again (one MultiMesh, ten triangles a building).
+* **Impostor cards** turn to the sun in the shadow pass, and are pushed back along it so a card
+  never shadows itself. Small items' cards cast nothing.
 
-### Stage 5 — Crossfade
+`--bench --with-bricks` (new: lets the viewpoints promote), over the city: 3.95M → 2.10M tris,
+186 → 145 calls. The rest is the few bands within 15 m.
 
-Dithered alpha fade over the hysteresis band at 110 m, shell and far instance drawn together for
-those few metres. Check shadows: are far buildings inside the directional shadow distance at all?
-If not, the far tier casts none and nothing is lost.
+### Stage 4 — Player builds past SHELL_RANGE (done 2026-09-29)
 
-### Stage 6 — Octahedral impostors, when trees exist
+Not a facade bake but the octahedral baker (§8): an intact build past SHELL_RANGE is a **card**,
+baked once from its real bricks (RecipeMesh) and shared by every copy of the same recipe (keyed by
+a hash of it). Inside SHELL_RANGE it keeps its own exact shell. A **damaged** build keeps its exact
+shell out there too (BuildShell leaves the dead bricks out), rather than rebaking. A copy's card is
+made the first time it is needed, so a build that never goes far never pays for a bake.
 
-The baker grows an octahedral mode (§3.3), plus a `visibility_range` setup for tree types:
-mesh → import LOD → impostor → culled. Built when the first tree prefab lands, and only if a
-forest scene measures fill-bound.
+### Stage 5 — Crossfade (done 2026-09-29)
+
+A banded shell dithers out over 80–140 m with Godot's own visibility-range fade (FADE_SELF, on the
+shell and its window panes). Its far box is drawn under it for that band, flagged in
+`INSTANCE_CUSTOM.w`, and dithers in on exactly the other pixels: the same interleaved-gradient
+noise and the same linear fade from the box's centre, the other side of the threshold. Coarse →
+banded now happens at 130 m and banded → coarse past 140 m, both inside the band, so no swap is
+ever seen. Shadows: the flagged box casts in full (its fade is measured from the sun's camera, so
+it is 0 there), the same shape as the shell's.
+
+Gate: `--far` 18 ok, with Stage 4 (two watchtowers 600 m out on one baked card set, their own shells
+closer in, a damaged one on its exact shell) and Stage 5 (a banded shell in the band fading, its
+box flagged). Screenshots `shots/fade_{70,100,125,150}.png`.
 
 ---
 
-## 8. Deliberately not in the plan
+## 8. Trees and small items (done 2026-09-29)
 
-* **Impostors for individual bricks, items and loot.** Too small and too many; instancing and
-  culling cover them.
+### 8.1 The octahedral impostor
+
+`ImpostorBaker` photographs a mesh from 8×8 directions over the upper hemisphere (hemi-octahedral
+map) into a colour and an object-space-normal atlas, 1024² (128 px a view), **in one render per
+atlas**: 64 turned copies of the object under one orthographic camera. The background is
+transparent black, so the result is premultiplied by coverage and the shader divides it back out,
+which keeps a dark fringe off every card. `shaders/impostor.gdshader` builds a camera-facing card,
+2R across, in the vertex shader and blends the four nearest views, each read where the pixel falls
+on that view's own plane (linear, so per vertex). Lit by the baked normals, holes by alpha scissor.
+
+`ImpostorLod` draws many copies of one mesh in **two draw calls**: the real mesh instanced near, the
+card further, nothing past a cull range. It repacks only when something changes tier, and a hidden
+copy is in neither buffer. `RecipeMesh` turns any recipe into one real-brick mesh, studs merged,
+from a private BrickWorld, so any scene can use it.
+
+### 8.2 Trees
+
+`Trees`: a trunk of round 2×2 bricks (the staircase newel) and a canopy of 4×4 and 2×2 plates and
+2×2 bricks in greens, layered so every piece sits on the one below. Plain structure: it stands when
+materialised, in compression on the trunk. Four variants, 4.2–6.7 m, 2.8–4.3k triangles.
+
+`Trees.scatter` puts them on a jittered 14-stud grid, thick in noise-field forests and thin in the
+open, on grass and dirt (full density), stone (half) and sand (quarter), above the sea, off
+building pads, on a trunk footprint with at most a brick of step. Deterministic from the world's
+seed, so every scene grows the same trees.
+
+* **City** (terrain mode): each tree is a **registered build**, so destructible like a mini
+  building: shot, it materialises, sheds pieces, topples. Intact, it is drawn by its variant's
+  ImpostorLod (bricks inside 45 m, cards beyond) and its shell node has no mesh, only collision.
+  Shot, it draws itself. Trees grow out to 1200 studs, beyond the city's rock onto the grass round
+  it, capped at 800. On the coarse ground ring a tree stands on the field's true height, which the
+  coarse mesh matches within a plate or two. The shell streamer's slice now scales with the
+  register (a full pass every eight), since trees make it much bigger.
+* **Heightfield / terrain editor**: `TerrainTrees`, the same trees drawn the same way, for looking
+  at (no brick world to shoot them in), re-scattered half a second after the last edit. Not in the
+  terrain bench. 6000 trees cap on the default world.
+
+Gate: `city.tscn -- --terrain --trees` 8 ok — placed, drawn only by their sets, all four baked,
+collision in reach, a tree materialised whole stands, one shot through the trunk comes down.
+
+### 8.3 Small items
+
+`ImpostorItems`, for the weapons and loot code: `kind(key, mesh, material)` once, then
+`add` / `move` / `remove` per item on the ground. Each kind is an ImpostorLod with small-item ranges
+(mesh inside 12 m, card to 150 m, culled past it), 64 px views, and cards that cast no shadow. A
+held item is not in it. Nothing in `weapons/` or `loot/` uses it yet; that is theirs to wire.
+
+`tools/impostor_probe.gd`: 17 ok — trees build whole, bake, field of cards; 100 brick guns near,
+carded and culled, one moved close becomes a mesh, one removed is gone.
+
+## 9. Deliberately not in the plan
+
+* **Impostors for individual bricks.** Too small and too many; instancing and culling cover
+  them. (Items and loot were on this list; they now have §8.3, because guns on the ground should
+  read at range.)
 * **Animated impostors for enemies.** A lower-poly mesh is cheaper for the number of mechs we have.
 * **Interiors.** A card cannot be entered. Far interiors already have the fake-room rung behind
   windows (Interiors.md); the far tier draws lit windows from the seed and nothing more.
@@ -382,15 +457,18 @@ forest scene measures fill-bound.
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
-* How many distinct recipes does a real city have? It does not matter for §3.1 (no bake), but it
-  decides whether §3.2's cache by recipe hash is worth having.
-* Does the brick colour live in the recipe, the material or vertex colour? The far instance has to
-  match the near shell at 110 m.
-* Is 24 bands per float enough for the tallest tower, or does the mask need both floats per axis?
-* Ownership: `city_scene.gd` is shared ground and the `terrain-city` worktree works in it too.
-  Stages 1–2 are small changes, but coordinate before starting them.
+* Answered: the brick colour is the course table, the same for every recipe building (Stage 1);
+  damage needed a texture, not floats (Stage 3); identical builds share a bake by recipe hash
+  (Stage 4).
+* A card is drawn wherever a tree is, however many there are: 6000 in the heightfield scene is 6000
+  cards, two triangles each, plus the CPU pass that sorts them every tenth frame. Past a few
+  thousand, chunk the ImpostorLods by area so whole chunks can be culled.
+* The crossfade assumes Godot's visibility fade dithers with interleaved-gradient noise, measured
+  from the shell's bounds centre. It looks right; if an engine update changes either, the band shows
+  a speckle of both or neither.
+* Trees on the city's coarse ground ring can float or sink by a plate or two.
 
 ---
 

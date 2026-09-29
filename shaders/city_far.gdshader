@@ -28,6 +28,8 @@ shader_type spatial;
 //   INSTANCE_CUSTOM.x = courses
 //   INSTANCE_CUSTOM.y = damage row, or -1 for an intact building
 //   INSTANCE_CUSTOM.z = window seed (the building id)
+//   INSTANCE_CUSTOM.w = 1 while a banded shell fades out over this box
+//                       (Stage 5): the box dithers in as the complement
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 const float STUD = 0.35;
@@ -44,11 +46,14 @@ uniform vec3 slab_colour = vec3(0.5);
 uniform vec3 window_colour = vec3(0.42, 0.36, 0.30);
 uniform vec3 interior_colour = vec3(0.12, 0.11, 0.10);
 uniform sampler2D damage_tex : filter_nearest, repeat_disable;
+uniform float fade_near = 80.0;
+uniform float fade_far = 140.0;
 
 varying vec3 v_local;      // metres, box corner at the origin
 varying vec3 v_size;       // metres
 varying vec3 v_normal;     // model space, axis aligned
 varying flat vec3 v_custom;
+varying flat float v_fade;     // how much of the shell is still drawn, 0..1
 
 void vertex() {
     v_size = vec3(length(MODEL_MATRIX[0].xyz), length(MODEL_MATRIX[1].xyz),
@@ -56,6 +61,14 @@ void vertex() {
     v_local = VERTEX * v_size;
     v_normal = NORMAL;
     v_custom = INSTANCE_CUSTOM.xyz;
+    // The shell's own visibility fade: distance to its bounds' centre, which
+    // is the box's centre, linear across the band -- as the engine does it.
+    v_fade = 0.0;
+    if (INSTANCE_CUSTOM.w > 0.5) {
+        vec3 c = (MODEL_MATRIX * vec4(0.5, 0.5, 0.5, 1.0)).xyz;
+        float d = distance(c, CAMERA_POSITION_WORLD);
+        v_fade = clamp((fade_far - d) / (fade_far - fade_near), 0.0, 1.0);
+    }
 }
 
 float hash(vec3 p) {
@@ -118,6 +131,14 @@ uint band_mask(int band, int side, int row) {
 void fragment() {
     // A segment shot away (see the note at the top about alpha scissor).
     bool gone = false;
+    // Where the engine still draws the fading shell (its dither passes), the
+    // box does not: the same interleaved-gradient noise, the other side of it.
+    if (v_fade > 0.0) {
+        float h = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
+        if (h < v_fade) {
+            gone = true;
+        }
+    }
     int courses = int(v_custom.x + 0.5);
     int row = int(floor(v_custom.y + 0.5));
     float seed = v_custom.z;
