@@ -26,6 +26,9 @@ extends Node
 
 const SENSE_HZ := 5.0
 const THINK_HZ := 10.0
+## DIRECTED (Docs/AI.md 10.2, AIPlan P8): a reduced tree, slower, and slower eyes.
+const DIRECTED_SENSE_HZ := 2.0
+const DIRECTED_THINK_HZ := 3.0
 const SIGHT_RANGE := 60.0
 const SIGHT_CONE_DEG := 70.0
 ## Close enough to feel someone behind you.
@@ -41,6 +44,15 @@ const BURST_OFF := 0.35
 
 var services: AIServices
 var pawn: Pawn
+## Its tier (AgentTier): SMART or DIRECTED, and the HSM that holds it. The
+## ImportanceBudget moves it; set_tier swaps the tree and the rates.
+var tier := AgentTier.SMART
+var tier_hsm: AgentTier
+## Came out of a swarm row: may go back to one when nobody is near (P8).
+var swarm_born := false
+## Walk the side's shared flow field toward this (a directed soldier closing on
+## a contact), every physics tick. INF: not.
+var field_goal := Vector3.INF
 var brain: BTPlayer
 var aim: AimModel
 var team := 1
@@ -187,7 +199,47 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 	s.add_pawn(p)
 	s.ai_nav.nav_changed.connect(so._on_nav_changed)
 	p.health.died.connect(so._on_died)
+	so.tier_hsm = AgentTier.attach(so, AgentTier.SMART)
 	return so
+
+
+## Its tier, from AgentTier's state: the tree and the rates that go with it.
+func set_tier(t: int) -> void:
+	if t == tier:
+		return
+	tier = t
+	var parent := brain.blackboard.get_parent()
+	brain.behavior_tree = SoldierTree.build() if t == AgentTier.SMART else SoldierTree.build_directed()
+	if parent != null:
+		brain.blackboard.set_parent(parent)
+	field_goal = Vector3.INF
+	fire_ok = false
+
+
+func _sense_hz() -> float:
+	return SENSE_HZ if tier == AgentTier.SMART else DIRECTED_SENSE_HZ
+
+
+func _think_hz() -> float:
+	return THINK_HZ if tier == AgentTier.SMART else DIRECTED_THINK_HZ
+
+
+## For the ImportanceBudget.
+func budget_pos() -> Vector3:
+	return pawn.feet()
+
+
+func budget_bonus(now: float) -> float:
+	var b := 0.0
+	if now - last_shot_at < 3.0:
+		b += 25.0
+	if now - hurt_at < 3.0:
+		b += 20.0
+	if squad != null:
+		var a := squad.alive()
+		if not a.is_empty() and a[0] == self:
+			b += 15.0
+	return b
 
 
 func is_dead() -> bool:
@@ -253,6 +305,8 @@ func _physics_process(_delta: float) -> void:
 	if now >= _next_think and not _think_queued:
 		_think_queued = true
 		services.sched.submit(AIScheduler.TREES, importance, _think)
+	if field_goal != Vector3.INF:
+		_steer_field()
 	_measure_masked()
 	_gate_masked()
 	_aim_and_fire(now)
@@ -261,7 +315,7 @@ func _physics_process(_delta: float) -> void:
 func _sense() -> void:
 	_sense_queued = false
 	var now := services.now()
-	_next_sense = now + 1.0 / (SENSE_HZ * services.sched.rate_scale(AIScheduler.PERCEPTION))
+	_next_sense = now + 1.0 / (_sense_hz() * services.sched.rate_scale(AIScheduler.PERCEPTION))
 	var k := knowledge()
 	for h in services.hostiles_of(team):
 		if can_see(h):
@@ -274,11 +328,20 @@ func _sense() -> void:
 			k.lost_sight(h, self)
 
 
+## The shared field's way toward `field_goal`, read every tick: a node is a stud,
+## and at a run a third of a second between thinks is two metres of corner.
+func _steer_field() -> void:
+	var d := services.field_dir(field_goal, pawn.feet())
+	d.y = 0.0
+	pawn.intents.move = d.normalized() if d.length() > 0.01 else Vector3.ZERO
+	_want_move = pawn.intents.move
+
+
 func _think() -> void:
 	_think_queued = false
 	var now := services.now()
-	_next_think = now + 1.0 / (THINK_HZ * services.sched.rate_scale(AIScheduler.TREES))
-	var dt := now - _last_think if _last_think > 0.0 else 1.0 / THINK_HZ
+	_next_think = now + 1.0 / (_think_hz() * services.sched.rate_scale(AIScheduler.TREES))
+	var dt := now - _last_think if _last_think > 0.0 else 1.0 / _think_hz()
 	_last_think = now
 	var hp := pawn.health.total_current()
 	if _hp_seen >= 0.0 and hp < _hp_seen:
