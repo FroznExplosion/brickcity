@@ -18,7 +18,7 @@ extends RefCounted
 ## The number that means something across any relief is "how much of the
 ## ground is under water", so that is what is asked for. Sampled on a coarse
 ## lattice over the play area — a few hundred field queries, once.
-static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
+static func sea_level_for(half_tiles: int, drowned := DEFAULT_DROWNED) -> float:
 	var brick := BrickTerrain.get_brick_metres()
 	var half := half_tiles * BrickTerrain.get_tile_studs()
 	@warning_ignore("integer_division")
@@ -35,6 +35,11 @@ static func sea_level_for(half_tiles: int, drowned := 0.30) -> float:
 	# the surface rather than exactly at it.
 	return heights[i] + brick * 0.5
 
+
+## How much of a new world is under water, when its file does not say. 0.22
+## puts this seed's sea at 11.6 m (it was 0.30, 14.9 m: the water sat high up
+## the hills with no beaches), and the sand band runs along its shore.
+const DEFAULT_DROWNED := 0.22
 
 ## THE sea level of the loaded world, in metres. -INF until a world is loaded
 ## or stamped.
@@ -84,7 +89,7 @@ static var sites: Array[Dictionary] = []
 
 ## Cut the pads into the field. Before anything is built, because a pad is
 ## part of what the world IS.
-static func stamp_sites(drowned := 0.30) -> void:
+static func stamp_sites(drowned := DEFAULT_DROWNED) -> void:
 	BrickTerrain.clear_pads()
 	BrickTerrain.clear_sculpt()
 	settle_sea(drowned)
@@ -305,7 +310,7 @@ static func from_dict(d: Dictionary) -> Dictionary:
 	BrickTerrain.clear_sculpt()
 	# The sea BEFORE the sculpt and the pads: it is measured on the field as
 	# generated, so digging a lake does not move the ocean.
-	settle_sea(float(d.get("drowned", 0.30)))
+	settle_sea(float(d.get("drowned", DEFAULT_DROWNED)))
 	sculpt_from_list(d.get("sculpt", []))
 	sites = []
 	for p in d.get("pads", []):
@@ -337,7 +342,7 @@ static func from_dict(d: Dictionary) -> Dictionary:
 				program[k] = int(site["program"][k])
 			row["program"] = program
 		sites.append(row)
-	return {"seed": seed_value, "drowned": float(d.get("drowned", 0.30))}
+	return {"seed": seed_value, "drowned": float(d.get("drowned", DEFAULT_DROWNED))}
 
 
 static func save_world(path: String, seed_value: int, drowned: float) -> Error:
