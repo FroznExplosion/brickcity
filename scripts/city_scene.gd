@@ -197,7 +197,7 @@ var camera: DebugCamera
 var _placer: CityPlacer
 ## Hit marks, debris and sounds by material, and footsteps (material_fx.gd).
 var _material_fx: MaterialFx
-## Natural disasters (Docs/Disasters.md): the small city only, null with --big.
+## Natural disasters (Docs/Disasters.md), in every city.
 var disasters: DisasterDirector
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
@@ -1051,11 +1051,12 @@ func _ready() -> void:
 	_material_fx.name = "MaterialFx"
 	add_child(_material_fx)
 	_material_fx.setup(world, registry, camera)
-	if not _big:
-		disasters = DisasterDirector.new()
-		disasters.name = "Disasters"
-		add_child(disasters)
-		disasters.setup(self)
+	# Every city, big included: what a disaster touches is ranged round the
+	# player (targets, failures, fire), so a bigger city is not a bigger bill.
+	disasters = DisasterDirector.new()
+	disasters.name = "Disasters"
+	add_child(disasters)
+	disasters.setup(self)
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:

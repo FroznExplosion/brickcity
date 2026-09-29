@@ -108,6 +108,7 @@ func _on_phase(p: Phase) -> void:
 		Phase.DONE:
 			_rumble.stop()
 			ctx.set_weather(0.0, 1.0, 1.0)
+			ctx.set_screen(0.0, 0.0)
 			for i in collapses.size():
 				ctx.clear_hazard(HAZARD_BASE + i)
 
@@ -168,6 +169,7 @@ func _shake() -> void:
 	var a := amplitude * intensity
 	# Nobody shoots straight on moving ground; eyes are fine.
 	ctx.set_weather(amplitude, 1.0, 3.0, intensity)
+	ctx.set_screen(0.0, amplitude * 0.3, Color(0.62, 0.6, 0.56))
 	ctx.shake(ctx.player_pos(), 0.008 + 0.02 * a)
 	_rumble.volume_db = lerpf(-40.0, 2.0, clampf(amplitude, 0.0, 1.0))
 	if not _rumble.playing:

@@ -740,6 +740,23 @@ func _check_weather() -> void:
 	_ok("a lightning storm: sight %.2f, aim x%.1f while it rages; clear when it is over" % mid,
 			float(mid[0]) < 0.9 and float(mid[1]) > 2.0 and s.sight_mul == 1.0 and s.aim_mul == 1.0)
 	await _until_quiet()
+	# Meteors and the tornado send soldiers under a roof too.
+	for kind in ["meteor", "tornado"]:
+		city.disasters.start(kind)
+		var dd: Disaster = city.disasters.current
+		n = 0
+		while dd.phase != Disaster.Phase.ACTIVE and n < 30 * 12:
+			await physics_frame
+			n += 1
+		await _ticks(5)
+		var during: bool = s.storm
+		city.disasters.stop()
+		n = 0
+		while city.disasters.is_running() and n < 30 * 15:
+			await physics_frame
+			n += 1
+		_ok("%s: soldiers take shelter while it lasts, and not after" % kind, during and not s.storm)
+		await _until_quiet()
 
 
 func _until_quiet() -> void:
