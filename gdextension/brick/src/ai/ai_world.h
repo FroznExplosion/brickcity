@@ -104,6 +104,9 @@ public:
     /// (furniture included -- bodies stand on it and walk round it), or inside
     /// a proxy.
     bool solid_at(const Vector3 &point);
+    /// The live brick at this world point: (chunk, block), or (-1, -1). What a
+    /// foot stands on, for weight (Docs/AI.md 3.10) and the fall rule (3.11).
+    Vector2i block_at(const Vector3 &point);
     /// The highest top of anything that could be solid over this XZ, or -INF
     /// with nothing there. Navigation scans a column no higher than this.
     float top_at(float x, float z);

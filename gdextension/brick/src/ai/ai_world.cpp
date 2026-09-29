@@ -61,6 +61,7 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("clear_danger"), &AIWorld::clear_danger);
     ClassDB::bind_method(D_METHOD("in_danger", "point"), &AIWorld::in_danger);
     ClassDB::bind_method(D_METHOD("danger_distance", "point"), &AIWorld::danger_distance);
+    ClassDB::bind_method(D_METHOD("block_at", "point"), &AIWorld::block_at);
     ClassDB::bind_method(D_METHOD("solid_at", "point"), &AIWorld::solid_at);
     ClassDB::bind_method(D_METHOD("top_at", "x", "z"), &AIWorld::top_at);
     ClassDB::bind_method(D_METHOD("set_terrain_ground", "on"), &AIWorld::set_terrain_ground);
@@ -493,6 +494,33 @@ float AIWorld::danger_distance(const Vector3 &point) const {
         best = std::min(best, q.distance_to(point));
     }
     return best;
+}
+
+Vector2i AIWorld::block_at(const Vector3 &p) {
+    const int64_t k = key((int)std::floor(p.x / HASH_CELL), (int)std::floor(p.z / HASH_CELL));
+    auto it = hash.find(k);
+    if (it == hash.end() || !world.is_valid()) {
+        return Vector2i(-1, -1);
+    }
+    const Vector3 cs = brick::cell_size();
+    for (int index : it->second) {
+        const ChunkEntry &e = chunk_entries[index];
+        if (!e.box.has_point(p)) {
+            continue;
+        }
+        const Vector3 l = e.inv.xform(p);
+        const Vector3i cell((int)std::floor(l.x / cs.x), (int)std::floor(l.y / cs.y),
+                (int)std::floor(l.z / cs.z));
+        const brick::Chunk &c = world->chunks[e.chunk];
+        if (!c.in_bounds(cell)) {
+            continue;
+        }
+        const int32_t bid = c.occupancy[c.index_of(cell)];
+        if (bid >= 0 && c.blocks[bid].alive) {
+            return Vector2i(e.chunk, bid);
+        }
+    }
+    return Vector2i(-1, -1);
 }
 
 bool AIWorld::solid_at(const Vector3 &p) {

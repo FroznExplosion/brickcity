@@ -39,6 +39,8 @@ const ARM_YAW_SPEED := deg_to_rad(420.0)
 ## Straight up and straight down, short of the pole (A15).
 const ARM_PITCH_LIMIT := deg_to_rad(89.0)
 const MAX_HEALTH := 2500.0
+## What it weighs on the bricks it stands on (WeightTracker).
+const MASS := WeightTracker.MECH
 
 var intents := TitanIntents.new()
 var team := 0
@@ -46,6 +48,9 @@ var body: CharacterBody3D
 var motor: TitanMotor
 var health: HealthPool
 var gun: GunController
+## Falling through floors (Docs/AI.md 3.11): the owner connects what it lands on
+## and what breaking it means.
+var fall: FallRule
 ## Where the arm should put its rounds, in world space; INF for "along the aim".
 var aim_point := Vector3.INF
 
@@ -99,6 +104,11 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	mo.reset(yaw)
 	m.intents.clear(yaw)
 	mo.set_intents(m.intents)
+	var fr := FallRule.new()
+	fr.name = "FallRule"
+	fr.mech = m
+	b.add_child(fr)
+	m.fall = fr
 	var g := GunController.new()
 	g.name = "ArmGun"
 	g.aim = m.muzzle
