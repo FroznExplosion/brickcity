@@ -1216,6 +1216,10 @@ func _exit_tree() -> void:
 		if int(job[2]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(job[2]))
 	_band_jobs.clear()
+	# And a shadow proxy being built.
+	for job in _shadow_jobs.values():
+		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
+	_shadow_jobs.clear()
 	for bodies in _frame_bodies.values():
 		for rid in (bodies as Array):
 			PhysicsServer3D.free_rid(rid)
@@ -5158,7 +5162,7 @@ func _run_breaklag_pass() -> void:
 		if biggest == null or size > biggest.recipe.courses * biggest.recipe.footprint_x \
 				* biggest.recipe.footprint_z:
 			biggest = c
-		if c.recipe.courses >= 12 and c.recipe.courses <= 30 and ordinary.size() < 2:
+		if c.recipe.courses >= 12 and c.recipe.courses <= 30 and ordinary.size() < 3:
 			ordinary.append(c)
 	# The first shot at a building that is still a shell: it is made bricks by
 	# the shot, and drawn by its shell until its bands are up.
@@ -5170,6 +5174,9 @@ func _run_breaklag_pass() -> void:
 			shell = c
 	if shell != null:
 		await _shell_lag(shell)
+	# On a building of its own: the walls case below wants one nothing has hit.
+	if ordinary.size() > 2:
+		await _proxy_check(ordinary[2])
 	if ordinary.size() > 0:
 		await _break_lag(ordinary[0], false)
 	if ordinary.size() > 1:
@@ -5181,6 +5188,41 @@ func _run_breaklag_pass() -> void:
 				TowerRecipe.total_plates(biggest.recipe.courses) * PLATE / 3.0)
 	print("[breaklag] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## A building's shadow proxy (_stream_shadows) is built on a worker now: it has
+## to turn up, and to catch up with a hit once the building has stopped losing
+## bricks.
+func _proxy_check(b: BuildingRegistry.Building) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5 + 30.0, 20.0, -30.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 6.0, fz * 0.5), Vector3.UP)
+	_promote(b.id)
+	var t := 0
+	while t < 90 and not _proxy_drawn(b.id):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: its shadow proxy is up" % b.id, _proxy_drawn(b.id),
+			"after %d tick(s)" % t)
+	_blast(b.xform * Vector3(fx * 0.5, 4.0, 0.0), 1.5)
+	await _frames(10)
+	t = 0
+	while t < 150 and not (_proxy_drawn(b.id) and not _shadow_jobs.has(b.id)
+			and int(_shadow_proxy_alive.get(b.id, -1)) == world.get_alive_block_count(b.chunk)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: and it catches up with a hit" % b.id,
+			_proxy_drawn(b.id) and int(_shadow_proxy_alive.get(b.id, -1))
+					== world.get_alive_block_count(b.chunk),
+			"built from %d bricks, %d alive, after %d tick(s)" % [
+				int(_shadow_proxy_alive.get(b.id, -1)), world.get_alive_block_count(b.chunk), t])
+
+
+func _proxy_drawn(id: int) -> bool:
+	var mi = _shadow_proxy.get(id)
+	return is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
+			and (mi as MeshInstance3D).mesh.get_surface_count() > 0
 
 
 ## A building still drawn as its shell, its ground storey blown out: how long
@@ -5273,6 +5315,14 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 	var gone_at := -1
 	var biggest_at := -1
 	var biggest := 0
+	# Every piece as it is first seen: when, and how many bricks. Counted in
+	# bricks, not boxes -- a piece that lands is split back into a box a brick,
+	# and a child of it could "outgrow" the building's body. And only pieces
+	# cut out while the building was still losing bricks: what comes off a
+	# piece once it lands is not the break.
+	var first_seen := {}   # island -> [tick, bricks]
+	var last_loss := 0
+	var alive_was := bricks
 	var t := 0
 	var timeline: Array[String] = []
 	# Until nothing has changed for a second: the damage applied, what was
@@ -5292,9 +5342,8 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			if not islands.is_blind(isl):
 				drawn += 1
 			fastest = maxf(fastest, isl.body.linear_velocity.length())
-			if isl.shape_count > biggest:
-				biggest = isl.shape_count
-				biggest_at = t
+			if not first_seen.has(isl):
+				first_seen[isl] = [t, world.get_alive_block_count(isl.chunk)]
 		if fresh > 0 and cut_at < 0:
 			cut_at = t
 		if drawn > 0 and drawn_at < 0:
@@ -5304,6 +5353,9 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 		var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
 		if gone_at < 0 and alive < int(bricks * 0.98):
 			gone_at = t
+		if alive != alive_was:
+			alive_was = alive
+			last_loss = t
 		var state := "%d/%d" % [alive, fresh]
 		if state != last_state:
 			last_state = state
@@ -5312,11 +5364,16 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			timeline.append("%d: queue %d, dirty %d, held %d, alive %d, pieces %d (%d drawn), fastest %.1f m/s" % [
 					t, _damage_queue.size(), _dirty.size(), director.held_rounds - held0,
 					alive, fresh, drawn, fastest])
+	for isl in first_seen:
+		var seen: Array = first_seen[isl]
+		if int(seen[0]) <= last_loss + 1 and int(seen[1]) > biggest:
+			biggest = int(seen[1])
+			biggest_at = int(seen[0])
 	print("[breaklag] building %d, %d bricks (mega %s), %s at %.1f m, %d blasts:" % [b.id, bricks,
 			CollapseDirector.is_mega(bricks), "the storey" if storey else "its walls", y, blasts])
 	for line in timeline:
 		print("[breaklag]   " + line)
-	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d boxes) %d, drawn %d, moving %d; the director held %d round(s)" % [
+	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d bricks) %d, drawn %d, moving %d; the director held %d round(s)" % [
 			gone_at, cut_at, biggest, biggest_at, drawn_at, moving_at, director.held_rounds - held0])
 	_gate_ok("building %d: pieces move within 10 ticks of its bricks going" % b.id,
 			moving_at > 0 and gone_at > 0 and moving_at - gone_at <= 10,
@@ -6038,6 +6095,8 @@ func _physics_process(_delta: float) -> void:
 	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	if not _shadow_jobs.is_empty():
+		_harvest_shadow_jobs()
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
 		_stream_shadows()
 	if camera != null and Engine.get_physics_frames() % 4 == 1:
@@ -6449,6 +6508,10 @@ var _band_built_at := {}  ## building id -> PackedInt32Array, per band
 var _band_todo := {}      ## building id -> PackedInt32Array of band indices
 
 var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
+## Proxies being built on a worker: building id -> [task, [mesh], alive bricks
+## it was built from, dropped since]. The old proxy -- or, before the first,
+## the bricks themselves -- casts until the new one is hung.
+var _shadow_jobs := {}
 var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
 ## A proxy is rebuilt once its building has stopped losing bricks -- the same
 ## count two passes running -- or after SHADOW_STALE_PASSES of it going on.
@@ -6560,14 +6623,50 @@ func _set_brick_shadows(id: int, on: bool) -> void:
 
 ## A shadow-only shell of a materialised building, from what is standing now.
 func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
-	var mesh: Mesh
+	if _shadow_jobs.has(b.id):
+		return false  # one on its way already
 	if b.is_build():
-		mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
-	else:
-		mesh = BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z,
-				b.recipe.courses, registry.live_damage_profile(b.id))
-	if mesh == null:
-		return false
+		# A build's shell reads the world's blocks: here, as it always was.
+		var built: Mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
+		if built == null:
+			return false
+		_attach_shadow_proxy(b, built, world.get_alive_block_count(b.chunk))
+		return true
+	# A recipe building's shell is arithmetic on the recipe and the damage
+	# masks, and nothing of the world: only the masks are worked out here (they
+	# read the bricks), the rest on a worker. Built here it was 4-25 ms a proxy
+	# -- the biggest thing left at the top of a collapse's worst ticks.
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	var profile := registry.live_damage_profile(b.id)
+	var layout: Array = TowerRecipe.layout(courses)
+	var holder := [null]
+	var work := func() -> void:
+		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
+	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
+	_shadow_jobs[b.id] = [task, holder, world.get_alive_block_count(b.chunk), false]
+	return true
+
+
+## Hang the proxies the workers have finished. Every tick, and nothing to do
+## on most of them.
+func _harvest_shadow_jobs() -> void:
+	for id in _shadow_jobs.keys():
+		var job: Array = _shadow_jobs[id]
+		if not WorkerThreadPool.is_task_completed(int(job[0])):
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		_shadow_jobs.erase(id)
+		var b := registry.get_building(int(id))
+		# Dropped meanwhile (its bricks given back), or gone.
+		if bool(job[3]) or b == null or not b.is_materialised() or not _brick_nodes.has(id) \
+				or job[1][0] == null:
+			continue
+		_attach_shadow_proxy(b, job[1][0], int(job[2]))
+
+
+func _attach_shadow_proxy(b: BuildingRegistry.Building, mesh: Mesh, alive: int) -> void:
 	var mi: MeshInstance3D = _shadow_proxy.get(b.id)
 	if mi == null:
 		mi = MeshInstance3D.new()
@@ -6578,11 +6677,13 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 		add_child(mi)
 		_shadow_proxy[b.id] = mi
 	mi.mesh = mesh
-	_shadow_proxy_alive[b.id] = world.get_alive_block_count(b.chunk)
-	return true
+	# What it was built from: bricks lost since then make it stale again.
+	_shadow_proxy_alive[b.id] = alive
 
 
 func _drop_shadow_proxy(id: int) -> void:
+	if _shadow_jobs.has(id):
+		(_shadow_jobs[id] as Array)[3] = true  # still waited for; never hung
 	var mi = _shadow_proxy.get(id)
 	if is_instance_valid(mi):
 		(mi as Node).queue_free()
