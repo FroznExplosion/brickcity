@@ -29,7 +29,10 @@ shader_type spatial;
 //   INSTANCE_CUSTOM.y = damage row, or -1 for an intact building
 //   INSTANCE_CUSTOM.z = window seed (the building id)
 //   INSTANCE_CUSTOM.w = 1 while a banded shell fades out over this box
-//                       (Stage 5): the box dithers in as the complement
+//                       (Stage 5). Godot fades a shell by alpha-BLENDING it,
+//                       so the box is drawn whole under it, a few centimetres
+//                       inside so the blended shell is always in front:
+//                       alpha * shell + (1 - alpha) * box, a real crossfade.
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 const float STUD = 0.35;
@@ -46,14 +49,13 @@ uniform vec3 slab_colour = vec3(0.5);
 uniform vec3 window_colour = vec3(0.42, 0.36, 0.30);
 uniform vec3 interior_colour = vec3(0.12, 0.11, 0.10);
 uniform sampler2D damage_tex : filter_nearest, repeat_disable;
-uniform float fade_near = 80.0;
-uniform float fade_far = 140.0;
+// Under a fading shell, drawn this far inside it (metres).
+uniform float fade_inset = 0.06;
 
 varying vec3 v_local;      // metres, box corner at the origin
 varying vec3 v_size;       // metres
 varying vec3 v_normal;     // model space, axis aligned
 varying flat vec3 v_custom;
-varying flat float v_fade;     // how much of the shell is still drawn, 0..1
 
 void vertex() {
     v_size = vec3(length(MODEL_MATRIX[0].xyz), length(MODEL_MATRIX[1].xyz),
@@ -61,13 +63,10 @@ void vertex() {
     v_local = VERTEX * v_size;
     v_normal = NORMAL;
     v_custom = INSTANCE_CUSTOM.xyz;
-    // The shell's own visibility fade: distance to its bounds' centre, which
-    // is the box's centre, linear across the band -- as the engine does it.
-    v_fade = 0.0;
     if (INSTANCE_CUSTOM.w > 0.5) {
-        vec3 c = (MODEL_MATRIX * vec4(0.5, 0.5, 0.5, 1.0)).xyz;
-        float d = distance(c, CAMERA_POSITION_WORLD);
-        v_fade = clamp((fade_far - d) / (fade_far - fade_near), 0.0, 1.0);
+        // Inside the fading shell, so its blend is always drawn over this.
+        vec3 inset = fade_inset / max(v_size, vec3(0.01));
+        VERTEX = 0.5 + (VERTEX - 0.5) * (1.0 - 2.0 * inset);
     }
 }
 
@@ -131,14 +130,6 @@ uint band_mask(int band, int side, int row) {
 void fragment() {
     // A segment shot away (see the note at the top about alpha scissor).
     bool gone = false;
-    // Where the engine still draws the fading shell (its dither passes), the
-    // box does not: the same interleaved-gradient noise, the other side of it.
-    if (v_fade > 0.0) {
-        float h = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-        if (h < v_fade) {
-            gone = true;
-        }
-    }
     int courses = int(v_custom.x + 0.5);
     int row = int(floor(v_custom.y + 0.5));
     float seed = v_custom.z;
@@ -190,12 +181,25 @@ void fragment() {
         float hp = max(0.5 * fwidth(p), 1e-3);
         col = (wall_integral(p + hp) - wall_integral(p - hp)) / (2.0 * hp);
 
-        // The windows, as the fraction of this pixel that is glass. Not over
-        // a damaged band -- BuildingShell puts no glass there -- and not in a
-        // storey with no slab over it, which has none.
+        // The windows, as the fraction of this pixel that is glass. Not in a
+        // storey with no slab over it, which has none, and not in a storey
+        // whose window courses are damaged ANYWHERE, on any side: that is the
+        // rule BuildingShell.build_window_mesh puts glass by, so the two tiers
+        // agree across the swap.
         float u = along / STUD;
         bool storey_has_slab = (storey + 1) * 6 <= courses;
-        if (storey_has_slab && mask == 0xFFFFFFFFu && p >= 1.0) {
+        bool glazed = storey_has_slab && p >= 1.0;
+        if (glazed && row >= 0) {
+            for (int k = 2; k <= 4 && glazed; k++) {
+                for (int sd = 0; sd < 4; sd++) {
+                    if (band_mask(1 + storey * 7 + k, sd, row) != 0xFFFFFFFFu) {
+                        glazed = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (glazed) {
             float hu = max(0.5 * fwidth(u), 1e-3);
             float s = span / STUD;
             float cov_u = (window_cols_integral(u + hu, s) - window_cols_integral(u - hu, s)) / (2.0 * hu);

@@ -13,6 +13,8 @@ extends Node3D
 ##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
 ##       F5 save · F9 load · ESC mouse
 ##       V on foot · K a soldier · U a squad (advances on you when on foot)
+##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
+##       SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload
 ## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
@@ -780,6 +782,13 @@ var _combat_rng := RandomNumberGenerator.new()
 var _player := PlayerController.new()
 var _player_pawn: Pawn
 var _play_mode := false
+## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
+## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
+var _view: PlayerView
+var _fps_hud: PlayerHud
+var _stats_were_visible := false
+## Hitmarkers and numbers outside the arena, which has its own.
+var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
@@ -810,6 +819,16 @@ var _ai_sync_ms := 0.0
 var _ai_run_ms := 0.0
 ## The deepest the ladder went in each --stress phase.
 var _ai_phase_level := {}
+## The arbiter's line (AIPlan R14): destruction over AI_HEAVY_MS for
+## AI_HEAVY_TICKS ticks running is a collapse, and the AI steps down for it.
+const AI_HEAVY_MS := 8.0
+const AI_QUIET_MS := 4.0
+const AI_HEAVY_TICKS := 3
+## The longest run of ticks the destruction spent over AI_HEAVY_MS, and its
+## worst tick: what tells the stress gate whether a step down was called for.
+var _ai_heavy_run := 0
+var _ai_heavy_run_max := 0
+var _ai_destruction_peak := 0.0
 ## `-- --no-ai`: the city without the AI's tick, to measure what it costs.
 var _no_ai := false
 ## Where a figure can walk, read from the bricks (AIPlan P3). Paths are
@@ -1053,8 +1072,8 @@ func _ready() -> void:
 	islands.piece_spawned.connect(_mech_ignore_piece)
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
-	ai_sched.set_thresholds(8.0, 4.0)
-	ai_sched.set_hysteresis(3, 45)
+	ai_sched.set_thresholds(AI_HEAVY_MS, AI_QUIET_MS)
+	ai_sched.set_hysteresis(AI_HEAVY_TICKS, 45)
 	# The field first: `_build_city` asks it how high each building stands,
 	# and a question asked before the field is configured is answered by the
 	# wrong world.
@@ -2254,9 +2273,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 						b.damage_profile))
 	mi.material_override = brick_material
 	mi.transform = b.xform
-	# Stage 5: a banded shell dithers out over the fade band while the far box
-	# dithers in over the same pixels (city_far.gdshader, `crossfade`), so the
-	# swap at SHELL_DETAIL_RANGE is a blend rather than a pop.
+	# Stage 5: a banded shell fades out over the fade band, blended over its
+	# far box drawn whole beneath it (city_far.gdshader), so the swap at
+	# SHELL_DETAIL_RANGE is a blend rather than a pop.
 	var fades := not coarse and not b.is_build() and not b.is_materialised()
 	if fades:
 		_fade_out(mi)
@@ -3401,9 +3420,12 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	if _gun.gun != null:
 		_gun.gun.queue_free()
-	camera.add_child(gi)
-	gi.position = Vector3(0.22, -0.2, -0.45)
 	_gun.equip(gi)
+	if _view != null:
+		_view.hold(gi)
+	else:
+		camera.add_child(gi)
+		gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
@@ -3563,6 +3585,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		camera.set_walking(false)
 	if _player_pawn == null or not is_instance_valid(_player_pawn):
 		_player_pawn = Pawn.spawn(self, feet, 0)
+		_player_pawn.moves = PawnMoves.new(_player_pawn)
 	else:
 		_player_pawn.place(feet)
 	if _player.get_parent() == null:
@@ -3583,10 +3606,53 @@ func _enter_pawn(feet: Vector3) -> void:
 	if _mech_cmd != null:
 		_mech_cmd.brain.leader = _player_pawn
 	_player_hud()
+	_fps_on()
 	print("[city] playing: pawn at %v" % feet)
 
 
+## The gun into the view's hands, its HUD up, the debug overlays away.
+func _fps_on() -> void:
+	if _view == null:
+		_view = PlayerView.new()
+		_view.name = "PlayerView"
+		add_child(_view)
+		_view.setup(camera, _player_pawn, _gun)
+	_player.view = _view
+	if _fps_hud == null:
+		_fps_hud = PlayerHud.new()
+		_fps_hud.name = "PlayerHud"
+		add_child(_fps_hud)
+		_fps_hud.setup(_player_pawn, _gun, _view)
+	if _feedback == null and arena == null:
+		_feedback = CombatFeedback.new()
+		_feedback.name = "Feedback"
+		add_child(_feedback)
+		_feedback.setup(self)
+		_gun.fired.connect(_feedback.on_player_shot)
+	if stats_label != null:
+		_stats_were_visible = stats_label.visible
+		stats_label.visible = false
+	if _reticle != null:
+		_reticle.visible = false
+
+
+func _fps_off() -> void:
+	_player.view = null
+	if _view != null:
+		_view.teardown()
+		_view.queue_free()
+		_view = null
+	if _fps_hud != null:
+		_fps_hud.queue_free()
+		_fps_hud = null
+	if stats_label != null:
+		stats_label.visible = _stats_were_visible
+	if _reticle != null:
+		_reticle.visible = camera.capture_mouse
+
+
 func _leave_pawn() -> void:
+	_fps_off()
 	_player.release()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
@@ -4216,6 +4282,9 @@ func _ai_tick(destruction_ms: float) -> void:
 	var t1 := Time.get_ticks_usec()
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
+	_ai_heavy_run = _ai_heavy_run + 1 if destruction_ms > AI_HEAVY_MS else 0
+	_ai_heavy_run_max = maxi(_ai_heavy_run_max, _ai_heavy_run)
+	_ai_destruction_peak = maxf(_ai_destruction_peak, destruction_ms)
 	ai_sched.run()
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
@@ -4311,15 +4380,27 @@ func _ground_gates() -> void:
 
 	# A saved build, aimed at open hillside, placed like the player does.
 	var path := "res://builds/cottage.json"
+	# Open, dry hillside: clear of every registry entry -- trees and small
+	# items too, since the placer would land a build ON one -- searched on a
+	# widening spiral, which a city full of trees needs more tries for.
 	var spot := _dry_point(RandomNumberGenerator.new(), 30.0)
-	for attempt in 40:
+	var found_clear := false
+	for attempt in 400:
+		var ang := float(attempt) * 2.39996
+		var cand := _on_ground(Vector3(cos(ang), 0.0, sin(ang)) * (10.0 + float(attempt) * 0.6))
+		if cand.y < ai_nav.get_water_level() + 0.5:
+			continue
 		var clear := true
 		for b in registry.buildings:
-			if _world_box(b).grow(12.0).has_point(Vector3(spot.x, b.xform.origin.y + 1.0, spot.z)):
+			if _world_box(b).grow(8.0).has_point(Vector3(cand.x, b.xform.origin.y + 1.0, cand.z)):
 				clear = false
+				break
 		if clear:
+			spot = cand
+			found_clear = true
 			break
-		spot = _on_ground(spot + Vector3(9.0, 0.0, 5.0))
+	if not found_clear:
+		print("[nav]   placed: no clear hillside found; trying anyway at %s" % spot)
 	if not _placer.start(path):
 		_gate_ok("a build placed on the hillside gets ground at its floor", false, "no " + path)
 		return
@@ -4360,9 +4441,12 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 	await _ground_gates()
 	# Up the hill: from in front of the lowest building to in front of the
 	# highest, which on this seed is metres of climb across the city.
-	var lo_b := registry.get_building(0)
+	# The SITE buildings: the registry also holds trees and small items now,
+	# and a tree on a hilltop is not a building a path climbs to.
+	var lo_b := registry.get_building(_site_ids[0])
 	var hi_b := lo_b
-	for c in registry.buildings:
+	for id in _site_ids:
+		var c := registry.get_building(id)
 		if c.xform.origin.y < lo_b.xform.origin.y:
 			lo_b = c
 		if c.xform.origin.y > hi_b.xform.origin.y:
@@ -5990,7 +6074,13 @@ func _place_trees() -> void:
 	for s in spots:
 		var variant: int = s.variant
 		var recipe := Trees.recipe(variant)
-		var id := registry.register_build(recipe, Trees.placement(s.cell, variant))
+		# Past the detail square the ground drawn is the coarse tier's, which
+		# is not the field's height: stand on what is drawn.
+		var cell: Vector3i = s.cell
+		var ground := NAN
+		if _terrain_coarse != null:
+			ground = _terrain_coarse.height_at(cell.x, cell.z)
+		var id := registry.register_build(recipe, Trees.placement(cell, variant, ground))
 		if id < 0:
 			continue
 		_index_building(id)
@@ -6188,7 +6278,8 @@ func _drop_shadow_proxy(id: int) -> void:
 ## Room for this many far instances before the buffer has to grow.
 const FAR_INITIAL_CAPACITY := 256
 ## Stage 5, the crossfade. A banded shell is fully drawn nearer than FADE_NEAR
-## and gone at FADE_FAR, dithered in between; the far box is the complement.
+## and gone at FADE_FAR, alpha-blended in between over its far box, which is
+## drawn whole under it (city_far.gdshader): a real crossfade.
 ## Coarse -> banded at FADE_IN_AT; banded -> coarse past FADE_FAR (the old
 ## SHELL_DETAIL_RANGE + SHELL_HYSTERESIS), where the shell has faded out.
 const FADE_NEAR := 80.0
@@ -6197,12 +6288,14 @@ const FADE_IN_AT := 130.0
 var _far_fade := {}   ## building id -> 1.0 while its box crossfades with a shell
 
 
-## Godot's own visibility-range fade, over the band: it dithers the shell out
-## with the same interleaved-gradient noise city_far.gdshader dithers the box
-## in with, so the two are each other's complement pixel for pixel.
+## Godot's own visibility-range fade over the band. It BLENDS a fading
+## instance, alpha = smoothstep over [end - margin, end + margin] from its
+## bounds' centre (renderer_scene_cull / render_forward_clustered, 4.6) -- so
+## end and margin are set for that span to be exactly FADE_NEAR..FADE_FAR,
+## and the shell is gone by the time the streamer frees it.
 func _fade_out(g: GeometryInstance3D) -> void:
-	g.visibility_range_end = FADE_FAR
-	g.visibility_range_end_margin = FADE_FAR - FADE_NEAR
+	g.visibility_range_end = (FADE_NEAR + FADE_FAR) * 0.5
+	g.visibility_range_end_margin = (FADE_FAR - FADE_NEAR) * 0.5
 	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 ## Rows of damage before the texture has to grow.
 const FAR_DMG_INITIAL_ROWS := 16
@@ -6244,8 +6337,8 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
 				or b.is_build())
-	# Under a banded shell that is fading (Stage 5), drawn too, flagged to
-	# dither in where the shell dithers out.
+	# Under a banded shell that is fading (Stage 5), drawn too, flagged so it
+	# sits just inside the shell for the shell to blend over.
 	var fade := 0.0
 	if not want and _shells.has(b.id) and not b.is_build() and not b.is_materialised() \
 			and not b.toppled and not _shell_coarse.get(b.id, false):
@@ -6399,8 +6492,6 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("course_colours", courses)
 	mat.set_shader_parameter("base_colour", _far_rgb(TowerRecipe.BASE_COLOUR))
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
-	mat.set_shader_parameter("fade_near", FADE_NEAR)
-	mat.set_shader_parameter("fade_far", FADE_FAR)
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
 	_far.multimesh = mm
@@ -6867,10 +6958,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					_fire(_blast_radius)
 				return
 			MOUSE_BUTTON_WHEEL_UP:
-				_set_blast_radius(_blast_radius * BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius * BLAST_STEP)
 				return
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_set_blast_radius(_blast_radius / BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius / BLAST_STEP)
 				return
 	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
 	# HOLD, held while aiming sends it to attack where the crosshair is.
@@ -7935,8 +8028,20 @@ func _run_stress_pass() -> void:
 					int(budget.counts.smart), int(budget.counts.directed), swarm.alive(),
 					_many.soldiers, _many.flyers, _many.animals, swarm.promoted, swarm.demoted,
 					budget.last_ms, swarm.tick_ms()])
-	print("[stress] %s  the AI stepped down under the collapse and back up after" % (
-			"ok   " if ai_sched.get_max_level_seen() >= 1 and ai_sched.get_level() == 0
+	# Stepped down when the collapse was heavy enough to call for it -- a run of
+	# AI_HEAVY_TICKS ticks over AI_HEAVY_MS -- and back up after, either way.
+	# The check used to require a step down, full stop, and failed once the
+	# collapse itself got cheap enough never to need one (its worst ticks well
+	# under 8 ms, one at a time): the arbiter doing nothing was the right answer.
+	# The ladder itself, driven by a load that does call for it, is
+	# tools/ai_world_probe.gd's.
+	var called_for := _ai_heavy_run_max >= AI_HEAVY_TICKS
+	print("[stress] destruction for the arbiter: worst tick %.1f ms, longest run over %.0f ms %d tick(s) -- a step down %s" % [
+			_ai_destruction_peak, AI_HEAVY_MS, _ai_heavy_run_max,
+			"was called for" if called_for else "was not called for"])
+	print("[stress] %s  the AI stepped down under the collapse if it was heavy, and back up after" % (
+			"ok   " if (ai_sched.get_max_level_seen() >= 1 or not called_for)
+					and ai_sched.get_level() == 0
 			else "FAIL "))
 	print("[stress] %d shot(s) at %d building(s); %d meant to come down" % [
 			shots, target, toppled_on_purpose])
@@ -8264,8 +8369,15 @@ func _run_tree_pass() -> void:
 			meshed += 1
 	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
 		_trees_placed, _inst_sets.size(), near, far, meshed])
-	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
-			"%d of %d" % [near + far, _trees_placed])
+	# Counted by copy, not by buffer: a tree crossing the mesh-to-card band is
+	# in both buffers, dithered into itself.
+	var drawn := 0
+	for id in trees:
+		var tset: ImpostorLod = _inst_sets[_inst_key(registry.get_building(id))]
+		if tset.is_drawn(int(_inst_handle[id])):
+			drawn += 1
+	_gate_ok("every tree is drawn by its set", drawn == _trees_placed,
+			"%d of %d" % [drawn, _trees_placed])
 	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
 	var baked := 0
 	for s in _inst_sets.values():
@@ -8340,8 +8452,8 @@ func _run_far_pass() -> void:
 		var box: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
-		# A box under a banded shell that is fading (Stage 5) is its
-		# complement, dithered on the other pixels: one drawer, not two.
+		# A box under a banded shell that is fading (Stage 5) is what the
+		# shell blends over: one building drawn, not two.
 		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
 		elif not shell and not box:
@@ -8433,8 +8545,9 @@ func _run_far_pass() -> void:
 	camera.global_position = aim + Vector3(0.0, 0.0, -(SHELL_DETAIL_RANGE - 70.0))
 	camera.look_at(aim, Vector3.UP)
 	await _far_settle()
-	# Its far box is still there, flagged to dither in only where the banded
-	# shell dithers out (Stage 5) -- inside FADE_NEAR, nowhere.
+	# Its far box is still there, flagged, just inside the banded shell for
+	# the shell's fade to blend over (Stage 5); inside FADE_NEAR the shell is
+	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
 			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
 			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
@@ -8470,7 +8583,10 @@ func _run_far_pass() -> void:
 	await _far_settle()
 	_gate_ok("  closer in, its own shell and no card", _shells.has(b1)
 			and (_shells[b1] as MeshInstance3D).mesh != null
-			and not set_.is_drawn(int(_inst_handle[b1])))
+			and not set_.is_drawn(int(_inst_handle[b1])),
+			"shell %s, mesh %s, card tier %d, %.0f m" % [_shells.has(b1),
+			_shells.has(b1) and (_shells[b1] as MeshInstance3D).mesh != null,
+			set_.tier_of(int(_inst_handle[b1])), bb1.xform.origin.distance_to(camera.global_position)])
 	# Damaged, it keeps its exact shell even out there.
 	var bb2 := registry.get_building(b2)
 	_promote(b2)
@@ -8502,7 +8618,8 @@ func _run_far_pass() -> void:
 	camera.look_at(mc, Vector3.UP)
 	await _far_settle()
 	var banded: bool = _shells.has(mid_id) and not _shell_coarse.get(mid_id, true)
-	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_end == FADE_FAR
+	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_fade_mode \
+			== GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_gate_ok("Stage 5: in the fade band, a banded shell that fades out", faded,
 			"banded %s" % banded)
 	_gate_ok("  and its far box, flagged to fade in", _far_on.has(mid_id)
@@ -8512,6 +8629,43 @@ func _run_far_pass() -> void:
 		camera.look_at(mc, Vector3.UP)
 		await _far_settle()
 		await _save_crop("fade_%d" % int(d), 0.5)
+
+	# The crossfade leaves no holes. It rests on how Godot fades an instance
+	# (blended, over [end - margin, end + margin] from its bounds' centre);
+	# if an engine update changes that, this is what fails.
+	# In the middle of the band, from low down so the building stands on sky:
+	#   A  the crossfade as it runs;
+	#   B  the shell alone, not fading -- the reference;
+	#   C  the shell fading with no box under it -- holes at the fade's rate.
+	# Holes are pixels of the building far from B: the box under the blend
+	# makes A nearly B, where C shows the sky through the fading shell.
+	camera.global_position = mc + Vector3(0.0, -mc.y + 1.5, -(FADE_NEAR + FADE_FAR) * 0.5)
+	camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
+	await _far_settle()
+	var shell_mi: MeshInstance3D = _shells.get(mid_id)
+	if shell_mi != null and _far_on.has(mid_id):
+		var rect := _screen_rect(_world_box(mb))
+		var img_a := await _grab()
+		var ranged: Array[GeometryInstance3D] = [shell_mi]
+		for ch in shell_mi.get_children():
+			if ch is GeometryInstance3D:
+				ranged.append(ch)
+		for g in ranged:
+			g.visibility_range_end = 0.0
+		var img_b := await _grab()
+		for g in ranged:
+			_fade_out(g)
+		_far.visible = false
+		var img_c := await _grab()
+		_far.visible = true
+		var holes_a := _holes(img_a, img_b, rect)
+		var holes_c := _holes(img_c, img_b, rect)
+		print("[far]   crossfade: %.1f%% of the building off its reference, against %.1f%% with no box" % [
+			holes_a * 100.0, holes_c * 100.0])
+		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
+				"%.3f vs %.3f" % [holes_a, holes_c])
+	else:
+		_gate_ok("Stage 5: the crossfade leaves no holes", false, "no fading shell to look at")
 
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
@@ -8529,6 +8683,47 @@ func _save_crop(shot_name: String, frac: float) -> void:
 	img.resize(full.x, full.y, Image.INTERPOLATE_NEAREST)
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
+
+
+## The screen rectangle a world box covers, clamped to the view.
+func _screen_rect(box: AABB) -> Rect2i:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for i in 8:
+		var p := box.position + box.size * Vector3(i & 1, (i >> 1) & 1, (i >> 2) & 1)
+		if camera.is_position_behind(p):
+			continue
+		var s := camera.unproject_position(p)
+		lo = lo.min(s)
+		hi = hi.max(s)
+	var view := Vector2(get_viewport().get_visible_rect().size)
+	lo = lo.clamp(Vector2.ZERO, view)
+	hi = hi.clamp(Vector2.ZERO, view)
+	return Rect2i(Vector2i(lo), Vector2i(hi - lo))
+
+
+func _grab() -> Image:
+	for i in 3:
+		await RenderingServer.frame_post_draw
+	return get_viewport().get_texture().get_image()
+
+
+## Share of `rect`, shrunk a little off its edges, where `img` is far from
+## `ref`: a hole shows what is behind, and here that is sky.
+static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
+	var r := rect.grow(-maxi(rect.size.x, rect.size.y) / 12)
+	if r.size.x <= 0 or r.size.y <= 0:
+		return 0.0
+	var off := 0
+	var n := 0
+	for y in range(r.position.y, r.end.y, 2):
+		for x in range(r.position.x, r.end.x, 2):
+			n += 1
+			var a := img.get_pixel(x, y)
+			var b := ref.get_pixel(x, y)
+			if absf(a.get_luminance() - b.get_luminance()) > 0.2:
+				off += 1
+	return float(off) / maxf(n, 1)
 
 
 ## Frames until the shell streamer has had a full quiet pass over the register.
@@ -9940,19 +10135,22 @@ func _run_dormant_pass() -> void:
 	var target: IslandManager.Dormant = islands.dormant[0]
 	var at: Vector3 = target.record.box.get_center()
 	var held := target.record.block_count()
+	var slept_id := target.piece_id
 	_blast(at, 3.0)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
 		await _frames(1)
 		guard += 1
 	await _frames(10)
+	# THAT piece, by its id -- not every piece within 20 m of the blast, which
+	# counted its neighbours' bricks too (2,814 "left" of a 1,421-brick piece).
 	var woke := false
 	var left := 0
 	for isl in islands.islands:
-		if isl.is_valid() and isl.body.global_position.distance_to(at) < 20.0:
+		if isl.is_valid() and isl.piece_id == slept_id:
 			woke = true
-			left += world.get_alive_block_count(isl.chunk)
-	_gate_ok("a blast wakes what it reaches", woke)
+			left = world.get_alive_block_count(isl.chunk)
+	_gate_ok("a blast wakes what it reaches", woke, "piece %d" % slept_id)
 	_gate_ok("and takes bricks out of it", left > 0 and left < held,
 			"%d of %d left" % [left, held])
 
@@ -9996,8 +10194,12 @@ func _run_fixture_pass() -> void:
 	var steps: int = int(f.params.get("steps", 0))
 	_gate_ok("the building builds its staircase with itself", not f.blocks.is_empty(),
 			"%d blocks" % f.blocks.size())
-	_gate_ok("every step is there", f.blocks.size() == steps,
-			"%d of %d" % [f.blocks.size(), steps])
+	# One spiral piece per two steps (StaircaseRecipe.build_flight): the count
+	# is pieces. It was steps, from before the flight was built from spiral
+	# pieces, and 27 steps are 14 pieces.
+	var pieces := StaircaseRecipe.flight_pieces(steps)
+	_gate_ok("every step is there", f.blocks.size() == pieces,
+			"%d pieces of %d for %d steps" % [f.blocks.size(), pieces, steps])
 	_gate_ok("in the SAME chunk as the building", chunk == b.chunk)
 	_gate_ok("so the city holds one chunk for the building, not two",
 			int(world.get_memory_report().chunks) == 1,
@@ -10040,13 +10242,11 @@ func _run_fixture_pass() -> void:
 	var tread: Vector3 = (found.position as Vector3) if not found.is_empty() else over
 	camera.allow_walk = true
 	camera.drive_uncaptured = true
-	# DROPPED: feet a little above the tread. The eye is a plate under the top
-	# of the head, so it goes a body's height less a plate above the feet. It
+	# DROPPED: feet a little above the tread, the eye EYE_HEIGHT above them. It
 	# was put a metre above the tread, which is the figure half a metre INTO it,
 	# and whether the solver pushed it out upwards or let it sink through was
 	# down to the shape of the box it was stuck in.
-	camera.global_position = tread + Vector3(0.0,
-			DebugCamera.BODY_HEIGHT - DebugCamera.PLATE_M + 0.3, 0.0)
+	camera.global_position = tread + Vector3(0.0, DebugCamera.EYE_HEIGHT + 0.3, 0.0)
 	camera.set_walking(true)
 	var body := camera.body()
 	var landed := 0
@@ -10078,7 +10278,6 @@ func _run_fixture_pass() -> void:
 	camera.global_position = mid + Vector3(0.0, 1.0, -9.0)
 	camera.look_at(mid, Vector3.UP)
 	await _frames(6)
-	var before := world.get_alive_block_count(chunk)
 	var stairs_before := _alive_of(chunk, f.blocks)
 	_blast(mid, 2.0)
 	var guard := 0
@@ -10089,8 +10288,16 @@ func _run_fixture_pass() -> void:
 	_gate_ok("shooting the flight takes steps out of it",
 			_alive_of(chunk, f.blocks) < stairs_before,
 			"%d of %d left" % [_alive_of(chunk, f.blocks), stairs_before])
+	# In the BUILDING's own dead list -- the steps it lost are its bricks. Not
+	# "fewer bricks than before": the rooms around the camera open while this
+	# waits and lay their furniture, and the count went up (638 -> 647).
+	var dead_steps := 0
+	for id in world.get_dead_blocks(chunk):
+		if f.blocks.has(id):
+			dead_steps += 1
 	_gate_ok("and the building is the thing that is damaged",
-			registry.get_building(0).is_damaged() and world.get_alive_block_count(chunk) < before)
+			registry.get_building(0).is_damaged() and dead_steps > 0,
+			"%d dead steps in the building's record" % dead_steps)
 
 	# The whole point: when the building comes down, the staircase goes with it.
 	var stairs_standing := _alive_of(chunk, f.blocks)
@@ -10495,15 +10702,24 @@ func _run_walk_pass() -> void:
 	print("\na brick floor costs headroom, and ducking gets it back")
 	camera.set_walking(false)
 	var room := Vector3(open.x + 30.0, 0.0, open.z)
-	# A beam with 1.40 m under it: clear standing from the ground, not clear
-	# standing on one brick course.
-	var beam := _test_block(room + Vector3(0.0, 1.5, 0.0), Vector3(6.0, 0.2, 1.2))
+	# A beam with 1.90 m under it: clear standing from the ground (the figure is
+	# four bricks, 1.68 m), not clear standing on one brick course (2.10 m), and
+	# clear again crouched on it (a brick shorter, 1.68 m). It was 1.40 m, sized
+	# for the old three-brick figure, which a four-brick one could not get under
+	# on the ground or crouched on the brick.
+	var beam := _test_block(room + Vector3(0.0, 2.0, 0.0), Vector3(6.0, 0.2, 1.2))
 	camera.global_position = room + Vector3(0.0, DebugCamera.EYE_HEIGHT, -4.0)
 	camera.look_at(Vector3(room.x, DebugCamera.EYE_HEIGHT, room.z + 6.0), Vector3.UP)
 	camera.set_walking(true)
 	await _frames(40)
+	# Until it is past the beam, in physics ticks, ten seconds at most. It was
+	# 150 drawn frames, which at a few hundred frames a second is half a second
+	# of walking -- a metre and a half of the five it had to cover.
 	_key(KEY_W, true)
-	await _frames(150)
+	var walk_ticks := 0
+	while walk_ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		walk_ticks += 1
 	_key(KEY_W, false)
 	await _frames(6)
 	_gate_ok("from the ground it walks under the beam standing",
@@ -10520,8 +10736,11 @@ func _run_walk_pass() -> void:
 	await _frames(40)
 	var ducked := false
 	_key(KEY_W, true)
-	for i in 240:
-		await _frames(1)
+	# Physics ticks, as above: until past the beam, ten seconds at most.
+	var ticks := 0
+	while ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		ticks += 1
 		ducked = ducked or camera.is_auto_crouched()
 	_key(KEY_W, false)
 	await _frames(6)

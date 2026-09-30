@@ -19,6 +19,14 @@ var look_pitch := 0.0
 var run := false
 var crouch := false
 var fire := false
+## Aiming down the sights: a slower walk and no sprint. The gun's cone is the
+## view's to narrow (PlayerView); the motor only slows the legs.
+var aim := false
+## The grapple line (PawnMoves): pressed shoots it, held keeps it, released lets
+## go. Only a pawn with moves has one.
+var grapple := false
+## The jump button still down: a jump held rises higher (PawnMoves).
+var jump_held := false
 ## Edge-triggered: set by the brain, cleared by the motor once acted on.
 var jump := false
 var reload := false
@@ -31,5 +39,8 @@ func clear() -> void:
 	run = false
 	crouch = false
 	fire = false
+	aim = false
+	grapple = false
 	jump = false
+	jump_held = false
 	reload = false

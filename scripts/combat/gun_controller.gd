@@ -25,6 +25,10 @@ const MAX_SPREAD_DEG := 8.0
 ## How far into what it struck a structural hit is placed: inside the struck
 ## cell, never on the boundary between two.
 const INTO_SURFACE := 0.02
+## Bloom: how wide sustained fire may push the cone past the gun's own, and how
+## fast it closes again once the trigger rests.
+const BLOOM_MAX_DEG := 4.0
+const BLOOM_RECOVER := 7.0
 
 var gun: GunInstance
 var rng: RandomNumberGenerator
@@ -37,10 +41,17 @@ var on_structure_hit := Callable()
 var exclude: Array[RID] = []
 ## Where bullets come from and which way: the camera for a player, the arm for a mech.
 var aim: Node3D
+## The holder's say on the cone, multiplied in: narrower aimed down the sights,
+## wider on the move or in the air (PlayerView sets it). 1 for a soldier.
+var spread_mult := 1.0
+## Degrees each round adds to the cone while firing (0: no bloom, a soldier's).
+var bloom_per_shot := 0.0
+var bloom := 0.0
 
 var ammo := 0
 var _cooldown := 0.0
 var _reload_left := 0.0
+var _reload_total := 1.0
 var _trigger := false
 var _shot := {}
 
@@ -69,7 +80,20 @@ func reload() -> void:
 	if gun == null or is_reloading() or ammo >= mag_size():
 		return
 	_reload_left = maxf(_stat(&"reload_time", 1.0), 0.05)
+	_reload_total = _reload_left
 	reload_started.emit(_reload_left)
+
+
+## 0 as a reload starts, 1 as it ends; 1 when not reloading.
+func reload_progress() -> float:
+	return 1.0 - _reload_left / _reload_total if is_reloading() else 1.0
+
+
+## The cone a round leaves in right now: its half-angle in degrees, from the gun's
+## own accuracy, bloom, and the holder's multiplier.
+func current_spread_deg() -> float:
+	var acc := clampf(_stat(&"accuracy", 1.0), 0.0, 1.0)
+	return (MAX_SPREAD_DEG * (1.0 - acc) + bloom) * spread_mult
 
 
 func _physics_process(delta: float) -> void:
@@ -82,6 +106,7 @@ func _physics_process(delta: float) -> void:
 func step(delta: float) -> void:
 	if gun == null:
 		return
+	bloom = maxf(bloom - BLOOM_RECOVER * delta, 0.0)
 	if _reload_left > 0.0:
 		_reload_left -= delta
 		if _reload_left <= 0.0:
@@ -98,6 +123,7 @@ func step(delta: float) -> void:
 		ammo -= 1
 		_cooldown += interval
 		_fire_one()
+		bloom = minf(bloom + bloom_per_shot, BLOOM_MAX_DEG)
 
 
 func _fire_one() -> void:
@@ -158,8 +184,7 @@ func _hit_living(target: Node, point: Vector3, normal: Vector3) -> DamageSystem.
 
 
 func _spread(forward: Vector3, aim_basis: Basis) -> Vector3:
-	var acc := clampf(_stat(&"accuracy", 1.0), 0.0, 1.0)
-	var cone := deg_to_rad(MAX_SPREAD_DEG) * (1.0 - acc)
+	var cone := deg_to_rad(current_spread_deg())
 	if cone <= 0.0:
 		return forward
 	var r := _roll()

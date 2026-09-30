@@ -53,6 +53,8 @@ func _tick(_delta: float) -> Status:
 		q.events["arrived"] = now
 		q.finish(SquadMsg.ReportKind.DONE)
 		return SUCCESS
+	# A mover that died and was cleared away since the bound was given.
+	_movers = _movers.filter(func(m) -> bool: return is_instance_valid(m))
 	var moved := true
 	for m in _movers:
 		if not (q.replied(m, SquadMsg.StatusKind.REACHED) or q.replied(m, SquadMsg.StatusKind.BLOCKED)):

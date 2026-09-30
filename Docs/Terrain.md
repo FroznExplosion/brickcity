@@ -2006,6 +2006,15 @@ Building shells, nothing materialised into live bricks yet.
 
 Worst viewpoint each, debug build, Radeon iGPU, 1152x648.
 
+> **Correction (2026-09-29, Docs/Impostors.md §7.1).** These city rows were not shells. The bench
+> sampled while the streamer was still settling, and its street-level viewpoint promoted the
+> buildings beside it into live bricks at whatever tick it got to them. Most of the millions were
+> those bricks, drawn again in every shadow cascade. The bench now settles each viewpoint and does
+> not promote (`--with-bricks` puts that back). Shells only, big_city, 150 buildings, worst
+> viewpoint: **~250–300k tris, ~100 calls**. With three brick buildings beside the camera: 2.1M
+> tris, 145 calls after the shadow LOD. So the conclusion below still holds, but for a different
+> reason: the city is the expensive half because of **materialised bricks**, not shells.
+
 **The city is the expensive half and terrain is not close.** 150 buildings
 cost 3.3M triangles where a 560 m terrain costs 1.2M, and the city's number
 climbs with building count while the terrain's is nearly flat in view
@@ -2441,6 +2450,20 @@ With the course lines (19.19) the far ground now reads as terraces of brick.
 The `--terrain --nav` flush gate now checks only the site buildings: the
 registry also holds brick trees and small items since the impostor work (822
 entries), and those do not stand on pads.
+
+### 19.21 Speckled seams, and one lighting rule for all far ground
+
+**The speckle** along skirts and smooth ramps was shadow acne: 19.20 gave
+smooth far vertices and skirts an "up" normal and did the lighting in the
+shader, but shadow bias reads the VERTEX normal, and "up" on a steep face
+biases the wrong way. Smooth cells now carry their real slope as the vertex
+normal and skirts face out; the shader still lights them flat.
+
+**The LOD 1 / LOD 2 border.** Blocky far blocks are flagged too (CUSTOM0.g =
+0.5) and lit by the same rule as smooth ones: flat per face, tops full
+brightness, anything steeper darkened by `far_ramp_shade`. The border now
+changes shape (steps to ramps) but not shading. Course lines stay on smooth
+ground only.
 
 ## 20. Editing terrain is a LEVEL EDITING job
 
