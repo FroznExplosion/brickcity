@@ -272,6 +272,22 @@ func _run() -> void:
 		await process_frame
 	get_root().get_texture().get_image().save_png("res://shots/impostor_items.png")
 
+	# Nothing interpolated. With physics interpolation on (the project has it)
+	# a MultiMesh blends each slot from its last transform to its new one,
+	# and a repack puts different copies in the same slots: trees slid and
+	# flickered whenever the player moved.
+	var interpolated := 0
+	var mmis := 0
+	for set_ in [lod, gk]:
+		for c in (set_ as Node).get_children():
+			if c is MultiMeshInstance3D:
+				mmis += 1
+				if (c as Node).is_physics_interpolated():
+					interpolated += 1
+	print("[impostor]   project physics interpolation %s; %d of %d MultiMeshes interpolated" % [
+		ProjectSettings.get_setting("physics/common/physics_interpolation"), interpolated, mmis])
+	_check("no MultiMesh of copies is interpolated", mmis > 0 and interpolated == 0)
+
 	# Areas: the field of 240 trees spans several 128 m squares.
 	print("[impostor]   %d trees in %d area(s)" % [lod.count(), lod.chunk_count()])
 	_check("copies are kept in areas", lod.chunk_count() > 1)

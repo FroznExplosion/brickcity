@@ -6405,6 +6405,9 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
+	# Not interpolated: a slot shown or hidden (a zero-scale transform) would
+	# otherwise grow or shrink over a frame, and the buildings never move.
+	_far.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_far.multimesh = mm
 	_far.material_override = mat
 	# Casts: a tower's shadow is long and seen from far off (section 7.2).
