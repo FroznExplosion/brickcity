@@ -63,6 +63,9 @@ void vertex() {
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
+    // Grass in the wind (weather.gdshaderinc): only what has a sway height --
+    // the tufts -- and after v_local, so the print lines ride along.
+    VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
     // A see-through brick is drawn by the glass pass, not here: collapsed to
     // a point, its faces cost nothing and rasterise nothing.
     if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
@@ -180,8 +183,10 @@ void fragment() {
     float out_rough = clamp(roughness + print_rough, 0.0, 1.0);
     float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
     // Rain (weather.gdshaderinc), as on bricks.
-    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX,
-            0.14 * (1.0 - MAT_METAL[mat]));
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.14 * (1.0 - MAT_METAL[mat]), 1.0, TIME);
+    NORMAL = wet_normal;
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

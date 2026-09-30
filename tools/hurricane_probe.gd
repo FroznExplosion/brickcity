@@ -72,6 +72,7 @@ func _run() -> void:
 	var peak_wind := 0.0
 	var peak_soak := 0.0
 	var peak_gale := 0.0
+	var peak_rain := 0.0
 	var before_eye := Vector3.ZERO
 	var after_eye := Vector3.ZERO
 	var eye := false
@@ -92,6 +93,7 @@ func _run() -> void:
 		peak_wind = maxf(peak_wind, h.wind.length())
 		peak_soak = maxf(peak_soak, float(scene._brick_material().get_shader_parameter("weather_wet")))
 		peak_gale = maxf(peak_gale, dir.ctx.gale.length())
+		peak_rain = maxf(peak_rain, WeatherFx.rain)
 		flashes = h.flashes
 		raining = raining or dir.ctx.raining
 		if h.phase == Disaster.Phase.ACTIVE:
@@ -144,6 +146,15 @@ func _run() -> void:
 		for set in scene._trees.get_children():
 			if set is ImpostorLod and (set as ImpostorLod).sway.x > 0.0:
 				swaying += 1
+	var grass := 0
+	for tile in scene._tiles:
+		var tufts = tile.get_node_or_null("Tufts")
+		if tufts != null and (tufts.get_instance_shader_parameter("weather_sway") as Vector3).x > 0.0:
+			grass += 1
+	_ok("rain falls on the surfaces while it rains (ripples, running streaks), and stops",
+			peak_rain > 0.9 and WeatherFx.rain < peak_rain, "%.2f at the height, %.2f after" % [peak_rain,
+			WeatherFx.rain])
+	_ok("the grass is set to move in the wind", grass > 0, "%d tile(s) of tufts" % grass)
 	_ok("trees sway in the gale, and it stops with the storm",
 			peak_gale > 0.5 and dir.ctx.gale == Vector3.ZERO and WeatherFx.wind == Vector3.ZERO
 			and (scene._trees == null or swaying > 0),
@@ -175,6 +186,12 @@ func _land_shot(cam: DebugCamera, name: String) -> void:
 	await process_frame
 	await process_frame
 	await _shot(name)
+	# And close: the ground at a low angle, where puddles and ripples show.
+	cam.global_position = tree + Vector3(4.0, 1.4, 4.0)
+	cam.look_at(tree + Vector3(-3.0, 0.0, -3.0), Vector3.UP)
+	await process_frame
+	await process_frame
+	await _shot(name + "_close")
 	cam.global_transform = was
 
 

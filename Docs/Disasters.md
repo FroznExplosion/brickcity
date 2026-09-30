@@ -751,7 +751,7 @@ pieces' core (the laid ground, studs, tufts), the impostor cards and the far cit
 defaults to "no weather", so an unregistered material draws exactly as before.
 
 * **Wet** (`weather_wet`, 0..1): a surface darkens a little (plastic 14%, the terrain's ground
-  22%, metal not at all), goes far glossier (roughness toward 0.07) and more specular — most on
+  22%, metal not at all), goes glossier (roughness toward a satin 0.22) and more specular — most on
   what faces the sky. The disaster context eases it: **up over 15 s while it rains, drying over
   120 s after**, so the city stays wet a while after a storm passes.
 * **Sway** (`weather_wind`, the wind's direction × strength, and a per-object `instance uniform
@@ -771,9 +771,29 @@ city's — and adopts copies made from a registered one (ImpostorLod's fading co
 `duplicate()` takes parameters as they are and would not follow). Not Godot's global shader
 uniforms: those live in `project.godot`, which is kept open by another area.
 
-Not yet: see-through (glass) bricks do not sway with their building (their pass has no
-include — a few centimetres at a tower's top), puddles and ripples, streaks running down walls,
-and grass tufts in the wind.
+Then, added (2026-09-30):
+
+* **Puddles.** On flat ground (`puddles` 1 on the terrain and the laid pieces, 0.4 on bricks — a
+  flat roof, rubble tops — 0.25 on the far city, none on cards): patches from a world-space noise
+  that grow as it gets wetter, darker by half and a mirror (roughness 0). The rest of a wet surface
+  is satin (roughness 0.22) so the puddles stand out; the first version made the whole film
+  near-mirror and the puddles vanished into it.
+* **Ripples.** A separate `weather_rain` (rain falling now, eased over 2 s — the wet lingers, the
+  ripples stop with the rain): rings spreading from drops, two layers of one drop per cell, bent
+  into the normal; strongest in the puddles, faint on the film.
+* **Streaks down walls:** thin runs, four columns a metre and about half of them wet, darker and
+  glossier; they flow while it rains and stay as dark trails after.
+* **Grass** (the tufts, `printed_core`'s vertex) sways at 0.45 per metre, 1.1 Hz — the tile's
+  Tufts node carries the instance parameter; studs and pebbles do not.
+* **Glass bricks** sway with their building: `brick_glass.gdshader` includes the weather too, and
+  a registered material's `next_pass` (its glass pass) is registered with it.
+
+**Names in the include are prefixed** (`wx_` for locals, `wp_` for parameters): a shader's own
+uniforms are visible inside an included function, and the ripples' local `centre` collided with
+the impostor shader's `centre` uniform — a compile error only a windowed run shows (headless has
+no renderer to compile with).
+
+Still not: rain drops splashing up off surfaces, and snow (the blizzard is deferred).
 
 Probe (`hurricane_probe`): bricks 1.00 wet at the height of the storm, the terrain's and the
 printed materials registered; still wet just after, drying; 4 tree sets swaying, gale up to 1.06
