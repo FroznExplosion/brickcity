@@ -57,6 +57,7 @@ func _run() -> void:
 	if shots:
 		await _ticks(10)
 		await _shot("calm")
+		await _land_shot(cam, "land_dry")
 	else:
 		cam.set_walking(true)
 		await _ticks(30)
@@ -69,6 +70,8 @@ func _run() -> void:
 	var peak_gain := 0.0
 	var peak_wet := 0
 	var peak_wind := 0.0
+	var peak_soak := 0.0
+	var peak_gale := 0.0
 	var before_eye := Vector3.ZERO
 	var after_eye := Vector3.ZERO
 	var eye := false
@@ -87,6 +90,8 @@ func _run() -> void:
 		peak_gain = maxf(peak_gain, sea.wave_gain)
 		peak_wet = maxi(peak_wet, sea._wet_count)
 		peak_wind = maxf(peak_wind, h.wind.length())
+		peak_soak = maxf(peak_soak, float(scene._brick_material().get_shader_parameter("weather_wet")))
+		peak_gale = maxf(peak_gale, dir.ctx.gale.length())
 		flashes = h.flashes
 		raining = raining or dir.ctx.raining
 		if h.phase == Disaster.Phase.ACTIVE:
@@ -95,6 +100,7 @@ func _run() -> void:
 			if shots and not shot_taken and u > 0.33:
 				shot_taken = true
 				await _shot("storm")
+				await _land_shot(cam, "land_wet")
 			if shots and not eye_shot and h.in_eye() and h.phase_t > h.active_s * 0.5:
 				eye_shot = true
 				await _shot("eye")
@@ -110,6 +116,7 @@ func _run() -> void:
 				if from == Vector3.INF:
 					from = cam.global_position
 				drift = Vector2(cam.global_position.x - from.x, cam.global_position.z - from.z).length()
+	await _ticks(6)   # the context eases wet and wind per frame; give it a few
 	_ok("it runs its course", not dir.is_running(), "%.0f s" % (ticks / 30.0))
 	_ok("the sea rises by the surge", peak > Hurricane.SURGE_M * 0.6 and peak <= Hurricane.SURGE_M + 0.01,
 			"+%.2f m at the peak" % peak)
@@ -125,10 +132,50 @@ func _run() -> void:
 	_ok("the sea is back exactly where it was", BrickWave.get_sea_level() == base_level
 			and sea.wave_gain == base_gain and sea._wet_count == base_wet,
 			"%.3f / %.3f, gain %.2f" % [BrickWave.get_sea_level(), base_level, sea.wave_gain])
+	# Wet, and swaying (Docs/Disasters.md 19).
+	var ground_wet := float(TerrainTile.instance_material().get_shader_parameter("weather_wet"))
+	_ok("everything gets wet in the rain: bricks, the ground's pieces, the terrain",
+			peak_soak > 0.9 and WeatherFx.is_registered(TerrainTile.instance_material())
+			and WeatherFx.is_registered(scene._mat), "bricks %.2f at the peak" % peak_soak)
+	_ok("and dries slowly after it", dir.ctx.wet > 0.5 and dir.ctx.wet < 1.0 and ground_wet > 0.5,
+			"%.2f just after" % dir.ctx.wet)
+	var swaying := 0
+	if scene._trees != null:
+		for set in scene._trees.get_children():
+			if set is ImpostorLod and (set as ImpostorLod).sway.x > 0.0:
+				swaying += 1
+	_ok("trees sway in the gale, and it stops with the storm",
+			peak_gale > 0.5 and dir.ctx.gale == Vector3.ZERO and WeatherFx.wind == Vector3.ZERO
+			and (scene._trees == null or swaying > 0),
+			"gale up to %.2f; %d tree set(s) swaying" % [peak_gale, swaying])
 	_ok("the wind has stopped, the lens is clear", cam.wind == Vector3.ZERO and not dir.ctx.raining
 			and float(dir.ctx.screen.get_shader_parameter("rain")) == 0.0)
 	print("  --   re-reading the seabed map: %.1f ms" % refresh_ms)
 	_finish(scene)
+
+
+## Over the land by the start, trees in view, and back where it was.
+func _land_shot(cam: DebugCamera, name: String) -> void:
+	var was := cam.global_transform
+	# The tree nearest the start that stands above the sea.
+	var tree := Vector3.INF
+	var scene := cam.get_parent()
+	if scene._trees != null:
+		for set in scene._trees.get_children():
+			if not (set is ImpostorLod):
+				continue
+			for xf: Transform3D in (set as ImpostorLod)._xf:
+				if xf.origin.y > BrickWave.get_sea_level() + 2.5 and (tree == Vector3.INF
+						or xf.origin.length() < tree.length()):
+					tree = xf.origin
+	if tree == Vector3.INF:
+		return
+	cam.global_position = tree + Vector3(9.0, 5.0, 9.0)
+	cam.look_at(tree + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+	await process_frame
+	await process_frame
+	await _shot(name)
+	cam.global_transform = was
 
 
 func _shot(name: String) -> void:

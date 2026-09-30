@@ -105,6 +105,7 @@ func _on_phase(p: Phase) -> void:
 			wind = Vector3.ZERO
 			ctx.set_sea(0.0, 1.0)
 			ctx.set_wind(Vector3.ZERO)
+			ctx.gale = Vector3.ZERO
 			ctx.set_storm(false)
 			ctx.raining = false
 			ctx.set_sky(0.0, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
@@ -176,6 +177,8 @@ func _step(dt: float) -> void:
 	var dir := Vector3(cos(heading), 0.0, sin(heading))
 	wind = dir * WIND_PUSH * k * gust
 	ctx.set_wind(wind)
+	# Trees and buildings sway in it (weather.gdshaderinc).
+	ctx.gale = dir * minf(1.5, k * gust)
 	# The surge follows, slowly: the sea does not jump with a gust.
 	if phase == Phase.ENDING:
 		# Down in a straight line to exactly nothing at DONE, from wherever it got.

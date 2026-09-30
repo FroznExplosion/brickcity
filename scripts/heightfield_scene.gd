@@ -312,6 +312,7 @@ func _build_scenery() -> void:
 func _build_terrain() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/terrain.gdshader")
+	WeatherFx.register(_mat)
 	_mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
 	_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
 	_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
@@ -1014,6 +1015,7 @@ func _brick_material() -> ShaderMaterial:
 	if _brick_mat == null:
 		_brick_mat = ShaderMaterial.new()
 		_brick_mat.shader = load("res://shaders/brick.gdshader")
+		WeatherFx.register(_brick_mat)
 	return _brick_mat
 
 

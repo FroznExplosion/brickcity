@@ -738,6 +738,45 @@ standing still is carried 9.1 m in 5.6 s; 0.08 m/s in the eye and the wind rever
 flashes; the sea, gain and wet map exactly back at the end; the wind and the lens clear.
 
 Not yet: waves that break over the new shoreline (the shore band is re-read, but no surf or
-spray at the waterline), wet ground, trees that bend, and the hurricane in the city: it would run
-there — rain, wind, pieces, buildings — but it is not in the city's list yet, and the city's sea is
-not wired to `disaster_sea`.
+spray at the waterline), and the hurricane in the city: it would run there — rain, wind, pieces,
+buildings — but it is not in the city's list yet, and the city's sea is not wired to
+`disaster_sea`. (Wet ground and bending trees: §19.)
+
+---
+
+## 19. Wet in the rain, and swaying in the wind
+
+`shaders/weather.gdshaderinc`, included by the brick shader, the terrain shader, the printed
+pieces' core (the laid ground, studs, tufts), the impostor cards and the far city. Every uniform
+defaults to "no weather", so an unregistered material draws exactly as before.
+
+* **Wet** (`weather_wet`, 0..1): a surface darkens a little (plastic 14%, the terrain's ground
+  22%, metal not at all), goes far glossier (roughness toward 0.07) and more specular — most on
+  what faces the sky. The disaster context eases it: **up over 15 s while it rains, drying over
+  120 s after**, so the city stays wet a while after a storm passes.
+* **Sway** (`weather_wind`, the wind's direction × strength, and a per-object `instance uniform
+  weather_sway` = height, lean per metre at wind 1, Hz): the object bends about its base, the lean
+  growing with the square of the height — a steady lean downwind, a sway about it and a flutter,
+  each object on its own phase. **Trees** 5 cm per metre of height at wind 1, 0.55 Hz — a 6 m
+  tree's crown moves ~30 cm in a hurricane; **standing buildings** 1.5 mm per metre, 0.22 Hz — a
+  35 m tower's top a few centimetres. Set only on trees (ImpostorLod's near copies; a city tree
+  that is bricks up close gets it on its bands) and building bands (`CityScene._sway_of`), so a
+  piece of debris or a chair never sways. Visual only: collision does not move.
+* **Who sets the wind:** the hurricane (up to ~1.5 in gusts), the tornado (along its walk, harder
+  the nearer it is), the lightning storm (a stiff breeze, 0.4), acid rain (0.2).
+
+`WeatherFx` (static) holds the values and pushes them into every registered material — the
+city's and heightfield's brick and terrain materials, TerrainTile's printed materials, the far
+city's — and adopts copies made from a registered one (ImpostorLod's fading copies and cards:
+`duplicate()` takes parameters as they are and would not follow). Not Godot's global shader
+uniforms: those live in `project.godot`, which is kept open by another area.
+
+Not yet: see-through (glass) bricks do not sway with their building (their pass has no
+include — a few centimetres at a tower's top), puddles and ripples, streaks running down walls,
+and grass tufts in the wind.
+
+Probe (`hurricane_probe`): bricks 1.00 wet at the height of the storm, the terrain's and the
+printed materials registered; still wet just after, drying; 4 tree sets swaying, gale up to 1.06
+and back to zero with the storm. Windowed, every shader compiles; `-- --hurricane-shot` saves
+`land_dry` / `land_wet` over the same trees. City `--play`, `--rooms`, the workshop gate and the
+disaster probe (115) pass.

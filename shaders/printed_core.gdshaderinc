@@ -7,6 +7,7 @@
 // on a steel brick is steel. Everything else instanced here (pebbles,
 // tufts) writes alpha 1.0, which is PLA.
 #include "res://shaders/brick_materials.gdshaderinc"
+#include "res://shaders/weather.gdshaderinc"
 
 group_uniforms print;
 uniform bool print_lines_enabled = true;
@@ -176,9 +177,14 @@ void fragment() {
         }
     }
 
+    float out_rough = clamp(roughness + print_rough, 0.0, 1.0);
+    float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
+    // Rain (weather.gdshaderinc), as on bricks.
+    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX,
+            0.14 * (1.0 - MAT_METAL[mat]));
     ALBEDO = albedo;
-    ROUGHNESS = clamp(roughness + print_rough, 0.0, 1.0);
-    SPECULAR = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
     METALLIC = MAT_METAL[mat];
     EMISSION = emission;
     RIM = surface_rim * (1.0 - MAT_METAL[mat]);
