@@ -28,6 +28,13 @@ const GROUND_FRICTION := 32.0
 const AIR_ACCEL := 16.0
 ## Above this, a long flight bleeds speed slowly back towards a run.
 const AIR_DRAG := 2.0
+## The player's jump, in bricks of clearance for the feet: a tap clears two, a
+## jump held to the top clears four. It launches for four; letting go on the way
+## up cuts the rise to what is left of two -- so a tap costs no wait, unlike a
+## charged jump that fires on release. A soldier's jump is Pawn.JUMP_SPEED, one
+## course: the nav is built around it.
+const JUMP_LOW := Pawn.BRICK_M * 2.0
+const JUMP_HIGH := Pawn.BRICK_M * 4.0
 ## Forgiveness: a jump pressed a moment before landing still happens, and one
 ## pressed a moment after running off an edge does too.
 const JUMP_BUFFER := 0.15
@@ -101,6 +108,8 @@ var wall_normal := Vector3.ZERO
 var hook := Vector3.ZERO
 
 var _buffer := 0.0
+## Feet height at take-off, while a jump can still be cut short.
+var _jump_from := NAN
 var _coyote := 0.0
 var _air_time := 0.0
 var _slide_t := 0.0
@@ -191,6 +200,7 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 	else:
 		_air_time += delta
 	var landed := on_floor and not _was_on_floor
+	_cut_jump()
 	_was_on_floor = on_floor
 
 	if state == State.MANTLE:
@@ -230,7 +240,7 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 		if on_floor or _coyote > 0.0:
 			_buffer = 0.0
 			_coyote = 0.0
-			b.velocity.y = Pawn.JUMP_SPEED
+			_jump(b.global_position.y)
 			on_floor = false
 	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
 	if on_floor:
@@ -255,6 +265,39 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 			return false
 		_try_wall_run(wish)
 	return true
+
+
+## Up at the full jump; `from` is the body's height at take-off.
+func _jump(from: float) -> void:
+	pawn.body.velocity.y = rise_speed(JUMP_HIGH)
+	pawn.rising_jump = true
+	_jump_from = from
+
+
+## Let go of the button on the way up: no higher than the low jump. The speed
+## left is exactly what reaches JUMP_LOW over take-off.
+func _cut_jump() -> void:
+	if is_nan(_jump_from):
+		return
+	var b := pawn.body
+	if b.velocity.y <= 0.0 or state != State.WALK:
+		_jump_from = NAN
+		return
+	if pawn.intents.jump_held:
+		return
+	var left := maxf(JUMP_LOW - (b.global_position.y - _jump_from), 0.0)
+	b.velocity.y = minf(b.velocity.y, rise_speed(left))
+	_jump_from = NAN
+
+
+## The upward speed that rises exactly `h` on this physics tick: v^2 = 2 g h,
+## less what the step loses -- gravity comes off before each move, which costs
+## v * dt / 2 of height (0.14 m of a four-brick jump at 30 Hz).
+static func rise_speed(h: float) -> float:
+	if h <= 0.0:
+		return 0.0
+	var gdt := Pawn.GRAVITY / float(Engine.physics_ticks_per_second)
+	return gdt * 0.5 + sqrt(gdt * gdt * 0.25 + 2.0 * Pawn.GRAVITY * h)
 
 
 ## move_and_slide with the wind added for this tick only (it is a push, not
@@ -315,7 +358,7 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 		return
 	if _buffer > 0.0:
 		_buffer = 0.0
-		b.velocity.y = Pawn.JUMP_SPEED
+		_jump(b.global_position.y)
 		state = State.WALK
 		return
 	if wish != Vector3.ZERO:
@@ -353,6 +396,7 @@ func _try_wall_run(wish: Vector3) -> bool:
 		if _last_wall != Vector3.ZERO and n.dot(_last_wall) > SAME_WALL:
 			continue
 		state = State.WALL_RUN
+		pawn.rising_jump = false
 		wall_normal = n
 		_wall_t = 0.0
 		_wall_idle = 0.0
@@ -484,6 +528,7 @@ func _try_mantle(wish: Vector3, jumped: bool) -> bool:
 		return false
 	var hs := _hspeed()
 	state = State.MANTLE
+	pawn.rising_jump = false
 	_m_from = start
 	_m_mid = mid
 	_m_to = end
@@ -541,6 +586,7 @@ func _try_grapple() -> void:
 	_g_rope = _chest().distance_to(hook)
 	_g_last = pawn.body.global_position
 	state = State.GRAPPLE
+	pawn.rising_jump = false
 	pawn.body.velocity.y = maxf(pawn.body.velocity.y, 1.5)
 	grappled.emit(hook)
 

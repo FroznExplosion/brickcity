@@ -86,6 +86,7 @@ func _process(delta: float) -> void:
 				and not trigger and not it.aim
 		it.crouch = Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_C)
 		it.grapple = Input.is_key_pressed(KEY_Q)
+		it.jump_held = Input.is_key_pressed(KEY_SPACE)
 		# Held through a sprint, the round waits for the gun to come up.
 		it.fire = trigger and (view == null or view.can_fire())
 	else:
@@ -95,6 +96,7 @@ func _process(delta: float) -> void:
 		it.fire = false
 		it.aim = false
 		it.grapple = false
+		it.jump_held = false
 	_follow(delta)
 
 
