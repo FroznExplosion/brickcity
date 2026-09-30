@@ -77,6 +77,7 @@ func _on_phase(p: Phase) -> void:
 		Phase.DONE:
 			ctx.set_storm(false)
 			ctx.raining = false
+			ctx.gale = Vector3.ZERO
 			_sky = 0.0
 			_apply_sky()
 			_rain.emitting = false
@@ -151,6 +152,7 @@ func _process(_delta: float) -> void:
 func _apply_sky() -> void:
 	ctx.set_sky(_sky, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
 	ctx.set_weather(_sky, 0.9, 1.3, intensity)
+	ctx.gale = Vector3(-0.7, 0.0, 0.7) * 0.2 * _sky
 	ctx.set_screen(_sky * 0.8, _sky * 0.12, Color(0.55, 0.65, 0.35), Color(0.72, 0.9, 0.5))
 
 

@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/weather.gdshaderinc"
 
 // L in heightfield_test: tint every piece of ground by its LOD level. 0 is
 // the detailed tiles; a coarse block says its own level per instance.
@@ -548,10 +549,14 @@ void fragment() {
     if (lod_debug) {
         albedo = mix(albedo, lod_colour(lod_level), 0.65);
     }
-    ALBEDO = albedo;
-    ROUGHNESS = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
+    float out_rough = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
             0.0, 1.0);
-    SPECULAR = surface_specular * mtl.y;
+    float out_spec = surface_specular * mtl.y;
+    // Rain (weather.gdshaderinc): the ground darkens more than a wall does.
+    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 0.22);
+    ALBEDO = albedo;
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
     RIM = surface_rim * mtl.z;
     RIM_TINT = 0.4;
 }

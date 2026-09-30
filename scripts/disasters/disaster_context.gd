@@ -21,6 +21,14 @@ var islands: IslandManager
 var fire: FireSpread
 ## True while it rains. Fire reads it: rain halves spread and slows heating.
 var raining := false
+## How wet the world's surfaces are (WeatherFx, weather.gdshaderinc): up while
+## it rains, over WET_S; drying over DRY_S after. Eased here, every frame.
+var wet := 0.0
+## The wind trees and buildings sway in: direction x strength, 0..~1.5.
+## Disasters set it; it is theirs to put back to zero.
+var gale := Vector3.ZERO
+const WET_S := 15.0
+const DRY_S := 120.0
 
 ## Where soldiers must not stand, by the disaster that said so: id -> AABB
 ## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
@@ -414,8 +422,15 @@ func shake(point: Vector3, strength: float) -> void:
 	_shake = minf(SHAKE_MAX, _shake + strength * pow(0.5, d / 20.0))
 
 
-## Called by the director every frame: applies and decays the shake.
+## Called by the director every frame: applies and decays the shake, and eases
+## the wet.
 func step(delta: float) -> void:
+	wet = move_toward(wet, 1.0 if raining else 0.0, delta / (WET_S if raining else DRY_S))
+	WeatherFx.set_weather(wet, gale)
+	_step_shake(delta)
+
+
+func _step_shake(delta: float) -> void:
 	var cam: Camera3D = city.camera
 	if _shake < 0.001:
 		_shake = 0.0

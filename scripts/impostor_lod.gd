@@ -56,6 +56,9 @@ static var _fading_shaders := {}
 var _quad: QuadMesh = null
 ## Vector2i -> {near: MMI, far: MMI, members: Array[int], dirty: bool}
 var _chunks := {}
+## Wind sway for the up-close copies (WeatherFx.sway_tree): (height, lean,
+## Hz), 0 height for none. Set before the first add().
+var sway := Vector3.ZERO
 var near_count := 0
 var far_count := 0
 
@@ -71,6 +74,7 @@ func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 	_far_shadows = far_shadows
 	_tile = tile
 	_near_mat = _fading(material, near_range, hysteresis)
+	WeatherFx.adopt(_near_mat, material)
 	_bake_later()
 
 
@@ -99,6 +103,7 @@ func _bake_later() -> void:
 	_quad.size = Vector2.ONE
 	_card_mat = ShaderMaterial.new()
 	_card_mat.shader = load("res://shaders/impostor.gdshader")
+	WeatherFx.adopt(_card_mat, material)
 	_card_mat.set_shader_parameter("albedo_atlas", got.albedo)
 	_card_mat.set_shader_parameter("normal_atlas", got.normal)
 	_card_mat.set_shader_parameter("grid", float(got.grid))
@@ -124,6 +129,8 @@ func _chunk(key: Vector2i) -> Dictionary:
 	var c := {"near": null, "far": null, "members": [], "dirty": true}
 	if mesh != null:
 		c.near = _make_mmi(mesh, _near_mat)
+		if sway.x > 0.0:
+			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_sway", sway)
 		add_child(c.near)
 	var far_mesh: Mesh = mesh
 	c.far = _make_mmi(far_mesh, material)
