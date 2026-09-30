@@ -686,6 +686,23 @@ public:
     /// it is worth paying here rather than discovering it later.
     Array get_block_boxes(int chunk_id) const;
 
+    /// Where a piece lying at `piece_xform` rests on `building_chunk`: for each
+    /// live box of the piece, as get_block_boxes lists them and in that order,
+    /// the point just under its lowest extent in the world -- and the building's
+    /// cell there, if that cell is solid and holds a brick. Each cell once, in
+    /// the order first found, as x, y, z triples. CityScene._wreck_settled's
+    /// walk: in script it was a Dictionary a brick and 12-31 ms for a piece of
+    /// 4,000-8,000 bricks coming to rest.
+    PackedInt32Array rest_contacts(int piece_chunk, const Transform3D &piece_xform,
+            int building_chunk) const;
+
+    /// Is the centre of any live box of this chunk -- as get_block_boxes lists
+    /// them: a whole block's, or each cell of a shaped one -- inside `box`,
+    /// leaving out the blocks in `exclude`? CityScene._with_stairs asks it of a
+    /// stairwell: walked in script over get_block_boxes it was a Dictionary a
+    /// brick, 60-70 ms for a 22,000-brick tower, in the tick a section fell.
+    bool any_block_centre_in(int chunk_id, const AABB &box, const PackedInt32Array &exclude) const;
+
     /// Same list, offset so the centre of mass is at the origin -- what a
     /// rigid body wants. Returns {boxes, com, mass}.
     Dictionary get_body_boxes(int chunk_id) const;

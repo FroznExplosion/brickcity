@@ -375,6 +375,14 @@ const PROMOTE_QUEUE_MAX := 24
 const SPAWN_BUDGET_MS := 3.0
 ## Same shape as DAMAGE_PER_TICK: the count is the cap, the clock is an
 ## early-out.
+##
+## Two does more than bound the cost. What a cascade's first solves let go in
+## small groups, and is not cut out this tick, is solved again with the next --
+## by when it has come loose together, and leaves as one piece. At eight a tick
+## the same collapses came down in 14-30 pieces where they had been 3, and a far
+## one in 9 where it had been 1 (collapse_probe). What two a tick did get wrong
+## was the order: the building's body came last and hung in the air for 13
+## ticks (--breaklag) -- the director hands it over first now.
 const SPAWNS_PER_TICK := 2
 ## How many building bands may be merged again in one tick
 ## (BuildingCollision.flush). ~0.45 ms each on a mega tower, and one chunk cut
@@ -911,6 +919,11 @@ var _phases := {}
 var _prof := {}
 var _prof_worst := {}
 var _prof_worst_ms := 0.0
+## Every tick over SPIKE_MS, as [ms, physics frame, its three biggest phases]:
+## the worst tick alone hides the second-worst thing, which is often the one
+## that happens at every break.
+const SPIKE_MS := 25.0
+var _prof_spikes: Array = []
 var _prof_sum := {}
 
 
@@ -951,6 +964,7 @@ func _ready() -> void:
 	_soldier_mode = "--soldier" in args
 	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
+	_breaklag_mode = "--breaklag" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
 	if _build_mode:
@@ -1159,6 +1173,8 @@ func _ready() -> void:
 		_run_nav_pass()
 	elif _soldier_mode:
 		_run_soldier_pass()
+	elif _breaklag_mode:
+		_run_breaklag_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
 	elif _squad_mode:
@@ -2726,13 +2742,14 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 	var from_y := box.position.y + (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M * 0.5
 	shaft = AABB(Vector3(shaft.position.x, from_y, shaft.position.z),
 			Vector3(shaft.size.x, maxf(box.end.y + 1.0 - from_y, 0.1), shaft.size.z))
-	for bx in world.get_block_boxes(b.chunk):
-		var d: Dictionary = bx
-		var bid := int(d.block)
-		if not bool(d.alive) or stairs.has(bid) or leaving.has(bid) or gone.has(bid):
-			continue
-		if shaft.has_point(d.pos as Vector3):
-			return group
+	# Anything live, not stairs and not leaving, centred in the shaft? (Dead and
+	# cut-out blocks are not live.) Asked of the engine: walked here over
+	# get_block_boxes it was 60-70 ms for a 22,000-brick tower, in the very tick
+	# the section broke away.
+	var exclude := PackedInt32Array(stairs.keys())
+	exclude.append_array(group)
+	if world.any_block_centre_in(b.chunk, shaft, exclude):
+		return group
 	var out := group.duplicate()
 	out.append_array(candidates)
 	return out
@@ -4036,32 +4053,27 @@ func _wreck_settled(isl: BrickIsland) -> void:
 	if not authority.may_decide() or not isl.is_valid() or not isl.landmark or isl.piece_id < 0:
 		return
 	var xf := isl.chunk_transform()
-	var cell := BrickWorld.get_cell_size()
 	var contacts := {}   # building id -> Array of absolute cells
 	var total := 0
-	for bx in world.get_block_boxes(isl.chunk):
-		var d: Dictionary = bx
-		if not bool(d.alive):
+	# Every brick's point just under it, and the building cell there if solid
+	# (BrickWorld.rest_contacts) -- for the buildings near the piece's box, found
+	# once: every brick's point is inside it. Walked in script, a Dictionary a
+	# brick and a building lookup per brick, it was 12-43 ms for a piece of
+	# 4,000-8,000 bricks coming to rest, and 107 for one of 2,000 boxes -- the
+	# worst tick of a big collapse by four times, every time one settled.
+	var box := islands.world_aabb(isl)
+	for id in _near_buildings(box.get_center(), maxf(box.size.x, box.size.z) * 0.5 + 0.3):
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
 			continue
-		var size: Vector3 = d.size
-		var centre: Vector3 = xf * (d.pos as Vector3)
-		# The block's vertical half-extent in the world, at whatever angle it lies.
-		var hy := absf(xf.basis.x.y) * size.x * 0.5 + absf(xf.basis.y.y) * size.y * 0.5 \
-				+ absf(xf.basis.z.y) * size.z * 0.5
-		var under := centre - Vector3.UP * (hy + 0.05)
-		for id in _near_buildings(under, 0.3):
-			var b := registry.get_building(id)
-			if b == null or not b.is_materialised():
-				continue
-			var local := world.get_chunk_transform(b.chunk).affine_inverse() * under
-			var at := world.get_chunk_origin(b.chunk) + Vector3i(floori(local.x / cell.x),
-					floori(local.y / cell.y), floori(local.z / cell.z))
-			if world.is_solid(b.chunk, at) and world.block_at(b.chunk, at) >= 0:
-				if not contacts.has(id):
-					contacts[id] = []
-				if not (contacts[id] as Array).has(at):
-					contacts[id].append(at)
-					total += 1
+		var cells := world.rest_contacts(isl.chunk, xf, b.chunk)
+		if cells.is_empty():
+			continue
+		var at_list := []
+		for k in range(0, cells.size(), 3):
+			at_list.append(Vector3i(cells[k], cells[k + 1], cells[k + 2]))
+		contacts[id] = at_list
+		total += at_list.size()
 	var before: Array = _wreck_loads.get(isl.piece_id, [])
 	var was: Dictionary = _wreck_state.get(isl.piece_id, {})
 	for id in before:
@@ -4906,6 +4918,142 @@ func _start_arena(gate: bool) -> void:
 ## cut free comes to rest on what is left of it, and its weight goes onto the
 ## bricks it lies on -- a LOAD command, applied and solved on the host, replayed
 ## by the twin buildings of the log check like everything else.
+var _breaklag_mode := false
+
+
+## How long a break takes to show. Reported: a break, then pieces that do
+## nothing for a few frames or vanish, and nothing falling for about a second.
+## A building is shot through as a player would -- its ground storey's walls
+## all round, or the whole storey -- and every physics tick after the first blast
+## is watched: the damage still queued, the buildings waiting for a solve, rounds
+## the collapse director held, and the pieces: when the first is cut out, when
+## the BIGGEST is (the building's body, which is what is seen hanging), when
+## they are drawn and when they move. Two ordinary buildings and the biggest
+## there is (a mega one in the big city: -- --breaklag --big).
+func _run_breaklag_pass() -> void:
+	print("[breaklag] a break, and how long before anything moves")
+	var biggest: BuildingRegistry.Building = null
+	var ordinary: Array = []
+	for c in registry.buildings:
+		if c.is_build():
+			continue
+		var size: int = c.recipe.courses * c.recipe.footprint_x * c.recipe.footprint_z
+		if biggest == null or size > biggest.recipe.courses * biggest.recipe.footprint_x \
+				* biggest.recipe.footprint_z:
+			biggest = c
+		if c.recipe.courses >= 12 and c.recipe.courses <= 30 and ordinary.size() < 2:
+			ordinary.append(c)
+	if ordinary.size() > 0:
+		await _break_lag(ordinary[0], false)
+	if ordinary.size() > 1:
+		await _break_lag(ordinary[1], true)
+	if biggest != null and not ordinary.has(biggest):
+		# A third of the way up: what is above falls on what is below, rather
+		# than the whole tower toppling off its stump.
+		await _break_lag(biggest, true,
+				TowerRecipe.total_plates(biggest.recipe.courses) * PLATE / 3.0)
+	print("[breaklag] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## `storey`: the whole storey blown out; otherwise its walls all round. At
+## height `y` -- the ground storey unless told.
+func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5 + 30.0, 20.0, -30.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, y + 5.0, fz * 0.5), Vector3.UP)
+	_promote(b.id)
+	await _frames(40)
+	var bricks := world.get_block_count(b.chunk)
+	var known := {}
+	for isl in islands.islands:
+		known[isl] = true
+	var held0 := director.held_rounds
+	var blasts := 0
+	var step := 2.5
+	var x := 0.0
+	while x <= fx + 0.01:
+		var z := 0.0
+		while z <= fz + 0.01:
+			var wall := x < 0.01 or z < 0.01 or x > fx - step or z > fz - step
+			if storey or wall:
+				_blast(b.xform * Vector3(minf(x, fx), y, minf(z, fz)), 2.2 if storey else 2.0)
+				blasts += 1
+			z += step
+		x += step
+	var cut_at := -1
+	var drawn_at := -1
+	var moving_at := -1
+	var gone_at := -1
+	var biggest_at := -1
+	var biggest := 0
+	var t := 0
+	var timeline: Array[String] = []
+	# Until nothing has changed for a second: the damage applied, what was
+	# going to come away gone.
+	var last_change := 0
+	var last_state := ""
+	while t < 240 and (t - last_change < 30 or not _damage_queue.is_empty()):
+		await get_tree().physics_frame
+		t += 1
+		var fresh := 0
+		var drawn := 0
+		var fastest := 0.0
+		for isl in islands.islands:
+			if known.has(isl) or not isl.is_valid():
+				continue
+			fresh += 1
+			if not islands.is_blind(isl):
+				drawn += 1
+			fastest = maxf(fastest, isl.body.linear_velocity.length())
+			if isl.shape_count > biggest:
+				biggest = isl.shape_count
+				biggest_at = t
+		if fresh > 0 and cut_at < 0:
+			cut_at = t
+		if drawn > 0 and drawn_at < 0:
+			drawn_at = t
+		if fastest > 1.0 and moving_at < 0:
+			moving_at = t
+		var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
+		if gone_at < 0 and alive < int(bricks * 0.98):
+			gone_at = t
+		var state := "%d/%d" % [alive, fresh]
+		if state != last_state:
+			last_state = state
+			last_change = t
+		if t <= 30 or t % 10 == 0:
+			timeline.append("%d: queue %d, dirty %d, held %d, alive %d, pieces %d (%d drawn), fastest %.1f m/s" % [
+					t, _damage_queue.size(), _dirty.size(), director.held_rounds - held0,
+					alive, fresh, drawn, fastest])
+	print("[breaklag] building %d, %d bricks (mega %s), %s at %.1f m, %d blasts:" % [b.id, bricks,
+			CollapseDirector.is_mega(bricks), "the storey" if storey else "its walls", y, blasts])
+	for line in timeline:
+		print("[breaklag]   " + line)
+	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d boxes) %d, drawn %d, moving %d; the director held %d round(s)" % [
+			gone_at, cut_at, biggest, biggest_at, drawn_at, moving_at, director.held_rounds - held0])
+	_gate_ok("building %d: pieces move within 10 ticks of its bricks going" % b.id,
+			moving_at > 0 and gone_at > 0 and moving_at - gone_at <= 10,
+			"gone %d, moving %d" % [gone_at, moving_at])
+	# The body is let go with the first of them, not after the debris: it was
+	# 13 ticks behind when two pieces went a tick, smallest first.
+	if not CollapseDirector.is_mega(bricks):
+		_gate_ok("building %d: and the biggest piece within 3 ticks of the first" % b.id,
+				biggest_at > 0 and cut_at > 0 and biggest_at - cut_at <= 3,
+				"first %d, biggest %d" % [cut_at, biggest_at])
+	else:
+		# A mega building's collapse is held while it grows -- but a chunk's
+		# worth goes at once, and a watched one is held HOLD_NEAR_MS at most:
+		# it was a second and a half, the break looking like a hang.
+		_gate_ok("building %d: the collapse is under way within %d ms of its bricks going" % [
+				b.id, CollapseDirector.HOLD_NEAR_MS + 100],
+				biggest_at > 0 and gone_at > 0
+				and (biggest_at - gone_at) * 1000.0 / 30.0 <= CollapseDirector.HOLD_NEAR_MS + 100,
+				"gone %d, biggest piece %d" % [gone_at, biggest_at])
+	await _frames(60)
+
+
 func _run_wreck_pass() -> void:
 	print("[wreck] a piece resting on a building loads it")
 	var b := registry.get_building(0)
@@ -5421,11 +5569,28 @@ func _physics_process(_delta: float) -> void:
 		# chunks, its furniture split out to be written off (CollapseDirector).
 		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
 				islands.interest_points())
+		# Stairs a section took with it (_with_stairs) can be a group of their own
+		# further down this same plan: what of it they were is gone already.
+		# Recorded as named, that DETACH cut nothing on any other machine (the
+		# log replay missed it) -- once the biggest section went first and eight
+		# a tick, where two a tick had left that group for the next solve.
+		var taken_by_stairs := {}
 		for entry in plan:
 			var kind: StringName = entry[1]
 			var before: PackedInt32Array = entry[0]
+			if not taken_by_stairs.is_empty():
+				var kept := PackedInt32Array()
+				for bid in before:
+					if not taken_by_stairs.has(bid):
+						kept.append(bid)
+				if kept.is_empty():
+					continue
+				before = kept
 			if kind != &"furniture":
+				var named := before.size()
 				before = _with_stairs(b, before)
+				for k in range(named, before.size()):
+					taken_by_stairs[before[k]] = true
 			# Furniture is deleted where it is unless somebody is right there:
 			# it costs next to nothing and is not held to the spawn budget.
 			if kind != &"furniture":
@@ -5634,6 +5799,16 @@ func _physics_process(_delta: float) -> void:
 		_tick_samples += 1
 		for k in _prof:
 			_prof_sum[k] = float(_prof_sum.get(k, 0.0)) + float(_prof[k])
+		if tick_total > SPIKE_MS:
+			var phases: Array = []
+			for k in _prof:
+				if not (k as String).contains("_"):
+					phases.append([float(_prof[k]), k])
+			phases.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+			var top := ""
+			for k in mini(3, phases.size()):
+				top += "%s %.1f  " % [phases[k][1], phases[k][0]]
+			_prof_spikes.append([tick_total, Engine.get_physics_frames(), top])
 		if tick_total > _prof_worst_ms:
 			_prof_worst_ms = tick_total
 			_prof_worst = _prof.duplicate()
@@ -5972,6 +6147,16 @@ const SUN_SHADOW_DISTANCE := 400.0
 
 var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
 var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
+## A proxy is rebuilt once its building has stopped losing bricks -- the same
+## count two passes running -- or after SHADOW_STALE_PASSES of it going on.
+## Rebuilt on every pass that saw a brick go, a building being taken apart
+## rebuilt its proxy every eight ticks, and a proxy is not the 0.5 ms above for
+## a big one: 10-28 ms (6,000-22,000 bricks), the worst tick of a collapse
+## after the solve's. A shadow a second or two behind the bricks it is cast
+## by, while they are still coming down, is not something anyone sees.
+const SHADOW_STALE_PASSES := 8
+var _shadow_seen := {}        ## building id -> alive bricks at the last pass
+var _shadow_stale := {}       ## building id -> passes it has been stale
 var _shadow_stats := {"proxies": 0, "bricks_casting": 0, "small_quiet": 0}
 
 
@@ -6002,9 +6187,16 @@ func _stream_shadows() -> void:
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
 			continue
-		var stale: bool = not _shadow_proxy.has(id) or int(_shadow_proxy_alive.get(id, -1)) 				!= world.get_alive_block_count(b.chunk)
+		var alive := world.get_alive_block_count(b.chunk)
+		var stale: bool = not _shadow_proxy.has(id)
+		if not stale and int(_shadow_proxy_alive.get(id, -1)) != alive:
+			_shadow_stale[id] = int(_shadow_stale.get(id, 0)) + 1
+			stale = alive == int(_shadow_seen.get(id, -1)) \
+					or int(_shadow_stale[id]) >= SHADOW_STALE_PASSES
+		_shadow_seen[id] = alive
 		if stale and built < SHADOW_PROXIES_PER_PASS and _make_shadow_proxy(b):
 			built += 1
+			_shadow_stale.erase(id)
 		casting += _set_brick_shadows_near(id, here)
 	var quiet := 0
 	for isl in islands.islands:
@@ -6093,6 +6285,8 @@ func _drop_shadow_proxy(id: int) -> void:
 		(mi as Node).queue_free()
 	_shadow_proxy.erase(id)
 	_shadow_proxy_alive.erase(id)
+	_shadow_seen.erase(id)
+	_shadow_stale.erase(id)
 	_set_brick_shadows(id, true)
 
 
@@ -7672,6 +7866,12 @@ func _report_profile() -> void:
 				_phys_sum / _frame_samples, _proc_sum / _frame_samples])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			_prof_worst_ms, int(_prof_worst.get("island_count", 0))])
+	if not _prof_spikes.is_empty():
+		var spikes := _prof_spikes.duplicate()
+		spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+		print("[prof] %d tick(s) over %.0f ms; the worst:" % [spikes.size(), SPIKE_MS])
+		for k in mini(12, spikes.size()):
+			print("[prof]   %.1f ms at tick %d: %s" % [spikes[k][0], spikes[k][1], spikes[k][2]])
 	var line := ""
 	for k in keys:
 		line += "%s %.1f  " % [k, float(_prof_worst.get(k, 0.0))]

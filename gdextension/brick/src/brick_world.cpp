@@ -4411,6 +4411,117 @@ PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_
 
 // --- detachment ------------------------------------------------------------
 
+PackedInt32Array BrickWorld::rest_contacts(int piece_chunk, const Transform3D &piece_xform,
+        int building_chunk) const {
+    PackedInt32Array out;
+    if (!valid_chunk(piece_chunk) || !valid_chunk(building_chunk)) {
+        return out;
+    }
+    const Chunk &c = chunks[piece_chunk];
+    const Chunk &bc = chunks[building_chunk];
+    const Transform3D inv = bc.xform.affine_inverse();
+    const Vector3 cs = cell_size();
+    const Basis &bs = piece_xform.basis;
+    // The same arithmetic the script did, in the same types, so a point on a
+    // cell boundary lands in the same cell: Vector3 sums in real_t, scalars in
+    // double (a GDScript float), the half-extent added in the script's order.
+    const double ax = std::abs((double)bs.rows[1][0]);
+    const double ay = std::abs((double)bs.rows[1][1]);
+    const double az = std::abs((double)bs.rows[1][2]);
+    std::vector<Vector3i> found;
+    auto test = [&](const Vector3 &pos, const Vector3 &size) {
+        const Vector3 centre = piece_xform.xform(pos);
+        const double hy = ax * (double)size.x * 0.5 + ay * (double)size.y * 0.5
+                + az * (double)size.z * 0.5;
+        const Vector3 under = centre - Vector3(0, 1, 0) * (real_t)(hy + 0.05);
+        const Vector3 local = inv.xform(under);
+        const Vector3i rel((int)std::floor((double)local.x / (double)cs.x),
+                (int)std::floor((double)local.y / (double)cs.y),
+                (int)std::floor((double)local.z / (double)cs.z));
+        if (!bc.in_bounds(rel) || !bc.solid_at(rel) || bc.occupancy[(size_t)bc.index_of(rel)] < 0) {
+            return;
+        }
+        const Vector3i at = bc.origin + rel;
+        if (std::find(found.begin(), found.end(), at) == found.end()) {
+            found.push_back(at);
+        }
+    };
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            test(centre, size);
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        test(Vector3((base.x + x + 0.5f) * cs.x, (base.y + y + 0.5f) * cs.y,
+                                (base.z + z + 0.5f) * cs.z), cs);
+                    }
+                }
+            }
+        }
+    }
+    out.resize((int64_t)found.size() * 3);
+    for (size_t k = 0; k < found.size(); ++k) {
+        out.set((int64_t)k * 3, found[k].x);
+        out.set((int64_t)k * 3 + 1, found[k].y);
+        out.set((int64_t)k * 3 + 2, found[k].z);
+    }
+    return out;
+}
+
+bool BrickWorld::any_block_centre_in(int chunk_id, const AABB &box,
+        const PackedInt32Array &exclude) const {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    const Chunk &c = chunks[chunk_id];
+    std::vector<uint8_t> skip(c.blocks.size(), 0);
+    for (int64_t k = 0; k < exclude.size(); ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)c.blocks.size()) {
+            skip[(size_t)id] = 1;
+        }
+    }
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive || skip[i]) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            if (box.has_point(centre)) {
+                return true;
+            }
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z) && box.has_point(Vector3((base.x + x + 0.5f) * cs.x,
+                            (base.y + y + 0.5f) * cs.y, (base.z + z + 0.5f) * cs.z))) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 void BrickWorld::block_extent(const Chunk &c, const Block &b,
         Vector3 &out_centre, Vector3 &out_size) const {
     const Vector3 cs = cell_size();
@@ -5673,6 +5784,10 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_block_index_range);
 
     ClassDB::bind_method(D_METHOD("build_chunk_mesh", "chunk_id"), &BrickWorld::build_chunk_mesh);
+    ClassDB::bind_method(D_METHOD("rest_contacts", "piece_chunk", "piece_xform", "building_chunk"),
+            &BrickWorld::rest_contacts);
+    ClassDB::bind_method(D_METHOD("any_block_centre_in", "chunk_id", "box", "exclude"),
+            &BrickWorld::any_block_centre_in);
     ClassDB::bind_method(D_METHOD("build_chunk_coarse_mesh", "chunk_id"),
             &BrickWorld::build_chunk_coarse_mesh);
     ClassDB::bind_method(D_METHOD("get_last_coarse_ms"), &BrickWorld::get_last_coarse_ms);
