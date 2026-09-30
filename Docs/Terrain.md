@@ -2451,6 +2451,20 @@ The `--terrain --nav` flush gate now checks only the site buildings: the
 registry also holds brick trees and small items since the impostor work (822
 entries), and those do not stand on pads.
 
+### 19.21 Speckled seams, and one lighting rule for all far ground
+
+**The speckle** along skirts and smooth ramps was shadow acne: 19.20 gave
+smooth far vertices and skirts an "up" normal and did the lighting in the
+shader, but shadow bias reads the VERTEX normal, and "up" on a steep face
+biases the wrong way. Smooth cells now carry their real slope as the vertex
+normal and skirts face out; the shader still lights them flat.
+
+**The LOD 1 / LOD 2 border.** Blocky far blocks are flagged too (CUSTOM0.g =
+0.5) and lit by the same rule as smooth ones: flat per face, tops full
+brightness, anything steeper darkened by `far_ramp_shade`. The border now
+changes shape (steps to ramps) but not shading. Course lines stay on smooth
+ground only.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

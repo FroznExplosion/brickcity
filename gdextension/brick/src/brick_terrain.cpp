@@ -2581,10 +2581,16 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
                 Vector3(x0, H(cx, cz), z0), Vector3(x1, H(cx + 1, cz), z0),
                 Vector3(x1, H(cx + 1, cz + 1), z1), Vector3(x0, H(cx, cz + 1), z1),
             };
+            // The cell's REAL slope as its vertex normal. The shader lights it
+            // flat anyway, but shadow bias reads the vertex normal: "up" on a
+            // steep ramp was shadow acne, a speckle along every seam (19.21).
+            Vector3 cn = (v[2] - v[0]).cross(v[1] - v[3]);
+            cn = cn.y < 0.0f ? -cn : cn;
+            cn = cn.length_squared() > 1e-8f ? cn.normalized() : Vector3(0, 1, 0);
             const int base = m.verts.size();
             for (int k = 0; k < 4; ++k) {
                 m.verts.push_back(v[k]);
-                m.normals.push_back(Vector3(0, 1, 0));   // the shader lights it flat
+                m.normals.push_back(cn);
                 m.colours.push_back(col);
                 m.uvs.push_back(Vector2(v[k].x, v[k].z));
                 m.uv2s.push_back(no_seam);
@@ -2599,12 +2605,12 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
     }
     // The skirt round the block's edge, facing out of it (19.17/19.18).
     const float drop = coarse_skirt_m(step);
-    auto skirt = [&](int ax, int az, int bx, int bz, int ccx, int ccz) {
+    auto skirt = [&](int ax, int az, int bx, int bz, int ccx, int ccz, const Vector3 &out) {
         const Vector3 pa((float)ax * cs, H(ax, az), (float)az * cs);
         const Vector3 pb((float)bx * cs, H(bx, bz), (float)bz * cs);
         const size_t c = (size_t)ccx + (size_t)N * ccz;
         m.material = cmat[c];
-        m.raw_quad(Vector3(0, 1, 0), ccol[c], no_seam,
+        m.raw_quad(out, ccol[c], no_seam,
             Vector3(pb.x, pb.y - drop, pb.z), Vector3(pa.x, pa.y - drop, pa.z), pa, pb,
             Vector2(0, drop), Vector2(cs, drop), Vector2(cs, 0), Vector2(0, 0));
         // raw_quad wrote CUSTOM0.g = 0: flag these as smooth far ground too.
@@ -2614,10 +2620,10 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
         }
     };
     for (int k = 0; k < N; ++k) {
-        skirt(k + 1, 0, k, 0, k, 0);
-        skirt(k, N, k + 1, N, k, N - 1);
-        skirt(0, k, 0, k + 1, 0, k);
-        skirt(N, k + 1, N, k, N - 1, k);
+        skirt(k + 1, 0, k, 0, k, 0, Vector3(0, 0, -1));
+        skirt(k, N, k + 1, N, k, N - 1, Vector3(0, 0, 1));
+        skirt(0, k, 0, k + 1, 0, k, Vector3(-1, 0, 0));
+        skirt(N, k + 1, N, k, N - 1, k, Vector3(1, 0, 0));
     }
     Array mesh;
     mesh.resize(Mesh::ARRAY_MAX);
@@ -2798,7 +2804,8 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                 }
                 const float len = hi - lo;
                 m.material = cmat[a];
-                m.raw_quad(edge ? Vector3(0, 1, 0) : d.n, ccol[a], face,
+                (void)edge;
+                m.raw_quad(d.n, ccol[a], face,
                     Vector3(pa.x, ny, pa.z), Vector3(pb.x, ny, pb.z),
                     Vector3(pb.x, y, pb.z), Vector3(pa.x, y, pa.z),
                     Vector2(0, y - ny), Vector2(len, y - ny),
@@ -2806,6 +2813,12 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
                 k = e;
             }
         }
+    }
+    // CUSTOM0.g = 128: blocky FAR ground. The shader lights it by the same
+    // rules as smooth far ground (tops full, steps darkened alike), so at the
+    // LOD 1 / LOD 2 border only the shape changes, not the shading (19.21).
+    for (int k = 1; k < m.custom0.size(); k += 4) {
+        m.custom0.set(k, 128);
     }
 
     Array mesh;

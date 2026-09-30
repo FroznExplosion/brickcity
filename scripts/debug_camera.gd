@@ -93,6 +93,12 @@ signal mode_changed(walking: bool)
 
 var _yaw := 0.0
 var _pitch := 0.0
+## Mouse-look speed, multiplied in: a player aiming down the sights turns slower
+## (PlayerView). 1 is the tuned default.
+var look_scale := 1.0
+## Lean, radians: the tilt of a wall-run. Kept through mouse-look, which would
+## otherwise level it on the next motion event.
+var roll := 0.0
 var _captured := false
 
 var _walking := false
@@ -160,9 +166,21 @@ func _set_captured(on: bool) -> void:
 ## take every motion event first, and looking around simply stopped.
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _captured:
-		_yaw -= event.relative.x * LOOK_SENSITIVITY
-		_pitch = clampf(_pitch - event.relative.y * LOOK_SENSITIVITY, -1.5, 1.5)
-		rotation = Vector3(_pitch, _yaw, 0.0)
+		var k := LOOK_SENSITIVITY * look_scale
+		add_look(-event.relative.x * k, -event.relative.y * k)
+
+
+## Turn by `yaw` and `pitch` radians -- the mouse, or a gun's recoil. From where
+## the camera points NOW, so a scripted look_at in between is kept, not undone.
+func add_look(yaw: float, pitch: float) -> void:
+	_yaw = rotation.y + yaw
+	_pitch = clampf(rotation.x + pitch, -1.5, 1.5)
+	rotation = Vector3(_pitch, _yaw, roll)
+
+
+func set_roll(r: float) -> void:
+	roll = r
+	rotation.z = r
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -212,10 +230,13 @@ func set_walking(on: bool) -> void:
 	mode_changed.emit(_walking)
 
 
-## Distance from the body's centre -- a capsule's origin -- up to the eye. The
-## eye sits a plate below the top of the head, whatever height the body is.
+## Distance from the body's centre -- a capsule's origin -- up to the eye: the
+## middle of the head, whatever height the body is -- EYE_HEIGHT above the feet
+## standing, a brick lower crouched. It was a plate below the crown, the rule
+## from before the figure was resized to four bricks with a head of a brick and
+## a quarter: 1.54 m, where EYE_HEIGHT (and Pawn.eye_offset) say 1.42.
 func _eye_offset() -> float:
-	return _height * 0.5 - PLATE_M
+	return _height * 0.5 - HEAD_HEIGHT * 0.5
 
 
 ## Resize the capsule with the FEET planted. A capsule grows about its centre,
