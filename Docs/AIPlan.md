@@ -698,6 +698,67 @@ creatures.
 arbiter stepping down cleanly during a collapse; the `--stress` pass re-run with those agents in it
 (R14).
 
+**Done (2026-09-29).**
+- **Tiers as HSM states** (`scripts/ai/agent_tier.gd`, `tier_state.gd`, AI.md 7): a LimboHSM per
+  agent, SMART ↔ DIRECTED, whose state's enter hook tells the agent (`set_tier`). A soldier swaps
+  its tree — DIRECTED runs `SoldierTree.build_directed()`: Evade › the squad's assignment ›
+  `BTDirectedEngage` (in sight and within 30 m, stand and shoot; otherwise walk the shared flow
+  field toward the contact) › Idle; no cover search, no tactic — at 3 Hz thinking and 2 Hz eyes
+  instead of 10 and 5. Evade and firing are the same code at both tiers. A SWARM ROW is not a
+  state: an agent demoted that far stops being a node. (An event dispatched to an HSM spawned the
+  same tick was not taken; the tier falls back to changing the state directly.)
+- **The importance budget** (`importance_budget.gd`, AI.md 10.2, R23): twice a second each agent's
+  importance — distance to a player (halving every ~10 m), ×1.5 in that player's view, +25
+  shooting, +20 hurt, +15 leading a squad, +20 an animal hunting close — the MAX over players. Best
+  first: ten SMART, the rest DIRECTED; an agent already smart counts 1.25× for keeping its place,
+  and no more than three are promoted a tick (a displaced smart agent keeps its place while a
+  promotion waits, so there are always ten). Swarm-born agents that are not smart and are 45 m
+  from every player go back to rows.
+- **Flow fields** (`AINav.request_field` / `field_dir`, AI.md 4.3): one Dijkstra field per goal,
+  over the STEPS INTO each node (so a drop is one-way, as it is for a path), within 45 m of the
+  goal, worked out inside `service()` after the paths and restarted by an invalidation that reaches
+  it. A* and the field share one step function (`_step`), extracted from the search. Agents read
+  it through `AIServices.field_dir(goal, from)`, keyed by the goal to 3 m, so everyone after the
+  same contact reads the same field; directed soldiers steer on it every physics tick.
+- **Swarm rows with promotion** (`swarm_side.gd`): `SwarmCore` in its own hands (its director
+  off); the goal is the nearest player; the obstacles are the chunks' boxes, or in the city the
+  buildings' boxes, shell or bricks, refreshed every 5 s; a player-side round hits the first row on
+  its line no further than what the bullet struck (`AIServices.round_listeners`). A row within
+  16 m of a player is released without a death and becomes an **animal hunting that player**,
+  born DIRECTED, at most two a tick and never past the budget's room; the budget hands it back as
+  a row, with its health, once the player is gone.
+- **Animals and packs** (`animal.gd`, `animal_pack.gd`): a procedural creature (`ProcCreature`, its
+  gait animated from how the body moves) on a Pawn's body — or a greybox for the many. The pack
+  decides for all of them: GRAZE round a wandering anchor, FLEE together from a noise, HUNT —
+  encircle the prey at 7 m, each to its own angle, then close on the shared field and bite.
+  Wildlife is on no side (a negative team): nobody's enemy (`hostiles_of`), and it has none.
+- **Flyers** (`flyer.gd`): a kinematic drone on the HEIGHT FIELD — `AIWorld.top_at` over a patch
+  round it and 1.2 s of flight ahead of it, never lower than 5 m over what it is over (under it, it
+  climbs at once and holds off going forward) — orbiting its target, a strafing run every 10 s,
+  climbing out when hit.
+- **City:** `-- --stress --agents` puts the P8 population round the stress pass's centre: six
+  squads of six, three flyers, a herd, 300 swarm rows, all after one player-side body; the budget
+  runs in `_ai_tick`, and the swarm's tick counts in the AI's time.
+- Gates: **`tools/many_probe.gd` 11** — 36 soldiers in squads, 3 flyers, a herd of 5 and 300
+  rows round one player: exactly ten smart and the rest directed in all 70 samples, the smart the
+  most important by the budget's own scores; rows walk on the player and its rounds hit them (54);
+  9 rows promoted into hunting animals that bite; with the player gone all 6 go back to rows;
+  directed soldiers close on the shared field (59.7 → 52.7 m, 5 fields); flyers never lower than
+  5.8 m over what they are over, firing; the herd grazes within 3.7 m of itself and runs from
+  gunfire; a tower cut at its foot comes down and soldiers keep firing through it; no round through
+  a wall; **AI 1.43 ms a tick mean (99th percentile 2.97 ms), the swarm's own tick included**.
+  **City `-- --stress --buildings=200 --agents`** — 10 smart, 40 directed, 294 rows through the
+  whole pass; the arbiter steps down to level 4 while the city comes down and back to 0; AI sync
+  and run 1.90 ms a tick.
+- **Timings are not settled.** Both runs above shared the machine with other chats' Godot runs;
+  the stress pass's whole-run mean was 24.2 ms against 17.1 ms without agents, taken at different
+  times on a busy machine. An A/B on a quiet machine is owed.
+- **Not done:** the arena's collapse is one clean piece, which does not fill the frame, so the
+  arbiter stepping DOWN is gated in the city stress pass rather than the arena; perception is still
+  per agent, not per squad round-robin; the budget ticks in GDScript (0.5–1.4 ms at 2 Hz — a
+  candidate for C++); a promoted row becomes an animal, not a soldier; flyers are not Pawns, so
+  soldiers do not shoot at them.
+
 ### P9 — The commander · M
 
 Per-encounter commander with a tree; sector grid; roster and doctrine from the **threat profile**;

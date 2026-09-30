@@ -749,6 +749,14 @@ var _buildings_arg := false
 ## not on pads and are not the gate's business.
 var _site_ids: Array[int] = []
 var _stress_mode := false
+## `--agents` with --stress: the P8 population in the city while it comes down.
+var _agents_mode := false
+## Many at once (AIPlan P8): who is smart, the swarm, and whom they are after.
+var budget: ImportanceBudget
+var swarm: SwarmSide
+var _many_target: Pawn
+var _many := {"soldiers": 0, "flyers": 0, "animals": 0, "hunters": 0}
+var _next_swarm_refresh := 0.0
 var _reach_mode := false
 var _far_mode := false
 var _tree_mode := false
@@ -943,6 +951,7 @@ func _ready() -> void:
 	_bench_bricks = "--with-bricks" in args
 	_terrain_mode = terrain_ground or "--terrain" in args
 	_stress_mode = "--stress" in args
+	_agents_mode = "--agents" in args
 	_reach_mode = "--reach" in args
 	_far_mode = "--far" in args
 	_tree_mode = "--trees" in args
@@ -4349,7 +4358,13 @@ func _ai_tick(destruction_ms: float) -> void:
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
 	_ai_run_ms = float(Time.get_ticks_usec() - t1) / 1000.0
-	_prof["ai"] = _ai_sync_ms + _ai_run_ms
+	if budget != null:
+		budget.tick(ai_services.now())
+	if swarm != null and ai_services.now() >= _next_swarm_refresh:
+		# Buildings come down: the field goes round what is still standing.
+		_next_swarm_refresh = ai_services.now() + 5.0
+		swarm.refresh()
+	_prof["ai"] = _ai_sync_ms + _ai_run_ms + (swarm.tick_ms() if swarm != null else 0.0)
 	if _phase != "":
 		_ai_phase_level[_phase] = maxi(int(_ai_phase_level.get(_phase, 0)), ai_sched.get_level())
 		var k := "tick:" + _phase
@@ -4788,6 +4803,80 @@ func _spawn_soldier(feet: Vector3) -> Soldier:
 	weight.add(so.pawn.body, so.pawn.feet, WeightTracker.PERSON)
 	print("[city] soldier at %v" % feet)
 	return so
+
+
+## The P8 population round `center` (the --stress --agents pass): six squads of
+## six in a ring 30-60 m out, three flyers, a herd, and 300 swarm rows 50-80 m
+## out -- all after one player-side body at `center` (the player's pawn if it
+## is out, a stand-in otherwise). The ImportanceBudget keeps ten smart.
+func _spawn_many(center: Vector3) -> void:
+	if ai_services.world3d == null:
+		ai_services.world3d = get_world_3d()
+		ai_services.on_structure_hit = _gun.on_structure_hit
+	budget = ImportanceBudget.new()
+	var target := _player_pawn
+	if target == null or not is_instance_valid(target):
+		target = Pawn.spawn(self, ai_nav.snap(_on_ground(center)), 0, true, 1e7)
+		Soldier._greybox(target, 0)
+		ai_services.add_pawn(target)
+	_many_target = target
+	budget.players = [target]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 88
+	for q in 6:
+		var ang := TAU * q / 6.0
+		var at := center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(30.0, 60.0)
+		var members: Array[Soldier] = []
+		for i in 6:
+			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, (i / 3) * 1.5))))
+			members.append(so)
+			budget.add(so)
+		squads.append(Squad.make(ai_services, self, members, 1))
+		_many.soldiers += 6
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	for i in 3:
+		var ang := TAU * i / 3.0
+		var g := GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+				WeaponClass.builtin(&"rifle"), 1))
+		var f := Flyer.spawn(ai_services, self, _on_ground(center + Vector3(cos(ang), 0.0, sin(ang)) * 40.0)
+				+ Vector3.UP * 30.0, 1, g)
+		budget.add(f)
+		_many.flyers += 1
+	var home := center + Vector3(-25.0, 0.0, -20.0)
+	var herd := AnimalPack.new(ai_services, -1, _on_ground(home), 5)
+	for i in 5:
+		budget.add(Animal.spawn(ai_services, self, ai_nav.snap(_on_ground(home + Vector3(i * 1.5, 0.0, 0.0))),
+				herd, 60.0, 400 + i if i < 2 else -1))
+		_many.animals += 1
+	var pts := PackedVector3Array()
+	for i in 300:
+		var ang := rng.randf() * TAU
+		pts.append(_on_ground(center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(50.0, 80.0)))
+	swarm = SwarmSide.new()
+	swarm.boxes = func() -> Array:
+		var out := []
+		for id in _near_buildings(center, 150.0):
+			var b := registry.get_building(id)
+			if b != null and not b.toppled:
+				out.append(_world_box(b))
+		return out
+	swarm.spawn_promoted = func(pos: Vector3, hp: float) -> Object:
+		var pack := AnimalPack.new(ai_services, 1, pos, _many.hunters)
+		var an := Animal.spawn(ai_services, self, ai_nav.snap(pos), pack, maxf(hp, 1.0), -1,
+				AgentTier.DIRECTED)
+		an.swarm_born = true
+		pack.hunt(_many_target)
+		budget.add(an)
+		_many.hunters += 1
+		return an
+	swarm.node_room = func() -> int:
+		return ImportanceBudget.SMART_CAP + ImportanceBudget.DIRECTED_CAP - budget.agents.size()
+	swarm.setup(ai_services, self, 1, pts, 40.0, 17)
+	swarm.refresh()
+	budget.demote_to_swarm = swarm.demote
+	print("[city] %d soldiers, %d flyers, %d animals, %d swarm rows round %v" % [_many.soldiers,
+			_many.flyers, _many.animals, swarm.alive(), center])
 
 
 ## A squad of four at `at`, on the other side (U, 30 m ahead of the camera). With
@@ -8189,6 +8278,9 @@ func _run_stress_pass() -> void:
 	print("[stress] standing: %.1f MB, %d chunks, %d islands" % [
 			float(mem.total_bytes) / 1048576.0, int(mem.chunks), islands.islands.size()])
 
+	if _agents_mode:
+		_spawn_many(Vector3(0.0, 0.0, 30.0))
+		await _frames(30)
 	_sampling = true
 	_phase = "under fire"
 	var target := 0
@@ -8275,6 +8367,11 @@ func _run_stress_pass() -> void:
 	print("[stress] AI ladder, deepest level per phase: %s-> now %d (deepest %d); AI sync+run %.2f ms a tick" % [
 			ladder, ai_sched.get_level(), ai_sched.get_max_level_seen(),
 			float(_prof_sum.get("ai", 0.0)) / maxi(_tick_samples, 1)])
+	if budget != null:
+		print("[stress] agents: %d smart, %d directed, %d swarm row(s); %d soldier(s), %d flyer(s), %d animal(s), %d promoted, %d demoted; budget %.2f ms a tick, swarm %.2f ms" % [
+					int(budget.counts.smart), int(budget.counts.directed), swarm.alive(),
+					_many.soldiers, _many.flyers, _many.animals, swarm.promoted, swarm.demoted,
+					budget.last_ms, swarm.tick_ms()])
 	# Stepped down when the collapse was heavy enough to call for it -- a run of
 	# AI_HEAVY_TICKS ticks over AI_HEAVY_MS -- and back up after, either way.
 	# The check used to require a step down, full stop, and failed once the
