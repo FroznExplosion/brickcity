@@ -585,7 +585,8 @@ class Dormant:
 	## What it rested on went while it slept (IslandManager.support_gone).
 	var unsure := false
 	## What it left drawn where it lay: its coarse stand-in, a node with no
-	## body (IslandManager._leave_stand_in). Null for a piece from a save.
+	## body (IslandManager._leave_stand_in). For a piece put back asleep from a
+	## save, built a little after (build_due_stand_ins).
 	var stand_in: MeshInstance3D = null
 
 
@@ -2977,6 +2978,8 @@ func tick() -> void:
 	# need the cap's attention.
 	_enforce_debris_cap()
 	_advance_sleep_jobs()
+	if not _stand_ins_due.is_empty():
+		build_due_stand_ins()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
 	tick_prof.pieces += float(_tp - _t_loop) / 1000.0
@@ -3597,6 +3600,49 @@ func restore_dormant(record: ChunkRecord, piece_id: int, owner_id: int) -> void:
 	d.piece_id = piece_id
 	d.owner = owner_id
 	dormant.append(d)
+	_stand_ins_due.append(d)
+
+
+## Pieces put back asleep from a save, whose stand-ins are still to be built.
+var _stand_ins_due: Array = []
+
+
+## Build the stand-ins of pieces put back asleep from a save, for `budget_ms`
+## (one at least). A record is bricks and nothing draws it: a save's wreckage
+## was invisible until somebody walked up to it. Each is made a chunk again
+## (ChunkRecord.restore), its stand-in taken from that, and the chunk given
+## back. Returns how many were built.
+func build_due_stand_ins(budget_ms := 2.0) -> int:
+	var until := Time.get_ticks_usec() + int(budget_ms * 1000.0)
+	var n := 0
+	while not _stand_ins_due.is_empty() and (n == 0 or Time.get_ticks_usec() < until):
+		var d: Dormant = _stand_ins_due.pop_front()
+		# Woken meanwhile, or a single brick (the MultiMesh's when awake).
+		if d.stand_in != null or not dormant.has(d) or d.record.block_count() <= 1:
+			continue
+		var chunk := d.record.restore(world)
+		if chunk < 0:
+			continue
+		var arrays: Array = world.build_chunk_coarse_mesh(chunk)
+		world.release_chunk(chunk)
+		coarse_built += 1
+		coarse_worst_ms = maxf(coarse_worst_ms, world.get_last_coarse_ms())
+		n += 1
+		if arrays.is_empty() or not mesh_arrays_ok(arrays, "stand-in of piece %d" % d.piece_id):
+			continue
+		coarse_verts += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var node := MeshInstance3D.new()
+		node.mesh = mesh
+		node.material_override = brick_material
+		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		add_child(node)
+		# Where its bricks lay: the chunk's own transform, as a piece's mesh has.
+		node.transform = d.record.xform
+		d.stand_in = node
+		stand_ins += 1
+	return n
 
 
 ## Wake anything dormant that this volume reaches, so that a blast lands on
