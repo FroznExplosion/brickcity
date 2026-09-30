@@ -42,9 +42,38 @@ static func create(library: GunPartLibrary, res: GunGenerator.Result) -> WorldGu
 	return p
 
 
+## The impostor ladder (Docs/Impostors.md 8.3), if the scene has one: past a
+## few metres the gun is a baked card and its model is hidden. The beam is not
+## touched -- it is what reads at range. Without an ImpostorItems in the scene
+## nothing here changes.
+var _items: ImpostorItems = null
+var _item := -1
+var _item_key := ""
+
+
+func _ready() -> void:
+	_items = get_tree().get_first_node_in_group(ImpostorItems.GROUP) as ImpostorItems
+	if _items == null or gun == null:
+		return
+	_item_key = "gun_%d" % (result.seed if result != null else get_instance_id())
+	_items.kind_from_node(_item_key, gun)
+	_item = _items.add(_item_key, gun.global_transform)
+
+
+func _exit_tree() -> void:
+	if _items != null and _item >= 0:
+		_items.remove(_item)
+		_items.drop_kind(_item_key)
+		_item = -1
+
+
 func _process(delta: float) -> void:
 	if _spin_root != null:
 		_spin_root.rotate_y(delta * SPIN_SPEED)
+	if _item >= 0:
+		# Its own model unless the card is standing in for it (not before
+		# the first pass has placed it, nor while the bake is still coming).
+		gun.visible = _items.tier_of(_item) != 2
 
 
 ## Rarity-coloured light column. This is the read that lets a player triage a pile of

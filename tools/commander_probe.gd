@@ -117,6 +117,40 @@ func _paper() -> void:
 	_ok("two styles, two measurably different rosters (AIPlan P9)",
 			abs(vet_r - vet_s) > 20 or abs(close_s - close_r) > 20,
 			"sniper %s | rusher %s" % [counts.sniper, counts.rusher])
+	# The map.
+	var g := SectorGrid.new()
+	var hot := Vector3(10.0, 0.0, 10.0)
+	var cold := Vector3(200.0, 0.0, 200.0)
+	g.note_loss(hot, 3.0)
+	g.note_threat(hot + Vector3(40.0, 0.0, 0.0), 2.0)
+	_ok("where men died is dangerous, and so is next door", g.danger(hot) > 5.0
+			and g.danger(hot + Vector3(33.0, 0.0, 0.0)) > 0.0 and g.danger(cold) == 0.0,
+			"%.1f there, %.1f next door, %.1f far off" % [g.danger(hot),
+			g.danger(hot + Vector3(33.0, 0.0, 0.0)), g.danger(cold)])
+	_ok("of the spots offered, it picks the safe one", g.safest([hot, cold]) == cold)
+	var d0 := g.danger(hot)
+	g.decay(PointsBattle.QUICK * 2.0)
+	_ok("and it forgets, slowly", g.danger(hot) < d0 and g.danger(hot) > 0.0,
+			"%.1f -> %.1f in %.0f s" % [d0, g.danger(hot), PointsBattle.QUICK * 2.0])
+	# Fights nobody watches (Red Dawn's table).
+	var r := PointsBattle.resolve(20.0, 8.0)
+	_ok("20 points on 8: a decisive attacker win", r.outcome == PointsBattle.Outcome.DECISIVE_ATTACKER
+			and is_equal_approx(float(r.defender_left), 8.0 * 0.2), "%s" % [r])
+	r = PointsBattle.resolve(10.0, 10.0, true)
+	_ok("even, against a building: the defender holds", r.outcome == PointsBattle.Outcome.STALEMATE
+			or r.outcome == PointsBattle.Outcome.DEFENDER, "%s" % r.name)
+	var even := PointsBattle.resolve(10.0, 10.0)
+	var lop := PointsBattle.resolve(40.0, 5.0)
+	_ok("an even fight takes longer than a one-sided one", float(even.seconds) > float(lop.seconds),
+			"%.0f s vs %.0f s" % [float(even.seconds), float(lop.seconds)])
+	var f := PointsBattle.Front.new()
+	f.where = Vector3.ZERO
+	f.attacker = 20.0
+	f.defender = 8.0
+	_ok("a front with a player near does not resolve on paper",
+			not f.step(1000.0, [Vector3(30.0, 0.0, 0.0)]) and f.result.is_empty())
+	_ok("and with nobody near, it does", f.step(1000.0, [Vector3(500.0, 0.0, 0.0)])
+			and f.result.name == "decisive attacker win")
 	_ok("vehicles and mechs are catalogued and costed, not yet fielded",
 			UnitCatalog.UNITS.has(&"tank") and UnitCatalog.points(&"tank") > 10.0
 			and not bool(UnitCatalog.get_unit(&"tank").built) and not (&"mech" in UnitCatalog.built()))
@@ -208,6 +242,17 @@ func _finish() -> void:
 	_ok("losing men makes it desperate", float(_log.get("desp1", 0.0)) > float(_log.get("desp0", 1.0)),
 			"%.2f -> %.2f" % [float(_log.get("desp0", -1.0)), float(_log.get("desp1", -1.0))])
 	_ok("short of strength and able to pay, it fields more", bool(_log.get("reinforced", false)))
+	_ok("where its men fell is marked dangerous on its map", cm.sectors.danger(_spawn_at) > 0.0,
+			"%.1f at the spawn" % cm.sectors.danger(_spawn_at))
+	# The HQ: radio down, nobody called; officer dead, nothing decided.
+	cm.budget = 30.0
+	cm.radio_destroyed()
+	_ok("radio down: no reinforcement, even pressed", not cm.force_reinforce())
+	var f := cm.open_front(Vector3(900.0, 0.0, 900.0), 10.0, 10.0, false, false)
+	cm.commander_killed()
+	cm.think(1.0)
+	_ok("commander and radio both gone: its side fights leaderless (x%.1f)" % Commander.LEADERLESS,
+			is_equal_approx(f.defender, 10.0 * Commander.LEADERLESS), "%.1f" % f.defender)
 	print("  log:")
 	for l in cm.log:
 		print("    " + l)

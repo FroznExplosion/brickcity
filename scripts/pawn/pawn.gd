@@ -38,6 +38,8 @@ const EYE_HEIGHT := BODY_HEIGHT - HEAD_HEIGHT * 0.5
 const WALK_SPEED := BRICK_M * 6.7
 const RUN_SPEED := BRICK_M * 13.3
 const CROUCH_SPEED := BRICK_M * 2.9
+## Aiming down the sights: a careful walk, 4.4 courses a second.
+const AIM_SPEED := BRICK_M * 4.4
 ## Clears one course and no more, at this gravity.
 const JUMP_SPEED := 4.2
 const GRAVITY := 20.0
@@ -62,6 +64,9 @@ var gun: GunController
 ## Where it looks from, turned to `intents.look_yaw` / `look_pitch` every tick: a
 ## gun held by a brain aims down this (a player's gun aims down the camera).
 var eye: Node3D
+## The player's movement on top of the walk -- momentum, slide, wall-run, mantle,
+## grapple (PawnMoves). Null for a soldier, whose walk is the plain one below.
+var moves: PawnMoves
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
@@ -178,6 +183,16 @@ func eye_interpolated() -> Vector3:
 	return body.get_global_transform_interpolated().origin + Vector3.UP * eye_offset()
 
 
+## The feet between physics ticks, at the body's present height.
+func feet_interpolated() -> Vector3:
+	return body.get_global_transform_interpolated().origin - Vector3.UP * _height * 0.5
+
+
+## Feet up to the eye: EYE_HEIGHT standing, a brick less crouched.
+func eye_height() -> float:
+	return _height - HEAD_HEIGHT * 0.5
+
+
 func is_crouched() -> bool:
 	return _height < BODY_HEIGHT
 
@@ -215,21 +230,39 @@ func step(delta: float) -> void:
 	# for it either way. The test is along the motion rather than in place, so
 	# walking at a beam ducks under it instead of stopping dead in front of it.
 	var probe := wish * WALK_SPEED * delta
-	_auto_crouched = false
-	if intents.crouch and not no_crouch:
-		_set_height(CROUCH_HEIGHT)
-	elif _fits(BODY_HEIGHT, probe):
-		_set_height(BODY_HEIGHT)
-	elif _fits(CROUCH_HEIGHT, probe):
-		_set_height(CROUCH_HEIGHT)
-		_auto_crouched = true
+	# A mantle owns the body's height from start to finish: it chose the height
+	# that fits where it is going, and a stand-up half way would move the body.
+	if moves == null or not moves.owns_height():
+		_auto_crouched = false
+		var low := intents.crouch and not no_crouch
+		if moves != null and moves.keeps_low():
+			low = true
+		if low:
+			_set_height(CROUCH_HEIGHT)
+		elif _fits(BODY_HEIGHT, probe):
+			_set_height(BODY_HEIGHT)
+		elif _fits(CROUCH_HEIGHT, probe):
+			_set_height(CROUCH_HEIGHT)
+			_auto_crouched = true
 
 	var speed := WALK_SPEED
 	if is_crouched():
 		speed = CROUCH_SPEED
+	elif intents.aim:
+		speed = AIM_SPEED
 	elif intents.run:
 		speed = RUN_SPEED
 
+	if moves != null:
+		moves.step(delta, wish, speed)
+	else:
+		_walk(delta, wish, speed)
+	_track_fall()
+
+
+## The plain walk: the velocity is the wish, every tick -- no momentum, which is
+## what a soldier on a path wants.
+func _walk(delta: float, wish: Vector3, speed: float) -> void:
 	if intents.jump:
 		intents.jump = false
 		if body.is_on_floor():
@@ -255,6 +288,9 @@ func step(delta: float) -> void:
 		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
 			_step_over(wanted)
 
+
+## Where a fall started and what landing from it costs.
+func _track_fall() -> void:
 	var on_floor := body.is_on_floor()
 	# Where a fall started: the highest the feet were since they left a floor.
 	var feet_y := body.global_position.y

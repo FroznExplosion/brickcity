@@ -30,6 +30,8 @@ var order: SquadMsg.Order
 ## Every report sent, for gates and the commander.
 var reports: Array[SquadMsg.Report] = []
 var morale := 1.0
+## Which play's assignments are current (begin_play).
+var generation := 0
 var broken := false
 ## What the tree is doing, for overlays and gates.
 var play := "idle"
@@ -138,12 +140,24 @@ func _report(oid: int, kind: int, reason := "") -> void:
 func assign(so: Soldier, a: SquadMsg.Assignment) -> void:
 	if so == null or so.is_dead():
 		return
+	a.generation = generation
 	so.set_assignment(a)
 
 
-func clear_assignments() -> void:
+## A play starts: its assignments are this generation's.
+func begin_play() -> int:
+	generation += 1
+	return generation
+
+
+## Let the members go. With `gen`, only from what that play gave them: when the
+## tree switches plays the new one starts before the old one exits, and the old
+## one clearing everything wiped the new one's orders (a CLEAR_ROOM straight
+## after a MOVE stacked nobody).
+func clear_assignments(gen := -1) -> void:
 	for m in members:
-		if is_instance_valid(m):
+		if is_instance_valid(m) and m.assignment != null \
+				and (gen < 0 or m.assignment.generation == gen):
 			m.set_assignment(null)
 
 

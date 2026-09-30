@@ -12,6 +12,9 @@ extends Node3D
 ##       LMB fire · WHEEL blast size · X wider blast
 ##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
 ##       F5 save · F9 load · ESC mouse
+##       V on foot · K a soldier · U a squad (advances on you when on foot)
+##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
+##       SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload
 ## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
@@ -733,6 +736,10 @@ var _sea = null
 ## `--buildings=` was on the command line. With a world file the SITES decide
 ## how many buildings there are, and this caps them only when asked to.
 var _buildings_arg := false
+## The buildings stood on the world's SITES: what the flush-with-the-ground
+## gate checks. The registry also holds trees and small items now, which are
+## not on pads and are not the gate's business.
+var _site_ids: Array[int] = []
 var _stress_mode := false
 var _reach_mode := false
 var _far_mode := false
@@ -767,10 +774,30 @@ var _combat_rng := RandomNumberGenerator.new()
 var _player := PlayerController.new()
 var _player_pawn: Pawn
 var _play_mode := false
+## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
+## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
+var _view: PlayerView
+var _fps_hud: PlayerHud
+var _stats_were_visible := false
+## Hitmarkers and numbers outside the arena, which has its own.
+var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
 var _mech: Mech
+## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
+## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
+var weight: WeightTracker
+## The mech map (AIPlan R8): an AINav with a mech's footprint, height and step.
+var mech_nav: AINav
+## Every mech with a brain: the player's (its brain off while piloted) and the
+## enemy's (Y).
+var mech_brains: Array[MechBrain] = []
+## The player's one button to their mech (F, on foot; AI.md 2.1, A4).
+var _mech_cmd: MechCommand
+var _chunk_owner := {}
+## Mechs with no brain and no pilot (the --mechfall gate's).
+var _loose_mechs: Array[Mech] = []
 var _mech_mode := false
 ## The AI's view of the city (Docs/AIPlan.md P2): what stands between two points,
 ## how long cover lasts, where not to stand. Synced once a tick; it reads the
@@ -784,6 +811,16 @@ var _ai_sync_ms := 0.0
 var _ai_run_ms := 0.0
 ## The deepest the ladder went in each --stress phase.
 var _ai_phase_level := {}
+## The arbiter's line (AIPlan R14): destruction over AI_HEAVY_MS for
+## AI_HEAVY_TICKS ticks running is a collapse, and the AI steps down for it.
+const AI_HEAVY_MS := 8.0
+const AI_QUIET_MS := 4.0
+const AI_HEAVY_TICKS := 3
+## The longest run of ticks the destruction spent over AI_HEAVY_MS, and its
+## worst tick: what tells the stress gate whether a step down was called for.
+var _ai_heavy_run := 0
+var _ai_heavy_run_max := 0
+var _ai_destruction_peak := 0.0
 ## `-- --no-ai`: the city without the AI's tick, to measure what it costs.
 var _no_ai := false
 ## Where a figure can walk, read from the bricks (AIPlan P3). Paths are
@@ -800,6 +837,12 @@ var _encounters: Array[Encounter] = []
 ## nav and scheduler; an agent's missed rounds go through the authority.
 var ai_services: AIServices
 var soldiers: Array[Soldier] = []
+## Squads (AIPlan P6): U spawns one; the --squad gate clears a room with one.
+var squads: Array[Squad] = []
+## The player's callouts and aggro meter, made the first time a pawn is entered.
+var _callout_hud: CalloutHud
+var _aggro_layer: CanvasLayer
+var _aggro_meter: AggroMeter
 ## Pieces hurt the pawns they fall on and push out the ones inside them
 ## (Docs/Collapse.md 4.4).
 var crush := Crush.new()
@@ -825,6 +868,8 @@ var _soldier_mode := false
 var _arena_mode := false
 var arena: WaveDirector
 var _wreck_mode := false
+var _squad_mode := false
+var _mechfall_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -915,6 +960,8 @@ func _ready() -> void:
 	_soldier_mode = "--soldier" in args
 	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
+	_squad_mode = "--squad" in args
+	_mechfall_mode = "--mechfall" in args
 	if _build_mode:
 		_build_path = DEFAULT_BUILD_PATH
 	for a in args:
@@ -1001,10 +1048,23 @@ func _ready() -> void:
 	ai_services.ai_nav = ai_nav
 	ai_services.sched = ai_sched
 	ai_services.rng.seed = 0x50DD1E4
+	# A squad's breaching charge is a blast like any other: asked for, queued,
+	# committed by the host, replayed by clients.
+	ai_services.on_breach = _blast
+	mech_nav = MechBrain.mech_nav(ai_world)
+	# Whatever changes where a figure can walk changes where a mech can.
+	ai_nav.nav_changed.connect(mech_nav.invalidate_box)
+	weight = WeightTracker.new(ai_world, world)
+	weight.on_load = _weight_load
+	weight.on_unload = _weight_unload
+	weight.on_solve = _weight_solve
+	# A piece that comes off under a mech crashing through is not something it
+	# lands on (R9).
+	islands.piece_spawned.connect(_mech_ignore_piece)
 	ai_sched.set_base_budget_ms(2.5)
 	# This script's own tick: a quiet city is 1-3 ms of it, a collapse tens.
-	ai_sched.set_thresholds(8.0, 4.0)
-	ai_sched.set_hysteresis(3, 45)
+	ai_sched.set_thresholds(AI_HEAVY_MS, AI_QUIET_MS)
+	ai_sched.set_hysteresis(AI_HEAVY_TICKS, 45)
 	# The field first: `_build_city` asks it how high each building stands,
 	# and a question asked before the field is configured is answered by the
 	# wrong world.
@@ -1110,6 +1170,10 @@ func _ready() -> void:
 		_run_soldier_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
+	elif _squad_mode:
+		_run_squad_pass()
+	elif _mechfall_mode:
+		_run_mechfall_pass()
 	elif _arena_mode:
 		_start_arena("--gate" in args)
 	elif _stress_mode:
@@ -1252,7 +1316,7 @@ func _build_city_on_sites() -> void:
 		pos.y = TerrainWorldScript.site_level(site)
 		var program: Dictionary = site["program"] if site.has("program") \
 				else _program_for({}, index)
-		_place_building(fp.x, fp.y, courses, pos, program)
+		_site_ids.append(_place_building(fp.x, fp.y, courses, pos, program))
 		index += 1
 
 
@@ -1344,6 +1408,7 @@ func _setup_terrain_field() -> void:
 	# the hillside, a crest blocks a sight line, and the sea is not a floor.
 	ai_world.set_terrain_ground(true)
 	ai_nav.set_water_level(TerrainWorldScript.sea_level)
+	mech_nav.set_water_level(TerrainWorldScript.sea_level)
 
 
 ## The ground the city stands on, when it stands on ground.
@@ -3346,9 +3411,12 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	if _gun.gun != null:
 		_gun.gun.queue_free()
-	camera.add_child(gi)
-	gi.position = Vector3(0.22, -0.2, -0.45)
 	_gun.equip(gi)
+	if _view != null:
+		_view.hold(gi)
+	else:
+		camera.add_child(gi)
+		gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
@@ -3508,6 +3576,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		camera.set_walking(false)
 	if _player_pawn == null or not is_instance_valid(_player_pawn):
 		_player_pawn = Pawn.spawn(self, feet, 0)
+		_player_pawn.moves = PawnMoves.new(_player_pawn)
 	else:
 		_player_pawn.place(feet)
 	if _player.get_parent() == null:
@@ -3522,19 +3591,94 @@ func _enter_pawn(feet: Vector3) -> void:
 	# earn aggro (AIServices).
 	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	if not _player_pawn.has_meta(&"weight"):
+		_player_pawn.set_meta(&"weight", weight.add(_player_pawn.body, _player_pawn.feet,
+				WeightTracker.PERSON))
+	if _mech_cmd != null:
+		_mech_cmd.brain.leader = _player_pawn
+	_player_hud()
+	_fps_on()
 	print("[city] playing: pawn at %v" % feet)
 
 
+## The gun into the view's hands, its HUD up, the debug overlays away.
+func _fps_on() -> void:
+	if _view == null:
+		_view = PlayerView.new()
+		_view.name = "PlayerView"
+		add_child(_view)
+		_view.setup(camera, _player_pawn, _gun)
+	_player.view = _view
+	if _fps_hud == null:
+		_fps_hud = PlayerHud.new()
+		_fps_hud.name = "PlayerHud"
+		add_child(_fps_hud)
+		_fps_hud.setup(_player_pawn, _gun, _view)
+	if _feedback == null and arena == null:
+		_feedback = CombatFeedback.new()
+		_feedback.name = "Feedback"
+		add_child(_feedback)
+		_feedback.setup(self)
+		_gun.fired.connect(_feedback.on_player_shot)
+	if stats_label != null:
+		_stats_were_visible = stats_label.visible
+		stats_label.visible = false
+	if _reticle != null:
+		_reticle.visible = false
+
+
+func _fps_off() -> void:
+	_player.view = null
+	if _view != null:
+		_view.teardown()
+		_view.queue_free()
+		_view = null
+	if _fps_hud != null:
+		_fps_hud.queue_free()
+		_fps_hud = null
+	if stats_label != null:
+		stats_label.visible = _stats_were_visible
+	if _reticle != null:
+		_reticle.visible = camera.capture_mouse
+
+
 func _leave_pawn() -> void:
+	_fps_off()
 	_player.release()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
 	if _player_pawn != null and is_instance_valid(_player_pawn):
 		_player_pawn.gun = null
+		if _player_pawn.has_meta(&"weight"):
+			weight.remove(int(_player_pawn.get_meta(&"weight")))
 		_player_pawn.body.queue_free()
 	_player_pawn = null
 	_gun.set_trigger(false)
 	_gun.exclude = [] as Array[RID]
+	if _aggro_layer != null:
+		_aggro_layer.visible = false
+
+
+## What the player is shown of the fight (AI.md 6.5, 8): the callouts it can hear
+## -- markers over the speakers it can see, over friendlies always -- and the
+## enemy's aggro meter. Heard from the camera, which is the player's eye.
+func _player_hud() -> void:
+	if _callout_hud == null:
+		var l := ai_services.callouts.listen(camera, 0, _player_pawn)
+		_callout_hud = CalloutHud.new()
+		_callout_hud.name = "Callouts"
+		_callout_hud.setup(ai_services.callouts, l)
+		add_child(_callout_hud)
+		_aggro_layer = CanvasLayer.new()
+		_aggro_layer.name = "Aggro"
+		_aggro_layer.layer = 5
+		_aggro_meter = AggroMeter.new()
+		_aggro_meter.table = ai_services.aggro_of(1)
+		_aggro_meter.position = Vector2(20.0, 180.0)
+		_aggro_layer.add_child(_aggro_meter)
+		add_child(_aggro_layer)
+	_callout_hud.listener.pawn = _player_pawn
+	_aggro_layer.visible = true
 
 
 ## Climb into the mech -- spawning one on the ground ahead of the camera if there
@@ -3556,6 +3700,10 @@ func _board_mech() -> void:
 		add_child(_pilot)
 	camera.set_process(false)
 	camera.allow_walk = false
+	# The pilot's keys drive it now, not its brain.
+	var br := _mech.body.get_node_or_null(^"MechBrain") as MechBrain
+	if br != null:
+		br.enabled = false
 	_pilot.board(_mech, camera)
 	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
 
@@ -3572,6 +3720,12 @@ func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech.gun.equip(gi)
 	_mech.gun.rng = _combat_rng
 	_mech.gun.on_structure_hit = _gun.on_structure_hit
+	_wire_mech(_mech)
+	# Out of the cockpit it fights on its own, on the one button (AI.md 2.1).
+	var br := MechBrain.attach(ai_services, _mech, mech_nav, MechTree.companion(), 0)
+	br.enabled = false
+	mech_brains.append(br)
+	_mech_cmd = MechCommand.new(br, _player_pawn)
 	return _mech
 
 
@@ -3579,6 +3733,208 @@ func _leave_mech() -> void:
 	_pilot.leave()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
+	if _mech_cmd != null and is_instance_valid(_mech):
+		# Out: it holds where it stands until told otherwise.
+		var br := _mech_cmd.brain
+		br.enabled = true
+		br.order = MechBrain.Order.HOLD
+		br.order_point = _mech.feet()
+
+
+## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
+func _wire_mech(m: Mech) -> void:
+	m.fall.decides = authority.may_decide()
+	m.fall.floor_at = _mech_floor_at
+	m.fall.on_break = _mech_break
+	m.fall.next_floor = _next_floor_below
+	weight.add(m.body, m.feet, Mech.MASS)
+
+
+## The enemy's mech (Y), ahead of the camera: an LMG, a launcher for walls, and
+## the enemy tree -- it breaches to get at infantry (AI.md 6.4).
+func _spawn_enemy_mech(feet: Vector3, yaw: float) -> MechBrain:
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var m := Mech.spawn(self, feet, yaw, 1)
+	var gi := GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+			WeaponClass.builtin(&"lmg"), 1))
+	gi.visible = false
+	m.arm.add_child(gi)
+	m.gun.equip(gi)
+	m.gun.rng = _combat_rng
+	m.gun.on_structure_hit = _gun.on_structure_hit
+	_wire_mech(m)
+	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
+	br.arm_launcher(GunInstance.from_result(GunGenerator.generate(_gun_library,
+			_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
+			_gun.on_structure_hit)
+	mech_brains.append(br)
+	print("[city] enemy mech at %v" % feet)
+	return br
+
+
+## What a mech's feet land on, for the fall rule: a building's brick is a floor
+## (T = 6 bricks; a floor already hanging, T = 3); a loose piece or the ground is
+## not. A building still in its shell is made bricks first -- a landing is damage
+## (A20).
+func _mech_floor_at(feet: Vector3) -> Dictionary:
+	var under := feet - Vector3.UP * 0.07
+	var v := _block_under_footprint(under)
+	if v.x < 0:
+		for id in _near_buildings(feet, 1.0):
+			var b := registry.get_building(id)
+			if b != null and not b.is_materialised() and _world_box(b).grow(0.3).has_point(under):
+				_promote(id)
+				ai_world.sync()
+				v = _block_under_footprint(under)
+				break
+	if v.x < 0:
+		return {}
+	var id := _building_of_chunk(v.x)
+	if id < 0:
+		return {}
+	var t := FallRule.T
+	var h := world.get_headroom(v.x, v.y)
+	if h >= 0.0 and not is_inf(h):
+		t *= 0.5
+	return {"chunk": v.x, "building": id, "t": t}
+
+
+## The host breaks the floor under a mech: a SHEAR that lets every block in the
+## ball go on its own. The pieces land quietly -- the rule, not their landing,
+## decides the next floor (R9).
+func _mech_break(point: Vector3, radius: float, fl: Dictionary) -> void:
+	var id := int(fl.building)
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.SHEAR
+	e.target = id
+	e.point = point
+	e.radius = radius
+	e.limit = 48
+	e.flags = DamageLog.FLAG_WHOLE
+	DamageLog.apply_entry(world, int(fl.chunk), e)
+	authority.commit_entry(e)
+	islands.quiet_landings(point, radius + 2.5, 3.0)
+	_mark_dirty(id)
+	_queue_remesh(id)
+	var r := Vector3.ONE * (radius + 1.0)
+	ai_nav.invalidate_box(AABB(point - r, r * 2.0))
+
+
+## A mech is three and a half metres across: what it stands on may be under its
+## rim, not its middle (a stair shaft, a gap between plates). The middle first,
+## then a ring under the rim.
+## Only a building's bricks count: the plate it just broke falls with it and is
+## under it too, and the rule does not apply to a loose piece (R9).
+func _block_under_footprint(under: Vector3) -> Vector2i:
+	var v := ai_world.block_at(under)
+	if v.x >= 0 and _building_of_chunk(v.x) >= 0:
+		return v
+	for r in [Mech.RADIUS * 0.5, Mech.RADIUS * 0.9]:
+		for k in 8:
+			var a := k * TAU / 8.0
+			v = ai_world.block_at(under + Vector3(cos(a), 0.0, sin(a)) * r)
+			if v.x >= 0 and _building_of_chunk(v.x) >= 0:
+				return v
+	return Vector2i(-1, -1)
+
+
+func _mech_ignore_piece(isl: BrickIsland) -> void:
+	if not isl.is_valid():
+		return
+	var box := islands.world_aabb(isl)
+	for m in _crashing_mechs():
+		var f := m.feet()
+		if box.grow(Mech.RADIUS + 1.0).has_point(Vector3(f.x, clampf(f.y, box.position.y, box.end.y), f.z)):
+			m.fall.ignore(isl.body)
+
+
+func _crashing_mechs() -> Array[Mech]:
+	var out: Array[Mech] = []
+	if _mech != null and is_instance_valid(_mech) and _mech.fall.is_carrying():
+		out.append(_mech)
+	for br in mech_brains:
+		if is_instance_valid(br) and br.mech.fall.is_carrying() and not out.has(br.mech):
+			out.append(br.mech)
+	for m in _loose_mechs:
+		if is_instance_valid(m) and m.fall.is_carrying() and not out.has(m):
+			out.append(m)
+	return out
+
+
+## The top of the first building brick (or the ground) straight under `from`,
+## or -INF. Pieces are passed: the one it broke is falling under it.
+func _next_floor_below(from: Vector3) -> float:
+	var p := from
+	var stop := from.y - 40.0
+	while p.y > stop:
+		var v := ai_world.block_at(p)
+		if (v.x >= 0 and _building_of_chunk(v.x) >= 0) or (v.x < 0 and ai_world.solid_at(p)):
+			return (floorf(p.y / PLATE) + 1.0) * PLATE
+		p.y -= PLATE * 0.5
+	return -INF
+
+
+## Which building a chunk is, or -1 (a piece, or nothing).
+func _building_of_chunk(chunk: int) -> int:
+	var id := int(_chunk_owner.get(chunk, -1))
+	if id >= 0:
+		var b := registry.get_building(id)
+		if b != null and b.is_materialised() and b.chunk == chunk:
+			return id
+	for b in registry.buildings:
+		if b.is_materialised() and b.chunk == chunk:
+			_chunk_owner[chunk] = b.id
+			return b.id
+	return -1
+
+
+func _weight_load(chunk: int, owner: int, cell: Vector3i, mass: float) -> void:
+	var id := _building_of_chunk(chunk)
+	if id < 0:
+		return
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.LOAD
+	e.target = id
+	e.owner = owner
+	e.radius = mass
+	e.points.append(Vector3(cell))
+	DamageLog.apply_entry(world, chunk, e)
+	authority.commit_entry(e)
+
+
+func _weight_unload(chunk: int, owner: int) -> void:
+	var id := _building_of_chunk(chunk)
+	if id < 0:
+		return
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.UNLOAD
+	e.target = id
+	e.owner = owner
+	DamageLog.apply_entry(world, chunk, e)
+	authority.commit_entry(e)
+
+
+func _weight_solve(chunk: int) -> void:
+	var id := _building_of_chunk(chunk)
+	if id >= 0:
+		_mark_dirty(id)
+
+
+## Where the player is aiming, for ATTACK_AREA: the camera's ray, on whatever it
+## meets. INF at nothing.
+func _aim_point() -> Vector3:
+	var from := camera.global_position
+	var ex: Array[RID] = []
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		ex.append(_player_pawn.body.get_rid())
+	var q := PhysicsRayQueryParameters3D.create(from, from - camera.global_transform.basis.z * 300.0,
+			Layers.PAWN_MASK, ex)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	return hit.position if not hit.is_empty() else Vector3.INF
 
 
 ## The gate for the mech (Docs/AIPlan.md P1): BoomerBorder's motor under a body
@@ -3854,6 +4210,10 @@ func _nav_touch(id: int) -> void:
 		ai_nav.invalidate_box(_world_box(b).grow(1.0))
 
 
+func _mech_nav_service() -> void:
+	mech_nav.service(int(NAV_BUDGET_US * ai_sched.rate_scale(AIScheduler.NAV)))
+
+
 func _nav_service() -> void:
 	var t0 := Time.get_ticks_usec()
 	ai_nav.service(int(NAV_BUDGET_US * ai_sched.rate_scale(AIScheduler.NAV)))
@@ -3905,9 +4265,17 @@ func _ai_tick(destruction_ms: float) -> void:
 		enc.step(func(id: int) -> void: _promote(id, false))
 	if ai_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 5.0, _nav_service)
+	if mech_nav.pending() > 0:
+		ai_sched.submit(AIScheduler.NAV, 6.0, _mech_nav_service)
+	# Weight is structure: only the host turns it into commands (R5).
+	if authority.may_decide():
+		weight.tick(ai_services.now())
 	var t1 := Time.get_ticks_usec()
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
+	_ai_heavy_run = _ai_heavy_run + 1 if destruction_ms > AI_HEAVY_MS else 0
+	_ai_heavy_run_max = maxi(_ai_heavy_run_max, _ai_heavy_run)
+	_ai_destruction_peak = maxf(_ai_destruction_peak, destruction_ms)
 	ai_sched.run()
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
@@ -3983,15 +4351,16 @@ func _ground_gates() -> void:
 	var off_grid := 0
 	var off_ground := 0
 	var cols := 0
-	for b in registry.buildings:
+	for id in _site_ids:
+		var b := registry.get_building(id)
 		var o: Vector3 = b.xform.origin
 		if absf(o.x / STUD - roundf(o.x / STUD)) > 1e-3 				or absf(o.z / STUD - roundf(o.z / STUD)) > 1e-3 				or absf(o.y / PLATE - roundf(o.y / PLATE)) > 1e-3:
 			off_grid += 1
 		off_ground += _unflush(b)
 		cols += int(b.recipe.footprint_x) * int(b.recipe.footprint_z)
 	print("[nav]   grid: %d building(s), %d off the stud grid, %d of %d footprint columns not flush" % [
-		registry.buildings.size(), off_grid, off_ground, cols])
-	_gate_ok("every building is on the stud grid and flush with the ground",
+		_site_ids.size(), off_grid, off_ground, cols])
+	_gate_ok("every site building is on the stud grid and flush with the ground",
 			off_grid == 0 and off_ground == 0)
 
 	# A saved build, aimed at open hillside, placed like the player does.
@@ -4332,8 +4701,190 @@ func _spawn_soldier(feet: Vector3) -> Soldier:
 			_combat_rng.randi(), WeaponClass.builtin(&"rifle"), 1))
 	var so := Soldier.spawn(ai_services, self, feet, 1, gun)
 	soldiers.append(so)
+	weight.add(so.pawn.body, so.pawn.feet, WeightTracker.PERSON)
 	print("[city] soldier at %v" % feet)
 	return so
+
+
+## A squad of four at `at`, on the other side (U, 30 m ahead of the camera). With
+## the player on foot, it is ordered to advance on the player; otherwise it
+## fights as its members find things.
+func _spawn_squad(at: Vector3) -> Squad:
+	var members: Array[Soldier] = []
+	for i in 4:
+		members.append(_spawn_soldier(ai_nav.snap(at + Vector3((i % 2) * 1.4 - 0.7, 0.0,
+				(i / 2) * 1.4 - 0.7))))
+	var q := Squad.make(ai_services, self, members, 1)
+	squads.append(q)
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+		o.point = _player_pawn.feet()
+		for m in members:
+			m.knowledge().heard(_player_pawn, _player_pawn.feet(), ai_services.now())
+		q.give(o)
+	print("[city] squad %d at %v" % [q.id, at])
+	return q
+
+
+## The squad gate (AIPlan P6): a tower is sealed at street level, so a squad told
+## to clear a ground-floor room blows its own door (mouse-holing, AI.md 6.2)
+## through the authority, stacks either side of it, flashes the room, goes in
+## crisscross, drops whoever is in there, and reports the room clear. The blast
+## is in the log, so the twins replay the hole.
+func _run_squad_pass() -> void:
+	print("[squad] a squad clears a room in a sealed tower")
+	var b := registry.get_building(0)
+	for c in registry.buildings:
+		if c.recipe.courses >= 24 and not c.is_build():
+			b = c
+			break
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5, 14.0, -16.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 1.0, 2.0), Vector3.UP)
+	var enc := start_encounter(_world_box(b).grow(6.0))
+	var guard := 0
+	while not enc.is_ready() and guard < 300:
+		await _frames(1)
+		guard += 1
+	await _frames(20)
+	# A ground-storey room against the street wall (-Z).
+	var cell := BrickWorld.get_cell_size()
+	var pick: Room = null
+	for r in registry.rooms_of(b.id):
+		if r.lo.z > TowerRecipe.WALL_THICK + RoomManifest.WALL_MARGIN:
+			continue
+		if pick == null or r.lo.y < pick.lo.y or (r.lo.y == pick.lo.y and r.size.x > pick.size.x):
+			pick = r
+	_gate_ok("the tower has a ground-storey room on the street", pick != null)
+	if pick == null:
+		get_tree().quit(1)
+		return
+	var box := AABB(Vector3(pick.lo) * cell, Vector3(pick.size) * cell)
+	var room := RoomTactics.make(b.xform, box, pick.id)
+	# Somebody in there, whom nobody has seen.
+	var inside := ai_nav.snap(b.xform * (box.position + box.size * Vector3(0.5, 0.0, 0.7)))
+	var defender := Pawn.spawn(self, inside, 0, true, 100.0)
+	Soldier._greybox(defender, 0)
+	ai_services.add_pawn(defender)
+	var street := _on_ground(b.xform * Vector3(box.get_center().x, 0.0, -9.0))
+	var q := _spawn_squad(street)
+	await _frames(10)
+	var n0 := authority.commands.size()
+	var o := SquadMsg.Order.make(SquadMsg.OrderKind.CLEAR_ROOM)
+	o.room = room
+	o.wall_thick = TowerRecipe.WALL_THICK * STUD
+	var oid := q.give(o)
+	var t0 := Engine.get_physics_frames()
+	var inside_n := {}
+	var done: SquadMsg.Report = null
+	while done == null and Engine.get_physics_frames() - t0 < 30 * 90:
+		await get_tree().physics_frame
+		for m in q.members:
+			if room.contains(m.pawn.feet()):
+				inside_n[m.get_instance_id()] = true
+		for r in q.reports:
+			if r.order_id == oid and r.kind != SquadMsg.ReportKind.ACCEPTED:
+				done = r
+	var secs := float(Engine.get_physics_frames() - t0) / 30.0
+	var blasts := 0
+	for i in range(n0, authority.commands.size()):
+		if authority.commands.entries[i].kind == DamageLog.Kind.BLAST:
+			blasts += 1
+	print("[squad] events %s" % [q.events.keys()])
+	_gate_ok("no door, so it makes one: a BLAST through the authority",
+			bool(q.events.get("breach", false)) and q.events.has("breached") and blasts >= 1,
+			"%d BLAST(s)" % blasts)
+	_gate_ok("it stacks, flashes the room and goes in", q.events.has("stacked")
+			and q.events.has("flashed") and inside_n.size() >= 3,
+			"%d of 4 went in" % inside_n.size())
+	_gate_ok("the room is cleared and the order reported DONE",
+			done != null and done.kind == SquadMsg.ReportKind.DONE and defender.health.is_dead(),
+			"%s in %.1f s; defender %s" % [done, secs, "down" if defender.health.is_dead() else "UP"])
+	var said := {}
+	for l in ai_services.callouts.said:
+		said[l[2]] = true
+	print("[squad] said %s" % [said.keys()])
+	# The picture: the hole it made, from the street.
+	var hole: Vector3 = q.events.get("opening", street)
+	var back := street - hole
+	back.y = 0.0
+	camera.position = hole + back.normalized() * 7.0 + Vector3.UP * 2.5
+	camera.look_at(hole + Vector3.UP * 0.9, Vector3.UP)
+	await _frames(30)
+	await _save("city_squad")
+	_check_log_replays()
+	print("[squad] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The fall rule in the city (Docs/AI.md 3.11, AIPlan P7): a mech dropped twelve
+## bricks onto a tower's roof goes through three floors -- each a SHEAR the host
+## commits -- and stops on the fourth down; the pieces it broke land without
+## breaking anything more; and the log's twin buildings replay every break.
+func _run_mechfall_pass() -> void:
+	print("[mechfall] a mech dropped onto a tower")
+	var b := registry.get_building(0)
+	for c in registry.buildings:
+		if c.recipe.courses >= 24 and not c.is_build():
+			b = c
+			break
+	var enc := start_encounter(_world_box(b).grow(4.0))
+	var guard := 0
+	while not enc.is_ready() and guard < 300:
+		await _frames(1)
+		guard += 1
+	await _frames(20)
+	# Over the middle of the biggest room of the top storey: over floor, not a
+	# column or a wall.
+	var cell := BrickWorld.get_cell_size()
+	var pick: Room = null
+	for r in registry.rooms_of(b.id):
+		if pick == null or r.lo.y > pick.lo.y or (r.lo.y == pick.lo.y
+				and r.size.x * r.size.z > pick.size.x * pick.size.z):
+			pick = r
+	var mid := b.xform * ((Vector3(pick.lo) + Vector3(pick.size) * Vector3(0.5, 0.0, 0.5)) * cell)
+	# The roof's surface there -- the highest under the mech's footprint, which is
+	# what it lands on. top_at is only a bound (the parapet is above it), and a
+	# roof has openings.
+	var roof := -INF
+	var high := ai_world.top_at(mid.x, mid.z) + 1.0
+	for r in [0.0, Mech.RADIUS * 0.5, Mech.RADIUS * 0.9]:
+		for k in (1 if r == 0.0 else 8):
+			var a := k * TAU / 8.0
+			roof = maxf(roof, _next_floor_below(Vector3(mid.x + cos(a) * r, high, mid.z + sin(a) * r)))
+	camera.position = Vector3(mid.x + 18.0, roof + 4.0, mid.z - 18.0)
+	camera.look_at(Vector3(mid.x, roof - 6.0, mid.z), Vector3.UP)
+	var n0 := authority.commands.size()
+	var feet := Vector3(mid.x, roof + 12.0 * FallRule.BRICK + 0.02, mid.z)
+	var m := Mech.spawn(self, feet, 0.0, 1)
+	_wire_mech(m)
+	_loose_mechs.append(m)
+	var t0 := Engine.get_physics_frames()
+	var still := 0
+	while still < 30 and Engine.get_physics_frames() - t0 < 30 * 12:
+		await get_tree().physics_frame
+		still = still + 1 if m.body.is_on_floor() and not m.fall.is_carrying() else 0
+	var shears := 0
+	for i in range(n0, authority.commands.size()):
+		var e: DamageLog.Entry = authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.SHEAR and e.flags & DamageLog.FLAG_WHOLE:
+			shears += 1
+	var judged := m.fall.landings.map(func(l): return "%.1f%s" % [float(l[1]), "!" if l[2] else ""])
+	var storeys := (roof - m.feet().y) / ((TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * PLATE)
+	_gate_ok("dropped twelve bricks onto the roof, it goes through three floors",
+			m.fall.breaks == 3 and shears == 3,
+			"%d broken, %d SHEAR(s); landings (bricks of energy) %s" % [m.fall.breaks, shears, judged])
+	_gate_ok("and stands on the floor three storeys down", absf(storeys - 3.0) < 0.35
+			and m.body.is_on_floor(), "%.2f storeys under the roof" % storeys)
+	# The picture: down through the holes it made.
+	camera.position = Vector3(mid.x + 4.0, roof + 12.0, mid.z + 4.0)
+	camera.look_at(m.feet() + Vector3.UP * 3.0, Vector3.UP)
+	await _frames(60)
+	await _save("city_mechfall")
+	_check_log_replays()
+	print("[mechfall] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## The vertical slice (AIPlan P4): a soldier in the city, against the player's
@@ -5419,7 +5970,13 @@ func _place_trees() -> void:
 	for s in spots:
 		var variant: int = s.variant
 		var recipe := Trees.recipe(variant)
-		var id := registry.register_build(recipe, Trees.placement(s.cell, variant))
+		# Past the detail square the ground drawn is the coarse tier's, which
+		# is not the field's height: stand on what is drawn.
+		var cell: Vector3i = s.cell
+		var ground := NAN
+		if _terrain_coarse != null:
+			ground = _terrain_coarse.height_at(cell.x, cell.z)
+		var id := registry.register_build(recipe, Trees.placement(cell, variant, ground))
 		if id < 0:
 			continue
 		_index_building(id)
@@ -6144,7 +6701,7 @@ func _update_hud() -> void:
 				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload" + (" · H disasters (shift: end)" if disasters != null else ""),
+		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · N respawn"
@@ -6296,11 +6853,23 @@ func _unhandled_input(event: InputEvent) -> void:
 					_fire(_blast_radius)
 				return
 			MOUSE_BUTTON_WHEEL_UP:
-				_set_blast_radius(_blast_radius * BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius * BLAST_STEP)
 				return
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_set_blast_radius(_blast_radius / BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius / BLAST_STEP)
 				return
+	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
+	# HOLD, held while aiming sends it to attack where the crosshair is.
+	if event is InputEventKey and not event.echo and event.keycode == KEY_F \
+			and _mech_cmd != null and _player.is_possessing():
+		if event.pressed:
+			_mech_cmd.press(ai_services.now())
+		else:
+			var o := _mech_cmd.release(ai_services.now(), _aim_point())
+			print("[city] mech order: %s" % MechBrain.Order.keys()[o])
+		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	match event.keycode:
@@ -6323,6 +6892,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_K:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 20.0
 			_spawn_soldier(ai_nav.snap(_on_ground(ahead)))
+		KEY_U:
+			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
+			_spawn_squad(_on_ground(ahead))
+		KEY_Y:
+			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
+			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
 		KEY_M:
 			if _pilot.is_piloting():
 				_leave_mech()
@@ -7340,8 +7915,20 @@ func _run_stress_pass() -> void:
 	print("[stress] AI ladder, deepest level per phase: %s-> now %d (deepest %d); AI sync+run %.2f ms a tick" % [
 			ladder, ai_sched.get_level(), ai_sched.get_max_level_seen(),
 			float(_prof_sum.get("ai", 0.0)) / maxi(_tick_samples, 1)])
-	print("[stress] %s  the AI stepped down under the collapse and back up after" % (
-			"ok   " if ai_sched.get_max_level_seen() >= 1 and ai_sched.get_level() == 0
+	# Stepped down when the collapse was heavy enough to call for it -- a run of
+	# AI_HEAVY_TICKS ticks over AI_HEAVY_MS -- and back up after, either way.
+	# The check used to require a step down, full stop, and failed once the
+	# collapse itself got cheap enough never to need one (its worst ticks well
+	# under 8 ms, one at a time): the arbiter doing nothing was the right answer.
+	# The ladder itself, driven by a load that does call for it, is
+	# tools/ai_world_probe.gd's.
+	var called_for := _ai_heavy_run_max >= AI_HEAVY_TICKS
+	print("[stress] destruction for the arbiter: worst tick %.1f ms, longest run over %.0f ms %d tick(s) -- a step down %s" % [
+			_ai_destruction_peak, AI_HEAVY_MS, _ai_heavy_run_max,
+			"was called for" if called_for else "was not called for"])
+	print("[stress] %s  the AI stepped down under the collapse if it was heavy, and back up after" % (
+			"ok   " if (ai_sched.get_max_level_seen() >= 1 or not called_for)
+					and ai_sched.get_level() == 0
 			else "FAIL "))
 	print("[stress] %d shot(s) at %d building(s); %d meant to come down" % [
 			shots, target, toppled_on_purpose])
@@ -7918,6 +8505,43 @@ func _run_far_pass() -> void:
 		await _far_settle()
 		await _save_crop("fade_%d" % int(d), 0.5)
 
+	# The crossfade leaves no holes. It rests on Godot's visibility fade
+	# dithering with the same noise and the same linear distance the box's
+	# shader uses; if an engine update changes either, this is what fails.
+	# In the middle of the band, from low down so the building stands on sky:
+	#   A  the crossfade as it runs;
+	#   B  the shell alone, not fading -- the reference;
+	#   C  the shell fading with no box under it -- holes at the fade's rate.
+	# Holes are pixels of the building far from B. Complementary dithers make
+	# A nearly B; independent ones would leave half of C's holes.
+	camera.global_position = mc + Vector3(0.0, -mc.y + 1.5, -(FADE_NEAR + FADE_FAR) * 0.5)
+	camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
+	await _far_settle()
+	var shell_mi: MeshInstance3D = _shells.get(mid_id)
+	if shell_mi != null and _far_on.has(mid_id):
+		var rect := _screen_rect(_world_box(mb))
+		var img_a := await _grab()
+		var ranged: Array[GeometryInstance3D] = [shell_mi]
+		for ch in shell_mi.get_children():
+			if ch is GeometryInstance3D:
+				ranged.append(ch)
+		for g in ranged:
+			g.visibility_range_end = 0.0
+		var img_b := await _grab()
+		for g in ranged:
+			_fade_out(g)
+		_far.visible = false
+		var img_c := await _grab()
+		_far.visible = true
+		var holes_a := _holes(img_a, img_b, rect)
+		var holes_c := _holes(img_c, img_b, rect)
+		print("[far]   crossfade: %.1f%% of the building off its reference, against %.1f%% with no box" % [
+			holes_a * 100.0, holes_c * 100.0])
+		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
+				"%.3f vs %.3f" % [holes_a, holes_c])
+	else:
+		_gate_ok("Stage 5: the crossfade leaves no holes", false, "no fading shell to look at")
+
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
@@ -7934,6 +8558,47 @@ func _save_crop(shot_name: String, frac: float) -> void:
 	img.resize(full.x, full.y, Image.INTERPOLATE_NEAREST)
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
+
+
+## The screen rectangle a world box covers, clamped to the view.
+func _screen_rect(box: AABB) -> Rect2i:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for i in 8:
+		var p := box.position + box.size * Vector3(i & 1, (i >> 1) & 1, (i >> 2) & 1)
+		if camera.is_position_behind(p):
+			continue
+		var s := camera.unproject_position(p)
+		lo = lo.min(s)
+		hi = hi.max(s)
+	var view := Vector2(get_viewport().get_visible_rect().size)
+	lo = lo.clamp(Vector2.ZERO, view)
+	hi = hi.clamp(Vector2.ZERO, view)
+	return Rect2i(Vector2i(lo), Vector2i(hi - lo))
+
+
+func _grab() -> Image:
+	for i in 3:
+		await RenderingServer.frame_post_draw
+	return get_viewport().get_texture().get_image()
+
+
+## Share of `rect`, shrunk a little off its edges, where `img` is far from
+## `ref`: a hole shows what is behind, and here that is sky.
+static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
+	var r := rect.grow(-maxi(rect.size.x, rect.size.y) / 12)
+	if r.size.x <= 0 or r.size.y <= 0:
+		return 0.0
+	var off := 0
+	var n := 0
+	for y in range(r.position.y, r.end.y, 2):
+		for x in range(r.position.x, r.end.x, 2):
+			n += 1
+			var a := img.get_pixel(x, y)
+			var b := ref.get_pixel(x, y)
+			if absf(a.get_luminance() - b.get_luminance()) > 0.2:
+				off += 1
+	return float(off) / maxf(n, 1)
 
 
 ## Frames until the shell streamer has had a full quiet pass over the register.
@@ -9345,19 +10010,22 @@ func _run_dormant_pass() -> void:
 	var target: IslandManager.Dormant = islands.dormant[0]
 	var at: Vector3 = target.record.box.get_center()
 	var held := target.record.block_count()
+	var slept_id := target.piece_id
 	_blast(at, 3.0)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
 		await _frames(1)
 		guard += 1
 	await _frames(10)
+	# THAT piece, by its id -- not every piece within 20 m of the blast, which
+	# counted its neighbours' bricks too (2,814 "left" of a 1,421-brick piece).
 	var woke := false
 	var left := 0
 	for isl in islands.islands:
-		if isl.is_valid() and isl.body.global_position.distance_to(at) < 20.0:
+		if isl.is_valid() and isl.piece_id == slept_id:
 			woke = true
-			left += world.get_alive_block_count(isl.chunk)
-	_gate_ok("a blast wakes what it reaches", woke)
+			left = world.get_alive_block_count(isl.chunk)
+	_gate_ok("a blast wakes what it reaches", woke, "piece %d" % slept_id)
 	_gate_ok("and takes bricks out of it", left > 0 and left < held,
 			"%d of %d left" % [left, held])
 
@@ -9401,8 +10069,12 @@ func _run_fixture_pass() -> void:
 	var steps: int = int(f.params.get("steps", 0))
 	_gate_ok("the building builds its staircase with itself", not f.blocks.is_empty(),
 			"%d blocks" % f.blocks.size())
-	_gate_ok("every step is there", f.blocks.size() == steps,
-			"%d of %d" % [f.blocks.size(), steps])
+	# One spiral piece per two steps (StaircaseRecipe.build_flight): the count
+	# is pieces. It was steps, from before the flight was built from spiral
+	# pieces, and 27 steps are 14 pieces.
+	var pieces := StaircaseRecipe.flight_pieces(steps)
+	_gate_ok("every step is there", f.blocks.size() == pieces,
+			"%d pieces of %d for %d steps" % [f.blocks.size(), pieces, steps])
 	_gate_ok("in the SAME chunk as the building", chunk == b.chunk)
 	_gate_ok("so the city holds one chunk for the building, not two",
 			int(world.get_memory_report().chunks) == 1,
@@ -9445,13 +10117,11 @@ func _run_fixture_pass() -> void:
 	var tread: Vector3 = (found.position as Vector3) if not found.is_empty() else over
 	camera.allow_walk = true
 	camera.drive_uncaptured = true
-	# DROPPED: feet a little above the tread. The eye is a plate under the top
-	# of the head, so it goes a body's height less a plate above the feet. It
+	# DROPPED: feet a little above the tread, the eye EYE_HEIGHT above them. It
 	# was put a metre above the tread, which is the figure half a metre INTO it,
 	# and whether the solver pushed it out upwards or let it sink through was
 	# down to the shape of the box it was stuck in.
-	camera.global_position = tread + Vector3(0.0,
-			DebugCamera.BODY_HEIGHT - DebugCamera.PLATE_M + 0.3, 0.0)
+	camera.global_position = tread + Vector3(0.0, DebugCamera.EYE_HEIGHT + 0.3, 0.0)
 	camera.set_walking(true)
 	var body := camera.body()
 	var landed := 0
@@ -9483,7 +10153,6 @@ func _run_fixture_pass() -> void:
 	camera.global_position = mid + Vector3(0.0, 1.0, -9.0)
 	camera.look_at(mid, Vector3.UP)
 	await _frames(6)
-	var before := world.get_alive_block_count(chunk)
 	var stairs_before := _alive_of(chunk, f.blocks)
 	_blast(mid, 2.0)
 	var guard := 0
@@ -9494,8 +10163,16 @@ func _run_fixture_pass() -> void:
 	_gate_ok("shooting the flight takes steps out of it",
 			_alive_of(chunk, f.blocks) < stairs_before,
 			"%d of %d left" % [_alive_of(chunk, f.blocks), stairs_before])
+	# In the BUILDING's own dead list -- the steps it lost are its bricks. Not
+	# "fewer bricks than before": the rooms around the camera open while this
+	# waits and lay their furniture, and the count went up (638 -> 647).
+	var dead_steps := 0
+	for id in world.get_dead_blocks(chunk):
+		if f.blocks.has(id):
+			dead_steps += 1
 	_gate_ok("and the building is the thing that is damaged",
-			registry.get_building(0).is_damaged() and world.get_alive_block_count(chunk) < before)
+			registry.get_building(0).is_damaged() and dead_steps > 0,
+			"%d dead steps in the building's record" % dead_steps)
 
 	# The whole point: when the building comes down, the staircase goes with it.
 	var stairs_standing := _alive_of(chunk, f.blocks)
@@ -9900,15 +10577,24 @@ func _run_walk_pass() -> void:
 	print("\na brick floor costs headroom, and ducking gets it back")
 	camera.set_walking(false)
 	var room := Vector3(open.x + 30.0, 0.0, open.z)
-	# A beam with 1.40 m under it: clear standing from the ground, not clear
-	# standing on one brick course.
-	var beam := _test_block(room + Vector3(0.0, 1.5, 0.0), Vector3(6.0, 0.2, 1.2))
+	# A beam with 1.90 m under it: clear standing from the ground (the figure is
+	# four bricks, 1.68 m), not clear standing on one brick course (2.10 m), and
+	# clear again crouched on it (a brick shorter, 1.68 m). It was 1.40 m, sized
+	# for the old three-brick figure, which a four-brick one could not get under
+	# on the ground or crouched on the brick.
+	var beam := _test_block(room + Vector3(0.0, 2.0, 0.0), Vector3(6.0, 0.2, 1.2))
 	camera.global_position = room + Vector3(0.0, DebugCamera.EYE_HEIGHT, -4.0)
 	camera.look_at(Vector3(room.x, DebugCamera.EYE_HEIGHT, room.z + 6.0), Vector3.UP)
 	camera.set_walking(true)
 	await _frames(40)
+	# Until it is past the beam, in physics ticks, ten seconds at most. It was
+	# 150 drawn frames, which at a few hundred frames a second is half a second
+	# of walking -- a metre and a half of the five it had to cover.
 	_key(KEY_W, true)
-	await _frames(150)
+	var walk_ticks := 0
+	while walk_ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		walk_ticks += 1
 	_key(KEY_W, false)
 	await _frames(6)
 	_gate_ok("from the ground it walks under the beam standing",
@@ -9925,8 +10611,11 @@ func _run_walk_pass() -> void:
 	await _frames(40)
 	var ducked := false
 	_key(KEY_W, true)
-	for i in 240:
-		await _frames(1)
+	# Physics ticks, as above: until past the beam, ten seconds at most.
+	var ticks := 0
+	while ticks < 300 and camera.global_position.z <= room.z + 1.0:
+		await get_tree().physics_frame
+		ticks += 1
 		ducked = ducked or camera.is_auto_crouched()
 	_key(KEY_W, false)
 	await _frames(6)

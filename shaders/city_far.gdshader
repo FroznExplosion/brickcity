@@ -190,12 +190,25 @@ void fragment() {
         float hp = max(0.5 * fwidth(p), 1e-3);
         col = (wall_integral(p + hp) - wall_integral(p - hp)) / (2.0 * hp);
 
-        // The windows, as the fraction of this pixel that is glass. Not over
-        // a damaged band -- BuildingShell puts no glass there -- and not in a
-        // storey with no slab over it, which has none.
+        // The windows, as the fraction of this pixel that is glass. Not in a
+        // storey with no slab over it, which has none, and not in a storey
+        // whose window courses are damaged ANYWHERE, on any side: that is the
+        // rule BuildingShell.build_window_mesh puts glass by, so the two tiers
+        // agree across the swap.
         float u = along / STUD;
         bool storey_has_slab = (storey + 1) * 6 <= courses;
-        if (storey_has_slab && mask == 0xFFFFFFFFu && p >= 1.0) {
+        bool glazed = storey_has_slab && p >= 1.0;
+        if (glazed && row >= 0) {
+            for (int k = 2; k <= 4 && glazed; k++) {
+                for (int sd = 0; sd < 4; sd++) {
+                    if (band_mask(1 + storey * 7 + k, sd, row) != 0xFFFFFFFFu) {
+                        glazed = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (glazed) {
             float hu = max(0.5 * fwidth(u), 1e-3);
             float s = span / STUD;
             float cov_u = (window_cols_integral(u + hu, s) - window_cols_integral(u - hu, s)) / (2.0 * hu);

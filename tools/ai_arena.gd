@@ -20,6 +20,11 @@ var lib: GunPartLibrary
 var chunks: Array[int] = []
 ## Blocks killed by charges, for gates.
 var breached_blocks := 0
+## Every change the arena's bricks took, as the host's commands (target = the
+## chunk), so a gate can replay them into a client's copy: twin().
+var log := DamageLog.new()
+## What bricks() built, in order, to build the client's copy from.
+var _specs: Array = []
 ## chunk -> [body RID, block -> shape indices]
 var _shapes := {}
 var _ai_us_sum := 0
@@ -61,6 +66,7 @@ func bricks(lo: Vector3i, size: Vector3i) -> int:
 			for z in size.z:
 				w.place_block(c, lo + Vector3i(x, y * 3, z), palette["brick_1x1"], 4)
 	w.set_chunk_anchored(c, true)
+	_specs.append([lo, size])
 	var body := StaticBody3D.new()
 	body.collision_layer = Layers.STRUCTURE
 	var built: Dictionary = w.add_chunk_shapes(body.get_rid(), c, Vector3.ZERO, false)
@@ -98,10 +104,17 @@ func room(x0: int, z0: int, wx: int, wz: int, courses: int, door_x: int, door_w:
 	return {"room": RoomTactics.make(Transform3D(), inner, id), "opening": opening}
 
 
+## What a round does to the arena's bricks, as the city's StructuralDamage says:
+## a gun wears them, ordnance blasts them.
 func structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+	if bool(shot.get("blast", false)):
+		breach(point, float(shot.radius))
+		return
 	for c in chunks:
 		if w.is_chunk_alive(c):
-			_disable(c, w.chip_hit(c, point, float(shot.radius), int(shot.hp)))
+			var e := log.record(0, DamageLog.Kind.CHIP, c, point, float(shot.radius), Vector3.ZERO,
+					int(shot.hp))
+			_disable(c, DamageLog.apply_entry(w, c, e))
 	var r := Vector3.ONE
 	s.ai_nav.invalidate_box(AABB(point - r, r * 2.0))
 
@@ -110,12 +123,44 @@ func structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
 func breach(point: Vector3, radius: float) -> void:
 	for c in chunks:
 		if w.is_chunk_alive(c):
-			var killed := w.apply_hit(c, point, radius)
+			var e := log.record(0, DamageLog.Kind.BLAST, c, point, radius)
+			var killed := DamageLog.apply_entry(w, c, e)
 			breached_blocks += killed.size()
 			_disable(c, killed)
 	s.ai_world.sync()
 	var r := Vector3.ONE * (radius + 1.0)
 	s.ai_nav.invalidate_box(AABB(point - r, r * 2.0))
+
+
+## The client: the same bricks built in a fresh world, the log applied. Returns
+## how many blocks agree with this world on alive and let-go, and of how many.
+func twin_agrees() -> Vector2i:
+	var w2 := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w2)
+	var twins: Array[int] = []
+	for spec in _specs:
+		var lo: Vector3i = spec[0]
+		var size: Vector3i = spec[1]
+		var c := w2.create_chunk(lo, Vector3i(size.x, size.y * 3, size.z))
+		for x in size.x:
+			for y in size.y:
+				for z in size.z:
+					w2.place_block(c, lo + Vector3i(x, y * 3, z), pal["brick_1x1"], 4)
+		w2.set_chunk_anchored(c, true)
+		twins.append(c)
+	for e in log.entries:
+		DamageLog.apply_entry(w2, twins[chunks.find(e.target)], e)
+	var same := 0
+	var n := 0
+	for i in chunks.size():
+		var a_boxes: Array = w.get_block_boxes(chunks[i])
+		var b_boxes: Array = w2.get_block_boxes(twins[i])
+		for k in a_boxes.size():
+			n += 1
+			if k < b_boxes.size() and bool(a_boxes[k].alive) == bool(b_boxes[k].alive) \
+					and w.is_support_broken(chunks[i], k) == w2.is_support_broken(twins[i], k):
+				same += 1
+	return Vector2i(same, n)
 
 
 func _disable(c: int, killed: PackedInt32Array) -> void:
@@ -152,7 +197,8 @@ func player(feet: Vector3, hp := 1e7, armed := true, player_index := 0) -> Pawn:
 		g.exclude = [p.body.get_rid()] as Array[RID]
 		g.on_structure_hit = structure_hit
 		p.body.add_child(g)
-		var gun := rifle(99 + player_index)
+		# The same rifle for every player: a gate compares what they do with it.
+		var gun := rifle(99)
 		gun.visible = false
 		p.eye.add_child(gun)
 		g.equip(gun)

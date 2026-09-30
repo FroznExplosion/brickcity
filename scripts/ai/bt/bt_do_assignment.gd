@@ -21,6 +21,8 @@ const SWEEP_TIME := 1.8
 const THROW := 0.4
 const PLACE := 0.8
 const ARRIVED := 0.45
+## Stuck this near its point, a member is there as far as the squad cares.
+const NEAR_ENOUGH := 2.5
 ## A follower this close to its place in the file stands, rather than
 ## re-pathing to a point that moves a hand's breadth every think.
 const FOLLOW_SLACK := 0.9
@@ -159,6 +161,10 @@ func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 	so.pawn.intents.crouch = false
 	so.masked_move = a.masked
 	so.state = "bound" if a.masked else "move"
+	# A bounding mover runs; the covering half does the shooting. (Its own rounds
+	# round the enemy would be the suppression that lets it go.)
+	if a.masked:
+		so.fire_ok = false
 	var r := so.move_to(to, a.run)
 	if r == 1 or not _far(so, to, ARRIVED):
 		_arrived_at = now
@@ -170,6 +176,16 @@ func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 		so.masked_move = false
 		so.stop()
 		so.report(SquadMsg.StatusKind.BLOCKED)
+	elif so.stuck >= Soldier.MAX_STUCK:
+		# Stuck short of it -- a squadmate on the next slot, a corner the body
+		# will not take: near enough counts as there, further is blocked. Either
+		# way the squad hears back; silence held a stack's barrier for good.
+		_arrived_at = now
+		so.masked_move = false
+		var near := not _far(so, to, NEAR_ENOUGH)
+		so.stuck = 0
+		so.stop()
+		so.report(SquadMsg.StatusKind.REACHED if near else SquadMsg.StatusKind.BLOCKED)
 
 
 func _hold(so: Soldier, a: SquadMsg.Assignment, seen: bool) -> void:

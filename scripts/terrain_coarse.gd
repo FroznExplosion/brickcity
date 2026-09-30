@@ -29,6 +29,8 @@ const LEVELS := 6
 var _tris := 0
 var _blocks := 0
 var _rings := 0
+## Tile -> the sample step of the block covering it, for `height_at`.
+var _tile_step := {}
 
 
 ## Fill everything inside `reach_tiles` of the origin that `hole` does not
@@ -106,6 +108,11 @@ func build(hole: Rect2i, reach_tiles: int, material: Material) -> void:
 			steps.append(STEP)
 			covered[c] = true
 
+	for i in blocks.size():
+		for dz in spans[i]:
+			for dx in spans[i]:
+				_tile_step[blocks[i] + Vector2i(dx, dz)] = steps[i]
+
 	# Baked in parallel: `build_coarse` only reads the field.
 	var baked: Array[Dictionary] = []
 	baked.resize(blocks.size())
@@ -147,6 +154,37 @@ func build(hole: Rect2i, reach_tiles: int, material: Material) -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		_rings += 1
+
+
+## The height this tier DRAWS at a column (metres), or NAN where it draws
+## nothing. Not the field's height: a coarse cell stands for step^2 columns.
+## For something standing on it -- a tree past the detail square
+## (Docs/Impostors.md 8.2) -- to stand on what is drawn rather than float
+## over it or sink in.
+##
+## Mirrors BrickTerrain::build_coarse: samples every `step` studs on a grid
+## aligned to multiples of `step` (a block's origin always is); a blocky cell
+## (step under the smooth step) is flat at the LOWEST of its four corners; a
+## smooth block is a grid through them, read here bilinearly.
+func height_at(x: int, z: int) -> float:
+	var tile := BrickTerrain.get_tile_studs()
+	var t := Vector2i(floori(float(x) / tile), floori(float(z) / tile))
+	if not _tile_step.has(t):
+		return NAN
+	var step: int = _tile_step[t]
+	var x0 := floori(float(x) / step) * step
+	var z0 := floori(float(z) / step) * step
+	var plate := BrickWorld.get_plate_metres()
+	var a := float(BrickTerrain.surface_plate(x0, z0) + 1) * plate
+	var b := float(BrickTerrain.surface_plate(x0 + step, z0) + 1) * plate
+	var c := float(BrickTerrain.surface_plate(x0, z0 + step) + 1) * plate
+	var d := float(BrickTerrain.surface_plate(x0 + step, z0 + step) + 1) * plate
+	var smooth := BrickTerrain.get_coarse_smooth_step()
+	if smooth <= 0 or step < smooth:
+		return minf(minf(a, b), minf(c, d))
+	var fx := (float(x) - x0) / step
+	var fz := (float(z) - z0) / step
+	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fz)
 
 
 func triangle_count() -> int:

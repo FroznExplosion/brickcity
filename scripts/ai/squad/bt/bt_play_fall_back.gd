@@ -10,8 +10,12 @@ const BACK := 12.0
 var _spots: Array[Vector3] = []
 var _holding := false
 
+## This play's generation (Squad.begin_play).
+var _gen := 0
+
 
 func _enter() -> void:
+	_gen = (agent as Squad).begin_play()
 	var q := agent as Squad
 	var s := q.services
 	var now := s.now()
@@ -64,4 +68,4 @@ func _tick(_delta: float) -> Status:
 func _exit() -> void:
 	var q := agent as Squad
 	if q != null:
-		q.clear_assignments()
+		q.clear_assignments(_gen)

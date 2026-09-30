@@ -547,6 +547,73 @@ aggro table and meter**.
 completes in the arena; a squad advances only while masked; the aggro meter moves with damage and
 holds with hysteresis; callout markers appear only when heard and seen.
 
+**Done (2026-09-29).** Built in the ai-p6 worktree; the squad code was adopted onto main mid-way
+(93dcac2, merged there with the engage policy, A21's no-crouch rule, and morale that recovers
+only out of the enemy's sight), and the rest — the city, two of the four gates, the docs — came
+after on ai-p6b.
+- **The layers talk in messages** (`scripts/ai/squad/squad_msg.gd`, AI.md 2): `Order` → `Report`
+  (ACCEPTED at once, then DONE or FAILED with a reason; a replaced order is FAILED "superseded"),
+  `Assignment` → `Status` (REACHED, BLOCKED, DONE), every one with an id. A `Squad` node
+  (`squad/squad.gd`) runs its own LimboAI tree (`SquadTree`) as a TACTICAL job; its blackboard is
+  every member's parent scope, so the play and target live one level up. Members have an Order
+  branch above their own fight (`BTHasAssignment` › `BTDoAssignment`); with no assignment a member
+  fights on its own tree.
+- **Clearing a room** (`bt_play_clear_room.gd`, `room_tactics.gd`): stack slots either side of the
+  way in, and the play waits on every REACHED (the reply barrier); a flashbang in; entry
+  crisscross, 0.6 s apart — the first through crosses to the far corner, the second to the near one
+  on the other side, the rest buttonhook; each sweeps its sector, firing at what shows; clear when
+  all have swept and nothing is in sight in the room. The points are worked out from the room's box
+  and its opening when needed, not baked — a hole the squad blew is as good a way in as a door.
+- **Mouse-holing:** no door, or the door watched by a known defender, and the squad makes its own:
+  along the walls facing it, clear of corners and the door, the point with the fewest bricks
+  through and the least in the defender's view. The breacher sets the charge, rejoins the stack,
+  "Breaching!", and the blast goes through `AIServices.on_breach` — in the city the host's `_blast`,
+  a logged `BLAST` that clients replay.
+- **Masked moves** (`squad/masking.gd`): a mover goes only while the enemy is suppressed (a hostile
+  round within 1.6 m of it in the last 0.8 s), looking elsewhere (outside a 50° cone, or
+  reloading), or blind to it (bricks, smoke). Checked every physics tick and inside `move_to`. A
+  bounding mover holds its fire: the covering half shoots, or a mover's own rounds would be the
+  suppression that lets it go.
+- **Plays:** bounding overwatch, search in pairs, fall back (and, since the adoption, travel in
+  formation for the commander). **Morale:** −0.35 per member lost, and losing half the squad breaks
+  it; −0.04/s per member pinned. **Attack tokens:** two shooters per target, asked for only by a
+  soldier that would fire this tick with a clear line. **Suppression fire** over the enemy's cover,
+  never through bricks or with a squadmate within 0.6 m of the line.
+- **Aggro** (`aggro_table.gd`, `aggro_meter.gd`, AI.md 8): per enemy side, a row per player-side
+  entity — hp dealt to the side, rounds fired in earshot, seconds seen, seconds within 10 m —
+  halving every 8 s; the focus moves only when another row leads by 25 % and by 15, and
+  `FactionKnowledge.best` returns it while it is fresh, so the soldiers aim at whoever holds it. The
+  meter shows a player's pilot and mech shares and marks the holder; a pawn with meta
+  `aggro_kind = "mech"` stands in for the mech until P7 gives it a body.
+- **Callouts** (`callouts.gd`, `callout_hud.gd`, AI.md 6.5, A18): heard within 35 m of the
+  listener's camera; an enemy speaker in sight gets a named subtitle and a depth-tested marker,
+  unseen only an unattributed subtitle; a friendly is always named and marked through walls. One
+  line per squad every 1.5 s, the same line not within 6 s, a line waiting over 2 s dropped, urgent
+  lines first. "In view" is worked out from the camera's FOV: `Camera3D.is_position_in_frustum`
+  needs a drawn viewport and is wrong headless.
+- **City:** the breach hook is `_blast`; entering a pawn (V) shows the callouts and the aggro meter;
+  **U** spawns a squad of four 30 m ahead, ordered to advance on the player when on foot.
+- Gates: **`tools/room_clear_probe.gd` 15** — two squads, two rooms: in through the door, the hidden
+  defender dropped, DONE; with the door watched, a hole along the wall and in through it; both
+  crisscross into four corners, nothing through a wall, nobody hit by a squadmate.
+  **`tools/squad_advance_probe.gd` 10** — 124 m moved masked and 0.00 m unmasked; with every
+  suppressor reloading the movers hold (917 → 1103 held mover-ticks); never more than two
+  shooting the player; searched for in pairs (2 and 2); two dropped, the rest fall back from 10 to
+  34 m and hold. **`tools/aggro_probe.gd` 7** — the table's margin and half-life; player 1 shoots
+  and takes the focus (share 0.33 → 0.98) and both soldiers aim at it; player 2 shooting as hard
+  does not take it; player 1 stops and it moves; the mech's share shows. **`tools/callout_probe.gd`
+  9** — the six cases of AI.md 6.5, the subtitles on screen, the rate limits. **City `-- --squad`
+  4** — in a sealed tower a squad blows its own door (a BLAST in the log), stacks, flashes, goes in,
+  drops the defender, reports DONE, and the log still replays.
+- **Found, not fixed:** sight and aim test the chest only, so a player standing behind a wall that
+  hides the chest but not the head is not seen; the advance probe's walls are sized round it. A
+  head test (the chest, then the head) was tried in the ai-p6 worktree (commit 95461fa) and left
+  out here so as not to shift the engage policy's tuning under it.
+- **Deferred:** flank, flush and bait (flush needs grenades; flank needs a path cost for time in
+  the enemy's view), the orderly advance in file, slicing corners, blind fire. Perception is still
+  per soldier, not per squad round-robin (AI.md 4.2); the faction's radio delay waits for the
+  commander. The flash has no effect on a player's view yet — `AIServices.flashed` is the hook.
+
 ### P7 — Mechs and weight · L
 
 Brick-built mech on the ported motor, in studs; mech map with clearance (R8) and breach links;
@@ -557,6 +624,69 @@ from P5; **the fall rule** with the plate handling of R9.
 section drops it, on a floor over columns does not; an enemy mech breaches a building to reach
 infantry; the player's mech follows, holds, and attacks an aimed area. Loopback agrees on every
 break.
+
+**Done (2026-09-29).**
+- **Headroom** (AI.md 3.10, R6/R7): every `solve_stress` now also leaves, per block, how much
+  more mass could rest on it before a tension joint on its way down lets go — worked out in the
+  same pass order, forward: a joint fails when a block's load passes `capacity × contact`, so its
+  own room is the difference, and a block's headroom is the least of its own and its supporters'
+  (R7's worst case: the whole added mass reaches every joint below). `INF` where every way down is
+  compression — almost every block of a standing building. `BrickWorld.get_headroom`; −1 where
+  the chunk has not been solved (R6: rather than baking per recipe, the lookup asks for a solve —
+  the city already solves every building it promotes).
+- **Weight for everything that stands on bricks** (`scripts/ai/weight_tracker.gd`, A16): the host
+  looks up each bearer's foot block when it changes (`AIWorld.block_at`, new): headroom `INF` —
+  nothing; finite — a `LOAD` is logged (R5: it takes part in every later solve) and, if the
+  bearer is heavier, a solve; stepping off — `UNLOAD`. A person is 1.0 (a 2×4 brick is 2.4), a
+  mech 45. Owner ids are negative so they never meet a piece's. The player's pawn, every soldier
+  and every mech are bearers in the city.
+- **The fall rule** (`scripts/mech/fall_rule.gd`, AI.md 3.11, A12): energy in bricks of fall —
+  the height from the top of the fall, so a dash off a roof counts as a drop — against T = 6 (3 on
+  a floor with finite headroom); a break costs A = 8.5 and the rest is CARRIED, possibly negative,
+  to the next floor, judged on it plus the height fallen since. The break is a `SHEAR` with the
+  new `FLAG_WHOLE` (every block in the ball lets go on its own, not a peeled clump), over the
+  mech's whole footprint plus half a metre — a hole it does not fit through is a hole it lands on
+  the rim of. **R9:** building collision is off from the broken floor down to the next building
+  floor under it (posts and walls under a floor are where its feet were), pieces that come off
+  under it are collision exceptions, the rule ignores pieces when it looks for the floor, and the
+  pieces land quietly (`IslandManager.quiet_landings`). A building still in its shell is made
+  bricks when a mech lands on it (A20).
+- **The mech map** (R8): `AINav.set_agent(span, head, crouch, step, drop, safe_drop)` — the
+  navigation that was hard-coded to a two-stud figure takes any footprint; a mech's is 10 studs,
+  48 plates of head, 9 of step, 17 of drop (a drop past that is the fall rule's). The city keeps a
+  second AINav with those numbers, invalidated by everything that invalidates the figure's.
+- **Mechs with brains** (`scripts/mech/mech_brain.gd`, `mech_tree.gd`, `bt/`): the brain half of
+  the titan contract — it fills the same TitanIntents the pilot's keys do. It senses from the
+  cockpit, fires every tick at the nearest hostile it sees with a clear line (never through a
+  wall, never with a friend in the way), and walks the mech map, steering torso-local every tick
+  as the torso turns. **The enemy's mech:** in sight — hold range and shoot; known, behind bricks —
+  **breach**: a launcher (ordnance: a `BLAST` through `on_structure_hit`) into the first brick on
+  the line from its cockpit to them until it sees them (AI.md 6.4). **The player's mech:** on the
+  one button (`mech_command.gd`, A4) — tap FOLLOW ↔ HOLD, held while aiming ATTACK_AREA at the aim
+  ray's point; it fights back whatever the order. Its brain is off while piloted.
+- **City:** weight on the host; the fall rule on every mech; **Y** spawns an enemy mech 40 m
+  ahead; **F** on foot is the mech's button (out of the cockpit it holds where it stands).
+- Gates: **`tools/mech_fall_probe.gd` 4** — five-storey towers: from 5 bricks it lands (energy
+  5.0), from 6 it breaks the roof and stops (6.0 → 3.9), from 12 three floors (12.0 → 9.9 → 7.7 →
+  5.5); a client applying the log lets the same 44 blocks go. **`tools/pawn_weight_probe.gd` 6** —
+  headroom is the solve's (one unit under it holds, one over it breaks; a floor on a column
+  `INF`); a balcony left 0.5 of room by wreckage: a person on the floor over the column changes
+  nothing, a person on the balcony drops it and falls with it, an UNLOAD on the ground; the client
+  agrees. **`tools/mech_ai_probe.gd` 6** — the enemy's mech breaches a roofed building (one
+  rocket, 66 bricks) and drops both infantry in 8.8 s, no round through a wall, the client agrees
+  on 1,732 blocks; the player's mech follows a 22 m walk (6.1 m at the end, 8.8 m at most), holds
+  while the pilot walks 22 m off, and sent to an area behind a 6 m wall goes round it and drops the
+  enemy there. **City `-- --mechfall` 2** — twelve bricks onto a tower's roof: three floors, three
+  SHEARs, standing three storeys down; the log replays.
+- **Found on the way:** a mech's capsule is as wide as a floor plate, so it came to rest on the
+  posts under the plate it broke, then on the plate itself, then wedged in a hole narrower than
+  itself — each a case R9 had in words. And a roof has openings: the gate measures the surface
+  under the whole footprint, not under its middle.
+- **Not done:** the mech is not a `Pawn`, so soldiers do not shoot at it and aggro's mech row is a
+  stand-in until it is; the mech body is still greybox (the brick-built mech); weight is by the
+  one block under a bearer's middle (a mech spans many — allowed to be slightly stupid, A10); no
+  mech-rated storeys or deliberate drop-through yet; the enemy mech has no dash, evade or melee;
+  the one button is gated in the arena, not in the city.
 
 ### P8 — Many · L
 
