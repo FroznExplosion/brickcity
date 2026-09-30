@@ -2264,9 +2264,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 						b.damage_profile))
 	mi.material_override = brick_material
 	mi.transform = b.xform
-	# Stage 5: a banded shell dithers out over the fade band while the far box
-	# dithers in over the same pixels (city_far.gdshader, `crossfade`), so the
-	# swap at SHELL_DETAIL_RANGE is a blend rather than a pop.
+	# Stage 5: a banded shell fades out over the fade band, blended over its
+	# far box drawn whole beneath it (city_far.gdshader), so the swap at
+	# SHELL_DETAIL_RANGE is a blend rather than a pop.
 	var fades := not coarse and not b.is_build() and not b.is_materialised()
 	if fades:
 		_fade_out(mi)
@@ -6189,7 +6189,8 @@ func _drop_shadow_proxy(id: int) -> void:
 ## Room for this many far instances before the buffer has to grow.
 const FAR_INITIAL_CAPACITY := 256
 ## Stage 5, the crossfade. A banded shell is fully drawn nearer than FADE_NEAR
-## and gone at FADE_FAR, dithered in between; the far box is the complement.
+## and gone at FADE_FAR, alpha-blended in between over its far box, which is
+## drawn whole under it (city_far.gdshader): a real crossfade.
 ## Coarse -> banded at FADE_IN_AT; banded -> coarse past FADE_FAR (the old
 ## SHELL_DETAIL_RANGE + SHELL_HYSTERESIS), where the shell has faded out.
 const FADE_NEAR := 80.0
@@ -6198,12 +6199,14 @@ const FADE_IN_AT := 130.0
 var _far_fade := {}   ## building id -> 1.0 while its box crossfades with a shell
 
 
-## Godot's own visibility-range fade, over the band: it dithers the shell out
-## with the same interleaved-gradient noise city_far.gdshader dithers the box
-## in with, so the two are each other's complement pixel for pixel.
+## Godot's own visibility-range fade over the band. It BLENDS a fading
+## instance, alpha = smoothstep over [end - margin, end + margin] from its
+## bounds' centre (renderer_scene_cull / render_forward_clustered, 4.6) -- so
+## end and margin are set for that span to be exactly FADE_NEAR..FADE_FAR,
+## and the shell is gone by the time the streamer frees it.
 func _fade_out(g: GeometryInstance3D) -> void:
-	g.visibility_range_end = FADE_FAR
-	g.visibility_range_end_margin = FADE_FAR - FADE_NEAR
+	g.visibility_range_end = (FADE_NEAR + FADE_FAR) * 0.5
+	g.visibility_range_end_margin = (FADE_FAR - FADE_NEAR) * 0.5
 	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 ## Rows of damage before the texture has to grow.
 const FAR_DMG_INITIAL_ROWS := 16
@@ -6245,8 +6248,8 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
 				or b.is_build())
-	# Under a banded shell that is fading (Stage 5), drawn too, flagged to
-	# dither in where the shell dithers out.
+	# Under a banded shell that is fading (Stage 5), drawn too, flagged so it
+	# sits just inside the shell for the shell to blend over.
 	var fade := 0.0
 	if not want and _shells.has(b.id) and not b.is_build() and not b.is_materialised() \
 			and not b.toppled and not _shell_coarse.get(b.id, false):
@@ -6400,8 +6403,6 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("course_colours", courses)
 	mat.set_shader_parameter("base_colour", _far_rgb(TowerRecipe.BASE_COLOUR))
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
-	mat.set_shader_parameter("fade_near", FADE_NEAR)
-	mat.set_shader_parameter("fade_far", FADE_FAR)
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
 	_far.multimesh = mm
@@ -8271,8 +8272,15 @@ func _run_tree_pass() -> void:
 			meshed += 1
 	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
 		_trees_placed, _inst_sets.size(), near, far, meshed])
-	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
-			"%d of %d" % [near + far, _trees_placed])
+	# Counted by copy, not by buffer: a tree crossing the mesh-to-card band is
+	# in both buffers, dithered into itself.
+	var drawn := 0
+	for id in trees:
+		var tset: ImpostorLod = _inst_sets[_inst_key(registry.get_building(id))]
+		if tset.is_drawn(int(_inst_handle[id])):
+			drawn += 1
+	_gate_ok("every tree is drawn by its set", drawn == _trees_placed,
+			"%d of %d" % [drawn, _trees_placed])
 	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
 	var baked := 0
 	for s in _inst_sets.values():
@@ -8347,8 +8355,8 @@ func _run_far_pass() -> void:
 		var box: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
-		# A box under a banded shell that is fading (Stage 5) is its
-		# complement, dithered on the other pixels: one drawer, not two.
+		# A box under a banded shell that is fading (Stage 5) is what the
+		# shell blends over: one building drawn, not two.
 		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
 		elif not shell and not box:
@@ -8440,8 +8448,9 @@ func _run_far_pass() -> void:
 	camera.global_position = aim + Vector3(0.0, 0.0, -(SHELL_DETAIL_RANGE - 70.0))
 	camera.look_at(aim, Vector3.UP)
 	await _far_settle()
-	# Its far box is still there, flagged to dither in only where the banded
-	# shell dithers out (Stage 5) -- inside FADE_NEAR, nowhere.
+	# Its far box is still there, flagged, just inside the banded shell for
+	# the shell's fade to blend over (Stage 5); inside FADE_NEAR the shell is
+	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
 			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
 			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
@@ -8477,7 +8486,10 @@ func _run_far_pass() -> void:
 	await _far_settle()
 	_gate_ok("  closer in, its own shell and no card", _shells.has(b1)
 			and (_shells[b1] as MeshInstance3D).mesh != null
-			and not set_.is_drawn(int(_inst_handle[b1])))
+			and not set_.is_drawn(int(_inst_handle[b1])),
+			"shell %s, mesh %s, card tier %d, %.0f m" % [_shells.has(b1),
+			_shells.has(b1) and (_shells[b1] as MeshInstance3D).mesh != null,
+			set_.tier_of(int(_inst_handle[b1])), bb1.xform.origin.distance_to(camera.global_position)])
 	# Damaged, it keeps its exact shell even out there.
 	var bb2 := registry.get_building(b2)
 	_promote(b2)
@@ -8509,7 +8521,8 @@ func _run_far_pass() -> void:
 	camera.look_at(mc, Vector3.UP)
 	await _far_settle()
 	var banded: bool = _shells.has(mid_id) and not _shell_coarse.get(mid_id, true)
-	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_end == FADE_FAR
+	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_fade_mode \
+			== GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_gate_ok("Stage 5: in the fade band, a banded shell that fades out", faded,
 			"banded %s" % banded)
 	_gate_ok("  and its far box, flagged to fade in", _far_on.has(mid_id)
@@ -8520,15 +8533,15 @@ func _run_far_pass() -> void:
 		await _far_settle()
 		await _save_crop("fade_%d" % int(d), 0.5)
 
-	# The crossfade leaves no holes. It rests on Godot's visibility fade
-	# dithering with the same noise and the same linear distance the box's
-	# shader uses; if an engine update changes either, this is what fails.
+	# The crossfade leaves no holes. It rests on how Godot fades an instance
+	# (blended, over [end - margin, end + margin] from its bounds' centre);
+	# if an engine update changes that, this is what fails.
 	# In the middle of the band, from low down so the building stands on sky:
 	#   A  the crossfade as it runs;
 	#   B  the shell alone, not fading -- the reference;
 	#   C  the shell fading with no box under it -- holes at the fade's rate.
-	# Holes are pixels of the building far from B. Complementary dithers make
-	# A nearly B; independent ones would leave half of C's holes.
+	# Holes are pixels of the building far from B: the box under the blend
+	# makes A nearly B, where C shows the sky through the fading shell.
 	camera.global_position = mc + Vector3(0.0, -mc.y + 1.5, -(FADE_NEAR + FADE_FAR) * 0.5)
 	camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
 	await _far_settle()
