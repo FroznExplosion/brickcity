@@ -637,9 +637,26 @@ counter is a hard counter, and they decay so a player who changes style is follo
   squad falls back on its own. **Reinforcements**: income over time, a wanted strength in points,
   a squad's roster drawn from the doctrine's weights within the budget, asked of its host.
 
-Not yet: the sector grid, off-screen fights by points, a killable commander and radio, CLEAR_ROOM
-orders against the city's rooms (the play exists; the commander does not yet build a
-`RoomTactics` from a city building), and vehicles.
+Also built (2026-09-29, the second pass):
+
+- **Rooms** — `CityRooms.at` makes a city building's room into a `RoomTactics` with its widest
+  walkable hole as the way in (or none: the play blows its own door). With the enemy in a room
+  and a squad of three or more free, the commander orders **CLEAR_ROOM**; one squad to a room; a
+  room that failed twice is given up. Plays hand out assignments by generation, so a play that
+  leaves never wipes the next one's orders; a stacker that cannot reach its slot tries a spare,
+  and stragglers are not waited for.
+- **`SectorGrid`** — 32 m sectors of threat seen, losses taken (decaying, 60 s half-life) and own
+  strength; the host spawns on the safest of the spots its survey passes.
+- **`PointsBattle`** — Red Dawn's ratio table and resolve time for fights nobody watches; a front
+  goes real-time when a player is within 100 m.
+- **The HQ** — an officer and a radio in the world (the arena puts them on the top floor of a
+  standing building 25-70 m from the fight). Radio down: nothing can be called in, and orders
+  reach only squads within 40 m of the HQ. Officer dead: nothing more is decided. Both: the side
+  fights leaderless, its points x0.6 in any front.
+- **By truck** — a reinforcement can be bought arriving by truck (`TransportTruck`,
+  [AIVehicles.md](AIVehicles.md) step 1).
+
+Not yet: vehicles past the truck, and a whole-map encounter to put fronts in.
 
 ---
 

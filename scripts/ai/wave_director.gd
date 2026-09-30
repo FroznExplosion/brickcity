@@ -47,6 +47,10 @@ const HQ_WITHIN := 70.0
 const RADIO_HP := 120.0
 ## The HQ is at least this far from the focus: out of its collapse.
 const HQ_CLEAR := 25.0
+## A truck sets out this far from the focus.
+const TRUCK_OUT := 70.0
+## ...and starts within this height of the fight.
+const TRUCK_LEVEL := 1.5
 ## The share of a wave put inside the focus building, when it has floors.
 const SPAWN_EVERY := 0.6
 const FIRST_WAVE_AFTER := 4.0
@@ -110,6 +114,8 @@ var _next_profile := 0.0
 var hq_officer: Soldier
 var hq_radio: StaticBody3D
 var hq_building := -1
+## Trucks bringing squads (TransportTruck).
+var trucks: Array[TransportTruck] = []
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
@@ -166,6 +172,7 @@ func setup(p_city: Node3D) -> void:
 	add_child(commander)
 	commander.alive_cap = ALIVE_CAP
 	commander.spawner = request_squad
+	commander.can_truck = true
 	commander.room_at = func(p: Vector3) -> Dictionary: return CityRooms.at(city, p)
 
 
@@ -280,9 +287,11 @@ func _physics_process(_delta: float) -> void:
 
 ## The commander's spawner: put down a squad of these kinds. False while one is
 ## still going down, or before the fight is set up.
-func request_squad(kinds: Array[StringName]) -> bool:
+func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> bool:
 	if not _ready_to_fight or kinds.is_empty():
 		return false
+	if arrival == &"truck":
+		return _send_truck(kinds)
 	# A batch still going down when the next is asked for -- its spots kept
 	# failing (a building came down under them) -- is given up: the commander's
 	# new call is the one that counts, and waiting on the old one refused every
@@ -888,7 +897,8 @@ func run_gate() -> void:
 		so.pawn.health.apply_impact(1e9, &"")
 	await _frames(3)
 	(city.ai_services.judge as DecisionJudge).resume()
-	commander.force_reinforce()
+	commander.budget = Commander.BUDGET_CAP
+	commander.force_reinforce(&"foot")
 	await _until(func() -> bool: return _left_to_spawn <= 0 and alive.size() >= Commander.CLEAR_WITH, 30.0)
 	var spot := _room_spot()
 	var cleared0 := int(commander.orders_given.get("CLEAR_ROOM", 0))
@@ -911,10 +921,62 @@ func run_gate() -> void:
 			"room spot %v; %s" % [spot, commander.log.slice(maxi(commander.log.size() - 5, 0))])
 	# Either it gets to the door, or it says it cannot (a city tower's slots
 	# can all be walled off) and the commander hears so -- never silence.
-	var could_not := commander.log.any(func(l: String) -> bool: return "could not stack" in l)
-	ok.call("and the squad stacks on the way in -- or reports it cannot",
-			stacked or could_not, _clear_detail())
+	# Or the clear came to an end and said why (Commander._clearing emptied by
+	# the squad's report): never a squad stood at a door for good.
+	var concluded := commander._clearing.is_empty() \
+			and int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0
+	ok.call("and the squad stacks on the way in -- or reports why it cannot",
+			stacked or concluded, _clear_detail())
 	print("[arena] room clear: %s" % ("stacked" if stacked else "could not stack, reported"))
+
+	# A squad by truck: it drives in from out past the fight and lets them out
+	# on the side away from the player.
+	(city.ai_services.judge as DecisionJudge).pause()
+	for so in alive.duplicate():
+		so.pawn.health.apply_impact(1e9, &"")
+	await _frames(3)
+	(city.ai_services.judge as DecisionJudge).resume()
+	commander.budget = Commander.BUDGET_CAP
+	var sent := commander.force_reinforce(&"truck")
+	var truck: TransportTruck = trucks.back() if not trucks.is_empty() else null
+	ok.call("the commander sends a squad by truck", sent and truck != null,
+			"%s" % [commander.log.slice(maxi(commander.log.size() - 2, 0))])
+	if truck != null:
+		var t0 := truck.global_position
+		var up0 := alive.size()
+		await _until(func() -> bool: return truck.state != "driving", 60.0)
+		await _frames(10)
+		var drove := truck.global_position.distance_to(t0)
+		ok.call("it drives in and lets them out", truck.state == "arrived" and truck.cargo.is_empty()
+				and alive.size() - up0 >= 2 and drove > 10.0,
+				"%s (%s), drove %.0f m, %d out; against %s; path %d pts" % [truck.state,
+				truck.stopped_because, drove, alive.size() - up0, truck.stuck_on, truck._path.size()])
+		var me := _player()
+		var lee := 0
+		var got_out := alive.slice(up0)
+		for so in got_out:
+			# The far side of the truck from the player.
+			if (so.pawn.feet() - truck.global_position).dot(me.feet() - truck.global_position) < 0.0:
+				lee += 1
+		ok.call("on the side away from the player", got_out.size() > 0 and lee * 2 >= got_out.size(),
+				"%d of %d in its lee" % [lee, got_out.size()])
+		# A second truck, shot to pieces on the way: its squad dies with it.
+		commander.budget = Commander.BUDGET_CAP
+		var lost0 := commander.lost_points
+		var up1 := alive.size()
+		for so in alive.duplicate():
+			so.pawn.health.apply_impact(1e9, &"")
+		await _frames(3)
+		lost0 = commander.lost_points
+		up1 = alive.size()
+		if commander.force_reinforce(&"truck"):
+			var second_truck: TransportTruck = trucks.back()
+			await _frames(30)
+			second_truck.health.apply_impact(1e9, &"")
+			await _frames(5)
+			ok.call("a truck shot to pieces takes its squad with it",
+					alive.size() == up1 and commander.lost_points >= lost0 + UnitCatalog.points(&"truck") + 2.0,
+					"%d up (was %d); lost %.1f -> %.1f pts" % [alive.size(), up1, lost0, commander.lost_points])
 
 	# The HQ: shoot the radio and nobody can be called; kill the officer and
 	# nothing more is decided.
@@ -1197,6 +1259,95 @@ func _check_hq() -> void:
 	var fit := survey.building_fit(hq_building)
 	if not bool(fit.ok) and fit.why != "not bricks yet":
 		(hq_radio.get_node("HealthPool") as HealthPool).apply_impact(1e9, &"")
+
+
+# --- trucks -------------------------------------------------------------------------
+
+## A squad by truck (TransportTruck): from a start on open ground out past the
+## fight, on the far side of it from the player, to the fight; its cargo is put
+## down at the tailgate when it stops.
+func _send_truck(kinds: Array[StringName]) -> bool:
+	var start := _truck_start()
+	if start == Vector3.INF:
+		return false
+	var goal: Vector3 = _street_of(focus)
+	var to := goal - start
+	var t := TransportTruck.make(city.ai_services, city, start, atan2(-to.x, -to.z))
+	t.cargo = kinds.duplicate()
+	t.arrived.connect(_dismount)
+	t.wrecked.connect(_truck_wrecked)
+	# Its rounds hit the truck like a body (it has a HealthPool): it shows.
+	trucks.append(t)
+	wave += 1
+	commander.note_fielded(UnitCatalog.points(&"truck"))
+	t.send(goal)
+	print("[arena] reinforcement %d by truck: %s, from %v" % [wave, ", ".join(kinds), start])
+	return true
+
+
+## Open ground TRUCK_OUT metres out from the focus, away from the player, where
+## a body stands and nothing is overhead.
+func _truck_start() -> Vector3:
+	var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
+	var p := _player()
+	var away := (c - p.feet()) if p != null else Vector3.FORWARD
+	away.y = 0.0
+	away = away.normalized() if away.length() > 0.1 else Vector3.FORWARD
+	var goal: Vector3 = _street_of(focus)
+	# Near the fight's own height: the foot map it drives climbs terraces a
+	# course at a time, and wheels do not (a vehicle map is AIVehicles.md 3).
+	for out in [TRUCK_OUT, TRUCK_OUT * 0.75, TRUCK_OUT * 0.5]:
+		for turn in [0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, PI]:
+			var dir: Vector3 = away.rotated(Vector3.UP, turn)
+			var q := c + dir * float(out)
+			q.y = city.ai_world.ground_at(q.x, q.z)
+			q = city.ai_nav.snap(q)
+			if not city.ai_nav.can_stand(q) or _in_a_building(q) or absf(q.y - goal.y) > TRUCK_LEVEL:
+				continue
+			if survey.what_is_under(q).on != SpawnSurvey.On.GROUND:
+				continue
+			# Room to turn a truck round in.
+			if not TransportTruck.room_at(city.get_world_3d(), q):
+				continue
+			# And a way from there to the fight -- not a beach below the tide line.
+			if city.ai_nav.find_path(q, goal, 20000).is_empty():
+				continue
+			return q + Vector3.UP * 0.3
+	return Vector3.INF
+
+
+func _dismount(t: TransportTruck) -> void:
+	if t.cargo.is_empty():
+		return
+	var p := _player()
+	var threat: Vector3 = p.feet() if p != null else t.global_position + Vector3.FORWARD
+	var spots := t.tailgate_points(threat, t.cargo.size())
+	_queue = t.cargo.duplicate()
+	_left_to_spawn = _queue.size()
+	_wave_size = _left_to_spawn
+	_put_inside = 0
+	_wave_squad = null
+	var n := _queue.size()
+	for i in n:
+		var at: Vector3 = spots[i] if i < spots.size() else city.ai_nav.snap(t.global_position
+				+ t.global_transform.basis.z * (TransportTruck.SIZE.z * 0.5 + 1.2 + i))
+		_spawn_at(at, -1)
+	t.cargo.clear()
+	_tip()
+	print("[arena] truck unloaded %d at %v" % [n, t.global_position])
+
+
+func _truck_wrecked(t: TransportTruck) -> void:
+	var lost := UnitCatalog.points(&"truck")
+	for k in t.cargo:
+		lost += UnitCatalog.points(k)
+	if not t.cargo.is_empty():
+		print("[arena] truck wrecked with %d aboard" % t.cargo.size())
+	t.cargo.clear()
+	commander.note_loss(lost, t.global_position)
+	feedback.burst(t.global_position, Color(0.33, 0.38, 0.24))
+	t.call_deferred("queue_free")
+	trucks.erase(t)
 
 
 ## A floor spot in a room of the focus, lowest storey first, or INF.

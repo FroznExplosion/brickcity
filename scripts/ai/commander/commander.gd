@@ -56,9 +56,12 @@ var profile := ThreatProfile.new()
 var doctrine := Doctrine.new()
 var desperation := 0.0
 var squads: Array[Squad] = []
-## (kinds: Array[StringName]) -> bool: spawn a squad of these; false if it
-## cannot now. The squad comes back through adopt().
+## (kinds: Array[StringName], arrival: StringName) -> bool: spawn a squad of
+## these, arriving on foot or by truck; false if it cannot now. The squad comes
+## back through adopt().
 var spawner := Callable()
+## The host can bring a squad by truck (TransportTruck).
+var can_truck := false
 ## How many soldiers may be up at once (the host's cap), and how many are.
 var alive_cap := 8
 ## Where the fight is, when nobody knows where the enemy is (the arena's focus).
@@ -82,6 +85,7 @@ var _last_think := -1.0
 var _last_reinforce := -INF
 var _waiting_spawn := false
 var _hold_until := -INF
+var _force_arrival: StringName = &""
 var _last_order_at := {}   # squad id -> time
 var _clearing := {}        # CLEAR_ROOM order id -> room id
 var rooms_cleared := 0
@@ -199,10 +203,25 @@ func hold_until(t: float) -> void:
 	_hold_until = t
 
 
-## The next reinforcement now, whatever the timing says (a key, a gate).
-func force_reinforce() -> bool:
+## The next reinforcement now, whatever the timing says (a key, a gate);
+## `arrival` forces how it comes (&"foot", &"truck"), empty for the doctrine's.
+func force_reinforce(arrival: StringName = &"") -> bool:
 	_last_reinforce = -INF
-	return _reinforce(true)
+	_force_arrival = arrival
+	var ok := _reinforce(true)
+	_force_arrival = &""
+	return ok
+
+
+## Something the host fielded for it that is not a soldier (a truck) is lost.
+func note_loss(points: float, where: Vector3) -> void:
+	lost_points += points
+	sectors.note_loss(where, points)
+	_update_desperation()
+
+
+func note_fielded(points: float) -> void:
+	fielded_points += points
 
 
 # --- the tick ------------------------------------------------------------------
@@ -363,13 +382,22 @@ func _reinforce(now_please: bool) -> bool:
 	var cost := 0.0
 	for k in kinds:
 		cost += UnitCatalog.points(k)
-	if not spawner.call(kinds):
+	# How it comes: by truck, if it can pay and the doctrine likes it.
+	var arrival: StringName = &"foot"
+	var truck := UnitCatalog.points(&"truck")
+	if can_truck and bool(UnitCatalog.get_unit(&"truck").built) and budget >= cost + truck \
+			and _force_arrival != &"foot" \
+			and (_force_arrival == &"truck" or _rng.randf() < doctrine.truck_share):
+		arrival = &"truck"
+		cost += truck
+	if not spawner.call(kinds, arrival):
 		return false
 	budget -= cost
 	_last_reinforce = now
 	_waiting_spawn = true
 	reinforcements += 1
-	_note("reinforce: %s (%.1f pts), answering %s" % [", ".join(kinds), cost, doctrine.answering])
+	_note("reinforce: %s%s (%.1f pts), answering %s" % [", ".join(kinds),
+			" by truck" if arrival == &"truck" else "", cost, doctrine.answering])
 	return true
 
 

@@ -173,7 +173,7 @@ func _build() -> void:
 
 
 ## The host's side of it: four at the spawn point, a squad, back to the commander.
-func _spawn(kinds: Array[StringName]) -> bool:
+func _spawn(kinds: Array[StringName], _arrival: StringName = &"foot") -> bool:
 	var members: Array[Soldier] = []
 	for i in kinds.size():
 		var so := a.soldier(a.s.ai_nav.snap(_spawn_at + Vector3(-1.5 + i, 0.0, 0.0)), 1, 60 + i,

@@ -6,6 +6,9 @@ extends BTAction
 ## condition above this then fails and the squad takes up its order again.
 
 const BACK := 12.0
+const FALL_TIME := 10.0
+
+var _started := 0.0
 
 var _spots: Array[Vector3] = []
 var _holding := false
@@ -19,6 +22,7 @@ func _enter() -> void:
 	var q := agent as Squad
 	var s := q.services
 	var now := s.now()
+	_started = now
 	_holding = false
 	_spots.clear()
 	var c := q.contact()
@@ -50,7 +54,13 @@ func _tick(_delta: float) -> Status:
 	var q := agent as Squad
 	q.play = "fall back"
 	blackboard.set_var(&"play", q.play)
-	if not _holding and q.all_replied(SquadMsg.StatusKind.REACHED):
+	# There, or as far as it could get (BLOCKED): either way it holds now. A
+	# member that cannot reach its spot held the whole squad on the move.
+	# And a fall back is a run, not a march: FALL_TIME on, whoever is not there
+	# holds where it has got to.
+	var settled := q.services.now() - _started > FALL_TIME or q.alive().all(func(m: Soldier) -> bool:
+		return q.replied(m, SquadMsg.StatusKind.REACHED) or q.replied(m, SquadMsg.StatusKind.BLOCKED))
+	if not _holding and settled:
 		_holding = true
 		var c := q.contact()
 		var alive := q.alive()

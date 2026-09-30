@@ -176,16 +176,18 @@ func _go(so: Soldier, a: SquadMsg.Assignment, to: Vector3, now: float) -> void:
 		so.masked_move = false
 		so.stop()
 		so.report(SquadMsg.StatusKind.BLOCKED)
-	elif so.stuck >= Soldier.MAX_STUCK:
-		# Stuck short of it -- a squadmate on the next slot, a corner the body
-		# will not take: near enough counts as there, further is blocked. Either
-		# way the squad hears back; silence held a stack's barrier for good.
+	elif not a.masked and so.stuck >= Soldier.MAX_STUCK and not _far(so, to, NEAR_ENOUGH):
+		# (Not a masked bound: a bound is six metres, and ending it 2.5 short
+		# lost the advance most of its ground.)
+		# Stuck just short of it -- a squadmate on the next slot: near enough is
+		# there, and the squad hears so (silence held a stack's barrier for
+		# good). Stuck further off it keeps trying: the plays have their own
+		# timeouts and stragglers, and a BLOCKED there broke their bounds.
 		_arrived_at = now
 		so.masked_move = false
-		var near := not _far(so, to, NEAR_ENOUGH)
 		so.stuck = 0
 		so.stop()
-		so.report(SquadMsg.StatusKind.REACHED if near else SquadMsg.StatusKind.BLOCKED)
+		so.report(SquadMsg.StatusKind.REACHED)
 
 
 func _hold(so: Soldier, a: SquadMsg.Assignment, seen: bool) -> void:
