@@ -16,6 +16,7 @@ render_mode blend_mix, cull_back, depth_draw_opaque, diffuse_burley, specular_sc
 // right side to be wrong on.
 
 #include "res://shaders/brick_materials.gdshaderinc"
+#include "res://shaders/weather.gdshaderinc"
 
 // How much of the brick's colour a face lets through, head on. Edges and
 // grazing angles are denser, as a real clear part is.
@@ -40,6 +41,9 @@ void vertex() {
     v_side = abs(NORMAL.y) < 0.7 ? 1.0 : 0.0;
     if (MAT_TRANSLUCENT[brick_material_id(COLOR.a)] < 0.5) {
         VERTEX = vec3(0.0);
+    } else {
+        // Sways with the building it is in (the brick pass does the same).
+        VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
     }
 }
 

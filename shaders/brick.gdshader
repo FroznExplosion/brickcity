@@ -360,8 +360,11 @@ void fragment() {
     float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
     // Rain (weather.gdshaderinc): plastic hardly darkens, it shines; metal
     // not at all.
-    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX,
-            0.14 * (1.0 - MAT_METAL[mat]));
+    // A flat roof holds some water; a wall streams.
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.14 * (1.0 - MAT_METAL[mat]), 0.4, TIME);
+    NORMAL = wet_normal;
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

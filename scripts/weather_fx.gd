@@ -16,6 +16,8 @@ extends RefCounted
 
 ## Soaked: 1. Set through set_weather, eased by the disaster context.
 static var wet := 0.0
+## Rain falling now, 0..1: ripples and running streaks.
+static var rain := 0.0
 ## Direction x strength, 0..~1.
 static var wind := Vector3.ZERO
 
@@ -28,8 +30,11 @@ const TREE_LEAN := 0.05
 const TREE_HZ := 0.55
 const BUILDING_LEAN := 0.0015
 const BUILDING_HZ := 0.22
+const GRASS_LEAN := 0.45
+const GRASS_HZ := 1.1
 
 
+## Its next passes too: the glass pass of a brick material sways with it.
 static func register(m: Material) -> void:
 	if not (m is ShaderMaterial):
 		return
@@ -39,6 +44,8 @@ static func register(m: Material) -> void:
 	_ids[id] = true
 	_mats.append(weakref(m))
 	_apply(m as ShaderMaterial)
+	if m.next_pass != null:
+		register(m.next_pass)
 
 
 ## `copy` was made from `source`: if the source is weathered, so is the copy.
@@ -52,13 +59,16 @@ static func is_registered(m: Material) -> bool:
 
 
 ## Into every registered material, if it moved enough to see.
-static func set_weather(p_wet: float, p_wind: Vector3) -> void:
+static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0) -> void:
 	p_wet = clampf(p_wet, 0.0, 1.0)
-	if absf(p_wet - wet) < 0.004 and p_wind.distance_to(wind) < 0.004 \
-			and not (p_wet == 0.0 and wet != 0.0) and not (p_wind == Vector3.ZERO and wind != Vector3.ZERO):
+	p_rain = clampf(p_rain, 0.0, 1.0)
+	if absf(p_wet - wet) < 0.004 and p_wind.distance_to(wind) < 0.004 and absf(p_rain - rain) < 0.01 \
+			and not (p_wet == 0.0 and wet != 0.0) and not (p_wind == Vector3.ZERO and wind != Vector3.ZERO) \
+			and not (p_rain == 0.0 and rain != 0.0):
 		return
 	wet = p_wet
 	wind = p_wind
+	rain = p_rain
 	var live: Array[WeakRef] = []
 	for r in _mats:
 		var m = r.get_ref()
@@ -76,11 +86,16 @@ static func set_weather(p_wet: float, p_wind: Vector3) -> void:
 static func _apply(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("weather_wet", wet)
 	m.set_shader_parameter("weather_wind", wind)
+	m.set_shader_parameter("weather_rain", rain)
 
 
 ## The instance parameter for a tree `height` metres tall.
 static func sway_tree(height: float) -> Vector3:
 	return Vector3(height, TREE_LEAN, TREE_HZ)
+
+
+static func sway_grass(height: float) -> Vector3:
+	return Vector3(height, GRASS_LEAN, GRASS_HZ)
 
 
 static func sway_building(height: float) -> Vector3:
