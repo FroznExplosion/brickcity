@@ -379,13 +379,12 @@ craters buildings). Deferred by decision (2026-09-28), not blocked:
 
 | Disaster | Why it fits | What it would need |
 |---|---|---|
-| **Hurricane / wind storm** | A tornado without a funnel: a whole city leaning | Little now: the sideways load exists (§17). A city-wide wind field over it, rain, and a cap like the quake's |
 | **Flood / tsunami** | Water through the lower storeys, floating debris | A moving water level over the city; buoyancy for pieces; the sideways load for the push |
 | **Blizzard / freeze** | Frozen bricks turn brittle and shatter | A per-building toughness multiplier while frozen; the `ICE` look exists |
 | **Volcano / lava** | Lava melts everything it reaches | Lava flow over the heightfield, a heat source for fire; large |
 | **Landslide** | Hillside comes down onto the city | Terrain pieces as islands at scale — against the heightfield rule; would have to be rubble thrown down a slope instead |
 
-Built since this table was first written: the earthquake's sideways load (§17), acid rain
+Built since this table was first written: the hurricane (§18), the earthquake's sideways load (§17), acid rain
 (§14), char and burning debris (§15), wind pushing standing buildings (§17), soldiers
 sheltering from storms, meteors and the tornado, weather on the AI's aim (§13), and co-op (§16).
 
@@ -701,3 +700,44 @@ quake, 1 at once, 3 in all — all 3 cut by the solver (≈290 checks), one SEVE
 over (22–133°); the tornado pushed 1 over, one seam. Full probe 115 / 115. Run alone the quake
 passed every time; one earlier full run (before §17) saw a top come to rest at 8° — physics, with
 the city already wrecked round it.
+
+---
+
+## 18. Hurricane — on the heightfield coast
+
+The first disaster made for the terrain rather than the city. `heightfield_test.tscn` hosts a
+director now (`H`, `Shift+H`, as in the city), offering only what needs no buildings — the
+hurricane (`DisasterDirector.setup(host, kinds)`). The context tolerates a host that is not a city:
+it needs a `camera` and a `_sun`; buildings, pieces, soldiers and the AI are used where the host
+has them. `hurricane.gd`: WARNING 10 s, ACTIVE 80 s, ENDING 20 s.
+
+* **The surge.** The sea rises `SURGE_M` (1.6 m) × intensity at the storm's height and comes back
+  to exactly where it was at DONE. Through the host's `disaster_sea(surge, wave_mul)`
+  (`ctx.set_sea`): **BrickWave's own sea level**, so the drawn sea, what a swimmer floats in and
+  the water's collision rise together. The flood itself costs nothing — the water shader compares
+  the ground (the seabed map) with `sea_level` per pixel — but where the studded tier shows and
+  how waves steer to the shore come from the seabed map's wet cells, and re-reading that is ~30 ms,
+  so it is done every 0.5 m of level, no more than every 2 s. The surge lags the wind by ~6 s and
+  follows the storm's envelope, not the eye's lull: a surge does not drain in the eye.
+* **The waves.** Gain × (1 + 1.4 × intensity) at full strength — 2.2 → 5.3 at Medium.
+* **The wind.** Gusting (three sines from the seed), veering ±0.5 rad, and it **turns round after
+  the eye**. It leans on whoever is out in it: `DebugCamera.wind`, up to 2.2 m/s × intensity of
+  drift walking, 60% of it swimming. In a city it would push loose pieces (small ones most) and put
+  up to 0.25 g × intensity of sideways load on buildings — one cut and blown over per intensity —
+  but the heightfield has none of either yet.
+* **Rain** driven along the wind (7,000 streaks round the camera), **litter and spray** blowing
+  past low down, **lightning** in the cloud every 3.5–9 s past 40% strength (a flash of the whole
+  scene, thunder 0.6–3 s later), the sky near dark, rain and haze on the lens, wind and rain
+  sounds. The AI: sight 0.75, aim 2.2x worse, and `storm` sends soldiers under a roof.
+* **The eye.** Halfway, 12 s of calm: wind to 8%, the rain stops, the sky opens — then the wind
+  comes back from the other side.
+
+Probe (`tools/hurricane_probe.gd`; `-- --hurricane-shot` windowed saves calm / storm / eye): the
+sea rises +1.60 m and more ground is wet (1,212 cells against 1,036); gain 2.20 → 5.28; a walker
+standing still is carried 9.1 m in 5.6 s; 0.08 m/s in the eye and the wind reversed after it; 10
+flashes; the sea, gain and wet map exactly back at the end; the wind and the lens clear.
+
+Not yet: waves that break over the new shoreline (the shore band is re-read, but no surf or
+spray at the waterline), wet ground, trees that bend, and the hurricane in the city: it would run
+there — rain, wind, pieces, buildings — but it is not in the city's list yet, and the city's sea is
+not wired to `disaster_sea`.
