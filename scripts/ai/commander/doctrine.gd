@@ -15,12 +15,26 @@ extends RefCounted
 ##   demolisher  do not stand in what it is shooting: fewer spawns inside
 ##               buildings, spread out, more marksmen (from outside the blast)
 ##
+## And whose kills they are (ThreatProfile.armor_style, A8):
+##
+##   mech        its mech does the killing: go for the PILOT, the one who can be
+##               killed -- assault to reach them, marksmen to pick them off, and
+##               the side's aggro biased toward pilot rows (pilot_focus); anti-
+##               armor (rocketeers) weighted up for when they can be fielded
+##   pilot       the pilot does: no rocketeers wasted on a mech that is not the
+##               threat
+##
+## A careful player -- one who hardly breaks a brick -- is the opposite of the
+## demolisher: the buildings are safe to put troops in, and it does.
+##
 ## Desperation (losses against what was fielded) pushes both ways, as Red Dawn's
 ## did: early, more aggressive; late and losing badly, it holds and husbands.
 
 ## Base roster weights, before the counters.
 const BASE := {&"rifleman": 4.0, &"assault": 2.0, &"breacher": 1.0, &"marksman": 0.6,
-		&"veteran": 0.8}
+		&"veteran": 0.8, &"rocketeer": 0.5}
+## Below this many bricks a minute, with enough seen, the player is careful.
+const CAREFUL_BRICKS := 10.0
 
 ## 0 cautious .. 1 reckless: how readily squads are sent ADVANCE.
 var aggression := 0.6
@@ -31,6 +45,9 @@ var spacing := 2.2
 var roster := BASE.duplicate()
 ## What it is answering, for the HUD and the log.
 var answering := "unknown"
+var answering_armor := "unknown"
+## 0..1: how much its fire prefers the player's pilot to the player's mech.
+var pilot_focus := 0.0
 
 
 ## Recompute from the profile, the commander's desperation and its difficulty.
@@ -60,6 +77,20 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 			inside_share = 0.25
 			spacing = 3.5
 	# Desperation: a little bolder at first, then careful as it bleeds.
+	var armor := profile.armor_style()
+	answering_armor = armor
+	pilot_focus = 0.0
+	match armor:
+		"mech":
+			mul[&"rocketeer"] = 2.0
+			mul[&"assault"] = float(mul[&"assault"]) * 1.4
+			mul[&"marksman"] = float(mul[&"marksman"]) * 1.4
+			pilot_focus = 0.7
+		"pilot":
+			mul[&"rocketeer"] = 0.5
+	if style != "demolisher" and profile.evidence >= 2.0 \
+			and profile.destructiveness * (1.0 / (ThreatProfile.HALF_LIFE / 60.0 / log(2.0))) < CAREFUL_BRICKS:
+		inside_share = 0.8
 	aggression += 0.15 * (1.0 - desperation) - 0.35 * maxf(desperation - 0.5, 0.0)
 	aggression = clampf(aggression, 0.1, 0.95)
 	for id in BASE:

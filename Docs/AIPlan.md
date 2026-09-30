@@ -773,6 +773,46 @@ missions, threat profile).
 **Gate:** two scripted player styles (destructive vs not; pilot kills vs mech kills) produce
 measurably different rosters and doctrine in the next encounter, within the clamps.
 
+**Done (2026-09-30), in two hands.** The commander itself came from the combat-arena work
+(`scripts/ai/commander/`, `tools/commander_probe.gd` 28): a per-encounter `Commander` that
+orders squads (ADVANCE, MOVE in file, CLEAR_ROOM) and buys reinforcements with points; a
+`SectorGrid` of where its men died; a `Doctrine` from the `ThreatProfile` (sniper, rusher,
+demolisher), its desperation and the difficulty, every weight clamped to ×0.5..×2 of its base;
+`PointsBattle` fronts resolved off-screen; an HQ whose officer and radio can be killed. The rest
+of P9, on ai-p9:
+- **Pilot kills against mech kills** (A8): `ThreatProfile.note_kill(by_mech)`, `mech_share()`,
+  `armor_style()` ("mech", "pilot", "mixed"), kept in the profile's dictionary. Against a player
+  whose MECH does the killing the doctrine goes for the PILOT: assault ×1.4 to reach them, marksmen
+  ×1.4 to pick them off, and a `pilot_focus` of 0.7 that the commander hands to its side's aggro
+  table (`AggroTable.bias`) — gains on the pilot's row count 1.7× — so its fire follows. Anti-armor
+  (the rocketeer) is weighted ×2 in the roster but not fielded: a mech is not a `Pawn`, so nothing
+  can aim at it yet, and making rocketeers fieldable changed the combat arena's draws enough that
+  its wave-3 check missed its window.
+- **The careful player** — enough seen, under 10 bricks a minute broken — is answered like the
+  opposite of the demolisher: the buildings are safe, 80 % of a reinforcement goes inside.
+- **The character save** (`scripts/character_save.gd`, A14): the character, the mech, the guns,
+  the missions, the threat profile and the aggro history (pilot and mech shares), as versioned
+  JSON at `user://character.json`. A gun is kept as what made it — class, seed, tier — and made
+  again the same; a file from a newer version is refused rather than half-read.
+  `take_encounter(commander, aggro)` at the end of one; `profile()` for the next commander.
+- **The friendly side:** a `Commander` on the player's team, its `rally` kept on the player, sends
+  its squads to MOVE in file after the player when they fall behind — the same code as the enemy's.
+- Gate: **`tools/threat_style_probe.gd` 7** — three scripted minutes each of A (a demolisher whose
+  mech kills: 240 bricks a minute, kills mostly the mech's) and B (a careful pilot), each ended into
+  a save on disk and read by a FRESH commander: A is read demolisher/mech, B balanced/pilot; the
+  save carries the profile exactly, the character, the missions and three guns made again
+  identical; A's rosters put 38 % of 1,600 units into assault and marksmen against B's 31 %, pilot
+  focus 0.7 against 0, rocketeer weight 1.0 against 0.25; A's reinforcements go 25 % inside
+  against B's 80 %, marksmen 9.9 % against 6.4 %; every weight inside ×0.5..×2; the pilot bias
+  reaches the side's aggro (1.7); a friendly squad 40 m off is brought to the player (1.8 m)
+  by two MOVE orders.
+- **Not done:** the commander is a script on a one-second think, not a LimboAI tree as planned —
+  it works, and it is the combat-arena work's to convert if a tree earns its keep; the pilot/mech
+  kill split is fed by the gate, not yet by a host (the combat arena has no player mech; the city
+  has no commander); the rocketeer waits for the mech to be a target. The combat arena's gate
+  (31) passed 2 of 3 runs with this change — the miss a squad's stack taking too long, in a check
+  that is timing-sensitive; it passed 1 of 1 without.
+
 ### P10 — Real co-op and save-anywhere · L
 
 A transport on the loopback seam; clients receive bodies; the falling-piece transform stream;
