@@ -8388,7 +8388,10 @@ func _run_far_pass() -> void:
 	await _far_settle()
 	_gate_ok("  closer in, its own shell and no card", _shells.has(b1)
 			and (_shells[b1] as MeshInstance3D).mesh != null
-			and not set_.is_drawn(int(_inst_handle[b1])))
+			and not set_.is_drawn(int(_inst_handle[b1])),
+			"shell %s, mesh %s, card tier %d, %.0f m" % [_shells.has(b1),
+			_shells.has(b1) and (_shells[b1] as MeshInstance3D).mesh != null,
+			set_.tier_of(int(_inst_handle[b1])), bb1.xform.origin.distance_to(camera.global_position)])
 	# Damaged, it keeps its exact shell even out there.
 	var bb2 := registry.get_building(b2)
 	_promote(b2)
