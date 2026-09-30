@@ -8173,8 +8173,15 @@ func _run_tree_pass() -> void:
 			meshed += 1
 	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
 		_trees_placed, _inst_sets.size(), near, far, meshed])
-	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
-			"%d of %d" % [near + far, _trees_placed])
+	# Counted by copy, not by buffer: a tree crossing the mesh-to-card band is
+	# in both buffers, dithered into itself.
+	var drawn := 0
+	for id in trees:
+		var tset: ImpostorLod = _inst_sets[_inst_key(registry.get_building(id))]
+		if tset.is_drawn(int(_inst_handle[id])):
+			drawn += 1
+	_gate_ok("every tree is drawn by its set", drawn == _trees_placed,
+			"%d of %d" % [drawn, _trees_placed])
 	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
 	var baked := 0
 	for s in _inst_sets.values():

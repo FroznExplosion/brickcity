@@ -414,6 +414,16 @@ which keeps a dark fringe off every card. `shaders/impostor.gdshader` builds a c
 2R across, in the vertex shader and blends the four nearest views, each read where the pixel falls
 on that view's own plane (linear, so per vertex). Lit by the baked normals, holes by alpha scissor.
 
+**No swimming, no pop (2026-09-29).** Each view is read where the *view ray* meets that view's own
+plane, per pixel. The first version read it where the pixel lay on the card's plane, per vertex,
+which put each view's features in a slightly different place, so cards swam as the player moved.
+Card against mesh, one tree at 60 m, silhouette overlap is now 0.94 / 0.96 / 0.95 from 2 / 15 / 40 m
+up. Across the mesh-to-card range (±5 m round it) a copy is drawn as **both**, dithered into each
+other with the same interleaved-gradient noise: the card in its shader, the mesh in a copy of its
+material with the fade injected at run time (so `brick.gdshader` is not touched). Mid-band a tree is
+2% off its mesh-only picture, against 48% if the mesh faded with no card. In the shadow pass
+neither dithers; both cast, one shape.
+
 `ImpostorLod` draws many copies of one mesh in **two draw calls**: the real mesh instanced near, the
 card further, nothing past a cull range. It repacks only when something changes tier, and a hidden
 copy is in neither buffer. `RecipeMesh` turns any recipe into one real-brick mesh, studs merged,
@@ -470,9 +480,10 @@ past 12 m the gun model hides and its card stands in; the rarity beam is untouch
 what reads at range. With no ImpostorItems in the scene nothing changes, which is every scene today;
 adding one to the loot range or the game is the weapons area's call.
 
-`tools/impostor_probe.gd`: 21 ok — trees build whole, bake, field of cards; 100 brick guns near,
+`tools/impostor_probe.gd`: 24 ok — trees build whole, bake, field of cards; 100 brick guns near,
 carded and culled, one moved close becomes a mesh, one removed is gone; the field kept in areas; a
-node kind that stays its owner's until baked, then a card in its own material's colour.
+node kind that stays its owner's until baked, then a card in its own material's colour; the card
+standing where the mesh stands from three heights; a tree mid-band with no holes.
 
 ## 9. Deliberately not in the plan
 
