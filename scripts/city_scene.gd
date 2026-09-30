@@ -4365,15 +4365,27 @@ func _ground_gates() -> void:
 
 	# A saved build, aimed at open hillside, placed like the player does.
 	var path := "res://builds/cottage.json"
+	# Open, dry hillside: clear of every registry entry -- trees and small
+	# items too, since the placer would land a build ON one -- searched on a
+	# widening spiral, which a city full of trees needs more tries for.
 	var spot := _dry_point(RandomNumberGenerator.new(), 30.0)
-	for attempt in 40:
+	var found_clear := false
+	for attempt in 400:
+		var ang := float(attempt) * 2.39996
+		var cand := _on_ground(Vector3(cos(ang), 0.0, sin(ang)) * (10.0 + float(attempt) * 0.6))
+		if cand.y < ai_nav.get_water_level() + 0.5:
+			continue
 		var clear := true
 		for b in registry.buildings:
-			if _world_box(b).grow(12.0).has_point(Vector3(spot.x, b.xform.origin.y + 1.0, spot.z)):
+			if _world_box(b).grow(8.0).has_point(Vector3(cand.x, b.xform.origin.y + 1.0, cand.z)):
 				clear = false
+				break
 		if clear:
+			spot = cand
+			found_clear = true
 			break
-		spot = _on_ground(spot + Vector3(9.0, 0.0, 5.0))
+	if not found_clear:
+		print("[nav]   placed: no clear hillside found; trying anyway at %s" % spot)
 	if not _placer.start(path):
 		_gate_ok("a build placed on the hillside gets ground at its floor", false, "no " + path)
 		return
@@ -4414,9 +4426,12 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 	await _ground_gates()
 	# Up the hill: from in front of the lowest building to in front of the
 	# highest, which on this seed is metres of climb across the city.
-	var lo_b := registry.get_building(0)
+	# The SITE buildings: the registry also holds trees and small items now,
+	# and a tree on a hilltop is not a building a path climbs to.
+	var lo_b := registry.get_building(_site_ids[0])
 	var hi_b := lo_b
-	for c in registry.buildings:
+	for id in _site_ids:
+		var c := registry.get_building(id)
 		if c.xform.origin.y < lo_b.xform.origin.y:
 			lo_b = c
 		if c.xform.origin.y > hi_b.xform.origin.y:
