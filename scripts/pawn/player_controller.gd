@@ -108,5 +108,6 @@ func _sync_look() -> void:
 
 func _follow(delta: float) -> void:
 	var h := pawn.eye_height()
+	_eye_h += pawn.take_eye_snap()
 	_eye_h = h if delta <= 0.0 else lerpf(_eye_h, h, 1.0 - exp(-EYE_EASE * delta))
 	camera.global_position = pawn.feet_interpolated() + Vector3.UP * _eye_h

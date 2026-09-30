@@ -200,9 +200,22 @@ func hold(gi: GunInstance) -> void:
 	gun.bloom = 0.0
 
 
-## Is the gun up? Not while it is still lowered from a sprint.
+## Is the gun up? Not while it is still lowered from a sprint, or down while
+## the hands climb or hold a lip.
 func can_fire() -> bool:
-	return _sprint < 0.35
+	return _sprint < 0.35 and _mantle < 0.35
+
+
+## Hanging and facing the lip: both hands are on it. Look away from the wall and
+## one comes off with the gun (Ceramic Edge's free hand) -- you can shoot from a
+## hang, just not into the wall you hang on.
+func _hands_on_lip() -> bool:
+	var mv := pawn.moves
+	if mv == null or not mv.is_hanging():
+		return false
+	var look := -camera.global_transform.basis.z
+	var flat := Vector3(look.x, 0.0, look.z)
+	return flat.length() < 0.1 or flat.normalized().dot(-mv.ledge_normal) > -0.2
 
 
 func ads_amount() -> float:
@@ -247,7 +260,8 @@ func _process(delta: float) -> void:
 	_sprint = move_toward(_sprint, 1.0 if sprinting and not it.fire and not it.aim else 0.0,
 			delta / SPRINT_TIME)
 	_reload = move_toward(_reload, 1.0 if reloading else 0.0, delta / RELOAD_TIME)
-	_mantle = move_toward(_mantle, 1.0 if mv != null and mv.is_mantling() else 0.0, delta / 0.1)
+	_mantle = move_toward(_mantle, 1.0 if mv != null and (mv.is_mantling() or _hands_on_lip())
+			else 0.0, delta / 0.1)
 	_since_shot += delta
 
 	# Where rounds go: tight at the eye, loose on the run and looser in the air.
