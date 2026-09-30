@@ -3506,27 +3506,38 @@ func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transf
 
 
 ## What a piece put to sleep leaves drawn where it lay (Dormant.stand_in): the
-## coarse stand-in, in a node of its own with no body. Sleeping used to take a
-## piece out of the picture with its body, so a collapse's rubble went from the
-## skyline as the player walked off (SLEEP_RANGE). Built from the chunk while
-## it is still there -- unless the stand-in is what the piece is drawing, and
-## then only the node is new. A single brick is the MultiMesh's, and just goes.
+## mesh it is drawing, in a node of its own with no body. Sleeping used to take
+## a piece out of the picture with its body, so a collapse's rubble went from
+## the skyline as the player walked off (SLEEP_RANGE).
+##
+## The mesh it has, whichever it is: far off that is the coarse stand-in already
+## (the ladder puts a settled piece to it at 145 m, sleep comes at 150), and
+## nearer -- the debris cap puts pieces to sleep wherever they are -- it is its
+## bricks, which is right that close. A stand-in built here was 8-38 ms a sleep
+## when the cap took a few at once. Once asleep it is never patched: nothing
+## changes it until the piece wakes and builds its own (_take_stand_in).
+##
+## Only a piece drawn by the bands of the building it toppled from has no one
+## mesh to leave; its stand-in is built, from the chunk while it is still there.
+## Those are whole buildings, and few. A single brick (the MultiMesh's) just goes.
 func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
 	if isl.mesh == null or not isl.mesh.is_inside_tree():
 		return null
-	var mesh: ArrayMesh = isl.array_mesh if isl.coarse_drawn else null
-	if mesh == null:
+	var mesh: ArrayMesh = isl.array_mesh
+	if (mesh == null or mesh.get_surface_count() == 0) and _any_band(isl):
 		var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
 		coarse_built += 1
 		coarse_worst_ms = maxf(coarse_worst_ms, world.get_last_coarse_ms())
-		if arrays.is_empty() or not mesh_arrays_ok(arrays, "stand-in %d" % isl.chunk):
-			return null
-		coarse_verts += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-		mesh = ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		if not arrays.is_empty() and mesh_arrays_ok(arrays, "stand-in %d" % isl.chunk):
+			coarse_verts += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			mesh = ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	if mesh == null or mesh.get_surface_count() == 0:
+		return null
 	var node := MeshInstance3D.new()
 	node.mesh = mesh
 	node.material_override = isl.mesh.material_override
+	node.cast_shadow = isl.mesh.cast_shadow
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(node)
 	node.global_transform = isl.mesh.global_transform
@@ -3535,7 +3546,9 @@ func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
 
 
 ## Hand a waking piece the stand-in it left: its mesh on the piece's own node,
-## the node itself gone. True if there was one to hand over.
+## the node itself gone. True if there was one to hand over. Marked coarse_drawn
+## whatever it is -- coarse or the bricks it slept with -- because either way it
+## is not the new chunk's bake, and must be built again, never patched.
 func _take_stand_in(d: Dormant, isl: BrickIsland) -> bool:
 	var node := d.stand_in
 	d.stand_in = null
