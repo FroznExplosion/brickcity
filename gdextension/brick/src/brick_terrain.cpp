@@ -899,6 +899,10 @@ static float slope_profile(float s, int len, float top, float yf, bool straight 
         // A cheese slope: one straight face from the back to the front.
         return top + (yf - top) * (s / (float)len);
     }
+    if (len <= 1) {
+        // A steep 1x1 face: straight from the top to the lip.
+        return top + (yf - top) * s;
+    }
     if (len <= 2) {
         // 1x2 slope: flat over the back stud, a straight face over the front.
         return s <= 1.0f ? top : top + (yf - top) * (s - 1.0f);
@@ -975,8 +979,16 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
             }
             const int nt = s.tp[TileSample::idx(lx + DXS[r], lz + DZS[r])];
             const int fall = s.tp[i0] - nt;
-            if (fall < 1 || fall > PLATES_PER_CELL) {
+            // Up to a brick: a slope or a curve. Two or three bricks: a STEEP
+            // slope, like LEGO's 1x2x3 (19.23), which needs only one stud.
+            const bool steep = fall > PLATES_PER_CELL;
+            // Taller than three bricks: the steep slope caps the top three and
+            // the column below stays bricks (the wall pass draws it).
+            if (fall < 1) {
                 return 0;
+            }
+            if (steep && fall < 2 * PLATES_PER_CELL) {
+                return 0;   // 4-5 plates: neither a slope nor a steep one
             }
             int n = 0;
             while (n < 4) {
@@ -991,6 +1003,9 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                     break;
                 }
                 ++n;
+            }
+            if (steep) {
+                return std::min(n, 2);   // a steep face is one stud, plus a back
             }
             return n >= 2 ? n : 0;
         };
@@ -1011,7 +1026,8 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                     continue;
                 }
                 const int i0 = TileSample::idx(lx, lz);
-                const int fall = s.tp[i0] - s.tp[TileSample::idx(lx + DXS[best_r], lz + DZS[best_r])];
+                const int fall = std::min(3 * PLATES_PER_CELL,
+                        s.tp[i0] - s.tp[TileSample::idx(lx + DXS[best_r], lz + DZS[best_r])]);
                 // Across the fall: +Z for an X fall, +X for a Z fall.
                 const int ax = best_r < 2 ? 0 : 1;
                 const int az = best_r < 2 ? 1 : 0;
@@ -1024,7 +1040,8 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                     const int ni = TileSample::idx(nx, nz);
                     if (s.tp[ni] != s.tp[i0] || s.mat[ni] != s.mat[i0] || s.col[ni] != s.col[i0]
                             || run_back(nx, nz, best_r) < best_len
-                            || s.tp[i0] - s.tp[TileSample::idx(nx + DXS[best_r], nz + DZS[best_r])] != fall) {
+                            || std::min(3 * PLATES_PER_CELL, s.tp[i0]
+                                    - s.tp[TileSample::idx(nx + DXS[best_r], nz + DZS[best_r])]) != fall) {
                         break;
                     }
                     ++w;
@@ -2350,7 +2367,11 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
             return false;
         }
         const int t = pieces[o].top;
-        return yp <= t && yp > t - PLATES_PER_CELL;
+        // A steep slope reaches below its own brick, to the ground in front
+        // of it, and draws every face of that column itself.
+        const int depth = pieces[o].kind == PIECE_SLOPE
+                ? std::max<int>(pieces[o].fall, PLATES_PER_CELL) : PLATES_PER_CELL;
+        return yp <= t && yp > t - depth;
     };
 
     // Is this +Y face already drawn by a packed surface piece?
@@ -3001,7 +3022,9 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p,
     const int width = along_x ? p.sz : p.sx;
     const float top = (float)(p.top + 1) * PLATE_M;
     const float yf = slope_front(p);
-    const float yb = top - BRICK_M;
+    // The piece's FOOT: its own brick's, or for a steep slope the ground in
+    // front of it -- it owns its column down to there (in_piece_solid).
+    const float yb = top - (float)std::max<int>(p.fall, PLATES_PER_CELL) * PLATE_M;
     const Vector2 face((float)p.sx * STUD_M, (float)p.sz * STUD_M);
     // Local (s along the fall from the back edge, q across) to world.
     auto P = [&](float sv, float q, float y) {
@@ -3067,7 +3090,7 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p,
     // which is lower than its column. Walls sized from the column stopped
     // short of a neighbouring slope and left a slit to the water (19.22).
     auto ground_at = [&](float sv, float q) {
-        const Vector2i c = cell_of(sv, q);
+        const Vector2i c = cell_of(sv, q < 0.0f ? q - 0.49f : (q > W ? q + 0.49f : q));
         if (c.x >= 0 && c.y >= 0 && c.x < TILE && c.y < TILE) {
             const int32_t o = owner[(size_t)c.x + TILE * c.y];
             if (o >= 0 && pieces[o].kind == PIECE_SLOPE) {
@@ -3087,17 +3110,27 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p,
                 Vector2(0, top - lo), Vector2(STUD_M, top - lo), Vector2(STUD_M, 0), Vector2(0, 0));
         }
     }
-    // SIDES, a segment at a time.
+    // SIDES, sampled every half stud against the neighbour's REAL surface
+    // (19.23). Where it is lower, a wall down to it; where it is higher, a
+    // cheek up to it -- the neighbour's face this cut exposed. Where the two
+    // surfaces CROSS inside a step, the step is split there, so neither a
+    // gap nor a fin is left. One flat bottom per segment left blue slivers
+    // wherever two slopes of different length met side by side.
+    // Half studs on a curve (it bends); whole studs on a straight face,
+    // which a straight neighbour meets exactly at the stud lines.
+    std::vector<float> ss;
+    const int per = (!cheese && len >= 3) ? 2 : 1;
+    for (int k = 0; k <= len * per; ++k) {
+        ss.push_back((float)k / (float)per);
+    }
     for (int side = 0; side < 2; ++side) {
         const float q = side == 0 ? 0.0f : W;
         const float qo = side == 0 ? -0.5f : W + 0.5f;
+        const float qn = side == 0 ? -0.01f : W + 0.01f;
         const Vector3 out_n = side == 0 ? -across_n : across_n;
-        for (size_t k = 0; k + 1 < st.size(); ++k) {
-            const float s0 = st[k], s1 = st[k + 1];
-            const Vector2i c = cell_of((s0 + s1) * 0.5f, qo);
-            const int ni = TileSample::idx(c.x, c.y);
-            // The same slope beside us (a neighbouring piece of the same shape
-            // and line): the two tops meet, nothing to close.
+        // The same slope beside us, whole length: nothing to close.
+        {
+            const Vector2i c = cell_of((float)len * 0.5f, qo);
             if (c.x >= 0 && c.y >= 0 && c.x < TILE && c.y < TILE) {
                 const int32_t o = owner[(size_t)c.x + TILE * c.y];
                 if (o >= 0) {
@@ -3109,32 +3142,41 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p,
                     }
                 }
             }
-            (void)ni;
-            // Lowest of the neighbour's surface at the two ends: a wall must
-            // reach the lower end.
-            const float ny = std::min(ground_at(s0 + 0.01f, qo), ground_at(s1 - 0.01f, qo));
-            const float y0 = Y(s0), y1 = Y(s1);
+        }
+        auto wall_or_cheek = [&](float s0, float s1, float y0, float y1, float n0, float n1) {
             const Vector2 f((s1 - s0) * STUD_M, top - yb);
-            if (ny < std::max(y0, y1) - 1e-5f) {
-                // A wall down to the lower neighbour (never below our foot).
-                const float lo = std::max(ny, yb);
-                if (y0 > lo + 1e-5f || y1 > lo + 1e-5f) {
-                    quad_facing(m, out_n, col, f,
-                        P(s0, q, lo), P(s1, q, lo), P(s1, q, std::max(y1, lo)), P(s0, q, std::max(y0, lo)),
-                        Vector2(0, f.y), Vector2(f.x, f.y), Vector2(f.x, 0), Vector2(0, 0));
-                }
+            const Vector2 u0(0, f.y), u1(f.x, f.y), u2(f.x, 0), u3(0, 0);
+            if (n0 <= y0 + 1e-5f && n1 <= y1 + 1e-5f) {
+                const float b0 = std::max(n0, yb), b1 = std::max(n1, yb);
+                quad_facing(m, out_n, col, f,
+                    P(s0, q, b0), P(s1, q, b1), P(s1, q, std::max(y1, b1)), P(s0, q, std::max(y0, b0)),
+                    u0, u1, u2, u3);
+            } else if (n0 >= y0 - 1e-5f && n1 >= y1 - 1e-5f) {
+                const float h0 = std::min(n0, top), h1 = std::min(n1, top);
+                quad_facing(m, -out_n, col, f,
+                    P(s0, q, std::min(y0, h0)), P(s1, q, std::min(y1, h1)), P(s1, q, h1), P(s0, q, h0),
+                    u0, u1, u2, u3);
             }
-            if (ny > std::min(y0, y1) + 1e-5f) {
-                // A cheek: the neighbour's face our cut exposed, facing us.
-                const float hi = std::min(ny, top);
-                if (hi > y0 + 1e-5f || hi > y1 + 1e-5f) {
-                    quad_facing(m, -out_n, col, f,
-                        P(s0, q, std::min(y0, hi)), P(s1, q, std::min(y1, hi)), P(s1, q, hi), P(s0, q, hi),
-                        Vector2(0, f.y), Vector2(f.x, f.y), Vector2(f.x, 0), Vector2(0, 0));
-                }
+        };
+        for (size_t k = 0; k + 1 < ss.size(); ++k) {
+            const float s0 = ss[k], s1 = ss[k + 1];
+            const float y0 = Y(s0), y1 = Y(s1);
+            const float n0 = ground_at(s0 + (k == 0 ? 0.01f : 0.0f), qn);
+            const float n1 = ground_at(s1 - (k + 2 == ss.size() ? 0.01f : 0.0f), qn);
+            const float d0 = n0 - y0, d1 = n1 - y1;
+            if ((d0 > 1e-5f && d1 < -1e-5f) || (d0 < -1e-5f && d1 > 1e-5f)) {
+                // They cross: split where the difference is zero.
+                const float t = d0 / (d0 - d1);
+                const float sm = s0 + (s1 - s0) * t;
+                const float ym = y0 + (y1 - y0) * t;
+                wall_or_cheek(s0, sm, y0, ym, n0, ym);
+                wall_or_cheek(sm, s1, ym, y1, ym, n1);
+            } else {
+                wall_or_cheek(s0, s1, y0, y1, n0, n1);
             }
         }
     }
+
 }
 
 /// A slope piece's surface under a cell, for its collision box.
