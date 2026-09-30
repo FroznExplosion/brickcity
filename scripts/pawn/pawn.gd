@@ -86,6 +86,12 @@ var _was_on_floor := true
 const SAFE_FALL := 1.5
 const FALL_DAMAGE := 26.0
 var _fall_from := 0.0
+## Rising under its own jump: that height was climbed, not fallen from, so it
+## does not count towards the fall (a high jump on the flat lands unhurt).
+## Set by PawnMoves; cleared at the top of the jump.
+var rising_jump := false
+## What the last jump rose, taken off every height the fall is measured from.
+var _jump_gain := 0.0
 var _placed := false
 ## How far the last landing dropped, for the probe.
 var last_fall := 0.0
@@ -298,8 +304,14 @@ func _track_fall() -> void:
 		_placed = false   # placed standing: the next fall is a real one
 	if _was_on_floor and not on_floor:
 		_fall_from = feet_y
+		_jump_gain = 0.0
 	elif not on_floor:
-		_fall_from = maxf(_fall_from, feet_y)
+		if rising_jump and body.velocity.y > 0.0:
+			_jump_gain = maxf(_jump_gain, feet_y - _fall_from)
+		else:
+			_fall_from = maxf(_fall_from, feet_y - _jump_gain)
+	if on_floor or body.velocity.y <= 0.0:
+		rising_jump = false
 	if on_floor and not _was_on_floor:
 		var drop := _fall_from - feet_y
 		last_fall = drop
