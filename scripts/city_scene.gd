@@ -5214,6 +5214,129 @@ func _run_breaklag_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## Stairs go with their floors.
+##
+## A staircase is one spiral column from the ground slab up, standing on
+## itself: nothing is joined to it, and it holds nothing up -- it must not, or a
+## tower would stand on its stairs (collapse_probe's "stairs"). So when the
+## building round it came down, the column stood on alone: whole spirals left
+## standing after their towers had gone (82 of 90 flights of one, 114 of 122
+## of another, in the big city), and falling sections caught on them. A flight
+## now stands while its own storey does -- live structure round the stairwell
+## within STAIR_STOREY_REACH of it. A run of flights that has lost its storeys
+## is cut out as rubble, which falling sections pass through; the flights above
+## it, with nothing under them now, come away at the next solve.
+const STAIR_SWEEP_TICKS := 10
+## Round the stairwell: the floor panels it clips to and a little more.
+const STAIR_RING := 1.2
+var _stairs_due := {}        ## building id -> true: solved since it was last swept
+var _stairs_swept_at := {}   ## building id -> the physics tick it was last swept
+
+
+## Sweep one building's stairs. -1 when it is not time yet (it stays due);
+## otherwise how many pieces were cut out.
+func _sweep_stairs(id: int) -> int:
+	var now := Engine.get_physics_frames()
+	if now - int(_stairs_swept_at.get(id, -100000)) < STAIR_SWEEP_TICKS:
+		return -1
+	_stairs_swept_at[id] = now
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or b.toppled or _toppling.has(id):
+		return 0
+	var runs := _orphan_stairs(b)
+	if runs.is_empty():
+		return 0
+	var cut := 0
+	for run in runs:
+		_disable(b.id, run)
+		var piece := islands.record_detach(b.id, null, b.chunk, run, 0)
+		var came := islands.spawn(b.chunk, run, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+		if came != null:
+			_note_handover(b.id, came)
+			islands.make_debris(came)
+		cut += 1
+	_refresh_furniture(b.id)
+	_recheck_drawn(b.id)
+	b.structure_version += 1
+	_fake_dirty[b.id] = true
+	if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
+		_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
+	_queue_remesh(b.id)
+	# What stood on them has nothing under it now: solved again.
+	_mark_dirty(b.id)
+	return cut
+
+
+## The runs of live stair blocks that have lost their storeys, bottom to top,
+## each a stack of consecutive flights.
+func _orphan_stairs(b: BuildingRegistry.Building) -> Array:
+	var out: Array = []
+	if b.is_build() or not b.is_materialised():
+		return out
+	# Gone: dead, or cut out already (a detached block is not in the dead list).
+	var dead := {}
+	for d in world.get_dead_blocks(b.chunk):
+		dead[d] = true
+	for d in world.get_detached_blocks(b.chunk):
+		dead[d] = true
+	var all_stairs := PackedInt32Array()
+	var live: Array = []   # [fixture index, position in its blocks, block id]
+	for fi in b.fixtures.size():
+		var f = b.fixtures[fi]
+		if f.kind != "staircase":
+			continue
+		for k in f.blocks.size():
+			var bid: int = f.blocks[k]
+			all_stairs.append(bid)
+			if not dead.has(bid):
+				live.append([fi, k, bid])
+	if live.is_empty():
+		return out
+	var ids := PackedInt32Array()
+	for e in live:
+		ids.append(int(e[2]))
+	var storey := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	var shaft := world.get_blocks_box(b.chunk, ids)
+	var ring := AABB(shaft.position - Vector3(STAIR_RING, storey, STAIR_RING),
+			shaft.size + Vector3(2.0 * STAIR_RING, 2.0 * storey, 2.0 * STAIR_RING))
+	var level := storey * 0.25
+	var levels := world.block_centre_levels(b.chunk, ring, level, all_stairs)
+	# Held: live structure round the stairwell within its own storey. A flight
+	# stands if ITS storey or any above it does -- the flights below a floor
+	# that still stands are the way up to it, even through a storey cut out
+	# round them (collapse_probe: floors still standing keep their stairs). So
+	# what goes is the top of each column: every flight above the highest held.
+	var top_held := {}   # fixture index -> highest position held
+	for e in live:
+		var bid: int = e[2]
+		var box := world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+		# Its own storey: from most of a storey below its foot to a little above
+		# its head -- the slab it stands on, the walls and landing beside it.
+		var lo := int(floor((box.position.y - storey * 0.75 - ring.position.y) / level))
+		var hi := int(floor((box.end.y + storey * 0.25 - ring.position.y) / level))
+		var held := false
+		for l in range(maxi(lo, 0), mini(hi, levels.size() - 1) + 1):
+			if levels[l] != 0:
+				held = true
+				break
+		if held:
+			top_held[e[0]] = maxi(int(top_held.get(e[0], -1)), int(e[1]))
+	var run := PackedInt32Array()
+	var last := [-1, -1]
+	for e in live:
+		if int(e[1]) <= int(top_held.get(e[0], -1)):
+			continue
+		var next_to_last: bool = int(e[0]) == int(last[0]) and int(e[1]) == int(last[1]) + 1
+		if not run.is_empty() and not next_to_last:
+			out.append(run)
+			run = PackedInt32Array()
+		run.append(int(e[2]))
+		last = [e[0], e[1]]
+	if not run.is_empty():
+		out.append(run)
+	return out
+
+
 ## A building's shadow proxy (_stream_shadows) is built on a worker now: it has
 ## to turn up, and to catch up with a hit once the building has stopped losing
 ## bricks.
@@ -5236,6 +5359,24 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 			and int(_shadow_proxy_alive.get(b.id, -1)) == world.get_alive_block_count(b.chunk)):
 		await get_tree().physics_frame
 		t += 1
+	# And a hit that leaves its floors standing leaves its stairs (_sweep_stairs
+	# cuts out only flights whose storey has gone). Past a sweep or two first.
+	await _frames(STAIR_SWEEP_TICKS * 3)
+	var stairs_all := 0
+	var stairs_live := 0
+	var gone := {}
+	for d in world.get_dead_blocks(b.chunk):
+		gone[d] = true
+	for d in world.get_detached_blocks(b.chunk):
+		gone[d] = true
+	for f in b.fixtures:
+		if f.kind == "staircase":
+			for bid in f.blocks:
+				stairs_all += 1
+				if not gone.has(bid):
+					stairs_live += 1
+	_gate_ok("building %d: its stairs stand while its floors do" % b.id,
+			stairs_all > 0 and stairs_live == stairs_all, "%d of %d" % [stairs_live, stairs_all])
 	_gate_ok("building %d: and it catches up with a hit" % b.id,
 			_proxy_drawn(b.id) and int(_shadow_proxy_alive.get(b.id, -1))
 					== world.get_alive_block_count(b.chunk),
@@ -5468,6 +5609,18 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 	_gate_ok("building %d: pieces move within 10 ticks of its bricks going" % b.id,
 			moving_at > 0 and gone_at > 0 and moving_at - gone_at <= 10,
 			"gone %d, moving %d" % [gone_at, moving_at])
+	# Stairs go with their floors (_sweep_stairs): none left standing on its own
+	# once the break is over. Given the sweep's time to come round.
+	if b.is_materialised() and not b.fixtures.is_empty():
+		var w := 0
+		while w < STAIR_SWEEP_TICKS * 6 and not _orphan_stairs(b).is_empty():
+			await get_tree().physics_frame
+			w += 1
+		var left := 0
+		for r in _orphan_stairs(b):
+			left += (r as PackedInt32Array).size()
+		_gate_ok("building %d: no flight of stairs stands without its storey" % b.id,
+				left == 0, "%d left standing alone" % left)
 	# The body is let go with the first of them, not after the debris: it was
 	# 13 ticks behind when two pieces went a tick, smallest first.
 	if not CollapseDirector.is_mega(bricks):
@@ -5932,6 +6085,8 @@ func _physics_process(_delta: float) -> void:
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
 			continue
+		if not b.fixtures.is_empty():
+			_stairs_due[id] = true
 		var quiet := true
 		# Stress, then balance, then what has come loose -- one call, which
 		# walks the building's joints once where the three calls walked them
@@ -6075,6 +6230,13 @@ func _physics_process(_delta: float) -> void:
 		if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
 			_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
 		_queue_remesh(b.id)
+	for sid in _stairs_due.keys():
+		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
+			break
+		var cut := _sweep_stairs(int(sid))
+		if cut >= 0:
+			_stairs_due.erase(sid)
+			spawned += cut
 	# M4: spread promotions rather than letting several land in one frame.
 	var hits := 0
 	var damage_until := Time.get_ticks_usec() + int(DAMAGE_BUDGET_MS * 1000.0)
