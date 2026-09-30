@@ -2239,8 +2239,33 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
     }
     const auto t0 = std::chrono::steady_clock::now();
     const Chunk &c = chunks[chunk_id];
-    const int dim[3] = { c.dims.x, c.dims.y, c.dims.z };
-    const int stride[3] = { 1, dim[0], dim[0] * dim[1] }; // Chunk::index_of
+
+    // Only the box the live bricks are in. A piece cut out of a building keeps
+    // the building's grid -- 42x627x60, 1.58 million cells, round 6,500 bricks
+    // -- and walking all of it was 10-16 ms a build, in a queue that was
+    // building one or three a tick for pieces falling far off.
+    Vector3i lo(INT_MAX, INT_MAX, INT_MAX);
+    Vector3i hi(INT_MIN, INT_MIN, INT_MIN);
+    for (const Block &b : c.blocks) {
+        if (b.removed || !b.alive || b.decorative) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i end = base + archetypes[b.archetype].size;
+        lo = Vector3i(std::min(lo.x, base.x), std::min(lo.y, base.y), std::min(lo.z, base.z));
+        hi = Vector3i(std::max(hi.x, end.x), std::max(hi.y, end.y), std::max(hi.z, end.z));
+    }
+    if (lo.x > hi.x) {
+        last_coarse_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        return arrays;
+    }
+    lo = Vector3i(std::max(lo.x, 0), std::max(lo.y, 0), std::max(lo.z, 0));
+    hi = Vector3i(std::min(hi.x, c.dims.x), std::min(hi.y, c.dims.y), std::min(hi.z, c.dims.z));
+    // From here on the grid is that box: cell (x, y, z) of it is the chunk's
+    // lo + (x, y, z), and a neighbour outside it holds nothing drawn.
+    const int dim[3] = { hi.x - lo.x, hi.y - lo.y, hi.z - lo.z };
+    const int stride[3] = { 1, dim[0], dim[0] * dim[1] }; // as Chunk::index_of
     const int cells = dim[0] * dim[1] * dim[2];
 
     // Per cell: 0 = nothing drawn there, else 1 + the colour's index; and its
@@ -2255,7 +2280,8 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
     std::vector<Color> cols;
     std::vector<int32_t> block_key(c.blocks.size(), 0);
     for (int i = 0; i < cells; ++i) {
-        const int32_t bid = c.occupancy[(size_t)i];
+        const int32_t bid = c.occupancy[(size_t)c.index_of(Vector3i(
+                lo.x + i % dim[0], lo.y + (i / dim[0]) % dim[1], lo.z + i / stride[2]))];
         if (bid < 0) {
             continue;
         }
@@ -2409,7 +2435,8 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
                     cell[sa] = si + oc[sa];
                     cell[pa] = (oc[pa] == 0) ? ai : (a1 + 1);
                     cell[pb] = (oc[pb] == 0) ? bj : (b1 + 1);
-                    const Vector3 vp(cell[0] * cs.x, cell[1] * cs.y, cell[2] * cs.z);
+                    const Vector3 vp((lo.x + cell[0]) * cs.x, (lo.y + cell[1]) * cs.y,
+                            (lo.z + cell[2]) * cs.z);
                     switch (f) {
                         case 0: case 1: uu.push_back(Vector2(vp.z, vp.y)); break;
                         case 2: case 3: uu.push_back(Vector2(vp.x, vp.z)); break;

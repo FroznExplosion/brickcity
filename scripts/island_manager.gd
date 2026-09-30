@@ -255,6 +255,11 @@ const ISLAND_MESH_RANGE := 120.0
 const ISLAND_MESH_HYSTERESIS := 25.0
 ## Changing tier is cheap, but not free, so only a few change tier per tick.
 const ISLAND_LOD_PER_TICK := 2
+## A stand-in already drawn is built again at most this often. A piece falling
+## far off sheds bricks every few ticks, and each was a stand-in built again --
+## one piece ten times over in the big city's collapse. 145 m away nobody sees
+## half a second of a few bricks too many.
+const COARSE_REBUILD_TICKS := 15
 ## Landings processed per tick. A landing shears joints and re-solves the
 ## piece, and when a whole city comes down at once hundreds arrive together
 ## -- 98 ms of a 108 ms tick. The rest wait their turn; the queue keeps the
@@ -1676,7 +1681,9 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	# have it now: a far piece being shot at would otherwise build it again
 	# for every hit -- 1-3 ms each for a big one, where a patch was nothing.
 	if isl.coarse:
-		if force_full:
+		var fresh := isl.coarse_drawn \
+				and Engine.get_physics_frames() - isl.coarse_tick < COARSE_REBUILD_TICKS
+		if force_full and not fresh:
 			_build_coarse(isl)
 		elif not _mesh_queue.has(isl):
 			_mesh_queue.append(isl)
@@ -1731,6 +1738,7 @@ func _starts_coarse(isl: BrickIsland) -> bool:
 ## the bricks' vertices. A big one is uploaded on a worker like any other mesh.
 func _build_coarse(isl: BrickIsland) -> void:
 	var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
+	isl.coarse_tick = Engine.get_physics_frames()
 	coarse_built += 1
 	coarse_worst_ms = maxf(coarse_worst_ms, world.get_last_coarse_ms())
 	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d (coarse)" % isl.chunk)
@@ -3109,8 +3117,13 @@ func _drain_mesh_queue() -> void:
 		if not isl.is_valid() or isl.mesh == null:
 			_mesh_queue.remove_at(i)
 			continue
-		# A stand-in waits on nothing: built now, in this budget.
+		# A stand-in waits on nothing: built now, in this budget -- unless the
+		# one it has is fresh (COARSE_REBUILD_TICKS), when it waits its turn.
 		if isl.coarse:
+			if isl.coarse_drawn \
+					and Engine.get_physics_frames() - isl.coarse_tick < COARSE_REBUILD_TICKS:
+				i += 1
+				continue
 			_mesh_queue.remove_at(i)
 			rebuild_mesh(isl, true)
 			done += 1
