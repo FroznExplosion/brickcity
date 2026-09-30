@@ -521,9 +521,11 @@ void fragment() {
         mtl = MATERIAL_TABLE[clamp(mi, 0, 6)];
     }
 
-    if (v_smooth_far > 0.5) {
-        // FLAT PER TRIANGLE (19.20): a shelf is lit as a brick top and a
-        // ramp between shelves as a step face, darker, as a blocky wall is.
+    // FAR GROUND, blocky (G 0.5) or smooth (G 1.0), lit by ONE rule (19.20,
+    // 19.21): flat per triangle, a top at full brightness and anything
+    // steeper -- a smooth ramp or a blocky step -- darkened alike. The border
+    // between the two then differs in shape only.
+    if (v_smooth_far > 0.25) {
         vec3 fn = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
         if (dot(fn, NORMAL) < 0.0) {
             fn = -fn;
@@ -532,7 +534,7 @@ void fragment() {
         float up = (INV_VIEW_MATRIX * vec4(fn, 0.0)).y;
         albedo *= mix(far_ramp_shade, 1.0, smoothstep(0.75, 0.97, up));
     }
-    if (far_courses && v_smooth_far > 0.5) {
+    if (far_courses && v_smooth_far > 0.75) {
         float c = v_world.y / far_course_m;
         float fw = max(fwidth(c), 1e-4);
         float f = fract(c);
