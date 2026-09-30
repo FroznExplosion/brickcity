@@ -267,7 +267,13 @@ func _check_piece_integrity() -> void:
 				var h0 := p[i + 4]
 				var m0 := p[i + 5]
 				var kind := p[i + 6]
-				if maxi(sx, sz) > BrickTerrain.get_max_piece_length() or mini(sx, sz) > 2:
+				# Flat pieces come off the ladder (at most 2 deep); a SLOPE
+				# (kind 3, Terrain.md 19.22) is up to 4 along the contour and
+				# 2-4 down the fall.
+				if kind == 3:
+					if maxi(sx, sz) > 4 or mini(sx, sz) < 1:
+						oversize += 1
+				elif maxi(sx, sz) > BrickTerrain.get_max_piece_length() or mini(sx, sz) > 2:
 					oversize += 1
 				# A ramp is tilted, so it can only ever be 1x1 — nothing longer
 				# can share one plane.

@@ -890,6 +890,32 @@ static const int LADDER_COUNT = (int)(sizeof(LADDER) / sizeof(LADDER[0]));
 /// their studs. Runtime so a scene can turn it off and compare.
 static float g_overlay_chance = OVERLAY_CHANCE;
 
+bool g_slope_pieces = true;
+
+/// A slope piece's top height at `s` studs from its back edge, in metres.
+/// `top` is the terrace, `yf` where the face meets the front lip.
+static float slope_profile(float s, int len, float top, float yf, bool straight = false) {
+    if (straight) {
+        // A cheese slope: one straight face from the back to the front.
+        return top + (yf - top) * (s / (float)len);
+    }
+    if (len <= 2) {
+        // 1x2 slope: flat over the back stud, a straight face over the front.
+        return s <= 1.0f ? top : top + (yf - top) * (s - 1.0f);
+    }
+    // Curved slope: flat at the back, falling ever steeper to the front.
+    const float u = s / (float)len;
+    return top - (top - yf) * u * u;
+}
+
+/// Where a slope's face meets its front: one plate above the lower ground
+/// (the LEGO lip), or ON it for a one-plate fall (a cheese slope).
+static float slope_front(const Piece &p) {
+    const float top = (float)(p.top + 1) * PLATE_M;
+    const float lower = top - (float)p.fall * PLATE_M;
+    return p.fall >= 2 ? lower + PLATE_M : lower;
+}
+
 void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         std::vector<int32_t> &owner) {
     out.clear();
@@ -932,6 +958,96 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
             }
         }
     };
+
+    // SLOPES FIRST (Terrain.md 19.22), along the terrace edges, before the
+    // packer lays flat pieces over them. A cell is a slope's FRONT where its
+    // neighbour on one side is 1-3 plates lower and the terrace runs back at
+    // least two studs behind it at the same height, material and colour: the
+    // run decides the piece (2 a 1x2 slope, 3-4 a curved slope), and rows
+    // along the contour with the same shape merge up to four wide.
+    if (g_slope_pieces) {
+        const int DXS[4] = { -1, 1, 0, 0 };
+        const int DZS[4] = { 0, 0, -1, 1 };
+        auto run_back = [&](int lx, int lz, int r) {
+            const int i0 = TileSample::idx(lx, lz);
+            if (s.smooth[i0]) {
+                return 0;
+            }
+            const int nt = s.tp[TileSample::idx(lx + DXS[r], lz + DZS[r])];
+            const int fall = s.tp[i0] - nt;
+            if (fall < 1 || fall > PLATES_PER_CELL) {
+                return 0;
+            }
+            int n = 0;
+            while (n < 4) {
+                const int cx = lx - DXS[r] * n;
+                const int cz = lz - DZS[r] * n;
+                if (cx < 0 || cz < 0 || cx >= TILE || cz >= TILE) {
+                    break;
+                }
+                const int ci = TileSample::idx(cx, cz);
+                if (owner[cx + TILE * cz] >= 0 || s.smooth[ci] || s.tp[ci] != s.tp[i0]
+                        || s.mat[ci] != s.mat[i0] || s.col[ci] != s.col[i0]) {
+                    break;
+                }
+                ++n;
+            }
+            return n >= 2 ? n : 0;
+        };
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                if (owner[lx + TILE * lz] >= 0) {
+                    continue;
+                }
+                int best_r = -1, best_len = 0;
+                for (int r = 0; r < 4; ++r) {
+                    const int len = run_back(lx, lz, r);
+                    if (len > best_len) {
+                        best_len = len;
+                        best_r = r;
+                    }
+                }
+                if (best_r < 0) {
+                    continue;
+                }
+                const int i0 = TileSample::idx(lx, lz);
+                const int fall = s.tp[i0] - s.tp[TileSample::idx(lx + DXS[best_r], lz + DZS[best_r])];
+                // Across the fall: +Z for an X fall, +X for a Z fall.
+                const int ax = best_r < 2 ? 0 : 1;
+                const int az = best_r < 2 ? 1 : 0;
+                int w = 1;
+                while (w < 4) {
+                    const int nx = lx + ax * w, nz = lz + az * w;
+                    if (nx >= TILE || nz >= TILE || owner[nx + TILE * nz] >= 0) {
+                        break;
+                    }
+                    const int ni = TileSample::idx(nx, nz);
+                    if (s.tp[ni] != s.tp[i0] || s.mat[ni] != s.mat[i0] || s.col[ni] != s.col[i0]
+                            || run_back(nx, nz, best_r) < best_len
+                            || s.tp[i0] - s.tp[TileSample::idx(nx + DXS[best_r], nz + DZS[best_r])] != fall) {
+                        break;
+                    }
+                    ++w;
+                }
+                // The piece's min corner and footprint: it runs BACK from the
+                // front cell, away from the fall.
+                const int len = best_len;
+                int ox = lx, oz = lz, sx = w, sz = len;
+                if (best_r < 2) {
+                    sx = len;
+                    sz = w;
+                    ox = best_r == 1 ? lx - (len - 1) : lx;
+                } else {
+                    oz = best_r == 3 ? lz - (len - 1) : lz;
+                }
+                emit(ox, oz, sx, sz, PIECE_SLOPE, best_r);
+                out.back().slope_len = (uint8_t)len;
+                out.back().fall = (uint8_t)fall;
+                out.back().top = s.tp[i0];
+                out.back().h = s.h[i0];
+            }
+        }
+    }
 
     // Ramps first. They are 1x1 by nature -- a tilted top cannot be shared by
     // a longer piece -- and placing them before anything else stops a tile run
@@ -2510,6 +2626,8 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 } // namespace
 
 static int g_coarse_smooth_step = 8;
+void BrickTerrain::set_slope_pieces(bool on) { brick::g_slope_pieces = on; }
+bool BrickTerrain::get_slope_pieces() { return brick::g_slope_pieces; }
 
 /// How far every edge of a terrain LOD piece hangs down: the detail tiles'
 /// outer skirt, a coarse block's edge walls and a smooth block's skirt. Deep
@@ -2839,6 +2957,197 @@ Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
     return out;
 }
 
+/// A slope piece's surface at a world point (x, z) over it, metres.
+static float slope_top_at(const Piece &p, float wx, float wz) {
+    const float gx = wx / STUD_M, gz = wz / STUD_M;
+    float sv;
+    if (p.ramp == 1) sv = gx - (float)p.ox;
+    else if (p.ramp == 0) sv = (float)(p.ox + p.sx) - gx;
+    else if (p.ramp == 3) sv = gz - (float)p.oz;
+    else sv = (float)(p.oz + p.sz) - gz;
+    sv = std::clamp(sv, 0.0f, (float)p.slope_len);
+    return slope_profile(sv, p.slope_len, (float)(p.top + 1) * PLATE_M, slope_front(p), p.fall < 2);
+}
+
+/// A quad facing `want`, whatever order its corners came in.
+static void quad_facing(MeshBuf &m, const Vector3 &want, const Color &col, const Vector2 &face,
+        const Vector3 &a, const Vector3 &b, const Vector3 &d, const Vector3 &e,
+        const Vector2 &ua, const Vector2 &ub, const Vector2 &ud, const Vector2 &ue) {
+    // raw_quad's front face has its winding normal pointing AWAY from `n`.
+    // Read from the DIAGONALS: a side wall that tapers to nothing at one end
+    // has a degenerate first triangle, and reading that one flipped 312
+    // triangles the wrong way (the probe's winding check).
+    const Vector3 wn = (d - a).cross(e - b);
+    if (wn.length_squared() < 1e-12f) {
+        return;   // no area: nothing to draw
+    }
+    if (wn.dot(want) > 0.0f) {
+        m.raw_quad(want, col, face, a, e, d, b, ua, ue, ud, ub);
+    } else {
+        m.raw_quad(want, col, face, a, b, d, e, ua, ub, ud, ue);
+    }
+}
+
+/// One slope piece (19.22): its profiled top, its front lip, its back wall
+/// where the ground behind is lower, and its two sides -- a wall down to a
+/// lower neighbour, or a cheek UP to a higher one, which is the neighbour's
+/// face the slope's cut has exposed. The mask skips a piece's own brick, so
+/// everything the piece exposes it draws itself.
+static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p,
+        const std::vector<Piece> &pieces, const std::vector<int32_t> &owner, const Color &col) {
+    const int r = p.ramp;
+    const int len = p.slope_len;
+    const bool along_x = r < 2;
+    const int width = along_x ? p.sz : p.sx;
+    const float top = (float)(p.top + 1) * PLATE_M;
+    const float yf = slope_front(p);
+    const float yb = top - BRICK_M;
+    const Vector2 face((float)p.sx * STUD_M, (float)p.sz * STUD_M);
+    // Local (s along the fall from the back edge, q across) to world.
+    auto P = [&](float sv, float q, float y) {
+        float x, z;
+        if (along_x) {
+            x = r == 1 ? ((float)p.ox + sv) * STUD_M : ((float)(p.ox + p.sx) - sv) * STUD_M;
+            z = ((float)p.oz + q) * STUD_M;
+        } else {
+            z = r == 3 ? ((float)p.oz + sv) * STUD_M : ((float)(p.oz + p.sz) - sv) * STUD_M;
+            x = ((float)p.ox + q) * STUD_M;
+        }
+        return Vector3(x, y, z);
+    };
+    const Vector3 fall_n = along_x ? Vector3(r == 1 ? 1.0f : -1.0f, 0, 0)
+                                   : Vector3(0, 0, r == 3 ? 1.0f : -1.0f);
+    const Vector3 across_n = along_x ? Vector3(0, 0, 1) : Vector3(1, 0, 0);
+    // Stations down the fall: the 1x2 needs its break at one stud; a curve,
+    // three a stud.
+    // A one-plate fall is a CHEESE slope: one straight face, one quad. A 1x2
+    // breaks at one stud; a curve takes two stations a stud -- enough for the
+    // curve to read, and a third of the triangles three a stud cost.
+    const bool cheese = p.fall < 2;
+    std::vector<float> st;
+    if (cheese) {
+        st = { 0.0f, (float)len };
+    } else if (len <= 2) {
+        st = { 0.0f, 1.0f, 2.0f };
+    } else {
+        for (int k = 0; k <= len * 2; ++k) {
+            st.push_back((float)k / 2.0f);
+        }
+    }
+    auto Y = [&](float sv) { return slope_profile(sv, len, top, yf, cheese); };
+    const float W = (float)width;
+
+    // TOP.
+    for (size_t k = 0; k + 1 < st.size(); ++k) {
+        const float s0 = st[k], s1 = st[k + 1];
+        const Vector3 a = P(s0, 0, Y(s0)), b = P(s0, W, Y(s0));
+        const Vector3 d = P(s1, W, Y(s1)), e = P(s1, 0, Y(s1));
+        Vector3 n = (d - a).cross(e - b);
+        n = n.y < 0.0f ? -n : n;
+        n = n.normalized();
+        quad_facing(m, n, col, face, a, b, d, e,
+            Vector2(0, s0 * STUD_M), Vector2(W * STUD_M, s0 * STUD_M),
+            Vector2(W * STUD_M, s1 * STUD_M), Vector2(0, s1 * STUD_M));
+    }
+    // FRONT: the lip, down to the brick's foot.
+    {
+        const float L = (float)len;
+        const Vector2 f(W * STUD_M, yf - yb);
+        quad_facing(m, fall_n, col, f,
+            P(L, 0, yb), P(L, W, yb), P(L, W, yf), P(L, 0, yf),
+            Vector2(0, f.y), Vector2(f.x, f.y), Vector2(f.x, 0), Vector2(0, 0));
+    }
+    // Neighbour surface height at local (s, q) just outside the piece.
+    auto cell_of = [&](float sv, float q) {
+        const Vector3 w = P(sv, q, 0.0f);
+        return Vector2i((int)std::floor(w.x / STUD_M + 1e-4f), (int)std::floor(w.z / STUD_M + 1e-4f));
+    };
+    // The neighbouring ground's height at local (s, q): its column top, or
+    // -- where the neighbour is itself a slope -- that slope's surface there,
+    // which is lower than its column. Walls sized from the column stopped
+    // short of a neighbouring slope and left a slit to the water (19.22).
+    auto ground_at = [&](float sv, float q) {
+        const Vector2i c = cell_of(sv, q);
+        if (c.x >= 0 && c.y >= 0 && c.x < TILE && c.y < TILE) {
+            const int32_t o = owner[(size_t)c.x + TILE * c.y];
+            if (o >= 0 && pieces[o].kind == PIECE_SLOPE) {
+                const Vector3 w = P(sv, q, 0.0f);
+                return slope_top_at(pieces[o], w.x, w.z);
+            }
+        }
+        return (float)(s.tp[TileSample::idx(c.x, c.y)] + 1) * PLATE_M;
+    };
+    // BACK: only where the ground behind is lower.
+    for (int q = 0; q < width; ++q) {
+        const float ny = ground_at(-0.5f, (float)q + 0.5f);
+        if (ny < top - 1e-5f) {
+            const float lo = std::max(ny, yb);
+            quad_facing(m, -fall_n, col, Vector2(STUD_M, top - lo),
+                P(0, (float)q, lo), P(0, (float)q + 1, lo), P(0, (float)q + 1, top), P(0, (float)q, top),
+                Vector2(0, top - lo), Vector2(STUD_M, top - lo), Vector2(STUD_M, 0), Vector2(0, 0));
+        }
+    }
+    // SIDES, a segment at a time.
+    for (int side = 0; side < 2; ++side) {
+        const float q = side == 0 ? 0.0f : W;
+        const float qo = side == 0 ? -0.5f : W + 0.5f;
+        const Vector3 out_n = side == 0 ? -across_n : across_n;
+        for (size_t k = 0; k + 1 < st.size(); ++k) {
+            const float s0 = st[k], s1 = st[k + 1];
+            const Vector2i c = cell_of((s0 + s1) * 0.5f, qo);
+            const int ni = TileSample::idx(c.x, c.y);
+            // The same slope beside us (a neighbouring piece of the same shape
+            // and line): the two tops meet, nothing to close.
+            if (c.x >= 0 && c.y >= 0 && c.x < TILE && c.y < TILE) {
+                const int32_t o = owner[(size_t)c.x + TILE * c.y];
+                if (o >= 0) {
+                    const Piece &n2 = pieces[o];
+                    if (n2.kind == PIECE_SLOPE && n2.ramp == p.ramp && n2.top == p.top
+                            && n2.slope_len == p.slope_len && n2.fall == p.fall
+                            && (along_x ? n2.ox == p.ox : n2.oz == p.oz)) {
+                        continue;
+                    }
+                }
+            }
+            (void)ni;
+            // Lowest of the neighbour's surface at the two ends: a wall must
+            // reach the lower end.
+            const float ny = std::min(ground_at(s0 + 0.01f, qo), ground_at(s1 - 0.01f, qo));
+            const float y0 = Y(s0), y1 = Y(s1);
+            const Vector2 f((s1 - s0) * STUD_M, top - yb);
+            if (ny < std::max(y0, y1) - 1e-5f) {
+                // A wall down to the lower neighbour (never below our foot).
+                const float lo = std::max(ny, yb);
+                if (y0 > lo + 1e-5f || y1 > lo + 1e-5f) {
+                    quad_facing(m, out_n, col, f,
+                        P(s0, q, lo), P(s1, q, lo), P(s1, q, std::max(y1, lo)), P(s0, q, std::max(y0, lo)),
+                        Vector2(0, f.y), Vector2(f.x, f.y), Vector2(f.x, 0), Vector2(0, 0));
+                }
+            }
+            if (ny > std::min(y0, y1) + 1e-5f) {
+                // A cheek: the neighbour's face our cut exposed, facing us.
+                const float hi = std::min(ny, top);
+                if (hi > y0 + 1e-5f || hi > y1 + 1e-5f) {
+                    quad_facing(m, -out_n, col, f,
+                        P(s0, q, std::min(y0, hi)), P(s1, q, std::min(y1, hi)), P(s1, q, hi), P(s0, q, hi),
+                        Vector2(0, f.y), Vector2(f.x, f.y), Vector2(f.x, 0), Vector2(0, 0));
+                }
+            }
+        }
+    }
+}
+
+/// A slope piece's surface under a cell, for its collision box.
+static float slope_cell_top(const Piece &p, int lx, int lz) {
+    const int r = p.ramp;
+    float sv;
+    if (r == 1) sv = (float)(lx - p.ox) + 0.5f;
+    else if (r == 0) sv = (float)(p.ox + p.sx - lx) - 0.5f;
+    else if (r == 3) sv = (float)(lz - p.oz) + 0.5f;
+    else sv = (float)(p.oz + p.sz - lz) - 0.5f;
+    return slope_profile(sv, p.slope_len, (float)(p.top + 1) * PLATE_M, slope_front(p), p.fall < 2);
+}
+
 Dictionary BrickTerrain::build_tile(int tx, int tz) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 
@@ -2965,6 +3274,12 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 full += OVERLAY_M;   // you stand on the tile, not on the brick
             }
             ctop[(size_t)lx + TILE * lz] = (s.ramp[i] != 255) ? full - BRICK_M * 0.5f : full;
+            if (o >= 0 && pieces[o].kind == PIECE_SLOPE) {
+                // On a slope, the box at the slope's height over this cell,
+                // quantised so a row of cells still merges.
+                ctop[(size_t)lx + TILE * lz] = std::round(slope_cell_top(pieces[o], lx, lz)
+                        / COLLIDE_QUANTUM) * COLLIDE_QUANTUM;
+            }
         }
     }
 
@@ -3127,7 +3442,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         // laid brick and a moulded baseplate, and the reason the mesher packs.
         const Vector2 face((float)p.sx * STUD_M, (float)p.sz * STUD_M);
 
-        if (p.kind == PIECE_RAMP) {
+        if (p.kind == PIECE_SLOPE) {
+            emit_slope(m, s, p, pieces, owner, col);
+        } else if (p.kind == PIECE_RAMP) {
             const float lo = top - BRICK_M;
             float y00 = top, y10 = top, y11 = top, y01 = top;
             switch (p.ramp) {
@@ -3641,6 +3958,10 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("build_coarse", "tx0", "tz0", "span", "step"),
         &BrickTerrain::build_coarse);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_slope_pieces", "on"),
+        &BrickTerrain::set_slope_pieces);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_slope_pieces"),
+        &BrickTerrain::get_slope_pieces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_coarse_smooth_step", "step"),
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
@@ -3659,6 +3980,7 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_BRICK", PIECE_BRICK);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_TILE", PIECE_TILE);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_RAMP", PIECE_RAMP);
+    ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_SLOPE", PIECE_SLOPE);
 }
 
 // ---------------------------------------------------------------------------

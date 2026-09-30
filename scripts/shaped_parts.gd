@@ -67,7 +67,8 @@ static func build(kind: String, size: Vector3i, axis := "z") -> Dictionary:
 	out["hulls"] = hulls
 	# A curved slope is smooth all over, like the real part: nothing clips to a
 	# curve, and a stud stood on one would float half in the air.
-	if kind == "curve":
+	# Nor on a one-plate wedge: it is a slope all the way to its back edge.
+	if kind == "curve" or size.y == 1:
 		out["studs"] = _zeros(size.x * size.z)
 	return out
 
@@ -142,6 +143,11 @@ static func _slope_prism(size: Vector3i, axis: String, curved: bool) -> Dictiona
 		# (0, 0), which is the curve's last facet.
 		while smooth.size() < poly.size():
 			smooth.append(true)
+	elif size.y == 1:
+		# A CHEESE slope: one plate high, one straight face from the top of the
+		# back to the front of the floor. No strip, no lip -- neither fits in
+		# a plate.
+		smooth.append(false)
 	else:
 		var flat := minf(S, depth * 0.5)          # the stud-bearing back strip
 		poly.append(Vector2(depth - flat, h))

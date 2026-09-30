@@ -2465,6 +2465,41 @@ brightness, anything steeper darkened by `far_ramp_shade`. The border now
 changes shape (steps to ramps) but not shading. Course lines stay on smooth
 ground only.
 
+### 19.22 Slopes and curves along terrace edges (after LEGO Worlds)
+
+`Docs/Reference/lego-worlds.md`: LEGO Worlds' hills are rows of slopes and
+curved slopes laid along the contour, not 1x1 ramps (which we tried and turned
+off, `RAMPS_ENABLED`, because a 50-degree face a third of a metre wide read as
+melted). So a new piece, `PIECE_SLOPE`:
+
+* **Where:** a cell whose neighbour on one side is 1-3 plates lower, with the
+  terrace running back at least 2 studs behind it at the same height, material
+  and colour. Placed before the flat packer.
+* **Which:** the run decides. 2 studs: a **1x2 slope** (flat back stud, 39
+  degree face, a plate-high lip). 3-4 studs: a **1x3 / 1x4 curved slope** (flat
+  at the back, falling ever steeper, two stations a stud). A one-plate fall
+  (the half-brick regions): a **cheese slope**, one straight face, no lip.
+* **Width:** rows along the contour with the same shape merge up to 4 wide,
+  like LEGO's 2x4 slopes.
+* **Drawn by the piece itself** (the mask skips a piece's own brick): the
+  profiled top, the front lip, a back wall where the ground behind is lower,
+  and each side a wall down to lower ground or a CHEEK up to higher ground --
+  the neighbour's face the slope's cut exposes. Neighbouring slopes are
+  measured at their real surface, not their column, or the walls stopped short
+  and showed the water through a slit.
+* **Collision:** each cell's box at the slope's height over its middle.
+* **Toggle:** `BrickTerrain.set_slope_pieces`; the F10 menu has "Slopes and
+  curves on terrace edges".
+
+Cost: 381k -> 660k detail triangles at the origin view (a first version with
+three stations a stud was 1.65M). Known gaps: a few specks where a slope meets
+a slope in the next tile (a tile cannot see its neighbour's pieces); no corner
+pieces yet, so a turning contour steps rather than wrapping.
+
+The workshop palette gained the same parts (Build mode area, small change):
+`curve_1x3`, `curve_1x4`, `curve_2x4`, and one-plate `cheese_1x1`, `cheese_1x2`,
+`cheese_2x2` (studless, in the Slopes category).
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and
