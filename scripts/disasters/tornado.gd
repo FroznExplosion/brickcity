@@ -207,6 +207,7 @@ func _on_phase(p: Phase) -> void:
 			_sky_from = _sky
 		Phase.DONE:
 			ctx.set_storm(false)
+			ctx.gale = Vector3.ZERO
 			_sky = 0.0
 			ctx.set_sky(0.0, SKY_SUN, SKY_TOP, SKY_HORIZON, SKY_SUN_MUL)
 			ctx.set_weather(0.0, 1.0, 1.0)
@@ -268,6 +269,9 @@ func _act(dt: float) -> void:
 	ctx.set_weather(strength, 0.9, 1.8, intensity)
 	# Dust, thicker the nearer the funnel.
 	var near := clampf(1.0 - Vector2(ctx.player_pos().x - pos.x, ctx.player_pos().z - pos.z).length() / 80.0, 0.0, 1.0)
+	# Trees and buildings lean along its walk, harder the nearer it is.
+	var heading := vel.normalized() if vel.length() > 0.1 else Vector3.RIGHT
+	ctx.gale = heading * strength * (0.3 + 0.9 * near)
 	ctx.set_screen(0.0, strength * (0.25 + 0.5 * near), Color(0.46, 0.46, 0.4))
 	if strength <= 0.01:
 		return

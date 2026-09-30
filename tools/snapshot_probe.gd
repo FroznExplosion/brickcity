@@ -450,6 +450,22 @@ func _check_load(label: String, bytes: PackedByteArray, want: Dictionary) -> voi
 	_ok("the pieces that were asleep are asleep",
 			(c.islands as IslandManager).dormant.size() == int(want.dormant),
 			"%d of %d" % [(c.islands as IslandManager).dormant.size(), int(want.dormant)])
+	# And drawn where they lie: each gets its stand-in a little after loading
+	# (IslandManager.build_due_stand_ins), inside the box its record covers.
+	var im := c.islands as IslandManager
+	while im.build_due_stand_ins(1000.0) > 0:
+		pass
+	var asleep := 0
+	var drawn := 0
+	for d in im.dormant:
+		if d.record.block_count() <= 1:
+			continue
+		asleep += 1
+		if d.stand_in != null and is_instance_valid(d.stand_in) and d.stand_in.mesh != null \
+				and d.record.box.grow(0.5).encloses(d.stand_in.transform * d.stand_in.get_aabb()):
+			drawn += 1
+	_ok("and drawn where they lie", drawn == asleep,
+			"%d of %d asleep drawn" % [drawn, asleep])
 	# And it is a world the game can carry on in: a new command follows the log.
 	var next_seq: int = (c.authority as WorldAuthority).commands.size()
 	var any: BrickIsland = null

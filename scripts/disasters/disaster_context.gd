@@ -21,6 +21,16 @@ var islands: IslandManager
 var fire: FireSpread
 ## True while it rains. Fire reads it: rain halves spread and slows heating.
 var raining := false
+## How wet the world's surfaces are (WeatherFx, weather.gdshaderinc): up while
+## it rains, over WET_S; drying over DRY_S after. Eased here, every frame.
+var wet := 0.0
+## The wind trees and buildings sway in: direction x strength, 0..~1.5.
+## Disasters set it; it is theirs to put back to zero.
+var gale := Vector3.ZERO
+const WET_S := 15.0
+const DRY_S := 120.0
+## Rain falling now, eased over a couple of seconds either way.
+var rain := 0.0
 
 ## Where soldiers must not stand, by the disaster that said so: id -> AABB
 ## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
@@ -46,10 +56,15 @@ const SHAKE_MAX := 0.6
 var _sky_base := {}
 
 
+## The host is usually a city, but a scene with no buildings -- the heightfield
+## test, whose sea a hurricane raises -- can host a director too. It needs a
+## `camera` and a `_sun`; `registry`, `islands`, `soldiers` and `ai_services`
+## are whatever it has, and a disaster that needs buildings is not offered
+## there (DisasterDirector.setup's `kinds`).
 func _init(city_node: Node3D) -> void:
 	city = city_node
-	registry = city.registry
-	islands = city.islands
+	registry = city.get("registry")
+	islands = city.get("islands")
 
 
 # --- Changing bricks: through the authority, like a gun -------------------
@@ -305,6 +320,8 @@ func impact_fx(point: Vector3, normal: Vector3) -> void:
 ## Every living pawn: the soldiers', and the player's when the player is in one.
 func pawns() -> Array[Pawn]:
 	var out: Array[Pawn] = []
+	if city.get("soldiers") == null:
+		return out
 	for so in city.soldiers:
 		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn):
 			out.append(so.pawn)
@@ -336,7 +353,7 @@ func damage_pawns(point: Vector3, radius: float, amount: float) -> int:
 ## Tell the AI a storm is raging (AIServices.storm): soldiers with nothing to
 ## fight get under a roof (BTShelter).
 func set_storm(on: bool) -> void:
-	if city.ai_services != null:
+	if city.get("ai_services") != null:
 		city.ai_services.storm = on
 
 
@@ -344,7 +361,7 @@ func set_storm(on: bool) -> void:
 ## is clear, 1 is `sight` and `aim` in full, and intensity scales how far from
 ## clear they go. Sight never drops below 60%.
 func set_weather(amount: float, sight: float, aim: float, intensity := 1.0) -> void:
-	if city.ai_services == null:
+	if city.get("ai_services") == null:
 		return
 	var k := clampf(amount, 0.0, 1.0) * maxf(intensity, 0.0)
 	city.ai_services.sight_mul = clampf(1.0 - (1.0 - sight) * k, 0.6, 1.0)
@@ -373,6 +390,26 @@ func duck_near(point: Vector3, radius: float, seconds: float) -> int:
 	return n
 
 
+# --- The sea and the wind ------------------------------------------------------
+
+## Raise the sea by `surge` metres and scale its waves by `wave_mul`, where the
+## host has a sea (`disaster_sea`). (0, 1) puts it back exactly. False where
+## there is no sea.
+func set_sea(surge: float, wave_mul: float) -> bool:
+	if not city.has_method("disaster_sea"):
+		return false
+	city.disaster_sea(surge, wave_mul)
+	return true
+
+
+## The wind on whoever is walking or swimming: metres a second of drift added
+## to their motion (DebugCamera.wind). Vector3.ZERO is calm.
+func set_wind(v: Vector3) -> void:
+	var cam = city.get("camera")
+	if cam != null and "wind" in cam:
+		cam.wind = v
+
+
 # --- The player ---------------------------------------------------------------
 
 ## Where the player is looking from: the camera, whatever it is attached to.
@@ -387,8 +424,16 @@ func shake(point: Vector3, strength: float) -> void:
 	_shake = minf(SHAKE_MAX, _shake + strength * pow(0.5, d / 20.0))
 
 
-## Called by the director every frame: applies and decays the shake.
+## Called by the director every frame: applies and decays the shake, and eases
+## the wet.
 func step(delta: float) -> void:
+	wet = move_toward(wet, 1.0 if raining else 0.0, delta / (WET_S if raining else DRY_S))
+	rain = move_toward(rain, 1.0 if raining else 0.0, delta / 2.0)
+	WeatherFx.set_weather(wet, gale, rain)
+	_step_shake(delta)
+
+
+func _step_shake(delta: float) -> void:
 	var cam: Camera3D = city.camera
 	if _shake < 0.001:
 		_shake = 0.0

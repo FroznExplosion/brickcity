@@ -1,4 +1,5 @@
 shader_type spatial;
+#include "res://shaders/weather.gdshaderinc"
 // An octahedral impostor card (scripts/impostor_baker.gd, Docs/Impostors.md 3.3).
 //
 // One instance of a unit quad per object, in a MultiMesh; the instance
@@ -145,9 +146,15 @@ void fragment() {
     vec3 nobj = srgb_to_linear(n.rgb / max(n.a, 1e-3)) * 2.0 - 1.0;
     vec3 nworld = normalize(v_rot * nobj);
     NORMAL = normalize((VIEW_MATRIX * vec4(nworld, 0.0)).xyz);
+    float out_rough = 0.42;
+    float out_spec = 0.55;
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.14, 0.0, TIME);
+    NORMAL = wet_normal;
     ALBEDO = albedo;
     ALPHA = cover;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
-    ROUGHNESS = 0.42;
-    SPECULAR = 0.55;
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
 }

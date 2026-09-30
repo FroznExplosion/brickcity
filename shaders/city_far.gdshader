@@ -1,4 +1,5 @@
 shader_type spatial;
+#include "res://shaders/weather.gdshaderinc"
 // The far city: every recipe building the shell ladder does not draw, as one
 // instance of a unit box in one MultiMesh (Docs/Impostors.md, Stages 1-3).
 //
@@ -214,11 +215,17 @@ void fragment() {
         // The inside of a wall, seen through a hole in another.
         col = interior_colour;
     }
+    float out_rough = 0.42;
+    float out_spec = 0.55;
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(col, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.14, 0.25, TIME);
+    NORMAL = wet_normal;
     ALBEDO = col;
     ALPHA = gone ? 0.0 : 1.0;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
-    ROUGHNESS = 0.42;
-    SPECULAR = 0.55;
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
     METALLIC = 0.0;
     RIM = 0.35;
     RIM_TINT = 0.4;

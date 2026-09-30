@@ -24,7 +24,8 @@ extends Node3D
 ##      like and what the studded-everywhere version was missing
 ##
 ## Keys: F1 seams · F2 painted studs · F3 contact shadows ·
-##       F4 stud geometry + scatter · F5 tiles-on-studs · Space walk/fly
+##       F4 stud geometry + scatter · F5 tiles-on-studs · Space walk/fly ·
+##       H disasters (the hurricane; Shift+H ends it)
 
 ## 5x5 tiles = 160 studs = 56 m square. `-- --tiles=N` overrides it, which
 ## is how the view-distance numbers in Terrain.md 19 were measured.
@@ -105,6 +106,19 @@ var _hud_layer: CanvasLayer = null
 var _env: Environment = null
 var _under := UnderwaterFx.new()
 var _camera: DebugCamera = null
+## The same camera, under the name the disaster context reads (a city's).
+var camera: DebugCamera = null
+## Weather for the coast (Docs/Disasters.md 18): the hurricane, and whatever
+## else needs no buildings. H opens it, as in the city.
+var disasters: DisasterDirector = null
+## The sea before a disaster moved it, and where the seabed map was last read.
+var _sea_base := NAN
+var _gain_base := 0.0
+var _seabed_surge := 0.0
+var _seabed_ms := 0
+var _wave_mul := 1.0
+const SEABED_STEP := 0.5
+const SEABED_MS := 2000
 var _sun: DirectionalLight3D = null
 var _mat: ShaderMaterial = null
 var _label: Label = null
@@ -227,6 +241,11 @@ func _ready() -> void:
 		_editor.name = "Editor"
 		add_child(_editor)
 		_editor.setup(self)
+	if not _bench_mode and not _shot_mode:
+		disasters = DisasterDirector.new()
+		disasters.name = "Disasters"
+		add_child(disasters)
+		disasters.setup(self, ["hurricane"])
 	_update_hud()
 	if _bench_mode:
 		_run_bench()
@@ -277,6 +296,7 @@ func _build_scenery() -> void:
 	_camera.position = Vector3(-8.0, 7.0, -8.0)
 	_camera.rotation = Vector3(-0.38, -2.36, 0.0)
 	add_child(_camera)
+	camera = _camera
 
 	var layer := CanvasLayer.new()
 	_label = Label.new()
@@ -292,6 +312,7 @@ func _build_scenery() -> void:
 func _build_terrain() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/terrain.gdshader")
+	WeatherFx.register(_mat)
 	_mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
 	_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
 	_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
@@ -594,6 +615,42 @@ func set_detail_radius(tiles: int) -> void:
 		# One step at the frozen spot, so the change is seen while frozen.
 		_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
 		_hide_covered_far()
+
+
+## A disaster moves the sea (DisasterContext.set_sea): `surge` metres over
+## where it was, waves `wave_mul` times as big. (0, 1) puts it back exactly.
+##
+## BrickWave's own level, so the drawn sea, the swimmer and the water's
+## collision rise together, and the flood itself needs nothing more: the water
+## shader compares the ground (the seabed map's R) with `sea_level` per pixel.
+## What the map's wet cells and shore distance decide -- where the studded tier
+## shows, how the waves steer to the shore -- is re-read every SEABED_STEP of
+## level, no more than every SEABED_MS, because a read is ~30 ms. Between reads
+## newly flooded ground is drawn by the smooth sheet.
+func disaster_sea(surge: float, wave_mul: float) -> void:
+	if _sea == null:
+		return
+	if is_nan(_sea_base):
+		if surge == 0.0 and wave_mul == 1.0:
+			return
+		_sea_base = BrickWave.get_sea_level()
+		_gain_base = _sea.wave_gain
+		_wave_mul = 1.0
+	var level := _sea_base + surge
+	BrickWave.set_sea_level(level)
+	set_water_param("sea_level", level)
+	if absf(wave_mul - _wave_mul) > 0.02 or (wave_mul == 1.0 and _wave_mul != 1.0):
+		_wave_mul = wave_mul
+		_sea.wave_gain = _gain_base * wave_mul
+		_sea.push_waves()
+	var now := Time.get_ticks_msec()
+	var back := surge == 0.0 and wave_mul == 1.0
+	if back or (absf(surge - _seabed_surge) >= SEABED_STEP and now - _seabed_ms >= SEABED_MS):
+		_seabed_surge = surge
+		_seabed_ms = now
+		_sea.refresh_seabed()
+	if back:
+		_sea_base = NAN
 
 
 func set_water_param(param: String, value: Variant) -> void:
@@ -958,6 +1015,7 @@ func _brick_material() -> ShaderMaterial:
 	if _brick_mat == null:
 		_brick_mat = ShaderMaterial.new()
 		_brick_mat.shader = load("res://shaders/brick.gdshader")
+		WeatherFx.register(_brick_mat)
 	return _brick_mat
 
 
@@ -1075,6 +1133,9 @@ func _unhandled_input(event: InputEvent) -> void:
 					% ("ON (0.14 m)" if BrickTerrain.get_plate_steps() else "OFF (0.42 m)"))
 		KEY_F7:
 			_set_water(not _sea.enabled)
+		KEY_H:
+			if disasters != null:
+				disasters.on_key((event as InputEventKey).shift_pressed)
 		KEY_L:
 			set_lod_view(not _lod_debug)
 		KEY_F10:
@@ -1184,7 +1245,7 @@ func _update_hud() -> void:
 			if _lod_debug else ""),
 		"F1 seams  F2 studs  F3 shadows  F4 stud geometry",
 		"F5 tiles on studs  F6 plate steps  F7 water",
-		"C curves  P print  V wave steps  L LOD view  F10 dev menu%s" % [
+		"C curves  P print  V wave steps  L LOD view  F10 dev menu  H disasters%s" % [
 			"   LOD FROZEN" if _lod_frozen else ""],
 	])
 

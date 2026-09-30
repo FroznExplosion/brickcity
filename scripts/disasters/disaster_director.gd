@@ -34,6 +34,7 @@ const KINDS := {
 	"tornado": preload("res://scripts/disasters/tornado.gd"),
 	"earthquake": preload("res://scripts/disasters/earthquake.gd"),
 	"acid": preload("res://scripts/disasters/acid_rain.gd"),
+	"hurricane": preload("res://scripts/disasters/hurricane.gd"),
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
 const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid"]
@@ -45,6 +46,7 @@ const TITLES := {
 	"tornado": "Tornado",
 	"earthquake": "Earthquake",
 	"acid": "Acid rain",
+	"hurricane": "Hurricane",
 }
 ## Intensity steps the slider snaps to, with their names.
 const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]
@@ -52,6 +54,10 @@ const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "E
 const BASE_SEED := 0xD15A5
 
 var ctx: DisasterContext
+## What this scene offers and Random rolls from: ROLL in a city, the kinds its
+## host asked for elsewhere (setup). A scene without buildings has no use for a
+## meteor shower.
+var roll: Array = ROLL.duplicate()
 ## Fire outlives what lit it, so it is the director's, not a disaster's.
 var fire: FireSpread
 var current: Disaster
@@ -96,7 +102,9 @@ var _recapture := false
 var _screen: ShaderMaterial
 
 
-func setup(city: Node3D) -> void:
+func setup(city: Node3D, kinds: Array = []) -> void:
+	if not kinds.is_empty():
+		roll = kinds.duplicate()
 	ctx = DisasterContext.new(city)
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--disaster="):
@@ -149,7 +157,7 @@ func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
 	if current != null:
 		return false
 	if kind == "":
-		kind = _forced if _forced != "" else String(ROLL[_roll_rng.randi_range(0, ROLL.size() - 1)])
+		kind = _forced if _forced != "" else String(roll[_roll_rng.randi_range(0, roll.size() - 1)])
 	if not KINDS.has(kind):
 		push_warning("[disaster] unknown kind '%s'" % kind)
 		return false
@@ -423,11 +431,11 @@ func _build_menu() -> void:
 	_kind_pick = OptionButton.new()
 	_kind_pick.add_item("Random", 0)
 	var i := 1
-	for kind in ROLL:
+	for kind in roll:
 		_kind_pick.add_item(TITLES[kind], i)
 		i += 1
 	_kind_pick.item_selected.connect(func(idx: int) -> void:
-		menu_kind = "" if idx == 0 else String(ROLL[idx - 1])
+		menu_kind = "" if idx == 0 else String(roll[idx - 1])
 		_quake_box.modulate.a = 1.0 if menu_kind in ["", "earthquake"] else 0.45)
 	v.add_child(_row("Disaster", _kind_pick))
 
@@ -476,6 +484,7 @@ func _build_menu() -> void:
 		menu_options.max_collapse_total = int(value))
 	_quake_box.add_child(_row("Max collapses in total", _total))
 	v.add_child(_quake_box)
+	_quake_box.visible = roll.has("earthquake")
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
@@ -514,7 +523,7 @@ func _row(label: String, control: Control) -> HBoxContainer:
 
 ## Put the controls where the remembered choice is.
 func _sync_menu() -> void:
-	_kind_pick.select(0 if menu_kind == "" else ROLL.find(menu_kind) + 1)
+	_kind_pick.select(0 if menu_kind == "" else roll.find(menu_kind) + 1)
 	_intensity.set_value_no_signal(menu_intensity)
 	_intensity_label.text = intensity_name(menu_intensity)
 	_at_once.set_value_no_signal(menu_options.max_collapse_at_once)

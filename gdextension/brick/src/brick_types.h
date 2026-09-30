@@ -538,6 +538,14 @@ struct JointCache {
     bool valid = false;
     std::vector<int32_t> at;       ///< per block, where its runs start; one more closes the last
     std::vector<JointRun> runs;
+    /// Blocks whose runs were redone since the cache was last built whole --
+    /// placed, removed, or next to one that was: where each one's runs start in
+    /// `over_runs` (-1: not redone, read `runs`), and how many. A block's
+    /// redone runs are exactly what building the cache whole would give it,
+    /// in the same order, so nothing that reads them can tell the difference.
+    std::vector<int32_t> over_at;
+    std::vector<int32_t> over_n;
+    std::vector<JointRun> over_runs;
 };
 
 } // namespace brick

@@ -258,6 +258,7 @@ static func instance_material() -> ShaderMaterial:
 	if _instance_material == null:
 		_instance_material = ShaderMaterial.new()
 		_instance_material.shader = load("res://shaders/printed.gdshader")
+		WeatherFx.register(_instance_material)   # wet in rain (Disasters.md 19)
 	return _instance_material
 
 
@@ -272,6 +273,7 @@ static func stud_material() -> ShaderMaterial:
 		_stud_material.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
 		_stud_material.set_shader_parameter("contour_radius",
 				PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
+		WeatherFx.register(_stud_material)
 	return _stud_material
 
 
@@ -282,6 +284,7 @@ static func tuft_material() -> ShaderMaterial:
 	if _tuft_material == null:
 		_tuft_material = ShaderMaterial.new()
 		_tuft_material.shader = load("res://shaders/printed_double.gdshader")
+		WeatherFx.register(_tuft_material)
 	return _tuft_material
 
 
@@ -311,6 +314,10 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	mi.visibility_range_end = range_end
 	mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	# Grass moves in the wind (weather.gdshaderinc); studs and pebbles do not.
+	if node_name == "Tufts":
+		mi.set_instance_shader_parameter("weather_sway",
+				WeatherFx.sway_grass(mesh.get_aabb().end.y))
 	add_child(mi)
 
 

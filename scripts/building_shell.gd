@@ -52,8 +52,12 @@ const ALL_STANDING := -1  ## every bit set, as a 32-bit int
 ## `damage` is band index -> PackedInt32Array of four segment masks, in
 ## SIDE_* order. An absent band is intact. Empty means an undamaged building,
 ## which is the overwhelmingly common case and takes the original path.
+##
+## `layout` is TowerRecipe.layout(courses), if the caller has it: a worker thread
+## building this (CityScene's shadow proxies) must not reach the memo that
+## layout() writes into, so it is looked up on the main thread and handed in.
 static func build_arrays(footprint_x: int, footprint_z: int, courses: int,
-		damage: Dictionary = {}) -> Array:
+		damage: Dictionary = {}, layout: Array = []) -> Array:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colours := PackedColorArray()
@@ -75,7 +79,7 @@ static func build_arrays(footprint_x: int, footprint_z: int, courses: int,
 	var top_colour := BrickWorld.get_filament_colour(TowerRecipe.SLAB_COLOUR)
 	var top_hollow := false
 	var band_index := 0
-	for band in TowerRecipe.layout(courses):
+	for band in (layout if not layout.is_empty() else TowerRecipe.layout(courses)):
 		var masks: PackedInt32Array = damage.get(band_index, PackedInt32Array())
 		band_index += 1
 
@@ -348,9 +352,9 @@ static func build_coarse_mesh(footprint_x: int, footprint_z: int, courses: int) 
 
 
 static func build_mesh(footprint_x: int, footprint_z: int, courses: int,
-		damage: Dictionary = {}) -> ArrayMesh:
+		damage: Dictionary = {}, layout: Array = []) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	var arrays := build_arrays(footprint_x, footprint_z, courses, damage)
+	var arrays := build_arrays(footprint_x, footprint_z, courses, damage, layout)
 	if (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		return mesh  # every band shot away: a mesh with no surface, not a crash
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)

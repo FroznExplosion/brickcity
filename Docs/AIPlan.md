@@ -698,6 +698,72 @@ creatures.
 arbiter stepping down cleanly during a collapse; the `--stress` pass re-run with those agents in it
 (R14).
 
+**Done (2026-09-29).**
+- **Tiers as HSM states** (`scripts/ai/agent_tier.gd`, `tier_state.gd`, AI.md 7): a LimboHSM per
+  agent, SMART ↔ DIRECTED, whose state's enter hook tells the agent (`set_tier`). A soldier swaps
+  its tree — DIRECTED runs `SoldierTree.build_directed()`: Evade › the squad's assignment ›
+  `BTDirectedEngage` (in sight and within 30 m, stand and shoot; otherwise walk the shared flow
+  field toward the contact) › Idle; no cover search, no tactic — at 3 Hz thinking and 2 Hz eyes
+  instead of 10 and 5. Evade and firing are the same code at both tiers. A SWARM ROW is not a
+  state: an agent demoted that far stops being a node. (An event dispatched to an HSM spawned the
+  same tick was not taken; the tier falls back to changing the state directly.)
+- **The importance budget** (`importance_budget.gd`, AI.md 10.2, R23): twice a second each agent's
+  importance — distance to a player (halving every ~10 m), ×1.5 in that player's view, +25
+  shooting, +20 hurt, +15 leading a squad, +20 an animal hunting close — the MAX over players. Best
+  first: ten SMART, the rest DIRECTED; an agent already smart counts 1.25× for keeping its place,
+  and no more than three are promoted a tick (a displaced smart agent keeps its place while a
+  promotion waits, so there are always ten). Swarm-born agents that are not smart and are 45 m
+  from every player go back to rows.
+- **Flow fields** (`AINav.request_field` / `field_dir`, AI.md 4.3): one Dijkstra field per goal,
+  over the STEPS INTO each node (so a drop is one-way, as it is for a path), within 45 m of the
+  goal, worked out inside `service()` after the paths and restarted by an invalidation that reaches
+  it. A* and the field share one step function (`_step`), extracted from the search. Agents read
+  it through `AIServices.field_dir(goal, from)`, keyed by the goal to 3 m, so everyone after the
+  same contact reads the same field; directed soldiers steer on it every physics tick.
+- **Swarm rows with promotion** (`swarm_side.gd`): `SwarmCore` in its own hands (its director
+  off); the goal is the nearest player; the obstacles are the chunks' boxes, or in the city the
+  buildings' boxes, shell or bricks, refreshed every 5 s; a player-side round hits the first row on
+  its line no further than what the bullet struck (`AIServices.round_listeners`). A row within
+  16 m of a player is released without a death and becomes an **animal hunting that player**,
+  born DIRECTED, at most two a tick and never past the budget's room; the budget hands it back as
+  a row, with its health, once the player is gone.
+- **Animals and packs** (`animal.gd`, `animal_pack.gd`): a procedural creature (`ProcCreature`, its
+  gait animated from how the body moves) on a Pawn's body — or a greybox for the many. The pack
+  decides for all of them: GRAZE round a wandering anchor, FLEE together from a noise, HUNT —
+  encircle the prey at 7 m, each to its own angle, then close on the shared field and bite.
+  Wildlife is on no side (a negative team): nobody's enemy (`hostiles_of`), and it has none.
+- **Flyers** (`flyer.gd`): a kinematic drone on the HEIGHT FIELD — `AIWorld.top_at` over a patch
+  round it and 1.2 s of flight ahead of it, never lower than 5 m over what it is over (under it, it
+  climbs at once and holds off going forward) — orbiting its target, a strafing run every 10 s,
+  climbing out when hit.
+- **City:** `-- --stress --agents` puts the P8 population round the stress pass's centre: six
+  squads of six, three flyers, a herd, 300 swarm rows, all after one player-side body; the budget
+  runs in `_ai_tick`, and the swarm's tick counts in the AI's time.
+- Gates: **`tools/many_probe.gd` 11** — 36 soldiers in squads, 3 flyers, a herd of 5 and 300
+  rows round one player: exactly ten smart and the rest directed in all 70 samples, the smart the
+  most important by the budget's own scores; rows walk on the player and its rounds hit them (54);
+  9 rows promoted into hunting animals that bite; with the player gone all 6 go back to rows;
+  directed soldiers close on the shared field (59.7 → 52.7 m, 5 fields); flyers never lower than
+  5.8 m over what they are over, firing; the herd grazes within 3.7 m of itself and runs from
+  gunfire; a tower cut at its foot comes down and soldiers keep firing through it; no round through
+  a wall; **AI 1.43 ms a tick mean (99th percentile 2.97 ms), the swarm's own tick included**.
+  **City `-- --stress --buildings=200 --agents`** — 10 smart, 40 directed, 294 rows through the
+  whole pass; the arbiter steps down to level 4 while the city comes down and back to 0; AI sync
+  and run 1.90 ms a tick.
+- **Timing, A/B on a quiet machine (2026-09-30, no editor, no other Godot runs;
+  `-- --stress --buildings=200`, twice each):** without agents the whole run's mean frame was 17.9
+  and 17.5 ms (1.9 % and 1.5 % of frames over 33 ms), AI sync and run 0.34 and 0.29 ms a tick; with
+  `--agents`, 25.4 and 19.6 ms (12.7 % and 2.9 % over 33 ms), AI 1.93 and 1.65 ms. So the AI's own
+  cost is steady -- about 1.5 ms a tick for 50 node agents and 300 rows, inside its 2.5 ms budget
+  -- and the whole frame pays 2-8 ms more, noisily: fifty more bodies moving in physics and the
+  swarm's drawing are outside the AI's budget. Where that goes next: the budget's own tick
+  (0.8-1.4 ms at 2 Hz, GDScript) to C++, and the directed tier's per-tick Soldier script.
+- **Not done:** the arena's collapse is one clean piece, which does not fill the frame, so the
+  arbiter stepping DOWN is gated in the city stress pass rather than the arena; perception is still
+  per agent, not per squad round-robin; the budget ticks in GDScript (0.5–1.4 ms at 2 Hz — a
+  candidate for C++); a promoted row becomes an animal, not a soldier; flyers are not Pawns, so
+  soldiers do not shoot at them.
+
 ### P9 — The commander · M
 
 Per-encounter commander with a tree; sector grid; roster and doctrine from the **threat profile**;
@@ -706,6 +772,46 @@ missions, threat profile).
 
 **Gate:** two scripted player styles (destructive vs not; pilot kills vs mech kills) produce
 measurably different rosters and doctrine in the next encounter, within the clamps.
+
+**Done (2026-09-30), in two hands.** The commander itself came from the combat-arena work
+(`scripts/ai/commander/`, `tools/commander_probe.gd` 28): a per-encounter `Commander` that
+orders squads (ADVANCE, MOVE in file, CLEAR_ROOM) and buys reinforcements with points; a
+`SectorGrid` of where its men died; a `Doctrine` from the `ThreatProfile` (sniper, rusher,
+demolisher), its desperation and the difficulty, every weight clamped to ×0.5..×2 of its base;
+`PointsBattle` fronts resolved off-screen; an HQ whose officer and radio can be killed. The rest
+of P9, on ai-p9:
+- **Pilot kills against mech kills** (A8): `ThreatProfile.note_kill(by_mech)`, `mech_share()`,
+  `armor_style()` ("mech", "pilot", "mixed"), kept in the profile's dictionary. Against a player
+  whose MECH does the killing the doctrine goes for the PILOT: assault ×1.4 to reach them, marksmen
+  ×1.4 to pick them off, and a `pilot_focus` of 0.7 that the commander hands to its side's aggro
+  table (`AggroTable.bias`) — gains on the pilot's row count 1.7× — so its fire follows. Anti-armor
+  (the rocketeer) is weighted ×2 in the roster but not fielded: a mech is not a `Pawn`, so nothing
+  can aim at it yet, and making rocketeers fieldable changed the combat arena's draws enough that
+  its wave-3 check missed its window.
+- **The careful player** — enough seen, under 10 bricks a minute broken — is answered like the
+  opposite of the demolisher: the buildings are safe, 80 % of a reinforcement goes inside.
+- **The character save** (`scripts/character_save.gd`, A14): the character, the mech, the guns,
+  the missions, the threat profile and the aggro history (pilot and mech shares), as versioned
+  JSON at `user://character.json`. A gun is kept as what made it — class, seed, tier — and made
+  again the same; a file from a newer version is refused rather than half-read.
+  `take_encounter(commander, aggro)` at the end of one; `profile()` for the next commander.
+- **The friendly side:** a `Commander` on the player's team, its `rally` kept on the player, sends
+  its squads to MOVE in file after the player when they fall behind — the same code as the enemy's.
+- Gate: **`tools/threat_style_probe.gd` 7** — three scripted minutes each of A (a demolisher whose
+  mech kills: 240 bricks a minute, kills mostly the mech's) and B (a careful pilot), each ended into
+  a save on disk and read by a FRESH commander: A is read demolisher/mech, B balanced/pilot; the
+  save carries the profile exactly, the character, the missions and three guns made again
+  identical; A's rosters put 38 % of 1,600 units into assault and marksmen against B's 31 %, pilot
+  focus 0.7 against 0, rocketeer weight 1.0 against 0.25; A's reinforcements go 25 % inside
+  against B's 80 %, marksmen 9.9 % against 6.4 %; every weight inside ×0.5..×2; the pilot bias
+  reaches the side's aggro (1.7); a friendly squad 40 m off is brought to the player (1.8 m)
+  by two MOVE orders.
+- **Not done:** the commander is a script on a one-second think, not a LimboAI tree as planned —
+  it works, and it is the combat-arena work's to convert if a tree earns its keep; the pilot/mech
+  kill split is fed by the gate, not yet by a host (the combat arena has no player mech; the city
+  has no commander); the rocketeer waits for the mech to be a target. The combat arena's gate
+  (31) passed 2 of 3 runs with this change — the miss a squad's stack taking too long, in a check
+  that is timing-sensitive; it passed 1 of 1 without.
 
 ### P10 — Real co-op and save-anywhere · L
 

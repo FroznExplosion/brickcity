@@ -70,6 +70,12 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_agent", "span", "head_stand", "head_crouch", "step_up",
             "max_drop", "safe_drop"), &AINav::set_agent);
     ClassDB::bind_method(D_METHOD("get_span"), &AINav::get_span);
+    ClassDB::bind_method(D_METHOD("request_field", "goal", "radius_m", "priority"), &AINav::request_field);
+    ClassDB::bind_method(D_METHOD("get_field_status", "id"), &AINav::get_field_status);
+    ClassDB::bind_method(D_METHOD("field_dir", "id", "point"), &AINav::field_dir);
+    ClassDB::bind_method(D_METHOD("field_cost", "id", "point"), &AINav::field_cost);
+    ClassDB::bind_method(D_METHOD("get_field_size", "id"), &AINav::get_field_size);
+    ClassDB::bind_method(D_METHOD("release_field", "id"), &AINav::release_field);
 }
 
 // The caches are hash maps that grow to tens of thousands of entries, and a
@@ -241,6 +247,102 @@ bool AINav::can_stand(const Vector3 &point) {
     return _node_head(ax, az, py) >= 0;
 }
 
+// One step from node `n` (air `hn` above it) in direction `d`: the node it lands
+// on and what the step costs, or false when there is no way that way. A* and
+// the flow field both walk by this, so they agree on what a body can do.
+bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
+    {
+            const int nx = n.x + DX[d];
+            const int nz = n.z + DZ[d];
+            // The floor next door nearest this one, within a step up or a drop.
+            const Column &col = _column(nx, nz);
+            int best_y = -1;
+            int best_head = -1;
+            int best_dy = std::numeric_limits<int>::max();
+            for (const Floor &f : col.floors) {
+                const int dy = f.y - n.y;
+                if (dy > step_up || -dy > max_drop) {
+                    continue;
+                }
+                if (std::abs(dy) >= best_dy) {
+                    continue;
+                }
+                // Stepping up needs the air to rise into.
+                if (dy > 0 && hn < dy + head_crouch) {
+                    continue;
+                }
+                const int hh = _node_head(nx, nz, f.y);
+                if (hh < 0) {
+                    continue;
+                }
+                best_y = f.y;
+                best_head = hh;
+                best_dy = std::abs(dy);
+            }
+            if (best_y < 0) {
+                return false;
+            }
+            // No cutting a corner the body would not fit round. A body going
+            // diagonally sweeps across BOTH side neighbours, so both have to take
+            // it -- at the height it leaves from or the one it steps to (a stair
+            // turns under it). Either one used to be enough, and the capsule caught
+            // the corner block and stood against it: the combat arena's soldier
+            // that never left its room.
+            // A drop is different: the body goes over air, not round a corner,
+            // and there the old rule stands -- one side open is enough.
+            if (d >= 4) {
+                const int ax = n.x + DX[d], az = n.z;
+                const int bx = n.x, bz = n.z + DZ[d];
+                if (std::abs(best_y - n.y) <= step_up) {
+                    const bool a_ok = _node_head(ax, az, n.y) >= 0 || _node_head(ax, az, best_y) >= 0;
+                    const bool b_ok = _node_head(bx, bz, n.y) >= 0 || _node_head(bx, bz, best_y) >= 0;
+                    if (!a_ok || !b_ok) {
+                        return false;
+                    }
+                } else if (_node_head(ax, az, n.y) < 0 && _node_head(bx, bz, n.y) < 0) {
+                    return false;
+                }
+            }
+            // A drop that hurts lands on open floor: the columns either side of
+            // the landing stand at its height too. A column is a stud and a body
+            // is two, and a one-stud slot -- a window sill in a wall's thickness --
+            // took a path it could not follow, stuck on the floor above.
+            if (best_y < n.y - safe_drop) {
+                // And the body has to get there: air in the landing column from
+                // the landing floor all the way up past where it steps off, plus
+                // a crouch. A short drop never needed this -- a body is taller
+                // than 9 plates -- but a storey's did: without it a path stepped
+                // off the second floor INTO the wall beside it, onto the sill of
+                // the window below, and the soldier walked into the wall forever.
+                if (best_head < (n.y - best_y) + head_crouch) {
+                    return false;
+                }
+                bool open = true;
+                for (int e = 0; e < 4 && open; ++e) {
+                    if (_node_head(nx + DX[e], nz + DZ[e], best_y) < head_crouch) {
+                        open = false;
+                    }
+                }
+                if (!open) {
+                    return false;
+                }
+            }
+            float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::max(0, best_y - n.y) * PLATE;
+            if (best_head < head_stand) {
+                step *= 2.0f;   // crouching is slow
+            }
+            if (best_y < n.y - step_up) {
+                step += 0.5f;   // a drop is a commitment
+            }
+            if (best_y < n.y - safe_drop) {
+                step += HURT_DROP_COST;   // and one that hurts, a last resort
+            }
+            out = Node{ nx, nz, best_y };
+            cost = step;
+            return true;
+    }
+}
+
 bool AINav::_advance(Search &s, uint64_t until_usec) {
     const uint64_t t_start = now_usec();
     auto cmp = [](const Open &a, const Open &b) { return a.f > b.f; };
@@ -328,91 +430,14 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
         const uint64_t t_exp = now_usec();
         const int hn = _node_head(n.x, n.z, n.y);
         for (int d = 0; d < 8; ++d) {
-            const int nx = n.x + DX[d];
-            const int nz = n.z + DZ[d];
-            // The floor next door nearest this one, within a step up or a drop.
-            const Column &col = _column(nx, nz);
-            int best_y = -1;
-            int best_head = -1;
-            int best_dy = std::numeric_limits<int>::max();
-            for (const Floor &f : col.floors) {
-                const int dy = f.y - n.y;
-                if (dy > step_up || -dy > max_drop) {
-                    continue;
-                }
-                if (std::abs(dy) >= best_dy) {
-                    continue;
-                }
-                // Stepping up needs the air to rise into.
-                if (dy > 0 && hn < dy + head_crouch) {
-                    continue;
-                }
-                const int hh = _node_head(nx, nz, f.y);
-                if (hh < 0) {
-                    continue;
-                }
-                best_y = f.y;
-                best_head = hh;
-                best_dy = std::abs(dy);
-            }
-            if (best_y < 0) {
+            Node nb;
+            float step = 0.0f;
+            if (!_step(n, hn, d, nb, step)) {
                 continue;
             }
-            // No cutting a corner the body would not fit round. A body going
-            // diagonally sweeps across BOTH side neighbours, so both have to take
-            // it -- at the height it leaves from or the one it steps to (a stair
-            // turns under it). Either one used to be enough, and the capsule caught
-            // the corner block and stood against it: the combat arena's soldier
-            // that never left its room.
-            // A drop is different: the body goes over air, not round a corner,
-            // and there the old rule stands -- one side open is enough.
-            if (d >= 4) {
-                const int ax = n.x + DX[d], az = n.z;
-                const int bx = n.x, bz = n.z + DZ[d];
-                if (std::abs(best_y - n.y) <= step_up) {
-                    const bool a_ok = _node_head(ax, az, n.y) >= 0 || _node_head(ax, az, best_y) >= 0;
-                    const bool b_ok = _node_head(bx, bz, n.y) >= 0 || _node_head(bx, bz, best_y) >= 0;
-                    if (!a_ok || !b_ok) {
-                        continue;
-                    }
-                } else if (_node_head(ax, az, n.y) < 0 && _node_head(bx, bz, n.y) < 0) {
-                    continue;
-                }
-            }
-            // A drop that hurts lands on open floor: the columns either side of
-            // the landing stand at its height too. A column is a stud and a body
-            // is two, and a one-stud slot -- a window sill in a wall's thickness --
-            // took a path it could not follow, stuck on the floor above.
-            if (best_y < n.y - safe_drop) {
-                // And the body has to get there: air in the landing column from
-                // the landing floor all the way up past where it steps off, plus
-                // a crouch. A short drop never needed this -- a body is taller
-                // than 9 plates -- but a storey's did: without it a path stepped
-                // off the second floor INTO the wall beside it, onto the sill of
-                // the window below, and the soldier walked into the wall forever.
-                if (best_head < (n.y - best_y) + head_crouch) {
-                    continue;
-                }
-                bool open = true;
-                for (int e = 0; e < 4 && open; ++e) {
-                    if (_node_head(nx + DX[e], nz + DZ[e], best_y) < head_crouch) {
-                        open = false;
-                    }
-                }
-                if (!open) {
-                    continue;
-                }
-            }
-            float step = (d >= 4 ? 1.41421356f : 1.0f) * STUD + std::max(0, best_y - n.y) * PLATE;
-            if (best_head < head_stand) {
-                step *= 2.0f;   // crouching is slow
-            }
-            if (best_y < n.y - step_up) {
-                step += 0.5f;   // a drop is a commitment
-            }
-            if (best_y < n.y - safe_drop) {
-                step += HURT_DROP_COST;   // and one that hurts, a last resort
-            }
+            const int nx = nb.x;
+            const int nz = nb.z;
+            const int best_y = nb.y;
             const int64_t nk = nkey(nx, nz, best_y);
             const float ng = gn + step;
             auto git = s.g.find(nk);
@@ -522,7 +547,175 @@ int AINav::service(int budget_usec) {
             finished++;
         }
     }
+    // Flow fields in what is left, best first: one field serves every agent
+    // converging on its goal, so it waits behind nothing but paths.
+    while (now_usec() < until) {
+        Field *best = nullptr;
+        for (auto &kv : fields) {
+            Field &f = kv.second;
+            if (f.status == PENDING && (best == nullptr || f.priority > best->priority
+                    || (f.priority == best->priority && f.id < best->id))) {
+                best = &f;
+            }
+        }
+        if (best == nullptr) {
+            break;
+        }
+        if (_advance_field(*best, until)) {
+            finished++;
+        }
+    }
     return finished;
+}
+
+// --- flow fields (Docs/AI.md 4.3) --------------------------------------------------
+
+int AINav::request_field(const Vector3 &goal, float radius_m, float priority) {
+    Field f;
+    f.id = next_id++;
+    f.goal = goal;
+    f.radius = std::max(1.0f, radius_m);
+    f.priority = priority;
+    fields.emplace(f.id, std::move(f));
+    return next_id - 1;
+}
+
+int AINav::get_field_status(int id) const {
+    auto it = fields.find(id);
+    return it == fields.end() ? UNKNOWN : (int)it->second.status;
+}
+
+void AINav::release_field(int id) {
+    fields.erase(id);
+}
+
+int AINav::get_field_size(int id) const {
+    auto it = fields.find(id);
+    return it == fields.end() ? 0 : (int)it->second.cost.size();
+}
+
+// Dijkstra outward from the goal, over the steps INTO each node: the cost of
+// getting from a node TO the goal, so a drop a body can take down but not
+// climb back up is one-way, as it is for a path.
+bool AINav::_advance_field(Field &f, uint64_t until_usec) {
+    auto cmp = [](const Open &a, const Open &b) { return a.f > b.f; };
+    if (!f.started) {
+        f.started = true;
+        f.open.clear();
+        f.cost.clear();
+        f.cost.reserve(16384);
+        if (!_snap_node(f.goal, f.goal_node)) {
+            f.status = FAILED;
+            return true;
+        }
+        const int64_t k0 = nkey(f.goal_node.x, f.goal_node.z, f.goal_node.y);
+        f.cost[k0] = 0.0f;
+        f.open.push_back(Open{ 0.0f, k0 });
+    }
+    const Vector3 g = _node_point(f.goal_node);
+    while (!f.open.empty()) {
+        if (now_usec() >= until_usec) {
+            return false;
+        }
+        std::pop_heap(f.open.begin(), f.open.end(), cmp);
+        const Open cur = f.open.back();
+        f.open.pop_back();
+        const float cn = f.cost[cur.key];
+        if (cur.f > cn + 1e-3f) {
+            continue;
+        }
+        const Node n = unkey(cur.key);
+        stat_field_nodes++;
+        // Every node that steps INTO n: in each direction d, the column behind
+        // it, any floor of it whose step d lands on n.
+        for (int d = 0; d < 8; ++d) {
+            const int px = n.x - DX[d];
+            const int pz = n.z - DZ[d];
+            const Vector3 pp((px + span * 0.5f) * STUD, 0.0f, (pz + span * 0.5f) * STUD);
+            if (Vector2(pp.x - g.x, pp.z - g.z).length() > f.radius) {
+                continue;
+            }
+            const Column &col = _column(px, pz);
+            for (const Floor &fl : col.floors) {
+                if (fl.y > n.y + max_drop || fl.y < n.y - step_up) {
+                    continue;
+                }
+                const int hm = _node_head(px, pz, fl.y);
+                if (hm < 0) {
+                    continue;
+                }
+                const Node m{ px, pz, fl.y };
+                Node out;
+                float c = 0.0f;
+                if (!_step(m, hm, d, out, c) || out.x != n.x || out.z != n.z || out.y != n.y) {
+                    continue;
+                }
+                const int64_t mk = nkey(px, pz, fl.y);
+                const float nc = cn + c;
+                auto it = f.cost.find(mk);
+                if (it != f.cost.end() && it->second <= nc) {
+                    continue;
+                }
+                f.cost[mk] = nc;
+                f.open.push_back(Open{ nc, mk });
+                std::push_heap(f.open.begin(), f.open.end(), cmp);
+            }
+        }
+    }
+    f.status = DONE;
+    return true;
+}
+
+Vector3 AINav::field_dir(int id, const Vector3 &point) {
+    auto it = fields.find(id);
+    if (it == fields.end() || it->second.status != DONE) {
+        return Vector3();
+    }
+    Field &f = it->second;
+    Node n;
+    if (!_snap_node(point, n, 2)) {
+        return Vector3();
+    }
+    auto self = f.cost.find(nkey(n.x, n.z, n.y));
+    if (self == f.cost.end()) {
+        return Vector3();
+    }
+    if (self->second <= 0.0f) {
+        return Vector3();
+    }
+    const int hn = _node_head(n.x, n.z, n.y);
+    float best = self->second;
+    Node pick = n;
+    for (int d = 0; d < 8; ++d) {
+        Node out;
+        float c = 0.0f;
+        if (!_step(n, hn, d, out, c)) {
+            continue;
+        }
+        auto o = f.cost.find(nkey(out.x, out.z, out.y));
+        if (o != f.cost.end() && o->second + c < best - 1e-4f) {
+            best = o->second + c;
+            pick = out;
+        }
+    }
+    if (pick.x == n.x && pick.z == n.z && pick.y == n.y) {
+        return Vector3();
+    }
+    const Vector3 dir = _node_point(pick) - _node_point(n);
+    return dir.normalized();
+}
+
+float AINav::field_cost(int id, const Vector3 &point) {
+    auto it = fields.find(id);
+    if (it == fields.end() || it->second.status != DONE) {
+        return std::numeric_limits<float>::infinity();
+    }
+    Node n;
+    if (!_snap_node(point, n, 2)) {
+        return std::numeric_limits<float>::infinity();
+    }
+    auto c = it->second.cost.find(nkey(n.x, n.z, n.y));
+    return c == it->second.cost.end() ? std::numeric_limits<float>::infinity() : c->second;
 }
 
 int AINav::get_status(int id) const {
@@ -540,6 +733,12 @@ void AINav::release(int id) {
 }
 
 int AINav::pending() const {
+    int fields_pending = 0;
+    for (const auto &kv : fields) {
+        if (kv.second.status == PENDING) {
+            fields_pending++;
+        }
+    }
     int n = 0;
     for (const auto &kv : searches) {
         if (kv.second.status == PENDING) {
@@ -584,6 +783,17 @@ void AINav::invalidate_box(const AABB &box) {
         }
     }
     revision++;
+    // A field whose reach covers the box is worked out again.
+    for (auto &kv : fields) {
+        Field &f = kv.second;
+        const float gx = f.goal.x, gz = f.goal.z;
+        const float cx = std::clamp(gx, box.position.x, box.position.x + box.size.x);
+        const float cz = std::clamp(gz, box.position.z, box.position.z + box.size.z);
+        if (Vector2(cx - gx, cz - gz).length() <= f.radius + STUD * span) {
+            f.started = false;
+            f.status = PENDING;
+        }
+    }
     // A search that may have read those columns starts again -- only one that
     // may have. Restarting every search on every change starved the queue in a
     // firefight: each round that broke a brick anywhere sent every path back to
