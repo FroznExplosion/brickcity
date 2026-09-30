@@ -93,6 +93,25 @@ public:
     /// any search that may have read them. Emits `nav_changed(box)` so path
     /// followers whose corridor crosses it re-path (the NavChange event, R17).
     void invalidate_box(const AABB &box);
+
+    // --- flow fields (Docs/AI.md 4.3) -----------------------------------------
+    //
+    // When many go to one place -- directed agents closing on a player -- one
+    // field serves them all: the cost from every node within `radius_m` of the
+    // goal TO it, worked out once (Dijkstra over the same steps a path takes,
+    // reversed, so a drop is one-way), served inside service() after the paths,
+    // and read by any number of agents with field_dir. Worked out again when an
+    // invalidation reaches it; the owner asks for a new one when its goal moves.
+
+    int request_field(const Vector3 &goal, float radius_m, float priority);
+    int get_field_status(int id) const;
+    /// Which way to walk from `point` toward the goal: a unit vector, or zero
+    /// (at the goal, outside the field, or not worked out yet).
+    Vector3 field_dir(int id, const Vector3 &point);
+    /// Metres of walking from `point` to the goal, INF outside the field.
+    float field_cost(int id, const Vector3 &point);
+    int get_field_size(int id) const;
+    void release_field(int id);
     void clear_cache();
 
     /// The sea, in metres: a floor deeper under it than WADE is not a floor.
@@ -148,6 +167,17 @@ private:
         float f = 0.0f;
         int64_t key = 0;
     };
+    struct Field {
+        int id = 0;
+        float priority = 0.0f;
+        Vector3 goal;
+        float radius = 40.0f;
+        Status status = PENDING;
+        bool started = false;
+        Node goal_node;
+        std::vector<Open> open;
+        std::unordered_map<int64_t, float> cost;
+    };
     struct Search {
         int id = 0;
         float priority = 0.0f;
@@ -183,6 +213,7 @@ private:
     // column so an invalidation forgets only the region it touched.
     std::unordered_map<int64_t, std::vector<std::pair<int16_t, int16_t>>> node_memo;
     std::unordered_map<int, Search> searches;
+    std::unordered_map<int, Field> fields;
     int next_id = 1;
     uint32_t revision = 1;
 
@@ -192,6 +223,7 @@ private:
     uint64_t stat_failed = 0;
     uint64_t stat_search_usec = 0;
     uint64_t stat_invalidations = 0;
+    uint64_t stat_field_nodes = 0;
     uint64_t stat_worst_expand_usec = 0;
     uint64_t stat_worst_snap_usec = 0;
     uint64_t stat_worst_column_usec = 0;
@@ -210,6 +242,8 @@ private:
     Vector3 _node_point(const Node &n) const;
     /// Run a search until done or `until_usec` passes. Returns true when done.
     bool _advance(Search &s, uint64_t until_usec);
+    bool _advance_field(Field &f, uint64_t until_usec);
+    bool _step(const Node &n, int hn, int d, Node &out, float &cost);
     void _finish(Search &s, int64_t goal_key);
 };
 
