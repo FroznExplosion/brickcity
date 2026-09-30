@@ -77,7 +77,7 @@ the figure to the moves:
 | Wall-run | 9 m/s, 4 s, 1 s level | 1.15 × run, 1.6 s, 0.6 s level with a lift onto the wall |
 | Mantle reach | ledge band to 2.4 m | body + 0.45 m (2.13 m, five bricks) |
 | Grapple | 10–30 m/s, reach 30 m | reel to 17 m/s, reach 32 m |
-| Jump | 5.0–8.6 m/s, charged | `Pawn.JUMP_SPEED` 4.2 — one course, unchanged: the city is built around it |
+| Jump | 5.0–8.6 m/s, charged: fires on release, tap small, hold big | Tap clears **2 bricks**, held clears **4** (`PawnMoves.JUMP_LOW`/`JUMP_HIGH`). Variable height, not charged: it launches for four and letting go on the way up cuts it to two, so a tap has no wait. The rise of your own jump never counts as a fall. Soldiers keep `Pawn.JUMP_SPEED`, one course — the nav is built around it |
 
 ### 2.2 The rules that made it feel good (kept)
 
@@ -214,7 +214,7 @@ does not free its body, so the hook holds where it bit.
 | Air-slide, ground hop | Sci-fi excess their own Doc 10 recommended against |
 | Wall-stick / wall-slide, same-wall climb budget | A mechanic for a player with full hands; a wall-run and a mantle cover the verticality |
 | Ledge hang, shimmy, corner wrap, beam ladders | Assassin's Creed climbing; the mantle is enough for an FPS |
-| Charged jump (tap small, hold big) | The city's jump is one course by design |
+| Charged jump (fires on release) | Replaced by a variable-height jump with the same two heights' idea and no delay on a tap |
 | Halo fall-death timer, void recovery | Fall damage already exists (`Pawn.SAFE_FALL`, Collapse.md 4.4) |
 | Skulls/modifiers, floor-is-lava | Their game's run structure, not ours |
 | Ceramic shaders, fracture, Synty art | Destruction is bricks ([reddawn](reddawn.md)); no third-party models ship (legal brief) |

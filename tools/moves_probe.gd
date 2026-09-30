@@ -9,6 +9,8 @@ extends SceneTree
 ## keyboard drives it. Each check is a move the player is promised:
 ##
 ##   sprint           holding run reaches the run speed, with no instant snap
+##   jump             a tap clears two bricks, held to the top four; a high jump on
+##                    the flat lands unhurt
 ##   slide            crouch at a run boosts to the slide speed, crouched; a second
 ##                    tap straight after does not boost again; letting go stands up
 ##   mantle           jump at a waist-high box and end up standing on it; a wall
@@ -81,6 +83,26 @@ func _run() -> void:
 	mv = PawnMoves.new(pawn)
 	pawn.moves = mv
 	await _ticks(10)
+
+	# --- jump ---------------------------------------------------------------
+	for held in [false, true]:
+		await _reset(Vector3(-20.0, 0.0, 60.0))
+		var y0 := pawn.feet().y
+		var hp := pawn.health.total_current()
+		pawn.intents.jump = true
+		pawn.intents.jump_held = true
+		await _ticks(1)
+		pawn.intents.jump_held = held
+		var top := y0
+		for i in 45:
+			await _ticks(1)
+			top = maxf(top, pawn.feet().y)
+		var want := PawnMoves.JUMP_HIGH if held else PawnMoves.JUMP_LOW
+		_ok("a %s jump clears %d bricks" % ["held" if held else "tapped", roundi(want / Pawn.BRICK_M)],
+				absf(top - y0 - want) < 0.12, "%.2f m (want %.2f)" % [top - y0, want])
+		if held:
+			_ok("and lands unhurt", pawn.is_on_floor() and pawn.health.total_current() == hp,
+					"%.0f hp taken, fall read %.2f m" % [hp - pawn.health.total_current(), pawn.last_fall])
 
 	# --- sprint -------------------------------------------------------------
 	await _reset(Vector3(0.0, 0.0, 60.0))

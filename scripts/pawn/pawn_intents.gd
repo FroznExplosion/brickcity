@@ -25,6 +25,8 @@ var aim := false
 ## The grapple line (PawnMoves): pressed shoots it, held keeps it, released lets
 ## go. Only a pawn with moves has one.
 var grapple := false
+## The jump button still down: a jump held rises higher (PawnMoves).
+var jump_held := false
 ## Edge-triggered: set by the brain, cleared by the motor once acted on.
 var jump := false
 var reload := false
@@ -40,4 +42,5 @@ func clear() -> void:
 	aim = false
 	grapple = false
 	jump = false
+	jump_held = false
 	reload = false
