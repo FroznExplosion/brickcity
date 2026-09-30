@@ -1447,6 +1447,124 @@ Now that cost is the "render" flush at the top of the tick, or the frame's.
 woken for lost support and 5 for being landed on; more pieces in motion (mean 36, from ~26) because
 they fall now; worst script tick 32 ms, of which 12 the upload flush.
 
+### What was left open: the long-failing gate checks, the joint cache, far wreckage
+
+* **Six gate checks that had failed for weeks.** Four measured the wrong thing, one was flawed, one
+  was a real bug:
+  * `--walk`, the eye: `DebugCamera._eye_offset` still put the eye a plate under the top of the
+    capsule, which was right for the three-brick figure; the figure is four bricks now and its eye
+    is `HEAD_HEIGHT` down (`EYE_HEIGHT`, `Pawn.eye_offset`). The camera now agrees with both.
+  * `--walk`, the beam: its clearance was set for the old figure (now 1.90 m), and "walk for 150
+    frames" was half a second at a few hundred frames a second -- a metre and a half of the five to
+    walk. It walks in physics ticks until it is past, ten seconds at most.
+  * `--fixture`, the step count: a flight is `StaircaseRecipe.flight_pieces(steps)` pieces now, not
+    one per step. And "the building is damaged" counted fewer bricks than before -- which rooms
+    opening round the camera made false (their furniture went in: 638 -> 647). It counts the steps
+    in the building's own dead list.
+  * `--dormant`, the blast: counted every piece within 20 m of the blast (2,814 bricks "left" of a
+    1,421-brick piece). It follows the piece that slept, by id.
+* **The AI arbiter under the collapse** (`--stress`). The check required a step down, and failed
+  once the collapse itself got cheap: its worst tick 42.6 ms, but never two ticks running over
+  8 ms, where the arbiter's line is three (AIPlan R14). It now asks the contract -- a step down when
+  the destruction was over the line long enough to call for one, and back to level 0 after either
+  way -- and prints the longest run it saw. Both sides have been seen since: a run with no heavy
+  streak, and one with an 11-tick streak where the AI stepped down and came back.
+* **The joint cache kept up to date.** A room laying its furniture, or taking it back, threw the
+  building's whole joint cache away, and the next solve built it again -- the high end of a mega
+  building's 3-6 ms solve. Now `place_block` and `remove_block` redo the runs of the block and of
+  what is directly above and below it, in an overlay (`JointCache::over_runs`) read before the
+  cache itself; the overlay is folded into a whole rebuild once it is a quarter the cache's size.
+  A block's redone runs are exactly what a whole build gives it, in the same order, so the solve
+  cannot tell: `solve_probe` furnishes and strips a solved tower and one that was not, and gets the
+  same answer, the same loads brick by brick, the same groups -- and checks the cache was kept
+  (`joint_overlay_bytes`). What it saves in the big city is inside the noise of `--big --shot`
+  (worst single solve 3.5-6.5 ms either way): measured, not claimed.
+* **Far wreckage drawn, not dropped** (`BrickWorld.build_chunk_coarse_mesh`). Settled wreckage
+  past `ISLAND_MESH_RANGE` + hysteresis (145 m) gave its mesh back and drew nothing, and a piece put
+  to sleep (`SLEEP_RANGE`, 150 m) went with its body: a collapse's rubble vanished from the skyline
+  as the player walked off. Out there a piece is now a **coarse stand-in**: its outer surface merged
+  across bricks wherever the colour agrees -- the greedy merge the bake does inside one brick, done
+  over the whole grid -- with a brick-sized UV2, so the seam shader draws brick outlines on it
+  (`BuildingShell.SEAM_UNIT`). No bake is read or made; a piece that goes coarse gives its bake back
+  as before. The same exposed area as the bricks facing every way, exactly
+  (`tools/coarse_probe.gd`), in 14-18% of the vertices the bricks upload and 39-49% of the
+  triangles they draw; built in 0.9-1.1 ms for a 20x20 tower, 3.6 ms for a 40x30 one of 60 courses
+  (a grid of 234,000 cells -- the build walks the grid once and then only the exposed faces).
+  * A piece that **comes loose** out there starts as the stand-in, so a far collapse never bakes or
+    uploads its full bricks -- those uploads were its worst frames (buffers made on the main thread).
+  * A piece **put to sleep** leaves its stand-in drawn where it lay, in a node with no body
+    (`Dormant.stand_in`), and hands it back when it wakes: drawn from its first tick, and far off,
+    that stand-in is what it goes on drawing. A dormant piece from a save has none until it wakes.
+  * Damage to a far piece rebuilds its stand-in from the mesh queue, once per tick at most, in the
+    queue's budget -- never a patch, since its index buffer is not the bake's.
+
+### A break, then nothing for a second
+
+Reported: pieces that should break do nothing for a few frames, or vanish, and nothing falls for
+about a second. `-- --breaklag` (and `-- --breaklag --big`) now measures it: a tower shot through
+as a player would, every physics tick watched -- damage queued, solves waiting, rounds the director
+held, and when the first piece is cut out, when the biggest is, when they are drawn and moving --
+and a building shot while still a shell: when the shot is seen on it. A mega tower's timing is
+printed, not judged: when one comes down is its structure's -- what still holds it, when it tips.
+
+In ticks the answer was mostly fine -- pieces moving 2-3 ticks after the bricks go -- with one real
+delay, and the rest was the ticks themselves being long: a break is where the slowest ticks were,
+and with the editor open every one of them is several times longer.
+
+* **The building's body left last.** What gave way is let go two groups a tick
+  (`SPAWNS_PER_TICK`), and it went in solve order, so a building's body waited behind its debris:
+  cut out 13 and 10 ticks after its storey went, hanging in the air meanwhile. The director hands
+  over the biggest group first now: 3 and 3 ticks. (The count stays at two, and not only for the
+  cost: what is not cut out this tick is solved again with the next, and leaves as one piece with
+  whatever came loose with it. At eight a tick the same collapses came down in 14-30 pieces where
+  they had been 3, and a far one in 9 where it had been 1.)
+* **The first shot at a building still in its shell.** A shot promotes a shell to bricks, and the
+  shell stays up -- drawing the building whole -- until the bake is in and every band is drawn.
+  Each hit while the bands were going queued a whole second pass, shell kept up for it too: a
+  2,800-brick building shot at showed the shot 14 ticks after it was made bricks. And pieces were
+  cut out of it meanwhile, falling out of a wall that went on showing them -- two of each, one
+  still in the wall (`collapse_probe`'s "no double" caught it once the biggest group went first;
+  the old order had the same doubles, hidden from the count behind a piece still baking).
+  * Only the bands built before the latest hit are built again (`_band_hits`, `_band_built_at`):
+    a band built after it was built from the bricks as they are. The shot shows at 10 ticks.
+  * Nothing is cut out of a building still behind its shell. The groups are solved again next
+    tick and go the tick the shell does -- with the holes they leave, which is when the shot is
+    first seen on the building anyway.
+* **Stairs taken twice.** A section takes the stairs of its floors with it (`_with_stairs`), and
+  those stairs could be a group of their own later in the same plan -- whose DETACH was then
+  recorded for bricks already gone, and found nothing to cut on any other machine (the `--wreck`
+  log replay caught it once the biggest section went first). Later groups drop what an earlier
+  section took.
+* **A mega collapse held for a second and a half.** `CollapseDirector` holds a mega building's
+  collapse while the cascade grows (so it comes down in a few big chunks, not hundreds), until it
+  stalls or `HOLD_MS`. Its own comment said "until there is a chunk's worth", and the code never
+  looked. Where somebody is near enough to watch (`NEAR_RANGE`), a chunk's worth now goes at once
+  and the rest is held `HOLD_NEAR_MS`, 500 ms, not 1.5 s. Far ones keep the old hold: letting part
+  of a growing cascade go early only made more pieces of it (`collapse_probe`'s far check, 9
+  against at most 4).
+* **A piece coming to rest: 100 ms.** `_wreck_settled` (wreckage weighing on buildings) walked
+  every brick of a settling piece in script -- a Dictionary a brick from `get_block_boxes`, a
+  building lookup and a transform per brick: 12-43 ms for a 4,000-8,000-brick piece and 107 ms for
+  one of 2,000 boxes, and the same pieces settle again and again in a collapse. It is one engine
+  call now, `BrickWorld.rest_contacts`, with the same arithmetic in the same types; the whole
+  per-piece loop's worst went from 90-114 ms to 0.5-2.6 ms. Compared with the script walk on 325
+  settles of a big collapse (identical, 16 with contacts) and in `tools/query_probe.gd`.
+* **The stairwell check: 67 ms.** `_with_stairs` asks whether anything still stands round a
+  stairwell before a section takes its stairs with it -- by walking `get_block_boxes` over the
+  whole 22,000-brick tower, in the tick the section broke away. `BrickWorld.any_block_centre_in`
+  answers the same (300 random boxes in `query_probe`).
+* **Shadow proxies rebuilt on every pass of a collapse.** A building's shadow proxy was rebuilt
+  whenever its brick count had changed since it was built -- every eighth tick while it was being
+  taken apart, one brick or a thousand -- and a proxy is 10-28 ms for a big one, not the 0.5 ms its
+  comment has. It is rebuilt once the count has held for a pass, or after 8 passes of change
+  (`SHADOW_STALE_PASSES`). Still open, for the shadow LOD's owner: the proxy build itself.
+
+`--big --shot` after all of it: worst script tick 45-47 ms, from 112-125 ms at the start of this
+work (two runs each, same machine, editor closed, nothing else running); ticks over 25 ms, 9-14
+from 16-26 (`[prof]` now lists them, `SPIKE_MS`). What is left at the top: a big shadow proxy when its building goes quiet
+(20-28 ms), one re-solve of a toppled 15,000-brick top (12-25 ms; the work budget always allows
+one), and the damage queue's eight blasts a tick (a 108-blast storey takes 14 ticks to land).
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
