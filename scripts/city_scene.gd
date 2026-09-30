@@ -596,9 +596,13 @@ const ROOM_REACH := 1.5
 ## And it goes back to drawn past this. The gap is the hysteresis that keeps a
 ## player pacing a doorway from laying and lifting the same room every pass.
 const ROOM_REACH_RELEASE := 4.0
-## How many rooms a pass may DRAW. A drawn room is a manifest and a buffer --
-## tens of microseconds -- so this is a guard on a teleport, not a budget.
-const ROOM_DRAWS_PER_PASS := 96
+## How many rooms a pass may DRAW, nearest first. A drawn room is a manifest and
+## a buffer -- tens of microseconds -- but its items' shapes go on the building's
+## furniture body in the same pass (_sync_drawn), and a building just made
+## bricks draws every room in ROOM_RANGE at once: 96 was 15 ms of the first hit
+## on a shell (--diag firsthit). A quarter of that a pass is the same rooms over
+## four passes, the far ones last.
+const ROOM_DRAWS_PER_PASS := 24
 ## How many rooms a streaming pass may open, and how many milliseconds it may
 ## spend doing it.
 ##
@@ -3230,6 +3234,7 @@ func _harvest_band_jobs(wait_for: int = -1) -> void:
 
 ## A building's bands are all built and attached.
 func _bands_done(id: int) -> void:
+	_band_first.erase(id)
 	if _band_redo.has(id):
 		# Something hit it on the way through. A band built after the hit was
 		# built from the bricks as they are, and is right; only the ones built
@@ -3274,6 +3279,10 @@ func _advance_bands() -> void:
 	while built < BANDS_PER_TICK and not _band_cursor.is_empty() \
 			and _band_verts_now < BAND_VERTS_PER_TICK:
 		var id: int = _band_cursor.keys()[0]
+		for first in _band_first:
+			if _band_cursor.has(first):
+				id = first
+				break
 		_build_one_band(id)
 		built += 1
 		if not _bands_building(id):
@@ -5196,6 +5205,15 @@ func _run_breaklag_pass() -> void:
 			shell = c
 	if shell != null:
 		await _shell_lag(shell)
+	# Another shell, aimed at before it is shot (_aim_promote).
+	var aimed: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest or c == shell:
+			continue
+		aimed = c
+		break
+	if aimed != null:
+		await _aim_check(aimed)
 	# On a building of its own: the walls case below wants one nothing has hit.
 	if ordinary.size() > 2:
 		await _proxy_check(ordinary[2])
@@ -5454,6 +5472,50 @@ func _proxy_drawn(id: int) -> bool:
 	var mi = _shadow_proxy.get(id)
 	return is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
 			and (mi as MeshInstance3D).mesh.get_surface_count() > 0
+
+
+## Aimed at from past PROMOTE_RANGE, a shell is bricks with its bands drawn
+## before the shot: the first hit shows the tick it lands.
+func _aim_check(b: BuildingRegistry.Building) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	# A side and a distance, past PROMOTE_RANGE, with nothing between the
+	# camera and the wall: a city block is dense, and the ray takes the first
+	# building it meets (the one really aimed at).
+	var face := Vector3.ZERO
+	var found := false
+	for side in [[Vector3(fx * 0.5, 3.0, 0.0), Vector3(0, 0, -1)], [Vector3(fx * 0.5, 3.0, fz), Vector3(0, 0, 1)],
+			[Vector3(0.0, 3.0, fz * 0.5), Vector3(-1, 0, 0)], [Vector3(fx, 3.0, fz * 0.5), Vector3(1, 0, 0)]]:
+		for dist in [35.0, 45.0, 60.0, 80.0]:
+			var f: Vector3 = b.xform * (side[0] as Vector3)
+			var out: Vector3 = b.xform.basis * (side[1] as Vector3)
+			var at: Vector3 = Vector3(f.x, 3.0, f.z) + out * dist
+			var hit := get_world_3d().direct_space_state.intersect_ray(
+					PhysicsRayQueryParameters3D.create(at, f + (f - at).normalized() * 2.0,
+					Layers.WORLD | Layers.STRUCTURE))
+			if not hit.is_empty() and _building_for_body(hit.rid) == b.id:
+				camera.global_position = at
+				camera.look_at(f, Vector3.UP)
+				face = f
+				found = true
+				break
+		if found:
+			break
+	if not found:
+		print("[breaklag] no clear view of building %d; aim check skipped" % b.id)
+		return
+	var t := 0
+	while t < 120 and not (b.is_materialised() and not _shells.has(b.id)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: aimed at from 60 m, it is bricks, drawn, before the shot" % b.id,
+			b.is_materialised() and not _shells.has(b.id), "after %d tick(s)" % t)
+	# The shot, then: on bricks already drawn.
+	var n0 := authority.commands.size()
+	chip(face, 0.3, 60)
+	await _frames(4)
+	_gate_ok("building %d: and the shot lands on bricks already drawn" % b.id,
+			b.is_materialised() and not _shells.has(b.id) and authority.commands.size() > n0)
 
 
 ## A building still drawn as its shell, its ground storey blown out: how long
@@ -6310,6 +6372,8 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("remesh", t)
 	_watch_handovers()
 
+	if camera != null and Engine.get_physics_frames() % 3 == 0:
+		_aim_promote()
 	var promoted := 0
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
@@ -7329,6 +7393,59 @@ func _remesh_bricks(id: int) -> void:
 
 
 ## Hand the bricks back for buildings nobody is near. Damage is kept.
+## Bricks for what the player is aiming at, before the shot.
+##
+## The first shot at a building still drawn as its shell made it bricks in that
+## tick, and the shot showed on it only once its bands were drawn -- 5 to 11
+## ticks, and several times that with the editor open: the lag on the first
+## hit (--diag firsthit, 2026-09-30). Aimed at for AIM_PROMOTE_TICKS within
+## AIM_PROMOTE_RANGE, a shell goes to the front of the promotion queue, its
+## bands first in line; and a building aimed at is not trimmed back to a shell
+## for AIM_KEEP_MS (_trim_quiet), or it would go and come back with every look.
+## Past DEMESH_RANGE a building in bricks has no mesh anyway, so the range is
+## inside it.
+const AIM_PROMOTE_RANGE := 100.0
+const AIM_PROMOTE_TICKS := 6
+const AIM_KEEP_MS := 8000
+var _aim_target := -1
+var _aim_since := 0
+var _aimed_at := {}   ## building id -> msec it was last aimed at
+## Building id -> true: aimed at, behind its shell -- its bands go first
+## (_advance_bands). Not one being shot: its bands built while the hits are
+## still landing are built again after the last one (_band_hits), and going
+## first made that more of them -- the shot showed at 15 ticks, not 9.
+var _band_first := {}
+var aim_promotions := 0
+
+
+func _aim_promote() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var from := cam.global_position
+	var to := from - cam.global_transform.basis.z * AIM_PROMOTE_RANGE
+	var q := PhysicsRayQueryParameters3D.create(from, to, Layers.WORLD | Layers.STRUCTURE)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var id := _building_for_body(hit.rid) if not hit.is_empty() else -1
+	if id < 0:
+		_aim_target = -1
+		return
+	_aimed_at[id] = Time.get_ticks_msec()
+	var now := Engine.get_physics_frames()
+	if id != _aim_target:
+		_aim_target = id
+		_aim_since = now
+		return
+	if now - _aim_since < AIM_PROMOTE_TICKS:
+		return
+	var b := registry.get_building(id)
+	if b == null or b.is_materialised() or b.toppled or _promote_queue.has(id):
+		return
+	_promote_queue.push_front(id)
+	_band_first[id] = true
+	aim_promotions += 1
+
+
 func _trim_quiet() -> void:
 	if not respawn_buildings:
 		return  # nothing is handed back, so nothing has to come back
@@ -7346,6 +7463,8 @@ func _trim_quiet() -> void:
 			continue  # still coming apart
 		if _pinned(id):
 			continue  # an encounter is being fought in it
+		if Time.get_ticks_msec() - int(_aimed_at.get(id, -1000000)) < AIM_KEEP_MS:
+			continue  # being aimed at (_aim_promote)
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue
