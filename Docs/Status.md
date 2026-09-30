@@ -1557,13 +1557,36 @@ and with the editor open every one of them is several times longer.
   whenever its brick count had changed since it was built -- every eighth tick while it was being
   taken apart, one brick or a thousand -- and a proxy is 10-28 ms for a big one, not the 0.5 ms its
   comment has. It is rebuilt once the count has held for a pass, or after 8 passes of change
-  (`SHADOW_STALE_PASSES`). Still open, for the shadow LOD's owner: the proxy build itself.
+  (`SHADOW_STALE_PASSES`). And a recipe building's proxy is built on a worker now
+  (`_shadow_jobs`): only its damage masks are worked out on the main thread (they read the
+  bricks), the shell -- 4-25 ms of arithmetic on the recipe -- off it, and hung when done.
 
 `--big --shot` after all of it: worst script tick 45-47 ms, from 112-125 ms at the start of this
 work (two runs each, same machine, editor closed, nothing else running); ticks over 25 ms, 9-14
-from 16-26 (`[prof]` now lists them, `SPIKE_MS`). What is left at the top: a big shadow proxy when its building goes quiet
-(20-28 ms), one re-solve of a toppled 15,000-brick top (12-25 ms; the work budget always allows
-one), and the damage queue's eight blasts a tick (a 108-blast storey takes 14 ticks to land).
+from 16-26, then 7 with the proxies off the main thread (`[prof]` now lists them, `SPIKE_MS`).
+
+What the first merge of the far stand-in had got wrong, found in those lists:
+
+* **Stand-ins built over a building's whole grid.** A piece cut out of a building keeps the
+  building's grid -- 42x627x60, 1.58 million cells, for 6,500 bricks -- and the builder walked all
+  of it: 10-16 ms a build, one to three a tick in the mesh queue for pieces falling far off (it
+  showed as "resolve", which is where the mesh queue is timed). It walks only the box its live
+  bricks are in now, with the same output, and a stand-in already drawn is built again at most
+  every `COARSE_REBUILD_TICKS` -- one piece shedding bricks as it fell rebuilt it ten times.
+* **A stand-in built for every piece put to sleep.** The debris cap puts pieces to sleep wherever
+  they are, and each had a coarse stand-in built on the spot: 8-38 ms a batch. A piece leaves the
+  mesh it has instead -- coarse already if it is far, its bricks if it is near -- and only one
+  still drawn by a toppled building's bands has one built. Cap sleeps over 8 ms: 12 -> 1.
+* **Wreckage loaded asleep from a save** had no stand-in, and was invisible until somebody walked
+  up to it. It gets one a little after loading, 2 ms a tick (`build_due_stand_ins`): the record
+  made a chunk again, the stand-in taken from it, the chunk given back.
+
+A caution for anyone timing on this machine: the same commit gives two different frame times, a
+mean of ~17 ms or of ~87 ms, and flips between them over hours (the latter with "idle process"
+at 400 ms a frame -- the display, not the game: the physics tick is the same in both). `--big
+--shot`'s frame time is only comparable between runs in the same mode, and its script-tick
+numbers are safer; and in the slow mode the collapse itself runs differently -- far more pieces
+put to sleep by the cap -- so compare like with like.
 
 ### Windows on far buildings: a room behind the glass that is not there
 
