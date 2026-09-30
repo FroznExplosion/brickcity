@@ -7891,8 +7891,10 @@ func _run_stress_pass() -> void:
 			float(mem.occupancy_bytes) / 1048576.0, float(mem.block_bytes) / 1048576.0,
 			float(int(mem.total_bytes) - int(mem.occupancy_bytes) - int(mem.block_bytes)) / 1048576.0])
 	print("[stress] collision: %s" % _collision_report())
-	print("[stress] islands %d (%d settled, %d small), %d mesh(es) given back, %d split(s)" % [
+	print("[stress] islands %d (%d settled, %d small), %d gone coarse for distance, %d split(s)" % [
 			isl.islands, isl.settled, isl.disposable, isl.dropped, isl.splits])
+	print("[stress] coarse stand-ins: %d built (worst %.2f ms, %d vertices in all), %d left by pieces put to sleep" % [
+			int(isl.coarse_built), float(isl.coarse_worst_ms), int(isl.coarse_verts), int(isl.stand_ins)])
 	print("[stress] small pieces deleted where they came loose: %d brick(s) beyond %.0f m, %d unseen, %d of furniture"
 			% [int(islands.report().tiny_deleted), IslandManager.SMALL_KEEP_RANGE,
 			int(islands.report().discarded), int(islands.report().furniture_deleted)])
@@ -9911,6 +9913,19 @@ func _run_dormant_pass() -> void:
 			int(rep.dormant_blocks) + int(rep.blocks) == blocks_before,
 			"%d asleep + %d awake against %d" % [
 				int(rep.dormant_blocks), int(rep.blocks), blocks_before])
+	# Asleep is not gone from view: each piece left its coarse stand-in drawn
+	# where it lay (IslandManager._leave_stand_in). A single brick is drawn by
+	# the shared MultiMesh and leaves none.
+	var drawn := 0
+	var singles := 0
+	for d in islands.dormant:
+		if d.record.block_count() == 1:
+			singles += 1
+		elif d.stand_in != null and is_instance_valid(d.stand_in) \
+				and d.stand_in.is_inside_tree() and d.stand_in.mesh != null:
+			drawn += 1
+	_gate_ok("and it is still drawn where it lay", drawn > 0 and drawn + singles == int(rep.dormant),
+			"%d stand-in(s) for %d asleep, %d single brick(s)" % [drawn, int(rep.dormant), singles])
 	print("[dormant] %d piece(s), %d block(s): %.1f MB resident -> %.1f MB + %.1f KB of record" % [
 			int(rep.dormant), int(rep.dormant_blocks),
 			float(resident.total_bytes) / 1048576.0,
@@ -9924,10 +9939,27 @@ func _run_dormant_pass() -> void:
 	camera.global_position = mid + Vector3(0.0, 30.0, -60.0)
 	camera.look_at(mid, Vector3.UP)
 	guard = 0
+	# Each piece as it wakes draws its stand-in until its bricks are baked: a
+	# woken piece used to be invisible for the tick or two that took.
+	var blind_on_waking := 0
+	var woken_before := int(islands.report().woken)
 	while guard < 1200 and int(islands.report().dormant) > 0:
 		await _frames(1)
 		guard += 1
+		if int(islands.report().woken) > woken_before:
+			woken_before = int(islands.report().woken)
+			for isl in islands.islands:
+				if islands.is_blind(isl):
+					blind_on_waking += 1
+	var stand_ins_left := 0
+	for child in islands.get_children():
+		if child is MeshInstance3D and not child.is_queued_for_deletion():
+			stand_ins_left += 1
 	rep = islands.report()
+	_gate_ok("a piece waking draws from its first tick", blind_on_waking == 0,
+			"%d blind piece-tick(s) as they woke" % blind_on_waking)
+	_gate_ok("and the stand-ins it left are gone", stand_ins_left == 0,
+			"%d left" % stand_ins_left)
 	_gate_ok("walking back wakes it", int(rep.dormant) == 0,
 			"%d still asleep" % int(rep.dormant))
 	_gate_ok("as the same pieces", int(rep.islands) >= was_dormant,
@@ -9953,6 +9985,9 @@ func _run_dormant_pass() -> void:
 	var at: Vector3 = target.record.box.get_center()
 	var held := target.record.block_count()
 	var slept_id := target.piece_id
+	var before_blast := {}
+	for isl in islands.islands:
+		before_blast[isl] = true
 	_blast(at, 3.0)
 	guard = 0
 	while not _damage_queue.is_empty() and guard < 120:
@@ -9970,6 +10005,26 @@ func _run_dormant_pass() -> void:
 	_gate_ok("a blast wakes what it reaches", woke, "piece %d" % slept_id)
 	_gate_ok("and takes bricks out of it", left > 0 and left < held,
 			"%d of %d left" % [left, held])
+	# Out here -- 300 m off -- the piece it woke goes on drawing the stand-in it
+	# left, rebuilt for what the blast took, and anything the blast broke off
+	# comes up as a stand-in too: nothing out here is baked or uploaded as
+	# bricks (IslandManager.ISLAND_MESH_RANGE).
+	var woken_coarse := false
+	var new_coarse := 0
+	var new_bricks := 0
+	for isl in islands.islands:
+		if not isl.is_valid() or isl.mesh == null:
+			continue
+		if isl.piece_id == slept_id:
+			woken_coarse = isl.coarse and isl.coarse_drawn
+		elif not before_blast.has(isl):
+			if isl.coarse:
+				new_coarse += 1
+			else:
+				new_bricks += 1
+	_gate_ok("far off, the piece it woke draws its stand-in", woken_coarse)
+	_gate_ok("and what it broke off comes up as stand-ins, never as bricks", new_bricks == 0,
+			"%d stand-in(s), %d as bricks" % [new_coarse, new_bricks])
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)

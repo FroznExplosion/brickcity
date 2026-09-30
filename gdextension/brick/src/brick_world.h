@@ -305,6 +305,15 @@ public:
     /// Vertices are local to the chunk origin. Interior faces are culled.
     Array build_chunk_mesh(int chunk_id);
 
+    /// A far piece's stand-in (IslandManager's coarse tier): the live bricks'
+    /// outer surface, merged ACROSS bricks wherever the colour agrees, with a
+    /// brick-sized UV2 so the seam shader still draws brick outlines. The same
+    /// arrays as build_chunk_mesh, local to the chunk origin; needs no bake and
+    /// makes none. Empty when nothing is alive.
+    Array build_chunk_coarse_mesh(int chunk_id);
+    /// How long the last build_chunk_coarse_mesh took, in ms.
+    double get_last_coarse_ms() const { return last_coarse_ms; }
+
     /// Stats from the last build_chunk_mesh call on this chunk.
     Dictionary get_mesh_stats(int chunk_id) const;
 
@@ -964,6 +973,14 @@ private:
     };
     std::vector<ChunkTemplate> templates;
     const brick::JointCache &joints_of(int chunk_id);
+    /// One block's runs, in the order joints_of lays them: up, then down.
+    void block_runs(const brick::Chunk &c, int32_t bid, std::vector<brick::JointRun> &out) const;
+    /// Keep a built cache true after `bid` was placed or removed: its runs and
+    /// those of `touching` (what is directly above and below its cells) redone.
+    void joints_changed(int chunk_id, int32_t bid, const std::vector<int32_t> &touching,
+            bool placed);
+    /// What is directly above and below `bid`'s solid cells, itself excluded.
+    void blocks_touching(const brick::Chunk &c, int32_t bid, std::vector<int32_t> &out) const;
 
     // check_stability and find_detached_groups on the grounding already in
     // scratch_depth, without walking it again. See solve_structure.
@@ -1013,6 +1030,7 @@ private:
     RID hull_shape_for(int archetype_id, int hull);
     void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
+    double last_coarse_ms = 0.0;
     Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1,
             bool skip_decorative = false);
     /// The merge itself, over the blocks given (alive ones): as few boxes as

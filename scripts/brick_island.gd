@@ -94,9 +94,14 @@ var mesh_job := -1
 ## Its mesh is built and waiting for the upload budget
 ## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
 var upload_waiting := false
-## Its mesh was dropped on purpose for distance (IslandManager's LOD ladder),
-## not lost: not counted as a piece gone invisible.
-var lod_dropped := false
+## Drawn far off as the coarse stand-in (IslandManager.ISLAND_MESH_RANGE;
+## BrickWorld.build_chunk_coarse_mesh), its bake given back: whatever changes
+## it builds the stand-in again. Set false to ask for its bricks back.
+var coarse := false
+## What it is drawing NOW is the stand-in -- which lags `coarse` while the
+## bricks it asked for are baking. A stand-in's index buffer is not the bake's,
+## and is never patched.
+var coarse_drawn := false
 ## Where it was when it was woken or cut out, and whether it has started to
 ## move since. Once it moves, what was resting on it there is woken
 ## (IslandManager.support_gone) -- not before: something woken that stays put
