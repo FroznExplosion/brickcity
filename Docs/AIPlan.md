@@ -750,9 +750,14 @@ arbiter stepping down cleanly during a collapse; the `--stress` pass re-run with
   **City `-- --stress --buildings=200 --agents`** — 10 smart, 40 directed, 294 rows through the
   whole pass; the arbiter steps down to level 4 while the city comes down and back to 0; AI sync
   and run 1.90 ms a tick.
-- **Timings are not settled.** Both runs above shared the machine with other chats' Godot runs;
-  the stress pass's whole-run mean was 24.2 ms against 17.1 ms without agents, taken at different
-  times on a busy machine. An A/B on a quiet machine is owed.
+- **Timing, A/B on a quiet machine (2026-09-30, no editor, no other Godot runs;
+  `-- --stress --buildings=200`, twice each):** without agents the whole run's mean frame was 17.9
+  and 17.5 ms (1.9 % and 1.5 % of frames over 33 ms), AI sync and run 0.34 and 0.29 ms a tick; with
+  `--agents`, 25.4 and 19.6 ms (12.7 % and 2.9 % over 33 ms), AI 1.93 and 1.65 ms. So the AI's own
+  cost is steady -- about 1.5 ms a tick for 50 node agents and 300 rows, inside its 2.5 ms budget
+  -- and the whole frame pays 2-8 ms more, noisily: fifty more bodies moving in physics and the
+  swarm's drawing are outside the AI's budget. Where that goes next: the budget's own tick
+  (0.8-1.4 ms at 2 Hz, GDScript) to C++, and the directed tier's per-tick Soldier script.
 - **Not done:** the arena's collapse is one clean piece, which does not fill the frame, so the
   arbiter stepping DOWN is gated in the city stress pass rather than the arena; perception is still
   per agent, not per squad round-robin; the budget ticks in GDScript (0.5–1.4 ms at 2 Hz — a
