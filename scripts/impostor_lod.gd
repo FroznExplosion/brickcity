@@ -49,6 +49,10 @@ var _free: Array[int] = []
 var _tile := 128
 var _far_shadows := true
 var _card_mat: ShaderMaterial = null
+## The near mesh's material, with the band's fade in it (_fading).
+var _near_mat: Material = null
+## Shader -> its fading copy, so every set sharing a material shares one.
+static var _fading_shaders := {}
 var _quad: QuadMesh = null
 ## Vector2i -> {near: MMI, far: MMI, members: Array[int], dirty: bool}
 var _chunks := {}
@@ -66,6 +70,7 @@ func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 	cull_range = p_cull_range
 	_far_shadows = far_shadows
 	_tile = tile
+	_near_mat = _fading(material, near_range, hysteresis)
 	_bake_later()
 
 
@@ -83,7 +88,9 @@ func setup_node(p_source: Node3D, p_near_range: float = 12.0,
 func _bake_later() -> void:
 	# A frame first, so the host is in the tree.
 	await get_tree().process_frame
-	var what: Variant = mesh if mesh != null else source
+	var what: Variant = source
+	if mesh != null:
+		what = mesh
 	var got: Dictionary = await ImpostorBaker.bake(self, what, ImpostorBaker.GRID, _tile)
 	if got.is_empty() or not is_instance_valid(self):
 		return
@@ -97,6 +104,10 @@ func _bake_later() -> void:
 	_card_mat.set_shader_parameter("grid", float(got.grid))
 	_card_mat.set_shader_parameter("radius", float(got.radius))
 	_card_mat.set_shader_parameter("centre", got.centre)
+	# The band a mesh copy fades into its card over (shaders/impostor.gdshader);
+	# a node source's owner has no fade, so it has none.
+	_card_mat.set_shader_parameter("lod_near", near_range if mesh != null else -1.0)
+	_card_mat.set_shader_parameter("lod_band", hysteresis)
 	for key in _chunks:
 		_dress_far(_chunks[key])
 		_chunks[key].dirty = true
@@ -112,7 +123,7 @@ func _chunk(key: Vector2i) -> Dictionary:
 		return _chunks[key]
 	var c := {"near": null, "far": null, "members": [], "dirty": true}
 	if mesh != null:
-		c.near = _make_mmi(mesh, material)
+		c.near = _make_mmi(mesh, _near_mat)
 		add_child(c.near)
 	var far_mesh: Mesh = mesh
 	c.far = _make_mmi(far_mesh, material)
@@ -247,6 +258,9 @@ func update(here: Vector3) -> void:
 		# A node source has nothing to draw far until its bake lands: until
 		# then its owner keeps drawing it at any range.
 		var no_card := mesh == null and bake.is_empty()
+		# A mesh copy crossing the band is drawn as BOTH, dithered into each
+		# other (tier 3) -- once there is a card to cross into.
+		var blend := mesh != null and _card_mat != null
 		for h in c.members:
 			var t := 0
 			if _want[h] != 0:
@@ -256,6 +270,15 @@ func update(here: Vector3) -> void:
 					var d := _xf[h].origin.distance_to(here)
 					if d > cull_range:
 						t = 0
+					elif blend:
+						# The band is the fade itself: no hysteresis needed,
+						# nothing pops at either edge of it.
+						if d < near_range - hysteresis:
+							t = 1
+						elif d > near_range + hysteresis:
+							t = 2
+						else:
+							t = 3
 					elif _tier[h] == 1:
 						t = 1 if d < near_range + hysteresis else 2
 					else:
@@ -271,7 +294,7 @@ func update(here: Vector3) -> void:
 			near_count += (c.near as MultiMeshInstance3D).multimesh.visible_instance_count
 		else:
 			for h in c.members:
-				if _tier[h] == 1:
+				if _tier[h] == 1 or _tier[h] == 3:
 					near_count += 1
 		far_count += (c.far as MultiMeshInstance3D).multimesh.visible_instance_count
 
@@ -288,21 +311,66 @@ func _repack(c: Dictionary) -> void:
 		var row := PackedFloat32Array([x.basis.x.x, x.basis.y.x, x.basis.z.x, x.origin.x,
 				x.basis.x.y, x.basis.y.y, x.basis.z.y, x.origin.y,
 				x.basis.x.z, x.basis.y.z, x.basis.z.z, x.origin.z])
-		if _tier[h] == 1:
+		if _tier[h] == 1 or _tier[h] == 3:
 			near.append_array(row)
-		else:
+		if _tier[h] == 2 or _tier[h] == 3:
 			far.append_array(row)
 			box = AABB(x.origin, Vector3.ZERO) if first else box.expand(x.origin)
 			first = false
+	@warning_ignore("integer_division")
+	var n_near := near.size() / 12
+	@warning_ignore("integer_division")
+	var n_far := far.size() / 12
 	if c.near != null:
-		_fill((c.near as MultiMeshInstance3D).multimesh, near, near.size() / 12)
+		_fill((c.near as MultiMeshInstance3D).multimesh, near, n_near)
 	var far_mmi: MultiMeshInstance3D = c.far
-	_fill(far_mmi.multimesh, far, far.size() / 12)
+	_fill(far_mmi.multimesh, far, n_far)
 	if _card_mat != null and not first:
 		# The cards' own bounds: every far copy's origin, grown by what a card
 		# can reach round it (the bake's centre is inside that, radius beyond).
 		var r: float = float(bake.radius) * 2.0 + (bake.centre as Vector3).length()
 		far_mmi.custom_aabb = AABB(box.position - Vector3.ONE * r, box.size + Vector3.ONE * r * 2.0)
+
+
+## A copy of `mat` whose shader fades the copy out over the band on the pixels
+## the card fades in on (shaders/impostor.gdshader: the same interleaved-gradient
+## noise, the same distance to the instance's origin). Injected at run time into
+## a copy, so the shader it came from -- brick.gdshader, the build area's --
+## is not touched. Only a ShaderMaterial can be given it; anything else is
+## returned as it is and pops at the switch, as before.
+static func _fading(mat: Material, near: float, band: float) -> Material:
+	if not (mat is ShaderMaterial) or (mat as ShaderMaterial).shader == null:
+		return mat
+	var src: Shader = (mat as ShaderMaterial).shader
+	var sh: Shader = _fading_shaders.get(src)
+	if sh == null:
+		var code := src.code
+		var v := code.find("void vertex() {")
+		var f := code.find("void fragment() {")
+		if v < 0 or f < 0:
+			return mat
+		var head := ("\nuniform float lod_near = -1.0;\nuniform float lod_band = 5.0;\n"
+				+ "varying float v_lod_d;\n"
+				+ "float lod_ign(vec2 px) {\n"
+				+ "    return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));\n}\n\n")
+		var in_vertex := "\n    v_lod_d = distance(MODEL_MATRIX[3].xyz, CAMERA_POSITION_WORLD);"
+		var in_fragment := ("\n    {\n"
+				+ "        float lod_t = lod_near > 0.0 ? clamp((v_lod_d - (lod_near - lod_band)) / (2.0 * lod_band), 0.0, 1.0) : 0.0;\n"
+				+ "        bool lod_gone = PROJECTION_MATRIX[3][3] < 0.5 && lod_ign(FRAGCOORD.xy) < lod_t;\n"
+				+ "        ALPHA = lod_gone ? 0.0 : 1.0;\n"
+				+ "        ALPHA_SCISSOR_THRESHOLD = 0.5;\n    }")
+		# Fragment first: inserting at the vertex moves everything after it.
+		code = code.insert(f + "void fragment() {".length(), in_fragment)
+		code = code.insert(v + "void vertex() {".length(), in_vertex)
+		code = code.insert(v, head)
+		sh = Shader.new()
+		sh.code = code
+		_fading_shaders[src] = sh
+	var out := (mat as ShaderMaterial).duplicate() as ShaderMaterial
+	out.shader = sh
+	out.set_shader_parameter("lod_near", near)
+	out.set_shader_parameter("lod_band", band)
+	return out
 
 
 static func _fill(mm: MultiMesh, buf: PackedFloat32Array, n: int) -> void:

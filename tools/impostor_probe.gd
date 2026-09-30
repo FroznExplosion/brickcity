@@ -20,6 +20,31 @@ func _check(what: String, cond: bool, detail: String = "") -> void:
 		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
 
 
+func _grab() -> Image:
+	for i in 4:
+		await process_frame
+	return get_root().get_texture().get_image()
+
+
+## Overlap of what two pictures cover -- every pixel not the background.
+static func _iou(a: Image, b: Image, bg: Color) -> float:
+	var both := 0
+	var either := 0
+	for y in range(0, a.get_height(), 2):
+		for x in range(0, a.get_width(), 2):
+			var ia := _covered(a.get_pixel(x, y), bg)
+			var ib := _covered(b.get_pixel(x, y), bg)
+			if ia and ib:
+				both += 1
+			if ia or ib:
+				either += 1
+	return float(both) / maxf(either, 1)
+
+
+static func _covered(c: Color, bg: Color) -> bool:
+	return absf(c.r - bg.r) + absf(c.g - bg.g) + absf(c.b - bg.b) > 0.12
+
+
 func _init() -> void:
 	_run.call_deferred()
 
@@ -129,6 +154,67 @@ func _run() -> void:
 		await process_frame
 	get_root().get_texture().get_image().save_png("res://shots/impostor_pair.png")
 
+	# The card stands where the tree stands, from any height: a card that swam
+	# put its views' features in different places as the camera moved. Card
+	# against mesh, the same spot, over sky only (nothing out here but them).
+	var spot := Vector3(2004.0, 0.0, 0.0)
+	twin.position = spot
+	var ious := []
+	for elev in [2.0, 15.0, 40.0]:
+		cam.position = spot + Vector3(0.0, elev, 60.0)
+		cam.look_at(spot + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+		twin.visible = true
+		solo.set_wanted(0, false)
+		solo.update(Vector3(2000.0, 0.0, 200.0))
+		var mesh_img := await _grab()
+		twin.visible = false
+		solo.set_wanted(0, true)
+		solo.update(Vector3(2000.0, 0.0, 200.0))
+		var card_img := await _grab()
+		ious.append(_iou(mesh_img, card_img, env.background_color))
+	print("[impostor]   card over mesh, from 2 / 15 / 40 m up at 60 m: %.2f / %.2f / %.2f" % ious)
+	_check("the card stands where the tree does, from any height",
+			ious.all(func(v): return v > 0.75), str(ious))
+	twin.visible = false
+
+	# The mesh-to-card band: drawn as both, dithered into each other, it has
+	# no holes. A tree in the middle of the band, against the tree as mesh
+	# alone, and against the mesh fading with no card behind it.
+	var band := ImpostorLod.new()
+	root.add_child(band)
+	band.setup(meshes[0], brick, 60.0)
+	guard = 0
+	while band.bake.is_empty() and guard < 300:
+		await process_frame
+		guard += 1
+	var bspot := Vector3(2100.0, 0.0, 0.0)
+	band.add(Transform3D(Basis(), bspot))
+	cam.position = bspot + Vector3(0.0, 3.0, 60.0)
+	cam.look_at(bspot + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+	band.update(cam.position)
+	_check("a tree at the switch range is drawn as both", band.tier_of(0) == 3,
+			"tier %d" % band.tier_of(0))
+	var both := await _grab()
+	twin.position = bspot
+	twin.visible = true
+	band.visible = false
+	var mesh_only := await _grab()
+	twin.visible = false
+	band.visible = true
+	for c in band.get_children():
+		if c is MultiMeshInstance3D and (c as MultiMeshInstance3D).material_override is ShaderMaterial \
+				and ((c as MultiMeshInstance3D).material_override as ShaderMaterial).shader \
+				== load("res://shaders/impostor.gdshader"):
+			(c as Node3D).visible = false
+	var fading_alone := await _grab()
+	var holes_both := 1.0 - _iou(both, mesh_only, env.background_color)
+	var holes_alone := 1.0 - _iou(fading_alone, mesh_only, env.background_color)
+	print("[impostor]   in the band: %.0f%% off the mesh as both, %.0f%% fading with no card" % [
+		holes_both * 100.0, holes_alone * 100.0])
+	_check("  and has no holes", holes_both < holes_alone * 0.5 and holes_alone > 0.1,
+			"%.2f vs %.2f" % [holes_both, holes_alone])
+	get_root().get_texture().get_image().save_png("res://shots/impostor_band.png")
+
 	# Small items: a brick gun, a hundred of them on the ground.
 	print("[impostor] items")
 	var gun := BuildRecipe.new()
@@ -162,15 +248,19 @@ func _run() -> void:
 	var n_near := 0
 	var n_far := 0
 	var n_cull := 0
+	var n_band := 0
 	for i in 100:
 		match items.tier_of(handles[i]):
 			1: n_near += 1
 			2: n_far += 1
+			3: n_band += 1    # in the fade band: drawn as both
 			_: n_cull += 1
-	print("[impostor]   items: %d near, %d cards, %d culled" % [n_near, n_far, n_cull])
+	print("[impostor]   items: %d near, %d crossing, %d cards, %d culled" % [n_near, n_band, n_far, n_cull])
 	_check("items near are meshes, further cards, furthest culled",
 			n_near > 0 and n_far > 0 and n_cull > 0)
-	_check("  two draw calls' worth of instances", gk.near_count == n_near and gk.far_count == n_far)
+	_check("  two draw calls' worth of instances", gk.near_count == n_near + n_band
+			and gk.far_count == n_far + n_band, "%d/%d near, %d/%d far" % [
+			gk.near_count, n_near + n_band, gk.far_count, n_far + n_band])
 	var last: int = handles[99]
 	items.move(last, Transform3D(Basis(), base + Vector3(3.0, 0.2, 3.0)))
 	items.update()

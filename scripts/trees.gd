@@ -89,14 +89,12 @@ static func recipe(variant: int) -> BuildRecipe:
 	#    four in the middle always, so the layers above have something to sit on.
 	var lo := -3 if wide else -2
 	var hi := 5 if wide else 4
-	var cells := 0
 	for x in range(lo, hi, 2):
 		for z in range(lo, hi, 2):
 			var middle := x >= -1 and x < 3 and z >= -1 and z < 3
 			var keep := middle or _hash(variant, x, z) < 0.6
 			if keep:
 				r.add("brick_2x2", o + Vector3i(x, y, z), b if (x + z) % 4 == 0 else a, 0, interior)
-				cells += 1
 	y += 3
 	# 4. A 4x4 plate and a 2x2 brick on top: the crown.
 	r.add("plate_4x4", o + Vector3i(-1, y, -1), b, 0, interior)

@@ -53,6 +53,7 @@ const SWIM_RISE := BRICK_M * 3.6
 ## How fast the body reaches the speed it is asking for. Low, so a swimmer
 ## coasts: the drag IS the feel of being in water.
 const SWIM_DRAG := 4.5
+const SWIM_WIND := 0.6         ## share of the wind a swimmer drifts with
 ## Chest deep. Below this the feet still have the floor and the figure wades;
 ## above it, walking stops meaning anything and it swims.
 const WADE_DEPTH := BODY_HEIGHT * 0.72
@@ -73,6 +74,9 @@ const DOUBLE_TAP_MS := 300
 ## A Callable rather than a reference to the water node, because this camera
 ## is a debug tool and must not know that `WaterSurface` exists.
 var water_probe := Callable()
+## Wind, in metres a second, added to walking and (partly) to swimming: a
+## hurricane leans on whoever is out in it (DisasterContext.set_wind).
+var wind := Vector3.ZERO
 
 ## Off for automated screenshot runs, which must not steal the mouse.
 var capture_mouse := true
@@ -93,6 +97,12 @@ signal mode_changed(walking: bool)
 
 var _yaw := 0.0
 var _pitch := 0.0
+## Mouse-look speed, multiplied in: a player aiming down the sights turns slower
+## (PlayerView). 1 is the tuned default.
+var look_scale := 1.0
+## Lean, radians: the tilt of a wall-run. Kept through mouse-look, which would
+## otherwise level it on the next motion event.
+var roll := 0.0
 var _captured := false
 
 var _walking := false
@@ -160,9 +170,21 @@ func _set_captured(on: bool) -> void:
 ## take every motion event first, and looking around simply stopped.
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _captured:
-		_yaw -= event.relative.x * LOOK_SENSITIVITY
-		_pitch = clampf(_pitch - event.relative.y * LOOK_SENSITIVITY, -1.5, 1.5)
-		rotation = Vector3(_pitch, _yaw, 0.0)
+		var k := LOOK_SENSITIVITY * look_scale
+		add_look(-event.relative.x * k, -event.relative.y * k)
+
+
+## Turn by `yaw` and `pitch` radians -- the mouse, or a gun's recoil. From where
+## the camera points NOW, so a scripted look_at in between is kept, not undone.
+func add_look(yaw: float, pitch: float) -> void:
+	_yaw = rotation.y + yaw
+	_pitch = clampf(rotation.x + pitch, -1.5, 1.5)
+	rotation = Vector3(_pitch, _yaw, roll)
+
+
+func set_roll(r: float) -> void:
+	roll = r
+	rotation.z = r
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -357,8 +379,8 @@ func _walk(delta: float) -> void:
 		speed = RUN_SPEED
 
 	var before := _body.global_position
-	_body.velocity.x = wish.x * speed
-	_body.velocity.z = wish.z * speed
+	_body.velocity.x = wish.x * speed + wind.x
+	_body.velocity.z = wish.z * speed + wind.z
 	if _body.is_on_floor():
 		_body.velocity.y = minf(_body.velocity.y, 0.0)
 	else:
@@ -396,9 +418,10 @@ func _swim(delta: float, surface: float) -> void:
 	if Input.is_key_pressed(KEY_SPACE) or (e_climbs and Input.is_key_pressed(KEY_E)): rise += 1.0
 	if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_Q): rise -= 1.0
 
-	var target := Vector3.ZERO
+	# The wind drives the sea's surface along: a swimmer drifts with it.
+	var target := Vector3(wind.x, 0.0, wind.z) * SWIM_WIND
 	if wish != Vector3.ZERO:
-		target = wish.normalized() * SWIM_SPEED
+		target += wish.normalized() * SWIM_SPEED
 	if rise != 0.0:
 		target.y = rise * SWIM_RISE
 	elif wish == Vector3.ZERO or absf(target.y) < 0.01:

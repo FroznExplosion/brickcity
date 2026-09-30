@@ -13,6 +13,8 @@ extends Node3D
 ##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
 ##       F5 save · F9 load · ESC mouse
 ##       V on foot · K a soldier · U a squad (advances on you when on foot)
+##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
+##       SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload
 ## Flags: `-- --shot` scripted capture; `-- --gun` and `-- --checkpoint` gates
 
 const BLAST_RADIUS := 1.4
@@ -780,6 +782,13 @@ var _combat_rng := RandomNumberGenerator.new()
 var _player := PlayerController.new()
 var _player_pawn: Pawn
 var _play_mode := false
+## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
+## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
+var _view: PlayerView
+var _fps_hud: PlayerHud
+var _stats_were_visible := false
+## Hitmarkers and numbers outside the arena, which has its own.
+var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
@@ -2271,9 +2280,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 						b.damage_profile))
 	mi.material_override = brick_material
 	mi.transform = b.xform
-	# Stage 5: a banded shell dithers out over the fade band while the far box
-	# dithers in over the same pixels (city_far.gdshader, `crossfade`), so the
-	# swap at SHELL_DETAIL_RANGE is a blend rather than a pop.
+	# Stage 5: a banded shell fades out over the fade band, blended over its
+	# far box drawn whole beneath it (city_far.gdshader), so the swap at
+	# SHELL_DETAIL_RANGE is a blend rather than a pop.
 	var fades := not coarse and not b.is_build() and not b.is_materialised()
 	if fades:
 		_fade_out(mi)
@@ -3419,9 +3428,12 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	if _gun.gun != null:
 		_gun.gun.queue_free()
-	camera.add_child(gi)
-	gi.position = Vector3(0.22, -0.2, -0.45)
 	_gun.equip(gi)
+	if _view != null:
+		_view.hold(gi)
+	else:
+		camera.add_child(gi)
+		gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
@@ -3581,6 +3593,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		camera.set_walking(false)
 	if _player_pawn == null or not is_instance_valid(_player_pawn):
 		_player_pawn = Pawn.spawn(self, feet, 0)
+		_player_pawn.moves = PawnMoves.new(_player_pawn)
 	else:
 		_player_pawn.place(feet)
 	if _player.get_parent() == null:
@@ -3601,10 +3614,53 @@ func _enter_pawn(feet: Vector3) -> void:
 	if _mech_cmd != null:
 		_mech_cmd.brain.leader = _player_pawn
 	_player_hud()
+	_fps_on()
 	print("[city] playing: pawn at %v" % feet)
 
 
+## The gun into the view's hands, its HUD up, the debug overlays away.
+func _fps_on() -> void:
+	if _view == null:
+		_view = PlayerView.new()
+		_view.name = "PlayerView"
+		add_child(_view)
+		_view.setup(camera, _player_pawn, _gun)
+	_player.view = _view
+	if _fps_hud == null:
+		_fps_hud = PlayerHud.new()
+		_fps_hud.name = "PlayerHud"
+		add_child(_fps_hud)
+		_fps_hud.setup(_player_pawn, _gun, _view)
+	if _feedback == null and arena == null:
+		_feedback = CombatFeedback.new()
+		_feedback.name = "Feedback"
+		add_child(_feedback)
+		_feedback.setup(self)
+		_gun.fired.connect(_feedback.on_player_shot)
+	if stats_label != null:
+		_stats_were_visible = stats_label.visible
+		stats_label.visible = false
+	if _reticle != null:
+		_reticle.visible = false
+
+
+func _fps_off() -> void:
+	_player.view = null
+	if _view != null:
+		_view.teardown()
+		_view.queue_free()
+		_view = null
+	if _fps_hud != null:
+		_fps_hud.queue_free()
+		_fps_hud = null
+	if stats_label != null:
+		stats_label.visible = _stats_were_visible
+	if _reticle != null:
+		_reticle.visible = camera.capture_mouse
+
+
 func _leave_pawn() -> void:
+	_fps_off()
 	_player.release()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
@@ -4321,15 +4377,27 @@ func _ground_gates() -> void:
 
 	# A saved build, aimed at open hillside, placed like the player does.
 	var path := "res://builds/cottage.json"
+	# Open, dry hillside: clear of every registry entry -- trees and small
+	# items too, since the placer would land a build ON one -- searched on a
+	# widening spiral, which a city full of trees needs more tries for.
 	var spot := _dry_point(RandomNumberGenerator.new(), 30.0)
-	for attempt in 40:
+	var found_clear := false
+	for attempt in 400:
+		var ang := float(attempt) * 2.39996
+		var cand := _on_ground(Vector3(cos(ang), 0.0, sin(ang)) * (10.0 + float(attempt) * 0.6))
+		if cand.y < ai_nav.get_water_level() + 0.5:
+			continue
 		var clear := true
 		for b in registry.buildings:
-			if _world_box(b).grow(12.0).has_point(Vector3(spot.x, b.xform.origin.y + 1.0, spot.z)):
+			if _world_box(b).grow(8.0).has_point(Vector3(cand.x, b.xform.origin.y + 1.0, cand.z)):
 				clear = false
+				break
 		if clear:
+			spot = cand
+			found_clear = true
 			break
-		spot = _on_ground(spot + Vector3(9.0, 0.0, 5.0))
+	if not found_clear:
+		print("[nav]   placed: no clear hillside found; trying anyway at %s" % spot)
 	if not _placer.start(path):
 		_gate_ok("a build placed on the hillside gets ground at its floor", false, "no " + path)
 		return
@@ -4370,9 +4438,12 @@ func _nav_terrain_gates(rng: RandomNumberGenerator) -> void:
 	await _ground_gates()
 	# Up the hill: from in front of the lowest building to in front of the
 	# highest, which on this seed is metres of climb across the city.
-	var lo_b := registry.get_building(0)
+	# The SITE buildings: the registry also holds trees and small items now,
+	# and a tree on a hilltop is not a building a path climbs to.
+	var lo_b := registry.get_building(_site_ids[0])
 	var hi_b := lo_b
-	for c in registry.buildings:
+	for id in _site_ids:
+		var c := registry.get_building(id)
 		if c.xform.origin.y < lo_b.xform.origin.y:
 			lo_b = c
 		if c.xform.origin.y > hi_b.xform.origin.y:
@@ -6312,7 +6383,8 @@ func _drop_shadow_proxy(id: int) -> void:
 ## Room for this many far instances before the buffer has to grow.
 const FAR_INITIAL_CAPACITY := 256
 ## Stage 5, the crossfade. A banded shell is fully drawn nearer than FADE_NEAR
-## and gone at FADE_FAR, dithered in between; the far box is the complement.
+## and gone at FADE_FAR, alpha-blended in between over its far box, which is
+## drawn whole under it (city_far.gdshader): a real crossfade.
 ## Coarse -> banded at FADE_IN_AT; banded -> coarse past FADE_FAR (the old
 ## SHELL_DETAIL_RANGE + SHELL_HYSTERESIS), where the shell has faded out.
 const FADE_NEAR := 80.0
@@ -6321,12 +6393,14 @@ const FADE_IN_AT := 130.0
 var _far_fade := {}   ## building id -> 1.0 while its box crossfades with a shell
 
 
-## Godot's own visibility-range fade, over the band: it dithers the shell out
-## with the same interleaved-gradient noise city_far.gdshader dithers the box
-## in with, so the two are each other's complement pixel for pixel.
+## Godot's own visibility-range fade over the band. It BLENDS a fading
+## instance, alpha = smoothstep over [end - margin, end + margin] from its
+## bounds' centre (renderer_scene_cull / render_forward_clustered, 4.6) -- so
+## end and margin are set for that span to be exactly FADE_NEAR..FADE_FAR,
+## and the shell is gone by the time the streamer frees it.
 func _fade_out(g: GeometryInstance3D) -> void:
-	g.visibility_range_end = FADE_FAR
-	g.visibility_range_end_margin = FADE_FAR - FADE_NEAR
+	g.visibility_range_end = (FADE_NEAR + FADE_FAR) * 0.5
+	g.visibility_range_end_margin = (FADE_FAR - FADE_NEAR) * 0.5
 	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 ## Rows of damage before the texture has to grow.
 const FAR_DMG_INITIAL_ROWS := 16
@@ -6368,8 +6442,8 @@ func _far_sync(b: BuildingRegistry.Building) -> void:
 	else:
 		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
 				or b.is_build())
-	# Under a banded shell that is fading (Stage 5), drawn too, flagged to
-	# dither in where the shell dithers out.
+	# Under a banded shell that is fading (Stage 5), drawn too, flagged so it
+	# sits just inside the shell for the shell to blend over.
 	var fade := 0.0
 	if not want and _shells.has(b.id) and not b.is_build() and not b.is_materialised() \
 			and not b.toppled and not _shell_coarse.get(b.id, false):
@@ -6523,8 +6597,6 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("course_colours", courses)
 	mat.set_shader_parameter("base_colour", _far_rgb(TowerRecipe.BASE_COLOUR))
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
-	mat.set_shader_parameter("fade_near", FADE_NEAR)
-	mat.set_shader_parameter("fade_far", FADE_FAR)
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
 	_far.multimesh = mm
@@ -6991,10 +7063,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					_fire(_blast_radius)
 				return
 			MOUSE_BUTTON_WHEEL_UP:
-				_set_blast_radius(_blast_radius * BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius * BLAST_STEP)
 				return
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_set_blast_radius(_blast_radius / BLAST_STEP)
+				if not _player.is_possessing():
+					_set_blast_radius(_blast_radius / BLAST_STEP)
 				return
 	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
 	# HOLD, held while aiming sends it to attack where the crosshair is.
@@ -8400,8 +8474,15 @@ func _run_tree_pass() -> void:
 			meshed += 1
 	print("[trees] %d trees in %d kinds: %d drawn as bricks, %d as cards; %d with a shell mesh" % [
 		_trees_placed, _inst_sets.size(), near, far, meshed])
-	_gate_ok("every tree is drawn by its set", near + far == _trees_placed,
-			"%d of %d" % [near + far, _trees_placed])
+	# Counted by copy, not by buffer: a tree crossing the mesh-to-card band is
+	# in both buffers, dithered into itself.
+	var drawn := 0
+	for id in trees:
+		var tset: ImpostorLod = _inst_sets[_inst_key(registry.get_building(id))]
+		if tset.is_drawn(int(_inst_handle[id])):
+			drawn += 1
+	_gate_ok("every tree is drawn by its set", drawn == _trees_placed,
+			"%d of %d" % [drawn, _trees_placed])
 	_gate_ok("  and none by a shell mesh of its own", meshed == 0)
 	var baked := 0
 	for s in _inst_sets.values():
@@ -8476,8 +8557,8 @@ func _run_far_pass() -> void:
 		var box: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
-		# A box under a banded shell that is fading (Stage 5) is its
-		# complement, dithered on the other pixels: one drawer, not two.
+		# A box under a banded shell that is fading (Stage 5) is what the
+		# shell blends over: one building drawn, not two.
 		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
 		elif not shell and not box:
@@ -8569,8 +8650,9 @@ func _run_far_pass() -> void:
 	camera.global_position = aim + Vector3(0.0, 0.0, -(SHELL_DETAIL_RANGE - 70.0))
 	camera.look_at(aim, Vector3.UP)
 	await _far_settle()
-	# Its far box is still there, flagged to dither in only where the banded
-	# shell dithers out (Stage 5) -- inside FADE_NEAR, nowhere.
+	# Its far box is still there, flagged, just inside the banded shell for
+	# the shell's fade to blend over (Stage 5); inside FADE_NEAR the shell is
+	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
 			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
 			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
@@ -8606,7 +8688,10 @@ func _run_far_pass() -> void:
 	await _far_settle()
 	_gate_ok("  closer in, its own shell and no card", _shells.has(b1)
 			and (_shells[b1] as MeshInstance3D).mesh != null
-			and not set_.is_drawn(int(_inst_handle[b1])))
+			and not set_.is_drawn(int(_inst_handle[b1])),
+			"shell %s, mesh %s, card tier %d, %.0f m" % [_shells.has(b1),
+			_shells.has(b1) and (_shells[b1] as MeshInstance3D).mesh != null,
+			set_.tier_of(int(_inst_handle[b1])), bb1.xform.origin.distance_to(camera.global_position)])
 	# Damaged, it keeps its exact shell even out there.
 	var bb2 := registry.get_building(b2)
 	_promote(b2)
@@ -8638,7 +8723,8 @@ func _run_far_pass() -> void:
 	camera.look_at(mc, Vector3.UP)
 	await _far_settle()
 	var banded: bool = _shells.has(mid_id) and not _shell_coarse.get(mid_id, true)
-	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_end == FADE_FAR
+	var faded: bool = banded and (_shells[mid_id] as GeometryInstance3D).visibility_range_fade_mode \
+			== GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_gate_ok("Stage 5: in the fade band, a banded shell that fades out", faded,
 			"banded %s" % banded)
 	_gate_ok("  and its far box, flagged to fade in", _far_on.has(mid_id)
@@ -8649,15 +8735,15 @@ func _run_far_pass() -> void:
 		await _far_settle()
 		await _save_crop("fade_%d" % int(d), 0.5)
 
-	# The crossfade leaves no holes. It rests on Godot's visibility fade
-	# dithering with the same noise and the same linear distance the box's
-	# shader uses; if an engine update changes either, this is what fails.
+	# The crossfade leaves no holes. It rests on how Godot fades an instance
+	# (blended, over [end - margin, end + margin] from its bounds' centre);
+	# if an engine update changes that, this is what fails.
 	# In the middle of the band, from low down so the building stands on sky:
 	#   A  the crossfade as it runs;
 	#   B  the shell alone, not fading -- the reference;
 	#   C  the shell fading with no box under it -- holes at the fade's rate.
-	# Holes are pixels of the building far from B. Complementary dithers make
-	# A nearly B; independent ones would leave half of C's holes.
+	# Holes are pixels of the building far from B: the box under the blend
+	# makes A nearly B, where C shows the sky through the fading shell.
 	camera.global_position = mc + Vector3(0.0, -mc.y + 1.5, -(FADE_NEAR + FADE_FAR) * 0.5)
 	camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
 	await _far_settle()
