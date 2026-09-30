@@ -46,7 +46,16 @@ const CHUNKS_FAR := 3
 ## made one small chunk a tick for as long as it ran: 331 of them in one pass.
 ## Held, it comes down in a few big ones, and the moment before it does is the
 ## groan Red Faction put there on purpose.
+##
+## Where somebody is close enough to be watching (NEAR_RANGE), though, only
+## while there is less than a chunk's worth (_chunk_target) -- a chunk is what
+## holding is waiting for, and one that is there already goes at once -- and
+## for HOLD_NEAR_MS at most: held a second and a half, a break next to the
+## player read as the game hanging, the bricks shot out and nothing falling.
+## Far off nobody sees the wait, and letting part of a growing cascade go early
+## only makes more pieces of it (collapse_probe's far check: 9 against 4).
 const HOLD_MS := 1500
+const HOLD_NEAR_MS := 500
 const STALL_ROUNDS := 2
 
 var world: BrickWorld
@@ -123,9 +132,20 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	# closely enough to miss the small pieces, and every one of them was a
 	# body stepped, meshed and slept.
 	if not is_mega(blocks) and not is_far(box, points):
+		# The biggest first: what has given way is let go a few groups a tick
+		# (CityScene.SPAWN_BUDGET_MS), and the one that has to go at once is the
+		# building's body -- left for last, it hung in the air while the
+		# small stuff went (--breaklag). Ties by first block, so the order is
+		# the same on every run: the host records each one as it goes.
+		collapse.sort_custom(func(a: PackedInt32Array, c: PackedInt32Array) -> bool:
+				if a.size() != c.size():
+					return a.size() > c.size()
+				return a[0] < c[0])
+		var groups_first: Array = []
 		for ids in collapse:
-			out.append([ids, &"group"])
-		return out
+			groups_first.append([ids, &"group"])
+		groups_first.append_array(out)
+		return groups_first
 	if not is_mega(blocks):
 		far_collapses += 1
 
@@ -143,7 +163,10 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	else:
 		_stalled[id] = int(_stalled[id]) + 1
 	_held_bricks[id] = bricks
-	if int(_stalled[id]) < STALL_ROUNDS and now - int(_held_since[id]) < HOLD_MS:
+	var watched := _nearest(box, points) < NEAR_RANGE
+	var ready := watched and bricks >= _chunk_target(box, points, bricks)
+	var hold_ms := HOLD_NEAR_MS if watched else HOLD_MS
+	if not ready and int(_stalled[id]) < STALL_ROUNDS and now - int(_held_since[id]) < hold_ms:
 		held_rounds += 1
 		return out
 	_held_since.erase(id)
@@ -218,11 +241,17 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	return out
 
 
-## Bricks per chunk for a building this far from everybody.
-func _chunk_target(box: AABB, points: PackedVector3Array, total: int) -> int:
+## How far the nearest player is from this box. INF with nobody.
+func _nearest(box: AABB, points: PackedVector3Array) -> float:
 	var d := INF
 	for p in points:
 		d = minf(d, _distance_to_box(box, p))
+	return d
+
+
+## Bricks per chunk for a building this far from everybody.
+func _chunk_target(box: AABB, points: PackedVector3Array, total: int) -> int:
+	var d := _nearest(box, points)
 	if points.is_empty() or d < NEAR_RANGE:
 		return CHUNK_NEAR
 	if d < FAR_RANGE:
