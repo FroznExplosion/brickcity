@@ -205,6 +205,9 @@ var disasters: DisasterDirector
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
+## Buildings still in bricks, their mesh given up at range, hit since their
+## shell was made: rebuilt from their bricks by _stream_detail.
+var _shell_stale := {}
 var _shell_bodies := {}    ## building id -> RID
 var _brick_nodes := {}     ## building id -> MeshInstance3D
 ## chunk id -> the MultiMeshInstance3D drawing that chunk's interiors, parented
@@ -2271,6 +2274,18 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# damage is in live bricks rather than a profile -- stays banded.
 	var boxed := coarse and _far_draws_coarse(b)
 	coarse = coarse and (boxed or not b.is_damaged())
+	# A building still in bricks -- its mesh given up at range (_demesh) --
+	# draws the damage its bricks have NOW. Its profile is only brought up to
+	# date when it gives its bricks back (dematerialise), so the shell standing
+	# in for it drew what it looked like before: a tower with its top blown off
+	# came back whole past DEMESH_RANGE, windows and all, and went again inside
+	# it -- "respawning" as the camera moved. One with no bricks left draws
+	# nothing.
+	var damage: Dictionary = b.damage_profile
+	var nothing_left := false
+	if b.is_materialised() and not b.is_build():
+		damage = registry.live_damage_profile(id)
+		nothing_left = world.get_alive_block_count(b.chunk) == 0
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2287,11 +2302,13 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		_shell_inst[id] = true
 	elif b.is_build():
 		mi.mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), coarse)
+	elif nothing_left:
+		pass  # the node, for every "has a shell" question; nothing drawn
 	else:
 		mi.mesh = (BuildingShell.build_coarse_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses)
 				if coarse else
 				BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
-						b.damage_profile))
+						damage))
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	# Stage 5: a banded shell fades out over the fade band, blended over its
@@ -2308,10 +2325,10 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# hundred metres a window is a pixel -- and not on a player build, which
 	# has no recipe windows. A child of the shell, so it goes when the shell
 	# does, and with its own material so the brick material is untouched.
-	if not coarse and not b.is_build():
+	if not coarse and not b.is_build() and not nothing_left:
 		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
 				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				b.damage_profile, b.recipe.get("program", {}))
+				damage, b.recipe.get("program", {}))
 		if panes != null:
 			var glass := MeshInstance3D.new()
 			glass.mesh = panes
@@ -2916,6 +2933,11 @@ func _queue_remesh(id: int) -> void:
 func _remesh(id: int, force_full: bool = false) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
+		# Its mesh given up at range (_demesh): the shell standing in for it
+		# has to show the hit too, or it goes on drawing what was there.
+		# Rebuilt by _stream_detail, in its budget.
+		if b != null and b.is_materialised() and _shells.has(id):
+			_shell_stale[id] = true
 		return
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
@@ -5177,10 +5199,12 @@ func _run_breaklag_pass() -> void:
 	# On a building of its own: the walls case below wants one nothing has hit.
 	if ordinary.size() > 2:
 		await _proxy_check(ordinary[2])
+		await _far_shell_check(ordinary[2], true)
 	if ordinary.size() > 0:
 		await _break_lag(ordinary[0], false)
 	if ordinary.size() > 1:
 		await _break_lag(ordinary[1], true)
+		await _far_shell_check(ordinary[1], false)
 	if biggest != null and not ordinary.has(biggest):
 		# A third of the way up: what is above falls on what is below, rather
 		# than the whole tower toppling off its stump.
@@ -5217,6 +5241,72 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 					== world.get_alive_block_count(b.chunk),
 			"built from %d bricks, %d alive, after %d tick(s)" % [
 				int(_shadow_proxy_alive.get(b.id, -1)), world.get_alive_block_count(b.chunk), t])
+
+
+## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
+## as a shell (_demesh). That shell has to be drawn from the damage its bricks
+## have now -- nothing, if none are left -- and take a hit while it is far. It
+## used to be drawn from the profile of the last time the building was given
+## back: a building damaged since came back whole at range, and went again up
+## close, which is what "buildings respawning" was.
+func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	camera.global_position = b.xform.origin + Vector3(0.0, 40.0,
+			-(DEMESH_RANGE + DEMESH_HYSTERESIS + 30.0))
+	camera.look_at(b.xform.origin + Vector3(0.0, 10.0, 0.0), Vector3.UP)
+	var t := 0
+	while t < 300 and not (_shells.has(b.id) and not _brick_nodes.has(b.id)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: far off, a shell stands in for it" % b.id,
+			_shells.has(b.id) and not _brick_nodes.has(b.id), "after %d tick(s)" % t)
+	_gate_ok("building %d: drawn with the damage it has, not what it had" % b.id,
+			_far_shell_true(b), _far_shell_note(b))
+	if not hit_it or not b.is_materialised() or world.get_alive_block_count(b.chunk) == 0:
+		return
+	var before := world.get_alive_block_count(b.chunk)
+	_blast(b.xform * Vector3(fx * 0.5, 6.0, 0.0), 2.0)
+	t = 0
+	while t < 150 and (world.get_alive_block_count(b.chunk) == before or not _far_shell_true(b)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: and a hit taken while far shows on it" % b.id,
+			world.get_alive_block_count(b.chunk) < before and _far_shell_true(b),
+			"%d -> %d bricks; %s" % [before, world.get_alive_block_count(b.chunk), _far_shell_note(b)])
+
+
+## Vertices the shell draws, and what it should: from the bricks while it has
+## them, from the profile once it has given them back.
+func _far_shell_counts(b: BuildingRegistry.Building) -> Array:
+	var got := 0
+	var mi = _shells.get(b.id)
+	if is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
+			and (mi as MeshInstance3D).mesh.get_surface_count() > 0:
+		got = ((mi as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+				as PackedVector3Array).size()
+	var r: Dictionary = b.recipe
+	var profile: Dictionary = b.damage_profile
+	var want := 0
+	if b.is_materialised():
+		profile = registry.live_damage_profile(b.id)
+		if world.get_alive_block_count(b.chunk) == 0:
+			return [got, 0, -1]
+	want = (BuildingShell.build_arrays(int(r.footprint_x), int(r.footprint_z), int(r.courses),
+			profile)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var whole := (BuildingShell.build_arrays(int(r.footprint_x), int(r.footprint_z),
+			int(r.courses), {})[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	return [got, want, whole]
+
+
+func _far_shell_true(b: BuildingRegistry.Building) -> bool:
+	var n := _far_shell_counts(b)
+	return int(n[0]) == int(n[1])
+
+
+func _far_shell_note(b: BuildingRegistry.Building) -> String:
+	var n := _far_shell_counts(b)
+	return "%d vertices drawn, %d from its damage, %s whole" % [n[0], n[1],
+			"n/a" if int(n[2]) < 0 else str(n[2])]
 
 
 func _proxy_drawn(id: int) -> bool:
@@ -7013,7 +7103,13 @@ func _stream_detail() -> void:
 			_demesh(id)
 			done += 1
 		elif dist < DEMESH_RANGE:
+			_shell_stale.erase(id)
 			_remesh_bricks(id)
+			done += 1
+		elif _shell_stale.has(id):
+			_shell_stale.erase(id)
+			_free_shell(id)
+			_make_shell(id, true)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
