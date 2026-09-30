@@ -4,11 +4,21 @@ extends RefCounted
 ## and wall-jump, a mantle up onto anything within reach, and a grapple line.
 ##
 ## Taken from Ceramic Edge's PlayerMovement (Docs/Reference/ceramicedge.md section
-## 2) and cut to a one-gun FPS: no dash, no air-slide, no slow motion, no ledge
-## hang or shimmy -- and no wall-stick, which only made sense for a player whose
-## hands were full. What stays is the Titanfall core: the moves carry speed into
-## each other (slide -> jump -> wall-run -> wall-jump -> grapple), and each asks
-## "does the body fit where this puts it?" before it commits.
+## 2) and cut to a one-gun FPS: no dash, no air-slide, no slow motion. The moves
+## carry speed into each other (slide -> jump -> wall-run -> wall-jump ->
+## grapple), and each asks "does the body fit where this puts it?" before it
+## commits:
+##
+##   ledge up to a body high   MANTLE straight over it
+##   up to an arm above that   GRAB it and HANG: shimmy along the lip, round its
+##                             corners, up or down to the next lip, climb, drop,
+##                             leap off
+##   a wall too tall for both  STICK to it when flying in, slide down it, jump off
+##
+## A climb -- mantle or pull-up -- sweeps the body where it will land: standing
+## room climbs standing, only crouching room climbs DUCKED (crouched from the
+## start, so the view never stands up into the ceiling), no room leaves the lip
+## hang-only.
 ##
 ## Still a motor: it reads PawnIntents and nothing else, so a brain that asks for
 ## the same keys gets the same moves. Pawn.moves is null for a soldier, whose
@@ -18,7 +28,7 @@ extends RefCounted
 ## sprinted at 11 m/s; this one is four bricks tall and runs 13.3 courses a second,
 ## so every speed here is a multiple of the pawn's own.
 
-enum State { WALK, SLIDE, WALL_RUN, MANTLE, GRAPPLE }
+enum State { WALK, SLIDE, WALL_RUN, MANTLE, GRAPPLE, HANG, WALL_STICK }
 
 ## Ground: how fast the legs get to the asked speed, and stop without asking.
 const GROUND_ACCEL := 40.0
@@ -74,17 +84,60 @@ const WALL_CHAIN_MAX := 5
 const SAME_WALL := 0.8
 const WALL_COOLDOWN := 0.25
 
-## Mantle: a ledge up to a body and an arm above the feet is climbed. On the
+## Mantle: a ledge up to a body above the feet is climbed straight over. On the
 ## ground by jumping at it; in the air by pushing into it.
-const MANTLE_REACH := Pawn.BODY_HEIGHT + 0.45
+const MANTLE_REACH := Pawn.BODY_HEIGHT
 const MANTLE_TIME_MIN := 0.22
 const MANTLE_TIME_MAX := 0.42
+
+## Ledge grab: higher than a mantle, up to fingertips on a raised arm.
+const HANG_REACH := Pawn.BODY_HEIGHT + 0.75
+## Hanging: the lip this far over the feet (hands over the head), the body this far
+## out from the face (the view off the wall).
+const HANG_DROP := Pawn.BODY_HEIGHT + 0.1
+const HANG_DIST := Pawn.BODY_RADIUS + 0.15
+const HANG_ENTER := 0.16
+## Hang this long before pushing on climbs, so a jump into a ledge reads as a grab.
+const HANG_MIN := 0.25
+const SHIMMY_SPEED := 1.8
+## A step up or down the wall to the next lip, and a corner wrap: eased, this long.
+const HANG_STEP_TIME := 0.32
+const HANG_CORNER_TIME := 0.28
+## After letting go, the next grab waits this long (no re-grabbing what you left).
+const LEDGE_COOLDOWN := 0.4
+## Air over the lip for the fingers, and top behind it for the hand: a slab under
+## a ceiling, or a knife edge, is not a ledge.
+const LIP_AIR := 0.05
+const LIP_DEPTH := 0.05
+## Leaving the hang: leaping off the way you look, springing back off a lip you
+## face but cannot climb.
+const HANG_LEAP := 6.0
+const HANG_BACK := 4.5
+
+## Wall stick: fly into a wall too tall to climb and hold on; after a beat, slide
+## down it; jump off any time. The harder you hit, the longer you hold.
+const STICK_MIN_SPEED := 2.5
+const STICK_FULL_SPEED := 8.0
+const STICK_TIME_MIN := 0.35
+const STICK_TIME_MAX := 1.2
+const STICK_SLIDE_SPEED := 1.5
+const STICK_SLIDE_TIME := 3.0
+const STICK_STRAFE := 1.0
+## Falling faster than this, the hands only scrape: the fall goes on.
+const STICK_MAX_FALL := 12.0
+const STICK_BACK_JUMP := 4.5
 
 ## Grapple: a line to whatever solid thing the eye is on, reeled in.
 const GRAPPLE_RANGE := 32.0
 const GRAPPLE_ACCEL := 36.0
 const GRAPPLE_MAX_SPEED := 17.0
-const GRAPPLE_GRAVITY := 0.4
+## On the line there is no gravity: it pulls straight, so it can be aimed through
+## a window. And the legs come up to two bricks -- a window is three courses tall,
+## exactly a crouching body, so a crouch alone would not fit through it.
+const GRAPPLE_GRAVITY := 0.0
+const GRAPPLE_TUCK := Pawn.BRICK_M * 2.0
+## Tucked a moment longer after letting go, to carry through the opening.
+const GRAPPLE_TUCK_AFTER := 0.3
 const GRAPPLE_STEER := 6.0
 const GRAPPLE_MAX_TIME := 2.2
 const GRAPPLE_ARRIVE := 1.3
@@ -96,6 +149,8 @@ const GRAPPLE_RELEASE_BOOST := 3.5
 signal slid
 signal wall_jumped
 signal mantled
+signal grabbed
+signal stuck
 ## The line bit at `point`; and was let go.
 signal grappled(point: Vector3)
 signal grapple_released
@@ -106,6 +161,12 @@ var state := State.WALK
 var wall_normal := Vector3.ZERO
 ## Where the line is hooked, while grappling.
 var hook := Vector3.ZERO
+## The hang: the lip's outward normal, the face point under the hands, its top,
+## and whether there is room to climb onto it.
+var ledge_normal := Vector3.ZERO
+var ledge_face := Vector3.ZERO
+var ledge_top := 0.0
+var ledge_climbable := false
 
 var _buffer := 0.0
 ## Feet height at take-off, while a jump can still be cut short.
@@ -136,20 +197,47 @@ var _g_rope := 0.0
 var _g_stall := 0.0
 var _g_last := Vector3.ZERO
 var _g_collider_id := 0
+var _tuck_left := 0.0
+var _ledge_cd := 0.0
+var _hang_t := 0.0
+## An eased move of the hanging body (entering, a step, a corner): from, to, t, time.
+var _h_from := Vector3.ZERO
+var _h_to := Vector3.ZERO
+var _h_t := 1.0
+var _h_dur := 0.2
+var _corner_cd := 0.0
+var _climb_cd := 0.0
+var _stick_t := 0.0
+var _stick_dur := 0.5
+var _stick_fast := false
+var _stick_pos := Vector3.ZERO
 
 
 func _init(p: Pawn) -> void:
 	pawn = p
 
 
-## The height is the mantle's for the whole of it (Pawn.step).
+## The height is the climb's for the whole of it, and a hang's (Pawn.step).
 func owns_height() -> bool:
-	return state == State.MANTLE
+	return state == State.MANTLE or state == State.HANG
 
 
-## Stay crouched whether or not crouch is held.
-func keeps_low() -> bool:
-	return state == State.SLIDE
+## A height to hold whether or not crouch is held; 0 for none. A slide is a
+## crouch; the grapple (and a moment after it) a tighter tuck.
+func low_height() -> float:
+	if state == State.GRAPPLE or (_tuck_left > 0.0 and not pawn.is_on_floor()):
+		return GRAPPLE_TUCK
+	if state == State.SLIDE:
+		return Pawn.CROUCH_HEIGHT
+	return 0.0
+
+
+func is_hanging() -> bool:
+	return state == State.HANG
+
+
+func is_wall_sticking() -> bool:
+	return state == State.WALL_STICK
 
 
 func is_sliding() -> bool:
@@ -183,6 +271,10 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 	_slide_cd = maxf(_slide_cd - delta, 0.0)
 	_wall_cd = maxf(_wall_cd - delta, 0.0)
 	_grapple_cd = maxf(_grapple_cd - delta, 0.0)
+	_tuck_left = maxf(_tuck_left - delta, 0.0)
+	_ledge_cd = maxf(_ledge_cd - delta, 0.0)
+	_corner_cd = maxf(_corner_cd - delta, 0.0)
+	_climb_cd = maxf(_climb_cd - delta, 0.0)
 	if it.jump:
 		it.jump = false
 		_buffer = JUMP_BUFFER
@@ -208,8 +300,13 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 		return
 	if grapple_edge and state != State.GRAPPLE:
 		_try_grapple()
+	if state == State.HANG:
+		_hang_tick(delta, wish, crouch_edge)
+		return
 
 	match state:
+		State.WALL_STICK:
+			_stick_tick(delta, wish)
 		State.GRAPPLE:
 			_grapple_tick(delta, wish)
 		State.WALL_RUN:
@@ -224,7 +321,7 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 				_slide_tick(delta, wish)
 			elif not _walk_tick(delta, wish, speed, on_floor):
 				return
-	if state == State.MANTLE:
+	if state == State.MANTLE or state == State.HANG:
 		return
 	_move(delta, wish, speed)
 
@@ -235,7 +332,7 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bool:
 	var b := pawn.body
 	if _buffer > 0.0:
-		if _try_mantle(wish, true):
+		if _try_mantle(wish, true) or _try_grab(wish, true):
 			return false
 		if on_floor or _coyote > 0.0:
 			_buffer = 0.0
@@ -260,10 +357,12 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 	b.velocity.x = h.x
 	b.velocity.z = h.z
 	if not on_floor:
-		# Falling, not rising hard: reach for a ledge, or run the wall beside you.
-		if b.velocity.y < 2.0 and _try_mantle(wish, false):
+		# Falling, not rising hard: reach for a ledge, run the wall beside you, or
+		# hold on to the one in front.
+		if b.velocity.y < 2.0 and (_try_mantle(wish, false) or _try_grab(wish, false)):
 			return false
-		_try_wall_run(wish)
+		if not _try_wall_run(wish):
+			_try_stick(wish)
 	return true
 
 
@@ -503,39 +602,62 @@ func _try_mantle(wish: Vector3, jumped: bool) -> bool:
 	var rise := top_y - feet.y
 	if rise < Pawn.STEP_HEIGHT * 0.8 or rise > MANTLE_REACH:
 		return false
-	# What fits on top: standing, or crouched under something low.
-	var land_feet := Vector3(over.x, top_y + 0.02, over.z)
-	var h := Pawn.BODY_HEIGHT
-	if not _fits_at(land_feet, h):
-		h = Pawn.CROUCH_HEIGHT
-		if not _fits_at(land_feet, h):
-			return false
-	# The path is an L: straight up in front of the face until the feet clear the
-	# lip, then across onto the top. Never through the corner, so never through
-	# the wall -- and each leg is swept with the body as it is.
-	_m_low = h < Pawn.BODY_HEIGHT
-	if _m_low and not pawn.is_crouched():
+	return _climb(Vector3(over.x, top_y + 0.02, over.z), into,
+			maxf(Pawn.WALK_SPEED, _hspeed() * 0.7))
+
+
+## What stands on top at `feet`: the height of a body that fits there -- standing,
+## else crouched -- or 0 when neither does.
+func _fit_height(feet: Vector3) -> float:
+	if _fits_at(feet, Pawn.BODY_HEIGHT):
+		return Pawn.BODY_HEIGHT
+	if _fits_at(feet, Pawn.CROUCH_HEIGHT):
+		return Pawn.CROUCH_HEIGHT
+	return 0.0
+
+
+## Climb onto `land_feet`, leaving along `into` at `exit_speed`. Refused (false)
+## when nothing fits there or the way up is blocked.
+##
+## The path is an L: straight up in front of the face until the feet clear the
+## lip, then across onto the top. Never through the corner, so never through the
+## wall -- and each leg is swept with the body as it will be. When only a crouch
+## fits on top, the body crouches BEFORE it rises, so the view comes up under the
+## ceiling rather than standing into it and ducking at the end.
+func _climb(land_feet: Vector3, into: Vector3, exit_speed: float) -> bool:
+	var b := pawn.body
+	var h := _fit_height(land_feet)
+	if h <= 0.0:
+		return false
+	var was_h := pawn._height
+	var low := h < Pawn.BODY_HEIGHT
+	if low and pawn._height > Pawn.CROUCH_HEIGHT:
 		pawn._set_height(Pawn.CROUCH_HEIGHT)
 	var half := pawn._height * 0.5
+	var top_y := land_feet.y - 0.02
 	var start := b.global_position
 	var mid := Vector3(start.x, top_y + 0.04 + half, start.z)
 	var end := Vector3(land_feet.x, top_y + 0.04 + half, land_feet.z)
 	var xf := b.global_transform
-	if mid.y > start.y and b.test_move(xf, mid - start):
+	var blocked := mid.y > start.y and b.test_move(xf, mid - start)
+	if not blocked:
+		xf.origin = mid
+		blocked = b.test_move(xf, end - mid)
+	if blocked:
+		if not is_equal_approx(pawn._height, was_h):
+			pawn._set_height(was_h)
 		return false
-	xf.origin = mid
-	if b.test_move(xf, end - mid):
-		return false
-	var hs := _hspeed()
 	state = State.MANTLE
 	pawn.rising_jump = false
+	_m_low = low
 	_m_from = start
 	_m_mid = mid
 	_m_to = end
 	_m_t = 0.0
-	_m_dur = clampf(0.16 + rise * 0.12, MANTLE_TIME_MIN, MANTLE_TIME_MAX)
-	_m_exit = into * maxf(Pawn.WALK_SPEED, hs * 0.7)
+	_m_dur = clampf(0.16 + (top_y - (start.y - half)) * 0.12, MANTLE_TIME_MIN, MANTLE_TIME_MAX)
+	_m_exit = into * exit_speed
 	_buffer = 0.0
+	_ledge_cd = LEDGE_COOLDOWN
 	mantled.emit()
 	return true
 
@@ -566,6 +688,400 @@ static func _ease(t: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+# --- ledge grab and hang ------------------------------------------------------
+
+## A lip ahead, higher than a mantle and within an arm's reach: take it and hang.
+## `jumped`: a jump pressed at it, which is intent enough; otherwise the move has
+## to push at the wall, or the body be flying at it -- falling past a ledge with
+## hands off does not grab it.
+func _try_grab(wish: Vector3, jumped: bool) -> bool:
+	if _ledge_cd > 0.0:
+		return false
+	var b := pawn.body
+	var feet := pawn.feet()
+	var hv := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var dirs: Array[Vector3] = []
+	if wish != Vector3.ZERO:
+		dirs.append(wish.normalized())
+	elif hv.length() > 0.5:
+		dirs.append(hv.normalized())
+	var look := _look_flat()
+	if dirs.is_empty() or dirs[0].dot(look) < 0.85:
+		dirs.append(look)
+	for approach in dirs:
+		if not jumped and wish.dot(approach) < 0.35 and hv.dot(approach) < 2.0:
+			continue
+		# Dense heights, so a single course of brick sticking out is not missed.
+		for cast_h in [0.6, 0.9, 1.2, 1.5, 1.8, 2.1]:
+			var o: Vector3 = feet + Vector3.UP * float(cast_h)
+			var wall := _ray(o, o + approach * (Pawn.BODY_RADIUS + 0.55))
+			if wall.is_empty() or absf((wall.normal as Vector3).y) > 0.4:
+				continue
+			var n := _flat(wall.normal)
+			if n == Vector3.ZERO:
+				continue
+			var face: Vector3 = wall.position
+			var top := _top_over(face, -n, feet.y + HANG_REACH + 0.3, feet.y + MANTLE_REACH * 0.75)
+			if top.is_empty():
+				continue
+			var top_y: float = top.position.y
+			var rise := top_y - feet.y
+			if rise < MANTLE_REACH * 0.75 or rise > HANG_REACH:
+				continue
+			if not _lip_grippable(face, top_y, -n):
+				continue
+			var spot := _hang_spot(face, n, top_y)
+			if spot == Vector3.INF:
+				continue
+			_start_hang(face, n, top_y, spot)
+			return true
+	return false
+
+
+## Where the feet hang from a lip -- or INF when the body fits nowhere under it.
+## Further out from the wall when something sticks out below the lip (a lower sill
+## the body would otherwise be inside): the arms reach, the body hangs clear.
+func _hang_spot(face: Vector3, n: Vector3, top_y: float) -> Vector3:
+	for out in [0.0, 0.2, 0.4, 0.6]:
+		var feet := Vector3(face.x, top_y - HANG_DROP, face.z) + n * (HANG_DIST + float(out))
+		if _fits_at(feet, Pawn.BODY_HEIGHT):
+			return feet
+	return Vector3.INF
+
+
+## The flat top of whatever `face` is the front of: step in from the face along
+## `into` and look down from `from_y` to `to_y`. A shallow step first, so a thin
+## wall is not stepped over into the air behind it.
+func _top_over(face: Vector3, into: Vector3, from_y: float, to_y: float) -> Dictionary:
+	for inset in [0.06, 0.18, 0.3]:
+		var p: Vector3 = face + into * float(inset)
+		var hit := _ray(Vector3(p.x, from_y, p.z), Vector3(p.x, to_y, p.z))
+		if not hit.is_empty() and (hit.normal as Vector3).y > 0.7:
+			return hit
+	return {}
+
+
+## Is there something to hold? Air over the lip for the fingers, and top behind
+## it for the hand. It also refuses the seam between two bricks inside a wall,
+## which a ray from inside the wall reads as a "top" with no air over it.
+func _lip_grippable(face: Vector3, top_y: float, into: Vector3) -> bool:
+	var edge := Vector3(face.x, top_y, face.z)
+	var over := edge + into * 0.02 + Vector3.UP * 0.005
+	var up := _ray(over, over + Vector3.UP * 0.6)
+	var gap := 0.6 if up.is_empty() else (up.position as Vector3).y - top_y
+	if gap < LIP_AIR:
+		return false
+	var probe := edge + into * LIP_DEPTH + Vector3.UP * (gap - 0.01)
+	var down := _ray(probe, probe + Vector3.DOWN * (gap + 0.1))
+	return not down.is_empty() and absf((down.position as Vector3).y - top_y) <= 0.06
+
+
+## The lip's frame, and whether a body fits on top of it.
+func _set_ledge(face: Vector3, n: Vector3, top_y: float) -> void:
+	ledge_face = face
+	ledge_normal = n
+	ledge_top = top_y
+	ledge_climbable = _fit_height(_climb_feet()) > 0.0
+
+
+## Where a climb from the hang puts the feet: over the lip, a body-width in.
+func _climb_feet() -> Vector3:
+	return Vector3(ledge_face.x, ledge_top + 0.02, ledge_face.z) \
+			- ledge_normal * (Pawn.BODY_RADIUS + 0.2)
+
+
+func _start_hang(face: Vector3, n: Vector3, top_y: float, feet: Vector3) -> void:
+	var b := pawn.body
+	# A tuck (the grapple's) or a crouch lets the legs down: a hanging body is long.
+	if pawn._height < Pawn.BODY_HEIGHT:
+		pawn._set_height(Pawn.BODY_HEIGHT, true)
+	if state == State.WALL_RUN or state == State.WALL_STICK:
+		_last_wall = wall_normal
+	state = State.HANG
+	pawn.rising_jump = false
+	_set_ledge(face, n, top_y)
+	_hang_t = 0.0
+	_buffer = 0.0
+	b.velocity = Vector3.ZERO
+	_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_ENTER)
+	grabbed.emit()
+
+
+func _ease_body(to: Vector3, seconds: float) -> void:
+	_h_from = pawn.body.global_position
+	_h_to = to
+	_h_t = 0.0
+	_h_dur = maxf(seconds, 0.01)
+
+
+## Hanging. Facing the wall the move keys map onto it: sideways shimmies, forward
+## climbs (or steps up to the next lip), back steps down (or lets go). Jump climbs
+## a lip you face, springs back off one you cannot climb, and leaps the way you
+## look otherwise; crouch lets go.
+func _hang_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
+	var b := pawn.body
+	_hang_t += delta
+	if _h_t < 1.0:
+		_h_t = minf(_h_t + delta / _h_dur, 1.0)
+		var p := _h_from.lerp(_h_to, _ease(_h_t))
+		b.velocity = (p - b.global_position) / maxf(delta, 0.001)
+		b.global_position = p
+		return
+	b.velocity = Vector3.ZERO
+	var look := _look_flat()
+	var facing := look.dot(-ledge_normal) > 0.4
+	if _buffer > 0.0:
+		_buffer = 0.0
+		if facing:
+			if not (ledge_climbable and _climb_from_hang()):
+				_leave_hang(ledge_normal * HANG_BACK + Vector3.UP * rise_speed(JUMP_LOW))
+		else:
+			_leave_hang(look * HANG_LEAP + Vector3.UP * rise_speed(JUMP_LOW))
+		return
+	if crouch_edge:
+		_leave_hang(ledge_normal * 1.5 + Vector3.DOWN)
+		return
+	var side := ledge_normal.cross(Vector3.UP).normalized()
+	var side_in := wish.dot(side)
+	var in_axis := wish.dot(-ledge_normal)
+	if absf(side_in) > 0.3 and absf(side_in) >= absf(in_axis) * 0.8:
+		var tangent := side * signf(side_in)
+		var step := SHIMMY_SPEED * delta
+		var before := b.global_position
+		var ok := _shimmy(before + tangent * step)
+		# Pinned at the end of the lip is the lip ending: go round the corner.
+		if (not ok or (b.global_position - before).dot(tangent) < step * 0.4) and _corner_cd <= 0.0:
+			_corner(tangent)
+		return
+	if _hang_t < HANG_MIN:
+		return
+	if in_axis > 0.3:
+		if ledge_climbable:
+			if _climb_cd <= 0.0 and not _climb_from_hang():
+				_climb_cd = 0.3
+		else:
+			_step_ledge(true)
+	elif in_axis < -0.4:
+		if not _step_ledge(false):
+			_leave_hang(ledge_normal * 1.5 + Vector3.DOWN)
+
+
+## Pull up over the lip. Re-measured now -- the hang may have lasted a while, and
+## what stands on top decides a standing climb, a ducked one, or none (hang on).
+func _climb_from_hang() -> bool:
+	var into := -ledge_normal
+	var land := _climb_feet()
+	var pushing := pawn.intents.move.dot(into) > 0.3
+	if _climb(land, into, Pawn.WALK_SPEED * 0.6 if pushing else 0.5):
+		return true
+	ledge_climbable = _fit_height(land) > 0.0
+	return false
+
+
+func _leave_hang(v: Vector3) -> void:
+	state = State.WALK
+	pawn.body.velocity = v
+	_ledge_cd = LEDGE_COOLDOWN
+
+
+## Slide the hang along the lip to `pos`: follows a gently curving or sloping lip
+## (a fan of rays finds the face, and the normal turns with it). False when the
+## lip runs out, which the caller takes for a corner.
+func _shimmy(pos: Vector3) -> bool:
+	var o := Vector3(pos.x, ledge_top - 0.1, pos.z)
+	var best := {}
+	var best_d := INF
+	for deg in [0.0, -15.0, 15.0, -28.0, 28.0]:
+		var d := (-ledge_normal).rotated(Vector3.UP, deg_to_rad(float(deg)))
+		var wh := _ray(o, o + d * (HANG_DIST + 0.5))
+		if wh.is_empty() or _flat(wh.normal) == Vector3.ZERO:
+			continue
+		var dist := o.distance_to(wh.position)
+		if dist < best_d:
+			best_d = dist
+			best = wh
+	if best.is_empty():
+		return false
+	var n := _flat(best.normal)
+	var face: Vector3 = best.position
+	var top := _top_over(face, -n, ledge_top + 0.35, ledge_top - 0.35)
+	if top.is_empty():
+		return false
+	var ny: float = top.position.y
+	if absf(ny - ledge_top) > 0.3 or not _lip_grippable(face, ny, -n):
+		return false
+	var feet := _hang_spot(face, n, ny)
+	if feet == Vector3.INF:
+		return false
+	_set_ledge(face, n, ny)
+	pawn.body.global_position = feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5
+	return true
+
+
+## Round a corner at the end of the lip, going along `tangent`: an INSIDE corner
+## (a wall across the lip ahead) or an OUTSIDE one (the lip ends and its face
+## wraps round). Eased, so the turn glides.
+func _corner(tangent: Vector3) -> bool:
+	var into := -ledge_normal
+	var here := Vector3(pawn.body.global_position.x, ledge_top - 0.1, pawn.body.global_position.z)
+	var fh := _ray(here, here + into * (HANG_DIST + 0.4))
+	var lip: Vector3 = fh.position if not fh.is_empty() else here + into * HANG_DIST
+	var hit := _ray(lip + ledge_normal * 0.06, lip + ledge_normal * 0.06 + tangent * 0.7)
+	if hit.is_empty() or _flat(hit.normal) == Vector3.ZERO:
+		var from := lip + tangent * 0.35 + into * 0.35
+		hit = _ray(from, from - tangent * 0.9)
+	if hit.is_empty() or _flat(hit.normal) == Vector3.ZERO:
+		return false
+	var n := _flat(hit.normal)
+	var face: Vector3 = hit.position
+	var top := _top_over(face, -n, ledge_top + 0.4, ledge_top - 0.4)
+	if top.is_empty():
+		return false
+	var ny: float = top.position.y
+	if absf(ny - ledge_top) > 0.4 or not _lip_grippable(face, ny, -n):
+		return false
+	var feet := _hang_spot(face, n, ny)
+	if feet == Vector3.INF:
+		return false
+	_set_ledge(face, n, ny)
+	_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_CORNER_TIME)
+	_corner_cd = 0.35
+	return true
+
+
+## Up (or down) the wall to the next lip within reach: a ladder of window sills,
+## a course sticking out. Up onto a lip there is room to climb onto climbs it.
+func _step_ledge(up: bool) -> bool:
+	var heights := [0.5, 0.8, 1.1, 1.4, 1.7] if up else [-0.5, -0.8, -1.1, -1.4, -1.7]
+	var b := pawn.body
+	for dy in heights:
+		var o := Vector3(b.global_position.x, ledge_top + float(dy), b.global_position.z)
+		var wh := _ray(o, o - ledge_normal * (HANG_DIST + 0.9))
+		if wh.is_empty() or _flat(wh.normal) == Vector3.ZERO:
+			continue
+		var n := _flat(wh.normal)
+		var face: Vector3 = wh.position
+		var top := _top_over(face, -n, face.y + 0.4, face.y - 0.4)
+		if top.is_empty():
+			continue
+		var ny: float = top.position.y
+		if up and (ny <= ledge_top + 0.3 or ny > ledge_top + 1.9):
+			continue
+		if not up and (ny >= ledge_top - 0.3 or ny < ledge_top - 1.9):
+			continue
+		if not _lip_grippable(face, ny, -n):
+			continue
+		var feet := _hang_spot(face, n, ny)
+		if feet == Vector3.INF:
+			continue
+		_set_ledge(face, n, ny)
+		if up and ledge_climbable and _climb_from_hang():
+			return true
+		_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_STEP_TIME)
+		return true
+	return false
+
+
+# --- wall stick ---------------------------------------------------------------
+
+## Flown into a wall too tall to climb: hold on. Hitting it hard is intent enough
+## (even back first); a gentle touch needs the move pushing into it and the body
+## already falling -- a jump up along a wall stays a jump. A fast graze along a
+## wall is a wall-run's, not this.
+func _try_stick(wish: Vector3) -> bool:
+	var b := pawn.body
+	if _wall_cd > 0.0 or b.is_on_floor():
+		return false
+	var hv := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var n := Vector3.ZERO
+	if b.is_on_wall():
+		n = _flat(b.get_wall_normal())
+	elif hv.length() >= STICK_MIN_SPEED:
+		var hit := _ray(_chest(), _chest() + hv.normalized() * (Pawn.BODY_RADIUS + 0.35))
+		if not hit.is_empty() and absf((hit.normal as Vector3).y) < 0.3:
+			n = _flat(hit.normal)
+	if n == Vector3.ZERO:
+		return false
+	var into_speed := hv.dot(-n)
+	var impact := into_speed >= STICK_MIN_SPEED
+	if not impact and (wish.dot(-n) < 0.35 or b.velocity.y > -0.5):
+		return false
+	if impact and hv.length() > WALL_RUN_MIN and hv.normalized().dot(-n) < 0.65:
+		return false
+	if _lip_in_reach(n):
+		return false
+	# The wall just left takes you back sliding, never holding: no climbing one
+	# wall by jumping at it over and over.
+	var same := _last_wall != Vector3.ZERO and n.dot(_last_wall) > SAME_WALL \
+			and b.global_position.distance_to(_stick_pos) < 1.5
+	var t := clampf((into_speed - STICK_MIN_SPEED) / (STICK_FULL_SPEED - STICK_MIN_SPEED), 0.0, 1.0)
+	state = State.WALL_STICK
+	pawn.rising_jump = false
+	wall_normal = n
+	_stick_pos = b.global_position
+	_stick_dur = lerpf(STICK_TIME_MIN, STICK_TIME_MAX, t)
+	_stick_t = _stick_dur if (same or not impact) else 0.0
+	_stick_fast = b.velocity.y < -STICK_MAX_FALL
+	b.velocity = Vector3(0.0, b.velocity.y if _stick_fast else 0.0, 0.0)
+	stuck.emit()
+	return true
+
+
+## A lip on this wall within reach -- the grab's or the mantle's, not the stick's.
+func _lip_in_reach(n: Vector3) -> bool:
+	var feet := pawn.feet()
+	var o := feet + Vector3.UP * 1.0
+	var wh := _ray(o, o - n * (Pawn.BODY_RADIUS + 0.5))
+	if wh.is_empty():
+		return false
+	var top := _top_over(wh.position, -n, feet.y + HANG_REACH + 0.3, feet.y + Pawn.STEP_HEIGHT)
+	return not top.is_empty() and _lip_grippable(wh.position, top.position.y, -n)
+
+
+func _stick_tick(delta: float, wish: Vector3) -> void:
+	var b := pawn.body
+	_stick_t += delta
+	if b.is_on_floor():
+		state = State.WALK
+		return
+	if _ray(_chest(), _chest() - wall_normal * (Pawn.BODY_RADIUS + 0.4)).is_empty():
+		_leave_wall()
+		return
+	if _buffer > 0.0:
+		_buffer = 0.0
+		_stick_jump()
+		return
+	# Sliding down past a lip, still pushing in: the hands take it.
+	if wish.dot(-wall_normal) >= 0.35 and _try_grab(wish, false):
+		return
+	if not _stick_fast and _stick_t > _stick_dur + STICK_SLIDE_TIME:
+		_leave_wall()
+		return
+	if wish.dot(wall_normal) > 0.4:
+		_leave_wall()
+		b.velocity = wall_normal * 2.0
+		return
+	var vy: float
+	if _stick_fast:
+		vy = maxf(b.velocity.y - Pawn.GRAVITY * delta, -20.0)
+	else:
+		vy = 0.0 if _stick_t < _stick_dur else -STICK_SLIDE_SPEED
+	var tangent := wall_normal.cross(Vector3.UP).normalized()
+	b.velocity = tangent * wish.dot(tangent) * STICK_STRAFE + Vector3.UP * vy \
+			- wall_normal * 1.5
+
+
+## Off a stuck wall: facing it, spring back off it; otherwise a wall-jump the way
+## you look.
+func _stick_jump() -> void:
+	if _look_flat().dot(-wall_normal) > 0.5:
+		pawn.body.velocity = wall_normal * STICK_BACK_JUMP + Vector3.UP * rise_speed(JUMP_LOW)
+		_leave_wall()
+		wall_jumped.emit()
+	else:
+		_wall_jump()
+
+
 # --- grapple ------------------------------------------------------------------
 
 func _try_grapple() -> void:
@@ -577,7 +1093,7 @@ func _try_grapple() -> void:
 	if hit.is_empty():
 		_grapple_cd = GRAPPLE_MISS_COOLDOWN
 		return
-	if state == State.WALL_RUN:
+	if state == State.WALL_RUN or state == State.WALL_STICK:
 		_leave_wall()
 	hook = hit.position
 	_g_collider_id = (hit.collider as Object).get_instance_id() if hit.collider != null else 0
@@ -640,10 +1156,18 @@ func _hook_gone() -> bool:
 func _release_grapple() -> void:
 	state = State.WALK
 	_grapple_cd = GRAPPLE_COOLDOWN
+	_tuck_left = GRAPPLE_TUCK_AFTER
 	grapple_released.emit()
 
 
 # --- helpers ------------------------------------------------------------------
+
+## A normal laid flat and unit length; zero when it points (nearly) straight up
+## or down.
+static func _flat(n: Vector3) -> Vector3:
+	var f := Vector3(n.x, 0.0, n.z)
+	return f.normalized() if f.length() > 0.3 else Vector3.ZERO
+
 
 func _hspeed() -> float:
 	return Vector2(pawn.body.velocity.x, pawn.body.velocity.z).length()
