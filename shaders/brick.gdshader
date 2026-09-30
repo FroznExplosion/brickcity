@@ -3,6 +3,7 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
 // Materials: PLA, TPU, wood, metal ... in the vertex colour's alpha.
 #include "res://shaders/brick_materials.gdshaderinc"
+#include "res://shaders/weather.gdshaderinc"
 
 // Brick surface. Flat filament colour from vertex colour (spec section 2: no
 // textures, so colour costs nothing but a byte per block), plus a dark seam
@@ -153,6 +154,9 @@ void vertex() {
     v_face = UV2;
     v_local = VERTEX;
     v_local_normal = normalize(NORMAL);
+    // Wind (weather.gdshaderinc): only what has a sway height set -- a tree, a
+    // standing building -- and after v_local, so the print lines ride along.
+    VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
     // A see-through brick is drawn by the glass pass, not here: collapsed to
     // a point, its faces cost nothing and rasterise nothing.
     if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
@@ -352,9 +356,15 @@ void fragment() {
         }
     }
 
+    float out_rough = clamp(roughness + print_rough, 0.0, 1.0);
+    float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
+    // Rain (weather.gdshaderinc): plastic hardly darkens, it shines; metal
+    // not at all.
+    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX,
+            0.14 * (1.0 - MAT_METAL[mat]));
     ALBEDO = albedo;
-    ROUGHNESS = clamp(roughness + print_rough, 0.0, 1.0);
-    SPECULAR = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
     METALLIC = MAT_METAL[mat];
     EMISSION = emission;
     RIM = surface_rim * (1.0 - MAT_METAL[mat]);

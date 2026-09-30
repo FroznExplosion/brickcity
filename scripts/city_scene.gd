@@ -1450,6 +1450,7 @@ func _build_terrain_ground() -> void:
 
 	_terrain_mat = ShaderMaterial.new()
 	_terrain_mat.shader = load("res://shaders/terrain.gdshader")
+	WeatherFx.register(_terrain_mat)
 	_terrain_mat.set_shader_parameter("stud_pitch", stud)
 	_terrain_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
 	_terrain_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
@@ -3080,6 +3081,18 @@ func _build_one_band(id: int) -> bool:
 	return true
 
 
+## A standing building's wind sway (WeatherFx): a tree's crown moves, a
+## tower's top a few centimetres. Height from the ground it stands on.
+func _sway_of(id: int) -> Vector3:
+	var b := registry.get_building(id)
+	if b == null or b.toppled:
+		return Vector3.ZERO
+	var h := registry.local_box(id).end.y
+	if b.is_build() and b.build != null and String(b.build.name).begins_with("tree_"):
+		return WeatherFx.sway_tree(h)
+	return WeatherFx.sway_building(h)
+
+
 ## Hang a finished band mesh in its slot.
 func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 	var nodes: Array = _brick_bands.get(id, [])
@@ -3090,6 +3103,8 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 	if node == null or not is_instance_valid(node):
 		node = MeshInstance3D.new()
 		node.material_override = brick_material
+		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
+		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -6262,7 +6277,10 @@ func _inst_set(key: String, recipe: BuildRecipe, near := true) -> ImpostorLod:
 	s.name = "Inst_%s" % key
 	add_child(s)
 	# A player build is only ever a card here: up close it is its own shell.
-	s.setup(RecipeMesh.build(recipe, key), brick_material, TREE_NEAR if near else -1.0)
+	var inst_mesh := RecipeMesh.build(recipe, key)
+	if inst_mesh != null and String(recipe.name).begins_with("tree_"):
+		s.sway = WeatherFx.sway_tree(inst_mesh.get_aabb().end.y)
+	s.setup(inst_mesh, brick_material, TREE_NEAR if near else -1.0)
 	_inst_sets[key] = s
 	return s
 
@@ -6714,6 +6732,7 @@ func _far_multimesh() -> MultiMesh:
 	mm.visible_instance_count = 0
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/city_far.gdshader")
+	WeatherFx.register(mat)
 	# The colours the shell is built in (BuildingShell.build_arrays), so the
 	# swap from a shell has no colour step.
 	var courses := []
@@ -11211,6 +11230,7 @@ func _build_scenery() -> void:
 	brick_material = ShaderMaterial.new()
 	brick_material.shader = load("res://shaders/brick.gdshader")
 	BrickMaterials.add_glass(brick_material)
+	WeatherFx.register(brick_material)
 	for key in _shader_toggles:
 		brick_material.set_shader_parameter(key, _shader_toggles[key])
 

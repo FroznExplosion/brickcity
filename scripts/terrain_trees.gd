@@ -47,7 +47,11 @@ func build(p_rect: Rect2i, p_seed: int) -> void:
 			var s := ImpostorLod.new()
 			s.name = "Trees_%d" % variant
 			add_child(s)
-			s.setup(RecipeMesh.build(Trees.recipe(variant), key), material, 45.0)
+			var tree_mesh := RecipeMesh.build(Trees.recipe(variant), key)
+			# Its crowns move in the wind (weather.gdshaderinc).
+			if tree_mesh != null:
+				s.sway = WeatherFx.sway_tree(tree_mesh.get_aabb().end.y)
+			s.setup(tree_mesh, material, 45.0)
 			_sets[key] = s
 		(_sets[key] as ImpostorLod).add(Trees.placement(spot.cell, variant))
 	count = spots.size()
