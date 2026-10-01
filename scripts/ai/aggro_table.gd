@@ -33,6 +33,9 @@ class Entry:
 
 
 var entries := {}   # instance id -> Entry
+## What each kind of row's gains count for: the commander's doctrine sets the
+## pilot's higher against a player whose mech does the killing (pilot_focus).
+var bias := {"pilot": 1.0, "mech": 1.0}
 ## Times the focus has moved, for gates.
 var switches := 0
 var _focus_id := 0
@@ -52,7 +55,8 @@ func track(who: Object, player := 0, kind := "pilot") -> Entry:
 func add(who: Object, amount: float) -> void:
 	if who == null or amount <= 0.0:
 		return
-	track(who).value += amount
+	var e := track(who)
+	e.value += amount * float(bias.get(e.kind, 1.0))
 	_refresh()
 
 

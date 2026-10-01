@@ -18,7 +18,7 @@ const RARITY_COLOURS: Array[Color] = [
 ]
 ## The key help at the bottom fades after this long.
 const HINT_SECONDS := 10.0
-const HINT := "WASD move · SHIFT sprint · SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload · V leave"
+const HINT := "WASD move · SHIFT sprint · SPACE jump (hold: higher) / climb · C slide, let go · Q grapple · RMB aim · LMB fire · R reload · V leave"
 
 var pawn: Pawn
 var gun: GunController

@@ -182,6 +182,15 @@ const _PARTS := {
 	"slope_2x4": Vector3i(2, 3, 4),
 	"curve_1x2": Vector3i(1, 3, 2),
 	"curve_2x2": Vector3i(2, 3, 2),
+	# Longer curves and one-plate "cheese" wedges: what LEGO Worlds' hills are
+	# made of (Docs/Reference/lego-worlds.md) -- a curve rises one brick over
+	# three or four studs, a cheese one plate.
+	"curve_1x3": Vector3i(1, 3, 3),
+	"curve_1x4": Vector3i(1, 3, 4),
+	"curve_2x4": Vector3i(2, 3, 4),
+	"cheese_1x1": Vector3i(1, 1, 1),
+	"cheese_1x2": Vector3i(1, 1, 2),
+	"cheese_2x2": Vector3i(2, 1, 2),
 	"round_1x1": Vector3i(1, 3, 1),
 	"round_2x2": Vector3i(2, 3, 2),
 	"arch_1x4": Vector3i(1, 3, 4),
@@ -209,6 +218,12 @@ const _SHAPED := {
 	"slope_2x4": {"kind": "slope", "axis": "x"},
 	"curve_1x2": {"kind": "curve", "axis": "z"},
 	"curve_2x2": {"kind": "curve", "axis": "z"},
+	"curve_1x3": {"kind": "curve", "axis": "z"},
+	"curve_1x4": {"kind": "curve", "axis": "z"},
+	"curve_2x4": {"kind": "curve", "axis": "z"},
+	"cheese_1x1": {"kind": "slope", "axis": "z"},
+	"cheese_1x2": {"kind": "slope", "axis": "z"},
+	"cheese_2x2": {"kind": "slope", "axis": "z"},
 	"round_1x1": {"kind": "round"},
 	"round_2x2": {"kind": "round"},
 	"arch_1x4": {"kind": "arch"},
@@ -286,7 +301,7 @@ const FACE_SOCKET := 2
 ## but a tile and a curved slope does. (A slope has them only on its back
 ## strip, but it has them.)
 static func has_studs(part: String) -> bool:
-	return not part.begins_with("tile_") and not part.begins_with("curve_")
+	return not part.begins_with("tile_") and not part.begins_with("curve_") 			and not part.begins_with("cheese_")
 
 
 ## Is this part a shape rather than a box?
@@ -354,7 +369,7 @@ const CATEGORIES := [
 	["Bricks", ["brick"]],
 	["Plates", ["plate"]],
 	["Tiles", ["tile"]],
-	["Slopes", ["slope", "curve"]],
+	["Slopes", ["slope", "curve", "cheese"]],
 	["Round", ["round"]],
 	["Arches", ["arch"]],
 	["Sideways", ["bracket"]],

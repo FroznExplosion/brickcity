@@ -30,7 +30,7 @@ in `scenes/player/`, `scenes/weapons/`, `scenes/ui/`.
 
 | Ceramic Edge | Here | How it changed on the way |
 |---|---|---|
-| `PlayerMovement.gd` — locomotion, slide, wall-run, wall-jump, vault, ledge grab, coyote, jump buffer | [`scripts/pawn/pawn_moves.gd`](../../scripts/pawn/pawn_moves.gd) (`PawnMoves`) | A motor behind `PawnIntents`, not a player script: it never reads input. Speeds in the figure's own units (§2.1). Vault and ledge grab merged into one **mantle** |
+| `PlayerMovement.gd` — locomotion, slide, wall-run, wall-jump, vault, ledge grab and hang, shimmy, corner wrap, beam-ladder steps, wall stick/slide, clearance bands, coyote, jump buffer | [`scripts/pawn/pawn_moves.gd`](../../scripts/pawn/pawn_moves.gd) (`PawnMoves`) | A motor behind `PawnIntents`, not a player script: it never reads input. Speeds in the figure's own units (§2.1). Vault becomes the **mantle**; one climb (`_climb`) serves both it and the pull-up from a hang (§2.4). No hand IK: the gun lowers while the hands are on a lip |
 | `PlayerGrapple.gd` + the grapple states | `PawnMoves` (the GRAPPLE state) | Hooks **any** solid surface, not authored anchors; Q, hold to keep the line (§6) |
 | `ViewmodelSway.gd` — sway, bob, recoil spring, land dip, wall retract | [`scripts/pawn/player_view.gd`](../../scripts/pawn/player_view.gd) (`PlayerView`) | One hand. Adds aim-down-sights, a sprint pose, a reload pose (§3) |
 | Recoil + camera shake in `PlayerMovement` | `PlayerView` | View kick per gun class, recovered once the trigger rests; shake on the frustum offsets |
@@ -75,8 +75,10 @@ the figure to the moves:
 | Sprint | 11 m/s | `Pawn.RUN_SPEED` 5.6 m/s |
 | Slide boost | 14 m/s, 1 s free, then 8 m/s² | 1.3 × run (7.3 m/s), 0.35 s free, then 5 m/s² |
 | Wall-run | 9 m/s, 4 s, 1 s level | 1.15 × run, 1.6 s, 0.6 s level with a lift onto the wall |
-| Mantle reach | ledge band to 2.4 m | body + 0.45 m (2.13 m, five bricks) |
-| Grapple | 10–30 m/s, reach 30 m | reel to 17 m/s, reach 32 m |
+| Vault / mantle | vault to 1.85 m, grab 1.85–2.4 m | mantle up to a body (1.68 m, four bricks) over the feet; **grab and hang** above that, to body + 0.75 m (2.43 m) |
+| Hang | lip 1.45 m over the feet, body 0.75 m off the face, shimmy 2.2 m/s | lip a body + 0.1 m over the feet (hands over the head), body a radius + 0.15 m off the face — further out if something below sticks out — shimmy 1.8 m/s |
+| Wall stick | 3 m/s into the wall; holds 0.35–1.6 s by impact; slides 2.5 m/s for 5 s | 2.5 m/s; holds 0.35–1.2 s; slides 1.5 m/s for 3 s |
+| Grapple | 10–30 m/s, reach 30 m | reel to 17 m/s, reach 32 m, **no gravity on the line**, legs tucked to 2 bricks (§6) |
 | Jump | 5.0–8.6 m/s, charged: fires on release, tap small, hold big | Tap clears **2 bricks**, held clears **4** (`PawnMoves.JUMP_LOW`/`JUMP_HIGH`). Variable height, not charged: it launches for four and letting go on the way up cuts it to two, so a tap has no wait. The rise of your own jump never counts as a fall. Soldiers keep `Pawn.JUMP_SPEED`, one course — the nav is built around it |
 
 ### 2.2 The rules that made it feel good (kept)
@@ -105,7 +107,29 @@ From `Docs/10_movement_actions.md`, worth keeping whatever the numbers become:
    collider, so "the same wall" is "a wall facing the same way" (normal dot > 0.8). Same here, for
    a different reason: a building's bricks are one compound body.
 
-### 2.3 Traps they paid for
+### 2.3 Hang, climb and stick (adopted 2026-09-30)
+
+| Move | How here |
+|---|---|
+| **Grab** | A lip between a body and an arm above the feet, with a jump at it or pushing/flying at it. It must be a real lip: air over it for the fingers and top behind it for the hand (`_lip_grippable`) — which also refuses the seam between two bricks that a ray started inside a brick wall reads as a "top" |
+| **Hang** | Facing the wall, the move keys map onto it: sideways shimmies (a fan of rays follows curves and slopes), forward climbs or steps up, back steps down or lets go. Jump climbs a lip you face, springs back off one you cannot climb, leaps the way you look otherwise. Crouch lets go |
+| **Corner wrap** | At the end of the lip, inside or outside corners, eased so the turn glides |
+| **Step up / down** | To the next lip within 1.9 m (a ladder of sills, a course sticking out). Up onto a lip with room goes straight over it. The hang spot moves out from the wall until the body fits — without that, every lip over a protruding one was refused |
+| **Wall stick** | Flying into a wall too tall to mantle or grab: a hard hit holds (longer the harder), then a slow slide; a gentle one needs a push and a fall. A graze at run speed is a wall-run's. The wall just left is slide-only (no climbing one wall by jumping at it). Jump facing it springs back; otherwise a wall-jump the way you look. Sliding past a lip while pushing in grabs it |
+| **Air crouch** | In the air a crouch pulls the **legs up and keeps the head where it is** (`Pawn._set_height(h, from_top)`) — the view does not drop, and the feet rising is not counted as a fall |
+
+### 2.4 One climb, three answers
+
+Every climb — a mantle from the ground or the air, a pull-up from a hang, a step up onto a lip with
+room — goes through `PawnMoves._climb`, which asks their clearance-band question at the landing:
+
+| On top | Climb |
+|---|---|
+| A standing body fits | Up, standing |
+| Only a crouching body fits | Up **ducked from the start**: the body crouches before it rises, so the view comes up under the ceiling instead of standing into it and dropping at the end. It stays crouched on top until there is room |
+| Neither | Refused. From a hang the lip becomes hang-only (shimmy, step, leap, drop) |
+
+### 2.5 Traps they paid for
 
 - **Phasing through an obstacle is coarse.** A collision exception on "the wall I'm vaulting"
   switches off every wall on that body. Their fix — collision on unless the path truly enters the
@@ -195,7 +219,10 @@ ZIP (reel to it, then the ledge logic climbs the lip), SWING (a pendulum done as
 projection, not a position snap), YANK (rip a linked target down). One hand stows its gun while the
 line is out.
 
-Here: **Titanfall's grapple, not Indiana Jones's whip.** A city of bricks has no authored anchors,
+Here: **Titanfall's grapple, not Indiana Jones's whip.** On the line there is no gravity (it pulls
+straight, so it can be aimed) and the legs tuck up to two bricks, head fixed, for the whole pull and
+0.3 s after: a building's window is three courses tall — exactly a crouching body — so only the
+tuck gets through one. `moves_probe` flies one. A city of bricks has no authored anchors,
 and a line that bites anything solid is what a pilot has. Q shoots it at whatever the eye is on
 within 32 m; hold to keep it, release to let go, jump to let go with a kick up. The swing's
 lesson came across as the constraint — the line only shortens, and motion away from the hook is
@@ -212,8 +239,6 @@ does not free its body, so the hook holds where it bit.
 | Two guns, per-hand fire and ammo, throw-your-gun | One gun, like any FPS |
 | Telekinetic pull, vortex shield, slow motion, dash | No abilities |
 | Air-slide, ground hop | Sci-fi excess their own Doc 10 recommended against |
-| Wall-stick / wall-slide, same-wall climb budget | A mechanic for a player with full hands; a wall-run and a mantle cover the verticality |
-| Ledge hang, shimmy, corner wrap, beam ladders | Assassin's Creed climbing; the mantle is enough for an FPS |
 | Charged jump (fires on release) | Replaced by a variable-height jump with the same two heights' idea and no delay on a tap |
 | Halo fall-death timer, void recovery | Fall damage already exists (`Pawn.SAFE_FALL`, Collapse.md 4.4) |
 | Skulls/modifiers, floor-is-lava | Their game's run structure, not ours |

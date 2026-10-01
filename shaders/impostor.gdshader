@@ -148,7 +148,10 @@ void fragment() {
     NORMAL = normalize((VIEW_MATRIX * vec4(nworld, 0.0)).xyz);
     float out_rough = 0.42;
     float out_spec = 0.55;
-    weather_wet_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 0.14);
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.14, 0.0, TIME);
+    NORMAL = wet_normal;
     ALBEDO = albedo;
     ALPHA = cover;
     ALPHA_SCISSOR_THRESHOLD = 0.5;

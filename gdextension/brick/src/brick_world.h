@@ -703,6 +703,14 @@ public:
     /// brick, 60-70 ms for a 22,000-brick tower, in the tick a section fell.
     bool any_block_centre_in(int chunk_id, const AABB &box, const PackedInt32Array &exclude) const;
 
+    /// any_block_centre_in for a stack of levels at once: `box` cut into slices
+    /// `level_height` tall from its bottom, and a byte per slice, 1 where the
+    /// centre of a live box (as get_block_boxes lists them) not in `exclude`
+    /// lies in it. One walk of the chunk -- CityScene._sweep_stairs asks it of
+    /// every storey round a stairwell at once.
+    PackedByteArray block_centre_levels(int chunk_id, const AABB &box, float level_height,
+            const PackedInt32Array &exclude) const;
+
     /// Same list, offset so the centre of mass is at the origin -- what a
     /// rigid body wants. Returns {boxes, com, mass}.
     Dictionary get_body_boxes(int chunk_id) const;

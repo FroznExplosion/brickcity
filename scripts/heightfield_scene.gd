@@ -653,6 +653,14 @@ func disaster_sea(surge: float, wave_mul: float) -> void:
 		_sea_base = NAN
 
 
+## Every detail tile again: after a change to how pieces are made.
+func rebuild_detail() -> void:
+	var r: int = FAR_TILES
+	_streamer.invalidate(Rect2i(-r, -r, r * 2 + 1, r * 2 + 1))
+	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
+	_streamer.settle(Vector2(at.x, at.z))
+
+
 func set_water_param(param: String, value: Variant) -> void:
 	if _sea == null:
 		return

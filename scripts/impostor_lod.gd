@@ -156,6 +156,13 @@ static func _make_mmi(m: Mesh, mat: Material) -> MultiMeshInstance3D:
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = m
 	var mmi := MultiMeshInstance3D.new()
+	# NOT interpolated. The project has physics interpolation on, and an
+	# interpolated MultiMesh blends each SLOT from its last transform to its
+	# new one. A repack puts different copies in the same slots, so for a
+	# frame every slot slid from one tree towards another: trees flickering
+	# and moving whenever the player moved, right beside them too. These
+	# copies never move by themselves; nothing here wants interpolating.
+	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	mmi.multimesh = mm
 	if mat != null:
 		mmi.material_override = mat

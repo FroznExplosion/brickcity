@@ -314,6 +314,10 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	mi.visibility_range_end = range_end
 	mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	# Grass moves in the wind (weather.gdshaderinc); studs and pebbles do not.
+	if node_name == "Tufts":
+		mi.set_instance_shader_parameter("weather_sway",
+				WeatherFx.sway_grass(mesh.get_aabb().end.y))
 	add_child(mi)
 
 

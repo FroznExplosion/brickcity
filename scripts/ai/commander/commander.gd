@@ -239,6 +239,7 @@ func think(dt: float) -> void:
 	budget = minf(budget + INCOME * dt, BUDGET_CAP)
 	_update_desperation()
 	doctrine.update(profile, desperation, difficulty)
+	services.aggro_of(team).bias["pilot"] = 1.0 + doctrine.pilot_focus
 	for q in squads:
 		if radio_up or hq == Vector3.INF or q.center().distance_to(hq) <= SHOUT_RANGE:
 			_command(q)

@@ -29,6 +29,8 @@ var wet := 0.0
 var gale := Vector3.ZERO
 const WET_S := 15.0
 const DRY_S := 120.0
+## Rain falling now, eased over a couple of seconds either way.
+var rain := 0.0
 
 ## Where soldiers must not stand, by the disaster that said so: id -> AABB
 ## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
@@ -426,7 +428,8 @@ func shake(point: Vector3, strength: float) -> void:
 ## the wet.
 func step(delta: float) -> void:
 	wet = move_toward(wet, 1.0 if raining else 0.0, delta / (WET_S if raining else DRY_S))
-	WeatherFx.set_weather(wet, gale)
+	rain = move_toward(rain, 1.0 if raining else 0.0, delta / 2.0)
+	WeatherFx.set_weather(wet, gale, rain)
 	_step_shake(delta)
 
 

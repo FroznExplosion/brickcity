@@ -205,6 +205,9 @@ var disasters: DisasterDirector
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
+## Buildings still in bricks, their mesh given up at range, hit since their
+## shell was made: rebuilt from their bricks by _stream_detail.
+var _shell_stale := {}
 var _shell_bodies := {}    ## building id -> RID
 var _brick_nodes := {}     ## building id -> MeshInstance3D
 ## chunk id -> the MultiMeshInstance3D drawing that chunk's interiors, parented
@@ -593,9 +596,13 @@ const ROOM_REACH := 1.5
 ## And it goes back to drawn past this. The gap is the hysteresis that keeps a
 ## player pacing a doorway from laying and lifting the same room every pass.
 const ROOM_REACH_RELEASE := 4.0
-## How many rooms a pass may DRAW. A drawn room is a manifest and a buffer --
-## tens of microseconds -- so this is a guard on a teleport, not a budget.
-const ROOM_DRAWS_PER_PASS := 96
+## How many rooms a pass may DRAW, nearest first. A drawn room is a manifest and
+## a buffer -- tens of microseconds -- but its items' shapes go on the building's
+## furniture body in the same pass (_sync_drawn), and a building just made
+## bricks draws every room in ROOM_RANGE at once: 96 was 15 ms of the first hit
+## on a shell (--diag firsthit). A quarter of that a pass is the same rooms over
+## four passes, the far ones last.
+const ROOM_DRAWS_PER_PASS := 24
 ## How many rooms a streaming pass may open, and how many milliseconds it may
 ## spend doing it.
 ##
@@ -749,6 +756,14 @@ var _buildings_arg := false
 ## not on pads and are not the gate's business.
 var _site_ids: Array[int] = []
 var _stress_mode := false
+## `--agents` with --stress: the P8 population in the city while it comes down.
+var _agents_mode := false
+## Many at once (AIPlan P8): who is smart, the swarm, and whom they are after.
+var budget: ImportanceBudget
+var swarm: SwarmSide
+var _many_target: Pawn
+var _many := {"soldiers": 0, "flyers": 0, "animals": 0, "hunters": 0}
+var _next_swarm_refresh := 0.0
 var _reach_mode := false
 var _far_mode := false
 var _tree_mode := false
@@ -943,6 +958,7 @@ func _ready() -> void:
 	_bench_bricks = "--with-bricks" in args
 	_terrain_mode = terrain_ground or "--terrain" in args
 	_stress_mode = "--stress" in args
+	_agents_mode = "--agents" in args
 	_reach_mode = "--reach" in args
 	_far_mode = "--far" in args
 	_tree_mode = "--trees" in args
@@ -1207,6 +1223,10 @@ func _exit_tree() -> void:
 		if int(job[2]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(job[2]))
 	_band_jobs.clear()
+	# And a shadow proxy being built.
+	for job in _shadow_jobs.values():
+		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
+	_shadow_jobs.clear()
 	for bodies in _frame_bodies.values():
 		for rid in (bodies as Array):
 			PhysicsServer3D.free_rid(rid)
@@ -2258,6 +2278,18 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# damage is in live bricks rather than a profile -- stays banded.
 	var boxed := coarse and _far_draws_coarse(b)
 	coarse = coarse and (boxed or not b.is_damaged())
+	# A building still in bricks -- its mesh given up at range (_demesh) --
+	# draws the damage its bricks have NOW. Its profile is only brought up to
+	# date when it gives its bricks back (dematerialise), so the shell standing
+	# in for it drew what it looked like before: a tower with its top blown off
+	# came back whole past DEMESH_RANGE, windows and all, and went again inside
+	# it -- "respawning" as the camera moved. One with no bricks left draws
+	# nothing.
+	var damage: Dictionary = b.damage_profile
+	var nothing_left := false
+	if b.is_materialised() and not b.is_build():
+		damage = registry.live_damage_profile(id)
+		nothing_left = world.get_alive_block_count(b.chunk) == 0
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2274,11 +2306,13 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		_shell_inst[id] = true
 	elif b.is_build():
 		mi.mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), coarse)
+	elif nothing_left:
+		pass  # the node, for every "has a shell" question; nothing drawn
 	else:
 		mi.mesh = (BuildingShell.build_coarse_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses)
 				if coarse else
 				BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
-						b.damage_profile))
+						damage))
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	# Stage 5: a banded shell fades out over the fade band, blended over its
@@ -2295,10 +2329,10 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# hundred metres a window is a pixel -- and not on a player build, which
 	# has no recipe windows. A child of the shell, so it goes when the shell
 	# does, and with its own material so the brick material is untouched.
-	if not coarse and not b.is_build():
+	if not coarse and not b.is_build() and not nothing_left:
 		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
 				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				b.damage_profile, b.recipe.get("program", {}))
+				damage, b.recipe.get("program", {}))
 		if panes != null:
 			var glass := MeshInstance3D.new()
 			glass.mesh = panes
@@ -2903,6 +2937,11 @@ func _queue_remesh(id: int) -> void:
 func _remesh(id: int, force_full: bool = false) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
+		# Its mesh given up at range (_demesh): the shell standing in for it
+		# has to show the hit too, or it goes on drawing what was there.
+		# Rebuilt by _stream_detail, in its budget.
+		if b != null and b.is_materialised() and _shells.has(id):
+			_shell_stale[id] = true
 		return
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
@@ -3195,6 +3234,7 @@ func _harvest_band_jobs(wait_for: int = -1) -> void:
 
 ## A building's bands are all built and attached.
 func _bands_done(id: int) -> void:
+	_band_first.erase(id)
 	if _band_redo.has(id):
 		# Something hit it on the way through. A band built after the hit was
 		# built from the bricks as they are, and is right; only the ones built
@@ -3239,6 +3279,10 @@ func _advance_bands() -> void:
 	while built < BANDS_PER_TICK and not _band_cursor.is_empty() \
 			and _band_verts_now < BAND_VERTS_PER_TICK:
 		var id: int = _band_cursor.keys()[0]
+		for first in _band_first:
+			if _band_cursor.has(first):
+				id = first
+				break
 		_build_one_band(id)
 		built += 1
 		if not _bands_building(id):
@@ -4349,7 +4393,13 @@ func _ai_tick(destruction_ms: float) -> void:
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
 	_ai_run_ms = float(Time.get_ticks_usec() - t1) / 1000.0
-	_prof["ai"] = _ai_sync_ms + _ai_run_ms
+	if budget != null:
+		budget.tick(ai_services.now())
+	if swarm != null and ai_services.now() >= _next_swarm_refresh:
+		# Buildings come down: the field goes round what is still standing.
+		_next_swarm_refresh = ai_services.now() + 5.0
+		swarm.refresh()
+	_prof["ai"] = _ai_sync_ms + _ai_run_ms + (swarm.tick_ms() if swarm != null else 0.0)
 	if _phase != "":
 		_ai_phase_level[_phase] = maxi(int(_ai_phase_level.get(_phase, 0)), ai_sched.get_level())
 		var k := "tick:" + _phase
@@ -4790,6 +4840,80 @@ func _spawn_soldier(feet: Vector3) -> Soldier:
 	return so
 
 
+## The P8 population round `center` (the --stress --agents pass): six squads of
+## six in a ring 30-60 m out, three flyers, a herd, and 300 swarm rows 50-80 m
+## out -- all after one player-side body at `center` (the player's pawn if it
+## is out, a stand-in otherwise). The ImportanceBudget keeps ten smart.
+func _spawn_many(center: Vector3) -> void:
+	if ai_services.world3d == null:
+		ai_services.world3d = get_world_3d()
+		ai_services.on_structure_hit = _gun.on_structure_hit
+	budget = ImportanceBudget.new()
+	var target := _player_pawn
+	if target == null or not is_instance_valid(target):
+		target = Pawn.spawn(self, ai_nav.snap(_on_ground(center)), 0, true, 1e7)
+		Soldier._greybox(target, 0)
+		ai_services.add_pawn(target)
+	_many_target = target
+	budget.players = [target]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 88
+	for q in 6:
+		var ang := TAU * q / 6.0
+		var at := center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(30.0, 60.0)
+		var members: Array[Soldier] = []
+		for i in 6:
+			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, (i / 3) * 1.5))))
+			members.append(so)
+			budget.add(so)
+		squads.append(Squad.make(ai_services, self, members, 1))
+		_many.soldiers += 6
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	for i in 3:
+		var ang := TAU * i / 3.0
+		var g := GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+				WeaponClass.builtin(&"rifle"), 1))
+		var f := Flyer.spawn(ai_services, self, _on_ground(center + Vector3(cos(ang), 0.0, sin(ang)) * 40.0)
+				+ Vector3.UP * 30.0, 1, g)
+		budget.add(f)
+		_many.flyers += 1
+	var home := center + Vector3(-25.0, 0.0, -20.0)
+	var herd := AnimalPack.new(ai_services, -1, _on_ground(home), 5)
+	for i in 5:
+		budget.add(Animal.spawn(ai_services, self, ai_nav.snap(_on_ground(home + Vector3(i * 1.5, 0.0, 0.0))),
+				herd, 60.0, 400 + i if i < 2 else -1))
+		_many.animals += 1
+	var pts := PackedVector3Array()
+	for i in 300:
+		var ang := rng.randf() * TAU
+		pts.append(_on_ground(center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(50.0, 80.0)))
+	swarm = SwarmSide.new()
+	swarm.boxes = func() -> Array:
+		var out := []
+		for id in _near_buildings(center, 150.0):
+			var b := registry.get_building(id)
+			if b != null and not b.toppled:
+				out.append(_world_box(b))
+		return out
+	swarm.spawn_promoted = func(pos: Vector3, hp: float) -> Object:
+		var pack := AnimalPack.new(ai_services, 1, pos, _many.hunters)
+		var an := Animal.spawn(ai_services, self, ai_nav.snap(pos), pack, maxf(hp, 1.0), -1,
+				AgentTier.DIRECTED)
+		an.swarm_born = true
+		pack.hunt(_many_target)
+		budget.add(an)
+		_many.hunters += 1
+		return an
+	swarm.node_room = func() -> int:
+		return ImportanceBudget.SMART_CAP + ImportanceBudget.DIRECTED_CAP - budget.agents.size()
+	swarm.setup(ai_services, self, 1, pts, 40.0, 17)
+	swarm.refresh()
+	budget.demote_to_swarm = swarm.demote
+	print("[city] %d soldiers, %d flyers, %d animals, %d swarm rows round %v" % [_many.soldiers,
+			_many.flyers, _many.animals, swarm.alive(), center])
+
+
 ## A squad of four at `at`, on the other side (U, 30 m ahead of the camera). With
 ## the player on foot, it is ordered to advance on the player; otherwise it
 ## fights as its members find things.
@@ -5069,7 +5193,7 @@ func _run_breaklag_pass() -> void:
 		if biggest == null or size > biggest.recipe.courses * biggest.recipe.footprint_x \
 				* biggest.recipe.footprint_z:
 			biggest = c
-		if c.recipe.courses >= 12 and c.recipe.courses <= 30 and ordinary.size() < 2:
+		if c.recipe.courses >= 12 and c.recipe.courses <= 30 and ordinary.size() < 3:
 			ordinary.append(c)
 	# The first shot at a building that is still a shell: it is made bricks by
 	# the shot, and drawn by its shell until its bands are up.
@@ -5081,10 +5205,24 @@ func _run_breaklag_pass() -> void:
 			shell = c
 	if shell != null:
 		await _shell_lag(shell)
+	# Another shell, aimed at before it is shot (_aim_promote).
+	var aimed: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest or c == shell:
+			continue
+		aimed = c
+		break
+	if aimed != null:
+		await _aim_check(aimed)
+	# On a building of its own: the walls case below wants one nothing has hit.
+	if ordinary.size() > 2:
+		await _proxy_check(ordinary[2])
+		await _far_shell_check(ordinary[2], true)
 	if ordinary.size() > 0:
 		await _break_lag(ordinary[0], false)
 	if ordinary.size() > 1:
 		await _break_lag(ordinary[1], true)
+		await _far_shell_check(ordinary[1], false)
 	if biggest != null and not ordinary.has(biggest):
 		# A third of the way up: what is above falls on what is below, rather
 		# than the whole tower toppling off its stump.
@@ -5092,6 +5230,292 @@ func _run_breaklag_pass() -> void:
 				TowerRecipe.total_plates(biggest.recipe.courses) * PLATE / 3.0)
 	print("[breaklag] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Stairs go with their floors.
+##
+## A staircase is one spiral column from the ground slab up, standing on
+## itself: nothing is joined to it, and it holds nothing up -- it must not, or a
+## tower would stand on its stairs (collapse_probe's "stairs"). So when the
+## building round it came down, the column stood on alone: whole spirals left
+## standing after their towers had gone (82 of 90 flights of one, 114 of 122
+## of another, in the big city), and falling sections caught on them. A flight
+## now stands while its own storey does -- live structure round the stairwell
+## within STAIR_STOREY_REACH of it. A run of flights that has lost its storeys
+## is cut out as rubble, which falling sections pass through; the flights above
+## it, with nothing under them now, come away at the next solve.
+const STAIR_SWEEP_TICKS := 10
+## Round the stairwell: the floor panels it clips to and a little more.
+const STAIR_RING := 1.2
+var _stairs_due := {}        ## building id -> true: solved since it was last swept
+var _stairs_swept_at := {}   ## building id -> the physics tick it was last swept
+
+
+## Sweep one building's stairs. -1 when it is not time yet (it stays due);
+## otherwise how many pieces were cut out.
+func _sweep_stairs(id: int) -> int:
+	var now := Engine.get_physics_frames()
+	if now - int(_stairs_swept_at.get(id, -100000)) < STAIR_SWEEP_TICKS:
+		return -1
+	_stairs_swept_at[id] = now
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or b.toppled or _toppling.has(id):
+		return 0
+	var runs := _orphan_stairs(b)
+	if runs.is_empty():
+		return 0
+	var cut := 0
+	for run in runs:
+		_disable(b.id, run)
+		var piece := islands.record_detach(b.id, null, b.chunk, run, 0)
+		var came := islands.spawn(b.chunk, run, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+		if came != null:
+			_note_handover(b.id, came)
+			islands.make_debris(came)
+		cut += 1
+	_refresh_furniture(b.id)
+	_recheck_drawn(b.id)
+	b.structure_version += 1
+	_fake_dirty[b.id] = true
+	if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
+		_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
+	_queue_remesh(b.id)
+	# What stood on them has nothing under it now: solved again.
+	_mark_dirty(b.id)
+	return cut
+
+
+## The runs of live stair blocks that have lost their storeys, bottom to top,
+## each a stack of consecutive flights.
+func _orphan_stairs(b: BuildingRegistry.Building) -> Array:
+	var out: Array = []
+	if b.is_build() or not b.is_materialised():
+		return out
+	# Gone: dead, or cut out already (a detached block is not in the dead list).
+	var dead := {}
+	for d in world.get_dead_blocks(b.chunk):
+		dead[d] = true
+	for d in world.get_detached_blocks(b.chunk):
+		dead[d] = true
+	var all_stairs := PackedInt32Array()
+	var live: Array = []   # [fixture index, position in its blocks, block id]
+	for fi in b.fixtures.size():
+		var f = b.fixtures[fi]
+		if f.kind != "staircase":
+			continue
+		for k in f.blocks.size():
+			var bid: int = f.blocks[k]
+			all_stairs.append(bid)
+			if not dead.has(bid):
+				live.append([fi, k, bid])
+	if live.is_empty():
+		return out
+	var ids := PackedInt32Array()
+	for e in live:
+		ids.append(int(e[2]))
+	var storey := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	var shaft := world.get_blocks_box(b.chunk, ids)
+	var ring := AABB(shaft.position - Vector3(STAIR_RING, storey, STAIR_RING),
+			shaft.size + Vector3(2.0 * STAIR_RING, 2.0 * storey, 2.0 * STAIR_RING))
+	var level := storey * 0.25
+	var levels := world.block_centre_levels(b.chunk, ring, level, all_stairs)
+	# Held: live structure round the stairwell within its own storey. A flight
+	# stands if ITS storey or any above it does -- the flights below a floor
+	# that still stands are the way up to it, even through a storey cut out
+	# round them (collapse_probe: floors still standing keep their stairs). So
+	# what goes is the top of each column: every flight above the highest held.
+	var top_held := {}   # fixture index -> highest position held
+	for e in live:
+		var bid: int = e[2]
+		var box := world.get_blocks_box(b.chunk, PackedInt32Array([bid]))
+		# Its own storey: from most of a storey below its foot to a little above
+		# its head -- the slab it stands on, the walls and landing beside it.
+		var lo := int(floor((box.position.y - storey * 0.75 - ring.position.y) / level))
+		var hi := int(floor((box.end.y + storey * 0.25 - ring.position.y) / level))
+		var held := false
+		for l in range(maxi(lo, 0), mini(hi, levels.size() - 1) + 1):
+			if levels[l] != 0:
+				held = true
+				break
+		if held:
+			top_held[e[0]] = maxi(int(top_held.get(e[0], -1)), int(e[1]))
+	var run := PackedInt32Array()
+	var last := [-1, -1]
+	for e in live:
+		if int(e[1]) <= int(top_held.get(e[0], -1)):
+			continue
+		var next_to_last: bool = int(e[0]) == int(last[0]) and int(e[1]) == int(last[1]) + 1
+		if not run.is_empty() and not next_to_last:
+			out.append(run)
+			run = PackedInt32Array()
+		run.append(int(e[2]))
+		last = [e[0], e[1]]
+	if not run.is_empty():
+		out.append(run)
+	return out
+
+
+## A building's shadow proxy (_stream_shadows) is built on a worker now: it has
+## to turn up, and to catch up with a hit once the building has stopped losing
+## bricks.
+func _proxy_check(b: BuildingRegistry.Building) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5 + 30.0, 20.0, -30.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 6.0, fz * 0.5), Vector3.UP)
+	_promote(b.id)
+	var t := 0
+	while t < 90 and not _proxy_drawn(b.id):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: its shadow proxy is up" % b.id, _proxy_drawn(b.id),
+			"after %d tick(s)" % t)
+	_blast(b.xform * Vector3(fx * 0.5, 4.0, 0.0), 1.5)
+	await _frames(10)
+	t = 0
+	while t < 150 and not (_proxy_drawn(b.id) and not _shadow_jobs.has(b.id)
+			and int(_shadow_proxy_alive.get(b.id, -1)) == world.get_alive_block_count(b.chunk)):
+		await get_tree().physics_frame
+		t += 1
+	# And a hit that leaves its floors standing leaves its stairs (_sweep_stairs
+	# cuts out only flights whose storey has gone). Past a sweep or two first.
+	await _frames(STAIR_SWEEP_TICKS * 3)
+	var stairs_all := 0
+	var stairs_live := 0
+	var gone := {}
+	for d in world.get_dead_blocks(b.chunk):
+		gone[d] = true
+	for d in world.get_detached_blocks(b.chunk):
+		gone[d] = true
+	for f in b.fixtures:
+		if f.kind == "staircase":
+			for bid in f.blocks:
+				stairs_all += 1
+				if not gone.has(bid):
+					stairs_live += 1
+	_gate_ok("building %d: its stairs stand while its floors do" % b.id,
+			stairs_all > 0 and stairs_live == stairs_all, "%d of %d" % [stairs_live, stairs_all])
+	_gate_ok("building %d: and it catches up with a hit" % b.id,
+			_proxy_drawn(b.id) and int(_shadow_proxy_alive.get(b.id, -1))
+					== world.get_alive_block_count(b.chunk),
+			"built from %d bricks, %d alive, after %d tick(s)" % [
+				int(_shadow_proxy_alive.get(b.id, -1)), world.get_alive_block_count(b.chunk), t])
+
+
+## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
+## as a shell (_demesh). That shell has to be drawn from the damage its bricks
+## have now -- nothing, if none are left -- and take a hit while it is far. It
+## used to be drawn from the profile of the last time the building was given
+## back: a building damaged since came back whole at range, and went again up
+## close, which is what "buildings respawning" was.
+func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	camera.global_position = b.xform.origin + Vector3(0.0, 40.0,
+			-(DEMESH_RANGE + DEMESH_HYSTERESIS + 30.0))
+	camera.look_at(b.xform.origin + Vector3(0.0, 10.0, 0.0), Vector3.UP)
+	var t := 0
+	while t < 300 and not (_shells.has(b.id) and not _brick_nodes.has(b.id)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: far off, a shell stands in for it" % b.id,
+			_shells.has(b.id) and not _brick_nodes.has(b.id), "after %d tick(s)" % t)
+	_gate_ok("building %d: drawn with the damage it has, not what it had" % b.id,
+			_far_shell_true(b), _far_shell_note(b))
+	if not hit_it or not b.is_materialised() or world.get_alive_block_count(b.chunk) == 0:
+		return
+	var before := world.get_alive_block_count(b.chunk)
+	_blast(b.xform * Vector3(fx * 0.5, 6.0, 0.0), 2.0)
+	t = 0
+	while t < 150 and (world.get_alive_block_count(b.chunk) == before or not _far_shell_true(b)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: and a hit taken while far shows on it" % b.id,
+			world.get_alive_block_count(b.chunk) < before and _far_shell_true(b),
+			"%d -> %d bricks; %s" % [before, world.get_alive_block_count(b.chunk), _far_shell_note(b)])
+
+
+## Vertices the shell draws, and what it should: from the bricks while it has
+## them, from the profile once it has given them back.
+func _far_shell_counts(b: BuildingRegistry.Building) -> Array:
+	var got := 0
+	var mi = _shells.get(b.id)
+	if is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
+			and (mi as MeshInstance3D).mesh.get_surface_count() > 0:
+		got = ((mi as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+				as PackedVector3Array).size()
+	var r: Dictionary = b.recipe
+	var profile: Dictionary = b.damage_profile
+	var want := 0
+	if b.is_materialised():
+		profile = registry.live_damage_profile(b.id)
+		if world.get_alive_block_count(b.chunk) == 0:
+			return [got, 0, -1]
+	want = (BuildingShell.build_arrays(int(r.footprint_x), int(r.footprint_z), int(r.courses),
+			profile)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var whole := (BuildingShell.build_arrays(int(r.footprint_x), int(r.footprint_z),
+			int(r.courses), {})[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	return [got, want, whole]
+
+
+func _far_shell_true(b: BuildingRegistry.Building) -> bool:
+	var n := _far_shell_counts(b)
+	return int(n[0]) == int(n[1])
+
+
+func _far_shell_note(b: BuildingRegistry.Building) -> String:
+	var n := _far_shell_counts(b)
+	return "%d vertices drawn, %d from its damage, %s whole" % [n[0], n[1],
+			"n/a" if int(n[2]) < 0 else str(n[2])]
+
+
+func _proxy_drawn(id: int) -> bool:
+	var mi = _shadow_proxy.get(id)
+	return is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
+			and (mi as MeshInstance3D).mesh.get_surface_count() > 0
+
+
+## Aimed at from past PROMOTE_RANGE, a shell is bricks with its bands drawn
+## before the shot: the first hit shows the tick it lands.
+func _aim_check(b: BuildingRegistry.Building) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	# A side and a distance, past PROMOTE_RANGE, with nothing between the
+	# camera and the wall: a city block is dense, and the ray takes the first
+	# building it meets (the one really aimed at).
+	var face := Vector3.ZERO
+	var found := false
+	for side in [[Vector3(fx * 0.5, 3.0, 0.0), Vector3(0, 0, -1)], [Vector3(fx * 0.5, 3.0, fz), Vector3(0, 0, 1)],
+			[Vector3(0.0, 3.0, fz * 0.5), Vector3(-1, 0, 0)], [Vector3(fx, 3.0, fz * 0.5), Vector3(1, 0, 0)]]:
+		for dist in [35.0, 45.0, 60.0, 80.0]:
+			var f: Vector3 = b.xform * (side[0] as Vector3)
+			var out: Vector3 = b.xform.basis * (side[1] as Vector3)
+			var at: Vector3 = Vector3(f.x, 3.0, f.z) + out * dist
+			var hit := get_world_3d().direct_space_state.intersect_ray(
+					PhysicsRayQueryParameters3D.create(at, f + (f - at).normalized() * 2.0,
+					Layers.WORLD | Layers.STRUCTURE))
+			if not hit.is_empty() and _building_for_body(hit.rid) == b.id:
+				camera.global_position = at
+				camera.look_at(f, Vector3.UP)
+				face = f
+				found = true
+				break
+		if found:
+			break
+	if not found:
+		print("[breaklag] no clear view of building %d; aim check skipped" % b.id)
+		return
+	var t := 0
+	while t < 120 and not (b.is_materialised() and not _shells.has(b.id)):
+		await get_tree().physics_frame
+		t += 1
+	_gate_ok("building %d: aimed at from 60 m, it is bricks, drawn, before the shot" % b.id,
+			b.is_materialised() and not _shells.has(b.id), "after %d tick(s)" % t)
+	# The shot, then: on bricks already drawn.
+	var n0 := authority.commands.size()
+	chip(face, 0.3, 60)
+	await _frames(4)
+	_gate_ok("building %d: and the shot lands on bricks already drawn" % b.id,
+			b.is_materialised() and not _shells.has(b.id) and authority.commands.size() > n0)
 
 
 ## A building still drawn as its shell, its ground storey blown out: how long
@@ -5184,6 +5608,14 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 	var gone_at := -1
 	var biggest_at := -1
 	var biggest := 0
+	# Every piece as it is first seen: when, and how many bricks. Counted in
+	# bricks, not boxes -- a piece that lands is split back into a box a brick,
+	# and a child of it could "outgrow" the building's body. And only pieces
+	# cut out while the building was still losing bricks: what comes off a
+	# piece once it lands is not the break.
+	var first_seen := {}   # island -> [tick, bricks]
+	var last_loss := 0
+	var alive_was := bricks
 	var t := 0
 	var timeline: Array[String] = []
 	# Until nothing has changed for a second: the damage applied, what was
@@ -5203,9 +5635,8 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			if not islands.is_blind(isl):
 				drawn += 1
 			fastest = maxf(fastest, isl.body.linear_velocity.length())
-			if isl.shape_count > biggest:
-				biggest = isl.shape_count
-				biggest_at = t
+			if not first_seen.has(isl):
+				first_seen[isl] = [t, world.get_alive_block_count(isl.chunk)]
 		if fresh > 0 and cut_at < 0:
 			cut_at = t
 		if drawn > 0 and drawn_at < 0:
@@ -5215,6 +5646,9 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 		var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
 		if gone_at < 0 and alive < int(bricks * 0.98):
 			gone_at = t
+		if alive != alive_was:
+			alive_was = alive
+			last_loss = t
 		var state := "%d/%d" % [alive, fresh]
 		if state != last_state:
 			last_state = state
@@ -5223,15 +5657,32 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			timeline.append("%d: queue %d, dirty %d, held %d, alive %d, pieces %d (%d drawn), fastest %.1f m/s" % [
 					t, _damage_queue.size(), _dirty.size(), director.held_rounds - held0,
 					alive, fresh, drawn, fastest])
+	for isl in first_seen:
+		var seen: Array = first_seen[isl]
+		if int(seen[0]) <= last_loss + 1 and int(seen[1]) > biggest:
+			biggest = int(seen[1])
+			biggest_at = int(seen[0])
 	print("[breaklag] building %d, %d bricks (mega %s), %s at %.1f m, %d blasts:" % [b.id, bricks,
 			CollapseDirector.is_mega(bricks), "the storey" if storey else "its walls", y, blasts])
 	for line in timeline:
 		print("[breaklag]   " + line)
-	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d boxes) %d, drawn %d, moving %d; the director held %d round(s)" % [
+	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d bricks) %d, drawn %d, moving %d; the director held %d round(s)" % [
 			gone_at, cut_at, biggest, biggest_at, drawn_at, moving_at, director.held_rounds - held0])
 	_gate_ok("building %d: pieces move within 10 ticks of its bricks going" % b.id,
 			moving_at > 0 and gone_at > 0 and moving_at - gone_at <= 10,
 			"gone %d, moving %d" % [gone_at, moving_at])
+	# Stairs go with their floors (_sweep_stairs): none left standing on its own
+	# once the break is over. Given the sweep's time to come round.
+	if b.is_materialised() and not b.fixtures.is_empty():
+		var w := 0
+		while w < STAIR_SWEEP_TICKS * 6 and not _orphan_stairs(b).is_empty():
+			await get_tree().physics_frame
+			w += 1
+		var left := 0
+		for r in _orphan_stairs(b):
+			left += (r as PackedInt32Array).size()
+		_gate_ok("building %d: no flight of stairs stands without its storey" % b.id,
+				left == 0, "%d left standing alone" % left)
 	# The body is let go with the first of them, not after the debris: it was
 	# 13 ticks behind when two pieces went a tick, smallest first.
 	if not CollapseDirector.is_mega(bricks):
@@ -5696,6 +6147,8 @@ func _physics_process(_delta: float) -> void:
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
 			continue
+		if not b.fixtures.is_empty():
+			_stairs_due[id] = true
 		var quiet := true
 		# Stress, then balance, then what has come loose -- one call, which
 		# walks the building's joints once where the three calls walked them
@@ -5839,6 +6292,13 @@ func _physics_process(_delta: float) -> void:
 		if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
 			_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
 		_queue_remesh(b.id)
+	for sid in _stairs_due.keys():
+		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
+			break
+		var cut := _sweep_stairs(int(sid))
+		if cut >= 0:
+			_stairs_due.erase(sid)
+			spawned += cut
 	# M4: spread promotions rather than letting several land in one frame.
 	var hits := 0
 	var damage_until := Time.get_ticks_usec() + int(DAMAGE_BUDGET_MS * 1000.0)
@@ -5912,6 +6372,8 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("remesh", t)
 	_watch_handovers()
 
+	if camera != null and Engine.get_physics_frames() % 3 == 0:
+		_aim_promote()
 	var promoted := 0
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
@@ -5949,6 +6411,8 @@ func _physics_process(_delta: float) -> void:
 	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	if not _shadow_jobs.is_empty():
+		_harvest_shadow_jobs()
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
 		_stream_shadows()
 	if camera != null and Engine.get_physics_frames() % 4 == 1:
@@ -6360,6 +6824,10 @@ var _band_built_at := {}  ## building id -> PackedInt32Array, per band
 var _band_todo := {}      ## building id -> PackedInt32Array of band indices
 
 var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
+## Proxies being built on a worker: building id -> [task, [mesh], alive bricks
+## it was built from, dropped since]. The old proxy -- or, before the first,
+## the bricks themselves -- casts until the new one is hung.
+var _shadow_jobs := {}
 var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
 ## A proxy is rebuilt once its building has stopped losing bricks -- the same
 ## count two passes running -- or after SHADOW_STALE_PASSES of it going on.
@@ -6471,14 +6939,50 @@ func _set_brick_shadows(id: int, on: bool) -> void:
 
 ## A shadow-only shell of a materialised building, from what is standing now.
 func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
-	var mesh: Mesh
+	if _shadow_jobs.has(b.id):
+		return false  # one on its way already
 	if b.is_build():
-		mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
-	else:
-		mesh = BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z,
-				b.recipe.courses, registry.live_damage_profile(b.id))
-	if mesh == null:
-		return false
+		# A build's shell reads the world's blocks: here, as it always was.
+		var built: Mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
+		if built == null:
+			return false
+		_attach_shadow_proxy(b, built, world.get_alive_block_count(b.chunk))
+		return true
+	# A recipe building's shell is arithmetic on the recipe and the damage
+	# masks, and nothing of the world: only the masks are worked out here (they
+	# read the bricks), the rest on a worker. Built here it was 4-25 ms a proxy
+	# -- the biggest thing left at the top of a collapse's worst ticks.
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	var profile := registry.live_damage_profile(b.id)
+	var layout: Array = TowerRecipe.layout(courses)
+	var holder := [null]
+	var work := func() -> void:
+		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
+	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
+	_shadow_jobs[b.id] = [task, holder, world.get_alive_block_count(b.chunk), false]
+	return true
+
+
+## Hang the proxies the workers have finished. Every tick, and nothing to do
+## on most of them.
+func _harvest_shadow_jobs() -> void:
+	for id in _shadow_jobs.keys():
+		var job: Array = _shadow_jobs[id]
+		if not WorkerThreadPool.is_task_completed(int(job[0])):
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		_shadow_jobs.erase(id)
+		var b := registry.get_building(int(id))
+		# Dropped meanwhile (its bricks given back), or gone.
+		if bool(job[3]) or b == null or not b.is_materialised() or not _brick_nodes.has(id) \
+				or job[1][0] == null:
+			continue
+		_attach_shadow_proxy(b, job[1][0], int(job[2]))
+
+
+func _attach_shadow_proxy(b: BuildingRegistry.Building, mesh: Mesh, alive: int) -> void:
 	var mi: MeshInstance3D = _shadow_proxy.get(b.id)
 	if mi == null:
 		mi = MeshInstance3D.new()
@@ -6489,11 +6993,13 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 		add_child(mi)
 		_shadow_proxy[b.id] = mi
 	mi.mesh = mesh
-	_shadow_proxy_alive[b.id] = world.get_alive_block_count(b.chunk)
-	return true
+	# What it was built from: bricks lost since then make it stale again.
+	_shadow_proxy_alive[b.id] = alive
 
 
 func _drop_shadow_proxy(id: int) -> void:
+	if _shadow_jobs.has(id):
+		(_shadow_jobs[id] as Array)[3] = true  # still waited for; never hung
 	var mi = _shadow_proxy.get(id)
 	if is_instance_valid(mi):
 		(mi as Node).queue_free()
@@ -6743,6 +7249,9 @@ func _far_multimesh() -> MultiMesh:
 	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
 	_far = MultiMeshInstance3D.new()
 	_far.name = "FarCity"
+	# Not interpolated: a slot shown or hidden (a zero-scale transform) would
+	# otherwise grow or shrink over a frame, and the buildings never move.
+	_far.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_far.multimesh = mm
 	_far.material_override = mat
 	# Casts: a tower's shadow is long and seen from far off (section 7.2).
@@ -6820,7 +7329,13 @@ func _stream_detail() -> void:
 			_demesh(id)
 			done += 1
 		elif dist < DEMESH_RANGE:
+			_shell_stale.erase(id)
 			_remesh_bricks(id)
+			done += 1
+		elif _shell_stale.has(id):
+			_shell_stale.erase(id)
+			_free_shell(id)
+			_make_shell(id, true)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
@@ -6878,6 +7393,59 @@ func _remesh_bricks(id: int) -> void:
 
 
 ## Hand the bricks back for buildings nobody is near. Damage is kept.
+## Bricks for what the player is aiming at, before the shot.
+##
+## The first shot at a building still drawn as its shell made it bricks in that
+## tick, and the shot showed on it only once its bands were drawn -- 5 to 11
+## ticks, and several times that with the editor open: the lag on the first
+## hit (--diag firsthit, 2026-09-30). Aimed at for AIM_PROMOTE_TICKS within
+## AIM_PROMOTE_RANGE, a shell goes to the front of the promotion queue, its
+## bands first in line; and a building aimed at is not trimmed back to a shell
+## for AIM_KEEP_MS (_trim_quiet), or it would go and come back with every look.
+## Past DEMESH_RANGE a building in bricks has no mesh anyway, so the range is
+## inside it.
+const AIM_PROMOTE_RANGE := 100.0
+const AIM_PROMOTE_TICKS := 6
+const AIM_KEEP_MS := 8000
+var _aim_target := -1
+var _aim_since := 0
+var _aimed_at := {}   ## building id -> msec it was last aimed at
+## Building id -> true: aimed at, behind its shell -- its bands go first
+## (_advance_bands). Not one being shot: its bands built while the hits are
+## still landing are built again after the last one (_band_hits), and going
+## first made that more of them -- the shot showed at 15 ticks, not 9.
+var _band_first := {}
+var aim_promotions := 0
+
+
+func _aim_promote() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var from := cam.global_position
+	var to := from - cam.global_transform.basis.z * AIM_PROMOTE_RANGE
+	var q := PhysicsRayQueryParameters3D.create(from, to, Layers.WORLD | Layers.STRUCTURE)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var id := _building_for_body(hit.rid) if not hit.is_empty() else -1
+	if id < 0:
+		_aim_target = -1
+		return
+	_aimed_at[id] = Time.get_ticks_msec()
+	var now := Engine.get_physics_frames()
+	if id != _aim_target:
+		_aim_target = id
+		_aim_since = now
+		return
+	if now - _aim_since < AIM_PROMOTE_TICKS:
+		return
+	var b := registry.get_building(id)
+	if b == null or b.is_materialised() or b.toppled or _promote_queue.has(id):
+		return
+	_promote_queue.push_front(id)
+	_band_first[id] = true
+	aim_promotions += 1
+
+
 func _trim_quiet() -> void:
 	if not respawn_buildings:
 		return  # nothing is handed back, so nothing has to come back
@@ -6895,6 +7463,8 @@ func _trim_quiet() -> void:
 			continue  # still coming apart
 		if _pinned(id):
 			continue  # an encounter is being fought in it
+		if Time.get_ticks_msec() - int(_aimed_at.get(id, -1000000)) < AIM_KEEP_MS:
+			continue  # being aimed at (_aim_promote)
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue
@@ -8189,6 +8759,9 @@ func _run_stress_pass() -> void:
 	print("[stress] standing: %.1f MB, %d chunks, %d islands" % [
 			float(mem.total_bytes) / 1048576.0, int(mem.chunks), islands.islands.size()])
 
+	if _agents_mode:
+		_spawn_many(Vector3(0.0, 0.0, 30.0))
+		await _frames(30)
 	_sampling = true
 	_phase = "under fire"
 	var target := 0
@@ -8275,6 +8848,11 @@ func _run_stress_pass() -> void:
 	print("[stress] AI ladder, deepest level per phase: %s-> now %d (deepest %d); AI sync+run %.2f ms a tick" % [
 			ladder, ai_sched.get_level(), ai_sched.get_max_level_seen(),
 			float(_prof_sum.get("ai", 0.0)) / maxi(_tick_samples, 1)])
+	if budget != null:
+		print("[stress] agents: %d smart, %d directed, %d swarm row(s); %d soldier(s), %d flyer(s), %d animal(s), %d promoted, %d demoted; budget %.2f ms a tick, swarm %.2f ms" % [
+					int(budget.counts.smart), int(budget.counts.directed), swarm.alive(),
+					_many.soldiers, _many.flyers, _many.animals, swarm.promoted, swarm.demoted,
+					budget.last_ms, swarm.tick_ms()])
 	# Stepped down when the collapse was heavy enough to call for it -- a run of
 	# AI_HEAVY_TICKS ticks over AI_HEAVY_MS -- and back up after, either way.
 	# The check used to require a step down, full stop, and failed once the
@@ -10503,9 +11081,17 @@ func _run_fixture_pass() -> void:
 	_gate_ok("every step is there", f.blocks.size() == pieces,
 			"%d pieces of %d for %d steps" % [f.blocks.size(), pieces, steps])
 	_gate_ok("in the SAME chunk as the building", chunk == b.chunk)
-	_gate_ok("so the city holds one chunk for the building, not two",
-			int(world.get_memory_report().chunks) == 1,
-			"%d" % int(world.get_memory_report().chunks))
+	# A chunk per building in bricks and none more: the staircase is not one.
+	# It was "one chunk", which counted on nothing else being bricks -- and the
+	# camera at rest here may be aiming at another building (_aim_promote).
+	var in_bricks := 0
+	for o in registry.buildings:
+		if o.is_materialised():
+			in_bricks += 1
+	_gate_ok("so the city holds a chunk for each building in bricks, none for its stairs",
+			int(world.get_memory_report().chunks) == in_bricks,
+			"%d chunk(s), %d building(s) in bricks" % [
+				int(world.get_memory_report().chunks), in_bricks])
 
 	# Clipped to the building, which is what makes it come apart with it.
 	var joined := 0
@@ -10948,16 +11534,18 @@ func _run_walk_pass() -> void:
 	var centre: Vector3 = b.xform.origin + Vector3(w * 0.5, 0.0, d * 0.5)
 	var start := centre - Vector3(0.0, 0.0, d * 0.5 + 4.0)
 
-	# The shell's own collision, tested from outside PROMOTE_RANGE -- which is
-	# now the only place a shell survives being looked at, because walking up to
-	# a building is what makes it bricks. A ray is how a shell gets hit in
-	# practice anyway: FIRE_RANGE is 2 km against SHELL_RANGE's 260 m, so most
-	# shots that land on a building land on one of these.
+	# The shell's own collision, tested from outside AIM_PROMOTE_RANGE -- which
+	# is now the only place a shell survives being looked at: walking up to a
+	# building makes it bricks (PROMOTE_RANGE), and so does aiming at it from
+	# nearer than that (_aim_promote). It was seventy metres, which aiming now
+	# reaches. A ray is how a shell gets hit in practice anyway: FIRE_RANGE is
+	# 2 km against SHELL_RANGE's 260 m, so most shots that land on a building
+	# land on one of these.
 	camera.set_walking(false)
-	camera.global_position = centre - Vector3(0.0, -3.0, d * 0.5 + 70.0)
+	camera.global_position = centre - Vector3(0.0, -3.0, d * 0.5 + AIM_PROMOTE_RANGE + 20.0)
 	camera.look_at(Vector3(centre.x, 3.0, centre.z), Vector3.UP)
 	await _frames(20)
-	_gate_ok("from seventy metres it is a shell and nothing else",
+	_gate_ok("from past aiming range it is a shell and nothing else",
 			_shells.has(0) and not b.is_materialised())
 	var shell_q := PhysicsRayQueryParameters3D.create(
 			camera.global_position, Vector3(centre.x, 3.0, centre.z))
