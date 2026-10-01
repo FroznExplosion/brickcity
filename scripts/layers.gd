@@ -56,6 +56,18 @@ const FIXTURE_MASK := WORLD | PAWN
 ## the collision cost during a collapse.
 const FALLING_MASK := WORLD | STRUCTURE | DEBRIS | FALLING
 
+## ...and while it is still in the AIR, not even with other falling sections.
+## Two pieces of one collapse fall side by side, cut from the same grid with
+## their faces touching, and the ones above come down on the ones below while
+## both are still moving: they caught on each other, came to rest on each
+## other in mid-air and jittered there, never slow enough to settle (--jam:
+## 3 to 5 pieces a collapse stuck on pieces still falling). A piece scans
+## FALLING again once something is under it (BrickIsland.landed), so what comes
+## down after it lands on it; and its LAYER is FALLING throughout, so everything
+## that asks "is this a falling piece" -- a pawn, a bullet, the mech's fall rule
+## -- sees no difference.
+const AIRBORNE_MASK := WORLD | STRUCTURE | DEBRIS
+
 ## Settled wreckage. Same as falling, plus rubble can land on it.
 const SETTLED_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | RUBBLE
 

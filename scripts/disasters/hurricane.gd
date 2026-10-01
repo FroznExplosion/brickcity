@@ -232,6 +232,9 @@ func _push_pieces(dir: Vector3, k: float) -> void:
 	if ctx.islands == null or k < 0.05 or Engine.get_physics_frames() % 3 != 0:
 		return
 	var player := ctx.player_pos()
+	# Small pieces broken off in it stay bodies, for this to blow about:
+	# anywhere else they only fall and shrink away (IslandManager._crumble).
+	ctx.islands.windy(get_instance_id(), player, RANGE, 500)
 	for isl in ctx.islands_near(player, RANGE):
 		if not is_instance_valid(isl.body) or isl.settled:
 			continue

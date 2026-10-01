@@ -12,9 +12,12 @@ extends SceneTree
 ##   * a LANDMARK (big enough to hide behind or stand on) is never deleted, is
 ##     solid to people, and is kept by every machine;
 ##   * a small piece -- DEBRIS_MAX_BLOCKS or fewer, however big -- is
-##     presentation: deleted where it came loose when unseen or far, kept while
-##     it can be seen, gone a second after it cannot, shrunk away (never popped)
-##     when it must go in view, and walked through;
+##     presentation: deleted where it came loose when unseen or far, and in view
+##     not a body at all but CRUMBS (IslandManager._crumble): it falls, stops on
+##     the floor and shrinks away;
+##   * where the wind is lifting small pieces (IslandManager.windy) one is still
+##     a body, rubble: kept while it can be seen, gone a second after it cannot,
+##     shrunk away (never popped) when it must go in view, and walked through;
 ##   * the cap puts landmarks to sleep farthest from anybody first -- interest
 ##     points, not one camera -- and never one somebody is standing next to.
 
@@ -39,6 +42,13 @@ var _tower := -1
 var _tower2 := -1
 const APART := 30.0
 var _rubble: BrickIsland
+## The crumb the brick in view became: where it started, where it stopped, and
+## the frame the last crumb went.
+var _crumb_y0 := 0.0
+var _crumb_half := 0.0
+var _crumb_land_y := INF
+var _crumb_gone_frame := -1
+var _crumb_frame0 := -1
 var _rubble_gone_frame := -1
 var _rubble2: BrickIsland
 var _away_frame := -1
@@ -156,6 +166,7 @@ func _tick() -> void:
 			_next()
 		1:
 			# The visible brick falls and lands, and is watched.
+			_watch_crumb()
 			if _rubble_gone_frame >= 0 or _phase_frame > WATCH_FRAMES:
 				_check_kept_in_view()
 				_next()
@@ -217,12 +228,28 @@ func _check_births() -> void:
 	_ok("an unseen brick is deleted where it came loose", gone == null
 			and _islands.discarded + _islands.tiny_deleted > before)
 
-	# Now looking straight at it: a small piece nearby and in view is a body --
-	# rubble, which people walk through.
+	# Now looking straight at it: a small piece nearby and in view is crumbs --
+	# no body, a brick drawn falling.
 	_look(Vector3(3.5, 3.0, 14.0), Vector3(3.5, 2.0, 2.8))
 	var seen := _find("brick_2x4", {brick: true})
+	var crumbs0 := _islands.crumb_count
+	var as_body := _islands.spawn(_tower, PackedInt32Array([seen]))
+	_ok("a brick in view crumbles: no body, one brick drawn falling",
+			as_body == null and _islands.crumb_count == crumbs0 + 1
+			and not _w.is_solid(_tower, _cell(seen, _tower)),
+			"%d crumb(s)" % _islands.crumb_count)
+	var cr = _islands._crumbs.values()[0] if not _islands._crumbs.is_empty() else null
+	if cr != null and cr.pos.size() > 0:
+		_crumb_y0 = cr.pos[0].y
+		_crumb_half = cr.half_h[0]
+	_crumb_frame0 = _frames
+
+	# In the wind it is still a body -- rubble, which people walk through -- so
+	# the wind has something to lift.
+	_islands.windy(0, Vector3(3.5, 0.0, 2.8), 60.0, 600000)
+	seen = _find("brick_2x4", {brick: true})
 	_rubble = _islands.spawn(_tower, PackedInt32Array([seen]))
-	_ok("a brick in view comes loose as a body", _rubble != null)
+	_ok("a brick in the wind comes loose as a body", _rubble != null)
 	if _rubble != null:
 		_ok("as rubble", _rubble.disposable and not _rubble.landmark
 				and _rubble.body.collision_layer == Layers.RUBBLE)
@@ -236,7 +263,28 @@ func _check_births() -> void:
 		_slabs.append(second)
 
 
+func _watch_crumb() -> void:
+	if _crumb_gone_frame >= 0:
+		return
+	if _islands.crumb_count == 0:
+		_crumb_gone_frame = _frames
+		return
+	var cr = _islands._crumbs.values()[0]
+	if cr.pos.size() > 0 and cr.landed[0] > 0:
+		_crumb_land_y = cr.pos[0].y
+
+
 func _check_kept_in_view() -> void:
+	print("\nthe crumb falls, stops on the floor, and goes")
+	_ok("it fell and stopped on the ground the ray found",
+			_crumb_land_y < _crumb_y0 and absf(_crumb_land_y - _crumb_half) < 0.02,
+			"from y %.2f to %.2f, ground at 0, half its height %.2f" % [
+				_crumb_y0, _crumb_land_y, _crumb_half])
+	var crumb_ms := int(float(_crumb_gone_frame - _crumb_frame0)
+			/ float(Engine.physics_ticks_per_second) * 1000.0)
+	_ok("and it is gone once it has shrunk away, in about a second and a half",
+			_crumb_gone_frame >= 0 and crumb_ms >= IslandManager.CRUMB_LIFE_MS - 100
+			and crumb_ms <= IslandManager.CRUMB_LIFE_MS + 200, "%d ms" % crumb_ms)
 	print("\ndebris in view stays in view")
 	_ok("the brick is still there two and a half seconds on",
 			_rubble != null and _rubble.is_valid() and _rubble_gone_frame < 0)
@@ -259,7 +307,7 @@ func _check_shrunk() -> void:
 	_look(Vector3(3.5, 3.0, 14.0), Vector3(3.5, 2.0, 2.8))
 	var id := _find("brick_2x4", {})
 	_rubble2 = _islands.spawn(_tower, PackedInt32Array([id]))
-	_ok("a second brick in view comes loose as a body", _rubble2 != null)
+	_ok("a second brick in the wind comes loose as a body", _rubble2 != null)
 
 
 func _check_unseen() -> void:
