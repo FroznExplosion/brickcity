@@ -5620,6 +5620,11 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 	var first_seen := {}   # island -> [tick, bricks]
 	var last_loss := 0
 	var alive_was := bricks
+	# Small pieces are crumbs now (IslandManager._crumble): no body, and falling
+	# from the tick they appear. They are what showed the break at once before,
+	# as bodies, and still are.
+	var crumbs0 := islands.crumbled
+	var crumbs_at := -1
 	var t := 0
 	var timeline: Array[String] = []
 	# Until nothing has changed for a second: the damage applied, what was
@@ -5645,7 +5650,9 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			cut_at = t
 		if drawn > 0 and drawn_at < 0:
 			drawn_at = t
-		if fastest > 1.0 and moving_at < 0:
+		if islands.crumbled > crumbs0 and crumbs_at < 0:
+			crumbs_at = t
+		if (fastest > 1.0 or crumbs_at >= 0) and moving_at < 0:
 			moving_at = t
 		var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
 		if gone_at < 0 and alive < int(bricks * 0.98):
@@ -5670,8 +5677,9 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			CollapseDirector.is_mega(bricks), "the storey" if storey else "its walls", y, blasts])
 	for line in timeline:
 		print("[breaklag]   " + line)
-	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d bricks) %d, drawn %d, moving %d; the director held %d round(s)" % [
-			gone_at, cut_at, biggest, biggest_at, drawn_at, moving_at, director.held_rounds - held0])
+	print("[breaklag]   bricks gone at tick %d; first piece cut out %d, the biggest (%d bricks) %d, drawn %d, moving %d (crumbs from %d, %d piece(s)); the director held %d round(s)" % [
+			gone_at, cut_at, biggest, biggest_at, drawn_at, moving_at, crumbs_at,
+			islands.crumbled - crumbs0, director.held_rounds - held0])
 	_gate_ok("building %d: pieces move within 10 ticks of its bricks going" % b.id,
 			moving_at > 0 and gone_at > 0 and moving_at - gone_at <= 10,
 			"gone %d, moving %d" % [gone_at, moving_at])
@@ -5760,7 +5768,9 @@ func _run_wreck_pass() -> void:
 ## themselves still falling. And a piece THROWN -- going up faster than
 ## JAM_THROWN with nothing having blown it -- is what pushing two overlapping
 ## bodies apart looks like, which is the price of letting falling pieces pass
-## through each other if it is done wrong.
+## through each other if it is done wrong (IslandManager.MAX_RISE_SPEED). It
+## was counted as a jump in one tick; the push builds over three or four, and
+## 1 -> 6 -> 10 -> 11 m/s was never one jump.
 const JAM_SLOW := 0.8
 const JAM_THROWN := 6.0
 
@@ -5817,10 +5827,7 @@ func _run_jam_pass() -> void:
 				continue
 			moving += 1
 			var v: Vector3 = isl.body.linear_velocity
-			# Thrown: up, fast, and it was not going up fast a tick ago -- a
-			# shove, not a bounce it was already in.
-			if v.y > JAM_THROWN and float(prev_vy.get(isl, 0.0)) < JAM_THROWN * 0.5 \
-					and Time.get_ticks_msec() - isl.born_ms > 300:
+			if v.y > JAM_THROWN and float(prev_vy.get(isl, 0.0)) <= JAM_THROWN:
 				thrown += 1
 			if v.y > 5.0 and v.y > worst_up:
 				print("[jam]   up %.1f m/s (%.1f a tick ago): %d bricks, %s, age %d ms, at y %.1f, %d contact(s)%s" % [
@@ -5854,6 +5861,9 @@ func _run_jam_pass() -> void:
 			blasts, islands.islands.size() - spawned0, reported.size(), on, thrown, worst_up,
 			str(t_quiet) if t_quiet >= 0 else "never", int(r.settled_by_rule),
 			int(r.get("settled_jittering", 0)), int(r.settled_by_age), int(r.get("landings_noted", 0))])
+	print("[jam]   crumbs: %d piece(s), %d brick(s) drawn, %d not (CRUMBS_MAX); worst crumb tick %.2f ms, worst crumble %.2f ms; small bodies %d; rises capped %d" % [
+			int(r.crumbled), int(r.crumb_bricks), int(r.crumbs_over), float(r.crumb_worst_ms),
+			float(r.crumble_worst_ms), int(islands.spawn_census.small[0]), int(r.rises_capped)])
 	_gate_ok("no piece hangs on another that is still falling",
 			int(on.get("falling piece", 0)) == 0, "%d" % int(on.get("falling piece", 0)))
 	_gate_ok("and hardly any hang at all", reported.size() <= 3, "%d stuck" % reported.size())

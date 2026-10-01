@@ -382,6 +382,15 @@ const VISIBLE_RANGE := 140.0       ## beyond this, nobody is watching closely
 const DEBRIS_GRAVITY := 1.6
 const MAX_DEBRIS_SPEED := 30.0
 const MAX_DEBRIS_SPIN := 14.0
+## Nothing in this game throws a piece UP: there are no impulses, and a landing
+## does not bounce. What does is the solver pushing apart two pieces that
+## overlap -- two that passed through each other in the air (Layers.
+## AIRBORNE_MASK), and then one landed -- and uncapped that threw a 22-brick
+## piece off a 72-brick one at 11 m/s (--jam --big). A piece rises no faster
+## than this, so two that overlap come apart over a few ticks instead of
+## flying. Not one the wind holds (hold_awake): a tornado lifts on purpose.
+const MAX_RISE_SPEED := 4.0
+var rises_capped := 0
 
 var world: BrickWorld
 var brick_material: ShaderMaterial
@@ -649,7 +658,7 @@ var debris_faded := 0
 ## The camera's frustum, refreshed every tick (_box_seen).
 var _frustum: Array[Plane] = []
 var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
-		"capped": [0, 0], "shed": [0, 0]}
+		"capped": [0, 0], "shed": [0, 0], "crumbled": [0, 0]}
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
 var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
@@ -1040,6 +1049,10 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
 	var landmark := group_is_landmark(source, block_ids)
+	if not landmark and _crumble(source, block_ids, inherit_linear):
+		spawn_census.crumbled[0] += 1
+		spawn_census.crumbled[1] += block_ids.size()
+		return null
 	if _delete_where_it_is(source, block_ids, landmark):
 		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
 		spawn_census.deleted[0] += 1
@@ -1180,6 +1193,267 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		spawn_worst = _w
 	piece_spawned.emit(isl)
 	return isl
+
+
+# ---------------------------------------------------------------------------
+# Crumbs: a small piece is not a body
+# ---------------------------------------------------------------------------
+
+## A piece of DEBRIS_MAX_BLOCKS or fewer -- a brick, a handful, a floor panel on
+## its own -- is not made a piece at all. Each brick is drawn from the shared
+## brick MultiMesh of its size (as a lone brick piece always was), given the
+## piece's velocity, a little away from the building it came off, and gravity;
+## it stops on the floor one ray found under it when it broke, and shrinks away
+## over CRUMB_LIFE_MS. No grid, no body, no shapes, no contacts: it was all of
+## those, for something that was swept up a second after it landed (DEBRIS_
+## UNSEEN_MS), that people walk through (Layers.PAWN_MASK) and that is each
+## machine's own anyway (the class notes). And outside SMALL_KEEP_RANGE or out
+## of view it was deleted where it came loose, the 569 of a big collapse that
+## just vanished (--diag census, 2026-09-30): in view now, every one falls.
+##
+## Not a piece of nothing but furniture (_delete_where_it_is has a rule for
+## that), and not inside a tornado's reach (windy): the wind lifts small pieces
+## and throws them, and a crumb only falls.
+const CRUMB_LIFE_MS := 1400
+## Full size this long, then shrinking to nothing at CRUMB_LIFE_MS.
+const CRUMB_FULL_MS := 350
+## m/s: away from its building, at most -- off the face it came from.
+const CRUMB_KICK := 1.2
+## m/s: each brick's own on top of that, so a handful comes apart as it falls.
+const CRUMB_SCATTER := 0.6
+## rad/s at most.
+const CRUMB_SPIN := 5.0
+## Bricks drawn as crumbs at once. Past it a piece just goes, as one out of
+## view does: the update is a few microseconds a brick, on the main thread.
+const CRUMBS_MAX := 600
+const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
+
+class Crumbs:
+	var mmi: MultiMeshInstance3D
+	var pos := PackedVector3Array()
+	var vel := PackedVector3Array()
+	var base: Array[Basis] = []
+	var axis := PackedVector3Array()
+	var rate := PackedFloat32Array()
+	## Physics ticks, not milliseconds: it moves a tick at a time, and a hitch
+	## must not shrink it away before it has fallen.
+	var born := PackedInt64Array()
+	var landed := PackedInt64Array()      ## the tick it stopped on its floor, 0 while falling
+	var floor_y := PackedFloat32Array()
+	var half_h := PackedFloat32Array()
+	var colour := PackedColorArray()
+
+	func remove(i: int) -> void:
+		var last := pos.size() - 1
+		if i != last:
+			pos[i] = pos[last]
+			vel[i] = vel[last]
+			base[i] = base[last]
+			axis[i] = axis[last]
+			rate[i] = rate[last]
+			born[i] = born[last]
+			landed[i] = landed[last]
+			floor_y[i] = floor_y[last]
+			half_h[i] = half_h[last]
+			colour[i] = colour[last]
+		pos.resize(last)
+		vel.resize(last)
+		base.resize(last)
+		axis.resize(last)
+		rate.resize(last)
+		born.resize(last)
+		landed.resize(last)
+		floor_y.resize(last)
+		half_h.resize(last)
+		colour.resize(last)
+
+var _crumbs := {}            ## brick size, snapped -> Crumbs
+var crumb_count := 0         ## bricks drawn as crumbs now
+var crumbled := 0            ## pieces that went as crumbs
+var crumb_bricks := 0        ## bricks that were drawn as crumbs
+var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
+var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
+var crumble_worst_ms := 0.0  ## the slowest single _crumble
+var _wind := {}              ## who -> [centre, radius, until msec]: windy()
+
+
+## Somewhere the wind is lifting small pieces (a tornado, Disasters): for `ms`,
+## a small piece that comes loose within `radius` of `centre` stays a body, so
+## the wind has something to lift. `who` is the caller's, so one wind is one
+## entry however often it says so.
+func windy(who: int, centre: Vector3, radius: float, ms: int) -> void:
+	_wind[who] = [centre, radius, Time.get_ticks_msec() + ms]
+
+
+func _in_wind(box: AABB) -> bool:
+	if _wind.is_empty():
+		return false
+	var now := Time.get_ticks_msec()
+	var c := box.get_center()
+	for who in _wind.keys():
+		var w: Array = _wind[who]
+		if int(w[2]) < now:
+			_wind.erase(who)
+			continue
+		var d := Vector2(c.x - (w[0] as Vector3).x, c.z - (w[0] as Vector3).z).length()
+		if d < float(w[1]) + box.size.length() * 0.5:
+			return true
+	return false
+
+
+## Crumble a small piece if it is one: out of its source, and drawn as crumbs if
+## it can be seen. False, and nothing done, for anything else.
+func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> bool:
+	var n := block_ids.size()
+	if n == 0 or n > DEBRIS_MAX_BLOCKS:
+		return false
+	var furniture := true
+	for id in block_ids:
+		if not world.is_block_decorative(source, id):
+			furniture = false
+			break
+	if furniture:
+		return false
+	var box := _group_box(source, block_ids)
+	if _in_wind(box):
+		return false
+	var t0 := Time.get_ticks_usec()
+	var dist := INF
+	if camera != null and is_instance_valid(camera):
+		dist = _distance_to_box(box, camera.global_position)
+	var far := dist > SMALL_KEEP_RANGE and dist < INF
+	var shown := not far and _box_seen(box)
+	if shown and crumb_count + n > CRUMBS_MAX:
+		crumbs_over += n
+		shown = false
+	if shown:
+		_add_crumbs(source, block_ids, box, linear)
+		crumbled += 1
+	elif far:
+		tiny_deleted += n
+	else:
+		discarded += n
+	# Out of the source the way every piece goes, and the grid it was given
+	# freed at once (_delete_where_it_is says why not killed in place).
+	var cut: Dictionary = world.split_island(source, block_ids)
+	if not cut.is_empty():
+		world.release_chunk(int(cut.chunk))
+	crumble_worst_ms = maxf(crumble_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	return true
+
+
+func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vector3) -> void:
+	var xf: Transform3D = world.get_chunk_transform(source)
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var centre := box.get_center()
+	# Off the face it came from: away from the middle of its source's grid.
+	var mid: Vector3 = xf * (Vector3(world.get_chunk_dims(source)) * BrickWorld.get_cell_size() * 0.5)
+	var out := Vector3(centre.x - mid.x, 0.0, centre.z - mid.z)
+	var kick := out.normalized() * randf_range(0.3, 1.0) * CRUMB_KICK \
+			if out.length() > 0.01 else Vector3.ZERO
+	# Where it comes down: one ray, from where the kick takes it, down onto the
+	# ground, a building or settled wreckage -- not onto anything still falling.
+	var floor_y := -INF
+	if is_inside_tree():
+		var from := centre + kick * 0.4
+		var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0,
+				CRUMB_FLOOR_MASK)
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			floor_y = (hit.position as Vector3).y
+	var basis := xf.basis.orthonormalized()
+	var now := Engine.get_physics_frames()
+	for id in block_ids:
+		if world.is_block_decorative(source, id):
+			continue
+		var t: Array = world.get_block_ticks(source, id)
+		if t.is_empty():
+			continue
+		var size := Vector3(t[1] as Vector3i) * tick_m
+		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
+		var cr := _crumb_set(size.snapped(Vector3.ONE * 0.001))
+		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
+		cr.pos.append(xf * local)
+		cr.vel.append(linear + kick + Vector3(randf_range(-1.0, 1.0), randf_range(0.0, 1.0),
+				randf_range(-1.0, 1.0)) * CRUMB_SCATTER)
+		cr.base.append(basis)
+		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
+		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
+		cr.born.append(now)
+		cr.landed.append(0)
+		cr.floor_y.append(floor_y)
+		cr.half_h.append(size.y * 0.5)
+		cr.colour.append(BrickWorld.get_filament_colour(world.get_block_colour(source, id)))
+		crumb_count += 1
+		crumb_bricks += 1
+
+
+func _crumb_set(key: Vector3) -> Crumbs:
+	if _crumbs.has(key):
+		return _crumbs[key]
+	var cr := Crumbs.new()
+	var mmi := MultiMeshInstance3D.new()
+	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.chamfered_box(key)
+	mmi.multimesh = mm
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	mmi.material_override = mat
+	add_child(mmi)
+	cr.mmi = mmi
+	_crumbs[key] = cr
+	return cr
+
+
+## Fall, stop on the floor, shrink, go. Once a tick, after the pieces.
+func _update_crumbs() -> void:
+	if _crumbs.is_empty():
+		return
+	var t0 := Time.get_ticks_usec()
+	var now := Engine.get_physics_frames()
+	var tps := float(Engine.physics_ticks_per_second)
+	var dt := 1.0 / tps
+	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
+	var full := int(CRUMB_FULL_MS * tps / 1000.0)
+	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
+	for key in _crumbs:
+		var cr: Crumbs = _crumbs[key]
+		var i := 0
+		while i < cr.pos.size():
+			var age := now - cr.born[i]
+			if age >= life:
+				cr.remove(i)
+				crumb_count -= 1
+				continue
+			if cr.landed[i] == 0:
+				var v := cr.vel[i]
+				v.y -= g * dt
+				var p := cr.pos[i] + v * dt
+				if p.y - cr.half_h[i] <= cr.floor_y[i]:
+					p.y = cr.floor_y[i] + cr.half_h[i]
+					cr.landed[i] = now
+				cr.pos[i] = p
+				cr.vel[i] = v
+			i += 1
+		var mm := cr.mmi.multimesh
+		var count := cr.pos.size()
+		if mm.instance_count != count:
+			mm.instance_count = count
+		for j in count:
+			var age := now - cr.born[j]
+			var s := 1.0
+			if age > full:
+				s = maxf(1.0 - float(age - full) / float(life - full), 0.01)
+			# It stops turning when it stops falling.
+			var turned := (cr.landed[j] if cr.landed[j] > 0 else now) - cr.born[j]
+			var b := Basis(cr.axis[j], cr.rate[j] * float(turned) * dt) * cr.base[j]
+			mm.set_instance_transform(j, Transform3D(b.scaled(Vector3(s, s, s)), cr.pos[j]))
+			mm.set_instance_color(j, cr.colour[j])
+	crumb_worst_ms = maxf(crumb_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
 
 ## Should this piece never become a body at all? Decided BEFORE anything is
@@ -2942,6 +3216,13 @@ func tick() -> void:
 		if speed > MAX_DEBRIS_SPEED:
 			isl.body.linear_velocity = isl.body.linear_velocity.normalized() * MAX_DEBRIS_SPEED
 			speed = MAX_DEBRIS_SPEED
+		if isl.body.linear_velocity.y > MAX_RISE_SPEED \
+				and not (isl.hold_until_ms > 0 and now < isl.hold_until_ms):
+			var risen := isl.body.linear_velocity
+			risen.y = MAX_RISE_SPEED
+			isl.body.linear_velocity = risen
+			speed = risen.length()
+			rises_capped += 1
 		var spin := isl.body.angular_velocity.length()
 		if spin > MAX_DEBRIS_SPIN:
 			isl.body.angular_velocity = isl.body.angular_velocity.normalized() * MAX_DEBRIS_SPIN
@@ -3081,6 +3362,7 @@ func tick() -> void:
 	var _tm := Time.get_ticks_usec()
 	tick_prof.mesh += float(_tm - _tf) / 1000.0
 	_update_multimeshes()
+	_update_crumbs()
 	if not defer_job_start:
 		start_mesh_jobs()
 	tick_prof.mm += float(Time.get_ticks_usec() - _tm) / 1000.0
@@ -3822,6 +4104,13 @@ func report() -> Dictionary:
 		"settled": settled,
 		"settled_by_rule": settled_by_rule,
 		"settled_jittering": settled_jittering,
+		"crumbled": crumbled,
+		"rises_capped": rises_capped,
+		"crumb_bricks": crumb_bricks,
+		"crumbs": crumb_count,
+		"crumbs_over": crumbs_over,
+		"crumb_worst_ms": crumb_worst_ms,
+		"crumble_worst_ms": crumble_worst_ms,
 		"landings_noted": landings_noted,
 		"far_landings": far_landings,
 		"far_shears": far_shears,
