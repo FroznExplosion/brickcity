@@ -1622,6 +1622,38 @@ with a `--breaklag` check that failed before the change.
 `--walk` and `--fixture` had counted on nothing being bricks that the camera only looked at; they
 look from past aiming range, and count a chunk per building in bricks.
 
+### Nothing hangs in mid-air, and small pieces crumble
+
+`--jam` (new): a storey blown out under three towers with stairs, watched for ten seconds from
+inside `FRACTURE_RANGE`. A piece slower than 0.8 m/s for a second and still not settled is stuck.
+Before: 4 stuck in the city, 3 of them on pieces still falling; 8 in the big city (5); everything
+still after 308 / 551 ticks. The stuck ones were in the heap at the bottom, jittering at 0.5-1 m/s.
+
+* **Pieces in the air pass through each other.** A falling piece no longer scans other falling
+  pieces until something is under it -- a contact with a near-vertical normal
+  (`BrickIsland.landed`, `Layers.AIRBORNE_MASK`); then it does, and what comes down after it lands
+  on it. Only the mask changes: its layer is `FALLING` throughout, so pawns, bullets, the mech's
+  fall rule and the AI see no difference.
+* **A heap settles.** A landed piece slower than `SETTLE_JITTER_SPEED` (1 m/s) settles on a second
+  clock, instead of having its clock reset by every push from a neighbour.
+* **Support from inside.** `_supported_below`'s rays report a hit from inside a shape: a piece sunk
+  a little into the slab it landed on read as "nothing under it", was nudged, and woken by every
+  piece that came to rest on it.
+* **Nothing is thrown up.** Two pieces that passed through each other in the air were pushed apart
+  at 11 m/s when one landed. A piece rises no faster than `MAX_RISE_SPEED` (4 m/s) unless the wind
+  holds it.
+
+After: 0 stuck in five runs; still after 134-236 ticks in the city, 325-435 in the big city.
+
+**Crumbs.** A piece of `DEBRIS_MAX_BLOCKS` (8) or fewer is not made a body (`_crumble`). Each brick
+is drawn from a per-size chamfered-brick MultiMesh with the piece's velocity, a kick away from its
+building and gravity; one ray when it breaks finds the floor; it stops there and shrinks out over
+`CRUMB_LIFE_MS` (1.4 s, counted in physics ticks). Far off or out of view it is only removed, as
+before; at most `CRUMBS_MAX` (600) bricks at once. Bodies per `--jam` collapse 95 -> 24, with 130-190
+pieces crumbling instead; the crumb update is 0.4-0.5 ms a tick at worst. A tornado or hurricane
+marks its reach `windy()`: small pieces broken off there stay bodies for the wind to lift. Pieces
+of 6-8 bricks no longer crush anyone (`Crush.MIN_BRICKS` is nine in practice).
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
