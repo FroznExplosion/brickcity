@@ -1588,6 +1588,40 @@ at 400 ms a frame -- the display, not the game: the physics tick is the same in 
 numbers are safer; and in the slow mode the collapse itself runs differently -- far more pieces
 put to sleep by the cap -- so compare like with like.
 
+### Buildings that came back, stairs left standing, and the first shot's lag
+
+Three of the complaints after a break, each measured first (`--diag`, a throwaway pass) and each
+with a `--breaklag` check that failed before the change.
+
+* **"Buildings respawning."** A building still in bricks gives its mesh up past `DEMESH_RANGE` and
+  stands in as a shell (`_demesh`). That shell was drawn from `damage_profile` -- the damage the
+  building had the last time it was given back, usually none -- so a building shot since came
+  back whole at range and went again up close, and its interior and pieces were seen clipping
+  through a building that was not there. The shell is drawn from the bricks now
+  (`live_damage_profile`), nothing at all once none are left, and a hit taken while it is far
+  marks it stale and redraws it (`_shell_stale`). Check: "far off ... drawn with the damage it
+  has, not what it had", and "a hit taken while far shows on it".
+* **Stairs go with their floors.** A staircase is one spiral column on its own footing, joined to
+  nothing (a tower must not stand on its stairs), so when the building round it came down the
+  column stood on: 82 of 90 flights of one tower, 114 of 122 of another, and falling sections
+  caught on them and jittered. Every building solved is swept (`_sweep_stairs`, at most every
+  `STAIR_SWEEP_TICKS`): a flight stands while there is live structure round the stairwell within
+  its own storey (`block_centre_levels`, one walk of the chunk for every storey at once), and the
+  flights above the highest one held are cut out as rubble. Flights below a standing storey stay,
+  so a figure can still climb to the floors that are left. They were not made structural: that
+  would let a building stand on its stairs.
+* **The first shot's lag.** A shot at a building still drawn as its shell made it bricks in that
+  tick, and showed only once its bands were drawn: 5-11 ticks, several times that with the editor
+  open. What the camera aims at for `AIM_PROMOTE_TICKS` within `AIM_PROMOTE_RANGE` (100 m) is
+  promoted ahead of the shot, its bands first in line, and is not trimmed back for `AIM_KEEP_MS`
+  (`_aim_promote`); the shot then lands on bricks already drawn. And a building made bricks drew
+  every room in `ROOM_RANGE` in one pass -- 15 ms of `_sync_drawn` -- so a pass draws 24, nearest
+  first. A shot building's bands were tried first in line too, and made its shot show later
+  (15 ticks against 9: a partial redo rebuilds more of them), so they are not.
+
+`--walk` and `--fixture` had counted on nothing being bricks that the camera only looked at; they
+look from past aiming range, and count a chunk per building in bricks.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
