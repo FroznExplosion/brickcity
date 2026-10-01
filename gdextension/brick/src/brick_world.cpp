@@ -4549,6 +4549,59 @@ bool BrickWorld::any_block_centre_in(int chunk_id, const AABB &box,
     return false;
 }
 
+PackedByteArray BrickWorld::block_centre_levels(int chunk_id, const AABB &box,
+        float level_height, const PackedInt32Array &exclude) const {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id) || level_height <= 0.0f) {
+        return out;
+    }
+    const int levels = std::max(1, (int)std::ceil(box.size.y / level_height));
+    out.resize(levels);
+    out.fill(0);
+    const Chunk &c = chunks[chunk_id];
+    std::vector<uint8_t> skip(c.blocks.size(), 0);
+    for (int64_t k = 0; k < exclude.size(); ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)c.blocks.size()) {
+            skip[(size_t)id] = 1;
+        }
+    }
+    auto mark = [&](const Vector3 &p) {
+        if (!box.has_point(p)) {
+            return;
+        }
+        const int l = std::min(levels - 1, std::max(0,
+                (int)std::floor((p.y - box.position.y) / level_height)));
+        out.set(l, 1);
+    };
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive || skip[i]) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            mark(centre);
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        mark(Vector3((base.x + x + 0.5f) * cs.x, (base.y + y + 0.5f) * cs.y,
+                                (base.z + z + 0.5f) * cs.z));
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
 void BrickWorld::block_extent(const Chunk &c, const Block &b,
         Vector3 &out_centre, Vector3 &out_size) const {
     const Vector3 cs = cell_size();
@@ -5815,6 +5868,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::rest_contacts);
     ClassDB::bind_method(D_METHOD("any_block_centre_in", "chunk_id", "box", "exclude"),
             &BrickWorld::any_block_centre_in);
+    ClassDB::bind_method(D_METHOD("block_centre_levels", "chunk_id", "box", "level_height", "exclude"),
+            &BrickWorld::block_centre_levels);
     ClassDB::bind_method(D_METHOD("build_chunk_coarse_mesh", "chunk_id"),
             &BrickWorld::build_chunk_coarse_mesh);
     ClassDB::bind_method(D_METHOD("get_last_coarse_ms"), &BrickWorld::get_last_coarse_ms);
