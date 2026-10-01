@@ -1,0 +1,12 @@
+{
+  "status": "set",
+  "updatedAt": "2026-09-30T23:17:35.162Z",
+  "weights": {
+    "collapse": 20,
+    "deny_escape": 60,
+    "guard_exits": 50,
+    "let_go": 5,
+    "rush": 60,
+    "trade": 45
+  }
+}
