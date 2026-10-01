@@ -1,0 +1,1013 @@
+<title>Brickcity Tactics Casebook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* A planning table: broad moments, the things around a soldier that shift the odds, and a place to try it. */
+:root{
+  --paper:#eef1ee; --sheet:#fbfcfa; --ink:#1c2a31; --ink-soft:#4a5a61; --rule:#cfd6d2;
+  --brick:#d99a00; --blue:#2c64a8; --never:#b3403a; --ok:#2f7d4f; --faint:#e4e9e5; --up:#2f7d4f; --down:#b3403a;
+  --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#141a1e; --sheet:#1b2328; --ink:#e3e8e5; --ink-soft:#a3b0b5; --rule:#2e3a40;
+  --brick:#f0bf2e; --blue:#6fa3e6; --never:#e2736b; --ok:#6cc08c; --faint:#222c31; --up:#6cc08c; --down:#e2736b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#141a1e; --sheet:#1b2328; --ink:#e3e8e5; --ink-soft:#a3b0b5; --rule:#2e3a40;
+  --brick:#f0bf2e; --blue:#6fa3e6; --never:#e2736b; --ok:#6cc08c; --faint:#222c31; --up:#6cc08c; --down:#e2736b; color-scheme:dark}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;
+  background-image:linear-gradient(var(--faint) 1px,transparent 1px),linear-gradient(90deg,var(--faint) 1px,transparent 1px);
+  background-size:28px 28px}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:20px 60px}
+header.top{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between;border-bottom:2px solid var(--ink);padding-bottom:12px}
+h1{font-family:var(--f-display);font-weight:700;font-size:2.4rem;line-height:1;margin:0;letter-spacing:.01em;text-wrap:balance}
+.sub{color:var(--ink-soft);margin:6px 0 0;max-width:70ch}
+.meter{font-family:var(--f-mono);font-size:.85rem;display:flex;gap:16px;flex-wrap:wrap}
+.meter b{font-weight:500}
+.save{font-family:var(--f-mono);font-size:.78rem;color:var(--ink-soft)}
+.save.err{color:var(--never)}
+nav.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:16px 0}
+.tab{font-family:var(--f-display);font-weight:600;font-size:1.05rem;letter-spacing:.04em;text-transform:uppercase;
+  border:1.5px solid var(--ink);background:var(--sheet);color:var(--ink);padding:5px 12px;border-radius:3px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--sheet)}
+.formula{font-family:var(--f-mono);font-size:.8rem;color:var(--ink-soft);margin:-6px 0 14px}
+.grid{display:grid;grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}}
+.list{display:flex;flex-direction:column;gap:6px}
+.list h3{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin:10px 0 0;font-weight:500}
+.case-btn{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 10px;text-align:left;background:var(--sheet);border:1px solid var(--rule);
+  border-radius:3px;padding:7px 10px;cursor:pointer;color:var(--ink);font:inherit}
+.case-btn[aria-current="true"]{border-color:var(--ink);box-shadow:inset 3px 0 0 var(--brick)}
+.case-btn .t{font-weight:600;font-size:.9rem;line-height:1.3}
+.case-btn .u{grid-column:2;font-size:.76rem;color:var(--ink-soft)}
+.dot{width:10px;height:10px;border-radius:50%;margin-top:5px;border:1.5px solid var(--ink-soft)}
+.dot.set{background:var(--ok);border-color:var(--ok)}
+.dot.draft{background:var(--brick);border-color:var(--brick)}
+.sheet{background:var(--sheet);border:1px solid var(--rule);border-radius:4px;padding:18px 20px;min-width:0}
+.eyebrow{font-family:var(--f-mono);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+h2{font-family:var(--f-display);font-weight:700;font-size:1.8rem;line-height:1.05;margin:4px 0 8px;text-wrap:balance}
+h4{font-family:var(--f-display);font-weight:600;font-size:1.1rem;letter-spacing:.04em;text-transform:uppercase;margin:18px 0 4px;color:var(--ink-soft)}
+.situation{max-width:70ch;margin:0 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{font-family:var(--f-mono);font-size:.74rem;border:1px solid var(--rule);border-radius:2px;padding:2px 7px;background:var(--paper)}
+.chip.up{border-color:var(--up);color:var(--up)}
+.chip.down{border-color:var(--down);color:var(--down)}
+.chip button{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 4px;font:inherit}
+.why{font-size:.85rem;color:var(--ink-soft);border-left:3px solid var(--blue);padding:2px 10px;margin:0 0 14px;max-width:72ch}
+.opt{display:grid;grid-template-columns:minmax(0,1fr) 170px 58px;gap:4px 14px;align-items:center;border-top:1px solid var(--rule);padding-block:8px}
+@media (max-width:620px){.opt{grid-template-columns:minmax(0,1fr) 110px}.opt .pct{display:none}}
+.opt .lbl{font-weight:600;font-size:.93rem;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.opt .det{grid-column:1;font-size:.82rem;color:var(--ink-soft);margin:0}
+.tag{font-family:var(--f-mono);font-size:.66rem;padding:1px 5px;border-radius:2px;border:1px solid var(--rule);color:var(--ink-soft);font-weight:400}
+.tag.built{border-color:var(--ok);color:var(--ok)}
+.tag.sug{border-style:dashed}
+.ctl{grid-row:1 / span 2;grid-column:2;display:flex;flex-direction:column;gap:4px}
+.pct{grid-row:1 / span 2;grid-column:3;font-family:var(--f-mono);font-size:1rem;text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--faint);border-radius:1px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--brick);width:0;transition:width .15s}
+.bar.blue i{background:var(--blue)}
+.opt.never .bar i{background:var(--never)}
+.opt.never .lbl{text-decoration:line-through;text-decoration-color:var(--never)}
+input[type=range]{width:100%;accent-color:var(--brick)}
+.never-t{font-size:.76rem;display:flex;gap:6px;align-items:center;color:var(--ink-soft);cursor:pointer}
+.never-t input{accent-color:var(--never)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button.act{font:inherit;font-size:.85rem;border:1.5px solid var(--ink);background:transparent;color:var(--ink);padding:5px 10px;border-radius:3px;cursor:pointer}
+button.act.primary{background:var(--ink);color:var(--sheet)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+textarea,input[type=text],select{font:inherit;font-size:.88rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:3px;padding:6px 8px}
+textarea,input[type=text]{width:100%}
+textarea{min-height:64px;resize:vertical}
+label.fld{display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--ink-soft);margin-top:12px}
+.status{display:flex;gap:6px;margin:14px 0 0;flex-wrap:wrap}
+.status button{font:inherit;font-size:.82rem;border:1px solid var(--rule);background:var(--paper);color:var(--ink);padding:4px 10px;border-radius:14px;cursor:pointer}
+.status button[aria-pressed="true"]{border-color:var(--ink);background:var(--ink);color:var(--sheet)}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden;flex-wrap:nowrap}
+.seg button{font-family:var(--f-mono);font-size:.72rem;border:0;border-left:1px solid var(--rule);background:var(--paper);color:var(--ink-soft);padding:4px 7px;cursor:pointer;position:relative;min-width:34px}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--sheet)}
+.seg button[aria-pressed="true"].v0{background:var(--never);color:var(--sheet)}
+.seg button[aria-pressed="true"].v6{background:var(--ok);color:var(--sheet)}
+.seg button.sug::after{content:"";position:absolute;left:50%;bottom:1px;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--brick)}
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;align-items:center;border-top:1px solid var(--rule);padding-block:7px}
+.mrow .lbl{font-weight:600;font-size:.9rem}
+.mrow .det{font-size:.8rem;color:var(--ink-soft);margin:0}
+.mrow.changed .lbl::before{content:"● ";color:var(--brick)}
+@media (max-width:620px){.mrow{grid-template-columns:minmax(0,1fr)}}
+.trow{border-top:1px solid var(--rule);padding-block:10px;display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr);gap:6px 16px}
+@media (max-width:700px){.trow{grid-template-columns:minmax(0,1fr)}}
+.trow .lbl{font-weight:600;font-size:.9rem}
+.kv{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:.8rem;color:var(--ink-soft)}
+.try{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.try{grid-template-columns:minmax(0,1fr)}}
+.fbox{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.fbox label{display:flex;gap:8px;align-items:flex-start;font-size:.84rem;cursor:pointer}
+.fbox label.imp{color:var(--ink-soft)}
+.fbox input{accent-color:var(--blue);margin-top:3px}
+.res{display:grid;grid-template-columns:minmax(0,1fr) minmax(80px,180px) 48px;gap:2px 12px;align-items:center;border-top:1px solid var(--rule);padding-block:6px}
+.res .lbl{font-weight:600;font-size:.9rem}
+.res .whys{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px}
+.res .pct{grid-row:auto;grid-column:auto;font-size:.9rem}
+.res.off .lbl{color:var(--ink-soft);font-weight:400}
+.squad{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.squad div{font-size:.9rem;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}
+.squad .who{font-family:var(--f-mono);font-size:.78rem;color:var(--ink-soft);min-width:78px}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:12px}
+.check{background:var(--sheet);border:1px solid var(--rule);border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.check .hd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.check .hd b{font-size:.92rem}
+.score{font-family:var(--f-mono);font-size:.9rem;font-variant-numeric:tabular-nums}
+.score.good{color:var(--ok)} .score.mid{color:var(--brick)} .score.bad{color:var(--never)}
+.cmp{display:grid;grid-template-columns:minmax(0,1fr) 70px 70px;gap:3px 8px;font-size:.8rem;align-items:center}
+.cmp .h{font-family:var(--f-mono);font-size:.68rem;color:var(--ink-soft);text-transform:uppercase}
+.mini{display:flex;align-items:center;gap:4px;font-family:var(--f-mono);font-size:.72rem;font-variant-numeric:tabular-nums}
+.mini .bar{flex:1;height:5px}
+.flag{font-size:.78rem;color:var(--never)}
+.note{font-size:.84rem;color:var(--ink-soft)}
+.empty{color:var(--ink-soft);font-style:italic}
+pre.json{max-height:260px;overflow:auto;background:var(--paper);border:1px solid var(--rule);padding:10px;font-family:var(--f-mono);font-size:.75rem}
+.rule{display:grid;grid-template-columns:minmax(0,1fr) 200px 56px;gap:4px 14px;align-items:center;border-top:1px solid var(--rule);padding-top:10px}
+@media (max-width:620px){.rule{grid-template-columns:minmax(0,1fr) 120px 48px}}
+.rule .rt{font-weight:600}
+.rule .rd{grid-column:1;font-size:.84rem;color:var(--ink-soft);margin:0}
+.rule .ctl{grid-column:2}
+.rule .pct{grid-column:3;font-size:.9rem}
+.scale{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:.64rem;color:var(--ink-soft)}
+.ckgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:4px 12px;margin-top:6px}
+.ckgrid label{display:flex;gap:6px;font-size:.84rem;align-items:flex-start}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Brickcity Tactics Casebook</h1>
+      <p class="sub">Twelve broad moments any enemy can be in, each with many possible moves. What is around the soldier (the place, the player, distance and cover, its health and magazine, its squad, what it tried last) makes some moves likelier and rules others out. Set the odds, then try a moment to see what a squad would do.</p>
+    </div>
+    <div>
+      <div class="meter" id="meter"></div>
+      <div class="save" id="save" aria-live="polite">Connecting to storage…</div>
+    </div>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <div id="view"></div>
+</div>
+
+<script>
+/* ======================================================================
+   MODEL — the moves, the moments, what shifts the odds. Suggested values
+   come from the research and your first casebook; your settings override.
+   ====================================================================== */
+const MULT = [0, 0.25, 0.5, 1, 2, 4, 1];
+// Step 6 "95%": when this is true the move takes ALWAYS_SHARE of the whole pick (shared if several do).
+const ALWAYS = 6, ALWAYS_SHARE = 0.95;
+const STEP_LABEL = ["never", "÷4", "÷2", "·", "×2", "×4", "95%"];
+const STEP_WORD = ["rules it out", "much less likely", "less likely", "no change", "more likely", "much more likely", "almost always: takes 95% of the pick"];
+
+const AGROUPS = {fire:"Fire", move:"Move", tool:"Tools and explosives", contain:"Contain", search:"Search", support:"Support", give:"Give up", mine:"Yours"};
+const ACTIONS = [
+  ["hold","fire","Hold and watch","Stay in cover with guns on where the player will show.",1],
+  ["trade","fire","Open fire","Shoot from where they are, in cover if they have it.",1],
+  ["suppress","fire","Suppress","Keep the player's head down so squadmates can move.",1],
+  ["relocate","fire","Fire, then move","Shoot, then change position before they fire back.",0],
+  ["strip_cover","fire","Shoot their cover away","Wear down or blast the wall, window or rubble they are behind.",0],
+  ["advance","move","Bound forward","Pairs move cover to cover while the others cover them.",1],
+  ["flank","move","Flank","Go round to a side the player is not watching.",1],
+  ["rush","move","Rush them","Everyone at once, straight at the position.",1],
+  ["melee","move","Charge to melee","Close the last metres and hit them. Distance and an empty magazine decide it.",0],
+  ["climb","move","Take the high ground","Go up: stairs, a roof, the rubble pile, upper floors a mech can't reach.",0],
+  ["fall_back","move","Fall back to better cover","Give ground to a stronger position.",1],
+  ["regroup","move","Regroup","Get back to the squad or the nearest friends.",0],
+  ["flee","move","Run","Break contact and get away.",1],
+  ["grenade","tool","Grenade","Throw one at the position, round the corner, down the stairwell, over the traverse.",0],
+  ["flash","tool","Flash, then go in","Stun them and enter right behind it.",1],
+  ["smoke","tool","Smoke","Blind the player's view of the ground they will cross.",0],
+  ["breach","tool","Make their own way in","Blast a hole in a wall, floor or ceiling where the player is not looking.",1],
+  ["collapse","tool","Bring it down","Take the building, floor or tunnel away with the player in it.",0],
+  ["seal","tool","Seal a way through","Blow the stairs, door or tunnel so nobody passes.",0],
+  ["guard_exits","contain","Guard the ways out","Cover the stairs, doors and tunnel mouths the player would leave by.",0],
+  ["deny_escape","contain","Deny the escape","Cover the window, roof or landing zone; fire on the evac.",0],
+  ["ambush","contain","Hide and ambush","Wait out of sight where the player will come.",0],
+  ["wait","contain","Wait them out","Contain and let the player make the next move.",0],
+  ["let_go","contain","Let them go","Not worth the losses; take the ground back.",0],
+  ["search","search","Check the last known position","Go to where the player was last seen.",0],
+  ["sweep","search","Sweep room by room","Clear the area in pairs, one space at a time.",1],
+  ["recon","search","Scout first","Send a drone, dog or one scout ahead of the squad.",0],
+  ["call_help","support","Call for help","Ask for more troops and hold until they arrive.",1],
+  ["call_armour","support","Call a mech or tank","Bring heavy armour to the problem.",1],
+  ["call_air","support","Call an air or drone strike","Strafing run, drone or strike on the position.",1],
+  ["air_window","support","Shoot in through a window from the air","Hover level with the player's floor and fire inside. Needs a window facing them and room to hover.",0],
+  ["mark","support","Mark the player for others","Spot and point them out; someone else does the shooting.",0],
+  ["screen_heavy","support","Screen our armour","Move ahead of our mech or tank, finding and suppressing anti-armour teams.",0],
+  ["heavy_leads","support","Follow in our armour's lee","Let the mech or tank lead and use it as cover.",0],
+  ["hide","give","Hide and go quiet","Get out of sight and stay there.",0],
+  ["surrender","give","Surrender","Drop the weapon and give up.",0],
+  ["play_dead","give","Play dead","Drop and lie still.",0],
+  ["reload","fire","Reload in cover","Duck into cover and reload. Ammo is unlimited; the magazine isn't.",0],
+].map(([id,g,l,d,b]) => ({id,g,l,d,b:!!b}));
+
+const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are"};
+// mods: action:step (0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4)
+const FACTORS = [
+  ["inside","place","Inside a building","Rooms, corridors, stairs.","sweep:4,flash:4,breach:4,smoke:2,call_air:2,screen_heavy:2,heavy_leads:2,call_armour:2"],
+  ["underground","place","Underground","Tunnel, cave, sewer.","grenade:4,seal:4,recon:3,guard_exits:4,collapse:4,flank:2,climb:0,call_air:0,air_window:0,smoke:1,advance:2,rush:2,call_armour:0,screen_heavy:0,heavy_leads:0,wait:4"],
+  ["trench","place","In a trench or ditch","Cover while in it; open ground outside it.","trade:4,hold:4,grenade:4,ambush:4,fall_back:4,flank:2,rush:2,climb:1,advance:3"],
+  ["open","place","Open ground, little cover","A square, a field, a wide street.","advance:4,smoke:4,suppress:4,rush:2,flank:2,hold:3,hide:1,ambush:1,trade:3"],
+  ["rubble","place","Rubble and wreckage","Cover everywhere, but weak; short sight lines.","advance:4,ambush:4,hide:4,search:4,climb:4,sweep:2"],
+  ["narrow","place","Narrow: single file","Corridor, tunnel, squeeze, stairwell.","flank:1,grenade:4,rush:3,advance:2,recon:4,guard_exits:4,melee:4,call_armour:1"],
+  ["choke","place","Only one way to the player","Stairs, a door, a bridge, a squeeze.","rush:2,guard_exits:5,grenade:3,flash:4,breach:4,flank:1,smoke:3,wait:4,seal:4,strip_cover:4,call_help:4,hold:4"],
+  ["p_high","place","Player is above us","Upper floor, roof, hill, top of the pile. Any gun, not just a sniper.","rush:3,climb:5,breach:3,collapse:4,call_air:4,strip_cover:4,advance:3,grenade:2"],
+  ["p_low","place","Player is below us","We hold the upper floors or the high ground.","grenade:4,hold:5,ambush:4,breach:4,climb:1"],
+  ["destructible","place","Their cover can be destroyed","Brick walls, floors, a building that can fall.","strip_cover:4,collapse:3,breach:4"],
+  ["valuable","place","The place is worth keeping","Our HQ, a radio, loot, hostages.","collapse:0,call_air:0,strip_cover:1,grenade:2,breach:2,seal:1,sweep:4,hold:4,flash:4"],
+  ["friends_blast","place","Our own troops in the blast or fall zone","Friendlies near where it would come down.","collapse:1,call_air:2,grenade:2,strip_cover:2"],
+  ["low_vis","place","Poor visibility","Dark, smoke, dust, rain.","advance:4,flank:4,rush:4,melee:4,relocate:4,ambush:4,hold:2,trade:2,mark:1"],
+  ["p_seen","player","Player in sight now","","search:0,recon:1,suppress:4,trade:4,wait:2"],
+  ["p_suspected","player","Player suspected, not confirmed","Heard, last seen here, or likely inside. Buildings get searched only when someone is suspected inside.","search:4,sweep:4,recon:4,suppress:1,rush:1,collapse:1,call_air:1,grenade:3,strip_cover:2"],
+  ["p_reach","player","Player within melee reach","Close enough to hit with what we carry: fists, blade, rifle stock, claws.","melee:6,grenade:1,call_air:0,recon:0,mark:1,reload:1"],
+  ["p_unaware","player","Player doesn't know we're here","We're behind them, or they're looking the other way.","trade:5,rush:4,melee:4,flank:4,ambush:3,relocate:3,hide:2,fall_back:1,flee:1,suppress:2,call_help:2"],
+  ["p_escape","player","Player has another way out","A window to another roof, a second stair, a tunnel.","guard_exits:3,deny_escape:5,rush:4,collapse:3,wait:1,seal:4"],
+  ["p_evac","player","Evac is coming for the player","A helicopter or vehicle on its way.","deny_escape:4,rush:5,collapse:4,call_air:3,wait:0,guard_exits:1"],
+  ["p_mech","player","Player is in a mech","","flee:4,hide:4,fall_back:3,climb:4,call_armour:4,ambush:4,surrender:5,trade:2,rush:0,melee:0,advance:1,suppress:1,sweep:0,flash:0"],
+  ["p_pilot_foot","player","The pilot is on foot","Their mech is elsewhere.","search:4,flank:4,rush:4,melee:4"],
+  ["p_reloading","player","Player reloading or hurt","A window of weakness.","rush:5,melee:4,advance:4,hold:2,wait:1"],
+  ["p_team","player","Player has teammates near","Another player could be covering them.","flank:2,guard_exits:2,regroup:4,call_help:4"],
+  ["we_alone","us","Alone","The only one left, or cut off.","regroup:5,call_help:4,hide:4,ambush:4,surrender:3,rush:1,sweep:1,flank:2,suppress:1"],
+  ["we_explosives","us","Carrying rockets or explosives","","breach:4,collapse:4,strip_cover:4,seal:4"],
+  ["friends_near","us","Other friendly squads near","","call_help:4,flank:4,guard_exits:4,suppress:4"],
+  ["heavy_near","us","Our mech or tank is here","","screen_heavy:5,heavy_leads:5,call_armour:0,rush:4,advance:4"],
+  ["air_avail","us","Air or drone support available","","call_air:4,mark:5,recon:4"],
+  ["we_marksman","kind","We're a marksman","","relocate:5,trade:3,hold:4,climb:4,rush:0,melee:0,sweep:1,flash:1"],
+  ["we_mech","kind","We're a mech or tank","Too big for doors and small rooms.","sweep:0,flash:0,breach:3,strip_cover:5,collapse:4,guard_exits:5,call_help:5,melee:2,hide:0,surrender:0,play_dead:0,screen_heavy:0,heavy_leads:0,call_armour:0"],
+  ["we_flyer","kind","We're a flyer","Drone or helicopter.","flank:5,mark:5,strip_cover:4,air_window:5,sweep:0,breach:0,flash:0,climb:0,melee:0,seal:0,surrender:0,play_dead:0,hide:1,call_air:1"],
+  ["we_melee","kind","We're a melee fighter","Brute, dog, creature: it closes in to hit.","melee:5,rush:4,trade:1,suppress:0,grenade:1,relocate:1,mark:1,hold:2,reload:0"],
+  ["we_swarm","kind","We're a swarm","Creatures, acting as one mass.","rush:5,climb:4,guard_exits:3,let_go:4,suppress:0,grenade:0,flash:0,smoke:0,call_help:0,call_armour:0,call_air:0,mark:0,surrender:0,play_dead:0,breach:0,seal:0,collapse:0,strip_cover:0,hide:2"],
+].map(([id,g,l,d,m]) => ({id,g,l,d,mods:kv(m)}));
+
+// Teamwork: [most squadmates doing it at once (0 = any), moves it works with]
+const TEAM = {
+  suppress:[2,"advance,flank,rush,smoke,melee"], flank:[2,"suppress,hold,trade"], rush:[0,"suppress,flash,smoke,grenade"],
+  advance:[0,"suppress,smoke"], flash:[1,"rush,sweep"], grenade:[1,"rush,advance"], smoke:[1,"advance,rush,flank"],
+  breach:[1,"guard_exits,flash,rush"], guard_exits:[2,"breach,sweep,search,collapse"], sweep:[0,"guard_exits"],
+  search:[2,"hold,guard_exits"], recon:[1,"hold"], mark:[1,"call_air"], call_air:[1,"mark,fall_back"],
+  call_help:[1,"hold,guard_exits"], call_armour:[1,""], collapse:[1,"guard_exits,fall_back"], hold:[0,"flank,search"],
+  deny_escape:[2,"rush"], climb:[1,"advance"], melee:[0,"suppress"], strip_cover:[1,"rush,advance"], seal:[1,"guard_exits"], reload:[0,"suppress"],
+};
+// Only possible when at least one of these is true
+const NEEDS = {
+  collapse:"destructible", breach:"destructible", strip_cover:"destructible", deny_escape:"p_escape,p_evac",
+  screen_heavy:"heavy_near", heavy_leads:"heavy_near", call_air:"air_avail", air_window:"we_flyer",
+  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected",
+};
+// Combos: moves done together with the main move. [first, while, then], each "move:chance%".
+// "first" happens just before (grenade, then rush), "while" alongside (fire while marking),
+// "then" right after (breach, then flash). The same factors, limits and "never" apply to each.
+const SLOTS = [["first","First"],["with","While doing it"],["then","Then"]];
+const COMBOS = {
+  rush:["grenade:35,flash:25,smoke:20","",""],
+  advance:["smoke:25,grenade:10","mark:10",""],
+  flank:["smoke:15","mark:10","rush:15"],
+  trade:["grenade:10","mark:25,call_help:20","grenade:40"],
+  suppress:["","mark:20,call_help:15",""],
+  hold:["","mark:20,call_help:25",""],
+  melee:["flash:15,grenade:10","",""],
+  sweep:["flash:35,grenade:25","",""],
+  breach:["","","flash:40,rush:30"],
+  search:["grenade:20,recon:20","call_help:10",""],
+  grenade:["","","rush:30,advance:20,trade:20"],
+  flash:["","","rush:50"],
+  smoke:["","","advance:40,rush:20,flee:15"],
+  fall_back:["smoke:30","call_help:25",""],
+  flee:["smoke:25","call_help:30",""],
+  regroup:["smoke:15","call_help:30",""],
+  climb:["","","trade:40"],
+  ambush:["","mark:15,call_help:10","rush:20"],
+  guard_exits:["","call_help:20,mark:10",""],
+  deny_escape:["","call_air:20,mark:20",""],
+  collapse:["","","guard_exits:30"],
+  mark:["","","trade:40"],
+  call_help:["","","hold:50"],
+  call_air:["mark:50","","hold:30"],
+  hide:["","call_help:20",""],
+  strip_cover:["","","rush:30,trade:30"],
+  screen_heavy:["","mark:30",""],
+  heavy_leads:["","mark:15",""],
+  recon:["","","search:40"],
+  seal:["","","fall_back:30"],
+  wait:["","call_help:20",""],
+  let_go:["","mark:15",""],
+};
+const MAX_EXTRA_DEF = 2;
+
+// Scales: things that come in amounts, not yes/no. Each move has a curve: its effect at each stop,
+// blended in between. "move@kind" is that kind's own curve (a melee fighter charges from far).
+const SCALES = [
+  {id:"dist", l:"Distance to the player", stops:[2,5,10,25,50,100,200], log:true, def:30, min:1, max:200, fmt:v => Math.round(v) + " m", chip:v => Math.round(v) + " m away"},
+  {id:"pcover", l:"The player's cover", stops:["none","partial","full"], disc:true, def:1, chip:v => ["player in the open","player in partial cover","player behind full cover"][v]},
+  {id:"cover", l:"Our cover", stops:["none","partial","full"], disc:true, def:1, chip:v => ["we're in the open","we're in partial cover","we're in full cover"][v]},
+  {id:"hp", l:"Our health", stops:[100,60,30,10], def:100, min:0, max:100, fmt:v => Math.round(v) + "%", chip:v => "our health " + Math.round(v) + "%"},
+  {id:"mag", l:"Rounds left in our magazine", d:"Ammo is unlimited; an empty magazine means a reload.", stops:[100,50,20,0], def:100, min:0, max:100, fmt:v => Math.round(v) + "%", chip:v => "magazine " + Math.round(v) + "%"},
+  {id:"squad", l:"Squad still fighting", stops:[100,75,50,25], def:100, min:0, max:100, fmt:v => Math.round(v) + "%", chip:v => "squad at " + Math.round(v) + "%"},
+  {id:"php", l:"The player's health", stops:[100,50,20], def:100, min:0, max:100, fmt:v => Math.round(v) + "%", chip:v => "player health " + Math.round(v) + "%"},
+];
+const SC = Object.fromEntries(SCALES.map(x => [x.id, x]));
+// step at each stop: 0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4
+const CURVES = {
+  dist:{ melee:"5 4 2 0 0 0 0", "melee@we_melee":"5 5 5 4 3 3 2", "rush@we_melee":"4 4 4 4 3 3 3", "rush@we_swarm":"4 4 4 4 4 4 4",
+    rush:"4 4 3 3 2 1 1", grenade:"2 3 4 4 1 0 0", flash:"3 4 4 3 0 0 0", trade:"3 3 3 3 3 3 2", suppress:"2 3 3 3 3 3 2",
+    advance:"1 2 3 3 4 4 4", flank:"1 2 3 4 4 3 2", smoke:"1 2 3 4 4 3 2", relocate:"2 2 3 3 4 4 4", hold:"3 3 3 3 3 4 4",
+    call_air:"0 0 1 3 4 4 4", collapse:"1 1 2 3 3 3 3", strip_cover:"2 3 3 3 3 3 3", mark:"2 2 3 3 4 4 4", sweep:"3 3 3 3 2 1 1",
+    search:"3 3 3 3 3 2 2", climb:"2 2 3 3 3 3 3", flee:"2 3 3 3 3 3 3", reload:"2 3 3 3 3 4 4",
+    "trade@we_marksman":"1 2 3 3 4 5 5", "relocate@we_marksman":"1 2 3 4 4 4 4" },
+  pcover:{ grenade:"3 3 4", trade:"4 3 2", suppress:"3 3 4", flank:"2 3 4", strip_cover:"0 3 4", flash:"2 3 4", rush:"4 3 2",
+    melee:"4 3 2", breach:"2 3 4", collapse:"1 3 4", call_air:"3 3 4", wait:"2 3 4", advance:"4 3 3" },
+  cover:{ fall_back:"5 3 2", advance:"4 3 2", trade:"2 3 4", hold:"1 3 4", suppress:"2 3 4", smoke:"4 3 2", rush:"3 3 2", flee:"4 3 2",
+    hide:"2 3 4", ambush:"1 3 4", call_help:"3 3 4", relocate:"2 3 3", reload:"1 3 4" },
+  hp:{ fall_back:"3 3 4 5", flee:"3 3 4 5", hide:"3 3 4 5", rush:"3 3 2 1", melee:"3 3 2 1", advance:"3 3 2 1", flank:"3 3 2 2",
+    call_help:"3 3 4 4", regroup:"3 3 4 5", surrender:"2 3 3 4", play_dead:"0 0 2 3", sweep:"3 3 2 1" },
+  mag:{ trade:"3 3 2 0", suppress:"3 3 1 0", relocate:"3 3 2 0", reload:"0 1 4 5", melee:"3 3 4 5", grenade:"3 3 4 4",
+    fall_back:"3 3 3 4", hold:"3 3 3 2", rush:"3 3 2 2", mark:"3 3 3 4", strip_cover:"3 3 2 0" },
+  squad:{ rush:"4 3 2 1", flank:"4 3 3 2", sweep:"4 3 2 1", fall_back:"2 3 4 4", regroup:"1 3 4 5", call_help:"3 3 4 5",
+    flee:"1 2 3 4", hold:"3 3 4 4", surrender:"0 0 3 3", guard_exits:"3 3 3 2" },
+  php:{ rush:"3 4 5", melee:"3 4 4", advance:"3 4 4", fall_back:"3 2 1", flee:"3 2 1", hide:"3 2 1", call_help:"3 3 2",
+    hold:"3 3 2", wait:"3 3 2", search:"3 4 4" },
+};
+const MEMDEF = [
+  ["repeat","Its own last move again","Stops a soldier doing the same thing every time.",2],
+  ["failed","A move that failed last time against this player","The player beat it before.",1],
+  ["worked","A move that worked last time against this player","",4],
+  ["partner","A move that works with what a squadmate is doing","Suppress while another flanks; guard the exits while another breaches.",4],
+  ["same","The same move a squadmate is already doing","On top of the 'at most' limit below.",2],
+];
+
+// The twelve moments. w: suggested starting weight of each move (0..100). imp: always true in this moment.
+const SITS = [
+  {id:"first_contact", l:"Contact: the player is seen", who:"Anyone", imp:"p_seen",
+   d:"A soldier or squad has just seen the player, or been shot at. Nobody has a plan yet.",
+   w:"trade:30,suppress:30,hold:15,advance:15,flank:20,rush:10,melee:5,grenade:10,relocate:10,fall_back:10,climb:5,smoke:5,ambush:5,call_help:10,mark:5,hide:10,regroup:5,reload:20"},
+  {id:"lost_player", l:"Lost the player", who:"Anyone", imp:"p_suspected",
+   d:"The player was here and now isn't seen. The side knows the last position and a guess at where they went.",
+   w:"hold:65,search:45,grenade:35,sweep:35,strip_cover:25,guard_exits:20,recon:15,ambush:15,wait:15,advance:10,call_help:5,climb:10,seal:5,reload:10,melee:5"},
+  {id:"player_dug_in", l:"Player holds a strong position", who:"Attacking squad",
+   d:"The player is in cover the squad has to deal with: a room, an upper floor, a roof, a trench, the far end of a bridge, a cave chamber.",
+   w:"guard_exits:50,call_help:40,hold:30,rush:30,breach:30,suppress:25,grenade:25,deny_escape:25,flank:20,flash:20,sweep:20,trade:15,strip_cover:15,collapse:15,wait:15,climb:15,call_air:15,advance:10,smoke:10,call_armour:10,air_window:10,recon:5,seal:5,ambush:5,fall_back:10,mark:5,let_go:3,reload:5,melee:5"},
+  {id:"player_coming", l:"Player is coming at us", who:"Defending squad",
+   d:"We hold a position and the player is on the way in.",
+   w:"hold:60,ambush:35,trade:30,grenade:25,suppress:20,relocate:10,fall_back:10,call_help:15,flank:10,climb:10,advance:10,breach:5,seal:5,hide:5,reload:10,melee:5"},
+  {id:"crossing", l:"We have to cross danger", who:"Moving squad",
+   d:"Between us and where we need to be: open ground, a street, a bridge, a gap the player can see.",
+   w:"advance:35,suppress:25,trade:25,smoke:20,flank:20,rush:25,strip_cover:15,melee:25,hold:10,call_armour:5,call_air:5,wait:5,reload:5"},
+  {id:"close_quarters", l:"Close quarters", who:"Anyone", sc:"dist:5",
+   d:"The player is a few metres away: same room, next trench bay, the next bend of a tunnel.",
+   w:"grenade:30,melee:25,rush:25,hold:25,flash:20,trade:20,fall_back:10,climb:5,flee:5,smoke:5,reload:5"},
+  {id:"caught_out", l:"Caught out", who:"Anyone", imp:"p_seen",
+   d:"The player has hit us from the side or behind, or surprised us in the open.",
+   w:"fall_back:30,trade:25,call_help:20,suppress:15,smoke:15,regroup:15,rush:10,melee:10,flee:10,hide:10,relocate:10,reload:5"},
+  {id:"have_jump", l:"We have the jump on them", who:"Anyone", imp:"p_seen,p_unaware",
+   d:"We see the player and they haven't seen us: passing by, looking away, reloading.",
+   w:"trade:50,relocate:30,ambush:25,flank:20,rush:20,grenade:20,melee:15,hide:15,mark:10,call_help:5,let_go:5,reload:5"},
+  {id:"outgunned", l:"Up against something bigger", who:"Infantry",
+   d:"The player has a mech, a vehicle, or firepower we can't match with what we carry.",
+   w:"climb:30,hide:25,fall_back:25,ambush:15,call_armour:15,call_help:15,trade:15,flee:10,flank:10,mark:10,surrender:10,search:10,reload:5,melee:5"},
+  {id:"have_heavy", l:"Our heavy support is here", who:"Infantry with support",
+   d:"A friendly mech, tank or aircraft is with us or can be called.",
+   w:"screen_heavy:40,heavy_leads:40,call_air:25,advance:25,mark:20,strip_cover:20,rush:15,hold:15,sweep:15,smoke:10,fall_back:10,flank:10,reload:5,melee:5"},
+  {id:"player_leaving", l:"Player is getting away", who:"Anyone",
+   d:"The player is leaving: running, heading for an exit, or an evac is on the way.",
+   w:"rush:35,deny_escape:35,trade:20,collapse:15,advance:15,flank:15,guard_exits:15,call_air:10,call_help:10,mark:10,let_go:5,reload:5,melee:5"},
+  {id:"losing", l:"We're losing", who:"Anyone",
+   d:"The squad is taking casualties, someone is cut off, or one soldier is left.",
+   w:"regroup:35,call_help:25,fall_back:25,hide:20,ambush:20,trade:20,flee:10,rush:5,melee:5,surrender:5,play_dead:3,reload:10"},
+].map(s => Object.assign(s, {w:kv(s.w)}));
+
+// Your first casebook, as checks: each old case is one moment with some things true.
+const CHECKS = [
+  ["bld_stairs_only","Player upstairs, stairs the only way out","player_dug_in","inside,choke,p_high,destructible,narrow",{hold_stairs:"guard_exits",push_up:"rush",floor_below:"breach",collapse:"collapse",call_mech:"call_armour",reinforce:"call_help"},"dist:12,pcover:2"],
+  ["bld_escape_window","Player upstairs, can get out a window","player_dug_in","inside,p_high,p_escape,destructible",{cover_both:"deny_escape",push_up:"rush",collapse:"collapse",hit_roof:"ambush",hold_stairs:"guard_exits"}],
+  ["bld_evac_inbound","Player on a roof, evac inbound","player_leaving","p_high,p_evac,destructible,air_avail",{rush_roof:"rush",deny_lz:"deny_escape",collapse:"collapse",let_go:"let_go",flyer:"call_air"}],
+  ["bld_value","Player inside the building the enemy needs","player_dug_in","inside,valuable,p_suspected",{clear_rooms:"sweep",hold_hq_room:"hold",evacuate_hq:"fall_back",collapse:"collapse"}],
+  ["bld_topple_side","Toppling would hit their own troops","player_dug_in","inside,p_high,destructible,friends_blast",{move_friends:"collapse",other_side:"collapse",drop_now:"collapse",dont:"rush"}],
+  ["bld_high_defender","Enemy upstairs, player coming up","player_coming","inside,choke,p_low,destructible,narrow",{anchor_top:"hold",roam_ambush:"ambush",drop_grenades:"grenade",hole_floor:"breach",cut_stairs:"seal"},"cover:2"],
+  ["bld_mousehole","Door watched, wall beside it thin","player_dug_in","inside,choke,destructible",{mousehole:"breach",door_flash:"flash",wait:"wait",shoot_wall:"strip_cover"},"dist:6,pcover:2"],
+  ["bld_roof_player","Player shooting from up high","player_dug_in","p_high,p_seen,air_avail,destructible",{counter_sniper:"climb",drone:"call_air",climb:"advance",collapse:"collapse",smoke_cross:"smoke"}],
+  ["und_tunnel_contact","Narrow tunnel, player ahead","lost_player","underground,narrow",{single_file:"sweep",grenade_ahead:"grenade",recon_first:"recon",hold_exits:"guard_exits",seal:"seal"}],
+  ["und_trench_confined","In a trench, player in the open","player_coming","trench",{stay_fire:"trade",move_along:"advance",leave_flank:"flank",hold_quiet:"ambush"},"dist:60,cover:2,pcover:0"],
+  ["und_trench_raid","Player got into the trench","close_quarters","trench,narrow",{bomb_bay:"grenade",hold_traverse:"hold",out_and_over:"climb",fall_back:"fall_back"},"dist:8,cover:2,pcover:2"],
+  ["und_portal","Tunnel mouths behind the player","have_jump","underground",{pop_fire_vanish:"relocate",let_pass:"ambush",stay_hidden:"hide",mass_attack:"rush"}],
+  ["und_cave_chamber","Cave squeeze into a chamber","player_dug_in","underground,narrow,choke",{grenade_through:"grenade",wait_out:"wait",another_way:"flank",crawl_in:"rush"},"dist:10,pcover:2"],
+  ["str_open_ground","Open ground to cross","crossing","open,p_high,p_seen",{bound:"advance",smoke:"smoke",flank_around:"flank",stay_fight:"trade",mine_muoo4ey0:"melee"},"dist:40,cover:2,pcover:1"],
+  ["str_rubble","Fighting in rubble","lost_player","rubble",{cover_hop:"advance",hold_high:"climb",search_pairs:"sweep",wait:"wait"}],
+  ["str_bridge","A single bridge","crossing","choke,open,p_seen,destructible",{suppress_rush:"rush",smoke_cross:"smoke",destroy_cover:"strip_cover",hold:"hold"}],
+  ["arm_tank_street","Tank in a street of windows","have_heavy","heavy_near,p_suspected,p_high,destructible",{infantry_lead:"screen_heavy",tank_overwatch:"hold",tank_alone:"rush",he_windows:"strip_cover"}],
+  ["arm_mech_screen","Mech escorted by a squad","have_heavy","heavy_near,open,p_seen",{screen:"screen_heavy",lee:"heavy_leads",mech_smoke:"smoke",split:"flank"}],
+  ["arm_mech_vs_infantry","Mech vs player inside a building","player_dug_in","we_mech,inside,destructible,p_seen",{breach_fire:"strip_cover",drop_through:"breach",collapse:"collapse",wait_out:"guard_exits",infantry_flush:"call_help"}],
+  ["arm_infantry_vs_mech","Infantry vs the player's mech","outgunned","p_mech,inside,we_explosives",{upper_windows:"climb",hide_deep:"hide",circle:"flank",lure:"fall_back",flee:"flee"}],
+  ["arm_pilot_out","Mech loud, pilot on foot","outgunned","p_mech,p_pilot_foot",{hunt_pilot:"search",all_mech:"trade",hide_from_mech:"hide",retreat:"fall_back"}],
+  ["air_cas_close","Air strike near own troops","have_heavy","air_avail,friends_blast,inside,destructible",{pull_back_strike:"call_air",strike_now:"call_air",no_strike:"rush"}],
+  ["air_drone_cover","Drone, player under a roof","player_dug_in","we_flyer,inside,p_suspected",{orbit_window:"flank",mark:"mark",strafe_roof:"strip_cover",hold_off:"wait"}],
+  ["air_player_heli","Player's helicopter landing","player_leaving","p_evac,open",{shoot_heli:"deny_escape",shoot_player:"trade",close_in:"advance",let_go:"let_go"},"dist:80,pcover:0"],
+  ["solo_sniper","Lone sniper has just fired","first_contact","we_marksman,we_alone",{relocate:"relocate",stay_fire:"trade",retreat:"regroup",hide:"hide"},"dist:120,cover:1"],
+  ["solo_separated","Soldier cut off from its squad","losing","we_alone,rubble",{regroup:"regroup",hide_ambush:"ambush",call_help:"call_help",fight:"trade"},"dist:15"],
+  ["solo_last_man","Last one left, badly hurt","losing","we_alone,p_seen",{flee:"flee",last_stand:"trade",hide:"hide",surrender:"surrender",play_dead:"play_dead"},"hp:25,squad:25,mag:10"],
+  ["solo_vs_mech","Lone soldier vs the player's mech","outgunned","we_alone,p_mech,open",{into_building:"fall_back",hide_rubble:"hide",call_at:"call_armour",shoot:"trade",mine_muooo335:"surrender"},"dist:30,cover:0"],
+  ["solo_swarm_building","Swarm reaches the building","player_dug_in","we_swarm,inside,choke,p_high",{pour_stairs:"rush",climb_outside:"climb",surround:"guard_exits",lose_interest:"let_go"}],
+  ["mine_muoozi4m","Player location unknown (yours)","lost_player","inside,destructible",{o0:"search",o1:"grenade",o2:"strip_cover",o3:"hold",o4:"sweep"}],
+].map(([id,t,sit,f,map,sc]) => ({id,t,sit,f:f.split(",").filter(Boolean),map,sc:kv(sc)}));
+
+const RULES = [
+  {id:"r_stairs", t:"Guard the only way out", d:"When the player's only exit is the stairs, contain at the stairs rather than go up into them."},
+  {id:"r_escape_expendable", t:"A building with an escape route is expendable", d:"If the player can leave (a window to another roof, an evac on the way), bringing the building down becomes a fair option."},
+  {id:"r_value_building", t:"Never destroy what the side needs", d:"No explosives in a building holding the side's HQ, radio, hostages or loot."},
+  {id:"r_own_troops", t:"Don't drop buildings on your own people", d:"Clear friendlies out of the fall zone first, or cut it to fall the other way."},
+  {id:"r_top_down", t:"Prefer coming from above", d:"Enter from the roof or drop through floors when that is possible."},
+  {id:"r_confined", t:"Stay in the trench or tunnel", d:"Leave only when the player is seen AND there is cover to fire from."},
+  {id:"r_seal_over_clear", t:"Seal rather than clear", d:"Close a tunnel or stairwell when clearing it is not needed."},
+  {id:"r_screen_armour", t:"Armour never moves without infantry", d:"Tanks and mechs in streets advance only with a squad screening them."},
+  {id:"r_pilot_first", t:"Go for the pilot", d:"When the player's pilot is out of the mech, the pilot is the target."},
+  {id:"r_regroup", t:"Alone, regroup first", d:"A soldier cut off tries to rejoin its squad before fighting alone."},
+  {id:"r_danger_close", t:"No strikes near friendlies", d:"Air strikes and heavy fire stay clear of the side's own troops."},
+  {id:"r_callouts", t:"Say what they're doing", d:"Every plan is called out, so the player can read it."},
+];
+const STRENGTH_WORDS = ["ignore","weak","medium","strong","always"];
+
+function kv(s){ const o = {}; (s||"").split(",").filter(Boolean).forEach(p => { const [k,v] = p.split(":"); o[k.trim()] = +v; }); return o; }
+const ACT = Object.fromEntries(ACTIONS.map(a => [a.id, a]));
+const FAC = Object.fromEntries(FACTORS.map(f => [f.id, f]));
+
+/* ---------------- user state (from storage) and effective values ---------------- */
+const S = {sit:{}, factor:{}, action:{}, memory:{}, rules:{}, actx:{}, sitx:{}, combo:{}, scale:{}, old:{}};
+
+function allSits(){ return SITS.concat(Object.values(S.sitx).map(x => Object.assign({}, x, {w: x.w || {}, mine:true}))); }
+function sitDef(id){ return allSits().find(s => s.id === id); }
+function implied(id){ const s = sitDef(id); return s && s.imp ? s.imp.split(",").filter(Boolean) : []; }
+function allActs(){ return ACTIONS.concat(Object.values(S.actx).map(a => ({id:a.id, g:"mine", l:a.l, d:a.d||"", b:false}))); }
+function actDef(id){ return ACT[id] || (S.actx[id] && {id, g:"mine", l:S.actx[id].l, d:S.actx[id].d||"", b:false}) || {id, g:"mine", l:id, d:"", b:false}; }
+function actLabel(id){ return actDef(id).l; }
+function facLabel(id){ return FAC[id] ? FAC[id].l : id; }
+function sitUser(id){ return S.sit[id] || {}; }
+function sitActs(id){
+  const s = sitDef(id); if(!s) return [];
+  const u = sitUser(id);
+  return [...new Set(Object.keys(s.w).concat(u.added || []))].filter(a => ACT[a] || S.actx[a]);
+}
+function baseW(sid, a){ const u = sitUser(sid); if(u.weights && u.weights[a] != null) return u.weights[a]; const s = sitDef(sid).w[a]; return s != null ? s : 20; }
+function baseIsMine(sid, a){ const u = sitUser(sid); return !!(u.weights && u.weights[a] != null); }
+function isNever(sid, a){ return (sitUser(sid).never || []).includes(a); }
+function sugStep(fid, a){ const d = FAC[fid] && FAC[fid].mods[a]; return d != null ? d : 3; }
+function modStep(fid, a){ const u = S.factor[fid]; if(u && u.mods && u.mods[a] != null) return u.mods[a]; return sugStep(fid, a); }
+function teamMax(a){ const u = S.action[a]; if(u && u.max != null) return u.max; return TEAM[a] ? TEAM[a][0] : 0; }
+function teamPairs(a){ const u = S.action[a]; if(u && u.pairs) return u.pairs; return TEAM[a] ? TEAM[a][1].split(",").filter(Boolean) : []; }
+function needs(a){ const u = S.action[a]; if(u && u.needs) return u.needs; return NEEDS[a] ? NEEDS[a].split(",") : []; }
+function memStep(k){ if(S.memory.global && S.memory.global[k] != null) return S.memory.global[k]; return MEMDEF.find(m => m[0] === k)[3]; }
+
+function sitScale(id){ const s = sitDef(id); return s && s.sc ? kv(s.sc) : {}; }
+function scaleVals(ticked){ const o = {}; SCALES.forEach(x => o[x.id] = x.def); return Object.assign(o, (ticked && ticked.sc) || {}); }
+function curveSug(id){ const o = {}; for(const [k, v] of Object.entries(CURVES[id] || {})) o[k] = v.split(" ").map(Number); return o; }
+function curves(id){
+  const o = curveSug(id), u = S.scale[id];
+  if(u && u.rows) for(const [k, v] of Object.entries(u.rows)){ if(v == null) delete o[k]; else o[k] = v; }
+  return o;
+}
+function curveAt(x, row, v){
+  if(x.disc) return MULT[row[Math.max(0, Math.min(row.length - 1, Math.round(v)))]];
+  const tr = q => x.log ? Math.log(Math.max(q, 0.5)) : q;
+  const xs = x.stops.map(tr), q = tr(v), asc = xs[xs.length - 1] > xs[0];
+  for(let i = 0; i < xs.length - 1; i++){
+    const a = xs[i], b = xs[i + 1];
+    if(asc ? (q >= a && q <= b) : (q <= a && q >= b)){ const t = (q - a) / (b - a); return MULT[row[i]] * (1 - t) + MULT[row[i + 1]] * t; }
+  }
+  return MULT[(asc ? q < xs[0] : q > xs[0]) ? row[0] : row[row.length - 1]];
+}
+// Every scale's effect on move `a`, given what's true (a kind's own curve wins).
+function scaleMults(a, ticked){
+  const out = [], sv = scaleVals(ticked);
+  for(const x of SCALES){
+    const rows = curves(x.id);
+    const kind = [...ticked].find(f => rows[a + "@" + f]);
+    const row = kind ? rows[a + "@" + kind] : rows[a];
+    if(!row) continue;
+    const m = curveAt(x, row, sv[x.id]);
+    if(Math.abs(m - 1) > 0.02) out.push({t: x.chip(sv[x.id]), m});
+  }
+  return out;
+}
+
+/* The pick. chance ∝ moment weight × every true thing × memory × teamwork. */
+function compute(sid, ticked, mem, mates){
+  mem = mem || {}; mates = mates || [];
+  const rows = [];
+  for(const a of sitActs(sid)){
+    const r = {a, w:0, why:[], blocked:null, never:isNever(sid, a)};
+    rows.push(r);
+    if(r.never) continue;
+    const nd = needs(a);
+    if(nd.length && !nd.some(f => ticked.has(f))){ r.blocked = "only when: " + nd.map(facLabel).join(" or "); continue; }
+    let w = baseW(sid, a);
+    for(const f of ticked){ const st = modStep(f, a); if(st === ALWAYS) r.force = true; if(st !== 3){ w *= MULT[st]; r.why.push({t:facLabel(f), st}); } }
+    for(const x of scaleMults(a, ticked)){ w *= x.m; r.why.push(x); }
+    if(mem.last === a){
+      const st = memStep("repeat"); if(st !== 3){ w *= MULT[st]; r.why.push({t:"did it last time", st}); }
+      if(mem.outcome === "failed"){ const s2 = memStep("failed"); if(s2 !== 3){ w *= MULT[s2]; r.why.push({t:"it failed last time", st:s2}); } }
+      if(mem.outcome === "worked"){ const s2 = memStep("worked"); if(s2 !== 3){ w *= MULT[s2]; r.why.push({t:"it worked last time", st:s2}); } }
+    }
+    const same = mates.filter(m => m === a).length, mx = teamMax(a);
+    if(mx && same >= mx){ r.blocked = `${same} squadmate${same>1?"s":""} already doing it (at most ${mx})`; continue; }
+    if(same){ const st = memStep("same"); if(st !== 3){ w *= MULT[st]; r.why.push({t:"a squadmate is already doing it", st}); } }
+    const pr = mates.find(m => m !== a && (teamPairs(a).includes(m) || teamPairs(m).includes(a)));
+    if(pr){ const st = memStep("partner"); if(st !== 3){ w *= MULT[st]; r.why.push({t:"works with a squadmate's " + actLabel(pr).toLowerCase(), st}); } }
+    r.w = w;
+  }
+  const forced = rows.filter(r => r.force && r.w > 0), rest = rows.filter(r => !(r.force && r.w > 0));
+  const ft = forced.reduce((s, r) => s + r.w, 0), rt = rest.reduce((s, r) => s + r.w, 0);
+  if(ft > 0){
+    const share = rt > 0 ? ALWAYS_SHARE : 1;
+    forced.forEach(r => r.p = share * r.w / ft);
+    rest.forEach(r => r.p = rt > 0 ? (1 - share) * r.w / rt : 0);
+  } else rows.forEach(r => r.p = rt > 0 ? r.w / rt : 0);
+  return rows;
+}
+function pick(rows){ let x = Math.random(); for(const r of rows){ if(r.p <= 0) continue; x -= r.p; if(x <= 0) return r.a; } const live = rows.filter(r => r.p > 0); return live.length ? live[live.length-1].a : null; }
+/* Combos: extra moves done first, alongside, or right after the main move. */
+function comboSug(main){ const c = COMBOS[main] || ["","",""]; return {first:kv(c[0]), with:kv(c[1]), then:kv(c[2])}; }
+function comboOf(main){ const u = S.combo[main], d = comboSug(main); if(!u) return d; return {first:u.first || d.first, with:u.with || d.with, then:u.then || d.then}; }
+function maxExtra(){ const g = S.memory.global; return g && g.maxExtra != null ? g.maxExtra : MAX_EXTRA_DEF; }
+// Chance (0..0.95) the extra move `a` joins, after "never", "only when", limits and every true thing.
+function extraChance(sid, ticked, a, pct, mates){
+  if(isNever(sid, a)) return {p:0, why:"never in this moment"};
+  const nd = needs(a);
+  if(nd.length && !nd.some(f => ticked.has(f))) return {p:0, why:"only when: " + nd.map(facLabel).join(" or ")};
+  const mx = teamMax(a), same = (mates || []).filter(m => m === a).length;
+  if(mx && same >= mx) return {p:0, why:`at most ${mx} at once`};
+  let m = 1, force = false; for(const f of ticked){ const st = modStep(f, a); if(st === ALWAYS) force = true; m *= MULT[st]; }
+  for(const x of scaleMults(a, ticked)) m *= x.m;
+  return {p: force && m > 0 ? ALWAYS_SHARE : Math.min(0.95, pct / 100 * m), why:""};
+}
+// The extras a main move could bring, with their chances here.
+function extrasFor(sid, ticked, main, mates){
+  const c = comboOf(main), out = [];
+  for(const [slot] of SLOTS) for(const [a, pct] of Object.entries(c[slot])){ if(a === main) continue; const r = extraChance(sid, ticked, a, pct, mates); out.push({slot, a, pct, p:r.p, why:r.why}); }
+  return out;
+}
+function rollExtras(sid, ticked, main, mates){
+  const got = [], cap = maxExtra();
+  for(const [slot] of SLOTS){
+    if(got.length >= cap) break;
+    const cands = extrasFor(sid, ticked, main, mates.concat(got.map(g => g.a))).filter(x => x.slot === slot && x.p > 0 && !got.some(g => g.a === x.a)).sort((x, y) => y.p - x.p);
+    for(const x of cands){ if(Math.random() < x.p){ got.push(x); break; } }
+  }
+  return got;
+}
+function planText(main, extras){
+  const f = extras.filter(x => x.slot === "first").map(x => actLabel(x.a)), w = extras.filter(x => x.slot === "with").map(x => actLabel(x.a).toLowerCase()), t = extras.filter(x => x.slot === "then").map(x => actLabel(x.a).toLowerCase());
+  return (f.length ? f.join(", ") + ", then " + actLabel(main).toLowerCase() : actLabel(main)) + (w.length ? ", while " + w.join(" and ") : "") + (t.length ? ", then " + t.join(", ") : "");
+}
+function squadRoll(sid, ticked, mem, n){
+  const out = [], chosen = [];
+  for(let i = 0; i < n; i++){
+    const rows = compute(sid, ticked, i === 0 ? mem : {}, chosen); const a = pick(rows);
+    const extras = a ? rollExtras(sid, ticked, a, chosen) : [];
+    out.push({a, extras, row: rows.find(r => r.a === a)});
+    if(a) chosen.push(a, ...extras.map(x => x.a));
+  }
+  return out;
+}
+function checkResult(c){
+  const old = S.old[c.id]; if(!old) return null;
+  const ticked = new Set(c.f.concat(implied(c.sit)));
+  ticked.sc = Object.assign(sitScale(c.sit), c.sc);
+  const rows = compute(c.sit, ticked);
+  const acts = [...new Set(Object.values(c.map))];
+  const q = {}, p = {}; let qs = 0, ps = 0;
+  const allNever = {};
+  for(const [o, a] of Object.entries(c.map)){
+    const nv = (old.never || []).includes(o), w = nv ? 0 : (old.weights && old.weights[o] != null ? old.weights[o] : 0);
+    q[a] = (q[a] || 0) + w; qs += w; allNever[a] = (allNever[a] === undefined ? true : allNever[a]) && nv;
+  }
+  for(const a of acts){ const r = rows.find(x => x.a === a); p[a] = r ? r.w : 0; ps += p[a]; }
+  let tv = 0;
+  for(const a of acts){ q[a] = qs ? q[a] / qs : 0; p[a] = ps ? p[a] / ps : 0; tv += Math.abs(p[a] - q[a]); }
+  const flags = acts.filter(a => allNever[a] && p[a] > 0.02).map(a => `You said never to ${actLabel(a).toLowerCase()}; it now gets ${Math.round(p[a]*100)}%.`);
+  const missing = acts.filter(a => q[a] > 0.05 && p[a] === 0).map(a => {
+    const r = rows.find(x => x.a === a);
+    return `${actLabel(a)} can't happen here${r && r.blocked ? " (" + r.blocked + ")" : r ? "" : " (not in this moment)"}.`;
+  });
+  return {score: 1 - tv / 2, acts, p, q, flags, missing};
+}
+
+/* ======================================================================
+   STORAGE
+   ====================================================================== */
+let db = null;
+const pending = new Map(), writing = new Set();
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function setSave(msg, err){ const el = $("#save"); el.textContent = msg; el.classList.toggle("err", !!err); }
+function queueWrite(path, data){
+  if(!db){ setSave("Not saved: storage isn't available here. Use Copy everything (Rules tab) to keep your work.", true); return; }
+  const p = pending.get(path); if(p) clearTimeout(p.timer);
+  pending.set(path, {data: JSON.parse(JSON.stringify(data)), timer: setTimeout(() => flush(path), 700)});
+  setSave("Saving…");
+}
+async function flush(path){
+  if(writing.has(path)){ const p = pending.get(path); if(p) p.timer = setTimeout(() => flush(path), 400); return; }
+  const p = pending.get(path); if(!p) return;
+  pending.delete(path); writing.add(path);
+  try{ await db.doc(path).set(p.data); setSave("Saved"); }
+  catch(e){ setSave(e && e.code === "invalid_argument" ? "Not saved: this view can't write." : "Not saved (" + (e && e.code || "error") + "). It will try again on your next change.", true); }
+  finally{ writing.delete(path); }
+}
+function touch(coll, id, fn){
+  const cur = JSON.parse(JSON.stringify(S[coll][id] || {}));
+  fn(cur); cur.updatedAt = new Date().toISOString();
+  S[coll][id] = cur;
+  queueWrite((coll === "memory" ? "memory" : coll) + "/" + id, cur);
+  renderMeter();
+}
+
+/* ======================================================================
+   VIEW
+   ====================================================================== */
+const TABS = [["moments","Moments"],["factors","What changes it"],["scales","Amounts"],["team","Teamwork & memory"],["combos","Combos"],["try","Try a moment"],["checks","Your first casebook"],["rules","Rules"]];
+const V = {tab:"moments", sit:SITS[0].id, fac:FACTORS[0].id, scale:"dist", facFilter:"all", try:{sit:SITS[0].id, ticked:new Set(), sc:{}, n:4, last:"", outcome:""}, roll:null};
+
+function renderTabs(){
+  $("#tabs").innerHTML = TABS.map(([id, l]) => `<button class="tab" role="tab" aria-selected="${id===V.tab}" data-t="${id}">${esc(l)}</button>`).join("");
+  $("#tabs").querySelectorAll(".tab").forEach(b => b.onclick = () => { V.tab = b.dataset.t; render(); });
+}
+function checkAvg(){ const rs = CHECKS.map(checkResult).filter(Boolean); return rs.length ? rs.reduce((s, r) => s + r.score, 0) / rs.length : null; }
+function renderMeter(){
+  const sits = allSits();
+  const done = sits.filter(s => sitUser(s.id).status === "set").length;
+  const fdone = FACTORS.filter(f => (S.factor[f.id] || {}).status === "set").length;
+  const avg = checkAvg();
+  $("#meter").innerHTML = `<span><b>${done}</b> of ${sits.length} moments done</span><span><b>${fdone}</b> of ${FACTORS.length} factors done</span>${avg != null ? `<span>first casebook match <b>${Math.round(avg*100)}%</b></span>` : ""}`;
+}
+function seg(name, v, sug, extra, top){
+  return `<div class="seg" role="group" aria-label="${esc(name)}">${STEP_LABEL.slice(0, (top || 5) + 1).map((l, i) => `<button type="button" data-v="${i}" ${extra||""} class="v${i} ${i===sug?"sug":""}" aria-pressed="${i===v}" title="${STEP_WORD[i]}${i===sug?" (suggested)":""}">${l}</button>`).join("")}</div>`;
+}
+function fmtM(m){ if(m < 0.005) return "never"; return m >= 1 ? "×" + (+m.toFixed(1)) : "÷" + (+(1 / m).toFixed(1)); }
+function whyM(x){ return x.m != null ? x.m : x.st === ALWAYS ? 99 : MULT[x.st]; }
+function whyChips(why){ return why.map(x => `<span class="chip ${whyM(x)>1?"up":"down"}">${x.m != null ? fmtM(x.m) : STEP_LABEL[x.st]} ${esc(x.t)}</span>`).join(""); }
+function statusBtns(cur, words){ return `<div class="status" role="group" aria-label="Status">${["unset","draft","set"].map((s, i) => `<button data-s="${s}" aria-pressed="${(cur||"unset")===s}">${words[i]}</button>`).join("")}</div>`; }
+
+/* ---------------- Moments ---------------- */
+function renderMoments(el){
+  const sits = allSits();
+  if(!sitDef(V.sit)) V.sit = sits[0].id;
+  el.innerHTML = `<div class="grid"><div class="list" id="mlist"></div><main class="sheet" id="msheet"></main></div>`;
+  const list = $("#mlist");
+  list.innerHTML = sits.map(s => { const st = sitUser(s.id).status; return `<button class="case-btn" aria-current="${s.id===V.sit}" data-id="${s.id}"><span class="dot ${st==="set"?"set":st==="draft"?"draft":""}"></span><span class="t">${esc(s.l)}</span><span class="u">${esc(s.who||"")} · ${sitActs(s.id).length} moves</span></button>`; }).join("")
+    + `<button class="case-btn" aria-current="${V.sit==="__new"}" data-id="__new"><span class="dot"></span><span class="t">+ Add a moment</span></button>`;
+  list.querySelectorAll(".case-btn").forEach(b => b.onclick = () => { V.sit = b.dataset.id; renderMoments(el); });
+  if(V.sit === "__new") return renderNewMoment($("#msheet"));
+  const s = sitDef(V.sit), u = sitUser(s.id), acts = sitActs(s.id);
+  const tot = acts.reduce((t, a) => t + (isNever(s.id, a) ? 0 : baseW(s.id, a)), 0);
+  const byG = {}; acts.forEach(a => (byG[actDef(a).g] = byG[actDef(a).g] || []).push(a));
+  const notIn = allActs().filter(a => !acts.includes(a.id));
+  $("#msheet").innerHTML = `
+    <div class="eyebrow">Moment · ${esc(s.who||"")}</div>
+    <h2>${esc(s.l)}</h2>
+    <p class="situation">${esc(s.d||"")}</p>
+    ${implied(s.id).length || Object.keys(sitScale(s.id)).length ? `<div class="chips">${implied(s.id).map(f => `<span class="chip">always: ${esc(facLabel(f))}</span>`).join("")}${Object.entries(sitScale(s.id)).map(([k, v]) => `<span class="chip">starts at: ${esc(SC[k].chip(v))}</span>`).join("")}</div>` : ""}
+    <p class="why">These are the starting odds, before the place, the player, the squad and memory change them. A dashed <span class="tag sug">suggested</span> tag means you haven't set it yet.</p>
+    <div class="row"><button class="act" id="m-try">Try this moment →</button><button class="act" id="m-reset">Reset to suggested</button></div>
+    ${Object.keys(AGROUPS).filter(g => byG[g]).map(g => `<h4>${esc(AGROUPS[g])}</h4>` + byG[g].map(a => {
+      const d = actDef(a), nv = isNever(s.id, a), w = baseW(s.id, a), pct = nv || !tot ? 0 : w / tot;
+      return `<div class="opt ${nv?"never":""}" data-a="${a}">
+        <div class="lbl">${esc(d.l)} <span class="tag ${d.b?"built":""}">${d.b?"in the game":"to build"}</span>${baseIsMine(s.id,a)?"":`<span class="tag sug">suggested</span>`}</div>
+        <p class="det">${esc(d.d)}</p>
+        <div class="ctl"><input type="range" min="0" max="100" step="5" value="${w}" aria-label="Weight for ${esc(d.l)}" ${nv?"disabled":""}>
+          <div class="bar"><i style="width:${Math.round(pct*100)}%"></i></div>
+          <label class="never-t"><input type="checkbox" ${nv?"checked":""}> never here</label></div>
+        <div class="pct">${nv ? "never" : Math.round(pct*100) + "%"}</div></div>`;
+    }).join("")).join("")}
+    <label class="fld">Add a move from the list
+      <div class="row"><select id="m-addlib" style="flex:1;min-width:0"><option value="">Choose…</option>${Object.keys(AGROUPS).map(g => { const xs = notIn.filter(a => a.g === g); return xs.length ? `<optgroup label="${esc(AGROUPS[g])}">${xs.map(a => `<option value="${a.id}">${esc(a.l)}</option>`).join("")}</optgroup>` : ""; }).join("")}</select><button class="act" id="m-addlib-btn">Add</button></div></label>
+    <label class="fld">Or a new move of your own (it becomes available in every moment)
+      <div class="row"><input type="text" id="m-addnew" placeholder="What else could it do?" style="flex:1;min-width:0"><button class="act" id="m-addnew-btn">Add</button></div></label>
+    <label class="fld">Notes: conditions, exceptions, what would change your answer
+      <textarea id="m-notes">${esc(u.notes||"")}</textarea></label>
+    ${statusBtns(u.status, ["Not looked at","Draft","Done"])}`;
+  const sheet = $("#msheet");
+  sheet.querySelectorAll(".opt").forEach(row => {
+    const a = row.dataset.a;
+    row.querySelector('input[type=range]').oninput = e => {
+      touch("sit", s.id, x => { x.weights = Object.assign({}, x.weights, {[a]: +e.target.value}); if(!x.status || x.status === "unset") x.status = "draft"; });
+      const t2 = acts.reduce((t, b) => t + (isNever(s.id, b) ? 0 : baseW(s.id, b)), 0);
+      sheet.querySelectorAll(".opt").forEach(r2 => { const b = r2.dataset.a, nv = isNever(s.id, b), pc = nv || !t2 ? 0 : baseW(s.id, b) / t2; r2.querySelector(".bar i").style.width = Math.round(pc*100) + "%"; r2.querySelector(".pct").textContent = nv ? "never" : Math.round(pc*100) + "%"; });
+      const tg = row.querySelector(".tag.sug"); if(tg) tg.remove();
+    };
+    row.querySelector('input[type=checkbox]').onchange = e => {
+      touch("sit", s.id, x => { const n = new Set(x.never || []); e.target.checked ? n.add(a) : n.delete(a); x.never = [...n]; if(!x.status || x.status === "unset") x.status = "draft"; });
+      renderMoments(el);
+    };
+  });
+  $("#m-try").onclick = () => { V.try.sit = s.id; V.tab = "try"; V.roll = null; render(); };
+  $("#m-reset").onclick = () => { touch("sit", s.id, x => { x.weights = {}; x.never = []; }); renderMoments(el); };
+  $("#m-addlib-btn").onclick = () => { const v = $("#m-addlib").value; if(!v) return; touch("sit", s.id, x => { x.added = [...new Set((x.added||[]).concat(v))]; }); renderMoments(el); };
+  $("#m-addnew-btn").onclick = () => {
+    const t = $("#m-addnew").value.trim(); if(!t) return;
+    const id = "my_" + Date.now().toString(36);
+    S.actx[id] = {id, l:t, d:""}; queueWrite("actx/" + id, S.actx[id]);
+    touch("sit", s.id, x => { x.added = (x.added||[]).concat(id); x.weights = Object.assign({}, x.weights, {[id]: 20}); });
+    renderMoments(el);
+  };
+  $("#m-notes").oninput = e => touch("sit", s.id, x => { x.notes = e.target.value; if(!x.status || x.status === "unset") x.status = "draft"; });
+  sheet.querySelectorAll(".status button").forEach(b => b.onclick = () => { touch("sit", s.id, x => { x.status = b.dataset.s; }); renderMoments(el); });
+}
+function renderNewMoment(sheet){
+  sheet.innerHTML = `<div class="eyebrow">Your moments</div><h2>Add a moment</h2>
+    <p class="situation">A broad situation any enemy could be in. Pick the moves that make sense in it; you can weigh them after.</p>
+    <label class="fld">Name<input type="text" id="n-l" placeholder="The player is hiding among civilians"></label>
+    <label class="fld">Who<input type="text" id="n-who" placeholder="Anyone"></label>
+    <label class="fld">Describe it<textarea id="n-d"></textarea></label>
+    <div class="fld">Moves in it<div class="ckgrid">${allActs().map(a => `<label><input type="checkbox" value="${a.id}"> ${esc(a.l)}</label>`).join("")}</div></div>
+    <div class="row" style="margin-top:12px"><button class="act primary" id="n-add">Add moment</button><span class="note" id="n-msg"></span></div>`;
+  $("#n-add").onclick = () => {
+    const l = $("#n-l").value.trim(), picks = [...sheet.querySelectorAll(".ckgrid input:checked")].map(i => i.value);
+    if(!l || picks.length < 2){ $("#n-msg").textContent = "Give it a name and at least two moves."; return; }
+    const id = "mym_" + Date.now().toString(36);
+    const w = {}; picks.forEach(a => w[a] = 20);
+    S.sitx[id] = {id, l, who: $("#n-who").value.trim() || "Anyone", d: $("#n-d").value.trim(), w, imp:""};
+    queueWrite("sitx/" + id, S.sitx[id]);
+    V.sit = id; render();
+  };
+}
+
+/* ---------------- Factors ---------------- */
+function renderFactors(el){
+  el.innerHTML = `<div class="grid"><div class="list" id="flist"></div><main class="sheet" id="fsheet"></main></div>`;
+  $("#flist").innerHTML = Object.keys(FGROUPS).map(g => `<h3>${esc(FGROUPS[g])}</h3>` + FACTORS.filter(f => f.g === g).map(f => {
+    const st = (S.factor[f.id] || {}).status;
+    return `<button class="case-btn" aria-current="${f.id===V.fac}" data-id="${f.id}"><span class="dot ${st==="set"?"set":st==="draft"?"draft":""}"></span><span class="t">${esc(f.l)}</span></button>`;
+  }).join("")).join("");
+  $("#flist").querySelectorAll(".case-btn").forEach(b => b.onclick = () => { V.fac = b.dataset.id; renderFactors(el); });
+  const f = FAC[V.fac], u = S.factor[f.id] || {};
+  const acts = allActs().filter(a => V.facFilter === "all" || modStep(f.id, a.id) !== 3);
+  $("#fsheet").innerHTML = `
+    <div class="eyebrow">${esc(FGROUPS[f.g])} · when this is true</div>
+    <h2>${esc(f.l)}</h2>
+    ${f.d ? `<p class="situation">${esc(f.d)}</p>` : ""}
+    <p class="why">How this changes each move, in every moment. The small dot marks the suggestion. "never" rules the move out whenever this is true; "95%" makes the move take 95% of the pick whenever this is true (the other moves share the rest).</p>
+    <div class="row"><div class="seg" role="group" aria-label="Show"><button data-f="all" aria-pressed="${V.facFilter==="all"}">all moves</button><button data-f="changed" aria-pressed="${V.facFilter==="changed"}">only the ones it changes</button></div>
+      <button class="act" id="f-reset">Reset to suggested</button></div>
+    ${Object.keys(AGROUPS).map(g => { const xs = acts.filter(a => a.g === g); return xs.length ? `<h4>${esc(AGROUPS[g])}</h4>` + xs.map(a => {
+      const v = modStep(f.id, a.id);
+      return `<div class="mrow ${v!==3?"changed":""}" data-a="${a.id}"><div><div class="lbl">${esc(a.l)}</div><p class="det">${esc(STEP_WORD[v])}</p></div>${seg("Effect on " + a.l, v, sugStep(f.id, a.id), "", ALWAYS)}</div>`;
+    }).join("") : ""; }).join("") || `<p class="empty">This doesn't change any move yet.</p>`}
+    <label class="fld">Notes<textarea id="f-notes">${esc(u.notes||"")}</textarea></label>
+    ${statusBtns(u.status, ["Not looked at","Draft","Done"])}`;
+  const sheet = $("#fsheet");
+  sheet.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { V.facFilter = b.dataset.f; renderFactors(el); });
+  sheet.querySelectorAll(".mrow").forEach(row => row.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+    const a = row.dataset.a, v = +b.dataset.v;
+    touch("factor", f.id, x => { x.mods = Object.assign({}, x.mods, {[a]: v}); if(!x.status || x.status === "unset") x.status = "draft"; });
+    row.querySelectorAll(".seg button").forEach(k => k.setAttribute("aria-pressed", +k.dataset.v === v));
+    row.querySelector(".det").textContent = STEP_WORD[v]; row.classList.toggle("changed", v !== 3);
+  }));
+  $("#f-reset").onclick = () => { touch("factor", f.id, x => { x.mods = {}; }); renderFactors(el); };
+  $("#f-notes").oninput = e => touch("factor", f.id, x => { x.notes = e.target.value; if(!x.status || x.status === "unset") x.status = "draft"; });
+  sheet.querySelectorAll(".status button").forEach(b => b.onclick = () => { touch("factor", f.id, x => { x.status = b.dataset.s; }); renderFactors(el); });
+}
+
+/* ---------------- Teamwork & memory ---------------- */
+function renderTeam(el){
+  const acts = allActs();
+  el.innerHTML = `<main class="sheet">
+    <div class="eyebrow">Across every moment</div><h2>Memory</h2>
+    <p class="situation">What a soldier remembers, and what its squadmates are doing, changes the odds too.</p>
+    ${MEMDEF.map(([k, l, d]) => `<div class="mrow" data-k="${k}"><div><div class="lbl">${esc(l)}</div><p class="det">${esc(d)}</p></div>${seg(l, memStep(k), MEMDEF.find(m=>m[0]===k)[3])}</div>`).join("")}
+    <h2 style="margin-top:22px">Teamwork and limits</h2>
+    <p class="situation">For each move: how many squadmates may do it at once, which moves it works with, and when it is possible at all. A move with nothing under "only when" is possible anywhere.</p>
+    ${Object.keys(AGROUPS).map(g => { const xs = acts.filter(a => a.g === g); return xs.length ? `<h4>${esc(AGROUPS[g])}</h4>` + xs.map(a => {
+      const mx = teamMax(a.id), pr = teamPairs(a.id), nd = needs(a.id);
+      return `<div class="trow" data-a="${a.id}"><div class="lbl">${esc(a.l)}</div><div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+        <div class="kv">At most <select data-k="max" aria-label="At most, ${esc(a.l)}">${[0,1,2,3].map(n => `<option value="${n}" ${n===mx?"selected":""}>${n?n+" at once":"any number"}</option>`).join("")}</select></div>
+        <div class="kv">Works with ${pr.map(p => `<span class="chip">${esc(actLabel(p))}<button data-rm-pair="${p}" aria-label="Remove">×</button></span>`).join("") || "<span>nothing</span>"}
+          <select data-k="pair" aria-label="Add a move it works with"><option value="">+ add</option>${acts.filter(b => b.id !== a.id && !pr.includes(b.id)).map(b => `<option value="${b.id}">${esc(b.l)}</option>`).join("")}</select></div>
+        <div class="kv">Only when ${nd.map(f => `<span class="chip">${esc(facLabel(f))}<button data-rm-need="${f}" aria-label="Remove">×</button></span>`).join(" or ") || "<span>always possible</span>"}
+          <select data-k="need" aria-label="Add a condition"><option value="">+ add</option>${FACTORS.filter(f => !nd.includes(f.id)).map(f => `<option value="${f.id}">${esc(f.l)}</option>`).join("")}</select></div>
+      </div></div>`;
+    }).join("") : ""; }).join("")}
+  </main>`;
+  el.querySelectorAll(".mrow[data-k]").forEach(row => row.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+    const v = +b.dataset.v; touch("memory", "global", x => { x[row.dataset.k] = v; });
+    row.querySelectorAll(".seg button").forEach(k => k.setAttribute("aria-pressed", +k.dataset.v === v));
+  }));
+  el.querySelectorAll(".trow").forEach(row => {
+    const a = row.dataset.a;
+    const cur = () => ({max: teamMax(a), pairs: teamPairs(a).slice(), needs: needs(a).slice()});
+    const save = fn => { const c = cur(); fn(c); touch("action", a, x => Object.assign(x, c)); renderTeam(el); };
+    row.querySelector('[data-k=max]').onchange = e => save(c => c.max = +e.target.value);
+    row.querySelector('[data-k=pair]').onchange = e => { if(e.target.value) save(c => c.pairs.push(e.target.value)); };
+    row.querySelector('[data-k=need]').onchange = e => { if(e.target.value) save(c => c.needs.push(e.target.value)); };
+    row.querySelectorAll("[data-rm-pair]").forEach(b => b.onclick = () => save(c => c.pairs = c.pairs.filter(p => p !== b.dataset.rmPair)));
+    row.querySelectorAll("[data-rm-need]").forEach(b => b.onclick = () => save(c => c.needs = c.needs.filter(p => p !== b.dataset.rmNeed)));
+  });
+}
+
+function extrasLine(sid, ticked, main){
+  const xs = extrasFor(sid, ticked, main, []).filter(x => x.p > 0.004);
+  if(!xs.length) return "";
+  const word = {first:"first", with:"while", then:"then"};
+  return `<div class="whys"><span class="note" style="font-size:.76rem">often with:</span>${xs.map(x => `<span class="chip">${word[x.slot]} ${esc(actLabel(x.a).toLowerCase())} ${Math.round(x.p*100)}%</span>`).join("")}</div>`;
+}
+
+/* ---------------- Combos ---------------- */
+function renderCombos(el){
+  const acts = allActs(), cap = maxExtra();
+  el.innerHTML = `<main class="sheet">
+    <div class="eyebrow">Doing more than one thing</div><h2>Combos</h2>
+    <p class="situation">A soldier picks one main move, then may add extras: something <b>first</b> (a grenade, then rush), something <b>while</b> doing it (open fire while marking the player), something <b>then</b> (breach, then flash). The number is the chance the extra joins. The same things that change moves change extras too (no grenade near the side's HQ, no air strike without air support), as do "never" and the "at most" limits.</p>
+    <div class="mrow"><div><div class="lbl">Most extras per soldier</div><p class="det">How many extras one soldier can add to its main move.</p></div>
+      <div class="seg" role="group" aria-label="Most extras">${[0,1,2,3].map(n => `<button data-cap="${n}" aria-pressed="${n===cap}" class="${n===MAX_EXTRA_DEF?"sug":""}">${n}</button>`).join("")}</div></div>
+    ${Object.keys(AGROUPS).map(g => { const xs = acts.filter(a => a.g === g); return xs.length ? `<h4>${esc(AGROUPS[g])}</h4>` + xs.map(a => {
+      const c = comboOf(a.id), changed = !!S.combo[a.id];
+      return `<div class="trow" data-a="${a.id}"><div class="lbl">${changed ? `<span style="color:var(--brick)">● </span>` : ""}${esc(a.l)}</div><div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+        ${SLOTS.map(([slot, sl]) => `<div class="kv"><span style="min-width:92px">${sl}</span>${Object.entries(c[slot]).map(([b, pct]) => `<span class="chip">${esc(actLabel(b))} <select data-slot="${slot}" data-b="${b}" aria-label="Chance">${[5,10,15,20,25,30,40,50,60,70,80,90,100].concat(pct).filter((v,i,arr)=>arr.indexOf(v)===i).sort((x,y)=>x-y).map(v => `<option value="${v}" ${v===pct?"selected":""}>${v}%</option>`).join("")}</select><button data-rm="${slot}:${b}" aria-label="Remove">×</button></span>`).join("")}
+          <select data-add="${slot}" aria-label="Add an extra"><option value="">+ add</option>${acts.filter(b => b.id !== a.id && c[slot][b.id] == null).map(b => `<option value="${b.id}">${esc(b.l)}</option>`).join("")}</select></div>`).join("")}
+        ${changed ? `<div><button class="act" data-reset style="font-size:.76rem;padding:2px 8px">Reset to suggested</button></div>` : ""}
+      </div></div>`;
+    }).join("") : ""; }).join("")}
+  </main>`;
+  el.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { touch("memory", "global", x => { x.maxExtra = +b.dataset.cap; }); renderCombos(el); });
+  el.querySelectorAll(".trow").forEach(row => {
+    const a = row.dataset.a;
+    const save = fn => { const c = JSON.parse(JSON.stringify(comboOf(a))); fn(c); touch("combo", a, x => Object.assign(x, c)); renderCombos(el); };
+    row.querySelectorAll("select[data-slot]").forEach(sel => sel.onchange = () => save(c => c[sel.dataset.slot][sel.dataset.b] = +sel.value));
+    row.querySelectorAll("select[data-add]").forEach(sel => sel.onchange = () => { if(sel.value) save(c => c[sel.dataset.add][sel.value] = 20); });
+    row.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const [slot, x] = b.dataset.rm.split(":"); save(c => delete c[slot][x]); });
+    const rs = row.querySelector("[data-reset]");
+    if(rs) rs.onclick = () => { delete S.combo[a]; const pd = pending.get("combo/" + a); if(pd){ clearTimeout(pd.timer); pending.delete("combo/" + a); } if(db) db.doc("combo/" + a).delete().catch(() => {}); renderCombos(el); };
+  });
+}
+
+function toSlider(x, v){ if(x.log) return Math.round((Math.log(v) - Math.log(x.min)) / (Math.log(x.max) - Math.log(x.min)) * 1000); return Math.round((v - x.min) / (x.max - x.min) * 1000); }
+function fromSlider(x, t){ const f = t / 1000; if(x.log) return Math.round(Math.exp(Math.log(x.min) + f * (Math.log(x.max) - Math.log(x.min)))); return Math.round(x.min + f * (x.max - x.min)); }
+
+/* ---------------- Scales ---------------- */
+function renderScales(el){
+  if(!SC[V.scale]) V.scale = SCALES[0].id;
+  const x = SC[V.scale], u = S.scale[x.id] || {}, rows = curves(x.id), sug = curveSug(x.id);
+  const kinds = FACTORS.filter(f => f.g === "kind");
+  const keys = Object.keys(rows).sort((a, b) => { const [ma, ka] = a.split("@"), [mb, kb] = b.split("@"); return actLabel(ma).localeCompare(actLabel(mb)) || (ka ? 1 : 0) - (kb ? 1 : 0); });
+  const stopName = v => x.disc ? v : (x.fmt ? x.fmt(v) : v);
+  el.innerHTML = `<div class="grid"><div class="list">${SCALES.map(y => { const st = (S.scale[y.id] || {}).status; return `<button class="case-btn" aria-current="${y.id===x.id}" data-id="${y.id}"><span class="dot ${st==="set"?"set":st==="draft"?"draft":""}"></span><span class="t">${esc(y.l)}</span><span class="u">${Object.keys(curves(y.id)).length} moves change with it</span></button>`; }).join("")}</div>
+  <main class="sheet">
+    <div class="eyebrow">Scale · an amount, not yes or no</div><h2>${esc(x.l)}</h2>
+    ${x.d ? `<p class="situation">${esc(x.d)}</p>` : ""}
+    <p class="why">How much likelier or less likely each move gets at each point${x.disc ? "" : "; in between, the page blends the two nearest points"}. A move not listed isn't changed by this. A row for a kind (melee fighter, marksman…) replaces the move's normal row for that kind. The dot marks the suggestion.</p>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:.84rem;min-width:100%">
+      <thead><tr><th style="text-align:left;padding:4px 8px 4px 0;font-weight:500;color:var(--ink-soft)">Move</th>${x.stops.map(v => `<th style="padding:4px;font-family:var(--f-mono);font-weight:500;font-size:.74rem;color:var(--ink-soft)">${esc(stopName(v))}</th>`).join("")}<th></th></tr></thead>
+      <tbody>${keys.map(k => { const [m, kind] = k.split("@"), row = rows[k], srow = sug[k];
+        return `<tr data-k="${esc(k)}" style="border-top:1px solid var(--rule)"><td style="padding:4px 8px 4px 0">${esc(actLabel(m))}${kind ? ` <span class="tag">${esc(facLabel(kind).replace(/^We're an? /, ""))}</span>` : ""}</td>${row.map((v, i) => `<td style="padding:3px"><select data-i="${i}" aria-label="${esc(actLabel(m))} at ${esc(stopName(x.stops[i]))}" style="padding:2px 4px;font-family:var(--f-mono);font-size:.74rem;${v>3?"color:var(--up);":v<3?"color:var(--down);":""}">${STEP_LABEL.slice(0, 6).map((l, j) => `<option value="${j}" ${j===v?"selected":""}>${l}${srow && srow[i]===j ? " •" : ""}</option>`).join("")}</select></td>`).join("")}<td><button class="act" data-rm style="font-size:.72rem;padding:1px 7px" aria-label="Remove row">×</button></td></tr>`; }).join("")}</tbody></table></div>
+    <div class="row" style="margin-top:10px">
+      <select id="sc-move" aria-label="Move"><option value="">+ a move…</option>${allActs().map(a => `<option value="${a.id}">${esc(a.l)}</option>`).join("")}</select>
+      <select id="sc-kind" aria-label="For"><option value="">for everyone</option>${kinds.map(f => `<option value="${f.id}">only for: ${esc(f.l.replace(/^We're an? /, ""))}</option>`).join("")}</select>
+      <button class="act" id="sc-add">Add row</button>
+      <button class="act" id="sc-reset">Reset to suggested</button>
+    </div>
+    <label class="fld">Notes<textarea id="sc-notes">${esc(u.notes||"")}</textarea></label>
+    ${statusBtns(u.status, ["Not looked at","Draft","Done"])}
+  </main></div>`;
+  el.querySelectorAll(".case-btn").forEach(b => b.onclick = () => { V.scale = b.dataset.id; renderScales(el); });
+  const setRow = (k, row) => touch("scale", x.id, z => { z.rows = Object.assign({}, z.rows, {[k]: row}); if(!z.status || z.status === "unset") z.status = "draft"; });
+  el.querySelectorAll("tr[data-k]").forEach(tr => {
+    const k = tr.dataset.k;
+    tr.querySelectorAll("select").forEach(sel => sel.onchange = () => { const row = curves(x.id)[k].slice(); row[+sel.dataset.i] = +sel.value; setRow(k, row); renderScales(el); });
+    tr.querySelector("[data-rm]").onclick = () => { setRow(k, null); renderScales(el); };
+  });
+  $("#sc-add").onclick = () => { const m = $("#sc-move").value; if(!m) return; const kd = $("#sc-kind").value; const k = kd ? m + "@" + kd : m; if(curves(x.id)[k]) return; setRow(k, (curves(x.id)[m] || x.stops.map(() => 3)).slice()); renderScales(el); };
+  $("#sc-reset").onclick = () => { touch("scale", x.id, z => { z.rows = {}; }); renderScales(el); };
+  $("#sc-notes").oninput = e => touch("scale", x.id, z => { z.notes = e.target.value; if(!z.status || z.status === "unset") z.status = "draft"; });
+  el.querySelectorAll(".status button").forEach(b => b.onclick = () => { touch("scale", x.id, z => { z.status = b.dataset.s; }); renderScales(el); });
+}
+
+/* ---------------- Try ---------------- */
+function renderTry(el){
+  const T = V.try; if(!sitDef(T.sit)) T.sit = SITS[0].id;
+  const imp = implied(T.sit);
+  const ticked = new Set([...T.ticked, ...imp]);
+  ticked.sc = Object.assign(sitScale(T.sit), T.sc);
+  const sv = scaleVals(ticked);
+  const mem = {last: T.last, outcome: T.outcome};
+  const rows = compute(T.sit, ticked, mem).sort((x, y) => y.p - x.p);
+  const live = rows.filter(r => r.p > 0), off = rows.filter(r => r.p === 0);
+  el.innerHTML = `<p class="formula">chance of a move = its weight in the moment × each true thing × each amount (distance, cover, health…) × memory × teamwork, then scaled so all moves add to 100%</p>
+  <div class="try">
+    <aside class="sheet">
+      <label class="fld" style="margin-top:0">Moment<select id="t-sit">${allSits().map(s => `<option value="${s.id}" ${s.id===T.sit?"selected":""}>${esc(s.l)}</option>`).join("")}</select></label>
+      <div class="fld">Squad size <div class="seg" role="group" aria-label="Squad size">${[1,2,3,4,5,6].map(n => `<button data-n="${n}" aria-pressed="${n===T.n}">${n}</button>`).join("")}</div></div>
+      <label class="fld">Its last move<select id="t-last"><option value="">none</option>${allActs().map(a => `<option value="${a.id}" ${a.id===T.last?"selected":""}>${esc(a.l)}</option>`).join("")}</select></label>
+      <label class="fld">…and against this player it<select id="t-out"><option value="">we don't know</option><option value="failed" ${T.outcome==="failed"?"selected":""}>failed</option><option value="worked" ${T.outcome==="worked"?"selected":""}>worked</option></select></label>
+      <div class="row" style="margin-top:12px"><button class="act" id="t-clear">Reset what's true</button></div>
+      <h4>Amounts</h4>
+      ${SCALES.map(x => x.disc ? `<div class="fld">${esc(x.l)} <div class="seg" role="group" aria-label="${esc(x.l)}">${x.stops.map((n, i) => `<button data-sc="${x.id}" data-v="${i}" aria-pressed="${i===sv[x.id]}">${n}</button>`).join("")}</div></div>`
+        : `<label class="fld">${esc(x.l)}: <b id="sv-${x.id}">${x.fmt(sv[x.id])}</b><input type="range" data-sc="${x.id}" min="0" max="1000" value="${toSlider(x, sv[x.id])}" aria-label="${esc(x.l)}"></label>`).join("")}
+      ${Object.keys(FGROUPS).map(g => `<h4>${esc(FGROUPS[g])}</h4><div class="fbox">${FACTORS.filter(f => f.g === g).map(f => {
+        const isImp = imp.includes(f.id);
+        return `<label class="${isImp?"imp":""}"><input type="checkbox" value="${f.id}" ${ticked.has(f.id)?"checked":""} ${isImp?"disabled":""}> <span>${esc(f.l)}${isImp?" (always, in this moment)":""}</span></label>`;
+      }).join("")}</div>`).join("")}
+    </aside>
+    <main class="sheet">
+      <div class="eyebrow">What one soldier would do</div>
+      <h2>${esc(sitDef(T.sit).l)}</h2>
+      ${live.length ? live.map(r => `<div class="res"><div class="lbl">${esc(actLabel(r.a))}</div><div class="bar blue"><i style="width:${Math.round(r.p*100)}%"></i></div><div class="pct">${r.p < 0.005 ? "<1%" : Math.round(r.p*100)+"%"}</div>${r.why.length ? `<div class="whys">${whyChips(r.why)}</div>` : ""}${extrasLine(T.sit, ticked, r.a)}</div>`).join("") : `<p class="empty">Nothing is possible here. Untick something or add moves to this moment.</p>`}
+      <h4>The squad</h4>
+      <p class="note">Each soldier picks a main move in turn, seeing what the ones before it chose (limits apply, and moves that work together get likelier), then rolls for extras: something first, something alongside, something after (see Combos).</p>
+      <div class="row"><button class="act primary" id="t-roll">Roll a squad</button></div>
+      <div class="squad" id="t-squad">${V.roll ? V.roll.map((x, i) => `<div><span class="who">Soldier ${i+1}</span><b>${esc(x.a ? planText(x.a, x.extras) : "nothing possible")}</b>${x.row && x.row.why.length ? whyChips(x.row.why.filter(w => /squadmate|last time/.test(w.t))) : ""}</div>`).join("") : `<span class="note">Not rolled yet.</span>`}</div>
+      ${off.length ? `<h4>Not possible here</h4>${off.map(r => `<div class="res off"><div class="lbl">${esc(actLabel(r.a))}</div><div></div><div class="pct">0%</div><div class="whys">${r.never ? `<span class="chip down">you set never in this moment</span>` : r.blocked ? `<span class="chip">${esc(r.blocked)}</span>` : whyChips(r.why.filter(w => whyM(w) < 0.005))}</div></div>`).join("")}` : ""}
+    </main>
+  </div>`;
+  $("#t-sit").onchange = e => { T.sit = e.target.value; T.sc = {}; V.roll = null; renderTry(el); };
+  el.querySelectorAll("button[data-sc]").forEach(b => b.onclick = () => { T.sc[b.dataset.sc] = +b.dataset.v; V.roll = null; renderTry(el); });
+  el.querySelectorAll("input[data-sc]").forEach(r => {
+    const x = SC[r.dataset.sc];
+    r.oninput = () => { $("#sv-" + x.id).textContent = x.fmt(fromSlider(x, +r.value)); };
+    r.onchange = () => { T.sc[x.id] = fromSlider(x, +r.value); V.roll = null; const y = scrollY; renderTry(el); scrollTo(0, y); };
+  });
+  $("#t-last").onchange = e => { T.last = e.target.value; V.roll = null; renderTry(el); };
+  $("#t-out").onchange = e => { T.outcome = e.target.value; V.roll = null; renderTry(el); };
+  $("#t-clear").onclick = () => { T.ticked = new Set(); T.sc = {}; V.roll = null; renderTry(el); };
+  el.querySelectorAll("[data-n]").forEach(b => b.onclick = () => { T.n = +b.dataset.n; V.roll = null; renderTry(el); });
+  el.querySelectorAll(".fbox input").forEach(k => k.onchange = () => { k.checked ? T.ticked.add(k.value) : T.ticked.delete(k.value); V.roll = null; renderTry(el); });
+  $("#t-roll").onclick = () => { V.roll = squadRoll(T.sit, ticked, mem, T.n); renderTry(el); };
+}
+
+/* ---------------- Checks ---------------- */
+function renderChecks(el){
+  const rs = CHECKS.map(c => ({c, r: checkResult(c)}));
+  const have = rs.filter(x => x.r);
+  const avg = checkAvg();
+  el.innerHTML = `<main class="sheet" style="margin-bottom:14px">
+    <div class="eyebrow">Your first casebook, kept as tests</div><h2>Does the broad version still give your answers?</h2>
+    <p class="situation">Each of your 30 specific cases is now one moment with certain things true. The page works out what the broad settings would choose there, and compares it with the odds you gave. Change a moment, a factor or a limit and these update.</p>
+    ${avg != null ? `<p><span class="score ${avg>=.8?"good":avg>=.6?"mid":"bad"}">Average match ${Math.round(avg*100)}%</span> <span class="note">over ${have.length} cases. 100% = the same odds; below 60% = worth a look.</span></p>` : `<p class="note">Your first answers are loading, or aren't stored in this view.</p>`}
+  </main>
+  <div class="checks">${rs.sort((x, y) => (x.r ? x.r.score : 2) - (y.r ? y.r.score : 2)).map(({c, r}) => r ? `<div class="check">
+    <div class="hd"><b>${esc(c.t)}</b><span class="score ${r.score>=.8?"good":r.score>=.6?"mid":"bad"}">${Math.round(r.score*100)}%</span></div>
+    <div class="note">${esc(sitDef(c.sit).l)}</div>
+    <div class="chips">${c.f.map(f => `<span class="chip">${esc(facLabel(f))}</span>`).join("")}${Object.entries(c.sc).map(([k, v]) => `<span class="chip">${esc(SC[k].chip(v))}</span>`).join("")}</div>
+    <div class="cmp"><span class="h">move</span><span class="h">you said</span><span class="h">broad</span>
+      ${r.acts.map(a => `<span>${esc(actLabel(a))}</span><span class="mini"><span class="bar"><i style="width:${Math.round(r.q[a]*100)}%"></i></span>${Math.round(r.q[a]*100)}</span><span class="mini"><span class="bar blue"><i style="width:${Math.round(r.p[a]*100)}%"></i></span>${Math.round(r.p[a]*100)}</span>`).join("")}</div>
+    ${r.flags.concat(r.missing).map(t => `<div class="flag">${esc(t)}</div>`).join("")}
+    <div class="row"><button class="act" data-open="${c.id}">Open in Try a moment</button></div>
+  </div>` : "").join("")}</div>`;
+  el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
+    const c = CHECKS.find(x => x.id === b.dataset.open);
+    V.try = {sit:c.sit, ticked:new Set(c.f), sc:Object.assign({}, c.sc), n:4, last:"", outcome:""}; V.roll = null; V.tab = "try"; render();
+  });
+}
+
+/* ---------------- Rules ---------------- */
+function exportText(){ return JSON.stringify({moments:S.sit, factors:S.factor, actions:S.action, memory:S.memory, rules:S.rules, yourMoves:S.actx, yourMoments:S.sitx, combos:S.combo, amounts:S.scale}, null, 2); }
+function renderRules(el){
+  el.innerHTML = `<main class="sheet"><div class="eyebrow">Across every moment</div><h2>General rules</h2>
+    <p class="situation">Principles that should hold wherever the fight is. These are kept from the first casebook; the moments and factors are how the AI will meet them.</p>
+    ${RULES.map(r => { const v = S.rules[r.id] || {}, s = v.strength;
+      return `<div class="rule"><div class="rt">${esc(r.t)}</div><p class="rd">${esc(r.d)}</p>
+        <div class="ctl"><input type="range" min="0" max="4" step="1" data-r="${r.id}" value="${s ?? 2}" aria-label="Strength for ${esc(r.t)}"><div class="scale">${STRENGTH_WORDS.map(w => `<span>${w}</span>`).join("")}</div></div>
+        <div class="pct">${s == null ? "—" : esc(STRENGTH_WORDS[s])}</div>
+        <textarea data-rn="${r.id}" placeholder="Exceptions, numbers" style="grid-column:1 / -1;min-height:44px">${esc(v.notes||"")}</textarea></div>`; }).join("")}
+    <label class="fld">Everything you've set, as data (a backup)<pre class="json" id="export"></pre></label>
+    <div class="row"><button class="act" id="copy-all">Copy everything</button><span class="note" id="copy-msg"></span></div></main>`;
+  el.querySelectorAll("input[data-r]").forEach(r => r.oninput = () => { touch("rules", r.dataset.r, x => { x.strength = +r.value; }); r.closest(".rule").querySelector(".pct").textContent = STRENGTH_WORDS[+r.value]; $("#export").textContent = exportText(); });
+  el.querySelectorAll("textarea[data-rn]").forEach(t => t.oninput = () => touch("rules", t.dataset.rn, x => { x.notes = t.value; }));
+  $("#export").textContent = exportText();
+  $("#copy-all").onclick = async () => {
+    try{ await navigator.clipboard.writeText(exportText()); $("#copy-msg").textContent = "Copied."; }
+    catch(e){ const rg = document.createRange(); rg.selectNodeContents($("#export")); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(rg); $("#copy-msg").textContent = "Selected: press Ctrl+C to copy."; }
+  };
+}
+
+function render(){
+  renderTabs(); renderMeter();
+  const el = $("#view");
+  ({moments:renderMoments, factors:renderFactors, scales:renderScales, team:renderTeam, combos:renderCombos, try:renderTry, checks:renderChecks, rules:renderRules})[V.tab](el);
+}
+function renderSoft(){
+  renderMeter();
+  const ae = document.activeElement;
+  if(ae && $("#view").contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return;
+  const y = scrollY; render(); scrollTo(0, y);
+}
+
+render();
+
+(async () => {
+  if(!window.claude || !window.claude.use){ setSave("Storage isn't available here. Changes last only while the page is open.", true); return; }
+  db = await window.claude.use("db");
+  if(!db){ setSave("Storage isn't available here. Changes last only while the page is open.", true); return; }
+  setSave("Loading your settings…");
+  const colls = [["sit","sit"],["factor","factor"],["action","action"],["memory","memory"],["rules","rules"],["actx","actx"],["sitx","sitx"],["combo","combo"],["scale","scale"],["answers","old"]];
+  let loaded = 0, timer = null;
+  colls.forEach(([path, key]) => db.collection(path).onSnapshot(s => {
+    s.docs.forEach(d => { if(!pending.has(path + "/" + d.id) && !writing.has(path + "/" + d.id)) S[key][d.id] = JSON.parse(JSON.stringify(d.data())); });
+    if(++loaded === colls.length){ setSave("Up to date"); render(); }
+    else if(loaded > colls.length){ clearTimeout(timer); timer = setTimeout(renderSoft, 300); }
+  }, e => setSave("Lost the connection to storage (" + e.code + ").", true)));
+})();
+</script>

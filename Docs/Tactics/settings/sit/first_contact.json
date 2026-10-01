@@ -1,0 +1,14 @@
+{
+  "never": [],
+  "status": "set",
+  "updatedAt": "2026-09-30T23:12:05.249Z",
+  "weights": {
+    "ambush": 5,
+    "call_help": 35,
+    "fall_back": 15,
+    "grenade": 40,
+    "hide": 5,
+    "mark": 25,
+    "melee": 25
+  }
+}
