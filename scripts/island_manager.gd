@@ -49,6 +49,21 @@ const SETTLE_MIN_MS := 900
 const SETTLE_SPEED := 0.5       ## m/s
 const SETTLE_SPIN := 0.5        ## rad/s
 const SETTLE_SLOW_MS := 700
+## A piece in a heap is not slow, it is jittering: pushed about by the pieces
+## round it, between half a metre a second and a metre, and every time it went
+## over SETTLE_SPEED its clock started again. --jam found pieces doing that for
+## the whole ten seconds it watched, 4-8 a collapse. So a piece with something
+## under it (BrickIsland.landed) has a second clock, at twice the speed, over
+## the same window. Free fall is still left behind at once -- a metre a second
+## takes 1.6x gravity a sixteenth of a second.
+const SETTLE_JITTER_SPEED := 1.0  ## m/s
+const SETTLE_JITTER_SPIN := 1.0   ## rad/s
+## A landed piece falling faster than IMPACT_MIN_SPEED with nothing touching it
+## for this many ticks has gone over an edge: it is in the air again.
+const AIRBORNE_AGAIN_TICKS := 6
+## A contact whose normal is this near vertical is something under the piece
+## (or on it), not a wall it is sliding down.
+const LANDED_NORMAL_Y := 0.7
 ## Closer than this to the player, a piece gets longer to finish rocking or
 ## tipping over -- the settle is a freeze, and a freeze you are looking at from
 ## three metres should not come a beat early.
@@ -381,6 +396,8 @@ var discarded := 0                 ## small pieces never spawned, because unseen
 var furniture_deleted := 0         ## furniture-only pieces deleted where they came loose
 var tiny_deleted := 0              ## small pieces deleted where they came loose, far away
 var settled_by_rule := 0          ## settled for staying slow, not for sleeping
+var settled_jittering := 0        ## of those, slow only by SETTLE_JITTER_SPEED
+var landings_noted := 0           ## pieces that came down on something (landed)
 var far_landings := 0             ## landings too far from anyone to break the piece
 var far_shears := 0               ## things landed on too far from anyone to shear
 var merged_rebuilds := 0          ## falling pieces rebuilt merged after a change
@@ -1357,7 +1374,37 @@ func _apply_layers(isl: BrickIsland) -> void:
 		isl.body.collision_mask = Layers.SETTLED_MASK
 	else:
 		isl.body.collision_layer = Layers.FALLING
-		isl.body.collision_mask = Layers.FALLING_MASK
+		isl.body.collision_mask = Layers.FALLING_MASK if isl.landed else Layers.AIRBORNE_MASK
+
+
+## In the air, or come down on something? A piece in the air passes through
+## other pieces in the air (Layers.AIRBORNE_MASK); the tick it has something
+## under it -- a contact whose normal is near vertical, not a wall it is
+## scraping down -- it lands, and what falls after it lands on it. Over an edge
+## and falling with nothing touching it, it is in the air again.
+func _note_landing(isl: BrickIsland) -> void:
+	if not isl.landed:
+		if isl.body.get_contact_count() == 0:
+			return
+		var st := PhysicsServer3D.body_get_direct_state(isl.body.get_rid())
+		if st == null:
+			return
+		for i in st.get_contact_count():
+			if absf(st.get_contact_local_normal(i).y) >= LANDED_NORMAL_Y:
+				isl.landed = true
+				isl.air_ticks = 0
+				landings_noted += 1
+				_apply_layers(isl)
+				return
+		return
+	if isl.body.get_contact_count() == 0 and isl.body.linear_velocity.y < -IMPACT_MIN_SPEED:
+		isl.air_ticks += 1
+		if isl.air_ticks >= AIRBORNE_AGAIN_TICKS:
+			isl.landed = false
+			isl.jitter_since = 0
+			_apply_layers(isl)
+	else:
+		isl.air_ticks = 0
 
 
 ## Take a chunk over whole, without copying a block of it.
@@ -1919,6 +1966,11 @@ func wake(isl: BrickIsland) -> void:
 	isl.ripple_pending = true
 	isl.body.freeze = false
 	isl.settled = false
+	# It was resting on something; if that has gone, it is in the air again
+	# within AIRBORNE_AGAIN_TICKS.
+	isl.landed = true
+	isl.air_ticks = 0
+	isl.jitter_since = 0
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_apply_layers(isl)
 	isl.body.sleeping = false
@@ -2011,6 +2063,12 @@ func _supported_below(isl: BrickIsland) -> bool:
 					box.position.z + box.size.z * fz)
 			var q := PhysicsRayQueryParameters3D.create(at, at + Vector3.DOWN * (SUPPORT_REACH + 0.1),
 					isl.body.collision_mask, skip)
+			# A piece that has sunk a little into what it landed on starts the
+			# ray INSIDE it, and a ray reports nothing from inside a shape: "no
+			# support" for a piece pressed into a slab. It was nudged for that,
+			# and woken by every piece that came to rest on it (--jam: the last
+			# two stuck pieces of a collapse).
+			q.hit_from_inside = true
 			if not space.intersect_ray(q).is_empty():
 				return true
 	return false
@@ -2910,10 +2968,14 @@ func tick() -> void:
 			isl.ripple_pending = false
 			support_gone(isl.ripple_box)
 
+		if not isl.disposable:
+			_note_landing(isl)
+
 		# Held by something outside physics (hold_awake): not at rest, whatever
 		# its speed says.
 		if isl.hold_until_ms > 0 and now < isl.hold_until_ms:
 			isl.slow_since = 0
+			isl.jitter_since = 0
 			continue
 
 		var rested := isl.body.sleeping
@@ -2932,6 +2994,16 @@ func tick() -> void:
 					by_rule = true
 			else:
 				isl.slow_since = 0
+			# Jittering in a heap: see SETTLE_JITTER_SPEED.
+			if isl.landed and speed < SETTLE_JITTER_SPEED and spin < SETTLE_JITTER_SPIN:
+				if isl.jitter_since == 0:
+					isl.jitter_since = now
+				elif not rested and now - isl.jitter_since >= _slow_window(isl):
+					rested = true
+					by_rule = true
+					settled_jittering += 1
+			else:
+				isl.jitter_since = 0
 			if not rested and now - isl.born_ms >= SETTLE_MAX_MS \
 					and speed < SETTLE_MAX_SPEED:
 				rested = true
@@ -2948,6 +3020,7 @@ func tick() -> void:
 			isl.unsupported_tries += 1
 			unsupported_nudges += 1
 			isl.slow_since = 0
+			isl.jitter_since = 0
 			isl.body.sleeping = false
 			isl.body.linear_velocity += Vector3.DOWN * SUPPORT_NUDGE
 			continue
@@ -3748,6 +3821,8 @@ func report() -> Dictionary:
 		"woken": woken,
 		"settled": settled,
 		"settled_by_rule": settled_by_rule,
+		"settled_jittering": settled_jittering,
+		"landings_noted": landings_noted,
 		"far_landings": far_landings,
 		"far_shears": far_shears,
 		"merged_rebuilds": merged_rebuilds,

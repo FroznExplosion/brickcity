@@ -891,6 +891,7 @@ var _soldier_mode := false
 var _arena_mode := false
 var arena: WaveDirector
 var _wreck_mode := false
+var _jam_mode := false
 var _squad_mode := false
 var _mechfall_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
@@ -989,6 +990,7 @@ func _ready() -> void:
 	_soldier_mode = "--soldier" in args
 	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
+	_jam_mode = "--jam" in args
 	_breaklag_mode = "--breaklag" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
@@ -1202,6 +1204,8 @@ func _ready() -> void:
 		_run_breaklag_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
+	elif _jam_mode:
+		_run_jam_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -5743,6 +5747,166 @@ func _run_wreck_pass() -> void:
 	_check_log_replays()
 	print("[wreck] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Does a collapse come down, or hang?
+##
+## A storey blown out under three towers with stairs, watched for ten seconds
+## from inside FRACTURE_RANGE, so landings break things. A piece is STUCK when it
+## has stayed slower than JAM_SLOW for a second, a second and a half after it
+## came loose, and still not settled: held up and jittering, the thing a
+## collapse was seen doing in mid-air. What it is touching says why. Measured
+## first (--diag stairs, 2026-09-30): 22 stuck, 17 of them on pieces that were
+## themselves still falling. And a piece THROWN -- going up faster than
+## JAM_THROWN with nothing having blown it -- is what pushing two overlapping
+## bodies apart looks like, which is the price of letting falling pieces pass
+## through each other if it is done wrong.
+const JAM_SLOW := 0.8
+const JAM_THROWN := 6.0
+
+func _run_jam_pass() -> void:
+	print("[jam] a collapse comes down, and nothing hangs in mid-air")
+	var picks: Array = []
+	for b in registry.buildings:
+		if b.is_build() or b.toppled or b.recipe.courses < 12:
+			continue
+		for f in b.fixtures:
+			if f.kind == "staircase":
+				picks.append(b)
+				break
+		if picks.size() >= 3:
+			break
+	_gate_ok("three towers with stairs to bring down", picks.size() == 3, "%d" % picks.size())
+	for b in picks:
+		_promote(b.id)
+		_jam_look(b, 30.0, 15.0)
+		await _frames(40)
+	var stuck := {}
+	var reported := {}
+	var on := {}
+	var thrown := 0
+	var worst_up := 0.0
+	var spawned0: int = islands.islands.size()
+	var t_quiet := -1
+	var blasts := 0
+	for b in picks:
+		var fx: float = b.recipe.footprint_x * STUD
+		var fz: float = b.recipe.footprint_z * STUD
+		var y: float = 1.2 + (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * PLATE
+		var x := 0.0
+		while x <= fx + 0.01:
+			var z := 0.0
+			while z <= fz + 0.01:
+				_blast(b.xform * Vector3(x, y, z), 2.0)
+				blasts += 1
+				z += 2.5
+			x += 2.5
+	var blasted_at := Engine.get_physics_frames()
+	var b0: BuildingRegistry.Building = picks[0]
+	_jam_look(b0, 35.0, 20.0)
+	var prev_vy := {}
+	for t in 600:
+		await get_tree().physics_frame
+		var by_body := {}
+		var moving := 0
+		for isl in islands.islands:
+			if isl.is_valid():
+				by_body[isl.body.get_rid()] = isl
+		for isl in islands.islands:
+			if not isl.is_valid() or isl.settled:
+				continue
+			moving += 1
+			var v: Vector3 = isl.body.linear_velocity
+			# Thrown: up, fast, and it was not going up fast a tick ago -- a
+			# shove, not a bounce it was already in.
+			if v.y > JAM_THROWN and float(prev_vy.get(isl, 0.0)) < JAM_THROWN * 0.5 \
+					and Time.get_ticks_msec() - isl.born_ms > 300:
+				thrown += 1
+			if v.y > 5.0 and v.y > worst_up:
+				print("[jam]   up %.1f m/s (%.1f a tick ago): %d bricks, %s, age %d ms, at y %.1f, %d contact(s)%s" % [
+						v.y, float(prev_vy.get(isl, 0.0)), world.get_alive_block_count(isl.chunk),
+						"landed" if isl.landed else "in the air", Time.get_ticks_msec() - isl.born_ms,
+						isl.body.global_position.y, isl.body.get_contact_count(), _jam_others(isl, by_body)])
+			worst_up = maxf(worst_up, v.y)
+			prev_vy[isl] = v.y
+			if t % 10 != 0:
+				continue
+			if v.length() < JAM_SLOW and Time.get_ticks_msec() - isl.born_ms > 1500:
+				stuck[isl] = int(stuck.get(isl, 0)) + 10
+			else:
+				stuck[isl] = 0
+			if int(stuck.get(isl, 0)) >= 60 and not reported.has(isl):
+				reported[isl] = true
+				var kinds := _jam_touching(isl, by_body)
+				for k in kinds:
+					on[k] = int(on.get(k, 0)) + 1
+				print("[jam]   stuck: %d bricks, %s, %s, on %s; %s, %.2f m/s, spin %.2f, tries %d, at y %.1f%s" % [
+						world.get_alive_block_count(isl.chunk),
+						"landmark" if isl.landmark else "debris",
+						"rubble" if isl.disposable else "falling", kinds,
+						"landed" if isl.landed else "in the air", v.length(),
+						isl.body.angular_velocity.length(), isl.unsupported_tries,
+						isl.body.global_position.y, _jam_others(isl, by_body)])
+		if moving == 0 and t_quiet < 0 and t > 60:
+			t_quiet = Engine.get_physics_frames() - blasted_at
+	var r := islands.report()
+	print("[jam]   %d blasts; %d pieces came loose; stuck %d, by what they touch %s; thrown %d (fastest up %.1f m/s); all still after %s tick(s); settled by rule %d (jittering %d), by age %d; landed %d" % [
+			blasts, islands.islands.size() - spawned0, reported.size(), on, thrown, worst_up,
+			str(t_quiet) if t_quiet >= 0 else "never", int(r.settled_by_rule),
+			int(r.get("settled_jittering", 0)), int(r.settled_by_age), int(r.get("landings_noted", 0))])
+	_gate_ok("no piece hangs on another that is still falling",
+			int(on.get("falling piece", 0)) == 0, "%d" % int(on.get("falling piece", 0)))
+	_gate_ok("and hardly any hang at all", reported.size() <= 3, "%d stuck" % reported.size())
+	_gate_ok("and none is thrown out of another", thrown == 0,
+			"%d thrown, fastest up %.1f m/s" % [thrown, worst_up])
+	print("[jam] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+func _jam_look(b: BuildingRegistry.Building, dist: float, height: float) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	var centre: Vector3 = b.xform * Vector3(fx * 0.5, 0.0, fz * 0.5)
+	camera.global_position = centre + (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized() \
+			* (fz * 0.5 + dist) + Vector3(0.0, height, 0.0)
+	camera.look_at(centre + Vector3(0.0, 8.0, 0.0), Vector3.UP)
+
+
+func _jam_others(isl: BrickIsland, by_body: Dictionary) -> String:
+	var out := ""
+	var st := PhysicsServer3D.body_get_direct_state(isl.body.get_rid())
+	for i in (st.get_contact_count() if st != null else 0):
+		var rid: RID = st.get_contact_collider(i)
+		var n := st.get_contact_local_normal(i)
+		var what := "?"
+		if by_body.has(rid):
+			var o: BrickIsland = by_body[rid]
+			what = "piece %d br %s %.2f m/s" % [world.get_alive_block_count(o.chunk),
+					"settled" if o.settled else ("landed" if o.landed else "air"),
+					o.body.linear_velocity.length()]
+		elif _building_for_body(rid) >= 0:
+			what = "building"
+		else:
+			what = "ground"
+		out += "
+[jam]       n (%.2f %.2f %.2f) %s" % [n.x, n.y, n.z, what]
+	return out
+
+
+## What a stuck piece's contacts are: standing structure, the ground, settled
+## wreckage, or pieces still falling.
+func _jam_touching(isl: BrickIsland, by_body: Dictionary) -> Array:
+	var kinds := {}
+	for ct in islands._contact_points(isl):
+		var rid: RID = (ct as Dictionary).collider
+		var kind := "ground/other"
+		if _building_for_body(rid) >= 0:
+			kind = "structure"
+		elif by_body.has(rid):
+			var o: BrickIsland = by_body[rid]
+			kind = ("settled piece" if o.settled else "falling piece")
+		kinds[kind] = true
+	return kinds.keys()
 
 
 ## The gate for the player (Docs/AIPlan.md P1): a Pawn driven by PlayerController
