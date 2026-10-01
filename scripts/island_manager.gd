@@ -1049,9 +1049,14 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
 	var landmark := group_is_landmark(source, block_ids)
-	if not landmark and _crumble(source, block_ids, inherit_linear):
+	var crumbled_as := _crumble(source, block_ids, inherit_linear) if not landmark else CRUMB_NOT
+	if crumbled_as == CRUMB_DRAWN:
 		spawn_census.crumbled[0] += 1
 		spawn_census.crumbled[1] += block_ids.size()
+		return null
+	if crumbled_as == CRUMB_GONE:
+		spawn_census.deleted[0] += 1
+		spawn_census.deleted[1] += block_ids.size()
 		return null
 	if _delete_where_it_is(source, block_ids, landmark):
 		spawn_prof.deleted += float(Time.get_ticks_usec() - _t0) / 1000.0
@@ -1301,22 +1306,27 @@ func _in_wind(box: AABB) -> bool:
 	return false
 
 
+## What _crumble did: nothing (not a small piece), drew it as crumbs, or took
+## it out with nothing drawn (far, or out of view, or CRUMBS_MAX).
+enum { CRUMB_NOT, CRUMB_DRAWN, CRUMB_GONE }
+
+
 ## Crumble a small piece if it is one: out of its source, and drawn as crumbs if
-## it can be seen. False, and nothing done, for anything else.
-func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> bool:
+## it can be seen. CRUMB_NOT, and nothing done, for anything else.
+func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> int:
 	var n := block_ids.size()
 	if n == 0 or n > DEBRIS_MAX_BLOCKS:
-		return false
+		return CRUMB_NOT
 	var furniture := true
 	for id in block_ids:
 		if not world.is_block_decorative(source, id):
 			furniture = false
 			break
 	if furniture:
-		return false
+		return CRUMB_NOT
 	var box := _group_box(source, block_ids)
 	if _in_wind(box):
-		return false
+		return CRUMB_NOT
 	var t0 := Time.get_ticks_usec()
 	var dist := INF
 	if camera != null and is_instance_valid(camera):
@@ -1339,7 +1349,7 @@ func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> bool
 	if not cut.is_empty():
 		world.release_chunk(int(cut.chunk))
 	crumble_worst_ms = maxf(crumble_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
-	return true
+	return CRUMB_DRAWN if shown else CRUMB_GONE
 
 
 func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vector3) -> void:
