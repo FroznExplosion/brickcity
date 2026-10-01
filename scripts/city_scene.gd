@@ -11081,9 +11081,17 @@ func _run_fixture_pass() -> void:
 	_gate_ok("every step is there", f.blocks.size() == pieces,
 			"%d pieces of %d for %d steps" % [f.blocks.size(), pieces, steps])
 	_gate_ok("in the SAME chunk as the building", chunk == b.chunk)
-	_gate_ok("so the city holds one chunk for the building, not two",
-			int(world.get_memory_report().chunks) == 1,
-			"%d" % int(world.get_memory_report().chunks))
+	# A chunk per building in bricks and none more: the staircase is not one.
+	# It was "one chunk", which counted on nothing else being bricks -- and the
+	# camera at rest here may be aiming at another building (_aim_promote).
+	var in_bricks := 0
+	for o in registry.buildings:
+		if o.is_materialised():
+			in_bricks += 1
+	_gate_ok("so the city holds a chunk for each building in bricks, none for its stairs",
+			int(world.get_memory_report().chunks) == in_bricks,
+			"%d chunk(s), %d building(s) in bricks" % [
+				int(world.get_memory_report().chunks), in_bricks])
 
 	# Clipped to the building, which is what makes it come apart with it.
 	var joined := 0
@@ -11526,16 +11534,18 @@ func _run_walk_pass() -> void:
 	var centre: Vector3 = b.xform.origin + Vector3(w * 0.5, 0.0, d * 0.5)
 	var start := centre - Vector3(0.0, 0.0, d * 0.5 + 4.0)
 
-	# The shell's own collision, tested from outside PROMOTE_RANGE -- which is
-	# now the only place a shell survives being looked at, because walking up to
-	# a building is what makes it bricks. A ray is how a shell gets hit in
-	# practice anyway: FIRE_RANGE is 2 km against SHELL_RANGE's 260 m, so most
-	# shots that land on a building land on one of these.
+	# The shell's own collision, tested from outside AIM_PROMOTE_RANGE -- which
+	# is now the only place a shell survives being looked at: walking up to a
+	# building makes it bricks (PROMOTE_RANGE), and so does aiming at it from
+	# nearer than that (_aim_promote). It was seventy metres, which aiming now
+	# reaches. A ray is how a shell gets hit in practice anyway: FIRE_RANGE is
+	# 2 km against SHELL_RANGE's 260 m, so most shots that land on a building
+	# land on one of these.
 	camera.set_walking(false)
-	camera.global_position = centre - Vector3(0.0, -3.0, d * 0.5 + 70.0)
+	camera.global_position = centre - Vector3(0.0, -3.0, d * 0.5 + AIM_PROMOTE_RANGE + 20.0)
 	camera.look_at(Vector3(centre.x, 3.0, centre.z), Vector3.UP)
 	await _frames(20)
-	_gate_ok("from seventy metres it is a shell and nothing else",
+	_gate_ok("from past aiming range it is a shell and nothing else",
 			_shells.has(0) and not b.is_materialised())
 	var shell_q := PhysicsRayQueryParameters3D.create(
 			camera.global_position, Vector3(centre.x, 3.0, centre.z))
