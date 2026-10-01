@@ -2500,6 +2500,48 @@ The workshop palette gained the same parts (Build mode area, small change):
 `curve_1x3`, `curve_1x4`, `curve_2x4`, and one-plate `cheese_1x1`, `cheese_1x2`,
 `cheese_2x2` (studless, in the Slopes category).
 
+### 19.23 Slope sides that meet, and steep slopes on steep ground
+
+**Slivers and fins beside slopes.** A slope's side used one flat bottom per
+segment, sized from the neighbour's height at one point. Where two slopes of
+different length met side by side their surfaces CROSS, and the side left a
+gap (blue water showing) on one part and a fin on the other. Sides are now
+sampled every stud (half stud on curves) against the neighbour's real surface:
+a wall where it is lower, a cheek where it is higher, split exactly where the
+two cross.
+
+**Steep slopes.** Where the ground drops two or three bricks over one stud --
+sculpted mounds, mostly; the generator rarely does -- the edge is a STEEP
+slope, like LEGO's 1x2x3 (~73 degrees): a flat back stud where there is room,
+one stud of steep face, a plate lip. A taller drop gets the steep slope on its
+top three bricks and plain brick below. A steep slope owns its column down to
+the ground in front (`in_piece_solid`), so the wall pass leaves that face to
+it.
+
+### 19.24 Slopes decided per column, from the field
+
+The packer used to decide slopes first-come, inside one tile, so the next
+tile could not know where its neighbour's slopes were: at tile borders sides
+were sized against the wrong surface (water slivers, fins), and on steep
+mounds slopes pointing different ways overlapped.
+
+Now `sample_tile` classifies every column -- its tile and a two-stud margin --
+from the FIELD alone (heights, material, colour over an 8-stud border): the
+side it falls toward, the run length, its distance from the front, the fall.
+Every tile gets the same answer about every column, so `column_surface` gives
+the exact slope surface of any neighbour, in or out of the tile. Pieces are
+built from runs of those columns (cut at tile edges, which is fine: the
+surface is the same either side).
+
+Each piece's sides, back wall and top share one UV frame, so the seam outline
+goes round the whole piece rather than round every segment -- the "small
+bricks" lines on slope sides. The side fillers (wall down to a lower
+neighbour, cheek up to a higher one -- the angled non-brick pieces that plug
+gaps) are split exactly where the two surfaces cross.
+
+Slopes are heightfield-only (`g_flat_mode`): the volumetric bench carves its
+field and keeps its bricks.
+
 ## 20. Editing terrain is a LEVEL EDITING job
 
 Nothing in this section is reachable from gameplay. The game loads a world and

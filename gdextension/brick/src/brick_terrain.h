@@ -264,6 +264,10 @@ struct TileSample {
     /// A painted COLOUR (filament index) for the column, 255 = its
     /// material's own. Pieces are cut where it changes, like material.
     std::vector<uint8_t> col;
+    /// SLOPE COLUMNS (19.24), a pure function of the field so neighbouring
+    /// tiles agree: the fall side (255 = none), the profile length, this
+    /// column's distance from the front, and the fall in plates.
+    std::vector<uint8_t> sl_r, sl_len, sl_d, sl_fall;
     std::vector<uint8_t> plate;
     std::vector<uint8_t> ramp;   ///< 255 = not a ramp, else 0=-X 1=+X 2=-Z 3=+Z
     /// This column is drawn as a CURVED surface rather than packed into
@@ -345,7 +349,8 @@ struct Piece {
     uint8_t kind;   ///< PieceKind
     uint8_t ramp;   ///< 255 unless kind == PIECE_RAMP/SLOPE; else 0=-X 1=+X 2=-Z 3=+Z
     uint8_t slope_len = 0;   ///< PIECE_SLOPE: studs down the fall (2..4)
-    uint8_t fall = 0;        ///< PIECE_SLOPE: plates to the lower neighbour (1..3)
+    uint8_t fall = 0;        ///< PIECE_SLOPE: plates to the lower neighbour
+    uint8_t slope_s0 = 0;    ///< PIECE_SLOPE: profile station at the piece's back edge
     /// A second course laid ON this piece: 0 none, 1 a smooth tile, 2 a
     /// studded plate. When set, the piece's own top face is NOT drawn -- the
     /// overlay covers it exactly, so the quad underneath is culled the same
