@@ -304,7 +304,9 @@ func _after_rest() -> void:
 	print("\nstep 3: the lifecycle is announced")
 	_ok("spawned", _events.spawned > 0, "%d" % _events.spawned)
 	_ok("settled", _events.settled > 0, "%d" % _events.settled)
-	_ok("changed", _events.changed > 0, "%d" % _events.changed)
+	# "changed" is asked of the shot below. It was asked here too, of the
+	# collapse, and what changed in this one was a piece of eight bricks
+	# shearing as it landed -- crumbs now (IslandManager._crumble), no body.
 	_ok("a toppled building is handed over", _events.handed_over == 1,
 			"%d" % _events.handed_over)
 
@@ -322,8 +324,8 @@ func _after_rest() -> void:
 		var e: DamageLog.Entry = authority.commands.entries[i]
 		if e.kind == DamageLog.Kind.PIECE_BLAST and e.target == big.piece_id:
 			hit_logged = true
-	_ok("a shot piece is changed, and the command names it", _events.changed > changed_before
-			and hit_logged)
+	_ok("changed: a shot piece is announced as changed, and the command names it",
+			_events.changed > changed_before and hit_logged)
 
 	# Sleep it: slept + removed(slept), and a record left behind.
 	var index := islands.islands.find(big)

@@ -123,16 +123,23 @@ func _check_crush() -> void:
 
 	var so := _soldier_at(open)
 	await _ticks(20)
+	# Held still, as the big one's is below: nine bricks and up is a piece the
+	# soldier sees coming and steps out from under (danger.gd), and what this
+	# asks is what it does to one that does not.
+	so.brain.active = false
 	so.stop()
 	var hp0: float = so.pawn.health.total_current()
 	var f := so.pawn.feet()
 	# Watched: a small piece nobody can see is deleted where it would spawn.
+	# Four courses, not two: two was eight bricks, and a piece that size is
+	# crumbs now (IslandManager._crumble), not a body that can fall on anyone.
 	city.camera.look_at_from_position(f + Vector3(10.0, 6.0, 10.0), f)
-	var piece := _drop(f + Vector3(-0.7, 5.0, -0.7), 4, 4, 2)
+	var piece := _drop(f + Vector3(-0.7, 5.0, -0.7), 4, 4, 4)
 	await _ticks(60)
 	var hp1: float = so.pawn.health.total_current()
 	_ok("a small piece dropped on a soldier hurts it", hp1 < hp0 and not so.pawn.health.is_dead(),
-			"%.0f -> %.0f hp" % [hp0, hp1])
+			"%.0f -> %.0f hp, %d bricks" % [hp0, hp1,
+				city.world.get_alive_block_count(piece.chunk) if piece != null and piece.is_valid() else -1])
 
 	var big := _soldier_at(open + Vector3(30.0, 0.0, 0.0), -1.0)
 	await _ticks(20)
@@ -596,9 +603,12 @@ func _check_trapped() -> void:
 
 # --- (7) ------------------------------------------------------------------------
 
+## Every piece that came off where somebody could see it: as a body, or as
+## crumbs (IslandManager._crumble) -- a small piece is no longer a body, and it
+## is still a piece the collapse made.
 func _spawned() -> int:
 	var c: Dictionary = city.islands.spawn_census
-	return int(c.landmark[0]) + int(c.small[0])
+	return int(c.landmark[0]) + int(c.small[0]) + int(c.crumbled[0])
 
 
 ## Bring building `id` down (cut through its second storey) with the camera at

@@ -130,6 +130,16 @@ var fade := 1.0
 ## there; 0 while it is moving faster. What settles it by rule rather than by
 ## waiting for the physics to call it asleep.
 var slow_since := 0
+## Something is under it: it has come down on the ground, a building or a piece
+## (IslandManager._note_landing). Until then it is in the air, and passes
+## through other pieces in the air (Layers.AIRBORNE_MASK).
+var landed := false
+## Ticks a landed piece has been falling fast and touching nothing: in the air
+## again (IslandManager.AIRBORNE_AGAIN_TICKS).
+var air_ticks := 0
+## When it last went slower than IslandManager.SETTLE_JITTER_SPEED, landed, and
+## stayed so (0: it has not). See SETTLE_JITTER_SPEED.
+var jitter_since := 0
 ## Non-zero when this island is a single brick drawn from a shared MultiMesh
 ## rather than its own MeshInstance3D. The key is the brick's box size.
 var mm_key := Vector3.ZERO

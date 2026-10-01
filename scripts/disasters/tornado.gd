@@ -291,6 +291,10 @@ func _act(dt: float) -> void:
 
 func _pull_pieces() -> void:
 	var wake_now := Engine.get_physics_frames() % 15 == 0
+	# Small pieces broken off in reach stay bodies, for this to lift: anywhere
+	# else they only fall and shrink away (IslandManager._crumble).
+	if ctx.islands != null:
+		ctx.islands.windy(get_instance_id(), pos, _lift_r + 10.0, 500)
 	for isl in ctx.islands_near(pos, _lift_r + 10.0):
 		if not isl.is_valid() or not is_instance_valid(isl.body):
 			continue
