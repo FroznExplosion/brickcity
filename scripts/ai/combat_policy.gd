@@ -109,13 +109,19 @@ static func create(model: CombatPolicy = null, contract: Dictionary = {}) -> Com
 
 ## The policy the command line asks for: `-- --tactics=book` runs the Tactics
 ## Casebook's (BookCombatPolicy, Docs/Tactics); anything else, create().
+## Loaded by path, not by class name: the base policy every soldier runs must not
+## depend on the book's scripts being in the class cache.
+const BOOK_POLICY := "res://scripts/ai/tactics/book_combat_policy.gd"
+
+
 static func from_args() -> CombatPolicy:
 	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
 		if a == "--tactics=book":
-			var b := BookCombatPolicy.new()
-			if b.book != null:
+			var script := load(BOOK_POLICY) as GDScript
+			var b: CombatPolicy = script.new() if script != null else null
+			if b != null and b.get(&"book") != null:
 				return b
-			push_warning("[ai] --tactics=book: no book at %s -- running the scripted policy" % TacticsBook.PATH)
+			push_warning("[ai] --tactics=book: the book policy or its book did not load -- running the scripted policy")
 	return create()
 
 
