@@ -157,7 +157,8 @@ static func score(ep: Dictionary) -> Dictionary:
 	var had_cover := o[O.HAS_COVER] > 0.5
 	if float(ep.exposed_reload_s) > EXPOSED_RELOAD_S and had_cover:
 		flags.append("reloaded_exposed")
-	if float(ep.held_fire_s) > HELD_FIRE_S:
+	# Melee holds its fire on purpose: it hits instead.
+	if float(ep.held_fire_s) > HELD_FIRE_S and t != T.MELEE:
 		flags.append("held_fire_point_blank")
 	if (t == T.PUSH or t == T.FLANK) and (o[O.HEALTH] < 0.35 or o[O.ALONE] > 0.5):
 		flags.append("pushed_hurt_or_alone")
