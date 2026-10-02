@@ -1018,11 +1018,20 @@ drains; ground dug below it fills by flowing, and the water in the hole is a poo
   ends level with the sea. Through the sand (`set_seep`, default 10 studs, 0.08 m/s): a hole up
   the beach fills slowly to 3 cm under the sea, so it never feeds a loop back into it. A hole
   below the sea far inland stays dry.
-* **Drawn** (`water_pools.gd`, `shaders/water_pool.gdshader`): a flat top per column at a level
-  stepped a plate at a time from the sea (so a pool that meets the sea is exactly level with it),
-  sides where it stands over its neighbour, none toward the sea. Calm — no wave function —
-  coloured by depth, foam streaks by flow speed. Re-meshed at 10 Hz, only tiles whose drawn
-  level changed.
+* **Drawn** (`water_pools.gd`, `shaders/water_pool.gdshader`): a top per column at its level,
+  each corner the mean of the wet columns and sea columns round it — so water coming in through a
+  breach is a surface sloping down from the sea into the hole, rising from the floor — and sides
+  only toward dry ground. Calm — no wave function — coloured by depth, foam bands travelling in
+  the direction of flow (COLOR.ba). Re-meshed at 20 Hz, only tiles whose level moved 4 mm.
+* **The sea kept off the pool.** The sea tiers cull on the seabed every 8 studs by the lowest
+  corner, so they drew their waves over a hole dug beside them — in the pool, and full in the hole
+  the moment it was dug. `BrickPools.sea_mask` is a byte per stud (255 on pool columns that are not
+  sea) over a 512-stud window round the camera; `water.gdshader` discards there.
+* **Flow speed** 0.3 of gravity in the pipes (`set_flow_speed`): at full strength a crater filled
+  in about a second, too fast to see it come in; now several seconds.
+* **A leak, fixed.** Water sent to a still column under the wake threshold was never added to it
+  (pass 2 only updates ticked columns), and the sea topped the loss up for ever. Any flow now wakes
+  the neighbour; a trickle wakes it without resetting its calm count.
 * **Wired** through `water_sea.gd`: `refresh_seabed(studs)` tells the pools where the ground
   changed (the editor's strokes via `terrain_changed`; a whole-world change resets them);
   `surface_at` / `submerged_at` answer a pool's level, -INF in a dry dug hole, else the wave. A

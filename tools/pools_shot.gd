@@ -6,7 +6,7 @@ extends SceneTree
 ##
 ## Digs a hole into the beach nearest the origin, through to the sea, and
 ## photographs it just after, while it fills, and once it is still:
-## shots/pool_0.png, pool_1.png, pool_2.png.
+## shots/pool_0.png, then pool_10/25/50/100.png at 1, 2.5, 5 and 10 s.
 
 var _plate := 0.14
 var _stud := 0.35
@@ -97,10 +97,11 @@ func _run() -> void:
 	scene.terrain_changed(hole)
 	scene._streamer.settle(Vector2(centre.x, centre.z))
 	await _shot("pool_0")
-	await create_timer(0.6).timeout
-	await _shot("pool_1")
-	await create_timer(6.0).timeout
-	await _shot("pool_2")
+	var t := 0.0
+	for k in [1.0, 2.5, 5.0, 10.0]:
+		await create_timer(k - t).timeout
+		t = k
+		await _shot("pool_%d" % int(k * 10))
 	# Leave the world file as it was: the sculpt was only for the pictures.
 	BrickTerrain.clear_sculpt()
 	quit(0)

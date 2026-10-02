@@ -32,10 +32,18 @@ void fragment() {
     float depth = COLOR.g;
     float flow = COLOR.r;
     vec3 albedo = mix(shallow_colour.rgb, deep_colour.rgb, smoothstep(0.0, 0.6, depth));
-    // Foam streaks where it runs: broken up along the stud grid so it reads
-    // as moving water rather than a flat white patch.
-    float streak = 0.5 + 0.5 * sin((v_world.x + v_world.z) * 9.0 - TIME * 6.0);
-    albedo = mix(albedo, foam_colour.rgb, clamp(flow * 1.5, 0.0, 0.8) * streak);
+    // Foam where it runs, in bands that travel the way the water goes
+    // (COLOR.ba, BrickPools), so water coming in through a breach is seen
+    // coming in. A band across a second band breaks it into flecks.
+    vec2 dir = vec2(COLOR.b, COLOR.a) * 2.0 - 1.0;
+    float dl = length(dir);
+    dir = dl > 1e-3 ? dir / dl : vec2(0.7071, 0.7071);
+    vec2 side = vec2(-dir.y, dir.x);
+    float along = dot(v_world.xz, dir);
+    float across = dot(v_world.xz, side);
+    float streak = smoothstep(0.35, 0.9, 0.5 + 0.5 * sin(along * 7.0 - TIME * 7.0))
+            * (0.6 + 0.4 * sin(across * 13.0 + along * 2.0));
+    albedo = mix(albedo, foam_colour.rgb, clamp(flow * 1.6, 0.0, 0.85) * streak);
     if (v_up > 0.5) {
         vec2 cell = mod(v_world.xz, stud);
         float edge = min(min(cell.x, stud - cell.x), min(cell.y, stud - cell.y));

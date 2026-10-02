@@ -11,9 +11,9 @@ extends Node3D
 const PoolShader := preload("res://shaders/water_pool.gdshader")
 
 ## How often the meshes of tiles whose water moved are rebuilt, seconds. The
-## sim runs at 60 Hz; the drawn level steps a plate at a time, so 10 Hz is
-## enough to see it rise.
-const MESH_EVERY := 0.1
+## sim runs at 60 Hz; the drawn level rises smoothly, and 20 Hz is where
+## the rise stops reading as steps.
+const MESH_EVERY := 0.05
 
 var _mat := ShaderMaterial.new()
 ## Vector2i tile -> MeshInstance3D.

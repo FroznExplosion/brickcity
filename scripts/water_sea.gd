@@ -48,6 +48,14 @@ const SEAM_OVERLAP := 3.0
 var _seabed: ImageTexture = null
 var _half_studs := 0
 var _step := 8
+## The pools' sea mask (BrickPools.sea_mask): studs a side, how far its
+## window moves at a time, and where it is now.
+const MASK_STUDS := 512
+const MASK_SNAP := 64
+var _mask_tex: ImageTexture = null
+var _mask_at := Vector2i(1 << 30, 0)
+var _mask_tiles := -1
+var _mask_stale := true
 
 
 ## Build the tiers over a square `half_studs` each way of the origin, with the
@@ -114,6 +122,7 @@ func refresh_seabed(studs := Rect2i()) -> void:
 		_seabed.update(_seabed_image())
 	if pools == null or not studs.has_area():
 		return
+	_mask_stale = true
 	# A whole-world change (a load, an undo of everything) is a new world to
 	# the pools: scanning every column for dug ground would take seconds.
 	var tile := BrickTerrain.get_tile_studs()
@@ -154,6 +163,7 @@ func follow(camera: Vector3, delta: float) -> void:
 	if pools != null:
 		pools.visible = enabled
 		pools.tick(delta)
+		_update_mask(camera)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
 	# The sheet leaves a hole exactly where the studded tier draws, and none
@@ -167,6 +177,41 @@ func follow(camera: Vector3, delta: float) -> void:
 			maxf(near.radius - SEAM_OVERLAP, 0.0) if near.visible else 0.0)
 
 
+## Keep the sea from drawing over pools: a stud mask over a window round the
+## camera, re-read when the window moves or the pools' ground changes.
+func _update_mask(camera: Vector3) -> void:
+	var stud := BrickWorld.get_stud_metres()
+	var tiles := BrickPools.tile_count()
+	if tiles == 0:
+		if _mask_tiles != 0:
+			_mask_tiles = 0
+			_set_mask_param("pool_mask_size", 0.0)
+		return
+	@warning_ignore("integer_division")
+	var at := Vector2i(floori(camera.x / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2,
+			floori(camera.z / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2)
+	if at == _mask_at and tiles == _mask_tiles and not _mask_stale:
+		return
+	_mask_at = at
+	_mask_tiles = tiles
+	_mask_stale = false
+	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_R8,
+			BrickPools.sea_mask(at.x, at.y, MASK_STUDS))
+	if _mask_tex == null:
+		_mask_tex = ImageTexture.create_from_image(img)
+	else:
+		_mask_tex.update(img)
+	_set_mask_param("pool_mask", _mask_tex)
+	_set_mask_param("pool_mask_origin", Vector2(at.x * stud, at.y * stud))
+	_set_mask_param("pool_mask_size", MASK_STUDS * stud)
+
+
+func _set_mask_param(name: String, value: Variant) -> void:
+	for tier in [near, sheet]:
+		if tier != null and tier._mat != null:
+			tier._mat.set_shader_parameter(name, value)
+
+
 ## Build the tiers again: a new studded radius. The seabed is kept.
 func rebuild() -> void:
 	var lod_on := false
@@ -178,6 +223,9 @@ func rebuild() -> void:
 	near = null
 	sheet = null
 	pools = null
+	_mask_tex = null
+	_mask_tiles = -1
+	_mask_stale = true
 	build(_half_studs, _outer_metres, _step)
 	set_lod_debug(lod_on)
 

@@ -4,6 +4,7 @@
 
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
@@ -37,7 +38,9 @@ constexpr float DAMP = 0.95f;
 /// A column whose depth moves less than this per step, with every flux out of
 /// it under EPS_F, is calm; CALM_STEPS calm steps and it stops being ticked.
 constexpr float EPS_D = 2.0e-5f;
-constexpr float EPS_F = 5.0e-3f;
+// 1 cm/s: below it the pipes leave a head of (1 - DAMP) * EPS_F / k, a few
+// millimetres, and the approach to it is an exponential tail of minutes.
+constexpr float EPS_F = 1.0e-2f;
 constexpr int CALM_STEPS = 30;
 /// Water shallower than this is not drawn and does not count as a surface.
 constexpr float SHOW_MIN = 0.02f;
@@ -45,6 +48,11 @@ constexpr float SHOW_MIN = 0.02f;
 /// never settles: seeping tops up the columns a few millimetres under sea
 /// level, the sea takes the excess at the breach, and the loop flows forever.
 constexpr float SEEP_SLACK = 0.03f;
+/// How fast water moves, as a fraction of gravity's pull in the pipes. Full
+/// strength filled a crater from a breach in about a second -- correct, and
+/// too quick to see it come in. 0.3 takes several seconds.
+float g_flow = 0.3f;
+
 /// Tiles made per tick when flow reaches a tile that is not held yet.
 constexpr int MAKE_PER_TICK = 2;
 
@@ -110,17 +118,25 @@ inline float level(const PoolTile *t, int i) {
     return t->kind[i] == K_OCEAN ? sea() : t->floor[i] + t->depth[i];
 }
 
-/// The level a column is DRAWN at: on the plate grid counted from the sea,
-/// so a pool fills a plate at a time and one that meets the sea is level
-/// with it. -INF when there is nothing to draw.
+/// The level a column is DRAWN at, or -INF when there is nothing to draw.
+/// Continuous: a pool is seen rising from the floor of the hole. (It was
+/// stepped a plate at a time, and a hole that filled in two seconds read as
+/// water that appeared rather than water that came in.)
 float shown_level(const PoolTile *t, int i) {
     if (t->kind[i] == K_OCEAN || t->depth[i] < SHOW_MIN) {
         return -std::numeric_limits<float>::infinity();
     }
-    const float s = sea();
-    const float l = t->floor[i] + t->depth[i];
-    const float q = s + std::round((l - s) / PLATE_M) * PLATE_M;
-    return q > t->floor[i] + 0.01f ? q : -std::numeric_limits<float>::infinity();
+    return t->floor[i] + t->depth[i];
+}
+
+/// Has a column's drawn water moved enough since it was meshed to mesh again?
+inline bool needs_redraw(const PoolTile *t, int i) {
+    const float now = shown_level(t, i);
+    const float was = t->shown[i];
+    if (std::isfinite(now) != std::isfinite(was)) {
+        return true;
+    }
+    return std::isfinite(now) && std::fabs(now - was) > 0.004f;
 }
 
 void activate(PoolTile *t, int i) {
@@ -270,7 +286,7 @@ bool dug_below_sea(int tx, int tz, const Rect2i &studs) {
 
 void step() {
     const float s = sea();
-    const float k = (float)STEP * G / STUD_M;
+    const float k = (float)STEP * G * g_flow / STUD_M;
     const size_t n0 = g_active.size();
 
     // Pass 1: the flux out of every ticked column to each neighbour.
@@ -312,11 +328,22 @@ void step() {
             }
         }
         for (int d = 0; d < 4; ++d) {
-            if (t->flux[i][d] > EPS_F) {
+            // ANY flow wakes the neighbour: pass 2 only adds water to ticked
+            // columns, and a trickle under EPS_F sent to a still one was lost
+            // (and the sea, an infinite source, kept topping it up).
+            // A trickle wakes it without resetting its calm count, or two
+            // columns trading microns keep each other awake for ever.
+            if (t->flux[i][d] > 0.0f) {
                 int j = 0;
                 PoolTile *nt = column(gx + DX[d], gz + DZ[d], j);
-                if (nt != nullptr) {
+                if (nt == nullptr) {
+                    continue;
+                }
+                if (t->flux[i][d] > EPS_F) {
                     activate(nt, j);
+                } else if (!nt->active[j]) {
+                    nt->active[j] = 1;
+                    g_active.emplace_back(nt, j);
                 }
             }
         }
@@ -350,7 +377,7 @@ void step() {
                 }
             }
             t->depth[i] = std::max(0.0f, t->depth[i] + dd);
-            if (shown_level(t, i) != t->shown[i]) {
+            if (needs_redraw(t, i)) {
                 mark_dirty(t, i);
             }
         }
@@ -581,6 +608,30 @@ Dictionary BrickPools::build_mesh(int tx, int tz) {
         indices.push_back(base + 2);
         indices.push_back(base + 3);
     };
+    // A corner's height: the mean of the water round it -- wet pool columns
+    // at their level, sea columns at the sea's. Where water comes in from the
+    // sea the surface slopes down from it into the hole, and a stream runs
+    // downhill, instead of every column being a flat step (STA's blocky
+    // water, section 3).
+    auto corner = [&](int cx, int cz, float own) {
+        float sum = 0.0f;
+        int n = 0;
+        for (int dz = -1; dz <= 0; ++dz) {
+            for (int dx = -1; dx <= 0; ++dx) {
+                int j = 0;
+                const PoolTile *nt = column(cx + dx, cz + dz, j);
+                if (nt == nullptr) {
+                    continue;
+                }
+                const float l = nt->kind[j] == K_OCEAN ? sea() : shown_level(nt, j);
+                if (std::isfinite(l)) {
+                    sum += l;
+                    ++n;
+                }
+            }
+        }
+        return n > 0 ? sum / (float)n : own;
+    };
     for (int i = 0; i < N; ++i) {
         const float top = shown_level(t, i);
         t->shown[i] = top;
@@ -594,9 +645,16 @@ Dictionary BrickPools::build_mesh(int tx, int tz) {
         for (int d = 0; d < 4; ++d) {
             speed += t->flux[i][d];
         }
-        // R: how fast it is flowing (foam), G: how deep (colour).
-        const Color col(std::min(speed / 4.0f, 1.0f), std::min(t->depth[i] / 3.0f, 1.0f), 0.0f, 1.0f);
-        quad(Vector3(x0, top, z0), Vector3(x1, top, z0), Vector3(x1, top, z1), Vector3(x0, top, z1),
+        // Net flow out of the column, for the direction foam runs in.
+        const float fx = t->flux[i][0] - t->flux[i][1];
+        const float fz = t->flux[i][2] - t->flux[i][3];
+        // R: how fast it is flowing (foam), G: how deep (colour), B and A:
+        // which way it flows, 0.5 still.
+        const Color col(std::min(speed / 2.0f, 1.0f), std::min(t->depth[i] / 3.0f, 1.0f),
+                0.5f + 0.5f * std::clamp(fx, -1.0f, 1.0f), 0.5f + 0.5f * std::clamp(fz, -1.0f, 1.0f));
+        const float h00 = corner(gx, gz, top), h10 = corner(gx + 1, gz, top);
+        const float h11 = corner(gx + 1, gz + 1, top), h01 = corner(gx, gz + 1, top);
+        quad(Vector3(x0, h00, z0), Vector3(x1, h10, z0), Vector3(x1, h11, z1), Vector3(x0, h01, z1),
                 Vector3(0, 1, 0), col);
         for (int d = 0; d < 4; ++d) {
             const int nx = gx + DX[d], nz = gz + DZ[d];
@@ -605,24 +663,24 @@ Dictionary BrickPools::build_mesh(int tx, int tz) {
             float bottom = t->floor[i];
             if (nt == nullptr) {
                 bottom = std::max(bottom, (float)(BrickTerrain::surface_plate(nx, nz) + 1) * PLATE_M);
-            } else if (nt->kind[j] == K_OCEAN) {
-                continue;   // the sea draws itself there
+            } else if (nt->kind[j] == K_OCEAN || std::isfinite(shown_level(nt, j))) {
+                continue;   // the sea, or water: the tops meet at the corners
             } else {
-                bottom = std::max(bottom, std::max(nt->floor[j], shown_level(nt, j)));
+                bottom = std::max(bottom, nt->floor[j]);
             }
-            if (bottom >= top - 0.005f) {
+            float ax, az, bx, bz, ha, hb;
+            switch (d) {
+                case 0: ax = x1; az = z0; bx = x1; bz = z1; ha = h10; hb = h11; break;
+                case 1: ax = x0; az = z1; bx = x0; bz = z0; ha = h01; hb = h00; break;
+                case 2: ax = x1; az = z1; bx = x0; bz = z1; ha = h11; hb = h01; break;
+                default: ax = x0; az = z0; bx = x1; bz = z0; ha = h00; hb = h10; break;
+            }
+            if (bottom >= std::max(ha, hb) - 0.005f) {
                 continue;
             }
             const Vector3 nrm((float)DX[d], 0, (float)DZ[d]);
-            float ax, az, bx, bz;
-            switch (d) {
-                case 0: ax = x1; az = z0; bx = x1; bz = z1; break;
-                case 1: ax = x0; az = z1; bx = x0; bz = z0; break;
-                case 2: ax = x1; az = z1; bx = x0; bz = z1; break;
-                default: ax = x0; az = z0; bx = x1; bz = z0; break;
-            }
-            quad(Vector3(ax, top, az), Vector3(bx, top, bz), Vector3(bx, bottom, bz),
-                    Vector3(ax, bottom, az), nrm, col);
+            quad(Vector3(ax, ha, az), Vector3(bx, hb, bz), Vector3(bx, std::min(bottom, hb), bz),
+                    Vector3(ax, std::min(bottom, ha), az), nrm, col);
         }
     }
     if (verts.is_empty()) {
@@ -639,6 +697,36 @@ Dictionary BrickPools::build_mesh(int tx, int tz) {
     result["triangle_count"] = (int)(indices.size() / 3);
     return result;
 }
+
+PackedByteArray BrickPools::sea_mask(int x0, int z0, int size) {
+    PackedByteArray out;
+    size = std::max(size, 1);
+    out.resize((int64_t)size * size);
+    uint8_t *w = out.ptrw();
+    std::fill(w, w + (size_t)size * size, (uint8_t)0);
+    const int tx0 = fdiv(x0, T), tx1 = fdiv(x0 + size - 1, T);
+    const int tz0 = fdiv(z0, T), tz1 = fdiv(z0 + size - 1, T);
+    for (int tz = tz0; tz <= tz1; ++tz) {
+        for (int tx = tx0; tx <= tx1; ++tx) {
+            const PoolTile *t = tile_at(tx, tz);
+            if (t == nullptr) {
+                continue;
+            }
+            for (int i = 0; i < N; ++i) {
+                if (t->kind[i] != K_LAND) {
+                    continue;
+                }
+                const int x = tx * T + i % T - x0, z = tz * T + i / T - z0;
+                if (x >= 0 && z >= 0 && x < size && z < size) {
+                    w[(size_t)z * size + x] = 255;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+void BrickPools::set_flow_speed(double fraction) { g_flow = (float)std::clamp(fraction, 0.01, 1.0); }
 
 void BrickPools::set_seep(int studs, double metres_per_second) {
     g_seep_studs = std::max(0, studs);
@@ -665,6 +753,10 @@ void BrickPools::_bind_methods() {
         &BrickPools::take_dirty_tiles);
     ClassDB::bind_static_method("BrickPools", D_METHOD("build_mesh", "tx", "tz"),
         &BrickPools::build_mesh);
+    ClassDB::bind_static_method("BrickPools", D_METHOD("sea_mask", "x0", "z0", "size"),
+        &BrickPools::sea_mask);
+    ClassDB::bind_static_method("BrickPools", D_METHOD("set_flow_speed", "fraction"),
+        &BrickPools::set_flow_speed);
     ClassDB::bind_static_method("BrickPools", D_METHOD("set_seep", "studs", "metres_per_second"),
         &BrickPools::set_seep);
 }
