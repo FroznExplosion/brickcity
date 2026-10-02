@@ -1654,6 +1654,46 @@ pieces crumbling instead; the crumb update is 0.4-0.5 ms a tick at worst. A torn
 marks its reach `windy()`: small pieces broken off there stay bodies for the wind to lift. Pieces
 of 6-8 bricks no longer crush anyone (`Crush.MIN_BRICKS` is nine in practice).
 
+### Fewer medium pieces, cascades in the tick, and bricks that stay clicked on
+
+Measured first: a body census (`IslandManager.body_census`, printed by `--shot` and `--jam`) by what a
+body came off -- a building, a piece (its landing, something landing on it, a hit) or adopted whole
+-- and by size. In a `--big --shot` the 9-48-brick bodies were almost all off pieces (141), 91 of
+them from hits on pieces, every one landmark-sized.
+
+* **What comes off a piece crumbles up to 48 bricks** (`_crumbles_off_a_piece`), landmark-sized or
+  not. The host decides; the DETACH carries `FLAG_GONE`, so no machine keeps a body of it. 9-48-brick
+  bodies off pieces: 141 -> 0.
+* **Landings snap on storey lines.** `TowerRecipe.STOREY_PLATES` (19: six courses and a slab); a
+  piece keeps its building's cells, so a snap at a multiple of it frees a slab from the walls under
+  it and leaves it with its own storey.
+* **Cascades run to their end in the tick** (`BrickWorld.solve_structure(chunk, rounds, budget)`,
+  `CASCADE_ROUNDS` 48 within 3 ms a building). The SOLVE command carries the rounds and replays them.
+  And the mega director hands its chunks over before its breakage -- the 14,000-brick top of the
+  `--breaklag --big` tower waited 25 ticks behind a hundred little groups at two spawns a tick -- and
+  crumb-sized groups are cut on a count of their own. That tower's top is down by tick 15 of the pass,
+  from 48-50. A mega collapse's chunks end between storeys, and the director counts a stall once a
+  tick, not once a solve (three solves in one tick read as two stalled rounds).
+* **Held bricks.** Reported: single bricks falling off a break while still clicked onto the bricks
+  round them. The stress solve sends load along the grounding walk's one path, so a brick on it could
+  fail under load that also hung elsewhere, and a failed brick was "joined to nothing". Now a group of
+  up to 48 bricks that came loose that way (`Block::strained`, not sheared or torn), whose own weight
+  its studs into grounded structure hold, is put back as `Block::held`: grounded, carrying nobody
+  else's load, never held twice. `tools/hang_probe.gd`: with a storey shot through and stubs left,
+  5 of 8 small falling groups were still clicked on; now 0. Buildings only: on pieces it changed how a
+  toppling building re-solves, and collapse_probe's soldier stopped riding it over.
+* **Shell roofs.** An undamaged shell's collision was four walls and a ground plate, and a piece
+  falling on it went through the top and stood inside on the ground floor. It has a roof now (not on a
+  damaged one: its boxes do not follow the damage).
+* **Path promotion** (`_path_promote`): a falling piece near somebody is swept a second ahead, and a
+  shell in its way is made bricks first, bands first. A far stand-in waits 4 ticks a millisecond its
+  last build took before it is built again.
+
+`--jam` after all of it: everything still after 84-94 ticks, from 308 / 551. Not done: a unit solve
+(storeys as single nodes in the stress solve). Mega solving is 690 ms over a `--big --shot` (548
+solves) from 1,368 ms (1,030), and cascades finish in the tick without it; a solve on rigid storeys
+would also decide differently what fails, so it is a change of model, not of speed.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
