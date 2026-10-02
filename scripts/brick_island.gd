@@ -104,6 +104,8 @@ var coarse := false
 var coarse_drawn := false
 ## The physics tick its stand-in was last built (IslandManager.COARSE_REBUILD_TICKS).
 var coarse_tick := -1000000
+## How long its last stand-in took to build, ms (IslandManager.coarse_wait).
+var coarse_ms := 0.0
 ## Where it was when it was woken or cut out, and whether it has started to
 ## move since. Once it moves, what was resting on it there is woken
 ## (IslandManager.support_gone) -- not before: something woken that stays put
@@ -134,6 +136,12 @@ var slow_since := 0
 ## (IslandManager._note_landing). Until then it is in the air, and passes
 ## through other pieces in the air (Layers.AIRBORNE_MASK).
 var landed := false
+## IslandManager.body_census: its size class when it was made, and from what.
+var census_cls := -1
+var census_from := ""
+## What last broke it, for the census of what comes off it: "landing" (it
+## landed), "struck" (something landed on it), "hit" (a blast or a shot).
+var shed_cause := ""
 ## Ticks a landed piece has been falling fast and touching nothing: in the air
 ## again (IslandManager.AIRBORNE_AGAIN_TICKS).
 var air_ticks := 0

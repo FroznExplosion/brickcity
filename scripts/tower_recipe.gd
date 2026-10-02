@@ -32,6 +32,13 @@ const PLATES_PER_COURSE := 3
 ## floors are three quarters of a building's bricks (Docs/Scale.md).
 const COURSES_PER_FLOOR := 6
 const SLAB_PLATES := 1
+## A storey, slab and walls: the base slab is plates [0, 1), storey n's walls
+## [19n + 1, 19n + 19) and the slab over them 19(n + 1). So a block's storey is
+## its cell's y / STOREY_PLATES, in a piece of the building as much as in the
+## building -- a piece keeps the building's cells (BrickWorld.split_island) --
+## and a cut on a multiple of it frees a slab from the walls under it, leaving
+## it with the storey it is the floor of.
+const STOREY_PLATES := COURSES_PER_FLOOR * PLATES_PER_COURSE + SLAB_PLATES
 const SLAB_COLOUR := 2
 
 ## THE LATTICE.

@@ -334,6 +334,23 @@ struct Block {
     // component walk arrives from.
     bool bottom_broken = false;
 
+    // support_broken by the STRESS solve, not by a shear or a tear: it gave way
+    // under load. Only such a brick can be held (below); one broken by force
+    // stays broken.
+    bool strained = false;
+
+    // Hangs on its own studs. The stress solve sends load along one path -- the
+    // grounding walk's -- so a brick on that path can fail under the weight of
+    // things that also hang elsewhere; they find the other way, and the brick
+    // that failed was "joined to nothing" and fell on its own, still clicked
+    // onto the bricks round it (tools/hang_probe.gd). A small group like that,
+    // whose own weight its studs hold, is put back as HELD
+    // (BrickWorld::reattach_held_groups): grounding reaches it and goes no
+    // further except into another held brick, and it carries nobody else's
+    // load. It still falls when what it is clicked to goes, or under its own
+    // weight, and once failed again it is not held twice.
+    bool held = false;
+
     // Transient, rebuilt by every stress solve. Weight of this block plus
     // everything resting on it, in FIXED-POINT mass units (brick::MASS_FIXED
     // per unit of archetype mass).
