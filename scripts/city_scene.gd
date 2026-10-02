@@ -1037,6 +1037,10 @@ func _ready() -> void:
 	# its tick (IslandManager._submit_mesh_job).
 	islands.defer_job_start = true
 	islands.on_impact = _on_island_impact
+	# A recipe tower's pieces break along its storeys (IslandManager._floor_line).
+	islands.storey_plates = func(id: int) -> int:
+		var ob := registry.get_building(id)
+		return TowerRecipe.STOREY_PLATES if ob != null and not ob.is_build() else 0
 	director = CollapseDirector.new(world)
 	# A client's shot arrives as a request; the host takes it exactly as it takes
 	# its own. Shears are never requested -- they come from the host's physics.
@@ -5864,6 +5868,8 @@ func _run_jam_pass() -> void:
 	print("[jam]   crumbs: %d piece(s), %d brick(s) drawn, %d not (CRUMBS_MAX); worst crumb tick %.2f ms, worst crumble %.2f ms; small bodies %d; rises capped %d" % [
 			int(r.crumbled), int(r.crumb_bricks), int(r.crumbs_over), float(r.crumb_worst_ms),
 			float(r.crumble_worst_ms), int(islands.spawn_census.small[0]), int(r.rises_capped)])
+	for line in islands.body_census_lines():
+		print("[jam]   bodies " + line)
 	_gate_ok("no piece hangs on another that is still falling",
 			int(on.get("falling piece", 0)) == 0, "%d" % int(on.get("falling piece", 0)))
 	_gate_ok("and hardly any hang at all", reported.size() <= 3, "%d stuck" % reported.size())
@@ -8331,6 +8337,12 @@ func _run_shot_pass() -> void:
 			sc.landmark[0], sc.landmark[1], sc.small[0], sc.small[1], sc.deleted[0], sc.deleted[1],
 			sc.capped[0], sc.capped[1]])
 	print("[city]   of which pieces coming off pieces: %d (%d bricks)" % [sc.shed[0], sc.shed[1]])
+	for line in islands.body_census_lines():
+		print("[city]   bodies " + line)
+	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms; landings snapped %d time(s), %d on a storey line" % [
+			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
+			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
+			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
 			director.breakage_out, director.furniture_out, director.collapsing.size()])
@@ -8887,6 +8899,8 @@ func _report_profile() -> void:
 				float(tw.mesh), int(tw.islands)])
 		print("[prof]   of which fracture: landings %.1f + merged rebuilds %.1f" % [
 			float(tw.get("landings", 0.0)), float(tw.get("reshapes", 0.0))])
+		print("[prof]   of which resolve (harvest, upload, mesh queue, band holes, resolve queue): %s" % [
+			tw.get("resolve parts: harvest, upload, mesh queue, band holes, resolve queue", [])])
 		print("[prof]   worst single piece reshape %.1f ms (%d bricks, %d boxes): shapes %.1f + space %.1f" % [
 			float(islands.reshape_worst[0]), int(islands.reshape_worst[1]), int(islands.reshape_worst[2]),
 			float(islands.reshape_worst[3]), float(islands.reshape_worst[4])])

@@ -659,6 +659,62 @@ var debris_faded := 0
 var _frustum: Array[Plane] = []
 var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
 		"capped": [0, 0], "shed": [0, 0], "crumbled": [0, 0]}
+## Bodies made, by what they came off -- a building, a piece (its landing or a
+## hit on it), or a building toppled whole -- and by size: 1-8, 9-48, 49-499,
+## 500+ bricks. Each [bodies, ms making them, ticks moving, boxes x ticks
+## moving]: what each kind costs, which is what decides what to cut.
+var body_census := {}
+var _shedding := false
+var _shed_cause := ""
+## (building id) -> plates per storey, or 0: the building a piece came from is
+## a recipe tower, whose storeys a landing breaks it along (_snap_across). Set
+## by the scene; unset, pieces break where they were struck, as they did.
+var storey_plates := Callable()
+const CENSUS_FROM := ["building", "piece: landing", "piece: struck", "piece: hit", "piece: other",
+		"adopted (toppled whole, or woken)"]
+
+
+static func census_class(bricks: int) -> int:
+	if bricks <= DEBRIS_MAX_BLOCKS:
+		return 0
+	if bricks <= LANDMARK_COUNT:
+		return 1
+	if bricks < 500:
+		return 2
+	return 3
+
+
+func _census_body(isl: BrickIsland, from: String, bricks: int, ms: float) -> void:
+	if body_census.is_empty():
+		for f in CENSUS_FROM:
+			body_census[f] = [[0, 0.0, 0, 0], [0, 0.0, 0, 0], [0, 0.0, 0, 0], [0, 0.0, 0, 0]]
+	isl.census_cls = census_class(bricks)
+	isl.census_from = from
+	var row: Array = body_census[from][isl.census_cls]
+	row[0] += 1
+	row[1] += ms
+
+
+## The census as lines, for a pass to print.
+func body_census_lines() -> PackedStringArray:
+	var out := PackedStringArray()
+	var names := ["1-8", "9-48", "49-499", "500+"]
+	var total_box := 0
+	for f in body_census:
+		for row in body_census[f]:
+			total_box += int(row[3])
+	for f in body_census:
+		var parts := PackedStringArray()
+		for c in 4:
+			var row: Array = body_census[f][c]
+			if int(row[0]) == 0:
+				continue
+			parts.append("%s: %d bodies, %.0f ms to make, %d moving ticks, %.0f%% of moving boxes" % [
+					names[c], int(row[0]), float(row[1]), int(row[2]),
+					100.0 * float(row[3]) / maxf(total_box, 1)])
+		if not parts.is_empty():
+			out.append("from a %s -- %s" % [f, "; ".join(parts)])
+	return out
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
 var _moving_now := 0
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
@@ -698,6 +754,7 @@ var _dorm_sleep_ms := 0.0
 var wake_worst := [0.0, 0]
 var sleep_worst := [0.0, 0]
 var _work_done := 0
+var _resolve_parts: Array = []
 var _sync_meshes := 0
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)
@@ -705,6 +762,7 @@ var coarse_worst_ms := 0.0 ## the slowest of them
 var coarse_verts := 0      ## their vertices, all told
 var stand_ins := 0         ## pieces put to sleep that left a stand-in drawn
 var breaks := 0      ## times a landing snapped a piece across its width
+var floor_breaks := 0  ## of those, on a storey line (_floor_line)
 var merged_shapes := 0  ## pieces whose collision has been merged down
 var merged_boxes := 0   ## boxes those pieces ended up with
 var unmerged_boxes := 0 ## boxes they had to go back to when hit
@@ -869,12 +927,33 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 		_local_seq += 1
 		return DamageLog.piece_id(-_local_seq)
 	var gone := _over_the_cap(chunk, ids)
-	if gone:
+	var crumbs := not gone and source != null and _crumbles_off_a_piece(chunk, ids)
+	if gone or crumbs:
 		e.flags |= DamageLog.FLAG_GONE
 	var pid := DamageLog.piece_id(_record(e))
 	if gone:
 		_gone_pieces[pid] = true
+	if crumbs:
+		_crumbled_pieces[pid] = true
 	return pid
+
+
+## What comes off a PIECE -- shot apart, struck, broken by its own landing -- and
+## is LANDMARK_COUNT bricks or fewer is crumbs, not a body, landmark-sized or
+## not: wreckage coming apart into bricks. They were the most of what a
+## collapse made: 9-48 bricks, 141 bodies in a --big --shot, 91 of them from
+## shots at pieces (body_census, 2026-10-02). The host's decision, and it
+## travels in the DETACH as FLAG_GONE, so nobody keeps a body of it -- a
+## landmark is something every machine has or none does.
+func _crumbles_off_a_piece(chunk: int, ids: PackedInt32Array) -> bool:
+	if not decides or ids.size() > LANDMARK_COUNT or ids.size() <= DEBRIS_MAX_BLOCKS:
+		return false
+	var furniture := true
+	for id in ids:
+		if not world.is_block_decorative(chunk, id):
+			furniture = false
+			break
+	return not furniture and not _in_wind(_group_box(chunk, ids))
 
 
 ## MAX_MOVING: is this group a landmark coming loose far from everybody while
@@ -1049,7 +1128,18 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
 	var landmark := group_is_landmark(source, block_ids)
-	var crumbled_as := _crumble(source, block_ids, inherit_linear) if not landmark else CRUMB_NOT
+	var crumbled_as := CRUMB_NOT
+	if _crumbled_pieces.has(piece_id):
+		_crumbled_pieces.erase(piece_id)
+		crumbled_as = _crumble(source, block_ids, inherit_linear, LANDMARK_COUNT)
+		if crumbled_as == CRUMB_NOT:
+			# Its DETACH said gone: out it goes, drawn or not.
+			var cut: Dictionary = world.split_island(source, block_ids)
+			if not cut.is_empty():
+				world.release_chunk(int(cut.chunk))
+			crumbled_as = CRUMB_GONE
+	elif not landmark:
+		crumbled_as = _crumble(source, block_ids, inherit_linear)
 	if crumbled_as == CRUMB_DRAWN:
 		spawn_census.crumbled[0] += 1
 		spawn_census.crumbled[1] += block_ids.size()
@@ -1196,6 +1286,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	_w[0] = float(Time.get_ticks_usec() - _t0) / 1000.0
 	if float(_w[0]) > float(spawn_worst[0]):
 		spawn_worst = _w
+	_census_body(isl, ("piece: " + (_shed_cause if _shed_cause != "" else "other"))
+			if _shedding else "building", count, float(_w[0]))
 	piece_spawned.emit(isl)
 	return isl
 
@@ -1229,8 +1321,10 @@ const CRUMB_SCATTER := 0.6
 ## rad/s at most.
 const CRUMB_SPIN := 5.0
 ## Bricks drawn as crumbs at once. Past it a piece just goes, as one out of
-## view does: the update is a few microseconds a brick, on the main thread.
-const CRUMBS_MAX := 600
+## view does: the update is about a microsecond a brick, on the main thread.
+## 600 was for pieces of eight; what comes off a piece crumbles up to
+## LANDMARK_COUNT (_crumbles_off_a_piece).
+const CRUMBS_MAX := 1500
 const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
 
 class Crumbs:
@@ -1273,12 +1367,14 @@ class Crumbs:
 		colour.resize(last)
 
 var _crumbs := {}            ## brick size, snapped -> Crumbs
+var _crumbled_pieces := {}   ## piece id -> true: its DETACH said gone, and it crumbles
 var crumb_count := 0         ## bricks drawn as crumbs now
 var crumbled := 0            ## pieces that went as crumbs
 var crumb_bricks := 0        ## bricks that were drawn as crumbs
 var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
 var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
 var crumble_worst_ms := 0.0  ## the slowest single _crumble
+var crumble_parts := [0.0, 0.0, 0.0]  ## ms, all told: drawing, cutting out, deciding
 var _wind := {}              ## who -> [centre, radius, until msec]: windy()
 
 
@@ -1313,9 +1409,10 @@ enum { CRUMB_NOT, CRUMB_DRAWN, CRUMB_GONE }
 
 ## Crumble a small piece if it is one: out of its source, and drawn as crumbs if
 ## it can be seen. CRUMB_NOT, and nothing done, for anything else.
-func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> int:
+func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3,
+		limit := DEBRIS_MAX_BLOCKS) -> int:
 	var n := block_ids.size()
-	if n == 0 or n > DEBRIS_MAX_BLOCKS:
+	if n == 0 or n > limit:
 		return CRUMB_NOT
 	var furniture := true
 	for id in block_ids:
@@ -1325,7 +1422,9 @@ func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> int:
 	if furniture:
 		return CRUMB_NOT
 	var box := _group_box(source, block_ids)
-	if _in_wind(box):
+	# Decided already when the DETACH said so (_crumbles_off_a_piece): the wind
+	# was asked then, and the blocks have to go now either way.
+	if limit == DEBRIS_MAX_BLOCKS and _in_wind(box):
 		return CRUMB_NOT
 	var t0 := Time.get_ticks_usec()
 	var dist := INF
@@ -1336,6 +1435,7 @@ func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> int:
 	if shown and crumb_count + n > CRUMBS_MAX:
 		crumbs_over += n
 		shown = false
+	var t_add := Time.get_ticks_usec()
 	if shown:
 		_add_crumbs(source, block_ids, box, linear)
 		crumbled += 1
@@ -1343,11 +1443,15 @@ func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3) -> int:
 		tiny_deleted += n
 	else:
 		discarded += n
+	crumble_parts[0] += float(Time.get_ticks_usec() - t_add) / 1000.0
 	# Out of the source the way every piece goes, and the grid it was given
 	# freed at once (_delete_where_it_is says why not killed in place).
+	var t_cut := Time.get_ticks_usec()
 	var cut: Dictionary = world.split_island(source, block_ids)
 	if not cut.is_empty():
 		world.release_chunk(int(cut.chunk))
+	crumble_parts[1] += float(Time.get_ticks_usec() - t_cut) / 1000.0
+	crumble_parts[2] += float(t_add - t0) / 1000.0
 	crumble_worst_ms = maxf(crumble_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 	return CRUMB_DRAWN if shown else CRUMB_GONE
 
@@ -1802,6 +1906,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.ripple_box = world_aabb(isl)
 	isl.ripple_pending = true
 	islands.append(isl)
+	_census_body(isl, "adopted (toppled whole, or woken)", world.get_alive_block_count(isl.chunk), 0.0)
 	# Not while a save is being put back: what lies next to this piece is
 	# exactly as the save had it, asleep or not, and waking it is a difference.
 	if not _restoring:
@@ -2497,6 +2602,7 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 		return
 	_record(e)
 	impact_blocks += loosened.size()
+	isl.shed_cause = "struck"
 	_touched(isl)
 	# Queued, not resolved here. Working out what the landing broke off means a
 	# stress solve, a connectivity walk and cutting the pieces out, and on a
@@ -2533,6 +2639,7 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 		return
 	if chip <= 0:
 		_record(e)
+	isl.shed_cause = "hit"
 	isl.disable_blocks(killed)
 	_touched(isl)
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
@@ -2628,7 +2735,11 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		spawn_census.shed[1] += moved.size()
 		var child := record_detach(isl.owner, isl, isl.chunk, moved)
 		var _ts := Time.get_ticks_usec()
-		if spawn(isl.chunk, moved, linear, angular, child, isl.owner) == null:
+		_shedding = true
+		_shed_cause = isl.shed_cause
+		var came := spawn(isl.chunk, moved, linear, angular, child, isl.owner)
+		_shedding = false
+		if came == null:
 			# Deleted where it was, or dropped over the moving cap: gone, and
 			# anything resting on it with it.
 			support_gone(isl.chunk_transform() * world.get_blocks_box(isl.chunk, moved))
@@ -2835,6 +2946,7 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	isl.impacts += 1
 	impacts += 1
 	impact_blocks += loosened.size()
+	isl.shed_cause = "landing"
 	_touched(isl)
 	# Queued, not resolved here -- the same rule shear() follows. Cutting the
 	# pieces out means a connectivity walk and a spawn each, and doing it inline
@@ -2928,6 +3040,12 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 			break
 		var local_point: Vector3 = inv_xf * (c.point as Vector3)
 		var at: float = local_point.dot(local_axis)
+		# Along a storey line, where there is one to break at: the slab goes
+		# with the walls it is the floor of (TowerRecipe.STOREY_PLATES).
+		var floor_at := _floor_line(isl, at, lo, hi) if local_axis.y > 0.5 else INF
+		if floor_at != INF:
+			local_point.y = floor_at
+			at = floor_at
 		# Severing right at an end shaves a cap off rather than breaking the
 		# piece, and severing twice in one place is one break.
 		if at - lo < BREAK_MIN_PIECE or hi - at < BREAK_MIN_PIECE:
@@ -2942,6 +3060,8 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		points.push_back(DamageLog.grid_frame(world, isl.chunk) * local_point)
 		used.append(at)
 		planes += 1
+		if floor_at != INF:
+			floor_breaks += 1
 	if planes > 0:
 		# A SEAM first: sever one course of downward joints and leave both sides
 		# solid, which is how a brick model comes apart. Tearing a band into
@@ -2959,6 +3079,27 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 			band_breaks += planes
 		breaks += planes
 	return torn
+
+
+## The storey line nearest `at` (along the piece's own Y, in its local metres)
+## that leaves BREAK_MIN_PIECE either side, or INF: a piece of a building with
+## no storeys, or none in reach.
+func _floor_line(isl: BrickIsland, at: float, lo: float, hi: float) -> float:
+	if not storey_plates.is_valid():
+		return INF
+	var per := int(storey_plates.call(isl.owner))
+	if per <= 0:
+		return INF
+	var cy: float = BrickWorld.get_cell_size().y
+	var origin_y: int = world.get_chunk_origin(isl.chunk).y
+	# In plates of the building's grid, which the piece kept.
+	var plates := at / cy + float(origin_y)
+	var n := roundi(plates / float(per))
+	for k in [n, n - 1, n + 1]:
+		var y := (float(k * per - origin_y)) * cy
+		if y - lo >= BREAK_MIN_PIECE and hi - y >= BREAK_MIN_PIECE:
+			return y
+	return INF
 
 
 ## How many pieces are invisible right now, and how big the biggest one is.
@@ -3221,6 +3362,10 @@ func tick() -> void:
 		if isl.landmark:
 			moving_landmarks += 1
 		moving_blocks += isl.shape_count
+		if isl.census_cls >= 0:
+			var crow: Array = body_census[isl.census_from][isl.census_cls]
+			crow[2] += 1
+			crow[3] += isl.shape_count
 
 		var speed := isl.body.linear_velocity.length()
 		if speed > MAX_DEBRIS_SPEED:
@@ -3354,12 +3499,19 @@ func tick() -> void:
 	# Meshes first. A piece that has left its building but has no mesh yet is
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
+	var _r0 := Time.get_ticks_usec()
 	_harvest_mesh_jobs()
+	var _r1 := Time.get_ticks_usec()
 	_drain_upload_waiting()
+	var _r2 := Time.get_ticks_usec()
 	_drain_mesh_queue()
+	var _r3 := Time.get_ticks_usec()
 	_fill_band_holes()
+	var _r4 := Time.get_ticks_usec()
 	_drain_resolve_queue()
 	var _tr := Time.get_ticks_usec()
+	_resolve_parts = [float(_r1 - _r0) / 1000.0, float(_r2 - _r1) / 1000.0,
+			float(_r3 - _r2) / 1000.0, float(_r4 - _r3) / 1000.0, float(_tr - _r4) / 1000.0]
 	tick_prof.resolve += float(_tr - _tl) / 1000.0
 	_drain_fracture_queue()
 	var _tfq := Time.get_ticks_usec()
@@ -3390,7 +3542,8 @@ func tick() -> void:
 				"landings": float(_tfq - _tr) / 1000.0,
 				"reshapes": float(_tf - _tfq) / 1000.0,
 				"mesh": float(_tm - _tf) / 1000.0,
-				"islands": islands.size()}
+				"islands": islands.size(),
+				"resolve parts: harvest, upload, mesh queue, band holes, resolve queue": _resolve_parts}
 
 
 ## Is there time left in this tick's share? Always yes for the first unit.
@@ -4115,6 +4268,7 @@ func report() -> Dictionary:
 		"settled_by_rule": settled_by_rule,
 		"settled_jittering": settled_jittering,
 		"crumbled": crumbled,
+		"floor_breaks": floor_breaks,
 		"rises_capped": rises_capped,
 		"crumb_bricks": crumb_bricks,
 		"crumbs": crumb_count,

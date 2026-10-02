@@ -134,6 +134,12 @@ var slow_since := 0
 ## (IslandManager._note_landing). Until then it is in the air, and passes
 ## through other pieces in the air (Layers.AIRBORNE_MASK).
 var landed := false
+## IslandManager.body_census: its size class when it was made, and from what.
+var census_cls := -1
+var census_from := ""
+## What last broke it, for the census of what comes off it: "landing" (it
+## landed), "struck" (something landed on it), "hit" (a blast or a shot).
+var shed_cause := ""
 ## Ticks a landed piece has been falling fast and touching nothing: in the air
 ## again (IslandManager.AIRBORNE_AGAIN_TICKS).
 var air_ticks := 0
