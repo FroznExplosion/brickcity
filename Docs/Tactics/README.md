@@ -20,6 +20,21 @@ How the enemy chooses what to do, authored as odds rather than code.
   behaviour asked for (melee in reach ~95%, shoot then grenade face to face, grenade
   first at a player behind cover, no melee from far unless a melee fighter).
 
+- **Soldiers using it:** run with `-- --tactics=book` (off by default; the scripted
+  policy runs otherwise). `TacticsSense` reads the moment, facts and amounts from the
+  world at each engage decision -- distance, both sides' cover (bricks across the
+  lines to head and chest), above/below, within reach, inside (a roof overhead), the
+  player unaware or reloading or in a mech, alone, other squads near, health,
+  magazine, squad strength, the player's health. `BookCombatPolicy` draws the book's
+  plan and maps its move to one of the eight tactics the soldier tree can carry out
+  (rush and melee added, CombatPolicy spec 2); grenades are thrown (`Grenade`: lobbed,
+  a danger zone for 1.2 s, then up to 120 damage within 4 m, none behind bricks, and a
+  small blast in the bricks; two per soldier, never onto a friend); call for help and
+  mark are said aloud. `tools/ai_moves_probe.gd` checks grenade, melee and rush. A move the game can't do yet (grenade,
+  smoke, breach...) is counted as *wanted* and the draw is made again among the
+  doable moves. Every logged decision carries the plan (`--log-decisions=PATH`).
+  `tools/tactics_sense_probe.gd` checks the readings and a fight.
+
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.
 

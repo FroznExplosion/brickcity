@@ -429,6 +429,8 @@ public:
     /// joint a landing had severed was whole again when the piece woke.
     static constexpr int JOINT_SUPPORT_BROKEN = 1;
     static constexpr int JOINT_BOTTOM_BROKEN = 2;
+    static constexpr int JOINT_STRAINED = 4;    ///< Block::strained
+    static constexpr int JOINT_HELD = 8;        ///< Block::held
     int get_block_joints(int chunk_id, int block_id) const;
     /// Restore a block's severed joints. Only ever sets what a record captured;
     /// it is not a way to break or mend structure by hand.
@@ -492,12 +494,35 @@ public:
     /// nothing changes nothing any of them can see: so the stability test and
     /// the detach reuse the walk the stress solve already made. A stress solve
     /// that did break a joint gets a fresh walk, as it always did.
-    Dictionary solve_structure(int chunk_id);
+    ///
+    /// A CASCADE: a stress solve that fails joints moves the load they carried
+    /// onto others, and the next solve fails those -- one generation a solve,
+    /// and the city solves a building once a tick, so the top of a tower whose
+    /// storey was blown out hung for thirty ticks while its last walls gave
+    /// way one generation at a time. Up to `max_rounds` stress solves are run
+    /// here, each on what the last left, until one fails nothing or
+    /// `budget_ms` has gone (0: no clock). stress.rounds is how many of them
+    /// failed something, which is what a SOLVE command must replay to land in
+    /// the same place (DamageLog); stress.failures and stress.separated are
+    /// all of theirs.
+    Dictionary solve_structure(int chunk_id, int max_rounds = 1, double budget_ms = 0.0);
     /// solve_structure for several chunks at once, one thread each (up to
     /// SOLVE_SLOTS), results in the order given. The chunks must be different:
     /// each solve reads and writes its own chunk only, so the answers are
     /// exactly what calling solve_structure on each in turn gives.
-    Array solve_structures(const PackedInt32Array &chunk_ids);
+    Array solve_structures(const PackedInt32Array &chunk_ids, int max_rounds = 1,
+            double budget_ms = 0.0);
+    /// What a SOLVE command replays: `rounds` stress solves, then the groups
+    /// that came loose held where their own studs hold them
+    /// (reattach_held_groups) -- exactly what solve_structure did to the
+    /// chunk. {failures, reattached}.
+    Dictionary solve_rounds(int chunk_id, int rounds);
+    /// The groups that came loose (detached_groups_of, against `grounded`) of
+    /// REATTACH_MAX_BLOCKS or fewer, every broken brick in them strained and
+    /// none held before, whose own weight the studs joining them to grounded
+    /// bricks hold: made held (Block::held). How many groups.
+    int reattach_held_groups(int chunk_id, const Array &groups, const uint8_t *grounded);
+    static constexpr int REATTACH_MAX_BLOCKS = 48;
 
     // --- templates ---------------------------------------------------------
 

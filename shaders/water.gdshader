@@ -119,6 +119,16 @@ uniform float seam_sink = 0.18;
 uniform vec2 hole_centre = vec2(0.0);
 uniform float hole_radius = 0.0;
 
+group_uniforms pools;
+// Where the sea is NOT drawn: dug ground that holds a pool of its own
+// (BrickPools.sea_mask, Water.md 12.7), a byte per stud over a window round
+// the camera. The seabed cull is every few studs and takes the lowest corner,
+// so without this the sea's waves were drawn over a hole dug next to it --
+// in the pool, and in the hole the moment it was dug. 0 size: no mask.
+uniform sampler2D pool_mask : hint_default_black, filter_nearest;
+uniform vec2 pool_mask_origin = vec2(0.0);
+uniform float pool_mask_size = 0.0;
+
 group_uniforms seabed;
 uniform sampler2D seabed_tex : hint_default_black, filter_nearest;
 uniform vec2 seabed_origin = vec2(0.0, 0.0);
@@ -571,6 +581,17 @@ vec3 lod_colour(float lod) {
 }
 
 void fragment() {
+    if (pool_mask_size > 0.0) {
+        vec3 wp = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+        vec3 wn = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
+        // A piece's side lies on a stud boundary: sample its own column,
+        // a hair inside it.
+        vec2 q = (wp.xz - wn.xz * 0.02 - pool_mask_origin) / pool_mask_size;
+        if (q.x >= 0.0 && q.y >= 0.0 && q.x < 1.0 && q.y < 1.0
+                && textureLod(pool_mask, q, 0.0).r > 0.5) {
+            discard;
+        }
+    }
     if (sheet_mode && hole_radius > 0.0 && distance(v_world.xz, hole_centre) < hole_radius) {
         discard;
     }

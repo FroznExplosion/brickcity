@@ -217,7 +217,14 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)
 		Kind.SOLVE:
-			world.solve_stress(chunk)
+			# As the host's solve went (BrickWorld.solve_structure): `limit` stress
+			# rounds, then what came loose held where its own studs hold it
+			# (Block::held). normal.x 1 says so; a log from before either is one
+			# stress solve.
+			if e.normal.x > 0.5:
+				world.solve_rounds(chunk, e.limit)
+			else:
+				world.solve_stress(chunk)
 			return PackedInt32Array()
 		Kind.CHIP:
 			return world.chip_hit(chunk, e.point, e.radius, e.limit)

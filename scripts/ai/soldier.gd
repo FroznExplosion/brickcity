@@ -87,6 +87,25 @@ var tactic := -1
 var tactic_at := -INF
 var tactic_until := -INF
 var tactic_done := false
+## Hand grenades (Grenade): how many it carries, when it may throw the next,
+## and a "then grenade" waiting to be thrown (BookCombatPolicy).
+const GRENADES := 2
+const GRENADE_GAP := 6.0
+const THROW_RANGE := [4.0, 28.0]
+var grenades := GRENADES
+var grenade_ready_at := 0.0
+var grenade_after := INF
+## Every grenade it threw, for gates.
+var thrown: Array = []
+## Melee: reach, what a blow does, how often.
+const MELEE_REACH := 1.7
+const MELEE_DAMAGE := 45.0
+const MELEE_GAP := 0.9
+var melee_ready_at := 0.0
+var melee_hits := 0
+## The Tactics Casebook's plan behind the tactic, when the book decides
+## (BookCombatPolicy): {moment, facts, amounts, move, asked, extras, wanted_extras}.
+var book := {}
 ## Health it has at full, when it was last hurt, and what it had then.
 var max_health := 100.0
 var hurt_at := -INF
@@ -347,6 +366,11 @@ func _think() -> void:
 	if _hp_seen >= 0.0 and hp < _hp_seen:
 		hurt_at = now
 	_hp_seen = hp
+	if now >= grenade_after:
+		grenade_after = INF
+		var c := contact()
+		if c != null:
+			throw_grenade(c.pos)
 	brain.update(dt)
 	if services.judge != null:
 		services.judge.watch(self, dt)
@@ -765,6 +789,68 @@ func _path_failed(now: float) -> void:
 func duck(seconds: float) -> void:
 	_duck_until = maxf(_duck_until, services.now() + seconds)
 	_ducking = true
+
+
+## Where to run to, to end up `stand_off` metres short of `at` on this side:
+## a spot a body can stand on (the target's own feet are not one).
+func approach_point(at: Vector3, stand_off: float) -> Vector3:
+	var nav := services.ai_nav
+	var feet := pawn.feet()
+	var back := Vector3(feet.x - at.x, 0.0, feet.z - at.z)
+	var d := back.length()
+	var p := at + (back / d) * minf(stand_off, d) if d > 0.01 else feet
+	p = nav.snap(p)
+	if nav.can_stand(p):
+		return p
+	var q := nav.snap(at)
+	return q if nav.can_stand(q) else Vector3.INF
+
+
+## May it throw a grenade at `at` now: one left, not too soon after the last,
+## in range, and no friend (nor itself) where it would land.
+func can_throw_at(at: Vector3) -> bool:
+	if grenades <= 0 or services.now() < grenade_ready_at or is_dead():
+		return false
+	var feet := pawn.feet()
+	var d := Vector2(at.x - feet.x, at.z - feet.z).length()
+	if d < THROW_RANGE[0] or d > THROW_RANGE[1]:
+		return false
+	for ally in allies():
+		if ally.pawn.feet().distance_to(at) < Grenade.RADIUS + 1.0:
+			return false
+	return true
+
+
+## Throw one at `at` (Grenade), shouting it. False when it may not.
+func throw_grenade(at: Vector3) -> bool:
+	if not can_throw_at(at):
+		return false
+	grenades -= 1
+	grenade_ready_at = services.now() + GRENADE_GAP
+	var g := Grenade.throw(services, pawn, eye_pos() + Vector3.UP * 0.2, at, pawn.get_parent())
+	thrown.append(g)
+	var lines := ["Grenade!", "Frag out!", "Fire in the hole!"]
+	services.say(pawn, "grenade", lines[services.rng.randi() % lines.size()])
+	return true
+
+
+## Hit `target` if it is in reach and the last blow was long enough ago.
+func melee(target: Pawn) -> bool:
+	var now := services.now()
+	if now < melee_ready_at or target == null or target.health == null or target.health.is_dead():
+		return false
+	var f := pawn.feet()
+	var t := target.feet()
+	if Vector2(t.x - f.x, t.z - f.z).length() > MELEE_REACH or absf(t.y - f.y) > 1.2:
+		return false
+	melee_ready_at = now + MELEE_GAP
+	var before := target.health.total_current()
+	target.health.apply_impact(MELEE_DAMAGE, &"")
+	# Counted as damage dealt, as a round that lands is (DecisionJudge).
+	dealt += before - target.health.total_current()
+	melee_hits += 1
+	services.noise(f, 15.0, pawn)
+	return true
 
 
 func stop() -> void:

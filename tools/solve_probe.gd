@@ -6,6 +6,11 @@ extends SceneTree
 ## grounding walk. It has to give exactly their answers, including when the
 ## stress solve breaks joints and the grounding has to be walked again.
 ##
+## And a fourth, between the stress solve and the rest: what came loose only
+## because load from elsewhere went through it, and whose own studs hold it,
+## is held on (Block::held; BrickWorld.solve_rounds with no rounds is that step
+## alone, and what a SOLVE command replays).
+##
 ## `-- --digest` prints one line per case instead: every block's load, the
 ## failures, the stability and the groups, hashed -- to compare two builds of
 ## the extension bit for bit. `-- --time` adds what each call costs on the big
@@ -230,6 +235,7 @@ func _check_parallel() -> void:
 
 func _separately(w: BrickWorld, chunk: int) -> Dictionary:
 	var stress: Dictionary = w.solve_stress(chunk)
+	stress["reattached"] = int(w.solve_rounds(chunk, 0).get("reattached", 0))
 	var stability: Dictionary = w.check_stability(chunk)
 	var groups: Array = w.find_detached_groups(chunk)
 	return {"stress": stress, "stability": stability, "groups": groups}
@@ -252,7 +258,8 @@ func _check_same(c: Dictionary) -> void:
 		_ok(label + ": the same stress answer",
 				s3.failures == s1.failures and s3.separated == s1.separated
 				and s3.max_ratio == s1.max_ratio and s3.peak_load == s1.peak_load
-				and s3.blocks_loaded == s1.blocks_loaded)
+				and s3.blocks_loaded == s1.blocks_loaded and s3.reattached == s1.reattached,
+				"%d held against %d" % [int(s3.reattached), int(s1.reattached)])
 		_ok(label + ": the same loads, block by block", _loads(wa, ca) == _loads(wb, cb))
 		var t3: Dictionary = three.stability
 		var t1: Dictionary = one.stability

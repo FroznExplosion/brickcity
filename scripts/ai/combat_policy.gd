@@ -23,7 +23,7 @@ extends RefCounted
 ## Change an observation or a tactic -- add, remove, reorder, rescale -- and
 ## SPEC_VERSION goes up. Every value is scaled to about 0..1.
 
-const SPEC_VERSION := 1
+const SPEC_VERSION := 2
 
 enum Obs {
 	HAS_COVER,        ## 1 if cover against the threat was found in reach
@@ -53,10 +53,12 @@ enum Tactic {
 	PUSH,          ## close in on the threat, firing
 	FLANK,         ## go round to its side, firing when it can
 	FALL_BACK,     ## to cover further from the threat
+	RUSH,          ## straight at it at a run, firing, no cover (spec 2)
+	MELEE,         ## run at it and hit it in reach (spec 2)
 	COUNT,
 }
 const TACTIC_NAMES: Array[String] = ["fight_open", "take_cover", "cover_reload", "push",
-		"flank", "fall_back"]
+		"flank", "fall_back", "rush", "melee"]
 
 ## What a model has to declare to be used in place of the scripted policy.
 const CONTRACT := {
@@ -73,6 +75,13 @@ const ALONE_METRES := 20.0
 ## The tactic for this observation. `rng` is the agent's own stream (D9).
 func decide(_obs: PackedFloat32Array, _rng: RandomNumberGenerator) -> int:
 	return Tactic.TAKE_COVER
+
+
+## The tactic, given the soldier itself (a policy that reads more of the world
+## than the observation, as BookCombatPolicy does). By default, decide().
+func decide_in(_so: Soldier, _c: FactionKnowledge.Contact, _cover: Dictionary,
+		obs: PackedFloat32Array, rng: RandomNumberGenerator) -> int:
+	return decide(obs, rng)
 
 
 ## For logs and overlays.
@@ -98,6 +107,24 @@ static func create(model: CombatPolicy = null, contract: Dictionary = {}) -> Com
 		push_warning("[ai] combat policy %s refused: contract %s, need %s -- running the scripted one"
 				% [model.policy_name(), contract, CONTRACT])
 	return ScriptedCombatPolicy.new()
+
+
+## The policy the command line asks for: `-- --tactics=book` runs the Tactics
+## Casebook's (BookCombatPolicy, Docs/Tactics); anything else, create().
+## Loaded by path, not by class name: the base policy every soldier runs must not
+## depend on the book's scripts being in the class cache.
+const BOOK_POLICY := "res://scripts/ai/tactics/book_combat_policy.gd"
+
+
+static func from_args() -> CombatPolicy:
+	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		if a == "--tactics=book":
+			var script := load(BOOK_POLICY) as GDScript
+			var b: CombatPolicy = script.new() if script != null else null
+			if b != null and b.get(&"book") != null:
+				return b
+			push_warning("[ai] --tactics=book: the book policy or its book did not load -- running the scripted policy")
+	return create()
 
 
 ## The situation, as the policy sees it. `cover` is CoverSearch.find's answer

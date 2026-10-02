@@ -308,8 +308,12 @@ static int layer_colour(int x, int z) {
     return t == nullptr ? 0xFF : t->col[i];
 }
 
+/// Set while reading the field as generated (BrickTerrain::generated_plate).
+/// Per thread, so a worker building a tile is not affected.
+static thread_local bool t_bare_field = false;
+
 static float sculpt_plates(int x, int z) {
-    if (!g_sculpt_any.load(std::memory_order_acquire)) {
+    if (t_bare_field || !g_sculpt_any.load(std::memory_order_acquire)) {
         return 0.0f;
     }
     const SculptMap &m = sculpt_map();
@@ -1782,6 +1786,13 @@ int BrickTerrain::surface_plate(int x, int z) {
     return floor_p;
 }
 
+int BrickTerrain::generated_plate(int x, int z) {
+    t_bare_field = true;
+    const int top = g_field.top_plate(x, z);
+    t_bare_field = false;
+    return top;
+}
+
 int BrickTerrain::solid_at(int x, int yp, int z) { return g_field.solid_at(x, yp, z); }
 
 int BrickTerrain::get_edit_count() { return (int)edit_count(); }
@@ -3052,6 +3063,20 @@ static float column_surface(const TileSample &s, int lx, int lz, float fx, float
     return slope_profile(sv, len, top, slope_front_at(top, s.sl_fall[i]), s.sl_fall[i] < 2);
 }
 
+PackedFloat32Array BrickTerrain::water_floor_tile(int tx, int tz) {
+    TileSample s;
+    sample_tile(g_field, tx, tz, s);
+    PackedFloat32Array out;
+    out.resize(TILE * TILE);
+    float *w = out.ptrw();
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            w[lx + TILE * lz] = column_surface(s, lx, lz, 0.5f, 0.5f);
+        }
+    }
+    return out;
+}
+
 /// The surface at a tile-local point in metres.
 static float surface_point(const TileSample &s, float x, float z) {
     const float gx = x / STUD_M, gz = z / STUD_M;
@@ -3934,6 +3959,10 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::clear_sculpt);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_at", "x", "z"),
         &BrickTerrain::sculpt_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("generated_plate", "x", "z"),
+        &BrickTerrain::generated_plate);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("water_floor_tile", "tx", "tz"),
+        &BrickTerrain::water_floor_tile);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_tiles"),
         &BrickTerrain::sculpt_tiles);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sculpt_tile", "tx", "tz"),
@@ -4325,7 +4354,15 @@ PackedFloat32Array BrickWave::build_shore_field(int half_studs, int step) {
         for (int ix = 0; ix < n; ++ix) {
             const int gx = ix * step - half_studs;
             const int gz = iz * step - half_studs;
-            const float ground = (float)(BrickTerrain::surface_plate(gx, gz) + 1) * PLATE_M;
+            float ground = (float)(BrickTerrain::surface_plate(gx, gz) + 1) * PLATE_M;
+            // Ground dug below the sea where the world as generated was dry
+            // is not sea: the sea tiers must not draw in it. Its water is a
+            // pool, which fills by flowing (BrickPools, Water.md 12).
+            if (ground < (float)g_sea_level
+                    && (float)(BrickTerrain::generated_plate(gx, gz) + 1) * PLATE_M
+                            >= (float)g_sea_level) {
+                ground = (float)g_sea_level + PLATE_M;
+            }
             const size_t k = (size_t)iz * n + ix;
             g_shore[k * 2] = ground;
             dist[k] = ground < (float)g_sea_level ? INF : 0.0f;
