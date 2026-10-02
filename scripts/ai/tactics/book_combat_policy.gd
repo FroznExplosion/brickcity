@@ -23,6 +23,8 @@ const DOABLE := {
 	"rush": T.PUSH, "advance": T.PUSH, "melee": T.PUSH,
 	"flank": T.FLANK,
 	"fall_back": T.FALL_BACK, "flee": T.FALL_BACK, "regroup": T.FALL_BACK, "hide": T.FALL_BACK,
+	# Said aloud (SAID), then fire from cover.
+	"call_help": -1, "mark": -1,
 }
 ## Extras the soldier can do now: said aloud (Callouts).
 const SAID := {
@@ -72,6 +74,9 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 		move = _redraw(plan.rows, rng)
 	var tactic := _tactic(move, cover) if move != "" else _fallback.decide(o, rng)
 	_count(done, move)
+	if SAID.has(move):
+		var said: Array = SAID[move]
+		so.services.say(so.pawn, "book_" + move, said[rng.randi() % said.size()])
 	var extras: Array = []
 	var not_yet: Array = []
 	for x in plan.extras:
