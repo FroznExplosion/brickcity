@@ -3030,3 +3030,90 @@ touches a piece that has fallen.
 `-- --terrain --nav` gates both: every building on the stud and plate grid
 with 0 of 23,100 footprint columns off the floor, and a cottage placed on the
 hillside flush in every column.
+
+## 22. Plan: heightfield until it must be volumetric
+
+Status: **plan, not built.** The terrain has two working modes today — the heightfield
+(`set_flat_mode(true)`: one surface per column, slopes, sculpt, paint) and the volumetric bench
+(carving, caves, a sparse cell-edit map `g_edits`) — but the mode is one global switch. This is
+the plan for both in one world, chosen per tile, with volumetric only where the ground actually
+needs it. Prior art: STA's blocky track stores nothing for unedited chunks, "the heightmap is the
+store there, which is also the far LOD" (`Docs/Reference/sta.md`).
+
+### 22.1 The rule: what a hit leaves decides the mode
+
+A tile is HEIGHT by default. A hit (explosion, dig, collapse) is applied as a carve, and the carve
+is classified per column before anything is stored:
+
+| what the column ends up as | stored as | tile stays |
+|---|---|---|
+| removed from the top down — the hole reaches the surface | a **height delta** in the sculpt layer (§20.6), exposed material in the surface-paint layer (§20.7) | HEIGHT |
+| a hollow under a lip at most `LIP_MAX` thick (default one brick) | the lip is removed too (it crumbles; debris spawned) → height delta | HEIGHT |
+| a hollow under a lip of sand, dirt or grass (ground that cannot hold an overhang) | the lip collapses → height delta | HEIGHT |
+| a hollow under a lip thicker than `LIP_MAX`, in rock | cell edits in the tile's volume store | **VOLUME** |
+
+So a crater blown into flat dirt from above is a heightfield crater. A blast into the side of a
+steep **stone** hill that leaves a roof thicker than a brick is an overhang, and only that tile
+(and any neighbour the hollow crosses into) becomes VOLUME. The material rule is the natural gate:
+loose ground slumps, rock arches. `LIP_MAX` and the material list are the knobs for "only
+sometimes".
+
+Heightfield craters are nearly free: they are the same per-column offsets the sculpt brush writes
+(copy-on-write tiles, saved in the world file), so the detail mesher, slopes, the coarse tier,
+collision, the AI's ground and the water's seabed all see them with no new code.
+
+### 22.2 A VOLUME tile
+
+* **Store:** the existing `g_edits` (cell → material, sparse), scoped to the tile. A converted tile
+  is the heightfield's own columns, solid to their tops, plus the edits — so converting never
+  changes the shape, and its edges still match its HEIGHT neighbours (both read one field).
+* **Mesher:** `sample_tile` picks the path per tile instead of from `g_flat_mode`; the volumetric
+  path already handles caves, craters and the wall pass.
+* **Slopes:** HEIGHT tiles only, at first. A blown-open rock face of plain bricks reads as rubble.
+  3D slope rules (a slope over a hollow, under an overhang) are a later step.
+* **Collision:** the volumetric box builder per tile (exists for the bench).
+* **AI:** `AINav` already reads columns with several floors (built for storeys); a VOLUME tile
+  answers `column_solid` from its cells instead of from one ground height.
+* **Water:** the seabed top is the highest solid cell; a cave floods only through the cell water
+  of Water.md §12.
+
+### 22.3 Far LOD and saving
+
+* Far tiers sample `surface_plate`, which for a VOLUME column is its highest solid cell: from far
+  away an overhang reads as a solid bump, filled under by skirts. A large authored arch or cave
+  mouth can carry a baked low-detail mesh, built once when its tile changes. Optional.
+* HEIGHT edits are sculpt/paint tiles (already saved). VOLUME tiles save their cell edits per
+  tile, run-length per column. Authored caves are VOLUME tiles from the start.
+
+### 22.4 Budgets (estimates, not measured)
+
+| | HEIGHT tile | VOLUME tile |
+|---|---|---|
+| build | ~3 ms | ~8–15 ms |
+| memory | heights + two layers | + sparse cell edits (a big crater ~10–50 KB) |
+| a hit | rebuild touched tiles | same + volumetric re-mesh, 5–20 ms, spread over frames |
+
+A battle that wrecks a hillside converts a handful of tiles; the rest of the world never pays.
+
+### 22.5 Build order
+
+1. Per-tile mode flag; `sample_tile` chooses the path per tile. Gate: a VOLUME tile beside HEIGHT
+   tiles has no seam (coverage gate).
+2. Carve classifier (§22.1) writing height deltas. Gate: a crater on flat dirt stays HEIGHT and
+   the far tier shows it.
+3. Lip rule, material rule, debris for collapsed lips.
+4. VOLUME conversion for thick rock overhangs; collision and AI per tile.
+5. Save/load of both; level-editor caves.
+6. Later: 3D slopes in VOLUME tiles; baked far proxies for big overhangs.
+
+### 22.6 Why Minecraft does not do this
+
+Minecraft stores the world in 16x16x16 sections and gets most of the memory saving without a
+second format: an all-air section is not stored, and a section of one block type is a one-entry
+palette, a few bytes. Its underground is full of caves and ores, so a heightfield could not
+describe most sections anyway, and every block is editable by every player. One uniform format is
+simpler for them than two paths and a conversion.
+
+This game is different: the terrain is a surface with nothing under it to find, most of it is
+never dug, and the far LOD already is a heightfield. Two formats cost a conversion step and buy
+the cheapest surface mesher, and all the slope work, for the ground nobody digs.
