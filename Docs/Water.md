@@ -933,3 +933,69 @@ the heightmap texture the absorption ramp samples are all terrain's.
    stays an island forever (Status.md limitation 6). In water it would need buoyancy per tick
    forever. The same "give islands back to the world" fix covers it, and water makes it more
    urgent.
+
+## 12. Plan: brick water that flows (after STA's blocky water)
+
+Status: **plan, not built.** Today's water is one wave function over a fixed sea level: the ocean.
+Nothing flows, fills a crater, or pours off a cliff. STA designed that for a blocky grid
+(`Docs/Reference/sta.md`; STA `Docs/24_CUBED_SPHERE_WATER.md`). This adapts it to bricks and to
+the hybrid terrain of Terrain.md §22.
+
+### 12.1 Three kinds of water, by where it is
+
+| where | model | cost (estimate) |
+|---|---|---|
+| **open sea, and all water at LOD 1+** | today's heightfield water: `BrickWave`, the studded tier, the sheet | as now |
+| **near water on HEIGHT tiles** | **2.5D column water**: per stud column a water depth over the ground and four outflow rates ("virtual pipes"). Pools, rivers, a crater filling from the sea, a sheet pouring over a terrace edge | a few adds per active column; 30 k active columns at 30 Hz is well under 1 ms |
+| **water inside VOLUME tiles** (caves, under overhangs) | **3D cell automaton**, STA's rules: `mass u16`, `MAX 4096`, down / side / up with the `COMPRESS` term for hydrostatics, gather form, active set only, trapped-air cap in sealed pockets | STA's budget: 100 k active cells ~3 ms on a worker |
+
+The split mirrors the terrain: 2.5D where the ground is 2.5D, 3D only where it is not. A cave
+mouth is where column water hands mass to cell water and back.
+
+### 12.2 Water in bricks, and slopes hold water too
+
+* A cell is **one stud by one brick** (0.35 x 0.42 m). Column water keeps its depth in plates, so
+  a pool's surface steps by a plate and reads as laid bricks.
+* **Slopes and curves hold water.** A column topped by a slope has less room: its capacity is the
+  air above the slope surface (`column_surface`, §19.24 of Terrain.md, over the stud). The water
+  renders as a flat top at its level, clipped where the level is below the slope (the same
+  seabed-texture clip the sea uses), so water lies in the hollow of a curved slope and its
+  waterline follows the slope instead of sitting in brick steps above it.
+* **Render:** top at the level, corners averaged with wet neighbours so a stream's surface falls
+  toward lower water (STA §3); sides where water borders air; a flow vector per column drives
+  foam. A column whose outflow drops over a terrace edge gets a **waterfall sheet** on the step.
+
+### 12.3 Who is infinite
+
+* **The ocean:** columns below sea level, open to the sky, never dug, read as full and are never
+  written (STA §10.6). A crater breached from the sea fills from them at the rate the breach
+  admits.
+* **Springs:** authored river sources, finite rate.
+* Everything else is finite: a crater lake, a broken water tower, a dammed river. Sand and dirt
+  absorb a little each tick, so spills dry.
+* **Trapped air** only matters in VOLUME tiles (sealed caves): STA's pocket cap.
+
+### 12.4 Meeting the ocean
+
+Where column water touches the ocean, the ocean is the reservoir and the wave function keeps
+drawing it. Column water is calm; near the join the ocean's waves fade over a few metres so the
+two meet at sea level.
+
+### 12.5 LOD
+
+* **Sim ring** (~100–150 m from any player): column and cell water tick.
+* **Frozen ring:** stored depth, no tick. A stream frozen mid-flow resumes when someone returns
+  (STA, Enshrouded).
+* **Far:** a per-tile water-top map baked when a tile leaves the frozen ring; the far water sheet
+  draws inland water at those levels, so a filled crater lake is visible from a distance.
+
+### 12.6 Build order
+
+1. Column water core in C++ (depth + pipes, active set). Headless gate: mass conserved; a crater
+   next to the sea fills to sea level and stops; a pool on a slope runs downhill and settles.
+2. Render: plate-stepped top, corner averaging, sides, slope clipping. Gate: water lying in a
+   curved slope shows its waterline on the slope face.
+3. Ocean coupling and the wave fade; springs; absorption.
+4. Swim / buoyancy / flow push read column water where it exists, `BrickWave` elsewhere.
+5. Cell water for VOLUME tiles (after Terrain.md §22 step 4); trapped air.
+6. Save, multiplayer diffs (STA §10.8–10.9), far water-top map.
