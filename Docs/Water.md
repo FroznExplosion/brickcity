@@ -1042,3 +1042,8 @@ drains; ground dug below it fills by flowing, and the water in the hole is a poo
 * **Probe**: `tools/pools_probe.gd` (breach fills, then stills; seep; inland stays dry; poured
   water conserved and flat; dug sea stays sea; seabed dry in the hole). Pictures:
   `tools/pools_shot.gd` (needs a window).
+* **The sea lies still against a pool** (2026-10-02). The mask's G channel is how much of its wave
+  the sea keeps: 0 against pool water, full 14 studs off (chamfer distance, smoothstep).
+  `water.gdshader` scales the whole surface offset by it, so where the two meet the sea is at its
+  still level — the pool's — and no crest stands over the calm water. Re-read when pool water
+  moves, at most 5 Hz.

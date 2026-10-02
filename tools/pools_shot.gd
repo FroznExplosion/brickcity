@@ -68,8 +68,8 @@ func _run() -> void:
 	var cam: Camera3D = scene._camera
 	# Over the land side, looking down across the hole to the sea.
 	var land := float(BrickTerrain.surface_plate(hole.position.x - 12, hole.get_center().y) + 1) * _plate
-	cam.global_position = Vector3(centre.x - 7.0, maxf(land, _sea) + 6.0, centre.z + 4.0)
-	cam.look_at(centre + Vector3(0.8, -1.0, 0.0))
+	cam.global_position = Vector3(centre.x - 4.0, maxf(land, _sea) + 3.0, centre.z + 3.0)
+	cam.look_at(centre + Vector3(2.5, -1.0, -0.5))
 	scene._streamer.settle(Vector2(centre.x, centre.z))
 	for i in 30:
 		await process_frame

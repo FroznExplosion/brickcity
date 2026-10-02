@@ -528,7 +528,7 @@ func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
 ## a ring is one mesh), and the seabed the water reads its shore from.
 func terrain_changed(studs: Rect2i) -> void:
 	if _trees != null:
-		_trees.rebuild_soon()
+		_trees.rebuild_soon(studs)
 	var tile := BrickTerrain.get_tile_studs()
 	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))

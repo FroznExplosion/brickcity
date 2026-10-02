@@ -56,6 +56,9 @@ var _mask_tex: ImageTexture = null
 var _mask_at := Vector2i(1 << 30, 0)
 var _mask_tiles := -1
 var _mask_stale := true
+## The pools' water moved: the calm channel follows it, at most this often.
+const MASK_WATER_EVERY := 0.2
+var _mask_water_t := 0.0
 
 
 ## Build the tiers over a square `half_studs` each way of the origin, with the
@@ -98,17 +101,15 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 ## the CPU's wave: the shore band is phased on that distance, and the swimmer
 ## and the drawn sea have to agree about where its crests are.
 func _seabed_image() -> Image:
-	var sea := BrickWave.get_sea_level()
 	var field: PackedFloat32Array = BrickWave.build_shore_field(_half_studs, _step)
 	@warning_ignore("integer_division")
 	var n: int = maxi(2 * _half_studs / _step, 2)
 	var img := Image.create_from_data(n, n, false, Image.FORMAT_RGF, field.to_byte_array())
+	# The WET map from the same field, in C++: this loop was 160k samples of
+	# GDScript, ~40 ms on every brush stroke.
 	_wet.clear()
-	for iz in n:
-		for ix in n:
-			if field[(iz * n + ix) * 2] < sea:
-				_wet[Vector2i(floori(float(ix * _step - _half_studs) / WET_CELL),
-						floori(float(iz * _step - _half_studs) / WET_CELL))] = true
+	for c in BrickWave.wet_cells(WET_CELL):
+		_wet[c] = true
 	_wet_count = _wet.size()
 	return img
 
@@ -163,6 +164,11 @@ func follow(camera: Vector3, delta: float) -> void:
 	if pools != null:
 		pools.visible = enabled
 		pools.tick(delta)
+		_mask_water_t += delta
+		if pools.water_moved and _mask_water_t >= MASK_WATER_EVERY:
+			pools.water_moved = false
+			_mask_water_t = 0.0
+			_mask_stale = true
 		_update_mask(camera)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
@@ -195,13 +201,16 @@ func _update_mask(camera: Vector3) -> void:
 	_mask_at = at
 	_mask_tiles = tiles
 	_mask_stale = false
-	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_R8,
+	# R: where the sea is not drawn. G: how much wave it keeps, none against
+	# a pool's water (BrickPools.sea_mask).
+	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_RG8,
 			BrickPools.sea_mask(at.x, at.y, MASK_STUDS))
 	if _mask_tex == null:
 		_mask_tex = ImageTexture.create_from_image(img)
 	else:
 		_mask_tex.update(img)
 	_set_mask_param("pool_mask", _mask_tex)
+	_set_mask_param("pool_calm", _mask_tex)
 	_set_mask_param("pool_mask_origin", Vector2(at.x * stud, at.y * stud))
 	_set_mask_param("pool_mask_size", MASK_STUDS * stud)
 

@@ -21,6 +21,9 @@ var _nodes := {}
 var _mesh_t := 0.0
 ## Triangles drawn, for the HUD and the probe.
 var triangles := 0
+## Set when any tile was re-meshed: the water moved, and the sea's calm
+## channel (water_sea.gd) should follow it. The sea clears it.
+var water_moved := false
 
 
 func _init() -> void:
@@ -55,6 +58,7 @@ func tick(delta: float) -> void:
 ## Re-mesh every tile whose drawn water changed.
 func refresh_meshes() -> void:
 	for t in BrickPools.take_dirty_tiles():
+		water_moved = true
 		var tile := t as Vector2i
 		var baked: Dictionary = BrickPools.build_mesh(tile.x, tile.y)
 		var arrays: Array = baked["mesh"]

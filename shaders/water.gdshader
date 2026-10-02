@@ -126,6 +126,10 @@ group_uniforms pools;
 // so without this the sea's waves were drawn over a hole dug next to it --
 // in the pool, and in the hole the moment it was dug. 0 size: no mask.
 uniform sampler2D pool_mask : hint_default_black, filter_nearest;
+// The same texture's G, filtered: how much of its wave the sea keeps, 0
+// against a pool's water. Where the sea meets a pool it lies at its still
+// level -- the pool's -- so no crest stands over the calm water.
+uniform sampler2D pool_calm : hint_default_white, filter_linear;
 uniform vec2 pool_mask_origin = vec2(0.0);
 uniform float pool_mask_size = 0.0;
 
@@ -341,6 +345,17 @@ float shore_wave(vec2 p, float t, float dist) {
 
 /// The whole surface above still water: swell shaped by the groups and dying
 /// in the shallows, plus the band. BrickWave::height_at minus sea_level.
+float pool_calm_at(vec2 p) {
+    if (pool_mask_size <= 0.0) {
+        return 1.0;
+    }
+    vec2 q = (p - pool_mask_origin) / pool_mask_size;
+    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) {
+        return 1.0;
+    }
+    return textureLod(pool_calm, q, 0.0).g;
+}
+
 float surface_offset(vec2 p, float t, float taper, float cell_m) {
     float dist = lattice_distance(p);
     float band = shore_wave(p, t, dist);
@@ -353,7 +368,8 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     // water, a quarter at the beach (BrickWave swell_near_shore). No depth
     // clamp -- `taper` is 1.
     float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
-    return wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band;
+    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
+            * pool_calm_at(p);
 }
 
 /// Where this cell's brick sits, in metres.
