@@ -14,6 +14,7 @@ extends Node3D
 ## until the editor rescans, and a headless run reads that cache off disk.
 
 const WaterSheetFx := preload("res://scripts/water_sheet.gd")
+const WaterPoolsFx := preload("res://scripts/water_pools.gd")
 
 ## Tier 0: brick pieces a stud across, round the camera.
 var near: WaterSurface = null
@@ -23,6 +24,9 @@ var near: WaterSurface = null
 var far: WaterSurface = null
 ## Tier 1 now: the smooth sheet, from the studded tier to the horizon.
 var sheet = null
+## The water in dug ground (water_pools.gd, Water.md §12): a hole dug below
+## the sea where the world was dry is not sea, and fills by flowing.
+var pools = null
 
 ## Stud columns per WET-map cell, and the map itself: whether any ground in
 ## the cell is under the sea. Tier 0 is 26k pieces whatever is under it, and
@@ -73,6 +77,11 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
 
+	pools = WaterPoolsFx.new()
+	pools.name = "Pools"
+	add_child(pools)
+	pools.reset_for_world()
+
 
 ## The ground under the water (R) and the distance to the nearest dry
 ## ground (G), one texel every `_step` studs, and the WET map beside it.
@@ -98,9 +107,20 @@ func _seabed_image() -> Image:
 
 ## The ground changed (an edit): read the seabed again. One texture is
 ## shared by every tier, so updating it in place reaches all of them.
-func refresh_seabed() -> void:
+## `studs`, when given, is where it changed: the pools there read their
+## ground again, and a hole newly dug below the sea starts to fill.
+func refresh_seabed(studs := Rect2i()) -> void:
 	if _seabed != null:
 		_seabed.update(_seabed_image())
+	if pools == null or not studs.has_area():
+		return
+	# A whole-world change (a load, an undo of everything) is a new world to
+	# the pools: scanning every column for dug ground would take seconds.
+	var tile := BrickTerrain.get_tile_studs()
+	if studs.get_area() > 64 * tile * tile:
+		pools.reset_for_world()
+	else:
+		pools.ground_changed(studs)
 
 
 ## Is there sea anywhere in what was built?
@@ -131,6 +151,9 @@ func follow(camera: Vector3, delta: float) -> void:
 	# only where there is water inside their reach.
 	near.visible = enabled and wet_near(camera, near.radius)
 	sheet.visible = enabled
+	if pools != null:
+		pools.visible = enabled
+		pools.tick(delta)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
 	# The sheet leaves a hole exactly where the studded tier draws, and none
@@ -154,6 +177,7 @@ func rebuild() -> void:
 		child.queue_free()
 	near = null
 	sheet = null
+	pools = null
 	build(_half_studs, _outer_metres, _step)
 	set_lod_debug(lod_on)
 
@@ -175,12 +199,20 @@ func set_lod_debug(on: bool) -> void:
 		sheet.set_lod_debug(on)
 
 
+## The water's surface over a point: a pool's where there is one, -INF
+## where the ground is dug below the sea and has not filled, else the sea's.
 func surface_at(p: Vector3) -> float:
-	return near.surface_at(p) if near != null else -INF
+	if near == null:
+		return -INF
+	if pools != null:
+		var pool: float = pools.level_at(p)
+		if not is_nan(pool):
+			return pool
+	return near.surface_at(p)
 
 
 func submerged_at(p: Vector3) -> bool:
-	return near != null and near.submerged_at(p)
+	return near != null and p.y < surface_at(p)
 
 
 func triangle_count() -> int:
