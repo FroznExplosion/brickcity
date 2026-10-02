@@ -75,6 +75,13 @@ func decide(_obs: PackedFloat32Array, _rng: RandomNumberGenerator) -> int:
 	return Tactic.TAKE_COVER
 
 
+## The tactic, given the soldier itself (a policy that reads more of the world
+## than the observation, as BookCombatPolicy does). By default, decide().
+func decide_in(_so: Soldier, _c: FactionKnowledge.Contact, _cover: Dictionary,
+		obs: PackedFloat32Array, rng: RandomNumberGenerator) -> int:
+	return decide(obs, rng)
+
+
 ## For logs and overlays.
 func policy_name() -> String:
 	return "base"
@@ -98,6 +105,24 @@ static func create(model: CombatPolicy = null, contract: Dictionary = {}) -> Com
 		push_warning("[ai] combat policy %s refused: contract %s, need %s -- running the scripted one"
 				% [model.policy_name(), contract, CONTRACT])
 	return ScriptedCombatPolicy.new()
+
+
+## The policy the command line asks for: `-- --tactics=book` runs the Tactics
+## Casebook's (BookCombatPolicy, Docs/Tactics); anything else, create().
+## Loaded by path, not by class name: the base policy every soldier runs must not
+## depend on the book's scripts being in the class cache.
+const BOOK_POLICY := "res://scripts/ai/tactics/book_combat_policy.gd"
+
+
+static func from_args() -> CombatPolicy:
+	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		if a == "--tactics=book":
+			var script := load(BOOK_POLICY) as GDScript
+			var b: CombatPolicy = script.new() if script != null else null
+			if b != null and b.get(&"book") != null:
+				return b
+			push_warning("[ai] --tactics=book: the book policy or its book did not load -- running the scripted policy")
+	return create()
 
 
 ## The situation, as the policy sees it. `cover` is CoverSearch.find's answer

@@ -87,6 +87,9 @@ var tactic := -1
 var tactic_at := -INF
 var tactic_until := -INF
 var tactic_done := false
+## The Tactics Casebook's plan behind the tactic, when the book decides
+## (BookCombatPolicy): {moment, facts, amounts, move, asked, extras, wanted_extras}.
+var book := {}
 ## Health it has at full, when it was last hurt, and what it had then.
 var max_health := 100.0
 var hurt_at := -INF
