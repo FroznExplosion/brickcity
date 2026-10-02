@@ -13,8 +13,10 @@ const DEBRIS := 1 << 2     ## detached clusters at rest
 const PAWN := 1 << 3       ## characters. Nothing uses it yet.
 const FALLING := 1 << 4    ## a large detached section still in motion
 const RUBBLE := 1 << 5     ## a piece too small to matter to a collapse
-## Interior fittings that are NOT made of brick, when there are any. Nothing
-## uses it today.
+## Interior fittings that are NOT made of brick: a building's furniture body --
+## the boxes of its drawn and real rooms' contents (CityScene._room_body).
+## Walkers and bullets meet it; nothing that falls does, so a collapsing
+## section never hangs on a table.
 ##
 ## It was written for staircases, which had a body of their own and had to be
 ## kept off everything structural: a section coming down landed on the

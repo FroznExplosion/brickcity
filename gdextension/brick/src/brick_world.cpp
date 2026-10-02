@@ -1321,6 +1321,9 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
 
 void BrickWorld::bake_chunk_faces(Chunk &c) {
     bake_faces_into(c, archetypes, c.bake);
+    // A new bake numbers its faces afresh: the patch baseline described the
+    // old one (update_index_regions).
+    c.live_indices = PackedInt32Array();
 }
 
 BrickWorld::BakeJob *BrickWorld::find_bake_job(int chunk_id) {
@@ -1356,6 +1359,7 @@ void BrickWorld::settle_bake_job(int chunk_id, bool adopt) {
         }
         if (adopt && valid_chunk(chunk_id)) {
             chunks[chunk_id].bake = std::move(job->bake);
+            chunks[chunk_id].live_indices = PackedInt32Array();
             stats[chunk_id].bake_ms = chunks[chunk_id].bake.bake_ms;
             stats[chunk_id].baked_faces = chunks[chunk_id].bake.face_count();
         }
@@ -2044,11 +2048,16 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     if (section < 0 || section >= c.bake.section_count()) {
         return Array();
     }
-    // NOT filled here. A band computes its own indices below, and the
-    // whole-chunk buffer is only a BASELINE for the next diff -- so
-    // update_index_regions establishes it the first time it is asked. Filling
-    // it here made the first band after a bake pay for every face in the chunk:
-    // measured at 57 ms against 5.5 for an ordinary band.
+    // The whole-chunk buffer is the BASELINE the next patch diffs against
+    // (update_index_regions), and it has to be what the bands DRAW. It was set
+    // the first time a patch was asked for -- after the hit the patch was for,
+    // so that hit was in the baseline, diffed as no change and never drawn:
+    // killed bricks went on being drawn, floating, until the building was
+    // rebuilt (--ghost, 2026-10-02). Filling it whole here made the first band
+    // after a bake pay for every face in the chunk (57 ms against 5.5), so each
+    // band writes its own range of it instead, as it computes it below: what is
+    // in the baseline is exactly what each band was built with. A band not
+    // built yet since the bake is all degenerate there.
     const int first = c.bake.section_first[(size_t)section];
     const int faces = c.bake.section_faces[(size_t)section];
     if (faces <= 0) {
@@ -2072,6 +2081,12 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     PackedInt32Array idx;
     idx.resize((int64_t)faces * 6);
     int32_t *w = idx.ptrw();
+    const int64_t total = (int64_t)c.bake.face_count() * 6;
+    if (c.live_indices.size() != total) {
+        c.live_indices.resize(total);
+        std::fill(c.live_indices.ptrw(), c.live_indices.ptrw() + total, 0);
+    }
+    int32_t *live = c.live_indices.ptrw();
     for (int f = 0; f < faces; ++f) {
         const int face = first + f;
         const int32_t owner = c.bake.owner[(size_t)face];
@@ -2079,12 +2094,14 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
         const bool drawn = c.blocks[owner].alive
                 && (other < 0 || !c.blocks[other].alive);
         const int to = f * 6;
+        int32_t *at = live + (size_t)face * 6;
         if (!drawn) {
             // A culled face stays a degenerate triangle, or the band's buffer
             // changes length when something breaks and it can never be patched
             // again.
             for (int k = 0; k < 6; ++k) {
                 w[to + k] = 0;
+                at[k] = 0;
             }
             continue;
         }
@@ -2095,6 +2112,14 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
         w[to + 3] = base + 1;
         w[to + 4] = base + 3;
         w[to + 5] = base + 2;
+        // In the chunk's numbering, as fill_indices writes it.
+        const int32_t g = face * 4;
+        at[0] = g + 0;
+        at[1] = g + 1;
+        at[2] = g + 2;
+        at[3] = g + 1;
+        at[4] = g + 3;
+        at[5] = g + 2;
     }
     arrays[Mesh::ARRAY_INDEX] = idx;
     return arrays;
@@ -2106,8 +2131,17 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
         return out;
     }
     Chunk &c = chunks[chunk_id];
+    // Nothing to patch FROM -- no bake (a block placed or removed since: a room
+    // laid or cleared), or no baseline for it (a fresh bake no band has been
+    // built from). It used to answer with no regions, which a caller reads as
+    // "patched, nothing moved" -- and the change this patch was for was never
+    // drawn. Section -1 says: build again (CityScene._remesh,
+    // IslandManager._patch_bands).
+    Dictionary cannot;
+    cannot["section"] = -1;
     if (!c.bake.valid) {
-        return out; // nothing to compare; the caller must build first
+        out.push_back(cannot);
+        return out;
     }
     const auto t0 = std::chrono::steady_clock::now();
     MeshStats &st = stats[chunk_id];
@@ -2117,14 +2151,12 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
     PackedInt32Array next;
     fill_indices(c, st, next);
 
-    // No baseline yet -- a fresh bake, whose bands were built from exactly this
-    // block state. So nothing has MOVED; this call is what establishes what to
-    // diff against next time.
     if (c.live_indices.size() != next.size()) {
         c.live_indices = next;
         st.indices = next.size();
         st.compact_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
+        out.push_back(cannot);
         return out;
     }
     const int32_t *a = c.live_indices.ptr();
