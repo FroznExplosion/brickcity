@@ -522,7 +522,10 @@ public:
     /// none held before, whose own weight the studs joining them to grounded
     /// bricks hold: made held (Block::held). How many groups.
     int reattach_held_groups(int chunk_id, const Array &groups, const uint8_t *grounded);
-    static constexpr int REATTACH_MAX_BLOCKS = 48;
+    /// Crumb-sized (IslandManager.DEBRIS_MAX_BLOCKS): the single bricks and
+    /// handfuls that sprayed off a break. It was 48, and wall chunks of that
+    /// size hung on a few studs where they should have fallen (--ghost).
+    static constexpr int REATTACH_MAX_BLOCKS = 8;
 
     // --- templates ---------------------------------------------------------
 

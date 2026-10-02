@@ -907,6 +907,7 @@ var _arena_mode := false
 var arena: WaveDirector
 var _wreck_mode := false
 var _jam_mode := false
+var _drawn_mode := false
 var _squad_mode := false
 var _mechfall_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
@@ -1006,6 +1007,7 @@ func _ready() -> void:
 	_arena_mode = combat_arena or "--arena" in args
 	_wreck_mode = "--wreck" in args
 	_jam_mode = "--jam" in args
+	_drawn_mode = "--drawn" in args
 	_breaklag_mode = "--breaklag" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
@@ -1225,6 +1227,8 @@ func _ready() -> void:
 		_run_wreck_pass()
 	elif _jam_mode:
 		_run_jam_pass()
+	elif _drawn_mode:
+		_run_drawn_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -2069,8 +2073,12 @@ func _room_body(id: int) -> RID:
 		return RID()
 	var body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
-	PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
-	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
+	# Furniture holds nothing up (Layers.FIXTURE). It was STRUCTURE, so a
+	# section of the building coming down landed on a drawn table or cupboard --
+	# static, unbreakable -- and hung there inside the building (user report,
+	# 2026-10-02). Walkers and bullets still meet it; wreckage goes through.
+	PhysicsServer3D.body_set_collision_layer(body, Layers.FIXTURE)
+	PhysicsServer3D.body_set_collision_mask(body, Layers.FIXTURE_MASK)
 	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM,
 			world.get_chunk_transform(b.chunk))
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
@@ -5828,6 +5836,108 @@ func _run_wreck_pass() -> void:
 	_check_log_replays()
 	print("[wreck] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Does a building draw what it has, and nothing it has lost?
+##
+## A building's bands are index-patched when it is hit (_remesh), against a
+## baseline of what they draw (BrickWorld.update_index_regions). The baseline
+## was set by the first patch asked for -- after the hit it was for -- so that
+## hit was never drawn: three big blasts into a wall left 3,467 of 9,516
+## triangles drawn with no brick behind them, a staircase and walls floating in
+## the hole, real to nobody's grid (user report, 2026-10-02). Each triangle is
+## asked: a step inside it, along its normal, is a live brick? A shaped part
+## (a spiral tread, a slope) answers no for a few of its own -- 246 of 15,106
+## on this building whole -- so the measure has slack for that.
+const DRAWN_SLACK := 0.02
+
+func _run_drawn_pass() -> void:
+	print("[drawn] a building draws the bricks it has, and none it has lost")
+	# The recipe tower nearest thirty courses: the big city has none in the
+	# twenties or thirties.
+	var b: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build():
+			continue
+		if b == null or absi(c.recipe.courses - 30) < absi(b.recipe.courses - 30):
+			b = c
+	var fx: float = b.recipe.footprint_x * STUD
+	var face: Vector3 = b.xform * Vector3(fx * 0.5, 7.0, 0.0)
+	var out: Vector3 = (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized()
+	camera.global_position = face + out * 16.0 + Vector3(0.0, 2.0, 0.0)
+	camera.look_at(face, Vector3.UP)
+	await _frames(90)
+	_gate_ok("building %d is bricks, its bands drawn" % b.id,
+			b.is_materialised() and _brick_nodes.has(b.id) and not _bands_building(b.id))
+	var before := _drawn_stale(b)
+	_gate_ok("whole, it draws nothing but bricks", float(before[1]) <= float(before[0]) * DRAWN_SLACK,
+			"%d of %d triangles with no brick behind them" % [before[1], before[0]])
+	for shot in 3:
+		_blast(face + Vector3(0.0, float(shot) * 2.5 - 2.0, 0.0) + out * 0.5, 5.8)
+		await _frames(20)
+	for t in 240:
+		await get_tree().physics_frame
+	await _frames(4)
+	var after := _drawn_stale(b)
+	_gate_ok("three big blasts into a wall later, it draws only what it has left",
+			float(after[1]) <= float(after[0]) * DRAWN_SLACK,
+			"%d of %d triangles with no brick behind them: %s" % [after[1], after[0], after[2]])
+	# Furniture holds nothing up: its body is no layer a piece collides with.
+	var furniture_ok := true
+	for id in _room_bodies:
+		if PhysicsServer3D.body_get_collision_layer(_room_bodies[id]) \
+				& (Layers.FALLING_MASK | Layers.SETTLED_MASK | Layers.AIRBORNE_MASK):
+			furniture_ok = false
+	_gate_ok("and no piece can come to rest on furniture", furniture_ok,
+			"%d furniture bodies" % _room_bodies.size())
+	print("[drawn] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## [triangles drawn, of them with no live brick behind, what was there].
+func _drawn_stale(b: BuildingRegistry.Building) -> Array:
+	var node: MeshInstance3D = _brick_nodes.get(b.id)
+	if node == null:
+		return [0, 0, {}]
+	var inv := world.get_chunk_transform(b.chunk).affine_inverse()
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(b.chunk)
+	var meshes: Array = [node]
+	for k in node.get_children():
+		if k is MeshInstance3D:
+			meshes.append(k)
+	var tris := 0
+	var stale := 0
+	var kinds := {}
+	for m in meshes:
+		var mesh: Mesh = (m as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		var xf: Transform3D = inv * (m as MeshInstance3D).global_transform
+		for si in mesh.get_surface_count():
+			var arr: Array = mesh.surface_get_arrays(si)
+			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var nrm: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+			for t in range(0, idx.size(), 3):
+				var a := idx[t]
+				var bb := idx[t + 1]
+				var c := idx[t + 2]
+				if a == bb or bb == c or a == c:
+					continue
+				tris += 1
+				var centre: Vector3 = xf * ((v[a] + v[bb] + v[c]) / 3.0)
+				var inside: Vector3 = centre - (xf.basis * nrm[a]).normalized() * 0.02
+				var cell := origin + Vector3i(floori(inside.x / cs.x), floori(inside.y / cs.y),
+						floori(inside.z / cs.z))
+				if world.is_solid(b.chunk, cell):
+					continue
+				stale += 1
+				var bid := world.block_at(b.chunk, cell)
+				var what := "no block" if bid < 0 else \
+						world.get_archetype_name(world.get_block_archetype(b.chunk, bid)).get_slice("#", 0)
+				kinds[what] = int(kinds.get(what, 0)) + 1
+	return [tris, stale, kinds]
 
 
 ## Does a collapse come down, or hang?
