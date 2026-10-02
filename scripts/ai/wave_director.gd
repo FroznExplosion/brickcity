@@ -1025,7 +1025,7 @@ func write_decisions(path: String) -> int:
 	for d in city.ai_services.decisions:
 		f.store_line(JSON.stringify({"t": d.t, "who": d.who, "obs": Array(d.obs),
 				"tactic": d.tactic, "policy": d.policy, "reward": d.get("reward"),
-				"flags": d.get("flags", []), "outcome": d.get("outcome", {})}))
+				"flags": d.get("flags", []), "outcome": d.get("outcome", {}), "book": d.get("book")}))
 	f.close()
 	print("[arena] %d decision(s) written to %s" % [city.ai_services.decisions.size(), path])
 	return city.ai_services.decisions.size()

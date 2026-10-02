@@ -53,7 +53,7 @@ var on_breach := Callable()
 ## Combat's seeded RNG (D9). Agents draw their own streams from it.
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
-var policy: CombatPolicy = CombatPolicy.create()
+var policy: CombatPolicy = CombatPolicy.from_args()
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []
@@ -173,6 +173,8 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 func log_decision(who: Node, obs: PackedFloat32Array, tactic: int) -> Dictionary:
 	var d := {"t": now(), "who": who.get_instance_id(), "obs": obs,
 			"tactic": tactic, "policy": policy.policy_name()}
+	if who is Soldier and not (who as Soldier).book.is_empty():
+		d["book"] = (who as Soldier).book.duplicate(true)
 	decisions.append(d)
 	if decisions.size() > DECISIONS_KEPT:
 		decisions = decisions.slice(decisions.size() - DECISIONS_KEPT)

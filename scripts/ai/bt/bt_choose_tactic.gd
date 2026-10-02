@@ -55,7 +55,7 @@ func _tick(_delta: float) -> Status:
 	blackboard.set_var(&"cover_threat", threat)
 	var obs := CombatPolicy.observe(so, c, cover)
 	var was := so.tactic
-	so.tactic = s.policy.decide(obs, s.rng)
+	so.tactic = s.policy.decide_in(so, c, cover, obs, s.rng)
 	so.tactic_at = now
 	so.tactic_until = now + s.rng.randf_range(HOLD[0], HOLD[1])
 	so.tactic_done = false
