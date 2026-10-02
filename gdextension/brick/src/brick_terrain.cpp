@@ -3063,6 +3063,35 @@ static float column_surface(const TileSample &s, int lx, int lz, float fx, float
     return slope_profile(sv, len, top, slope_front_at(top, s.sl_fall[i]), s.sl_fall[i] < 2);
 }
 
+Dictionary BrickTerrain::ray_ground(const Vector3 &from, const Vector3 &dir, double max_metres) {
+    Dictionary out;
+    const Vector3 d = dir.normalized();
+    auto ground = [](const Vector3 &p) {
+        return (double)(surface_plate((int)std::floor(p.x / STUD_M), (int)std::floor(p.z / STUD_M)) + 1)
+                * (double)PLATE_M;
+    };
+    const double step = 0.5;
+    for (double t = 0.0; t < max_metres; t += step) {
+        const Vector3 p = from + d * (real_t)(t + step);
+        if ((double)p.y > ground(p)) {
+            continue;
+        }
+        double lo = t, hi = t + step;
+        for (int i = 0; i < 5; ++i) {
+            const double mid = (lo + hi) * 0.5;
+            if ((double)(from + d * (real_t)mid).y <= ground(from + d * (real_t)mid)) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        const Vector3 at = from + d * (real_t)hi;
+        out["position"] = Vector3(at.x, (real_t)ground(at), at.z);
+        return out;
+    }
+    return out;
+}
+
 PackedFloat32Array BrickTerrain::water_floor_tile(int tx, int tz) {
     TileSample s;
     sample_tile(g_field, tx, tz, s);
@@ -3963,6 +3992,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::generated_plate);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("water_floor_tile", "tx", "tz"),
         &BrickTerrain::water_floor_tile);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("ray_ground", "from", "dir", "max_metres"),
+        &BrickTerrain::ray_ground);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("sculpt_tiles"),
         &BrickTerrain::sculpt_tiles);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sculpt_tile", "tx", "tz"),
@@ -4406,6 +4437,25 @@ PackedFloat32Array BrickWave::build_shore_field(int half_studs, int step) {
     std::copy(g_shore.begin(), g_shore.end(), out.ptrw());
     return out;
 }
+Array BrickWave::wet_cells(int cell_studs) {
+    Array out;
+    cell_studs = std::max(cell_studs, 1);
+    std::set<std::pair<int, int>> seen;
+    for (int iz = 0; iz < g_shore_n; ++iz) {
+        for (int ix = 0; ix < g_shore_n; ++ix) {
+            if (g_shore[((size_t)iz * g_shore_n + ix) * 2] >= (float)g_sea_level) {
+                continue;
+            }
+            const int cx = (int)std::floor((double)(ix * g_shore_step - g_shore_half) / cell_studs);
+            const int cz = (int)std::floor((double)(iz * g_shore_step - g_shore_half) / cell_studs);
+            if (seen.insert({ cx, cz }).second) {
+                out.append(Vector2i(cx, cz));
+            }
+        }
+    }
+    return out;
+}
+
 double BrickWave::group_at(double x, double z, double t) { return group_factor(x, z, t); }
 double BrickWave::band_at(double x, double z, double t) { return band_value(x, z, t); }
 
@@ -4559,6 +4609,8 @@ void BrickWave::_bind_methods() {
         &BrickWave::shore_distance);
     ClassDB::bind_static_method("BrickWave", D_METHOD("build_shore_field", "half_studs", "step"),
         &BrickWave::build_shore_field);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("wet_cells", "cell_studs"),
+        &BrickWave::wet_cells);
     ClassDB::bind_static_method("BrickWave", D_METHOD("group_at", "x", "z", "t"),
         &BrickWave::group_at);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_at", "x", "z", "t"),

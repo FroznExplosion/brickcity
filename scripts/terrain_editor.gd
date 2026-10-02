@@ -327,7 +327,7 @@ func _end_stroke() -> void:
 	if _stroke_rect.size.x > 0:
 		_host.terrain_changed(_stroke_rect)
 	_stroke_rect = Rect2i()
-	_refresh_markers()
+	_refresh_markers(false)
 	_status = "stroke done (%d to undo)" % BrickTerrain.sculpt_undo_depth()
 
 
@@ -496,7 +496,7 @@ func _set_tool(t: Tool) -> void:
 		_palette.visible = t == Tool.PAINT_BRUSH
 	_selected = -1
 	_status = "tool: %s" % TOOL_NAMES[int(t)].to_lower()
-	_refresh_markers()
+	_refresh_markers(false)
 
 
 ## `-` and `=` mean different things per tool, because the thing they change
@@ -568,31 +568,10 @@ func _aim() -> Dictionary:
 ## truth the tiles are built from, so the brush marches it: half a metre a
 ## step, then halved down to a couple of centimetres.
 func _aim_field() -> Dictionary:
-	var stud := BrickWorld.get_stud_metres()
-	var plate := BrickWorld.get_plate_metres()
-	var from := _camera.global_position
-	var dir := -_camera.global_transform.basis.z
-	var ground := func(p: Vector3) -> float:
-		return float(BrickTerrain.surface_plate(int(floor(p.x / stud)),
-				int(floor(p.z / stud))) + 1) * plate
-	var step := 0.5
-	var t := 0.0
-	while t < 400.0:
-		var p := from + dir * (t + step)
-		if p.y <= ground.call(p):
-			var lo := t
-			var hi := t + step
-			for i in 5:
-				var mid := (lo + hi) * 0.5
-				var q := from + dir * mid
-				if q.y <= ground.call(q):
-					hi = mid
-				else:
-					lo = mid
-			var at := from + dir * hi
-			return {"position": Vector3(at.x, ground.call(at), at.z)}
-		t += step
-	return {}
+	# In C++: a half-metre march along the view and a bisection, up to 800
+	# field reads, every frame a brush is out.
+	return BrickTerrain.ray_ground(_camera.global_position,
+			-_camera.global_transform.basis.z, 400.0)
 
 
 func _click() -> void:
@@ -837,11 +816,18 @@ func _rebuild_all() -> void:
 ## A flat disc over each pad, so an author can see what they are editing —
 ## the ground itself only shows the RESULT of a pad, which is a flat spot
 ## that looks like any other flat spot.
-func _refresh_markers() -> void:
+## `shells`: also rebuild the building shells on the sites (and with them the
+## trees, which stand clear of the pads). Only an edit to a site or a pad
+## needs that; a tool switch or a brush stroke does not -- rebuilding them on
+## every switch re-scattered all the trees, and new tree sets draw every tree
+## at full detail until their impostor cards bake: 9 million triangles for a
+## couple of seconds.
+func _refresh_markers(shells := true) -> void:
 	for child in _markers.get_children():
 		_markers.remove_child(child)
 		child.queue_free()
-	_refresh_shells()
+	if shells:
+		_refresh_shells()
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
 	for i in BrickTerrain.pad_count():

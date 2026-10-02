@@ -3147,3 +3147,13 @@ Two ways to get some of it back, if wanted:
   (§19.22–19.24) is heightfield-only, so LOD 0 would lose slopes until 3D slope rules exist.
   Overhangs pop at the LOD boundary. Generated overhangs as VOLUME-from-generation tiles with a
   baked far proxy (§22.3) get the same mountains at every distance without this.
+
+### 22.8 The editor's triangle spike (2026-10-02)
+
+Switching tool (and ending every brush stroke) called `_refresh_markers`, which rebuilt the site
+shells and with them re-scattered all 6000 trees into NEW ImpostorLod sets. A new set has no
+baked card, and until it bakes every tree is drawn at full detail: 1 M triangles became 9 M+ for
+a couple of seconds. Now a tool switch or stroke does not touch the shells; `TerrainTrees` keeps
+its sets and re-places only the trees in the changed area (`rebuild_soon(studs)`). The brush's
+aim (`BrickTerrain.ray_ground`) and the sea's WET map (`BrickWave.wet_cells`) moved to C++.
+Measured in the editor scene: 758 k triangles before a switch to RAISE, 761 k peak after.

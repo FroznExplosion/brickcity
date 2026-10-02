@@ -446,6 +446,11 @@ public:
     /// or the middle of a slope's face (column_surface), so a slope holds
     /// water. TILE x TILE, row-major (z then x).
     static PackedFloat32Array water_floor_tile(int tx, int tz);
+    /// Where a ray first meets the heightfield's column tops, within
+    /// `max_metres`: {"position": Vector3} on the top of the column hit, or
+    /// {} for a miss. Half-metre march, then bisection. (The editor's brush
+    /// aimed with this in GDScript every frame: up to 800 field reads.)
+    static Dictionary ray_ground(const Vector3 &from, const Vector3 &dir, double max_metres);
 
     /// Remove every solid plate cell within `radius_m` of a world point.
     ///
@@ -780,6 +785,9 @@ public:
     /// interleaved (ground, distance) row by row -- the texture's own layout,
     /// so the water uploads it as it is.
     static PackedFloat32Array build_shore_field(int half_studs, int step);
+    /// After build_shore_field: the cells, `cell_studs` a side, holding any
+    /// field sample under the sea, as Vector2i (water_sea.gd's WET map).
+    static Array wet_cells(int cell_studs);
     /// Metres from a point to the nearest dry ground, bilinear over that
     /// field; very large where no field has been built.
     static double shore_distance(double x, double z);

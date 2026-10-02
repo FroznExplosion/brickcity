@@ -15,7 +15,8 @@ extends SceneTree
 ## - still water stops being ticked (a pool costs nothing at rest);
 ## - ground dug deeper under the sea is still sea, not a pool;
 ## - the sea tiers do not draw in a dug hole (the seabed reads it as dry,
-##   and the stud mask hides the sea's waves over it).
+##   and the stud mask hides the sea's waves over it), and the sea lies still
+##   where it meets a pool, so no crest stands over the calm water.
 
 const TerrainWorldScript := preload("res://scripts/terrain_world.gd")
 const STEP := 1.0 / 60.0
@@ -193,8 +194,15 @@ func _run() -> void:
 			floori(float(beach.y) / _tile))
 	_ok("the pool is drawn", int(baked["triangle_count"]) > 0, "%d tris" % int(baked["triangle_count"]))
 	var mask: PackedByteArray = BrickPools.sea_mask(hole.position.x, hole.position.y, 8)
-	_ok("the sea is masked off the pool, stud by stud", mask[2 * 8 + 2] == 255
+	_ok("the sea is masked off the pool, stud by stud", mask[(2 * 8 + 2) * 2] == 255
 			and BrickPools.sea_mask(beach.x + 3, beach.y, 1)[0] == 0)
+	# The calm channel: none of the sea's wave against the pool, all of it
+	# well out.
+	var wide: PackedByteArray = BrickPools.sea_mask(beach.x - 40, beach.y - 40, 80)
+	var at_edge: int = wide[(40 * 80 + 41) * 2 + 1]
+	var far_out: int = wide[(40 * 80 + 79) * 2 + 1]
+	_ok("the sea lies still where it meets the pool, and waves on out",
+			at_edge < 40 and far_out == 255, "%d at the breach, %d 38 studs out" % [at_edge, far_out])
 	var still_after := -1.0
 	for q in 40:
 		_sim(0.5)

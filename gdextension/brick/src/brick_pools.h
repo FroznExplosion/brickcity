@@ -69,10 +69,12 @@ public:
     /// "mesh" is empty when there is nothing to draw.
     static Dictionary build_mesh(int tx, int tz);
 
-    /// Where the sea must NOT be drawn, a byte per stud over a square window
-    /// (row-major, z then x): 255 on every pool column that is not sea. The
-    /// sea's cull samples the seabed every few studs and would draw its waves
-    /// over a dug hole; this is the stud-sharp answer.
+    /// Two bytes per stud over a square window (row-major, z then x; an RG8
+    /// image). R: 255 where the sea must NOT be drawn -- every pool column
+    /// that is not sea; the sea's cull samples the seabed every few studs and
+    /// would draw its waves over a dug hole. G: how much of its wave the sea
+    /// keeps, 0 against pool water rising to 255 a few metres off, so the sea
+    /// lies still where it meets a pool.
     static PackedByteArray sea_mask(int x0, int z0, int size);
     /// How fast water moves, 0..1 of full gravity in the pipes.
     static void set_flow_speed(double fraction);
