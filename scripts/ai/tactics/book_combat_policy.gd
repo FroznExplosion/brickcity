@@ -20,12 +20,16 @@ const DOABLE := {
 	"trade": -1, "suppress": -1,
 	"hold": T.TAKE_COVER, "relocate": T.TAKE_COVER,
 	"reload": T.COVER_RELOAD,
-	"rush": T.PUSH, "advance": T.PUSH, "melee": T.PUSH,
+	"rush": T.RUSH, "advance": T.PUSH, "melee": T.MELEE,
+	# Thrown (Soldier.throw_grenade), then fire from cover.
+	"grenade": -1,
 	"flank": T.FLANK,
 	"fall_back": T.FALL_BACK, "flee": T.FALL_BACK, "regroup": T.FALL_BACK, "hide": T.FALL_BACK,
 	# Said aloud (SAID), then fire from cover.
 	"call_help": -1, "mark": -1,
 }
+## A "then grenade" goes this long after the decision.
+const THEN_GRENADE := 1.8
 ## Extras the soldier can do now: said aloud (Callouts).
 const SAID := {
 	"call_help": ["Need help over here!", "Contact, send everyone!", "Get over here!"],
@@ -69,9 +73,12 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	var plan := book.plan(sense.moment, sense.facts, sense.amounts, mem, mates, rng)
 	var move: String = plan.move
 	var asked := move
-	if not DOABLE.has(move):
-		_count(wanted, move)
-		move = _redraw(plan.rows, rng)
+	if not DOABLE.has(move) or (move == "grenade" and not so.can_throw_at(c.pos)):
+		if not DOABLE.has(move):
+			_count(wanted, move)
+		move = _redraw(plan.rows, rng, so, c)
+	if move == "grenade":
+		so.throw_grenade(c.pos)
 	var tactic := _tactic(move, cover) if move != "" else _fallback.decide(o, rng)
 	_count(done, move)
 	if SAID.has(move):
@@ -80,7 +87,13 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	var extras: Array = []
 	var not_yet: Array = []
 	for x in plan.extras:
-		if SAID.has(x.move):
+		if x.move == "grenade":
+			if x.slot == "then":
+				so.grenade_after = so.services.now() + THEN_GRENADE
+				extras.append("grenade")
+			elif so.throw_grenade(c.pos):
+				extras.append("grenade")
+		elif SAID.has(x.move):
 			var lines: Array = SAID[x.move]
 			so.services.say(so.pawn, "book_" + str(x.move), lines[rng.randi() % lines.size()])
 			extras.append(x.move)
@@ -94,12 +107,12 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	return tactic
 
 
-## Again, among the moves the tree can do, in their book proportions.
-func _redraw(rows: Array, rng: RandomNumberGenerator) -> String:
+## Again, among the moves the soldier can do now, in their book proportions.
+func _redraw(rows: Array, rng: RandomNumberGenerator, so: Soldier, c: FactionKnowledge.Contact) -> String:
 	var live: Array = []
 	var total := 0.0
 	for r in rows:
-		if DOABLE.has(r.move) and r.p > 0.0:
+		if DOABLE.has(r.move) and r.p > 0.0 and (r.move != "grenade" or so.can_throw_at(c.pos)):
 			live.append(r)
 			total += r.p
 	if total <= 0.0:

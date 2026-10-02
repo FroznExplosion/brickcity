@@ -26,8 +26,11 @@ How the enemy chooses what to do, authored as odds rather than code.
   lines to head and chest), above/below, within reach, inside (a roof overhead), the
   player unaware or reloading or in a mech, alone, other squads near, health,
   magazine, squad strength, the player's health. `BookCombatPolicy` draws the book's
-  plan and maps its move to one of the six tactics the soldier tree can carry out;
-  call for help and mark are said aloud. A move the game can't do yet (grenade,
+  plan and maps its move to one of the eight tactics the soldier tree can carry out
+  (rush and melee added, CombatPolicy spec 2); grenades are thrown (`Grenade`: lobbed,
+  a danger zone for 1.2 s, then up to 120 damage within 4 m, none behind bricks, and a
+  small blast in the bricks; two per soldier, never onto a friend); call for help and
+  mark are said aloud. `tools/ai_moves_probe.gd` checks grenade, melee and rush. A move the game can't do yet (grenade,
   smoke, breach...) is counted as *wanted* and the draw is made again among the
   doable moves. Every logged decision carries the plan (`--log-decisions=PATH`).
   `tools/tactics_sense_probe.gd` checks the readings and a fight.

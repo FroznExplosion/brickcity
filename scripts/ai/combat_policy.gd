@@ -23,7 +23,7 @@ extends RefCounted
 ## Change an observation or a tactic -- add, remove, reorder, rescale -- and
 ## SPEC_VERSION goes up. Every value is scaled to about 0..1.
 
-const SPEC_VERSION := 1
+const SPEC_VERSION := 2
 
 enum Obs {
 	HAS_COVER,        ## 1 if cover against the threat was found in reach
@@ -53,10 +53,12 @@ enum Tactic {
 	PUSH,          ## close in on the threat, firing
 	FLANK,         ## go round to its side, firing when it can
 	FALL_BACK,     ## to cover further from the threat
+	RUSH,          ## straight at it at a run, firing, no cover (spec 2)
+	MELEE,         ## run at it and hit it in reach (spec 2)
 	COUNT,
 }
 const TACTIC_NAMES: Array[String] = ["fight_open", "take_cover", "cover_reload", "push",
-		"flank", "fall_back"]
+		"flank", "fall_back", "rush", "melee"]
 
 ## What a model has to declare to be used in place of the scripted policy.
 const CONTRACT := {

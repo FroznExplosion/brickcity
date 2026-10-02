@@ -83,4 +83,8 @@ func scores(o: PackedFloat32Array) -> PackedFloat32Array:
 	# Falling back: hurt, low, and close.
 	s[Tactic.FALL_BACK] = -1.4 + (1.0 if hurt else 0.0) + (1.0 - health) * 1.6 \
 			+ (0.7 if far < 9.0 else 0.0) + (0.4 if alone else 0.0)
+	# Rush and melee are the Tactics Casebook's moves (BookCombatPolicy): the
+	# scripted policy as tuned does not take them.
+	s[Tactic.RUSH] = -8.0
+	s[Tactic.MELEE] = -8.0
 	return s

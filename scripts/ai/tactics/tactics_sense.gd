@@ -22,6 +22,8 @@ const HEAD := CoverSearch.STAND_EYE
 const CHEST := CoverSearch.STAND_CHEST
 ## Hurt within this is being caught out, on a first decision.
 const CAUGHT_SECONDS := 2.0
+## A player out of sight in full cover, heard within this, is dug in, not lost.
+const HEARD_DUG_IN := 3.0
 ## Another player within this of the target is "teammates near".
 const TEAM_NEAR := 15.0
 ## A friendly soldier outside the squad within this is "other squads near".
@@ -119,10 +121,11 @@ static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amou
 		return "have_jump"
 	if so.tactic < 0 and now - so.hurt_at < CAUGHT_SECONDS:
 		return "caught_out"
+	# Hidden behind full cover but just heard (firing from it): dug in, not lost.
+	if int(amounts.pcover) == 2 and (c.visible or now - c.heard_at < HEARD_DUG_IN):
+		return "player_dug_in"
 	if not c.visible:
 		return "lost_player"
-	if int(amounts.pcover) == 2:
-		return "player_dug_in"
 	return "first_contact"
 
 
