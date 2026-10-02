@@ -999,3 +999,37 @@ two meet at sea level.
 4. Swim / buoyancy / flow push read column water where it exists, `BrickWave` elsewhere.
 5. Cell water for VOLUME tiles (after Terrain.md §22 step 4); trapped air.
 6. Save, multiplayer diffs (STA §10.8–10.9), far water-top map.
+
+### 12.7 Built: pools — dug ground fills from the sea (2026-10-02)
+
+The first step of §12, cut down to what the game needs now: **the sea stays infinite and never
+drains; ground dug below it fills by flowing, and the water in the hole is a pool of its own.**
+
+* **What is sea.** A column is sea where the field AS GENERATED (noise and pads, no sculpt —
+  `BrickTerrain.generated_plate`) is below sea level. Ground dug below the sea where the world was
+  dry is not sea: `build_shore_field` reads it as dry ground, so the sea tiers do not draw there.
+  A slope whose face dips under the sea on a natural beach is land, as it was.
+* **Pools** (`BrickPools`, `src/brick_pools.cpp`): one water depth per stud column, held in
+  32x32 tiles only where something is dug or water has flowed. Virtual-pipe flow (flux per
+  neighbour with momentum, damped 0.95 a step), 60 Hz fixed sub-steps, active set only. Sea
+  columns are a fixed level, an infinite source and sink. The floor is `column_surface` at the
+  column's middle, so a slope holds water and the drawn top is clipped by the slope face.
+* **Two ways in.** Through a breach (the hole reaches a sea column): fills in a few seconds and
+  ends level with the sea. Through the sand (`set_seep`, default 10 studs, 0.08 m/s): a hole up
+  the beach fills slowly to 3 cm under the sea, so it never feeds a loop back into it. A hole
+  below the sea far inland stays dry.
+* **Drawn** (`water_pools.gd`, `shaders/water_pool.gdshader`): a flat top per column at a level
+  stepped a plate at a time from the sea (so a pool that meets the sea is exactly level with it),
+  sides where it stands over its neighbour, none toward the sea. Calm — no wave function —
+  coloured by depth, foam streaks by flow speed. Re-meshed at 10 Hz, only tiles whose drawn
+  level changed.
+* **Wired** through `water_sea.gd`: `refresh_seabed(studs)` tells the pools where the ground
+  changed (the editor's strokes via `terrain_changed`; a whole-world change resets them);
+  `surface_at` / `submerged_at` answer a pool's level, -INF in a dry dug hole, else the wave. A
+  loaded world's sculpt is scanned and its pools settled full before the first frame.
+* **Not saved**: a pool is refilled from the sea at load, so only pools fed by the sea come back.
+  Nothing digs the heightfield in play yet — the editor's brush does; a weapon crater writes the
+  same sculpt and needs only the same `terrain_changed` call.
+* **Probe**: `tools/pools_probe.gd` (breach fills, then stills; seep; inland stays dry; poured
+  water conserved and flat; dug sea stays sea; seabed dry in the hole). Pictures:
+  `tools/pools_shot.gd` (needs a window).

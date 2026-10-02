@@ -564,7 +564,7 @@ func terrain_changed(studs: Rect2i) -> void:
 	for span in dirty_rings:
 		_rebuild_ring(span)
 	if _sea != null:
-		_sea.refresh_seabed()
+		_sea.refresh_seabed(studs)
 
 
 # ---------------------------------------------------------------------------

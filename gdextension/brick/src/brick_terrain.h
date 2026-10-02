@@ -438,6 +438,14 @@ public:
     static int height_at(int x, int z);
     static int solid_at(int x, int yp, int z);
     static int surface_plate(int x, int z);
+    /// The top plate of the field AS GENERATED: noise and pads, no sculpt.
+    /// The sea is measured on this, so a hole dug in the beach is not ocean
+    /// and has to fill by flowing (Water.md 12).
+    static int generated_plate(int x, int z);
+    /// The floor water rests on, per column of a tile, in metres: the top,
+    /// or the middle of a slope's face (column_surface), so a slope holds
+    /// water. TILE x TILE, row-major (z then x).
+    static PackedFloat32Array water_floor_tile(int tx, int tz);
 
     /// Remove every solid plate cell within `radius_m` of a world point.
     ///

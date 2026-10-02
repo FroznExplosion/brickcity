@@ -3117,3 +3117,33 @@ simpler for them than two paths and a conversion.
 This game is different: the terrain is a surface with nothing under it to find, most of it is
 never dug, and the far LOD already is a heightfield. Two formats cost a conversion step and buy
 the cheapest surface mesher, and all the slope work, for the ground nobody digs.
+
+### 22.7 Decision: stay heightfield; when full volumetric would win (2026-10-02)
+
+**Decision: keep the heightfield.** §22.1–22.6 stays as the plan if overhangs are ever wanted;
+nothing of it is scheduled.
+
+Full volumetric (Minecraft's one format everywhere) beats this hybrid when most near tiles would
+convert anyway — roughly, when a normal session turns more than a third of the near tiles
+VOLUME: digging and mining as the core loop, generation full of caves and arches, or terrain that
+falls as physics. Then two meshers and a conversion buy nothing. A mech FPS, where destruction is
+flavour and not the game, is the hybrid's case.
+
+What the hybrid does without: generated caves and overhangs (only authored VOLUME tiles); a
+thin-roofed tunnel in loose ground (it collapses by design); hidden underground content; slopes
+under overhangs; terrain that falls as a body. Strata by depth are not lost — the material at a
+depth is a function of the field in either mode.
+
+Two ways to get some of it back, if wanted:
+
+* **Underground made when exposed.** Caves, ore and buried things as a pure function of
+  (cell, seed), evaluated only when a hit reaches them; the carve classifier converts a tile when
+  its hole touches a hidden void. Deterministic, so a cave that crosses tiles agrees and every
+  peer computes the same thing without sending it. Cave mouths at the surface must be VOLUME from
+  generation, or nothing would show they are there. Unopened ground still stores nothing.
+* **Volumetric LOD 0, heightfield LOD 1+.** Storage is not the cost (the volumetric mode is
+  already the field plus sparse edits); the cost is that every near tile goes through the
+  volumetric mesher (~2–4x the build, on every streaming move, estimated) and the slope work
+  (§19.22–19.24) is heightfield-only, so LOD 0 would lose slopes until 3D slope rules exist.
+  Overhangs pop at the LOD boundary. Generated overhangs as VOLUME-from-generation tiles with a
+  baked far proxy (§22.3) get the same mountains at every distance without this.
