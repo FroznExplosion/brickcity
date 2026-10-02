@@ -844,7 +844,10 @@ func melee(target: Pawn) -> bool:
 	if Vector2(t.x - f.x, t.z - f.z).length() > MELEE_REACH or absf(t.y - f.y) > 1.2:
 		return false
 	melee_ready_at = now + MELEE_GAP
+	var before := target.health.total_current()
 	target.health.apply_impact(MELEE_DAMAGE, &"")
+	# Counted as damage dealt, as a round that lands is (DecisionJudge).
+	dealt += before - target.health.total_current()
 	melee_hits += 1
 	services.noise(f, 15.0, pawn)
 	return true
