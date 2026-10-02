@@ -5853,11 +5853,14 @@ const DRAWN_SLACK := 0.02
 
 func _run_drawn_pass() -> void:
 	print("[drawn] a building draws the bricks it has, and none it has lost")
+	# The recipe tower nearest thirty courses: the big city has none in the
+	# twenties or thirties.
 	var b: BuildingRegistry.Building = null
 	for c in registry.buildings:
-		if not c.is_build() and c.recipe.courses >= 24 and c.recipe.courses <= 40:
+		if c.is_build():
+			continue
+		if b == null or absi(c.recipe.courses - 30) < absi(b.recipe.courses - 30):
 			b = c
-			break
 	var fx: float = b.recipe.footprint_x * STUD
 	var face: Vector3 = b.xform * Vector3(fx * 0.5, 7.0, 0.0)
 	var out: Vector3 = (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized()
