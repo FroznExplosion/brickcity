@@ -537,10 +537,19 @@ static func _pane(verts: PackedVector3Array, normals: PackedVector3Array,
 		indices.push_back(v0 + i)
 
 
-## Four wall slabs and a floor. Enough for a projectile to hit the building and
-## for debris to land on it; the real per-block collision arrives with the
-## bricks, on damage.
-static func collision_boxes(footprint_x: int, footprint_z: int, courses: int) -> Array:
+## Four wall slabs and a floor -- and a ROOF, `roofed`. Enough for a
+## projectile to hit the building and for debris to land on it; the real
+## per-block collision arrives with the bricks, on damage.
+##
+## The roof is new (2026-10-02). Without it a piece coming down on a building
+## still drawn as its shell fell straight through the top into the hollow of
+## the four walls and stood inside the building on its ground floor --
+## wreckage clipping into a building that looked whole (--breaklag's slab).
+## Only on a building with its top: the boxes do not follow damage, and a roof
+## at the recipe's height over storeys that are gone would hold debris up in
+## the air.
+static func collision_boxes(footprint_x: int, footprint_z: int, courses: int,
+		roofed := false) -> Array:
 	var t := TowerRecipe.WALL_THICK
 	var w := footprint_x * STUD
 	var d := footprint_z * STUD
@@ -553,7 +562,8 @@ static func collision_boxes(footprint_x: int, footprint_z: int, courses: int) ->
 		{"pos": Vector3(tw * 0.5, y, d * 0.5), "size": Vector3(tw, h, d - tw * 2.0)},
 		{"pos": Vector3(w - tw * 0.5, y, d * 0.5), "size": Vector3(tw, h, d - tw * 2.0)},
 		{"pos": Vector3(w * 0.5, PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)},
-	]
+	] + ([{"pos": Vector3(w * 0.5, h - PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)}]
+			if roofed else [])
 
 
 ## `unit` is the rectangle the seam shader tiles: pass a brick-sized one and the

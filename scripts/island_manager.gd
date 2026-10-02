@@ -275,6 +275,17 @@ const ISLAND_LOD_PER_TICK := 2
 ## one piece ten times over in the big city's collapse. 145 m away nobody sees
 ## half a second of a few bricks too many.
 const COARSE_REBUILD_TICKS := 15
+## ...and longer for one that costs more to build: COARSE_TICKS_PER_MS ticks of
+## wait for each millisecond its last build took. A 5,000-brick chunk of a
+## collapse, falling far off while the queued shots of a --big --shot kept
+## landing on it, was 17-22 ms a build -- the worst tick of the pass, every
+## fifteen ticks. At four ticks a millisecond that one waits a second.
+const COARSE_TICKS_PER_MS := 4.0
+
+
+## How long this piece's stand-in waits before it is built again.
+static func coarse_wait(isl: BrickIsland) -> int:
+	return maxi(COARSE_REBUILD_TICKS, int(isl.coarse_ms * COARSE_TICKS_PER_MS))
 ## Landings processed per tick. A landing shears joints and re-solves the
 ## piece, and when a whole city comes down at once hundreds arrive together
 ## -- 98 ms of a 108 ms tick. The rest wait their turn; the queue keeps the
@@ -2119,7 +2130,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	# for every hit -- 1-3 ms each for a big one, where a patch was nothing.
 	if isl.coarse:
 		var fresh := isl.coarse_drawn \
-				and Engine.get_physics_frames() - isl.coarse_tick < COARSE_REBUILD_TICKS
+				and Engine.get_physics_frames() - isl.coarse_tick < coarse_wait(isl)
 		if force_full and not fresh:
 			_build_coarse(isl)
 		elif not _mesh_queue.has(isl):
@@ -2176,8 +2187,9 @@ func _starts_coarse(isl: BrickIsland) -> bool:
 func _build_coarse(isl: BrickIsland) -> void:
 	var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
 	isl.coarse_tick = Engine.get_physics_frames()
+	isl.coarse_ms = world.get_last_coarse_ms()
 	coarse_built += 1
-	coarse_worst_ms = maxf(coarse_worst_ms, world.get_last_coarse_ms())
+	coarse_worst_ms = maxf(coarse_worst_ms, isl.coarse_ms)
 	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d (coarse)" % isl.chunk)
 	if ok:
 		var verts := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
@@ -3642,11 +3654,16 @@ func _drain_mesh_queue() -> void:
 		# one it has is fresh (COARSE_REBUILD_TICKS), when it waits its turn.
 		if isl.coarse:
 			if isl.coarse_drawn \
-					and Engine.get_physics_frames() - isl.coarse_tick < COARSE_REBUILD_TICKS:
+					and Engine.get_physics_frames() - isl.coarse_tick < coarse_wait(isl):
 				i += 1
 				continue
 			_mesh_queue.remove_at(i)
+			var _tc := Time.get_ticks_usec()
+			var _was := "rebuilt" if isl.coarse_drawn else "first"
 			rebuild_mesh(isl, true)
+			_note_mesh_drain(isl, _tc, "stand-in, %s, from %s (%s), %d ms old, settled %s, edits %d" % [
+					_was, isl.census_from, isl.shed_cause, Time.get_ticks_msec() - isl.born_ms,
+					isl.settled, isl.edits])
 			done += 1
 			continue
 		# Still on the worker? Leave it and look at the next one -- a big bake
@@ -3667,8 +3684,20 @@ func _drain_mesh_queue() -> void:
 			i += 1
 			continue
 		_mesh_queue.remove_at(i)
+		var _tb := Time.get_ticks_usec()
 		rebuild_mesh(isl, true)
+		_note_mesh_drain(isl, _tb, "baked")
 		done += 1
+
+
+## The slowest single mesh the queue made, for the profile: [ms, bricks, kind].
+var mesh_drain_worst: Array = [0.0, 0, ""]
+
+
+func _note_mesh_drain(isl: BrickIsland, t0: int, kind: String) -> void:
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	if ms > float(mesh_drain_worst[0]):
+		mesh_drain_worst = [ms, world.get_alive_block_count(isl.chunk) if isl.is_valid() else -1, kind]
 
 
 ## Put distant, settled wreckage away, and bring back what somebody has walked

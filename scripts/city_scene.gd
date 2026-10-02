@@ -389,6 +389,10 @@ const SPAWN_BUDGET_MS := 3.0
 ## was the order: the building's body came last and hung in the air for 13
 ## ticks (--breaklag) -- the director hands it over first now.
 const SPAWNS_PER_TICK := 2
+## Groups small enough to be crumbs (IslandManager._crumble) are cut out on a
+## count of their own: no body, a fraction of a millisecond each, and two a
+## tick of them held up whatever came after (CollapseDirector.plan).
+const CRUMBS_CUT_PER_TICK := 24
 ## How many building bands may be merged again in one tick
 ## (BuildingCollision.flush). ~0.45 ms each on a mega tower, and one chunk cut
 ## out of one can leave fifteen stale: the rest are parked out of the space and
@@ -442,6 +446,14 @@ const BUILDING_CELL := 32.0
 ## against 1 ms across 22. Structure only changes when something hits it, so the
 ## solve is driven by that instead, and budgeted like everything else.
 const SOLVES_PER_TICK := 4
+## A building's cascade runs to its end in the tick it starts, as far as this
+## allows (BrickWorld.solve_structure's rounds): a joint failing puts its load
+## on the next, which the next solve fails, and at one solve a tick the top of
+## a tower with its storey blown out hung for half a second while its last
+## walls gave way a generation at a time (--breaklag --big). Rounds are cheap
+## -- a stress solve, no Dictionary -- and the clock is per building.
+const CASCADE_ROUNDS := 48
+const CASCADE_BUDGET_MS := 3.0
 ##
 ## A count, not a clock like spawns. A solve put off to the next tick meets more
 ## damage: on the big city a 6 ms budget turned towers that toppled as
@@ -546,6 +558,9 @@ var _pending_disable := {}
 ## Solves of mega buildings [count, ms], and the worst single solve
 ## [ms, blocks, groups, collapsing].
 var _solve_mega := [0, 0.0]
+var _held_groups := 0      ## groups put back as held (Block::held), all told
+var _cascade_rounds := 0   ## stress rounds that failed something, all told
+var _cascade_worst := 0    ## the most in one solve
 var _solve_worst := [0.0, 0, 0, false]
 var _solve_batches := 0
 var _solve_batch_worst := 0.0
@@ -2374,7 +2389,7 @@ func _make_shell_body(id: int) -> void:
 	var boxes: Array = (BuildShell.collision_boxes(world, b.build, _dead_by_frame(b))
 			if b.is_build() else
 			BuildingShell.collision_boxes(b.recipe.footprint_x, b.recipe.footprint_z,
-					b.recipe.courses))
+					b.recipe.courses, b.damage_profile.is_empty()))
 	for box in boxes:
 		PhysicsServer3D.body_add_shape(body, _shape_rid(box.size), Transform3D(Basis(), box.pos))
 	# The same boxes stand in for the bricks with the AI (AIWorld proxies) while
@@ -5222,6 +5237,16 @@ func _run_breaklag_pass() -> void:
 		break
 	if aimed != null:
 		await _aim_check(aimed)
+	# And one a falling piece is about to land on (_path_promote).
+	var under: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest \
+				or c == shell or c == aimed:
+			continue
+		under = c
+		break
+	if under != null:
+		await _path_check(under)
 	# On a building of its own: the walls case below wants one nothing has hit.
 	if ordinary.size() > 2:
 		await _proxy_check(ordinary[2])
@@ -5480,6 +5505,50 @@ func _proxy_drawn(id: int) -> bool:
 	var mi = _shadow_proxy.get(id)
 	return is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
 			and (mi as MeshInstance3D).mesh.get_surface_count() > 0
+
+
+## A slab dropped from twenty-five metres onto a shell: by the time it lands
+## the building is bricks with its bands drawn, so the landing shows on it.
+func _path_check(b: BuildingRegistry.Building) -> void:
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	var top: float = TowerRecipe.total_plates(b.recipe.courses) * PLATE
+	var centre: Vector3 = b.xform * Vector3(fx * 0.5, top, fz * 0.5)
+	camera.global_position = centre + Vector3(0.0, 10.0, 0.0) \
+			+ (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized() * (fz * 0.5 + 35.0)
+	# Looking AWAY: aimed at, it would be made bricks for that (_aim_promote),
+	# and this is about the piece.
+	camera.look_at(camera.global_position * 2.0 - centre, Vector3.UP)
+	await _frames(4)
+	var c := world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(6, 6, 3))
+	TowerRecipe.build(world, c, palette, 6, 6, 3)
+	world.set_chunk_transform(c, Transform3D(Basis(), centre + Vector3(-1.0, 25.0, -1.0)))
+	var ids := PackedInt32Array()
+	for id in world.get_block_count(c):
+		ids.append(id)
+	var p0 := path_promotions
+	var piece := islands.spawn(c, ids, Vector3.ZERO, Vector3.ZERO, -1, -1)
+	world.release_chunk(c)
+	if piece == null:
+		_gate_ok("a slab to drop on building %d" % b.id, false)
+		return
+	var start := piece.body.global_position
+	var promoted_at := -1
+	var t := 0
+	while t < 240 and piece.is_valid() and not piece.landed:
+		await get_tree().physics_frame
+		t += 1
+		if promoted_at < 0 and b.is_materialised():
+			promoted_at = t
+	print("[breaklag]   slab: %d bricks, %s, from %s to %s; building box %s; made bricks at tick %d, landed %d" % [
+			world.get_alive_block_count(piece.chunk) if piece.is_valid() else -1,
+			"landmark" if piece.landmark else ("rubble" if piece.disposable else "piece"),
+			start, piece.body.global_position if piece.is_valid() else Vector3.ZERO,
+			_world_box(b), promoted_at, t])
+	_gate_ok("building %d: a slab falling on it made it bricks, drawn, before it landed" % b.id,
+			b.is_materialised() and not _shells.has(b.id) and path_promotions > p0,
+			"landed after %d tick(s); materialised %s, shell %s, %d promoted from a path" % [
+				t, b.is_materialised(), _shells.has(b.id), path_promotions - p0])
 
 
 ## Aimed at from past PROMOTE_RANGE, a shell is bricks with its bands drawn
@@ -6292,6 +6361,7 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("render", t)
 	var spawn_until := Time.get_ticks_usec() + int(SPAWN_BUDGET_MS * 1000.0)
 	var spawned := 0
+	var crumbs_cut := 0
 	var solved := 0
 	# Solving, toppling and detaching decide what a building does next, and on
 	# budgets whose timing differs machine to machine. The host decides; a client
@@ -6315,7 +6385,7 @@ func _physics_process(_delta: float) -> void:
 				chunks.append(ab.chunk)
 		if ids.size() > 1:
 			var _tb := Time.get_ticks_usec()
-			var answers: Array = world.solve_structures(chunks)
+			var answers: Array = world.solve_structures(chunks, CASCADE_ROUNDS, CASCADE_BUDGET_MS)
 			var _batch_ms := float(Time.get_ticks_usec() - _tb) / 1000.0
 			_solve_batches += 1
 			_solve_batch_worst = maxf(_solve_batch_worst, _batch_ms)
@@ -6340,7 +6410,7 @@ func _physics_process(_delta: float) -> void:
 			ahead.erase(id)
 		else:
 			var _ts := Time.get_ticks_usec()
-			solve = world.solve_structure(b.chunk)
+			solve = world.solve_structure(b.chunk, CASCADE_ROUNDS, CASCADE_BUDGET_MS)
 			var _solve_ms := float(Time.get_ticks_usec() - _ts) / 1000.0
 			var _blocks := world.get_block_count(b.chunk)
 			if _blocks >= CollapseDirector.MEGA_BLOCKS:
@@ -6351,12 +6421,15 @@ func _physics_process(_delta: float) -> void:
 						director.collapsing.has(b.id)]
 		t = _mark("solve", t)
 		var res: Dictionary = solve.stress
-		if int(res.get("failures", 0)) > 0:
+		if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
 			quiet = false
 			# A solve that failed something changed the structure, and when it
 			# ran relative to the hits around it decides what it failed.
 			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE,
-					b.id, Vector3.ZERO, 0.0)
+					b.id, Vector3.ZERO, 0.0, Vector3(1.0, 0.0, 0.0), int(res.get("rounds", 0)))
+			_held_groups += int(res.get("reattached", 0))
+			_cascade_rounds += int(res.get("rounds", 1))
+			_cascade_worst = maxi(_cascade_worst, int(res.get("rounds", 1)))
 
 		# Is what is left actually balanced on what holds it up? Stress cannot
 		# answer that -- toppling is a rigid-body question. Without this a tower
@@ -6404,7 +6477,8 @@ func _physics_process(_delta: float) -> void:
 		# Breakage as it always was; a mega building's collapse as a few big
 		# chunks, its furniture split out to be written off (CollapseDirector).
 		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
-				islands.interest_points())
+				islands.interest_points(), 0 if b.is_build() else TowerRecipe.STOREY_PLATES,
+				int(res.get("failures", 0)) > 0)
 		# Stairs a section took with it (_with_stairs) can be a group of their own
 		# further down this same plan: what of it they were is gone already.
 		# Recorded as named, that DETACH cut nothing on any other machine (the
@@ -6428,8 +6502,14 @@ func _physics_process(_delta: float) -> void:
 				for k in range(named, before.size()):
 					taken_by_stairs[before[k]] = true
 			# Furniture is deleted where it is unless somebody is right there:
-			# it costs next to nothing and is not held to the spawn budget.
-			if kind != &"furniture":
+			# it costs next to nothing and is not held to the spawn budget. Nor
+			# is a group small enough to be crumbs (IslandManager._crumble): no
+			# body, no mesh -- but the clock still holds it.
+			if kind != &"furniture" and before.size() <= IslandManager.DEBRIS_MAX_BLOCKS:
+				if crumbs_cut >= CRUMBS_CUT_PER_TICK 						or (crumbs_cut > 0 and Time.get_ticks_usec() >= spawn_until):
+					break
+				crumbs_cut += 1
+			elif kind != &"furniture":
 				if spawned >= SPAWNS_PER_TICK \
 						or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
 					break
@@ -6554,6 +6634,7 @@ func _physics_process(_delta: float) -> void:
 
 	if camera != null and Engine.get_physics_frames() % 3 == 0:
 		_aim_promote()
+		_path_promote()
 	var promoted := 0
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
@@ -7624,6 +7705,66 @@ func _aim_promote() -> void:
 	_promote_queue.push_front(id)
 	_band_first[id] = true
 	aim_promotions += 1
+
+
+## Bricks for what a falling piece is about to land on.
+##
+## A piece that came down on a building still drawn as its shell made it bricks
+## in the tick it landed (_shear_building -> _promote), and the hit showed only
+## once the bands were drawn -- the first shot's lag, for a falling building
+## instead of a gun. Every few ticks a falling piece near somebody is swept
+## PATH_AHEAD_S ahead along its velocity and gravity, and a shell in the way
+## goes to the front of the promotion queue, bands first, as one aimed at does
+## (_aim_promote). Far from everyone a landing does not promote (FRACTURE_RANGE),
+## so neither does this. A few pieces a pass, round the list.
+const PATH_AHEAD_S := 1.0
+const PATH_MIN_SPEED := 3.0
+const PATH_CHECKS_PER_PASS := 12
+var path_promotions := 0
+var _path_cursor := 0
+var _path_box := BoxShape3D.new()
+
+
+func _path_promote() -> void:
+	var n := islands.islands.size()
+	if n == 0:
+		return
+	var space := get_world_3d().direct_space_state
+	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) \
+			* IslandManager.DEBRIS_GRAVITY
+	var t := PATH_AHEAD_S
+	var checked := 0
+	var looked := 0
+	while checked < PATH_CHECKS_PER_PASS and looked < n:
+		_path_cursor = (_path_cursor + 1) % n
+		looked += 1
+		var isl: BrickIsland = islands.islands[_path_cursor]
+		if not isl.is_valid() or isl.settled or isl.disposable:
+			continue
+		var v := isl.body.linear_velocity
+		if v.length() < PATH_MIN_SPEED:
+			continue
+		var box := islands.world_aabb(isl)
+		if islands.far_from_everyone(box.get_center()):
+			continue
+		checked += 1
+		var ahead := box.merge(AABB(box.position + v * t + Vector3.DOWN * 0.5 * g * t * t, box.size))
+		_path_box.size = ahead.size
+		var q := PhysicsShapeQueryParameters3D.new()
+		q.shape = _path_box
+		q.transform = Transform3D(Basis(), ahead.get_center())
+		q.collision_mask = Layers.STRUCTURE
+		for hit in space.intersect_shape(q, 8):
+			var id := _building_for_body(hit.rid)
+			if id < 0:
+				continue
+			var b := registry.get_building(id)
+			if b == null or b.is_materialised() or b.toppled or _promote_queue.has(id):
+				continue
+			_promote_queue.push_front(id)
+			_band_first[id] = true
+			path_promotions += 1
+			return   # one a pass: a promotion is the expensive part
 
 
 func _trim_quiet() -> void:
@@ -8869,6 +9010,8 @@ func _report_profile() -> void:
 	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
 			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
 			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
+	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs" % [
+			_cascade_rounds, _cascade_worst, _held_groups])
 	var sw: Array = islands.spawn_worst
 	print("[prof] worst single spawn %.1f ms (%d bricks): split %.1f  shapes %.1f  node %.1f (furniture %.1f, into the scene %.1f, %d boxes)  mesh %.1f" % [
 			float(sw[0]), int(sw[5]), float(sw[1]), float(sw[2]), float(sw[3]), float(sw[6]),
@@ -8899,8 +9042,9 @@ func _report_profile() -> void:
 				float(tw.mesh), int(tw.islands)])
 		print("[prof]   of which fracture: landings %.1f + merged rebuilds %.1f" % [
 			float(tw.get("landings", 0.0)), float(tw.get("reshapes", 0.0))])
-		print("[prof]   of which resolve (harvest, upload, mesh queue, band holes, resolve queue): %s" % [
-			tw.get("resolve parts: harvest, upload, mesh queue, band holes, resolve queue", [])])
+		print("[prof]   of which resolve (harvest, upload, mesh queue, band holes, resolve queue): %s; the slowest mesh the queue made %s" % [
+			tw.get("resolve parts: harvest, upload, mesh queue, band holes, resolve queue", []),
+			islands.mesh_drain_worst])
 		print("[prof]   worst single piece reshape %.1f ms (%d bricks, %d boxes): shapes %.1f + space %.1f" % [
 			float(islands.reshape_worst[0]), int(islands.reshape_worst[1]), int(islands.reshape_worst[2]),
 			float(islands.reshape_worst[3]), float(islands.reshape_worst[4])])
