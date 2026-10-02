@@ -10,6 +10,8 @@ extends RefCounted
 ##         DynamicSelector
 ##           Sequence  TacticIs(cover, cover reload, fall back) > FindCover > PeekAndFire
 ##           Sequence  TacticIs(push, flank) > Manoeuvre
+##           Sequence  TacticIs(rush) > Rush        -- straight in at a run
+##           Sequence  TacticIs(melee) > Melee      -- run at it and hit it
 ##           FireInOpen                        -- fight open, or a tactic that failed
 ##     GoHelp                                   -- a buddy is stuck and called
 ##     DynamicSequence  HasContact(25 s, unsearched) > Search  -- lost it: go and look
@@ -58,6 +60,18 @@ static func build() -> BehaviorTree:
 	move.add_child(wants_move)
 	move.add_child(BTManoeuvre.new())
 	how.add_child(move)
+	var rush := BTSequence.new()
+	var wants_rush := BTTacticIs.new()
+	wants_rush.tactics = [CombatPolicy.Tactic.RUSH]
+	rush.add_child(wants_rush)
+	rush.add_child(BTRush.new())
+	how.add_child(rush)
+	var melee := BTSequence.new()
+	var wants_melee := BTTacticIs.new()
+	wants_melee.tactics = [CombatPolicy.Tactic.MELEE]
+	melee.add_child(wants_melee)
+	melee.add_child(BTMelee.new())
+	how.add_child(melee)
 	how.add_child(BTFireInOpen.new())
 	engage.add_child(how)
 	root.add_child(engage)

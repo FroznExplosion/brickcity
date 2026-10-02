@@ -21,6 +21,8 @@ const LINES := {
 	CombatPolicy.Tactic.FLANK: ["Flanking!", "Going round the side!", "I'll get round him!"],
 	CombatPolicy.Tactic.FALL_BACK: ["Falling back!", "Pull back!", "I'm hit, moving back!"],
 	CombatPolicy.Tactic.FIGHT_OPEN: ["Light him up!", "Open fire!", "There he is!"],
+	CombatPolicy.Tactic.RUSH: ["Rush him!", "Charge!", "Everybody go!"],
+	CombatPolicy.Tactic.MELEE: ["I'll take him!", "Get over here!", "Hand to hand!"],
 }
 
 
@@ -55,7 +57,7 @@ func _tick(_delta: float) -> Status:
 	blackboard.set_var(&"cover_threat", threat)
 	var obs := CombatPolicy.observe(so, c, cover)
 	var was := so.tactic
-	so.tactic = s.policy.decide(obs, s.rng)
+	so.tactic = s.policy.decide_in(so, c, cover, obs, s.rng)
 	so.tactic_at = now
 	so.tactic_until = now + s.rng.randf_range(HOLD[0], HOLD[1])
 	so.tactic_done = false
@@ -78,7 +80,7 @@ func _should_decide(so: Soldier, now: float) -> bool:
 	if so.hurt_at > so.tactic_at:
 		return true
 	var g := so.pawn.gun
-	if g != null and so.tactic != CombatPolicy.Tactic.COVER_RELOAD \
+	if g != null and so.tactic != CombatPolicy.Tactic.COVER_RELOAD and so.tactic != CombatPolicy.Tactic.MELEE \
 			and float(g.ammo) / float(maxi(g.mag_size(), 1)) < 0.2 and not g.is_reloading():
 		return true
 	return false

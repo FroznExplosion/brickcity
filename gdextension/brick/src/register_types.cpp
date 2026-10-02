@@ -1,6 +1,7 @@
 #include "register_types.h"
 #include "brick_world.h"
 #include "brick_terrain.h"
+#include "brick_pools.h"
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
@@ -22,6 +23,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<BrickWorld>();
     ClassDB::register_class<BrickTerrain>();
     ClassDB::register_class<BrickWave>();
+    // Pools: dug ground that fills from the sea (Water.md 12).
+    ClassDB::register_class<BrickPools>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();
