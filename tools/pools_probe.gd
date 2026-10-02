@@ -14,7 +14,8 @@ extends SceneTree
 ## - water poured into a basin spreads flat and none is lost or made;
 ## - still water stops being ticked (a pool costs nothing at rest);
 ## - ground dug deeper under the sea is still sea, not a pool;
-## - the sea tiers do not draw in a dug hole (the seabed reads it as dry).
+## - the sea tiers do not draw in a dug hole (the seabed reads it as dry,
+##   and the stud mask hides the sea's waves over it).
 
 const TerrainWorldScript := preload("res://scripts/terrain_world.gd")
 const STEP := 1.0 / 60.0
@@ -191,7 +192,16 @@ func _run() -> void:
 	var baked: Dictionary = BrickPools.build_mesh(floori(float(beach.x - 2) / _tile),
 			floori(float(beach.y) / _tile))
 	_ok("the pool is drawn", int(baked["triangle_count"]) > 0, "%d tris" % int(baked["triangle_count"]))
-	_sim(5.0)
+	var mask: PackedByteArray = BrickPools.sea_mask(hole.position.x, hole.position.y, 8)
+	_ok("the sea is masked off the pool, stud by stud", mask[2 * 8 + 2] == 255
+			and BrickPools.sea_mask(beach.x + 3, beach.y, 1)[0] == 0)
+	var still_after := -1.0
+	for q in 40:
+		_sim(0.5)
+		if BrickPools.active_count() == 0:
+			still_after = 0.5 * (q + 1)
+			break
+	print("    still %.1f s after it was full" % still_after)
 	_ok("a still pool stops being ticked", BrickPools.active_count() == 0,
 			"%d active" % BrickPools.active_count())
 	for c in BrickPools.active_columns(4):
