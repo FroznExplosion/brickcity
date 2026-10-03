@@ -190,6 +190,7 @@ func _build() -> void:
 	_rain.draw_pass_1 = drop
 	_rain.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 60, 80))
 	add_child(_rain)
+	RainSplash.add(_rain, proc, self, Color(0.75, 0.95, 0.5, 0.85))
 	_hiss = AudioStreamPlayer.new()
 	_hiss.stream = DisasterSounds.rain()
 	_hiss.volume_db = -40.0

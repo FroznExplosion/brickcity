@@ -73,6 +73,8 @@ func _run() -> void:
 	var peak_soak := 0.0
 	var peak_gale := 0.0
 	var peak_rain := 0.0
+	var peak_surf := 0
+	var splash_points := 0
 	var before_eye := Vector3.ZERO
 	var after_eye := Vector3.ZERO
 	var eye := false
@@ -94,6 +96,10 @@ func _run() -> void:
 		peak_soak = maxf(peak_soak, float(scene._brick_material().get_shader_parameter("weather_wet")))
 		peak_gale = maxf(peak_gale, dir.ctx.gale.length())
 		peak_rain = maxf(peak_rain, WeatherFx.rain)
+		peak_surf = maxi(peak_surf, h.peak_surf)
+		var rs = h.get_node_or_null("RainSplash")
+		if rs != null:
+			splash_points = maxi(splash_points, (rs as RainSplash).points)
 		flashes = h.flashes
 		raining = raining or dir.ctx.raining
 		if h.phase == Disaster.Phase.ACTIVE:
@@ -103,6 +109,7 @@ func _run() -> void:
 				shot_taken = true
 				await _shot("storm")
 				await _land_shot(cam, "land_wet")
+				await _wall_shot(cam, scene)
 			if shots and not eye_shot and h.in_eye() and h.phase_t > h.active_s * 0.5:
 				eye_shot = true
 				await _shot("eye")
@@ -155,6 +162,10 @@ func _run() -> void:
 			peak_rain > 0.9 and WeatherFx.rain < peak_rain, "%.2f at the height, %.2f after" % [peak_rain,
 			WeatherFx.rain])
 	_ok("the grass is set to move in the wind", grass > 0, "%d tile(s) of tufts" % grass)
+	_ok("the rain splashes where it lands -- ground, roofs, water", splash_points > RainSplash.RAYS / 2,
+			"%d of %d rays found somewhere to land" % [splash_points, RainSplash.RAYS])
+	_ok("surf sprays where the waves meet the shore", peak_surf > 0,
+			"%d shore stretch(es) spraying at most" % peak_surf)
 	_ok("trees sway in the gale, and it stops with the storm",
 			peak_gale > 0.5 and dir.ctx.gale == Vector3.ZERO and WeatherFx.wind == Vector3.ZERO
 			and (scene._trees == null or swaying > 0),
@@ -189,9 +200,25 @@ func _land_shot(cam: DebugCamera, name: String) -> void:
 	# And close: the ground at a low angle, where puddles and ripples show.
 	cam.global_position = tree + Vector3(4.0, 1.4, 4.0)
 	cam.look_at(tree + Vector3(-3.0, 0.0, -3.0), Vector3.UP)
-	await process_frame
-	await process_frame
+	for i in 70:   # the rain has to fall to here, and the collision field follow
+		await process_frame
 	await _shot(name + "_close")
+	cam.global_transform = was
+
+
+## Close to a site's wall in the rain: the streaks running down it.
+func _wall_shot(cam: DebugCamera, scene: Node) -> void:
+	if scene._sites.is_empty():
+		return
+	var was := cam.global_transform
+	var site: MeshInstance3D = scene._sites[0]
+	var box := site.global_transform * site.get_aabb()
+	var face := Vector3(box.position.x - 4.0, box.position.y + 3.0, box.get_center().z)
+	cam.global_position = face
+	cam.look_at(Vector3(box.position.x, box.position.y + 2.5, box.get_center().z + 1.0), Vector3.UP)
+	for i in 70:
+		await process_frame
+	await _shot("wall_wet")
 	cam.global_transform = was
 
 

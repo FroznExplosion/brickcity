@@ -384,7 +384,9 @@ func _tip_pushed() -> void:
 		if p.piece == null:
 			var most := Earthquake.TOP_MIN_BRICKS - 1
 			for isl in ctx.islands_near(box.get_center(), box.size.length()):
-				if isl.is_valid() and is_instance_valid(isl.body) and ctx.piece_bricks(isl) > most:
+				# Its own top: old rubble lying near is not it.
+				if (isl.is_valid() and is_instance_valid(isl.body) and isl.owner == int(p.id)
+						and ctx.piece_bricks(isl) > most):
 					most = ctx.piece_bricks(isl)
 					p.piece = isl
 		var isl: BrickIsland = p.piece
