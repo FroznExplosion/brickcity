@@ -61,6 +61,10 @@ func _run() -> void:
 	else:
 		cam.set_walking(true)
 		await _ticks(30)
+	# Frame time before it, for the comparison: a measurement, not a check.
+	# Uncapped, or both read the 60 Hz vsync interval.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var calm := await _frame_ms(90)
 	_ok("a hurricane starts", dir.start("hurricane", 1.0))
 	var h: Hurricane = dir.current
 	var h_active := h.active_s
@@ -74,6 +78,7 @@ func _run() -> void:
 	var peak_gale := 0.0
 	var peak_rain := 0.0
 	var peak_surf := 0
+	var storm_ms: Array[float] = []
 	var splash_points := 0
 	var before_eye := Vector3.ZERO
 	var after_eye := Vector3.ZERO
@@ -115,6 +120,7 @@ func _run() -> void:
 				await _shot("eye")
 			if u > 0.3 and u < 0.4:
 				before_eye = h.wind
+				storm_ms.append(1000.0 / maxf(Engine.get_frames_per_second(), 1.0))
 			if h.in_eye():
 				eye = true
 				eye_calm = minf(eye_calm, h.wind.length())
@@ -173,6 +179,12 @@ func _run() -> void:
 	_ok("the wind has stopped, the lens is clear", cam.wind == Vector3.ZERO and not dir.ctx.raining
 			and float(dir.ctx.screen.get_shader_parameter("rain")) == 0.0)
 	print("  --   re-reading the seabed map: %.1f ms" % refresh_ms)
+	if not storm_ms.is_empty() and DisplayServer.get_name() != "headless":
+		var sum := 0.0
+		for v in storm_ms:
+			sum += v
+		print("  --   frame time: calm %.1f ms, at the height of the storm %.1f ms (mean of FPS)" % [
+				calm, sum / storm_ms.size()])
 	_finish(scene)
 
 
@@ -220,6 +232,14 @@ func _wall_shot(cam: DebugCamera, scene: Node) -> void:
 		await process_frame
 	await _shot("wall_wet")
 	cam.global_transform = was
+
+
+## Mean frame time over `n` rendered frames.
+func _frame_ms(n: int) -> float:
+	var t0 := Time.get_ticks_usec()
+	for i in n:
+		await process_frame
+	return float(Time.get_ticks_usec() - t0) / 1000.0 / float(n)
 
 
 func _shot(name: String) -> void:

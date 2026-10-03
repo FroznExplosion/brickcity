@@ -831,3 +831,24 @@ printed materials registered; still wet just after, drying; 4 tree sets swaying,
 and back to zero with the storm. Windowed, every shader compiles; `-- --hurricane-shot` saves
 `land_dry` / `land_wet` over the same trees. City `--play`, `--rooms`, the workshop gate and the
 disaster probe (115) pass.
+
+---
+
+## 20. Frame times on a quiet machine (2026-10-03)
+
+Taken with the editor closed and no other Godot process running, before and after each run.
+
+| Run | Mean | Worst |
+|---|---|---|
+| Physics tick during the meteor shower (headless) | 4.95 ms | 57.2 ms |
+| Physics tick during an Extreme quake, 1 collapse at a time | 7.36 ms | 32.8 ms |
+| Shaking alone, no collapses, 12 s | 7.14 ms | 14.4 ms |
+| Physics tick during the tornado | 8.48 ms | 44.3 ms |
+| Frame, heightfield coast, 1280x720, vsync off: calm | 7.5 ms | — |
+| Frame, the same, at the height of the hurricane | 7.9 ms | — |
+
+The worst ticks are the collapses and landings themselves (the same as without a disaster: see
+[Collapse](Collapse.md)); the disasters' own work -- shaking, wind, rain, splashes, surf, wet and
+sway -- costs well under a millisecond on top. The hurricane's frame was first measured at 16.6
+ms both ways: the 60 Hz vsync interval, not the frame; the probe now switches vsync off for it.
+The earlier numbers in this document were taken with other processes running and read high.
