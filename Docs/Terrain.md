@@ -3157,3 +3157,21 @@ a couple of seconds. Now a tool switch or stroke does not touch the shells; `Ter
 its sets and re-places only the trees in the changed area (`rebuild_soon(studs)`). The brush's
 aim (`BrickTerrain.ray_ground`) and the sea's WET map (`BrickWave.wet_cells`) moved to C++.
 Measured in the editor scene: 758 k triangles before a switch to RAISE, 761 k peak after.
+
+### 22.9 What runs every frame, measured (2026-10-03)
+
+Each per-frame piece of the heightfield scene timed alone (editor open, so indicative; ms per frame,
+camera still / moving at ~15 m/s):
+
+| piece | before | after | what changed |
+|---|---|---|---|
+| trees re-tiering (ImpostorLod.update, 6000 trees) | 3.8 every 10th frame | ~0 still, 0.2 moving | a set is re-sorted only after the camera moves a metre, one set a frame |
+| streamer.follow | 1.0 / 3.8 | 0.12 / 2.6 | `_finish` and the shadow flags skip when nothing is owed / the centre has not moved |
+| HUD | 0.3 every frame | 0.16 at 5 Hz | throttled |
+| pools' sea mask | 4.7 per rebuild | 0.11 | calm stamped round wet columns, not a distance pass over the window |
+
+What is left is not GDScript arithmetic: the moving streamer cost is creating meshes, multimeshes
+and 200–300 collision boxes per tile through the engine, under its per-frame budget. The big
+lever there is collision as ONE shape per tile (a HeightMapShape3D from C++) instead of hundreds of
+boxes — but a heightmap shape ramps between columns where the boxes step, which changes how the
+ground feels underfoot, so it is a decision, not a cleanup.

@@ -36,6 +36,12 @@ var _rebuild_in := -1.0
 ## for a change that could be anywhere (a site moved, a pad cut).
 var _pending := Rect2i()
 var _rebuild_all := false
+## Where each set was last sorted into tiers from, by key. A set is sorted
+## again only once the camera has moved a metre from there, and the sets take
+## turns, one a frame: a pass over all 6000 trees was 3.8 ms every tenth frame.
+var _sorted_at := {}
+var _turn := 0
+const RESORT_METRES := 1.0
 
 
 func setup(p_camera: Camera3D, p_material: Material) -> void:
@@ -133,13 +139,25 @@ func _process(delta: float) -> void:
 		if _rebuild_in < 0.0:
 			_rebuild()
 	_frame += 1
-	if _frame % UPDATE_EVERY == 0:
-		_update()
+	if camera == null or _sets.is_empty() or _frame % UPDATE_EVERY >= _sets.size():
+		return
+	# One set on each of the first frames of every UPDATE_EVERY.
+	var keys := _sets.keys()
+	var key: String = keys[_turn % keys.size()]
+	_turn += 1
+	var here := camera.global_position
+	var was: Vector3 = _sorted_at.get(key, Vector3.INF)
+	if was.distance_to(here) < RESORT_METRES:
+		return
+	_sorted_at[key] = here
+	(_sets[key] as ImpostorLod).update(here)
 
 
+## Every set, now: after trees were added or taken away.
 func _update() -> void:
 	if camera == null:
 		return
 	var here := camera.global_position
-	for s in _sets.values():
-		(s as ImpostorLod).update(here)
+	for key in _sets:
+		(_sets[key] as ImpostorLod).update(here)
+		_sorted_at[key] = here
