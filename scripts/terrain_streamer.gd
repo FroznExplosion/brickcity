@@ -69,9 +69,12 @@ extends Node3D
 ## (BrickTerrain.set_sun_direction), so it has no reason to be in the shadow
 ## map at all. Raise it to compare the two.
 @export var shadow_radius := 0
-## Collision boxes added per frame per tile. A whole collider at once was an
-## 18.9 ms spike; 64 is about 1 ms.
-@export var shapes_per_frame := 32
+## Collision boxes added per frame per tile; 0 is the whole collider at once.
+## The cap was 32 because a whole collider measured an 18.9 ms spike -- but
+## that was Jolt rebuilding its compound on every box added to a body already
+## in the space. Added before the body joins (TerrainTile.add_collision) a
+## whole 670-box tile is 0.77 ms, so it goes in one call.
+@export var shapes_per_frame := 0
 
 var _material: Material = null
 var _tiles := {}          ## Vector2i -> TerrainTile

@@ -76,6 +76,7 @@ func rebuild(material: Material) -> void:
 	_instances_done = false
 	_collision_done = false
 	_coll_i = 0
+	_release_multimeshes()
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -294,10 +295,7 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	var count := buffer.size() / FLOATS_PER_INSTANCE
 	if count == 0:
 		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = mesh
+	var mm := _take_multimesh(node_name, mesh)
 	mm.instance_count = count
 	# One upload. C++ already emitted the engine's own buffer layout, so there
 	# is no per-instance loop on this side at all.
@@ -336,6 +334,40 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 ## and every tile after the first reuses them. `brick_sandbox.gd` has done
 ## this since M3; terrain simply never did.
 static var _box_shapes := {}
+
+## MultiMeshes kept for reuse, by kind ("Studs", "Tufts", "Pebbles").
+##
+## A NEW MultiMesh entering the tree stalls on the render thread: measured
+## 4.5 ms a node on average and 19 ms at worst, whatever its size -- one stud
+## or a thousand. That was the "inst" worst-tile spike while walking (21-105
+## ms). A MultiMesh that has been drawn before costs 0.04 ms to fill and show
+## again, in a brand-new node. So a tile hands its MultiMeshes back when it
+## leaves, and the next tile takes them.
+static var _mm_pool := {}
+## This tile's MultiMeshes, [kind, MultiMesh], to give back.
+var _mms: Array = []
+
+
+func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
+	var mm: MultiMesh = null
+	var free: Array = _mm_pool.get(kind, [])
+	if not free.is_empty():
+		mm = free.pop_back()
+	else:
+		mm = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = mesh
+	_mms.append([kind, mm])
+	return mm
+
+
+func _release_multimeshes() -> void:
+	for pair in _mms:
+		if not _mm_pool.has(pair[0]):
+			_mm_pool[pair[0]] = []
+		(_mm_pool[pair[0]] as Array).append(pair[1])
+	_mms.clear()
 ## Live tiles. The shared shapes outlive any one tile and have to be freed
 ## when the last one goes, or Jolt reports them leaked at exit — which it
 ## did, 305 of them, the first time this ran.
@@ -382,8 +414,10 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	_free_body()
+	_release_multimeshes()
 	_live_tiles -= 1
 	if _live_tiles <= 0:
 		for rid in _box_shapes.values():
 			PhysicsServer3D.free_rid(rid)
 		_box_shapes.clear()
+		_mm_pool.clear()

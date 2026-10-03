@@ -3175,3 +3175,19 @@ and 200–300 collision boxes per tile through the engine, under its per-frame b
 lever there is collision as ONE shape per tile (a HeightMapShape3D from C++) instead of hundreds of
 boxes — but a heightmap shape ramps between columns where the boxes step, which changes how the
 ground feels underfoot, so it is a decision, not a cleanup.
+
+### 22.10 Two engine stalls behind the streaming spikes (2026-10-03)
+
+Neither was GDScript arithmetic, and neither needed C++ — both were the ORDER of engine calls.
+
+* **Collision.** Every box was added to a tile's body after the body had joined the physics space,
+  and Jolt rebuilds a body's whole compound shape on each change while it is in the space. A
+  670-box tile: 24.9 ms that way, 0.77 ms with the boxes added first and the body put in the space
+  after (`TerrainTile.add_collision`). The streamer's 32-boxes-a-frame cap existed to bound the
+  first number and is gone (`shapes_per_frame = 0`). The sea's swim patch moved 81 boxes in the
+  space 20 times a second: 0.95 ms a refit, 0.065 ms out of the space (`water_collider.gd`). The
+  city's building code already did this; the terrain had not.
+* **Instances.** A NEW MultiMesh entering the tree stalls on the render thread: 4.5 ms a node on
+  average, 19 ms at worst, for one stud or a thousand. A MultiMesh drawn before fills and shows in
+  a new node in 0.04 ms. Tiles now hand their stud, tuft and pebble MultiMeshes back to a pool when
+  they leave and the next tile takes them (`TerrainTile._take_multimesh`).
