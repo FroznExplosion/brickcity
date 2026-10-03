@@ -136,6 +136,7 @@ var _far_blocks := 0
 var _far_rings := 0
 var _sites: Array[MeshInstance3D] = []
 var _trees: TerrainTrees = null
+var _hud_in := 0.0
 ## Every coarse block's tile rect, and which node draws it (-1 = a merged
 ## ring, which is always drawn). The coverage check needs both.
 var _all_rects: Array[Rect2i] = []
@@ -1114,7 +1115,12 @@ func _process(delta: float) -> void:
 		# not, and every capture taken after a submerged one came out fogged
 		# green with the sea switched off.
 		_under.set_submerged(_env, false, DRY_AMBIENT)
-	_update_hud()
+	# Five times a second: it walks every tile to sum its counts, 0.3 ms a
+	# frame, and nobody reads a number that changes sixty times a second.
+	_hud_in -= delta
+	if _hud_in <= 0.0:
+		_hud_in = 0.2
+		_update_hud()
 
 
 func _unhandled_input(event: InputEvent) -> void:

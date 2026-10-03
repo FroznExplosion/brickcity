@@ -706,17 +706,33 @@ PackedByteArray BrickPools::sea_mask(int x0, int z0, int size) {
     uint8_t *w = out.ptrw();
     // R: 255 on every pool column that is not sea (the sea discards there).
     // G: how much of its wave the sea keeps, 0 against water in a pool and
-    // full POOL_CALM_STUDS away -- so where the sea meets a pool it is at
-    // its still level, the pool's level, and no crest stands over the pool.
-    constexpr float POOL_CALM_STUDS = 14.0f;
-    const float INF = 1.0e9f;
-    std::vector<float> dist(n, INF);
+    // full CALM studs away -- so where the sea meets a pool it is at its
+    // still level, the pool's, and no crest stands over the pool.
+    //
+    // G is STAMPED: a disc of falling calm round each wet column, into a
+    // field that starts full. A distance pass over the whole window was
+    // 4.7 ms, run on every window move and five times a second while a pool
+    // fills; a pool is tens to hundreds of wet columns.
+    constexpr int CALM = 14;
+    static uint8_t kernel[2 * CALM + 1][2 * CALM + 1];
+    static bool kernel_ready = false;
+    if (!kernel_ready) {
+        for (int dz = -CALM; dz <= CALM; ++dz) {
+            for (int dx = -CALM; dx <= CALM; ++dx) {
+                const float u = std::clamp(std::sqrt((float)(dx * dx + dz * dz)) / (float)CALM, 0.0f, 1.0f);
+                kernel[dz + CALM][dx + CALM] = (uint8_t)std::lround(255.0f * u * u * (3.0f - 2.0f * u));
+            }
+        }
+        kernel_ready = true;
+    }
     for (size_t k = 0; k < n; ++k) {
         w[k * 2] = 0;
+        w[k * 2 + 1] = 255;
     }
-    const int tx0 = fdiv(x0, T), tx1 = fdiv(x0 + size - 1, T);
-    const int tz0 = fdiv(z0, T), tz1 = fdiv(z0 + size - 1, T);
-    bool any_wet = false;
+    // Tiles one calm-reach out of the window too: water just outside it
+    // still calms the sea just inside.
+    const int tx0 = fdiv(x0 - CALM, T), tx1 = fdiv(x0 + size - 1 + CALM, T);
+    const int tz0 = fdiv(z0 - CALM, T), tz1 = fdiv(z0 + size - 1 + CALM, T);
     for (int tz = tz0; tz <= tz1; ++tz) {
         for (int tx = tx0; tx <= tx1; ++tx) {
             const PoolTile *t = tile_at(tx, tz);
@@ -729,45 +745,25 @@ PackedByteArray BrickPools::sea_mask(int x0, int z0, int size) {
                 }
                 const int x = tx * T + i % T - x0, z = tz * T + i / T - z0;
                 if (x >= 0 && z >= 0 && x < size && z < size) {
-                    const size_t k = (size_t)z * size + x;
-                    w[k * 2] = 255;
-                    if (t->depth[i] >= SHOW_MIN) {
-                        dist[k] = 0.0f;
-                        any_wet = true;
+                    w[((size_t)z * size + x) * 2] = 255;
+                }
+                if (t->depth[i] < SHOW_MIN) {
+                    continue;
+                }
+                const int za = std::max(z - CALM, 0), zb = std::min(z + CALM, size - 1);
+                const int xa = std::max(x - CALM, 0), xb = std::min(x + CALM, size - 1);
+                for (int zz = za; zz <= zb; ++zz) {
+                    const uint8_t *row = kernel[zz - z + CALM];
+                    uint8_t *dst = w + ((size_t)zz * size) * 2 + 1;
+                    for (int xx = xa; xx <= xb; ++xx) {
+                        const uint8_t v = row[xx - x + CALM];
+                        if (v < dst[(size_t)xx * 2]) {
+                            dst[(size_t)xx * 2] = v;
+                        }
                     }
                 }
             }
         }
-    }
-    if (any_wet) {
-        // Two-pass chamfer, as the shore field does (BrickWave).
-        const float D1 = 1.0f, D2 = 1.41421356f;
-        for (int z = 0; z < size; ++z) {
-            for (int x = 0; x < size; ++x) {
-                float &v = dist[(size_t)z * size + x];
-                if (x > 0) v = std::min(v, dist[(size_t)z * size + x - 1] + D1);
-                if (z > 0) {
-                    v = std::min(v, dist[(size_t)(z - 1) * size + x] + D1);
-                    if (x > 0) v = std::min(v, dist[(size_t)(z - 1) * size + x - 1] + D2);
-                    if (x + 1 < size) v = std::min(v, dist[(size_t)(z - 1) * size + x + 1] + D2);
-                }
-            }
-        }
-        for (int z = size - 1; z >= 0; --z) {
-            for (int x = size - 1; x >= 0; --x) {
-                float &v = dist[(size_t)z * size + x];
-                if (x + 1 < size) v = std::min(v, dist[(size_t)z * size + x + 1] + D1);
-                if (z + 1 < size) {
-                    v = std::min(v, dist[(size_t)(z + 1) * size + x] + D1);
-                    if (x + 1 < size) v = std::min(v, dist[(size_t)(z + 1) * size + x + 1] + D2);
-                    if (x > 0) v = std::min(v, dist[(size_t)(z + 1) * size + x - 1] + D2);
-                }
-            }
-        }
-    }
-    for (size_t k = 0; k < n; ++k) {
-        const float u = std::clamp(dist[k] / POOL_CALM_STUDS, 0.0f, 1.0f);
-        w[k * 2 + 1] = (uint8_t)std::lround(255.0f * u * u * (3.0f - 2.0f * u));
     }
     return out;
 }
