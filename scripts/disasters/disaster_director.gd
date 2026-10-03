@@ -37,7 +37,7 @@ const KINDS := {
 	"hurricane": preload("res://scripts/disasters/hurricane.gd"),
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid"]
+const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid", "hurricane"]
 ## The menu's names, in the menu's order.
 const TITLES := {
 	"meteor": "Meteor shower",

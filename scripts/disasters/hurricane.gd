@@ -16,8 +16,10 @@ extends Disaster
 ##     there are any, and a standing building takes it as a sideways load
 ##     (BrickWorld.lateral_check), as it does from a tornado -- up to
 ##     MAX_PUSHED x intensity cut and blown over.
-##   * RAIN, driven sideways by the wind; spray and litter blown across the
-##     ground; lightning in the cloud; the sky nearly dark.
+##   * RAIN, driven sideways by the wind, landing and splashing (RainSplash);
+##     SURF -- spray bursting where the waves meet the shore, wherever the
+##     surge has put the shore now; litter blown across the ground; lightning
+##     in the cloud; the sky nearly dark.
 ##   * THE EYE. Halfway through, EYE_S of calm: the rain stops, the sky opens,
 ##     the wind drops -- and comes back from the other side.
 ##
@@ -46,6 +48,12 @@ const FLASH_MIN := 3.5
 const FLASH_MAX := 9.0
 const PUSH_EVERY := 1.0
 const RANGE := 120.0
+## Surf: the shore is looked for round the player every SURF_EVERY, out to
+## SURF_REACH, and up to SURF_SPOTS of the nearest stretches spray.
+const SURF_EVERY := 0.6
+const SURF_REACH := 100.0
+const SURF_SPOTS := 6
+const SURF_BAND := 0.35           ## m of ground height either side of the sea that is shore
 
 const SKY_SUN := Color(0.62, 0.66, 0.72)
 const SKY_TOP := Color(0.2, 0.22, 0.26)
@@ -60,7 +68,12 @@ var peak_surge := 0.0
 var flashes := 0
 var eye_seen := false
 var pushed_buildings: Array[int] = []
+## The tops it cut, being helped over: {box (from the cut up), dir, t, piece}.
+var _tipping: Array[Dictionary] = []
+var peak_tilt := 0.0              ## degrees, the most a cut top has leaned
 var pieces_pushed := 0
+var surf_spots := 0               ## shore stretches spraying, the last look
+var peak_surf := 0
 
 var _heading := 0.0
 var _gust_phase := Vector3.ZERO
@@ -77,6 +90,9 @@ var _litter_proc: ParticleProcessMaterial
 var _wind_sound: AudioStreamPlayer
 var _rain_sound: AudioStreamPlayer
 var _thunder: AudioStreamPlayer
+var _surf: Array[GPUParticles3D] = []
+var _surf_proc: ParticleProcessMaterial
+var _next_surf := 0.0
 
 
 func _init() -> void:
@@ -113,6 +129,8 @@ func _on_phase(p: Phase) -> void:
 			ctx.set_screen(0.0, 0.0)
 			_rain.emitting = false
 			_litter.emitting = false
+			for e in _surf:
+				e.emitting = false
 			_wind_sound.stop()
 			_rain_sound.stop()
 
@@ -157,6 +175,7 @@ func _tick_active(dt: float) -> void:
 	if _next_push <= 0.0:
 		_next_push += PUSH_EVERY
 		_push_buildings()
+	_tip_tops()
 
 
 func _tick_ending(dt: float) -> void:
@@ -195,12 +214,58 @@ func _step(dt: float) -> void:
 	ctx.set_screen(clampf(strength * 1.3, 0.0, 1.0), strength * 0.25, Color(0.55, 0.6, 0.66))
 	ctx.shake(ctx.player_pos(), 0.004 * k * gust)
 	_push_pieces(dir, k * gust)
+	_surf_step(dt)
 	_flash = maxf(0.0, _flash - dt * 6.0)
 	if _thunder_in >= 0.0:
 		_thunder_in -= dt
 		if _thunder_in < 0.0:
 			_thunder.play()
 	_sound(strength, gust)
+
+
+## Where the sea meets the ground near the player, spray goes up -- more of it
+## the stronger the storm. The shore is wherever the ground is within
+## SURF_BAND of the sea as it is NOW, so it walks inland with the surge.
+func _surf_step(dt: float) -> void:
+	_next_surf -= dt
+	if _next_surf > 0.0:
+		return
+	_next_surf = SURF_EVERY
+	var spots: Array[Vector3] = []
+	if _has_sea and strength > 0.2:
+		var sea := BrickWave.get_sea_level()
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var at := ctx.player_pos()
+		var best := {}
+		# Rings outward, nearest first; one spot per direction at most.
+		for ring in range(1, 21):
+			var r := SURF_REACH * float(ring) / 20.0
+			for k in 24:
+				if best.has(k):
+					continue
+				var a := TAU * float(k) / 24.0
+				var x := at.x + cos(a) * r
+				var z := at.z + sin(a) * r
+				var ground := float(BrickTerrain.surface_plate(floori(x / stud), floori(z / stud)) + 1) * plate
+				if absf(ground - sea) <= SURF_BAND:
+					best[k] = Vector3(x, sea, z)
+		for k in best:
+			spots.append(best[k])
+		spots.sort_custom(func(p: Vector3, q: Vector3) -> bool:
+			return p.distance_squared_to(at) < q.distance_squared_to(at))
+	surf_spots = mini(spots.size(), SURF_SPOTS)
+	peak_surf = maxi(peak_surf, surf_spots)
+	var carry := wind.normalized() * 6.0 * strength if wind.length() > 0.01 else Vector3.ZERO
+	_surf_proc.gravity = Vector3(carry.x, -6.0, carry.z)
+	for i in _surf.size():
+		var e := _surf[i]
+		if i < surf_spots:
+			e.global_position = spots[i]
+			e.amount_ratio = clampf(strength * intensity, 0.2, 1.0)
+			e.emitting = true
+		else:
+			e.emitting = false
 
 
 ## Seconds since it began, on the physics tick.
@@ -268,7 +333,31 @@ func _push_buildings() -> void:
 		var level: Vector3 = r.level
 		if ctx.sever(id, level):
 			pushed_buildings.append(id)
+			_tipping.append({"id": id, "dir": axis, "t": _time(), "piece": null,
+					"box": AABB(Vector3(box.position.x, level.y, box.position.z),
+							Vector3(box.size.x, box.end.y - level.y, box.size.z))})
 			return
+
+
+## Help each cut top over its downwind edge for Earthquake.PUSH_S, as the
+## tornado does.
+func _tip_tops() -> void:
+	for p in _tipping:
+		var box: AABB = p.box
+		if p.piece == null:
+			var most := Earthquake.TOP_MIN_BRICKS - 1
+			for isl in ctx.islands_near(box.get_center(), box.size.length()):
+				# Its own top: old rubble lying near is not it.
+				if (isl.is_valid() and is_instance_valid(isl.body) and isl.owner == int(p.id)
+						and ctx.piece_bricks(isl) > most):
+					most = ctx.piece_bricks(isl)
+					p.piece = isl
+		var isl: BrickIsland = p.piece
+		if isl == null or not isl.is_valid() or not is_instance_valid(isl.body):
+			continue
+		peak_tilt = maxf(peak_tilt, rad_to_deg(acos(clampf(isl.body.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+		if _time() - float(p.t) <= Earthquake.PUSH_S:
+			Earthquake.tip(isl, p.dir, box, intensity)
 
 
 # --- Look and sound ----------------------------------------------------------------
@@ -328,6 +417,7 @@ func _build() -> void:
 	_rain.draw_pass_1 = drop
 	_rain.visibility_aabb = AABB(Vector3(-50, -40, -50), Vector3(100, 60, 100))
 	add_child(_rain)
+	RainSplash.add(_rain, _rain_proc, self)
 
 	# Litter and spray: bits of brick, leaf and foam going past low down.
 	var bit_mat := StandardMaterial3D.new()
@@ -364,6 +454,51 @@ func _build() -> void:
 	_litter.draw_pass_1 = bit
 	_litter.visibility_aabb = AABB(Vector3(-60, -10, -60), Vector3(120, 30, 120))
 	add_child(_litter)
+
+	# Surf: white spray thrown up where waves break, blown downwind.
+	var foam_mat := StandardMaterial3D.new()
+	foam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	foam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	foam_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	foam_mat.vertex_color_use_as_albedo = true
+	var puff := GradientTexture2D.new()
+	puff.fill = GradientTexture2D.FILL_RADIAL
+	puff.fill_from = Vector2(0.5, 0.5)
+	puff.fill_to = Vector2(1.0, 0.5)
+	var pg := Gradient.new()
+	pg.colors = PackedColorArray([Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
+	puff.gradient = pg
+	foam_mat.albedo_texture = puff
+	var foam := QuadMesh.new()
+	foam.size = Vector2(1.8, 1.8)
+	foam.material = foam_mat
+	_surf_proc = ParticleProcessMaterial.new()
+	_surf_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	_surf_proc.emission_box_extents = Vector3(6.0, 0.2, 6.0)
+	_surf_proc.direction = Vector3.UP
+	_surf_proc.spread = 35.0
+	_surf_proc.initial_velocity_min = 3.0
+	_surf_proc.initial_velocity_max = 7.0
+	_surf_proc.scale_min = 0.5
+	_surf_proc.scale_max = 1.8
+	var fg := Gradient.new()
+	fg.offsets = PackedFloat32Array([0.0, 0.3, 1.0])
+	fg.colors = PackedColorArray([Color(1, 1, 1, 0.0), Color(0.95, 0.97, 1.0, 0.75),
+			Color(0.9, 0.93, 0.96, 0.0)])
+	var framp := GradientTexture1D.new()
+	framp.gradient = fg
+	_surf_proc.color_ramp = framp
+	for i in SURF_SPOTS:
+		var e := GPUParticles3D.new()
+		e.amount = 140
+		e.lifetime = 1.4
+		e.local_coords = false
+		e.emitting = false
+		e.process_material = _surf_proc
+		e.draw_pass_1 = foam
+		e.visibility_aabb = AABB(Vector3(-15, -5, -15), Vector3(30, 20, 30))
+		add_child(e)
+		_surf.append(e)
 
 	_wind_sound = AudioStreamPlayer.new()
 	_wind_sound.stream = DisasterSounds.wind()

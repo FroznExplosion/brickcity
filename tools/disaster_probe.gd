@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane
 
 var _pass := 0
 var _fail := 0
@@ -101,6 +101,8 @@ func _run() -> void:
 		await _check_char(city, dir)
 	if only == "" or "coop" in only:
 		await _check_coop(city, dir)
+	if only == "" or "hurricane" in only:
+		await _check_city_hurricane(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -1066,6 +1068,62 @@ func _check_coop(city: Node3D, dir: DisasterDirector) -> void:
 		t += 1
 	city.remove_child(cd)
 	cd.free()
+	await _until_out(dir)
+
+
+## The hurricane in the city (Docs/Disasters.md 18): the city offers it; the
+## wind leans on loose pieces and puts a sideways load on buildings -- any it
+## blows over is a SEVER seam, to its cap; everything gets wet and sways; and
+## it all clears.
+func _check_city_hurricane(city: Node3D, dir: DisasterDirector) -> void:
+	print("hurricane in the city")
+	await _until_out(dir)
+	_ok("the city offers a hurricane", dir.roll.has("hurricane"))
+	# The tallest standing tower, its bricks in, the camera beside it: what the
+	# wind can put over is what is near the player.
+	var tall = null
+	for b in city.registry.buildings:
+		if not b.toppled and not b.is_build() and (tall == null
+				or CityPlacer.box_of(b).size.y > CityPlacer.box_of(tall).size.y):
+			tall = b
+	var tbox := CityPlacer.box_of(tall)
+	city.camera.global_position = tbox.get_center() + Vector3(-tbox.size.x - 20.0, 0.0, 0.0)
+	if tall.chunk < 0:
+		city._promote(tall.id)
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a hurricane starts", dir.start("hurricane", 2.5))
+	var h: Hurricane = dir.current
+	var cap := maxi(1, int(round(Hurricane.MAX_PUSHED * 2.5)))
+	var pushed := 0
+	var pieces := 0
+	var tilt := 0.0
+	var soak := 0.0
+	var gale := 0.0
+	var t := 0
+	while dir.is_running() and t < 30 * 130:
+		await physics_frame
+		t += 1
+		if is_instance_valid(h):
+			pushed = h.pushed_buildings.size()
+			pieces = h.pieces_pushed
+			tilt = h.peak_tilt
+		soak = maxf(soak, dir.ctx.wet)
+		gale = maxf(gale, dir.ctx.gale.length())
+	await _ticks(6)
+	var seams := 0
+	for i in range(n0, city.authority.commands.size()):
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.SEVER and e.flags & DamageLog.FLAG_SEAM:
+			seams += 1
+	_ok("it runs its course", not dir.is_running(), "%.0f s" % (t / 30.0))
+	_ok("at Extreme it blows the tallest tower over, cut where its joints give, to its cap",
+			pushed > 0 and seams == pushed and pushed <= cap, "%d blown over, %d seam(s), cap %d" % [pushed, seams, cap])
+	_ok("and its top goes over downwind", tilt > 10.0, "%.0f degrees" % tilt)
+	print("  --   %d push(es) to loose pieces" % pieces)
+	_ok("the city gets wet, sways, and the wind stops after", soak > 0.9 and gale > 0.5
+			and dir.ctx.gale == Vector3.ZERO and dir.ctx.wet > 0.5,
+			"wet %.2f, gale %.2f" % [soak, gale])
 	await _until_out(dir)
 
 

@@ -737,10 +737,24 @@ sea rises +1.60 m and more ground is wet (1,212 cells against 1,036); gain 2.20 
 standing still is carried 9.1 m in 5.6 s; 0.08 m/s in the eye and the wind reversed after it; 10
 flashes; the sea, gain and wet map exactly back at the end; the wind and the lens clear.
 
-Not yet: waves that break over the new shoreline (the shore band is re-read, but no surf or
-spray at the waterline), and the hurricane in the city: it would run there — rain, wind, pieces,
-buildings — but it is not in the city's list yet, and the city's sea is not wired to
-`disaster_sea`. (Wet ground and bending trees: §19.)
+Then, added (2026-10-03):
+
+* **Surf.** Every 0.6 s the shore is looked for round the player out to 100 m — 20 rings × 24
+  directions, the ground (`BrickTerrain.surface_plate`) within 0.35 m of the sea **as it is now**,
+  so the shore walks inland with the surge — and the six nearest stretches throw white spray up
+  (1.8 m puffs, 3–7 m/s up), blown downwind. Probe: 4 stretches spraying at the storm's height.
+* **The surge moved into the sea itself**: `WaterSea.set_surge(surge, wave_mul)` (the level, the
+  waves, the seabed re-read every 0.5 m / 2 s), so the heightfield scene and the city both just
+  call it from `disaster_sea`.
+* **In the city.** The hurricane is in the city's roll now. Where the city has a sea it surges; the
+  wind pushes loose pieces (small ones most) and puts its sideways load on buildings whose bricks
+  are in — one that gives is cut at a seam and its top is **tipped over downwind** (as the tornado
+  does), up to one per intensity. A cut top is found by its owner (`BrickIsland.owner`): the
+  biggest piece near the box was sometimes old rubble in a city already wrecked, and the tip went
+  to that — the tornado had the same flaw, fixed with it. Probe, Extreme, beside the tallest
+  tower: 1 blown over, one seam, its top over at 61–93°; 273 pushes to loose pieces; wet, swaying
+  and still after.
+* Rain **splashes** where it lands: §19.
 
 ---
 
@@ -793,7 +807,24 @@ uniforms are visible inside an included function, and the ripples' local `centre
 the impostor shader's `centre` uniform — a compile error only a windowed run shows (headless has
 no renderer to compile with).
 
-Still not: rain drops splashing up off surfaces, and snow (the blizzard is deferred).
+**Rain that lands** (`rain_splash.gd`, on the lightning storm's, acid rain's and the hurricane's
+rain), 2026-10-03. Two parts, because one would not do:
+
+* **Stopping.** A `GPUParticlesCollisionHeightField3D` follows the camera and the rain hides on
+  contact — it no longer falls through a roof into the room below.
+* **Splashing.** The obvious way — a sub-emitter fired on each collision — splashed only on tree
+  crowns: Godot draws that collision field from geometry that **casts shadows**, and the ground
+  bakes its own shadow and casts none, so rain fell straight through it. (Found by making the
+  splashes red and half a metre across.) So the splashes come from physics instead: every 0.2 s,
+  256 rays straight down within 22 m of the camera find where drops land — ground, roof, water,
+  anything that collides — and a splash emitter fires from those points
+  (`EMISSION_SHAPE_POINTS`): 6 cm drops thrown up and out for a quarter of a second, at the rain's
+  rate. Probe: 256 of 256 rays found somewhere to land.
+
+Seen on screen at last: the **streaks** on a site's wall in the rain (`wall_wet`), and a tree
+visibly leaning in the gale.
+
+Still not: snow (the blizzard is deferred).
 
 Probe (`hurricane_probe`): bricks 1.00 wet at the height of the storm, the terrain's and the
 printed materials registered; still wet just after, drying; 4 tree sets swaying, gale up to 1.06

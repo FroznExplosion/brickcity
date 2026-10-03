@@ -60,6 +60,16 @@ var _mask_stale := true
 const MASK_WATER_EVERY := 0.2
 var _mask_water_t := 0.0
 
+## A storm surge (set_surge): the level and gain before it, and where the
+## seabed map was last read.
+const SURGE_SEABED_STEP := 0.5
+const SURGE_SEABED_MS := 2000
+var _surge_base := NAN
+var _surge_gain := 0.0
+var _surge_mul := 1.0
+var _surge_seabed := 0.0
+var _surge_seabed_ms := 0
+
 
 ## Build the tiers over a square `half_studs` each way of the origin, with the
 ## sheet reaching `outer_metres`. The seabed is sampled every `step` studs:
@@ -237,6 +247,46 @@ func rebuild() -> void:
 	_mask_stale = true
 	build(_half_studs, _outer_metres, _step)
 	set_lod_debug(lod_on)
+
+
+## A storm moves the sea (Docs/Disasters.md 18): `surge` metres over where it
+## was, waves `wave_mul` times as big. (0, 1) puts it back exactly.
+##
+## BrickWave's own level, so the drawn sea, the swimmer and the water's
+## collision rise together, and the flood itself needs nothing more: the water
+## shader compares the ground (the seabed map's R) with `sea_level` per pixel.
+## What the map's wet cells and shore distance decide -- where the studded tier
+## shows, how the waves steer to the shore -- is re-read every SURGE_SEABED_STEP
+## of level, no more than every SURGE_SEABED_MS, because a read is ~30 ms.
+## Between reads newly flooded ground is drawn by the smooth sheet.
+func set_surge(surge: float, wave_mul: float) -> void:
+	if is_nan(_surge_base):
+		if surge == 0.0 and wave_mul == 1.0:
+			return
+		_surge_base = BrickWave.get_sea_level()
+		_surge_gain = wave_gain
+		_surge_mul = 1.0
+	var level := _surge_base + surge
+	BrickWave.set_sea_level(level)
+	_set_mask_param("sea_level", level)
+	if absf(wave_mul - _surge_mul) > 0.02 or (wave_mul == 1.0 and _surge_mul != 1.0):
+		_surge_mul = wave_mul
+		wave_gain = _surge_gain * wave_mul
+		push_waves()
+	var now := Time.get_ticks_msec()
+	var back := surge == 0.0 and wave_mul == 1.0
+	if back or (absf(surge - _surge_seabed) >= SURGE_SEABED_STEP
+			and now - _surge_seabed_ms >= SURGE_SEABED_MS):
+		_surge_seabed = surge
+		_surge_seabed_ms = now
+		refresh_seabed()
+	if back:
+		_surge_base = NAN
+
+
+## How far the storm has the sea above its own level (0 when calm).
+func surge() -> float:
+	return 0.0 if is_nan(_surge_base) else BrickWave.get_sea_level() - _surge_base
 
 
 ## The sea state changed (gain, shore strength, steering): into both tiers.

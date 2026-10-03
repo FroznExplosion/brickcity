@@ -1547,6 +1547,13 @@ func _build_terrain_ground() -> void:
 ## THE SEA, at the level the world settled (§21.6), out as far as the coarse
 ## ground goes. Only if there is any: a world whose sea is under all of its
 ## ground has nothing to draw, and the brick tiers are not free.
+## A disaster moves the sea (DisasterContext.set_sea): a hurricane's surge.
+## Nothing where the city has no sea.
+func disaster_sea(surge: float, wave_mul: float) -> void:
+	if _sea != null:
+		_sea.set_surge(surge, wave_mul)
+
+
 func _build_sea(tile_m: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	_sea = WaterSeaScript.new()
