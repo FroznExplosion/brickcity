@@ -2308,7 +2308,11 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# box and cannot, so what still needs it -- a build, or a building whose
 	# damage is in live bricks rather than a profile -- stays banded.
 	var boxed := coarse and _far_draws_coarse(b)
-	coarse = coarse and (boxed or not b.is_damaged())
+	# Nor a recipe building still in bricks (_demesh), damaged or not: the far
+	# box will not draw it, and the coarse mesh is an untextured box -- every
+	# tower walked past and left behind stood there as a plain white block,
+	# with no courses and no windows, until the camera came back.
+	coarse = coarse and (boxed or (b.is_build() and not b.is_damaged()))
 	# A building still in bricks -- its mesh given up at range (_demesh) --
 	# draws the damage its bricks have NOW. Its profile is only brought up to
 	# date when it gives its bricks back (dematerialise), so the shell standing
@@ -2471,6 +2475,16 @@ func _promote(id: int, solve: bool = true) -> int:
 		return b.chunk
 
 	var t0 := Time.get_ticks_usec()
+	# Past SHELL_RANGE a recipe building has no shell, only its far box, and a
+	# promotion hid that box at once: the building was then drawn by however
+	# many bands had been built, and anything cut off it fell while bands built
+	# from the bricks before the cut went on drawing it standing -- a second
+	# copy of every section that came off a building shot from far away. A
+	# placeholder now, as any building inside the range has: the far box goes
+	# on drawing it and pieces wait for its bands (_bands_done frees it).
+	# Before materialise: the far box draws a building that is not bricks yet.
+	if not b.is_build() and not b.toppled and not _shells.has(id):
+		_make_shell(id, true, true)
 	var chunk := registry.materialise(id)
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building

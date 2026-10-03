@@ -15,6 +15,10 @@ extends SceneTree
 ##        building; some long built -- and no tick where a piece that left
 ##        draws nothing while its building has stopped (gap), nor where it
 ##        draws and its building still draws the same bricks (double).
+## farcut (3) the same for a building first hit from past SHELL_RANGE, where
+##        it has no shell: nothing leaves it while its bands are still being
+##        built from the bricks before the cut (a standing copy of the section
+##        that fell), and something draws it all that time.
 
 var _pass := 0
 var _fail := 0
@@ -72,6 +76,8 @@ func _run() -> void:
 		await _check_fake()
 	if _only("handover"):
 		await _check_handover()
+	if _only("farcut"):
+		await _check_farcut()
 	if _only("crush"):
 		await _check_crush()
 	if _only("far"):
@@ -406,6 +412,38 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+func _check_farcut() -> void:
+	print("farcut: a building cut from past the shell range is drawn once")
+	var id := _tower(4)
+	var c := _box(id).get_center()
+	city.camera.global_position = c + Vector3(-1.0, 0.6, -1.0).normalized() * (city.SHELL_RANGE + 60.0)
+	city.camera.look_at(c)
+	await _ticks(30 * 3)
+	var b = city.registry.get_building(id)
+	_ok("it starts as no shell, only its far box", not city._shells.has(id) and city._far_on.has(id))
+	_undercut(id)
+	var double := 0
+	var blind := 0
+	var left := false
+	for t in 30 * 8:
+		await physics_frame
+		if not b.is_materialised() or b.toppled:
+			continue
+		var building: bool = city._bands_building(id)
+		if city._handovers.has(id):
+			left = true
+		# A piece has left while bands built from the bricks before it are up:
+		# they draw the section standing while it falls.
+		if building and city._handovers.has(id):
+			double += 1
+		# Bands going up and nothing standing in for the rest.
+		if building and not city._far_on.has(id) and not city._shells.has(id):
+			blind += 1
+	_ok("pieces left it", left)
+	_ok("none while its bands were still being built", double == 0, "%d tick(s)" % double)
+	_ok("and its far box drew it until they were", blind == 0, "%d tick(s) half drawn" % blind)
 
 
 # --- (4) ------------------------------------------------------------------------
