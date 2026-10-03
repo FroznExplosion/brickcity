@@ -3191,3 +3191,9 @@ Neither was GDScript arithmetic, and neither needed C++ — both were the ORDER 
   average, 19 ms at worst, for one stud or a thousand. A MultiMesh drawn before fills and shows in
   a new node in 0.04 ms. Tiles now hand their stud, tuft and pebble MultiMeshes back to a pool when
   they leave and the next tile takes them (`TerrainTile._take_multimesh`).
+
+Walking at ~15 m/s through the heightfield scene, three runs each, other chats' tests running
+alongside both: `streamer.follow` mean 3.2 ms before, 0.56 ms after; worst collision phase 5 ms to
+1.1 ms; worst instance phase 20 ms to 13–18 ms (the pool is empty until tiles start dropping).
+The first merge of this carried the cap removal WITHOUT the collision reorder (reverted by
+accident with a test flag): whole tiles into a live body, 85 ms spikes. Fixed in the next merge.

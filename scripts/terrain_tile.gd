@@ -176,10 +176,15 @@ func add_collision(max_shapes := 0) -> bool:
 	if n == 0:
 		_collision_done = true
 		return true
+	# The body joins the physics space only once every box is on it. Added to
+	# a body already IN the space, Jolt rebuilds the whole compound shape on
+	# each box: 670 boxes measured 24.9 ms a tile that way, 0.77 ms added
+	# first and put in the space after -- 32x. That rebuild was the dip while
+	# sculpting (a refreshed tile adds all of them at once) and the "coll"
+	# worst-tile spikes while walking.
 	if not _body.is_valid():
 		_body = PhysicsServer3D.body_create()
 		PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
-		PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 		PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 		PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
 		PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
@@ -192,6 +197,7 @@ func add_collision(max_shapes := 0) -> bool:
 			Transform3D(Basis(), Vector3(boxes[o], boxes[o + 1], boxes[o + 2])))
 		_coll_i += 1
 	if _coll_i >= n:
+		PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 		_collision_done = true
 	return _collision_done
 
@@ -390,7 +396,6 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 		return
 	_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
-	PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 	PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 	PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
 	PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
@@ -400,6 +405,8 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 		PhysicsServer3D.body_add_shape(_body,
 			_box_shape(Vector3(boxes[o + 3], boxes[o + 4], boxes[o + 5])),
 			Transform3D(Basis(), Vector3(boxes[o], boxes[o + 1], boxes[o + 2])))
+	# Into the space last: see add_collision.
+	PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 
 
 func _free_body() -> void:
