@@ -31,6 +31,15 @@ const WET_S := 15.0
 const DRY_S := 120.0
 ## Rain falling now, eased over a couple of seconds either way.
 var rain := 0.0
+## Snow falling (a disaster sets it), and lying: up over SNOW_S while it falls,
+## melting over MELT_S after (Docs/Disasters.md 21). The cover is made the
+## first time it lies and freed when the last of it has gone.
+var snowing := false
+var snow := 0.0
+var snow_rate := 1.0              ## how fast it lies: a heavy fall, faster
+var snow_cover: SnowCover = null
+const SNOW_S := 45.0
+const MELT_S := 90.0
 
 ## Where soldiers must not stand, by the disaster that said so: id -> AABB
 ## (Docs/Disasters.md section 9). Re-sent to the AI every tick by push_hazards,
@@ -429,7 +438,20 @@ func shake(point: Vector3, strength: float) -> void:
 func step(delta: float) -> void:
 	wet = move_toward(wet, 1.0 if raining else 0.0, delta / (WET_S if raining else DRY_S))
 	rain = move_toward(rain, 1.0 if raining else 0.0, delta / 2.0)
-	WeatherFx.set_weather(wet, gale, rain)
+	snow = move_toward(snow, 1.0 if snowing else 0.0,
+			delta * snow_rate / SNOW_S if snowing else delta / MELT_S)
+	# Melting snow leaves it wet.
+	if not snowing and snow > 0.0:
+		wet = maxf(wet, minf(snow * 2.0, 1.0))
+	WeatherFx.set_weather(wet, gale, rain, snow)
+	if snow > 0.0 and snow_cover == null:
+		snow_cover = SnowCover.new()
+		snow_cover.name = "SnowCover"
+		city.add_child(snow_cover)
+		snow_cover.setup(city)
+	elif snow <= 0.0 and snow_cover != null:
+		snow_cover.queue_free()
+		snow_cover = null
 	_step_shake(delta)
 
 

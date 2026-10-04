@@ -238,7 +238,7 @@ func _ready() -> void:
 		disasters = DisasterDirector.new()
 		disasters.name = "Disasters"
 		add_child(disasters)
-		disasters.setup(self, ["hurricane"])
+		disasters.setup(self, ["hurricane", "snow"])
 	_update_hud()
 	if _bench_mode:
 		_run_bench()
@@ -608,6 +608,11 @@ func set_detail_radius(tiles: int) -> void:
 		# One step at the frozen spot, so the change is seen while frozen.
 		_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
 		_hide_covered_far()
+
+
+## Ground for snow to lie on (SnowCover): this scene is all terrain.
+func has_terrain() -> bool:
+	return true
 
 
 ## A disaster moves the sea (DisasterContext.set_sea): the sea does it

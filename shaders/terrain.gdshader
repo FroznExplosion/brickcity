@@ -557,6 +557,7 @@ void fragment() {
     weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
             VIEW_MATRIX, 0.22, 1.0, TIME);
     NORMAL = wet_normal;
+    weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

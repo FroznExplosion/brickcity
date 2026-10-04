@@ -29,6 +29,13 @@ uniform float weather_wet : hint_range(0.0, 1.0) = 0.0;
 uniform float weather_rain : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 weather_wind = vec3(0.0);
 instance uniform vec3 weather_sway = vec3(0.0);
+// Snow (Docs/Disasters.md 21): 0 none .. 1 deep. The cover itself is geometry
+// (shaders/snow.gdshader); this is the cheap cap for what has none -- tree
+// crowns, the far city, the far ground: their upward faces whiten.
+uniform float weather_snow : hint_range(0.0, 1.0) = 0.0;
+// PER INSTANCE: how much an object's tops take the cap (trees 1). Buildings
+// and the near ground carry real cover instead, so 0.
+instance uniform float weather_snowcap = 0.0;
 
 // `local` in model space with +Y up from the base. Returns it bent.
 vec3 weather_sway_vertex(vec3 wp_local, mat4 wp_model, float wp_t) {
@@ -79,6 +86,19 @@ vec2 weather_ripple_layer(vec2 wp_p, float wp_t, float wp_seed) {
     float wx_radius = wx_age * 0.4;
     float wx_ring = exp(-pow((wx_dist - wx_radius) * 28.0, 2.0)) * (1.0 - wx_age);
     return wx_dist > 1e-4 ? wx_d / wx_dist * wx_ring : vec2(0.0);
+}
+
+// The snow cap: upward faces whitened by how deep the snow is, times `cap`.
+void weather_snow_surface(inout vec3 wp_albedo, inout float wp_roughness, inout float wp_specular,
+        vec3 wp_normal_view, mat4 wp_inv_view, float wp_cap) {
+    if (weather_snow <= 0.0 || wp_cap <= 0.0) {
+        return;
+    }
+    float wx_up = (wp_inv_view * vec4(wp_normal_view, 0.0)).y;
+    float wx_k = smoothstep(0.55, 0.85, wx_up) * clamp(weather_snow * 1.4, 0.0, 1.0) * wp_cap;
+    wp_albedo = mix(wp_albedo, vec3(0.93, 0.95, 0.99), wx_k);
+    wp_roughness = mix(wp_roughness, 0.6, wx_k);
+    wp_specular = mix(wp_specular, 0.35, wx_k);
 }
 
 // Wet surface. `darken` is how much this surface darkens soaked (the ground's

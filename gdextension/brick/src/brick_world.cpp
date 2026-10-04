@@ -3539,6 +3539,147 @@ Dictionary BrickWorld::lateral_check(int chunk_id, float accel_g, Vector3 world_
     return out;
 }
 
+// --- snow cover --------------------------------------------------------------
+
+namespace {
+
+constexpr int32_t SNOW_NONE = INT32_MIN;
+
+// Merge equal tops into rectangles and emit a low box for each.
+Array snow_boxes(const std::vector<int32_t> &top, int w, int d, float cell_x, float cell_z,
+        float plate, float thickness, Vector3 offset) {
+    PackedVector3Array verts;
+    PackedVector3Array normals;
+    PackedColorArray colours;
+    PackedInt32Array indices;
+    std::vector<uint8_t> used((size_t)w * (size_t)d, 0);
+    auto quad = [&](Vector3 a, Vector3 b, Vector3 c, Vector3 e, Vector3 n, float ra, float rb,
+            float rc, float re) {
+        const int32_t base = (int32_t)verts.size();
+        verts.push_back(a);
+        verts.push_back(b);
+        verts.push_back(c);
+        verts.push_back(e);
+        for (int i = 0; i < 4; ++i) {
+            normals.push_back(n);
+        }
+        colours.push_back(Color(ra, 0, 0, 1));
+        colours.push_back(Color(rb, 0, 0, 1));
+        colours.push_back(Color(rc, 0, 0, 1));
+        colours.push_back(Color(re, 0, 0, 1));
+        indices.push_back(base);
+        indices.push_back(base + 1);
+        indices.push_back(base + 2);
+        indices.push_back(base);
+        indices.push_back(base + 2);
+        indices.push_back(base + 3);
+    };
+    for (int z = 0; z < d; ++z) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i0 = (size_t)x + (size_t)w * (size_t)z;
+            const int32_t t = top[i0];
+            if (t == SNOW_NONE || used[i0]) {
+                continue;
+            }
+            int x1 = x + 1;
+            while (x1 < w && !used[(size_t)x1 + (size_t)w * z] && top[(size_t)x1 + (size_t)w * z] == t) {
+                ++x1;
+            }
+            int z1 = z + 1;
+            while (z1 < d) {
+                bool row = true;
+                for (int xx = x; xx < x1; ++xx) {
+                    const size_t ii = (size_t)xx + (size_t)w * (size_t)z1;
+                    if (used[ii] || top[ii] != t) {
+                        row = false;
+                        break;
+                    }
+                }
+                if (!row) {
+                    break;
+                }
+                ++z1;
+            }
+            for (int zz = z; zz < z1; ++zz) {
+                for (int xx = x; xx < x1; ++xx) {
+                    used[(size_t)xx + (size_t)w * (size_t)zz] = 1;
+                }
+            }
+            const float X0 = offset.x + x * cell_x;
+            const float X1 = offset.x + x1 * cell_x;
+            const float Z0 = offset.z + z * cell_z;
+            const float Z1 = offset.z + z1 * cell_z;
+            const float Y0 = offset.y + t * plate;
+            const float Y1 = Y0 + thickness;
+            // Top, then the four sides (the shader draws both faces).
+            quad(Vector3(X0, Y1, Z0), Vector3(X1, Y1, Z0), Vector3(X1, Y1, Z1), Vector3(X0, Y1, Z1),
+                    Vector3(0, 1, 0), 1, 1, 1, 1);
+            quad(Vector3(X0, Y0, Z0), Vector3(X1, Y0, Z0), Vector3(X1, Y1, Z0), Vector3(X0, Y1, Z0),
+                    Vector3(0, 0, -1), 0, 0, 1, 1);
+            quad(Vector3(X1, Y0, Z1), Vector3(X0, Y0, Z1), Vector3(X0, Y1, Z1), Vector3(X1, Y1, Z1),
+                    Vector3(0, 0, 1), 0, 0, 1, 1);
+            quad(Vector3(X0, Y0, Z1), Vector3(X0, Y0, Z0), Vector3(X0, Y1, Z0), Vector3(X0, Y1, Z1),
+                    Vector3(-1, 0, 0), 0, 0, 1, 1);
+            quad(Vector3(X1, Y0, Z0), Vector3(X1, Y0, Z1), Vector3(X1, Y1, Z1), Vector3(X1, Y1, Z0),
+                    Vector3(1, 0, 0), 0, 0, 1, 1);
+        }
+    }
+    Array arrays;
+    if (verts.is_empty()) {
+        return arrays;
+    }
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = verts;
+    arrays[Mesh::ARRAY_NORMAL] = normals;
+    arrays[Mesh::ARRAY_COLOR] = colours;
+    arrays[Mesh::ARRAY_INDEX] = indices;
+    return arrays;
+}
+
+} // namespace
+
+Array BrickWorld::build_snow_cover(int chunk_id, float thickness) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i dm = c.dims;
+    const Vector3 cs = cell_size();
+    std::vector<int32_t> top((size_t)dm.x * (size_t)dm.z, SNOW_NONE);
+    for (int z = 0; z < dm.z; ++z) {
+        for (int x = 0; x < dm.x; ++x) {
+            for (int y = dm.y - 1; y >= 0; --y) {
+                const int32_t bid = c.block_at(Vector3i(x, y, z));
+                if (bid < 0) {
+                    continue;
+                }
+                const Block &b = c.blocks[bid];
+                // Furniture neither carries snow nor keeps it off: it is
+                // inside, under a roof, or it is on a roof under the snow.
+                if (!b.alive || b.detached || b.removed || b.decorative) {
+                    continue;
+                }
+                top[(size_t)x + (size_t)dm.x * (size_t)z] = y + 1;
+                break;
+            }
+        }
+    }
+    return snow_boxes(top, dm.x, dm.z, cs.x, cs.z, cs.y, thickness, Vector3());
+}
+
+Array BrickWorld::build_snow_cover_tops(const PackedInt32Array &tops, int w, int d, float cell,
+        float plate, float thickness, Vector2 origin) {
+    if (w <= 0 || d <= 0 || tops.size() < (int64_t)w * d) {
+        return Array();
+    }
+    std::vector<int32_t> top((size_t)w * (size_t)d);
+    for (int64_t i = 0; i < (int64_t)w * d; ++i) {
+        const int32_t t = tops[i];
+        top[(size_t)i] = t < -1000000 ? SNOW_NONE : t;
+    }
+    return snow_boxes(top, w, d, cell, cell, plate, thickness, Vector3(origin.x, 0.0f, origin.y));
+}
+
 int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on) {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -6154,6 +6295,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("lateral_check", "chunk_id", "accel_g", "world_dir"),
             &BrickWorld::lateral_check);
+    ClassDB::bind_method(D_METHOD("build_snow_cover", "chunk_id", "thickness"),
+            &BrickWorld::build_snow_cover);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("build_snow_cover_tops", "tops", "w", "d",
+            "cell", "plate", "thickness", "origin"), &BrickWorld::build_snow_cover_tops);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id", "max_rounds", "budget_ms"),
             &BrickWorld::solve_structure, DEFVAL(1), DEFVAL(0.0));

@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow
 
 var _pass := 0
 var _fail := 0
@@ -103,6 +103,8 @@ func _run() -> void:
 		await _check_coop(city, dir)
 	if only == "" or "hurricane" in only:
 		await _check_city_hurricane(city, dir)
+	if only == "" or "snow" in only:
+		await _check_city_snow(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -1125,6 +1127,127 @@ func _check_city_hurricane(city: Node3D, dir: DisasterDirector) -> void:
 			and dir.ctx.gale == Vector3.ZERO and dir.ctx.wet > 0.5,
 			"wet %.2f, gale %.2f" % [soak, gale])
 	await _until_out(dir)
+
+
+## Snow on a building (Docs/Disasters.md 21): tiles on its tops open to the
+## sky, none on the floors under its roof -- until a hole in the roof lets the
+## snow onto the floor below.
+func _check_city_snow(city: Node3D, dir: DisasterDirector) -> void:
+	print("snow on the city")
+	await _until_out(dir)
+	_ok("the city offers a snowfall", dir.roll.has("snow"))
+	# A tower with its roof still on -- earlier sections cut the tops off some
+	# -- undamaged first, tallest first; its bricks in, the camera by it.
+	var order: Array = []
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id):
+			order.append(c)
+	order.sort_custom(func(x, y) -> bool:
+		if x.is_damaged() != y.is_damaged():
+			return not x.is_damaged()
+		return CityPlacer.box_of(x).size.y > CityPlacer.box_of(y).size.y)
+	var b = null
+	var box := AABB()
+	for c in order:
+		var cbox := CityPlacer.box_of(c)
+		city.camera.global_position = cbox.get_center() + Vector3(-cbox.size.x - 15.0, 0.0, 0.0)
+		if c.chunk < 0:
+			city._promote(c.id)
+		await _ticks(10)
+		var top := dir.ctx.top_of(cbox)
+		if not top.is_empty() and (top.position as Vector3).y > cbox.end.y - 3.0:
+			b = c
+			box = cbox
+			break
+	_ok("a tower with its roof on", b != null)
+	if b == null:
+		return
+	_ok("a snowfall starts", dir.start("snow", 2.5))
+	var t := 0
+	var cover: SnowCover = null
+	while t < 30 * 40:
+		await physics_frame
+		t += 1
+		cover = dir.ctx.snow_cover
+		if cover != null and cover.covers.has(b.id) and cover.covers[b.id].node != null \
+				and dir.ctx.snow > 0.8:
+			break
+	var tops := _snow_tops(cover, b.id)
+	_ok("snow lies on the building", tops.size() > 0, "%d tile top(s)" % tops.size())
+	if "--disaster-shot" in OS.get_cmdline_user_args():
+		var cam := Camera3D.new()
+		cam.far = 2000.0
+		city.add_child(cam)
+		cam.look_at_from_position(box.get_center() + Vector3(-28.0, box.size.y * 0.5 + 12.0, -22.0),
+				box.get_center() + Vector3(0.0, box.size.y * 0.35, 0.0))
+		cam.make_current()
+		await _ticks(40)
+		await _save_shot("snow_city")
+		cam.queue_free()
+		city.camera.make_current()
+	var highest := -INF
+	for p in tops:
+		highest = maxf(highest, (p as Vector3).y)
+	_ok("on its roof: open to the sky, nothing under the roof",
+			highest > box.end.y - 2.0, "highest %.1f m, the box's top %.1f m" % [highest, box.end.y])
+	# A hole through the roof: the floor below is open to the sky now.
+	var roof := Vector3(box.get_center().x, box.end.y - 0.5, box.get_center().z)
+	var before := _snow_height_at(cover, b.id, roof)
+	for k in 3:
+		dir.ctx.blast(roof + Vector3(0.0, -1.2 * k, 0.0), 2.2)
+	var builds0: int = cover.cover_builds
+	t = 0
+	while t < 30 * 8 and cover.cover_builds == builds0:
+		await physics_frame
+		t += 1
+	await _ticks(10)
+	var after := _snow_height_at(cover, b.id, roof)
+	_ok("a hole in the roof lets it onto the floor below", cover.cover_builds > builds0
+			and after < before - 1.0,
+			"snow over the roof's middle at %.1f m, then %.1f m" % [before, after])
+	dir.stop()
+	await _until_over(dir)
+	dir.ctx.snow = 0.0005
+	await _ticks(10)
+	_ok("and it all goes once melted", dir.ctx.snow_cover == null)
+
+
+## The world points of the tops of a building's snow tiles.
+func _snow_tops(cover: SnowCover, id: int) -> Array:
+	var out := []
+	if cover == null or not cover.covers.has(id) or cover.covers[id].node == null:
+		return out
+	var mi: MeshInstance3D = cover.covers[id].node
+	if not is_instance_valid(mi):
+		return out
+	var arrays: Array = mi.mesh.surface_get_arrays(0)
+	var vs: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var cs: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var xf := mi.global_transform
+	for i in vs.size():
+		if cs[i].r > 0.5:
+			out.append(xf * vs[i])
+	return out
+
+
+## How high the building's snow lies over `at` (its XZ): each box's first
+## four vertices are its top (BrickWorld.build_snow_cover). -INF for none.
+func _snow_height_at(cover: SnowCover, id: int, at: Vector3) -> float:
+	if cover == null or not cover.covers.has(id) or cover.covers[id].node == null:
+		return -INF
+	var mi: MeshInstance3D = cover.covers[id].node
+	if not is_instance_valid(mi):
+		return -INF
+	var vs: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var xf := mi.global_transform
+	var best := -INF
+	for i in range(0, vs.size() - 3, 20):
+		var a := xf * vs[i]
+		var c := xf * vs[i + 2]
+		if at.x >= minf(a.x, c.x) and at.x <= maxf(a.x, c.x) and at.z >= minf(a.z, c.z) \
+				and at.z <= maxf(a.z, c.z):
+			best = maxf(best, a.y)
+	return best
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:

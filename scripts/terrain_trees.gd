@@ -126,6 +126,7 @@ func _place(spots: Array) -> void:
 			# Its crowns move in the wind (weather.gdshaderinc).
 			if tree_mesh != null:
 				s.sway = WeatherFx.sway_tree(tree_mesh.get_aabb().end.y)
+			s.snowcap = 1.0   # snow on the crowns
 			s.setup(tree_mesh, material, 45.0)
 			_sets[key] = s
 		var cell: Vector3i = spot.cell

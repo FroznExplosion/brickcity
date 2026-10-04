@@ -18,11 +18,17 @@ extends RefCounted
 static var wet := 0.0
 ## Rain falling now, 0..1: ripples and running streaks.
 static var rain := 0.0
+## Snow lying, 0..1 (SnowCover, snow.gdshader, the caps).
+static var snow := 0.0
 ## Direction x strength, 0..~1.
 static var wind := Vector3.ZERO
 
 static var _mats: Array[WeakRef] = []
 static var _ids := {}
+## Plain materials with no weather in their shader -- the small city's flat
+## ground -- tinted instead: [weakref, colour, roughness] as they were made.
+static var _tints: Array = []
+const SNOW_WHITE := Color(0.9, 0.92, 0.96)
 
 ## How far a tree's crown and a tower's top lean at wind 1, per metre of height,
 ## and how fast each sways.
@@ -48,6 +54,24 @@ static func register(m: Material) -> void:
 		register(m.next_pass)
 
 
+## A plain StandardMaterial3D: white as the snow lies, darker and glossier wet.
+static func register_tint(m: StandardMaterial3D) -> void:
+	if m == null:
+		return
+	_tints.append([weakref(m), m.albedo_color, m.roughness])
+	_tint(_tints[_tints.size() - 1])
+
+
+static func _tint(t: Array) -> void:
+	var m = (t[0] as WeakRef).get_ref()
+	if m == null:
+		return
+	var base: Color = t[1]
+	var col := base.darkened(0.25 * wet).lerp(SNOW_WHITE, clampf(snow * 1.3, 0.0, 1.0))
+	(m as StandardMaterial3D).albedo_color = col
+	(m as StandardMaterial3D).roughness = lerpf(float(t[2]), 0.3, wet * (1.0 - snow))
+
+
 ## `copy` was made from `source`: if the source is weathered, so is the copy.
 static func adopt(copy: Material, source: Material) -> void:
 	if source != null and _ids.has(source.get_instance_id()):
@@ -59,9 +83,18 @@ static func is_registered(m: Material) -> bool:
 
 
 ## Into every registered material, if it moved enough to see.
-static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0) -> void:
+static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0, p_snow := 0.0) -> void:
 	p_wet = clampf(p_wet, 0.0, 1.0)
 	p_rain = clampf(p_rain, 0.0, 1.0)
+	p_snow = clampf(p_snow, 0.0, 1.0)
+	if absf(p_snow - snow) >= 0.004 or (p_snow == 0.0 and snow != 0.0):
+		snow = p_snow
+		for r in _mats:
+			var sm = r.get_ref()
+			if sm != null:
+				(sm as ShaderMaterial).set_shader_parameter("weather_snow", snow)
+		for t in _tints:
+			_tint(t)
 	if absf(p_wet - wet) < 0.004 and p_wind.distance_to(wind) < 0.004 and absf(p_rain - rain) < 0.01 \
 			and not (p_wet == 0.0 and wet != 0.0) and not (p_wind == Vector3.ZERO and wind != Vector3.ZERO) \
 			and not (p_rain == 0.0 and rain != 0.0):
@@ -69,6 +102,8 @@ static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0) -> void:
 	wet = p_wet
 	wind = p_wind
 	rain = p_rain
+	for t in _tints:
+		_tint(t)
 	var live: Array[WeakRef] = []
 	for r in _mats:
 		var m = r.get_ref()
@@ -87,6 +122,7 @@ static func _apply(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("weather_wet", wet)
 	m.set_shader_parameter("weather_wind", wind)
 	m.set_shader_parameter("weather_rain", rain)
+	m.set_shader_parameter("weather_snow", snow)
 
 
 ## The instance parameter for a tree `height` metres tall.
