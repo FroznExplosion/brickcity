@@ -37,6 +37,7 @@ in `scenes/player/`, `scenes/weapons/`, `scenes/ui/`.
 | Spread bloom in `Weapon.gd` | [`GunController`](../../scripts/combat/gun_controller.gd) `bloom_per_shot`, `spread_mult` | Opt-in, so a soldier's gun behaves exactly as before; every roll still the gun's seeded RNG |
 | `Reticle.gd`, `AmmoOverlay`, `HealthOverlay` | [`scripts/pawn/player_hud.gd`](../../scripts/pawn/player_hud.gd) (`PlayerHud`) | Crosshair gap = the real cone at the real FOV; hitmarkers stay `CombatFeedback`'s |
 | Hor+ FOV (`PlayerController._apply_fov`) | `PlayerView` | Horizontal 90°, converted to the camera's vertical FOV per aspect |
+| `menu/` — main menu, pause menu, options, rebinding, the fit-safe layout and its tests | [`menu/`](../../menu/) copied whole; [`scripts/brickcity_menu_host.gd`](../../scripts/brickcity_menu_host.gd) | §7.1. Rows nothing here honours were deleted; the player's keys became input actions |
 
 The gate for it is [`tools/moves_probe.gd`](../../tools/moves_probe.gd) (the moves) and the city's
 `-- --play` pass (the pawn in the city, with the view and HUD on).
@@ -246,6 +247,36 @@ does not free its body, so the hook holds where it bit.
 
 ---
 
+### 7.1 The menu module (adopted 2026-10-03)
+
+`menu/` is their drop-in front end, copied as it is: autoloads `MenuSettings` (the settings
+model, saved to `user://settings.cfg`) and `MenuManager` (pausing), a `pause` action (Escape), and
+`menu/host_script` pointing at `BrickcityMenuHost`. Its own tests come with it and pass:
+`res://menu/tests/menu_smoke.tscn` and `menu_fit_smoke.tscn` (nine window sizes, two settings
+profiles, nothing cut off or collapsed). Read `menu/docs/01_menu_system.md` before changing it.
+
+- **What was cut** — rows nothing here honours: Music/SFX/UI/Voice volume (every sound plays on
+  Master), gamepad sensitivity and vibration, difficulty, language, subtitle size, hints, reduce
+  flashing. Rows the module's own code reads (`pad_deadzone`, `ui_scale`, the safe-area insets)
+  stay: deleting them makes it read `null`.
+- **How a setting reaches the game** — the host writes STATIC fields on the classes that use
+  them: `PlayerView.hfov`, `ads_sensitivity`, `shake_scale`, `reduce_motion`;
+  `DebugCamera.look_mult`, `invert_y`; `PlayerController.toggle_sprint/aim/crouch`;
+  `PlayerHud.opacity`; `CalloutHud.shown` (callout subtitles). A setting changed while nobody is
+  on foot holds when somebody is, and a probe that never loads the menu runs on the defaults —
+  which is their "settings only push changes" trap avoided by construction.
+- **Rebinding** works because the player's keys are now input actions (project.godot): move ×4,
+  sprint, jump, crouch (C and Ctrl), grapple, fire, aim, reload, pause. The debug keys (V, K, T,
+  F-keys...) stay raw and are not offered for rebinding.
+- **Pause opens only over the city** (`city_scene.gd` scenes: city, big city, arena). The
+  workshop and the terrain tools keep their own Escape. Over the city, Escape is the menu's;
+  `DebugCamera` gives it up there and still frees the mouse elsewhere.
+- **Main menu** (`res://menu/ui/MainMenu.tscn`) lists the arena, the city, the big city and the
+  workshop. It is not the main scene; set it as one to boot into it.
+- **Co-op**: the pause menu pauses the whole tree. Fine alone; a networked session must not stop
+  the world — `MenuManager` is the file to replace then (their own docstring says so), and the
+  menus themselves stay.
+
 ## 8. Still worth taking later
 
 - **Footsteps by distance, sound by surface** (Doc 24): a step every 2.1 m of ground covered, so a
@@ -253,6 +284,4 @@ does not free its body, so the hook holds where it bit.
 - **Pellets** for the shotgun, and **casings** with inherited velocity.
 - **Gun weight** into the sway (heavier = slower, smaller).
 - **Swing** as a second grapple mode if a level wants it.
-- **Menu module** (`menu/`): options with a horizontal-FOV slider and sensitivity/invert that the
-  player controller reads at spawn — their note: the settings autoload only pushes *changes*, so
-  read it once at spawn or the saved value is ignored until touched.
+

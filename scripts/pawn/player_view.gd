@@ -26,6 +26,15 @@ extends Node
 ## Field of view the way players think of it: HORIZONTAL degrees, turned into the
 ## camera's vertical FOV for the window's shape (Ceramic Edge's Hor+).
 const HFOV := 90.0
+## The Options menu's say (BrickcityMenuHost): field of view, sensitivity while
+## aiming (1 = the zoom's own), how much the view shakes, and Reduce Motion --
+## no gun bob or sway, no wall-run lean.
+static var hfov := HFOV
+static var ads_sensitivity := 0.75
+static var shake_scale := 1.0
+static var reduce_motion := false
+## The Options default for ads_sensitivity: at it, aiming turns at the zoom's rate.
+const ADS_SENSITIVITY_DEFAULT := 0.75
 const SPRINT_FOV := 6.0
 const SLIDE_FOV := 10.0
 const ADS_TIME := 0.16
@@ -143,6 +152,7 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	gun = g
 	_rng.seed = 0x5EE
 	_fov_was = camera.fov
+	_hfov = hfov
 	rig = Node3D.new()
 	rig.name = "Viewmodel"
 	camera.add_child(rig)
@@ -278,26 +288,27 @@ func _process(delta: float) -> void:
 
 func _camera(delta: float, wall_run: bool, sliding: bool) -> void:
 	var zoom := float(_feel()[1])
-	var hfov := HFOV + SPRINT_FOV * _sprint + (SLIDE_FOV if sliding else 0.0)
-	hfov = lerpf(hfov, HFOV * zoom, _smooth(_ads))
+	var base := PlayerView.hfov
+	var hfov := base + SPRINT_FOV * _sprint + (SLIDE_FOV if sliding else 0.0)
+	hfov = lerpf(hfov, base * zoom, _smooth(_ads))
 	_hfov = lerpf(_hfov, hfov, 1.0 - exp(-14.0 * delta))
 	var vp := camera.get_viewport().get_visible_rect().size
 	var aspect := vp.x / maxf(vp.y, 1.0)
 	camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(_hfov) * 0.5) / aspect))
-	camera.look_scale = lerpf(1.0, zoom, _ads)
+	camera.look_scale = lerpf(1.0, zoom * ads_sensitivity / ADS_SENSITIVITY_DEFAULT, _ads)
 
 	var lean := 0.0
 	if wall_run:
 		# Away from the wall: a wall on the right tips the head left.
 		var right := camera.global_transform.basis.x
-		lean = -signf(pawn.moves.wall_normal.dot(right)) * WALL_LEAN
+		lean = 0.0 if reduce_motion else -signf(pawn.moves.wall_normal.dot(right)) * WALL_LEAN
 	elif sliding:
-		lean = 0.04
+		lean = 0.0 if reduce_motion else 0.04
 	_roll = lerpf(_roll, lean, 1.0 - exp(-8.0 * delta))
 	camera.set_roll(_roll)
 
 	_shake = maxf(_shake - SHAKE_DECAY * delta, 0.0)
-	var amt := _shake * _shake * SHAKE_MAX
+	var amt := _shake * _shake * SHAKE_MAX * shake_scale
 	camera.h_offset = _rng.randf_range(-1.0, 1.0) * amt
 	camera.v_offset = _rng.randf_range(-1.0, 1.0) * amt
 
@@ -335,7 +346,7 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 		_fit(gun.gun)
 
 	var hip := 1.0 - _smooth(_ads)
-	var free := 1.0 - 0.85 * _ads
+	var free := (1.0 - 0.85 * _ads) * (0.0 if reduce_motion else 1.0)
 	var pos := HIP.lerp(ADS, _smooth(_ads))
 	var rot := Vector3.ZERO
 	pos += SPRINT_POS * _smooth(_sprint)
