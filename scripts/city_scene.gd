@@ -7845,6 +7845,11 @@ var aim_promotions := 0
 
 
 func _aim_promote() -> void:
+	# The far pass looks straight at buildings to check the shell ladder, and
+	# a look within AIM_PROMOTE_RANGE made each one bricks under it: no shell
+	# left to check (two of its checks failed on this, not on the ladder).
+	if _far_mode:
+		return
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return
@@ -9878,7 +9883,10 @@ func _run_far_pass() -> void:
 	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
 			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
-			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
+			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0),
+			"shell %s, box tier %s, body %s, far box %s, bricks %s, aim-promoted %d" % [
+			_shells.has(far_id), _shell_box.has(far_id), _shell_bodies.has(far_id),
+			_far_on.has(far_id), fb.is_materialised(), aim_promotions])
 
 	# Stage 4: player builds out there are cards, one bake for identical ones.
 	var tower := BuildRecipe.load_from("res://builds/watchtower.json")
@@ -9993,7 +10001,9 @@ func _run_far_pass() -> void:
 		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
 				"%.3f vs %.3f" % [holes_a, holes_c])
 	else:
-		_gate_ok("Stage 5: the crossfade leaves no holes", false, "no fading shell to look at")
+		_gate_ok("Stage 5: the crossfade leaves no holes", false,
+				"no fading shell to look at: shell %s, far box %s, bricks %s, aim-promoted %d" % [
+				shell_mi != null, _far_on.has(mid_id), mb.is_materialised(), aim_promotions])
 
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
@@ -10058,13 +10068,18 @@ static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
 func _far_settle() -> void:
 	var last := -1
 	var quiet := 0
+	# And two whole passes of the streamer over the register: ninety quiet
+	# FRAMES is a third of a second at a high frame rate, less than one pass
+	# with the trees in it, and a building it had not reached yet was read as
+	# having no shell.
+	var from := _stream_cursor
 	for i in 1200:
 		await RenderingServer.frame_post_draw
 		var n := _shells_made + _shells_freed + _shells_swapped + _far_on.size() \
 				+ _shell_far.size() + _shell_bodies.size()
 		quiet = quiet + 1 if n == last else 0
 		last = n
-		if quiet >= 90:
+		if quiet >= 90 and _stream_cursor - from >= registry.buildings.size() * 2:
 			return
 
 
