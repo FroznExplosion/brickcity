@@ -175,6 +175,40 @@ static func fake_material() -> ShaderMaterial:
 	return _fake_material
 
 
+## Stop drawing, at once, every item of `held[key]` standing inside one of
+## `boxes` (the node's own space). For a section leaving a building: the rooms
+## it took are worked out again a few a pass, and the drawing is only rebuilt
+## once they all are -- up to 18 ticks on a big tower, every item in the
+## section hanging in the air where it had been while the section fell.
+## Zero scale, not a shorter buffer: nothing else in the drawing moves.
+## Returns how many it hid.
+static func hide_inside(held: Dictionary, key: int, boxes: Array[AABB]) -> int:
+	var node: MultiMeshInstance3D = held.get(key)
+	if node == null or not is_instance_valid(node) or node.multimesh == null:
+		return 0
+	# Kept on the node by _attach_buffers: reading a MultiMesh's buffer back
+	# is a read from the GPU.
+	var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
+	@warning_ignore("integer_division")
+	var count: int = buffer.size() / STRIDE
+	if count != node.multimesh.instance_count:
+		return 0  # not the drawing this buffer was kept for
+	var hidden := 0
+	for i in count:
+		var at := i * STRIDE
+		var p := Vector3(buffer[at + 3], buffer[at + 7], buffer[at + 11])
+		for box in boxes:
+			if box.has_point(p):
+				for k in [0, 1, 2, 4, 5, 6, 8, 9, 10]:
+					buffer[at + k] = 0.0
+				hidden += 1
+				break
+	if hidden > 0:
+		node.multimesh.buffer = buffer
+		node.set_meta(&"buffer", buffer)
+	return hidden
+
+
 ## One MultiMesh from a list of buffers of STRIDE floats an instance, made,
 ## refreshed or freed as they require.
 static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
@@ -212,6 +246,7 @@ static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
 	elif node.get_parent() != parent:
 		node.reparent(parent, false)
 	node.multimesh = mm
+	node.set_meta(&"buffer", buffer)
 	return count
 
 
