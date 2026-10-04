@@ -3197,3 +3197,13 @@ alongside both: `streamer.follow` mean 3.2 ms before, 0.56 ms after; worst colli
 1.1 ms; worst instance phase 20 ms to 13–18 ms (the pool is empty until tiles start dropping).
 The first merge of this carried the cap removal WITHOUT the collision reorder (reverted by
 accident with a test flag): whole tiles into a live body, 85 ms spikes. Fixed in the next merge.
+
+### 22.11 One collision shape a tile: measured, not taken (2026-10-03)
+
+Built the tile's collider as one triangle mesh in C++ (the merged boxes' tops and walls, 5,000
+triangles, made on the bake's worker thread) and timed it against the boxes in the heightfield
+scene, 20 tiles: boxes **0.37 ms** a tile (added before the body joins the space, §22.10), trimesh
+**4.0–4.7 ms** (worst 22 ms) — Jolt builds the mesh's search tree on the main thread when the
+shape is set. A 65x65 heightmap shape was 0.53 ms and would turn every brick step into a ramp.
+Neither beats the boxes once they are added in the right order, so the boxes stay and the trimesh
+code was removed.
