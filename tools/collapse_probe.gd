@@ -19,6 +19,8 @@ extends SceneTree
 ##        it has no shell: nothing leaves it while its bands are still being
 ##        built from the bricks before the cut (a standing copy of the section
 ##        that fell), and something draws it all that time.
+## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
+##        drawn furniture it lands on, rather than standing in it.
 
 var _pass := 0
 var _fail := 0
@@ -76,8 +78,6 @@ func _run() -> void:
 		await _check_fake()
 	if _only("handover"):
 		await _check_handover()
-	if _only("farcut"):
-		await _check_farcut()
 	if _only("crush"):
 		await _check_crush()
 	if _only("far"):
@@ -96,6 +96,11 @@ func _run() -> void:
 		await _check_fall()
 	if _only("trapped"):
 		await _check_trapped()
+	# Last, so the sections before them pick the buildings they always have.
+	if _only("farcut"):
+		await _check_farcut()
+	if _only("crushdrawn"):
+		await _check_crushdrawn()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -412,6 +417,64 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+## Docs/CollapseNext.md 1.2: a piece that lands in a drawn room takes the
+## drawn furniture it lands on with it, rather than standing in it.
+func _check_crushdrawn() -> void:
+	print("crushdrawn: a piece landing in a drawn room crushes what it lands on")
+	var id := _tower(3)
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	city._promote(id)
+	city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
+	city.camera.look_at(box.get_center())
+	await _ticks(30 * 4)
+	# A drawn room with something drawn in it, and the drawn item in it.
+	var room: Room = null
+	var item := AABB()
+	for r in city.registry.drawn_rooms_of(id):
+		var rs: Vector3 = (r as Room).local_box().size
+		if not (r as Room).drawn_boxes.is_empty() and rs.x >= 2.4 and rs.z >= 2.4:
+			room = r
+			item = (r as Room).drawn_boxes[0]
+			break
+	_ok("there is a drawn room with furniture", room != null,
+			"%d drawn room(s)" % b.drawn_rooms.size())
+	if room == null:
+		return
+	var xf: Transform3D = city.world.get_chunk_transform(b.chunk)
+	var at: Vector3 = xf * item.get_center()
+	var gone0 := room.gone.size()
+	var crushed0: int = city.crushed_by_wreckage
+	# Four studs square and four courses (fewer is crumbs, no body), under
+	# the ceiling, over the item.
+	# Kept inside the room's walls: wedged in one, it never comes down.
+	var rb: AABB = room.world_box(b.xform)
+	var px := clampf(at.x - 0.7, rb.position.x + 0.2, rb.end.x - 1.6)
+	var pz := clampf(at.z - 0.7, rb.position.z + 0.2, rb.end.z - 1.6)
+	# Three courses with the slab the helper adds is about two metres: low,
+	# so it clears the ceiling, and through the item from the start.
+	var piece := _drop(Vector3(px, rb.position.y + 0.3, pz), 4, 4, 3)
+	# Down, and settled: a piece that slid in slowly counts as much.
+	for t in 30 * 4:
+		await physics_frame
+		if piece != null and piece.is_valid() and piece.settled:
+			break
+	await _ticks(2)
+	print("  --   piece %s, room %.1f m tall, item top %.2f, piece bottom %.2f" % [
+		piece != null, room.local_box().size.y, (xf * item.end).y, rb.position.y + 0.3])
+	if piece != null and piece.is_valid():
+		print("  --   settled %s, box %s, item at %s, room box %s" % [piece.settled,
+				city.islands.world_aabb(piece), at, room.world_box(b.xform)])
+	var still := false
+	for bx in room.drawn_boxes:
+		if (bx as AABB).grow(0.05).has_point(item.get_center()):
+			still = true
+	_ok("the item it landed on is crushed", room.gone.size() > gone0 and not still,
+			"gone %d -> %d, still drawn %s, crushed rooms %d" % [gone0, room.gone.size(), still,
+			city.crushed_by_wreckage - crushed0])
+	_ok("and the room is still drawn", room.drawn)
 
 
 func _check_farcut() -> void:

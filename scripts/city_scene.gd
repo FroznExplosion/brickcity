@@ -1081,6 +1081,7 @@ func _ready() -> void:
 	authority.committed.connect(_nav_on_command)
 	islands.piece_settled.connect(func(isl: BrickIsland) -> void:
 		ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5))
+		_crush_drawn(isl)
 		_wreck_settled(isl))
 	islands.piece_woken.connect(func(isl: BrickIsland) -> void:
 		if isl.settled:
@@ -3456,6 +3457,62 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 				_shear_building(b.id, point, radius)
 
 	islands.shear_near(point, radius, source)
+	_crush_drawn(source)
+
+
+## A piece came down in a drawn room. Its furniture is drawn, not bricks, and
+## holds nothing up (Layers.FIXTURE), so the piece went through the table --
+## and the table stayed drawn inside the wreckage until the floor under it
+## went (Docs/CollapseNext.md 1.2). An item with a brick of the piece where it
+## stands is crushed: gone from the room's record, as anything destroyed is,
+## and the room drawn again at once without it. Asked when a piece lands hard
+## and when one settles -- a slow one ends up in the furniture too.
+func _crush_drawn(source: BrickIsland) -> void:
+	if source == null or not source.is_valid():
+		return
+	var piece := islands.world_aabb(source).grow(0.2)
+	var piece_inv := world.get_chunk_transform(source.chunk).affine_inverse()
+	var piece_origin: Vector3i = world.get_chunk_origin(source.chunk)
+	var cs := BrickWorld.get_cell_size()
+	for id in _near_buildings(piece.get_center(), piece.size.length() * 0.5 + 1.0):
+		var b := registry.get_building(id)
+		if b == null or b.drawn_rooms.is_empty() or not b.is_materialised():
+			continue
+		var chunk_xf := world.get_chunk_transform(b.chunk)
+		var origin: Vector3i = world.get_chunk_origin(b.chunk)
+		var offset: Vector3i = registry._rebase_of(b)
+		var redraw := []
+		for index in b.drawn_rooms:
+			var room := registry.get_room(id, index)
+			if room == null or not room.world_box(b.xform).intersects(piece):
+				continue
+			for i in room.items.size():
+				if room.gone.has(i):
+					continue
+				var cell: Vector3i = (room.items[i] as Dictionary).cell
+				var base := chunk_xf * (Vector3(cell - offset - origin) * cs)
+				# Its foot and a little above it: a piece through a table is in
+				# the table's space, one resting on the floor beside it is not.
+				for up in [0.5, 1.5, 2.5]:
+					var p := base + Vector3(cs.x * 0.5, cs.y * up, cs.z * 0.5)
+					if not piece.has_point(p):
+						continue
+					var at := Vector3i((piece_inv * p / cs).floor()) + piece_origin
+					if world.is_solid(source.chunk, at):
+						room.gone[i] = true
+						if not redraw.has(index):
+							redraw.append(index)
+						break
+		if redraw.is_empty():
+			continue
+		# Out and back in: _sync_drawn only redraws a room that came or went.
+		for index in redraw:
+			registry.undraw_room(id, index)
+		_sync_drawn(id)
+		for index in redraw:
+			registry.draw_room(id, index)
+		_sync_drawn(id)
+		crushed_by_wreckage += redraw.size()
 
 
 ## Shear, not destroy: a brick struck by falling masonry comes loose.
@@ -6616,6 +6673,9 @@ func _physics_process(_delta: float) -> void:
 		# log replay missed it) -- once the biggest section went first and eight
 		# a tick, where two a tick had left that group for the next solve.
 		var taken_by_stairs := {}
+		# Where each group that leaves was, in the building's own space: what
+		# its rooms drew there stops being drawn this tick (below).
+		var left_boxes: Array[AABB] = []
 		for entry in plan:
 			var kind: StringName = entry[1]
 			var before: PackedInt32Array = entry[0]
@@ -6648,6 +6708,7 @@ func _physics_process(_delta: float) -> void:
 			# Parent first, island second -- see the note above the toppling
 			# spawn. spawn() returns null for debris discarded unseen; either
 			# way the blocks have left this building.
+			left_boxes.append(world.get_blocks_box(b.chunk, before).grow(0.2))
 			_disable(b.id, before)
 			t = _mark("disable", t)
 			# The detach is a command: WHEN a group leaves is a budget, and timing
@@ -6677,6 +6738,12 @@ func _physics_process(_delta: float) -> void:
 		# Blocks just left it: a fake drawn since the hit is stale again.
 		b.structure_version += 1
 		_fake_dirty[b.id] = true
+		# And until the fake is rebuilt -- a few rooms a pass, the drawing
+		# swapped only once all of them are -- what it drew in the groups that
+		# left hung in the air while they fell, up to 18 ticks on a big tower.
+		if not left_boxes.is_empty():
+			FurnitureMesh.hide_inside(_fake_furniture, b.id, left_boxes)
+			FurnitureMesh.hide_inside(_drawn_furniture, b.id, left_boxes)
 		# Keep drawing those bricks until the piece that took them has come up.
 		# See IslandManager.OVERLAP_FRAMES.
 		# Start a hold, never extend one -- see the same guard in _shed.
@@ -7808,6 +7875,8 @@ var _aimed_at := {}   ## building id -> msec it was last aimed at
 ## first made that more of them -- the shot showed at 15 ticks, not 9.
 var _band_first := {}
 var aim_promotions := 0
+## Drawn rooms a landing piece crushed furniture in (_crush_drawn).
+var crushed_by_wreckage := 0
 
 
 func _aim_promote() -> void:
