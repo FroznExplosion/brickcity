@@ -516,3 +516,16 @@ standing where the mesh stands from three heights; a tree mid-band with no holes
 * [Imposter Syndrome — Blender Conference 2026](https://conference.blender.org/2026/presentations/4266/)
 * [Imposter Syndrome — BCON26 talk video](https://www.youtube.com/watch?v=qBPuZ-1StZc)
 * [Imposter Cards add-on thread — Blender Artists](https://blenderartists.org/t/imposter-cards/1639864)
+
+## ImpostorLod's sorting in C++ (2026-10-03)
+
+The per-copy half of `ImpostorLod` — transforms, wanted flags, tiers, squares, the distance sort and
+the MultiMesh buffer packing — moved to C++ (`ImpostorSet`, `gdextension/brick/src/impostor_set.cpp`).
+The script keeps the nodes, meshes, materials and the bake; its public API is unchanged, so the
+city, `ImpostorItems` and `TerrainTrees` did not change. Heightfield scene, 6,000 trees, a full
+update of every set while moving: 2.0 ms mean / 3.2 ms worst in GDScript, 0.21 / 0.37 ms now
+(other Godot runs alongside both), same near and far counts. `impostor_probe`: 25 ok before and
+after, identical tier counts.
+
+Seen while testing, not caused by this: `city.tscn -- --trees` fails "trees were placed -- 0" with
+the old script too; the city's `_place_trees` never runs in that pass.
