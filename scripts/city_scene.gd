@@ -3172,6 +3172,30 @@ func _build_one_band(id: int) -> bool:
 	return true
 
 
+func _is_tree(id: int) -> bool:
+	var b := registry.get_building(id)
+	return b != null and b.is_build() and b.build != null and String(b.build.name).begins_with("tree_")
+
+
+## Ground for snow to lie on (SnowCover): only a city on terrain has any.
+func has_terrain() -> bool:
+	return _terrain_mat != null
+
+
+## The buildings snow can lie on (SnowCover): standing, bricks in, one frame,
+## not trees (their crowns take a cap in the shader instead).
+func snow_buildings() -> Array:
+	var out := []
+	for b in registry.buildings:
+		if b.toppled or b.chunk < 0 or b.frames.size() > 1 or not _brick_nodes.has(b.id):
+			continue
+		if _is_tree(b.id):
+			continue
+		out.append({"id": b.id, "chunk": b.chunk, "parent": _brick_nodes[b.id],
+				"version": b.structure_version, "sway": _sway_of(b.id)})
+	return out
+
+
 ## A standing building's wind sway (WeatherFx): a tree's crown moves, a
 ## tower's top a few centimetres. Height from the ground it stands on.
 func _sway_of(id: int) -> Vector3:
@@ -3196,6 +3220,8 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node.material_override = brick_material
 		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
 		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
+		# A tree's crown takes a cap of snow; a building gets real cover.
+		node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -7136,6 +7162,7 @@ func _inst_set(key: String, recipe: BuildRecipe, near := true) -> ImpostorLod:
 	var inst_mesh := RecipeMesh.build(recipe, key)
 	if inst_mesh != null and String(recipe.name).begins_with("tree_"):
 		s.sway = WeatherFx.sway_tree(inst_mesh.get_aabb().end.y)
+		s.snowcap = 1.0
 	s.setup(inst_mesh, brick_material, TREE_NEAR if near else -1.0)
 	_inst_sets[key] = s
 	return s
@@ -12274,6 +12301,7 @@ func _build_scenery() -> void:
 		gmat.albedo_color = Color(0.34, 0.35, 0.33)
 		gmat.roughness = 1.0
 		gmesh.material_override = gmat
+		WeatherFx.register_tint(gmat)   # white under snow, dark when wet
 		ground.add_child(gmesh)
 		add_child(ground)
 		_ground_plane = ground

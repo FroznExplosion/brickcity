@@ -35,9 +35,10 @@ const KINDS := {
 	"earthquake": preload("res://scripts/disasters/earthquake.gd"),
 	"acid": preload("res://scripts/disasters/acid_rain.gd"),
 	"hurricane": preload("res://scripts/disasters/hurricane.gd"),
+	"snow": preload("res://scripts/disasters/snowfall.gd"),
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid", "hurricane"]
+const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid", "hurricane", "snow"]
 ## The menu's names, in the menu's order.
 const TITLES := {
 	"meteor": "Meteor shower",
@@ -47,6 +48,7 @@ const TITLES := {
 	"earthquake": "Earthquake",
 	"acid": "Acid rain",
 	"hurricane": "Hurricane",
+	"snow": "Snowfall",
 }
 ## Intensity steps the slider snaps to, with their names.
 const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]

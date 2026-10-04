@@ -852,3 +852,27 @@ The worst ticks are the collapses and landings themselves (the same as without a
 sway -- costs well under a millisecond on top. The hurricane's frame was first measured at 16.6
 ms both ways: the 60 Hz vsync interval, not the frame; the probe now switches vsync off for it.
 The earlier numbers in this document were taken with other processes running and read high.
+
+---
+
+## 21. Snow
+
+`snowfall.gd` (kind `snow`, in the city's roll and the heightfield's): flakes drifting on a
+breeze, a grey-white sky, sight 0.7 / aim 1.5x, soldiers shelter. The snow **lies** as smooth
+tiles, plate-and-a-bit thick (0.16 m, studs hidden), on every top open to the sky:
+
+* **Buildings** — `BrickWorld.build_snow_cover(chunk)`: each column scanned from the top to its
+  first living structural block; equal tops merged into rectangles, each a low box. Under the
+  building's own node, so it sways with it; rebuilt when its structure changes (≤ 1 s), so a hole
+  in a roof lets snow onto the floor below (probe: roof snow at 33.3 m, then 30.0 m under the hole).
+* **Terrain** — squares of 32 studs round the camera to 70 m, one a physics tick (≤ 2.4 ms):
+  heights from the heightfield, a ray down per cell so nothing lies under a building, site or
+  tree; none on the sea. `BrickWorld.build_snow_cover_tops`.
+* **Growth** in `snow.gdshader`: tiles appear a stud cell at a time, then thicken; melting runs it
+  back. The context eases it: lying over 45 s / intensity, melting over 90 s, leaving it wet.
+* **Caps** where there is no cover: tree crowns (`weather_snowcap`), far city, far ground,
+  printed pieces whiten their up faces (`weather_snow_surface`). The small city's flat ground is
+  tinted (`WeatherFx.register_tint`).
+
+Probes: `snow_probe` 8/8 (159 squares, none under a site, melts, cover freed); disaster probe 128
+with a city snow section. Shots: `snow_before`, `snow_lying`, `snow_close`, `disaster_snow_city`.

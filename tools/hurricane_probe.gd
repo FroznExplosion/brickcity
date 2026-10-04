@@ -40,7 +40,7 @@ func _run() -> void:
 	if dir == null:
 		_finish(scene)
 		return
-	_ok("offering only the hurricane: no buildings here to hit", dir.roll == ["hurricane"],
+	_ok("offering only what needs no buildings: the hurricane, snow", dir.roll == ["hurricane", "snow"],
 			str(dir.roll))
 	var sea = scene._sea
 	var base_level := BrickWave.get_sea_level()

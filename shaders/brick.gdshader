@@ -365,6 +365,8 @@ void fragment() {
     weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
             VIEW_MATRIX, 0.14 * (1.0 - MAT_METAL[mat]), 0.4, TIME);
     NORMAL = wet_normal;
+    // A tree's crown takes a cap of snow; a building has real cover.
+    weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, weather_snowcap);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

@@ -396,6 +396,25 @@ public:
     /// horizontal axis.
     Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
 
+    // --- snow cover (Docs/Disasters.md 21) ----------------------------------
+
+    /// Snow on a chunk: smooth tiles, `thickness` metres thick, on every top
+    /// a living block shows to the SKY -- each column scanned from the top
+    /// down to its first living, structural, attached block. A floor under a
+    /// roof gets none; a roof blown away lets it onto the floor below.
+    /// Equal neighbouring tops are merged into rectangles, each a low box
+    /// (top and four sides, no bottom). Mesh arrays in chunk-local metres;
+    /// COLOR.r is 1 on the top of the snow and 0 at its foot, so a shader can
+    /// grow it from nothing. Empty Array when there is no exposed top.
+    Array build_snow_cover(int chunk_id, float thickness);
+    /// The same from a grid of tops: `tops` is w x d plate heights (the top of
+    /// the ground in plates, row-major x fastest), any value below -1000000
+    /// for "no snow here". `cell` is the cell's metres across, `plate` a
+    /// plate's height, and the grid's corner is at `origin` (world XZ).
+    /// Vertices in world metres. For the terrain.
+    static Array build_snow_cover_tops(const PackedInt32Array &tops, int w, int d, float cell,
+            float plate, float thickness, Vector2 origin);
+
     /// What one cell of stud contact can carry IN TENSION, in the same mass
     /// units archetypes use. This is a real quantity, not a tuning knob: a
     /// brick connection releases at 3-5 N, a brick weighs about 2.5 g, so a

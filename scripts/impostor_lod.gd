@@ -59,6 +59,8 @@ var _chunks := {}
 ## Wind sway for the up-close copies (WeatherFx.sway_tree): (height, lean,
 ## Hz), 0 height for none. Set before the first add().
 var sway := Vector3.ZERO
+## How much the up-close copies' tops take a cap of snow (trees 1).
+var snowcap := 0.0
 var near_count := 0
 var far_count := 0
 
@@ -131,6 +133,8 @@ func _chunk(key: Vector2i) -> Dictionary:
 		c.near = _make_mmi(mesh, _near_mat)
 		if sway.x > 0.0:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_sway", sway)
+		if snowcap > 0.0:
+			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_snowcap", snowcap)
 		add_child(c.near)
 	var far_mesh: Mesh = mesh
 	c.far = _make_mmi(far_mesh, material)
