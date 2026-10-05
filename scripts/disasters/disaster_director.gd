@@ -37,6 +37,12 @@ const KINDS := {
 	"hurricane": preload("res://scripts/disasters/hurricane.gd"),
 	"snow": preload("res://scripts/disasters/snowfall.gd"),
 	"blizzard": preload("res://scripts/disasters/blizzard.gd"),
+	"big_meteor": preload("res://scripts/disasters/big_meteor.gd"),
+	"meteor_storm": preload("res://scripts/disasters/meteor_storm.gd"),
+	"meteor_mixed": preload("res://scripts/disasters/meteor_mixed.gd"),
+	"hail": preload("res://scripts/disasters/hailstorm.gd"),
+	"sandstorm": preload("res://scripts/disasters/sandstorm.gd"),
+	"waterspout": preload("res://scripts/disasters/waterspout.gd"),
 }
 ## Several at once (Docs/Disasters.md 22): a menu entry that starts each of
 ## its kinds together, each from its own seed. Offered where every kind in it
@@ -48,10 +54,12 @@ const COMBOS := {
 	"cataclysm": ["meteor", "earthquake"],
 	"whiteout_quake": ["blizzard", "earthquake"],
 	"apocalypse": ["meteor", "lightning", "tornado", "earthquake"],
+	"spouts": ["hurricane", "waterspout", "waterspout"],
+	"dust_and_hail": ["sandstorm", "hail"],
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
 const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid", "hurricane", "snow",
-		"blizzard"]
+		"blizzard", "big_meteor", "meteor_storm", "meteor_mixed", "hail", "sandstorm", "waterspout"]
 ## The menu's names, in the menu's order.
 const TITLES := {
 	"meteor": "Meteor shower",
@@ -63,12 +71,20 @@ const TITLES := {
 	"hurricane": "Hurricane",
 	"snow": "Snowfall",
 	"blizzard": "Blizzard",
+	"big_meteor": "Giant meteor",
+	"meteor_storm": "Heavy meteor shower",
+	"meteor_mixed": "Meteor shower with giants",
+	"hail": "Hailstorm",
+	"sandstorm": "Sandstorm",
+	"waterspout": "Waterspout",
 	"outbreak": "Tornado outbreak (3 tornadoes)",
 	"superstorm": "Superstorm (hurricane + 2 tornadoes)",
 	"firestorm": "Firestorm (lightning + fire + tornado)",
 	"cataclysm": "Cataclysm (meteors + earthquake)",
 	"whiteout_quake": "Frozen quake (blizzard + earthquake)",
 	"apocalypse": "Apocalypse (meteors, lightning, tornado, quake)",
+	"spouts": "Hurricane with waterspouts",
+	"dust_and_hail": "Sand and hail",
 }
 ## Intensity steps the slider snaps to, with their names.
 const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]

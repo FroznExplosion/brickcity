@@ -33,6 +33,8 @@ instance uniform vec3 weather_sway = vec3(0.0);
 // (shaders/snow.gdshader); this is the cheap cap for what has none -- tree
 // crowns, the far city, the far ground: their upward faces whiten.
 uniform float weather_snow : hint_range(0.0, 1.0) = 0.0;
+// What lies: snow white, or a sandstorm's sand.
+uniform vec3 weather_snow_colour : source_color = vec3(0.93, 0.95, 0.99);
 // PER INSTANCE: how much an object's tops take the cap (trees 1). Buildings
 // and the near ground carry real cover instead, so 0.
 instance uniform float weather_snowcap = 0.0;
@@ -96,7 +98,7 @@ void weather_snow_surface(inout vec3 wp_albedo, inout float wp_roughness, inout 
     }
     float wx_up = (wp_inv_view * vec4(wp_normal_view, 0.0)).y;
     float wx_k = smoothstep(0.55, 0.85, wx_up) * clamp(weather_snow * 1.4, 0.0, 1.0) * wp_cap;
-    wp_albedo = mix(wp_albedo, vec3(0.93, 0.95, 0.99), wx_k);
+    wp_albedo = mix(wp_albedo, weather_snow_colour, wx_k);
     wp_roughness = mix(wp_roughness, 0.6, wx_k);
     wp_specular = mix(wp_specular, 0.35, wx_k);
 }

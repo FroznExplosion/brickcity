@@ -27,6 +27,15 @@ const SPLASHES := 900
 var rain: GPUParticles3D
 var splash: GPUParticles3D
 var points := 0                   ## last refresh: rays that found somewhere to land
+## Where it landed, the last refresh: [point, normal]. What hail chips, and
+## what the sounds play on.
+var hits: Array = []
+## The sound of it on what it hits (SurfaceSounds), or null for silence.
+var sounds: SurfaceSounds = null
+var ctx: DisasterContext = null
+## Where it is raining, when that is not everywhere round the camera: (x, z,
+## radius); radius 0 for everywhere. A waterspout's cell.
+var area := Vector3.ZERO
 
 var _proc: ParticleProcessMaterial
 var _img: Image
@@ -37,13 +46,20 @@ var _rng := RandomNumberGenerator.new()
 
 ## Make `rain` (with process material `proc`) stop on what it hits and splash.
 ## Adds itself under `parent`. Returns itself.
+## `sound` "rain" or "hail" plays it on what it hits (SurfaceSounds); "" none.
 static func add(p_rain: GPUParticles3D, proc: ParticleProcessMaterial, parent: Node3D,
-		colour := Color(0.9, 0.94, 1.0, 0.9)) -> RainSplash:
+		colour := Color(0.9, 0.94, 1.0, 0.9), sound := "", p_ctx: DisasterContext = null) -> RainSplash:
 	var r := RainSplash.new()
 	r.name = "RainSplash"
 	r.rain = p_rain
+	r.ctx = p_ctx
 	parent.add_child(r)
 	r._build(proc, colour)
+	if sound != "" and p_ctx != null:
+		r.sounds = SurfaceSounds.new()
+		r.sounds.name = "Sounds"
+		r.add_child(r.sounds)
+		r.sounds.setup(sound)
 	return r
 
 
@@ -108,6 +124,8 @@ func _physics_process(delta: float) -> void:
 	splash.amount_ratio = rain.amount_ratio
 	if not on:
 		return
+	if sounds != null:
+		sounds.step(delta, rain.amount_ratio)
 	_next -= delta
 	if _next > 0.0:
 		return
@@ -118,22 +136,40 @@ func _physics_process(delta: float) -> void:
 	var at := cam.global_position
 	var space := get_world_3d().direct_space_state
 	var n := 0
+	hits.clear()
 	for i in RAYS:
 		var a := _rng.randf() * TAU
 		var d := sqrt(_rng.randf()) * REACH
 		var x := at.x + cos(a) * d
 		var z := at.z + sin(a) * d
+		if area.z > 0.0 and Vector2(x - area.x, z - area.y).length() > area.z:
+			continue
 		var q := PhysicsRayQueryParameters3D.create(Vector3(x, at.y + 40.0, z), Vector3(x, at.y - 60.0, z))
 		var hit := space.intersect_ray(q)
 		if hit.is_empty():
 			continue
 		var p: Vector3 = hit.position
+		hits.append([p, hit.normal])
 		# Relative to the emitter, which stands under the camera.
 		_img.set_pixel(n, 0, Color(p.x - at.x, p.y, p.z - at.z))
 		n += 1
 	points = n
+	if sounds != null:
+		sounds.set_points(hits, at, ctx.city, ctx)
 	if n == 0:
 		return
 	_tex.update(_img)
 	_proc.emission_point_count = n
 	splash.global_position = Vector3(at.x, 0.0, at.z)
+
+
+## Hail: what is thrown up where it lands is `pellet`, bouncing higher and
+## longer than a splash of water.
+func bounce(pellet: Mesh) -> void:
+	splash.draw_pass_1 = pellet
+	splash.lifetime = 0.6
+	_proc.initial_velocity_min = 1.8
+	_proc.initial_velocity_max = 3.8
+	_proc.spread = 40.0
+	_proc.scale_min = 0.5
+	_proc.scale_max = 1.0

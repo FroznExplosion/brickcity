@@ -225,10 +225,10 @@ func _update_mask(camera: Vector3) -> void:
 	_set_mask_param("pool_mask_size", MASK_STUDS * stud)
 
 
-func _set_mask_param(name: String, value: Variant) -> void:
+func _set_mask_param(param: String, value: Variant) -> void:
 	for tier in [near, sheet]:
 		if tier != null and tier._mat != null:
-			tier._mat.set_shader_parameter(name, value)
+			tier._mat.set_shader_parameter(param, value)
 
 
 ## Build the tiers again: a new studded radius. The seabed is kept.
@@ -259,14 +259,14 @@ func rebuild() -> void:
 ## shows, how the waves steer to the shore -- is re-read every SURGE_SEABED_STEP
 ## of level, no more than every SURGE_SEABED_MS, because a read is ~30 ms.
 ## Between reads newly flooded ground is drawn by the smooth sheet.
-func set_surge(surge: float, wave_mul: float) -> void:
+func set_surge(p_surge: float, wave_mul: float) -> void:
 	if is_nan(_surge_base):
-		if surge == 0.0 and wave_mul == 1.0:
+		if p_surge == 0.0 and wave_mul == 1.0:
 			return
 		_surge_base = BrickWave.get_sea_level()
 		_surge_gain = wave_gain
 		_surge_mul = 1.0
-	var level := _surge_base + surge
+	var level := _surge_base + p_surge
 	BrickWave.set_sea_level(level)
 	_set_mask_param("sea_level", level)
 	if absf(wave_mul - _surge_mul) > 0.02 or (wave_mul == 1.0 and _surge_mul != 1.0):
@@ -274,10 +274,10 @@ func set_surge(surge: float, wave_mul: float) -> void:
 		wave_gain = _surge_gain * wave_mul
 		push_waves()
 	var now := Time.get_ticks_msec()
-	var back := surge == 0.0 and wave_mul == 1.0
-	if back or (absf(surge - _surge_seabed) >= SURGE_SEABED_STEP
+	var back := p_surge == 0.0 and wave_mul == 1.0
+	if back or (absf(p_surge - _surge_seabed) >= SURGE_SEABED_STEP
 			and now - _surge_seabed_ms >= SURGE_SEABED_MS):
-		_surge_seabed = surge
+		_surge_seabed = p_surge
 		_surge_seabed_ms = now
 		refresh_seabed()
 	if back:

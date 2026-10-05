@@ -11,7 +11,6 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 uniform float thickness = 0.12;
 uniform float stud = 0.32;
-uniform vec3 snow_colour : source_color = vec3(0.93, 0.95, 0.99);
 
 varying vec3 v_world;
 varying float v_top;
@@ -35,7 +34,7 @@ void fragment() {
     if (snow_hash(cell) > weather_snow * 1.6 - 0.05) {
         discard;
     }
-    vec3 col = snow_colour;
+    vec3 col = weather_snow_colour;
     vec3 nw = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
     float up = clamp(abs(nw.y), 0.0, 1.0);
     // Smooth tiles, two studs a side: a faint groove between them, on top.

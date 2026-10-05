@@ -77,7 +77,7 @@ static func random(p_seed: int) -> CreatureDNA:
 		# spread pairs along spine; single pair sits mid-rear
 		var si: int
 		if pairs == 1:
-			si = d.spine_joints / 2
+			si = floori(d.spine_joints / 2.0)
 		else:
 			si = int(round(lerpf(d.spine_joints - 1, 0, float(p) / float(pairs - 1))))
 		d.leg_pairs.append({

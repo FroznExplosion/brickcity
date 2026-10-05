@@ -72,6 +72,23 @@ var snow_rate := 1.0:
 				r = maxf(r, float(d.get("snow_rate", 1.0)))
 		return r if r > 0.0 else 1.0
 var snow_cover: SnowCover = null
+## The colour of what lies: what is falling decides it (snow white, sand
+## tan), and what has fallen keeps it while it goes.
+var lying_colour := Color(0.93, 0.95, 0.99)
+var snow_tint := Color(0.93, 0.95, 0.99):
+	set(v):
+		_put("snow_tint", v)
+## How deep it may lie while it falls: 1 for snow, less for hail (a thin
+## white of stones, patchy). The deepest any falling one allows.
+var snow_cap := 1.0:
+	set(v):
+		_put("snow_cap", v)
+	get:
+		var c := 0.0
+		for d in _by.values():
+			if d.get("snowing", false):
+				c = maxf(c, float(d.get("snow_cap", 1.0)))
+		return c if c > 0.0 else 1.0
 const SNOW_S := 45.0
 const MELT_S := 90.0
 
@@ -116,19 +133,19 @@ func _init(city_node: Node3D) -> void:
 func blast(point: Vector3, radius: float) -> void:
 	# Not requested from a client: the host runs the same disaster and blasts
 	# the same place itself.
-	if decides:
+	if decides and city.has_method("_blast"):
 		city._blast(point, radius)
 
 
 ## Wear bricks in a ball by `hp`: weakens, kills only what runs out.
 func chip(point: Vector3, radius: float, hp: int) -> void:
-	if decides:
+	if decides and city.has_method("chip"):
 		city.chip(point, radius, hp)
 
 
 ## Blacken the bricks in a ball: fire's mark, colour only (DamageLog SCORCH).
 func scorch(point: Vector3, radius: float) -> int:
-	return city.scorch(point, radius) if decides else 0
+	return city.scorch(point, radius) if decides and city.has_method("scorch") else 0
 
 
 ## Knock a clump of bricks loose from the building at `point`, whole -- they
@@ -200,7 +217,7 @@ func ray(from: Vector3, to: Vector3) -> Dictionary:
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.collision_mask = Layers.HITSCAN_MASK
 	var hit := space.intersect_ray(q)
-	var far: Dictionary = city._ray_recipes(from, to)
+	var far: Dictionary = city._ray_recipes(from, to) if city.has_method("_ray_recipes") else {}
 	if not far.is_empty() and (hit.is_empty()
 			or from.distance_to(far.position) < from.distance_to(hit.position)):
 		return {"position": far.position, "normal": (from - to).normalized(),
@@ -264,6 +281,8 @@ func top_of(box: AABB) -> Dictionary:
 
 ## The standing building whose box holds `point` (within `margin`), or -1.
 func building_at(point: Vector3, margin := 0.3) -> int:
+	if registry == null:
+		return -1
 	for b in registry.buildings:
 		if not b.toppled and CityPlacer.box_of(b).grow(margin).has_point(point):
 			return b.id
@@ -273,6 +292,8 @@ func building_at(point: Vector3, margin := 0.3) -> int:
 ## Standing buildings as [id, box] pairs, in registry order.
 func buildings() -> Array:
 	var out := []
+	if registry == null:
+		return out
 	for b in registry.buildings:
 		if not b.toppled:
 			out.append([b.id, CityPlacer.box_of(b)])
@@ -282,6 +303,8 @@ func buildings() -> Array:
 ## Every building's box, standing ones only. For picking targets.
 func building_boxes() -> Array[AABB]:
 	var out: Array[AABB] = []
+	if registry == null:
+		return out
 	for b in registry.buildings:
 		if not b.toppled:
 			out.append(CityPlacer.box_of(b))
@@ -306,6 +329,8 @@ func material_at(point: Vector3) -> int:
 	var q := PhysicsPointQueryParameters3D.new()
 	q.position = point
 	q.collision_mask = Layers.STRUCTURE
+	if city.get("_material_fx") == null:
+		return -1   # a host with no bricks (the heightfield)
 	if city.get_world_3d().direct_space_state.intersect_point(q, 1).is_empty():
 		return -1
 	return city._material_fx.material_at(point)
@@ -315,6 +340,8 @@ func material_at(point: Vector3) -> int:
 func islands_near(point: Vector3, radius: float) -> Array[BrickIsland]:
 	var out: Array[BrickIsland] = []
 	var r2 := radius * radius
+	if islands == null:
+		return out   # a host with no pieces
 	for isl in islands.islands:
 		if is_instance_valid(isl.body) and isl.body.global_position.distance_squared_to(point) <= r2:
 			out.append(isl)
@@ -322,7 +349,8 @@ func islands_near(point: Vector3, radius: float) -> Array[BrickIsland]:
 
 
 func wake_near(point: Vector3, radius: float) -> void:
-	islands.wake_near(point, radius)
+	if islands != null:
+		islands.wake_near(point, radius)
 
 
 ## Keep a piece from settling for `ms` -- it is being held up by wind, not by
@@ -424,9 +452,9 @@ func _apply_weather() -> void:
 
 
 ## Rain streaking the view and dust hazing it, 0..1 each; `dust_colour` tints it.
-func set_screen(rain: float, dust: float, dust_colour := Color(0.6, 0.55, 0.48),
+func set_screen(p_rain: float, p_dust: float, dust_colour := Color(0.6, 0.55, 0.48),
 		rain_colour := Color(0.78, 0.84, 0.92)) -> void:
-	_put("screen", [clampf(rain, 0.0, 1.0), clampf(dust, 0.0, 1.0), dust_colour, rain_colour])
+	_put("screen", [clampf(p_rain, 0.0, 1.0), clampf(p_dust, 0.0, 1.0), dust_colour, rain_colour])
 	_apply_screen()
 
 
@@ -523,12 +551,17 @@ func shake(point: Vector3, strength: float) -> void:
 func step(delta: float) -> void:
 	wet = move_toward(wet, 1.0 if raining else 0.0, delta / (WET_S if raining else DRY_S))
 	rain = move_toward(rain, 1.0 if raining else 0.0, delta / 2.0)
-	snow = move_toward(snow, 1.0 if snowing else 0.0,
-			delta * snow_rate / SNOW_S if snowing else delta / MELT_S)
+	var lie := snow_cap if snowing else 0.0
+	snow = move_toward(snow, lie, delta * snow_rate / SNOW_S if snow < lie else delta / MELT_S)
 	# Melting snow leaves it wet.
 	if not snowing and snow > 0.0:
 		wet = maxf(wet, minf(snow * 2.0, 1.0))
-	WeatherFx.set_weather(wet, gale, rain, snow)
+	for d in _by.values():
+		if d.get("snowing", false) and d.has("snow_tint"):
+			lying_colour = d.snow_tint
+	if snowing and not _any_tint():
+		lying_colour = Color(0.93, 0.95, 0.99)
+	WeatherFx.set_weather(wet, gale, rain, snow, lying_colour)
 	if snow > 0.0 and snow_cover == null:
 		snow_cover = SnowCover.new()
 		snow_cover.name = "SnowCover"
@@ -656,6 +689,13 @@ func _sum(channel: String, cap: float) -> Vector3:
 	for d in _by.values():
 		v += d.get(channel, Vector3.ZERO)
 	return v.limit_length(cap)
+
+
+func _any_tint() -> bool:
+	for d in _by.values():
+		if d.get("snowing", false) and d.has("snow_tint"):
+			return true
+	return false
 
 
 ## A disaster has ended: what it set goes, and what the others set stands.

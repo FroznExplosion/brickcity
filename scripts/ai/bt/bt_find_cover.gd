@@ -26,11 +26,11 @@ func _tick(_delta: float) -> Status:
 		var away := Vector3(feet.x - threat.x, 0.0, feet.z - threat.z)
 		if away.length() > 0.01:
 			var back := s.ai_nav.snap(feet + away.normalized() * FALL_BACK)
-			var found := CoverSearch.find_for(so, back, threat)
-			if not found.is_empty() and (found.cover as Vector3).distance_to(threat) \
+			var back_cover := CoverSearch.find_for(so, back, threat)
+			if not back_cover.is_empty() and (back_cover.cover as Vector3).distance_to(threat) \
 					> feet.distance_to(threat) + 2.0:
-				cover = found
-				blackboard.set_var(&"cover", found)
+				cover = back_cover
+				blackboard.set_var(&"cover", back_cover)
 				blackboard.set_var(&"cover_at", now)
 				blackboard.set_var(&"cover_threat", threat)
 				so.state = "fall back"

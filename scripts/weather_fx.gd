@@ -18,8 +18,10 @@ extends RefCounted
 static var wet := 0.0
 ## Rain falling now, 0..1: ripples and running streaks.
 static var rain := 0.0
-## Snow lying, 0..1 (SnowCover, snow.gdshader, the caps).
+## Snow lying, 0..1 (SnowCover, snow.gdshader, the caps), and its colour:
+## white, or a sandstorm's sand.
 static var snow := 0.0
+static var snow_colour := Color(0.93, 0.95, 0.99)
 ## Direction x strength, 0..~1.
 static var wind := Vector3.ZERO
 
@@ -67,7 +69,7 @@ static func _tint(t: Array) -> void:
 	if m == null:
 		return
 	var base: Color = t[1]
-	var col := base.darkened(0.25 * wet).lerp(SNOW_WHITE, clampf(snow * 1.3, 0.0, 1.0))
+	var col := base.darkened(0.25 * wet).lerp(snow_colour, clampf(snow * 1.3, 0.0, 1.0))
 	(m as StandardMaterial3D).albedo_color = col
 	(m as StandardMaterial3D).roughness = lerpf(float(t[2]), 0.3, wet * (1.0 - snow))
 
@@ -83,7 +85,14 @@ static func is_registered(m: Material) -> bool:
 
 
 ## Into every registered material, if it moved enough to see.
-static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0, p_snow := 0.0) -> void:
+static func set_weather(p_wet: float, p_wind: Vector3, p_rain := 0.0, p_snow := 0.0,
+		p_colour := Color(0.93, 0.95, 0.99)) -> void:
+	if p_colour != snow_colour:
+		snow_colour = p_colour
+		for r in _mats:
+			var cm = r.get_ref()
+			if cm != null:
+				(cm as ShaderMaterial).set_shader_parameter("weather_snow_colour", snow_colour)
 	p_wet = clampf(p_wet, 0.0, 1.0)
 	p_rain = clampf(p_rain, 0.0, 1.0)
 	p_snow = clampf(p_snow, 0.0, 1.0)
@@ -123,6 +132,7 @@ static func _apply(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("weather_wind", wind)
 	m.set_shader_parameter("weather_rain", rain)
 	m.set_shader_parameter("weather_snow", snow)
+	m.set_shader_parameter("weather_snow_colour", snow_colour)
 
 
 ## The instance parameter for a tree `height` metres tall.

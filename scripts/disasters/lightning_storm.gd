@@ -388,4 +388,4 @@ func _build() -> void:
 	_rain.draw_pass_1 = drop
 	_rain.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 60, 80))
 	add_child(_rain)
-	RainSplash.add(_rain, proc, self)   # it lands, and splashes
+	RainSplash.add(_rain, proc, self, Color(0.9, 0.94, 1.0, 0.9), "rain", ctx)   # it lands, splashes, patters

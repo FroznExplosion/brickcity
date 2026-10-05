@@ -74,12 +74,12 @@ var _stuck_at := 0.0
 
 
 ## Give `m` a brain: `tree` is MechTree.enemy() or MechTree.companion().
-static func attach(s: AIServices, m: Mech, mech_nav: AINav, tree: BehaviorTree, p_team: int) -> MechBrain:
+static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree, p_team: int) -> MechBrain:
 	var br := MechBrain.new()
 	br.name = "MechBrain"
 	br.services = s
 	br.mech = m
-	br.nav = mech_nav
+	br.nav = p_mech_nav
 	br.team = p_team
 	m.team = p_team
 	# Before the motor (-10): intents are written, then read.
@@ -216,7 +216,7 @@ func _pick_target() -> Pawn:
 	return best
 
 
-func _fire(now: float) -> void:
+func _fire(_now: float) -> void:
 	var it := mech.intents
 	_target = _pick_target()
 	var aim_at := Vector3.INF
