@@ -2409,7 +2409,7 @@ func _make_shell_body(id: int) -> void:
 	var boxes: Array = (BuildShell.collision_boxes(world, b.build, _dead_by_frame(b))
 			if b.is_build() else
 			BuildingShell.collision_boxes(b.recipe.footprint_x, b.recipe.footprint_z,
-					b.recipe.courses, b.damage_profile.is_empty()))
+					b.recipe.courses, b.damage_profile.is_empty(), b.damage_profile))
 	for box in boxes:
 		PhysicsServer3D.body_add_shape(body, _shape_rid(box.size), Transform3D(Basis(), box.pos))
 	# The same boxes stand in for the bricks with the AI (AIWorld proxies) while
