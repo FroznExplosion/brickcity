@@ -20,6 +20,9 @@ extends SceneTree
 ##        built from the bricks before the cut (a standing copy of the section
 ##        that fell), and something draws it all that time; and one given
 ##        back mid-bands is drawn as it is now, not as before the shot.
+## storeys what is left of a storey carries what is above it, or does not:
+##        one corner left, the top tips off; one column left, it is crushed;
+##        and no undamaged building is near either.
 ## shellhit (CollapseNext 1.1) a damaged shell is solid where it is drawn and
 ##        nowhere else: no invisible walls where storeys have gone.
 ## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
@@ -106,6 +109,8 @@ func _run() -> void:
 		await _check_crushdrawn()
 	if _only("shellhit"):
 		await _check_shellhit()
+	if _only("storeys"):
+		await _check_storeys()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -422,6 +427,94 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+## Storey by storey (CityScene._gravity_fail): what is left of a storey has to
+## carry what is above it. The second storey of a tower is shot away but for
+## `keep` (a box in the world); returns how many bricks are still above it
+## after, and the gravity failures it caused.
+func _storey_left(id: int, keep: Array) -> Dictionary:
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	city.camera.look_at_from_position(box.get_center() + Vector3(-40.0, 15.0, -40.0), box.get_center())
+	var chunk: int = city._promote(id)
+	var w := 0
+	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+		await physics_frame
+		w += 1
+	var y := box.position.y + (1 + TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
+	var f0: Dictionary = city.gravity_fails.duplicate()
+	for pass_i in 2:
+		var x := box.position.x + 0.6
+		while x < box.end.x:
+			var z := box.position.z + 0.6
+			while z < box.end.z:
+				var kept := false
+				for k in keep:
+					var kb: AABB = k
+					if kb.has_point(Vector3(x, kb.get_center().y, z)):
+						kept = true
+				if not kept:
+					city._blast(Vector3(x, y, z), 1.3)
+				z += 1.5
+			x += 1.5
+		await _ticks(30 * 2)
+	await _ticks(30 * 3)
+	var above := 0
+	if b.is_materialised():
+		var xf: Transform3D = city.world.get_chunk_transform(chunk)
+		for bx in city.world.get_block_boxes(chunk):
+			var d: Dictionary = bx
+			if bool(d.alive) and (xf * (d.pos as Vector3)).y > y + 1.5:
+				above += 1
+	return {"id": id, "left": city.world.get_alive_block_count(chunk) if b.is_materialised() else -1,
+			"toppled": b.toppled, "above": above, "tip": int(city.gravity_fails.tip) - int(f0.tip),
+			"crush": int(city.gravity_fails.crush) - int(f0.crush)}
+
+
+func _check_storeys() -> void:
+	print("storeys: what is left of a storey has to carry what is above it")
+	var worst := 0.0
+	for ob in city.registry.buildings:
+		if ob.is_build() or ob.toppled or ob.is_damaged():
+			continue
+		var r: Dictionary = city.world.gravity_check(city._promote(ob.id), city.CRUSH_PER_STUD)
+		worst = maxf(worst, float(r.ratio))
+	_ok("no undamaged building is near failing a storey", worst < 0.8, "worst %.2f of what it can" % worst)
+	# Two thin corners, diagonally: balanced, so it cannot tip -- and far too
+	# little to carry five storeys.
+	var id := _tower(5)
+	var box := _box(id)
+	var thin := 1.4
+	var r2 := await _storey_left(id, [
+			AABB(Vector3(box.end.x - thin, box.position.y, box.end.z - thin), Vector3(thin, box.size.y, thin)),
+			AABB(Vector3(box.position.x, box.position.y, box.position.z), Vector3(thin, box.size.y, thin))])
+	_ok("two thin corners left: the storey check brings it down", int(r2.above) == 0
+			and int(r2.crush) + int(r2.tip) > 0, str(r2))
+	# Crushed: an intact tower made weak enough that its ground storey cannot
+	# carry the rest. It comes down a storey and nothing is left standing on air.
+	id = _tower(4)
+	var cb = city.registry.get_building(id)
+	var cchunk: int = city._promote(id)
+	await _ticks(30 * 3)
+	var cbox := _box(id)
+	var alive0: int = city.world.get_alive_block_count(cchunk)
+	var crushed0: int = int(city.gravity_fails.crush)
+	city.crush_per_stud = 0.5
+	city._mark_dirty(id)
+	await _ticks(30 * 5)
+	city.crush_per_stud = city.CRUSH_PER_STUD
+	var left: int = city.world.get_alive_block_count(cchunk) if cb.is_materialised() else 0
+	_ok("a storey that cannot carry what is above it is crushed, and it comes down",
+			int(city.gravity_fails.crush) > crushed0 and left < alive0 / 2,
+			"%d crush(es), %d of %d bricks left standing" % [int(city.gravity_fails.crush) - crushed0,
+			left, alive0])
+	# One corner: what is above is off its edge.
+	id = _tower(5)
+	box = _box(id)
+	var r1 := await _storey_left(id, [AABB(Vector3(box.end.x - 2.6, box.position.y, box.end.z - 2.6),
+			Vector3(2.6, box.size.y, 2.6))])
+	_ok("one corner left: what is above tips off it", int(r1.above) == 0 and int(r1.tip) > 0, str(r1))
 
 
 ## Docs/CollapseNext.md 1.1: a building handed back with its top gone is solid

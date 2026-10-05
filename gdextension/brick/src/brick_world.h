@@ -396,6 +396,23 @@ public:
     /// horizontal axis.
     Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
 
+    /// Gravity alone, storey by storey (Docs/Collapse.md, "per-floor"). The
+    /// stress solve fails only joints in tension, and the stability test asks
+    /// only whether the whole building stands on its foundation -- so a top
+    /// resting on one corner of a storey could neither tip off it nor crush
+    /// it: six bricks held up nine hundred. Pure query, like lateral_check.
+    ///
+    /// At every course boundary above the foundation, of what is grounded:
+    ///   TIP    the weight above, at its centre of mass, outside the extent
+    ///          of the contact at the boundary on some side: it overturns
+    ///          about that edge unless the studs behind it, each holding
+    ///          tension_per_stud at its own lever, hold it back.
+    ///   CRUSH  the weight above against the contact at the boundary, each
+    ///          stud bearing `crush_per_stud` times tension_per_stud.
+    /// Returns {ratio, kind ("tip" or "crush"), level, level_cell, mass_above,
+    /// boundaries} for the worst boundary; ratio >= 1 fails there.
+    Dictionary gravity_check(int chunk_id, float crush_per_stud);
+
     // --- snow cover (Docs/Disasters.md 21) ----------------------------------
 
     /// Snow on a chunk: smooth tiles, `thickness` metres thick, on every top

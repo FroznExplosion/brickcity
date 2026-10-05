@@ -3539,6 +3539,164 @@ Dictionary BrickWorld::lateral_check(int chunk_id, float accel_g, Vector3 world_
     return out;
 }
 
+Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
+    Dictionary out;
+    out["ratio"] = 0.0;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const Vector3i up = -chunk_down[chunk_id];
+    if (up != Vector3i(0, 1, 0)) {
+        return out; // a toppled chunk is a piece: physics has it, not this
+    }
+    // What is grounded now: only that is weighed, and only that holds.
+    solve_grounded(chunk_id);
+    const std::vector<int32_t> &depth = solve_scratch().depth;
+    const Vector3 cs = cell_size();
+    const double cap = (double)std::max((int64_t)1,
+            brick::to_mass_units(stress[chunk_id].tension_per_stud));
+    const double crush_cap = cap * std::max(crush_per_stud, 0.0001f);
+    constexpr double SOLID_STUDS = 4.0;
+
+    int lo = INT32_MAX;
+    int hi = INT32_MIN;
+    int x0 = INT32_MAX, x1 = INT32_MIN, z0 = INT32_MAX, z1 = INT32_MIN;
+    const size_t n = c.blocks.size();
+    auto counts = [&](size_t i) {
+        const Block &b = c.blocks[i];
+        return b.alive && !b.decorative && i < depth.size() && depth[i] >= 0;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        if (!counts(i)) {
+            continue;
+        }
+        const Block &b = c.blocks[i];
+        const Vector3i bs = archetypes[b.archetype].size;
+        lo = std::min(lo, b.cell.y);
+        hi = std::max(hi, b.cell.y + bs.y);
+        x0 = std::min(x0, b.cell.x);
+        x1 = std::max(x1, b.cell.x + bs.x);
+        z0 = std::min(z0, b.cell.z);
+        z1 = std::max(z1, b.cell.z + bs.z);
+    }
+    if (lo >= hi) {
+        return out;
+    }
+    const int layers = hi - lo + 1;
+    // Per boundary h (index h - lo): mass whose bottom is at h and its
+    // moments; stud contact at h, its moments, and how far it reaches.
+    std::vector<double> m(layers, 0.0), mx(layers, 0.0), mz(layers, 0.0);
+    std::vector<double> j(layers, 0.0), jx(layers, 0.0), jz(layers, 0.0);
+    std::vector<double> ex0(layers, 1e30), ex1(layers, -1e30), ez0(layers, 1e30), ez1(layers, -1e30);
+    auto touch = [&](int k, double a0, double a1, double b0, double b1, double studs) {
+        const double cx = (a0 + a1) * 0.5;
+        const double cz = (b0 + b1) * 0.5;
+        j[k] += studs;
+        jx[k] += studs * cx;
+        jz[k] += studs * cz;
+        ex0[k] = std::min(ex0[k], a0);
+        ex1[k] = std::max(ex1[k], a1);
+        ez0[k] = std::min(ez0[k], b0);
+        ez1[k] = std::max(ez1[k], b1);
+    };
+    const brick::JointCache &jc = joints_of(chunk_id);
+    for (size_t i = 0; i < n; ++i) {
+        if (!counts(i)) {
+            continue;
+        }
+        const Block &b = c.blocks[i];
+        const Vector3i sz = archetypes[b.archetype].size;
+        const double ax0 = b.cell.x * cs.x, ax1 = (b.cell.x + sz.x) * cs.x;
+        const double az0 = b.cell.z * cs.z, az1 = (b.cell.z + sz.z) * cs.z;
+        const double mass = (double)std::max((int64_t)1,
+                brick::to_mass_units(archetypes[b.archetype].mass));
+        const int bot = b.cell.y;
+        const int top = b.cell.y + sz.y;
+        m[bot - lo] += mass;
+        mx[bot - lo] += mass * (ax0 + ax1) * 0.5;
+        mz[bot - lo] += mass * (az0 + az1) * 0.5;
+        // Solid plastic through every boundary strictly inside it.
+        for (int h = bot + 1; h < top; ++h) {
+            touch(h - lo, ax0, ax1, az0, az1, (double)sz.x * (double)sz.z * SOLID_STUDS);
+        }
+        if (b.support_broken || b.bottom_broken) {
+            continue;
+        }
+        // Studs meeting at its bottom, from the grounded blocks it stands on.
+        const int32_t bid = (int32_t)i;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            if (!counts((size_t)nb)) {
+                return;
+            }
+            const Block &o = c.blocks[nb];
+            const Vector3i osz = archetypes[o.archetype].size;
+            if (o.cell.y + osz.y != bot) {
+                return;
+            }
+            const double ox0 = std::max(ax0, (double)o.cell.x * cs.x);
+            const double ox1 = std::min(ax1, (double)(o.cell.x + osz.x) * cs.x);
+            const double oz0 = std::max(az0, (double)o.cell.z * cs.z);
+            const double oz1 = std::min(az1, (double)(o.cell.z + osz.z) * cs.z);
+            touch(bot - lo, std::min(ox0, ox1), std::max(ox0, ox1),
+                    std::min(oz0, oz1), std::max(oz0, oz1), (double)count);
+        });
+    }
+
+    // Top down: what is above boundary h is every block whose bottom is >= h.
+    const int floor_y = foundation_level[chunk_id];
+    double W = 0.0, WX = 0.0, WZ = 0.0;
+    double best = 0.0;
+    int best_h = -1;
+    double best_w = 0.0;
+    bool best_crush = false;
+    int boundaries = 0;
+    for (int h = hi; h > lo; --h) {
+        const int k = h - lo;
+        W += m[k];
+        WX += mx[k];
+        WZ += mz[k];
+        if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
+            continue;
+        }
+        ++boundaries;
+        const double xc = WX / W;
+        const double zc = WZ / W;
+        // TIP, about whichever edge the centre of mass is beyond.
+        double tip = 0.0;
+        auto over = [&](double past, double hold) {
+            if (past <= 0.0) {
+                return;
+            }
+            const double r = hold > 0.0 ? W * past / hold : 1e9;
+            tip = std::max(tip, r);
+        };
+        over(xc - ex1[k], cap * (j[k] * ex1[k] - jx[k]));
+        over(ex0[k] - xc, cap * (jx[k] - j[k] * ex0[k]));
+        over(zc - ez1[k], cap * (j[k] * ez1[k] - jz[k]));
+        over(ez0[k] - zc, cap * (jz[k] - j[k] * ez0[k]));
+        // CRUSH.
+        const double crush = W / (j[k] * crush_cap);
+        const double r = std::max(tip, crush);
+        if (r > best) {
+            best = r;
+            best_h = h;
+            best_w = W;
+            best_crush = crush > tip;
+        }
+    }
+    out["ratio"] = best;
+    out["boundaries"] = boundaries;
+    if (best_h >= 0) {
+        const Vector3 local((x0 + x1) * 0.5f * cs.x, best_h * cs.y, (z0 + z1) * 0.5f * cs.z);
+        out["level"] = c.xform.xform(local);
+        out["level_cell"] = best_h;
+        out["mass_above"] = best_w / (double)brick::MASS_FIXED;
+        out["kind"] = best_crush ? "crush" : "tip";
+    }
+    return out;
+}
+
 // --- snow cover --------------------------------------------------------------
 
 namespace {
@@ -6300,6 +6458,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_static_method("BrickWorld", D_METHOD("build_snow_cover_tops", "tops", "w", "d",
             "cell", "plate", "thickness", "origin"), &BrickWorld::build_snow_cover_tops);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
+    ClassDB::bind_method(D_METHOD("gravity_check", "chunk_id", "crush_per_stud"),
+            &BrickWorld::gravity_check);
     ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id", "max_rounds", "budget_ms"),
             &BrickWorld::solve_structure, DEFVAL(1), DEFVAL(0.0));
     ClassDB::bind_method(D_METHOD("heal_joints", "chunk_id"), &BrickWorld::heal_joints);

@@ -2784,6 +2784,55 @@ func _topple(id: int) -> void:
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
 
 
+## Storey by storey, can what is left carry what is above it? (BrickWorld.
+## gravity_check.) The stress solve fails only joints in tension, and the
+## stability test only asks whether the whole building stands on its
+## foundation: a storey shot away but for one corner held the eight storeys
+## above it up on six bricks, for good.
+##   TIP    what is above, off the edge of what is left: cut clean at that
+##          boundary (a seam, as an earthquake cuts), and it goes over the edge.
+##   CRUSH  too much on too little: everything in the storey under that
+##          boundary is torn loose, and what is above comes down a floor.
+## A command either way (SEVER), so every machine does the same.
+const CRUSH_PER_STUD := 20.0   ## x tension_per_stud: an intact tower asks at most 12.4 (big city), one corner left ~22
+var gravity_fails := {"tip": 0, "crush": 0}
+## CRUSH_PER_STUD, settable: collapse_probe weakens one tower to crush it.
+var crush_per_stud := CRUSH_PER_STUD
+
+
+func _gravity_fail(b: BuildingRegistry.Building) -> bool:
+	if not authority.may_decide() or b.toppled or not b.is_materialised():
+		return false
+	var r: Dictionary = world.gravity_check(b.chunk, crush_per_stud)
+	if float(r.get("ratio", 0.0)) < 1.0 or not r.has("level"):
+		return false
+	var level: Vector3 = r.level
+	var kind := str(r.kind)
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.SEVER
+	e.target = b.id
+	e.normal = Vector3.UP
+	if kind == "tip":
+		e.point = level
+		e.flags = DamageLog.FLAG_SEAM
+	else:
+		# The storey under the boundary: its middle, and a storey thick.
+		var storey := float(TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
+		e.point = level - Vector3.UP * storey * 0.5
+		e.radius = storey
+	if not authority.request(DamageLog.Kind.SEVER, b.id, e.point, e.radius, Vector3.UP):
+		return false
+	if DamageLog.apply_entry(world, b.chunk, e).is_empty():
+		return false
+	authority.commit_entry(e)
+	gravity_fails[kind] = int(gravity_fails.get(kind, 0)) + 1
+	print("[city] building %d: storey at %.1f m %s (%.1fx what it can, %.0f above)" % [
+			b.id, level.y, "tips over" if kind == "tip" else "is crushed", float(r.ratio),
+			float(r.get("mass_above", 0.0))])
+	return true
+
+
 ## The staircase goes with the floors it serves (Docs/Collapse.md 2.1). Its
 ## blocks have no joint to any slab -- they are grounded by their own column,
 ## down to the ground -- so a section breaking off left them standing, and fell
@@ -6671,6 +6720,11 @@ func _physics_process(_delta: float) -> void:
 
 		var groups: Array = solve.groups
 		if groups.is_empty():
+			# Nothing hanging has failed and nothing is loose -- but is each
+			# storey still able to carry what is above it? (_gravity_fail)
+			if not b.is_build() and _gravity_fail(b):
+				_mark_dirty(b.id)
+				continue
 			# Nothing failed, nothing is falling, nothing is unbalanced: this
 			# building is at rest and does not need looking at again until
 			# something hits it.
