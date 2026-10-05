@@ -20,6 +20,8 @@ extends SceneTree
 ##        built from the bricks before the cut (a standing copy of the section
 ##        that fell), and something draws it all that time; and one given
 ##        back mid-bands is drawn as it is now, not as before the shot.
+## shellhit (CollapseNext 1.1) a damaged shell is solid where it is drawn and
+##        nowhere else: no invisible walls where storeys have gone.
 ## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
 ##        drawn furniture it lands on, rather than standing in it.
 
@@ -102,6 +104,8 @@ func _run() -> void:
 		await _check_farcut()
 	if _only("crushdrawn"):
 		await _check_crushdrawn()
+	if _only("shellhit"):
+		await _check_shellhit()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -418,6 +422,45 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+
+
+## Docs/CollapseNext.md 1.1: a building handed back with its top gone is solid
+## where its shell is drawn and nowhere else -- not four full-height walls
+## that wreckage comes to rest on in mid-air.
+func _check_shellhit() -> void:
+	print("shellhit: a damaged shell's collision follows its damage")
+	var id := _tower(6)
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	var c := box.get_center()
+	# Off to one side and looking away: aim promotion would make it bricks.
+	city.camera.global_position = c + Vector3(-60.0, 20.0, 0.0)
+	city.camera.look_at(c + Vector3(-120.0, 20.0, 0.0))
+	# The top three storeys cut off, and given time to go.
+	var storeys := int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+	var alive0: int = city.world.get_alive_block_count(city._promote(id))
+	var cut_y := _sever(id, storeys - 3)
+	await _ticks(30 * 6)
+	await _drain()
+	print("  --   %d storeys, alive %d -> %d, toppled %s" % [storeys, alive0,
+			city.world.get_alive_block_count(b.chunk), b.toppled])
+	city._demote(id, 60.0)
+	await _ticks(30 * 2)
+	_ok("it is a shell with a body again", not b.is_materialised() and city._shell_bodies.has(id)
+			and not b.damage_profile.is_empty(),
+			"bricks %s, body %s, %d damaged band(s)" % [b.is_materialised(),
+			city._shell_bodies.has(id), b.damage_profile.size()])
+	# Straight down onto the middle of its front wall.
+	var top := box.end.y
+	var front: Vector3 = b.xform * Vector3(float(b.recipe.footprint_x) * BrickPalette.STUD_M * 0.5,
+			0.0, TowerRecipe.WALL_THICK * BrickPalette.STUD_M * 0.5)
+	var q := PhysicsRayQueryParameters3D.create(Vector3(front.x, top + 10.0, front.z),
+			Vector3(front.x, box.position.y - 1.0, front.z), Layers.STRUCTURE)
+	var hit := city.get_world_3d().direct_space_state.intersect_ray(q)
+	var at: float = (hit.position as Vector3).y if not hit.is_empty() else -INF
+	_ok("something dropped on it stops where it was cut, not at its old roofline",
+			not hit.is_empty() and at < cut_y + 1.0,
+			"hit at %.1f m; cut at %.1f, the roof was %.1f" % [at, cut_y, top])
 
 
 ## Docs/CollapseNext.md 1.2: a piece that lands in a drawn room takes the

@@ -165,6 +165,12 @@ class Building:
 		for ids in dead_frames.values():
 			if not (ids as PackedInt32Array).is_empty():
 				return true
+		# Bricks that left as a piece: nothing died, and the building is still
+		# a different shape. A tower cut clean through had its top fall off,
+		# and was handed back with no profile -- its shell drawn whole again.
+		for ids in gone.values():
+			if not (ids as PackedInt32Array).is_empty():
+				return true
 		return false
 
 
