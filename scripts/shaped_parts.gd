@@ -55,7 +55,17 @@ const FACETED := true
 ## `kind` is "slope", "curve", "round" or "arch". `axis` ("z" or "x") is the
 ## direction a slope or curve falls along -- toward -axis, so the low edge is
 ## the part's front at 0 and the high back carries the studs.
+## Built parts, by kind, size and axis. A part is a pure function of those
+## three, and it is asked for again and again: every palette bake (the city
+## bakes two -- its world's and RecipeMesh's), and `BrickPalette.mass_of_part`
+## on every call. Treat what comes back as read-only.
+static var _built := {}
+
+
 static func build(kind: String, size: Vector3i, axis := "z") -> Dictionary:
+	var memo := "%s|%d,%d,%d|%s" % [kind, size.x, size.y, size.z, axis]
+	if _built.has(memo):
+		return _built[memo]
 	var shape := _shape(kind, size, axis)
 	var out := _mask(shape.pieces, size)
 	var mesh := _mesh(shape.draw)
@@ -70,6 +80,7 @@ static func build(kind: String, size: Vector3i, axis := "z") -> Dictionary:
 	# Nor on a one-plate wedge: it is a slope all the way to its back edge.
 	if kind == "curve" or size.y == 1:
 		out["studs"] = _zeros(size.x * size.z)
+	_built[memo] = out
 	return out
 
 
@@ -348,67 +359,20 @@ static func _prism_has(pr: Dictionary, v: Vector3) -> bool:
 # ---------------------------------------------------------------------------
 
 ## Cells, studs, sockets and the solid-cell count, sampled from the pieces.
+##
+## Each cell is SAMPLES^3 points tested against the prisms; a cell is solid
+## when half of them are inside. A stud stands on a column's highest solid
+## cell -- at whatever height that is, which is how the extension reads it (a
+## spiral piece's lower tread has studs a rise below its top) -- and only
+## where the stud's whole footprint is on the part (nine points
+## just under the face): half a cell is enough to CONNECT through, not enough
+## to stand a stud on, which would hang off a curve or a slope.
+##
+## In C++ (ShapedSampler.mask), the same arithmetic in the same precision:
+## this loop was ~0.75 s of GDScript for the palette's 17 shaped parts, on
+## every palette bake. Measured identical for all of them.
 static func _mask(pieces: Array, size: Vector3i) -> Dictionary:
-	var cells := PackedByteArray()
-	cells.resize(size.x * size.y * size.z)
-	var solid := 0
-	var total := SAMPLES * SAMPLES * SAMPLES
-	for z in size.z:
-		for y in size.y:
-			for x in size.x:
-				var hit := 0
-				for sy in SAMPLES:
-					for sz in SAMPLES:
-						for sx in SAMPLES:
-							var v := Vector3(
-								(x + (sx + 0.5) / SAMPLES) * S,
-								(y + (sy + 0.5) / SAMPLES) * P,
-								(z + (sz + 0.5) / SAMPLES) * S)
-							for pr in pieces:
-								if _prism_has(pr, v):
-									hit += 1
-									break
-				var on := hit * 2 >= total
-				cells[x + size.x * (y + size.y * z)] = 1 if on else 0
-				solid += 1 if on else 0
-
-	# A stud stands on a column's highest solid cell -- at whatever height that
-	# is, which is how the extension reads it (a spiral piece's lower tread has
-	# studs a rise below its top) -- and only where the stud's whole footprint
-	# is on the part: its centre and eight points round it, just under the
-	# face. Half a cell is enough to CONNECT through; it is not enough to stand
-	# a stud on, which would hang off a curve or a slope.
-	var studs := _zeros(size.x * size.z)
-	var sockets := _zeros(size.x * size.z)
-	for z in size.z:
-		for x in size.x:
-			var top := -1
-			for y in size.y:
-				if cells[x + size.x * (y + size.y * z)] != 0:
-					top = y
-			if top >= 0 and _covered(pieces, x, z, (top + 1) * P - 1e-4):
-				studs[x + size.x * z] = 1
-			if cells[x + size.x * (size.y * z)] != 0:
-				sockets[x + size.x * z] = 1
-	return {"cells": cells, "studs": studs, "sockets": sockets, "solid": solid}
-
-
-## Is a stud's footprint on the part at height `y`, over column (x, z)? The
-## stud is 0.6 of a stud across; its inner 0.4 is what is sampled, which lets a
-## 2x2 round's corner studs stand on its octagon as a real one's do on its
-## circle.
-static func _covered(pieces: Array, x: int, z: int, y: float) -> bool:
-	for du in [-0.2, 0.0, 0.2]:
-		for dv in [-0.2, 0.0, 0.2]:
-			var v := Vector3((x + 0.5 + du) * S, y, (z + 0.5 + dv) * S)
-			var hit := false
-			for pr in pieces:
-				if _prism_has(pr, v):
-					hit = true
-					break
-			if not hit:
-				return false
-	return true
+	return ShapedSampler.mask(pieces, size, S, P, SAMPLES)
 
 
 ## Every face of the drawn prisms, as triangles with normals.
