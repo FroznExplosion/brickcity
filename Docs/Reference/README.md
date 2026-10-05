@@ -15,6 +15,7 @@ after.
 | [boomer-border.md](boomer-border.md) | `C:\Users\lbaun\Documents\boomer-border` | Titanfall-style mech (motor, embark, cockpit, AI brain), the pluggable-brain contract, the Borderlands gun/loot system **we are adopting**, layered elemental damage, the C++ horde |
 | [ceramicedge.md](ceramicedge.md) | `C:\Users\lbaun\Documents\ceramicedge` | First-person movement (slide, wall-run, mantle, grapple), the procedural view model, recoil and spread feel, the FPS HUD — **adopted for the player**, one gun and no abilities |
 | [sta.md](sta.md) | `C:\Users\lbaun\Documents\sta` | Planet sandbox: SDF and blocky cubed-sphere terrain, the native water solver, and the **cellular-automaton blocky water** design (mass per cell, active set, trapped air, LOD) |
+| [zylanntest.md](zylanntest.md) | `C:\Users\lbaun\Documents\zylanntest` | Voxel planets on Zylann's Voxel Tools: the **curvature vertex shader** (a flat world that looks like a planet), toroidal world wrapping, planet size tiers |
 | [lego-worlds.md](lego-worlds.md) | LEGO Worlds (TT Games) screenshots and wiki | How brick terrain uses slopes, curves and corners |
 | [external.md](external.md) | Research in both projects | Third-party addons with verdicts, published techniques, and Godot engine landmines |
 
