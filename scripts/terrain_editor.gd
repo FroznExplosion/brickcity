@@ -130,7 +130,9 @@ func setup(host) -> void:
 	_status = host._load_status
 	_shot_mode = host._edit_shot
 	_build_scenery()
-	_refresh_markers()
+	# The host has just built its sites and trees: rebuilding them here
+	# scattered all 6,000 trees a second time at startup (~330 ms).
+	_refresh_markers(false)
 	if _shot_mode:
 		_run_shots()
 

@@ -527,5 +527,26 @@ update of every set while moving: 2.0 ms mean / 3.2 ms worst in GDScript, 0.21 /
 (other Godot runs alongside both), same near and far counts. `impostor_probe`: 25 ok before and
 after, identical tier counts.
 
-Seen while testing, not caused by this: `city.tscn -- --trees` fails "trees were placed -- 0" with
-the old script too; the city's `_place_trees` never runs in that pass.
+City gate, run as documented (`city.tscn -- --terrain --trees`): 8 ok with the C++ set. (An
+earlier note here said the gate failed; it had been run without `--terrain`, which plants no trees.)
+
+## Tree startup: the palette bake, not the trees (2026-10-05)
+
+The city took ~1 s to place 800 trees and the heightfield scene ~1.1 s for 6,000, and almost none
+of it was trees. `RecipeMesh` bakes the whole brick palette into a scratch world before meshing its
+first recipe, and 95% of a palette bake was `ShapedParts._mask` — every cell of every shaped part
+sampled with 6^3 point-in-prism tests in GDScript: 752 ms for the 17 shaped parts. It moved to
+C++ (`ShapedSampler.mask`, the same arithmetic in the same precision): 3.6 ms, masks identical for
+all 17 parts. `ShapedParts.build` is also memoised now (the city bakes two palettes, and
+`BrickPalette.mass_of_part` built the part on every call). The per-vertex merge in `RecipeMesh`
+moved to C++ too (`MeshMerge`), output identical, though it was not where the time went.
+
+City trees: 1,057 ms to ~180 ms. Heightfield trees: 1,100 ms to ~300 ms, and they are scattered
+once at startup instead of twice (the editor's first marker refresh rebuilt them).
+
+Checks: shaped 324, palette 1537, place 144, scale 26, city_place 25, workshop gate 17, hurricane
+20, city `--terrain --trees` 8, all passing. `impostor_probe` 25 ok in 8 of 10 runs; twice
+"a tree at the switch range ... has no holes" failed (1.00 and 0.64 vs 0.48), each half of this
+change alone passed, and the combined change then passed three in a row. `_grab` waits 4 frames;
+a first-use material may not have compiled by then under load (other Godot runs were going).
+Intermittent, unconfirmed: worth a longer wait in that check if it shows up again.
