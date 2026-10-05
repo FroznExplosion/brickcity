@@ -94,9 +94,18 @@ var mesh_job := -1
 ## Its mesh is built and waiting for the upload budget
 ## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
 var upload_waiting := false
-## Its mesh was dropped on purpose for distance (IslandManager's LOD ladder),
-## not lost: not counted as a piece gone invisible.
-var lod_dropped := false
+## Drawn far off as the coarse stand-in (IslandManager.ISLAND_MESH_RANGE;
+## BrickWorld.build_chunk_coarse_mesh), its bake given back: whatever changes
+## it builds the stand-in again. Set false to ask for its bricks back.
+var coarse := false
+## What it is drawing NOW is the stand-in -- which lags `coarse` while the
+## bricks it asked for are baking. A stand-in's index buffer is not the bake's,
+## and is never patched.
+var coarse_drawn := false
+## The physics tick its stand-in was last built (IslandManager.COARSE_REBUILD_TICKS).
+var coarse_tick := -1000000
+## How long its last stand-in took to build, ms (IslandManager.coarse_wait).
+var coarse_ms := 0.0
 ## Where it was when it was woken or cut out, and whether it has started to
 ## move since. Once it moves, what was resting on it there is woken
 ## (IslandManager.support_gone) -- not before: something woken that stays put
@@ -123,6 +132,22 @@ var fade := 1.0
 ## there; 0 while it is moving faster. What settles it by rule rather than by
 ## waiting for the physics to call it asleep.
 var slow_since := 0
+## Something is under it: it has come down on the ground, a building or a piece
+## (IslandManager._note_landing). Until then it is in the air, and passes
+## through other pieces in the air (Layers.AIRBORNE_MASK).
+var landed := false
+## IslandManager.body_census: its size class when it was made, and from what.
+var census_cls := -1
+var census_from := ""
+## What last broke it, for the census of what comes off it: "landing" (it
+## landed), "struck" (something landed on it), "hit" (a blast or a shot).
+var shed_cause := ""
+## Ticks a landed piece has been falling fast and touching nothing: in the air
+## again (IslandManager.AIRBORNE_AGAIN_TICKS).
+var air_ticks := 0
+## When it last went slower than IslandManager.SETTLE_JITTER_SPEED, landed, and
+## stayed so (0: it has not). See SETTLE_JITTER_SPEED.
+var jitter_since := 0
 ## Non-zero when this island is a single brick drawn from a shared MultiMesh
 ## rather than its own MeshInstance3D. The key is the brick's box size.
 var mm_key := Vector3.ZERO

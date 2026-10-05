@@ -69,9 +69,12 @@ extends Node3D
 ## (BrickTerrain.set_sun_direction), so it has no reason to be in the shadow
 ## map at all. Raise it to compare the two.
 @export var shadow_radius := 0
-## Collision boxes added per frame per tile. A whole collider at once was an
-## 18.9 ms spike; 64 is about 1 ms.
-@export var shapes_per_frame := 32
+## Collision boxes added per frame per tile; 0 is the whole collider at once.
+## The cap was 32 because a whole collider measured an 18.9 ms spike -- but
+## that was Jolt rebuilding its compound on every box added to a body already
+## in the space. Added before the body joins (TerrainTile.add_collision) a
+## whole 670-box tile is 0.77 ms, so it goes in one call.
+@export var shapes_per_frame := 0
 
 var _material: Material = null
 var _tiles := {}          ## Vector2i -> TerrainTile
@@ -90,6 +93,13 @@ var _dropped := 0
 var _assemble_ms := 0.0
 var _worst_tile_ms := 0.0
 var _centre := Vector2i.ZERO
+## The centre the shadow flags were last set for: they only change when it
+## moves (a new tile gets its flag in _finish).
+var _shadow_centre := Vector2i(1 << 30, 0)
+## Some tile still has a phase to add (instances, collision in reach). When
+## nothing does, _finish is not run: it sorted and walked every resident tile
+## each frame to find nothing to do, ~1 ms of an idle frame.
+var _finish_pending := true
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
 var _worst_surface_ms := 0.0
@@ -111,13 +121,17 @@ func follow(camera_xz: Vector2) -> void:
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
 	var cx := int(floor(camera_xz.x / tile_m))
 	var cz := int(floor(camera_xz.y / tile_m))
+	if _centre != Vector2i(cx, cz):
+		_finish_pending = true    # collision reach moved with it
 	_centre = Vector2i(cx, cz)
 	_collect(cx, cz)
 	_drop(cx, cz)
 	_assemble()
-	for c in _tiles:
-		(_tiles[c] as TerrainTile).set_casts_shadow(
-			absi(c.x - cx) <= shadow_radius and absi(c.y - cz) <= shadow_radius)
+	if _shadow_centre != _centre:
+		_shadow_centre = _centre
+		for c in _tiles:
+			(_tiles[c] as TerrainTile).set_casts_shadow(
+				absi(c.x - cx) <= shadow_radius and absi(c.y - cz) <= shadow_radius)
 
 
 ## Build everything the camera wants, now, blocking. For captures and
@@ -341,6 +355,7 @@ func _assemble() -> void:
 			tile.add_collision()
 		_tiles[c] = tile
 		_built += 1
+		_finish_pending = true
 		# The budget can only stop the NEXT piece of work, so ONE piece is
 		# the floor on a hitch. Assembling a whole tile at once put that
 		# floor at 54 ms, which is why a tile is three phases now.
@@ -357,9 +372,14 @@ func _assemble() -> void:
 
 ## The later phases, nearest first, still under the frame's budget.
 func _finish(t0: int) -> void:
+	if not _finish_pending:
+		return
 	var coords := _tiles.keys()
 	coords.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		return (a - _centre).length_squared() < (b - _centre).length_squared())
+	# Whether a phase is still owed when this pass ends; a budget stop
+	# leaves `_finish_pending` set, so the next frame carries on.
+	var left := false
 	for c in coords:
 		if float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
 			return
@@ -377,11 +397,13 @@ func _finish(t0: int) -> void:
 		if collide_radius < 0 or (absi(c.x - _centre.x) <= collide_radius
 				and absi(c.y - _centre.y) <= collide_radius):
 			var t2 := Time.get_ticks_usec()
-			tile.add_collision(shapes_per_frame)
+			if not tile.add_collision(shapes_per_frame):
+				left = true
 			var cms := float(Time.get_ticks_usec() - t2) / 1000.0
 			if cms > 0.05:
 				_worst_coll_ms = maxf(_worst_coll_ms, cms)
 				_worst_tile_ms = maxf(_worst_tile_ms, cms)
+	_finish_pending = left
 
 
 ## Everything past `keep_radius` goes. The gap to `near_radius` is what stops

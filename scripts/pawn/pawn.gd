@@ -38,6 +38,8 @@ const EYE_HEIGHT := BODY_HEIGHT - HEAD_HEIGHT * 0.5
 const WALK_SPEED := BRICK_M * 6.7
 const RUN_SPEED := BRICK_M * 13.3
 const CROUCH_SPEED := BRICK_M * 2.9
+## Aiming down the sights: a careful walk, 4.4 courses a second.
+const AIM_SPEED := BRICK_M * 4.4
 ## Clears one course and no more, at this gravity.
 const JUMP_SPEED := 4.2
 const GRAVITY := 20.0
@@ -62,6 +64,9 @@ var gun: GunController
 ## Where it looks from, turned to `intents.look_yaw` / `look_pitch` every tick: a
 ## gun held by a brain aims down this (a player's gun aims down the camera).
 var eye: Node3D
+## The player's movement on top of the walk -- momentum, slide, wall-run, mantle,
+## grapple (PawnMoves). Null for a soldier, whose walk is the plain one below.
+var moves: PawnMoves
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
@@ -81,6 +86,19 @@ var _was_on_floor := true
 const SAFE_FALL := 1.5
 const FALL_DAMAGE := 26.0
 var _fall_from := 0.0
+## Rising under its own jump: that height was climbed, not fallen from, so it
+## does not count towards the fall (a high jump on the flat lands unhurt).
+## Set by PawnMoves; cleared at the top of the jump.
+var rising_jump := false
+## What the last jump rose, taken off every height the fall is measured from.
+var _jump_gain := 0.0
+## How far the legs are pulled up in the air (a head-anchored crouch or tuck):
+## the feet rose that much without the body rising, so a fall does not count it.
+var _tuck := 0.0
+## Eye height changes the camera must take at once rather than ease: a crouch in
+## the air keeps the head where it is, so the eye's height over the feet jumps
+## while the eye itself does not move. PlayerController takes it (take_eye_snap).
+var _eye_snap := 0.0
 var _placed := false
 ## How far the last landing dropped, for the probe.
 var last_fall := 0.0
@@ -178,6 +196,16 @@ func eye_interpolated() -> Vector3:
 	return body.get_global_transform_interpolated().origin + Vector3.UP * eye_offset()
 
 
+## The feet between physics ticks, at the body's present height.
+func feet_interpolated() -> Vector3:
+	return body.get_global_transform_interpolated().origin - Vector3.UP * _height * 0.5
+
+
+## Feet up to the eye: EYE_HEIGHT standing, a brick less crouched.
+func eye_height() -> float:
+	return _height - HEAD_HEIGHT * 0.5
+
+
 func is_crouched() -> bool:
 	return _height < BODY_HEIGHT
 
@@ -215,21 +243,42 @@ func step(delta: float) -> void:
 	# for it either way. The test is along the motion rather than in place, so
 	# walking at a beam ducks under it instead of stopping dead in front of it.
 	var probe := wish * WALK_SPEED * delta
-	_auto_crouched = false
-	if intents.crouch and not no_crouch:
-		_set_height(CROUCH_HEIGHT)
-	elif _fits(BODY_HEIGHT, probe):
-		_set_height(BODY_HEIGHT)
-	elif _fits(CROUCH_HEIGHT, probe):
-		_set_height(CROUCH_HEIGHT)
-		_auto_crouched = true
+	# A mantle owns the body's height from start to finish: it chose the height
+	# that fits where it is going, and a stand-up half way would move the body.
+	if moves == null or not moves.owns_height():
+		_auto_crouched = false
+		var low_h := CROUCH_HEIGHT if intents.crouch and not no_crouch else 0.0
+		if moves != null and moves.low_height() > 0.0:
+			low_h = moves.low_height() if low_h == 0.0 else minf(low_h, moves.low_height())
+		# In the air a crouch pulls the legs up and keeps the head where it is: what
+		# a body tucking through a window does, and the view does not drop.
+		var top := moves != null and not body.is_on_floor()
+		if low_h > 0.0:
+			_set_height(low_h, top)
+		elif _fits(BODY_HEIGHT, probe, top):
+			_set_height(BODY_HEIGHT, top)
+		elif _fits(CROUCH_HEIGHT, probe, top):
+			_set_height(CROUCH_HEIGHT, top)
+			_auto_crouched = true
 
 	var speed := WALK_SPEED
 	if is_crouched():
 		speed = CROUCH_SPEED
+	elif intents.aim:
+		speed = AIM_SPEED
 	elif intents.run:
 		speed = RUN_SPEED
 
+	if moves != null:
+		moves.step(delta, wish, speed)
+	else:
+		_walk(delta, wish, speed)
+	_track_fall()
+
+
+## The plain walk: the velocity is the wish, every tick -- no momentum, which is
+## what a soldier on a path wants.
+func _walk(delta: float, wish: Vector3, speed: float) -> void:
 	if intents.jump:
 		intents.jump = false
 		if body.is_on_floor():
@@ -255,17 +304,28 @@ func step(delta: float) -> void:
 		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
 			_step_over(wanted)
 
+
+## Where a fall started and what landing from it costs.
+func _track_fall() -> void:
 	var on_floor := body.is_on_floor()
 	# Where a fall started: the highest the feet were since they left a floor.
-	var feet_y := body.global_position.y
+	var feet_y := feet().y
 	if on_floor and _was_on_floor:
 		_placed = false   # placed standing: the next fall is a real one
 	if _was_on_floor and not on_floor:
 		_fall_from = feet_y
+		_jump_gain = 0.0
 	elif not on_floor:
-		_fall_from = maxf(_fall_from, feet_y)
+		if rising_jump and body.velocity.y > 0.0:
+			_jump_gain = maxf(_jump_gain, feet_y - _fall_from)
+		else:
+			_fall_from = maxf(_fall_from, feet_y - _jump_gain)
+	if on_floor or body.velocity.y <= 0.0:
+		rising_jump = false
 	if on_floor and not _was_on_floor:
-		var drop := _fall_from - feet_y
+		# Landed with the legs pulled up: they reach the ground that much higher
+		# than they would have hanging down.
+		var drop := _fall_from - feet_y - _tuck
 		last_fall = drop
 		# A storey is 2.66 m and the AI may now choose to drop one (AINav
 		# MAX_DROP): it lands hurt, not dead. A jump off a roof does not.
@@ -276,28 +336,47 @@ func step(delta: float) -> void:
 			packet.hit_position = feet()
 			DamageSystem.resolve(packet, health)
 		landed.emit()
+	if on_floor:
+		_tuck = 0.0
 	_was_on_floor = on_floor
+
+
+## What the camera must add to its eye height at once (see _eye_snap).
+func take_eye_snap() -> float:
+	var s := _eye_snap
+	_eye_snap = 0.0
+	return s
 
 
 ## Resize the capsule with the FEET planted. A capsule grows about its centre, so
 ## changing the height alone would sink the body into the floor or lift it off.
-func _set_height(h: float) -> void:
+##
+## `from_top`: keep the HEAD where it is instead -- the legs pull up or drop down.
+## For the air, where there is no floor to plant on. The feet move by the change;
+## the fall does not count it, and the eye (which hangs from the head) stays put.
+func _set_height(h: float, from_top := false) -> void:
 	if is_equal_approx(h, _height) or _capsule == null:
 		return
 	var delta := h - _height
 	_height = h
 	_capsule.height = h
-	body.global_position.y += delta * 0.5
+	if from_top:
+		body.global_position.y -= delta * 0.5
+		_tuck = maxf(_tuck - delta, 0.0)
+		_fall_from -= delta
+		_eye_snap += delta
+	else:
+		body.global_position.y += delta * 0.5
 
 
 ## Would the body fit at `h` if it moved by `motion`? The capsule has to be the
 ## size being asked about, so it is resized, tested and put back.
-func _fits(h: float, motion: Vector3) -> bool:
+func _fits(h: float, motion: Vector3, from_top := false) -> bool:
 	if _capsule == null:
 		return true
 	var was := _height
 	var xf := body.global_transform
-	xf.origin.y += (h - was) * 0.5
+	xf.origin.y += (h - was) * (-0.5 if from_top else 0.5)
 	_capsule.height = h
 	var blocked := body.test_move(xf, motion)
 	_capsule.height = was

@@ -701,13 +701,13 @@ func run_gate() -> void:
 		# Metres walked since it appeared, not how far it is from there now: a
 		# soldier that ran to cover and back out to fight can be standing a
 		# metre from its spawn point having gone thirty.
-		var d := float(travelled.get(so.get_instance_id(), 0.0))
+		var walked := float(travelled.get(so.get_instance_id(), 0.0))
 		# Standing still is fine in cover that happened to be next to where it
 		# appeared; standing still anywhere else is what this is here to catch.
-		if d > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
-			moved.append("%.1f m, %s" % [d, so.state])
+		if walked > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
+			moved.append("%.1f m, %s" % [walked, so.state])
 		else:
-			stayed.append("%.1f m, %s" % [d, so.state])
+			stayed.append("%.1f m, %s" % [walked, so.state])
 	ok.call("they move: %d of %d walked more than 3 m or are working a cover spot" % [
 			moved.size(), moved.size() + stayed.size()],
 			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,
@@ -1087,7 +1087,7 @@ func write_decisions(path: String) -> int:
 	for d in city.ai_services.decisions:
 		f.store_line(JSON.stringify({"t": d.t, "who": d.who, "obs": Array(d.obs),
 				"tactic": d.tactic, "policy": d.policy, "reward": d.get("reward"),
-				"flags": d.get("flags", []), "outcome": d.get("outcome", {})}))
+				"flags": d.get("flags", []), "outcome": d.get("outcome", {}), "book": d.get("book")}))
 	f.close()
 	print("[arena] %d decision(s) written to %s" % [city.ai_services.decisions.size(), path])
 	return city.ai_services.decisions.size()

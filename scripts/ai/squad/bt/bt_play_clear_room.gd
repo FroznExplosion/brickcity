@@ -240,7 +240,7 @@ func _stack_move(q: Squad, so: Soldier, i: int) -> void:
 
 
 ## A stack slot nobody in the team is heading for, or -1.
-func _spare_slot(q: Squad) -> int:
+func _spare_slot(_q: Squad) -> int:
 	var taken := {}
 	for m in _team:
 		if m.assignment != null and m.assignment.task == SquadMsg.Task.MOVE:

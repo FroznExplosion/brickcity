@@ -296,3 +296,87 @@ the largest single cost still on the table.
    building holds bricks, which is what §1's ladder wanted anyway.
 4. **Multiplayer**: seeded manifests are deterministic, so two clients agree without syncing
    contents. The diff is what replicates. Same shape as the damage record.
+
+---
+
+## 8. Simplification (2026-10-05) — proposal, not built
+
+**Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
+holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
+in. The cause is the number of separate systems, each with its own range, its own per-room and
+per-storey visibility rule, and its own way of noticing that a floor has gone:
+
+| Today | Range | Notices a lost floor by |
+|---|---|---|
+| real rung (room laid as decorative bricks) | `ROOM_REACH` / blast | being bricks |
+| drawn rung (instanced boxes + FIXTURE collision) | `ROOM_RANGE` 40 / `ROOM_SLEEP_RANGE` 58, storey span | `_recheck_drawn` |
+| fake rung (unlit, window-only) | `ROOM_VIEW_RANGE` 70, outer rooms only, portal test | rebuild passes; `hide_inside` |
+| furniture of a chunk (`FurnitureMesh.attach`) | wherever the chunk is drawn | redraw on change |
+| spilled / written-off / wreck rooms | when somebody arrives | §5.2 resolve |
+| loot and items (`ImpostorItems`) | 12 m mesh, 150 m card | not at all |
+
+Each fix so far (2026-10-03/04) patched one of these. The user's direction: one simple rule.
+
+### 8.1 Two kinds of thing, by size
+
+* **Interior pieces** — desks, tables, chairs, beds, shelves: `BuildRecipe.Role.INTERIOR`.
+  **Seen from a distance**, through windows and holes.
+* **Items** — cups, books, guns, ammo, powerups: `Role.DETAIL` and the loot (`ImpostorItems`).
+  **Only up close.**
+
+### 8.2 One drawing per building, by distance only
+
+A building that is bricks has **one interior drawing** (all its pieces, every room) and **one item
+drawing** (all its items). No per-room, per-storey, outer-room or portal rules decide what is drawn;
+only the building's distance does:
+
+* interior pieces shown inside `INTERIOR_RANGE` (~100 m — the shell's painted windows take over past
+  it, as today);
+* items shown inside `ITEM_RANGE` (~20 m);
+* **no pop**: both fade in and out over a band with the same screen-door dither the impostor ladder
+  uses (`ImpostorLod._fading`), so nothing appears or vanishes in one frame. Loot gets the same fade at
+  its cull edge.
+
+Collision (cover) for interior pieces only near the player (one box per piece), as now.
+
+### 8.3 What holds a piece: its floor bricks, nothing else
+
+Each piece records the block ids it stands on. One index, block id -> pieces, answers every "the
+floor went" case the five systems above answered separately:
+
+* the bricks leave as a **piece** (a section falls): the furniture on them moves to that piece's
+  drawing and **rides it down**;
+* the bricks are **destroyed**: the furniture on them is gone (debris particles), recorded in the
+  room's diff as today (`room.gone`);
+* a **landing piece** occupies a piece's space: crushed, as `_crush_drawn` does now.
+
+### 8.4 Shot: the piece becomes bricks, only that piece
+
+A blast or a bullet that reaches an interior piece lays **that piece** into the chunk as decorative
+bricks (the code that lays a room today, for one item), and from then on it is ordinary brick
+destruction. No room is ever laid whole; no proximity opens a room.
+
+### 8.5 Authored furniture fits as it is
+
+Workshop room templates and items already come in as pieces (connected clusters, `RoomTemplates`).
+A piece's drawing is its parts; later an authored piece can be drawn by its own instanced mesh
+(`RecipeMesh` + an `ImpostorLod`-style set per kind) without changing §8.2-8.4. A player build's own
+furniture is bricks in its chunk already and only needs the same distance fades.
+
+### 8.6 What goes
+
+The drawn, fake and real rungs and their ranges, `_recheck_drawn`, `_sync_fake`/fake rebuild passes,
+`hide_inside`, room activation by `ROOM_REACH` and storey span, the window portal test for interiors,
+compromise-lays-the-room, spill/write-off/wreck resolve for contents (a fallen building's pieces ride
+it, §8.3). Rooms themselves stay: kinds, seeds, manifests, the diff, and the room graph the AI uses.
+Probes whose checks measure the removed rungs (`--rooms`, `interior_probe`, parts of
+`collapse_probe` "fake", `--drawn`) are rewritten against §8.2-8.4 in the same change.
+
+### 8.7 Stages
+
+1. Interior drawing per building + item drawing + dither fades (§8.2), beside the old rungs, switch
+   between them; screenshots before/after.
+2. Support index: ride / destroyed / crushed (§8.3).
+3. Shot piece becomes bricks (§8.4).
+4. Remove the old rungs and their tests (§8.6).
+5. Loot fade at the cull edge.

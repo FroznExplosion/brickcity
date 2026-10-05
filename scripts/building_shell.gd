@@ -52,8 +52,12 @@ const ALL_STANDING := -1  ## every bit set, as a 32-bit int
 ## `damage` is band index -> PackedInt32Array of four segment masks, in
 ## SIDE_* order. An absent band is intact. Empty means an undamaged building,
 ## which is the overwhelmingly common case and takes the original path.
+##
+## `layout` is TowerRecipe.layout(courses), if the caller has it: a worker thread
+## building this (CityScene's shadow proxies) must not reach the memo that
+## layout() writes into, so it is looked up on the main thread and handed in.
 static func build_arrays(footprint_x: int, footprint_z: int, courses: int,
-		damage: Dictionary = {}) -> Array:
+		damage: Dictionary = {}, layout: Array = []) -> Array:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colours := PackedColorArray()
@@ -75,7 +79,7 @@ static func build_arrays(footprint_x: int, footprint_z: int, courses: int,
 	var top_colour := BrickWorld.get_filament_colour(TowerRecipe.SLAB_COLOUR)
 	var top_hollow := false
 	var band_index := 0
-	for band in TowerRecipe.layout(courses):
+	for band in (layout if not layout.is_empty() else TowerRecipe.layout(courses)):
 		var masks: PackedInt32Array = damage.get(band_index, PackedInt32Array())
 		band_index += 1
 
@@ -348,9 +352,9 @@ static func build_coarse_mesh(footprint_x: int, footprint_z: int, courses: int) 
 
 
 static func build_mesh(footprint_x: int, footprint_z: int, courses: int,
-		damage: Dictionary = {}) -> ArrayMesh:
+		damage: Dictionary = {}, layout: Array = []) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	var arrays := build_arrays(footprint_x, footprint_z, courses, damage)
+	var arrays := build_arrays(footprint_x, footprint_z, courses, damage, layout)
 	if (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		return mesh  # every band shot away: a mesh with no surface, not a crash
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -533,23 +537,98 @@ static func _pane(verts: PackedVector3Array, normals: PackedVector3Array,
 		indices.push_back(v0 + i)
 
 
-## Four wall slabs and a floor. Enough for a projectile to hit the building and
-## for debris to land on it; the real per-block collision arrives with the
-## bricks, on damage.
-static func collision_boxes(footprint_x: int, footprint_z: int, courses: int) -> Array:
+## Four wall slabs and a floor -- and a ROOF, `roofed`. Enough for a
+## projectile to hit the building and for debris to land on it; the real
+## per-block collision arrives with the bricks, on damage.
+##
+## The roof is new (2026-10-02). Without it a piece coming down on a building
+## still drawn as its shell fell straight through the top into the hollow of
+## the four walls and stood inside the building on its ground floor --
+## wreckage clipping into a building that looked whole (--breaklag's slab).
+## Only on a building with its top: the boxes do not follow damage, and a roof
+## at the recipe's height over storeys that are gone would hold debris up in
+## the air.
+static func collision_boxes(footprint_x: int, footprint_z: int, courses: int,
+		roofed := false, damage: Dictionary = {}) -> Array:
 	var t := TowerRecipe.WALL_THICK
 	var w := footprint_x * STUD
 	var d := footprint_z * STUD
 	var tw := t * STUD
 	var h := TowerRecipe.total_plates(courses) * PLATE
 	var y := h * 0.5
+	if not damage.is_empty():
+		return _damaged_boxes(w, d, tw, courses, damage)
 	return [
 		{"pos": Vector3(w * 0.5, y, tw * 0.5), "size": Vector3(w, h, tw)},
 		{"pos": Vector3(w * 0.5, y, d - tw * 0.5), "size": Vector3(w, h, tw)},
 		{"pos": Vector3(tw * 0.5, y, d * 0.5), "size": Vector3(tw, h, d - tw * 2.0)},
 		{"pos": Vector3(w - tw * 0.5, y, d * 0.5), "size": Vector3(tw, h, d - tw * 2.0)},
 		{"pos": Vector3(w * 0.5, PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)},
-	]
+	] + ([{"pos": Vector3(w * 0.5, h - PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)}]
+			if roofed else [])
+
+
+## A damaged shell's boxes: what its mesh draws, not the recipe's four full
+## walls. Those stood where storeys had gone -- invisible walls that wreckage
+## came to rest on in mid-air (Docs/CollapseNext.md 1.1). Each side is its
+## standing runs, band by band, a box carried up through every band with the
+## same mask so an intact stretch is still one box; the ground plate; and a
+## roof on the highest floor still standing, which is what a piece dropped on
+## a building with its top gone lands on.
+static func _damaged_boxes(w: float, d: float, tw: float, courses: int,
+		damage: Dictionary) -> Array:
+	var out := [{"pos": Vector3(w * 0.5, PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)}]
+	var spans := [w, w, d, d]
+	var open := [null, null, null, null]   ## per side: [mask, y0]
+	var roof := -1.0
+	var band_index := 0
+	var y_top := 0.0
+	for band in TowerRecipe.layout(courses):
+		var masks: PackedInt32Array = damage.get(band_index, PackedInt32Array())
+		band_index += 1
+		# The cornice is a row of buttresses along one edge, not a wall: the
+		# full-height boxes never counted it either.
+		if band.kind == "cornice":
+			continue
+		var y0: float = int(band.y) * PLATE
+		var y1: float = y0 + int(band.plates) * PLATE
+		y_top = y1
+		var gone := _band_is_gone(masks)
+		if not gone and (band.kind == "slab" or band.kind == "base"):
+			roof = y1
+		for side in 4:
+			var m: int = 0 if gone else _mask_for(masks, side)
+			if open[side] != null and int(open[side][0]) == m:
+				continue
+			if open[side] != null:
+				_wall_boxes(out, side, int(open[side][0]), float(open[side][1]), y0, w, d, tw, spans[side])
+			open[side] = [m, y0]
+	for side in 4:
+		if open[side] != null:
+			_wall_boxes(out, side, int(open[side][0]), float(open[side][1]), y_top, w, d, tw, spans[side])
+	if roof > PLATE:
+		out.append({"pos": Vector3(w * 0.5, roof - PLATE * 0.5, d * 0.5), "size": Vector3(w, PLATE, d)})
+	return out
+
+
+static func _wall_boxes(out: Array, side: int, mask: int, y0: float, y1: float,
+		w: float, d: float, tw: float, span: float) -> void:
+	if y1 <= y0:
+		return
+	var h := y1 - y0
+	var y := y0 + h * 0.5
+	for r in _runs(mask, span):
+		var run_len: float = r.y - r.x
+		var mid: float = (r.x + r.y) * 0.5
+		match side:
+			SIDE_FRONT:
+				out.append({"pos": Vector3(mid, y, tw * 0.5), "size": Vector3(run_len, h, tw)})
+			SIDE_BACK:
+				out.append({"pos": Vector3(mid, y, d - tw * 0.5), "size": Vector3(run_len, h, tw)})
+			SIDE_LEFT:
+				out.append({"pos": Vector3(tw * 0.5, y, mid), "size": Vector3(tw, h, run_len)})
+			SIDE_RIGHT:
+				out.append({"pos": Vector3(w - tw * 0.5, y, mid), "size": Vector3(tw, h, run_len)})
 
 
 ## `unit` is the rectangle the seam shader tiles: pass a brick-sized one and the

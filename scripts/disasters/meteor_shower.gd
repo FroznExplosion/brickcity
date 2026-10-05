@@ -30,6 +30,16 @@ const BIG_CHANCE := 0.1
 const BIG_RADIUS := 4.8         ## BIG_BLAST * 1.5
 const IGNITE_CHANCE := 0.2
 const STREAKS := 5              ## harmless ones during the warning
+## A GIANT (Docs/Disasters.md 23): its ring shows longer, and where it lands a
+## shockwave throws what is loose and knocks people down, ejecta blast the
+## ground round the crater, and fires start in a ring.
+const GIANT_LEAD := 6.0
+const GIANT_RADIUS := 11.0
+const SHOCK_REACH := 4.0          ## x the crater's radius
+const SHOCK_PUSH := 14.0          ## m/s at the crater's edge, falling off
+const SHOCK_DAMAGE := 60.0        ## at the edge, falling off
+const EJECTA := 8
+const GIANT_RING := 8             ## blasts the crater is made of, after its core
 
 ## A warm, dusty cast rather than a red wash: the bricks must keep their own
 ## colours, or a player cannot read what is being hit.
@@ -85,20 +95,28 @@ func _on_begin() -> void:
 	_build_pools()
 
 
-## The whole shower, from the rng alone.
+## The whole shower, from the rng alone. The variants (meteor_storm.gd,
+## meteor_mixed.gd, big_meteor.gd) roll their own from the same two parts.
 func _roll_schedule() -> void:
-	# Intensity: more of them, and bigger. At 1 the count is exactly as drawn.
-	var count := clampi(int(round(rng.randi_range(25, 40) * intensity)), 6, 120)
-	bursts = rng.randi_range(3, 4)
-	var grow := sqrt(maxf(intensity, 0.1))
 	meteors.clear()
+	_add_shower(rng.randi_range(25, 40), rng.randi_range(3, 4), RADIUS_MIN, RADIUS_MAX, BIG_CHANCE)
+	_sort()
+
+
+## `count` meteors (scaled by intensity) in `bursts` bursts over ACTIVE, of
+## radius `rmin`..`rmax`, a `big_chance` share of them big.
+func _add_shower(count: int, p_bursts: int, rmin: float, rmax: float, big_chance: float) -> void:
+	# Intensity: more of them, and bigger. At 1 the count is exactly as drawn.
+	count = clampi(int(round(count * intensity)), 6, 240)
+	bursts = p_bursts
+	var grow := sqrt(maxf(intensity, 0.1))
 	for i in count:
 		var b := floori(float(i * bursts) / count)
 		var centre := active_s * (b + 0.5) / bursts
-		var big := rng.randf() < BIG_CHANCE * intensity
+		var big := rng.randf() < big_chance * intensity
 		meteors.append({
 			"t": clampf(centre + rng.randf_range(-3.0, 3.0), MARK_LEAD + 0.5, active_s - 0.5),
-			"radius": (BIG_RADIUS if big else rng.randf_range(RADIUS_MIN, RADIUS_MAX)) * grow,
+			"radius": (BIG_RADIUS if big else rng.randf_range(rmin, rmax)) * grow,
 			"big": big,
 			"ignite": rng.randf() < minf(IGNITE_CHANCE * intensity, 0.8),
 			"to_building": rng.randf() < BUILDING_SHARE,
@@ -106,6 +124,29 @@ func _roll_schedule() -> void:
 			"burst": b,
 			"stage": Stage.WAITING,
 		})
+
+
+## One giant, landing at `t` into ACTIVE: a building near the player for
+## preference, never on top of them.
+func _add_giant(t: float, radius := GIANT_RADIUS) -> void:
+	var e := []
+	for i in EJECTA:
+		e.append([rng.randf_range(0.4, 2.5), rng.randf() * TAU, rng.randf_range(1.2, 2.4),
+				rng.randf_range(0.8, 1.8)])
+	meteors.append({
+		"t": clampf(t, GIANT_LEAD + 0.5, active_s - 0.5),
+		"radius": minf(radius * sqrt(maxf(intensity, 0.1)), 15.0),
+		"big": true, "giant": true, "lead": GIANT_LEAD,
+		"ignite": true,
+		"to_building": rng.randf() < 0.8,
+		"u": rng.randf(), "v": rng.randf(), "w": rng.randf(),
+		"burst": bursts,
+		"stage": Stage.WAITING,
+		"ejecta": e,
+	})
+
+
+func _sort() -> void:
 	meteors.sort_custom(func(a: Dictionary, c: Dictionary) -> bool: return a.t < c.t)
 
 
@@ -169,6 +210,7 @@ func _tick_active(dt: float) -> void:
 	_finish_streaks()
 	_clock += dt
 	_step_meteors(true)
+	_step_ejecta()
 
 
 func _tick_ending(dt: float) -> void:
@@ -177,6 +219,7 @@ func _tick_ending(dt: float) -> void:
 	_finish_streaks()
 	_clock += dt
 	_step_meteors(false)
+	_step_ejecta()
 
 
 func _finish_streaks() -> void:
@@ -197,7 +240,7 @@ func _step_meteors(new: bool) -> void:
 			Stage.WAITING:
 				if not new:
 					m.stage = Stage.DONE
-				elif _clock >= float(m.t) - MARK_LEAD:
+				elif _clock >= float(m.t) - float(m.get("lead", MARK_LEAD)):
 					_mark(m)
 			Stage.MARKED:
 				if _clock >= float(m.t) - flight:
@@ -205,7 +248,7 @@ func _step_meteors(new: bool) -> void:
 					m.pos = _pos_at(m, _clock)
 					m.rock = _take_rock()
 					if m.rock != null:
-						(m.rock as Node3D).scale = Vector3.ONE * (1.6 if m.big else 1.0)
+						(m.rock as Node3D).scale = Vector3.ONE * clampf(float(m.radius) / 2.6, 1.0, 6.0)
 						(m.rock as Node3D).global_position = m.pos
 			Stage.FLYING:
 				_fly(m)
@@ -287,6 +330,7 @@ func _fly(m: Dictionary) -> void:
 
 
 func _impact(m: Dictionary, pos: Vector3, normal: Vector3, structure: bool) -> void:
+	var t_us := Time.get_ticks_usec()
 	m.stage = Stage.DONE
 	if m.rock != null:
 		_give_rock(m.rock)
@@ -299,16 +343,122 @@ func _impact(m: Dictionary, pos: Vector3, normal: Vector3, structure: bool) -> v
 	var r := float(m.radius)
 	# Char first: the crater's rim is left black (SCORCH), its middle blown away.
 	ctx.scorch(pos, r + SCORCH_RIM)
-	ctx.blast(pos, r)
+	if m.get("giant", false):
+		# The same hole in pieces: a core now, a ring of overlapping blasts
+		# over the next few ticks. One blast this big was the whole crater's
+		# work in one tick -- 125-175 ms.
+		ctx.blast(pos, r * 0.55)
+		for i in GIANT_RING:
+			var a := TAU * float(i) / GIANT_RING
+			_ejecta.append([_clock + 0.034 * float(i + 1), pos + Vector3(cos(a), 0.0, sin(a)) * r * 0.5,
+					r * 0.52])
+	else:
+		ctx.blast(pos, r)
 	ctx.impact_fx(pos, normal)
 	ctx.shake(pos, 0.5 if m.big else 0.25)
 	if m.ignite:
 		ctx.ignite(pos, 1.0 if m.big else 0.6)
 	_burst(pos, r, m.big)
+	if m.get("giant", false):
+		_giant_impact(m, pos, r)
 	var player := ctx.player_pos()
+	impact_ms = maxf(impact_ms, float(Time.get_ticks_usec() - t_us) / 1000.0)
 	impacts.append({"pos": pos, "radius": r, "big": m.big, "burst": m.burst,
 			"structure": structure,
 			"player_dist": Vector2(pos.x - player.x, pos.z - player.z).length()})
+
+
+# --- Giants -------------------------------------------------------------------
+
+## Pending ejecta: [at clock, point, radius]. Pending shock pulses: [at clock,
+## point, crater radius] -- the crater's own rubble only comes loose a few
+## ticks after the blast, so the wave goes through it then.
+var _ejecta: Array = []
+var _shocks: Array = []
+var giants_landed := 0
+var impact_ms := 0.0             ## the slowest impact, for the probe
+var shocked_pieces := 0
+var shocked_pawns := 0
+
+
+## What a giant does beyond its crater.
+func _giant_impact(m: Dictionary, pos: Vector3, r: float) -> void:
+	giants_landed += 1
+	var reach := r * SHOCK_REACH
+	ctx.shake(pos, 1.4)
+	ctx.wake_near(pos, reach)
+	# The shockwave: what is loose is thrown out and up, now and again as the
+	# crater's rubble comes free; people knocked over.
+	_shock(pos, r)
+	_shocks.append([_clock + 0.25, pos, r])
+	_shocks.append([_clock + 0.7, pos, r])
+	_shocks.append([_clock + 1.5, pos, r])
+	_shocks.append([_clock + 2.5, pos, r])
+	for p in ctx.pawns():
+		var d := p.chest().distance_to(pos)
+		if d > reach:
+			continue
+		var k := clampf(1.0 - (d - r) / (reach - r), 0.0, 1.0)
+		var away := Vector3(p.chest().x - pos.x, 0.0, p.chest().z - pos.z).normalized()
+		p.shove = away * 9.0 * k + Vector3.UP * 3.0 * k
+		ctx.damage_pawns(p.chest(), 0.4, SHOCK_DAMAGE * k)
+		shocked_pawns += 1
+	# Fires in a ring round the rim.
+	for i in 4:
+		var a := TAU * float(i) / 4.0 + float(m.u) * TAU
+		ctx.ignite(pos + Vector3(cos(a), 1.0, sin(a)) * (r * 0.9), 0.9)
+	# Ejecta: smaller blasts round it over the next seconds.
+	for e in m.ejecta:
+		var a: float = e[1]
+		var d: float = r * float(e[2])
+		var p2 := pos + Vector3(cos(a) * d, 0.0, sin(a) * d)
+		var hit := ctx.ray(p2 + Vector3.UP * 60.0, p2 + Vector3.DOWN * 40.0)
+		if not hit.is_empty():
+			p2 = hit.position
+		_ejecta.append([_clock + float(e[0]), p2, float(e[3])])
+	# The dust of it: every pool's cloud at once, round the crater.
+	for i in _dust.size():
+		var dust := _dust[i]
+		var a := TAU * float(i) / _dust.size()
+		dust.global_position = pos + Vector3(cos(a), 0.0, sin(a)) * r * 0.6
+		dust.scale = Vector3.ONE * (r / 1.2)
+		dust.restart()
+
+
+func _shock(pos: Vector3, r: float) -> void:
+	var reach := r * SHOCK_REACH
+	for isl in ctx.islands_near(pos, reach):
+		if not isl.is_valid() or not is_instance_valid(isl.body):
+			continue
+		var rel := isl.body.global_position - pos
+		var d := maxf(rel.length(), 0.5)
+		var k := clampf(1.0 - (d - r) / (reach - r), 0.0, 1.0) if d > r else 1.0
+		if k <= 0.0:
+			continue
+		var bricks := maxf(float(ctx.piece_bricks(isl)), 1.0)
+		var out := (Vector3(rel.x, 0.0, rel.z).normalized() + Vector3.UP * 0.6).normalized()
+		isl.body.linear_velocity += out * SHOCK_PUSH * k * clampf(60.0 / bricks, 0.15, 1.0)
+		isl.body.sleeping = false
+		shocked_pieces += 1
+
+
+func _step_ejecta() -> void:
+	var waves: Array = []
+	for w in _shocks:
+		if _clock >= float(w[0]):
+			_shock(w[1], float(w[2]))
+		else:
+			waves.append(w)
+	_shocks = waves
+	var keep: Array = []
+	for e in _ejecta:
+		if _clock >= float(e[0]):
+			ctx.blast(e[1], float(e[2]))
+			ctx.scorch(e[1], float(e[2]) + 0.6)
+			ctx.impact_fx(e[1], Vector3.UP)
+		else:
+			keep.append(e)
+	_ejecta = keep
 
 
 # --- Look and sound -------------------------------------------------------------
@@ -341,13 +491,15 @@ func _burst(pos: Vector3, r: float, big: bool) -> void:
 	var f := _flashes[_flash_i]
 	_flash_i = (_flash_i + 1) % _flashes.size()
 	f.global_position = pos + Vector3.UP * 1.5
-	f.light_energy = 12.0 if big else 7.0
+	f.light_energy = clampf(5.0 + r * 1.8, 7.0, 40.0)
+	f.omni_range = maxf(f.omni_range, r * 6.0)
 	f.visible = true
 	var s := _booms[_boom_i]
 	_boom_i = (_boom_i + 1) % _booms.size()
 	s.global_position = pos
 	# Cosmetic, so not from the disaster's rng: that is the schedule's alone.
-	s.pitch_scale = (0.75 if big else 1.0) * randf_range(0.92, 1.08)
+	s.pitch_scale = clampf(1.0 - (r - 2.0) * 0.06, 0.45, 1.0) * randf_range(0.92, 1.08)
+	s.volume_db = clampf((r - 3.0) * 1.5, 0.0, 12.0)
 	s.play()
 
 

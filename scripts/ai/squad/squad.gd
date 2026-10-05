@@ -173,8 +173,12 @@ func on_status(so: Soldier, assignment_id: int, kind: int) -> void:
 
 ## Has `so` replied `kind` to its CURRENT assignment? A dead member counts as
 ## having replied: a barrier does not wait on the dead.
-func replied(so: Soldier, kind: int) -> bool:
-	if so.is_dead():
+##
+## Untyped on purpose: a play may still hold a member whose node has been freed
+## since it died, and a typed parameter refuses the freed object before this can
+## say so. Freed counts as dead: nothing more to wait for.
+func replied(so, kind: int) -> bool:
+	if not is_instance_valid(so) or so.is_dead():
 		return true
 	if so.assignment == null:
 		return false
@@ -249,7 +253,7 @@ func _enemy_in_sight() -> bool:
 	return c != null and c.visible
 
 
-func _on_member_down(so: Soldier) -> void:
+func _on_member_down(_so: Soldier) -> void:
 	morale = maxf(0.0, morale - LOSS)
 	# Half the squad gone breaks it, whatever the running number says: two
 	# losses of four land morale on BROKEN to the last decimal (0.3000...04),

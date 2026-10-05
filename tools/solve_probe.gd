@@ -6,6 +6,11 @@ extends SceneTree
 ## grounding walk. It has to give exactly their answers, including when the
 ## stress solve breaks joints and the grounding has to be walked again.
 ##
+## And a fourth, between the stress solve and the rest: what came loose only
+## because load from elsewhere went through it, and whose own studs hold it,
+## is held on (Block::held; BrickWorld.solve_rounds with no rounds is that step
+## alone, and what a SOLVE command replays).
+##
 ## `-- --digest` prints one line per case instead: every block's load, the
 ## failures, the stability and the groups, hashed -- to compare two builds of
 ## the extension bit for bit. `-- --time` adds what each call costs on the big
@@ -27,6 +32,7 @@ func _init() -> void:
 		_check_same(c)
 	_check_template()
 	_check_parallel()
+	_check_joints_kept()
 	if args.has("--time"):
 		_time()
 	print("\n%d passed, %d failed" % [passed, failed])
@@ -98,6 +104,85 @@ func _build_into(w: BrickWorld, palette: Dictionary, c: Dictionary) -> int:
 	return chunk
 
 
+## A room laying furniture, or taking it back, no longer throws the joint cache
+## away: the blocks it touched have their joints redone in place. The building
+## has to solve exactly as one whose cache was built whole after the same
+## changes -- loads brick by brick, groups, stability.
+func _check_joints_kept() -> void:
+	print("\nthe joint cache kept up to date answers as one built whole")
+	var c := {"name": "", "x": 20, "z": 20, "courses": 36, "tension": 0.0,
+			"hits": [[Vector3(0.4, 0.5, 0.4), 2.5]]}
+	var wa := BrickWorld.new()
+	var wb := BrickWorld.new()
+	var pa := TowerRecipe.bake_palette(wa)
+	var pb := TowerRecipe.bake_palette(wb)
+	var ca := _build_into(wa, pa, c)
+	var cb := _build_into(wb, pb, c)
+	# A: solved first, so its cache is built -- then furnished and stripped.
+	wa.solve_structure(ca)
+	var ops := _furnish_ops(wa, ca, pa)
+	_apply_ops(wa, ca, ops)
+	# B: the same, with no solve before: its cache is built whole afterwards.
+	_apply_ops(wb, cb, ops)
+	var a: Dictionary = wa.solve_structure(ca)
+	var b: Dictionary = wb.solve_structure(cb)
+	(a.stress as Dictionary).erase("solve_ms")
+	(b.stress as Dictionary).erase("solve_ms")
+	_ok("furniture laid and bricks taken out: %d change(s)" % ops.size(), ops.size() > 10)
+	_ok("the same answer", str(a) == str(b))
+	_ok("the same loads, brick by brick", _loads(wa, ca) == _loads(wb, cb))
+	# And the furniture is joined to what it stands on: it comes away with it.
+	var groups_a: Array = a.groups
+	var total := 0
+	for g in groups_a:
+		total += (g as PackedInt32Array).size()
+	var groups_b: Array = b.groups
+	var total_b := 0
+	for g in groups_b:
+		total_b += (g as PackedInt32Array).size()
+	_ok("the same groups come loose", groups_a == groups_b, "%d bricks against %d" % [total, total_b])
+	# And A's cache was KEPT through the changes, not thrown away and built
+	# again by that solve: it carries the runs it redid in place, which B's,
+	# built whole, has none of.
+	var over_a := int(wa.get_memory_report().joint_overlay_bytes)
+	var over_b := int(wb.get_memory_report().joint_overlay_bytes)
+	_ok("and it was kept up to date, not built again", over_a > 0 and over_b == 0,
+			"%d bytes redone in place against %d" % [over_a, over_b])
+
+
+## Furniture on every empty cell with a brick under it on a few floors, and a
+## few bricks taken out: the same list for two worlds, so both get the same.
+func _furnish_ops(w: BrickWorld, chunk: int, palette: Dictionary) -> Array:
+	var ops := []
+	var one: int = palette["brick_1x1"]
+	var dims := w.get_chunk_dims(chunk)
+	var origin := w.get_chunk_origin(chunk)
+	var placed := 0
+	for y in range(3, dims.y - 3, 12):
+		for x in range(1, dims.x - 1, 3):
+			for z in range(1, dims.z - 1, 3):
+				var at := origin + Vector3i(x, y, z)
+				if placed < 60 and w.block_at(chunk, at) < 0 and w.block_at(chunk, at - Vector3i(0, 1, 0)) >= 0 \
+						and w.block_at(chunk, at + Vector3i(0, 1, 0)) < 0 and w.block_at(chunk, at + Vector3i(0, 2, 0)) < 0:
+					ops.append(["place", at, one])
+					placed += 1
+	var taken := 0
+	for id in range(40, w.get_block_count(chunk), 97):
+		if taken >= 12:
+			break
+		ops.append(["remove", id])
+		taken += 1
+	return ops
+
+
+func _apply_ops(w: BrickWorld, chunk: int, ops: Array) -> void:
+	for op in ops:
+		if op[0] == "place":
+			w.place_block(chunk, op[1], op[2], 3, true)
+		else:
+			w.remove_block(chunk, op[1])
+
+
 ## solve_structures solves several buildings at once, a thread each. It has to
 ## answer exactly what solve_structure on each in turn does -- every case, two
 ## rounds, the loads brick by brick -- and take about as long as the slowest.
@@ -150,6 +235,7 @@ func _check_parallel() -> void:
 
 func _separately(w: BrickWorld, chunk: int) -> Dictionary:
 	var stress: Dictionary = w.solve_stress(chunk)
+	stress["reattached"] = int(w.solve_rounds(chunk, 0).get("reattached", 0))
 	var stability: Dictionary = w.check_stability(chunk)
 	var groups: Array = w.find_detached_groups(chunk)
 	return {"stress": stress, "stability": stability, "groups": groups}
@@ -172,7 +258,8 @@ func _check_same(c: Dictionary) -> void:
 		_ok(label + ": the same stress answer",
 				s3.failures == s1.failures and s3.separated == s1.separated
 				and s3.max_ratio == s1.max_ratio and s3.peak_load == s1.peak_load
-				and s3.blocks_loaded == s1.blocks_loaded)
+				and s3.blocks_loaded == s1.blocks_loaded and s3.reattached == s1.reattached,
+				"%d held against %d" % [int(s3.reattached), int(s1.reattached)])
 		_ok(label + ": the same loads, block by block", _loads(wa, ca) == _loads(wb, cb))
 		var t3: Dictionary = three.stability
 		var t1: Dictionary = one.stability

@@ -24,7 +24,8 @@ extends Node3D
 ##      like and what the studded-everywhere version was missing
 ##
 ## Keys: F1 seams · F2 painted studs · F3 contact shadows ·
-##       F4 stud geometry + scatter · F5 tiles-on-studs · Space walk/fly
+##       F4 stud geometry + scatter · F5 tiles-on-studs · Space walk/fly ·
+##       H disasters (the hurricane; Shift+H ends it)
 
 ## 5x5 tiles = 160 studs = 56 m square. `-- --tiles=N` overrides it, which
 ## is how the view-distance numbers in Terrain.md 19 were measured.
@@ -105,6 +106,11 @@ var _hud_layer: CanvasLayer = null
 var _env: Environment = null
 var _under := UnderwaterFx.new()
 var _camera: DebugCamera = null
+## The same camera, under the name the disaster context reads (a city's).
+var camera: DebugCamera = null
+## Weather for the coast (Docs/Disasters.md 18): the hurricane, and whatever
+## else needs no buildings. H opens it, as in the city.
+var disasters: DisasterDirector = null
 var _sun: DirectionalLight3D = null
 var _mat: ShaderMaterial = null
 var _label: Label = null
@@ -122,6 +128,7 @@ var _far_blocks := 0
 var _far_rings := 0
 var _sites: Array[MeshInstance3D] = []
 var _trees: TerrainTrees = null
+var _hud_in := 0.0
 ## Every coarse block's tile rect, and which node draws it (-1 = a merged
 ## ring, which is always drawn). The coverage check needs both.
 var _all_rects: Array[Rect2i] = []
@@ -227,6 +234,12 @@ func _ready() -> void:
 		_editor.name = "Editor"
 		add_child(_editor)
 		_editor.setup(self)
+	if not _bench_mode and not _shot_mode:
+		disasters = DisasterDirector.new()
+		disasters.name = "Disasters"
+		add_child(disasters)
+		disasters.setup(self, ["hurricane", "snow", "blizzard", "hail", "sandstorm", "waterspout",
+				"wildfire"])
 	_update_hud()
 	if _bench_mode:
 		_run_bench()
@@ -277,6 +290,7 @@ func _build_scenery() -> void:
 	_camera.position = Vector3(-8.0, 7.0, -8.0)
 	_camera.rotation = Vector3(-0.38, -2.36, 0.0)
 	add_child(_camera)
+	camera = _camera
 
 	var layer := CanvasLayer.new()
 	_label = Label.new()
@@ -292,6 +306,7 @@ func _build_scenery() -> void:
 func _build_terrain() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/terrain.gdshader")
+	WeatherFx.register(_mat)
 	_mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
 	_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
 	_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
@@ -309,6 +324,11 @@ func _build_terrain() -> void:
 	_streamer.near_radius = NEAR_TILES
 	_streamer.keep_radius = NEAR_TILES + 2
 	_streamer.world_half = maxi(FAR_TILES, NEAR_TILES)
+	# The block the detail square and the coarse tier snap to (TerrainStreamer
+	# .align). `-- --align=2` to compare a tighter detail area.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--align="):
+			_streamer.align = maxi(1, int(arg.split("=")[1]))
 	add_child(_streamer)
 	_streamer.setup(_mat)
 	# A capture or a bench must not photograph a half-built world.
@@ -507,7 +527,7 @@ func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
 ## a ring is one mesh), and the seabed the water reads its shore from.
 func terrain_changed(studs: Rect2i) -> void:
 	if _trees != null:
-		_trees.rebuild_soon()
+		_trees.rebuild_soon(studs)
 	var tile := BrickTerrain.get_tile_studs()
 	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
@@ -543,7 +563,7 @@ func terrain_changed(studs: Rect2i) -> void:
 	for span in dirty_rings:
 		_rebuild_ring(span)
 	if _sea != null:
-		_sea.refresh_seabed()
+		_sea.refresh_seabed(studs)
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +614,18 @@ func set_detail_radius(tiles: int) -> void:
 		# One step at the frozen spot, so the change is seen while frozen.
 		_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
 		_hide_covered_far()
+
+
+## Ground for snow to lie on (SnowCover): this scene is all terrain.
+func has_terrain() -> bool:
+	return true
+
+
+## A disaster moves the sea (DisasterContext.set_sea): the sea does it
+## (WaterSea.set_surge), as it does in the city.
+func disaster_sea(surge: float, wave_mul: float) -> void:
+	if _sea != null:
+		_sea.set_surge(surge, wave_mul)
 
 
 func set_water_param(param: String, value: Variant) -> void:
@@ -958,6 +990,7 @@ func _brick_material() -> ShaderMaterial:
 	if _brick_mat == null:
 		_brick_mat = ShaderMaterial.new()
 		_brick_mat.shader = load("res://shaders/brick.gdshader")
+		WeatherFx.register(_brick_mat)
 	return _brick_mat
 
 
@@ -1048,7 +1081,12 @@ func _process(delta: float) -> void:
 		# not, and every capture taken after a submerged one came out fogged
 		# green with the sea switched off.
 		_under.set_submerged(_env, false, DRY_AMBIENT)
-	_update_hud()
+	# Five times a second: it walks every tile to sum its counts, 0.3 ms a
+	# frame, and nobody reads a number that changes sixty times a second.
+	_hud_in -= delta
+	if _hud_in <= 0.0:
+		_hud_in = 0.2
+		_update_hud()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1075,6 +1113,9 @@ func _unhandled_input(event: InputEvent) -> void:
 					% ("ON (0.14 m)" if BrickTerrain.get_plate_steps() else "OFF (0.42 m)"))
 		KEY_F7:
 			_set_water(not _sea.enabled)
+		KEY_H:
+			if disasters != null:
+				disasters.on_key((event as InputEventKey).shift_pressed)
 		KEY_L:
 			set_lod_view(not _lod_debug)
 		KEY_F10:
@@ -1184,7 +1225,7 @@ func _update_hud() -> void:
 			if _lod_debug else ""),
 		"F1 seams  F2 studs  F3 shadows  F4 stud geometry",
 		"F5 tiles on studs  F6 plate steps  F7 water",
-		"C curves  P print  V wave steps  L LOD view  F10 dev menu%s" % [
+		"C curves  P print  V wave steps  L LOD view  F10 dev menu  H disasters%s" % [
 			"   LOD FROZEN" if _lod_frozen else ""],
 	])
 

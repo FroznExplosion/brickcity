@@ -76,6 +76,7 @@ func rebuild(material: Material) -> void:
 	_instances_done = false
 	_collision_done = false
 	_coll_i = 0
+	_release_multimeshes()
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -175,10 +176,15 @@ func add_collision(max_shapes := 0) -> bool:
 	if n == 0:
 		_collision_done = true
 		return true
+	# The body joins the physics space only once every box is on it. Added to
+	# a body already IN the space, Jolt rebuilds the whole compound shape on
+	# each box: 670 boxes measured 24.9 ms a tile that way, 0.77 ms added
+	# first and put in the space after -- 32x. That rebuild was the dip while
+	# sculpting (a refreshed tile adds all of them at once) and the "coll"
+	# worst-tile spikes while walking.
 	if not _body.is_valid():
 		_body = PhysicsServer3D.body_create()
 		PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
-		PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 		PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 		PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
 		PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
@@ -191,6 +197,7 @@ func add_collision(max_shapes := 0) -> bool:
 			Transform3D(Basis(), Vector3(boxes[o], boxes[o + 1], boxes[o + 2])))
 		_coll_i += 1
 	if _coll_i >= n:
+		PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 		_collision_done = true
 	return _collision_done
 
@@ -258,6 +265,7 @@ static func instance_material() -> ShaderMaterial:
 	if _instance_material == null:
 		_instance_material = ShaderMaterial.new()
 		_instance_material.shader = load("res://shaders/printed.gdshader")
+		WeatherFx.register(_instance_material)   # wet in rain (Disasters.md 19)
 	return _instance_material
 
 
@@ -272,6 +280,7 @@ static func stud_material() -> ShaderMaterial:
 		_stud_material.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
 		_stud_material.set_shader_parameter("contour_radius",
 				PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
+		WeatherFx.register(_stud_material)
 	return _stud_material
 
 
@@ -282,6 +291,7 @@ static func tuft_material() -> ShaderMaterial:
 	if _tuft_material == null:
 		_tuft_material = ShaderMaterial.new()
 		_tuft_material.shader = load("res://shaders/printed_double.gdshader")
+		WeatherFx.register(_tuft_material)
 	return _tuft_material
 
 
@@ -291,10 +301,7 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	var count := buffer.size() / FLOATS_PER_INSTANCE
 	if count == 0:
 		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = mesh
+	var mm := _take_multimesh(node_name, mesh)
 	mm.instance_count = count
 	# One upload. C++ already emitted the engine's own buffer layout, so there
 	# is no per-instance loop on this side at all.
@@ -311,6 +318,10 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	mi.visibility_range_end = range_end
 	mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	# Grass moves in the wind (weather.gdshaderinc); studs and pebbles do not.
+	if node_name == "Tufts":
+		mi.set_instance_shader_parameter("weather_sway",
+				WeatherFx.sway_grass(mesh.get_aabb().end.y))
 	add_child(mi)
 
 
@@ -329,6 +340,40 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 ## and every tile after the first reuses them. `brick_sandbox.gd` has done
 ## this since M3; terrain simply never did.
 static var _box_shapes := {}
+
+## MultiMeshes kept for reuse, by kind ("Studs", "Tufts", "Pebbles").
+##
+## A NEW MultiMesh entering the tree stalls on the render thread: measured
+## 4.5 ms a node on average and 19 ms at worst, whatever its size -- one stud
+## or a thousand. That was the "inst" worst-tile spike while walking (21-105
+## ms). A MultiMesh that has been drawn before costs 0.04 ms to fill and show
+## again, in a brand-new node. So a tile hands its MultiMeshes back when it
+## leaves, and the next tile takes them.
+static var _mm_pool := {}
+## This tile's MultiMeshes, [kind, MultiMesh], to give back.
+var _mms: Array = []
+
+
+func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
+	var mm: MultiMesh = null
+	var free: Array = _mm_pool.get(kind, [])
+	if not free.is_empty():
+		mm = free.pop_back()
+	else:
+		mm = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = mesh
+	_mms.append([kind, mm])
+	return mm
+
+
+func _release_multimeshes() -> void:
+	for pair in _mms:
+		if not _mm_pool.has(pair[0]):
+			_mm_pool[pair[0]] = []
+		(_mm_pool[pair[0]] as Array).append(pair[1])
+	_mms.clear()
 ## Live tiles. The shared shapes outlive any one tile and have to be freed
 ## when the last one goes, or Jolt reports them leaked at exit — which it
 ## did, 305 of them, the first time this ran.
@@ -351,7 +396,6 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 		return
 	_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
-	PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 	PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 	PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
 	PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
@@ -361,6 +405,8 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 		PhysicsServer3D.body_add_shape(_body,
 			_box_shape(Vector3(boxes[o + 3], boxes[o + 4], boxes[o + 5])),
 			Transform3D(Basis(), Vector3(boxes[o], boxes[o + 1], boxes[o + 2])))
+	# Into the space last: see add_collision.
+	PhysicsServer3D.body_set_space(_body, get_world_3d().space)
 
 
 func _free_body() -> void:
@@ -375,8 +421,10 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	_free_body()
+	_release_multimeshes()
 	_live_tiles -= 1
 	if _live_tiles <= 0:
 		for rid in _box_shapes.values():
 			PhysicsServer3D.free_rid(rid)
 		_box_shapes.clear()
+		_mm_pool.clear()

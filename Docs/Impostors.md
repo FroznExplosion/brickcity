@@ -168,7 +168,7 @@ Trees do not exist yet (Terrain.md lists them as authored prefab features), so t
 | 110–260 m | **far MultiMesh, facade shader** + the existing collision bodies | build shell, then baked box (Stage 4) | octahedral impostor |
 | 260 m – fog | **far MultiMesh, facade shader** | **baked box** | octahedral impostor |
 
-Swaps between rungs stay on the existing hysteresis. Stage 5 adds a dithered crossfade so the swap
+Swaps between rungs stay on the existing hysteresis. Stage 5 adds a crossfade so the swap
 at 110 m does not pop.
 
 ---
@@ -295,6 +295,9 @@ on every `damage_profile` change.
   draws the shell's own course colours.
 * The damage profile records **window openings as missing segments** in every damaged band that
   has windows. The shell draws them as holes, and so does the facade.
+* **Glass follows the shell's rule:** a storey whose window courses are damaged anywhere, on any
+  side, has no glass on any side (`BuildingShell.build_window_mesh`). The facade reads those twelve
+  masks for a damaged building, so the two tiers agree across the swap.
 
 Gate, `big_city.tscn -- --far --buildings=150`, 11 ok: one drawer per building; 64 coarse shells
 drawn by the far box, all with collision; a tower shot at 500 m with its crown taken off (bands 210–239
@@ -378,17 +381,24 @@ made the first time it is needed, so a build that never goes far never pays for 
 
 ### Stage 5 — Crossfade (done 2026-09-29)
 
-A banded shell dithers out over 80–140 m with Godot's own visibility-range fade (FADE_SELF, on the
-shell and its window panes). Its far box is drawn under it for that band, flagged in
-`INSTANCE_CUSTOM.w`, and dithers in on exactly the other pixels: the same interleaved-gradient
-noise and the same linear fade from the box's centre, the other side of the threshold. Coarse →
-banded now happens at 130 m and banded → coarse past 140 m, both inside the band, so no swap is
-ever seen. Shadows: the flagged box casts in full (its fade is measured from the sun's camera, so
-it is 0 there), the same shape as the shell's.
+A banded shell (and its window panes) fades out over 80–140 m with Godot's own visibility-range fade
+(FADE_SELF), and its far box is drawn **whole underneath it** for that band, flagged in
+`INSTANCE_CUSTOM.w` and inset 6 cm so the shell is always in front. The pixel is
+`alpha · shell + (1 − alpha) · box`, a real crossfade. Coarse → banded happens at 130 m and
+banded → coarse past 140 m, where the shell has gone, so no swap is ever seen.
 
-Gate: `--far` 18 ok, with Stage 4 (two watchtowers 600 m out on one baked card set, their own shells
-closer in, a damaged one on its exact shell) and Stage 5 (a banded shell in the band fading, its
-box flagged). Screenshots `shots/fade_{70,100,125,150}.png`.
+How Godot fades is the load-bearing fact, read from its source (4.6): a fading instance is
+**alpha-blended**, not dithered; alpha is `smoothstep` of the distance from the camera to the
+instance's bounds centre over `[end − margin, end + margin]`. So `end` is 110 and `margin` 30. The
+first version assumed a dither over `[end − margin, end]` and drew the box on the complementary
+pixels. The gate below caught it: that box z-fought a translucent shell across the band.
+
+Gate: `--far` 19 ok, with Stage 4 (two watchtowers 600 m out on one baked card set, their own
+shells closer in, a damaged one on its exact shell) and Stage 5: a banded shell in the band fading
+with its box flagged, and **no holes**. Three pictures of a building in mid-band against the sky: as
+drawn, with the shell not fading (the reference), and fading with no box. As drawn, 0.0% of the
+building is off the reference; with no box, 15%. If an engine update changes how fading works,
+this is the check that fails. Screenshots `shots/fade_{70,100,125,150}.png`.
 
 ---
 
@@ -403,6 +413,16 @@ transparent black, so the result is premultiplied by coverage and the shader div
 which keeps a dark fringe off every card. `shaders/impostor.gdshader` builds a camera-facing card,
 2R across, in the vertex shader and blends the four nearest views, each read where the pixel falls
 on that view's own plane (linear, so per vertex). Lit by the baked normals, holes by alpha scissor.
+
+**No swimming, no pop (2026-09-29).** Each view is read where the *view ray* meets that view's own
+plane, per pixel. The first version read it where the pixel lay on the card's plane, per vertex,
+which put each view's features in a slightly different place, so cards swam as the player moved.
+Card against mesh, one tree at 60 m, silhouette overlap is now 0.94 / 0.96 / 0.95 from 2 / 15 / 40 m
+up. Across the mesh-to-card range (±5 m round it) a copy is drawn as **both**, dithered into each
+other with the same interleaved-gradient noise: the card in its shader, the mesh in a copy of its
+material with the fade injected at run time (so `brick.gdshader` is not touched). Mid-band a tree is
+2% off its mesh-only picture, against 48% if the mesh faded with no card. In the shadow pass
+neither dithers; both cast, one shape.
 
 `ImpostorLod` draws many copies of one mesh in **two draw calls**: the real mesh instanced near, the
 card further, nothing past a cull range. It repacks only when something changes tier, and a hidden
@@ -431,6 +451,15 @@ seed, so every scene grows the same trees.
   at (no brick world to shoot them in), re-scattered half a second after the last edit. Not in the
   terrain bench. 6000 trees cap on the default world.
 
+**Areas.** An ImpostorLod keeps its copies in 128 m squares, each with its own pair of MultiMeshes
+and true bounds, so a square out of view or out of every shadow cascade is culled whole; a square
+wholly inside or outside a range is decided without a distance check per copy. That is what lets
+6000 trees stand in the heightfield scene.
+
+**On the coarse ring.** A city tree past the detail square stands on the ground the coarse tier
+DRAWS (`TerrainCoarse.height_at`, which mirrors `build_coarse`: a blocky cell flat at the lowest
+of its four corners, a smooth block bilinear through them), not on the field's own height.
+
 Gate: `city.tscn -- --terrain --trees` 8 ok — placed, drawn only by their sets, all four baked,
 collision in reach, a tree materialised whole stands, one shot through the trunk comes down.
 
@@ -439,10 +468,22 @@ collision in reach, a tree materialised whole stands, one shot through the trunk
 `ImpostorItems`, for the weapons and loot code: `kind(key, mesh, material)` once, then
 `add` / `move` / `remove` per item on the ground. Each kind is an ImpostorLod with small-item ranges
 (mesh inside 12 m, card to 150 m, culled past it), 64 px views, and cards that cast no shadow. A
-held item is not in it. Nothing in `weapons/` or `loot/` uses it yet; that is theirs to wire.
+held item is not in it.
 
-`tools/impostor_probe.gd`: 17 ok — trees build whole, bake, field of cards; 100 brick guns near,
-carded and culled, one moved close becomes a mesh, one removed is gone.
+`kind_from_node(key, node)` bakes an assembled thing with its own materials (colour lit by a flat
+white ambient; the normal pass is geometry, whatever it is dressed in). Its owner keeps drawing it
+up close; `tier_of` says when the card stands in, and a card only takes over once its bake has
+landed. 32 px views, about 0.7 MB a kind, because a rolled gun is unique and so is its bake.
+
+`WorldGunPickup` uses it **when the scene has an ImpostorItems** (in the `impostor_items` group):
+past 12 m the gun model hides and its card stands in; the rarity beam is untouched, since it is
+what reads at range. With no ImpostorItems in the scene nothing changes, which is every scene today;
+adding one to the loot range or the game is the weapons area's call.
+
+`tools/impostor_probe.gd`: 24 ok — trees build whole, bake, field of cards; 100 brick guns near,
+carded and culled, one moved close becomes a mesh, one removed is gone; the field kept in areas; a
+node kind that stays its owner's until baked, then a card in its own material's colour; the card
+standing where the mesh stands from three heights; a tree mid-band with no holes.
 
 ## 9. Deliberately not in the plan
 
@@ -462,13 +503,11 @@ carded and culled, one moved close becomes a mesh, one removed is gone.
 * Answered: the brick colour is the course table, the same for every recipe building (Stage 1);
   damage needed a texture, not floats (Stage 3); identical builds share a bake by recipe hash
   (Stage 4).
-* A card is drawn wherever a tree is, however many there are: 6000 in the heightfield scene is 6000
-  cards, two triangles each, plus the CPU pass that sorts them every tenth frame. Past a few
-  thousand, chunk the ImpostorLods by area so whole chunks can be culled.
-* The crossfade assumes Godot's visibility fade dithers with interleaved-gradient noise, measured
-  from the shell's bounds centre. It looks right; if an engine update changes either, the band shows
-  a speckle of both or neither.
-* Trees on the city's coarse ground ring can float or sink by a plate or two.
+* The crossfade rests on how Godot fades an instance (blended, over [end − margin, end + margin]
+  from its bounds centre). Guarded: the `--far` gate's no-holes check fails if that changes.
+* The heightfield scene's own coarse tier moves with the camera, so its trees stand on the field's
+  true height; past the detail square they can sit a little off its coarse ground. At the ranges
+  that happens they are cards.
 
 ---
 
@@ -477,3 +516,37 @@ carded and culled, one moved close becomes a mesh, one removed is gone.
 * [Imposter Syndrome — Blender Conference 2026](https://conference.blender.org/2026/presentations/4266/)
 * [Imposter Syndrome — BCON26 talk video](https://www.youtube.com/watch?v=qBPuZ-1StZc)
 * [Imposter Cards add-on thread — Blender Artists](https://blenderartists.org/t/imposter-cards/1639864)
+
+## ImpostorLod's sorting in C++ (2026-10-03)
+
+The per-copy half of `ImpostorLod` — transforms, wanted flags, tiers, squares, the distance sort and
+the MultiMesh buffer packing — moved to C++ (`ImpostorSet`, `gdextension/brick/src/impostor_set.cpp`).
+The script keeps the nodes, meshes, materials and the bake; its public API is unchanged, so the
+city, `ImpostorItems` and `TerrainTrees` did not change. Heightfield scene, 6,000 trees, a full
+update of every set while moving: 2.0 ms mean / 3.2 ms worst in GDScript, 0.21 / 0.37 ms now
+(other Godot runs alongside both), same near and far counts. `impostor_probe`: 25 ok before and
+after, identical tier counts.
+
+City gate, run as documented (`city.tscn -- --terrain --trees`): 8 ok with the C++ set. (An
+earlier note here said the gate failed; it had been run without `--terrain`, which plants no trees.)
+
+## Tree startup: the palette bake, not the trees (2026-10-05)
+
+The city took ~1 s to place 800 trees and the heightfield scene ~1.1 s for 6,000, and almost none
+of it was trees. `RecipeMesh` bakes the whole brick palette into a scratch world before meshing its
+first recipe, and 95% of a palette bake was `ShapedParts._mask` — every cell of every shaped part
+sampled with 6^3 point-in-prism tests in GDScript: 752 ms for the 17 shaped parts. It moved to
+C++ (`ShapedSampler.mask`, the same arithmetic in the same precision): 3.6 ms, masks identical for
+all 17 parts. `ShapedParts.build` is also memoised now (the city bakes two palettes, and
+`BrickPalette.mass_of_part` built the part on every call). The per-vertex merge in `RecipeMesh`
+moved to C++ too (`MeshMerge`), output identical, though it was not where the time went.
+
+City trees: 1,057 ms to ~180 ms. Heightfield trees: 1,100 ms to ~300 ms, and they are scattered
+once at startup instead of twice (the editor's first marker refresh rebuilt them).
+
+Checks: shaped 324, palette 1537, place 144, scale 26, city_place 25, workshop gate 17, hurricane
+20, city `--terrain --trees` 8, all passing. `impostor_probe` 25 ok in 8 of 10 runs; twice
+"a tree at the switch range ... has no holes" failed (1.00 and 0.64 vs 0.48), each half of this
+change alone passed, and the combined change then passed three in a row. `_grab` waits 4 frames;
+a first-use material may not have compiled by then under load (other Godot runs were going).
+Intermittent, unconfirmed: worth a longer wait in that check if it shows up again.

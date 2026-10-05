@@ -34,6 +34,7 @@ func _enter() -> void:
 	var alive := q.alive()
 	for i in alive.size():
 		var pair := i % 2
+		@warning_ignore("integer_division")
 		var rank := i / 2
 		var p := lkp + right * SPREAD * (1.0 if pair == 0 else -1.0) - dir * TRAIL * rank
 		var a := SquadMsg.Assignment.make(SquadMsg.Task.MOVE, s.ai_nav.snap(p))

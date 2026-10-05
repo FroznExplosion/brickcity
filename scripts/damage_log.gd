@@ -109,6 +109,9 @@ const FLAG_CHUNK := 16
 ## (BrickWorld.sever_seams) -- both sides stay whole -- not a band of loose
 ## brick. An earthquake's cut (Docs/Disasters.md 10).
 const FLAG_SEAM := 32
+## SHEAR: every block in the ball lets go on its own, rather than a clump peeled
+## off by its underside -- a floor a mech has come down on (Docs/AI.md 3.11).
+const FLAG_WHOLE := 64
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -207,13 +210,21 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 		Kind.SHEAR:
 			# peel, matching every site that records a SHEAR -- a replay that
 			# sheared differently would not reproduce the world.
-			return world.separate_near(chunk, e.point, e.radius, e.limit, true)
+			return world.separate_near(chunk, e.point, e.radius, e.limit,
+					not (e.flags & FLAG_WHOLE))
 		Kind.SEVER:
 			if e.flags & FLAG_SEAM:
 				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)
 		Kind.SOLVE:
-			world.solve_stress(chunk)
+			# As the host's solve went (BrickWorld.solve_structure): `limit` stress
+			# rounds, then what came loose held where its own studs hold it
+			# (Block::held). normal.x 1 says so; a log from before either is one
+			# stress solve.
+			if e.normal.x > 0.5:
+				world.solve_rounds(chunk, e.limit)
+			else:
+				world.solve_stress(chunk)
 			return PackedInt32Array()
 		Kind.CHIP:
 			return world.chip_hit(chunk, e.point, e.radius, e.limit)

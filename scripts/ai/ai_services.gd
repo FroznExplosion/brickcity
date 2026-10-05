@@ -53,7 +53,7 @@ var on_breach := Callable()
 ## Combat's seeded RNG (D9). Agents draw their own streams from it.
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
-var policy: CombatPolicy = CombatPolicy.create()
+var policy: CombatPolicy = CombatPolicy.from_args()
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []
@@ -71,6 +71,10 @@ const LONE_SQUAD := 1000000
 ## Lines that jump the queue.
 const URGENT_LINES := ["man_down", "stuck", "grenade"]
 var callouts := Callouts.new()
+## (shooter: Pawn, from: Vector3, to: Vector3, info: Dictionary) -> void, for
+## every round any armed pawn fires: what is not a physics body and still stops
+## rounds -- the swarm's rows (SwarmSide) -- hears it here.
+var round_listeners: Array[Callable] = []
 ## Every flash: [point, radius, time], for gates.
 var flashes: Array = []
 var _knowledge := {}
@@ -85,6 +89,41 @@ var _last_aggro := -1.0
 ## a run is the same run however fast the machine is.
 func now() -> float:
 	return float(Engine.get_physics_frames()) / float(Engine.physics_ticks_per_second)
+
+
+## Flow fields (Docs/AI.md 4.3): one per goal, shared by every agent closing on
+## it. Keyed by the goal to FIELD_SNAP metres, so everybody after the same
+## contact reads the same field; one nobody has read for FIELD_IDLE seconds goes.
+const FIELD_SNAP := 3.0
+const FIELD_RADIUS := 45.0
+const FIELD_IDLE := 15.0
+var _fields := {}   # Vector3i -> [field id, last read]
+var fields_built := 0
+
+
+## Which way to walk from `from` toward `goal`, on the shared field. Zero until
+## the field is worked out (a few ticks), or outside it.
+func field_dir(goal: Vector3, from: Vector3) -> Vector3:
+	var key := Vector3i((goal / FIELD_SNAP).round())
+	var t := now()
+	var f: Array = _fields.get(key, [])
+	if f.is_empty():
+		f = [ai_nav.request_field(Vector3(key) * FIELD_SNAP, FIELD_RADIUS, 3.0), t]
+		_fields[key] = f
+		fields_built += 1
+	f[1] = t
+	return ai_nav.field_dir(int(f[0]), from)
+
+
+func _drop_idle_fields(t: float) -> void:
+	for key in _fields.keys():
+		if t - float(_fields[key][1]) > FIELD_IDLE:
+			ai_nav.release_field(int(_fields[key][0]))
+			_fields.erase(key)
+
+
+func field_count() -> int:
+	return _fields.size()
 
 
 func knowledge_of(team: int) -> FactionKnowledge:
@@ -103,10 +142,15 @@ func aggro_of(team: int) -> AggroTable:
 	return _aggro[team]
 
 
+## Wildlife is on no side (a negative team): nobody's enemy, and it has none --
+## it runs from noise (AnimalPack) rather than fighting.
 func hostiles_of(team: int) -> Array[Pawn]:
 	var out: Array[Pawn] = []
+	if team < 0:
+		return out
 	for p in pawns:
-		if is_instance_valid(p) and p.team != team and p.health != null and not p.health.is_dead():
+		if is_instance_valid(p) and p.team != team and p.team >= 0 and p.health != null \
+				and not p.health.is_dead():
 			out.append(p)
 	return out
 
@@ -129,6 +173,8 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 func log_decision(who: Node, obs: PackedFloat32Array, tactic: int) -> Dictionary:
 	var d := {"t": now(), "who": who.get_instance_id(), "obs": obs,
 			"tactic": tactic, "policy": policy.policy_name()}
+	if who is Soldier and not (who as Soldier).book.is_empty():
+		d["book"] = (who as Soldier).book.duplicate(true)
 	decisions.append(d)
 	if decisions.size() > DECISIONS_KEPT:
 		decisions = decisions.slice(decisions.size() - DECISIONS_KEPT)
@@ -184,6 +230,8 @@ func _on_fired(info: Dictionary, shooter: Pawn) -> void:
 	var from := aim.global_position
 	var to: Vector3 = info.point if info.has("point") else from - aim.global_transform.basis.z * 400.0
 	noise(from, 40.0, shooter)
+	for cb in round_listeners:
+		cb.call(shooter, from, to, info)
 	var victim: Pawn = null
 	if info.get("collider") is Node:
 		victim = (info.collider as Node).get_node_or_null(^"Pawn") as Pawn
@@ -244,6 +292,8 @@ func tokens_on(target: Pawn) -> int:
 
 func tick() -> void:
 	var t := now()
+	if Engine.get_physics_frames() % 30 == 0:
+		_drop_idle_fields(t)
 	if t >= _next_aggro:
 		_next_aggro = t + 1.0 / AGGRO_HZ
 		var dt := t - _last_aggro if _last_aggro >= 0.0 else 1.0 / AGGRO_HZ

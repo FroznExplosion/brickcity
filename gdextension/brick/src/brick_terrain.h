@@ -264,6 +264,10 @@ struct TileSample {
     /// A painted COLOUR (filament index) for the column, 255 = its
     /// material's own. Pieces are cut where it changes, like material.
     std::vector<uint8_t> col;
+    /// SLOPE COLUMNS (19.24), a pure function of the field so neighbouring
+    /// tiles agree: the fall side (255 = none), the profile length, this
+    /// column's distance from the front, and the fall in plates.
+    std::vector<uint8_t> sl_r, sl_len, sl_d, sl_fall;
     std::vector<uint8_t> plate;
     std::vector<uint8_t> ramp;   ///< 255 = not a ramp, else 0=-X 1=+X 2=-Z 3=+Z
     /// This column is drawn as a CURVED surface rather than packed into
@@ -322,6 +326,11 @@ enum PieceKind {
     PIECE_BRICK = 0,  ///< flat plate, studs up
     PIECE_TILE = 1,   ///< flat, smooth top, NO studs -- a terrace edge or lip
     PIECE_RAMP = 2,   ///< 1x1, top tilted one brick toward a lower neighbour
+    /// A SLOPE along a terrace edge (Terrain.md 19.22): W studs along the
+    /// contour, L (2..4) studs down the fall. L 2 is a 1x2 slope (flat back,
+    /// straight face, a plate lip); L 3 and 4 are curved slopes. A one-plate
+    /// fall makes the cheese version, with no lip. `ramp` is the fall side.
+    PIECE_SLOPE = 3,
 };
 
 /// Ints per piece in `pack_tile`'s flat return: ox, oz, sx, sz, height,
@@ -338,7 +347,10 @@ struct Piece {
     uint8_t mat;
     uint8_t studded;
     uint8_t kind;   ///< PieceKind
-    uint8_t ramp;   ///< 255 unless kind == PIECE_RAMP; else 0=-X 1=+X 2=-Z 3=+Z
+    uint8_t ramp;   ///< 255 unless kind == PIECE_RAMP/SLOPE; else 0=-X 1=+X 2=-Z 3=+Z
+    uint8_t slope_len = 0;   ///< PIECE_SLOPE: studs down the fall (2..4)
+    uint8_t fall = 0;        ///< PIECE_SLOPE: plates to the lower neighbour
+    uint8_t slope_s0 = 0;    ///< PIECE_SLOPE: profile station at the piece's back edge
     /// A second course laid ON this piece: 0 none, 1 a smooth tile, 2 a
     /// studded plate. When set, the piece's own top face is NOT drawn -- the
     /// overlay covers it exactly, so the quad underneath is culled the same
@@ -426,6 +438,19 @@ public:
     static int height_at(int x, int z);
     static int solid_at(int x, int yp, int z);
     static int surface_plate(int x, int z);
+    /// The top plate of the field AS GENERATED: noise and pads, no sculpt.
+    /// The sea is measured on this, so a hole dug in the beach is not ocean
+    /// and has to fill by flowing (Water.md 12).
+    static int generated_plate(int x, int z);
+    /// The floor water rests on, per column of a tile, in metres: the top,
+    /// or the middle of a slope's face (column_surface), so a slope holds
+    /// water. TILE x TILE, row-major (z then x).
+    static PackedFloat32Array water_floor_tile(int tx, int tz);
+    /// Where a ray first meets the heightfield's column tops, within
+    /// `max_metres`: {"position": Vector3} on the top of the column hit, or
+    /// {} for a miss. Half-metre march, then bisection. (The editor's brush
+    /// aimed with this in GDScript every frame: up to 800 field reads.)
+    static Dictionary ray_ground(const Vector3 &from, const Vector3 &dir, double max_metres);
 
     /// Remove every solid plate cell within `radius_m` of a world point.
     ///
@@ -654,6 +679,10 @@ public:
     ///
     /// Returns: mesh (ARRAY_MAX arrays), triangle_count, build_ms.
     static Dictionary build_coarse(int tx0, int tz0, int span, int step);
+    /// Slope and curved-slope pieces along terrace edges (19.22). On by
+    /// default; off draws every edge as a flat brick, as before.
+    static void set_slope_pieces(bool on);
+    static bool get_slope_pieces();
     /// Coarse blocks sampled this coarsely or more are built SMOOTH: one
     /// vertex a sample, no flat tops and walls (Terrain.md §19.14). At that
     /// distance a brick course is under a pixel, so the steps are paid for
@@ -756,6 +785,9 @@ public:
     /// interleaved (ground, distance) row by row -- the texture's own layout,
     /// so the water uploads it as it is.
     static PackedFloat32Array build_shore_field(int half_studs, int step);
+    /// After build_shore_field: the cells, `cell_studs` a side, holding any
+    /// field sample under the sea, as Vector2i (water_sea.gd's WET map).
+    static Array wet_cells(int cell_studs);
     /// Metres from a point to the nearest dry ground, bilinear over that
     /// field; very large where no field has been built.
     static double shore_distance(double x, double z);

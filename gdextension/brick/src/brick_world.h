@@ -305,6 +305,15 @@ public:
     /// Vertices are local to the chunk origin. Interior faces are culled.
     Array build_chunk_mesh(int chunk_id);
 
+    /// A far piece's stand-in (IslandManager's coarse tier): the live bricks'
+    /// outer surface, merged ACROSS bricks wherever the colour agrees, with a
+    /// brick-sized UV2 so the seam shader still draws brick outlines. The same
+    /// arrays as build_chunk_mesh, local to the chunk origin; needs no bake and
+    /// makes none. Empty when nothing is alive.
+    Array build_chunk_coarse_mesh(int chunk_id);
+    /// How long the last build_chunk_coarse_mesh took, in ms.
+    double get_last_coarse_ms() const { return last_coarse_ms; }
+
     /// Stats from the last build_chunk_mesh call on this chunk.
     Dictionary get_mesh_stats(int chunk_id) const;
 
@@ -387,6 +396,42 @@ public:
     /// horizontal axis.
     Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
 
+    /// Gravity alone, storey by storey (Docs/Collapse.md, "per-floor"). The
+    /// stress solve fails only joints in tension, and the stability test asks
+    /// only whether the whole building stands on its foundation -- so a top
+    /// resting on one corner of a storey could neither tip off it nor crush
+    /// it: six bricks held up nine hundred. Pure query, like lateral_check.
+    ///
+    /// At every course boundary above the foundation, of what is grounded:
+    ///   TIP    the weight above, at its centre of mass, outside the extent
+    ///          of the contact at the boundary on some side: it overturns
+    ///          about that edge unless the studs behind it, each holding
+    ///          tension_per_stud at its own lever, hold it back.
+    ///   CRUSH  the weight above against the contact at the boundary, each
+    ///          stud bearing `crush_per_stud` times tension_per_stud.
+    /// Returns {ratio, kind ("tip" or "crush"), level, level_cell, mass_above,
+    /// boundaries} for the worst boundary; ratio >= 1 fails there.
+    Dictionary gravity_check(int chunk_id, float crush_per_stud);
+
+    // --- snow cover (Docs/Disasters.md 21) ----------------------------------
+
+    /// Snow on a chunk: smooth tiles, `thickness` metres thick, on every top
+    /// a living block shows to the SKY -- each column scanned from the top
+    /// down to its first living, structural, attached block. A floor under a
+    /// roof gets none; a roof blown away lets it onto the floor below.
+    /// Equal neighbouring tops are merged into rectangles, each a low box
+    /// (top and four sides, no bottom). Mesh arrays in chunk-local metres;
+    /// COLOR.r is 1 on the top of the snow and 0 at its foot, so a shader can
+    /// grow it from nothing. Empty Array when there is no exposed top.
+    Array build_snow_cover(int chunk_id, float thickness);
+    /// The same from a grid of tops: `tops` is w x d plate heights (the top of
+    /// the ground in plates, row-major x fastest), any value below -1000000
+    /// for "no snow here". `cell` is the cell's metres across, `plate` a
+    /// plate's height, and the grid's corner is at `origin` (world XZ).
+    /// Vertices in world metres. For the terrain.
+    static Array build_snow_cover_tops(const PackedInt32Array &tops, int w, int d, float cell,
+            float plate, float thickness, Vector2 origin);
+
     /// What one cell of stud contact can carry IN TENSION, in the same mass
     /// units archetypes use. This is a real quantity, not a tuning knob: a
     /// brick connection releases at 3-5 N, a brick weighs about 2.5 g, so a
@@ -420,6 +465,8 @@ public:
     /// joint a landing had severed was whole again when the piece woke.
     static constexpr int JOINT_SUPPORT_BROKEN = 1;
     static constexpr int JOINT_BOTTOM_BROKEN = 2;
+    static constexpr int JOINT_STRAINED = 4;    ///< Block::strained
+    static constexpr int JOINT_HELD = 8;        ///< Block::held
     int get_block_joints(int chunk_id, int block_id) const;
     /// Restore a block's severed joints. Only ever sets what a record captured;
     /// it is not a way to break or mend structure by hand.
@@ -445,6 +492,16 @@ public:
     void clear_load(int chunk_id, int owner);
     /// The external weight on one block, all owners together. For probes.
     float get_external_load(int chunk_id, int block_id) const;
+
+    /// How much more mass (archetype units) could rest on a block before a
+    /// joint on its way to the ground fails, from the last solve_stress
+    /// (Docs/AI.md 3.10, AIPlan R6/R7). INF where every way down is
+    /// compression -- almost every block of a standing building. Worst case
+    /// by design: the whole added mass is taken to reach every joint below,
+    /// where the solve would share it, so a mistake costs a needless solve
+    /// and never a missed break. -1 when the chunk has not been solved since
+    /// the block existed: ask for a solve.
+    float get_headroom(int chunk_id, int block_id) const;
     PackedInt32Array get_load_owners(int chunk_id) const;
     float get_block_capacity(int chunk_id, int block_id) const;
     bool is_support_broken(int chunk_id, int block_id) const;
@@ -473,12 +530,38 @@ public:
     /// nothing changes nothing any of them can see: so the stability test and
     /// the detach reuse the walk the stress solve already made. A stress solve
     /// that did break a joint gets a fresh walk, as it always did.
-    Dictionary solve_structure(int chunk_id);
+    ///
+    /// A CASCADE: a stress solve that fails joints moves the load they carried
+    /// onto others, and the next solve fails those -- one generation a solve,
+    /// and the city solves a building once a tick, so the top of a tower whose
+    /// storey was blown out hung for thirty ticks while its last walls gave
+    /// way one generation at a time. Up to `max_rounds` stress solves are run
+    /// here, each on what the last left, until one fails nothing or
+    /// `budget_ms` has gone (0: no clock). stress.rounds is how many of them
+    /// failed something, which is what a SOLVE command must replay to land in
+    /// the same place (DamageLog); stress.failures and stress.separated are
+    /// all of theirs.
+    Dictionary solve_structure(int chunk_id, int max_rounds = 1, double budget_ms = 0.0);
     /// solve_structure for several chunks at once, one thread each (up to
     /// SOLVE_SLOTS), results in the order given. The chunks must be different:
     /// each solve reads and writes its own chunk only, so the answers are
     /// exactly what calling solve_structure on each in turn gives.
-    Array solve_structures(const PackedInt32Array &chunk_ids);
+    Array solve_structures(const PackedInt32Array &chunk_ids, int max_rounds = 1,
+            double budget_ms = 0.0);
+    /// What a SOLVE command replays: `rounds` stress solves, then the groups
+    /// that came loose held where their own studs hold them
+    /// (reattach_held_groups) -- exactly what solve_structure did to the
+    /// chunk. {failures, reattached}.
+    Dictionary solve_rounds(int chunk_id, int rounds);
+    /// The groups that came loose (detached_groups_of, against `grounded`) of
+    /// REATTACH_MAX_BLOCKS or fewer, every broken brick in them strained and
+    /// none held before, whose own weight the studs joining them to grounded
+    /// bricks hold: made held (Block::held). How many groups.
+    int reattach_held_groups(int chunk_id, const Array &groups, const uint8_t *grounded);
+    /// Crumb-sized (IslandManager.DEBRIS_MAX_BLOCKS): the single bricks and
+    /// handfuls that sprayed off a break. It was 48, and wall chunks of that
+    /// size hung on a few studs where they should have fallen (--ghost).
+    static constexpr int REATTACH_MAX_BLOCKS = 8;
 
     // --- templates ---------------------------------------------------------
 
@@ -666,6 +749,31 @@ public:
     /// keep a block -> shape-indices map. That is the price of odd shapes and
     /// it is worth paying here rather than discovering it later.
     Array get_block_boxes(int chunk_id) const;
+
+    /// Where a piece lying at `piece_xform` rests on `building_chunk`: for each
+    /// live box of the piece, as get_block_boxes lists them and in that order,
+    /// the point just under its lowest extent in the world -- and the building's
+    /// cell there, if that cell is solid and holds a brick. Each cell once, in
+    /// the order first found, as x, y, z triples. CityScene._wreck_settled's
+    /// walk: in script it was a Dictionary a brick and 12-31 ms for a piece of
+    /// 4,000-8,000 bricks coming to rest.
+    PackedInt32Array rest_contacts(int piece_chunk, const Transform3D &piece_xform,
+            int building_chunk) const;
+
+    /// Is the centre of any live box of this chunk -- as get_block_boxes lists
+    /// them: a whole block's, or each cell of a shaped one -- inside `box`,
+    /// leaving out the blocks in `exclude`? CityScene._with_stairs asks it of a
+    /// stairwell: walked in script over get_block_boxes it was a Dictionary a
+    /// brick, 60-70 ms for a 22,000-brick tower, in the tick a section fell.
+    bool any_block_centre_in(int chunk_id, const AABB &box, const PackedInt32Array &exclude) const;
+
+    /// any_block_centre_in for a stack of levels at once: `box` cut into slices
+    /// `level_height` tall from its bottom, and a byte per slice, 1 where the
+    /// centre of a live box (as get_block_boxes lists them) not in `exclude`
+    /// lies in it. One walk of the chunk -- CityScene._sweep_stairs asks it of
+    /// every storey round a stairwell at once.
+    PackedByteArray block_centre_levels(int chunk_id, const AABB &box, float level_height,
+            const PackedInt32Array &exclude) const;
 
     /// Same list, offset so the centre of mass is at the origin -- what a
     /// rigid body wants. Returns {boxes, com, mass}.
@@ -907,6 +1015,11 @@ private:
         // piece's id) -> (block, units) pairs. Every solve adds it to the blocks'
         // own weight. Ordered, so two machines sum in the same order.
         std::map<int32_t, std::vector<std::pair<int32_t, int64_t>>> loads;
+        // Per block, from the last solve: how much more mass could rest on it
+        // before a tension joint on its way to the ground lets go. INT64_MAX
+        // for a block whose every way down is compression (Docs/AI.md 3.10).
+        // Empty until the chunk has been solved.
+        std::vector<int64_t> headroom;
     };
     std::vector<StressState> stress;
 
@@ -949,6 +1062,14 @@ private:
     };
     std::vector<ChunkTemplate> templates;
     const brick::JointCache &joints_of(int chunk_id);
+    /// One block's runs, in the order joints_of lays them: up, then down.
+    void block_runs(const brick::Chunk &c, int32_t bid, std::vector<brick::JointRun> &out) const;
+    /// Keep a built cache true after `bid` was placed or removed: its runs and
+    /// those of `touching` (what is directly above and below its cells) redone.
+    void joints_changed(int chunk_id, int32_t bid, const std::vector<int32_t> &touching,
+            bool placed);
+    /// What is directly above and below `bid`'s solid cells, itself excluded.
+    void blocks_touching(const brick::Chunk &c, int32_t bid, std::vector<int32_t> &out) const;
 
     // check_stability and find_detached_groups on the grounding already in
     // scratch_depth, without walking it again. See solve_structure.
@@ -998,6 +1119,7 @@ private:
     RID hull_shape_for(int archetype_id, int hull);
     void free_hull_shapes(int archetype_id);
     RID box_shape_for(const Vector3 &size);
+    double last_coarse_ms = 0.0;
     Dictionary add_merged_shapes(RID body, int chunk_id, Vector3 offset, int section = -1,
             bool skip_decorative = false);
     /// The merge itself, over the blocks given (alive ones): as few boxes as

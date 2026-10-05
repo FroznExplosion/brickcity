@@ -46,7 +46,16 @@ const CHUNKS_FAR := 3
 ## made one small chunk a tick for as long as it ran: 331 of them in one pass.
 ## Held, it comes down in a few big ones, and the moment before it does is the
 ## groan Red Faction put there on purpose.
+##
+## Where somebody is close enough to be watching (NEAR_RANGE), though, only
+## while there is less than a chunk's worth (_chunk_target) -- a chunk is what
+## holding is waiting for, and one that is there already goes at once -- and
+## for HOLD_NEAR_MS at most: held a second and a half, a break next to the
+## player read as the game hanging, the bricks shot out and nothing falling.
+## Far off nobody sees the wait, and letting part of a growing cascade go early
+## only makes more pieces of it (collapse_probe's far check: 9 against 4).
 const HOLD_MS := 1500
+const HOLD_NEAR_MS := 500
 const STALL_ROUNDS := 2
 
 var world: BrickWorld
@@ -66,6 +75,7 @@ var collapsing := {}
 var _held_since := {}
 var _held_bricks := {}
 var _stalled := {}
+var _stall_tick := {}   ## building id -> the tick _stalled last counted
 var held_rounds := 0
 
 
@@ -104,8 +114,12 @@ static func is_mega(blocks: int) -> bool:
 ## building's size, `box` its world box, `points` where the players are.
 ## Returns [ids, kind] pairs, kind one of &"breakage", &"group", &"chunk",
 ## &"furniture" -- in a fixed order, since the host records each as it spawns.
+## `storey_plates`: a recipe tower's storey height (TowerRecipe.STOREY_PLATES),
+## so a mega collapse's chunks end where a storey does; 0 for anything else.
+## `failing`: the solve that found these groups was still failing joints -- the
+## cascade is running, whatever the brick count says (STALL_ROUNDS).
 func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
-		points: PackedVector3Array) -> Array:
+		points: PackedVector3Array, storey_plates := 0, failing := false) -> Array:
 	var out: Array = []
 	var collapse: Array = []
 	for g in groups:
@@ -123,9 +137,20 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	# closely enough to miss the small pieces, and every one of them was a
 	# body stepped, meshed and slept.
 	if not is_mega(blocks) and not is_far(box, points):
+		# The biggest first: what has given way is let go a few groups a tick
+		# (CityScene.SPAWN_BUDGET_MS), and the one that has to go at once is the
+		# building's body -- left for last, it hung in the air while the
+		# small stuff went (--breaklag). Ties by first block, so the order is
+		# the same on every run: the host records each one as it goes.
+		collapse.sort_custom(func(a: PackedInt32Array, c: PackedInt32Array) -> bool:
+				if a.size() != c.size():
+					return a.size() > c.size()
+				return a[0] < c[0])
+		var groups_first: Array = []
 		for ids in collapse:
-			out.append([ids, &"group"])
-		return out
+			groups_first.append([ids, &"group"])
+		groups_first.append_array(out)
+		return groups_first
 	if not is_mega(blocks):
 		far_collapses += 1
 
@@ -138,17 +163,31 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 		_held_since[id] = now
 		_held_bricks[id] = 0
 		_stalled[id] = 0
-	if bricks > int(_held_bricks[id]):
+	# Growing, or still failing joints: a cascade on a clock (CityScene.
+	# CASCADE_BUDGET_MS) can spend a solve failing joints before anything new
+	# comes loose, and that read as stalled -- a far collapse let go early and
+	# the rest came after it in more rounds (collapse_probe: 4 pieces far, 3
+	# near).
+	if bricks > int(_held_bricks[id]) or failing:
 		_stalled[id] = 0
-	else:
+	elif Engine.get_physics_frames() != int(_stall_tick.get(id, -1)):
+		# Once a TICK, not once a solve: a building is solved again in the tick
+		# it was re-marked in, and three solves in one tick read as two stalled
+		# rounds -- a far collapse let go 25 ms after it started, and what came
+		# loose after came down as pieces of its own.
 		_stalled[id] = int(_stalled[id]) + 1
+	_stall_tick[id] = Engine.get_physics_frames()
 	_held_bricks[id] = bricks
-	if int(_stalled[id]) < STALL_ROUNDS and now - int(_held_since[id]) < HOLD_MS:
+	var watched := _nearest(box, points) < NEAR_RANGE
+	var ready := watched and bricks >= _chunk_target(box, points, bricks)
+	var hold_ms := HOLD_NEAR_MS if watched else HOLD_MS
+	if not ready and int(_stalled[id]) < STALL_ROUNDS and now - int(_held_since[id]) < hold_ms:
 		held_rounds += 1
 		return out
 	_held_since.erase(id)
 	_held_bricks.erase(id)
 	_stalled.erase(id)
+	_stall_tick.erase(id)
 
 	rounds += 1
 	groups_in += collapse.size()
@@ -179,14 +218,33 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 				return int(a[0]) < int(c[0])
 			return int(a[1]) < int(c[1]))
 	var target := _chunk_target(box, points, total)
+	# The chunks go BEFORE the breakage, as an ordinary building's body does
+	# (above): a blown storey under a tower left a hundred little groups by the
+	# shots, the spawns are two a tick, and the 14,000-brick top waited behind
+	# all of them -- 25 ticks after its cascade was over (--breaklag --big).
+	var breakage := out
+	out = []
 	var current := PackedInt32Array()
-	for entry in ordered:
+	# A chunk is closed between storeys, not inside one: once it has its
+	# target, the groups still starting on the storey it reached go with it,
+	# so what falls is whole floors (Docs/Status.md, "floor units").
+	var per_tick := BrickWorld.ticks_per_plate() * maxi(storey_plates, 1)
+	for k in ordered.size():
+		var entry: Array = ordered[k]
 		var structure: PackedInt32Array = entry[2]
 		current.append_array(structure)
-		if current.size() >= target:
-			out.append([current, &"chunk"])
-			chunks_out += 1
-			current = PackedInt32Array()
+		if current.size() < target:
+			continue
+		if storey_plates > 0 and k + 1 < ordered.size():
+			@warning_ignore("integer_division")
+			var here := int(entry[0]) / per_tick
+			@warning_ignore("integer_division")
+			var next := int(ordered[k + 1][0]) / per_tick
+			if next == here:
+				continue
+		out.append([current, &"chunk"])
+		chunks_out += 1
+		current = PackedInt32Array()
 	if not current.is_empty():
 		# The last, short chunk joins the one below it rather than being a
 		# small piece on its own -- unless it is the only one.
@@ -202,6 +260,7 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 		else:
 			out.append([current, &"chunk"])
 			chunks_out += 1
+	out.append_array(breakage)
 	# split_island and the DETACH both want the ids in order. (A packed array in
 	# an Array is a copy when read out: sort it and put it back.)
 	for entry in out:
@@ -218,11 +277,17 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	return out
 
 
-## Bricks per chunk for a building this far from everybody.
-func _chunk_target(box: AABB, points: PackedVector3Array, total: int) -> int:
+## How far the nearest player is from this box. INF with nobody.
+func _nearest(box: AABB, points: PackedVector3Array) -> float:
 	var d := INF
 	for p in points:
 		d = minf(d, _distance_to_box(box, p))
+	return d
+
+
+## Bricks per chunk for a building this far from everybody.
+func _chunk_target(box: AABB, points: PackedVector3Array, total: int) -> int:
+	var d := _nearest(box, points)
 	if points.is_empty() or d < NEAR_RANGE:
 		return CHUNK_NEAR
 	if d < FAR_RANGE:

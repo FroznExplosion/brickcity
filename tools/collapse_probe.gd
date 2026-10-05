@@ -15,6 +15,18 @@ extends SceneTree
 ##        building; some long built -- and no tick where a piece that left
 ##        draws nothing while its building has stopped (gap), nor where it
 ##        draws and its building still draws the same bricks (double).
+## farcut (3) the same for a building first hit from past SHELL_RANGE, where
+##        it has no shell: nothing leaves it while its bands are still being
+##        built from the bricks before the cut (a standing copy of the section
+##        that fell), and something draws it all that time; and one given
+##        back mid-bands is drawn as it is now, not as before the shot.
+## storeys what is left of a storey carries what is above it, or does not:
+##        one corner left, the top tips off; one column left, it is crushed;
+##        and no undamaged building is near either.
+## shellhit (CollapseNext 1.1) a damaged shell is solid where it is drawn and
+##        nowhere else: no invisible walls where storeys have gone.
+## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
+##        drawn furniture it lands on, rather than standing in it.
 
 var _pass := 0
 var _fail := 0
@@ -90,6 +102,15 @@ func _run() -> void:
 		await _check_fall()
 	if _only("trapped"):
 		await _check_trapped()
+	# Last, so the sections before them pick the buildings they always have.
+	if _only("farcut"):
+		await _check_farcut()
+	if _only("crushdrawn"):
+		await _check_crushdrawn()
+	if _only("shellhit"):
+		await _check_shellhit()
+	if _only("storeys"):
+		await _check_storeys()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -123,16 +144,23 @@ func _check_crush() -> void:
 
 	var so := _soldier_at(open)
 	await _ticks(20)
+	# Held still, as the big one's is below: nine bricks and up is a piece the
+	# soldier sees coming and steps out from under (danger.gd), and what this
+	# asks is what it does to one that does not.
+	so.brain.active = false
 	so.stop()
 	var hp0: float = so.pawn.health.total_current()
 	var f := so.pawn.feet()
 	# Watched: a small piece nobody can see is deleted where it would spawn.
+	# Four courses, not two: two was eight bricks, and a piece that size is
+	# crumbs now (IslandManager._crumble), not a body that can fall on anyone.
 	city.camera.look_at_from_position(f + Vector3(10.0, 6.0, 10.0), f)
-	var piece := _drop(f + Vector3(-0.7, 5.0, -0.7), 4, 4, 2)
+	var piece := _drop(f + Vector3(-0.7, 5.0, -0.7), 4, 4, 4)
 	await _ticks(60)
 	var hp1: float = so.pawn.health.total_current()
 	_ok("a small piece dropped on a soldier hurts it", hp1 < hp0 and not so.pawn.health.is_dead(),
-			"%.0f -> %.0f hp" % [hp0, hp1])
+			"%.0f -> %.0f hp, %d bricks" % [hp0, hp1,
+				city.world.get_alive_block_count(piece.chunk) if piece != null and piece.is_valid() else -1])
 
 	var big := _soldier_at(open + Vector3(30.0, 0.0, 0.0), -1.0)
 	await _ticks(20)
@@ -401,6 +429,250 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
 
 
+## Storey by storey (CityScene._gravity_fail): what is left of a storey has to
+## carry what is above it. The second storey of a tower is shot away but for
+## `keep` (a box in the world); returns how many bricks are still above it
+## after, and the gravity failures it caused.
+func _storey_left(id: int, keep: Array) -> Dictionary:
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	city.camera.look_at_from_position(box.get_center() + Vector3(-40.0, 15.0, -40.0), box.get_center())
+	var chunk: int = city._promote(id)
+	var w := 0
+	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+		await physics_frame
+		w += 1
+	var y := box.position.y + (1 + TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
+	var f0: Dictionary = city.gravity_fails.duplicate()
+	for pass_i in 2:
+		var x := box.position.x + 0.6
+		while x < box.end.x:
+			var z := box.position.z + 0.6
+			while z < box.end.z:
+				var kept := false
+				for k in keep:
+					var kb: AABB = k
+					if kb.has_point(Vector3(x, kb.get_center().y, z)):
+						kept = true
+				if not kept:
+					city._blast(Vector3(x, y, z), 1.3)
+				z += 1.5
+			x += 1.5
+		await _ticks(30 * 2)
+	await _ticks(30 * 3)
+	var above := 0
+	if b.is_materialised():
+		var xf: Transform3D = city.world.get_chunk_transform(chunk)
+		for bx in city.world.get_block_boxes(chunk):
+			var d: Dictionary = bx
+			if bool(d.alive) and (xf * (d.pos as Vector3)).y > y + 1.5:
+				above += 1
+	return {"id": id, "left": city.world.get_alive_block_count(chunk) if b.is_materialised() else -1,
+			"toppled": b.toppled, "above": above, "tip": int(city.gravity_fails.tip) - int(f0.tip),
+			"crush": int(city.gravity_fails.crush) - int(f0.crush)}
+
+
+func _check_storeys() -> void:
+	print("storeys: what is left of a storey has to carry what is above it")
+	var worst := 0.0
+	for ob in city.registry.buildings:
+		if ob.is_build() or ob.toppled or ob.is_damaged():
+			continue
+		var r: Dictionary = city.world.gravity_check(city._promote(ob.id), city.CRUSH_PER_STUD)
+		worst = maxf(worst, float(r.ratio))
+	_ok("no undamaged building is near failing a storey", worst < 0.8, "worst %.2f of what it can" % worst)
+	# Two thin corners, diagonally: balanced, so it cannot tip -- and far too
+	# little to carry five storeys.
+	var id := _tower(5)
+	var box := _box(id)
+	var thin := 1.4
+	var r2 := await _storey_left(id, [
+			AABB(Vector3(box.end.x - thin, box.position.y, box.end.z - thin), Vector3(thin, box.size.y, thin)),
+			AABB(Vector3(box.position.x, box.position.y, box.position.z), Vector3(thin, box.size.y, thin))])
+	_ok("two thin corners left: the storey check brings it down", int(r2.above) == 0
+			and int(r2.crush) + int(r2.tip) > 0, str(r2))
+	# Crushed: an intact tower made weak enough that its ground storey cannot
+	# carry the rest. It comes down a storey and nothing is left standing on air.
+	id = _tower(4)
+	var cb = city.registry.get_building(id)
+	var cchunk: int = city._promote(id)
+	await _ticks(30 * 3)
+	var cbox := _box(id)
+	var alive0: int = city.world.get_alive_block_count(cchunk)
+	var crushed0: int = int(city.gravity_fails.crush)
+	city.crush_per_stud = 0.5
+	city._mark_dirty(id)
+	await _ticks(30 * 5)
+	city.crush_per_stud = city.CRUSH_PER_STUD
+	var left: int = city.world.get_alive_block_count(cchunk) if cb.is_materialised() else 0
+	_ok("a storey that cannot carry what is above it is crushed, and it comes down",
+			int(city.gravity_fails.crush) > crushed0 and left < alive0 / 2,
+			"%d crush(es), %d of %d bricks left standing" % [int(city.gravity_fails.crush) - crushed0,
+			left, alive0])
+	# One corner: what is above is off its edge.
+	id = _tower(5)
+	box = _box(id)
+	var r1 := await _storey_left(id, [AABB(Vector3(box.end.x - 2.6, box.position.y, box.end.z - 2.6),
+			Vector3(2.6, box.size.y, 2.6))])
+	_ok("one corner left: what is above tips off it", int(r1.above) == 0 and int(r1.tip) > 0, str(r1))
+
+
+## Docs/CollapseNext.md 1.1: a building handed back with its top gone is solid
+## where its shell is drawn and nowhere else -- not four full-height walls
+## that wreckage comes to rest on in mid-air.
+func _check_shellhit() -> void:
+	print("shellhit: a damaged shell's collision follows its damage")
+	var id := _tower(6)
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	var c := box.get_center()
+	# Off to one side and looking away: aim promotion would make it bricks.
+	city.camera.global_position = c + Vector3(-60.0, 20.0, 0.0)
+	city.camera.look_at(c + Vector3(-120.0, 20.0, 0.0))
+	# The top three storeys cut off, and given time to go.
+	var storeys := int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+	var alive0: int = city.world.get_alive_block_count(city._promote(id))
+	var cut_y := _sever(id, storeys - 3)
+	await _ticks(30 * 6)
+	await _drain()
+	print("  --   %d storeys, alive %d -> %d, toppled %s" % [storeys, alive0,
+			city.world.get_alive_block_count(b.chunk), b.toppled])
+	city._demote(id, 60.0)
+	await _ticks(30 * 2)
+	_ok("it is a shell with a body again", not b.is_materialised() and city._shell_bodies.has(id)
+			and not b.damage_profile.is_empty(),
+			"bricks %s, body %s, %d damaged band(s)" % [b.is_materialised(),
+			city._shell_bodies.has(id), b.damage_profile.size()])
+	# Straight down onto the middle of its front wall.
+	var top := box.end.y
+	var front: Vector3 = b.xform * Vector3(float(b.recipe.footprint_x) * BrickPalette.STUD_M * 0.5,
+			0.0, TowerRecipe.WALL_THICK * BrickPalette.STUD_M * 0.5)
+	var q := PhysicsRayQueryParameters3D.create(Vector3(front.x, top + 10.0, front.z),
+			Vector3(front.x, box.position.y - 1.0, front.z), Layers.STRUCTURE)
+	var hit := city.get_world_3d().direct_space_state.intersect_ray(q)
+	var at: float = (hit.position as Vector3).y if not hit.is_empty() else -INF
+	_ok("something dropped on it stops where it was cut, not at its old roofline",
+			not hit.is_empty() and at < cut_y + 1.0,
+			"hit at %.1f m; cut at %.1f, the roof was %.1f" % [at, cut_y, top])
+
+
+## Docs/CollapseNext.md 1.2: a piece that lands in a drawn room takes the
+## drawn furniture it lands on with it, rather than standing in it.
+func _check_crushdrawn() -> void:
+	print("crushdrawn: a piece landing in a drawn room crushes what it lands on")
+	var id := _tower(3)
+	var b = city.registry.get_building(id)
+	var box := _box(id)
+	city._promote(id)
+	city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
+	city.camera.look_at(box.get_center())
+	await _ticks(30 * 4)
+	# A drawn room with something drawn in it, and the drawn item in it.
+	var room: Room = null
+	var item := AABB()
+	for r in city.registry.drawn_rooms_of(id):
+		var rs: Vector3 = (r as Room).local_box().size
+		if not (r as Room).drawn_boxes.is_empty() and rs.x >= 2.4 and rs.z >= 2.4:
+			room = r
+			item = (r as Room).drawn_boxes[0]
+			break
+	_ok("there is a drawn room with furniture", room != null,
+			"%d drawn room(s)" % b.drawn_rooms.size())
+	if room == null:
+		return
+	var xf: Transform3D = city.world.get_chunk_transform(b.chunk)
+	var at: Vector3 = xf * item.get_center()
+	var gone0 := room.gone.size()
+	var crushed0: int = city.crushed_by_wreckage
+	# Four studs square and four courses (fewer is crumbs, no body), under
+	# the ceiling, over the item.
+	# Kept inside the room's walls: wedged in one, it never comes down.
+	var rb: AABB = room.world_box(b.xform)
+	var px := clampf(at.x - 0.7, rb.position.x + 0.2, rb.end.x - 1.6)
+	var pz := clampf(at.z - 0.7, rb.position.z + 0.2, rb.end.z - 1.6)
+	# Three courses with the slab the helper adds is about two metres: low,
+	# so it clears the ceiling, and through the item from the start.
+	var piece := _drop(Vector3(px, rb.position.y + 0.3, pz), 4, 4, 3)
+	# Down, and settled: a piece that slid in slowly counts as much.
+	for t in 30 * 4:
+		await physics_frame
+		if piece != null and piece.is_valid() and piece.settled:
+			break
+	await _ticks(2)
+	print("  --   piece %s, room %.1f m tall, item top %.2f, piece bottom %.2f" % [
+		piece != null, room.local_box().size.y, (xf * item.end).y, rb.position.y + 0.3])
+	if piece != null and piece.is_valid():
+		print("  --   settled %s, box %s, item at %s, room box %s" % [piece.settled,
+				city.islands.world_aabb(piece), at, room.world_box(b.xform)])
+	var still := false
+	for bx in room.drawn_boxes:
+		if (bx as AABB).grow(0.05).has_point(item.get_center()):
+			still = true
+	_ok("the item it landed on is crushed", room.gone.size() > gone0 and not still,
+			"gone %d -> %d, still drawn %s, crushed rooms %d" % [gone0, room.gone.size(), still,
+			city.crushed_by_wreckage - crushed0])
+	_ok("and the room is still drawn", room.drawn)
+
+
+func _check_farcut() -> void:
+	print("farcut: a building cut from past the shell range is drawn once")
+	var id := _tower(4)
+	var c := _box(id).get_center()
+	city.camera.global_position = c + Vector3(-1.0, 0.6, -1.0).normalized() * (city.SHELL_RANGE + 60.0)
+	city.camera.look_at(c)
+	await _ticks(30 * 3)
+	var b = city.registry.get_building(id)
+	_ok("it starts as no shell, only its far box", not city._shells.has(id) and city._far_on.has(id))
+	_undercut(id)
+	var double := 0
+	var blind := 0
+	var left := false
+	for t in 30 * 8:
+		await physics_frame
+		if not b.is_materialised() or b.toppled:
+			continue
+		var building: bool = city._bands_building(id)
+		if city._handovers.has(id):
+			left = true
+		# A piece has left while bands built from the bricks before it are up:
+		# they draw the section standing while it falls.
+		if building and city._handovers.has(id):
+			double += 1
+		# Bands going up and nothing standing in for the rest.
+		if building and not city._far_on.has(id) and not city._shells.has(id):
+			blind += 1
+	_ok("pieces left it", left)
+	_ok("none while its bands were still being built", double == 0, "%d tick(s)" % double)
+	_ok("and its far box drew it until they were", blind == 0, "%d tick(s) half drawn" % blind)
+
+	# Its mesh given back while its bands are still going up (DEMESH_AFTER_MS
+	# runs out first on a big tower with a slow frame): the shell left standing
+	# in for it was drawn from the building before it was hit.
+	var id2 := _tower(4)
+	var c2 := _box(id2).get_center()
+	city.camera.global_position = c2 + Vector3(-1.0, 0.6, -1.0).normalized() * (city.SHELL_RANGE + 60.0)
+	city.camera.look_at(c2)
+	await _ticks(30 * 3)
+	var b2 = city.registry.get_building(id2)
+	# One shot, all landed, the bands still going up.
+	# A small one in a wall: nothing cut loose, so nothing remeshes it after.
+	var bb2 := _box(id2)
+	city._blast(Vector3(bb2.get_center().x, bb2.position.y + 3.0, bb2.position.z), 1.0)
+	var w := 0
+	while (not city._damage_queue.is_empty() or city._remesh_queue.has(id2)) and w < 60:
+		await physics_frame
+		w += 1
+	var mid: bool = city._bands_building(id2) and city._shells.has(id2)
+	city._demesh(id2)
+	await _ticks(30 * 3)
+	var box_tier: bool = city._shell_box.has(id2)
+	var mi = city._shells.get(id2)
+	var drawn: bool = mi != null and (mi as MeshInstance3D).mesh != null
+	_ok("given back mid-bands, it is drawn from its bricks as they are now",
+			mid and b2.is_damaged() and not box_tier and drawn,
+			"mid-bands %s, damaged %s, box tier %s, shell drawn %s" % [mid, b2.is_damaged(), box_tier, drawn])
+
+
 # --- (4) ------------------------------------------------------------------------
 
 ## A tower of `courses` with its staircase, alone in a world of its own, built.
@@ -596,9 +868,12 @@ func _check_trapped() -> void:
 
 # --- (7) ------------------------------------------------------------------------
 
+## Every piece that came off where somebody could see it: as a body, or as
+## crumbs (IslandManager._crumble) -- a small piece is no longer a body, and it
+## is still a piece the collapse made.
 func _spawned() -> int:
 	var c: Dictionary = city.islands.spawn_census
-	return int(c.landmark[0]) + int(c.small[0])
+	return int(c.landmark[0]) + int(c.small[0]) + int(c.crumbled[0])
 
 
 ## Bring building `id` down (cut through its second storey) with the camera at

@@ -13,8 +13,10 @@ const DEBRIS := 1 << 2     ## detached clusters at rest
 const PAWN := 1 << 3       ## characters. Nothing uses it yet.
 const FALLING := 1 << 4    ## a large detached section still in motion
 const RUBBLE := 1 << 5     ## a piece too small to matter to a collapse
-## Interior fittings that are NOT made of brick, when there are any. Nothing
-## uses it today.
+## Interior fittings that are NOT made of brick: a building's furniture body --
+## the boxes of its drawn and real rooms' contents (CityScene._room_body).
+## Walkers and bullets meet it; nothing that falls does, so a collapsing
+## section never hangs on a table.
 ##
 ## It was written for staircases, which had a body of their own and had to be
 ## kept off everything structural: a section coming down landed on the
@@ -55,6 +57,18 @@ const FIXTURE_MASK := WORLD | PAWN
 ## deflecting a falling building, and the pairs they generate are the bulk of
 ## the collision cost during a collapse.
 const FALLING_MASK := WORLD | STRUCTURE | DEBRIS | FALLING
+
+## ...and while it is still in the AIR, not even with other falling sections.
+## Two pieces of one collapse fall side by side, cut from the same grid with
+## their faces touching, and the ones above come down on the ones below while
+## both are still moving: they caught on each other, came to rest on each
+## other in mid-air and jittered there, never slow enough to settle (--jam:
+## 3 to 5 pieces a collapse stuck on pieces still falling). A piece scans
+## FALLING again once something is under it (BrickIsland.landed), so what comes
+## down after it lands on it; and its LAYER is FALLING throughout, so everything
+## that asks "is this a falling piece" -- a pawn, a bullet, the mech's fall rule
+## -- sees no difference.
+const AIRBORNE_MASK := WORLD | STRUCTURE | DEBRIS
 
 ## Settled wreckage. Same as falling, plus rubble can land on it.
 const SETTLED_MASK := WORLD | STRUCTURE | DEBRIS | FALLING | RUBBLE

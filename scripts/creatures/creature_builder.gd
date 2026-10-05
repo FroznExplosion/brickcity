@@ -269,7 +269,7 @@ static func _mesh_organic(dna: CreatureDNA, mesh: ArrayMesh, spine_j: Array[Vect
 	ab.commit(mesh, eye_mat)
 
 # --------------------------------------------------------------------- ROBOTIC
-static func _mesh_robot(dna: CreatureDNA, mesh: ArrayMesh, spine_j: Array[Vector3], neck_j: Vector3, head_j: Vector3, nose_j: Vector3, tail_j: Array[Vector3], spine_i: Array[int], head_i: int, tail_i: Array[int], legs: Array[Dictionary]) -> void:
+static func _mesh_robot(dna: CreatureDNA, mesh: ArrayMesh, spine_j: Array[Vector3], _neck_j: Vector3, head_j: Vector3, nose_j: Vector3, tail_j: Array[Vector3], spine_i: Array[int], head_i: int, tail_i: Array[int], legs: Array[Dictionary]) -> void:
 	var mb := PartMeshLib.new(false)  # flat shaded hull
 	var br := dna.body_r
 	for i in dna.spine_joints - 1:

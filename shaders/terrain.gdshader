@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/weather.gdshaderinc"
 
 // L in heightfield_test: tint every piece of ground by its LOD level. 0 is
 // the detailed tiles; a coarse block says its own level per instance.
@@ -14,6 +15,8 @@ uniform bool far_courses = true;
 uniform float far_course_m = 0.42;
 uniform float far_course_line : hint_range(0.0, 1.0) = 0.35;
 uniform float far_course_shade : hint_range(0.0, 0.5) = 0.10;
+// How dark a ramp between two shelves is against a shelf's top.
+uniform float far_ramp_shade : hint_range(0.3, 1.0) = 0.72;
 
 // Brick ground. brick.gdshader's seam, plus the two things terrain adds:
 // painted studs and their faked contact shadow.
@@ -519,7 +522,20 @@ void fragment() {
         mtl = MATERIAL_TABLE[clamp(mi, 0, 6)];
     }
 
-    if (far_courses && v_smooth_far > 0.5) {
+    // FAR GROUND, blocky (G 0.5) or smooth (G 1.0), lit by ONE rule (19.20,
+    // 19.21): flat per triangle, a top at full brightness and anything
+    // steeper -- a smooth ramp or a blocky step -- darkened alike. The border
+    // between the two then differs in shape only.
+    if (v_smooth_far > 0.25) {
+        vec3 fn = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
+        if (dot(fn, NORMAL) < 0.0) {
+            fn = -fn;
+        }
+        NORMAL = fn;
+        float up = (INV_VIEW_MATRIX * vec4(fn, 0.0)).y;
+        albedo *= mix(far_ramp_shade, 1.0, smoothstep(0.75, 0.97, up));
+    }
+    if (far_courses && v_smooth_far > 0.75) {
         float c = v_world.y / far_course_m;
         float fw = max(fwidth(c), 1e-4);
         float f = fract(c);
@@ -533,10 +549,20 @@ void fragment() {
     if (lod_debug) {
         albedo = mix(albedo, lod_colour(lod_level), 0.65);
     }
-    ALBEDO = albedo;
-    ROUGHNESS = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
+    float out_rough = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
             0.0, 1.0);
-    SPECULAR = surface_specular * mtl.y;
+    float out_spec = surface_specular * mtl.y;
+    // Rain (weather.gdshaderinc): the ground darkens more than a wall does.
+    vec3 wet_normal = NORMAL;
+    weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
+            VIEW_MATRIX, 0.22, 1.0, TIME);
+    NORMAL = wet_normal;
+    weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
+    vec3 burn_glow = weather_burn_surface(albedo, out_rough, v_world, TIME);
+    EMISSION += burn_glow;
+    ALBEDO = albedo;
+    ROUGHNESS = out_rough;
+    SPECULAR = out_spec;
     RIM = surface_rim * mtl.z;
     RIM_TINT = 0.4;
 }

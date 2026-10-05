@@ -99,6 +99,7 @@ func _on_phase(p: Phase) -> void:
 			_sky_from = _sky
 		Phase.DONE:
 			ctx.raining = false
+			ctx.gale = Vector3.ZERO
 			ctx.set_storm(false)
 			ctx.clear_hazard(0)
 			_sky = 0.0
@@ -261,6 +262,8 @@ func _apply_sky() -> void:
 	# Rain and dark: a little shorter sight, a much worse shot.
 	ctx.set_weather(_sky, 0.85, 2.2, intensity)
 	ctx.set_screen(_sky, 0.0)
+	# A stiff breeze with it: trees move (weather.gdshaderinc).
+	ctx.gale = Vector3(0.6, 0.0, 0.8) * 0.4 * _sky
 
 
 ## A jagged path from high above down to `to`, by midpoint displacement, and one
@@ -385,3 +388,4 @@ func _build() -> void:
 	_rain.draw_pass_1 = drop
 	_rain.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 60, 80))
 	add_child(_rain)
+	RainSplash.add(_rain, proc, self, Color(0.9, 0.94, 1.0, 0.9), "rain", ctx)   # it lands, splashes, patters

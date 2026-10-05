@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <limits>
 #include <cstring>
 
 using namespace godot;
@@ -521,7 +522,6 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     b.colour = (uint8_t)std::clamp(colour, 0, 255);
     b.decorative = decorative;
     c.blocks.push_back(b);
-    joint_cache[chunk_id].valid = false;
 
     for (int x = 0; x < a.size.x; ++x) {
         for (int y = 0; y < a.size.y; ++y) {
@@ -533,6 +533,11 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
                 c.occupancy[c.index_of(l)] = id;
             }
         }
+    }
+    if (joint_cache[chunk_id].valid) {
+        std::vector<int32_t> touching;
+        blocks_touching(c, id, touching);
+        joints_changed(chunk_id, id, touching, true);
     }
     // Geometry changed, so the bake has to be redone. Damage never gets here:
     // killing a block only changes which baked faces are indexed.
@@ -574,6 +579,12 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     }
     const Archetype &a = archetypes[b.archetype];
     const Vector3i base = b.cell - c.origin;
+    // What its joints reached, asked while its cells are still its own.
+    std::vector<int32_t> touching;
+    const bool keep_joints = joint_cache[chunk_id].valid;
+    if (keep_joints) {
+        blocks_touching(c, block_id, touching);
+    }
 
     // Release only the cells this block actually owns. A masked part left its
     // notch free for somebody else, and that somebody is still there.
@@ -586,7 +597,6 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
                 if (c.in_bounds(l) && c.occupancy[c.index_of(l)] == block_id) {
                     c.occupancy[c.index_of(l)] = -1;
-                    joint_cache[chunk_id].valid = false;
                 }
             }
         }
@@ -601,6 +611,9 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     b.removed = true;
     b.index_count = 0;
     b.load = 0;
+    if (keep_joints) {
+        joints_changed(chunk_id, block_id, touching, false);
+    }
 
     // Geometry changed, so the bake is stale and a bake in flight is reading
     // the arrays this call just wrote. Same contract as place_block -- and the
@@ -1308,6 +1321,9 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
 
 void BrickWorld::bake_chunk_faces(Chunk &c) {
     bake_faces_into(c, archetypes, c.bake);
+    // A new bake numbers its faces afresh: the patch baseline described the
+    // old one (update_index_regions).
+    c.live_indices = PackedInt32Array();
 }
 
 BrickWorld::BakeJob *BrickWorld::find_bake_job(int chunk_id) {
@@ -1343,6 +1359,7 @@ void BrickWorld::settle_bake_job(int chunk_id, bool adopt) {
         }
         if (adopt && valid_chunk(chunk_id)) {
             chunks[chunk_id].bake = std::move(job->bake);
+            chunks[chunk_id].live_indices = PackedInt32Array();
             stats[chunk_id].bake_ms = chunks[chunk_id].bake.bake_ms;
             stats[chunk_id].baked_faces = chunks[chunk_id].bake.face_count();
         }
@@ -1869,6 +1886,7 @@ void BrickWorld::fill_indices(Chunk &c, MeshStats &st, PackedInt32Array &out) {
 Dictionary BrickWorld::get_memory_report() const {
     Dictionary d;
     int64_t occupancy = 0, blocks = 0, bake_verts = 0, bake_topology = 0, indices = 0, joints = 0;
+    int64_t joint_overlay = 0;
     int live = 0, baked = 0, total_blocks = 0, total_faces = 0;
 
     for (size_t i = 0; i < chunks.size(); ++i) {
@@ -1892,8 +1910,12 @@ Dictionary BrickWorld::get_memory_report() const {
         }
         indices += (int64_t)c.live_indices.size() * sizeof(int32_t);
         if (i < joint_cache.size()) {
-            joints += (int64_t)joint_cache[i].runs.capacity() * sizeof(brick::JointRun)
-                    + (int64_t)joint_cache[i].at.capacity() * sizeof(int32_t);
+            const brick::JointCache &jc = joint_cache[i];
+            const int64_t over = (int64_t)jc.over_runs.capacity() * sizeof(brick::JointRun)
+                    + (int64_t)(jc.over_at.capacity() + jc.over_n.capacity()) * sizeof(int32_t);
+            joints += (int64_t)jc.runs.capacity() * sizeof(brick::JointRun)
+                    + (int64_t)jc.at.capacity() * sizeof(int32_t) + over;
+            joint_overlay += over;
         }
     }
 
@@ -1908,6 +1930,9 @@ Dictionary BrickWorld::get_memory_report() const {
     d["bake_topology_bytes"] = bake_topology;
     d["index_bytes"] = indices;
     d["joint_bytes"] = joints;
+    // Of which, the runs redone in place since each cache was last built whole
+    // (JointCache::over_runs).
+    d["joint_overlay_bytes"] = joint_overlay;
     d["total_bytes"] = total;
     d["bytes_per_block"] = total_blocks > 0 ? (double)total / total_blocks : 0.0;
     return d;
@@ -2023,11 +2048,16 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     if (section < 0 || section >= c.bake.section_count()) {
         return Array();
     }
-    // NOT filled here. A band computes its own indices below, and the
-    // whole-chunk buffer is only a BASELINE for the next diff -- so
-    // update_index_regions establishes it the first time it is asked. Filling
-    // it here made the first band after a bake pay for every face in the chunk:
-    // measured at 57 ms against 5.5 for an ordinary band.
+    // The whole-chunk buffer is the BASELINE the next patch diffs against
+    // (update_index_regions), and it has to be what the bands DRAW. It was set
+    // the first time a patch was asked for -- after the hit the patch was for,
+    // so that hit was in the baseline, diffed as no change and never drawn:
+    // killed bricks went on being drawn, floating, until the building was
+    // rebuilt (--ghost, 2026-10-02). Filling it whole here made the first band
+    // after a bake pay for every face in the chunk (57 ms against 5.5), so each
+    // band writes its own range of it instead, as it computes it below: what is
+    // in the baseline is exactly what each band was built with. A band not
+    // built yet since the bake is all degenerate there.
     const int first = c.bake.section_first[(size_t)section];
     const int faces = c.bake.section_faces[(size_t)section];
     if (faces <= 0) {
@@ -2051,6 +2081,12 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     PackedInt32Array idx;
     idx.resize((int64_t)faces * 6);
     int32_t *w = idx.ptrw();
+    const int64_t total = (int64_t)c.bake.face_count() * 6;
+    if (c.live_indices.size() != total) {
+        c.live_indices.resize(total);
+        std::fill(c.live_indices.ptrw(), c.live_indices.ptrw() + total, 0);
+    }
+    int32_t *live = c.live_indices.ptrw();
     for (int f = 0; f < faces; ++f) {
         const int face = first + f;
         const int32_t owner = c.bake.owner[(size_t)face];
@@ -2058,12 +2094,14 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
         const bool drawn = c.blocks[owner].alive
                 && (other < 0 || !c.blocks[other].alive);
         const int to = f * 6;
+        int32_t *at = live + (size_t)face * 6;
         if (!drawn) {
             // A culled face stays a degenerate triangle, or the band's buffer
             // changes length when something breaks and it can never be patched
             // again.
             for (int k = 0; k < 6; ++k) {
                 w[to + k] = 0;
+                at[k] = 0;
             }
             continue;
         }
@@ -2074,6 +2112,14 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
         w[to + 3] = base + 1;
         w[to + 4] = base + 3;
         w[to + 5] = base + 2;
+        // In the chunk's numbering, as fill_indices writes it.
+        const int32_t g = face * 4;
+        at[0] = g + 0;
+        at[1] = g + 1;
+        at[2] = g + 2;
+        at[3] = g + 1;
+        at[4] = g + 3;
+        at[5] = g + 2;
     }
     arrays[Mesh::ARRAY_INDEX] = idx;
     return arrays;
@@ -2085,8 +2131,17 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
         return out;
     }
     Chunk &c = chunks[chunk_id];
+    // Nothing to patch FROM -- no bake (a block placed or removed since: a room
+    // laid or cleared), or no baseline for it (a fresh bake no band has been
+    // built from). It used to answer with no regions, which a caller reads as
+    // "patched, nothing moved" -- and the change this patch was for was never
+    // drawn. Section -1 says: build again (CityScene._remesh,
+    // IslandManager._patch_bands).
+    Dictionary cannot;
+    cannot["section"] = -1;
     if (!c.bake.valid) {
-        return out; // nothing to compare; the caller must build first
+        out.push_back(cannot);
+        return out;
     }
     const auto t0 = std::chrono::steady_clock::now();
     MeshStats &st = stats[chunk_id];
@@ -2096,14 +2151,12 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
     PackedInt32Array next;
     fill_indices(c, st, next);
 
-    // No baseline yet -- a fresh bake, whose bands were built from exactly this
-    // block state. So nothing has MOVED; this call is what establishes what to
-    // diff against next time.
     if (c.live_indices.size() != next.size()) {
         c.live_indices = next;
         st.indices = next.size();
         st.compact_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
+        out.push_back(cannot);
         return out;
     }
     const int32_t *a = c.live_indices.ptr();
@@ -2195,6 +2248,277 @@ Array BrickWorld::build_chunk_mesh(int chunk_id) {
     arrays[Mesh::ARRAY_TEX_UV] = c.bake.uvs;
     arrays[Mesh::ARRAY_TEX_UV2] = c.bake.uv2s;
     arrays[Mesh::ARRAY_INDEX] = c.live_indices;
+    return arrays;
+}
+
+// A far piece's stand-in. The bake merges faces WITHIN a brick and no further,
+// so a wall of 2x4s is a quad per brick face, and a settled piece of 5,000
+// bricks is 40,000-odd vertices whether it is 5 m away or 300. Here the merge
+// runs across bricks, over the occupancy grid itself: every cell of a live
+// brick keyed by its colour, and one rectangle for each run of one colour on
+// each exposed plane -- the greedy mesh the bake does per brick, done per
+// chunk. No bake is read or made: a piece that goes coarse gives its bake back.
+//
+// UV is the vertex's own position in the face plane (chunk metres) and UV2 a
+// brick-sized rectangle, so the seam shader tiles brick outlines over each
+// merged face (brick.gdshader; BuildingShell.SEAM_UNIT) -- a course tall and
+// two studs wide: not where the real seams are, but where seams would be.
+// Authored parts (round bricks, spiral steps) are drawn as the cells they fill.
+Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
+    Array arrays;
+    if (!valid_chunk(chunk_id)) {
+        return arrays;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const Chunk &c = chunks[chunk_id];
+
+    // Only the box the live bricks are in. A piece cut out of a building keeps
+    // the building's grid -- 42x627x60, 1.58 million cells, round 6,500 bricks
+    // -- and walking all of it was 10-16 ms a build, in a queue that was
+    // building one or three a tick for pieces falling far off.
+    Vector3i lo(INT_MAX, INT_MAX, INT_MAX);
+    Vector3i hi(INT_MIN, INT_MIN, INT_MIN);
+    for (const Block &b : c.blocks) {
+        if (b.removed || !b.alive || b.decorative) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i end = base + archetypes[b.archetype].size;
+        lo = Vector3i(std::min(lo.x, base.x), std::min(lo.y, base.y), std::min(lo.z, base.z));
+        hi = Vector3i(std::max(hi.x, end.x), std::max(hi.y, end.y), std::max(hi.z, end.z));
+    }
+    if (lo.x > hi.x) {
+        last_coarse_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        return arrays;
+    }
+    lo = Vector3i(std::max(lo.x, 0), std::max(lo.y, 0), std::max(lo.z, 0));
+    hi = Vector3i(std::min(hi.x, c.dims.x), std::min(hi.y, c.dims.y), std::min(hi.z, c.dims.z));
+    // From here on the grid is that box: cell (x, y, z) of it is the chunk's
+    // lo + (x, y, z), and a neighbour outside it holds nothing drawn.
+    const int dim[3] = { hi.x - lo.x, hi.y - lo.y, hi.z - lo.z };
+    const int stride[3] = { 1, dim[0], dim[0] * dim[1] }; // as Chunk::index_of
+    const int cells = dim[0] * dim[1] * dim[2];
+
+    // Per cell: 0 = nothing drawn there, else 1 + the colour's index; and its
+    // material, for what hides what (brick_material_hides). The cells that
+    // hold anything are listed as they go: a building is mostly the air inside
+    // it, and everything after this walks the list, not the grid. (Walking the
+    // grid six times over, a face direction at a time, was 5 ms for a
+    // 40x30-stud tower of 60 courses.)
+    std::vector<int32_t> key((size_t)cells, 0);
+    std::vector<uint8_t> mat((size_t)cells, 0);
+    std::vector<int32_t> filled;
+    std::vector<Color> cols;
+    std::vector<int32_t> block_key(c.blocks.size(), 0);
+    for (int i = 0; i < cells; ++i) {
+        const int32_t bid = c.occupancy[(size_t)c.index_of(Vector3i(
+                lo.x + i % dim[0], lo.y + (i / dim[0]) % dim[1], lo.z + i / stride[2]))];
+        if (bid < 0) {
+            continue;
+        }
+        const Block &b = c.blocks[(size_t)bid];
+        if (!b.alive || b.decorative) {
+            continue; // dead bricks still hold their cells; furniture is FurnitureMesh's
+        }
+        int32_t &k = block_key[(size_t)bid];
+        if (k == 0) {
+            const Color col = block_rgba(b.material, b.colour);
+            for (size_t j = 0; j < cols.size(); ++j) {
+                if (cols[j] == col) {
+                    k = (int32_t)j + 1;
+                    break;
+                }
+            }
+            if (k == 0) {
+                cols.push_back(col);
+                k = (int32_t)cols.size();
+            }
+        }
+        key[(size_t)i] = k;
+        mat[(size_t)i] = b.material;
+        filled.push_back(i);
+    }
+
+    // As bake_faces_into: which axis each face is sliced along, and which two
+    // span its plane. FACE_DIR steps + along it for an even face, - for odd.
+    static const int SLICE_AXIS[6] = { 0, 0, 1, 1, 2, 2 };
+    static const int PLANE_A[6]    = { 1, 1, 0, 0, 0, 0 };
+    static const int PLANE_B[6]    = { 2, 2, 2, 2, 1, 1 };
+
+    // Every exposed face, by the way it faces, as its place in a raster of
+    // slices: (slice * A + a) * B + b, A and B being its plane's two axes.
+    std::vector<int32_t> faces[6];
+    for (const int i : filled) {
+        const int at[3] = { i % dim[0], (i / dim[0]) % dim[1], i / stride[2] };
+        for (int f = 0; f < 6; ++f) {
+            const int ax = SLICE_AXIS[f];
+            const int step = (f & 1) ? -1 : 1;
+            const int n = at[ax] + step;
+            if (n >= 0 && n < dim[ax]) {
+                const size_t j = (size_t)(i + step * stride[ax]);
+                if (key[j] != 0 && brick_material_hides(mat[(size_t)i], mat[j])) {
+                    continue; // buried
+                }
+            }
+            faces[f].push_back((at[ax] * dim[PLANE_A[f]] + at[PLANE_A[f]]) * dim[PLANE_B[f]]
+                    + at[PLANE_B[f]]);
+        }
+    }
+
+    const Vector3 cs = cell_size();
+    const Vector2 seam_side(2.0f * STUD_M, 3.0f * PLATE_M);
+    const Vector2 seam_flat(2.0f * STUD_M, 2.0f * STUD_M);
+    std::vector<Vector3> vv;
+    std::vector<Vector3> nn;
+    std::vector<Color> cc;
+    std::vector<Vector2> uu;
+    std::vector<Vector2> u2;
+    std::vector<int32_t> ii;
+    std::vector<int32_t> mask; // one slice's plane; all zero between slices
+    std::vector<int32_t> slice_at;
+    std::vector<int32_t> by_slice;
+
+    for (int f = 0; f < 6; ++f) {
+        std::vector<int32_t> &list = faces[f];
+        if (list.empty()) {
+            continue;
+        }
+        const int sa = SLICE_AXIS[f];
+        const int pa = PLANE_A[f];
+        const int pb = PLANE_B[f];
+        const int an = dim[pa];
+        const int bn = dim[pb];
+        const int plane = an * bn;
+        const Vector2 seam = (f == 2 || f == 3) ? seam_flat : seam_side;
+        mask.assign((size_t)plane, 0);
+        // Grouped by slice, keeping the grid's order within one: a counting
+        // sort (a comparison sort of the whole list was most of the build).
+        // In a slice that order is B-major -- B is always the slower of the
+        // two in the grid -- so each face comes after every face lower along
+        // B, and after those level with it and lower along A: the least
+        // untaken face first, which is all the greedy merge asks of an order.
+        slice_at.assign((size_t)dim[sa] + 1, 0);
+        for (const int32_t v : list) {
+            ++slice_at[(size_t)(v / plane) + 1];
+        }
+        for (int q = 0; q < dim[sa]; ++q) {
+            slice_at[(size_t)q + 1] += slice_at[(size_t)q];
+        }
+        by_slice.resize(list.size());
+        for (const int32_t v : list) {
+            by_slice[(size_t)slice_at[(size_t)(v / plane)]++] = v;
+        }
+        list.swap(by_slice);
+        size_t s0 = 0;
+        while (s0 < list.size()) {
+            const int si = list[s0] / plane;
+            size_t s1 = s0;
+            for (; s1 < list.size() && list[s1] / plane == si; ++s1) {
+                const int r = list[s1] % plane;
+                int at[3];
+                at[sa] = si;
+                at[pa] = r / bn;
+                at[pb] = r % bn;
+                mask[(size_t)r] = key[(size_t)(at[0] + at[1] * stride[1] + at[2] * stride[2])];
+            }
+
+            // Greedy rectangles of one colour, started from each listed face
+            // in scan order. A face is spent by zeroing it, and every one is,
+            // so the plane is clean again for the next slice.
+            for (size_t s = s0; s < s1; ++s) {
+                const int r = list[s] % plane;
+                const int32_t k = mask[(size_t)r];
+                if (k == 0) {
+                    continue;
+                }
+                const int ai = r / bn;
+                const int bj = r % bn;
+                int b1 = bj;
+                while (b1 + 1 < bn && mask[(size_t)ai * bn + b1 + 1] == k) {
+                    ++b1;
+                }
+                int a1 = ai;
+                while (a1 + 1 < an) {
+                    bool row_ok = true;
+                    for (int bb = bj; bb <= b1; ++bb) {
+                        if (mask[(size_t)(a1 + 1) * bn + bb] != k) {
+                            row_ok = false;
+                            break;
+                        }
+                    }
+                    if (!row_ok) {
+                        break;
+                    }
+                    ++a1;
+                }
+                for (int aa = ai; aa <= a1; ++aa) {
+                    for (int bb = bj; bb <= b1; ++bb) {
+                        mask[(size_t)aa * bn + bb] = 0;
+                    }
+                }
+
+                const Color col = cols[(size_t)k - 1];
+                const int v0 = (int)vv.size();
+                for (int q = 0; q < 4; ++q) {
+                    const Vector3i o = FACE_CORNERS[f][q];
+                    const int oc[3] = { o.x, o.y, o.z };
+                    int cell[3];
+                    cell[sa] = si + oc[sa];
+                    cell[pa] = (oc[pa] == 0) ? ai : (a1 + 1);
+                    cell[pb] = (oc[pb] == 0) ? bj : (b1 + 1);
+                    const Vector3 vp((lo.x + cell[0]) * cs.x, (lo.y + cell[1]) * cs.y,
+                            (lo.z + cell[2]) * cs.z);
+                    switch (f) {
+                        case 0: case 1: uu.push_back(Vector2(vp.z, vp.y)); break;
+                        case 2: case 3: uu.push_back(Vector2(vp.x, vp.z)); break;
+                        default:        uu.push_back(Vector2(vp.x, vp.y)); break;
+                    }
+                    vv.push_back(vp);
+                    nn.push_back(FACE_NORMAL[f]);
+                    cc.push_back(col);
+                    u2.push_back(seam);
+                }
+                ii.push_back(v0 + 0);
+                ii.push_back(v0 + 1);
+                ii.push_back(v0 + 2);
+                ii.push_back(v0 + 1);
+                ii.push_back(v0 + 3);
+                ii.push_back(v0 + 2);
+            }
+            s0 = s1;
+        }
+    }
+
+    if (!vv.empty()) {
+        PackedVector3Array verts;
+        PackedVector3Array normals;
+        PackedColorArray colours;
+        PackedVector2Array uvs;
+        PackedVector2Array uv2s;
+        PackedInt32Array indices;
+        verts.resize((int64_t)vv.size());
+        normals.resize((int64_t)nn.size());
+        colours.resize((int64_t)cc.size());
+        uvs.resize((int64_t)uu.size());
+        uv2s.resize((int64_t)u2.size());
+        indices.resize((int64_t)ii.size());
+        std::memcpy(verts.ptrw(), vv.data(), vv.size() * sizeof(Vector3));
+        std::memcpy(normals.ptrw(), nn.data(), nn.size() * sizeof(Vector3));
+        std::memcpy(colours.ptrw(), cc.data(), cc.size() * sizeof(Color));
+        std::memcpy(uvs.ptrw(), uu.data(), uu.size() * sizeof(Vector2));
+        std::memcpy(uv2s.ptrw(), u2.data(), u2.size() * sizeof(Vector2));
+        std::memcpy(indices.ptrw(), ii.data(), ii.size() * sizeof(int32_t));
+        arrays.resize(Mesh::ARRAY_MAX);
+        arrays[Mesh::ARRAY_VERTEX] = verts;
+        arrays[Mesh::ARRAY_NORMAL] = normals;
+        arrays[Mesh::ARRAY_COLOR] = colours;
+        arrays[Mesh::ARRAY_TEX_UV] = uvs;
+        arrays[Mesh::ARRAY_TEX_UV2] = uv2s;
+        arrays[Mesh::ARRAY_INDEX] = indices;
+    }
+    last_coarse_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
     return arrays;
 }
 
@@ -2430,43 +2754,114 @@ const brick::JointCache &BrickWorld::joints_of(int chunk_id) {
     }
     jc.at.clear();
     jc.runs.clear();
+    jc.over_at.clear();
+    jc.over_n.clear();
+    jc.over_runs.clear();
     jc.at.reserve(n + 1);
     for (size_t i = 0; i < n; ++i) {
         jc.at.push_back((int32_t)jc.runs.size());
-        const Block &b = c.blocks[i];
-        if (b.removed) {
-            continue; // its cells are someone else's, or nobody's
-        }
-        const int32_t bid = (int32_t)i;
-        const Vector3i base = b.cell - c.origin;
-        const Archetype &a = archetypes[b.archetype];
-        const size_t from = jc.runs.size();
-        auto add = [&](int32_t nb, uint8_t up) {
-            if (jc.runs.size() > from && jc.runs.back().nb == nb && jc.runs.back().up == up
-                    && jc.runs.back().count < 0xFFFF) {
-                ++jc.runs.back().count;
-            } else {
-                jc.runs.push_back(brick::JointRun{ nb, 1, up, 0 });
-            }
-        };
-        for (const Archetype::SurfaceCell &sc : a.top_cells) {
-            const int32_t upb = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y + 1, base.z + sc.z));
-            if (upb >= 0 && upb != bid
-                    && joint_exists(c, archetypes, bid, upb, b.cell.x + sc.x, b.cell.z + sc.z)) {
-                add(upb, 1);
-            }
-        }
-        for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
-            const int32_t down = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y - 1, base.z + sc.z));
-            if (down >= 0 && down != bid
-                    && joint_exists(c, archetypes, down, bid, b.cell.x + sc.x, b.cell.z + sc.z)) {
-                add(down, 0);
-            }
-        }
+        block_runs(c, (int32_t)i, jc.runs);
     }
     jc.at.push_back((int32_t)jc.runs.size());
     jc.valid = true;
     return jc;
+}
+
+void BrickWorld::block_runs(const Chunk &c, int32_t bid, std::vector<brick::JointRun> &out) const {
+    const Block &b = c.blocks[(size_t)bid];
+    if (b.removed) {
+        return; // its cells are someone else's, or nobody's
+    }
+    const Vector3i base = b.cell - c.origin;
+    const Archetype &a = archetypes[b.archetype];
+    const size_t from = out.size();
+    auto add = [&](int32_t nb, uint8_t up) {
+        if (out.size() > from && out.back().nb == nb && out.back().up == up
+                && out.back().count < 0xFFFF) {
+            ++out.back().count;
+        } else {
+            out.push_back(brick::JointRun{ nb, 1, up, 0 });
+        }
+    };
+    for (const Archetype::SurfaceCell &sc : a.top_cells) {
+        const int32_t upb = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y + 1, base.z + sc.z));
+        if (upb >= 0 && upb != bid
+                && joint_exists(c, archetypes, bid, upb, b.cell.x + sc.x, b.cell.z + sc.z)) {
+            add(upb, 1);
+        }
+    }
+    for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
+        const int32_t down = c.block_at(Vector3i(base.x + sc.x, base.y + sc.y - 1, base.z + sc.z));
+        if (down >= 0 && down != bid
+                && joint_exists(c, archetypes, down, bid, b.cell.x + sc.x, b.cell.z + sc.z)) {
+            add(down, 0);
+        }
+    }
+}
+
+void BrickWorld::blocks_touching(const Chunk &c, int32_t bid, std::vector<int32_t> &out) const {
+    const Block &b = c.blocks[(size_t)bid];
+    const Archetype &a = archetypes[b.archetype];
+    const Vector3i base = b.cell - c.origin;
+    for (int x = 0; x < a.size.x; ++x) {
+        for (int y = 0; y < a.size.y; ++y) {
+            for (int z = 0; z < a.size.z; ++z) {
+                if (!a.solid_at(x, y, z)) {
+                    continue;
+                }
+                for (int dy = -1; dy <= 1; dy += 2) {
+                    const int32_t o = c.block_at(Vector3i(base.x + x, base.y + y + dy, base.z + z));
+                    if (o >= 0 && o != bid
+                            && std::find(out.begin(), out.end(), o) == out.end()) {
+                        out.push_back(o);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A room laying its furniture, or taking it back, used to throw the whole
+// cache away -- and the next solve of the building built it again: 2-3 ms of a
+// 50,000-brick tower's solve, every time a room opened or shut near somebody.
+// Only the block and what touches it can have changed, so only their runs are
+// redone. The overlay is folded back into a whole build once it is a quarter
+// the size of the cache itself.
+void BrickWorld::joints_changed(int chunk_id, int32_t bid, const std::vector<int32_t> &touching,
+        bool placed) {
+    brick::JointCache &jc = joint_cache[chunk_id];
+    if (!jc.valid) {
+        return;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    if (placed) {
+        // A new id, one past the end: its base range is empty.
+        if (jc.at.size() != n) {
+            jc.valid = false;
+            return;
+        }
+        jc.at.push_back(jc.at.back());
+    } else if (jc.at.size() != n + 1) {
+        jc.valid = false;
+        return;
+    }
+    if (jc.over_at.size() < n) {
+        jc.over_at.resize(n, -1);
+        jc.over_n.resize(n, 0);
+    }
+    auto redo = [&](int32_t b) {
+        jc.over_at[(size_t)b] = (int32_t)jc.over_runs.size();
+        block_runs(c, b, jc.over_runs);
+        jc.over_n[(size_t)b] = (int32_t)jc.over_runs.size() - jc.over_at[(size_t)b];
+    };
+    redo(bid);
+    for (int32_t o : touching) {
+        redo(o);
+    }
+    if (jc.over_runs.size() > jc.runs.size() / 4 + 4096) {
+        jc.valid = false;
+    }
 }
 
 /// for_each_neighbour, from the cache: the same neighbours in the same order,
@@ -2479,8 +2874,15 @@ template <typename F>
 static inline void for_each_joint(const Chunk &c, const brick::JointCache &jc,
         int32_t bid, F &&fn) {
     const Block &b = c.blocks[bid];
-    const brick::JointRun *r = jc.runs.data() + jc.at[bid];
-    const brick::JointRun *end = jc.runs.data() + jc.at[bid + 1];
+    const brick::JointRun *r;
+    const brick::JointRun *end;
+    if (!jc.over_at.empty() && jc.over_at[bid] >= 0) {
+        r = jc.over_runs.data() + jc.over_at[bid];
+        end = r + jc.over_n[bid];
+    } else {
+        r = jc.runs.data() + jc.at[bid];
+        end = jc.runs.data() + jc.at[bid + 1];
+    }
     for (; r != end; ++r) {
         const Block &o = c.blocks[r->nb];
         if (r->up) {
@@ -2597,8 +2999,14 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
         const int32_t bid = scratch_queue[head];
         ++ss.blocks_visited;
         const int32_t next_depth = scratch_depth[bid] + 1;
+        const bool from_held = c.blocks[bid].held;
         for_each_joint(c, jc, bid, [&](int32_t nb, int) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
+                return;
+            }
+            // A held brick hangs on its own studs: nothing is held up THROUGH
+            // it, except another of its own group (Block::held).
+            if (from_held && !c.blocks[nb].held) {
                 return;
             }
             if (!grounding_flows(c, archetypes, bid, nb, up)) {
@@ -2760,6 +3168,20 @@ float BrickWorld::get_external_load(int chunk_id, int block_id) const {
     return (float)((double)sum / (double)brick::to_mass_units(1.0f));
 }
 
+float BrickWorld::get_headroom(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return -1.0f;
+    }
+    const std::vector<int64_t> &h = stress[chunk_id].headroom;
+    if (block_id < 0 || block_id >= (int)h.size()) {
+        return -1.0f;
+    }
+    if (h[block_id] == std::numeric_limits<int64_t>::max()) {
+        return std::numeric_limits<float>::infinity();
+    }
+    return (float)((double)h[block_id] / (double)brick::MASS_FIXED);
+}
+
 PackedInt32Array BrickWorld::get_load_owners(int chunk_id) const {
     PackedInt32Array out;
     if (valid_chunk(chunk_id)) {
@@ -2845,9 +3267,11 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         int contact = 0;
         int contact_tension = 0;
         const int my_height = height_along(b.cell, up);
+        // A held brick is nobody's supporter but its own group's (Block::held).
+        const bool i_am_held = b.held;
         for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
             const int32_t nd = scratch_depth[nb];
-            if (nd < 0 || nd >= depth) {
+            if (nd < 0 || nd >= depth || (c.blocks[nb].held && !i_am_held)) {
                 return;
             }
             contact += count;
@@ -2859,19 +3283,40 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
             continue; // reached only through equal-depth peers; nothing to load
         }
 
-        if (contact_tension > 0) {
+        // A held brick is asked what holding it asked (reattach_held_groups):
+        // its own weight against ALL its studs into grounded structure, not
+        // only those the walk reached it through -- or it was held one solve
+        // and failed the next on a stricter test than the one that held it.
+        int test_contact = contact;
+        int test_tension = contact_tension;
+        if (i_am_held) {
+            test_contact = 0;
+            test_tension = 0;
+            for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+                if (scratch_depth[nb] < 0) {
+                    return;
+                }
+                test_contact += count;
+                if (height_along(c.blocks[nb].cell, up) > my_height) {
+                    test_tension += count;
+                }
+            });
+        }
+
+        if (test_tension > 0) {
             // Only the share carried by the upward joints is a pull. Both sides
             // are integers and the comparison is exact: no division, so no
             // rounding decides whether a joint fails.
-            const int64_t pull = b.load * (int64_t)contact_tension;
-            const int64_t capacity = (int64_t)contact_tension * capacity_per_stud
-                    * (int64_t)contact;
+            const int64_t pull = b.load * (int64_t)test_tension;
+            const int64_t capacity = (int64_t)test_tension * capacity_per_stud
+                    * (int64_t)test_contact;
             // Reported only, never decided on.
             sx.max_ratio = std::max(sx.max_ratio,
                     (float)((double)pull / (double)std::max((int64_t)1, capacity)));
 
             if (pull > capacity && !b.support_broken) {
                 b.support_broken = true;
+                b.strained = true;
                 separated.push_back(bid);
                 ++sx.failures;
             }
@@ -2888,12 +3333,58 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
         int64_t remainder = b.load - share * (int64_t)contact;
         for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
             const int32_t nd = scratch_depth[nb];
-            if (nd >= 0 && nd < depth) {
+            if (nd >= 0 && nd < depth && !(c.blocks[nb].held && !i_am_held)) {
                 const int64_t extra = std::min(remainder, (int64_t)count);
                 remainder -= extra;
                 c.blocks[nb].load += share * (int64_t)count + extra;
             }
         });
+    }
+
+    // Headroom, walking the same order FORWARD: a block's supporters are
+    // shallower, so theirs is known by the time it is reached. A joint fails
+    // when load * tension_contact > tension_contact * capacity * contact, that
+    // is when the block's load passes capacity * contact -- so what it can
+    // still take is the difference. Mass added to a block reaches the joints
+    // under it too; the least over every supporter takes it all to each of
+    // them (R7's worst case), where the solve would share it.
+    {
+        constexpr int64_t INF_ROOM = std::numeric_limits<int64_t>::max();
+        sx.headroom.assign(n, 0);
+        for (size_t qi = 0; qi < scratch_queue.size(); ++qi) {
+            const int32_t bid = scratch_queue[qi];
+            const Block &b = c.blocks[bid];
+            const int32_t depth = scratch_depth[bid];
+            if (depth <= 0) {
+                sx.headroom[bid] = INF_ROOM;
+                continue;
+            }
+            if (b.support_broken) {
+                continue;   // already let go: no room at all
+            }
+            int contact = 0;
+            int contact_tension = 0;
+            int64_t below = INF_ROOM;
+            const int my_height = height_along(b.cell, up);
+            const bool i_am_held = b.held;
+            for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+                const int32_t nd = scratch_depth[nb];
+                if (nd < 0 || nd >= depth || (c.blocks[nb].held && !i_am_held)) {
+                    return;
+                }
+                contact += count;
+                if (height_along(c.blocks[nb].cell, up) > my_height) {
+                    contact_tension += count;
+                }
+                below = std::min(below, sx.headroom[nb]);
+            });
+            int64_t room = below;
+            if (contact_tension > 0) {
+                room = std::min(room, std::max((int64_t)0,
+                        capacity_per_stud * (int64_t)contact - b.load));
+            }
+            sx.headroom[bid] = room;
+        }
     }
 
     // Nothing is destroyed. A released joint leaves both bricks whole -- the
@@ -3048,6 +3539,305 @@ Dictionary BrickWorld::lateral_check(int chunk_id, float accel_g, Vector3 world_
     return out;
 }
 
+Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
+    Dictionary out;
+    out["ratio"] = 0.0;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const Vector3i up = -chunk_down[chunk_id];
+    if (up != Vector3i(0, 1, 0)) {
+        return out; // a toppled chunk is a piece: physics has it, not this
+    }
+    // What is grounded now: only that is weighed, and only that holds.
+    solve_grounded(chunk_id);
+    const std::vector<int32_t> &depth = solve_scratch().depth;
+    const Vector3 cs = cell_size();
+    const double cap = (double)std::max((int64_t)1,
+            brick::to_mass_units(stress[chunk_id].tension_per_stud));
+    const double crush_cap = cap * std::max(crush_per_stud, 0.0001f);
+    constexpr double SOLID_STUDS = 4.0;
+
+    int lo = INT32_MAX;
+    int hi = INT32_MIN;
+    int x0 = INT32_MAX, x1 = INT32_MIN, z0 = INT32_MAX, z1 = INT32_MIN;
+    const size_t n = c.blocks.size();
+    auto counts = [&](size_t i) {
+        const Block &b = c.blocks[i];
+        return b.alive && !b.decorative && i < depth.size() && depth[i] >= 0;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        if (!counts(i)) {
+            continue;
+        }
+        const Block &b = c.blocks[i];
+        const Vector3i bs = archetypes[b.archetype].size;
+        lo = std::min(lo, b.cell.y);
+        hi = std::max(hi, b.cell.y + bs.y);
+        x0 = std::min(x0, b.cell.x);
+        x1 = std::max(x1, b.cell.x + bs.x);
+        z0 = std::min(z0, b.cell.z);
+        z1 = std::max(z1, b.cell.z + bs.z);
+    }
+    if (lo >= hi) {
+        return out;
+    }
+    const int layers = hi - lo + 1;
+    // Per boundary h (index h - lo): mass whose bottom is at h and its
+    // moments; stud contact at h, its moments, and how far it reaches.
+    std::vector<double> m(layers, 0.0), mx(layers, 0.0), mz(layers, 0.0);
+    std::vector<double> j(layers, 0.0), jx(layers, 0.0), jz(layers, 0.0);
+    std::vector<double> ex0(layers, 1e30), ex1(layers, -1e30), ez0(layers, 1e30), ez1(layers, -1e30);
+    auto touch = [&](int k, double a0, double a1, double b0, double b1, double studs) {
+        const double cx = (a0 + a1) * 0.5;
+        const double cz = (b0 + b1) * 0.5;
+        j[k] += studs;
+        jx[k] += studs * cx;
+        jz[k] += studs * cz;
+        ex0[k] = std::min(ex0[k], a0);
+        ex1[k] = std::max(ex1[k], a1);
+        ez0[k] = std::min(ez0[k], b0);
+        ez1[k] = std::max(ez1[k], b1);
+    };
+    const brick::JointCache &jc = joints_of(chunk_id);
+    for (size_t i = 0; i < n; ++i) {
+        if (!counts(i)) {
+            continue;
+        }
+        const Block &b = c.blocks[i];
+        const Vector3i sz = archetypes[b.archetype].size;
+        const double ax0 = b.cell.x * cs.x, ax1 = (b.cell.x + sz.x) * cs.x;
+        const double az0 = b.cell.z * cs.z, az1 = (b.cell.z + sz.z) * cs.z;
+        const double mass = (double)std::max((int64_t)1,
+                brick::to_mass_units(archetypes[b.archetype].mass));
+        const int bot = b.cell.y;
+        const int top = b.cell.y + sz.y;
+        m[bot - lo] += mass;
+        mx[bot - lo] += mass * (ax0 + ax1) * 0.5;
+        mz[bot - lo] += mass * (az0 + az1) * 0.5;
+        // Solid plastic through every boundary strictly inside it.
+        for (int h = bot + 1; h < top; ++h) {
+            touch(h - lo, ax0, ax1, az0, az1, (double)sz.x * (double)sz.z * SOLID_STUDS);
+        }
+        if (b.support_broken || b.bottom_broken) {
+            continue;
+        }
+        // Studs meeting at its bottom, from the grounded blocks it stands on.
+        const int32_t bid = (int32_t)i;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            if (!counts((size_t)nb)) {
+                return;
+            }
+            const Block &o = c.blocks[nb];
+            const Vector3i osz = archetypes[o.archetype].size;
+            if (o.cell.y + osz.y != bot) {
+                return;
+            }
+            const double ox0 = std::max(ax0, (double)o.cell.x * cs.x);
+            const double ox1 = std::min(ax1, (double)(o.cell.x + osz.x) * cs.x);
+            const double oz0 = std::max(az0, (double)o.cell.z * cs.z);
+            const double oz1 = std::min(az1, (double)(o.cell.z + osz.z) * cs.z);
+            touch(bot - lo, std::min(ox0, ox1), std::max(ox0, ox1),
+                    std::min(oz0, oz1), std::max(oz0, oz1), (double)count);
+        });
+    }
+
+    // Top down: what is above boundary h is every block whose bottom is >= h.
+    const int floor_y = foundation_level[chunk_id];
+    double W = 0.0, WX = 0.0, WZ = 0.0;
+    double best = 0.0;
+    int best_h = -1;
+    double best_w = 0.0;
+    bool best_crush = false;
+    int boundaries = 0;
+    for (int h = hi; h > lo; --h) {
+        const int k = h - lo;
+        W += m[k];
+        WX += mx[k];
+        WZ += mz[k];
+        if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
+            continue;
+        }
+        ++boundaries;
+        const double xc = WX / W;
+        const double zc = WZ / W;
+        // TIP, about whichever edge the centre of mass is beyond.
+        double tip = 0.0;
+        auto over = [&](double past, double hold) {
+            if (past <= 0.0) {
+                return;
+            }
+            const double r = hold > 0.0 ? W * past / hold : 1e9;
+            tip = std::max(tip, r);
+        };
+        over(xc - ex1[k], cap * (j[k] * ex1[k] - jx[k]));
+        over(ex0[k] - xc, cap * (jx[k] - j[k] * ex0[k]));
+        over(zc - ez1[k], cap * (j[k] * ez1[k] - jz[k]));
+        over(ez0[k] - zc, cap * (jz[k] - j[k] * ez0[k]));
+        // CRUSH.
+        const double crush = W / (j[k] * crush_cap);
+        const double r = std::max(tip, crush);
+        if (r > best) {
+            best = r;
+            best_h = h;
+            best_w = W;
+            best_crush = crush > tip;
+        }
+    }
+    out["ratio"] = best;
+    out["boundaries"] = boundaries;
+    if (best_h >= 0) {
+        const Vector3 local((x0 + x1) * 0.5f * cs.x, best_h * cs.y, (z0 + z1) * 0.5f * cs.z);
+        out["level"] = c.xform.xform(local);
+        out["level_cell"] = best_h;
+        out["mass_above"] = best_w / (double)brick::MASS_FIXED;
+        out["kind"] = best_crush ? "crush" : "tip";
+    }
+    return out;
+}
+
+// --- snow cover --------------------------------------------------------------
+
+namespace {
+
+constexpr int32_t SNOW_NONE = INT32_MIN;
+
+// Merge equal tops into rectangles and emit a low box for each.
+Array snow_boxes(const std::vector<int32_t> &top, int w, int d, float cell_x, float cell_z,
+        float plate, float thickness, Vector3 offset) {
+    PackedVector3Array verts;
+    PackedVector3Array normals;
+    PackedColorArray colours;
+    PackedInt32Array indices;
+    std::vector<uint8_t> used((size_t)w * (size_t)d, 0);
+    auto quad = [&](Vector3 a, Vector3 b, Vector3 c, Vector3 e, Vector3 n, float ra, float rb,
+            float rc, float re) {
+        const int32_t base = (int32_t)verts.size();
+        verts.push_back(a);
+        verts.push_back(b);
+        verts.push_back(c);
+        verts.push_back(e);
+        for (int i = 0; i < 4; ++i) {
+            normals.push_back(n);
+        }
+        colours.push_back(Color(ra, 0, 0, 1));
+        colours.push_back(Color(rb, 0, 0, 1));
+        colours.push_back(Color(rc, 0, 0, 1));
+        colours.push_back(Color(re, 0, 0, 1));
+        indices.push_back(base);
+        indices.push_back(base + 1);
+        indices.push_back(base + 2);
+        indices.push_back(base);
+        indices.push_back(base + 2);
+        indices.push_back(base + 3);
+    };
+    for (int z = 0; z < d; ++z) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i0 = (size_t)x + (size_t)w * (size_t)z;
+            const int32_t t = top[i0];
+            if (t == SNOW_NONE || used[i0]) {
+                continue;
+            }
+            int x1 = x + 1;
+            while (x1 < w && !used[(size_t)x1 + (size_t)w * z] && top[(size_t)x1 + (size_t)w * z] == t) {
+                ++x1;
+            }
+            int z1 = z + 1;
+            while (z1 < d) {
+                bool row = true;
+                for (int xx = x; xx < x1; ++xx) {
+                    const size_t ii = (size_t)xx + (size_t)w * (size_t)z1;
+                    if (used[ii] || top[ii] != t) {
+                        row = false;
+                        break;
+                    }
+                }
+                if (!row) {
+                    break;
+                }
+                ++z1;
+            }
+            for (int zz = z; zz < z1; ++zz) {
+                for (int xx = x; xx < x1; ++xx) {
+                    used[(size_t)xx + (size_t)w * (size_t)zz] = 1;
+                }
+            }
+            const float X0 = offset.x + x * cell_x;
+            const float X1 = offset.x + x1 * cell_x;
+            const float Z0 = offset.z + z * cell_z;
+            const float Z1 = offset.z + z1 * cell_z;
+            const float Y0 = offset.y + t * plate;
+            const float Y1 = Y0 + thickness;
+            // Top, then the four sides (the shader draws both faces).
+            quad(Vector3(X0, Y1, Z0), Vector3(X1, Y1, Z0), Vector3(X1, Y1, Z1), Vector3(X0, Y1, Z1),
+                    Vector3(0, 1, 0), 1, 1, 1, 1);
+            quad(Vector3(X0, Y0, Z0), Vector3(X1, Y0, Z0), Vector3(X1, Y1, Z0), Vector3(X0, Y1, Z0),
+                    Vector3(0, 0, -1), 0, 0, 1, 1);
+            quad(Vector3(X1, Y0, Z1), Vector3(X0, Y0, Z1), Vector3(X0, Y1, Z1), Vector3(X1, Y1, Z1),
+                    Vector3(0, 0, 1), 0, 0, 1, 1);
+            quad(Vector3(X0, Y0, Z1), Vector3(X0, Y0, Z0), Vector3(X0, Y1, Z0), Vector3(X0, Y1, Z1),
+                    Vector3(-1, 0, 0), 0, 0, 1, 1);
+            quad(Vector3(X1, Y0, Z0), Vector3(X1, Y0, Z1), Vector3(X1, Y1, Z1), Vector3(X1, Y1, Z0),
+                    Vector3(1, 0, 0), 0, 0, 1, 1);
+        }
+    }
+    Array arrays;
+    if (verts.is_empty()) {
+        return arrays;
+    }
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = verts;
+    arrays[Mesh::ARRAY_NORMAL] = normals;
+    arrays[Mesh::ARRAY_COLOR] = colours;
+    arrays[Mesh::ARRAY_INDEX] = indices;
+    return arrays;
+}
+
+} // namespace
+
+Array BrickWorld::build_snow_cover(int chunk_id, float thickness) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i dm = c.dims;
+    const Vector3 cs = cell_size();
+    std::vector<int32_t> top((size_t)dm.x * (size_t)dm.z, SNOW_NONE);
+    for (int z = 0; z < dm.z; ++z) {
+        for (int x = 0; x < dm.x; ++x) {
+            for (int y = dm.y - 1; y >= 0; --y) {
+                const int32_t bid = c.block_at(Vector3i(x, y, z));
+                if (bid < 0) {
+                    continue;
+                }
+                const Block &b = c.blocks[bid];
+                // Furniture neither carries snow nor keeps it off: it is
+                // inside, under a roof, or it is on a roof under the snow.
+                if (!b.alive || b.detached || b.removed || b.decorative) {
+                    continue;
+                }
+                top[(size_t)x + (size_t)dm.x * (size_t)z] = y + 1;
+                break;
+            }
+        }
+    }
+    return snow_boxes(top, dm.x, dm.z, cs.x, cs.z, cs.y, thickness, Vector3());
+}
+
+Array BrickWorld::build_snow_cover_tops(const PackedInt32Array &tops, int w, int d, float cell,
+        float plate, float thickness, Vector2 origin) {
+    if (w <= 0 || d <= 0 || tops.size() < (int64_t)w * d) {
+        return Array();
+    }
+    std::vector<int32_t> top((size_t)w * (size_t)d);
+    for (int64_t i = 0; i < (int64_t)w * d; ++i) {
+        const int32_t t = tops[i];
+        top[(size_t)i] = t < -1000000 ? SNOW_NONE : t;
+    }
+    return snow_boxes(top, w, d, cell, cell, plate, thickness, Vector3(origin.x, 0.0f, origin.y));
+}
+
 int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on) {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -3158,7 +3948,9 @@ int BrickWorld::get_block_joints(int chunk_id, int block_id) const {
     }
     const Block &b = c.blocks[block_id];
     return (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
-            | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0);
+            | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0)
+            | (b.strained ? JOINT_STRAINED : 0)
+            | (b.held ? JOINT_HELD : 0);
 }
 
 void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
@@ -3172,6 +3964,8 @@ void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
     Block &b = c.blocks[block_id];
     b.support_broken = (joints & JOINT_SUPPORT_BROKEN) != 0;
     b.bottom_broken = (joints & JOINT_BOTTOM_BROKEN) != 0;
+    b.strained = (joints & JOINT_STRAINED) != 0;
+    b.held = (joints & JOINT_HELD) != 0;
 }
 
 int BrickWorld::heal_joints(int chunk_id) {
@@ -3180,9 +3974,11 @@ int BrickWorld::heal_joints(int chunk_id) {
     }
     int healed = 0;
     for (Block &b : chunks[chunk_id].blocks) {
-        if (b.support_broken || b.bottom_broken) {
+        if (b.support_broken || b.bottom_broken || b.strained || b.held) {
             b.support_broken = false;
             b.bottom_broken = false;
+            b.strained = false;
+            b.held = false;
             ++healed;
         }
     }
@@ -3289,7 +4085,7 @@ Dictionary BrickWorld::check_stability(int chunk_id) {
     return stability_of_grounding(chunk_id);
 }
 
-Dictionary BrickWorld::solve_structure(int chunk_id) {
+Dictionary BrickWorld::solve_structure(int chunk_id, int max_rounds, double budget_ms) {
     SolveScratch &scratch = solve_scratch();
     std::vector<int32_t> &scratch_depth = scratch.depth;
     std::vector<uint8_t> &scratch_grounded = scratch.grounded;
@@ -3297,24 +4093,70 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     if (!valid_chunk(chunk_id)) {
         return out;
     }
-    const Dictionary stress_out = solve_stress(chunk_id);
+    // Round after round while the cascade runs (see the header). Each stress
+    // solve begins with its own grounding walk, so a round sees what the last
+    // one failed; what can no longer reach the ground is not walked, so it
+    // weighs nothing -- as if it had already been cut out, which is what
+    // happened between two ticks' solves.
+    const auto t0 = std::chrono::steady_clock::now();
+    Dictionary stress_out;
+    int rounds = 0;
+    int failed_rounds = 0;
+    int failures = 0;
+    int last = 0;
+    PackedInt32Array separated;
+    while (true) {
+        stress_out = solve_stress(chunk_id);
+        ++rounds;
+        last = (int)stress_out.get("failures", 0);
+        if (last <= 0) {
+            break;
+        }
+        ++failed_rounds;
+        failures += last;
+        separated.append_array(PackedInt32Array(stress_out.get("separated", PackedInt32Array())));
+        if (rounds >= std::max(1, max_rounds)) {
+            break;
+        }
+        if (budget_ms > 0.0 && std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count() >= budget_ms) {
+            break;
+        }
+    }
+    stress_out["failures"] = failures;
+    stress_out["separated"] = separated;
+    stress_out["rounds"] = failed_rounds;
     // The stress solve changes support_broken on the joints it fails and on
     // nothing else, and a block in the walk was never support_broken to begin
     // with (the walk does not enter one) -- so no failures means the grounding
     // it walked is still the grounding. A failure means a fresh walk.
-    if ((int)stress_out.get("failures", 0) > 0) {
+    if (last > 0) {
         solve_grounded(chunk_id);
     }
-    const Dictionary stability = stability_of_grounding(chunk_id);
+    Dictionary stability = stability_of_grounding(chunk_id);
 
     // solve_grounded's bytes, from the walk: reached, and alive.
-    const Chunk &c = chunks[chunk_id];
-    const size_t n = c.blocks.size();
-    scratch_grounded.assign(n, 0);
-    for (size_t i = 0; i < n; ++i) {
-        scratch_grounded[i] = (scratch_depth[i] >= 0 && c.blocks[i].alive) ? 1 : 0;
+    const size_t n = chunks[chunk_id].blocks.size();
+    auto grounded_from_walk = [&]() {
+        const Chunk &cc = chunks[chunk_id];
+        scratch_grounded.assign(n, 0);
+        for (size_t i = 0; i < n; ++i) {
+            scratch_grounded[i] = (scratch_depth[i] >= 0 && cc.blocks[i].alive) ? 1 : 0;
+        }
+    };
+    grounded_from_walk();
+    Array groups = detached_groups_of(chunk_id, scratch_grounded.data());
+    // What came loose only because load from elsewhere went through it, and
+    // whose own studs hold it, is put back (Block::held) -- and the answers
+    // asked again of the building it is part of once more.
+    const int reattached = reattach_held_groups(chunk_id, groups, scratch_grounded.data());
+    stress_out["reattached"] = reattached;
+    if (reattached > 0) {
+        solve_grounded(chunk_id);
+        stability = stability_of_grounding(chunk_id);
+        grounded_from_walk();
+        groups = detached_groups_of(chunk_id, scratch_grounded.data());
     }
-    const Array groups = detached_groups_of(chunk_id, scratch_grounded.data());
 
     out["stress"] = stress_out;
     out["stability"] = stability;
@@ -3322,7 +4164,109 @@ Dictionary BrickWorld::solve_structure(int chunk_id) {
     return out;
 }
 
-Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids) {
+int BrickWorld::reattach_held_groups(int chunk_id, const Array &groups, const uint8_t *grounded) {
+    if (!valid_chunk(chunk_id) || groups.is_empty()) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const Vector3i up = -chunk_down[chunk_id];
+    const int64_t cap = std::max((int64_t)1, brick::to_mass_units(stress[chunk_id].tension_per_stud));
+    std::vector<uint8_t> &in_group = solve_scratch().mark;
+    in_group.assign(c.blocks.size(), 0);
+    int reattached = 0;
+    for (int gi = 0; gi < groups.size(); ++gi) {
+        const PackedInt32Array g = groups[gi];
+        if (g.size() == 0 || g.size() > REATTACH_MAX_BLOCKS) {
+            continue;
+        }
+        // Only what the stress solve failed, and never held twice: a brick
+        // broken by force -- sheared, torn -- or one its own weight already
+        // pulled off a hold, stays where it fell.
+        bool strained = false;
+        bool eligible = true;
+        int64_t mass = 0;
+        for (int k = 0; k < g.size(); ++k) {
+            const Block &b = c.blocks[g[k]];
+            if (b.support_broken) {
+                if (!b.strained || b.held) {
+                    eligible = false;
+                    break;
+                }
+                strained = true;
+            }
+            if (!b.decorative) {
+                mass += std::max((int64_t)1, brick::to_mass_units(archetypes[b.archetype].mass));
+            }
+        }
+        if (!eligible || !strained) {
+            continue;
+        }
+        for (int k = 0; k < g.size(); ++k) {
+            in_group[g[k]] = 1;
+        }
+        // Its studs into grounded structure: above it (it hangs from them) and
+        // below it (it rests on them), as the stress solve counts contact.
+        int64_t above = 0;
+        int64_t below = 0;
+        for (int k = 0; k < g.size(); ++k) {
+            const int32_t bid = g[k];
+            const Block &b = c.blocks[bid];
+            if (b.decorative) {
+                continue;
+            }
+            const int my_height = height_along(b.cell, up);
+            for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+                const Block &o = c.blocks[nb];
+                if (in_group[nb] || !grounded[nb] || o.decorative || o.held) {
+                    return;
+                }
+                if (height_along(o.cell, up) > my_height) {
+                    above += count;
+                } else {
+                    below += count;
+                }
+            });
+        }
+        for (int k = 0; k < g.size(); ++k) {
+            in_group[g[k]] = 0;
+        }
+        // The stress solve's own test, on its own weight: no pull at all when
+        // nothing above holds it and something below does; otherwise the load
+        // against the capacity of all its contact.
+        const bool holds = (above == 0 && below > 0) || (above + below > 0 && mass <= cap * (above + below));
+        if (!holds) {
+            continue;
+        }
+        for (int k = 0; k < g.size(); ++k) {
+            Block &b = c.blocks[g[k]];
+            b.support_broken = false;
+            b.strained = false;
+            b.held = true;
+        }
+        ++reattached;
+    }
+    return reattached;
+}
+
+Dictionary BrickWorld::solve_rounds(int chunk_id, int rounds) {
+    Dictionary out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    int failures = 0;
+    for (int r = 0; r < rounds; ++r) {
+        failures += (int)solve_stress(chunk_id).get("failures", 0);
+    }
+    const PackedByteArray grounded = solve_grounded(chunk_id);
+    const Array groups = detached_groups_of(chunk_id, grounded.ptr());
+    out["failures"] = failures;
+    out["reattached"] = reattach_held_groups(chunk_id, groups, grounded.ptr());
+    return out;
+}
+
+Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids, int max_rounds,
+        double budget_ms) {
     const int n = (int)chunk_ids.size();
     std::vector<Dictionary> results((size_t)n);
     // The first on this thread, in slot 0 like any other solve here; each of
@@ -3332,19 +4276,19 @@ Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids) {
     std::vector<std::thread> workers;
     for (int i = 1; i < par; ++i) {
         const int chunk = chunk_ids[i];
-        workers.emplace_back([this, &results, i, chunk]() {
+        workers.emplace_back([this, &results, i, chunk, max_rounds, budget_ms]() {
             scratch_slot = i;
-            results[(size_t)i] = solve_structure(chunk);
+            results[(size_t)i] = solve_structure(chunk, max_rounds, budget_ms);
         });
     }
     if (n > 0) {
-        results[0] = solve_structure(chunk_ids[0]);
+        results[0] = solve_structure(chunk_ids[0], max_rounds, budget_ms);
     }
     for (std::thread &t : workers) {
         t.join();
     }
     for (int i = par; i < n; ++i) {
-        results[(size_t)i] = solve_structure(chunk_ids[i]);
+        results[(size_t)i] = solve_structure(chunk_ids[i], max_rounds, budget_ms);
     }
     Array out;
     for (const Dictionary &d : results) {
@@ -4009,6 +4953,170 @@ PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_
 
 // --- detachment ------------------------------------------------------------
 
+PackedInt32Array BrickWorld::rest_contacts(int piece_chunk, const Transform3D &piece_xform,
+        int building_chunk) const {
+    PackedInt32Array out;
+    if (!valid_chunk(piece_chunk) || !valid_chunk(building_chunk)) {
+        return out;
+    }
+    const Chunk &c = chunks[piece_chunk];
+    const Chunk &bc = chunks[building_chunk];
+    const Transform3D inv = bc.xform.affine_inverse();
+    const Vector3 cs = cell_size();
+    const Basis &bs = piece_xform.basis;
+    // The same arithmetic the script did, in the same types, so a point on a
+    // cell boundary lands in the same cell: Vector3 sums in real_t, scalars in
+    // double (a GDScript float), the half-extent added in the script's order.
+    const double ax = std::abs((double)bs.rows[1][0]);
+    const double ay = std::abs((double)bs.rows[1][1]);
+    const double az = std::abs((double)bs.rows[1][2]);
+    std::vector<Vector3i> found;
+    auto test = [&](const Vector3 &pos, const Vector3 &size) {
+        const Vector3 centre = piece_xform.xform(pos);
+        const double hy = ax * (double)size.x * 0.5 + ay * (double)size.y * 0.5
+                + az * (double)size.z * 0.5;
+        const Vector3 under = centre - Vector3(0, 1, 0) * (real_t)(hy + 0.05);
+        const Vector3 local = inv.xform(under);
+        const Vector3i rel((int)std::floor((double)local.x / (double)cs.x),
+                (int)std::floor((double)local.y / (double)cs.y),
+                (int)std::floor((double)local.z / (double)cs.z));
+        if (!bc.in_bounds(rel) || !bc.solid_at(rel) || bc.occupancy[(size_t)bc.index_of(rel)] < 0) {
+            return;
+        }
+        const Vector3i at = bc.origin + rel;
+        if (std::find(found.begin(), found.end(), at) == found.end()) {
+            found.push_back(at);
+        }
+    };
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            test(centre, size);
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        test(Vector3((base.x + x + 0.5f) * cs.x, (base.y + y + 0.5f) * cs.y,
+                                (base.z + z + 0.5f) * cs.z), cs);
+                    }
+                }
+            }
+        }
+    }
+    out.resize((int64_t)found.size() * 3);
+    for (size_t k = 0; k < found.size(); ++k) {
+        out.set((int64_t)k * 3, found[k].x);
+        out.set((int64_t)k * 3 + 1, found[k].y);
+        out.set((int64_t)k * 3 + 2, found[k].z);
+    }
+    return out;
+}
+
+bool BrickWorld::any_block_centre_in(int chunk_id, const AABB &box,
+        const PackedInt32Array &exclude) const {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    const Chunk &c = chunks[chunk_id];
+    std::vector<uint8_t> skip(c.blocks.size(), 0);
+    for (int64_t k = 0; k < exclude.size(); ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)c.blocks.size()) {
+            skip[(size_t)id] = 1;
+        }
+    }
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive || skip[i]) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            if (box.has_point(centre)) {
+                return true;
+            }
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z) && box.has_point(Vector3((base.x + x + 0.5f) * cs.x,
+                            (base.y + y + 0.5f) * cs.y, (base.z + z + 0.5f) * cs.z))) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+PackedByteArray BrickWorld::block_centre_levels(int chunk_id, const AABB &box,
+        float level_height, const PackedInt32Array &exclude) const {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id) || level_height <= 0.0f) {
+        return out;
+    }
+    const int levels = std::max(1, (int)std::ceil(box.size.y / level_height));
+    out.resize(levels);
+    out.fill(0);
+    const Chunk &c = chunks[chunk_id];
+    std::vector<uint8_t> skip(c.blocks.size(), 0);
+    for (int64_t k = 0; k < exclude.size(); ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)c.blocks.size()) {
+            skip[(size_t)id] = 1;
+        }
+    }
+    auto mark = [&](const Vector3 &p) {
+        if (!box.has_point(p)) {
+            return;
+        }
+        const int l = std::min(levels - 1, std::max(0,
+                (int)std::floor((p.y - box.position.y) / level_height)));
+        out.set(l, 1);
+    };
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive || skip[i]) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        if (a.is_full_box()) {
+            Vector3 centre, size;
+            block_extent(c, b, centre, size);
+            mark(centre);
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        mark(Vector3((base.x + x + 0.5f) * cs.x, (base.y + y + 0.5f) * cs.y,
+                                (base.z + z + 0.5f) * cs.z));
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
 void BrickWorld::block_extent(const Chunk &c, const Block &b,
         Vector3 &out_centre, Vector3 &out_size) const {
     const Vector3 cs = cell_size();
@@ -4458,6 +5566,8 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
         nb.decorative = src_block.decorative;
         nb.support_broken = src_block.support_broken;
         nb.bottom_broken = src_block.bottom_broken;
+        nb.strained = src_block.strained;
+        nb.held = src_block.held;
         nb.hp = src_block.hp;
         nb.material = src_block.material;   // a steel beam falls as steel
         nb.scorched = src_block.scorched;
@@ -4915,7 +6025,9 @@ Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
                 decorative.push_back(n);
             }
             const int cut = (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
-                    | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0);
+                    | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0)
+                    | (b.strained ? JOINT_STRAINED : 0)
+                    | (b.held ? JOINT_HELD : 0);
             if (cut != 0) {
                 joints.push_back(n);
                 joints.push_back(cut);
@@ -5122,8 +6234,12 @@ PackedByteArray BrickWorld::solve_grounded_from(int chunk_id, const PackedInt32A
         const int32_t bid = scratch_queue[head];
         ++ss.blocks_visited;
         const int32_t next_depth = scratch_depth[bid] + 1;
+        const bool from_held = c.blocks[bid].held;
         for_each_joint(c, jc, bid, [&](int32_t nb, int) {
             if (mark[nb] != 0 || c.blocks[nb].support_broken) {
+                return;
+            }
+            if (from_held && !c.blocks[nb].held) {
                 return;
             }
             if (!grounding_flows(c, archetypes, bid, nb, up)) {
@@ -5271,6 +6387,15 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_block_index_range);
 
     ClassDB::bind_method(D_METHOD("build_chunk_mesh", "chunk_id"), &BrickWorld::build_chunk_mesh);
+    ClassDB::bind_method(D_METHOD("rest_contacts", "piece_chunk", "piece_xform", "building_chunk"),
+            &BrickWorld::rest_contacts);
+    ClassDB::bind_method(D_METHOD("any_block_centre_in", "chunk_id", "box", "exclude"),
+            &BrickWorld::any_block_centre_in);
+    ClassDB::bind_method(D_METHOD("block_centre_levels", "chunk_id", "box", "level_height", "exclude"),
+            &BrickWorld::block_centre_levels);
+    ClassDB::bind_method(D_METHOD("build_chunk_coarse_mesh", "chunk_id"),
+            &BrickWorld::build_chunk_coarse_mesh);
+    ClassDB::bind_method(D_METHOD("get_last_coarse_ms"), &BrickWorld::get_last_coarse_ms);
     ClassDB::bind_method(D_METHOD("get_mesh_stats", "chunk_id"), &BrickWorld::get_mesh_stats);
     ClassDB::bind_method(D_METHOD("set_chunk_section_plates", "chunk_id", "plates"),
             &BrickWorld::set_chunk_section_plates);
@@ -5299,8 +6424,9 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_chunk_authored_tris);
     ClassDB::bind_method(D_METHOD("get_blocks_box", "chunk_id", "block_ids"),
             &BrickWorld::get_blocks_box);
-    ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids"),
-            &BrickWorld::solve_structures);
+    ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids", "max_rounds", "budget_ms"),
+            &BrickWorld::solve_structures, DEFVAL(1), DEFVAL(0.0));
+    ClassDB::bind_method(D_METHOD("solve_rounds", "chunk_id", "rounds"), &BrickWorld::solve_rounds);
     ClassDB::bind_method(D_METHOD("get_block_sections", "chunk_id", "block_ids", "skip_decorative"),
             &BrickWorld::get_block_sections, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("add_band_shapes", "bodies", "chunk_id", "offset", "sections",
@@ -5327,8 +6453,15 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("solve_stress", "chunk_id"), &BrickWorld::solve_stress);
     ClassDB::bind_method(D_METHOD("lateral_check", "chunk_id", "accel_g", "world_dir"),
             &BrickWorld::lateral_check);
+    ClassDB::bind_method(D_METHOD("build_snow_cover", "chunk_id", "thickness"),
+            &BrickWorld::build_snow_cover);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("build_snow_cover_tops", "tops", "w", "d",
+            "cell", "plate", "thickness", "origin"), &BrickWorld::build_snow_cover_tops);
     ClassDB::bind_method(D_METHOD("check_stability", "chunk_id"), &BrickWorld::check_stability);
-    ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id"), &BrickWorld::solve_structure);
+    ClassDB::bind_method(D_METHOD("gravity_check", "chunk_id", "crush_per_stud"),
+            &BrickWorld::gravity_check);
+    ClassDB::bind_method(D_METHOD("solve_structure", "chunk_id", "max_rounds", "budget_ms"),
+            &BrickWorld::solve_structure, DEFVAL(1), DEFVAL(0.0));
     ClassDB::bind_method(D_METHOD("heal_joints", "chunk_id"), &BrickWorld::heal_joints);
     ClassDB::bind_method(D_METHOD("save_template", "chunk_id"), &BrickWorld::save_template);
     ClassDB::bind_method(D_METHOD("place_blocks", "chunk_id", "origin", "cells", "archetype_ids", "colours"),
@@ -5357,6 +6490,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_external_load", "chunk_id", "block_id"),
             &BrickWorld::get_external_load);
     ClassDB::bind_method(D_METHOD("get_load_owners", "chunk_id"), &BrickWorld::get_load_owners);
+    ClassDB::bind_method(D_METHOD("get_headroom", "chunk_id", "block_id"), &BrickWorld::get_headroom);
     ClassDB::bind_method(D_METHOD("chip_hit", "chunk_id", "world_point", "radius_m", "damage"),
             &BrickWorld::chip_hit);
     ClassDB::bind_method(D_METHOD("get_worn_blocks", "chunk_id"), &BrickWorld::get_worn_blocks);

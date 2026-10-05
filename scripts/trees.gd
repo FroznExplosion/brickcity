@@ -89,14 +89,12 @@ static func recipe(variant: int) -> BuildRecipe:
 	#    four in the middle always, so the layers above have something to sit on.
 	var lo := -3 if wide else -2
 	var hi := 5 if wide else 4
-	var cells := 0
 	for x in range(lo, hi, 2):
 		for z in range(lo, hi, 2):
 			var middle := x >= -1 and x < 3 and z >= -1 and z < 3
 			var keep := middle or _hash(variant, x, z) < 0.6
 			if keep:
 				r.add("brick_2x2", o + Vector3i(x, y, z), b if (x + z) % 4 == 0 else a, 0, interior)
-				cells += 1
 	y += 3
 	# 4. A 4x4 plate and a 2x2 brick on top: the crown.
 	r.add("plate_4x4", o + Vector3i(-1, y, -1), b, 0, interior)
@@ -168,11 +166,14 @@ static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Arr
 
 ## Where a tree's placed recipe (rebased to its min corner) goes so its trunk
 ## corner lands on `cell` -- a Transform3D for BuildingRegistry.register_build.
-static func placement(cell: Vector3i, variant: int) -> Transform3D:
+## `ground_m`, if given, is the height it stands at instead of the cell's: the
+## ground that is DRAWN there, where that is a coarse tier (TerrainCoarse.height_at).
+static func placement(cell: Vector3i, variant: int, ground_m: float = NAN) -> Transform3D:
 	var off := trunk_offset(variant)
 	var c := cell - off
 	var size := BrickWorld.get_cell_size()
-	return Transform3D(Basis(), Vector3(c.x * size.x, c.y * size.y, c.z * size.z))
+	var y := c.y * size.y if is_nan(ground_m) else ground_m - off.y * size.y
+	return Transform3D(Basis(), Vector3(c.x * size.x, y, c.z * size.z))
 
 
 static func _hash(s: int, x: int, z: int) -> float:

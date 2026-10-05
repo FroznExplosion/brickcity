@@ -21,6 +21,8 @@ extends RefCounted
 ## pawns inside a piece's box.
 
 const MIN_SPEED := 2.5            ## m/s
+## In practice nine: a piece of IslandManager.DEBRIS_MAX_BLOCKS or fewer is
+## crumbs, not a body (IslandManager._crumble), and crumbs hurt nobody.
 const MIN_BRICKS := 6
 const DAMAGE := 1.1               ## hp per (m/s x sqrt(bricks))
 const KILL_BRICKS := 100

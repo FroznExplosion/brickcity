@@ -2006,6 +2006,15 @@ Building shells, nothing materialised into live bricks yet.
 
 Worst viewpoint each, debug build, Radeon iGPU, 1152x648.
 
+> **Correction (2026-09-29, Docs/Impostors.md §7.1).** These city rows were not shells. The bench
+> sampled while the streamer was still settling, and its street-level viewpoint promoted the
+> buildings beside it into live bricks at whatever tick it got to them. Most of the millions were
+> those bricks, drawn again in every shadow cascade. The bench now settles each viewpoint and does
+> not promote (`--with-bricks` puts that back). Shells only, big_city, 150 buildings, worst
+> viewpoint: **~250–300k tris, ~100 calls**. With three brick buildings beside the camera: 2.1M
+> tris, 145 calls after the shadow LOD. So the conclusion below still holds, but for a different
+> reason: the city is the expensive half because of **materialised bricks**, not shells.
+
 **The city is the expensive half and terrain is not close.** 150 buildings
 cost 3.3M triangles where a 560 m terrain costs 1.2M, and the city's number
 climbs with building count while the terrain's is nearly flat in view
@@ -2419,6 +2428,119 @@ far ground".
 
 **The sea is three bricks lower** (`SEA_AT_SAND` −0.76 m): 0.5 m covered
 nearly all the sand.
+
+### 19.20 Smooth far ground that reads as brick
+
+The switch from blocky LOD 1 to smooth LOD 2 was easy to see, for three
+reasons, each now fixed at no triangle cost (far tier 547,548 triangles before
+and after):
+
+  * **Colour bled.** A smooth vertex was shared by four cells, so material
+    colours blended into blobs. Each cell now has its own four vertices: one
+    flat colour, a hard edge, as a blocky cell has. Heights still come from the
+    shared corners, so there are no cracks.
+  * **Slopes were continuous.** Corner heights are snapped to a brick course
+    (0.42 m): gentle ground becomes flat shelves joined by short ramps.
+  * **Lighting was smooth.** The shader lights smooth far ground flat per
+    triangle (normal from screen-space derivatives), and darkens ramps
+    (`far_ramp_shade` 0.72) the way a blocky wall is darker than its top.
+
+With the course lines (19.19) the far ground now reads as terraces of brick.
+
+The `--terrain --nav` flush gate now checks only the site buildings: the
+registry also holds brick trees and small items since the impostor work (822
+entries), and those do not stand on pads.
+
+### 19.21 Speckled seams, and one lighting rule for all far ground
+
+**The speckle** along skirts and smooth ramps was shadow acne: 19.20 gave
+smooth far vertices and skirts an "up" normal and did the lighting in the
+shader, but shadow bias reads the VERTEX normal, and "up" on a steep face
+biases the wrong way. Smooth cells now carry their real slope as the vertex
+normal and skirts face out; the shader still lights them flat.
+
+**The LOD 1 / LOD 2 border.** Blocky far blocks are flagged too (CUSTOM0.g =
+0.5) and lit by the same rule as smooth ones: flat per face, tops full
+brightness, anything steeper darkened by `far_ramp_shade`. The border now
+changes shape (steps to ramps) but not shading. Course lines stay on smooth
+ground only.
+
+### 19.22 Slopes and curves along terrace edges (after LEGO Worlds)
+
+`Docs/Reference/lego-worlds.md`: LEGO Worlds' hills are rows of slopes and
+curved slopes laid along the contour, not 1x1 ramps (which we tried and turned
+off, `RAMPS_ENABLED`, because a 50-degree face a third of a metre wide read as
+melted). So a new piece, `PIECE_SLOPE`:
+
+* **Where:** a cell whose neighbour on one side is 1-3 plates lower, with the
+  terrace running back at least 2 studs behind it at the same height, material
+  and colour. Placed before the flat packer.
+* **Which:** the run decides. 2 studs: a **1x2 slope** (flat back stud, 39
+  degree face, a plate-high lip). 3-4 studs: a **1x3 / 1x4 curved slope** (flat
+  at the back, falling ever steeper, two stations a stud). A one-plate fall
+  (the half-brick regions): a **cheese slope**, one straight face, no lip.
+* **Width:** rows along the contour with the same shape merge up to 4 wide,
+  like LEGO's 2x4 slopes.
+* **Drawn by the piece itself** (the mask skips a piece's own brick): the
+  profiled top, the front lip, a back wall where the ground behind is lower,
+  and each side a wall down to lower ground or a CHEEK up to higher ground --
+  the neighbour's face the slope's cut exposes. Neighbouring slopes are
+  measured at their real surface, not their column, or the walls stopped short
+  and showed the water through a slit.
+* **Collision:** each cell's box at the slope's height over its middle.
+* **Toggle:** `BrickTerrain.set_slope_pieces`; the F10 menu has "Slopes and
+  curves on terrace edges".
+
+Cost: 381k -> 660k detail triangles at the origin view (a first version with
+three stations a stud was 1.65M). Known gaps: a few specks where a slope meets
+a slope in the next tile (a tile cannot see its neighbour's pieces); no corner
+pieces yet, so a turning contour steps rather than wrapping.
+
+The workshop palette gained the same parts (Build mode area, small change):
+`curve_1x3`, `curve_1x4`, `curve_2x4`, and one-plate `cheese_1x1`, `cheese_1x2`,
+`cheese_2x2` (studless, in the Slopes category).
+
+### 19.23 Slope sides that meet, and steep slopes on steep ground
+
+**Slivers and fins beside slopes.** A slope's side used one flat bottom per
+segment, sized from the neighbour's height at one point. Where two slopes of
+different length met side by side their surfaces CROSS, and the side left a
+gap (blue water showing) on one part and a fin on the other. Sides are now
+sampled every stud (half stud on curves) against the neighbour's real surface:
+a wall where it is lower, a cheek where it is higher, split exactly where the
+two cross.
+
+**Steep slopes.** Where the ground drops two or three bricks over one stud --
+sculpted mounds, mostly; the generator rarely does -- the edge is a STEEP
+slope, like LEGO's 1x2x3 (~73 degrees): a flat back stud where there is room,
+one stud of steep face, a plate lip. A taller drop gets the steep slope on its
+top three bricks and plain brick below. A steep slope owns its column down to
+the ground in front (`in_piece_solid`), so the wall pass leaves that face to
+it.
+
+### 19.24 Slopes decided per column, from the field
+
+The packer used to decide slopes first-come, inside one tile, so the next
+tile could not know where its neighbour's slopes were: at tile borders sides
+were sized against the wrong surface (water slivers, fins), and on steep
+mounds slopes pointing different ways overlapped.
+
+Now `sample_tile` classifies every column -- its tile and a two-stud margin --
+from the FIELD alone (heights, material, colour over an 8-stud border): the
+side it falls toward, the run length, its distance from the front, the fall.
+Every tile gets the same answer about every column, so `column_surface` gives
+the exact slope surface of any neighbour, in or out of the tile. Pieces are
+built from runs of those columns (cut at tile edges, which is fine: the
+surface is the same either side).
+
+Each piece's sides, back wall and top share one UV frame, so the seam outline
+goes round the whole piece rather than round every segment -- the "small
+bricks" lines on slope sides. The side fillers (wall down to a lower
+neighbour, cheek up to a higher one -- the angled non-brick pieces that plug
+gaps) are split exactly where the two surfaces cross.
+
+Slopes are heightfield-only (`g_flat_mode`): the volumetric bench carves its
+field and keeps its bricks.
 
 ## 20. Editing terrain is a LEVEL EDITING job
 
@@ -2908,3 +3030,230 @@ touches a piece that has fallen.
 `-- --terrain --nav` gates both: every building on the stud and plate grid
 with 0 of 23,100 footprint columns off the floor, and a cottage placed on the
 hillside flush in every column.
+
+## 22. Plan: heightfield until it must be volumetric
+
+Status: **plan, not built.** The terrain has two working modes today — the heightfield
+(`set_flat_mode(true)`: one surface per column, slopes, sculpt, paint) and the volumetric bench
+(carving, caves, a sparse cell-edit map `g_edits`) — but the mode is one global switch. This is
+the plan for both in one world, chosen per tile, with volumetric only where the ground actually
+needs it. Prior art: STA's blocky track stores nothing for unedited chunks, "the heightmap is the
+store there, which is also the far LOD" (`Docs/Reference/sta.md`).
+
+### 22.1 The rule: what a hit leaves decides the mode
+
+A tile is HEIGHT by default. A hit (explosion, dig, collapse) is applied as a carve, and the carve
+is classified per column before anything is stored:
+
+| what the column ends up as | stored as | tile stays |
+|---|---|---|
+| removed from the top down — the hole reaches the surface | a **height delta** in the sculpt layer (§20.6), exposed material in the surface-paint layer (§20.7) | HEIGHT |
+| a hollow under a lip at most `LIP_MAX` thick (default one brick) | the lip is removed too (it crumbles; debris spawned) → height delta | HEIGHT |
+| a hollow under a lip of sand, dirt or grass (ground that cannot hold an overhang) | the lip collapses → height delta | HEIGHT |
+| a hollow under a lip thicker than `LIP_MAX`, in rock | cell edits in the tile's volume store | **VOLUME** |
+
+So a crater blown into flat dirt from above is a heightfield crater. A blast into the side of a
+steep **stone** hill that leaves a roof thicker than a brick is an overhang, and only that tile
+(and any neighbour the hollow crosses into) becomes VOLUME. The material rule is the natural gate:
+loose ground slumps, rock arches. `LIP_MAX` and the material list are the knobs for "only
+sometimes".
+
+Heightfield craters are nearly free: they are the same per-column offsets the sculpt brush writes
+(copy-on-write tiles, saved in the world file), so the detail mesher, slopes, the coarse tier,
+collision, the AI's ground and the water's seabed all see them with no new code.
+
+### 22.2 A VOLUME tile
+
+* **Store:** the existing `g_edits` (cell → material, sparse), scoped to the tile. A converted tile
+  is the heightfield's own columns, solid to their tops, plus the edits — so converting never
+  changes the shape, and its edges still match its HEIGHT neighbours (both read one field).
+* **Mesher:** `sample_tile` picks the path per tile instead of from `g_flat_mode`; the volumetric
+  path already handles caves, craters and the wall pass.
+* **Slopes:** HEIGHT tiles only, at first. A blown-open rock face of plain bricks reads as rubble.
+  3D slope rules (a slope over a hollow, under an overhang) are a later step.
+* **Collision:** the volumetric box builder per tile (exists for the bench).
+* **AI:** `AINav` already reads columns with several floors (built for storeys); a VOLUME tile
+  answers `column_solid` from its cells instead of from one ground height.
+* **Water:** the seabed top is the highest solid cell; a cave floods only through the cell water
+  of Water.md §12.
+
+### 22.3 Far LOD and saving
+
+* Far tiers sample `surface_plate`, which for a VOLUME column is its highest solid cell: from far
+  away an overhang reads as a solid bump, filled under by skirts. A large authored arch or cave
+  mouth can carry a baked low-detail mesh, built once when its tile changes. Optional.
+* HEIGHT edits are sculpt/paint tiles (already saved). VOLUME tiles save their cell edits per
+  tile, run-length per column. Authored caves are VOLUME tiles from the start.
+
+### 22.4 Budgets (estimates, not measured)
+
+| | HEIGHT tile | VOLUME tile |
+|---|---|---|
+| build | ~3 ms | ~8–15 ms |
+| memory | heights + two layers | + sparse cell edits (a big crater ~10–50 KB) |
+| a hit | rebuild touched tiles | same + volumetric re-mesh, 5–20 ms, spread over frames |
+
+A battle that wrecks a hillside converts a handful of tiles; the rest of the world never pays.
+
+### 22.5 Build order
+
+1. Per-tile mode flag; `sample_tile` chooses the path per tile. Gate: a VOLUME tile beside HEIGHT
+   tiles has no seam (coverage gate).
+2. Carve classifier (§22.1) writing height deltas. Gate: a crater on flat dirt stays HEIGHT and
+   the far tier shows it.
+3. Lip rule, material rule, debris for collapsed lips.
+4. VOLUME conversion for thick rock overhangs; collision and AI per tile.
+5. Save/load of both; level-editor caves.
+6. Later: 3D slopes in VOLUME tiles; baked far proxies for big overhangs.
+
+### 22.6 Why Minecraft does not do this
+
+Minecraft stores the world in 16x16x16 sections and gets most of the memory saving without a
+second format: an all-air section is not stored, and a section of one block type is a one-entry
+palette, a few bytes. Its underground is full of caves and ores, so a heightfield could not
+describe most sections anyway, and every block is editable by every player. One uniform format is
+simpler for them than two paths and a conversion.
+
+This game is different: the terrain is a surface with nothing under it to find, most of it is
+never dug, and the far LOD already is a heightfield. Two formats cost a conversion step and buy
+the cheapest surface mesher, and all the slope work, for the ground nobody digs.
+
+### 22.7 Decision: stay heightfield; when full volumetric would win (2026-10-02)
+
+**Decision: keep the heightfield.** §22.1–22.6 stays as the plan if overhangs are ever wanted;
+nothing of it is scheduled.
+
+Full volumetric (Minecraft's one format everywhere) beats this hybrid when most near tiles would
+convert anyway — roughly, when a normal session turns more than a third of the near tiles
+VOLUME: digging and mining as the core loop, generation full of caves and arches, or terrain that
+falls as physics. Then two meshers and a conversion buy nothing. A mech FPS, where destruction is
+flavour and not the game, is the hybrid's case.
+
+What the hybrid does without: generated caves and overhangs (only authored VOLUME tiles); a
+thin-roofed tunnel in loose ground (it collapses by design); hidden underground content; slopes
+under overhangs; terrain that falls as a body. Strata by depth are not lost — the material at a
+depth is a function of the field in either mode.
+
+Two ways to get some of it back, if wanted:
+
+* **Underground made when exposed.** Caves, ore and buried things as a pure function of
+  (cell, seed), evaluated only when a hit reaches them; the carve classifier converts a tile when
+  its hole touches a hidden void. Deterministic, so a cave that crosses tiles agrees and every
+  peer computes the same thing without sending it. Cave mouths at the surface must be VOLUME from
+  generation, or nothing would show they are there. Unopened ground still stores nothing.
+* **Volumetric LOD 0, heightfield LOD 1+.** Storage is not the cost (the volumetric mode is
+  already the field plus sparse edits); the cost is that every near tile goes through the
+  volumetric mesher (~2–4x the build, on every streaming move, estimated) and the slope work
+  (§19.22–19.24) is heightfield-only, so LOD 0 would lose slopes until 3D slope rules exist.
+  Overhangs pop at the LOD boundary. Generated overhangs as VOLUME-from-generation tiles with a
+  baked far proxy (§22.3) get the same mountains at every distance without this.
+
+### 22.8 The editor's triangle spike (2026-10-02)
+
+Switching tool (and ending every brush stroke) called `_refresh_markers`, which rebuilt the site
+shells and with them re-scattered all 6000 trees into NEW ImpostorLod sets. A new set has no
+baked card, and until it bakes every tree is drawn at full detail: 1 M triangles became 9 M+ for
+a couple of seconds. Now a tool switch or stroke does not touch the shells; `TerrainTrees` keeps
+its sets and re-places only the trees in the changed area (`rebuild_soon(studs)`). The brush's
+aim (`BrickTerrain.ray_ground`) and the sea's WET map (`BrickWave.wet_cells`) moved to C++.
+Measured in the editor scene: 758 k triangles before a switch to RAISE, 761 k peak after.
+
+### 22.9 What runs every frame, measured (2026-10-03)
+
+Each per-frame piece of the heightfield scene timed alone (editor open, so indicative; ms per frame,
+camera still / moving at ~15 m/s):
+
+| piece | before | after | what changed |
+|---|---|---|---|
+| trees re-tiering (ImpostorLod.update, 6000 trees) | 3.8 every 10th frame | ~0 still, 0.2 moving | a set is re-sorted only after the camera moves a metre, one set a frame |
+| streamer.follow | 1.0 / 3.8 | 0.12 / 2.6 | `_finish` and the shadow flags skip when nothing is owed / the centre has not moved |
+| HUD | 0.3 every frame | 0.16 at 5 Hz | throttled |
+| pools' sea mask | 4.7 per rebuild | 0.11 | calm stamped round wet columns, not a distance pass over the window |
+
+What is left is not GDScript arithmetic: the moving streamer cost is creating meshes, multimeshes
+and 200–300 collision boxes per tile through the engine, under its per-frame budget. The big
+lever there is collision as ONE shape per tile (a HeightMapShape3D from C++) instead of hundreds of
+boxes — but a heightmap shape ramps between columns where the boxes step, which changes how the
+ground feels underfoot, so it is a decision, not a cleanup.
+
+### 22.10 Two engine stalls behind the streaming spikes (2026-10-03)
+
+Neither was GDScript arithmetic, and neither needed C++ — both were the ORDER of engine calls.
+
+* **Collision.** Every box was added to a tile's body after the body had joined the physics space,
+  and Jolt rebuilds a body's whole compound shape on each change while it is in the space. A
+  670-box tile: 24.9 ms that way, 0.77 ms with the boxes added first and the body put in the space
+  after (`TerrainTile.add_collision`). The streamer's 32-boxes-a-frame cap existed to bound the
+  first number and is gone (`shapes_per_frame = 0`). The sea's swim patch moved 81 boxes in the
+  space 20 times a second: 0.95 ms a refit, 0.065 ms out of the space (`water_collider.gd`). The
+  city's building code already did this; the terrain had not.
+* **Instances.** A NEW MultiMesh entering the tree stalls on the render thread: 4.5 ms a node on
+  average, 19 ms at worst, for one stud or a thousand. A MultiMesh drawn before fills and shows in
+  a new node in 0.04 ms. Tiles now hand their stud, tuft and pebble MultiMeshes back to a pool when
+  they leave and the next tile takes them (`TerrainTile._take_multimesh`).
+
+Walking at ~15 m/s through the heightfield scene, three runs each, other chats' tests running
+alongside both: `streamer.follow` mean 3.2 ms before, 0.56 ms after; worst collision phase 5 ms to
+1.1 ms; worst instance phase 20 ms to 13–18 ms (the pool is empty until tiles start dropping).
+The first merge of this carried the cap removal WITHOUT the collision reorder (reverted by
+accident with a test flag): whole tiles into a live body, 85 ms spikes. Fixed in the next merge.
+
+### 22.11 One collision shape a tile: measured, not taken (2026-10-03)
+
+Built the tile's collider as one triangle mesh in C++ (the merged boxes' tops and walls, 5,000
+triangles, made on the bake's worker thread) and timed it against the boxes in the heightfield
+scene, 20 tiles: boxes **0.37 ms** a tile (added before the body joins the space, §22.10), trimesh
+**4.0–4.7 ms** (worst 22 ms) — Jolt builds the mesh's search tree on the main thread when the
+shape is set. A 65x65 heightmap shape was 0.53 ms and would turn every brick step into a ramp.
+Neither beats the boxes once they are added in the right order, so the boxes stay and the trimesh
+code was removed.
+
+### 22.12 Where the triangles go, and what was tried (2026-10-05)
+
+Heightfield scene, measured by hiding each group (frame totals include the sun's shadow pass):
+
+| view | frame | detail terrain | studs | trees | sea | shadow pass |
+|---|---|---|---|---|---|---|
+| editor, high | 686 k tris, 1,658 calls | 57 k | 0 | 289 k, **1,467 calls** | 26 k | 245 k |
+| on foot | 1.58 M tris, 585 calls | 415 k (4.9 k a tile) | 61 k | **772 k** | 26 k | 643 k |
+
+Tried, on foot:
+
+| idea | result | taken |
+|---|---|---|
+| automatic LODs on the near tree mesh (ImporterMesh.generate_lods) | **−530 k tris (−33%)**, ~20 ms once a mesh, no visible change | yes — `ImpostorLod._with_lods`, every set (trees, items, city) |
+| far tree cards cast no shadow | −4 k tris, −85 calls | no: trees want their far shadows; small |
+| sun shadow distance 60 m | already 60 | — |
+| automatic LODs on terrain tiles | −4 k tris, 7 ms a tile | no: brick tops have nothing to simplify |
+| occlusion culling, coarse ground as occluders | 0 in this view | no: a 128 m tree square or an 11 m tile is almost never wholly behind a hill |
+
+The census's "1,467 tree calls" was taken before the trees had sorted into tiers after loading;
+settled, from the same height, they are 258.
+
+**Tree squares** (`ImpostorLod.set_chunk`, `TerrainTrees.chunk_metres`), trees only, settled:
+
+| square | calls, editor / on foot | tree tris, editor |
+|---|---|---|
+| 128 m | 258 / 289 | 238 k |
+| 256 m | 179 / 194 | 247 k |
+| **512 m (taken)** | **150 / 162** | 280 k |
+| 1024 m | 142 / 143 | 288 k |
+
+Fewer squares cull less finely, but what they add is two-triangle cards; −42% draw calls is the
+better trade. Items and the city keep 128 m.
+
+**Detail radius.** The detail square snaps to `TerrainStreamer.align` blocks (4 tiles): the
+camera's block plus a whole block each side, so full bricks reach 4–7 tiles (45–80 m) and a radius
+of 3 is the same square as 4. A tighter square needs 2-tile blocks (`-- --align=2` in the
+heightfield scene, for comparing):
+
+| | resident tiles | drawn, mech view | drawn, on foot |
+|---|---|---|---|
+| now (radius 4, blocks of 4) | 240 | 1.20 M | 1.09 M |
+| radius 3, blocks of 2 | 140 | 1.10 M | 1.13 M |
+| radius 2, blocks of 2 | 60 | 0.97 M | 0.99 M |
+
+Resident tiles fall a lot (less to bake and hold); what is DRAWN barely moves — the coarse ground
+takes the area over and has triangles of its own, and the frame is mostly trees and shadows. At
+radius 2 the ground 20–40 m off visibly loses its slopes and curves. Not changed; a look decision
+(`shots/detail_radius_*.png` in the main folder).
