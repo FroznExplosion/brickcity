@@ -367,6 +367,11 @@ void fragment() {
     NORMAL = wet_normal;
     // A tree's crown takes a cap of snow; a building has real cover.
     weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, weather_snowcap);
+    // A tree over burnt ground is burnt too (the wildfire's map).
+    if (weather_snowcap > 0.0) {
+        emission += weather_burn_surface(albedo, out_rough,
+                (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz, TIME) * 0.4;
+    }
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

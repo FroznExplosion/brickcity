@@ -43,6 +43,7 @@ const KINDS := {
 	"hail": preload("res://scripts/disasters/hailstorm.gd"),
 	"sandstorm": preload("res://scripts/disasters/sandstorm.gd"),
 	"waterspout": preload("res://scripts/disasters/waterspout.gd"),
+	"wildfire": preload("res://scripts/disasters/wildfire.gd"),
 }
 ## Several at once (Docs/Disasters.md 22): a menu entry that starts each of
 ## its kinds together, each from its own seed. Offered where every kind in it
@@ -77,6 +78,7 @@ const TITLES := {
 	"hail": "Hailstorm",
 	"sandstorm": "Sandstorm",
 	"waterspout": "Waterspout",
+	"wildfire": "Wildfire",
 	"outbreak": "Tornado outbreak (3 tornadoes)",
 	"superstorm": "Superstorm (hurricane + 2 tornadoes)",
 	"firestorm": "Firestorm (lightning + fire + tornado)",

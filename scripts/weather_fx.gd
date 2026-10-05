@@ -22,6 +22,10 @@ static var rain := 0.0
 ## white, or a sandstorm's sand.
 static var snow := 0.0
 static var snow_colour := Color(0.93, 0.95, 0.99)
+## The wildfire's map of the ground (weather.gdshaderinc): R burnt, G burning,
+## over `burn_rect` (x, z, width, depth). Kept after the fire: scars stay.
+static var burn_tex: Texture2D = null
+static var burn_rect := Vector4.ZERO
 ## Direction x strength, 0..~1.
 static var wind := Vector3.ZERO
 
@@ -133,6 +137,20 @@ static func _apply(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("weather_rain", rain)
 	m.set_shader_parameter("weather_snow", snow)
 	m.set_shader_parameter("weather_snow_colour", snow_colour)
+	if burn_tex != null:
+		m.set_shader_parameter("weather_burn_tex", burn_tex)
+		m.set_shader_parameter("weather_burn_rect", burn_rect)
+
+
+## The wildfire's map into every material (the texture is updated in place).
+static func set_burn(tex: Texture2D, rect: Vector4) -> void:
+	burn_tex = tex
+	burn_rect = rect
+	for r in _mats:
+		var m = r.get_ref()
+		if m != null:
+			(m as ShaderMaterial).set_shader_parameter("weather_burn_tex", burn_tex)
+			(m as ShaderMaterial).set_shader_parameter("weather_burn_rect", burn_rect)
 
 
 ## The instance parameter for a tree `height` metres tall.

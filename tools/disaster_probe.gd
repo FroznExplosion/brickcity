@@ -542,7 +542,21 @@ func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 	var ctx := dir.ctx
 	var w: AIWorld = city.ai_world
+	# On open ground: earlier sections leave rubble about, and a soldier boxed
+	# in by it evades and goes nowhere.
 	var feet: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0))
+	for r in range(0, 60, 6):
+		var found := false
+		for k in 8:
+			var a := TAU * k / 8.0
+			var p: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0) + Vector3(cos(a), 0.0, sin(a)) * r)
+			if city.ai_nav.can_stand(p) and ctx.islands_near(p, 8.0).is_empty() \
+					and ctx.building_at(p, 6.0) < 0:
+				feet = p
+				found = true
+				break
+		if found:
+			break
 	var so: Soldier = city._spawn_soldier(feet)
 	await _ticks(10)
 	# A meteor's ring on top of it: the same hazard the shower sets.

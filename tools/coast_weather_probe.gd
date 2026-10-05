@@ -116,6 +116,49 @@ func _run() -> void:
 			"%.0f s on the water" % (water / 30.0))
 	_ok("its rain falls in its own cell: dry outside it, wet in it", dry_seen and wet_seen)
 	_ok("and nothing is left raining after", not dir.is_running() and not ctx.raining)
+
+	# --- Wildfire ----------------------------------------------------------------
+	ctx.wet = 0.0
+	_ok("a wildfire starts", dir.start("wildfire", 1.0))
+	var wf: Wildfire = dir.current
+	var most_hazards := 0
+	var burnt := 0
+	var peak := 0
+	var shot_taken := false
+	t = 0
+	while dir.is_running() and t < 30 * 140:
+		await physics_frame
+		t += 1
+		if not is_instance_valid(wf):
+			continue
+		burnt = wf.burnt
+		peak = wf.peak_burning
+		most_hazards = maxi(most_hazards, ctx.hazards.size())
+		if shots and not shot_taken and wf.phase == Disaster.Phase.ACTIVE and wf.phase_t > 40.0 \
+				and not wf._order.is_empty():
+			shot_taken = true
+			var at := wf._centre(wf._order[0])
+			cam.global_position = at - wf._wind_dir * 40.0 + Vector3.UP * 25.0
+			cam.look_at(at, Vector3.UP)
+			await _ticks(20)
+			await _shot("wildfire")
+	_ok("it spreads across the ground", peak >= 20 and burnt >= 40,
+			"%d burning at most, %d burnt" % [peak, burnt])
+	_ok("the AI is kept out of where it burns", most_hazards > 0, "%d block(s)" % most_hazards)
+	var scars := 0
+	var glowing := 0
+	if WeatherFx.burn_tex != null:
+		var img := WeatherFx.burn_tex.get_image()
+		for y in range(0, img.get_height(), 2):
+			for x in range(0, img.get_width(), 2):
+				var c := img.get_pixel(x, y)
+				if c.r > 0.9:
+					scars += 1
+				elif c.g > 0.5:
+					glowing += 1
+	_ok("it leaves the ground burnt -- and the scars stay", not dir.is_running() and scars > 5
+			and glowing == 0, "%d scarred sample(s), %d still glowing" % [scars, glowing])
+	_ok("and lets go of the AI's ground", ctx.hazards.is_empty())
 	_finish(scene)
 
 

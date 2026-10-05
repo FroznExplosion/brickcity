@@ -35,6 +35,12 @@ instance uniform vec3 weather_sway = vec3(0.0);
 uniform float weather_snow : hint_range(0.0, 1.0) = 0.0;
 // What lies: snow white, or a sandstorm's sand.
 uniform vec3 weather_snow_colour : source_color = vec3(0.93, 0.95, 0.99);
+// Wildfire (Docs/Disasters.md 27): a map of the ground over `weather_burn_rect`
+// (x, z, width, depth in metres) -- R burnt, G burning now. The terrain and the
+// laid pieces darken where it is burnt and glow where it burns.
+uniform sampler2D weather_burn_tex : filter_linear, repeat_disable;
+uniform vec4 weather_burn_rect = vec4(0.0);
+
 // PER INSTANCE: how much an object's tops take the cap (trees 1). Buildings
 // and the near ground carry real cover instead, so 0.
 instance uniform float weather_snowcap = 0.0;
@@ -101,6 +107,23 @@ void weather_snow_surface(inout vec3 wp_albedo, inout float wp_roughness, inout 
     wp_albedo = mix(wp_albedo, weather_snow_colour, wx_k);
     wp_roughness = mix(wp_roughness, 0.6, wx_k);
     wp_specular = mix(wp_specular, 0.35, wx_k);
+}
+
+// The ground burnt and burning at `wp_world`: albedo charred, and EMISSION
+// back for the glow of what still burns.
+vec3 weather_burn_surface(inout vec3 wp_albedo, inout float wp_roughness, vec3 wp_world, float wp_t) {
+    if (weather_burn_rect.z <= 0.0) {
+        return vec3(0.0);
+    }
+    vec2 wx_uv = (wp_world.xz - weather_burn_rect.xy) / weather_burn_rect.zw;
+    if (wx_uv.x < 0.0 || wx_uv.y < 0.0 || wx_uv.x > 1.0 || wx_uv.y > 1.0) {
+        return vec3(0.0);
+    }
+    vec4 wx_b = texture(weather_burn_tex, wx_uv);
+    wp_albedo = mix(wp_albedo, wp_albedo * 0.12 + vec3(0.025, 0.022, 0.02), wx_b.r);
+    wp_roughness = mix(wp_roughness, 0.95, wx_b.r);
+    float wx_flick = 0.7 + 0.3 * sin(wp_t * 9.0 + wp_world.x * 1.7 + wp_world.z * 2.3);
+    return vec3(1.0, 0.36, 0.06) * wx_b.g * wx_flick * 2.2;
 }
 
 // Wet surface. `darken` is how much this surface darkens soaked (the ground's

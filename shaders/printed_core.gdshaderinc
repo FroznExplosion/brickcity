@@ -188,6 +188,9 @@ void fragment() {
             VIEW_MATRIX, 0.14 * (1.0 - MAT_METAL[mat]), 1.0, TIME);
     NORMAL = wet_normal;
     weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
+    vec3 burn_glow = weather_burn_surface(albedo, out_rough,
+            (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz, TIME);
+    emission += burn_glow;
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;
