@@ -18,7 +18,8 @@ extends SceneTree
 ## farcut (3) the same for a building first hit from past SHELL_RANGE, where
 ##        it has no shell: nothing leaves it while its bands are still being
 ##        built from the bricks before the cut (a standing copy of the section
-##        that fell), and something draws it all that time.
+##        that fell), and something draws it all that time; and one given
+##        back mid-bands is drawn as it is now, not as before the shot.
 ## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
 ##        drawn furniture it lands on, rather than standing in it.
 
@@ -507,6 +508,33 @@ func _check_farcut() -> void:
 	_ok("pieces left it", left)
 	_ok("none while its bands were still being built", double == 0, "%d tick(s)" % double)
 	_ok("and its far box drew it until they were", blind == 0, "%d tick(s) half drawn" % blind)
+
+	# Its mesh given back while its bands are still going up (DEMESH_AFTER_MS
+	# runs out first on a big tower with a slow frame): the shell left standing
+	# in for it was drawn from the building before it was hit.
+	var id2 := _tower(4)
+	var c2 := _box(id2).get_center()
+	city.camera.global_position = c2 + Vector3(-1.0, 0.6, -1.0).normalized() * (city.SHELL_RANGE + 60.0)
+	city.camera.look_at(c2)
+	await _ticks(30 * 3)
+	var b2 = city.registry.get_building(id2)
+	# One shot, all landed, the bands still going up.
+	# A small one in a wall: nothing cut loose, so nothing remeshes it after.
+	var bb2 := _box(id2)
+	city._blast(Vector3(bb2.get_center().x, bb2.position.y + 3.0, bb2.position.z), 1.0)
+	var w := 0
+	while (not city._damage_queue.is_empty() or city._remesh_queue.has(id2)) and w < 60:
+		await physics_frame
+		w += 1
+	var mid: bool = city._bands_building(id2) and city._shells.has(id2)
+	city._demesh(id2)
+	await _ticks(30 * 3)
+	var box_tier: bool = city._shell_box.has(id2)
+	var mi = city._shells.get(id2)
+	var drawn: bool = mi != null and (mi as MeshInstance3D).mesh != null
+	_ok("given back mid-bands, it is drawn from its bricks as they are now",
+			mid and b2.is_damaged() and not box_tier and drawn,
+			"mid-bands %s, damaged %s, box tier %s, shell drawn %s" % [mid, b2.is_damaged(), box_tier, drawn])
 
 
 # --- (4) ------------------------------------------------------------------------

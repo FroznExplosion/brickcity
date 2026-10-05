@@ -7855,8 +7855,14 @@ func _demesh(id: int) -> void:
 	# The bake is the expensive part -- 3.4 MB a building against a few hundred
 	# kilobytes for its occupancy and blocks.
 	world.drop_chunk_bake(b.chunk)
-	if not _shells.has(id):
-		_make_shell(id, true)
+	# A shell still up here is the one kept through its bands (_bands_done),
+	# drawn from the building before it was made bricks -- given back before
+	# the bands were done, a building shot from afar went on drawing the wall
+	# it had been shot in whole, until something else hit it or the camera
+	# came back. Built again from the bricks as they are.
+	if _shells.has(id):
+		_free_shell(id)
+	_make_shell(id, true)
 	_demeshed += 1
 
 
