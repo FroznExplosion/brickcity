@@ -417,7 +417,7 @@ func _build() -> void:
 	_rain.draw_pass_1 = drop
 	_rain.visibility_aabb = AABB(Vector3(-50, -40, -50), Vector3(100, 60, 100))
 	add_child(_rain)
-	RainSplash.add(_rain, _rain_proc, self)
+	RainSplash.add(_rain, _rain_proc, self, Color(0.9, 0.94, 1.0, 0.9), "rain", ctx)
 
 	# Litter and spray: bits of brick, leaf and foam going past low down.
 	var bit_mat := StandardMaterial3D.new()

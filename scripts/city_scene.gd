@@ -4192,7 +4192,7 @@ func _building_of_chunk(chunk: int) -> int:
 	return -1
 
 
-func _weight_load(chunk: int, owner: int, cell: Vector3i, mass: float) -> void:
+func _weight_load(chunk: int, owner_id: int, cell: Vector3i, mass: float) -> void:
 	var id := _building_of_chunk(chunk)
 	if id < 0:
 		return
@@ -4200,14 +4200,14 @@ func _weight_load(chunk: int, owner: int, cell: Vector3i, mass: float) -> void:
 	e.tick = Engine.get_physics_frames()
 	e.kind = DamageLog.Kind.LOAD
 	e.target = id
-	e.owner = owner
+	e.owner = owner_id
 	e.radius = mass
 	e.points.append(Vector3(cell))
 	DamageLog.apply_entry(world, chunk, e)
 	authority.commit_entry(e)
 
 
-func _weight_unload(chunk: int, owner: int) -> void:
+func _weight_unload(chunk: int, owner_id: int) -> void:
 	var id := _building_of_chunk(chunk)
 	if id < 0:
 		return
@@ -4215,7 +4215,7 @@ func _weight_unload(chunk: int, owner: int) -> void:
 	e.tick = Engine.get_physics_frames()
 	e.kind = DamageLog.Kind.UNLOAD
 	e.target = id
-	e.owner = owner
+	e.owner = owner_id
 	DamageLog.apply_entry(world, chunk, e)
 	authority.commit_entry(e)
 
@@ -5047,7 +5047,7 @@ func _spawn_many(center: Vector3) -> void:
 		var at := center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(30.0, 60.0)
 		var members: Array[Soldier] = []
 		for i in 6:
-			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, (i / 3) * 1.5))))
+			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, floori(i / 3.0) * 1.5))))
 			members.append(so)
 			budget.add(so)
 		squads.append(Squad.make(ai_services, self, members, 1))
@@ -5105,7 +5105,7 @@ func _spawn_squad(at: Vector3) -> Squad:
 	var members: Array[Soldier] = []
 	for i in 4:
 		members.append(_spawn_soldier(ai_nav.snap(at + Vector3((i % 2) * 1.4 - 0.7, 0.0,
-				(i / 2) * 1.4 - 0.7))))
+				floori(i / 2.0) * 1.4 - 0.7))))
 	var q := Squad.make(ai_services, self, members, 1)
 	squads.append(q)
 	if _player_pawn != null and is_instance_valid(_player_pawn):
@@ -5131,7 +5131,7 @@ func _run_squad_pass() -> void:
 			b = c
 			break
 	var fx: float = b.recipe.footprint_x * STUD
-	var fz: float = b.recipe.footprint_z * STUD
+	var _fz: float = b.recipe.footprint_z * STUD
 	camera.position = b.xform * Vector3(fx * 0.5, 14.0, -16.0)
 	camera.look_at(b.xform * Vector3(fx * 0.5, 1.0, 2.0), Vector3.UP)
 	var enc := start_encounter(_world_box(b).grow(6.0))
@@ -7126,17 +7126,17 @@ func _stream_shells() -> void:
 	var count := registry.buildings.size()
 	if count == 0:
 		return
-	var budget := SHELLS_PER_TICK
+	var shell_budget := SHELLS_PER_TICK
 	var looked := 0
 	# A full pass over the register every eight, however many there are: with
 	# trees in it the register is ten times the city, and a fixed slice left a
 	# building waiting seconds for its tier.
-	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, count / 8 + 1))
-	while looked < slice and budget > 0:
+	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, floori(count / 8.0) + 1))
+	while looked < slice and shell_budget > 0:
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
 		looked += 1
-		budget -= _stream_shell(b, here)
+		shell_budget -= _stream_shell(b, here)
 		# After the shell's own step, so a building whose shell just went
 		# gets its far box in the same tick rather than a pass later.
 		_far_sync(b)
@@ -8622,7 +8622,7 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 		await RenderingServer.frame_post_draw
 		samples.append(get_process_delta_time() * 1000.0)
 	var sum := 0.0
-	for i in range(samples.size() / 2, samples.size()):
+	for i in range(floori(samples.size() / 2.0), samples.size()):
 		sum += samples[i]
 	var detailed := 0
 	var meshed_coarse := 0
@@ -9900,14 +9900,14 @@ func _run_far_pass() -> void:
 			past += 1
 		# A coarse shell the far box draws has no mesh: that is one drawer.
 		var shell: bool = _shells.has(b.id) and not _shell_box.has(b.id)
-		var box: bool = _far_on.has(b.id)
+		var on_far: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
 		# A box under a banded shell that is fading (Stage 5) is what the
 		# shell blends over: one building drawn, not two.
-		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
+		if shell and on_far and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
-		elif not shell and not box:
+		elif not shell and not on_far:
 			undrawn += 1
 	print("[far] %d buildings, %d past the shell range, %d shells, %d far boxes" % [
 		registry.buildings.size(), past, _shells.size(), _far_on.size()])
@@ -10135,7 +10135,7 @@ func _save_crop(shot_name: String, frac: float) -> void:
 	var img := get_viewport().get_texture().get_image()
 	var full := img.get_size()
 	var size := Vector2i(int(full.x * frac), int(full.y * frac))
-	img = img.get_region(Rect2i((full - size) / 2, size))
+	img = img.get_region(Rect2i(Vector2i(Vector2(full - size) / 2.0), size))
 	img.resize(full.x, full.y, Image.INTERPOLATE_NEAREST)
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
@@ -10167,7 +10167,7 @@ func _grab() -> Image:
 ## Share of `rect`, shrunk a little off its edges, where `img` is far from
 ## `ref`: a hole shows what is behind, and here that is sky.
 static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
-	var r := rect.grow(-maxi(rect.size.x, rect.size.y) / 12)
+	var r := rect.grow(-floori(maxi(rect.size.x, rect.size.y) / 12.0))
 	if r.size.x <= 0 or r.size.y <= 0:
 		return 0.0
 	var off := 0

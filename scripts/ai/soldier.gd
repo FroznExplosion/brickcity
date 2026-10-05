@@ -46,7 +46,7 @@ var services: AIServices
 var pawn: Pawn
 ## Its tier (AgentTier): SMART or DIRECTED, and the HSM that holds it. The
 ## ImportanceBudget moves it; set_tier swaps the tree and the rates.
-var tier := AgentTier.SMART
+var tier: int = AgentTier.SMART
 var tier_hsm: AgentTier
 ## Came out of a swarm row: may go back to one when nobody is near (P8).
 var swarm_born := false

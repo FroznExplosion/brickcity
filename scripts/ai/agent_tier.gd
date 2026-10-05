@@ -19,7 +19,7 @@ var directed_state: TierState
 
 
 ## The HSM for `agent` (a node with `set_tier(int)`), starting in `start`.
-static func attach(agent: Node, start: int) -> AgentTier:
+static func attach(p_agent: Node, start: int) -> AgentTier:
 	var h := AgentTier.new()
 	h.name = "Tier"
 	h.update_mode = LimboHSM.MANUAL
@@ -36,8 +36,8 @@ static func attach(agent: Node, start: int) -> AgentTier:
 	h.smart_state = smart
 	h.directed_state = directed
 	h.initial_state = smart if start == SMART else directed
-	agent.add_child(h)
-	h.initialize(agent)
+	p_agent.add_child(h)
+	h.initialize(p_agent)
 	h.set_active(true)
 	return h
 

@@ -618,17 +618,17 @@ static func _wall_boxes(out: Array, side: int, mask: int, y0: float, y1: float,
 	var h := y1 - y0
 	var y := y0 + h * 0.5
 	for r in _runs(mask, span):
-		var len: float = r.y - r.x
+		var run_len: float = r.y - r.x
 		var mid: float = (r.x + r.y) * 0.5
 		match side:
 			SIDE_FRONT:
-				out.append({"pos": Vector3(mid, y, tw * 0.5), "size": Vector3(len, h, tw)})
+				out.append({"pos": Vector3(mid, y, tw * 0.5), "size": Vector3(run_len, h, tw)})
 			SIDE_BACK:
-				out.append({"pos": Vector3(mid, y, d - tw * 0.5), "size": Vector3(len, h, tw)})
+				out.append({"pos": Vector3(mid, y, d - tw * 0.5), "size": Vector3(run_len, h, tw)})
 			SIDE_LEFT:
-				out.append({"pos": Vector3(tw * 0.5, y, mid), "size": Vector3(tw, h, len)})
+				out.append({"pos": Vector3(tw * 0.5, y, mid), "size": Vector3(tw, h, run_len)})
 			SIDE_RIGHT:
-				out.append({"pos": Vector3(w - tw * 0.5, y, mid), "size": Vector3(tw, h, len)})
+				out.append({"pos": Vector3(w - tw * 0.5, y, mid), "size": Vector3(tw, h, run_len)})
 
 
 ## `unit` is the rectangle the seam shader tiles: pass a brick-sized one and the

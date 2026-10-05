@@ -253,7 +253,7 @@ func _enemy_in_sight() -> bool:
 	return c != null and c.visible
 
 
-func _on_member_down(so: Soldier) -> void:
+func _on_member_down(_so: Soldier) -> void:
 	morale = maxf(0.0, morale - LOSS)
 	# Half the squad gone breaks it, whatever the running number says: two
 	# losses of four land morale on BROKEN to the last decimal (0.3000...04),

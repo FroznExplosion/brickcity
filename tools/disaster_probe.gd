@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow,multi
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow,multi,hail,giant
 
 var _pass := 0
 var _fail := 0
@@ -107,6 +107,10 @@ func _run() -> void:
 		await _check_city_snow(city, dir)
 	if only == "" or "multi" in only:
 		await _check_multi(city, dir)
+	if only == "" or "hail" in only:
+		await _check_hail(city, dir)
+	if only == "" or "giant" in only:
+		await _check_giant(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -538,7 +542,21 @@ func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 	var ctx := dir.ctx
 	var w: AIWorld = city.ai_world
+	# On open ground: earlier sections leave rubble about, and a soldier boxed
+	# in by it evades and goes nowhere.
 	var feet: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0))
+	for r in range(0, 60, 6):
+		var found := false
+		for k in 8:
+			var a := TAU * k / 8.0
+			var p: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0) + Vector3(cos(a), 0.0, sin(a)) * r)
+			if city.ai_nav.can_stand(p) and ctx.islands_near(p, 8.0).is_empty() \
+					and ctx.building_at(p, 6.0) < 0:
+				feet = p
+				found = true
+				break
+		if found:
+			break
 	var so: Soldier = city._spawn_soldier(feet)
 	await _ticks(10)
 	# A meteor's ring on top of it: the same hazard the shower sets.
@@ -1318,6 +1336,169 @@ func _all_clear(city: Node3D, ctx: DisasterContext, base: Color) -> bool:
 				city.ai_services.sight_mul, city.ai_services.aim_mul, city.ai_services.storm,
 				lens_clear, ctx.gale, ctx.raining])
 	return ok
+
+
+## Hail (Docs/Disasters.md 24): stones land on what is open to the sky, wear
+## it as committed CHIPs, are heard as the material they hit, bruise whoever
+## is out in it, and lie thin.
+func _check_hail(city: Node3D, dir: DisasterDirector) -> void:
+	print("hail")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	# On a roof's edge: the roof under the stones, the street beside.
+	var b = null
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id):
+			b = c
+			break
+	var box := CityPlacer.box_of(b)
+	city.camera.global_position = Vector3(box.position.x - 2.0, box.end.y + 3.0, box.get_center().z)
+	if b.chunk < 0:
+		city._promote(b.id)
+	var feet: Vector3 = city.ai_nav.snap(Vector3(box.position.x - 6.0, 0.0, box.get_center().z))
+	var so: Soldier = city._spawn_soldier(feet)
+	so.brain.active = false
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a hailstorm starts", dir.start("hail", 1.0))
+	var h: Hailstorm = dir.current
+	var heard := {}
+	var lying := 0.0
+	var got := [0, 0, 0]
+	var t := 0
+	while dir.is_running() and t < 30 * 70:
+		await physics_frame
+		t += 1
+		lying = maxf(lying, ctx.snow)
+		if is_instance_valid(h):
+			got = [h.landings, h.chips, h.bruised]
+			var rs = h.get_node_or_null("RainSplash")
+			if rs != null and (rs as RainSplash).sounds != null:
+				heard = (rs as RainSplash).sounds.by_family.duplicate()
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 300:
+		await physics_frame
+		wait += 1
+	var chipped := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chipped += 1
+	_ok("stones land, and wear what they hit as committed CHIPs", got[0] > 100 and got[1] > 0
+			and chipped >= got[1], "%d landing(s), %d chip(s), %d CHIP command(s)" % [got[0], got[1], chipped])
+	_ok("heard as what they hit: the roof's plastic among it", int(heard.get("plastic", 0)) > 20,
+			str(heard))
+	_ok("a soldier out in it is bruised", got[2] > 0)
+	_ok("they lie, thin", lying > 0.2 and lying <= Hailstorm.LIE_CAP + 0.01, "%.2f" % lying)
+	_ok("and it clears", not dir.is_running() and not ctx.snowing and not ctx.raining)
+	ctx.snow = 0.0005
+	await _ticks(10)
+
+
+## The meteor variants (Docs/Disasters.md 23): the heavy shower has two to
+## three times the rocks; the mixed one small rocks and one or two giants; and
+## a giant lands as one crater, a shockwave and ejecta, through the authority.
+func _check_giant(city: Node3D, dir: DisasterDirector) -> void:
+	print("meteor variants")
+	await _until_out(dir)
+	var normal := MeteorShower.new()
+	normal.begin(dir.ctx, 77)
+	var heavy := MeteorStorm.new()
+	heavy.begin(dir.ctx, 77)
+	var mixed := MeteorMixed.new()
+	mixed.begin(dir.ctx, 77)
+	var giants := 0
+	var small_max := 0.0
+	for m in mixed.meteors:
+		if m.get("giant", false):
+			giants += 1
+		else:
+			small_max = maxf(small_max, float(m.radius))
+	_ok("a heavy shower has two to three times the rocks", heavy.meteors.size() >= normal.meteors.size() * 1.7,
+			"%d against %d" % [heavy.meteors.size(), normal.meteors.size()])
+	_ok("a mixed one, small rocks and one or two giants", giants >= 1 and giants <= 2 and small_max <= 2.3,
+			"%d giant(s), small ones up to %.1f m" % [giants, small_max])
+	normal.free()
+	heavy.free()
+	mixed.free()
+	dir.ctx.forget(null)
+
+	# A giant, for real: by the tallest tower, its bricks in, the camera off it.
+	var b = null
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id) and (b == null
+				or CityPlacer.box_of(c).size.y > CityPlacer.box_of(b).size.y):
+			b = c
+	var box := CityPlacer.box_of(b)
+	city.camera.global_position = box.get_center() + Vector3(-box.size.x - 40.0, 10.0, 0.0)
+	if b.chunk < 0:
+		city._promote(b.id)
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a giant meteor starts", dir.start("big_meteor", 1.0))
+	var g: BigMeteor = dir.current
+	var landed := 0
+	var pieces := 0
+	var radius := 0.0
+	var worst := 0.0
+	var worst_parts := {}
+	var impact_ms := 0.0
+	var worst_when := ""
+	var pawns_hit := 0
+	var t := 0
+	while dir.is_running() and t < 30 * 60:
+		await physics_frame
+		t += 1
+		var tick_ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		if tick_ms > worst and is_instance_valid(g) and g.giants_landed > 0:
+			worst = tick_ms
+			worst_parts = (city._prof as Dictionary).duplicate()
+			worst_when = "%s %.1f s" % [Disaster.phase_name(g.phase), g.phase_t] if is_instance_valid(g) else "after"
+		# Once its spot is marked: soldiers just outside the crater, for the wave.
+		if is_instance_valid(g) and not g.has_meta("placed") and g.meteors[0].has("aim"):
+			g.set_meta("placed", true)
+			var aim: Vector3 = g.meteors[0].aim
+			var rr := float(g.meteors[0].radius)
+			for k in 3:
+				var a := TAU * k / 3.0
+				var w: Soldier = city._spawn_soldier(city.ai_nav.snap(aim + Vector3(cos(a), 0.0, sin(a)) * rr * 1.6))
+				w.brain.active = false
+		if is_instance_valid(g):
+			landed = g.giants_landed
+			impact_ms = g.impact_ms
+			pawns_hit = g.shocked_pawns
+			pieces = g.shocked_pieces
+			if not g.impacts.is_empty():
+				radius = float(g.impacts[0].radius)
+				if "--disaster-shot" in OS.get_cmdline_user_args() and not g.has_meta("shot") 						and g.phase_t > float(g.meteors[0].t) + 1.5:
+					g.set_meta("shot", true)
+					var cam := Camera3D.new()
+					cam.far = 2000.0
+					city.add_child(cam)
+					var at: Vector3 = g.impacts[0].pos
+					cam.look_at_from_position(at + Vector3(-60.0, 35.0, -45.0), at + Vector3(0.0, 4.0, 0.0))
+					cam.make_current()
+					await _ticks(3)
+					await _save_shot("giant_meteor")
+					cam.queue_free()
+					city.camera.make_current()
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 600:
+		await physics_frame
+		wait += 1
+	var blasts := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.BLAST:
+			blasts += 1
+	_ok("one giant lands, a crater of %.1f m" % radius, landed == 1 and radius >= MeteorShower.GIANT_RADIUS - 0.01)
+	_ok("its crater and its ejecta are committed blasts", blasts >= 2, "%d BLAST(s)" % blasts)
+	_ok("the shockwave knocks down whoever is near", pawns_hit > 0, "%d soldier(s); %d piece(s) thrown" % [pawns_hit, pieces])
+	var parts := []
+	for k in worst_parts:
+		if float(worst_parts[k]) >= 2.0:
+			parts.append("%s %.0f" % [k, float(worst_parts[k])])
+	print("  --   worst physics tick after it lands: %.1f ms (%s); the impact itself %.1f ms; at %s" % [worst, ", ".join(parts), impact_ms, worst_when])
+	_ok("and it clears", not dir.is_running() and dir.ctx.hazards.is_empty())
+	await _until_out(dir)
 
 
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:

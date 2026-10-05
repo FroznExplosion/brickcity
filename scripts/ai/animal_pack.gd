@@ -43,12 +43,12 @@ var _next_graze := -INF
 var _rng := RandomNumberGenerator.new()
 
 
-func _init(s: AIServices, p_team: int, p_home: Vector3, seed := 1) -> void:
+func _init(s: AIServices, p_team: int, p_home: Vector3, p_seed := 1) -> void:
 	services = s
 	team = p_team
 	home = p_home
 	anchor = p_home
-	_rng.seed = seed
+	_rng.seed = p_seed
 
 
 func hunt(p: Pawn) -> void:

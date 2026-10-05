@@ -692,13 +692,13 @@ func run_gate() -> void:
 		# Metres walked since it appeared, not how far it is from there now: a
 		# soldier that ran to cover and back out to fight can be standing a
 		# metre from its spawn point having gone thirty.
-		var d := float(travelled.get(so.get_instance_id(), 0.0))
+		var walked := float(travelled.get(so.get_instance_id(), 0.0))
 		# Standing still is fine in cover that happened to be next to where it
 		# appeared; standing still anywhere else is what this is here to catch.
-		if d > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
-			moved.append("%.1f m, %s" % [d, so.state])
+		if walked > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
+			moved.append("%.1f m, %s" % [walked, so.state])
 		else:
-			stayed.append("%.1f m, %s" % [d, so.state])
+			stayed.append("%.1f m, %s" % [walked, so.state])
 	ok.call("they move: %d of %d walked more than 3 m or are working a cover spot" % [
 			moved.size(), moved.size() + stayed.size()],
 			moved.size() * 4 >= (moved.size() + stayed.size()) * 3,

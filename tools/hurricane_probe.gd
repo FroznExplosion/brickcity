@@ -40,7 +40,7 @@ func _run() -> void:
 	if dir == null:
 		_finish(scene)
 		return
-	_ok("offering only what needs no buildings: hurricane, snow, blizzard", dir.roll == ["hurricane", "snow", "blizzard"],
+	_ok("offering only what needs no buildings", dir.roll == ["hurricane", "snow", "blizzard", "hail", "sandstorm", "waterspout", "wildfire"],
 			str(dir.roll))
 	var sea = scene._sea
 	var base_level := BrickWave.get_sea_level()
@@ -80,6 +80,7 @@ func _run() -> void:
 	var peak_surf := 0
 	var storm_ms: Array[float] = []
 	var splash_points := 0
+	var patter := {}
 	var before_eye := Vector3.ZERO
 	var after_eye := Vector3.ZERO
 	var eye := false
@@ -105,6 +106,8 @@ func _run() -> void:
 		var rs = h.get_node_or_null("RainSplash")
 		if rs != null:
 			splash_points = maxi(splash_points, (rs as RainSplash).points)
+			if (rs as RainSplash).sounds != null:
+				patter = (rs as RainSplash).sounds.by_family.duplicate()
 		flashes = h.flashes
 		raining = raining or dir.ctx.raining
 		if h.phase == Disaster.Phase.ACTIVE:
@@ -168,6 +171,7 @@ func _run() -> void:
 			peak_rain > 0.9 and WeatherFx.rain < peak_rain, "%.2f at the height, %.2f after" % [peak_rain,
 			WeatherFx.rain])
 	_ok("the grass is set to move in the wind", grass > 0, "%d tile(s) of tufts" % grass)
+	_ok("and is heard on what it lands on, by material", not patter.is_empty(), str(patter))
 	_ok("the rain splashes where it lands -- ground, roofs, water", splash_points > RainSplash.RAYS / 2,
 			"%d of %d rays found somewhere to land" % [splash_points, RainSplash.RAYS])
 	_ok("surf sprays where the waves meet the shore", peak_surf > 0,

@@ -919,3 +919,143 @@ Probe (`--only=multi`): an outbreak's three tornadoes on three paths, three haza
 the gale summed to its cap (1.5), a late client sent all three starts, all over in 51 s; a superstorm
 of three, nothing else allowed to start, `stop` ending all three; and after each, the sun, the AI's
 sight and aim, the lens, the storm, the gale, the rain and the hazards exactly as before.
+
+
+---
+
+## 23. Meteor variants
+
+Three kinds built on the shower, by how its schedule is rolled (`_add_shower`, `_add_giant`):
+
+* **Heavy meteor shower** (`meteor_storm`): 70-100 rocks in 5-6 bursts over 45 s, radius 2-3.6 m,
+  a quarter big — 89 against a normal 40 on the same seed.
+* **Meteor shower with giants** (`meteor_mixed`): a shower of small rocks (1.2-2.2 m) and one or
+  two giants, the second late, when the streets are already broken.
+* **Giant meteor** (`big_meteor`): 12 s of warning — a light in the sky growing where it will come
+  from, the sky going a dusty orange, the rumble deepening — a ring wide enough to read from a
+  street away, and one impact: an **11 m crater** (× √intensity, to 15 m), a **shockwave** that
+  knocks people down and hurts them (60 at the rim, falling off to 4× the radius) and throws loose
+  pieces in pulses at 0, 0.25, 0.7, 1.5 and 2.5 s (the crater's own rubble only comes free a few
+  ticks after the blast), **ejecta** — eight smaller blasts round it over 2.5 s — fires in a ring,
+  the dust of all of it, and a flash and boom scaled to the crater.
+
+**The crater is made in pieces.** One 8.5 m blast was 125-175 ms of one tick. A core blast now and
+a ring of eight overlapping ones over the next eight ticks make the same hole; the worst tick after
+a giant lands measured 16-20 ms. (The worst tick of every meteor kind is at the very start —
+building the pools of rocks, rings and dust — 90-130 ms once, the shower's as much as the giant's.)
+
+---
+
+## 24. Hail, and weather heard on what it hits
+
+**SurfaceSounds** (`surface_sounds.gd`): every landing heard as the material it struck. The points
+are RainSplash's — rays straight down from the sky to the first thing they meet — so a floor under
+a roof is never hit and never heard, and from indoors the storm is on the roof overhead. Each
+point is filed by family when it is found: a brick by its material (`BrickMaterials.family`:
+plastic, soft, wood, metal, stone), the ground by the terrain's material, below the sea level as
+water; and played as `BrickMaterials`' own synthesised impact — rain small and soft (pitched up,
+quiet, 18 a second at full), hail hard (26 a second). Points are taken within 16 m across, not
+through: the rain on the roof above is near. The rain of the lightning storm, acid rain, the
+hurricane and the waterspout all patter now; the probe heard the hurricane's 1,228 times on the
+coast's stone.
+
+**Hailstorm** (`hailstorm.gd`, 35 s): ice stones out of a green-grey sky, landing hard and bouncing
+(each landing throws up pellets — `RainSplash.bounce`), heard as above. A share of the landings
+each 0.4 s chip what they hit by how much the material minds it (plastic most, metal and stone
+hardly), as committed CHIPs; anyone with no roof is bruised; the stones **lie** thin and patchy
+(the snow cover, capped at 0.4 — `DisasterContext.snow_cap`) and melt. Probe: 885 plastic hits
+heard on a roof, 56 committed CHIPs, the soldier bruised, 0.40 lying, all clear after.
+
+---
+
+## 25. Sandstorm
+
+`sandstorm.gd`, 55 s: a brown **wall** rolls in on the wind during the warning (huge slow puffs in a
+band across the wind), then a heavy haze (lens 0.78), the sun a dull orange, sight at the floor and
+aim 1.9× worse, a gusting gale that sways things and leans on a walker (1.4 m/s), sand streaming
+low. **Sand-blasting**: rays downwind from round the player find windward walls and chip them a
+little, by material. **Sand lies**: the snow cover, tinted (`DisasterContext.snow_tint`, carried
+into the shaders as `weather_snow_colour`), capped at 0.3, blown away after. Probe: haze 0.78, a
+walker carried 4.7 m in 4 s, 0.30 lying in sand's colour.
+
+---
+
+## 26. Waterspout
+
+`waterspout.gd`, a `Tornado` on the water: it forms on open water near the player (at least 0.8 m
+deep), wanders a seeded path over it that passes close, a pale funnel with spray thrown up in a
+ring at its foot, and its **own rain cell**: rain falls, splashes and patters only within 32 m of
+it (`RainSplash.area`), so a dry beach watches it come and is rained on only if it comes close.
+Everything a tornado does to what it reaches it does. Where there is no sea it walks as a small
+tornado. Probe: 33 s on the water, dry outside its cell, wet in it, nothing left raining after.
+
+Combos added: **hurricane with waterspouts**, **sand and hail**.
+
+---
+
+## 27. Wildfire
+
+`wildfire.gd`, on terrain (the heightfield offers it; the flat small city has no ground to burn).
+A fire front across the land — the building fire is cells of walls; this is cells of ground:
+
+* **4 m cells**, each with fuel from its terrain (grass high, dirt some; sand, stone, the sea and
+  lying snow none), more where a tree stands — a tree cell burns longer and its flames are taller.
+* **Spread** every 0.25 s to the eight neighbours, likelier downwind (0.25 upwind to 1.75 straight
+  down it) and with more fuel, a third as likely in rain, less on wet ground; a cell burns for its
+  fuel's worth and never relights; no more than 180 at once.
+* **The ground's map** (`WeatherFx.set_burn`, `weather_burn_surface` in the terrain and printed
+  shaders): burning cells **glow**, burnt ones are left **black**, and the scars stay after. A tree
+  standing over burnt ground is charred too.
+* It **lights buildings** it reaches (the building fire takes over), burns anyone standing in it,
+  marks where it burns as danger for the AI in 12 m blocks, and puts up smoke and glow.
+* Flames are pooled — 36 on the burning cells nearest the camera — with four smoke columns and
+  lights over the front, and a roar where it is nearest.
+
+Probe: 180 burning at most, 1,854 cells burnt, 58 danger blocks, the map scarred and nothing left
+glowing after, the AI's ground let go. `shots/wildfire.png`.
+
+The probe's soldier-in-a-ring test now spawns on open ground: earlier sections leave rubble about,
+and a soldier boxed in by it evaded and went nowhere.
+
+---
+
+## 28. Planned: heat wave, ice storm, avalanche
+
+**Heat wave** — the printed city's own disaster: plastic softens.
+
+* About two minutes of it: a white, hazy sun, the sky warm and washed out, heat shimmer on the lens
+  (a refraction wobble low in the view), AI sight a little down, no wind.
+* **Softening is a solver change, made a command.** A new DamageLog kind, SOFTEN (a factor, per
+  building): `tension_per_stud` scaled by material — PLA's glass transition is about 60 °C, so PLA
+  loses most, PETG and ABS less, nylon little, metal and stone nothing. Applied to buildings in the
+  sun (not shaded by a taller neighbour — the snow cover's sky test), stepped every few seconds,
+  each step re-solving the building. Tall PLA towers **sag and creep**: joints fail where the load
+  is highest, overhangs droop off, cantilevers go first. Restored at the end only for what still
+  stands — what fell stays fallen.
+* Fire spreads twice as fast; snow and hail melt at once.
+* Cost: re-solving every building in the sun is the risk — throttle to the nearest few, the far
+  city only on the cheap ladder (a rolled sag).
+
+**Ice storm** — freezing rain.
+
+* Rain that freezes where it lands (the RainSplash points): a glaze — a new `weather_ice` uniform,
+  glassy and blue-white on exposed tops and windward faces, thickening through the storm.
+* **Brittle**: while iced, bricks chip at 1.5× (a per-building CHIP multiplier, as a command), a hit
+  **shatters** a bigger ball of them, and pieces that land break more.
+* **Icicles** hang from exposed overhangs (the snow cover's scan turned over: a bottom open to the
+  air under a covered top), drawn as thin cones, and fall on a thaw — damage below.
+* Walkers slide: less friction on iced ground (DebugCamera and Pawn, a slip factor).
+* The thaw: the glaze melts to wet, and the icicles drop over a few seconds.
+
+**Avalanche** — the snow cover comes down.
+
+* Needs snow lying deep (after a snowfall or a blizzard) on slopes or roofs.
+* Trigger: a blast, a quake, or the disaster itself — a crown line breaks above the player.
+* **The slab**: the snow cover over a slope turns into moving snow — a heightfield-following sheet
+  sliding downhill at 10-30 m/s with a powder cloud ahead of it (particles and a few proxies, not
+  bricks), the cover under it taken away as it passes and laid deeper where it stops.
+* Roofs shed: steep or heavily loaded roofs dump their cover over the edge (the building's cover
+  rebuilt without it, a puff and a slide of white).
+* What it hits: pawns buried (heavy damage, slowed), loose pieces carried, and a building in its
+  path takes a sideways load (the lateral solver) — a weak one fails.
+* On the heightfield only (it needs slopes), and only where snow lies.

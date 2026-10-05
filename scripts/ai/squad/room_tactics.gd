@@ -65,6 +65,7 @@ static func stack_slots(opening: Dictionary, n: int) -> Array[Vector3]:
 	var slots: Array[Vector3] = []
 	for i in n:
 		var side := -1.0 if i % 2 == 0 else 1.0
+		@warning_ignore("integer_division")
 		var rank := i / 2
 		slots.append(out_face + r * side * (half + 0.4 + rank * STACK_GAP))
 	return slots
