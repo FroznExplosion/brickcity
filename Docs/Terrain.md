@@ -3227,6 +3227,33 @@ Tried, on foot:
 | automatic LODs on terrain tiles | −4 k tris, 7 ms a tile | no: brick tops have nothing to simplify |
 | occlusion culling, coarse ground as occluders | 0 in this view | no: a 128 m tree square or an 11 m tile is almost never wholly behind a hill |
 
-Still open: the trees' draw calls from high up (1,467: two MultiMeshes per 128 m square per kind,
-plus their shadow passes) — bigger squares for the far cards would cut them; and the detail radius
-(`NEAR_TILES` 4, full bricks to ~45 m) is the lever on the terrain's 415 k.
+The census's "1,467 tree calls" was taken before the trees had sorted into tiers after loading;
+settled, from the same height, they are 258.
+
+**Tree squares** (`ImpostorLod.set_chunk`, `TerrainTrees.chunk_metres`), trees only, settled:
+
+| square | calls, editor / on foot | tree tris, editor |
+|---|---|---|
+| 128 m | 258 / 289 | 238 k |
+| 256 m | 179 / 194 | 247 k |
+| **512 m (taken)** | **150 / 162** | 280 k |
+| 1024 m | 142 / 143 | 288 k |
+
+Fewer squares cull less finely, but what they add is two-triangle cards; −42% draw calls is the
+better trade. Items and the city keep 128 m.
+
+**Detail radius.** The detail square snaps to `TerrainStreamer.align` blocks (4 tiles): the
+camera's block plus a whole block each side, so full bricks reach 4–7 tiles (45–80 m) and a radius
+of 3 is the same square as 4. A tighter square needs 2-tile blocks (`-- --align=2` in the
+heightfield scene, for comparing):
+
+| | resident tiles | drawn, mech view | drawn, on foot |
+|---|---|---|---|
+| now (radius 4, blocks of 4) | 240 | 1.20 M | 1.09 M |
+| radius 3, blocks of 2 | 140 | 1.10 M | 1.13 M |
+| radius 2, blocks of 2 | 60 | 0.97 M | 0.99 M |
+
+Resident tiles fall a lot (less to bake and hold); what is DRAWN barely moves — the coarse ground
+takes the area over and has triangles of its own, and the frame is mostly trees and shadows. At
+radius 2 the ground 20–40 m off visibly loses its slopes and curves. Not changed; a look decision
+(`shots/detail_radius_*.png` in the main folder).

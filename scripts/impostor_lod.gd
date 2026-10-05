@@ -31,6 +31,12 @@ extends Node3D
 ## a node source draws nothing far until then.
 
 const CHUNK := 128.0
+## This set's square size, metres; CHUNK unless `set_chunk` says otherwise
+## before the first `add`. Each square is two MultiMeshes and their shadow
+## passes, so a set of thousands of cards spread over a kilometre wants big
+## squares (fewer draw calls), and a set of a hundred items small ones (tight
+## culling).
+var chunk_m := CHUNK
 
 var near_range := 40.0
 var cull_range := 3000.0
@@ -198,6 +204,15 @@ static func _make_mmi(m: Mesh, mat: Material) -> MultiMeshInstance3D:
 
 func _init() -> void:
 	_set.set_chunk(CHUNK)
+
+
+## The square size, before any copy is added.
+func set_chunk(metres: float) -> void:
+	if _set.count() > 0:
+		push_error("ImpostorLod.set_chunk after copies were added")
+		return
+	chunk_m = metres
+	_set.set_chunk(metres)
 
 
 ## A new copy. Returns its handle, which stays its own until `remove`.

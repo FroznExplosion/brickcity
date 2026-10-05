@@ -20,6 +20,10 @@ const MAX_TREES := 6000
 ## of distance checks, and nobody crosses 45 m in a sixth of a second.
 const UPDATE_EVERY := 10
 const REBUILD_AFTER := 0.5
+## The ImpostorLod square for trees. 6,000 cards over a kilometre and a half
+## in 128 m squares were ~1,470 draw calls from the editor's height (two
+## MultiMeshes a square a kind, and their shadow passes).
+static var chunk_metres := 512.0
 
 var camera: Camera3D
 var material: Material
@@ -127,6 +131,7 @@ func _place(spots: Array) -> void:
 			if tree_mesh != null:
 				s.sway = WeatherFx.sway_tree(tree_mesh.get_aabb().end.y)
 			s.snowcap = 1.0   # snow on the crowns
+			s.set_chunk(chunk_metres)
 			s.setup(tree_mesh, material, 45.0)
 			_sets[key] = s
 		var cell: Vector3i = spot.cell
