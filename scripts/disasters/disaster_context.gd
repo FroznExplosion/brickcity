@@ -19,14 +19,35 @@ var registry: BuildingRegistry
 var islands: IslandManager
 ## The fire service (fire_spread.gd), set by the director. ignite() goes here.
 var fire: FireSpread
-## True while it rains. Fire reads it: rain halves spread and slows heating.
-var raining := false
+## SEVERAL DISASTERS AT ONCE (Docs/Disasters.md 22). Each disaster's sky,
+## weather, lens, wind, rain, snow, storm and sea are kept apart, by `source`
+## -- the disaster acting now, which the director sets round each one's tick
+## -- and combined: the darkest sky, the worst sight and aim, the heaviest rain
+## and dust on the lens, the winds added, any rain is rain, the highest surge.
+## A disaster that ends is forgotten (forget), and what it set goes with it.
+## Without a source (a probe calling straight in) it is one source of its own.
+var source: Object = null
+var _by := {}                     ## source -> {channel: value}
+var _slots := {}                  ## source -> its hazard id block
+var _next_slot := 0
+
+## True while it rains (any disaster's). Fire reads it: rain halves spread and
+## slows heating.
+var raining := false:
+	set(v):
+		_put("raining", v)
+	get:
+		return _any("raining")
 ## How wet the world's surfaces are (WeatherFx, weather.gdshaderinc): up while
 ## it rains, over WET_S; drying over DRY_S after. Eased here, every frame.
 var wet := 0.0
-## The wind trees and buildings sway in: direction x strength, 0..~1.5.
-## Disasters set it; it is theirs to put back to zero.
-var gale := Vector3.ZERO
+## The wind trees and buildings sway in: direction x strength, 0..~1.5 --
+## every disaster's added. Disasters set it; it is theirs to put back to zero.
+var gale := Vector3.ZERO:
+	set(v):
+		_put("gale", v)
+	get:
+		return _sum("gale", 1.5)
 const WET_S := 15.0
 const DRY_S := 120.0
 ## Rain falling now, eased over a couple of seconds either way.
@@ -34,9 +55,22 @@ var rain := 0.0
 ## Snow falling (a disaster sets it), and lying: up over SNOW_S while it falls,
 ## melting over MELT_S after (Docs/Disasters.md 21). The cover is made the
 ## first time it lies and freed when the last of it has gone.
-var snowing := false
+var snowing := false:
+	set(v):
+		_put("snowing", v)
+	get:
+		return _any("snowing")
 var snow := 0.0
-var snow_rate := 1.0              ## how fast it lies: a heavy fall, faster
+## How fast it lies: a heavy fall, faster. The fastest of those falling.
+var snow_rate := 1.0:
+	set(v):
+		_put("snow_rate", v)
+	get:
+		var r := 0.0
+		for d in _by.values():
+			if d.get("snowing", false):
+				r = maxf(r, float(d.get("snow_rate", 1.0)))
+		return r if r > 0.0 else 1.0
 var snow_cover: SnowCover = null
 const SNOW_S := 45.0
 const MELT_S := 90.0
@@ -362,36 +396,69 @@ func damage_pawns(point: Vector3, radius: float, amount: float) -> int:
 ## Tell the AI a storm is raging (AIServices.storm): soldiers with nothing to
 ## fight get under a roof (BTShelter).
 func set_storm(on: bool) -> void:
+	_put("storm", on)
 	if city.get("ai_services") != null:
-		city.ai_services.storm = on
+		city.ai_services.storm = _any("storm")
 
 
 ## The weather's effect on the AI (AIServices.sight_mul, aim_mul): `amount` 0
 ## is clear, 1 is `sight` and `aim` in full, and intensity scales how far from
 ## clear they go. Sight never drops below 60%.
 func set_weather(amount: float, sight: float, aim: float, intensity := 1.0) -> void:
+	var k := clampf(amount, 0.0, 1.0) * maxf(intensity, 0.0)
+	_put("weather", [clampf(1.0 - (1.0 - sight) * k, 0.6, 1.0), maxf(1.0, 1.0 + (aim - 1.0) * k)])
+	_apply_weather()
+
+
+func _apply_weather() -> void:
 	if city.get("ai_services") == null:
 		return
-	var k := clampf(amount, 0.0, 1.0) * maxf(intensity, 0.0)
-	city.ai_services.sight_mul = clampf(1.0 - (1.0 - sight) * k, 0.6, 1.0)
-	city.ai_services.aim_mul = maxf(1.0, 1.0 + (aim - 1.0) * k)
+	var sight := 1.0
+	var aim := 1.0
+	for d in _by.values():
+		if d.has("weather"):
+			sight = minf(sight, float(d.weather[0]))
+			aim = maxf(aim, float(d.weather[1]))
+	city.ai_services.sight_mul = sight
+	city.ai_services.aim_mul = aim
 
 
 ## Rain streaking the view and dust hazing it, 0..1 each; `dust_colour` tints it.
 func set_screen(rain: float, dust: float, dust_colour := Color(0.6, 0.55, 0.48),
 		rain_colour := Color(0.78, 0.84, 0.92)) -> void:
+	_put("screen", [clampf(rain, 0.0, 1.0), clampf(dust, 0.0, 1.0), dust_colour, rain_colour])
+	_apply_screen()
+
+
+func _apply_screen() -> void:
 	if screen == null:
 		return
-	screen.set_shader_parameter("rain", clampf(rain, 0.0, 1.0))
-	screen.set_shader_parameter("dust", clampf(dust, 0.0, 1.0))
-	screen.set_shader_parameter("dust_colour", dust_colour)
-	screen.set_shader_parameter("rain_colour", rain_colour)
+	var r := 0.0
+	var dsum := 0.0
+	var rc := Color(0.78, 0.84, 0.92)
+	var dc := Color(0.6, 0.55, 0.48)
+	for d in _by.values():
+		if not d.has("screen"):
+			continue
+		var v: Array = d.screen
+		if float(v[0]) > r:
+			r = float(v[0])
+			rc = v[3]
+		if float(v[1]) > dsum:
+			dsum = float(v[1])
+			dc = v[2]
+	screen.set_shader_parameter("rain", r)
+	screen.set_shader_parameter("dust", dsum)
+	screen.set_shader_parameter("dust_colour", dc)
+	screen.set_shader_parameter("rain_colour", rc)
 
 
 ## Soldiers within `radius` of `point` get low for `seconds` (Soldier.duck): a
 ## stroke is about to land there.
 func duck_near(point: Vector3, radius: float, seconds: float) -> int:
 	var n := 0
+	if city.get("soldiers") == null:
+		return 0
 	for so in city.soldiers:
 		if is_instance_valid(so) and so.pawn != null and not so.is_dead() 				and so.pawn.feet().distance_to(point) <= radius:
 			so.duck(seconds)
@@ -407,16 +474,34 @@ func duck_near(point: Vector3, radius: float, seconds: float) -> int:
 func set_sea(surge: float, wave_mul: float) -> bool:
 	if not city.has_method("disaster_sea"):
 		return false
-	city.disaster_sea(surge, wave_mul)
+	_put("sea", [surge, wave_mul])
+	_apply_sea()
 	return true
+
+
+func _apply_sea() -> void:
+	if not city.has_method("disaster_sea"):
+		return
+	var surge := 0.0
+	var mul := 1.0
+	for d in _by.values():
+		if d.has("sea"):
+			surge = maxf(surge, float(d.sea[0]))
+			mul = maxf(mul, float(d.sea[1]))
+	city.disaster_sea(surge, mul)
 
 
 ## The wind on whoever is walking or swimming: metres a second of drift added
 ## to their motion (DebugCamera.wind). Vector3.ZERO is calm.
 func set_wind(v: Vector3) -> void:
+	_put("wind", v)
+	_apply_wind()
+
+
+func _apply_wind() -> void:
 	var cam = city.get("camera")
 	if cam != null and "wind" in cam:
-		cam.wind = v
+		cam.wind = _sum("wind", 4.0)
 
 
 # --- The player ---------------------------------------------------------------
@@ -474,6 +559,30 @@ func _step_shake(delta: float) -> void:
 ## down in ENDING; at 0 every value is put back exactly as it was.
 func set_sky(amount: float, sun_colour: Color, top: Color, horizon: Color,
 		sun_energy_mul: float, flash := 0.0) -> void:
+	_put("sky", [clampf(amount, 0.0, 1.0), sun_colour, top, horizon, sun_energy_mul, flash])
+	_apply_sky()
+
+
+## The darkest mood any disaster asks for, and the brightest flash.
+func _apply_sky() -> void:
+	var best: Array = []
+	var flash := 0.0
+	for d in _by.values():
+		if not d.has("sky"):
+			continue
+		var v: Array = d.sky
+		flash = maxf(flash, float(v[5]))
+		if best.is_empty() or float(v[0]) > float(best[0]):
+			best = v
+	if best.is_empty():
+		if _sky_base.is_empty():
+			return
+		best = [0.0, Color.WHITE, Color.WHITE, Color.WHITE, 1.0, 0.0]
+	_sky_now(float(best[0]), best[1], best[2], best[3], float(best[4]), flash)
+
+
+func _sky_now(amount: float, sun_colour: Color, top: Color, horizon: Color,
+		sun_energy_mul: float, flash: float) -> void:
 	var sun: DirectionalLight3D = city._sun
 	var mat := _sky_material()
 	if _sky_base.is_empty():
@@ -512,11 +621,58 @@ func _sky_material() -> ProceduralSkyMaterial:
 ## Mark `box` as somewhere not to stand, under `id` (0, 1, 2 ... per disaster;
 ## the context makes it negative). Stays until cleared.
 func set_hazard(id: int, box: AABB) -> void:
-	hazards[HAZARD_BASE - id] = box
+	hazards[_hazard_key(id)] = box
 
 
 func clear_hazard(id: int) -> void:
-	hazards.erase(HAZARD_BASE - id)
+	hazards.erase(_hazard_key(id))
+
+
+## Each disaster its own block of ids: two tornadoes both mark "hazard 0".
+func _hazard_key(id: int) -> int:
+	if not _slots.has(source):
+		_slots[source] = _next_slot
+		_next_slot = (_next_slot + 1) % 500
+	return HAZARD_BASE - id - 100 * int(_slots[source])
+
+
+# --- Several at once -------------------------------------------------------------
+
+func _put(channel: String, value: Variant) -> void:
+	if not _by.has(source):
+		_by[source] = {}
+	_by[source][channel] = value
+
+
+func _any(channel: String) -> bool:
+	for d in _by.values():
+		if d.get(channel, false):
+			return true
+	return false
+
+
+func _sum(channel: String, cap: float) -> Vector3:
+	var v := Vector3.ZERO
+	for d in _by.values():
+		v += d.get(channel, Vector3.ZERO)
+	return v.limit_length(cap)
+
+
+## A disaster has ended: what it set goes, and what the others set stands.
+func forget(src: Object) -> void:
+	_by.erase(src)
+	for k in hazards.keys():
+		var slot := int(_slots.get(src, -1))
+		if slot >= 0 and k <= HAZARD_BASE - 100 * slot and k > HAZARD_BASE - 100 * (slot + 1):
+			hazards.erase(k)
+	_slots.erase(src)
+	_apply_sky()
+	_apply_weather()
+	_apply_screen()
+	_apply_wind()
+	_apply_sea()
+	if city.get("ai_services") != null:
+		city.ai_services.storm = _any("storm")
 
 
 ## The city calls this every AI tick, right after its own danger boxes are

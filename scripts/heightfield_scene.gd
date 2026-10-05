@@ -238,7 +238,7 @@ func _ready() -> void:
 		disasters = DisasterDirector.new()
 		disasters.name = "Disasters"
 		add_child(disasters)
-		disasters.setup(self, ["hurricane", "snow"])
+		disasters.setup(self, ["hurricane", "snow", "blizzard"])
 	_update_hud()
 	if _bench_mode:
 		_run_bench()

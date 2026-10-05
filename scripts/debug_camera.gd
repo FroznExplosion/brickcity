@@ -389,8 +389,11 @@ func _walk(delta: float) -> void:
 
 	# Stopped dead by something low -- a kerb of rubble, a course of brick, the
 	# lip of a floor slab. Step over it rather than making the player jump.
-	if wish != Vector3.ZERO and _body.is_on_wall():
-		var wanted := Vector3(wish.x, 0.0, wish.z) * speed * delta
+	# The wind's push steps up too: a gale drives a walker over a kerb, not
+	# into it for ever.
+	var push := Vector3(wish.x * speed + wind.x, 0.0, wish.z * speed + wind.z)
+	if push.length() > 0.05 and _body.is_on_wall():
+		var wanted := push * delta
 		var moved := _body.global_position - before
 		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
 			_step_over(wanted)

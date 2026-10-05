@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow,multi
 
 var _pass := 0
 var _fail := 0
@@ -105,6 +105,8 @@ func _run() -> void:
 		await _check_city_hurricane(city, dir)
 	if only == "" or "snow" in only:
 		await _check_city_snow(city, dir)
+	if only == "" or "multi" in only:
+		await _check_multi(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -667,6 +669,7 @@ func _check_intensity(dir: DisasterDirector) -> void:
 	low.free()
 	mid.free()
 	high.free()
+	dir.ctx.forget(null)
 	_ok("the names", DisasterDirector.intensity_name(1.0) == "Medium"
 			and DisasterDirector.intensity_name(2.5) == "Extreme")
 
@@ -683,6 +686,7 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 		q._plan()
 		sizes.append(q.plan.size())
 		q.free()
+	dir.ctx.forget(null)
 	_ok("more intensity, more buildings fail", sizes[0] <= sizes[1] and sizes[1] <= sizes[2]
 			and sizes[2] > 0, "%s at Low / Medium / Extreme" % [sizes])
 
@@ -1250,6 +1254,72 @@ func _snow_height_at(cover: SnowCover, id: int, at: Vector3) -> float:
 	return best
 
 
+## Several at once (Docs/Disasters.md 22): a combo starts each of its kinds,
+## each on its own seed; their hazards do not overwrite each other; the winds
+## add; a client joining mid-way is sent every start; stop ends them all; and
+## when the last has gone the sky, the AI's weather, the lens, the storm and
+## the hazards are all as they were.
+func _check_multi(city: Node3D, dir: DisasterDirector) -> void:
+	print("several at once")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	var base: Color = ctx.sky_base().sun_colour
+	_ok("the city offers combos", dir.combos().has("outbreak") and dir.combos().has("superstorm"),
+			str(dir.combos()))
+	_ok("a tornado outbreak starts three tornadoes", dir.start("outbreak", 1.0)
+			and dir.running.size() == 3 and dir.running.all(func(d) -> bool: return d is Tornado))
+	var paths := {}
+	for d in dir.running:
+		paths[(d as Tornado).path[0].snapped(Vector3.ONE)] = true
+	_ok("each on its own path", paths.size() == 3)
+	var late: Array = []
+	dir.add_client(func(m: Array) -> void: late.append(m))
+	_ok("a client joining mid-way is sent all three", late.size() == 3)
+	var most_hazards := 0
+	var gale := 0.0
+	var t := 0
+	while dir.is_running() and t < 30 * 150:
+		await physics_frame
+		t += 1
+		most_hazards = maxi(most_hazards, ctx.hazards.size())
+		gale = maxf(gale, ctx.gale.length())
+	_ok("their hazards stand side by side", most_hazards >= 3, "%d at most" % most_hazards)
+	_ok("the winds add, to the cap", gale > 0.3 and gale <= 1.5 + 1e-4, "gale up to %.2f" % gale)
+	_ok("they all end", not dir.is_running() and dir.running.is_empty(), "%.0f s" % (t / 30.0))
+	await _ticks(5)
+	_ok("and leave nothing behind: sky, AI weather, lens, storm, hazards", _all_clear(city, ctx, base))
+
+	_ok("a superstorm starts a hurricane and two tornadoes", dir.start("superstorm", 1.0)
+			and dir.running.size() == 3)
+	_ok("nothing else starts while they run", not dir.start("meteor"))
+	await _ticks(30 * 20)
+	dir.stop()
+	_ok("stop ends them all", dir.running.all(func(d) -> bool:
+			return d.phase == Disaster.Phase.ENDING or d.phase == Disaster.Phase.DONE))
+	t = 0
+	while dir.is_running() and t < 30 * 60:
+		await physics_frame
+		t += 1
+	await _ticks(5)
+	_ok("and they leave nothing behind either", not dir.is_running() and _all_clear(city, ctx, base))
+	await _until_out(dir)
+
+
+func _all_clear(city: Node3D, ctx: DisasterContext, base: Color) -> bool:
+	var lens_clear := ctx.screen == null or (float(ctx.screen.get_shader_parameter("rain")) == 0.0
+			and float(ctx.screen.get_shader_parameter("dust")) == 0.0)
+	var ok: bool = ((city._sun as DirectionalLight3D).light_color == base and ctx.hazards.is_empty()
+			and city.ai_services.sight_mul == 1.0 and city.ai_services.aim_mul == 1.0
+			and not city.ai_services.storm and lens_clear and ctx.gale == Vector3.ZERO
+			and not ctx.raining)
+	if not ok:
+		print("  --   left: sun %s (base %s), %d hazard(s), sight %.2f aim %.2f storm %s lens %s gale %s rain %s" % [
+				(city._sun as DirectionalLight3D).light_color, base, ctx.hazards.size(),
+				city.ai_services.sight_mul, city.ai_services.aim_mul, city.ai_services.storm,
+				lens_clear, ctx.gale, ctx.raining])
+	return ok
+
+
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
 	print("meteor shower")
 	# The same seed rolls the same shower -- without a city: the schedule is
@@ -1265,6 +1335,8 @@ func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("one seed, one shower", same, "%d meteors" % a.meteors.size())
 	a.free()
 	b.free()
+	# Made outside the director: what they set in WARNING is no one's to clear.
+	dir.ctx.forget(null)
 	var base: Color = dir.ctx.sky_base().sun_colour
 
 	var n0: int = city.authority.commands.size()

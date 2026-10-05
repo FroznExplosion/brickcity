@@ -121,20 +121,56 @@ func _run() -> void:
 	ctx.snow = 0.0005
 	await _ticks(10)
 	_ok("once it has gone, so has its cover", ctx.snow_cover == null and WeatherFx.snow == 0.0)
+
+	# A blizzard: the same snow, with a gale in it.
+	cam.set_walking(true)
+	await _ticks(30)
+	_ok("a blizzard starts", dir.start("blizzard", 1.0))
+	var bz: Blizzard = dir.current
+	var from := Vector3.INF
+	var drift := 0.0
+	var gale := 0.0
+	var haze := 0.0
+	var lay_t := -1.0
+	t = 0
+	while dir.is_running() and t < 30 * 100:
+		await physics_frame
+		t += 1
+		if not is_instance_valid(bz) or bz.phase != Disaster.Phase.ACTIVE:
+			continue
+		gale = maxf(gale, ctx.gale.length())
+		haze = maxf(haze, float(ctx.screen.get_shader_parameter("dust")) if ctx.screen != null else 0.0)
+		if lay_t < 0.0 and ctx.snow >= 0.9:
+			lay_t = bz.phase_t
+		if bz.phase_t > 10.0 and bz.phase_t < 14.0:
+			if from == Vector3.INF:
+				from = cam.global_position
+			drift = Vector2(cam.global_position.x - from.x, cam.global_position.z - from.z).length()
+		if shots and bz.phase_t > 20.0 and not bz.has_meta("shot"):
+			bz.set_meta("shot", true)
+			cam.set_walking(false)
+			await _shot("blizzard")
+			cam.set_walking(true)
+	_ok("it lies twice as fast as a snowfall", lay_t > 0.0 and lay_t < DisasterContext.SNOW_S / 1.5,
+			"deep after %.0f s (a snowfall at intensity 1 takes %.0f)" % [lay_t, DisasterContext.SNOW_S])
+	_ok("the gale sways things hard and leans on a walker", gale > 0.9 and (shots or drift > 2.0),
+			"gale %.2f, walker carried %.1f m in 4 s" % [gale, drift])
+	_ok("the view whites out", ctx.screen == null or haze > 0.5, "haze %.2f" % haze)
+	_ok("and the wind drops with it", not dir.is_running() and cam.wind == Vector3.ZERO
+			and ctx.gale == Vector3.ZERO)
 	_finish(scene)
 
 
 func _tree_spot(scene: Node) -> Vector3:
 	var tree := Vector3.INF
-	if scene._trees == null:
+	var trees = scene._trees
+	if trees == null:
 		return tree
-	for set in scene._trees.get_children():
-		if not (set is ImpostorLod):
-			continue
-		for xf: Transform3D in (set as ImpostorLod)._xf:
-			if xf.origin.y > BrickWave.get_sea_level() + 2.5 and (tree == Vector3.INF
-					or xf.origin.length() < tree.length()):
-				tree = xf.origin
+	# Where they stand, as they were scattered (ImpostorLod keeps no list).
+	for spot in Trees.scatter(trees.rect, trees.world_seed, TerrainTrees.MAX_TREES):
+		var o: Vector3 = Trees.placement(spot.cell, spot.variant).origin
+		if o.y > BrickWave.get_sea_level() + 2.5 and (tree == Vector3.INF or o.length() < tree.length()):
+			tree = o
 	return tree
 
 
