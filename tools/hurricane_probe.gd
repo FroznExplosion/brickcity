@@ -40,7 +40,7 @@ func _run() -> void:
 	if dir == null:
 		_finish(scene)
 		return
-	_ok("offering only what needs no buildings: the hurricane, snow", dir.roll == ["hurricane", "snow"],
+	_ok("offering only what needs no buildings: hurricane, snow, blizzard", dir.roll == ["hurricane", "snow", "blizzard"],
 			str(dir.roll))
 	var sea = scene._sea
 	var base_level := BrickWave.get_sea_level()
@@ -192,16 +192,8 @@ func _run() -> void:
 func _land_shot(cam: DebugCamera, name: String) -> void:
 	var was := cam.global_transform
 	# The tree nearest the start that stands above the sea.
-	var tree := Vector3.INF
 	var scene := cam.get_parent()
-	if scene._trees != null:
-		for set in scene._trees.get_children():
-			if not (set is ImpostorLod):
-				continue
-			for xf: Transform3D in (set as ImpostorLod)._xf:
-				if xf.origin.y > BrickWave.get_sea_level() + 2.5 and (tree == Vector3.INF
-						or xf.origin.length() < tree.length()):
-					tree = xf.origin
+	var tree := _tree_spot(scene)
 	if tree == Vector3.INF:
 		return
 	cam.global_position = tree + Vector3(9.0, 5.0, 9.0)
@@ -240,6 +232,19 @@ func _frame_ms(n: int) -> float:
 	for i in n:
 		await process_frame
 	return float(Time.get_ticks_usec() - t0) / 1000.0 / float(n)
+
+
+func _tree_spot(scene: Node) -> Vector3:
+	var tree := Vector3.INF
+	var trees = scene._trees
+	if trees == null:
+		return tree
+	# Where they stand, as they were scattered (ImpostorLod keeps no list).
+	for spot in Trees.scatter(trees.rect, trees.world_seed, TerrainTrees.MAX_TREES):
+		var o: Vector3 = Trees.placement(spot.cell, spot.variant).origin
+		if o.y > BrickWave.get_sea_level() + 2.5 and (tree == Vector3.INF or o.length() < tree.length()):
+			tree = o
+	return tree
 
 
 func _shot(name: String) -> void:

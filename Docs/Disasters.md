@@ -380,7 +380,7 @@ craters buildings). Deferred by decision (2026-09-28), not blocked:
 | Disaster | Why it fits | What it would need |
 |---|---|---|
 | **Flood / tsunami** | Water through the lower storeys, floating debris | A moving water level over the city; buoyancy for pieces; the sideways load for the push |
-| **Blizzard / freeze** | Frozen bricks turn brittle and shatter | A per-building toughness multiplier while frozen; the `ICE` look exists |
+| **Freeze** (the blizzard is built, §21) | Frozen bricks turn brittle and shatter | A per-building toughness multiplier while frozen, as a command; the `ICE` look exists |
 | **Volcano / lava** | Lava melts everything it reaches | Lava flow over the heightfield, a heat source for fire; large |
 | **Landslide** | Hillside comes down onto the city | Terrain pieces as islands at scale — against the heightfield rule; would have to be rubble thrown down a slope instead |
 
@@ -876,3 +876,46 @@ tiles, plate-and-a-bit thick (0.16 m, studs hidden), on every top open to the sk
 
 Probes: `snow_probe` 8/8 (159 squares, none under a site, melts, cover freed); disaster probe 128
 with a city snow section. Shots: `snow_before`, `snow_lying`, `snow_close`, `disaster_snow_city`.
+
+**Blizzard** (`blizzard.gd`, a `Snowfall` with its tuning changed — the snowfall's constants are
+variables now): a gale of 1.1 (trees and towers sway hard), flakes carried sideways at 11 m/s and
+thick enough to white the view out (lens haze 0.62), the snow lying 1.8x as fast, a 2 m/s push on a
+walker, sight at the 60% floor and aim 2.2x worse. Flakes are carried by their starting velocity,
+not a pull: as a pull, a nine-second flake would have been doing a hundred metres a second.
+Probe: deep after 22 s (a snowfall takes 45), gale 1.11, a walker carried 5.8 m in 4 s, haze 0.62,
+the wind back to nothing after. `shots/blizzard.png`.
+
+---
+
+## 22. Several at once
+
+**Combos** — menu entries that start each of their kinds together, each from its own seed:
+
+| Combo | Kinds |
+|---|---|
+| Tornado outbreak | 3 tornadoes |
+| Superstorm | hurricane + 2 tornadoes |
+| Firestorm | lightning + fire + tornado |
+| Cataclysm | meteor shower + earthquake |
+| Frozen quake | blizzard + earthquake |
+| Apocalypse | meteors + lightning + tornado + earthquake |
+
+A combo is offered where every kind in it is (the heightfield offers none yet: it has no buildings
+for tornadoes). Random still rolls single kinds; nothing new starts while any run; `Shift+H` ends
+them all.
+
+**The director** runs a list (`running`; `current` is the latest), ticks each in the order it
+started, and tells the context which is acting (`DisasterContext.source`). In co-op each kind is its
+own start event, so a client joining mid-way is sent every one.
+
+**The context keeps each disaster's state apart and combines it**, because each used to write
+straight into the world and the last to write won: the sky took the **darkest** mood asked for and
+the brightest flash; the AI the **worst** sight and aim; the lens the heaviest rain and dust; the
+wind on trees and walkers is the **sum** (capped); rain, snow and the storm are on if **any** says
+so; the sea takes the **highest** surge. Hazard ids get a block per disaster — two tornadoes both
+mark "hazard 0". When a disaster ends, what it set is forgotten and the rest stands.
+
+Probe (`--only=multi`): an outbreak's three tornadoes on three paths, three hazards side by side,
+the gale summed to its cap (1.5), a late client sent all three starts, all over in 51 s; a superstorm
+of three, nothing else allowed to start, `stop` ending all three; and after each, the sun, the AI's
+sight and aim, the lens, the storm, the gale, the rain and the hazards exactly as before.
