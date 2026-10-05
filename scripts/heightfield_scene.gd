@@ -324,6 +324,11 @@ func _build_terrain() -> void:
 	_streamer.near_radius = NEAR_TILES
 	_streamer.keep_radius = NEAR_TILES + 2
 	_streamer.world_half = maxi(FAR_TILES, NEAR_TILES)
+	# The block the detail square and the coarse tier snap to (TerrainStreamer
+	# .align). `-- --align=2` to compare a tighter detail area.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--align="):
+			_streamer.align = maxi(1, int(arg.split("=")[1]))
 	add_child(_streamer)
 	_streamer.setup(_mat)
 	# A capture or a bench must not photograph a half-built world.
