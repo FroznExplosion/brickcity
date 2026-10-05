@@ -71,6 +71,7 @@ var far_count := 0
 func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 		p_cull_range: float = 3000.0, far_shadows: bool = true, tile: int = 128) -> void:
 	mesh = p_mesh
+	_near_mesh = _with_lods(p_mesh)
 	material = p_material
 	near_range = p_near_range
 	cull_range = p_cull_range
@@ -129,13 +130,13 @@ func _chunk(key: Vector2i) -> Dictionary:
 		return _chunks[key]
 	var c := {"near": null, "far": null}
 	if mesh != null:
-		c.near = _make_mmi(mesh, _near_mat)
+		c.near = _make_mmi(_near_mesh, _near_mat)
 		if sway.x > 0.0:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_sway", sway)
 		if snowcap > 0.0:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_snowcap", snowcap)
 		add_child(c.near)
-	var far_mesh: Mesh = mesh
+	var far_mesh: Mesh = _near_mesh
 	c.far = _make_mmi(far_mesh, material)
 	if not _far_shadows:
 		(c.far as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -152,6 +153,29 @@ func _dress_far(c: Dictionary) -> void:
 	var far: MultiMeshInstance3D = c.far
 	far.multimesh.mesh = _quad
 	far.material_override = _card_mat
+
+
+## The mesh the near copies draw: `mesh` with automatic LODs, so a tree forty
+## metres off is not drawn with every stud a tree at your feet has. Godot picks
+## the level per copy by screen-space error (under a pixel by default). On the
+## heightfield scene on foot this took 530k of 1.58M triangles off the frame
+## for ~20 ms, once per mesh. The bake keeps the full `mesh`.
+var _near_mesh: Mesh = null
+static var _lodded := {}
+
+
+static func _with_lods(m: Mesh) -> Mesh:
+	if not (m is ArrayMesh) or m.get_surface_count() != 1:
+		return m
+	if _lodded.has(m):
+		return _lodded[m]
+	var im := ImporterMesh.new()
+	im.add_surface(Mesh.PRIMITIVE_TRIANGLES, (m as ArrayMesh).surface_get_arrays(0), [], {},
+			m.surface_get_material(0))
+	im.generate_lods(25.0, 60.0, [])
+	var out: Mesh = im.get_mesh()
+	_lodded[m] = out
+	return out
 
 
 static func _make_mmi(m: Mesh, mat: Material) -> MultiMeshInstance3D:

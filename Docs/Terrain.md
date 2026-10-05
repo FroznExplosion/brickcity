@@ -3207,3 +3207,26 @@ scene, 20 tiles: boxes **0.37 ms** a tile (added before the body joins the space
 shape is set. A 65x65 heightmap shape was 0.53 ms and would turn every brick step into a ramp.
 Neither beats the boxes once they are added in the right order, so the boxes stay and the trimesh
 code was removed.
+
+### 22.12 Where the triangles go, and what was tried (2026-10-05)
+
+Heightfield scene, measured by hiding each group (frame totals include the sun's shadow pass):
+
+| view | frame | detail terrain | studs | trees | sea | shadow pass |
+|---|---|---|---|---|---|---|
+| editor, high | 686 k tris, 1,658 calls | 57 k | 0 | 289 k, **1,467 calls** | 26 k | 245 k |
+| on foot | 1.58 M tris, 585 calls | 415 k (4.9 k a tile) | 61 k | **772 k** | 26 k | 643 k |
+
+Tried, on foot:
+
+| idea | result | taken |
+|---|---|---|
+| automatic LODs on the near tree mesh (ImporterMesh.generate_lods) | **−530 k tris (−33%)**, ~20 ms once a mesh, no visible change | yes — `ImpostorLod._with_lods`, every set (trees, items, city) |
+| far tree cards cast no shadow | −4 k tris, −85 calls | no: trees want their far shadows; small |
+| sun shadow distance 60 m | already 60 | — |
+| automatic LODs on terrain tiles | −4 k tris, 7 ms a tile | no: brick tops have nothing to simplify |
+| occlusion culling, coarse ground as occluders | 0 in this view | no: a 128 m tree square or an 11 m tile is almost never wholly behind a hill |
+
+Still open: the trees' draw calls from high up (1,467: two MultiMeshes per 128 m square per kind,
+plus their shadow passes) — bigger squares for the far cards would cut them; and the detail radius
+(`NEAR_TILES` 4, full bricks to ~45 m) is the lever on the terrain's 415 k.
