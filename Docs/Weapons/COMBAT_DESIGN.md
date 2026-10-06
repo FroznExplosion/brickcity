@@ -312,3 +312,88 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Not yet:** ice's slow/freeze and fire's burn are statuses — later. An enemy's shield and armor
   are not yet SHOWN on the capsule; the player needs to read them (with melee, step 4). Helmets
   wait for head crits.
+
+---
+
+## 12. Handoff — pick up here (2026-10-06)
+
+Everything above through step 3 is **built, tested and merged into `main`**. The player side it
+sits on (FPS movement, view model, HUD, settings menu) is documented in
+[../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
+
+### 12.1 Next: step 4, melee
+
+What it must do (§4.1, §4.5):
+
+- **One melee = `CombatScale.melee(level)`**, the player's level. Against a shield it does 1.5×
+  (that is why a shield's layer health is ×1.5 in `CombatScale.layer_hp` — the two must match, so
+  one melee breaks exactly one shield-melee). Add the 1.5 as a damage type (e.g. a `&"melee"` row in
+  `Elements.TABLE` with `&"shield": 1.5`, or a packet flag read in `DamageSystem`).
+- **A melee stops at the layer it breaks**: no carry-over (call `apply_impact` with carry-over off
+  for that hit — add a packet flag rather than flipping the pool's `impact_carries_over`). That is
+  what keeps the table in §4.1 exact: a medium enemy is 3 + 1 = 4 melees, always.
+- **Input**: a new rebindable action `melee` in `project.godot` [input] (V is "leave the pawn" and F
+  the mech order in `city_scene.gd`; E is free; on a pad, right stick click). `PlayerController`
+  reads actions via `_pressed()`/`_down()`; `PawnIntents` gets an edge-triggered `melee`.
+- **Hit**: a short sphere/shape cast ahead of the eye (~1.5 m), the first body with a HealthPool,
+  through `DamageSystem.resolve` like a round. A quick view-model jab in `PlayerView` (a pose like
+  `RELOAD_POS`, ~0.25 s) and a small camera kick.
+- **Readability**: the enemy's shield and armor must be SEEN — a shimmer for a shield, plates for
+  armor, a crack/flash when one breaks — or the counts cannot be read. `EnemyProfiles.COLOURS` has
+  per-layer colours; the soldiers are greybox capsules (`Soldier._greybox`). `DamageResult` and
+  `HealthPool.layer_depleted` give the events.
+- **Test**: a probe that melees each profile and counts hits to kill (= the §4.1 table, at levels 1
+  and 6), checks a melee that breaks a defence leaves the flesh untouched, and the
+  melee-then-shoot loop.
+
+### 12.2 After that
+
+5. Four gun slots + ordnance (hold swap) + grenade slot (G / right bumper), HUD for the four.
+6. Modifier slots by rarity (parts become modifiers), the explosive attachment, first red text.
+7. Special weapons / alt-fire, the shock arc first.
+Also open: ice slow/freeze and fire burn (statuses — `scripts/status/` exists from BoomerBorder);
+helmets and head crits (switch `Pawn.head_crits` on when enemies are figures).
+
+### 12.3 Where things are
+
+| What | File |
+|---|---|
+| Power curve, rarity | `scripts/guns/tier.gd`, `scripts/guns/rarity.gd`, `scripts/guns/gun_quality.gd` (`LN_STEP`) |
+| Light enemy anchor | `scripts/loot/loot_roller.gd` (`TRASH_BASE_HP`, `enemy_hp`) |
+| Melee unit, gating, shield regen | `scripts/combat/combat_scale.gd` |
+| Enemy layer profiles | `scripts/combat/enemy_profiles.gd` |
+| Elements + effectiveness table | `scripts/elements/elements.gd` |
+| Damage routing, crit absorb | `scripts/combat/damage_system.gd`, `scripts/combat/health_pool.gd` |
+| Crit spots | `scripts/combat/crit_spots.gd`, `Pawn.head_crits` in `scripts/pawn/pawn.gd` |
+| Gun fire, element on the round | `scripts/combat/gun_controller.gd`; element roll in `scripts/guns/gun_generator.gd` |
+| Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
+| Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
+| Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
+
+### 12.4 Tests to run before merging
+
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (15),
+`crit_probe` (10), `defence_probe` (19), `moves_probe` (39), and the AI ones that read soldier
+health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
+`room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
+(7), `res://scenes/combat_arena.tscn -- --gate` (31). Menu: `res://menu/tests/menu_smoke.tscn`
+(190), `menu_fit_smoke.tscn` (435).
+
+### 12.5 Traps hit on the way
+
+- **After merging `main`, rebuild the engine library and re-import** (`python -m SCons` in
+  `gdextension/brick`, then `--import`). Three times a run "failed" with parse errors that were only
+  a stale DLL or class cache (`AgentTier`, `ShapedSampler`, `build_tile_chamfered`).
+- **A `GunInstance` never added to the tree crashes the engine at quit** (exit 139 after every
+  check passed). Free it before quitting; `crit_probe` shows how. `threat_style_probe` crashes the
+  same way and is probably the same cause (AI area, not fixed).
+- **Commit the `.uid` of every new script** with it, or the editor in the main folder makes a
+  different one and the next merge refuses to overwrite it.
+- **`project.godot` in the main folder often has uncommitted edits** (the main scene, the editor
+  re-serialising the input actions). A merge that touches it is refused until they are committed.
+- **Writing GDScript through Bash heredocs eats backslashes** (line continuations vanish). Write
+  patches as Python files with the Write tool.
+- **AI-area files were changed** (`unit_catalog.gd`, `wave_director.gd`, `squad.gd`,
+  `bt_play_advance.gd`, `callout_hud.gd`); tell the AI chat if it is mid-change there.
+- **`squad_advance_probe` flakes** (fails about one run in two on `main` too). Soldier probes'
+  timing checks flake under machine load; rerun alone before blaming a change.
