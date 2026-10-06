@@ -101,9 +101,13 @@ var _shadow_centre := Vector2i(1 << 30, 0)
 ## each frame to find nothing to do, ~1 ms of an idle frame.
 var _finish_pending := true
 ## Tiles within this many of the camera get the chamfered near mesh
-## (TerrainTile.add_bevel). It is drawn only inside BEVEL_RANGE (12 m, about
+## (TerrainTile.add_bevel). It is shown within near_show_radius (about
 ## one tile), so two is enough with a margin, and nothing further pays for it.
 @export var bevel_radius := 2
+## Tiles within this ring SHOW their detailed version (chamfer, bevelled
+## studs); `bevel_radius` bakes one ring further ahead so it is ready.
+@export var near_show_radius := 1
+var _near_centre := Vector2i(1 << 30, 0)
 ## Chamfered bakes in flight: tile coord -> [task id, result holder, tile].
 var _bevel_tasks := {}
 const BEVEL_IN_FLIGHT := 2
@@ -135,6 +139,11 @@ func follow(camera_xz: Vector2) -> void:
 	_drop(cx, cz)
 	_assemble()
 	_bevel_step()
+	if _near_centre != _centre:
+		_near_centre = _centre
+		for c in _tiles:
+			(_tiles[c] as TerrainTile).set_near(absi(c.x - cx) <= near_show_radius
+					and absi(c.y - cz) <= near_show_radius)
 	if _shadow_centre != _centre:
 		_shadow_centre = _centre
 		for c in _tiles:
@@ -404,6 +413,8 @@ func _assemble() -> void:
 		_tiles[c] = tile
 		_built += 1
 		_finish_pending = true
+		tile.set_near(absi(c.x - _centre.x) <= near_show_radius
+				and absi(c.y - _centre.y) <= near_show_radius)
 		# The budget can only stop the NEXT piece of work, so ONE piece is
 		# the floor on a hitch. Assembling a whole tile at once put that
 		# floor at 54 ms, which is why a tile is three phases now.

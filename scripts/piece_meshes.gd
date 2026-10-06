@@ -91,7 +91,7 @@ static func stud() -> ArrayMesh:
 ## The same stud with no rim bevel: 22 triangles to `stud`'s 38. Past a few
 ## metres the 13 mm rim is under a pixel or two (Terrain.md 17.12's
 ## `17.8 / distance`), so the terrain draws this one there and the bevelled
-## one only near the camera (TerrainTile.STUD_BEVEL_RANGE).
+## one only on tiles round the camera (TerrainTile.set_near).
 static func stud_plain() -> ArrayMesh:
 	if _stud_plain != null:
 		return _stud_plain

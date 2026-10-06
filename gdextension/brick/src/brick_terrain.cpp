@@ -3811,28 +3811,39 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 const float yb = top - BRICK_M;
                 const Vector2 fzy(z1 - z0, BRICK_M);
                 const Vector2 fxy(x1 - x0, BRICK_M);
+                // A side STOPS where the top's chamfer meets it: the strip
+                // runs down to `top - cut` on this plane, so a side drawn on
+                // up to `top` stood a 13 mm sheet of brick outside the bevel,
+                // its texture floating past the edge. Same cut as
+                // MeshBuf::quad's. A square edge has no strip: full height.
+                const float cut = g_face_bevel > 0.0f
+                        ? std::min(g_face_bevel, std::min(x1 - x0, z1 - z0) * 0.34f) : 0.0f;
+                const float t_zm = (square & 1u) ? top : top - cut;
+                const float t_xp = (square & 2u) ? top : top - cut;
+                const float t_zp = (square & 4u) ? top : top - cut;
+                const float t_xm = (square & 8u) ? top : top - cut;
                 if (lo_xm) {
                     m.quad(Vector3(-1, 0, 0), col, fzy,
                         Vector3(x0, yb, z1), Vector3(x0, yb, z0),
-                        Vector3(x0, top, z0), Vector3(x0, top, z1),
+                        Vector3(x0, t_xm, z0), Vector3(x0, t_xm, z1),
                         Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
                 }
                 if (lo_xp) {
                     m.quad(Vector3(1, 0, 0), col, fzy,
                         Vector3(x1, yb, z0), Vector3(x1, yb, z1),
-                        Vector3(x1, top, z1), Vector3(x1, top, z0),
+                        Vector3(x1, t_xp, z1), Vector3(x1, t_xp, z0),
                         Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
                 }
                 if (lo_zm) {
                     m.quad(Vector3(0, 0, -1), col, fxy,
                         Vector3(x0, yb, z0), Vector3(x1, yb, z0),
-                        Vector3(x1, top, z0), Vector3(x0, top, z0),
+                        Vector3(x1, t_zm, z0), Vector3(x0, t_zm, z0),
                         Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
                 }
                 if (lo_zp) {
                     m.quad(Vector3(0, 0, 1), col, fxy,
                         Vector3(x1, yb, z1), Vector3(x0, yb, z1),
-                        Vector3(x0, top, z1), Vector3(x1, top, z1),
+                        Vector3(x0, t_zp, z1), Vector3(x1, t_zp, z1),
                         Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
                 }
             }
