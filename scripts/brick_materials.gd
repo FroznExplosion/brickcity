@@ -20,6 +20,9 @@ class_name BrickMaterials
 ##
 ## No audio files and no textures: every sound is synthesised here once and
 ## every mark drawn here once, the same rule as the rest of the palette.
+##
+## And the FINISH (set_look): printed on which bed, or injection moulded, for
+## every printed part in the world at once (shaders/print_finish.gdshaderinc).
 
 const FAMILY_OF := {
 	"PLA": "plastic", "PLA matte": "plastic", "PLA silk": "plastic", "ABS": "plastic",
@@ -54,6 +57,7 @@ static func toughness(material: int) -> float:
 ## drawn blended by the second pass and skipped by the first. A material
 ## without it still draws PETG, solid. Returns `mat`.
 static func add_glass(mat: ShaderMaterial) -> ShaderMaterial:
+	load_look()
 	if mat == null or mat.shader == null or not _GLASS_FOR.has(mat.shader.resource_path):
 		return mat
 	var glass := ShaderMaterial.new()
@@ -61,6 +65,82 @@ static func add_glass(mat: ShaderMaterial) -> ShaderMaterial:
 	mat.next_pass = glass
 	mat.set_shader_parameter("glass_pass", true)
 	return mat
+
+
+# ---------------------------------------------------------------------------
+# Finish
+# ---------------------------------------------------------------------------
+
+## How every printed part in the world is finished: printed, with its layer
+## lines, or injection moulded -- one glossy skin, as a bought brick is.
+enum Finish { PRINTED, MOULDED }
+## What a printed part's bottom face was printed on.
+enum Bed { GLASS, SMOOTH_PEI, TEXTURED_PEI }
+
+const BED_NAMES := ["glass", "smooth PEI", "textured PEI"]
+const LOOK_PATH := "user://print_look.cfg"
+const _FINISH_INC := "res://shaders/print_finish.gdshaderinc"
+
+static var finish: int = Finish.PRINTED
+static var bed: int = Bed.GLASS
+static var _look_loaded := false
+
+
+## Set the finish and the bed, for every brick, stud and scatter shader at
+## once. They are constants in print_finish.gdshaderinc, and this rewrites
+## that include in memory: Godot recompiles every shader that includes it,
+## whoever made the material. Costs one recompile when it changes and
+## nothing a frame. Remembered in `LOOK_PATH` unless `save` is false.
+static func set_look(p_finish: int, p_bed: int, save := true) -> void:
+	_look_loaded = true
+	finish = clampi(p_finish, 0, Finish.size() - 1)
+	bed = clampi(p_bed, 0, Bed.size() - 1)
+	var inc := load(_FINISH_INC) as ShaderInclude
+	if inc != null:
+		var code := _with_const(inc.code, "PRINT_FINISH", finish)
+		code = _with_const(code, "PRINT_BED", bed)
+		if code != inc.code:
+			inc.code = code
+	if save:
+		var cf := ConfigFile.new()
+		cf.set_value("print", "finish", finish)
+		cf.set_value("print", "bed", bed)
+		cf.save(LOOK_PATH)
+
+
+## The look the player chose last time, once a run. Called wherever a brick
+## material is made (add_glass); harmless to call again.
+static func load_look() -> void:
+	if _look_loaded:
+		return
+	_look_loaded = true
+	var cf := ConfigFile.new()
+	if cf.load(LOOK_PATH) == OK:
+		set_look(int(cf.get_value("print", "finish", Finish.PRINTED)),
+				int(cf.get_value("print", "bed", Bed.GLASS)), false)
+
+
+## Step through the looks: printed on each bed, then moulded. Returns its name.
+static func cycle_look() -> String:
+	load_look()
+	if finish == Finish.MOULDED:
+		set_look(Finish.PRINTED, Bed.GLASS)
+	elif bed < Bed.size() - 1:
+		set_look(Finish.PRINTED, bed + 1)
+	else:
+		set_look(Finish.MOULDED, bed)
+	return look_name()
+
+
+static func look_name() -> String:
+	if finish == Finish.MOULDED:
+		return "injection moulded"
+	return "printed, %s bed" % BED_NAMES[bed]
+
+
+static func _with_const(code: String, name: String, value: int) -> String:
+	var re := RegEx.create_from_string("const int %s = -?\\d+;" % name)
+	return re.sub(code, "const int %s = %d;" % [name, value])
 
 
 # ---------------------------------------------------------------------------

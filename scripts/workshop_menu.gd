@@ -33,11 +33,13 @@ const KIND_LABELS := {
 	"aircraft": "Aircraft",
 }
 const ROLE_LABELS := ["Structure", "Interior", "Detail"]
+const FINISH_MOULDED := 10
 
 var _bar: PanelContainer
 var _title: Label
 var _file: MenuButton
 var _insert: MenuButton
+var _finish: MenuButton
 var _type: MenuButton
 var _layer: MenuButton
 var _gen: MenuButton
@@ -213,6 +215,17 @@ func _build_bar() -> void:
 	gp.set_item_as_radio_checkable(gp.get_item_index(G_REROLL), false)
 	_gen.disabled = true
 
+	# How every printed part looks (BrickMaterials.set_look): ids 0-2 are
+	# printed on that bed, 3 is injection moulded.
+	_finish = _menu(row, "Finish", [
+		["Printed on glass", BrickMaterials.Bed.GLASS, 0],
+		["Printed on smooth PEI", BrickMaterials.Bed.SMOOTH_PEI, 0],
+		["Printed on textured PEI", BrickMaterials.Bed.TEXTURED_PEI, 0],
+		[],
+		["Injection moulded (no layer lines)", FINISH_MOULDED, 0],
+	], _on_finish, true)
+	_tick_finish()
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
@@ -263,6 +276,24 @@ func _on_file(id: int) -> void:
 		F_QUICK_SAVE: action.emit("quick_save", null)
 		F_QUICK_LOAD: action.emit("quick_load", null)
 		F_CITY: action.emit("city", null)
+
+
+func _on_finish(id: int) -> void:
+	if id == FINISH_MOULDED:
+		BrickMaterials.set_look(BrickMaterials.Finish.MOULDED, BrickMaterials.bed)
+	else:
+		BrickMaterials.set_look(BrickMaterials.Finish.PRINTED, id)
+	_tick_finish()
+
+
+func _tick_finish() -> void:
+	BrickMaterials.load_look()
+	var p := _finish.get_popup()
+	var on := FINISH_MOULDED if BrickMaterials.finish == BrickMaterials.Finish.MOULDED \
+			else BrickMaterials.bed
+	for i in p.item_count:
+		if not p.is_item_separator(i):
+			p.set_item_checked(i, p.get_item_id(i) == on)
 
 
 func _on_edit(id: int) -> void:

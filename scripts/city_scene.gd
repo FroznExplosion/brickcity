@@ -8466,6 +8466,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			print("[city] chamfered edges: %s"
 					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
+		KEY_I:
+			# Printed on glass / smooth PEI / textured PEI, or injection
+			# moulded (BrickMaterials.set_look).
+			print("[city] finish: %s" % BrickMaterials.cycle_look())
 		KEY_J:
 			# The overlap. A piece that has just come off a building is drawn by
 			# BOTH for two frames, because on the frame it is born there is
