@@ -225,6 +225,11 @@ static func room_at(world: World3D, at: Vector3) -> bool:
 ## stand-in for the vehicle map (AIVehicles.md 3) until there is one: the foot
 ## map's paths squeeze between walls a body passes and a truck does not.
 static func route_wide(world: World3D, path: PackedVector3Array) -> bool:
+	return route_width_share(world, path) >= 1.0
+
+
+## The share of a route's points with a truck's width clear round them, 0..1.
+static func route_width_share(world: World3D, path: PackedVector3Array) -> float:
 	var q := PhysicsShapeQueryParameters3D.new()
 	var c := CylinderShape3D.new()
 	c.radius = SIZE.x * 0.5 + 0.35
@@ -232,15 +237,18 @@ static func route_wide(world: World3D, path: PackedVector3Array) -> bool:
 	q.shape = c
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
 	var space := world.direct_space_state
+	var clear := 0
+	var total := 0
 	for i in path.size():
 		var pts := [path[i]]
 		if i > 0:
 			pts.append(path[i - 1].lerp(path[i], 0.5))
 		for p in pts:
+			total += 1
 			q.transform = Transform3D(Basis(), (p as Vector3) + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
-			if not space.intersect_shape(q, 1).is_empty():
-				return false
-	return true
+			if space.intersect_shape(q, 1).is_empty():
+				clear += 1
+	return float(clear) / maxf(total, 1)
 
 
 ## Where the cargo gets out: behind and beside the truck, on the side away from

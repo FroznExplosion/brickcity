@@ -396,11 +396,15 @@ func _reinforce(now_please: bool) -> bool:
 			and (_force_arrival == &"truck" or _rng.randf() < doctrine.truck_share):
 		arrival = &"truck"
 		cost += truck
+	# Waiting BEFORE the call: a host that hands the squad back at once
+	# (adopt() inside the call) clears it again, and one that does not leaves
+	# it set. Set after, it waited on a squad already here.
+	_waiting_spawn = true
 	if not spawner.call(kinds, arrival):
+		_waiting_spawn = false
 		return false
 	budget -= cost
 	_last_reinforce = now
-	_waiting_spawn = true
 	reinforcements += 1
 	_note("reinforce: %s%s (%.1f pts), answering %s" % [", ".join(kinds),
 			" by truck" if arrival == &"truck" else "", cost, doctrine.answering])

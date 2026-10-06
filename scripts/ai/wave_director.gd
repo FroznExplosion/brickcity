@@ -1305,6 +1305,10 @@ func _truck_start() -> Vector3:
 	away.y = 0.0
 	away = away.normalized() if away.length() > 0.1 else Vector3.FORWARD
 	var goal: Vector3 = _street_of(focus)
+	# The widest route found, if none is wide the whole way: the city's streets
+	# are three metres, and a soldier's path hugs the walls of them.
+	var best := Vector3.INF
+	var best_share := -1.0
 	# Near the fight's own height: the foot map it drives climbs terraces a
 	# course at a time, and wheels do not (a vehicle map is AIVehicles.md 3).
 	for out in [TRUCK_OUT, TRUCK_OUT * 0.75, TRUCK_OUT * 0.5]:
@@ -1323,10 +1327,15 @@ func _truck_start() -> Vector3:
 			# And a way from there to the fight -- not a beach below the tide line
 			# -- wide enough for a truck all the way in.
 			var route: PackedVector3Array = city.ai_nav.find_path(q, goal, 20000)
-			if route.is_empty() or not TransportTruck.route_wide(city.get_world_3d(), route):
+			if route.is_empty():
 				continue
-			return q + Vector3.UP * 0.3
-	return Vector3.INF
+			var share := TransportTruck.route_width_share(city.get_world_3d(), route)
+			if share >= 1.0:
+				return q + Vector3.UP * 0.3
+			if share > best_share:
+				best_share = share
+				best = q + Vector3.UP * 0.3
+	return best
 
 
 func _dismount(t: TransportTruck) -> void:
