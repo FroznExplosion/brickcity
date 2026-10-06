@@ -972,16 +972,6 @@ var _prof_sum := {}
 
 func _ready() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
-	# Anything after `--` is a scripted pass or a test run: a window nobody is
-	# at, on a machine somebody is using. "Pause When Unfocused" would stop it
-	# the moment they click elsewhere, and a gate that pauses goes on counting
-	# ticks over a city standing still (the `--groups` gate, 2026-10-06: one of
-	# its screenshots was the pause menu). Off for this run only, not saved;
-	# Escape still pauses.
-	if not OS.get_cmdline_user_args().is_empty():
-		var menu_settings := get_node_or_null(^"/root/MenuSettings")
-		if menu_settings != null:
-			menu_settings.set_value(&"pause_on_focus_loss", false, false)
 	_shot_mode = "--shot" in args
 	_bench_mode = "--bench" in args
 	_bench_bricks = "--with-bricks" in args
@@ -1208,6 +1198,9 @@ func _ready() -> void:
 	disasters.setup(self)
 	if group_interiors:
 		InteriorGroups.warm(self)
+	# One of the passes below, unless none of them is asked for (the `else` at
+	# the end of the chain).
+	_scripted = true
 	if _lod_mode:
 		_run_lod_pass()
 	elif _reach_mode:
@@ -1270,6 +1263,35 @@ func _ready() -> void:
 		_run_bench()
 	elif _shot_mode:
 		_run_shot_pass()
+	else:
+		_scripted = false
+	# The arena is in the chain and is the game, not a pass, unless it is run
+	# as its gate.
+	if _arena_mode and not ("--gate" in args):
+		_scripted = false
+	if _scripted:
+		# "Pause When Unfocused" off for this run, not saved: see pause_allowed.
+		var menu_settings := get_node_or_null(^"/root/MenuSettings")
+		if menu_settings != null:
+			menu_settings.set_value(&"pause_on_focus_loss", false, false)
+
+
+## A scripted pass is running: a gate, a probe pass, a measurement -- anything
+## the chain at the end of _ready started. It runs in a window nobody is at,
+## on a machine somebody is using.
+var _scripted := false
+
+
+## May the pause menu open over this scene? (BrickcityMenuHost asks.)
+##
+## Not over a scripted pass. Paused, the city stands still while the pass goes
+## on counting ticks and taking pictures: two gates on 2026-10-06 each wrote
+## the pause menu as one of their screenshots -- once when the window lost
+## focus ("Pause When Unfocused", which a pass also turns off for its run),
+## once when Escape was pressed at the keyboard while the window had it.
+## `--play` is the pass that checks Escape opens the menu, so it may.
+func pause_allowed() -> bool:
+	return not _scripted or _play_mode
 
 
 func _exit_tree() -> void:

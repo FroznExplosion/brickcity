@@ -66,7 +66,10 @@ func _pause_allowed() -> bool:
 	if tree == null or tree.current_scene == null:
 		return false
 	var scr := tree.current_scene.get_script() as Script
-	return scr != null and scr.resource_path == CITY_SCRIPT
+	if scr == null or scr.resource_path != CITY_SCRIPT:
+		return false
+	# Not over a scripted pass: CityScene.pause_allowed says why.
+	return tree.current_scene.pause_allowed()
 
 
 func _pause_opened() -> void:
