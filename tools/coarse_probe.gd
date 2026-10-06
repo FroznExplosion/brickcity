@@ -24,6 +24,7 @@ func _init() -> void:
 	]:
 		_check(c)
 	_check_empty()
+	_check_worker()
 	print("\n%d passed, %d failed" % [passed, failed])
 	quit(1 if failed > 0 else 0)
 
@@ -99,6 +100,66 @@ func _check(c: Dictionary) -> void:
 
 
 ## Everything dead: nothing to draw, and nothing is what comes back.
+## A big piece's stand-in is built on a worker (BrickWorld.coarse_chunk_async;
+## IslandManager.COARSE_ASYNC_BLOCKS). It has to be the stand-in the same call
+## makes here, and nothing may pull the chunk out from under the worker.
+func _check_worker() -> void:
+	print("\non a worker")
+	var c := {"x": 40, "z": 30, "courses": 60, "hits": [[Vector3(0.5, 1.0, 0.5), 3.2]]}
+	var w := BrickWorld.new()
+	var chunk := _tower(w, c)
+	var here: Array = w.build_chunk_coarse_mesh(chunk)
+	w.coarse_chunk_async(chunk)
+	_ok("a build on a worker is pending, and is not started twice", w.coarse_pending(chunk))
+	w.coarse_chunk_async(chunk)
+	var waited := 0
+	while not w.coarse_ready(chunk) and waited < 5000:
+		OS.delay_msec(1)
+		waited += 1
+	var there: Array = w.take_coarse_mesh(chunk)
+	_ok("it finishes, and is the stand-in built here", not there.is_empty() and there == here,
+			"%d ms waited, %d against %d vertices" % [waited,
+			(there[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() if not there.is_empty() else 0,
+			(here[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()])
+	_ok("and the job is gone once taken", not w.coarse_pending(chunk) and not w.coarse_ready(chunk))
+	# The chunk released, a block removed and a block placed with the worker
+	# still running: each waits for it. (A crash here is the failure.)
+	w.coarse_chunk_async(chunk)
+	w.remove_block(chunk, 5)
+	_ok("removing a block waits for the worker and drops its build", not w.coarse_pending(chunk))
+	w.coarse_chunk_async(chunk)
+	var palette := TowerRecipe.bake_palette(w)
+	# Somewhere a brick can actually go: a refused placement changes nothing
+	# and has no reason to wait.
+	var one := int(palette["brick_1x1"])
+	var dims := w.get_chunk_dims(chunk)
+	var spot := Vector3i(-1, -1, -1)
+	for y in range(dims.y - 1, 0, -1):
+		for x in range(1, dims.x - 1):
+			if spot.x < 0 and w.can_place(chunk, Vector3i(x, y, 1), one):
+				spot = Vector3i(x, y, 1)
+		if spot.x >= 0:
+			break
+	var placed := w.place_block(chunk, spot, one, 3, false) if spot.x >= 0 else -1
+	_ok("so does placing one", placed >= 0 and not w.coarse_pending(chunk),
+			"placed at %s: %d" % [spot, placed])
+	w.coarse_chunk_async(chunk)
+	w.release_chunk(chunk)
+	_ok("and releasing the chunk", not w.coarse_pending(chunk) and not w.is_chunk_alive(chunk))
+	# Many at once, as a far collapse makes them.
+	var chunks: Array = []
+	for i in 6:
+		chunks.append(_tower(w, {"x": 20, "z": 20, "courses": 36, "hits": []}))
+	for ch in chunks:
+		w.coarse_chunk_async(ch)
+	var all_ok := true
+	for ch in chunks:
+		var arr: Array = w.take_coarse_mesh(ch)   # waits for it
+		if arr.is_empty() or arr != w.build_chunk_coarse_mesh(ch):
+			all_ok = false
+	_ok("six at once, each the stand-in of its own chunk", all_ok)
+
+
 func _check_empty() -> void:
 	print("\nnothing left alive")
 	var w := BrickWorld.new()

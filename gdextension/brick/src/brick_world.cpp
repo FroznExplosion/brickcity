@@ -558,6 +558,10 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     if (!bake_jobs.empty() && bake_pending(chunk_id)) {
         settle_bake_job(chunk_id, false);
     }
+    // ...and a stand-in's worker is reading the block list this is about to grow.
+    if (!coarse_jobs.empty()) {
+        settle_coarse_job(chunk_id);
+    }
     return id;
 }
 
@@ -622,6 +626,9 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
         c.bake.valid = false;
         if (bake_pending(chunk_id)) {
             settle_bake_job(chunk_id, false);
+        }
+        if (!coarse_jobs.empty()) {
+            settle_coarse_job(chunk_id);
         }
     }
     return true;
@@ -1822,6 +1829,11 @@ BrickWorld::~BrickWorld() {
             j->worker.join();
         }
     }
+    for (auto &j : coarse_jobs) {
+        if (j->worker.joinable()) {
+            j->worker.join();
+        }
+    }
     PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     if (ps != nullptr) {
         for (auto &kv : box_shapes) {
@@ -2264,13 +2276,9 @@ Array BrickWorld::build_chunk_mesh(int chunk_id) {
 // merged face (brick.gdshader; BuildingShell.SEAM_UNIT) -- a course tall and
 // two studs wide: not where the real seams are, but where seams would be.
 // Authored parts (round bricks, spiral steps) are drawn as the cells they fill.
-Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
-    Array arrays;
-    if (!valid_chunk(chunk_id)) {
-        return arrays;
-    }
+void BrickWorld::coarse_faces_into(const Chunk &c, const std::vector<Archetype> &archetypes,
+        CoarseOut &out) {
     const auto t0 = std::chrono::steady_clock::now();
-    const Chunk &c = chunks[chunk_id];
 
     // Only the box the live bricks are in. A piece cut out of a building keeps
     // the building's grid -- 42x627x60, 1.58 million cells, round 6,500 bricks
@@ -2288,9 +2296,9 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
         hi = Vector3i(std::max(hi.x, end.x), std::max(hi.y, end.y), std::max(hi.z, end.z));
     }
     if (lo.x > hi.x) {
-        last_coarse_ms = std::chrono::duration<double, std::milli>(
+        out.ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
-        return arrays;
+        return;
     }
     lo = Vector3i(std::max(lo.x, 0), std::max(lo.y, 0), std::max(lo.z, 0));
     hi = Vector3i(std::min(hi.x, c.dims.x), std::min(hi.y, c.dims.y), std::min(hi.z, c.dims.z));
@@ -2369,12 +2377,12 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
     const Vector3 cs = cell_size();
     const Vector2 seam_side(2.0f * STUD_M, 3.0f * PLATE_M);
     const Vector2 seam_flat(2.0f * STUD_M, 2.0f * STUD_M);
-    std::vector<Vector3> vv;
-    std::vector<Vector3> nn;
-    std::vector<Color> cc;
-    std::vector<Vector2> uu;
-    std::vector<Vector2> u2;
-    std::vector<int32_t> ii;
+    std::vector<Vector3> &vv = out.vv;
+    std::vector<Vector3> &nn = out.nn;
+    std::vector<Color> &cc = out.cc;
+    std::vector<Vector2> &uu = out.uu;
+    std::vector<Vector2> &u2 = out.u2;
+    std::vector<int32_t> &ii = out.ii;
     std::vector<int32_t> mask; // one slice's plane; all zero between slices
     std::vector<int32_t> slice_at;
     std::vector<int32_t> by_slice;
@@ -2490,36 +2498,115 @@ Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
         }
     }
 
-    if (!vv.empty()) {
-        PackedVector3Array verts;
-        PackedVector3Array normals;
-        PackedColorArray colours;
-        PackedVector2Array uvs;
-        PackedVector2Array uv2s;
-        PackedInt32Array indices;
-        verts.resize((int64_t)vv.size());
-        normals.resize((int64_t)nn.size());
-        colours.resize((int64_t)cc.size());
-        uvs.resize((int64_t)uu.size());
-        uv2s.resize((int64_t)u2.size());
-        indices.resize((int64_t)ii.size());
-        std::memcpy(verts.ptrw(), vv.data(), vv.size() * sizeof(Vector3));
-        std::memcpy(normals.ptrw(), nn.data(), nn.size() * sizeof(Vector3));
-        std::memcpy(colours.ptrw(), cc.data(), cc.size() * sizeof(Color));
-        std::memcpy(uvs.ptrw(), uu.data(), uu.size() * sizeof(Vector2));
-        std::memcpy(uv2s.ptrw(), u2.data(), u2.size() * sizeof(Vector2));
-        std::memcpy(indices.ptrw(), ii.data(), ii.size() * sizeof(int32_t));
-        arrays.resize(Mesh::ARRAY_MAX);
-        arrays[Mesh::ARRAY_VERTEX] = verts;
-        arrays[Mesh::ARRAY_NORMAL] = normals;
-        arrays[Mesh::ARRAY_COLOR] = colours;
-        arrays[Mesh::ARRAY_TEX_UV] = uvs;
-        arrays[Mesh::ARRAY_TEX_UV2] = uv2s;
-        arrays[Mesh::ARRAY_INDEX] = indices;
-    }
-    last_coarse_ms = std::chrono::duration<double, std::milli>(
+    out.ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count();
+}
+
+Array BrickWorld::coarse_arrays(const CoarseOut &o) {
+    Array arrays;
+    if (o.vv.empty()) {
+        return arrays;
+    }
+    PackedVector3Array verts;
+    PackedVector3Array normals;
+    PackedColorArray colours;
+    PackedVector2Array uvs;
+    PackedVector2Array uv2s;
+    PackedInt32Array indices;
+    verts.resize((int64_t)o.vv.size());
+    normals.resize((int64_t)o.nn.size());
+    colours.resize((int64_t)o.cc.size());
+    uvs.resize((int64_t)o.uu.size());
+    uv2s.resize((int64_t)o.u2.size());
+    indices.resize((int64_t)o.ii.size());
+    std::memcpy(verts.ptrw(), o.vv.data(), o.vv.size() * sizeof(Vector3));
+    std::memcpy(normals.ptrw(), o.nn.data(), o.nn.size() * sizeof(Vector3));
+    std::memcpy(colours.ptrw(), o.cc.data(), o.cc.size() * sizeof(Color));
+    std::memcpy(uvs.ptrw(), o.uu.data(), o.uu.size() * sizeof(Vector2));
+    std::memcpy(uv2s.ptrw(), o.u2.data(), o.u2.size() * sizeof(Vector2));
+    std::memcpy(indices.ptrw(), o.ii.data(), o.ii.size() * sizeof(int32_t));
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = verts;
+    arrays[Mesh::ARRAY_NORMAL] = normals;
+    arrays[Mesh::ARRAY_COLOR] = colours;
+    arrays[Mesh::ARRAY_TEX_UV] = uvs;
+    arrays[Mesh::ARRAY_TEX_UV2] = uv2s;
+    arrays[Mesh::ARRAY_INDEX] = indices;
     return arrays;
+}
+
+Array BrickWorld::build_chunk_coarse_mesh(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    CoarseOut out;
+    coarse_faces_into(chunks[chunk_id], archetypes, out);
+    last_coarse_ms = out.ms;
+    return coarse_arrays(out);
+}
+
+bool BrickWorld::coarse_pending(int chunk_id) const {
+    for (const auto &j : coarse_jobs) {
+        if (j->chunk_id == chunk_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void BrickWorld::coarse_chunk_async(int chunk_id) {
+    if (!valid_chunk(chunk_id) || coarse_pending(chunk_id)) {
+        return;
+    }
+    auto job = std::make_unique<CoarseJob>();
+    job->chunk_id = chunk_id;
+    job->parts = archetypes; // copied, as a bake's: the palette can grow under a worker
+    CoarseJob *raw = job.get();
+    const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
+    raw->worker = std::thread([raw, cp]() {
+        coarse_faces_into(*cp, raw->parts, raw->out);
+        raw->done.store(true, std::memory_order_release);
+    });
+    coarse_jobs.push_back(std::move(job));
+}
+
+bool BrickWorld::coarse_ready(int chunk_id) const {
+    for (const auto &j : coarse_jobs) {
+        if (j->chunk_id == chunk_id) {
+            return j->done.load(std::memory_order_acquire);
+        }
+    }
+    return false;
+}
+
+Array BrickWorld::take_coarse_mesh(int chunk_id) {
+    for (size_t i = 0; i < coarse_jobs.size(); ++i) {
+        if (coarse_jobs[i]->chunk_id != chunk_id) {
+            continue;
+        }
+        CoarseJob *job = coarse_jobs[i].get();
+        if (job->worker.joinable()) {
+            job->worker.join();
+        }
+        last_coarse_ms = job->out.ms;
+        const Array arrays = coarse_arrays(job->out);
+        coarse_jobs.erase(coarse_jobs.begin() + (long)i);
+        return arrays;
+    }
+    return Array();
+}
+
+void BrickWorld::settle_coarse_job(int chunk_id) {
+    for (size_t i = 0; i < coarse_jobs.size(); ++i) {
+        if (coarse_jobs[i]->chunk_id != chunk_id) {
+            continue;
+        }
+        if (coarse_jobs[i]->worker.joinable()) {
+            coarse_jobs[i]->worker.join();
+        }
+        coarse_jobs.erase(coarse_jobs.begin() + (long)i);
+        return;
+    }
 }
 
 Array BrickWorld::build_mesh_internal(Chunk &c, MeshStats &st,
@@ -4368,6 +4455,9 @@ bool BrickWorld::load_template(int template_id, int chunk_id) {
     if (!bake_jobs.empty() && bake_pending(chunk_id)) {
         settle_bake_job(chunk_id, false);
     }
+    if (!coarse_jobs.empty()) {
+        settle_coarse_job(chunk_id);
+    }
     return true;
 }
 
@@ -5762,6 +5852,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     }
     // Never free a chunk a worker is still reading.
     settle_bake_job(chunk_id, false);
+    settle_coarse_job(chunk_id);
     chunks[chunk_id] = Chunk();
     chunk_live[chunk_id] = 0;
     fire_clear(chunk_id);
@@ -6735,6 +6826,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("build_chunk_coarse_mesh", "chunk_id"),
             &BrickWorld::build_chunk_coarse_mesh);
     ClassDB::bind_method(D_METHOD("get_last_coarse_ms"), &BrickWorld::get_last_coarse_ms);
+    ClassDB::bind_method(D_METHOD("coarse_chunk_async", "chunk_id"), &BrickWorld::coarse_chunk_async);
+    ClassDB::bind_method(D_METHOD("coarse_pending", "chunk_id"), &BrickWorld::coarse_pending);
+    ClassDB::bind_method(D_METHOD("coarse_ready", "chunk_id"), &BrickWorld::coarse_ready);
+    ClassDB::bind_method(D_METHOD("take_coarse_mesh", "chunk_id"), &BrickWorld::take_coarse_mesh);
     ClassDB::bind_method(D_METHOD("get_mesh_stats", "chunk_id"), &BrickWorld::get_mesh_stats);
     ClassDB::bind_method(D_METHOD("set_chunk_section_plates", "chunk_id", "plates"),
             &BrickWorld::set_chunk_section_plates);

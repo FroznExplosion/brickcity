@@ -313,6 +313,18 @@ public:
     Array build_chunk_coarse_mesh(int chunk_id);
     /// How long the last build_chunk_coarse_mesh took, in ms.
     double get_last_coarse_ms() const { return last_coarse_ms; }
+    /// The same build on a worker, for a big piece: 17-22 ms for a 5,000-7,000
+    /// brick chunk of a far collapse, the worst tick of a big city's pass when
+    /// it was built in the mesh queue. Start it, ask coarse_ready, then
+    /// take_coarse_mesh (which also sets get_last_coarse_ms). The worker reads
+    /// the chunk as it stands; a brick killed meanwhile may or may not be in
+    /// the stand-in, which is built again when the piece changes anyway. What
+    /// would pull the chunk out from under it -- release_chunk, a block placed
+    /// or removed, a template loaded -- waits for the worker first.
+    void coarse_chunk_async(int chunk_id);
+    bool coarse_pending(int chunk_id) const;
+    bool coarse_ready(int chunk_id) const;
+    Array take_coarse_mesh(int chunk_id);
 
     /// Stats from the last build_chunk_mesh call on this chunk.
     Dictionary get_mesh_stats(int chunk_id) const;
@@ -1151,6 +1163,30 @@ private:
     void bake_chunk_faces(brick::Chunk &c);
 
     /// One chunk's bake, running or finished, on a thread of its own.
+    /// A stand-in's arrays as plain vectors: what a worker can fill.
+    struct CoarseOut {
+        std::vector<Vector3> vv;
+        std::vector<Vector3> nn;
+        std::vector<Color> cc;
+        std::vector<Vector2> uu;
+        std::vector<Vector2> u2;
+        std::vector<int32_t> ii;
+        double ms = 0.0;
+    };
+    struct CoarseJob {
+        int chunk_id = -1;
+        CoarseOut out;
+        std::vector<brick::Archetype> parts; // snapshot, as a BakeJob's
+        std::atomic<bool> done{false};
+        std::thread worker;
+    };
+    std::vector<std::unique_ptr<CoarseJob>> coarse_jobs;
+    static void coarse_faces_into(const brick::Chunk &c, const std::vector<brick::Archetype> &archetypes,
+            CoarseOut &out);
+    static Array coarse_arrays(const CoarseOut &o);
+    /// Wait for a chunk's stand-in worker and drop what it made.
+    void settle_coarse_job(int chunk_id);
+
     struct BakeJob {
         int chunk_id = -1;
         brick::FaceBake bake;

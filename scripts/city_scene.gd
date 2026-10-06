@@ -559,6 +559,7 @@ var _pending_disable := {}
 ## [ms, blocks, groups, collapsing].
 var _solve_mega := [0, 0.0]
 var _held_groups := 0      ## groups put back as held (Block::held), all told
+var _resolves_put_off := 0 ## solves of a building already solved that tick, left for the next
 var _cascade_rounds := 0   ## stress rounds that failed something, all told
 var _cascade_worst := 0    ## the most in one solve
 var _solve_worst := [0.0, 0, 0, false]
@@ -6824,8 +6825,19 @@ func _physics_process(_delta: float) -> void:
 			_solve_batch_worst = maxf(_solve_batch_worst, _batch_ms)
 			for k in ids.size():
 				ahead[ids[k]] = answers[k]
+	# Once a tick each. A building re-marked while it was handled -- something
+	# came loose, a joint failed -- used to come round again in the same tick,
+	# up to SOLVES_PER_TICK times: the same groups found again before anything
+	# had been cut out of it, and each with a cascade's clock of its own
+	# (CASCADE_BUDGET_MS, so 12 ms where 3 was meant). It waits for the next.
+	var solved_now := {}
+	var again: Array[int] = []
 	while solved < decide_limit and not _dirty.is_empty():
 		var id: int = _dirty.pop_front()
+		if solved_now.has(id):
+			again.append(id)
+			continue
+		solved_now[id] = true
 		solved += 1
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
@@ -7009,6 +7021,10 @@ func _physics_process(_delta: float) -> void:
 		if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
 			_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
 		_queue_remesh(b.id)
+	for id in again:
+		if not _dirty.has(id):
+			_dirty.append(id)
+	_resolves_put_off += again.size()
 	for sid in _stairs_due.keys():
 		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
 			break
@@ -8965,6 +8981,8 @@ func _run_shot_pass() -> void:
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
 			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
+	print("[city]   stand-ins: %d built, %d of them on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
+			islands.coarse_built, islands.coarse_async, islands.coarse_main_worst_ms, islands.coarse_worst_ms])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
 			director.breakage_out, director.furniture_out, director.collapsing.size()])
@@ -9491,8 +9509,8 @@ func _report_profile() -> void:
 	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
 			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
 			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
-	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs" % [
-			_cascade_rounds, _cascade_worst, _held_groups])
+	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs; %d second solve(s) in a tick put off" % [
+			_cascade_rounds, _cascade_worst, _held_groups, _resolves_put_off])
 	var sw: Array = islands.spawn_worst
 	print("[prof] worst single spawn %.1f ms (%d bricks): split %.1f  shapes %.1f  node %.1f (furniture %.1f, into the scene %.1f, %d boxes)  mesh %.1f" % [
 			float(sw[0]), int(sw[5]), float(sw[1]), float(sw[2]), float(sw[3]), float(sw[6]),
