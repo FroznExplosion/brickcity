@@ -84,10 +84,19 @@ would -- but:
   **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
   building that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended)
+### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stage 1 of 5 done 2026-10-06
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
-and one item drawing, faded by its own distance, rebuilt alone. Stages as Interiors.md §8.7. The
-biggest piece of work here; after §1.8 and the small ones below.
+and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
+* **Stage 1, done, off by default** (Interiors.md §8.8): `InteriorGroups`, F6 in play or
+  `-- --group-interiors`. `interior_group_probe` 20, `-- --groups --big` 17, and six screenshots to
+  look at side by side (`shots/interior_rungs_*.png`, `shots/interior_groups_*.png`). **Wants the
+  user's eye before it becomes the default**: pieces are lit like the room they are in when near
+  (darker than the fake drew them), flat-shaded from 60 m.
+* **Stage 2, next:** the support index (block id -> pieces): a piece rides the section its floor
+  leaves on, is gone when its floor is destroyed, crushed when something lands in it. Replaces
+  `InteriorGroups.touch`'s walk and `hide_inside`.
+* Stage 3: a shot piece becomes bricks, only that piece. Stage 4: the rungs and their tests go.
+  Stage 5: loot fades at its cull edge.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot

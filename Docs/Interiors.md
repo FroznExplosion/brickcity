@@ -299,7 +299,7 @@ the largest single cost still on the table.
 
 ---
 
-## 8. Simplification (2026-10-05) — proposal, not built
+## 8. Simplification (2026-10-05) — stage 1 built 2026-10-06, behind a switch (§8.8)
 
 **Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
 holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
@@ -326,13 +326,18 @@ Each fix so far (2026-10-03/04) patched one of these. The user's direction: one 
 
 ### 8.2 One drawing per storey group, by distance only
 
-> **Decided 2026-10-06 (user):** not one drawing for a whole building. The big towers are too big
-> for that -- 120-160 storeys, thousands of rooms: one buffer rebuilt for one shot, and the top of a
-> tower drawn because the player stands at its foot. The unit is a **group of storeys**: a few
-> floors together (`INTERIOR_GROUP_STOREYS`, sized so a group stays a few hundred pieces; a small
-> building is one group). Each group has its own interior drawing and item drawing, fades by ITS
-> distance, and is rebuilt alone when something in it changes. Everything below reads "building"
-> as "storey group".
+> **Decided 2026-10-06 (user):** not one drawing for a whole building. The buildings the game wants
+> are too big for that: one buffer rebuilt for one shot, and the top of a tower drawn because the
+> player stands at its foot. The unit is a **group of storeys**: a few floors together
+> (`InteriorGroups.GROUP_STOREYS`, four at most, fewer where a floor has so many rooms that a group
+> would pass `GROUP_PIECES`; a building shorter than that is one group). Each group has its own
+> interior drawing and item drawing, comes and goes by ITS distance, and is rebuilt alone when
+> something in it changes. Everything below reads "building" as "storey group".
+>
+> Measured 2026-10-06 (the numbers this note first gave were wrong): the tallest tower in the big
+> city is 41 storeys and the widest floor is 6 rooms -- 8 to 13 interior pieces a storey, 26 to 40
+> boxes. So every building today takes four storeys to a group, and the 41-storey tower is 11
+> groups of about 130 boxes each.
 
 A storey group of a building that is bricks has **one interior drawing** (all its pieces, every
 room in it) and **one item drawing** (all its items). No per-room, outer-room or portal rules decide
@@ -388,3 +393,51 @@ Probes whose checks measure the removed rungs (`--rooms`, `interior_probe`, part
 3. Shot piece becomes bricks (§8.4).
 4. Remove the old rungs and their tests (§8.6).
 5. Loot fade at the cull edge.
+
+### 8.8 Stage 1 as built (2026-10-06)
+
+`scripts/interior_groups.gd` (the groups, what each holds, how it is drawn),
+`shaders/interior_group.gdshader` (the fades), `CityScene._stream_groups` (who is near what, and the
+collision). **Off by default**: `group_interiors` on the city scene, **F6** in play,
+`-- --group-interiors` on the command line. Switching lets go of everything the other side holds, so
+nothing is drawn twice.
+
+| | The rungs | Storey groups |
+|---|---|---|
+| unit | a room | up to four storeys |
+| seen from | 40 m on the player's storey (drawn); 70 m, whole building (fake) | 100 m, each group by its own distance |
+| at the edge | on or off in a frame | each piece dithers out over the last 15 m |
+| shading | lit when drawn, flat when faked: a room changes as it crosses | lit inside 30 m, ramping to the fake's flat shade by 60 m |
+| collision | drawn rooms | the group at the player's height, inside 40 m |
+| a shot | the building's fake is worked out again | the groups at the shot's height |
+| walking up to a room | lays it as bricks at 1.5 m | nothing: it is drawn, with its boxes |
+
+What differs from §8.2 as written, and why:
+
+* **Each piece fades by its own distance**, not the group by one distance: the group decides what is
+  BUILT (inside `INTERIOR_RANGE`, kept `RELEASE` past it), the shader what SHOWS. A group is then
+  always built and dropped with nothing of it visible, and no uniform is updated as the camera moves.
+* **Items** are the `DETAIL` parts only (`RoomManifest.draw_items` returns them as `details`),
+  inside `ITEM_RANGE` 20 m. There is no authored item with a DETAIL part in the repository today, so
+  the item drawing is empty in a generated city; `interior_group_probe` makes one to test it. Loot
+  is stage 5.
+* **A blast still lays the whole room** it reaches (§8.4 is stage 3), and that room leaves its
+  group's drawing the same tick.
+* **Whose floor has gone** is still asked by walking the pieces of the groups at that height
+  (`InteriorGroups.touch`, `RoomManifest.item_supported`), a couple of milliseconds a pass; a
+  section that leaves hides what stood in it the same tick (`hide_inside`). §8.3's index replaces
+  both in stage 2 -- and until then nothing rides a falling section, as nothing does under the rungs.
+
+Checks: `tools/interior_group_probe.gd` (20: the cut, one drawing per group, the clock, a change
+reaching one group and not the rest, DETAIL apart), and the scene's gate `city.tscn -- --groups --big`
+(17: ranges, the rungs silent, collision, a shot, a falling section, nothing made in a building
+coming apart), which writes `shots/interior_rungs_{14,50,92}.png` beside
+`shots/interior_groups_{14,50,92}.png`. From the gate, on the 41-storey tower: the rungs draw 1,406
+boxes out to 70-85 m and none past it; the groups draw the same 1,406 from 14 m and 990 of them (the
+five groups in range) from 92 m; 956 rooms worked out and 67 drawings put up over the whole pass in
+40 ms, the slowest drawing 0.3 ms once the shader is warm (`InteriorGroups.warm`; 16-19 ms the first
+time without it).
+
+Found on the way: `CityScene._mid_collapse` (CollapseNext 1.8) did not hold a building that had
+been hit and not yet solved -- one tick -- and a group was made in a tower already cut through. It
+does now, for the rungs as well.
