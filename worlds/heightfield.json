@@ -1,0 +1,81 @@
+{
+	"drowned": 0.0,
+	"pads": [
+		{
+			"height": 17.6400000751019,
+			"radius": 14,
+			"radius_z": 14,
+			"skirt": 7,
+			"x": 16,
+			"z": 16
+		},
+		{
+			"height": 18.9000000804663,
+			"radius": 10,
+			"radius_z": 10,
+			"skirt": 5,
+			"x": 112,
+			"z": 48
+		},
+		{
+			"height": 20.1600000858307,
+			"radius": 18,
+			"radius_z": 18,
+			"skirt": 9,
+			"x": -48,
+			"z": 112
+		},
+		{
+			"height": 18.9000000804663,
+			"radius": 12,
+			"radius_z": 12,
+			"skirt": 6,
+			"x": 80,
+			"z": -80
+		},
+		{
+			"height": 17.6400000751019,
+			"radius": 16,
+			"radius_z": 16,
+			"skirt": 8,
+			"x": -112,
+			"z": -48
+		}
+	],
+	"paints": [],
+	"sculpt": [],
+	"seed": 20260921,
+	"sites": [
+		{
+			"radius": 14,
+			"storeys": 6,
+			"tile_x": 0,
+			"tile_z": 0
+		},
+		{
+			"radius": 10,
+			"storeys": 3,
+			"tile_x": 3,
+			"tile_z": 1
+		},
+		{
+			"radius": 18,
+			"storeys": 9,
+			"tile_x": -2,
+			"tile_z": 3
+		},
+		{
+			"radius": 12,
+			"storeys": 4,
+			"tile_x": 2,
+			"tile_z": -3
+		},
+		{
+			"radius": 16,
+			"storeys": 7,
+			"tile_x": -4,
+			"tile_z": -2
+		}
+	],
+	"version": 3
+}
