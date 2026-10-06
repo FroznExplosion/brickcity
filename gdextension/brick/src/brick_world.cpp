@@ -4776,6 +4776,344 @@ void BrickWorld::set_scorched_blocks(int chunk_id, const PackedInt32Array &ids) 
     }
 }
 
+// --- fire, brick by brick ---------------------------------------------------
+//
+// Per material, in BRICK_MATERIALS' order (append-only, as that table is):
+//   TAKE   how readily it takes heat -- leaves at once, nylon grudgingly. Metal
+//          and stone take a little (they char) and never burn.
+//   BURN   seconds a 12-cell block (a 2x2 brick) burns. Plastic slumps and goes
+//          in a few seconds; a wooden trunk smoulders for half a minute;
+//          leaves flash.
+//   FLAME  how hard it heats what is round it while it burns.
+// PLA, PLA matte, PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA,
+// Wood PLA, Wood, Metal, Stone, Leaf.
+namespace {
+constexpr float FIRE_TAKE[] = {0.55f, 0.55f, 0.55f, 0.5f, 0.45f, 0.4f, 0.35f, 0.55f, 0.45f,
+        0.8f, 1.0f, 0.25f, 0.2f, 1.6f};
+constexpr float FIRE_BURN[] = {7.0f, 7.0f, 7.0f, 8.0f, 8.0f, 10.0f, 10.0f, 7.0f, 8.0f,
+        9.0f, 26.0f, 0.0f, 0.0f, 3.0f};
+constexpr float FIRE_FLAME[] = {0.7f, 0.7f, 0.7f, 0.8f, 0.6f, 0.6f, 0.6f, 0.7f, 0.7f,
+        0.8f, 1.0f, 0.0f, 0.0f, 0.9f};
+constexpr int FIRE_TABLE = (int)(sizeof(FIRE_TAKE) / sizeof(FIRE_TAKE[0]));
+
+float fire_take(int m) { return (m >= 0 && m < FIRE_TABLE) ? FIRE_TAKE[m] : FIRE_TAKE[0]; }
+float fire_flame(int m) { return (m >= 0 && m < FIRE_TABLE) ? FIRE_FLAME[m] : FIRE_FLAME[0]; }
+
+// Heat a burning neighbour gives, per second, per unit of contact: tuned so a
+// leaf over a burning leaf catches in about a second and a length of trunk over
+// a burning one in about one and a half.
+constexpr float FIRE_HEAT_K = 0.12f;
+// More contact than this heats no faster: a big block over a big fire is not
+// set alight in an instant.
+constexpr float FIRE_GAIN_CAP = 8.0f;
+// What a block loses to the air, per second, as a share of its heat. A block
+// beside a fire it cannot catch from settles below 1 and never does.
+constexpr float FIRE_COOL = 0.12f;
+// Heat at which a block chars (its material's darkest colour, for good).
+constexpr float FIRE_CHAR = 0.6f;
+constexpr float FIRE_MAX_HEAT = 1.5f;
+// Flames climb: what is above a burning block is heated three times what is
+// beside it, and what is below a fraction. Reach is how many cells of air the
+// heat crosses that way -- up four (0.56 m), sideways one, more downwind.
+constexpr float FIRE_UP = 3.0f;
+constexpr float FIRE_SIDE = 1.0f;
+constexpr float FIRE_DOWN = 0.3f;
+constexpr int FIRE_REACH_UP = 4;
+// Wind at this speed (m/s) is full strength: downwind heated 3.5x, upwind a
+// fifth, and the heat carried three cells further downwind.
+constexpr float FIRE_WIND_FULL = 15.0f;
+
+const Vector3i FIRE_DIRS[6] = {Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(1, 0, 0),
+        Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)};
+
+bool fire_air(const brick::Chunk &c, const Vector3i &l, int32_t self) {
+    if (!c.in_bounds(l)) {
+        return true;
+    }
+    const int32_t nb = c.occupancy[c.index_of(l)];
+    if (nb == self) {
+        return false;
+    }
+    if (nb < 0) {
+        return true;
+    }
+    const brick::Block &o = c.blocks[nb];
+    return !o.alive || o.detached || o.removed;
+}
+} // namespace
+
+float BrickWorld::fire_burn_seconds(int material, int cells) {
+    if (material < 0 || material >= FIRE_TABLE || FIRE_BURN[material] <= 0.0f) {
+        return material >= FIRE_TABLE ? FIRE_BURN[0] : 0.0f;
+    }
+    const float size = std::cbrt(std::max(cells, 1) / 12.0f);
+    return FIRE_BURN[material] * std::clamp(size, 0.5f, 3.0f);
+}
+
+std::map<int32_t, BrickWorld::FireBlock> *BrickWorld::fire_of(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return nullptr;
+    }
+    if ((int)fire_state.size() <= chunk_id) {
+        fire_state.resize((size_t)chunk_id + 1);
+    }
+    return &fire_state[(size_t)chunk_id];
+}
+
+int BrickWorld::fire_heat(int chunk_id, Vector3 world_point, float radius_m, float heat,
+        bool by_material) {
+    std::map<int32_t, FireBlock> *fs = fire_of(chunk_id);
+    if (fs == nullptr || heat <= 0.0f) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    const Vector3 centre_local = c.xform.affine_inverse().xform(world_point);
+    const float r = std::max(radius_m, 0.0f);
+    const Vector3 r3(r, r, r);
+    const Vector3i lo = brick::world_to_grid(centre_local - r3);
+    const Vector3i hi = brick::world_to_grid(centre_local + r3);
+    const Vector3i own = brick::world_to_grid(centre_local);
+    const float r2 = r * r;
+    std::vector<int32_t> hit;
+    for (int x = lo.x; x <= hi.x; ++x) {
+        for (int y = lo.y; y <= hi.y; ++y) {
+            for (int z = lo.z; z <= hi.z; ++z) {
+                const Vector3i l(x, y, z);
+                const int32_t bid = c.block_at(l);
+                if (bid < 0 || !c.blocks[bid].alive || c.blocks[bid].detached) {
+                    continue;
+                }
+                const Vector3 cell_centre((x + 0.5f) * cs.x, (y + 0.5f) * cs.y, (z + 0.5f) * cs.z);
+                if (l != own && cell_centre.distance_squared_to(centre_local) > r2) {
+                    continue;
+                }
+                hit.push_back(bid);
+            }
+        }
+    }
+    std::sort(hit.begin(), hit.end());
+    hit.erase(std::unique(hit.begin(), hit.end()), hit.end());
+    int burnable = 0;
+    for (int32_t bid : hit) {
+        const int m = c.blocks[bid].material;
+        const bool burns = fire_burn_seconds(m, 1) > 0.0f;
+        FireBlock &fb = (*fs)[bid];
+        // A flame put to it: what burns takes the heat whole, what does not
+        // takes its share (and only chars).
+        fb.heat = std::min(FIRE_MAX_HEAT,
+                fb.heat + ((burns && !by_material) ? heat : heat * fire_take(m)));
+        burnable += burns ? 1 : 0;
+    }
+    return burnable;
+}
+
+Dictionary BrickWorld::fire_step(int chunk_id, float dt, Vector3 wind, float damp, int max_burning) {
+    Dictionary out;
+    PackedInt32Array killed;
+    PackedInt32Array charred;
+    PackedVector3Array points;
+    PackedFloat32Array power;
+    PackedVector3Array loose;
+    int caught = 0;
+    int burning = 0;
+    std::map<int32_t, FireBlock> *fs = fire_of(chunk_id);
+    if (fs != nullptr && !fs->empty()) {
+        Chunk &c = chunks[chunk_id];
+        const Vector3 cs = cell_size();
+        const Vector3 wl = c.xform.basis.xform_inv(wind);
+        const float ws = std::clamp(wl.length() / FIRE_WIND_FULL, 0.0f, 1.5f);
+        const Vector3 wd = ws > 0.0f ? wl.normalized() : Vector3();
+        float weight[6];
+        int reach[6];
+        for (int d = 0; d < 6; ++d) {
+            const Vector3i dv = FIRE_DIRS[d];
+            const float along = wd.dot(Vector3(dv.x, dv.y, dv.z));
+            const float base = dv.y > 0 ? FIRE_UP : (dv.y < 0 ? FIRE_DOWN : FIRE_SIDE);
+            weight[d] = base * std::max(0.2f, 1.0f + 2.5f * ws * along);
+            reach[d] = dv.y > 0 ? FIRE_REACH_UP
+                    : (dv.y < 0 ? 1 : 1 + (int)std::lround(3.0f * ws * std::max(0.0f, along)));
+        }
+        // 1. What every burning block gives what is round it.
+        std::map<int32_t, float> gain;
+        for (auto &kv : *fs) {
+            FireBlock &fb = kv.second;
+            if (!fb.burning) {
+                continue;
+            }
+            const int32_t id = kv.first;
+            const Block &b = c.blocks[id];
+            if (!b.alive || b.detached || b.removed) {
+                continue;
+            }
+            burning += 1;
+            // Flames build for a second, and die down as the fuel runs out.
+            const float p = fire_flame(b.material) * std::min(1.0f, 0.5f + fb.age * 0.5f)
+                    * std::min(1.0f, 0.3f + fb.fuel / std::max(0.01f, 0.3f * fb.fuel0));
+            const Vector3i base = b.cell - c.origin;
+            const Vector3i sz = archetypes[b.archetype].size;
+            for (int x = 0; x < sz.x; ++x) {
+                for (int y = 0; y < sz.y; ++y) {
+                    for (int z = 0; z < sz.z; ++z) {
+                        const Vector3i l = base + Vector3i(x, y, z);
+                        if (c.block_at(l) != id) {
+                            continue;
+                        }
+                        for (int d = 0; d < 6; ++d) {
+                            for (int k = 1; k <= reach[d]; ++k) {
+                                const Vector3i n = l + FIRE_DIRS[d] * k;
+                                if (!c.in_bounds(n)) {
+                                    break;
+                                }
+                                const int32_t nb = c.occupancy[c.index_of(n)];
+                                if (nb == id) {
+                                    break;
+                                }
+                                if (nb >= 0 && c.blocks[nb].alive && !c.blocks[nb].detached) {
+                                    gain[nb] += p * weight[d] / (float)k;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (auto &kv : gain) {
+            if (fs->find(kv.first) == fs->end()) {
+                (*fs)[kv.first] = FireBlock();
+            }
+        }
+        // 2. Every block with heat: burn, heat, cool, char, catch.
+        bool rebake = false;
+        for (auto it = fs->begin(); it != fs->end();) {
+            const int32_t id = it->first;
+            FireBlock &fb = it->second;
+            Block &b = c.blocks[id];
+            const Vector3i base = b.cell - c.origin;
+            const Vector3i sz = archetypes[b.archetype].size;
+            if (!b.alive || b.detached || b.removed) {
+                // Burning, and carried off on a piece: where, so the fire can go
+                // with it (BurningDebris).
+                if (fb.burning && b.detached && !b.removed) {
+                    loose.push_back(c.xform.xform(Vector3((base.x + sz.x * 0.5f) * cs.x,
+                            (base.y + sz.y * 0.5f) * cs.y, (base.z + sz.z * 0.5f) * cs.z)));
+                }
+                it = fs->erase(it);
+                continue;
+            }
+            if (fb.burning) {
+                fb.age += dt;
+                fb.fuel -= dt;
+                if (fb.fuel <= 0.0f) {
+                    b.alive = false;
+                    b.hp = 0;
+                    killed.push_back(id);
+                    it = fs->erase(it);
+                    continue;
+                }
+                const Vector3 mid((base.x + sz.x * 0.5f) * cs.x, (base.y + sz.y * 0.5f) * cs.y,
+                        (base.z + sz.z * 0.5f) * cs.z);
+                points.push_back(c.xform.xform(mid));
+                power.push_back(std::min(1.0f, 0.5f + fb.age * 0.5f)
+                        * std::min(1.0f, 0.3f + fb.fuel / std::max(0.01f, 0.3f * fb.fuel0)));
+                ++it;
+                continue;
+            }
+            auto g = gain.find(id);
+            const float in = g != gain.end() ? std::min(g->second, FIRE_GAIN_CAP) : 0.0f;
+            fb.heat += dt * (FIRE_HEAT_K * fire_take(b.material) * in * damp - FIRE_COOL * fb.heat);
+            fb.heat = std::min(fb.heat, FIRE_MAX_HEAT);
+            if (!b.scorched && fb.heat >= FIRE_CHAR) {
+                b.scorched = true;
+                b.colour = (uint8_t)brick_material_darkest(b.material);
+                charred.push_back(id);
+                rebake = true;
+            }
+            if (fb.heat >= 1.0f && burning < max_burning) {
+                int cells = 0;
+                bool air = false;
+                for (int x = 0; x < sz.x; ++x) {
+                    for (int y = 0; y < sz.y; ++y) {
+                        for (int z = 0; z < sz.z; ++z) {
+                            const Vector3i l = base + Vector3i(x, y, z);
+                            if (c.block_at(l) != id) {
+                                continue;
+                            }
+                            cells += 1;
+                            for (int d = 0; d < 6 && !air; ++d) {
+                                air = fire_air(c, l + FIRE_DIRS[d], id);
+                            }
+                        }
+                    }
+                }
+                const float secs = fire_burn_seconds(b.material, cells);
+                if (air && secs > 0.0f) {
+                    fb.burning = true;
+                    fb.fuel = fb.fuel0 = secs;
+                    fb.age = 0.0f;
+                    caught += 1;
+                    burning += 1;
+                }
+            }
+            if (!fb.burning && fb.heat < 0.02f) {
+                it = fs->erase(it);
+                continue;
+            }
+            ++it;
+        }
+        if (rebake && (c.bake.valid || bake_pending(chunk_id))) {
+            drop_chunk_bake(chunk_id);
+        }
+        out["active"] = !fs->empty();
+    } else {
+        out["active"] = false;
+    }
+    out["killed"] = killed;
+    out["charred"] = charred;
+    out["points"] = points;
+    out["power"] = power;
+    out["loose"] = loose;
+    out["caught"] = caught;
+    out["burning"] = (int)points.size();
+    return out;
+}
+
+void BrickWorld::fire_clear(int chunk_id) {
+    if (chunk_id >= 0 && chunk_id < (int)fire_state.size()) {
+        fire_state[(size_t)chunk_id].clear();
+    }
+}
+
+PackedFloat32Array BrickWorld::fire_get(int chunk_id, int block_id) const {
+    PackedFloat32Array out;
+    out.resize(4);
+    out.fill(0.0f);
+    if (chunk_id < 0 || chunk_id >= (int)fire_state.size()) {
+        return out;
+    }
+    const auto &fs = fire_state[(size_t)chunk_id];
+    const auto it = fs.find(block_id);
+    if (it != fs.end()) {
+        out.set(0, it->second.heat);
+        out.set(1, it->second.burning ? 1.0f : 0.0f);
+        out.set(2, it->second.fuel);
+        out.set(3, it->second.age);
+    }
+    return out;
+}
+
+int BrickWorld::fire_burning(int chunk_id) const {
+    if (chunk_id < 0 || chunk_id >= (int)fire_state.size()) {
+        return 0;
+    }
+    int n = 0;
+    for (const auto &kv : fire_state[(size_t)chunk_id]) {
+        n += kv.second.burning ? 1 : 0;
+    }
+    return n;
+}
+
 PackedInt32Array BrickWorld::separate_near(int chunk_id, Vector3 world_point, float radius_m,
         int max_blocks, bool peel) {
     PackedInt32Array loosened;
@@ -5426,6 +5764,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     settle_bake_job(chunk_id, false);
     chunks[chunk_id] = Chunk();
     chunk_live[chunk_id] = 0;
+    fire_clear(chunk_id);
     joint_cache[chunk_id] = brick::JointCache();
 }
 
@@ -6499,6 +6838,16 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_scorched_blocks", "chunk_id"), &BrickWorld::get_scorched_blocks);
     ClassDB::bind_method(D_METHOD("set_scorched_blocks", "chunk_id", "ids"),
             &BrickWorld::set_scorched_blocks);
+    ClassDB::bind_method(D_METHOD("fire_heat", "chunk_id", "world_point", "radius_m", "heat",
+                    "by_material"),
+            &BrickWorld::fire_heat, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("fire_step", "chunk_id", "dt", "wind", "damp", "max_burning"),
+            &BrickWorld::fire_step);
+    ClassDB::bind_method(D_METHOD("fire_clear", "chunk_id"), &BrickWorld::fire_clear);
+    ClassDB::bind_method(D_METHOD("fire_burning", "chunk_id"), &BrickWorld::fire_burning);
+    ClassDB::bind_method(D_METHOD("fire_get", "chunk_id", "block_id"), &BrickWorld::fire_get);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("fire_burn_seconds", "material", "cells"),
+            &BrickWorld::fire_burn_seconds);
     ClassDB::bind_method(D_METHOD("set_worn_blocks", "chunk_id", "worn"),
             &BrickWorld::set_worn_blocks);
     ClassDB::bind_method(D_METHOD("apply_hit", "chunk_id", "world_point", "radius_m"),

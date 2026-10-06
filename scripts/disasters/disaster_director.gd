@@ -158,7 +158,18 @@ func setup(city: Node3D, kinds: Array = []) -> void:
 		elif a.begins_with("--disaster-seed="):
 			_base_seed = int(a.split("=", true, 1)[1])
 	_roll_rng.seed = _base_seed
-	fire = FireSpread.new()
+	# A city burns brick by brick (BrickFire); a host without bricks keeps the
+	# coarse cells.
+	if city.has_method("fire_chunks") and city.get("world") != null:
+		var bf := BrickFire.new()
+		bf.world = city.world
+		bf.chunks_near = city.fire_chunks
+		bf.burnt = city.fire_burnt
+		bf.standing = city.fire_standing
+		bf.gale = func() -> Vector3: return ctx.gale
+		fire = bf
+	else:
+		fire = FireSpread.new()
 	fire.name = "Fire"
 	add_child(fire)
 	fire.material_at = ctx.material_at

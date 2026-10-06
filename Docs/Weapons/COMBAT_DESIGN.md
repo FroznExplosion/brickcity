@@ -1,6 +1,7 @@
 # Combat and weapon design — Borderlands loot, Halo fights
 
-**Status: proposal, agreed in outline 2026-10-05; numbers to tune in play.** Supersedes the
+**Status: proposal, agreed in outline 2026-10-05 (melee counted per layer and the element set
+revised the same day); numbers to tune in play.** Supersedes the
 power curve and rarity table of `GUN_SCALING_SPEC.md` / `PROGRESSION_SPEC.md` where they differ
 (§9 lists every change against what is built).
 
@@ -73,35 +74,47 @@ their acceptance tests.
 
 ## 4. Enemies: defences, crits and melee
 
-### 4.1 Melee scales with level
+### 4.1 Melee counts are readable
 
-Melee damage is not a flat number: **one melee = a very light enemy's whole health, at the
-player's level.** It grows ×1.25 per level like everything else, so against on-level enemies the
-melee counts never change:
+The goal: **a player who looks at an enemy knows exactly how many melees it takes.** So melee is
+counted per LAYER, not as one pool of health:
 
-| Enemy weight | Health (in melees) | Pistol, common, body shots |
-|---|---|---|
-| Very light | 1 melee | 3 |
-| Light | 2 melees | 6 (the anchor) |
-| Medium | 3 melees | 9 |
-| Heavy | more, plus defences | — |
+- Every defence (shield or armor) says how many melees break it.
+- **Flesh is one melee, for every enemy up to medium.** Heavier enemies may need more.
+- **A melee that breaks a defence stops there** — it does not spill into the flesh. One hit is one
+  step, always.
 
-Off level it drifts the same way guns do: an enemy a level above takes 1.25× as many.
+| Enemy | Defence | Flesh | Melees to kill |
+|---|---|---|---|
+| Very light, bare | — | 1 | **1** |
+| Very light, shielded or armored | 1 | 1 | **2** |
+| Light | 1–2 | 1 | **2–3** |
+| Medium | 3 | 1 | **4** |
+| Heavy | more | more | per type |
+
+Melee damage is sized to that: **one melee = one step at the player's level**, and grows ×1.25 per
+level with everything else, so on level the counts never change. An enemy above your level takes
+1.25× per level as much, and the extra hit shows up there first.
+
+Guns wear the same layers, so an enemy already shot up takes fewer melees — the counts above are
+for an untouched enemy, and the HUD should show a cracked shield or armor so the player can read
+that too.
 
 ### 4.2 Defences sit over the flesh
 
-An enemy is **flesh** (health) and may wear **shield** and/or **armor** over it. Each type says how
-much it has, measured the same way — in melees to break — and guns break them too.
+An enemy is **flesh** (or, for plant-based enemies, **vegetation**) and may wear **shield** and/or
+**armor** over it. Guns break them too.
 
-| Defence | Regenerates | Weak to | Notes |
+| Layer | Regenerates | Weak to | Notes |
 |---|---|---|---|
-| Shield | yes, after a delay | **Shock** (and melee, 1.5×) | Absorbs crits: no crit bonus while it holds |
-| Armor | no | **Explosive** | Absorbs crits; can sit on the crit spot itself (a helmet) |
-| Flesh | no | **Fire** | Takes crits |
+| Shield | yes, after a delay | **Plasma**, melee (1.5×) | Absorbs crits: no crit bonus while it holds |
+| Armor | no | **Corrosive** | Absorbs crits; can sit on the crit spot itself (a helmet) |
+| Flesh | no | **Acid** | Takes crits |
+| Vegetation | no | **Fire** | Plant enemies' flesh. Takes crits |
 
-Example roster (to tune): a *light trooper* is 2 melees of flesh; a *shielded trooper* is
-1 melee of shield over 2 of flesh; a *heavy* is 2 melees of armor over 4 of flesh, with a helmet
-(1 melee of armor on the head) guarding the crit spot until it is broken.
+Gun shots-to-kill (§3) are against the flesh; defences add their own shots on top, and each enemy
+type's card lists both. A very light enemy's flesh can be less than a light one's for guns (a
+common pistol: 3 shots vs 6) while still being one melee for both.
 
 ### 4.3 Crits are places, not dice
 
@@ -121,35 +134,36 @@ rewarded even through the last sliver of shield.
 
 ### 4.5 The loop this is built to encourage (not force)
 
-- **Melee, then the head**: a melee strips a shield (1.5×) or cracks a helmet, and the next
-  headshot crits for the kill.
-- **Strip, then finish**: shock rounds take the shield down fast, a kinetic or fire headshot
+- **Melee, then the head**: a melee strips a shield or cracks a helmet, and the next headshot
+  crits for the kill.
+- **Strip, then finish**: plasma rounds take the shield down fast, a kinetic or acid headshot
   finishes the flesh.
-- **Weaken, then punch**: rounds wear the shield thin, and the melee's spillover finishes.
+- **Weaken, then punch**: rounds wear the shield or armor thin, a melee breaks it, and the next
+  melee (or a headshot) takes the flesh — the count the player can read.
 
 None of it is required; all of it is faster than holding the trigger on a shield.
 
 ## 5. Damage types and elements
 
-**Kinetic** is every gun's baseline. On top, a gun may carry one of **three elements** (the
-per-gun element ratio already built stays: part of each round is element, the rest kinetic):
+**Kinetic** is every gun's baseline. On top, a gun may carry **one element** (the per-gun element
+ratio already built stays: part of each round is element, the rest kinetic). One element per
+layer type, so the chart is one line each:
 
-| Element | Strong vs | Weak vs |
+| Element | Strong vs | Also |
 |---|---|---|
-| Shock | Shield (2×) | — |
-| Fire | Flesh (1.5×) | Armor (0.75×) |
-| Corrosive | Armor (2×) | Shield (0.75×) |
+| **Plasma** | Shield (2×) | — |
+| **Corrosive** | Armor (2×) | — |
+| **Acid** | Flesh (1.5×) | — |
+| **Fire** | Vegetation (2×) | burns plant enemies over time |
+| **Ice** | — (neutral damage) | slows, and freezes an enemy that takes enough |
 
-**Explosive** is not an element but a damage type, for two kinds of weapon:
+Nothing is weak AGAINST an element (no 0.5× rows): an element is a bonus where it fits and plain
+damage where it does not. Simple enough to hold in your head mid-fight.
 
-- **Explosive guns** (grenade-round rifles, launchers firing small rounds): bonus vs **armor**
-  and **more wear on bricks** per hit — they chip walls faster, they do not blow holes.
-- **Ordnance** (rocket launchers, grenades): the big brick destruction — a blast that removes
-  bricks outright (`StructuralDamage` already makes ordnance a blast and everything else a chip).
+**Shock is not a gun element.** It belongs to special weapons (§7): a shot that arcs from enemy to
+nearby enemy and slows each one it touches — a Wunderwaffe.
 
-*Open: the Corrosive row overlaps Explosive (both strong vs armor). Keep both (corrosive for
-guns, explosive for ordnance), or make the three elements Shock / Fire / Explosive and drop
-Corrosive.*
+**Explosive is not an element either** — it is an **attachment** (§6.1), as in Borderlands 4.
 
 ## 6. Modifiers
 
@@ -166,16 +180,34 @@ Legendary red text and Mythic effects are named, hand-written behaviours, not ra
 The manufacturer parts already built (parts that add or multiply stats) become the source of
 modifiers: a part fills a slot.
 
-## 7. Carrying four guns
+### 6.1 The explosive attachment
 
-Four weapon slots (Borderlands), with swap. Swap speed becomes a real stat, and the HUD shows the
-four. Ammo per type (light / rifle / sniper / shell / ordnance) is shared across them.
+A gun with it fires rounds that **always explode on impact** — area damage around the hit, in the
+round's own element (or kinetic). Rarer rolls change *when* it explodes:
+
+- **Proximity**: the round bursts as it passes near an enemy, even on a miss.
+- **Chain**: it bursts near an enemy and keeps flying, bursting again at the next one.
+
+Explosive rounds also **wear bricks harder** (§8) — they chip walls faster but do not blow holes.
+
+## 7. Carrying four guns, and ordnance
+
+**Four gun slots** (Borderlands), with swap. Swap speed becomes a real stat, and the HUD shows the
+four. Ammo per type (light / rifle / sniper / shell) is shared across them.
+
+**Ordnance** is a separate slot (Borderlands 4): rocket launchers, grenades, and **special
+weapons** — cooldown- or charge-gated rather than magazine-gated (the ordnance classes already
+built work this way). Special weapons are where unusual effects live, **shock** first: the round
+arcs across several nearby enemies and slows them.
+
+The same ordnance effects can also roll onto a gun as an **underbarrel / alternate fire** (a
+grenade tube under a rifle, a shock arc on a pistol's second trigger), on the same cooldown rules.
 
 ## 8. Bricks
 
-Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive guns chip
-harder**; **ordnance blasts**. Elements do not change brick damage (fire scorching bricks is a
-cosmetic mark, already built).
+Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive rounds chip
+harder**; **ordnance blasts** — rockets and grenades are where big holes come from. Elements do not
+change brick damage (fire scorching bricks is a cosmetic mark, already built).
 
 ## 9. Against what is built
 
@@ -184,19 +216,24 @@ cosmetic mark, already built).
 | `TIER_STEP = 1.6` (68.7× over 10 tiers) | 1.25 (7.45×) | constant; enemy HP table moves with it |
 | `Rarity.MULTS` 1.0 / 1.3 / 1.6 / 2.0 / 3.3 / 5.0 | 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | constant; rename *Unique* → *Epic* |
 | Crit = random `crit_chance` × class `crit_mult` | crit spots (hurtboxes), 2× | hurtboxes on pawns; `GunController._hit_living` reads the spot hit |
-| Defence layers stack, spill over in full | shield / armor / flesh, crits absorbed, shield gating | `HealthPool`: a carry-over factor and a crit flag on the packet |
-| 7 elements, effectiveness matrix | 3 elements + explosive type | trim the element list; matrix is data |
-| No melee | level-scaled melee, 1.5× vs shield | new: input, motion, hit, damage |
-| One gun in hand | four slots, swap | inventory, HUD, view (swap animation) |
+| Defence layers stack, spill over in full | shield / armor / flesh / vegetation; crits absorbed; shield gating; melee stops at the layer it breaks | `HealthPool`: a carry-over factor and crit/melee flags on the packet |
+| Elements incl. shock, corrosive, acid, fire; weak-against rows | plasma / corrosive / acid / fire / ice, bonus-only; shock on special weapons | element list and matrix (data); ice's slow/freeze is a status |
+| "Explosive" as a gun effect | an attachment: always area damage; proximity and chain variants | effect becomes an attachment with variants |
+| No melee | per-layer, level-scaled melee | new: input, motion, hit, damage |
+| One gun in hand | four gun slots + an ordnance slot; alt-fire | inventory, HUD, view (swap) |
 | Parts with stat adds/mults, rarity → extra parts | slot-limited modifiers + red text | parts become modifiers; slots by rarity |
-| Ordnance blasts bricks, guns chip | + explosive guns chip harder | one multiplier in `StructuralDamage` |
+| Ordnance blasts bricks, guns chip | + explosive rounds chip harder | one multiplier in `StructuralDamage` |
 
 ## 10. Build order (proposed)
 
+Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and the soldiers are.
+
 1. **Numbers**: `TIER_STEP`, rarity table and names, enemy HP; the §3 anchors as a probe.
 2. **Crit spots**: head hurtboxes, crit by location, shields/armor absorb crits.
-3. **Defences**: shield / armor / flesh per enemy type, shield gating, the three elements.
-4. **Melee**: key, motion, hit, level scaling, the melee-then-headshot loop tested.
-5. **Four slots**: inventory, swap, HUD.
-6. **Modifiers**: slots by rarity, the first modifier set, the first red-text effects.
-7. **Explosive guns**: armor bonus, brick wear.
+3. **Layers**: shield / armor / flesh / vegetation per enemy type, shield gating, the five
+   elements.
+4. **Melee**: key, motion, hit, per-layer counts, the melee-then-headshot loop tested.
+5. **Four slots + ordnance**: inventory, swap, HUD, the ordnance slot.
+6. **Modifiers**: slots by rarity, the first modifier set, the explosive attachment, the first
+   red-text effects.
+7. **Special weapons and alt-fire**: the shock arc first.

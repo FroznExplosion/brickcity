@@ -7,6 +7,9 @@ do it**, and the traps waiting in each one.
 
 Last updated **2026-09-23**, after the drawn interior rung (§2.1).
 
+Destruction, collapse, pieces and their LOD have a list of their own:
+[CollapseNext.md](CollapseNext.md).
+
 ---
 
 ## 1. Where things stand

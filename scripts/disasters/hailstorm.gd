@@ -25,8 +25,8 @@ const CHIP_RADIUS := 0.25
 const PAWN_DAMAGE := 0.6          ## a round, to anyone with no roof
 ## How much each material minds it, by index (brick_grid.h): PLA, PLA matte,
 ## PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA, Wood PLA, Wood,
-## Metal, Stone.
-const HARD := [1.0, 1.0, 1.0, 0.7, 0.6, 0.2, 0.5, 1.0, 0.6, 0.9, 0.5, 0.1, 0.05]
+## Metal, Stone, Leaf.
+const HARD := [1.0, 1.0, 1.0, 0.7, 0.6, 0.2, 0.5, 1.0, 0.6, 0.9, 0.5, 0.1, 0.05, 0.8]
 
 const SKY_SUN := Color(0.72, 0.8, 0.72)
 const SKY_TOP := Color(0.26, 0.32, 0.28)

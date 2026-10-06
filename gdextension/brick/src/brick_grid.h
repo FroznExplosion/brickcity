@@ -260,6 +260,9 @@ inline const BrickMaterialDef BRICK_MATERIALS[] = {
     {"Wood", WOOD_VARIANTS, (int)(sizeof(WOOD_VARIANTS) / sizeof(WOOD_VARIANTS[0])), 1.6f, false},
     {"Metal", METAL_VARIANTS, (int)(sizeof(METAL_VARIANTS) / sizeof(METAL_VARIANTS[0])), 4.0f, false},
     {"Stone", STONE_VARIANTS, (int)(sizeof(STONE_VARIANTS) / sizeof(STONE_VARIANTS[0])), 2.5f, false},
+    // Vegetation: a tree's leaves. Filament colours (the greens), soft, and the
+    // fastest thing in the world to burn (BrickWorld fire tables).
+    {"Leaf", nullptr, 0, 0.6f, false},
 };
 constexpr int BRICK_MATERIAL_COUNT = (int)(sizeof(BRICK_MATERIALS) / sizeof(BRICK_MATERIALS[0]));
 

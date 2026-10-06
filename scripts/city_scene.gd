@@ -3676,6 +3676,88 @@ func scorch(point: Vector3, radius: float) -> int:
 	return n
 
 
+## The chunks fire can reach round `point` (BrickFire): [building id, frame,
+## chunk] for each standing building whose box is within `radius`. With
+## `promote`, a building out of brick range is materialised first -- a flame put
+## to it (lightning, a meteor) -- but fire that is only spreading does not drag
+## far buildings in.
+func fire_chunks(point: Vector3, radius: float, promote := false) -> Array:
+	var out := []
+	for id in _near_buildings(point, radius + 2.0):
+		var b := registry.get_building(id)
+		if b == null or b.toppled:
+			continue
+		if not registry.local_box(b.id).grow(radius).has_point(b.xform.affine_inverse() * point):
+			continue
+		if not b.is_materialised():
+			if not promote or _promote(b.id) < 0:
+				continue
+		var cs := b.chunks()
+		for fi in cs.size():
+			out.append([b.id, fi, cs[fi]])
+	return out
+
+
+## Is this building still standing in bricks (BrickFire): fire steps only those.
+## A toppled one is a piece now -- the burning debris carries its fire on.
+func fire_standing(id: int) -> bool:
+	var b := registry.get_building(id)
+	return b != null and not b.toppled and b.is_materialised()
+
+
+## What fire did to a building's bricks (BrickWorld.fire_step, which already
+## did it): `killed` burnt out, `charred` blackened. Committed -- BURN and
+## SCORCH by ids -- and followed up as a hit's kills are: the bricks stop
+## colliding and drawing, the building is re-solved (a burnt support brings
+## down what it held), the AI's ground is redone round `at`.
+func fire_burnt(id: int, frame: int, killed: PackedInt32Array, charred: PackedInt32Array,
+		at: Vector3) -> void:
+	var b := registry.get_building(id)
+	if b == null or not authority.may_decide():
+		return
+	var pf := Engine.get_physics_frames()
+	if not charred.is_empty():
+		var e := DamageLog.Entry.new()
+		e.tick = pf
+		e.kind = DamageLog.Kind.SCORCH
+		e.target = id
+		e.frame = frame
+		e.flags = DamageLog.FLAG_BLOCKS
+		e.blocks = charred
+		e.point = at
+		authority.commit_entry(e)
+		if not _recolour.has(id):
+			_recolour[id] = pf + RECOLOUR_TICKS
+	if killed.is_empty():
+		return
+	var cs := b.chunks()
+	var box := AABB(at, Vector3.ZERO)
+	if frame < cs.size():
+		var lb: AABB = world.get_blocks_box(cs[frame], killed)
+		box = world.get_chunk_transform(cs[frame]) * lb
+	var e := DamageLog.Entry.new()
+	e.tick = pf
+	e.kind = DamageLog.Kind.BURN
+	e.target = id
+	e.frame = frame
+	e.blocks = killed
+	e.point = box.get_center()
+	e.radius = box.size.length() * 0.5
+	authority.commit_entry(e)
+	b.hit = true
+	_mark_dirty(id)
+	_last_hit[id] = Time.get_ticks_msec()
+	director.note_hit(id, e.point)
+	if frame == 0:
+		if not _pending_disable.has(id):
+			_pending_disable[id] = PackedInt32Array()
+		_pending_disable[id].append_array(killed)
+	else:
+		_disable_frame(id, frame, killed)
+	_queue_remesh(id)
+	islands.wake_near(e.point, e.radius + 2.0)
+
+
 func _setup_gun() -> void:
 	_combat_rng.seed = 0xC0FFEE
 	DamageSystem.rng.seed = 0xC0FFEE + 1
@@ -4487,7 +4569,7 @@ func _nav_on_command(e: DamageLog.Entry) -> void:
 	if e.kind == DamageLog.Kind.CHIP:
 		return
 	match e.kind:
-		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
+		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER, DamageLog.Kind.BURN:
 			var r := Vector3.ONE * (e.radius + 1.0)
 			ai_nav.invalidate_box(AABB(e.point - r, r * 2.0))
 		_:
@@ -8115,6 +8197,8 @@ func _trim_quiet() -> void:
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue
+		if world.fire_burning(b.chunk) > 0:
+			continue  # on fire: its heat is only in its bricks
 		if Time.get_ticks_msec() - b.materialised_at < TRIM_AFTER_MS:
 			continue
 		# Not another once this run has had its share: the clock below is
