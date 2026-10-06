@@ -38,13 +38,7 @@ const BEVEL := 0.013
 static var bevel_enabled := false
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
-## Inside this the studs have their rim bevel (PieceMeshes.stud, 38 tris);
-## out to STUD_RANGE they are plain (stud_plain, 22). Most studs on screen are
-## in the outer ring, where the 13 mm rim is a pixel or two.
-const STUD_BEVEL_RANGE := 6.0
-## The band the two stud meshes cross over in. Both are drawn inside it, so it
-## is kept short: the rim is a pixel or two there either way.
-const STUD_BEVEL_FADE := 2.0
+
 const SCATTER_RANGE := 30.0   ## §8.
 const RANGE_FADE := 6.0
 
@@ -130,6 +124,8 @@ func build(tile_x: int, tile_z: int, material: Material,
 	if bevel_enabled and not phases:
 		near = BrickTerrain.build_tile_chamfered(tx, tz, BEVEL)
 		_bevel_done = true
+		# Nobody streams a direct caller's tiles: it is near, all of it.
+		_near = true
 	piece_count = data["piece_count"]
 	tri_count = data["triangle_count"]
 	stud_count = data["stud_count"]
@@ -157,12 +153,16 @@ func add_instances() -> void:
 	if _instances_done or _data.is_empty():
 		return
 	_instances_done = true
-	# Bevelled studs fade out over STUD_BEVEL_RANGE .. +STUD_BEVEL_FADE while
-	# the plain ones fade in over the same band, so the two cross, not pop.
+	# Bevelled studs on tiles round the camera, plain ones elsewhere; which is
+	# shown is the streamer's call, by the tile's ring (set_near). NOT by a
+	# visibility range: Godot fades a range per OBJECT, and the object here is
+	# a whole 11 m tile -- standing in one, every stud on it was mid-fade,
+	# dithered half see-through.
 	_add_instances("StudsFar", PieceMeshes.stud_plain(), _data["studs"], STUD_RANGE,
-			stud_material(), STUD_BEVEL_RANGE + STUD_BEVEL_FADE, STUD_BEVEL_FADE)
-	_add_instances("Studs", PieceMeshes.stud(), _data["studs"], STUD_BEVEL_RANGE,
-			stud_material(), 0.0, STUD_BEVEL_FADE)
+			stud_material())
+	_add_instances("Studs", PieceMeshes.stud(), _data["studs"], STUD_RANGE,
+			stud_material())
+	_apply_near()
 	_add_instances("Tufts", PieceMeshes.tuft(), _data["tufts"], SCATTER_RANGE,
 			tuft_material())
 	_add_instances("Pebbles", PieceMeshes.pebble(), _data["pebbles"], SCATTER_RANGE)
@@ -233,17 +233,58 @@ func has_collision() -> bool:
 	return _collision_done
 
 
-## The chamfered near mesh (BrickTerrain.build_tile_chamfered): drawn out to
-## BEVEL_RANGE, and the flat surface picks up from there.
+## The chamfered near mesh (BrickTerrain.build_tile_chamfered), shown instead
+## of the flat one while the tile is near (set_near).
 func add_bevel(near: Dictionary) -> void:
 	_bevel_done = true
 	var arrays: Array = near.get("mesh", [])
 	if arrays.is_empty() or _far_surface == null:
 		return
-	_add_surface(arrays, _material, 0.0, BEVEL_RANGE)
-	_far_surface.visibility_range_begin = BEVEL_RANGE
-	_far_surface.visibility_range_begin_margin = RANGE_FADE
+	_near_surface = _add_surface(arrays, _material, 0.0, 0.0)
+	if _near_surface != null:
+		_near_surface.name = "SurfaceChamfered"
+		# The terrain shader fades its drawn outline and shaded chamfer IN
+		# with distance on this mesh only: the real chamfer up close, both
+		# a little further, the outline alone past that (terrain.gdshader).
+		_near_surface.set_instance_shader_parameter("geo_bevel", 1.0)
 	bevel_tri_count = near["triangle_count"]
+	_apply_near()
+
+
+## The detailed version of this tile -- chamfered surface, bevelled studs --
+## or the plain one. Set by the streamer from the tile's ring round the
+## camera; a whole-tile switch a tile or more away, where a 13 mm bevel is a
+## pixel or two, so it does not read as a pop.
+func set_near(on: bool) -> void:
+	if on == _near:
+		return
+	_near = on
+	_apply_near()
+
+
+func _apply_near() -> void:
+	var chamfered := _near and _near_surface != null
+	if _near_surface != null:
+		_near_surface.visible = chamfered
+	if _far_surface != null:
+		_far_surface.visible = not chamfered
+	for c in get_children():
+		if c is MultiMeshInstance3D:
+			if c.name == "Studs":
+				(c as Node3D).visible = _near and _studs_shown
+			elif c.name == "StudsFar":
+				(c as Node3D).visible = not _near and _studs_shown
+
+
+## F4 in the heightfield scene: instances on or off, the near/far choice kept.
+func set_studs_shown(on: bool) -> void:
+	_studs_shown = on
+	_apply_near()
+
+
+var _near := false
+var _studs_shown := true
+var _near_surface: MeshInstance3D = null
 
 
 ## Does this tile still want its chamfered mesh?
