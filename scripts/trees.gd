@@ -28,7 +28,13 @@ const BRIGHT_GREEN := 35
 const OLIVE := 37
 
 const TRUNK_HEIGHTS := [7, 9, 11, 13]       ## round bricks, per variant
-const TRUNK_COLOURS := [BROWN, CHOCOLATE, BROWN, CHOCOLATE]
+## The trunk is Wood and its colours are wood's own (brick_grid.h WOOD_VARIANTS):
+## walnut and teak. The canopy is Leaf -- vegetation, the fastest thing to
+## burn -- in filament greens. What a tree is made of is what fire reads: the
+## leaves flash, the trunk smoulders (Docs/Disasters.md 29).
+const WALNUT := 1
+const TEAK := 7
+const TRUNK_COLOURS := [TEAK, WALNUT, TEAK, WALNUT]
 const LEAF_COLOURS := [[GREEN, DARK_GREEN], [DARK_GREEN, OLIVE],
 		[BRIGHT_GREEN, GREEN], [GREEN, OLIVE]]
 const WIDE := [true, false, true, true]      ## an 8-stud canopy, or a 6-stud one
@@ -45,6 +51,9 @@ const GROUND_DENSITY := {1: 1.0, 2: 1.0, 3: 0.25, 4: 0.5}
 const MAX_STEP_PLATES := 3
 
 const TRUNK_CORNER := Vector3i(3, 0, 3)
+## brick_grid.h BRICK_MATERIALS indices.
+const WOOD := 10
+const LEAF := 13
 
 static var _recipes := {}
 
@@ -65,25 +74,26 @@ static func recipe(variant: int) -> BuildRecipe:
 	# reaches three studs past the trunk, so the trunk's corner is at (3, 0, 3).
 	var o := TRUNK_CORNER
 	for k in trunk_h:
-		r.add("round_2x2", o + Vector3i(0, k * 3, 0), TRUNK_COLOURS[variant])
+		r.add("round_2x2", o + Vector3i(0, k * 3, 0), TRUNK_COLOURS[variant], 0,
+				BuildRecipe.Role.STRUCTURE, WOOD)
 	var y := trunk_h * 3
 	var leaf: Array = LEAF_COLOURS[variant]
 	var a: int = leaf[0]
 	var b: int = leaf[1]
 	var interior := BuildRecipe.Role.STRUCTURE
 	# 1. A 4x4 plate on the trunk's top.
-	r.add("plate_4x4", o + Vector3i(-1, y, -1), a, 0, interior)
+	r.add("plate_4x4", o + Vector3i(-1, y, -1), a, 0, interior, LEAF)
 	y += 1
 	# 2. Four 4x4 plates round it, each overlapping it by 2x2: 8x8 of canopy.
 	#    The narrow variant is nine 2x2 plates, 6x6, every one overlapping it.
 	var wide: bool = WIDE[variant]
 	if wide:
 		for q in [Vector3i(-3, 0, -3), Vector3i(1, 0, -3), Vector3i(-3, 0, 1), Vector3i(1, 0, 1)]:
-			r.add("plate_4x4", o + Vector3i(q.x, y, q.z), a, 0, interior)
+			r.add("plate_4x4", o + Vector3i(q.x, y, q.z), a, 0, interior, LEAF)
 	else:
 		for px in [-2, 0, 2]:
 			for pz in [-2, 0, 2]:
-				r.add("plate_2x2", o + Vector3i(px, y, pz), a, 0, interior)
+				r.add("plate_2x2", o + Vector3i(px, y, pz), a, 0, interior, LEAF)
 	y += 1
 	# 3. Bricks over the plates, not every one, so the canopy is ragged. The
 	#    four in the middle always, so the layers above have something to sit on.
@@ -94,12 +104,12 @@ static func recipe(variant: int) -> BuildRecipe:
 			var middle := x >= -1 and x < 3 and z >= -1 and z < 3
 			var keep := middle or _hash(variant, x, z) < 0.6
 			if keep:
-				r.add("brick_2x2", o + Vector3i(x, y, z), b if (x + z) % 4 == 0 else a, 0, interior)
+				r.add("brick_2x2", o + Vector3i(x, y, z), b if (x + z) % 4 == 0 else a, 0, interior, LEAF)
 	y += 3
 	# 4. A 4x4 plate and a 2x2 brick on top: the crown.
-	r.add("plate_4x4", o + Vector3i(-1, y, -1), b, 0, interior)
+	r.add("plate_4x4", o + Vector3i(-1, y, -1), b, 0, interior, LEAF)
 	y += 1
-	r.add("brick_2x2", o + Vector3i(0, y, 0), a, 0, interior)
+	r.add("brick_2x2", o + Vector3i(0, y, 0), a, 0, interior, LEAF)
 	_recipes[variant] = r
 	return r
 

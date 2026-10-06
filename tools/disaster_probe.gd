@@ -302,11 +302,18 @@ func _check_fire(city: Node3D, dir: DisasterDirector) -> void:
 	while not city._damage_queue.is_empty() and wait < 600:
 		await physics_frame
 		wait += 1
-	var chips := 0
+	# Brick by brick (Docs/Disasters.md 29): what burnt out is a BURN, what got
+	# hot a SCORCH -- committed, so a client sees the same building.
+	var burns := 0
+	var chars := 0
 	for i in range(n0, city.authority.commands.size()):
-		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
-			chips += 1
-	_ok("it wore the building through CHIP commands", chips > 0, "%d CHIP(s)" % chips)
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.BURN:
+			burns += 1
+		elif e.kind == DamageLog.Kind.SCORCH and e.flags & DamageLog.FLAG_BLOCKS:
+			chars += 1
+	_ok("it burnt the building through BURN and SCORCH commands", burns > 0 and chars > 0,
+			"%d BURN, %d SCORCH" % [burns, chars])
 
 
 func _check_lightning(city: Node3D, dir: DisasterDirector) -> void:
@@ -977,7 +984,7 @@ func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 	while dir.fire.scorches == s0 and t < 30 * 10:
 		await physics_frame
 		t += 1
-	_ok("a burning cell chars its walls", dir.fire.scorches > s0, "after %.1f s" % [t / 30.0])
+	_ok("a fire chars the bricks it heats", dir.fire.scorches > s0, "after %.1f s" % [t / 30.0])
 
 	# A clump knocked off the burning wall takes the fire with it.
 	var caught0 := dir.debris.caught

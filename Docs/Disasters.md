@@ -284,6 +284,9 @@ damage with intensity; the funnel and the orbiting bricks widen with it.
 
 ## 5. Fire
 
+> **A city now burns brick by brick — section 29.** The coarse cells below are what a host without
+> bricks still burns with, and the layer a city's flames, smoke and danger are drawn on.
+
 Fire is a service first: lightning and meteors call `FireSpread.ignite(point, heat)`. On its own
 in the roll it is "a building catches": a random building's random storey ignites.
 
@@ -1059,3 +1062,66 @@ and a soldier boxed in by it evaded and went nowhere.
 * What it hits: pawns buried (heavy damage, slowed), loose pieces carried, and a building in its
   path takes a sideways load (the lateral solver) — a weak one fails.
 * On the heightfield only (it needs slopes), and only where snow lies.
+
+---
+
+## 29. Fire, brick by brick
+
+A city now burns BRICKS, not 1.4 m cells (`BrickFire`, `BrickWorld.fire_step`). The coarse
+`FireSpread` stays for a host with no bricks, and as the layer the flames, smoke, light, the AI's
+danger and burning debris are drawn on — the burning bricks gathered into its cells.
+
+**The rule, in C++, four times a second, per building with any heat in it:**
+
+* Every brick has **heat**. A **burning** brick heats what is next to it, through every face: three
+  times as much above as beside (flames climb), 0.3 below, and the wind leans it — straight
+  downwind 3.5×, upwind a fifth at a full gale. Heat crosses air too: four cells (0.56 m) upward, one
+  sideways, up to four downwind in a gale.
+* A brick **catches** when its heat passes 1 **and it touches air** (a face onto an empty cell or a
+  dead brick). A brick buried in others heats but cannot burn until what is round it has burnt
+  away. That one rule is why a canopy burns from the outside in and a wall from its faces — there
+  is no canopy case and no wall case.
+* It **burns** for its material's time, by size (× ∛(cells/12), a 2×2 brick is 1): **leaves 3 s,
+  plastic 7-10 s, wood PLA 9 s, wood 26 s**, metal and stone never. Then it is **gone** — killed like
+  a blast's bricks — and the building's solve feels it: a burnt support brings down what it held.
+* Whatever gets **hot chars** (heat 0.6: its material's darkest), metal and stone included.
+* Heat leaks away (12% a second), so a brick beside a fire it cannot catch from settles short of 1.
+  Rain damps the gain to 0.4×.
+
+Materials take heat at their own rate — leaves 1.6, wood 1.0, PLA 0.55, nylon 0.35, metal 0.25 and
+stone 0.2 (to char only). The tables are in `brick_world.cpp`, in BRICK_MATERIALS' order.
+
+**Trees are wood and leaves.** A new material, **Leaf** (index 13, vegetation: filament colours,
+matte, soft to the ear, toughness 0.6), is the canopy; the trunk is **Wood** (walnut and teak). Lit at
+its foot a tree's fire climbs the 2.5 m trunk in 7.5 s, the canopy catches from the trunk's top and
+is gone in 8 s more, outside first, while the trunk burns on for half a minute.
+
+**Between buildings — tree to tree, tree to house — embers.** Each step, up to six points off a
+building's burning bricks are tried, by flame and `spread_mul`, tossed (0.8 m up to 1.2 m down), a
+metre about and carried downwind (0.12 s of the wind); whatever brick of another building one lands
+in takes 0.4 heat × its material's take — two embers light a leaf, plastic needs many. An ember may
+bring one building's bricks in a step (it has nothing to land in otherwise); a forest fire does not
+materialise the forest at once. Without a storm there is a light breeze (0.12 of a gale, its way
+rolled from the seed), so a fire always leans somewhere.
+
+**What comes away burning keeps burning.** A tree whose canopy's last support burns through drops
+the canopy as a piece; a storey cut under a fire comes away with it. The bricks that were burning
+are reported (`fire_step` "loose"), and BurningDebris lights the piece that has them.
+
+**Commands.** The heat is the host's alone; what it does is committed: **BURN** (the ids that burnt
+out — new) and **SCORCH with FLAG_BLOCKS** (the ids charred). A client replays them
+(`StructureReplayer`); a building rebuilt from its recipe gets both back from the damage record.
+`city.fire_burnt` follows a burn up as a hit's kills are: collision, remesh (charring on the recolour
+throttle), re-solve, the AI's ground round it, pieces woken.
+
+**Caps.** 900 burning bricks in the city, 300 in one building; at the cap nothing new catches. A
+burning building is never trimmed back to a shell (its heat lives only in its bricks). Flames are
+drawn on the 48 busiest cells.
+
+Probe `tools/brick_fire_probe.gd`. On a bare BrickWorld: the tree as above; a leaf strip under a
+gale burns six plates downwind in 7.8 s and never upwind; on a burning wooden brick, a leaf brick
+lasts 3 s, PLA 7 s, wood 26 s, and metal and stone never catch but char. In the city: two trees, a
+gale from one to the other, the first lit at its foot — its bricks go as BURN and SCORCH commands, a
+client copy replaying them loses the same bricks, the canopy drops burning, the trunk burns through
+at the foot and comes down, and embers light the second tree. The disaster probe's building fire
+caught 518 bricks and committed 63 BURNs and 92 SCORCHes.

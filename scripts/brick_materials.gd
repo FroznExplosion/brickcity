@@ -29,6 +29,7 @@ const FAMILY_OF := {
 	"PETG": "plastic", "Glow PLA": "plastic", "Carbon PLA": "plastic", "Wood PLA": "plastic",
 	"TPU": "soft", "Nylon": "soft",
 	"Wood": "wood", "Metal": "metal", "Stone": "stone",
+	"Leaf": "soft",
 }
 
 const RATE := 22050
