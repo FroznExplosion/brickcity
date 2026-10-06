@@ -29,6 +29,10 @@ const CLEARANCE := 0.55
 const WHEEL := 0.45
 ## Up-speed for a kerb: about half a metre at this gravity.
 const KERB_POP := 4.5
+## Seconds it backs up the first time it is stuck.
+const REVERSE := 1.5
+## An empty truck leaves the board this long after unloading.
+const LEAVE_AFTER := 30.0
 
 var services: AIServices
 ## The kinds of unit riding in it.
@@ -47,6 +51,8 @@ var _wp := 0
 var _from := Vector3.ZERO
 var _moved_at := 0.0
 var _yaw := 0.0
+var _reverse_until := -INF
+var _reversals := 0
 
 
 static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> TransportTruck:
@@ -114,6 +120,15 @@ func _physics_process(delta: float) -> void:
 		move_and_slide()
 		return
 	var now := services.now()
+	if now < _reverse_until:
+		# Backing off what it was stuck on, before trying the way again.
+		var back := global_transform.basis.z
+		velocity.x = back.x * DRIVE * 0.35
+		velocity.z = back.z * DRIVE * 0.35
+		move_and_slide()
+		_from = global_position
+		_moved_at = now
+		return
 	if _path.is_empty():
 		var st := services.ai_nav.get_status(_path_id)
 		if st == AINav.PENDING:
@@ -159,6 +174,11 @@ func _physics_process(delta: float) -> void:
 	if at.distance_to(_from) > 1.0:
 		_from = at
 		_moved_at = now
+	elif now - _moved_at > STUCK and _reversals < 1:
+		# The first time: back off and try again -- a corner clipped on a turn
+		# is usually cleared by a length of reverse.
+		_reversals += 1
+		_reverse_until = now + REVERSE
 	elif now - _moved_at > STUCK:
 		# What it is up against, for the log: the thing a vehicle map would
 		# have routed round.
@@ -176,6 +196,10 @@ func _arrive(why: String) -> void:
 		return
 	stopped_because = why
 	state = "arrived"
+	# Unloaded, it goes: an empty truck is in the next one's way.
+	get_tree().create_timer(LEAVE_AFTER).timeout.connect(func() -> void:
+		if is_instance_valid(self) and state == "arrived" and cargo.is_empty():
+			queue_free())
 	if _path_id >= 0:
 		services.ai_nav.release(_path_id)
 	arrived.emit(self)
@@ -186,12 +210,37 @@ func _arrive(why: String) -> void:
 static func room_at(world: World3D, at: Vector3) -> bool:
 	var q := PhysicsShapeQueryParameters3D.new()
 	var c := CylinderShape3D.new()
-	c.radius = SIZE.z * 0.5 + 0.4
+	# A full length and a metre: room to turn, and clear of another truck
+	# parked there (a tail swung into one stuck the next).
+	c.radius = SIZE.z + 1.0
 	c.height = SIZE.y - CLEARANCE
 	q.shape = c
 	q.transform = Transform3D(Basis(), at + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS | Layers.FALLING | Layers.WORLD
 	return world.direct_space_state.intersect_shape(q, 1).is_empty()
+
+
+## Is a route wide enough for a truck the whole way -- at every waypoint and
+## midway between them, a truck's width and a margin clear of buildings? A
+## stand-in for the vehicle map (AIVehicles.md 3) until there is one: the foot
+## map's paths squeeze between walls a body passes and a truck does not.
+static func route_wide(world: World3D, path: PackedVector3Array) -> bool:
+	var q := PhysicsShapeQueryParameters3D.new()
+	var c := CylinderShape3D.new()
+	c.radius = SIZE.x * 0.5 + 0.35
+	c.height = SIZE.y - CLEARANCE
+	q.shape = c
+	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
+	var space := world.direct_space_state
+	for i in path.size():
+		var pts := [path[i]]
+		if i > 0:
+			pts.append(path[i - 1].lerp(path[i], 0.5))
+		for p in pts:
+			q.transform = Transform3D(Basis(), (p as Vector3) + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
+			if not space.intersect_shape(q, 1).is_empty():
+				return false
+	return true
 
 
 ## Where the cargo gets out: behind and beside the truck, on the side away from

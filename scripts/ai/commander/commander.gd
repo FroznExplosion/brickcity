@@ -46,6 +46,8 @@ const TRAVEL_FAR := 22.0
 const ADVANCE_FROM := 16.0
 ## Seconds between orders to one squad, at least.
 const ORDER_GAP := 6.0
+## How long a squad asked for may take to arrive before the next is bought.
+const WAIT_FOR_SPAWN := 45.0
 
 var services: AIServices
 var team := 1
@@ -363,8 +365,9 @@ func _reinforce(now_please: bool) -> bool:
 	if not spawner.is_valid() or not commander_up or not radio_up:
 		return false
 	var now := services.now()
-	# A squad asked for and not yet down -- unless it never came.
-	if _waiting_spawn and now - _last_reinforce < 20.0:
+	# A squad asked for and not yet down -- unless it never came (a truck takes
+	# its time on the road). Pressed, it does not wait on the last one.
+	if _waiting_spawn and not now_please and now - _last_reinforce < WAIT_FOR_SPAWN:
 		return false
 	_waiting_spawn = false
 	if not now_please and (now - _last_reinforce < REINFORCE_GAP or now < _hold_until):

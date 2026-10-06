@@ -909,9 +909,13 @@ func run_gate() -> void:
 		# rough fix eight metres off.
 		await _frames(2)
 		var me := _player()
-		city.ai_services.noise(me.eye.global_position, 40.0, me)
-		await _until(func() -> bool:
-			return int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0, 30.0)
+		# And keeps firing, as a player holed up does: heard every couple of
+		# seconds, the contact stays fresh while the commander decides.
+		for k in 15:
+			city.ai_services.noise(me.eye.global_position, 40.0, me)
+			if int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0:
+				break
+			await _frames(60)
 		await _until(func() -> bool:
 			return commander.squads.any(func(q): return is_instance_valid(q) and q.events.has("stacked")),
 			60.0)
@@ -1309,8 +1313,10 @@ func _truck_start() -> Vector3:
 			# Room to turn a truck round in.
 			if not TransportTruck.room_at(city.get_world_3d(), q):
 				continue
-			# And a way from there to the fight -- not a beach below the tide line.
-			if city.ai_nav.find_path(q, goal, 20000).is_empty():
+			# And a way from there to the fight -- not a beach below the tide line
+			# -- wide enough for a truck all the way in.
+			var route: PackedVector3Array = city.ai_nav.find_path(q, goal, 20000)
+			if route.is_empty() or not TransportTruck.route_wide(city.get_world_3d(), route):
 				continue
 			return q + Vector3.UP * 0.3
 	return Vector3.INF
