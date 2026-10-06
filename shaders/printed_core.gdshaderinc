@@ -14,17 +14,21 @@
 
 group_uniforms top_paths;
 // 0: a 45-degree raster, what a slicer does on a flat top by default.
-// 1: a STUD. Its top is one path spiralling in to the centre, and its sides
-//    are shaded round although the mesh is an octagon.
+// 1: a STUD. Its top is one path spiralling in to the centre, following the
+//    stud's own N-sided outline -- the slicer walks the shape it is given, and
+//    this stud is an octagon (PieceMeshes.stud).
 //
-//    The top was concentric loops following the octagon, and that drew the
-//    octagon's corners as eight creases on every stud. A real stud is round
-//    and so is its toolpath; the mesh is eight-sided only to be cheap, and
-//    the shading is now what says round -- normals bent radially (vertex())
-//    and a circular spiral. The silhouette is still eight-sided, at 0.2 m.
+//    The corners are ROUNDED, by a fifth of a bead. Concentric loops with sharp
+//    corners drew eight hard creases on every stud: the ridge normal swings
+//    straight across the corner's bisector. A real nozzle cannot turn on a
+//    point either, so the path rounds every corner a little, and so does this.
 uniform int top_mode : hint_range(0, 1) = 0;
-uniform int contour_sides : hint_range(3, 16) = 8;   // unused since the spiral; kept for callers
-uniform float contour_radius = 0.0685;   // where the spiral starts, its outer bead
+uniform int contour_sides : hint_range(3, 16) = 8;
+uniform float contour_radius = 0.0685;   // the outline's corner radius: where the spiral starts
+// How far a stud's facets are shaded toward round: 0 eight flat faces, 1 a
+// cylinder. Between, an octagon with softened corners, which is what a
+// printed polygon is.
+uniform float stud_round : hint_range(0.0, 1.0) = 0.5;
 // A real stud is 1.8 mm, nine 0.2 mm layers: with the brick's 48, 57.
 uniform int stud_layers : hint_range(1, 32) = 9;
 uniform float stud_height = 0.074;   // PieceMeshes.STUD_H
@@ -51,15 +55,17 @@ void vertex() {
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
-    // A stud is shaded round: each vertex's normal points out from the axis,
-    // so across a flat face the interpolated normal turns the way a cylinder's
-    // does and the octagon's corners stop showing. The 45-degree rim keeps
-    // its lean. v_flat_normal above keeps the true face, for the toolpaths.
+    // A stud's corners are softened in the shading (stud_round): each
+    // vertex's normal leans out from the axis, so across a flat face the
+    // interpolated normal turns a little the way a cylinder's does. The
+    // 45-degree rim keeps its lean. v_flat_normal above keeps the true face,
+    // for the toolpaths.
     if (top_mode == 1 && abs(NORMAL.y) < 0.95) {
         float rl = length(VERTEX.xz);
         if (rl > 1e-5) {
             float h = length(NORMAL.xz);
-            NORMAL = normalize(vec3(VERTEX.x / rl * h, NORMAL.y, VERTEX.z / rl * h));
+            vec3 round_n = vec3(VERTEX.x / rl * h, NORMAL.y, VERTEX.z / rl * h);
+            NORMAL = normalize(mix(NORMAL, round_n, stud_round));
         }
     }
     // Grass in the wind (weather.gdshaderinc): only what has a sway height --
@@ -70,6 +76,26 @@ void vertex() {
     if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
         VERTEX = vec3(0.0);
     }
+}
+
+/// How far p is inside a regular n-gon of the given corner radius (vertex on
+/// +X, the orientation PieceMeshes.stud builds), with the corners rounded:
+/// a soft maximum over the edges, `soft` metres of it. Its level sets are
+/// the outline shrunk inward with round corners -- a toolpath's loops.
+float ngon_depth_round(vec2 p, int n, float radius, float soft) {
+    float apothem = radius * cos(3.14159265 / float(n));
+    float d[16];
+    float worst = -1e9;
+    for (int i = 0; i < n; i++) {
+        float a = PS_TAU * (float(i) + 0.5) / float(n);
+        d[i] = dot(p, vec2(cos(a), sin(a)));
+        worst = max(worst, d[i]);
+    }
+    float sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        sum += exp((d[i] - worst) / soft);
+    }
+    return apothem - (worst + soft * log(sum));
 }
 
 void fragment() {
@@ -88,15 +114,15 @@ void fragment() {
         if (face != 0) {
             float bw = ps_bead(face, mat);
             if (top_mode == 1) {
-                // One bead a turn, in to the centre. `t` steps by exactly
-                // one where the angle wraps, which fract() never sees; the
-                // derivatives take the unwrapped radial count instead.
-                float r = length(v_local.xz);
+                // One bead a turn, in to the centre, along the outline.
+                // `t` steps by exactly one where the angle wraps, which
+                // fract() never sees; the derivatives take the unwrapped
+                // count instead.
                 float turn = atan(v_local.z, v_local.x) / PS_TAU + 0.5;
                 // A finer line than a brick's skin: a real stud top is
                 // 4.8 mm across and takes five or six turns of 0.4 mm.
                 bw *= 0.7;
-                t_d = (contour_radius - r) / bw;
+                t_d = ngon_depth_round(v_local.xz, contour_sides, contour_radius, bw * 0.2) / bw;
                 t = t_d + turn;
             } else {
                 t = dot(v_local.xz, vec2(0.7071, face == 2 ? -0.7071 : 0.7071)) / bw;

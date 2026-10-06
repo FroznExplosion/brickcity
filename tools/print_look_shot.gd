@@ -99,6 +99,7 @@ func _build() -> void:
 	stud_mat.shader = load("res://shaders/printed.gdshader")
 	stud_mat.set_shader_parameter("top_mode", 1)
 	stud_mat.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
+	stud_mat.set_shader_parameter("contour_radius", PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
 	var stud := BrickWorld.get_stud_metres()
 	var plate := stud * 0.4
 	for s in studs:
