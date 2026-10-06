@@ -285,3 +285,30 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   shot always lands the same with no RNG drawn, a crouched head still crits where it went, a
   shield absorbs the crit until it breaks.
 - Helmets (armor guarding the head spot specifically) come with step 3's layers.
+- **Deferred (2026-10-06):** pawns get no head spot for now (`Pawn.head_crits = false`): the
+  enemies are still capsules. The system stays built and tested (`crit_probe` switches it on);
+  turn it on when enemies are figures with heads.
+
+**Step 3 — defences and elements: built 2026-10-06.**
+- `CombatScale`: the MELEE is the unit. One melee at level 1 = a light enemy's flesh = 64
+  (`LootRoller.TRASH_BASE_HP`, the §3 anchor), ×1.25 a level. A shield of "one melee" holds
+  1.5× that (melee is 1.5× vs shields). Shield gating 0.5. Shields regenerate after 3 s, full in
+  2 s.
+- `EnemyProfiles`: layers in melees, top first — `very_light` (½ flesh), `very_light_shielded`,
+  `light` (1 flesh), `light_shielded`, `light_armored`, `medium` (3 armor + 1 flesh),
+  `medium_shielded`, `heavy` (2 shield + 3 armor + 2 flesh), `plant` (1 vegetation).
+- `Elements`: plasma / corrosive / acid / fire / ice and the effectiveness table every
+  `HealthPool` uses by default; bonus-only.
+- `DamageSystem`: an element's part of a round lands on the TOP layer (it used to go straight
+  past the defences to its "tuned" layer), element first, then kinetic. `HealthPool.apply_impact`
+  gates a body shot that breaks a shield; a crit-spot hit is ungated.
+- Guns carry an element: `GunGenerator` rolls one for an elemental barrel from its own stream off
+  the seed (no other roll moved), names it ("Charged", "Corroding", "Caustic", "Burning",
+  "Frozen"), and `GunController` puts it on the round.
+- The arena's units are profiles now (`UnitCatalog` "profile" replaces "hp"): rifleman and
+  assault light, breacher light-armored, marksman very light, veteran medium, rocketeer
+  light-shielded, officer medium-shielded; `WaveDirector.level` sizes them.
+- `tools/defence_probe.gd` (19 checks).
+- **Not yet:** ice's slow/freeze and fire's burn are statuses — later. An enemy's shield and armor
+  are not yet SHOWN on the capsule; the player needs to read them (with melee, step 4). Helmets
+  wait for head crits.
