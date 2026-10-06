@@ -202,10 +202,12 @@ func _ready() -> void:
 	else:
 		_drowned = float(loaded.get("drowned", DROWNED))
 		_load_status = "loaded %s" % _world_path
-	# Shaded chamfer only. The geometry tier is what six rounds of artefacts
-	# were about (§17.21); the shaded bevel has never produced one and is
-	# measured at 7.6% of pixels changed.
-	TerrainTile.bevel_enabled = false
+	# The geometry chamfer near the camera (Terrain.md 22.13): tops only, an
+	# edge bevelled only where the brick beside it bevels back or the ground
+	# drops away, with a floor under every chamfered top and walls that reach
+	# a bevel below the bricks they stand on. tools/bevel_gap_probe.gd is the
+	# gate: no more see-through pixels with it than without.
+	TerrainTile.bevel_enabled = true
 
 	# The sea was chosen from the terrain by loading the world, before its
 	# pads were cut — TerrainWorld.sea_level, the one every scene agrees on.

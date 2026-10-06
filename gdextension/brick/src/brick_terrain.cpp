@@ -1274,7 +1274,21 @@ static Field g_field;
 /// size and is NOT affordable for the city's chunk mesh, where the same
 /// multiplier puts a 150 m tower at 4.8M. Measure before turning it on
 /// anywhere new.
-static float g_face_bevel = 0.0f;
+/// The chamfer the mesher uses, PER THREAD. Tiles bake on worker threads in
+/// parallel, and a global switched round one chamfered bake (as the near tier
+/// once did, on the main thread) would chamfer whatever else was baking.
+/// `build_tile` takes it from `g_face_bevel_set` (set_face_bevel) unless
+/// `build_tile_chamfered` says otherwise for its own call.
+static float g_face_bevel_set = 0.0f;
+static thread_local float g_face_bevel = 0.0f;
+static thread_local float t_bevel_override = -1.0f;
+
+/// How far a wall that stands on a neighbour's top reaches BELOW it while
+/// the geometry chamfer is on. A groove between two chamfered bricks is a V
+/// a bevel deep; where it runs into a slope's cheek, a curve's skirt or an
+/// overlay's lip, that wall used to stop at the bricks' top and the V's end
+/// was a hole into the unmeshed ground (tools/bevel_gap_probe.gd).
+static inline float bevel_reach() { return g_face_bevel > 0.0f ? g_face_bevel * 1.5f : 0.0f; }
 
 void BrickTerrain::configure(int64_t world_seed) {
     g_field.seed = (uint32_t)(world_seed & 0xffffffff);
@@ -1288,10 +1302,17 @@ int BrickTerrain::get_max_piece_length() { return MAX_LEN; }
 int BrickTerrain::get_period() { return PERIOD; }
 
 void BrickTerrain::set_face_bevel(double metres) {
-    g_face_bevel = (float)std::max(0.0, metres);
+    g_face_bevel_set = (float)std::max(0.0, metres);
 }
 
-double BrickTerrain::get_face_bevel() { return (double)g_face_bevel; }
+double BrickTerrain::get_face_bevel() { return (double)g_face_bevel_set; }
+
+Dictionary BrickTerrain::build_tile_chamfered(int tx, int tz, double metres) {
+    t_bevel_override = (float)std::max(0.0, metres);
+    Dictionary out = build_tile(tx, tz);
+    t_bevel_override = -1.0f;
+    return out;
+}
 int BrickTerrain::get_piece_stride() { return PIECE_STRIDE; }
 
 /// The real surface, in bricks: scan down from the nominal top until
@@ -2844,6 +2865,7 @@ static Dictionary build_coarse_smooth(int tx0, int tz0, int span, int step, uint
 }
 
 Dictionary BrickTerrain::build_coarse(int tx0, int tz0, int span, int step) {
+    g_face_bevel = 0.0f;   // the far tier is never chamfered
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     span = std::max(span, 1);
     step = std::max(step, 1);
@@ -3201,6 +3223,16 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p, const Co
         quad_facing(m, n.normalized(), col, top_face, a, b, d, e,
             Vector2(0, v0), Vector2(W * STUD_M, v0), Vector2(W * STUD_M, v1), Vector2(0, v1));
     }
+    // A FLOOR at the piece's base while the geometry chamfer is on. A slope
+    // is hollow under its face; a groove between chamfered bricks ending at
+    // one of its corners looked into that hollow and through the world
+    // (bevel_gap_probe). Two triangles a piece, chamfer tier only.
+    if (g_face_bevel > 0.0f) {
+        const float fy = yb - bevel_reach();
+        quad_facing(m, Vector3(0, 1, 0), col, top_face,
+            P(s0, 0, fy), P(s0, W, fy), P(s1, W, fy), P(s1, 0, fy),
+            Vector2(0, 0), Vector2(W * STUD_M, 0), Vector2(W * STUD_M, L), Vector2(0, L));
+    }
     // FRONT lip, where the piece reaches the slope's front.
     if (p.slope_s0 + cnt == len) {
         const Vector2 f(W * STUD_M, yf - yb);
@@ -3220,7 +3252,7 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p, const Co
             const float ny = outside(s0 - 0.02f, (float)q + 0.5f);
             const float yt = Y(s0);
             if (ny < yt - 1e-4f) {
-                const float lo = std::max(ny, yb);
+                const float lo = std::max(ny, yb) - bevel_reach();
                 quad_facing(m, -fall_n, col, f,
                     P(s0, (float)q, lo), P(s0, (float)q + 1, lo), P(s0, (float)q + 1, yt), P(s0, (float)q, yt),
                     Vector2((float)q * STUD_M, top - lo), Vector2((float)(q + 1) * STUD_M, top - lo),
@@ -3246,7 +3278,7 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p, const Co
         auto uv = [&](float sv, float y) { return Vector2((sv - s0) * STUD_M, top - y); };
         auto piece = [&](float a0, float a1, float y0, float y1, float n0, float n1) {
             if (n0 <= y0 + 1e-5f && n1 <= y1 + 1e-5f) {
-                const float b0 = std::max(n0, yb), b1 = std::max(n1, yb);
+                const float b0 = std::max(n0, yb) - bevel_reach(), b1 = std::max(n1, yb) - bevel_reach();
                 const float t0 = std::max(y0, b0), t1 = std::max(y1, b1);
                 quad_facing(m, out_n, col, side_face,
                     P(a0, q, b0), P(a1, q, b1), P(a1, q, t1), P(a0, q, t0),
@@ -3278,6 +3310,7 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p, const Co
 }
 
 Dictionary BrickTerrain::build_tile(int tx, int tz) {
+    g_face_bevel = t_bevel_override >= 0.0f ? t_bevel_override : g_face_bevel_set;
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 
     TileSample s;
@@ -3537,7 +3570,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     if (s.smooth[ni]) {
                         continue;
                     }
-                    const float ny = (float)(s.tp[ni] + 1) * PLATE_M;
+                    const float ny = (float)(s.tp[ni] + 1) * PLATE_M - bevel_reach();
                     const float lo = std::min(e.ya, e.yb);
                     if (ny >= lo - 1e-5f) {
                         continue;   // nothing showing
@@ -3588,37 +3621,45 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             if (n.y < 0.0f) {
                 n = -n;
             }
+            // SQUARE all round: no neighbour bevels back against a tilted
+            // top, so a chamfer here was a slit with nothing behind it.
             m.quad(n, col, face, a, b, c, d,
-                Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y), 0, 0xF);
         } else if (p.overlay != 0) {
             // The overlay's top, one plate up. The brick's own top is NOT
             // emitted: it is covered exactly, so it is culled.
             const float oy = top + OVERLAY_M;
+            // The top's bevel runs down onto the overlay's OWN lip walls
+            // (always drawn), so it needs nobody else; the lips are square.
             m.quad(Vector3(0, 1, 0), col, face,
                 Vector3(x0, oy, z0), Vector3(x1, oy, z0),
                 Vector3(x1, oy, z1), Vector3(x0, oy, z1),
                 Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+            const uint8_t LIP_SQ = 0xF;
             // The lip: four one-plate walls round the overlay, always drawn,
             // because a neighbour at the same brick height still sits a plate
             // lower unless it carries an overlay too.
+            // The lip reaches a bevel below the brick top it stands on, so a
+            // neighbour's groove ending against it has a wall (bevel_reach).
+            const float lb = top - bevel_reach();
             const Vector2 lip(face.x, OVERLAY_M);
             const Vector2 lip_z(face.y, OVERLAY_M);
             m.quad(Vector3(0, 0, -1), col, lip,
-                Vector3(x0, top, z0), Vector3(x1, top, z0),
+                Vector3(x0, lb, z0), Vector3(x1, lb, z0),
                 Vector3(x1, oy, z0), Vector3(x0, oy, z0),
-                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0));
+                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0), 0, LIP_SQ);
             m.quad(Vector3(0, 0, 1), col, lip,
-                Vector3(x1, top, z1), Vector3(x0, top, z1),
+                Vector3(x1, lb, z1), Vector3(x0, lb, z1),
                 Vector3(x0, oy, z1), Vector3(x1, oy, z1),
-                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0));
+                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0), 0, LIP_SQ);
             m.quad(Vector3(-1, 0, 0), col, lip_z,
-                Vector3(x0, top, z1), Vector3(x0, top, z0),
+                Vector3(x0, lb, z1), Vector3(x0, lb, z0),
                 Vector3(x0, oy, z0), Vector3(x0, oy, z1),
-                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0));
+                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
             m.quad(Vector3(1, 0, 0), col, lip_z,
-                Vector3(x1, top, z0), Vector3(x1, top, z1),
+                Vector3(x1, lb, z0), Vector3(x1, lb, z1),
                 Vector3(x1, oy, z1), Vector3(x1, oy, z0),
-                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0));
+                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
         } else {
             // A side is convex where the ground DROPS AWAY, because that is
             // where a wall face exists for the chamfer to meet. Level with a
@@ -3628,6 +3669,31 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             uint8_t square = 0;
             bool lo_zm = false, lo_zp = false, lo_xm = false, lo_xp = false;
             bool hi_zm = false, hi_zp = false, hi_xm = false, hi_xp = false;
+            // A LEVEL neighbour closes the groove only if it bevels back: a
+            // plain brick or tile in this tile with no overlay. Anything else
+            // -- an overlay's lip, a slope, a ramp, curved ground, a column
+            // in the next tile whose pieces this tile cannot see -- leaves our
+            // half-groove a slit down to nothing, which is the see-through-
+            // the-world gap. Such an edge is SQUARE: the user's rule, "only
+            // chamfer where the brick beside it chamfers too".
+            auto partner = [&](int nlx, int nlz) -> bool {
+                if (nlx < 0 || nlz < 0 || nlx >= TILE || nlz >= TILE) {
+                    return false;
+                }
+                const int i = TileSample::idx(nlx, nlz);
+                if (s.smooth[i] || s.ramp[i] != 255 || (!s.sl_r.empty() && s.sl_r[i] != 255)) {
+                    return false;
+                }
+                const int32_t o = owner[(size_t)nlx + TILE * nlz];
+                if (o < 0) {
+                    return false;
+                }
+                const Piece &q = pieces[(size_t)o];
+                return q.kind != PIECE_SLOPE && q.kind != PIECE_RAMP && q.overlay == 0;
+            };
+            bool lv_zm = false, lv_zp = false, lv_xm = false, lv_xp = false;
+            // Any column along the edge level with this one (partner or not).
+            bool eq_zm = false, eq_zp = false, eq_xm = false, eq_xp = false;
             for (int dx2 = 0; dx2 < p.sx; ++dx2) {
                 const int16_t a2 = s.tp[TileSample::idx(p.ox + dx2, p.oz - 1)];
                 const int16_t b2 = s.tp[TileSample::idx(p.ox + dx2, p.oz + p.sz)];
@@ -3635,6 +3701,10 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 if (b2 < p.top) lo_zp = true;
                 if (a2 > p.top) hi_zm = true;
                 if (b2 > p.top) hi_zp = true;
+                if (a2 == p.top && !partner(p.ox + dx2, p.oz - 1)) lv_zm = true;
+                if (b2 == p.top && !partner(p.ox + dx2, p.oz + p.sz)) lv_zp = true;
+                if (a2 == p.top) eq_zm = true;
+                if (b2 == p.top) eq_zp = true;
             }
             for (int dz2 = 0; dz2 < p.sz; ++dz2) {
                 const int16_t a2 = s.tp[TileSample::idx(p.ox - 1, p.oz + dz2)];
@@ -3643,7 +3713,15 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 if (b2 < p.top) lo_xp = true;
                 if (a2 > p.top) hi_xm = true;
                 if (b2 > p.top) hi_xp = true;
+                if (a2 == p.top && !partner(p.ox - 1, p.oz + dz2)) lv_xm = true;
+                if (b2 == p.top && !partner(p.ox + p.sx, p.oz + dz2)) lv_xp = true;
+                if (a2 == p.top) eq_xm = true;
+                if (b2 == p.top) eq_xp = true;
             }
+            if (lv_zm) square |= 1u;
+            if (lv_xp) square |= 2u;
+            if (lv_zp) square |= 4u;
+            if (lv_xm) square |= 8u;
             // A HIGHER neighbour is an inside corner: a wall standing on this
             // floor. Bevelling there cut a slot along the foot of every wall.
             if (hi_zm) square |= 1u;
@@ -3678,6 +3756,53 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     Vector3(x1, top, z1), Vector3(x0, top, z1),
                     Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y),
                     0, square);
+                // THE SKIRT. A square edge beside a LEVEL neighbour can still
+                // face that neighbour's half-groove: the rule above decides a
+                // whole piece edge, so a 2x4 edge that is square because one
+                // column beside it is higher can sit against a brick that
+                // bevels toward it -- and that half-groove opened onto
+                // nothing (bevel_gap_probe: 1,436 magenta pixels). A wall one
+                // bevel deep under every such edge closes it whatever the
+                // neighbour does: the backing of section 17.21, 13 mm tall.
+                if (g_face_bevel > 0.0f) {
+                    const float sd = g_face_bevel * 1.5f;
+                    const float ys = top - sd;
+                    const Vector2 skx(x1 - x0, sd), skz(z1 - z0, sd);
+                    // THE BACKING: the piece's footprint again, just under the
+                    // deepest groove. Pinholes still opened where grooves meet
+                    // other edges at corners (bevel_gap_probe: 263 pixels after
+                    // the skirt); with a floor under every chamfered top a hole
+                    // shows brick, never the void. Section 17.21's backing, for
+                    // the price of two triangles a piece.
+                    m.raw_quad(Vector3(0, 1, 0), col, face,
+                        Vector3(x0, ys, z0), Vector3(x1, ys, z0),
+                        Vector3(x1, ys, z1), Vector3(x0, ys, z1),
+                        Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                    if ((square & 1u) && eq_zm) {
+                        m.raw_quad(Vector3(0, 0, -1), col, skx,
+                            Vector3(x0, ys, z0), Vector3(x1, ys, z0),
+                            Vector3(x1, top, z0), Vector3(x0, top, z0),
+                            Vector2(0, sd), Vector2(skx.x, sd), Vector2(skx.x, 0), Vector2(0, 0));
+                    }
+                    if ((square & 2u) && eq_xp) {
+                        m.raw_quad(Vector3(1, 0, 0), col, skz,
+                            Vector3(x1, ys, z0), Vector3(x1, ys, z1),
+                            Vector3(x1, top, z1), Vector3(x1, top, z0),
+                            Vector2(0, sd), Vector2(skz.x, sd), Vector2(skz.x, 0), Vector2(0, 0));
+                    }
+                    if ((square & 4u) && eq_zp) {
+                        m.raw_quad(Vector3(0, 0, 1), col, skx,
+                            Vector3(x1, ys, z1), Vector3(x0, ys, z1),
+                            Vector3(x0, top, z1), Vector3(x1, top, z1),
+                            Vector2(0, sd), Vector2(skx.x, sd), Vector2(skx.x, 0), Vector2(0, 0));
+                    }
+                    if ((square & 8u) && eq_xm) {
+                        m.raw_quad(Vector3(-1, 0, 0), col, skz,
+                            Vector3(x0, ys, z1), Vector3(x0, ys, z0),
+                            Vector3(x0, top, z0), Vector3(x0, top, z1),
+                            Vector2(0, sd), Vector2(skz.x, sd), Vector2(skz.x, 0), Vector2(0, 0));
+                    }
+                }
                 // ...and its own sides, so a brick's side seam is the same
                 // brick as its top. Only where the ground drops away; level
                 // with a neighbour the face is interior. SQUARE: the top's
@@ -3952,6 +4077,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_face_bevel);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_face_bevel"),
         &BrickTerrain::get_face_bevel);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("build_tile_chamfered", "tx", "tz", "metres"),
+        &BrickTerrain::build_tile_chamfered);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("height_at", "x", "z"),
         &BrickTerrain::height_at);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("solid_at", "x", "yp", "z"),

@@ -25,6 +25,7 @@ const STUD_TAPER := 0.86
 const SIDES := 8
 
 static var _stud: ArrayMesh = null
+static var _stud_plain: ArrayMesh = null
 static var _round_plate: ArrayMesh = null
 static var _tuft: ArrayMesh = null
 static var _pebble: ArrayMesh = null
@@ -85,6 +86,37 @@ static func stud() -> ArrayMesh:
 			Vector3(cos(a2) * cap_r, STUD_H, sin(a2) * cap_r))
 	_stud = st.commit()
 	return _stud
+
+
+## The same stud with no rim bevel: 22 triangles to `stud`'s 38. Past a few
+## metres the 13 mm rim is under a pixel or two (Terrain.md 17.12's
+## `17.8 / distance`), so the terrain draws this one there and the bevelled
+## one only near the camera (TerrainTile.STUD_BEVEL_RANGE).
+static func stud_plain() -> ArrayMesh:
+	if _stud_plain != null:
+		return _stud_plain
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top_r := STUD_R * STUD_TAPER
+	for i in SIDES:
+		var a0 := TAU * float(i) / float(SIDES)
+		var a1 := TAU * float(i + 1) / float(SIDES)
+		var c0 := Vector2(cos(a0), sin(a0))
+		var c1 := Vector2(cos(a1), sin(a1))
+		var n := (Vector3(c0.x + c1.x, 0.0, c0.y + c1.y)).normalized()
+		_quad_n(st, n, Vector3(c0.x * STUD_R, 0.0, c0.y * STUD_R),
+			Vector3(c1.x * STUD_R, 0.0, c1.y * STUD_R),
+			Vector3(c1.x * top_r, STUD_H, c1.y * top_r),
+			Vector3(c0.x * top_r, STUD_H, c0.y * top_r))
+	for i in range(1, SIDES - 1):
+		var a1 := TAU * float(i) / float(SIDES)
+		var a2 := TAU * float(i + 1) / float(SIDES)
+		_tri_n(st, Vector3.UP,
+			Vector3(top_r, STUD_H, 0.0),
+			Vector3(cos(a1) * top_r, STUD_H, sin(a1) * top_r),
+			Vector3(cos(a2) * top_r, STUD_H, sin(a2) * top_r))
+	_stud_plain = st.commit()
+	return _stud_plain
 
 
 ## A 1x1 round plate: the water surface piece (spec §4). Octagonal skirt plus a
