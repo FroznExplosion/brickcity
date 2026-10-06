@@ -1,6 +1,10 @@
 # AI roster — putting enemy and friendly types together (plan)
 
-**Status: 2026-10-06. A plan. Nothing here is built except what a section names as existing.**
+**Status: 2026-10-06. A plan; step RO1 (§9) is built.** Types are described as recipes on the
+Tactics Casebook page's Roster tab, exported to `data/ai/roster.json`, read by `Roster`
+(`scripts/ai/roster/roster.gd`) and checked by `tools/roster_probe.gd`. Nothing in the game is
+fielded from a recipe yet. Everything else here is planned unless a section names it as existing.
+The numbers are first guesses, sized from the weapons and health code as it stands.
 
 How every thing that fights is described and assembled: soldiers, creatures, flyers, mechs,
 trucks, tanks, helicopters, planes -- enemy and friendly. Read first:
@@ -28,6 +32,10 @@ decides what an agent does).
 | R12 | **A commander runs each side.** The friendly one takes its lead from what the players do. |
 | R13 | **The player orders only their own mech**: go to an area, hold, follow. No orders to other allies. |
 | R14 | **The player can rodeo and drive every vehicle** -- but not an enemy mech: it starts to self-destruct the moment a pilot of another side tries to get in. |
+| R15 | **People's weapons and mech weapons are two scales** (§4.6). Most mech weapons kill a person or an animal in one hit. A pilot's gun does nothing to a mech -- except explosives, an element the mech's current layer is weak to (a little), and anti-mech weapons (good damage, always). |
+| R16 | **Self-destruct is quick: high damage, small area.** **Nuke eject** is a mod (Nuker) only some enemies have, and the player can have: a doomed mech throws its pilot clear and goes off big -- unless it is finished with a takedown while doomed, or its power cell is destroyed (then it just blows up). |
+| R17 | **A name over the head** of every enemy and every non-player ally says what it is, as in Borderlands 4: "Heavy Gunner Nuker" is a heavy mech with a machine gun that will nuke; "Light Melee Nuker" runs at you, punches, and goes off the moment it is doomed. |
+| R18 | Settled readings of §4.2: armour gone drops the doors to very low rather than taking them off; the power cell can be destroyed as soon as its door is off; a mech in auto mode is weaker than one with a pilot (no abilities, no smoke). |
 
 ---
 
@@ -77,29 +85,37 @@ Size picks the agent profile, so one pathfinder sends a person through a door an
 the building -- or through a hole it makes (breach links and the fall rule exist, AIPlan P7).
 It also sets weight on floors and how much attention the thing draws by being seen.
 
-| Size | Example | Fits | Weight on floors |
-|---|---|---|---|
-| small | a dog, a drone | anywhere a person does, and gaps | none to speak of |
-| person | a soldier | doors, stairs, rooms | any floor |
-| large | a brute, a light mech | wide doors, damaged walls | checked against the floor's headroom |
-| huge | a medium or heavy mech, a tank | damaged buildings, or breaks in | breaks weak floors (the fall rule) |
-
-Numbers to be set. A mech's size comes from its mech class.
+| Size | Example | Tall x wide | Fits | Weight on floors |
+|---|---|---|---|---|
+| small | a dog, a drone | 0.6 x 0.4 m | anywhere a person does, and gaps | none to speak of |
+| person | a soldier | 1.68 x 0.52 m (today's pawn) | doors, stairs, rooms | any floor |
+| large | a brute | 2.6 x 1.0 m | wide doors, damaged walls | checked against the floor's headroom |
+| huge | a mech, a tank | 6.7 x 3.5 m (today's mech) | damaged buildings, or breaks in | breaks weak floors (the fall rule) |
 
 ### 2.3 Class and grade (R2)
 
 Twelve steps of "how much it takes to kill", and the sort of enemy it is. Size is not in it: a
 person-sized enemy can be strong/tough, a huge one light/weak.
 
+Counted in **melees to break each layer**, the fight's own unit (COMBAT_DESIGN.md 4.1: one
+melee is a light enemy's whole flesh -- 64 health at level 1, +25% a level; a shield holds 1.5x).
+"def" is the one defence a light or medium type wears: armour, or a shield with the Shielded mod.
+
 | | weak | regular | tough |
 |---|---|---|---|
-| **light** | fodder | | |
-| **medium** | | the line | |
-| **heavy** | | | defenders, attackers |
-| **strong** | | | leaders, bosses |
+| **light** | flesh 0.5 -- **1** | flesh 1 -- **1** | def 1, flesh 1 -- **2** |
+| **medium** | def 2, flesh 1 -- **3** | def 3, flesh 1 -- **4** | def 4, flesh 1 -- **5** |
+| **heavy** | shield 1, armour 2, flesh 2 -- **5** | shield 2, armour 3, flesh 2 -- **7** | shield 3, armour 4, flesh 2 -- **9** |
+| **strong** | shield 3, armour 5, flesh 3 -- **11** | shield 4, armour 6, flesh 3 -- **13** | shield 6, armour 8, flesh 4 -- **18** |
 
-(The table shows the usual roles, not a rule.) Class sets the health layers a thing wears;
-grade scales them, its damage and its points.
+Bold is melees to kill. These contain today's profiles exactly: very light = light/weak,
+light = light/regular, light armoured or shielded = light/tough, medium = medium/regular,
+heavy = heavy/regular. Usual roles: light/weak is fodder; medium is the line; heavy and strong
+are defenders, attackers and leaders. Grade also scales damage and points.
+
+**Points** (what a commander pays) = (0.5 + half the melees to kill) x attack x role x mods --
+which gives today's prices: rifleman 1, breacher 1.5, veteran 2.5, marksman 4, rocketeer 5,
+officer 8.
 
 ### 2.4 Attack
 
@@ -187,11 +203,15 @@ A mech's brain is its own tree (it exists, AIPlan P7), deciding from the caseboo
 
 ### 4.1 Classes (R6)
 
-| Class | Shield | Armour | Hatch | Get in and out |
-|---|---|---|---|---|
-| light | most | least | back | from behind |
-| medium | middle | middle | front | from the front |
-| heavy | least | most | front | from the front |
+| Class | Shield | Armour | Health | Hatch armour | Cell-door armour | Hatch | Points |
+|---|---|---|---|---|---|---|---|
+| light | 1400 | 800 | 800 | 200 | 150 | back | 20 |
+| medium | 1000 | 1500 | 1250 | 350 | 250 | front | 25 |
+| heavy | 600 | 2400 | 1500 | 500 | 350 | front | 30 |
+
+Grade scales the pools: weak x0.75, regular x1, tough x1.3. Doomed health 250; the power cell
+300, hit for x3. (Today's mech is one pool of 2500 and costs 25.) Against a mech gun of about
+350 damage a second that is 9 to 13 seconds for one mech to kill another.
 
 ### 4.2 How a mech dies (R7)
 
@@ -265,6 +285,42 @@ the HUD; the player has the same counters.
 
 **Vehicles:** the player can rodeo and drive all of them (R14).
 
+### 4.6 People's weapons and mech weapons (R15)
+
+| Shooter -> target | What it does | First guess |
+|---|---|---|
+| mech weapon -> person, animal | kills in one hit, up to the medium class | a mech round counts as 6 melees; a machine-gun round as 2. Heavy and strong infantry take 2-4 hits, so they stay worth fielding against a mech |
+| pilot's gun -> mech | **nothing** | 0 |
+| pilot's gun with the **element the mech's current layer is weak to** | a little | 10% of the gun's damage. Plasma on a shield; nothing once it reaches the armour |
+| pilot's **explosive** (grenade, rocket, launcher) | some, on any layer | 50% of its damage: a grenade 75, a rocket 120 |
+| **anti-mech weapon** (a new class) | good, on any layer; may carry an element for extra effect | about 400 a shot: 8-11 shots for a whole mech |
+| mech melee -> mech | **through the shield**, into armour and health; on the hatch, into the hatch's own armour too | 500 a blow: a light mech dies in about 4, a heavy in about 8; a hatch comes off in 1-2 |
+| mech melee -> doomed mech | the **finisher** | kills |
+
+Open: whether corrosive on bare armour counts as "the element it is weak to" (read here as
+yes, the same 10%), or only plasma on a shield does.
+
+### 4.7 Self-destruct and nuke eject (R16)
+
+| | When | Fuse | Reach | Damage |
+|---|---|---|---|---|
+| Self-destruct | a pilot of another side tries to get in; or its power cell is destroyed | 2 s | 8 m | kills people; 1000 to a mech |
+| **Nuke eject** (the Nuker mod) | it becomes doomed: the pilot is thrown clear and the mech goes off | 4 s, loudly | 30 m | kills people; 2500 to a mech |
+
+A nuke is **stopped by a takedown** (the melee finisher) while the mech is doomed, and a mech
+whose **power cell** is destroyed never nukes -- it just blows up. So the name over its head
+tells the player which of those to go for. An AI with the mod plays to it: a "Light Melee
+Nuker" closes, punches, and wants to be doomed next to its target.
+
+### 4.8 The name over its head (R17)
+
+Worked out from the recipe, so it never lies: for a mech, class + attack + mods ("Heavy Gunner
+Nuker"); for anything else, grade (unless regular) + class (unless light) + attack + mods +
+body (unless a walker) + "Leader" for a leader ("Tough Breacher", "Weak Bomber Flyer"). A
+recipe may carry a name of its own ("Veteran", "Brute"), shown with the tag. It follows the
+phase: a brute whose armour has gone reads "Heavy Melee". Shown over enemies and non-player
+allies, in the side's colour.
+
 ## 5. The loop this is all for (R9)
 
 1. The player's mech goes in loud. It takes the enemy's attention, the enemy mech's most of all.
@@ -337,12 +393,12 @@ Each step ends in a gate, as AIPlan's phases do.
 
 | Step | What | Shows |
 |---|---|---|
-| RO1 | Recipes as data, derived values, the validity check; today's five infantry units written as recipes; the Roster tab on the casebook page | no change in behaviour |
-| RO2 | Size, class and grade: agent profiles and where each fits; health layers by class and grade | a large walker that cannot use a door a person can |
+| RO1 | **Built.** Recipes as data, derived values, the validity check; today's infantry units written as recipes; the Roster tab on the casebook page | no change in behaviour: `roster_probe` shows the recipes give today's units their own health, weapon and points |
+| RO2 | Units fielded from recipes (UnitCatalog reads the roster); the name over the head; size, class and grade: agent profiles and where each fits | a large walker that cannot use a door a person can; "Tough Breacher" over its head |
 | RO3 | Attack types and roles as casebook facts; a melee type, a bomber, a grenadier; a leader whose death breaks the squad; fodder on the cheap tier | "very light bomber fodder" fights |
 | RO4 | Phases | the brute loses its armour and charges |
 | RO5 | Mover, Senses and Arsenal lifted out of `Soldier`; flyers and creatures decide from the casebook | a flying bomber is the same recipe with a different body |
-| RO6 | The mech's layers (§4.2): shield, armour, health, the two doors, pilot and cell, doomed, auto mode; mech melee through shields; the finisher | a mech killed each of the ways §4.2 allows |
+| RO6 | The mech's layers (§4.2): shield, armour, health, the two doors, pilot and cell, doomed, auto mode; mech melee through shields; the finisher; the two damage scales (§4.6); self-destruct and nuke eject (§4.7) | a mech killed each of the ways §4.2 allows; a rifle that does nothing to it |
 | RO7 | The AI knows the layers (§4.3); aggro G1-G4, G6, G7, G9; the mech section of the casebook | the §5 loop up to step 3 |
 | RO8 | Mounting and dismounting for AI pilots; self-destruct on a wrong pilot; rodeo for the player with the charge and the counters; then the rodeo mod | the §5 loop whole |
 | RO9 | Hover craft; fast-plane runs | both in the arena |
@@ -354,14 +410,8 @@ damage rules, so it is agreed with those areas before it starts.
 
 ## 10. Open questions
 
-1. The numbers: each size's dimensions; health layers for the twelve class-and-grade steps;
-   shield, armour and health for the three mech classes.
-2. "Armour gone" and the doors: read here as "the doors drop to very low health", not "the doors
-   come off". Is that right, or does the hatch come off the moment the armour pool is gone?
-3. Auto mode after a pilot is killed inside: the same brain the player's empty mech runs
-   (follow / hold / go there), or weaker? For an enemy mech, does "auto" differ at all from its
-   AI pilot -- suggested: yes, no abilities and no smoke, so killing the pilot is worth it.
-4. Can the power cell be destroyed as soon as its door is off, whatever shield and health are
-   left? (Read here as yes.)
-5. How long the self-destruct takes, and how big it is.
-6. Whether a non-boss phase may change the body.
+1. The numbers in §2.2, §2.3, §4.1, §4.6 and §4.7 are first guesses: to be played and changed.
+2. Does corrosive on bare armour give a pilot's gun its "little" damage, as plasma on a shield
+   does (§4.6)?
+3. Whether a non-boss phase may change the body.
+4. Which mech weapons are the exceptions to "kills a person in one hit".

@@ -43,6 +43,12 @@ How the enemy chooses what to do, authored as odds rather than code.
   file to start again. The page's "In the game" tab draws it: paste the file there,
   or have Claude upload it (the page's storage, `tally/latest`).
 
+- **The roster of types:** the page's Roster tab builds each enemy or ally type as a
+  recipe (body, size, class and grade, attack, role, mods, phases; `Docs/AIRoster.md`).
+  The exporter writes `data/ai/roster.json` with everything worked out from each
+  recipe; `Roster` (`scripts/ai/roster/roster.gd`) reads it; `tools/roster_probe.gd`
+  checks the recipes give today's units their own health, weapon and points.
+
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.
 

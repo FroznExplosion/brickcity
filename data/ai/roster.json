@@ -1,0 +1,637 @@
+{
+ "version": 1,
+ "source": "Docs/Tactics/tactics_casebook.html",
+ "parts": {
+  "bodies": [
+   "walker",
+   "flyer",
+   "mech",
+   "wheeled",
+   "tracked",
+   "hover",
+   "boat"
+  ],
+  "sizes": {
+   "small": {
+    "l": "Small",
+    "tall": 0.6,
+    "wide": 0.4,
+    "fits": "anywhere a person does, and gaps",
+    "floors": "no weight to speak of",
+    "eg": "a dog, a drone"
+   },
+   "person": {
+    "l": "Person",
+    "tall": 1.68,
+    "wide": 0.52,
+    "fits": "doors, stairs, rooms",
+    "floors": "any floor",
+    "eg": "a soldier"
+   },
+   "large": {
+    "l": "Large",
+    "tall": 2.6,
+    "wide": 1,
+    "fits": "wide doors and damaged walls",
+    "floors": "checked against the floor's headroom",
+    "eg": "a brute"
+   },
+   "huge": {
+    "l": "Huge",
+    "tall": 6.7,
+    "wide": 3.5,
+    "fits": "damaged buildings, or breaks in",
+    "floors": "breaks weak floors",
+    "eg": "a mech, a tank"
+   }
+  },
+  "classes": [
+   "light",
+   "medium",
+   "heavy",
+   "strong"
+  ],
+  "grades": [
+   "weak",
+   "regular",
+   "tough"
+  ],
+  "attacks": [
+   "shooter",
+   "marksman",
+   "melee",
+   "bomber",
+   "grenadier",
+   "anti_armour",
+   "gunner"
+  ],
+  "roles": [
+   "line",
+   "attacker",
+   "defender",
+   "leader",
+   "fodder",
+   "flanker",
+   "scout"
+  ],
+  "mods": [
+   "shielded",
+   "armoured",
+   "explodes",
+   "jetpack",
+   "cloaked",
+   "rodeo",
+   "nuker",
+   "boss"
+  ],
+  "triggers": [
+   "armour_gone",
+   "shield_gone",
+   "health_half",
+   "leader_dead",
+   "alone",
+   "post_lost",
+   "hatch_off",
+   "doomed"
+  ]
+ },
+ "recipes": {
+  "rifleman": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "line",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "rifleman",
+   "derived": {
+    "tag": "Rifleman",
+    "name": "Rifleman",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rifle",
+    "facts": [],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 1,
+    "points": 1,
+    "phases": []
+   }
+  },
+  "assault": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "attacker",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "assault",
+   "derived": {
+    "tag": "Assault",
+    "name": "Assault",
+    "errors": [],
+    "warnings": [],
+    "weapon": "smg",
+    "facts": [
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 1,
+    "points": 1,
+    "phases": []
+   }
+  },
+  "breacher": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "tough",
+   "attack": "shooter",
+   "role": "attacker",
+   "mods": [
+    "armoured"
+   ],
+   "phases": [],
+   "built": true,
+   "unit": "breacher",
+   "derived": {
+    "tag": "Tough Breacher",
+    "name": "Breacher",
+    "errors": [],
+    "warnings": [],
+    "weapon": "shotgun",
+    "facts": [
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "armor",
+      1
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 2,
+    "points": 1.5,
+    "phases": []
+   }
+  },
+  "marksman": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "weak",
+   "attack": "marksman",
+   "role": "line",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "marksman",
+   "derived": {
+    "tag": "Weak Marksman",
+    "name": "Marksman",
+    "errors": [],
+    "warnings": [],
+    "weapon": "sniper",
+    "facts": [
+     "we_marksman"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      0.5
+     ]
+    ],
+    "melees": 1,
+    "points": 4,
+    "phases": []
+   }
+  },
+  "veteran": {
+   "body": "walker",
+   "size": "person",
+   "class": "medium",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "line",
+   "mods": [
+    "armoured"
+   ],
+   "phases": [],
+   "built": true,
+   "unit": "veteran",
+   "derived": {
+    "tag": "Medium Rifleman",
+    "name": "Veteran",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rifle",
+    "facts": [],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "armor",
+      3
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 4,
+    "points": 2.5,
+    "phases": []
+   }
+  },
+  "rocketeer": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "tough",
+   "attack": "anti_armour",
+   "role": "line",
+   "mods": [
+    "shielded"
+   ],
+   "phases": [],
+   "built": false,
+   "unit": "rocketeer",
+   "derived": {
+    "tag": "Tough Rocketeer",
+    "name": "Rocketeer",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rocket_launcher",
+    "facts": [
+     "we_anti_armour"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "shield",
+      1
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 2,
+    "points": 5,
+    "phases": []
+   }
+  },
+  "officer": {
+   "body": "walker",
+   "size": "person",
+   "class": "medium",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "leader",
+   "mods": [
+    "shielded"
+   ],
+   "phases": [],
+   "built": false,
+   "unit": "officer",
+   "derived": {
+    "tag": "Medium Trooper Leader",
+    "name": "Officer",
+    "errors": [],
+    "warnings": [],
+    "weapon": "pistol",
+    "facts": [
+     "we_leader"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "shield",
+      3
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 4,
+    "points": 8,
+    "phases": []
+   }
+  },
+  "gnat": {
+   "body": "flyer",
+   "size": "small",
+   "class": "light",
+   "grade": "weak",
+   "attack": "bomber",
+   "role": "fodder",
+   "mods": [],
+   "phases": [],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Weak Bomber Flyer",
+    "name": "Weak Bomber Flyer",
+    "errors": [],
+    "warnings": [],
+    "weapon": "itself",
+    "facts": [
+     "we_flyer",
+     "we_bomber",
+     "we_fodder"
+    ],
+    "tier": "swarm",
+    "size": {
+     "id": "small",
+     "l": "Small",
+     "tall": 0.6,
+     "wide": 0.4,
+     "fits": "anywhere a person does, and gaps",
+     "floors": "no weight to speak of",
+     "eg": "a dog, a drone"
+    },
+    "layers": [
+     [
+      "health",
+      0.5
+     ]
+    ],
+    "melees": 1,
+    "points": 0.45,
+    "phases": []
+   }
+  },
+  "brute": {
+   "body": "walker",
+   "size": "large",
+   "class": "heavy",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "attacker",
+   "mods": [],
+   "phases": [
+    {
+     "when": "armour_gone",
+     "become": {
+      "attack": "melee"
+     }
+    }
+   ],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Heavy Gunner",
+    "name": "Brute",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "facts": [
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "large",
+     "l": "Large",
+     "tall": 2.6,
+     "wide": 1,
+     "fits": "wide doors and damaged walls",
+     "floors": "checked against the floor's headroom",
+     "eg": "a brute"
+    },
+    "layers": [
+     [
+      "shield",
+      2
+     ],
+     [
+      "armor",
+      3
+     ],
+     [
+      "health",
+      2
+     ]
+    ],
+    "melees": 7,
+    "points": 4,
+    "phases": [
+     {
+      "when": "armour_gone",
+      "become": {
+       "attack": "melee"
+      },
+      "tag": "Heavy Melee",
+      "weapon": "melee",
+      "facts": [
+       "we_melee",
+       "we_attacker"
+      ],
+      "tier": "smart",
+      "layers": [
+       [
+        "shield",
+        2
+       ],
+       [
+        "armor",
+        3
+       ],
+       [
+        "health",
+        2
+       ]
+      ],
+      "errors": []
+     }
+    ]
+   }
+  },
+  "heavy_gunner_nuker": {
+   "body": "mech",
+   "size": "huge",
+   "class": "heavy",
+   "grade": "regular",
+   "attack": "gunner",
+   "role": "attacker",
+   "mods": [
+    "nuker"
+   ],
+   "phases": [],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Heavy Gunner Nuker",
+    "name": "Heavy Gunner Nuker",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "facts": [
+     "we_mech",
+     "we_gunner",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "huge",
+     "l": "Huge",
+     "tall": 6.7,
+     "wide": 3.5,
+     "fits": "damaged buildings, or breaks in",
+     "floors": "breaks weak floors",
+     "eg": "a mech, a tank"
+    },
+    "mech": {
+     "shield": 600,
+     "armor": 2400,
+     "health": 1500,
+     "hatch": 500,
+     "cell_door": 350,
+     "hatch_side": "front",
+     "doomed": 250,
+     "power_cell": 300,
+     "cell_crit": 3
+    },
+    "layers": [],
+    "melees": 0,
+    "points": 39,
+    "phases": []
+   }
+  },
+  "light_melee_nuker": {
+   "body": "mech",
+   "size": "huge",
+   "class": "light",
+   "grade": "regular",
+   "attack": "melee",
+   "role": "attacker",
+   "mods": [
+    "nuker"
+   ],
+   "phases": [],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Light Melee Nuker",
+    "name": "Light Melee Nuker",
+    "errors": [],
+    "warnings": [],
+    "weapon": "melee",
+    "facts": [
+     "we_mech",
+     "we_melee",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "huge",
+     "l": "Huge",
+     "tall": 6.7,
+     "wide": 3.5,
+     "fits": "damaged buildings, or breaks in",
+     "floors": "breaks weak floors",
+     "eg": "a mech, a tank"
+    },
+    "mech": {
+     "shield": 1400,
+     "armor": 800,
+     "health": 800,
+     "hatch": 200,
+     "cell_door": 150,
+     "hatch_side": "back",
+     "doomed": 250,
+     "power_cell": 300,
+     "cell_crit": 3
+    },
+    "layers": [],
+    "melees": 0,
+    "points": 26,
+    "phases": []
+   }
+  }
+ }
+}
