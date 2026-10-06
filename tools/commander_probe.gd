@@ -176,8 +176,10 @@ func _build() -> void:
 func _spawn(kinds: Array[StringName]) -> bool:
 	var members: Array[Soldier] = []
 	for i in kinds.size():
-		var so := a.soldier(a.s.ai_nav.snap(_spawn_at + Vector3(-1.5 + i, 0.0, 0.0)), 1, 60 + i,
-				float(UnitCatalog.get_unit(kinds[i]).hp))
+		var so := a.soldier(a.s.ai_nav.snap(_spawn_at + Vector3(-1.5 + i, 0.0, 0.0)), 1, 60 + i)
+		# Dressed as the unit it is, the way the arena dresses them (EnemyProfiles).
+		so.max_health = EnemyProfiles.apply(so.pawn.health,
+				UnitCatalog.get_unit(kinds[i]).get("profile", &"light"), 1)
 		so.set_meta(&"unit", kinds[i])
 		so.pawn.intents.look_yaw = 0.0
 		members.append(so)

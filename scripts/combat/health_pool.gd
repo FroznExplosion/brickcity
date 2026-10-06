@@ -73,9 +73,11 @@ func _index_of_living_type(layer_type: StringName) -> int:
 
 
 func _multiplier_for(element_id: StringName, layer_index: int) -> float:
-	if matrix == null:
+	if element_id == &"":
 		return 1.0
-	return matrix.get_multiplier(element_id, layer_configs[layer_index].layer_type)
+	# The game's own table (Elements) unless this pool was given one.
+	var m := matrix if matrix != null else Elements.matrix()
+	return m.get_multiplier(element_id, layer_configs[layer_index].layer_type)
 
 
 ## Apply post-multiplier external scaling (slag, frozen, crit) here once.
@@ -83,7 +85,12 @@ func _multiplier_for(element_id: StringName, layer_index: int) -> float:
 ## NOTE on carry-over: "remaining" is tracked in raw (pre-element-multiplier)
 ## terms so each new layer applies its own multiplier fairly. The amount a layer
 ## absorbs is converted back to raw before subtracting from remaining.
-func apply_impact(amount: float, element_id: StringName, extra_multiplier: float = 1.0) -> void:
+##
+## `ungated`: a crit-spot hit. A body shot that breaks a SHIELD carries only
+## CombatScale.SHIELD_GATE of what is left into the layer under it (shield gating,
+## Docs/Weapons/COMBAT_DESIGN.md 4.4); a crit-spot hit carries all of it.
+func apply_impact(amount: float, element_id: StringName, extra_multiplier: float = 1.0,
+		ungated := false) -> void:
 	if _is_dead:
 		return
 	var raw_remaining: float = amount * extra_multiplier
@@ -98,6 +105,9 @@ func apply_impact(amount: float, element_id: StringName, extra_multiplier: float
 		var landed: float = _damage_index(idx, scaled_absorbed, element_id)
 		if not impact_carries_over:
 			break
+		var gate := 1.0
+		if not ungated and _current[idx] <= 0.0 and layer_configs[idx].layer_type == &"shield":
+			gate = CombatScale.SHIELD_GATE
 		# A layer that absorbed NOTHING cannot absorb any more of this, and it is still the
 		# topmost living one — so without this the loop re-picks it forever. That is exactly what
 		# a `damage_filter` holding a floor does: the layer never depletes, and a large enough
@@ -107,7 +117,7 @@ func apply_impact(amount: float, element_id: StringName, extra_multiplier: float
 		# Convert what this layer soaked up back into raw terms and continue.
 		if mult <= 0.0:
 			break
-		raw_remaining -= landed / mult
+		raw_remaining = (raw_remaining - landed / mult) * gate
 	_check_death()
 
 

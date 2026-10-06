@@ -45,6 +45,9 @@ const SPOT_CHOICES := 3
 ## The HQ goes in a standing building at most this far from the focus.
 const HQ_WITHIN := 70.0
 const RADIO_HP := 120.0
+## The fight's level (Tier, 1..10): what its soldiers' defences are sized at
+## (EnemyProfiles). The player's guns are rolled at the same level.
+var level := 1
 ## The HQ is at least this far from the focus: out of its collapse.
 const HQ_CLEAR := 25.0
 ## The share of a wave put inside the focus building, when it has floors.
@@ -64,12 +67,6 @@ const AIM_REACTION := 0.7
 const AIM_CONE_START := 10.0
 const AIM_CONE_MIN := 2.6
 const AIM_SETTLE := 2.6
-## Health on the weapon specs' scale (GUN_QUALITY_NAMING_SPEC 7.2: gun damage
-## and enemy HP were divided by the same 10): a trash soldier takes about five
-## level-1 rifle rounds, a standard one about twelve. Pawn's default 100 is the
-## old scale's number, and made every soldier a sponge.
-const HP_TRASH := 45.0
-const HP_STANDARD := 113.0
 ## Ticks after a spawn its drop is measured at.
 const SETTLE_TICKS := 15
 ## Half a street out from a face.
@@ -368,10 +365,7 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	so.aim.cone_min = AIM_CONE_MIN
 	so.aim.settle = AIM_SETTLE
 	so.set_meta(&"unit", kind)
-	var hp := float(unit.hp)
-	so.pawn.health.layer_configs[0].max_value = hp
-	so.pawn.health.reset()
-	so.max_health = hp
+	so.max_health = EnemyProfiles.apply(so.pawn.health, unit.get("profile", &"light"), level)
 	# In its hands where it can be seen: its muzzle flash and its tracers are
 	# how the player tells who is shooting and from where.
 	gun.visible = true
@@ -734,7 +728,7 @@ func run_gate() -> void:
 	if target != null:
 		var shot_hit := false
 		_mouse(true)
-		# A veteran takes about thirteen rifle rounds (113 hp): time for them.
+		# A veteran (3 melees of armor over 1 of flesh) takes ~29 rifle rounds: time for them.
 		while feedback.kills_shown == kills0 and _now() - t_fire < 20.0:
 			var t := _soldier_in_sight()
 			if t != null:
@@ -1115,9 +1109,8 @@ func _set_up_hq() -> void:
 			city._combat_rng.randi(), WeaponClass.builtin(&"pistol"), 1))
 	hq_officer = Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ENEMY_TEAM, gun)
 	hq_officer.set_meta(&"unit", &"officer")
-	hq_officer.pawn.health.layer_configs[0].max_value = 113.0
-	hq_officer.pawn.health.reset()
-	hq_officer.max_health = 113.0
+	hq_officer.max_health = EnemyProfiles.apply(hq_officer.pawn.health,
+			UnitCatalog.get_unit(&"officer").get("profile", &"medium"), level)
 	gun.visible = true
 	gun.position = Vector3(0.2, -0.28, -0.3)
 	# Gold, so he can be picked out from his men.

@@ -9,6 +9,8 @@ extends Node3D
 var gun_seed: int = 0
 var rarity: int = 1
 var gun_name: String = ""
+## The element its rounds carry (Elements), or &"" for a kinetic gun.
+var element_id: StringName = &""
 var stats: Dictionary[StringName, float] = {}
 var recipe: Dictionary = {}
 var weapon_class: WeaponClass
@@ -38,6 +40,7 @@ static func from_result(result: GunGenerator.Result,
 	gun.gun_seed = result.seed
 	gun.rarity = result.rarity
 	gun.gun_name = result.gun_name
+	gun.element_id = result.element_id
 	gun.stats = result.stats
 	gun.recipe = result.recipe
 	gun.weapon_class = result.weapon_class
