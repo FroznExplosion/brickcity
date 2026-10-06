@@ -728,6 +728,14 @@ func body_census_lines() -> PackedStringArray:
 	return out
 ## Pieces moving as of the last tick, plus bodies made since: what the cap reads.
 var _moving_now := 0
+## Building id -> its pieces (not rubble) still moving, as of the last tick.
+var _moving_of := {}
+
+
+## How many pieces of this building are still moving: it is coming apart, or
+## its wreckage has not come to rest (CityScene._mid_collapse).
+func moving_of(owner_id: int) -> int:
+	return int(_moving_of.get(owner_id, 0))
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
@@ -938,12 +946,16 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 		_local_seq += 1
 		return DamageLog.piece_id(-_local_seq)
 	var gone := _over_the_cap(chunk, ids)
-	var crumbs := not gone and source != null and _crumbles_off_a_piece(chunk, ids)
-	if gone or crumbs:
+	var far_small := not gone and _far_and_small(chunk, ids)
+	var crumbs := not gone and not far_small and source != null \
+			and _crumbles_off_a_piece(chunk, ids)
+	if gone or crumbs or far_small:
 		e.flags |= DamageLog.FLAG_GONE
 	var pid := DamageLog.piece_id(_record(e))
 	if gone:
 		_gone_pieces[pid] = true
+	if far_small:
+		_gone_pieces[pid] = &"far"
 	if crumbs:
 		_crumbled_pieces[pid] = true
 	return pid
@@ -965,6 +977,25 @@ func _crumbles_off_a_piece(chunk: int, ids: PackedInt32Array) -> bool:
 			furniture = false
 			break
 	return not furniture and not _in_wind(_group_box(chunk, ids))
+
+
+## Far from every player, a piece of fewer than FAR_DELETE_BLOCKS bricks is
+## not made: cut out and gone, on every machine (user, 2026-10-06 -- a far
+## collapse is still physics, and is made cheap by rule). Eight and under went
+## already where a machine's own camera was far (SMALL_KEEP_RANGE); this is the
+## host's word, so a piece of nine that is landmark-sized goes for everybody
+## too. FRACTURE_RANGE is "far", as it is for a landing.
+const FAR_DELETE_BLOCKS := 10
+var far_small_deleted := [0, 0]   ## pieces, bricks
+
+
+func _far_and_small(chunk: int, ids: PackedInt32Array) -> bool:
+	if not decides or ids.size() >= FAR_DELETE_BLOCKS:
+		return false
+	var points := interest_points()
+	if points.is_empty():
+		return false
+	return _nearest_interest(_sample_centre(chunk, ids), points) > FRACTURE_RANGE
 
 
 ## MAX_MOVING: is this group a landmark coming loose far from everybody while
@@ -1129,12 +1160,17 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# The host said it goes (MAX_MOVING): cut out and let go, as every other
 	# machine does with the same DETACH.
 	if _gone_pieces.has(piece_id):
+		var why = _gone_pieces[piece_id]
 		_gone_pieces.erase(piece_id)
 		var cut: Dictionary = world.split_island(source, block_ids)
 		if not cut.is_empty():
 			world.release_chunk(int(cut.chunk))
-		spawn_census.capped[0] += 1
-		spawn_census.capped[1] += block_ids.size()
+		if why is StringName and why == &"far":
+			far_small_deleted[0] += 1
+			far_small_deleted[1] += block_ids.size()
+		else:
+			spawn_census.capped[0] += 1
+			spawn_census.capped[1] += block_ids.size()
 		return null
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
@@ -3320,6 +3356,7 @@ func tick() -> void:
 	var now := Time.get_ticks_msec()
 	var settles := 0
 	var moving := 0
+	var moving_of_now := {}
 	var moving_landmarks := 0
 	var moving_blocks := 0
 	var i := islands.size() - 1
@@ -3371,6 +3408,8 @@ func tick() -> void:
 		if isl.settled:
 			continue
 		moving += 1
+		if not isl.disposable:
+			moving_of_now[isl.owner] = int(moving_of_now.get(isl.owner, 0)) + 1
 		if isl.landmark:
 			moving_landmarks += 1
 		moving_blocks += isl.shape_count
@@ -3480,6 +3519,7 @@ func tick() -> void:
 				settled_by_age += 1
 			settle_now(isl)
 
+	_moving_of = moving_of_now
 	census.ticks += 1
 	census.moving += moving
 	census.landmarks += moving_landmarks

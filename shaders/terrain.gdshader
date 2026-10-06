@@ -58,6 +58,15 @@ group_uniforms chamfer;
 // baked vertex buffer on a distance test. Real bevels go on shared instanced
 // meshes instead -- PieceMeshes.chamfered_box and the stud's rim.
 uniform bool chamfer_enabled = true;
+// On a tile drawn with REAL chamfer geometry (TerrainTile.add_bevel sets
+// geo_bevel = 1 on that mesh) the drawn seam and the shaded chamfer fade IN
+// with distance: none inside outline_blend_begin, where the geometry is the
+// edge; both together out to outline_blend_end; the outline alone past it,
+// where a 13 mm bevel is under a pixel or two anyway. Elsewhere geo_bevel
+// is 0 and nothing changes.
+instance uniform float geo_bevel = 0.0;
+uniform float outline_blend_begin = 3.0;
+uniform float outline_blend_end = 9.0;
 uniform float chamfer_width : hint_range(0.0, 0.05) = 0.013;
 uniform float chamfer_fade_begin = 18.0;
 uniform float chamfer_fade_end = 55.0;
@@ -268,6 +277,8 @@ void fragment() {
         binormal = normalize((dp_y * duv_x.x - dp_x * duv_y.x) / det);
     }
 
+    float outline_w = geo_bevel > 0.5
+            ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
     if (seams_enabled && !no_piece) {
         // UV is wrapped by UV2 first. For a real piece UV never leaves
         // [0, UV2), so this changes nothing -- but it lets a coarse LOD hand
@@ -289,7 +300,7 @@ void fragment() {
         // as z-fighting on the ground. Turning the seams off and leaving the
         // print on is what proved it.
         float seam = clamp((seam_width - d) / aa + 0.5, 0.0, 1.0);
-        float fade = 1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist);
+        float fade = (1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist)) * outline_w;
         albedo *= mix(1.0, seam_darken, seam * fade);
     }
 
@@ -307,7 +318,7 @@ void fragment() {
         vec3 bevel = NORMAL
                 + tangent * side.x * (1.0 - inside.x)
                 + binormal * side.y * (1.0 - inside.y);
-        float fade = 1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist);
+        float fade = (1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist)) * outline_w;
         NORMAL = normalize(mix(NORMAL, normalize(bevel), fade));
         float on_bevel = max(1.0 - inside.x, 1.0 - inside.y) * fade;
         surface_gloss = mix(1.0, chamfer_gloss, on_bevel);

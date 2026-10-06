@@ -324,11 +324,19 @@ Each fix so far (2026-10-03/04) patched one of these. The user's direction: one 
 * **Items** — cups, books, guns, ammo, powerups: `Role.DETAIL` and the loot (`ImpostorItems`).
   **Only up close.**
 
-### 8.2 One drawing per building, by distance only
+### 8.2 One drawing per storey group, by distance only
 
-A building that is bricks has **one interior drawing** (all its pieces, every room) and **one item
-drawing** (all its items). No per-room, per-storey, outer-room or portal rules decide what is drawn;
-only the building's distance does:
+> **Decided 2026-10-06 (user):** not one drawing for a whole building. The big towers are too big
+> for that -- 120-160 storeys, thousands of rooms: one buffer rebuilt for one shot, and the top of a
+> tower drawn because the player stands at its foot. The unit is a **group of storeys**: a few
+> floors together (`INTERIOR_GROUP_STOREYS`, sized so a group stays a few hundred pieces; a small
+> building is one group). Each group has its own interior drawing and item drawing, fades by ITS
+> distance, and is rebuilt alone when something in it changes. Everything below reads "building"
+> as "storey group".
+
+A storey group of a building that is bricks has **one interior drawing** (all its pieces, every
+room in it) and **one item drawing** (all its items). No per-room, outer-room or portal rules decide
+what is drawn; only the group's distance does:
 
 * interior pieces shown inside `INTERIOR_RANGE` (~100 m — the shell's painted windows take over past
   it, as today);

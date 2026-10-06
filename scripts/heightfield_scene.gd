@@ -202,10 +202,12 @@ func _ready() -> void:
 	else:
 		_drowned = float(loaded.get("drowned", DROWNED))
 		_load_status = "loaded %s" % _world_path
-	# Shaded chamfer only. The geometry tier is what six rounds of artefacts
-	# were about (§17.21); the shaded bevel has never produced one and is
-	# measured at 7.6% of pixels changed.
-	TerrainTile.bevel_enabled = false
+	# The geometry chamfer near the camera (Terrain.md 22.13): tops only, an
+	# edge bevelled only where the brick beside it bevels back or the ground
+	# drops away, with a floor under every chamfered top and walls that reach
+	# a bevel below the bricks they stand on. tools/bevel_gap_probe.gd is the
+	# gate: no more see-through pixels with it than without.
+	TerrainTile.bevel_enabled = true
 
 	# The sea was chosen from the terrain by loading the world, before its
 	# pads were cut — TerrainWorld.sea_level, the one every scene agrees on.
@@ -1102,8 +1104,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F4:
 			_show_instances = not _show_instances
 			for tile in _tiles:
+				# The studs' near/far choice is the tile's (set_near); the rest
+				# of the instances are simply on or off.
+				tile.set_studs_shown(_show_instances)
 				for child in tile.get_children():
-					if child is MultiMeshInstance3D:
+					if child is MultiMeshInstance3D and not String(child.name).begins_with("Studs"):
 						(child as MultiMeshInstance3D).visible = _show_instances
 		KEY_F6:
 			BrickTerrain.set_plate_steps(not BrickTerrain.get_plate_steps())

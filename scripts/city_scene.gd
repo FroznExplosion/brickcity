@@ -1873,6 +1873,41 @@ var _fake_ms := 0.0
 var _fake_builds := 0
 
 
+## Is this building coming apart right now -- or its wreckage still coming to
+## rest?
+##
+## No interior and no items are made for a building in that state (user,
+## 2026-10-06): walking up to a collapse, or a tower made bricks while it is
+## falling, used to have rooms drawn, faked and opened in storeys on their way
+## down -- furniture popping in mid-air. They are made once it has been still
+## for COLLAPSE_QUIET_MS: nothing loose or failing in its solve, and none of its
+## pieces (rubble aside) moving. What is drawn already stays, and goes with what
+## falls as it did (FurnitureMesh.hide_inside, _recheck_drawn).
+const COLLAPSE_QUIET_MS := 2000
+var _broke_ms := {}   ## building id -> msec its solve last had something loose, failing or unbalanced
+var interior_waits := 0   ## room, fake and spill passes put off by _mid_collapse
+## Off: interiors are made in a building whatever it is doing, as they were.
+## For far_rules_probe, which has to fail without the rule.
+var hold_interiors_mid_collapse := true
+
+
+func _mid_collapse(id: int) -> bool:
+	if not hold_interiors_mid_collapse:
+		return false
+	var b := registry.get_building(id)
+	if b != null and _toppling.has(id) and not b.toppled:
+		return true
+	if director.holding(id):
+		return true
+	if Time.get_ticks_msec() - int(_broke_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS:
+		return true
+	if islands.moving_of(id) > 0:
+		# Still falling: the quiet starts when the last of it has stopped.
+		_broke_ms[id] = Time.get_ticks_msec()
+		return true
+	return false
+
+
 ## Fake, or stop faking, the buildings around the player.
 ##
 ## Every outer room of a standing building that is bricks and within
@@ -1899,6 +1934,9 @@ func _stream_fake(here: Vector3) -> void:
 			continue
 		if built >= FAKE_BUILDS_PER_PASS:
 			continue
+		if _mid_collapse(id):
+			interior_waits += 1
+			continue   # nothing new drawn in it until it is still
 		_sync_fake(id)
 		built += 1
 	for id in _fake_rooms.keys():
@@ -2160,6 +2198,9 @@ func _stream_rooms() -> void:
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
 			continue
 		here_buildings.append(b)
+		if _mid_collapse(id):
+			interior_waits += 1
+			continue   # no room drawn or opened in a building coming apart
 		# Measured in the BUILDING's space, with the camera brought into it
 		# once. A world AABB per candidate is eight matrix multiplies and an
 		# allocation, and a pass standing inside one of the big shapes has a
@@ -2241,6 +2282,12 @@ func _stream_rooms() -> void:
 			break
 		var fell := registry.get_building(id)
 		if fell == null:
+			continue
+		# Not into wreckage still moving, or a building still coming down: its
+		# rooms are owed to whoever walks up to the pile once it is one.
+		var wreck_now := islands.find_by_chunk(wreck)
+		if hold_interiors_mid_collapse 				and ((wreck_now != null and not wreck_now.settled) or _mid_collapse(id)):
+			interior_waits += 1
 			continue
 		for room in registry.spilled_rooms(id):
 			# The room's box travels with the wreck: the chunk's transform is
@@ -6807,6 +6854,11 @@ func _physics_process(_delta: float) -> void:
 						director.collapsing.has(b.id)]
 		t = _mark("solve", t)
 		var res: Dictionary = solve.stress
+		# Structural: joints failing, or the building off balance. A brick
+		# knocked loose by a shot is not a collapse (see the plan, below).
+		if int(res.get("failures", 0)) > 0 \
+				or not bool((solve.stability as Dictionary).get("stable", true)):
+			_broke_ms[b.id] = Time.get_ticks_msec()
 		if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
 			quiet = false
 			# A solve that failed something changed the structure, and when it
@@ -6870,6 +6922,10 @@ func _physics_process(_delta: float) -> void:
 		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
 				islands.interest_points(), 0 if b.is_build() else TowerRecipe.STOREY_PLATES,
 				int(res.get("failures", 0)) > 0)
+		for entry in plan:
+			if entry[1] != &"breakage" and entry[1] != &"furniture":
+				_broke_ms[b.id] = Time.get_ticks_msec()   # a section, not a chip (_mid_collapse)
+				break
 		# Stairs a section took with it (_with_stairs) can be a group of their own
 		# further down this same plan: what of it they were is gone already.
 		# Recorded as named, that DETACH cut nothing on any other machine (the

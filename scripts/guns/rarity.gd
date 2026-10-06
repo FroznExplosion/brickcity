@@ -20,20 +20,17 @@ const IDS: Array[StringName] = [
 const NAMES: Array[String] = [
 	"Common", "Uncommon", "Rare", "Unique", "Legendary", "Mythic",
 ]
-## DERIVED from two authored calibration points, not chosen (QUALITY_NAMING §1):
-##     T1 Legendary == T3 Uncommon      ->  3.3 ~= 1.3 * 1.6^2 = 3.328
-##     T1 Legendary >= T2 Unique        ->  3.3 >= 2.0 * 1.6   = 3.2
-## Everything else fills in between. Lifespans in tiers (ln(mult)/ln(1.6)):
-##     uncommon 0.56 | rare 1.00 | unique 1.48 | legendary 2.54 | mythic 3.42
+## The combat design's table (Docs/Weapons/COMBAT_DESIGN.md section 2). Rarity
+## multiplies damage -- Borderlands scaling, not Halo's fixed shots-to-kill -- but gently:
+## the anchor is that on level a common pistol kills a light enemy in ~6 body shots and a
+## legendary in 4, reaching 2-3 only with a headshot or a damage modifier. So the colour
+## is strong, and the last step is skill or build.
 ##
-## RARE IS WORTH EXACTLY ONE TIER. That is the anchor to hold when retuning: it means a
-## fresh Rare exactly matches a fresh Common one tier up, and every other rarity reads
-## as a fraction or multiple of that.
-##
-## Unique sits at 1.48 tiers and Legendary at 2.54, so Legendary is a full tier clear of
-## Unique rather than tying it — the old 2.00/2.00 pair made orange 4x rarer than purple
-## for zero visible gain on the score.
-const MULTS: Array[float] = [1.0, 1.3, 1.6, 2.0, 3.3, 5.0]
+## Lifespans in tiers at Tier.TIER_STEP 1.25 (ln(mult)/ln(1.25)):
+##     uncommon 0.63 | rare 1.18 | unique 1.67 | legendary 2.51 | mythic 2.51
+## RARE IS WORTH ABOUT ONE TIER, and a Unique one tier back is a good Uncommon.
+## Legendary and Mythic share a multiplier: a Mythic's own effect is what makes it better.
+const MULTS: Array[float] = [1.0, 1.15, 1.3, 1.45, 1.75, 1.75]
 
 
 ## Damage multiplier for a 1-based rarity index (1 = common .. 6 = mythic).

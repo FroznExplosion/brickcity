@@ -34,7 +34,7 @@ Six rarities. Rarity multiplies base damage (Borderlands), and buys modifier slo
 | Common | white | 1.00× | 1 | — |
 | Uncommon | green | 1.15× | 2 | 0.6 |
 | Rare | blue | 1.30× | 3 | 1.2 |
-| Epic | purple | 1.45× | 4 | 1.7 |
+| Unique | purple | 1.45× | 4 | 1.7 |
 | Legendary | orange | 1.75× | 4 + red text | 2.5 |
 | Mythic | pink | 1.75× | 4 + red text + a mythic effect | 2.5 |
 
@@ -54,6 +54,11 @@ Borderlands scaling, but with Halo's habit of designing around shots-to-kill. Th
 > **On level, a common pistol kills a light enemy in 6 body shots (5–7 is the band). A legendary
 > pistol of the same level kills it in 2–3.**
 
+"A common pistol" is the **median roll**: a gun's per-shot damage trades against its fire rate
+(`GunStats`, a common pistol rolls ~8–16 a shot), so the anchor holds for the middle of the range
+and the band absorbs the ends. The light enemy is the `trash` archetype; its level-1 health
+(`LootRoller.TRASH_BASE_HP`) is set from this anchor.
+
 A 1.75× legendary alone takes 4 body shots, so the last step comes from **skill or build, not the
 colour alone**:
 
@@ -62,7 +67,7 @@ colour alone**:
 | Common 1.00× | 6 | 3 |
 | Uncommon 1.15× | 6 | 3 |
 | Rare 1.30× | 5 | 3 |
-| Epic 1.45× | 5 | 3 |
+| Unique 1.45× | 5 | 3 |
 | Legendary 1.75× | 4 | **2** |
 | Legendary + one damage modifier (+20%) | **3** | **2** |
 | Legendary from last level (1.40×) | 5 | 3 |
@@ -190,23 +195,33 @@ round's own element (or kinetic). Rarer rolls change *when* it explodes:
 
 Explosive rounds also **wear bricks harder** (§8) — they chip walls faster but do not blow holes.
 
-## 7. Carrying four guns, and ordnance
+## 7. Carrying four guns, ordnance and grenades
 
 **Four gun slots** (Borderlands), with swap. Swap speed becomes a real stat, and the HUD shows the
 four. Ammo per type (light / rifle / sniper / shell) is shared across them.
 
-**Ordnance** is a separate slot (Borderlands 4): rocket launchers, grenades, and **special
-weapons** — cooldown- or charge-gated rather than magazine-gated (the ordnance classes already
-built work this way). Special weapons are where unusual effects live, **shock** first: the round
-arcs across several nearby enemies and slows them.
+**Ordnance** is its own slot (Borderlands 4): rocket launchers and **special weapons** —
+cooldown- or charge-gated rather than magazine-gated (the ordnance classes already built work this
+way). **Hold the swap button** to bring the ordnance up; tap swap cycles the four guns. Special
+weapons are where unusual effects live, **shock** first: the round arcs across several nearby
+enemies and slows them.
 
 The same ordnance effects can also roll onto a gun as an **underbarrel / alternate fire** (a
 grenade tube under a rifle, a shock arc on a pistol's second trigger), on the same cooldown rules.
 
+**Grenades** have a slot of their own and are **thrown with G** (right bumper on a pad) without
+putting the gun away. A grenade is ordnance for bricks (§8): it blasts.
+
+| Input | Does |
+|---|---|
+| Swap (tap) | next of the four guns |
+| Swap (hold) | the ordnance |
+| G / right bumper | throw a grenade |
+
 ## 8. Bricks
 
 Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive rounds chip
-harder**; **ordnance blasts** — rockets and grenades are where big holes come from. Elements do not
+harder**; **ordnance blasts** — rocket launchers and grenades are where big holes come from. Elements do not
 change brick damage (fire scorching bricks is a cosmetic mark, already built).
 
 ## 9. Against what is built
@@ -214,7 +229,7 @@ change brick damage (fire scorching bricks is a cosmetic mark, already built).
 | Built (BoomerBorder copy) | This design | Change |
 |---|---|---|
 | `TIER_STEP = 1.6` (68.7× over 10 tiers) | 1.25 (7.45×) | constant; enemy HP table moves with it |
-| `Rarity.MULTS` 1.0 / 1.3 / 1.6 / 2.0 / 3.3 / 5.0 | 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | constant; rename *Unique* → *Epic* |
+| `Rarity.MULTS` 1.0 / 1.3 / 1.6 / 2.0 / 3.3 / 5.0 | 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | constant; names unchanged (Unique stays) |
 | Crit = random `crit_chance` × class `crit_mult` | crit spots (hurtboxes), 2× | hurtboxes on pawns; `GunController._hit_living` reads the spot hit |
 | Defence layers stack, spill over in full | shield / armor / flesh / vegetation; crits absorbed; shield gating; melee stops at the layer it breaks | `HealthPool`: a carry-over factor and crit/melee flags on the packet |
 | Elements incl. shock, corrosive, acid, fire; weak-against rows | plasma / corrosive / acid / fire / ice, bonus-only; shock on special weapons | element list and matrix (data); ice's slow/freeze is a status |
@@ -233,7 +248,40 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 3. **Layers**: shield / armor / flesh / vegetation per enemy type, shield gating, the five
    elements.
 4. **Melee**: key, motion, hit, per-layer counts, the melee-then-headshot loop tested.
-5. **Four slots + ordnance**: inventory, swap, HUD, the ordnance slot.
+5. **Four slots, ordnance, grenades**: inventory, tap/hold swap, the grenade throw (G), HUD.
 6. **Modifiers**: slots by rarity, the first modifier set, the explosive attachment, the first
    red-text effects.
 7. **Special weapons and alt-fire**: the shock arc first.
+
+## 11. Progress
+
+**Step 1 — numbers: built 2026-10-06.**
+- `Tier.TIER_STEP` 1.6 → **1.25**; `GunQuality.LN_STEP` follows (a level is still 100 score
+  points).
+- `Rarity.MULTS` → **1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75**; the names stay (purple is Unique).
+- `LootRoller.TRASH_BASE_HP` (the light enemy) 45 → **64**, set from the §3 anchor: a median common
+  pistol (11.05 a shot) kills it in 6. `LootRoller.enemy_hp` already steps with `Tier`, so every
+  archetype moved with the curve.
+- `tools/combat_numbers_probe.gd` (15 checks) holds §1–3: the curve, the anchor at every level, the
+  legendary rows (4 / 2 with headshots / 3 with a modifier / 5 a level behind), what a colour is
+  worth, the score step.
+- **Not yet joined:** the combat arena's soldiers take their health from the AI's `UnitCatalog`
+  (trash 45, standard 113), not from `LootRoller.enemy_hp`. Step 3 (layers per enemy type) is where
+  the two become one table.
+
+**Step 2 — crit spots: built 2026-10-06.**
+- `CritSpots` (`scripts/combat/crit_spots.gd`): named spheres on a body, each following a node.
+  Every pawn gets `head`, a sphere round its Eye (mid-head), so a crouched head is still the head.
+  An enemy type can add weak points of its own.
+- `GunController._hit_living` asks the struck body's `CritSpots` where the round landed. **The
+  random `crit_chance` roll is gone**; a crit is a place, so every peer agrees without a roll and
+  the gun's RNG is not touched.
+- `DamageSystem.resolve` applies the crit only when the top living layer takes crits
+  (`CRIT_LAYERS`: health / flesh / vegetation). A shield or armor over the flesh **absorbs** it:
+  the hit lands plain and `DamageResult.crit_absorbed` says so (for a "blocked" hitmarker later).
+- Class crit (headshot) multipliers: **2.0** pistol, SMG, rifle, LMG, shotgun; **2.5** DMR,
+  revolver; **3.0** sniper.
+- `tools/crit_probe.gd` (10 checks): head crits at the gun's multiplier, chest does not, the same
+  shot always lands the same with no RNG drawn, a crouched head still crits where it went, a
+  shield absorbs the crit until it breaks.
+- Helmets (armor guarding the head spot specifically) come with step 3's layers.

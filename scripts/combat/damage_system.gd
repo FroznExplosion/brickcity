@@ -19,6 +19,11 @@ const _STATUS_MANAGER_META := &"_cc_status_manager"
 ## BrickWorld is seeded.
 static var rng := _seeded(0x5eed)
 
+## The layers a crit counts on (Docs/Weapons/COMBAT_DESIGN.md 4.2-4.3): flesh, by
+## whichever name it carries. A shield or armor over them ABSORBS the crit -- the hit
+## lands as a plain one -- so a headshot pays only once the defence is gone.
+const CRIT_LAYERS: Array[StringName] = [&"health", &"flesh", &"vegetation"]
+
 
 static func _seeded(s: int) -> RandomNumberGenerator:
 	var r := RandomNumberGenerator.new()
@@ -30,6 +35,7 @@ class DamageResult extends RefCounted:
 	var dealt: float = 0.0            ## ACTUAL damage removed from the target's layers
 	var element_color: Color = Color.WHITE
 	var was_crit: bool = false
+	var crit_absorbed: bool = false   ## a crit-spot hit a shield or armor took as a plain one
 	var procced_status: bool = false
 	var killed: bool = false          ## this hit dropped the target's vital layer
 
@@ -50,7 +56,8 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	# Compose external multipliers (crit + slag/frozen). The element-vs-layer matrix is
 	# NOT here — HealthPool applies it per layer.
 	var extra: float = 1.0
-	if packet.crit:
+	var crit := packet.crit and pool.top_layer_type() in CRIT_LAYERS
+	if crit:
 		extra *= maxf(1.0, packet.crit_multiplier)
 	if status_mgr != null:
 		extra *= status_mgr.damage_taken_multiplier()
@@ -75,7 +82,8 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		pool.apply_to_layer_type(
 			elemental_amount * extra, packet.element.tuned_layer_type, packet.element.id)
 
-	result.was_crit = packet.crit
+	result.was_crit = crit
+	result.crit_absorbed = packet.crit and not crit
 
 	# Roll the status proc — only when the shot actually carries elemental content
 	# (ratio > 0); a pure-kinetic shot never procs, even with an element assigned.

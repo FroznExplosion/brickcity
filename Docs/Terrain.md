@@ -3257,3 +3257,55 @@ Resident tiles fall a lot (less to bake and hold); what is DRAWN barely moves �
 takes the area over and has triangles of its own, and the frame is mostly trees and shadows. At
 radius 2 the ground 20–40 m off visibly loses its slopes and curves. Not changed; a look decision
 (`shots/detail_radius_*.png` in the main folder).
+
+### 22.13 Studs plain past 6 m; the geometry chamfer back on, without holes (2026-10-06)
+
+**Studs.** The rim bevel (38 tris a stud) only near the camera: `PieceMeshes.stud_plain` (22) from
+`TerrainTile.STUD_BEVEL_RANGE` (6 m) out to `STUD_RANGE`, crossing over a 2 m band. On foot: stud
+triangles 61 k to 32 k, draw calls unchanged.
+
+**The chamfer.** §17.24's tops-only chamfer, off since §17.22 because it opened slits through the
+world. The test for that is new: `tools/bevel_gap_probe.gd` hides the sea, puts an unlit magenta
+plane under everything and counts magenta pixels from 16 low views, chamfer off and on.
+
+| step | magenta, on (off: ~25) |
+|---|---|
+| as it was | 1,436 |
+| an edge level with a neighbour bevels only if that neighbour is a plain brick in this tile that bevels back (not an overlay, slope, ramp, curve, or a column in the next tile); ramps and overlay lips square | (in the next row) |
+| + a skirt, one bevel deep, under every square edge beside a level neighbour | 263 |
+| + slope cheeks, curve skirts and overlay lips reach a bevel below the bricks they stand on (`bevel_reach`) | 117 |
+| + a floor under each slope piece | **10 — fewer than with it off** |
+
+The floors close some holes the flat mesh had too. The piece-level rule alone could not do it:
+it decides a whole piece edge, so a 2x4 edge squared by one higher column sat against a brick
+bevelling toward it — the skirt and the reach are what make a square edge safe whatever the
+neighbour does, which is §17.21's lesson (backing, not agreement) at 13 mm.
+
+**Cost and where it is paid.** The chamfered mesh was built for EVERY resident tile, on the main
+thread during assembly: 1.6 M triangles held and ~8 ms a tile, for a mesh drawn only inside 12 m.
+Now the bevel is per-thread in C++ (`build_tile_chamfered`), the streamer bakes it on a worker for
+tiles within `bevel_radius` (2) of the camera, and the tile attaches it when it lands
+(`TerrainTile.add_bevel`). Held: 322 k. Drawn on foot: +198 k triangles, +34 calls.
+On in the heightfield scene; the city keeps the shaded chamfer (`bevel_enabled` false).
+
+### 22.14 No per-tile fades; sides stop at the chamfer; outline blended in by distance (2026-10-06)
+
+Reported from the editor: bricks near the camera looked SEE-THROUGH, and side textures stood past
+the chamfer.
+
+* **See-through.** §22.13 swapped chamfered/flat surfaces and bevelled/plain studs with Godot
+  visibility ranges and fades. A range is measured per OBJECT, and the object is a whole 11 m tile:
+  standing on one, every stud and the whole chamfered surface were mid-fade, dithered half
+  transparent. Now no range does it: the streamer sets each tile's version by its ring round the
+  camera (`TerrainTile.set_near`, `near_show_radius` 1 — the camera's tile and its neighbours),
+  and `bevel_radius` (2) bakes one ring ahead. The switch happens a tile or more away, where the
+  13 mm bevel is a pixel or two.
+* **Floating side texture.** A side face under a chamfered top edge ran up to the full top, a
+  13 mm sheet of brick outside the bevel. It now stops at `top - cut`, where the top's strip meets
+  its plane (same cut as `MeshBuf::quad`); a square edge keeps the full height.
+* **Outline blended with the chamfer.** On the chamfered mesh only (`geo_bevel` instance uniform)
+  `terrain.gdshader` fades the drawn seam and the shaded chamfer IN with per-pixel distance:
+  nothing inside `outline_blend_begin` (3 m) where the geometry is the edge, both together to
+  `outline_blend_end` (9 m), the outline alone beyond. Flat tiles keep the outline everywhere.
+
+`bevel_gap_probe`: 15 see-through pixels with the chamfer, 27 without.
