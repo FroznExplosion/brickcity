@@ -43,6 +43,8 @@ var inside_share := 0.6
 ## Metres between members in a file (BTPlayTravel reads its own; for HUDs now).
 var spacing := 2.2
 var roster := BASE.duplicate()
+## How often a reinforcement comes by truck, when the side can pay for one.
+var truck_share := 0.4
 ## What it is answering, for the HUD and the log.
 var answering := "unknown"
 var answering_armor := "unknown"
@@ -95,6 +97,10 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 	aggression = clampf(aggression, 0.1, 0.95)
 	for id in BASE:
 		roster[id] = float(BASE[id]) * clampf(float(mul[id]), 0.5, 2.0)
+	# A squad by truck: sooner against a sniper (get across the open fast),
+	# later against a demolisher (a truck is a target it will not miss).
+	truck_share = clampf(0.4 + (0.2 if style == "sniper" else 0.0)
+			- (0.25 if style == "demolisher" else 0.0), 0.0, 0.8)
 
 
 ## Draw `n` units the budget can pay for, weighted by the roster. Only built

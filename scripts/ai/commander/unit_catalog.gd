@@ -40,8 +40,9 @@ const UNITS := {
 	# --- vehicles (Red Dawn's roles) and mechs: planned ---------------------------
 	&"jeep": {"name": "Jeep", "points": 3.0, "mobility": &"wheeled", "role": &"transport",
 			"seats": 4, "built": false},
+	# Built: a squad can be bought "by truck" (TransportTruck, AIVehicles.md 6.1).
 	&"truck": {"name": "Truck", "points": 4.0, "mobility": &"wheeled", "role": &"transport",
-			"seats": 8, "built": false},
+			"seats": 8, "built": true},
 	&"apc": {"name": "APC", "points": 12.0, "mobility": &"wheeled", "role": &"apc",
 			"seats": 8, "built": false},
 	&"ifv": {"name": "IFV", "points": 15.0, "mobility": &"tracked", "role": &"ifv",

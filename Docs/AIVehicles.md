@@ -1,8 +1,18 @@
 # AI vehicles and mechs — plan
 
-**Status: planning, 2026-09-29. Nothing here is built.** What exists: the commander can already
-name, cost and weigh every vehicle below (`UnitCatalog`, `built = false`), so the budget, the
-doctrine and the save format know them before the first one drives. Read [AI.md](AI.md) first
+**Status: 2026-09-29. Step 1 is built in its smallest form; the rest is planned.** The commander
+can name, cost and weigh every vehicle below (`UnitCatalog`), so the budget, the doctrine and
+the save format know them before each one drives; only the truck has `built = true`.
+
+**What step 1 is today** (`scripts/ai/vehicles/transport_truck.gd`): a kinematic body with health
+that asks for one path and drives it (9 m/s, 1.6 rad/s turns, slower through a sharp one). What it
+carries is **cargo** -- the unit kinds the commander bought -- not bodies in seats: at the drop
+(within 22 m of where it was sent, the end of its path, or stuck 3 s) the host puts the squad
+down at the tailgate, on the side away from the threat. Shot to pieces on the way, its squad is
+lost with it. The commander buys "a squad by truck" as often as its doctrine's `truck_share`
+says (0.4; more against a sniper, less against a demolisher). Not yet: a brick-built body,
+seats, moving cover, a vehicle map with clearance -- it drives the foot map, and stops where
+that is too narrow for it. Read [AI.md](AI.md) first
 (§3.6 navigation per way of moving, §6.4 mechs, §9 the commander) and [AIPlan.md](AIPlan.md) P7.
 
 Prior art: Red Dawn (`C:\Users\lbaun\Documents\reddawn`) has six vehicle types and a
