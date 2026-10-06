@@ -20,8 +20,8 @@ How the enemy chooses what to do, authored as odds rather than code.
   behaviour asked for (melee in reach ~95%, shoot then grenade face to face, grenade
   first at a player behind cover, no melee from far unless a melee fighter).
 
-- **Soldiers using it:** run with `-- --tactics=book` (off by default; the scripted
-  policy runs otherwise). `TacticsSense` reads the moment, facts and amounts from the
+- **Soldiers using it:** the casebook is the default policy; `-- --tactics=scripted`
+  runs the old scripted one. `TacticsSense` reads the moment, facts and amounts from the
   world at each engage decision -- distance, both sides' cover (bricks across the
   lines to head and chest), above/below, within reach, inside (a roof overhead), the
   player unaware or reloading or in a mech, alone, other squads near, health,
@@ -34,6 +34,14 @@ How the enemy chooses what to do, authored as odds rather than code.
   smoke, breach...) is counted as *wanted* and the draw is made again among the
   doable moves. Every logged decision carries the plan (`--log-decisions=PATH`).
   `tools/tactics_sense_probe.gd` checks the readings and a fight.
+
+- **What happened, counted:** while the city runs (not in a gate), `TacticsTally`
+  counts every book decision by moment -- moves taken, moves asked for that could
+  not be done, extras, the facts that held, the player's cover and distance band,
+  and each move's judged outcome -- into `user://tactics_tally.json`
+  (`%APPDATA%\Godot\app_userdata\Brickcity\`), added to across runs. Delete the
+  file to start again. The page's "In the game" tab draws it: paste the file there,
+  or have Claude upload it (the page's storage, `tally/latest`).
 
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.

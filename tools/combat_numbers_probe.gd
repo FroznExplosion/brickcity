@@ -19,8 +19,8 @@ extends SceneTree
 ##   score         a level is 100 points
 
 const SAMPLES := 301
-## The crit-spot multiplier the design sets (section 4.3).
-const CRIT := 2.0
+## The crit-spot multiplier: the pistol class's (2x, section 4.3).
+var CRIT := WeaponClass.builtin(&"pistol").crit_mult
 ## A damage modifier, as in section 3's table.
 const DAMAGE_MOD := 1.2
 

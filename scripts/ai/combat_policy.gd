@@ -13,7 +13,10 @@ extends RefCounted
 ## declare their contract ... a mismatch refuses to load and the scripted twin
 ## runs, loudly"). A policy is anything that turns an observation into a tactic:
 ##
-##   ScriptedCombatPolicy  -- now: a scored, weighted-random choice. Its
+##   BookCombatPolicy      -- the default (from_args): the Tactics Casebook's
+##                            authored odds (Docs/Tactics), reading more of the
+##                            world than the observation (decide_in).
+##   ScriptedCombatPolicy  -- `-- --tactics=scripted`: a scored, weighted-random choice. Its
 ##                            decisions are logged (AIServices.decisions) as
 ##                            the imitation data a model is first trained on.
 ##   an ONNX model         -- later, in its own GDExtension (AI.md 11.3). It has
@@ -109,21 +112,22 @@ static func create(model: CombatPolicy = null, contract: Dictionary = {}) -> Com
 	return ScriptedCombatPolicy.new()
 
 
-## The policy the command line asks for: `-- --tactics=book` runs the Tactics
-## Casebook's (BookCombatPolicy, Docs/Tactics); anything else, create().
+## The policy to run by default: the Tactics Casebook's (BookCombatPolicy,
+## Docs/Tactics). `-- --tactics=scripted` runs the scripted one instead, and so
+## does a book that will not load -- loudly.
 ## Loaded by path, not by class name: the base policy every soldier runs must not
 ## depend on the book's scripts being in the class cache.
 const BOOK_POLICY := "res://scripts/ai/tactics/book_combat_policy.gd"
 
 
 static func from_args() -> CombatPolicy:
-	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
-		if a == "--tactics=book":
-			var script := load(BOOK_POLICY) as GDScript
-			var b: CombatPolicy = script.new() if script != null else null
-			if b != null and b.get(&"book") != null:
-				return b
-			push_warning("[ai] --tactics=book: the book policy or its book did not load -- running the scripted policy")
+	if "--tactics=scripted" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		return create()
+	var script := load(BOOK_POLICY) as GDScript
+	var b: CombatPolicy = script.new() if script != null else null
+	if b != null and b.get(&"book") != null:
+		return b
+	push_warning("[ai] the Tactics Casebook's policy or its book did not load -- running the scripted policy")
 	return create()
 
 

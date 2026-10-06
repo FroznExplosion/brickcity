@@ -11,8 +11,9 @@ extends Node3D
 ##     controller never touches the grid itself, so a client's gun asks and the
 ##     host's gun commits, with no difference here.
 ##
-## Every roll -- spread, crit -- comes from `rng`, which the owner sets from the
-## host's combat state. Never the global RNG (Multiplayer.md, D9).
+## Every roll -- spread -- comes from `rng`, which the owner sets from the host's
+## combat state. Never the global RNG (Multiplayer.md, D9). A crit is not a roll: it is
+## where the round landed (CritSpots, Docs/Weapons/COMBAT_DESIGN.md 4.3).
 
 ## Per bullet: {"point", "normal", "collider", "structure": bool, "result"} -- or
 ## {} on a miss. "result" is the DamageSystem.DamageResult for a living target.
@@ -171,16 +172,22 @@ func _living(collider: Object) -> Node:
 
 
 func _hit_living(target: Node, point: Vector3, normal: Vector3) -> DamageSystem.DamageResult:
-	var crit_chance := _stat(&"crit_chance", 0.0)
-	var crit := crit_chance > 0.0 and _roll().randf() < crit_chance
+	# A crit is a hit on a crit spot -- the head, a weak point -- never a dice roll.
+	var crit := _crit_spot(target, point) != &""
 	var p := DamagePacket.new(_stat(&"damage", 1.0), null, self)
 	p.hit_position = point
 	p.hit_normal = normal
 	p.crit = crit
-	p.crit_multiplier = _stat(&"crit_mult", 1.5)
+	p.crit_multiplier = _stat(&"crit_mult", 2.0)
 	p.element_ratio = _stat(&"element_ratio", 0.0)
 	p.rng = rng
 	return DamageSystem.resolve(p, target)
+
+
+## The crit spot `point` is in on `target` (its CritSpots), or &"" for none.
+static func _crit_spot(target: Node, point: Vector3) -> StringName:
+	var spots := target.get_node_or_null(^"CritSpots") as CritSpots
+	return spots.spot_at(point) if spots != null else &""
 
 
 func _spread(forward: Vector3, aim_basis: Basis) -> Vector3:

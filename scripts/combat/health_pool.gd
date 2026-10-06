@@ -200,6 +200,13 @@ func total_current() -> float:
 	return t
 
 
+## The type of the layer a hit would land on now ("" when dead): what decides whether a
+## crit counts (DamageSystem.resolve).
+func top_layer_type() -> StringName:
+	var idx := _topmost_living_index()
+	return layer_configs[idx].layer_type if idx >= 0 else &""
+
+
 func layer_count() -> int:
 	return _current.size()
 

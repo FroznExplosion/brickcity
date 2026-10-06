@@ -16,6 +16,7 @@ extends SceneTree
 
 const Arena := preload("res://tools/ai_arena.gd")
 const FIGHT_SECONDS := 25.0
+const TALLY := "user://tactics_tally_probe.json"
 
 var _pass := 0
 var _fail := 0
@@ -123,6 +124,10 @@ func _show(r: Dictionary) -> String:
 func _fight_setup() -> void:
 	_policy = BookCombatPolicy.new()
 	a.s.policy = _policy
+	# The counts the city keeps (TacticsTally), here in a file of the probe's own.
+	if FileAccess.file_exists(TALLY):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TALLY))
+	a.s.tally = TacticsTally.open(TALLY)
 	_player = a.player(Vector3(700.0, 0.0, -25.0), 1e7, true, 9)
 	var members: Array[Soldier] = []
 	for i in 3:
@@ -166,6 +171,25 @@ func _verdict() -> void:
 			"%d decision(s), moments %s" % [ds.size(), moments])
 	_ok("and runs the tactic its move maps to", agree, "moves %s" % [moves])
 	_ok("the soldiers fight", shots > 0, "%d shot(s)" % shots)
+	# The tally: every book decision counted under its moment, kept on disk.
+	var tally := a.s.tally as TacticsTally
+	var counted := 0
+	var moved := 0.0
+	var judged := 0
+	for id in tally.data.moments:
+		var m: Dictionary = tally.data.moments[id]
+		counted += int(m.n)
+		for k in m.moves:
+			moved += float(m.moves[k])
+		for k in m.outcomes:
+			judged += int(m.outcomes[k].n)
+	var all_book := a.s.decisions.filter(func(d): return d.has("book")).size()
+	tally.save()
+	var again := TacticsTally.open(TALLY)
+	_ok("what happened is counted by moment, with outcomes, and kept on disk",
+			counted == all_book and int(moved) == counted and judged >= 1 and judged <= counted
+			and int(again.data.decisions) == counted and int(again.data.runs) == 2,
+			"%d decision(s) in %d moment(s), %d judged" % [counted, tally.data.moments.size(), judged])
 	print("  info the book asked for, not built yet: %s" % (_policy.wanted_text() if not _policy.wanted.is_empty() else "nothing"))
 
 

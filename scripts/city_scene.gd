@@ -1103,6 +1103,11 @@ func _ready() -> void:
 	ai_services.ai_nav = ai_nav
 	ai_services.sched = ai_sched
 	ai_services.rng.seed = 0x50DD1E4
+	# What the casebook chooses is counted across runs (TacticsTally), for the
+	# graph on the Tactics Casebook page -- but not a gate's scripted fights.
+	var tally_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--gate" in tally_args and not "--squad" in tally_args:
+		ai_services.tally = (load("res://scripts/ai/tactics/tactics_tally.gd") as GDScript).call(&"open")
 	# A squad's breaching charge is a blast like any other: asked for, queued,
 	# committed by the host, replayed by clients.
 	ai_services.on_breach = _blast
@@ -1246,6 +1251,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	if ai_services != null and ai_services.tally != null:
+		ai_services.tally.call(&"save")
 	# A band still uploading on a worker at shutdown was a crash on quit, as a
 	# piece's was (IslandManager._exit_tree).
 	for job in _band_jobs:
