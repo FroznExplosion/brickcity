@@ -202,16 +202,23 @@ void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, fl
     }
 }
 
-// The skin inside the walls is ONE path: a diagonal line to the wall, a turn,
-// back alongside it, from one corner to the opposite. Drawn as parallel beads
-// whose grooves stop short of the wall on alternate ends -- where bead k
-// turns into bead k+1 -- which is what makes it read as a zigzag and not as
-// hatching. `uv` is the point, `lo`/`hi` the infill's rectangle, `n` the unit
-// direction the beads are counted along (t = dot(uv, n) / bw).
-// Returns 0..1: how much of the groove next to this point is a turn.
-float ps_zigzag_join(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float bw) {
-    vec2 a = vec2(-n.y, n.x);           // along the beads
-    vec2 p0 = n * dot(uv, n);           // this bead's line, nearest the origin
+// The skin inside the walls is ONE path, the way a slicer lays it: a
+// diagonal line to the wall, a short CONNECTOR running along the wall, the
+// next diagonal back, and so on from one corner to the opposite one. Where
+// two neighbouring diagonals end at a wall WITHOUT a connector between them,
+// the round bead ends cannot fill the sharp corner they leave against the
+// wall: a small triangular VOID, dark, along every edge of a printed top.
+//
+// `uv` is the point, `lo`/`hi` the infill's rectangle, `n` the unit
+// direction the diagonals are counted along (t = dot(uv, n) / bw), `e` how
+// far inside the infill's edge this is, `aa` fwidth(t).
+// Returns (on a connector 0/1, void coverage 0..1).
+vec2 ps_zigzag(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float e, float bw, float aa) {
+    if (e > bw) {
+        return vec2(0.0);
+    }
+    vec2 a = vec2(-n.y, n.x);           // along the diagonals
+    vec2 p0 = n * dot(uv, n);           // this diagonal's line, nearest the origin
     float s = dot(uv, a);
     float smin = -1e9;
     float smax = 1e9;
@@ -224,18 +231,21 @@ float ps_zigzag_join(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float bw) {
         }
     }
     if (smax <= smin) {
-        return 0.0;
+        return vec2(0.0);
     }
-    // Which end of the line this is, and how far from it, across the wall.
+    // Which end of its diagonal this point is near.
     float end = s > 0.5 * (smin + smax) ? 1.0 : 0.0;
-    float from_end = min(s - smin, smax - s) * min(abs(a.x), abs(a.y));
-    // The groove beside this point is groove k, between beads k and k+1;
-    // that pair turns at the end matching k's parity.
+    // Between diagonals k and k+1 (k = floor(t)) the path either connects at
+    // this end -- k's parity -- or leaves the gap open.
     float k = floor(t);
-    float turns_here = mod(k, 2.0) == end ? 1.0 : 0.0;
-    // A round end: the turn's inside radius is half a bead.
-    float r = bw * (0.5 + sqrt(max(0.25 - (fract(t) - 0.5) * (fract(t) - 0.5), 0.0)));
-    return turns_here * (1.0 - smoothstep(r * 0.8, r, from_end));
+    if (mod(k, 2.0) == end) {
+        return vec2(1.0, 0.0);
+    }
+    // The void: a triangle on the wall, centred between the two bead ends,
+    // about a bead wide at its base and three quarters of one tall.
+    float g = abs(fract(t) - 0.5);
+    float half_w = 0.3 * (1.0 - e / (0.7 * bw));
+    return vec2(0.0, clamp((half_w - g) / max(aa, 1e-4) + 0.5, 0.0, 1.0));
 }
 
 // Textured PEI's powder-coat grain on a bottom face. `p` is the face in
