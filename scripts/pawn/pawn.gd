@@ -131,6 +131,12 @@ static func spawn(parent: Node, at_feet: Vector3, p_team := 0, with_health := tr
 	e.position = Vector3.UP * (BODY_HEIGHT * 0.5 - HEAD_HEIGHT * 0.5)
 	b.add_child(e)
 	p.eye = e
+	# The head is the crit spot (Docs/Weapons/COMBAT_DESIGN.md 4.3): a sphere round
+	# the eye, which already sits mid-head and moves with the crouch.
+	var crits := CritSpots.new()
+	crits.name = "CritSpots"
+	crits.add(&"head", e, HEAD_HEIGHT * 0.5 + 0.03)
+	b.add_child(crits)
 	if with_health:
 		var pool := HealthPool.new()
 		pool.name = "HealthPool"
