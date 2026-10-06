@@ -2220,9 +2220,63 @@ func _starts_coarse(isl: BrickIsland) -> bool:
 ## Build a far piece's coarse stand-in and hang it. From the grid, on this
 ## thread: there is no bake to wait for, and a stand-in is a few percent of
 ## the bricks' vertices. A big one is uploaded on a worker like any other mesh.
+## A piece of this many bricks has its stand-in built on a worker
+## (BrickWorld.coarse_chunk_async): a 5,000-7,000-brick chunk of a far collapse
+## was 17-22 ms in one call from the mesh queue, the worst tick of most
+## --big --shot runs. A smaller one is a millisecond or two and is built where
+## it is asked for, as it was. The piece goes on drawing what it had until the
+## worker is done (nothing, for a first stand-in: a tick or two, far off).
+const COARSE_ASYNC_BLOCKS := 1500
+var _coarse_jobs: Array[BrickIsland] = []
+var coarse_async := 0            ## stand-ins built on a worker
+var coarse_main_worst_ms := 0.0  ## the slowest stand-in built on the main thread
+
+
 func _build_coarse(isl: BrickIsland) -> void:
-	var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
 	isl.coarse_tick = Engine.get_physics_frames()
+	if world.get_alive_block_count(isl.chunk) >= COARSE_ASYNC_BLOCKS:
+		if not world.coarse_pending(isl.chunk):
+			world.coarse_chunk_async(isl.chunk)
+			coarse_async += 1
+		if not _coarse_jobs.has(isl):
+			_coarse_jobs.append(isl)
+		return
+	var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
+	coarse_main_worst_ms = maxf(coarse_main_worst_ms, world.get_last_coarse_ms())
+	_finish_coarse(isl, arrays)
+
+
+## Attach the stand-ins the workers have finished.
+func _harvest_coarse_jobs() -> void:
+	var k := 0
+	while k < _coarse_jobs.size():
+		var isl: BrickIsland = _coarse_jobs[k]
+		if not isl.is_valid():
+			# Gone; releasing its chunk waited for the worker and dropped the job.
+			_coarse_jobs.remove_at(k)
+			continue
+		if not world.coarse_ready(isl.chunk):
+			# No job at all: a block placed or removed in it settled it
+			# (BrickWorld.settle_coarse_job). Asked for again.
+			if not world.coarse_pending(isl.chunk):
+				_coarse_jobs.remove_at(k)
+				if isl.coarse and not _mesh_queue.has(isl):
+					isl.coarse_tick = -1000000
+					_mesh_queue.append(isl)
+				continue
+			k += 1
+			continue
+		_coarse_jobs.remove_at(k)
+		var arrays: Array = world.take_coarse_mesh(isl.chunk)
+		if not isl.coarse:
+			continue  # come near meanwhile: it draws its bricks now
+		_finish_coarse(isl, arrays)
+		# Its cost was a worker's, not this thread's: it waits only the plain
+		# COARSE_REBUILD_TICKS before it may be built again (coarse_wait).
+		isl.coarse_ms = 0.0
+
+
+func _finish_coarse(isl: BrickIsland, arrays: Array) -> void:
 	isl.coarse_ms = world.get_last_coarse_ms()
 	coarse_built += 1
 	coarse_worst_ms = maxf(coarse_worst_ms, isl.coarse_ms)
@@ -3552,6 +3606,7 @@ func tick() -> void:
 	# a hole in the world, and the queues below can wait a tick -- they only
 	# decide what breaks NEXT.
 	var _r0 := Time.get_ticks_usec()
+	_harvest_coarse_jobs()
 	_harvest_mesh_jobs()
 	var _r1 := Time.get_ticks_usec()
 	_drain_upload_waiting()
@@ -4359,6 +4414,8 @@ func report() -> Dictionary:
 		"dropped": dropped,
 		"coarse_built": coarse_built,
 		"coarse_worst_ms": coarse_worst_ms,
+		"coarse_async": coarse_async,
+		"coarse_main_worst_ms": coarse_main_worst_ms,
 		"coarse_verts": coarse_verts,
 		"stand_ins": stand_ins,
 		"breaks": breaks,

@@ -8974,6 +8974,8 @@ func _run_shot_pass() -> void:
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
 			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
+	print("[city]   stand-ins: %d built, %d of them on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
+			islands.coarse_built, islands.coarse_async, islands.coarse_main_worst_ms, islands.coarse_worst_ms])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
 			director.breakage_out, director.furniture_out, director.collapsing.size()])

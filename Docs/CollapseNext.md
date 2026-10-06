@@ -43,13 +43,18 @@ to make over the run, ~13 % of moving boxes. Groups of 48 or fewer off a piece c
 **Do:** measure what a hit on a falling piece actually cuts (solve groups by size) and decide: a
 larger crumble limit for pieces far from the player, or a hit on a falling piece breaks it along
 storey lines only. **Check:** the census line in `--big --shot`.
+2026-10-06, same pass: off pieces that were hit, 107 bodies of 49–499 (82 ms) and **349 of 500 or
+more (949 ms to make)**; the worst `islands.tick` is 43.6 ms, 41.4 of it rebuilding merged boxes
+after a hit. The big ones cost more than the medium ones this item was written about.
 
-### 1.5 The first stand-in for a big far piece is built on the main thread
-A 5,000–7,000-brick chunk falling far off gets its first coarse stand-in in one call: 17–22 ms,
-the worst tick of most `--big --shot` runs (`IslandManager._build_coarse`, via the mesh queue).
-Rebuilds wait in proportion to cost (`COARSE_TICKS_PER_MS`); the first build does not. **Do:** build
-stand-ins on a worker, like bakes (the chunk must not change under it: cancel on edit, as
-`settle_bake_job` does). **Check:** `--big --shot` "the slowest mesh the queue made".
+### ~~1.5 The first stand-in for a big far piece is built on the main thread~~ — done 2026-10-06
+A piece of `COARSE_ASYNC_BLOCKS` (1,500) bricks or more has its stand-in built on a worker
+(`BrickWorld.coarse_chunk_async`, harvested in `IslandManager._harvest_coarse_jobs`); a block placed
+or removed in the chunk, or the chunk released, waits for the worker and drops its build
+(`settle_coarse_job`), and the piece asks again. `--big --shot`: 184 stand-ins, 150 of them on a
+worker, the slowest on the main thread 1.6 ms (it was 17–22), and the slowest mesh the queue makes
+is now a bake at 4.1 ms. `coarse_probe` "on a worker": the worker's build is the one made in place.
+What the worst tick is now: `fracture: merged rebuilds`, 41 ms (see 1.4).
 
 ### ~~1.6 A building is solved several times in one tick~~ — done 2026-10-06
 Once a tick each (`solved_now` in the solve loop; a second solve waits for the next tick). The
