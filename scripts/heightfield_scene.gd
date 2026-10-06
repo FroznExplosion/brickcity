@@ -111,14 +111,6 @@ var camera: DebugCamera = null
 ## Weather for the coast (Docs/Disasters.md 18): the hurricane, and whatever
 ## else needs no buildings. H opens it, as in the city.
 var disasters: DisasterDirector = null
-## The sea before a disaster moved it, and where the seabed map was last read.
-var _sea_base := NAN
-var _gain_base := 0.0
-var _seabed_surge := 0.0
-var _seabed_ms := 0
-var _wave_mul := 1.0
-const SEABED_STEP := 0.5
-const SEABED_MS := 2000
 var _sun: DirectionalLight3D = null
 var _mat: ShaderMaterial = null
 var _label: Label = null
@@ -136,6 +128,7 @@ var _far_blocks := 0
 var _far_rings := 0
 var _sites: Array[MeshInstance3D] = []
 var _trees: TerrainTrees = null
+var _hud_in := 0.0
 ## Every coarse block's tile rect, and which node draws it (-1 = a merged
 ## ring, which is always drawn). The coverage check needs both.
 var _all_rects: Array[Rect2i] = []
@@ -245,7 +238,8 @@ func _ready() -> void:
 		disasters = DisasterDirector.new()
 		disasters.name = "Disasters"
 		add_child(disasters)
-		disasters.setup(self, ["hurricane"])
+		disasters.setup(self, ["hurricane", "snow", "blizzard", "hail", "sandstorm", "waterspout",
+				"wildfire"])
 	_update_hud()
 	if _bench_mode:
 		_run_bench()
@@ -330,6 +324,11 @@ func _build_terrain() -> void:
 	_streamer.near_radius = NEAR_TILES
 	_streamer.keep_radius = NEAR_TILES + 2
 	_streamer.world_half = maxi(FAR_TILES, NEAR_TILES)
+	# The block the detail square and the coarse tier snap to (TerrainStreamer
+	# .align). `-- --align=2` to compare a tighter detail area.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--align="):
+			_streamer.align = maxi(1, int(arg.split("=")[1]))
 	add_child(_streamer)
 	_streamer.setup(_mat)
 	# A capture or a bench must not photograph a half-built world.
@@ -617,48 +616,16 @@ func set_detail_radius(tiles: int) -> void:
 		_hide_covered_far()
 
 
-## A disaster moves the sea (DisasterContext.set_sea): `surge` metres over
-## where it was, waves `wave_mul` times as big. (0, 1) puts it back exactly.
-##
-## BrickWave's own level, so the drawn sea, the swimmer and the water's
-## collision rise together, and the flood itself needs nothing more: the water
-## shader compares the ground (the seabed map's R) with `sea_level` per pixel.
-## What the map's wet cells and shore distance decide -- where the studded tier
-## shows, how the waves steer to the shore -- is re-read every SEABED_STEP of
-## level, no more than every SEABED_MS, because a read is ~30 ms. Between reads
-## newly flooded ground is drawn by the smooth sheet.
+## Ground for snow to lie on (SnowCover): this scene is all terrain.
+func has_terrain() -> bool:
+	return true
+
+
+## A disaster moves the sea (DisasterContext.set_sea): the sea does it
+## (WaterSea.set_surge), as it does in the city.
 func disaster_sea(surge: float, wave_mul: float) -> void:
-	if _sea == null:
-		return
-	if is_nan(_sea_base):
-		if surge == 0.0 and wave_mul == 1.0:
-			return
-		_sea_base = BrickWave.get_sea_level()
-		_gain_base = _sea.wave_gain
-		_wave_mul = 1.0
-	var level := _sea_base + surge
-	BrickWave.set_sea_level(level)
-	set_water_param("sea_level", level)
-	if absf(wave_mul - _wave_mul) > 0.02 or (wave_mul == 1.0 and _wave_mul != 1.0):
-		_wave_mul = wave_mul
-		_sea.wave_gain = _gain_base * wave_mul
-		_sea.push_waves()
-	var now := Time.get_ticks_msec()
-	var back := surge == 0.0 and wave_mul == 1.0
-	if back or (absf(surge - _seabed_surge) >= SEABED_STEP and now - _seabed_ms >= SEABED_MS):
-		_seabed_surge = surge
-		_seabed_ms = now
-		_sea.refresh_seabed()
-	if back:
-		_sea_base = NAN
-
-
-## Every detail tile again: after a change to how pieces are made.
-func rebuild_detail() -> void:
-	var r: int = FAR_TILES
-	_streamer.invalidate(Rect2i(-r, -r, r * 2 + 1, r * 2 + 1))
-	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
-	_streamer.settle(Vector2(at.x, at.z))
+	if _sea != null:
+		_sea.set_surge(surge, wave_mul)
 
 
 func set_water_param(param: String, value: Variant) -> void:
@@ -1114,7 +1081,12 @@ func _process(delta: float) -> void:
 		# not, and every capture taken after a submerged one came out fogged
 		# green with the sea switched off.
 		_under.set_submerged(_env, false, DRY_AMBIENT)
-	_update_hud()
+	# Five times a second: it walks every tile to sum its counts, 0.3 ms a
+	# frame, and nobody reads a number that changes sixty times a second.
+	_hud_in -= delta
+	if _hud_in <= 0.0:
+		_hud_in = 0.2
+		_update_hud()
 
 
 func _unhandled_input(event: InputEvent) -> void:

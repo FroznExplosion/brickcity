@@ -1081,6 +1081,7 @@ func _ready() -> void:
 	authority.committed.connect(_nav_on_command)
 	islands.piece_settled.connect(func(isl: BrickIsland) -> void:
 		ai_nav.invalidate_box(islands.world_aabb(isl).grow(0.5))
+		_crush_drawn(isl)
 		_wreck_settled(isl))
 	islands.piece_woken.connect(func(isl: BrickIsland) -> void:
 		if isl.settled:
@@ -1547,6 +1548,13 @@ func _build_terrain_ground() -> void:
 ## THE SEA, at the level the world settled (§21.6), out as far as the coarse
 ## ground goes. Only if there is any: a world whose sea is under all of its
 ## ground has nothing to draw, and the brick tiers are not free.
+## A disaster moves the sea (DisasterContext.set_sea): a hurricane's surge.
+## Nothing where the city has no sea.
+func disaster_sea(surge: float, wave_mul: float) -> void:
+	if _sea != null:
+		_sea.set_surge(surge, wave_mul)
+
+
 func _build_sea(tile_m: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	_sea = WaterSeaScript.new()
@@ -2308,7 +2316,11 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# box and cannot, so what still needs it -- a build, or a building whose
 	# damage is in live bricks rather than a profile -- stays banded.
 	var boxed := coarse and _far_draws_coarse(b)
-	coarse = coarse and (boxed or not b.is_damaged())
+	# Nor a recipe building still in bricks (_demesh), damaged or not: the far
+	# box will not draw it, and the coarse mesh is an untextured box -- every
+	# tower walked past and left behind stood there as a plain white block,
+	# with no courses and no windows, until the camera came back.
+	coarse = coarse and (boxed or (b.is_build() and not b.is_damaged()))
 	# A building still in bricks -- its mesh given up at range (_demesh) --
 	# draws the damage its bricks have NOW. Its profile is only brought up to
 	# date when it gives its bricks back (dematerialise), so the shell standing
@@ -2397,7 +2409,7 @@ func _make_shell_body(id: int) -> void:
 	var boxes: Array = (BuildShell.collision_boxes(world, b.build, _dead_by_frame(b))
 			if b.is_build() else
 			BuildingShell.collision_boxes(b.recipe.footprint_x, b.recipe.footprint_z,
-					b.recipe.courses, b.damage_profile.is_empty()))
+					b.recipe.courses, b.damage_profile.is_empty(), b.damage_profile))
 	for box in boxes:
 		PhysicsServer3D.body_add_shape(body, _shape_rid(box.size), Transform3D(Basis(), box.pos))
 	# The same boxes stand in for the bricks with the AI (AIWorld proxies) while
@@ -2471,6 +2483,16 @@ func _promote(id: int, solve: bool = true) -> int:
 		return b.chunk
 
 	var t0 := Time.get_ticks_usec()
+	# Past SHELL_RANGE a recipe building has no shell, only its far box, and a
+	# promotion hid that box at once: the building was then drawn by however
+	# many bands had been built, and anything cut off it fell while bands built
+	# from the bricks before the cut went on drawing it standing -- a second
+	# copy of every section that came off a building shot from far away. A
+	# placeholder now, as any building inside the range has: the far box goes
+	# on drawing it and pieces wait for its bands (_bands_done frees it).
+	# Before materialise: the far box draws a building that is not bricks yet.
+	if not b.is_build() and not b.toppled and not _shells.has(id):
+		_make_shell(id, true, true)
 	var chunk := registry.materialise(id)
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
@@ -2760,6 +2782,55 @@ func _topple(id: int) -> void:
 			break
 		var node: MeshInstance3D = extra_nodes[i - 1]
 		islands.adopt(extra_frames[i], node, null, 0, 4, [], piece + i, id)
+
+
+## Storey by storey, can what is left carry what is above it? (BrickWorld.
+## gravity_check.) The stress solve fails only joints in tension, and the
+## stability test only asks whether the whole building stands on its
+## foundation: a storey shot away but for one corner held the eight storeys
+## above it up on six bricks, for good.
+##   TIP    what is above, off the edge of what is left: cut clean at that
+##          boundary (a seam, as an earthquake cuts), and it goes over the edge.
+##   CRUSH  too much on too little: everything in the storey under that
+##          boundary is torn loose, and what is above comes down a floor.
+## A command either way (SEVER), so every machine does the same.
+const CRUSH_PER_STUD := 20.0   ## x tension_per_stud: an intact tower asks at most 12.4 (big city), one corner left ~22
+var gravity_fails := {"tip": 0, "crush": 0}
+## CRUSH_PER_STUD, settable: collapse_probe weakens one tower to crush it.
+var crush_per_stud := CRUSH_PER_STUD
+
+
+func _gravity_fail(b: BuildingRegistry.Building) -> bool:
+	if not authority.may_decide() or b.toppled or not b.is_materialised():
+		return false
+	var r: Dictionary = world.gravity_check(b.chunk, crush_per_stud)
+	if float(r.get("ratio", 0.0)) < 1.0 or not r.has("level"):
+		return false
+	var level: Vector3 = r.level
+	var kind := str(r.kind)
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.SEVER
+	e.target = b.id
+	e.normal = Vector3.UP
+	if kind == "tip":
+		e.point = level
+		e.flags = DamageLog.FLAG_SEAM
+	else:
+		# The storey under the boundary: its middle, and a storey thick.
+		var storey := float(TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
+		e.point = level - Vector3.UP * storey * 0.5
+		e.radius = storey
+	if not authority.request(DamageLog.Kind.SEVER, b.id, e.point, e.radius, Vector3.UP):
+		return false
+	if DamageLog.apply_entry(world, b.chunk, e).is_empty():
+		return false
+	authority.commit_entry(e)
+	gravity_fails[kind] = int(gravity_fails.get(kind, 0)) + 1
+	print("[city] building %d: storey at %.1f m %s (%.1fx what it can, %.0f above)" % [
+			b.id, level.y, "tips over" if kind == "tip" else "is crushed", float(r.ratio),
+			float(r.get("mass_above", 0.0))])
+	return true
 
 
 ## The staircase goes with the floors it serves (Docs/Collapse.md 2.1). Its
@@ -3151,6 +3222,30 @@ func _build_one_band(id: int) -> bool:
 	return true
 
 
+func _is_tree(id: int) -> bool:
+	var b := registry.get_building(id)
+	return b != null and b.is_build() and b.build != null and String(b.build.name).begins_with("tree_")
+
+
+## Ground for snow to lie on (SnowCover): only a city on terrain has any.
+func has_terrain() -> bool:
+	return _terrain_mat != null
+
+
+## The buildings snow can lie on (SnowCover): standing, bricks in, one frame,
+## not trees (their crowns take a cap in the shader instead).
+func snow_buildings() -> Array:
+	var out := []
+	for b in registry.buildings:
+		if b.toppled or b.chunk < 0 or b.frames.size() > 1 or not _brick_nodes.has(b.id):
+			continue
+		if _is_tree(b.id):
+			continue
+		out.append({"id": b.id, "chunk": b.chunk, "parent": _brick_nodes[b.id],
+				"version": b.structure_version, "sway": _sway_of(b.id)})
+	return out
+
+
 ## A standing building's wind sway (WeatherFx): a tree's crown moves, a
 ## tower's top a few centimetres. Height from the ground it stands on.
 func _sway_of(id: int) -> Vector3:
@@ -3175,6 +3270,8 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node.material_override = brick_material
 		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
 		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
+		# A tree's crown takes a cap of snow; a building gets real cover.
+		node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -3435,6 +3532,62 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 				_shear_building(b.id, point, radius)
 
 	islands.shear_near(point, radius, source)
+	_crush_drawn(source)
+
+
+## A piece came down in a drawn room. Its furniture is drawn, not bricks, and
+## holds nothing up (Layers.FIXTURE), so the piece went through the table --
+## and the table stayed drawn inside the wreckage until the floor under it
+## went (Docs/CollapseNext.md 1.2). An item with a brick of the piece where it
+## stands is crushed: gone from the room's record, as anything destroyed is,
+## and the room drawn again at once without it. Asked when a piece lands hard
+## and when one settles -- a slow one ends up in the furniture too.
+func _crush_drawn(source: BrickIsland) -> void:
+	if source == null or not source.is_valid():
+		return
+	var piece := islands.world_aabb(source).grow(0.2)
+	var piece_inv := world.get_chunk_transform(source.chunk).affine_inverse()
+	var piece_origin: Vector3i = world.get_chunk_origin(source.chunk)
+	var cs := BrickWorld.get_cell_size()
+	for id in _near_buildings(piece.get_center(), piece.size.length() * 0.5 + 1.0):
+		var b := registry.get_building(id)
+		if b == null or b.drawn_rooms.is_empty() or not b.is_materialised():
+			continue
+		var chunk_xf := world.get_chunk_transform(b.chunk)
+		var origin: Vector3i = world.get_chunk_origin(b.chunk)
+		var offset: Vector3i = registry._rebase_of(b)
+		var redraw := []
+		for index in b.drawn_rooms:
+			var room := registry.get_room(id, index)
+			if room == null or not room.world_box(b.xform).intersects(piece):
+				continue
+			for i in room.items.size():
+				if room.gone.has(i):
+					continue
+				var cell: Vector3i = (room.items[i] as Dictionary).cell
+				var base := chunk_xf * (Vector3(cell - offset - origin) * cs)
+				# Its foot and a little above it: a piece through a table is in
+				# the table's space, one resting on the floor beside it is not.
+				for up in [0.5, 1.5, 2.5]:
+					var p := base + Vector3(cs.x * 0.5, cs.y * up, cs.z * 0.5)
+					if not piece.has_point(p):
+						continue
+					var at := Vector3i((piece_inv * p / cs).floor()) + piece_origin
+					if world.is_solid(source.chunk, at):
+						room.gone[i] = true
+						if not redraw.has(index):
+							redraw.append(index)
+						break
+		if redraw.is_empty():
+			continue
+		# Out and back in: _sync_drawn only redraws a room that came or went.
+		for index in redraw:
+			registry.undraw_room(id, index)
+		_sync_drawn(id)
+		for index in redraw:
+			registry.draw_room(id, index)
+		_sync_drawn(id)
+		crushed_by_wreckage += redraw.size()
 
 
 ## Shear, not destroy: a brick struck by falling masonry comes loose.
@@ -3521,6 +3674,88 @@ func scorch(point: Vector3, radius: float) -> int:
 			if not _recolour.has(b.id):
 				_recolour[b.id] = Engine.get_physics_frames() + RECOLOUR_TICKS
 	return n
+
+
+## The chunks fire can reach round `point` (BrickFire): [building id, frame,
+## chunk] for each standing building whose box is within `radius`. With
+## `promote`, a building out of brick range is materialised first -- a flame put
+## to it (lightning, a meteor) -- but fire that is only spreading does not drag
+## far buildings in.
+func fire_chunks(point: Vector3, radius: float, promote := false) -> Array:
+	var out := []
+	for id in _near_buildings(point, radius + 2.0):
+		var b := registry.get_building(id)
+		if b == null or b.toppled:
+			continue
+		if not registry.local_box(b.id).grow(radius).has_point(b.xform.affine_inverse() * point):
+			continue
+		if not b.is_materialised():
+			if not promote or _promote(b.id) < 0:
+				continue
+		var cs := b.chunks()
+		for fi in cs.size():
+			out.append([b.id, fi, cs[fi]])
+	return out
+
+
+## Is this building still standing in bricks (BrickFire): fire steps only those.
+## A toppled one is a piece now -- the burning debris carries its fire on.
+func fire_standing(id: int) -> bool:
+	var b := registry.get_building(id)
+	return b != null and not b.toppled and b.is_materialised()
+
+
+## What fire did to a building's bricks (BrickWorld.fire_step, which already
+## did it): `killed` burnt out, `charred` blackened. Committed -- BURN and
+## SCORCH by ids -- and followed up as a hit's kills are: the bricks stop
+## colliding and drawing, the building is re-solved (a burnt support brings
+## down what it held), the AI's ground is redone round `at`.
+func fire_burnt(id: int, frame: int, killed: PackedInt32Array, charred: PackedInt32Array,
+		at: Vector3) -> void:
+	var b := registry.get_building(id)
+	if b == null or not authority.may_decide():
+		return
+	var pf := Engine.get_physics_frames()
+	if not charred.is_empty():
+		var e := DamageLog.Entry.new()
+		e.tick = pf
+		e.kind = DamageLog.Kind.SCORCH
+		e.target = id
+		e.frame = frame
+		e.flags = DamageLog.FLAG_BLOCKS
+		e.blocks = charred
+		e.point = at
+		authority.commit_entry(e)
+		if not _recolour.has(id):
+			_recolour[id] = pf + RECOLOUR_TICKS
+	if killed.is_empty():
+		return
+	var cs := b.chunks()
+	var box := AABB(at, Vector3.ZERO)
+	if frame < cs.size():
+		var lb: AABB = world.get_blocks_box(cs[frame], killed)
+		box = world.get_chunk_transform(cs[frame]) * lb
+	var e := DamageLog.Entry.new()
+	e.tick = pf
+	e.kind = DamageLog.Kind.BURN
+	e.target = id
+	e.frame = frame
+	e.blocks = killed
+	e.point = box.get_center()
+	e.radius = box.size.length() * 0.5
+	authority.commit_entry(e)
+	b.hit = true
+	_mark_dirty(id)
+	_last_hit[id] = Time.get_ticks_msec()
+	director.note_hit(id, e.point)
+	if frame == 0:
+		if not _pending_disable.has(id):
+			_pending_disable[id] = PackedInt32Array()
+		_pending_disable[id].append_array(killed)
+	else:
+		_disable_frame(id, frame, killed)
+	_queue_remesh(id)
+	islands.wake_near(e.point, e.radius + 2.0)
 
 
 func _setup_gun() -> void:
@@ -4039,7 +4274,7 @@ func _building_of_chunk(chunk: int) -> int:
 	return -1
 
 
-func _weight_load(chunk: int, owner: int, cell: Vector3i, mass: float) -> void:
+func _weight_load(chunk: int, owner_id: int, cell: Vector3i, mass: float) -> void:
 	var id := _building_of_chunk(chunk)
 	if id < 0:
 		return
@@ -4047,14 +4282,14 @@ func _weight_load(chunk: int, owner: int, cell: Vector3i, mass: float) -> void:
 	e.tick = Engine.get_physics_frames()
 	e.kind = DamageLog.Kind.LOAD
 	e.target = id
-	e.owner = owner
+	e.owner = owner_id
 	e.radius = mass
 	e.points.append(Vector3(cell))
 	DamageLog.apply_entry(world, chunk, e)
 	authority.commit_entry(e)
 
 
-func _weight_unload(chunk: int, owner: int) -> void:
+func _weight_unload(chunk: int, owner_id: int) -> void:
 	var id := _building_of_chunk(chunk)
 	if id < 0:
 		return
@@ -4062,7 +4297,7 @@ func _weight_unload(chunk: int, owner: int) -> void:
 	e.tick = Engine.get_physics_frames()
 	e.kind = DamageLog.Kind.UNLOAD
 	e.target = id
-	e.owner = owner
+	e.owner = owner_id
 	DamageLog.apply_entry(world, chunk, e)
 	authority.commit_entry(e)
 
@@ -4334,7 +4569,7 @@ func _nav_on_command(e: DamageLog.Entry) -> void:
 	if e.kind == DamageLog.Kind.CHIP:
 		return
 	match e.kind:
-		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
+		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER, DamageLog.Kind.BURN:
 			var r := Vector3.ONE * (e.radius + 1.0)
 			ai_nav.invalidate_box(AABB(e.point - r, r * 2.0))
 		_:
@@ -4894,7 +5129,7 @@ func _spawn_many(center: Vector3) -> void:
 		var at := center + Vector3(cos(ang), 0.0, sin(ang)) * rng.randf_range(30.0, 60.0)
 		var members: Array[Soldier] = []
 		for i in 6:
-			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, (i / 3) * 1.5))))
+			var so := _spawn_soldier(ai_nav.snap(_on_ground(at + Vector3((i % 3) * 1.5, 0.0, floori(i / 3.0) * 1.5))))
 			members.append(so)
 			budget.add(so)
 		squads.append(Squad.make(ai_services, self, members, 1))
@@ -4952,7 +5187,7 @@ func _spawn_squad(at: Vector3) -> Squad:
 	var members: Array[Soldier] = []
 	for i in 4:
 		members.append(_spawn_soldier(ai_nav.snap(at + Vector3((i % 2) * 1.4 - 0.7, 0.0,
-				(i / 2) * 1.4 - 0.7))))
+				floori(i / 2.0) * 1.4 - 0.7))))
 	var q := Squad.make(ai_services, self, members, 1)
 	squads.append(q)
 	if _player_pawn != null and is_instance_valid(_player_pawn):
@@ -4978,7 +5213,7 @@ func _run_squad_pass() -> void:
 			b = c
 			break
 	var fx: float = b.recipe.footprint_x * STUD
-	var fz: float = b.recipe.footprint_z * STUD
+	var _fz: float = b.recipe.footprint_z * STUD
 	camera.position = b.xform * Vector3(fx * 0.5, 14.0, -16.0)
 	camera.look_at(b.xform * Vector3(fx * 0.5, 1.0, 2.0), Vector3.UP)
 	var enc := start_encounter(_world_box(b).grow(6.0))
@@ -6195,6 +6430,40 @@ func _run_play_pass() -> void:
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
+
+	# The settings menu (Ceramic Edge's menu/, Docs/Reference/ceramicedge.md section 8):
+	# Escape pauses the city under it and resuming gives it back; what is set in Options
+	# reaches the game (BrickcityMenuHost).
+	var mm := get_node_or_null(^"/root/MenuManager")
+	var ms := get_node_or_null(^"/root/MenuSettings")
+	_gate_ok("the menu autoloads are there", mm != null and ms != null)
+	if mm != null and ms != null:
+		_key(KEY_ESCAPE, true)
+		await _frames(2)
+		_key(KEY_ESCAPE, false)
+		await _frames(2)
+		_gate_ok("Escape opens the pause menu over the city, and the city stops",
+				mm.is_open() and get_tree().paused)
+		mm.close_pause()
+		await _frames(2)
+		_gate_ok("and resuming starts it again", not mm.is_open() and not get_tree().paused)
+		var fov_was: Variant = ms.get_value(&"fov")
+		ms.set_value(&"fov", 110, false)
+		await _frames(30)
+		var vp := get_viewport().get_visible_rect().size
+		var want := rad_to_deg(2.0 * atan(tan(deg_to_rad(110.0) * 0.5) / (vp.x / vp.y)))
+		_gate_ok("a field of view set in Options is the view's",
+				is_equal_approx(PlayerView.hfov, 110.0) and absf(camera.fov - want) < 1.0,
+				"camera %.1f, want %.1f" % [camera.fov, want])
+		ms.set_value(&"fov", fov_was, false)
+		var sens_was: Variant = ms.get_value(&"mouse_sensitivity")
+		var crouch_was: Variant = ms.get_value(&"toggle_crouch")
+		ms.set_value(&"mouse_sensitivity", 2.0, false)
+		ms.set_value(&"toggle_crouch", true, false)
+		_gate_ok("and so are the mouse and hold-or-toggle",
+				is_equal_approx(DebugCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
+		ms.set_value(&"mouse_sensitivity", sens_was, false)
+		ms.set_value(&"toggle_crouch", crouch_was, false)
 	_leave_pawn()
 	await _frames(4)
 	_gate_ok("V leaves: the camera flies again", camera.is_processing() and _player_pawn == null)
@@ -6567,6 +6836,11 @@ func _physics_process(_delta: float) -> void:
 
 		var groups: Array = solve.groups
 		if groups.is_empty():
+			# Nothing hanging has failed and nothing is loose -- but is each
+			# storey still able to carry what is above it? (_gravity_fail)
+			if not b.is_build() and _gravity_fail(b):
+				_mark_dirty(b.id)
+				continue
 			# Nothing failed, nothing is falling, nothing is unbalanced: this
 			# building is at rest and does not need looking at again until
 			# something hits it.
@@ -6595,6 +6869,9 @@ func _physics_process(_delta: float) -> void:
 		# log replay missed it) -- once the biggest section went first and eight
 		# a tick, where two a tick had left that group for the next solve.
 		var taken_by_stairs := {}
+		# Where each group that leaves was, in the building's own space: what
+		# its rooms drew there stops being drawn this tick (below).
+		var left_boxes: Array[AABB] = []
 		for entry in plan:
 			var kind: StringName = entry[1]
 			var before: PackedInt32Array = entry[0]
@@ -6627,6 +6904,7 @@ func _physics_process(_delta: float) -> void:
 			# Parent first, island second -- see the note above the toppling
 			# spawn. spawn() returns null for debris discarded unseen; either
 			# way the blocks have left this building.
+			left_boxes.append(world.get_blocks_box(b.chunk, before).grow(0.2))
 			_disable(b.id, before)
 			t = _mark("disable", t)
 			# The detach is a command: WHEN a group leaves is a budget, and timing
@@ -6656,6 +6934,12 @@ func _physics_process(_delta: float) -> void:
 		# Blocks just left it: a fake drawn since the hit is stale again.
 		b.structure_version += 1
 		_fake_dirty[b.id] = true
+		# And until the fake is rebuilt -- a few rooms a pass, the drawing
+		# swapped only once all of them are -- what it drew in the groups that
+		# left hung in the air while they fell, up to 18 ticks on a big tower.
+		if not left_boxes.is_empty():
+			FurnitureMesh.hide_inside(_fake_furniture, b.id, left_boxes)
+			FurnitureMesh.hide_inside(_drawn_furniture, b.id, left_boxes)
 		# Keep drawing those bricks until the piece that took them has come up.
 		# See IslandManager.OVERLAP_FRAMES.
 		# Start a hold, never extend one -- see the same guard in _shed.
@@ -6958,17 +7242,17 @@ func _stream_shells() -> void:
 	var count := registry.buildings.size()
 	if count == 0:
 		return
-	var budget := SHELLS_PER_TICK
+	var shell_budget := SHELLS_PER_TICK
 	var looked := 0
 	# A full pass over the register every eight, however many there are: with
 	# trees in it the register is ten times the city, and a fixed slice left a
 	# building waiting seconds for its tier.
-	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, count / 8 + 1))
-	while looked < slice and budget > 0:
+	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, floori(count / 8.0) + 1))
+	while looked < slice and shell_budget > 0:
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
 		looked += 1
-		budget -= _stream_shell(b, here)
+		shell_budget -= _stream_shell(b, here)
 		# After the shell's own step, so a building whose shell just went
 		# gets its far box in the same tick rather than a pass later.
 		_far_sync(b)
@@ -7115,6 +7399,7 @@ func _inst_set(key: String, recipe: BuildRecipe, near := true) -> ImpostorLod:
 	var inst_mesh := RecipeMesh.build(recipe, key)
 	if inst_mesh != null and String(recipe.name).begins_with("tree_"):
 		s.sway = WeatherFx.sway_tree(inst_mesh.get_aabb().end.y)
+		s.snowcap = 1.0
 	s.setup(inst_mesh, brick_material, TREE_NEAR if near else -1.0)
 	_inst_sets[key] = s
 	return s
@@ -7740,8 +8025,14 @@ func _demesh(id: int) -> void:
 	# The bake is the expensive part -- 3.4 MB a building against a few hundred
 	# kilobytes for its occupancy and blocks.
 	world.drop_chunk_bake(b.chunk)
-	if not _shells.has(id):
-		_make_shell(id, true)
+	# A shell still up here is the one kept through its bands (_bands_done),
+	# drawn from the building before it was made bricks -- given back before
+	# the bands were done, a building shot from afar went on drawing the wall
+	# it had been shot in whole, until something else hit it or the camera
+	# came back. Built again from the bricks as they are.
+	if _shells.has(id):
+		_free_shell(id)
+	_make_shell(id, true)
 	_demeshed += 1
 
 
@@ -7787,9 +8078,16 @@ var _aimed_at := {}   ## building id -> msec it was last aimed at
 ## first made that more of them -- the shot showed at 15 ticks, not 9.
 var _band_first := {}
 var aim_promotions := 0
+## Drawn rooms a landing piece crushed furniture in (_crush_drawn).
+var crushed_by_wreckage := 0
 
 
 func _aim_promote() -> void:
+	# The far pass looks straight at buildings to check the shell ladder, and
+	# a look within AIM_PROMOTE_RANGE made each one bricks under it: no shell
+	# left to check (two of its checks failed on this, not on the ladder).
+	if _far_mode:
+		return
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return
@@ -7899,6 +8197,8 @@ func _trim_quiet() -> void:
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue
+		if world.fire_burning(b.chunk) > 0:
+			continue  # on fire: its heat is only in its bricks
 		if Time.get_ticks_msec() - b.materialised_at < TRIM_AFTER_MS:
 			continue
 		# Not another once this run has had its share: the clock below is
@@ -8197,6 +8497,10 @@ func _toggle_shader(param: String) -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# On foot the buttons are the player's own (rebindable input actions,
+	# PlayerController): firing, aiming and reloading go through the pawn.
+	if event is InputEventMouseButton and _player.is_possessing():
+		return
 	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
 		_gun.set_trigger(false)
 	if event is InputEventMouseButton and event.pressed:
@@ -8270,7 +8574,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
 			_gun_armed = true
 		KEY_R:
-			if _gun_armed:
+			if _gun_armed and not _player.is_possessing():
 				_gun.reload()
 		KEY_F4:
 			_ai_label.visible = not _ai_label.visible
@@ -8284,6 +8588,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			print("[city] chamfered edges: %s"
 					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
+		KEY_I:
+			# Printed on glass / smooth PEI / textured PEI, or injection
+			# moulded (BrickMaterials.set_look).
+			print("[city] finish: %s" % BrickMaterials.cycle_look())
 		KEY_J:
 			# The overlap. A piece that has just come off a building is drawn by
 			# BOTH for two frames, because on the frame it is born there is
@@ -8440,7 +8748,7 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 		await RenderingServer.frame_post_draw
 		samples.append(get_process_delta_time() * 1000.0)
 	var sum := 0.0
-	for i in range(samples.size() / 2, samples.size()):
+	for i in range(floori(samples.size() / 2.0), samples.size()):
 		sum += samples[i]
 	var detailed := 0
 	var meshed_coarse := 0
@@ -9718,14 +10026,14 @@ func _run_far_pass() -> void:
 			past += 1
 		# A coarse shell the far box draws has no mesh: that is one drawer.
 		var shell: bool = _shells.has(b.id) and not _shell_box.has(b.id)
-		var box: bool = _far_on.has(b.id)
+		var on_far: bool = _far_on.has(b.id)
 		if _shell_box.has(b.id) and (_shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
 		# A box under a banded shell that is fading (Stage 5) is what the
 		# shell blends over: one building drawn, not two.
-		if shell and box and float(_far_fade.get(b.id, 0.0)) == 0.0:
+		if shell and on_far and float(_far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
-		elif not shell and not box:
+		elif not shell and not on_far:
 			undrawn += 1
 	print("[far] %d buildings, %d past the shell range, %d shells, %d far boxes" % [
 		registry.buildings.size(), past, _shells.size(), _far_on.size()])
@@ -9819,7 +10127,10 @@ func _run_far_pass() -> void:
 	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", _shells.has(far_id)
 			and not _shell_box.has(far_id) and _shell_bodies.has(far_id)
-			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0))
+			and (not _far_on.has(far_id) or float(_far_fade.get(far_id, 0.0)) > 0.0),
+			"shell %s, box tier %s, body %s, far box %s, bricks %s, aim-promoted %d" % [
+			_shells.has(far_id), _shell_box.has(far_id), _shell_bodies.has(far_id),
+			_far_on.has(far_id), fb.is_materialised(), aim_promotions])
 
 	# Stage 4: player builds out there are cards, one bake for identical ones.
 	var tower := BuildRecipe.load_from("res://builds/watchtower.json")
@@ -9934,7 +10245,9 @@ func _run_far_pass() -> void:
 		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
 				"%.3f vs %.3f" % [holes_a, holes_c])
 	else:
-		_gate_ok("Stage 5: the crossfade leaves no holes", false, "no fading shell to look at")
+		_gate_ok("Stage 5: the crossfade leaves no holes", false,
+				"no fading shell to look at: shell %s, far box %s, bricks %s, aim-promoted %d" % [
+				shell_mi != null, _far_on.has(mid_id), mb.is_materialised(), aim_promotions])
 
 	print("[far] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
@@ -9948,7 +10261,7 @@ func _save_crop(shot_name: String, frac: float) -> void:
 	var img := get_viewport().get_texture().get_image()
 	var full := img.get_size()
 	var size := Vector2i(int(full.x * frac), int(full.y * frac))
-	img = img.get_region(Rect2i((full - size) / 2, size))
+	img = img.get_region(Rect2i(Vector2i(Vector2(full - size) / 2.0), size))
 	img.resize(full.x, full.y, Image.INTERPOLATE_NEAREST)
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
@@ -9980,7 +10293,7 @@ func _grab() -> Image:
 ## Share of `rect`, shrunk a little off its edges, where `img` is far from
 ## `ref`: a hole shows what is behind, and here that is sky.
 static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
-	var r := rect.grow(-maxi(rect.size.x, rect.size.y) / 12)
+	var r := rect.grow(-floori(maxi(rect.size.x, rect.size.y) / 12.0))
 	if r.size.x <= 0 or r.size.y <= 0:
 		return 0.0
 	var off := 0
@@ -9999,13 +10312,18 @@ static func _holes(img: Image, ref: Image, rect: Rect2i) -> float:
 func _far_settle() -> void:
 	var last := -1
 	var quiet := 0
+	# And two whole passes of the streamer over the register: ninety quiet
+	# FRAMES is a third of a second at a high frame rate, less than one pass
+	# with the trees in it, and a building it had not reached yet was read as
+	# having no shell.
+	var from := _stream_cursor
 	for i in 1200:
 		await RenderingServer.frame_post_draw
 		var n := _shells_made + _shells_freed + _shells_swapped + _far_on.size() \
 				+ _shell_far.size() + _shell_bodies.size()
 		quiet = quiet + 1 if n == last else 0
 		last = n
-		if quiet >= 90:
+		if quiet >= 90 and _stream_cursor - from >= registry.buildings.size() * 2:
 			return
 
 
@@ -12253,6 +12571,7 @@ func _build_scenery() -> void:
 		gmat.albedo_color = Color(0.34, 0.35, 0.33)
 		gmat.roughness = 1.0
 		gmesh.material_override = gmat
+		WeatherFx.register_tint(gmat)   # white under snow, dark when wet
 		ground.add_child(gmesh)
 		add_child(ground)
 		_ground_plane = ground

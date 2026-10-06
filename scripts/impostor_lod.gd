@@ -31,6 +31,12 @@ extends Node3D
 ## a node source draws nothing far until then.
 
 const CHUNK := 128.0
+## This set's square size, metres; CHUNK unless `set_chunk` says otherwise
+## before the first `add`. Each square is two MultiMeshes and their shadow
+## passes, so a set of thousands of cards spread over a kilometre wants big
+## squares (fewer draw calls), and a set of a hundred items small ones (tight
+## culling).
+var chunk_m := CHUNK
 
 var near_range := 40.0
 var cull_range := 3000.0
@@ -41,11 +47,11 @@ var source: Node3D
 var material: Material
 var bake := {}
 
-var _xf: Array[Transform3D] = []
-var _want := PackedByteArray()
-var _tier := PackedByteArray()     ## 0 hidden, 1 near, 2 far
-var _chunk_of: Array[Vector2i] = []
-var _free: Array[int] = []
+## The copies themselves -- transform, wanted, tier, square -- and the
+## sorting and packing, in C++ (src/impostor_set.cpp). This loop was
+## GDScript: 3.8 ms a pass for the heightfield scene's 6,000 trees. What
+## stays here is everything that is a node, a mesh or a material.
+var _set := ImpostorSet.new()
 var _tile := 128
 var _far_shadows := true
 var _card_mat: ShaderMaterial = null
@@ -54,11 +60,14 @@ var _near_mat: Material = null
 ## Shader -> its fading copy, so every set sharing a material shares one.
 static var _fading_shaders := {}
 var _quad: QuadMesh = null
-## Vector2i -> {near: MMI, far: MMI, members: Array[int], dirty: bool}
+## Vector2i -> {near: MMI, far: MMI}: each square's two MultiMeshes. Which
+## copies a square holds is the C++ set's business.
 var _chunks := {}
 ## Wind sway for the up-close copies (WeatherFx.sway_tree): (height, lean,
 ## Hz), 0 height for none. Set before the first add().
 var sway := Vector3.ZERO
+## How much the up-close copies' tops take a cap of snow (trees 1).
+var snowcap := 0.0
 var near_count := 0
 var far_count := 0
 
@@ -68,6 +77,7 @@ var far_count := 0
 func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 		p_cull_range: float = 3000.0, far_shadows: bool = true, tile: int = 128) -> void:
 	mesh = p_mesh
+	_near_mesh = _with_lods(p_mesh)
 	material = p_material
 	near_range = p_near_range
 	cull_range = p_cull_range
@@ -115,24 +125,24 @@ func _bake_later() -> void:
 	_card_mat.set_shader_parameter("lod_band", hysteresis)
 	for key in _chunks:
 		_dress_far(_chunks[key])
-		_chunks[key].dirty = true
+	_set.mark_all_dirty()
 	# A node source's copies can take their far tier now: re-sort them all.
 	if mesh == null:
-		for i in _tier.size():
-			if _tier[i] == 1:
-				_tier[i] = 0
+		_set.retier(1, 0)
 
 
 func _chunk(key: Vector2i) -> Dictionary:
 	if _chunks.has(key):
 		return _chunks[key]
-	var c := {"near": null, "far": null, "members": [], "dirty": true}
+	var c := {"near": null, "far": null}
 	if mesh != null:
-		c.near = _make_mmi(mesh, _near_mat)
+		c.near = _make_mmi(_near_mesh, _near_mat)
 		if sway.x > 0.0:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_sway", sway)
+		if snowcap > 0.0:
+			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_snowcap", snowcap)
 		add_child(c.near)
-	var far_mesh: Mesh = mesh
+	var far_mesh: Mesh = _near_mesh
 	c.far = _make_mmi(far_mesh, material)
 	if not _far_shadows:
 		(c.far as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -149,6 +159,29 @@ func _dress_far(c: Dictionary) -> void:
 	var far: MultiMeshInstance3D = c.far
 	far.multimesh.mesh = _quad
 	far.material_override = _card_mat
+
+
+## The mesh the near copies draw: `mesh` with automatic LODs, so a tree forty
+## metres off is not drawn with every stud a tree at your feet has. Godot picks
+## the level per copy by screen-space error (under a pixel by default). On the
+## heightfield scene on foot this took 530k of 1.58M triangles off the frame
+## for ~20 ms, once per mesh. The bake keeps the full `mesh`.
+var _near_mesh: Mesh = null
+static var _lodded := {}
+
+
+static func _with_lods(m: Mesh) -> Mesh:
+	if not (m is ArrayMesh) or m.get_surface_count() != 1:
+		return m
+	if _lodded.has(m):
+		return _lodded[m]
+	var im := ImporterMesh.new()
+	im.add_surface(Mesh.PRIMITIVE_TRIANGLES, (m as ArrayMesh).surface_get_arrays(0), [], {},
+			m.surface_get_material(0))
+	im.generate_lods(25.0, 60.0, [])
+	var out: Mesh = im.get_mesh()
+	_lodded[m] = out
+	return out
 
 
 static func _make_mmi(m: Mesh, mat: Material) -> MultiMeshInstance3D:
@@ -169,181 +202,83 @@ static func _make_mmi(m: Mesh, mat: Material) -> MultiMeshInstance3D:
 	return mmi
 
 
-static func _key(p: Vector3) -> Vector2i:
-	return Vector2i(floori(p.x / CHUNK), floori(p.z / CHUNK))
+func _init() -> void:
+	_set.set_chunk(CHUNK)
+
+
+## The square size, before any copy is added.
+func set_chunk(metres: float) -> void:
+	if _set.count() > 0:
+		push_error("ImpostorLod.set_chunk after copies were added")
+		return
+	chunk_m = metres
+	_set.set_chunk(metres)
 
 
 ## A new copy. Returns its handle, which stays its own until `remove`.
 func add(xf: Transform3D, wanted: bool = true) -> int:
-	var h: int
-	if not _free.is_empty():
-		h = _free.pop_back()
-		_xf[h] = xf
-		_want[h] = 1 if wanted else 0
-		_tier[h] = 0
-		_chunk_of[h] = _key(xf.origin)
-	else:
-		h = _xf.size()
-		_xf.append(xf)
-		_want.append(1 if wanted else 0)
-		_tier.append(0)
-		_chunk_of.append(_key(xf.origin))
-	var c := _chunk(_chunk_of[h])
-	(c.members as Array).append(h)
-	c.dirty = true
+	var h := _set.add(xf, wanted)
+	_chunk(_set.key_of(h))
 	return h
 
 
 ## Moved (an item kicked across the floor), into another square if need be.
 func move(handle: int, xf: Transform3D) -> void:
-	if handle < 0 or handle >= _xf.size():
-		return
-	_xf[handle] = xf
-	var k := _key(xf.origin)
-	var old: Dictionary = _chunks[_chunk_of[handle]]
-	if k != _chunk_of[handle]:
-		(old.members as Array).erase(handle)
-		old.dirty = true
-		_chunk_of[handle] = k
-		var c := _chunk(k)
-		(c.members as Array).append(handle)
-		c.dirty = true
-	elif _tier[handle] != 0:
-		old.dirty = true
+	if _set.move(handle, xf):
+		_chunk(_set.key_of(handle))
 
 
 ## Gone for good (picked up, destroyed). Its handle is reused.
 func remove(handle: int) -> void:
-	if handle < 0 or handle >= _xf.size() or _free.has(handle):
-		return
-	_want[handle] = 0
-	var c: Dictionary = _chunks[_chunk_of[handle]]
-	(c.members as Array).erase(handle)
-	c.dirty = true
-	_tier[handle] = 0
-	_free.append(handle)
+	_set.remove(handle)
 
 
 func count() -> int:
-	return _xf.size() - _free.size()
+	return _set.count()
 
 
 func chunk_count() -> int:
-	return _chunks.size()
+	return _set.chunk_count()
 
 
 func set_wanted(handle: int, on: bool) -> void:
-	if handle < 0 or handle >= _want.size():
-		return
-	var v := 1 if on else 0
-	if _want[handle] != v:
-		_want[handle] = v
-		(_chunks[_chunk_of[handle]] as Dictionary).dirty = true
+	_set.set_wanted(handle, on)
 
 
 func is_drawn(handle: int) -> bool:
-	return handle >= 0 and handle < _tier.size() and _tier[handle] != 0
+	return _set.tier_of(handle) != 0
 
 
 func tier_of(handle: int) -> int:
-	return _tier[handle] if handle >= 0 and handle < _tier.size() else 0
+	return _set.tier_of(handle)
 
 
 ## Sort into tiers from `here`, and repack the squares where anything changed.
+##
+## The sorting and the packing are ImpostorSet's (C++); each square it hands
+## back gets its buffers, and its cards their bounds.
 func update(here: Vector3) -> void:
-	var here2 := Vector2(here.x, here.z)
-	near_count = 0
-	far_count = 0
-	for key in _chunks:
-		var c: Dictionary = _chunks[key]
-		# The square's nearest and furthest points, flat: a whole square on
-		# one side of a range edge is decided without looking inside it.
-		var lo := Vector2(key) * CHUNK
-		var nearest := here2.clamp(lo, lo + Vector2.ONE * CHUNK).distance_to(here2)
-		var furthest := maxf(maxf(here2.distance_to(lo), here2.distance_to(lo + Vector2(CHUNK, 0))),
-				maxf(here2.distance_to(lo + Vector2(0, CHUNK)), here2.distance_to(lo + Vector2.ONE * CHUNK)))
-		var whole := -1
-		if nearest > cull_range + CHUNK:
-			whole = 0
-		elif nearest > near_range + hysteresis + CHUNK * 0.1 and furthest < cull_range:
-			whole = 2
-		var changed: bool = c.dirty
-		c.dirty = false
-		# A node source has nothing to draw far until its bake lands: until
-		# then its owner keeps drawing it at any range.
-		var no_card := mesh == null and bake.is_empty()
-		# A mesh copy crossing the band is drawn as BOTH, dithered into each
-		# other (tier 3) -- once there is a card to cross into.
-		var blend := mesh != null and _card_mat != null
-		for h in c.members:
-			var t := 0
-			if _want[h] != 0:
-				if whole >= 0:
-					t = whole
-				else:
-					var d := _xf[h].origin.distance_to(here)
-					if d > cull_range:
-						t = 0
-					elif blend:
-						# The band is the fade itself: no hysteresis needed,
-						# nothing pops at either edge of it.
-						if d < near_range - hysteresis:
-							t = 1
-						elif d > near_range + hysteresis:
-							t = 2
-						else:
-							t = 3
-					elif _tier[h] == 1:
-						t = 1 if d < near_range + hysteresis else 2
-					else:
-						t = 1 if d < near_range - hysteresis else 2
-				if t == 2 and no_card:
-					t = 1
-			if t != _tier[h]:
-				_tier[h] = t
-				changed = true
-		if changed:
-			_repack(c)
+	# A node source has nothing to draw far until its bake lands: until then
+	# its owner keeps drawing it at any range.
+	var no_card := mesh == null and bake.is_empty()
+	# A mesh copy crossing the band is drawn as BOTH, dithered into each
+	# other (tier 3) -- once there is a card to cross into.
+	var blend := mesh != null and _card_mat != null
+	for r in _set.update(here, near_range, cull_range, hysteresis, blend, no_card):
+		var c := _chunk(r.key)
 		if c.near != null:
-			near_count += (c.near as MultiMeshInstance3D).multimesh.visible_instance_count
-		else:
-			for h in c.members:
-				if _tier[h] == 1 or _tier[h] == 3:
-					near_count += 1
-		far_count += (c.far as MultiMeshInstance3D).multimesh.visible_instance_count
-
-
-func _repack(c: Dictionary) -> void:
-	var near := PackedFloat32Array()
-	var far := PackedFloat32Array()
-	var box := AABB()
-	var first := true
-	for h in c.members:
-		if _tier[h] == 0:
-			continue
-		var x := _xf[h]
-		var row := PackedFloat32Array([x.basis.x.x, x.basis.y.x, x.basis.z.x, x.origin.x,
-				x.basis.x.y, x.basis.y.y, x.basis.z.y, x.origin.y,
-				x.basis.x.z, x.basis.y.z, x.basis.z.z, x.origin.z])
-		if _tier[h] == 1 or _tier[h] == 3:
-			near.append_array(row)
-		if _tier[h] == 2 or _tier[h] == 3:
-			far.append_array(row)
-			box = AABB(x.origin, Vector3.ZERO) if first else box.expand(x.origin)
-			first = false
-	@warning_ignore("integer_division")
-	var n_near := near.size() / 12
-	@warning_ignore("integer_division")
-	var n_far := far.size() / 12
-	if c.near != null:
-		_fill((c.near as MultiMeshInstance3D).multimesh, near, n_near)
-	var far_mmi: MultiMeshInstance3D = c.far
-	_fill(far_mmi.multimesh, far, n_far)
-	if _card_mat != null and not first:
-		# The cards' own bounds: every far copy's origin, grown by what a card
-		# can reach round it (the bake's centre is inside that, radius beyond).
-		var r: float = float(bake.radius) * 2.0 + (bake.centre as Vector3).length()
-		far_mmi.custom_aabb = AABB(box.position - Vector3.ONE * r, box.size + Vector3.ONE * r * 2.0)
+			_fill((c.near as MultiMeshInstance3D).multimesh, r.near, r.n_near)
+		var far_mmi: MultiMeshInstance3D = c.far
+		_fill(far_mmi.multimesh, r.far, r.n_far)
+		if _card_mat != null and r.has_far:
+			# The cards' own bounds: every far copy's origin, grown by what a
+			# card can reach round it (the bake's centre is inside that,
+			# radius beyond).
+			var box: AABB = r.far_box
+			var rad: float = float(bake.radius) * 2.0 + (bake.centre as Vector3).length()
+			far_mmi.custom_aabb = AABB(box.position - Vector3.ONE * rad, box.size + Vector3.ONE * rad * 2.0)
+	near_count = _set.get_near_count()
+	far_count = _set.get_far_count()
 
 
 ## A copy of `mat` whose shader fades the copy out over the band on the pixels

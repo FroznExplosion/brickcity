@@ -22,7 +22,7 @@ var services: AIServices
 var pawn: Pawn
 var pack: AnimalPack
 var team := 2
-var tier := AgentTier.SMART
+var tier: int = AgentTier.SMART
 var tier_hsm: AgentTier
 var swarm_born := false
 var visual: ProcCreature

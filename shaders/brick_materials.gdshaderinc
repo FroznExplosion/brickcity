@@ -30,27 +30,34 @@
 //   10  Wood         no       rings and grain along the piece's long side
 //   11  Metal        no       metallic, brushed along the long side
 //   12  Stone        no       mottled, with veins
+//   13  Leaf         no       vegetation: flat, soft, matte
 
-const int MAT_COUNT = 13;
-const float MAT_PRINTED[13] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0);
-const float MAT_ROUGH[13]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.55, 0.30, 0.72);
-const float MAT_SPEC[13]    = float[](0.55, 0.28, 0.80, 0.60, 0.72, 0.18, 0.32, 0.50, 0.40, 0.35, 0.40, 0.50, 0.32);
+const int MAT_COUNT = 14;
+const float MAT_PRINTED[14] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+const float MAT_ROUGH[14]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.55, 0.30, 0.72, 0.78);
+const float MAT_SPEC[14]    = float[](0.55, 0.28, 0.80, 0.60, 0.72, 0.18, 0.32, 0.50, 0.40, 0.35, 0.40, 0.50, 0.32, 0.22);
 // Metal at 0.8, not 1.0: a fully metallic surface is exactly as bright as
 // what it reflects, and brass and copper came out dull brown wherever the
 // surroundings were plain. A fifth of diffuse keeps the metal's own colour.
-const float MAT_METAL[13]   = float[](0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0);
+const float MAT_METAL[14]   = float[](0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0);
 // Multipliers on the bead: layer height and width, how proud a bead stands,
 // and how dark the groove between two reads.
-const float MAT_LAYER[13]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0);
-const float MAT_RELIEF[13]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
-const float MAT_GROOVE[13]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+const float MAT_LAYER[14]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0);
+const float MAT_RELIEF[14]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+const float MAT_GROOVE[14]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+// Walls: how many loops a slicer walks round the outline before it fills the
+// inside, seen on a top or bottom face (print_surface.gdshaderinc). Two is
+// the ordinary print -- what a real brick's top shows under its studs -- and
+// three on the tough engineering filaments (nylon, carbon), which are the
+// ones printed thick. Not printed: 0.
+const int MAT_WALLS[14]     = int[](2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 0, 0, 0, 0);
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
 // 7 nylon fibre, 8 wood-fill banding.
-const int MAT_TEX[13]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3);
+const int MAT_TEX[14]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3, 0);
 // Light passes through (brick_grid.h `translucent`). With a glass pass on the
 // material these are drawn there instead; without one -- a material nobody
 // gave a second pass -- they draw here, glossy and solid.
-const float MAT_TRANSLUCENT[13] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+const float MAT_TRANSLUCENT[14] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
 int brick_material_id(float alpha) {
     return clamp(int(round((1.0 - alpha) * 255.0)), 0, MAT_COUNT - 1);
@@ -150,6 +157,8 @@ vec3 bm_nylon(vec3 base, vec2 p, float fade) {
     return base * mix(1.0, 0.94 + 0.1 * fuzz, fade);
 }
 
+// `layer_t` is height in 20 mm steps (what a layer was before they were 57 a
+// brick), so the bands kept their size when the layers got finer.
 vec3 bm_wood_fill(vec3 base, vec2 p, float layer_t, float seed, float fade) {
     // Wood-filled PLA prints with streaky light and dark bands where the
     // nozzle ran hotter or cooler -- along the LAYERS, not a grain.

@@ -72,6 +72,8 @@ const ROOM_TRIES := 2
 ## A squad this strong, at least, is sent in to clear a room.
 const CLEAR_WITH := 3
 ## The last few things it decided, newest last, for the HUD and gates.
+# A public field, read by the probes and the HUD: the name stays.
+@warning_ignore("shadowed_global_identifier")
 var log: Array[String] = []
 var orders_given := {}   # OrderKind name -> count
 var reinforcements := 0
@@ -139,10 +141,10 @@ func open_front(where: Vector3, attacker: float, defender: float, fortified := f
 	return f
 
 
-func setup(p_services: AIServices, p_team: int, seed := 0x0C0DE) -> void:
+func setup(p_services: AIServices, p_team: int, p_seed := 0x0C0DE) -> void:
 	services = p_services
 	team = p_team
-	_rng.seed = seed
+	_rng.seed = p_seed
 	doctrine.update(profile, desperation, difficulty)
 
 
@@ -161,7 +163,7 @@ func adopt(q: Squad) -> void:
 
 
 ## A member joined a squad after adoption (spawned one by one).
-func joined(q: Squad, so: Soldier) -> void:
+func joined(_q: Squad, so: Soldier) -> void:
 	_count_in(so)
 
 

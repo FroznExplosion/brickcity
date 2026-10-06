@@ -46,13 +46,13 @@ var _next_promote := -INF
 
 
 func setup(s: AIServices, parent: Node, p_team: int, positions: PackedVector3Array, hp: float,
-		seed := 1) -> void:
+		p_seed := 1) -> void:
 	services = s
 	team = p_team
 	name = "Swarm"
 	core = SwarmCore.new()
 	core.name = "SwarmCore"
-	core.set_seed(seed)
+	core.set_seed(p_seed)
 	core.configure(maxi(positions.size() + 64, 128), 2.0, 120)
 	# Its numbers are ours: it spawns what we tell it, when we tell it.
 	core.set_director_enabled(false)

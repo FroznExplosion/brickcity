@@ -87,7 +87,13 @@ enum Kind {
 	## Fire blackened the bricks in a ball of `radius` (BrickWorld.scorch_hit):
 	## colour only -- nothing dies, no joint changes. A building, world space.
 	## A command because every machine should see the same charred walls.
+	## With FLAG_BLOCKS, the blocks named in `blocks` instead of a ball.
 	SCORCH,
+	## Fire burnt `blocks` out (BrickWorld.fire_step, Docs/Disasters.md 29): they
+	## are gone, as a blast's are. A building; `point` and `radius` are where, for
+	## whoever has to know what changed (navigation). Ids, because what burns
+	## out is decided by heat only the host keeps.
+	BURN,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -112,6 +118,8 @@ const FLAG_SEAM := 32
 ## SHEAR: every block in the ball lets go on its own, rather than a clump peeled
 ## off by its underside -- a floor a mech has come down on (Docs/AI.md 3.11).
 const FLAG_WHOLE := 64
+## SCORCH: char the blocks in `blocks`, not a ball (fire, brick by brick).
+const FLAG_BLOCKS := 128
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -160,7 +168,8 @@ class Entry extends RefCounted:
 		return e
 
 	func is_piece() -> bool:
-		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD or kind == Kind.SCORCH:
+		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD or kind == Kind.SCORCH \
+				or kind == Kind.BURN:
 			return false
 		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 
@@ -241,8 +250,14 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return PackedInt32Array()
 		Kind.SCORCH:
 			# Nothing died: what it returns is not the caller's business.
-			world.scorch_hit(chunk, e.point, e.radius)
+			if e.flags & FLAG_BLOCKS:
+				world.set_scorched_blocks(chunk, e.blocks)
+			else:
+				world.scorch_hit(chunk, e.point, e.radius)
 			return PackedInt32Array()
+		Kind.BURN:
+			world.kill_blocks(chunk, e.blocks)
+			return e.blocks
 		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
 			return _apply_local(world, chunk, e)
 		Kind.PIECE_REST:

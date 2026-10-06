@@ -447,7 +447,8 @@ func _find_piece(c: Dictionary) -> BrickIsland:
 	# A cut's top, not a clump shaken off a facade beside it.
 	var most := TOP_MIN_BRICKS - 1 if c.get("lateral", false) else 0
 	for isl in ctx.islands_near(box.get_center(), box.size.length()):
-		if not isl.is_valid() or not is_instance_valid(isl.body):
+		# Its own: old rubble lying near, in a city already wrecked, is not it.
+		if not isl.is_valid() or not is_instance_valid(isl.body) or isl.owner != int(c.id):
 			continue
 		var n := ctx.piece_bricks(isl)
 		if n > most:

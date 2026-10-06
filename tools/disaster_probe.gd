@@ -32,7 +32,7 @@ extends SceneTree
 ## failures; at Extreme with 1 at once / 3 in all, never more than that, the
 ## failures undermine and topple buildings; with 0 at once nothing falls.
 ##
-##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop
+##     ... -- --only=meteor,lightning,fire,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop,hurricane,snow,multi,hail,giant
 
 var _pass := 0
 var _fail := 0
@@ -101,6 +101,16 @@ func _run() -> void:
 		await _check_char(city, dir)
 	if only == "" or "coop" in only:
 		await _check_coop(city, dir)
+	if only == "" or "hurricane" in only:
+		await _check_city_hurricane(city, dir)
+	if only == "" or "snow" in only:
+		await _check_city_snow(city, dir)
+	if only == "" or "multi" in only:
+		await _check_multi(city, dir)
+	if only == "" or "hail" in only:
+		await _check_hail(city, dir)
+	if only == "" or "giant" in only:
+		await _check_giant(city, dir)
 	root.remove_child(city)
 	city.free()
 
@@ -292,11 +302,18 @@ func _check_fire(city: Node3D, dir: DisasterDirector) -> void:
 	while not city._damage_queue.is_empty() and wait < 600:
 		await physics_frame
 		wait += 1
-	var chips := 0
+	# Brick by brick (Docs/Disasters.md 29): what burnt out is a BURN, what got
+	# hot a SCORCH -- committed, so a client sees the same building.
+	var burns := 0
+	var chars := 0
 	for i in range(n0, city.authority.commands.size()):
-		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
-			chips += 1
-	_ok("it wore the building through CHIP commands", chips > 0, "%d CHIP(s)" % chips)
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.BURN:
+			burns += 1
+		elif e.kind == DamageLog.Kind.SCORCH and e.flags & DamageLog.FLAG_BLOCKS:
+			chars += 1
+	_ok("it burnt the building through BURN and SCORCH commands", burns > 0 and chars > 0,
+			"%d BURN, %d SCORCH" % [burns, chars])
 
 
 func _check_lightning(city: Node3D, dir: DisasterDirector) -> void:
@@ -532,7 +549,21 @@ func _check_soldiers(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 	var ctx := dir.ctx
 	var w: AIWorld = city.ai_world
+	# On open ground: earlier sections leave rubble about, and a soldier boxed
+	# in by it evades and goes nowhere.
 	var feet: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0))
+	for r in range(0, 60, 6):
+		var found := false
+		for k in 8:
+			var a := TAU * k / 8.0
+			var p: Vector3 = city.ai_nav.snap(Vector3(-20.0, 0.0, 40.0) + Vector3(cos(a), 0.0, sin(a)) * r)
+			if city.ai_nav.can_stand(p) and ctx.islands_near(p, 8.0).is_empty() \
+					and ctx.building_at(p, 6.0) < 0:
+				feet = p
+				found = true
+				break
+		if found:
+			break
 	var so: Soldier = city._spawn_soldier(feet)
 	await _ticks(10)
 	# A meteor's ring on top of it: the same hazard the shower sets.
@@ -663,6 +694,7 @@ func _check_intensity(dir: DisasterDirector) -> void:
 	low.free()
 	mid.free()
 	high.free()
+	dir.ctx.forget(null)
 	_ok("the names", DisasterDirector.intensity_name(1.0) == "Medium"
 			and DisasterDirector.intensity_name(2.5) == "Extreme")
 
@@ -679,6 +711,7 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 		q._plan()
 		sizes.append(q.plan.size())
 		q.free()
+	dir.ctx.forget(null)
 	_ok("more intensity, more buildings fail", sizes[0] <= sizes[1] and sizes[1] <= sizes[2]
 			and sizes[2] > 0, "%s at Low / Medium / Extreme" % [sizes])
 
@@ -951,7 +984,7 @@ func _check_char(city: Node3D, dir: DisasterDirector) -> void:
 	while dir.fire.scorches == s0 and t < 30 * 10:
 		await physics_frame
 		t += 1
-	_ok("a burning cell chars its walls", dir.fire.scorches > s0, "after %.1f s" % [t / 30.0])
+	_ok("a fire chars the bricks it heats", dir.fire.scorches > s0, "after %.1f s" % [t / 30.0])
 
 	# A clump knocked off the burning wall takes the fire with it.
 	var caught0 := dir.debris.caught
@@ -1069,6 +1102,412 @@ func _check_coop(city: Node3D, dir: DisasterDirector) -> void:
 	await _until_out(dir)
 
 
+## The hurricane in the city (Docs/Disasters.md 18): the city offers it; the
+## wind leans on loose pieces and puts a sideways load on buildings -- any it
+## blows over is a SEVER seam, to its cap; everything gets wet and sways; and
+## it all clears.
+func _check_city_hurricane(city: Node3D, dir: DisasterDirector) -> void:
+	print("hurricane in the city")
+	await _until_out(dir)
+	_ok("the city offers a hurricane", dir.roll.has("hurricane"))
+	# The tallest standing tower, its bricks in, the camera beside it: what the
+	# wind can put over is what is near the player.
+	var tall = null
+	for b in city.registry.buildings:
+		if not b.toppled and not b.is_build() and (tall == null
+				or CityPlacer.box_of(b).size.y > CityPlacer.box_of(tall).size.y):
+			tall = b
+	var tbox := CityPlacer.box_of(tall)
+	city.camera.global_position = tbox.get_center() + Vector3(-tbox.size.x - 20.0, 0.0, 0.0)
+	if tall.chunk < 0:
+		city._promote(tall.id)
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a hurricane starts", dir.start("hurricane", 2.5))
+	var h: Hurricane = dir.current
+	var cap := maxi(1, int(round(Hurricane.MAX_PUSHED * 2.5)))
+	var pushed := 0
+	var pieces := 0
+	var tilt := 0.0
+	var soak := 0.0
+	var gale := 0.0
+	var t := 0
+	while dir.is_running() and t < 30 * 130:
+		await physics_frame
+		t += 1
+		if is_instance_valid(h):
+			pushed = h.pushed_buildings.size()
+			pieces = h.pieces_pushed
+			tilt = h.peak_tilt
+		soak = maxf(soak, dir.ctx.wet)
+		gale = maxf(gale, dir.ctx.gale.length())
+	await _ticks(6)
+	var seams := 0
+	for i in range(n0, city.authority.commands.size()):
+		var e: DamageLog.Entry = city.authority.commands.entries[i]
+		if e.kind == DamageLog.Kind.SEVER and e.flags & DamageLog.FLAG_SEAM:
+			seams += 1
+	_ok("it runs its course", not dir.is_running(), "%.0f s" % (t / 30.0))
+	_ok("at Extreme it blows the tallest tower over, cut where its joints give, to its cap",
+			pushed > 0 and seams == pushed and pushed <= cap, "%d blown over, %d seam(s), cap %d" % [pushed, seams, cap])
+	_ok("and its top goes over downwind", tilt > 10.0, "%.0f degrees" % tilt)
+	print("  --   %d push(es) to loose pieces" % pieces)
+	_ok("the city gets wet, sways, and the wind stops after", soak > 0.9 and gale > 0.5
+			and dir.ctx.gale == Vector3.ZERO and dir.ctx.wet > 0.5,
+			"wet %.2f, gale %.2f" % [soak, gale])
+	await _until_out(dir)
+
+
+## Snow on a building (Docs/Disasters.md 21): tiles on its tops open to the
+## sky, none on the floors under its roof -- until a hole in the roof lets the
+## snow onto the floor below.
+func _check_city_snow(city: Node3D, dir: DisasterDirector) -> void:
+	print("snow on the city")
+	await _until_out(dir)
+	_ok("the city offers a snowfall", dir.roll.has("snow"))
+	# A tower with its roof still on -- earlier sections cut the tops off some
+	# -- undamaged first, tallest first; its bricks in, the camera by it.
+	var order: Array = []
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id):
+			order.append(c)
+	order.sort_custom(func(x, y) -> bool:
+		if x.is_damaged() != y.is_damaged():
+			return not x.is_damaged()
+		return CityPlacer.box_of(x).size.y > CityPlacer.box_of(y).size.y)
+	var b = null
+	var box := AABB()
+	for c in order:
+		var cbox := CityPlacer.box_of(c)
+		city.camera.global_position = cbox.get_center() + Vector3(-cbox.size.x - 15.0, 0.0, 0.0)
+		if c.chunk < 0:
+			city._promote(c.id)
+		await _ticks(10)
+		var top := dir.ctx.top_of(cbox)
+		if not top.is_empty() and (top.position as Vector3).y > cbox.end.y - 3.0:
+			b = c
+			box = cbox
+			break
+	_ok("a tower with its roof on", b != null)
+	if b == null:
+		return
+	_ok("a snowfall starts", dir.start("snow", 2.5))
+	var t := 0
+	var cover: SnowCover = null
+	while t < 30 * 40:
+		await physics_frame
+		t += 1
+		cover = dir.ctx.snow_cover
+		if cover != null and cover.covers.has(b.id) and cover.covers[b.id].node != null \
+				and dir.ctx.snow > 0.8:
+			break
+	var tops := _snow_tops(cover, b.id)
+	_ok("snow lies on the building", tops.size() > 0, "%d tile top(s)" % tops.size())
+	if "--disaster-shot" in OS.get_cmdline_user_args():
+		var cam := Camera3D.new()
+		cam.far = 2000.0
+		city.add_child(cam)
+		cam.look_at_from_position(box.get_center() + Vector3(-28.0, box.size.y * 0.5 + 12.0, -22.0),
+				box.get_center() + Vector3(0.0, box.size.y * 0.35, 0.0))
+		cam.make_current()
+		await _ticks(40)
+		await _save_shot("snow_city")
+		cam.queue_free()
+		city.camera.make_current()
+	var highest := -INF
+	for p in tops:
+		highest = maxf(highest, (p as Vector3).y)
+	_ok("on its roof: open to the sky, nothing under the roof",
+			highest > box.end.y - 2.0, "highest %.1f m, the box's top %.1f m" % [highest, box.end.y])
+	# A hole through the roof: the floor below is open to the sky now.
+	var roof := Vector3(box.get_center().x, box.end.y - 0.5, box.get_center().z)
+	var before := _snow_height_at(cover, b.id, roof)
+	for k in 3:
+		dir.ctx.blast(roof + Vector3(0.0, -1.2 * k, 0.0), 2.2)
+	var builds0: int = cover.cover_builds
+	t = 0
+	while t < 30 * 8 and cover.cover_builds == builds0:
+		await physics_frame
+		t += 1
+	await _ticks(10)
+	var after := _snow_height_at(cover, b.id, roof)
+	_ok("a hole in the roof lets it onto the floor below", cover.cover_builds > builds0
+			and after < before - 1.0,
+			"snow over the roof's middle at %.1f m, then %.1f m" % [before, after])
+	dir.stop()
+	await _until_over(dir)
+	dir.ctx.snow = 0.0005
+	await _ticks(10)
+	_ok("and it all goes once melted", dir.ctx.snow_cover == null)
+
+
+## The world points of the tops of a building's snow tiles.
+func _snow_tops(cover: SnowCover, id: int) -> Array:
+	var out := []
+	if cover == null or not cover.covers.has(id) or cover.covers[id].node == null:
+		return out
+	var mi: MeshInstance3D = cover.covers[id].node
+	if not is_instance_valid(mi):
+		return out
+	var arrays: Array = mi.mesh.surface_get_arrays(0)
+	var vs: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var cs: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var xf := mi.global_transform
+	for i in vs.size():
+		if cs[i].r > 0.5:
+			out.append(xf * vs[i])
+	return out
+
+
+## How high the building's snow lies over `at` (its XZ): each box's first
+## four vertices are its top (BrickWorld.build_snow_cover). -INF for none.
+func _snow_height_at(cover: SnowCover, id: int, at: Vector3) -> float:
+	if cover == null or not cover.covers.has(id) or cover.covers[id].node == null:
+		return -INF
+	var mi: MeshInstance3D = cover.covers[id].node
+	if not is_instance_valid(mi):
+		return -INF
+	var vs: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var xf := mi.global_transform
+	var best := -INF
+	for i in range(0, vs.size() - 3, 20):
+		var a := xf * vs[i]
+		var c := xf * vs[i + 2]
+		if at.x >= minf(a.x, c.x) and at.x <= maxf(a.x, c.x) and at.z >= minf(a.z, c.z) \
+				and at.z <= maxf(a.z, c.z):
+			best = maxf(best, a.y)
+	return best
+
+
+## Several at once (Docs/Disasters.md 22): a combo starts each of its kinds,
+## each on its own seed; their hazards do not overwrite each other; the winds
+## add; a client joining mid-way is sent every start; stop ends them all; and
+## when the last has gone the sky, the AI's weather, the lens, the storm and
+## the hazards are all as they were.
+func _check_multi(city: Node3D, dir: DisasterDirector) -> void:
+	print("several at once")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	var base: Color = ctx.sky_base().sun_colour
+	_ok("the city offers combos", dir.combos().has("outbreak") and dir.combos().has("superstorm"),
+			str(dir.combos()))
+	_ok("a tornado outbreak starts three tornadoes", dir.start("outbreak", 1.0)
+			and dir.running.size() == 3 and dir.running.all(func(d) -> bool: return d is Tornado))
+	var paths := {}
+	for d in dir.running:
+		paths[(d as Tornado).path[0].snapped(Vector3.ONE)] = true
+	_ok("each on its own path", paths.size() == 3)
+	var late: Array = []
+	dir.add_client(func(m: Array) -> void: late.append(m))
+	_ok("a client joining mid-way is sent all three", late.size() == 3)
+	var most_hazards := 0
+	var gale := 0.0
+	var t := 0
+	while dir.is_running() and t < 30 * 150:
+		await physics_frame
+		t += 1
+		most_hazards = maxi(most_hazards, ctx.hazards.size())
+		gale = maxf(gale, ctx.gale.length())
+	_ok("their hazards stand side by side", most_hazards >= 3, "%d at most" % most_hazards)
+	_ok("the winds add, to the cap", gale > 0.3 and gale <= 1.5 + 1e-4, "gale up to %.2f" % gale)
+	_ok("they all end", not dir.is_running() and dir.running.is_empty(), "%.0f s" % (t / 30.0))
+	await _ticks(5)
+	_ok("and leave nothing behind: sky, AI weather, lens, storm, hazards", _all_clear(city, ctx, base))
+
+	_ok("a superstorm starts a hurricane and two tornadoes", dir.start("superstorm", 1.0)
+			and dir.running.size() == 3)
+	_ok("nothing else starts while they run", not dir.start("meteor"))
+	await _ticks(30 * 20)
+	dir.stop()
+	_ok("stop ends them all", dir.running.all(func(d) -> bool:
+			return d.phase == Disaster.Phase.ENDING or d.phase == Disaster.Phase.DONE))
+	t = 0
+	while dir.is_running() and t < 30 * 60:
+		await physics_frame
+		t += 1
+	await _ticks(5)
+	_ok("and they leave nothing behind either", not dir.is_running() and _all_clear(city, ctx, base))
+	await _until_out(dir)
+
+
+func _all_clear(city: Node3D, ctx: DisasterContext, base: Color) -> bool:
+	var lens_clear := ctx.screen == null or (float(ctx.screen.get_shader_parameter("rain")) == 0.0
+			and float(ctx.screen.get_shader_parameter("dust")) == 0.0)
+	var ok: bool = ((city._sun as DirectionalLight3D).light_color == base and ctx.hazards.is_empty()
+			and city.ai_services.sight_mul == 1.0 and city.ai_services.aim_mul == 1.0
+			and not city.ai_services.storm and lens_clear and ctx.gale == Vector3.ZERO
+			and not ctx.raining)
+	if not ok:
+		print("  --   left: sun %s (base %s), %d hazard(s), sight %.2f aim %.2f storm %s lens %s gale %s rain %s" % [
+				(city._sun as DirectionalLight3D).light_color, base, ctx.hazards.size(),
+				city.ai_services.sight_mul, city.ai_services.aim_mul, city.ai_services.storm,
+				lens_clear, ctx.gale, ctx.raining])
+	return ok
+
+
+## Hail (Docs/Disasters.md 24): stones land on what is open to the sky, wear
+## it as committed CHIPs, are heard as the material they hit, bruise whoever
+## is out in it, and lie thin.
+func _check_hail(city: Node3D, dir: DisasterDirector) -> void:
+	print("hail")
+	await _until_out(dir)
+	var ctx := dir.ctx
+	# On a roof's edge: the roof under the stones, the street beside.
+	var b = null
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id):
+			b = c
+			break
+	var box := CityPlacer.box_of(b)
+	city.camera.global_position = Vector3(box.position.x - 2.0, box.end.y + 3.0, box.get_center().z)
+	if b.chunk < 0:
+		city._promote(b.id)
+	var feet: Vector3 = city.ai_nav.snap(Vector3(box.position.x - 6.0, 0.0, box.get_center().z))
+	var so: Soldier = city._spawn_soldier(feet)
+	so.brain.active = false
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a hailstorm starts", dir.start("hail", 1.0))
+	var h: Hailstorm = dir.current
+	var heard := {}
+	var lying := 0.0
+	var got := [0, 0, 0]
+	var t := 0
+	while dir.is_running() and t < 30 * 70:
+		await physics_frame
+		t += 1
+		lying = maxf(lying, ctx.snow)
+		if is_instance_valid(h):
+			got = [h.landings, h.chips, h.bruised]
+			var rs = h.get_node_or_null("RainSplash")
+			if rs != null and (rs as RainSplash).sounds != null:
+				heard = (rs as RainSplash).sounds.by_family.duplicate()
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 300:
+		await physics_frame
+		wait += 1
+	var chipped := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.CHIP:
+			chipped += 1
+	_ok("stones land, and wear what they hit as committed CHIPs", got[0] > 100 and got[1] > 0
+			and chipped >= got[1], "%d landing(s), %d chip(s), %d CHIP command(s)" % [got[0], got[1], chipped])
+	_ok("heard as what they hit: the roof's plastic among it", int(heard.get("plastic", 0)) > 20,
+			str(heard))
+	_ok("a soldier out in it is bruised", got[2] > 0)
+	_ok("they lie, thin", lying > 0.2 and lying <= Hailstorm.LIE_CAP + 0.01, "%.2f" % lying)
+	_ok("and it clears", not dir.is_running() and not ctx.snowing and not ctx.raining)
+	ctx.snow = 0.0005
+	await _ticks(10)
+
+
+## The meteor variants (Docs/Disasters.md 23): the heavy shower has two to
+## three times the rocks; the mixed one small rocks and one or two giants; and
+## a giant lands as one crater, a shockwave and ejecta, through the authority.
+func _check_giant(city: Node3D, dir: DisasterDirector) -> void:
+	print("meteor variants")
+	await _until_out(dir)
+	var normal := MeteorShower.new()
+	normal.begin(dir.ctx, 77)
+	var heavy := MeteorStorm.new()
+	heavy.begin(dir.ctx, 77)
+	var mixed := MeteorMixed.new()
+	mixed.begin(dir.ctx, 77)
+	var giants := 0
+	var small_max := 0.0
+	for m in mixed.meteors:
+		if m.get("giant", false):
+			giants += 1
+		else:
+			small_max = maxf(small_max, float(m.radius))
+	_ok("a heavy shower has two to three times the rocks", heavy.meteors.size() >= normal.meteors.size() * 1.7,
+			"%d against %d" % [heavy.meteors.size(), normal.meteors.size()])
+	_ok("a mixed one, small rocks and one or two giants", giants >= 1 and giants <= 2 and small_max <= 2.3,
+			"%d giant(s), small ones up to %.1f m" % [giants, small_max])
+	normal.free()
+	heavy.free()
+	mixed.free()
+	dir.ctx.forget(null)
+
+	# A giant, for real: by the tallest tower, its bricks in, the camera off it.
+	var b = null
+	for c in city.registry.buildings:
+		if not c.toppled and not c.is_build() and not city._is_tree(c.id) and (b == null
+				or CityPlacer.box_of(c).size.y > CityPlacer.box_of(b).size.y):
+			b = c
+	var box := CityPlacer.box_of(b)
+	city.camera.global_position = box.get_center() + Vector3(-box.size.x - 40.0, 10.0, 0.0)
+	if b.chunk < 0:
+		city._promote(b.id)
+	await _ticks(10)
+	var n0: int = city.authority.commands.size()
+	_ok("a giant meteor starts", dir.start("big_meteor", 1.0))
+	var g: BigMeteor = dir.current
+	var landed := 0
+	var pieces := 0
+	var radius := 0.0
+	var worst := 0.0
+	var worst_parts := {}
+	var impact_ms := 0.0
+	var worst_when := ""
+	var pawns_hit := 0
+	var t := 0
+	while dir.is_running() and t < 30 * 60:
+		await physics_frame
+		t += 1
+		var tick_ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		if tick_ms > worst and is_instance_valid(g) and g.giants_landed > 0:
+			worst = tick_ms
+			worst_parts = (city._prof as Dictionary).duplicate()
+			worst_when = "%s %.1f s" % [Disaster.phase_name(g.phase), g.phase_t] if is_instance_valid(g) else "after"
+		# Once its spot is marked: soldiers just outside the crater, for the wave.
+		if is_instance_valid(g) and not g.has_meta("placed") and g.meteors[0].has("aim"):
+			g.set_meta("placed", true)
+			var aim: Vector3 = g.meteors[0].aim
+			var rr := float(g.meteors[0].radius)
+			for k in 3:
+				var a := TAU * k / 3.0
+				var w: Soldier = city._spawn_soldier(city.ai_nav.snap(aim + Vector3(cos(a), 0.0, sin(a)) * rr * 1.6))
+				w.brain.active = false
+		if is_instance_valid(g):
+			landed = g.giants_landed
+			impact_ms = g.impact_ms
+			pawns_hit = g.shocked_pawns
+			pieces = g.shocked_pieces
+			if not g.impacts.is_empty():
+				radius = float(g.impacts[0].radius)
+				if "--disaster-shot" in OS.get_cmdline_user_args() and not g.has_meta("shot") 						and g.phase_t > float(g.meteors[0].t) + 1.5:
+					g.set_meta("shot", true)
+					var cam := Camera3D.new()
+					cam.far = 2000.0
+					city.add_child(cam)
+					var at: Vector3 = g.impacts[0].pos
+					cam.look_at_from_position(at + Vector3(-60.0, 35.0, -45.0), at + Vector3(0.0, 4.0, 0.0))
+					cam.make_current()
+					await _ticks(3)
+					await _save_shot("giant_meteor")
+					cam.queue_free()
+					city.camera.make_current()
+	var wait := 0
+	while not city._damage_queue.is_empty() and wait < 600:
+		await physics_frame
+		wait += 1
+	var blasts := 0
+	for i in range(n0, city.authority.commands.size()):
+		if city.authority.commands.entries[i].kind == DamageLog.Kind.BLAST:
+			blasts += 1
+	_ok("one giant lands, a crater of %.1f m" % radius, landed == 1 and radius >= MeteorShower.GIANT_RADIUS - 0.01)
+	_ok("its crater and its ejecta are committed blasts", blasts >= 2, "%d BLAST(s)" % blasts)
+	_ok("the shockwave knocks down whoever is near", pawns_hit > 0, "%d soldier(s); %d piece(s) thrown" % [pawns_hit, pieces])
+	var parts := []
+	for k in worst_parts:
+		if float(worst_parts[k]) >= 2.0:
+			parts.append("%s %.0f" % [k, float(worst_parts[k])])
+	print("  --   worst physics tick after it lands: %.1f ms (%s); the impact itself %.1f ms; at %s" % [worst, ", ".join(parts), impact_ms, worst_when])
+	_ok("and it clears", not dir.is_running() and dir.ctx.hazards.is_empty())
+	await _until_out(dir)
+
+
 func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
 	print("meteor shower")
 	# The same seed rolls the same shower -- without a city: the schedule is
@@ -1084,6 +1523,8 @@ func _check_meteor(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("one seed, one shower", same, "%d meteors" % a.meteors.size())
 	a.free()
 	b.free()
+	# Made outside the director: what they set in WARNING is no one's to clear.
+	dir.ctx.forget(null)
 	var base: Color = dir.ctx.sky_base().sun_colour
 
 	var n0: int = city.authority.commands.size()

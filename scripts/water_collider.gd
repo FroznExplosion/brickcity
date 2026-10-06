@@ -46,11 +46,12 @@ func setup(space: RID) -> void:
 
 	_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
-	PhysicsServer3D.body_set_space(_body, space)
 	PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 	PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
 	for i in cells * cells:
 		PhysicsServer3D.body_add_shape(_body, _shape, Transform3D())
+	# Shapes first, then the space (TerrainTile.add_collision).
+	PhysicsServer3D.body_set_space(_body, space)
 
 
 ## Put the patch under `centre_xz` and fit it to the wave at `time`.
@@ -69,6 +70,11 @@ func follow(centre_xz: Vector2, time: float, delta: float) -> void:
 	_centre = at
 
 	var half := float(cells) * 0.5 - 0.5
+	# Out of the space while the boxes move, back in after. Jolt rebuilds a
+	# body's compound shape on every shape change while it is in the space:
+	# 81 moves were 81 rebuilds, 8 ms a refit at up to 20 refits a second.
+	var space := PhysicsServer3D.body_get_space(_body)
+	PhysicsServer3D.body_set_space(_body, RID())
 	for i in cells * cells:
 		@warning_ignore("integer_division")
 		var cz := i / cells
@@ -81,6 +87,7 @@ func follow(centre_xz: Vector2, time: float, delta: float) -> void:
 		var y: float = BrickWave.height_at(x, z, time)
 		PhysicsServer3D.body_set_shape_transform(_body, i,
 			Transform3D(Basis(), Vector3(x, y - thickness * 0.5, z)))
+	PhysicsServer3D.body_set_space(_body, space)
 
 
 func _exit_tree() -> void:

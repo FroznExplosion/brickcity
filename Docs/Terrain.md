@@ -3157,3 +3157,103 @@ a couple of seconds. Now a tool switch or stroke does not touch the shells; `Ter
 its sets and re-places only the trees in the changed area (`rebuild_soon(studs)`). The brush's
 aim (`BrickTerrain.ray_ground`) and the sea's WET map (`BrickWave.wet_cells`) moved to C++.
 Measured in the editor scene: 758 k triangles before a switch to RAISE, 761 k peak after.
+
+### 22.9 What runs every frame, measured (2026-10-03)
+
+Each per-frame piece of the heightfield scene timed alone (editor open, so indicative; ms per frame,
+camera still / moving at ~15 m/s):
+
+| piece | before | after | what changed |
+|---|---|---|---|
+| trees re-tiering (ImpostorLod.update, 6000 trees) | 3.8 every 10th frame | ~0 still, 0.2 moving | a set is re-sorted only after the camera moves a metre, one set a frame |
+| streamer.follow | 1.0 / 3.8 | 0.12 / 2.6 | `_finish` and the shadow flags skip when nothing is owed / the centre has not moved |
+| HUD | 0.3 every frame | 0.16 at 5 Hz | throttled |
+| pools' sea mask | 4.7 per rebuild | 0.11 | calm stamped round wet columns, not a distance pass over the window |
+
+What is left is not GDScript arithmetic: the moving streamer cost is creating meshes, multimeshes
+and 200–300 collision boxes per tile through the engine, under its per-frame budget. The big
+lever there is collision as ONE shape per tile (a HeightMapShape3D from C++) instead of hundreds of
+boxes — but a heightmap shape ramps between columns where the boxes step, which changes how the
+ground feels underfoot, so it is a decision, not a cleanup.
+
+### 22.10 Two engine stalls behind the streaming spikes (2026-10-03)
+
+Neither was GDScript arithmetic, and neither needed C++ — both were the ORDER of engine calls.
+
+* **Collision.** Every box was added to a tile's body after the body had joined the physics space,
+  and Jolt rebuilds a body's whole compound shape on each change while it is in the space. A
+  670-box tile: 24.9 ms that way, 0.77 ms with the boxes added first and the body put in the space
+  after (`TerrainTile.add_collision`). The streamer's 32-boxes-a-frame cap existed to bound the
+  first number and is gone (`shapes_per_frame = 0`). The sea's swim patch moved 81 boxes in the
+  space 20 times a second: 0.95 ms a refit, 0.065 ms out of the space (`water_collider.gd`). The
+  city's building code already did this; the terrain had not.
+* **Instances.** A NEW MultiMesh entering the tree stalls on the render thread: 4.5 ms a node on
+  average, 19 ms at worst, for one stud or a thousand. A MultiMesh drawn before fills and shows in
+  a new node in 0.04 ms. Tiles now hand their stud, tuft and pebble MultiMeshes back to a pool when
+  they leave and the next tile takes them (`TerrainTile._take_multimesh`).
+
+Walking at ~15 m/s through the heightfield scene, three runs each, other chats' tests running
+alongside both: `streamer.follow` mean 3.2 ms before, 0.56 ms after; worst collision phase 5 ms to
+1.1 ms; worst instance phase 20 ms to 13–18 ms (the pool is empty until tiles start dropping).
+The first merge of this carried the cap removal WITHOUT the collision reorder (reverted by
+accident with a test flag): whole tiles into a live body, 85 ms spikes. Fixed in the next merge.
+
+### 22.11 One collision shape a tile: measured, not taken (2026-10-03)
+
+Built the tile's collider as one triangle mesh in C++ (the merged boxes' tops and walls, 5,000
+triangles, made on the bake's worker thread) and timed it against the boxes in the heightfield
+scene, 20 tiles: boxes **0.37 ms** a tile (added before the body joins the space, §22.10), trimesh
+**4.0–4.7 ms** (worst 22 ms) — Jolt builds the mesh's search tree on the main thread when the
+shape is set. A 65x65 heightmap shape was 0.53 ms and would turn every brick step into a ramp.
+Neither beats the boxes once they are added in the right order, so the boxes stay and the trimesh
+code was removed.
+
+### 22.12 Where the triangles go, and what was tried (2026-10-05)
+
+Heightfield scene, measured by hiding each group (frame totals include the sun's shadow pass):
+
+| view | frame | detail terrain | studs | trees | sea | shadow pass |
+|---|---|---|---|---|---|---|
+| editor, high | 686 k tris, 1,658 calls | 57 k | 0 | 289 k, **1,467 calls** | 26 k | 245 k |
+| on foot | 1.58 M tris, 585 calls | 415 k (4.9 k a tile) | 61 k | **772 k** | 26 k | 643 k |
+
+Tried, on foot:
+
+| idea | result | taken |
+|---|---|---|
+| automatic LODs on the near tree mesh (ImporterMesh.generate_lods) | **−530 k tris (−33%)**, ~20 ms once a mesh, no visible change | yes — `ImpostorLod._with_lods`, every set (trees, items, city) |
+| far tree cards cast no shadow | −4 k tris, −85 calls | no: trees want their far shadows; small |
+| sun shadow distance 60 m | already 60 | — |
+| automatic LODs on terrain tiles | −4 k tris, 7 ms a tile | no: brick tops have nothing to simplify |
+| occlusion culling, coarse ground as occluders | 0 in this view | no: a 128 m tree square or an 11 m tile is almost never wholly behind a hill |
+
+The census's "1,467 tree calls" was taken before the trees had sorted into tiers after loading;
+settled, from the same height, they are 258.
+
+**Tree squares** (`ImpostorLod.set_chunk`, `TerrainTrees.chunk_metres`), trees only, settled:
+
+| square | calls, editor / on foot | tree tris, editor |
+|---|---|---|
+| 128 m | 258 / 289 | 238 k |
+| 256 m | 179 / 194 | 247 k |
+| **512 m (taken)** | **150 / 162** | 280 k |
+| 1024 m | 142 / 143 | 288 k |
+
+Fewer squares cull less finely, but what they add is two-triangle cards; −42% draw calls is the
+better trade. Items and the city keep 128 m.
+
+**Detail radius.** The detail square snaps to `TerrainStreamer.align` blocks (4 tiles): the
+camera's block plus a whole block each side, so full bricks reach 4–7 tiles (45–80 m) and a radius
+of 3 is the same square as 4. A tighter square needs 2-tile blocks (`-- --align=2` in the
+heightfield scene, for comparing):
+
+| | resident tiles | drawn, mech view | drawn, on foot |
+|---|---|---|---|
+| now (radius 4, blocks of 4) | 240 | 1.20 M | 1.09 M |
+| radius 3, blocks of 2 | 140 | 1.10 M | 1.13 M |
+| radius 2, blocks of 2 | 60 | 0.97 M | 0.99 M |
+
+Resident tiles fall a lot (less to bake and hold); what is DRAWN barely moves — the coarse ground
+takes the area over and has triangles of its own, and the frame is mostly trees and shadows. At
+radius 2 the ground 20–40 m off visibly loses its slopes and curves. Not changed; a look decision
+(`shots/detail_radius_*.png` in the main folder).

@@ -1104,6 +1104,37 @@ float rounding picked, sometimes the one that put the part into the baseplate.
 | **Merge cell faces into block faces in the bake** | Already done when it was written down as outstanding. Re-measured on the real gate tower: **8.34 baked faces per block**, not 43.9. See §10.1 |
 | **Damage-aware shell — gate G1b** | Done, §9.5. 744 bytes and 2.43 ms per damaged building; intact ones draw byte-identical geometry to before |
 
+### The printed look — 57 layers, three finishes, four looks ✅
+
+`shaders/print_surface.gdshaderinc`, shared by the brick shader and the stud/scatter shader, so a
+stud and the brick under it came off the same printer. A real FDM part has three surfaces, and
+looking printed is mostly getting the difference between them right:
+
+| Face | What it is | Roughness (PLA) |
+|---|---|---|
+| side | **57 layers on a 2x4 counting its studs** (11.4 mm at 0.2 mm): **48 on the body** (16 a plate, 8.75 mm in game) and **9 up each stud** (`stud_layers`). Layer height is snapped to a whole number a plate, so a coarser material (`MAT_LAYER`) still ends each brick on a whole layer. A small shade wobble per layer | 0.50 — dull |
+| top | the last skin: `MAT_WALLS` loops round the outline (2 — what a real brick shows under its studs; 3 for nylon and carbon; `wall_bonus` adds to all), a fine dark junction where the infill meets the inner wall, then **one path zigzagging diagonally from corner to corner**: parallel beads whose grooves stop short of the wall on alternate ends, where the path turns (`ps_zigzag_join`). Direction hashed per piece. Lines 0.028 m | 0.36 — satin |
+| stud top | **one path spiralling in to the centre, following the octagon** — loops of the stud's own outline, corners rounded by a fifth of a bead (`ngon_depth_round`, a soft max over the edges) so they do not draw creases; stud sides' facets half-softened toward round (`stud_round`) | as top |
+| bottom | the first layer, squashed into the bed: 0.032 m lines, the raster the other way to the top, and the **bed's** finish | glass 0.10 · smooth PEI 0.25 · textured PEI 0.62 with a powder-coat grain |
+
+The layers also drive **anisotropy**: the lighting's tangent is set across the beads, so the
+highlight smears across the layers and stays tight along them. That is what still says "printed"
+past the few metres where 48 lines a brick are resolved and dissolve into roughness — at 1080p a
+layer is under a pixel from about 2.5 m (stud layers sooner), and drawing it there only crawls. The
+earlier 21-a-brick setting existed for that reason; the anisotropy is what replaces them there.
+
+**The finish is global and costs nothing a frame.** `BrickMaterials.set_look(finish, bed)` rewrites
+`shaders/print_finish.gdshaderinc`'s two constants in memory, and Godot recompiles every shader that
+includes it — whoever made the material (city, workshop, sandbox, impostor copies). `finish` 1 is
+**injection moulded**: no lines, every face the same glossy skin (roughness × 0.5). Remembered in
+`user://print_look.cfg`. Workshop: the **Finish** menu. City: **I** steps glass → smooth PEI →
+textured PEI → moulded.
+
+Pictures: `tools/print_look_shot.gd` (not headless) writes each look from the side, top, below and
+at range. Not done: per-PIECE strength (a strong flag on a block would need a bit in the block data
+and the mesher; walls are per material for now); terrain and water keep their own print code and
+do not follow the finish switch yet.
+
 ### What is deferred, and stays deferred
 
 Hinges, swivels, sliders, axles, motors and the float connector table — so vehicles, aircraft and

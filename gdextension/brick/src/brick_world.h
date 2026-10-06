@@ -396,6 +396,42 @@ public:
     /// horizontal axis.
     Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
 
+    /// Gravity alone, storey by storey (Docs/Collapse.md, "per-floor"). The
+    /// stress solve fails only joints in tension, and the stability test asks
+    /// only whether the whole building stands on its foundation -- so a top
+    /// resting on one corner of a storey could neither tip off it nor crush
+    /// it: six bricks held up nine hundred. Pure query, like lateral_check.
+    ///
+    /// At every course boundary above the foundation, of what is grounded:
+    ///   TIP    the weight above, at its centre of mass, outside the extent
+    ///          of the contact at the boundary on some side: it overturns
+    ///          about that edge unless the studs behind it, each holding
+    ///          tension_per_stud at its own lever, hold it back.
+    ///   CRUSH  the weight above against the contact at the boundary, each
+    ///          stud bearing `crush_per_stud` times tension_per_stud.
+    /// Returns {ratio, kind ("tip" or "crush"), level, level_cell, mass_above,
+    /// boundaries} for the worst boundary; ratio >= 1 fails there.
+    Dictionary gravity_check(int chunk_id, float crush_per_stud);
+
+    // --- snow cover (Docs/Disasters.md 21) ----------------------------------
+
+    /// Snow on a chunk: smooth tiles, `thickness` metres thick, on every top
+    /// a living block shows to the SKY -- each column scanned from the top
+    /// down to its first living, structural, attached block. A floor under a
+    /// roof gets none; a roof blown away lets it onto the floor below.
+    /// Equal neighbouring tops are merged into rectangles, each a low box
+    /// (top and four sides, no bottom). Mesh arrays in chunk-local metres;
+    /// COLOR.r is 1 on the top of the snow and 0 at its foot, so a shader can
+    /// grow it from nothing. Empty Array when there is no exposed top.
+    Array build_snow_cover(int chunk_id, float thickness);
+    /// The same from a grid of tops: `tops` is w x d plate heights (the top of
+    /// the ground in plates, row-major x fastest), any value below -1000000
+    /// for "no snow here". `cell` is the cell's metres across, `plate` a
+    /// plate's height, and the grid's corner is at `origin` (world XZ).
+    /// Vertices in world metres. For the terrain.
+    static Array build_snow_cover_tops(const PackedInt32Array &tops, int w, int d, float cell,
+            float plate, float thickness, Vector2 origin);
+
     /// What one cell of stud contact can carry IN TENSION, in the same mass
     /// units archetypes use. This is a real quantity, not a tuning knob: a
     /// brick connection releases at 3-5 N, a brick weighs about 2.5 g, so a
@@ -577,6 +613,44 @@ public:
     PackedInt32Array get_scorched_blocks(int chunk_id) const;
     /// Char these blocks again. Ids that are gone are skipped.
     void set_scorched_blocks(int chunk_id, const PackedInt32Array &ids);
+
+    // --- fire, brick by brick (Docs/Disasters.md 29) -------------------------
+    //
+    // Each block has heat; a BURNING block has fuel, by its material and size,
+    // and when the fuel is gone the block is. A burning block heats what is
+    // next to it -- most of all what is above it (flames climb), more of what
+    // is downwind -- and reaches across a few cells of air upward and
+    // downwind. A block catches when its heat passes 1 AND it touches air: a
+    // brick buried in others heats but cannot burn until what is round it has
+    // burnt away, which is why a canopy burns from the outside in and a wall
+    // from its faces, with nothing special-cased. Metal and stone never burn,
+    // only char. The state is the host's; what it DOES (blocks killed and
+    // charred) is returned, so the caller can commit it as commands.
+
+    /// Add heat to every block with a cell within radius_m of a world point
+    /// (and the one the point is in). A flame put to it (by_material false):
+    /// what burns takes it whole, what does not its share. An ember (true):
+    /// everything by how readily its material takes heat -- leaves catch from
+    /// a couple, plastic hardly. Returns how many of them can burn.
+    int fire_heat(int chunk_id, Vector3 world_point, float radius_m, float heat,
+            bool by_material = false);
+    /// One step of `dt` seconds under `wind` (world, m/s) and `damp` (1 dry,
+    /// less in rain). Kills what burnt out and chars what got hot, and returns
+    /// {"killed", "charred": ids; "points": world centres of burning blocks;
+    /// "power": their flames 0..1; "loose": where burning blocks were carried
+    /// off on a piece since the last step; "caught": how many caught this step;
+    /// "burning": how many burn; "active": whether anything is still hot}.
+    Dictionary fire_step(int chunk_id, float dt, Vector3 wind, float damp, int max_burning);
+    /// Put the chunk's fire out: every block's heat and flame gone.
+    void fire_clear(int chunk_id);
+    /// How many of the chunk's blocks are burning.
+    int fire_burning(int chunk_id) const;
+    /// One block's fire, for probes: [heat, 1 if burning, fuel left, seconds
+    /// burning]; all 0 for a block with none.
+    PackedFloat32Array fire_get(int chunk_id, int block_id) const;
+    /// Seconds a block of this material and this many cells burns; 0 for one
+    /// that does not burn.
+    static float fire_burn_seconds(int material, int cells);
 
     /// How many authored triangles the chunk's living blocks draw (a curved
     /// stair tread's `mesh`, against a brick's handful of voxel faces). Bricks
@@ -986,6 +1060,18 @@ private:
         std::vector<int64_t> headroom;
     };
     std::vector<StressState> stress;
+
+    /// Fire, per chunk: the blocks with any heat, by id (ordered: the step is
+    /// the same every run). See fire_step.
+    struct FireBlock {
+        float heat = 0.0f;
+        float fuel = 0.0f;      ///< seconds left; burning while > 0
+        float fuel0 = 0.0f;
+        float age = 0.0f;       ///< seconds burning
+        bool burning = false;
+    };
+    std::vector<std::map<int32_t, FireBlock>> fire_state;
+    std::map<int32_t, FireBlock> *fire_of(int chunk_id);
 
     // Scratch for the structural solve, one set per thread that solves
     // (solve_structures runs several buildings' solves at once). Slot 0 is the

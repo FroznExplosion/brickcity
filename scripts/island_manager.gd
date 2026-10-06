@@ -1139,7 +1139,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	# Measured while the blocks are still in the source: the size decides both
 	# whether it becomes a body at all and what kind of body it is.
 	var landmark := group_is_landmark(source, block_ids)
-	var crumbled_as := CRUMB_NOT
+	var crumbled_as: int = CRUMB_NOT
 	if _crumbled_pieces.has(piece_id):
 		_crumbled_pieces.erase(piece_id)
 		crumbled_as = _crumble(source, block_ids, inherit_linear, LANDMARK_COUNT)
@@ -1486,7 +1486,7 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 		var hit := get_world_3d().direct_space_state.intersect_ray(q)
 		if not hit.is_empty():
 			floor_y = (hit.position as Vector3).y
-	var basis := xf.basis.orthonormalized()
+	var frame_basis := xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
 	for id in block_ids:
 		if world.is_block_decorative(source, id):
@@ -1501,7 +1501,7 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 		cr.pos.append(xf * local)
 		cr.vel.append(linear + kick + Vector3(randf_range(-1.0, 1.0), randf_range(0.0, 1.0),
 				randf_range(-1.0, 1.0)) * CRUMB_SCATTER)
-		cr.base.append(basis)
+		cr.base.append(frame_basis)
 		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
 		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
 		cr.born.append(now)

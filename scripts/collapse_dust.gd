@@ -51,6 +51,22 @@ static func _quad() -> QuadMesh:
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		# Without it a particle billboard drops its scale, and a cloud of 6-12 m
+		# puffs drew as two dozen hard 1 m squares hanging where the building
+		# had been -- read as bits of the interior left floating in the air.
+		mat.billboard_keep_scale = true
+		# A soft round puff, not a square.
+		var soft := GradientTexture2D.new()
+		soft.fill = GradientTexture2D.FILL_RADIAL
+		soft.fill_from = Vector2(0.5, 0.5)
+		soft.fill_to = Vector2(1.0, 0.5)
+		var fall := Gradient.new()
+		fall.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
+		fall.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+		soft.gradient = fall
+		soft.width = 64
+		soft.height = 64
+		mat.albedo_texture = soft
 		mat.vertex_color_use_as_albedo = true
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		_mesh.material = mat

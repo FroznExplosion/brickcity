@@ -2,6 +2,9 @@
 #include "brick_world.h"
 #include "brick_terrain.h"
 #include "brick_pools.h"
+#include "impostor_set.h"
+#include "mesh_merge.h"
+#include "shaped_sampler.h"
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
@@ -25,6 +28,12 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<BrickWave>();
     // Pools: dug ground that fills from the sea (Water.md 12).
     ClassDB::register_class<BrickPools>();
+    // ImpostorLod's tiering and packing (scripts/impostor_lod.gd).
+    ClassDB::register_class<ImpostorSet>();
+    // RecipeMesh's merge (scripts/recipe_mesh.gd).
+    ClassDB::register_class<MeshMerge>();
+    // ShapedParts' cell sampling (scripts/shaped_parts.gd).
+    ClassDB::register_class<ShapedSampler>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();

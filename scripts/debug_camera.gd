@@ -100,6 +100,10 @@ var _pitch := 0.0
 ## Mouse-look speed, multiplied in: a player aiming down the sights turns slower
 ## (PlayerView). 1 is the tuned default.
 var look_scale := 1.0
+## The player's own sensitivity and pitch inversion (the Options menu, through
+## BrickcityMenuHost). Static: one player, every camera.
+static var look_mult := 1.0
+static var invert_y := false
 ## Lean, radians: the tilt of a wall-run. Kept through mouse-look, which would
 ## otherwise level it on the next motion event.
 var roll := 0.0
@@ -170,8 +174,8 @@ func _set_captured(on: bool) -> void:
 ## take every motion event first, and looking around simply stopped.
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _captured:
-		var k := LOOK_SENSITIVITY * look_scale
-		add_look(-event.relative.x * k, -event.relative.y * k)
+		var k := LOOK_SENSITIVITY * look_scale * look_mult
+		add_look(-event.relative.x * k, -event.relative.y * k * (-1.0 if invert_y else 1.0))
 
 
 ## Turn by `yaw` and `pitch` radians -- the mouse, or a gun's recoil. From where
@@ -196,7 +200,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_set_captured(true)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			_set_captured(not _captured)
+			# Where the pause menu opens, Escape is its key (MenuManager frees the
+			# mouse and gives it back); elsewhere it still frees and takes the mouse.
+			var mm := get_node_or_null(^"/root/MenuManager")
+			if mm == null or not mm.can_pause():
+				_set_captured(not _captured)
 		elif event.keycode == KEY_SPACE and _active():
 			_space_pressed()
 
@@ -389,8 +397,11 @@ func _walk(delta: float) -> void:
 
 	# Stopped dead by something low -- a kerb of rubble, a course of brick, the
 	# lip of a floor slab. Step over it rather than making the player jump.
-	if wish != Vector3.ZERO and _body.is_on_wall():
-		var wanted := Vector3(wish.x, 0.0, wish.z) * speed * delta
+	# The wind's push steps up too: a gale drives a walker over a kerb, not
+	# into it for ever.
+	var push := Vector3(wish.x * speed + wind.x, 0.0, wish.z * speed + wind.z)
+	if push.length() > 0.05 and _body.is_on_wall():
+		var wanted := push * delta
 		var moved := _body.global_position - before
 		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
 			_step_over(wanted)

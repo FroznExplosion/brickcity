@@ -39,7 +39,7 @@ var health: HealthPool
 var gun: GunController
 var aim: Node3D
 var team := 1
-var tier := AgentTier.SMART
+var tier: int = AgentTier.SMART
 var tier_hsm: AgentTier
 var swarm_born := false
 var mode := Mode.ORBIT
@@ -126,7 +126,7 @@ func budget_pos() -> Vector3:
 	return body.global_position
 
 
-func budget_bonus(now: float) -> float:
+func budget_bonus(_now: float) -> float:
 	return 20.0 if mode == Mode.RUN else 10.0
 
 

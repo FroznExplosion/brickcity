@@ -35,9 +35,32 @@ const KINDS := {
 	"earthquake": preload("res://scripts/disasters/earthquake.gd"),
 	"acid": preload("res://scripts/disasters/acid_rain.gd"),
 	"hurricane": preload("res://scripts/disasters/hurricane.gd"),
+	"snow": preload("res://scripts/disasters/snowfall.gd"),
+	"blizzard": preload("res://scripts/disasters/blizzard.gd"),
+	"big_meteor": preload("res://scripts/disasters/big_meteor.gd"),
+	"meteor_storm": preload("res://scripts/disasters/meteor_storm.gd"),
+	"meteor_mixed": preload("res://scripts/disasters/meteor_mixed.gd"),
+	"hail": preload("res://scripts/disasters/hailstorm.gd"),
+	"sandstorm": preload("res://scripts/disasters/sandstorm.gd"),
+	"waterspout": preload("res://scripts/disasters/waterspout.gd"),
+	"wildfire": preload("res://scripts/disasters/wildfire.gd"),
+}
+## Several at once (Docs/Disasters.md 22): a menu entry that starts each of
+## its kinds together, each from its own seed. Offered where every kind in it
+## is (a scene's `roll`).
+const COMBOS := {
+	"outbreak": ["tornado", "tornado", "tornado"],
+	"superstorm": ["hurricane", "tornado", "tornado"],
+	"firestorm": ["lightning", "fire", "tornado"],
+	"cataclysm": ["meteor", "earthquake"],
+	"whiteout_quake": ["blizzard", "earthquake"],
+	"apocalypse": ["meteor", "lightning", "tornado", "earthquake"],
+	"spouts": ["hurricane", "waterspout", "waterspout"],
+	"dust_and_hail": ["sandstorm", "hail"],
 }
 ## What Random rolls from. The drill is not in it; --disaster=drill still runs one.
-const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid"]
+const ROLL := ["meteor", "lightning", "fire", "tornado", "earthquake", "acid", "hurricane", "snow",
+		"blizzard", "big_meteor", "meteor_storm", "meteor_mixed", "hail", "sandstorm", "waterspout"]
 ## The menu's names, in the menu's order.
 const TITLES := {
 	"meteor": "Meteor shower",
@@ -47,6 +70,23 @@ const TITLES := {
 	"earthquake": "Earthquake",
 	"acid": "Acid rain",
 	"hurricane": "Hurricane",
+	"snow": "Snowfall",
+	"blizzard": "Blizzard",
+	"big_meteor": "Giant meteor",
+	"meteor_storm": "Heavy meteor shower",
+	"meteor_mixed": "Meteor shower with giants",
+	"hail": "Hailstorm",
+	"sandstorm": "Sandstorm",
+	"waterspout": "Waterspout",
+	"wildfire": "Wildfire",
+	"outbreak": "Tornado outbreak (3 tornadoes)",
+	"superstorm": "Superstorm (hurricane + 2 tornadoes)",
+	"firestorm": "Firestorm (lightning + fire + tornado)",
+	"cataclysm": "Cataclysm (meteors + earthquake)",
+	"whiteout_quake": "Frozen quake (blizzard + earthquake)",
+	"apocalypse": "Apocalypse (meteors, lightning, tornado, quake)",
+	"spouts": "Hurricane with waterspouts",
+	"dust_and_hail": "Sand and hail",
 }
 ## Intensity steps the slider snaps to, with their names.
 const INTENSITY_NAMES := [[0.5, "Low"], [1.0, "Medium"], [1.6, "High"], [2.5, "Extreme"]]
@@ -61,6 +101,9 @@ var roll: Array = ROLL.duplicate()
 ## Fire outlives what lit it, so it is the director's, not a disaster's.
 var fire: FireSpread
 var current: Disaster
+## Everything running now, in the order it started (several at once: COMBOS).
+## `current` is the latest of them.
+var running: Array[Disaster] = []
 ## Pieces carrying fire off a burning building (BurningDebris).
 var debris: BurningDebris
 var current_kind := ""
@@ -80,8 +123,8 @@ var send_to_host := Callable()
 var events_sent := 0
 var events_received := 0
 var _clients: Array[Callable] = []
-## The running disaster's start event, for a client that joins mid-way.
-var _start_event: Array = []
+## The running disasters' start events, for a client that joins mid-way.
+var _start_events: Array = []
 ## Most ticks a joining client runs to catch up (a whole disaster's worth).
 const MAX_CATCHUP := 30 * 120
 
@@ -115,7 +158,18 @@ func setup(city: Node3D, kinds: Array = []) -> void:
 		elif a.begins_with("--disaster-seed="):
 			_base_seed = int(a.split("=", true, 1)[1])
 	_roll_rng.seed = _base_seed
-	fire = FireSpread.new()
+	# A city burns brick by brick (BrickFire); a host without bricks keeps the
+	# coarse cells.
+	if city.has_method("fire_chunks") and city.get("world") != null:
+		var bf := BrickFire.new()
+		bf.world = city.world
+		bf.chunks_near = city.fire_chunks
+		bf.burnt = city.fire_burnt
+		bf.standing = city.fire_standing
+		bf.gale = func() -> Vector3: return ctx.gale
+		fire = bf
+	else:
+		fire = FireSpread.new()
 	fire.name = "Fire"
 	add_child(fire)
 	fire.material_at = ctx.material_at
@@ -140,7 +194,19 @@ func setup(city: Node3D, kinds: Array = []) -> void:
 
 ## True when a disaster is running (any phase before DONE).
 func is_running() -> bool:
-	return current != null
+	return not running.is_empty()
+
+
+## The combos this scene can run: every kind in them offered here.
+func combos() -> Array:
+	var out := []
+	for k in COMBOS:
+		var ok := true
+		for kind in COMBOS[k]:
+			ok = ok and roll.has(kind)
+		if ok:
+			out.append(k)
+	return out
 
 
 ## Start `kind` -- or a rolled one when empty -- at `intensity`, with `options`
@@ -154,37 +220,52 @@ func start(kind: String = "", intensity := 1.0, options := {}) -> bool:
 		send_to_host.call(["request", kind, intensity, options.duplicate(true)])
 		events_sent += 1
 		return true
-	if current != null:
+	if is_running():
 		return false
 	if kind == "":
 		kind = _forced if _forced != "" else String(roll[_roll_rng.randi_range(0, roll.size() - 1)])
+	if COMBOS.has(kind):
+		for part in COMBOS[kind]:
+			_start_one(String(part), intensity, options)
+		return true
 	if not KINDS.has(kind):
 		push_warning("[disaster] unknown kind '%s'" % kind)
 		return false
-	var seed_value := hash([_base_seed, count])
-	var at := Engine.get_physics_frames()
-	_begin(kind, seed_value, intensity, options)
-	_start_event = ["start", kind, seed_value, at, intensity, options.duplicate(true)]
-	_publish(_start_event)
+	_start_one(kind, intensity, options)
 	return true
 
 
+func _start_one(kind: String, intensity: float, options: Dictionary) -> void:
+	var seed_value := hash([_base_seed, count])
+	var at := Engine.get_physics_frames()
+	var d := _begin(kind, seed_value, intensity, options)
+	var ev := ["start", kind, seed_value, at, intensity, options.duplicate(true)]
+	d.set_meta("start_event", ev)
+	_start_events.append(ev)
+	_publish(ev)
+
+
 ## Make the disaster and set it going. Both sides come through here.
-func _begin(kind: String, seed_value: int, intensity: float, options: Dictionary) -> void:
+func _begin(kind: String, seed_value: int, intensity: float, options: Dictionary) -> Disaster:
 	var d: Disaster = KINDS[kind].new()
 	d.name = "Disaster_%s" % kind
 	d.intensity = intensity
 	d.options = options.duplicate()
+	d.set_meta("kind", kind)
 	add_child(d)
+	running.append(d)
 	current = d
 	current_kind = kind
-	d.finished.connect(_on_finished)
+	d.finished.connect(_on_finished.bind(d))
+	ctx.source = d
 	d.begin(ctx, seed_value)
+	ctx.source = null
 	count += 1
 	print("[disaster] %s begins (#%d, intensity %.2f)%s" % [d.title, count, intensity,
 			"" if is_host else " -- the host's"])
 	started.emit(kind)
 	_update_banner()
+	return d
 
 
 # --- Co-op ------------------------------------------------------------------------
@@ -194,8 +275,8 @@ func _begin(kind: String, seed_value: int, intensity: float, options: Dictionary
 ## Called with the event's wire form (plain arrays: they have to serialise).
 func add_client(deliver: Callable) -> void:
 	_clients.append(deliver)
-	if not _start_event.is_empty():
-		deliver.call(_start_event.duplicate(true))
+	for ev in _start_events:
+		deliver.call((ev as Array).duplicate(true))
 		events_sent += 1
 
 
@@ -215,24 +296,29 @@ func receive(msg: Array) -> void:
 		"start":
 			if is_host:
 				return
-			if current != null:
-				current.queue_free()   # the host's word is final
-				current = null
 			var kind := String(msg[1])
 			if not KINDS.has(kind):
 				push_warning("[disaster] the host started '%s', which this build does not know" % kind)
 				return
-			_begin(kind, int(msg[2]), float(msg[4]), msg[5])
+			# Several may run at once; the same one twice may not.
+			for r in running:
+				if r.has_meta("seed") and int(r.get_meta("seed")) == int(msg[2]):
+					return
+			var d := _begin(kind, int(msg[2]), float(msg[4]), msg[5])
+			d.set_meta("seed", int(msg[2]))
 			# Catch up to the host: the disaster's clock runs on physics ticks.
 			var behind := mini(Engine.get_physics_frames() - int(msg[3]), MAX_CATCHUP)
 			var dt := 1.0 / Engine.physics_ticks_per_second
 			for i in maxi(behind, 0):
-				if current == null or current.phase == Disaster.Phase.DONE:
+				if not is_instance_valid(d) or d.phase == Disaster.Phase.DONE:
 					break
-				current.tick(dt)
+				ctx.source = d
+				d.tick(dt)
+				ctx.source = null
 		"stop":
-			if not is_host and current != null:
-				current.end_now()
+			if not is_host:
+				for d in running:
+					d.end_now()
 				_update_banner()
 		"request":
 			if is_host:
@@ -262,8 +348,9 @@ func stop() -> void:
 			send_to_host.call(["request_stop"])
 			events_sent += 1
 		return
-	if current != null:
-		current.end_now()
+	if is_running():
+		for d in running:
+			d.end_now()
 		_update_banner()
 		_publish(["stop", Engine.get_physics_frames()])
 
@@ -315,28 +402,43 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
+## Each running disaster ticks in the order it started, with the context told
+## which it is (DisasterContext.source).
 func _physics_process(delta: float) -> void:
-	if current != null:
-		current.tick(delta)
+	for d in running.duplicate():
+		if is_instance_valid(d):
+			ctx.source = d
+			d.tick(delta)
+	ctx.source = null
 
 
 func _process(delta: float) -> void:
 	ctx.step(delta)
 	_update_banner()
 	if is_menu_open():
-		_status.text = ("Running: %s — Shift+H or Stop to end it" % current.title) \
-				if current != null else "Nothing running."
+		_status.text = ("Running: %s — Shift+H or Stop to end it" % _titles()) \
+				if is_running() else "Nothing running."
 
 
-func _on_finished() -> void:
-	var kind := current_kind
-	print("[disaster] %s over" % current.title)
-	current.queue_free()
-	current = null
-	current_kind = ""
-	_start_event = []
+func _on_finished(d: Disaster) -> void:
+	var kind := String(d.get_meta("kind", ""))
+	print("[disaster] %s over" % d.title)
+	# What it set goes; what the others set stands.
+	ctx.forget(d)
+	running.erase(d)
+	_start_events.erase(d.get_meta("start_event", []))
+	d.queue_free()
+	current = running.back() if not running.is_empty() else null
+	current_kind = String(current.get_meta("kind", "")) if current != null else ""
 	ended.emit(kind)
 	_update_banner()
+
+
+func _titles() -> String:
+	var names := PackedStringArray()
+	for d in running:
+		names.append(d.title)
+	return " + ".join(names)
 
 
 # --- The weather on the lens -------------------------------------------------------
@@ -378,18 +480,21 @@ func _update_banner() -> void:
 	var burning := ""
 	if fire != null and fire.is_burning():
 		burning = "FIRE — %d burning" % fire.count()
-	if current == null:
+	if running.is_empty():
 		_banner.visible = burning != ""
 		_banner.text = burning
 		return
 	_banner.visible = true
-	_banner.text = "%s (%s) — %s  %ds   (Shift+H to end)" % [current.title.to_upper(),
-			intensity_name(current.intensity), Disaster.phase_name(current.phase),
-			ceili(current.seconds_left())]
-	if current is Earthquake:
-		var q: Earthquake = current
-		_banner.text += "\ncollapsing %d/%d · %d of %d so far" % [q.active_collapses(),
-				q.max_collapse_at_once, q.collapses.size(), q.max_collapse_total]
+	var left := 0.0
+	for d in running:
+		left = maxf(left, d.seconds_left())
+	_banner.text = "%s (%s) — %s  %ds   (Shift+H to end)" % [_titles().to_upper(),
+			intensity_name(current.intensity), Disaster.phase_name(current.phase), ceili(left)]
+	for d in running:
+		if d is Earthquake:
+			var q: Earthquake = d
+			_banner.text += "\ncollapsing %d/%d · %d of %d so far" % [q.active_collapses(),
+					q.max_collapse_at_once, q.collapses.size(), q.max_collapse_total]
 	if burning != "" and current_kind != "fire":
 		_banner.text += "\n" + burning
 
@@ -431,12 +536,12 @@ func _build_menu() -> void:
 	_kind_pick = OptionButton.new()
 	_kind_pick.add_item("Random", 0)
 	var i := 1
-	for kind in roll:
+	for kind in _menu_kinds():
 		_kind_pick.add_item(TITLES[kind], i)
 		i += 1
 	_kind_pick.item_selected.connect(func(idx: int) -> void:
-		menu_kind = "" if idx == 0 else String(roll[idx - 1])
-		_quake_box.modulate.a = 1.0 if menu_kind in ["", "earthquake"] else 0.45)
+		menu_kind = "" if idx == 0 else String(_menu_kinds()[idx - 1])
+		_quake_box.modulate.a = 1.0 if _has_quake(menu_kind) else 0.45)
 	v.add_child(_row("Disaster", _kind_pick))
 
 	var ih := HBoxContainer.new()
@@ -521,11 +626,21 @@ func _row(label: String, control: Control) -> HBoxContainer:
 	return h
 
 
+## Random, a quake, or a combo with one: the caps apply.
+func _has_quake(kind: String) -> bool:
+	return kind == "" or kind == "earthquake" or (COMBOS.has(kind) and (COMBOS[kind] as Array).has("earthquake"))
+
+
+## The menu's list: every kind, then every combo this scene can run.
+func _menu_kinds() -> Array:
+	return roll + combos()
+
+
 ## Put the controls where the remembered choice is.
 func _sync_menu() -> void:
-	_kind_pick.select(0 if menu_kind == "" else roll.find(menu_kind) + 1)
+	_kind_pick.select(0 if menu_kind == "" else _menu_kinds().find(menu_kind) + 1)
 	_intensity.set_value_no_signal(menu_intensity)
 	_intensity_label.text = intensity_name(menu_intensity)
 	_at_once.set_value_no_signal(menu_options.max_collapse_at_once)
 	_total.set_value_no_signal(menu_options.max_collapse_total)
-	_quake_box.modulate.a = 1.0 if menu_kind in ["", "earthquake"] else 0.45
+	_quake_box.modulate.a = 1.0 if _has_quake(menu_kind) else 0.45

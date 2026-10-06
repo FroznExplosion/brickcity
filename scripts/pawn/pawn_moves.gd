@@ -572,7 +572,7 @@ func _wall_jump() -> void:
 ## A ledge ahead within reach: climb it. `jumped` is a jump pressed at it (the
 ## ground or the air); otherwise it is the air's reach while pushing into a wall.
 func _try_mantle(wish: Vector3, jumped: bool) -> bool:
-	var b := pawn.body
+	var _b := pawn.body
 	var fwd := wish.normalized() if wish != Vector3.ZERO else _look_flat()
 	if fwd == Vector3.ZERO or (not jumped and wish == Vector3.ZERO):
 		return false
@@ -846,11 +846,11 @@ func _hang_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 	var in_axis := wish.dot(-ledge_normal)
 	if absf(side_in) > 0.3 and absf(side_in) >= absf(in_axis) * 0.8:
 		var tangent := side * signf(side_in)
-		var step := SHIMMY_SPEED * delta
+		var shimmy := SHIMMY_SPEED * delta
 		var before := b.global_position
-		var ok := _shimmy(before + tangent * step)
+		var ok := _shimmy(before + tangent * shimmy)
 		# Pinned at the end of the lip is the lip ending: go round the corner.
-		if (not ok or (b.global_position - before).dot(tangent) < step * 0.4) and _corner_cd <= 0.0:
+		if (not ok or (b.global_position - before).dot(tangent) < shimmy * 0.4) and _corner_cd <= 0.0:
 			_corner(tangent)
 		return
 	if _hang_t < HANG_MIN:
