@@ -433,6 +433,9 @@ public:
     /// 0 disables it. Costs 7x the triangles -- see the note in the .cpp.
     static void set_face_bevel(double metres);
     static double get_face_bevel();
+    /// `build_tile` with the chamfer at `metres` for this call only, safe on
+    /// a worker thread beside unchamfered bakes (the near tier, streamed).
+    static Dictionary build_tile_chamfered(int tx, int tz, double metres);
     static int get_piece_stride();
 
     static int height_at(int x, int z);

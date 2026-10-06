@@ -100,6 +100,13 @@ var _shadow_centre := Vector2i(1 << 30, 0)
 ## nothing does, _finish is not run: it sorted and walked every resident tile
 ## each frame to find nothing to do, ~1 ms of an idle frame.
 var _finish_pending := true
+## Tiles within this many of the camera get the chamfered near mesh
+## (TerrainTile.add_bevel). It is drawn only inside BEVEL_RANGE (12 m, about
+## one tile), so two is enough with a margin, and nothing further pays for it.
+@export var bevel_radius := 2
+## Chamfered bakes in flight: tile coord -> [task id, result holder, tile].
+var _bevel_tasks := {}
+const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
 var _worst_surface_ms := 0.0
@@ -127,11 +134,46 @@ func follow(camera_xz: Vector2) -> void:
 	_collect(cx, cz)
 	_drop(cx, cz)
 	_assemble()
+	_bevel_step()
 	if _shadow_centre != _centre:
 		_shadow_centre = _centre
 		for c in _tiles:
 			(_tiles[c] as TerrainTile).set_casts_shadow(
 				absi(c.x - cx) <= shadow_radius and absi(c.y - cz) <= shadow_radius)
+
+
+## Start chamfered bakes for near tiles that lack one, and hand finished
+## ones to their tiles -- if the tile is still the one the bake was for (a
+## refreshed tile is a new node, and gets a new bake).
+func _bevel_step() -> void:
+	if not TerrainTile.bevel_enabled:
+		return
+	for c in _bevel_tasks.keys():
+		var job: Array = _bevel_tasks[c]
+		if not WorkerThreadPool.is_task_completed(job[0]):
+			continue
+		WorkerThreadPool.wait_for_task_completion(job[0])
+		_bevel_tasks.erase(c)
+		var tile = job[2]
+		if is_instance_valid(tile) and _tiles.get(c) == tile and tile.needs_bevel():
+			tile.add_bevel(job[1][0])
+	if _bevel_tasks.size() >= BEVEL_IN_FLIGHT:
+		return
+	for dz in range(-bevel_radius, bevel_radius + 1):
+		for dx in range(-bevel_radius, bevel_radius + 1):
+			var c := _centre + Vector2i(dx, dz)
+			if _bevel_tasks.has(c) or not _tiles.has(c):
+				continue
+			var tile: TerrainTile = _tiles[c]
+			if not tile.needs_bevel():
+				continue
+			var holder := [{}]
+			var task := WorkerThreadPool.add_task(
+				func() -> void: holder[0] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL),
+				true, "terrain chamfer")
+			_bevel_tasks[c] = [task, holder, tile]
+			if _bevel_tasks.size() >= BEVEL_IN_FLIGHT:
+				return
 
 
 ## Build everything the camera wants, now, blocking. For captures and
@@ -150,6 +192,12 @@ func settle(camera_xz: Vector2, rounds := 4000) -> void:
 				_finish(Time.get_ticks_usec())
 			budget_ms = saved
 			shapes_per_frame = saved_shapes
+			# And the chamfered near meshes, so a capture sees them.
+			for b in 4000:
+				_bevel_step()
+				if _bevel_tasks.is_empty():
+					break
+				OS.delay_msec(1)
 			return
 
 
