@@ -249,12 +249,14 @@ void fragment() {
     if (print_lines_enabled && ps_printed(mat) && v_face.x > 0.0 && v_face.y > 0.0) {
         float t;
         float junction = 0.0;
+        float join = 0.0;
         if (face != 0) {
-            // A top or bottom: the outline walked once per wall, then a
-            // diagonal raster across what is left. The raster is in PIECE
-            // space and its direction is hashed off the piece, so two bricks
-            // side by side read as two printed parts; a bottom -- the first
-            // layer -- runs the other way to the top, as a slicer alternates.
+            // A top or bottom: the outline walked once per wall (two for
+            // PLA), then ONE path zigzagging diagonally from one corner to
+            // the opposite one (ps_zigzag_join). Its direction is hashed off
+            // the piece, so two bricks side by side read as two printed
+            // parts; a bottom -- the first layer -- runs the other way to the
+            // top, as a slicer alternates.
             float bw = ps_bead(face, mat);
             float d2 = min(min(v_uv.x, v_face.x - v_uv.x),
                            min(v_uv.y, v_face.y - v_uv.y));
@@ -269,7 +271,9 @@ void fragment() {
                 if (face == 2) {
                     flip = -flip;
                 }
-                t = dot(v_uv, vec2(0.7071, flip * 0.7071)) / bw;
+                vec2 n = vec2(0.7071, flip * 0.7071);
+                t = dot(v_uv, n) / bw;
+                join = ps_zigzag_join(v_uv, vec2(wall), v_face - vec2(wall), n, t, bw);
             }
             // Where the raster meets the innermost wall the two never quite
             // fuse: a fine dark line round the infill.
@@ -280,7 +284,8 @@ void fragment() {
         } else {
             // UV.y is the height WITHIN THIS BLOCK's face, in metres, so the
             // layers restart at each brick's own base -- which is what a
-            // printed brick does, being printed by itself: 57 to a brick.
+            // printed brick does, being printed by itself: 48 to a brick
+            // body (and 9 more up its studs: 57).
             //
             // Not `v_local.y`: the chunk mesher emits WORLD metres, so on a
             // tower a hundred metres up `t` ran into the thousands and its
@@ -288,7 +293,7 @@ void fragment() {
             // itself away completely.
             t = v_uv.y / ps_layer(mat);
         }
-        ps_beads(t, face, mat, dist, VERTEX, seed, junction,
+        ps_beads(t, t, face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);

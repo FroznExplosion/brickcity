@@ -1112,15 +1112,16 @@ looking printed is mostly getting the difference between them right:
 
 | Face | What it is | Roughness (PLA) |
 |---|---|---|
-| side | **57 layers on a brick** (a real 2x4: 9.6 mm at 0.168 mm), 19 a plate, 7.4 mm in game. Layer height is snapped to a whole number a plate, so a coarser material (`MAT_LAYER`) still ends each brick on a whole layer. A small shade wobble per layer | 0.50 — dull |
-| top | the last skin: `MAT_WALLS` loops round the outline (3 for PLA, 4 for nylon and carbon, 2 for silk, glow and wood-fill; `wall_bonus` adds to all of them), a fine dark junction where the infill meets the inner wall, then a 45° raster hashed per piece. Lines 0.028 m, wider than a layer is tall | 0.36 — satin |
+| side | **57 layers on a 2x4 counting its studs** (11.4 mm at 0.2 mm): **48 on the body** (16 a plate, 8.75 mm in game) and **9 up each stud** (`stud_layers`). Layer height is snapped to a whole number a plate, so a coarser material (`MAT_LAYER`) still ends each brick on a whole layer. A small shade wobble per layer | 0.50 — dull |
+| top | the last skin: `MAT_WALLS` loops round the outline (2 — what a real brick shows under its studs; 3 for nylon and carbon; `wall_bonus` adds to all), a fine dark junction where the infill meets the inner wall, then **one path zigzagging diagonally from corner to corner**: parallel beads whose grooves stop short of the wall on alternate ends, where the path turns (`ps_zigzag_join`). Direction hashed per piece. Lines 0.028 m | 0.36 — satin |
+| stud top | **one path spiralling in to the centre**, circular (it was loops following the octagon, which drew its corners as creases); stud sides shaded round by radially bent normals, so the octagon's facets stop showing — only the silhouette stays eight-sided | as top |
 | bottom | the first layer, squashed into the bed: 0.032 m lines, the raster the other way to the top, and the **bed's** finish | glass 0.10 · smooth PEI 0.25 · textured PEI 0.62 with a powder-coat grain |
 
 The layers also drive **anisotropy**: the lighting's tangent is set across the beads, so the
 highlight smears across the layers and stays tight along them. That is what still says "printed"
-past the few metres where 57 lines a brick are resolved and dissolve into roughness — the earlier
-21-a-brick setting existed because finer lines vanished at range; the anisotropy is what replaces
-them there.
+past the few metres where 48 lines a brick are resolved and dissolve into roughness — at 1080p a
+layer is under a pixel from about 2.5 m (stud layers sooner), and drawing it there only crawls. The
+earlier 21-a-brick setting existed for that reason; the anisotropy is what replaces them there.
 
 **The finish is global and costs nothing a frame.** `BrickMaterials.set_look(finish, bed)` rewrites
 `shaders/print_finish.gdshaderinc`'s two constants in memory, and Godot recompiles every shader that

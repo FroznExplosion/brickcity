@@ -28,9 +28,9 @@ uniform float edge_alpha : hint_range(0.0, 1.0) = 0.9;
 uniform float edge_width = 0.014;
 uniform float edge_fade_begin = 30.0;
 uniform float edge_fade_end = 75.0;
-// PETG's layers, half melted away but still there on the sides: 57 a brick,
-// as print_surface.gdshaderinc has them. None on a moulded part.
-uniform float layer_height = 0.0073684;
+// PETG's layers, half melted away but still there on the sides: 48 a brick
+// body, as print_surface.gdshaderinc has them. None on a moulded part.
+uniform float layer_height = 0.00875;
 uniform float layer_fade_end = 14.0;
 
 varying vec2 v_uv;
