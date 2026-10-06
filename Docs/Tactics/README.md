@@ -39,7 +39,7 @@ How the enemy chooses what to do, authored as odds rather than code.
   counts every book decision by moment -- moves taken, moves asked for that could
   not be done, extras, the facts that held, the player's cover and distance band,
   and each move's judged outcome -- into `user://tactics_tally.json`
-  (`%APPDATA%\Godotpp_userdata\Brickcity\`), added to across runs. Delete the
+  (`%APPDATA%\Godot\app_userdata\Brickcity\`), added to across runs. Delete the
   file to start again. The page's "In the game" tab draws it: paste the file there,
   or have Claude upload it (the page's storage, `tally/latest`).
 
