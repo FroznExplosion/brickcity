@@ -54,6 +54,10 @@ var on_breach := Callable()
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
 var policy: CombatPolicy = CombatPolicy.from_args()
+## Counts of what the casebook chose, by moment (TacticsTally), when whoever
+## owns the fight keeps them: the city does, a probe's arena does not. Untyped,
+## so the services do not depend on the book's scripts.
+var tally: RefCounted
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []

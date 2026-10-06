@@ -559,6 +559,7 @@ var _pending_disable := {}
 ## [ms, blocks, groups, collapsing].
 var _solve_mega := [0, 0.0]
 var _held_groups := 0      ## groups put back as held (Block::held), all told
+var _resolves_put_off := 0 ## solves of a building already solved that tick, left for the next
 var _cascade_rounds := 0   ## stress rounds that failed something, all told
 var _cascade_worst := 0    ## the most in one solve
 var _solve_worst := [0.0, 0, 0, false]
@@ -1102,6 +1103,11 @@ func _ready() -> void:
 	ai_services.ai_nav = ai_nav
 	ai_services.sched = ai_sched
 	ai_services.rng.seed = 0x50DD1E4
+	# What the casebook chooses is counted across runs (TacticsTally), for the
+	# graph on the Tactics Casebook page -- but not a gate's scripted fights.
+	var tally_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--gate" in tally_args and not "--squad" in tally_args:
+		ai_services.tally = (load("res://scripts/ai/tactics/tactics_tally.gd") as GDScript).call(&"open")
 	# A squad's breaching charge is a blast like any other: asked for, queued,
 	# committed by the host, replayed by clients.
 	ai_services.on_breach = _blast
@@ -1245,6 +1251,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	if ai_services != null and ai_services.tally != null:
+		ai_services.tally.call(&"save")
 	# A band still uploading on a worker at shutdown was a crash on quit, as a
 	# piece's was (IslandManager._exit_tree).
 	for job in _band_jobs:
@@ -1866,6 +1874,41 @@ var _fake_ms := 0.0
 var _fake_builds := 0
 
 
+## Is this building coming apart right now -- or its wreckage still coming to
+## rest?
+##
+## No interior and no items are made for a building in that state (user,
+## 2026-10-06): walking up to a collapse, or a tower made bricks while it is
+## falling, used to have rooms drawn, faked and opened in storeys on their way
+## down -- furniture popping in mid-air. They are made once it has been still
+## for COLLAPSE_QUIET_MS: nothing loose or failing in its solve, and none of its
+## pieces (rubble aside) moving. What is drawn already stays, and goes with what
+## falls as it did (FurnitureMesh.hide_inside, _recheck_drawn).
+const COLLAPSE_QUIET_MS := 2000
+var _broke_ms := {}   ## building id -> msec its solve last had something loose, failing or unbalanced
+var interior_waits := 0   ## room, fake and spill passes put off by _mid_collapse
+## Off: interiors are made in a building whatever it is doing, as they were.
+## For far_rules_probe, which has to fail without the rule.
+var hold_interiors_mid_collapse := true
+
+
+func _mid_collapse(id: int) -> bool:
+	if not hold_interiors_mid_collapse:
+		return false
+	var b := registry.get_building(id)
+	if b != null and _toppling.has(id) and not b.toppled:
+		return true
+	if director.holding(id):
+		return true
+	if Time.get_ticks_msec() - int(_broke_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS:
+		return true
+	if islands.moving_of(id) > 0:
+		# Still falling: the quiet starts when the last of it has stopped.
+		_broke_ms[id] = Time.get_ticks_msec()
+		return true
+	return false
+
+
 ## Fake, or stop faking, the buildings around the player.
 ##
 ## Every outer room of a standing building that is bricks and within
@@ -1892,6 +1935,9 @@ func _stream_fake(here: Vector3) -> void:
 			continue
 		if built >= FAKE_BUILDS_PER_PASS:
 			continue
+		if _mid_collapse(id):
+			interior_waits += 1
+			continue   # nothing new drawn in it until it is still
 		_sync_fake(id)
 		built += 1
 	for id in _fake_rooms.keys():
@@ -2153,6 +2199,9 @@ func _stream_rooms() -> void:
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
 			continue
 		here_buildings.append(b)
+		if _mid_collapse(id):
+			interior_waits += 1
+			continue   # no room drawn or opened in a building coming apart
 		# Measured in the BUILDING's space, with the camera brought into it
 		# once. A world AABB per candidate is eight matrix multiplies and an
 		# allocation, and a pass standing inside one of the big shapes has a
@@ -2234,6 +2283,12 @@ func _stream_rooms() -> void:
 			break
 		var fell := registry.get_building(id)
 		if fell == null:
+			continue
+		# Not into wreckage still moving, or a building still coming down: its
+		# rooms are owed to whoever walks up to the pile once it is one.
+		var wreck_now := islands.find_by_chunk(wreck)
+		if hold_interiors_mid_collapse 				and ((wreck_now != null and not wreck_now.settled) or _mid_collapse(id)):
+			interior_waits += 1
 			continue
 		for room in registry.spilled_rooms(id):
 			# The room's box travels with the wreck: the chunk's transform is
@@ -3676,6 +3731,88 @@ func scorch(point: Vector3, radius: float) -> int:
 	return n
 
 
+## The chunks fire can reach round `point` (BrickFire): [building id, frame,
+## chunk] for each standing building whose box is within `radius`. With
+## `promote`, a building out of brick range is materialised first -- a flame put
+## to it (lightning, a meteor) -- but fire that is only spreading does not drag
+## far buildings in.
+func fire_chunks(point: Vector3, radius: float, promote := false) -> Array:
+	var out := []
+	for id in _near_buildings(point, radius + 2.0):
+		var b := registry.get_building(id)
+		if b == null or b.toppled:
+			continue
+		if not registry.local_box(b.id).grow(radius).has_point(b.xform.affine_inverse() * point):
+			continue
+		if not b.is_materialised():
+			if not promote or _promote(b.id) < 0:
+				continue
+		var cs := b.chunks()
+		for fi in cs.size():
+			out.append([b.id, fi, cs[fi]])
+	return out
+
+
+## Is this building still standing in bricks (BrickFire): fire steps only those.
+## A toppled one is a piece now -- the burning debris carries its fire on.
+func fire_standing(id: int) -> bool:
+	var b := registry.get_building(id)
+	return b != null and not b.toppled and b.is_materialised()
+
+
+## What fire did to a building's bricks (BrickWorld.fire_step, which already
+## did it): `killed` burnt out, `charred` blackened. Committed -- BURN and
+## SCORCH by ids -- and followed up as a hit's kills are: the bricks stop
+## colliding and drawing, the building is re-solved (a burnt support brings
+## down what it held), the AI's ground is redone round `at`.
+func fire_burnt(id: int, frame: int, killed: PackedInt32Array, charred: PackedInt32Array,
+		at: Vector3) -> void:
+	var b := registry.get_building(id)
+	if b == null or not authority.may_decide():
+		return
+	var pf := Engine.get_physics_frames()
+	if not charred.is_empty():
+		var e := DamageLog.Entry.new()
+		e.tick = pf
+		e.kind = DamageLog.Kind.SCORCH
+		e.target = id
+		e.frame = frame
+		e.flags = DamageLog.FLAG_BLOCKS
+		e.blocks = charred
+		e.point = at
+		authority.commit_entry(e)
+		if not _recolour.has(id):
+			_recolour[id] = pf + RECOLOUR_TICKS
+	if killed.is_empty():
+		return
+	var cs := b.chunks()
+	var box := AABB(at, Vector3.ZERO)
+	if frame < cs.size():
+		var lb: AABB = world.get_blocks_box(cs[frame], killed)
+		box = world.get_chunk_transform(cs[frame]) * lb
+	var e := DamageLog.Entry.new()
+	e.tick = pf
+	e.kind = DamageLog.Kind.BURN
+	e.target = id
+	e.frame = frame
+	e.blocks = killed
+	e.point = box.get_center()
+	e.radius = box.size.length() * 0.5
+	authority.commit_entry(e)
+	b.hit = true
+	_mark_dirty(id)
+	_last_hit[id] = Time.get_ticks_msec()
+	director.note_hit(id, e.point)
+	if frame == 0:
+		if not _pending_disable.has(id):
+			_pending_disable[id] = PackedInt32Array()
+		_pending_disable[id].append_array(killed)
+	else:
+		_disable_frame(id, frame, killed)
+	_queue_remesh(id)
+	islands.wake_near(e.point, e.radius + 2.0)
+
+
 func _setup_gun() -> void:
 	_combat_rng.seed = 0xC0FFEE
 	DamageSystem.rng.seed = 0xC0FFEE + 1
@@ -4487,7 +4624,7 @@ func _nav_on_command(e: DamageLog.Entry) -> void:
 	if e.kind == DamageLog.Kind.CHIP:
 		return
 	match e.kind:
-		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER:
+		DamageLog.Kind.BLAST, DamageLog.Kind.SHEAR, DamageLog.Kind.SEVER, DamageLog.Kind.BURN:
 			var r := Vector3.ONE * (e.radius + 1.0)
 			ai_nav.invalidate_box(AABB(e.point - r, r * 2.0))
 		_:
@@ -6348,6 +6485,40 @@ func _run_play_pass() -> void:
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
+
+	# The settings menu (Ceramic Edge's menu/, Docs/Reference/ceramicedge.md section 8):
+	# Escape pauses the city under it and resuming gives it back; what is set in Options
+	# reaches the game (BrickcityMenuHost).
+	var mm := get_node_or_null(^"/root/MenuManager")
+	var ms := get_node_or_null(^"/root/MenuSettings")
+	_gate_ok("the menu autoloads are there", mm != null and ms != null)
+	if mm != null and ms != null:
+		_key(KEY_ESCAPE, true)
+		await _frames(2)
+		_key(KEY_ESCAPE, false)
+		await _frames(2)
+		_gate_ok("Escape opens the pause menu over the city, and the city stops",
+				mm.is_open() and get_tree().paused)
+		mm.close_pause()
+		await _frames(2)
+		_gate_ok("and resuming starts it again", not mm.is_open() and not get_tree().paused)
+		var fov_was: Variant = ms.get_value(&"fov")
+		ms.set_value(&"fov", 110, false)
+		await _frames(30)
+		var vp := get_viewport().get_visible_rect().size
+		var want := rad_to_deg(2.0 * atan(tan(deg_to_rad(110.0) * 0.5) / (vp.x / vp.y)))
+		_gate_ok("a field of view set in Options is the view's",
+				is_equal_approx(PlayerView.hfov, 110.0) and absf(camera.fov - want) < 1.0,
+				"camera %.1f, want %.1f" % [camera.fov, want])
+		ms.set_value(&"fov", fov_was, false)
+		var sens_was: Variant = ms.get_value(&"mouse_sensitivity")
+		var crouch_was: Variant = ms.get_value(&"toggle_crouch")
+		ms.set_value(&"mouse_sensitivity", 2.0, false)
+		ms.set_value(&"toggle_crouch", true, false)
+		_gate_ok("and so are the mouse and hold-or-toggle",
+				is_equal_approx(DebugCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
+		ms.set_value(&"mouse_sensitivity", sens_was, false)
+		ms.set_value(&"toggle_crouch", crouch_was, false)
 	_leave_pawn()
 	await _frames(4)
 	_gate_ok("V leaves: the camera flies again", camera.is_processing() and _player_pawn == null)
@@ -6654,8 +6825,19 @@ func _physics_process(_delta: float) -> void:
 			_solve_batch_worst = maxf(_solve_batch_worst, _batch_ms)
 			for k in ids.size():
 				ahead[ids[k]] = answers[k]
+	# Once a tick each. A building re-marked while it was handled -- something
+	# came loose, a joint failed -- used to come round again in the same tick,
+	# up to SOLVES_PER_TICK times: the same groups found again before anything
+	# had been cut out of it, and each with a cascade's clock of its own
+	# (CASCADE_BUDGET_MS, so 12 ms where 3 was meant). It waits for the next.
+	var solved_now := {}
+	var again: Array[int] = []
 	while solved < decide_limit and not _dirty.is_empty():
 		var id: int = _dirty.pop_front()
+		if solved_now.has(id):
+			again.append(id)
+			continue
+		solved_now[id] = true
 		solved += 1
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised():
@@ -6684,6 +6866,11 @@ func _physics_process(_delta: float) -> void:
 						director.collapsing.has(b.id)]
 		t = _mark("solve", t)
 		var res: Dictionary = solve.stress
+		# Structural: joints failing, or the building off balance. A brick
+		# knocked loose by a shot is not a collapse (see the plan, below).
+		if int(res.get("failures", 0)) > 0 \
+				or not bool((solve.stability as Dictionary).get("stable", true)):
+			_broke_ms[b.id] = Time.get_ticks_msec()
 		if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
 			quiet = false
 			# A solve that failed something changed the structure, and when it
@@ -6747,6 +6934,10 @@ func _physics_process(_delta: float) -> void:
 		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
 				islands.interest_points(), 0 if b.is_build() else TowerRecipe.STOREY_PLATES,
 				int(res.get("failures", 0)) > 0)
+		for entry in plan:
+			if entry[1] != &"breakage" and entry[1] != &"furniture":
+				_broke_ms[b.id] = Time.get_ticks_msec()   # a section, not a chip (_mid_collapse)
+				break
 		# Stairs a section took with it (_with_stairs) can be a group of their own
 		# further down this same plan: what of it they were is gone already.
 		# Recorded as named, that DETACH cut nothing on any other machine (the
@@ -6830,6 +7021,10 @@ func _physics_process(_delta: float) -> void:
 		if int(_remesh_hold.get(b.id, -1)) <= Engine.get_process_frames():
 			_remesh_hold[b.id] = Engine.get_process_frames() + IslandManager.OVERLAP_FRAMES
 		_queue_remesh(b.id)
+	for id in again:
+		if not _dirty.has(id):
+			_dirty.append(id)
+	_resolves_put_off += again.size()
 	for sid in _stairs_due.keys():
 		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
 			break
@@ -8081,6 +8276,8 @@ func _trim_quiet() -> void:
 		var dist: float = b.xform.origin.distance_to(here)
 		if dist < TRIM_RADIUS:
 			continue
+		if world.fire_burning(b.chunk) > 0:
+			continue  # on fire: its heat is only in its bricks
 		if Time.get_ticks_msec() - b.materialised_at < TRIM_AFTER_MS:
 			continue
 		# Not another once this run has had its share: the clock below is
@@ -8379,6 +8576,10 @@ func _toggle_shader(param: String) -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# On foot the buttons are the player's own (rebindable input actions,
+	# PlayerController): firing, aiming and reloading go through the pawn.
+	if event is InputEventMouseButton and _player.is_possessing():
+		return
 	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
 		_gun.set_trigger(false)
 	if event is InputEventMouseButton and event.pressed:
@@ -8452,7 +8653,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
 			_gun_armed = true
 		KEY_R:
-			if _gun_armed:
+			if _gun_armed and not _player.is_possessing():
 				_gun.reload()
 		KEY_F4:
 			_ai_label.visible = not _ai_label.visible
@@ -8466,6 +8667,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			print("[city] chamfered edges: %s"
 					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
+		KEY_I:
+			# Printed on glass / smooth PEI / textured PEI, or injection
+			# moulded (BrickMaterials.set_look).
+			print("[city] finish: %s" % BrickMaterials.cycle_look())
 		KEY_J:
 			# The overlap. A piece that has just come off a building is drawn by
 			# BOTH for two frames, because on the frame it is born there is
@@ -8776,6 +8981,8 @@ func _run_shot_pass() -> void:
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
 			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
+	print("[city]   stand-ins: %d built, %d of them on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
+			islands.coarse_built, islands.coarse_async, islands.coarse_main_worst_ms, islands.coarse_worst_ms])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
 			director.breakage_out, director.furniture_out, director.collapsing.size()])
@@ -9302,8 +9509,8 @@ func _report_profile() -> void:
 	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
 			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
 			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
-	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs" % [
-			_cascade_rounds, _cascade_worst, _held_groups])
+	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs; %d second solve(s) in a tick put off" % [
+			_cascade_rounds, _cascade_worst, _held_groups, _resolves_put_off])
 	var sw: Array = islands.spawn_worst
 	print("[prof] worst single spawn %.1f ms (%d bricks): split %.1f  shapes %.1f  node %.1f (furniture %.1f, into the scene %.1f, %d boxes)  mesh %.1f" % [
 			float(sw[0]), int(sw[5]), float(sw[1]), float(sw[2]), float(sw[3]), float(sw[6]),

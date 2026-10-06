@@ -501,6 +501,13 @@ func _player_tick(now: float) -> void:
 
 
 func _on_player_died() -> void:
+	# A gate's player does not go down: one grenade takes more than the top-up
+	# in _player_tick catches.
+	if invulnerable:
+		var p := _player()
+		if p != null:
+			p.health.reset()
+			return
 	_player_dead_at = _now()
 	print("[arena] player down on wave %d" % wave)
 

@@ -1,5 +1,7 @@
 # Collapse, LOD and the AI: how it works now, what is wrong, what to build
 
+> **What is left to do** in this area is in [CollapseNext.md](CollapseNext.md).
+
 An audit, 2026-09-28, of how a building is represented at each distance, what happens to its
 interior and its pieces when it comes down, how the AI copes with all of it — and the causes found
 for five reported bugs. Nothing here is built yet; §5 is the proposed order.

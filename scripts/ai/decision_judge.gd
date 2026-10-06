@@ -138,6 +138,8 @@ func close(so: Soldier, why: String) -> Dictionary:
 		d.flags = verdict.flags
 		d.outcome = {"dealt": ep.dealt, "taken": ep.taken, "died": ep.died,
 				"seconds": ep.seconds}
+		if so.services.tally != null and d.has("book"):
+			so.services.tally.call(&"close", d, str(verdict.verdict))
 	ep.erase("decision")
 	episodes.append(ep)
 	if episodes.size() > KEPT:

@@ -26,7 +26,7 @@ const REACH := 45.0               ## m round the player the rays start
 const CHIP_HP := 10
 const CHIP_RADIUS := 0.35
 ## How much each material minds it (brick_grid.h order, as Hailstorm.HARD).
-const HARD := [1.0, 1.0, 1.0, 0.7, 0.6, 0.4, 0.5, 1.0, 0.6, 0.9, 0.7, 0.05, 0.15]
+const HARD := [1.0, 1.0, 1.0, 0.7, 0.6, 0.4, 0.5, 1.0, 0.6, 0.9, 0.7, 0.05, 0.15, 0.5]
 
 const SKY_SUN := Color(0.95, 0.66, 0.4)
 const SKY_TOP := Color(0.58, 0.44, 0.3)

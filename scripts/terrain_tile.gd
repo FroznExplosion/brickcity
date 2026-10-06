@@ -38,6 +38,7 @@ const BEVEL := 0.013
 static var bevel_enabled := false
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
+
 const SCATTER_RANGE := 30.0   ## §8.
 const RANGE_FADE := 6.0
 
@@ -112,14 +113,19 @@ func build(tile_x: int, tile_z: int, material: Material,
 	BrickTerrain.set_face_bevel(0.0)
 	var data: Dictionary = baked if not baked.is_empty() \
 			else BrickTerrain.build_tile(tx, tz)
-	# The near mesh: the same tile with every face chamfered. Built now, once,
-	# so walking never rebuilds anything.
+	# The near mesh: the same tile with its tops chamfered. A direct caller
+	# gets it now; a STREAMED tile (phases) gets it later from the streamer,
+	# baked on a worker and only for tiles near the camera -- building it for
+	# every resident tile, here on the main thread, was 1.6 M triangles held
+	# and ~8 ms a tile for a mesh drawn only inside BEVEL_RANGE.
 	bevel_tri_count = 0
+	_bevel_done = false
 	var near: Dictionary = {}
-	if bevel_enabled:
-		BrickTerrain.set_face_bevel(BEVEL)
-		near = BrickTerrain.build_tile(tx, tz)
-		BrickTerrain.set_face_bevel(0.0)
+	if bevel_enabled and not phases:
+		near = BrickTerrain.build_tile_chamfered(tx, tz, BEVEL)
+		_bevel_done = true
+		# Nobody streams a direct caller's tiles: it is near, all of it.
+		_near = true
 	piece_count = data["piece_count"]
 	tri_count = data["triangle_count"]
 	stud_count = data["stud_count"]
@@ -127,13 +133,10 @@ func build(tile_x: int, tile_z: int, material: Material,
 	curve_cells = int(data.get("curve_cells", 0))
 	build_ms = data["build_ms"]
 
-	if near.is_empty():
-		_add_surface(data["mesh"], material, 0.0, 0.0)
-	else:
-		# near: drawn out to BEVEL_RANGE.  far: picks up from there.
-		_add_surface(near["mesh"], material, 0.0, BEVEL_RANGE)
-		_add_surface(data["mesh"], material, BEVEL_RANGE, 0.0)
-		bevel_tri_count = near["triangle_count"]
+	_material = material
+	_far_surface = _add_surface(data["mesh"], material, 0.0, 0.0)
+	if not near.is_empty():
+		add_bevel(near)
 	_data = data
 	if phases:
 		return   # the streamer will ask for the rest, a frame at a time
@@ -150,8 +153,16 @@ func add_instances() -> void:
 	if _instances_done or _data.is_empty():
 		return
 	_instances_done = true
+	# Bevelled studs on tiles round the camera, plain ones elsewhere; which is
+	# shown is the streamer's call, by the tile's ring (set_near). NOT by a
+	# visibility range: Godot fades a range per OBJECT, and the object here is
+	# a whole 11 m tile -- standing in one, every stud on it was mid-fade,
+	# dithered half see-through.
+	_add_instances("StudsFar", PieceMeshes.stud_plain(), _data["studs"], STUD_RANGE,
+			stud_material())
 	_add_instances("Studs", PieceMeshes.stud(), _data["studs"], STUD_RANGE,
 			stud_material())
+	_apply_near()
 	_add_instances("Tufts", PieceMeshes.tuft(), _data["tufts"], SCATTER_RANGE,
 			tuft_material())
 	_add_instances("Pebbles", PieceMeshes.pebble(), _data["pebbles"], SCATTER_RANGE)
@@ -222,10 +233,74 @@ func has_collision() -> bool:
 	return _collision_done
 
 
-func _add_surface(arrays: Array, material: Material,
-		range_begin: float, range_end: float) -> void:
-	if arrays.is_empty():
+## The chamfered near mesh (BrickTerrain.build_tile_chamfered), shown instead
+## of the flat one while the tile is near (set_near).
+func add_bevel(near: Dictionary) -> void:
+	_bevel_done = true
+	var arrays: Array = near.get("mesh", [])
+	if arrays.is_empty() or _far_surface == null:
 		return
+	_near_surface = _add_surface(arrays, _material, 0.0, 0.0)
+	if _near_surface != null:
+		_near_surface.name = "SurfaceChamfered"
+		# The terrain shader fades its drawn outline and shaded chamfer IN
+		# with distance on this mesh only: the real chamfer up close, both
+		# a little further, the outline alone past that (terrain.gdshader).
+		_near_surface.set_instance_shader_parameter("geo_bevel", 1.0)
+	bevel_tri_count = near["triangle_count"]
+	_apply_near()
+
+
+## The detailed version of this tile -- chamfered surface, bevelled studs --
+## or the plain one. Set by the streamer from the tile's ring round the
+## camera; a whole-tile switch a tile or more away, where a 13 mm bevel is a
+## pixel or two, so it does not read as a pop.
+func set_near(on: bool) -> void:
+	if on == _near:
+		return
+	_near = on
+	_apply_near()
+
+
+func _apply_near() -> void:
+	var chamfered := _near and _near_surface != null
+	if _near_surface != null:
+		_near_surface.visible = chamfered
+	if _far_surface != null:
+		_far_surface.visible = not chamfered
+	for c in get_children():
+		if c is MultiMeshInstance3D:
+			if c.name == "Studs":
+				(c as Node3D).visible = _near and _studs_shown
+			elif c.name == "StudsFar":
+				(c as Node3D).visible = not _near and _studs_shown
+
+
+## F4 in the heightfield scene: instances on or off, the near/far choice kept.
+func set_studs_shown(on: bool) -> void:
+	_studs_shown = on
+	_apply_near()
+
+
+var _near := false
+var _studs_shown := true
+var _near_surface: MeshInstance3D = null
+
+
+## Does this tile still want its chamfered mesh?
+func needs_bevel() -> bool:
+	return bevel_enabled and not _bevel_done and not _data.is_empty()
+
+
+var _bevel_done := false
+var _far_surface: MeshInstance3D = null
+var _material: Material = null
+
+
+func _add_surface(arrays: Array, material: Material,
+		range_begin: float, range_end: float) -> MeshInstance3D:
+	if arrays.is_empty():
+		return null
 	var mesh := ArrayMesh.new()
 	# CUSTOM0 carries the print material (§18.3). A custom channel is
 	# ignored unless the surface says what format it is in, so the flag
@@ -245,6 +320,7 @@ func _add_surface(arrays: Array, material: Material,
 		mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	add_child(mi)
+	return mi
 
 
 ## Instanced pieces need a material that reads the per-instance colour, or
@@ -296,7 +372,7 @@ static func tuft_material() -> ShaderMaterial:
 
 
 func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
-		range_end: float, mat: Material = null) -> void:
+		range_end: float, mat: Material = null, range_begin := 0.0, fade := RANGE_FADE) -> void:
 	@warning_ignore("integer_division")
 	var count := buffer.size() / FLOATS_PER_INSTANCE
 	if count == 0:
@@ -316,7 +392,10 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	# surface shader draws that shadow analytically for nothing instead.
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.visibility_range_end = range_end
-	mi.visibility_range_end_margin = RANGE_FADE
+	mi.visibility_range_end_margin = fade
+	if range_begin > 0.0:
+		mi.visibility_range_begin = range_begin
+		mi.visibility_range_begin_margin = fade
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	# Grass moves in the wind (weather.gdshaderinc); studs and pebbles do not.
 	if node_name == "Tufts":

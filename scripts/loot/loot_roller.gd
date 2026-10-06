@@ -32,9 +32,12 @@ const ARCHETYPES: Dictionary[StringName, Dictionary] = {
 	&"boss":     {"hp_mult": 70.0, "drops": 4, "luck": 3.50},
 }
 
-## Trash HP at TIER 1. Everything else derives: this is the anchor that makes a tier-1
-## mid-roll common rifle kill trash in 4-6 shots (§7.2).
-const TRASH_BASE_HP := 45.0
+## Trash (the LIGHT enemy) HP at TIER 1. Everything else derives from it. Set by the
+## combat design's anchor (Docs/Weapons/COMBAT_DESIGN.md section 3): a median-roll common
+## pistol (11.05 a shot) kills it in 6 body shots, a legendary in 4, a legendary with
+## headshots in 2 -- each with some margin before the next boundary. A median common
+## rifle takes 8. tools/combat_numbers_probe.gd holds it. (Was 45: rifle 4-6.)
+const TRASH_BASE_HP := 64.0
 
 
 static func archetype(id: StringName) -> Dictionary:

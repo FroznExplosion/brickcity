@@ -47,8 +47,8 @@ const SCORCH_RADIUS := 1.5
 
 ## Burn, per material index -- append-only, like the table it mirrors.
 ## PLA, PLA matte, PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA,
-## Wood PLA, Wood, Metal, Stone.
-const FLAMMABILITY := [0.5, 0.5, 0.5, 0.4, 0.35, 0.3, 0.25, 0.5, 0.4, 0.8, 1.0, 0.0, 0.0]
+## Wood PLA, Wood, Metal, Stone, Leaf.
+const FLAMMABILITY := [0.5, 0.5, 0.5, 0.4, 0.35, 0.3, 0.25, 0.5, 0.4, 0.8, 1.0, 0.0, 0.0, 1.0]
 const FLAM_UNKNOWN := 0.5
 
 const DIRS := [Vector3i(0, 1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
@@ -62,6 +62,8 @@ class Cell:
 	var steps := 0
 	var scorched := false
 	var emitter: GPUParticles3D
+	## Where its flames are (BrickFire: the middle of its burning bricks).
+	var at := Vector3.ZERO
 
 ## What the world is, as callables so the probe can run fire without a city:
 ## material_at(Vector3) -> int (-1 for no brick); chip(Vector3, float, int);
@@ -96,6 +98,11 @@ var _groups: Array = []
 ## Where the smoke is, for the AI (it blocks sight): [centre, radius] per
 ## cluster, above the fire.
 var smoke_spots: Array = []
+
+## Fire carried off on pieces: [point, physics tick], the last LOOSE_TICKS of it
+## (BrickFire: burning bricks that came away). BurningDebris lights what is there.
+var loose: Array = []
+const LOOSE_TICKS := 45
 
 ## Counters for the probe and the HUD.
 var caught := 0

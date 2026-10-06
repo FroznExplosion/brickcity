@@ -64,11 +64,18 @@ func _drain(limit := 30 * 30) -> void:
 		n += 1
 
 
+## Sections that run in a probe of their own, with a city of their own
+## (tools/storey_probe.gd): this probe takes some twenty untouched towers of the
+## city's twenty-two, and "storeys", last in line, was left none -- it threw
+## and three of its four checks never ran, with the probe still passing.
+const OWN_PROBE := ["storeys", "farrules"]
+
+
 func _only(name: String) -> bool:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			return name in a.split("=", true, 1)[1].split(",")
-	return true
+	return not OWN_PROBE.has(name)
 
 
 func _run() -> void:
@@ -109,6 +116,8 @@ func _run() -> void:
 		await _check_crushdrawn()
 	if _only("shellhit"):
 		await _check_shellhit()
+	if _only("farrules"):
+		await _check_far_rules()
 	if _only("storeys"):
 		await _check_storeys()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -207,6 +216,9 @@ func _tower(storeys := 4, skip: Array = []) -> int:
 		if int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR >= storeys:
 			_touched.append(b.id)
 			return b.id
+	# Said, not passed over: a section with no tower to test on tests nothing.
+	_ok("an untouched tower of %d storeys to test on" % storeys, false,
+			"%d of %d buildings used already" % [_touched.size(), city.registry.buildings.size()])
 	return -1
 
 
@@ -489,8 +501,16 @@ func _check_storeys() -> void:
 	var r2 := await _storey_left(id, [
 			AABB(Vector3(box.end.x - thin, box.position.y, box.end.z - thin), Vector3(thin, box.size.y, thin)),
 			AABB(Vector3(box.position.x, box.position.y, box.position.z), Vector3(thin, box.size.y, thin))])
-	_ok("two thin corners left: the storey check brings it down", int(r2.above) == 0
-			and int(r2.crush) + int(r2.tip) > 0, str(r2))
+	# Asked of the outcome, not the route. It was "and the storey check did it":
+	# true while a building was solved several times a tick, when the check ran
+	# between two of them on a half-blasted storey and tipped it. Solved once a
+	# tick (2026-10-06), the stress solve's own cascade takes the top off first
+	# -- 57, 93, then 699 bricks as the blasts land -- and there is nothing left
+	# above for the check to find. Either is the building coming down; what must
+	# not happen is five storeys standing on two thin corners. The check itself
+	# is asked by the two cases below, which only it can bring down.
+	_ok("two thin corners left: what is above comes down", int(r2.above) == 0,
+			"%s%s" % [r2, "" if int(r2.crush) + int(r2.tip) > 0 else " -- by the stress solve"])
 	# Crushed: an intact tower made weak enough that its ground storey cannot
 	# carry the rest. It comes down a storey and nothing is left standing on air.
 	id = _tower(4)
@@ -905,6 +925,180 @@ func _check_far() -> void:
 	_ok("and comes down in a few big pieces, far fewer than close by",
 			int(far.pieces) <= 4 and int(far.pieces) < int(near.pieces),
 			"%d piece(s) far, %d near" % [far.pieces, near.pieces])
+
+
+# --- far rules (Docs/CollapseNext.md 1.8) ---------------------------------------
+
+## The top `n` live structural bricks of a building's chunk.
+func _top_bricks(chunk: int, n: int) -> PackedInt32Array:
+	var w: BrickWorld = city.world
+	var dead := {}
+	for d in w.get_dead_blocks(chunk):
+		dead[d] = true
+	for d in w.get_detached_blocks(chunk):
+		dead[d] = true
+	var out := PackedInt32Array()
+	var id := w.get_block_count(chunk) - 1
+	while id >= 0 and out.size() < n:
+		if not dead.has(id) and not w.is_block_decorative(chunk, id):
+			out.append(id)
+		id -= 1
+	out.sort()
+	return out
+
+
+## Pieces of a building (rubble aside) that have not come to rest.
+func _moving_pieces(id: int) -> int:
+	var n := 0
+	for isl in city.islands.islands:
+		if isl.is_valid() and isl.owner == id and not isl.settled and not isl.disposable:
+			n += 1
+	return n
+
+
+## A far collapse is still physics, and cheap by rule (user, 2026-10-06):
+## a piece under ten bricks is deleted where it breaks off, on every machine;
+## and no interior is made in a building that is coming apart, or in wreckage
+## that has not come to rest.
+func _check_far_rules() -> void:
+	print("far rules: small pieces go, and no interior is made in what is still falling")
+	var w: BrickWorld = city.world
+	var isl_m: IslandManager = city.islands
+
+	# (a) Nine bricks, far from everybody: gone, and the command says so.
+	var far_id := _tower(5)
+	var fb := _box(far_id)
+	city.camera.global_position = fb.get_center() + Vector3(-260.0, 40.0, 0.0)
+	city.camera.look_at(fb.get_center())
+	var fchunk: int = city._promote(far_id)
+	await _ticks(20)
+	var nine := _top_bricks(fchunk, 9)
+	var gone0: int = int(isl_m.far_small_deleted[0])
+	city._disable(far_id, nine)
+	var pid: int = isl_m.record_detach(far_id, null, fchunk, nine)
+	var cmds = city.authority.commands.entries
+	var e: DamageLog.Entry = cmds[cmds.size() - 1]
+	var body = isl_m.spawn(fchunk, nine, Vector3.ZERO, Vector3.ZERO, pid, far_id)
+	_ok("nine bricks coming loose far from everybody are not made a piece",
+			nine.size() == 9 and body == null and int(isl_m.far_small_deleted[0]) == gone0 + 1,
+			"%d bricks, body %s, %d deleted far" % [nine.size(), body != null,
+			int(isl_m.far_small_deleted[0]) - gone0])
+	_ok("and the host says so in the command, so no machine keeps it",
+			e.kind == DamageLog.Kind.DETACH and (e.flags & DamageLog.FLAG_GONE) != 0)
+	var ten := _top_bricks(fchunk, 10)
+	city._disable(far_id, ten)
+	var pid10: int = isl_m.record_detach(far_id, null, fchunk, ten)
+	var body10 = isl_m.spawn(fchunk, ten, Vector3.ZERO, Vector3.ZERO, pid10, far_id)
+	_ok("ten bricks, as far off, still fall", body10 != null)
+
+	# The same nine with somebody close: a piece, as it always was.
+	var near_id := _tower(5)
+	var nb := _box(near_id)
+	city.camera.global_position = nb.get_center() + Vector3(-25.0, 6.0, 0.0)
+	city.camera.look_at(nb.get_center())
+	var nchunk: int = city._promote(near_id)
+	await _ticks(20)
+	var nine_near := _top_bricks(nchunk, 9)
+	city._disable(near_id, nine_near)
+	var pid_n: int = isl_m.record_detach(near_id, null, nchunk, nine_near)
+	cmds = city.authority.commands.entries
+	var en: DamageLog.Entry = cmds[cmds.size() - 1]
+	var body_n = isl_m.spawn(nchunk, nine_near, Vector3.ZERO, Vector3.ZERO, pid_n, near_id)
+	_ok("with somebody close, nine bricks are a piece", body_n != null
+			and (en.flags & DamageLog.FLAG_GONE) == 0)
+	await _ticks(30 * 4)
+
+	# (b) A building coming apart gets no rooms until it is still -- with the
+	# rule, and (the same case) without it.
+	for with_rule in [true, false]:
+		city.hold_interiors_mid_collapse = with_rule
+		var id := _tower(6)
+		var b = city.registry.get_building(id)
+		var box := _box(id)
+		# Out of every room range while it is cut.
+		city.camera.global_position = box.get_center() + Vector3(-150.0, 30.0, 0.0)
+		city.camera.look_at(box.get_center())
+		city._promote(id)
+		await _ticks(30)
+		var drawn0: int = b.drawn_rooms.size()
+		_undercut(id)
+		# The blasts land eight a tick; then pieces are in the air.
+		var t := 0
+		while t < 30 * 6 and _moving_pieces(id) == 0:
+			await physics_frame
+			t += 1
+		# The upgrade: somebody arrives while it falls.
+		city.camera.global_position = Vector3(box.get_center().x, box.position.y + 2.0,
+				box.position.z - 12.0)
+		city.camera.look_at(box.get_center())
+		var falling := _moving_pieces(id)
+		var drawn_falling := 0
+		var faked_falling := false
+		t = 0
+		while t < 30 * 25 and _moving_pieces(id) > 0:
+			await physics_frame
+			t += 1
+			drawn_falling = maxi(drawn_falling, b.drawn_rooms.size() - drawn0)
+			if city._fake_rooms.has(id):
+				faked_falling = true
+		var fell_ticks := t
+		# Then still: rooms come, in what is left standing.
+		await _ticks(30 * 5)
+		var after: int = b.drawn_rooms.size() - drawn0
+		var standing: bool = b.is_materialised() and not b.toppled
+		if with_rule:
+			_ok("somebody arriving while a building falls: no room drawn or faked in it",
+					falling > 0 and drawn_falling == 0 and not faked_falling,
+					"%d piece(s) falling for %d tick(s); %d room(s) drawn, faked %s" % [
+					falling, fell_ticks, drawn_falling, faked_falling])
+			_ok("and once it is still, what is left standing gets its rooms",
+					not standing or after > 0, "standing %s, %d room(s) drawn" % [standing, after])
+		else:
+			_ok("(without the rule the same case draws rooms in it while it falls)",
+					falling > 0 and (drawn_falling > 0 or faked_falling),
+					"%d piece(s) falling for %d tick(s); %d room(s) drawn, faked %s" % [
+					falling, fell_ticks, drawn_falling, faked_falling])
+	city.hold_interiors_mid_collapse = true
+	print("  --   interior passes put off: %d" % city.interior_waits)
+
+	# (c) A fallen building's rooms are not spilled into wreckage still moving.
+	city.spill_interiors = true
+	for with_rule in [true, false]:
+		city.hold_interiors_mid_collapse = with_rule
+		var tid := _tower(4)
+		var tbox := _box(tid)
+		city.camera.global_position = Vector3(tbox.get_center().x, tbox.position.y + 3.0,
+				tbox.position.z - 14.0)
+		city.camera.look_at(tbox.get_center())
+		city._promote(tid)
+		await _ticks(30)
+		var spilled0: int = city._spilled_rooms
+		city._topple(tid)
+		var spilled_moving := 0
+		var moved := 0
+		var t3 := 0
+		while t3 < 30 * 20:
+			await physics_frame
+			t3 += 1
+			var wreck: int = int(city._wrecks.get(tid, -1))
+			var wi = city.islands.find_by_chunk(wreck) if wreck >= 0 else null
+			if wi != null and not wi.settled:
+				moved += 1
+				spilled_moving = maxi(spilled_moving, city._spilled_rooms - spilled0)
+			elif t3 > 60:
+				break
+		var owed: int = city.registry.spilled_rooms(tid).size()
+		if with_rule:
+			_ok("a toppled building's rooms are not spilled into it while it moves",
+					moved > 0 and spilled_moving == 0,
+					"it moved for %d tick(s); %d spilled meanwhile; %d room(s) still owed" % [
+					moved, spilled_moving, owed])
+		else:
+			_ok("(without the rule the same case spills into it as it falls)",
+					moved > 0 and spilled_moving > 0,
+					"it moved for %d tick(s); %d spilled meanwhile" % [moved, spilled_moving])
+	city.hold_interiors_mid_collapse = true
+	city.spill_interiors = false
 
 
 # --- (8) ------------------------------------------------------------------------

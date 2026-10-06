@@ -277,6 +277,11 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	return out
 
 
+## Is this building's collapse being held -- given way, and not let go yet?
+func holding(id: int) -> bool:
+	return _held_since.has(id)
+
+
 ## How far the nearest player is from this box. INF with nobody.
 func _nearest(box: AABB, points: PackedVector3Array) -> float:
 	var d := INF
