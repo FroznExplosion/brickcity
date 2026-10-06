@@ -1104,7 +1104,8 @@ func _ready() -> void:
 	ai_services.rng.seed = 0x50DD1E4
 	# What the casebook chooses is counted across runs (TacticsTally), for the
 	# graph on the Tactics Casebook page -- but not a gate's scripted fights.
-	if not "--gate" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+	var tally_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--gate" in tally_args and not "--squad" in tally_args:
 		ai_services.tally = (load("res://scripts/ai/tactics/tactics_tally.gd") as GDScript).call(&"open")
 	# A squad's breaching charge is a blast like any other: asked for, queued,
 	# committed by the host, replayed by clients.

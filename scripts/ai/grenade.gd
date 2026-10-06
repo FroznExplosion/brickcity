@@ -3,14 +3,15 @@ extends Node3D
 ## A soldier's hand grenade (the casebook's "grenade" move, Docs/Tactics).
 ##
 ## Thrown in an arc to a point, it lies there FUSE seconds -- long enough to see
-## it and run -- then goes off: up to DAMAGE to every body within RADIUS, less
-## with distance and none behind bricks; a small blast in the bricks (ordnance,
+## it and run -- then goes off: up to DAMAGE to every body within RADIUS (more
+## than half a soldier's or a player's health, never all of it), less with
+## distance and none behind bricks; a small blast in the bricks (ordnance,
 ## StructuralDamage); a bang everyone near hears. While it lies there its ball is
 ## a danger zone (AIWorld), so soldiers -- the thrower's side too -- get out of it.
 ## The flight ignores walls: it is lobbed over them, which is the point of it.
 
 const RADIUS := 4.0
-const DAMAGE := 120.0
+const DAMAGE := 60.0
 const FUSE := 1.2
 ## Metres above the straight line at mid flight, and the throw's speed.
 const ARC := 2.5
@@ -81,9 +82,11 @@ func _explode() -> void:
 	if _danger_id >= 0:
 		s.ai_world.remove_danger(_danger_id)
 	var at := to + Vector3.UP * 0.3
+	var done := {}
 	for p in s.pawns:
-		if not is_instance_valid(p) or p.health == null or p.health.is_dead():
+		if not is_instance_valid(p) or p.health == null or p.health.is_dead() or done.has(p):
 			continue
+		done[p] = true
 		var d := p.chest().distance_to(at)
 		if d >= RADIUS or not s.ai_world.line_clear(at, p.chest()):
 			continue
