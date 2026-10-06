@@ -566,9 +566,12 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 ##
 ## The same parts, cells and colours `build_item` would lay, so promoting a
 ## drawn room to bricks changes nothing on screen. `offset` is the host's
-## rebase, as there. Returns {buffer, boxes, parts}; `boxes` holds one AABB
-## per item drawn, in the chunk's own metres, which is the space the building's
-## mesh and its furniture body are both in.
+## rebase, as there. Returns {buffer, details, boxes, parts}; `boxes` holds one
+## AABB per item drawn, in the chunk's own metres, which is the space the
+## building's mesh and its furniture body are both in. `details` is the same
+## kind of buffer for the DETAIL parts -- the small things on and round the
+## pieces -- which the drawn rung never shows and a storey group shows only up
+## close (InteriorGroups.ITEM_RANGE).
 ##
 ## An item is drawn where the manifest says, which for a standing building is
 ## where it would be laid. That is what `Room.posts` bought: an item placed
@@ -577,6 +580,7 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		room: Room, offset: Vector3i = Vector3i.ZERO) -> Dictionary:
 	var buffer := PackedFloat32Array()
+	var details := PackedFloat32Array()
 	var boxes: Array[AABB] = []
 	var cs := BrickWorld.get_cell_size()
 	var origin: Vector3i = world.get_chunk_origin(chunk)
@@ -600,11 +604,6 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 			var name: String = part[0]
 			if not palette.has(name):
 				continue
-			# DETAIL is never drawn: it exists only with somebody in the room
-			# (Docs/Workshop.md, Stage D), and the drawn rung is for rooms
-			# nobody is in.
-			if is_detail(part):
-				continue
 			var size := Vector3(world.get_archetype_size(palette[name])) * cs
 			var lo := Vector3(at + (part[1] as Vector3i)) * cs
 			var pc := _part_colour(part, colour, filaments)
@@ -613,16 +612,23 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 			var mid := lo + size * 0.5
 			# MultiMesh's own row layout: the basis by rows with the origin at
 			# the end of each, then the colour.
-			buffer.append_array([size.x, 0.0, 0.0, mid.x,
+			var row := [size.x, 0.0, 0.0, mid.x,
 					0.0, size.y, 0.0, mid.y,
 					0.0, 0.0, size.z, mid.z,
-					c.r, c.g, c.b, c.a])
+					c.r, c.g, c.b, c.a]
+			# DETAIL is not part of the piece's own drawing or its box: it
+			# exists only with somebody near (Docs/Workshop.md, Stage D), so
+			# it goes in a buffer of its own for whoever draws up close.
+			if is_detail(part):
+				details.append_array(row)
+				continue
+			buffer.append_array(row)
 			parts += 1
 			box = box.merge(AABB(lo, size)) if any else AABB(lo, size)
 			any = true
 		if any:
 			boxes.append(box)
-	return {"buffer": buffer, "boxes": boxes, "parts": parts}
+	return {"buffer": buffer, "details": details, "boxes": boxes, "parts": parts}
 
 
 ## How many cells an item needs, so that it is placed inside the room rather

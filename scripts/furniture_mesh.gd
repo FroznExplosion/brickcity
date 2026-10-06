@@ -165,6 +165,13 @@ static func attach_fake(rooms: Array, parent: Node3D, held: Dictionary, key: int
 	return n
 
 
+## And for a storey group's drawing (InteriorGroups): one buffer per room, the
+## caller's own key and material.
+static func attach_group(buffers: Array[PackedFloat32Array], parent: Node3D,
+		held: Dictionary, key: int, mat: Material) -> int:
+	return _attach_buffers(buffers, parent, held, key, mat)
+
+
 static var _fake_material: ShaderMaterial
 
 
