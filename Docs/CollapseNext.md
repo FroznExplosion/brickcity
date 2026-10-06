@@ -12,7 +12,8 @@ cite them ("CollapseNext.md 1.1"), and a finished one is struck, not removed.
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
 `--wreck`, `--fixture`, `--walk`, `--dormant`, `--rooms`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
-`float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `fakehide_probe.gd`. Timing passes (`--shot`,
+`float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `fakehide_probe.gd`, `storey_probe.gd`,
+`far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
 ---
@@ -63,6 +64,26 @@ drawn as crumbs only on the host (`IslandManager._crumbles_off_a_piece`); a clie
 releases it. **Do:** when a client replays a gone DETACH from a piece, draw it as crumbs too.
 **Check:** `loopback_probe` with a count of crumbs drawn on each side.
 
+### ~~1.8 Far collapses: cheap by rule, still physics~~ — done 2026-10-06
+`IslandManager._far_and_small` (`FAR_DELETE_BLOCKS` 10, past `FRACTURE_RANGE`, `FLAG_GONE`);
+`CityScene._mid_collapse` (`COLLAPSE_QUIET_MS`) holds the drawn, fake and real rungs and the wreck
+spill. `tools/far_rules_probe.gd`, 9 checks, two of them the same case with the rule off. A blast
+already lays a room only when the camera is within 60 m of it, so nothing is made far off. The rule
+as the user set it: a collapse far from every player is still simulated -- it has to land where it
+would -- but:
+* **a piece of fewer than ten bricks is deleted when it breaks off**, on every machine (the host
+  says so in the DETACH, as it does for the moving cap);
+* **no interior and no items are made for wreckage until somebody is close to it** (rooms spilled
+  into a wreck within `SPILL_RANGE`, as now -- and not into a wreck still moving);
+* **a building that is mid-collapse when it is upgraded** (made bricks, or come into room range)
+  **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
+  building that is still coming apart.
+
+### 1.9 Interiors by storey group (Interiors.md §8, as amended)
+The simplification, with the unit the user set: a group of storeys, each with one interior drawing
+and one item drawing, faded by its own distance, rebuilt alone. Stages as Interiors.md §8.7. The
+biggest piece of work here; after §1.8 and the small ones below.
+
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
   carry what is above it tips or crushes (`_gravity_fail`, `CRUSH_PER_STUD`). A building left
@@ -75,17 +96,15 @@ releases it. **Do:** when a client replays a gone DETACH from a piece, draw it a
 
 ## 2. Waiting on a decision
 
-* **One drawing per building for interiors** — [Interiors.md](Interiors.md) §8, a proposal, not
-  built: replace the real / drawn / fake / chunk-furniture ladder with one drawing by distance and
-  pieces held by their floor bricks. It would remove the cause behind most "furniture drawn where
-  nothing holds it" reports, and several fixes above with it. The biggest open piece of work here.
+* ~~One drawing per building for interiors~~ — **decided 2026-10-06:** per **storey group**, not
+  per building (the towers are too big for one drawing); see §1.9 and
+  [Interiors.md](Interiors.md) §8.2.
 * **The unit solve** (storeys as single nodes in the stress solve). Not built, and less needed
   than it was: cascades finish in the tick (`BrickWorld.solve_structure` rounds), mega solving
   halved (1,368 → 690 ms over a `--big --shot`), and the storey check above now decides the case it
   was first wanted for. Build it only if solve time shows up again.
-* **Collapses far off without the physics engine** (beyond ~150 m a collapse falls on a simple
-  path and settles as stand-ins). Far collapses are already coarse — a few big chunks,
-  `CollapseDirector` — and this would remove even those bodies.
+* ~~Collapses far off without the physics engine~~ — **decided 2026-10-06:** no. A far collapse
+  stays physics, accurate, and is made cheap by rule instead; see §1.8.
 * **Aim-ahead promotion** (`_aim_promote`, 100 m, kept 8 s) makes more buildings bricks while the
   player looks round. No spikes measured; if memory or frame time climbs, lengthen the dwell
   (`AIM_PROMOTE_TICKS`) or cap how many it keeps.
