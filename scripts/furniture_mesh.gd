@@ -123,6 +123,10 @@ static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		node.multimesh = mm
 		node.material_override = material()
+		# Interior pieces, for the view switches. A room laid as bricks draws
+		# its DETAIL bricks in this same MultiMesh, so those count as pieces
+		# here: a chunk does not keep which of its decorative blocks were which.
+		DebugView.tag(node, DebugView.Kind.INTERIOR)
 		parent.add_child(node)
 		held[chunk] = node
 	elif node.get_parent() != parent:
@@ -248,6 +252,9 @@ static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
 		node.transform = Transform3D.IDENTITY
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		node.material_override = mat
+		# Interior pieces unless whoever asked says otherwise (InteriorGroups
+		# tags its item drawing as items).
+		DebugView.tag(node, DebugView.Kind.INTERIOR)
 		parent.add_child(node)
 		held[key] = node
 	elif node.get_parent() != parent:

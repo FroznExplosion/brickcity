@@ -1021,6 +1021,8 @@ func _ready() -> void:
 	_jam_mode = "--jam" in args
 	_drawn_mode = "--drawn" in args
 	_groups_mode = "--groups" in args
+	_view_mode = "--view" in args
+	DebugView.reset()
 	if "--group-interiors" in args:
 		group_interiors = true
 	_breaklag_mode = "--breaklag" in args
@@ -1254,6 +1256,8 @@ func _ready() -> void:
 		_run_drawn_pass()
 	elif _groups_mode:
 		_run_groups_pass()
+	elif _view_mode:
+		_run_view_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -1927,6 +1931,11 @@ var _group_covers := 0     ## times a group's boxes were put on or taken off a b
 ## Pieces drawn on the section that took their floor, riding it down:
 ## [BrickIsland, MultiMeshInstance3D]. See _groups_floor_went.
 var _group_riders: Array = []
+## The view switches (DebugView): a sweep is owed -- something was switched --
+## and the frame the last one ran.
+var _view_owed := false
+var _view_frame := 0
+var _view_mode := false
 var _group_orphans := 0    ## pieces whose floor went, all told
 var _group_rides := 0      ## and of those, the ones that rode a section
 var _groups_leaving := false   ## _disable is being told of bricks about to leave, not yet gone
@@ -2566,6 +2575,7 @@ func _groups_floor_went(b: BuildingRegistry.Building, box: AABB,
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mm
 	node.material_override = InteriorGroups.piece_material()
+	DebugView.tag(node, DebugView.Kind.INTERIOR)
 	came.mesh.add_child(node)
 	_group_riders.append([came, node])
 	_group_rides += riding
@@ -6904,6 +6914,226 @@ func _run_groups_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## The view switches' gate (DebugView).
+##
+##     godot --path . --resolution 1280x720 scenes/city.tscn -- --view --big
+##
+## A tower in bricks, looked at in each view (shots/view_*.png), and the two
+## halves of what the switches promise:
+##
+##   * a switch changes what is DRAWN -- the picture really is different, for
+##     bricks cut loose after the switch as much as for those there before it;
+##   * and nothing else -- the wall that is not drawn still stops a ray, the
+##     desk that is not drawn still has its box, and with every switch back
+##     each node is drawn exactly as it was.
+func _run_view_pass() -> void:
+	print("[view] what is drawn can be switched off; what is there cannot")
+	respawn_buildings = false
+	_set_group_interiors(true)
+	var picks := _groups_pick(1)
+	_gate_ok("a tower with a face nothing stands in front of", picks.size() == 1)
+	if picks.is_empty():
+		print("[view] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+	var b: BuildingRegistry.Building = picks[0][0]
+	var face: Vector3 = picks[0][1]
+	var out: Vector3 = picks[0][2]
+	var eye := 8.0
+	_promote(b.id)
+	for t in 600:
+		await get_tree().physics_frame
+		if _brick_nodes.has(b.id) and not _bands_building(b.id):
+			break
+	stats_label.visible = false
+	if _reticle != null:
+		_reticle.visible = false
+	_groups_look(face, out, 16.0, eye)
+	await _groups_settle(b)
+	await _frames(4)
+	var S := DebugView.Mode.SHOWN
+	var C := DebugView.Mode.CLEAR
+	var H := DebugView.Mode.HIDDEN
+
+	# What every drawing in the scene is drawn with, before anything is switched.
+	var before := {}
+	for node in find_children("*", "GeometryInstance3D", true, false):
+		before[node] = [(node as GeometryInstance3D).layers, (node as GeometryInstance3D).transparency]
+	var shown := _view_grab()
+	await _save("view_shown")
+
+	# See-through: the bricks, not what stands in them.
+	_view_set(C, S, S)
+	await _frames(6)
+	var tally := _view_tally(b)
+	_gate_ok("structure see-through: every brick mesh of the tower is, and no interior piece",
+			tally.structure > 0 and tally.structure_clear == tally.structure
+			and tally.interior > 0 and tally.interior_clear == 0 and tally.structure_hidden == 0,
+			str(tally))
+	var clear := _view_grab()
+	await _save("view_structure_clear")
+
+	# Hidden: not drawn, and still there.
+	_view_set(H, S, S)
+	await _frames(6)
+	tally = _view_tally(b)
+	var cam := get_viewport().get_camera_3d()
+	_gate_ok("structure hidden: every brick mesh of the tower is on the layer the camera does not draw",
+			tally.structure > 0 and tally.structure_hidden == tally.structure
+			and tally.interior_hidden == 0 and (cam.cull_mask & DebugView.HIDDEN_LAYER) == 0,
+			str(tally))
+	var hidden := _view_grab()
+	await _save("view_structure_hidden")
+	var d_clear := _view_differ(shown, clear)
+	var d_hidden := _view_differ(shown, hidden)
+	_gate_ok("  and the picture shows it: see-through and hidden are each a different picture from shown, and from each other",
+			d_clear > 0.05 and d_hidden > 0.05 and _view_differ(clear, hidden) > 0.02,
+			"%.0f%% of the picture changed see-through, %.0f%% hidden" % [d_clear * 100.0, d_hidden * 100.0])
+	await get_tree().physics_frame
+	var centre := _world_box(b).get_center()
+	var q := PhysicsRayQueryParameters3D.create(camera.global_position,
+			Vector3(centre.x, camera.global_position.y, centre.z))
+	q.collision_mask = Layers.STRUCTURE
+	var wall := get_world_3d().direct_space_state.intersect_ray(q)
+	_gate_ok("  the wall that is not drawn still stops a ray",
+			not wall.is_empty() and _brick_cols.has(b.id)
+			and (_brick_cols[b.id] as BuildingCollision).owns(wall.rid)
+			and camera.global_position.distance_to(wall.position) < 17.0,
+			"%s" % ("nothing hit" if wall.is_empty() else "%.1f m off" % camera.global_position.distance_to(wall.position)))
+
+	# Bricks cut loose AFTER the switch are in the same view.
+	var pieces0 := islands.islands.size()
+	_blast(face + Vector3(0.0, eye, 0.0) - out * 0.5, 2.6)
+	for t in 45:
+		await get_tree().physics_frame
+	await _frames(4)
+	var loose := 0
+	var loose_drawn := 0
+	for node in islands.find_children("*", "GeometryInstance3D", true, false):
+		if DebugView.kind_of(node) != DebugView.Kind.STRUCTURE:
+			continue
+		loose += 1
+		if (node as GeometryInstance3D).layers != DebugView.HIDDEN_LAYER:
+			loose_drawn += 1
+	_gate_ok("  what a blast cuts loose after the switch is hidden with the rest",
+			loose > 0 and loose_drawn == 0,
+			"%d drawing(s) of pieces and crumbs (%d piece(s) made), %d still drawn" % [
+				loose, islands.islands.size() - pieces0, loose_drawn])
+
+	# Interior pieces off, walls see-through: the rooms are empty to look at.
+	_view_set(H, S, S)
+	await _frames(4)
+	var with_pieces := _view_grab()
+	_view_set(H, H, S)
+	await _frames(6)
+	tally = _view_tally(b)
+	var without := _view_grab()
+	await _save("view_structure_and_interior_hidden")
+	_gate_ok("interior pieces hidden: every drawing of them is, and the picture loses them",
+			tally.interior > 0 and tally.interior_hidden == tally.interior
+			and _view_differ(with_pieces, without) > 0.0005,
+			"%s; %.2f%% of the picture" % [str(tally), _view_differ(with_pieces, without) * 100.0])
+	await get_tree().physics_frame
+	var met := false
+	var chunk_xf := world.get_chunk_transform(b.chunk)
+	for g in interior_groups.known(b.id):
+		if not g.cover or met:
+			continue
+		for room_boxes in g.boxes:
+			for box in (room_boxes as Array):
+				if (box as AABB).size == Vector3.ZERO or met:
+					continue
+				var fq := PhysicsRayQueryParameters3D.create(camera.global_position,
+						chunk_xf * (box as AABB).get_center())
+				fq.collision_mask = Layers.FIXTURE
+				var fhit := get_world_3d().direct_space_state.intersect_ray(fq)
+				met = not fhit.is_empty() and fhit.rid == _room_bodies.get(b.id, RID())
+	_gate_ok("  the desk that is not drawn still has its box", met)
+	_view_set(C, H, S)
+	await _frames(6)
+	await _save("view_clear_no_interior")
+
+	# Items: the storey groups' item drawings and loot. A generated city has
+	# no authored item with a DETAIL part, so there may be none to hide.
+	_view_set(S, S, H)
+	await _frames(6)
+	var items := 0
+	var items_drawn := 0
+	for node in get_tree().get_nodes_in_group(DebugView.GROUP_ITEMS):
+		items += 1
+		if (node as GeometryInstance3D).layers != DebugView.HIDDEN_LAYER:
+			items_drawn += 1
+	_gate_ok("items hidden: every item drawing is (%d here)" % items, items_drawn == 0,
+			"%d still drawn" % items_drawn)
+
+	# Everything back: each node drawn exactly as it was.
+	_view_set(S, S, S)
+	await _frames(6)
+	var changed := 0
+	var checked := 0
+	var metas := 0
+	for node in before:
+		if not is_instance_valid(node):
+			continue
+		checked += 1
+		var g := node as GeometryInstance3D
+		if g.layers != int(before[node][0]) or not is_equal_approx(g.transparency, float(before[node][1])):
+			changed += 1
+		if g.has_meta(&"view_layers") or g.has_meta(&"view_alpha"):
+			metas += 1
+	_gate_ok("everything shown again: each drawing is on the layer and at the transparency it had",
+			checked > 0 and changed == 0 and metas == 0
+			and get_tree().get_nodes_in_group(DebugView.GROUP_TOUCHED).is_empty()
+			and (cam.cull_mask & DebugView.HIDDEN_LAYER) != 0,
+			"%d checked, %d changed, %d still marked, %d still listed" % [checked, changed, metas,
+				get_tree().get_nodes_in_group(DebugView.GROUP_TOUCHED).size()])
+	print("[view] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## How the tower's drawings stand under the view switches: of its structure
+## and of its interior pieces, how many, how many see-through, how many hidden.
+func _view_tally(b: BuildingRegistry.Building) -> Dictionary:
+	var t := {"structure": 0, "structure_clear": 0, "structure_hidden": 0,
+			"interior": 0, "interior_clear": 0, "interior_hidden": 0}
+	var root: Node = _brick_nodes.get(b.id)
+	if root == null:
+		return t
+	var nodes: Array = [root]
+	nodes.append_array(root.find_children("*", "GeometryInstance3D", true, false))
+	for node in nodes:
+		var g := node as GeometryInstance3D
+		var kind := DebugView.kind_of(g)
+		if kind == DebugView.Kind.ITEMS:
+			continue
+		var name := "structure" if kind == DebugView.Kind.STRUCTURE else "interior"
+		t[name] += 1
+		if g.layers == DebugView.HIDDEN_LAYER:
+			t[name + "_hidden"] += 1
+		if is_equal_approx(g.transparency, DebugView.CLEAR):
+			t[name + "_clear"] += 1
+	return t
+
+
+func _view_grab() -> Image:
+	return get_viewport().get_texture().get_image()
+
+
+## The share of two pictures' pixels (every fourth, each way) that differ.
+func _view_differ(a: Image, b: Image) -> float:
+	var size := a.get_size()
+	var n := 0
+	var differ := 0
+	for y in range(0, size.y, 4):
+		for x in range(0, size.x, 4):
+			n += 1
+			var ca := a.get_pixel(x, y)
+			var cb := b.get_pixel(x, y)
+			if absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) > 0.06:
+				differ += 1
+	return float(differ) / maxf(float(n), 1.0)
+
+
 ## Up to `n` recipe towers of eight storeys or more, tallest first, each with a
 ## face no other building stands within 100 m in front of:
 ## [building, the foot of that face, which way it looks].
@@ -9241,6 +9471,8 @@ func _process(delta: float) -> void:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
 	_update_live_prof(delta)
+	if _view_owed or (DebugView.active() and Engine.get_process_frames() - _view_frame >= 2):
+		_view_sweep()
 	if not _sampling:
 		return
 	var ms := delta * 1000.0
@@ -9303,6 +9535,7 @@ func _update_hud() -> void:
 		"rooms         %d  (%d open, %d with a diff, %d spilled into wreckage)" % [
 			rooms.rooms, rooms.active, rooms.changed, _spilled_rooms],
 		_groups_hud_line(),
+		_view_hud_line(),
 		"",
 		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
 				"  reloading" if _gun.is_reloading() else "",
@@ -9312,9 +9545,78 @@ func _update_hud() -> void:
 		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
-F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · N respawn"
+F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · N respawn
+7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
+
+
+## One of the view switches (DebugView): 7, 8 and 9 in play.
+func _view_cycle(kind: int) -> void:
+	DebugView.cycle(kind)
+	_view_owed = true
+	print("[city] view: %s" % DebugView.line())
+	_update_hud()
+
+
+func _view_set(structure: int, interior: int, items: int) -> void:
+	DebugView.modes = [structure, interior, items] as Array[int]
+	_view_owed = true
+
+
+## Make everything the city draws match the view switches.
+##
+## Structure is what draws under the nodes that ARE the city's bricks: each
+## building's brick mesh and its bands, a build's frames, the shells, the far
+## boxes, the instanced sets, and everything of the pieces (IslandManager:
+## bodies, bands, stand-ins, crumbs). Interior pieces and items hang under the
+## same nodes and are told apart by what they were tagged when made. Loot is
+## items wherever it is.
+##
+## Every other frame while a switch is thrown, so a piece cut loose or a room
+## drawn a moment ago is in the same view as the rest; once more when the last
+## switch goes back, to put everything as it was; and then not at all.
+func _view_sweep() -> void:
+	_view_owed = false
+	_view_frame = Engine.get_process_frames()
+	DebugView.seen = [[0, 0], [0, 0], [0, 0]]
+	DebugView.aim(get_viewport().get_camera_3d())
+	if camera != null:
+		DebugView.aim(camera)
+	if not DebugView.active():
+		DebugView.restore(get_tree())
+		return
+	for id in _brick_nodes:
+		DebugView.apply_tree(_brick_nodes[id])
+	for id in _frame_nodes:
+		for node in (_frame_nodes[id] as Array):
+			DebugView.apply_tree(node)
+	for id in _shells:
+		DebugView.apply_tree(_shells[id])
+	DebugView.apply_tree(_far)
+	for key in _inst_sets:
+		DebugView.apply_tree(_inst_sets[key])
+	DebugView.apply_tree(islands)
+	for node in get_tree().get_nodes_in_group(ImpostorItems.GROUP):
+		DebugView.apply_tree(node, DebugView.Kind.ITEMS)
+	# Loot lying about: a pickup is a node of its own, wherever it was put.
+	# Looked for now and then -- it is a walk of the whole scene.
+	if Engine.get_process_frames() % 30 < 2 or _view_pickups.is_empty():
+		_view_pickups = find_children("*", "WorldGunPickup", true, false)
+	for node in _view_pickups:
+		if is_instance_valid(node):
+			DebugView.apply_tree(node, DebugView.Kind.ITEMS)
+
+
+var _view_pickups: Array = []
+
+
+func _view_hud_line() -> String:
+	if not DebugView.active():
+		return "view          everything shown  (7 structure · 8 interior pieces · 9 items)"
+	var s: Array = DebugView.seen
+	return "view          %s\n              drawn now: %d structure mesh(es), %d interior box(es) in %d drawing(s), %d item(s) in %d" % [
+			DebugView.line(), int(s[0][1]), int(s[1][1]), int(s[1][0]), int(s[2][1]), int(s[2][0])]
 
 
 func _groups_hud_line() -> String:
@@ -9543,6 +9845,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			_update_ai_label()
 		KEY_F5:
 			save_checkpoint()
+		KEY_7:
+			_view_cycle(DebugView.Kind.STRUCTURE)
+		KEY_8:
+			_view_cycle(DebugView.Kind.INTERIOR)
+		KEY_9:
+			_view_cycle(DebugView.Kind.ITEMS)
 		KEY_F6:
 			_set_group_interiors(not group_interiors)
 			print("[city] interiors: %s" % ("storey groups, by distance (InteriorGroups)"

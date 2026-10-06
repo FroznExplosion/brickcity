@@ -337,6 +337,8 @@ func attach(b: BuildingRegistry.Building, g: Group, parent: Node3D) -> void:
 	var items = _item_nodes.get(key)
 	if items != null and is_instance_valid(items):
 		(items as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if not (items as Node).is_in_group(DebugView.GROUP_ITEMS):
+			DebugView.tag(items as MultiMeshInstance3D, DebugView.Kind.ITEMS)
 	g.shown = true
 	g.changed = false
 	# Where each room's rows are in what is now on screen (check_floors).

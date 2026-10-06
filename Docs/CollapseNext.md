@@ -151,3 +151,25 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md Â
   off), and since the several-disasters merge collapse_probe "a lightning storm" and disaster_probe
   "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and collapse_probe
   "rode it" vary with physics run to run.
+
+---
+
+## 5. Tools for looking
+
+**View switches** (`scripts/debug_view.gd`, 2026-10-06), in play:
+
+| Key | What | States |
+|---|---|---|
+| **7** | structure: bricks of buildings, shells, far boxes, pieces, crumbs | shown / see-through / hidden |
+| **8** | interior pieces: drawn, faked, storey-group, laid as bricks, riding a section | shown / hidden |
+| **9** | items: a storey group's item drawing, loot | shown / hidden |
+
+Only the drawing changes. What is hidden keeps its bricks, its collision and its shadow, and is
+streamed and worked out as before -- so with 7 on hidden, what floats in the air is exactly the
+interior that is spawned, and with 8 hidden as well, what is left is the items. The HUD's `view` line
+says what is switched and counts what is drawn of each. Far boxes and impostor cards stay solid when
+structure is see-through (they cut their own alpha) and go when it is hidden. A room laid as bricks
+draws its small parts with its pieces, so 9 does not separate those. Today a generated city has no
+items to hide: no authored item has a DETAIL part and nothing drops loot in the city scene.
+Gate: `city.tscn -- --view --big` (10), which writes `shots/view_*.png`.
+
