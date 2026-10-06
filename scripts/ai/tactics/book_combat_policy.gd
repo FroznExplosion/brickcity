@@ -104,6 +104,8 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 			not_yet.append(x.move)
 	so.book = {"moment": sense.moment, "facts": sense.facts, "amounts": sense.amounts,
 			"move": move, "asked": asked, "extras": extras, "wanted_extras": not_yet}
+	if so.services.tally != null:
+		so.services.tally.call(&"note", so.book)
 	return tactic
 
 

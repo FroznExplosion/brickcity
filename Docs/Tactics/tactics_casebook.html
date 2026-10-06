@@ -137,6 +137,27 @@ pre.json{max-height:260px;overflow:auto;background:var(--paper);border:1px solid
 .scale{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:.64rem;color:var(--ink-soft)}
 .ckgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:4px 12px;margin-top:6px}
 .ckgrid label{display:flex;gap:6px;font-size:.84rem;align-items:flex-start}
+.gbar{display:grid;grid-template-columns:minmax(0,190px) minmax(60px,1fr) 44px 40px;gap:2px 10px;align-items:center;padding-block:4px;border-top:1px solid var(--rule);font-size:.86rem}
+.gbar.pick{cursor:pointer}
+.gbar.pick:hover .track i,.gbar.pick[aria-current="true"] .track i{background:var(--ink)}
+.gbar.pick[aria-current="true"] .name{font-weight:600}
+.gbar .name{min-width:0;overflow-wrap:anywhere}
+.gbar .num{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.gbar .sub2{grid-column:1 / -1;font-size:.76rem;color:var(--ink-soft)}
+.track{position:relative;height:10px;background:var(--faint);border-radius:0 4px 4px 0}
+.track i{display:block;height:100%;background:var(--blue);border-radius:0 4px 4px 0;min-width:2px}
+.track.soft i{background:var(--ink-soft)}
+.track b{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);box-shadow:0 0 0 2px var(--sheet)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.78rem;color:var(--ink-soft);margin:6px 0 2px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend .sw{width:22px;height:10px;background:var(--blue);border-radius:0 4px 4px 0}
+.legend .tk{width:2px;height:14px;background:var(--ink)}
+.cross{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin-top:6px}
+.cross > div{border:1px solid var(--rule);border-radius:3px;padding:8px 10px;background:var(--paper);min-width:0}
+.cross h5{margin:0 0 4px;font-family:var(--f-mono);font-size:.74rem;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)}
+.cross .ln{display:flex;justify-content:space-between;gap:8px;font-size:.82rem}
+.cross .ln span:last-child{font-family:var(--f-mono);font-size:.76rem;font-variant-numeric:tabular-nums}
+@media (max-width:620px){.gbar{grid-template-columns:minmax(0,1fr) minmax(50px,90px) 40px 36px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
@@ -437,7 +458,7 @@ const ACT = Object.fromEntries(ACTIONS.map(a => [a.id, a]));
 const FAC = Object.fromEntries(FACTORS.map(f => [f.id, f]));
 
 /* ---------------- user state (from storage) and effective values ---------------- */
-const S = {sit:{}, factor:{}, action:{}, memory:{}, rules:{}, actx:{}, sitx:{}, combo:{}, scale:{}, old:{}};
+const S = {sit:{}, factor:{}, action:{}, memory:{}, rules:{}, actx:{}, sitx:{}, combo:{}, scale:{}, tally:{}, old:{}};
 
 function allSits(){ return SITS.concat(Object.values(S.sitx).map(x => Object.assign({}, x, {w: x.w || {}, mine:true}))); }
 function sitDef(id){ return allSits().find(s => s.id === id); }
@@ -629,8 +650,8 @@ function touch(coll, id, fn){
 /* ======================================================================
    VIEW
    ====================================================================== */
-const TABS = [["moments","Moments"],["factors","What changes it"],["scales","Amounts"],["team","Teamwork & memory"],["combos","Combos"],["try","Try a moment"],["checks","Your first casebook"],["rules","Rules"]];
-const V = {tab:"moments", sit:SITS[0].id, fac:FACTORS[0].id, scale:"dist", facFilter:"all", try:{sit:SITS[0].id, ticked:new Set(), sc:{}, n:4, last:"", outcome:""}, roll:null};
+const TABS = [["moments","Moments"],["factors","What changes it"],["scales","Amounts"],["team","Teamwork & memory"],["combos","Combos"],["try","Try a moment"],["game","In the game"],["checks","Your first casebook"],["rules","Rules"]];
+const V = {gameSit:"", tab:"moments", sit:SITS[0].id, fac:FACTORS[0].id, scale:"dist", facFilter:"all", try:{sit:SITS[0].id, ticked:new Set(), sc:{}, n:4, last:"", outcome:""}, roll:null};
 
 function renderTabs(){
   $("#tabs").innerHTML = TABS.map(([id, l]) => `<button class="tab" role="tab" aria-selected="${id===V.tab}" data-t="${id}">${esc(l)}</button>`).join("");
@@ -937,6 +958,75 @@ function renderTry(el){
   $("#t-roll").onclick = () => { V.roll = squadRoll(T.sit, ticked, mem, T.n); renderTry(el); };
 }
 
+/* ---------------- In the game ---------------- */
+// The game counts what the casebook chose (TacticsTally -> tactics_tally.json); the counts are
+// stored here as tally/latest and drawn: which moments came up, and what happened in each.
+const BAND_ORDER = ["reach","close","near","mid","far","very far"];
+const BAND_TEXT = {reach:"within 2 m", close:"2-6 m", near:"6-15 m", mid:"15-30 m", far:"30-60 m", "very far":"over 60 m"};
+const PCOVER_TEXT = {"0":"player in the open", "1":"player in partial cover", "2":"player behind full cover"};
+function bookOdds(sid){
+  if(!sitDef(sid)) return {};
+  const t = new Set(implied(sid)); t.sc = sitScale(sid);
+  const o = {}; compute(sid, t).forEach(r => o[r.a] = r.p); return o;
+}
+function topMoves(d, n){ const tot = Object.values(d).reduce((x, y) => x + y, 0); return Object.entries(d).sort((x, y) => y[1] - x[1]).slice(0, n).map(([k, v]) => [k, v, tot ? v / tot : 0]); }
+function renderGame(el){
+  const doc = S.tally.latest, T = doc && doc.tally;
+  const paste = `<label class="fld">Update from the game: paste the contents of <span style="font-family:var(--f-mono)">tactics_tally.json</span> (in <span style="font-family:var(--f-mono)">%APPDATA%\\Godot\\app_userdata\\Brickcity</span>), or ask Claude to upload it
+      <textarea id="g-paste" placeholder='{"version":1,"decisions":…}'></textarea></label>
+    <div class="row" style="margin-top:8px"><button class="act" id="g-save">Save counts</button><span class="note" id="g-msg"></span></div>`;
+  if(!T || !T.moments || !Object.keys(T.moments).length){
+    el.innerHTML = `<main class="sheet"><div class="eyebrow">What happened</div><h2>In the game</h2>
+      <p class="situation">While the casebook decides, the game counts every decision: which moment it was, which move was taken, what was asked for and couldn't be done, and what came of it. Nothing has been uploaded yet.</p>${paste}</main>`;
+  } else {
+    const ms = Object.entries(T.moments).map(([id, m]) => ({id, m})).sort((x, y) => y.m.n - x.m.n);
+    const total = ms.reduce((t, x) => t + x.m.n, 0), maxN = Math.max(...ms.map(x => x.m.n));
+    if(!T.moments[V.gameSit]) V.gameSit = ms[0].id;
+    const m = T.moments[V.gameSit], odds = bookOdds(V.gameSit);
+    const moves = Object.entries(m.moves).sort((x, y) => y[1] - x[1]);
+    const asked = Object.entries(m.asked || {}).concat(Object.entries(m.wanted_extras || {})).reduce((o, [k, v]) => (o[k] = (o[k] || 0) + v, o), {});
+    const askedL = Object.entries(asked).sort((x, y) => y[1] - x[1]);
+    const facts = Object.entries(m.facts || {}).sort((x, y) => y[1] - x[1]);
+    const scale = Math.max(...moves.map(([a, v]) => v / m.n), ...moves.map(([a]) => odds[a] || 0), 0.01);
+    const sName = id => sitDef(id) ? sitDef(id).l : id;
+    el.innerHTML = `<main class="sheet" style="margin-bottom:14px">
+      <div class="eyebrow">What happened · counted by the game</div><h2>In the game</h2>
+      <p class="situation"><b>${T.decisions}</b> decisions over <b>${T.runs}</b> run${T.runs==1?"":"s"}, counted since ${esc(String(T.since||"").replace("T"," "))}; last saved ${esc(String(T.updated||"").replace("T"," "))}. Uploaded here ${esc(String(doc.uploadedAt||"").slice(0,16).replace("T"," "))}.</p>
+      <h4>Which moments came up</h4>
+      <p class="note">Pick one to see what the enemies did in it.</p>
+      ${ms.map(x => `<div class="gbar pick" role="button" tabindex="0" data-m="${esc(x.id)}" aria-current="${x.id===V.gameSit}" title="${esc(sName(x.id))}: ${x.m.n} of ${total} decisions">
+        <div class="name">${esc(sName(x.id))}</div><div class="track"><i style="width:${x.m.n/maxN*100}%"></i></div><div class="num">${x.m.n}</div><div class="num">${Math.round(x.m.n/total*100)}%</div></div>`).join("")}
+    </main>
+    <main class="sheet" style="margin-bottom:14px">
+      <div class="eyebrow">${m.n} decision${m.n==1?"":"s"}</div><h2>${esc(sName(V.gameSit))}</h2>
+      <h4>What they did</h4>
+      <div class="legend"><span><i class="sw"></i>how often it happened</span><span><i class="tk"></i>the book's starting odds for this moment (before distance, cover and the rest)</span></div>
+      ${moves.map(([a, v]) => { const o = (m.outcomes || {})[a], share = v / m.n, bk = odds[a];
+        return `<div class="gbar" title="${esc(actLabel(a))}: ${v} of ${m.n} (${Math.round(share*100)}%)${bk != null ? "; the book starts at " + Math.round(bk*100) + "%" : ""}">
+          <div class="name">${esc(actLabel(a))}</div>
+          <div class="track"><i style="width:${share/scale*100}%"></i>${bk != null ? `<b style="left:calc(${Math.min(bk/scale,1)*100}% - 1px)"></b>` : ""}</div>
+          <div class="num">${v}</div><div class="num">${Math.round(share*100)}%</div>
+          ${o && o.n ? `<div class="sub2">judged ${o.n}: average score ${(o.reward/o.n).toFixed(1)}, dealt ${Math.round(o.dealt/o.n)} and took ${Math.round(o.taken/o.n)} damage a time${o.good ? ", " + o.good + " good call" + (o.good>1?"s":"") : ""}${o.stupid ? ", " + o.stupid + " blunder" + (o.stupid>1?"s":"") : ""}${o.died ? ", died " + o.died + "×" : ""}</div>` : ""}</div>`; }).join("")}
+      ${askedL.length ? `<h4>Asked for, but couldn't</h4><p class="note">The book picked these and the game can't do them yet (or couldn't right then); the soldier picked again.</p>
+        ${askedL.map(([a, v]) => `<div class="gbar" title="${esc(actLabel(a))}: asked ${v} time${v==1?"":"s"}"><div class="name">${esc(actLabel(a))}</div><div class="track soft"><i style="width:${v/askedL[0][1]*100}%"></i></div><div class="num">${v}</div><div class="num"></div></div>`).join("")}` : ""}
+      <h4>What they did, by the player's cover</h4>
+      <div class="cross">${["0","1","2"].filter(k => (m.by_pcover||{})[k]).map(k => `<div><h5>${esc(PCOVER_TEXT[k])} · ${m.pcover[k]}</h5>${topMoves(m.by_pcover[k], 4).map(([a, v, f]) => `<div class="ln"><span>${esc(actLabel(a))}</span><span>${v} · ${Math.round(f*100)}%</span></div>`).join("")}</div>`).join("") || `<p class="empty">No counts.</p>`}</div>
+      <h4>What they did, by distance</h4>
+      <div class="cross">${BAND_ORDER.filter(k => (m.by_dist||{})[k]).map(k => `<div><h5>${esc(BAND_TEXT[k])} · ${m.dist[k]}</h5>${topMoves(m.by_dist[k], 4).map(([a, v, f]) => `<div class="ln"><span>${esc(actLabel(a))}</span><span>${v} · ${Math.round(f*100)}%</span></div>`).join("")}</div>`).join("") || `<p class="empty">No counts.</p>`}</div>
+      ${facts.length ? `<h4>What was true at the time</h4><div class="chips">${facts.map(([f, v]) => `<span class="chip">${esc(facLabel(f))} · ${Math.round(v/m.n*100)}%</span>`).join("")}</div>` : ""}
+    </main>
+    <main class="sheet">${paste}</main>`;
+    el.querySelectorAll(".gbar.pick").forEach(b => { const go = () => { V.gameSit = b.dataset.m; const y = scrollY; renderGame(el); scrollTo(0, y); }; b.onclick = go; b.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); go(); } }; });
+  }
+  $("#g-save").onclick = () => {
+    let t; try{ t = JSON.parse($("#g-paste").value); }catch(e){ $("#g-msg").textContent = "That isn't the file's contents (not valid JSON)."; return; }
+    if(!t || typeof t.moments !== "object"){ $("#g-msg").textContent = "That doesn't look like tactics_tally.json."; return; }
+    S.tally.latest = {tally: t, uploadedAt: new Date().toISOString()};
+    queueWrite("tally/latest", S.tally.latest);
+    renderGame(el);
+  };
+}
+
 /* ---------------- Checks ---------------- */
 function renderChecks(el){
   const rs = CHECKS.map(c => ({c, r: checkResult(c)}));
@@ -986,7 +1076,7 @@ function renderRules(el){
 function render(){
   renderTabs(); renderMeter();
   const el = $("#view");
-  ({moments:renderMoments, factors:renderFactors, scales:renderScales, team:renderTeam, combos:renderCombos, try:renderTry, checks:renderChecks, rules:renderRules})[V.tab](el);
+  ({game:renderGame, moments:renderMoments, factors:renderFactors, scales:renderScales, team:renderTeam, combos:renderCombos, try:renderTry, checks:renderChecks, rules:renderRules})[V.tab](el);
 }
 function renderSoft(){
   renderMeter();
@@ -1002,7 +1092,7 @@ render();
   db = await window.claude.use("db");
   if(!db){ setSave("Storage isn't available here. Changes last only while the page is open.", true); return; }
   setSave("Loading your settings…");
-  const colls = [["sit","sit"],["factor","factor"],["action","action"],["memory","memory"],["rules","rules"],["actx","actx"],["sitx","sitx"],["combo","combo"],["scale","scale"],["answers","old"]];
+  const colls = [["sit","sit"],["factor","factor"],["action","action"],["memory","memory"],["rules","rules"],["actx","actx"],["sitx","sitx"],["combo","combo"],["scale","scale"],["tally","tally"],["answers","old"]];
   let loaded = 0, timer = null;
   colls.forEach(([path, key]) => db.collection(path).onSnapshot(s => {
     s.docs.forEach(d => { if(!pending.has(path + "/" + d.id) && !writing.has(path + "/" + d.id)) S[key][d.id] = JSON.parse(JSON.stringify(d.data())); });

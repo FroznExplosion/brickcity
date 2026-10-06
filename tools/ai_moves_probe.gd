@@ -12,8 +12,9 @@ extends SceneTree
 ##   B. Melee: the soldier runs at the player, hits it in reach, holds its fire.
 ##   C. Rush: straight in at a run from 25 m, firing on the way.
 ##   D. The book deciding, the player within reach: it chooses melee and hits.
-##   E. The book deciding, three soldiers against a player behind a wall they
-##      cannot see over, but hear firing every second: grenades go.
+##   E. A book that asks for the grenade nearly every time, three soldiers
+##      against a player behind a wall they cannot see over but hear firing
+##      every second: grenades go.
 
 const Arena := preload("res://tools/ai_arena.gd")
 
@@ -125,7 +126,12 @@ func _begin(stage: String) -> void:
 			_pair(-240.0, Vector3(0.0, 0.0, -1.4), 400.0)
 			_log["hp0"] = _hp(_p)
 		"book_grenades":
-			a.s.policy = BookCombatPolicy.new()
+			# The wiring, not the dice: a copy of the book in which the grenade is
+			# all but certain in every moment.
+			var sure := TacticsBook.load_book()
+			for m in sure.moments:
+				sure.moments[m].weights = {"grenade": 100.0, "hold": 1.0}
+			a.s.policy = BookCombatPolicy.new(sure)
 			a.bricks(_cell(Vector3(237.9, 0.0, -14.0)), Vector3i(12, 6, 1))
 			_p = a.player(Vector3(240.0, 0.0, -15.0), 1e7, true, 8)
 			_old.append(_p)
@@ -186,7 +192,7 @@ func _check(t: float) -> bool:
 			for m in _log.members:
 				n += m.thrown.size()
 			var pol := a.s.policy as BookCombatPolicy
-			_ok("the book deciding, three soldiers against a player firing from behind a wall: grenades go", n >= 1,
+			_ok("the book asking for grenades, three soldiers against a player firing from behind a wall: they go", n >= 2,
 					"%d grenade(s); done %s; still not built %s" % [n, pol.done, pol.wanted_text()])
 			return true
 	return true
