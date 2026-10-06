@@ -614,6 +614,44 @@ public:
     /// Char these blocks again. Ids that are gone are skipped.
     void set_scorched_blocks(int chunk_id, const PackedInt32Array &ids);
 
+    // --- fire, brick by brick (Docs/Disasters.md 29) -------------------------
+    //
+    // Each block has heat; a BURNING block has fuel, by its material and size,
+    // and when the fuel is gone the block is. A burning block heats what is
+    // next to it -- most of all what is above it (flames climb), more of what
+    // is downwind -- and reaches across a few cells of air upward and
+    // downwind. A block catches when its heat passes 1 AND it touches air: a
+    // brick buried in others heats but cannot burn until what is round it has
+    // burnt away, which is why a canopy burns from the outside in and a wall
+    // from its faces, with nothing special-cased. Metal and stone never burn,
+    // only char. The state is the host's; what it DOES (blocks killed and
+    // charred) is returned, so the caller can commit it as commands.
+
+    /// Add heat to every block with a cell within radius_m of a world point
+    /// (and the one the point is in). A flame put to it (by_material false):
+    /// what burns takes it whole, what does not its share. An ember (true):
+    /// everything by how readily its material takes heat -- leaves catch from
+    /// a couple, plastic hardly. Returns how many of them can burn.
+    int fire_heat(int chunk_id, Vector3 world_point, float radius_m, float heat,
+            bool by_material = false);
+    /// One step of `dt` seconds under `wind` (world, m/s) and `damp` (1 dry,
+    /// less in rain). Kills what burnt out and chars what got hot, and returns
+    /// {"killed", "charred": ids; "points": world centres of burning blocks;
+    /// "power": their flames 0..1; "loose": where burning blocks were carried
+    /// off on a piece since the last step; "caught": how many caught this step;
+    /// "burning": how many burn; "active": whether anything is still hot}.
+    Dictionary fire_step(int chunk_id, float dt, Vector3 wind, float damp, int max_burning);
+    /// Put the chunk's fire out: every block's heat and flame gone.
+    void fire_clear(int chunk_id);
+    /// How many of the chunk's blocks are burning.
+    int fire_burning(int chunk_id) const;
+    /// One block's fire, for probes: [heat, 1 if burning, fuel left, seconds
+    /// burning]; all 0 for a block with none.
+    PackedFloat32Array fire_get(int chunk_id, int block_id) const;
+    /// Seconds a block of this material and this many cells burns; 0 for one
+    /// that does not burn.
+    static float fire_burn_seconds(int material, int cells);
+
     /// How many authored triangles the chunk's living blocks draw (a curved
     /// stair tread's `mesh`, against a brick's handful of voxel faces). Bricks
     /// are a poor measure of a bake: a staircase piece of 146 of them is
@@ -1022,6 +1060,18 @@ private:
         std::vector<int64_t> headroom;
     };
     std::vector<StressState> stress;
+
+    /// Fire, per chunk: the blocks with any heat, by id (ordered: the step is
+    /// the same every run). See fire_step.
+    struct FireBlock {
+        float heat = 0.0f;
+        float fuel = 0.0f;      ///< seconds left; burning while > 0
+        float fuel0 = 0.0f;
+        float age = 0.0f;       ///< seconds burning
+        bool burning = false;
+    };
+    std::vector<std::map<int32_t, FireBlock>> fire_state;
+    std::map<int32_t, FireBlock> *fire_of(int chunk_id);
 
     // Scratch for the structural solve, one set per thread that solves
     // (solve_structures runs several buildings' solves at once). Slot 0 is the

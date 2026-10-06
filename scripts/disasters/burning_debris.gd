@@ -87,7 +87,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _catch_near_fire() -> void:
-	if fire == null or not fire.is_burning() or _burning.size() >= MAX_BURNING:
+	if fire == null or (not fire.is_burning() and fire.loose.is_empty()) \
+			or _burning.size() >= MAX_BURNING:
 		return
 	# By the piece's box, not its centre: a storey's worth of building coming
 	# away has its centre metres from the fire that is eating its corner.
@@ -96,10 +97,17 @@ func _catch_near_fire() -> void:
 		if isl.settled or _burning.has(isl) or not isl.is_valid():
 			continue
 		var box := im.world_aabb(isl).grow(CATCH_REACH)
+		var lit := false
 		for c in fire.cells:
 			if box.has_point(FireSpread.centre_of(c.key)):
-				catch_piece(isl)
+				lit = catch_piece(isl)
 				break
+		# Burning bricks that came away (BrickFire): the piece has them.
+		if not lit:
+			for q in fire.loose:
+				if box.has_point(q[0]):
+					catch_piece(isl)
+					break
 		if _burning.size() >= MAX_BURNING:
 			return
 

@@ -26,8 +26,8 @@ const POOL := 0.65               ## share of drops that fall in a puddle
 
 ## How much each material minds acid, by index (brick_grid.h BRICK_MATERIALS):
 ## PLA, PLA matte, PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA,
-## Wood PLA, Wood, Metal, Stone.
-const SUSCEPTIBLE := [1.0, 1.0, 1.0, 0.7, 0.5, 0.4, 0.3, 1.0, 0.6, 0.6, 0.2, 0.0, 0.0]
+## Wood PLA, Wood, Metal, Stone, Leaf.
+const SUSCEPTIBLE := [1.0, 1.0, 1.0, 0.7, 0.5, 0.4, 0.3, 1.0, 0.6, 0.6, 0.2, 0.0, 0.0, 0.8]
 
 ## For the probe.
 var drops := 0
