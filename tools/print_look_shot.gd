@@ -19,6 +19,8 @@ const LOOKS := [
 ## [name, camera position, look-at point]
 const VIEWS := [
 	["side", Vector3(1.05, 0.62, 1.55), Vector3(0.35, 0.45, 0.6)],
+	["skin", Vector3(0.72, 1.12, 1.88), Vector3(0.62, 0.84, 1.68)],
+	["stud", Vector3(0.5, 1.12, 0.95), Vector3(0.15, 0.9, 0.55)],
 	["top", Vector3(0.55, 1.55, 1.25), Vector3(0.35, 0.85, 0.55)],
 	["bottom", Vector3(2.2, 0.05, 1.3), Vector3(2.45, 0.6, 0.6)],
 	["wall", Vector3(6.5, 1.6, 9.0), Vector3(5.6, 0.8, 0.7)],
@@ -97,6 +99,7 @@ func _build() -> void:
 	stud_mat.shader = load("res://shaders/printed.gdshader")
 	stud_mat.set_shader_parameter("top_mode", 1)
 	stud_mat.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
+	stud_mat.set_shader_parameter("contour_radius", PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
 	var stud := BrickWorld.get_stud_metres()
 	var plate := stud * 0.4
 	for s in studs:

@@ -14,12 +14,24 @@
 
 group_uniforms top_paths;
 // 0: a 45-degree raster, what a slicer does on a flat top by default.
-// 1: concentric loops following an N-sided outline — for a stud, whose top
-//    is an octagon and not a circle, so circular rings would be visibly the
-//    wrong shape on the one part there are thousands of.
+// 1: a STUD. Its top is one path spiralling in to the centre, following the
+//    stud's own N-sided outline -- the slicer walks the shape it is given, and
+//    this stud is an octagon (PieceMeshes.stud).
+//
+//    The corners are ROUNDED, by a fifth of a bead. Concentric loops with sharp
+//    corners drew eight hard creases on every stud: the ridge normal swings
+//    straight across the corner's bisector. A real nozzle cannot turn on a
+//    point either, so the path rounds every corner a little, and so does this.
 uniform int top_mode : hint_range(0, 1) = 0;
 uniform int contour_sides : hint_range(3, 16) = 8;
-uniform float contour_radius = 0.0685;
+uniform float contour_radius = 0.0685;   // the outline's corner radius: where the spiral starts
+// How far a stud's facets are shaded toward round: 0 eight flat faces, 1 a
+// cylinder. Between, an octagon with softened corners, which is what a
+// printed polygon is.
+uniform float stud_round : hint_range(0.0, 1.0) = 0.5;
+// A real stud is 1.8 mm, nine 0.2 mm layers: with the brick's 48, 57.
+uniform int stud_layers : hint_range(1, 32) = 9;
+uniform float stud_height = 0.074;   // PieceMeshes.STUD_H
 
 group_uniforms surface;
 // Multiplied onto the vertex colour. A MultiMesh writes its instance colour
@@ -43,6 +55,19 @@ void vertex() {
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
+    // A stud's corners are softened in the shading (stud_round): each
+    // vertex's normal leans out from the axis, so across a flat face the
+    // interpolated normal turns a little the way a cylinder's does. The
+    // 45-degree rim keeps its lean. v_flat_normal above keeps the true face,
+    // for the toolpaths.
+    if (top_mode == 1 && abs(NORMAL.y) < 0.95) {
+        float rl = length(VERTEX.xz);
+        if (rl > 1e-5) {
+            float h = length(NORMAL.xz);
+            vec3 round_n = vec3(VERTEX.x / rl * h, NORMAL.y, VERTEX.z / rl * h);
+            NORMAL = normalize(mix(NORMAL, round_n, stud_round));
+        }
+    }
     // Grass in the wind (weather.gdshaderinc): only what has a sway height --
     // the tufts -- and after v_local, so the print lines ride along.
     VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
@@ -53,16 +78,24 @@ void vertex() {
     }
 }
 
-/// Distance from p to the boundary of a regular n-gon of the given radius,
-/// with a vertex on +X — the orientation PieceMeshes.stud() builds.
-float ngon_depth(vec2 p, int n, float radius) {
+/// How far p is inside a regular n-gon of the given corner radius (vertex on
+/// +X, the orientation PieceMeshes.stud builds), with the corners rounded:
+/// a soft maximum over the edges, `soft` metres of it. Its level sets are
+/// the outline shrunk inward with round corners -- a toolpath's loops.
+float ngon_depth_round(vec2 p, int n, float radius, float soft) {
     float apothem = radius * cos(3.14159265 / float(n));
-    float worst = 0.0;
+    float d[16];
+    float worst = -1e9;
     for (int i = 0; i < n; i++) {
         float a = PS_TAU * (float(i) + 0.5) / float(n);
-        worst = max(worst, dot(p, vec2(cos(a), sin(a))));
+        d[i] = dot(p, vec2(cos(a), sin(a)));
+        worst = max(worst, d[i]);
     }
-    return apothem - worst;
+    float sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        sum += exp((d[i] - worst) / soft);
+    }
+    return apothem - (worst + soft * log(sum));
 }
 
 void fragment() {
@@ -77,21 +110,36 @@ void fragment() {
     float aniso = 0.0;
     if (print_lines_enabled && ps_printed(mat)) {
         float t;
+        float t_d;
         if (face != 0) {
             float bw = ps_bead(face, mat);
             if (top_mode == 1) {
-                // A stud's top is all wall: loops in to the middle.
-                t = ngon_depth(v_local.xz, contour_sides, contour_radius) / bw;
+                // One bead a turn, in to the centre, along the outline.
+                // `t` steps by exactly one where the angle wraps, which
+                // fract() never sees; the derivatives take the unwrapped
+                // count instead.
+                float turn = atan(v_local.z, v_local.x) / PS_TAU + 0.5;
+                // A finer line than a brick's skin: a real stud top is
+                // 4.8 mm across and takes five or six turns of 0.4 mm.
+                bw *= 0.7;
+                t_d = ngon_depth_round(v_local.xz, contour_sides, contour_radius, bw * 0.2) / bw;
+                t = t_d + turn;
             } else {
                 t = dot(v_local.xz, vec2(0.7071, face == 2 ? -0.7071 : 0.7071)) / bw;
+                t_d = t;
             }
+        } else if (top_mode == 1) {
+            // A stud's own layers, on top of the brick's: nine.
+            t = v_local.y / (stud_height / float(max(stud_layers, 1)));
+            t_d = t;
         } else {
             // Sides are LAYERS, stacked along the part's own print axis, the
-            // same height as the brick's: a stud is ten of them.
+            // same height as the brick's.
             t = v_local.y / ps_layer(mat);
+            t_d = t;
         }
         // A stud is one shared mesh: one seed for all of them.
-        ps_beads(t, face, mat, dist, VERTEX, 0.0, 0.0,
+        ps_beads(t, t_d, face, mat, dist, VERTEX, 0.0, 0.0, 0.0,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);

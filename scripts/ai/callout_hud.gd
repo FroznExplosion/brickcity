@@ -7,6 +7,10 @@ extends CanvasLayer
 
 const MARKER_ABOVE := 0.55
 
+## Subtitles on or off (the Options menu, through BrickcityMenuHost). Only the
+## text: the talking markers over speakers stay.
+static var shown := true
+
 var callouts: Callouts
 var listener: Callouts.Listener
 var _box: VBoxContainer
@@ -31,6 +35,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _box != null:
+		_box.visible = shown
 	refresh()
 
 

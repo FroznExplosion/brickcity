@@ -20,6 +20,9 @@ const RARITY_COLOURS: Array[Color] = [
 const HINT_SECONDS := 10.0
 const HINT := "WASD move · SHIFT sprint · SPACE jump (hold: higher) / climb · C slide, let go · Q grapple · RMB aim · LMB fire · R reload · V leave"
 
+## How solid the HUD is drawn (the Options menu's HUD Opacity).
+static var opacity := 1.0
+
 var pawn: Pawn
 var gun: GunController
 var view: PlayerView
@@ -42,6 +45,7 @@ func setup(p: Pawn, g: GunController, v: PlayerView) -> void:
 func _process(delta: float) -> void:
 	_age += delta
 	if _hud != null:
+		_hud.modulate.a = opacity
 		_hud.queue_redraw()
 
 
