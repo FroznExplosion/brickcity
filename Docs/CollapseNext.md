@@ -51,18 +51,18 @@ Rebuilds wait in proportion to cost (`COARSE_TICKS_PER_MS`); the first build doe
 stand-ins on a worker, like bakes (the chunk must not change under it: cancel on edit, as
 `settle_bake_job` does). **Check:** `--big --shot` "the slowest mesh the queue made".
 
-### 1.6 A building is solved several times in one tick
-A building re-marked dirty while the solve loop runs is solved again in the same tick, up to
-`SOLVES_PER_TICK` times; with cascade rounds (`CASCADE_ROUNDS`, 3 ms each) that is up to 12 ms on
-one building. It also fooled the director's stall count (fixed: once a tick). **Do:** solve a
-building at most once a tick unless its first solve was cut short by the budget. **Check:**
-`--breaklag --big` timeline and `[prof] solves`.
+### ~~1.6 A building is solved several times in one tick~~ — done 2026-10-06
+Once a tick each (`solved_now` in the solve loop; a second solve waits for the next tick). The
+`--breaklag --big` tower is still down by tick 15, so the repeats bought nothing. One thing moved:
+with two thin corners left under a tower, the stress solve's own cascade now takes the top off
+before the storey check gets to it (`storey_probe` asks for the outcome there, not the route).
 
-### 1.7 Clients see nothing where the host sees crumbs
+### 1.7 Clients see nothing where the host sees crumbs — waits for a live client
 A group of 9–48 bricks off a piece is cut out on every machine (`FLAG_GONE` in its DETACH) and
-drawn as crumbs only on the host (`IslandManager._crumbles_off_a_piece`); a client's replay just
-releases it. **Do:** when a client replays a gone DETACH from a piece, draw it as crumbs too.
-**Check:** `loopback_probe` with a count of crumbs drawn on each side.
+drawn as crumbs only on the host (`IslandManager._crumbles_off_a_piece`); a replay just releases
+it. There is no live co-op client yet -- `StructureReplayer` is used by saves and the log check
+only -- so there is nothing to draw on. **Do, with the client (Multiplayer.md):** when it replays a
+gone DETACH from a piece, hand the cut chunk to its IslandManager to crumble before releasing it.
 
 ### ~~1.8 Far collapses: cheap by rule, still physics~~ — done 2026-10-06
 `IslandManager._far_and_small` (`FAR_DELETE_BLOCKS` 10, past `FRACTURE_RANGE`, `FLAG_GONE`);

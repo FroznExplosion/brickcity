@@ -501,8 +501,16 @@ func _check_storeys() -> void:
 	var r2 := await _storey_left(id, [
 			AABB(Vector3(box.end.x - thin, box.position.y, box.end.z - thin), Vector3(thin, box.size.y, thin)),
 			AABB(Vector3(box.position.x, box.position.y, box.position.z), Vector3(thin, box.size.y, thin))])
-	_ok("two thin corners left: the storey check brings it down", int(r2.above) == 0
-			and int(r2.crush) + int(r2.tip) > 0, str(r2))
+	# Asked of the outcome, not the route. It was "and the storey check did it":
+	# true while a building was solved several times a tick, when the check ran
+	# between two of them on a half-blasted storey and tipped it. Solved once a
+	# tick (2026-10-06), the stress solve's own cascade takes the top off first
+	# -- 57, 93, then 699 bricks as the blasts land -- and there is nothing left
+	# above for the check to find. Either is the building coming down; what must
+	# not happen is five storeys standing on two thin corners. The check itself
+	# is asked by the two cases below, which only it can bring down.
+	_ok("two thin corners left: what is above comes down", int(r2.above) == 0,
+			"%s%s" % [r2, "" if int(r2.crush) + int(r2.tip) > 0 else " -- by the stress solve"])
 	# Crushed: an intact tower made weak enough that its ground storey cannot
 	# carry the rest. It comes down a storey and nothing is left standing on air.
 	id = _tower(4)
