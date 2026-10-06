@@ -45,6 +45,8 @@ class Result:
 	var grade_word: String = ""
 	## Optional second name word from the barrel's element. "" when non-elemental.
 	var element_word: String = ""
+	## The element its rounds carry (Elements.GUN_ELEMENTS), &"" for a kinetic gun.
+	var element_id: StringName = &""
 	## Slot-weighted part quality (QUALITY_NAMING §2.3). Drives grade_word.
 	var quality: float = 0.0
 	## The damage roll (0..1) behind the score. Kept for the comparison UI.
@@ -130,6 +132,7 @@ static func _finish(res: Result, rng: RandomNumberGenerator) -> void:
 
 	res.quality = GunQuality.compute_q(res.recipe, res.rarity, res.damage_quality)
 	res.grade_word = GunQuality.grade_word(res.quality, res.rarity, res.seed)
+	res.element_id = _roll_element(res)
 	res.element_word = _element_word(res)
 	res.score = GunQuality.score(res.stats, res.weapon_class)
 	res.gun_name = _make_name(res, rng)
@@ -138,13 +141,18 @@ static func _finish(res: Result, rng: RandomNumberGenerator) -> void:
 ## Element name slot. Omitted entirely on a non-elemental gun, which is what makes
 ## "Burning" mean something when it does appear.
 static func _element_word(res: Result) -> String:
+	return Elements.word(res.element_id)
+
+
+## Which element an elemental barrel's rounds carry. From its own stream off the gun's
+## seed, so adding it moved no other roll: every seed rolls the gun it always did.
+static func _roll_element(res: Result) -> StringName:
 	var barrel := res.recipe.get(Slot.BARREL) as GunBarrelDef
 	if barrel == null or barrel.element_ratio <= 0.01:
-		return ""
-	match barrel.barrel_family:
-		&"blaster", &"beam": return "Searing"
-		&"hybrid": return "Burning"
-		_: return ""
+		return &""
+	var r := RandomNumberGenerator.new()
+	r.seed = hash([res.seed, "element"])
+	return Elements.GUN_ELEMENTS[r.randi() % Elements.GUN_ELEMENTS.size()]
 
 
 ## An authored legendary (QUALITY_NAMING §4.6). Same pipeline as any world drop — the

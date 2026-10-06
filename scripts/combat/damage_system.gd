@@ -71,16 +71,15 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	var kinetic_amount: float = packet.amount * (1.0 - ratio)
 	var elemental_amount: float = packet.amount * ratio
 
-	# Kinetic -> topmost living layer, FLAT (empty element id => matrix multiplier 1.0).
-	if kinetic_amount > 0.0:
-		pool.apply_impact(kinetic_amount, &"", extra)
-
-	# Elemental -> bypass to the element's tuned layer (matrix-scaled). apply_to_layer_type
-	# falls back to the top layer when that layer is absent/dead (the wrong-element case);
-	# it has no extra-multiplier param, so pre-multiply by `extra`.
+	# Both parts land on the TOP living layer -- the defences sit over the flesh
+	# (Docs/Weapons/COMBAT_DESIGN.md 4.2) -- the element's part multiplied by the matrix
+	# there (Elements), the kinetic part flat. The element goes first, so a plasma round
+	# strips the shield and its kinetic part meets what is under it. A crit-spot hit is
+	# not gated when it breaks a shield (4.4).
 	if has_element and elemental_amount > 0.0:
-		pool.apply_to_layer_type(
-			elemental_amount * extra, packet.element.tuned_layer_type, packet.element.id)
+		pool.apply_impact(elemental_amount, packet.element.id, extra, packet.crit)
+	if kinetic_amount > 0.0:
+		pool.apply_impact(kinetic_amount, &"", extra, packet.crit)
 
 	result.was_crit = crit
 	result.crit_absorbed = packet.crit and not crit

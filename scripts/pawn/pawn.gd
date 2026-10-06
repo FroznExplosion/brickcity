@@ -50,6 +50,10 @@ const STEP_HEIGHT := BRICK_M + 0.03
 
 signal landed
 
+## Pawns get a head crit spot (CritSpots). DEFERRED: off until the enemies are figures
+## rather than capsules; tools/crit_probe.gd switches it on to test the system.
+static var head_crits := false
+
 ## Filled by whoever drives this pawn.
 var intents := PawnIntents.new()
 ## Faction. 0 = the players' side.
@@ -132,11 +136,13 @@ static func spawn(parent: Node, at_feet: Vector3, p_team := 0, with_health := tr
 	b.add_child(e)
 	p.eye = e
 	# The head is the crit spot (Docs/Weapons/COMBAT_DESIGN.md 4.3): a sphere round
-	# the eye, which already sits mid-head and moves with the crouch.
-	var crits := CritSpots.new()
-	crits.name = "CritSpots"
-	crits.add(&"head", e, HEAD_HEIGHT * 0.5 + 0.03)
-	b.add_child(crits)
+	# the eye, which already sits mid-head and moves with the crouch. Off for now --
+	# the enemies are still capsules -- and switched on with real figures.
+	if head_crits:
+		var crits := CritSpots.new()
+		crits.name = "CritSpots"
+		crits.add(&"head", e, HEAD_HEIGHT * 0.5 + 0.03)
+		b.add_child(crits)
 	if with_health:
 		var pool := HealthPool.new()
 		pool.name = "HealthPool"

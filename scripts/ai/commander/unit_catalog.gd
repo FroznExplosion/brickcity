@@ -16,31 +16,33 @@ extends RefCounted
 ## (the flyer height field), water (the sea's surface), mech (a mech map with
 ## clearance and breach links, AIPlan P7).
 ##
-## HP is on the weapon specs' scale (GUN_QUALITY_NAMING_SPEC 7.2): trash 45,
-## standard 113, heavy 315. Vehicles carry their own damage zones when built.
+## Health is a PROFILE (EnemyProfiles): the layers an infantryman wears over its
+## flesh, counted in melees, at the fight's level (Docs/Weapons/COMBAT_DESIGN.md 4).
+## Vehicles carry their own damage zones when built.
 
 const UNITS := {
 	# --- infantry: built -------------------------------------------------------
 	&"rifleman": {"name": "Rifleman", "points": 1.0, "mobility": &"foot", "role": &"line",
-			"weapon": &"rifle", "hp": 45.0, "built": true},
+			"weapon": &"rifle", "profile": &"light", "built": true},
 	&"assault": {"name": "Assault", "points": 1.0, "mobility": &"foot", "role": &"close",
-			"weapon": &"smg", "hp": 45.0, "built": true},
+			"weapon": &"smg", "profile": &"light", "built": true},
 	&"breacher": {"name": "Breacher", "points": 1.5, "mobility": &"foot", "role": &"close",
-			"weapon": &"shotgun", "hp": 45.0, "built": true},
+			"weapon": &"shotgun", "profile": &"light_armored", "built": true},
 	&"marksman": {"name": "Marksman", "points": 4.0, "mobility": &"foot", "role": &"long",
-			"weapon": &"sniper", "hp": 45.0, "built": true},
+			"weapon": &"sniper", "profile": &"very_light", "built": true},
 	&"veteran": {"name": "Veteran", "points": 2.5, "mobility": &"foot", "role": &"line",
-			"weapon": &"rifle", "hp": 113.0, "built": true},
+			"weapon": &"rifle", "profile": &"medium", "built": true},
 	# --- infantry: not yet -------------------------------------------------------
 	&"rocketeer": {"name": "Rocketeer", "points": 5.0, "mobility": &"foot", "role": &"anti_armor",
-			"weapon": &"rocket_launcher", "hp": 45.0, "built": false},
+			"weapon": &"rocket_launcher", "profile": &"light_shielded", "built": false},
 	&"officer": {"name": "Officer", "points": 8.0, "mobility": &"foot", "role": &"command",
-			"weapon": &"pistol", "hp": 113.0, "built": false},
+			"weapon": &"pistol", "profile": &"medium_shielded", "built": false},
 	# --- vehicles (Red Dawn's roles) and mechs: planned ---------------------------
 	&"jeep": {"name": "Jeep", "points": 3.0, "mobility": &"wheeled", "role": &"transport",
 			"seats": 4, "built": false},
+	# Built: a squad can be bought "by truck" (TransportTruck, AIVehicles.md 6.1).
 	&"truck": {"name": "Truck", "points": 4.0, "mobility": &"wheeled", "role": &"transport",
-			"seats": 8, "built": false},
+			"seats": 8, "built": true},
 	&"apc": {"name": "APC", "points": 12.0, "mobility": &"wheeled", "role": &"apc",
 			"seats": 8, "built": false},
 	&"ifv": {"name": "IFV", "points": 15.0, "mobility": &"tracked", "role": &"ifv",

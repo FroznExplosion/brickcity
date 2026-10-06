@@ -62,6 +62,8 @@ func _crit(info: Dictionary) -> bool:
 
 
 func _run() -> void:
+	# Head crits are off in the game until enemies are figures; this tests the system.
+	Pawn.head_crits = true
 	var floor := StaticBody3D.new()
 	floor.collision_layer = Layers.WORLD
 	var fs := CollisionShape3D.new()

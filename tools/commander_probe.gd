@@ -173,11 +173,13 @@ func _build() -> void:
 
 
 ## The host's side of it: four at the spawn point, a squad, back to the commander.
-func _spawn(kinds: Array[StringName]) -> bool:
+func _spawn(kinds: Array[StringName], _arrival: StringName = &"foot") -> bool:
 	var members: Array[Soldier] = []
 	for i in kinds.size():
-		var so := a.soldier(a.s.ai_nav.snap(_spawn_at + Vector3(-1.5 + i, 0.0, 0.0)), 1, 60 + i,
-				float(UnitCatalog.get_unit(kinds[i]).hp))
+		var so := a.soldier(a.s.ai_nav.snap(_spawn_at + Vector3(-1.5 + i, 0.0, 0.0)), 1, 60 + i)
+		# Dressed as the unit it is, the way the arena dresses them (EnemyProfiles).
+		so.max_health = EnemyProfiles.apply(so.pawn.health,
+				UnitCatalog.get_unit(kinds[i]).get("profile", &"light"), 1)
 		so.set_meta(&"unit", kinds[i])
 		so.pawn.intents.look_yaw = 0.0
 		members.append(so)
@@ -210,19 +212,23 @@ func _on_tick() -> void:
 				_log["advance_at"] = now - _t
 			if _log.has("advance_at") or now - _t > 50.0:
 				_log["squads"] = cm.squads.size()
-				# Drop three of them: the side bleeds, and wants more.
+				# Drop all but one of them: the side bleeds, is short, and wants
+				# more. (Three from one squad, as this was, left two squads that
+				# could still be the strength the doctrine wants.)
 				var d0 := cm.desperation
-				var q: Squad = cm.squads[0]
-				var alive := q.alive()
-				for k in mini(3, alive.size()):
-					alive[k].pawn.health.apply_impact(1e9, &"")
+				var everyone: Array[Soldier] = []
+				for sq in cm.squads:
+					everyone.append_array(sq.alive())
+				for k in maxi(everyone.size() - 1, 0):
+					everyone[k].pawn.health.apply_impact(1e9, &"")
 				_log["desp0"] = d0
+				# Counted from the losses: it may answer them at once.
+				_log["spawned_before"] = int(_log.get("spawned", 0))
 				_stage = "losses"
 				_t = now
 		"losses":
 			if now - _t > 2.0 and not _log.has("desp1"):
 				_log["desp1"] = cm.desperation
-				_log["spawned_before"] = int(_log.get("spawned", 0))
 				cm.budget = 20.0
 			if _log.has("desp1") and (int(_log.get("spawned", 0)) > int(_log.spawned_before)
 					or now - _t > 20.0):
@@ -241,7 +247,14 @@ func _finish() -> void:
 			_log.has("advance_at"), "at %.1f s; orders %s" % [float(_log.get("advance_at", -1.0)), cm.orders_given])
 	_ok("losing men makes it desperate", float(_log.get("desp1", 0.0)) > float(_log.get("desp0", 1.0)),
 			"%.2f -> %.2f" % [float(_log.get("desp0", -1.0)), float(_log.get("desp1", -1.0))])
-	_ok("short of strength and able to pay, it fields more", bool(_log.get("reinforced", false)))
+	var up_pts := 0.0
+	for q in cm.squads:
+		if is_instance_valid(q):
+			for m in q.alive():
+				up_pts += UnitCatalog.points(StringName(m.get_meta(&"unit", &"rifleman")))
+	_ok("short of strength and able to pay, it fields more", bool(_log.get("reinforced", false)),
+			"%.1f pts up, wants %.1f, budget %.1f, aggression %.2f, desperation %.2f, waiting %s" % [
+			up_pts, cm.want_strength(), cm.budget, cm.doctrine.aggression, cm.desperation, cm._waiting_spawn])
 	_ok("where its men fell is marked dangerous on its map", cm.sectors.danger(_spawn_at) > 0.0,
 			"%.1f at the spawn" % cm.sectors.danger(_spawn_at))
 	# The HQ: radio down, nobody called; officer dead, nothing decided.

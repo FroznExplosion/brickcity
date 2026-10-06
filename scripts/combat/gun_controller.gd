@@ -180,6 +180,7 @@ func _hit_living(target: Node, point: Vector3, normal: Vector3) -> DamageSystem.
 	p.crit = crit
 	p.crit_multiplier = _stat(&"crit_mult", 2.0)
 	p.element_ratio = _stat(&"element_ratio", 0.0)
+	p.element = Elements.get_def(gun.element_id)
 	p.rng = rng
 	return DamageSystem.resolve(p, target)
 
