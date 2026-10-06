@@ -64,11 +64,18 @@ func _drain(limit := 30 * 30) -> void:
 		n += 1
 
 
+## Sections that run in a probe of their own, with a city of their own
+## (tools/storey_probe.gd): this probe takes some twenty untouched towers of the
+## city's twenty-two, and "storeys", last in line, was left none -- it threw
+## and three of its four checks never ran, with the probe still passing.
+const OWN_PROBE := ["storeys"]
+
+
 func _only(name: String) -> bool:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			return name in a.split("=", true, 1)[1].split(",")
-	return true
+	return not OWN_PROBE.has(name)
 
 
 func _run() -> void:
@@ -207,6 +214,9 @@ func _tower(storeys := 4, skip: Array = []) -> int:
 		if int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR >= storeys:
 			_touched.append(b.id)
 			return b.id
+	# Said, not passed over: a section with no tower to test on tests nothing.
+	_ok("an untouched tower of %d storeys to test on" % storeys, false,
+			"%d of %d buildings used already" % [_touched.size(), city.registry.buildings.size()])
 	return -1
 
 
