@@ -250,10 +250,11 @@ void fragment() {
         float t;
         float junction = 0.0;
         float join = 0.0;
+        float gap = 0.0;
         if (face != 0) {
             // A top or bottom: the outline walked once per wall (two for
             // PLA), then ONE path zigzagging diagonally from one corner to
-            // the opposite one (ps_zigzag_join). Its direction is hashed off
+            // the opposite one (ps_zigzag). Its direction is hashed off
             // the piece, so two bricks side by side read as two printed
             // parts; a bottom -- the first layer -- runs the other way to the
             // top, as a slicer alternates.
@@ -273,7 +274,14 @@ void fragment() {
                 }
                 vec2 n = vec2(0.7071, flip * 0.7071);
                 t = dot(v_uv, n) / bw;
-                join = ps_zigzag_join(v_uv, vec2(wall), v_face - vec2(wall), n, t, bw);
+                float e = d2 - wall;
+                vec2 zz = ps_zigzag(v_uv, vec2(wall), v_face - vec2(wall), n, t, e, bw,
+                        fwidth(t));
+                if (zz.x > 0.5) {
+                    // On a connector: one bead along the wall, a bead wide.
+                    t = e / bw + 0.5;
+                }
+                gap = zz.y;
             }
             // Where the raster meets the innermost wall the two never quite
             // fuse: a fine dark line round the infill.
@@ -295,6 +303,14 @@ void fragment() {
         }
         ps_beads(t, t, face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
+        if (gap > 0.0) {
+            // A void reaches down a layer: dark, and no shine in it. Gone
+            // with the rest of the pattern once it is under a pixel.
+            float show = gap * (1.0 - smoothstep(print_fade_begin, print_fade_end, dist))
+                    * (1.0 - smoothstep(resolve_begin, resolve_end, fwidth(t)));
+            albedo *= mix(1.0, 0.45, show);
+            print_rough += 0.4 * show;
+        }
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
