@@ -268,3 +268,20 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Not yet joined:** the combat arena's soldiers take their health from the AI's `UnitCatalog`
   (trash 45, standard 113), not from `LootRoller.enemy_hp`. Step 3 (layers per enemy type) is where
   the two become one table.
+
+**Step 2 — crit spots: built 2026-10-06.**
+- `CritSpots` (`scripts/combat/crit_spots.gd`): named spheres on a body, each following a node.
+  Every pawn gets `head`, a sphere round its Eye (mid-head), so a crouched head is still the head.
+  An enemy type can add weak points of its own.
+- `GunController._hit_living` asks the struck body's `CritSpots` where the round landed. **The
+  random `crit_chance` roll is gone**; a crit is a place, so every peer agrees without a roll and
+  the gun's RNG is not touched.
+- `DamageSystem.resolve` applies the crit only when the top living layer takes crits
+  (`CRIT_LAYERS`: health / flesh / vegetation). A shield or armor over the flesh **absorbs** it:
+  the hit lands plain and `DamageResult.crit_absorbed` says so (for a "blocked" hitmarker later).
+- Class crit (headshot) multipliers: **2.0** pistol, SMG, rifle, LMG, shotgun; **2.5** DMR,
+  revolver; **3.0** sniper.
+- `tools/crit_probe.gd` (10 checks): head crits at the gun's multiplier, chest does not, the same
+  shot always lands the same with no RNG drawn, a crouched head still crits where it went, a
+  shield absorbs the crit until it breaks.
+- Helmets (armor guarding the head spot specifically) come with step 3's layers.

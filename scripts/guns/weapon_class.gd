@@ -25,20 +25,21 @@ extends Resource
 @export var base_reload: float = 1.6
 @export var base_accuracy: float = 0.90           ## 0..1
 
-## Shipping presets (WEAPONS §2). Keyed by class id.
+## Shipping presets (WEAPONS §2). Keyed by class id. "crit" is the HEADSHOT multiplier
+## (Docs/Weapons/COMBAT_DESIGN.md 4.3): 2x across the board, more on the precision guns.
 const _PRESETS := {
-	&"pistol":   {"ammo": &"light",  "dmg": 10.0, "fr": 6.0,  "mmin": 10, "mmax": 16,  "crit": 1.75, "rl": 1.6, "acc": 0.90},
-	&"smg":      {"ammo": &"light",  "dmg": 4.5,  "fr": 13.0, "mmin": 25, "mmax": 40,  "crit": 1.40, "rl": 1.8, "acc": 0.75},
-	&"rifle":    {"ammo": &"rifle",  "dmg": 8.0,  "fr": 7.5,  "mmin": 24, "mmax": 40,  "crit": 1.75, "rl": 2.4, "acc": 0.85},
-	&"lmg":      {"ammo": &"rifle",  "dmg": 6.5,  "fr": 10.0, "mmin": 80, "mmax": 120, "crit": 1.50, "rl": 4.0, "acc": 0.70},
-	&"dmr":      {"ammo": &"sniper", "dmg": 15.0, "fr": 3.5,  "mmin": 12, "mmax": 18,  "crit": 2.25, "rl": 2.6, "acc": 0.95},
+	&"pistol":   {"ammo": &"light",  "dmg": 10.0, "fr": 6.0,  "mmin": 10, "mmax": 16,  "crit": 2.00, "rl": 1.6, "acc": 0.90},
+	&"smg":      {"ammo": &"light",  "dmg": 4.5,  "fr": 13.0, "mmin": 25, "mmax": 40,  "crit": 2.00, "rl": 1.8, "acc": 0.75},
+	&"rifle":    {"ammo": &"rifle",  "dmg": 8.0,  "fr": 7.5,  "mmin": 24, "mmax": 40,  "crit": 2.00, "rl": 2.4, "acc": 0.85},
+	&"lmg":      {"ammo": &"rifle",  "dmg": 6.5,  "fr": 10.0, "mmin": 80, "mmax": 120, "crit": 2.00, "rl": 4.0, "acc": 0.70},
+	&"dmr":      {"ammo": &"sniper", "dmg": 15.0, "fr": 3.5,  "mmin": 12, "mmax": 18,  "crit": 2.50, "rl": 2.6, "acc": 0.95},
 	# fr 1.35 (not 1.2) so the worst FEEL roll still clears the 1.0 shots/sec floor:
 	# 1.35 * 0.80 = 1.08/s (QUALITY_NAMING §4.4). dmg re-solved to hold ~60 base DPS.
 	# Do NOT "fix" this by clamping the rolled fire rate — that raises the gun's DPS
 	# above its roll and punches a hole in the §4.3 spread budget for this class alone.
 	&"sniper":   {"ammo": &"sniper", "dmg": 44.5, "fr": 1.35, "mmin": 4,  "mmax": 6,   "crit": 3.00, "rl": 3.2, "acc": 0.98},
-	&"shotgun":  {"ammo": &"shell",  "dmg": 30.0, "fr": 1.6,  "mmin": 5,  "mmax": 8,   "crit": 1.60, "rl": 3.5, "acc": 0.50},
-	&"revolver": {"ammo": &"shell",  "dmg": 32.0, "fr": 2.0,  "mmin": 5,  "mmax": 7,   "crit": 2.75, "rl": 2.8, "acc": 0.88},
+	&"shotgun":  {"ammo": &"shell",  "dmg": 30.0, "fr": 1.6,  "mmin": 5,  "mmax": 8,   "crit": 2.00, "rl": 3.5, "acc": 0.50},
+	&"revolver": {"ammo": &"shell",  "dmg": 32.0, "fr": 2.0,  "mmin": 5,  "mmax": 7,   "crit": 2.50, "rl": 2.8, "acc": 0.88},
 
 	# --- ORDNANCE (the BL4-style second equip slot) ---
 	# Cooldown-gated, not magazine-gated: `fr` is exactly 1.0/cooldown, so base DPS lands
