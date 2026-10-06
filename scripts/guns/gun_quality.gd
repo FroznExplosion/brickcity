@@ -11,13 +11,13 @@ extends RefCounted
 
 ## The score is denominated in TIERS of power, so it reads off Tier.TIER_STEP. There is
 ## no player level anywhere in this system (PROGRESSION_SPEC §0.2).
-const LN_STEP := 0.47000363  # ln(1.6), precomputed: this runs per drop.
+const LN_STEP := 0.22314355  # ln(1.25), precomputed: this runs per drop.
 ## MUST equal ln(Tier.TIER_STEP). If the two ever disagree, every score in the game
 ## silently rescales without a single damage number changing.
 
 ## Score presentation (§4). 100 pts per TIER, so the number reads directly as
 ## "tiers of power x100". Floor 100 = a tier-1 worst-roll Common, so no gun reads 0.
-## Range across the whole game: 100 -> ~1414 (tier-10 god-roll Mythic).
+## Range across the whole game: 100 -> ~1400 (tier-10 god-roll Mythic).
 const SCORE_PER_TIER := 100.0
 const SCORE_FLOOR := 100.0
 

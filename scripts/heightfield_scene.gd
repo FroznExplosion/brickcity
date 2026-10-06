@@ -1104,8 +1104,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F4:
 			_show_instances = not _show_instances
 			for tile in _tiles:
+				# The studs' near/far choice is the tile's (set_near); the rest
+				# of the instances are simply on or off.
+				tile.set_studs_shown(_show_instances)
 				for child in tile.get_children():
-					if child is MultiMeshInstance3D:
+					if child is MultiMeshInstance3D and not String(child.name).begins_with("Studs"):
 						(child as MultiMeshInstance3D).visible = _show_instances
 		KEY_F6:
 			BrickTerrain.set_plate_steps(not BrickTerrain.get_plate_steps())
