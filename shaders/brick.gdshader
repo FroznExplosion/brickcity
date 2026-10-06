@@ -4,6 +4,7 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 // Materials: PLA, TPU, wood, metal ... in the vertex colour's alpha.
 #include "res://shaders/brick_materials.gdshaderinc"
 #include "res://shaders/weather.gdshaderinc"
+#include "res://shaders/print_surface.gdshaderinc"
 
 // Brick surface. Flat filament colour from vertex colour (spec section 2: no
 // textures, so colour costs nothing but a byte per block), plus a dark seam
@@ -102,36 +103,15 @@ uniform float chamfer_fade_end = 55.0;
 // than "painted box".
 uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.45;
 
-group_uniforms print;
-// The same printed surface the ground and the scatter have
-// (terrain.gdshader, printed.gdshader). City bricks were the last thing in
-// the world still coming out of the mould smooth.
+// The printed surface -- layer lines, top and bottom toolpaths, the finish of
+// each face, the bed, printed or injection moulded -- is in
+// print_surface.gdshaderinc, shared with the studs. Its uniforms
+// (print_lines_enabled, layer_height ...) are this material's as before.
 //
 // In OBJECT space, unlike the ground's: a chunk of wall that has been blasted
 // off tumbles, and world-space layers would swim through it as it fell. The
 // ground never moves, so it uses world space to keep layers continuous across
 // a seam; a brick belongs to itself.
-uniform bool print_lines_enabled = true;
-// 0.46 mm layers on a 9.6 mm brick, at 1:43.75 -- twenty-one a course.
-//
-// It was 0.00875, a 0.2 mm layer, which is physically the commonest
-// setting there is and was ALSO about one screen pixel at two metres:
-// the filter threw the whole pattern away and the print read as
-// switched off. A 0.32 mm layer through a 0.55 mm nozzle is just as
-// real a print and is actually visible.
-uniform float layer_height = 0.020;
-// One 0.55 mm nozzle width, same scale.
-uniform float bead_width = 0.024;
-uniform float bead_groove : hint_range(0.0, 0.5) = 0.17;
-uniform float layer_darken : hint_range(0.0, 1.0) = 0.86;
-uniform float layer_relief : hint_range(0.0, 1.0) = 0.28;
-// Beads a pixel. Past resolve_end a bead is under a pixel and drawing it
-// only makes it crawl -- see terrain.gdshader for the long version.
-uniform float resolve_begin : hint_range(0.05, 1.0) = 0.30;
-uniform float resolve_end : hint_range(0.1, 2.0) = 0.75;
-uniform int perimeters : hint_range(0, 4) = 3;
-uniform float print_fade_begin = 7.0;
-uniform float print_fade_end = 22.0;
 
 group_uniforms surface;
 // PLASTIC. See terrain.gdshader's note: 0.85 read as matte card, and ABS is
@@ -174,7 +154,10 @@ void fragment() {
     vec3 albedo = COLOR.rgb;
     int mat = brick_material_id(COLOR.a);
     // The uniforms tune PLA (material 0); every material moves with them.
-    float roughness = MAT_ROUGH[mat] + (surface_roughness - MAT_ROUGH[0]);
+    // Sides, top and bottom of a printed part are three different finishes
+    // (print_surface.gdshaderinc).
+    int face = ps_face(v_local_normal);
+    float roughness = ps_roughness(face, mat, MAT_ROUGH[mat] + (surface_roughness - MAT_ROUGH[0]));
 
     // Distance to the nearest edge of this block's face, in metres.
     //
@@ -238,77 +221,79 @@ void fragment() {
         }
     }
 
-    // --- printed surface -------------------------------------------------
-    // Only a printed material has beads. Wood, metal and stone are what they
-    // say, not a print of them.
+    // --- this face's seed -------------------------------------------------
+    // This face's own corner, in the chunk's metres: v_local less the UV
+    // walked back along the face's own axes. One seed a face: the grain of a
+    // wood brick, the wobble of a printed one's layers.
+    float seed = 0.0;
+    {
+        vec3 dlx = dFdx(v_local);
+        vec3 dly = dFdy(v_local);
+        vec2 dux = dFdx(v_uv);
+        vec2 duy = dFdy(v_uv);
+        float det = dux.x * duy.y - duy.x * dux.y;
+        if (abs(det) > 1e-12) {
+            vec3 tu = (dlx * duy.y - dly * dux.y) / det;
+            vec3 tv = (dly * dux.x - dlx * duy.x) / det;
+            vec3 corner = v_local - tu * v_uv.x - tv * v_uv.y;
+            seed = bm_hash3(floor(corner / 0.07 + 0.5));
+        }
+    }
+
+    // --- printed surface (print_surface.gdshaderinc) ----------------------
+    // Only a printed material has beads, and only while the finish is
+    // printed. Wood, metal and stone are what they say, not a print of them.
     float print_rough = 0.0;
-    float lh = layer_height * MAT_LAYER[mat];
-    float bw = bead_width * MAT_LAYER[mat];
-    float layer_t = v_uv.y / lh;
-    if (print_lines_enabled && MAT_PRINTED[mat] > 0.5) {
-        float fade = 1.0 - smoothstep(print_fade_begin, print_fade_end, dist);
-        if (fade > 0.0 && v_face.x > 0.0 && v_face.y > 0.0) {
-            // Continuous, because the relief below differentiates it.
-            float t;
-            if (abs(v_local_normal.y) > 0.7) {
-                // A top face: the outline walked two or three times, then a
-                // diagonal raster across what is left. The raster is in
-                // PIECE space and its direction is hashed off the piece, so
-                // two bricks side by side read as two printed parts.
-                float d2 = min(min(v_uv.x, v_face.x - v_uv.x),
-                               min(v_uv.y, v_face.y - v_uv.y));
-                float wall = float(perimeters) * bw;
-                if (d2 < wall) {
-                    t = d2 / bw;
-                } else {
-                    // The block's own corner, in the same world metres the
-                    // mesher wrote, so every fragment of a block agrees.
-                    vec2 origin = v_local.xz - v_uv;
-                    float flip = hash21(floor(origin / 0.35 + 0.5)) < 0.5 ? -1.0 : 1.0;
-                    t = dot(v_uv, vec2(0.7071, flip * 0.7071)) / bw;
-                }
+    vec3 aniso_dir = vec3(0.0);
+    float aniso = 0.0;
+    if (print_lines_enabled && ps_printed(mat) && v_face.x > 0.0 && v_face.y > 0.0) {
+        float t;
+        float junction = 0.0;
+        if (face != 0) {
+            // A top or bottom: the outline walked once per wall, then a
+            // diagonal raster across what is left. The raster is in PIECE
+            // space and its direction is hashed off the piece, so two bricks
+            // side by side read as two printed parts; a bottom -- the first
+            // layer -- runs the other way to the top, as a slicer alternates.
+            float bw = ps_bead(face, mat);
+            float d2 = min(min(v_uv.x, v_face.x - v_uv.x),
+                           min(v_uv.y, v_face.y - v_uv.y));
+            float wall = float(ps_walls(mat)) * bw;
+            if (d2 < wall) {
+                t = d2 / bw;
             } else {
-                // UV.y is the height WITHIN THIS BLOCK's face, in metres, so
-                // the layers restart at each brick's own base -- which is
-                // what a printed brick does, being printed by itself.
-                //
-                // It was `v_local.y` first, and that drew nothing at all:
-                // the chunk mesher emits vertices in WORLD metres, not
-                // object-local ones, so on a tower a hundred metres from
-                // the origin `t` ran into the thousands and fwidth of it
-                // came back larger than a bead. The pattern filtered itself
-                // away completely and looked like the block was disabled.
-                t = layer_t;
+                // The block's own corner, in the same world metres the
+                // mesher wrote, so every fragment of a block agrees.
+                vec2 origin = v_local.xz - v_uv;
+                float flip = hash21(floor(origin / 0.35 + 0.5)) < 0.5 ? -1.0 : 1.0;
+                if (face == 2) {
+                    flip = -flip;
+                }
+                t = dot(v_uv, vec2(0.7071, flip * 0.7071)) / bw;
             }
-
-            float ph = fract(t);
-            float aa3 = max(fwidth(t), 1e-5);
-            float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa3);
-            float groove = max(aa3 * 1.4, bead_groove * MAT_GROOVE[mat]);
-            float ink = (1.0 - smoothstep(0.0, groove, abs(ph - 0.5))) * resolved;
-            albedo *= mix(1.0, layer_darken, ink * fade * MAT_GROOVE[mat]);
-
-            vec3 dpx = dFdx(VERTEX);
-            vec3 dpy = dFdy(VERTEX);
-            vec3 grad = dpx * dFdx(t) + dpy * dFdy(t);
-            float glen = length(grad);
-            if (glen > 1e-8 && resolved > 0.0) {
-                // SQUARED, and this is the crawl that survived the first
-                // fix. Banding in albedo stops aliasing as soon as it is
-                // filtered; a normal does not, because a half-resolved ridge
-                // still swings the SPECULAR highlight a long way for a small
-                // camera move, and a bright moving speckle reads as
-                // z-fighting. Normals have to give up earlier than colour.
-                float relief_k = resolved * resolved;
-                NORMAL = normalize(NORMAL
-                        + (grad / glen) * sin(ph * TAU_F)
-                          * layer_relief * MAT_RELIEF[mat] * fade * relief_k);
-                // ...and the roughness takes over what the normal drops.
-                // A bead that is no longer resolved has not gone away: it is
-                // sub-pixel roughness now, and saying so is what stops the
-                // highlight from sparkling where the ridges used to be.
-                print_rough = (1.0 - relief_k) * fade * layer_relief * 0.8;
+            // Where the raster meets the innermost wall the two never quite
+            // fuse: a fine dark line round the infill.
+            if (wall > 0.0) {
+                float jw = 0.18 * bw + fwidth(d2);
+                junction = (1.0 - smoothstep(0.0, jw, abs(d2 - wall))) * 0.6;
             }
+        } else {
+            // UV.y is the height WITHIN THIS BLOCK's face, in metres, so the
+            // layers restart at each brick's own base -- which is what a
+            // printed brick does, being printed by itself: 57 to a brick.
+            //
+            // Not `v_local.y`: the chunk mesher emits WORLD metres, so on a
+            // tower a hundred metres up `t` ran into the thousands and its
+            // fwidth came back larger than a bead -- the pattern filtered
+            // itself away completely.
+            t = v_uv.y / ps_layer(mat);
+        }
+        ps_beads(t, face, mat, dist, VERTEX, seed, junction,
+                albedo, NORMAL, print_rough, aniso_dir, aniso);
+        if (face == 2) {
+            vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
+            vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
+            ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
         }
     }
 
@@ -319,20 +304,6 @@ void fragment() {
         // Along the grain = along this face's longer side, which on a brick
         // is its length: a 1x6 of oak is a board, not end grain.
         vec2 p = v_face.x >= v_face.y ? v_uv : v_uv.yx;
-        // This face's own corner, in the chunk's metres: v_local less the UV
-        // walked back along the face's own axes. One seed a face.
-        vec3 dlx = dFdx(v_local);
-        vec3 dly = dFdy(v_local);
-        vec2 dux = dFdx(v_uv);
-        vec2 duy = dFdy(v_uv);
-        float det = dux.x * duy.y - duy.x * dux.y;
-        float seed = 0.0;
-        if (abs(det) > 1e-12) {
-            vec3 tu = (dlx * duy.y - dly * dux.y) / det;
-            vec3 tv = (dly * dux.x - dlx * duy.x) / det;
-            vec3 corner = v_local - tu * v_uv.x - tv * v_uv.y;
-            seed = bm_hash3(floor(corner / 0.07 + 0.5));
-        }
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
         if (tex == 1) {
             albedo = bm_wood(albedo, p, seed, tfade, roughness);
@@ -352,7 +323,9 @@ void fragment() {
         } else if (tex == 7) {
             albedo = bm_nylon(albedo, p, tfade);
         } else if (tex == 8) {
-            albedo = bm_wood_fill(albedo, p, layer_t, seed, tfade);
+            // Banding by height in 20 mm steps, not by layer, so it did not
+            // shrink when the layers did.
+            albedo = bm_wood_fill(albedo, p, v_uv.y / 0.020, seed, tfade);
         }
     }
 
@@ -376,6 +349,9 @@ void fragment() {
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;
     METALLIC = MAT_METAL[mat];
+    // The layers' anisotropy, set after the rain has had the normal.
+    ps_tangent_frame(NORMAL, aniso_dir, TANGENT, BINORMAL);
+    ANISOTROPY = aniso;
     EMISSION = emission;
     RIM = surface_rim * (1.0 - MAT_METAL[mat]);
     RIM_TINT = 0.4;

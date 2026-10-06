@@ -44,6 +44,12 @@ const float MAT_METAL[13]   = float[](0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0
 const float MAT_LAYER[13]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0);
 const float MAT_RELIEF[13]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
 const float MAT_GROOVE[13]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+// Walls: how many loops a slicer walks round the outline before it fills the
+// inside, seen on a top or bottom face (print_surface.gdshaderinc). More
+// where the material is tougher (brick_grid.h toughness) -- the strong
+// filaments are the ones printed thick -- and fewer on the brittle novelty
+// ones. Not printed: 0.
+const int MAT_WALLS[13]     = int[](3, 3, 2, 3, 4, 3, 4, 2, 4, 2, 0, 0, 0);
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
 // 7 nylon fibre, 8 wood-fill banding.
 const int MAT_TEX[13]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3);
@@ -150,6 +156,8 @@ vec3 bm_nylon(vec3 base, vec2 p, float fade) {
     return base * mix(1.0, 0.94 + 0.1 * fuzz, fade);
 }
 
+// `layer_t` is height in 20 mm steps (what a layer was before they were 57 a
+// brick), so the bands kept their size when the layers got finer.
 vec3 bm_wood_fill(vec3 base, vec2 p, float layer_t, float seed, float fade) {
     // Wood-filled PLA prints with streaky light and dark bands where the
     // nozzle ran hotter or cooler -- along the LAYERS, not a grain.
