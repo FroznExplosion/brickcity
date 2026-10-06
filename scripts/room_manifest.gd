@@ -568,7 +568,10 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 ## drawn room to bricks changes nothing on screen. `offset` is the host's
 ## rebase, as there. Returns {buffer, details, boxes, parts}; `boxes` holds one
 ## AABB per item drawn, in the chunk's own metres, which is the space the
-## building's mesh and its furniture body are both in. `details` is the same
+## building's mesh and its furniture body are both in. `pieces` says which
+## rows are whose: six ints an item drawn -- its index in `room.items`, its
+## first row and row count in `buffer`, the same two for `details`, and its
+## box in `boxes` (-1 for an item that is all DETAIL). `details` is the same
 ## kind of buffer for the DETAIL parts -- the small things on and round the
 ## pieces -- which the drawn rung never shows and a storey group shows only up
 ## close (InteriorGroups.ITEM_RANGE).
@@ -581,6 +584,7 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		room: Room, offset: Vector3i = Vector3i.ZERO) -> Dictionary:
 	var buffer := PackedFloat32Array()
 	var details := PackedFloat32Array()
+	var pieces := PackedInt32Array()
 	var boxes: Array[AABB] = []
 	var cs := BrickWorld.get_cell_size()
 	var origin: Vector3i = world.get_chunk_origin(chunk)
@@ -600,6 +604,10 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		var colour := 4 + int(i % 8)
 		var box := AABB()
 		var any := false
+		@warning_ignore("integer_division")
+		var row0 := buffer.size() / 16
+		@warning_ignore("integer_division")
+		var detail0 := details.size() / 16
 		for part in parts_of(str(item.type)):
 			var name: String = part[0]
 			if not palette.has(name):
@@ -626,14 +634,40 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 			parts += 1
 			box = box.merge(AABB(lo, size)) if any else AABB(lo, size)
 			any = true
+		@warning_ignore("integer_division")
+		var rows := buffer.size() / 16 - row0
+		@warning_ignore("integer_division")
+		var detail_rows := details.size() / 16 - detail0
+		if rows > 0 or detail_rows > 0:
+			pieces.append_array([i, row0, rows, detail0, detail_rows,
+					boxes.size() if any else -1])
 		if any:
 			boxes.append(box)
-	return {"buffer": buffer, "details": details, "boxes": boxes, "parts": parts}
+	return {"buffer": buffer, "details": details, "boxes": boxes, "parts": parts,
+			"pieces": pieces}
 
 
 ## How many cells an item needs, so that it is placed inside the room rather
 ## than through its wall.
 static func _item_span(type: String) -> Vector3i:
+	# Asked for every piece every time a floor near it changes
+	# (InteriorGroups.check_floors): worked out once a type.
+	if _spans.has(type):
+		return _spans[type]
+	var span := _item_span_of(type)
+	_spans[type] = span
+	return span
+
+
+## Authored items can be added and reloaded (RoomTemplates): forget theirs.
+static func forget_spans() -> void:
+	_spans.clear()
+
+
+static var _spans := {}
+
+
+static func _item_span_of(type: String) -> Vector3i:
 	var hi := Vector3i.ONE
 	for part in parts_of(type):
 		var size := BuildRecipe.part_size(part[0])

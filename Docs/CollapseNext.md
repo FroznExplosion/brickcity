@@ -84,7 +84,7 @@ would -- but:
   **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
   building that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stage 1 of 5 done 2026-10-06
+### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 and 2 of 5 done 2026-10-06
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
 and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
 * **Stage 1, done, off by default** (Interiors.md §8.8): `InteriorGroups`, F6 in play or
@@ -92,10 +92,12 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   look at side by side (`shots/interior_rungs_*.png`, `shots/interior_groups_*.png`). **Wants the
   user's eye before it becomes the default**: pieces are lit like the room they are in when near
   (darker than the fake drew them), flat-shaded from 60 m.
-* **Stage 2, next:** the support index (block id -> pieces): a piece rides the section its floor
-  leaves on, is gone when its floor is destroyed, crushed when something lands in it. Replaces
-  `InteriorGroups.touch`'s walk and `hide_inside`.
-* Stage 3: a shot piece becomes bricks, only that piece. Stage 4: the rungs and their tests go.
+* **Stage 2, done** (Interiors.md §8.9): a piece whose floor is destroyed is gone that tick; one
+  whose floor leaves as a section is drawn on the section and rides it down, and comes off when it
+  lands. No index: every piece at that height is asked for its floor, 0.2 ms a time
+  (`InteriorGroups.check_floors`). `interior_group_probe` 22, `-- --groups --big` 19.
+* **Stage 3, next:** a shot piece becomes bricks, only that piece (today a blast still lays the
+  whole room it reaches). Then stage 4: the rungs and their tests go, and the switch with them.
   Stage 5: loot fades at its cull edge.
 
 ### Done since, not from this list
