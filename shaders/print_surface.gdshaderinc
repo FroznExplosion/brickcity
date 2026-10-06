@@ -28,19 +28,21 @@
 
 group_uniforms print;
 uniform bool print_lines_enabled = true;
-// 57 layers on a 2x4's side: a real printed brick, 9.6 mm at 0.168 mm a
-// layer. So 19 a plate, and at 1:43.75 that is 7.4 mm.
+// A real printed 2x4 is 57 layers from the bed to the top of its studs:
+// 11.4 mm at 0.2 mm a layer. That is 48 on the body (9.6 mm, so 16 a plate)
+// and 9 on the stud (stud_layers, printed_core). At 1:43.75 a layer is
+// 8.75 mm.
 //
-// It was 0.020 (21 a brick), raised from 0.00875 because a layer that thin
-// is about a pixel at two metres and the resolve filter below dissolves it.
-// That is still true: at 57 a brick the lines are drawn within a few metres
-// and dissolve past that. What carries the print further now is not the line
-// but the anisotropy -- the highlight smeared across the layers, which is how
-// a real print looks from across a room too.
+// It was 0.020 (21 a brick) for a while, because a layer this thin is about
+// a pixel at two to three metres and the resolve filter below dissolves it.
+// That is still true: the lines are DRAWN within a few metres and dissolve
+// past that, because past it they are finer than the screen. What carries
+// the print further is the anisotropy -- the highlight smeared across the
+// layers, which is how a real print reads from across a room too.
 //
 // Snapped to a whole number a plate (ps_layer), so a material with coarser
 // or finer layers (MAT_LAYER) still finishes each brick on a whole layer.
-uniform float layer_height = 0.0073684;
+uniform float layer_height = 0.00875;
 // Top and bottom lines. Wider than a side layer is tall: the nozzle squashes
 // a skin line flat, and the first layer is squashed flatter still into the bed.
 uniform float top_bead_width = 0.028;
@@ -143,18 +145,23 @@ vec2 ps_face_k(int face) {
     return vec2(0.05, 0.05);
 }
 
-// The beads. `t` counts them and must be CONTINUOUS -- the ridge normal comes
-// from its screen-space gradient, and fract() would put a cliff in that once
-// a bead. `vertex` is view-space VERTEX; `seed` is 0..1 per face, for the
-// layer wobble; `junction` 0..1 darkens where the infill meets the walls.
+// The beads. `t` counts them: fract(t) is where across a bead this is.
+// `t_d` is the same count made CONTINUOUS for derivatives -- the ridge normal
+// and the filter come from its screen-space gradient, so a spiral, whose `t`
+// steps by one where it wraps, passes the unwrapped version here (a step of
+// one changes nothing in fract, but everything in fwidth). Usually t again.
+// `vertex` is view-space VERTEX; `seed` is 0..1 per face, for the layer
+// wobble; `junction` 0..1 darkens where the infill meets the walls; `join`
+// 0..1 removes the groove where two beads are one path turning round.
 // Writes the anisotropy direction (view space, across the beads) and amount.
-void ps_beads(float t, int face, int mat, float dist, vec3 vertex, float seed, float junction,
+void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, float seed,
+        float junction, float join,
         inout vec3 albedo, inout vec3 normal, inout float rough,
         inout vec3 aniso_dir, inout float aniso) {
     vec2 fk = ps_face_k(face);
     vec3 dpx = dFdx(vertex);
     vec3 dpy = dFdy(vertex);
-    vec3 grad = dpx * dFdx(t) + dpy * dFdy(t);
+    vec3 grad = dpx * dFdx(t_d) + dpy * dFdy(t_d);
     float glen = length(grad);
     if (glen > 1e-8) {
         aniso_dir = grad / glen;
@@ -166,12 +173,12 @@ void ps_beads(float t, int face, int mat, float dist, vec3 vertex, float seed, f
         return;
     }
     float ph = fract(t);
-    float aa = max(fwidth(t), 1e-5);
+    float aa = max(fwidth(t_d), 1e-5);
     // Dissolve toward the average as a bead approaches a pixel: below its own
     // sampling rate a bead pattern does not fade, it CRAWLS.
     float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
     float groove = max(aa * 1.4, bead_groove * MAT_GROOVE[mat]);
-    float ink = (1.0 - smoothstep(0.0, groove, abs(ph - 0.5))) * resolved;
+    float ink = (1.0 - smoothstep(0.0, groove, abs(ph - 0.5))) * resolved * (1.0 - join);
     ink = max(ink, junction * resolved);
     albedo *= mix(1.0, layer_darken, ink * fade * MAT_GROOVE[mat] * fk.x);
     if (face == 0) {
@@ -184,12 +191,51 @@ void ps_beads(float t, int face, int mat, float dist, vec3 vertex, float seed, f
         // a long way for a small camera move, and a moving speckle reads as
         // z-fighting. Normals have to give up earlier than colour.
         float relief_k = resolved * resolved;
-        normal = normalize(normal + aniso_dir * sin(ph * PS_TAU)
+        // Where two beads are one path turning round there is no valley
+        // between them, so no ridge either side of one.
+        float ridge = sin(ph * PS_TAU) * mix(1.0, 0.25, join);
+        normal = normalize(normal + aniso_dir * ridge
                 * layer_relief * MAT_RELIEF[mat] * fk.y * fade * relief_k);
         // ...and roughness takes over what the normal drops: an unresolved
         // bead is sub-pixel roughness now, not gone.
         rough += (1.0 - relief_k) * fade * layer_relief * 0.5 * fk.y;
     }
+}
+
+// The skin inside the walls is ONE path: a diagonal line to the wall, a turn,
+// back alongside it, from one corner to the opposite. Drawn as parallel beads
+// whose grooves stop short of the wall on alternate ends -- where bead k
+// turns into bead k+1 -- which is what makes it read as a zigzag and not as
+// hatching. `uv` is the point, `lo`/`hi` the infill's rectangle, `n` the unit
+// direction the beads are counted along (t = dot(uv, n) / bw).
+// Returns 0..1: how much of the groove next to this point is a turn.
+float ps_zigzag_join(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float bw) {
+    vec2 a = vec2(-n.y, n.x);           // along the beads
+    vec2 p0 = n * dot(uv, n);           // this bead's line, nearest the origin
+    float s = dot(uv, a);
+    float smin = -1e9;
+    float smax = 1e9;
+    for (int i = 0; i < 2; i++) {
+        if (abs(a[i]) > 1e-6) {
+            float s1 = (lo[i] - p0[i]) / a[i];
+            float s2 = (hi[i] - p0[i]) / a[i];
+            smin = max(smin, min(s1, s2));
+            smax = min(smax, max(s1, s2));
+        }
+    }
+    if (smax <= smin) {
+        return 0.0;
+    }
+    // Which end of the line this is, and how far from it, across the wall.
+    float end = s > 0.5 * (smin + smax) ? 1.0 : 0.0;
+    float from_end = min(s - smin, smax - s) * min(abs(a.x), abs(a.y));
+    // The groove beside this point is groove k, between beads k and k+1;
+    // that pair turns at the end matching k's parity.
+    float k = floor(t);
+    float turns_here = mod(k, 2.0) == end ? 1.0 : 0.0;
+    // A round end: the turn's inside radius is half a bead.
+    float r = bw * (0.5 + sqrt(max(0.25 - (fract(t) - 0.5) * (fract(t) - 0.5), 0.0)));
+    return turns_here * (1.0 - smoothstep(r * 0.8, r, from_end));
 }
 
 // Textured PEI's powder-coat grain on a bottom face. `p` is the face in

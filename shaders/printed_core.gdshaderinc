@@ -14,12 +14,20 @@
 
 group_uniforms top_paths;
 // 0: a 45-degree raster, what a slicer does on a flat top by default.
-// 1: concentric loops following an N-sided outline — for a stud, whose top
-//    is an octagon and not a circle, so circular rings would be visibly the
-//    wrong shape on the one part there are thousands of.
+// 1: a STUD. Its top is one path spiralling in to the centre, and its sides
+//    are shaded round although the mesh is an octagon.
+//
+//    The top was concentric loops following the octagon, and that drew the
+//    octagon's corners as eight creases on every stud. A real stud is round
+//    and so is its toolpath; the mesh is eight-sided only to be cheap, and
+//    the shading is now what says round -- normals bent radially (vertex())
+//    and a circular spiral. The silhouette is still eight-sided, at 0.2 m.
 uniform int top_mode : hint_range(0, 1) = 0;
-uniform int contour_sides : hint_range(3, 16) = 8;
-uniform float contour_radius = 0.0685;
+uniform int contour_sides : hint_range(3, 16) = 8;   // unused since the spiral; kept for callers
+uniform float contour_radius = 0.0685;   // where the spiral starts, its outer bead
+// A real stud is 1.8 mm, nine 0.2 mm layers: with the brick's 48, 57.
+uniform int stud_layers : hint_range(1, 32) = 9;
+uniform float stud_height = 0.074;   // PieceMeshes.STUD_H
 
 group_uniforms surface;
 // Multiplied onto the vertex colour. A MultiMesh writes its instance colour
@@ -43,6 +51,17 @@ void vertex() {
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
+    // A stud is shaded round: each vertex's normal points out from the axis,
+    // so across a flat face the interpolated normal turns the way a cylinder's
+    // does and the octagon's corners stop showing. The 45-degree rim keeps
+    // its lean. v_flat_normal above keeps the true face, for the toolpaths.
+    if (top_mode == 1 && abs(NORMAL.y) < 0.95) {
+        float rl = length(VERTEX.xz);
+        if (rl > 1e-5) {
+            float h = length(NORMAL.xz);
+            NORMAL = normalize(vec3(VERTEX.x / rl * h, NORMAL.y, VERTEX.z / rl * h));
+        }
+    }
     // Grass in the wind (weather.gdshaderinc): only what has a sway height --
     // the tufts -- and after v_local, so the print lines ride along.
     VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
@@ -51,18 +70,6 @@ void vertex() {
     if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
         VERTEX = vec3(0.0);
     }
-}
-
-/// Distance from p to the boundary of a regular n-gon of the given radius,
-/// with a vertex on +X — the orientation PieceMeshes.stud() builds.
-float ngon_depth(vec2 p, int n, float radius) {
-    float apothem = radius * cos(3.14159265 / float(n));
-    float worst = 0.0;
-    for (int i = 0; i < n; i++) {
-        float a = PS_TAU * (float(i) + 0.5) / float(n);
-        worst = max(worst, dot(p, vec2(cos(a), sin(a))));
-    }
-    return apothem - worst;
 }
 
 void fragment() {
@@ -77,21 +84,36 @@ void fragment() {
     float aniso = 0.0;
     if (print_lines_enabled && ps_printed(mat)) {
         float t;
+        float t_d;
         if (face != 0) {
             float bw = ps_bead(face, mat);
             if (top_mode == 1) {
-                // A stud's top is all wall: loops in to the middle.
-                t = ngon_depth(v_local.xz, contour_sides, contour_radius) / bw;
+                // One bead a turn, in to the centre. `t` steps by exactly
+                // one where the angle wraps, which fract() never sees; the
+                // derivatives take the unwrapped radial count instead.
+                float r = length(v_local.xz);
+                float turn = atan(v_local.z, v_local.x) / PS_TAU + 0.5;
+                // A finer line than a brick's skin: a real stud top is
+                // 4.8 mm across and takes five or six turns of 0.4 mm.
+                bw *= 0.7;
+                t_d = (contour_radius - r) / bw;
+                t = t_d + turn;
             } else {
                 t = dot(v_local.xz, vec2(0.7071, face == 2 ? -0.7071 : 0.7071)) / bw;
+                t_d = t;
             }
+        } else if (top_mode == 1) {
+            // A stud's own layers, on top of the brick's: nine.
+            t = v_local.y / (stud_height / float(max(stud_layers, 1)));
+            t_d = t;
         } else {
             // Sides are LAYERS, stacked along the part's own print axis, the
-            // same height as the brick's: a stud is ten of them.
+            // same height as the brick's.
             t = v_local.y / ps_layer(mat);
+            t_d = t;
         }
         // A stud is one shared mesh: one seed for all of them.
-        ps_beads(t, face, mat, dist, VERTEX, 0.0, 0.0,
+        ps_beads(t, t_d, face, mat, dist, VERTEX, 0.0, 0.0, 0.0,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);

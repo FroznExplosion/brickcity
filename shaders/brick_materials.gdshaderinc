@@ -45,11 +45,11 @@ const float MAT_LAYER[13]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.
 const float MAT_RELIEF[13]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
 const float MAT_GROOVE[13]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
 // Walls: how many loops a slicer walks round the outline before it fills the
-// inside, seen on a top or bottom face (print_surface.gdshaderinc). More
-// where the material is tougher (brick_grid.h toughness) -- the strong
-// filaments are the ones printed thick -- and fewer on the brittle novelty
-// ones. Not printed: 0.
-const int MAT_WALLS[13]     = int[](3, 3, 2, 3, 4, 3, 4, 2, 4, 2, 0, 0, 0);
+// inside, seen on a top or bottom face (print_surface.gdshaderinc). Two is
+// the ordinary print -- what a real brick's top shows under its studs -- and
+// three on the tough engineering filaments (nylon, carbon), which are the
+// ones printed thick. Not printed: 0.
+const int MAT_WALLS[13]     = int[](2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 0, 0, 0);
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
 // 7 nylon fibre, 8 wood-fill banding.
 const int MAT_TEX[13]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3);
