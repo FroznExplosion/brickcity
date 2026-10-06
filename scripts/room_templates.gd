@@ -47,6 +47,7 @@ static var _items_for := {}
 ## Forget what was read, so a template saved a moment ago is picked up.
 static func reload() -> void:
 	_loaded = false
+	RoomManifest.forget_spans()
 	_parts.clear()
 	_rooms.clear()
 	_items_for.clear()
@@ -92,6 +93,7 @@ static func add_item(id: String, r: BuildRecipe) -> String:
 			ids.append(i)
 	var type := "item:" + id
 	_parts[type] = _parts_of(r, ids, _lo_of(r, ids))
+	RoomManifest.forget_spans()
 	for k in _kinds_meant(r):
 		var list: Array = _items_for.get(k, [])
 		list.append(type)

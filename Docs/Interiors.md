@@ -423,10 +423,8 @@ What differs from §8.2 as written, and why:
   is stage 5.
 * **A blast still lays the whole room** it reaches (§8.4 is stage 3), and that room leaves its
   group's drawing the same tick.
-* **Whose floor has gone** is still asked by walking the pieces of the groups at that height
-  (`InteriorGroups.touch`, `RoomManifest.item_supported`), a couple of milliseconds a pass; a
-  section that leaves hides what stood in it the same tick (`hide_inside`). §8.3's index replaces
-  both in stage 2 -- and until then nothing rides a falling section, as nothing does under the rungs.
+* **Whose floor has gone**: see §8.9 (stage 2). Stage 1 walked the groups at that height a pass
+  later and hid what stood in a leaving section; both went with stage 2.
 
 Checks: `tools/interior_group_probe.gd` (20: the cut, one drawing per group, the clock, a change
 reaching one group and not the rest, DETAIL apart), and the scene's gate `city.tscn -- --groups --big`
@@ -438,6 +436,45 @@ five groups in range) from 92 m; 956 rooms worked out and 67 drawings put up ove
 40 ms, the slowest drawing 0.3 ms once the shader is warm (`InteriorGroups.warm`; 16-19 ms the first
 time without it).
 
+`group_interiors` on also passes `--wreck`, `--breaklag --big`, `--play` and `--big --shot` (the log
+replays into the same structure). `--jam --big` passed four runs of five with it on; the fifth
+left one 12-brick piece resting on a 121-brick one that was still creeping. With it off it passed
+three of three. Too few runs to tie the one failure to the switch or clear it: pieces do not
+collide with furniture boxes (`Layers.FIXTURE`), but the pass's budgets are wall-clock and no two
+runs cut the same pieces (20-24 came loose). Worth ten runs each way before the switch goes on.
+
 Found on the way: `CityScene._mid_collapse` (CollapseNext 1.8) did not hold a building that had
 been hit and not yet solved -- one tick -- and a group was made in a tower already cut through. It
 does now, for the rungs as well.
+
+### 8.9 Stage 2 as built (2026-10-06): what holds a piece is the bricks under it
+
+§8.3, without its index. `InteriorGroups.check_floors(building, y_lo, y_hi)` asks every piece of the
+shown groups between two heights whether a brick is still under it (`RoomManifest.item_supported`,
+the rule a piece has always been placed by). A storey group is thirty or forty pieces, so that is
+a few dozen grid reads -- **0.2 ms a call** in the gate, a whole collapse's worth in 4-5 ms -- where
+an index of block id -> pieces would be looked up once for every brick that left, and a section is
+thousands of bricks. It is asked at the two places bricks stop being there:
+
+* **`CityScene._disable`**, the one door every destroyed brick of a standing building goes through
+  (a blast's are flushed there once a tick): a piece with nothing under it is out of its room's
+  record and out of both drawings **that tick**, its rows scaled to nothing where they are. Nothing
+  is worked out again and no other group is touched.
+* **the detach** in the solve loop, once a section has left: the pieces it carried are drawn **on the
+  section** (`_groups_floor_went`: their rows taken into the section's own space, under the
+  section's node) and **ride it down**. They are a drawing, as they were in the building: they hold
+  nothing and nothing lands on them. They are taken off when the section lands, settles or breaks
+  up (`_groups_tend_riders`); the room's record has had them gone since they left.
+* **crushed**: `_crush_drawn`, as for the rungs, over the rooms of the groups a landing piece reaches.
+
+A change nobody can place (`_mark_dirty` with no height) still has every group walk its rooms
+(`InteriorGroups.touch`), a couple of milliseconds a pass; `interior_group_probe` checks the walk and
+the asking agree. `hide_inside` for groups, and its check, went: the asking replaces it.
+
+Not done here: a piece whose floor is DESTROYED just goes -- no debris particles (crumbs are cut
+from bricks, `IslandManager._add_crumbs`, and a drawn piece has none). Stage 3 makes a shot piece
+bricks, which gives it debris for free.
+
+Checks: `interior_group_probe` 22; `-- --groups --big` 19 -- on the 41-storey tower cut at its
+ninth storey, 350 pieces lost their floors, 347 rode a section, none was left drawn over a floor
+that had gone on any tick, and none was still drawn once its section had landed.

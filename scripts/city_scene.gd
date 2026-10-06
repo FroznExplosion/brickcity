@@ -1924,6 +1924,12 @@ var interior_groups := InteriorGroups.new()
 ## groups the player is near.
 var _group_shapes := {}
 var _group_covers := 0     ## times a group's boxes were put on or taken off a body
+## Pieces drawn on the section that took their floor, riding it down:
+## [BrickIsland, MultiMeshInstance3D]. See _groups_floor_went.
+var _group_riders: Array = []
+var _group_orphans := 0    ## pieces whose floor went, all told
+var _group_rides := 0      ## and of those, the ones that rode a section
+var _groups_leaving := false   ## _disable is being told of bricks about to leave, not yet gone
 
 
 func _mid_collapse(id: int) -> bool:
@@ -2469,6 +2475,8 @@ func _stream_groups(here: Vector3) -> void:
 			# have gone: it waits for the group to be current.
 			if want != g.cover and (not want or not g.dirty):
 				covers.append([id, g, want])
+			elif want and g.cover_stale and not g.dirty:
+				covers.append([id, g, true])   # a piece has gone: its box with it
 	todo.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
 	var until := Time.get_ticks_usec() + int(InteriorGroups.BUDGET_MS * 1000.0)
 	var first := true
@@ -2486,6 +2494,97 @@ func _stream_groups(here: Vector3) -> void:
 	for id in groups.known_ids():
 		if not near.has(id):
 			_drop_groups(id)
+	_groups_tend_riders()
+
+
+## Bricks of `b` inside `box` (its chunk's own space) have just been destroyed
+## or have left it. Every piece of its storey groups there with nothing under
+## it now is out of the building this tick (InteriorGroups.check_floors) --
+## and when its floor left as a section (`came`), it is drawn on that section
+## and rides it down. [Interiors §8.3](../Docs/Interiors.md).
+##
+## What rides is a drawing, as it was in the building: it holds nothing and
+## nothing lands on it. It is taken off when the section lands or breaks up
+## (_groups_tend_riders) -- the fall is what destroyed it, and its room's
+## record has said so since the moment it left.
+func _groups_floor_went(b: BuildingRegistry.Building, box: AABB,
+		came: BrickIsland = null) -> void:
+	if not group_interiors or interior_groups.known(b.id).is_empty():
+		return
+	var orphans := interior_groups.check_floors(b, box.position.y, box.end.y)
+	if orphans.is_empty():
+		return
+	_group_orphans += orphans.size()
+	if came == null or not came.is_valid() or came.mesh == null \
+			or not is_instance_valid(came.mesh):
+		return
+	# From the building chunk's space into the section's, as the two stand this
+	# tick: the section has not moved yet.
+	var into: Transform3D = world.get_chunk_transform(came.chunk).affine_inverse() \
+			* world.get_chunk_transform(b.chunk)
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(came.chunk)
+	var rows := PackedFloat32Array()
+	var riding := 0
+	for o in orphans:
+		var piece: AABB = o.box
+		if piece.size == Vector3.ZERO:
+			continue
+		# Is its floor in THIS section? Half a plate under its foot, at the
+		# middle and toward each corner.
+		var carried := false
+		for f in [Vector2(0.5, 0.5), Vector2(0.15, 0.15), Vector2(0.85, 0.15),
+				Vector2(0.15, 0.85), Vector2(0.85, 0.85)]:
+			var under: Vector3 = into * Vector3(piece.position.x + piece.size.x * f.x,
+					piece.position.y - cs.y * 0.5, piece.position.z + piece.size.z * f.y)
+			if world.is_solid(came.chunk, Vector3i((under / cs).floor()) + origin):
+				carried = true
+				break
+		if not carried:
+			continue   # destroyed under it, or gone with another section
+		rows.append_array(o.rows)
+		rows.append_array(o.details)
+		riding += 1
+	if rows.is_empty():
+		return
+	@warning_ignore("integer_division")
+	var n := rows.size() / FurnitureMesh.STRIDE
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = FurnitureMesh.unit_mesh()
+	mm.instance_count = n
+	for r in n:
+		var at := r * FurnitureMesh.STRIDE
+		# A row is the basis by rows with the origin at the end of each.
+		mm.set_instance_transform(r, into * Transform3D(
+				Basis(Vector3(rows[at], rows[at + 4], rows[at + 8]),
+					Vector3(rows[at + 1], rows[at + 5], rows[at + 9]),
+					Vector3(rows[at + 2], rows[at + 6], rows[at + 10])),
+				Vector3(rows[at + 3], rows[at + 7], rows[at + 11])))
+		mm.set_instance_color(r, Color(rows[at + 12], rows[at + 13], rows[at + 14], rows[at + 15]))
+	var node := MultiMeshInstance3D.new()
+	node.multimesh = mm
+	node.material_override = InteriorGroups.piece_material()
+	came.mesh.add_child(node)
+	_group_riders.append([came, node])
+	_group_rides += riding
+
+
+## Take what rode a section off it once the section has landed, settled or
+## gone. Asked every pass; there are a handful.
+func _groups_tend_riders() -> void:
+	var k := 0
+	while k < _group_riders.size():
+		var isl: BrickIsland = _group_riders[k][0]
+		var node = _group_riders[k][1]
+		if node != null and is_instance_valid(node) and isl != null and isl.is_valid() \
+				and not isl.landed and not isl.settled:
+			k += 1
+			continue
+		if node != null and is_instance_valid(node):
+			(node as Node).queue_free()
+		_group_riders.remove_at(k)
 
 
 ## Put a worked-out group on screen, or refresh what it shows, and its
@@ -2497,7 +2596,7 @@ func _group_show(b: BuildingRegistry.Building, g: InteriorGroups.Group) -> void:
 	if g.shown and not g.changed and interior_groups.nodes_ok(b.id, g, parent):
 		return
 	interior_groups.attach(b, g, parent)
-	if g.cover:
+	if g.cover and g.cover_stale:
 		_group_cover(b.id, g, true)
 
 
@@ -2525,6 +2624,8 @@ func _group_cover(id: int, g: InteriorGroups.Group, on: bool) -> void:
 	if on:
 		for room_boxes in g.boxes:
 			for box in (room_boxes as Array):
+				if (box as AABB).size == Vector3.ZERO:
+					continue   # its piece has gone (InteriorGroups.check_floors)
 				mine.push_back(_take_shape(id, body, (box as AABB).size,
 						Transform3D(Basis(), (box as AABB).position + (box as AABB).size * 0.5)))
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
@@ -2533,6 +2634,7 @@ func _group_cover(id: int, g: InteriorGroups.Group, on: bool) -> void:
 	else:
 		_group_shapes[key] = mine
 	g.cover = on
+	g.cover_stale = false
 	_group_covers += 1
 
 
@@ -2614,6 +2716,10 @@ func _set_group_interiors(on: bool) -> void:
 	else:
 		for id in interior_groups.known_ids():
 			_drop_groups(id)
+		for rider in _group_riders:
+			if rider[1] != null and is_instance_valid(rider[1]):
+				(rider[1] as Node).queue_free()
+		_group_riders.clear()
 
 
 ## The far tier: a shell mesh and five boxes. No bricks anywhere.
@@ -3337,7 +3443,11 @@ func _mark_dirty(id: int, y_lo: float = -INF, y_hi: float = INF) -> void:
 	if b != null:
 		b.structure_version += 1
 		_fake_dirty[id] = true
-		interior_groups.touch(id, y_lo, y_hi)
+		# A caller that knows where says so; then what died or left tells the
+		# storey groups itself, the tick it does (_disable, the detach). Only a
+		# change nobody can place has every group walk its pieces again.
+		if y_lo == -INF and y_hi == INF:
+			interior_groups.touch(id)
 
 
 func _queue_remesh(id: int) -> void:
@@ -3760,7 +3870,17 @@ func _take_bands(id: int) -> Array:
 
 
 func _disable(id: int, ids: PackedInt32Array) -> void:
-	if ids.is_empty() or not _brick_cols.has(id):
+	if ids.is_empty():
+		return
+	# What stood on these, in the storey groups: gone this tick, not when a
+	# pass next walks the group (Interiors.md 8.3). Not for bricks that are
+	# about to leave as a section -- they are still here; the detach asks once
+	# they have gone, and what stood on them rides.
+	if group_interiors and not _groups_leaving and not interior_groups.known(id).is_empty():
+		var held := registry.get_building(id)
+		if held != null and held.is_materialised():
+			_groups_floor_went(held, world.get_blocks_box(held.chunk, ids).grow(0.2))
+	if not _brick_cols.has(id):
 		return
 	# Interiors are drawn from their own blocks rather than from the face
 	# bake, so a blast that takes a chair out has to be told to redraw one --
@@ -6555,7 +6675,9 @@ func _run_groups_pass() -> void:
 			if g.cover:
 				covered += 1
 				for room_boxes in g.boxes:
-					cover_boxes += (room_boxes as Array).size()
+					for box in (room_boxes as Array):
+						if (box as AABB).size != Vector3.ZERO:
+							cover_boxes += 1
 				cover_shapes += (_group_shapes.get(InteriorGroups.key_of(b.id, g.index),
 						PackedInt32Array()) as PackedInt32Array).size()
 		print("[groups] from %.0f m: %d of %d group(s) in range and drawn after %d tick(s), %d box(es); %d with collision, %d casting shadows" % [
@@ -6651,9 +6773,11 @@ func _run_groups_pass() -> void:
 			far_same = false
 			why += " group %d: stamp %d->%d, %d->%d floats;" % [g.index, stamps[g.index],
 					g.struct_stamp, (buffers[g.index] as PackedFloat32Array).size(), now.size()]
-	_gate_ok("a shot asks the storey groups at its height again, and leaves the ones above as they were",
-			hit_group >= 0 and layout[hit_group].struct_stamp != stamps[hit_group]
-			and far_same and asked < layout.size(),
+	# Nothing is walked for a shot: the rooms it reached are laid as bricks and
+	# drop out of their group, and what lost its floor is found the tick it
+	# does (InteriorGroups.check_floors). The groups above do not change.
+	_gate_ok("a shot has no storey group walk its rooms again, and leaves the ones above as they were",
+			hit_group >= 0 and asked == 0 and far_same,
 			"%d of %d group(s) asked again (the shot in group %d), %d room(s) worked out;%s" % [
 				asked, layout.size(), hit_group, interior_groups.rooms_worked - worked0, why])
 
@@ -6666,11 +6790,30 @@ func _run_groups_pass() -> void:
 	_groups_look(face, out, 30.0, eye + 10.0)
 	await _groups_settle(b)
 	var above := _groups_shown_above(b, cut_local + 2.8)
+	var rides0 := _group_rides
+	var orphans0 := _group_orphans
 	_groups_cut(wb, cut_world)
 	var hung_ticks := 0
 	var hung_worst := 0
+	var riding_most := 0
+	var rider_off := 0   # riders on a section that has landed, or on nothing
 	for t in 240:
 		await get_tree().physics_frame
+		riding_most = maxi(riding_most, _group_riders.size())
+		if t == 50:
+			await _save("interior_groups_fall")   # the sections on their way down, furniture aboard
+		if t % 4 == 0:
+			for rider in _group_riders:
+				var on: BrickIsland = rider[0]
+				if rider[1] == null or not is_instance_valid(rider[1]) or not on.is_valid():
+					continue
+				# Drawn under the section's own node, and that node is where the
+				# section's bricks are (a tick of travel allowed): the rows were
+				# carried into the section's space on that understanding.
+				if (rider[1] as Node).get_parent() != on.mesh \
+						or on.mesh.global_transform.origin.distance_to(
+							world.get_chunk_transform(on.chunk).origin) > 0.6:
+					rider_off += 1
 		if b.toppled or not b.is_materialised():
 			break
 		var hung := _groups_hanging(b, cut_local + 2.8)
@@ -6680,6 +6823,21 @@ func _run_groups_pass() -> void:
 	_gate_ok("a section falls: of %d box(es) above the cut, none is left drawn over a floor that has gone" % above,
 			above > 0 and hung_ticks == 0,
 			"%d tick(s), up to %d box(es)" % [hung_ticks, hung_worst])
+	_gate_ok("  what stood in it rides the section down, drawn on the section",
+			_group_rides > rides0 and riding_most > 0 and rider_off == 0,
+			"%d piece(s) lost their floor, %d rode; up to %d section(s) carrying some; %d found off its section" % [
+				_group_orphans - orphans0, _group_rides - rides0, riding_most, rider_off])
+	for t in 600:
+		await get_tree().physics_frame
+		if _group_riders.is_empty():
+			break
+	var still_up := 0
+	for rider in _group_riders:
+		if not (rider[0] as BrickIsland).landed and not (rider[0] as BrickIsland).settled:
+			still_up += 1
+	_gate_ok("  and is taken off it when the section lands",
+			_group_riders.size() == still_up,
+			"%d left, %d of them on sections still in the air" % [_group_riders.size(), still_up])
 
 	# A building that is coming apart when somebody arrives gets no groups
 	# until it is still; then the storeys left standing get theirs.
@@ -6739,6 +6897,9 @@ func _run_groups_pass() -> void:
 	var gr: Dictionary = interior_groups.report()
 	print("[groups] all told: %d room(s) worked out, %d drawing(s) put up or refreshed, %d let go, %.1f ms (the slowest drawing %.2f ms); %d time(s) collision put on or taken off" % [
 			gr.rooms_worked, gr.attaches, gr.releases, gr.work_ms, gr.worst_attach_ms, _group_covers])
+	print("[groups]   floors asked %d time(s), %.2f ms all told (%.3f ms each); %d piece(s) lost theirs, %d rode a section" % [
+			gr.checks, gr.check_ms, float(gr.check_ms) / maxf(float(gr.checks), 1.0),
+			_group_orphans, _group_rides])
 	print("[groups] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
@@ -7687,13 +7848,17 @@ func _physics_process(_delta: float) -> void:
 			# spawn. spawn() returns null for debris discarded unseen; either
 			# way the blocks have left this building.
 			left_boxes.append(world.get_blocks_box(b.chunk, before).grow(0.2))
+			_groups_leaving = true
 			_disable(b.id, before)
+			_groups_leaving = false
 			t = _mark("disable", t)
 			# The detach is a command: WHEN a group leaves is a budget, and timing
 			# changes what the next hit does (DamageLog, "Every operation").
 			var piece := islands.record_detach(b.id, null, b.chunk, before,
 					DamageLog.FLAG_CHUNK if kind == &"chunk" else 0)
 			var came := islands.spawn(b.chunk, before, Vector3.ZERO, Vector3.ZERO, piece, b.id)
+			# What stood on it, in the storey groups, goes with it.
+			_groups_floor_went(b, left_boxes[left_boxes.size() - 1], came)
 			if came != null:
 				_note_handover(b.id, came)
 			if came == null:
@@ -7716,15 +7881,12 @@ func _physics_process(_delta: float) -> void:
 		# Blocks just left it: a fake drawn since the hit is stale again.
 		b.structure_version += 1
 		_fake_dirty[b.id] = true
-		for left in left_boxes:
-			interior_groups.touch(b.id, left.position.y, left.end.y)
 		# And until the fake is rebuilt -- a few rooms a pass, the drawing
 		# swapped only once all of them are -- what it drew in the groups that
 		# left hung in the air while they fell, up to 18 ticks on a big tower.
 		if not left_boxes.is_empty():
 			FurnitureMesh.hide_inside(_fake_furniture, b.id, left_boxes)
 			FurnitureMesh.hide_inside(_drawn_furniture, b.id, left_boxes)
-			interior_groups.hide_inside(b.id, left_boxes)
 		# Keep drawing those bricks until the piece that took them has come up.
 		# See IslandManager.OVERLAP_FRAMES.
 		# Start a hold, never extend one -- see the same guard in _shed.

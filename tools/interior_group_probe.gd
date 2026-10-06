@@ -8,10 +8,12 @@ extends SceneTree
 ##   * a group's drawing is every interior piece of every room in it, the same
 ##     rows the drawn rung works out room by room, and nothing twice;
 ##   * it is worked out a few rooms at a time under a clock;
-##   * a change in one group's storeys works that group out again and leaves
-##     the others exactly as they were (the reason for groups at all: a tower
-##     is not redrawn for one shot);
-##   * a piece whose floor has gone, and a room laid as bricks, leave it;
+##   * a piece whose floor has gone is out of its group the moment it is asked
+##     (check_floors), with nothing worked out again and no other group touched
+##     (the reason for groups at all: a tower is not redrawn for one shot);
+##   * a change nobody can place has the groups at that height walk their rooms
+##     again, and the walk agrees with the asking;
+##   * a room laid as bricks leaves its group;
 ##   * the small things (BuildRecipe.Role.DETAIL) are a drawing of their own.
 ##
 ## What needs the city -- ranges, fades, the collapse rules, collision -- is the
@@ -183,12 +185,40 @@ func _check_building() -> void:
 		stamps.append(g.struct_stamp)
 		copies.append(g.pieces.duplicate(true))
 	var y := victim.position.y
+	# Asked, the tick the floor went (Interiors.md 8.3): the piece is out of
+	# the drawing and the record, and nothing is worked out to get it there.
+	var top_node := groups.piece_node(id, top.index)
+	var shown0 := _shown(top_node)
+	var count0: int = top_node.multimesh.instance_count
+	var worked_before := groups.rooms_worked
+	var lost: Array = groups.check_floors(b, y - 0.3, y + 0.3)
+	var lost_rows := 0
+	var is_victim := false
+	for o in lost:
+		lost_rows += (o.rows as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+		if int(o.room) == victim_room and (o.box as AABB).is_equal_approx(victim):
+			is_victim = true
+	_ok("asked, the piece whose floor went is out of the drawing at once, its rows handed back",
+			lost.size() >= 1 and is_victim and lost_rows > 0
+			and _shown(top_node) == shown0 - lost_rows
+			and top_node.multimesh.instance_count == count0
+			and not (rooms[victim_room] as Room).gone.is_empty(),
+			"%d piece(s), %d box(es) of %d; %d instance(s) before and after" % [
+				lost.size(), lost_rows, shown0, count0])
+	var untouched := true
+	for g in layout:
+		if g.struct_stamp != stamps[g.index] or (g != top and g.pieces != copies[g.index]):
+			untouched = false
+	_ok("with no room worked out again and no other group touched",
+			groups.rooms_worked == worked_before and untouched and top.cover_stale and not top.dirty)
+	_ok("and asked again, nothing more is lost", groups.check_floors(b, y - 0.3, y + 0.3).is_empty())
+	# The other road to the same place: a change nobody can place.
 	groups.touch(id, y - 0.3, y + 0.3)
 	var touched := 0
 	for g in layout:
 		if g.struct_stamp != stamps[g.index]:
 			touched += 1
-	_ok("a change at one height reaches the group there, not the building",
+	_ok("a change nobody can place has the group at that height walked again, not the building",
 			top.dirty and touched >= 1 and touched <= 2 and touched < layout.size(),
 			"%d of %d group(s) asked again" % [touched, layout.size()])
 	var worked0 := groups.rooms_worked
@@ -207,8 +237,9 @@ func _check_building() -> void:
 	for buf in top.pieces:
 		top_rows += (buf as PackedFloat32Array).size()
 	var room: Room = rooms[victim_room]
-	_ok("the piece whose floor went is gone from its group and from its room's record",
-			not room.gone.is_empty() and top_rows < int(want_rows.get(top.index, 0))
+	_ok("and the walk draws what the asking left: the same boxes, the lost ones dropped",
+			not room.gone.is_empty()
+			and top_rows == int(want_rows.get(top.index, 0)) - lost_rows * FurnitureMesh.STRIDE
 			and groups.piece_node(id, top.index).multimesh.instance_count * FurnitureMesh.STRIDE == top_rows,
 			"%d floor brick(s) killed; %d of %d box(es) left; %d room(s) worked out again" % [
 				under.size(), top_rows / FurnitureMesh.STRIDE,
@@ -234,15 +265,6 @@ func _check_building() -> void:
 	_ok("a room laid as bricks leaves its group's drawing, and comes back when it is taken out",
 			placed > 0 and rows_before > 0 and rows_laid == 0 and rows_back == rows_before,
 			"%d brick(s) laid; %d, %d, %d floats" % [placed, rows_before, rows_laid, rows_back])
-
-	# A section leaving: what stood in its box stops being drawn at once.
-	var mid: InteriorGroups.Group = layout[layout.size() / 2]
-	var shown_before := _shown(groups.piece_node(id, mid.index))
-	var hid := groups.hide_inside(id, [mid.box.grow(0.05)] as Array[AABB])
-	_ok("everything standing in a box that leaves is hidden at once, and that group asked again",
-			shown_before > 0 and hid == shown_before and _shown(groups.piece_node(id, mid.index)) == 0
-			and mid.dirty,
-			"%d of %d hidden" % [hid, shown_before])
 
 	groups.release(id, top)
 	_ok("a group let go draws nothing and keeps nothing",

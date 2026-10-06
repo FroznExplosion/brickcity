@@ -85,8 +85,16 @@ class Group:
 	var pieces: Array[PackedFloat32Array] = []
 	var items: Array[PackedFloat32Array] = []
 	var boxes: Array = []
+	## Per room, which rows are whose (RoomManifest.draw_items' `pieces`), and
+	## where each room's rows start in the two drawings as they were last put
+	## on screen.
+	var piece_rows: Array = []
+	var room_row0 := PackedInt32Array()
+	var room_item0 := PackedInt32Array()
 	## The rows have moved on since they were last put on screen.
 	var changed := false
+	## Its boxes have changed since CityScene last gave them collision.
+	var cover_stale := false
 	var piece_count := 0
 	var item_count := 0
 	var shadows := true
@@ -105,6 +113,9 @@ var _piece_nodes := {}
 var _item_nodes := {}
 
 var rooms_worked := 0     ## rooms worked out, all told
+var checks := 0           ## times pieces were asked for their floors (check_floors)
+var check_ms := 0.0
+var pieces_lost := 0      ## groups that lost a piece to one
 var attaches := 0         ## drawings put on screen or refreshed
 var releases := 0
 var work_ms := 0.0
@@ -269,10 +280,12 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 		g.pieces.clear()
 		g.items.clear()
 		g.boxes.clear()
+		g.piece_rows.clear()
 		for k in n:
 			g.pieces.append(PackedFloat32Array())
 			g.items.append(PackedFloat32Array())
 			g.boxes.append([])
+			g.piece_rows.append(PackedInt32Array())
 	var offset: Vector3i = registry._rebase_of(b)
 	var worked := 0
 	var done := true
@@ -290,6 +303,7 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 			g.pieces[k] = PackedFloat32Array()
 			g.items[k] = PackedFloat32Array()
 			g.boxes[k] = []
+			g.piece_rows[k] = PackedInt32Array()
 		else:
 			if room.items.is_empty():
 				room.items = RoomManifest.items_for(room)
@@ -297,6 +311,8 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 			g.pieces[k] = d.buffer
 			g.items[k] = d.details
 			g.boxes[k] = d.boxes
+			g.piece_rows[k] = d.pieces
+		g.cover_stale = true
 		g.room_stamp[k] = g.struct_stamp
 		# After the drawing: a piece whose floor has gone is written off BY it.
 		g.room_gone[k] = room.gone.size()
@@ -323,6 +339,18 @@ func attach(b: BuildingRegistry.Building, g: Group, parent: Node3D) -> void:
 		(items as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	g.shown = true
 	g.changed = false
+	# Where each room's rows are in what is now on screen (check_floors).
+	g.room_row0.resize(g.pieces.size())
+	g.room_item0.resize(g.pieces.size())
+	var at := 0
+	var item_at := 0
+	for k in g.pieces.size():
+		g.room_row0[k] = at
+		g.room_item0[k] = item_at
+		@warning_ignore("integer_division")
+		at += g.pieces[k].size() / FurnitureMesh.STRIDE
+		@warning_ignore("integer_division")
+		item_at += g.items[k].size() / FurnitureMesh.STRIDE
 	_apply_shadows(key, g.shadows)
 	attaches += 1
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
@@ -377,6 +405,9 @@ func release(building_id: int, g: Group) -> void:
 	g.pieces.clear()
 	g.items.clear()
 	g.boxes.clear()
+	g.piece_rows.clear()
+	g.room_row0 = PackedInt32Array()
+	g.room_item0 = PackedInt32Array()
 
 
 ## Everything of one building: its bricks went, or it came down.
@@ -394,26 +425,107 @@ func drop_all() -> void:
 		drop(id)
 
 
-## Stop drawing, at once, everything of this building standing inside one of
-## `boxes` (the chunk's own space): a section that has just left it. The groups
-## that held any are worked out again from what is left. See
-## FurnitureMesh.hide_inside. Returns how many boxes it hid.
-func hide_inside(building_id: int, boxes: Array[AABB]) -> int:
-	var have = _layouts.get(building_id)
+## Ask every piece of the shown groups between two heights (the building's
+## own space) whether a brick is still under it -- now, the tick its floor was
+## destroyed or left. [Interiors §8.3](../Docs/Interiors.md).
+##
+## A piece with none is out of its room's record (`gone`) and out of both
+## drawings at once: its rows are scaled to nothing where they are, so nothing
+## else in the drawing moves and nothing is worked out again. Each is returned
+## as {group, room, item, rows, details, box} -- the rows it was drawn with, in
+## the building chunk's own space -- for whoever shows what became of it (it
+## rides the section that took its floor: CityScene._groups_floor_went).
+##
+## This is §8.3's "one index, block id -> pieces" without the index. A storey
+## group is thirty or forty pieces, so asking each "is there a brick under you"
+## is a few dozen grid reads, 30-60 microseconds a group; an index would be
+## looked up once for every brick that left, and a section is thousands.
+func check_floors(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> Array:
+	var out: Array = []
+	var have = _layouts.get(b.id)
 	if have == null:
-		return 0
-	var hidden := 0
+		return out
+	var t0 := Time.get_ticks_usec()
+	var rooms := registry.rooms_of(b.id)
+	var offset: Vector3i = registry._rebase_of(b)
 	for g in (have as Array):
-		if not g.shown:
+		if not g.shown or g.piece_rows.is_empty():
 			continue
-		var key := key_of(building_id, g.index)
-		var n := FurnitureMesh.hide_inside(_piece_nodes, key, boxes) \
-				+ FurnitureMesh.hide_inside(_item_nodes, key, boxes)
-		if n > 0:
-			g.struct_stamp += 1
-			g.dirty = true
-		hidden += n
-	return hidden
+		if g.box.position.y - 0.6 > y_hi or g.box.end.y < y_lo:
+			continue
+		var lost := false
+		for k in g.piece_rows.size():
+			var mine: PackedInt32Array = g.piece_rows[k]
+			if mine.is_empty():
+				continue
+			var room: Room = rooms[g.first_room + k]
+			if room.active or room.spilled:
+				continue
+			var room_lost := false
+			for j in range(0, mine.size(), 6):
+				var i := mine[j]
+				if room.gone.has(i):
+					continue
+				var item: Dictionary = room.items[i]
+				if RoomManifest.item_supported(world, b.chunk, str(item.type),
+						(item.cell as Vector3i) - offset):
+					continue
+				room.gone[i] = true
+				var box := AABB()
+				if mine[j + 5] >= 0:
+					box = g.boxes[k][mine[j + 5]]
+					g.boxes[k][mine[j + 5]] = AABB()   # no box: no collision
+				out.append({"group": g, "room": g.first_room + k, "item": i,
+						"rows": _take_rows(g.pieces, k, mine[j + 1], mine[j + 2]),
+						"details": _take_rows(g.items, k, mine[j + 3], mine[j + 4]),
+						"box": box})
+				room_lost = true
+			if room_lost:
+				# The room's rows are what its record says: nothing to work out.
+				g.room_gone[k] = room.gone.size()
+				lost = true
+		if lost:
+			pieces_lost += 1
+			g.cover_stale = true
+			if g.changed:
+				continue   # a newer drawing is owed already: it has them out
+			var key := key_of(b.id, g.index)
+			_rewrite(_piece_nodes.get(key), g.pieces)
+			_rewrite(_item_nodes.get(key), g.items)
+	checks += 1
+	check_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	return out
+
+
+## Rows [first, first + count) of one room's buffer, copied out; the originals
+## are scaled to nothing.
+static func _take_rows(buffers: Array[PackedFloat32Array], k: int, first: int,
+		count: int) -> PackedFloat32Array:
+	if count <= 0:
+		return PackedFloat32Array()
+	var buffer: PackedFloat32Array = buffers[k]
+	var taken := buffer.slice(first * FurnitureMesh.STRIDE, (first + count) * FurnitureMesh.STRIDE)
+	for r in range(first, first + count):
+		var at := r * FurnitureMesh.STRIDE
+		for f in [0, 1, 2, 4, 5, 6, 8, 9, 10]:
+			buffer[at + f] = 0.0
+	buffers[k] = buffer
+	return taken
+
+
+## Put a group's rows, as they now are, back into the drawing that shows them.
+## Same rows in the same places, so the instance count does not change.
+static func _rewrite(node, buffers: Array[PackedFloat32Array]) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var mm: MultiMesh = (node as MultiMeshInstance3D).multimesh
+	var buffer := PackedFloat32Array()
+	for b in buffers:
+		buffer.append_array(b)
+	if mm == null or buffer.size() != mm.instance_count * FurnitureMesh.STRIDE:
+		return
+	mm.buffer = buffer
+	(node as MultiMeshInstance3D).set_meta(&"buffer", buffer)
 
 
 func piece_node(building_id: int, group: int) -> MultiMeshInstance3D:
@@ -444,4 +556,5 @@ func report() -> Dictionary:
 			buildings += 1
 	return {"groups": groups, "buildings": buildings, "piece_boxes": pieces,
 			"item_boxes": items, "rooms_worked": rooms_worked, "attaches": attaches,
-			"releases": releases, "work_ms": work_ms, "worst_attach_ms": worst_attach_ms}
+			"releases": releases, "work_ms": work_ms, "worst_attach_ms": worst_attach_ms,
+			"checks": checks, "check_ms": check_ms}
