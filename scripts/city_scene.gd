@@ -6348,6 +6348,40 @@ func _run_play_pass() -> void:
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
+
+	# The settings menu (Ceramic Edge's menu/, Docs/Reference/ceramicedge.md section 8):
+	# Escape pauses the city under it and resuming gives it back; what is set in Options
+	# reaches the game (BrickcityMenuHost).
+	var mm := get_node_or_null(^"/root/MenuManager")
+	var ms := get_node_or_null(^"/root/MenuSettings")
+	_gate_ok("the menu autoloads are there", mm != null and ms != null)
+	if mm != null and ms != null:
+		_key(KEY_ESCAPE, true)
+		await _frames(2)
+		_key(KEY_ESCAPE, false)
+		await _frames(2)
+		_gate_ok("Escape opens the pause menu over the city, and the city stops",
+				mm.is_open() and get_tree().paused)
+		mm.close_pause()
+		await _frames(2)
+		_gate_ok("and resuming starts it again", not mm.is_open() and not get_tree().paused)
+		var fov_was: Variant = ms.get_value(&"fov")
+		ms.set_value(&"fov", 110, false)
+		await _frames(30)
+		var vp := get_viewport().get_visible_rect().size
+		var want := rad_to_deg(2.0 * atan(tan(deg_to_rad(110.0) * 0.5) / (vp.x / vp.y)))
+		_gate_ok("a field of view set in Options is the view's",
+				is_equal_approx(PlayerView.hfov, 110.0) and absf(camera.fov - want) < 1.0,
+				"camera %.1f, want %.1f" % [camera.fov, want])
+		ms.set_value(&"fov", fov_was, false)
+		var sens_was: Variant = ms.get_value(&"mouse_sensitivity")
+		var crouch_was: Variant = ms.get_value(&"toggle_crouch")
+		ms.set_value(&"mouse_sensitivity", 2.0, false)
+		ms.set_value(&"toggle_crouch", true, false)
+		_gate_ok("and so are the mouse and hold-or-toggle",
+				is_equal_approx(DebugCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
+		ms.set_value(&"mouse_sensitivity", sens_was, false)
+		ms.set_value(&"toggle_crouch", crouch_was, false)
 	_leave_pawn()
 	await _frames(4)
 	_gate_ok("V leaves: the camera flies again", camera.is_processing() and _player_pawn == null)
@@ -8379,6 +8413,10 @@ func _toggle_shader(param: String) -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# On foot the buttons are the player's own (rebindable input actions,
+	# PlayerController): firing, aiming and reloading go through the pawn.
+	if event is InputEventMouseButton and _player.is_possessing():
+		return
 	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
 		_gun.set_trigger(false)
 	if event is InputEventMouseButton and event.pressed:
@@ -8452,7 +8490,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
 			_gun_armed = true
 		KEY_R:
-			if _gun_armed:
+			if _gun_armed and not _player.is_possessing():
 				_gun.reload()
 		KEY_F4:
 			_ai_label.visible = not _ai_label.visible
