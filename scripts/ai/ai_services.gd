@@ -54,6 +54,11 @@ var on_breach := Callable()
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
 var policy: CombatPolicy = CombatPolicy.from_args()
+## A navigation map per SIZE of body (Roster's sizes, AIRoster.md 2.2): "person"
+## is `ai_nav`; the others are made the first time a body of that size asks, with
+## that size's numbers, and kept. The owner may put its own in (the city's mech
+## map is "huge").
+var navs := {}
 ## Counts of what the casebook chose, by moment (TacticsTally), when whoever
 ## owns the fight keeps them: the city does, a probe's arena does not. Untyped,
 ## so the services do not depend on the book's scripts.
@@ -171,6 +176,27 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 	callouts.say(squad_id, speaker, key, text, now(), key in URGENT_LINES, range_m)
 	if on_say.is_valid():
 		on_say.call(speaker, key, text, range_m)
+
+
+## The map a body of `size` walks: where it fits is the map's to say, so a large
+## body is simply not offered a door only a person fits.
+func nav_for(size: String) -> AINav:
+	if size == "person" or size == "":
+		return ai_nav
+	if navs.has(size):
+		return navs[size]
+	var roster := Roster.shared()
+	var prof: Array = roster.size_nav(size) if roster != null else []
+	if prof.size() < 6:
+		return ai_nav
+	var n := AINav.new()
+	n.set_ai_world(ai_world)
+	n.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
+	# What changes the person's map changes this one.
+	if ai_nav != null:
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs[size] = n
+	return n
 
 
 ## Log a decision; the judge fills in its reward and flags when it closes.

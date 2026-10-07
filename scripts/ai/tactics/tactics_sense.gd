@@ -104,8 +104,12 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	amounts["squad"] = 100.0
 	if so.squad != null and so.squad.members.size() > 0:
 		amounts["squad"] = 100.0 * so.squad.alive().size() / so.squad.members.size()
-	match StringName(so.get_meta(&"unit", &"")):
-		&"marksman": add.call("we_marksman")
+	# What it is: the facts its recipe brings (Roster). A soldier with no type
+	# set -- a probe's -- is still known for a marksman by its unit.
+	for f in so.type_facts:
+		add.call(str(f))
+	if so.type_facts.is_empty() and StringName(so.get_meta(&"unit", &"")) == &"marksman":
+		add.call("we_marksman")
 
 	return {"moment": _moment(so, c, facts, amounts, now), "facts": facts, "amounts": amounts}
 

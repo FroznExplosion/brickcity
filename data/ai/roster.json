@@ -16,6 +16,14 @@
     "l": "Small",
     "tall": 0.6,
     "wide": 0.4,
+    "nav": [
+     1,
+     5,
+     5,
+     2,
+     21,
+     12
+    ],
     "fits": "anywhere a person does, and gaps",
     "floors": "no weight to speak of",
     "eg": "a dog, a drone"
@@ -24,6 +32,14 @@
     "l": "Person",
     "tall": 1.68,
     "wide": 0.52,
+    "nav": [
+     2,
+     12,
+     9,
+     3,
+     21,
+     9
+    ],
     "fits": "doors, stairs, rooms",
     "floors": "any floor",
     "eg": "a soldier"
@@ -32,6 +48,14 @@
     "l": "Large",
     "tall": 2.6,
     "wide": 1,
+    "nav": [
+     3,
+     19,
+     19,
+     4,
+     21,
+     12
+    ],
     "fits": "wide doors and damaged walls",
     "floors": "checked against the floor's headroom",
     "eg": "a brute"
@@ -40,6 +64,14 @@
     "l": "Huge",
     "tall": 6.7,
     "wide": 3.5,
+    "nav": [
+     10,
+     48,
+     48,
+     9,
+     17,
+     17
+    ],
     "fits": "damaged buildings, or breaks in",
     "floors": "breaks weak floors",
     "eg": "a mech, a tank"
@@ -120,6 +152,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -161,6 +201,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -204,6 +252,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -249,6 +305,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -290,6 +354,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -337,6 +409,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -384,6 +464,14 @@
      "l": "Person",
      "tall": 1.68,
      "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
      "fits": "doors, stairs, rooms",
      "floors": "any floor",
      "eg": "a soldier"
@@ -431,6 +519,14 @@
      "l": "Small",
      "tall": 0.6,
      "wide": 0.4,
+     "nav": [
+      1,
+      5,
+      5,
+      2,
+      21,
+      12
+     ],
      "fits": "anywhere a person does, and gaps",
      "floors": "no weight to speak of",
      "eg": "a dog, a drone"
@@ -479,6 +575,14 @@
      "l": "Large",
      "tall": 2.6,
      "wide": 1,
+     "nav": [
+      3,
+      19,
+      19,
+      4,
+      21,
+      12
+     ],
      "fits": "wide doors and damaged walls",
      "floors": "checked against the floor's headroom",
      "eg": "a brute"
@@ -561,6 +665,14 @@
      "l": "Huge",
      "tall": 6.7,
      "wide": 3.5,
+     "nav": [
+      10,
+      48,
+      48,
+      9,
+      17,
+      17
+     ],
      "fits": "damaged buildings, or breaks in",
      "floors": "breaks weak floors",
      "eg": "a mech, a tank"
@@ -612,6 +724,14 @@
      "l": "Huge",
      "tall": 6.7,
      "wide": 3.5,
+     "nav": [
+      10,
+      48,
+      48,
+      9,
+      17,
+      17
+     ],
      "fits": "damaged buildings, or breaks in",
      "floors": "breaks weak floors",
      "eg": "a mech, a tank"

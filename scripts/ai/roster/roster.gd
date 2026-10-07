@@ -14,14 +14,25 @@ extends RefCounted
 ##   derived.points   what it costs a commander
 ##   derived.phases   what it becomes, and when
 ##
-## Nothing in the game fields a type from here yet (AIRoster.md RO1): today's
-## units still come from UnitCatalog, and tools/roster_probe.gd checks the two
-## agree.
+## UnitCatalog reads a unit's health, weapon, points and name from here (AIRoster.md
+## RO2), so changing a recipe on the page changes the unit in the game.
 
 const PATH := "res://data/ai/roster.json"
 
 var parts := {}
 var recipes := {}
+
+static var _shared: Roster
+static var _shared_tried := false
+
+
+## The one roster the game runs on, loaded the first time it is asked for. Null
+## (once, loudly) if it will not load: callers fall back to UnitCatalog's own table.
+static func shared() -> Roster:
+	if not _shared_tried:
+		_shared_tried = true
+		_shared = load_roster()
+	return _shared
 
 
 static func load_roster(path := PATH) -> Roster:
@@ -84,6 +95,12 @@ func for_unit(unit: StringName) -> String:
 		if StringName(str(recipes[id].get("unit", ""))) == unit:
 			return id
 	return ""
+
+
+## What a size's pathfinding is told (AINav.set_agent): [studs wide, plates of head
+## room standing, squeezing, plates it steps up, drops off an edge, drops unhurt].
+func size_nav(size: String) -> Array:
+	return (parts.get("sizes", {}) as Dictionary).get(size, {}).get("nav", [])
 
 
 ## Its health layers at `level`, top first, ready for a HealthPool -- built as
