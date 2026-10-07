@@ -81,23 +81,34 @@ func _explode() -> void:
 	exploded = true
 	if _danger_id >= 0:
 		s.ai_world.remove_danger(_danger_id)
-	var at := to + Vector3.UP * 0.3
-	var done := {}
-	for p in s.pawns:
-		if not is_instance_valid(p) or p.health == null or p.health.is_dead() or done.has(p):
-			continue
-		done[p] = true
-		var d := p.chest().distance_to(at)
-		if d >= RADIUS or not s.ai_world.line_clear(at, p.chest()):
-			continue
-		var dmg := DAMAGE * (1.0 - d / RADIUS)
-		p.health.apply_impact(dmg, &"")
-		hits.append([p, dmg])
-	if s.on_structure_hit.is_valid():
-		s.on_structure_hit.call(to, Vector3.DOWN, StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
-	s.noise(to, HEARD, thrower)
+	hits = blast(s, to, thrower, DAMAGE, RADIUS)
 	went_off.emit(to)
 	queue_free()
+
+
+## A blast on the ground at `at`: up to `damage` to every body within `radius`
+## (less with distance, none behind bricks), a small blast in the bricks, a bang.
+## `skip` is a body it does not hurt -- the one that set it off, if it is its own.
+## Returns [[pawn, damage], ...].
+static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, radius: float,
+		skip: Pawn = null) -> Array:
+	var out: Array = []
+	var from := at + Vector3.UP * 0.3
+	var done := {}
+	for p in services.pawns:
+		if not is_instance_valid(p) or p.health == null or p.health.is_dead() or done.has(p) or p == skip:
+			continue
+		done[p] = true
+		var d := p.chest().distance_to(from)
+		if d >= radius or not services.ai_world.line_clear(from, p.chest()):
+			continue
+		var dmg := damage * (1.0 - d / radius)
+		p.health.apply_impact(dmg, &"")
+		out.append([p, dmg])
+	if services.on_structure_hit.is_valid():
+		services.on_structure_hit.call(at, Vector3.DOWN, StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
+	services.noise(at, HEARD, by)
+	return out
 
 
 func _exit_tree() -> void:

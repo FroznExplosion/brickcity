@@ -23,6 +23,7 @@ const LINES := {
 	CombatPolicy.Tactic.FIGHT_OPEN: ["Light him up!", "Open fire!", "There he is!"],
 	CombatPolicy.Tactic.RUSH: ["Rush him!", "Charge!", "Everybody go!"],
 	CombatPolicy.Tactic.MELEE: ["I'll take him!", "Get over here!", "Hand to hand!"],
+	CombatPolicy.Tactic.DETONATE: ["For the cause!", "Here I come!", "You're coming with me!"],
 }
 
 
@@ -80,7 +81,7 @@ func _should_decide(so: Soldier, now: float) -> bool:
 	if so.hurt_at > so.tactic_at:
 		return true
 	var g := so.pawn.gun
-	if g != null and so.tactic != CombatPolicy.Tactic.COVER_RELOAD and so.tactic != CombatPolicy.Tactic.MELEE \
+	if g != null and not so.no_gun and so.tactic != CombatPolicy.Tactic.COVER_RELOAD and so.tactic != CombatPolicy.Tactic.MELEE \
 			and float(g.ammo) / float(maxi(g.mag_size(), 1)) < 0.2 and not g.is_reloading():
 		return true
 	return false

@@ -54,6 +54,7 @@ var on_breach := Callable()
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
 var policy: CombatPolicy = CombatPolicy.from_args()
+const NAV_SIZE_USEC := 200
 ## A navigation map per SIZE of body (Roster's sizes, AIRoster.md 2.2): "person"
 ## is `ai_nav`; the others are made the first time a body of that size asks, with
 ## that size's numbers, and kept. The owner may put its own in (the city's mech
@@ -331,6 +332,9 @@ func tick() -> void:
 		for team in _aggro:
 			_aggro_tick(team, _aggro[team], dt)
 	callouts.tick(t, world3d, ai_world)
+	# The maps of the other sizes of body are served here, a little each.
+	for size in navs:
+		(navs[size] as AINav).service(NAV_SIZE_USEC)
 
 
 func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:

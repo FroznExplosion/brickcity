@@ -202,6 +202,7 @@ const ACTIONS = [
   ["fall_back","move","Fall back to better cover","Give ground to a stronger position.",1],
   ["regroup","move","Regroup","Get back to the squad or the nearest friends.",0],
   ["flee","move","Run","Break contact and get away.",1],
+  ["detonate","move","Go off","A bomber's whole plan: get to them and explode.",1],
   ["grenade","tool","Grenade","Throw one at the position, round the corner, down the stairwell, over the traverse.",0],
   ["flash","tool","Flash, then go in","Stun them and enter right behind it.",1],
   ["smoke","tool","Smoke","Blind the player's view of the ground they will cross.",0],
@@ -229,7 +230,7 @@ const ACTIONS = [
   ["reload","fire","Reload in cover","Duck into cover and reload. Ammo is unlimited; the magazine isn't.",0],
 ].map(([id,g,l,d,b]) => ({id,g,l,d,b:!!b}));
 
-const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are"};
+const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are", role:"Its role"};
 // mods: action:step (0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4)
 const FACTORS = [
   ["inside","place","Inside a building","Rooms, corridors, stairs.","sweep:4,flash:4,breach:4,smoke:2,call_air:2,screen_heavy:2,heavy_leads:2,call_armour:2"],
@@ -247,7 +248,7 @@ const FACTORS = [
   ["low_vis","place","Poor visibility","Dark, smoke, dust, rain.","advance:4,flank:4,rush:4,melee:4,relocate:4,ambush:4,hold:2,trade:2,mark:1"],
   ["p_seen","player","Player in sight now","","search:0,recon:1,suppress:4,trade:4,wait:2"],
   ["p_suspected","player","Player suspected, not confirmed","Heard, last seen here, or likely inside. Buildings get searched only when someone is suspected inside.","search:4,sweep:4,recon:4,suppress:1,rush:1,collapse:1,call_air:1,grenade:3,strip_cover:2"],
-  ["p_reach","player","Player within melee reach","Close enough to hit with what we carry: fists, blade, rifle stock, claws.","melee:6,grenade:1,call_air:0,recon:0,mark:1,reload:1"],
+  ["p_reach","player","Player within melee reach","Close enough to hit with what we carry: fists, blade, rifle stock, claws.","melee:6,detonate:6,grenade:1,call_air:0,recon:0,mark:1,reload:1"],
   ["p_unaware","player","Player doesn't know we're here","We're behind them, or they're looking the other way.","trade:5,rush:4,melee:4,flank:4,ambush:3,relocate:3,hide:2,fall_back:1,flee:1,suppress:2,call_help:2"],
   ["p_escape","player","Player has another way out","A window to another roof, a second stair, a tunnel.","guard_exits:3,deny_escape:5,rush:4,collapse:3,wait:1,seal:4"],
   ["p_evac","player","Evac is coming for the player","A helicopter or vehicle on its way.","deny_escape:4,rush:5,collapse:4,call_air:3,wait:0,guard_exits:1"],
@@ -256,6 +257,7 @@ const FACTORS = [
   ["p_reloading","player","Player reloading or hurt","A window of weakness.","rush:5,melee:4,advance:4,hold:2,wait:1"],
   ["p_team","player","Player has teammates near","Another player could be covering them.","flank:2,guard_exits:2,regroup:4,call_help:4"],
   ["we_alone","us","Alone","The only one left, or cut off.","regroup:5,call_help:4,hide:4,ambush:4,surrender:3,rush:1,sweep:1,flank:2,suppress:1"],
+  ["leader_dead","us","Our leader is dead","The squad has lost whoever was giving its orders.","fall_back:4,flee:4,regroup:4,hide:4,surrender:4,rush:1,flank:2,sweep:1,advance:2,hold:2"],
   ["we_explosives","us","Carrying rockets or explosives","","breach:4,collapse:4,strip_cover:4,seal:4"],
   ["friends_near","us","Other friendly squads near","","call_help:4,flank:4,guard_exits:4,suppress:4"],
   ["heavy_near","us","Our mech or tank is here","","screen_heavy:5,heavy_leads:5,call_armour:0,rush:4,advance:4"],
@@ -265,6 +267,16 @@ const FACTORS = [
   ["we_flyer","kind","We're a flyer","Drone or helicopter.","flank:5,mark:5,strip_cover:4,air_window:5,sweep:0,breach:0,flash:0,climb:0,melee:0,seal:0,surrender:0,play_dead:0,hide:1,call_air:1"],
   ["we_melee","kind","We're a melee fighter","Brute, dog, creature: it closes in to hit.","melee:5,rush:4,trade:1,suppress:0,grenade:1,relocate:1,mark:1,hold:2,reload:0"],
   ["we_swarm","kind","We're a swarm","Creatures, acting as one mass.","rush:5,climb:4,guard_exits:3,let_go:4,suppress:0,grenade:0,flash:0,smoke:0,call_help:0,call_armour:0,call_air:0,mark:0,surrender:0,play_dead:0,breach:0,seal:0,collapse:0,strip_cover:0,hide:2"],
+  ["we_bomber","kind","We're a bomber","It carries no gun: it gets to the enemy and goes off.","detonate:5,rush:2,flank:2,advance:2,ambush:2,search:2,hide:1,call_help:1,climb:1,trade:0,suppress:0,hold:0,relocate:0,strip_cover:0,melee:0,grenade:0,flash:0,smoke:0,breach:0,collapse:0,seal:0,reload:0,mark:0,fall_back:0,flee:0,regroup:0,guard_exits:0,deny_escape:0,wait:0,let_go:0,sweep:0,recon:0,call_armour:0,call_air:0,screen_heavy:0,heavy_leads:0,surrender:0,play_dead:0"],
+  ["we_grenadier","kind","We're a grenadier","Grenades first, the gun second.","grenade:5,trade:2,rush:2,melee:1"],
+  ["we_gunner","kind","We're a gunner","A heavy gun: pins the enemy, slow to move.","suppress:5,trade:4,hold:4,rush:1,flank:1,advance:2,melee:1,relocate:1"],
+  ["we_anti_armour","kind","We're anti-armour","Carries rockets for mechs and vehicles.","hold:4,trade:4,melee:1,rush:1"],
+  ["we_attacker","role","Attacker","Goes first.","rush:4,flank:4,advance:4,melee:4,hold:2,wait:1,fall_back:2,hide:1"],
+  ["we_defender","role","Defender","Holds a post and does not chase.","hold:4,guard_exits:4,ambush:4,trade:4,rush:1,advance:2,flank:2,search:2,sweep:2"],
+  ["we_leader","role","Leader","Gives the orders, and stays alive to give them.","call_help:4,mark:4,hold:4,fall_back:4,rush:1,melee:1,flank:2,advance:2"],
+  ["we_fodder","role","Cannon fodder","Cheap, and comes straight at you.","rush:4,melee:4,advance:4,hold:1,flank:1,fall_back:1,hide:0,ambush:1,wait:0,relocate:1"],
+  ["we_flanker","role","Flanker / hunter","Works alone and goes round.","flank:5,search:4,ambush:4,hold:1,trade:2"],
+  ["we_scout","role","Scout","Finds and marks; does not fight.","recon:4,mark:5,fall_back:4,hide:4,rush:0,melee:1,trade:2"],
 ].map(([id,g,l,d,m]) => ({id,g,l,d,mods:kv(m)}));
 
 // Teamwork: [most squadmates doing it at once (0 = any), moves it works with]
@@ -280,7 +292,7 @@ const TEAM = {
 const NEEDS = {
   collapse:"destructible", breach:"destructible", strip_cover:"destructible", deny_escape:"p_escape,p_evac",
   screen_heavy:"heavy_near", heavy_leads:"heavy_near", call_air:"air_avail", air_window:"we_flyer",
-  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected",
+  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber",
 };
 // Combos: moves done together with the main move. [first, while, then], each "move:chance%".
 // "first" happens just before (grenade, then rush), "while" alongside (fire while marking),
@@ -367,40 +379,40 @@ const MEMDEF = [
 const SITS = [
   {id:"first_contact", l:"Contact: the player is seen", who:"Anyone", imp:"p_seen",
    d:"A soldier or squad has just seen the player, or been shot at. Nobody has a plan yet.",
-   w:"trade:30,suppress:30,hold:15,advance:15,flank:20,rush:10,melee:5,grenade:10,relocate:10,fall_back:10,climb:5,smoke:5,ambush:5,call_help:10,mark:5,hide:10,regroup:5,reload:20"},
+   w:"trade:30,suppress:30,hold:15,advance:15,flank:20,rush:10,melee:5,grenade:10,relocate:10,fall_back:10,climb:5,smoke:5,ambush:5,call_help:10,mark:5,hide:10,regroup:5,reload:20,detonate:30"},
   {id:"lost_player", l:"Lost the player", who:"Anyone", imp:"p_suspected",
    d:"The player was here and now isn't seen. The side knows the last position and a guess at where they went.",
-   w:"hold:65,search:45,grenade:35,sweep:35,strip_cover:25,guard_exits:20,recon:15,ambush:15,wait:15,advance:10,call_help:5,climb:10,seal:5,reload:10,melee:5"},
+   w:"hold:65,search:45,grenade:35,sweep:35,strip_cover:25,guard_exits:20,recon:15,ambush:15,wait:15,advance:10,call_help:5,climb:10,seal:5,reload:10,melee:5,detonate:30"},
   {id:"player_dug_in", l:"Player holds a strong position", who:"Attacking squad",
    d:"The player is in cover the squad has to deal with: a room, an upper floor, a roof, a trench, the far end of a bridge, a cave chamber.",
-   w:"guard_exits:50,call_help:40,hold:30,rush:30,breach:30,suppress:25,grenade:25,deny_escape:25,flank:20,flash:20,sweep:20,trade:15,strip_cover:15,collapse:15,wait:15,climb:15,call_air:15,advance:10,smoke:10,call_armour:10,air_window:10,recon:5,seal:5,ambush:5,fall_back:10,mark:5,let_go:3,reload:5,melee:5"},
+   w:"guard_exits:50,call_help:40,hold:30,rush:30,breach:30,suppress:25,grenade:25,deny_escape:25,flank:20,flash:20,sweep:20,trade:15,strip_cover:15,collapse:15,wait:15,climb:15,call_air:15,advance:10,smoke:10,call_armour:10,air_window:10,recon:5,seal:5,ambush:5,fall_back:10,mark:5,let_go:3,reload:5,melee:5,detonate:30"},
   {id:"player_coming", l:"Player is coming at us", who:"Defending squad",
    d:"We hold a position and the player is on the way in.",
-   w:"hold:60,ambush:35,trade:30,grenade:25,suppress:20,relocate:10,fall_back:10,call_help:15,flank:10,climb:10,advance:10,breach:5,seal:5,hide:5,reload:10,melee:5"},
+   w:"hold:60,ambush:35,trade:30,grenade:25,suppress:20,relocate:10,fall_back:10,call_help:15,flank:10,climb:10,advance:10,breach:5,seal:5,hide:5,reload:10,melee:5,detonate:30"},
   {id:"crossing", l:"We have to cross danger", who:"Moving squad",
    d:"Between us and where we need to be: open ground, a street, a bridge, a gap the player can see.",
-   w:"advance:35,suppress:25,trade:25,smoke:20,flank:20,rush:25,strip_cover:15,melee:25,hold:10,call_armour:5,call_air:5,wait:5,reload:5"},
+   w:"advance:35,suppress:25,trade:25,smoke:20,flank:20,rush:25,strip_cover:15,melee:25,hold:10,call_armour:5,call_air:5,wait:5,reload:5,detonate:30"},
   {id:"close_quarters", l:"Close quarters", who:"Anyone", sc:"dist:5",
    d:"The player is a few metres away: same room, next trench bay, the next bend of a tunnel.",
-   w:"grenade:30,melee:25,rush:25,hold:25,flash:20,trade:20,fall_back:10,climb:5,flee:5,smoke:5,reload:5"},
+   w:"grenade:30,melee:25,rush:25,hold:25,flash:20,trade:20,fall_back:10,climb:5,flee:5,smoke:5,reload:5,detonate:30"},
   {id:"caught_out", l:"Caught out", who:"Anyone", imp:"p_seen",
    d:"The player has hit us from the side or behind, or surprised us in the open.",
-   w:"fall_back:30,trade:25,call_help:20,suppress:15,smoke:15,regroup:15,rush:10,melee:10,flee:10,hide:10,relocate:10,reload:5"},
+   w:"fall_back:30,trade:25,call_help:20,suppress:15,smoke:15,regroup:15,rush:10,melee:10,flee:10,hide:10,relocate:10,reload:5,detonate:30"},
   {id:"have_jump", l:"We have the jump on them", who:"Anyone", imp:"p_seen,p_unaware",
    d:"We see the player and they haven't seen us: passing by, looking away, reloading.",
-   w:"trade:50,relocate:30,ambush:25,flank:20,rush:20,grenade:20,melee:15,hide:15,mark:10,call_help:5,let_go:5,reload:5"},
+   w:"trade:50,relocate:30,ambush:25,flank:20,rush:20,grenade:20,melee:15,hide:15,mark:10,call_help:5,let_go:5,reload:5,detonate:30"},
   {id:"outgunned", l:"Up against something bigger", who:"Infantry",
    d:"The player has a mech, a vehicle, or firepower we can't match with what we carry.",
-   w:"climb:30,hide:25,fall_back:25,ambush:15,call_armour:15,call_help:15,trade:15,flee:10,flank:10,mark:10,surrender:10,search:10,reload:5,melee:5"},
+   w:"climb:30,hide:25,fall_back:25,ambush:15,call_armour:15,call_help:15,trade:15,flee:10,flank:10,mark:10,surrender:10,search:10,reload:5,melee:5,detonate:30"},
   {id:"have_heavy", l:"Our heavy support is here", who:"Infantry with support",
    d:"A friendly mech, tank or aircraft is with us or can be called.",
-   w:"screen_heavy:40,heavy_leads:40,call_air:25,advance:25,mark:20,strip_cover:20,rush:15,hold:15,sweep:15,smoke:10,fall_back:10,flank:10,reload:5,melee:5"},
+   w:"screen_heavy:40,heavy_leads:40,call_air:25,advance:25,mark:20,strip_cover:20,rush:15,hold:15,sweep:15,smoke:10,fall_back:10,flank:10,reload:5,melee:5,detonate:30"},
   {id:"player_leaving", l:"Player is getting away", who:"Anyone",
    d:"The player is leaving: running, heading for an exit, or an evac is on the way.",
-   w:"rush:35,deny_escape:35,trade:20,collapse:15,advance:15,flank:15,guard_exits:15,call_air:10,call_help:10,mark:10,let_go:5,reload:5,melee:5"},
+   w:"rush:35,deny_escape:35,trade:20,collapse:15,advance:15,flank:15,guard_exits:15,call_air:10,call_help:10,mark:10,let_go:5,reload:5,melee:5,detonate:30"},
   {id:"losing", l:"We're losing", who:"Anyone",
    d:"The squad is taking casualties, someone is cut off, or one soldier is left.",
-   w:"regroup:35,call_help:25,fall_back:25,hide:20,ambush:20,trade:20,flee:10,rush:5,melee:5,surrender:5,play_dead:3,reload:10"},
+   w:"regroup:35,call_help:25,fall_back:25,hide:20,ambush:20,trade:20,flee:10,rush:5,melee:5,surrender:5,play_dead:3,reload:10,detonate:30"},
 ].map(s => Object.assign(s, {w:kv(s.w)}));
 
 // Your first casebook, as checks: each old case is one moment with some things true.
@@ -489,7 +501,7 @@ const R_ATTACKS = {
   marksman:{l:"Marksman", fact:"we_marksman", points:4, weapons:["sniper","dmr"], word:"Marksman"},
   melee:{l:"Melee", fact:"we_melee", points:1, weapons:["melee"], word:"Melee"},
   bomber:{l:"Bomber", fact:"we_bomber", points:0.75, weapons:["itself"], word:"Bomber"},
-  grenadier:{l:"Grenadier", fact:"we_grenadier", points:1.5, weapons:["grenade_launcher","grenade"], word:"Grenadier"},
+  grenadier:{l:"Grenadier", fact:"we_grenadier", points:1.5, weapons:["rifle","smg","grenade_launcher"], word:"Grenadier", grenades:6},
   anti_armour:{l:"Anti-armour", fact:"we_anti_armour", points:10/3, weapons:["rocket_launcher"], word:"Rocketeer"},
   gunner:{l:"Gunner", fact:"we_gunner", points:1.5, weapons:["lmg"], word:"Gunner"}};
 const R_ROLES = {
@@ -520,8 +532,12 @@ const RECIPES = {
   veteran:{name:"Veteran", body:"walker", size:"person", cls:"medium", grade:"regular", attack:"shooter", weapon:"rifle", role:"line", mods:["armoured"], phases:[], built:true, unit:"veteran"},
   rocketeer:{name:"Rocketeer", body:"walker", size:"person", cls:"light", grade:"tough", attack:"anti_armour", weapon:"rocket_launcher", role:"line", mods:["shielded"], phases:[], built:false, unit:"rocketeer"},
   officer:{name:"Officer", body:"walker", size:"person", cls:"medium", grade:"regular", attack:"shooter", weapon:"pistol", role:"leader", mods:["shielded"], phases:[], built:false, unit:"officer"},
+  brawler:{name:"Brawler", body:"walker", size:"person", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:[], phases:[], built:true},
+  bomber:{name:"", body:"walker", size:"person", cls:"light", grade:"weak", attack:"bomber", role:"fodder", mods:[], phases:[], built:true},
+  grenadier:{name:"", body:"walker", size:"person", cls:"light", grade:"regular", attack:"grenadier", weapon:"rifle", role:"line", mods:[], phases:[], built:true},
+  sergeant:{name:"Sergeant", body:"walker", size:"person", cls:"light", grade:"tough", attack:"shooter", weapon:"rifle", role:"leader", mods:["armoured"], phases:[], built:true},
   gnat:{name:"", body:"flyer", size:"small", cls:"light", grade:"weak", attack:"bomber", role:"fodder", mods:[], phases:[], built:false},
-  brute:{name:"Brute", body:"walker", size:"large", cls:"heavy", grade:"regular", attack:"shooter", weapon:"lmg", role:"attacker", mods:[], phases:[{when:"armour_gone", become:{attack:"melee"}}], built:false},
+  brute:{name:"Brute", body:"walker", size:"large", cls:"heavy", grade:"regular", attack:"shooter", weapon:"lmg", role:"attacker", mods:[], phases:[{when:"armour_gone", become:{attack:"melee"}}], built:true},
   heavy_gunner_nuker:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:["nuker"], phases:[], built:false},
   light_melee_nuker:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:["nuker"], phases:[], built:false},
 };
@@ -577,6 +593,9 @@ function rDerive(r, nested){
   const mods = r.mods || [], attack = R_ATTACKS[r.attack], role = R_ROLES[r.role];
   d.tag = rTag(r); d.name = r.name || d.tag;
   d.weapon = r.weapon || attack.weapons[0];
+  d.attack = r.attack; d.role = r.role;
+  // Hand grenades carried: a grenadier's are its point; types with no hands free carry none.
+  d.grenades = attack.grenades != null ? attack.grenades : (r.attack === "melee" || r.attack === "bomber" ? 0 : 2);
   d.facts = [R_BODIES[r.body].fact, attack.fact, role.fact].filter(Boolean);
   d.tier = role.tier === "directed" && r.grade === "weak" ? "swarm" : role.tier;
   d.size = Object.assign({id: r.size}, R_SIZES[r.size]);
@@ -601,7 +620,7 @@ function rDerive(r, nested){
     const next = Object.assign({}, r, ph.become || {}, {phases: [], name: ""});
     if((ph.become || {}).attack && !(ph.become || {}).weapon) delete next.weapon;   // a new attack brings its own weapon
     const nd = rDerive(next, true);
-    return {when: ph.when, become: ph.become || {}, tag: nd.tag, weapon: nd.weapon, facts: nd.facts, tier: nd.tier, layers: nd.layers, errors: nd.errors};
+    return {when: ph.when, become: ph.become || {}, tag: nd.tag, weapon: nd.weapon, attack: nd.attack, role: nd.role, facts: nd.facts, tier: nd.tier, layers: nd.layers, errors: nd.errors};
   });
   return d;
 }

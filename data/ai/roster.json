@@ -145,6 +145,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "rifle",
+    "attack": "shooter",
+    "role": "line",
+    "grenades": 2,
     "facts": [],
     "tier": "smart",
     "size": {
@@ -192,6 +195,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "smg",
+    "attack": "shooter",
+    "role": "attacker",
+    "grenades": 2,
     "facts": [
      "we_attacker"
     ],
@@ -243,6 +249,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "shotgun",
+    "attack": "shooter",
+    "role": "attacker",
+    "grenades": 2,
     "facts": [
      "we_attacker"
     ],
@@ -296,6 +305,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "sniper",
+    "attack": "marksman",
+    "role": "line",
+    "grenades": 2,
     "facts": [
      "we_marksman"
     ],
@@ -347,6 +359,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "rifle",
+    "attack": "shooter",
+    "role": "line",
+    "grenades": 2,
     "facts": [],
     "tier": "smart",
     "size": {
@@ -400,6 +415,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "rocket_launcher",
+    "attack": "anti_armour",
+    "role": "line",
+    "grenades": 2,
     "facts": [
      "we_anti_armour"
     ],
@@ -455,6 +473,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "pistol",
+    "attack": "shooter",
+    "role": "leader",
+    "grenades": 2,
     "facts": [
      "we_leader"
     ],
@@ -491,6 +512,222 @@
     "phases": []
    }
   },
+  "brawler": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "regular",
+   "attack": "melee",
+   "role": "attacker",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Melee",
+    "name": "Brawler",
+    "errors": [],
+    "warnings": [],
+    "weapon": "melee",
+    "attack": "melee",
+    "role": "attacker",
+    "grenades": 0,
+    "facts": [
+     "we_melee",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 1,
+    "points": 1,
+    "phases": []
+   }
+  },
+  "bomber": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "weak",
+   "attack": "bomber",
+   "role": "fodder",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Weak Bomber",
+    "name": "Weak Bomber",
+    "errors": [],
+    "warnings": [],
+    "weapon": "itself",
+    "attack": "bomber",
+    "role": "fodder",
+    "grenades": 0,
+    "facts": [
+     "we_bomber",
+     "we_fodder"
+    ],
+    "tier": "swarm",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      0.5
+     ]
+    ],
+    "melees": 1,
+    "points": 0.45,
+    "phases": []
+   }
+  },
+  "grenadier": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "regular",
+   "attack": "grenadier",
+   "role": "line",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Grenadier",
+    "name": "Grenadier",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rifle",
+    "attack": "grenadier",
+    "role": "line",
+    "grenades": 6,
+    "facts": [
+     "we_grenadier"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 1,
+    "points": 1.5,
+    "phases": []
+   }
+  },
+  "sergeant": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "tough",
+   "attack": "shooter",
+   "role": "leader",
+   "mods": [
+    "armoured"
+   ],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Tough Rifleman Leader",
+    "name": "Sergeant",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rifle",
+    "attack": "shooter",
+    "role": "leader",
+    "grenades": 2,
+    "facts": [
+     "we_leader"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "armor",
+      1
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 2,
+    "points": 4.8,
+    "phases": []
+   }
+  },
   "gnat": {
    "body": "flyer",
    "size": "small",
@@ -508,6 +745,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "itself",
+    "attack": "bomber",
+    "role": "fodder",
+    "grenades": 0,
     "facts": [
      "we_flyer",
      "we_bomber",
@@ -558,7 +798,7 @@
      }
     }
    ],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Heavy Gunner",
@@ -566,6 +806,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "lmg",
+    "attack": "shooter",
+    "role": "attacker",
+    "grenades": 2,
     "facts": [
      "we_attacker"
     ],
@@ -611,6 +854,8 @@
       },
       "tag": "Heavy Melee",
       "weapon": "melee",
+      "attack": "melee",
+      "role": "attacker",
       "facts": [
        "we_melee",
        "we_attacker"
@@ -654,6 +899,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "lmg",
+    "attack": "gunner",
+    "role": "attacker",
+    "grenades": 2,
     "facts": [
      "we_mech",
      "we_gunner",
@@ -713,6 +961,9 @@
     "errors": [],
     "warnings": [],
     "weapon": "melee",
+    "attack": "melee",
+    "role": "attacker",
+    "grenades": 0,
     "facts": [
      "we_mech",
      "we_melee",

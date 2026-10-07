@@ -87,7 +87,7 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	amounts["dist"] = dist
 	amounts["hp"] = clampf(so.pawn.health.total_current() / maxf(so.max_health, 1.0), 0.0, 1.0) * 100.0
 	var g := so.pawn.gun
-	amounts["mag"] = 0.0 if g == null or g.is_reloading() \
+	amounts["mag"] = 0.0 if g == null or so.no_gun or g.is_reloading() \
 			else float(g.ammo) / float(maxi(g.mag_size(), 1)) * 100.0
 	var near := 0
 	var others := 0
@@ -101,6 +101,8 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 		add.call("we_alone")
 	if others > 0:
 		add.call("friends_near")
+	if so.squad != null and so.squad.leader_lost:
+		add.call("leader_dead")
 	amounts["squad"] = 100.0
 	if so.squad != null and so.squad.members.size() > 0:
 		amounts["squad"] = 100.0 * so.squad.alive().size() / so.squad.members.size()

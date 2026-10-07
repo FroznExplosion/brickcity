@@ -20,7 +20,7 @@ const DOABLE := {
 	"trade": -1, "suppress": -1,
 	"hold": T.TAKE_COVER, "relocate": T.TAKE_COVER,
 	"reload": T.COVER_RELOAD,
-	"rush": T.RUSH, "advance": T.PUSH, "melee": T.MELEE,
+	"rush": T.RUSH, "advance": T.PUSH, "melee": T.MELEE, "detonate": T.DETONATE,
 	# Thrown (Soldier.throw_grenade), then fire from cover.
 	"grenade": -1,
 	"flank": T.FLANK,
