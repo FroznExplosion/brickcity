@@ -1,7 +1,8 @@
 // Turns the Tactics Casebook (Docs/Tactics/tactics_casebook.html, the page the
 // enemy's choices are authored on) plus the settings saved from it
 // (Docs/Tactics/settings/<collection>/<id>.json) into the book the game reads:
-// data/ai/tactics_book.json.
+// data/ai/tactics_book.json -- and the roster of types (the page's Roster tab,
+// Docs/AIRoster.md) into data/ai/roster.json.
 //
 //     node tools/tactics_export.js
 //
@@ -17,6 +18,7 @@ const root = path.join(__dirname, "..");
 const pagePath = path.join(root, "Docs", "Tactics", "tactics_casebook.html");
 const settingsDir = path.join(root, "Docs", "Tactics", "settings");
 const outPath = path.join(root, "data", "ai", "tactics_book.json");
+const rosterPath = path.join(root, "data", "ai", "roster.json");
 
 const html = fs.readFileSync(pagePath, "utf8");
 const marker = "   STORAGE";
@@ -25,7 +27,7 @@ const modelSrc = html.split("<script>")[1].split(marker)[0].replace(/\/\* =+\s*$
 
 // Settings saved from the page, by collection.
 const settings = {};
-for (const coll of ["sit", "factor", "action", "memory", "rules", "actx", "sitx", "combo", "scale"]) {
+for (const coll of ["sit", "factor", "action", "memory", "rules", "actx", "sitx", "combo", "scale", "recipe"]) {
   settings[coll] = {};
   const dir = path.join(settingsDir, coll);
   if (!fs.existsSync(dir)) continue;
@@ -37,7 +39,8 @@ const M = new Function("SETTINGS", modelSrc + `
 Object.assign(S, SETTINGS);
 return {S, MULT, ALWAYS, ALWAYS_SHARE, SLOTS, SCALES, SITS, FACTORS, RULES, MEMDEF,
   allSits, allActs, sitActs, baseW, isNever, implied, sitScale, modStep, curves, teamMax, teamPairs, needs,
-  memStep, comboOf, maxExtra, compute, extrasFor};`)(settings);
+  memStep, comboOf, maxExtra, compute, extrasFor,
+  allRecipes, rDerive, R_BODIES, R_SIZES, R_CLASSES, R_GRADES, R_LAYERS, R_MECH, R_MECH_GRADE, R_MECH_FIXED, R_ATTACKS, R_ROLES, R_MODS, R_TRIGGERS};`)(settings);
 
 const book = {version: 1, source: "Docs/Tactics/tactics_casebook.html", mult: M.MULT, always: M.ALWAYS,
   always_share: M.ALWAYS_SHARE, max_extra: M.maxExtra(), slots: M.SLOTS.map(s => s[0]),
@@ -91,7 +94,23 @@ for (let i = 0; i < 60; i++) {
   book.golden.push({moment, facts, amounts, mem, mates, expect, main: top ? top.a : "", extras});
 }
 
+// The roster: each recipe with everything worked out from it, by the page's own code -- so
+// the game derives nothing itself (Roster, scripts/ai/roster/roster.gd).
+const roster = {version: 1, source: "Docs/Tactics/tactics_casebook.html",
+  parts: {bodies: Object.keys(M.R_BODIES), sizes: M.R_SIZES, classes: M.R_CLASSES, grades: M.R_GRADES,
+    attacks: Object.keys(M.R_ATTACKS), roles: Object.keys(M.R_ROLES), mods: Object.keys(M.R_MODS), triggers: Object.keys(M.R_TRIGGERS)},
+  recipes: {}};
+let unfit = 0;
+for (const [id, r] of Object.entries(M.allRecipes())) {
+  const d = M.rDerive(r);
+  if (d.errors.length) unfit++;
+  roster.recipes[id] = {body: r.body, size: r.size, class: r.cls, grade: r.grade, attack: r.attack, role: r.role,
+    mods: r.mods || [], phases: r.phases || [], built: !!r.built, unit: r.unit || "", derived: d};
+}
+
 fs.mkdirSync(path.dirname(outPath), {recursive: true});
+fs.writeFileSync(rosterPath, JSON.stringify(roster, null, 1) + "\n");
+console.log(`wrote ${path.relative(root, rosterPath)}: ${Object.keys(roster.recipes).length} recipes` + (unfit ? `, ${unfit} that cannot be fielded` : ""));
 fs.writeFileSync(outPath, JSON.stringify(book, null, 1) + "\n");
 console.log(`wrote ${path.relative(root, outPath)}: ${Object.keys(book.moves).length} moves, ${Object.keys(book.facts).length} facts, ` +
   `${Object.keys(book.amounts).length} amounts, ${Object.keys(book.moments).length} moments, ${book.golden.length} golden cases`);

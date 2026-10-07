@@ -457,8 +457,157 @@ function kv(s){ const o = {}; (s||"").split(",").filter(Boolean).forEach(p => { 
 const ACT = Object.fromEntries(ACTIONS.map(a => [a.id, a]));
 const FAC = Object.fromEntries(FACTORS.map(f => [f.id, f]));
 
+/* ---------------- Roster: every type is a recipe of parts (Docs/AIRoster.md) ---------------- */
+const R_BODIES = {walker:{l:"Walker", fact:"", word:""}, flyer:{l:"Flyer", fact:"we_flyer", word:"Flyer"}, mech:{l:"Mech", fact:"we_mech", word:""},
+  wheeled:{l:"Wheeled vehicle", fact:"we_vehicle", word:"Truck"}, tracked:{l:"Tracked vehicle", fact:"we_vehicle", word:"Tank"},
+  hover:{l:"Hover craft", fact:"we_flyer", word:"Hover craft"}, boat:{l:"Boat", fact:"we_vehicle", word:"Boat"}};
+// Size decides where it fits and what it weighs on a floor -- not how hard it is to kill.
+const R_SIZES = {
+  small:{l:"Small", tall:0.6, wide:0.4, fits:"anywhere a person does, and gaps", floors:"no weight to speak of", eg:"a dog, a drone"},
+  person:{l:"Person", tall:1.68, wide:0.52, fits:"doors, stairs, rooms", floors:"any floor", eg:"a soldier"},
+  large:{l:"Large", tall:2.6, wide:1.0, fits:"wide doors and damaged walls", floors:"checked against the floor's headroom", eg:"a brute"},
+  huge:{l:"Huge", tall:6.7, wide:3.5, fits:"damaged buildings, or breaks in", floors:"breaks weak floors", eg:"a mech, a tank"}};
+const R_CLASSES = ["light","medium","heavy","strong"], R_GRADES = ["weak","regular","tough"];
+// Melees to break each layer (the fight's unit: one melee = a light enemy's whole flesh, 64 at level 1).
+// "def" is the one defence a light or medium type wears: armour, or a shield with the Shielded mod.
+const R_LAYERS = {
+  light:{weak:{def:0,flesh:0.5}, regular:{def:0,flesh:1}, tough:{def:1,flesh:1}},
+  medium:{weak:{def:2,flesh:1}, regular:{def:3,flesh:1}, tough:{def:4,flesh:1}},
+  heavy:{weak:{shield:1,armor:2,flesh:2}, regular:{shield:2,armor:3,flesh:2}, tough:{shield:3,armor:4,flesh:2}},
+  strong:{weak:{shield:3,armor:5,flesh:3}, regular:{shield:4,armor:6,flesh:3}, tough:{shield:6,armor:8,flesh:4}}};
+// Mechs: pools in health points (today's one-pool mech is 2500), the two doors, and the hatch's side.
+const R_MECH = {
+  light:{shield:1400, armor:800, health:800, hatch:200, cell_door:150, hatch_side:"back"},
+  medium:{shield:1000, armor:1500, health:1250, hatch:350, cell_door:250, hatch_side:"front"},
+  heavy:{shield:600, armor:2400, health:1500, hatch:500, cell_door:350, hatch_side:"front"}};
+const R_MECH_GRADE = {weak:0.75, regular:1, tough:1.3};
+const R_MECH_FIXED = {doomed:250, power_cell:300, cell_crit:3};
+const R_ATTACKS = {
+  shooter:{l:"Shooter", fact:"", points:1, weapons:["rifle","smg","shotgun","pistol","lmg","dmr"], words:{rifle:"Rifleman", smg:"Assault", shotgun:"Breacher", pistol:"Trooper", lmg:"Gunner", dmr:"Rifleman"}},
+  marksman:{l:"Marksman", fact:"we_marksman", points:4, weapons:["sniper","dmr"], word:"Marksman"},
+  melee:{l:"Melee", fact:"we_melee", points:1, weapons:["melee"], word:"Melee"},
+  bomber:{l:"Bomber", fact:"we_bomber", points:0.75, weapons:["itself"], word:"Bomber"},
+  grenadier:{l:"Grenadier", fact:"we_grenadier", points:1.5, weapons:["grenade_launcher","grenade"], word:"Grenadier"},
+  anti_armour:{l:"Anti-armour", fact:"we_anti_armour", points:10/3, weapons:["rocket_launcher"], word:"Rocketeer"},
+  gunner:{l:"Gunner", fact:"we_gunner", points:1.5, weapons:["lmg"], word:"Gunner"}};
+const R_ROLES = {
+  line:{l:"Line", fact:"", points:1, tier:"smart", d:"The ordinary soldier: no lean."},
+  attacker:{l:"Attacker", fact:"we_attacker", points:1, tier:"smart", d:"Rush, flank, push; goes first."},
+  defender:{l:"Defender", fact:"we_defender", points:1, tier:"smart", d:"Holds a post and does not chase past its leash."},
+  leader:{l:"Leader", fact:"we_leader", points:3.2, tier:"smart", d:"Gives the orders; when it dies the squad's morale breaks."},
+  fodder:{l:"Cannon fodder", fact:"we_fodder", points:0.6, tier:"directed", d:"Rush and melee, no cover; the cheap brain; dies in numbers."},
+  flanker:{l:"Flanker / hunter", fact:"we_flanker", points:1.2, tier:"smart", d:"Works alone, goes round, goes for the pilot."},
+  scout:{l:"Scout", fact:"we_scout", points:1, tier:"smart", d:"Finds and marks; does not fight."}};
+const R_MODS = {
+  shielded:{l:"Shielded", word:"", points:1, d:"A light or medium type's defence is a shield, not armour."},
+  armoured:{l:"Armoured", word:"", points:1, d:"A light or medium type's defence is armour (the default)."},
+  explodes:{l:"Explodes on death", word:"Volatile", points:1.1, d:""},
+  jetpack:{l:"Jetpack", word:"Jumper", points:1.2, d:""},
+  cloaked:{l:"Cloaked", word:"Stalker", points:1.3, d:""},
+  rodeo:{l:"Rodeo", word:"Boarder", points:1.5, d:"May climb a player's mech."},
+  nuker:{l:"Nuke eject", word:"Nuker", points:1.3, d:"A mech that, once doomed, ejects and goes off like a nuke -- unless it is finished first or its power cell is destroyed."},
+  boss:{l:"Boss", word:"Boss", points:2, d:"May have more than two phases."}};
+const R_TRIGGERS = {armour_gone:"its armour is gone", shield_gone:"its shield is gone", health_half:"its health is under half", leader_dead:"its leader is dead",
+  alone:"it is alone", post_lost:"its post is lost", hatch_off:"its hatch is off", doomed:"it is doomed"};
+// The types. `unit` ties one to today's UnitCatalog entry; `built` says the game fields it now.
+const RECIPES = {
+  rifleman:{name:"Rifleman", body:"walker", size:"person", cls:"light", grade:"regular", attack:"shooter", weapon:"rifle", role:"line", mods:[], phases:[], built:true, unit:"rifleman"},
+  assault:{name:"Assault", body:"walker", size:"person", cls:"light", grade:"regular", attack:"shooter", weapon:"smg", role:"attacker", mods:[], phases:[], built:true, unit:"assault"},
+  breacher:{name:"Breacher", body:"walker", size:"person", cls:"light", grade:"tough", attack:"shooter", weapon:"shotgun", role:"attacker", mods:["armoured"], phases:[], built:true, unit:"breacher"},
+  marksman:{name:"Marksman", body:"walker", size:"person", cls:"light", grade:"weak", attack:"marksman", weapon:"sniper", role:"line", mods:[], phases:[], built:true, unit:"marksman"},
+  veteran:{name:"Veteran", body:"walker", size:"person", cls:"medium", grade:"regular", attack:"shooter", weapon:"rifle", role:"line", mods:["armoured"], phases:[], built:true, unit:"veteran"},
+  rocketeer:{name:"Rocketeer", body:"walker", size:"person", cls:"light", grade:"tough", attack:"anti_armour", weapon:"rocket_launcher", role:"line", mods:["shielded"], phases:[], built:false, unit:"rocketeer"},
+  officer:{name:"Officer", body:"walker", size:"person", cls:"medium", grade:"regular", attack:"shooter", weapon:"pistol", role:"leader", mods:["shielded"], phases:[], built:false, unit:"officer"},
+  gnat:{name:"", body:"flyer", size:"small", cls:"light", grade:"weak", attack:"bomber", role:"fodder", mods:[], phases:[], built:false},
+  brute:{name:"Brute", body:"walker", size:"large", cls:"heavy", grade:"regular", attack:"shooter", weapon:"lmg", role:"attacker", mods:[], phases:[{when:"armour_gone", become:{attack:"melee"}}], built:false},
+  heavy_gunner_nuker:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:["nuker"], phases:[], built:false},
+  light_melee_nuker:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:["nuker"], phases:[], built:false},
+};
+const cap = w => w ? w[0].toUpperCase() + w.slice(1) : "";
+function rAttackWord(r){ const a = R_ATTACKS[r.attack] || {}; return a.words ? (a.words[r.weapon || a.weapons[0]] || a.l) : (a.word || a.l || ""); }
+// What shows over its head: the parts that change how you fight it.
+function rTag(r){
+  const mods = (r.mods || []).map(m => (R_MODS[m] || {}).word).filter(Boolean);
+  if(r.body === "mech") return [cap(r.cls), rAttackWord(r)].concat(mods).join(" ");
+  const parts = [];
+  if(r.grade !== "regular") parts.push(cap(r.grade));
+  if(r.cls !== "light") parts.push(cap(r.cls));
+  parts.push(rAttackWord(r));
+  parts.push(...mods);
+  if(R_BODIES[r.body] && R_BODIES[r.body].word) parts.push(R_BODIES[r.body].word);
+  if(r.role === "leader") parts.push("Leader");
+  return parts.join(" ");
+}
+// Why a recipe cannot be fielded (error) or is unusual (warning): [[level, text], ...].
+function rCheck(r){
+  const out = [], mods = r.mods || [], err = t => out.push(["error", t]), warn = t => out.push(["warning", t]);
+  for(const [k, table, name] of [["body", R_BODIES, "body"], ["size", R_SIZES, "size"], ["attack", R_ATTACKS, "attack"], ["role", R_ROLES, "role"]]) if(!table[r[k]]) err(`Unknown ${name}: ${r[k]}.`);
+  if(!R_CLASSES.includes(r.cls)) err(`Unknown class: ${r.cls}.`);
+  if(!R_GRADES.includes(r.grade)) err(`Unknown grade: ${r.grade}.`);
+  mods.forEach(m => { if(!R_MODS[m]) err(`Unknown mod: ${m}.`); });
+  if(out.length) return out;
+  if(r.body === "mech"){
+    if(r.cls === "strong") err("Mechs come in three classes: light, medium, heavy.");
+    if(r.size !== "large" && r.size !== "huge") err("A mech is large or huge.");
+    if(r.role === "fodder") err("A mech is never cannon fodder.");
+  } else if(mods.includes("nuker")) err("Nuke eject is a mech's mod.");
+  if(mods.includes("shielded") && mods.includes("armoured")) err("Shielded and Armoured both name the one defence: pick one.");
+  if(mods.includes("rodeo") && (r.body !== "walker" || (r.size !== "person" && r.size !== "small"))) err("Rodeo needs a person-sized walker: it has to climb.");
+  if(mods.includes("rodeo") && r.attack === "bomber") err("A bomber does not climb on: it goes off.");
+  if(r.attack === "marksman" && r.role === "fodder") err("A marksman is not cannon fodder: it has to live to shoot.");
+  if(r.attack === "bomber" && r.role === "leader") err("A bomber cannot lead: it goes off.");
+  if(r.attack === "bomber" && r.role === "defender") err("A bomber does not hold a post: it goes to the enemy.");
+  const a = R_ATTACKS[r.attack];
+  if(r.weapon && !a.weapons.includes(r.weapon)) err(`${a.l} does not carry a ${r.weapon}: ${a.weapons.join(", ")}.`);
+  if((r.phases || []).length > 2 && !mods.includes("boss")) err("Two phases at most, unless it is a boss.");
+  (r.phases || []).forEach((ph, i) => { if(!R_TRIGGERS[ph.when]) err(`Phase ${i + 1}: unknown trigger ${ph.when}.`); });
+  if(r.body === "flyer" && r.size === "huge") warn("A huge flyer: is this a hover craft or a helicopter (a different body)?");
+  if(r.role === "fodder" && (r.cls === "heavy" || r.cls === "strong")) warn("Cannon fodder is usually light and weak; this one is expensive to throw away.");
+  if(r.role === "leader" && r.grade === "weak") warn("A weak leader breaks its squad's morale the moment it is hit.");
+  if(r.size === "small" && (r.cls === "heavy" || r.cls === "strong")) warn("Small and very hard to kill: make sure the player can read that (the name tag will say).");
+  return out;
+}
+// Everything worked out from a recipe. `nested` stops a phase deriving its own phases.
+function rDerive(r, nested){
+  const checks = rCheck(r);
+  const d = {tag: "", name: "", errors: checks.filter(c => c[0] === "error").map(c => c[1]), warnings: checks.filter(c => c[0] === "warning").map(c => c[1])};
+  if(d.errors.length) return d;
+  const mods = r.mods || [], attack = R_ATTACKS[r.attack], role = R_ROLES[r.role];
+  d.tag = rTag(r); d.name = r.name || d.tag;
+  d.weapon = r.weapon || attack.weapons[0];
+  d.facts = [R_BODIES[r.body].fact, attack.fact, role.fact].filter(Boolean);
+  d.tier = role.tier === "directed" && r.grade === "weak" ? "swarm" : role.tier;
+  d.size = Object.assign({id: r.size}, R_SIZES[r.size]);
+  const modPts = mods.reduce((x, m) => x * R_MODS[m].points, 1);
+  if(r.body === "mech"){
+    const m = R_MECH[r.cls], g = R_MECH_GRADE[r.grade], round10 = x => Math.round(x * g / 10) * 10;
+    d.mech = {shield: round10(m.shield), armor: round10(m.armor), health: round10(m.health), hatch: round10(m.hatch), cell_door: round10(m.cell_door),
+      hatch_side: m.hatch_side, doomed: R_MECH_FIXED.doomed, power_cell: R_MECH_FIXED.power_cell, cell_crit: R_MECH_FIXED.cell_crit};
+    d.layers = []; d.melees = 0;
+    d.points = r.points != null ? r.points : Math.round((d.mech.shield + d.mech.armor + d.mech.health) / 150 * modPts * 10) / 10;
+  } else {
+    const L = R_LAYERS[r.cls][r.grade];
+    d.layers = [];
+    if(L.def) d.layers.push([mods.includes("shielded") ? "shield" : "armor", L.def]);
+    if(L.shield) d.layers.push(["shield", L.shield]);
+    if(L.armor) d.layers.push(["armor", L.armor]);
+    d.layers.push(["health", L.flesh]);
+    d.melees = d.layers.reduce((x, l) => x + Math.ceil(l[1]), 0);
+    d.points = r.points != null ? r.points : Math.round((0.5 + 0.5 * d.melees) * attack.points * role.points * modPts * 100) / 100;
+  }
+  if(!nested) d.phases = (r.phases || []).map(ph => {
+    const next = Object.assign({}, r, ph.become || {}, {phases: [], name: ""});
+    if((ph.become || {}).attack && !(ph.become || {}).weapon) delete next.weapon;   // a new attack brings its own weapon
+    const nd = rDerive(next, true);
+    return {when: ph.when, become: ph.become || {}, tag: nd.tag, weapon: nd.weapon, facts: nd.facts, tier: nd.tier, layers: nd.layers, errors: nd.errors};
+  });
+  return d;
+}
+
 /* ---------------- user state (from storage) and effective values ---------------- */
-const S = {sit:{}, factor:{}, action:{}, memory:{}, rules:{}, actx:{}, sitx:{}, combo:{}, scale:{}, tally:{}, old:{}};
+const S = {sit:{}, factor:{}, action:{}, memory:{}, rules:{}, actx:{}, sitx:{}, combo:{}, scale:{}, tally:{}, recipe:{}, old:{}};
+// Recipes in force: the page's, with yours over them (and yours that are new).
+function allRecipes(){ const o = {}; for(const [id, r] of Object.entries(RECIPES)) o[id] = Object.assign({}, r, S.recipe[id] || {}); for(const [id, r] of Object.entries(S.recipe)) if(!o[id]) o[id] = Object.assign({mods: [], phases: [], built: false, mine: true}, r); return o; }
 
 function allSits(){ return SITS.concat(Object.values(S.sitx).map(x => Object.assign({}, x, {w: x.w || {}, mine:true}))); }
 function sitDef(id){ return allSits().find(s => s.id === id); }
@@ -650,8 +799,8 @@ function touch(coll, id, fn){
 /* ======================================================================
    VIEW
    ====================================================================== */
-const TABS = [["moments","Moments"],["factors","What changes it"],["scales","Amounts"],["team","Teamwork & memory"],["combos","Combos"],["try","Try a moment"],["game","In the game"],["checks","Your first casebook"],["rules","Rules"]];
-const V = {gameSit:"", tab:"moments", sit:SITS[0].id, fac:FACTORS[0].id, scale:"dist", facFilter:"all", try:{sit:SITS[0].id, ticked:new Set(), sc:{}, n:4, last:"", outcome:""}, roll:null};
+const TABS = [["moments","Moments"],["factors","What changes it"],["scales","Amounts"],["team","Teamwork & memory"],["combos","Combos"],["try","Try a moment"],["game","In the game"],["roster","Roster"],["checks","Your first casebook"],["rules","Rules"]];
+const V = {recipe:"rifleman", gameSit:"", tab:"moments", sit:SITS[0].id, fac:FACTORS[0].id, scale:"dist", facFilter:"all", try:{sit:SITS[0].id, ticked:new Set(), sc:{}, n:4, last:"", outcome:""}, roll:null};
 
 function renderTabs(){
   $("#tabs").innerHTML = TABS.map(([id, l]) => `<button class="tab" role="tab" aria-selected="${id===V.tab}" data-t="${id}">${esc(l)}</button>`).join("");
@@ -1027,6 +1176,76 @@ function renderGame(el){
   };
 }
 
+/* ---------------- Roster ---------------- */
+const LAYER_WORD = {shield:"shield", armor:"armour", health:"flesh"};
+function renderRoster(el){
+  const all = allRecipes();
+  if(!all[V.recipe]) V.recipe = Object.keys(all)[0];
+  const id = V.recipe, r = all[id], d = rDerive(r);
+  const opt = (table, cur, lab) => Object.keys(table).map(k => `<option value="${k}" ${k===cur?"selected":""}>${esc(lab ? lab(k) : (table[k].l || cap(k)))}</option>`).join("");
+  const sel = (key, table, cur, lab) => `<select data-part="${key}" aria-label="${key}">${opt(table, cur, lab)}</select>`;
+  const arr = xs => Object.fromEntries(xs.map(x => [x, {l: cap(x)}]));
+  const a = R_ATTACKS[r.attack] || R_ATTACKS.shooter;
+  const phase = (ph, i) => `<div class="kv" data-ph="${i}" style="margin-top:6px"><span>When</span><select data-phk="when">${opt(Object.fromEntries(Object.entries(R_TRIGGERS).map(([k, v]) => [k, {l: v}])), ph.when)}</select>
+      <span>it becomes</span><select data-phk="attack"><option value="">the same attack</option>${opt(R_ATTACKS, (ph.become||{}).attack)}</select>
+      <select data-phk="role"><option value="">the same role</option>${opt(R_ROLES, (ph.become||{}).role)}</select>
+      <select data-phk="body"><option value="">the same body</option>${opt(R_BODIES, (ph.become||{}).body)}</select>
+      <button class="act" data-phrm="${i}" style="font-size:.74rem;padding:1px 7px" aria-label="Remove phase">×</button>
+      ${d.phases && d.phases[i] && d.phases[i].tag ? `<span class="chip">then reads: ${esc(d.phases[i].tag)}</span>` : ""}</div>`;
+  el.innerHTML = `<div class="grid"><div class="list">
+      ${Object.entries(all).map(([k, x]) => { const dx = rDerive(x); return `<button class="case-btn" aria-current="${k===id}" data-id="${esc(k)}"><span class="dot ${dx.errors.length ? "" : x.built ? "set" : "draft"}" title="${x.built ? "in the game" : "planned"}"></span><span class="t">${esc(dx.name || k)}</span><span class="u">${esc(dx.errors.length ? "cannot be fielded" : dx.tag)}${x.built ? "" : " · planned"}</span></button>`; }).join("")}
+      <button class="case-btn" data-id="__new"><span class="dot"></span><span class="t">+ A new type</span></button>
+    </div>
+    <main class="sheet">
+      <div class="eyebrow">A type is a recipe of parts · ${r.built ? "in the game" : "planned"}${r.unit ? " · unit: " + esc(r.unit) : ""}</div>
+      <h2>${esc(d.name || id)}</h2>
+      ${d.tag ? `<p class="situation">Over its head: <b>${esc(d.tag)}</b></p>` : ""}
+      ${d.errors.map(t => `<p class="flag">Cannot be fielded: ${esc(t)}</p>`).join("")}${d.warnings.map(t => `<p class="note">Unusual: ${esc(t)}</p>`).join("")}
+      <h4>The parts</h4>
+      <div class="cross">
+        <div><h5>Body · how it moves</h5>${sel("body", R_BODIES, r.body)}</div>
+        <div><h5>Size · where it fits</h5>${sel("size", R_SIZES, r.size)}<div class="note" style="margin-top:4px">${esc((R_SIZES[r.size]||{}).fits||"")}</div></div>
+        <div><h5>Class · how hard to kill</h5>${sel("cls", arr(R_CLASSES), r.cls)}</div>
+        <div><h5>Grade</h5>${sel("grade", arr(R_GRADES), r.grade)}</div>
+        <div><h5>Attack</h5>${sel("attack", R_ATTACKS, r.attack)}</div>
+        <div><h5>Weapon</h5><select data-part="weapon"><option value="">the usual (${esc(a.weapons[0])})</option>${a.weapons.map(w => `<option value="${w}" ${w===r.weapon?"selected":""}>${esc(w.replace(/_/g, " "))}</option>`).join("")}</select></div>
+        <div><h5>Role</h5>${sel("role", R_ROLES, r.role)}<div class="note" style="margin-top:4px">${esc((R_ROLES[r.role]||{}).d||"")}</div></div>
+        <div><h5>Name (optional)</h5><input type="text" data-part="name" value="${esc(r.name||"")}" placeholder="${esc(d.tag||"")}"></div>
+      </div>
+      <h4>Mods</h4>
+      <div class="ckgrid">${Object.entries(R_MODS).map(([k, m]) => `<label title="${esc(m.d)}"><input type="checkbox" data-mod="${k}" ${(r.mods||[]).includes(k)?"checked":""}> ${esc(m.l)}</label>`).join("")}</div>
+      <h4>Phases</h4>
+      <p class="note">When something happens, parts change: a shooter that loses its armour turns to melee. Two at most, more for a boss.</p>
+      ${(r.phases||[]).map(phase).join("")}
+      <div class="row" style="margin-top:8px"><button class="act" id="r-addph">Add a phase</button></div>
+      ${d.errors.length ? "" : `<h4>What the game works out</h4>
+      <div class="cross">
+        ${d.mech ? `<div><h5>Killed in layers</h5>${[["shield","Shield"],["armor","Armour"],["health","Health"],["hatch","Hatch armour"],["cell_door","Cell-door armour"],["doomed","Doomed health"],["power_cell","Power cell"]].map(([k, l]) => `<div class="ln"><span>${l}</span><span>${d.mech[k]}</span></div>`).join("")}<div class="ln"><span>Hatch</span><span>at the ${d.mech.hatch_side}</span></div></div>`
+          : `<div><h5>Melees to break each layer</h5>${d.layers.map(l => `<div class="ln"><span>${cap(LAYER_WORD[l[0]])}</span><span>${l[1]}</span></div>`).join("")}<div class="ln"><span><b>Melees to kill</b></span><span><b>${d.melees}</b></span></div><div class="note">${Math.round(d.layers.reduce((x, l) => x + l[1] * 64 * (l[0]==="shield"?1.5:1), 0))} health at level 1</div></div>`}
+        <div><h5>Carries</h5><div class="ln"><span>${esc(String(d.weapon).replace(/_/g, " "))}</span><span></span></div><h5 style="margin-top:8px">Brain</h5><div class="ln"><span>${esc(d.tier)}</span><span></span></div></div>
+        <div><h5>Size</h5><div class="ln"><span>${esc(d.size.l)}</span><span>${d.size.tall} m tall</span></div><div class="note">${esc(d.size.fits)}; ${esc(d.size.floors)}</div></div>
+        <div><h5>Costs the commander</h5><div class="ln"><span>points</span><span>${d.points}</span></div><h5 style="margin-top:8px">Casebook facts</h5><div class="chips">${d.facts.length ? d.facts.map(f => `<span class="chip" title="${FAC[f] ? "in the casebook" : "to add to the casebook (roster step 3)"}">${esc(FAC[f] ? FAC[f].l : f + " · to add")}</span>`).join("") : `<span class="note">none: the default curves</span>`}</div></div>
+      </div>`}
+      <div class="row" style="margin-top:14px">${RECIPES[id] && S.recipe[id] ? `<button class="act" id="r-reset">Reset to suggested</button>` : ""}${!RECIPES[id] ? `<button class="act" id="r-del">Remove this type</button>` : ""}</div>
+    </main></div>`;
+  const save = fn => { const cur = JSON.parse(JSON.stringify(all[id])); delete cur.mine; fn(cur); S.recipe[id] = cur; queueWrite("recipe/" + id, cur); const y = scrollY; renderRoster(el); scrollTo(0, y); };
+  el.querySelectorAll(".case-btn").forEach(b => b.onclick = () => {
+    if(b.dataset.id === "__new"){ const nid = "type_" + Date.now().toString(36); S.recipe[nid] = {name:"", body:"walker", size:"person", cls:"light", grade:"regular", attack:"shooter", role:"line", mods:[], phases:[], built:false}; queueWrite("recipe/" + nid, S.recipe[nid]); V.recipe = nid; }
+    else V.recipe = b.dataset.id;
+    renderRoster(el); });
+  el.querySelectorAll("select[data-part]").forEach(x => x.onchange = () => save(c => { c[x.dataset.part] = x.value; if(x.dataset.part === "attack") c.weapon = ""; if(!c.weapon) delete c.weapon; }));
+  el.querySelectorAll("input[data-part]").forEach(x => x.onchange = () => save(c => { c.name = x.value.trim(); }));
+  el.querySelectorAll("input[data-mod]").forEach(x => x.onchange = () => save(c => { const m = new Set(c.mods || []); x.checked ? m.add(x.dataset.mod) : m.delete(x.dataset.mod); c.mods = [...m]; }));
+  $("#r-addph").onclick = () => save(c => { c.phases = (c.phases || []).concat([{when:"armour_gone", become:{}}]); });
+  el.querySelectorAll("[data-ph]").forEach(row => {
+    const i = +row.dataset.ph;
+    row.querySelectorAll("select[data-phk]").forEach(x => x.onchange = () => save(c => { const ph = c.phases[i]; if(x.dataset.phk === "when") ph.when = x.value; else { ph.become = ph.become || {}; if(x.value) ph.become[x.dataset.phk] = x.value; else delete ph.become[x.dataset.phk]; } }));
+    row.querySelector("[data-phrm]").onclick = () => save(c => { c.phases.splice(i, 1); });
+  });
+  const rs = $("#r-reset"); if(rs) rs.onclick = () => { delete S.recipe[id]; const pd = pending.get("recipe/" + id); if(pd){ clearTimeout(pd.timer); pending.delete("recipe/" + id); } if(db) db.doc("recipe/" + id).delete().catch(() => {}); renderRoster(el); };
+  const del = $("#r-del"); if(del) del.onclick = () => { delete S.recipe[id]; const pd = pending.get("recipe/" + id); if(pd){ clearTimeout(pd.timer); pending.delete("recipe/" + id); } if(db) db.doc("recipe/" + id).delete().catch(() => {}); V.recipe = "rifleman"; renderRoster(el); };
+}
+
 /* ---------------- Checks ---------------- */
 function renderChecks(el){
   const rs = CHECKS.map(c => ({c, r: checkResult(c)}));
@@ -1053,7 +1272,7 @@ function renderChecks(el){
 }
 
 /* ---------------- Rules ---------------- */
-function exportText(){ return JSON.stringify({moments:S.sit, factors:S.factor, actions:S.action, memory:S.memory, rules:S.rules, yourMoves:S.actx, yourMoments:S.sitx, combos:S.combo, amounts:S.scale}, null, 2); }
+function exportText(){ return JSON.stringify({moments:S.sit, factors:S.factor, actions:S.action, memory:S.memory, rules:S.rules, yourMoves:S.actx, yourMoments:S.sitx, combos:S.combo, amounts:S.scale, recipes:S.recipe}, null, 2); }
 function renderRules(el){
   el.innerHTML = `<main class="sheet"><div class="eyebrow">Across every moment</div><h2>General rules</h2>
     <p class="situation">Principles that should hold wherever the fight is. These are kept from the first casebook; the moments and factors are how the AI will meet them.</p>
@@ -1076,7 +1295,7 @@ function renderRules(el){
 function render(){
   renderTabs(); renderMeter();
   const el = $("#view");
-  ({game:renderGame, moments:renderMoments, factors:renderFactors, scales:renderScales, team:renderTeam, combos:renderCombos, try:renderTry, checks:renderChecks, rules:renderRules})[V.tab](el);
+  ({roster:renderRoster, game:renderGame, moments:renderMoments, factors:renderFactors, scales:renderScales, team:renderTeam, combos:renderCombos, try:renderTry, checks:renderChecks, rules:renderRules})[V.tab](el);
 }
 function renderSoft(){
   renderMeter();
@@ -1092,7 +1311,7 @@ render();
   db = await window.claude.use("db");
   if(!db){ setSave("Storage isn't available here. Changes last only while the page is open.", true); return; }
   setSave("Loading your settings…");
-  const colls = [["sit","sit"],["factor","factor"],["action","action"],["memory","memory"],["rules","rules"],["actx","actx"],["sitx","sitx"],["combo","combo"],["scale","scale"],["tally","tally"],["answers","old"]];
+  const colls = [["sit","sit"],["factor","factor"],["action","action"],["memory","memory"],["rules","rules"],["actx","actx"],["sitx","sitx"],["combo","combo"],["scale","scale"],["tally","tally"],["recipe","recipe"],["answers","old"]];
   let loaded = 0, timer = null;
   colls.forEach(([path, key]) => db.collection(path).onSnapshot(s => {
     s.docs.forEach(d => { if(!pending.has(path + "/" + d.id) && !writing.has(path + "/" + d.id)) S[key][d.id] = JSON.parse(JSON.stringify(d.data())); });
