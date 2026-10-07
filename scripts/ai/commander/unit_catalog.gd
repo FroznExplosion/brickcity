@@ -113,4 +113,11 @@ static func built() -> Array[StringName]:
 	for id in UNITS:
 		if bool(get_unit(id).built):
 			out.append(id)
+	# And the types that exist only as recipes (Roster).
+	var roster := Roster.shared()
+	if roster != null:
+		for rid in roster.ids():
+			var r := roster.recipe(rid)
+			if bool(r.built) and str(r.get("unit", "")) == "" and roster.fit(rid) and not out.has(StringName(rid)):
+				out.append(StringName(rid))
 	return out

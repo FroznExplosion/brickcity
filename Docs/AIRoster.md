@@ -1,6 +1,8 @@
 # AI roster — putting enemy and friendly types together (plan)
 
-**Status: 2026-10-06. A plan; steps RO1 and RO2 (§9) are built.** Types are described as recipes
+**Status: 2026-10-07. A plan; steps RO1 to RO4 (§9) are built.** The commander fields five new
+types from recipes -- a melee type, a bomber, a grenadier, a sergeant and the brute -- and a type
+can change in a fight (phases). Types are described as recipes
 on the Tactics Casebook page's Roster tab, exported to `data/ai/roster.json` and read by `Roster`
 (`scripts/ai/roster/roster.gd`). `UnitCatalog` reads a unit's name, weapon, points and health
 from its recipe; every soldier carries its type's name over its head and tells the casebook what
@@ -395,8 +397,8 @@ Each step ends in a gate, as AIPlan's phases do.
 |---|---|---|
 | RO1 | **Built.** Recipes as data, derived values, the validity check; today's infantry units written as recipes; the Roster tab on the casebook page | no change in behaviour: `roster_probe` shows the recipes give today's units their own health, weapon and points |
 | RO2 | **Built.** Units fielded from recipes (`UnitCatalog` reads the roster: change a recipe on the page, export, and the unit changes); the name over the head of every soldier, enemy or ally; the type's facts into the casebook; a navigation map per size | `roster_field_probe`: "Tough Breacher" over its head; through a door two studs wide a person has a way and a large body has none. **Not yet:** a large BODY (the pawn is still person-sized -- it comes with the first large type, RO3), and the brain-tier cap (with fodder, RO3) |
-| RO3 | Attack types and roles as casebook facts; a melee type, a bomber, a grenadier; a leader whose death breaks the squad; fodder on the cheap tier | "very light bomber fodder" fights |
-| RO4 | Phases | the brute loses its armour and charges |
+| RO3 | **Built.** Attack types and roles as casebook facts (bomber, grenadier, gunner, anti-armour; attacker, defender, leader, fodder, flanker, scout); the bomber's move, "go off" (95% in reach); five types the commander fields: **Brawler** (melee, no gun), **Weak Bomber** (fodder: runs in, lights a 0.7 s fuse, 80 damage within 4.5 m; shot dead first, it does not go off), **Grenadier** (six grenades), **Sergeant** (a leader: its death breaks its squad and its soldiers know), **Brute** (the first large body, 2.6 m, on the large map, spawned outside); fodder capped at the cheap tier, where a type with no gun still closes and hits or goes off | `roster_types_probe` (9 checks); the arena gate with all five in its waves. **Not yet:** the flying bomber (RO5); a defender's post and leash beyond its casebook lean; gunner and anti-armour as fielded types |
+| RO4 | **Built.** Phases: when its trigger comes (armour gone, shield gone, health under half, leader dead, alone) a type's attack, role, casebook facts, brain cap and the name over its head change, it shouts, turns orange, and decides again at once | the brute loses its armour, becomes "Heavy Melee", drops its gun and charges. **Not yet:** a phase that changes the body (RO5); the post, hatch and doomed triggers (with those systems); the armour visibly bursting off (a colour change stands in) |
 | RO5 | Mover, Senses and Arsenal lifted out of `Soldier`; flyers and creatures decide from the casebook | a flying bomber is the same recipe with a different body |
 | RO6 | The mech's layers (§4.2): shield, armour, health, the two doors, pilot and cell, doomed, auto mode; mech melee through shields; the finisher; the two damage scales (§4.6); self-destruct and nuke eject (§4.7) | a mech killed each of the ways §4.2 allows; a rifle that does nothing to it |
 | RO7 | The AI knows the layers (§4.3); aggro G1-G4, G6, G7, G9; the mech section of the casebook | the §5 loop up to step 3 |

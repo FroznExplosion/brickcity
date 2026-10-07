@@ -318,6 +318,11 @@ func _spawn_one() -> void:
 	var done := _wave_size - _left_to_spawn
 	var want_inside := not _floors.is_empty() \
 			and float(_put_inside) < commander.doctrine.inside_share * float(done + 1) - 0.01
+	# A body bigger than a person does not start on a floor it could not leave.
+	if want_inside and not _queue.is_empty() and Roster.shared() != null:
+		var next := UnitCatalog.get_unit(_queue[0])
+		if str(Roster.shared().recipe(str(next.get("recipe", ""))).get("size", "person")) != "person":
+			want_inside = false
 	var others: Array = []
 	for so in alive:
 		others.append(so.pawn)
@@ -378,7 +383,7 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	so.set_type(str(unit.get("recipe", "")), Roster.shared())
 	# In its hands where it can be seen: its muzzle flash and its tracers are
 	# how the player tells who is shooting and from where.
-	gun.visible = true
+	gun.visible = not so.no_gun
 	gun.position = Vector3(0.2, -0.28, -0.3)
 	so.pawn.gun.fired.connect(_on_soldier_fired.bind(so))
 	var p := _player()

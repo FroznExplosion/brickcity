@@ -266,6 +266,21 @@
     "then": {}
    }
   },
+  "detonate": {
+   "label": "Go off",
+   "group": "move",
+   "built": true,
+   "max": 0,
+   "pairs": [],
+   "needs": [
+    "we_bomber"
+   ],
+   "combos": {
+    "first": {},
+    "with": {},
+    "then": {}
+   }
+  },
   "grenade": {
    "label": "Grenade",
    "group": "tool",
@@ -917,6 +932,7 @@
    "group": "player",
    "mods": {
     "melee": 6,
+    "detonate": 6,
     "grenade": 1,
     "recon": 0,
     "call_air": 0,
@@ -1022,6 +1038,22 @@
     "sweep": 1,
     "call_help": 4,
     "hide": 4
+   }
+  },
+  "leader_dead": {
+   "label": "Our leader is dead",
+   "group": "us",
+   "mods": {
+    "hold": 2,
+    "advance": 2,
+    "flank": 2,
+    "rush": 1,
+    "fall_back": 4,
+    "regroup": 4,
+    "flee": 4,
+    "sweep": 1,
+    "hide": 4,
+    "surrender": 4
    }
   },
   "we_explosives": {
@@ -1153,6 +1185,167 @@
     "hide": 2,
     "surrender": 0,
     "play_dead": 0
+   }
+  },
+  "we_bomber": {
+   "label": "We're a bomber",
+   "group": "kind",
+   "mods": {
+    "hold": 0,
+    "trade": 0,
+    "suppress": 0,
+    "relocate": 0,
+    "strip_cover": 0,
+    "advance": 2,
+    "flank": 2,
+    "rush": 2,
+    "melee": 0,
+    "climb": 1,
+    "fall_back": 0,
+    "regroup": 0,
+    "flee": 0,
+    "detonate": 5,
+    "grenade": 0,
+    "flash": 0,
+    "smoke": 0,
+    "breach": 0,
+    "collapse": 0,
+    "seal": 0,
+    "guard_exits": 0,
+    "deny_escape": 0,
+    "ambush": 2,
+    "wait": 0,
+    "let_go": 0,
+    "search": 2,
+    "sweep": 0,
+    "recon": 0,
+    "call_help": 1,
+    "call_armour": 0,
+    "call_air": 0,
+    "mark": 0,
+    "screen_heavy": 0,
+    "heavy_leads": 0,
+    "hide": 1,
+    "surrender": 0,
+    "play_dead": 0,
+    "reload": 0
+   }
+  },
+  "we_grenadier": {
+   "label": "We're a grenadier",
+   "group": "kind",
+   "mods": {
+    "trade": 2,
+    "rush": 2,
+    "melee": 1,
+    "grenade": 5
+   }
+  },
+  "we_gunner": {
+   "label": "We're a gunner",
+   "group": "kind",
+   "mods": {
+    "hold": 4,
+    "trade": 4,
+    "suppress": 5,
+    "relocate": 1,
+    "advance": 2,
+    "flank": 1,
+    "rush": 1,
+    "melee": 1
+   }
+  },
+  "we_anti_armour": {
+   "label": "We're anti-armour",
+   "group": "kind",
+   "mods": {
+    "hold": 4,
+    "trade": 4,
+    "rush": 1,
+    "melee": 1
+   }
+  },
+  "we_attacker": {
+   "label": "Attacker",
+   "group": "role",
+   "mods": {
+    "hold": 2,
+    "advance": 4,
+    "flank": 4,
+    "rush": 4,
+    "melee": 4,
+    "fall_back": 2,
+    "wait": 1,
+    "hide": 1
+   }
+  },
+  "we_defender": {
+   "label": "Defender",
+   "group": "role",
+   "mods": {
+    "hold": 4,
+    "trade": 4,
+    "advance": 2,
+    "flank": 2,
+    "rush": 1,
+    "guard_exits": 4,
+    "ambush": 4,
+    "search": 2,
+    "sweep": 2
+   }
+  },
+  "we_leader": {
+   "label": "Leader",
+   "group": "role",
+   "mods": {
+    "hold": 4,
+    "advance": 2,
+    "flank": 2,
+    "rush": 1,
+    "melee": 1,
+    "fall_back": 4,
+    "call_help": 4,
+    "mark": 4
+   }
+  },
+  "we_fodder": {
+   "label": "Cannon fodder",
+   "group": "role",
+   "mods": {
+    "hold": 1,
+    "relocate": 1,
+    "advance": 4,
+    "flank": 1,
+    "rush": 4,
+    "melee": 4,
+    "fall_back": 1,
+    "ambush": 1,
+    "wait": 0,
+    "hide": 0
+   }
+  },
+  "we_flanker": {
+   "label": "Flanker / hunter",
+   "group": "role",
+   "mods": {
+    "hold": 1,
+    "trade": 2,
+    "flank": 5,
+    "ambush": 4,
+    "search": 4
+   }
+  },
+  "we_scout": {
+   "label": "Scout",
+   "group": "role",
+   "mods": {
+    "trade": 2,
+    "rush": 0,
+    "melee": 1,
+    "fall_back": 4,
+    "recon": 4,
+    "mark": 5,
+    "hide": 4
    }
   }
  },
@@ -1885,7 +2078,8 @@
     "mark": 25,
     "hide": 5,
     "regroup": 5,
-    "reload": 20
+    "reload": 20,
+    "detonate": 30
    },
    "never": []
   },
@@ -1911,7 +2105,8 @@
     "climb": 10,
     "seal": 5,
     "reload": 10,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -1949,7 +2144,8 @@
     "mark": 5,
     "let_go": 3,
     "reload": 5,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -1974,7 +2170,8 @@
     "seal": 5,
     "hide": 5,
     "reload": 10,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -1996,7 +2193,8 @@
     "call_armour": 5,
     "call_air": 5,
     "wait": 5,
-    "reload": 5
+    "reload": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2018,7 +2216,8 @@
     "climb": 5,
     "flee": 5,
     "smoke": 5,
-    "reload": 5
+    "reload": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2041,7 +2240,8 @@
     "flee": 10,
     "hide": 10,
     "relocate": 10,
-    "reload": 5
+    "reload": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2065,7 +2265,8 @@
     "mark": 10,
     "call_help": 5,
     "let_go": 5,
-    "reload": 5
+    "reload": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2088,7 +2289,8 @@
     "surrender": 10,
     "search": 10,
     "reload": 5,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2111,7 +2313,8 @@
     "fall_back": 10,
     "flank": 10,
     "reload": 5,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2133,7 +2336,8 @@
     "mark": 10,
     "let_go": 5,
     "reload": 5,
-    "melee": 5
+    "melee": 5,
+    "detonate": 30
    },
    "never": []
   },
@@ -2154,7 +2358,8 @@
     "melee": 5,
     "surrender": 5,
     "play_dead": 3,
-    "reload": 10
+    "reload": 10,
+    "detonate": 30
    },
    "never": []
   }
@@ -2232,52 +2437,51 @@
   {
    "moment": "first_contact",
    "facts": [
-    "valuable",
-    "p_pilot_foot",
-    "we_swarm"
+    "p_seen",
+    "heavy_near",
+    "we_scout"
    ],
    "amounts": {
     "cover": 2,
     "php": 79.4
    },
    "mem": {
-    "last": "wait",
+    "last": "ambush",
     "outcome": ""
    },
    "mates": [],
    "expect": {
-    "trade": 0.19350987912517803,
-    "suppress": 0,
-    "hold": 0.09675493956258902,
-    "advance": 0.021569150306738758,
-    "flank": 0.25801317216690406,
-    "rush": 0.3643145990996685,
+    "trade": 0.09594512783789068,
+    "suppress": 0.19189025567578136,
+    "hold": 0.04797256391894534,
+    "advance": 0.04277724512857633,
+    "flank": 0.12792683711718758,
+    "rush": 0,
     "melee": 0,
-    "grenade": 0,
-    "relocate": 0.020367469600319883,
-    "fall_back": 0.00480146387579348,
-    "climb": 0.016125823260431504,
-    "smoke": 0,
-    "ambush": 0.016125823260431504,
-    "call_help": 0,
-    "mark": 0,
-    "hide": 0.006401951834391307,
-    "regroup": 0.002015727907553938,
-    "reload": 0
+    "grenade": 0.09848382247478608,
+    "relocate": 0.02019699958856295,
+    "fall_back": 0.00952255393791065,
+    "climb": 0.007995427319824224,
+    "smoke": 0.007995427319824224,
+    "ambush": 0.007995427319824224,
+    "call_help": 0.11193598247753914,
+    "mark": 0.2019699958856295,
+    "hide": 0.025393477167761736,
+    "regroup": 0.001998856829956056,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "rush",
+   "main": "mark",
    "extras": {
-    "first:grenade": 0,
-    "first:flash": 0,
-    "first:smoke": 0
+    "then:trade": 0.8
    }
   },
   {
    "moment": "lost_player",
    "facts": [
-    "we_marksman",
-    "air_avail",
-    "open"
+    "we_attacker",
+    "we_anti_armour",
+    "rubble"
    ],
    "amounts": {
     "dist": 48.2,
@@ -2288,39 +2492,40 @@
    },
    "mem": {},
    "mates": [
-    "guard_exits"
+    "seal"
    ],
    "expect": {
-    "hold": 0.1747085777899487,
-    "search": 0.48380836926447335,
-    "grenade": 0.01992672991566935,
-    "sweep": 0.049524940500753296,
+    "hold": 0.08108094967242711,
+    "search": 0.4490637212626733,
+    "grenade": 0.018495693867658366,
+    "sweep": 0.045968312020711166,
     "strip_cover": 0,
-    "guard_exits": 0.013439121368457593,
-    "recon": 0.08063472821074556,
-    "ambush": 0.010079341026343195,
-    "wait": 0.005039670513171598,
-    "advance": 0.1046695244206302,
-    "call_help": 0.013439121368457593,
-    "climb": 0.026878242736915185,
+    "guard_exits": 0.04989596902918592,
+    "recon": 0.03742197677188944,
+    "ambush": 0.07484395354377887,
+    "wait": 0.001169436774121545,
+    "advance": 0.19430538669920427,
+    "call_help": 0.00623699612864824,
+    "climb": 0.02494798451459296,
     "seal": 0,
-    "reload": 0.017851632884434504,
-    "melee": 0
+    "reload": 0.016569619715108827,
+    "melee": 0,
+    "detonate": 0
    },
    "main": "search",
    "extras": {
     "first:grenade": 0.08472803017970487,
-    "first:recon": 0.8,
+    "first:recon": 0.4,
     "with:call_help": 0.1
    }
   },
   {
    "moment": "player_dug_in",
    "facts": [
-    "p_reach",
-    "we_explosives",
-    "p_high",
-    "p_suspected"
+    "p_pilot_foot",
+    "we_swarm",
+    "destructible",
+    "p_mech"
    ],
    "amounts": {
     "cover": 1,
@@ -2330,49 +2535,52 @@
    "mem": {},
    "mates": [
     "climb",
-    "flash"
+    "grenade"
    ],
    "expect": {
-    "guard_exits": 0.1252035808904606,
-    "call_help": 0.16466774958713382,
-    "hold": 0.12350081219035036,
-    "rush": 0.03578552856913181,
+    "guard_exits": 0.2045843353251648,
+    "call_help": 0,
+    "hold": 0.20180198836474258,
+    "rush": 0,
     "breach": 0,
-    "suppress": 0.015650447611307575,
-    "grenade": 0.012048417196393518,
+    "suppress": 0,
+    "grenade": 0,
     "deny_escape": 0,
-    "flank": 0.10016286471236849,
+    "flank": 0.3273349365202637,
     "flash": 0,
-    "sweep": 0.11795806697694872,
-    "trade": 0.03756107426713818,
+    "sweep": 0,
+    "trade": 0.03068765029877472,
     "strip_cover": 0,
     "collapse": 0,
-    "wait": 0.03756107426713818,
+    "wait": 0.06137530059754944,
     "climb": 0,
     "call_air": 0,
-    "advance": 0.10234589775374503,
-    "smoke": 0.050081432356184244,
-    "call_armour": 0.025040716178092122,
+    "advance": 0.04180864340358998,
+    "smoke": 0,
+    "call_armour": 0,
     "air_window": 0,
-    "recon": 0,
+    "recon": 0.02045843353251648,
     "seal": 0,
-    "ambush": 0.012520358089046061,
-    "fall_back": 0.028446353741177363,
-    "mark": 0.003953410759956158,
-    "let_go": 0.007512214853427636,
+    "ambush": 0.04091686706503296,
+    "fall_back": 0.0464817246533457,
+    "mark": 0,
+    "let_go": 0.024550120239019774,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "call_help",
+   "main": "flank",
    "extras": {
-    "then:hold": 0.8220000000000001
+    "first:smoke": 0,
+    "with:mark": 0,
+    "then:rush": 0
    }
   },
   {
    "moment": "player_coming",
    "facts": [
-    "p_seen",
-    "we_melee",
+    "p_evac",
+    "we_fodder",
     "p_reach"
    ],
    "amounts": {
@@ -2388,27 +2596,28 @@
     "recon"
    ],
    "expect": {
-    "hold": 0.01672031014665294,
-    "ambush": 0.009753514252214213,
-    "trade": 0.007217600546638518,
-    "grenade": 0.00027722041996620754,
-    "suppress": 0,
-    "relocate": 0.0003007333561099382,
-    "fall_back": 0.002868313694228625,
-    "call_help": 0.00836015507332647,
-    "flank": 0.00021109391560149328,
-    "climb": 0.0013933591788877447,
-    "advance": 0.0012934971265368602,
+    "hold": 0.009900034389551466,
+    "ambush": 0.0028875100302858444,
+    "trade": 0.017094059379292197,
+    "grenade": 0.001313129561391896,
+    "suppress": 0.002623509113231138,
+    "relocate": 0.00035612623706858743,
+    "fall_back": 0.0008491590157066904,
+    "call_help": 0.009900034389551466,
+    "flank": 0.00006249396708404362,
+    "climb": 0.0016500057315919111,
+    "advance": 0.003063499641617438,
     "breach": 0,
     "seal": 0,
-    "hide": 0.0016042022898370384,
-    "reload": 0,
-    "melee": 0.95
+    "hide": 0,
+    "reload": 0.00030043854362736056,
+    "melee": 0.95,
+    "detonate": 0
    },
    "main": "melee",
    "extras": {
     "first:flash": 0.075,
-    "first:grenade": 0.003979166666666667
+    "first:grenade": 0.01591666666666667
    }
   },
   {
@@ -2434,7 +2643,8 @@
     "call_armour": 0.025351326855212873,
     "call_air": 0,
     "wait": 0.025351326855212873,
-    "reload": 0
+    "reload": 0,
+    "detonate": 0
    },
    "main": "smoke",
    "extras": {
@@ -2446,9 +2656,9 @@
   {
    "moment": "close_quarters",
    "facts": [
-    "p_reloading",
-    "p_seen",
-    "heavy_near"
+    "air_avail",
+    "p_escape",
+    "we_grenadier"
    ],
    "amounts": {
     "pcover": 2,
@@ -2460,23 +2670,24 @@
     "surrender"
    ],
    "expect": {
-    "grenade": 0.16666666666666666,
-    "melee": 0.050347222222222224,
-    "rush": 0.4027777777777778,
-    "hold": 0.034722222222222224,
-    "flash": 0.2222222222222222,
-    "trade": 0.05555555555555555,
-    "fall_back": 0.043055555555555555,
-    "climb": 0.006944444444444444,
-    "flee": 0.010763888888888889,
-    "smoke": 0.006944444444444444,
-    "reload": 0
+    "grenade": 0.6079556698990699,
+    "melee": 0.005739164852562834,
+    "rush": 0.045913318820502674,
+    "hold": 0.06332871561448644,
+    "flash": 0.2026518899663566,
+    "trade": 0.012665743122897288,
+    "fall_back": 0.0392638036809816,
+    "climb": 0.006332871561448644,
+    "flee": 0.0098159509202454,
+    "smoke": 0.006332871561448644,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "rush",
+   "main": "grenade",
    "extras": {
-    "first:grenade": 0.7,
-    "first:flash": 0.95,
-    "first:smoke": 0.1
+    "then:rush": 0.2175,
+    "then:advance": 0.03625,
+    "then:trade": 0.05
    }
   },
   {
@@ -2506,7 +2717,8 @@
     "flee": 0.01852051558237498,
     "hide": 0.04337357279244725,
     "relocate": 0.0191566613166642,
-    "reload": 0.007138567188756943
+    "reload": 0.007138567188756943,
+    "detonate": 0
    },
    "main": "call_help",
    "extras": {
@@ -2516,10 +2728,10 @@
   {
    "moment": "have_jump",
    "facts": [
-    "valuable",
+    "p_seen",
     "inside",
-    "p_low",
-    "p_escape"
+    "friends_blast",
+    "we_alone"
    ],
    "amounts": {
     "hp": 65.6,
@@ -2531,62 +2743,63 @@
    },
    "mates": [],
    "expect": {
-    "trade": 0.4159947257947515,
-    "relocate": 0.03940617384931246,
-    "ambush": 0.05199934072434394,
-    "flank": 0.1663978903179006,
-    "rush": 0.2687954916943529,
-    "grenade": 0.032025141595651375,
+    "trade": 0.6184522965447975,
+    "relocate": 0.058584489667725295,
+    "ambush": 0.07730653706809969,
+    "flank": 0.1236904593089595,
+    "rush": 0.049951711774009575,
+    "grenade": 0.02380561716156835,
     "melee": 0,
-    "hide": 0.004445943631931407,
-    "mark": 0.013135391283104154,
-    "call_help": 0.0025999670362171967,
-    "let_go": 0.005199934072434393,
-    "reload": 0
+    "hide": 0.013219417838645046,
+    "mark": 0.019528163222575095,
+    "call_help": 0.007730653706809969,
+    "let_go": 0.007730653706809969,
+    "reload": 0,
+    "detonate": 0
    },
    "main": "trade",
    "extras": {
-    "first:grenade": 0.15396897897908604,
+    "first:grenade": 0.07698448948954302,
     "with:mark": 0.3157586014584486,
-    "with:call_help": 0.1,
-    "then:grenade": 0.6158759159163442
+    "with:call_help": 0.2,
+    "then:grenade": 0.3079379579581721
    }
   },
   {
    "moment": "outgunned",
    "facts": [
-    "friends_blast",
-    "low_vis",
-    "p_low"
+    "p_reach",
+    "p_unaware",
+    "valuable"
    ],
    "amounts": {
     "dist": 1.9
    },
    "mem": {},
    "mates": [
-    "seal"
+    "collapse"
    ],
    "expect": {
-    "climb": 0.018633540372670808,
-    "hide": 0.12422360248447205,
-    "fall_back": 0.062111801242236024,
-    "ambush": 0.2981366459627329,
-    "call_armour": 0.07453416149068323,
-    "call_help": 0.07453416149068323,
-    "trade": 0.037267080745341616,
-    "flee": 0.006211180124223602,
-    "flank": 0.049689440993788817,
-    "mark": 0.006211180124223602,
+    "climb": 0.004907975460122704,
+    "hide": 0.004089979550102253,
+    "fall_back": 0.0020449897750511267,
+    "ambush": 0.004907975460122704,
+    "call_armour": 0.004907975460122704,
+    "call_help": 0.002453987730061352,
+    "trade": 0.019631901840490816,
+    "flee": 0.00010224948875255633,
+    "flank": 0.0032719836400818027,
+    "mark": 0.00040899795501022533,
     "surrender": 0,
-    "search": 0.049689440993788817,
+    "search": 0.0032719836400818027,
     "reload": 0,
-    "melee": 0.19875776397515527
+    "melee": 0.95,
+    "detonate": 0
    },
-   "main": "ambush",
+   "main": "melee",
    "extras": {
-    "with:mark": 0.01875,
-    "with:call_help": 0.1,
-    "then:rush": 0.95
+    "first:flash": 0.3,
+    "first:grenade": 0.00625
    }
   },
   {
@@ -2616,7 +2829,8 @@
     "fall_back": 0.33534243534689656,
     "flank": 0.033926280554429734,
     "reload": 0.08732875920492099,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
@@ -2627,8 +2841,8 @@
   {
    "moment": "player_leaving",
    "facts": [
-    "we_flyer",
-    "valuable",
+    "we_leader",
+    "p_seen",
     "p_reach"
    ],
    "amounts": {
@@ -2646,33 +2860,33 @@
     "recon"
    ],
    "expect": {
-    "rush": 0.03282076212798492,
+    "rush": 0.014935336161619567,
     "deny_escape": 0,
-    "trade": 0.0350660880971773,
+    "trade": 0.12765670987457098,
     "collapse": 0,
-    "advance": 0.2723714699417835,
-    "flank": 0.37403827303655784,
-    "guard_exits": 0.16664921068391061,
+    "advance": 0.24788939687335382,
+    "flank": 0.08510447324971399,
+    "guard_exits": 0.30333993743680104,
     "call_air": 0,
-    "call_help": 0.03572959077063043,
-    "mark": 0.06665968427356425,
-    "let_go": 0.016664921068391063,
+    "call_help": 0.13007216517290027,
+    "mark": 0.06066798748736021,
+    "let_go": 0.030333993743680104,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "flank",
+   "main": "guard_exits",
    "extras": {
-    "first:smoke": 0.2805580892804297,
-    "with:mark": 0.2,
-    "then:rush": 0.02461815
+    "with:call_help": 0.42879999999999996,
+    "with:mark": 0.1
    }
   },
   {
    "moment": "losing",
    "facts": [
-    "p_low",
-    "rubble",
-    "friends_near"
+    "friends_blast",
+    "narrow",
+    "we_swarm"
    ],
    "amounts": {
     "dist": 2,
@@ -2684,32 +2898,34 @@
    "mem": {},
    "mates": [
     "surrender",
-    "let_go"
+    "wait"
    ],
    "expect": {
-    "regroup": 0.13681900151199844,
-    "call_help": 0.3909114328914241,
-    "fall_back": 0.022808321341568454,
-    "hide": 0.07298662829301905,
-    "ambush": 0.24741229929836964,
-    "trade": 0.06185307482459241,
-    "flee": 0.002882971817574253,
-    "rush": 0.006107063342806131,
-    "melee": 0.05628629809037909,
-    "surrender": 0.0019329085882685128,
+    "regroup": 0.3099211186302944,
+    "call_help": 0,
+    "fall_back": 0.05166519552211621,
+    "hide": 0.041332156417692965,
+    "ambush": 0.14010900480573885,
+    "trade": 0.14010900480573885,
+    "flee": 0.006530480713995489,
+    "rush": 0.05533465035797849,
+    "melee": 0.2549983887464447,
+    "surrender": 0,
     "play_dead": 0,
-    "reload": 0
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "call_help",
+   "main": "regroup",
    "extras": {
-    "then:hold": 0.95
+    "first:smoke": 0,
+    "with:call_help": 0
    }
   },
   {
    "moment": "first_contact",
    "facts": [
-    "we_mech",
-    "p_low"
+    "we_attacker",
+    "friends_blast"
    ],
    "amounts": {
     "dist": 8.5,
@@ -2724,38 +2940,39 @@
     "collapse"
    ],
    "expect": {
-    "trade": 0.011708581122900926,
-    "suppress": 0.023417162245801853,
-    "hold": 0.05064642067115285,
-    "advance": 0.00909948492950955,
-    "flank": 0.044441928837653494,
-    "rush": 0.004241584783161169,
-    "melee": 0.008340262281988177,
-    "grenade": 0.5127914865883095,
-    "relocate": 0.0034453178005152047,
-    "fall_back": 0.02388818484974695,
-    "climb": 0.001001545872242792,
-    "smoke": 0.004006183488971168,
-    "ambush": 0.009076419475116998,
-    "call_help": 0.20500606121130927,
-    "mark": 0.04567049177427132,
-    "hide": 0,
-    "regroup": 0.0018304112608152612,
-    "reload": 0.041388472806533516
+    "trade": 0.02397292394013547,
+    "suppress": 0.04794584788027094,
+    "hold": 0.012962104223445342,
+    "advance": 0.037261775414081016,
+    "flank": 0.18198669310906485,
+    "rush": 0.01736900284074141,
+    "melee": 0.06830562003309446,
+    "grenade": 0.2624808073688435,
+    "relocate": 0.007054171698037669,
+    "fall_back": 0.024455125367444822,
+    "climb": 0.00820252523027636,
+    "smoke": 0.00820252523027636,
+    "ambush": 0.009291830984548631,
+    "call_help": 0.10493574458550255,
+    "mark": 0.0935087876251505,
+    "hide": 0.0035753107262346227,
+    "regroup": 0.003747705163767948,
+    "reload": 0.08474149857908354,
+    "detonate": 0
    },
    "main": "grenade",
    "extras": {
-    "then:rush": 0.1401957499250494,
-    "then:advance": 0.1336721667166337,
+    "then:rush": 0.2803914998500988,
+    "then:advance": 0.2673443334332674,
     "then:trade": 0.08600000000000001
    }
   },
   {
    "moment": "lost_player",
    "facts": [
-    "we_mech",
-    "valuable",
-    "friends_near"
+    "we_defender",
+    "p_seen",
+    "we_bomber"
    ],
    "amounts": {
     "hp": 91,
@@ -2768,33 +2985,30 @@
     "heavy_leads"
    ],
    "expect": {
-    "hold": 0.2460145999726389,
-    "search": 0.3356845011254566,
-    "grenade": 0.03705700992315357,
+    "hold": 0,
+    "search": 0,
+    "grenade": 0,
     "sweep": 0,
     "strip_cover": 0,
-    "guard_exits": 0.11002441859241449,
-    "recon": 0.04125915697215544,
-    "ambush": 0.02062957848607772,
-    "wait": 0.02062957848607772,
-    "advance": 0.023554504134811374,
-    "call_help": 0.15139359998316237,
-    "climb": 0.013753052324051811,
+    "guard_exits": 0,
+    "recon": 0,
+    "ambush": 0.10329035798641266,
+    "wait": 0,
+    "advance": 0.029483796359666668,
+    "call_help": 0.02368792209821731,
+    "climb": 0.01721505966440211,
     "seal": 0,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0.8263228638913013
    },
-   "main": "search",
-   "extras": {
-    "first:grenade": 0.15396897897908604,
-    "first:recon": 0.4,
-    "with:call_help": 0.95
-   }
+   "main": "detonate",
+   "extras": {}
   },
   {
    "moment": "player_dug_in",
    "facts": [
-    "rubble"
+    "narrow"
    ],
    "amounts": {
     "dist": 123.3,
@@ -2806,42 +3020,44 @@
    },
    "mates": [
     "melee",
-    "advance"
+    "flank"
    ],
    "expect": {
-    "guard_exits": 0.13123263824501824,
-    "call_help": 0.10498611059601458,
-    "hold": 0.03936979147350547,
-    "rush": 0.03936979147350547,
+    "guard_exits": 0.2786232010523902,
+    "call_help": 0.11144928042095609,
+    "hold": 0.08358696031571707,
+    "rush": 0.04179348015785853,
     "breach": 0,
-    "suppress": 0.05570258569354353,
+    "suppress": 0.059131756171256177,
     "grenade": 0,
     "deny_escape": 0,
-    "flank": 0.08912413710966964,
+    "flank": 0.011826351234251235,
     "flash": 0,
     "sweep": 0,
-    "trade": 0.01671077570806306,
+    "trade": 0.035479053702753706,
     "strip_cover": 0,
     "collapse": 0,
-    "wait": 0.03936979147350547,
-    "climb": 0.1574791658940219,
+    "wait": 0.04179348015785853,
+    "climb": 0.04179348015785853,
     "call_air": 0,
-    "advance": 0.10498611059601458,
-    "smoke": 0.08912413710966964,
-    "call_armour": 0.026246527649003645,
+    "advance": 0.055724640210478044,
+    "smoke": 0.09461080987400988,
+    "call_armour": 0.0069655800263097555,
     "air_window": 0,
-    "recon": 0.013123263824501822,
-    "seal": 0,
-    "ambush": 0.006561631912250911,
-    "fall_back": 0.05249305529800729,
-    "mark": 0.026246527649003645,
-    "let_go": 0.007873958294701094,
+    "recon": 0.027862320105239022,
+    "seal": 0.013931160052619511,
+    "ambush": 0.0034827900131548777,
+    "fall_back": 0.055724640210478044,
+    "mark": 0.027862320105239022,
+    "let_go": 0.008358696031571706,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "climb",
+   "main": "guard_exits",
    "extras": {
-    "then:trade": 0.16978272002592487
+    "with:call_help": 0.2,
+    "with:mark": 0.2
    }
   },
   {
@@ -2874,7 +3090,8 @@
     "seal": 0,
     "hide": 0.007522778019551221,
     "reload": 0,
-    "melee": 0.04250892341567996
+    "melee": 0.04250892341567996,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
@@ -2904,7 +3121,8 @@
     "call_armour": 0.02877371091177948,
     "call_air": 0,
     "wait": 0.02877371091177948,
-    "reload": 0
+    "reload": 0,
+    "detonate": 0
    },
    "main": "smoke",
    "extras": {
@@ -2916,9 +3134,9 @@
   {
    "moment": "close_quarters",
    "facts": [
-    "heavy_near",
-    "p_high",
-    "choke",
+    "we_grenadier",
+    "valuable",
+    "p_low",
     "p_reach"
    ],
    "amounts": {
@@ -2927,32 +3145,33 @@
    },
    "mem": {},
    "mates": [
-    "call_help",
-    "fall_back"
+    "recon",
+    "regroup"
    ],
    "expect": {
-    "grenade": 0.0006358734357513486,
+    "grenade": 0.002262358131292186,
     "melee": 0.95,
-    "rush": 0.007393088479669012,
-    "hold": 0.02129752094143184,
-    "flash": 0.013565299962695437,
-    "trade": 0.003391324990673859,
-    "fall_back": 0.001064876047071592,
-    "climb": 0.0016956624953369296,
-    "flee": 0.000532438023535796,
-    "smoke": 0.0004239156238342324,
-    "reload": 0
+    "rush": 0.0016439802420723211,
+    "hold": 0.03788695750537314,
+    "flash": 0.006032955016779162,
+    "trade": 0.0007541193770973952,
+    "fall_back": 0.0009471739376343285,
+    "climb": 0.0000471324610685872,
+    "flee": 0.00023679348440858213,
+    "smoke": 0.0001885298442743488,
+    "reload": 0,
+    "detonate": 0
    },
    "main": "melee",
    "extras": {
     "first:flash": 0.6,
-    "first:grenade": 0.0125
+    "first:grenade": 0.1
    }
   },
   {
    "moment": "caught_out",
    "facts": [
-    "underground"
+    "trench"
    ],
    "amounts": {
     "dist": 92,
@@ -2965,31 +3184,31 @@
     "reload"
    ],
    "expect": {
-    "fall_back": 0.30340775772487116,
-    "trade": 0.25283979810405927,
-    "call_help": 0.10113591924162371,
-    "suppress": 0.15170387886243558,
-    "smoke": 0.04248824518054922,
-    "regroup": 0.018962984857804448,
-    "rush": 0.028325496787032816,
+    "fall_back": 0.36040332933352964,
+    "trade": 0.3003361077779414,
+    "call_help": 0.060067221555588274,
+    "suppress": 0.09010083233338241,
+    "smoke": 0.10093944291625473,
+    "regroup": 0.011262604041672801,
+    "rush": 0.016823240486042453,
     "melee": 0,
-    "flee": 0.025283979810405928,
-    "hide": 0.025283979810405928,
-    "relocate": 0.050567959620811856,
-    "reload": 0
+    "flee": 0.015016805388897068,
+    "hide": 0.015016805388897068,
+    "relocate": 0.030033610777794137,
+    "reload": 0,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
-    "first:smoke": 0.16804413505765683,
+    "first:smoke": 0.6721765402306273,
     "with:call_help": 0.25
    }
   },
   {
    "moment": "have_jump",
    "facts": [
-    "p_team",
-    "rubble",
-    "heavy_near"
+    "we_marksman",
+    "narrow"
    ],
    "amounts": {
     "dist": 34.3,
@@ -3006,32 +3225,33 @@
     "reload"
    ],
    "expect": {
-    "trade": 0.09086298262793044,
-    "relocate": 0.01984829821393548,
-    "ambush": 0.029693785172526285,
-    "flank": 0.3800804502083365,
-    "rush": 0.17406549084289732,
-    "grenade": 0.2283350707286976,
+    "trade": 0.1363292611976637,
+    "relocate": 0.11233764066348341,
+    "ambush": 0.01529651969818674,
+    "flank": 0.19579545213679028,
+    "rush": 0,
+    "grenade": 0.4705000574221142,
     "melee": 0,
-    "hide": 0.008076709566927149,
-    "mark": 0.04272357001169553,
-    "call_help": 0.0107689460892362,
-    "let_go": 0.011877514069010515,
-    "reload": 0.0036671824688069956
+    "hide": 0.004160653357906793,
+    "mark": 0.04401742158931102,
+    "call_help": 0.005547537810542391,
+    "let_go": 0.012237215758549393,
+    "reload": 0.0037782403654521243,
+    "detonate": 0
    },
-   "main": "flank",
+   "main": "grenade",
    "extras": {
-    "first:smoke": 0.6,
-    "with:mark": 0.17985063946657454,
-    "then:rush": 0.5495641485821818
+    "then:rush": 0,
+    "then:advance": 0.5825121926042901,
+    "then:trade": 0.22281091367114098
    }
   },
   {
    "moment": "outgunned",
    "facts": [
-    "friends_near",
-    "low_vis",
-    "p_high"
+    "we_bomber",
+    "p_unaware",
+    "destructible"
    ],
    "amounts": {
     "pcover": 0,
@@ -3044,30 +3264,29 @@
     "relocate"
    ],
    "expect": {
-    "climb": 0.29686797898427625,
-    "hide": 0.03655186991243901,
-    "fall_back": 0.07310373982487801,
-    "ambush": 0.07421699474606906,
-    "call_armour": 0.03710849737303453,
-    "call_help": 0.29686797898427625,
-    "trade": 0.03710849737303453,
-    "flee": 0.029241495929951213,
-    "flank": 0.04947799649737938,
-    "mark": 0.007811551488489265,
-    "surrender": 0.01666790007005468,
-    "search": 0.04497549881611785,
+    "climb": 0.04733746484207039,
+    "hide": 0.011656850717359831,
+    "fall_back": 0,
+    "ambush": 0.04733746484207039,
+    "call_armour": 0,
+    "call_help": 0.04733746484207039,
+    "trade": 0,
+    "flee": 0,
+    "flank": 0.031558309894713595,
+    "mark": 0,
+    "surrender": 0,
+    "search": 0.05737300738858931,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0.7573994374731262
    },
-   "main": "climb",
-   "extras": {
-    "then:trade": 0.4
-   }
+   "main": "detonate",
+   "extras": {}
   },
   {
    "moment": "have_heavy",
    "facts": [
-    "p_low"
+    "friends_blast"
    ],
    "amounts": {
     "dist": 2.6,
@@ -3081,22 +3300,24 @@
     "screen_heavy": 0,
     "heavy_leads": 0,
     "call_air": 0,
-    "advance": 0.06960779563009852,
-    "mark": 0.053666138673064814,
+    "advance": 0.09734909402080745,
+    "mark": 0.07505409318204097,
     "strip_cover": 0,
-    "rush": 0.23636714117164664,
-    "hold": 0.37995626180529896,
+    "rush": 0.33056824801098117,
+    "hold": 0.13284574493221252,
     "sweep": 0,
-    "smoke": 0.017258131147958312,
-    "fall_back": 0.08781211383944687,
-    "flank": 0.006960779563009852,
+    "smoke": 0.02413613901342334,
+    "fall_back": 0.12280851087066758,
+    "flank": 0.009734909402080745,
     "reload": 0,
-    "melee": 0.14837163816947607
+    "melee": 0.2075032605677863,
+    "detonate": 0
    },
-   "main": "hold",
+   "main": "rush",
    "extras": {
-    "with:mark": 0.1,
-    "with:call_help": 0.40906666666666675
+    "first:grenade": 0.11255413657731769,
+    "first:flash": 0.16079162368188243,
+    "first:smoke": 0.06431664947275298
    }
   },
   {
@@ -3111,28 +3332,30 @@
    },
    "mem": {},
    "mates": [
-    "suppress"
+    "relocate"
    ],
    "expect": {
-    "rush": 0.16278382233756022,
+    "rush": 0.11095107531438174,
     "deny_escape": 0,
-    "trade": 0.15363511894141185,
+    "trade": 0.2094309054526906,
     "collapse": 0,
-    "advance": 0.27732808127128983,
-    "flank": 0.08886255279571262,
-    "guard_exits": 0.0921810713648471,
+    "advance": 0.1890227689095375,
+    "flank": 0.06056741785691813,
+    "guard_exits": 0.12565854327161438,
     "call_air": 0,
-    "call_help": 0.14674388965375945,
-    "mark": 0.057536946321844355,
-    "let_go": 0.01707056877126798,
-    "reload": 0.003857948542306563,
-    "melee": 0
+    "call_help": 0.20003698302571274,
+    "mark": 0.07843268419482884,
+    "let_go": 0.023270100605854514,
+    "reload": 0.002629521368461559,
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "advance",
+   "main": "trade",
    "extras": {
-    "first:smoke": 0.5,
     "first:grenade": 0.08007820385955275,
-    "with:mark": 0.16852674065168416
+    "with:mark": 0.4213168516292104,
+    "with:call_help": 0.8596309333333333,
+    "then:grenade": 0.320312815438211
    }
   },
   {
@@ -3160,7 +3383,8 @@
     "melee": 0,
     "surrender": 0,
     "play_dead": 0,
-    "reload": 0.232354402395637
+    "reload": 0.232354402395637,
+    "detonate": 0
    },
    "main": "reload",
    "extras": {}
@@ -3168,7 +3392,7 @@
   {
    "moment": "first_contact",
    "facts": [
-    "p_reloading",
+    "air_avail",
     "p_reach"
    ],
    "amounts": {
@@ -3181,24 +3405,25 @@
     "advance"
    ],
    "expect": {
-    "trade": 0.006598365683125017,
-    "suppress": 0.013196731366250034,
-    "hold": 0.0008247957103906271,
-    "advance": 0.0015478666164997436,
-    "flank": 0.004515851748787854,
-    "rush": 0.008255288621331965,
+    "trade": 0.007184414900210536,
+    "suppress": 0.014368829800421073,
+    "hold": 0.001796103725052634,
+    "advance": 0.0008426719976705275,
+    "flank": 0.004916937640195739,
+    "rush": 0.0022471253271214063,
     "melee": 0.95,
-    "grenade": 0.004398910455416678,
-    "relocate": 0.0010997276138541695,
-    "fall_back": 0.0009265205146721378,
-    "climb": 0.0010997276138541695,
-    "smoke": 0.0012031576595349523,
-    "ambush": 0.0005498638069270848,
-    "call_help": 0.00432376240180331,
-    "mark": 0.0006873297586588559,
-    "hide": 0.0006176803431147585,
-    "regroup": 0.00015442008577868963,
-    "reload": 0
+    "grenade": 0.004789609933473691,
+    "relocate": 0.0011974024833684227,
+    "fall_back": 0.0010088115922378962,
+    "climb": 0.0011974024833684227,
+    "smoke": 0.0013100189094660051,
+    "ambush": 0.0005987012416842114,
+    "call_help": 0.004707787430443516,
+    "mark": 0.002993506208421057,
+    "hide": 0.0006725410614919308,
+    "regroup": 0.0001681352653729827,
+    "reload": 0,
+    "detonate": 0
    },
    "main": "melee",
    "extras": {
@@ -3209,8 +3434,8 @@
   {
    "moment": "lost_player",
    "facts": [
-    "valuable",
-    "p_reach"
+    "p_seen",
+    "p_pilot_foot"
    ],
    "amounts": {
     "pcover": 1,
@@ -3223,33 +3448,34 @@
     "strip_cover"
    ],
    "expect": {
-    "hold": 0.27177448170258256,
-    "search": 0.1881515642556341,
-    "grenade": 0.01929288511655959,
-    "sweep": 0.32739379412254516,
+    "hold": 0.20545809056921996,
+    "search": 0,
+    "grenade": 0.23336285660300027,
+    "sweep": 0.24750559133893563,
     "strip_cover": 0,
-    "guard_exits": 0.04181145872347424,
-    "recon": 0,
-    "ambush": 0.03135859404260568,
-    "wait": 0.03135859404260568,
-    "advance": 0.0528093109258475,
-    "call_help": 0.01045286468086856,
-    "climb": 0.02090572936173712,
+    "guard_exits": 0.06321787402129844,
+    "recon": 0.023706702757986916,
+    "ambush": 0.04741340551597383,
+    "wait": 0.023706702757986916,
+    "advance": 0.07984634995256634,
+    "call_help": 0.01580446850532461,
+    "climb": 0.03160893701064922,
     "seal": 0,
-    "reload": 0.004690723025539767,
-    "melee": 0
+    "reload": 0.028369020967057682,
+    "melee": 0,
+    "detonate": 0
    },
    "main": "sweep",
    "extras": {
-    "first:flash": 0.5158759159163441,
-    "first:grenade": 0.06591796912542121
+    "first:flash": 0.25793795795817204,
+    "first:grenade": 0.5273437530033697
    }
   },
   {
    "moment": "player_dug_in",
    "facts": [
-    "we_alone",
-    "destructible"
+    "we_flyer",
+    "low_vis"
    ],
    "amounts": {
     "dist": 2,
@@ -3264,47 +3490,49 @@
    },
    "mates": [],
    "expect": {
-    "guard_exits": 0.10931035136029318,
-    "call_help": 0.1748965621764691,
-    "hold": 0.008485216024342757,
-    "rush": 0.0394828989113379,
-    "breach": 0.13117242163235182,
-    "suppress": 0.000029889549200080102,
-    "grenade": 0.05465517568014659,
+    "guard_exits": 0.10487873042828512,
+    "call_help": 0.08390298434262809,
+    "hold": 0.004070605724747816,
+    "rush": 0.3030575794455727,
+    "breach": 0,
+    "suppress": 0.00011471111140593659,
+    "grenade": 0.05243936521414256,
     "deny_escape": 0,
-    "flank": 0.010931035136029318,
-    "flash": 0.043724140544117274,
+    "flank": 0.16780596868525618,
+    "flash": 0,
     "sweep": 0,
-    "trade": 0.000286939672320769,
-    "strip_cover": 0.000573879344641538,
-    "collapse": 0.008198276352021989,
-    "wait": 0.032793105408087955,
-    "climb": 0.016396552704043978,
+    "trade": 0.00013765333368712392,
+    "strip_cover": 0,
+    "collapse": 0,
+    "wait": 0.03146361912848553,
+    "climb": 0,
     "call_air": 0,
-    "advance": 0.013160966303779303,
-    "smoke": 0.010931035136029318,
-    "call_armour": 0.021862070272058637,
-    "air_window": 0,
-    "recon": 0.010931035136029318,
+    "advance": 0.025254798287131064,
+    "smoke": 0.010487873042828512,
+    "call_armour": 0.020975746085657023,
+    "air_window": 0.08390298434262809,
+    "recon": 0.010487873042828512,
     "seal": 0,
-    "ambush": 0.005465517568014659,
-    "fall_back": 0.07715430667993303,
-    "mark": 0.010739742021148807,
-    "let_go": 0.006558621081617592,
-    "reload": 0.005369871010574403,
-    "melee": 0.20689039029541065
+    "ambush": 0.005243936521414256,
+    "fall_back": 0.07402634454073563,
+    "mark": 0.010304335264579014,
+    "let_go": 0.006292723825697107,
+    "reload": 0.005152167632289507,
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "melee",
+   "main": "rush",
    "extras": {
-    "first:flash": 0.15,
-    "first:grenade": 0.1
+    "first:grenade": 0.35,
+    "first:flash": 0,
+    "first:smoke": 0.1
    }
   },
   {
    "moment": "player_coming",
    "facts": [
-    "choke",
-    "p_seen"
+    "destructible",
+    "p_escape"
    ],
    "amounts": {
     "pcover": 2,
@@ -3318,35 +3546,37 @@
     "trade"
    ],
    "expect": {
-    "hold": 0.26304385378817946,
-    "ambush": 0.07672112402155234,
-    "trade": 0.03288048172352243,
-    "grenade": 0.16875247331037496,
-    "suppress": 0.17536256919211965,
-    "relocate": 0.027686119798132063,
-    "fall_back": 0.00812147898571004,
-    "call_help": 0.06576096344704487,
-    "flank": 0.08768128459605982,
-    "climb": 0.021920321149014956,
-    "advance": 0.04202752985356448,
-    "breach": 0,
-    "seal": 0.021920321149014956,
-    "hide": 0.00812147898571004,
+    "hold": 0.12939464771936068,
+    "ambush": 0.07548021116962707,
+    "trade": 0.016174330964920085,
+    "grenade": 0.16602301495590407,
+    "suppress": 0.0862630984795738,
+    "relocate": 0.027238315333382643,
+    "fall_back": 0.007990119496670521,
+    "call_help": 0.03234866192984017,
+    "flank": 0.3450523939182952,
+    "climb": 0.02156577461989345,
+    "advance": 0.04134776267607486,
+    "breach": 0.0431315492397869,
+    "seal": 0,
+    "hide": 0.007990119496670521,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "hold",
+   "main": "flank",
    "extras": {
-    "with:mark": 0.2526068811667589,
-    "with:call_help": 0.5
+    "first:smoke": 0.3,
+    "with:mark": 0.12630344058337944,
+    "then:rush": 0.39550706579164513
    }
   },
   {
    "moment": "crossing",
    "facts": [
-    "p_unaware",
-    "heavy_near",
-    "p_reach"
+    "p_team",
+    "we_grenadier",
+    "p_pilot_foot"
    ],
    "amounts": {
     "cover": 2,
@@ -3360,34 +3590,34 @@
     "hold"
    ],
    "expect": {
-    "advance": 0.06559635880122558,
-    "suppress": 0.056964383819858244,
-    "trade": 0.5170100800492397,
-    "smoke": 0.06396000990299873,
-    "flank": 0.18983330939210022,
-    "rush": 0.019323782015952765,
+    "advance": 0.06553749478459588,
+    "suppress": 0.2276530634155825,
+    "trade": 0.12913653304860526,
+    "smoke": 0.12780522858418666,
+    "flank": 0.189662959218933,
+    "rush": 0.009653220744514178,
     "strip_cover": 0,
     "melee": 0,
-    "hold": 0.06396000990299873,
-    "call_armour": 0,
+    "hold": 0.12780522858418666,
+    "call_armour": 0.031951307146046666,
     "call_air": 0,
-    "wait": 0.015990002475749682,
-    "reload": 0.007362063639876417
+    "wait": 0.031951307146046666,
+    "reload": 0.05884365732730261,
+    "detonate": 0
    },
-   "main": "trade",
+   "main": "suppress",
    "extras": {
-    "first:grenade": 0.05324760523026725,
-    "with:mark": 0.07893965036461215,
-    "with:call_help": 0.95,
-    "then:grenade": 0.212990420921069
+    "with:mark": 0.2526068811667589,
+    "with:call_help": 0.95
    }
   },
   {
    "moment": "close_quarters",
    "facts": [
     "inside",
-    "p_mech",
-    "friends_blast"
+    "friends_near",
+    "underground",
+    "p_reach"
    ],
    "amounts": {
     "dist": 1.5,
@@ -3400,30 +3630,31 @@
     "regroup"
    ],
    "expect": {
-    "grenade": 0.11469788386227538,
-    "melee": 0,
-    "rush": 0,
-    "hold": 0.3823262795409179,
-    "flash": 0,
-    "trade": 0.3058610236327343,
-    "fall_back": 0.08887312005389272,
-    "climb": 0.07646525590818358,
-    "flee": 0.02221828001347318,
-    "smoke": 0.009558156988522947,
-    "reload": 0
+    "grenade": 0.0018035712948065595,
+    "melee": 0.95,
+    "rush": 0.02614620472748984,
+    "hold": 0.006011904316021865,
+    "flash": 0.004809523452817491,
+    "trade": 0.009619046905634983,
+    "fall_back": 0.0013974888011148204,
+    "climb": 0,
+    "flee": 0.00017468610013935255,
+    "smoke": 0.00003757440197513665,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "hold",
+   "main": "melee",
    "extras": {
-    "with:mark": 0.1,
-    "with:call_help": 0.25
+    "first:flash": 0.15,
+    "first:grenade": 0.025
    }
   },
   {
    "moment": "caught_out",
    "facts": [
-    "we_flyer",
-    "valuable",
-    "p_mech"
+    "we_leader",
+    "p_seen",
+    "friends_near"
    ],
    "amounts": {
     "dist": 28.4,
@@ -3437,23 +3668,24 @@
     "mark"
    ],
    "expect": {
-    "fall_back": 0.37786655909658995,
-    "trade": 0.03253132001354774,
-    "call_help": 0.11502787187110804,
-    "suppress": 0.004879698002032162,
-    "smoke": 0.3450836156133241,
-    "regroup": 0.021567725975832758,
-    "rush": 0,
+    "fall_back": 0.42259464688464815,
+    "trade": 0.036382054359837004,
+    "call_help": 0.2572874562463611,
+    "suppress": 0.021829232615902205,
+    "smoke": 0.19296559218477083,
+    "regroup": 0.012060349511548177,
+    "rush": 0.007300680979253147,
     "melee": 0,
-    "flee": 0.05751393593555402,
-    "hide": 0.014378483983888505,
-    "relocate": 0.015406349545764657,
-    "reload": 0.01574443996235791
+    "flee": 0.01608046601539757,
+    "hide": 0.01608046601539757,
+    "relocate": 0.008615000043454004,
+    "reload": 0.008804055143430169,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
     "first:smoke": 0.95,
-    "with:call_help": 0.25
+    "with:call_help": 0.95
    }
   },
   {
@@ -3472,38 +3704,39 @@
     "outcome": "failed"
    },
    "mates": [
-    "call_armour",
+    "call_help",
     "hold"
    ],
    "expect": {
-    "trade": 0.45824453986514074,
-    "relocate": 0.043408396510136144,
-    "ambush": 0.028640283741571296,
-    "flank": 0.34765485757768677,
-    "rush": 0.09646735806958681,
-    "grenade": 0.008819430490722101,
+    "trade": 0.46115904471165187,
+    "relocate": 0.04368448050241961,
+    "ambush": 0.02882244029447824,
+    "flank": 0.3498659952545732,
+    "rush": 0.09708090511306425,
+    "grenade": 0.008875523407652965,
     "melee": 0,
-    "hide": 0.0010202778879742683,
-    "mark": 0.003617366375844678,
-    "call_help": 0.006319955945640067,
-    "let_go": 0.005728056748314259,
-    "reload": 0.00007947678738286031
+    "hide": 0.001026767010245456,
+    "mark": 0.003640373375201634,
+    "call_help": 0,
+    "let_go": 0.005764488058895648,
+    "reload": 0.00007998227181717708,
+    "detonate": 0
    },
    "main": "trade",
    "extras": {
     "first:grenade": 0.03849224474477151,
     "with:mark": 0.07893965036461215,
-    "with:call_help": 0.11033333333333334,
+    "with:call_help": 0,
     "then:grenade": 0.15396897897908604
    }
   },
   {
    "moment": "outgunned",
    "facts": [
+    "we_scout",
     "we_swarm",
-    "friends_near",
-    "destructible",
-    "narrow"
+    "p_seen",
+    "p_high"
    ],
    "amounts": {
     "dist": 2.8,
@@ -3515,20 +3748,21 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "climb": 0.20582130125983022,
-    "hide": 0.17025852489423415,
-    "fall_back": 0.04256463122355854,
-    "ambush": 0.20582130125983022,
+    "climb": 0.5070581016282756,
+    "hide": 0.20972310419395332,
+    "fall_back": 0.05243077604848833,
+    "ambush": 0.1267645254070689,
     "call_armour": 0,
     "call_help": 0,
-    "trade": 0.10291065062991511,
-    "flee": 0.005819484134197195,
-    "flank": 0.023450099349513122,
+    "trade": 0.06338226270353445,
+    "flee": 0.0035841972617508223,
+    "flank": 0.028885646884886453,
     "mark": 0,
     "surrender": 0,
-    "search": 0.13721420083988684,
+    "search": 0,
     "reload": 0,
-    "melee": 0.10613980640903439
+    "melee": 0.008171385872042242,
+    "detonate": 0
    },
    "main": "climb",
    "extras": {
@@ -3538,7 +3772,7 @@
   {
    "moment": "have_heavy",
    "facts": [
-    "we_flyer"
+    "we_fodder"
    ],
    "amounts": {
     "pcover": 0,
@@ -3555,28 +3789,31 @@
     "screen_heavy": 0,
     "heavy_leads": 0,
     "call_air": 0,
-    "advance": 0.21004049883572087,
-    "mark": 0.3294752922913269,
+    "advance": 0.5554294869661344,
+    "mark": 0.10890774254237931,
     "strip_cover": 0,
-    "rush": 0.02669015200162481,
-    "hold": 0.19564508146186835,
+    "rush": 0.07057923360249353,
+    "hold": 0.06467029443498236,
     "sweep": 0,
-    "smoke": 0.13043005430791224,
-    "fall_back": 0.06521502715395612,
-    "flank": 0.04017245672683697,
-    "reload": 0.0023314372207539308,
-    "melee": 0
+    "smoke": 0.1724541184932863,
+    "fall_back": 0.021556764811660786,
+    "flank": 0.0033197417809957613,
+    "reload": 0.0030826173680674916,
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "mark",
+   "main": "advance",
    "extras": {
-    "then:trade": 0.8
+    "first:smoke": 0.5,
+    "first:grenade": 0.15396897897908604,
+    "with:mark": 0.12630344058337944
    }
   },
   {
    "moment": "player_leaving",
    "facts": [
-    "p_reach",
-    "we_swarm"
+    "p_reloading",
+    "we_scout"
    ],
    "amounts": {
     "cover": 2,
@@ -3585,33 +3822,34 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "rush": 0.6862311569394601,
+    "rush": 0,
     "deny_escape": 0,
-    "trade": 0.1286683419261488,
+    "trade": 0.18038465778505797,
     "collapse": 0,
-    "advance": 0.013542711899526069,
-    "flank": 0.08577889461743252,
-    "guard_exits": 0.07148241218119376,
+    "advance": 0.07594400968902769,
+    "flank": 0.24051287704674396,
+    "guard_exits": 0.2004273975389533,
     "call_air": 0,
-    "call_help": 0,
-    "mark": 0,
-    "let_go": 0.014296482436238754,
+    "call_help": 0.08017095901558133,
+    "mark": 0.20251735917074046,
+    "let_go": 0.020042739753895332,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "rush",
+   "main": "flank",
    "extras": {
-    "first:grenade": 0,
-    "first:flash": 0,
-    "first:smoke": 0
+    "first:smoke": 0.15,
+    "with:mark": 0.5052137623335178,
+    "then:rush": 0
    }
   },
   {
    "moment": "losing",
    "facts": [
-    "p_pilot_foot",
-    "we_alone",
-    "choke"
+    "heavy_near",
+    "we_flyer",
+    "p_low"
    ],
    "amounts": {
     "dist": 40.9,
@@ -3620,31 +3858,34 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "regroup": 0.15256315033506687,
-    "call_help": 0.4358947152430482,
-    "fall_back": 0.05448683940538102,
-    "hide": 0.17435788609721928,
-    "ambush": 0.1108206903160292,
-    "trade": 0.0554103451580146,
-    "flee": 0.010897367881076205,
-    "rush": 0.003186360722369996,
+    "regroup": 0.08952914328562239,
+    "call_help": 0.2557975522446354,
+    "fall_back": 0.1278987761223177,
+    "hide": 0.05115951044892708,
+    "ambush": 0.2601331039775953,
+    "trade": 0.13006655198879766,
+    "flee": 0.02557975522446354,
+    "rush": 0.059835606707640966,
     "melee": 0,
     "surrender": 0,
-    "play_dead": 0.002382644841794628,
-    "reload": 0
+    "play_dead": 0,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "call_help",
+   "main": "ambush",
    "extras": {
-    "then:hold": 0.95
+    "with:mark": 0.95,
+    "with:call_help": 0.15733333333333335,
+    "then:rush": 0.36803070915753633
    }
   },
   {
    "moment": "first_contact",
    "facts": [
+    "air_avail",
+    "p_pilot_foot",
     "p_reloading",
-    "p_reach",
-    "p_unaware",
-    "rubble"
+    "narrow"
    ],
    "amounts": {
     "hp": 78.1,
@@ -3655,38 +3896,36 @@
     "relocate"
    ],
    "expect": {
-    "trade": 0.4127997055106708,
-    "suppress": 0.05159996318883385,
-    "hold": 0.025799981594416925,
-    "advance": 0.13034505769450885,
-    "flank": 0.07512954640294209,
-    "rush": 0.03262435930180597,
+    "trade": 0.09269745284222772,
+    "suppress": 0.09269745284222772,
+    "hold": 0.02317436321055693,
+    "advance": 0.02927001806822232,
+    "flank": 0.01687093641728545,
+    "rush": 0.029304236098190502,
     "melee": 0,
-    "grenade": 0.026482645491810574,
-    "relocate": 0.01086208814120907,
-    "fall_back": 0.012899990797208463,
-    "climb": 0.01719998772961128,
-    "smoke": 0.01719998772961128,
-    "ambush": 0.01719998772961128,
-    "call_help": 0.11486151805834414,
-    "mark": 0.013577610176511337,
-    "hide": 0.00859999386480564,
-    "regroup": 0.03281757658809832,
-    "reload": 0
+    "grenade": 0.19030042890773038,
+    "relocate": 0.009756672689407438,
+    "fall_back": 0.04634872642111386,
+    "climb": 0.00772478773685231,
+    "smoke": 0.01544957547370462,
+    "ambush": 0.00772478773685231,
+    "call_help": 0.20634453002679892,
+    "mark": 0.19513345378814875,
+    "hide": 0.00772478773685231,
+    "regroup": 0.029477790003828414,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "trade",
+   "main": "call_help",
    "extras": {
-    "first:grenade": 0.03849224474477151,
-    "with:mark": 0.07893965036461215,
-    "with:call_help": 0.3816,
-    "then:grenade": 0.15396897897908604
+    "then:hold": 0.5
    }
   },
   {
    "moment": "lost_player",
    "facts": [
-    "p_suspected",
-    "low_vis"
+    "p_mech",
+    "p_unaware"
    ],
    "amounts": {
     "dist": 16.6,
@@ -3696,32 +3935,33 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "hold": 0.12361541084747074,
-    "search": 0.17115979963495948,
-    "grenade": 0.1331242886049685,
-    "sweep": 0.266248577209937,
+    "hold": 0.29223990648322995,
+    "search": 0.20231993525762074,
+    "grenade": 0.15735994964481612,
+    "sweep": 0,
     "strip_cover": 0,
-    "guard_exits": 0.038035511029991,
-    "recon": 0.05705326654498649,
-    "ambush": 0.11410653308997298,
-    "wait": 0.028526633272493246,
-    "advance": 0.0190177555149955,
-    "call_help": 0.0190177555149955,
-    "climb": 0.0190177555149955,
+    "guard_exits": 0.04495998561280461,
+    "recon": 0.0674399784192069,
+    "ambush": 0.1348799568384138,
+    "wait": 0.03371998920960345,
+    "advance": 0.002809999100800288,
+    "call_help": 0.011239996403201152,
+    "climb": 0.04495998561280461,
     "seal": 0,
-    "reload": 0.006827374229883385,
-    "melee": 0.004249338990350644
+    "reload": 0.008070317417498427,
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "sweep",
+   "main": "hold",
    "extras": {
-    "first:flash": 0.5064084305795196,
-    "first:grenade": 0.5
+    "with:mark": 0.2,
+    "with:call_help": 0.25
    }
   },
   {
    "moment": "player_dug_in",
    "facts": [
-    "low_vis",
+    "p_escape",
     "p_reach"
    ],
    "amounts": {
@@ -3732,49 +3972,50 @@
    "mem": {},
    "mates": [
     "heavy_leads",
-    "flash"
+    "grenade"
    ],
    "expect": {
-    "guard_exits": 0.004775156885606756,
-    "call_help": 0.00764025101697081,
-    "hold": 0.0028650941313640536,
-    "rush": 0.012483413831474036,
+    "guard_exits": 0.003918299188454722,
+    "call_help": 0.006269278701527556,
+    "hold": 0.004701959026145667,
+    "rush": 0.010243380784502525,
     "breach": 0,
-    "suppress": 0.004775156885606756,
-    "grenade": 0.0011405060283799276,
-    "deny_escape": 0,
-    "flank": 0.007299238581631536,
-    "flash": 0,
+    "suppress": 0.003918299188454722,
+    "grenade": 0,
+    "deny_escape": 0.007836598376909445,
+    "flank": 0.0029947288953952457,
+    "flash": 0.003134639350763778,
     "sweep": 0,
-    "trade": 0.0014325470656820268,
+    "trade": 0.0023509795130728334,
     "strip_cover": 0,
     "collapse": 0,
-    "wait": 0.0014325470656820268,
-    "climb": 0.001368607234055913,
+    "wait": 0.00029387243913410417,
+    "climb": 0.0011230233357732173,
     "call_air": 0,
-    "advance": 0.000912404822703942,
-    "smoke": 0.000456202411351971,
-    "call_armour": 0.0009550313771213512,
+    "advance": 0.0007486822238488114,
+    "smoke": 0.0003743411119244057,
+    "call_armour": 0.0007836598376909445,
     "air_window": 0,
     "recon": 0,
     "seal": 0,
-    "ambush": 0.0019100627542427025,
-    "fall_back": 0.0002387578442803378,
-    "mark": 0.000028512650709498187,
-    "let_go": 0.0002865094131364054,
+    "ambush": 0.0007836598376909445,
+    "fall_back": 0.00019591495942273613,
+    "mark": 0.00009358527798110143,
+    "let_go": 0.00023509795130728336,
     "reload": 0,
-    "melee": 0.95
+    "melee": 0.95,
+    "detonate": 0
    },
    "main": "melee",
    "extras": {
-    "first:flash": 0,
-    "first:grenade": 0.047768316547572826
+    "first:flash": 0.3,
+    "first:grenade": 0
    }
   },
   {
    "moment": "player_coming",
    "facts": [
-    "trench"
+    "open"
    ],
    "amounts": {
     "dist": 2,
@@ -3783,27 +4024,28 @@
     "mag": 73.6
    },
    "mem": {
-    "last": "search",
+    "last": "let_go",
     "outcome": "failed"
    },
    "mates": [],
    "expect": {
-    "hold": 0.38627438357046284,
-    "ambush": 0.22532672374943666,
-    "trade": 0.19313719178523142,
-    "grenade": 0.040236914955256546,
-    "suppress": 0.03218953196420524,
-    "relocate": 0.00804738299105131,
-    "fall_back": 0.00804738299105131,
-    "call_help": 0.048284297946307855,
-    "flank": 0.004023691495525655,
-    "climb": 0.0020118457477628273,
-    "advance": 0.0020118457477628273,
+    "hold": 0.37345947964645837,
+    "ambush": 0.05446284078177518,
+    "trade": 0.18672973982322918,
+    "grenade": 0.038902029129839415,
+    "suppress": 0.12448649321548612,
+    "relocate": 0.015560811651935765,
+    "fall_back": 0.007780405825967882,
+    "call_help": 0.09336486991161459,
+    "flank": 0.007780405825967882,
+    "climb": 0.015560811651935765,
+    "advance": 0.007780405825967882,
     "breach": 0,
     "seal": 0,
-    "hide": 0.01609476598210262,
-    "reload": 0.002124509109637546,
-    "melee": 0.03218953196420524
+    "hide": 0.007780405825967882,
+    "reload": 0.004108054276111043,
+    "melee": 0.06224324660774306,
+    "detonate": 0
    },
    "main": "hold",
    "extras": {
@@ -3835,7 +4077,8 @@
     "call_armour": 0,
     "call_air": 0,
     "wait": 0.018339851410414137,
-    "reload": 0
+    "reload": 0,
+    "detonate": 0
    },
    "main": "flank",
    "extras": {
@@ -3848,8 +4091,8 @@
    "moment": "close_quarters",
    "facts": [
     "inside",
-    "p_reach",
-    "p_unaware"
+    "p_pilot_foot",
+    "p_reloading"
    ],
    "amounts": {
     "dist": 18,
@@ -3865,29 +4108,31 @@
    },
    "mates": [],
    "expect": {
-    "grenade": 0.0024488325473876553,
-    "melee": 0.95,
-    "rush": 0.006424104049313616,
-    "hold": 0.008162775157958851,
-    "flash": 0.004435701336843206,
-    "trade": 0.026120880505468323,
-    "fall_back": 0.0005820058687624661,
-    "climb": 0.0008162775157958851,
-    "flee": 0.00029100293438123303,
-    "smoke": 0.0006699536065884268,
-    "reload": 0.00004846647750038068
+    "grenade": 0.1722626677635923,
+    "melee": 0.020251729417811344,
+    "rush": 0.4519023984331572,
+    "hold": 0.07177611156816346,
+    "flash": 0.07800714533362743,
+    "trade": 0.11484177850906155,
+    "fall_back": 0.04094109403848044,
+    "climb": 0.014355222313632694,
+    "flee": 0.02047054701924022,
+    "smoke": 0.011781940303745611,
+    "reload": 0.0034093652994877646,
+    "detonate": 0
    },
-   "main": "melee",
+   "main": "rush",
    "extras": {
-    "first:flash": 0.20377726559016754,
-    "first:grenade": 0.05
+    "first:grenade": 0.7,
+    "first:flash": 0.3396287759836126,
+    "first:smoke": 0.16414848960655498
    }
   },
   {
    "moment": "caught_out",
    "facts": [
-    "p_team",
-    "p_escape"
+    "we_mech",
+    "we_alone"
    ],
    "amounts": {
     "dist": 3.8,
@@ -3902,18 +4147,19 @@
     "ambush"
    ],
    "expect": {
-    "fall_back": 0.11367816507407516,
-    "trade": 0.12792841938535524,
-    "call_help": 0.3031417735308671,
-    "suppress": 0.0483271888872233,
-    "smoke": 0.02478317378831964,
-    "regroup": 0.05683908253703758,
-    "rush": 0.1074598722836984,
-    "melee": 0.08926675038379994,
-    "flee": 0.01610906296240777,
-    "hide": 0.07578544338271677,
-    "relocate": 0.012792841938535523,
-    "reload": 0.023888225845963652
+    "fall_back": 0.06626251288579907,
+    "trade": 0.07456892475752316,
+    "call_help": 0.7068001374485234,
+    "suppress": 0.007042427572364939,
+    "smoke": 0.01444600527664603,
+    "regroup": 0.06626251288579907,
+    "rush": 0.007829737099539933,
+    "melee": 0.026016602193242585,
+    "flee": 0.009389903429819919,
+    "hide": 0,
+    "relocate": 0.007456892475752317,
+    "reload": 0.013924343974989366,
+    "detonate": 0
    },
    "main": "call_help",
    "extras": {
@@ -3944,7 +4190,8 @@
     "mark": 0.0219033901389375,
     "call_help": 0.004335469809406724,
     "let_go": 0.008670939618813447,
-    "reload": 0.0028054102558369336
+    "reload": 0.0028054102558369336,
+    "detonate": 0
    },
    "main": "flank",
    "extras": {
@@ -3956,9 +4203,9 @@
   {
    "moment": "outgunned",
    "facts": [
-    "we_mech",
-    "open",
-    "p_reach"
+    "we_defender",
+    "rubble",
+    "p_pilot_foot"
    ],
    "amounts": {
     "pcover": 1,
@@ -3974,32 +4221,34 @@
     "call_armour"
    ],
    "expect": {
-    "climb": 0.08277515607984864,
-    "hide": 0,
-    "fall_back": 0.11616113569872093,
-    "ambush": 0.01034689450998108,
+    "climb": 0.1705367402592519,
+    "hide": 0.11965994608190841,
+    "fall_back": 0.11965994608190841,
+    "ambush": 0.1705367402592519,
     "call_armour": 0,
-    "call_help": 0.6622012486387892,
-    "trade": 0.04138757803992432,
-    "flee": 0.04646445427948838,
-    "flank": 0.01379585934664144,
-    "mark": 0.008712322506425934,
-    "surrender": 0,
-    "search": 0.018155350900180132,
+    "call_help": 0.1705367402592519,
+    "trade": 0.08526837012962594,
+    "flee": 0.047863978432763375,
+    "flank": 0.02842279004320865,
+    "mark": 0.035898961734362723,
+    "surrender": 0.014211395021604324,
+    "search": 0.03740439169686258,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "call_help",
+   "main": "climb",
    "extras": {
-    "then:hold": 0.95
+    "then:trade": 0.8
    }
   },
   {
    "moment": "have_heavy",
    "facts": [
-    "p_escape",
+    "p_team",
     "underground",
-    "rubble",
+    "we_alone",
+    "narrow",
     "p_reach"
    ],
    "amounts": {
@@ -4017,28 +4266,29 @@
     "screen_heavy": 0,
     "heavy_leads": 0,
     "call_air": 0,
-    "advance": 0.0034697968508978745,
-    "mark": 0.0028649698768881543,
+    "advance": 0.0013387317735967712,
+    "mark": 0.004421499435732457,
     "strip_cover": 0,
-    "rush": 0.0166550248843098,
-    "hold": 0.007776346808696418,
+    "rush": 0.0032129562566322514,
+    "hold": 0.012001212754130953,
     "sweep": 0,
-    "smoke": 0.00045475712331558,
-    "fall_back": 0.016891862394132557,
-    "flank": 0.00045475712331558,
-    "reload": 0.0014324849384440771,
-    "melee": 0.95
+    "smoke": 0.00070182530725912,
+    "fall_back": 0.026069160673078566,
+    "flank": 0.000043864081703695,
+    "reload": 0.0022107497178662284,
+    "melee": 0.95,
+    "detonate": 0
    },
    "main": "melee",
    "extras": {
     "first:flash": 0.075,
-    "first:grenade": 0.05
+    "first:grenade": 0.1
    }
   },
   {
    "moment": "player_leaving",
    "facts": [
-    "trench"
+    "open"
    ],
    "amounts": {
     "pcover": 0,
@@ -4049,19 +4299,20 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "rush": 0.015262672627591288,
+    "rush": 0.016148412874619798,
     "deny_escape": 0,
-    "trade": 0.25917137323888606,
+    "trade": 0.13710594607060697,
     "collapse": 0,
-    "advance": 0.07473569895157649,
-    "flank": 0.017573949281266932,
-    "guard_exits": 0.11715966187511287,
+    "advance": 0.1581456868781455,
+    "flank": 0.018593820083548068,
+    "guard_exits": 0.12395880055698712,
     "call_air": 0,
-    "call_help": 0.2859169122123967,
-    "mark": 0.08146191185721836,
-    "let_go": 0.019723848800524052,
-    "reload": 0.12899397115542732,
-    "melee": 0
+    "call_help": 0.30250955772291,
+    "mark": 0.08618939934858931,
+    "let_go": 0.020868484942253723,
+    "reload": 0.13647989152233936,
+    "melee": 0,
+    "detonate": 0
    },
    "main": "call_help",
    "extras": {
@@ -4071,8 +4322,8 @@
   {
    "moment": "losing",
    "facts": [
-    "p_reloading",
-    "air_avail"
+    "air_avail",
+    "we_anti_armour"
    ],
    "amounts": {
     "dist": 155.8,
@@ -4087,18 +4338,19 @@
     "regroup"
    ],
    "expect": {
-    "regroup": 0.051288021707794326,
-    "call_help": 0.2930744097588247,
-    "fall_back": 0.3288294877494013,
-    "hide": 0.06576589754988026,
-    "ambush": 0.0407992217761705,
-    "trade": 0.0554993758557123,
-    "flee": 0.03288294877494013,
-    "rush": 0.11978406718153002,
+    "regroup": 0.05437650883173041,
+    "call_help": 0.310722907609888,
+    "fall_back": 0.3486311023382943,
+    "hide": 0.06972622046765886,
+    "ambush": 0.043256089226434535,
+    "trade": 0.11768292871842377,
+    "flee": 0.03486311023382943,
+    "rush": 0.007937330162716139,
     "melee": 0,
     "surrender": 0,
-    "play_dead": 0.005344698052678336,
-    "reload": 0.006731871593068133
+    "play_dead": 0.005666547688662924,
+    "reload": 0.007137254722361698,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
@@ -4109,9 +4361,9 @@
   {
    "moment": "first_contact",
    "facts": [
-    "choke",
-    "p_mech",
-    "low_vis"
+    "destructible",
+    "we_explosives",
+    "p_unaware"
    ],
    "amounts": {
     "pcover": 1,
@@ -4122,28 +4374,32 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "trade": 0.032825748434137374,
-    "suppress": 0.03159037080489564,
-    "hold": 0.03529650369262083,
-    "advance": 0.007662307566619008,
-    "flank": 0.04094394428344016,
-    "rush": 0,
+    "trade": 0.4041349155374565,
+    "suppress": 0.04861569212446553,
+    "hold": 0.02715960453880756,
+    "advance": 0.011791833274840312,
+    "flank": 0.12602056506006706,
+    "rush": 0.01749436980758242,
     "melee": 0,
-    "grenade": 0.16521082570656484,
-    "relocate": 0.05528006622608039,
-    "fall_back": 0.07226959131064115,
-    "climb": 0.02353100246174722,
-    "smoke": 0.02353100246174722,
-    "ambush": 0.04706200492349444,
-    "call_help": 0.32943403446446107,
-    "mark": 0.01857529107059153,
-    "hide": 0.07647575800067846,
-    "regroup": 0.017015856155150957,
-    "reload": 0.023295692437129756
+    "grenade": 0.12712479204160493,
+    "relocate": 0.02126817928843925,
+    "fall_back": 0.01390232257330212,
+    "climb": 0.009053201512935854,
+    "smoke": 0.018106403025871708,
+    "ambush": 0.009053201512935854,
+    "call_help": 0.06337241059055097,
+    "mark": 0.057172524968922715,
+    "hide": 0.014711452458520763,
+    "regroup": 0.013093192688083479,
+    "reload": 0.017925338995612997,
+    "detonate": 0
    },
-   "main": "call_help",
+   "main": "trade",
    "extras": {
-    "then:hold": 0.5
+    "first:grenade": 0.17552463603615812,
+    "with:mark": 0.3157586014584486,
+    "with:call_help": 0.2,
+    "then:grenade": 0.7020985441446325
    }
   },
   {
@@ -4159,7 +4415,7 @@
     "outcome": "worked"
    },
    "mates": [
-    "breach"
+    "smoke"
    ],
    "expect": {
     "hold": 0.24607984560542875,
@@ -4167,16 +4423,17 @@
     "grenade": 0.0192291177853937,
     "sweep": 0.09081348641845036,
     "strip_cover": 0,
-    "guard_exits": 0.11966914479465819,
+    "guard_exits": 0.059834572397329096,
     "recon": 0.08975185859599365,
     "ambush": 0.044875929297996824,
     "wait": 0.044875929297996824,
-    "advance": 0.059834572397329096,
+    "advance": 0.11966914479465819,
     "call_help": 0.014958643099332274,
     "climb": 0.029917286198664548,
     "seal": 0,
     "reload": 0.0064737928613120485,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
    "main": "hold",
    "extras": {
@@ -4187,8 +4444,9 @@
   {
    "moment": "player_dug_in",
    "facts": [
-    "destructible",
-    "narrow",
+    "low_vis",
+    "p_seen",
+    "p_high",
     "underground"
    ],
    "amounts": {
@@ -4201,52 +4459,52 @@
     "outcome": "failed"
    },
    "mates": [
-    "flee"
+    "detonate"
    ],
    "expect": {
-    "guard_exits": 0.11305048633034642,
-    "call_help": 0.09044038906427714,
-    "hold": 0.033915145899103924,
-    "rush": 0.007363680193483825,
-    "breach": 0.1356605835964157,
-    "suppress": 0.05652524316517321,
-    "grenade": 0.34812535906745123,
+    "guard_exits": 0.10153887231400005,
+    "call_help": 0.1624621957024001,
+    "hold": 0.030461661694200014,
+    "rush": 0.02645542915197804,
+    "breach": 0,
+    "suppress": 0.2030777446280001,
+    "grenade": 0.15633836496874376,
     "deny_escape": 0,
-    "flank": 0.005652524316517321,
-    "flash": 0.033325727531688915,
-    "sweep": 0,
-    "trade": 0.008478786474775981,
-    "strip_cover": 0.008478786474775981,
-    "collapse": 0.06783029179820785,
-    "wait": 0.033915145899103924,
+    "flank": 0.08123109785120004,
+    "flash": 0.059864524292682846,
+    "sweep": 0.00881847638399268,
+    "trade": 0.015230830847100007,
+    "strip_cover": 0,
+    "collapse": 0,
+    "wait": 0.030461661694200014,
     "climb": 0,
     "call_air": 0,
-    "advance": 0.0071393326915735284,
-    "smoke": 0.005652524316517321,
+    "advance": 0.051298835704858624,
+    "smoke": 0.010153887231400005,
     "call_armour": 0,
     "air_window": 0,
-    "recon": 0.011305048633034642,
-    "seal": 0.011305048633034642,
-    "ambush": 0.005652524316517321,
-    "fall_back": 0.005652524316517321,
-    "mark": 0.0071393326915735284,
-    "let_go": 0.0033915145899103927,
+    "recon": 0.0025384718078500013,
+    "seal": 0.02030777446280001,
+    "ambush": 0.02030777446280001,
+    "fall_back": 0.010153887231400005,
+    "mark": 0.003206177231553664,
+    "let_go": 0.006092332338840003,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "grenade",
+   "main": "suppress",
    "extras": {
-    "then:rush": 0.06513620978123272,
-    "then:advance": 0.12630344058337944,
-    "then:trade": 0.1
+    "with:mark": 0.06315172029168972,
+    "with:call_help": 0.3
    }
   },
   {
    "moment": "player_coming",
    "facts": [
-    "destructible",
-    "p_reloading",
-    "p_mech"
+    "low_vis",
+    "we_marksman",
+    "friends_near"
    ],
    "amounts": {
     "dist": 1.5,
@@ -4258,36 +4516,37 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "hold": 0.11429682184857615,
-    "ambush": 0.435416464185052,
-    "trade": 0.010496646904461074,
-    "grenade": 0.077752940033045,
-    "suppress": 0.0008747205753717563,
-    "relocate": 0.0017494411507435125,
-    "fall_back": 0.013801146855865488,
-    "call_help": 0.093303528039654,
-    "flank": 0.015550588006609,
-    "climb": 0.031101176013218,
-    "advance": 0.001943823500826125,
-    "breach": 0.031101176013218,
+    "hold": 0.19027586764824853,
+    "ambush": 0.36243022409190195,
+    "trade": 0.0021842892969824446,
+    "grenade": 0.06471968287355392,
+    "suppress": 0.0058247714586198525,
+    "relocate": 0.0058247714586198525,
+    "fall_back": 0.011487743710055821,
+    "call_help": 0.1553272388965294,
+    "flank": 0.051775746298843135,
+    "climb": 0.025887873149421568,
+    "advance": 0.006471968287355392,
+    "breach": 0,
     "seal": 0,
-    "hide": 0.062202352026436,
-    "reload": 0.1104091748469239,
-    "melee": 0
+    "hide": 0.025887873149421568,
+    "reload": 0.09190194968044657,
+    "melee": 0,
+    "detonate": 0
    },
    "main": "ambush",
    "extras": {
-    "with:mark": 0.133125,
-    "with:call_help": 0.2,
+    "with:mark": 0.03328125,
+    "with:call_help": 0.4,
     "then:rush": 0
    }
   },
   {
    "moment": "crossing",
    "facts": [
-    "friends_near",
-    "we_swarm",
-    "p_mech",
+    "we_bomber",
+    "we_flanker",
+    "we_explosives",
     "p_reach"
    ],
    "amounts": {
@@ -4303,32 +4562,30 @@
     "let_go"
    ],
    "expect": {
-    "advance": 0.15330149387152825,
+    "advance": 0.015143986590114107,
     "suppress": 0,
-    "trade": 0.09332273456137817,
+    "trade": 0,
     "smoke": 0,
-    "flank": 0.5972655011928203,
-    "rush": 0,
+    "flank": 0.02950062818168571,
+    "rush": 0.005355385228200229,
     "strip_cover": 0,
     "melee": 0,
-    "hold": 0.11646677273259996,
+    "hold": 0,
     "call_armour": 0,
     "call_air": 0,
-    "wait": 0.03732909382455127,
-    "reload": 0.0023144038171221785
+    "wait": 0,
+    "reload": 0,
+    "detonate": 0.95
    },
-   "main": "flank",
-   "extras": {
-    "first:smoke": 0,
-    "with:mark": 0,
-    "then:rush": 0
-   }
+   "main": "detonate",
+   "extras": {}
   },
   {
    "moment": "close_quarters",
    "facts": [
-    "we_flyer",
-    "valuable"
+    "we_fodder",
+    "we_defender",
+    "p_suspected"
    ],
    "amounts": {
     "dist": 7.4,
@@ -4344,22 +4601,23 @@
     "let_go"
    ],
    "expect": {
-    "grenade": 0.1290372427728404,
-    "melee": 0,
-    "rush": 0.08492434320561579,
-    "hold": 0.5494697476590032,
-    "flash": 0,
-    "trade": 0.10989394953180065,
-    "fall_back": 0.07011233980128881,
-    "climb": 0,
-    "flee": 0.035056169900644404,
-    "smoke": 0.021506207128806736,
-    "reload": 0
+    "grenade": 0.17359124816112176,
+    "melee": 0.3668910025699292,
+    "rush": 0.007140439854580703,
+    "hold": 0.09239884671398442,
+    "flash": 0.14783815474237508,
+    "trade": 0.14783815474237508,
+    "fall_back": 0.011790092840704411,
+    "climb": 0.014465937346760148,
+    "flee": 0.023580185681408822,
+    "smoke": 0.014465937346760148,
+    "reload": 0,
+    "detonate": 0
    },
-   "main": "hold",
+   "main": "melee",
    "extras": {
-    "with:mark": 0.6262388703416901,
-    "with:call_help": 0.95
+    "first:flash": 0.3,
+    "first:grenade": 0.15655971758542253
    }
   },
   {
@@ -4389,7 +4647,8 @@
     "flee": 0.03597704056397261,
     "hide": 0.031014690141355702,
     "relocate": 0.03917262073480644,
-    "reload": 0
+    "reload": 0,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
@@ -4400,8 +4659,8 @@
   {
    "moment": "have_jump",
    "facts": [
-    "p_team",
-    "p_pilot_foot"
+    "we_marksman",
+    "heavy_near"
    ],
    "amounts": {
     "dist": 46.4,
@@ -4413,31 +4672,32 @@
     "suppress"
    ],
    "expect": {
-    "trade": 0.36156211172224295,
-    "relocate": 0.051310997882233665,
-    "ambush": 0.026637680136707486,
-    "flank": 0.3409623057498558,
-    "rush": 0.16021587869477863,
-    "grenade": 0.012183321997477445,
+    "trade": 0.5162080728793365,
+    "relocate": 0.1636853303964411,
+    "ambush": 0.020098886345339035,
+    "flank": 0.2572657452203396,
+    "rush": 0,
+    "grenade": 0.009192662532144779,
     "melee": 0,
-    "hide": 0.007991304041012245,
-    "mark": 0.020161492291643875,
-    "call_help": 0.005327536027341497,
-    "let_go": 0.005327536027341497,
-    "reload": 0.008319835429364974
+    "hide": 0.006029665903601711,
+    "mark": 0.015212418650668068,
+    "call_help": 0.0020098886345339033,
+    "let_go": 0.004019777269067807,
+    "reload": 0.0062775521685275604,
+    "detonate": 0
    },
    "main": "trade",
    "extras": {
     "first:grenade": 0.05717146695466396,
     "with:mark": 0.4730491776163712,
-    "with:call_help": 0.2,
+    "with:call_help": 0.1,
     "then:grenade": 0.22868586781865585
    }
   },
   {
    "moment": "outgunned",
    "facts": [
-    "low_vis"
+    "p_unaware"
    ],
    "amounts": {
     "pcover": 0,
@@ -4447,36 +4707,38 @@
    "mem": {},
    "mates": [
     "sweep",
-    "deny_escape"
+    "guard_exits"
    ],
    "expect": {
-    "climb": 0.1735111152751368,
-    "hide": 0.04683836161788276,
-    "fall_back": 0.02341918080894138,
-    "ambush": 0.1735111152751368,
-    "call_armour": 0.0867555576375684,
-    "call_help": 0.056206033941459295,
-    "trade": 0.0867555576375684,
-    "flee": 0.004683836161788276,
-    "flank": 0.2143826224288357,
-    "mark": 0.01826254236559095,
+    "climb": 0.10538187801559663,
+    "hide": 0.014223626257716223,
+    "fall_back": 0.0035559065644290557,
+    "ambush": 0.05269093900779832,
+    "call_armour": 0.05269093900779832,
+    "call_help": 0.03413670301851893,
+    "trade": 0.42152751206238653,
+    "flee": 0.0007111813128858111,
+    "flank": 0.1302051648370483,
+    "mark": 0.0443669792283595,
     "surrender": 0,
-    "search": 0.1156740768500912,
+    "search": 0.1405091706874622,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "flank",
+   "main": "trade",
    "extras": {
-    "first:smoke": 0.3,
-    "with:mark": 0.03157586014584486,
-    "then:rush": 0.95
+    "first:grenade": 0.15396897897908604,
+    "with:mark": 0.3157586014584486,
+    "with:call_help": 0.06478666666666665,
+    "then:grenade": 0.6158759159163442
    }
   },
   {
    "moment": "have_heavy",
    "facts": [
-    "p_seen",
-    "p_reloading"
+    "p_escape",
+    "air_avail"
    ],
    "amounts": {
     "hp": 7.7,
@@ -4487,29 +4749,29 @@
    "expect": {
     "screen_heavy": 0,
     "heavy_leads": 0,
-    "call_air": 0,
-    "advance": 0.09561510008552175,
-    "mark": 0.1529841601368348,
+    "call_air": 0.20456195285604478,
+    "advance": 0.025570244107005598,
+    "mark": 0.32729912456967164,
     "strip_cover": 0,
-    "rush": 0.019723944775083713,
-    "hold": 0.0908432261010986,
-    "sweep": 0.004930986193770928,
-    "smoke": 0.12112430146813147,
-    "fall_back": 0.48449720587252587,
-    "flank": 0.030281075367032867,
+    "rush": 0.005274753487690563,
+    "hold": 0.09717642777324163,
+    "sweep": 0,
+    "smoke": 0.06478428518216109,
+    "fall_back": 0.25913714072864436,
+    "flank": 0.016196071295540272,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0
    },
-   "main": "fall_back",
+   "main": "mark",
    "extras": {
-    "first:smoke": 0.6,
-    "with:call_help": 0.95
+    "then:trade": 0.4
    }
   },
   {
    "moment": "player_leaving",
    "facts": [
-    "friends_near"
+    "we_bomber"
    ],
    "amounts": {
     "cover": 1,
@@ -4518,31 +4780,28 @@
    "mem": {},
    "mates": [],
    "expect": {
-    "rush": 0.3600626921160812,
+    "rush": 0.358450271000429,
     "deny_escape": 0,
-    "trade": 0.08542338634294835,
+    "trade": 0,
     "collapse": 0,
-    "advance": 0.0654548901151457,
-    "flank": 0.22779569691452894,
-    "guard_exits": 0.18982974742877412,
+    "advance": 0.06516177214081713,
+    "flank": 0.11338779479188599,
+    "guard_exits": 0,
     "call_air": 0,
-    "call_help": 0.037965949485754824,
-    "mark": 0.023976150225328098,
-    "let_go": 0.009491487371438706,
+    "call_help": 0.009448982899323832,
+    "mark": 0,
+    "let_go": 0,
     "reload": 0,
-    "melee": 0
+    "melee": 0,
+    "detonate": 0.45355117916754395
    },
-   "main": "rush",
-   "extras": {
-    "first:grenade": 0.5388914264268011,
-    "first:flash": 0.18424139854155147,
-    "first:smoke": 0.4
-   }
+   "main": "detonate",
+   "extras": {}
   },
   {
    "moment": "losing",
    "facts": [
-    "open",
+    "rubble",
     "p_reach"
    ],
    "amounts": {
@@ -4556,22 +4815,23 @@
     "strip_cover"
    ],
    "expect": {
-    "regroup": 0.061825543147341455,
-    "call_help": 0.17664440899240416,
-    "fall_back": 0.6535843132718954,
-    "hide": 0.017664440899240415,
-    "ambush": 0.008832220449620207,
-    "trade": 0.0046087553278026175,
-    "flee": 0.03532888179848083,
-    "rush": 0.008832220449620207,
+    "regroup": 0.051766796463871695,
+    "call_help": 0.14790513275391912,
+    "fall_back": 0.5472489911895008,
+    "hide": 0.1183241062031353,
+    "ambush": 0.05916205310156765,
+    "trade": 0.0038589309023547417,
+    "flee": 0.029581026550783825,
+    "rush": 0.014790513275391912,
     "melee": 0,
     "surrender": 0,
     "play_dead": 0,
-    "reload": 0.03267921566359477
+    "reload": 0.027362449559475036,
+    "detonate": 0
    },
    "main": "fall_back",
    "extras": {
-    "first:smoke": 0.95,
+    "first:smoke": 0.5218116275619906,
     "with:call_help": 0.25
    }
   }

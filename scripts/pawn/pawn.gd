@@ -74,6 +74,10 @@ var moves: PawnMoves
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
+## What it stands and crouches at: the constants, unless resize() made it another
+## size of body (Roster's sizes, Docs/AIRoster.md 2.2).
+var stand_height := BODY_HEIGHT
+var crouch_height := CROUCH_HEIGHT
 var _auto_crouched := false
 ## Asking to crouch does nothing (Docs/AI.md A21: no soldier crouches). Ducking
 ## under something too low to stand under still happens: that is the body, not
@@ -166,6 +170,23 @@ func _ready() -> void:
 				break
 
 
+## Make it a body `height` tall and `radius` round, its feet where they are: a
+## bigger or smaller figure than the person it is spawned as.
+func resize(height: float, radius: float) -> void:
+	if body == null:
+		body = get_parent() as CharacterBody3D
+	var at := feet() if body.is_inside_tree() else body.position - Vector3.UP * _height * 0.5
+	stand_height = height
+	crouch_height = maxf(height - BRICK_M, height * 0.6)
+	_height = height
+	if _capsule != null:
+		_capsule.radius = minf(radius, height * 0.5)
+		_capsule.height = height
+	if eye != null:
+		eye.position = Vector3.UP * eye_offset()
+	place(at)
+
+
 ## Put the feet here, still. A teleport: interpolation is told so, or it would
 ## blend the body in from wherever it was.
 func place(at_feet: Vector3) -> void:
@@ -219,7 +240,7 @@ func eye_height() -> float:
 
 
 func is_crouched() -> bool:
-	return _height < BODY_HEIGHT
+	return _height < stand_height
 
 
 ## Crouching nobody asked for: the ceiling did it.
@@ -259,7 +280,7 @@ func step(delta: float) -> void:
 	# that fits where it is going, and a stand-up half way would move the body.
 	if moves == null or not moves.owns_height():
 		_auto_crouched = false
-		var low_h := CROUCH_HEIGHT if intents.crouch and not no_crouch else 0.0
+		var low_h := crouch_height if intents.crouch and not no_crouch else 0.0
 		if moves != null and moves.low_height() > 0.0:
 			low_h = moves.low_height() if low_h == 0.0 else minf(low_h, moves.low_height())
 		# In the air a crouch pulls the legs up and keeps the head where it is: what
@@ -267,10 +288,10 @@ func step(delta: float) -> void:
 		var top := moves != null and not body.is_on_floor()
 		if low_h > 0.0:
 			_set_height(low_h, top)
-		elif _fits(BODY_HEIGHT, probe, top):
-			_set_height(BODY_HEIGHT, top)
-		elif _fits(CROUCH_HEIGHT, probe, top):
-			_set_height(CROUCH_HEIGHT, top)
+		elif _fits(stand_height, probe, top):
+			_set_height(stand_height, top)
+		elif _fits(crouch_height, probe, top):
+			_set_height(crouch_height, top)
 			_auto_crouched = true
 
 	var speed := WALK_SPEED
@@ -402,9 +423,9 @@ func _step_over(motion: Vector3) -> bool:
 	if body.test_move(start, Vector3.UP * STEP_HEIGHT):
 		# No headroom to rise into. Crouching is what makes a step up onto a brick
 		# possible under a low ceiling, so try it before giving up.
-		if _height <= CROUCH_HEIGHT or not _fits(CROUCH_HEIGHT, Vector3.UP * STEP_HEIGHT):
+		if _height <= crouch_height or not _fits(crouch_height, Vector3.UP * STEP_HEIGHT):
 			return false
-		_set_height(CROUCH_HEIGHT)
+		_set_height(crouch_height)
 		_auto_crouched = true
 		start = body.global_transform
 		if body.test_move(start, Vector3.UP * STEP_HEIGHT):

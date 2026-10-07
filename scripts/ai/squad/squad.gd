@@ -30,6 +30,9 @@ var order: SquadMsg.Order
 ## Every report sent, for gates and the commander.
 var reports: Array[SquadMsg.Report] = []
 var morale := 1.0
+## Its leader has been killed (a member whose role is "leader", Roster): the
+## squad breaks, and its soldiers know it (the casebook's "our leader is dead").
+var leader_lost := false
 ## Which play's assignments are current (begin_play).
 var generation := 0
 var broken := false
@@ -255,6 +258,12 @@ func _enemy_in_sight() -> bool:
 
 func _on_member_down(_so: Soldier) -> void:
 	morale = maxf(0.0, morale - LOSS)
+	if _so != null and _so.role == "leader" and not leader_lost:
+		leader_lost = true
+		morale = minf(morale, BROKEN - 0.05)
+		var left := alive()
+		if not left.is_empty():
+			services.callouts.say(id, left[0].pawn, "leader_down", "They got the sergeant!", services.now(), true)
 	# Half the squad gone breaks it, whatever the running number says: two
 	# losses of four land morale on BROKEN to the last decimal (0.3000...04),
 	# and a rule that depends on rounding is not a rule.

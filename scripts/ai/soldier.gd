@@ -108,6 +108,39 @@ var melee_hits := 0
 var type_id := ""
 var type_facts: Array = []
 var name_tag: Label3D
+## Its attack and role (the recipe's), and what follows from them: a melee type or
+## a bomber holds no gun; fodder never runs the smart tree (ImportanceBudget).
+var attack_kind := "shooter"
+var role := "line"
+var no_gun := false
+var tier_cap := AgentTier.SMART
+## Its size of body, the map a body that size walks (null: the person's), and
+## how far its arm reaches.
+var body_size := "person"
+var nav: AINav
+var melee_reach := MELEE_REACH
+## A bomber: it lights its fuse within DETONATE_REACH and goes off FUSE later, for
+## up to BLAST_DAMAGE within BLAST_RADIUS. Shot dead first, it does not go off --
+## unless its recipe has the "explodes" mod (a smaller blast).
+const DETONATE_REACH := 2.6
+const FUSE := 0.7
+const BLAST_DAMAGE := 80.0
+const BLAST_RADIUS := 4.5
+const DEATH_BLAST := [40.0, 3.0]
+var fuse_at := INF
+var explodes := false
+var blast_hits: Array = []
+var _went_off := false
+## Phases (AIRoster.md 2.8): what it becomes, and when; how many it has been through.
+var phases: Array = []
+var phase_changes := 0
+var _phase_i := 0
+signal phased(index: int)
+const PHASE_LINES := {
+	"melee": ["RAAAGH!", "I'll tear you apart!", "Come here!"],
+	"bomber": ["If I go, you go!", "Take this with you!"],
+	"_": ["New plan!", "Change of plan!"],
+}
 ## How far the name can be read from, and how high over the body's middle it sits.
 const TAG_RANGE := 45.0
 const TAG_ABOVE := 0.32
@@ -338,6 +371,11 @@ func _physics_process(_delta: float) -> void:
 		_steer_field()
 	_measure_masked()
 	_gate_masked()
+	if no_gun:
+		fire_ok = false
+	if now >= fuse_at:
+		go_off()
+		return
 	_aim_and_fire(now)
 
 
@@ -381,6 +419,7 @@ func _think() -> void:
 		var c := contact()
 		if c != null:
 			throw_grenade(c.pos)
+	_check_phase()
 	brain.update(dt)
 	if services.judge != null:
 		services.judge.watch(self, dt)
@@ -567,7 +606,7 @@ func walk_toward(p: Vector3, run := false) -> int:
 
 func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
-	var nav := services.ai_nav
+	var nav := _nav()
 	# Trapped (no way anywhere, several times running): stop asking until it is
 	# time to look again -- rubble may have made a way down since.
 	if trapped:
@@ -683,8 +722,8 @@ func _unstick(toward: Vector3) -> void:
 			@warning_ignore("integer_division")
 			var turn := (k + 1) / 2 * (PI / 4.0) * (1.0 if k % 2 == 0 else -1.0)
 			var a: float = a0 + turn
-			var p := services.ai_nav.snap(feet + Vector3(cos(a), 0.0, sin(a)) * r)
-			if absf(p.y - feet.y) > 0.5 or not services.ai_nav.can_stand(p):
+			var p := _nav().snap(feet + Vector3(cos(a), 0.0, sin(a)) * r)
+			if absf(p.y - feet.y) > 0.5 or not _nav().can_stand(p):
 				continue
 			if not body_fits(services.world3d, p, pawn.body.get_rid()):
 				continue
@@ -801,8 +840,9 @@ func duck(seconds: float) -> void:
 	_ducking = true
 
 
-## Make it the type `id` of `roster`: its facts for the casebook and its name
-## over its head. (Health and weapon are the spawner's: UnitCatalog.)
+## Make it the type `id` of `roster`: its facts for the casebook, its name over
+## its head, its attack and role, its grenades, its size of body, its phases, and
+## the best brain it may run. (Health and the gun are the spawner's: UnitCatalog.)
 func set_type(id: String, roster: Roster) -> void:
 	if roster == null or not roster.has(id):
 		return
@@ -814,6 +854,122 @@ func set_type(id: String, roster: Roster) -> void:
 	# Its own name first, unless the tag already says it ("Tough Breacher").
 	var plain := named == "" or tag.to_lower().contains(named.to_lower())
 	set_name_tag(tag if plain else "%s  ·  %s" % [named, tag])
+	role = str(d.get("role", "line"))
+	grenades = int(d.get("grenades", GRENADES))
+	explodes = (roster.recipe(id).get("mods", []) as Array).has("explodes")
+	phases = (d.get("phases", []) as Array).duplicate(true)
+	_phase_i = 0
+	_set_attack(str(d.get("attack", "shooter")))
+	_set_tier_cap(str(d.get("tier", "smart")))
+	set_size(str(roster.recipe(id).get("size", "person")), roster)
+
+
+func _set_attack(kind: String) -> void:
+	attack_kind = kind
+	no_gun = kind == "melee" or kind == "bomber"
+	if no_gun:
+		fire_ok = false
+		for c in pawn.eye.get_children():
+			if c is GunInstance:
+				(c as GunInstance).visible = false
+
+
+## "smart", or the cheap tiers ("directed", "swarm"): capped, it is put on the
+## directed tree now and the budget never promotes it.
+func _set_tier_cap(tier_name: String) -> void:
+	tier_cap = AgentTier.SMART if tier_name == "smart" else AgentTier.DIRECTED
+	if tier_cap == AgentTier.DIRECTED and tier_hsm != null:
+		tier_hsm.demote()
+
+
+## A body of another size (Roster's sizes): taller and wider, on that size's map.
+func set_size(size: String, roster: Roster) -> void:
+	body_size = size
+	if size == "person" or size == "" or roster == null:
+		return
+	var sz: Dictionary = (roster.parts.get("sizes", {}) as Dictionary).get(size, {})
+	if sz.is_empty():
+		return
+	var tall := float(sz.get("tall", Pawn.BODY_HEIGHT))
+	var wide := float(sz.get("wide", Pawn.BODY_RADIUS * 2.0))
+	var sy := tall / Pawn.BODY_HEIGHT
+	var sx := wide / (Pawn.BODY_RADIUS * 2.0)
+	pawn.resize(tall, wide * 0.5)
+	for c in pawn.body.get_children():
+		if c is MeshInstance3D:
+			(c as MeshInstance3D).scale = Vector3(sx, sy, sx)
+	nav = services.nav_for(size)
+	melee_reach = MELEE_REACH * maxf(1.0, sx * 0.6)
+	if name_tag != null:
+		name_tag.position = Vector3.UP * (tall * 0.5 + TAG_ABOVE)
+
+
+## The map this body walks.
+func _nav() -> AINav:
+	return nav if nav != null else services.ai_nav
+
+
+## A bomber's fuse: lit once, it goes off FUSE seconds later wherever it has got to.
+func light_fuse() -> void:
+	if fuse_at < INF or is_dead():
+		return
+	fuse_at = services.now() + FUSE
+	var lines := ["Tick, tick, tick!", "Here it comes!", "Boom!"]
+	services.say(pawn, "bomber", lines[services.rng.randi() % lines.size()], AIServices.SHOUT)
+
+
+func go_off() -> void:
+	if _went_off:
+		return
+	_went_off = true
+	fuse_at = INF
+	blast_hits = Grenade.blast(services, pawn.feet(), pawn, BLAST_DAMAGE, BLAST_RADIUS, pawn)
+	pawn.health.apply_impact(1e9, &"")
+
+
+## The next phase, if its moment has come: the parts that change, the new name
+## over its head, a shout, and the tactic decided again at once.
+func _check_phase() -> void:
+	if _phase_i >= phases.size() or is_dead():
+		return
+	var ph: Dictionary = phases[_phase_i]
+	if not _phase_due(str(ph.get("when", ""))):
+		return
+	_phase_i += 1
+	phase_changes += 1
+	type_facts = (ph.get("facts", []) as Array).duplicate()
+	role = str(ph.get("role", role))
+	_set_attack(str(ph.get("attack", attack_kind)))
+	_set_tier_cap(str(ph.get("tier", "smart")))
+	set_name_tag(str(ph.get("tag", "")))
+	for c in pawn.body.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).material_override is StandardMaterial3D:
+			((c as MeshInstance3D).material_override as StandardMaterial3D).albedo_color = Color(1.0, 0.45, 0.1)
+	var lines: Array = PHASE_LINES.get(attack_kind, PHASE_LINES["_"])
+	services.say(pawn, "phase", lines[services.rng.randi() % lines.size()], AIServices.SHOUT)
+	tactic_done = true
+	tactic_at = -INF
+	tactic_until = -INF
+	phased.emit(_phase_i)
+
+
+func _phase_due(when: String) -> bool:
+	match when:
+		"armour_gone": return _layer_gone(EnemyProfiles.ARMOR)
+		"shield_gone": return _layer_gone(EnemyProfiles.SHIELD)
+		"health_half": return pawn.health.total_current() < max_health * 0.5
+		"leader_dead": return squad != null and squad.leader_lost
+		"alone": return squad != null and squad.members.size() > 1 and squad.alive().size() <= 1
+	return false
+
+
+## It wore a layer of `type` and that layer is down.
+func _layer_gone(type: StringName) -> bool:
+	var h := pawn.health
+	for i in h.layer_count():
+		if h.layer_type_at(i) == type:
+			return h.get_layer_value(i) <= 0.0
+	return false
 
 
 ## The words over its head (they follow a phase): seen by anyone within
@@ -837,7 +993,7 @@ func set_name_tag(text: String) -> void:
 ## Where to run to, to end up `stand_off` metres short of `at` on this side:
 ## a spot a body can stand on (the target's own feet are not one).
 func approach_point(at: Vector3, stand_off: float) -> Vector3:
-	var nav := services.ai_nav
+	var nav := _nav()
 	var feet := pawn.feet()
 	var back := Vector3(feet.x - at.x, 0.0, feet.z - at.z)
 	var d := back.length()
@@ -884,7 +1040,7 @@ func melee(target: Pawn) -> bool:
 		return false
 	var f := pawn.feet()
 	var t := target.feet()
-	if Vector2(t.x - f.x, t.z - f.z).length() > MELEE_REACH or absf(t.y - f.y) > 1.2:
+	if Vector2(t.x - f.x, t.z - f.z).length() > melee_reach or absf(t.y - f.y) > 1.2:
 		return false
 	melee_ready_at = now + MELEE_GAP
 	var before := target.health.total_current()
@@ -927,6 +1083,10 @@ func _on_nav_changed(box: AABB) -> void:
 func _on_died() -> void:
 	_dead = true
 	fire_ok = false
+	fuse_at = INF
+	if explodes and not _went_off:
+		_went_off = true
+		blast_hits = Grenade.blast(services, pawn.feet(), pawn, DEATH_BLAST[0], DEATH_BLAST[1], pawn)
 	if services.judge != null:
 		services.judge.close(self, "died")
 	knowledge().forget_seer(self)
