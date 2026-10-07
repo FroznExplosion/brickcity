@@ -307,7 +307,7 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 		else:
 			if room.items.is_empty():
 				room.items = RoomManifest.items_for(room)
-			var d := RoomManifest.draw_items(world, b.chunk, registry.palette, room, offset)
+			var d := RoomManifest.draw_items(world, b.chunk, registry.palette, room, offset, true)
 			g.pieces[k] = d.buffer
 			g.items[k] = d.details
 			g.boxes[k] = d.boxes
@@ -431,9 +431,12 @@ func drop_all() -> void:
 ## own space) whether a brick is still under it -- now, the tick its floor was
 ## destroyed or left. [Interiors §8.3](../Docs/Interiors.md).
 ##
-## A piece with none is out of its room's record (`gone`) and out of both
-## drawings at once: its rows are scaled to nothing where they are, so nothing
-## else in the drawing moves and nothing is worked out again. Each is returned
+## A piece that no longer has most of its floor here (RoomManifest.
+## item_floor_share) is out of both drawings at once: its rows are scaled to
+## nothing where they are, so nothing else in the drawing moves and nothing is
+## worked out again. It is NOT written off in its room's record: its floor may
+## have left as a piece of the building, and then it is on that piece (the
+## rider this hands back, and `piece_work` once the piece is still). Each is returned
 ## as {group, room, item, rows, details, box} -- the rows it was drawn with, in
 ## the building chunk's own space -- for whoever shows what became of it (it
 ## rides the section that took its floor: CityScene._groups_floor_went).
@@ -466,13 +469,12 @@ func check_floors(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> Arr
 			var room_lost := false
 			for j in range(0, mine.size(), 6):
 				var i := mine[j]
-				if room.gone.has(i):
-					continue
+				if room.gone.has(i) or (mine[j + 2] == 0 and mine[j + 4] == 0):
+					continue   # gone, or taken out by an earlier asking
 				var item: Dictionary = room.items[i]
-				if RoomManifest.item_supported(world, b.chunk, str(item.type),
-						(item.cell as Vector3i) - offset):
+				if RoomManifest.item_floor_share(world, b.chunk, str(item.type),
+						(item.cell as Vector3i) - offset) > 0.5:
 					continue
-				room.gone[i] = true
 				var box := AABB()
 				if mine[j + 5] >= 0:
 					box = g.boxes[k][mine[j + 5]]
@@ -481,10 +483,12 @@ func check_floors(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> Arr
 						"rows": _take_rows(g.pieces, k, mine[j + 1], mine[j + 2]),
 						"details": _take_rows(g.items, k, mine[j + 3], mine[j + 4]),
 						"box": box})
+				# No rows any more: the mark that it has been taken out.
+				mine[j + 2] = 0
+				mine[j + 4] = 0
 				room_lost = true
 			if room_lost:
-				# The room's rows are what its record says: nothing to work out.
-				g.room_gone[k] = room.gone.size()
+				g.piece_rows[k] = mine
 				lost = true
 		if lost:
 			pieces_lost += 1
@@ -540,6 +544,165 @@ func item_node(building_id: int, group: int) -> MultiMeshInstance3D:
 	return node if node != null and is_instance_valid(node) else null
 
 
+# ---------------------------------------------------------------------------
+# Pieces: what a fallen part of a building carries
+# ---------------------------------------------------------------------------
+
+## The interior of one PIECE of a building: every item of the building whose
+## floor is mostly in that piece's chunk, drawn on the piece.
+## [Interiors §8.3](../Docs/Interiors.md), the other half.
+##
+## An item is on whichever chunk holds its floor. For the standing building
+## that is a storey group; for a piece that has come off it -- a section lying
+## in the street, a tower gone over whole -- it is this, worked out by the same
+## question asked of the piece's chunk instead (RoomManifest.draw_items takes
+## any chunk, and a piece keeps the building's cells). So a collapsed building
+## is not empty: what stood on a floor is still on that floor, wherever the
+## floor ended up and whichever way up, whether or not anybody watched it fall.
+##
+## It is a drawing, not bricks: it holds nothing and collides with nothing.
+## CityScene decides which pieces get one (`_stream_pieces`): still ones, near
+## the player -- nothing is made for wreckage nobody is near, or still moving.
+class PieceDraw:
+	extends RefCounted
+	var chunk := -1
+	var owner := -1
+	## The owner's rooms whose floors reach into the piece's box, and how far
+	## through them the working out has got.
+	var rooms := PackedInt32Array()
+	var cursor := 0
+	var pieces: Array[PackedFloat32Array] = []
+	var items: Array[PackedFloat32Array] = []
+	var shown := false
+	var dirty := true
+	## The piece's own count of changes (BrickIsland.edits) when it was drawn,
+	## and how many live bricks it had: not everything that takes bricks off a
+	## piece counts as an edit (a drawing was ten boxes ahead of its piece once,
+	## the edit count unmoved), so CityScene counts them again now and then.
+	var edits := -1
+	var alive := -1
+	## The sum of its rooms' `gone` counts when it was drawn: something crushed
+	## or blasted since shows as that moving on.
+	var gone_sum := -1
+	var boxes := 0
+
+
+var _piece_draws := {}        ## piece chunk -> PieceDraw
+var _piece_nodes_p := {}      ## piece chunk -> MultiMeshInstance3D, interior pieces
+var _piece_nodes_i := {}      ## piece chunk -> MultiMeshInstance3D, items
+var pieces_drawn := 0         ## piece drawings put up, all told
+
+
+func piece(chunk: int) -> PieceDraw:
+	return _piece_draws.get(chunk)
+
+
+func piece_chunks() -> Array:
+	return _piece_draws.keys()
+
+
+## How many items of a piece's rooms are written off, all told, now.
+func piece_gone_sum(p: PieceDraw) -> int:
+	var rooms := registry.rooms_of(p.owner)
+	var n := 0
+	for index in p.rooms:
+		n += (rooms[index] as Room).gone.size()
+	return n
+
+
+func piece_drop(chunk: int) -> void:
+	FurnitureMesh.drop(chunk, _piece_nodes_p)
+	FurnitureMesh.drop(chunk, _piece_nodes_i)
+	_piece_draws.erase(chunk)
+
+
+func piece_drop_all() -> void:
+	for chunk in _piece_draws.keys():
+		piece_drop(chunk)
+
+
+## Work out one piece's interior, until `until_usec` (a room is always done),
+## and put it on screen under `parent` -- the piece's own node -- once every
+## room is. `lo`..`hi` is the piece's box in cells (the building's grid).
+## True when it is drawn and up to date.
+func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vector3i,
+		edits: int, parent: Node3D, until_usec: int, alive: int = -1) -> bool:
+	var t0 := Time.get_ticks_usec()
+	var p: PieceDraw = _piece_draws.get(chunk)
+	if p == null:
+		p = PieceDraw.new()
+		p.chunk = chunk
+		p.owner = b.id
+		_piece_draws[chunk] = p
+	var rooms := registry.rooms_of(b.id)
+	if p.dirty or p.edits != edits or (alive >= 0 and p.alive != alive):
+		p.dirty = false
+		p.edits = edits
+		p.alive = alive
+		p.cursor = 0
+		p.pieces.clear()
+		p.items.clear()
+		p.rooms = PackedInt32Array()
+		for room in rooms:
+			# Its FLOOR is the cell under it; its plan is its own box.
+			if room.lo.y - 1 < lo.y or room.lo.y - 1 >= hi.y:
+				continue
+			if room.lo.x >= hi.x or room.lo.x + room.size.x <= lo.x \
+					or room.lo.z >= hi.z or room.lo.z + room.size.z <= lo.z:
+				continue
+			p.rooms.push_back(room.id)
+	var offset: Vector3i = registry._rebase_of(b)
+	var worked := 0
+	while p.cursor < p.rooms.size():
+		if worked > 0 and Time.get_ticks_usec() >= until_usec:
+			work_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+			return false
+		var room: Room = rooms[p.rooms[p.cursor]]
+		p.cursor += 1
+		worked += 1
+		# Laid as bricks: its contents are blocks in some chunk, drawn from it.
+		if room.active or room.spilled:
+			continue
+		if room.items.is_empty():
+			room.items = RoomManifest.items_for(room)
+		if room.items.is_empty():
+			continue
+		var d := RoomManifest.draw_items(world, chunk, registry.palette, room, offset, true)
+		if not (d.buffer as PackedFloat32Array).is_empty():
+			p.pieces.append(d.buffer)
+		if not (d.details as PackedFloat32Array).is_empty():
+			p.items.append(d.details)
+	rooms_worked += worked
+	p.boxes = FurnitureMesh.attach_group(p.pieces, parent, _piece_nodes_p, chunk, piece_material())
+	FurnitureMesh.attach_group(p.items, parent, _piece_nodes_i, chunk, item_material())
+	var items = _piece_nodes_i.get(chunk)
+	if items != null and is_instance_valid(items):
+		(items as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if not (items as Node).is_in_group(DebugView.GROUP_ITEMS):
+			DebugView.tag(items as MultiMeshInstance3D, DebugView.Kind.ITEMS)
+	if not p.shown:
+		pieces_drawn += 1
+	p.shown = true
+	p.gone_sum = piece_gone_sum(p)
+	work_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	return true
+
+
+## Every row a building's shown groups are drawing now, pieces and items
+## together, in its chunk's own space: what goes over with it when it topples
+## whole (CityScene._topple).
+func rows_of(building_id: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for g in known(building_id):
+		if not g.shown:
+			continue
+		for buffer in g.pieces:
+			out.append_array(buffer)
+		for buffer in g.items:
+			out.append_array(buffer)
+	return out
+
+
 ## What is on screen, for the HUD and the reports.
 func report() -> Dictionary:
 	var groups := 0
@@ -559,4 +722,5 @@ func report() -> Dictionary:
 	return {"groups": groups, "buildings": buildings, "piece_boxes": pieces,
 			"item_boxes": items, "rooms_worked": rooms_worked, "attaches": attaches,
 			"releases": releases, "work_ms": work_ms, "worst_attach_ms": worst_attach_ms,
-			"checks": checks, "check_ms": check_ms}
+			"checks": checks, "check_ms": check_ms,
+			"piece_drawings": _piece_draws.size(), "pieces_drawn": pieces_drawn}

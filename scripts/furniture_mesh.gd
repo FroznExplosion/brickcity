@@ -99,7 +99,7 @@ static func build(world: BrickWorld, chunk: int, into: MultiMesh = null) -> Mult
 ## to date here so that every owner of a chunk does this the same way.
 static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 		held: Dictionary) -> int:
-	var node: MultiMeshInstance3D = held.get(chunk)
+	var node := _held(held, chunk)
 	# A node whose parent was freed is not null, it is FREED, and reading
 	# anything off it is an error rather than a null check.
 	if node != null and not is_instance_valid(node):
@@ -163,7 +163,7 @@ static func attach_fake(rooms: Array, parent: Node3D, held: Dictionary, key: int
 	var n := _attach_buffers(buffers, parent, held, key, fake_material())
 	# No shadows: the fake rung is only ever seen through a window, and a
 	# shadow pass over furniture nobody can reach is the cost it exists to cut.
-	var node: MultiMeshInstance3D = held.get(key)
+	var node := _held(held, key)
 	if node != null:
 		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return n
@@ -194,7 +194,7 @@ static func fake_material() -> ShaderMaterial:
 ## Zero scale, not a shorter buffer: nothing else in the drawing moves.
 ## Returns how many it hid.
 static func hide_inside(held: Dictionary, key: int, boxes: Array[AABB]) -> int:
-	var node: MultiMeshInstance3D = held.get(key)
+	var node := _held(held, key)
 	if node == null or not is_instance_valid(node) or node.multimesh == null:
 		return 0
 	# Kept on the node by _attach_buffers: reading a MultiMesh's buffer back
@@ -224,7 +224,7 @@ static func hide_inside(held: Dictionary, key: int, boxes: Array[AABB]) -> int:
 ## refreshed or freed as they require.
 static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
 		held: Dictionary, key: int, mat: Material) -> int:
-	var node: MultiMeshInstance3D = held.get(key)
+	var node := _held(held, key)
 	if node != null and not is_instance_valid(node):
 		held.erase(key)
 		node = null
@@ -264,9 +264,24 @@ static func _attach_buffers(buffers: Array[PackedFloat32Array], parent: Node3D,
 	return count
 
 
+## The node `held` keeps under `key`, or null -- and null, with the entry
+## forgotten, when it was freed with its parent. Read untyped first: putting a
+## freed instance into a typed variable is itself an error, and it stops the
+## function that did it. A piece's drawing hangs off the piece's own node,
+## which goes whenever the piece breaks up or sleeps, so here that is routine.
+static func _held(held: Dictionary, key: int) -> MultiMeshInstance3D:
+	var node = held.get(key)
+	if node == null:
+		return null
+	if not is_instance_valid(node):
+		held.erase(key)
+		return null
+	return node as MultiMeshInstance3D
+
+
 ## Drop a chunk's furniture node, if it has one.
 static func drop(chunk: int, held: Dictionary) -> void:
-	var node: MultiMeshInstance3D = held.get(chunk)
+	var node := _held(held, chunk)
 	# Valid, not merely non-null: this node hangs off the building's own,
 	# and freeing that takes this with it while leaving the map pointing at
 	# a freed object.

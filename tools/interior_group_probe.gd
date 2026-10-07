@@ -14,6 +14,9 @@ extends SceneTree
 ##   * a change nobody can place has the groups at that height walk their rooms
 ##     again, and the walk agrees with the asking;
 ##   * a room laid as bricks leaves its group;
+##   * what a section of the building takes with it is on that section: the
+##     same boxes, worked out from the piece's own chunk, none lost and none
+##     drawn twice -- so a collapsed building is not empty;
 ##   * the small things (BuildRecipe.Role.DETAIL) are a drawing of their own.
 ##
 ## What needs the city -- ranges, fades, the collapse rules, collision -- is the
@@ -202,7 +205,8 @@ func _check_building() -> void:
 			lost.size() >= 1 and is_victim and lost_rows > 0
 			and _shown(top_node) == shown0 - lost_rows
 			and top_node.multimesh.instance_count == count0
-			and not (rooms[victim_room] as Room).gone.is_empty(),
+			# Not written off: for all this knows its floor left as a piece.
+			and (rooms[victim_room] as Room).gone.is_empty(),
 			"%d piece(s), %d box(es) of %d; %d instance(s) before and after" % [
 				lost.size(), lost_rows, shown0, count0])
 	var untouched := true
@@ -238,7 +242,7 @@ func _check_building() -> void:
 		top_rows += (buf as PackedFloat32Array).size()
 	var room: Room = rooms[victim_room]
 	_ok("and the walk draws what the asking left: the same boxes, the lost ones dropped",
-			not room.gone.is_empty()
+			room.gone.is_empty()
 			and top_rows == int(want_rows.get(top.index, 0)) - lost_rows * FurnitureMesh.STRIDE
 			and groups.piece_node(id, top.index).multimesh.instance_count * FurnitureMesh.STRIDE == top_rows,
 			"%d floor brick(s) killed; %d of %d box(es) left; %d room(s) worked out again" % [
@@ -266,12 +270,105 @@ func _check_building() -> void:
 			placed > 0 and rows_before > 0 and rows_laid == 0 and rows_back == rows_before,
 			"%d brick(s) laid; %d, %d, %d floats" % [placed, rows_before, rows_laid, rows_back])
 
+	_check_section(w, reg, groups, b, layout, parent)
+
 	groups.release(id, top)
 	_ok("a group let go draws nothing and keeps nothing",
 			not top.shown and groups.piece_node(id, top.index) == null and top.pieces.is_empty())
 	groups.drop(id)
 	_ok("and a building let go has no groups", groups.known(id).is_empty())
 	parent.queue_free()
+
+
+## The top of the tower comes off as one piece: cut through its walls and
+## columns half way up a storey, and what the solve finds loose is split out.
+## Everything that stood above the cut is then on the piece -- worked out from
+## the piece's chunk by the rule the building's own groups use -- and not in
+## the building. Interiors.md 8.3: a thing is where its floor is.
+func _check_section(w: BrickWorld, reg: BuildingRegistry, groups: InteriorGroups,
+		b: BuildingRegistry.Building, layout: Array, parent: Node3D) -> void:
+	var far := Time.get_ticks_usec() + 60000000
+	for g in layout:
+		groups.work(b, g, far)
+		groups.attach(b, g, parent)
+	var before := 0
+	for g in layout:
+		before += _shown(groups.piece_node(b.id, g.index))
+	# Six storeys up, a metre above the floor: every brick in two courses.
+	var cs := BrickWorld.get_cell_size()
+	var dims: Vector3i = w.get_chunk_dims(b.chunk)
+	var origin: Vector3i = w.get_chunk_origin(b.chunk)
+	var cut_y := 1 + 6 * TowerRecipe.STOREY_PLATES + 7
+	var slab := PackedInt32Array()
+	for y in range(cut_y, cut_y + 6):
+		for x in dims.x:
+			for z in dims.z:
+				var blk: int = w.block_at(b.chunk, origin + Vector3i(x, y, z))
+				if blk >= 0 and not slab.has(blk):
+					slab.push_back(blk)
+	w.kill_blocks(b.chunk, slab)
+	var res: Dictionary = w.solve_structure(b.chunk, 1, 0.0)
+	var biggest := PackedInt32Array()
+	for grp in (res.groups as Array):
+		if (grp as PackedInt32Array).size() > biggest.size():
+			biggest = grp
+	var cut: Dictionary = w.split_island(b.chunk, biggest)
+	var piece_chunk: int = int(cut.get("chunk", -1))
+	_ok("the tower cut through above its sixth storey: the top is one piece",
+			piece_chunk >= 0 and biggest.size() > 500,
+			"%d brick(s) killed in the cut, %d in the piece" % [slab.size(), biggest.size()])
+	if piece_chunk < 0:
+		return
+	var lost: Array = groups.check_floors(b, -INF, INF)
+	var lost_rows := 0
+	for o in lost:
+		lost_rows += (o.rows as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+	var left := 0
+	for g in layout:
+		left += _shown(groups.piece_node(b.id, g.index))
+	var any_written_off := false
+	for room in reg.rooms_of(b.id):
+		if room.lo.y > cut_y and not room.gone.is_empty():
+			any_written_off = true
+	_ok("the building stops drawing what stood above the cut, and writes none of it off",
+			lost.size() > 0 and left == before - lost_rows and left > 0 and not any_written_off,
+			"%d box(es) before, %d taken out with %d piece(s), %d left" % [
+				before, lost_rows, lost.size(), left])
+	var on_piece := Node3D.new()
+	root.add_child(on_piece)
+	var p_origin: Vector3i = w.get_chunk_origin(piece_chunk)
+	var p_dims: Vector3i = w.get_chunk_dims(piece_chunk)
+	var done := groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
+			p_origin + p_dims + Vector3i.ONE, 0, on_piece, far)
+	var drawn: InteriorGroups.PieceDraw = groups.piece(piece_chunk)
+	_ok("and the piece draws exactly that: the same boxes, on the piece",
+			done and drawn != null and drawn.shown and drawn.boxes == lost_rows
+			and on_piece.get_child_count() >= 1,
+			"%d box(es) on the piece for %d that left the building" % [
+				drawn.boxes if drawn != null else -1, lost_rows])
+	# In the piece's own space: a box that was at height h in the building is
+	# at h less the piece's origin, so the lowest thing on the piece stands
+	# just above the piece's own bottom, not 16 m up it.
+	var lowest := INF
+	var node: MultiMeshInstance3D = on_piece.get_child(0) if on_piece.get_child_count() > 0 else null
+	if node != null:
+		var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
+		for i in buffer.size() / FurnitureMesh.STRIDE:
+			lowest = minf(lowest, buffer[i * FurnitureMesh.STRIDE + 7])
+	_ok("in the piece's own space, standing on the piece's floors",
+			lowest > 0.0 and lowest < float(TowerRecipe.STOREY_PLATES) * cs.y,
+			"the lowest box is %.2f m up the piece" % lowest)
+	var again := groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
+			p_origin + p_dims + Vector3i.ONE, 0, on_piece, far)
+	var worked := groups.rooms_worked
+	groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
+			p_origin + p_dims + Vector3i.ONE, 1, on_piece, far)
+	_ok("asked again it is the same drawing; told the piece changed, it is worked out again",
+			again and groups.piece(piece_chunk).boxes == lost_rows and groups.rooms_worked > worked)
+	groups.piece_drop(piece_chunk)
+	_ok("a piece let go draws nothing", groups.piece(piece_chunk) == null
+			and on_piece.get_child_count() == 0 or (on_piece.get_child(0) as Node).is_queued_for_deletion())
+	on_piece.queue_free()
 
 
 ## The small things: an authored item with a DETAIL part on it. The part is a

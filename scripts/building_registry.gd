@@ -189,6 +189,12 @@ var _materialise_ms := 0.0
 var _fixture_parts := {}
 var _rooms_active := 0
 var _rooms_drawn := 0
+## Storey groups are drawing the interiors (CityScene.group_interiors): an item
+## is on whichever chunk holds its floor -- the building, or a piece of it lying
+## in the street (InteriorGroups). So an item with no floor in THIS building is
+## not gone, it is elsewhere, and nothing done to the room's place in the
+## building -- laying it, blasting it -- may write it off.
+var floors_decide := false
 
 
 func _init(brick_world: BrickWorld, part_palette: Dictionary) -> void:
@@ -400,7 +406,8 @@ func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
 		# until something nearby broke nothing asked the solve anything.
 		if down == Vector3i(0, -1, 0) and not RoomManifest.item_supported(
 				world, into, str(item.type), at - offset):
-			room.gone[i] = true
+			if not floors_decide:
+				room.gone[i] = true
 			continue
 		var laid := RoomManifest.build_item(world, into, palette,
 				{"type": item.type, "cell": at, "yaw": item.yaw},
@@ -691,6 +698,24 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 		# line up if anybody ever does build it.
 		if room.drawn:
 			undraw_room(building_id, room.id)
+		if floors_decide:
+			# Only what is still standing in the room: an item whose floor has
+			# left is on a piece somewhere, and this blast is not there.
+			if room.items.is_empty():
+				room.items = RoomManifest.items_for(room)
+			var here := false
+			var offset := _rebase_of(b)
+			for i in room.items.size():
+				if room.gone.has(i):
+					continue
+				var item: Dictionary = room.items[i]
+				if b.chunk >= 0 and RoomManifest.item_floor_share(world, b.chunk,
+						str(item.type), (item.cell as Vector3i) - offset) > 0.5:
+					room.gone[i] = true
+					here = true
+			if here:
+				woken += 1
+			continue
 		var count: int = room.items.size() if not room.items.is_empty() 				else RoomManifest.item_count_for(room)
 		for i in count:
 			room.gone[i] = true

@@ -36,6 +36,10 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 func _run() -> void:
 	print("fakehide probe")
 	city = load("res://scenes/big_city.tscn").instantiate()
+	# The fake and drawn rungs are what this probe is about; storey groups are
+	# the default now, and what they do when a section leaves is `-- --groups`
+	# ("none is left drawn over a floor that has gone"). Goes with the rungs.
+	city.group_interiors = false
 	root.add_child(city)
 	await _ticks(30)
 	var used := []
