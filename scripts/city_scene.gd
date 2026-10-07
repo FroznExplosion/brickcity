@@ -1015,6 +1015,8 @@ func _ready() -> void:
 	DebugView.reset()
 	if "--group-interiors" in args:
 		group_interiors = true
+	if "--rungs" in args:
+		group_interiors = false
 	_breaklag_mode = "--breaklag" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
@@ -1196,6 +1198,7 @@ func _ready() -> void:
 	disasters.name = "Disasters"
 	add_child(disasters)
 	disasters.setup(self)
+	registry.floors_decide = group_interiors
 	if group_interiors:
 		InteriorGroups.warm(self)
 	# One of the passes below, unless none of them is asked for (the `else` at
@@ -1949,9 +1952,10 @@ var hold_interiors_mid_collapse := true
 ## Interiors drawn a group of storeys at a time (InteriorGroups;
 ## Docs/Interiors.md 8.2) instead of by the drawn, fake and real rungs: one
 ## drawing of a group's interior pieces and one of its items, shown and faded by
-## distance alone. Off: the rungs, as they were. F6 switches in play;
-## `-- --group-interiors` starts with it on.
-@export var group_interiors := false
+## distance alone. The default since 2026-10-07 (user). Off: the drawn, fake
+## and real rungs, which stay until their tests are rewritten (Interiors.md
+## 8.7, stage 4); F6 switches in play, `-- --rungs` starts with them.
+@export var group_interiors := true
 var interior_groups := InteriorGroups.new()
 ## InteriorGroups.key_of(building, group) -> that group's shapes on its
 ## building's furniture body (_room_body): one box per interior piece, for the
@@ -2533,7 +2537,85 @@ func _stream_groups(here: Vector3) -> void:
 	for id in groups.known_ids():
 		if not near.has(id):
 			_drop_groups(id)
+	_stream_pieces(here)
 	_groups_tend_riders()
+
+
+## A piece smaller than this carries no interior drawing: it is rubble, and a
+## floor that small has nothing standing on most of it.
+const PIECE_INTERIOR_BLOCKS := 24
+var _pieces_owed := 0   ## piece drawings wanted and not yet up to date, as of the last pass
+var _pieces_pass := 0   ## passes run: a piece's bricks are counted again every eighth
+
+
+## Give the still pieces of buildings near the player their interiors
+## (InteriorGroups.piece_work; Interiors.md 8.3).
+##
+## A collapsed building is not empty: what stood on a floor is on that floor,
+## wherever it came to rest. Which pieces get a drawing is the user's rule for
+## wreckage (CollapseNext.md 1.8): **nothing until somebody is near** -- inside
+## the range a standing building's interior is drawn at, fading the same way --
+## and **nothing new on a piece that is still moving**. A piece that has a
+## drawing keeps it if it is knocked again, worked out afresh when its bricks
+## change (it can only lose things), and loses it past the range, or when it
+## breaks up (its parts get their own once they are still), sleeps or goes.
+## Nearest first, on what is left of the groups' clock.
+func _stream_pieces(here: Vector3) -> void:
+	var groups := interior_groups
+	var reach := InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE
+	var todo: Array = []
+	var live := {}
+	for isl in islands.islands:
+		if not isl.is_valid() or isl.owner < 0 or isl.mesh == null:
+			continue
+		var have: InteriorGroups.PieceDraw = groups.piece(isl.chunk)
+		if have == null and not isl.settled:
+			continue   # still coming down: nothing new
+		var d := maxf(isl.body.global_position.distance_to(here) - isl.radius, 0.0)
+		if d > (reach if have != null else InteriorGroups.INTERIOR_RANGE):
+			continue   # dropped below, with every other drawing not kept
+		var b := registry.get_building(isl.owner)
+		if b == null or b.is_build():
+			continue
+		if have == null and world.get_alive_block_count(isl.chunk) < PIECE_INTERIOR_BLOCKS:
+			continue
+		live[isl.chunk] = true
+		# Its bricks counted again every eighth pass (half a second), each piece
+		# on its own pass: an edit count that did not move is not proof that
+		# nothing left it.
+		var alive := have.alive if have != null else -1
+		if have != null and (isl.chunk + _pieces_pass) % 8 == 0:
+			alive = world.get_alive_block_count(isl.chunk)
+			if have.shown and groups.piece_gone_sum(have) != have.gone_sum:
+				have.dirty = true   # something in its rooms was crushed or blasted
+		if have == null or not have.shown or have.dirty or have.edits != isl.edits 				or have.alive != alive:
+			todo.append([d, isl, b])
+	for chunk in groups.piece_chunks():
+		if not live.has(chunk):
+			groups.piece_drop(chunk)
+	_pieces_pass += 1
+	_pieces_owed = todo.size()
+	if todo.is_empty():
+		return
+	todo.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+	var cs := BrickWorld.get_cell_size()
+	var until := Time.get_ticks_usec() + int(InteriorGroups.BUDGET_MS * 500.0)
+	var first := true
+	for entry in todo:
+		if not first and Time.get_ticks_usec() >= until:
+			break
+		first = false
+		var isl: BrickIsland = entry[1]
+		# The piece's box in cells: the building's grid, which it kept.
+		var box: AABB = islands._island_aabb(isl)
+		var origin: Vector3i = world.get_chunk_origin(isl.chunk)
+		var lo := Vector3i((box.position / cs).floor()) + origin - Vector3i.ONE
+		var hi := Vector3i((box.end / cs).ceil()) + origin + Vector3i.ONE
+		if groups.piece_work(entry[2], isl.chunk, lo, hi, isl.edits, isl.mesh, until,
+				world.get_alive_block_count(isl.chunk)):
+			_pieces_owed -= 1
+		else:
+			break
 
 
 ## Bricks of `b` inside `box` (its chunk's own space) have just been destroyed
@@ -2586,8 +2668,19 @@ func _groups_floor_went(b: BuildingRegistry.Building, box: AABB,
 		riding += 1
 	if rows.is_empty():
 		return
+	_rider_add(came, rows, into)
+	_group_rides += riding
+
+
+## Draw `rows` (a building chunk's own space) on a piece, taken into the
+## piece's space by `into`: what rides it.
+func _rider_add(isl: BrickIsland, rows: PackedFloat32Array, into: Transform3D) -> void:
+	if isl == null or not isl.is_valid() or isl.mesh == null or not is_instance_valid(isl.mesh):
+		return
 	@warning_ignore("integer_division")
 	var n := rows.size() / FurnitureMesh.STRIDE
+	if n == 0:
+		return
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -2606,20 +2699,23 @@ func _groups_floor_went(b: BuildingRegistry.Building, box: AABB,
 	node.multimesh = mm
 	node.material_override = InteriorGroups.piece_material()
 	DebugView.tag(node, DebugView.Kind.INTERIOR)
-	came.mesh.add_child(node)
-	_group_riders.append([came, node])
-	_group_rides += riding
+	isl.mesh.add_child(node)
+	_group_riders.append([isl, node])
 
 
-## Take what rode a section off it once the section has landed, settled or
-## gone. Asked every pass; there are a handful.
+## Forget riders whose piece has gone -- broken up, crumbled, put to sleep --
+## and take one off a piece that has a drawing of its own now (_stream_pieces:
+## the same things, worked out from the piece instead of carried over). Until
+## then it stays where it is: a section that lands whole keeps its furniture.
 func _groups_tend_riders() -> void:
 	var k := 0
 	while k < _group_riders.size():
 		var isl: BrickIsland = _group_riders[k][0]
 		var node = _group_riders[k][1]
+		var own: InteriorGroups.PieceDraw = interior_groups.piece(isl.chunk) \
+				if isl != null and isl.is_valid() else null
 		if node != null and is_instance_valid(node) and isl != null and isl.is_valid() \
-				and not isl.landed and not isl.settled:
+				and (own == null or not own.shown):
 			k += 1
 			continue
 		if node != null and is_instance_valid(node):
@@ -2735,6 +2831,7 @@ func _set_group_interiors(on: bool) -> void:
 	if on == group_interiors:
 		return
 	group_interiors = on
+	registry.floors_decide = on
 	if on:
 		InteriorGroups.warm(self)
 		for id in _materialised:
@@ -2756,6 +2853,7 @@ func _set_group_interiors(on: bool) -> void:
 	else:
 		for id in interior_groups.known_ids():
 			_drop_groups(id)
+		interior_groups.piece_drop_all()
 		for rider in _group_riders:
 			if rider[1] != null and is_instance_valid(rider[1]):
 				(rider[1] as Node).queue_free()
@@ -3197,6 +3295,11 @@ func _topple(id: int) -> void:
 	# drawing furniture that has already been redrawn, forever. It is the
 	# floating brick over a building that has come down.
 	FurnitureMesh.drop(chunk, _furniture)
+	# What its storey groups are drawing goes over with it: the piece it
+	# becomes is this same chunk, so the rows are in the right space as they
+	# are. Dropped with the groups, every desk in a toppling tower vanished the
+	# tick it began to lean.
+	var riding_rows := interior_groups.rows_of(id) if group_interiors else PackedFloat32Array()
 	_drop_drawn(id)
 	# A banded building has no single mesh to hand over -- it has its bands,
 	# and they already hold the right geometry. The island draws them until
@@ -3227,7 +3330,12 @@ func _topple(id: int) -> void:
 	# into the wreck when somebody arrives. Either way nothing is built in the
 	# middle of a collapse for rooms nobody may ever look at (section 5.1).
 	if not b.is_build():
-		if spill_interiors:
+		if group_interiors:
+			# Nothing is written off or marked: an item is on whichever piece
+			# holds its floor, and is drawn there once that piece is still and
+			# somebody is near (_stream_pieces).
+			pass
+		elif spill_interiors:
 			registry.mark_rooms_spilled(id)
 			_wrecks[id] = chunk
 		else:
@@ -3241,6 +3349,9 @@ func _topple(id: int) -> void:
 	registry.hand_over(id)
 	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands,
 			piece, id, true, true, carried_band_bytes)
+	if not riding_rows.is_empty():
+		_rider_add(islands.find_by_chunk(chunk), riding_rows, Transform3D.IDENTITY)
+		_group_rides += 1
 	for i in range(1, extra_frames.size()):
 		if i - 1 >= extra_nodes.size():
 			break
@@ -4054,6 +4165,13 @@ func _crush_drawn(source: BrickIsland) -> void:
 				if room.gone.has(i):
 					continue
 				var cell: Vector3i = (room.items[i] as Dictionary).cell
+				# With storey groups an item is where its floor is, and a room
+				# whose floor has left is air here: what falls through that air
+				# crushes nothing (it was writing off furniture lying on a piece
+				# in the street, ten boxes at a time).
+				if group_interiors and RoomManifest.item_floor_share(world, b.chunk,
+						str((room.items[i] as Dictionary).type), cell - offset) <= 0.5:
+					continue
 				var base := chunk_xf * (Vector3(cell - offset - origin) * cs)
 				# Its foot and a little above it: a piece through a table is in
 				# the table's space, one resting on the floor beside it is not.
@@ -6867,17 +6985,19 @@ func _run_groups_pass() -> void:
 			_group_rides > rides0 and riding_most > 0 and rider_off == 0,
 			"%d piece(s) lost their floor, %d rode; up to %d section(s) carrying some; %d found off its section" % [
 				_group_orphans - orphans0, _group_rides - rides0, riding_most, rider_off])
-	for t in 600:
-		await get_tree().physics_frame
-		if _group_riders.is_empty():
-			break
-	var still_up := 0
-	for rider in _group_riders:
-		if not (rider[0] as BrickIsland).landed and not (rider[0] as BrickIsland).settled:
-			still_up += 1
-	_gate_ok("  and is taken off it when the section lands",
-			_group_riders.size() == still_up,
-			"%d left, %d of them on sections still in the air" % [_group_riders.size(), still_up])
+	# The wreckage is not empty (user, 2026-10-07: "the building just stays
+	# empty"). Once its pieces are still, what stood on a floor is drawn on
+	# the piece that has that floor -- and nothing is made on one still moving.
+	var wreck: Dictionary = await _groups_wreck_settle(b)
+	_gate_ok("the wreckage has its interior: still pieces draw what stood on their floors",
+			int(wreck.pieces) > 0 and int(wreck.boxes) > 0 and int(wreck.made_moving) == 0,
+			"%d piece(s) with a drawing, %d box(es); %d drawing(s) made on a piece still moving; still after %d tick(s)" % [
+				wreck.pieces, wreck.boxes, wreck.made_moving, wreck.ticks])
+	_gate_ok("  each is what its own chunk holds, and no rider is left on a piece that has one",
+			int(wreck.wrong) == 0 and int(wreck.riders) == 0,
+			"%d drawing(s) not what the piece's chunk gives, %d rider(s) on a piece with a drawing;%s" % [
+				wreck.wrong, wreck.riders, wreck.get("why", "")])
+	await _save("interior_groups_wreck")
 
 	# A building that is coming apart when somebody arrives gets no groups
 	# until it is still; then the storeys left standing get theirs.
@@ -6928,6 +7048,33 @@ func _run_groups_pass() -> void:
 				after += 1
 	_gate_ok("  once it is still, the storeys left standing get theirs", after > 0,
 			"%d group(s); still at tick %d, toppled %s" % [after, still_at, b2.toppled])
+
+	# What is left of it goes over whole. Its furniture goes with it: the piece
+	# it becomes is the same chunk, so every box it was drawing rides. (Dropped
+	# with the groups, a toppling tower's rooms emptied the tick it leaned.)
+	if not b2.toppled and b2.is_materialised():
+		@warning_ignore("integer_division")
+		var drawing: int = interior_groups.rows_of(b2.id).size() / FurnitureMesh.STRIDE
+		var went := b2.chunk
+		_topple(b2.id)
+		await get_tree().physics_frame
+		var carried := 0
+		for rider in _group_riders:
+			if (rider[0] as BrickIsland).is_valid() and (rider[0] as BrickIsland).chunk == went \
+					and rider[1] != null and is_instance_valid(rider[1]):
+				carried += (rider[1] as MultiMeshInstance3D).multimesh.instance_count
+		_gate_ok("a tower that goes over whole takes its furniture with it",
+				b2.toppled and drawing > 0 and carried == drawing
+				and interior_groups.known(b2.id).is_empty(),
+				"%d box(es) drawn before, %d riding the piece it became" % [drawing, carried])
+		var wreck2: Dictionary = await _groups_wreck_settle(b2)
+		_gate_ok("  and what is left of it on the ground has its interior",
+				int(wreck2.pieces) > 0 and int(wreck2.boxes) > 0 and int(wreck2.wrong) == 0,
+				"%d piece(s) with a drawing, %d box(es), %d wrong; still after %d tick(s);%s" % [
+					wreck2.pieces, wreck2.boxes, wreck2.wrong, wreck2.ticks, wreck2.get("why", "")])
+	else:
+		_gate_ok("a tower that goes over whole takes its furniture with it", false,
+				"nothing left standing to topple")
 
 	# And back: the groups let go of everything they hold.
 	_set_group_interiors(false)
@@ -7199,6 +7346,61 @@ func _groups_pick(n: int) -> Array:
 		if found.size() >= n:
 			break
 	return found
+
+
+## Wait for a building's pieces to come to rest and for the piece drawings to
+## catch up, then say what the wreckage is drawing: {pieces with a drawing,
+## their boxes, drawings that are not what the piece's own chunk gives when
+## asked afresh, riders left on a piece that has a drawing, drawings first
+## seen on a piece that was not still, ticks waited}.
+func _groups_wreck_settle(b: BuildingRegistry.Building) -> Dictionary:
+	var out := {"pieces": 0, "boxes": 0, "wrong": 0, "riders": 0, "made_moving": 0, "ticks": 0}
+	var seen := {}
+	var quiet := 0
+	for t in 2400:
+		await get_tree().physics_frame
+		out.ticks = t
+		for chunk in interior_groups.piece_chunks():
+			if seen.has(chunk):
+				continue
+			seen[chunk] = true
+			var at := islands.find_by_chunk(int(chunk))
+			if at != null and not at.settled:
+				out.made_moving += 1
+		quiet = quiet + 1 if (t > 90 and islands.moving_of(b.id) == 0 and _pieces_owed == 0) else 0
+		# Long enough for every piece's bricks to have been counted again
+		# (_stream_pieces: every eighth pass, a pass every fourth tick).
+		if quiet >= 48:
+			break
+	var rooms := registry.rooms_of(b.id)
+	var offset: Vector3i = registry._rebase_of(b)
+	for chunk in interior_groups.piece_chunks():
+		var p: InteriorGroups.PieceDraw = interior_groups.piece(int(chunk))
+		if p == null or p.owner != b.id or not p.shown:
+			continue
+		for rider in _group_riders:
+			if (rider[0] as BrickIsland).is_valid() and (rider[0] as BrickIsland).chunk == int(chunk):
+				out.riders += 1
+		if p.boxes > 0:
+			out.pieces += 1
+			out.boxes += p.boxes
+		# Asked afresh, of every room of the building and not only the ones
+		# its box was thought to reach.
+		var want := 0
+		for room in rooms:
+			if room.active or room.spilled or room.items.is_empty():
+				continue
+			@warning_ignore("integer_division")
+			want += (RoomManifest.draw_items(world, int(chunk), registry.palette, room, offset,
+					true).buffer as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+		if want != p.boxes:
+			out.wrong += 1
+			var isl := islands.find_by_chunk(int(chunk))
+			out["why"] = "%s piece %d: draws %d, its chunk gives %d; %d room(s) tried; drawn at edit %d, now %d; settled %s, %d brick(s)" % [
+					out.get("why", ""), int(chunk), p.boxes, want, p.rooms.size(), p.edits,
+					isl.edits if isl != null else -1, isl.settled if isl != null else false,
+					world.get_alive_block_count(int(chunk))]
+	return out
 
 
 ## Stand `dist` out from the foot of a face, `eye` up it, looking at it.
@@ -10355,7 +10557,9 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		_free_shell(id)
 		_drop_drawn(id)
 		if b != null and not b.is_build():
-			if spill_interiors:
+			if group_interiors:
+				pass   # as in _topple: on its pieces, by rule
+			elif spill_interiors:
 				registry.mark_rooms_spilled(id)
 				_wrecks[id] = b.chunk
 			else:
@@ -11890,6 +12094,11 @@ func _bake_and_wait(chunk: int) -> float:
 ## 4,000-room tower and the other on a 180-room one, and let `_merge_quiet_
 ## buildings` rebuild the body underneath both of them.
 func _run_interiors_pass() -> void:
+	# The rungs' own pass: it measures the drawn, fake and real rungs, so it
+	# runs on them. Storey groups are the default (2026-10-07) and are checked
+	# by `-- --groups` and tools/interior_group_probe.gd; this goes with the
+	# rungs (Docs/Interiors.md 8.7, stage 4).
+	_set_group_interiors(false)
 	_measuring = true
 	print("[interiors] what a room costs, and what a building's worth of them costs")
 	print("[interiors] %d building(s), %s shapes" % [
@@ -12308,6 +12517,11 @@ func _run_windows_pass() -> void:
 ## and after each step counts every way a piece can be in the wrong place.
 ## See _audit_interiors for what each number means.
 func _run_interior_audit_pass() -> void:
+	# The rungs' own pass: it measures the drawn, fake and real rungs, so it
+	# runs on them. Storey groups are the default (2026-10-07) and are checked
+	# by `-- --groups` and tools/interior_group_probe.gd; this goes with the
+	# rungs (Docs/Interiors.md 8.7, stage 4).
+	_set_group_interiors(false)
 	print("[audit] what interior pieces do while a building comes down")
 	var target := -1
 	var tallest := 0
@@ -12634,6 +12848,11 @@ func _fresh_bricks(id: int) -> int:
 ## Docs/Interiors.md. The truth layer's half is `tools/interior_probe.gd`; this
 ## is the half with distances, collision and a mesh in it.
 func _run_rooms_pass() -> void:
+	# The rungs' own pass: it measures the drawn, fake and real rungs, so it
+	# runs on them. Storey groups are the default (2026-10-07) and are checked
+	# by `-- --groups` and tools/interior_group_probe.gd; this goes with the
+	# rungs (Docs/Interiors.md 8.7, stage 4).
+	_set_group_interiors(false)
 	print("[rooms] what is inside a building, and what it costs")
 	var b := registry.get_building(0)
 	var rep: Dictionary = registry.room_report()

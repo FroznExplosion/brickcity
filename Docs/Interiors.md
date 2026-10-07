@@ -299,7 +299,7 @@ the largest single cost still on the table.
 
 ---
 
-## 8. Simplification (2026-10-05) — stage 1 built 2026-10-06, behind a switch (§8.8)
+## 8. Simplification (2026-10-05) — stages 1 and 2 built; the default since 2026-10-07 (§8.8–8.10)
 
 **Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
 holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
@@ -398,9 +398,12 @@ Probes whose checks measure the removed rungs (`--rooms`, `interior_probe`, part
 
 `scripts/interior_groups.gd` (the groups, what each holds, how it is drawn),
 `shaders/interior_group.gdshader` (the fades), `CityScene._stream_groups` (who is near what, and the
-collision). **Off by default**: `group_interiors` on the city scene, **F6** in play,
-`-- --group-interiors` on the command line. Switching lets go of everything the other side holds, so
-nothing is drawn twice.
+collision). **The default since 2026-10-07** (user: "interior seems to be working correctly at all
+ranges ... we should make storey groups default"): `group_interiors` on the city scene. **F6** in
+play goes back to the rungs, as does `-- --rungs`; the rungs' own tests select them (`--rooms`,
+`--interiors`, `--interior-audit`, `fakehide_probe`, and collapse_probe's "fake", "crushdrawn" and
+"farrules" sections) until stage 4 removes both. Switching lets go of everything the other side
+holds, so nothing is drawn twice.
 
 | | The rungs | Storey groups |
 |---|---|---|
@@ -478,3 +481,45 @@ bricks, which gives it debris for free.
 Checks: `interior_group_probe` 22; `-- --groups --big` 19 -- on the 41-storey tower cut at its
 ninth storey, 350 pieces lost their floors, 347 rode a section, none was left drawn over a floor
 that had gone on any tick, and none was still drawn once its section had landed.
+
+### 8.10 A collapsed building is not empty (2026-10-07): an item is where its floor is
+
+The user's report with the groups on: interiors right at every range, **but a collapsed building
+stays empty**. It did, three ways: what rode a section was taken off when the section landed; a
+tower that toppled whole dropped its groups the tick it began to lean; and a collapse nobody was
+near enough to have drawn left nothing to ride at all.
+
+One rule now covers the building and everything that comes off it: **an item is on the chunk that
+holds most of its floor** (`RoomManifest.item_floor_share` > 0.5 -- more than half, so a floor
+cracked under a table leaves the table on the bigger part and never on both).
+
+* **The standing building**: its storey groups draw the items whose floor is mostly in its chunk
+  (`draw_items(..., own = true)`), and write nothing off. An item not there is not gone -- it may
+  be on a piece.
+* **A piece of it** (`InteriorGroups.piece_work`): the same question asked of the PIECE's chunk.
+  A split keeps every block's cell, so the building's manifest reads straight onto the piece: the
+  items whose floor the piece holds, drawn in the piece's own space under the piece's own node.
+  Whichever way up it came to rest, and whether or not anybody watched it fall.
+* **Which pieces** (`CityScene._stream_pieces`) is the user's rule for wreckage (CollapseNext 1.8):
+  nothing until somebody is within the range a standing interior is drawn at; nothing new on a
+  piece still moving; `PIECE_INTERIOR_BLOCKS` (24) bricks or more. A drawing is worked out again
+  when the piece's bricks change, and goes with the piece.
+* **On the way down** the riders of §8.9 carry what was being drawn, and now stay until the piece
+  has a drawing of its own (or breaks up). A tower that goes over whole takes every box with it
+  (`_topple`: the piece it becomes is the same chunk).
+* **Written off** (`Room.gone`) is for what was destroyed: crushed, or blasted. Not for floors
+  that left. `BuildingRegistry.floors_decide` keeps laying a room, blasting its place in the
+  building, and a piece falling through that place, from writing off what is lying on a piece
+  somewhere else -- each of those did, and the last showed up as a wreck drawing ten boxes it
+  should not have had.
+
+It is still a drawing: it holds nothing, nothing lands on it, and a piece on its side has its
+furniture standing out of the wall its floor has become. **Not covered:** a piece the piece cap
+has put to sleep is a stand-in with no chunk to ask, so it carries nothing until it wakes; and a
+landing piece does not crush what another piece carries.
+
+Checks: `interior_group_probe` 28 (the top of a tower split off: the building stops drawing 112
+boxes and the piece draws exactly those 112, in its own space); `-- --groups --big` 22 (the
+wreckage of a cut tower has its interior, each drawing is what its own chunk gives when asked
+afresh, none is made on a piece still moving; a tower toppled whole carries every box it was
+drawing, and its wreckage has its interior).

@@ -505,6 +505,26 @@ static func item_supported(world: BrickWorld, chunk: int, type: String,
 	return false
 
 
+## How much of an item's floor is live brick in this chunk: 0 to 1, over the
+## cells under its footprint.
+##
+## The storey groups' rule for WHERE an item is (InteriorGroups): on the chunk
+## that holds most of its floor -- the standing building, or the piece of it
+## that floor went with. More than half, so no two chunks can both claim it:
+## a floor cracked under a table leaves the table on the bigger part, not on
+## both. `cell` is in the chunk's grid, which a piece shares with the building
+## it came from (a split keeps every block's cell).
+static func item_floor_share(world: BrickWorld, chunk: int, type: String,
+		cell: Vector3i) -> float:
+	var span := _item_span(type)
+	var held := 0
+	for x in span.x:
+		for z in span.z:
+			if world.is_solid(chunk, Vector3i(cell.x + x, cell.y - 1, cell.z + z)):
+				held += 1
+	return float(held) / float(maxi(span.x * span.z, 1))
+
+
 ## A part row's colour: the author's own when it has one, the room's otherwise.
 static func _part_colour(part: Array, colour: int, filaments: int) -> int:
 	if part.size() > 4 and int(part[4]) >= 0:
@@ -580,8 +600,13 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 ## where it would be laid. That is what `Room.posts` bought: an item placed
 ## clear of the columns, so the drawing does not have to ask the chunk whether
 ## there is room for it.
+##
+## `own` is the storey groups' way of asking (InteriorGroups): draw the items
+## whose floor is mostly in THIS chunk (item_floor_share), and write nothing
+## off. An item not drawn here may be on a piece of the building -- `chunk`
+## can be that piece -- so its not being here says nothing about its being gone.
 static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
-		room: Room, offset: Vector3i = Vector3i.ZERO) -> Dictionary:
+		room: Room, offset: Vector3i = Vector3i.ZERO, own: bool = false) -> Dictionary:
 	var buffer := PackedFloat32Array()
 	var details := PackedFloat32Array()
 	var pieces := PackedInt32Array()
@@ -597,7 +622,11 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		# Its floor went while nobody was looking -- blown out, or fallen with
 		# a piece of the building. It went with it: written off, not drawn
 		# standing on nothing.
-		if not item_supported(world, chunk, str(item.type), (item.cell as Vector3i) - offset):
+		if own:
+			if item_floor_share(world, chunk, str(item.type),
+					(item.cell as Vector3i) - offset) <= 0.5:
+				continue
+		elif not item_supported(world, chunk, str(item.type), (item.cell as Vector3i) - offset):
 			room.gone[i] = true
 			continue
 		var at: Vector3i = (item.cell as Vector3i) - offset - origin

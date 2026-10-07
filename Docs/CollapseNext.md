@@ -84,14 +84,15 @@ would -- but:
   **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
   building that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 and 2 of 5 done 2026-10-06
+### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 and 2 of 5 done; the default since 2026-10-07
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
 and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
-* **Stage 1, done, off by default** (Interiors.md §8.8): `InteriorGroups`, F6 in play or
-  `-- --group-interiors`. `interior_group_probe` 20, `-- --groups --big` 17, and six screenshots to
-  look at side by side (`shots/interior_rungs_*.png`, `shots/interior_groups_*.png`). **Wants the
-  user's eye before it becomes the default**: pieces are lit like the room they are in when near
-  (darker than the fake drew them), flat-shaded from 60 m.
+* **Stage 1, done, and the default** (Interiors.md §8.8; user, 2026-10-07): `InteriorGroups`.
+  F6 in play or `-- --rungs` goes back to the rungs, and the rungs' own tests select them.
+* **A collapsed building is not empty** (Interiors.md §8.10, 2026-10-07, the user's report): an
+  item is on whichever chunk holds most of its floor, so still pieces near the player draw what
+  stood on their floors, and a tower that topples whole keeps its furniture on the way down.
+  `interior_group_probe` 28, `-- --groups --big` 22. Not covered: pieces the cap has put to sleep.
 * **Stage 2, done** (Interiors.md §8.9): a piece whose floor is destroyed is gone that tick; one
   whose floor leaves as a section is drawn on the section and rides it down, and comes off when it
   lands. No index: every piece at that height is asked for its floor, 0.2 ms a time
@@ -156,6 +157,15 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   `far-coarse-status` (8 commits); it cannot merge while the main folder has uncommitted
   `Docs/Status.md` edits (another area's). Merge it once those are committed. The leftover-drawing
   fix (`--drawn`, 4931ed0) has no Status section yet: write it there too.
+* **`--walk` fails one check with storey groups on** ("gets past it rather than stopping dead",
+  the debug camera's walker on a brick course under a beam): it ducks, then stays at the beam's
+  lip. Not furniture in the way -- nothing overlaps it but the beam and the course, and a test
+  step from where it stops is free. Every frame its move goes through (2 cm forward) and it is
+  back where it was the next. With the rungs, or with the groups' collision boxes off, the same
+  check passes by NOT ducking: the standing test misses the beam and the body goes through it
+  12 cm deep. So the check was passing on a miss, and the walker's duck-under does not work; it is
+  `DebugCamera._walk`, not interiors. The player pawn's same check (`--play`) passes either way.
+  A stand-up probe a body's width ahead did not fix it (tried, reverted).
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), `impostor_probe` "no holes" (render, on and
   off), and since the several-disasters merge collapse_probe "a lightning storm" and disaster_probe

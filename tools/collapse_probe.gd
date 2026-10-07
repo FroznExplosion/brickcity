@@ -88,7 +88,7 @@ func _run() -> void:
 	if _only("shell"):
 		await _check_shell()
 	if _only("fake"):
-		await _check_fake()
+		await _on_rungs(_check_fake)
 	if _only("handover"):
 		await _check_handover()
 	if _only("crush"):
@@ -113,11 +113,11 @@ func _run() -> void:
 	if _only("farcut"):
 		await _check_farcut()
 	if _only("crushdrawn"):
-		await _check_crushdrawn()
+		await _on_rungs(_check_crushdrawn)
 	if _only("shellhit"):
 		await _check_shellhit()
 	if _only("farrules"):
-		await _check_far_rules()
+		await _on_rungs(_check_far_rules)
 	if _only("storeys"):
 		await _check_storeys()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -144,6 +144,17 @@ func _soldier_at(p: Vector3, hp := 500.0) -> Soldier:
 		so.pawn.health.layer_configs[0].max_value = hp
 		so.pawn.health.reset()
 	return so
+
+
+## Run a section that is about the drawn, fake and real rungs with them on,
+## and put the storey groups -- the default since 2026-10-07 -- back after it.
+## What the groups do in the same cases is `-- --groups` and
+## tools/interior_group_probe.gd; these sections go with the rungs
+## (Docs/Interiors.md 8.7, stage 4). Every other section runs as the game does.
+func _on_rungs(section: Callable) -> void:
+	city._set_group_interiors(false)
+	await section.call()
+	city._set_group_interiors(true)
 
 
 func _check_crush() -> void:
