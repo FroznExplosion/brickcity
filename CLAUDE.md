@@ -92,6 +92,12 @@ to do all three, and Escape (their way out) paused the pass.
   keyboard. Copy the file.
 - New code that captures the mouse must not do it when `DebugCamera.hands_off`
   is set (today `DebugCamera._set_captured` is the only place that captures).
+- A test window, and any scripted city pass, runs on the settings menu's
+  **defaults**, in memory (`TestWindow.use_default_settings`): what the user
+  has saved in Options no longer changes a gate's pictures or numbers. So a
+  pass must **never save settings** -- `MenuSettings.set_value(id, v, false)`,
+  never the saving form, never `reset_tab`/`reset_all`/`rebind`: it would write
+  the defaults over the user's own `settings.cfg`.
 
 ### Know what a test measures, and prune what no longer matters
 
