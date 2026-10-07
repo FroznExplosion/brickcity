@@ -6,7 +6,7 @@ to do it**, with the evidence for each and how to tell it is fixed. What was bui
 a second" on); the user's priorities are the ones reported in play â€” lag on the first hit, a pause
 before anything falls, things hanging in mid-air, things drawn that are not there.
 
-Last updated **2026-10-06**. First written 2026-10-03; items keep their numbers, because commits
+Last updated **2026-10-07**. First written 2026-10-03; items keep their numbers, because commits
 cite them ("CollapseNext.md 1.1"), and a finished one is struck, not removed.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
@@ -129,10 +129,20 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md Â
 
 ## 3. Measurements still owed
 
-* `--big --shot` and `--stress` with the editor closed and nothing else running, after everything
-  from 2026-09-30 on (crumbs, airborne pieces, cascade rounds, held bricks, the patch baseline,
-  the storey check). The numbers taken so far were under load from other chats' Godot and Blender
-  and are rough.
+* `--stress` with the editor closed and nothing else running, after everything from 2026-09-30 on.
+* **`--big --shot`, taken 2026-10-07** with the editor closed and no other Godot running when the
+  batch began (not re-checked during the pass; on the user's saved settings, which were the menu's
+  defaults but for brightness): frames mean **17.8 ms**, worst 67.4, 23 of 906 over 33 ms; worst
+  script tick **55.1 ms**, 9 ticks over 25 ms (islands 21 + damage 16 + spawn 11 in the worst; one
+  of 34.5 that is all `stream`, at tick 24); the slowest stand-in on the main thread 1.7 ms; worst
+  `islands.tick` 21.0 ms. Off pieces that were hit: 58 bodies of 49-499 bricks (49 ms to make) and
+  157 of 500 or more (385 ms) -- item 1.4. The log replays into the same structure. For
+  scale, the day before, with other chats' Godot and Blender running, the same pass read 90 ms a
+  frame and 26 ticks over 25.
+* **Passes now run on the menu's default settings** (`TestWindow.use_default_settings`), not on
+  whatever is saved in Options, so numbers and pictures are comparable from here on. They were
+  not before: the `--far` crossfade control read 8.8 %, 6.4 %, 5.1 % or 4.7 % by the anti-aliasing
+  that happened to be saved.
 * `--shot` queues ~1,000 blasts that land at eight a tick; with cascades finishing in the tick,
   towers come down while blasts are still landing, and those blasts shatter the falling chunks
   (one run made 136 bodies of 500+ bricks off hit pieces, another 4). Decide whether a queued blast

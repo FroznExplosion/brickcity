@@ -73,8 +73,43 @@ func _ready() -> void:
 	# deferred call queued just before this one (it is the autoload before this).
 	# Left to _process, that was the whole first frame with a full-size window
 	# on the screen -- a third of a second in the city.
+	use_default_settings.call_deferred()
 	_park.call_deferred()
 	print("[test window] off the screen, no focus, no mouse (override.cfg: display/window/size/no_focus)")
+
+
+var _defaulted := false
+
+
+## Run on the menu's DEFAULT settings, not the user's. In memory only: their
+## settings.cfg is not written (MenuSettings.set_value(..., false)).
+##
+## A test loads the same `user://settings.cfg` the game does, so what was set
+## in Options was set for every gate as well. `--far`'s crossfade check counts
+## pixels far from a reference, and its control -- holes with no box under a
+## fading shell -- read 6.1 % one day and 4.7 % the next with nothing in the
+## far city changed (2026-10-07), under a floor of 5. It is the anti-aliasing:
+## 8.8 % with MSAA and FXAA off, 6.4 % with FXAA alone, 5.1 % with MSAA alone,
+## 4.7 % with both, which is the menu's default. Brightness, anti-aliasing,
+## shadow quality, render scale, the colour filter, the bindings: a gate's
+## answer must not depend on what somebody chose in a menu.
+##
+## For a test window, and for a scripted pass in any window (CityScene). A
+## pass must never SAVE settings itself: after this, what would be written is
+## the defaults, over the user's own.
+func use_default_settings() -> void:
+	if _defaulted:
+		return
+	_defaulted = true
+	var settings := get_node_or_null(^"/root/MenuSettings")
+	if settings == null:
+		return
+	for def in settings.all_defs():
+		var id: StringName = (def as Dictionary)["id"]
+		settings.set_value(id, settings.default_of(id), false)
+	# And the keys the project ships with, once MenuSettings has applied the
+	# user's rebinding (a deferred call of its own, queued before this one).
+	InputMap.load_from_project_settings.call_deferred()
 
 
 func _process(_delta: float) -> void:
