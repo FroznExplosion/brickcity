@@ -1273,6 +1273,11 @@ func _ready() -> void:
 		# A pass clicks for itself (--play, --mech), and a click is what takes
 		# the mouse: never the real one.
 		DebugCamera.hands_off = true
+		# On the menu's default settings, not whatever the user has set in
+		# Options: a pass's answer must not depend on their brightness.
+		var test_window := get_node_or_null(^"/root/TestWindow")
+		if test_window != null:
+			test_window.use_default_settings()
 		# "Pause When Unfocused" off for this run, not saved: see pause_allowed.
 		var menu_settings := get_node_or_null(^"/root/MenuSettings")
 		if menu_settings != null:
@@ -10206,7 +10211,9 @@ func _run_shot_pass() -> void:
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
 			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
-	print("[city]   stand-ins: %d built, %d of them on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
+	# Started can pass built: a start is dropped when its chunk changes under
+	# the worker, and asked for again.
+	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
 			islands.coarse_built, islands.coarse_async, islands.coarse_main_worst_ms, islands.coarse_worst_ms])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
@@ -11548,7 +11555,13 @@ func _run_far_pass() -> void:
 		var holes_c := _holes(img_c, img_b, rect)
 		print("[far]   crossfade: %.1f%% of the building off its reference, against %.1f%% with no box" % [
 			holes_a * 100.0, holes_c * 100.0])
-		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.05 and holes_a < holes_c * 0.25,
+		# The control's floor is for the settings a pass runs on -- the menu's
+		# defaults (TestWindow.use_default_settings): MSAA 2x and FXAA, under
+		# which a fading shell with no box shows 4.7 % holes. It was 0.05, set
+		# when passes ran on whatever was saved in Options: 8.8 % with both
+		# off, 6.4 and 5.1 with one. What the check is for is the second half:
+		# the crossfade is a small fraction of that, whatever it is.
+		_gate_ok("Stage 5: the crossfade leaves no holes", holes_c > 0.03 and holes_a < holes_c * 0.25,
 				"%.3f vs %.3f" % [holes_a, holes_c])
 	else:
 		_gate_ok("Stage 5: the crossfade leaves no holes", false,
