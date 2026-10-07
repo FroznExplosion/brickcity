@@ -86,6 +86,14 @@ func _pause_closed() -> void:
 		cam._set_captured(true)
 
 
+## Leaving for the main menu. The city's slow motion (its O key) is the engine's
+## own time scale, which outlives the scene: the menu and whatever was started
+## from it next ran slow.
+func _quit_to_main_menu() -> void:
+	Engine.time_scale = 1.0
+	super()
+
+
 # =====================================================================
 # Settings the game owns
 # =====================================================================
