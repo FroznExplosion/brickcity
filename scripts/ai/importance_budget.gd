@@ -102,9 +102,16 @@ func tick(now: float) -> void:
 	var held_back := 0
 	var n_smart := 0
 	var n_directed := 0
-	for i in scored.size():
-		var a: Object = scored[i][2]
+	var slot := 0
+	for k in scored.size():
+		var a: Object = scored[k][2]
 		var hsm: AgentTier = a.tier_hsm
+		# A type capped at the cheap tier (Roster: cannon fodder) takes no smart
+		# place, however near it is: the next agent down gets it.
+		var capped: bool = a.get(&"tier_cap") == AgentTier.DIRECTED
+		var i := SMART_CAP if capped else slot
+		if not capped:
+			slot += 1
 		if i < SMART_CAP:
 			if hsm.tier() != AgentTier.SMART:
 				if promoted >= PROMOTIONS_PER_TICK:

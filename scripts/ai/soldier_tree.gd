@@ -12,6 +12,7 @@ extends RefCounted
 ##           Sequence  TacticIs(push, flank) > Manoeuvre
 ##           Sequence  TacticIs(rush) > Rush        -- straight in at a run
 ##           Sequence  TacticIs(melee) > Melee      -- run at it and hit it
+##           Sequence  TacticIs(detonate) > Detonate -- a bomber: run at it and go off
 ##           FireInOpen                        -- fight open, or a tactic that failed
 ##     GoHelp                                   -- a buddy is stuck and called
 ##     DynamicSequence  HasContact(25 s, unsearched) > Search  -- lost it: go and look
@@ -72,6 +73,12 @@ static func build() -> BehaviorTree:
 	melee.add_child(wants_melee)
 	melee.add_child(BTMelee.new())
 	how.add_child(melee)
+	var bomb := BTSequence.new()
+	var wants_bomb := BTTacticIs.new()
+	wants_bomb.tactics = [CombatPolicy.Tactic.DETONATE]
+	bomb.add_child(wants_bomb)
+	bomb.add_child(BTDetonate.new())
+	how.add_child(bomb)
 	how.add_child(BTFireInOpen.new())
 	engage.add_child(how)
 	root.add_child(engage)

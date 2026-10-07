@@ -1,13 +1,12 @@
 @tool
-class_name BTMelee
+class_name BTDetonate
 extends BTAction
-## MELEE (the casebook's "charge to melee"): run at the enemy and hit it once in
-## reach (Soldier.melee), every Soldier.MELEE_GAP seconds while it stays there.
-## Holds fire while charging. Fails when there is no way or the enemy is beyond
-## GIVE_UP_RANGE (the tree then fights in the open); done after GIVE_UP seconds.
+## DETONATE (the casebook's "go off", a bomber's move): run at the enemy, light
+## the fuse within Soldier.DETONATE_REACH, and keep coming until it goes
+## (Soldier.light_fuse / go_off). Fails when there is no way to the enemy; done
+## after GIVE_UP seconds without getting there.
 
-const GIVE_UP := 7.0
-const GIVE_UP_RANGE := 25.0
+const GIVE_UP := 9.0
 
 var _began := 0.0
 
@@ -24,18 +23,12 @@ func _tick(_delta: float) -> Status:
 	var target: Pawn = c.pawn if c.pawn != null and is_instance_valid(c.pawn) else null
 	var at := target.feet() if target != null and c.visible else c.pos
 	var feet := so.pawn.feet()
-	var d := Vector2(at.x - feet.x, at.z - feet.z).length()
-	so.state = "melee"
+	so.state = "bomber"
 	so.fire_ok = false
-	if d > GIVE_UP_RANGE:
-		so.tactic_done = true
-		return FAILURE
 	so.look_at_point(at + Vector3.UP * 1.2)
-	if target != null and d <= so.melee_reach * 0.9:
-		so.stop()
-		so.melee(target)
-		return RUNNING
-	var to := so.approach_point(at, so.melee_reach * 0.6)
+	if Vector2(at.x - feet.x, at.z - feet.z).length() <= Soldier.DETONATE_REACH and absf(at.y - feet.y) < 2.0:
+		so.light_fuse()
+	var to := so.approach_point(at, 0.8)
 	if to == Vector3.INF:
 		so.tactic_done = true
 		return FAILURE

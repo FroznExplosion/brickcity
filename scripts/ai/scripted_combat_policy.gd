@@ -87,4 +87,5 @@ func scores(o: PackedFloat32Array) -> PackedFloat32Array:
 	# scripted policy as tuned does not take them.
 	s[Tactic.RUSH] = -8.0
 	s[Tactic.MELEE] = -8.0
+	s[Tactic.DETONATE] = -8.0
 	return s

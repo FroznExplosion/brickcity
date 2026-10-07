@@ -48,8 +48,11 @@ How the enemy chooses what to do, authored as odds rather than code.
   The exporter writes `data/ai/roster.json` with everything worked out from each
   recipe; `Roster` (`scripts/ai/roster/roster.gd`) reads it, and `UnitCatalog` takes
   each unit's name, weapon, points and health from its recipe -- so a recipe changed
-  on the page changes the unit in the game after an export. `tools/roster_probe.gd`
-  and `tools/roster_field_probe.gd` check it.
+  on the page changes the unit in the game after an export. A recipe's attack, role,
+  size and phases are the soldier's too (`Soldier.set_type`): a melee type or a bomber
+  holds no gun, fodder stays on the cheap brain, a large body walks the large map, and a
+  phase changes it mid-fight. `tools/roster_probe.gd`, `tools/roster_field_probe.gd`
+  and `tools/roster_types_probe.gd` check it.
 
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.
