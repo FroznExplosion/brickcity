@@ -462,11 +462,13 @@ const R_BODIES = {walker:{l:"Walker", fact:"", word:""}, flyer:{l:"Flyer", fact:
   wheeled:{l:"Wheeled vehicle", fact:"we_vehicle", word:"Truck"}, tracked:{l:"Tracked vehicle", fact:"we_vehicle", word:"Tank"},
   hover:{l:"Hover craft", fact:"we_flyer", word:"Hover craft"}, boat:{l:"Boat", fact:"we_vehicle", word:"Boat"}};
 // Size decides where it fits and what it weighs on a floor -- not how hard it is to kill.
+// nav: what its pathfinding is told (AINav.set_agent): studs wide, plates of head room standing
+// and squeezing (a plate is 0.14 m), plates it steps up, drops off an edge, drops unhurt.
 const R_SIZES = {
-  small:{l:"Small", tall:0.6, wide:0.4, fits:"anywhere a person does, and gaps", floors:"no weight to speak of", eg:"a dog, a drone"},
-  person:{l:"Person", tall:1.68, wide:0.52, fits:"doors, stairs, rooms", floors:"any floor", eg:"a soldier"},
-  large:{l:"Large", tall:2.6, wide:1.0, fits:"wide doors and damaged walls", floors:"checked against the floor's headroom", eg:"a brute"},
-  huge:{l:"Huge", tall:6.7, wide:3.5, fits:"damaged buildings, or breaks in", floors:"breaks weak floors", eg:"a mech, a tank"}};
+  small:{l:"Small", tall:0.6, wide:0.4, nav:[1,5,5,2,21,12], fits:"anywhere a person does, and gaps", floors:"no weight to speak of", eg:"a dog, a drone"},
+  person:{l:"Person", tall:1.68, wide:0.52, nav:[2,12,9,3,21,9], fits:"doors, stairs, rooms", floors:"any floor", eg:"a soldier"},
+  large:{l:"Large", tall:2.6, wide:1.0, nav:[3,19,19,4,21,12], fits:"wide doors and damaged walls", floors:"checked against the floor's headroom", eg:"a brute"},
+  huge:{l:"Huge", tall:6.7, wide:3.5, nav:[10,48,48,9,17,17], fits:"damaged buildings, or breaks in", floors:"breaks weak floors", eg:"a mech, a tank"}};
 const R_CLASSES = ["light","medium","heavy","strong"], R_GRADES = ["weak","regular","tough"];
 // Melees to break each layer (the fight's unit: one melee = a light enemy's whole flesh, 64 at level 1).
 // "def" is the one defence a light or medium type wears: armour, or a shield with the Shielded mod.

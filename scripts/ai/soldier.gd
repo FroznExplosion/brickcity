@@ -103,6 +103,16 @@ const MELEE_DAMAGE := 45.0
 const MELEE_GAP := 0.9
 var melee_ready_at := 0.0
 var melee_hits := 0
+## What it is (Roster, AIRoster.md): its recipe, the casebook facts the recipe
+## brings (we_marksman, we_leader...), and the name shown over its head.
+var type_id := ""
+var type_facts: Array = []
+var name_tag: Label3D
+## How far the name can be read from, and how high over the body's middle it sits.
+const TAG_RANGE := 45.0
+const TAG_ABOVE := 0.32
+const TAG_ENEMY := Color(1.0, 0.55, 0.42)
+const TAG_FRIEND := Color(0.5, 0.78, 1.0)
 ## The Tactics Casebook's plan behind the tactic, when the book decides
 ## (BookCombatPolicy): {moment, facts, amounts, move, asked, extras, wanted_extras}.
 var book := {}
@@ -789,6 +799,39 @@ func _path_failed(now: float) -> void:
 func duck(seconds: float) -> void:
 	_duck_until = maxf(_duck_until, services.now() + seconds)
 	_ducking = true
+
+
+## Make it the type `id` of `roster`: its facts for the casebook and its name
+## over its head. (Health and weapon are the spawner's: UnitCatalog.)
+func set_type(id: String, roster: Roster) -> void:
+	if roster == null or not roster.has(id):
+		return
+	type_id = id
+	type_facts = roster.facts(id).duplicate()
+	var d := roster.derived(id)
+	var tag := str(d.get("tag", ""))
+	var named := str(d.get("name", tag))
+	# Its own name first, unless the tag already says it ("Tough Breacher").
+	var plain := named == "" or tag.to_lower().contains(named.to_lower())
+	set_name_tag(tag if plain else "%s  ·  %s" % [named, tag])
+
+
+## The words over its head (they follow a phase): seen by anyone within
+## TAG_RANGE with a clear line -- it is hidden by walls, as the body is.
+func set_name_tag(text: String) -> void:
+	if name_tag == null or not is_instance_valid(name_tag):
+		name_tag = Label3D.new()
+		name_tag.name = "NameTag"
+		name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		name_tag.fixed_size = true
+		name_tag.pixel_size = 0.0011
+		name_tag.font_size = 26
+		name_tag.outline_size = 7
+		name_tag.modulate = TAG_FRIEND if team == AIServices.PLAYER_SIDE else TAG_ENEMY
+		name_tag.visibility_range_end = TAG_RANGE
+		name_tag.position = Vector3.UP * (Pawn.BODY_HEIGHT * 0.5 + TAG_ABOVE)
+		pawn.body.add_child(name_tag)
+	name_tag.text = text
 
 
 ## Where to run to, to end up `stand_off` metres short of `at` on this side:

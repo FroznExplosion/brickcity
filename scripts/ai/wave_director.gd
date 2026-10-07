@@ -374,7 +374,8 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	so.aim.cone_min = AIM_CONE_MIN
 	so.aim.settle = AIM_SETTLE
 	so.set_meta(&"unit", kind)
-	so.max_health = EnemyProfiles.apply(so.pawn.health, unit.get("profile", &"light"), level)
+	so.max_health = UnitCatalog.apply_health(so.pawn.health, kind, level)
+	so.set_type(str(unit.get("recipe", "")), Roster.shared())
 	# In its hands where it can be seen: its muzzle flash and its tracers are
 	# how the player tells who is shooting and from where.
 	gun.visible = true
@@ -1175,8 +1176,8 @@ func _set_up_hq() -> void:
 			city._combat_rng.randi(), WeaponClass.builtin(&"pistol"), 1))
 	hq_officer = Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ENEMY_TEAM, gun)
 	hq_officer.set_meta(&"unit", &"officer")
-	hq_officer.max_health = EnemyProfiles.apply(hq_officer.pawn.health,
-			UnitCatalog.get_unit(&"officer").get("profile", &"medium"), level)
+	hq_officer.max_health = UnitCatalog.apply_health(hq_officer.pawn.health, &"officer", level)
+	hq_officer.set_type(str(UnitCatalog.get_unit(&"officer").get("recipe", "")), Roster.shared())
 	gun.visible = true
 	gun.position = Vector3(0.2, -0.28, -0.3)
 	# Gold, so he can be picked out from his men.

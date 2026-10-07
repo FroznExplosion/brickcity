@@ -1,9 +1,12 @@
 # AI roster — putting enemy and friendly types together (plan)
 
-**Status: 2026-10-06. A plan; step RO1 (§9) is built.** Types are described as recipes on the
-Tactics Casebook page's Roster tab, exported to `data/ai/roster.json`, read by `Roster`
-(`scripts/ai/roster/roster.gd`) and checked by `tools/roster_probe.gd`. Nothing in the game is
-fielded from a recipe yet. Everything else here is planned unless a section names it as existing.
+**Status: 2026-10-06. A plan; steps RO1 and RO2 (§9) are built.** Types are described as recipes
+on the Tactics Casebook page's Roster tab, exported to `data/ai/roster.json` and read by `Roster`
+(`scripts/ai/roster/roster.gd`). `UnitCatalog` reads a unit's name, weapon, points and health
+from its recipe; every soldier carries its type's name over its head and tells the casebook what
+it is; each size of body has a navigation map of its own (`AIServices.nav_for`).
+`tools/roster_probe.gd` and `tools/roster_field_probe.gd` check it. Everything else here is
+planned unless a section names it as existing.
 The numbers are first guesses, sized from the weapons and health code as it stands.
 
 How every thing that fights is described and assembled: soldiers, creatures, flyers, mechs,
@@ -32,7 +35,7 @@ decides what an agent does).
 | R12 | **A commander runs each side.** The friendly one takes its lead from what the players do. |
 | R13 | **The player orders only their own mech**: go to an area, hold, follow. No orders to other allies. |
 | R14 | **The player can rodeo and drive every vehicle** -- but not an enemy mech: it starts to self-destruct the moment a pilot of another side tries to get in. |
-| R15 | **People's weapons and mech weapons are two scales** (§4.6). Most mech weapons kill a person or an animal in one hit. A pilot's gun does nothing to a mech -- except explosives, an element the mech's current layer is weak to (a little), and anti-mech weapons (good damage, always). |
+| R15 | **People's weapons and mech weapons are two scales** (§4.6). Mech guns and anti-mech weapons are **rolled by the same generator as a pilot's guns**, on the mech's scale; one that rolls enough damage kills a person or an animal in one hit, and most do. A pilot's gun does nothing to a mech -- except explosives, an element the mech's current layer is weak to (a little: plasma on a shield, corrosive on bare armour), and anti-mech weapons (good damage, always). |
 | R16 | **Self-destruct is quick: high damage, small area.** **Nuke eject** is a mod (Nuker) only some enemies have, and the player can have: a doomed mech throws its pilot clear and goes off big -- unless it is finished with a takedown while doomed, or its power cell is destroyed (then it just blows up). |
 | R17 | **A name over the head** of every enemy and every non-player ally says what it is, as in Borderlands 4: "Heavy Gunner Nuker" is a heavy mech with a machine gun that will nuke; "Light Melee Nuker" runs at you, punches, and goes off the moment it is doomed. |
 | R18 | Settled readings of §4.2: armour gone drops the doors to very low rather than taking them off; the power cell can be destroyed as soon as its door is off; a mech in auto mode is weaker than one with a pilot (no abilities, no smoke). |
@@ -289,16 +292,13 @@ the HUD; the player has the same counters.
 
 | Shooter -> target | What it does | First guess |
 |---|---|---|
-| mech weapon -> person, animal | kills in one hit, up to the medium class | a mech round counts as 6 melees; a machine-gun round as 2. Heavy and strong infantry take 2-4 hits, so they stay worth fielding against a mech |
+| mech weapon -> person, animal | its rolled damage, as any gun's: enough kills in one hit, and most mech guns have enough | mech weapon classes in the same generator (`WeaponClass`), with base damage about 6 melees a round for a cannon and 2 for a machine gun. So a cannon one-shots up to the medium class at its level; heavy and strong infantry take 2-4 hits and stay worth fielding against a mech; a low roll, or a mech gun under the enemy's level, may not |
 | pilot's gun -> mech | **nothing** | 0 |
-| pilot's gun with the **element the mech's current layer is weak to** | a little | 10% of the gun's damage. Plasma on a shield; nothing once it reaches the armour |
+| pilot's gun with the **element the mech's current layer is weak to** | a little | 10% of the gun's damage. Plasma on a shield -- and nothing once it reaches the armour; corrosive on bare armour -- and nothing while the shield is up |
 | pilot's **explosive** (grenade, rocket, launcher) | some, on any layer | 50% of its damage: a grenade 75, a rocket 120 |
-| **anti-mech weapon** (a new class) | good, on any layer; may carry an element for extra effect | about 400 a shot: 8-11 shots for a whole mech |
+| **anti-mech weapon** (new classes in the same generator) | good, on any layer; may roll an element for extra effect | about 400 a shot at base: 8-11 shots for a whole mech |
 | mech melee -> mech | **through the shield**, into armour and health; on the hatch, into the hatch's own armour too | 500 a blow: a light mech dies in about 4, a heavy in about 8; a hatch comes off in 1-2 |
 | mech melee -> doomed mech | the **finisher** | kills |
-
-Open: whether corrosive on bare armour counts as "the element it is weak to" (read here as
-yes, the same 10%), or only plasma on a shield does.
 
 ### 4.7 Self-destruct and nuke eject (R16)
 
@@ -394,7 +394,7 @@ Each step ends in a gate, as AIPlan's phases do.
 | Step | What | Shows |
 |---|---|---|
 | RO1 | **Built.** Recipes as data, derived values, the validity check; today's infantry units written as recipes; the Roster tab on the casebook page | no change in behaviour: `roster_probe` shows the recipes give today's units their own health, weapon and points |
-| RO2 | Units fielded from recipes (UnitCatalog reads the roster); the name over the head; size, class and grade: agent profiles and where each fits | a large walker that cannot use a door a person can; "Tough Breacher" over its head |
+| RO2 | **Built.** Units fielded from recipes (`UnitCatalog` reads the roster: change a recipe on the page, export, and the unit changes); the name over the head of every soldier, enemy or ally; the type's facts into the casebook; a navigation map per size | `roster_field_probe`: "Tough Breacher" over its head; through a door two studs wide a person has a way and a large body has none. **Not yet:** a large BODY (the pawn is still person-sized -- it comes with the first large type, RO3), and the brain-tier cap (with fodder, RO3) |
 | RO3 | Attack types and roles as casebook facts; a melee type, a bomber, a grenadier; a leader whose death breaks the squad; fodder on the cheap tier | "very light bomber fodder" fights |
 | RO4 | Phases | the brute loses its armour and charges |
 | RO5 | Mover, Senses and Arsenal lifted out of `Soldier`; flyers and creatures decide from the casebook | a flying bomber is the same recipe with a different body |
@@ -411,7 +411,4 @@ damage rules, so it is agreed with those areas before it starts.
 ## 10. Open questions
 
 1. The numbers in §2.2, §2.3, §4.1, §4.6 and §4.7 are first guesses: to be played and changed.
-2. Does corrosive on bare armour give a pilot's gun its "little" damage, as plasma on a shield
-   does (§4.6)?
-3. Whether a non-boss phase may change the body.
-4. Which mech weapons are the exceptions to "kills a person in one hit".
+2. Whether a non-boss phase may change the body.

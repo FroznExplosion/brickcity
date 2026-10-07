@@ -64,8 +64,43 @@ const UNITS := {
 }
 
 
+## A unit: its row above, with what its RECIPE says over it (Roster, AIRoster.md
+## RO2) -- name, weapon, points, built, and `recipe`, the recipe's id. A type that
+## exists only as a recipe is a unit too. An id nobody knows is a rifleman.
 static func get_unit(id: StringName) -> Dictionary:
-	return UNITS.get(id, UNITS[&"rifleman"])
+	var roster := Roster.shared()
+	var rid := ""
+	if roster != null:
+		rid = roster.for_unit(id)
+		if rid == "" and roster.has(String(id)):
+			rid = String(id)
+	if rid == "" or not roster.fit(rid):
+		return UNITS.get(id, UNITS[&"rifleman"])
+	var u: Dictionary = (UNITS.get(id, {"mobility": &"foot", "role": &"line"}) as Dictionary).duplicate()
+	var d := roster.derived(rid)
+	u["recipe"] = rid
+	u["name"] = str(d.name)
+	u["weapon"] = StringName(str(d.weapon))
+	u["points"] = float(d.points)
+	u["built"] = bool(roster.recipe(rid).built)
+	return u
+
+
+## Dress `pool` as unit `id` at `level`, full: its recipe's layers, or -- with no
+## recipe -- its profile's (EnemyProfiles). Returns its total health.
+static func apply_health(pool: HealthPool, id: StringName, level: int) -> float:
+	var u := get_unit(id)
+	var roster := Roster.shared()
+	var layers: Array[DefenseLayer] = []
+	if roster != null and u.has("recipe"):
+		layers = roster.layers(str(u.recipe), level)
+	if layers.is_empty():
+		return EnemyProfiles.apply(pool, u.get("profile", &"light"), level)
+	pool.layer_configs = layers
+	pool.vital_layer_index = -1
+	pool.impact_carries_over = true
+	pool.reset()
+	return pool.total_current()
 
 
 static func points(id: StringName) -> float:
@@ -76,6 +111,6 @@ static func points(id: StringName) -> float:
 static func built() -> Array[StringName]:
 	var out: Array[StringName] = []
 	for id in UNITS:
-		if bool(UNITS[id].built):
+		if bool(get_unit(id).built):
 			out.append(id)
 	return out
