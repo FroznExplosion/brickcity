@@ -1270,6 +1270,9 @@ func _ready() -> void:
 	if _arena_mode and not ("--gate" in args):
 		_scripted = false
 	if _scripted:
+		# A pass clicks for itself (--play, --mech), and a click is what takes
+		# the mouse: never the real one.
+		DebugCamera.hands_off = true
 		# "Pause When Unfocused" off for this run, not saved: see pause_allowed.
 		var menu_settings := get_node_or_null(^"/root/MenuSettings")
 		if menu_settings != null:
@@ -7597,6 +7600,10 @@ func _run_play_pass() -> void:
 			chips += 1
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, _gun.gun.gun_name])
+	# That was a click, and a click is what takes the mouse. A pass must not:
+	# it runs on a machine somebody is using (DebugCamera.hands_off).
+	_gate_ok("and the pass's own click did not take the real mouse",
+			Input.mouse_mode == Input.MOUSE_MODE_VISIBLE)
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
 
 	# The settings menu (Ceramic Edge's menu/, Docs/Reference/ceramicedge.md section 8):

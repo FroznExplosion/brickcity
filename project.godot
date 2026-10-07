@@ -22,6 +22,7 @@ ElementalManager="*res://autoload/elemental_manager.gd"
 VfxPool="*res://autoload/vfx_pool.gd"
 MenuSettings="*res://menu/core/MenuSettings.gd"
 MenuManager="*res://menu/core/MenuManager.gd"
+TestWindow="*res://scripts/test_window.gd"
 
 [editor_plugins]
 

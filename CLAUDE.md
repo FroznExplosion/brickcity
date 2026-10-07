@@ -67,6 +67,32 @@ The engine library is **not committed**; each worktree builds its own.
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
 - Run the probes your change could affect before merging.
 
+### Test windows stay out of the user's way
+
+The user works on this machine while tests run. A run that opens a window --
+any scene pass (`-- --something`), any probe marked `## Not headless` -- must
+not take their keyboard, their mouse, or the middle of their screen. It used
+to do all three, and Escape (their way out) paused the pass.
+
+- **Once per worktree:** `cp tools/test_window.cfg override.cfg` (beside
+  `project.godot`; untracked and gitignored). **Never in the main folder** --
+  the game window there could not be clicked into.
+- With it, every window that worktree opens: never takes the keyboard, never
+  captures the mouse, opens as a title bar in the bottom right corner and is
+  off the screen about three seconds later (`scripts/test_window.gd`), and
+  draws at 1280x720. It is still drawn there; screenshots are as before.
+- **Do not pass `--resolution`.** It makes the window full size while the
+  engine starts, in the corner but large. The test window sizes itself.
+- **Launch from Bash**, as the passes always have been. PowerShell's
+  `Start-Process` gives the new window the keyboard whatever the setting says.
+- Do not add `borderless` or a minimised start to `override.cfg`: either one
+  takes the keyboard (measured 2026-10-06).
+- Without the file a scripted pass still never captures the mouse and cannot
+  be paused (`CityScene._scripted`), but its window opens mid-screen with the
+  keyboard. Copy the file.
+- New code that captures the mouse must not do it when `DebugCamera.hands_off`
+  is set (today `DebugCamera._set_captured` is the only place that captures).
+
 ### Know what a test measures, and prune what no longer matters
 
 - Before running a probe or pass (or trusting its result), read what each

@@ -163,9 +163,18 @@ func _active() -> bool:
 	return _captured or drive_uncaptured
 
 
+## Never take the real mouse, whatever asks. Set for a window nobody is at: a
+## test window (TestWindow) or a scripted pass (CityScene). The camera still
+## counts itself captured -- a pass's synthetic click turns its look and its
+## keys on as a real one would -- but the cursor stays the user's, free and
+## where they left it. This is the only place in the game that captures it.
+static var hands_off := false
+
+
 func _set_captured(on: bool) -> void:
 	_captured = on
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on and not hands_off \
+			else Input.MOUSE_MODE_VISIBLE
 
 
 ## Mouse-look in `_input`, ahead of the GUI. With the mouse captured its
