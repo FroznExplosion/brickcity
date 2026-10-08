@@ -13,9 +13,8 @@ shader_type spatial;
 // Nor does it change shade in one step. Near, a piece is lit like the
 // brickwork round it, shadows and all. Far off that is a dark box in a dark
 // room behind a window a few pixels wide, so past `lit_near` it goes over,
-// by `lit_far`, to a fixed shade per face that no light touches -- what the
-// fake rung drew (shaders/fake_interior.gdshader), reached by a ramp instead
-// of by a room changing rungs.
+// by `lit_far`, to a fixed shade per face that no light touches, by a ramp
+// and never in one step.
 //
 // The colour is the MultiMesh instance colour, which Godot multiplies into
 // COLOR: the filament colour the same part has as a brick.

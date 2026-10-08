@@ -175,6 +175,10 @@ Stated as the design we should be measuring ourselves against, independent of wh
 
 ### 4.1 Four rungs, for rooms as well as buildings
 
+**For rooms, replaced 2026-10-08** ([Interiors.md](Interiors.md) §8): the drawn and fake rungs were
+built, measured, and then folded into one drawing per group of storeys, shown by distance alone,
+with a piece becoming bricks only when it is hit. What follows is the argument that got there.
+
 The project's ladder ([Plan §4.2](Plan.md)) is **truth → materialisation → presentation**. At city
 scale with interiors it wants a fourth rung, between "nothing" and "real":
 

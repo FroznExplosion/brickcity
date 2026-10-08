@@ -6,8 +6,18 @@ last is LOD'd) to the things inside buildings, which is where the object count a
 **Built: §1-§5, in first pass -- portal test and seeded spill included.** `scripts/room.gd`, `scripts/room_manifest.gd` and the room
 half of `BuildingRegistry`: rooms generated from the recipe, contents generated from
 `(building seed, room id)`, activation by proximity and by damage volume, a diff that survives
-deactivation, and §5.2's analytic resolve for a room that fell over. `tools/interior_probe.gd`
-passes 39 checks and `godot --path . -- --rooms` passes 13.
+deactivation, and §5.2's analytic resolve for a room that fell over.
+
+**Superseded 2026-10-08 (§8, stage 4 in §8.12).** How a room's contents come to be on screen is §8
+now: drawn a group of storeys at a time, by distance; a thing is where its floor is; what is hit
+becomes bricks, that piece alone. Activation by walking up to a room, the drawn and fake drawings,
+the spill, the write-off and the analytic resolve (§3's per-room visibility, §4.1, §5.1, §5.2 and
+Scale.md §4.1's rungs) are **removed**, with their gates. §1-§7 below are kept as the argument that
+led here; where they describe those, they describe history. What stands from them: rooms and
+manifests from the recipe and a seed (§2), the diff (§3), furniture weighing nothing in the solve
+(§3.1), bricks riding the piece they stand on (§4.2), an untouched room costing nothing (§5.4), and
+a room's openings, which the squad AI reads. `tools/interior_probe.gd` passes 87 checks,
+`tools/interior_group_probe.gd` 33, `-- --groups --big` 23.
 
 **Not built:** occlusion (§3's `OccluderInstance3D`), item behaviours beyond being brick, and
 §5.3's audio rule, which needs audio. The portal test IS built, and it turns out to need no doors
@@ -299,7 +309,7 @@ the largest single cost still on the table.
 
 ---
 
-## 8. Simplification (2026-10-05) — stages 1 to 3 built; the default since 2026-10-07 (§8.8–8.11)
+## 8. Simplification (2026-10-05) — stages 1 to 4 built (§8.8–8.12); the only interior drawing since 2026-10-08
 
 **Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
 holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
@@ -399,11 +409,9 @@ Probes whose checks measure the removed rungs (`--rooms`, `interior_probe`, part
 `scripts/interior_groups.gd` (the groups, what each holds, how it is drawn),
 `shaders/interior_group.gdshader` (the fades), `CityScene._stream_groups` (who is near what, and the
 collision). **The default since 2026-10-07** (user: "interior seems to be working correctly at all
-ranges ... we should make storey groups default"): `group_interiors` on the city scene. **F6** in
-play goes back to the rungs, as does `-- --rungs`; the rungs' own tests select them (`--rooms`,
-`--interiors`, `--interior-audit`, `fakehide_probe`, and collapse_probe's "fake", "crushdrawn" and
-"farrules" sections) until stage 4 removes both. Switching lets go of everything the other side
-holds, so nothing is drawn twice.
+ranges ... we should make storey groups default"). Until stage 4 (§8.12) there was a switch back to
+the rungs -- `group_interiors`, F6 in play, `-- --rungs` -- and the rungs' own tests selected them;
+both went with the rungs, and the table below is the comparison that was made while both existed.
 
 | | The rungs | Storey groups |
 |---|---|---|
@@ -548,7 +556,7 @@ reaches**, one at a time, and nothing else:
   brick destroyed is written off, and one nothing touched is a drawing again.
 
 `Room.active`, `open_rooms`, the reach that opened a room by walking up to it and
-`compromise_rooms` are the rungs' now, and are not reached with the groups on.
+`compromise_rooms` were the rungs', and went with them in stage 4 (§8.12).
 
 Checks: `interior_group_probe` 34 (a blast at one piece of a three-piece room lays that piece's
 3 bricks and no other; the room draws 9 boxes where it drew 12; unseen, the piece is written off
@@ -558,3 +566,58 @@ the rest of its storeys are still drawn).
 
 **Not done:** a drawn piece on WRECKAGE is not laid when the wreckage is hit -- it follows its
 floor's bricks and goes when they do. Debris particles for a written-off piece are still missing.
+
+### 8.12 Stage 4 as built (2026-10-08): the rungs are gone, and their tests with them
+
+§8.6. There is one way an interior is drawn now, and no switch.
+
+**Removed from the game**
+* `CityScene`: the room streaming pass and everything it drove -- opening a room by reach
+  (`_open_room`, `_close_room`, `_demote_room`), the drawn rung (`_sync_drawn`, `_recheck_drawn`,
+  `_drop_drawn`), the fake rung (`_stream_fake`, `_sync_fake`, `_drop_fake`), the spill into wreckage,
+  their ranges and budgets (`ROOM_REACH`, `ROOM_VIEW_RANGE`, `SPILL_RANGE`, ...), `spill_interiors`,
+  and the switch itself: `group_interiors`, **F6**, `-- --rungs`, `-- --group-interiors`. About
+  1,800 lines. `_stream_groups` is the interior pass.
+* `BuildingRegistry`: `activate_room`, `deactivate_room`, `draw_room`, `undraw_room`,
+  `compromise_rooms`, `mark_rooms_spilled`, `write_off_rooms`, `spill_room`, and `floors_decide` --
+  what it guarded is the only rule now: nothing is written off for having no floor *here*.
+* `Room`: `active`, `drawn` and its buffers, the fake's cache, `outer`, `hit`, `spilled`. A room is
+  its box, kind, seed, manifest, `gone`, `laid` and its openings.
+* `RoomManifest`: `down_axis`, `resolved_cell` (§5.2's resolve), `item_supported`; `draw_items`
+  draws by floor share always. `FurnitureMesh`: `attach_drawn`, `attach_fake`, `hide_inside`.
+  `shaders/fake_interior.gdshader`.
+
+**Kept:** rooms, kinds, seeds and manifests; the diff; `openings_of` and `rooms_in_range` (the squad
+AI's room graph, `scripts/ai/squad/city_rooms.gd`); `lay_item` / `compromise_items` (§8.11);
+`ROOM_RANGE`, `ROOM_SLEEP_RANGE` and `ROOM_STOREY_SPAN`, which are the range of the groups'
+collision boxes; `_crush_drawn`; `hold_interiors_mid_collapse`.
+
+**Tests: what went, and why**
+* `-- --interiors` and `-- --interior-audit` (scene passes): they timed opening a room as bricks
+  three ways, and walked a tower counting rooms opened, drawn, faked and spilled at each stage.
+  Nothing they counted exists.
+* `-- --rooms` (the rungs' gate, 39 checks): room by room it asked for drawn where near, bricks
+  where touched, faked behind a window, written off under a topple. Removed. **`-- --rooms` now
+  runs the `--groups` gate**, because other docs and habits use that name for "the interiors gate"
+  and a flag that silently did nothing would read as a pass. Its three checks of a room's
+  *openings* (windows, one window not two merged, a blown hole) are still wanted -- the AI reads
+  them -- and are in `interior_probe` now, headless.
+* `tools/fakehide_probe.gd`: `FurnitureMesh.hide_inside`, which hid faked furniture in a section
+  the tick it left. The groups' answer to the same bug is `check_floors` (§8.9), checked by
+  `interior_group_probe` and the gate.
+* `interior_probe`: the sections on activation, the drawn rung, the analytic resolve and the spill
+  went; in their place the same claims about what replaced them -- a piece laid alone, a drawing
+  with no brick laid that is exactly the bricks it becomes, nothing drawn or laid without a floor
+  and **nothing written off for it**, the diff across giving the bricks back, a blast laying what
+  it reaches, a laid piece riding the wreck and not drawn twice. 87 checks.
+* `interior_group_probe`: one check, "a room laid as bricks leaves its group's drawing", which laid
+  a whole room -- no longer possible. The piece-at-a-time form of it is `_check_shot`. 33 checks.
+* `collapse_probe`: "fake" is now "interior" (a building's drawing follows its structure: a floor
+  blown out with nobody near, given back, rebuilt, nothing drawn over air); "crushdrawn" drops its
+  piece on a storey group's furniture; "farrules" (`far_rules_probe`) asks that no storey group is
+  made in a building coming apart -- with the rule and, the same case, without -- and that nothing
+  new is drawn on wreckage still moving. Same counts as before: 62 and 9.
+
+**Still not done:** stage 5 (loot fades at its cull edge); a drawn piece on wreckage is not laid
+when the wreckage is hit; debris particles for a written-off piece; pieces the cap has put to sleep
+carry no interior.

@@ -122,7 +122,6 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 		posts.append(entry)
 	var rects: Array[Rect2i] = []
 	var mine: Array = []
-	var outer: Array = []
 	var m := WALL_MARGIN
 	var t := TowerRecipe.WALL_THICK
 	for entry in (pl.rooms as Array):
@@ -131,15 +130,12 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 		if inset.size.x < 4 or inset.size.y < 4:
 			continue
 		rects.append(inset)
-		# Against an exterior wall: the same test openings_for makes per side.
-		outer.append(inset.position.x - m <= t or inset.position.y - m <= t
-				or inset.end.x + m >= footprint_x - t or inset.end.y + m >= footprint_z - t)
 		var here: Array[Rect2i] = []
 		for q in posts:
 			if (q as Rect2i).intersects(inset):
 				here.append(q)
 		mine.append(here)
-	return {"rects": rects, "posts": mine, "outer": outer, "storeys": storeys_of(courses)}
+	return {"rects": rects, "posts": mine, "storeys": storeys_of(courses)}
 
 
 ## Which rooms lie within `radius` metres of a point in the building's own
@@ -226,7 +222,6 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 			r.lo = Vector3i(box.position.x, int(storey.floor_y), box.position.y)
 			r.size = Vector3i(box.size.x, int(storey.height), box.size.y)
 			r.posts = (lat.posts as Array)[ri]
-			r.outer = bool((lat.outer as Array)[ri])
 			r.room_seed = hash3(building_seed, r.id, 0x9E37)
 			r.kind = Room.KINDS[kind_index(r.room_seed, program)]
 			out.append(r)
@@ -336,11 +331,8 @@ static func storeys_of(courses: int) -> Array:
 
 ## How many things are in this room, without working out what they are.
 ##
-## The count is the first thing `items_for` computes and the only thing a blast
-## nobody is watching needs: "everything in here is gone" is a set of indices,
-## and the indices do not require the list. A city under fire compromises
-## thousands of rooms it will never build, and each of those used to generate a
-## manifest purely to count it.
+## The count is the first thing `items_for` computes, and the indices do not
+## require the list.
 static func item_count_for(room: Room) -> int:
 	var tpl := template_for(room)
 	if not tpl.is_empty():
@@ -490,21 +482,6 @@ static func _on_a_post(room: Room, at: Vector3i, span: Vector3i,
 	return false
 
 
-## Is there anything under this item, in the chunk it would be laid into?
-##
-## `cell` is in the chunk's grid, as `place_block` takes it. Any one cell of
-## live block under its footprint will do: that is the solve's own notion of
-## held up, so an item this passes is one grounding reaches.
-static func item_supported(world: BrickWorld, chunk: int, type: String,
-		cell: Vector3i) -> bool:
-	var span := _item_span(type)
-	for x in span.x:
-		for z in span.z:
-			if world.is_solid(chunk, Vector3i(cell.x + x, cell.y - 1, cell.z + z)):
-				return true
-	return false
-
-
 ## An item's box in its building's own space, in metres: where it stands and
 ## how much room it takes. What a blast is measured against (BuildingRegistry.
 ## compromise_items).
@@ -552,8 +529,8 @@ static func is_detail(part: Array) -> bool:
 ## takes and for the same reason.
 ##
 ## `roles`, when given, gets one BuildRecipe.Role per block laid, in order: an
-## authored item's DETAIL parts are laid here like any other (this is the real
-## rung) and the caller may want to know which they were.
+## authored item's DETAIL parts are laid here like any other (they are bricks
+## now) and the caller may want to know which they were.
 static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		item: Dictionary, colour: int, offset: Vector3i = Vector3i.ZERO,
 		roles: Array = []) -> PackedInt32Array:
@@ -590,31 +567,31 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 
 ## What a room looks like DRAWN: every part of every item it still holds, as a
 ## MultiMesh buffer, and one box per item for collision -- without laying a
-## single block. [Scale §4.1](../Docs/Scale.md) rung 2.
+## single block. What a storey group is drawn from (InteriorGroups).
 ##
-## The same parts, cells and colours `build_item` would lay, so promoting a
-## drawn room to bricks changes nothing on screen. `offset` is the host's
-## rebase, as there. Returns {buffer, details, boxes, parts}; `boxes` holds one
+## The same parts, cells and colours `build_item` would lay, so a piece laid as
+## bricks changes nothing on screen. `offset` is the host's rebase, as there.
+## Returns {buffer, details, boxes, parts, pieces}; `boxes` holds one
 ## AABB per item drawn, in the chunk's own metres, which is the space the
 ## building's mesh and its furniture body are both in. `pieces` says which
 ## rows are whose: six ints an item drawn -- its index in `room.items`, its
 ## first row and row count in `buffer`, the same two for `details`, and its
 ## box in `boxes` (-1 for an item that is all DETAIL). `details` is the same
 ## kind of buffer for the DETAIL parts -- the small things on and round the
-## pieces -- which the drawn rung never shows and a storey group shows only up
-## close (InteriorGroups.ITEM_RANGE).
+## pieces -- which a storey group shows only up close
+## (InteriorGroups.ITEM_RANGE).
 ##
 ## An item is drawn where the manifest says, which for a standing building is
 ## where it would be laid. That is what `Room.posts` bought: an item placed
 ## clear of the columns, so the drawing does not have to ask the chunk whether
 ## there is room for it.
 ##
-## `own` is the storey groups' way of asking (InteriorGroups): draw the items
-## whose floor is mostly in THIS chunk (item_floor_share), and write nothing
-## off. An item not drawn here may be on a piece of the building -- `chunk`
-## can be that piece -- so its not being here says nothing about its being gone.
+## Only the items whose floor is mostly in THIS chunk (item_floor_share), and
+## nothing is written off: an item not drawn here may be on a piece of the
+## building -- `chunk` can be that piece -- so its not being here says nothing
+## about its being gone.
 static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
-		room: Room, offset: Vector3i = Vector3i.ZERO, own: bool = false) -> Dictionary:
+		room: Room, offset: Vector3i = Vector3i.ZERO) -> Dictionary:
 	var buffer := PackedFloat32Array()
 	var details := PackedFloat32Array()
 	var pieces := PackedInt32Array()
@@ -627,15 +604,10 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 		if room.gone.has(i) or room.laid.has(i):
 			continue   # gone, or bricks now and drawn from them
 		var item: Dictionary = room.items[i]
-		# Its floor went while nobody was looking -- blown out, or fallen with
-		# a piece of the building. It went with it: written off, not drawn
-		# standing on nothing.
-		if own:
-			if item_floor_share(world, chunk, str(item.type),
-					(item.cell as Vector3i) - offset) <= 0.5:
-				continue
-		elif not item_supported(world, chunk, str(item.type), (item.cell as Vector3i) - offset):
-			room.gone[i] = true
+		# Its floor is not here -- blown out, or fallen with a piece of the
+		# building. It went with it, and is not drawn standing on nothing.
+		if item_floor_share(world, chunk, str(item.type),
+				(item.cell as Vector3i) - offset) <= 0.5:
 			continue
 		var at: Vector3i = (item.cell as Vector3i) - offset - origin
 		var colour := 4 + int(i % 8)
@@ -817,57 +789,6 @@ static func _aperture(side: Dictionary, from_u: int, to_u: int, lo_y: int, hi_y:
 		size = Vector3(thick * cell.x, (hi_y - lo_y + plates) * cell.y,
 				(to_u - from_u) * cell.z)
 	return AABB(lo, size)
-
-
-## Which way is down for a room whose building has fallen over.
-##
-## [Interiors §5.2](../Docs/Interiors.md), the analytic resolve: snap world-down
-## into the room's own frame and take the nearest of six. Exact for a section
-## lying on a face, which is most of them, and it names the room's NEW floor
-## without simulating anything.
-static func down_axis(chunk_xform: Transform3D) -> Vector3i:
-	var local: Vector3 = chunk_xform.basis.inverse() * Vector3.DOWN
-	var ax := absf(local.x)
-	var ay := absf(local.y)
-	var az := absf(local.z)
-	if ay >= ax and ay >= az:
-		return Vector3i(0, -1 if local.y < 0.0 else 1, 0)
-	if ax >= az:
-		return Vector3i(-1 if local.x < 0.0 else 1, 0, 0)
-	return Vector3i(0, 0, -1 if local.z < 0.0 else 1)
-
-
-## Where an item ends up in a room that fell while nobody was looking.
-##
-## Against whatever face is now the floor, at its authored position projected
-## onto it, with a seeded offset. No physics, no settling frames, deterministic,
-## instant -- and nobody can tell whether the chair tumbled into that corner or
-## was put there.
-static func resolved_cell(room: Room, item: Dictionary, down: Vector3i,
-		index: int) -> Vector3i:
-	if down == Vector3i(0, -1, 0):
-		return item.cell  # still upright: it is where it was
-	var span := _item_span(str(item.type))
-	var at: Vector3i = item.cell
-	var jitter := Vector3i(
-			int(hash3(room.room_seed, index, 41) % maxi(room.size.x - span.x, 1)),
-			int(hash3(room.room_seed, index, 43) % maxi(room.size.y - span.y, 1)),
-			int(hash3(room.room_seed, index, 47) % maxi(room.size.z - span.z, 1)))
-	# Against the new floor: the axis that is now down goes to the low (or high)
-	# end of the room, and the other two keep the authored position, jittered.
-	match down:
-		Vector3i(1, 0, 0):
-			return Vector3i(room.lo.x + room.size.x - span.x, room.lo.y + jitter.y, at.z)
-		Vector3i(-1, 0, 0):
-			return Vector3i(room.lo.x, room.lo.y + jitter.y, at.z)
-		Vector3i(0, 0, 1):
-			return Vector3i(at.x, room.lo.y + jitter.y, room.lo.z + room.size.z - span.z)
-		Vector3i(0, 0, -1):
-			return Vector3i(at.x, room.lo.y + jitter.y, room.lo.z)
-		Vector3i(0, 1, 0):
-			# Upside down: the ceiling is the floor now.
-			return Vector3i(at.x, room.lo.y + room.size.y - span.y, at.z)
-	return at
 
 
 ## A small integer hash. Deterministic, order-independent and cheap -- the same

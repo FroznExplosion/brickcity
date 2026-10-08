@@ -63,7 +63,7 @@ And the ones that need a scene — add `--fixed-fps 60` if the window loses focu
 godot --path . -- --shot        # scripted collapse, writes shots/ and a frame-time report
 godot --path . -- --stress --buildings=200
 godot --path . -- --walk        # player collision
-godot --path . -- --rooms       # interiors, including the portal test
+godot --path . -- --groups --big  # interiors: storey groups by distance, collision, wreckage
 godot --path . -- --chamfer     # the shaded bevel, differenced on and off
 ```
 
