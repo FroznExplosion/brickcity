@@ -733,6 +733,14 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
 }
 
 PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
+    return chunk_studs(chunk_id, -1, true);
+}
+
+PackedFloat32Array BrickWorld::get_chunk_studs_section(int chunk_id, int section) const {
+    return chunk_studs(chunk_id, section, false);
+}
+
+PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furniture) const {
     PackedFloat32Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -757,6 +765,12 @@ PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
     for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
         const Block &b = c.blocks[bi];
         if (b.removed || !b.alive) {
+            continue;
+        }
+        // A block is drawn by the band its lowest cell is in (FaceBake) -- and
+        // furniture by none of them: it is not in the bake (FurnitureMesh).
+        if ((b.decorative && !furniture)
+                || (section >= 0 && c.section_of_y(b.cell.y) != section)) {
             continue;
         }
         const Archetype &a = archetypes[b.archetype];
@@ -1169,6 +1183,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                 }
                 fb.owner.push_back((int32_t)bi);
                 fb.other.push_back(other);
+                fb.edge.push_back(brick::EDGE_RAW);
             }
             continue;
         }
@@ -1313,6 +1328,160 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                         }
                         fb.owner.push_back((int32_t)bi);
                         fb.other.push_back(other);
+
+                        // What each side of the rectangle is (brick::EDGE_*),
+                        // for the chamfered mesh. Across a side lies either
+                        // nothing of this part -- a free edge -- or more of
+                        // this same face.
+                        const int32_t this_face = (int32_t)fb.owner.size() - 1;
+                        uint32_t edge_grooves = 0; // brick::EDGE_GROOVE_SHIFT
+                        const auto side = [&](int which, int a_from, int a_to, int b_from,
+                                int b_to, int da, int db) -> uint32_t {
+                            bool free_edge = false, more_face = false, open = true;
+                            bool walled = true;
+                            // The facet floors (FaceBake::floors): runs of
+                            // cells along this side with a block against the
+                            // face round the edge AND one diagonally across.
+                            const size_t floors_before = fb.floors.size();
+                            int at = 0, run_from = -1;
+                            const auto close_run = [&]() {
+                                if (run_from >= 0) {
+                                    fb.floors.push_back({ this_face, (uint16_t)run_from,
+                                            (uint16_t)at, (uint8_t)which });
+                                    run_from = -1;
+                                }
+                            };
+                            for (int aa = a_from; aa <= a_to; ++aa) {
+                                for (int bb = b_from; bb <= b_to; ++bb, ++at) {
+                                    int lc[3] = { 0, 0, 0 };
+                                    lc[sa] = si;
+                                    lc[pa] = aa + da;
+                                    lc[pb] = bb + db;
+                                    const bool off = lc[pa] < 0 || lc[pa] >= an
+                                            || lc[pb] < 0 || lc[pb] >= bn;
+                                    if (!off && a.solid_at(lc[0], lc[1], lc[2])) {
+                                        more_face = true;
+                                        close_run();
+                                        continue;
+                                    }
+                                    free_edge = true;
+                                    // The face round the corner: open to the
+                                    // air for good only where no block of any
+                                    // kind owns the cell beyond it.
+                                    const Vector3i beyond(base.x + lc[0], base.y + lc[1],
+                                            base.z + lc[2]);
+                                    const int32_t against = c.block_at(beyond);
+                                    if (against >= 0) {
+                                        open = false;
+                                        // A third brick, not more of the one
+                                        // this stands against: that one's
+                                        // face goes on past the edge and is
+                                        // pushed out under this (EXTEND).
+                                        const int32_t across = c.block_at(beyond + FACE_DIR[f]);
+                                        if (across < 0 || across == against) {
+                                            close_run();
+                                        } else if (run_from < 0) {
+                                            run_from = at;
+                                        }
+                                    } else {
+                                        walled = false;
+                                        close_run();
+                                    }
+                                }
+                            }
+                            close_run();
+                            if (free_edge && more_face) {
+                                fb.floors.resize(floors_before);
+                                return brick::EDGE_FLUSH;
+                            }
+                            if (!free_edge) {
+                                return brick::EDGE_EXTEND;
+                            }
+                            // One facet for the two faces that share it, where
+                            // the one round the corner is open to the air for
+                            // good, and so always draws it: an ordinary brick's
+                            // only (a shaped part's other face may be FLUSH
+                            // there and draw none). If this face is as open as
+                            // that one, the lower axis has it. If this one
+                            // stands against a brick, that one has it -- and
+                            // keeps it when the brick is shot away and this
+                            // face appears: its facet is shaded as a groove's
+                            // (EDGE_GROOVE_SHIFT), a copy drawn here would not
+                            // be, and the two would flicker over each other.
+                            const int perp = da != 0 ? pa : pb;
+                            if (open && a.is_full_box() && (other >= 0 || sa > perp)) {
+                                return brick::EDGE_CONVEX_QUIET;
+                            }
+                            if (walled) {
+                                edge_grooves |= 1u << which;
+                            }
+                            return brick::EDGE_CONVEX;
+                        };
+                        uint32_t edge = (uint32_t)(
+                                (side(0, ai, ai, bj, b1, -1, 0) << brick::EDGE_A_LO)
+                                | (side(1, a1, a1, bj, b1, 1, 0) << brick::EDGE_A_HI)
+                                | (side(2, ai, a1, bj, bj, 0, -1) << brick::EDGE_B_LO)
+                                | (side(3, ai, a1, b1, b1, 0, 1) << brick::EDGE_B_HI)
+                                | (f << brick::EDGE_DIR_SHIFT));
+                        // The plugs (brick::EDGE_PLUG_SHIFT): a corner whose
+                        // other two faces both have a block against them.
+                        const auto taken_at = [&](int aa, int bb) -> bool {
+                            int lc[3] = { 0, 0, 0 };
+                            lc[sa] = si;
+                            lc[pa] = aa;
+                            lc[pb] = bb;
+                            return c.block_at(Vector3i(base.x + lc[0], base.y + lc[1],
+                                    base.z + lc[2])) >= 0;
+                        };
+                        for (int k = 0; k < 4; ++k) {
+                            const Vector3i o = FACE_CORNERS[f][k];
+                            const int oc[3] = { o.x, o.y, o.z };
+                            const int ca = oc[pa] ? a1 : ai;
+                            const int cb = oc[pb] ? b1 : bj;
+                            if (taken_at(ca + (oc[pa] ? 1 : -1), cb)
+                                    && taken_at(ca, cb + (oc[pb] ? 1 : -1))) {
+                                edge |= 1u << (brick::EDGE_PLUG_SHIFT + k);
+                            }
+                        }
+                        // The caps (brick::EDGE_CAP_SHIFT). A cell of this
+                        // slice just past the rectangle, along a free edge:
+                        // a face of this block too, standing against another
+                        // block (`mask` is still this slice's), with one
+                        // against the face round the edge as well.
+                        const auto tunnel_at = [&](int aa, int bb, int da, int db) -> bool {
+                            if (aa < 0 || aa >= an || bb < 0 || bb >= bn) {
+                                return false;
+                            }
+                            const int32_t beyond = mask[(size_t)aa * bn + bb];
+                            return beyond != NO_FACE && beyond >= 0 && taken_at(aa + da, bb + db);
+                        };
+                        const auto code_of = [&](int shift) -> uint32_t {
+                            return (edge >> shift) & 3u;
+                        };
+                        const bool a_lo_on = code_of(brick::EDGE_A_LO) == brick::EDGE_EXTEND;
+                        const bool a_hi_on = code_of(brick::EDGE_A_HI) == brick::EDGE_EXTEND;
+                        const bool b_lo_on = code_of(brick::EDGE_B_LO) == brick::EDGE_EXTEND;
+                        const bool b_hi_on = code_of(brick::EDGE_B_HI) == brick::EDGE_EXTEND;
+                        uint32_t caps = 0;
+                        if (code_of(brick::EDGE_A_LO) == brick::EDGE_CONVEX) {
+                            caps |= (b_lo_on && tunnel_at(ai, bj - 1, -1, 0)) ? 1u << 0 : 0u;
+                            caps |= (b_hi_on && tunnel_at(ai, b1 + 1, -1, 0)) ? 1u << 1 : 0u;
+                        }
+                        if (code_of(brick::EDGE_A_HI) == brick::EDGE_CONVEX) {
+                            caps |= (b_lo_on && tunnel_at(a1, bj - 1, 1, 0)) ? 1u << 2 : 0u;
+                            caps |= (b_hi_on && tunnel_at(a1, b1 + 1, 1, 0)) ? 1u << 3 : 0u;
+                        }
+                        if (code_of(brick::EDGE_B_LO) == brick::EDGE_CONVEX) {
+                            caps |= (a_lo_on && tunnel_at(ai - 1, bj, 0, -1)) ? 1u << 4 : 0u;
+                            caps |= (a_hi_on && tunnel_at(a1 + 1, bj, 0, -1)) ? 1u << 5 : 0u;
+                        }
+                        if (code_of(brick::EDGE_B_HI) == brick::EDGE_CONVEX) {
+                            caps |= (a_lo_on && tunnel_at(ai - 1, b1, 0, 1)) ? 1u << 6 : 0u;
+                            caps |= (a_hi_on && tunnel_at(a1 + 1, b1, 0, 1)) ? 1u << 7 : 0u;
+                        }
+                        edge |= caps << brick::EDGE_CAP_SHIFT;
+                        edge |= edge_grooves << brick::EDGE_GROOVE_SHIFT;
+                        fb.edge.push_back(edge);
                     }
                 }
             }
@@ -1321,6 +1490,8 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
     fb.section_faces[(size_t)sec] = (int32_t)fb.owner.size() - fb.section_first[(size_t)sec];
     }
 
+    static std::atomic<uint32_t> bakes_made{0};
+    fb.serial = bakes_made.fetch_add(1, std::memory_order_relaxed) + 1;
     fb.valid = true;
     fb.bake_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count();
@@ -1834,6 +2005,11 @@ BrickWorld::~BrickWorld() {
             j->worker.join();
         }
     }
+    for (auto &j : chamfer_jobs) {
+        if (j->worker.joinable()) {
+            j->worker.join();
+        }
+    }
     PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
     if (ps != nullptr) {
         for (auto &kv : box_shapes) {
@@ -2261,6 +2437,594 @@ Array BrickWorld::build_chunk_mesh(int chunk_id) {
     arrays[Mesh::ARRAY_TEX_UV2] = c.bake.uv2s;
     arrays[Mesh::ARRAY_INDEX] = c.live_indices;
     return arrays;
+}
+
+// --- the chamfered near mesh -------------------------------------------------
+//
+// Every baked face again, with the free edges of its brick cut off at 45
+// degrees (Docs/BrickBevel.md). It is the face bake's faces in the face bake's
+// order, each one now a few quads instead of one, so everything the flat mesh
+// does with a face still holds: a face is drawn or it is not, by the same rule,
+// and damage is zeros written over its indices.
+//
+// Nothing here asks what the brick next door is doing, and that is the design
+// (Terrain.md 22.13: backing, not agreement). A face only knows its own four
+// sides, as the bake found them (brick::EDGE_*):
+//
+//   * a free edge of the brick is drawn IN by the bevel and gets a facet down
+//     to where the face round the corner starts. Both faces of an edge draw
+//     that facet -- either may be hidden behind a neighbour while the other is
+//     seen -- and the two copies are the same quad shaded the same way.
+//   * a side that is not an edge of the brick is pushed OUT by the bevel,
+//     under whatever stands there. A brick on a slab shows a sliver of the
+//     slab's top under its own bevelled bottom edge, and that sliver is
+//     otherwise a face nobody draws: a slit into the wall.
+//   * where three bricks meet on a line, a corner or an end, what would show
+//     between their bevels is drawn by the face whose facet stops there: a
+//     floor (FaceBake::floors), a plug (EDGE_PLUG_SHIFT), a cap
+//     (EDGE_CAP_SHIFT).
+//
+// A facet carries a NEGATIVE UV2 (brick.gdshader: no print, no seam of its
+// own), so the two copies of one cannot differ. Its UV is free, then, and
+// says what the shader cannot work out: x is how deep into the cut the vertex
+// is (0 at the face, 1 a bevel behind it) and y whether the cut is one wall
+// of a groove between two bricks (brick::EDGE_GROOVE_SHIFT).
+void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
+    const auto t0 = std::chrono::steady_clock::now();
+    // As bake_faces_into: the two axes of each face's plane, and which UV
+    // component the bake wrote along each.
+    static const int PLANE_A[6] = { 1, 1, 0, 0, 0, 0 };
+    static const int PLANE_B[6] = { 2, 2, 2, 2, 1, 1 };
+    static const int UV_A[6] = { 1, 1, 0, 0, 0, 0 };
+    static const int UV_B[6] = { 0, 0, 1, 1, 1, 1 };
+
+    const float c = in.bevel;
+    const Vector3 cs = cell_size();
+    out.quad_first.assign((size_t)in.faces + 1, 0);
+    int floor_at = 0;
+    const size_t guess = (size_t)in.faces * 4 * (c > 0.0f ? 4 : 1);
+    out.vv.reserve(guess);
+    out.nn.reserve(guess);
+    out.cc.reserve(guess);
+    out.uu.reserve(guess);
+    out.u2.reserve(guess);
+
+    Vector3 n;
+    Color col;
+    Vector2 u2;
+    const auto push = [&](const Vector3 &p, const Vector2 &uv) {
+        out.vv.push_back(p);
+        out.nn.push_back(n);
+        out.cc.push_back(col);
+        out.uu.push_back(uv);
+        out.u2.push_back(u2);
+    };
+    // A quad given round its edge, stored as a baked face is -- a, b, d, c, for
+    // triangles (0, 1, 2) and (1, 3, 2) -- and turned to face `n` if it came
+    // the other way round (the rule PieceMeshes._tri_n keeps).
+    const auto quad = [&](const Vector3 &a, const Vector3 &b, const Vector3 &cc, const Vector3 &d,
+            const Vector2 &ua, const Vector2 &ub, const Vector2 &uc, const Vector2 &ud) {
+        if ((b - a).cross(d - a).dot(n) > 0.0f) {
+            push(a, ua); push(d, ud); push(b, ub); push(cc, uc);
+        } else {
+            push(a, ua); push(b, ub); push(d, ud); push(cc, uc);
+        }
+    };
+
+    int32_t quads = 0;
+    for (int i = 0; i < in.faces; ++i) {
+        out.quad_first[(size_t)i] = quads;
+        // This face's facet floors, whether or not it is drawn.
+        while (floor_at < in.floor_count && in.floors[floor_at].face - in.face_base < i) {
+            ++floor_at;
+        }
+        int floor_end = floor_at;
+        while (floor_end < in.floor_count && in.floors[floor_end].face - in.face_base == i) {
+            ++floor_end;
+        }
+        if (in.drawn != nullptr && in.drawn[i] == 0) {
+            continue;
+        }
+        const int v = i * 4;
+        const uint32_t e = in.edge[i];
+        const Vector3 face_n = in.normals[v];
+        col = in.colours[v];
+        const Vector2 face_u2 = in.uv2s[v];
+
+        if ((e & brick::EDGE_RAW) != 0 || c <= 0.0f) {
+            for (int k = 0; k < 4; ++k) {
+                n = in.normals[v + k];
+                u2 = in.uv2s[v + k];
+                push(in.verts[v + k], in.uvs[v + k]);
+            }
+            ++quads;
+            continue;
+        }
+
+        const int f = (e >> brick::EDGE_DIR_SHIFT) & 7;
+        Vector3 A, B;
+        A[PLANE_A[f]] = 1.0f;
+        B[PLANE_B[f]] = 1.0f;
+        Vector2 UA, UB;
+        UA[UV_A[f]] = 1.0f;
+        UB[UV_B[f]] = 1.0f;
+        const int code_a[2] = { (e >> brick::EDGE_A_LO) & 3, (e >> brick::EDGE_A_HI) & 3 };
+        const int code_b[2] = { (e >> brick::EDGE_B_LO) & 3, (e >> brick::EDGE_B_HI) & 3 };
+        // How far a corner moves along the OUTWARD direction of a side.
+        const auto shift = [c](int code) -> float {
+            return code == brick::EDGE_FLUSH ? 0.0f : (code == brick::EDGE_EXTEND ? c : -c);
+        };
+
+        Vector3 q[4];
+        Vector2 qu[4];
+        int hi_a[4], hi_b[4];
+        for (int k = 0; k < 4; ++k) {
+            const Vector3i o = FACE_CORNERS[f][k];
+            hi_a[k] = o[PLANE_A[f]];
+            hi_b[k] = o[PLANE_B[f]];
+            const float da = shift(code_a[hi_a[k]]) * (hi_a[k] ? 1.0f : -1.0f);
+            const float db = shift(code_b[hi_b[k]]) * (hi_b[k] ? 1.0f : -1.0f);
+            q[k] = in.verts[v + k] + A * da + B * db;
+            qu[k] = in.uvs[v + k] + UA * da + UB * db;
+        }
+
+        // The face itself, in the bake's own corner order.
+        n = face_n;
+        u2 = face_u2;
+        for (int k = 0; k < 4; ++k) {
+            push(q[k], qu[k]);
+        }
+        ++quads;
+
+        // The facets. `u2` negative marks them (see above).
+        u2 = Vector2(-face_u2.x, -face_u2.y);
+        for (int s = 0; s < 4; ++s) {
+            const bool on_a = s < 2;
+            const int hi = s & 1;
+            if ((on_a ? code_a[hi] : code_b[hi]) != brick::EDGE_CONVEX) {
+                continue;
+            }
+            int k1 = -1, k2 = -1;
+            for (int k = 0; k < 4; ++k) {
+                if ((on_a ? hi_a[k] : hi_b[k]) == hi) {
+                    (k1 < 0 ? k1 : k2) = k;
+                }
+            }
+            const float sgn = hi ? 1.0f : -1.0f;
+            const Vector3 o = (on_a ? A : B) * sgn;
+            const float groove = (e & (1u << (brick::EDGE_GROOVE_SHIFT + s))) != 0 ? 1.0f : 0.0f;
+            const Vector2 shallow(0.0f, groove), deep(1.0f, groove);
+            // From this face's drawn-in edge to the one round the corner's.
+            const Vector3 step = (o - face_n) * c;
+            // At a PLUGGED corner (brick::EDGE_PLUG_SHIFT) the facet does not
+            // stop a bevel short for a corner triangle: its far edge runs on
+            // to the brick's corner, and the facet of the other side meets it
+            // there along the mitre. Two facets close the corner between them.
+            Vector3 far1 = q[k1] + step, far2 = q[k2] + step;
+            for (int end = 0; end < 2; ++end) {
+                const int k = end == 0 ? k1 : k2;
+                const int other_code = on_a ? code_b[hi_b[k]] : code_a[hi_a[k]];
+                if (other_code != brick::EDGE_CONVEX
+                        || (e & (1u << (brick::EDGE_PLUG_SHIFT + k))) == 0) {
+                    continue;
+                }
+                const Vector3 run_out = on_a ? B * (hi_b[k] ? c : -c) : A * (hi_a[k] ? c : -c);
+                (end == 0 ? far1 : far2) += run_out;
+            }
+            n = (face_n + o).normalized();
+            quad(q[k1], q[k2], far2, far1, shallow, shallow, deep, deep);
+            ++quads;
+            // The caps (brick::EDGE_CAP_SHIFT): the facet's own cross-section,
+            // across the end it stops at, facing back along it.
+            for (int end = 0; end < 2; ++end) {
+                if ((e & (1u << (brick::EDGE_CAP_SHIFT + s * 2 + end))) == 0) {
+                    continue;
+                }
+                const int k = ((on_a ? hi_b[k1] : hi_a[k1]) == end) ? k1 : k2;
+                n = (on_a ? B : A) * (end ? -1.0f : 1.0f);
+                quad(q[k], q[k] + step, q[k] + o * c, q[k] + o * c,
+                        shallow, deep, deep, deep);
+                ++quads;
+                // And a floor under the bevel of facet that reaches past the
+                // face to that cap: the brick this stands on is not drawn
+                // there either.
+                const Vector3 edge_at = in.verts[v + k] ;
+                const Vector3 edge_to = q[k] + o * c;
+                const Vector3 back = face_n * -c;
+                n = -o;
+                quad(edge_at, edge_to, edge_to + back, edge_at + back, deep, deep, deep, deep);
+                ++quads;
+            }
+        }
+
+        // The corners, where three facets leave a triangle open. One that has
+        // a QUIET side is drawn by the face that side belongs to, and a
+        // plugged one is closed by its two facets (above).
+        for (int k = 0; k < 4; ++k) {
+            const int ca = code_a[hi_a[k]];
+            const int cb = code_b[hi_b[k]];
+            if (ca != brick::EDGE_CONVEX || cb != brick::EDGE_CONVEX
+                    || (e & (1u << (brick::EDGE_PLUG_SHIFT + k))) != 0) {
+                continue;
+            }
+            const Vector3 oa = A * (hi_a[k] ? 1.0f : -1.0f);
+            const Vector3 ob = B * (hi_b[k] ? 1.0f : -1.0f);
+            const Vector3 p1 = q[k] + (oa - face_n) * c;
+            const Vector3 p2 = q[k] + (ob - face_n) * c;
+            n = (face_n + oa + ob).normalized();
+            const int sa_bit = brick::EDGE_GROOVE_SHIFT + hi_a[k];
+            const int sb_bit = brick::EDGE_GROOVE_SHIFT + 2 + hi_b[k];
+            const float groove = ((e >> sa_bit) & (e >> sb_bit) & 1u) != 0 ? 1.0f : 0.0f;
+            const Vector2 shallow(0.0f, groove), deep(1.0f, groove);
+            quad(q[k], p1, p2, p2, shallow, deep, deep, deep);
+            ++quads;
+        }
+
+        // The facet floors (FaceBake::floors): in the plane of the face round
+        // the edge, from where the facet ends out to the edge, facing back
+        // into the cut.
+        for (int li = floor_at; li < floor_end; ++li) {
+            const brick::FaceBake::Floor &fl = in.floors[li];
+            const bool on_a = fl.side < 2;
+            const int hi = fl.side & 1;
+            // The side's corner at the low end of the way along it.
+            int k0 = 0;
+            for (int k = 0; k < 4; ++k) {
+                if ((on_a ? hi_a[k] : hi_b[k]) == hi && (on_a ? hi_b[k] : hi_a[k]) == 0) {
+                    k0 = k;
+                }
+            }
+            const int run_axis = on_a ? PLANE_B[f] : PLANE_A[f];
+            const Vector3 along = (on_a ? B : A) * cs[run_axis];
+            const Vector3 from = in.verts[v + k0] + along * (float)fl.from;
+            const Vector3 to = in.verts[v + k0] + along * (float)fl.to;
+            const Vector3 back = face_n * -c;
+            const Vector2 uv(1.0f, 1.0f); // the floor of a groove
+            n = (on_a ? A : B) * (hi ? -1.0f : 1.0f);
+            quad(from, to, to + back, from + back, uv, uv, uv, uv);
+            ++quads;
+        }
+    }
+    out.quad_first[(size_t)in.faces] = quads;
+    out.ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+}
+
+Array BrickWorld::chamfer_arrays(const ChamferOut &o) {
+    Array arrays;
+    if (o.vv.empty()) {
+        return arrays;
+    }
+    PackedVector3Array verts;
+    PackedVector3Array normals;
+    PackedColorArray colours;
+    PackedVector2Array uvs;
+    PackedVector2Array uv2s;
+    verts.resize((int64_t)o.vv.size());
+    normals.resize((int64_t)o.nn.size());
+    colours.resize((int64_t)o.cc.size());
+    uvs.resize((int64_t)o.uu.size());
+    uv2s.resize((int64_t)o.u2.size());
+    std::memcpy(verts.ptrw(), o.vv.data(), o.vv.size() * sizeof(Vector3));
+    std::memcpy(normals.ptrw(), o.nn.data(), o.nn.size() * sizeof(Vector3));
+    std::memcpy(colours.ptrw(), o.cc.data(), o.cc.size() * sizeof(Color));
+    std::memcpy(uvs.ptrw(), o.uu.data(), o.uu.size() * sizeof(Vector2));
+    std::memcpy(uv2s.ptrw(), o.u2.data(), o.u2.size() * sizeof(Vector2));
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = verts;
+    arrays[Mesh::ARRAY_NORMAL] = normals;
+    arrays[Mesh::ARRAY_COLOR] = colours;
+    arrays[Mesh::ARRAY_TEX_UV] = uvs;
+    arrays[Mesh::ARRAY_TEX_UV2] = uv2s;
+    return arrays;
+}
+
+void BrickWorld::chamfer_indices(const Chunk &c, int section,
+        const std::vector<int32_t> &quad_first, PackedInt32Array &out) {
+    // A section, or with section < 0 the chunk.
+    const int first = section < 0 ? 0 : c.bake.section_first[(size_t)section];
+    const int faces = section < 0 ? c.bake.face_count() : c.bake.section_faces[(size_t)section];
+    out.resize((int64_t)quad_first[(size_t)faces] * 6);
+    int32_t *w = out.ptrw();
+    for (int f = 0; f < faces; ++f) {
+        const int32_t owner = c.bake.owner[(size_t)(first + f)];
+        const int32_t other = c.bake.other[(size_t)(first + f)];
+        const bool drawn = c.blocks[owner].alive
+                && (other < 0 || !c.blocks[other].alive);
+        for (int32_t qi = quad_first[(size_t)f]; qi < quad_first[(size_t)f + 1]; ++qi) {
+            int32_t *at = w + (size_t)qi * 6;
+            if (!drawn) {
+                std::fill(at, at + 6, 0);
+                continue;
+            }
+            const int32_t b = qi * 4;
+            at[0] = b + 0;
+            at[1] = b + 1;
+            at[2] = b + 2;
+            at[3] = b + 1;
+            at[4] = b + 3;
+            at[5] = b + 2;
+        }
+    }
+}
+
+Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    Chunk &c = chunks[chunk_id];
+    if (!c.bake.valid) {
+        bake_chunk_faces(c);
+        stats[chunk_id].bake_ms = c.bake.bake_ms;
+    }
+    const int faces = c.bake.face_count();
+    if (faces == 0) {
+        return Array();
+    }
+    std::vector<uint8_t> drawn((size_t)faces, 0);
+    for (int f = 0; f < faces; ++f) {
+        const int32_t owner = c.bake.owner[(size_t)f];
+        const int32_t other = c.bake.other[(size_t)f];
+        drawn[(size_t)f] = c.blocks[owner].alive && (other < 0 || !c.blocks[other].alive);
+    }
+    ChamferIn in;
+    in.verts = c.bake.verts.ptr();
+    in.normals = c.bake.normals.ptr();
+    in.colours = c.bake.colours.ptr();
+    in.uvs = c.bake.uvs.ptr();
+    in.uv2s = c.bake.uv2s.ptr();
+    in.edge = c.bake.edge.data();
+    in.drawn = drawn.data();
+    in.floors = c.bake.floors.data();
+    in.floor_count = (int)c.bake.floors.size();
+    in.faces = faces;
+    in.bevel = (float)std::max(0.0, bevel);
+    ChamferOut out;
+    chamfer_faces_into(in, out);
+    Array arrays = chamfer_arrays(out);
+    if (arrays.is_empty()) {
+        return arrays;
+    }
+    // Every quad here is drawn: the faces that are not were left out.
+    const int32_t quads = out.quad_first[(size_t)faces];
+    PackedInt32Array idx;
+    idx.resize((int64_t)quads * 6);
+    int32_t *w = idx.ptrw();
+    for (int32_t qi = 0; qi < quads; ++qi) {
+        const int32_t b = qi * 4;
+        int32_t *at = w + (size_t)qi * 6;
+        at[0] = b + 0;
+        at[1] = b + 1;
+        at[2] = b + 2;
+        at[3] = b + 1;
+        at[4] = b + 3;
+        at[5] = b + 2;
+    }
+    arrays[Mesh::ARRAY_INDEX] = idx;
+    last_chamfer_tris = quads * 2;
+    last_chamfer_ms = out.ms;
+    return arrays;
+}
+
+bool BrickWorld::chamfer_pending(int chunk_id, int section) const {
+    for (const auto &j : chamfer_jobs) {
+        if (j->chunk_id == chunk_id && j->section == section) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool BrickWorld::chamfer_ready(int chunk_id, int section) const {
+    for (const auto &j : chamfer_jobs) {
+        if (j->chunk_id == chunk_id && j->section == section) {
+            return j->done.load(std::memory_order_acquire);
+        }
+    }
+    return false;
+}
+
+void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) {
+    if (!valid_chunk(chunk_id) || chamfer_pending(chunk_id, section)) {
+        return;
+    }
+    const Chunk &c = chunks[chunk_id];
+    if (!c.bake.valid || section >= c.bake.section_count()) {
+        return;
+    }
+    const int first = section < 0 ? 0 : c.bake.section_first[(size_t)section];
+    const int faces = section < 0 ? c.bake.face_count() : c.bake.section_faces[(size_t)section];
+    if (faces <= 0) {
+        return;
+    }
+    auto job = std::make_unique<ChamferJob>();
+    job->chunk_id = chunk_id;
+    job->section = section;
+    job->serial = c.bake.serial;
+    job->verts = c.bake.verts;
+    job->normals = c.bake.normals;
+    job->colours = c.bake.colours;
+    job->uvs = c.bake.uvs;
+    job->uv2s = c.bake.uv2s;
+    job->edge.assign(c.bake.edge.begin() + first, c.bake.edge.begin() + first + faces);
+    job->in.verts = job->verts.ptr() + (size_t)first * 4;
+    job->in.normals = job->normals.ptr() + (size_t)first * 4;
+    job->in.colours = job->colours.ptr() + (size_t)first * 4;
+    job->in.uvs = job->uvs.ptr() + (size_t)first * 4;
+    job->in.uv2s = job->uv2s.ptr() + (size_t)first * 4;
+    job->in.edge = job->edge.data();
+    {
+        const auto before = [](const brick::FaceBake::Floor &l, int face) {
+            return l.face < face;
+        };
+        const auto lo = std::lower_bound(c.bake.floors.begin(), c.bake.floors.end(), first,
+                before);
+        const auto hi = std::lower_bound(lo, c.bake.floors.end(), first + faces, before);
+        job->floors.assign(lo, hi);
+    }
+    job->in.floors = job->floors.data();
+    job->in.floor_count = (int)job->floors.size();
+    job->in.face_base = first;
+    job->in.faces = faces;
+    job->in.bevel = (float)std::max(0.0, bevel);
+    ChamferJob *raw = job.get();
+    raw->worker = std::thread([raw]() {
+        chamfer_faces_into(raw->in, raw->out);
+        raw->done.store(true, std::memory_order_release);
+    });
+    chamfer_jobs.push_back(std::move(job));
+}
+
+Array BrickWorld::take_chamfer_section(int chunk_id, int section) {
+    for (size_t i = 0; i < chamfer_jobs.size(); ++i) {
+        ChamferJob *job = chamfer_jobs[i].get();
+        if (job->chunk_id != chunk_id || job->section != section) {
+            continue;
+        }
+        if (job->worker.joinable()) {
+            job->worker.join();
+        }
+        Array arrays;
+        // Only against the bake it was built from: another one numbers its
+        // faces afresh, and these quads would be drawn by the wrong bricks.
+        if (valid_chunk(chunk_id) && chunks[chunk_id].bake.valid
+                && chunks[chunk_id].bake.serial == job->serial) {
+            arrays = chamfer_arrays(job->out);
+        }
+        if (!arrays.is_empty()) {
+            ChamferBand &band = chamfer_bands[std::make_pair(chunk_id, section)];
+            band.serial = job->serial;
+            band.quad_first = std::move(job->out.quad_first);
+            chamfer_indices(chunks[chunk_id], section, band.quad_first, band.live);
+            arrays[Mesh::ARRAY_INDEX] = band.live;
+            last_chamfer_tris = (int)(band.live.size() / 3);
+            last_chamfer_ms = job->out.ms;
+        }
+        chamfer_jobs.erase(chamfer_jobs.begin() + (long)i);
+        return arrays;
+    }
+    return Array();
+}
+
+Array BrickWorld::update_chamfer_regions(int chunk_id, const PackedInt32Array &sections) {
+    Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    auto it = chamfer_bands.lower_bound(std::make_pair(chunk_id, INT32_MIN));
+    for (; it != chamfer_bands.end() && it->first.first == chunk_id; ++it) {
+        ChamferBand &band = it->second;
+        const int section = it->first.second;
+        // The chunk as one band (section < 0) is every section.
+        if (!sections.is_empty() && section >= 0 && !sections.has(section)) {
+            continue;
+        }
+        Dictionary d;
+        d["section"] = section;
+        if (!c.bake.valid || c.bake.serial != band.serial
+                || section >= c.bake.section_count()) {
+            d["stale"] = true;
+            out.push_back(d);
+            continue;
+        }
+        PackedInt32Array next;
+        // The bake is the one the band was built from, so its faces are still
+        // the band's; a band of fewer would read past its quads.
+        const int band_faces = section < 0 ? c.bake.face_count()
+                : c.bake.section_faces[(size_t)section];
+        if ((int)band.quad_first.size() != band_faces + 1) {
+            d["stale"] = true;
+            out.push_back(d);
+            continue;
+        }
+        chamfer_indices(c, section, band.quad_first, next);
+        const int n = (int)next.size();
+        if (n != band.live.size()) {
+            d["stale"] = true;
+            out.push_back(d);
+            continue;
+        }
+        const int32_t *a = band.live.ptr();
+        const int32_t *b = next.ptr();
+        int lo = -1, hi = -1;
+        for (int i = 0; i < n; ++i) {
+            if (a[i] != b[i]) {
+                if (lo < 0) {
+                    lo = i;
+                }
+                hi = i;
+            }
+        }
+        if (lo < 0) {
+            continue;
+        }
+        const int count = hi - lo + 1;
+        // Four vertices a quad, six indices: the mesh's vertex count, and so
+        // its index width (IslandManager.INDEX16_MAX_VERTS).
+        const int index_bytes = (n / 6) * 4 <= 65536 ? 2 : 4;
+        PackedByteArray data;
+        data.resize((int64_t)count * index_bytes);
+        uint8_t *w = data.ptrw();
+        for (int i = 0; i < count; ++i) {
+            const int32_t val = b[lo + i];
+            if (index_bytes == 2) {
+                const uint16_t v16 = (uint16_t)val;
+                std::memcpy(w + (size_t)i * 2, &v16, 2);
+            } else {
+                std::memcpy(w + (size_t)i * 4, &val, 4);
+            }
+        }
+        d["offset"] = lo * index_bytes;
+        d["data"] = data;
+        d["changed_bytes"] = data.size();
+        out.push_back(d);
+        band.live = next;
+    }
+    return out;
+}
+
+int BrickWorld::get_chamfer_expected_triangles(int chunk_id, int section) const {
+    const auto it = chamfer_bands.find(std::make_pair(chunk_id, section));
+    if (!valid_chunk(chunk_id) || it == chamfer_bands.end()) {
+        return -1;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const ChamferBand &band = it->second;
+    if (!c.bake.valid || c.bake.serial != band.serial) {
+        return -1;
+    }
+    PackedInt32Array idx;
+    chamfer_indices(c, section, band.quad_first, idx);
+    int tris = 0;
+    const int32_t *r = idx.ptr();
+    for (int64_t i = 0; i + 2 < idx.size(); i += 3) {
+        if (r[i] != r[i + 1] || r[i + 1] != r[i + 2]) {
+            ++tris;
+        }
+    }
+    return tris;
+}
+
+void BrickWorld::drop_chamfer(int chunk_id, int section, bool all) {
+    for (size_t i = chamfer_jobs.size(); i-- > 0;) {
+        ChamferJob *job = chamfer_jobs[i].get();
+        if (job->chunk_id != chunk_id || (!all && job->section != section)) {
+            continue;
+        }
+        if (job->worker.joinable()) {
+            job->worker.join();
+        }
+        chamfer_jobs.erase(chamfer_jobs.begin() + (long)i);
+    }
+    if (!all) {
+        chamfer_bands.erase(std::make_pair(chunk_id, section));
+        return;
+    }
+    auto it = chamfer_bands.lower_bound(std::make_pair(chunk_id, INT32_MIN));
+    while (it != chamfer_bands.end() && it->first.first == chunk_id) {
+        it = chamfer_bands.erase(it);
+    }
 }
 
 // A far piece's stand-in. The bake merges faces WITHIN a brick and no further,
@@ -5853,6 +6617,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     // Never free a chunk a worker is still reading.
     settle_bake_job(chunk_id, false);
     settle_coarse_job(chunk_id);
+    drop_chamfer(chunk_id, -1, true);
     chunks[chunk_id] = Chunk();
     chunk_live[chunk_id] = 0;
     fire_clear(chunk_id);
@@ -6780,6 +7545,27 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("kill_block", "chunk_id", "cell"), &BrickWorld::kill_block);
     ClassDB::bind_method(D_METHOD("kill_blocks", "chunk_id", "ids"), &BrickWorld::kill_blocks);
     ClassDB::bind_method(D_METHOD("get_chunk_studs", "chunk_id"), &BrickWorld::get_chunk_studs);
+    ClassDB::bind_method(D_METHOD("get_chunk_studs_section", "chunk_id", "section"),
+            &BrickWorld::get_chunk_studs_section);
+    ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
+            &BrickWorld::build_chunk_chamfer_mesh);
+    ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),
+            &BrickWorld::chamfer_section_async);
+    ClassDB::bind_method(D_METHOD("chamfer_pending", "chunk_id", "section"),
+            &BrickWorld::chamfer_pending);
+    ClassDB::bind_method(D_METHOD("chamfer_ready", "chunk_id", "section"),
+            &BrickWorld::chamfer_ready);
+    ClassDB::bind_method(D_METHOD("take_chamfer_section", "chunk_id", "section"),
+            &BrickWorld::take_chamfer_section);
+    ClassDB::bind_method(D_METHOD("update_chamfer_regions", "chunk_id", "sections"),
+            &BrickWorld::update_chamfer_regions, DEFVAL(PackedInt32Array()));
+    ClassDB::bind_method(D_METHOD("drop_chamfer", "chunk_id", "section", "all"),
+            &BrickWorld::drop_chamfer, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("get_chamfer_expected_triangles", "chunk_id", "section"),
+            &BrickWorld::get_chamfer_expected_triangles);
+    ClassDB::bind_method(D_METHOD("get_last_chamfer_triangles"),
+            &BrickWorld::get_last_chamfer_triangles);
+    ClassDB::bind_method(D_METHOD("get_last_chamfer_ms"), &BrickWorld::get_last_chamfer_ms);
     ClassDB::bind_method(D_METHOD("get_column_mask", "chunk_id", "y0", "y1"),
             &BrickWorld::get_column_mask);
     ClassDB::bind_method(D_METHOD("build_damage_profile", "chunk_id", "fx", "fz", "thick",

@@ -214,6 +214,11 @@ public:
     /// Dead blocks show their neighbours' studs again, because `solid_at` asks
     /// about LIVE blocks -- a crater exposes the studs under it.
     PackedFloat32Array get_chunk_studs(int chunk_id) const;
+    /// The same, for one drawing band of the chunk (set_chunk_section_plates)
+    /// or, with section < 0, all of them: the studs of the blocks that band
+    /// draws -- so none of furniture's, which no band does (FurnitureMesh). A
+    /// building's studs are drawn band by band, near the camera only.
+    PackedFloat32Array get_chunk_studs_section(int chunk_id, int section) const;
 
     /// Gate G1b: what the cheap representation needs to know about the damage.
     ///
@@ -304,6 +309,49 @@ public:
 
     /// Vertices are local to the chunk origin. Interior faces are culled.
     Array build_chunk_mesh(int chunk_id);
+
+    // --- the chamfered near mesh (Docs/BrickBevel.md) ------------------------
+    //
+    // The same faces as the flat mesh, each with its free edges cut off at 45
+    // degrees: drawn instead of the flat band close to the camera. Built from
+    // the face bake, in the bake's order, so damage is the same index patch.
+
+    /// The whole chunk, chamfered, now: only the faces drawn at this moment,
+    /// nothing kept. For what is small and rebuilt whole on every change -- a
+    /// workshop frame, a placement ghost.
+    Array build_chunk_chamfer_mesh(int chunk_id, double bevel);
+    /// One band's chamfered mesh, on a worker -- or the whole chunk's as one,
+    /// with section < 0, for a chunk drawn as one mesh (build_chunk_mesh).
+    /// Needs the bake (bake_ready); ask chamfer_ready, then
+    /// take_chamfer_section.
+    void chamfer_section_async(int chunk_id, int section, double bevel);
+    bool chamfer_pending(int chunk_id, int section) const;
+    bool chamfer_ready(int chunk_id, int section) const;
+    /// The finished band's arrays, indexed for the bricks alive NOW, and the
+    /// band is held from here on so update_chamfer_regions can patch it. Empty
+    /// when the bake it was built from has gone: ask again.
+    Array take_chamfer_section(int chunk_id, int section);
+    /// As update_index_regions, for the chamfered bands held: one
+    /// {section, offset, data, changed_bytes} per band whose indices moved, and
+    /// {section, stale = true} for a band whose bake has gone -- drop it.
+    /// Each band's bytes are in the index width its own mesh has: two up to
+    /// 65,536 vertices, four past that, as the engine chooses.
+    ///
+    /// `sections`, if not empty, is the bands to look at: the ones whose FLAT
+    /// band moved (update_index_regions) are the only ones whose chamfered
+    /// band can have, and re-indexing a band is the whole cost of this.
+    Array update_chamfer_regions(int chunk_id, const PackedInt32Array &sections);
+    /// Stop holding a band and throw away one still being built. `all` is
+    /// every band of the chunk, whatever `section` says.
+    void drop_chamfer(int chunk_id, int section, bool all = false);
+    /// Triangles a held band SHOULD be drawing, worked out afresh from the
+    /// bricks alive now: what a gate compares against what the band's index
+    /// buffer really holds after its patches. -1 if the band is not held.
+    int get_chamfer_expected_triangles(int chunk_id, int section) const;
+    /// Triangles in the last chamfered mesh made (take or build), and how long
+    /// the builder took.
+    int get_last_chamfer_triangles() const { return last_chamfer_tris; }
+    double get_last_chamfer_ms() const { return last_chamfer_ms; }
 
     /// A far piece's stand-in (IslandManager's coarse tier): the live bricks'
     /// outer surface, merged ACROSS bricks wherever the colour agrees, with a
@@ -1186,6 +1234,70 @@ private:
     static Array coarse_arrays(const CoarseOut &o);
     /// Wait for a chunk's stand-in worker and drop what it made.
     void settle_coarse_job(int chunk_id);
+
+    /// What the chamfer builder reads: a run of baked faces, by pointer.
+    struct ChamferIn {
+        const Vector3 *verts = nullptr;   // four a face, from the run's first
+        const Vector3 *normals = nullptr;
+        const Color *colours = nullptr;
+        const Vector2 *uvs = nullptr;
+        const Vector2 *uv2s = nullptr;
+        const uint32_t *edge = nullptr;   // one a face
+        const uint8_t *drawn = nullptr;   // one a face, or null for every face
+        /// The run's facet floors (FaceBake::floors), and the bake's number
+        /// for the run's first face (a floor names its face by that).
+        const brick::FaceBake::Floor *floors = nullptr;
+        int floor_count = 0;
+        int face_base = 0;
+        int faces = 0;
+        float bevel = 0.0f;
+    };
+    struct ChamferOut {
+        std::vector<Vector3> vv;
+        std::vector<Vector3> nn;
+        std::vector<Color> cc;
+        std::vector<Vector2> uu;
+        std::vector<Vector2> u2;
+        /// Per face, the first of its quads (four vertices each); one more
+        /// closes the last. A face not drawn (ChamferIn::drawn) has none.
+        std::vector<int32_t> quad_first;
+        double ms = 0.0;
+    };
+    static void chamfer_faces_into(const ChamferIn &in, ChamferOut &out);
+    struct ChamferJob {
+        int chunk_id = -1;
+        int section = -1;
+        uint32_t serial = 0;
+        // The bake's arrays, held so the worker's pointers stay good: a bake
+        // is never written after it is made, only replaced.
+        PackedVector3Array verts;
+        PackedVector3Array normals;
+        PackedColorArray colours;
+        PackedVector2Array uvs;
+        PackedVector2Array uv2s;
+        std::vector<uint32_t> edge;
+        std::vector<brick::FaceBake::Floor> floors;
+        ChamferIn in;
+        ChamferOut out;
+        std::atomic<bool> done{false};
+        std::thread worker;
+    };
+    std::vector<std::unique_ptr<ChamferJob>> chamfer_jobs;
+    /// A chamfered band on the GPU: what is needed to patch its indices.
+    struct ChamferBand {
+        uint32_t serial = 0;
+        std::vector<int32_t> quad_first;
+        PackedInt32Array live;
+    };
+    std::map<std::pair<int, int>, ChamferBand> chamfer_bands;
+    /// A chamfered band's indices for the bricks alive now: six a quad, zeros
+    /// for a face not drawn, so the length never changes.
+    static void chamfer_indices(const brick::Chunk &c, int section,
+            const std::vector<int32_t> &quad_first, PackedInt32Array &out);
+    static Array chamfer_arrays(const ChamferOut &o);
+    PackedFloat32Array chunk_studs(int chunk_id, int section, bool furniture) const;
+    int last_chamfer_tris = 0;
+    double last_chamfer_ms = 0.0;
 
     struct BakeJob {
         int chunk_id = -1;

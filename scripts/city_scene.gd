@@ -166,6 +166,10 @@ const STREET_STUDS := 9
 var world: BrickWorld
 var registry: BuildingRegistry
 var islands: IslandManager
+## The near tier of everything drawn in bricks here -- buildings' bands, a
+## build's other frames, loose pieces: chamfered meshes and stud geometry
+## close to the camera (BrickNear).
+var brick_near: BrickNear
 ## How a building comes apart: breakage or collapse, and a mega building's
 ## collapse in a few big chunks (CollapseDirector).
 var director: CollapseDirector
@@ -940,6 +944,16 @@ func _ready() -> void:
 	islands.name = "Islands"
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
+	brick_near = BrickNear.new(world)
+	islands.near_tier = brick_near
+	# For measurement: the same city with no near tier at all, to set a pass
+	# against one with it.
+	# `--no-studs` and `--no-bevel` are its two halves, one at a time.
+	var near_args := OS.get_cmdline_user_args()
+	if "--no-near" in near_args or "--no-bevel" in near_args:
+		BrickNear.enabled = false
+	if "--no-near" in near_args or "--no-studs" in near_args:
+		brick_near.studs_on = false
 	# This scene starts the pieces' mesh jobs itself, after everything else in
 	# its tick (IslandManager._submit_mesh_job).
 	islands.defer_job_start = true
@@ -2688,6 +2702,7 @@ func _remesh_frames(id: int) -> void:
 		if world.get_alive_block_count(c) == 0:
 			_retirer.retire(mi.mesh)
 			mi.mesh = null
+			brick_near.untrack(mi)
 			continue
 		var arrays: Array = world.build_chunk_mesh(c)
 		var mesh := ArrayMesh.new()
@@ -2695,6 +2710,8 @@ func _remesh_frames(id: int) -> void:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		_retirer.retire(mi.mesh)
 		mi.mesh = mesh
+		# A frame is its own chunk, drawn whole.
+		brick_near.track(mi, c)
 
 
 ## Disable the collision shapes of blocks a hit removed, in one frame's body.
@@ -3181,6 +3198,13 @@ func _remesh(id: int, force_full: bool = false) -> void:
 			RenderingServer.mesh_surface_update_index_region(
 					(held[si] as ArrayMesh).get_rid(), 0, int(d.offset), d.data)
 		if ok:
+			# And the chamfered ones, and the studs the hit uncovered: of the
+			# bands this patch moved, no others.
+			var touched := PackedInt32Array()
+			for entry in moved:
+				touched.append(int((entry as Dictionary).section))
+			if not touched.is_empty():
+				brick_near.damaged(b.chunk, touched)
 			return
 
 	_rebuild_bands(id, b.chunk)
@@ -3363,6 +3387,13 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		_retirer.retire(node.mesh)
 	var live := mesh != null and mesh.get_surface_count() > 0
 	node.mesh = mesh if live else null
+	# Its chamfered mesh and studs, when the camera is near (and again: this is
+	# a new mesh, from what may be a new bake).
+	var band_of := registry.get_building(id)
+	if live and band_of != null:
+		brick_near.track(node, band_of.chunk, at)
+	else:
+		brick_near.untrack(node)
 	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
 	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
 
@@ -9177,6 +9208,8 @@ func _process(delta: float) -> void:
 	if _terrain_streamer != null:
 		_terrain_streamer.follow(Vector2(camera.global_position.x,
 				camera.global_position.z))
+	if brick_near != null:
+		brick_near.step(camera.global_position)
 	if _sea != null:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
@@ -9578,8 +9611,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_L:
 			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:
-			print("[city] chamfered edges: %s"
-					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
+			# Both halves of the bevel: the shaded one, and the real one near
+			# the camera (BrickNear), so the key shows the wall with and
+			# without. Shift+B is the near tier alone.
+			if not event.shift_pressed:
+				_toggle_shader("chamfer_enabled")
+			BrickNear.enabled = not BrickNear.enabled if event.shift_pressed \
+					else bool(_shader_toggles["chamfer_enabled"])
+			print("[city] chamfered edges: shaded %s, built near the camera %s (%.0f m)" % [
+					"ON" if _shader_toggles["chamfer_enabled"] else "OFF",
+					"ON" if BrickNear.enabled else "OFF", BrickNear.radius])
 		KEY_I:
 			# Printed on glass / smooth PEI / textured PEI, or injection
 			# moulded (BrickMaterials.set_look).
@@ -10710,6 +10751,7 @@ func _run_stress_pass() -> void:
 			int(islands.report().discarded), int(islands.report().furniture_deleted)])
 	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
 			_band_builds, _band_cpp_ms, _band_upload_ms, _band_worst])
+	print("[stress] near tier: %s" % brick_near.report())
 	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
 			islands.small_live_max, islands.large_live_max, islands.total_live_max,
 			islands.cap_deleted, islands.cap_slept, maxi(islands.cap_worst_over, 0)])
@@ -11535,7 +11577,15 @@ func _place_build(path: String) -> void:
 ## sub-pixel highlight that does not fade out shimmers, which is the same reason
 ## the seam fades (spec section 2, layer lines).
 func _run_chamfer_pass() -> void:
-	print("[chamfer] a bevel nobody paid a triangle for")
+	# `-- --chamfer --cost`: what the near tier costs where it is paid --
+	# shooting at, and then bringing down, a building the camera stands beside.
+	# A timing run (CLAUDE.md: the editor closed), and with `--no-near` the
+	# same run without the tier, to set beside it.
+	if "--cost" in OS.get_cmdline_user_args():
+		await _run_chamfer_cost()
+		get_tree().quit(0)
+		return
+	print("[chamfer] real bevels where the camera is, none where it is not")
 	var b := registry.get_building(0)
 	var chunk := _promote(0)
 	await _frames(40)
@@ -11549,35 +11599,135 @@ func _run_chamfer_pass() -> void:
 	camera.look_at(wall, Vector3.UP)
 	await _frames(10)
 
+	# The wall in front of the camera is drawn with its chamfered mesh
+	# (BrickNear), and the studs within reach as studs.
 	var near_off := await _capture_chamfer(false, "chamfer_off")
+	_gate_ok("with the near tier off, nothing is chamfered", brick_near.chamfered_bands == 0)
 	var near_on := await _capture_chamfer(true, "chamfer_on")
+	_gate_ok("a wall a metre and a half off is drawn chamfered", brick_near.chamfered_bands > 0,
+			"%d bands, %d triangles, %d studs; worst step %.2f ms" % [brick_near.chamfered_bands,
+				brick_near.chamfered_tris, brick_near.stud_instances, brick_near.worst_step_ms])
+	_gate_ok("and its exposed studs are geometry", brick_near.stud_instances > 0,
+			"%d" % brick_near.stud_instances)
 	var near_diff := _image_difference(near_off, near_on)
-	_gate_ok("up close, the bevel changes the picture", near_diff > 0.04,
+	_gate_ok("up close, the bevel changes the picture", near_diff > 0.01,
 			"%.1f%% of sampled pixels" % (near_diff * 100.0))
 	_gate_ok("but does not repaint the whole wall -- it is edges, not a tint",
 			near_diff < 0.75, "%.1f%%" % (near_diff * 100.0))
 
-	# And from across the street it is gone, because at that size it is noise.
+	# Shot at: the chamfered bands are patched as the flat ones are. What their
+	# index buffers draw is read back and set against the bricks left alive.
+	var before: Dictionary = brick_near.audit()
+	_blast(wall + Vector3(0.6, 0.3, 0.2), 1.1)
+	await _frames(20)
+	brick_near.settle(camera.global_position)
+	await _frames(4)
+	var after: Dictionary = brick_near.audit()
+	_gate_ok("a hit takes triangles out of the chamfered bands", int(after.bands) > 0
+			and int(after.drawn) != int(before.drawn),
+			"%d drawn before, %d after" % [before.drawn, after.drawn])
+	_gate_ok("and they draw exactly the bricks left", int(after.drawn) == int(after.wanted),
+			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
+	await _save("chamfer_hit")
+
+	# And from across the street there is none: at that size it is noise, and
+	# it is not paid for.
 	camera.global_position = wall - Vector3(0.0, -6.0, 110.0)
 	camera.look_at(wall, Vector3.UP)
 	await _frames(10)
 	var far_off := await _capture_chamfer(false, "")
 	var far_on := await _capture_chamfer(true, "")
+	_gate_ok("at a hundred metres no band is chamfered", brick_near.chamfered_bands == 0
+			and brick_near.stud_instances == 0,
+			"%d bands, %d studs" % [brick_near.chamfered_bands, brick_near.stud_instances])
 	var far_diff := _image_difference(far_off, far_on)
-	_gate_ok("at a hundred metres it has faded out", far_diff < 0.01,
+	_gate_ok("and the picture is the same either way", far_diff < 0.01,
 			"%.2f%% of sampled pixels" % (far_diff * 100.0))
-	_gate_ok("which is far less than it changes up close", far_diff * 4.0 < near_diff,
-			"%.2f%% against %.1f%%" % [far_diff * 100.0, near_diff * 100.0])
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
-## Render one frame with the chamfer on or off and hand back the image. A name
-## also writes it to shots/, for the eye to judge what a number cannot.
+## Frame times while a building six metres from the camera is shot at and then
+## cut down, with whatever near tier the run has.
+func _run_chamfer_cost() -> void:
+	print("[chamfer] cost, near tier %s" % ("ON" if BrickNear.enabled else "OFF (--no-near)"))
+	# The renderer's own clock as well as the frame's: a frame is held to the
+	# display's 16.6 ms whatever it cost to draw.
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+	var b := registry.get_building(0)
+	var chunk := _promote(0)
+	await _frames(60)
+	var fx: float = b.recipe.footprint_x * STUD
+	var wall: Vector3 = b.xform * Vector3(fx * 0.5, 2.6, 0.0)
+	camera.global_position = wall - Vector3(1.5, -0.4, 6.0)
+	camera.look_at(wall, Vector3.UP)
+	await _frames(10)
+	brick_near.settle(camera.global_position)
+	await _frames(30)
+	print("[chamfer]   standing: %d bricks, %d bands; %s" % [world.get_alive_block_count(chunk),
+			world.get_chunk_sections(chunk), brick_near.report()])
+	var idle: Array = await _frame_times(120)
+	print("[chamfer]   looking at it: %s" % _frame_line(idle))
+
+	# Twelve shots into the wall, one every five frames.
+	var hits := []
+	for i in 12:
+		_blast(wall + Vector3(-1.5 + 0.5 * float(i % 6), -0.8 + 0.9 * floorf(float(i) / 6.0), 0.3), 0.9)
+		hits.append_array(await _frame_times(5))
+	hits.append_array(await _frame_times(30))
+	print("[chamfer]   twelve shots: %s" % _frame_line(hits))
+	print("[chamfer]   %s" % brick_near.report())
+
+	# And down: its bottom courses cut through from the camera's side.
+	for i in 10:
+		_blast(b.xform * Vector3(fx * (0.05 + 0.1 * float(i)), 0.9, 0.3), 2.2)
+	var fall: Array = await _frame_times(360)
+	print("[chamfer]   brought down: %s" % _frame_line(fall))
+	print("[chamfer]   %s" % brick_near.report())
+	await _save("chamfer_cost_%s" % ("near" if BrickNear.enabled else "flat"))
+
+
+## The next `n` frames: each one's length, and what the renderer says the
+## frame before it took to draw on the CPU and on the GPU, in ms.
+func _frame_times(n: int) -> Array:
+	var out := []
+	var view := get_viewport().get_viewport_rid()
+	var last := Time.get_ticks_usec()
+	for i in n:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		out.append([float(now - last) / 1000.0,
+				RenderingServer.viewport_get_measured_render_time_cpu(view)
+				+ RenderingServer.get_frame_setup_time_cpu(),
+				RenderingServer.viewport_get_measured_render_time_gpu(view)])
+		last = now
+	return out
+
+
+func _frame_line(times: Array) -> String:
+	var sum := 0.0
+	var worst := 0.0
+	var cpu := 0.0
+	var gpu := 0.0
+	var gpu_worst := 0.0
+	for t in times:
+		sum += float(t[0])
+		worst = maxf(worst, float(t[0]))
+		cpu += float(t[1])
+		gpu += float(t[2])
+		gpu_worst = maxf(gpu_worst, float(t[2]))
+	var n := maxf(times.size(), 1.0)
+	return "%d frames, mean %.1f ms, worst %.1f; drawing them: CPU %.2f ms, GPU %.2f (worst %.2f)" % [
+			times.size(), sum / n, worst, cpu / n, gpu / n, gpu_worst]
+
+
+## Render one frame with the near tier -- chamfered bands, bevelled studs -- on
+## or off and hand back the image. A name also writes it to shots/, for the eye
+## to judge what a number cannot.
 func _capture_chamfer(on: bool, shot_name: String) -> Image:
-	_shader_toggles["chamfer_enabled"] = on
-	brick_material.set_shader_parameter("chamfer_enabled", on)
+	BrickNear.enabled = on
+	brick_near.settle(camera.global_position)
 	await _frames(3)
 	var img := get_viewport().get_texture().get_image()
 	if shot_name != "":
