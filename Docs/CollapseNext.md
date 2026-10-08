@@ -37,7 +37,7 @@ why holding bricks on a toppling piece changes how it goes over (likely the piec
 what let it tip), then put it back for pieces behind that fix. **Check:** `hang_probe` with a piece
 case; collapse_probe "rode it" over several full runs.
 
-### 1.4 Hits on pieces still make many medium bodies
+### ~~1.4 Hits on pieces still make many medium bodies~~ — the cause fixed 2026-10-07; a quiet-machine timing owed
 `--big --shot`'s body census: ~150 bodies of 49–499 bricks off pieces that were **hit**, 100–150 ms
 to make over the run, ~13 % of moving boxes. Groups of 48 or fewer off a piece crumble already.
 **Do:** measure what a hit on a falling piece actually cuts (solve groups by size) and decide: a
@@ -46,6 +46,31 @@ storey lines only. **Check:** the census line in `--big --shot`.
 2026-10-06, same pass: off pieces that were hit, 107 bodies of 49–499 (82 ms) and **349 of 500 or
 more (949 ms to make)**; the worst `islands.tick` is 43.6 ms, 41.4 of it rebuilding merged boxes
 after a hit. The big ones cost more than the medium ones this item was written about.
+
+**Measured and fixed 2026-10-07.** Counting hits by where the piece was (`IslandManager.hit_census`,
+a line in `--big --shot`): **262 hits on pieces in the air made 174 bodies; 155 on pieces that were
+down made 12.** A piece's solve stands it on its lowest bricks and asks what their joints can hold --
+right for wreckage on the ground, and for a section in free fall a tower's weight hung on a row of
+studs that is holding up nothing, so one shot failed it all the way across. Three changes:
+* **A piece in the air is not stress-solved** (`solve_island`): it comes apart where a hit
+  disconnects it and nowhere else -- the rule for every brick. The landing breaks it, along its
+  storeys, when it gets there. `float_probe`: a hole in a falling section's wall leaves it one
+  piece; cut clean through, it is two; down, it is solved as before.
+* **A hit's solve is queued** like a landing's, not run inside the call: once a piece a tick however
+  many blasts reached it, on the pieces' clock. The first in the queue is always done the tick it is
+  queued. A decision still queued is made before its piece is put to sleep (`_decide_owed`), and a
+  save carries whether a piece had landed, so a load decides as the host did (`snapshot_probe`).
+* **A moving piece's merged collision is rebuilt at most every 6 ticks, 12 in the air**
+  (`_flush_reshapes`): it was every tick the piece was hit, the whole piece each time.
+
+`--big --shot`, before -> after (three runs after): bodies of 500+ off hit pieces **159 -> 41-60**,
+their making 384 ms -> 109-145; hits in the air 174 bodies -> 3-12; collision rebuilds about
+900-1,300 -> 250-360; the worst script tick 52 ms -> 41-57, ticks over 25 ms 10 -> 10-18. The log
+still replays into the same structure. **Not shown to be faster overall:** frames averaged 18 ms
+before and 22-23 after, with more in motion at once (peak 7,000 boxes -> 18-20,000 -- sections that
+used to shatter now come down whole) -- and another chat's Godot was running through all of these,
+so no frame time here is to be trusted either way. **Owed:** the same before/after with nothing
+else running (§3). Hits on pieces already on the ground still make bodies (612 hits, 124 bodies).
 
 ### ~~1.5 The first stand-in for a big far piece is built on the main thread~~ — done 2026-10-06
 A piece of `COARSE_ASYNC_BLOCKS` (1,500) bricks or more has its stand-in built on a worker
