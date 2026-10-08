@@ -436,6 +436,15 @@ func _brick_material() -> ShaderMaterial:
 	return _brick_mat
 
 
+## What the editing tools are handed (terrain_editor.gd's header).
+func edit_context() -> Dictionary:
+	return {
+		"camera": _camera, "streamer": _streamer,
+		"world_path": _world_path, "seed": _seed, "drowned": _drowned,
+		"world_half": FAR_TILES, "status": _load_status, "shot": _edit_shot,
+	}
+
+
 ## The sites again, after an edit moved, resized or re-floored one.
 func rebuild_sites() -> void:
 	_build_sites()

@@ -5,10 +5,22 @@ extends Node3D
 ##     godot --path . scenes/heightfield_test.tscn
 ##     godot --path . scenes/heightfield_test.tscn -- --editshot
 ##
-## The TOOLS, not a scene. heightfield_scene.gd adds this node on top of its
-## own terrain, far tier, water and sites (§20.9), so what is edited is exactly
-## what is looked at and there is one terrain scene rather than two that
-## drifted apart.
+## The TOOLS, not a scene. A host adds this node on top of its own terrain,
+## far tier, water and sites (§20.9), so what is edited is exactly what is
+## looked at: heightfield_scene.gd always, and the city on terrain -- the
+## combat arena -- while its edit mode is on (F11 there, §22.17).
+##
+## WHAT A HOST GIVES IT:
+##
+##   edit_context()          camera, streamer, world_path, seed, drowned,
+##                           world_half (tiles), and optionally status, shot,
+##                           hud_top (pixels down the right-hand side, where
+##                           the host's own readout is in the way) and sites
+##                           (false where a site is a real building the tools
+##                           must not move: the city)
+##   terrain_changed(studs)  the field changed there: everything the host
+##                           baked from it other than the detail tiles
+##   rebuild_sites()         the sites' stand-in buildings again
 ##
 ## Editing terrain is an authoring job, not a gameplay one. Nothing here is
 ## reachable from the game: the game loads a world file and never writes one.
@@ -79,9 +91,15 @@ var _host = null
 var _stroke_rect := Rect2i()
 
 var _streamer: TerrainStreamer = null
-var _mat: ShaderMaterial = null
 var _camera: DebugCamera = null
-var _sun: DirectionalLight3D = null
+## The authored world's edge, in tiles: what "all of it" means to a rebuild.
+var _world_half := 0
+## False where a site is a real building standing on its pad (the city):
+## the site tool is not offered and a site's pad is not moved, resized or
+## deleted, because the building would not follow.
+var _edits_sites := true
+var _hud_top := 12.0
+const SITE_LOCKED := "a building stands on that: sites are edited in heightfield_test (--world=<name>)"
 var _label: Label = null
 var _markers: Node3D = null
 
@@ -120,15 +138,17 @@ var _status := "loaded"
 ## Stand the tools in a scene that already has its terrain.
 func setup(host) -> void:
 	_host = host
-	_camera = host._camera
-	_streamer = host._streamer
-	_sun = host._sun
-	_mat = host._mat
-	_world_path = host._world_path
-	_seed = host._seed
-	_drowned = host._drowned
-	_status = host._load_status
-	_shot_mode = host._edit_shot
+	var ctx: Dictionary = host.edit_context()
+	_camera = ctx["camera"]
+	_streamer = ctx["streamer"]
+	_world_path = ctx["world_path"]
+	_seed = int(ctx["seed"])
+	_drowned = float(ctx["drowned"])
+	_world_half = int(ctx["world_half"])
+	_status = String(ctx.get("status", "loaded"))
+	_shot_mode = bool(ctx.get("shot", false))
+	_edits_sites = bool(ctx.get("sites", true))
+	_hud_top = float(ctx.get("hud_top", 12.0))
 	_build_scenery()
 	# The host has just built its sites and trees: rebuilding them here
 	# scattered all 6,000 trees a second time at startup (~330 ms).
@@ -167,7 +187,7 @@ func _build_scenery() -> void:
 	_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_label.position = Vector2(-14, 12)
+	_label.position = Vector2(-14, _hud_top)
 	_label.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_label.add_theme_constant_override("outline_size", 4)
@@ -188,6 +208,33 @@ func _build_scenery() -> void:
 		_brush_material = m
 		_brush_colour = c
 		_status = "paint: %s" % _paint_name())
+
+
+## The tools in hand or put away. Put away they take no input, draw nothing
+## and cost nothing; what was edited stays edited, and unsaved.
+func set_active(on: bool) -> void:
+	if not on:
+		_end_stroke()
+		_grabbing = false
+	set_process(on)
+	set_process_unhandled_input(on)
+	visible = on
+	_label.get_parent().visible = on
+	if on:
+		_refresh_markers(false)
+
+
+func is_dirty() -> bool:
+	return _dirty
+
+
+## Is the selection a pad the tools must leave where it is?
+func _site_locked() -> bool:
+	if _edits_sites or _tool != Tool.PAD or _selected < 0 \
+			or _selected >= BrickTerrain.pad_count() or not _is_site_pad(_selected):
+		return false
+	_status = SITE_LOCKED
+	return true
 
 
 func _process(delta: float) -> void:
@@ -492,6 +539,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _set_tool(t: Tool) -> void:
+	if t == Tool.SITE and not _edits_sites:
+		_status = SITE_LOCKED
+		return
 	_end_stroke()
 	_tool = t
 	if _palette != null:
@@ -507,6 +557,8 @@ func _step_value(dir: int) -> void:
 	if _is_brush():
 		_brush_rate = clampf(_brush_rate * (1.25 if dir > 0 else 0.8), 0.1, 20.0)
 		_status = "strength %.2f" % _brush_rate
+		return
+	if _site_locked():
 		return
 	if _tool == Tool.SITE:
 		_step_site_floor(dir)
@@ -648,7 +700,7 @@ func _click() -> void:
 ## Move the selection to a column, rebuilding what it left as well as what
 ## it arrived at — the same both-ends rule resizing needs.
 func _move_selected(gx: int, gz: int) -> void:
-	if _selected < 0:
+	if _selected < 0 or _site_locked():
 		return
 	var tile := BrickTerrain.get_tile_studs()
 	match _tool:
@@ -691,7 +743,7 @@ func _nudge_selected(d_radius: int, d_skirt: int, d_height: float) -> void:
 		_brush_radius = clampf(_brush_radius + float(d_radius), 2.0, 64.0)
 		_status = "brush radius %d studs" % int(_brush_radius)
 		return
-	if _selected < 0:
+	if _selected < 0 or _site_locked():
 		return
 	if _tool == Tool.PAINT:
 		if _selected >= BrickTerrain.paint_count():
@@ -727,7 +779,7 @@ func _nudge_selected(d_radius: int, d_skirt: int, d_height: float) -> void:
 
 
 func _delete_selected() -> void:
-	if _selected < 0:
+	if _selected < 0 or _site_locked():
 		return
 	if _tool == Tool.PAINT:
 		if _selected >= BrickTerrain.paint_count():
@@ -806,7 +858,7 @@ func _is_site_pad(index: int) -> bool:
 
 
 func _rebuild_all() -> void:
-	var far: int = _host.get_script().FAR_TILES
+	var far := _world_half
 	_streamer.invalidate(Rect2i(-far, -far, far * 2 + 1, far * 2 + 1))
 	var tile := BrickTerrain.get_tile_studs()
 	_host.terrain_changed(Rect2i(-far * tile, -far * tile, (far * 2 + 1) * tile,
