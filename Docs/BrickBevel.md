@@ -141,7 +141,7 @@ the drawn seam was there to stop.
 | `tools/brick_bevel_gap_probe.gd` (not headless) | A magenta core inside every brick, a centimetre in from each face; counted over 200 close views of a tower, the tower shot through, a heap of every palette part, and the heap with three bricks in ten gone. A view may show `LONE_PIXELS` (8) and no more. Flat mesh: 39 / 34 / 19 / 30 pixels in all (rasteriser cracks, one to four a view). Chamfered: 20 / 19 / 14 / 19. Writes `shots/brick_bevel_off.png` and `_on.png`. |
 | `tools/brick_bevel_probe.gd` (headless) | Bands add up to the chunk; every triangle faces its normal; a hit's patches give exactly a fresh build; a stale bake is refused; studs band by band are the chunk's and follow the workshop's rule. |
 | `city.tscn -- --chamfer` | A wall a metre and a half off is chamfered and studded; after a hit the bands' index buffers, read back, draw exactly the bricks left; at a hundred metres nothing is held and the picture is the same either way. |
-| `city.tscn -- --chamfer --cost [--no-near]` | Frame times beside a building while it is shot at and brought down. A timing run. |
+| `city.tscn -- --chamfer --cost [--no-near \| --no-studs \| --no-bevel]` | Frame times, and the renderer's own CPU and GPU time, beside a building while it is shot at and brought down. A timing run. |
 
 While the mesh was being written the gap probe's worst view went 6,956 pixels (no backing but
 `EXTEND`) -> 36 (plugs and the first floors) -> 3.
@@ -162,8 +162,18 @@ under 0.1 ms a frame with nothing to build. Taking a finished band 0.6-0.9 ms, h
 0.1-0.3, a band's studs 0.5. The stud meshes and their material are made when the tracker is,
 not by the first band that wants studs: that was 45 ms.
 
-What this does not measure is the renderer: 50,000 more triangles and 8,700 stud instances in
-view are inside the 16.6 ms here, on this machine.
+**The renderer is where it is paid, and that number is not settled.** Frame times cannot show it
+(a frame is held to 16.6 ms either way), so the pass also reads the renderer's own clock
+(`viewport_get_measured_render_time_gpu`). Looking at the building, on this machine's integrated
+Radeon: 10.9 and 8.7 ms of GPU a frame with the tier, 5.9 and 5.8 without -- **3 to 5 ms more**.
+But another chat's gate was running through every one of those runs, and later runs under the
+same load gave 7.2-9.4 ms in all four arrangements (tier, `--no-studs`, `--no-bevel`,
+`--no-near`), which is noise the size of the answer. It wants taking again on a quiet machine.
+What is being drawn is 50,274 chamfered triangles and 8,734 studs (22 or 38 triangles each, so
+the studs are several times the bevels), all within 18 m.
+
+If it is too much: `BrickNear.radius` and `BrickNear.stud_radius` are the two knobs, and
+`-- --no-studs` / `-- --no-bevel` say which half to turn.
 
 ## 7. Not done
 

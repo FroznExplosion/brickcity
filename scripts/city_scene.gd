@@ -948,8 +948,11 @@ func _ready() -> void:
 	islands.near_tier = brick_near
 	# For measurement: the same city with no near tier at all, to set a pass
 	# against one with it.
-	if "--no-near" in OS.get_cmdline_user_args():
+	# `--no-studs` and `--no-bevel` are its two halves, one at a time.
+	var near_args := OS.get_cmdline_user_args()
+	if "--no-near" in near_args or "--no-bevel" in near_args:
 		BrickNear.enabled = false
+	if "--no-near" in near_args or "--no-studs" in near_args:
 		brick_near.studs_on = false
 	# This scene starts the pieces' mesh jobs itself, after everything else in
 	# its tick (IslandManager._submit_mesh_job).
@@ -11649,6 +11652,9 @@ func _run_chamfer_pass() -> void:
 ## cut down, with whatever near tier the run has.
 func _run_chamfer_cost() -> void:
 	print("[chamfer] cost, near tier %s" % ("ON" if BrickNear.enabled else "OFF (--no-near)"))
+	# The renderer's own clock as well as the frame's: a frame is held to the
+	# display's 16.6 ms whatever it cost to draw.
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	var b := registry.get_building(0)
 	var chunk := _promote(0)
 	await _frames(60)
@@ -11682,14 +11688,19 @@ func _run_chamfer_cost() -> void:
 	await _save("chamfer_cost_%s" % ("near" if BrickNear.enabled else "flat"))
 
 
-## The next `n` frames' lengths, in ms.
+## The next `n` frames: each one's length, and what the renderer says the
+## frame before it took to draw on the CPU and on the GPU, in ms.
 func _frame_times(n: int) -> Array:
 	var out := []
+	var view := get_viewport().get_viewport_rid()
 	var last := Time.get_ticks_usec()
 	for i in n:
 		await get_tree().process_frame
 		var now := Time.get_ticks_usec()
-		out.append(float(now - last) / 1000.0)
+		out.append([float(now - last) / 1000.0,
+				RenderingServer.viewport_get_measured_render_time_cpu(view)
+				+ RenderingServer.get_frame_setup_time_cpu(),
+				RenderingServer.viewport_get_measured_render_time_gpu(view)])
 		last = now
 	return out
 
@@ -11697,14 +11708,18 @@ func _frame_times(n: int) -> Array:
 func _frame_line(times: Array) -> String:
 	var sum := 0.0
 	var worst := 0.0
-	var over := 0
+	var cpu := 0.0
+	var gpu := 0.0
+	var gpu_worst := 0.0
 	for t in times:
-		sum += float(t)
-		worst = maxf(worst, float(t))
-		if float(t) > 20.0:
-			over += 1
-	return "%d frames, mean %.1f ms, worst %.1f, %d over 20 ms" % [times.size(),
-			sum / maxf(times.size(), 1.0), worst, over]
+		sum += float(t[0])
+		worst = maxf(worst, float(t[0]))
+		cpu += float(t[1])
+		gpu += float(t[2])
+		gpu_worst = maxf(gpu_worst, float(t[2]))
+	var n := maxf(times.size(), 1.0)
+	return "%d frames, mean %.1f ms, worst %.1f; drawing them: CPU %.2f ms, GPU %.2f (worst %.2f)" % [
+			times.size(), sum / n, worst, cpu / n, gpu / n, gpu_worst]
 
 
 ## Render one frame with the near tier -- chamfered bands, bevelled studs -- on
