@@ -1535,7 +1535,7 @@ func _setup_terrain_field() -> void:
 ## The detail tier covers the CITY and stops there: this is an authored place
 ## of a known size, not an infinite world, so `world_half` is a real edge and
 ## the resident square never moves. Everything out to the horizon is the
-## coarse tier, with a static hole cut for the city (TerrainCoarse).
+## coarse tier, with a fixed hole cut for the city (TerrainCoarse).
 func _build_terrain_ground() -> void:
 	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
@@ -1595,8 +1595,9 @@ func _build_terrain_coarse() -> void:
 	_terrain_coarse = TerrainCoarseScript.new()
 	_terrain_coarse.name = "TerrainCoarse"
 	add_child(_terrain_coarse)
-	_terrain_coarse.build(Rect2i(-_terrain_half, -_terrain_half,
-			_terrain_half * 2 + 1, _terrain_half * 2 + 1), TERRAIN_REACH_TILES, _terrain_mat)
+	# A FIXED HOLE: the detail tier covers the city and never moves.
+	_terrain_coarse.build(TERRAIN_REACH_TILES, _terrain_mat, Rect2i(-_terrain_half,
+			-_terrain_half, _terrain_half * 2 + 1, _terrain_half * 2 + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -1670,9 +1671,7 @@ func rebuild_detail() -> void:
 
 ## The coarse tier from scratch: after the smooth step changed.
 func rebuild_far() -> void:
-	if _terrain_coarse != null:
-		_terrain_coarse.queue_free()
-	_build_terrain_coarse()
+	_terrain_coarse.rebuild()
 	print("[city] terrain: coarse rebuilt, %d blocks, %d triangles, smooth from step %d" % [
 		_terrain_coarse.block_count(), _terrain_coarse.triangle_count(),
 		BrickTerrain.get_coarse_smooth_step()])
@@ -1761,6 +1760,9 @@ func _reground(studs: Rect2i) -> void:
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
 	if _terrain_streamer != null:
 		_terrain_streamer.refresh(Rect2i(lo, hi - lo + Vector2i.ONE))
+	# A pad's skirt can reach past the city's square, onto coarse ground.
+	if _terrain_coarse != null:
+		_terrain_coarse.field_changed(Rect2i(lo, hi - lo + Vector2i.ONE))
 	# The AI caches the ground per column; this drops the cache.
 	ai_world.set_terrain_ground(true)
 	ai_nav.invalidate_box(AABB(Vector3(studs.position.x * STUD, -100.0, studs.position.y * STUD),

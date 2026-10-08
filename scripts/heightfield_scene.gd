@@ -45,15 +45,6 @@ static var NEAR_TILES := 4
 ## frame (§19.4). On by default because the terrain can afford it — the city
 ## is the half that cannot (§19.5).
 static var FAR_TILES := 50
-## The FIRST coarse ring: block size in tiles, and studs between samples.
-## Both DOUBLE with every ring outward, which is the whole reason distance is
-## affordable — see _build_far.
-const FAR_SPAN := 4
-const FAR_STEP := 4
-## Where ring 0 ends, in tiles. Each ring after it reaches twice as far.
-const FAR_FIRST := 16
-## How many doublings are allowed. Six reaches 5.6 km from a 4-tile block.
-const FAR_LEVELS := 6
 const WORLD_SEED := 20260921
 const DRY_AMBIENT := 0.6
 ## Preloaded rather than reached for by class name: a brand new `class_name`
@@ -119,29 +110,12 @@ var _bench_mode := false
 var _build_ms := 0.0
 var _bake_ms := 0.0
 var _streamer: TerrainStreamer = null
-var _far_nodes: Array[MeshInstance3D] = []
-var _far_rects: Array[Rect2i] = []
-var _far_hidden := 0
-var _far_tris := 0
-var _far_blocks := 0
-var _far_rings := 0
+## The coarse ground past the detail, out to FAR_TILES (TerrainCoarse): no
+## hole, hidden under the detail square as it moves.
+var _far: TerrainCoarse = null
 var _sites: Array[MeshInstance3D] = []
 var _trees: TerrainTrees = null
 var _hud_in := 0.0
-## Every coarse block's tile rect, and which node draws it (-1 = a merged
-## ring, which is always drawn). The coverage check needs both.
-var _all_rects: Array[Rect2i] = []
-## Each block's sample step, beside its rect: an edit re-bakes a block at the
-## step it was built with.
-var _all_steps: Array[int] = []
-## The camera tile the small far blocks were last re-LODded for.
-var _relod_at := Vector2i(1 << 30, 0)
-var _all_owner: Array[int] = []
-## Block index -> its own node, for blocks that have one.
-var _all_node := {}
-## span -> the block indices in that ring, and the ring's mesh node.
-var _ring_members := {}
-var _ring_nodes := {}
 var _frame_ms := 0.0
 var _show_instances := true
 
@@ -311,186 +285,15 @@ func _build_terrain() -> void:
 	_tiles.assign(_streamer.tiles())
 	_bake_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 
-	_build_far()
-	_hide_covered_far()
+	_far = TerrainCoarse.new()
+	_far.name = "Far"
+	_far.verbose = _bench_mode
+	add_child(_far)
+	# No hole: the detail square moves, so the coarse tier covers the world
+	# and hides under it, down to the block the two are aligned on.
+	_far.build(FAR_TILES, _mat, Rect2i(), _streamer.align)
+	_far.cover(_streamer)
 	_build_ms = float(Time.get_ticks_usec() - t0) / 1000.0
-
-
-## The coarse tier: everything from the full tiles out to FAR_TILES, as
-## blocks of FAR_SPAN x FAR_SPAN tiles, one mesh and one draw call each.
-##
-## Baked in parallel like the near tier, and for the same reason — it is C++
-## that only reads the field.
-static func _ring_blocks_total(spans: Array[int]) -> int:
-	var n := 0
-	for v in spans:
-		if v > 1:
-			n += 1
-	return n
-
-
-## The same surface, moved. A merged ring holds blocks from all over the
-## world in one mesh, so their vertices have to carry the offset the node
-## transform used to.
-static func _offset_surface(arrays: Array, origin: Vector3) -> Array:
-	var out := arrays.duplicate(true)
-	var verts: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
-	for i in verts.size():
-		verts[i] += origin
-	out[Mesh.ARRAY_VERTEX] = verts
-	return out
-
-
-## Build, or rebuild, one ring's mesh from the blocks still belonging to it.
-##
-## A ring is one mesh holding blocks from all over the world, which is what
-## takes the draw calls from 832 to 371 at 4.5 km — and it means a block
-## cannot be removed from the world without rebuilding the ring around it.
-## That happens when the detail walks into a block and it has to be split.
-## Rare, and a ring is ~48 blocks, so it re-bakes in parallel in a few
-## milliseconds.
-func _rebuild_ring(span: int) -> void:
-	var members: Array[int] = _ring_members.get(span, [] as Array[int])
-	var live: Array[int] = []
-	for i in members:
-		if _all_owner[i] != -2:
-			live.append(i)
-	var baked: Array[Dictionary] = []
-	baked.resize(live.size())
-	if not live.is_empty():
-		var task := WorkerThreadPool.add_group_task(
-			func(k: int) -> void:
-				baked[k] = BrickTerrain.build_coarse(_all_rects[live[k]].position.x,
-					_all_rects[live[k]].position.y, span,
-					_all_steps[live[k]]),
-			live.size(), -1, true, "coarse ring")
-		WorkerThreadPool.wait_for_group_task_completion(task)
-
-	var tile_studs := BrickTerrain.get_tile_studs()
-	var stud := BrickWorld.get_stud_metres()
-	var mesh := ArrayMesh.new()
-	for k in live.size():
-		var arrays: Array = baked[k]["mesh"]
-		if arrays.is_empty():
-			continue
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
-			_offset_surface(arrays, Vector3(_all_rects[live[k]].position.x * tile_studs * stud,
-				0.0, _all_rects[live[k]].position.y * tile_studs * stud)),
-			[], {}, TerrainTile.CUSTOM0_FLAGS)
-	if _ring_nodes.has(span):
-		(_ring_nodes[span] as MeshInstance3D).queue_free()
-	var mi := MeshInstance3D.new()
-	mi.name = "CoarseRing_%d" % span
-	mi.mesh = mesh
-	mi.material_override = _mat
-	@warning_ignore("integer_division")
-	mi.set_instance_shader_parameter("lod_level", _lod_of_step(FAR_STEP * span / FAR_SPAN))
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(mi)
-	_ring_nodes[span] = mi
-
-
-## Split any coarse block the detail has walked into, down to the lattice
-## the detail is aligned on.
-##
-## The rings are laid out from the ORIGIN, so a block far out is 16, 64 or
-## 128 tiles across — and the detail square is 12. Wherever the camera walks
-## far from the origin it lands INSIDE a block that is too big to hide, and
-## the two tiers draw the same ground. The coverage check found 121 tiles
-## like that; before the check existed, nobody found them at all.
-##
-## A quadtree split is the answer and it is cheap because it is local: only
-## the children that actually touch the detail recurse, so a 128-tile block
-## becomes about fifteen smaller ones rather than a thousand. Refined blocks
-## are kept — walking back and forth over the same ground bakes once.
-func _refine_for(detail: Rect2i) -> void:
-	var todo: Array[int] = []
-	for i in _all_rects.size():
-		if _all_rects[i].size.x <= _streamer.align:
-			continue
-		if _all_owner[i] == -2:
-			continue                      # already split
-		if _all_rects[i].intersects(detail):
-			todo.append(i)
-	if todo.is_empty():
-		return
-
-	var new_rects: Array[Rect2i] = []
-	var dirty_rings := {}
-	for i in todo:
-		_split(_all_rects[i], detail, new_rects)
-		# A block that came from an EARLIER split is in `_far_nodes` too, and
-		# freeing it without letting go of it there left `_hide_covered_far`
-		# setting `visible` on a freed node the next frame -- the crash
-		# flying out over the far ground found.
-		if _all_owner[i] >= 0:
-			_far_nodes[_all_owner[i]] = null
-		_all_owner[i] = -2                # retired; its children cover it
-		if _all_node.has(i):
-			(_all_node[i] as MeshInstance3D).queue_free()
-			_all_node.erase(i)
-		else:
-			dirty_rings[_all_rects[i].size.x] = true
-	for span in dirty_rings:
-		_rebuild_ring(span)
-	if new_rects.is_empty():
-		return
-
-	# Bake the children in parallel, like everything else that reads the
-	# field and nothing else.
-	var baked: Array[Dictionary] = []
-	baked.resize(new_rects.size())
-	var task := WorkerThreadPool.add_group_task(
-		func(k: int) -> void:
-			@warning_ignore("integer_division")
-			baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
-				new_rects[k].position.y, new_rects[k].size.x,
-				FAR_STEP * (new_rects[k].size.x / FAR_SPAN)),
-		new_rects.size(), -1, true, "coarse refine")
-	WorkerThreadPool.wait_for_group_task_completion(task)
-
-	var tile_studs := BrickTerrain.get_tile_studs()
-	var stud := BrickWorld.get_stud_metres()
-	for k in new_rects.size():
-		var arrays: Array = baked[k]["mesh"]
-		if arrays.is_empty():
-			continue
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				TerrainTile.CUSTOM0_FLAGS)
-		var mi := MeshInstance3D.new()
-		mi.name = "CoarseSplit_%d_%d" % [new_rects[k].position.x, new_rects[k].position.y]
-		mi.mesh = mesh
-		mi.material_override = _mat
-		@warning_ignore("integer_division")
-		mi.set_instance_shader_parameter("lod_level",
-				_lod_of_step(FAR_STEP * (new_rects[k].size.x / FAR_SPAN)))
-		mi.position = Vector3(new_rects[k].position.x * tile_studs * stud, 0.0,
-				new_rects[k].position.y * tile_studs * stud)
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(mi)
-		_all_rects.append(new_rects[k])
-		@warning_ignore("integer_division")
-		_all_steps.append(FAR_STEP * (new_rects[k].size.x / FAR_SPAN))
-		_all_owner.append(_far_nodes.size())
-		_all_node[_all_rects.size() - 1] = mi
-		_far_nodes.append(mi)
-		_far_rects.append(new_rects[k])
-		_far_tris += int(baked[k]["triangle_count"])
-		_far_blocks += 1
-
-
-## Four children, and only the ones that touch the detail split again.
-func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
-	@warning_ignore("integer_division")
-	var h := rect.size.x / 2
-	for dz in [0, h]:
-		for dx in [0, h]:
-			var child := Rect2i(rect.position + Vector2i(dx, dz), Vector2i(h, h))
-			if h > _streamer.align and child.intersects(detail):
-				_split(child, detail, out)
-			else:
-				out.append(child)
 
 
 ## The field changed over these studs (an edit): make everything that was
@@ -506,37 +309,7 @@ func terrain_changed(studs: Rect2i) -> void:
 	var tile := BrickTerrain.get_tile_studs()
 	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
-	var tiles := Rect2i(lo, hi - lo + Vector2i.ONE)
-	var dirty_rings := {}
-	var nodes: Array[int] = []
-	for i in _all_rects.size():
-		if _all_owner[i] == -2 or not _all_rects[i].intersects(tiles):
-			continue
-		if _all_node.has(i):
-			nodes.append(i)
-		else:
-			dirty_rings[_all_rects[i].size.x] = true
-	var baked: Array[Dictionary] = []
-	baked.resize(nodes.size())
-	if not nodes.is_empty():
-		var task := WorkerThreadPool.add_group_task(
-			func(k: int) -> void:
-				var r: Rect2i = _all_rects[nodes[k]]
-				baked[k] = BrickTerrain.build_coarse(r.position.x, r.position.y,
-					r.size.x, _all_steps[nodes[k]]),
-			nodes.size(), -1, true, "coarse edit")
-		WorkerThreadPool.wait_for_group_task_completion(task)
-	for k in nodes.size():
-		var arrays: Array = baked[k]["mesh"]
-		var mi := _all_node[nodes[k]] as MeshInstance3D
-		if arrays.is_empty() or not is_instance_valid(mi):
-			continue
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				TerrainTile.CUSTOM0_FLAGS)
-		mi.mesh = mesh
-	for span in dirty_rings:
-		_rebuild_ring(span)
+	_far.field_changed(Rect2i(lo, hi - lo + Vector2i.ONE))
 	if _sea != null:
 		_sea.refresh_seabed(studs)
 
@@ -588,7 +361,7 @@ func set_detail_radius(tiles: int) -> void:
 	if _lod_frozen:
 		# One step at the frozen spot, so the change is seen while frozen.
 		_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
-		_hide_covered_far()
+		_far.cover(_streamer)
 
 
 ## Ground for snow to lie on (SnowCover): this scene is all terrain.
@@ -630,338 +403,16 @@ func rebuild_detail() -> void:
 ## The far tier from scratch: after the smooth step changed, or to see a
 ## border as the build lays it out.
 func rebuild_far() -> void:
-	for node in _far_nodes:
-		if node != null and is_instance_valid(node):
-			node.queue_free()
-	for span in _ring_nodes:
-		var mi = _ring_nodes[span]
-		if is_instance_valid(mi):
-			mi.queue_free()
-	_far_nodes.clear()
-	_far_rects.clear()
-	_all_rects.clear()
-	_all_steps.clear()
-	_all_owner.clear()
-	_all_node.clear()
-	_ring_members.clear()
-	_ring_nodes.clear()
-	_far_hidden = 0
-	_far_tris = 0
-	_far_blocks = 0
-	_far_rings = 0
-	_build_far()
+	_far.rebuild()
+	_far.cover(_streamer)
 	var at: Vector3 = _frozen_at if _lod_frozen else _camera.global_position
-	_refine_for(_streamer.current_region())
-	_hide_covered_far()
 	print("[heightfield] far tier rebuilt: %d blocks, %d tris, smooth from step %d (at %s)" % [
-		_far_blocks, _far_tris, BrickTerrain.get_coarse_smooth_step(), at])
-
-
-## THE SMALL FAR BLOCKS FOLLOW THE CAMERA'S LOD (Terrain.md 19.19).
-##
-## Ring 0 of the far tier is laid out round the world's ORIGIN, and blocks
-## split to sit beside the detail are kept once split -- so the ground round
-## the origin (where the sites are) and everywhere the camera had passed stayed
-## LOD 1, blocky, however far away the camera went. Each such block is re-baked
-## at the step its distance from the camera calls for -- the same rings the
-## far tier is laid out in, measured from the camera instead of the origin --
-## whenever the camera enters a new tile. Smooth past LOD 1, as the rest is.
-func _relod_far(at: Vector3) -> void:
-	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
-	var c := Vector2i(floori(at.x / tile_m), floori(at.z / tile_m))
-	if c == _relod_at:
-		return
-	_relod_at = c
-	var redo: Array[int] = []
-	var want: Array[int] = []
-	for i in _all_rects.size():
-		if _all_owner[i] < 0 or not _all_node.has(i):
-			continue
-		var r: Rect2i = _all_rects[i]
-		var dx: int = maxi(0, maxi(r.position.x - c.x, c.x - (r.end.x - 1)))
-		var dz: int = maxi(0, maxi(r.position.y - c.y, c.y - (r.end.y - 1)))
-		var d: int = maxi(dx, dz)
-		var level := 0
-		while level < FAR_LEVELS - 1 and d >= (FAR_FIRST << level):
-			level += 1
-		# A block is never sampled coarser than it is wide.
-		var step: int = maxi(FAR_STEP << level, 1)
-		step = mini(step, r.size.x * BrickTerrain.get_tile_studs())
-		if step != _all_steps[i]:
-			redo.append(i)
-			want.append(step)
-	if redo.is_empty():
-		return
-	var baked: Array[Dictionary] = []
-	baked.resize(redo.size())
-	var task := WorkerThreadPool.add_group_task(
-		func(k: int) -> void:
-			var r: Rect2i = _all_rects[redo[k]]
-			baked[k] = BrickTerrain.build_coarse(r.position.x, r.position.y, r.size.x, want[k]),
-		redo.size(), -1, true, "coarse relod")
-	WorkerThreadPool.wait_for_group_task_completion(task)
-	for k in redo.size():
-		var i: int = redo[k]
-		var mi := _all_node[i] as MeshInstance3D
-		var arrays: Array = baked[k]["mesh"]
-		if not is_instance_valid(mi) or arrays.is_empty():
-			continue
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				TerrainTile.CUSTOM0_FLAGS)
-		mi.mesh = mesh
-		mi.set_instance_shader_parameter("lod_level", _lod_of_step(want[k]))
-		_all_steps[i] = want[k]
-
-
-## A coarse block's LOD level from its sample step: the detailed tiles are 0,
-## a block sampled every FAR_STEP studs is 1, and each doubling one more.
-## A float, because the shader's `lod_level` is one: an int handed to a float
-## instance uniform is dropped without a word, and every block read as 0.
-static func _lod_of_step(step: int) -> float:
-	return float(1 + maxi(0, roundi(log(float(step) / float(FAR_STEP)) / log(2.0))))
-
-
-## A coarse block under the detailed tier is hidden.
-##
-## The coarse tier is built once for the whole world and never rebuilt, so
-## without this the detail simply streams in ON TOP of it — two surfaces in
-## the same place, the coarse one poking through wherever its max-of-cell
-## height beats the real ground. Reported as "the LOD never goes away when
-## you walk up to it", which is exactly what it was.
-##
-## Both tiers are on the same 4-tile lattice, so a block is covered or it is
-## not; there is no partial case to get wrong.
-func _hide_covered_far() -> void:
-	if _far_nodes.is_empty():
-		return
-	_refine_for(_streamer.current_region())
-	_far_hidden = 0
-	for i in _far_nodes.size():
-		if _far_nodes[i] == null:
-			continue                      # retired by a later split
-		var rect := _far_rects[i]
-		# Only the smallest blocks can ever be covered — anything bigger is
-		# further out than the detail reaches — so only they are checked,
-		# and a 128-tile block never walks its tiles.
-		var covered := rect.size.x <= _streamer.align
-		if covered:
-			for dz in rect.size.y:
-				for dx in rect.size.x:
-					var c := rect.position + Vector2i(dx, dz)
-					# Outside the authored world counts as covered: there is
-					# nothing there for the detail to build, and a block
-					# waiting for tiles that will never exist stayed visible
-					# under real detail at the world's rim.
-					if absi(c.x) > FAR_TILES or absi(c.y) > FAR_TILES:
-						continue
-					if not _streamer.has_tile(c):
-						covered = false
-						break
-				if not covered:
-					break
-		_far_nodes[i].visible = not covered
-		if covered:
-			_far_hidden += 1
+		_far.block_count(), _far.triangle_count(), BrickTerrain.get_coarse_smooth_step(), at])
 
 
 ## How far the coarse tier reaches, in metres.
 static func _far_metres() -> float:
 	return float(FAR_TILES * BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
-
-
-func _build_far() -> void:
-	if FAR_TILES <= 0:
-		return
-	# NO HOLE. The coarse tier covers the whole world, including under the
-	# detail, and blocks are HIDDEN where detail covers them.
-	#
-	# Leaving a hole where the detail starts is the obvious saving and it is
-	# wrong: the detail moves and the hole does not, so walking away from
-	# the origin left a black pit behind. Coverage is a property of where
-	# the camera IS, so it has to be decided every frame, not at build.
-	@warning_ignore("integer_division")
-
-	# CASCADED BLOCKS: the further out, the bigger the block and the coarser
-	# the samples inside it.
-	#
-	# One coarse level at a fixed 1.4 m sample does not scale, and the
-	# numbers said so plainly: 560 m held 2.9M triangles, 1.1 km held 10.7M,
-	# and 2.2 km held 40.9M and drew at 80 ms. Constant density over a disc
-	# is quadratic in the radius, and no amount of culling fixes quadratic.
-	#
-	# Doubling the sample spacing every time the radius doubles makes each
-	# ring cost the SAME as the one inside it — a block always holds the
-	# same (span x TILE / step)^2 cells — so the tier is linear in the
-	# NUMBER of rings, which is logarithmic in distance.
-	#
-	# The placement is a greedy fill rather than a lattice sweep: walk every
-	# uncovered tile, ask which ring its radius puts it in, and lay the
-	# LARGEST aligned block that fits there, halving until one does. Two
-	# attempts at "place blocks ring by ring and skip the ones that overlap"
-	# both left bands a whole block wide — a tile exactly on a ring boundary
-	# belongs to neither sweep — and 2,500 one-tile fills with it. A fill
-	# that always terminates at span 1 cannot leave a hole.
-	var blocks: Array[Vector2i] = []
-	var spans: Array[int] = []
-	var steps: Array[int] = []
-	var covered := {}
-
-	# The edge of the field, rounded UP to the coarsest lattice.
-	#
-	# A block has to fit entirely inside the reach or it is refused and the
-	# fill falls back a level, so a reach that is not a multiple of the
-	# biggest span frays the whole rim down to one-tile blocks: at 9 km that
-	# was 3,212 of them. Rounding up draws a little more ground than asked
-	# for, which costs one row of blocks and nothing else.
-	# Only as many doublings as the reach actually needs: rounding a 560 m
-	# field up to the six-level lattice drew 1.4 km of ground nobody asked
-	# for.
-	var levels := 1
-	while (FAR_FIRST << (levels - 1)) < FAR_TILES and levels < FAR_LEVELS:
-		levels += 1
-	var coarsest: int = FAR_SPAN << (levels - 1)
-	var reach: int = int(ceil(float(FAR_TILES) / float(coarsest))) * coarsest
-
-	var free_at := func(bx: int, bz: int, span: int) -> bool:
-		if absi(bx) > reach or absi(bz) > reach:
-			return false
-		if absi(bx + span - 1) > reach or absi(bz + span - 1) > reach:
-			return false
-		for dz in span:
-			for dx in span:
-				if covered.has(Vector2i(bx + dx, bz + dz)):
-					return false
-		return true
-
-	# COARSEST FIRST, then fill in.
-	#
-	# Placing a block per uncovered tile, at that tile's own level, fragments
-	# badly: a big block is refused whenever any of its cells was already
-	# taken by a smaller one, so the scan produced 471 blocks where the ring
-	# arithmetic says about 140. Laying the big ones first and letting the
-	# small ones fill around them is the same greedy idea with the order that
-	# actually works.
-	#
-	# A block may only sit in its own ring or further out, never closer: the
-	# radius test is on the block's NEAREST corner, so a coarse block never
-	# creeps inside the range where its samples would be visible.
-	# Ring 0 starts at the origin, not at the old fixed near square: the
-	# detail moves, so the coarse tier has to be able to draw anywhere the
-	# detail is not. Excluding the origin square left 21 tiles drawn by
-	# nothing the moment the camera walked away from it.
-	var ring_inner := func(level: int) -> int:
-		return 0 if level == 0 else (FAR_FIRST << (level - 1))
-
-	for level in range(levels - 1, -1, -1):
-		var span: int = FAR_SPAN << level
-		var step: int = FAR_STEP << level
-		var inner: int = ring_inner.call(level)
-		for bz in range(-reach, reach, span):
-			for bx in range(-reach, reach, span):
-				# Nearest corner of the block, in Chebyshev radius.
-				var nx: int = 0 if bx <= 0 and bx + span - 1 >= 0 else mini(absi(bx), absi(bx + span - 1))
-				var nz: int = 0 if bz <= 0 and bz + span - 1 >= 0 else mini(absi(bz), absi(bz + span - 1))
-				if maxi(nx, nz) < inner:
-					continue        # too close for this level of detail
-				if not free_at.call(bx, bz, span):
-					continue
-				blocks.append(Vector2i(bx, bz))
-				spans.append(span)
-				steps.append(step)
-				for dz in span:
-					for dx in span:
-						covered[Vector2i(bx + dx, bz + dz)] = true
-
-	# Whatever is left, one tile at a time. There is always something: the
-	# detail square is not on the block lattice, and the world's edge is not
-	# either.
-	for tz in range(-reach, reach + 1):
-		for tx in range(-reach, reach + 1):
-			if covered.has(Vector2i(tx, tz)):
-				continue
-			if absi(tx) > FAR_TILES or absi(tz) > FAR_TILES:
-				continue
-			blocks.append(Vector2i(tx, tz))
-			spans.append(1)
-			steps.append(FAR_STEP)
-			covered[Vector2i(tx, tz)] = true
-
-	if _bench_mode:
-		var by_span := {}
-		for v in spans:
-			by_span[v] = int(by_span.get(v, 0)) + 1
-		var keys := by_span.keys()
-		keys.sort()
-		for k in keys:
-			print("[bench]   span %2d: %d blocks" % [k, by_span[k]])
-
-	var baked: Array[Dictionary] = []
-	baked.resize(blocks.size())
-	var task := WorkerThreadPool.add_group_task(
-		func(i: int) -> void:
-			baked[i] = BrickTerrain.build_coarse(
-				blocks[i].x, blocks[i].y, spans[i], steps[i]),
-		blocks.size(), -1, true, "terrain coarse")
-	WorkerThreadPool.wait_for_group_task_completion(task)
-
-	var tile_studs := BrickTerrain.get_tile_studs()
-	var stud := BrickWorld.get_stud_metres()
-	# The SMALLEST blocks stay separate, because they are the only ones the
-	# detail ever covers and hiding is per node. Everything bigger is merged
-	# into ONE mesh a ring: those blocks are further out than the detail
-	# reaches, so they never need to be hidden individually, and a ring is
-	# built once and never changes.
-	#
-	# Draw calls were growing linearly with view distance — 1,157 at 9 km —
-	# and this is where they were going.
-	var merged := {}          ## span -> Array of surface arrays
-	for i in blocks.size():
-		var arrays: Array = baked[i]["mesh"]
-		if arrays.is_empty():
-			continue
-		_far_tris += int(baked[i]["triangle_count"])
-		var origin := Vector3(blocks[i].x * tile_studs * stud, 0.0,
-				blocks[i].y * tile_studs * stud)
-		_all_rects.append(Rect2i(blocks[i], Vector2i(spans[i], spans[i])))
-		_all_steps.append(steps[i])
-		if spans[i] > _streamer.align:
-			# -1: lives in a merged ring and is therefore always drawn. A
-			# block like this cannot be hidden on its own — splitting is the
-			# only way to get the detail's ground back off it — so the ring
-			# it belongs to keeps a HOLE where a split has retired a block.
-			_all_owner.append(-1)
-			if not merged.has(spans[i]):
-				merged[spans[i]] = []
-			merged[spans[i]].append(true)
-			if not _ring_members.has(spans[i]):
-				_ring_members[spans[i]] = [] as Array[int]
-			_ring_members[spans[i]].append(_all_rects.size() - 1)
-			continue
-		_all_owner.append(_far_nodes.size())
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				TerrainTile.CUSTOM0_FLAGS)
-		var mi := MeshInstance3D.new()
-		_all_node[_all_rects.size() - 1] = mi
-		mi.name = "Coarse_%d_%d" % [blocks[i].x, blocks[i].y]
-		mi.mesh = mesh
-		mi.material_override = _mat
-		mi.set_instance_shader_parameter("lod_level", _lod_of_step(steps[i]))
-		mi.position = origin
-		# Far ground does not cast: the shadow of a hill 300 m away lands on
-		# ground the player cannot see, and the shadow pass was 183k
-		# triangles before anything was added to it (§19.1).
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(mi)
-		_far_nodes.append(mi)
-		_far_rects.append(Rect2i(blocks[i], Vector2i(spans[i], spans[i])))
-		_far_blocks += 1
-
-	for span in merged:
-		_rebuild_ring(span)
-		_far_rings += 1
-		_far_blocks += merged[span].size()
 
 
 ## One blocky building a site, standing on the pad the field was given.
@@ -1060,8 +511,8 @@ func _process(delta: float) -> void:
 	if _streamer != null:
 		if not _lod_frozen:
 			_streamer.follow(Vector2(lod_at.x, lod_at.z))
-			_hide_covered_far()
-			_relod_far(lod_at)
+			_far.cover(_streamer)
+			_far.relod(lod_at)
 		_tiles.assign(_streamer.tiles())
 	if _sea != null and _sea.enabled:
 		_sea.follow(lod_at, delta)
@@ -1197,7 +648,7 @@ func _update_hud() -> void:
 		"             %d%% curved  (C)   far %d blocks  %d tris" % [
 			roundi(100.0 * float(curved) / maxf(float(_tiles.size()
 				* tile_studs * tile_studs), 1.0)),
-			_far_blocks - _far_hidden, _far_tris],
+			_far.block_count() - _far.hidden_count(), _far.triangle_count()],
 		"water        %s  %d instances  %s  sea %.1f m  %s" % [
 			"ON" if _sea.enabled else "OFF (F7)",
 			_water.instance_count(),
@@ -1281,7 +732,7 @@ func _run_bench() -> void:
 	await _report_water_collision()
 	if FAR_TILES > 0:
 		print("[bench] far tier: %d blocks in %d meshes, %s tris, out to %.0f m" % [
-			_far_blocks, _far_nodes.size() + _far_rings, _thousands(_far_tris),
+			_far.block_count(), _far.mesh_count(), _thousands(_far.triangle_count()),
 			float(FAR_TILES * BrickTerrain.get_tile_studs())
 				* BrickWorld.get_stud_metres()])
 	print("[bench] %dx%d tiles, %.0f m square, built %.0f ms (%.0f baked on %d threads)" % [
@@ -1454,7 +905,7 @@ func _report_coverage() -> void:
 		if absi(int(spot.x / tile_m)) > FAR_TILES or absi(int(spot.y / tile_m)) > FAR_TILES:
 			continue
 		_streamer.settle(spot)
-		_hide_covered_far()
+		_far.cover(_streamer)
 		var cx := int(floor(spot.x / tile_m))
 		var cz := int(floor(spot.y / tile_m))
 		for dz in range(-12, 13):
@@ -1463,33 +914,21 @@ func _report_coverage() -> void:
 				if absi(c.x) > FAR_TILES or absi(c.y) > FAR_TILES:
 					continue
 				checked += 1
-				var n := 1 if _streamer.has_tile(c) else 0
-				for i in _all_rects.size():
-					if not _all_rects[i].has_point(c):
-						continue
-					var owner_i := _all_owner[i]
-					if owner_i == -2:
-						continue            # retired by a split
-					if owner_i < 0 or _far_nodes[owner_i].visible:
-						n += 1
+				var coarse := _far.drawing(c)
+				var n := coarse.size() + (1 if _streamer.has_tile(c) else 0)
 				if n > 1:
 					worst_double += 1
 					if double_spans.size() < 6:
-						for i in _all_rects.size():
-							if _all_rects[i].has_point(c) and _all_owner[i] != -2 									and (_all_owner[i] < 0
-									or _far_nodes[_all_owner[i]].visible):
-								var res := 0
-								for qz in _all_rects[i].size.y:
-									for qx in _all_rects[i].size.x:
-										if _streamer.has_tile(_all_rects[i].position
-												+ Vector2i(qx, qz)):
-											res += 1
-								double_spans.append(
-									"%s span %d at %s owner %d resident %d/%d region %s" % [
-									c, _all_rects[i].size.x, _all_rects[i].position,
-									_all_owner[i], res,
-									_all_rects[i].size.x * _all_rects[i].size.y,
-									_streamer.current_region()])
+						for i in coarse:
+							var r := _far.block_rect(i)
+							var res := 0
+							for qz in r.size.y:
+								for qx in r.size.x:
+									if _streamer.has_tile(r.position + Vector2i(qx, qz)):
+										res += 1
+							double_spans.append("%s %s resident %d/%d region %s" % [
+								c, _far.describe(i), res, r.size.x * r.size.y,
+								_streamer.current_region()])
 				elif n == 0:
 					worst_hole += 1
 	print("[bench] coverage: %d tiles, %d drawn twice, %d drawn by nothing" % [
