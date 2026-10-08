@@ -12,7 +12,10 @@ extends SceneTree
 ##   * the geometry chamfer near the camera (TerrainTile.bevel_enabled) -- a
 ##     switch each scene set for itself, and only one did;
 ##   * the terrain dev menu (F10, terrain_dev_menu.gd) -- every row it offers
-##     a scene has to do something on that scene.
+##     a scene has to do something on that scene;
+##   * the level editor's tools (terrain_editor.gd) -- always in hand in the
+##     heightfield test, an edit mode (F11) in the arena, where a brush moves
+##     the ground and a building's site does not move.
 
 var _passed := 0
 var _failed := 0
@@ -140,8 +143,89 @@ func _arena() -> void:
 		scene._toggle_terrain_dev_menu()
 		await _frames(2)
 		_ok("F10 closes it", scene._terrain_dev_menu == null)
+	await _arena_edit(scene, streamer, cam)
 	scene.queue_free()
 	await _frames(4)
+
+
+## The arena's edit mode: the level editor's tools on the city's ground.
+func _arena_edit(scene: Node3D, streamer: TerrainStreamer, cam: Camera3D) -> void:
+	scene._toggle_terrain_edit()
+	var ed = scene._terrain_editor
+	_ok("F11 puts the editing tools in hand", scene._edit_mode and ed != null
+			and ed.is_processing() and ed.is_processing_unhandled_input())
+	if ed == null:
+		return
+	_ok("out of the pawn: the tools are aimed with a free camera",
+			not scene._player.is_possessing())
+
+	# A site here is a building standing on its pad.
+	ed._set_tool(ed.Tool.SITE)
+	_ok("the site tool is not offered", ed._tool != ed.Tool.SITE, ed._status)
+	var site_pad := -1
+	for i in BrickTerrain.pad_count():
+		if ed._is_site_pad(i):
+			site_pad = i
+			break
+	var pads := BrickTerrain.pad_count()
+	if site_pad >= 0:
+		var was: Dictionary = BrickTerrain.get_pad(site_pad)
+		ed._set_tool(ed.Tool.PAD)
+		ed._selected = site_pad
+		ed._delete_selected()
+		ed._nudge_selected(2, 0, 0.0)
+		ed._move_selected(int(was["x"]) + 5, int(was["z"]) + 5)
+		var now: Dictionary = BrickTerrain.get_pad(site_pad)
+		_ok("a building's pad cannot be deleted, resized or moved",
+				BrickTerrain.pad_count() == pads and int(now["x"]) == int(was["x"])
+				and int(now["z"]) == int(was["z"]) and int(now["radius"]) == int(was["radius"]),
+				"%d pads, %d before" % [BrickTerrain.pad_count(), pads])
+	else:
+		_ok("the city's world has site pads to protect", false, "%d pads, none a site's" % pads)
+
+	# A brush on open ground, well clear of every pad's skirt.
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var spot := Vector2i.ZERO
+	var found := false
+	for k in 96:
+		var a := TAU * k / 96.0
+		var c := Vector2i(int(cos(a) * 150.0), int(sin(a) * 150.0))
+		var clear := true
+		for i in BrickTerrain.pad_count():
+			if (BrickTerrain.pad_bounds(i) as Rect2i).grow(24).has_point(c):
+				clear = false
+				break
+		if clear:
+			spot = c
+			found = true
+			break
+	_ok("there is open ground in the city's square to try a brush on", found)
+	if found:
+		var ground := float(BrickTerrain.surface_plate(spot.x, spot.y) + 1) * plate
+		cam.global_position = Vector3((spot.x + 0.5) * stud, ground + 14.0, (spot.y + 0.5) * stud)
+		cam.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+		ed._set_tool(ed.Tool.RAISE)
+		ed._begin_stroke()
+		await _frames(40)
+		ed._end_stroke()
+		streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
+		await _frames(4)
+		var raised := float(BrickTerrain.surface_plate(spot.x, spot.y) + 1) * plate
+		_ok("the raise brush raises the city's ground", raised > ground + plate * 0.5,
+				"%.2f m to %.2f m at %s" % [ground, raised, spot])
+		_ok("and the edit is marked unsaved", ed.is_dirty())
+		# Put it back: the field is global, and the next scene reads it.
+		var back: Rect2i = BrickTerrain.sculpt_undo()
+		streamer.refresh(scene._tiles_over(back))
+		scene.terrain_changed(back)
+		var again := float(BrickTerrain.surface_plate(spot.x, spot.y) + 1) * plate
+		_ok("undo puts it back", is_equal_approx(again, ground), "%.2f m" % again)
+
+	scene._toggle_terrain_edit()
+	_ok("F11 again puts them away", not scene._edit_mode and not ed.is_processing()
+			and not ed.is_processing_unhandled_input() and not ed.visible)
+	await _frames(2)
 
 
 func _heightfield() -> void:
@@ -156,6 +240,10 @@ func _heightfield() -> void:
 	var c := _chamfer(streamer)
 	_ok("its ground near the camera is chamfered", int(c.tris) > 0 and int(c.shown) > 0,
 			"%d chamfered triangles held, %d tile(s) showing them" % [c.tris, c.shown])
+
+	var ed = scene._editor
+	_ok("the editing tools are in hand, sites and all", ed != null and ed.is_processing()
+			and ed._edits_sites and ed._world_half == scene.FAR_TILES)
 
 	scene._toggle_dev_menu()
 	var menu: Node = scene._dev_menu

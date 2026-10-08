@@ -1677,6 +1677,70 @@ func rebuild_far() -> void:
 		BrickTerrain.get_coarse_smooth_step()])
 
 
+# ---------------------------------------------------------------------------
+# Terrain edit mode (terrain_editor.gd, Docs/Terrain.md §20, §22.17).
+#
+# F11 on terrain: the level editor's tools, on this scene's ground. While it
+# is on, the number keys, the left button and the rest of the editor's keys
+# are the editor's (`_unhandled_input` gives them up), and the camera flies.
+# Pads, paint and the brushes are live; a SITE here is a real building on
+# its pad, so the site tool and site pads are locked (`sites: false`) --
+# those are edited in heightfield_test with `-- --world=city`.
+
+const TerrainEditTools := preload("res://scripts/terrain_editor.gd")
+var _terrain_editor = null
+var _edit_mode := false
+
+
+func _toggle_terrain_edit() -> void:
+	if _terrain_streamer == null:
+		print("[city] no terrain here: nothing to edit (F11)")
+		return
+	if not _edit_mode and _pilot.is_piloting():
+		print("[city] terrain edit: get out of the mech first (M)")
+		return
+	_edit_mode = not _edit_mode
+	if _edit_mode:
+		# The tools are aimed with a free camera.
+		if _player.is_possessing():
+			_leave_pawn()
+		# And the gun put down (as 2 does): the left button is the brush's.
+		_gun_armed = false
+		_gun.set_trigger(false)
+		if _gun.gun != null:
+			_gun.gun.visible = false
+		if _terrain_editor == null:
+			_terrain_editor = TerrainEditTools.new()
+			_terrain_editor.name = "TerrainEditor"
+			add_child(_terrain_editor)
+			_terrain_editor.setup(self)
+		_terrain_editor.set_active(true)
+	else:
+		_terrain_editor.set_active(false)
+	print("[city] terrain edit mode: %s" % ("ON -- the editor's keys, top right; F11 leaves"
+			if _edit_mode else ("off, UNSAVED edits kept (CTRL+S in edit mode writes %s)"
+			% _terrain_world_path if _terrain_editor.is_dirty() else "off")))
+	_update_hud()
+
+
+## What the editing tools are handed (terrain_editor.gd's header).
+func edit_context() -> Dictionary:
+	return {
+		"camera": camera, "streamer": _terrain_streamer,
+		"world_path": _terrain_world_path, "seed": int(BrickTerrain.get_seed()),
+		"drowned": _terrain_drowned, "world_half": _terrain_half,
+		"status": "editing %s" % _terrain_world_path.get_file(), "sites": false,
+		# Under the arena's readout, which has the top right.
+		"hud_top": 190.0,
+	}
+
+
+## The editor's stand-in buildings on the sites: here the sites have their
+## real ones.
+func rebuild_sites() -> void:
+	pass
+
+
 ## THE SEA, at the level the world settled (§21.6), out as far as the coarse
 ## ground goes. Only if there is any: a world whose sea is under all of its
 ## ground has nothing to draw, and the brick tiers are not free.
@@ -1755,14 +1819,30 @@ func _ground_building(id: int) -> void:
 ## The field changed over these studs: rebuild the ground there, and make the
 ## AI read it again.
 func _reground(studs: Rect2i) -> void:
+	if _terrain_streamer != null:
+		_terrain_streamer.refresh(_tiles_over(studs))
+	terrain_changed(studs)
+
+
+static func _tiles_over(studs: Rect2i) -> Rect2i:
 	var tile := BrickTerrain.get_tile_studs()
 	var lo := Vector2i(floori(float(studs.position.x) / tile), floori(float(studs.position.y) / tile))
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
-	if _terrain_streamer != null:
-		_terrain_streamer.refresh(Rect2i(lo, hi - lo + Vector2i.ONE))
-	# A pad's skirt can reach past the city's square, onto coarse ground.
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+
+## The field changed over these studs, and the detail tiles over them are
+## already being rebuilt (by `_reground`, or by the editing tools, which
+## know which tiles their brush is under): everything else that was read
+## from the field there.
+func terrain_changed(studs: Rect2i) -> void:
+	# A pad's skirt, or a brush, can reach past the city's square onto
+	# coarse ground.
 	if _terrain_coarse != null:
-		_terrain_coarse.field_changed(Rect2i(lo, hi - lo + Vector2i.ONE))
+		_terrain_coarse.field_changed(_tiles_over(studs))
+	# The seabed the water reads its shore from.
+	if _sea != null:
+		_sea.refresh_seabed(studs)
 	# The AI caches the ground per column; this drops the cache.
 	ai_world.set_terrain_ground(true)
 	ai_nav.invalidate_box(AABB(Vector3(studs.position.x * STUD, -100.0, studs.position.y * STUD),
@@ -9853,7 +9933,7 @@ func _update_hud() -> void:
 		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
-F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · F10 terrain dev menu · N respawn
+F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · F10 terrain dev menu · F11 terrain edit · N respawn
 7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
@@ -10069,6 +10149,17 @@ func _toggle_shader(param: String) -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Terrain edit mode: everything but these is the editor's.
+	if _edit_mode:
+		if event is InputEventKey and event.pressed and not event.echo:
+			match event.keycode:
+				KEY_F11:
+					_toggle_terrain_edit()
+				KEY_F10:
+					_toggle_terrain_dev_menu()
+				KEY_F1:
+					stats_label.visible = not stats_label.visible
+		return
 	# On foot the buttons are the player's own (rebindable input actions,
 	# PlayerController): firing, aiming and reloading go through the pawn.
 	if event is InputEventMouseButton and _player.is_possessing():
@@ -10168,6 +10259,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			load_checkpoint()
 		KEY_F10:
 			_toggle_terrain_dev_menu()
+		KEY_F11:
+			_toggle_terrain_edit()
 		KEY_L:
 			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:

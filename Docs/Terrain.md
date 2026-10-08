@@ -3358,8 +3358,7 @@ F10 opening and closing in both, and every row pressed in the scene that offers 
   edge beside a face that was culled is a slit) -- a C++ change in the building mesher, and its
   triangles land on the buildings that are being shot at.
 * *Two far tiers.* Done next, §22.16.
-* *The level editor in the arena.* The tools are a node on a host, but their keys (0-8, G, [ ],
-  - =) are the arena's guns and view switches, and a site there has a real building on it.
+* *The level editor in the arena.* Done as an edit mode, §22.17.
 
 ### 22.16 One coarse tier (2026-10-08)
 
@@ -3400,3 +3399,43 @@ What changed on purpose:
   before only the detail tiles were refreshed.
 * After "Rebuild far terrain" the small blocks are re-LODded on the next frame, not when the camera
   next changes tile.
+
+### 22.17 The level editor in the arena: an edit mode (2026-10-08)
+
+**F11** in the city on terrain (the combat arena) puts the level editor's tools (§20) in hand on
+that scene's ground; F11 again puts them away. It is the same `terrain_editor.gd` node the
+heightfield test has always-on, and it now asks its host for what it needs (`edit_context()`,
+`terrain_changed(studs)`, `rebuild_sites()` — listed in its header) instead of reading the
+heightfield scene's fields.
+
+While edit mode is on:
+
+* the keys and the left button are the editor's. The city's `_unhandled_input` gives up
+  everything except F1 (stats), F10 (the terrain dev menu) and F11; the camera's own keys still
+  fly it;
+* the player is out of the pawn (as V does) and the gun is put down (as 2 does) — the tools are
+  aimed with a free camera, and the left button is the brush's. Not entered from inside a mech;
+* the editor's readout is under the arena's on the right.
+
+**Pads, paint and the brushes are live.** A change goes into the field; the detail tiles over it
+are rebuilt by the editor, and the city's `terrain_changed` does the rest: the coarse blocks over
+it, the seabed, the AI's cached ground and the nav under it — what a pad cut for a placed build
+already did (`_reground`, which is now a tile refresh plus `terrain_changed`).
+
+**Sites are locked.** A site here is a real building standing on its pad, and the building would
+not follow: the site tool is not offered and a site's pad cannot be moved, resized, re-floored or
+deleted (`edit_context()["sites"] = false`). A city's layout is still edited in the heightfield
+test: `scenes/heightfield_test.tscn -- --world=city`.
+
+**CTRL+S writes the world file** the scene loaded (`worlds/city.json`), as in the heightfield
+test. Leaving edit mode with unsaved edits says so and keeps them in the field. Known, not done:
+
+* a tree is a registered build placed on the ground it found at startup; sculpt under one and it
+  floats or sinks until the scene is loaded again;
+* a pad cut for a build placed with P is in the pad list, so it is saved with the world, and the
+  build is not (the checkpoint's log has no entry for a placed build either);
+* the encounter keeps running while the tools are out.
+
+`tools/ground_tools_probe.gd` holds it (27 checks with §22.15's): F11 in and out, the site tool
+refused, a building's pad unmoved by delete, resize and move, the raise brush raising open ground
+in the city's square, undo putting it back, and the heightfield test's tools in hand with sites.
