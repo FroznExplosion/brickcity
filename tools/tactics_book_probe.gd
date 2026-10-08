@@ -116,6 +116,9 @@ func _extra(b: TacticsBook, moment: String, f: Array, am: Dictionary, main: Stri
 func _intent(b: TacticsBook) -> void:
 	var reach := 1.0
 	for m in b.moments:
+		# A soldier's moments: a mech's (mech_fight) has a punch, not a melee.
+		if not (b.moments[m].weights as Dictionary).has("melee"):
+			continue
 		reach = minf(reach, _p(b.odds(m, ["p_reach"], {"dist": 1.5}), "melee"))
 	_ok("within melee reach, melee takes ~95% of the pick in every moment", reach > 0.9,
 			"lowest %.0f%%" % (reach * 100.0))

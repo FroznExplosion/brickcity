@@ -342,13 +342,31 @@ func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:
 	for p in pawns:
 		if not is_instance_valid(p) or p.team != PLAYER_SIDE or p.health == null or p.health.is_dead():
 			continue
-		table.track(p, int(p.get_meta(&"player", 0)), String(p.get_meta(&"aggro_kind", "pilot")))
+		var kind := String(p.get_meta(&"aggro_kind", "pilot"))
+		table.track(p, int(p.get_meta(&"player", 0)), kind)
 		var c := k.of(p)
-		if c != null and c.visible:
-			table.add(p, AggroTable.SEEN * dt)
-		for a in pawns:
-			if is_instance_valid(a) and a.team == team \
-					and a.feet().distance_to(p.feet()) <= AggroTable.NEAR_RANGE:
-				table.add(p, AggroTable.NEAR * dt)
-				break
+		var seen := c != null and c.visible
+		# What merely being there is worth: a mech's presence (G1), more with its
+		# hatch off (G6); a pilot in sight while a mech holds the focus, little
+		# (G4) -- and then a pilot nobody sees, nothing at all, however near.
+		# With no mech holding the focus, being near counts seen or not, as it
+		# always has: that is what keeps a side on a player who has gone indoors.
+		var presence := 1.0
+		var behind_mech := false
+		if kind == "mech":
+			presence = AggroTable.MECH_PRESENCE
+			var ml := MechLayers.of(p.body)
+			if ml != null and ml.hatch_off and ml.piloted:
+				presence *= AggroTable.EXPOSED
+		elif table.kind_of(table.focus()) == "mech":
+			presence = AggroTable.PILOT_BEHIND_MECH
+			behind_mech = true
+		if seen:
+			table.add(p, AggroTable.SEEN * presence * dt)
+		if seen or not behind_mech:
+			for a in pawns:
+				if is_instance_valid(a) and a.team == team \
+						and a.feet().distance_to(p.feet()) <= AggroTable.NEAR_RANGE:
+					table.add(p, AggroTable.NEAR * presence * dt)
+					break
 	table.decay(dt)

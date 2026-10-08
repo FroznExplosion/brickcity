@@ -60,6 +60,12 @@ How the enemy chooses what to do, authored as odds rather than code.
   (`derived.mech`); `Mech.set_type` applies them through `MechLayers`, which is how a
   mech is killed (`Docs/AIRoster.md` 4.2; `tools/mech_layers_probe.gd`).
 
+- **A mech's moves:** the moment `mech_fight` and the facts "Mech against mech" are a
+  mech's own page of the casebook. `TacticsSense.read_mech` reads them,
+  `BookCombatPolicy.decide_mech` rolls, and `MechBrain` does it (stand off, close in,
+  punch, back off, turn the open side away) whenever its pilot has given it no order.
+  `tools/mech_fight_probe.gd` checks it.
+
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.
 

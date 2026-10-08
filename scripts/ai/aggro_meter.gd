@@ -20,9 +20,10 @@ func _process(_delta: float) -> void:
 
 
 ## The pilot's and the mech's shares, and who holds the focus: what is drawn.
-## {"pilot": 0..1, "mech": 0..1, "holder": "pilot"|"mech"|""}
+## {"pilot": 0..1, "mech": 0..1, "holder": "pilot"|"mech"|"", "exposed": bool} --
+## exposed: the mech's hatch is off, so the pilot in it can be shot (AIRoster.md G9).
 func reading() -> Dictionary:
-	var out := {"pilot": 0.0, "mech": 0.0, "holder": ""}
+	var out := {"pilot": 0.0, "mech": 0.0, "holder": "", "exposed": false}
 	if table == null:
 		return out
 	var focus := table.focus()
@@ -33,6 +34,10 @@ func reading() -> Dictionary:
 		out[e.kind] = float(out.get(e.kind, 0.0)) + table.share(e.who)
 		if e.who == focus:
 			out.holder = e.kind
+		if e.kind == "mech" and e.who is Pawn:
+			var ml := MechLayers.of((e.who as Pawn).body)
+			if ml != null and ml.hatch_off and ml.piloted:
+				out.exposed = true
 	return out
 
 
@@ -47,4 +52,7 @@ func _draw() -> void:
 		var col := Color(1.0, 0.35, 0.25) if r.holder == kind else Color(0.9, 0.75, 0.3)
 		draw_rect(Rect2(Vector2(46, y), Vector2(BAR.x * v, BAR.y)), col)
 		draw_string(font, Vector2(0, y + BAR.y), kind, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+		if kind == "mech" and bool(r.exposed):
+			draw_string(font, Vector2(46 + BAR.x + 6, y + BAR.y), "hatch off", HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+					Color(1.0, 0.35, 0.25))
 		y += BAR.y + 6.0
