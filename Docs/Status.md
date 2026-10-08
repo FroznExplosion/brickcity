@@ -925,9 +925,6 @@ here is 0.35 m) and is sub-pixel past about twenty metres. What the eye reads at
 *lighting*, not the silhouette. So it is shaded: `shaders/brick.gdshader` bends the normal to
 45 degrees inside a band along each block edge, and leaves the geometry flat.
 
-(Since 2026-10-08 that is the far half of the answer. Within fourteen metres of the camera a band
-of brick mesh is drawn with real bevels, and its studs as geometry: [BrickBevel.md](BrickBevel.md).)
-
 The machinery was already there. The seam needs distance-to-block-edge, which needs UV in metres and
 UV2 as the block's face size, and that is exactly what a chamfer needs too -- so the bevel costs two
 texture-space derivatives for a tangent frame and nothing else. No vertex format change, no second
