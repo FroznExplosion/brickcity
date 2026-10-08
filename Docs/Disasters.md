@@ -918,6 +918,20 @@ wind on trees and walkers is the **sum** (capped); rain, snow and the storm are 
 so; the sea takes the **highest** surge. Hazard ids get a block per disaster — two tornadoes both
 mark "hazard 0". When a disaster ends, what it set is forgotten and the rest stands.
 
+**Outside its tick a disaster must say who it is** (2026-10-08). The director names the source
+round `tick()` only. The lightning storm also sets its sky, flash, sight, aim, lens and breeze every
+frame from `_process`, and those went in as nobody's: never forgotten, so the last frame before DONE
+stayed until the next storm wrote over it. Measured after a stopped storm: usually a rounding error
+(sight 0.9999999999999997 — the last ENDING tick is 1e-14 s short of 6 s), but when no frame is
+drawn between the last two ticks, the tick before's: sight 0.999167, aim x1.006667, the sun at
+1.096 for 1.1, a breath of gale. A stroke lit on that frame would have left its flash on the sun
+too. Either way not "exactly as before". It now names itself round that call, and nothing is left
+as nobody's. The director does the same round `end_now()` (`Shift+H`, a client's stop): what a
+disaster's ENDING hook sets — hail and sand stop lying — is its own. The collapse probe's weather
+check (`--only=weather`: a storm stopped half-way, sight and aim exactly 1 after) is what caught it.
+The disaster probe asks both directly: after the lightning storm nothing is held as nobody's, and a
+hailstorm stopped half-way stops lying on that tick.
+
 Probe (`--only=multi`): an outbreak's three tornadoes on three paths, three hazards side by side,
 the gale summed to its cap (1.5), a late client sent all three starts, all over in 51 s; a superstorm
 of three, nothing else allowed to start, `stop` ending all three; and after each, the sun, the AI's
@@ -1016,6 +1030,13 @@ A fire front across the land — the building fire is cells of walls; this is ce
 
 Probe: 180 burning at most, 1,854 cells burnt, 58 danger blocks, the map scarred and nothing left
 glowing after, the AI's ground let go. `shots/wildfire.png`.
+
+The scars are counted on the fire's own map (the image it paints and uploads), which the probe
+holds on to after the fire is freed (2026-10-08). It used to read the texture back
+(`WeatherFx.burn_tex.get_image()`), and headless that is always the blank the texture was made
+from: the dummy renderer drops `ImageTexture.update`. So the check failed headless — 0 scars —
+with the fire burning as it should. In a window the probe also asks that the texture the shaders
+read is that map, byte for byte, and that `WeatherFx` still holds it after the fire has gone.
 
 The probe's soldier-in-a-ring test now spawns on open ground: earlier sections leave rubble about,
 and a soldier boxed in by it evaded and went nowhere.
