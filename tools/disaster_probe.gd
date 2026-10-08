@@ -379,6 +379,11 @@ func _check_lightning(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("it rained", rained)
 	_ok("the sky darkened, and came back", dark.r < base.r
 			and (city._sun as DirectionalLight3D).light_color == base, "sun %s -> %s" % [base, dark])
+	# The storm sets its sky, flash and the AI's weather every frame, between
+	# ticks, when the director is naming nobody (Docs/Disasters.md 22). Set as
+	# nobody's, the last frame's stayed after the storm.
+	_ok("and nothing it set is left as nobody's", not dir.ctx._by.has(null),
+			str(dir.ctx._by.get(null, {}).keys()))
 	print("  --   strokes lit %d fire cell(s); nearest stroke %.0f m from the player" % [
 			dir.fire.caught - caught0, nearest])
 
@@ -1397,6 +1402,25 @@ func _check_hail(city: Node3D, dir: DisasterDirector) -> void:
 	_ok("a soldier out in it is bruised", got[2] > 0)
 	_ok("they lie, thin", lying > 0.2 and lying <= Hailstorm.LIE_CAP + 0.01, "%.2f" % lying)
 	_ok("and it clears", not dir.is_running() and not ctx.snowing and not ctx.raining)
+	# Stopped half-way, the stones stop lying at once: what its ENDING hook says
+	# is its own, the director naming it round end_now as round a tick
+	# (Docs/Disasters.md 22). Said as nobody's, it lay on through the ending.
+	dir.start("hail", 1.0)
+	dir.count -= 1   # the sections after this one keep their seeds
+	h = dir.current
+	t = 0
+	while h.phase != Disaster.Phase.ACTIVE and t < 30 * 20:
+		await physics_frame
+		t += 1
+	await _ticks(5)
+	var fell := ctx.snowing
+	dir.stop()
+	_ok("stopped half-way, the stones stop lying at once", fell and not ctx.snowing
+			and h.phase == Disaster.Phase.ENDING)
+	t = 0
+	while dir.is_running() and t < 30 * 20:
+		await physics_frame
+		t += 1
 	ctx.snow = 0.0005
 	await _ticks(10)
 
