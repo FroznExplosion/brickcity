@@ -985,6 +985,186 @@
     ]
    }
   },
+  "light_gunner": {
+   "body": "mech",
+   "size": "huge",
+   "class": "light",
+   "grade": "regular",
+   "attack": "gunner",
+   "role": "attacker",
+   "mods": [],
+   "phases": [],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Light Gunner",
+    "name": "Light Gunner",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "attack": "gunner",
+    "role": "attacker",
+    "grenades": 2,
+    "facts": [
+     "we_mech",
+     "we_gunner",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "huge",
+     "l": "Huge",
+     "tall": 6.7,
+     "wide": 3.5,
+     "nav": [
+      10,
+      48,
+      48,
+      9,
+      17,
+      17
+     ],
+     "fits": "damaged buildings, or breaks in",
+     "floors": "breaks weak floors",
+     "eg": "a mech, a tank"
+    },
+    "mech": {
+     "shield": 1400,
+     "armor": 800,
+     "health": 800,
+     "hatch": 200,
+     "cell_door": 150,
+     "hatch_side": "back",
+     "doomed": 250,
+     "power_cell": 300,
+     "cell_crit": 3
+    },
+    "layers": [],
+    "melees": 0,
+    "points": 20,
+    "phases": []
+   }
+  },
+  "medium_gunner": {
+   "body": "mech",
+   "size": "huge",
+   "class": "medium",
+   "grade": "regular",
+   "attack": "gunner",
+   "role": "attacker",
+   "mods": [],
+   "phases": [],
+   "built": false,
+   "unit": "mech",
+   "derived": {
+    "tag": "Medium Gunner",
+    "name": "Medium Gunner",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "attack": "gunner",
+    "role": "attacker",
+    "grenades": 2,
+    "facts": [
+     "we_mech",
+     "we_gunner",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "huge",
+     "l": "Huge",
+     "tall": 6.7,
+     "wide": 3.5,
+     "nav": [
+      10,
+      48,
+      48,
+      9,
+      17,
+      17
+     ],
+     "fits": "damaged buildings, or breaks in",
+     "floors": "breaks weak floors",
+     "eg": "a mech, a tank"
+    },
+    "mech": {
+     "shield": 1000,
+     "armor": 1500,
+     "health": 1250,
+     "hatch": 350,
+     "cell_door": 250,
+     "hatch_side": "front",
+     "doomed": 250,
+     "power_cell": 300,
+     "cell_crit": 3
+    },
+    "layers": [],
+    "melees": 0,
+    "points": 25,
+    "phases": []
+   }
+  },
+  "heavy_gunner": {
+   "body": "mech",
+   "size": "huge",
+   "class": "heavy",
+   "grade": "regular",
+   "attack": "gunner",
+   "role": "attacker",
+   "mods": [],
+   "phases": [],
+   "built": false,
+   "unit": "",
+   "derived": {
+    "tag": "Heavy Gunner",
+    "name": "Heavy Gunner",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "attack": "gunner",
+    "role": "attacker",
+    "grenades": 2,
+    "facts": [
+     "we_mech",
+     "we_gunner",
+     "we_attacker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "huge",
+     "l": "Huge",
+     "tall": 6.7,
+     "wide": 3.5,
+     "nav": [
+      10,
+      48,
+      48,
+      9,
+      17,
+      17
+     ],
+     "fits": "damaged buildings, or breaks in",
+     "floors": "breaks weak floors",
+     "eg": "a mech, a tank"
+    },
+    "mech": {
+     "shield": 600,
+     "armor": 2400,
+     "health": 1500,
+     "hatch": 500,
+     "cell_door": 350,
+     "hatch_side": "front",
+     "doomed": 250,
+     "power_cell": 300,
+     "cell_crit": 3
+    },
+    "layers": [],
+    "melees": 0,
+    "points": 30,
+    "phases": []
+   }
+  },
   "heavy_gunner_nuker": {
    "body": "mech",
    "size": "huge",

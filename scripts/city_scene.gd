@@ -4949,6 +4949,8 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float) -> MechBrain:
 	m.gun.on_structure_hit = _gun.on_structure_hit
 	_wire_mech(m)
 	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
+	# A medium mech by the roster: its layers and the name over it (AIRoster.md RO6).
+	m.set_type("medium_gunner", Roster.shared())
 	br.arm_launcher(GunInstance.from_result(GunGenerator.generate(_gun_library,
 			_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
 			_gun.on_structure_hit)
