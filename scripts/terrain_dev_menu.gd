@@ -1,7 +1,7 @@
 extends PanelContainer
 
-## THE DEV MENU for the terrain scene. F10 in heightfield_test (and the
-## terrain editor, which is the same scene). [Docs/Terrain.md](../Docs/Terrain.md) §20.10.
+## THE TERRAIN DEV MENU. F10 wherever there is ground: heightfield_test, and
+## the city on terrain -- the combat arena. [Docs/Terrain.md](../Docs/Terrain.md) §20.10, §22.15.
 ##
 ## Opening it frees the mouse; the world keeps running (the waves move, you
 ## can still fly with the keyboard), it just stops taking the mouse. Every
@@ -12,6 +12,8 @@ extends PanelContainer
 ##                   border and look at it up close.
 ##   LOD view        the L tint.
 ##   Detail radius   how many tiles of full detail round the camera.
+##   Real chamfers   the geometry chamfer near the camera, on every scene's
+##                   ground at once (TerrainTile.bevel_enabled).
 ##   Smooth far from the coarse sample step past which far ground is smooth
 ##                   (Terrain.md 19.14); applied with "Rebuild far terrain".
 ##   Waves           height, strength at the shore, how far out that strength
@@ -19,6 +21,20 @@ extends PanelContainer
 ##                   rolling toward the shore.
 ##   Studded water   how far round the camera the brick water reaches.
 ##   Tile lean, grid lines   the studded tiles' look.
+##
+## WHAT A HOST GIVES IT. Every host:
+##
+##   _lod_debug, set_lod_view(on)      the LOD tint
+##   rebuild_detail(), rebuild_far()   the two tiers again, from the field
+##   set_ground_param(name, value)     a uniform on the ground's material
+##   set_water_param(name, value)      and on the brick water's
+##   dev_sea()                         the WaterSea, or null where it is dry
+##
+## and only a host whose detail square FOLLOWS the camera (the heightfield
+## test; the city's covers the city and never moves), so those rows are left
+## out where it does not:
+##
+##   _lod_frozen, set_lod_frozen(on), set_detail_radius(tiles), _streamer
 ##
 ## Preloaded by path, not named: see heightfield_scene.gd.
 
@@ -46,14 +62,20 @@ func setup(p_host) -> void:
 	_rows.add_theme_constant_override("separation", 6)
 	scroll.add_child(_rows)
 
-	_title("DEV MENU  (F10 to close)")
+	_title("TERRAIN DEV MENU  (F10 to close)")
 	_section("LOD")
-	_check("Freeze LOD streaming", host._lod_frozen, func(on: bool) -> void:
-		host.set_lod_frozen(on))
-	_check("LOD colour view (L)", host._lod_debug, func(on: bool) -> void:
+	var streams: bool = host.has_method("set_lod_frozen")
+	if streams:
+		_check("Freeze LOD streaming", host._lod_frozen, func(on: bool) -> void:
+			host.set_lod_frozen(on))
+	_check("LOD colour view", host._lod_debug, func(on: bool) -> void:
 		host.set_lod_view(on))
-	_slider("Detail radius (tiles)", 1, 12, 1, host._streamer.near_radius,
-		func(v: float) -> void: host.set_detail_radius(int(v)))
+	if streams:
+		_slider("Detail radius (tiles)", 1, 12, 1, host._streamer.near_radius,
+			func(v: float) -> void: host.set_detail_radius(int(v)))
+	_check("Real chamfers near the camera", TerrainTile.bevel_enabled, func(on: bool) -> void:
+		TerrainTile.bevel_enabled = on
+		host.rebuild_detail())
 	_smooth_step = BrickTerrain.get_coarse_smooth_step()
 	_option("Smooth far terrain from", ["off", "every 8 studs (LOD 2+)", "every 16 studs (LOD 3+)",
 			"every 4 studs (LOD 1+)"], [0, 8, 16, 4].find(_smooth_step),
@@ -62,13 +84,17 @@ func setup(p_host) -> void:
 		BrickTerrain.set_slope_pieces(on)
 		host.rebuild_detail())
 	_check("Course lines on smooth far ground", true, func(on: bool) -> void:
-		host._mat.set_shader_parameter("far_courses", on))
+		host.set_ground_param("far_courses", on))
 	_button("Rebuild far terrain", func() -> void:
 		BrickTerrain.set_coarse_smooth_step(_smooth_step)
 		host.rebuild_far())
 
+	# A world whose sea is under all of its ground has no sea node at all.
+	var sea = host.dev_sea()
+	if sea == null:
+		_section("NO SEA IN THIS WORLD")
+		return
 	_section("WAVES")
-	var sea = host._sea
 	_slider("Wave height", 0.0, 5.0, 0.1, sea.wave_gain, func(v: float) -> void:
 		sea.wave_gain = v
 		sea.push_waves())
@@ -98,10 +124,11 @@ func setup(p_host) -> void:
 
 
 ## Fit the window: from where the menu sits down to 14 px off the bottom,
-## scrolling for the rest. A fixed height ran off shorter windows.
-func fit(top: float) -> void:
+## scrolling for the rest. A fixed height ran off shorter windows. `left` is
+## for a host whose own readout fills the left side (the city's).
+func fit(top: float, left := 14.0) -> void:
 	var h: float = get_viewport().get_visible_rect().size.y
-	position = Vector2(14, top)
+	position = Vector2(left, top)
 	_scroll.custom_minimum_size = Vector2(440, maxf(h - top - 14.0 - 24.0, 160.0))
 	size = Vector2.ZERO
 

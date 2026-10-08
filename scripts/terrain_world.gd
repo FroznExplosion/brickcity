@@ -363,6 +363,33 @@ static func save_world(path: String, seed_value: int, drowned: float) -> Error:
 	return OK
 
 
+## OPEN A LEVEL: the field set up as brick heightfield ground, and the world
+## file at `path` loaded into it. The one way a scene gets its ground -- the
+## heightfield test and the city each had their own copy of this, and a copy
+## is how one of them ends up on different ground from the other.
+##
+## Returns what `load_world` does: {} when there is no file (the field is
+## then `seed_value` as generated, and the caller says what a new world
+## starts with), otherwise the world's seed and drowned fraction. A file cut
+## from another seed is loaded again on its own: the sea and every pad height
+## were read off ground that world is not.
+static func open_world(path: String, seed_value: int) -> Dictionary:
+	# HEIGHTFIELD: ground to stand on, no caves under it.
+	BrickTerrain.set_flat_mode(true)
+	# Half-brick steps: the relief cut into plates (0.14 m) rather than
+	# bricks (0.42 m), so a slope is three shallower stairs instead of one.
+	BrickTerrain.set_plate_steps(true)
+	# Curved ground has no PIECES in it (§18.5), and the game is laid brick.
+	BrickTerrain.set_smooth_terrain(false)
+	BrickTerrain.configure(seed_value)
+	var loaded := load_world(path)
+	var file_seed := int(loaded.get("seed", seed_value))
+	if not loaded.is_empty() and file_seed != 0 and file_seed != seed_value:
+		BrickTerrain.configure(file_seed)
+		loaded = load_world(path)
+	return loaded
+
+
 ## Returns {} when there is no world there, which is not an error: a level
 ## that has never been edited is a seed and nothing else.
 static func load_world(path: String) -> Dictionary:

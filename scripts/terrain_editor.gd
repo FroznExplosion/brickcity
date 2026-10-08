@@ -8,7 +8,7 @@ extends Node3D
 ## The TOOLS, not a scene. heightfield_scene.gd adds this node on top of its
 ## own terrain, far tier, water and sites (§20.9), so what is edited is exactly
 ## what is looked at and there is one terrain scene rather than two that
-## drifted apart. `scenes/terrain_editor.tscn` is that same scene.
+## drifted apart.
 ##
 ## Editing terrain is an authoring job, not a gameplay one. Nothing here is
 ## reachable from the game: the game loads a world file and never writes one.
