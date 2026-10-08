@@ -56,6 +56,10 @@ How the enemy chooses what to do, authored as odds rather than code.
   `tools/roster_probe.gd`, `tools/roster_field_probe.gd`, `tools/roster_types_probe.gd`
   and `tools/roster_air_probe.gd` check it.
 
+- **Mechs:** a mech recipe carries its class's shield, armour, health and doors
+  (`derived.mech`); `Mech.set_type` applies them through `MechLayers`, which is how a
+  mech is killed (`Docs/AIRoster.md` 4.2; `tools/mech_layers_probe.gd`).
+
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.
 

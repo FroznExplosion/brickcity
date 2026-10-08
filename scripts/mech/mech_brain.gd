@@ -82,6 +82,9 @@ static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree
 	br.nav = p_mech_nav
 	br.team = p_team
 	m.team = p_team
+	# Its blast (MechLayers) catches whoever the services know is there.
+	if m.layers != null:
+		m.layers.services = s
 	# Before the motor (-10): intents are written, then read.
 	br.process_physics_priority = -12
 	m.body.add_child(br)
@@ -118,6 +121,8 @@ func arm_launcher(gun: GunInstance, rng: RandomNumberGenerator, on_hit: Callable
 	launcher.rng = rng
 	launcher.exclude = [mech.body.get_rid()] as Array[RID]
 	launcher.on_structure_hit = on_hit
+	# A mech's launcher is a mech's weapon to another mech, not a pilot's rocket.
+	launcher.damage_scale = &"mech"
 	mech.body.add_child(launcher)
 	gun.visible = false
 	mech.arm.add_child(gun)

@@ -540,6 +540,9 @@ const RECIPES = {
   drone:{name:"Drone", body:"flyer", size:"small", cls:"light", grade:"regular", attack:"shooter", weapon:"rifle", role:"line", mods:[], phases:[], built:true},
   hound:{name:"Hound", body:"walker", size:"small", cls:"light", grade:"weak", attack:"melee", role:"fodder", mods:[], phases:[], built:true},
   brute:{name:"Brute", body:"walker", size:"large", cls:"heavy", grade:"regular", attack:"shooter", weapon:"lmg", role:"attacker", mods:[], phases:[{when:"armour_gone", become:{attack:"melee"}}], built:true},
+  light_gunner:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false},
+  medium_gunner:{name:"", body:"mech", size:"huge", cls:"medium", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false, unit:"mech"},
+  heavy_gunner:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false},
   heavy_gunner_nuker:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:["nuker"], phases:[], built:false},
   light_melee_nuker:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:["nuker"], phases:[], built:false},
 };

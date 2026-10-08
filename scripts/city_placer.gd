@@ -38,10 +38,6 @@ var ground_ray := Callable()
 ## terrain shaped to its floor.
 var on_ground := false
 
-## Where prebuilt structures live. `res://builds/` ships with the game
-## (tools/make_prebuilts.gd writes it); `user://builds/` is the player's.
-const LIBRARY_DIRS := ["res://builds/", "user://builds/"]
-
 var _registry: BuildingRegistry
 var _camera: Camera3D
 var _recipe: BuildRecipe
@@ -88,20 +84,15 @@ func setup(registry: BuildingRegistry, camera: Camera3D) -> void:
 
 
 ## Every build that can be placed: `first` (the workshop's last save) if it
-## exists, then each library folder's .json files in name order.
+## exists, then the building library (BuildRecipe.library: what ships with the
+## game, then the player's own).
 static func library(first: String = "") -> PackedStringArray:
 	var out := PackedStringArray()
 	if first != "" and FileAccess.file_exists(first):
 		out.append(first)
-	for dir in LIBRARY_DIRS:
-		if not DirAccess.dir_exists_absolute(dir):
-			continue   # a player who has saved nothing has no folder yet
-		var files := DirAccess.get_files_at(dir)
-		files.sort()
-		for f in files:
-			var path: String = dir + f
-			if f.ends_with(".json") and not out.has(path):
-				out.append(path)
+	for path in BuildRecipe.library("building"):
+		if not out.has(path):
+			out.append(path)
 	return out
 
 
