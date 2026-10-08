@@ -46,6 +46,13 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	if packet == null or target_root == null:
 		return result
 
+	# A mech is killed in layers, by its own rules (MechLayers): the hit goes there.
+	# By meta, not by class: this file does not depend on the mech's scripts.
+	if target_root.has_meta(&"mech_layers"):
+		var layers: Variant = target_root.get_meta(&"mech_layers")
+		if typeof(layers) == TYPE_OBJECT and is_instance_valid(layers):
+			return (layers as Object).call(&"take_packet", packet)
+
 	var pool: HealthPool = _find_health_pool(target_root)
 	if pool == null or pool.is_dead():
 		return result
