@@ -32,6 +32,12 @@ const BLOOM_MAX_DEG := 4.0
 const BLOOM_RECOVER := 7.0
 
 var gun: GunInstance
+## What scale of weapon this is to a target that cares (DamagePacket.scale); &""
+## lets the gun's class say (ordnance is explosive, the rest a person's). A mech's
+## arm gun is &"mech", and its rounds are multiplied by `damage_mult` -- a stand-in
+## until mech weapons are rolled as classes of their own.
+var damage_scale: StringName = &""
+var damage_mult := 1.0
 var rng: RandomNumberGenerator
 var range_m := 400.0
 var collision_mask := Layers.GUN_MASK
@@ -174,7 +180,8 @@ func _living(collider: Object) -> Node:
 func _hit_living(target: Node, point: Vector3, normal: Vector3) -> DamageSystem.DamageResult:
 	# A crit is a hit on a crit spot -- the head, a weak point -- never a dice roll.
 	var crit := _crit_spot(target, point) != &""
-	var p := DamagePacket.new(_stat(&"damage", 1.0), null, self)
+	var p := DamagePacket.new(_stat(&"damage", 1.0) * damage_mult, null, self)
+	p.scale = damage_scale
 	p.hit_position = point
 	p.hit_normal = normal
 	p.crit = crit

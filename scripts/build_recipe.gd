@@ -931,6 +931,75 @@ static func _strings(a) -> PackedStringArray:
 	return out
 
 
+# ---------------------------------------------------------------------------
+# WHERE BUILDS LIVE
+#
+# One table, here beside the code that reads and writes the files. There were
+# four copies of it -- the city's placer, the workshop, its menu and the room
+# templates each spelled the folders out, and the quick-save path three times
+# -- so adding a kind, or moving a folder, was four edits that had to agree.
+
+## The library folders by build kind: what ships with the game first
+## (`res://`, written by tools/make_prebuilts.gd), the player's own last
+## (`user://`, written by the workshop). `building` is what the city's placer
+## offers with P. Rooms and items live apart: they are what the GENERATOR
+## builds from (Docs/Workshop.md, Stage E), not things dropped into the city
+## whole; rooms are filed in a sub-folder a room kind.
+const LIBRARY_DIRS := {
+	"building": ["res://builds/", "user://builds/"],
+	"room": ["res://rooms/", "user://rooms/"],
+	"item": ["res://items/", "user://items/"],
+}
+## The workshop's one quick-save slot (F5 there), and what the city places
+## when it is asked for a build without being told which (`--build`, P).
+const QUICK_SAVE := "user://workshop_build.json"
+
+
+## The folders for a kind, shipped first. A kind with no library of its own
+## is filed with the buildings.
+static func library_dirs(of_kind := "building") -> Array:
+	return LIBRARY_DIRS.get(of_kind, LIBRARY_DIRS["building"])
+
+
+## Where the game's own builds of a kind are.
+static func shipped_dir(of_kind := "building") -> String:
+	return library_dirs(of_kind)[0]
+
+
+## Where a player's build of a kind is saved.
+static func player_dir(of_kind := "building") -> String:
+	var dirs := library_dirs(of_kind)
+	return dirs[dirs.size() - 1]
+
+
+## A shipped building by its file's name: `shipped("cottage")`.
+static func shipped(build_name: String) -> String:
+	return shipped_dir() + build_name + ".json"
+
+
+## Every saved build of a kind: each .json under its folders, sub-folders
+## too, shipped first, in name order.
+static func library(of_kind := "building") -> PackedStringArray:
+	var out := PackedStringArray()
+	for dir in library_dirs(of_kind):
+		_collect(dir, out)
+	return out
+
+
+static func _collect(dir: String, out: PackedStringArray) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return   # a player who has saved nothing has no folder yet
+	var files := DirAccess.get_files_at(dir)
+	files.sort()
+	for f in files:
+		if f.ends_with(".json"):
+			out.append(dir + f)
+	var subs := DirAccess.get_directories_at(dir)
+	subs.sort()
+	for sub_dir in subs:
+		_collect(dir + sub_dir + "/", out)
+
+
 func save_to(path: String) -> Error:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:

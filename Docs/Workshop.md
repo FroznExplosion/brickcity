@@ -78,6 +78,11 @@ A top menu bar, visible whenever the mouse is free (ESC):
 
 Open lists `res://builds/` and `user://builds/` (the city placer's library, so
 every save is placeable with `P`). Save As names the file. Clear asks first.
+The folders for each kind, and the quick-save path, are written once:
+`BuildRecipe.LIBRARY_DIRS` and `BuildRecipe.QUICK_SAVE`, with `library(kind)`,
+`player_dir(kind)` and `shipped(name)` beside them. The workshop, its menu, the
+city's placer and the room templates all ask there (2026-10-08; each had its own
+copy of the list and its own folder walk).
 The F-keys keep working. `ctrl+N / ctrl+O / ctrl+S / ctrl+shift+S`.
 
 ### Stage B — placing a build inside a build ✅

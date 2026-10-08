@@ -3,12 +3,12 @@ extends SceneTree
 ## Gate for Docs/Collapse.md: collapse, LOD and the AI.
 ##
 ##     godot --headless --path . --script res://tools/collapse_probe.gd
-##     ... -- --only=shell,fake,...   run just those sections
+##     ... -- --only=shell,interior,...   run just those sections
 ##
 ## shell  (1) the coarse box tier is for undamaged buildings only.
-## fake   (2) a room's fake is redrawn when its building's structure changes:
-##        a floor taken out while nobody was near, the building given back and
-##        rebuilt, and no faked item is left standing on air.
+## interior (2) a building's interior drawing follows its structure: a floor
+##        taken out while nobody was near, the building given back and
+##        rebuilt, and nothing drawn in it is left standing on air.
 ## stairs (4) a tower whose ground storey is gone but for its staircase does not
 ##        stand on the staircase: nothing above is grounded through it.
 ## handover (3) sections cut off buildings -- some just promoted, bands still
@@ -25,8 +25,8 @@ extends SceneTree
 ##        and no undamaged building is near either.
 ## shellhit (CollapseNext 1.1) a damaged shell is solid where it is drawn and
 ##        nowhere else: no invisible walls where storeys have gone.
-## crushdrawn (CollapseNext 1.2) a piece landing in a drawn room crushes the
-##        drawn furniture it lands on, rather than standing in it.
+## crushdrawn (CollapseNext 1.2) a piece landing on drawn furniture crushes
+##        what it lands on, rather than standing in it.
 
 var _pass := 0
 var _fail := 0
@@ -87,8 +87,8 @@ func _run() -> void:
 	await _ticks(30)
 	if _only("shell"):
 		await _check_shell()
-	if _only("fake"):
-		await _on_rungs(_check_fake)
+	if _only("interior"):
+		await _check_interior()
 	if _only("handover"):
 		await _check_handover()
 	if _only("crush"):
@@ -113,11 +113,11 @@ func _run() -> void:
 	if _only("farcut"):
 		await _check_farcut()
 	if _only("crushdrawn"):
-		await _on_rungs(_check_crushdrawn)
+		await _check_crushdrawn()
 	if _only("shellhit"):
 		await _check_shellhit()
 	if _only("farrules"):
-		await _on_rungs(_check_far_rules)
+		await _check_far_rules()
 	if _only("storeys"):
 		await _check_storeys()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -144,17 +144,6 @@ func _soldier_at(p: Vector3, hp := 500.0) -> Soldier:
 		so.pawn.health.layer_configs[0].max_value = hp
 		so.pawn.health.reset()
 	return so
-
-
-## Run a section that is about the drawn, fake and real rungs with them on,
-## and put the storey groups -- the default since 2026-10-07 -- back after it.
-## What the groups do in the same cases is `-- --groups` and
-## tools/interior_group_probe.gd; these sections go with the rungs
-## (Docs/Interiors.md 8.7, stage 4). Every other section runs as the game does.
-func _on_rungs(section: Callable) -> void:
-	city._set_group_interiors(false)
-	await section.call()
-	city._set_group_interiors(true)
 
 
 func _check_crush() -> void:
@@ -261,54 +250,36 @@ func _check_shell() -> void:
 
 # --- (2) ------------------------------------------------------------------------
 
-## Outer rooms of `id` with a fake drawing, and how many of their drawn items
-## stand on nothing.
-func _fake_state(id: int) -> Dictionary:
-	var b = city.registry.get_building(id)
-	var rooms := 0
-	var stale := 0
-	var floating := 0
-	for room in city.registry.rooms_of(id):
-		if not room.outer or room.fake_buffer.is_empty():
-			continue
-		rooms += 1
-		if room.fake_stamp != b.structure_version:
-			stale += 1
-		for i in room.items.size():
-			if room.gone.has(i):
-				continue
-			var item: Dictionary = room.items[i]
-			if b.is_materialised() and not RoomManifest.item_supported(city.world, b.chunk,
-					str(item.type), item.cell as Vector3i):
-				floating += 1
-	return {"rooms": rooms, "stale": stale, "floating": floating}
+
+## How many of building `id`'s storey groups are on screen.
+func _groups_shown(id: int) -> int:
+	var n := 0
+	for g in city.interior_groups.known(id):
+		if g.shown:
+			n += 1
+	return n
 
 
-func _check_fake() -> void:
-	print("fake: a room's fake follows the building's structure")
+func _check_interior() -> void:
+	print("interior: a building's interior drawing follows its structure")
 	var id := _tower(4)
+	var b = city.registry.get_building(id)
 	var box := _box(id)
 	var c := box.get_center()
 	var cam: Camera3D = city.camera
 	var near_at := Vector3(c.x - box.size.x * 0.5 - 50.0, 12.0, c.z)
-	# Near enough to fake, too far to draw; its bricks, as a hit would bring them.
+	# Near enough for its interior to be drawn; its bricks, as a hit would bring them.
 	cam.global_position = near_at
 	city._promote(id)
-	var n := 0
-	var st := {}
-	while n < 30 * 10:
-		await physics_frame
-		n += 1
-		st = _fake_state(id)
-		if int(st.rooms) > 0 and int(st.stale) == 0:
-			break
-	_ok("its outer rooms are faked", int(st.rooms) > 0, "%s" % [st])
+	await _ticks(20)
+	await city._groups_settle(b)
+	_ok("its storeys are drawn", _groups_shown(id) > 0, "%d group(s)" % _groups_shown(id))
 
-	# Away, out of fake range; then a floor goes, with nobody there.
+	# Away, out of range; then a floor goes, with nobody there.
 	cam.global_position = near_at + Vector3(-400.0, 0.0, 0.0)
 	await _ticks(20)
-	_ok("far off, its fake is dropped", not city._fake_rooms.has(id))
-	var b = city.registry.get_building(id)
+	_ok("far off, its drawing is let go", city.interior_groups.known(id).is_empty(),
+			"%d group(s) kept" % city.interior_groups.known(id).size())
 	var v0: int = b.structure_version
 	var slab_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
 	var x := box.position.x + 0.8
@@ -330,15 +301,14 @@ func _check_fake() -> void:
 	cam.global_position = near_at
 	if not b.toppled:
 		city._promote(id)
-	n = 0
-	while n < 30 * 10:
-		await physics_frame
-		n += 1
-		st = _fake_state(id)
-		if int(st.stale) == 0 and n > 30:
-			break
-	_ok("back in range, every faked room is redrawn", int(st.stale) == 0, "%s" % [st])
-	_ok("and no faked item stands on air", int(st.floating) == 0, "%s" % [st])
+	await _ticks(20)
+	var took: int = await city._groups_settle(b)
+	var standing: bool = b.is_materialised() and not b.toppled
+	var hanging: int = city._groups_hanging(b, -1.0e9) if standing else 0
+	_ok("back in range, its storeys are drawn again",
+			not standing or (_groups_shown(id) > 0 and took < 600),
+			"standing %s; %d group(s) after %d tick(s)" % [standing, _groups_shown(id), took])
+	_ok("and nothing in them stands on air", hanging == 0, "%d piece(s) on nothing" % hanging)
 
 
 # --- (3) ------------------------------------------------------------------------
@@ -587,28 +557,36 @@ func _check_shellhit() -> void:
 			"hit at %.1f m; cut at %.1f, the roof was %.1f" % [at, cut_y, top])
 
 
-## Docs/CollapseNext.md 1.2: a piece that lands in a drawn room takes the
-## drawn furniture it lands on with it, rather than standing in it.
+## Docs/CollapseNext.md 1.2: a piece that lands on drawn furniture takes what
+## it lands on with it, rather than standing in it.
 func _check_crushdrawn() -> void:
-	print("crushdrawn: a piece landing in a drawn room crushes what it lands on")
+	print("crushdrawn: a piece landing on drawn furniture crushes what it lands on")
 	var id := _tower(3)
 	var b = city.registry.get_building(id)
 	var box := _box(id)
 	city._promote(id)
 	city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
 	city.camera.look_at(box.get_center())
-	await _ticks(30 * 4)
-	# A drawn room with something drawn in it, and the drawn item in it.
+	await _ticks(20)
+	await city._groups_settle(b)
+	# A room with a piece drawn in it, and that piece's box.
+	var rooms: Array = city.registry.rooms_of(id)
 	var room: Room = null
+	var group_index := -1
 	var item := AABB()
-	for r in city.registry.drawn_rooms_of(id):
-		var rs: Vector3 = (r as Room).local_box().size
-		if not (r as Room).drawn_boxes.is_empty() and rs.x >= 2.4 and rs.z >= 2.4:
-			room = r
-			item = (r as Room).drawn_boxes[0]
-			break
-	_ok("there is a drawn room with furniture", room != null,
-			"%d drawn room(s)" % b.drawn_rooms.size())
+	for g in city.interior_groups.known(id):
+		if not g.shown or room != null:
+			continue
+		for k in g.boxes.size():
+			var r: Room = rooms[g.first_room + k]
+			var rs: Vector3 = r.local_box().size
+			if not (g.boxes[k] as Array).is_empty() and rs.x >= 2.4 and rs.z >= 2.4:
+				room = r
+				group_index = g.index
+				item = g.boxes[k][0]
+				break
+	_ok("there is a room with furniture drawn in it", room != null,
+			"%d group(s) drawn" % _groups_shown(id))
 	if room == null:
 		return
 	var xf: Transform3D = city.world.get_chunk_transform(b.chunk)
@@ -630,19 +608,25 @@ func _check_crushdrawn() -> void:
 		if piece != null and piece.is_valid() and piece.settled:
 			break
 	await _ticks(2)
+	await city._groups_settle(b)
 	print("  --   piece %s, room %.1f m tall, item top %.2f, piece bottom %.2f" % [
 		piece != null, room.local_box().size.y, (xf * item.end).y, rb.position.y + 0.3])
 	if piece != null and piece.is_valid():
 		print("  --   settled %s, box %s, item at %s, room box %s" % [piece.settled,
 				city.islands.world_aabb(piece), at, room.world_box(b.xform)])
 	var still := false
-	for bx in room.drawn_boxes:
-		if (bx as AABB).grow(0.05).has_point(item.get_center()):
-			still = true
+	var shown := false
+	for g in city.interior_groups.known(id):
+		if g.index != group_index:
+			continue
+		shown = g.shown and not g.dirty
+		for bx in g.boxes[room.id - g.first_room]:
+			if (bx as AABB).grow(0.05).has_point(item.get_center()):
+				still = true
 	_ok("the item it landed on is crushed", room.gone.size() > gone0 and not still,
 			"gone %d -> %d, still drawn %s, crushed rooms %d" % [gone0, room.gone.size(), still,
 			city.crushed_by_wreckage - crushed0])
-	_ok("and the room is still drawn", room.drawn)
+	_ok("and the rest of its storeys are still drawn", shown)
 
 
 func _check_farcut() -> void:
@@ -969,7 +953,7 @@ func _moving_pieces(id: int) -> int:
 
 ## A far collapse is still physics, and cheap by rule (user, 2026-10-06):
 ## a piece under ten bricks is deleted where it breaks off, on every machine;
-## and no interior is made in a building that is coming apart, or in wreckage
+## and no interior is made in a building that is coming apart, or on wreckage
 ## that has not come to rest.
 func _check_far_rules() -> void:
 	print("far rules: small pieces go, and no interior is made in what is still falling")
@@ -1019,19 +1003,19 @@ func _check_far_rules() -> void:
 			and (en.flags & DamageLog.FLAG_GONE) == 0)
 	await _ticks(30 * 4)
 
-	# (b) A building coming apart gets no rooms until it is still -- with the
-	# rule, and (the same case) without it.
+	# (b) A building coming apart gets no interior until it is still -- with
+	# the rule, and (the same case) without it.
 	for with_rule in [true, false]:
 		city.hold_interiors_mid_collapse = with_rule
 		var id := _tower(6)
 		var b = city.registry.get_building(id)
 		var box := _box(id)
-		# Out of every room range while it is cut.
+		# Out of interior range while it is cut.
 		city.camera.global_position = box.get_center() + Vector3(-150.0, 30.0, 0.0)
 		city.camera.look_at(box.get_center())
 		city._promote(id)
 		await _ticks(30)
-		var drawn0: int = b.drawn_rooms.size()
+		var shown0 := _groups_shown(id)
 		_undercut(id)
 		# The blasts land eight a tick; then pieces are in the air.
 		var t := 0
@@ -1043,73 +1027,76 @@ func _check_far_rules() -> void:
 				box.position.z - 12.0)
 		city.camera.look_at(box.get_center())
 		var falling := _moving_pieces(id)
-		var drawn_falling := 0
-		var faked_falling := false
+		var shown_falling := 0
 		t = 0
 		while t < 30 * 25 and _moving_pieces(id) > 0:
 			await physics_frame
 			t += 1
-			drawn_falling = maxi(drawn_falling, b.drawn_rooms.size() - drawn0)
-			if city._fake_rooms.has(id):
-				faked_falling = true
+			shown_falling = maxi(shown_falling, _groups_shown(id) - shown0)
 		var fell_ticks := t
-		# Then still: rooms come, in what is left standing.
+		# Then still: its interior comes, in what is left standing.
 		await _ticks(30 * 5)
-		var after: int = b.drawn_rooms.size() - drawn0
+		var after: int = _groups_shown(id) - shown0
 		var standing: bool = b.is_materialised() and not b.toppled
 		if with_rule:
-			_ok("somebody arriving while a building falls: no room drawn or faked in it",
-					falling > 0 and drawn_falling == 0 and not faked_falling,
-					"%d piece(s) falling for %d tick(s); %d room(s) drawn, faked %s" % [
-					falling, fell_ticks, drawn_falling, faked_falling])
-			_ok("and once it is still, what is left standing gets its rooms",
-					not standing or after > 0, "standing %s, %d room(s) drawn" % [standing, after])
+			_ok("somebody arriving while a building falls: no interior is drawn in it",
+					falling > 0 and shown0 == 0 and shown_falling == 0,
+					"%d piece(s) falling for %d tick(s); %d storey group(s) drawn meanwhile" % [
+					falling, fell_ticks, shown_falling])
+			_ok("and once it is still, what is left standing gets its interior",
+					not standing or after > 0,
+					"standing %s, %d storey group(s) drawn" % [standing, after])
 		else:
-			_ok("(without the rule the same case draws rooms in it while it falls)",
-					falling > 0 and (drawn_falling > 0 or faked_falling),
-					"%d piece(s) falling for %d tick(s); %d room(s) drawn, faked %s" % [
-					falling, fell_ticks, drawn_falling, faked_falling])
+			_ok("(without the rule the same case draws its interior while it falls)",
+					falling > 0 and shown_falling > 0,
+					"%d piece(s) falling for %d tick(s); %d storey group(s) drawn meanwhile" % [
+					falling, fell_ticks, shown_falling])
 	city.hold_interiors_mid_collapse = true
 	print("  --   interior passes put off: %d" % city.interior_waits)
 
-	# (c) A fallen building's rooms are not spilled into wreckage still moving.
-	city.spill_interiors = true
-	for with_rule in [true, false]:
-		city.hold_interiors_mid_collapse = with_rule
-		var tid := _tower(4)
-		var tbox := _box(tid)
-		city.camera.global_position = Vector3(tbox.get_center().x, tbox.position.y + 3.0,
-				tbox.position.z - 14.0)
-		city.camera.look_at(tbox.get_center())
-		city._promote(tid)
-		await _ticks(30)
-		var spilled0: int = city._spilled_rooms
-		city._topple(tid)
-		var spilled_moving := 0
-		var moved := 0
-		var t3 := 0
-		while t3 < 30 * 20:
-			await physics_frame
-			t3 += 1
-			var wreck: int = int(city._wrecks.get(tid, -1))
-			var wi = city.islands.find_by_chunk(wreck) if wreck >= 0 else null
-			if wi != null and not wi.settled:
-				moved += 1
-				spilled_moving = maxi(spilled_moving, city._spilled_rooms - spilled0)
-			elif t3 > 60:
-				break
-		var owed: int = city.registry.spilled_rooms(tid).size()
-		if with_rule:
-			_ok("a toppled building's rooms are not spilled into it while it moves",
-					moved > 0 and spilled_moving == 0,
-					"it moved for %d tick(s); %d spilled meanwhile; %d room(s) still owed" % [
-					moved, spilled_moving, owed])
+	# (c) Nothing new is drawn on wreckage that is still moving; once it is
+	# still, with somebody near, what stood on its floors is drawn on it
+	# (CityScene._stream_pieces). Not a rule that can be switched off: there
+	# is one arm.
+	var tid := _tower(4)
+	var tbox := _box(tid)
+	city.camera.global_position = Vector3(tbox.get_center().x, tbox.position.y + 3.0,
+			tbox.position.z - 14.0)
+	city.camera.look_at(tbox.get_center())
+	city._promote(tid)
+	await _ticks(30)
+	city._topple(tid)
+	var had := {}
+	var early := 0
+	var moved := 0
+	var quiet := 0
+	var t3 := 0
+	while t3 < 30 * 30 and quiet < 90:
+		await physics_frame
+		t3 += 1
+		var moving := 0
+		for isl in isl_m.islands:
+			if not isl.is_valid() or isl.owner != tid:
+				continue
+			if not isl.settled and not isl.disposable:
+				moving += 1
+			var have: bool = city.interior_groups.piece(isl.chunk) != null
+			# New this tick, on a piece that is plainly on its way down.
+			if have and not had.has(isl.chunk) and not isl.settled \
+					and isl.body.linear_velocity.length() > 1.0:
+				early += 1
+			if have:
+				had[isl.chunk] = true
+		if moving > 0:
+			moved += 1
+			quiet = 0
 		else:
-			_ok("(without the rule the same case spills into it as it falls)",
-					moved > 0 and spilled_moving > 0,
-					"it moved for %d tick(s); %d spilled meanwhile" % [moved, spilled_moving])
-	city.hold_interiors_mid_collapse = true
-	city.spill_interiors = false
+			quiet += 1
+	_ok("a toppled building's interior is not drawn on its wreckage while that moves",
+			moved > 0 and early == 0,
+			"it moved for %d tick(s); %d piece(s) given a drawing while falling" % [moved, early])
+	_ok("and once it is still, the wreckage near the player has what stood on its floors",
+			not had.is_empty(), "%d piece(s) with a drawing" % had.size())
 
 
 # --- (8) ------------------------------------------------------------------------

@@ -11,7 +11,7 @@ extends SceneTree
 ## (Docs/BuildMode.md section 2.1). The workshop writes the same file with F5;
 ## this is the same recipe without the mouse.
 
-const OUT := "user://workshop_build.json"
+const OUT := BuildRecipe.QUICK_SAVE
 
 
 func _init() -> void:

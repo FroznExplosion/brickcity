@@ -6,7 +6,8 @@ class_name FurnitureMesh
 ## A chunk's face bake is whole-chunk: one room opening in a 50,000-brick tower
 ## invalidated the lot, and on the `--big` shapes that cost **225 ms a room**,
 ## 56% of it re-baking faces that had not moved and another 35% re-uploading a
-## vertex buffer that had barely changed. Measured three ways in `--interiors`,
+## vertex buffer that had barely changed. Measured three ways (a pass since
+## removed with what it measured),
 ## and the per-unit cost came out roughly the same whether the unit was a room,
 ## a storey or a whole building -- because the cost was never proportional to
 ## what changed. Picking a bigger unit only paid the same bill fewer times.
@@ -14,7 +15,7 @@ class_name FurnitureMesh
 ## So interiors came out of the bake entirely (`Block::decorative`,
 ## `place_block(..., decorative = true)`) and are drawn from here instead.
 ##
-## **Every item part is a box.** `_add_room_shapes` has always relied on that --
+## **Every item part is a box.** `_add_item_shapes` has always relied on that --
 ## it builds one collision box per block from `get_block_ticks` -- so the same
 ## description draws them: one `MultiMesh` per chunk, one instance per live
 ## decorative block, scaled and coloured per instance. Rebuilding it is a walk
@@ -139,85 +140,11 @@ static func attach(world: BrickWorld, chunk: int, parent: Node3D,
 const STRIDE := 16
 
 
-## Draw a building's DRAWN rooms -- the ones with no blocks at all -- under
-## `parent`. [Scale §4.1](../Docs/Scale.md) rung 2.
-##
-## The other half of this file draws from blocks. This draws from the
-## manifest: each room worked out its buffer once when it was drawn
-## (`RoomManifest.draw_items`), so a redraw is a concatenation, not a walk over
-## anything. `key` is the caller's key into `held` -- a building id, since a
-## drawn room belongs to a standing building and never to an island.
-static func attach_drawn(rooms: Array, parent: Node3D, held: Dictionary, key: int) -> int:
-	var buffers: Array[PackedFloat32Array] = []
-	for room in rooms:
-		buffers.append((room as Room).drawn_buffer)
-	return _attach_buffers(buffers, parent, held, key, material())
-
-
-## The same for FAKED rooms: seen through a window from further off, drawn
-## unlit, with no collision anywhere. See shaders/fake_interior.gdshader.
-static func attach_fake(rooms: Array, parent: Node3D, held: Dictionary, key: int) -> int:
-	var buffers: Array[PackedFloat32Array] = []
-	for room in rooms:
-		buffers.append((room as Room).fake_buffer)
-	var n := _attach_buffers(buffers, parent, held, key, fake_material())
-	# No shadows: the fake rung is only ever seen through a window, and a
-	# shadow pass over furniture nobody can reach is the cost it exists to cut.
-	var node := _held(held, key)
-	if node != null:
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return n
-
-
 ## And for a storey group's drawing (InteriorGroups): one buffer per room, the
 ## caller's own key and material.
 static func attach_group(buffers: Array[PackedFloat32Array], parent: Node3D,
 		held: Dictionary, key: int, mat: Material) -> int:
 	return _attach_buffers(buffers, parent, held, key, mat)
-
-
-static var _fake_material: ShaderMaterial
-
-
-static func fake_material() -> ShaderMaterial:
-	if _fake_material == null:
-		_fake_material = ShaderMaterial.new()
-		_fake_material.shader = load("res://shaders/fake_interior.gdshader")
-	return _fake_material
-
-
-## Stop drawing, at once, every item of `held[key]` standing inside one of
-## `boxes` (the node's own space). For a section leaving a building: the rooms
-## it took are worked out again a few a pass, and the drawing is only rebuilt
-## once they all are -- up to 18 ticks on a big tower, every item in the
-## section hanging in the air where it had been while the section fell.
-## Zero scale, not a shorter buffer: nothing else in the drawing moves.
-## Returns how many it hid.
-static func hide_inside(held: Dictionary, key: int, boxes: Array[AABB]) -> int:
-	var node := _held(held, key)
-	if node == null or not is_instance_valid(node) or node.multimesh == null:
-		return 0
-	# Kept on the node by _attach_buffers: reading a MultiMesh's buffer back
-	# is a read from the GPU.
-	var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
-	@warning_ignore("integer_division")
-	var count: int = buffer.size() / STRIDE
-	if count != node.multimesh.instance_count:
-		return 0  # not the drawing this buffer was kept for
-	var hidden := 0
-	for i in count:
-		var at := i * STRIDE
-		var p := Vector3(buffer[at + 3], buffer[at + 7], buffer[at + 11])
-		for box in boxes:
-			if box.has_point(p):
-				for k in [0, 1, 2, 4, 5, 6, 8, 9, 10]:
-					buffer[at + k] = 0.0
-				hidden += 1
-				break
-	if hidden > 0:
-		node.multimesh.buffer = buffer
-		node.set_meta(&"buffer", buffer)
-	return hidden
 
 
 ## One MultiMesh from a list of buffers of STRIDE floats an instance, made,

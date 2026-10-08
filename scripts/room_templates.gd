@@ -31,9 +31,6 @@ extends RefCounted
 ## stood it in to see it -- and are left out. The room's own walls are the
 ## generator's.
 
-const ROOM_DIRS := ["res://rooms/", "user://rooms/"]
-const ITEM_DIRS := ["res://items/", "user://items/"]
-
 static var _loaded := false
 ## type -> parts
 static var _parts := {}
@@ -57,28 +54,12 @@ static func _ensure() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	for dir in ITEM_DIRS:
-		for path in _files(dir):
-			add_item(path.get_file().get_basename(), BuildRecipe.load_from(path))
-	for dir in ROOM_DIRS:
-		for path in _files(dir):
-			add_room(path.get_file().get_basename(), BuildRecipe.load_from(path))
-
-
-static func _files(dir: String) -> PackedStringArray:
-	var out := PackedStringArray()
-	if not DirAccess.dir_exists_absolute(dir):
-		return out
-	var files := DirAccess.get_files_at(dir)
-	files.sort()
-	for f in files:
-		if f.ends_with(".json"):
-			out.append(dir + f)
-	var subs := DirAccess.get_directories_at(dir)
-	subs.sort()
-	for s in subs:
-		out.append_array(_files(dir + s + "/"))
-	return out
+	# The item and room libraries (BuildRecipe.LIBRARY_DIRS): the game's own,
+	# then the player's.
+	for path in BuildRecipe.library("item"):
+		add_item(path.get_file().get_basename(), BuildRecipe.load_from(path))
+	for path in BuildRecipe.library("room"):
+		add_room(path.get_file().get_basename(), BuildRecipe.load_from(path))
 
 
 ## Register an Item build under `item:<id>`. Every brick is the item, whatever

@@ -11,6 +11,11 @@ var hit_position: Vector3 = Vector3.ZERO
 var hit_normal: Vector3 = Vector3.ZERO
 var crit: bool = false
 
+## Whose weapon this is, for what shrugs off small arms (a mech: Docs/AIRoster.md
+## 4.6): &"person", &"explosive", &"anti_mech" or &"mech". Unsaid (&""), it is
+## worked out from the gun that fired it (MechLayers.scale_of).
+var scale: StringName = &""
+
 ## Multiplies base_status_chance for this specific shot (from the weapon).
 var element_chance: float = 1.0
 

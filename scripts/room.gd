@@ -10,14 +10,16 @@ extends RefCounted
 ## parametric-until-touched trick the buildings themselves use, one level down.
 ##
 ##   TRUTH           the room and its seed. Bytes, and generated at that.
-##   MATERIALISED    the items, as bricks in the building's own chunk.
-##   PRESENTATION    the building's mesh and body, which already draw them.
+##   PRESENTATION    a drawing, a few storeys of rooms at a time, of whatever
+##                   still has a floor under it (`InteriorGroups`).
+##   MATERIALISED    an item something has hit, as bricks in the building's
+##                   own chunk (`laid`) -- that item and no other.
 ##
-## Items are **bricks in the host's grid**, for the reason a staircase is
+## Items are measured in **the host's grid**, for the reason a staircase is
 ## (`Fixture`): a chair standing on a floor that breaks away has to go with it,
 ## and anything with a body of its own does not. It also answers Interiors §7
-## question 3 -- a chair is a small cluster of blocks, so it is destructible,
-## printable and spillable by the paths that already exist.
+## question 3 -- a chair is a small cluster of blocks, so once it is hit it is
+## destructible and printable by the paths that already exist.
 
 ## What the room is for. Drives the manifest, so what you find in a room is
 ## consistent with what the room is.
@@ -55,44 +57,9 @@ var posts: Array[Rect2i] = []
 ## would silently hit the property instead.
 var room_seed := 0
 
-## Materialised state. `items` is the manifest once it has been run; `blocks`
-## holds what each item actually laid, so deactivating can take it back out.
-var active := false
+## The manifest once it has been run (`RoomManifest.items_for`): a dictionary
+## an item -- type, cell, yaw, and `blocks` for one laid as bricks (`laid`).
 var items: Array = []
-## DRAWN: the manifest on screen and one collision box per item, with not a
-## single block laid. [Scale §4.1](../Docs/Scale.md) rung 2 -- furniture nobody
-## has touched, which is nearly all of it. Mutually exclusive with `active`: a
-## room is shut, drawn or real, and promotion from drawn to real is what
-## touching it does.
-var drawn := false
-## What drawing it takes, worked out once when it is drawn: a MultiMesh buffer
-## row per item part (`FurnitureMesh.STRIDE` floats each), and one box per
-## item in the chunk's own metres. Both empty while the room is not drawn.
-var drawn_buffer := PackedFloat32Array()
-var drawn_boxes: Array[AABB] = []
-## Against an exterior wall, so it has windows and can be seen into from
-## outside. Only these are ever FAKED: a room in the middle of a floor is behind
-## walls from every direction and drawing it costs something for nobody.
-var outer := false
-## The FAKE rung: the same drawing as `drawn_buffer`, shown far off with no
-## collision and no lighting. Kept rather than rebuilt, because the fake set of a
-## building changes every time the player walks a room into or out of reach, and
-## redrawing from a cache is a concatenation. `fake_gone` is `gone.size()` when
-## it was worked out -- the diff only grows, so a changed count means stale.
-var fake_buffer := PackedFloat32Array()
-var fake_gone := -1
-## The building's structure_version when the fake was drawn. The gone count
-## alone missed a floor that fell out from under a room: items are only written
-## off (their floor gone) BY a redraw, so the count never moved, the cache was
-## kept, and the room's furniture was drawn standing on air -- through the
-## building being given back and rebuilt, too.
-var fake_stamp := -1
-## Real because a blast reached it, not because somebody walked in. Such a room
-## holds half-broken furniture, and a drawing can only show an item whole or
-## not at all -- so it stays real until the old sleep range rather than
-## demoting to drawn the moment the player steps back. Cleared when it closes,
-## which is when its diff is written.
-var hit := false
 ## Item index -> true, for the ones that are not coming back: destroyed, taken,
 ## or never placed because something was in the way. Interiors §2's diff, and
 ## the only thing about a room that has to be written down.
@@ -103,7 +70,7 @@ var gone := {}
 ## (../Docs/Interiors.md); BuildingRegistry.lay_item). From then on such an
 ## item is ordinary brick destruction, drawn from its blocks, and no drawing
 ## of the room shows it. Its blocks are in `items[i].blocks`. The rest of the
-## room stays as it was -- the storey groups never lay a room whole.
+## room stays a drawing: no room is ever laid whole.
 var laid := {}
 
 ## Holes in this room's walls, in the building's local space. Interiors §3: the
@@ -112,11 +79,6 @@ var laid := {}
 ## made by somebody shooting at it, which means an undamaged building has none
 ## and the portal test costs nothing until it does.
 var openings: Array[AABB] = []
-## The building came down while this room held nothing -- so its contents were
-## never built, and what happens to them is Interiors §4.1's question. A
-## spilled room resolves into the wreckage when somebody arrives, rather than
-## having been simulated while nobody was watching (§5.2).
-var spilled := false
 
 ## How damaged the building was when the openings were last looked for. Walls
 ## only change when something hits them.
@@ -137,29 +99,7 @@ func item_count() -> int:
 	return items.size()
 
 
-## Stop drawing it. The manifest and the diff stay; only the drawing goes.
-func clear_drawing() -> void:
-	drawn = false
-	drawn_buffer = PackedFloat32Array()
-	drawn_boxes = []
-
-
 ## The room's box in the building's local space, in metres.
-## How far a point in the BUILDING's own space is from this room, in metres.
-##
-## The same answer as measuring against `world_box`, and it allocates nothing
-## and transforms nothing. That matters because it is the inner loop of room
-## streaming: standing inside one of the big shapes, a pass measures a thousand
-## rooms, and building a world AABB for each -- eight matrix multiplies and an
-## allocation -- was 12 ms of a 15 ms pass.
-func local_distance(p: Vector3) -> float:
-	var c := BrickWorld.get_cell_size()
-	var dx := maxf(maxf(lo.x * c.x - p.x, p.x - (lo.x + size.x) * c.x), 0.0)
-	var dy := maxf(maxf(lo.y * c.y - p.y, p.y - (lo.y + size.y) * c.y), 0.0)
-	var dz := maxf(maxf(lo.z * c.z - p.z, p.z - (lo.z + size.z) * c.z), 0.0)
-	return sqrt(dx * dx + dy * dy + dz * dz)
-
-
 func local_box() -> AABB:
 	var c := BrickWorld.get_cell_size()
 	return AABB(Vector3(lo.x * c.x, lo.y * c.y, lo.z * c.z),
