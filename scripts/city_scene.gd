@@ -1167,7 +1167,8 @@ func _ready() -> void:
 		var path: String = root.get_meta(CHECKPOINT_META)
 		root.remove_meta(CHECKPOINT_META)
 		_restore_checkpoint(path)
-	if _build_path != "":
+	# Not after a load: the save carries every placed build, `--build`'s too.
+	if _build_path != "" and not _checkpoint_restored:
 		_place_build(_build_path)
 	# P picks up a saved workshop build and places it like a brick
 	# (scripts/city_placer.gd); what it places goes through the same
@@ -1177,10 +1178,12 @@ func _ready() -> void:
 	add_child(_placer)
 	_placer.setup(registry, camera)
 	_placer.on_placed = func(id: int) -> void:
-		if _terrain_mode and _placer.on_ground:
+		var grounded: bool = _terrain_mode and _placer.on_ground
+		if grounded:
 			_ground_building(id)
 		_index_building(id)
 		_make_shell(id)
+		_note_placed(id, grounded)
 	if _terrain_mode:
 		# The ground a build is aimed at is the terrain's own collider, so
 		# the ghost stands where the ground is drawn.
@@ -8231,12 +8234,16 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		var killed: PackedInt32Array = world.chip_hit(chunk, point, radius, chip_hp) 				if chip_hp > 0 else world.apply_hit(chunk, point, radius)
 		t_part = _part("dmg_hit", t_part)
 		# Committed as soon as it is applied, so the log's order is the order
-		# the world changed in. A chip always: the hp it took is state even
-		# when no brick died.
+		# the world changed in. ALWAYS, whether or not a brick died: the hp a
+		# hit took is state. A blast used to be logged only when it killed,
+		# which is every blast on PLA and not on anything tougher -- a stone
+		# cottage takes the first one as wear and loses bricks to the second,
+		# so a load, a replay or a client that was told only about the second
+		# had 76 bricks standing where the host had 69 (the --checkpoint gate).
 		if chip_hp > 0:
 			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.CHIP,
 					b.id, point, radius, Vector3.ZERO, chip_hp)
-		elif not killed.is_empty():
+		else:
 			authority.commit(Engine.get_physics_frames(), DamageLog.Kind.BLAST,
 					b.id, point, radius)
 		# Every other frame of a multi-frame build takes the same hit: a blast
@@ -8244,9 +8251,8 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		if b.frames.size() > 1:
 			for fi in range(1, b.frames.size()):
 				var hit_frame: PackedInt32Array = 						world.chip_hit(b.frames[fi], point, radius, chip_hp) if chip_hp > 0 						else world.apply_hit(b.frames[fi], point, radius)
-				if hit_frame.is_empty() and chip_hp <= 0:
-					continue
-				# Each frame is its own grid, so each hit is its own command.
+				# Each frame is its own grid, so each hit is its own command
+				# -- logged whether or not it killed, as above.
 				var fe := DamageLog.Entry.new()
 				fe.tick = Engine.get_physics_frames()
 				fe.kind = DamageLog.Kind.CHIP if chip_hp > 0 else DamageLog.Kind.BLAST
@@ -10756,7 +10762,7 @@ const CHECKPOINT_GATE_META := &"city_checkpoint_gate"
 ## is moving, what is asleep, what is queued -- to CHECKPOINT_PATH.
 func save_checkpoint() -> bool:
 	var scene := {"damage": _damage_queue.duplicate(true), "dirty": Array(_dirty),
-			"camera": camera.global_transform}
+			"camera": camera.global_transform, "placed": _placed.duplicate(true)}
 	var bytes := AreaSnapshot.capture(authority.commands, islands, scene).to_bytes()
 	var f := FileAccess.open(CHECKPOINT_PATH, FileAccess.WRITE)
 	if f == null:
@@ -10768,6 +10774,45 @@ func save_checkpoint() -> bool:
 		authority.commands.size(), islands.islands.size(), islands.dormant.size(),
 		int(bytes.size() / 1024.0)])
 	return true
+
+
+## Every build put into the city after the city was built -- `--build`, or P --
+## in the order it was registered: {id, recipe (BuildRecipe.to_dict), xform,
+## grounded}. A checkpoint carries them. The scene a load rebuilds is the city's
+## own buildings and nothing else, so without this a placed build was gone after
+## F9, and every command in the log that named it went nowhere.
+var _placed: Array[Dictionary] = []
+## This scene was built from a checkpoint.
+var _checkpoint_restored := false
+
+
+func _note_placed(id: int, grounded: bool) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.is_build():
+		return
+	_placed.append({"id": id, "recipe": b.build.to_dict(), "xform": b.xform,
+			"grounded": grounded})
+
+
+## A placed build from a checkpoint, put back as it was placed: registered (so
+## it has the id the log knows it by), its pad cut again if it stood on the
+## ground, indexed and shelled.
+func _replace_build(d: Dictionary) -> void:
+	var recipe := BuildRecipe.from_dict(d.get("recipe", {}))
+	if recipe.is_empty():
+		return
+	var id := registry.register_build(recipe, d.get("xform", Transform3D()))
+	if id < 0:
+		return
+	if id != int(d.get("id", -1)):
+		push_warning("[city] checkpoint: a placed build came back as building %d, was %d -- the city under it is not the one that was saved"
+				% [id, int(d.get("id", -1))])
+	var grounded: bool = bool(d.get("grounded", false)) and _terrain_mode
+	if grounded:
+		_ground_building(id)
+	_index_building(id)
+	_make_shell(id)
+	_note_placed(id, grounded)
 
 
 ## Throw the area away and build it again from CHECKPOINT_PATH. The scene is
@@ -10787,6 +10832,11 @@ func _restore_checkpoint(path: String) -> Dictionary:
 	if snap == null:
 		push_error("[city] checkpoint: %s does not read back" % path)
 		return {}
+	_checkpoint_restored = true
+	# The builds placed after the city was built, first and in order: the log
+	# names a building by its id, and theirs come after the city's own.
+	for d in snap.scene.get("placed", []):
+		_replace_build(d)
 	# A building that comes down whole in the log is its bricks and nothing else:
 	# no body, no mesh, no bake -- the piece it becomes is given those.
 	var toppling := {}
@@ -10838,7 +10888,8 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		_mark_dirty(int(id))
 	if scene.has("camera"):
 		camera.global_transform = scene.camera
-	print("[city] checkpoint loaded in %d ms: %s" % [Time.get_ticks_msec() - t0, report])
+	print("[city] checkpoint loaded in %d ms, %d placed build(s): %s" % [
+		Time.get_ticks_msec() - t0, _placed.size(), report])
 	return report
 
 
@@ -10859,6 +10910,20 @@ func _run_checkpoint_pass() -> void:
 	await _frames(4)
 	var probe = registry.buildings[0]
 	_blast(probe.xform.origin + Vector3(probe.recipe.footprint_x * 0.5 * STUD, 0.8, 0.3), 1.4)
+	# A build placed after the city was built, and hit: the save has to carry
+	# it, or the load has no building for those commands to land on.
+	var placed_id := -1
+	if _placed.is_empty():
+		_place_build("res://builds/cottage.json")
+	if not _placed.is_empty():
+		placed_id = int(_placed[0]["id"])
+		var pbox: AABB = CityPlacer.box_of(registry.get_building(placed_id))
+		# Twice, a few ticks apart: the hit that turns a placed build into
+		# bricks destroys none of them (measured 2026-10-08: 76 of 76 alive
+		# after the first, 3 after the second -- not this gate's to fix).
+		for shot in 2:
+			_blast(pbox.position + Vector3(0.2, 1.0, pbox.size.z * 0.5), 1.0)
+			await _frames(8)
 	for b in registry.buildings:
 		if b.recipe.courses < 44:
 			continue
@@ -10902,6 +10967,8 @@ func _run_checkpoint_pass() -> void:
 		if dm.piece_id >= 0:
 			want.dormant += 1
 	want["commands"] = authority.commands.size()
+	want["placed"] = placed_id
+	want["placed_hit"] = want.buildings.has(placed_id)
 	print("[city] checkpoint: saving %d command(s), %d damaged building(s), %d piece(s) (%d moving, %d at rest), %d asleep" % [
 		want.commands, want.buildings.size(), want.pieces.size(), want.moving, want.settled, want.dormant])
 	if not save_checkpoint():
@@ -10924,6 +10991,12 @@ func _check_checkpoint(want: Dictionary) -> void:
 	_gate_ok("every damaged building, brick for brick",
 			same_b == want.buildings.size() and same_b > 0,
 			"%d of %d" % [same_b, want.buildings.size()])
+	var pb := registry.get_building(int(want.get("placed", -1)))
+	_gate_ok("a build placed before the save is there after the load, hit as it was",
+			bool(want.get("placed_hit", false)) and pb != null and pb.is_build()
+			and pb.is_materialised() and _placed.size() == 1,
+			"building %d, hit before the save: %s, %d placed now" % [
+			int(want.get("placed", -1)), want.get("placed_hit", false), _placed.size()])
 	var got := {}
 	for isl in islands.islands:
 		if isl.is_valid() and isl.piece_id >= 0:
@@ -10985,8 +11058,14 @@ func _check_log_replays() -> void:
 	var skipped := 0
 	for id in touched:
 		var b := registry.get_building(int(id))
-		if b == null or b.is_build():
+		# A placed build of one frame has a twin too (its fixtures come with
+		# its recipe); one of several frames is skipped, as every build was:
+		# the replay below resolves frame 0 only.
+		if b == null or (b.is_build() and not b.build.is_single_frame()):
 			skipped += 1
+			continue
+		if b.is_build():
+			twin_of[int(id)] = twin.register_build(b.build, b.xform)
 			continue
 		var tid := twin.register(b.recipe.footprint_x, b.recipe.footprint_z,
 				b.recipe.courses, b.xform)
@@ -12219,6 +12298,7 @@ func _place_build(path: String) -> void:
 	# question 3).
 	_index_building(id)
 	_make_shell(id)
+	_note_placed(id, false)
 	var b := registry.get_building(id)
 	var tris := 0
 	var mesh: Mesh = (_shells[id] as MeshInstance3D).mesh

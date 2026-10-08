@@ -158,6 +158,18 @@ frame time unchanged at 16.6 ms; `--stress` 200 mean 18.4 ms against 18.2.
   into a collapse (1,718 commands, 92 pieces, 73 of them still falling), reloads, and checks every
   damaged building and every piece brick for brick, where it was, moving as it was, with a node to
   draw into — then lets it run 4 s and replays the whole log against it: 8 of 8.
+- **A checkpoint carries the builds placed into the city (2026-10-08).** A load rebuilds the
+  scene, which is the city's own buildings and nothing else: a build placed with P or `--build`
+  was gone after F9, and every command naming it went nowhere. The save's scene data now lists
+  them (`_placed`: id, recipe, transform, whether a pad was cut for it); `_restore_checkpoint`
+  registers them first, in order, so each has the id the log knows it by, and cuts its pad again.
+  `--build` is not placed a second time after a load.
+- **A blast is logged whether or not it killed.** It was committed only when a brick died — every
+  blast on PLA, and not on anything tougher: a stone cottage takes the first 1 m blast as wear and
+  loses bricks to the second. A load, a replay or a client told only about the second had 76
+  bricks standing where the host had 69. Found by putting a placed, twice-hit cottage in the
+  `--checkpoint` gate; `_apply_blast` now commits every blast it applies, as it always did a chip.
+  The gate's replay check gives a one-frame placed build a twin too. `--checkpoint`: 9 of 9.
 - **A rebuilt building no longer regrows what left it as pieces.** The registry records detached
   blocks (`get_detached_blocks`, new) alongside the damage. `dormant_probe` checks it.
 - **Found on the way:** a piece woken from sleep or loaded from a save had no mesh node — solid
