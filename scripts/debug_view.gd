@@ -5,9 +5,8 @@ class_name DebugView
 ##
 ##   STRUCTURE   bricks -- buildings, their shells and far boxes, falling and
 ##               settled pieces, crumbs: shown, see-through, or hidden
-##   INTERIOR    interior pieces -- whatever rung or storey group draws them,
-##               the furniture of a room laid as bricks, what rides a falling
-##               section: shown or hidden
+##   INTERIOR    interior pieces -- a storey group's drawing, a piece laid
+##               as bricks, what rides a falling section: shown or hidden
 ##   ITEMS       the small things -- a storey group's item drawing, loot:
 ##               shown or hidden
 ##

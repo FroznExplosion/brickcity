@@ -10,9 +10,11 @@ Last updated **2026-10-07**. First written 2026-10-03; items keep their numbers,
 cite them ("CollapseNext.md 1.1"), and a finished one is struck, not removed.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
-`--wreck`, `--fixture`, `--walk`, `--dormant`, `--rooms`, `--far`; `tools/collapse_probe.gd`,
+`--wreck`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
+its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
-`float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `fakehide_probe.gd`, `storey_probe.gd`,
+`float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
+`storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -26,8 +28,9 @@ floor still standing; a clean cut now counts as damage. `collapse_probe` "shellh
 
 ### ~~1.2 Wreckage in a room leaves the furniture standing in it~~ — done 2026-10-03 (f6f3d16)
 A drawn item a piece lands on is crushed and the room redrawn; faked and drawn furniture in a
-section's box is hidden the tick the section leaves. `collapse_probe` "crushdrawn",
-`fakehide_probe`.
+section's box is hidden the tick the section leaves. `collapse_probe` "crushdrawn" (on the storey
+groups since 2026-10-08; `fakehide_probe` went with the fake drawing it measured -- the groups'
+form of it is `InteriorGroups.check_floors`).
 
 ### 1.3 Single bricks still spray off PIECES
 Held bricks (`Block::held`, `BrickWorld.reattach_held_groups`, groups of 8 or fewer) are on for
@@ -96,24 +99,24 @@ gone DETACH from a piece, hand the cut chunk to its IslandManager to crumble bef
 
 ### ~~1.8 Far collapses: cheap by rule, still physics~~ — done 2026-10-06
 `IslandManager._far_and_small` (`FAR_DELETE_BLOCKS` 10, past `FRACTURE_RANGE`, `FLAG_GONE`);
-`CityScene._mid_collapse` (`COLLAPSE_QUIET_MS`) holds the drawn, fake and real rungs and the wreck
-spill. `tools/far_rules_probe.gd`, 9 checks, two of them the same case with the rule off. A blast
-already lays a room only when the camera is within 60 m of it, so nothing is made far off. The rule
+`CityScene._mid_collapse` (`COLLAPSE_QUIET_MS`) holds the storey groups (it held the rungs and the
+wreck spill, until those went, 2026-10-08), and `_stream_pieces` draws nothing new on a piece still
+moving. `tools/far_rules_probe.gd`, 9 checks, one of them the same case with the rule off. A blast
+lays a piece only when the camera is within 60 m of it, so nothing is made far off. The rule
 as the user set it: a collapse far from every player is still simulated -- it has to land where it
 would -- but:
 * **a piece of fewer than ten bricks is deleted when it breaks off**, on every machine (the host
   says so in the DETACH, as it does for the moving cap);
-* **no interior and no items are made for wreckage until somebody is close to it** (rooms spilled
-  into a wreck within `SPILL_RANGE`, as now -- and not into a wreck still moving);
-* **a building that is mid-collapse when it is upgraded** (made bricks, or come into room range)
-  **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
-  building that is still coming apart.
+* **no interior and no items are made for wreckage until somebody is close to it** (inside the
+  range a standing building's interior is drawn at -- and not on a piece still moving);
+* **a building that is mid-collapse when it is upgraded** (made bricks, or come into range)
+  **gets no interior and no items until it has finished**: no storey group is made in a building
+  that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 to 3 of 5 done; the default since 2026-10-07
+### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 to 4 of 5 done; the only interior drawing since 2026-10-08
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
 and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
 * **Stage 1, done, and the default** (Interiors.md §8.8; user, 2026-10-07): `InteriorGroups`.
-  F6 in play or `-- --rungs` goes back to the rungs, and the rungs' own tests select them.
 * **A collapsed building is not empty** (Interiors.md §8.10, 2026-10-07, the user's report): an
   item is on whichever chunk holds most of its floor, so still pieces near the player draw what
   stood on their floors, and a tower that topples whole keeps its furniture on the way down.
@@ -125,11 +128,13 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
 * **Stage 3, done 2026-10-08** (Interiors.md §8.11): a blast or bullet lays the pieces it reaches
   as bricks, each on its own, and no room; unseen, it writes off those pieces only.
   `interior_group_probe` 34, `-- --groups --big` 24.
-* **Stage 4, next:** the rungs and their tests go, and the switch with them -- the drawn, fake and
-  real rungs, `_recheck_drawn`, `_sync_fake`, room activation by reach, `compromise_rooms`, spill
-  and write-off; `--rooms`, `--interiors`, `--interior-audit`, `fakehide_probe`, and
-  collapse_probe's "fake", "crushdrawn" and "farrules" sections rewritten against the groups or
-  removed with what they measured. Stage 5: loot fades at its cull edge.
+* **Stage 4, done 2026-10-08** (Interiors.md §8.12): the drawn, fake and real rungs are gone, with
+  room activation by reach, `compromise_rooms`, spill and write-off, and the switch (F6,
+  `-- --rungs`). Gone with them: `--interiors`, `--interior-audit`, the old `--rooms` gate (the
+  name now runs `--groups`), `fakehide_probe`. Rewritten against the groups: `interior_probe` (87),
+  collapse_probe's "fake" (now "interior"), "crushdrawn" and "farrules". `interior_group_probe` 33,
+  `-- --groups --big` 23.
+* **Stage 5, next:** loot fades at its cull edge.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
