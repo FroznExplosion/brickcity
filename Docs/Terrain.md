@@ -3357,7 +3357,46 @@ F10 opening and closing in both, and every row pressed in the scene that offers 
   second, near mesh per chunk from the per-brick faces, with the backing §22.13 needed (a bevelled
   edge beside a face that was culled is a slit) -- a C++ change in the building mesher, and its
   triangles land on the buildings that are being shot at.
-* *Two far tiers.* `heightfield_scene` still has its own cascade (rings that split and re-LOD as
-  the camera walks) beside `TerrainCoarse` (a fixed hole). Same blocks, different bookkeeping.
+* *Two far tiers.* Done next, §22.16.
 * *The level editor in the arena.* The tools are a node on a host, but their keys (0-8, G, [ ],
   - =) are the arena's guns and view switches, and a site there has a real building on it.
+
+### 22.16 One coarse tier (2026-10-08)
+
+There were two copies of the coarse cascade (§19.4): 600 lines in `heightfield_scene.gd` (no hole,
+blocks hidden under a detail square that moves, split when it walks into them, re-LODded by the
+camera's distance, re-baked on an edit) and `TerrainCoarse` for the city (a hole cut once, every
+block merged into a ring). Same layout rule, same bake, same ring merge, written twice.
+
+`TerrainCoarse` is now both. `build(reach_tiles, material, hole, split_to)`:
+
+| | `hole` | `split_to` | every frame |
+|---|---|---|---|
+| the city, the arena | the city's square | 0: every block in a ring mesh | nothing |
+| the heightfield test | none | the streamer's `align`: blocks that size are a node each | `cover(streamer)`, `relod(camera)` |
+
+Also on the class: `field_changed(tiles)` (an edit), `rebuild()` (the dev menu), `height_at` (trees
+past the detail square), `drawing(tile)` (the bench's coverage check asks the tier who draws a
+tile rather than reading its arrays).
+
+Checked against the two copies it replaces:
+
+* the heightfield bench's layout and coverage lines are the same text before and after: 64 + 48 +
+  48 blocks at spans 4, 8, 16; 220 blocks in 126 meshes, 685,692 triangles; 2,236 tiles checked,
+  0 drawn twice, 0 drawn by nothing;
+* the city: 203 blocks in 4 rings, 370,132 triangles, before and after;
+* pictures of far ground from five viewpoints, before and after: under 1% of pixels differ (the
+  readout's numbers);
+* the editor's shot pass (`-- --editshot`: pads, paint, sites, brush strokes, undo, world round
+  trip) runs clean.
+
+What changed on purpose:
+
+* **The city's coarse ground has LOD levels in the LOD view.** Only the heightfield copy told the
+  shader a block's level, so the city's far ground was all drawn as level 0.
+* **A ring is baked once at startup, not twice.** The heightfield copy baked every block and then
+  baked the merged ones again to build their ring.
+* **A pad cut for a placed build re-bakes the coarse blocks its skirt reaches** (`_reground`), where
+  before only the detail tiles were refreshed.
+* After "Rebuild far terrain" the small blocks are re-LODded on the next frame, not when the camera
+  next changes tile.
