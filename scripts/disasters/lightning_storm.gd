@@ -254,7 +254,13 @@ func _process(delta: float) -> void:
 	else:
 		_bolt.visible = false
 		_strike_light.visible = false
+	# Between ticks the director has not said who is acting, and what is set
+	# then is nobody's: it was never forgotten, and the last frame's sky, flash,
+	# sight and aim outlived the storm (Docs/Disasters.md 22).
+	var was := ctx.source
+	ctx.source = self
 	_apply_sky()
+	ctx.source = was
 
 
 func _apply_sky() -> void:

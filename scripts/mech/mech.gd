@@ -39,6 +39,14 @@ const ARM_YAW_SPEED := deg_to_rad(420.0)
 ## Straight up and straight down, short of the pole (A15).
 const ARM_PITCH_LIMIT := deg_to_rad(89.0)
 const MAX_HEALTH := 2500.0
+## A mech gun's rounds, against a person's (GunController.damage_mult): a
+## stand-in until mech weapons are rolled as their own classes (AIRoster.md 4.6).
+## At 8 a rifle-class round is one melee: it kills a light enemy in one.
+const GUN_MULT := 8.0
+## A mech's fist: how far between centres it reaches, how hard, how often.
+const MELEE_REACH := 5.0
+const MELEE_DAMAGE := 500.0
+const MELEE_GAP := 1.2
 ## What it weighs on the bricks it stands on (WeightTracker).
 const MASS := WeightTracker.MECH
 
@@ -47,7 +55,15 @@ var team := 0
 var body: CharacterBody3D
 var motor: TitanMotor
 var health: HealthPool
+## How it is killed: shield, armour, health, the doors, the pilot and the cell.
+var layers: MechLayers
 var gun: GunController
+## What it is (Roster): its recipe, the name over it.
+var type_id := ""
+var name_tag: Label3D
+var melee_ready_at := 0.0
+var melee_hits := 0
+var _clock := 0.0
 ## Falling through floors (Docs/AI.md 3.11): the owner connects what it lands on
 ## and what breaking it means.
 var fall: FallRule
@@ -94,6 +110,7 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	pool.layer_configs = [layer]
 	b.add_child(pool)
 	m.health = pool
+	m.layers = MechLayers.attach(m)
 	m._build_greybox()
 	parent.add_child(b)
 	if b.is_inside_tree():
@@ -113,9 +130,53 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	g.name = "ArmGun"
 	g.aim = m.muzzle
 	g.exclude = [b.get_rid()] as Array[RID]
+	g.damage_scale = &"mech"
+	g.damage_mult = GUN_MULT
 	b.add_child(g)
 	m.gun = g
 	return m
+
+
+## Make it the mech type `id` of `roster`: its class's shield, armour, health and
+## doors, the side its hatch is on, the Nuker mod, and its name over it.
+func set_type(id: String, roster: Roster) -> void:
+	if roster == null or not roster.has(id):
+		return
+	var d := roster.derived(id)
+	var spec: Dictionary = d.get("mech", {})
+	if spec.is_empty():
+		return
+	type_id = id
+	var keep := layers.services if layers != null else null
+	if layers != null:
+		health.damage_filter = Callable()
+		health.layer_depleted.disconnect(layers._on_layer_depleted)
+		health.died.disconnect(layers._on_died)
+		layers.queue_free()
+	layers = MechLayers.attach(self, spec)
+	layers.services = keep
+	layers.nuker = (roster.recipe(id).get("mods", []) as Array).has("nuker")
+	if name_tag == null or not is_instance_valid(name_tag):
+		name_tag = TypeKit.make_tag(body, TypeKit.tag_text(d), team, HEIGHT * 0.5 + 0.7)
+	else:
+		name_tag.text = TypeKit.tag_text(d)
+
+
+## Punch `target` if it is in reach and the last blow was long enough ago: through
+## its shield, on the side of it this mech is at -- and a doomed mech is finished.
+func melee(target: Mech) -> bool:
+	if target == null or target.layers == null or target.layers.dead or _clock < melee_ready_at:
+		return false
+	var to := target.feet() - feet()
+	if Vector2(to.x, to.z).length() > MELEE_REACH or absf(to.y) > HEIGHT * 0.5:
+		return false
+	melee_ready_at = _clock + MELEE_GAP
+	melee_hits += 1
+	# Where the fist lands: the near side of its torso, at the cockpit's height.
+	var flat := Vector3(-to.x, 0.0, -to.z).normalized()
+	var at := target.feet() + Vector3.UP * COCKPIT_Y + flat * RADIUS * 0.85
+	target.layers.melee(MELEE_DAMAGE, target.layers.zone_at(at))
+	return true
 
 
 func feet() -> Vector3:
@@ -130,6 +191,7 @@ func cockpit_interpolated() -> Vector3:
 
 
 func _physics_process(delta: float) -> void:
+	_clock += delta
 	if body == null or motor == null:
 		return
 	_aim_arm(delta)
