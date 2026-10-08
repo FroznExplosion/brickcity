@@ -174,6 +174,10 @@ const STREET_STUDS := 9
 var world: BrickWorld
 var registry: BuildingRegistry
 var islands: IslandManager
+## The near tier of everything drawn in bricks here -- buildings' bands, a
+## build's other frames, loose pieces: chamfered meshes and stud geometry
+## close to the camera (BrickNear).
+var brick_near: BrickNear
 ## How a building comes apart: breakage or collapse, and a mega building's
 ## collapse in a few big chunks (CollapseDirector).
 var director: CollapseDirector
@@ -1059,6 +1063,8 @@ func _ready() -> void:
 	islands.name = "Islands"
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
+	brick_near = BrickNear.new(world)
+	islands.near = brick_near
 	# This scene starts the pieces' mesh jobs itself, after everything else in
 	# its tick (IslandManager._submit_mesh_job).
 	islands.defer_job_start = true
@@ -3358,6 +3364,7 @@ func _remesh_frames(id: int) -> void:
 		if world.get_alive_block_count(c) == 0:
 			_retirer.retire(mi.mesh)
 			mi.mesh = null
+			brick_near.untrack(mi)
 			continue
 		var arrays: Array = world.build_chunk_mesh(c)
 		var mesh := ArrayMesh.new()
@@ -3365,6 +3372,8 @@ func _remesh_frames(id: int) -> void:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		_retirer.retire(mi.mesh)
 		mi.mesh = mesh
+		# A frame is its own chunk, drawn whole.
+		brick_near.track(mi, c)
 
 
 ## Disable the collision shapes of blocks a hit removed, in one frame's body.
@@ -3872,6 +3881,8 @@ func _remesh(id: int, force_full: bool = false) -> void:
 			RenderingServer.mesh_surface_update_index_region(
 					(held[si] as ArrayMesh).get_rid(), 0, int(d.offset), d.data)
 		if ok:
+			# And the chamfered ones, and the studs the hit uncovered.
+			brick_near.damaged(b.chunk)
 			return
 
 	_rebuild_bands(id, b.chunk)
@@ -4054,6 +4065,13 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		_retirer.retire(node.mesh)
 	var live := mesh != null and mesh.get_surface_count() > 0
 	node.mesh = mesh if live else null
+	# Its chamfered mesh and studs, when the camera is near (and again: this is
+	# a new mesh, from what may be a new bake).
+	var band_of := registry.get_building(id)
+	if live and band_of != null:
+		brick_near.track(node, band_of.chunk, at)
+	else:
+		brick_near.untrack(node)
 	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
 	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
 
@@ -9948,6 +9966,8 @@ func _process(delta: float) -> void:
 	if _terrain_streamer != null:
 		_terrain_streamer.follow(Vector2(camera.global_position.x,
 				camera.global_position.z))
+	if brick_near != null:
+		brick_near.step(camera.global_position)
 	if _sea != null:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
@@ -12323,7 +12343,7 @@ func _place_build(path: String) -> void:
 ## sub-pixel highlight that does not fade out shimmers, which is the same reason
 ## the seam fades (spec section 2, layer lines).
 func _run_chamfer_pass() -> void:
-	print("[chamfer] a bevel nobody paid a triangle for")
+	print("[chamfer] real bevels where the camera is, none where it is not")
 	var b := registry.get_building(0)
 	var chunk := _promote(0)
 	await _frames(40)
@@ -12337,35 +12357,61 @@ func _run_chamfer_pass() -> void:
 	camera.look_at(wall, Vector3.UP)
 	await _frames(10)
 
+	# The wall in front of the camera is drawn with its chamfered mesh
+	# (BrickNear), and the studs within reach as studs.
 	var near_off := await _capture_chamfer(false, "chamfer_off")
+	_gate_ok("with the near tier off, nothing is chamfered", brick_near.chamfered_bands == 0)
 	var near_on := await _capture_chamfer(true, "chamfer_on")
+	_gate_ok("a wall a metre and a half off is drawn chamfered", brick_near.chamfered_bands > 0,
+			"%d bands, %d triangles, %d studs; worst step %.2f ms" % [brick_near.chamfered_bands,
+				brick_near.chamfered_tris, brick_near.stud_instances, brick_near.worst_step_ms])
+	_gate_ok("and its exposed studs are geometry", brick_near.stud_instances > 0,
+			"%d" % brick_near.stud_instances)
 	var near_diff := _image_difference(near_off, near_on)
-	_gate_ok("up close, the bevel changes the picture", near_diff > 0.04,
+	_gate_ok("up close, the bevel changes the picture", near_diff > 0.01,
 			"%.1f%% of sampled pixels" % (near_diff * 100.0))
 	_gate_ok("but does not repaint the whole wall -- it is edges, not a tint",
 			near_diff < 0.75, "%.1f%%" % (near_diff * 100.0))
 
-	# And from across the street it is gone, because at that size it is noise.
+	# Shot at: the chamfered bands are patched as the flat ones are. What their
+	# index buffers draw is read back and set against the bricks left alive.
+	var before: Dictionary = brick_near.audit()
+	_blast(wall + Vector3(0.6, 0.3, 0.2), 1.1)
+	await _frames(20)
+	brick_near.settle(camera.global_position)
+	await _frames(4)
+	var after: Dictionary = brick_near.audit()
+	_gate_ok("a hit takes triangles out of the chamfered bands", int(after.bands) > 0
+			and int(after.drawn) != int(before.drawn),
+			"%d drawn before, %d after" % [before.drawn, after.drawn])
+	_gate_ok("and they draw exactly the bricks left", int(after.drawn) == int(after.wanted),
+			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
+	await _save("chamfer_hit")
+
+	# And from across the street there is none: at that size it is noise, and
+	# it is not paid for.
 	camera.global_position = wall - Vector3(0.0, -6.0, 110.0)
 	camera.look_at(wall, Vector3.UP)
 	await _frames(10)
 	var far_off := await _capture_chamfer(false, "")
 	var far_on := await _capture_chamfer(true, "")
+	_gate_ok("at a hundred metres no band is chamfered", brick_near.chamfered_bands == 0
+			and brick_near.stud_instances == 0,
+			"%d bands, %d studs" % [brick_near.chamfered_bands, brick_near.stud_instances])
 	var far_diff := _image_difference(far_off, far_on)
-	_gate_ok("at a hundred metres it has faded out", far_diff < 0.01,
+	_gate_ok("and the picture is the same either way", far_diff < 0.01,
 			"%.2f%% of sampled pixels" % (far_diff * 100.0))
-	_gate_ok("which is far less than it changes up close", far_diff * 4.0 < near_diff,
-			"%.2f%% against %.1f%%" % [far_diff * 100.0, near_diff * 100.0])
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
-## Render one frame with the chamfer on or off and hand back the image. A name
-## also writes it to shots/, for the eye to judge what a number cannot.
+## Render one frame with the near tier -- chamfered bands, bevelled studs -- on
+## or off and hand back the image. A name also writes it to shots/, for the eye
+## to judge what a number cannot.
 func _capture_chamfer(on: bool, shot_name: String) -> Image:
-	_shader_toggles["chamfer_enabled"] = on
-	brick_material.set_shader_parameter("chamfer_enabled", on)
+	BrickNear.enabled = on
+	brick_near.settle(camera.global_position)
 	await _frames(3)
 	var img := get_viewport().get_texture().get_image()
 	if shot_name != "":

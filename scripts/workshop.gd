@@ -907,6 +907,7 @@ func _archetype() -> int:
 
 func _process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	_stud_lod()
 	if not _drag.is_empty():
 		_drag_process()
 	_place_handles()
@@ -1928,11 +1929,18 @@ func _remesh() -> void:
 			add_child(mi)
 			_frame_meshes[f] = mi
 		mi.transform = world.get_chunk_transform(f)
-		var arrays := world.build_chunk_mesh(f)
+		# Chamfered, all of it: a workshop is a few hundred bricks an arm's
+		# length away, rebuilt whole on every edit, so there is no far tier to
+		# keep and nothing to patch (Docs/BrickBevel.md). The shader is told, so
+		# its drawn seam and shaded bevel stand down up close (geo_bevel).
+		var chamfered := BrickNear.enabled
+		var arrays := world.build_chunk_chamfer_mesh(f, BrickNear.BEVEL) if chamfered \
+				else world.build_chunk_mesh(f)
 		var m := ArrayMesh.new()
 		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		mi.mesh = m
+		mi.set_instance_shader_parameter("geo_bevel", 1.0 if chamfered else 0.0)
 		_restud(f, mi)
 
 
@@ -1973,6 +1981,30 @@ static func _stud_material() -> Material:
 		sm.shader = load("res://shaders/printed.gdshader")
 		_studs_fallback = BrickMaterials.add_glass(sm)
 	return _studs_fallback
+
+
+## Bevelled studs on a frame the camera is near, plain ones on a frame it is
+## not (BrickNear.radius, as the city and the terrain do it): which mesh the
+## frame's stud MultiMesh draws, a whole frame at a time.
+func _stud_lod() -> void:
+	if _camera == null:
+		return
+	var eye := _camera.global_position
+	for frame in _frame_studs:
+		# A frame that emptied was freed with its mesh; its entry stays.
+		var held: Variant = _frame_studs[frame]
+		if not is_instance_valid(held):
+			continue
+		var mmi: MultiMeshInstance3D = held
+		if mmi.multimesh == null or mmi.multimesh.instance_count == 0:
+			continue
+		var box := mmi.multimesh.get_aabb()
+		var local := mmi.global_transform.affine_inverse() * eye
+		var dist := local.distance_to(local.clamp(box.position, box.end))
+		var plain := mmi.multimesh.mesh == PieceMeshes.stud_plain()
+		var want_plain := dist > BrickNear.radius + (0.0 if plain else BrickNear.MARGIN)
+		if want_plain != plain:
+			mmi.multimesh.mesh = PieceMeshes.stud_plain() if want_plain else PieceMeshes.stud()
 
 
 func _restud(frame: int, parent: MeshInstance3D) -> void:

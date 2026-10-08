@@ -414,24 +414,32 @@ struct FaceBake {
     // authored surface).
     // Four bytes a face, against the 224 bytes of its four vertices.
     std::vector<uint32_t> edge;
-    // The LIPS of the faces that stand against another brick, in face order.
+    // The FLOORS of the facets, in face order.
     //
-    // Such a face is not drawn while that brick lives. But where it runs along
-    // a free edge of its OWN brick, and the face round that edge has a brick
-    // against it as well, three bricks meet on one line: the other two are
-    // bevelled there, and between their bevels is this brick's edge, with
-    // both of its faces hidden. A floor tile laid up to the foot of a wall
-    // that stands on the block beside it is that, the whole length of the
-    // wall. So the face keeps a strip a bevel wide along the edge -- its lip
-    // -- for exactly the cells where the other face is covered, and the lip
-    // is drawn while the contact HOLDS: the opposite of the face itself.
-    struct Lip {
+    // A facet runs from its face back to the plane of the face round the edge
+    // -- and stops there, a bevel short of the edge itself. When that other
+    // face is drawn too, its own facet is the same quad and the brick is
+    // closed. When it stands against a brick, the next thing seen past the
+    // facet's end is that brick's facet, coming the other way... unless THAT
+    // brick has a third brick against it there, diagonally across the edge
+    // from this one. Three bricks on one line: the middle one's edge has both
+    // of its faces hidden, nobody draws its facet, and the two facets either
+    // side of it stop a bevel apart with the inside of the wall between them.
+    // A floor tile laid up to the foot of a wall that stands on the block
+    // beside the tile is exactly that, the whole length of the wall.
+    //
+    // So where both are true -- a block against the face round the edge, and
+    // a block diagonally across -- the facet gets a floor: the strip of the
+    // other face's plane from the facet's end out to the edge. It is the
+    // middle brick's face, seen as if that brick's edge were square. One
+    // entry a run of cells along a side.
+    struct Floor {
         int32_t face;
         uint16_t from;  // cells along the side, [from, to)
         uint16_t to;
         uint8_t side;   // 0..3: A low, A high, B low, B high
     };
-    std::vector<Lip> lips;
+    std::vector<Floor> floors;
     // Which bake this is, counted up across every bake made. A chamfered band
     // is built from one bake's face order and is only good for that one.
     uint32_t serial = 0;
@@ -470,7 +478,7 @@ struct FaceBake {
         owner.clear();
         other.clear();
         edge.clear();
-        lips.clear();
+        floors.clear();
         valid = false;
     }
 };
@@ -503,7 +511,8 @@ enum : uint32_t {
     // faces that meet this one at the corner stood against another brick when
     // the bake was made. With both of them hidden, the three bevels that meet
     // there leave a triangular hole into the wall -- at every joint of every
-    // course -- and the corner is drawn with a PLUG behind it.
+    // course -- so the corner is PLUGGED: instead of a corner triangle, the
+    // face's two facets run on to the brick's corner and meet in a mitre.
     EDGE_PLUG_SHIFT = 12,
     // Two bits a side (the low end of the way along it, then the high), from
     // here: the facet on that side stops at that end where the face goes on
