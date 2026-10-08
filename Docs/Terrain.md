@@ -3340,6 +3340,12 @@ where it does: the city's detail tier covers the city and never moves, and its c
 `TerrainTile.bevel_enabled` and rebuilds the detail tiles. Also fixed: "Slopes and curves on
 terrace edges" called `host.rebuild_detail()`, which no scene had.
 
+**A crash on the way out.** With chamfered bakes running under the city, the arena's gate
+(`combat_arena.tscn -- --gate`) crashed the engine as it quit, two runs in two: a worker was still
+inside `BrickTerrain` when the scene went. `TerrainStreamer._exit_tree` now waits for every bake
+it has in flight. Five gate runs after: no crash. (The gate's own verdict varies run to run with
+or without this change -- "the wave hunts the player" failed once in five on main too.)
+
 `tools/ground_tools_probe.gd` (headless) holds it: both scenes' ground chamfered near the camera,
 F10 opening and closing in both, and every row pressed in the scene that offers it.
 
