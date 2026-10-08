@@ -109,7 +109,7 @@ would -- but:
   **gets no interior and no items until it has finished**: no rooms drawn, faked or opened in a
   building that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 and 2 of 5 done; the default since 2026-10-07
+### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 to 3 of 5 done; the default since 2026-10-07
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
 and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
 * **Stage 1, done, and the default** (Interiors.md §8.8; user, 2026-10-07): `InteriorGroups`.
@@ -122,9 +122,14 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   whose floor leaves as a section is drawn on the section and rides it down, and comes off when it
   lands. No index: every piece at that height is asked for its floor, 0.2 ms a time
   (`InteriorGroups.check_floors`). `interior_group_probe` 22, `-- --groups --big` 19.
-* **Stage 3, next:** a shot piece becomes bricks, only that piece (today a blast still lays the
-  whole room it reaches). Then stage 4: the rungs and their tests go, and the switch with them.
-  Stage 5: loot fades at its cull edge.
+* **Stage 3, done 2026-10-08** (Interiors.md §8.11): a blast or bullet lays the pieces it reaches
+  as bricks, each on its own, and no room; unseen, it writes off those pieces only.
+  `interior_group_probe` 34, `-- --groups --big` 24.
+* **Stage 4, next:** the rungs and their tests go, and the switch with them -- the drawn, fake and
+  real rungs, `_recheck_drawn`, `_sync_fake`, room activation by reach, `compromise_rooms`, spill
+  and write-off; `--rooms`, `--interiors`, `--interior-audit`, `fakehide_probe`, and
+  collapse_probe's "fake", "crushdrawn" and "farrules" sections rewritten against the groups or
+  removed with what they measured. Stage 5: loot fades at its cull edge.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot

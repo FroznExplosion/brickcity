@@ -299,7 +299,7 @@ the largest single cost still on the table.
 
 ---
 
-## 8. Simplification (2026-10-05) — stages 1 and 2 built; the default since 2026-10-07 (§8.8–8.10)
+## 8. Simplification (2026-10-05) — stages 1 to 3 built; the default since 2026-10-07 (§8.8–8.11)
 
 **Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
 holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
@@ -424,8 +424,8 @@ What differs from §8.2 as written, and why:
   inside `ITEM_RANGE` 20 m. There is no authored item with a DETAIL part in the repository today, so
   the item drawing is empty in a generated city; `interior_group_probe` makes one to test it. Loot
   is stage 5.
-* **A blast still lays the whole room** it reaches (§8.4 is stage 3), and that room leaves its
-  group's drawing the same tick.
+* ~~A blast still lays the whole room it reaches~~ -- stage 3, §8.11: it lays the pieces it
+  reaches, each on its own.
 * **Whose floor has gone**: see §8.9 (stage 2). Stage 1 walked the groups at that height a pass
   later and hid what stood in a leaving section; both went with stage 2.
 
@@ -523,3 +523,38 @@ boxes and the piece draws exactly those 112, in its own space); `-- --groups --b
 wreckage of a cut tower has its interior, each drawing is what its own chunk gives when asked
 afresh, none is made on a piece still moving; a tower toppled whole carries every box it was
 drawing, and its wreckage has its interior).
+
+### 8.11 Stage 3 as built (2026-10-08): a piece that is hit becomes bricks, alone
+
+§8.4. With the storey groups, a blast or a bullet no longer lays a room. It lays **the pieces it
+reaches**, one at a time, and nothing else:
+
+* `BuildingRegistry.compromise_items(building, point, radius, watched)` measures the blast against
+  each piece's own box (`RoomManifest.item_box`) -- not the room's -- and `lay_item` puts that piece
+  into the building's chunk as decorative bricks: the code that laid a room, for one item. It is
+  marked in `Room.laid` and no drawing shows it again; what the blast then does to it is ordinary
+  brick destruction, and a table with two legs shot off is the bricks that are left.
+* The rest of the room, and of the storey group, goes on being a drawing: the group redraws the
+  one room, without that piece, the same tick (`_groups_rooms_moved`).
+* Its bricks get a collision box each on the building's furniture body (`_add_item_shapes`), which
+  go as the bricks do (`_disable`); the piece's own one-box-a-piece cover goes with the redraw.
+* Nobody near enough to see (the camera past 60 m, as before): the pieces inside the blast are
+  written off and nothing is laid. Before, that was every piece in every room the blast's radius
+  touched.
+* Only where it stands: a piece whose floor is on a fallen part of the building is not in the
+  building to be hit (`item_floor_share`); what a blast does to wreckage it does to the wreckage's
+  bricks, and the drawing on that piece follows its floor (§8.10).
+* When the building gives its bricks back (`dematerialise` -> `_unlay_all`), a laid piece with a
+  brick destroyed is written off, and one nothing touched is a drawing again.
+
+`Room.active`, `open_rooms`, the reach that opened a room by walking up to it and
+`compromise_rooms` are the rungs' now, and are not reached with the groups on.
+
+Checks: `interior_group_probe` 34 (a blast at one piece of a three-piece room lays that piece's
+3 bricks and no other; the room draws 9 boxes where it drew 12; unseen, the piece is written off
+and nothing is laid; bricks given back, the damaged one is gone and the untouched one is drawn
+again), `-- --groups --big` 24 (a blast at a piece in the city makes it bricks and lays no room;
+the rest of its storeys are still drawn).
+
+**Not done:** a drawn piece on WRECKAGE is not laid when the wreckage is hit -- it follows its
+floor's bricks and goes when they do. Debris particles for a written-off piece are still missing.

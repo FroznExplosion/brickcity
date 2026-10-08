@@ -98,6 +98,14 @@ var hit := false
 ## the only thing about a room that has to be written down.
 var gone := {}
 
+## Item index -> true, for the ones that are BRICKS: laid into the building's
+## chunk because a blast or a bullet reached them ([Interiors §8.4]
+## (../Docs/Interiors.md); BuildingRegistry.lay_item). From then on such an
+## item is ordinary brick destruction, drawn from its blocks, and no drawing
+## of the room shows it. Its blocks are in `items[i].blocks`. The rest of the
+## room stays as it was -- the storey groups never lay a room whole.
+var laid := {}
+
 ## Holes in this room's walls, in the building's local space. Interiors §3: the
 ## openings ARE the portals, and "importantly -- holes blown in the walls". A
 ## generated building has no doors and no windows, so every one of these was
@@ -113,6 +121,12 @@ var spilled := false
 ## How damaged the building was when the openings were last looked for. Walls
 ## only change when something hits them.
 var openings_at := -1
+
+
+## Changes whenever what a drawing of this room should show changes: an item
+## written off, or one laid as bricks.
+func diff_stamp() -> int:
+	return gone.size() + laid.size() * 65536
 
 
 func has_opening() -> bool:
