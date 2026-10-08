@@ -84,8 +84,7 @@ var _water_far: WaterSurface = null
 var _water_sheet = null
 ## THE LEVEL EDITOR lives in this scene (Docs/Terrain.md §20.9): the tools are
 ## a node on top of the same terrain, far tier, water and sites, so what is
-## edited is exactly what is looked at. `scenes/terrain_editor.tscn` is this
-## scene under its old name.
+## edited is exactly what is looked at. There is no separate editor scene.
 const EditTools := preload("res://scripts/terrain_editor.gd")
 var _editor = null
 var _edit_shot := false
@@ -170,44 +169,24 @@ func _ready() -> void:
 		elif arg == "--editshot":
 			_edit_shot = true
 
-	# The whole difference between this scene and the volumetric one.
-	BrickTerrain.set_flat_mode(true)
-	# Half-brick steps: the relief cut into plates (0.14 m) rather than
-	# bricks (0.42 m), so a slope is three shallower stairs instead of one.
-	BrickTerrain.set_plate_steps(true)
-	# Curved ground is OFF by default, on C.
-	#
-	# It works — regional, genuinely curved, studs and tiles standing on it
-	# (§18.5) — but curved ground has no PIECES in it, so wherever it goes
-	# the packed 2x4s and the smooth tiles go with it, and this scene is
-	# here to look at laid brick. It is a thing the generator can do, not
-	# the ground the game is made of.
-	BrickTerrain.set_smooth_terrain(false)
-	BrickTerrain.configure(WORLD_SEED)
-	# The world file first — pads, painted material, sculpt and building
-	# sites — and the generator's default sites only if this level has never
-	# been edited. `-- --world=<name>` picks the level.
+	# The field as brick heightfield ground -- the whole difference between
+	# this scene and the volumetric one -- and the world file in it: pads,
+	# painted material, sculpt and building sites (TerrainWorld.open_world,
+	# the same call the city makes). `-- --world=<name>` picks the level.
+	# Curved ground is on C: it works (§18.5), but it has no pieces in it.
 	_world_path = World.world_path()
-	var loaded := World.load_world(_world_path)
-	var file_seed := int(loaded.get("seed", WORLD_SEED))
-	if not loaded.is_empty() and file_seed != 0 and file_seed != WORLD_SEED:
-		# Loaded against the wrong field: the sea and every pad height were
-		# read off ground this world is not. Again, on its own.
-		_seed = file_seed
-		BrickTerrain.configure(_seed)
-		loaded = World.load_world(_world_path)
+	var loaded := World.open_world(_world_path, WORLD_SEED)
 	if loaded.is_empty():
+		# Never edited: the generator's default sites.
 		World.stamp_sites(DROWNED)
 		_load_status = "no world file; seeded from TerrainWorld.SITES"
 	else:
+		if int(loaded.get("seed", 0)) != 0:
+			_seed = int(loaded["seed"])
 		_drowned = float(loaded.get("drowned", DROWNED))
 		_load_status = "loaded %s" % _world_path
-	# The geometry chamfer near the camera (Terrain.md 22.13): tops only, an
-	# edge bevelled only where the brick beside it bevels back or the ground
-	# drops away, with a floor under every chamfered top and walls that reach
-	# a bevel below the bricks they stand on. tools/bevel_gap_probe.gd is the
-	# gate: no more see-through pixels with it than without.
-	TerrainTile.bevel_enabled = true
+	# The geometry chamfer near the camera (Terrain.md 22.13) is on wherever
+	# there is ground: TerrainTile.bevel_enabled, not a line here.
 
 	# The sea was chosen from the terrain by loading the world, before its
 	# pads were cut — TerrainWorld.sea_level, the one every scene agrees on.
@@ -306,15 +285,9 @@ func _build_scenery() -> void:
 
 
 func _build_terrain() -> void:
-	_mat = ShaderMaterial.new()
-	_mat.shader = load("res://shaders/terrain.gdshader")
-	WeatherFx.register(_mat)
-	_mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
-	_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
-	_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
+	_mat = TerrainTile.ground_material(-_sun.global_transform.basis.z)
 	for key in _toggles:
 		_mat.set_shader_parameter(key, _toggles[key])
-	_mat.set_shader_parameter("sun_dir", -_sun.global_transform.basis.z)
 
 	var t0 := Time.get_ticks_usec()
 
@@ -636,6 +609,22 @@ func set_water_param(param: String, value: Variant) -> void:
 	for tier in [_sea.near, _sea.sheet]:
 		if tier != null and tier._mat != null:
 			tier._mat.set_shader_parameter(param, value)
+
+
+func set_ground_param(param: String, value: Variant) -> void:
+	_mat.set_shader_parameter(param, value)
+
+
+## The sea the dev menu's wave and water rows act on.
+func dev_sea():
+	return _sea
+
+
+## Every detail tile again from the field, behind the ones on screen: after
+## something that changes how a tile is cut (the dev menu's slope pieces).
+func rebuild_detail() -> void:
+	var h: int = _streamer.world_half
+	_streamer.refresh(Rect2i(-h, -h, h * 2 + 1, h * 2 + 1))
 
 
 ## The far tier from scratch: after the smooth step changed, or to see a

@@ -1503,23 +1503,15 @@ func _grid_sites() -> Array[Dictionary]:
 
 ## The field this city is cut into. Before anything asks it a question.
 func _setup_terrain_field() -> void:
-	# HEIGHTFIELD mode: a city wants ground to stand on, not caves under it.
-	BrickTerrain.set_flat_mode(true)
-	# Half-brick steps: a slope in three shallow stairs rather than one.
-	BrickTerrain.set_plate_steps(true)
-	# Curved ground has no PIECES in it, and this scene is about laid brick.
-	BrickTerrain.set_smooth_terrain(false)
-	BrickTerrain.configure(TERRAIN_SEED)
-	# The world file: its sea, its pads and its sites. Loading clears the pad
-	# list first -- it is global, and a scene reload would otherwise stamp a
-	# second set on top of the first -- and settles the sea on the field as
-	# generated, before any pad is cut (TerrainWorld.sea_level).
+	# Brick heightfield ground -- a city wants ground to stand on, not caves
+	# under it -- and the world file in it: its sea, its pads and its sites
+	# (TerrainWorld.open_world, the same call the heightfield test makes).
+	# Loading clears the pad list first -- it is global, and a scene reload
+	# would otherwise stamp a second set on top of the first -- and settles
+	# the sea on the field as generated, before any pad is cut
+	# (TerrainWorld.sea_level).
 	_terrain_world_path = TerrainWorldScript.world_path("big_city" if _big else "city")
-	var loaded: Dictionary = TerrainWorldScript.load_world(_terrain_world_path)
-	var file_seed := int(loaded.get("seed", TERRAIN_SEED))
-	if not loaded.is_empty() and file_seed != 0 and file_seed != TERRAIN_SEED:
-		BrickTerrain.configure(file_seed)
-		loaded = TerrainWorldScript.load_world(_terrain_world_path)
+	var loaded: Dictionary = TerrainWorldScript.open_world(_terrain_world_path, TERRAIN_SEED)
 	if loaded.is_empty():
 		BrickTerrain.clear_pads()
 		BrickTerrain.clear_paints()
@@ -1559,13 +1551,7 @@ func _build_terrain_ground() -> void:
 	var half: int = int(ceil(reach / tile_m)) + 1
 	_terrain_half = half
 
-	_terrain_mat = ShaderMaterial.new()
-	_terrain_mat.shader = load("res://shaders/terrain.gdshader")
-	WeatherFx.register(_terrain_mat)
-	_terrain_mat.set_shader_parameter("stud_pitch", stud)
-	_terrain_mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
-	_terrain_mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
-	_terrain_mat.set_shader_parameter("sun_dir", -_sun.global_transform.basis.z)
+	_terrain_mat = TerrainTile.ground_material(-_sun.global_transform.basis.z)
 
 	_terrain_streamer = TerrainStreamer.new()
 	_terrain_streamer.name = "TerrainStreamer"
@@ -1588,11 +1574,7 @@ func _build_terrain_ground() -> void:
 	_terrain_streamer.settle(Vector2(camera.position.x, camera.position.z))
 	var detail_ms := float(Time.get_ticks_usec() - t0) / 1000.0
 
-	_terrain_coarse = TerrainCoarseScript.new()
-	_terrain_coarse.name = "TerrainCoarse"
-	add_child(_terrain_coarse)
-	_terrain_coarse.build(Rect2i(-half, -half, half * 2 + 1, half * 2 + 1),
-			TERRAIN_REACH_TILES, _terrain_mat)
+	_build_terrain_coarse()
 
 	var lo := 1e9
 	var hi := -1e9
@@ -1606,6 +1588,94 @@ func _build_terrain_ground() -> void:
 		_terrain_coarse.triangle_count(),
 		float(Time.get_ticks_usec() - t0) / 1000.0])
 	_build_sea(tile_m)
+
+
+## The coarse ground out to the horizon, with the city's square cut out of it.
+func _build_terrain_coarse() -> void:
+	_terrain_coarse = TerrainCoarseScript.new()
+	_terrain_coarse.name = "TerrainCoarse"
+	add_child(_terrain_coarse)
+	_terrain_coarse.build(Rect2i(-_terrain_half, -_terrain_half,
+			_terrain_half * 2 + 1, _terrain_half * 2 + 1), TERRAIN_REACH_TILES, _terrain_mat)
+
+
+# ---------------------------------------------------------------------------
+# The terrain dev menu (terrain_dev_menu.gd, Docs/Terrain.md §20.10, §22.15).
+#
+# F10 on terrain: the same menu the heightfield test opens, on this scene's
+# ground and sea. What it asks of a host is in its header; the rows about a
+# detail square that follows the camera are not offered here, because this
+# one covers the city and never moves.
+
+const TerrainDevMenu := preload("res://scripts/terrain_dev_menu.gd")
+var _terrain_dev_menu = null
+var _lod_debug := false
+
+
+func _toggle_terrain_dev_menu() -> void:
+	if _terrain_streamer == null:
+		print("[city] no terrain here: the dev menu is the ground's (F10)")
+		return
+	var opening: bool = _terrain_dev_menu == null
+	if not opening:
+		_terrain_dev_menu.queue_free()
+		_terrain_dev_menu = null
+	else:
+		# Built fresh each time, so every control shows the state as it is now.
+		_terrain_dev_menu = TerrainDevMenu.new()
+		_terrain_dev_menu.name = "TerrainDevMenu"
+		stats_label.get_parent().add_child(_terrain_dev_menu)
+		_terrain_dev_menu.setup(self)
+		_fit_terrain_dev_menu()
+		if not get_viewport().size_changed.is_connected(_fit_terrain_dev_menu):
+			get_viewport().size_changed.connect(_fit_terrain_dev_menu)
+	# The mouse is the menu's while it is open, and the camera's again after.
+	camera._set_captured(not opening)
+
+
+## Down the right-hand side: the stats fill the left, top to bottom.
+func _fit_terrain_dev_menu() -> void:
+	if _terrain_dev_menu != null and is_instance_valid(_terrain_dev_menu):
+		_terrain_dev_menu.fit(12.0, get_viewport().get_visible_rect().size.x - 480.0)
+
+
+func set_lod_view(on: bool) -> void:
+	_lod_debug = on
+	_terrain_mat.set_shader_parameter("lod_debug", on)
+	if _sea != null:
+		_sea.set_lod_debug(on)
+
+
+func set_ground_param(param: String, value: Variant) -> void:
+	_terrain_mat.set_shader_parameter(param, value)
+
+
+func set_water_param(param: String, value: Variant) -> void:
+	if _sea == null:
+		return
+	for tier in [_sea.near, _sea.sheet]:
+		if tier != null and tier._mat != null:
+			tier._mat.set_shader_parameter(param, value)
+
+
+func dev_sea():
+	return _sea
+
+
+## Every detail tile again from the field, behind the ones on screen.
+func rebuild_detail() -> void:
+	_terrain_streamer.refresh(Rect2i(-_terrain_half, -_terrain_half,
+			_terrain_half * 2 + 1, _terrain_half * 2 + 1))
+
+
+## The coarse tier from scratch: after the smooth step changed.
+func rebuild_far() -> void:
+	if _terrain_coarse != null:
+		_terrain_coarse.queue_free()
+	_build_terrain_coarse()
+	print("[city] terrain: coarse rebuilt, %d blocks, %d triangles, smooth from step %d" % [
+		_terrain_coarse.block_count(), _terrain_coarse.triangle_count(),
+		BrickTerrain.get_coarse_smooth_step()])
 
 
 ## THE SEA, at the level the world settled (§21.6), out as far as the coarse
@@ -9781,7 +9851,7 @@ func _update_hud() -> void:
 		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
 			+ "
-F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · N respawn
+F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F6 interiors · F9 load · F10 terrain dev menu · N respawn
 7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
@@ -10094,6 +10164,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_update_hud()
 		KEY_F9:
 			load_checkpoint()
+		KEY_F10:
+			_toggle_terrain_dev_menu()
 		KEY_L:
 			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:

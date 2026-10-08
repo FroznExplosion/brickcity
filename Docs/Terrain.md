@@ -2549,7 +2549,7 @@ never writes one; an author writes worlds and never plays them from here.
 
 ### 20.1 An edit goes into the FIELD
 
-`scenes/terrain_editor.tscn` edits **pads** (§19.12), not meshes and not a
+The editor (the tools in `scenes/heightfield_test.tscn`) edits **pads** (§19.12), not meshes and not a
 heightmap. That is the whole reason it is a short script: a pad goes into the
 generator, and the detailed tier, the coarse tier, the collider, the stud
 test, the seabed texture and the buoyancy solver all agree about it without
@@ -2736,7 +2736,7 @@ Now there is one. `heightfield_scene.gd` is the scene, and
 `terrain_editor.gd` is the TOOLS — a node it adds on top of its own terrain,
 far tier, water and sites (not in `--bench` or `--shot`, which measure and
 photograph the terrain rather than an editor's markers).
-`scenes/terrain_editor.tscn` is the same scene under its old name.
+(`scenes/terrain_editor.tscn`, the same scene under its old name, went in §22.15.)
 
 * **Tool 0, LOOK, is the default**, so the click that takes the mouse never
   places anything. 1–8 as before. The eyedropper is `I` (P is the print
@@ -2890,7 +2890,7 @@ built from to its world file and quits; that is how the two files in
 `worlds/` were made, and it is how to reset one.
 
     godot --path . scenes/city.tscn -- --terrain --save-world
-    godot --path . scenes/terrain_editor.tscn -- --world=city
+    godot --path . scenes/heightfield_test.tscn -- --world=city
 
 The editor opens a city world on the city's own seed (it takes the seed from
 the file now, not from a constant), selects a site by clicking anywhere on
@@ -3286,7 +3286,7 @@ thread during assembly: 1.6 M triangles held and ~8 ms a tile, for a mesh drawn 
 Now the bevel is per-thread in C++ (`build_tile_chamfered`), the streamer bakes it on a worker for
 tiles within `bevel_radius` (2) of the camera, and the tile attaches it when it lands
 (`TerrainTile.add_bevel`). Held: 322 k. Drawn on foot: +198 k triangles, +34 calls.
-On in the heightfield scene; the city keeps the shaded chamfer (`bevel_enabled` false).
+On in the heightfield scene; the city kept the shaded chamfer (`bevel_enabled` false) until §22.15.
 
 ### 22.14 No per-tile fades; sides stop at the chamfer; outline blended in by distance (2026-10-06)
 
@@ -3309,3 +3309,55 @@ the chamfer.
   `outline_blend_end` (9 m), the outline alone beyond. Flat tiles keep the outline everywhere.
 
 `bevel_gap_probe`: 15 see-through pixels with the chamfer, 27 without.
+
+### 22.15 One ground in every scene: the chamfer, the dev menu, how a level is opened (2026-10-07)
+
+Asked for: the chamfered bricks and studs were only in the heightfield test, and the heightfield
+test and the combat arena were two copies of the same ground that had started to differ. The
+arena (`scenes/combat_arena.tscn`, the project's main scene) is where everything is tested
+together; `heightfield_test` is the one scene for the ground on its own and for editing a level.
+
+What was per scene, and is now in one place:
+
+| | was | now |
+|---|---|---|
+| geometry chamfer near the camera | `TerrainTile.bevel_enabled`, false, set true by the heightfield test only | true by default; no scene sets it |
+| opening a level (flat mode, plate steps, seed, world file, the file's own seed) | a copy in `heightfield_scene` and one in `city_scene` | `TerrainWorld.open_world(path, seed)` |
+| the ground's material | built by hand in both | `TerrainTile.ground_material(sun_travel)` |
+| the terrain dev menu (F10) | heightfield test only, reading the scene's private fields | any host: F10 in the city on terrain too (the arena) |
+| the editor's scene | `heightfield_test.tscn` and an alias, `terrain_editor.tscn` | `heightfield_test.tscn`; the alias is removed |
+
+**The chamfer in the city.** Nothing else had to change: the city's streamer already follows the
+camera every frame, so it bakes the chamfered mesh for tiles within `bevel_radius` and shows it
+within `near_show_radius`, exactly as in §22.13-14. Checked by an on/off pair of pictures from
+0.9 m above a nine-plate slope beside the city (not kept in `shots/`). Cost is §22.13's (+198 k triangles
+drawn on foot, +34 calls, measured in the heightfield test); not re-measured in the city.
+
+**The dev menu on any host.** `terrain_dev_menu.gd`'s header lists what it asks of a scene. The
+rows about a detail square that FOLLOWS the camera (Freeze LOD, Detail radius) are offered only
+where it does: the city's detail tier covers the city and never moves, and its coarse tier is
+`TerrainCoarse`, cut once. New row, in both: **Real chamfers near the camera**, which flips
+`TerrainTile.bevel_enabled` and rebuilds the detail tiles. Also fixed: "Slopes and curves on
+terrace edges" called `host.rebuild_detail()`, which no scene had.
+
+**A crash on the way out.** With chamfered bakes running under the city, the arena's gate
+(`combat_arena.tscn -- --gate`) crashed the engine as it quit, two runs in two: a worker was still
+inside `BrickTerrain` when the scene went. `TerrainStreamer._exit_tree` now waits for every bake
+it has in flight. Five gate runs after: no crash. (The gate's own verdict varies run to run with
+or without this change -- "the wave hunts the player" failed once in five on main too.)
+
+`tools/ground_tools_probe.gd` (headless) holds it: both scenes' ground chamfered near the camera,
+F10 opening and closing in both, and every row pressed in the scene that offers it.
+
+**Not done here, on purpose.**
+
+* *Bricks that are not ground* -- buildings, workshop builds, pieces -- still have the SHADED
+  chamfer only (`brick.gdshader`). Their mesh is `BrickWorld::build_mesh_internal`: a quad per
+  exposed cell face, with a block's index range patched when it is hit. A real chamfer there is a
+  second, near mesh per chunk from the per-brick faces, with the backing §22.13 needed (a bevelled
+  edge beside a face that was culled is a slit) -- a C++ change in the building mesher, and its
+  triangles land on the buildings that are being shot at.
+* *Two far tiers.* `heightfield_scene` still has its own cascade (rings that split and re-LOD as
+  the camera walks) beside `TerrainCoarse` (a fixed hole). Same blocks, different bookkeeping.
+* *The level editor in the arena.* The tools are a node on a host, but their keys (0-8, G, [ ],
+  - =) are the arena's guns and view switches, and a site there has a real building on it.

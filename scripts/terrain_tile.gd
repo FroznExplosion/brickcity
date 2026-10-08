@@ -26,16 +26,20 @@ extends Node3D
 ## zero-runtime-cost pattern the stud and scatter tiers already use.
 const BEVEL_RANGE := 12.0
 const BEVEL := 0.013
-## OFF by default, and ON only in the volumetric bench that measures it.
+## ON, for every scene that has ground: the heightfield test, the city on
+## terrain, the combat arena. It was a switch each scene set for itself, and
+## only the heightfield test did -- so the same ground was chamfered there and
+## flat under the city (Docs/Terrain.md §22.13 measured it; §22.15 made it the
+## default).
 ##
-## Two meshes a tile means a cross-fade, and Godot's FADE_SELF makes BOTH
-## meshes part-transparent through the fade band -- they do not add up to an
-## opaque surface. So everything 6 to 18 m from the camera was see-through:
-## a dug pad showed the hillside behind it through its own walls, and a
-## sculpted spire read as glass (Docs/Terrain.md §20.8). The heightfield
-## scene had it off since §17.22; the editor and the city never did. The
-## shader's shaded bevel is the chamfer everywhere else.
-static var bevel_enabled := false
+## It was off for a long time because two meshes a tile were cross-faded by a
+## visibility range, and Godot fades a range per OBJECT: everything 6 to 18 m
+## away was see-through (§20.8). Nothing fades now -- the streamer shows one
+## mesh or the other by the tile's ring round the camera (`set_near`, §22.14)
+## -- and tools/bevel_gap_probe.gd is the gate: no more see-through pixels
+## with it than without. Past the near ring the shader's shaded bevel is the
+## chamfer, as it always was.
+static var bevel_enabled := true
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
 
@@ -321,6 +325,23 @@ func _add_surface(arrays: Array, material: Material,
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	add_child(mi)
 	return mi
+
+
+## A new ground material: `terrain.gdshader` with the stud's real numbers in
+## it and the sun the ground's baked shadow was cast from. One place, because
+## every scene with ground made its own and they are meant to be the same
+## ground (heightfield_scene, city_scene).
+##
+## `sun_travel` is the way the light shines: `-sun.global_transform.basis.z`.
+static func ground_material(sun_travel: Vector3) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/terrain.gdshader")
+	WeatherFx.register(mat)
+	mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
+	mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
+	mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
+	mat.set_shader_parameter("sun_dir", sun_travel)
+	return mat
 
 
 ## Instanced pieces need a material that reads the per-instance colour, or
