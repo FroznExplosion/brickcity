@@ -58,6 +58,9 @@ var merged := false
 ## it `reshape_due`, and it is rebuilt merged once, at the end of the tick.
 var fly_merged := false
 var reshape_due := false
+## The physics tick its merged collision was last rebuilt after a change
+## (IslandManager._flush_reshapes, AIR_RESHAPE_TICKS).
+var reshaped_tick := -1000
 ## Bumped by every change to its blocks (IslandManager._touched). A capture
 ## spread over several ticks is only good if nothing changed while it ran.
 var edits := 0

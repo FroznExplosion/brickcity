@@ -10481,6 +10481,7 @@ func _run_shot_pass() -> void:
 	print("[city]   of which pieces coming off pieces: %d (%d bricks)" % [sc.shed[0], sc.shed[1]])
 	for line in islands.body_census_lines():
 		print("[city]   bodies " + line)
+	print("[city]   " + islands.hit_census_line())
 	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms; landings snapped %d time(s), %d on a storey line" % [
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],

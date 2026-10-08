@@ -295,5 +295,57 @@ a piece that is only furniture has nothing to draw")
 	_ok("the piece on top of the box wakes", not over.settled)
 	_ok("the piece under the box does not", under.settled)
 
+	# A piece in the air carries nothing: a hit cuts it where it DISCONNECTS it
+	# and nowhere else (IslandManager.solve_island; Docs/CollapseNext.md 1.4).
+	# Stood on its lowest bricks and stress-solved, as a piece on the ground
+	# is, a falling section failed all the way across for one shot: 174 bodies
+	# off 262 hits in the air in a --big --shot, where 155 on the ground made 12.
+	print("\na hit on a piece in the air cuts it only where it disconnects it")
+	var tall := _piece(Vector3(160.0, 80.0, 0.0), 20, 20, 36)
+	await _ticks(2)
+	var tall_box := _m.world_aabb(tall)
+	var bodies := _m.islands.size()
+	var skipped: int = _m.air_solves_skipped
+	_m.damage(tall, Vector3(tall_box.position.x + 0.2, tall_box.get_center().y, tall_box.get_center().z), 1.2)
+	await _ticks(3)
+	_ok("a hole blown in a falling section's wall leaves it one piece, and it is not stress-solved",
+			tall.is_valid() and not tall.landed and _m.islands.size() == bodies
+			and _m.air_solves_skipped > skipped,
+			"%d bodies before, %d after; landed %s; %d solve(s) skipped" % [
+				bodies, _m.islands.size(), tall.landed, _m.air_solves_skipped - skipped])
+	# Cut clean through, it is two.
+	var dims: Vector3i = _w.get_chunk_dims(tall.chunk)
+	var origin: Vector3i = _w.get_chunk_origin(tall.chunk)
+	var band := PackedInt32Array()
+	@warning_ignore("integer_division")
+	var cut_y := dims.y / 2
+	for y in range(cut_y, cut_y + 6):
+		for x in dims.x:
+			for z in dims.z:
+				var blk: int = _w.block_at(tall.chunk, origin + Vector3i(x, y, z))
+				if blk >= 0 and not band.has(blk):
+					band.push_back(blk)
+	_w.kill_blocks(tall.chunk, band)
+	tall.disable_blocks(band)
+	bodies = _m.islands.size()
+	_m.solve_island(tall)
+	_ok("cut clean through in the air, it is two pieces", _m.islands.size() == bodies + 1
+			and not tall.landed,
+			"%d brick(s) cut; %d bodies before, %d after" % [band.size(), bodies, _m.islands.size()])
+	# Down, the same question is the stress solve: nothing is skipped.
+	tall.landed = true
+	skipped = _m.air_solves_skipped
+	_m.solve_island(tall)
+	_ok("once it is down it is solved for what it can hold", _m.air_solves_skipped == skipped)
+	# And a hit's solve is made before the piece is put to sleep, not lost with it.
+	var other := _piece(Vector3(200.0, 80.0, 0.0), 20, 20, 36)
+	await _ticks(2)
+	var ob := _m.world_aabb(other)
+	_m.damage(other, Vector3(ob.position.x + 0.2, ob.get_center().y, ob.get_center().z), 1.2)
+	var owed: bool = (_m.pending_state().resolve as PackedInt32Array).size() > 0 \
+			or _m._resolve_queue.has(other)
+	_m._decide_owed(other)
+	_ok("a decision queued for a piece is made before it sleeps", owed and not _m._resolve_queue.has(other))
+
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
