@@ -44,7 +44,10 @@ const SETTLE_MS := 350
 ## Chamfer builds in flight at once, bands looked at a step (the ones being
 ## built are looked at every step), stud buffers made a step.
 const IN_FLIGHT := 2
-const SLICE := 48
+const SLICE := 16
+## A band that moved this far since it was last looked at is not still: a piece
+## in the air is drawn flat until it has come to rest (and SETTLE_MS more).
+const STILL := 0.02
 const STUD_BUILDS := 2
 
 enum { FLAT, PENDING, UPLOADING, NEAR }
@@ -57,6 +60,7 @@ class Band:
 	var chunk := -1
 	var section := -1
 	var box := AABB()
+	var at := Vector3.ZERO   ## where the node was when last looked at
 	var state := FLAT
 	var since := 0
 	var layers := 1
@@ -78,6 +82,16 @@ var chamfered_tris := 0       ## drawn by them
 var stud_instances := 0       ## in the stud MultiMeshes held now
 var builds := 0               ## chamfered bands built, ever
 var worst_step_ms := 0.0
+var step_ms := 0.0            ## all of `step`, and how many
+var steps := 0
+var damage_ms := 0.0          ## all of `damaged`, how many, the worst one
+var damage_calls := 0
+var worst_damage_ms := 0.0
+## The worst single take of a finished band's arrays, hanging of its mesh, and
+## build of a band's studs: the three things `step` does that are not a glance.
+var worst_take_ms := 0.0
+var worst_show_ms := 0.0
+var worst_studs_ms := 0.0
 
 var _bands := {}              ## flat node's instance id -> Band
 var _order: Array[int] = []
@@ -89,6 +103,12 @@ var _blocked := 0             ## bands that want their chamfered mesh and wait
 
 func _init(w: BrickWorld) -> void:
 	world = w
+	# The stud meshes and their material, made now: left to the first band
+	# that wanted studs, they were 45 ms of its step (the material's shader,
+	# mostly) -- the first time the player walked up to a building.
+	PieceMeshes.stud()
+	PieceMeshes.stud_plain()
+	TerrainTile.stud_material()
 
 
 ## A band of `chunk` is drawn by `node` from here on (again: its mesh was
@@ -117,6 +137,7 @@ func track(node: MeshInstance3D, chunk: int, section: int = -1) -> void:
 	band.section = section
 	band.box = node.mesh.get_aabb() if node.mesh != null else AABB()
 	band.since = Time.get_ticks_msec()
+	band.at = node.global_position if node.is_inside_tree() else Vector3.ZERO
 	band.studs_dirty = true
 	if not _by_chunk.has(chunk):
 		_by_chunk[chunk] = []
@@ -130,17 +151,31 @@ func untrack(node: MeshInstance3D) -> void:
 
 
 ## Bricks of `chunk` died (or came back): the owner has patched its flat
-## bands, and this patches the chamfered ones the same way.
-func damaged(chunk: int) -> void:
+## bands, and this patches the chamfered ones the same way. `sections` is the
+## bands the owner's patch moved, if it knows (BrickWorld.update_index_regions
+## says): only those are looked at. Empty is all of them.
+func damaged(chunk: int, sections := PackedInt32Array()) -> void:
 	if not _by_chunk.has(chunk):
 		return
+	var t0 := Time.get_ticks_usec()
 	var by_section := {}
 	for key in _by_chunk[chunk]:
 		var band: Band = _bands.get(key)
 		if band != null:
 			by_section[band.section] = band
-			band.studs_dirty = true
-	for entry in world.update_chamfer_regions(chunk):
+			if sections.is_empty() or band.section < 0 or sections.has(band.section):
+				band.studs_dirty = true
+	_patch(chunk, by_section, sections)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	damage_ms += ms
+	damage_calls += 1
+	worst_damage_ms = maxf(worst_damage_ms, ms)
+
+
+func _patch(chunk: int, by_section: Dictionary, sections: PackedInt32Array) -> void:
+	if chamfered_bands == 0 and _busy.is_empty():
+		return
+	for entry in world.update_chamfer_regions(chunk, sections):
 		var d: Dictionary = entry
 		var band: Band = by_section.get(int(d.section))
 		if band == null:
@@ -173,7 +208,21 @@ func step(eye: Vector3) -> void:
 			break
 		_cursor = (_cursor + 1) % _order.size()
 		_visit(_order[_cursor], eye, now, stud_budget)
-	worst_step_ms = maxf(worst_step_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	step_ms += ms
+	steps += 1
+	worst_step_ms = maxf(worst_step_ms, ms)
+
+
+## One line for a pass's report.
+func report() -> String:
+	return ("%d chamfered band(s) built, %d held now (%d triangles), %d stud(s); "
+			+ "step %.3f ms mean, %.2f worst (take %.2f, hang %.2f, studs %.2f); "
+			+ "a hit's patch %.3f ms mean over %d, %.2f worst") % [
+			builds, chamfered_bands, chamfered_tris, stud_instances,
+			step_ms / maxf(steps, 1.0), worst_step_ms, worst_take_ms, worst_show_ms,
+			worst_studs_ms,
+			damage_ms / maxf(damage_calls, 1.0), damage_calls, worst_damage_ms]
 
 
 ## Everything the camera wants, now, blocking: for a capture or a gate.
@@ -229,7 +278,14 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 		if band.state != FLAT:
 			_to_flat(band)
 		return
-	var local := node.global_transform.affine_inverse() * eye
+	var xf := node.global_transform
+	# Falling, tumbling, sliding: nothing is built for it. A collapse is the
+	# worst moment there is to start building meshes of what is coming down
+	# (and it breaks into other pieces before they would be done).
+	if band.state == FLAT and xf.origin.distance_squared_to(band.at) > STILL * STILL:
+		band.since = now
+	band.at = xf.origin
+	var local := xf.affine_inverse() * eye
 	var nearest := local.clamp(band.box.position, band.box.end)
 	var dist := local.distance_to(nearest)
 
@@ -249,7 +305,9 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 				world.drop_chamfer(band.chunk, band.section)
 				_idle(key, band, now)
 			elif world.chamfer_ready(band.chunk, band.section):
+				var t_take := Time.get_ticks_usec()
 				var arrays: Array = world.take_chamfer_section(band.chunk, band.section)
+				worst_take_ms = maxf(worst_take_ms, float(Time.get_ticks_usec() - t_take) / 1000.0)
 				if arrays.is_empty():
 					_idle(key, band, now)   # its bake went from under it
 				else:
@@ -266,7 +324,10 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 					band.state = FLAT
 					band.since = now
 				else:
+					var t_show := Time.get_ticks_usec()
 					_show_near(band, mesh)
+					worst_show_ms = maxf(worst_show_ms,
+							float(Time.get_ticks_usec() - t_show) / 1000.0)
 		NEAR:
 			if not want:
 				_to_flat(band)
@@ -308,10 +369,10 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 		var v: Variant = node.get_instance_shader_parameter(param)
 		if v != null:
 			near.set_instance_shader_parameter(param, v)
-	band.layers = node.layers
+	band.layers = _layers_of(node)
 	near.layers = band.layers
 	node.add_child(near)
-	node.layers = 0
+	_set_layers(node, 0)
 	band.near = near
 	band.mesh = mesh
 	band.state = NEAR
@@ -333,7 +394,7 @@ func _to_flat(band: Band) -> void:
 		NEAR:
 			world.drop_chamfer(band.chunk, band.section)
 			if is_instance_valid(band.node):
-				band.node.layers = band.layers
+				_set_layers(band.node, band.layers)
 			if is_instance_valid(band.near):
 				band.near.queue_free()
 			band.near = null
@@ -361,7 +422,9 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 		if int(budget[0]) <= 0:
 			return
 		budget[0] = int(budget[0]) - 1
+		var t_studs := Time.get_ticks_usec()
 		_build_studs(band)
+		worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
 	if tier != band.stud_tier and band.studs != null:
 		band.studs.multimesh.mesh = PieceMeshes.stud() if tier == 2 else PieceMeshes.stud_plain()
 		band.stud_tier = tier
@@ -379,7 +442,7 @@ func _build_studs(band: Band) -> void:
 		# Studs never cast (Terrain.md 7.4).
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		mmi.layers = band.layers if band.state == NEAR else band.node.layers
+		mmi.layers = band.layers if band.state == NEAR else _layers_of(band.node)
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
@@ -393,6 +456,24 @@ func _build_studs(band: Band) -> void:
 	mm.instance_count = count
 	if count > 0:
 		mm.set_buffer(buffer)
+
+
+## A node's render layers, and setting them -- past DebugView, which hides a
+## node the same way this hides a flat band (its layers swapped for a layer no
+## camera draws, the real ones kept in a meta) and puts back what it kept. So
+## while DebugView has a node hidden, its real layers are the meta's, and that
+## is what is read and written: read from `layers`, a band shown chamfered
+## during a hidden view would remember the hidden layer as its own, and its
+## flat mesh would stay invisible for good once it went back to it.
+static func _layers_of(node: VisualInstance3D) -> int:
+	return int(node.get_meta(&"view_layers", node.layers))
+
+
+static func _set_layers(node: VisualInstance3D, layers: int) -> void:
+	if node.has_meta(&"view_layers"):
+		node.set_meta(&"view_layers", layers)
+	else:
+		node.layers = layers
 
 
 func _unlink(key: int, chunk: int) -> void:
@@ -417,7 +498,7 @@ func _forget(key: int) -> void:
 		chamfered_bands -= 1
 		chamfered_tris -= band.tris
 		if is_instance_valid(band.node):
-			band.node.layers = band.layers
+			_set_layers(band.node, band.layers)
 		if is_instance_valid(band.near):
 			band.near.queue_free()
 	if band.studs != null and is_instance_valid(band.studs):

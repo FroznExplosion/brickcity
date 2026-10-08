@@ -408,7 +408,7 @@ var brick_material: ShaderMaterial
 var camera: Camera3D
 ## The near tier (chamfered meshes, studs) for the pieces' meshes, if the scene
 ## has one: told of every mesh a piece is given and every patch of one.
-var near: BrickNear
+var near_tier: BrickNear
 
 var islands: Array[BrickIsland] = []
 var settled := 0
@@ -1954,10 +1954,10 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# drew nothing from two frames into its fall until something happened
 		# to rebuild it. New instances of the same band meshes, as `fresh` is.
 		isl.bands = _instance_bands(carried_bands, fresh)
-		if near != null:
+		if near_tier != null:
 			for si in isl.bands.size():
 				if isl.bands[si] != null:
-					near.track(isl.bands[si], isl.chunk, si)
+					near_tier.track(isl.bands[si], isl.chunk, si)
 		# A building that toppled halfway through rebuilding its bands comes down
 		# with holes in it, and nothing rebuilt it until something changed it --
 		# which a landing nobody is near never does (FRACTURE_RANGE). One piece
@@ -2188,8 +2188,6 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 				_held.append(isl)
 			return
 		if _patch_bands(isl):
-			if near != null:
-				near.damaged(isl.chunk)
 			return
 	# Something a patch cannot carry: drop the bands and build the one mesh an
 	# island uses.
@@ -2228,8 +2226,8 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 			if int(region.get("changed_bytes", 0)) > 0:
 				RenderingServer.mesh_surface_update_index_region(
 						isl.array_mesh.get_rid(), 0, int(region.offset), region.data)
-				if near != null:
-					near.damaged(isl.chunk)
+				if near_tier != null:
+					near_tier.damaged(isl.chunk)
 			return
 
 	# Never bake on the main thread. build_chunk_mesh() will do it silently if
@@ -2363,13 +2361,13 @@ func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array, coarse := fal
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null and not coarse else 0
 	isl.index_width = index_width(arrays)
 	isl.mesh.mesh = mesh
-	if near != null:
+	if near_tier != null:
 		# The bricks themselves, whole: not a stand-in, and not while the
 		# piece is drawn by a building's bands (they are tracked one by one).
 		if isl.array_mesh != null and not coarse and isl.bands.is_empty():
-			near.track(isl.mesh, isl.chunk)
+			near_tier.track(isl.mesh, isl.chunk)
 		else:
-			near.untrack(isl.mesh)
+			near_tier.untrack(isl.mesh)
 
 
 ## Room in this tick's upload budget for `verts` more (UPLOAD_VERTS_PER_TICK),
@@ -2498,6 +2496,11 @@ func _patch_bands(isl: BrickIsland) -> bool:
 			return false
 		RenderingServer.mesh_surface_update_index_region(band.get_rid(), 0,
 				int(d.offset), d.data)
+	if near_tier != null and not moved.is_empty():
+		var touched := PackedInt32Array()
+		for entry in moved:
+			touched.append(int((entry as Dictionary).section))
+		near_tier.damaged(isl.chunk, touched)
 	return true
 
 
@@ -3383,8 +3386,8 @@ func _fill_band_holes() -> void:
 		# In the piece's own node's space, as its other bands are.
 		isl.mesh.add_child(node)
 		isl.bands[si] = node
-		if near != null and live:
-			near.track(node, isl.chunk, si)
+		if near_tier != null and live:
+			near_tier.track(node, isl.chunk, si)
 		while isl.band_bytes.size() < isl.bands.size():
 			isl.band_bytes.append(0)
 		isl.band_bytes[si] = index_patch_bytes(arrays) if live else 0

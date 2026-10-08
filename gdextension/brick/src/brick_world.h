@@ -336,7 +336,11 @@ public:
     /// {section, stale = true} for a band whose bake has gone -- drop it.
     /// Each band's bytes are in the index width its own mesh has: two up to
     /// 65,536 vertices, four past that, as the engine chooses.
-    Array update_chamfer_regions(int chunk_id);
+    ///
+    /// `sections`, if not empty, is the bands to look at: the ones whose FLAT
+    /// band moved (update_index_regions) are the only ones whose chamfered
+    /// band can have, and re-indexing a band is the whole cost of this.
+    Array update_chamfer_regions(int chunk_id, const PackedInt32Array &sections);
     /// Stop holding a band and throw away one still being built. `all` is
     /// every band of the chunk, whatever `section` says.
     void drop_chamfer(int chunk_id, int section, bool all = false);

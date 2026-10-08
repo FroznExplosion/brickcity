@@ -2906,7 +2906,7 @@ Array BrickWorld::take_chamfer_section(int chunk_id, int section) {
     return Array();
 }
 
-Array BrickWorld::update_chamfer_regions(int chunk_id) {
+Array BrickWorld::update_chamfer_regions(int chunk_id, const PackedInt32Array &sections) {
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -2916,6 +2916,10 @@ Array BrickWorld::update_chamfer_regions(int chunk_id) {
     for (; it != chamfer_bands.end() && it->first.first == chunk_id; ++it) {
         ChamferBand &band = it->second;
         const int section = it->first.second;
+        // The chunk as one band (section < 0) is every section.
+        if (!sections.is_empty() && section >= 0 && !sections.has(section)) {
+            continue;
+        }
         Dictionary d;
         d["section"] = section;
         if (!c.bake.valid || c.bake.serial != band.serial
@@ -7553,8 +7557,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::chamfer_ready);
     ClassDB::bind_method(D_METHOD("take_chamfer_section", "chunk_id", "section"),
             &BrickWorld::take_chamfer_section);
-    ClassDB::bind_method(D_METHOD("update_chamfer_regions", "chunk_id"),
-            &BrickWorld::update_chamfer_regions);
+    ClassDB::bind_method(D_METHOD("update_chamfer_regions", "chunk_id", "sections"),
+            &BrickWorld::update_chamfer_regions, DEFVAL(PackedInt32Array()));
     ClassDB::bind_method(D_METHOD("drop_chamfer", "chunk_id", "section", "all"),
             &BrickWorld::drop_chamfer, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("get_chamfer_expected_triangles", "chunk_id", "section"),

@@ -1064,7 +1064,12 @@ func _ready() -> void:
 	add_child(islands)
 	islands.setup(world, brick_material, camera)
 	brick_near = BrickNear.new(world)
-	islands.near = brick_near
+	islands.near_tier = brick_near
+	# For measurement: the same city with no near tier at all, to set a pass
+	# against one with it.
+	if "--no-near" in OS.get_cmdline_user_args():
+		BrickNear.enabled = false
+		brick_near.studs_on = false
 	# This scene starts the pieces' mesh jobs itself, after everything else in
 	# its tick (IslandManager._submit_mesh_job).
 	islands.defer_job_start = true
@@ -3881,8 +3886,13 @@ func _remesh(id: int, force_full: bool = false) -> void:
 			RenderingServer.mesh_surface_update_index_region(
 					(held[si] as ArrayMesh).get_rid(), 0, int(d.offset), d.data)
 		if ok:
-			# And the chamfered ones, and the studs the hit uncovered.
-			brick_near.damaged(b.chunk)
+			# And the chamfered ones, and the studs the hit uncovered: of the
+			# bands this patch moved, no others.
+			var touched := PackedInt32Array()
+			for entry in moved:
+				touched.append(int((entry as Dictionary).section))
+			if not touched.is_empty():
+				brick_near.damaged(b.chunk, touched)
 			return
 
 	_rebuild_bands(id, b.chunk)
@@ -10377,8 +10387,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_L:
 			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:
-			print("[city] chamfered edges: %s"
-					% ("ON" if _toggle_shader("chamfer_enabled") else "OFF"))
+			# Both halves of the bevel: the shaded one, and the real one near
+			# the camera (BrickNear), so the key shows the wall with and
+			# without. Shift+B is the near tier alone.
+			if not event.shift_pressed:
+				_toggle_shader("chamfer_enabled")
+			BrickNear.enabled = not BrickNear.enabled if event.shift_pressed \
+					else bool(_shader_toggles["chamfer_enabled"])
+			print("[city] chamfered edges: shaded %s, built near the camera %s (%.0f m)" % [
+					"ON" if _shader_toggles["chamfer_enabled"] else "OFF",
+					"ON" if BrickNear.enabled else "OFF", BrickNear.radius])
 		KEY_I:
 			# Printed on glass / smooth PEI / textured PEI, or injection
 			# moulded (BrickMaterials.set_look).
@@ -11517,6 +11535,7 @@ func _run_stress_pass() -> void:
 			int(islands.report().discarded), int(islands.report().furniture_deleted)])
 	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
 			_band_builds, _band_cpp_ms, _band_upload_ms, _band_worst])
+	print("[stress] near tier: %s" % brick_near.report())
 	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
 			islands.small_live_max, islands.large_live_max, islands.total_live_max,
 			islands.cap_deleted, islands.cap_slept, maxi(islands.cap_worst_over, 0)])
@@ -12343,6 +12362,14 @@ func _place_build(path: String) -> void:
 ## sub-pixel highlight that does not fade out shimmers, which is the same reason
 ## the seam fades (spec section 2, layer lines).
 func _run_chamfer_pass() -> void:
+	# `-- --chamfer --cost`: what the near tier costs where it is paid --
+	# shooting at, and then bringing down, a building the camera stands beside.
+	# A timing run (CLAUDE.md: the editor closed), and with `--no-near` the
+	# same run without the tier, to set beside it.
+	if "--cost" in OS.get_cmdline_user_args():
+		await _run_chamfer_cost()
+		get_tree().quit(0)
+		return
 	print("[chamfer] real bevels where the camera is, none where it is not")
 	var b := registry.get_building(0)
 	var chunk := _promote(0)
@@ -12404,6 +12431,68 @@ func _run_chamfer_pass() -> void:
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Frame times while a building six metres from the camera is shot at and then
+## cut down, with whatever near tier the run has.
+func _run_chamfer_cost() -> void:
+	print("[chamfer] cost, near tier %s" % ("ON" if BrickNear.enabled else "OFF (--no-near)"))
+	var b := registry.get_building(0)
+	var chunk := _promote(0)
+	await _frames(60)
+	var fx: float = b.recipe.footprint_x * STUD
+	var wall: Vector3 = b.xform * Vector3(fx * 0.5, 2.6, 0.0)
+	camera.global_position = wall - Vector3(1.5, -0.4, 6.0)
+	camera.look_at(wall, Vector3.UP)
+	await _frames(10)
+	brick_near.settle(camera.global_position)
+	await _frames(30)
+	print("[chamfer]   standing: %d bricks, %d bands; %s" % [world.get_alive_block_count(chunk),
+			world.get_chunk_sections(chunk), brick_near.report()])
+	var idle: Array = await _frame_times(120)
+	print("[chamfer]   looking at it: %s" % _frame_line(idle))
+
+	# Twelve shots into the wall, one every five frames.
+	var hits := []
+	for i in 12:
+		_blast(wall + Vector3(-1.5 + 0.5 * float(i % 6), -0.8 + 0.9 * floorf(float(i) / 6.0), 0.3), 0.9)
+		hits.append_array(await _frame_times(5))
+	hits.append_array(await _frame_times(30))
+	print("[chamfer]   twelve shots: %s" % _frame_line(hits))
+	print("[chamfer]   %s" % brick_near.report())
+
+	# And down: its bottom courses cut through from the camera's side.
+	for i in 10:
+		_blast(b.xform * Vector3(fx * (0.05 + 0.1 * float(i)), 0.9, 0.3), 2.2)
+	var fall: Array = await _frame_times(360)
+	print("[chamfer]   brought down: %s" % _frame_line(fall))
+	print("[chamfer]   %s" % brick_near.report())
+	await _save("chamfer_cost_%s" % ("near" if BrickNear.enabled else "flat"))
+
+
+## The next `n` frames' lengths, in ms.
+func _frame_times(n: int) -> Array:
+	var out := []
+	var last := Time.get_ticks_usec()
+	for i in n:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		out.append(float(now - last) / 1000.0)
+		last = now
+	return out
+
+
+func _frame_line(times: Array) -> String:
+	var sum := 0.0
+	var worst := 0.0
+	var over := 0
+	for t in times:
+		sum += float(t)
+		worst = maxf(worst, float(t))
+		if float(t) > 20.0:
+			over += 1
+	return "%d frames, mean %.1f ms, worst %.1f, %d over 20 ms" % [times.size(),
+			sum / maxf(times.size(), 1.0), worst, over]
 
 
 ## Render one frame with the near tier -- chamfered bands, bevelled studs -- on

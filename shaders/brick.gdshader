@@ -40,12 +40,11 @@ uniform float seam_fade_end = 75.0;
 // highlight along the top edges and goes dark along the bottom ones, so an
 // unlit corner still separates from the face beside it.
 //
-// It is SHADED, not built. A chamfer on every edge of every block would be a
-// ring of four quads per face -- five times the triangles for a bevel that is
-// 13 mm wide at game scale and is sub-pixel past about twenty metres. What the
-// eye actually reads at that size is the LIGHTING, so the normal is bent to
-// 45 degrees inside a band along each block edge and the geometry is left flat.
-// It costs two texture-space derivatives and no vertices.
+// Past a few metres it is SHADED, not built: a 13 mm bevel is a pixel at
+// fourteen metres and what the eye reads at that size is the LIGHTING, so the
+// normal is bent to 45 degrees inside a band along each block edge and the
+// geometry is left flat. It costs two texture-space derivatives and no
+// vertices.
 //
 // 13 mm is the real thing to scale: a moulded brick chamfers about 0.3 mm on an
 // 8 mm stud, and a stud here is 0.35 m (Docs/Status.md, "the part palette").
@@ -56,42 +55,30 @@ uniform float seam_fade_end = 75.0;
 // stays legible; the chamfer fades by 60 m because a sub-pixel highlight
 // shimmers.
 //
-// --- why not real geometry near the camera, and a line far away? ----------
+// --- and close to the camera it is BUILT ---------------------------------
 //
-// Asked, and the answer is no, for two reasons of different weight.
+// For a long time this said it never would be, for two reasons: fourteen
+// triangles a face where there were two (a 150 m tower at 685k becoming 4.8M),
+// and a baked vertex buffer rebuilt every time the camera crossed a distance
+// -- the 175 ms M2c was written to remove, driven by camera movement instead
+// of by damage. Both were true of the mesh as it then was.
 //
-// The triangle count is the small one. A chamfered quad is a centre quad plus
-// four edge strips plus four mitred corners: 14 triangles where there was 2.
-// Against the measured figures -- M0's 824 blocks at 36,256 triangles after
-// 82.9% face culling, a 150 m tower at 685k, a 25-tile terrain field at 76k --
-// that is 254k, 4.8M and 532k. The tower alone ends it.
+// What changed (Docs/BrickBevel.md): the bake merges faces per brick, so the
+// chamfered mesh is the bake's faces in the bake's order -- drawn or not by
+// the same rule, damaged by the same index patch; it is a SECOND mesh beside
+// the flat one, built and uploaded on workers and switched in, so nothing is
+// rebuilt when the camera moves; and only the bands within fourteen metres
+// have one (BrickNear). A tower is 6.1x the flat triangles there, and
+// nowhere else.
 //
-// The real reason is M2c. Faces are baked ONCE and damage flips index slots,
-// because re-uploading a chunk's vertex buffer measured 175 ms at 16.5k
-// blocks. A geometry tier that switches with distance has to rebuild and
-// re-upload that buffer every time the camera crosses the threshold -- which
-// is the exact cost M2c was written to remove, re-introduced and now driven
-// by camera movement rather than by damage. Hysteresis bounds how often, not
-// how much.
+// The flat mesh still relies on what the last paragraph here always said: two
+// touching coplanar block faces are meshed as touching coplanar quads, so
+// without the seam a run of same-coloured bricks is one flat slab. On the flat
+// mesh the seam is not decorating a division that exists -- it IS the division.
+// On the chamfered one the division is a groove (see geo_bevel).
 //
-// So: shaded bevel in the chunk mesh, always. Where a real chamfer is wanted
-// it goes on geometry that ALREADY exists and is already instanced and few --
-// studs, scatter, and loose debris. A single brick tumbling past the camera is
-// the one place a flat silhouette genuinely reads wrong, and those are
-// separate meshes with their own budget.
-//
-// BUILT: `PieceMeshes.chamfered_box`, used by IslandManager's debris MultiMesh
-// and by terrain carve debris. 44 triangles -- 6 inset faces, 12 bevel strips,
-// 8 corner triangles -- cached per size, so the bevel is paid ONCE for the
-// whole debris field rather than once per brick. Compare
-// `shots/debris_chamfer_ab.png`: chamfered in red, plain box in blue, at the
-// 2.4 m a brick coming off a wall actually passes you.
-//
-// The corollary, for anyone tempted to switch the seam off and rely on
-// geometry: there is no geometry to rely on. Two touching coplanar block faces
-// are meshed as touching coplanar quads, so without the seam a run of same-
-// coloured bricks is one flat slab. The seam is not decorating a division that
-// exists -- it IS the division.
+// Loose debris bricks and studs have real bevels at any distance: shared
+// instanced meshes, paid once (PieceMeshes.chamfered_box, PieceMeshes.stud).
 group_uniforms chamfer;
 uniform bool chamfer_enabled = true;
 uniform float chamfer_width : hint_range(0.0, 0.05) = 0.013;  // metres, per side

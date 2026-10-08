@@ -3351,12 +3351,9 @@ F10 opening and closing in both, and every row pressed in the scene that offers 
 
 **Not done here, on purpose.**
 
-* *Bricks that are not ground* -- buildings, workshop builds, pieces -- still have the SHADED
-  chamfer only (`brick.gdshader`). Their mesh is `BrickWorld::build_mesh_internal`: a quad per
-  exposed cell face, with a block's index range patched when it is hit. A real chamfer there is a
-  second, near mesh per chunk from the per-brick faces, with the backing §22.13 needed (a bevelled
-  edge beside a face that was culled is a slit) -- a C++ change in the building mesher, and its
-  triangles land on the buildings that are being shot at.
+* *Bricks that are not ground* -- buildings, workshop builds, pieces. Done since
+  ([BrickBevel.md](BrickBevel.md)): a second, chamfered mesh per band of a chunk, from the
+  per-brick faces of the bake, with the backing §22.13 needed.
 * *Two far tiers.* Done next, §22.16.
 * *The level editor in the arena.* Done as an edit mode, §22.17.
 
