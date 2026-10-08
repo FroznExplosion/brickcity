@@ -196,6 +196,10 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md Â
   12 cm deep. So the check was passing on a miss, and the walker's duck-under does not work; it is
   `DebugCamera._walk`, not interiors. The player pawn's same check (`--play`) passes either way.
   A stand-up probe a body's width ahead did not fix it (tried, reverted).
+* **`--play`'s own duck-under check failed once** (2026-10-08, "standing on a brick it ducks under
+  the beam and gets past": ducked, feet at 0.03 m -- off the brick course) and passed the three
+  runs after it and every run before it that day. The pawn's version of the walker's check above;
+  likely the same edge. One in about a dozen so far.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), `impostor_probe` "no holes" (render, on and
   off), and since the several-disasters merge collapse_probe "a lightning storm" and disaster_probe
