@@ -175,8 +175,8 @@ func _heightfield() -> void:
 		streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
 		_press(menu, "Rebuild far terrain")
 		await _frames(2)
-		_ok("Rebuild far terrain lays the far tier again", int(scene._far_blocks) > 0,
-				"%d blocks" % scene._far_blocks)
+		_ok("Rebuild far terrain lays the far tier again", scene._far.block_count() > 0,
+				"%d blocks" % scene._far.block_count())
 		scene._toggle_dev_menu()
 		await _frames(2)
 		_ok("F10 closes it", scene._dev_menu == null)

@@ -505,6 +505,14 @@ static func item_supported(world: BrickWorld, chunk: int, type: String,
 	return false
 
 
+## An item's box in its building's own space, in metres: where it stands and
+## how much room it takes. What a blast is measured against (BuildingRegistry.
+## compromise_items).
+static func item_box(item: Dictionary) -> AABB:
+	var cs := BrickWorld.get_cell_size()
+	return AABB(Vector3(item.cell as Vector3i) * cs, Vector3(_item_span(str(item.type))) * cs)
+
+
 ## How much of an item's floor is live brick in this chunk: 0 to 1, over the
 ## cells under its footprint.
 ##
@@ -616,8 +624,8 @@ static func draw_items(world: BrickWorld, chunk: int, palette: Dictionary,
 	var filaments := BrickWorld.get_filament_count()
 	var parts := 0
 	for i in room.items.size():
-		if room.gone.has(i):
-			continue
+		if room.gone.has(i) or room.laid.has(i):
+			continue   # gone, or bricks now and drawn from them
 		var item: Dictionary = room.items[i]
 		# Its floor went while nobody was looking -- blown out, or fallen with
 		# a piece of the building. It went with it: written off, not drawn

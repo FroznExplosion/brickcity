@@ -1535,7 +1535,7 @@ func _setup_terrain_field() -> void:
 ## The detail tier covers the CITY and stops there: this is an authored place
 ## of a known size, not an infinite world, so `world_half` is a real edge and
 ## the resident square never moves. Everything out to the horizon is the
-## coarse tier, with a static hole cut for the city (TerrainCoarse).
+## coarse tier, with a fixed hole cut for the city (TerrainCoarse).
 func _build_terrain_ground() -> void:
 	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
@@ -1595,8 +1595,9 @@ func _build_terrain_coarse() -> void:
 	_terrain_coarse = TerrainCoarseScript.new()
 	_terrain_coarse.name = "TerrainCoarse"
 	add_child(_terrain_coarse)
-	_terrain_coarse.build(Rect2i(-_terrain_half, -_terrain_half,
-			_terrain_half * 2 + 1, _terrain_half * 2 + 1), TERRAIN_REACH_TILES, _terrain_mat)
+	# A FIXED HOLE: the detail tier covers the city and never moves.
+	_terrain_coarse.build(TERRAIN_REACH_TILES, _terrain_mat, Rect2i(-_terrain_half,
+			-_terrain_half, _terrain_half * 2 + 1, _terrain_half * 2 + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -1670,9 +1671,7 @@ func rebuild_detail() -> void:
 
 ## The coarse tier from scratch: after the smooth step changed.
 func rebuild_far() -> void:
-	if _terrain_coarse != null:
-		_terrain_coarse.queue_free()
-	_build_terrain_coarse()
+	_terrain_coarse.rebuild()
 	print("[city] terrain: coarse rebuilt, %d blocks, %d triangles, smooth from step %d" % [
 		_terrain_coarse.block_count(), _terrain_coarse.triangle_count(),
 		BrickTerrain.get_coarse_smooth_step()])
@@ -1761,6 +1760,9 @@ func _reground(studs: Rect2i) -> void:
 	var hi := Vector2i(floori(float(studs.end.x) / tile), floori(float(studs.end.y) / tile))
 	if _terrain_streamer != null:
 		_terrain_streamer.refresh(Rect2i(lo, hi - lo + Vector2i.ONE))
+	# A pad's skirt can reach past the city's square, onto coarse ground.
+	if _terrain_coarse != null:
+		_terrain_coarse.field_changed(Rect2i(lo, hi - lo + Vector2i.ONE))
 	# The AI caches the ground per column; this drops the cache.
 	ai_world.set_terrain_ground(true)
 	ai_nav.invalidate_box(AABB(Vector3(studs.position.x * STUD, -100.0, studs.position.y * STUD),
@@ -2842,6 +2844,39 @@ func _group_cover(id: int, g: InteriorGroups.Group, on: bool) -> void:
 	g.cover = on
 	g.cover_stale = false
 	_group_covers += 1
+
+
+## Collision for items just laid as bricks one at a time (BuildingRegistry.
+## lay_item): a box a block on the building's furniture body, as a laid room's
+## blocks have (_add_room_shapes), so each goes when its block does (_disable).
+## `laid` is [[room index, item index], ...].
+func _add_item_shapes(id: int, laid: Array) -> void:
+	var b := registry.get_building(id)
+	if b == null or laid.is_empty() or not _brick_cols.has(id):
+		return
+	var body := _room_body(id)
+	if not body.is_valid():
+		return
+	var map: Dictionary = _room_shapes.get(id, {})
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	PhysicsServer3D.body_set_space(body, RID())
+	for pair in laid:
+		var room := registry.get_room(id, int(pair[0]))
+		if room == null:
+			continue
+		var item: Dictionary = room.items[int(pair[1])]
+		for block in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+			var ticks: Array = world.get_block_ticks(b.chunk, block)
+			if ticks.is_empty():
+				continue
+			var lo: Vector3 = Vector3(ticks[0] as Vector3i) * tick_m
+			var size: Vector3 = Vector3(ticks[1] as Vector3i) * tick_m
+			var at := _take_shape(id, body, size, Transform3D(Basis(), lo + size * 0.5))
+			var shapes: PackedInt32Array = map.get(block, PackedInt32Array())
+			shapes.push_back(at)
+			map[block] = shapes
+	_room_shapes[id] = map
+	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 
 
 ## Everything the groups hold for one building: its drawings, and its boxes
@@ -4232,8 +4267,8 @@ func _crush_drawn(source: BrickIsland) -> void:
 			if room == null or not room.world_box(b.xform).intersects(piece):
 				continue
 			for i in room.items.size():
-				if room.gone.has(i):
-					continue
+				if room.gone.has(i) or room.laid.has(i):
+					continue   # gone already, or bricks: the piece meets those itself
 				var cell: Vector3i = (room.items[i] as Dictionary).cell
 				# With storey groups an item is where its floor is, and a room
 				# whose floor has left is air here: what falls through that air
@@ -7009,6 +7044,48 @@ func _run_groups_pass() -> void:
 			"%d of %d group(s) asked again (the shot in group %d), %d room(s) worked out;%s" % [
 				asked, layout.size(), hit_group, interior_groups.rooms_worked - worked0, why])
 
+	# A blast at a PIECE: that piece becomes bricks and is broken as bricks
+	# are. Its room is not laid, and the rest of the storey goes on being a
+	# drawing (Interiors.md 8.4). A room of two pieces or more that nothing
+	# has touched, in a group near enough to have its collision.
+	var shot_room: Room = null
+	var shot_item := -1
+	var shot_group: InteriorGroups.Group = null
+	var shot_offset: Vector3i = registry._rebase_of(b)
+	for g in layout:
+		if not g.cover or shot_room != null:
+			continue
+		for index in range(g.first_room, g.last_room):
+			var r := registry.get_room(b.id, index)
+			if r == null or r.items.size() < 2 or not r.gone.is_empty() or not r.laid.is_empty():
+				continue
+			if RoomManifest.item_floor_share(world, b.chunk, str(r.items[0].type),
+					(r.items[0].cell as Vector3i) - shot_offset) > 0.5:
+				shot_room = r
+				shot_item = 0
+				shot_group = g
+				break
+	if shot_room != null:
+		var laid0: int = registry.items_laid
+		var boxes0: int = shot_group.piece_count
+		_blast(b.xform * RoomManifest.item_box(shot_room.items[shot_item]).get_center(), 0.5)
+		for t in 30:
+			await get_tree().physics_frame
+		await _groups_settle(b)
+		_gate_ok("a blast at a piece makes that piece bricks, and lays no room",
+				registry.items_laid > laid0 and shot_room.laid.has(shot_item)
+				and not shot_room.active and int(registry.room_report().active) == 0,
+				"%d piece(s) laid, room %d: laid %s, gone %s; %d room(s) laid whole" % [
+					registry.items_laid - laid0, shot_room.id, shot_room.laid.keys(),
+					shot_room.gone.keys(), int(registry.room_report().active)])
+		_gate_ok("  and the rest of its storeys are still a drawing, less what the blast reached",
+				shot_group.shown and not shot_group.dirty and shot_group.piece_count > 0
+				and shot_group.piece_count < boxes0,
+				"%d box(es) before, %d after" % [boxes0, shot_group.piece_count])
+	else:
+		_gate_ok("a blast at a piece makes that piece bricks, and lays no room", false,
+				"no untouched room of two pieces in a group with collision")
+
 	# A section comes off: nothing of a group stays drawn where its floor has left.
 	var wb := _world_box(b)
 	var cut_storey := mini(9, int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR - 3)
@@ -8027,7 +8104,19 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		# the difference between 20 ms a frame and 108 in a firefight.
 		var watched_room: bool = camera != null 				and camera.global_position.distance_to(point) < ROOM_RANGE * 1.5
 		var t_room := Time.get_ticks_usec()
-		var woke: int = registry.compromise_rooms(b.id, point, radius, watched_room)
+		var woke := 0
+		if group_interiors:
+			# With storey groups a blast lays the PIECES it reaches, each on
+			# its own, and no room (Interiors.md 8.4): what is hit is bricks
+			# from here on, and the rest of the room goes on being drawn.
+			var reached: Dictionary = registry.compromise_items(b.id, point, reach, watched_room)
+			woke = (reached.laid as Array).size() + int(reached.gone)
+			if not (reached.laid as Array).is_empty():
+				_add_item_shapes(b.id, reached.laid)
+				_furnished[b.id] = true
+				_refresh_furniture(b.id)
+		else:
+			woke = registry.compromise_rooms(b.id, point, radius, watched_room)
 		# A drawn room the blast reached was promoted -- or, unwatched, written
 		# off -- and either way it is not drawn any more. A faked one likewise:
 		# what the blast did to it is in its diff now.
@@ -8038,7 +8127,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 			# _sync_drawn is for the rungs -- a pass later is a laid room drawn
 			# twice for four ticks.
 			_groups_rooms_moved(b, local.y - reach, local.y + reach)
-		if woke > 0 and watched_room:
+		if woke > 0 and watched_room and not group_interiors:
 			var fb := _room_body(b.id)
 			if fb.is_valid():
 				PhysicsServer3D.body_set_space(fb, RID())

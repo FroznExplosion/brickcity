@@ -17,6 +17,8 @@ extends SceneTree
 ##   * what a section of the building takes with it is on that section: the
 ##     same boxes, worked out from the piece's own chunk, none lost and none
 ##     drawn twice -- so a collapsed building is not empty;
+##   * a piece a blast reaches becomes bricks -- that piece and no other; the
+##     rest of its room goes on being drawn (Interiors.md 8.4);
 ##   * the small things (BuildRecipe.Role.DETAIL) are a drawing of their own.
 ##
 ## What needs the city -- ranges, fades, the collapse rules, collision -- is the
@@ -39,6 +41,7 @@ func _init() -> void:
 	print("interiors by storey group")
 	_check_cut()
 	_check_building()
+	_check_shot()
 	_check_details()
 	print("\n%d passed, %d failed" % [passed, failed])
 	quit(1 if failed > 0 else 0)
@@ -369,6 +372,110 @@ func _check_section(w: BrickWorld, reg: BuildingRegistry, groups: InteriorGroups
 	_ok("a piece let go draws nothing", groups.piece(piece_chunk) == null
 			and on_piece.get_child_count() == 0 or (on_piece.get_child(0) as Node).is_queued_for_deletion())
 	on_piece.queue_free()
+
+
+## A piece that is hit becomes bricks, alone. Interiors.md 8.4: no room is
+## ever laid whole -- a blast lays the pieces it reaches, each on its own, and
+## from then on those are ordinary brick destruction while the rest of the room
+## goes on being a drawing.
+func _check_shot() -> void:
+	print("\na piece that is hit becomes bricks, alone")
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	reg.floors_decide = true
+	var id := reg.register(40, 30, 60, Transform3D.IDENTITY)
+	var b := reg.get_building(id)
+	reg.materialise(id)
+	var groups := InteriorGroups.new()
+	groups.world = w
+	groups.registry = reg
+	var parent := Node3D.new()
+	root.add_child(parent)
+	var far := Time.get_ticks_usec() + 60000000
+	var layout: Array = groups.layout(b)
+	for g in layout:
+		groups.work(b, g, far)
+		groups.attach(b, g, parent)
+	# A room of three pieces or more, one of them with nothing within 0.6 m.
+	var room: Room = null
+	var target := -1
+	for r in reg.rooms_of(id):
+		if r.items.size() < 3 or room != null:
+			continue
+		for i in r.items.size():
+			var mine := RoomManifest.item_box(r.items[i]).grow(0.6)
+			var alone := true
+			for j in r.items.size():
+				if j != i and mine.intersects(RoomManifest.item_box(r.items[j])):
+					alone = false
+			if alone:
+				room = r
+				target = i
+				break
+	_ok("there is a room of three pieces with one standing clear", room != null)
+	if room == null:
+		return
+	var group: InteriorGroups.Group = null
+	for g in layout:
+		if room.id >= g.first_room and room.id < g.last_room:
+			group = g
+	var k := room.id - group.first_room
+	var rows_before := (group.pieces[k] as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+	var interior_parts := 0
+	for part in RoomManifest.parts_of(str(room.items[target].type)):
+		if palette.has(part[0]) and not RoomManifest.is_detail(part):
+			interior_parts += 1
+	var decor_before := w.get_decorative_blocks(b.chunk).size()
+	# The building stands at the origin, unturned: its own space is the world's.
+	var hit: Dictionary = reg.compromise_items(id,
+			RoomManifest.item_box(room.items[target]).get_center(), 0.3, true)
+	var laid: PackedInt32Array = room.items[target].get("blocks", PackedInt32Array())
+	_ok("a blast at it lays that piece as bricks, and no other",
+			hit.laid == [[room.id, target]] and room.laid.size() == 1 and room.laid.has(target)
+			and not room.active and not laid.is_empty()
+			and w.get_decorative_blocks(b.chunk).size() == decor_before + laid.size(),
+			"laid %s; %d brick(s); %d decorative in the chunk before, %d after" % [
+				hit.laid, laid.size(), decor_before, w.get_decorative_blocks(b.chunk).size()])
+	groups.room_changed(id, room.id)
+	groups.work(b, group, far)
+	if group.changed:
+		groups.attach(b, group, parent)
+	var rows_after := (group.pieces[k] as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+	_ok("the rest of the room goes on being drawn, without it",
+			rows_after == rows_before - interior_parts and rows_after > 0 and not group.dirty,
+			"%d box(es) of the room before, %d after, %d were the piece's" % [
+				rows_before, rows_after, interior_parts])
+	_ok("and asked for its floors, a piece that is bricks is not handed back as lost",
+			groups.check_floors(b, -INF, INF).is_empty())
+	# Nobody near enough to see: written off, and nothing laid.
+	var other := -1
+	var third := -1
+	for i in room.items.size():
+		if i == target:
+			continue
+		if other < 0:
+			other = i
+		elif third < 0:
+			third = i
+	var decor_now := w.get_decorative_blocks(b.chunk).size()
+	var unseen: Dictionary = reg.compromise_items(id,
+			RoomManifest.item_box(room.items[other]).get_center(), 0.05, false)
+	_ok("with nobody near enough to see, what the blast reaches is written off and nothing is laid",
+			(unseen.laid as Array).is_empty() and int(unseen.gone) == 1 and room.gone.has(other)
+			and w.get_decorative_blocks(b.chunk).size() == decor_now,
+			"%s" % [unseen])
+	# The bricks go back: a laid piece with a brick destroyed is written off,
+	# one nothing touched is a drawing again.
+	reg.compromise_items(id, RoomManifest.item_box(room.items[third]).get_center(), 0.05, true)
+	var third_laid := room.laid.has(third)
+	w.kill_blocks(b.chunk, PackedInt32Array([laid[0]]))
+	reg.dematerialise(id)
+	_ok("when the building gives its bricks back, a laid piece with a brick destroyed is written off and one untouched is a drawing again",
+			third_laid and room.gone.has(target) and not room.gone.has(third)
+			and room.laid.is_empty() and b.laid_rooms.is_empty(),
+			"third laid %s; gone %s; still laid %s" % [third_laid, room.gone.keys(), room.laid.keys()])
+	parent.queue_free()
 
 
 ## The small things: an authored item with a DETAIL part on it. The part is a
