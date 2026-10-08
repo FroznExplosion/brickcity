@@ -28,6 +28,15 @@ const DOABLE := {
 	# Said aloud (SAID), then fire from cover.
 	"call_help": -1, "mark": -1,
 }
+## Book move -> what a FLYER does with it (Flyer.Mode): circle and fire, a
+## strafing run, break off upwards, or -- a bomber -- dive and go off.
+const AIR := {
+	"trade": Flyer.Mode.ORBIT, "suppress": Flyer.Mode.ORBIT, "hold": Flyer.Mode.ORBIT, "mark": Flyer.Mode.ORBIT,
+	"flank": Flyer.Mode.ORBIT, "wait": Flyer.Mode.ORBIT, "guard_exits": Flyer.Mode.ORBIT,
+	"rush": Flyer.Mode.RUN, "advance": Flyer.Mode.RUN, "air_window": Flyer.Mode.RUN, "relocate": Flyer.Mode.RUN,
+	"fall_back": Flyer.Mode.CLIMB, "flee": Flyer.Mode.CLIMB, "hide": Flyer.Mode.CLIMB, "regroup": Flyer.Mode.CLIMB,
+	"detonate": Flyer.Mode.DIVE,
+}
 ## A "then grenade" goes this long after the decision.
 const THEN_GRENADE := 1.8
 ## Extras the soldier can do now: said aloud (Callouts).
@@ -107,6 +116,41 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	if so.services.tally != null:
 		so.services.tally.call(&"note", so.book)
 	return tactic
+
+
+## A flyer's decision: the same book, read from the air (TacticsSense.read_air),
+## its move turned into a flight mode (AIR). Returns the mode.
+func decide_air(f: Flyer, target: Pawn, rng: RandomNumberGenerator) -> int:
+	if book == null:
+		return Flyer.Mode.ORBIT
+	var sense := TacticsSense.read_air(f, target)
+	var plan := book.plan(sense.moment, sense.facts, sense.amounts, {"last": str(f.book.get("move", ""))}, [], rng)
+	var move: String = plan.move
+	var asked := move
+	if not AIR.has(move):
+		_count(wanted, move)
+		var live: Array = (plan.rows as Array).filter(func(r): return AIR.has(r.move) and r.p > 0.0)
+		var total := 0.0
+		for r in live:
+			total += r.p
+		move = ""
+		var x := rng.randf() * total
+		for r in live:
+			x -= r.p
+			if x <= 0.0:
+				move = r.move
+				break
+		if move == "" and not live.is_empty():
+			move = live[live.size() - 1].move
+	_count(done, move)
+	f.book = {"moment": sense.moment, "facts": sense.facts, "amounts": sense.amounts, "move": move,
+			"asked": asked, "extras": [], "wanted_extras": []}
+	if f.services.tally != null and move != "":
+		f.services.tally.call(&"note", f.book)
+	# A flank is the other way round the circle.
+	if move == "flank":
+		f.orbit_dir = -f.orbit_dir
+	return int(AIR.get(move, Flyer.Mode.ORBIT))
 
 
 ## Again, among the moves the soldier can do now, in their book proportions.

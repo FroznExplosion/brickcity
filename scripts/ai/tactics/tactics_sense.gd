@@ -116,6 +116,42 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	return {"moment": _moment(so, c, facts, amounts, now), "facts": facts, "amounts": amounts}
 
 
+## The same reading for a FLYER over `target` (Flyer): distance, how covered the
+## target is from where it flies, a roof over the target ("inside"), its own
+## health, and what its recipe says it is.
+static func read_air(f: Flyer, target: Pawn) -> Dictionary:
+	var s := f.services
+	var from := f.body.global_position
+	var them := target.feet()
+	var facts: Array = ["p_seen"]
+	for t in f.type_facts:
+		if not facts.has(str(t)):
+			facts.append(str(t))
+	if not facts.has("we_flyer"):
+		facts.append("we_flyer")
+	var d := from.distance_to(them)
+	if d <= REACH + 0.6:
+		facts.append("p_reach")
+	var theirs := cover_level(s, from, them)
+	if theirs > 0:
+		facts.append("destructible")
+	if BTShelter.covered(s, them):
+		facts.append("inside")
+	if target.eye != null and (-target.eye.global_basis.z).dot((from - them).normalized()) < 0.0:
+		facts.append("p_unaware")
+	var hp := clampf(f.health.total_current() / maxf(f.max_health, 1.0), 0.0, 1.0) * 100.0
+	var amounts := {"dist": d, "pcover": theirs, "cover": 0, "hp": hp, "mag": 0.0 if f.no_gun else 100.0,
+			"squad": 100.0, "php": _health_pct(target)}
+	var moment := "first_contact"
+	if hp < 35.0:
+		moment = "losing"
+	elif facts.has("p_unaware"):
+		moment = "have_jump"
+	elif theirs == 2:
+		moment = "player_dug_in"
+	return {"moment": moment, "facts": facts, "amounts": amounts}
+
+
 static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amounts: Dictionary, now: float) -> String:
 	if float(amounts.dist) < CLOSE_QUARTERS:
 		return "close_quarters"

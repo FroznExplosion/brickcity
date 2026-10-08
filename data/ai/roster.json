@@ -20,7 +20,7 @@
      1,
      5,
      5,
-     2,
+     3,
      21,
      12
     ],
@@ -737,7 +737,7 @@
    "role": "fodder",
    "mods": [],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Weak Bomber Flyer",
@@ -763,7 +763,7 @@
       1,
       5,
       5,
-      2,
+      3,
       21,
       12
      ],
@@ -779,6 +779,111 @@
     ],
     "melees": 1,
     "points": 0.45,
+    "phases": []
+   }
+  },
+  "drone": {
+   "body": "flyer",
+   "size": "small",
+   "class": "light",
+   "grade": "regular",
+   "attack": "shooter",
+   "role": "line",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Rifleman Flyer",
+    "name": "Drone",
+    "errors": [],
+    "warnings": [],
+    "weapon": "rifle",
+    "attack": "shooter",
+    "role": "line",
+    "grenades": 2,
+    "facts": [
+     "we_flyer"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "small",
+     "l": "Small",
+     "tall": 0.6,
+     "wide": 0.4,
+     "nav": [
+      1,
+      5,
+      5,
+      3,
+      21,
+      12
+     ],
+     "fits": "anywhere a person does, and gaps",
+     "floors": "no weight to speak of",
+     "eg": "a dog, a drone"
+    },
+    "layers": [
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 1,
+    "points": 1,
+    "phases": []
+   }
+  },
+  "hound": {
+   "body": "walker",
+   "size": "small",
+   "class": "light",
+   "grade": "weak",
+   "attack": "melee",
+   "role": "fodder",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Weak Melee",
+    "name": "Hound",
+    "errors": [],
+    "warnings": [],
+    "weapon": "melee",
+    "attack": "melee",
+    "role": "fodder",
+    "grenades": 0,
+    "facts": [
+     "we_melee",
+     "we_fodder"
+    ],
+    "tier": "swarm",
+    "size": {
+     "id": "small",
+     "l": "Small",
+     "tall": 0.6,
+     "wide": 0.4,
+     "nav": [
+      1,
+      5,
+      5,
+      3,
+      21,
+      12
+     ],
+     "fits": "anywhere a person does, and gaps",
+     "floors": "no weight to speak of",
+     "eg": "a dog, a drone"
+    },
+    "layers": [
+     [
+      "health",
+      0.5
+     ]
+    ],
+    "melees": 1,
+    "points": 0.6,
     "phases": []
    }
   },
