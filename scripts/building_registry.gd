@@ -158,6 +158,8 @@ class Building:
 	## And which are DRAWN -- on screen from the manifest, no blocks laid.
 	## Kept for the same reason `open_rooms` is.
 	var drawn_rooms: Array[int] = []
+	## And which hold an item laid as bricks on its own (Room.laid).
+	var laid_rooms: Array[int] = []
 
 	func is_damaged() -> bool:
 		if hit or not dead.is_empty():
@@ -724,6 +726,107 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 	return woken
 
 
+## Lay ONE item of a room into the building's chunk as bricks.
+## [Interiors §8.4](../Docs/Interiors.md): what a blast or a bullet reaches
+## becomes bricks -- that piece, and only that piece -- and is ordinary brick
+## destruction from then on. The room is not opened and its other pieces stay
+## a drawing. Returns how many blocks were laid.
+##
+## Only where it stands: an item whose floor is not mostly in this chunk is on
+## a piece somewhere else (RoomManifest.item_floor_share), and is not here to
+## be laid.
+func lay_item(building_id: int, index: int, i: int) -> int:
+	var b := get_building(building_id)
+	var room := get_room(building_id, index)
+	if b == null or room == null or room.active or not b.is_materialised() or b.toppled:
+		return 0
+	if room.items.is_empty():
+		room.items = RoomManifest.items_for(room)
+	if i < 0 or i >= room.items.size() or room.gone.has(i) or room.laid.has(i):
+		return 0
+	var item: Dictionary = room.items[i]
+	var offset := _rebase_of(b)
+	if RoomManifest.item_floor_share(world, b.chunk, str(item.type),
+			(item.cell as Vector3i) - offset) <= 0.5:
+		return 0
+	var blocks := RoomManifest.build_item(world, b.chunk, palette,
+			{"type": item.type, "cell": item.cell, "yaw": item.yaw}, 4 + int(i % 8), offset)
+	if blocks.is_empty():
+		# Something is already where it stands -- rubble, a fallen beam. It
+		# cannot be both: it is gone, as an item a room could not place is.
+		room.gone[i] = true
+		return 0
+	item["blocks"] = blocks
+	room.laid[i] = true
+	if not b.laid_rooms.has(index):
+		b.laid_rooms.append(index)
+	items_laid += 1
+	return blocks.size()
+
+
+var items_laid := 0   ## items laid as bricks one at a time, all told
+
+
+## Every interior piece a blast reaches, where it stands: laid as bricks if
+## somebody could see it (`build`), written off if nobody could -- the same
+## choice compromise_rooms makes for a whole room, made for the pieces inside
+## `radius` of the point and no others. Returns {laid: [[room, item], ...],
+## gone: how many were written off}.
+func compromise_items(building_id: int, world_point: Vector3, radius: float,
+		build: bool = true) -> Dictionary:
+	var out := {"laid": [], "gone": 0}
+	var b := get_building(building_id)
+	if b == null or b.is_build() or not b.is_materialised() or b.toppled:
+		return out
+	var local := b.xform.affine_inverse() * world_point
+	var offset := _rebase_of(b)
+	for room in rooms_of(building_id):
+		if not room.local_box().grow(radius).has_point(local):
+			continue
+		if room.active:
+			room.hit = true   # a room the rungs laid whole: bricks already
+			continue
+		if room.items.is_empty():
+			room.items = RoomManifest.items_for(room)
+		for i in room.items.size():
+			if room.gone.has(i) or room.laid.has(i):
+				continue
+			var item: Dictionary = room.items[i]
+			var box := RoomManifest.item_box(item)
+			var nearest := local.clamp(box.position, box.end)
+			if nearest.distance_to(local) > radius:
+				continue
+			if RoomManifest.item_floor_share(world, b.chunk, str(item.type),
+					(item.cell as Vector3i) - offset) <= 0.5:
+				continue   # not standing here: on a piece somewhere
+			if build:
+				if lay_item(building_id, room.id, i) > 0:
+					(out.laid as Array).append([room.id, i])
+				elif room.gone.has(i):
+					out.gone += 1
+			else:
+				room.gone[i] = true
+				out.gone += 1
+	return out
+
+
+## The building's bricks are going back: an item laid as bricks goes with
+## them. One with a brick destroyed is written off; one nothing touched is a
+## drawing again the next time the building is bricks.
+func _unlay_all(b: Building, dead: Dictionary) -> void:
+	for index in b.laid_rooms:
+		var room: Room = b.rooms[index]
+		for i in room.laid:
+			var item: Dictionary = room.items[i]
+			for id in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+				if dead.has(id):
+					room.gone[i] = true
+					break
+			item["blocks"] = PackedInt32Array()
+		room.laid.clear()
+	b.laid_rooms.clear()
+
+
 ## Which of this building's rooms are within `radius` metres of a world point.
 ##
 ## Arithmetic on the room lattice rather than a walk over the rooms. The
@@ -1045,6 +1148,7 @@ func dematerialise(id: int) -> void:
 	for room in b.rooms:
 		if room.active:
 			deactivate_room(id, room.id, dead, true)
+	_unlay_all(b, dead)
 	_undraw_all(b)
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION

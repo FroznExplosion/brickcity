@@ -292,7 +292,7 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 	for k in n:
 		var room: Room = rooms[g.first_room + k]
 		var state := (1 if room.active else 0) | (2 if room.spilled else 0)
-		if g.room_stamp[k] == g.struct_stamp and g.room_gone[k] == room.gone.size() \
+		if g.room_stamp[k] == g.struct_stamp and g.room_gone[k] == room.diff_stamp() \
 				and g.room_state[k] == state:
 			continue
 		if worked > 0 and Time.get_ticks_usec() >= until_usec:
@@ -314,8 +314,7 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 			g.piece_rows[k] = d.pieces
 		g.cover_stale = true
 		g.room_stamp[k] = g.struct_stamp
-		# After the drawing: a piece whose floor has gone is written off BY it.
-		g.room_gone[k] = room.gone.size()
+		g.room_gone[k] = room.diff_stamp()
 		g.room_state[k] = state
 		g.changed = true
 	rooms_worked += worked
@@ -469,8 +468,8 @@ func check_floors(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> Arr
 			var room_lost := false
 			for j in range(0, mine.size(), 6):
 				var i := mine[j]
-				if room.gone.has(i) or (mine[j + 2] == 0 and mine[j + 4] == 0):
-					continue   # gone, or taken out by an earlier asking
+				if room.gone.has(i) or room.laid.has(i) or (mine[j + 2] == 0 and mine[j + 4] == 0):
+					continue   # gone, bricks now, or taken out by an earlier asking
 				var item: Dictionary = room.items[i]
 				if RoomManifest.item_floor_share(world, b.chunk, str(item.type),
 						(item.cell as Vector3i) - offset) > 0.5:
@@ -606,7 +605,7 @@ func piece_gone_sum(p: PieceDraw) -> int:
 	var rooms := registry.rooms_of(p.owner)
 	var n := 0
 	for index in p.rooms:
-		n += (rooms[index] as Room).gone.size()
+		n += (rooms[index] as Room).diff_stamp()
 	return n
 
 
