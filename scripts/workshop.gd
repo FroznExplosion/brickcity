@@ -2151,10 +2151,10 @@ func _build_grid() -> void:
 # Save, load, and the gate: place it in the city and shoot it
 # ---------------------------------------------------------------------------
 
-const SAVE_PATH := "user://workshop_build.json"
-## Where F5 and F9 actually go. The gate points it somewhere else so that a
-## test run cannot overwrite what somebody built.
-var _save_path := SAVE_PATH
+## Where F5 and F9 actually go: the quick-save slot (BuildRecipe.QUICK_SAVE).
+## The gate points it somewhere else so that a test run cannot overwrite what
+## somebody built.
+var _save_path := BuildRecipe.QUICK_SAVE
 
 
 func _save() -> void:
@@ -2165,11 +2165,11 @@ func _save() -> void:
 			recipe.size(), recipe.fixture_count(), _save_path, error_string(err)])
 
 
-## Where Shift+F5 keeps builds: the player's half of the city placer's library
-## (CityPlacer.LIBRARY_DIRS), so every one saved here can be picked up with P
-## and chosen with the wheel. F5 still overwrites the one quick-save slot.
-const BUILDS_DIR := "user://builds/"
-var _builds_dir := BUILDS_DIR
+## Where Shift+F5 keeps builds: the player's half of the building library
+## (BuildRecipe.player_dir), so every one saved here can be picked up with P in
+## the city and chosen with the wheel. F5 still overwrites the one quick-save
+## slot. A gate points this somewhere a test cannot hurt.
+var _builds_dir := BuildRecipe.player_dir()
 
 
 ## Save the build as a NEW entry in the library, never over an old one: the
@@ -2445,8 +2445,7 @@ func _save_current() -> void:
 ## buildings where the city placer finds them, rooms filed by room kind.
 func _save_as(build_name: String, room_kind: String = "") -> String:
 	recipe.name = build_name
-	var dirs: Array = WorkshopMenu.DIRS.get(recipe.kind, WorkshopMenu.DIRS.building)
-	var dir: String = dirs[dirs.size() - 1]   # the player's, not the shipped one
+	var dir := BuildRecipe.player_dir(recipe.kind)   # the player's, not the shipped one
 	if recipe.kind == "room":
 		if room_kind == "":
 			room_kind = str(recipe.meta.get("room_kind", Room.KINDS[0]))
@@ -2458,7 +2457,7 @@ func _save_as(build_name: String, room_kind: String = "") -> String:
 			recipe.meta.erase("room_kind")
 		else:
 			recipe.meta["room_kind"] = room_kind
-	if _builds_dir != BUILDS_DIR:
+	if _builds_dir != BuildRecipe.player_dir():
 		dir = _builds_dir   # the gate writes somewhere a test cannot hurt
 	var path := dir + slug(build_name) + ".json"
 	return path if _write(path) else ""
