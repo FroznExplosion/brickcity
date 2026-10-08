@@ -915,9 +915,9 @@ var _mechfall_mode := false
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
-## city. Empty means nothing was asked for.
+## city. Empty means nothing was asked for; with no path it is the workshop's
+## quick save (BuildRecipe.QUICK_SAVE).
 var _build_path := ""
-const DEFAULT_BUILD_PATH := "user://workshop_build.json"
 ## How many buildings the stress pass destabilises. Every building is damaged
 ## either way; this is how many are hit hard enough to come down. -1 means all
 ## of them, which is the old behaviour -- see `_run_stress_pass`.
@@ -1021,10 +1021,10 @@ func _ready() -> void:
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
 	if _build_mode:
-		_build_path = DEFAULT_BUILD_PATH
+		_build_path = BuildRecipe.QUICK_SAVE
 	for a in args:
 		if a == "--build":
-			_build_path = DEFAULT_BUILD_PATH
+			_build_path = BuildRecipe.QUICK_SAVE
 		elif a.begins_with("--build="):
 			_build_path = a.split("=", true, 1)[1]
 	# Not only in the stress pass. Walking round a city is the reason to want a
@@ -5549,7 +5549,7 @@ func _ground_gates() -> void:
 			off_grid == 0 and off_ground == 0)
 
 	# A saved build, aimed at open hillside, placed like the player does.
-	var path := "res://builds/cottage.json"
+	var path := BuildRecipe.shipped("cottage")
 	# Open, dry hillside: clear of every registry entry -- trees and small
 	# items too, since the placer would land a build ON one -- searched on a
 	# widening spiral, which a city full of trees needs more tries for.
@@ -10402,7 +10402,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					% ("ON" if respawn_buildings else "OFF -- promoted once, resident for good"))
 			_update_hud()
 		KEY_P:
-			_placer.toggle(_build_path if _build_path != "" else DEFAULT_BUILD_PATH)
+			_placer.toggle(_build_path if _build_path != "" else BuildRecipe.QUICK_SAVE)
 		KEY_G:
 			_show_grids = not _show_grids
 			if _grid_view != null:
@@ -10914,7 +10914,7 @@ func _run_checkpoint_pass() -> void:
 	# it, or the load has no building for those commands to land on.
 	var placed_id := -1
 	if _placed.is_empty():
-		_place_build("res://builds/cottage.json")
+		_place_build(BuildRecipe.shipped("cottage"))
 	if not _placed.is_empty():
 		placed_id = int(_placed[0]["id"])
 		var pbox: AABB = CityPlacer.box_of(registry.get_building(placed_id))
@@ -11984,7 +11984,7 @@ func _run_far_pass() -> void:
 			_far_on.has(far_id), fb.is_materialised(), aim_promotions])
 
 	# Stage 4: player builds out there are cards, one bake for identical ones.
-	var tower := BuildRecipe.load_from("res://builds/watchtower.json")
+	var tower := BuildRecipe.load_from(BuildRecipe.shipped("watchtower"))
 	var far_at := here + Vector3(-600.0, 0.0, -600.0)
 	var b1 := registry.register_build(tower, Transform3D(Basis(), BrickWorld.grid_to_world(
 			Vector3i(int(far_at.x / STUD), 0, int(far_at.z / STUD)))))

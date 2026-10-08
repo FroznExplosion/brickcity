@@ -605,7 +605,7 @@ func _check_save_new() -> void:
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(dir + f)
 	DirAccess.remove_absolute(dir)
-	_ws._builds_dir = _ws.BUILDS_DIR
+	_ws._builds_dir = BuildRecipe.player_dir()
 
 
 func _check_delete() -> void:

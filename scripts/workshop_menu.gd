@@ -14,15 +14,6 @@ extends Control
 
 signal action(name: String, arg: Variant)
 
-## Library folders by build kind. `building` is the city placer's library
-## (CityPlacer.LIBRARY_DIRS) so every building saved here can be placed with P.
-## Rooms and items live apart: they are what the GENERATOR builds from
-## (Docs/Workshop.md, Stage E), not things a player drops into the city whole.
-const DIRS := {
-	"building": ["res://builds/", "user://builds/"],
-	"room": ["res://rooms/", "user://rooms/"],
-	"item": ["res://items/", "user://items/"],
-}
 const KIND_LABELS := {
 	"building": "Building",
 	"room": "Room template",
@@ -353,7 +344,7 @@ func _build_open_dialog() -> void:
 	l.text = "Show:"
 	row.add_child(l)
 	_open_filter = OptionButton.new()
-	for k in DIRS:
+	for k in BuildRecipe.LIBRARY_DIRS:
 		_open_filter.add_item(KIND_LABELS[k])
 		_open_filter.set_item_metadata(_open_filter.item_count - 1, k)
 	_open_filter.item_selected.connect(func(_i: int) -> void: _fill_open())
@@ -371,7 +362,7 @@ func show_open(mode: String) -> void:
 	_open_dialog.title = "Open a build" if mode == "open" else "Insert a build into this one"
 	_open_dialog.ok_button_text = "Open" if mode == "open" else "Pick up"
 	# Opening defaults to the kind being authored; inserting is usually a building.
-	var want := _kind if mode == "open" and DIRS.has(_kind) else "building"
+	var want := _kind if mode == "open" and BuildRecipe.LIBRARY_DIRS.has(_kind) else "building"
 	for i in _open_filter.item_count:
 		if _open_filter.get_item_metadata(i) == want:
 			_open_filter.select(i)
@@ -404,27 +395,13 @@ func _open_chosen() -> void:
 	action.emit("open" if _open_mode == "open" else "insert", path)
 
 
-## Every .json under the folders for `kind`, recursively (rooms are filed by
-## room kind), in name order.
+## Every saved build of `kind` (BuildRecipe.library: the folders, and rooms'
+## sub-folders, are its to know). A kind with no library of its own lists
+## nothing here, rather than the buildings.
 static func library(kind: String) -> PackedStringArray:
-	var out := PackedStringArray()
-	for dir in (DIRS.get(kind, []) as Array):
-		_collect(dir, out)
-	return out
-
-
-static func _collect(dir: String, out: PackedStringArray) -> void:
-	if not DirAccess.dir_exists_absolute(dir):
-		return
-	var files := DirAccess.get_files_at(dir)
-	files.sort()
-	for f in files:
-		if f.ends_with(".json"):
-			out.append(dir + f)
-	var subs := DirAccess.get_directories_at(dir)
-	subs.sort()
-	for s in subs:
-		_collect(dir + s + "/", out)
+	if not BuildRecipe.LIBRARY_DIRS.has(kind):
+		return PackedStringArray()
+	return BuildRecipe.library(kind)
 
 
 ## A line about a saved build without building it: name and what is in it.

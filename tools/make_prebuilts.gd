@@ -17,7 +17,8 @@ extends SceneTree
 ## Every build is checked before it is written: every brick has to go in (no
 ## two overlapping) and the whole thing has to stand, grounded, in one piece.
 
-const OUT := "res://builds/"
+## The shipped half of the building library.
+var OUT := BuildRecipe.shipped_dir()
 const STOREY := 6            ## courses: TowerRecipe.COURSES_PER_FLOOR
 const DOOR := 4              ## studs wide, STOREY - 1 courses tall
 const SILL := 2              ## courses of wall under a window
