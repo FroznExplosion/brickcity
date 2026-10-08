@@ -205,6 +205,13 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md ย
   the beam and gets past": ducked, feet at 0.03 m -- off the brick course) and passed the three
   runs after it and every run before it that day. The pawn's version of the walker's check above;
   likely the same edge. One in about a dozen so far.
+* **`-- --groups --programs` fails one check** (found 2026-10-08; the same on the commit before
+  stage 4, so not from it): "a section falls: ... none is left drawn over a floor that has gone" --
+  1 tick, up to 3 boxes in the small city; 3 ticks, up to 9 with `--big`. Without `--programs` it
+  passes. Not looked into. A guess, untested: an authored piece wide enough to stand on two floor
+  panels keeps its place while most of its floor is still there (the rule, ยง8.10), and the gate
+  counts its parts over the panel that has left -- which a built-in piece is too small to do.
+  Either the rule or the gate's measure is wrong for wide pieces; trace which rows hang first.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), `impostor_probe` "no holes" (render, on and
   off), and since the several-disasters merge collapse_probe "a lightning storm" and disaster_probe
@@ -220,15 +227,15 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md ย
 | Key | What | States |
 |---|---|---|
 | **7** | structure: bricks of buildings, shells, far boxes, pieces, crumbs | shown / see-through / hidden |
-| **8** | interior pieces: drawn, faked, storey-group, laid as bricks, riding a section | shown / hidden |
+| **8** | interior pieces: a storey group's drawing, laid as bricks, riding a section | shown / hidden |
 | **9** | items: a storey group's item drawing, loot | shown / hidden |
 
 Only the drawing changes. What is hidden keeps its bricks, its collision and its shadow, and is
 streamed and worked out as before -- so with 7 on hidden, what floats in the air is exactly the
 interior that is spawned, and with 8 hidden as well, what is left is the items. The HUD's `view` line
 says what is switched and counts what is drawn of each. Far boxes and impostor cards stay solid when
-structure is see-through (they cut their own alpha) and go when it is hidden. A room laid as bricks
-draws its small parts with its pieces, so 9 does not separate those. Today a generated city has no
+structure is see-through (they cut their own alpha) and go when it is hidden. A piece laid as bricks
+draws its small parts with it, so 9 does not separate those. Today a generated city has no
 items to hide: no authored item has a DETAIL part and nothing drops loot in the city scene.
 Gate: `city.tscn -- --view --big` (10), which writes `shots/view_*.png`.
 
