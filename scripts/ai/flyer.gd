@@ -10,8 +10,16 @@ extends Node
 ##           target, low, fast, firing
 ##   CLIMB   hit: straight up CLIMB_OUT metres, out of the fight for a moment
 ##
+##   DIVE    a bomber: straight at its target, under the clearance at the end,
+##           and off it goes (Soldier's fuse and blast)
+##
 ## Tiered like the others (AgentTier): SMART decides at THINK_HZ, DIRECTED at a
 ## third of it; it flies every tick either way.
+##
+## A flyer is a type from the roster like any other (set_type, Docs/AIRoster.md
+## RO5): its name over it, its facts for the casebook, and -- when the casebook is
+## the policy -- what it does next is the book's move, turned into a mode
+## (BookCombatPolicy.decide_air). With no book it flies the fixed pattern above.
 
 const THINK_HZ := 5.0
 const DIRECTED_THINK_HZ := 1.5
@@ -31,7 +39,13 @@ const SAMPLE := 3.0
 const LOOK_AHEAD := 1.2
 const HEALTH := 150.0
 
-enum Mode { ORBIT, RUN, CLIMB }
+enum Mode { ORBIT, RUN, CLIMB, DIVE }
+## The casebook is asked again after this long, drawn in this range.
+const DECIDE_EVERY := [2.5, 4.5]
+## A diving bomber may come under the clearance within this of its target.
+const DIVE_LOW := 18.0
+const DIVE_SPEED := 15.0
+const TAG_ABOVE := 0.9
 
 var services: AIServices
 var body: CharacterBody3D
@@ -58,6 +72,24 @@ var _next_run := 0.0
 var _run_dir := Vector3.FORWARD
 var _orbit_angle := 0.0
 var _hp_seen := -1.0
+## What it is (Roster): as a soldier has them (Soldier.set_type).
+var type_id := ""
+var type_facts: Array = []
+var attack_kind := "shooter"
+var role := "line"
+var no_gun := false
+var tier_cap := AgentTier.SMART
+var name_tag: Label3D
+var max_health := HEALTH
+## The casebook's plan behind its mode, when the book decides.
+var book := {}
+## Which way round it circles: a flank is the other way.
+var orbit_dir := 1.0
+## A bomber's fuse and what its blast hurt, for gates.
+var fuse_at := INF
+var blast_hits: Array = []
+var _went_off := false
+var _decide_at := 0.0
 
 
 static func spawn(s: AIServices, parent: Node, at: Vector3, p_team: int, g: GunInstance,
@@ -118,6 +150,39 @@ func set_tier(t: int) -> void:
 	tier = t
 
 
+## Make it the type `id` of `roster`: its facts, its name over it, its attack and
+## the best brain it may run. (Health is the spawner's: UnitCatalog.apply_health.)
+func set_type(id: String, roster: Roster) -> void:
+	if roster == null or not roster.has(id):
+		return
+	type_id = id
+	type_facts = roster.facts(id).duplicate()
+	var d := roster.derived(id)
+	attack_kind = str(d.get("attack", "shooter"))
+	role = str(d.get("role", "line"))
+	no_gun = attack_kind == "melee" or attack_kind == "bomber"
+	max_health = health.total_current()
+	if name_tag == null or not is_instance_valid(name_tag):
+		name_tag = TypeKit.make_tag(body, TypeKit.tag_text(d), team, TAG_ABOVE)
+	else:
+		name_tag.text = TypeKit.tag_text(d)
+	tier_cap = TypeKit.tier_cap(str(d.get("tier", "smart")))
+	if tier_cap == AgentTier.DIRECTED and tier_hsm != null:
+		tier_hsm.demote()
+
+
+## A bomber goes off: the blast, and it is gone.
+func go_off() -> void:
+	if _went_off:
+		return
+	_went_off = true
+	fuse_at = INF
+	blast_hits = Grenade.blast(services, body.global_position - Vector3.UP * 0.3, null,
+			Soldier.BLAST_DAMAGE, Soldier.BLAST_RADIUS)
+	health.apply_impact(1e9, &"")
+	body.queue_free()
+
+
 func is_dead() -> bool:
 	return health == null or health.is_dead()
 
@@ -154,6 +219,9 @@ func _physics_process(delta: float) -> void:
 		gun.set_trigger(false)
 		return
 	var now := services.now()
+	if now >= fuse_at:
+		go_off()
+		return
 	if now >= _next_think and not _queued:
 		_queued = true
 		services.sched.submit(AIScheduler.TREES, 5.0, _think)
@@ -166,6 +234,17 @@ func _physics_process(delta: float) -> void:
 	var floor_h := maxf(height_at(p), height_at(ahead))
 	var v := _want
 	var min_y := floor_h + CLEARANCE
+	# A bomber on its last stretch comes down to its target: nothing else may.
+	if mode == Mode.DIVE and target != null and is_instance_valid(target) \
+			and Vector2(p.x - target.feet().x, p.z - target.feet().z).length() < DIVE_LOW:
+		# Steered every tick, not at the think's rate: at this speed a second-old
+		# heading misses by metres.
+		v = (target.chest() - p).normalized() * DIVE_SPEED
+		body.velocity = body.velocity.lerp(v, clampf(delta * 6.0, 0.0, 1.0))
+		body.move_and_slide()
+		if p.distance_to(target.chest()) <= Soldier.DETONATE_REACH and fuse_at == INF:
+			fuse_at = now + Soldier.FUSE
+		return
 	if p.y < min_y + 0.5:
 		v.y = maxf(v.y, (min_y + 1.0 - p.y) * 3.0)
 		# Too low for what is ahead: hold off until it has climbed.
@@ -197,7 +276,23 @@ func _think() -> void:
 		_want = Vector3.ZERO
 		return
 	var t := target.feet()
+	# What next: the casebook's, when it is the policy; a bomber with no book dives.
+	if services.policy.has_method(&"decide_air"):
+		# A dive is not thought better of.
+		if now >= _decide_at and mode != Mode.CLIMB and mode != Mode.DIVE and (mode != Mode.RUN or now > _mode_until):
+			_decide_at = now + services.rng.randf_range(DECIDE_EVERY[0], DECIDE_EVERY[1])
+			mode = services.policy.call(&"decide_air", self, target, services.rng)
+			_mode_until = now + (RUN_SECONDS if mode == Mode.RUN else CLIMB_SECONDS)
+			if mode == Mode.RUN:
+				var over := t - p
+				over.y = 0.0
+				_run_dir = over.normalized()
+	elif attack_kind == "bomber":
+		mode = Mode.DIVE
 	match mode:
+		Mode.DIVE:
+			state = "dive"
+			_want = (target.chest() - p).normalized() * DIVE_SPEED
 		Mode.CLIMB:
 			state = "climb"
 			_want = Vector3.UP * (CLIMB_OUT / CLIMB_SECONDS) + (p - t).normalized() * 4.0
@@ -212,7 +307,7 @@ func _think() -> void:
 				_next_run = now + RUN_EVERY
 		Mode.ORBIT:
 			state = "orbit"
-			if now >= _next_run and _next_run > 0.0:
+			if not services.policy.has_method(&"decide_air") and now >= _next_run and _next_run > 0.0:
 				mode = Mode.RUN
 				_mode_until = now + RUN_SECONDS
 				var across := t - p
@@ -222,7 +317,7 @@ func _think() -> void:
 			if _next_run == 0.0:
 				_next_run = now + RUN_EVERY
 			var rel := Vector2(p.x - t.x, p.z - t.z)
-			_orbit_angle = rel.angle() + 0.35
+			_orbit_angle = rel.angle() + 0.35 * orbit_dir
 			var spot := t + Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT
 			spot.y = height_at(spot) + ORBIT_UP
 			var to := spot - p
@@ -246,7 +341,7 @@ func _pick_target() -> Pawn:
 
 
 func _fire() -> void:
-	if target == null or not is_instance_valid(target) or mode == Mode.CLIMB:
+	if no_gun or target == null or not is_instance_valid(target) or mode == Mode.CLIMB:
 		gun.set_trigger(false)
 		return
 	var from := body.global_position

@@ -60,16 +60,16 @@ func _catalog() -> void:
 		p2.free()
 	_ok("and its health, the same as before for every unit fielded today", same, ", ".join(totals))
 	var brute := UnitCatalog.get_unit(&"brute")
-	var gnat := UnitCatalog.get_unit(&"gnat")
+	var planned := UnitCatalog.get_unit(&"heavy_gunner_nuker")
 	var nobody := UnitCatalog.get_unit(&"no_such_thing")
 	_ok("a type that exists only as a recipe is a unit, built or planned; one nobody knows is a rifleman",
 			str(brute.get("recipe", "")) == "brute" and str(brute.name) == "Brute" and bool(brute.built)
-			and is_equal_approx(float(brute.points), 4.0) and str(gnat.get("recipe", "")) == "gnat"
-			and not bool(gnat.built) and str(nobody.weapon) == "rifle",
-			"%s: %s pts, built %s; %s: built %s" % [brute.name, brute.points, brute.built, gnat.name, gnat.built])
+			and is_equal_approx(float(brute.points), 4.0) and str(planned.get("recipe", "")) == "heavy_gunner_nuker"
+			and not bool(planned.built) and str(nobody.weapon) == "rifle",
+			"%s: %s pts, built %s; %s: built %s" % [brute.name, brute.points, brute.built, planned.name, planned.built])
 	_ok("only units the game can field are offered to the commander",
 			UnitCatalog.built().has(&"rifleman") and UnitCatalog.built().has(&"brute")
-			and not UnitCatalog.built().has(&"rocketeer") and not UnitCatalog.built().has(&"gnat")
+			and not UnitCatalog.built().has(&"rocketeer") and not UnitCatalog.built().has(&"heavy_gunner_nuker")
 			and not UnitCatalog.built().has(&"mech"), str(UnitCatalog.built()))
 
 

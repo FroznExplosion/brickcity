@@ -114,6 +114,9 @@ var attack_kind := "shooter"
 var role := "line"
 var no_gun := false
 var tier_cap := AgentTier.SMART
+## A spot it is running a path to on the directed tier (BTDirectedEngage: a type
+## with no gun closing in), followed every tick; INF for none.
+var chase_goal := Vector3.INF
 ## Its size of body, the map a body that size walks (null: the person's), and
 ## how far its arm reaches.
 var body_size := "person"
@@ -142,10 +145,10 @@ const PHASE_LINES := {
 	"_": ["New plan!", "Change of plan!"],
 }
 ## How far the name can be read from, and how high over the body's middle it sits.
-const TAG_RANGE := 45.0
+const TAG_RANGE := TypeKit.TAG_RANGE
 const TAG_ABOVE := 0.32
-const TAG_ENEMY := Color(1.0, 0.55, 0.42)
-const TAG_FRIEND := Color(0.5, 0.78, 1.0)
+const TAG_ENEMY := TypeKit.TAG_ENEMY
+const TAG_FRIEND := TypeKit.TAG_FRIEND
 ## The Tactics Casebook's plan behind the tactic, when the book decides
 ## (BookCombatPolicy): {moment, facts, amounts, move, asked, extras, wanted_extras}.
 var book := {}
@@ -275,6 +278,7 @@ func set_tier(t: int) -> void:
 	if parent != null:
 		brain.blackboard.set_parent(parent)
 	field_goal = Vector3.INF
+	chase_goal = Vector3.INF
 	fire_ok = false
 
 
@@ -369,6 +373,10 @@ func _physics_process(_delta: float) -> void:
 		services.sched.submit(AIScheduler.TREES, importance, _think)
 	if field_goal != Vector3.INF:
 		_steer_field()
+	elif chase_goal != Vector3.INF:
+		# Followed every tick: at a run, a path steered at the cheap tier's think
+		# rate overshoots its waypoints and swings back and forth across them.
+		move_to(chase_goal, true)
 	_measure_masked()
 	_gate_masked()
 	if no_gun:
@@ -849,11 +857,7 @@ func set_type(id: String, roster: Roster) -> void:
 	type_id = id
 	type_facts = roster.facts(id).duplicate()
 	var d := roster.derived(id)
-	var tag := str(d.get("tag", ""))
-	var named := str(d.get("name", tag))
-	# Its own name first, unless the tag already says it ("Tough Breacher").
-	var plain := named == "" or tag.to_lower().contains(named.to_lower())
-	set_name_tag(tag if plain else "%s  ·  %s" % [named, tag])
+	set_name_tag(TypeKit.tag_text(d))
 	role = str(d.get("role", "line"))
 	grenades = int(d.get("grenades", GRENADES))
 	explodes = (roster.recipe(id).get("mods", []) as Array).has("explodes")
@@ -877,7 +881,7 @@ func _set_attack(kind: String) -> void:
 ## "smart", or the cheap tiers ("directed", "swarm"): capped, it is put on the
 ## directed tree now and the budget never promotes it.
 func _set_tier_cap(tier_name: String) -> void:
-	tier_cap = AgentTier.SMART if tier_name == "smart" else AgentTier.DIRECTED
+	tier_cap = TypeKit.tier_cap(tier_name)
 	if tier_cap == AgentTier.DIRECTED and tier_hsm != null:
 		tier_hsm.demote()
 
@@ -954,39 +958,19 @@ func _check_phase() -> void:
 
 
 func _phase_due(when: String) -> bool:
-	match when:
-		"armour_gone": return _layer_gone(EnemyProfiles.ARMOR)
-		"shield_gone": return _layer_gone(EnemyProfiles.SHIELD)
-		"health_half": return pawn.health.total_current() < max_health * 0.5
-		"leader_dead": return squad != null and squad.leader_lost
-		"alone": return squad != null and squad.members.size() > 1 and squad.alive().size() <= 1
-	return false
+	return TypeKit.phase_due(when, pawn.health, max_health, squad)
 
 
 ## It wore a layer of `type` and that layer is down.
 func _layer_gone(type: StringName) -> bool:
-	var h := pawn.health
-	for i in h.layer_count():
-		if h.layer_type_at(i) == type:
-			return h.get_layer_value(i) <= 0.0
-	return false
+	return TypeKit.layer_gone(pawn.health, type)
 
 
 ## The words over its head (they follow a phase): seen by anyone within
 ## TAG_RANGE with a clear line -- it is hidden by walls, as the body is.
 func set_name_tag(text: String) -> void:
 	if name_tag == null or not is_instance_valid(name_tag):
-		name_tag = Label3D.new()
-		name_tag.name = "NameTag"
-		name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		name_tag.fixed_size = true
-		name_tag.pixel_size = 0.0011
-		name_tag.font_size = 26
-		name_tag.outline_size = 7
-		name_tag.modulate = TAG_FRIEND if team == AIServices.PLAYER_SIDE else TAG_ENEMY
-		name_tag.visibility_range_end = TAG_RANGE
-		name_tag.position = Vector3.UP * (Pawn.BODY_HEIGHT * 0.5 + TAG_ABOVE)
-		pawn.body.add_child(name_tag)
+		name_tag = TypeKit.make_tag(pawn.body, text, team, pawn.stand_height * 0.5 + TAG_ABOVE)
 	name_tag.text = text
 
 
@@ -1083,6 +1067,7 @@ func _on_nav_changed(box: AABB) -> void:
 func _on_died() -> void:
 	_dead = true
 	fire_ok = false
+	chase_goal = Vector3.INF
 	fuse_at = INF
 	if explodes and not _went_off:
 		_went_off = true

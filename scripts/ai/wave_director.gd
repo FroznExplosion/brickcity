@@ -309,7 +309,40 @@ func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> b
 	_resurvey()
 	print("[arena] reinforcement %d: %s, %d floor spot(s) in building %d" % [
 		wave, ", ".join(kinds), _floors.size(), focus])
+	_air_wing()
 	return true
+
+
+## Flyers the roster has (a flying bomber, a drone) come in with a reinforcement,
+## from the second on: AIR_PER_WAVE of them, from over the rooftops. Not in a
+## gate: its checks count a wave's soldiers. (Until the commander buys recipes by
+## points -- AIRoster.md RO11 -- these are free.)
+const AIR_PER_WAVE := 2
+const AIR_KINDS: Array[StringName] = [&"gnat", &"gnat", &"drone"]
+var air: Array[Flyer] = []
+
+func _air_wing() -> void:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	var p := _player()
+	if wave < 2 or p == null or "--gate" in args or Roster.shared() == null:
+		return
+	air = air.filter(func(f): return is_instance_valid(f) and not f.is_dead())
+	if city._gun_library == null:
+		city._gun_library = GunPlaceholderParts.build_library()
+	for i in AIR_PER_WAVE:
+		var kind: StringName = AIR_KINDS[city._combat_rng.randi() % AIR_KINDS.size()]
+		var unit := UnitCatalog.get_unit(kind)
+		if not bool(unit.get("built", false)):
+			continue
+		var ang := city._combat_rng.randf() * TAU
+		var at := p.feet() + Vector3(cos(ang), 0.0, sin(ang)) * 45.0 + Vector3.UP * 25.0
+		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
+				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
+		var f := Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
+		UnitCatalog.apply_health(f.health, kind, level)
+		f.set_type(str(unit.get("recipe", "")), Roster.shared())
+		air.append(f)
+	print("[arena] air wing: %s" % [air.map(func(f): return f.name_tag.text if f.name_tag != null else "flyer")])
 
 
 func _spawn_one() -> void:
