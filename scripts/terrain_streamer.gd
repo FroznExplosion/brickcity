@@ -127,6 +127,27 @@ func setup(material: Material) -> void:
 		_free_slots.append(i)
 
 
+## Leaving the tree with bakes in flight: wait for them, and keep nothing.
+##
+## A worker still inside BrickTerrain when the scene goes away -- a gate that
+## quits the moment it has its answer -- crashed the engine on the way out
+## (the combat arena's gate, twice in two runs, once the chamfered bakes ran
+## under the city too: Docs/Terrain.md §22.15). A bake is a few milliseconds.
+func _exit_tree() -> void:
+	for slot in _slot_task.size():
+		if _slot_task[slot] < 0:
+			continue
+		WorkerThreadPool.wait_for_task_completion(_slot_task[slot])
+		_slot_task[slot] = -1
+		_slots[slot] = {}
+		_free_slots.append(slot)
+	_tasks.clear()
+	_stale.clear()
+	for c in _bevel_tasks:
+		WorkerThreadPool.wait_for_task_completion(_bevel_tasks[c][0])
+	_bevel_tasks.clear()
+
+
 ## Call every frame with the camera's world position.
 func follow(camera_xz: Vector2) -> void:
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()

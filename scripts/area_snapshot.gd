@@ -36,7 +36,7 @@ extends RefCounted
 
 ## DamageLog.to_data() of the whole area.
 var commands: Array = []
-## [{id, owner, xform (the chunk's), linear, angular, at_rest, disposable}]
+## [{id, owner, xform (the chunk's), linear, angular, at_rest, disposable, landed}]
 var pieces: Array = []
 ## [{id, owner, record (ChunkRecord.to_data)}]
 var dormant: Array = []
@@ -70,6 +70,10 @@ static func capture(history: DamageLog, islands: IslandManager,
 			"angular": isl.body.angular_velocity,
 			"at_rest": isl.settled,
 			"disposable": isl.disposable,
+			# Whether it had come down on something: a piece in the air is not
+			# stress-solved (IslandManager.solve_island), so a decision still
+			# queued for it comes out differently if the load forgets which.
+			"landed": isl.landed,
 		})
 		var riding := furniture_of(w, isl.chunk)
 		if not riding.is_empty():
@@ -164,8 +168,11 @@ func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 				laid += 1
 			else:
 				refused += 1
+		# A save from before pieces said so was of pieces that were always
+		# solved: landed.
 		if islands.restore_piece(chunk, id, int(p.owner), p.xform, p.linear, p.angular,
-				bool(p.at_rest), bool(p.disposable)) != null:
+				bool(p.at_rest), bool(p.disposable),
+				bool((p as Dictionary).get("landed", true))) != null:
 			kept[id] = true
 		else:
 			missing += 1

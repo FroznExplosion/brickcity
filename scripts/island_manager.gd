@@ -706,6 +706,21 @@ func _census_body(isl: BrickIsland, from: String, bricks: int, ms: float) -> voi
 	row[1] += ms
 
 
+## Hits on pieces, by where the piece was when it was hit -- in the air, down
+## but still moving, at rest -- as [hits, bodies they made]. What a shot at
+## wreckage costs depends on which (Docs/CollapseNext.md 1.4).
+var hit_census := [[0, 0], [0, 0], [0, 0]]
+## Stress solves not run because the piece was in the air (solve_island).
+var air_solves_skipped := 0
+
+
+func hit_census_line() -> String:
+	return "hits on pieces -- in the air: %d made %d bodies; down and moving: %d made %d; at rest: %d made %d" % [
+			hit_census[0][0], hit_census[0][1], hit_census[1][0], hit_census[1][1],
+			hit_census[2][0], hit_census[2][1]] + "; %d solve(s) of a piece in the air left at where it was cut through; %d merged rebuild(s), %d tick(s) one was put off" % [
+			air_solves_skipped, merged_rebuilds, reshapes_put_off]
+
+
 ## The census as lines, for a pass to print.
 func body_census_lines() -> PackedStringArray:
 	var out := PackedStringArray()
@@ -1747,17 +1762,42 @@ func _ensure_per_block(isl: BrickIsland) -> void:
 		_reshape(isl, false)
 
 
+## A piece in the air has its collision rebuilt after a change at most this
+## often. It collides with nothing while it falls but what it lands on
+## (Layers.AIRBORNE_MASK), and the rebuild is the whole piece's boxes -- 7 ms
+## for 15,000 bricks -- so a section shot at on its way down was rebuilt every
+## tick it was hit: 20 ms of the worst `islands.tick` once sections stopped
+## shattering in the air (solve_island) and stayed big. Until the rebuild its
+## boxes are a fifth of a second behind its bricks: a bullet can stop on a
+## brick a blast just took. The tick it lands it is rebuilt at once.
+const AIR_RESHAPE_TICKS := 12
+## And one that is down but still moving, this often: what rests on it is
+## resting on its boxes, so less slack than a piece in the air gets -- a tenth
+## of a second. 900-1,300 rebuilds a `--big --shot`, nearly all of them of
+## pieces on the ground being hit tick after tick.
+const MOVING_RESHAPE_TICKS := 6
+var reshapes_put_off := 0
+
+
 ## Rebuild, merged, every falling piece whose blocks changed this tick.
 func _flush_reshapes() -> void:
+	var later: Array[BrickIsland] = []
+	var now := Engine.get_physics_frames()
 	for isl in _reshape_list:
 		if not isl.is_valid() or not isl.reshape_due:
 			continue
-		isl.reshape_due = false
 		if isl.settled:
+			isl.reshape_due = false
 			continue  # settling already rebuilt it
+		if now - isl.reshaped_tick < (MOVING_RESHAPE_TICKS if isl.landed else AIR_RESHAPE_TICKS):
+			later.append(isl)   # still due
+			reshapes_put_off += 1
+			continue
+		isl.reshape_due = false
+		isl.reshaped_tick = now
 		_reshape(isl, true, true)
 		merged_rebuilds += 1
-	_reshape_list.clear()
+	_reshape_list = later
 
 
 ## Is anybody close enough to a landing for it to break the piece that landed?
@@ -2748,9 +2788,18 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# disposable pieces costs a stress solve, a connectivity walk and a chunk
 	# per group, to produce more of what is already being swept up in two and a
 	# half seconds.
+	hit_census[0 if not isl.landed else (2 if isl.settled else 1)][0] += 1
+	# Queued, as a landing's is (shear): what the hit broke off is worked out on
+	# the pieces' share of the tick, once for a piece however many blasts
+	# reached it. It was solved here, in the call: eight blasts a tick into one
+	# fallen section was eight stress solves of it, on nobody's clock. The
+	# first piece in the queue is always done the tick it is queued, so a shot
+	# still breaks what it hits when it hits it.
 	if not isl.disposable:
-		solve_island(isl)
-	rebuild_mesh(isl)
+		if not _resolve_queue.has(isl):
+			_resolve_queue.append(isl)
+	else:
+		rebuild_mesh(isl)
 
 
 ## Damage every loose piece whose volume reaches the blast, not every piece
@@ -2825,6 +2874,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	_ensure_per_block(isl)
 	_upart("shed: per block", _tu)
 	var shed := 0
+	var bodies := 0
 	var more := false
 	for g in groups:
 		if shed >= SHEDS_PER_PASS:
@@ -2841,6 +2891,8 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		_shed_cause = isl.shed_cause
 		var came := spawn(isl.chunk, moved, linear, angular, child, isl.owner)
 		_shedding = false
+		if came != null:
+			bodies += 1
 		if came == null:
 			# Deleted where it was, or dropped over the moving cap: gone, and
 			# anything resting on it with it.
@@ -2864,6 +2916,8 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	_upart("shed: body back", _tb)
 	if more and not _resolve_queue.has(isl):
 		_resolve_queue.append(isl)
+	if isl.shed_cause == "hit":
+		hit_census[0 if not isl.landed else (2 if isl.settled else 1)][1] += bodies
 	if shed == 0:
 		return 0
 	# And redraw what is standing in it. Furniture is not in the face bake, so
@@ -2914,6 +2968,23 @@ func solve_island(isl: BrickIsland) -> void:
 	if not decides:
 		return
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
+	# In the air nothing carries anything. The solve below stands the piece on
+	# its lowest bricks and asks what their joints can hold -- right for
+	# wreckage on the ground, and for a section in free fall it is a tower's
+	# weight hung on a row of studs that is holding up nothing: one shot at a
+	# falling section failed it all the way across, storey after storey. 262
+	# hits on pieces in the air made 174 bodies in a `--big --shot`, 159 of them
+	# 500 bricks or more (385 ms to make, and the worst ticks of the run), where
+	# 155 hits on pieces that were down made 12 (Docs/CollapseNext.md 1.4).
+	# A falling piece comes apart where a hit DISCONNECTS it, and nowhere else
+	# (the rule for every brick: it falls when nothing connects it or force
+	# breaks it). The landing breaks it, along its storeys, when it gets there.
+	if not isl.landed:
+		var _ta := Time.get_ticks_usec()
+		split_if_broken(isl)
+		_upart("split", _ta)
+		air_solves_skipped += 1
+		return
 	var down: Vector3 = isl.body.global_transform.basis.inverse() * Vector3.DOWN
 	# Scaled to integers so the extension can see which component dominates.
 	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SOLVE)
@@ -3989,7 +4060,21 @@ func _stream_dormancy() -> void:
 
 ## Photograph a piece and give everything else back.
 func _sleep(isl: BrickIsland, index: int, by_cap := false) -> bool:
+	_decide_owed(isl)
 	return _commit_sleep(isl, index, ChunkRecord.capture(world, isl.chunk), by_cap)
+
+
+## A piece with a decision still queued -- hit, struck or landed, and not yet
+## re-solved -- has it made now, before it is put to sleep. Asleep it is a
+## record and a stand-in, and the queue's entry for it is an island that no
+## longer exists: what the hit broke off would never come off.
+func _decide_owed(isl: BrickIsland) -> void:
+	var at := _resolve_queue.find(isl)
+	if at < 0:
+		return
+	_resolve_queue.remove_at(at)
+	solve_island(isl)
+	rebuild_mesh(isl)
 
 
 enum { NOTHING, SLEPT, STARTED }
@@ -4001,6 +4086,7 @@ enum { NOTHING, SLEPT, STARTED }
 func _sleep_or_begin(isl: BrickIsland, index: int, for_cap: bool) -> int:
 	if isl.capturing:
 		return STARTED
+	_decide_owed(isl)
 	if world.get_block_count(isl.chunk) <= SLEEP_SYNC_BLOCKS:
 		return SLEPT if _sleep(isl, index, for_cap) else NOTHING
 	isl.capturing = true
@@ -4114,7 +4200,8 @@ func _wake_record(d: Dormant) -> BrickIsland:
 ## hold is physics: where the piece is and how it is moving. That comes from
 ## the save, and here it is put back.
 func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transform3D,
-		linear: Vector3, angular: Vector3, at_rest: bool, is_disposable: bool) -> BrickIsland:
+		linear: Vector3, angular: Vector3, at_rest: bool, is_disposable: bool,
+		was_landed: bool = true) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return null
 	world.set_chunk_transform(chunk, chunk_xform)
@@ -4134,6 +4221,7 @@ func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transf
 		_apply_layers(isl)
 		_reshape(isl, true)
 	else:
+		isl.landed = was_landed
 		_apply_layers(isl)
 		isl.body.linear_velocity = linear
 		isl.body.angular_velocity = angular
