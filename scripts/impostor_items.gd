@@ -18,10 +18,15 @@ extends Node3D
 ##
 ## Small things get small ranges: real mesh inside NEAR, card to CULL, and
 ## the cards cast no shadow (a shadow a few pixels across is not worth a
-## cascade's draw, section 7.2).
+## cascade's draw, section 7.2). Nothing goes in one frame: a card dithers
+## away over the last CULL_FADE metres before CULL (Docs/Interiors.md 8.2 --
+## the rule the interiors' drawings follow, for loot).
 
 const NEAR := 12.0
 const CULL := 150.0
+## The last metres before a kind's cull range that its cards fade out over;
+## no more than half of what lies between its two ranges.
+const CULL_FADE := 25.0
 ## Frames between tier passes.
 const UPDATE_EVERY := 6
 ## Pixels a view in the atlas: small things are small on screen.
@@ -46,6 +51,7 @@ func kind(key: String, mesh: Mesh, material: Material, near: float = NEAR,
 	s.name = "Items_%s" % key
 	add_child(s)
 	s.setup(mesh, material, near, cull, false, TILE)
+	s.set_cull_fade(_fade_for(near, cull))
 	_kinds[key] = s
 	return s
 
@@ -62,8 +68,13 @@ func kind_from_node(key: String, node: Node3D, near: float = NEAR, cull: float =
 	s.name = "Items_%s" % key
 	add_child(s)
 	s.setup_node(node, near, cull, false, NODE_TILE)
+	s.set_cull_fade(_fade_for(near, cull))
 	_kinds[key] = s
 	return s
+
+
+static func _fade_for(near: float, cull: float) -> float:
+	return clampf((cull - near) * 0.5, 0.0, CULL_FADE)
 
 
 ## The kind has nothing left in it: free its bake.

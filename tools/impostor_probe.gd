@@ -73,6 +73,12 @@ func _run() -> void:
 	get_root().add_child(root)
 	var cam := Camera3D.new()
 	cam.far = 2000.0
+	# Where it is put, the frame it is put there. The project interpolates
+	# between physics ticks, a camera included, and this scene draws hundreds
+	# of frames a tick: a picture taken four frames after a move was taken from
+	# somewhere on the way (a card 120 m off measured a twentieth of its size,
+	# a different fraction every run).
+	cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	root.add_child(cam)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-40, -35, 0)
@@ -330,6 +336,76 @@ func _run() -> void:
 				if px.a > 0.5 and px.r > px.g * 2.0:
 					reddish += 1
 	_check("  baked in its own material's colour", reddish > 0)
+
+	# The cull edge (Docs/Interiors.md 8.2, stage 5): a card thins out over
+	# the last CULL_FADE metres before its range, so a copy that is culled has
+	# nothing left on screen to vanish. Through a long lens -- at 150 m a gun
+	# is a few pixels -- from the side, where there is most of it, and looking
+	# at its middle. Measured as how far the picture is from the empty sky,
+	# summed, and not as pixels counted: anti-aliasing spreads a dither's holes
+	# into their neighbours, and a count of touched pixels then reads three
+	# quarters drawn as all of it.
+	print("[impostor] the cull edge")
+	var edge := items.kind("edge", gun_mesh, brick)
+	guard = 0
+	while edge.bake.is_empty() and guard < 300:
+		await process_frame
+		guard += 1
+	var espot := Vector3(6000.0, 0.0, 0.0)
+	var eh := items.add("edge", Transform3D(Basis(), espot))
+	var emid: Vector3 = espot + gun_mesh.get_aabb().get_center()
+	var fov0 := cam.fov
+	cam.fov = 2.0
+	var cull := ImpostorItems.CULL
+	var fade := ImpostorItems.CULL_FADE
+	var d0 := cull - fade - 5.0
+	var seen: Array[float] = []   # how much of it is drawn, as it would measure from d0
+	var tiers: Array[int] = []
+	var wide := 0                 # pixels across, from d0
+	for d in [d0, cull - fade * 0.75, cull - fade * 0.5, cull - fade * 0.25, cull - 0.5, cull + 3.0]:
+		# The fade is measured to the copy's origin, as the tiers are.
+		var off := Vector3(emid.x - espot.x + d, emid.y - espot.y, emid.z - espot.z)
+		cam.position = espot + off.normalized() * d
+		cam.look_at(emid, Vector3.UP)
+		items.update()
+		tiers.append(items.tier_of(eh))
+		var img := await _grab()
+		var sky: Color = img.get_pixel(img.get_width() - 4, img.get_height() - 4)
+		var n := 0.0
+		var x_lo := img.get_width()
+		var x_hi := -1
+		@warning_ignore("integer_division")
+		for y in range(img.get_height() / 4, img.get_height() * 3 / 4):
+			@warning_ignore("integer_division")
+			for x in range(img.get_width() / 4, img.get_width() * 3 / 4):
+				var px := img.get_pixel(x, y)
+				var off_sky := absf(px.r - sky.r) + absf(px.g - sky.g) + absf(px.b - sky.b)
+				n += off_sky
+				if off_sky > 0.12:
+					x_lo = mini(x_lo, x)
+					x_hi = maxi(x_hi, x)
+		if seen.is_empty():
+			wide = maxi(x_hi - x_lo + 1, 0)
+		seen.append(n * (d / d0) * (d / d0))
+		if is_equal_approx(d, cull - fade * 0.5):
+			img.save_png("res://shots/impostor_cull_fade.png")
+	cam.fov = fov0
+	print("[impostor]   %d px across from %.0f m; how much of it is drawn, out to past %.0f m: %s; tiers %s" % [
+			wide, d0, cull, seen.map(func(v): return int(v)), tiers])
+	@warning_ignore("integer_division")
+	_check("short of the fade the card is whole, and all of it in the picture",
+			tiers[0] == 2 and wide > 60 and wide < get_root().size.x / 2 - 8,
+			"tier %d, %d px across" % [tiers[0], wide])
+	_check("  it thins all the way through the last %.0f m" % fade,
+			seen[1] < seen[0] and seen[2] < seen[1] and seen[3] < seen[2] and seen[4] < seen[3])
+	_check("  half way, about half of it is drawn",
+			seen[2] > seen[0] * 0.35 and seen[2] < seen[0] * 0.65,
+			"%.0f%%" % (100.0 * seen[2] / maxf(seen[0], 1.0)))
+	_check("  at its range almost nothing is left to vanish",
+			tiers[4] == 2 and seen[4] < seen[0] * 0.08,
+			"tier %d, %.1f%%" % [tiers[4], 100.0 * seen[4] / maxf(seen[0], 1.0)])
+	_check("  and past it the copy is culled", tiers[5] == 0 and seen[5] < seen[0] * 0.005,
+			"tier %d, %.2f%%" % [tiers[5], 100.0 * seen[5] / maxf(seen[0], 1.0)])
 
 	print("[impostor] %d ok, %d FAIL" % [_ok, _fail])
 	quit(1 if _fail > 0 else 0)

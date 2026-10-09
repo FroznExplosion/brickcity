@@ -17,6 +17,10 @@ shader_type spatial;
 // the other pixels (ImpostorLod's fading brick material uses the same noise
 // and the same distance), so the switch is a blend, not a pop.
 //
+// And where its owner asks (`lod_cull`, ImpostorLod.cull_fade) it dithers away
+// again over the last `lod_cull_band` metres before the range it is culled at,
+// so a copy that reaches that range has nothing left on screen to vanish.
+//
 // In the shadow pass the "camera" is the light, so the card turns to the sun
 // and casts the silhouette the sun would see.
 render_mode world_vertex_coords, cull_disabled, diffuse_burley, specular_schlick_ggx;
@@ -29,12 +33,15 @@ uniform vec3 centre = vec3(0.0);
 // Negative: no mesh tier to fade against.
 uniform float lod_near = -1.0;
 uniform float lod_band = 5.0;
+// Negative: no fade before the cull range.
+uniform float lod_cull = -1.0;
+uniform float lod_cull_band = 0.0;
 
 varying flat vec2 v_f0;
 varying flat vec4 v_w;
 varying flat vec3 v_c;         // the object's centre, world
 varying flat float v_s;        // its scale
-varying flat float v_fade;     // how far through the band, 0 mesh .. 1 card
+varying flat float v_fade;     // how much of the card is drawn, 0 none .. 1 all
 varying mat3 v_rot;
 
 vec2 encode(vec3 d) {
@@ -108,9 +115,13 @@ void vertex() {
     v_rot = rot;
     // The band, measured to the instance's origin -- as the mesh measures it.
     v_fade = 1.0;
+    float d = distance(MODEL_MATRIX[3].xyz, CAMERA_POSITION_WORLD);
     if (lod_near > 0.0) {
-        float d = distance(MODEL_MATRIX[3].xyz, CAMERA_POSITION_WORLD);
         v_fade = clamp((d - (lod_near - lod_band)) / (2.0 * lod_band), 0.0, 1.0);
+    }
+    // And out again before the cull range: gone by the time it is culled.
+    if (lod_cull > 0.0 && lod_cull_band > 0.0) {
+        v_fade *= 1.0 - clamp((d - (lod_cull - lod_cull_band)) / lod_cull_band, 0.0, 1.0);
     }
 }
 
@@ -136,7 +147,8 @@ void fragment() {
     vec4 n = texture(normal_atlas, uv0) * v_w.x + texture(normal_atlas, uv1) * v_w.y
             + texture(normal_atlas, uv2) * v_w.z + texture(normal_atlas, uv3) * v_w.w;
     float cover = a.a;
-    // In the band, only on the pixels the fading mesh has left. Not in the
+    // In a band, only on its share of the pixels: the ones the fading mesh
+    // has left, or fewer and fewer of them towards the cull range. Not in the
     // shadow pass: there both cast in full, and their shadows are one shape.
     if (v_fade < 1.0 && PROJECTION_MATRIX[3][3] < 0.5 && ign(FRAGCOORD.xy) >= v_fade) {
         cover = 0.0;

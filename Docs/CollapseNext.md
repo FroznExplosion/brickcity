@@ -113,7 +113,7 @@ would -- but:
   **gets no interior and no items until it has finished**: no storey group is made in a building
   that is still coming apart.
 
-### 1.9 Interiors by storey group (Interiors.md §8, as amended) — stages 1 to 4 of 5 done; the only interior drawing since 2026-10-08
+### ~~1.9 Interiors by storey group (Interiors.md §8, as amended)~~ — all five stages done 2026-10-08
 The simplification, with the unit the user set: a group of storeys, each with one interior drawing
 and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md §8.7.
 * **Stage 1, done, and the default** (Interiors.md §8.8; user, 2026-10-07): `InteriorGroups`.
@@ -134,7 +134,9 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   name now runs `--groups`), `fakehide_probe`. Rewritten against the groups: `interior_probe` (87),
   collapse_probe's "fake" (now "interior"), "crushdrawn" and "farrules". `interior_group_probe` 33,
   `-- --groups --big` 23.
-* **Stage 5, next:** loot fades at its cull edge.
+* **Stage 5, done 2026-10-08** (Interiors.md §8.13): a loot card dithers away over the last 25 m
+  before its range (`ImpostorItems.CULL_FADE`). Nothing visible changes today -- no scene has an
+  `ImpostorItems` yet, so loot has no cull edge. `impostor_probe` 30.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
@@ -213,10 +215,12 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   counts its parts over the panel that has left -- which a built-in piece is too small to do.
   Either the rule or the gate's measure is wrong for wide pieces; trace which rows hang first.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
-  `threat_style_probe` (crashes on exit after passing), `impostor_probe` "no holes" (render, on and
-  off), and since the several-disasters merge collapse_probe "a lightning storm" and disaster_probe
-  "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and collapse_probe
-  "rode it" vary with physics run to run.
+  `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
+  collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
+  disaster_probe "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and
+  collapse_probe "rode it" vary with physics run to run. `impostor_probe` "no holes" was on this
+  list: fixed 2026-10-08 -- the probe's camera was interpolated, so its pictures were taken on the
+  way to where it had been put (Interiors.md §8.13).
 
 ---
 

@@ -41,6 +41,10 @@ var chunk_m := CHUNK
 var near_range := 40.0
 var cull_range := 3000.0
 var hysteresis := 5.0
+## Metres before `cull_range` over which a card dithers away, so a copy that
+## reaches the range has nothing left to vanish (Docs/Interiors.md 8.2, "no
+## pop"). 0 for none -- trees, whose range is past the fog. `set_cull_fade`.
+var cull_fade := 0.0
 
 var mesh: Mesh
 var source: Node3D
@@ -123,6 +127,7 @@ func _bake_later() -> void:
 	# a node source's owner has no fade, so it has none.
 	_card_mat.set_shader_parameter("lod_near", near_range if mesh != null else -1.0)
 	_card_mat.set_shader_parameter("lod_band", hysteresis)
+	_dress_cull()
 	for key in _chunks:
 		_dress_far(_chunks[key])
 	_set.mark_all_dirty()
@@ -151,6 +156,21 @@ func _chunk(key: Vector2i) -> Dictionary:
 	if _card_mat != null:
 		_dress_far(c)
 	return c
+
+
+## Fade the cards out over the last `metres` before `cull_range`. Before or
+## after the bake. Only the card fades: until the bake lands a mesh set's far
+## tier is the mesh itself, and that goes at the range in one frame.
+func set_cull_fade(metres: float) -> void:
+	cull_fade = maxf(metres, 0.0)
+	_dress_cull()
+
+
+func _dress_cull() -> void:
+	if _card_mat == null:
+		return
+	_card_mat.set_shader_parameter("lod_cull", cull_range if cull_fade > 0.0 else -1.0)
+	_card_mat.set_shader_parameter("lod_cull_band", cull_fade)
 
 
 ## Cards for a square's far tier, with bounds that cover them: a card is built
