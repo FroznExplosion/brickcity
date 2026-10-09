@@ -242,3 +242,28 @@ func _check_studs() -> void:
 	@warning_ignore("integer_division")
 	var tiled := w.get_chunk_studs_section(c, -1).size() / 16
 	_ok("a smooth tile on that covers them and shows none", tiled == 4, "%d" % tiled)
+
+	# The three studs a band steps through (BrickNear._stud_mesh), nearest first.
+	var tris := []
+	for m in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
+		tris.append((m.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3)
+	_ok("each stud tier is fewer triangles than the one before", tris == [38, 22, 10],
+			"%s" % [tris])
+	_ok("bevelled inside plain inside square inside none",
+			BrickNear.stud_bevel_radius <= BrickNear.stud_round_radius
+			and BrickNear.stud_round_radius <= BrickNear.stud_radius,
+			"%.0f, %.0f, %.0f m" % [BrickNear.stud_bevel_radius, BrickNear.stud_round_radius,
+				BrickNear.stud_radius])
+
+	# An instanced build's one mesh is chamfered, and says so.
+	var was := BrickNear.enabled
+	BrickNear.enabled = false
+	var flat := RecipeMesh.build(Trees.recipe(0), "probe_tree")
+	BrickNear.enabled = true
+	var bevelled := RecipeMesh.build(Trees.recipe(0), "probe_tree")
+	BrickNear.enabled = was
+	var flat_n := (flat.surface_get_arrays(0)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	var bev_n := (bevelled.surface_get_arrays(0)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	_ok("a tree's instanced mesh is built chamfered", bev_n > flat_n
+			and RecipeMesh.geo_bevel(bevelled) == 1.0 and RecipeMesh.geo_bevel(flat) == 0.0,
+			"%d triangles to %d flat" % [bev_n, flat_n])

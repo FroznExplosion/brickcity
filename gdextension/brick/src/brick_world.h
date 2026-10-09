@@ -219,6 +219,13 @@ public:
     /// draws -- so none of furniture's, which no band does (FurnitureMesh). A
     /// building's studs are drawn band by band, near the camera only.
     PackedFloat32Array get_chunk_studs_section(int chunk_id, int section) const;
+    /// A stud buffer (as the two above give) sorted into rings round `eye`,
+    /// which is in the buffer's own space: one buffer for the studs nearer
+    /// than each of `rings` (metres, rising) and not nearer than the one
+    /// before; a stud past the last is in none. For drawing each ring with a
+    /// stud mesh of its own (BrickNear).
+    static Array split_studs(const PackedFloat32Array &buffer, Vector3 eye,
+            const PackedFloat32Array &rings);
 
     /// Gate G1b: what the cheap representation needs to know about the damage.
     ///
