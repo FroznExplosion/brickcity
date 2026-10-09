@@ -13,6 +13,8 @@ extends RefCounted
 
 ## Within this, the player can be hit with what a soldier carries.
 const REACH := 2.0
+## Soldiers of a mech's side this near can shoot its rider off (read_ridden).
+const ESCORT_RANGE := 40.0
 ## Further above or below than this, the player is "above us" / "below us".
 const LEVEL_DIFF := 2.5
 ## Closer than this is close quarters.
@@ -201,6 +203,37 @@ static func read_mech(br: MechBrain, target: Pawn) -> Dictionary:
 		hull = clampf((l.value(MechLayers.ARMOR) + l.value(MechLayers.HEALTH)) / maxf(top, 1.0), 0.0, 1.0) * 100.0
 	return {"moment": "mech_fight", "facts": facts,
 			"amounts": {"dist": d, "pcover": 0, "cover": 0, "hp": hull, "mag": 100.0, "squad": 100.0, "php": 100.0}}
+
+
+## The reading for a mech with a RIDER on it (Rodeo, Docs/AIRoster.md 4.5): is
+## its smoke ready, is there somewhere low to scrape it off under or a wall to
+## back into, are its own soldiers near to shoot it -- and its own layers.
+static func read_ridden(br: MechBrain) -> Dictionary:
+	var m := br.mech
+	var l := m.layers
+	var r := m.rodeo
+	var facts: Array = ["we_mech", "rider_on"]
+	if r.smoke_ready():
+		facts.append("smoke_ready")
+	if br.find_low_spot() != Vector3.INF:
+		facts.append("low_near")
+	if br.wall_behind() >= 0.0:
+		facts.append("wall_behind")
+	for p in br.services.pawns:
+		if is_instance_valid(p) and p.team == m.team and p != m.pawn and p.health != null \
+				and not p.health.is_dead() and not p.has_meta(&"mech") \
+				and p.feet().distance_to(m.feet()) < ESCORT_RANGE:
+			facts.append("escort_near")
+			break
+	if not l.shield_up():
+		facts.append("our_shield_down")
+	if l.hatch_off and l.piloted:
+		facts.append("our_hatch_off")
+	if l.auto or not l.piloted:
+		facts.append("our_auto")
+	var planted := 100.0 * r.plant if r.charge_at == INF else 100.0
+	return {"moment": "mech_ridden", "facts": facts,
+			"amounts": {"dist": 0.0, "pcover": 0, "cover": 0, "hp": 100.0, "mag": 100.0, "squad": 100.0, "php": 100.0 - planted}}
 
 
 static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amounts: Dictionary, now: float) -> String:

@@ -233,10 +233,13 @@ const ACTIONS = [
   ["m_backoff","mech","Back off","Open the range, still firing: to let the shield come back, or to get out of a fist's reach.",1],
   ["m_guard","mech","Turn the open side away","Keep a missing hatch or cell door away from the enemy, and give ground. A mech with its hatch in front cannot fire while it does.",1],
   ["m_bail","mech","Bail out","The pilot gets out and goes on foot; the mech fights on by itself (auto), weaker.",1],
+  ["m_smoke","mech","Electric smoke","A cloud round itself: the rider is thrown off and hurt. It costs its own shield, hurts its own pilot with the hatch off, and takes 15 s to come back -- so it can be baited.",1],
+  ["m_scrape","mech","Scrape it off","Walk under something just low enough to take the rider off its back.",1],
+  ["m_crush","mech","Crush it","Back hard into a wall: the rider on its back is crushed.",1],
   ["reload","fire","Reload in cover","Duck into cover and reload. Ammo is unlimited; the magazine isn't.",0],
 ].map(([id,g,l,d,b]) => ({id,g,l,d,b:!!b}));
 
-const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are", role:"Its role", mechs:"Mech against mech"};
+const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are", role:"Its role", mechs:"Mech against mech", rider:"A rider on us"};
 // mods: action:step (0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4)
 const FACTORS = [
   ["inside","place","Inside a building","Rooms, corridors, stairs.","sweep:4,flash:4,breach:4,smoke:2,call_air:2,screen_heavy:2,heavy_leads:2,call_armour:2"],
@@ -289,12 +292,16 @@ const FACTORS = [
   ["t_doomed","mechs","The target mech is doomed","A few hits finish it; a fist finishes it now.","m_punch:5,m_close:5,m_backoff:0,m_guard:1"],
   ["t_nuker","mechs","The doomed target will nuke","Shot dead it goes off; punched (the finisher) it does not. The AI holds its fire on it.","m_punch:5,m_close:5,m_fire:1,m_backoff:2"],
   ["finisher_ready","mechs","A doomed mech within a fist's reach","","m_punch:6"],
-  ["our_shield_down","mechs","Our shield is down","It comes back after five seconds untouched.","m_backoff:5,m_fire:2,m_close:2,m_punch:2"],
-  ["our_hatch_off","mechs","Our hatch is off","The pilot can be shot.","m_guard:5,m_backoff:4,m_close:1,m_punch:1,m_fire:2,m_bail:4"],
+  ["our_shield_down","mechs","Our shield is down","It comes back after five seconds untouched.","m_backoff:5,m_fire:2,m_close:2,m_punch:2,m_smoke:4"],
+  ["our_hatch_off","mechs","Our hatch is off","The pilot can be shot.","m_guard:5,m_backoff:4,m_close:1,m_punch:1,m_fire:2,m_bail:4,m_smoke:1"],
   ["our_cell_off","mechs","Our cell door is off","The power cell can be shot: lose it and lose everything.","m_guard:5,m_backoff:4,m_close:1,m_punch:1"],
   ["our_doomed","mechs","We are doomed","A few hits from the end, and a fist ends it.","m_backoff:5,m_close:1,m_punch:1,m_guard:2,m_bail:5"],
-  ["our_auto","mechs","Nobody is flying it (auto)","The pilot is dead or out: it fights on, simpler.","m_fire:4,m_guard:0,m_punch:2,m_backoff:2,m_bail:0"],
+  ["our_auto","mechs","Nobody is flying it (auto)","The pilot is dead or out: it fights on, simpler.","m_fire:4,m_guard:0,m_punch:2,m_backoff:2,m_bail:0,m_smoke:0,m_scrape:2,m_crush:2"],
   ["our_nuker","mechs","We nuke when doomed","It wants to die next to its target.","m_close:5,m_punch:4,m_backoff:1,m_guard:1,m_bail:0"],
+  ["smoke_ready","rider","Our smoke is ready","It is not, for 15 s after it was used.","m_smoke:4"],
+  ["low_near","rider","Somewhere low enough to scrape it off is near","Bricks over our head and under the rider's, within 32 m.","m_scrape:4"],
+  ["wall_behind","rider","A wall right behind our back","Within 14 m, at the rider's height, with a clear run back to it.","m_crush:4"],
+  ["escort_near","rider","Our soldiers are near","They can shoot the rider -- at their own mech.","m_fire:5"],
 ].map(([id,g,l,d,m]) => ({id,g,l,d,mods:kv(m)}));
 
 // Teamwork: [most squadmates doing it at once (0 = any), moves it works with]
@@ -310,7 +317,7 @@ const TEAM = {
 const NEEDS = {
   collapse:"destructible", breach:"destructible", strip_cover:"destructible", deny_escape:"p_escape,p_evac",
   screen_heavy:"heavy_near", heavy_leads:"heavy_near", call_air:"air_avail", air_window:"we_flyer",
-  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber", m_guard:"our_hatch_off,our_cell_off", m_bail:"our_hatch_off,our_doomed",
+  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber", m_guard:"our_hatch_off,our_cell_off", m_bail:"our_hatch_off,our_doomed", m_smoke:"smoke_ready", m_scrape:"low_near", m_crush:"wall_behind",
 };
 // Combos: moves done together with the main move. [first, while, then], each "move:chance%".
 // "first" happens just before (grenade, then rush), "while" alongside (fire while marking),
@@ -434,6 +441,9 @@ const SITS = [
   {id:"mech_fight", l:"A mech in a fight", who:"A mech",
    d:"A mech with something to shoot at: another mech, or people on foot. Its own layers and its target's decide the rest (Mech against mech).",
    w:"m_fire:45,m_close:25,m_punch:10,m_backoff:10,m_guard:20,m_bail:10"},
+  {id:"mech_ridden", l:"A rider on us", who:"A mech",
+   d:"Somebody has climbed on our back to plant a charge on the hatch. Smoke them off, scrape them off under something low, crush them against a wall -- or fight on and let our soldiers shoot them.",
+   w:"m_smoke:45,m_scrape:25,m_crush:25,m_fire:10"},
 ].map(s => Object.assign(s, {w:kv(s.w)}));
 
 // Your first casebook, as checks: each old case is one moment with some things true.

@@ -29,6 +29,9 @@ const MECH_PRESENCE := 2.5
 const PILOT_BEHIND_MECH := 0.3
 ## A mech with its hatch off draws this much more: the pilot can be had (G6).
 const EXPOSED := 1.5
+## A rider on one of the side's mechs, the moment it is noticed (G5): before
+## that it draws nothing.
+const RIDER_SPIKE := 60.0
 
 class Entry:
 	var who: Object

@@ -4237,6 +4237,43 @@ func _board_mech() -> void:
 	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
 
 
+## The mech the player's pawn is riding (Rodeo), or null.
+func _riding() -> Mech:
+	if _player_pawn == null or not is_instance_valid(_player_pawn) or not _player_pawn.has_meta(&"riding"):
+		return null
+	var m := _player_pawn.get_meta(&"riding") as Mech
+	return m if m != null and is_instance_valid(m) else null
+
+
+## E on foot: climb the enemy mech within reach, if there is one.
+func _rodeo_climb() -> void:
+	if _riding() != null:
+		return
+	for n in get_tree().get_nodes_in_group(&"mech_layers"):
+		var ml := n as MechLayers
+		if ml != null and not ml.dead and ml.mech.rodeo.can_climb(_player_pawn):
+			ml.mech.rodeo.climb(_player_pawn)
+			print("[city] on its back: hold E to plant the charge (%.1f s), jump to get off" % Rodeo.PLANT_SECONDS)
+			return
+
+
+## What a rider on `m` hears of it: the player's own ride, in the log.
+func _wire_rodeo(m: Mech) -> void:
+	var r := m.rodeo
+	r.noticed.connect(func(p: Pawn) -> void:
+		if p == _player_pawn:
+			print("[city] rodeo: it has noticed you"))
+	r.dropped.connect(func(p: Pawn, why: String) -> void:
+		if p == _player_pawn:
+			print("[city] rodeo: off (%s)" % why))
+	r.charge_planted.connect(func() -> void:
+		print("[city] rodeo: charge planted -- %.1f s" % Rodeo.CHARGE_FUSE))
+	r.charge_blew.connect(func() -> void:
+		print("[city] rodeo: its hatch is off"))
+	r.smoked.connect(func() -> void:
+		print("[city] rodeo: electric smoke"))
+
+
 ## The mech whose hatch `p` stands at, any side's; null for none.
 func _mech_at_hatch(p: Pawn) -> Mech:
 	for n in get_tree().get_nodes_in_group(&"mech_layers"):
@@ -4292,6 +4329,7 @@ func _wire_mech(m: Mech) -> void:
 	m.fall.on_break = _mech_break
 	m.fall.next_floor = _next_floor_below
 	weight.add(m.body, m.feet, Mech.MASS)
+	_wire_rodeo(m)
 
 
 ## The enemy's mech (Y), ahead of the camera: an LMG, a launcher for walls, and
@@ -9254,6 +9292,9 @@ func _process(delta: float) -> void:
 	if _sea != null:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
+	var ridden := _riding()
+	if ridden != null:
+		ridden.rodeo.planting = Input.is_key_pressed(KEY_E)
 	_update_live_prof(delta)
 	if _view_owed or (DebugView.active() and Engine.get_process_frames() - _view_frame >= 2):
 		_view_sweep()
@@ -9553,6 +9594,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				KEY_F1:
 					stats_label.visible = not stats_label.visible
 		return
+	# Rodeo (Docs/AIRoster.md 4.5): on foot, E climbs an enemy mech; on its back,
+	# E held plants the charge and jump gets off.
+	if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
+			_rodeo_climb()
+			return
+		if _riding() != null and event.is_action_pressed(&"jump"):
+			_riding().rodeo.drop("jumped")
+			return
 	# On foot the buttons are the player's own (rebindable input actions,
 	# PlayerController): firing, aiming and reloading go through the pawn.
 	if event is InputEventMouseButton and _player.is_possessing():

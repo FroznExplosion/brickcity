@@ -65,7 +65,10 @@ How the enemy chooses what to do, authored as odds rather than code.
   `BookCombatPolicy.decide_mech` rolls, and `MechBrain` does it (stand off, close in,
   punch, back off, turn the open side away, bail out) whenever its pilot has given it
   no order. `tools/mech_fight_probe.gd` checks it; `tools/mech_mount_probe.gd` checks
-  bailing out.
+  bailing out. With somebody riding it the moment is "A rider on us" (`mech_ridden`:
+  electric smoke, scrape it off, crush it, or fight on for the escort), with the facts of
+  its own group (smoke ready, somewhere low near, a wall behind, our soldiers near);
+  `TacticsSense.read_ridden`, `BookCombatPolicy.decide_ridden`, `tools/mech_rodeo_probe.gd`.
 
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.

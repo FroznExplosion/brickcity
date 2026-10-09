@@ -344,6 +344,13 @@ func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:
 			continue
 		var kind := String(p.get_meta(&"aggro_kind", "pilot"))
 		table.track(p, int(p.get_meta(&"player", 0)), kind)
+		# A rider on one of this side's mechs nobody has noticed yet draws
+		# nothing (G5); noticed, it has had its spike (Rodeo).
+		if p.has_meta(&"riding"):
+			var ridden := p.get_meta(&"riding") as Mech
+			if ridden != null and is_instance_valid(ridden) and ridden.team == team \
+					and not ridden.rodeo.is_noticed:
+				continue
 		var c := k.of(p)
 		var seen := c != null and c.visible
 		# What merely being there is worth: a mech's presence (G1), more with its
