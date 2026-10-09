@@ -23,7 +23,8 @@ extends Node
 enum Order { NONE, FOLLOW, HOLD, ATTACK_AREA }
 ## What the casebook's mech section has it doing (BookCombatPolicy.decide_mech;
 ## Docs/AIRoster.md 4.3): FIRE is the tree's own way; the rest take over the legs.
-enum Stance { FIRE, CLOSE, PUNCH, BACKOFF, GUARD }
+## BAIL is the pilot getting out (AIRoster.md 4.3): the mech fights on, on auto.
+enum Stance { FIRE, CLOSE, PUNCH, BACKOFF, GUARD, BAIL }
 ## The casebook is asked again after this long, drawn in this range.
 const DECIDE_EVERY := [2.5, 4.0]
 const CLOSE_TO := 14.0
@@ -245,6 +246,14 @@ func _stance(now: float) -> bool:
 	var d := away.length()
 	var other := MechLayers.of(t.body)
 	match stance:
+		Stance.BAIL:
+			stance = Stance.FIRE
+			if mech.layers != null and mech.layers.piloted and not mech.layers.dead:
+				var p := mech.dismount()
+				state = "bailed out"
+				services.say(p if p != null else mech.pawn, "bail_out",
+						["I'm out!", "Bailing out!", "Ejecting!"][services.rng.randi() % 3], AIServices.SHOUT)
+			return false
 		Stance.CLOSE:
 			state = "close in"
 			if d > CLOSE_TO:

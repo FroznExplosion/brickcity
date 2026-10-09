@@ -418,8 +418,11 @@ func _on_layer_depleted(type: StringName) -> void:
 			pool.apply_to_layer_type(value(SHIELD), SHIELD, &"")
 		doomed_entered.emit()
 		if nuker:
-			# The pilot is thrown clear, and the count starts.
-			piloted = false
+			# The pilot is thrown clear (Mech.dismount), and the count starts.
+			if mech != null and mech.layers == self:
+				mech.dismount(true)
+			else:
+				piloted = false
 			light_fuse("nuke")
 
 

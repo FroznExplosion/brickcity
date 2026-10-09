@@ -122,6 +122,12 @@ var chase_goal := Vector3.INF
 var body_size := "person"
 var nav: AINav
 var melee_reach := MELEE_REACH
+## A mech of its own side to get into (Docs/AIRoster.md 4.4; go_board): walked to,
+## to its hatch's side, and boarded. Null for none. While it goes, the tree waits.
+var board_mech: Mech
+## Why the last boarding stopped short: "" (it got in), "blocked", "no way",
+## "taken", "gone".
+var board_failed := ""
 ## A bomber: it lights its fuse within DETONATE_REACH and goes off FUSE later, for
 ## up to BLAST_DAMAGE within BLAST_RADIUS. Shot dead first, it does not go off --
 ## unless its recipe has the "explodes" mod (a smaller blast).
@@ -371,7 +377,9 @@ func _physics_process(_delta: float) -> void:
 	if now >= _next_think and not _think_queued:
 		_think_queued = true
 		services.sched.submit(AIScheduler.TREES, importance, _think)
-	if field_goal != Vector3.INF:
+	if board_mech != null:
+		_board_step()
+	elif field_goal != Vector3.INF:
 		_steer_field()
 	elif chase_goal != Vector3.INF:
 		# Followed every tick: at a run, a path steered at the cheap tier's think
@@ -428,7 +436,8 @@ func _think() -> void:
 		if c != null:
 			throw_grenade(c.pos)
 	_check_phase()
-	brain.update(dt)
+	if board_mech == null:
+		brain.update(dt)
 	if services.judge != null:
 		services.judge.watch(self, dt)
 
@@ -611,6 +620,42 @@ func walk_toward(p: Vector3, run := false) -> int:
 		_stuck_at = now
 		return -1
 	return 0
+
+
+## Go and get into `m` (4.4). Never another side's mech -- that would set it off
+## (R14) -- nor one already lit, taken or dead. True if it set out.
+func go_board(m: Mech) -> bool:
+	if m == null or not is_instance_valid(m) or m.team != team or m.layers.dead 			or m.layers.fuse_kind != "" or not m.is_empty() or _dead:
+		return false
+	board_mech = m
+	board_failed = ""
+	state = "to the mech"
+	fire_ok = false
+	return true
+
+
+func _board_step() -> void:
+	var m := board_mech
+	var why := ""
+	if not is_instance_valid(m) or m.layers.dead or m.layers.fuse_kind != "":
+		why = "gone"
+	elif not m.is_empty():
+		why = "taken"
+	elif not m.mount_spot_clear():
+		why = "blocked"
+	if why == "" and m.can_reach(pawn):
+		stop()
+		board_mech = null
+		if not m.mount(pawn):
+			board_failed = "taken"
+		return
+	if why == "" and move_to(m.mount_point(), true) == -1:
+		why = "no way"
+	if why != "":
+		board_failed = why
+		board_mech = null
+		stop()
+		state = "idle"
 
 
 func move_to(goal: Vector3, run := false) -> int:
