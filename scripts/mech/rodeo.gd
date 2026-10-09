@@ -136,6 +136,12 @@ func drop(why: String) -> void:
 	last_drop_at = _now
 	if is_instance_valid(p):
 		p.remove_meta(&"riding")
+		if why != "jumped" and why != "dead":
+			# Thrown off: a rider with the rodeo mod waits a little to go again.
+			var so := p.body.get_node_or_null(^"Soldier") as Soldier
+			if so != null:
+				so.rodeo_target = null
+				so._rodeo_retry_at = so.services.now() + Soldier.RODEO_RETRY
 		p.body.collision_layer = _rider_layers.x
 		p.body.collision_mask = _rider_layers.y
 		if why != "dead":

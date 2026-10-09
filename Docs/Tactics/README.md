@@ -69,6 +69,8 @@ How the enemy chooses what to do, authored as odds rather than code.
   electric smoke, scrape it off, crush it, or fight on for the escort), with the facts of
   its own group (smoke ready, somewhere low near, a wall behind, our soldiers near);
   `TacticsSense.read_ridden`, `BookCombatPolicy.decide_ridden`, `tools/mech_rodeo_probe.gd`.
+  The Roster tab's **Boarder** has the rodeo mod: it climbs a player's mech
+  (`Soldier.rodeo`).
 
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.

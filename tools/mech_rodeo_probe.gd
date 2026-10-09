@@ -17,6 +17,10 @@ extends SceneTree
 ##    off -- over its head, under the rider's.
 ## D. Crush: told to, it backs hard into the wall behind it.
 ## E. Escort: its soldiers near and told to fight on, they shoot the rider.
+## F. The rodeo mod: a Boarder goes round behind the player's mech (the player in
+##    it), climbs on, plants, gets off before it goes -- and the hatch is off.
+## G. The player's answer: electric smoke throws a Boarder off, and it comes
+##    back for another go.
 
 const Arena := preload("res://tools/ai_arena.gd")
 
@@ -32,6 +36,7 @@ var pm: MechBrain      # the player's mech
 var em: MechBrain      # the enemy's
 var pilot: Pawn
 var guards: Array = []
+var boarder: Soldier
 
 
 func _init() -> void:
@@ -200,6 +205,31 @@ func _begin(stage: String) -> void:
 				guards.append(so)
 			_log["hp0"] = pilot.health.total_current()
 			em.mech.rodeo.climb(pilot)
+		"mod", "counter":
+			_retire(em)
+			_retire(pilot)
+			for g in guards:
+				_retire(g)
+			guards = []
+			if pm != null:
+				_retire(pm)
+			a.s.policy = BookCombatPolicy.new()
+			var at := Vector3(0.0, 0.0, 200.0) if stage == "mod" else Vector3(0.0, 0.0, -200.0)
+			# The player's mech with the player in it: the player drives, not its brain.
+			pm = _mech(at, 0.0, 0, MechTree.companion())
+			pm.enabled = false
+			pm.mech.occupy()
+			boarder = a.soldier(at + Vector3(4.0, 0.0, 24.0), 1, 90)
+			boarder.max_health = UnitCatalog.apply_health(boarder.pawn.health, &"boarder", 1)
+			boarder.set_type("boarder", Roster.shared())
+			# The side knows the mech is there.
+			a.s.knowledge_of(1).saw(pm.mech.pawn, pm.mech.feet(), a.s.now())
+			var r := pm.mech.rodeo
+			r.climbed.connect(func(_p: Pawn) -> void:
+				_log["climbs"] = int(_log.get("climbs", 0)) + 1
+				_log["climb_at"] = a.s.now())
+			r.dropped.connect(func(_p: Pawn, why: String) -> void:
+				(_log.get_or_add("drops", []) as Array).append(why))
 
 
 func _check(t: float) -> bool:
@@ -224,6 +254,28 @@ func _check(t: float) -> bool:
 			_ok("crush: it backs hard into the wall behind it, and the rider is crushed",
 					float(_log.wall) > 0.0 and drops.size() == 1 and drops[0] == "crushed",
 					"wall %.1f m behind; off by %s after %.1f s" % [float(_log.wall), drops, t])
+			return true
+		"mod":
+			if t < 30.0 and not pm.mech.layers.hatch_off:
+				return false
+			var drops: Array = _log.get("drops", [])
+			_ok("the rodeo mod: a Boarder climbs the player's mech from behind, plants, gets off, and the hatch is off",
+					boarder.rodeo and pm.mech.layers.hatch_off and int(_log.get("climbs", 0)) >= 1 and drops.has("jumped")
+					and not boarder.is_dead(),
+					"%s; climbed %d time(s) after %.1f s; off by %s; hatch off at %.1f s" % [boarder.name_tag.text if boarder.name_tag != null else "?",
+					int(_log.get("climbs", 0)), float(_log.get("climb_at", 0.0)) - _t0, drops, t])
+			return true
+		"counter":
+			var r := pm.mech.rodeo
+			# The player lets off the smoke as soon as it is on.
+			if r.rider == boarder.pawn and r.smokes == 0 and a.s.now() - float(_log.get("climb_at", 0.0)) > 0.3:
+				r.smoke()
+			var drops: Array = _log.get("drops", [])
+			if t < 40.0 and int(_log.get("climbs", 0)) < 2:
+				return false
+			_ok("smoke from the cockpit throws a Boarder off, and it comes back for another go",
+					drops.size() >= 1 and drops[0] == "smoke" and int(_log.get("climbs", 0)) >= 2,
+					"climbs %d, off by %s" % [int(_log.get("climbs", 0)), drops])
 			return true
 		"escort":
 			if t < 10.0:
@@ -312,7 +364,7 @@ func _on_tick() -> void:
 	mech_nav.service(800)
 	if not _check(a.s.now() - _t0):
 		return
-	var order := ["loop", "who", "scrape", "crush", "escort"]
+	var order := ["loop", "who", "scrape", "crush", "escort", "mod", "counter"]
 	var i := order.find(_stage)
 	if i + 1 < order.size():
 		_begin(order[i + 1])
