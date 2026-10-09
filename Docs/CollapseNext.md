@@ -40,7 +40,7 @@ why holding bricks on a toppling piece changes how it goes over (likely the piec
 what let it tip), then put it back for pieces behind that fix. **Check:** `hang_probe` with a piece
 case; collapse_probe "rode it" over several full runs.
 
-### ~~1.4 Hits on pieces still make many medium bodies~~ — the cause fixed 2026-10-07; timed on a quiet machine 2026-10-08: no faster (§3)
+### ~~1.4 Hits on pieces still make many medium bodies~~ — fixed 2026-10-07; timed 2026-10-08: it cost the collapse pass a third, most of it taken back (§3)
 `--big --shot`'s body census: ~150 bodies of 49–499 bricks off pieces that were **hit**, 100–150 ms
 to make over the run, ~13 % of moving boxes. Groups of 48 or fewer off a piece crumble already.
 **Do:** measure what a hit on a falling piece actually cuts (solve groups by size) and decide: a
@@ -59,10 +59,13 @@ studs that is holding up nothing, so one shot failed it all the way across. Thre
   disconnects it and nowhere else -- the rule for every brick. The landing breaks it, along its
   storeys, when it gets there. `float_probe`: a hole in a falling section's wall leaves it one
   piece; cut clean through, it is two; down, it is solved as before.
-* **A hit's solve is queued** like a landing's, not run inside the call: once a piece a tick however
-  many blasts reached it, on the pieces' clock. The first in the queue is always done the tick it is
-  queued. A decision still queued is made before its piece is put to sleep (`_decide_owed`), and a
-  save carries whether a piece had landed, so a load decides as the host did (`snapshot_probe`).
+* ~~**A hit's solve is queued** like a landing's, not run inside the call: once a piece a tick
+  however many blasts reached it, on the pieces' clock.~~ **Taken back 2026-10-08** (§3): it is
+  solved in the call again -- queued, pieces under fire stayed whole and moving, and the pass was
+  a fifth slower with more long ticks, not fewer. A decision still queued (a landing's, or what
+  one pass could not finish shedding) is made before its piece is put to sleep (`_decide_owed`),
+  and a save carries whether a piece had landed, so a load decides as the host did
+  (`snapshot_probe`).
 * **A moving piece's merged collision is rebuilt at most every 6 ticks, 12 in the air**
   (`_flush_reshapes`): it was every tick the piece was hit, the whole piece each time.
 
@@ -73,9 +76,10 @@ still replays into the same structure. **Not shown to be faster overall:** frame
 before and 22-23 after, with more in motion at once (peak 7,000 boxes -> 18-20,000 -- sections that
 used to shatter now come down whole) -- and another chat's Godot was running through all of these,
 so no frame time here is to be trusted either way. ~~**Owed:** the same before/after with nothing
-else running~~ -- taken 2026-10-08, §3: the pass is slower than it was on 2026-10-07, and this rule
-is not most of why. Hits on pieces already on the ground still make bodies (612 hits, 124 bodies;
-2026-10-08: 991 hits, 219 bodies -- the bigger number now).
+else running~~ -- taken 2026-10-08, §3: this change made the pass a third slower (23.5 -> 30.8 ms
+a frame, three alternated pairs); a starved queue is fixed and the queued hit solve taken back
+(26.8), and what is left is the price of a shot section coming down whole. Hits on pieces already
+on the ground still make bodies (612 hits, 124 bodies then; 350-420 hits, 112-162 bodies now).
 
 ### ~~1.5 The first stand-in for a big far piece is built on the main thread~~ — done 2026-10-06
 A piece of `COARSE_ASYNC_BLOCKS` (1,500) bricks or more has its stand-in built on a worker
@@ -161,6 +165,12 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   was first wanted for. Build it only if solve time shows up again.
 * ~~Collapses far off without the physics engine~~ — **decided 2026-10-06:** no. A far collapse
   stays physics, accurate, and is made cheap by rule instead; see §1.8.
+* **Should a shot shatter a section that is falling?** (2026-10-08, §3.) Today it does not: a piece
+  in the air is cut only where a hit disconnects it (1.4), which is the rule for every brick, and
+  it lands whole. Stress-solving it in the air as if it stood on its lowest bricks -- how it was
+  before 1.4 -- breaks it into many bodies on the way down, which is wrong by that rule and is
+  about a sixth faster in `--big --shot` (26.8 ms a frame against 20.5-21.7), because what lands is
+  smaller and comes to rest sooner. Kept as it is until decided.
 * **Aim-ahead promotion** (`_aim_promote`, 100 m, kept 8 s) makes more buildings bricks while the
   player looks round. No spikes measured; if memory or frame time climbs, lengthen the dwell
   (`AIM_PROMOTE_TICKS`) or cap how many it keeps.
@@ -173,28 +183,59 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
 16.7, 33.3 or 50 ms and nothing between. A pass whose frames go from 15 ms of work to 18 reads as
 its mean doubling. The script ticks (`[prof]`) are not quantised; compare those first.
 
-* **`--big --shot`, 2026-10-08, quiet** (editor closed, no other Godot before or after each run,
-  CPU idle at 10 %; menu-default settings; after interiors stage 5 and main's near tier):
+* **`--big --shot`, 2026-10-08: what 1.4 cost, and what was taken back.** Quiet machine throughout
+  (editor closed, no other Godot before or after any run). Forty-odd runs; what they say first is
+  how to read the pass at all:
 
-  | | frames mean | over 33.3 ms | worst script tick | ticks over 25 ms |
+  * **One run is not a measurement.** The same code read 27 ms a frame and 33 an hour apart, and
+    the commit the 2026-10-07 figure below was taken on (17.8 ms, 23 frames over 33.3) read
+    21.0-26.5 and 58-109 in four runs today: that figure was a lucky run. The machine also slows
+    by a sixth over an hour of runs. **Only alternated runs compare** -- A, B, A, B -- three pairs
+    or more; everything below is.
+  * Frame means are V-Sync-quantised (above). Frames over 33.3 ms moves the same way and further.
+
+  | compared, alternated | runs each | frames mean, ms | of 906 over 33.3 ms | ticks over 25 ms |
   |---|---|---|---|---|
-  | 2026-10-07, before 1.4 (below) | 17.8 ms | 23 of 906 | 55.1 ms | 9 |
-  | **2026-10-08, as the game is** | **32.8** | **287** | **63.4** | **50** |
-  | the same, near tier off (`--no-studs --no-bevel`) | 34.1 | 294 | 55.5 | 63 |
-  | the same, 1.4's in-the-air rule off (a switch for the run, not kept) | 29.5 | 159 | 70.0 | 50 |
+  | just before 1.4 (aab167a) / just after (b5376ed) | 3 | 23.5 / **30.8** | 90 / **238** | 90 / 72 |
+  | 1.4's three parts switched off for the run, one at a time: none / in-air rule / queued hit solve / rebuild limit | 2 | 29.9 / 27.1 / 25.8 / 32.5 | 215 / 144 / 139 / 293 | 48 / 48 / 49 / 76 |
+  | in-air rule and queued hit solve both off, rebuild limit kept | 3 | 20.5-21.7 | 60-88 | 28-39 |
+  | landings with a unit of their own a tick / without (the fix) | 6 | **28.8** / 33.9 | **190** / 308 | the same |
+  | on top of that, a hit solved in the call / queued (the second fix) | 3 | **25.0** / 31.1 | **132** / 269 | **44** / 69 |
+  | as the game is now / just before 1.4 | 3 | 26.8 / 23.4 | 149 / 93 | 69 / 59 |
 
-  One run each, and two runs of the same thing differ by a few per cent. **The pass is slower than
-  on 2026-10-07 and it is not known why.** What the three runs rule out as the main cause: the near
-  tier (no difference), and 1.4's rule for pieces in the air (a tenth). What is in the worst ticks
-  now: `islands` -- 46.9 ms in one tick, 45.5 of it the pieces' loop; one piece's merged collision
-  rebuilt in 22.5 ms (15,099 bricks, 2,021 boxes); one landing's re-solve 38.4 ms (12,315 bricks:
-  stress 15.5 + shedding 18.8) -- and `stream` at 33-46 ms on ticks that are 0 or 2 in every four
-  (the shells' pass and the detail/trim pass; the interior groups run on 3 and are not in them).
-  In motion at the peak: 49 pieces, 20,465 boxes (7,000 before 1.4). Hits on pieces: 486 in the
-  air made 10 bodies; 991 on pieces down and still moving made 219 (131 of 49-499 bricks, 206 ms
-  to make; 98 of 500 or more, 191 ms). The log replays into the same structure.
-  **Next, before anything else in section 1:** find which change doubled the ticks over 25 ms --
-  the pass at a few commits between 2026-10-07 and now, each with its own build of the library.
+  **What happened.** 1.4 (b5376ed) made this pass a third slower. Of its three parts the rebuild
+  limit is a gain and stays; the cost was the other two together, and through one thing: **how many
+  pieces are down and still moving**. Per tick, counted: pieces in the air are one piece on
+  average and cost nothing; pieces down and moving were 26 against 19, and the physics solver
+  takes 2.5-2.9 ms a tick for every thousand of their boxes. They stayed whole and moving because
+  * the landing queue was starved (`IslandManager.WORK_MIN`): one unit of queue work a tick
+    shared by the re-solves and the landings, re-solves first, and with a hit's solve queued a
+    re-solve was nearly always waiting -- up to 25 landings stood in line, each a section that
+    should have been broken along its storeys. **Fixed:** each queue has its own first unit;
+  * a hit's solve, queued, ran once a piece a tick instead of once a blast, so a piece under fire
+    shed less a tick, lay there longer and was hit again -- twice the hits on pieces that were
+    down. It also made *more* long ticks, not fewer. **Taken back:** solved in the call, as before
+    1.4. `_decide_owed` and the saved `landed` stay, for the solves that are still queued.
+
+  **Where it stands:** 26.8 ms against 23.4 before 1.4, and 149 slow frames against 93. What is
+  left is the in-air rule itself: a falling section that is shot is no longer stress-solved as if
+  it stood on its lowest bricks, so it comes down whole (the peak is 19,000 boxes in motion
+  against 8,000) where it used to arrive already in pieces. That rule is the game's rule for every
+  brick -- nothing falls that is still connected and not broken by force -- and switching it off
+  as well is the fastest this pass has run (20.5-21.7 ms). **A decision, not a bug** (§2): keep
+  the rule and pay about a sixth in the heaviest pass there is, or let a shot shatter what is
+  falling. Kept, until somebody says otherwise.
+
+  **Tried, no gain that two to four runs could show:** a blast waking only what rested on what it
+  removed (`support_gone`) instead of everything within four radii; not waking a piece a blast
+  reached and took nothing from; the queues' 4 ms counted from when they start, not from the top
+  of the tick; main's near tier off.
+  Also in the worst ticks, unchanged by any of this: one piece's merged collision rebuilt in
+  22.5 ms (15,099 bricks, 2,021 boxes); one landing's re-solve 38.4 ms (12,315 bricks); `stream`
+  at 33-46 ms on ticks that are 0 or 2 in every four (the shells' pass and the detail/trim pass).
+* **`--big --shot`, taken 2026-10-08 before any of that, one run each** (kept for the record; see
+  the first point above for what one run is worth): as the game was 32.8 ms, 287 over 33.3, worst
+  script tick 63.4, 50 ticks over 25; near tier off 34.1 / 294 / 55.5 / 63.
 * **`--stress --buildings=200`, 2026-10-08, quiet** (as above): whole run mean **24.7 ms**, worst
   75.5, 302 of 2,874 frames over 33.3 ms (10.5 %). By phase, mean / worst: under fire 16.7 / 23.0;
   damage queue draining 18.9 / 52.4; collapsing 27.8 / 48.4; settled 37.6 / 75.5 (160 of 240 over

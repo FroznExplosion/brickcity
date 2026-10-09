@@ -2820,17 +2820,18 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# per group, to produce more of what is already being swept up in two and a
 	# half seconds.
 	hit_census[0 if not isl.landed else (2 if isl.settled else 1)][0] += 1
-	# Queued, as a landing's is (shear): what the hit broke off is worked out on
-	# the pieces' share of the tick, once for a piece however many blasts
-	# reached it. It was solved here, in the call: eight blasts a tick into one
-	# fallen section was eight stress solves of it, on nobody's clock. The
-	# first piece in the queue is always done the tick it is queued, so a shot
-	# still breaks what it hits when it hits it.
+	# Solved here, in the call, once a blast -- NOT queued for the pieces' share
+	# of the tick. Queued (once a piece a tick however many blasts reached it;
+	# 2026-10-07 to 10-08) looked like less work and was more: a piece under
+	# fire shed less a tick, lay whole and moving for longer, and was there to
+	# be hit again -- twice the hits on pieces that were down (759-919 a
+	# `--big --shot` against 339-403), and every box of a moving piece is the
+	# physics solver's to pay for. Three alternated pairs, quiet machine:
+	# queued 31.1 ms a frame, 269 of 906 over 33.3 ms, 69 ticks over 25 ms;
+	# here 25.0, 132 and 44, the worst tick the same. Docs/CollapseNext.md 3.
 	if not isl.disposable:
-		if not _resolve_queue.has(isl):
-			_resolve_queue.append(isl)
-	else:
-		rebuild_mesh(isl)
+		solve_island(isl)
+	rebuild_mesh(isl)
 
 
 ## Damage every loose piece whose volume reaches the blast, not every piece
