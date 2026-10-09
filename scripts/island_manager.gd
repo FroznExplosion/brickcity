@@ -369,6 +369,17 @@ const JOB_NOT_STARTED := -2
 var defer_job_start := false
 ## Always do at least one, however long it takes: a budget that can starve
 ## forever is a deadlock, and a single unit is bounded by the piece's size.
+##
+## One of EACH queue. It was one for the tick, the re-solves were served
+## first, and in a collapse the tick's own loop has spent the budget before
+## either queue is reached -- so while a re-solve was waiting, no landing was
+## dealt with. Once a hit's solve was queued as well (Docs/CollapseNext.md 1.4)
+## one nearly always was: in a `--big --shot` up to 25 landings stood waiting,
+## each a section lying whole and still moving where its landing should have
+## broken it along its storeys, and the physics solver paid for every box of
+## every one. Six alternated pairs of that pass (2026-10-08, quiet machine):
+## frames 33.9 -> 28.8 ms mean, 308 -> 190 of 906 over 33.3 ms; the worst
+## script tick and the count of ticks over 25 ms the same.
 const WORK_MIN := 1
 ## Pieces cut off one island in a single pass. A collapse produced 4139
 ## splits, and cutting them all the moment the solver noticed them was the
@@ -790,7 +801,6 @@ var _dorm_wake_ms := 0.0
 var _dorm_sleep_ms := 0.0
 var wake_worst := [0.0, 0]
 var sleep_worst := [0.0, 0]
-var _work_done := 0
 var _resolve_parts: Array = []
 var _sync_meshes := 0
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
@@ -2810,17 +2820,18 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# per group, to produce more of what is already being swept up in two and a
 	# half seconds.
 	hit_census[0 if not isl.landed else (2 if isl.settled else 1)][0] += 1
-	# Queued, as a landing's is (shear): what the hit broke off is worked out on
-	# the pieces' share of the tick, once for a piece however many blasts
-	# reached it. It was solved here, in the call: eight blasts a tick into one
-	# fallen section was eight stress solves of it, on nobody's clock. The
-	# first piece in the queue is always done the tick it is queued, so a shot
-	# still breaks what it hits when it hits it.
+	# Solved here, in the call, once a blast -- NOT queued for the pieces' share
+	# of the tick. Queued (once a piece a tick however many blasts reached it;
+	# 2026-10-07 to 10-08) looked like less work and was more: a piece under
+	# fire shed less a tick, lay whole and moving for longer, and was there to
+	# be hit again -- twice the hits on pieces that were down (759-919 a
+	# `--big --shot` against 339-403), and every box of a moving piece is the
+	# physics solver's to pay for. Three alternated pairs, quiet machine:
+	# queued 31.1 ms a frame, 269 of 906 over 33.3 ms, 69 ticks over 25 ms;
+	# here 25.0, 132 and 44, the worst tick the same. Docs/CollapseNext.md 3.
 	if not isl.disposable:
-		if not _resolve_queue.has(isl):
-			_resolve_queue.append(isl)
-	else:
-		rebuild_mesh(isl)
+		solve_island(isl)
+	rebuild_mesh(isl)
 
 
 ## Damage every loose piece whose volume reaches the blast, not every piece
@@ -3499,7 +3510,6 @@ func tick() -> void:
 		_frustum = camera.get_frustum()
 	var look := Engine.get_physics_frames() % SEEN_EVERY == 0
 	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
-	_work_done = 0
 	_sync_meshes = 0
 	var now := Time.get_ticks_msec()
 	var settles := 0
@@ -3747,15 +3757,17 @@ func tick() -> void:
 				"resolve parts: harvest, upload, mesh queue, band holes, resolve queue": _resolve_parts}
 
 
-## Is there time left in this tick's share? Always yes for the first unit.
+## Is there time left in this tick's share? Each queue does its first unit
+## whatever this says (WORK_MIN).
 func _has_work_time() -> bool:
-	return _work_done < WORK_MIN or Time.get_ticks_usec() < _work_until
+	return Time.get_ticks_usec() < _work_until
 
 
 ## Islands that had more to shed than one pass allowed. Re-solving finishes
 ## the job, a couple of pieces at a time.
 func _drain_resolve_queue() -> void:
-	while _has_work_time() and not _resolve_queue.is_empty():
+	var done := 0
+	while (done < WORK_MIN or _has_work_time()) and not _resolve_queue.is_empty():
 		var isl: BrickIsland = _resolve_queue.pop_front()
 		if not isl.is_valid():
 			continue
@@ -3766,14 +3778,16 @@ func _drain_resolve_queue() -> void:
 		rebuild_mesh(isl)
 		_upart("mesh", t1)
 		_unit_done("resolve", isl, t0)
-		_work_done += 1
+		done += 1
 
 
 ## Work through landings a couple at a time. Each one shears the contact band
 ## and re-solves the piece, which is far too much to do for every island that
 ## touched down in the same tick.
 func _drain_fracture_queue() -> void:
-	while _has_work_time() and not _fracture_queue.is_empty():
+	# Its own first unit, whatever the re-solves before it took (WORK_MIN).
+	var done := 0
+	while (done < WORK_MIN or _has_work_time()) and not _fracture_queue.is_empty():
 		var entry: Array = _fracture_queue.pop_front()
 		var isl: BrickIsland = entry[0]
 		if not isl.is_valid():
@@ -3783,7 +3797,7 @@ func _drain_fracture_queue() -> void:
 		_unit = {}
 		fracture_on_impact(isl, float(entry[1]))
 		_unit_done("landing", isl, t0)
-		_work_done += 1
+		done += 1
 
 
 ## The island LOD ladder: its bricks near, the coarse stand-in far

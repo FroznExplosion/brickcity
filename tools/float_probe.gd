@@ -337,11 +337,17 @@ a piece that is only furniture has nothing to draw")
 	skipped = _m.air_solves_skipped
 	_m.solve_island(tall)
 	_ok("once it is down it is solved for what it can hold", _m.air_solves_skipped == skipped)
-	# And a hit's solve is made before the piece is put to sleep, not lost with it.
+	# And a solve still queued for a piece -- a landing's, or what one pass
+	# could not finish shedding -- is made before the piece is put to sleep,
+	# not lost with it. (A hit's own solve is made in the call, and queues
+	# nothing: asked first.)
 	var other := _piece(Vector3(200.0, 80.0, 0.0), 20, 20, 36)
 	await _ticks(2)
 	var ob := _m.world_aabb(other)
 	_m.damage(other, Vector3(ob.position.x + 0.2, ob.get_center().y, ob.get_center().z), 1.2)
+	_ok("a hit on a piece is solved in the call: nothing is left queued for it",
+			not _m._resolve_queue.has(other))
+	_m._resolve_queue.append(other)
 	var owed: bool = (_m.pending_state().resolve as PackedInt32Array).size() > 0 \
 			or _m._resolve_queue.has(other)
 	_m._decide_owed(other)
