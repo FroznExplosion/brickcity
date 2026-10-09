@@ -24,7 +24,18 @@ enum Order { NONE, FOLLOW, HOLD, ATTACK_AREA }
 ## What the casebook's mech section has it doing (BookCombatPolicy.decide_mech;
 ## Docs/AIRoster.md 4.3): FIRE is the tree's own way; the rest take over the legs.
 ## BAIL is the pilot getting out (AIRoster.md 4.3): the mech fights on, on auto.
-enum Stance { FIRE, CLOSE, PUNCH, BACKOFF, GUARD, BAIL }
+## SMOKE, SCRAPE and CRUSH answer a rider (Rodeo; the casebook's "A rider on us").
+enum Stance { FIRE, CLOSE, PUNCH, BACKOFF, GUARD, BAIL, SMOKE, SCRAPE, CRUSH }
+## With a rider on, the casebook is asked this often.
+const RIDDEN_EVERY := [0.8, 1.4]
+## A smoke spent: someone on foot this near -- the last rider -- is watched for,
+## felt if not seen, and counts as this much nearer.
+const WATCH_BACK := 16.0
+const PREFER_BACK := 0.25
+## Where to look for something to scrape a rider off under, or a wall to back
+## into: rings out to this far.
+const SCRAPE_SEARCH := [8.0, 16.0, 24.0, 32.0]
+const CRUSH_SEARCH := 14.0
 ## The casebook is asked again after this long, drawn in this range.
 const DECIDE_EVERY := [2.5, 4.0]
 const CLOSE_TO := 14.0
@@ -78,6 +89,11 @@ var _decide_at := 0.0
 ## What a mech backing off or guarding is getting away from, and when it last
 ## had it in sight: remembered this long.
 const REMEMBER := 12.0
+var _ridden_at := 0.0
+## Where it is going to scrape the rider off, and the wall it is backing into,
+## or INF.
+var scrape_spot := Vector3.INF
+var crush_point := Vector3.INF
 var _stance_target: Pawn
 var _stance_seen := -INF
 var _was_doomed := false
@@ -217,6 +233,13 @@ func _think() -> void:
 func _stance(now: float) -> bool:
 	if order != Order.NONE or not services.policy.has_method(&"decide_mech"):
 		return false
+	if mech.rodeo != null and mech.rodeo.rider != null and mech.rodeo.is_noticed \
+			and services.policy.has_method(&"decide_ridden"):
+		return _ridden(now)
+	if stance == Stance.SCRAPE or stance == Stance.CRUSH or stance == Stance.SMOKE:
+		stance = Stance.FIRE
+		scrape_spot = Vector3.INF
+		crush_point = Vector3.INF
 	var c := contact()
 	var t: Pawn = _target if _target != null and is_instance_valid(_target) else null
 	if t == null and c != null and c.age(now) <= 6.0:
@@ -281,7 +304,104 @@ func _stance(now: float) -> bool:
 	return false
 
 
+## A rider on it, noticed: the casebook's "A rider on us" (smoke, scrape, crush,
+## or fight on and let the escort shoot it). True if it took the legs.
+func _ridden(now: float) -> bool:
+	if now >= _ridden_at:
+		_ridden_at = now + services.rng.randf_range(RIDDEN_EVERY[0], RIDDEN_EVERY[1])
+		stance = services.policy.call(&"decide_ridden", self, services.rng)
+	match stance:
+		Stance.SMOKE:
+			state = "smoke"
+			mech.rodeo.smoke()
+			stance = Stance.FIRE
+			return false
+		Stance.SCRAPE:
+			state = "scrape"
+			if scrape_spot == Vector3.INF:
+				scrape_spot = find_low_spot()
+			if scrape_spot == Vector3.INF or move_to(scrape_spot, true) == -1:
+				scrape_spot = Vector3.INF
+				stance = Stance.FIRE
+				return false
+			return true
+		Stance.CRUSH:
+			state = "crush"
+			if crush_point == Vector3.INF:
+				var d := wall_behind()
+				if d < 0.0:
+					stance = Stance.FIRE
+					return false
+				crush_point = mech.feet() + Basis(Vector3.UP, mech.motor.torso_yaw).z * d
+			# Straight at the wall, back first and hard (_fire keeps the torso
+			# turned away from it).
+			var to := crush_point - mech.feet()
+			to.y = 0.0
+			_goal = Vector3.INF
+			_want_dir = to.normalized() if to.length() > 0.1 else Vector3.ZERO
+			mech.intents.sprint = true
+			return true
+	state = "ridden"
+	return false
+
+
+## The nearest place it can walk to with bricks overhead just low enough to take
+## a rider off -- over the mech's head, under the rider's. INF for none near.
+func find_low_spot() -> Vector3:
+	var w := services.ai_world
+	var feet := mech.feet()
+	var best := Vector3.INF
+	var best_d := INF
+	for p in [feet] + _ring_points(feet):
+		var at: Vector3 = nav.snap(p)
+		if Vector2(at.x - p.x, at.z - p.z).length() > 2.0:
+			continue
+		if _low_over(w, at):
+			var d := feet.distance_to(at)
+			if d < best_d:
+				best_d = d
+				best = at
+	return best
+
+
+func _ring_points(feet: Vector3) -> Array:
+	var out: Array = []
+	for r in SCRAPE_SEARCH:
+		for k in 12:
+			var a := TAU * k / 12.0
+			out.append(feet + Vector3(cos(a), 0.0, sin(a)) * float(r))
+	return out
+
+
+static func _low_over(w: AIWorld, at: Vector3) -> bool:
+	for up in [Rodeo.SEAT_UP + Pawn.BODY_HEIGHT * 0.7, Rodeo.SEAT_UP + Pawn.BODY_HEIGHT * 0.95]:
+		if w.solid_at(at + Vector3.UP * up):
+			return true
+	return false
+
+
+## How far behind its back a wall stands at the rider's height, with a clear run
+## back to it; -1 for none within CRUSH_SEARCH.
+func wall_behind() -> float:
+	var w := services.ai_world
+	var back := Basis(Vector3.UP, mech.motor.torso_yaw).z
+	var feet := mech.feet()
+	var seat := Vector3.UP * (Rodeo.SEAT_UP + Pawn.BODY_HEIGHT * 0.5)
+	var d := Mech.RADIUS
+	while d <= CRUSH_SEARCH:
+		if w.solid_at(feet + back * d + seat):
+			# The run back there must be open below the rider, or it stops short.
+			if d <= Mech.RADIUS + 0.6 or w.line_clear(feet + Vector3.UP * 1.5, feet + back * (d - Mech.RADIUS) + Vector3.UP * 1.5):
+				return d
+			return -1.0
+		d += 0.5
+	return -1.0
+
+
 func can_see(h: Pawn) -> bool:
+	# Not its own back: a rider is felt (Rodeo), not seen.
+	if mech.rodeo != null and h == mech.rodeo.rider:
+		return false
 	var e := eye()
 	var at := h.chest()
 	if e.distance_to(at) > SIGHT_RANGE:
@@ -310,8 +430,16 @@ func _pick_target() -> Pawn:
 	var focus := services.aggro_of(team).focus() if team != AIServices.PLAYER_SIDE else null
 	for h in services.hostiles_of(team):
 		var c := k.of(h)
-		if c == null or not c.seen_by.has(get_instance_id()):
+		if (c == null or not c.seen_by.has(get_instance_id())) and not _felt(h):
 			continue
+		# Never its own rider: the arm cannot reach its own back (the casebook's
+		# "A rider on us" answers it).
+		if mech.rodeo != null and h == mech.rodeo.rider:
+			continue
+		# Its smoke spent, it minds its back: the last rider near is felt even
+		# unseen, and comes first.
+		var back := mech.rodeo != null and mech.rodeo.smoke_spent() and h == mech.rodeo.last_rider \
+				and h.feet().distance_to(mech.feet()) < WATCH_BACK and not h.has_meta(&"riding")
 		if services.ai_world.bricks_between(from, h.chest()) > 0:
 			continue
 		# How near it counts as: a mech to a mech, a doomed mech, the one the side
@@ -322,6 +450,8 @@ func _pick_target() -> Pawn:
 			d *= PREFER_DOOMED if ml.doomed else PREFER_MECH
 		if h == focus:
 			d *= PREFER_FOCUS
+		if back:
+			d *= PREFER_BACK
 		if h == _target:
 			held_d = d
 		if d < best_d:
@@ -331,6 +461,12 @@ func _pick_target() -> Pawn:
 	if _target != null and is_instance_valid(_target) and held_d < INF and best != _target and best_d > held_d * SWITCH_AT:
 		return _target
 	return best
+
+
+## A rider just off its back, while its smoke is down: it knows where they are.
+func _felt(h: Pawn) -> bool:
+	return mech.rodeo != null and mech.rodeo.smoke_spent() and h == mech.rodeo.last_rider \
+			and h.feet().distance_to(mech.feet()) < WATCH_BACK
 
 
 func _fire(_now: float) -> void:
@@ -352,6 +488,10 @@ func _fire(_now: float) -> void:
 	var to := aim_at - eye()
 	it.aim_yaw = atan2(-to.x, -to.z)
 	it.aim_pitch = atan2(to.y, Vector2(to.x, to.z).length())
+	# Backing into a wall to crush a rider: its back stays to the wall.
+	if stance == Stance.CRUSH and crush_point != Vector3.INF:
+		var away := mech.feet() - crush_point
+		it.aim_yaw = atan2(-away.x, -away.z)
 	# Guarding: the torso turns so the open side is away from what it faces. A
 	# hatch at the back means facing it; a hatch in front means showing its back.
 	if stance == Stance.GUARD and mech.layers != null and order == Order.NONE:
@@ -469,6 +609,7 @@ func _steer() -> void:
 		return
 	var b := Basis(Vector3.UP, mech.motor.torso_yaw)
 	it.move_dir = Vector2(_want_dir.dot(b.x), -_want_dir.dot(b.z))
-	# Nothing to shoot: face where it is going.
-	if _target == null and breach_point == Vector3.INF:
+	# Nothing to shoot: face where it is going -- unless it is backing into a
+	# wall on purpose (CRUSH).
+	if _target == null and breach_point == Vector3.INF and stance != Stance.CRUSH:
 		it.aim_yaw = atan2(-_want_dir.x, -_want_dir.z)

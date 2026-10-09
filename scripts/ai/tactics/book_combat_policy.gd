@@ -43,6 +43,11 @@ const MECH := {
 	"m_backoff": MechBrain.Stance.BACKOFF, "m_guard": MechBrain.Stance.GUARD,
 	"m_bail": MechBrain.Stance.BAIL,
 }
+## Book move -> what a mech with a RIDER on it does (the moment "A rider on us").
+const RIDDEN := {
+	"m_smoke": MechBrain.Stance.SMOKE, "m_scrape": MechBrain.Stance.SCRAPE,
+	"m_crush": MechBrain.Stance.CRUSH, "m_fire": MechBrain.Stance.FIRE,
+}
 ## A "then grenade" goes this long after the decision.
 const THEN_GRENADE := 1.8
 ## Extras the soldier can do now: said aloud (Callouts).
@@ -140,6 +145,24 @@ func decide_mech(br: MechBrain, target: Pawn, rng: RandomNumberGenerator) -> int
 	if br.services.tally != null:
 		br.services.tally.call(&"note", br.book)
 	return int(MECH[move])
+
+
+## A mech with a rider on it (Rodeo): the book's "A rider on us", read by
+## TacticsSense.read_ridden. Returns the stance.
+func decide_ridden(br: MechBrain, rng: RandomNumberGenerator) -> int:
+	if book == null or not book.moments.has("mech_ridden"):
+		return MechBrain.Stance.SMOKE if br.mech.rodeo.smoke_ready() else MechBrain.Stance.FIRE
+	var sense := TacticsSense.read_ridden(br)
+	var plan := book.plan(sense.moment, sense.facts, sense.amounts, {"last": str(br.book.get("move", ""))}, [], rng)
+	var move: String = plan.move
+	if not RIDDEN.has(move):
+		move = "m_fire"
+	_count(done, move)
+	br.book = {"moment": sense.moment, "facts": sense.facts, "amounts": sense.amounts, "move": move,
+			"asked": move, "extras": [], "wanted_extras": []}
+	if br.services.tally != null:
+		br.services.tally.call(&"note", br.book)
+	return int(RIDDEN[move])
 
 
 ## A flyer's decision: the same book, read from the air (TacticsSense.read_air),

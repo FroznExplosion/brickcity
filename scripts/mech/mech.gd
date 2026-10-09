@@ -69,6 +69,8 @@ var motor: TitanMotor
 var health: HealthPool
 ## How it is killed: shield, armour, health, the doors, the pilot and the cell.
 var layers: MechLayers
+## Whoever is riding it (Rodeo, 4.5).
+var rodeo: Rodeo
 var gun: GunController
 ## What it is (Roster): its recipe, the casebook facts it brings, the name over it.
 var type_id := ""
@@ -137,6 +139,7 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	m.health = pool
 	m.layers = MechLayers.attach(m)
 	m._wire_layers()
+	m.rodeo = Rodeo.attach(m)
 	m._build_greybox()
 	parent.add_child(b)
 	if b.is_inside_tree():

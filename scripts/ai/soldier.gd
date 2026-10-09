@@ -625,7 +625,8 @@ func walk_toward(p: Vector3, run := false) -> int:
 ## Go and get into `m` (4.4). Never another side's mech -- that would set it off
 ## (R14) -- nor one already lit, taken or dead. True if it set out.
 func go_board(m: Mech) -> bool:
-	if m == null or not is_instance_valid(m) or m.team != team or m.layers.dead 			or m.layers.fuse_kind != "" or not m.is_empty() or _dead:
+	if m == null or not is_instance_valid(m) or m.team != team or m.layers.dead \
+			or m.layers.fuse_kind != "" or not m.is_empty() or _dead:
 		return false
 	board_mech = m
 	board_failed = ""
