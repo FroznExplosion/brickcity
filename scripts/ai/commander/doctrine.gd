@@ -35,7 +35,9 @@ const BASE := {&"rifleman": 4.0, &"assault": 2.0, &"breacher": 1.0, &"marksman":
 		&"veteran": 0.8, &"rocketeer": 0.5,
 		# The roster's own types (Docs/AIRoster.md RO3).
 		&"brawler": 0.7, &"bomber": 0.7, &"grenadier": 0.6, &"sergeant": 0.4, &"brute": 0.3,
-		&"hound": 0.6}
+		&"hound": 0.6,
+		# Climbs a player's mech and blows its hatch (RO8).
+		&"boarder": 0.4}
 ## Below this many bricks a minute, with enough seen, the player is careful.
 const CAREFUL_BRICKS := 10.0
 
@@ -88,6 +90,7 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 	match armor:
 		"mech":
 			mul[&"rocketeer"] = 2.0
+			mul[&"boarder"] = 2.0
 			mul[&"assault"] = float(mul[&"assault"]) * 1.4
 			mul[&"marksman"] = float(mul[&"marksman"]) * 1.4
 			pilot_focus = 0.7

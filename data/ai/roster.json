@@ -887,6 +887,64 @@
     "phases": []
    }
   },
+  "boarder": {
+   "body": "walker",
+   "size": "person",
+   "class": "light",
+   "grade": "tough",
+   "attack": "shooter",
+   "role": "flanker",
+   "mods": [
+    "rodeo"
+   ],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Tough Assault Boarder",
+    "name": "Tough Assault Boarder",
+    "errors": [],
+    "warnings": [],
+    "weapon": "smg",
+    "attack": "shooter",
+    "role": "flanker",
+    "grenades": 2,
+    "facts": [
+     "we_flanker"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "person",
+     "l": "Person",
+     "tall": 1.68,
+     "wide": 0.52,
+     "nav": [
+      2,
+      12,
+      9,
+      3,
+      21,
+      9
+     ],
+     "fits": "doors, stairs, rooms",
+     "floors": "any floor",
+     "eg": "a soldier"
+    },
+    "layers": [
+     [
+      "armor",
+      1
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 2,
+    "points": 2.7,
+    "phases": []
+   }
+  },
   "brute": {
    "body": "walker",
    "size": "large",

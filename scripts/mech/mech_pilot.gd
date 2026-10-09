@@ -7,7 +7,8 @@ extends Node
 ##
 ## WASD drives relative to the TORSO, not the look -- the Titanfall feel the motor
 ## exists to keep: turn your head and the chassis follows at its own pace.
-## SHIFT sprints, Q dashes, LMB fires the arm, R reloads.
+## SHIFT sprints, Q dashes, LMB fires the arm, R reloads, C lets off electric
+## smoke (a rider on its back is thrown off: Rodeo).
 
 ## The crosshair's reach, for converging the arm on what it points at.
 const AIM_RANGE := 400.0
@@ -45,6 +46,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_piloting() and _active() and event is InputEventKey and event.pressed \
 			and not event.echo and event.keycode == KEY_R:
 		mech.gun.reload()
+	if is_piloting() and _active() and event is InputEventKey and event.pressed \
+			and not event.echo and event.keycode == KEY_C:
+		if not mech.rodeo.smoke():
+			print("[mech] smoke not ready")
 
 
 func _process(_delta: float) -> void:

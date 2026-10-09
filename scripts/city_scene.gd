@@ -4263,6 +4263,9 @@ func _wire_rodeo(m: Mech) -> void:
 	r.noticed.connect(func(p: Pawn) -> void:
 		if p == _player_pawn:
 			print("[city] rodeo: it has noticed you"))
+	r.climbed.connect(func(_p: Pawn) -> void:
+		if m == _mech:
+			print("[city] a rider on your mech! C: electric smoke, or scrape it off under something low"))
 	r.dropped.connect(func(p: Pawn, why: String) -> void:
 		if p == _player_pawn:
 			print("[city] rodeo: off (%s)" % why))

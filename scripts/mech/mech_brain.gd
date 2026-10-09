@@ -231,11 +231,13 @@ func _think() -> void:
 ## then, and carry out a stance that takes the legs. True if it did -- the tree
 ## is then left out this think.
 func _stance(now: float) -> bool:
-	if order != Order.NONE or not services.policy.has_method(&"decide_mech"):
-		return false
+	# A rider is answered whatever its orders: the player's mech too, out of
+	# the cockpit, keeps its hatch.
 	if mech.rodeo != null and mech.rodeo.rider != null and mech.rodeo.is_noticed \
 			and services.policy.has_method(&"decide_ridden"):
 		return _ridden(now)
+	if order != Order.NONE or not services.policy.has_method(&"decide_mech"):
+		return false
 	if stance == Stance.SCRAPE or stance == Stance.CRUSH or stance == Stance.SMOKE:
 		stance = Stance.FIRE
 		scrape_spot = Vector3.INF

@@ -128,6 +128,14 @@ var board_mech: Mech
 ## Why the last boarding stopped short: "" (it got in), "blocked", "no way",
 ## "taken", "gone".
 var board_failed := ""
+## The rodeo mod (4.5, R8): it goes round behind a hostile mech, climbs on and
+## plants a charge on its hatch. The mech it is after, and when it may try again
+## after being thrown off.
+var rodeo := false
+var rodeo_target: Mech
+var _rodeo_retry_at := 0.0
+const RODEO_RANGE := 35.0
+const RODEO_RETRY := 3.0
 ## A bomber: it lights its fuse within DETONATE_REACH and goes off FUSE later, for
 ## up to BLAST_DAMAGE within BLAST_RADIUS. Shot dead first, it does not go off --
 ## unless its recipe has the "explodes" mod (a smaller blast).
@@ -377,8 +385,13 @@ func _physics_process(_delta: float) -> void:
 	if now >= _next_think and not _think_queued:
 		_think_queued = true
 		services.sched.submit(AIScheduler.TREES, importance, _think)
+	if pawn.has_meta(&"riding"):
+		_ride()
+		return
 	if board_mech != null:
 		_board_step()
+	elif rodeo_target != null:
+		_rodeo_step(now)
 	elif field_goal != Vector3.INF:
 		_steer_field()
 	elif chase_goal != Vector3.INF:
@@ -436,7 +449,9 @@ func _think() -> void:
 		if c != null:
 			throw_grenade(c.pos)
 	_check_phase()
-	if board_mech == null:
+	if rodeo and rodeo_target == null and now >= _rodeo_retry_at:
+		rodeo_target = _rodeo_pick()
+	if board_mech == null and rodeo_target == null and not pawn.has_meta(&"riding"):
 		brain.update(dt)
 	if services.judge != null:
 		services.judge.watch(self, dt)
@@ -657,6 +672,63 @@ func _board_step() -> void:
 		board_mech = null
 		stop()
 		state = "idle"
+
+
+## A hostile mech near, known to the side, with its hatch still on and nobody
+## on it: the one to climb.
+func _rodeo_pick() -> Mech:
+	var k := knowledge()
+	var now := services.now()
+	var best: Mech = null
+	var best_d := RODEO_RANGE
+	for h in services.hostiles_of(team):
+		var ml := MechLayers.of(h.body)
+		if ml == null or ml.dead or ml.hatch_off or ml.mech.rodeo.rider != null:
+			continue
+		var c := k.of(h)
+		if c == null or c.age(now) > 4.0:
+			continue
+		var d := pawn.feet().distance_to(ml.mech.feet())
+		if d < best_d:
+			best_d = d
+			best = ml.mech
+	return best
+
+
+## Round behind it and up: the spot behind its torso, then on when in reach.
+func _rodeo_step(now: float) -> void:
+	var m := rodeo_target
+	if not is_instance_valid(m) or m.layers.dead or m.layers.hatch_off or m.rodeo.rider != null:
+		rodeo_target = null
+		return
+	state = "rodeo"
+	fire_ok = false
+	if m.rodeo.can_climb(pawn):
+		stop()
+		m.rodeo.climb(pawn)
+		return
+	var back := Basis(Vector3.UP, m.motor.torso_yaw).z
+	var to := m.feet() + back * (Mech.RADIUS + 1.0)
+	if move_to(_nav().snap(to), true) == -1:
+		rodeo_target = null
+		_rodeo_retry_at = now + RODEO_RETRY
+
+
+## On a mech's back: hold on and plant. Thrown off, it tries again a little later.
+func _ride() -> void:
+	var m := pawn.get_meta(&"riding") as Mech
+	state = "riding"
+	fire_ok = false
+	pawn.intents.move = Vector3.ZERO
+	pawn.intents.fire = false
+	if m == null or not is_instance_valid(m):
+		return
+	m.rodeo.planting = true
+	if m.rodeo.charge_at != INF:
+		# The charge is on: off, before it goes.
+		m.rodeo.drop("jumped")
+		rodeo_target = null
+		_rodeo_retry_at = services.now() + RODEO_RETRY
 
 
 func move_to(goal: Vector3, run := false) -> int:
@@ -908,6 +980,7 @@ func set_type(id: String, roster: Roster) -> void:
 	role = str(d.get("role", "line"))
 	grenades = int(d.get("grenades", GRENADES))
 	explodes = (roster.recipe(id).get("mods", []) as Array).has("explodes")
+	rodeo = (roster.recipe(id).get("mods", []) as Array).has("rodeo")
 	phases = (d.get("phases", []) as Array).duplicate(true)
 	_phase_i = 0
 	_set_attack(str(d.get("attack", "shooter")))
