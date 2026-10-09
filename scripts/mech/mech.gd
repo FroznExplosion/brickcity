@@ -58,8 +58,14 @@ var health: HealthPool
 ## How it is killed: shield, armour, health, the doors, the pilot and the cell.
 var layers: MechLayers
 var gun: GunController
-## What it is (Roster): its recipe, the name over it.
+## What it is (Roster): its recipe, the casebook facts it brings, the name over it.
 var type_id := ""
+var type_facts: Array = []
+## What everybody else sees and shoots at (make_target): a Pawn that does not
+## walk -- the motor moves this body -- but has a chest, an eye, a side and this
+## mech's health, so soldiers, flyers and other mechs sense and target a mech as
+## they do a person, and the side's aggro keeps a row for it.
+var pawn: Pawn
 var name_tag: Label3D
 var melee_ready_at := 0.0
 var melee_hits := 0
@@ -137,6 +143,31 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	return m
 
 
+## The Pawn that stands for this mech to everyone who senses and shoots (above).
+## Give it to AIServices.add_pawn.
+func make_target() -> Pawn:
+	if pawn != null and is_instance_valid(pawn):
+		return pawn
+	var e := Node3D.new()
+	e.name = "Eye"
+	e.position = Vector3.UP * (COCKPIT_Y - HEIGHT * 0.5)
+	body.add_child(e)
+	var p := Pawn.new()
+	p.name = "Pawn"
+	p.team = team
+	p.health = health
+	p.gun = gun
+	p.eye = e
+	# Never stepped: the titan's motor moves the body.
+	p.process_mode = Node.PROCESS_MODE_DISABLED
+	p.stand_height = HEIGHT
+	p.set_meta(&"aggro_kind", "mech")
+	p.set_meta(&"mech", true)
+	body.add_child(p)
+	pawn = p
+	return p
+
+
 ## Make it the mech type `id` of `roster`: its class's shield, armour, health and
 ## doors, the side its hatch is on, the Nuker mod, and its name over it.
 func set_type(id: String, roster: Roster) -> void:
@@ -147,6 +178,7 @@ func set_type(id: String, roster: Roster) -> void:
 	if spec.is_empty():
 		return
 	type_id = id
+	type_facts = roster.facts(id).duplicate()
 	var keep := layers.services if layers != null else null
 	if layers != null:
 		health.damage_filter = Callable()

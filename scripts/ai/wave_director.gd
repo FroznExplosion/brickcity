@@ -54,6 +54,10 @@ const HQ_CLEAR := 25.0
 const TRUCK_OUT := 70.0
 ## ...and starts within this height of the fight.
 const TRUCK_LEVEL := 1.5
+## ...looked for in this many directions round the focus, at five distances.
+const TRUCK_TURNS := 32
+## The gate's room spot is this far inside its room on every side.
+const ROOM_MARGIN := 0.8
 ## The share of a wave put inside the focus building, when it has floors.
 const SPAWN_EVERY := 0.6
 const FIRST_WAVE_AFTER := 4.0
@@ -113,6 +117,8 @@ var hq_radio: StaticBody3D
 var hq_building := -1
 ## Trucks bringing squads (TransportTruck).
 var trucks: Array[TransportTruck] = []
+## The share of the last truck's road that was a truck wide (_truck_start).
+var _truck_road := 0.0
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
@@ -939,6 +945,11 @@ func run_gate() -> void:
 	(city.ai_services.judge as DecisionJudge).resume()
 	commander.budget = Commander.BUDGET_CAP
 	commander.force_reinforce(&"foot")
+	# And nothing more to spend until the truck below is asked for: with the
+	# rest of a full budget the commander sent a truck of its own during the
+	# clear, and the truck this pass sends drove into it six metres from the
+	# same start.
+	commander.budget = 0.0
 	await _until(func() -> bool: return _left_to_spawn <= 0 and alive.size() >= Commander.CLEAR_WITH, 30.0)
 	var spot := _room_spot()
 	var cleared0 := int(commander.orders_given.get("CLEAR_ROOM", 0))
@@ -956,13 +967,22 @@ func run_gate() -> void:
 			if int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0:
 				break
 			await _frames(60)
+		# A minute and a half: the room is one well inside the building now, and
+		# a squad on its way to the door at sixty seconds was counted as one
+		# that never got there.
 		await _until(func() -> bool:
 			return commander.squads.any(func(q): return is_instance_valid(q) and q.events.has("stacked")),
-			60.0)
+			90.0)
 		stacked = commander.squads.any(func(q): return is_instance_valid(q) and q.events.has("stacked"))
+	var known: FactionKnowledge.Contact = city.ai_services.knowledge_of(commander.team).best(_now())
 	ok.call("the player in a room: the commander sends a squad in to clear it",
 			int(commander.orders_given.get("CLEAR_ROOM", 0)) > cleared0,
-			"room spot %v; %s" % [spot, commander.log.slice(maxi(commander.log.size() - 5, 0))])
+			"room spot %v; player at %v; contact %s; squads of %s; %s" % [spot,
+			_player().feet() if _player() != null else Vector3.INF,
+			("at %v, %.1f s old, in a room: %s" % [known.pos, known.age(_now()),
+			not CityRooms.at(city, known.pos).is_empty()]) if known != null else "none",
+			commander.squads.map(func(q): return q.alive().size() if is_instance_valid(q) else -1),
+			commander.log.slice(maxi(commander.log.size() - 5, 0))])
 	# Either it gets to the door, or it says it cannot (a city tower's slots
 	# can all be walled off) and the commander hears so -- never silence.
 	# Or the clear came to an end and said why (Commander._clearing emptied by
@@ -982,6 +1002,9 @@ func run_gate() -> void:
 	(city.ai_services.judge as DecisionJudge).resume()
 	commander.budget = Commander.BUDGET_CAP
 	var sent := commander.force_reinforce(&"truck")
+	# Nothing left over: a second squad sent on the change, by truck from the
+	# same start or on foot, is in this one's way and in its count.
+	commander.budget = 0.0
 	var truck: TransportTruck = trucks.back() if not trucks.is_empty() else null
 	ok.call("the commander sends a squad by truck", sent and truck != null,
 			"%s" % [commander.log.slice(maxi(commander.log.size() - 2, 0))])
@@ -1017,7 +1040,9 @@ func run_gate() -> void:
 		lost0 = commander.lost_points
 		up1 = alive.size()
 		commander.budget = Commander.BUDGET_CAP
-		if commander.force_reinforce(&"truck"):
+		var second_sent := commander.force_reinforce(&"truck")
+		commander.budget = 0.0
+		if second_sent:
 			var second_truck: TransportTruck = trucks.back()
 			await _frames(30)
 			second_truck.health.apply_impact(1e9, &"")
@@ -1314,7 +1339,9 @@ func _check_hq() -> void:
 ## fight, on the far side of it from the player, to the fight; its cargo is put
 ## down at the tailgate when it stops.
 func _send_truck(kinds: Array[StringName]) -> bool:
+	var t0 := Time.get_ticks_usec()
 	var start := _truck_start()
+	var took := float(Time.get_ticks_usec() - t0) / 1000.0
 	if start == Vector3.INF:
 		return false
 	var goal: Vector3 = _street_of(focus)
@@ -1328,7 +1355,8 @@ func _send_truck(kinds: Array[StringName]) -> bool:
 	wave += 1
 	commander.note_fielded(UnitCatalog.points(&"truck"))
 	t.send(goal)
-	print("[arena] reinforcement %d by truck: %s, from %v" % [wave, ", ".join(kinds), start])
+	print("[arena] reinforcement %d by truck: %s, from %v (road wide enough for %d%% of the way; found in %.0f ms)" % [wave,
+			", ".join(kinds), start, roundi(_truck_road * 100.0), took])
 	return true
 
 
@@ -1343,12 +1371,22 @@ func _truck_start() -> Vector3:
 	var goal: Vector3 = _street_of(focus)
 	# The widest route found, if none is wide the whole way: the city's streets
 	# are three metres, and a soldier's path hugs the walls of them.
+	# ...and of those, the one a truck gets furthest along before it sticks: by
+	# share alone it took a road wide for four fifths of its length and narrow
+	# ten metres from the start, and let its squad out there.
 	var best := Vector3.INF
 	var best_share := -1.0
+	var best_run := -1.0
 	# Near the fight's own height: the foot map it drives climbs terraces a
 	# course at a time, and wheels do not (a vehicle map is AIVehicles.md 3).
-	for out in [TRUCK_OUT, TRUCK_OUT * 0.75, TRUCK_OUT * 0.5]:
-		for turn in [0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, PI]:
+	# All the way round, closely, and at five distances: with the player inside the
+	# focus "away" is any direction at all, and three rings of eight found no
+	# start as often as not -- or only one whose road was too narrow, and the
+	# truck stuck eight metres in.
+	for out in [TRUCK_OUT, TRUCK_OUT * 0.85, TRUCK_OUT * 0.7, TRUCK_OUT * 0.55, TRUCK_OUT * 0.4]:
+		for step in TRUCK_TURNS:
+			# 0, +1, -1, +2, -2 ... steps round: away from the player first.
+			var turn := float(ceili(step / 2.0)) * (TAU / float(TRUCK_TURNS)) * (1.0 if step % 2 == 1 else -1.0)
 			var dir: Vector3 = away.rotated(Vector3.UP, turn)
 			var q := c + dir * float(out)
 			q.y = city.ai_world.ground_at(q.x, q.z)
@@ -1367,10 +1405,14 @@ func _truck_start() -> Vector3:
 				continue
 			var share := TransportTruck.route_width_share(city.get_world_3d(), route)
 			if share >= 1.0:
+				_truck_road = 1.0
 				return q + Vector3.UP * 0.3
-			if share > best_share:
+			var run := TransportTruck.route_clear_run(city.get_world_3d(), route)
+			if run > best_run:
+				best_run = run
 				best_share = share
 				best = q + Vector3.UP * 0.3
+	_truck_road = maxf(best_share, 0.0)
 	return best
 
 
@@ -1412,10 +1454,27 @@ func _truck_wrecked(t: TransportTruck) -> void:
 func _room_spot() -> Vector3:
 	var spots := survey.floors_of(focus)
 	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.y < y.y)
+	# Well inside the room, not on its edge: a body put down beside a wall
+	# settles a hand's width from where it was put, and from an edge spot that
+	# is outside the room -- the commander then sees a contact in no room at
+	# all and never orders the clear.
+	var edge := Vector3.INF
 	for f in spots:
-		if not CityRooms.at(city, f).is_empty():
+		var r := CityRooms.at(city, f)
+		if r.is_empty():
+			continue
+		var inside := true
+		for d in [Vector3(ROOM_MARGIN, 0.0, 0.0), Vector3(-ROOM_MARGIN, 0.0, 0.0),
+				Vector3(0.0, 0.0, ROOM_MARGIN), Vector3(0.0, 0.0, -ROOM_MARGIN)]:
+			var n := CityRooms.at(city, f + d)
+			if n.is_empty() or int(n.index) != int(r.index) or int(n.building) != int(r.building):
+				inside = false
+				break
+		if inside:
 			return f
-	return Vector3.INF
+		if edge == Vector3.INF:
+			edge = f
+	return edge
 
 
 ## Every line said so far, by key and count.

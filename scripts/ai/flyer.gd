@@ -345,7 +345,7 @@ func _fire() -> void:
 		gun.set_trigger(false)
 		return
 	var from := body.global_position
-	var at := target.chest()
+	var at := MechLayers.aim_point(target, from)
 	if from.distance_to(at) > 0.5:
 		aim.look_at(at, Vector3.UP)
 	var clear := services.ai_world.bricks_between(from, at) == 0 and from.distance_to(at) < 60.0

@@ -37,6 +37,11 @@ const AIR := {
 	"fall_back": Flyer.Mode.CLIMB, "flee": Flyer.Mode.CLIMB, "hide": Flyer.Mode.CLIMB, "regroup": Flyer.Mode.CLIMB,
 	"detonate": Flyer.Mode.DIVE,
 }
+## Book move -> what a MECH does with it (MechBrain.Stance).
+const MECH := {
+	"m_fire": MechBrain.Stance.FIRE, "m_close": MechBrain.Stance.CLOSE, "m_punch": MechBrain.Stance.PUNCH,
+	"m_backoff": MechBrain.Stance.BACKOFF, "m_guard": MechBrain.Stance.GUARD,
+}
 ## A "then grenade" goes this long after the decision.
 const THEN_GRENADE := 1.8
 ## Extras the soldier can do now: said aloud (Callouts).
@@ -116,6 +121,24 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	if so.services.tally != null:
 		so.services.tally.call(&"note", so.book)
 	return tactic
+
+
+## A mech's decision: the book's mech section, read from its layers and its
+## target's (TacticsSense.read_mech). Returns the stance.
+func decide_mech(br: MechBrain, target: Pawn, rng: RandomNumberGenerator) -> int:
+	if book == null or not book.moments.has("mech_fight"):
+		return MechBrain.Stance.FIRE
+	var sense := TacticsSense.read_mech(br, target)
+	var plan := book.plan(sense.moment, sense.facts, sense.amounts, {"last": str(br.book.get("move", ""))}, [], rng)
+	var move: String = plan.move
+	if not MECH.has(move):
+		move = "m_fire"
+	_count(done, move)
+	br.book = {"moment": sense.moment, "facts": sense.facts, "amounts": sense.amounts, "move": move,
+			"asked": move, "extras": [], "wanted_extras": []}
+	if br.services.tally != null:
+		br.services.tally.call(&"note", br.book)
+	return int(MECH[move])
 
 
 ## A flyer's decision: the same book, read from the air (TacticsSense.read_air),

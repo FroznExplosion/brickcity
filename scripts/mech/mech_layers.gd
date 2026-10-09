@@ -188,6 +188,30 @@ func zone_at(point: Vector3) -> StringName:
 	return &""
 
 
+## Where to aim at `target` from `from`: its chest -- or, if it is a mech with a
+## door off on the side the shooter is on, the pilot or the power cell behind it.
+static func aim_point(target: Pawn, from: Vector3) -> Vector3:
+	var ml := of(target.body)
+	if ml == null or ml.dead:
+		return target.chest()
+	var centre := ml.mech.feet() + Vector3.UP * Mech.COCKPIT_Y
+	if ml.hatch_off and ml.piloted and ml.side_faces(ml.hatch_point(), from):
+		return ml.hatch_point()
+	if ml.cell_door_off and ml.side_faces(ml.cell_point(), from):
+		return ml.cell_point()
+	return centre
+
+
+## Is the part at `part` on the side of the torso that faces `from`?
+func side_faces(part: Vector3, from: Vector3) -> bool:
+	var centre := mech.feet() + Vector3.UP * part.y - Vector3.UP * mech.feet().y
+	var out := part - centre
+	var to := from - centre
+	out.y = 0.0
+	to.y = 0.0
+	return out.dot(to) > 0.0
+
+
 ## A hit through DamageSystem.
 func take_packet(packet: DamagePacket) -> DamageSystem.DamageResult:
 	var res := DamageSystem.DamageResult.new()

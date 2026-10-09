@@ -55,6 +55,9 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	if p != null and is_instance_valid(p):
 		if String(p.get_meta(&"aggro_kind", "pilot")) == "mech":
 			add.call("p_mech")
+			var their := MechLayers.of(p.body)
+			if their != null and their.hatch_off and their.piloted:
+				add.call("p_hatch_off")
 		if p.gun != null and p.gun.is_reloading():
 			add.call("p_reloading")
 		if c.visible and p.eye != null:
@@ -150,6 +153,54 @@ static func read_air(f: Flyer, target: Pawn) -> Dictionary:
 	elif theirs == 2:
 		moment = "player_dug_in"
 	return {"moment": moment, "facts": facts, "amounts": amounts}
+
+
+## The reading for a MECH with `target` in front of it (MechBrain): what the
+## target is, its layers and this mech's own, the distance, how much hull is left.
+static func read_mech(br: MechBrain, target: Pawn) -> Dictionary:
+	var m := br.mech
+	var l := m.layers
+	var facts: Array = ["p_seen"]
+	for t in m.type_facts:
+		if not facts.has(str(t)):
+			facts.append(str(t))
+	if not facts.has("we_mech"):
+		facts.append("we_mech")
+	var d := m.feet().distance_to(target.feet())
+	var other := MechLayers.of(target.body)
+	if other != null:
+		facts.append("t_mech")
+		if other.doomed:
+			facts.append("t_doomed")
+			if other.nuker:
+				facts.append("t_nuker")
+			if d <= Mech.MELEE_REACH:
+				facts.append("finisher_ready")
+		if other.hatch_off and other.piloted:
+			facts.append("p_hatch_off")
+	else:
+		facts.append("t_person")
+	var hull := 100.0
+	if l != null:
+		if not l.shield_up():
+			facts.append("our_shield_down")
+		if l.hatch_off and l.piloted:
+			facts.append("our_hatch_off")
+		if l.cell_door_off:
+			facts.append("our_cell_off")
+		if l.doomed:
+			facts.append("our_doomed")
+		if l.auto or not l.piloted:
+			facts.append("our_auto")
+		if l.nuker:
+			facts.append("our_nuker")
+		var top := 0.0
+		for i in l.pool.layer_count():
+			if l.pool.layer_type_at(i) == MechLayers.ARMOR or l.pool.layer_type_at(i) == MechLayers.HEALTH:
+				top += float(l.pool.layer_configs[i].max_value)
+		hull = clampf((l.value(MechLayers.ARMOR) + l.value(MechLayers.HEALTH)) / maxf(top, 1.0), 0.0, 1.0) * 100.0
+	return {"moment": "mech_fight", "facts": facts,
+			"amounts": {"dist": d, "pcover": 0, "cover": 0, "hp": hull, "mag": 100.0, "squad": 100.0, "php": 100.0}}
 
 
 static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amounts: Dictionary, now: float) -> String:

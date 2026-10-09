@@ -469,7 +469,8 @@ func _aim_and_fire(now: float) -> void:
 	# stepped behind a wall 150 ms ago is behind a wall. And a soldier that cannot
 	# shoot does not take a token another could use.
 	var seen := c != null and c.visible and c.pawn != null and is_instance_valid(c.pawn)
-	var at := c.pawn.chest() if seen else Vector3.ZERO
+	# At a mech with a door off on this side: the pilot or the cell behind it.
+	var at := MechLayers.aim_point(c.pawn, eye_pos()) if seen else Vector3.ZERO
 	# And from where the eye will be when the gun steps: on the move, the
 	# round leaves a tick later from a hand's breadth on -- past a wall's edge.
 	var next_eye := eye + pawn.body.velocity / float(Engine.physics_ticks_per_second)
@@ -1022,6 +1023,8 @@ func melee(target: Pawn) -> bool:
 	var now := services.now()
 	if now < melee_ready_at or target == null or target.health == null or target.health.is_dead():
 		return false
+	if MechLayers.of(target.body) != null:
+		return false   # a fist does nothing to a mech
 	var f := pawn.feet()
 	var t := target.feet()
 	if Vector2(t.x - f.x, t.z - f.z).length() > melee_reach or absf(t.y - f.y) > 1.2:
