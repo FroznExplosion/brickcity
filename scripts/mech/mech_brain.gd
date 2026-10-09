@@ -21,6 +21,20 @@ extends Node
 ## the authority -- like any gun's.
 
 enum Order { NONE, FOLLOW, HOLD, ATTACK_AREA }
+## What the casebook's mech section has it doing (BookCombatPolicy.decide_mech;
+## Docs/AIRoster.md 4.3): FIRE is the tree's own way; the rest take over the legs.
+enum Stance { FIRE, CLOSE, PUNCH, BACKOFF, GUARD }
+## The casebook is asked again after this long, drawn in this range.
+const DECIDE_EVERY := [2.5, 4.0]
+const CLOSE_TO := 14.0
+const BACKOFF_TO := 42.0
+## Choosing whom to shoot: another mech counts as this much nearer than it is to
+## a mech (G2), a doomed one nearer still (G7), the side's focus a little (aggro);
+## and it changes target only for one this much better (G3).
+const PREFER_MECH := 0.35
+const PREFER_DOOMED := 0.3
+const PREFER_FOCUS := 0.6
+const SWITCH_AT := 0.6
 
 const SENSE_HZ := 5.0
 const THINK_HZ := 10.0
@@ -56,6 +70,16 @@ var shots := 0
 var blocked_shots := 0
 var launched := 0
 
+var stance := Stance.FIRE
+## The casebook's plan behind the stance, when the book decides.
+var book := {}
+var _decide_at := 0.0
+## What a mech backing off or guarding is getting away from, and when it last
+## had it in sight: remembered this long.
+const REMEMBER := 12.0
+var _stance_target: Pawn
+var _stance_seen := -INF
+var _was_doomed := false
 var _next_sense := -INF
 var _next_think := -INF
 var _last_think := 0.0
@@ -82,6 +106,8 @@ static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree
 	br.nav = p_mech_nav
 	br.team = p_team
 	m.team = p_team
+	# Seen, shot at and given a row in the other side's attention, as a person is.
+	s.add_pawn(m.make_target())
 	# Its blast (MechLayers) catches whoever the services know is there.
 	if m.layers != null:
 		m.layers.services = s
@@ -180,7 +206,70 @@ func _think() -> void:
 	_next_think = now + 1.0 / (THINK_HZ * services.sched.rate_scale(AIScheduler.TREES))
 	var dt := now - _last_think if _last_think > 0.0 else 1.0 / THINK_HZ
 	_last_think = now
-	brain.update(dt)
+	if not _stance(now):
+		brain.update(dt)
+
+
+## The casebook's say, for a mech with no order of a player's: decide now and
+## then, and carry out a stance that takes the legs. True if it did -- the tree
+## is then left out this think.
+func _stance(now: float) -> bool:
+	if order != Order.NONE or not services.policy.has_method(&"decide_mech"):
+		return false
+	var c := contact()
+	var t: Pawn = _target if _target != null and is_instance_valid(_target) else null
+	if t == null and c != null and c.age(now) <= 6.0:
+		t = c.pawn
+	# Backing off or guarding it has its back or its side to the enemy and may
+	# not see it: it remembers what it is getting away from, for a while.
+	if t != null and is_instance_valid(t):
+		_stance_target = t
+		_stance_seen = now
+	elif (stance == Stance.GUARD or stance == Stance.BACKOFF) and now - _stance_seen < REMEMBER:
+		t = _stance_target
+	if t == null or not is_instance_valid(t):
+		stance = Stance.FIRE
+		return false
+	# A target just doomed is a new question: ask at once.
+	var their := MechLayers.of(t.body)
+	var doomed := their != null and their.doomed
+	if doomed and not _was_doomed:
+		_decide_at = 0.0
+	_was_doomed = doomed
+	if now >= _decide_at:
+		_decide_at = now + services.rng.randf_range(DECIDE_EVERY[0], DECIDE_EVERY[1])
+		stance = services.policy.call(&"decide_mech", self, t, services.rng)
+	var feet := mech.feet()
+	var at := t.feet()
+	var away := Vector3(feet.x - at.x, 0.0, feet.z - at.z)
+	var d := away.length()
+	var other := MechLayers.of(t.body)
+	match stance:
+		Stance.CLOSE:
+			state = "close in"
+			if d > CLOSE_TO:
+				move_to(nav.snap(at + away / maxf(d, 0.01) * (CLOSE_TO - 2.0)), true)
+			else:
+				stop()
+			return true
+		Stance.PUNCH:
+			state = "punch"
+			if other == null:
+				return false
+			if d <= Mech.MELEE_REACH * 0.9:
+				stop()
+				mech.melee(other.mech)
+			else:
+				move_to(nav.snap(at + away / maxf(d, 0.01) * (Mech.MELEE_REACH * 0.7)), true)
+			return true
+		Stance.BACKOFF, Stance.GUARD:
+			state = "back off" if stance == Stance.BACKOFF else "guard"
+			if d < BACKOFF_TO:
+				move_to(nav.snap(feet + away / maxf(d, 0.01) * 8.0), true)
+			else:
+				stop()
+			return true
+	return false
 
 
 func can_see(h: Pawn) -> bool:
@@ -206,18 +295,32 @@ func can_see(h: Pawn) -> bool:
 func _pick_target() -> Pawn:
 	var best: Pawn = null
 	var best_d := INF
+	var held_d := INF
 	var from := mech.muzzle.global_position
 	var k := knowledge()
+	var focus := services.aggro_of(team).focus() if team != AIServices.PLAYER_SIDE else null
 	for h in services.hostiles_of(team):
 		var c := k.of(h)
 		if c == null or not c.seen_by.has(get_instance_id()):
 			continue
 		if services.ai_world.bricks_between(from, h.chest()) > 0:
 			continue
+		# How near it counts as: a mech to a mech, a doomed mech, the one the side
+		# is watching.
 		var d := from.distance_to(h.chest())
+		var ml := MechLayers.of(h.body)
+		if ml != null:
+			d *= PREFER_DOOMED if ml.doomed else PREFER_MECH
+		if h == focus:
+			d *= PREFER_FOCUS
+		if h == _target:
+			held_d = d
 		if d < best_d:
 			best_d = d
 			best = h
+	# The one it is on is kept unless another is much the better.
+	if _target != null and is_instance_valid(_target) and held_d < INF and best != _target and best_d > held_d * SWITCH_AT:
+		return _target
 	return best
 
 
@@ -226,7 +329,8 @@ func _fire(_now: float) -> void:
 	_target = _pick_target()
 	var aim_at := Vector3.INF
 	if _target != null:
-		aim_at = _target.chest()
+		# A mech with a door off on this side: the pilot, or the cell, behind it.
+		aim_at = MechLayers.aim_point(_target, mech.muzzle.global_position)
 	elif breach_point != Vector3.INF:
 		aim_at = breach_point
 	if aim_at == Vector3.INF:
@@ -239,6 +343,13 @@ func _fire(_now: float) -> void:
 	var to := aim_at - eye()
 	it.aim_yaw = atan2(-to.x, -to.z)
 	it.aim_pitch = atan2(to.y, Vector2(to.x, to.z).length())
+	# Guarding: the torso turns so the open side is away from what it faces. A
+	# hatch at the back means facing it; a hatch in front means showing its back.
+	if stance == Stance.GUARD and mech.layers != null and order == Order.NONE:
+		var open_front := (mech.layers.hatch_off and mech.layers.hatch_side == "front") \
+				or (mech.layers.cell_door_off and mech.layers.hatch_side == "back")
+		if open_front:
+			it.aim_yaw = wrapf(it.aim_yaw + PI, -PI, PI)
 	# Only when the arm is on it.
 	var fwd := -mech.muzzle.global_transform.basis.z
 	var want := (aim_at - mech.muzzle.global_position).normalized()
@@ -246,7 +357,11 @@ func _fire(_now: float) -> void:
 	var from := mech.muzzle.global_position
 	var friend := _friend_in_line(from, aim_at)
 	if _target != null:
-		mech.gun.set_trigger(on and not friend and services.ai_world.bricks_between(from, aim_at) == 0)
+		# A doomed Nuker is not shot dead -- that is what sets it off. It is
+		# punched (the finisher), or left alone.
+		var theirs := MechLayers.of(_target.body)
+		var hold := theirs != null and theirs.doomed and theirs.nuker and order == Order.NONE
+		mech.gun.set_trigger(on and not friend and not hold and services.ai_world.bricks_between(from, aim_at) == 0)
 		if launcher != null:
 			launcher.set_trigger(false)
 	else:
@@ -260,6 +375,8 @@ func _friend_in_line(from: Vector3, at: Vector3) -> bool:
 	for p in services.pawns:
 		if not is_instance_valid(p) or p.team != team or p.health == null or p.health.is_dead():
 			continue
+		if p == mech.pawn:
+			continue   # its own body is not in its own way
 		var ch := p.chest()
 		if from.distance_to(ch) > d + 2.0:
 			continue
