@@ -740,6 +740,40 @@ PackedFloat32Array BrickWorld::get_chunk_studs_section(int chunk_id, int section
     return chunk_studs(chunk_id, section, false);
 }
 
+Array BrickWorld::split_studs(const PackedFloat32Array &buffer, Vector3 eye,
+        const PackedFloat32Array &rings) {
+    Array out;
+    const int ring_n = (int)rings.size();
+    std::vector<std::vector<float>> parts((size_t)ring_n);
+    const float *r = buffer.ptr();
+    const int64_t n = buffer.size() / 16;
+    for (int64_t i = 0; i < n; ++i) {
+        // Sixteen floats: three rows of the basis with the origin in each
+        // row's fourth, then the colour (chunk_studs).
+        const float *at = r + i * 16;
+        const float dx = at[3] - (float)eye.x;
+        const float dy = at[7] - (float)eye.y;
+        const float dz = at[11] - (float)eye.z;
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        for (int k = 0; k < ring_n; ++k) {
+            if (d2 < rings[k] * rings[k]) {
+                parts[(size_t)k].insert(parts[(size_t)k].end(), at, at + 16);
+                break;
+            }
+        }
+    }
+    for (int k = 0; k < ring_n; ++k) {
+        PackedFloat32Array part;
+        part.resize((int64_t)parts[(size_t)k].size());
+        if (!parts[(size_t)k].empty()) {
+            std::memcpy(part.ptrw(), parts[(size_t)k].data(),
+                    parts[(size_t)k].size() * sizeof(float));
+        }
+        out.push_back(part);
+    }
+    return out;
+}
+
 PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furniture) const {
     PackedFloat32Array out;
     if (!valid_chunk(chunk_id)) {
@@ -7547,6 +7581,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_studs", "chunk_id"), &BrickWorld::get_chunk_studs);
     ClassDB::bind_method(D_METHOD("get_chunk_studs_section", "chunk_id", "section"),
             &BrickWorld::get_chunk_studs_section);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("split_studs", "buffer", "eye", "rings"),
+            &BrickWorld::split_studs);
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
             &BrickWorld::build_chunk_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),

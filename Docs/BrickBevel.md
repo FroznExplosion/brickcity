@@ -31,7 +31,7 @@ Files: `gdextension/brick/src/brick_world.cpp` (`bake_faces_into`, `chamfer_face
 
 Measured on a 20 x 16 stud, 24-course tower (`brick_bevel_probe`): 18,938 triangles chamfered to
 the flat mesh's 3,102, **6.1x**, built in 1.1 ms for the whole chunk. Standing six metres from a
-638-brick building: three bands, 50,274 triangles, 8,734 studs.
+638-brick building: three bands, 50,274 triangles, and 3,188 of its 8,734 studs.
 
 ## 2. The mesh
 
@@ -105,8 +105,23 @@ a mesh of the whole chunk.
   the worst moment to start meshing what is coming down.
 * **Studs** within `stud_radius` (18 m, the terrain's `STUD_RANGE`): one MultiMesh a band from
   `BrickWorld.get_chunk_studs_section` -- a stud where a live block's face offers one and the cell
-  above is empty, none on a smooth part, none of furniture's. `PieceMeshes.stud()` inside `radius`,
-  `stud_plain()` past it.
+  above is empty, none on a smooth part, none of furniture's. They are most of what the tier
+  draws, so they step down three times -- by the STUD, not the band. A band is a storey: with
+  the camera at one end of it every stud on the floor was "within eight metres", and all 8,734
+  of a 638-brick building's were drawn bevelled. A band's studs are sorted into three
+  MultiMeshes by their own distance (`BrickWorld.split_studs`), again each time the camera has
+  moved a metre, and one past the last ring is not drawn at all: 3,188 of the 8,734, standing
+  six metres off.
+
+  | Within | Mesh | Triangles |
+  |---|---|---|
+  | `stud_bevel_radius`, 8 m | `PieceMeshes.stud()`, the rim bevelled | 38 |
+  | `stud_round_radius`, 13 m | `stud_plain()`, an octagon | 22 |
+  | `stud_radius`, 18 m | `stud_square()`, a tapered square post of the same plan area | 10 |
+
+  A stud is 0.21 m: 36 pixels wide at 8 m, 22 at 13, 16 at 18 (1080p). Square is visibly square
+  at 8 m and a bump at 18, which is why it starts at 13; set `stud_round_radius` to
+  `stud_bevel_radius` to go straight to it.
 * **Damage.** The owner patches its flat bands and calls `damaged(chunk, sections)` with the
   bands that patch moved. The chamfered ones are re-indexed and patched the same way
   (`update_chamfer_regions`), and those bands' studs are counted again, two bands a frame.
@@ -114,12 +129,21 @@ a mesh of the whole chunk.
   from; one built from a bake that has gone is not handed over, and one held from it is called
   stale and dropped rather than patched.
 
-`BrickNear.enabled`, `radius` and `stud_radius` are static and can be set at run time. The city
-takes `-- --no-near` for a run without the tier.
+`BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius` and `stud_round_radius` are
+static and can be set at run time. The city takes `-- --no-near` for a run without the tier.
 
 The workshop does not use the tracker: it is a few hundred bricks an arm's length away, rebuilt
 whole on every edit, so every frame is chamfered always (`build_chunk_chamfer_mesh`) and its stud
-MultiMesh swaps mesh by distance.
+MultiMesh swaps between the bevelled and the plain stud at `stud_bevel_radius`. Its placement
+ghosts -- the held part, a build in hand -- and the city's (`city_placer`) are chamfered the same
+way: what is about to be put down has the edges it will have.
+
+**Instanced builds** (`RecipeMesh`: a tree, an item, drawn as many copies of one mesh by
+`ImpostorLod`) are built chamfered too. One mesh serves every near copy and `ImpostorLod` gives
+it automatic LODs, so the bevels are drawn on the copies close enough to show them and
+simplified away on the rest; the node drawing it takes `geo_bevel` from
+`RecipeMesh.geo_bevel(mesh)`. A tree is mostly studs: chamfered it is 4,072 triangles to 3,502
+flat (+16%; the four kinds +13% to +22%), and its first LOD is no bigger than the flat one's.
 
 ## 4. The shader
 
@@ -165,21 +189,25 @@ not by the first band that wants studs: that was 45 ms.
 **The renderer is where it is paid, and that number is not settled.** Frame times cannot show it
 (a frame is held to 16.6 ms either way), so the pass also reads the renderer's own clock
 (`viewport_get_measured_render_time_gpu`). Looking at the building, on this machine's integrated
-Radeon: 10.9 and 8.7 ms of GPU a frame with the tier, 5.9 and 5.8 without -- **3 to 5 ms more**.
-But another chat's gate was running through every one of those runs, and later runs under the
-same load gave 7.2-9.4 ms in all four arrangements (tier, `--no-studs`, `--no-bevel`,
-`--no-near`), which is noise the size of the answer. It wants taking again on a quiet machine.
-What is being drawn is 50,274 chamfered triangles and 8,734 studs (22 or 38 triangles each, so
-the studs are several times the bevels), all within 18 m.
+Radeon, GPU ms a frame:
 
-If it is too much: `BrickNear.radius` and `BrickNear.stud_radius` are the two knobs, and
+| | tier | `--no-studs` | `--no-bevel` | `--no-near` |
+|---|---|---|---|---|
+| Studs a band at a time, all 8,734 bevelled | 10.9, 8.7 | | | 5.9, 5.8 |
+| Studs in rings (now), 3,188 drawn | 9.4, 9.1 | 8.4, 9.3 | 8.2, 9.1 | 7.7, 8.1 |
+
+So about **1 to 1.5 ms** now where it was 3 to 5. But another chat's gate was running through
+every one of those runs -- the `--no-near` column moved 2 ms between the two rows with nothing
+in it changed -- so the differences are the size of the noise. It wants taking again on a quiet
+machine.
+
+If it is too much: `BrickNear.radius` and the three stud radii are the knobs, and
 `-- --no-studs` / `-- --no-bevel` say which half to turn.
 
 ## 7. Not done
 
-* **Instanced builds** (`RecipeMesh`: trees, items drawn as many copies of one mesh) are flat with
-  bevelled studs merged in, as before. A chamfered merge for the near copies is the same call.
-* **Placement ghosts** (workshop, `city_placer`) are flat: they are drawn with a ghost material.
+* **The terrain's studs** have two steps (bevelled on the tiles round the camera, plain to
+  `STUD_RANGE`), not these three. The square stud is in `PieceMeshes` for it to use.
 * **A setting.** `BrickNear.radius` is a static; the options menu has no row for it.
 * **`build_mesh_internal`** (a masked group's mesh, per cell) has no chamfered form. Pieces are
   chunks and go through the bake.

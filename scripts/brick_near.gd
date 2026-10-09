@@ -13,10 +13,11 @@ extends RefCounted
 ##     is drawn with it INSTEAD of the flat one. A switch, never a fade: a fade
 ##     is per object, and the object is a storey of a building (Terrain.md
 ##     22.15 found out what that looks like).
-##   * a band within `stud_radius` gets its exposed studs as a MultiMesh
+##   * a band within `stud_radius` gets its exposed studs as geometry
 ##     (BrickWorld.get_chunk_studs_section: the workshop's rule -- none where a
-##     brick covers it, none on a smooth plate), bevelled inside `radius` and
-##     plain past it.
+##     brick covers it, none on a smooth plate), each STUD by its own distance:
+##     bevelled inside `stud_bevel_radius`, a plain octagon to
+##     `stud_round_radius`, a square post to `stud_radius`, nothing past it.
 ##   * `damaged` patches the chamfered bands of a chunk as the owner patches
 ##     its flat ones, and has the studs counted again.
 ##
@@ -36,6 +37,20 @@ static var enabled := true
 static var radius := 14.0
 ## And inside which its studs are geometry: the terrain's STUD_RANGE.
 static var stud_radius := 18.0
+## Studs are most of what the near tier draws (a 638-brick building: 8,734 of
+## them to 50,274 chamfered triangles), so they come down in three steps of
+## their own -- and by the STUD, not the band: a band is a storey, and with the
+## camera at one end of it every stud on the floor was "within eight metres".
+## A band's studs are sorted into three MultiMeshes by distance
+## (BrickWorld.split_studs), again whenever the camera has moved STUD_RESORT:
+##   inside `stud_bevel_radius`  PieceMeshes.stud, 38 triangles: the rim bevel
+##       is 13 mm, three pixels at 8 m and under two past it;
+##   to `stud_round_radius`      PieceMeshes.stud_plain, 22: still round;
+##   to `stud_radius`            PieceMeshes.stud_square, 10: a stud is 0.21 m,
+##       twenty pixels wide or less out here and mostly seen from the side.
+## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square.
+static var stud_bevel_radius := 8.0
+static var stud_round_radius := 13.0
 ## A band goes back to flat this much further out than it came in.
 const MARGIN := 2.0
 ## A band is left alone this long after it was last (re)built: one being
@@ -49,6 +64,9 @@ const SLICE := 16
 ## in the air is drawn flat until it has come to rest (and SETTLE_MS more).
 const STILL := 0.02
 const STUD_BUILDS := 2
+## How far the camera moves, in a band's own space, before that band's studs
+## are sorted into their rings again. The rings' edges move in steps this big.
+const STUD_RESORT := 1.0
 
 enum { FLAT, PENDING, UPLOADING, NEAR }
 
@@ -69,8 +87,11 @@ class Band:
 	var task := -1
 	var holder: Array
 	var discard := false
-	var studs: MultiMeshInstance3D
-	var stud_tier := 0
+	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square
+	var stud_buffer := PackedFloat32Array()      ## every stud of the band
+	var stud_eye := Vector3.INF                  ## where they were last sorted from
+	var stud_bevelled := true                    ## ... and with `enabled` as it was
+	var stud_count := 0                          ## drawn now, the three together
 	var studs_dirty := true
 
 
@@ -108,6 +129,7 @@ func _init(w: BrickWorld) -> void:
 	# mostly) -- the first time the player walked up to a building.
 	PieceMeshes.stud()
 	PieceMeshes.stud_plain()
+	PieceMeshes.stud_square()
 	TerrainTile.stud_material()
 
 
@@ -335,7 +357,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 				band.near.cast_shadow = node.cast_shadow
 
 	if studs_on:
-		_studs(band, dist, stud_budget)
+		_studs(band, dist, local, stud_budget)
 
 
 func _idle(key: int, band: Band, now: int) -> void:
@@ -405,57 +427,79 @@ func _to_flat(band: Band) -> void:
 	band.since = Time.get_ticks_msec()
 
 
-func _studs(band: Band, dist: float, budget: Array) -> void:
-	var tier := 0
-	if dist < stud_radius + (MARGIN if band.stud_tier > 0 else 0.0):
-		tier = 2 if (enabled and dist < radius + (MARGIN if band.stud_tier == 2 else 0.0)) else 1
-	if tier == 0:
-		if band.studs != null:
-			if is_instance_valid(band.studs):
-				stud_instances -= band.studs.multimesh.instance_count
-				band.studs.queue_free()
-			band.studs = null
-			band.stud_tier = 0
-			band.studs_dirty = true
+func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
+	# The band's box against the furthest ring; a stud's own distance decides
+	# the rest (_sort_studs).
+	if dist >= stud_radius + (MARGIN if not band.studs.is_empty() else 0.0):
+		if not band.studs.is_empty():
+			_drop_studs(band)
 		return
-	if band.studs == null or band.studs_dirty:
-		if int(budget[0]) <= 0:
-			return
-		budget[0] = int(budget[0]) - 1
-		var t_studs := Time.get_ticks_usec()
-		_build_studs(band)
-		worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
-	if tier != band.stud_tier and band.studs != null:
-		band.studs.multimesh.mesh = PieceMeshes.stud() if tier == 2 else PieceMeshes.stud_plain()
-		band.stud_tier = tier
+	var fetch := band.studs.is_empty() or band.studs_dirty
+	if not fetch and band.stud_bevelled == enabled \
+			and local_eye.distance_squared_to(band.stud_eye) < STUD_RESORT * STUD_RESORT:
+		return
+	if int(budget[0]) <= 0:
+		return
+	budget[0] = int(budget[0]) - 1
+	var t_studs := Time.get_ticks_usec()
+	if fetch:
+		band.studs_dirty = false
+		band.stud_buffer = world.get_chunk_studs_section(band.chunk, band.section)
+	_sort_studs(band, local_eye)
+	worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
 
 
-func _build_studs(band: Band) -> void:
-	band.studs_dirty = false
-	var buffer: PackedFloat32Array = world.get_chunk_studs_section(band.chunk, band.section)
-	@warning_ignore("integer_division")
-	var count := buffer.size() / 16
-	if band.studs == null:
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "Studs"
-		mmi.material_override = TerrainTile.stud_material()
-		# Studs never cast (Terrain.md 7.4).
-		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		mmi.layers = band.layers if band.state == NEAR else _layers_of(band.node)
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_colors = true
-		mm.mesh = PieceMeshes.stud_plain()
-		mmi.multimesh = mm
-		band.node.add_child(mmi)
-		band.studs = mmi
-		band.stud_tier = 1
-	var mm := band.studs.multimesh
-	stud_instances += count - mm.instance_count
-	mm.instance_count = count
-	if count > 0:
-		mm.set_buffer(buffer)
+## The band's studs into their three rings round the camera, each ring's
+## MultiMesh given its own.
+func _sort_studs(band: Band, local_eye: Vector3) -> void:
+	if band.studs.is_empty():
+		var layers := band.layers if band.state == NEAR else _layers_of(band.node)
+		for mesh in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = "Studs"
+			mmi.material_override = TerrainTile.stud_material()
+			# Studs never cast (Terrain.md 7.4).
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+			mmi.layers = layers
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = mesh
+			mmi.multimesh = mm
+			band.node.add_child(mmi)
+			band.studs.append(mmi)
+	band.stud_eye = local_eye
+	band.stud_bevelled = enabled
+	# With the tier off there is no bevelled ring: its studs are plain.
+	var rings := PackedFloat32Array([stud_bevel_radius if enabled else 0.0,
+			maxf(stud_round_radius, stud_bevel_radius), stud_radius])
+	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings)
+	var drawn := 0
+	for k in 3:
+		var part: PackedFloat32Array = parts[k]
+		var mm := band.studs[k].multimesh
+		@warning_ignore("integer_division")
+		var n := part.size() / 16
+		mm.instance_count = n
+		if n > 0:
+			mm.set_buffer(part)
+		band.studs[k].visible = n > 0
+		drawn += n
+	stud_instances += drawn - band.stud_count
+	band.stud_count = drawn
+
+
+func _drop_studs(band: Band) -> void:
+	for mmi in band.studs:
+		if is_instance_valid(mmi):
+			mmi.queue_free()
+	band.studs.clear()
+	band.stud_buffer = PackedFloat32Array()
+	band.stud_eye = Vector3.INF
+	band.studs_dirty = true
+	stud_instances -= band.stud_count
+	band.stud_count = 0
 
 
 ## A node's render layers, and setting them -- past DebugView, which hides a
@@ -501,9 +545,7 @@ func _forget(key: int) -> void:
 			_set_layers(band.node, band.layers)
 		if is_instance_valid(band.near):
 			band.near.queue_free()
-	if band.studs != null and is_instance_valid(band.studs):
-		stud_instances -= band.studs.multimesh.instance_count
-		band.studs.queue_free()
+	_drop_studs(band)
 	_busy.erase(key)
 	_unlink(key, band.chunk)
 	_bands.erase(key)
