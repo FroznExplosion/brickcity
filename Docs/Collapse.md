@@ -48,6 +48,11 @@ enough away (`TRIM_AFTER_MS`); its damage goes into the record (`_record_damage`
 
 ### 1.2 Rooms
 
+**Replaced 2026-10-08** ([Interiors.md](Interiors.md) §8, stage 4 in §8.12): interiors are drawn a
+group of storeys at a time by distance, a thing is where its floor is, and what is hit becomes
+bricks, that piece alone. The rungs below, the write-off on a topple, `--interior-audit` and
+`--rooms` as described in this document are gone; the table is how it was.
+
 | Rung | When | What exists |
 |---|---|---|
 | **Shut** | beyond the others | a seed and a diff; nothing drawn |

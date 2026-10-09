@@ -149,16 +149,10 @@ class Building:
 	var dead_count := -1
 	var dead_frame := -1
 
-	## Which of this building's rooms are holding contents right now.
+	## Which of this building's rooms hold an item laid as bricks (Room.laid).
 	##
 	## Kept rather than found, because finding it means walking `rooms`, and a
-	## building of the big shapes has four thousand of them. The streaming pass
-	## asks this every tick; the answer is normally a handful.
-	var open_rooms: Array[int] = []
-	## And which are DRAWN -- on screen from the manifest, no blocks laid.
-	## Kept for the same reason `open_rooms` is.
-	var drawn_rooms: Array[int] = []
-	## And which hold an item laid as bricks on its own (Room.laid).
+	## building of the big shapes has four thousand of them.
 	var laid_rooms: Array[int] = []
 
 	func is_damaged() -> bool:
@@ -189,14 +183,6 @@ var _materialise_ms := 0.0
 ## fixture must cost nothing, and baking eight wedge archetypes for a city that
 ## never wakes one is not nothing.
 var _fixture_parts := {}
-var _rooms_active := 0
-var _rooms_drawn := 0
-## Storey groups are drawing the interiors (CityScene.group_interiors): an item
-## is on whichever chunk holds its floor -- the building, or a piece of it lying
-## in the street (InteriorGroups). So an item with no floor in THIS building is
-## not gone, it is elsewhere, and nothing done to the room's place in the
-## building -- laying it, blasting it -- may write it off.
-var floors_decide := false
 
 
 func _init(brick_world: BrickWorld, part_palette: Dictionary) -> void:
@@ -367,365 +353,6 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 	return room.openings
 
 
-## Materialise a room's contents: run the manifest and lay the bricks.
-##
-## `chunk` is where they go. Left at -1 it is the building's own chunk, which is
-## materialised first if it has to be -- the ordinary case, a room in a building
-## that is standing. A caller that owns the blocks somewhere else passes them:
-## after a topple the bricks belong to an island, and the room's contents belong
-## in that island with them.
-##
-## **Which way is down is read from the chunk, not assumed.** A room in a piece
-## that has fallen over resolves its contents against whatever face is now the
-## floor (Interiors section 5.2) -- deterministic, instant, and indistinguishable
-## from having simulated the fall.
-func activate_room(building_id: int, index: int, chunk: int = -1) -> int:
-	var b := get_building(building_id)
-	var room := get_room(building_id, index)
-	if b == null or room == null or room.active:
-		return 0
-	# Promotion from drawn: the drawing goes and the bricks replace it. The
-	# caller that holds the drawing's collision reconciles against `drawn`.
-	if room.drawn:
-		undraw_room(building_id, index)
-	var into := chunk
-	if into < 0:
-		into = materialise(building_id)
-	if into < 0 or not world.is_chunk_alive(into):
-		return 0
-	if room.items.is_empty():
-		room.items = RoomManifest.items_for(room)
-	var down := RoomManifest.down_axis(world.get_chunk_transform(into))
-	var offset := _rebase_of(b)
-	var placed := 0
-	for i in room.items.size():
-		if room.gone.has(i):
-			continue
-		var item: Dictionary = room.items[i]
-		var at := RoomManifest.resolved_cell(room, item, down, i)
-		# Standing, and its floor is gone: it went with the floor. Laying it
-		# anyway put a chair in mid-air that the next solve would drop, and
-		# until something nearby broke nothing asked the solve anything.
-		if down == Vector3i(0, -1, 0) and not RoomManifest.item_supported(
-				world, into, str(item.type), at - offset):
-			if not floors_decide:
-				room.gone[i] = true
-			continue
-		var laid := RoomManifest.build_item(world, into, palette,
-				{"type": item.type, "cell": at, "yaw": item.yaw},
-				4 + int(i % 8), offset)
-		item["blocks"] = laid
-		if laid.is_empty():
-			# Nowhere to put it -- something is already there. It is gone in the
-			# same sense a taken item is: the room has been resolved, and this
-			# is what the resolution says.
-			room.gone[i] = true
-		else:
-			placed += laid.size()
-	room.active = true
-	if not b.open_rooms.has(index):
-		b.open_rooms.append(index)
-	_rooms_active += 1
-	return placed
-
-
-## Draw a room: its manifest on screen and one collision box per item, with no
-## blocks laid at all. [Scale §4.1](../Docs/Scale.md) rung 2, between shut and
-## real.
-##
-## Only for a building that is standing and is bricks. The drawing is in the
-## chunk's own space, because that is the space the building's mesh node and
-## its furniture body are in, and a building that is a shell has neither.
-## Returns how many items were drawn.
-func draw_room(building_id: int, index: int) -> int:
-	var b := get_building(building_id)
-	var room := get_room(building_id, index)
-	if b == null or room == null or room.active or room.drawn or room.spilled:
-		return 0
-	if b.toppled or b.is_build() or not b.is_materialised():
-		return 0
-	if not world.is_chunk_alive(b.chunk):
-		return 0
-	if room.items.is_empty():
-		room.items = RoomManifest.items_for(room)
-	var drawing := RoomManifest.draw_items(world, b.chunk, palette, room, _rebase_of(b))
-	room.drawn_buffer = drawing.buffer
-	room.drawn_boxes = drawing.boxes
-	room.drawn = true
-	b.drawn_rooms.append(index)
-	_rooms_drawn += 1
-	return room.drawn_boxes.size()
-
-
-## Stop drawing a room. There is nothing to take back out of the chunk and no
-## diff to write: nothing can happen to a drawn room without promoting it.
-func undraw_room(building_id: int, index: int) -> void:
-	var b := get_building(building_id)
-	var room := get_room(building_id, index)
-	if b == null or room == null or not room.drawn:
-		return
-	room.clear_drawing()
-	b.drawn_rooms.erase(index)
-	_rooms_drawn -= 1
-
-
-## Every drawn room of a building, for whoever draws them.
-func drawn_rooms_of(building_id: int) -> Array[Room]:
-	var out: Array[Room] = []
-	var b := get_building(building_id)
-	if b == null:
-		return out
-	for index in b.drawn_rooms:
-		out.append(b.rooms[index])
-	return out
-
-
-func _undraw_all(b: Building) -> void:
-	for index in b.drawn_rooms:
-		(b.rooms[index] as Room).clear_drawing()
-	_rooms_drawn -= b.drawn_rooms.size()
-	b.drawn_rooms.clear()
-
-
-## Take a room's contents back out, keeping what changed.
-##
-## Interiors section 3: deactivating frees the objects and keeps the diff. The
-## diff is one thing -- which items are gone -- because everything else about a
-## room regenerates from its seed.
-## `dead` and `releasing` are for dematerialise, shutting every room at once:
-## the dead asked once for all of them, and nothing removed from a chunk that is
-## about to be released anyway.
-func deactivate_room(building_id: int, index: int, dead: Dictionary = {},
-		releasing: bool = false) -> void:
-	var b := get_building(building_id)
-	var room := get_room(building_id, index)
-	if b == null or room == null or not room.active:
-		return
-	var chunk := b.chunk
-	var dead_set := dead
-	if dead.is_empty() and not releasing and chunk >= 0 and world.is_chunk_alive(chunk):
-		dead_set = {}
-		for id in world.get_dead_blocks(chunk):
-			dead_set[id] = true
-	for i in room.items.size():
-		var item: Dictionary = room.items[i]
-		var blocks: PackedInt32Array = item.get("blocks", PackedInt32Array())
-		if blocks.is_empty():
-			continue
-		var lost := false
-		for id in blocks:
-			if dead_set.has(id):
-				lost = true
-				break
-		if lost:
-			# Shot, crushed, or taken down with the wall it stood against.
-			room.gone[i] = true
-		elif not releasing and chunk >= 0 and world.is_chunk_alive(chunk):
-			for id in blocks:
-				world.remove_block(chunk, id)
-		item["blocks"] = PackedInt32Array()
-	room.active = false
-	room.hit = false
-	b.open_rooms.erase(index)
-	_rooms_active -= 1
-
-
-## The host is coming down. Decide what happens to each room's contents.
-##
-## Interiors §4.1: a destroyed room's contents "should not survive intact -- but
-## they should not simply vanish either, because the player watched a building
-## fall and expects to find what was in it". So the manifest is **spilled**: the
-## same items the room would have held, in the wreckage, damaged.
-##
-## A room that was OPEN needs nothing done -- its bricks are in the chunk that
-## is about to become an island, so they ride it (§4.2). A room that was shut is
-## marked `spilled`, and `spill_room` puts its contents in when somebody is
-## close enough for it to matter. §5.1's rule, and the one this project keeps
-## arriving at: do not build, in the most expensive moment there is, something
-## nobody can see.
-func mark_rooms_spilled(building_id: int) -> int:
-	var b := get_building(building_id)
-	if b == null:
-		return 0
-	# Generated here if nobody has asked before. A building coming down is
-	# exactly the moment its rooms start to matter, whether or not anybody
-	# had looked inside it first -- and rooms are lazy, so without this a
-	# tower nobody had approached spilled nothing at all.
-	# A drawn room had no blocks to ride the fall, so it spills like a shut one.
-	_undraw_all(b)
-	var n := 0
-	for room in rooms_of(building_id):
-		if room.active or room.spilled:
-			continue
-		room.spilled = true
-		n += 1
-	return n
-
-
-## The host is coming down and its shut rooms are simply gone.
-##
-## The alternative to `mark_rooms_spilled`, and the default. Measured with
-## `--interior-audit`: every spill landed in a wreck that was still falling,
-## every item it laid was joined to no structure at all -- placed against
-## whatever face was "down" at that instant, at a seeded height, and a wall
-## margin clear of the walls -- and by the time the wreck came to rest all of
-## it had been split off as small debris and deleted. The spill paid for
-## furniture that floated for the whole fall and then did not exist.
-##
-## A room that was REAL rides the fall in its own bricks, as before; this only
-## decides what happens to the rooms nobody had touched. Their diff is written
-## -- every item gone -- so the building's record says what the collapse did.
-func write_off_rooms(building_id: int) -> int:
-	var b := get_building(building_id)
-	if b == null:
-		return 0
-	_undraw_all(b)
-	var n := 0
-	for room in rooms_of(building_id):
-		if room.active or room.spilled:
-			continue
-		var count: int = room.items.size() if not room.items.is_empty() \
-				else RoomManifest.item_count_for(room)
-		for i in count:
-			room.gone[i] = true
-		n += 1
-	return n
-
-
-## Put a spilled room's contents into the wreckage.
-##
-## `chunk` is the island that holds what the building became. Where each item
-## lands is §5.2's analytic resolve -- against whatever face is now the floor --
-## and what state it is in is seeded from the room: roughly a third of each
-## item's bricks are gone, deterministically, so the same wreck looks the same
-## on a second visit and on another machine.
-##
-## `budget` caps how many items are laid in full; the rest are written off.
-## §4.1's degradation ladder: "spill the N most valuable or most visible items
-## in full, represent the rest as generic rubble, and let distance and budget
-## decide N". There is no generic rubble item yet, so the remainder is simply
-## gone, which is the honest version of the same trade.
-func spill_room(building_id: int, index: int, chunk: int, budget: int = 4) -> int:
-	var b := get_building(building_id)
-	var room := get_room(building_id, index)
-	if b == null or room == null or not room.spilled or room.active:
-		return 0
-	if chunk < 0 or not world.is_chunk_alive(chunk):
-		return 0
-	if room.items.is_empty():
-		room.items = RoomManifest.items_for(room)
-	var down := RoomManifest.down_axis(world.get_chunk_transform(chunk))
-	var offset := _rebase_of(b)
-	var laid := 0
-	var placed := 0
-	for i in room.items.size():
-		if room.gone.has(i):
-			continue
-		var item: Dictionary = room.items[i]
-		if laid >= budget:
-			room.gone[i] = true      # rubble, in the sense that nothing is left of it
-			continue
-		var at := RoomManifest.resolved_cell(room, item, down, i)
-		var blocks := RoomManifest.build_item(world, chunk, palette,
-				{"type": item.type, "cell": at, "yaw": item.yaw},
-				4 + int(i % 8), offset)
-		if blocks.is_empty():
-			room.gone[i] = true
-			continue
-		# Damaged, not intact: a third of it, chosen from the room's seed.
-		var broken := PackedInt32Array()
-		for k in blocks.size():
-			if RoomManifest.hash3(room.room_seed, i, k) % 3 == 0:
-				broken.push_back(blocks[k])
-		if not broken.is_empty():
-			world.kill_blocks(chunk, broken)
-		item["blocks"] = blocks
-		laid += 1
-		placed += blocks.size()
-	room.spilled = false
-	room.active = true
-	if not b.open_rooms.has(index):
-		b.open_rooms.append(index)
-	_rooms_active += 1
-	return placed
-
-
-## Rooms of this building that came down without being opened.
-func spilled_rooms(building_id: int) -> Array[Room]:
-	var out: Array[Room] = []
-	var b := get_building(building_id)
-	if b == null:
-		return out
-	for room in b.rooms:
-		if room.spilled:
-			out.append(room)
-	return out
-
-
-## Every room this volume reaches, activated where it stands.
-##
-## Interiors section 5: a COMPROMISED room resolves immediately, whether or not
-## anybody can see it, because its contents are part of what the damage does.
-## Plan section 4.4 is the same rule one level up.
-func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
-		build: bool = true) -> int:
-	var b := get_building(building_id)
-	if b == null or b.is_build():
-		return 0
-	var woken := 0
-	var local := b.xform.affine_inverse() * world_point
-	for room in rooms_of(building_id):
-		if not room.local_box().grow(radius).has_point(local):
-			continue
-		if room.active:
-			room.hit = true
-			continue
-		if build:
-			if activate_room(building_id, room.id) > 0:
-				woken += 1
-			room.hit = room.active
-			continue
-		# Nobody is near enough to see it, so nothing is built. Interiors
-		# section 5.1: "rooms near the camera spawn full contents; distant ones
-		# write spilled into the diff and resolve analytically if anybody ever
-		# arrives". What the blast did to this room is recorded and costs
-		# nothing -- and it costs nothing in the right way, because BUILDING it
-		# means taking the host's body out of the physics space to add the
-		# collision, which wakes everything resting on that building. Doing
-		# that once per blast took the stress pass's damage phase from 20 ms a
-		# frame to 108.
-		# Not even the manifest: how many things were in here is a function of
-		# the room's seed, so "all of them are gone" is writable without a list
-		# of what they were. `items_for` is deterministic, so the indices still
-		# line up if anybody ever does build it.
-		if room.drawn:
-			undraw_room(building_id, room.id)
-		if floors_decide:
-			# Only what is still standing in the room: an item whose floor has
-			# left is on a piece somewhere, and this blast is not there.
-			if room.items.is_empty():
-				room.items = RoomManifest.items_for(room)
-			var here := false
-			var offset := _rebase_of(b)
-			for i in room.items.size():
-				if room.gone.has(i):
-					continue
-				var item: Dictionary = room.items[i]
-				if b.chunk >= 0 and RoomManifest.item_floor_share(world, b.chunk,
-						str(item.type), (item.cell as Vector3i) - offset) > 0.5:
-					room.gone[i] = true
-					here = true
-			if here:
-				woken += 1
-			continue
-		var count: int = room.items.size() if not room.items.is_empty() 				else RoomManifest.item_count_for(room)
-		for i in count:
-			room.gone[i] = true
-		room.spilled = false
-		woken += 1
-	return woken
-
-
 ## Lay ONE item of a room into the building's chunk as bricks.
 ## [Interiors §8.4](../Docs/Interiors.md): what a blast or a bullet reaches
 ## becomes bricks -- that piece, and only that piece -- and is ordinary brick
@@ -738,7 +365,7 @@ func compromise_rooms(building_id: int, world_point: Vector3, radius: float,
 func lay_item(building_id: int, index: int, i: int) -> int:
 	var b := get_building(building_id)
 	var room := get_room(building_id, index)
-	if b == null or room == null or room.active or not b.is_materialised() or b.toppled:
+	if b == null or room == null or not b.is_materialised() or b.toppled:
 		return 0
 	if room.items.is_empty():
 		room.items = RoomManifest.items_for(room)
@@ -768,10 +395,18 @@ var items_laid := 0   ## items laid as bricks one at a time, all told
 
 
 ## Every interior piece a blast reaches, where it stands: laid as bricks if
-## somebody could see it (`build`), written off if nobody could -- the same
-## choice compromise_rooms makes for a whole room, made for the pieces inside
-## `radius` of the point and no others. Returns {laid: [[room, item], ...],
-## gone: how many were written off}.
+## somebody could see it (`build`), written off if nobody could -- for the
+## pieces inside `radius` of the point and no others. Returns
+## {laid: [[room, item], ...], gone: how many were written off}.
+##
+## Interiors section 5.1 is why nothing is built unseen: laying bricks means
+## new collision on the host's body, and a firefight reaches thousands of
+## pieces nobody will ever look at.
+##
+## Only what stands HERE. An item is on whichever chunk holds its floor -- the
+## building, or a piece of it lying in the street (InteriorGroups) -- so one
+## with no floor in this building is not gone, it is elsewhere, and a blast in
+## the building may not write it off.
 func compromise_items(building_id: int, world_point: Vector3, radius: float,
 		build: bool = true) -> Dictionary:
 	var out := {"laid": [], "gone": 0}
@@ -782,9 +417,6 @@ func compromise_items(building_id: int, world_point: Vector3, radius: float,
 	var offset := _rebase_of(b)
 	for room in rooms_of(building_id):
 		if not room.local_box().grow(radius).has_point(local):
-			continue
-		if room.active:
-			room.hit = true   # a room the rungs laid whole: bricks already
 			continue
 		if room.items.is_empty():
 			room.items = RoomManifest.items_for(room)
@@ -843,17 +475,20 @@ func rooms_in_range(building_id: int, world_point: Vector3, radius: float,
 			b.recipe.courses, local, radius, storey_span)
 
 
-## How many rooms are holding contents, and how many have a diff to their name.
+## How many rooms there are, how many have a diff to their name, and how many
+## interior pieces are bricks right now (lay_item).
 func room_report() -> Dictionary:
 	var total := 0
 	var changed := 0
+	var laid := 0
 	for b in buildings:
 		total += b.rooms.size()
 		for room in b.rooms:
 			if room.is_changed():
 				changed += 1
-	return {"rooms": total, "active": _rooms_active, "drawn": _rooms_drawn,
-			"changed": changed}
+		for index in b.laid_rooms:
+			laid += (b.rooms[index] as Room).laid.size()
+	return {"rooms": total, "changed": changed, "laid": laid}
 
 
 # ---------------------------------------------------------------------------
@@ -1110,19 +745,9 @@ func hand_over(id: int) -> void:
 	var b := get_building(id)
 	if b == null or not b.is_materialised():
 		return
-	# The bricks are about to belong to an island, contents included: what was
-	# in the room rides the piece it was standing on (Interiors section 4.2).
-	# The rooms themselves stop being materialised, because the building they
-	# were cut out of is not there any more.
-	for room in b.rooms:
-		if room.active:
-			room.active = false
-			room.hit = false
-			_rooms_active -= 1
-			for item in room.items:
-				item["blocks"] = PackedInt32Array()
-	b.open_rooms.clear()
-	_undraw_all(b)
+	# The bricks are about to belong to an island, a piece laid as bricks
+	# included: it rides the piece it was standing on (Interiors section 4.2),
+	# and stays `laid` so that no drawing of that piece shows it twice.
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
 	b.toppled = true
@@ -1137,19 +762,16 @@ func dematerialise(id: int) -> void:
 	var b := get_building(id)
 	if b == null or not b.is_materialised():
 		return
-	# A room's contents are bricks in this chunk. They go when it goes, and what
-	# they leave behind is the diff. The dead asked once for all of them, and
-	# nothing taken out of a chunk that is about to be released: each room used
-	# to walk the whole building for its dead and remove its furniture a block
-	# at a time, which was most of giving a big building back (5-6 ms).
-	var dead := {}
-	for dead_id in world.get_dead_blocks(b.chunk):
-		dead[dead_id] = true
-	for room in b.rooms:
-		if room.active:
-			deactivate_room(id, room.id, dead, true)
-	_unlay_all(b, dead)
-	_undraw_all(b)
+	# A piece laid as bricks is bricks in this chunk. It goes when the chunk
+	# goes, and what it leaves behind is the diff. The dead are asked once for
+	# all of them, and nothing is taken out of a chunk that is about to be
+	# released -- and only if something was laid at all: the dead of a big
+	# building is a walk of fifty thousand blocks.
+	if not b.laid_rooms.is_empty():
+		var dead := {}
+		for dead_id in world.get_dead_blocks(b.chunk):
+			dead[dead_id] = true
+		_unlay_all(b, dead)
 	_record_damage(b)
 	b.recipe_version = RECIPE_VERSION
 	# The profile is expressed in the tower recipe's vertical bands, and a player
@@ -1328,5 +950,4 @@ func _build_damage_profile(b: Building) -> Dictionary:
 		bands.push_back(int(band.plates))
 	return world.build_damage_profile(b.chunk, b.recipe.footprint_x, b.recipe.footprint_z,
 			TowerRecipe.WALL_THICK, BuildingShell.SEGMENTS, bands)
-
 

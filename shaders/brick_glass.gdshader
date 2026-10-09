@@ -39,7 +39,8 @@ varying float v_side;
 
 void vertex() {
     v_uv = UV;
-    v_face = UV2;
+    // A chamfered band's facets carry a negative UV2 (brick.gdshader).
+    v_face = abs(UV2);
     v_side = abs(NORMAL.y) < 0.7 ? 1.0 : 0.0;
     if (MAT_TRANSLUCENT[brick_material_id(COLOR.a)] < 0.5) {
         VERTEX = vec3(0.0);

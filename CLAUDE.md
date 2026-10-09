@@ -65,6 +65,10 @@ The engine library is **not committed**; each worktree builds its own.
 - Probes: `--headless --path . --script res://tools/<name>_probe.gd` (build mode:
   `place_probe`, `city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`;
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
+- The brick mesher or its near tier (`bake_faces_into`, `chamfer_faces_into`,
+  `brick_near.gd`, `brick.gdshader`): `brick_bevel_probe`, `brick_bevel_gap_probe`
+  (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
+  (Docs/BrickBevel.md).
 - Run the probes your change could affect before merging.
 
 ### Test windows stay out of the user's way

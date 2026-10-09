@@ -110,7 +110,7 @@ func _check_building() -> void:
 			"%d groups for %d rooms on %d storeys; %d twice, %d outside" % [
 				layout.size(), rooms.size(), layout[layout.size() - 1].last_storey, twice, outside])
 
-	# The same rooms again, worked out the way the drawn rung does: one at a time.
+	# The same rooms again, worked out one at a time.
 	var reg2 := BuildingRegistry.new(w, palette)
 	var id2 := reg2.register(40, 30, 60, Transform3D.IDENTITY)
 	var want_rows := {}   # group -> floats
@@ -253,26 +253,6 @@ func _check_building() -> void:
 				int(want_rows.get(top.index, 0)) / FurnitureMesh.STRIDE, groups.rooms_worked - worked0])
 	_ok("and every other group's drawing is what it was", others_same)
 
-	# A room laid as bricks (a blast reached it) is drawn from its bricks, not
-	# by its group; taken back out, it is the group's again.
-	var laid_room := -1
-	for index in range(g0.first_room, g0.last_room):
-		if not (g0.pieces[index - g0.first_room] as PackedFloat32Array).is_empty():
-			laid_room = index
-			break
-	var rows_before := (g0.pieces[laid_room - g0.first_room] as PackedFloat32Array).size()
-	var placed := reg.activate_room(id, laid_room)
-	groups.room_changed(id, laid_room)
-	groups.work(b, g0, far)
-	var rows_laid := (g0.pieces[laid_room - g0.first_room] as PackedFloat32Array).size()
-	reg.deactivate_room(id, laid_room)
-	groups.room_changed(id, laid_room)
-	groups.work(b, g0, far)
-	var rows_back := (g0.pieces[laid_room - g0.first_room] as PackedFloat32Array).size()
-	_ok("a room laid as bricks leaves its group's drawing, and comes back when it is taken out",
-			placed > 0 and rows_before > 0 and rows_laid == 0 and rows_back == rows_before,
-			"%d brick(s) laid; %d, %d, %d floats" % [placed, rows_before, rows_laid, rows_back])
-
 	_check_section(w, reg, groups, b, layout, parent)
 
 	groups.release(id, top)
@@ -383,7 +363,6 @@ func _check_shot() -> void:
 	var w := BrickWorld.new()
 	var palette := TowerRecipe.bake_palette(w)
 	var reg := BuildingRegistry.new(w, palette)
-	reg.floors_decide = true
 	var id := reg.register(40, 30, 60, Transform3D.IDENTITY)
 	var b := reg.get_building(id)
 	reg.materialise(id)
@@ -433,7 +412,7 @@ func _check_shot() -> void:
 	var laid: PackedInt32Array = room.items[target].get("blocks", PackedInt32Array())
 	_ok("a blast at it lays that piece as bricks, and no other",
 			hit.laid == [[room.id, target]] and room.laid.size() == 1 and room.laid.has(target)
-			and not room.active and not laid.is_empty()
+			and not laid.is_empty()
 			and w.get_decorative_blocks(b.chunk).size() == decor_before + laid.size(),
 			"laid %s; %d brick(s); %d decorative in the chunk before, %d after" % [
 				hit.laid, laid.size(), decor_before, w.get_decorative_blocks(b.chunk).size()])

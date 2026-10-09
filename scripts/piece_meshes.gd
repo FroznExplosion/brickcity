@@ -91,7 +91,8 @@ static func stud() -> ArrayMesh:
 ## The same stud with no rim bevel: 22 triangles to `stud`'s 38. Past a few
 ## metres the 13 mm rim is under a pixel or two (Terrain.md 17.12's
 ## `17.8 / distance`), so the terrain draws this one there and the bevelled
-## one only on tiles round the camera (TerrainTile.set_near).
+## one only on tiles round the camera (TerrainTile.set_near) -- and bricks do
+## the same, a band of mesh at a time (BrickNear).
 static func stud_plain() -> ArrayMesh:
 	if _stud_plain != null:
 		return _stud_plain
@@ -276,17 +277,16 @@ static func _slab(st: SurfaceTool, cx: float, y: float, cz: float,
 ## A brick with its edges cut off: 6 inset faces, 12 bevel strips, 8 corner
 ## triangles. 44 triangles, watertight, flat-shaded.
 ##
-## This is the ONE place real chamfer geometry earns its cost, and it is worth
-## saying why, because the same request for the chunk mesh is refused in
-## `brick.gdshader`.
+## Real chamfer geometry at ANY distance, which a chunk's mesh has only near
+## the camera (BrickNear; Docs/BrickBevel.md).
 ##
 ## A 13 mm bevel subtends 17.8/distance pixels — 8.9 px at 2 m, 2.2 px at 8 m.
-## On a baked chunk that is millions of triangles to move two pixels on edges
-## that are almost all interior, where the shaded bevel is not an approximation
-## but the correct answer. A loose brick tumbling past the camera is the
-## opposite case on every count: it is entirely silhouette, it is routinely the
-## nearest geometry in the frame, and it is a SHARED instanced mesh — so the
-## 44 triangles are paid once for the whole debris field, not once per brick.
+## On a baked chunk past fourteen metres that is triangles to move a pixel on
+## edges that are almost all interior, where the shaded bevel is the answer. A
+## loose brick tumbling past the camera is the opposite case on every count:
+## it is entirely silhouette, it is routinely the nearest geometry in the
+## frame, and it is a SHARED instanced mesh — so the 44 triangles are paid once
+## for the whole debris field, not once per brick.
 ##
 ## Cached per size, because `IslandManager` already keeps one MultiMesh per
 ## distinct brick size and there are a handful of those.

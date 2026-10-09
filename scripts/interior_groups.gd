@@ -4,10 +4,11 @@ extends RefCounted
 ## What stands in a building's rooms, drawn a GROUP OF STOREYS at a time.
 ## [Interiors §8.2](../Docs/Interiors.md).
 ##
-## The rungs this stands beside each have a unit and a rule of their own: a room
-## drawn inside 40 m on the player's storey, an outer room faked inside 70 m for
-## the whole building, a room laid as bricks at arm's length. Three rules, three
-## ranges, and a seam wherever a room crosses from one to the next.
+## What this replaced (the "rungs", removed 2026-10-08) had a unit and a rule
+## each: a room drawn inside 40 m on the player's storey, an outer room faked
+## inside 70 m for the whole building, a room laid as bricks at arm's length.
+## Three rules, three ranges, and a seam wherever a room crossed from one to
+## the next.
 ##
 ## Here the unit is a few storeys together and the only rule is distance:
 ##
@@ -74,12 +75,11 @@ class Group:
 	## A room in it may have changed since it was worked out.
 	var dirty := true
 	## Bumped when blocks in its storeys may have changed: every piece's floor is
-	## asked again (RoomManifest.item_supported).
+	## asked again (RoomManifest.item_floor_share).
 	var struct_stamp := 0
 	## Per room, what its drawing was worked out against.
 	var room_stamp := PackedInt32Array()
 	var room_gone := PackedInt32Array()
-	var room_state := PackedByteArray()
 	## Per room: MultiMesh rows for its interior pieces and its items, and one
 	## box per piece in the chunk's own metres (collision, crushing).
 	var pieces: Array[PackedFloat32Array] = []
@@ -238,7 +238,8 @@ func known_ids() -> Array:
 	return _layouts.keys()
 
 
-## A room was laid as bricks or taken back out: its group draws it, or stops.
+## Something in a room changed -- a piece written off, or laid as bricks: its
+## group draws the room again.
 func room_changed(building_id: int, room_index: int) -> void:
 	for g in known(building_id):
 		if room_index >= g.first_room and room_index < g.last_room:
@@ -275,8 +276,6 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 		g.room_stamp.fill(-1)
 		g.room_gone.resize(n)
 		g.room_gone.fill(-1)
-		g.room_state.resize(n)
-		g.room_state.fill(0)
 		g.pieces.clear()
 		g.items.clear()
 		g.boxes.clear()
@@ -291,31 +290,22 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 	var done := true
 	for k in n:
 		var room: Room = rooms[g.first_room + k]
-		var state := (1 if room.active else 0) | (2 if room.spilled else 0)
-		if g.room_stamp[k] == g.struct_stamp and g.room_gone[k] == room.diff_stamp() \
-				and g.room_state[k] == state:
+		if g.room_stamp[k] == g.struct_stamp and g.room_gone[k] == room.diff_stamp():
 			continue
 		if worked > 0 and Time.get_ticks_usec() >= until_usec:
 			done = false
 			break
 		worked += 1
-		if state != 0:
-			g.pieces[k] = PackedFloat32Array()
-			g.items[k] = PackedFloat32Array()
-			g.boxes[k] = []
-			g.piece_rows[k] = PackedInt32Array()
-		else:
-			if room.items.is_empty():
-				room.items = RoomManifest.items_for(room)
-			var d := RoomManifest.draw_items(world, b.chunk, registry.palette, room, offset, true)
-			g.pieces[k] = d.buffer
-			g.items[k] = d.details
-			g.boxes[k] = d.boxes
-			g.piece_rows[k] = d.pieces
+		if room.items.is_empty():
+			room.items = RoomManifest.items_for(room)
+		var d := RoomManifest.draw_items(world, b.chunk, registry.palette, room, offset)
+		g.pieces[k] = d.buffer
+		g.items[k] = d.details
+		g.boxes[k] = d.boxes
+		g.piece_rows[k] = d.pieces
 		g.cover_stale = true
 		g.room_stamp[k] = g.struct_stamp
 		g.room_gone[k] = room.diff_stamp()
-		g.room_state[k] = state
 		g.changed = true
 	rooms_worked += worked
 	work_ms += float(Time.get_ticks_usec() - t0) / 1000.0
@@ -402,7 +392,6 @@ func release(building_id: int, g: Group) -> void:
 	g.item_count = 0
 	g.room_stamp = PackedInt32Array()
 	g.room_gone = PackedInt32Array()
-	g.room_state = PackedByteArray()
 	g.pieces.clear()
 	g.items.clear()
 	g.boxes.clear()
@@ -419,11 +408,6 @@ func drop(building_id: int) -> void:
 	for g in (have as Array):
 		release(building_id, g)
 	_layouts.erase(building_id)
-
-
-func drop_all() -> void:
-	for id in _layouts.keys():
-		drop(id)
 
 
 ## Ask every piece of the shown groups between two heights (the building's
@@ -463,8 +447,6 @@ func check_floors(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> Arr
 			if mine.is_empty():
 				continue
 			var room: Room = rooms[g.first_room + k]
-			if room.active or room.spilled:
-				continue
 			var room_lost := false
 			for j in range(0, mine.size(), 6):
 				var i := mine[j]
@@ -615,11 +597,6 @@ func piece_drop(chunk: int) -> void:
 	_piece_draws.erase(chunk)
 
 
-func piece_drop_all() -> void:
-	for chunk in _piece_draws.keys():
-		piece_drop(chunk)
-
-
 ## Work out one piece's interior, until `until_usec` (a room is always done),
 ## and put it on screen under `parent` -- the piece's own node -- once every
 ## room is. `lo`..`hi` is the piece's box in cells (the building's grid).
@@ -659,14 +636,11 @@ func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vect
 		var room: Room = rooms[p.rooms[p.cursor]]
 		p.cursor += 1
 		worked += 1
-		# Laid as bricks: its contents are blocks in some chunk, drawn from it.
-		if room.active or room.spilled:
-			continue
 		if room.items.is_empty():
 			room.items = RoomManifest.items_for(room)
 		if room.items.is_empty():
 			continue
-		var d := RoomManifest.draw_items(world, chunk, registry.palette, room, offset, true)
+		var d := RoomManifest.draw_items(world, chunk, registry.palette, room, offset)
 		if not (d.buffer as PackedFloat32Array).is_empty():
 			p.pieces.append(d.buffer)
 		if not (d.details as PackedFloat32Array).is_empty():

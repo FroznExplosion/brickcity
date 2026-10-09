@@ -406,6 +406,43 @@ struct FaceBake {
     PackedVector2Array uv2s;  // that rect's size
     std::vector<int32_t> owner;
     std::vector<int32_t> other; // block on the far side, -1 = open air
+    // What each face's four sides are, for the chamfered near mesh
+    // (chamfer_faces_into): two bits a side -- EDGE_* below -- at
+    // EDGE_A_LO .. EDGE_B_HI, the face's direction (0..5) at EDGE_DIR_SHIFT,
+    // a bit a corner at EDGE_PLUG_SHIFT, a bit each end of each side at
+    // EDGE_CAP_SHIFT, and EDGE_RAW on a face that is copied as it is (an
+    // authored surface).
+    // Four bytes a face, against the 224 bytes of its four vertices.
+    std::vector<uint32_t> edge;
+    // The FLOORS of the facets, in face order.
+    //
+    // A facet runs from its face back to the plane of the face round the edge
+    // -- and stops there, a bevel short of the edge itself. When that other
+    // face is drawn too, its own facet is the same quad and the brick is
+    // closed. When it stands against a brick, the next thing seen past the
+    // facet's end is that brick's facet, coming the other way... unless THAT
+    // brick has a third brick against it there, diagonally across the edge
+    // from this one. Three bricks on one line: the middle one's edge has both
+    // of its faces hidden, nobody draws its facet, and the two facets either
+    // side of it stop a bevel apart with the inside of the wall between them.
+    // A floor tile laid up to the foot of a wall that stands on the block
+    // beside the tile is exactly that, the whole length of the wall.
+    //
+    // So where both are true -- a block against the face round the edge, and
+    // a block diagonally across -- the facet gets a floor: the strip of the
+    // other face's plane from the facet's end out to the edge. It is the
+    // middle brick's face, seen as if that brick's edge were square. One
+    // entry a run of cells along a side.
+    struct Floor {
+        int32_t face;
+        uint16_t from;  // cells along the side, [from, to)
+        uint16_t to;
+        uint8_t side;   // 0..3: A low, A high, B low, B high
+    };
+    std::vector<Floor> floors;
+    // Which bake this is, counted up across every bake made. A chamfered band
+    // is built from one bake's face order and is only good for that one.
+    uint32_t serial = 0;
     bool valid = false;
     double bake_ms = 0.0;
 
@@ -440,8 +477,54 @@ struct FaceBake {
         uv2s = PackedVector2Array();
         owner.clear();
         other.clear();
+        edge.clear();
+        floors.clear();
         valid = false;
     }
+};
+
+// One side of a baked face, as the chamfered mesh needs it (FaceBake::edge).
+//
+//   FLUSH   left where it is: the side is part free edge and part not (only a
+//           shaped part's face can be), and flat is what the flat mesh does.
+//   CONVEX  a free edge of the brick: the face is drawn in by the bevel and a
+//           45-degree facet runs from there to the face round the corner.
+//   EXTEND  not an edge of the brick at all -- the same face goes on past it,
+//           under another brick or as another rectangle. The face is pushed
+//           OUT by the bevel there: that sliver is what the brick standing on
+//           it shows under its own bevelled edge (the backing).
+//   CONVEX_QUIET  a free edge whose facet the face round the corner draws:
+//           that one is open to the air for as long as the brick lives, so
+//           one of the two is enough (bake_faces_into says which).
+enum : uint32_t {
+    EDGE_FLUSH = 0,
+    EDGE_CONVEX = 1,
+    EDGE_EXTEND = 2,
+    EDGE_CONVEX_QUIET = 3,
+    EDGE_A_LO = 0,
+    EDGE_A_HI = 2,
+    EDGE_B_LO = 4,
+    EDGE_B_HI = 6,
+    EDGE_RAW = 1 << 8,
+    EDGE_DIR_SHIFT = 9,
+    // One bit a corner (the face's four, in the bake's order), from here: both
+    // faces that meet this one at the corner stood against another brick when
+    // the bake was made. With both of them hidden, the three bevels that meet
+    // there leave a triangular hole into the wall -- at every joint of every
+    // course -- so the corner is PLUGGED: instead of a corner triangle, the
+    // face's two facets run on to the brick's corner and meet in a mitre.
+    EDGE_PLUG_SHIFT = 12,
+    // Two bits a side (the low end of the way along it, then the high), from
+    // here: the facet on that side stops at that end where the face goes on
+    // -- hidden behind another brick, and with a brick against the face round
+    // the edge as well. The bevelled edge runs on between the three of them as
+    // a tunnel nobody draws, and the facet's end is CAPPED across its mouth.
+    EDGE_CAP_SHIFT = 16,
+    // One bit a side, from here: a brick stands against the face round that
+    // edge, all the way along it. The facet there is one wall of a GROOVE
+    // between two bricks, not the corner of a brick in the open, and is shaded
+    // as one: darker toward the bottom (brick.gdshader).
+    EDGE_GROOVE_SHIFT = 24,
 };
 
 struct Chunk {

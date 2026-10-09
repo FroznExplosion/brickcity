@@ -317,8 +317,7 @@ func receive(msg: Array) -> void:
 				ctx.source = null
 		"stop":
 			if not is_host:
-				for d in running:
-					d.end_now()
+				_end_all()
 				_update_banner()
 		"request":
 			if is_host:
@@ -349,10 +348,18 @@ func stop() -> void:
 			events_sent += 1
 		return
 	if is_running():
-		for d in running:
-			d.end_now()
+		_end_all()
 		_update_banner()
 		_publish(["stop", Engine.get_physics_frames()])
+
+
+## Each running disaster to its ENDING, told which it is like a tick: what its
+## hook sets there (hail and sand stop lying) is its own, not nobody's.
+func _end_all() -> void:
+	for d in running:
+		ctx.source = d
+		d.end_now()
+	ctx.source = null
 
 
 ## The city's key handler hands H here.

@@ -40,12 +40,11 @@ uniform float seam_fade_end = 75.0;
 // highlight along the top edges and goes dark along the bottom ones, so an
 // unlit corner still separates from the face beside it.
 //
-// It is SHADED, not built. A chamfer on every edge of every block would be a
-// ring of four quads per face -- five times the triangles for a bevel that is
-// 13 mm wide at game scale and is sub-pixel past about twenty metres. What the
-// eye actually reads at that size is the LIGHTING, so the normal is bent to
-// 45 degrees inside a band along each block edge and the geometry is left flat.
-// It costs two texture-space derivatives and no vertices.
+// Past a few metres it is SHADED, not built: a 13 mm bevel is a pixel at
+// fourteen metres and what the eye reads at that size is the LIGHTING, so the
+// normal is bent to 45 degrees inside a band along each block edge and the
+// geometry is left flat. It costs two texture-space derivatives and no
+// vertices.
 //
 // 13 mm is the real thing to scale: a moulded brick chamfers about 0.3 mm on an
 // 8 mm stud, and a stud here is 0.35 m (Docs/Status.md, "the part palette").
@@ -56,42 +55,30 @@ uniform float seam_fade_end = 75.0;
 // stays legible; the chamfer fades by 60 m because a sub-pixel highlight
 // shimmers.
 //
-// --- why not real geometry near the camera, and a line far away? ----------
+// --- and close to the camera it is BUILT ---------------------------------
 //
-// Asked, and the answer is no, for two reasons of different weight.
+// For a long time this said it never would be, for two reasons: fourteen
+// triangles a face where there were two (a 150 m tower at 685k becoming 4.8M),
+// and a baked vertex buffer rebuilt every time the camera crossed a distance
+// -- the 175 ms M2c was written to remove, driven by camera movement instead
+// of by damage. Both were true of the mesh as it then was.
 //
-// The triangle count is the small one. A chamfered quad is a centre quad plus
-// four edge strips plus four mitred corners: 14 triangles where there was 2.
-// Against the measured figures -- M0's 824 blocks at 36,256 triangles after
-// 82.9% face culling, a 150 m tower at 685k, a 25-tile terrain field at 76k --
-// that is 254k, 4.8M and 532k. The tower alone ends it.
+// What changed (Docs/BrickBevel.md): the bake merges faces per brick, so the
+// chamfered mesh is the bake's faces in the bake's order -- drawn or not by
+// the same rule, damaged by the same index patch; it is a SECOND mesh beside
+// the flat one, built and uploaded on workers and switched in, so nothing is
+// rebuilt when the camera moves; and only the bands within fourteen metres
+// have one (BrickNear). A tower is 6.1x the flat triangles there, and
+// nowhere else.
 //
-// The real reason is M2c. Faces are baked ONCE and damage flips index slots,
-// because re-uploading a chunk's vertex buffer measured 175 ms at 16.5k
-// blocks. A geometry tier that switches with distance has to rebuild and
-// re-upload that buffer every time the camera crosses the threshold -- which
-// is the exact cost M2c was written to remove, re-introduced and now driven
-// by camera movement rather than by damage. Hysteresis bounds how often, not
-// how much.
+// The flat mesh still relies on what the last paragraph here always said: two
+// touching coplanar block faces are meshed as touching coplanar quads, so
+// without the seam a run of same-coloured bricks is one flat slab. On the flat
+// mesh the seam is not decorating a division that exists -- it IS the division.
+// On the chamfered one the division is a groove (see geo_bevel).
 //
-// So: shaded bevel in the chunk mesh, always. Where a real chamfer is wanted
-// it goes on geometry that ALREADY exists and is already instanced and few --
-// studs, scatter, and loose debris. A single brick tumbling past the camera is
-// the one place a flat silhouette genuinely reads wrong, and those are
-// separate meshes with their own budget.
-//
-// BUILT: `PieceMeshes.chamfered_box`, used by IslandManager's debris MultiMesh
-// and by terrain carve debris. 44 triangles -- 6 inset faces, 12 bevel strips,
-// 8 corner triangles -- cached per size, so the bevel is paid ONCE for the
-// whole debris field rather than once per brick. Compare
-// `shots/debris_chamfer_ab.png`: chamfered in red, plain box in blue, at the
-// 2.4 m a brick coming off a wall actually passes you.
-//
-// The corollary, for anyone tempted to switch the seam off and rely on
-// geometry: there is no geometry to rely on. Two touching coplanar block faces
-// are meshed as touching coplanar quads, so without the seam a run of same-
-// coloured bricks is one flat slab. The seam is not decorating a division that
-// exists -- it IS the division.
+// Loose debris bricks and studs have real bevels at any distance: shared
+// instanced meshes, paid once (PieceMeshes.chamfered_box, PieceMeshes.stud).
 group_uniforms chamfer;
 uniform bool chamfer_enabled = true;
 uniform float chamfer_width : hint_range(0.0, 0.05) = 0.013;  // metres, per side
@@ -102,6 +89,29 @@ uniform float chamfer_fade_end = 55.0;
 // specular line along every edge, which is most of what says "plastic" rather
 // than "painted box".
 uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.45;
+// On a mesh with REAL chamfer geometry (BrickWorld's chamfered bands; the node
+// sets geo_bevel = 1) the drawn seam and the shaded chamfer fade IN with
+// distance, as terrain.gdshader's do: none inside outline_blend_begin, where
+// the geometry is the edge; both by outline_blend_end. Elsewhere geo_bevel is
+// 0 and nothing changes.
+//
+// The facets of that mesh carry a NEGATIVE UV2. Two faces of a brick each
+// draw the facet they share, so a facet takes nothing from its face's UV --
+// no print, no grain, no seam band -- and the two copies shade as one. Past
+// the blend the whole facet is the seam: it is where the dark line was drawn.
+//
+// A facet's UV says instead how deep in the cut the fragment is (x: 0 at the
+// face, 1 a bevel behind it) and whether the cut is one wall of a GROOVE
+// between two bricks (y) rather than the corner of a brick in the open. A
+// groove 13 mm wide sees very little sky, and no ambient term at this scale
+// knows it, so it is darkened here: without that, two bricks of one colour in
+// flat light met in a V nobody could see, and the wall read as one slab --
+// the thing the drawn seam was there to stop. Evenly, not by depth: the two
+// copies of a facet count depth from opposite sides.
+instance uniform float geo_bevel = 0.0;
+uniform float outline_blend_begin = 3.0;
+uniform float outline_blend_end = 9.0;
+uniform float groove_darken : hint_range(0.0, 1.0) = 0.6;    // 1.0 = invisible
 
 // The printed surface -- layer lines, top and bottom toolpaths, the finish of
 // each face, the bed, printed or injection moulded -- is in
@@ -167,10 +177,14 @@ void fragment() {
     // out of it, with no extra geometry. Without that, an undamaged building
     // had one outline around each entire wall and only grew brick edges when it
     // materialised.
-    vec2 cell = mod(v_uv, v_face);
-    vec2 to_edge = min(cell, v_face - cell);
+    bool facet = v_face.x < 0.0;
+    vec2 fsize = abs(v_face);
+    vec2 cell = mod(v_uv, fsize);
+    vec2 to_edge = min(cell, fsize - cell);
     float d = min(to_edge.x, to_edge.y);
     float dist = length(VERTEX);
+    float outline_w = geo_bevel > 0.5
+            ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
 
     if (seams_enabled) {
         // One screen pixel, measured in the same metres. Keeps the seam
@@ -178,13 +192,20 @@ void fragment() {
         float aa = max(fwidth(d), 1e-5);
         // Analytic coverage of the seam band by this pixel; see
         // terrain.gdshader for what the widened-to-one-pixel version did.
-        float seam = clamp((seam_width - d) / aa + 0.5, 0.0, 1.0);
-        float fade = 1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist);
-
-        albedo *= mix(1.0, seam_darken, seam * fade);
+        float seam = facet ? 1.0 : clamp((seam_width - d) / aa + 0.5, 0.0, 1.0);
+        float fade = (1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist)) * outline_w;
+        float shade = mix(1.0, seam_darken, seam * fade);
+        if (facet) {
+            shade = min(shade, mix(1.0, groove_darken, v_uv.y));
+        }
+        albedo *= shade;
     }
 
-    if (chamfer_enabled && chamfer_width > 0.0) {
+    if (facet) {
+        // The real thing: already at 45 degrees, and as glossy as the shaded
+        // one is made.
+        roughness *= chamfer_gloss;
+    } else if (chamfer_enabled && chamfer_width > 0.0) {
         // A tangent frame from the UV mapping rather than from the vertex data:
         // the mesher writes no TANGENT, and every face here is axis-aligned in
         // its own chunk but the chunk can be at any angle once it is falling.
@@ -207,14 +228,15 @@ void fragment() {
             vec2 aa2 = max(fwidth(to_edge), vec2(1e-5));
             vec2 band = vec2(chamfer_width);
             vec2 inside = smoothstep(band, band + aa2, to_edge);
-            vec2 side = vec2(cell.x * 2.0 < v_face.x ? -1.0 : 1.0,
-                             cell.y * 2.0 < v_face.y ? -1.0 : 1.0);
+            vec2 side = vec2(cell.x * 2.0 < fsize.x ? -1.0 : 1.0,
+                             cell.y * 2.0 < fsize.y ? -1.0 : 1.0);
 
             // 45 degrees is equal parts face normal and edge direction.
             vec3 bevel = NORMAL
                     + tangent * side.x * (1.0 - inside.x)
                     + binormal * side.y * (1.0 - inside.y);
-            float fade = 1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist);
+            float fade = (1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist))
+                    * outline_w;
             NORMAL = normalize(mix(NORMAL, normalize(bevel), fade));
             float on_bevel = max(1.0 - inside.x, 1.0 - inside.y) * fade;
             roughness = mix(roughness, roughness * chamfer_gloss, on_bevel);
@@ -246,7 +268,7 @@ void fragment() {
     float print_rough = 0.0;
     vec3 aniso_dir = vec3(0.0);
     float aniso = 0.0;
-    if (print_lines_enabled && ps_printed(mat) && v_face.x > 0.0 && v_face.y > 0.0) {
+    if (print_lines_enabled && ps_printed(mat) && v_face.x > 0.0 && v_face.y > 0.0) {  // not a facet
         float t;
         float junction = 0.0;
         float join = 0.0;
@@ -259,8 +281,8 @@ void fragment() {
             // parts; a bottom -- the first layer -- runs the other way to the
             // top, as a slicer alternates.
             float bw = ps_bead(face, mat);
-            float d2 = min(min(v_uv.x, v_face.x - v_uv.x),
-                           min(v_uv.y, v_face.y - v_uv.y));
+            float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
+                           min(v_uv.y, fsize.y - v_uv.y));
             float wall = float(ps_walls(mat)) * bw;
             if (d2 < wall) {
                 t = d2 / bw;
@@ -275,7 +297,7 @@ void fragment() {
                 vec2 n = vec2(0.7071, flip * 0.7071);
                 t = dot(v_uv, n) / bw;
                 float e = d2 - wall;
-                vec2 zz = ps_zigzag(v_uv, vec2(wall), v_face - vec2(wall), n, t, e, bw,
+                vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
                         fwidth(t));
                 if (zz.x > 0.5) {
                     // On a connector: one bead along the wall, a bead wide.
@@ -324,7 +346,7 @@ void fragment() {
     if (tex != 0 && v_face.x > 0.0 && v_face.y > 0.0) {
         // Along the grain = along this face's longer side, which on a brick
         // is its length: a 1x6 of oak is a board, not end grain.
-        vec2 p = v_face.x >= v_face.y ? v_uv : v_uv.yx;
+        vec2 p = fsize.x >= fsize.y ? v_uv : v_uv.yx;
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
         if (tex == 1) {
             albedo = bm_wood(albedo, p, seed, tfade, roughness);

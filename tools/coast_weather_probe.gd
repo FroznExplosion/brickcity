@@ -1,14 +1,17 @@
 extends SceneTree
 
-## Sandstorm and waterspout on the heightfield coast (Docs/Disasters.md 25, 26).
+## Sandstorm, waterspout and wildfire on the heightfield coast
+## (Docs/Disasters.md 25, 26, 27).
 ##
 ##     godot --headless --path . --script res://tools/coast_weather_probe.gd
-##     godot --path . --resolution 1280x720 --script res://tools/coast_weather_probe.gd -- --coast-shot
+##     godot --path . --script res://tools/coast_weather_probe.gd -- --coast-shot
 ##
 ## A sandstorm hazes the view, leans on a walker, and leaves sand lying -- in
 ## sand's colour -- that blows away after. A waterspout forms and walks on open
 ## water, throws spray, and its rain falls in its own cell: the player is rained
-## on only inside it, and nothing is left wet-flagged after.
+## on only inside it, and nothing is left wet-flagged after. A wildfire spreads
+## over the ground, keeps the AI out of where it burns, and leaves its map of
+## the ground scarred, nothing glowing, for the terrain shaders to go on reading.
 
 var _passed := 0
 var _failed := 0
@@ -125,6 +128,9 @@ func _run() -> void:
 	var burnt := 0
 	var peak := 0
 	var shot_taken := false
+	# The fire's own map of the ground: what it paints and uploads. Held here,
+	# because the fire is freed when it ends.
+	var map: Image = null
 	t = 0
 	while dir.is_running() and t < 30 * 140:
 		await physics_frame
@@ -133,6 +139,7 @@ func _run() -> void:
 			continue
 		burnt = wf.burnt
 		peak = wf.peak_burning
+		map = wf._img
 		most_hazards = maxi(most_hazards, ctx.hazards.size())
 		if shots and not shot_taken and wf.phase == Disaster.Phase.ACTIVE and wf.phase_t > 40.0 \
 				and not wf._order.is_empty():
@@ -145,19 +152,30 @@ func _run() -> void:
 	_ok("it spreads across the ground", peak >= 20 and burnt >= 40,
 			"%d burning at most, %d burnt" % [peak, burnt])
 	_ok("the AI is kept out of where it burns", most_hazards > 0, "%d block(s)" % most_hazards)
+	# Counted on the map, not read back from the texture: headless, the renderer
+	# is a dummy that drops ImageTexture.update, so WeatherFx.burn_tex.get_image()
+	# is the blank it was made from whatever burnt (it read 0 scars, always).
 	var scars := 0
 	var glowing := 0
-	if WeatherFx.burn_tex != null:
-		var img := WeatherFx.burn_tex.get_image()
-		for y in range(0, img.get_height(), 2):
-			for x in range(0, img.get_width(), 2):
-				var c := img.get_pixel(x, y)
+	if map != null:
+		for y in range(0, map.get_height(), 2):
+			for x in range(0, map.get_width(), 2):
+				var c := map.get_pixel(x, y)
 				if c.r > 0.9:
 					scars += 1
 				elif c.g > 0.5:
 					glowing += 1
+	# They stay: the shaders still have the map after the fire has gone -- and,
+	# where there is a renderer to ask, it is the map as the fire last left it.
+	var kept := WeatherFx.burn_tex != null and WeatherFx.burn_rect.z > 0.0
+	var drawn := "not read back: headless"
+	if kept and map != null and DisplayServer.get_name() != "headless":
+		var same := WeatherFx.burn_tex.get_image().get_data() == map.get_data()
+		kept = same
+		drawn = "the shaders' map is the fire's" if same else "the shaders' map is NOT the fire's"
 	_ok("it leaves the ground burnt -- and the scars stay", not dir.is_running() and scars > 5
-			and glowing == 0, "%d scarred sample(s), %d still glowing" % [scars, glowing])
+			and glowing == 0 and kept,
+			"%d scarred sample(s), %d still glowing; %s" % [scars, glowing, drawn])
 	_ok("and lets go of the AI's ground", ctx.hazards.is_empty())
 	_finish(scene)
 
