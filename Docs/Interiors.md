@@ -309,7 +309,7 @@ the largest single cost still on the table.
 
 ---
 
-## 8. Simplification (2026-10-05) — stages 1 to 4 built (§8.8–8.12); the only interior drawing since 2026-10-08
+## 8. Simplification (2026-10-05) — all five stages built (§8.8–8.13); the only interior drawing since 2026-10-08
 
 **Why.** In play the biggest remaining problems are furniture and small things drawn where nothing
 holds them: pieces left hanging when a section falls, a table standing inside wreckage, items popping
@@ -618,6 +618,39 @@ collision boxes; `_crush_drawn`; `hold_interiors_mid_collapse`.
   made in a building coming apart -- with the rule and, the same case, without -- and that nothing
   new is drawn on wreckage still moving. Same counts as before: 62 and 9.
 
-**Still not done:** stage 5 (loot fades at its cull edge); a drawn piece on wreckage is not laid
-when the wreckage is hit; debris particles for a written-off piece; pieces the cap has put to sleep
-carry no interior.
+**Still not done:** a drawn piece on wreckage is not laid when the wreckage is hit; debris
+particles for a written-off piece; pieces the cap has put to sleep carry no interior.
+
+### 8.13 Stage 5 as built (2026-10-08): loot fades out before its range
+
+§8.2's last line. Loot on the ground is on the impostor ladder (`ImpostorItems`,
+[Impostors.md](Impostors.md) §8.3): the mesh inside 12 m, a card to 150 m, nothing past it -- and
+at 150 m the card went in one frame. Now a card **dithers away over the last 25 m** before its
+kind's range (`ImpostorItems.CULL_FADE`; never more than half of what lies between the kind's two
+ranges), with the screen-door noise the mesh-to-card band and the storey groups use, so a copy that
+is culled has nothing left on screen to vanish, and one coming into range starts from nothing.
+
+* `shaders/impostor.gdshader`: `lod_cull`, `lod_cull_band`. Off by default.
+* `ImpostorLod.set_cull_fade(metres)`: opt-in a set. **Trees and the city's instanced builds do not
+  ask for it** and draw as they did; their ranges are another area's to choose.
+* `ImpostorItems.kind` / `kind_from_node` ask for it for every kind.
+
+**What this changes in the game today: nothing you can see.** No scene has an `ImpostorItems`
+node -- the loot range draws each gun's own model at any distance, and nothing drops loot in the
+city -- so there is no cull edge yet for loot to pop at. This is the rule in place for when there
+is one. Putting an `ImpostorItems` in a scene is still the weapons area's call (Impostors.md §8.3).
+
+**Not covered:** a rolled gun's own model swaps for its card at 12 m in one frame (the card is a
+picture of that model, so it is a small step; a dither there needs the fade in the gun's own
+materials). Until a kind's bake lands, a mesh kind's far tier is the mesh itself and goes at the
+range in one frame -- a few frames, once per kind.
+
+Checks: `tools/impostor_probe.gd` 30 (through a long lens: the card whole short of the band, less
+of it at each step through, about half at half way, under a tenth of it left at the range, culled
+past it). Writes `shots/impostor_cull_fade.png`.
+
+Found on the way: that probe's camera was physics-interpolated, like everything in the project, in
+a scene that draws hundreds of frames a tick -- a picture taken four frames after the camera was
+moved was taken from somewhere on the way there. It is what made its "a tree mid-band has no
+holes" check fail some runs and pass others. The probe's camera is not interpolated now; the check
+has passed every run since (five).

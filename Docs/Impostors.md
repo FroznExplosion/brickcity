@@ -468,7 +468,9 @@ collision in reach, a tree materialised whole stands, one shot through the trunk
 `ImpostorItems`, for the weapons and loot code: `kind(key, mesh, material)` once, then
 `add` / `move` / `remove` per item on the ground. Each kind is an ImpostorLod with small-item ranges
 (mesh inside 12 m, card to 150 m, culled past it), 64 px views, and cards that cast no shadow. A
-held item is not in it.
+held item is not in it. A card dithers away over the last 25 m before its range
+(`ImpostorLod.set_cull_fade`, 2026-10-08; [Interiors.md](Interiors.md) §8.13), so nothing is culled
+in one frame; other sets -- trees, instanced builds -- do not ask for that and are unchanged.
 
 `kind_from_node(key, node)` bakes an assembled thing with its own materials (colour lit by a flat
 white ambient; the normal pass is geometry, whatever it is dressed in). Its owner keeps drawing it
@@ -480,7 +482,7 @@ past 12 m the gun model hides and its card stands in; the rarity beam is untouch
 what reads at range. With no ImpostorItems in the scene nothing changes, which is every scene today;
 adding one to the loot range or the game is the weapons area's call.
 
-`tools/impostor_probe.gd`: 24 ok — trees build whole, bake, field of cards; 100 brick guns near,
+`tools/impostor_probe.gd`: 30 ok (2026-10-08, with the cull edge's five) — trees build whole, bake, field of cards; 100 brick guns near,
 carded and culled, one moved close becomes a mesh, one removed is gone; the field kept in areas; a
 node kind that stays its owner's until baked, then a card in its own material's colour; the card
 standing where the mesh stands from three heights; a tree mid-band with no holes.
