@@ -40,7 +40,7 @@ why holding bricks on a toppling piece changes how it goes over (likely the piec
 what let it tip), then put it back for pieces behind that fix. **Check:** `hang_probe` with a piece
 case; collapse_probe "rode it" over several full runs.
 
-### ~~1.4 Hits on pieces still make many medium bodies~~ — the cause fixed 2026-10-07; a quiet-machine timing owed
+### ~~1.4 Hits on pieces still make many medium bodies~~ — the cause fixed 2026-10-07; timed on a quiet machine 2026-10-08: no faster (§3)
 `--big --shot`'s body census: ~150 bodies of 49–499 bricks off pieces that were **hit**, 100–150 ms
 to make over the run, ~13 % of moving boxes. Groups of 48 or fewer off a piece crumble already.
 **Do:** measure what a hit on a falling piece actually cuts (solve groups by size) and decide: a
@@ -72,8 +72,10 @@ their making 384 ms -> 109-145; hits in the air 174 bodies -> 3-12; collision re
 still replays into the same structure. **Not shown to be faster overall:** frames averaged 18 ms
 before and 22-23 after, with more in motion at once (peak 7,000 boxes -> 18-20,000 -- sections that
 used to shatter now come down whole) -- and another chat's Godot was running through all of these,
-so no frame time here is to be trusted either way. **Owed:** the same before/after with nothing
-else running (§3). Hits on pieces already on the ground still make bodies (612 hits, 124 bodies).
+so no frame time here is to be trusted either way. ~~**Owed:** the same before/after with nothing
+else running~~ -- taken 2026-10-08, §3: the pass is slower than it was on 2026-10-07, and this rule
+is not most of why. Hits on pieces already on the ground still make bodies (612 hits, 124 bodies;
+2026-10-08: 991 hits, 219 bodies -- the bigger number now).
 
 ### ~~1.5 The first stand-in for a big far piece is built on the main thread~~ — done 2026-10-06
 A piece of `COARSE_ASYNC_BLOCKS` (1,500) bricks or more has its stand-in built on a worker
@@ -165,9 +167,42 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
 
 ---
 
-## 3. Measurements still owed
+## 3. Measurements
 
-* `--stress` with the editor closed and nothing else running, after everything from 2026-09-30 on.
+**Read frame means with care: the passes run with V-Sync on** (the menu's default), so a frame is
+16.7, 33.3 or 50 ms and nothing between. A pass whose frames go from 15 ms of work to 18 reads as
+its mean doubling. The script ticks (`[prof]`) are not quantised; compare those first.
+
+* **`--big --shot`, 2026-10-08, quiet** (editor closed, no other Godot before or after each run,
+  CPU idle at 10 %; menu-default settings; after interiors stage 5 and main's near tier):
+
+  | | frames mean | over 33.3 ms | worst script tick | ticks over 25 ms |
+  |---|---|---|---|---|
+  | 2026-10-07, before 1.4 (below) | 17.8 ms | 23 of 906 | 55.1 ms | 9 |
+  | **2026-10-08, as the game is** | **32.8** | **287** | **63.4** | **50** |
+  | the same, near tier off (`--no-studs --no-bevel`) | 34.1 | 294 | 55.5 | 63 |
+  | the same, 1.4's in-the-air rule off (a switch for the run, not kept) | 29.5 | 159 | 70.0 | 50 |
+
+  One run each, and two runs of the same thing differ by a few per cent. **The pass is slower than
+  on 2026-10-07 and it is not known why.** What the three runs rule out as the main cause: the near
+  tier (no difference), and 1.4's rule for pieces in the air (a tenth). What is in the worst ticks
+  now: `islands` -- 46.9 ms in one tick, 45.5 of it the pieces' loop; one piece's merged collision
+  rebuilt in 22.5 ms (15,099 bricks, 2,021 boxes); one landing's re-solve 38.4 ms (12,315 bricks:
+  stress 15.5 + shedding 18.8) -- and `stream` at 33-46 ms on ticks that are 0 or 2 in every four
+  (the shells' pass and the detail/trim pass; the interior groups run on 3 and are not in them).
+  In motion at the peak: 49 pieces, 20,465 boxes (7,000 before 1.4). Hits on pieces: 486 in the
+  air made 10 bodies; 991 on pieces down and still moving made 219 (131 of 49-499 bricks, 206 ms
+  to make; 98 of 500 or more, 191 ms). The log replays into the same structure.
+  **Next, before anything else in section 1:** find which change doubled the ticks over 25 ms --
+  the pass at a few commits between 2026-10-07 and now, each with its own build of the library.
+* **`--stress --buildings=200`, 2026-10-08, quiet** (as above): whole run mean **24.7 ms**, worst
+  75.5, 302 of 2,874 frames over 33.3 ms (10.5 %). By phase, mean / worst: under fire 16.7 / 23.0;
+  damage queue draining 18.9 / 52.4; collapsing 27.8 / 48.4; settled 37.6 / 75.5 (160 of 240 over
+  33.3); trimmed 25.1 / 48.9. Worst script tick 45.1 ms, 93 ticks over 25 ms; mean per tick the
+  biggest is `stream` 2.8 ms, then `hud` 1.1. A building given back 8.7 ms on average (54 of
+  them), the worst 20.0 (2,850 bricks: dematerialise 7.1 + shell 12.0); a promotion 2.7 ms (200).
+  Interior pieces a blast reached: 668, 41 of them laid as bricks, 163 ms in all. Peak 457.5 MB
+  with 183 buildings resident, 260.7 MB after trimming. No earlier quiet run to set it against.
 * **`--big --shot`, taken 2026-10-07** with the editor closed and no other Godot running when the
   batch began (not re-checked during the pass; on the user's saved settings, which were the menu's
   defaults but for brightness): frames mean **17.8 ms**, worst 67.4, 23 of 906 over 33 ms; worst
