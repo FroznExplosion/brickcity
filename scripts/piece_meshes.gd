@@ -26,6 +26,7 @@ const SIDES := 8
 
 static var _stud: ArrayMesh = null
 static var _stud_plain: ArrayMesh = null
+static var _stud_square: ArrayMesh = null
 static var _round_plate: ArrayMesh = null
 static var _tuft: ArrayMesh = null
 static var _pebble: ArrayMesh = null
@@ -118,6 +119,33 @@ static func stud_plain() -> ArrayMesh:
 			Vector3(cos(a2) * top_r, STUD_H, sin(a2) * top_r))
 	_stud_plain = st.commit()
 	return _stud_plain
+
+
+## The stud as a tapered SQUARE post: 10 triangles to `stud_plain`'s 22. For
+## bricks past the distance a stud reads as round (BrickNear.stud_round_radius):
+## out there it is a bump on a surface and the bump is what is seen. The same
+## plan area as the octagon -- side 1.68 x the radius -- so a field of them is
+## as heavy to the eye, and square to the grid, as the brick under it is.
+static func stud_square() -> ArrayMesh:
+	if _stud_square != null:
+		return _stud_square
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half := STUD_R * 0.84
+	var top := half * STUD_TAPER
+	var corners := [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]
+	for i in 4:
+		var c0: Vector2 = corners[i]
+		var c1: Vector2 = corners[(i + 1) % 4]
+		var n := Vector3(c0.x + c1.x, 0.0, c0.y + c1.y).normalized()
+		_quad_n(st, n, Vector3(c0.x * half, 0.0, c0.y * half),
+			Vector3(c1.x * half, 0.0, c1.y * half),
+			Vector3(c1.x * top, STUD_H, c1.y * top),
+			Vector3(c0.x * top, STUD_H, c0.y * top))
+	_quad_n(st, Vector3.UP, Vector3(-top, STUD_H, -top), Vector3(top, STUD_H, -top),
+		Vector3(top, STUD_H, top), Vector3(-top, STUD_H, top))
+	_stud_square = st.commit()
+	return _stud_square
 
 
 ## A 1x1 round plate: the water surface piece (spec §4). Octagonal skirt plus a

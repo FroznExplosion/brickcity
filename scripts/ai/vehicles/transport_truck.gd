@@ -251,6 +251,30 @@ static func route_width_share(world: World3D, path: PackedVector3Array) -> float
 	return float(clear) / maxf(total, 1)
 
 
+## How far along a route a truck gets before the first point it does not fit
+## through, in metres: the whole of it when it fits all the way.
+static func route_clear_run(world: World3D, path: PackedVector3Array) -> float:
+	var q := PhysicsShapeQueryParameters3D.new()
+	var c := CylinderShape3D.new()
+	c.radius = SIZE.x * 0.5 + 0.35
+	c.height = SIZE.y - CLEARANCE
+	q.shape = c
+	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
+	var space := world.direct_space_state
+	var run := 0.0
+	for i in path.size():
+		var pts := [path[i]]
+		if i > 0:
+			pts.push_front(path[i - 1].lerp(path[i], 0.5))
+		for p in pts:
+			q.transform = Transform3D(Basis(), (p as Vector3) + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
+			if not space.intersect_shape(q, 1).is_empty():
+				return run + (path[i - 1].distance_to(p) if i > 0 else 0.0)
+		if i > 0:
+			run += path[i - 1].distance_to(path[i])
+	return run
+
+
 ## Where the cargo gets out: behind and beside the truck, on the side away from
 ## `threat` (its lee), as far out as a body can stand.
 func tailgate_points(threat: Vector3, n: int) -> Array[Vector3]:

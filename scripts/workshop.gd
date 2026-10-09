@@ -1421,7 +1421,9 @@ func _ghost_shape(arch: int) -> Array:
 		return _ghost_shapes[arch]
 	var c := world.create_chunk(Vector3i.ZERO, world.get_archetype_size(arch))
 	var bid := world.place_block(c, Vector3i.ZERO, arch, 0)
-	var arrays := world.build_chunk_mesh(c)
+	# Bevelled as the part will be once it is down (_remesh).
+	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+			else world.build_chunk_mesh(c)
 	var m := ArrayMesh.new()
 	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -1984,7 +1986,7 @@ static func _stud_material() -> Material:
 
 
 ## Bevelled studs on a frame the camera is near, plain ones on a frame it is
-## not (BrickNear.radius, as the city and the terrain do it): which mesh the
+## not (BrickNear.stud_bevel_radius, as the city does it): which mesh the
 ## frame's stud MultiMesh draws, a whole frame at a time.
 func _stud_lod() -> void:
 	if _camera == null:
@@ -2002,7 +2004,7 @@ func _stud_lod() -> void:
 		var local := mmi.global_transform.affine_inverse() * eye
 		var dist := local.distance_to(local.clamp(box.position, box.end))
 		var plain := mmi.multimesh.mesh == PieceMeshes.stud_plain()
-		var want_plain := dist > BrickNear.radius + (0.0 if plain else BrickNear.MARGIN)
+		var want_plain := dist > BrickNear.stud_bevel_radius + (0.0 if plain else BrickNear.MARGIN)
 		if want_plain != plain:
 			mmi.multimesh.mesh = PieceMeshes.stud_plain() if want_plain else PieceMeshes.stud()
 
@@ -2650,7 +2652,8 @@ func _make_stamp_ghost() -> void:
 		return
 	var c := world.create_chunk(Vector3i.ZERO, _stamp.chunk_dims())
 	_stamp.build(world, c, palette, true)
-	var arrays := world.build_chunk_mesh(c)
+	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+			else world.build_chunk_mesh(c)
 	world.release_chunk(c)
 	var m := ArrayMesh.new()
 	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():

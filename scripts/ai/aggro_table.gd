@@ -22,6 +22,13 @@ const HALF_LIFE := 8.0
 ## To take the focus, a row has to beat the holder by this ratio AND this much.
 const LEAD_RATIO := 1.25
 const LEAD_ABS := 15.0
+## A mech is seen and felt near more than a person is (Docs/AIRoster.md 6, G1):
+## standing there, it holds attention.
+const MECH_PRESENCE := 2.5
+## While a mech holds the focus, a pilot merely in sight gains this share (G4).
+const PILOT_BEHIND_MECH := 0.3
+## A mech with its hatch off draws this much more: the pilot can be had (G6).
+const EXPOSED := 1.5
 
 class Entry:
 	var who: Object
@@ -71,6 +78,12 @@ func share(who: Object) -> float:
 	for k in entries:
 		total += (entries[k] as Entry).value
 	return value(who) / total if total > 0.0 else 0.0
+
+
+## What kind of row `who` is ("pilot", "mech"), or "".
+func kind_of(who: Object) -> String:
+	var e: Entry = entries.get(who.get_instance_id() if who != null else 0)
+	return e.kind if e != null else ""
 
 
 ## Who holds the attention, or null.

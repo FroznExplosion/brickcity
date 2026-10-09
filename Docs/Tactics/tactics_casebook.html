@@ -187,7 +187,7 @@ const ALWAYS = 6, ALWAYS_SHARE = 0.95;
 const STEP_LABEL = ["never", "÷4", "÷2", "·", "×2", "×4", "95%"];
 const STEP_WORD = ["rules it out", "much less likely", "less likely", "no change", "more likely", "much more likely", "almost always: takes 95% of the pick"];
 
-const AGROUPS = {fire:"Fire", move:"Move", tool:"Tools and explosives", contain:"Contain", search:"Search", support:"Support", give:"Give up", mine:"Yours"};
+const AGROUPS = {fire:"Fire", move:"Move", tool:"Tools and explosives", contain:"Contain", search:"Search", support:"Support", give:"Give up", mech:"A mech's moves", mine:"Yours"};
 const ACTIONS = [
   ["hold","fire","Hold and watch","Stay in cover with guns on where the player will show.",1],
   ["trade","fire","Open fire","Shoot from where they are, in cover if they have it.",1],
@@ -227,10 +227,15 @@ const ACTIONS = [
   ["hide","give","Hide and go quiet","Get out of sight and stay there.",0],
   ["surrender","give","Surrender","Drop the weapon and give up.",0],
   ["play_dead","give","Play dead","Drop and lie still.",0],
+  ["m_fire","mech","Stand off and fire","Keep its range and shoot: what a mech does by default.",1],
+  ["m_close","mech","Close in","Walk the target down to short range.",1],
+  ["m_punch","mech","Punch","Get within a fist's reach and hit: through a shield, and the end of a doomed mech.",1],
+  ["m_backoff","mech","Back off","Open the range, still firing: to let the shield come back, or to get out of a fist's reach.",1],
+  ["m_guard","mech","Turn the open side away","Keep a missing hatch or cell door away from the enemy, and give ground. A mech with its hatch in front cannot fire while it does.",1],
   ["reload","fire","Reload in cover","Duck into cover and reload. Ammo is unlimited; the magazine isn't.",0],
 ].map(([id,g,l,d,b]) => ({id,g,l,d,b:!!b}));
 
-const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are", role:"Its role"};
+const FGROUPS = {place:"The place", player:"The player", us:"Us and our side", kind:"What we are", role:"Its role", mechs:"Mech against mech"};
 // mods: action:step (0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4)
 const FACTORS = [
   ["inside","place","Inside a building","Rooms, corridors, stairs.","sweep:4,flash:4,breach:4,smoke:2,call_air:2,screen_heavy:2,heavy_leads:2,call_armour:2"],
@@ -277,6 +282,18 @@ const FACTORS = [
   ["we_fodder","role","Cannon fodder","Cheap, and comes straight at you.","rush:4,melee:4,advance:4,hold:1,flank:1,fall_back:1,hide:0,ambush:1,wait:0,relocate:1"],
   ["we_flanker","role","Flanker / hunter","Works alone and goes round.","flank:5,search:4,ambush:4,hold:1,trade:2"],
   ["we_scout","role","Scout","Finds and marks; does not fight.","recon:4,mark:5,fall_back:4,hide:4,rush:0,melee:1,trade:2"],
+  ["p_hatch_off","player","The mech's hatch is off","The player's mech has lost its hatch: the pilot inside can be shot.","trade:5,suppress:4,flank:4,flee:2,hide:1,fall_back:2,m_fire:5,m_close:4"],
+  ["t_mech","mechs","The target is a mech","","m_punch:4,m_close:3"],
+  ["t_person","mechs","The target is on foot","","m_fire:4,m_punch:1,m_close:2,m_backoff:2"],
+  ["t_doomed","mechs","The target mech is doomed","A few hits finish it; a fist finishes it now.","m_punch:5,m_close:5,m_backoff:0,m_guard:1"],
+  ["t_nuker","mechs","The doomed target will nuke","Shot dead it goes off; punched (the finisher) it does not. The AI holds its fire on it.","m_punch:5,m_close:5,m_fire:1,m_backoff:2"],
+  ["finisher_ready","mechs","A doomed mech within a fist's reach","","m_punch:6"],
+  ["our_shield_down","mechs","Our shield is down","It comes back after five seconds untouched.","m_backoff:5,m_fire:2,m_close:2,m_punch:2"],
+  ["our_hatch_off","mechs","Our hatch is off","The pilot can be shot.","m_guard:5,m_backoff:4,m_close:1,m_punch:1,m_fire:2"],
+  ["our_cell_off","mechs","Our cell door is off","The power cell can be shot: lose it and lose everything.","m_guard:5,m_backoff:4,m_close:1,m_punch:1"],
+  ["our_doomed","mechs","We are doomed","A few hits from the end, and a fist ends it.","m_backoff:5,m_close:1,m_punch:1,m_guard:2"],
+  ["our_auto","mechs","Nobody is flying it (auto)","The pilot is dead or out: it fights on, simpler.","m_fire:4,m_guard:0,m_punch:2,m_backoff:2"],
+  ["our_nuker","mechs","We nuke when doomed","It wants to die next to its target.","m_close:5,m_punch:4,m_backoff:1,m_guard:1"],
 ].map(([id,g,l,d,m]) => ({id,g,l,d,mods:kv(m)}));
 
 // Teamwork: [most squadmates doing it at once (0 = any), moves it works with]
@@ -292,7 +309,7 @@ const TEAM = {
 const NEEDS = {
   collapse:"destructible", breach:"destructible", strip_cover:"destructible", deny_escape:"p_escape,p_evac",
   screen_heavy:"heavy_near", heavy_leads:"heavy_near", call_air:"air_avail", air_window:"we_flyer",
-  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber",
+  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber", m_guard:"our_hatch_off,our_cell_off",
 };
 // Combos: moves done together with the main move. [first, while, then], each "move:chance%".
 // "first" happens just before (grenade, then rush), "while" alongside (fire while marking),
@@ -348,7 +365,7 @@ const SCALES = [
 const SC = Object.fromEntries(SCALES.map(x => [x.id, x]));
 // step at each stop: 0 never, 1 ÷4, 2 ÷2, 3 no change, 4 ×2, 5 ×4
 const CURVES = {
-  dist:{ melee:"5 4 2 0 0 0 0", "melee@we_melee":"5 5 5 4 3 3 2", "rush@we_melee":"4 4 4 4 3 3 3", "rush@we_swarm":"4 4 4 4 4 4 4",
+  dist:{ m_punch:"5 5 3 2 0 0 0", m_close:"1 1 2 4 4 4 3", m_backoff:"4 4 3 3 2 1 1", m_fire:"2 3 3 3 3 3 2", melee:"5 4 2 0 0 0 0", "melee@we_melee":"5 5 5 4 3 3 2", "rush@we_melee":"4 4 4 4 3 3 3", "rush@we_swarm":"4 4 4 4 4 4 4",
     rush:"4 4 3 3 2 1 1", grenade:"2 3 4 4 1 0 0", flash:"3 4 4 3 0 0 0", trade:"3 3 3 3 3 3 2", suppress:"2 3 3 3 3 3 2",
     advance:"1 2 3 3 4 4 4", flank:"1 2 3 4 4 3 2", smoke:"1 2 3 4 4 3 2", relocate:"2 2 3 3 4 4 4", hold:"3 3 3 3 3 4 4",
     call_air:"0 0 1 3 4 4 4", collapse:"1 1 2 3 3 3 3", strip_cover:"2 3 3 3 3 3 3", mark:"2 2 3 3 4 4 4", sweep:"3 3 3 3 2 1 1",
@@ -358,7 +375,7 @@ const CURVES = {
     melee:"4 3 2", breach:"2 3 4", collapse:"1 3 4", call_air:"3 3 4", wait:"2 3 4", advance:"4 3 3" },
   cover:{ fall_back:"5 3 2", advance:"4 3 2", trade:"2 3 4", hold:"1 3 4", suppress:"2 3 4", smoke:"4 3 2", rush:"3 3 2", flee:"4 3 2",
     hide:"2 3 4", ambush:"1 3 4", call_help:"3 3 4", relocate:"2 3 3", reload:"1 3 4" },
-  hp:{ fall_back:"3 3 4 5", flee:"3 3 4 5", hide:"3 3 4 5", rush:"3 3 2 1", melee:"3 3 2 1", advance:"3 3 2 1", flank:"3 3 2 2",
+  hp:{ m_backoff:"3 3 4 5", m_punch:"3 3 2 1", m_close:"3 3 2 1", fall_back:"3 3 4 5", flee:"3 3 4 5", hide:"3 3 4 5", rush:"3 3 2 1", melee:"3 3 2 1", advance:"3 3 2 1", flank:"3 3 2 2",
     call_help:"3 3 4 4", regroup:"3 3 4 5", surrender:"2 3 3 4", play_dead:"0 0 2 3", sweep:"3 3 2 1" },
   mag:{ trade:"3 3 2 0", suppress:"3 3 1 0", relocate:"3 3 2 0", reload:"0 1 4 5", melee:"3 3 4 5", grenade:"3 3 4 4",
     fall_back:"3 3 3 4", hold:"3 3 3 2", rush:"3 3 2 2", mark:"3 3 3 4", strip_cover:"3 3 2 0" },
@@ -413,6 +430,9 @@ const SITS = [
   {id:"losing", l:"We're losing", who:"Anyone",
    d:"The squad is taking casualties, someone is cut off, or one soldier is left.",
    w:"regroup:35,call_help:25,fall_back:25,hide:20,ambush:20,trade:20,flee:10,rush:5,melee:5,surrender:5,play_dead:3,reload:10,detonate:30"},
+  {id:"mech_fight", l:"A mech in a fight", who:"A mech",
+   d:"A mech with something to shoot at: another mech, or people on foot. Its own layers and its target's decide the rest (Mech against mech).",
+   w:"m_fire:45,m_close:25,m_punch:10,m_backoff:10,m_guard:20"},
 ].map(s => Object.assign(s, {w:kv(s.w)}));
 
 // Your first casebook, as checks: each old case is one moment with some things true.

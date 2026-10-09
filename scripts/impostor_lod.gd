@@ -146,9 +146,16 @@ func _chunk(key: Vector2i) -> Dictionary:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_sway", sway)
 		if snowcap > 0.0:
 			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("weather_snowcap", snowcap)
+		# A mesh built with real bevels (RecipeMesh) says so to its shader.
+		var bevel := RecipeMesh.geo_bevel(mesh)
+		if bevel > 0.0:
+			(c.near as MultiMeshInstance3D).set_instance_shader_parameter("geo_bevel", bevel)
 		add_child(c.near)
 	var far_mesh: Mesh = _near_mesh
 	c.far = _make_mmi(far_mesh, material)
+	# The real mesh stands in far until the card is baked: bevelled too, then.
+	if mesh != null and RecipeMesh.geo_bevel(mesh) > 0.0:
+		(c.far as MultiMeshInstance3D).set_instance_shader_parameter("geo_bevel", 1.0)
 	if not _far_shadows:
 		(c.far as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(c.far)

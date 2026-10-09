@@ -179,7 +179,9 @@ func _make_ghost() -> void:
 	var lo: Vector3i = _recipe.origin()
 	var shift := Transform3D(Basis(), -Vector3(lo.x * cell.x, lo.y * cell.y, lo.z * cell.z))
 	for f in asm.frames:
-		var arrays := w.build_chunk_mesh(f)
+		# Bevelled as the build will be once it is placed (BrickNear).
+		var arrays := w.build_chunk_chamfer_mesh(f, BrickNear.BEVEL) if BrickNear.enabled \
+				else w.build_chunk_mesh(f)
 		if arrays.size() == 0 or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			continue
 		var m := ArrayMesh.new()

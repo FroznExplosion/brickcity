@@ -103,7 +103,12 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 		if d >= radius or not services.ai_world.line_clear(from, p.chest()):
 			continue
 		var dmg := damage * (1.0 - d / radius)
-		p.health.apply_impact(dmg, &"")
+		# A mech takes a blast by its own rules: an explosive's half, on the hull.
+		var ml := MechLayers.of(p.body)
+		if ml != null:
+			ml.take(dmg, &"explosive")
+		else:
+			p.health.apply_impact(dmg, &"")
 		out.append([p, dmg])
 	if services.on_structure_hit.is_valid():
 		services.on_structure_hit.call(at, Vector3.DOWN, StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
