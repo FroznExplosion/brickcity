@@ -9009,7 +9009,12 @@ func _aim_promote() -> void:
 	# The far pass looks straight at buildings to check the shell ladder, and
 	# a look within AIM_PROMOTE_RANGE made each one bricks under it: no shell
 	# left to check (two of its checks failed on this, not on the ladder).
-	if _far_mode:
+	# The build pass likewise: it stands in front of a creation to check its
+	# shell, hands its bricks back ("walk away") and checks the shell again
+	# without moving -- and six ticks of looking made it bricks both times. It
+	# passed while ten frames were fewer than six ticks, and stopped when the
+	# near tier's drawing made frames longer (2026-10-08).
+	if _far_mode or _build_mode:
 		return
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
