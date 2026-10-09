@@ -41,6 +41,7 @@ const AIR := {
 const MECH := {
 	"m_fire": MechBrain.Stance.FIRE, "m_close": MechBrain.Stance.CLOSE, "m_punch": MechBrain.Stance.PUNCH,
 	"m_backoff": MechBrain.Stance.BACKOFF, "m_guard": MechBrain.Stance.GUARD,
+	"m_bail": MechBrain.Stance.BAIL,
 }
 ## A "then grenade" goes this long after the decision.
 const THEN_GRENADE := 1.8

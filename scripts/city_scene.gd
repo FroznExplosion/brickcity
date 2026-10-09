@@ -724,6 +724,8 @@ var mech_nav: AINav
 var mech_brains: Array[MechBrain] = []
 ## The player's one button to their mech (F, on foot; AI.md 2.1, A4).
 var _mech_cmd: MechCommand
+## The player got into the mech on foot, and gets out on foot (_leave_mech).
+var _boarded_on_foot := false
 var _chunk_owner := {}
 ## Mechs with no brain and no pilot (the --mechfall gate's).
 var _loose_mechs: Array[Mech] = []
@@ -4193,9 +4195,24 @@ func _player_hud() -> void:
 
 
 ## Climb into the mech -- spawning one on the ground ahead of the camera if there
-## is none -- and take its controls. Its arm gets a gun of its own.
+## is none -- and take its controls. Its arm gets a gun of its own. On foot it is
+## got into from its hatch's side, and only our own: trying another side's sets
+## it off (Docs/AIRoster.md 4.4, R14). From the free camera it is a debug key
+## and boards from anywhere.
 func _board_mech() -> void:
-	if _player.is_possessing():
+	_boarded_on_foot = false
+	if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
+		var near := _mech_at_hatch(_player_pawn)
+		if near == null:
+			print("[city] no mech's hatch within reach: walk to its hatch side")
+			return
+		if not near.layers.try_enter(_player_pawn.team):
+			print("[city] not our mech: its self-destruct is lit -- get clear")
+			return
+		if near != _mech:
+			print("[city] a mech of ours, but not yours to drive")
+			return
+		_boarded_on_foot = true
 		_leave_pawn()
 	if camera.is_walking():
 		camera.set_walking(false)
@@ -4216,7 +4233,17 @@ func _board_mech() -> void:
 	if br != null:
 		br.enabled = false
 	_pilot.board(_mech, camera)
+	_mech.occupy()
 	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
+
+
+## The mech whose hatch `p` stands at, any side's; null for none.
+func _mech_at_hatch(p: Pawn) -> Mech:
+	for n in get_tree().get_nodes_in_group(&"mech_layers"):
+		var ml := n as MechLayers
+		if ml != null and not ml.dead and ml.mech.can_reach(p):
+			return ml.mech
+	return null
 
 
 func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
@@ -4250,6 +4277,12 @@ func _leave_mech() -> void:
 		br.enabled = true
 		br.order = MechBrain.Order.HOLD
 		br.order_point = _mech.feet()
+	if is_instance_valid(_mech):
+		_mech.dismount()
+		# Out of the hatch, on foot, if that is how the player got in.
+		if _boarded_on_foot:
+			_boarded_on_foot = false
+			_enter_pawn(_mech.mount_point())
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -4278,6 +4311,9 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float) -> MechBrain:
 	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
 	# A medium mech by the roster: its layers and the name over it (AIRoster.md RO6).
 	m.set_type("medium_gunner", Roster.shared())
+	# Its pilot, a soldier of its side, inside: one who can bail out (RO8).
+	var pilot := _spawn_soldier(feet)
+	m.mount(pilot.pawn, true)
 	br.arm_launcher(GunInstance.from_result(GunGenerator.generate(_gun_library,
 			_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
 			_gun.on_structure_hit)

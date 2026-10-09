@@ -63,8 +63,9 @@ How the enemy chooses what to do, authored as odds rather than code.
 - **A mech's moves:** the moment `mech_fight` and the facts "Mech against mech" are a
   mech's own page of the casebook. `TacticsSense.read_mech` reads them,
   `BookCombatPolicy.decide_mech` rolls, and `MechBrain` does it (stand off, close in,
-  punch, back off, turn the open side away) whenever its pilot has given it no order.
-  `tools/mech_fight_probe.gd` checks it.
+  punch, back off, turn the open side away, bail out) whenever its pilot has given it
+  no order. `tools/mech_fight_probe.gd` checks it; `tools/mech_mount_probe.gd` checks
+  bailing out.
 
 To update after changing the page: copy the page source here, save the settings
 here, run the exporter, run the probe, commit all of it together.

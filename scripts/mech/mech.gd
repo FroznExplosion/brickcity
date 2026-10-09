@@ -49,6 +49,18 @@ const MELEE_DAMAGE := 500.0
 const MELEE_GAP := 1.2
 ## What it weighs on the bricks it stands on (WeightTracker).
 const MASS := WeightTracker.MECH
+## Getting in (Docs/AIRoster.md 4.4): a pilot stands this far out from the torso's
+## centre on the hatch's side -- in front of a medium or heavy, behind a light --
+## and gets in from within MOUNT_REACH of that spot.
+const MOUNT_OUT := RADIUS + 1.3
+const MOUNT_REACH := 1.6
+## A Nuker's pilot is thrown clear of its blast (4.7): this much past its reach.
+const EJECT_CLEAR := 6.0
+## Danger zones for a lit fuse (AIWorld), so people get clear of a blast.
+const DANGER_ID_BASE := 720000
+
+signal mounted(p: Pawn)
+signal dismounted(p: Pawn, thrown: bool)
 
 var intents := TitanIntents.new()
 var team := 0
@@ -67,6 +79,13 @@ var type_facts: Array = []
 ## they do a person, and the side's aggro keeps a row for it.
 var pawn: Pawn
 var name_tag: Label3D
+## Who is in it: an AI pilot's pawn, put away while it is inside (stow). Null
+## with nobody in it -- or with a pilot nobody put in (layers.piloted), the
+## player's included: the city frees the player's pawn and makes a new one on
+## the way out.
+var pilot_pawn: Pawn
+var _stowed_layers := Vector2i.ZERO
+var _danger_id := -1
 var melee_ready_at := 0.0
 var melee_hits := 0
 var _clock := 0.0
@@ -117,6 +136,7 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	b.add_child(pool)
 	m.health = pool
 	m.layers = MechLayers.attach(m)
+	m._wire_layers()
 	m._build_greybox()
 	parent.add_child(b)
 	if b.is_inside_tree():
@@ -185,13 +205,196 @@ func set_type(id: String, roster: Roster) -> void:
 		health.layer_depleted.disconnect(layers._on_layer_depleted)
 		health.died.disconnect(layers._on_died)
 		layers.queue_free()
+	var was_piloted := layers.piloted if layers != null else true
+	var was_auto := layers.auto if layers != null else false
 	layers = MechLayers.attach(self, spec)
 	layers.services = keep
 	layers.nuker = (roster.recipe(id).get("mods", []) as Array).has("nuker")
+	layers.piloted = was_piloted
+	layers.auto = was_auto
+	layers.pilot = pilot_pawn
+	_wire_layers()
 	if name_tag == null or not is_instance_valid(name_tag):
 		name_tag = TypeKit.make_tag(body, TypeKit.tag_text(d), team, HEIGHT * 0.5 + 0.7)
 	else:
 		name_tag.text = TypeKit.tag_text(d)
+
+
+# --- getting in and out (Docs/AIRoster.md 4.4, 4.7; R14) ----------------------------
+
+## Nobody in it, and nobody driving: a mech standing on the map for a pilot of
+## its side to get into. Its brain sleeps until one does.
+func park() -> void:
+	if pilot_pawn != null:
+		return
+	layers.piloted = false
+	layers.auto = false
+	var br := brain()
+	if br != null:
+		br.enabled = false
+		intents.clear(motor.torso_yaw)
+		gun.set_trigger(false)
+
+
+func brain() -> MechBrain:
+	return body.get_node_or_null(^"MechBrain") as MechBrain
+
+
+func is_empty() -> bool:
+	return not layers.piloted and pilot_pawn == null
+
+
+## Where a pilot stands to get in: on the hatch's side, clear of the hull --
+## on the walking map when there is one.
+func mount_point() -> Vector3:
+	var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
+	var back := Basis(Vector3.UP, motor.torso_yaw).z
+	var at := feet() + back * z_sign * MOUNT_OUT
+	var s := layers.services
+	if s != null and s.ai_nav != null:
+		var snapped := s.ai_nav.snap(at)
+		if Vector2(snapped.x - at.x, snapped.z - at.z).length() < 1.5:
+			return snapped
+	return at
+
+
+## Can somebody stand at the mount point? Not with bricks in it, nor with no
+## walking map near it (the mech backed against a wall, say).
+func mount_spot_clear() -> bool:
+	var s := layers.services
+	if s == null or s.ai_world == null:
+		return true
+	var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
+	var back := Basis(Vector3.UP, motor.torso_yaw).z
+	var at := feet() + back * z_sign * MOUNT_OUT
+	if s.ai_world.solid_at(at + Vector3.UP * 0.9) or s.ai_world.solid_at(at + Vector3.UP * 1.5):
+		return false
+	if s.ai_nav != null:
+		var snapped := s.ai_nav.snap(at)
+		if Vector2(snapped.x - at.x, snapped.z - at.z).length() >= 1.5:
+			return false
+	return true
+
+
+## Is `p` standing where it can get in?
+func can_reach(p: Pawn) -> bool:
+	var mp := mount_point()
+	var f := p.feet()
+	return Vector2(f.x - mp.x, f.z - mp.z).length() <= MOUNT_REACH and absf(f.y - mp.y) < 1.2
+
+
+## `p` gets in, from the mount point (or from `anywhere`, for a pilot fielded in
+## it). A pilot of another side sets off its self-destruct instead (R14) and
+## stays out. An AI pilot wakes the mech's brain. True if it got in.
+func mount(p: Pawn, anywhere := false) -> bool:
+	if p == null or layers.dead or pilot_pawn != null or (p.health != null and p.health.is_dead()):
+		return false
+	if not anywhere and not can_reach(p):
+		return false
+	if not layers.try_enter(p.team):
+		return false
+	_stow(p)
+	pilot_pawn = p
+	layers.pilot = p
+	layers.piloted = true
+	layers.auto = false
+	var br := brain()
+	if br != null and p.body.get_node_or_null(^"Soldier") != null:
+		br.enabled = true
+	mounted.emit(p)
+	return true
+
+
+## A pilot nobody put in -- the player, whose pawn the city frees -- takes the
+## controls: piloted, not auto.
+func occupy() -> void:
+	if layers.dead:
+		return
+	layers.piloted = true
+	layers.auto = false
+
+
+## The pilot gets out: on the ground at the mount point, or -- `thrown`, a
+## Nuker's eject -- clear of its blast. The mech fights on in auto mode (4.2).
+## Returns the pilot's pawn (null for a pilot nobody put in).
+func dismount(thrown := false) -> Pawn:
+	var p := pilot_pawn
+	var was := layers.piloted
+	pilot_pawn = null
+	layers.pilot = null
+	layers.piloted = false
+	layers.auto = was and not layers.dead
+	if p == null or not is_instance_valid(p):
+		return null
+	var at := mount_point()
+	if thrown:
+		var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
+		var out := Basis(Vector3.UP, motor.torso_yaw).z * z_sign
+		at = feet() + out * (float(MechLayers.NUKE[1]) + EJECT_CLEAR)
+		var s := layers.services
+		if s != null and s.ai_nav != null:
+			at = s.ai_nav.snap(at)
+	_unstow(p, at)
+	dismounted.emit(p, thrown)
+	return p
+
+
+## Put a pilot away inside: out of everybody's sight and aim (the services' pawns),
+## not moving, not colliding, not drawn. Its hits come through the hatch
+## (MechLayers.pilot).
+func _stow(p: Pawn) -> void:
+	var s := layers.services
+	if s != null:
+		s.pawns.erase(p)
+		for team in [0, 1]:
+			s.knowledge_of(team).contacts.erase(p.get_instance_id())
+	_stowed_layers = Vector2i(p.body.collision_layer, p.body.collision_mask)
+	p.body.collision_layer = 0
+	p.body.collision_mask = 0
+	p.body.visible = false
+	p.intents.clear()
+	p.place(feet() + Vector3.UP * (COCKPIT_Y - Pawn.BODY_HEIGHT * 0.5))
+	p.body.process_mode = Node.PROCESS_MODE_DISABLED
+	p.set_meta(&"in_mech", self)
+
+
+func _unstow(p: Pawn, at: Vector3) -> void:
+	p.body.process_mode = Node.PROCESS_MODE_INHERIT
+	p.body.collision_layer = _stowed_layers.x
+	p.body.collision_mask = _stowed_layers.y
+	p.body.visible = true
+	p.place(at)
+	p.remove_meta(&"in_mech")
+	var s := layers.services
+	if s != null and not p.health.is_dead():
+		s.add_pawn(p)
+
+
+func _wire_layers() -> void:
+	layers.fuse_lit.connect(_on_fuse_lit)
+	layers.destroyed.connect(_on_destroyed)
+	layers.pilot_killed.connect(func() -> void: pilot_pawn = null)
+
+
+## A fuse lit: a danger zone the size of its blast, so people get clear of it.
+func _on_fuse_lit(kind: String, _seconds: float) -> void:
+	var s := layers.services
+	if s == null or s.ai_world == null:
+		return
+	var reach := float((MechLayers.NUKE if kind == "nuke" else MechLayers.SELF_DESTRUCT)[1])
+	_danger_id = DANGER_ID_BASE + int(get_instance_id() % 100000)
+	s.ai_world.set_danger(_danger_id, AABB(feet() - Vector3(reach, 0.5, reach), Vector3(reach * 2.0, HEIGHT + 1.0, reach * 2.0)))
+
+
+## Destroyed with its pilot inside: the pilot goes with it.
+func _on_destroyed(_why: String) -> void:
+	var s := layers.services
+	if _danger_id >= 0 and s != null and s.ai_world != null:
+		s.ai_world.remove_danger(_danger_id)
+		_danger_id = -1
+	if pilot_pawn != null and is_instance_valid(pilot_pawn) and pilot_pawn.health != null:
+		pilot_pawn.health.apply_impact(1e9, &"")
+	pilot_pawn = null
 
 
 ## Punch `target` if it is in reach and the last blow was long enough ago: through

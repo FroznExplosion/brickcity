@@ -232,6 +232,7 @@ const ACTIONS = [
   ["m_punch","mech","Punch","Get within a fist's reach and hit: through a shield, and the end of a doomed mech.",1],
   ["m_backoff","mech","Back off","Open the range, still firing: to let the shield come back, or to get out of a fist's reach.",1],
   ["m_guard","mech","Turn the open side away","Keep a missing hatch or cell door away from the enemy, and give ground. A mech with its hatch in front cannot fire while it does.",1],
+  ["m_bail","mech","Bail out","The pilot gets out and goes on foot; the mech fights on by itself (auto), weaker.",1],
   ["reload","fire","Reload in cover","Duck into cover and reload. Ammo is unlimited; the magazine isn't.",0],
 ].map(([id,g,l,d,b]) => ({id,g,l,d,b:!!b}));
 
@@ -289,11 +290,11 @@ const FACTORS = [
   ["t_nuker","mechs","The doomed target will nuke","Shot dead it goes off; punched (the finisher) it does not. The AI holds its fire on it.","m_punch:5,m_close:5,m_fire:1,m_backoff:2"],
   ["finisher_ready","mechs","A doomed mech within a fist's reach","","m_punch:6"],
   ["our_shield_down","mechs","Our shield is down","It comes back after five seconds untouched.","m_backoff:5,m_fire:2,m_close:2,m_punch:2"],
-  ["our_hatch_off","mechs","Our hatch is off","The pilot can be shot.","m_guard:5,m_backoff:4,m_close:1,m_punch:1,m_fire:2"],
+  ["our_hatch_off","mechs","Our hatch is off","The pilot can be shot.","m_guard:5,m_backoff:4,m_close:1,m_punch:1,m_fire:2,m_bail:4"],
   ["our_cell_off","mechs","Our cell door is off","The power cell can be shot: lose it and lose everything.","m_guard:5,m_backoff:4,m_close:1,m_punch:1"],
-  ["our_doomed","mechs","We are doomed","A few hits from the end, and a fist ends it.","m_backoff:5,m_close:1,m_punch:1,m_guard:2"],
-  ["our_auto","mechs","Nobody is flying it (auto)","The pilot is dead or out: it fights on, simpler.","m_fire:4,m_guard:0,m_punch:2,m_backoff:2"],
-  ["our_nuker","mechs","We nuke when doomed","It wants to die next to its target.","m_close:5,m_punch:4,m_backoff:1,m_guard:1"],
+  ["our_doomed","mechs","We are doomed","A few hits from the end, and a fist ends it.","m_backoff:5,m_close:1,m_punch:1,m_guard:2,m_bail:5"],
+  ["our_auto","mechs","Nobody is flying it (auto)","The pilot is dead or out: it fights on, simpler.","m_fire:4,m_guard:0,m_punch:2,m_backoff:2,m_bail:0"],
+  ["our_nuker","mechs","We nuke when doomed","It wants to die next to its target.","m_close:5,m_punch:4,m_backoff:1,m_guard:1,m_bail:0"],
 ].map(([id,g,l,d,m]) => ({id,g,l,d,mods:kv(m)}));
 
 // Teamwork: [most squadmates doing it at once (0 = any), moves it works with]
@@ -309,7 +310,7 @@ const TEAM = {
 const NEEDS = {
   collapse:"destructible", breach:"destructible", strip_cover:"destructible", deny_escape:"p_escape,p_evac",
   screen_heavy:"heavy_near", heavy_leads:"heavy_near", call_air:"air_avail", air_window:"we_flyer",
-  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber", m_guard:"our_hatch_off,our_cell_off",
+  seal:"choke,underground,narrow", sweep:"p_seen,p_suspected", detonate:"we_bomber", m_guard:"our_hatch_off,our_cell_off", m_bail:"our_hatch_off,our_doomed",
 };
 // Combos: moves done together with the main move. [first, while, then], each "move:chance%".
 // "first" happens just before (grenade, then rush), "while" alongside (fire while marking),
@@ -432,7 +433,7 @@ const SITS = [
    w:"regroup:35,call_help:25,fall_back:25,hide:20,ambush:20,trade:20,flee:10,rush:5,melee:5,surrender:5,play_dead:3,reload:10,detonate:30"},
   {id:"mech_fight", l:"A mech in a fight", who:"A mech",
    d:"A mech with something to shoot at: another mech, or people on foot. Its own layers and its target's decide the rest (Mech against mech).",
-   w:"m_fire:45,m_close:25,m_punch:10,m_backoff:10,m_guard:20"},
+   w:"m_fire:45,m_close:25,m_punch:10,m_backoff:10,m_guard:20,m_bail:10"},
 ].map(s => Object.assign(s, {w:kv(s.w)}));
 
 // Your first casebook, as checks: each old case is one moment with some things true.
