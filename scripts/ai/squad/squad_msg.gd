@@ -43,6 +43,10 @@ class Order:
 	var breach := false
 	## ADVANCE / SEARCH / HOLD / FALL_BACK: the point it is about.
 	var point := Vector3.ZERO
+	## ADVANCE: bound to `point` itself -- a flank, a place beside the players
+	## (the friendly commander) -- still suppressing the enemy, instead of
+	## closing on the enemy.
+	var to_point := false
 	var priority := 1
 
 	static func make(p_kind: int) -> Order:

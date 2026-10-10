@@ -73,7 +73,7 @@ func _pick(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 	for attempt in 2:
 		var p := s.ai_nav.snap(feet + dir * step)
 		if s.ai_nav.can_stand(p) and Vector2(p.x - feet.x, p.z - feet.z).length() > 1.0 \
-				and not s.ai_world.in_danger(p + Vector3.UP * 0.9):
+				and not s.ai_world.in_danger(p + Vector3.UP * 0.9) and not s.in_lane(so.team, p):
 			return p
 		dir = Vector3(-dir.x, 0.0, -dir.z) if d >= CLOSE and d <= FAR else dir.rotated(Vector3.UP, PI * 0.5)
 	return Vector3.INF

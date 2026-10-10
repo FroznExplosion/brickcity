@@ -36,6 +36,12 @@ extends RefCounted
 ## on the casebook page included (at NEW_RECIPE weight before the answers). A
 ## recipe's weight is its base times the product of its parts' nudges, clamped.
 ##
+## It LEARNS (`learn`): across encounters the casebook's tally (TacticsTally) says
+## how each move turned out -- its mean reward from DecisionJudge, deaths
+## counted in. A move that paid lifts the parts that make it (MOVE_PARTS: a flank
+## the flankers, a rush the attackers...), one that did not lowers them, between
+## LEARN_RANGE; that is one more answer, inside the same clamp.
+##
 ## And SUPPORT (`support`): what it buys besides squads -- AIR (the roster's
 ## flyers and hover craft) and a TANK -- weighted the same way: against a
 ## demolisher, what destruction does not stop (flyers); against a player on
@@ -73,6 +79,15 @@ const PART_MULS := {
 	# player meets far fewer of them (threat_style_probe, AIPlan P9).
 	"careful": {"role:flanker": 1.5, "role:scout": 1.5},
 }
+## The parts a casebook move is made by, for learning from the tally.
+const MOVE_PARTS := {"flank": ["role:flanker"], "rush": ["role:attacker"], "advance": ["role:attacker"],
+		"melee": ["attack:melee"], "detonate": ["attack:bomber"], "grenade": ["attack:grenadier"],
+		"hold": ["role:defender"], "suppress": ["role:line"], "trade": ["role:line"]}
+## A move is learnt from once judged this many times.
+const LEARN_MIN := 10
+## Mean reward that moves a part by one step of LEARN_RANGE: +30 is x1.33.
+const LEARN_SCALE := 30.0
+const LEARN_RANGE := [0.75, 1.33]
 ## Support's base weights, before the answers: how readily, given the points,
 ## it buys air or a tank with a reinforcement.
 const SUPPORT_BASE := {&"air": 0.25, &"tank": 0.15}
@@ -95,6 +110,10 @@ var roster := BASE.duplicate()
 var truck_share := 0.4
 ## Support kind (&"air", &"tank") -> its weight now (SUPPORT_BASE, answered).
 var support := SUPPORT_BASE.duplicate()
+## What the tally taught it: "part:value" -> multiplier (learn).
+var learned := {}
+## Move -> [times judged, mean reward], what `learned` came from.
+var learned_from := {}
 ## What it is answering, for the HUD and the log.
 var answering := "unknown"
 var answering_armor := "unknown"
@@ -137,6 +156,7 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 		var k := 1.0
 		for a in answers:
 			k *= part_mul(id, PART_MULS.get(a, {}))
+		k *= part_mul(id, learned)
 		roster[id] = base_of(id) * clampf(k, 0.5, 2.0)
 	for kind in SUPPORT_BASE:
 		var k := 1.0
@@ -147,6 +167,28 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 	# later against a demolisher (a truck is a target it will not miss).
 	truck_share = clampf(0.4 + (0.2 if style == "sniper" else 0.0)
 			- (0.25 if style == "demolisher" else 0.0), 0.0, 0.8)
+
+
+## Learn from a tally's data (TacticsTally.data): each move judged LEARN_MIN times
+## or more lifts or lowers its parts by its mean reward. Call update() after.
+func learn(tally: Dictionary) -> void:
+	learned = {}
+	learned_from = {}
+	var sums := {}
+	for m in (tally.get("moments", {}) as Dictionary).values():
+		for move in (m.get("outcomes", {}) as Dictionary):
+			var o: Dictionary = m.outcomes[move]
+			var acc: Array = sums.get(move, [0, 0.0])
+			sums[move] = [int(acc[0]) + int(o.get("n", 0)), float(acc[1]) + float(o.get("reward", 0.0))]
+	for move in sums:
+		var n := int(sums[move][0])
+		if n < LEARN_MIN or not MOVE_PARTS.has(move):
+			continue
+		var mean := float(sums[move][1]) / n
+		learned_from[move] = [n, mean]
+		var k := clampf(1.0 + mean / LEARN_SCALE * (float(LEARN_RANGE[1]) - 1.0), LEARN_RANGE[0], LEARN_RANGE[1])
+		for part in MOVE_PARTS[move]:
+			learned[part] = float(learned.get(part, 1.0)) * k
 
 
 ## Every id the roster weighs: BASE's, and every recipe on foot that can be

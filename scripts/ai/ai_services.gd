@@ -64,6 +64,16 @@ var navs := {}
 ## owns the fight keeps them: the city does, a probe's arena does not. Untyped,
 ## so the services do not depend on the book's scripts.
 var tally: RefCounted
+## Side -> (point: Vector3) -> bool: is it in front of one of that side's players'
+## guns (PlayerIntent.in_lane)? Set by a friendly commander; its soldiers do not
+## close on an enemy there (BTChooseTactic) -- they go round.
+var lanes := {}
+
+
+## Is `p` in front of a gun of side `team`'s players (`lanes`)? False for a side
+## with no friendly commander.
+func in_lane(team: int, p: Vector3) -> bool:
+	return lanes.has(team) and (lanes[team] as Callable).call(p)
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []
