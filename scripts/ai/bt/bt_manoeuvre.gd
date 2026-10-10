@@ -86,7 +86,7 @@ static func screen_point(so: Soldier, at: Vector3, threat: Vector3, flank: bool)
 			var want: Vector3 = at + side * k * out + (u * SCREEN_AHEAD if flank else -u * (LEE_BACK + step))
 			var p := s.ai_nav.snap(want)
 			if s.ai_nav.can_stand(p) and Vector2(p.x - want.x, p.z - want.z).length() < 2.0 \
-					and not s.ai_world.in_danger(p + Vector3.UP * 0.9):
+					and not s.ai_world.in_danger(p + Vector3.UP * 0.9) and not s.in_lane(so.team, p):
 				return p
 	return Vector3.INF
 
@@ -97,7 +97,7 @@ func _push_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 	if d <= PUSH_TO + 1.0:
 		return Vector3.INF
 	var p := so.services.ai_nav.snap(feet + to / d * (d - PUSH_TO))
-	return p if so.services.ai_nav.can_stand(p) else Vector3.INF
+	return p if so.services.ai_nav.can_stand(p) and not so.services.in_lane(so.team, p) else Vector3.INF
 
 
 func _flank_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
@@ -113,7 +113,7 @@ func _flank_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 			var want := Vector3(enemy.x + cos(a) * d, feet.y, enemy.z + sin(a) * d)
 			var p := s.ai_nav.snap(want)
 			if s.ai_nav.can_stand(p) and Vector2(p.x - want.x, p.z - want.z).length() < 2.5 \
-					and not s.ai_world.in_danger(p + Vector3.UP * 0.9):
+					and not s.ai_world.in_danger(p + Vector3.UP * 0.9) and not s.in_lane(so.team, p):
 				return p
 	return Vector3.INF
 

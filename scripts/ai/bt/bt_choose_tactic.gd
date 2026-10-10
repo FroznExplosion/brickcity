@@ -27,6 +27,11 @@ const LINES := {
 }
 
 
+## The tactics that walk at the enemy.
+const CLOSING := [CombatPolicy.Tactic.PUSH, CombatPolicy.Tactic.RUSH, CombatPolicy.Tactic.MELEE,
+		CombatPolicy.Tactic.DETONATE]
+
+
 func _tick(_delta: float) -> Status:
 	var so := SoldierTree.soldier_of(agent)
 	var s := so.services
@@ -59,6 +64,10 @@ func _tick(_delta: float) -> Status:
 	var obs := CombatPolicy.observe(so, c, cover)
 	var was := so.tactic
 	so.tactic = s.policy.decide_in(so, c, cover, obs, s.rng)
+	# A friendly does not close on an enemy in front of a player's gun (its side's
+	# lanes, AIServices.lanes): whatever was chosen, it goes round to its side.
+	if so.tactic in CLOSING and s.lanes.has(so.team) and (s.lanes[so.team] as Callable).call(c.pos):
+		so.tactic = CombatPolicy.Tactic.FLANK
 	so.tactic_at = now
 	so.tactic_until = now + s.rng.randf_range(HOLD[0], HOLD[1])
 	so.tactic_done = false

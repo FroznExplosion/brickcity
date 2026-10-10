@@ -78,6 +78,17 @@ const SUPPORT_GAP := 20.0
 var _support_at := 0.0
 ## Support bought: [kind, unit, points].
 var support_bought: Array = []
+## The FRIENDLY commander's reading of the players (R12, R13: they give it no
+## orders): set, its squads support what the players do -- beside them and at
+## their fight's flank, never in front of their guns -- instead of hunting the
+## enemy on their own (_command_friendly). Null for an enemy commander.
+var intent: PlayerIntent
+## Squad id -> where it was last sent in support, and why.
+var support_to := {}
+## A squad still nearer the players' lane than this goes out to the side first.
+const OUT_TO_SIDE := 6.0
+## Re-sent when where it should be has moved this far.
+const SUPPORT_MOVED := 6.0
 ## How many soldiers may be up at once (the host's cap), and how many are.
 var alive_cap := 8
 ## Where the fight is, when nobody knows where the enemy is (the arena's focus).
@@ -165,6 +176,11 @@ func setup(p_services: AIServices, p_team: int, p_seed := 0x0C0DE) -> void:
 	services = p_services
 	team = p_team
 	_rng.seed = p_seed
+	# What worked, across encounters (TacticsTally): the doctrine learns it.
+	if services.tally != null:
+		doctrine.learn(services.tally.get(&"data"))
+		if not doctrine.learned_from.is_empty():
+			_note("learnt from the tally: %s" % [doctrine.learned_from])
 	doctrine.update(profile, desperation, difficulty)
 	# Its side's plane runs are paid for from its budget (AirSupport.RUN_POINTS).
 	services.air_of(team).payer = self
@@ -280,6 +296,8 @@ func think(dt: float) -> void:
 	var c := services.knowledge_of(team).best(now)
 	if c != null and c.visible:
 		sectors.note_threat(c.pos, dt)
+	if intent != null:
+		intent.observe()
 	_step_fronts(now)
 	if not commander_up:
 		return   # nobody left to decide
@@ -324,6 +342,9 @@ func _update_desperation() -> void:
 func _command(q: Squad) -> void:
 	if q.broken:
 		return   # it falls back on its own (SquadTree's first branch)
+	if intent != null:
+		_command_friendly(q)
+		return
 	var now := services.now()
 	var c := services.knowledge_of(team).best(now)
 	var busy := q.order != null
@@ -375,6 +396,72 @@ func _command(q: Squad) -> void:
 		var o := SquadMsg.Order.make(SquadMsg.OrderKind.MOVE)
 		o.point = target
 		_give(q, o, "MOVE in file to %s" % ("the last contact" if target != rally else "the fight"))
+
+
+## A friendly squad: where the players' fight is (PlayerIntent.focus), at its
+## flank while there is an enemy in hand -- bounding (ADVANCE) -- or beside the
+## players on the way (MOVE). Sent again only when that place has moved
+## SUPPORT_MOVED, so a squad is not re-ordered every second as a player walks.
+func _command_friendly(q: Squad) -> void:
+	var now := services.now()
+	var f: Array = intent.focus()
+	if f[0] == Vector3.INF:
+		return
+	var slot := maxi(squads.find(q), 0)
+	var c := services.knowledge_of(team).best(now)
+	var fighting := c != null and c.age(now) < FRESH
+	services.lanes[team] = intent.in_lane
+	var beside := intent.support_point(f[0], slot)
+	var to := intent.flank_of(f[0], slot) if fighting else beside
+	if to == Vector3.INF:
+		return
+	# Out to the side before going in: from behind the players, the straight way
+	# to the fight's flank is past them and down their lane.
+	var leg := "the flank of" if fighting else "beside"
+	# Once going in at the flank, only a member back in the lane itself sends it
+	# out again: one drifting a little would have it turn back and forth.
+	var was: Dictionary = support_to.get(q.id, {})
+	var going_in := str(was.get("leg", "")) == "the flank of"
+	var out := PlayerIntent.LANE_CLEAR if going_in else OUT_TO_SIDE
+	if fighting and beside != Vector3.INF and _off_lane(q, f[0], going_in) < out:
+		to = beside
+		leg = "out to the side of"
+	if not was.is_empty() and (was.at as Vector3).distance_to(to) < SUPPORT_MOVED \
+			and str(was.leg) == leg:
+		return
+	if now - float(_last_order_at.get(q.id, -INF)) < ORDER_GAP:
+		return
+	support_to[q.id] = {"at": to, "leg": leg, "why": f[1]}
+	# With an enemy in hand a squad bounds (ADVANCE): a file on the march is no
+	# play for a fight.
+	var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE if fighting else SquadMsg.OrderKind.MOVE)
+	o.point = to
+	o.to_point = true
+	_give(q, o, "support: %s %s the players' fight, %s" % ["ADVANCE" if fighting else "MOVE", leg, f[1]])
+
+
+## How far the squad's nearest member is to the side of the line from the
+## nearest player to the players' fight: all of it is out, or it is not.
+## Members behind the player count too -- from there the straight way in is past
+## its gun -- unless `ahead_only`: going in already, only one actually in front
+## of the player matters, not the covering half left behind.
+func _off_lane(q: Squad, f: Vector3, ahead_only := false) -> float:
+	var p := intent.nearest_player(f)
+	if p == null:
+		return INF
+	var u := Vector3(f.x - p.feet().x, 0.0, f.z - p.feet().z)
+	if u.length() < 1.0:
+		return INF
+	u = u.normalized()
+	var least := INF
+	var length := Vector2(f.x - p.feet().x, f.z - p.feet().z).length()
+	for m in q.alive():
+		var rel := m.pawn.feet() - p.feet()
+		rel.y = 0.0
+		var along := rel.dot(u)
+		if along < length and (along > 0.0 or not ahead_only):
+			least = minf(least, absf(rel.dot(Vector3(-u.z, 0.0, u.x))))
+	return least
 
 
 func _give(q: Squad, o: SquadMsg.Order, why: String) -> void:
