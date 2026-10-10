@@ -70,6 +70,11 @@ The engine library is **not committed**; each worktree builds its own.
   (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
   (Docs/BrickBevel.md).
 - Run the probes your change could affect before merging.
+- The PC has hard-powered-off during windowed arena runs (no blue screen, no
+  dump). `tools/heat_log.ps1` runs from the user's Startup folder and logs
+  temperature, throttling, load and the running Godot processes every 5 s to
+  `%LOCALAPPDATA%\brickcity-heat\heat_<date>.csv`. After a crash, read the
+  last lines there; do not run several windowed passes back to back.
 
 ### Test windows stay out of the user's way
 
