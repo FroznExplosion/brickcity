@@ -70,11 +70,32 @@ The engine library is **not committed**; each worktree builds its own.
   (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
   (Docs/BrickBevel.md).
 - Run the probes your change could affect before merging.
-- The PC has hard-powered-off during windowed arena runs (no blue screen, no
-  dump). `tools/heat_log.ps1` runs from the user's Startup folder and logs
-  temperature, throttling, load and the running Godot processes every 5 s to
-  `%LOCALAPPDATA%\brickcity-heat\heat_<date>.csv`. After a crash, read the
-  last lines there; do not run several windowed passes back to back.
+
+### Open issue: the PC crashes and shuts itself off
+
+We are tracking whole-PC crashes: the screen freezes, goes black, and the
+machine is off (Kernel-Power 41, bugcheck 0, no blue screen, no dump). Most
+have come during test runs, especially windowed `combat_arena` passes
+(2026-10-06, 10-07, twice on 10-09). Suspects: heat, or the AMD graphics
+driver (Legion Go, Ryzen Z1 Extreme, driver from Nov 2023).
+
+- `tools/heat_log.ps1` runs at login (user's Startup folder) and writes
+  temperature, throttling, CPU/GPU load, free RAM and every running Godot
+  process (what it runs, its RAM) about every 7 s to
+  `%LOCALAPPDATA%\brickcity-heat\heat_<date>.csv`.
+- **After every windowed or long test run**, read the heat log lines covering
+  that run and say in chat the peak temperature and whether `passive_pct`
+  dropped below 100 (throttling).
+- **When the user says the PC crashed or was found off**, read the heat log
+  first: the last lines before the gap show the temperature, load and which
+  Godot runs were going. Match the gap with the System event log
+  (Kernel-Power 41 / EventLog 6008) and the chats' last tool calls, and report
+  what was running and whether it looks like heat (90 °C or more, throttling)
+  or the driver (normal readings up to the end).
+- If the heat log has no lines for today, the logger is not running: tell the
+  user (it is started by `brickcity heat log` in their Startup folder).
+- Until the cause is known, do not run several windowed passes back to back
+  or at the same time as another chat's; run one, then check the heat log.
 
 ### Test windows stay out of the user's way
 
