@@ -10,6 +10,9 @@ var source: Node
 var hit_position: Vector3 = Vector3.ZERO
 var hit_normal: Vector3 = Vector3.ZERO
 var crit: bool = false
+## A melee (COMBAT_DESIGN 4.1): 1.5x on a shield, never a crit, and it STOPS at the
+## layer it breaks -- one blow is one step, so the counts a player reads hold.
+var melee: bool = false
 
 ## Whose weapon this is, for what shrugs off small arms (a mech: Docs/AIRoster.md
 ## 4.6): &"person", &"explosive", &"anti_mech" or &"mech". Unsaid (&""), it is

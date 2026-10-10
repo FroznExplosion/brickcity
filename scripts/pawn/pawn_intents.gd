@@ -30,6 +30,8 @@ var jump_held := false
 ## Edge-triggered: set by the brain, cleared by the motor once acted on.
 var jump := false
 var reload := false
+## A melee down the eye (Pawn.melee), when its last one has recovered.
+var melee := false
 
 
 ## A still, quiet request that keeps looking where it looked. Look is NOT zeroed:
@@ -44,3 +46,4 @@ func clear() -> void:
 	jump = false
 	jump_held = false
 	reload = false
+	melee = false

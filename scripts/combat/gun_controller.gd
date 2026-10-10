@@ -166,7 +166,7 @@ func _fire_one() -> void:
 ## or, a hurtbox under an entity, its parent: whichever holds a HealthPool as a
 ## direct child or is one. Never a recursive search up the tree: from a wall, that
 ## would walk to the scene root and find some enemy's HealthPool under it.
-func _living(collider: Object) -> Node:
+static func _living(collider: Object) -> Node:
 	var n := collider as Node
 	for _i in 2:
 		if n == null:

@@ -16,7 +16,7 @@ extends Node
 ## move_forward/back/left/right (WASD), sprint (SHIFT, forward only, and not while
 ## firing or aiming -- the gun comes up first), jump (SPACE; at a ledge it climbs),
 ## crouch (C or CTRL; at a run, a slide), grapple (Q, held), aim (RMB), fire (LMB),
-## reload (R). Sprint, aim and crouch can each be HOLD or TOGGLE (Options).
+## reload (R), melee (E). Sprint, aim and crouch can each be HOLD or TOGGLE (Options).
 
 var pawn: Pawn
 var camera: Camera3D
@@ -30,6 +30,9 @@ static var toggle_crouch := false
 var _sprint_on := false
 var _aim_on := false
 var _crouch_on := false
+## The melee button means something else here first: `() -> bool`, true when it was
+## used (the scene's rodeo climb onto a mech in reach). Else the press is a melee.
+var melee_context := Callable()
 ## The hands and the camera's feel (PlayerView), when there is one. It says when
 ## the gun is up enough to fire.
 var view: PlayerView
@@ -72,6 +75,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		pawn.intents.jump = true
 	if _pressed(event, &"reload"):
 		pawn.intents.reload = true
+	if _pressed(event, &"melee"):
+		if not (melee_context.is_valid() and bool(melee_context.call())):
+			pawn.intents.melee = true
 	# The toggles flip on the press, whatever was held.
 	if _pressed(event, &"sprint"):
 		_sprint_on = not _sprint_on

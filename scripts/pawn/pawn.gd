@@ -49,6 +49,8 @@ const GRAVITY := 20.0
 const STEP_HEIGHT := BRICK_M + 0.03
 
 signal landed
+## A melee was thrown (intents.melee). `info` is MeleeStrike.strike's: {} on a whiff.
+signal meleed(info: Dictionary)
 
 ## Pawns get a head crit spot (CritSpots). DEFERRED: off until the enemies are figures
 ## rather than capsules; tools/crit_probe.gd switches it on to test the system.
@@ -71,6 +73,11 @@ var eye: Node3D
 ## The player's movement on top of the walk -- momentum, slide, wall-run, mantle,
 ## grapple (PawnMoves). Null for a soldier, whose walk is the plain one below.
 var moves: PawnMoves
+## The story tier its melee hits at (CombatScale.melee): the player's current tier,
+## which whoever runs the fight sets (the arena's level).
+var melee_tier := 1
+## Seconds until the next melee may start (MeleeStrike.RECOVERY).
+var _melee_cool := 0.0
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
@@ -259,11 +266,34 @@ func _physics_process(delta: float) -> void:
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
 		eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
+	_melee_cool = maxf(_melee_cool - delta, 0.0)
+	if intents.melee and _melee_cool <= 0.0:
+		melee()
+	intents.melee = false
 	if gun != null:
-		gun.set_trigger(intents.fire)
+		# The gun is down for the start of a blow.
+		gun.set_trigger(intents.fire and not is_meleeing())
 		if intents.reload:
 			gun.reload()
 	intents.reload = false
+
+
+## Throw a melee down the eye now (MeleeStrike). The blow's damage is this pawn's
+## melee_tier; what it reached goes out on `meleed`.
+func melee() -> Dictionary:
+	_melee_cool = MeleeStrike.RECOVERY
+	if eye == null or not eye.is_inside_tree():
+		return {}
+	var ex: Array[RID] = [body.get_rid()]
+	var info := MeleeStrike.strike(body.get_world_3d(), eye.global_position,
+			-eye.global_transform.basis.z, melee_tier, ex, self)
+	meleed.emit(info)
+	return info
+
+
+## In the gun-down part of a blow.
+func is_meleeing() -> bool:
+	return _melee_cool > MeleeStrike.RECOVERY - MeleeStrike.GUN_DOWN
 
 
 ## One tick of movement from `intents`.
