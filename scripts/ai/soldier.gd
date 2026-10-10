@@ -712,7 +712,7 @@ func _rodeo_pick() -> Object:
 			target = ml.mech
 			at = ml.mech.feet()
 		else:
-			var tk := h.get_meta(&"vehicle", null) as Tank
+			var tk := h.get_meta(&"vehicle") as Tank if h.has_meta(&"vehicle") else null
 			if tk == null or not _rodeo_ok(tk):
 				continue
 			target = tk
