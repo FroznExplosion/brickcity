@@ -70,6 +70,8 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_agent", "span", "head_stand", "head_crouch", "step_up",
             "max_drop", "safe_drop"), &AINav::set_agent);
     ClassDB::bind_method(D_METHOD("get_span"), &AINav::get_span);
+    ClassDB::bind_method(D_METHOD("set_crush", "plates", "cost_m"), &AINav::set_crush);
+    ClassDB::bind_method(D_METHOD("get_crush"), &AINav::get_crush);
     ClassDB::bind_method(D_METHOD("request_field", "goal", "radius_m", "priority"), &AINav::request_field);
     ClassDB::bind_method(D_METHOD("get_field_status", "id"), &AINav::get_field_status);
     ClassDB::bind_method(D_METHOD("field_dir", "id", "point"), &AINav::field_dir);
@@ -149,7 +151,32 @@ const AINav::Column &AINav::_column(int x, int z) {
             // about where the water is, so this is the one place it is asked.
             const bool drowned = (float)y * PLATE < water_level - WADE;
             if (head >= head_crouch && !drowned) {
-                col.floors.push_back(Floor{ (int16_t)y, head });
+                col.floors.push_back(Floor{ (int16_t)y, head, 0 });
+            }
+        }
+        // What a crushing agent drives through: the run of bricks standing on
+        // the ground here, if it is over a step and no more than `crush`. Its
+        // foot is a floor too, with the run's height and the air over it as
+        // the head. Only on the ground -- what stands on a storey's floor is
+        // that floor's run, and the terrain is not bricks.
+        if (crush > 0) {
+            const int g = std::max(0, (int)std::lround(ai->ground_at(cx, cz) / PLATE));
+            if (g <= ymax && solid[g]) {
+                int r = 0;
+                while (g + r <= ymax && solid[g + r]) {
+                    r++;
+                }
+                if (r > step_up && r <= crush) {
+                    int a = 0;
+                    while (g + r + a <= ymax && !solid[g + r + a]) {
+                        a++;
+                    }
+                    const int16_t head = (g + r + a > ymax) ? SKY : (int16_t)(r + a);
+                    const bool drowned = (float)g * PLATE < water_level - WADE;
+                    if (head >= head_crouch && !drowned) {
+                        col.floors.insert(col.floors.begin(), Floor{ (int16_t)g, head, (int16_t)r });
+                    }
+                }
             }
         }
     }
@@ -259,6 +286,7 @@ bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
             int best_y = -1;
             int best_head = -1;
             int best_dy = std::numeric_limits<int>::max();
+            int best_crush = 0;
             for (const Floor &f : col.floors) {
                 const int dy = f.y - n.y;
                 if (dy > step_up || -dy > max_drop) {
@@ -278,6 +306,7 @@ bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
                 best_y = f.y;
                 best_head = hh;
                 best_dy = std::abs(dy);
+                best_crush = f.crush;
             }
             if (best_y < 0) {
                 return false;
@@ -336,6 +365,9 @@ bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
             }
             if (best_y < n.y - safe_drop) {
                 step += HURT_DROP_COST;   // and one that hurts, a last resort
+            }
+            if (best_crush > 0) {
+                step += crush_cost;   // bricks to go through, not road
             }
             out = Node{ nx, nz, best_y };
             cost = step;
@@ -820,6 +852,12 @@ void AINav::set_agent(int p_span, int p_head_stand, int p_head_crouch, int p_ste
     step_up = std::max(0, p_step_up);
     max_drop = std::max(step_up, p_max_drop);
     safe_drop = std::max(0, std::min(p_safe_drop, max_drop));
+    clear_cache();
+}
+
+void AINav::set_crush(int plates, float cost_m) {
+    crush = std::max(0, plates);
+    crush_cost = std::max(0.0f, cost_m);
     clear_cache();
 }
 

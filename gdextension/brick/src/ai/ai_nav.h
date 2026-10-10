@@ -74,6 +74,14 @@ public:
             int safe_drop);
     int get_span() const { return span; }
 
+    /// A tracked vehicle CRUSHES what is low enough (Docs/AIVehicles.md 3): a
+    /// run of bricks standing on the ground -- a garden wall, a barricade, a
+    /// heap of rubble -- more than a step high and no more than `plates`, is a
+    /// way THROUGH at its foot, for `cost_m` metres of driving more than the
+    /// road beside it. 0 (the default) crushes nothing. Forgets every column.
+    void set_crush(int plates, float cost_m);
+    int get_crush() const { return crush; }
+
     /// A path now, whatever it costs, up to `max_expansions` nodes. Empty if none.
     PackedVector3Array find_path(const Vector3 &from, const Vector3 &to, int max_expansions);
 
@@ -156,6 +164,7 @@ private:
     struct Floor {
         int16_t y = 0;       // plate the feet are on
         int16_t head = 0;    // plates of air above
+        int16_t crush = 0;   // plates of bricks the agent crushes to stand here
     };
     struct Column {
         std::vector<Floor> floors;
@@ -205,6 +214,8 @@ private:
     int step_up = STEP_UP;
     int max_drop = MAX_DROP;
     int safe_drop = SAFE_DROP;
+    int crush = 0;
+    float crush_cost = 0.0f;
     float water_level = -1e30f;
     bool stand_only = true;
     std::unordered_map<int64_t, Column> columns;

@@ -143,6 +143,8 @@ var _rodeo_retry_at := 0.0
 ## A vehicle of its side to ride on (VehicleDeck): walked to and got on. Null
 ## for none; given up after BOARD_VEHICLE_GIVE_UP or when there is no way.
 var board_vehicle: Node3D
+## A seat in `board_vehicle` (Tank.Seat) to take rather than its deck, or -1.
+var board_seat := -1
 var _board_vehicle_since := 0.0
 const BOARD_VEHICLE_GIVE_UP := 15.0
 const RODEO_RANGE := 35.0
@@ -797,12 +799,28 @@ func _aboard(now: float) -> void:
 func _board_vehicle_step(now: float) -> void:
 	var v := board_vehicle
 	var deck: VehicleDeck = v.rodeo if is_instance_valid(v) else null
-	if deck == null or v.is_wrecked() or v.team != team or deck.free_spot() < 0 \
+	var tank: Tank = v as Tank if is_instance_valid(v) else null
+	var seat := board_seat if tank != null and board_seat >= 0 and tank.seat_free(board_seat) else -1
+	if deck == null or v.is_wrecked() or v.team != team or (seat < 0 and deck.free_spot() < 0) \
 			or now - _board_vehicle_since > BOARD_VEHICLE_GIVE_UP:
 		board_vehicle = null
+		board_seat = -1
 		stop()
 		return
 	state = "boarding"
+	if seat >= 0:
+		# Its seat: in at the hatch.
+		if tank.can_reach(pawn):
+			stop()
+			board_vehicle = null
+			board_seat = -1
+			tank.board(pawn, seat)
+			return
+		if move_to(_nav().snap(tank.mount_point()), true) == -1:
+			board_vehicle = null
+			board_seat = -1
+			stop()
+		return
 	if deck.can_ride(pawn):
 		stop()
 		board_vehicle = null
@@ -817,9 +835,10 @@ func _board_vehicle_step(now: float) -> void:
 		stop()
 
 
-## Go and ride on `v` (a vehicle of this side).
-func ride_on(v: Node3D) -> void:
+## Go and ride on `v` (a vehicle of this side) -- or in it, at `seat` of a tank.
+func ride_on(v: Node3D, seat := -1) -> void:
 	board_vehicle = v
+	board_seat = seat
 	_board_vehicle_since = services.now()
 
 

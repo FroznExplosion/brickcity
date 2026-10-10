@@ -734,6 +734,13 @@ var _vehicle_pilot := VehiclePilot.new()
 var _hop_in_at := 0.0
 ## Friendly soldiers this near the player's vehicle, stopped, hop on its deck.
 const HOP_IN_RANGE := 15.0
+## What a tank's lost damage zone means, for the log (Tank, VehicleBricks).
+const ZONE_LOST_LINES := {&"engine": "engine destroyed -- it will not drive, and the turret turns by hand",
+		&"track_l": "left track thrown -- it can only turn", &"track_r": "right track thrown -- it can only turn",
+		&"turret": "turret jammed", &"gun": "cannon shot off -- the machine gun still works",
+		&"ammo": "AMMO RACK HIT -- it cooks off"}
+const TRUCK_ZONE_LOST_LINES := {&"engine": "engine shot out -- it will not drive",
+		&"wheels": "wheels shot off -- half speed"}
 ## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
 ## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
 var weight: WeightTracker
@@ -4456,7 +4463,10 @@ func _spawn_tank(feet: Vector3, yaw: float, team: int, crewed: bool) -> Tank:
 			so.pawn.team = team
 			t.board(so.pawn, seat, true)
 	t.wrecked.connect(func(w: Tank) -> void:
-		print("[city] tank wrecked at %v" % w.feet()))
+		print("[city] tank wrecked at %v%s" % [w.feet(), " -- its ammo cooked off" if w.cooked_off else ""]))
+	t.damaged.connect(func(zone: StringName) -> void:
+		var whose := "your tank" if _vehicle_pilot.vehicle == t else "a tank of side %d" % t.team
+		print("[city] %s: %s" % [whose, ZONE_LOST_LINES.get(zone, String(zone) + " gone")]))
 	_wire_deck(t)
 	t.player_thrown.connect(func() -> void:
 		if _vehicle_pilot.vehicle == t:
@@ -4502,9 +4512,10 @@ func _vehicle_at_side() -> CharacterBody3D:
 func _use_vehicle(v: CharacterBody3D) -> void:
 	var drive := false
 	if v is Tank:
+		# A seat: the driver's if it is free, the gunner's with one of ours driving.
 		var t := v as Tank
-		drive = not t.player_in and not Tank._alive(t.crew[Tank.Seat.DRIVER]) \
-				and (t.is_empty() or t.team == _player_pawn.team)
+		drive = not t.player_in and (t.is_empty() or (t.team == _player_pawn.team
+				and (t.seat_free(Tank.Seat.DRIVER) or t.seat_free(Tank.Seat.GUNNER))))
 	else:
 		var tr := v as TransportTruck
 		drive = tr.is_empty() and tr.can_reach(_player_pawn)
@@ -4542,7 +4553,7 @@ func _drive_vehicle(v: CharacterBody3D) -> void:
 		v.wrecked.connect(_on_driven_wrecked)
 	_hop_in_at = 0.0
 	if v is Tank:
-		print("[city] driving a tank: WASD drive, LMB cannon, RMB machine gun, C inside/behind, M to get out")
+		print("[city] in a tank, %s; C inside/behind, M to get out" % VehiclePilot.seat_line(v as Tank))
 	else:
 		print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
 
@@ -4564,7 +4575,7 @@ func _leave_vehicle(hurt := 0.0) -> void:
 func _on_driven_wrecked(v: Node) -> void:
 	if _vehicle_pilot.vehicle == v:
 		print("[city] wrecked: you climb out")
-		_leave_vehicle(Tank.BAIL_HURT)
+		_leave_vehicle(float(v.get(&"bail_hurt")) if v is Tank else Tank.BAIL_HURT)
 
 
 ## Halo's marines: while the player drives a vehicle of theirs and it stands
@@ -4580,6 +4591,11 @@ func _hop_in() -> void:
 		return
 	var deck: VehicleDeck = v.rodeo
 	var room := deck.riders.size() - deck.rider_count()
+	# A tank's gunner's seat first, if the player drives it alone (Halo's
+	# marine on the Warthog's gun).
+	var tank := v as Tank
+	var seat := Tank.Seat.GUNNER if tank != null and tank.player_drives() \
+			and tank.seat_free(Tank.Seat.GUNNER) else -1
 	var near := []
 	for p in ai_services.pawns:
 		if not is_instance_valid(p) or p.team != v.team or p.body == null:
@@ -4588,7 +4604,10 @@ func _hop_in() -> void:
 		if so == null or p.health == null or p.health.is_dead():
 			continue
 		if so.board_vehicle == v:
-			room -= 1
+			if so.board_seat >= 0:
+				seat = -1
+			else:
+				room -= 1
 			continue
 		if so.board_vehicle != null or so.board_mech != null or so.rodeo_target != null \
 				or p.has_meta(&"riding") or p.has_meta(&"aboard") or p.has_meta(&"in_vehicle"):
@@ -4597,6 +4616,8 @@ func _hop_in() -> void:
 		if d < HOP_IN_RANGE:
 			near.append([d, so])
 	near.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
+	if seat >= 0 and not near.is_empty():
+		(near.pop_front()[1] as Soldier).ride_on(v, seat)
 	for i in mini(room, near.size()):
 		(near[i][1] as Soldier).ride_on(v)
 
@@ -4634,6 +4655,9 @@ func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]
 	tr.cargo = cargo
 	tr.arrived.connect(_truck_unload)
 	_wire_deck(tr)
+	tr.damaged.connect(func(zone: StringName) -> void:
+		var whose := "your truck" if _vehicle_pilot.vehicle == tr else "a truck of side %d" % tr.team
+		print("[city] %s: %s" % [whose, TRUCK_ZONE_LOST_LINES.get(zone, String(zone) + " gone")]))
 	tr.wrecked.connect(func(w: TransportTruck) -> void:
 		print("[city] truck wrecked at %v%s" % [w.feet(), (" with %d aboard" % w.cargo.size()) if not w.cargo.is_empty() else ""])
 		w.cargo.clear()
@@ -5093,6 +5117,29 @@ func _run_vehicles_pass() -> void:
 	Input.parse_input_event(click)
 	await _frames(20)
 	_gate_ok("LMB fires its cannon", t.shells > shells)
+	# Its seats: Q to the gunner's -- nobody drives now -- and back.
+	_key(KEY_Q, true)
+	await _frames(2)
+	_key(KEY_Q, false)
+	await _frames(5)
+	var at_gun := t.feet()
+	_key(KEY_W, true)
+	await _frames(60)
+	_key(KEY_W, false)
+	_gate_ok("Q: the gunner's seat -- W drives nothing", t.player_seat == Tank.Seat.GUNNER
+			and t.feet().distance_to(at_gun) < 0.5, "seat %d, moved %.1f m" % [t.player_seat, t.feet().distance_to(at_gun)])
+	_key(KEY_Q, true)
+	await _frames(2)
+	_key(KEY_Q, false)
+	await _frames(5)
+	# Back at the wheel, standing: a friend near takes the gunner's seat.
+	var gunner := _spawn_soldier(ai_nav.snap(t.feet() + t.global_transform.basis.z * 7.0))
+	gunner.team = 0
+	gunner.pawn.team = 0
+	await _frames(600)
+	_gate_ok("Q back at the wheel; a friend near takes the gunner's seat", t.player_drives()
+			and t.crew[Tank.Seat.GUNNER] == gunner.pawn and not t.player_guns(),
+			"seat %d, gunner %s (%s)" % [t.player_seat, t.crew[Tank.Seat.GUNNER], gunner.state])
 	await _save("city_vehicles")
 	_key(KEY_M, true)
 	await _frames(2)

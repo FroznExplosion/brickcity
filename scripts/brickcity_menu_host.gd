@@ -148,6 +148,7 @@ const ACTION_NAMES := {
 	"inventory": "Backpack",
 	"use_vehicle": "Get In / Out, Ride on (Mech, Tank, Truck)",
 	"vehicle_view": "Vehicle: Behind / Inside View",
+	"vehicle_seat": "Tank: Driver's / Gunner's Seat",
 	"mech_order": "Order Your Mech (tap: follow / hold; hold + aim: attack there)",
 	"mech_dash": "Mech: Dash", "mech_smoke": "Mech: Electric Smoke (throws off a rider)",
 	"dev_big_blast": "Big Blast", "dev_disasters": "Disaster Menu (Shift: stop all)",

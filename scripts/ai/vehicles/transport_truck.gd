@@ -24,13 +24,18 @@ extends CharacterBody3D
 ## who shoot from it. Driven by the player it is a target everybody senses and
 ## shoots (make_target); rounds are what hurt it, as they always did.
 ##
-## A brick-built body and moving cover are the steps after this one
-## (AIVehicles.md 4).
+## Its body is BRICKS (VehicleBricks), in damage zones (AIVehicles.md 4.2): its
+## ENGINE under the hood -- shot out, it does not drive (a squad on its way is
+## let out where it stops) -- and its WHEELS -- two shot off, it goes at half
+## speed. Rounds knock bricks off where they land, as on a tank. Moving cover
+## is the step after this one (AIVehicles.md 4).
 
 signal arrived(truck: TransportTruck)
 signal wrecked(truck: TransportTruck)
 ## Taken at the cab by `by`.
 signal hijacked(by: Pawn)
+## A damage zone of its bricks is gone (VehicleBricks.zone_lost).
+signal damaged(zone: StringName)
 
 const DRIVE := 9.0
 const TURN := 1.6
@@ -41,6 +46,13 @@ const GRAVITY := 20.0
 const SIZE := Vector3(2.3, 2.4, 5.6)
 const CLEARANCE := 0.55
 const WHEEL := 0.45
+## Hit points of a brick, by zone; a zone works down to this share of its bricks.
+const BRICK_HP := {&"body": 60.0, &"engine": 45.0, &"wheels": 50.0}
+const ZONE_KEEP := {&"engine": 0.5, &"wheels": 0.6}
+## How far from where a round struck its damage reaches into the bricks.
+const BRICK_REACH := {&"person": 0.5, &"mech": 0.8, &"explosive": 1.1}
+## On what wheels it has left, once it has lost them.
+const LIMP := 0.5
 ## Up-speed for a kerb: about half a metre at this gravity.
 const KERB_POP := 4.5
 ## Seconds it backs up the first time it is stuck.
@@ -87,6 +99,9 @@ var stopped_because := ""
 var stuck_on: Array[String] = []
 ## Which map its path is on: "vehicle", or "foot" with no road on the vehicle map.
 var road := ""
+## Its body (VehicleBricks): zones of bricks.
+var bricks: VehicleBricks
+var _smoke: CPUParticles3D
 
 var _path := PackedVector3Array()
 var _path_id := -1
@@ -136,6 +151,7 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> Transp
 	pool.layer_configs = [layer]
 	t.add_child(pool)
 	t.health = pool
+	t.set_meta(&"takes_packet", t)
 	parent.add_child(t)
 	t.global_position = at
 	t._yaw = yaw
@@ -222,6 +238,9 @@ func _physics_process(delta: float) -> void:
 	if Vector2(goal.x - at.x, goal.z - at.z).length() < DROP:
 		_arrive("there")
 		return
+	if not can_drive():
+		_arrive("engine")
+		return
 	while _wp < _path.size() and Vector2(_path[_wp].x - at.x, _path[_wp].z - at.z).length() < 2.0:
 		_wp += 1
 	if _wp >= _path.size():
@@ -233,7 +252,7 @@ func _physics_process(delta: float) -> void:
 	_yaw += turn
 	rotation.y = _yaw
 	# Slower through a sharp turn.
-	var speed := DRIVE * clampf(1.0 - absf(wrapf(want - _yaw, -PI, PI)) / PI, 0.3, 1.0)
+	var speed := top_speed() * clampf(1.0 - absf(wrapf(want - _yaw, -PI, PI)) / PI, 0.3, 1.0)
 	var fwd := -global_transform.basis.z
 	velocity.x = fwd.x * speed
 	velocity.z = fwd.z * speed
@@ -267,7 +286,8 @@ func _physics_process(delta: float) -> void:
 ## The player's keys, as a car: throttle up to speed, steering that bites only
 ## while it rolls (and turns the other way backing up).
 func _drive_keys(delta: float) -> void:
-	var want := throttle * (DRIVE if throttle > 0.0 else BACK_SPEED)
+	var go := throttle if can_drive() else 0.0
+	var want := go * (top_speed() if go > 0.0 else BACK_SPEED * top_speed() / DRIVE)
 	var rate := BRAKE if (want == 0.0 or signf(want) != signf(_speed)) and absf(_speed) > 0.1 else ACCEL
 	_speed = move_toward(_speed, want, rate * delta)
 	var bite := clampf(absf(_speed) / STEER_FULL, 0.0, 1.0) * signf(_speed)
@@ -292,6 +312,69 @@ func _run_down(fwd: Vector3) -> void:
 
 func is_wrecked() -> bool:
 	return state == "wrecked"
+
+
+## Does it drive: an engine.
+func can_drive() -> bool:
+	return bricks == null or bricks.has(&"engine")
+
+
+## How fast it goes on what wheels it has.
+func top_speed() -> float:
+	return DRIVE * (1.0 if bricks == null or bricks.has(&"wheels") else LIMP)
+
+
+## A hit through DamageSystem (the "takes_packet" meta): on its bricks where it
+## struck (a splash round its middle: a brick of its outside), and its health.
+func take_packet(packet: DamagePacket) -> DamageSystem.DamageResult:
+	var res := DamageSystem.DamageResult.new()
+	if is_wrecked():
+		return res
+	var before := health.total_current()
+	var reach := float(BRICK_REACH.get(MechLayers.scale_of(packet), 0.5))
+	if packet.hit_position == Vector3.ZERO or packet.hit_position.distance_to(global_position) < 0.05:
+		bricks.hit_anywhere(packet.amount, reach)
+	else:
+		bricks.hit(packet.hit_position, packet.amount, reach)
+	if not is_wrecked():
+		health.apply_impact(packet.amount, &"")
+	res.dealt = before - health.total_current()
+	res.killed = health.is_dead()
+	return res
+
+
+func _on_zone_lost(zone: StringName) -> void:
+	if is_wrecked():
+		return
+	if zone == &"engine":
+		_smoke_from(Vector3(0.0, 1.6, -SIZE.z * 0.42))
+	damaged.emit(zone)
+
+
+func _smoke_from(at: Vector3) -> void:
+	if _smoke != null:
+		return
+	var s := CPUParticles3D.new()
+	s.name = "Smoke"
+	s.amount = 20
+	s.lifetime = 2.5
+	s.direction = Vector3.UP
+	s.spread = 12.0
+	s.initial_velocity_min = 1.0
+	s.initial_velocity_max = 2.0
+	s.gravity = Vector3.UP * 0.4
+	var m := SphereMesh.new()
+	m.radius = 0.3
+	m.height = 0.6
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.12, 0.12, 0.12, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.material = mat
+	s.mesh = m
+	s.position = at
+	add_child(s)
+	_smoke = s
 
 
 ## Nobody at the wheel: a player's truck parked, or nobody's.
@@ -454,41 +537,42 @@ func _on_wrecked() -> void:
 	state = "wrecked"
 	throttle = 0.0
 	steer = 0.0
+	if bricks != null:
+		bricks.burn()
+	_smoke_from(Vector3(0.0, 1.6, -SIZE.z * 0.3))
 	if pawn != null and is_instance_valid(pawn) and services != null:
 		services.pawns.erase(pawn)
 	wrecked.emit(self)
 
 
+## Its body in bricks (VehicleBricks), by zone. Studs across (x) and along (z,
+## forward is -z), plates up from the feet:
+##   wheels   four, a stud wide and two long, two courses, under the corners;
+##   chassis  two plates the whole length over them, the bed's floor;
+##   engine   the front three studs, from the chassis to the hood's top;
+##   cab      behind it, up to the roof; the bed's sides and tailgate one
+##            course high, open on top for riders.
 func _build_look() -> void:
-	var olive := StandardMaterial3D.new()
-	olive.albedo_color = Color(0.33, 0.38, 0.24)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.12, 0.12, 0.12)
-	var parts := [
-		# cab, bed, and the bed's sides: open, for riders to stand in and shoot
-		[Vector3(2.2, 1.6, 1.8), Vector3(0.0, 1.2, -1.8), olive],
-		[Vector3(2.3, 0.5, 3.6), Vector3(0.0, 0.8, 0.9), olive],
-		[Vector3(0.12, 0.5, 3.6), Vector3(-1.09, 1.3, 0.9), olive],
-		[Vector3(0.12, 0.5, 3.6), Vector3(1.09, 1.3, 0.9), olive],
-		[Vector3(2.3, 0.5, 0.12), Vector3(0.0, 1.3, 2.64), olive],
-	]
-	for p in parts:
-		var mi := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = p[0]
-		bm.material = p[2]
-		mi.mesh = bm
-		mi.position = p[1]
-		add_child(mi)
-	for x in [-1.1, 1.1]:
-		for z in [-1.9, 1.6]:
-			var w := MeshInstance3D.new()
-			var cm := CylinderMesh.new()
-			cm.top_radius = 0.45
-			cm.bottom_radius = 0.45
-			cm.height = 0.35
-			cm.material = dark
-			w.mesh = cm
-			w.rotation.z = PI * 0.5
-			w.position = Vector3(x, 0.45, z)
-			add_child(w)
+	var olive := Color(0.33, 0.38, 0.24)
+	var dark := Color(0.12, 0.12, 0.12)
+	var grille := Color(0.26, 0.24, 0.18)
+	var glass := Color(0.35, 0.45, 0.5)
+	bricks = VehicleBricks.attach(self)
+	var b := bricks.add_part(self)
+	var hp: Dictionary = BRICK_HP
+	for x in [-3.0, 2.0]:
+		for z in [-6.5, 3.5]:
+			bricks.fill(b, &"wheels", Vector3(x, 0, z), Vector3(x + 1.0, 6, z + 2.0), dark, hp[&"wheels"])
+	bricks.fill(b, &"body", Vector3(-3, 6, -5), Vector3(3, 8, 8), olive, hp[&"body"])
+	bricks.fill(b, &"engine", Vector3(-3, 6, -8), Vector3(3, 11, -5), grille, hp[&"engine"], true)
+	bricks.fill(b, &"body", Vector3(-3, 8, -5), Vector3(3, 11, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 11, -5), Vector3(3, 15, -4), glass, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 11, -4), Vector3(3, 15, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 15, -5), Vector3(3, 17, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 8, -1), Vector3(-2, 11, 8), olive, hp[&"body"])
+	bricks.fill(b, &"body", Vector3(2, 8, -1), Vector3(3, 11, 8), olive, hp[&"body"])
+	bricks.fill(b, &"body", Vector3(-2, 8, 7), Vector3(2, 11, 8), olive, hp[&"body"], true)
+	for z in ZONE_KEEP:
+		bricks.keep(z, ZONE_KEEP[z])
+	bricks.finish()
+	bricks.zone_lost.connect(_on_zone_lost)

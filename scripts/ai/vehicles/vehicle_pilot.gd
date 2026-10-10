@@ -9,9 +9,12 @@ extends Node
 ## cab -- and back. In a tank the turret follows the look at its own pace
 ## (Tank.TURRET_TURN), so the gun lands where the crosshair is once it has come
 ## round: W / S drive, A / D turn the hull (on the spot as well), LMB the
-## cannon, RMB the machine gun. In a truck W / S are throttle and brake, A / D
+## cannon, RMB the machine gun. A tank has two seats (`vehicle_seat`, Q, moves
+## between them): at the wheel the player drives, and has the gun too unless one
+## of theirs sits in the gunner's; in the gunner's they aim and shoot while one
+## of theirs drives (TankBrain). In a truck W / S are throttle and brake, A / D
 ## steer -- only while it rolls. Those are the defaults: it reads the move, fire,
-## aim and vehicle_view actions, rebound in Options > Controls.
+## aim, vehicle_view and vehicle_seat actions, rebound in Options > Controls.
 
 ## The crosshair's reach, for where the turret should point.
 const AIM_RANGE := 400.0
@@ -61,8 +64,24 @@ func _active() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if is_driving() and _active() and event.is_action_pressed(&"vehicle_view") and not event.is_echo():
+	if not is_driving() or not _active() or event.is_echo():
+		return
+	if event.is_action_pressed(&"vehicle_view"):
 		chase = not chase
+	elif event.is_action_pressed(&"vehicle_seat") and tank() != null:
+		var t := tank()
+		if t.switch_seat():
+			print("[city] %s" % seat_line(t))
+
+
+## What the player's seat in `t` gives them, for the log.
+static func seat_line(t: Tank) -> String:
+	if t.player_seat == Tank.Seat.GUNNER:
+		return "gunner's seat: LMB cannon, RMB machine gun -- %s" % \
+				("one of yours drives" if t.ai_drives() else "nobody drives (Q: take the wheel)")
+	if t.player_guns():
+		return "driver's seat, and the gun: WASD drive, LMB cannon, RMB machine gun (Q: gunner's seat)"
+	return "driver's seat: WASD drive -- one of yours has the gun (Q: swap with them)"
 
 
 func _process(_delta: float) -> void:
@@ -76,9 +95,10 @@ func _process(_delta: float) -> void:
 		if Input.is_action_pressed(&"move_back"): go -= 1.0
 		if Input.is_action_pressed(&"move_left"): turn += 1.0
 		if Input.is_action_pressed(&"move_right"): turn -= 1.0
-	vehicle.throttle = go
-	vehicle.steer = turn
-	if t != null:
+	if t == null or t.player_drives():
+		vehicle.throttle = go
+		vehicle.steer = turn
+	if t != null and t.player_guns():
 		var on := _active() and not t.is_wrecked()
 		t.fire_main = on and Input.is_action_pressed(&"fire")
 		t.fire_coax = on and Input.is_action_pressed(&"aim")
@@ -87,7 +107,7 @@ func _process(_delta: float) -> void:
 
 func _physics_process(_delta: float) -> void:
 	var t := tank()
-	if t == null or not camera.is_inside_tree():
+	if t == null or not camera.is_inside_tree() or not t.player_guns():
 		return
 	# Where the crosshair lands: the turret turns to it.
 	var from := camera.global_position
