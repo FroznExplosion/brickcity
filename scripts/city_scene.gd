@@ -4142,6 +4142,8 @@ func _enter_pawn(feet: Vector3) -> void:
 	# earn aggro (AIServices).
 	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	# A splash or a ricochet of the player's rounds spares the player's side.
+	_gun.team = _player_pawn.team
 	if not _player_pawn.has_meta(&"weight"):
 		_player_pawn.set_meta(&"weight", weight.add(_player_pawn.body, _player_pawn.feet,
 				WeightTracker.PERSON))
@@ -4185,6 +4187,9 @@ func _fps_on() -> void:
 	var fb: CombatFeedback = arena.feedback if arena != null else _feedback
 	if fb != null and not _player_pawn.meleed.is_connected(fb.on_player_shot):
 		_player_pawn.meleed.connect(fb.on_player_shot)
+	# So does a splash or a ricochet of a modifier (GunController.side_hit).
+	if fb != null and not _gun.side_hit.is_connected(fb.on_player_shot):
+		_gun.side_hit.connect(fb.on_player_shot)
 	if stats_label != null:
 		_stats_were_visible = stats_label.visible
 		stats_label.visible = false
@@ -4220,6 +4225,7 @@ func _leave_pawn() -> void:
 	_player_pawn = null
 	_gun.set_trigger(false)
 	_gun.exclude = [] as Array[RID]
+	_gun.team = -1
 	if _aggro_layer != null:
 		_aggro_layer.visible = false
 

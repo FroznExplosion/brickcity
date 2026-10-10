@@ -39,6 +39,10 @@ class Result:
 	var rarity: int
 	var recipe: Dictionary                       # Slot -> GunPartDef
 	var stats: Dictionary[StringName, float]
+	## The stats before modifiers. The score reads these: it is tiers of power from tier,
+	## colour and roll, the same currency as an ordnance's or a shield's, and the
+	## modifiers stand beside it on the card (GunCard), never hidden inside it.
+	var base_stats: Dictionary[StringName, float] = {}
 	var gun_name: String
 	## Optional first name word from part-rarity quality (QUALITY_NAMING §3.1).
 	## "" for ~78% of guns, which is what makes it read as a signal when present.
@@ -63,6 +67,8 @@ class Result:
 	var weapon_class: WeaponClass
 	var tier: int = 1
 	var active_effects: PackedStringArray = PackedStringArray()   # aggregate, slot-agnostic
+	## Its modifiers (GunModifiers), already folded into `stats`. From the seed.
+	var modifiers: Array[Dictionary] = []
 	var merges: Array[MergeRule] = []                              # active synergy bonuses
 
 	## Compact, save/network-friendly form.
@@ -114,11 +120,21 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 		if def != null:
 			res.recipe[slot] = def
 
-	res.active_effects = GunEffects.stack(GunEffects.collect(res.recipe, res.rarity))
-	res.merges = MergeRule.detect(res.active_effects)
-	res.stats = GunStats.compute(res.recipe, res.rarity, res.weapon_class, res.tier, res.seed)
+	_resolve(res)
 	_finish(res, rng)
 	return res
+
+
+## Everything that reads the recipe: effects, merges, stats, and the modifiers on top.
+## Shared by generate(), generate_legendary() and deserialize().
+static func _resolve(res: Result) -> void:
+	res.modifiers = GunModifiers.roll(res.seed, res.rarity, res.weapon_class)
+	res.active_effects = GunEffects.stack(
+			GunEffects.collect(res.recipe, res.rarity) + GunModifiers.effects(res.modifiers))
+	res.merges = MergeRule.detect(res.active_effects)
+	res.stats = GunStats.compute(res.recipe, res.rarity, res.weapon_class, res.tier, res.seed)
+	res.base_stats = res.stats.duplicate()
+	GunModifiers.apply(res.stats, res.modifiers)
 
 
 ## Quality, score and name. Shared by generate() and deserialize() so a reassembled gun
@@ -134,7 +150,8 @@ static func _finish(res: Result, rng: RandomNumberGenerator) -> void:
 	res.grade_word = GunQuality.grade_word(res.quality, res.rarity, res.seed)
 	res.element_id = _roll_element(res)
 	res.element_word = _element_word(res)
-	res.score = GunQuality.score(res.stats, res.weapon_class)
+	res.score = GunQuality.score(res.base_stats if not res.base_stats.is_empty() else res.stats,
+			res.weapon_class)
 	res.gun_name = _make_name(res, rng)
 
 
@@ -175,12 +192,11 @@ static func generate_legendary(library: GunPartLibrary, gen_seed: int,
 		res.recipe[Slot.BARREL] = barrel
 		# The recipe changed, so everything downstream of it must be recomputed —
 		# effects, merges, stats, quality, name and score all read the recipe.
-		res.active_effects = GunEffects.stack(GunEffects.collect(res.recipe, res.rarity))
-		res.merges = MergeRule.detect(res.active_effects)
-		res.stats = GunStats.compute(res.recipe, res.rarity, wc, tier, res.seed)
+		_resolve(res)
 
 	for key: StringName in leg.signature:
 		res.stats[key] = res.stats.get(key, 0.0) * leg.signature[key]
+		res.base_stats[key] = res.base_stats.get(key, 0.0) * leg.signature[key]
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = res.seed
@@ -214,9 +230,7 @@ static func deserialize(library: GunPartLibrary, data: Dictionary) -> Result:
 		var def := library.get_by_id(ids[slot])
 		if def != null:
 			res.recipe[int(slot)] = def
-	res.active_effects = GunEffects.stack(GunEffects.collect(res.recipe, res.rarity))
-	res.merges = MergeRule.detect(res.active_effects)
-	res.stats = GunStats.compute(res.recipe, res.rarity, res.weapon_class, res.tier, res.seed)
+	_resolve(res)
 	res.luck = float(data.get("luck", 1.0))
 	# Re-derive name/grade/score rather than trusting the payload: they are functions
 	# of the recipe, so a save that predates a word-table change stays correct.

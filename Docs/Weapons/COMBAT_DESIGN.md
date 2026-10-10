@@ -97,17 +97,20 @@ higher colour is felt in the hand — but not so much that a white stops working
 ## 3. Shots to kill — the anchor
 
 Halo's habit: design around shots-to-kill and keep them readable. The anchor, on level, against a
-light enemy (the `trash` archetype, `LootRoller.TRASH_BASE_HP` = 64 at tier 1), with a median-roll
-pistol (11.05 a shot at tier 1):
+light enemy (the `trash` archetype, `LootRoller.TRASH_BASE_HP` = 60 at tier 1), with a median-roll
+pistol (10.3 a shot at tier 1, before modifiers):
 
 | Light enemy, pistol, on level | Damage a shot | Body shots | Headshots (2×) |
 |---|---|---|---|
-| Common | 11.05 | **6** | **3** |
-| Legendary, no modifiers (1.12×) | 12.4 | 6 | 3 |
-| Common + one damage modifier (+20%) | 13.3 | 5 | 3 |
-| Legendary + one damage modifier (+20%) | 14.9 | 5 | 3 |
-| Purple or legendary + two damage modifiers (+40%) | 16.9–17.3 | **4** | **2** |
+| Common | 10.3 | **6** | **3** |
+| Legendary, no modifiers (1.12×) | 11.5 | 6 | 3 |
+| Common + one damage modifier (+20%) | 12.4 | 5 | 3 |
+| Legendary + one damage modifier (+20%) | 13.8 | 5 | 3 |
+| Purple or legendary + two damage modifiers (+40%) | 15.7–16.2 | **4** | **2** |
 | Any of the above, one tier behind (×0.8) | — | one more, usually | — |
+
+Every row holds for a light enemy of 57.7–61.8 health; 60 sits in the middle
+(`tools/combat_numbers_probe.gd` holds them).
 
 **The colour gets you nothing alone; the build does.** A two-headshot kill takes a gun with the
 slots to carry two damage modifiers (purple and up) *and* the aim. That is the chase: a white works,
@@ -128,13 +131,13 @@ Two guns of the same class, tier and rarity differ in **how** they deal damage, 
 - **Named parts carry the trades**, readable on the card: a *Heavy Barrel* +8% damage −10% fire
   rate; a *Rapid Receiver* −8% damage +15% fire rate. A part's trade stays inside **±5–10%** on any
   one stat.
-- The hidden power roll shrinks: today a gun's DPS rolls 1.00–1.28× (`GunStats.DPS_WINDOW`), wider
-  than the whole rarity range. It comes down to about **1.00–1.10×**, so two guns of one colour
-  never sit a shots-to-kill count apart on the roll alone. The damage-vs-fire-rate trade
-  (`FIRE_BASE` 0.80–1.25) stays: it is feel, not power.
-  Shrinking it lowers the median roll (1.14× to 1.05×), so the light enemy's health is re-anchored
-  with it (`TRASH_BASE_HP` about 64 → 59) to keep a median common at 6 shots — the §3 table is
-  in shots, and the shots are what must hold.
+- The hidden power roll is small: a gun's DPS rolls **1.00–1.10×** (`GunStats.DPS_WINDOW`; v1's
+  1.00–1.28× was wider than the whole rarity range), so two guns of one colour rarely sit a
+  shots-to-kill count apart on the roll alone. The damage-vs-fire-rate trade (`FIRE_BASE`
+  0.80–1.25) stays: it is feel, not power.
+  Shrinking it lowered the median roll (1.14× to 1.05×), so the light enemy's health was
+  re-anchored with it (`TRASH_BASE_HP` 64 → 60) to keep a median common at 6 shots — the §3 table
+  is in shots, and the shots are what must hold.
 - Part quality's own swing stays at ±3% (`PART_SWING`).
 
 ## 4. Enemies: defences, crits and melee
@@ -290,6 +293,11 @@ counts, so they scale with tier for free. **This is where a gun's power comes fr
 - **Mechanical**: element conversion; the **explosive attachment** (§6.1).
 
 Legendary red text and Mythic effects are named, hand-written behaviours, not random rolls.
+
+**The score leaves modifiers out.** A gun's score is tiers of power from its tier, colour and roll —
+the same currency as an ordnance's or a shield's, 100 a tier — and its modifiers are listed beside
+it on the card, never folded into it. The card's damage and DPS rows show the gun with its
+modifiers.
 
 The manufacturer parts already built (parts that add or multiply stats) become the source of
 modifiers: a part fills a slot.
@@ -452,10 +460,10 @@ anchor was "a legendary pistol kills in 4 body / 2 head" (now that takes a built
 
 | Built | This design | Change |
 |---|---|---|
-| `Rarity.MULTS` 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12 | constant; `combat_numbers_probe` anchor rows rewritten to §3 |
-| `GunStats.DPS_WINDOW` 1.00–1.28 | about 1.00–1.10 | constant; the median moves, so `LootRoller.TRASH_BASE_HP` is re-anchored (§3.1) |
-| Parts with stat adds/mults, rarity → extra parts | slot-limited modifiers, quality by rarity, named trade parts, red text | parts become modifiers |
-| Mythic colour `GunCard.RARITY_COLORS[5]` (1.0, 0.25, 0.35) | red | already red-ish; check it reads as red next to orange |
+| `Rarity.MULTS` 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12 | **done** (step 6) |
+| `GunStats.DPS_WINDOW` 1.00–1.28 | about 1.00–1.10 | **done**: 1.10, `TRASH_BASE_HP` 60 |
+| Parts with stat adds/mults, rarity → extra parts | slot-limited modifiers, quality by rarity, named trade parts, red text | **done** for the first set (step 6, §14) |
+| Mythic colour `GunCard.RARITY_COLORS[5]` (1.0, 0.25, 0.35) | red | **done**: (0.95, 0.12, 0.12) |
 | `CharacterSave.character.level` (unused) | player level 1–100, XP, skill points, nodes | new: XP sources, tree data, save fields |
 | `CombatScale.melee(level)` | the player's current story tier | "level" becomes story tier |
 | No pickup flow | third hand, keep to slot, backpack | new |
@@ -606,32 +614,68 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   time (swap speed as a stat needs one); the loadout is not saved (`CharacterSave.guns`); co-op
   (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
 
+**Step 6 — rarity v2 and modifiers: built 2026-10-10.**
+- **Numbers**: `Rarity.MULTS` 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12; `GunStats.DPS_WINDOW_HI`
+  1.10; `LootRoller.TRASH_BASE_HP` 60. `combat_numbers_probe` rewritten to §3's rows (20 checks).
+  The player's shield capacity reads the same `Rarity.damage_mult`, so shields' colour step shrank
+  with it.
+- **Mythic is red** on the card, the HUD and the floor beam.
+- `GunModifiers` (`scripts/guns/gun_modifiers.gd`): slots by colour (`Rarity.SLOTS`
+  1 / 2 / 3 / 4 / 4 / 4, always full), quality by colour (`Rarity.QUALITY`: the floor of the roll
+  inside a modifier's band), rolled from the gun's seed on a stream of its own, so a save or a peer
+  rebuilds the same list. The first set: +damage (10–20%, may repeat, adds), power shot (every
+  6th–4th round 2×), double fire (every 5th–3rd round a free extra; from purple, the rarer roll:
+  15–25% of rounds, from the owner's seeded stream), Shield Buster (+20–40% on a shield),
+  Overkill Ricochet (green and up: a kill's excess ×1.0–1.5 to the nearest enemy in 12 m),
+  magazine (+20–40%), reload (−10–25%), and the **explosive attachment** (blue and up: every round
+  bursts for 35–60% of its damage over 3 m, half at the edge, not through walls, and wears bricks
+  harder through `StructuralDamage`). Ordnance rolls only the ones that do not count rounds.
+- They reach the game as stats (`GunModifiers.apply`); `GunController` reads them as it fires.
+  Splash and ricochet are hits of their own (`side_hit`, marked on the HUD like a round) through
+  the same `DamageSystem`, never a crit, never onto the holder's side (`GunController.team`).
+  Shield Buster is `DamagePacket.shield_mult`.
+- **Named trade parts**: every tier's second barrel is a *Heavy Barrel* (+8% damage, −10% fire
+  rate) and its second receiver a *Rapid Receiver* (−8% / +15%), on the card. The placeholder parts
+  no longer carry the old part effects (ricochet, explosive, lifesteal, fire ramp): a gun's
+  behaviours are its modifiers now. Authored legendary barrels keep theirs.
+- **The score leaves modifiers out** (`Result.base_stats`, §6).
+- **First red text**: Boilerplate winds up to +60% fire rate over 2 s of held trigger; Sermon puts
+  the round back on a kill. The card says what each does (`LegendaryTable.EFFECT_TEXT`).
+- The card lists the modifiers, one a line, and the trade parts.
+- `tools/modifiers_probe.gd` (19 checks). `test/loot_range_test.gd --probe` passes again: its v1
+  calibration rows (a legendary worth two tiers, a rare one) were replaced by v2's half a tier,
+  and the narrower roll fixed its gun-vs-shield score rows.
+- **Not yet:** the explosive attachment's proximity and chain rolls; split rounds, conditional
+  damage, the handling, swap-speed and utility modifiers; element conversion; Mythic effects; the
+  other three legendaries' red text (Landlord, Hangnail, Dinner Bell); mechs ignore Shield Buster
+  (`MechLayers` judges its own hits).
+
 ---
 
 ## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 5 is **built, tested and merged into `main`**. The player side it
+Everything above through step 6 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 6, rarity v2 and modifiers
+### 15.1 Next: step 7, alt-fire — the tracking dart first
 
-What it must do (§2, §3, §3.1, §6, §11):
+What it must do (§7.2):
 
-- **Numbers**: `Rarity.MULTS` → 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12; `GunStats.DPS_WINDOW_HI`
-  1.28 → ~1.10 and `LootRoller.TRASH_BASE_HP` re-anchored so a median common pistol still takes 6;
-  `combat_numbers_probe` rewritten to §3's rows (it holds v1's today).
-- **Mythic is red** (`GunCard.RARITY_COLORS`, `PlayerHud.RARITY_COLOURS`).
-- **Modifier slots by rarity** (1 / 2 / 3 / 4 / 4 / 4) and quality by rarity
-  (`Rarity.stat_roll_quality`); the parts that already add or multiply stats become modifiers.
-- **First modifiers**: +damage (10–20%), power shot (every Nth round 2×), double fire (every Nth a
-  free extra round; rarer: random from the gun's own stream), Overkill Ricochet, Shield Buster.
-- **Named trade parts**: Heavy Barrel (+8% damage, −10% fire rate), Rapid Receiver (−8% / +15%).
-- **The explosive attachment** and the first red-text effects.
+- **Hold reload** with no floor gun in view and nothing carried flips the gun to its alt-fire mode
+  and back (`PlayerArsenal` already routes hold-reload: pickup, then stow, then this). The HUD
+  shows the mode. A gun with no alt-fire ignores it.
+- **Alt-fire as a roll**: a gun may carry one (a field on the gun from its seed, like the
+  modifiers), shown on the card.
+- **Tracking dart**: in alt-fire mode hold fire to charge (~0.5 s), release a slow projectile
+  (~40 m/s) that does a heavy shot's damage, sticks, and marks the spot 2.5 s or until the next
+  dart. While marked, primary rounds fired within ~15° of the mark bend onto it, and crit if it is
+  in a crit spot (shields still absorb, §4.4). One mark per player.
+- Then the charged plasma shot and the shock arc.
 
 ### 15.2 After that
 
-Steps 7–10 of §12: the tracking dart and other alt-fires; element statuses; the player level and
+Steps 8–10 of §12 (and the rest of step 7): the tracking dart and other alt-fires; element statuses; the player level and
 skill tree; infusion. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
 loadout, co-op drops, pad bindings. Also open: helmets and head crits (switch `Pawn.head_crits` on when
 enemies are figures), and §13's questions.
@@ -648,17 +692,18 @@ enemies are figures), and §13's questions.
 | Damage routing, crit absorb | `scripts/combat/damage_system.gd`, `scripts/combat/health_pool.gd` |
 | Crit spots | `scripts/combat/crit_spots.gd`, `Pawn.head_crits` in `scripts/pawn/pawn.gd` |
 | Gun fire, element on the round | `scripts/combat/gun_controller.gd`; element roll in `scripts/guns/gun_generator.gd` |
+| Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
 | Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (15),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
-(7), `res://scenes/combat_arena.tscn -- --gate` (31). Menu: `res://menu/tests/menu_smoke.tscn`
+(7), `res://scenes/combat_arena.tscn -- --gate` (35), `res://test/loot_range_test.tscn -- --probe`. Menu: `res://menu/tests/menu_smoke.tscn`
 (190), `menu_fit_smoke.tscn` (435).
 
 ### 15.5 Traps hit on the way
@@ -677,5 +722,10 @@ health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_
   patches as Python files with the Write tool.
 - **AI-area files were changed** (`unit_catalog.gd`, `wave_director.gd`, `squad.gd`,
   `bt_play_advance.gd`, `callout_hud.gd`); tell the AI chat if it is mid-change there.
+- **`fights_back_probe`'s "rounds went into the wall" check sits on its line**: 2 of 14 rounds
+  reach the hiding soldier on `main` before step 6 against a 15% limit; step 6's numbers (a lower
+  median damage, light enemies at 60) make it 4 of 15 and it fails, deterministically. The fight
+  itself is unchanged (the soldier still leaves its cover with time in it). AI area: its gun is a
+  seeded loot roll, so any loot change moves it.
 - **`squad_advance_probe` flakes** (fails about one run in two on `main` too). Soldier probes'
   timing checks flake under machine load; rerun alone before blaming a change.
