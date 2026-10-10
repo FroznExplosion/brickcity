@@ -20,6 +20,12 @@ extends Node
 ## RO5): its name over it, its facts for the casebook, and -- when the casebook is
 ## the policy -- what it does next is the book's move, turned into a mode
 ## (BookCombatPolicy.decide_air). With no book it flies the fixed pattern above.
+##
+## A HOVER CRAFT (a recipe whose body is "hover"; AIRoster.md 7, R10) is the same
+## agent, slower and higher, held to a LOITER area round where it was put: it
+## circles inside it and makes slow attack passes, and a target outside the area
+## is fought from its edge, never chased. Shot down, any flyer falls; a hover
+## craft comes down with a crash (CRASH).
 
 const THINK_HZ := 5.0
 const DIRECTED_THINK_HZ := 1.5
@@ -46,6 +52,14 @@ const DECIDE_EVERY := [2.5, 4.5]
 const DIVE_LOW := 18.0
 const DIVE_SPEED := 15.0
 const TAG_ABOVE := 0.9
+## A hover craft: how fast it circles and passes, how high, and the area it keeps.
+const HOVER_SPEED := 6.0
+const HOVER_RUN := 9.0
+const HOVER_UP := 12.0
+const LOITER := 40.0
+## Coming down: gravity, and a hover craft's crash -- [damage, reach].
+const FALL_G := 20.0
+const CRASH := [90.0, 5.0]
 
 var services: AIServices
 var body: CharacterBody3D
@@ -90,6 +104,11 @@ var fuse_at := INF
 var blast_hits: Array = []
 var _went_off := false
 var _decide_at := 0.0
+## A hover craft (above), and the centre of the area it keeps.
+var hover := false
+var loiter_center := Vector3.INF
+## Shot down and on the ground.
+var crashed := false
 
 
 static func spawn(s: AIServices, parent: Node, at: Vector3, p_team: int, g: GunInstance,
@@ -169,6 +188,32 @@ func set_type(id: String, roster: Roster) -> void:
 	tier_cap = TypeKit.tier_cap(str(d.get("tier", "smart")))
 	if tier_cap == AgentTier.DIRECTED and tier_hsm != null:
 		tier_hsm.demote()
+	hover = str(roster.recipe(id).get("body", "")) == "hover"
+	if hover and loiter_center == Vector3.INF:
+		loiter_center = body.global_position
+
+
+## Keep it over `center` (a hover craft's loiter area).
+func set_loiter(center: Vector3) -> void:
+	loiter_center = center
+
+
+## `p` brought inside the loiter area, if it has one.
+func in_area(p: Vector3) -> Vector3:
+	if not hover or loiter_center == Vector3.INF:
+		return p
+	var rel := Vector2(p.x - loiter_center.x, p.z - loiter_center.z)
+	if rel.length() <= LOITER:
+		return p
+	rel = rel.normalized() * LOITER
+	return Vector3(loiter_center.x + rel.x, p.y, loiter_center.z + rel.y)
+
+
+func from_center() -> float:
+	if loiter_center == Vector3.INF:
+		return 0.0
+	var p := body.global_position
+	return Vector2(p.x - loiter_center.x, p.z - loiter_center.z).length()
 
 
 ## A bomber goes off: the blast, and it is gone.
@@ -217,6 +262,7 @@ func _top(x: float, z: float) -> float:
 func _physics_process(delta: float) -> void:
 	if is_dead():
 		gun.set_trigger(false)
+		_fall(delta)
 		return
 	var now := services.now()
 	if now >= fuse_at:
@@ -259,6 +305,27 @@ func _physics_process(delta: float) -> void:
 	_fire()
 
 
+## Shot down: it falls, and a hover craft hits the ground with a crash.
+func _fall(delta: float) -> void:
+	if crashed or _went_off or not is_instance_valid(body) or not body.is_inside_tree():
+		return
+	body.velocity.x *= 0.98
+	body.velocity.z *= 0.98
+	body.velocity.y -= FALL_G * delta
+	body.move_and_slide()
+	var p := body.global_position
+	# Off the edge of the world: down, with nothing to crash on.
+	if p.y < -60.0:
+		crashed = true
+		body.velocity = Vector3.ZERO
+		return
+	if body.get_slide_collision_count() > 0 or p.y - _top(p.x, p.z) < 0.7:
+		crashed = true
+		body.velocity = Vector3.ZERO
+		if hover:
+			blast_hits = Grenade.blast(services, p, null, CRASH[0], CRASH[1])
+
+
 func _think() -> void:
 	_queued = false
 	var now := services.now()
@@ -274,6 +341,11 @@ func _think() -> void:
 	if target == null:
 		state = "patrol"
 		_want = Vector3.ZERO
+		# A hover craft with nothing to fight goes back over its area.
+		if hover and from_center() > LOITER * 0.5:
+			var home := loiter_center - p
+			home.y = height_at(loiter_center) + HOVER_UP - p.y
+			_want = home.normalized() * HOVER_SPEED
 		return
 	var t := target.feet()
 	# What next: the casebook's, when it is the policy; a bomber with no book dives.
@@ -282,7 +354,10 @@ func _think() -> void:
 		if now >= _decide_at and mode != Mode.CLIMB and mode != Mode.DIVE and (mode != Mode.RUN or now > _mode_until):
 			_decide_at = now + services.rng.randf_range(DECIDE_EVERY[0], DECIDE_EVERY[1])
 			mode = services.policy.call(&"decide_air", self, target, services.rng)
-			_mode_until = now + (RUN_SECONDS if mode == Mode.RUN else CLIMB_SECONDS)
+			_mode_until = now + (RUN_SECONDS * (1.6 if hover else 1.0) if mode == Mode.RUN else CLIMB_SECONDS)
+			# A hover craft does not dive: it has no bomb to go off.
+			if hover and mode == Mode.DIVE:
+				mode = Mode.ORBIT
 			if mode == Mode.RUN:
 				var over := t - p
 				over.y = 0.0
@@ -300,8 +375,14 @@ func _think() -> void:
 				mode = Mode.ORBIT
 		Mode.RUN:
 			state = "run"
-			var alt := maxf(height_at(p), height_at(p + _run_dir * RUN_SPEED)) + CLEARANCE + 3.0
-			_want = _run_dir * RUN_SPEED + Vector3.UP * (alt - p.y) * 1.5
+			var rs := HOVER_RUN if hover else RUN_SPEED
+			var alt := maxf(height_at(p), height_at(p + _run_dir * rs)) + CLEARANCE + 3.0
+			_want = _run_dir * rs + Vector3.UP * (alt - p.y) * 1.5
+			# A pass that would take a hover craft out of its area is broken off.
+			var next := p + _run_dir * rs * 1.5
+			if hover and in_area(next) != next:
+				_mode_until = now - 0.01
+				_want = Vector3.ZERO
 			if now > _mode_until:
 				mode = Mode.ORBIT
 				_next_run = now + RUN_EVERY
@@ -318,15 +399,16 @@ func _think() -> void:
 				_next_run = now + RUN_EVERY
 			var rel := Vector2(p.x - t.x, p.z - t.z)
 			_orbit_angle = rel.angle() + 0.35 * orbit_dir
-			var spot := t + Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT
-			spot.y = height_at(spot) + ORBIT_UP
+			var spot := in_area(t + Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT)
+			spot.y = height_at(spot) + (HOVER_UP if hover else ORBIT_UP)
 			var to := spot - p
-			_want = to.normalized() * minf(SPEED, to.length() * 2.0)
+			_want = to.normalized() * minf(HOVER_SPEED if hover else SPEED, to.length() * 2.0)
 
 
 func _pick_target() -> Pawn:
 	var c := services.knowledge_of(team).best(services.now())
-	if c != null and c.pawn != null and is_instance_valid(c.pawn) and c.age(services.now()) < 5.0:
+	if c != null and c.pawn != null and is_instance_valid(c.pawn) and c.age(services.now()) < 5.0 \
+			and c.pawn.health != null and not c.pawn.health.is_dead():
 		return c.pawn
 	var best: Pawn = null
 	var best_d := SIGHT

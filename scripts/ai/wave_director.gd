@@ -215,6 +215,10 @@ func begin() -> void:
 	_player().health.died.connect(_on_player_died)
 	_resurvey()
 	commander.setup(city.ai_services, ENEMY_TEAM)
+	# Fast planes for its soldiers to call in (AIRoster.md R10) -- not in the
+	# gate, whose fights are compared run to run.
+	if not "--gate" in (OS.get_cmdline_args() + OS.get_cmdline_user_args()):
+		city.ai_services.air_of(ENEMY_TEAM).parent = city
 	commander.rally = city._world_box(city.registry.get_building(focus)).get_center()
 	# The first squad a few seconds in: the commander's clock, set back.
 	commander.hold_until(_now() + FIRST_WAVE_AFTER)
@@ -325,6 +329,10 @@ func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> b
 ## points -- AIRoster.md RO11 -- these are free.)
 const AIR_PER_WAVE := 2
 const AIR_KINDS: Array[StringName] = [&"gnat", &"gnat", &"drone"]
+## A hover craft over the focus building from the second reinforcement on, one at
+## a time (AIRoster.md R10): it keeps to the area round it.
+const HOVER_KIND := &"skimmer"
+var hover: Flyer
 var air: Array[Flyer] = []
 
 func _air_wing() -> void:
@@ -348,6 +356,17 @@ func _air_wing() -> void:
 		UnitCatalog.apply_health(f.health, kind, level)
 		f.set_type(str(unit.get("recipe", "")), Roster.shared())
 		air.append(f)
+	if (hover == null or not is_instance_valid(hover) or hover.is_dead()) and bool(UnitCatalog.get_unit(HOVER_KIND).get("built", false)):
+		var unit := UnitCatalog.get_unit(HOVER_KIND)
+		var over: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
+		var at := Vector3(over.x, 0.0, over.z) + Vector3.UP * 40.0
+		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
+				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
+		hover = Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
+		UnitCatalog.apply_health(hover.health, HOVER_KIND, level)
+		hover.set_type(str(unit.get("recipe", "")), Roster.shared())
+		hover.set_loiter(Vector3(over.x, 0.0, over.z))
+		air.append(hover)
 	print("[arena] air wing: %s" % [air.map(func(f): return f.name_tag.text if f.name_tag != null else "flyer")])
 
 
@@ -547,6 +566,9 @@ func _on_player_died() -> void:
 		if p != null:
 			p.health.reset()
 			return
+	# Down already: more hits on the body do not put the respawn off.
+	if _player_dead_at >= 0.0:
+		return
 	_player_dead_at = _now()
 	print("[arena] player down on wave %d" % wave)
 

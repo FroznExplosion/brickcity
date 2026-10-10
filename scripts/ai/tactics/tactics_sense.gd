@@ -47,6 +47,9 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 
 	# The player.
 	add.call("p_seen" if c.visible else "p_suspected")
+	# A plane to call on (AirSupport): the casebook's call_air needs it.
+	if s.air_of(so.team).available():
+		add.call("air_avail")
 	if them.y - feet.y > LEVEL_DIFF:
 		add.call("p_high")
 	elif feet.y - them.y > LEVEL_DIFF:
