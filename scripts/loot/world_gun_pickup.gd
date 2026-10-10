@@ -8,6 +8,8 @@ extends Node3D
 ## with loot on the floor.
 
 const BEAM_HEIGHT := 2.2
+## Every pickup is in this group: what a player can reach for (PlayerArsenal).
+const GROUP := &"gun_pickups"
 const SPIN_SPEED := 0.8
 
 var result: GunGenerator.Result
@@ -20,6 +22,7 @@ static func create(library: GunPartLibrary, res: GunGenerator.Result) -> WorldGu
 	var p := WorldGunPickup.new()
 	p.result = res
 	p.name = "Pickup"
+	p.add_to_group(GROUP)
 
 	p._spin_root = Node3D.new()
 	p.add_child(p._spin_root)

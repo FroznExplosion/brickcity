@@ -706,6 +706,11 @@ var _play_mode := false
 ## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
 ## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
 var _view: PlayerView
+## The player's guns in play: two groups of two, ordnance, grenades, the floor and
+## the backpack (PlayerArsenal; COMBAT_DESIGN 7). Made on first entering the pawn.
+var _arsenal: PlayerArsenal
+## Loot rolls: their own stream, so a drop never moves the gun's or the fight's.
+var _loot_rng := RandomNumberGenerator.new()
 var _fps_hud: PlayerHud
 var _stats_were_visible := false
 ## Hitmarkers and numbers outside the arena, which has its own.
@@ -3927,19 +3932,44 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 		_gun_library = GunPlaceholderParts.build_library()
 	var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(class_id), 1)
 	var gi := GunInstance.from_result(res)
-	if _gun.gun != null:
-		_gun.gun.queue_free()
-	_gun.equip(gi)
-	if _view != null:
-		_view.hold(gi)
+	if _arsenal != null and _player.is_possessing():
+		# The hands are the arsenal's: the new gun takes the place of the one held.
+		_arsenal.replace_in_hand(gi)
 	else:
-		camera.add_child(gi)
-		gi.position = Vector3(0.22, -0.2, -0.45)
+		if _gun.gun != null:
+			_gun.gun.queue_free()
+		_gun.equip(gi)
+		if _view != null:
+			_view.hold(gi)
+		else:
+			camera.add_child(gi)
+			gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
 			else ("%d hits a brick" % StructuralDamage.hits_per_brick(gi.weapon_class))])
 	return gi
+
+
+## What a kill drops (LootRoller, Docs/Weapons/PROGRESSION_SPEC.md 3): guns of the
+## fight's tier on the floor round `at`, as `archetype` (trash .. boss) is generous.
+func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunPickup]:
+	var out: Array[WorldGunPickup] = []
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var t := arena.level if arena != null else 1
+	var drops := LootRoller.roll_drops(archetype, t, t, _loot_rng)
+	for i in drops.size():
+		var d: LootRoller.Drop = drops[i]
+		var cls: StringName = GUN_CLASSES[_loot_rng.randi() % GUN_CLASSES.size()]
+		var res := GunGenerator.generate(_gun_library, _loot_rng.randi(), WeaponClass.builtin(cls),
+				d.tier, d.rarity, d.luck)
+		var p := WorldGunPickup.create(_gun_library, res)
+		add_child(p)
+		var a := TAU * float(i) / float(maxi(drops.size(), 1))
+		p.global_position = at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0)
+		out.append(p)
+	return out
 
 
 ## The gate for the player's gun (Docs/AIPlan.md P1): a generated gun, fired at a
@@ -4119,6 +4149,16 @@ func _enter_pawn(feet: Vector3) -> void:
 		_mech_cmd.brain.leader = _player_pawn
 	_player_hud()
 	_fps_on()
+	if _arsenal == null:
+		_arsenal = PlayerArsenal.new()
+		_arsenal.name = "Arsenal"
+		add_child(_arsenal)
+		_loot_rng.seed = 0x1007
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
+			arena.level if arena != null else 1)
+	_arsenal.fill_default(_loot_rng)
 	print("[city] playing: pawn at %v" % feet)
 
 

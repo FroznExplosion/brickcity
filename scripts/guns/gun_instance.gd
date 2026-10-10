@@ -17,6 +17,8 @@ var weapon_class: WeaponClass
 var tier: int = 1
 var active_effects: PackedStringArray = PackedStringArray()
 var merges: Array[MergeRule] = []
+## What it was made from: dropped on the floor, it becomes a WorldGunPickup of this.
+var result: GunGenerator.Result
 
 var _model_root: Node3D
 var _muzzle_point: Node3D
@@ -37,6 +39,7 @@ static func create(library: GunPartLibrary, gen_seed: int = -1,
 static func from_result(result: GunGenerator.Result,
 		skin_library: GunSkinLibrary = null) -> GunInstance:
 	var gun := GunInstance.new()
+	gun.result = result
 	gun.gun_seed = result.seed
 	gun.rarity = result.rarity
 	gun.gun_name = result.gun_name
