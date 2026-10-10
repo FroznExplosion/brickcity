@@ -1,81 +1,141 @@
 # Combat and weapon design — Borderlands loot, Halo fights
 
-**Status: proposal, agreed in outline 2026-10-05 (melee counted per layer and the element set
-revised the same day); numbers to tune in play.** Supersedes the
-power curve and rarity table of `GUN_SCALING_SPEC.md` / `PROGRESSION_SPEC.md` where they differ
-(§9 lists every change against what is built).
+**Status: version 2, agreed 2026-10-09** (version 1 agreed 2026-10-05). Version 2 adds a player
+level that grows abilities rather than damage, a much smaller rarity damage step with the power
+moved into modifiers, two weapon groups of two guns, floor pickups, tracking-dart alt-fires and
+safehouse infusion. Numbers are to tune in play. Supersedes the power curve and rarity table of
+`GUN_SCALING_SPEC.md` / `PROGRESSION_SPEC.md` where they differ (§11 lists every change against
+what is built; §12 is the build order).
 
 The aim in one line: **Borderlands' loot chase on top of Halo's combat sandbox.** Guns are
-generated, levelled and coloured by rarity, and a better gun really does more damage (Borderlands
-scaling, not Halo's fixed shots-to-kill) — but fights are won Halo's way: strip the defence,
-then land the precision shot, and melee is a real tool in that loop rather than a panic button.
+generated, tiered and coloured by rarity, and the loot keeps the player searching — but fights are
+won Halo's way: strip the defence, then land the precision shot, and melee is a real tool in that
+loop rather than a panic button.
+
+What that means for a gun picked up off the floor: **any gun works.** Every gun of a tier hits
+about as hard as any other of that tier and class, so a white is a real weapon, not junk. A higher
+rarity is better because of *what it carries* — more modifiers, stronger ones, a red-text effect —
+not because its numbers are bigger. The player picks up a white, uses it, and finds it worked but
+was not as good as the purple they lost: that is what drives the search.
 
 ---
 
-## 1. Levels and the power curve
+## 1. Two progressions, kept apart
 
-- **10 weapon levels** (tiers). A gun's level is fixed when it drops. There is no player level.
-- **25% per level**: a gun's base damage, and every enemy's durability, are ×1.25 per level
-  (`TIER_STEP = 1.25`). Level 10 is 7.45× level 1. Damage and durability move together, so on
-  level, shots-to-kill (§3) stay the same at every level.
-- Being **off level** is what changes the numbers: a gun one level behind does 80% of an on-level
-  gun of the same rarity, two behind 64%.
-- Reaching a new level is expected to take a while, so a good gun carries across a level change.
+| | Player level (1–100) | Weapon tier (1–10) |
+|---|---|---|
+| Earned by | XP: kills, objectives, missions | the story: each act / zone opens the next tier |
+| Grows | skill points: abilities, mobility, cooldowns, melee tricks; health or shields **only if the player spends points there** | gun base damage and enemy durability, together |
+| Never touches | gun damage, melee damage | the player's health, abilities |
 
-The 25% is a starting point. It is one constant and enemy health follows it; nothing else needs to
-know.
+The two never feed each other. A player level is never part of a damage number, so on level the
+shots-to-kill (§3) hold whatever the player's level; a higher level gives the player more *ways* to
+fight, not bigger numbers.
+
+### 1.1 Weapon tiers
+
+- **10 tiers**, tied to story progress: tier 1 is the starting outposts, tier 10 the end-game
+  zones. A zone drops guns of its own tier (an enemy above the player's tier drops at its own tier;
+  one below drops at the player's — `LootRoller.drop_tier`, so a low zone is never a farm).
+- **25% per tier**: a gun's base damage, every enemy's durability and the melee (§4.1) are ×1.25
+  per tier (`Tier.TIER_STEP = 1.25`). Tier 10 is 7.45× tier 1. They move together, so on level
+  shots-to-kill are the same at every tier.
+- Being **off tier** is what changes the numbers: a gun one tier behind does 80% of an on-tier gun,
+  two behind 64%.
+- A gun's tier is fixed when it drops, until it is **infused** (§1.2).
+
+### 1.2 Safehouse infusion
+
+At a safehouse workbench the player spends materials to raise a gun to their **current story tier**.
+Everything else about the gun stays: its parts, modifiers, alt-fire, element, name. Only its base
+damage moves to the new tier.
+
+- It can never go above the player's current story tier.
+- The cost grows with the tiers gained and with the gun's rarity (an infused legendary costs more
+  than an infused white).
+- This is what keeps a favourite gun alive. A god-roll purple from tier 2 can come along to tier 7.
+- Built on what is there: a saved gun is `{class, seed, tier, rarity}` (`CharacterSave.gun_entry`),
+  and its tier only scales damage (`GunStats.compute`), never a roll — so infusion is rewriting
+  `tier` in the entry. A probe must hold that: the same seed at two tiers gives the same gun except
+  damage.
+
+### 1.3 Player level and the skill tree
+
+- **Levels 1–100**, from XP. Each level gives a **skill point**; some levels also unlock an
+  **ability** slot or a new ability (grapple hook, overshield, and so on — the mech FPS's kit).
+- **No automatic stat growth.** Health and shields do not rise by themselves with level.
+- **Health and shields are a player choice:** the tree has nodes that raise them, and the player
+  decides whether to spend points there. Their total is capped (about **+30%** over base, all nodes
+  bought) so a high level cannot make a tier trivial — on level an enemy still kills you in about
+  the same number of hits.
+- Everything else in the tree is horizontal: abilities and their cooldowns, mobility (slide, lunge,
+  air dash), swap and reload speed, melee augmentations (§4.2), ammo and grenade capacity.
+- Where it lives: `CharacterSave.character` already has `level`; XP, skill points and bought nodes
+  join it.
 
 ## 2. Rarity
 
-Six rarities. Rarity multiplies base damage (Borderlands), and buys modifier slots (§6).
+Six rarities. Rarity buys **modifier slots and modifier quality**, and a **small** damage step so a
+higher colour is felt in the hand — but not so much that a white stops working.
 
-| Rarity | Colour | Damage | Slots | Worth (levels of growth) |
+| Rarity | Colour | Damage | Slots | On top |
 |---|---|---|---|---|
 | Common | white | 1.00× | 1 | — |
-| Uncommon | green | 1.15× | 2 | 0.6 |
-| Rare | blue | 1.30× | 3 | 1.2 |
-| Unique | purple | 1.45× | 4 | 1.7 |
-| Legendary | orange | 1.75× | 4 + red text | 2.5 |
-| Mythic | pink | 1.75× | 4 + red text + a mythic effect | 2.5 |
+| Uncommon | green | 1.03× | 2 | — |
+| Rare | blue | 1.06× | 3 | — |
+| Unique | purple | 1.09× | 4 | — |
+| Legendary | orange | 1.12× | 4 | red text: a hand-written effect |
+| Mythic | **red** | 1.12× | 4 | red text + a mythic effect |
 
-"Worth" = ln(rarity) / ln(1.25): how many levels of growth the colour is worth. The rules this
-table is built to hold:
-
-- **A purple stays viable for two levels.** One level on, a level N purple (1.45 / 1.25 = 1.16) is
-  about a **good uncommon** of level N+1. Two levels on (0.93) a common overtakes it.
-- **A blue is worth about one level**: a level N+1 white ≈ a level N blue.
-- **Legendary and Mythic share a damage multiplier.** A Mythic's special effect is what makes it
-  better; it does not also need more damage. (If play says it does, ~1.9× is the next step.)
+- The whole colour range is worth about **half a tier** of damage (ln 1.12 / ln 1.25 = 0.51). A
+  colour on its own does not change a shots-to-kill count (§3); a built gun does.
+- **Modifier quality climbs with rarity.** A modifier rolls inside a band (§6), and a higher rarity
+  rolls nearer the top (`Rarity.stat_roll_quality`, already a field). So a purple's +damage
+  modifier is usually bigger than a green's, and it has three more of them.
+- Legendary and Mythic share a damage step: a Mythic's own effect is what makes it better.
 
 ## 3. Shots to kill — the anchor
 
-Borderlands scaling, but with Halo's habit of designing around shots-to-kill. The anchor:
+Halo's habit: design around shots-to-kill and keep them readable. The anchor, on level, against a
+light enemy (the `trash` archetype, `LootRoller.TRASH_BASE_HP` = 64 at tier 1), with a median-roll
+pistol (11.05 a shot at tier 1):
 
-> **On level, a common pistol kills a light enemy in 6 body shots (5–7 is the band). A legendary
-> pistol of the same level kills it in 2–3.**
+| Light enemy, pistol, on level | Damage a shot | Body shots | Headshots (2×) |
+|---|---|---|---|
+| Common | 11.05 | **6** | **3** |
+| Legendary, no modifiers (1.12×) | 12.4 | 6 | 3 |
+| Common + one damage modifier (+20%) | 13.3 | 5 | 3 |
+| Legendary + one damage modifier (+20%) | 14.9 | 5 | 3 |
+| Purple or legendary + two damage modifiers (+40%) | 16.9–17.3 | **4** | **2** |
+| Any of the above, one tier behind (×0.8) | — | one more, usually | — |
 
-"A common pistol" is the **median roll**: a gun's per-shot damage trades against its fire rate
-(`GunStats`, a common pistol rolls ~8–16 a shot), so the anchor holds for the middle of the range
-and the band absorbs the ends. The light enemy is the `trash` archetype; its level-1 health
-(`LootRoller.TRASH_BASE_HP`) is set from this anchor.
+**The colour gets you nothing alone; the build does.** A two-headshot kill takes a gun with the
+slots to carry two damage modifiers (purple and up) *and* the aim. That is the chase: a white works,
+a built purple works better, a legendary works better again because its red text does something no
+white can.
 
-A 1.75× legendary alone takes 4 body shots, so the last step comes from **skill or build, not the
-colour alone**:
-
-| Light enemy, pistol, on level | Body shots | With headshots (2×) |
-|---|---|---|
-| Common 1.00× | 6 | 3 |
-| Uncommon 1.15× | 6 | 3 |
-| Rare 1.30× | 5 | 3 |
-| Unique 1.45× | 5 | 3 |
-| Legendary 1.75× | 4 | **2** |
-| Legendary + one damage modifier (+20%) | **3** | **2** |
-| Legendary from last level (1.40×) | 5 | 3 |
+Power-shot and double-fire modifiers (§6) change the count for some shots of a magazine rather than
+every shot; they are counted in their own rows when built.
 
 Every other class gets its own anchor row against the light enemy (a rifle ~8 body / 4 head, a
 sniper 2 body / 1 head, a shotgun 1–2 close), so a class's feel is set once and holds at every
-level. The class presets already carry per-class damage at ~60 DPS parity; the anchors become
-their acceptance tests.
+tier.
+
+### 3.1 Variance inside one colour
+
+Two guns of the same class, tier and rarity differ in **how** they deal damage, not how much:
+
+- **Named parts carry the trades**, readable on the card: a *Heavy Barrel* +8% damage −10% fire
+  rate; a *Rapid Receiver* −8% damage +15% fire rate. A part's trade stays inside **±5–10%** on any
+  one stat.
+- The hidden power roll shrinks: today a gun's DPS rolls 1.00–1.28× (`GunStats.DPS_WINDOW`), wider
+  than the whole rarity range. It comes down to about **1.00–1.10×**, so two guns of one colour
+  never sit a shots-to-kill count apart on the roll alone. The damage-vs-fire-rate trade
+  (`FIRE_BASE` 0.80–1.25) stays: it is feel, not power.
+  Shrinking it lowers the median roll (1.14× to 1.05×), so the light enemy's health is re-anchored
+  with it (`TRASH_BASE_HP` about 64 → 59) to keep a median common at 6 shots — the §3 table is
+  in shots, and the shots are what must hold.
+- Part quality's own swing stays at ±3% (`PART_SWING`).
 
 ## 4. Enemies: defences, crits and melee
 
@@ -97,15 +157,33 @@ counted per LAYER, not as one pool of health:
 | Medium | 3 | 1 | **4** |
 | Heavy | more | more | per type |
 
-Melee damage is sized to that: **one melee = one step at the player's level**, and grows ×1.25 per
-level with everything else, so on level the counts never change. An enemy above your level takes
-1.25× per level as much, and the extra hit shows up there first.
+**Melee damage scales with the player's current story tier** — not the gun in hand, not the
+player level. One melee = one step at that tier (`CombatScale.melee`): 64 at tier 1, ×1.25 a tier
+(156 at tier 5, 477 at tier 10), and **1.5× against shields**, so one melee always breaks one
+"melee's worth" of shield. On level the counts never change. An enemy above your tier takes 1.25× per
+tier as much, and the extra hit shows there first.
 
 Guns wear the same layers, so an enemy already shot up takes fewer melees — the counts above are
 for an untouched enemy, and the HUD should show a cracked shield or armor so the player can read
 that too.
 
-### 4.2 Defences sit over the flesh
+### 4.2 Melee in the skill tree — the Vanguard Brawler branch
+
+Melee damage itself never comes from the player level (§1). What the level buys is what a melee
+*does*:
+
+| Node | Effect |
+|---|---|
+| **Kinetic Lunge** (mobility) | +50% melee lunge distance; a sprinting slide-punch launches light enemies backward. Closes the gap on a staggered enemy for the finishing blow. |
+| **Shield-Shatter Shockwave** (tactical) | A melee that breaks a shield sends a shockwave, 4 m round: staggers everything in it and strips 25% of *their* shields. |
+| **Backstab** (lethality) | A melee from behind does 2.5×, and a heavy enemy's frontal armor plates do not cover its back. This deliberately breaks the §4.1 counts from behind: a paid-for skill, read by position. |
+| **Vampiric Impact** (sustain) | A melee kill restores 50% of your shield and refills the magazine of the gun in hand. |
+
+These are the first branch; other branches (marksman, elements, mobility, survival — where the
+health and shield nodes live) are to design. The brawler loop they serve: **punch to break a
+defence, shoot to finish, refill the shield, push the next one.**
+
+### 4.3 Defences sit over the flesh
 
 An enemy is **flesh** (or, for plant-based enemies, **vegetation**) and may wear **shield** and/or
 **armor** over it. Guns break them too.
@@ -117,68 +195,99 @@ An enemy is **flesh** (or, for plant-based enemies, **vegetation**) and may wear
 | Flesh | no | **Acid** | Takes crits |
 | Vegetation | no | **Fire** | Plant enemies' flesh. Takes crits |
 
-Gun shots-to-kill (§3) are against the flesh; defences add their own shots on top, and each enemy
-type's card lists both. A very light enemy's flesh can be less than a light one's for guns (a
-common pistol: 3 shots vs 6) while still being one melee for both.
+The enemy kinds, in game terms:
 
-### 4.3 Crits are places, not dice
+- **Shielded infantry** (an "Elite"): a regenerating shield over flesh; the shield eats headshots.
+- **Armored brutes and heavy mechs**: armor plates and big health; strip the armor, or get round it
+  (Backstab, weak spots).
+- **Light swarms** (grunts, drones): little health, many of them; the targets for chain effects —
+  Overkill Ricochet, explosive rounds.
+
+Gun shots-to-kill (§3) are against the flesh; defences add their own shots on top, and each enemy
+type's card lists both.
+
+### 4.4 Crits are places, not dice
 
 A crit is a hit on a **crit spot** — usually the head, sometimes a weak point (a pack, a joint) per
-enemy type. Each pawn gets a small hurtbox per spot. The random `crit_chance` roll goes.
+enemy type. Each pawn gets a small hurtbox per spot. There is no random crit roll.
 
-- **Crit multiplier**: 2× (the class may vary it; a sniper higher).
+- **Crit multiplier**: 2× (a DMR or revolver 2.5×, a sniper 3×).
 - **Shields and armor absorb crits**: while a shield is up, or while a helmet covers the head, a
   head hit does normal damage to that defence.
-- Deterministic: where the round hit decides it, not a roll — every co-op peer agrees for free.
+- Deterministic: where the round hit decides it — every co-op peer agrees for free.
 
-### 4.4 Shield gating
+### 4.5 Shield gating
 
 When a body shot breaks a shield, **only half the damage left over carries into the flesh.** When
 a **headshot** breaks it, the gate is skipped and the whole rest carries — the precision shot is
 rewarded even through the last sliver of shield.
 
-### 4.5 The loop this is built to encourage (not force)
+### 4.6 The loop this is built to encourage (not force)
 
-- **Melee, then the head**: a melee strips a shield or cracks a helmet, and the next headshot
-  crits for the kill.
-- **Strip, then finish**: plasma rounds take the shield down fast, a kinetic or acid headshot
-  finishes the flesh.
-- **Weaken, then punch**: rounds wear the shield or armor thin, a melee breaks it, and the next
-  melee (or a headshot) takes the flesh — the count the player can read.
+- **Melee, then the head**: a melee strips a shield or cracks a helmet, and the next headshot crits
+  for the kill.
+- **Strip, then finish**: plasma takes the shield down fast, a kinetic or acid headshot finishes the
+  flesh.
+- **Weaken, then punch**: rounds wear the shield or armor thin, a melee breaks it, and the next melee
+  (or a headshot) takes the flesh.
+- **Tag, then pour**: a tracking dart (§7.2) marks a spot, the follow-up rounds go there.
 
 None of it is required; all of it is faster than holding the trigger on a shield.
 
+**Worked example — the Elite.** A tier-5 Elite Commander: shield over flesh. Group 1 is a blue
+plasma pistol (charged-shot alt-fire) and a purple kinetic DMR (two damage modifiers, Overkill
+Ricochet).
+
+1. Tap swap to the plasma pistol; hold the trigger and release the charged shot: plasma is 2×
+   against shields, and the charged shot takes the whole shield (it costs the pistol's heat — §7.2).
+2. Tap swap to the DMR. The shield is down, so the head is open: crits land.
+3. Two headshots. The second kills, and Overkill Ricochet carries the excess into the grunt beside
+   it.
+
 ## 5. Damage types and elements
 
-**Kinetic** is every gun's baseline. On top, a gun may carry **one element** (the per-gun element
-ratio already built stays: part of each round is element, the rest kinetic). One element per
-layer type, so the chart is one line each:
+Elements stay, Borderlands-style: **kinetic** is every gun's baseline, and a gun may carry **one
+element** (part of each round is element, the rest kinetic — the per-gun ratio already built). One
+element per layer type, so the chart is one line each:
 
-| Element | Strong vs | Also |
+| Element | Strong vs | Status |
 |---|---|---|
 | **Plasma** | Shield (2×) | — |
-| **Corrosive** | Armor (2×) | — |
+| **Corrosive** | Armor (2×) | corrodes: armor keeps losing a little for a few seconds |
 | **Acid** | Flesh (1.5×) | — |
-| **Fire** | Vegetation (2×) | burns plant enemies over time |
+| **Fire** | Vegetation (2×) | burns: flesh and vegetation take damage over time |
 | **Ice** | — (neutral damage) | slows, and freezes an enemy that takes enough |
 
-Nothing is weak AGAINST an element (no 0.5× rows): an element is a bonus where it fits and plain
-damage where it does not. Simple enough to hold in your head mid-fight.
+- Nothing is weak AGAINST an element (no 0.5× rows): an element is a bonus where it fits and plain
+  damage where it does not. Simple enough to hold in your head mid-fight.
+- **Statuses are not dice.** In Borderlands a burn is a chance to proc; here the element part of a
+  round always builds its status, so co-op peers agree and the player can count on it.
+- Building **an element to match the enemy** is the Borderlands half of the loop: a plasma gun in
+  one group for shielded infantry, a corrosive one for armor.
 
-**Shock is not a gun element.** It belongs to special weapons (§7): a shot that arcs from enemy to
-nearby enemy and slows each one it touches — a Wunderwaffe.
+**Shock is not a gun element.** It belongs to special weapons (§7.3): a shot that arcs from enemy to
+nearby enemy and slows each one it touches.
 
-**Explosive is not an element either** — it is an **attachment** (§6.1), as in Borderlands 4.
+**Explosive is not an element either** — it is an **attachment** (§6.1).
 
 ## 6. Modifiers
 
-Rarity sets the number of slots (§2). Modifiers are percentages, so they scale with level for free:
+Rarity sets the number of slots and how high the modifiers roll (§2). Modifiers are percentages or
+counts, so they scale with tier for free. **This is where a gun's power comes from.**
 
+- **Damage**: +X% damage (rolls +10–20%; a higher rarity rolls nearer +20%). Two of them on one gun
+  is what moves a shots-to-kill count (§3).
+- **Firing personality**:
+  - **Power shot**: every Nth round (N = 4–6) does 2×.
+  - **Double fire**: every Nth round fires a free extra round (no ammo). A rarer roll makes it
+    random instead — about one round in five — drawn from the gun's own seeded stream so every peer
+    agrees.
+  - **Split rounds**, **conditional damage** (+X% on a staggered enemy, on a shield-broken enemy),
+    **Overkill Ricochet** (a killing blow's excess, up to 150%, jumps to a nearby enemy),
+    **Shield Buster** (+X% against shields).
 - **Stat**: magazine, reload, handling (ADS speed, recoil, sway), swap speed.
 - **Utility**: shield regen on kill, ammo back on headshot, longer slide, faster melee.
-- **Mechanical**: element conversion, split rounds, conditional damage (+X% on a staggered
-  enemy), **Overkill Ricochet** (a killing blow's excess jumps to a nearby enemy).
-- **Damage** (+X%) is a modifier like any other — the "build" half of §3's 2–3 shots.
+- **Mechanical**: element conversion; the **explosive attachment** (§6.1).
 
 Legendary red text and Mythic effects are named, hand-written behaviours, not random rolls.
 
@@ -195,70 +304,173 @@ round's own element (or kinetic). Rarer rolls change *when* it explodes:
 
 Explosive rounds also **wear bricks harder** (§8) — they chip walls faster but do not blow holes.
 
-## 7. Carrying four guns, ordnance and grenades
+## 7. Loadout, alt-fire and ordnance
 
-**Four gun slots** (Borderlands), with swap. Swap speed becomes a real stat, and the HUD shows the
-four. Ammo per type (light / rifle / sniper / shell) is shared across them.
+### 7.1 Two groups of two guns
 
-**Ordnance** is its own slot (Borderlands 4): rocket launchers and **special weapons** —
-cooldown- or charge-gated rather than magazine-gated (the ordnance classes already built work this
-way). **Hold the swap button** to bring the ordnance up; tap swap cycles the four guns. Special
-weapons are where unusual effects live, **shock** first: the round arcs across several nearby
-enemies and slows them.
+```
+ Group 1          Group 2
+ [ A ] [ B ]      [ A ] [ B ]
+```
 
-The same ordnance effects can also roll onto a gun as an **underbarrel / alternate fire** (a
-grenade tube under a rifle, a shock arc on a pistol's second trigger), on the same cooldown rules.
+- **Tap swap** (Y on a pad): instantly to the other gun in the active group. This is Halo's
+  two-gun swap, built for "strip with one, finish with the other".
+- **Hold swap**: to the other group (its last-held gun). For a big change of target — infantry
+  clearing to mech killing.
+- **Tap must not wait for hold to be ruled out.** The swap starts on the press; if the button is
+  still down at the hold threshold (~0.25 s), the in-group swap is cut short and the group swap
+  runs instead. A tap never waits.
+- Two groups for now. A third is a later choice.
+- Swap speed is a real stat (modifiers, skill tree). Ammo per type (light / rifle / sniper / shell)
+  is shared across all four guns.
+- On a keyboard, number keys pick a slot directly (1–2 group 1, 3–4 group 2) as well as the swap
+  key. All of it is rebindable.
 
-**Grenades** have a slot of their own and are **thrown with G** (right bumper on a pad) without
-putting the gun away. A grenade is ordnance for bricks (§8): it blasts.
+### 7.2 Alt-fire
 
-| Input | Does |
+A gun may roll an **alt-fire** (its second trigger). It is part of the gun's personality, like its
+modifiers, and stays with it through infusion. Alt-fires are setup tools that still do real damage —
+never a zero-damage tag.
+
+**Tracking dart** (hold to charge):
+
+- Hold the alt-fire to charge (~0.5 s), release to fire a heavy **dart**. It does real damage on
+  the hit, as a heavy shot would.
+- The dart is a **projectile**, deliberately slow (start at about 40 m/s, to tune): the player
+  leads a moving target. Landing it is the skill.
+- It sticks where it hits and **marks that spot for 2–3 s** (start at 2.5 s), or until the player
+  fires another dart — a new dart ends the old mark at once, hit or miss.
+- While the mark holds, the player's primary rounds **go to the marked spot**. If the dart is in a
+  crit spot (the head), the rounds that go there **crit** — the precision was in landing the dart.
+- Shields and helmets still absorb crits (§4.4): a dart in a shielded Elite's head gives no crit
+  until the shield is down. Tag-then-pour does not skip the strip.
+- Guns are hitscan, so "go to the spot" is a **cone**: a round fired within about 15° of the mark
+  is bent onto it; one fired further off flies straight. The player still has to point at the
+  target.
+- One mark per player.
+
+**Homing (any other homing source)** — a seeker round, a homing launcher: aims at the **centre of
+the target's body** and **can never crit**. Halo's needler, not an aimbot.
+
+**Charged shot** (the plasma pistol's): hold to charge, release a shot that takes a whole shield.
+It costs the gun's heat (or a large ammo bite) so it cannot be spammed; it is a shield answer, not
+a damage answer.
+
+**Other alt-fires** come from the ordnance effects: an underbarrel grenade tube on a rifle, a shock
+arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldowns, like ordnance.
+
+### 7.3 Ordnance and grenades
+
+- **Ordnance** is its own slot (Borderlands 4): rocket launchers and **special weapons** — gated by
+  a cooldown or charge, not a magazine. **D-pad right** brings it up (a key on the keyboard); swap or
+  D-pad right again goes back to the gun you had.
+- Special weapons are where unusual effects live, **shock** first: the round arcs across several
+  nearby enemies and slows them.
+- **Grenades** have a slot of their own and are **thrown with G** (right bumper on a pad) without
+  putting the gun away. A grenade is ordnance for bricks (§8): it blasts.
+
+### 7.4 Picking up a gun off the floor
+
+A gun on the floor (`WorldGunPickup`, with its card and rarity beam) can be tried without touching
+the loadout:
+
+- **Hold X** (the interact key): pick it up into a **third hand**. The loadout is untouched.
+- **Tap swap** while holding it: drop it where you stand and draw the gun you had.
+- **Keep it**: hold **D-pad left** to put it in slot A of the active group, **D-pad up** for slot B.
+  The gun it replaces drops where you stand (a backpack is a later choice — §13).
+- Switching group, or picking up another floor gun, drops the one in the third hand.
+
+### 7.5 Input summary
+
+| Input (pad / keyboard) | Does |
 |---|---|
-| Swap (tap) | next of the four guns |
-| Swap (hold) | the ordnance |
+| Y tap / swap key tap | the other gun in the group |
+| Y hold / swap key hold | the other group |
+| 1–4 (keyboard) | that slot directly |
+| D-pad right / ordnance key | the ordnance |
 | G / right bumper | throw a grenade |
+| X hold / interact hold | pick a floor gun into the third hand |
+| D-pad left / up (holding a floor gun) | keep it in slot A / B of the active group |
+| Alt-fire (aim button on guns that have one, or its own key) | the gun's alt-fire |
+| Right stick click / E | melee |
+
+Alt-fire and aim share a button on a pad, so a gun with an alt-fire either has no aim-down-sights
+or puts the alt-fire on a separate bind; to decide when alt-fire is built (§13).
 
 ## 8. Bricks
 
 Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive rounds chip
-harder**; **ordnance blasts** — rocket launchers and grenades are where big holes come from. Elements do not
-change brick damage (fire scorching bricks is a cosmetic mark, already built).
+harder**; **ordnance blasts** — rocket launchers and grenades are where big holes come from. Elements
+do not change brick damage (fire scorching bricks is a cosmetic mark, already built).
 
-## 9. Against what is built
+## 9. Version 1 (2026-10-05) in short
 
-| Built (BoomerBorder copy) | This design | Change |
+What version 2 changed from it, for anyone reading §14's history: rarity damage was
+1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 (a purple viable two tiers; infusion now does that job);
+four gun slots with tap-to-cycle and hold-for-ordnance (now two groups of two, ordnance on D-pad
+right); no player level at all (now 1–100, abilities only); Mythic was pink (now red); the shot
+anchor was "a legendary pistol kills in 4 body / 2 head" (now that takes a built gun).
+
+## 10. Not in this design
+
+- No player level in any damage number, gun or melee.
+- No random crits, no random status procs.
+- No unbounded scaling: tiers end at 10; past that is a difficulty choice, not more numbers.
+
+## 11. Against what is built
+
+| Built | This design | Change |
 |---|---|---|
-| `TIER_STEP = 1.6` (68.7× over 10 tiers) | 1.25 (7.45×) | constant; enemy HP table moves with it |
-| `Rarity.MULTS` 1.0 / 1.3 / 1.6 / 2.0 / 3.3 / 5.0 | 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | constant; names unchanged (Unique stays) |
-| Crit = random `crit_chance` × class `crit_mult` | crit spots (hurtboxes), 2× | hurtboxes on pawns; `GunController._hit_living` reads the spot hit |
-| Defence layers stack, spill over in full | shield / armor / flesh / vegetation; crits absorbed; shield gating; melee stops at the layer it breaks | `HealthPool`: a carry-over factor and crit/melee flags on the packet |
-| Elements incl. shock, corrosive, acid, fire; weak-against rows | plasma / corrosive / acid / fire / ice, bonus-only; shock on special weapons | element list and matrix (data); ice's slow/freeze is a status |
-| "Explosive" as a gun effect | an attachment: always area damage; proximity and chain variants | effect becomes an attachment with variants |
-| No melee | per-layer, level-scaled melee | new: input, motion, hit, damage |
-| One gun in hand | four gun slots + an ordnance slot; alt-fire | inventory, HUD, view (swap) |
-| Parts with stat adds/mults, rarity → extra parts | slot-limited modifiers + red text | parts become modifiers; slots by rarity |
-| Ordnance blasts bricks, guns chip | + explosive rounds chip harder | one multiplier in `StructuralDamage` |
+| `Rarity.MULTS` 1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75 | 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12 | constant; `combat_numbers_probe` anchor rows rewritten to §3 |
+| `GunStats.DPS_WINDOW` 1.00–1.28 | about 1.00–1.10 | constant; the median moves, so `LootRoller.TRASH_BASE_HP` is re-anchored (§3.1) |
+| Parts with stat adds/mults, rarity → extra parts | slot-limited modifiers, quality by rarity, named trade parts, red text | parts become modifiers |
+| Mythic colour `GunCard.RARITY_COLORS[5]` (1.0, 0.25, 0.35) | red | already red-ish; check it reads as red next to orange |
+| `CharacterSave.character.level` (unused) | player level 1–100, XP, skill points, nodes | new: XP sources, tree data, save fields |
+| `CombatScale.melee(level)` | the player's current story tier | "level" becomes story tier |
+| No pickup flow | third hand, keep to slot | new |
+| One gun in hand | two groups of two, ordnance on D-pad right, grenade on G | inventory, HUD, view (swap) |
+| Crit spots, layers, gating, five elements (built) | unchanged | — |
+| Fire burn, ice slow/freeze (not built) | + corrosive corrode; statuses always build | statuses (`scripts/status/` exists) |
 
-## 10. Build order (proposed)
+## 12. Build order
 
 Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and the soldiers are.
 
-1. **Numbers**: `TIER_STEP`, rarity table and names, enemy HP; the §3 anchors as a probe.
-2. **Crit spots**: head hurtboxes, crit by location, shields/armor absorb crits.
-3. **Layers**: shield / armor / flesh / vegetation per enemy type, shield gating, the five
-   elements.
+1. ~~Numbers~~ (built; v2 changes them again in step 6).
+2. ~~Crit spots~~ (built; deferred until enemies have heads).
+3. ~~Layers and elements~~ (built).
 4. **Melee**: key, motion, hit, per-layer counts, the melee-then-headshot loop tested.
-5. **Four slots, ordnance, grenades**: inventory, tap/hold swap, the grenade throw (G), HUD.
-6. **Modifiers**: slots by rarity, the first modifier set, the explosive attachment, the first
-   red-text effects.
-7. **Special weapons and alt-fire**: the shock arc first.
+5. **Two groups, ordnance, grenades, pickups**: inventory, tap/hold swap, D-pad ordnance, G throw,
+   the third hand, HUD for the four.
+6. **Rarity v2 and modifiers**: the new rarity step and DPS window, slots and quality by rarity,
+   the first modifiers (damage, power shot, double fire, Overkill Ricochet), named trade parts, the
+   explosive attachment, the first red-text effects.
+7. **Alt-fire and special weapons**: tracking dart first, then the charged plasma shot and the shock
+   arc.
+8. **Elements' statuses**: burn, corrode, ice slow/freeze.
+9. **Player level and the skill tree**: XP, points, the Vanguard Brawler branch, health/shield
+   nodes with their cap, the first abilities.
+10. **Safehouse infusion**: workbench, materials, the same-gun-at-another-tier probe.
 
-## 11. Progress
+## 13. Open questions
+
+- Keep a backpack (Borderlands) or only the four guns plus the floor (Halo)?
+- Co-op loot: shared floor guns (first to pick up owns it) or instanced per player?
+- Alt-fire bind on a pad (it collides with aim).
+- Melee key: E is free on a keyboard (V and F are taken in `city_scene.gd`); right stick click
+  on a pad.
+- Infusion materials: what they are and where they drop.
+- The other skill-tree branches and the ability list.
+
+---
+
+## 14. Progress (what is built)
 
 **Step 1 — numbers: built 2026-10-06.**
 - `Tier.TIER_STEP` 1.6 → **1.25**; `GunQuality.LN_STEP` follows (a level is still 100 score
   points).
 - `Rarity.MULTS` → **1.0 / 1.15 / 1.30 / 1.45 / 1.75 / 1.75**; the names stay (purple is Unique).
+  (Version 2 replaces these with 1.00–1.12 — §2; not built yet, §12 step 6.)
 - `LootRoller.TRASH_BASE_HP` (the light enemy) 45 → **64**, set from the §3 anchor: a median common
   pistol (11.05 a shot) kills it in 6. `LootRoller.enemy_hp` already steps with `Tier`, so every
   archetype moved with the curve.
@@ -315,17 +527,18 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 
 ---
 
-## 12. Handoff — pick up here (2026-10-06)
+## 15. Handoff — pick up here (2026-10-06, next steps updated 2026-10-09)
 
 Everything above through step 3 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 12.1 Next: step 4, melee
+### 15.1 Next: step 4, melee
 
-What it must do (§4.1, §4.5):
+What it must do (§4.1, §4.6):
 
-- **One melee = `CombatScale.melee(level)`**, the player's level. Against a shield it does 1.5×
+- **One melee = `CombatScale.melee(level)`**, at the player's current story tier (§4.1; never
+  the player level). Against a shield it does 1.5×
   (that is why a shield's layer health is ×1.5 in `CombatScale.layer_hp` — the two must match, so
   one melee breaks exactly one shield-melee). Add the 1.5 as a damage type (e.g. a `&"melee"` row in
   `Elements.TABLE` with `&"shield": 1.5`, or a packet flag read in `DamageSystem`).
@@ -346,15 +559,14 @@ What it must do (§4.1, §4.5):
   and 6), checks a melee that breaks a defence leaves the flesh untouched, and the
   melee-then-shoot loop.
 
-### 12.2 After that
+### 15.2 After that
 
-5. Four gun slots + ordnance (hold swap) + grenade slot (G / right bumper), HUD for the four.
-6. Modifier slots by rarity (parts become modifiers), the explosive attachment, first red text.
-7. Special weapons / alt-fire, the shock arc first.
-Also open: ice slow/freeze and fire burn (statuses — `scripts/status/` exists from BoomerBorder);
-helmets and head crits (switch `Pawn.head_crits` on when enemies are figures).
+Steps 5–10 of §12: two groups of two guns with ordnance on D-pad right, grenades and floor pickups;
+rarity v2 and the modifiers; the tracking dart and other alt-fires; element statuses; the player
+level and skill tree; infusion. Also open: helmets and head crits (switch `Pawn.head_crits` on when
+enemies are figures), and §13's questions.
 
-### 12.3 Where things are
+### 15.3 Where things are
 
 | What | File |
 |---|---|
@@ -370,7 +582,7 @@ helmets and head crits (switch `Pawn.head_crits` on when enemies are figures).
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
 | Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
 
-### 12.4 Tests to run before merging
+### 15.4 Tests to run before merging
 
 Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (15),
 `crit_probe` (10), `defence_probe` (19), `moves_probe` (39), and the AI ones that read soldier
@@ -379,7 +591,7 @@ health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_
 (7), `res://scenes/combat_arena.tscn -- --gate` (31). Menu: `res://menu/tests/menu_smoke.tscn`
 (190), `menu_fit_smoke.tscn` (435).
 
-### 12.5 Traps hit on the way
+### 15.5 Traps hit on the way
 
 - **After merging `main`, rebuild the engine library and re-import** (`python -m SCons` in
   `gdextension/brick`, then `--import`). Three times a run "failed" with parse errors that were only
