@@ -177,6 +177,7 @@ func setup(p_city: Node3D) -> void:
 	commander.spawner = request_squad
 	commander.can_truck = true
 	commander.room_at = func(p: Vector3) -> Dictionary: return CityRooms.at(city, p)
+	_wire_support()
 
 
 ## Pick the focus, hold it as bricks, and put the player in the street.
@@ -325,76 +326,120 @@ func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> b
 	return true
 
 
-## Flyers the roster has (a flying bomber, a drone) come in with a reinforcement,
-## from the second on (`-- --air`: from the first): AIR_PER_WAVE of them, from
-## over the rooftops. Not in a gate: its checks count a wave's soldiers. (Until the commander buys recipes by
-## points -- AIRoster.md RO11 -- these are free.)
+## Air and armour (AIRoster.md RO10, RO11): the COMMANDER buys them with its
+## points as support (Commander.buy_support, Doctrine.support) -- a flyer or
+## hover craft of the roster, or a tank -- and this host fields them
+## (_field_support). Not in a gate: its checks count a wave's soldiers.
+##
+## Two switches field them free, for trying them out: `-- --air`, AIR_PER_WAVE
+## flyers and the Skimmer with every reinforcement; `-- --tank`, a tank.
 const AIR_PER_WAVE := 2
 const AIR_KINDS: Array[StringName] = [&"gnat", &"gnat", &"drone"]
-## A hover craft over the focus building from the second reinforcement on, one at
-## a time (AIRoster.md R10): it keeps to the area round it.
+## A hover craft keeps to the area over the focus building (AIRoster.md R10).
 const HOVER_KIND := &"skimmer"
 var hover: Flyer
 var air: Array[Flyer] = []
-## The enemy's tank (`-- --tank`, AIRoster.md RO10), and the squad screening it.
+## The enemy's tank, and the squad screening it.
 var tank: Tank
+
+
+## The commander's support, wired when this is not a gate.
+func _wire_support() -> void:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if "--gate" in args:
+		return
+	commander.support_spawner = _field_support
+	commander.support_up = func() -> Dictionary:
+		air = air.filter(func(f): return is_instance_valid(f) and not f.is_dead())
+		return {&"air": air.size(),
+				&"tank": 1 if tank != null and is_instance_valid(tank) and not tank.is_wrecked() else 0}
+
+
+## What the commander bought: `unit` of `kind` (&"air" or &"tank").
+func _field_support(kind: StringName, unit: StringName) -> bool:
+	if _player() == null:
+		return false
+	print("[arena] the commander buys %s (%.1f pts of %.1f), answering %s / %s" % [unit,
+			UnitCatalog.points(unit), commander.budget, commander.doctrine.answering,
+			commander.doctrine.answering_armor])
+	if kind == &"tank":
+		return _field_tank()
+	return _field_flyer(unit) != null
+
 
 func _air_wing() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
-	var p := _player()
-	if (wave < 2 and not "--air" in args) or p == null or "--gate" in args or Roster.shared() == null:
+	if not "--air" in args or "--gate" in args or _player() == null or Roster.shared() == null:
 		return
 	air = air.filter(func(f): return is_instance_valid(f) and not f.is_dead())
-	if city._gun_library == null:
-		city._gun_library = GunPlaceholderParts.build_library()
 	for i in AIR_PER_WAVE:
-		var kind: StringName = AIR_KINDS[city._combat_rng.randi() % AIR_KINDS.size()]
-		var unit := UnitCatalog.get_unit(kind)
-		if not bool(unit.get("built", false)):
-			continue
-		var ang: float = city._combat_rng.randf() * TAU
-		var at := p.feet() + Vector3(cos(ang), 0.0, sin(ang)) * 45.0 + Vector3.UP * 25.0
-		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
-				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
-		var f := Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
-		UnitCatalog.apply_health(f.health, kind, level)
-		f.set_type(str(unit.get("recipe", "")), Roster.shared())
-		air.append(f)
-	if (hover == null or not is_instance_valid(hover) or hover.is_dead()) and bool(UnitCatalog.get_unit(HOVER_KIND).get("built", false)):
-		var unit := UnitCatalog.get_unit(HOVER_KIND)
-		var over: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
-		var at := Vector3(over.x, 0.0, over.z) + Vector3.UP * 40.0
-		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
-				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
-		hover = Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
-		UnitCatalog.apply_health(hover.health, HOVER_KIND, level)
-		hover.set_type(str(unit.get("recipe", "")), Roster.shared())
-		hover.set_loiter(Vector3(over.x, 0.0, over.z))
-		air.append(hover)
+		_field_flyer(AIR_KINDS[city._combat_rng.randi() % AIR_KINDS.size()])
+	if hover == null or not is_instance_valid(hover) or hover.is_dead():
+		_field_flyer(HOVER_KIND)
 	print("[arena] air wing: %s" % [air.map(func(f): return f.name_tag.text if f.name_tag != null else "flyer")])
 
 
-## A tank with the reinforcements (`-- --tank`; not in a gate, whose checks count
-## a wave's soldiers): crewed, it drives in from out past the fight -- where a
-## truck would start -- to the focus building's street, at the pace of the
-## wave's squad, who screen it. One at a time; a live one is sent on to the
-## new focus. (Free until the commander buys by points: RO11.)
+## One flyer of recipe `kind` over the fight: a hover craft over the focus
+## building, held to its area; any other from over the rooftops round the
+## player. Null if the roster cannot field it.
+func _field_flyer(kind: StringName) -> Flyer:
+	var p := _player()
+	var unit := UnitCatalog.get_unit(kind)
+	if p == null or not bool(unit.get("built", false)) or Roster.shared() == null:
+		return null
+	if city._gun_library == null:
+		city._gun_library = GunPlaceholderParts.build_library()
+	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
+			city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
+	var hovers := str(Roster.shared().recipe(str(unit.get("recipe", ""))).get("body", "")) == "hover"
+	var at: Vector3
+	var over := Vector3.ZERO
+	if hovers:
+		var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
+		over = Vector3(c.x, 0.0, c.z)
+		at = over + Vector3.UP * 40.0
+	else:
+		var ang: float = city._combat_rng.randf() * TAU
+		at = p.feet() + Vector3(cos(ang), 0.0, sin(ang)) * 45.0 + Vector3.UP * 25.0
+	var f := Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
+	UnitCatalog.apply_health(f.health, kind, level)
+	f.set_type(str(unit.get("recipe", "")), Roster.shared())
+	if hovers:
+		f.set_loiter(over)
+		hover = f
+	air.append(f)
+	print("[arena] in the air: %s" % (f.name_tag.text if f.name_tag != null else String(kind)))
+	return f
+
+
+## A tank with the reinforcements (`-- --tank`): see _field_tank.
 func _tank_wing() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	if not "--tank" in args or "--gate" in args or _player() == null:
 		return
+	_field_tank()
+
+
+## A crewed tank (one at a time): it drives in from out past the fight -- where
+## a truck would start -- to the focus building's street, at the pace of the
+## wave's squad, who screen it. A live one is sent on to the new focus instead.
+func _field_tank() -> bool:
 	var goal: Vector3 = _street_of(focus)
 	if tank != null and is_instance_valid(tank) and not tank.is_wrecked():
 		(tank.get_node(^"TankBrain") as TankBrain).send(goal)
-		return
+		return false
 	var start := _truck_start()
 	if start == Vector3.INF:
 		print("[arena] no open ground for a tank to start from")
-		return
+		return false
 	var to := goal - start
 	tank = city._spawn_tank(start, atan2(-to.x, -to.z), ENEMY_TEAM, true)
-	(tank.get_node(^"TankBrain") as TankBrain).send(goal)
+	var br := tank.get_node(^"TankBrain") as TankBrain
+	br.send(goal)
+	if _wave_squad != null and is_instance_valid(_wave_squad):
+		br.escort = _wave_squad
 	print("[arena] tank from %v to the street of building %d" % [start, focus])
+	return true
 
 
 ## Every TANK_REPORT seconds while a tank is out: what it and its escort are

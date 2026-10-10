@@ -47,8 +47,9 @@ const UNITS := {
 			"seats": 8, "built": false},
 	&"ifv": {"name": "IFV", "points": 15.0, "mobility": &"tracked", "role": &"ifv",
 			"seats": 6, "built": false},
+	# Built (RO10): a commander buys it as support (Commander.buy_support).
 	&"tank": {"name": "Tank", "points": 20.0, "mobility": &"tracked", "role": &"heavy_armor",
-			"seats": 0, "built": false},
+			"seats": 2, "built": true},
 	&"transport_heli": {"name": "Transport helicopter", "points": 10.0, "mobility": &"air",
 			"role": &"air_transport", "seats": 8, "built": false},
 	&"attack_heli": {"name": "Attack helicopter", "points": 18.0, "mobility": &"air",

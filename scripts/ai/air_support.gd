@@ -1,7 +1,9 @@
 class_name AirSupport
 extends RefCounted
 ## A side's fast planes (Docs/AIRoster.md 7, R10): what a soldier's "call in air"
-## (the casebook's call_air) asks for, and later what a commander buys (RO11).
+## (the casebook's call_air) asks for, and what its commander pays for (RO11):
+## RUN_POINTS from the `payer`'s budget a run -- with too little there, there is
+## no air to call (and a soldier does not know it as available). No payer: free.
 ## One run at a time, then COOLDOWN before the next. A side with nowhere to put a
 ## plane (no `parent`) has none -- and its soldiers do not know air as available.
 ##
@@ -10,12 +12,15 @@ extends RefCounted
 ## view of it, so the run does not come in over the caller's own head.
 
 const COOLDOWN := 45.0
+const RUN_POINTS := 6.0
 
 var services: AIServices
 var team := 1
 ## Where the planes are put; null for a side with no air.
 var parent: Node
 var ready_at := 0.0
+## The side's commander, who pays for each run; null for free runs.
+var payer: Commander
 var current: AirStrike
 var runs := 0
 ## Every run launched, for logs and gates: [kind, at, called by].
@@ -29,7 +34,8 @@ func _init(s: AIServices, p_team: int) -> void:
 
 func available() -> bool:
 	return parent != null and is_instance_valid(parent) and services.now() >= ready_at \
-			and (current == null or not is_instance_valid(current))
+			and (current == null or not is_instance_valid(current)) \
+			and (payer == null or not is_instance_valid(payer) or payer.budget >= RUN_POINTS)
 
 
 ## A run on `at`, called by `caller` (or nobody). Returns it, or null.
@@ -51,6 +57,8 @@ func request(at: Vector3, caller: Pawn = null, kind := "") -> AirStrike:
 	ready_at = services.now() + COOLDOWN
 	runs += 1
 	log.append([kind, at, caller])
+	if payer != null and is_instance_valid(payer):
+		payer.pay(RUN_POINTS, "air: a %s run" % kind)
 	print("[air] %s run on %v (side %d)%s" % [kind, at, team, " called by a soldier" if caller != null else ""])
 	return current
 
