@@ -379,12 +379,17 @@ arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldow
 A gun on the floor (`WorldGunPickup`, with its card and rarity beam) can be tried without touching
 the loadout:
 
-- **Hold X** (the interact key): pick it up into a **third hand**. The loadout is untouched.
+- **Hold reload** (R; X on a pad, as in Halo) with a floor gun in reach and near the crosshair:
+  pick it up into a **third hand**. The loadout is untouched. Tapped, reload still reloads.
 - **Tap swap** while holding it: drop it where you stand and draw the gun you had.
-- **Keep it**: hold **D-pad left** to put it in slot A of the active group, **D-pad up** for slot B.
-  The gun it replaces goes into the **backpack** (dropped where you stand only when the backpack
-  is full).
-- **Stow it**: hold **D-pad down** to send it straight to the backpack without touching the loadout.
+- **Keep it**: a slot key (1–4) puts it in that slot; on a pad, hold **D-pad left** for slot A of
+  the active group, **D-pad up** for slot B. The gun it replaces goes into the **backpack**
+  (dropped where you stand only when the backpack is full).
+- **Stow it**: hold reload again with no floor gun in view (D-pad down on a pad) to send it
+  straight to the backpack without touching the loadout.
+
+Hold reload is one button with three jobs, in this order: a floor gun in view → pick it up;
+carrying one → stow it; otherwise → the alt-fire mode switch (§7.2).
 - Switching group, or picking up another floor gun, drops the one in the third hand.
 
 ### 7.5 The backpack
@@ -408,19 +413,20 @@ backpack is a list of those.
 
 ### 7.7 Input summary
 
-| Input (pad / keyboard) | Does |
-|---|---|
-| Y tap / swap key tap | the other gun in the group |
-| Y hold / swap key hold | the other group |
-| 1–4 (keyboard) | that slot directly |
-| D-pad right / ordnance key | the ordnance |
-| G / right bumper | throw a grenade |
-| X hold / interact hold | pick a floor gun into the third hand |
-| D-pad left / up (holding a floor gun) | keep it in slot A / B of the active group |
-| D-pad down (holding a floor gun) | stow it in the backpack |
-| Reload tap / R tap | reload |
-| Reload hold / R hold | switch the gun to its alt-fire mode and back |
-| Right stick click / E | melee (next to an enemy mech: climb it) |
+| Pad | Keyboard / mouse | Does |
+|---|---|---|
+| Y tap | Tab tap, mouse wheel | the other gun in the group |
+| Y hold | Tab hold | the other group |
+| — | 1–4 | that slot directly |
+| D-pad right | 5 | the ordnance, and back |
+| Right bumper | G | throw a grenade |
+| X tap | R tap | reload |
+| X hold | R hold | floor gun in view: pick it up · carrying one: stow it · else: alt-fire mode |
+| D-pad left / up (carrying) | 1–4 (carrying) | keep the floor gun in that slot |
+| — | I | the backpack (arrows / wheel choose, 1–4 swap into a slot, Backspace drops) |
+| Right stick click | E | melee (next to an enemy mech: climb it) |
+
+Every keyboard bind is an input action, rebindable in Options. Pad bindings do not exist yet.
 
 ## 8. Bricks
 
@@ -575,34 +581,59 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   (`Soldier.melee`, a flat 45) is still theirs (AI area); a lunge toward the target (§4.2's
   Kinetic Lunge is a skill).
 
+**Step 5 — groups, ordnance, grenades, pickups, backpack: built 2026-10-10.**
+- `Loadout` (`scripts/loot/loadout.gd`): the rules as plain state — four slots in two groups, the
+  hand per group, ordnance, the third hand, the backpack (10). Every operation that lets go of a
+  gun returns it, so nothing is lost.
+- `PlayerArsenal` (`scripts/pawn/player_arsenal.gd`): the keys (§7.7), one `GunController` firing
+  whatever is in hand — each gun keeps its own magazine over a swap — guns not in hand hidden in
+  the tree under a holster, floor pickups (in reach 2.6 m, within 28° of the crosshair), drops as
+  `WorldGunPickup`s in front of the player, and its own HUD: the four slots in two rows (active
+  group bright, gun in hand boxed), the ordnance and grenades, the prompt under the crosshair, the
+  backpack panel. A key it handles is marked handled, so `city_scene`'s debug keys under it
+  (1, 2, G, I) do not also fire while playing.
+- Tap swap acts on the press; held past 0.25 s the tap is undone and the group changes.
+- The starting kit (`fill_default`): the arena's rifle, a pistol, a shotgun, a sniper, and a
+  rocket launcher for the ordnance, all of the fight's tier.
+- **Grenades**: three, G throws one at the crosshair (25 m, onto the ground beyond), the AI's
+  `Grenade` with `damage` sized to 2.5 melees of the fight's tier; one comes back every 20 s (a
+  stand-in until there are ammo pickups).
+- **Loot**: `CityScene.drop_loot` rolls `LootRoller` drops of the fight's tier on its own seeded
+  stream; every arena soldier drops on death (the HQ officer as a badass) — WaveDirector, one
+  line, AI area. `GunInstance.result` keeps what a gun was made from, so it can be dropped again.
+- `tools/loadout_probe.gd` (31 checks).
+- **Not yet:** ammo reserves per type (magazines still refill from nothing); the swap has no draw
+  time (swap speed as a stat needs one); the loadout is not saved (`CharacterSave.guns`); co-op
+  (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
+
 ---
 
 ## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 4 is **built, tested and merged into `main`**. The player side it
+Everything above through step 5 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 5, two groups, ordnance, grenades, pickups, backpack
+### 15.1 Next: step 6, rarity v2 and modifiers
 
-What it must do (§7.1–7.7):
+What it must do (§2, §3, §3.1, §6, §11):
 
-- **Loadout**: two groups of two gun slots; the player's `GunController` holds the active one.
-  Tap swap (the gun is out at once; `PlayerView.hold`), hold swap (~0.25 s) switches group. Number
-  keys 1–4 pick a slot.
-- **Ordnance** slot on its own key; **grenade** on G, thrown without lowering the gun.
-- **Floor pickups**: look at a `WorldGunPickup`, hold interact to carry it in a third hand; tap
-  swap drops it; keep it into slot A / B (replaced gun to the backpack) or stow it.
-- **Backpack**: a list of saved gun entries (`CharacterSave.gun_entry`); an inventory screen to
-  move guns between it and the four slots.
-- **HUD**: the four guns, which group is active, the third hand.
-- **Test**: a probe for the loadout state machine (tap / hold / slots / third hand / backpack)
-  without a window, then the arena gate.
+- **Numbers**: `Rarity.MULTS` → 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12; `GunStats.DPS_WINDOW_HI`
+  1.28 → ~1.10 and `LootRoller.TRASH_BASE_HP` re-anchored so a median common pistol still takes 6;
+  `combat_numbers_probe` rewritten to §3's rows (it holds v1's today).
+- **Mythic is red** (`GunCard.RARITY_COLORS`, `PlayerHud.RARITY_COLOURS`).
+- **Modifier slots by rarity** (1 / 2 / 3 / 4 / 4 / 4) and quality by rarity
+  (`Rarity.stat_roll_quality`); the parts that already add or multiply stats become modifiers.
+- **First modifiers**: +damage (10–20%), power shot (every Nth round 2×), double fire (every Nth a
+  free extra round; rarer: random from the gun's own stream), Overkill Ricochet, Shield Buster.
+- **Named trade parts**: Heavy Barrel (+8% damage, −10% fire rate), Rapid Receiver (−8% / +15%).
+- **The explosive attachment** and the first red-text effects.
 
 ### 15.2 After that
 
-Steps 6–10 of §12: rarity v2 and the modifiers; the tracking dart and other alt-fires; element statuses; the player
-level and skill tree; infusion. Also open: helmets and head crits (switch `Pawn.head_crits` on when
+Steps 7–10 of §12: the tracking dart and other alt-fires; element statuses; the player level and
+skill tree; infusion. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
+loadout, co-op drops, pad bindings. Also open: helmets and head crits (switch `Pawn.head_crits` on when
 enemies are figures), and §13's questions.
 
 ### 15.3 Where things are
@@ -624,7 +655,7 @@ enemies are figures), and §13's questions.
 ### 15.4 Tests to run before merging
 
 Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (15),
-`crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `moves_probe` (39), and the AI ones that read soldier
+`crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
 (7), `res://scenes/combat_arena.tscn -- --gate` (31). Menu: `res://menu/tests/menu_smoke.tscn`
