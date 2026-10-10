@@ -268,6 +268,19 @@ element per layer type, so the chart is one line each:
 - Building **an element to match the enemy** is the Borderlands half of the loop: a plasma gun in
   one group for shielded infantry, a corrosive one for armor.
 
+How the statuses build (built in step 8, `ElementStatus`), from what the element part of a round
+dealt, on the layer it landed on:
+
+| Status | Builds from | Does |
+|---|---|---|
+| **Burn** | fire's part landing on flesh or vegetation | 60% more of it over 3 s, while the flesh is bare; a shield or armor coming up puts it out |
+| **Corrode** | corrosive's part landing on armor | 50% more of it over 3 s, on the armor only |
+| **Chill** | ice's part, on any layer | slows up to 50%; ice worth a quarter of the enemy's whole health **freezes** it for 2 s (no moving, firing or turning), then 1.5 s before it can freeze again; the chill thaws on its own a second after the ice stops |
+
+- The extra damage is plain: the element's multiplier was already in the part that built it.
+- A player is slowed by ice, never frozen. A mech has none of this (its hits are its own,
+  `MechLayers`).
+
 **Shock is not a gun element.** It belongs to special weapons (§7.3): a shot that arcs from enemy to
 nearby enemy and slows each one it touches.
 
@@ -345,6 +358,12 @@ tag.
 holding it again flips back. Aim keeps its button, so no gun loses aim-down-sights for having an
 alt-fire. The HUD shows which mode the gun is in. A gun with no alt-fire ignores the hold.
 
+As built (step 7): an alt-fire **fires once and the gun is back on its primary** — dart, then
+pour, with no second hold — and the primary waits for the trigger to come up. A trigger held
+through the switch fires nothing. The press of a held reload starts a reload; the hold calls it
+off. A gun carries at most one alt-fire, rolled from its seed (`GunAltFire`): 10% of whites up to
+every mythic that can; never ordnance, never a sniper.
+
 **Tracking dart** (hold to charge):
 
 - In alt-fire mode, hold fire to charge (~0.5 s), release to fire a heavy **dart**. It does real damage on
@@ -367,7 +386,13 @@ the target's body** and **can never crit**. Halo's needler, not an aimbot.
 
 **Charged shot** (the plasma pistol's): in alt-fire mode, hold fire to charge, release a shot that takes a whole shield.
 It costs the gun's heat (or a large ammo bite) so it cannot be spammed; it is a shield answer, not
-a damage answer.
+a damage answer. Built as a 0.8 s charge for a quarter of the magazine (at least 2 rounds), on
+pistols, SMGs and revolvers; off a shield it is one plain round.
+
+**Shock arc** (built): in alt-fire mode, press fire — the struck enemy takes 1.5 rounds, then the
+arc jumps to the nearest enemy within 6 m not yet touched, up to three more, each 80% of the last,
+each slowed 40% for 1.5 s. Shock is no element (kinetic). A 5 s cooldown, no ammo. On pistols,
+shotguns and revolvers.
 
 **Other alt-fires** come from the ordnance effects: an underbarrel grenade tube on a rifle, a shock
 arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldowns, like ordnance.
@@ -470,7 +495,7 @@ anchor was "a legendary pistol kills in 4 body / 2 head" (now that takes a built
 | — | co-op loot shared, or instanced as a session option | new (Multiplayer) |
 | One gun in hand | two groups of two, ordnance on D-pad right, grenade on G | inventory, HUD, view (swap) |
 | Crit spots, layers, gating, five elements (built) | unchanged | — |
-| Fire burn, ice slow/freeze (not built) | + corrosive corrode; statuses always build | statuses (`scripts/status/` exists) |
+| Fire burn, ice slow/freeze (not built) | + corrosive corrode; statuses always build | **done** (step 8): `ElementStatus`, not the older `scripts/status/` dice |
 
 ## 12. Build order
 
@@ -485,9 +510,9 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 6. **Rarity v2 and modifiers**: the new rarity step and DPS window, slots and quality by rarity,
    the first modifiers (damage, power shot, double fire, Overkill Ricochet), named trade parts, the
    explosive attachment, the first red-text effects.
-7. **Alt-fire and special weapons**: tracking dart first, then the charged plasma shot and the shock
-   arc.
-8. **Elements' statuses**: burn, corrode, ice slow/freeze.
+7. ~~**Alt-fire and special weapons**: tracking dart first, then the charged plasma shot and the shock
+   arc.~~ (built as alt-fires; the special ordnance weapons are still to come)
+8. ~~**Elements' statuses**: burn, corrode, ice slow/freeze.~~ (built)
 9. **Player level and the skill tree**: XP, points, the Vanguard Brawler branch, health/shield
    nodes with their cap, the first abilities.
 10. **Safehouse infusion**: workbench, materials, the same-gun-at-another-tier probe.
@@ -650,32 +675,54 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   other three legendaries' red text (Landlord, Hangnail, Dinner Bell); mechs ignore Shield Buster
   (`MechLayers` judges its own hits).
 
+**Step 7 — alt-fire: built 2026-10-10.**
+- `GunAltFire` (`scripts/guns/gun_alt_fire.gd`): the roll from the seed (`Result.alt_fire`,
+  `GunInstance.alt_fire`), so a save rebuilds it; the card's line.
+- The mode: `GunInstance.alt_mode`, flipped by `GunController.toggle_alt()` from
+  `PlayerArsenal.interact()` — the third job of held reload. The HUD shows the mode over the slots,
+  the charge under the crosshair, and the mark as a diamond with its time.
+- **Tracking dart** (`scripts/combat/tracking_dart.gd`): 0.5 s charge, one round, 40 m/s with a
+  little drop, 2× a round's damage where it strikes (a crit spot counts). It rides along in what
+  it struck and marks it 2.5 s; a new dart ends the mark at once. A primary round fired within 15°
+  of the mark goes to it and lands in the dart's crit spot (a shield over it still takes it plain).
+  The mark is the controller's: one a player, kept through a swap.
+- **Plasma charge**: `DamagePacket.strip_shield` — a shield up takes all of it and the hit stops.
+- **Shock arc**: through `side_hit` (marked on the HUD), with `ArcFlash` for the look.
+- `tools/alt_fire_probe.gd` (30 checks).
+- **Not yet:** the underbarrel grenade tube and the thermal torch; shock as a special ordnance
+  weapon (§7.3); a heat bar instead of the charge's ammo bite; AI soldiers never use alt-fires.
+
+**Step 8 — element statuses: built 2026-10-10.**
+- `ElementStatus` (`scripts/elements/element_status.gd`): made on a target by
+  `DamageSystem.resolve` from what the element part dealt (§5's table), ticked by itself, nothing
+  random, gone when its last status ends or the target dies. A see-through shell round the body
+  in the element's colour shows it.
+- The slow and the freeze are `Pawn.speed_mult` and `Pawn.frozen`; `Pawn.is_player` (set by
+  `PlayerController.possess`) keeps a player from being frozen.
+- The shock arc's slow is a status here too (`ElementStatus.shock`).
+- `tools/status_probe.gd` (19 checks).
+- **Not yet:** frozen enemies take no extra damage and do not shatter (the older
+  `FrozenStatus`/`ElementDoT` in `scripts/status/` have both, unused); no hit-number colours for
+  status damage; a frozen soldier's brain still thinks (its body just does not move).
+
 ---
 
 ## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 6 is **built, tested and merged into `main`**. The player side it
+Everything above through step 8 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 7, alt-fire — the tracking dart first
+### 15.1 Next: step 9, player level and the skill tree
 
-What it must do (§7.2):
-
-- **Hold reload** with no floor gun in view and nothing carried flips the gun to its alt-fire mode
-  and back (`PlayerArsenal` already routes hold-reload: pickup, then stow, then this). The HUD
-  shows the mode. A gun with no alt-fire ignores it.
-- **Alt-fire as a roll**: a gun may carry one (a field on the gun from its seed, like the
-  modifiers), shown on the card.
-- **Tracking dart**: in alt-fire mode hold fire to charge (~0.5 s), release a slow projectile
-  (~40 m/s) that does a heavy shot's damage, sticks, and marks the spot 2.5 s or until the next
-  dart. While marked, primary rounds fired within ~15° of the mark bend onto it, and crit if it is
-  in a crit spot (shields still absorb, §4.4). One mark per player.
-- Then the charged plasma shot and the shock arc.
+What it must do (§1.3, §4.2, PROGRESSION_SPEC.md): XP from kills and objectives, a level 1–100
+with a skill point a level, the tree's data and its screen, the Vanguard Brawler branch first
+(melee nodes), health and shield nodes with their cap, the first abilities. `CharacterSave`
+already has an unused `character.level`.
 
 ### 15.2 After that
 
-Steps 8–10 of §12 (and the rest of step 7): the tracking dart and other alt-fires; element statuses; the player level and
+Steps 9–10 of §12, and what steps 7–8 left (§14): the tracking dart and other alt-fires; element statuses; the player level and
 skill tree; infusion. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
 loadout, co-op drops, pad bindings. Also open: helmets and head crits (switch `Pawn.head_crits` on when
 enemies are figures), and §13's questions.
@@ -693,13 +740,15 @@ enemies are figures), and §13's questions.
 | Crit spots | `scripts/combat/crit_spots.gd`, `Pawn.head_crits` in `scripts/pawn/pawn.gd` |
 | Gun fire, element on the round | `scripts/combat/gun_controller.gd`; element roll in `scripts/guns/gun_generator.gd` |
 | Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
+| Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
+| Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
 | Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
@@ -727,5 +776,10 @@ health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_
   median damage, light enemies at 60) make it 4 of 15 and it fails, deterministically. The fight
   itself is unchanged (the soldier still leaves its cover with time in it). AI area: its gun is a
   seeded loot roll, so any loot change moves it.
+- **Physics runs at 30 ticks a second** (`project.godot`), not 60: a probe that waits seconds
+  must count `Engine.physics_ticks_per_second` ticks.
+- **`loot_range_test --probe` rolls unseeded** (`_rng.randomize()`): its gun-vs-shield category
+  row fails about one run in three on a gun and a shield scored close together (seen: T8 R1, gun
+  840 vs shield 865). Rerun before blaming a change.
 - **`squad_advance_probe` flakes** (fails about one run in two on `main` too). Soldier probes'
   timing checks flake under machine load; rerun alone before blaming a change.

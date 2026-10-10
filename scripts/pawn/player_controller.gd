@@ -45,6 +45,7 @@ const EYE_EASE := 14.0
 func possess(p: Pawn, cam: Camera3D) -> void:
 	pawn = p
 	camera = cam
+	pawn.is_player = true
 	pawn.intents.clear()
 	_eye_h = pawn.eye_height()
 	_sync_look()
@@ -54,6 +55,7 @@ func possess(p: Pawn, cam: Camera3D) -> void:
 func release() -> void:
 	if pawn != null:
 		pawn.intents.clear()
+		pawn.is_player = false
 	pawn = null
 	camera = null
 

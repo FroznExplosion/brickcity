@@ -69,6 +69,8 @@ class Result:
 	var active_effects: PackedStringArray = PackedStringArray()   # aggregate, slot-agnostic
 	## Its modifiers (GunModifiers), already folded into `stats`. From the seed.
 	var modifiers: Array[Dictionary] = []
+	## Its alt-fire (GunAltFire), &"" for none. From the seed, like the modifiers.
+	var alt_fire: StringName = &""
 	var merges: Array[MergeRule] = []                              # active synergy bonuses
 
 	## Compact, save/network-friendly form.
@@ -129,6 +131,7 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 ## Shared by generate(), generate_legendary() and deserialize().
 static func _resolve(res: Result) -> void:
 	res.modifiers = GunModifiers.roll(res.seed, res.rarity, res.weapon_class)
+	res.alt_fire = GunAltFire.roll(res.seed, res.rarity, res.weapon_class)
 	res.active_effects = GunEffects.stack(
 			GunEffects.collect(res.recipe, res.rarity) + GunModifiers.effects(res.modifiers))
 	res.merges = MergeRule.detect(res.active_effects)
