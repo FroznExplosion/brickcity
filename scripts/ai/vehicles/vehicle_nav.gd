@@ -46,8 +46,9 @@ static func make(ai_world: AIWorld, kind: StringName) -> AINav:
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	n.set_agent(span_of(kind), head_of(kind), head_of(kind), int(k.step), int(k.drop), int(k.drop))
-	if k.has("crush"):
-		n.set_crush(int(k.crush), float(k.crush_cost))
+	# An engine library built before set_crush: the tank goes round, as it did.
+	if k.has("crush") and n.has_method(&"set_crush"):
+		n.call(&"set_crush", int(k.crush), float(k.crush_cost))
 	return n
 
 
