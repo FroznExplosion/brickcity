@@ -7,12 +7,12 @@ so it is not mistaken for this project's spec.
 
 | Doc | What |
 |---|---|
-| **[COMBAT_DESIGN.md](COMBAT_DESIGN.md)** | **This game's direction (2026-10-05): Borderlands loot, Halo fights — 10 levels at +25%, six rarities, crit spots, shield/armor/flesh, per-layer melee, plasma/corrosive/acid/fire/ice, explosive as an attachment, four guns plus ordnance. Overrides the specs below where they differ. §11 is what is built, §12 the handoff (next step, files, tests, traps)** |
+| **[COMBAT_DESIGN.md](COMBAT_DESIGN.md)** | **This game's direction (v2, 2026-10-09): Borderlands loot, Halo fights — 10 story tiers at +25%, a player level 1–100 for abilities only, six rarities with a small damage step and the power in modifiers, crit spots, shield/armor/flesh, per-layer melee, plasma/corrosive/acid/fire/ice, two groups of two guns, tracking-dart alt-fire, floor pickups, safehouse infusion. Overrides the specs below where they differ. §12 is the build order, §14 what is built, §15 the handoff (next step, files, tests, traps)** |
 | [WEAPONS_SPEC.md](WEAPONS_SPEC.md) | Classes, rarity, parts, the generator |
 | [GUN_SCALING_SPEC.md](GUN_SCALING_SPEC.md) | Damage and fire rate per class and tier |
 | [MANUFACTURER_SPEC.md](MANUFACTURER_SPEC.md) | Brands, native effects, mods, merges |
 | [GUN_QUALITY_NAMING_SPEC.md](GUN_QUALITY_NAMING_SPEC.md) | Quality rolls and names |
-| [PROGRESSION_SPEC.md](PROGRESSION_SPEC.md) | Zone tier, no player level |
+| [PROGRESSION_SPEC.md](PROGRESSION_SPEC.md) | Weapon tiers, player level, loot pacing (rewritten 2026-10-09) |
 | [ELEMENTAL_SPEC.md](ELEMENTAL_SPEC.md) | Elements, defence layers, split damage (Amendment A) |
 | [INTEGRATION_SPEC.md](INTEGRATION_SPEC.md) | How the elemental FX and the sim were joined |
 | [ProceduralGunSystem/](ProceduralGunSystem/) | Generator and skin specs |

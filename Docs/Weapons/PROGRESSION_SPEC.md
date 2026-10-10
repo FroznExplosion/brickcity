@@ -1,134 +1,108 @@
-# Progression Spec — Tier Anchors, Hidden Level, Loot Pacing
+# Progression Spec — Weapon Tiers, Player Level, Loot Pacing
 
-**Engine:** Godot 4.6 · **Genre:** FPS rogue-lite (Roboquest / Gunfire Reborn lane).
-**Pairs with:** [ELEMENTAL_SPEC.md](ELEMENTAL_SPEC.md) (elemental/damage), [GUN_SCALING_SPEC.md](GUN_SCALING_SPEC.md)
-(procedural guns), [META_SPEC.md](META_SPEC.md) (account/class progression).
-
-This spec covers the **run loop**: how difficulty and loot scale across a single run.
-Account-loop progression (class trees, challenges, ascension unlocks, currency) lives
-in [META_SPEC.md](META_SPEC.md). Keep the two lifetimes separate — that separation is
-load-bearing.
+**Engine:** Godot 4.6. **Rewritten 2026-10-09** to match the code (`scripts/guns/tier.gd`,
+`scripts/loot/loot_roller.gd`) and the combat design's version 2
+([COMBAT_DESIGN.md](COMBAT_DESIGN.md) §1). The BoomerBorder original sampled a 100-level
+decelerating curve at ten anchors (~2.3× a tier) and had no player level at all; both are gone.
+COMBAT_DESIGN overrides this file where they differ.
 
 ---
 
-## 0. Design pillars
+## 0. Pillars
 
-1. **Hybrid: curve engine underneath, discrete tiers on top.** The
-   `GUN_SCALING_SPEC` §2 `level_multiplier(L)` curve is kept intact. It is only ever
-   *sampled at 10 discrete tier anchor points* — never evaluated per player level.
-   Guns snap to their tier's anchor; they do not ladder up every kill. **10 tiers** =
-   the weapon gets meaningfully better 10 times across the game (~2.3× power per tier).
-2. **No visible player level. Ever.** "Level" exists only as an internal difficulty
-   scalar. The player sees a **Tier** on the zone, never a number on themselves.
-3. **Flat difficulty within a tier.** A tier's anchor is a constant per zone. It does
-   NOT increment from kills, time, or player rank. Camping cannot raise difficulty.
-4. **High stat floor.** Common and Legendary of the same tier deal roughly the same
-   baseline damage (~40% spread, see GUN_SCALING §3.3). Rarity changes *behavior*, not
-   raw power. Loot swaps are tactical, not a math chase.
-5. **One dial, set by tier + ascension only.** The hidden level is driven by (a) which
-   tier the zone is, and (b) the run's ascension offset. Nothing else touches it.
+1. **Two progressions, kept apart.** The **weapon tier** (1–10, from the story) sets gun damage and
+   enemy durability. The **player level** (1–100, from XP) sets abilities and options. Neither feeds
+   the other; no player level appears in any damage number.
+2. **One constant sets the power curve.** ×1.25 a tier (`Tier.TIER_STEP`), for guns, enemies and
+   melee alike, so on level every shots-to-kill count is the same at every tier.
+3. **Flat difficulty inside a tier.** A zone's tier is fixed. It never rises from kills, time or the
+   player's level. Camping cannot raise it.
+4. **Loot swaps are about what a gun does.** Inside a tier, colours differ in damage by at most 12%
+   (COMBAT_DESIGN §2); what a better gun has is modifiers and effects.
 
 ---
 
-## 1. Tiers & anchors
+## 1. Weapon tiers
 
-**Files:** `scripts/progression/tier.gd`, `resources/progression/tiers/*.tres`
+**Files:** `scripts/guns/tier.gd` (`Tier.power_mult`, `Tier.COUNT`).
 
-A `Tier` is a `Resource` describing one Act / difficulty plateau.
+| Tier | Power (×1.25 a tier) | Where (to write per act) |
+|---|---|---|
+| 1 | 1.00 | starting outposts |
+| 2 | 1.25 | |
+| 3 | 1.56 | |
+| 4 | 1.95 | |
+| 5 | 2.44 | |
+| 6 | 3.05 | |
+| 7 | 3.81 | |
+| 8 | 4.77 | |
+| 9 | 5.96 | |
+| 10 | 7.45 | end-game zones |
 
-`Tier` fields (`@export`):
-- `tier_id: StringName` — `&"tier_1"`, `&"tier_2"`, ...
-- `display_name: String` — player-facing ("Tier I", "The Rim"). Cosmetic.
-- `anchor_level: int` — the hidden level this tier samples the curve at. **This is the
-  single number that sets the tier's power band.**
-- `enemy_hp_scale: float` — multiplier on enemy base HP for this tier (tunable
-  independently of gun scaling so TTK bands can be dialed).
+- A gun's damage is `class base × roll × rarity × Tier.power_mult(tier)` (`GunStats.compute`).
+- An enemy's health is `LootRoller.TRASH_BASE_HP × archetype hp_mult × Tier.power_mult(tier)`
+  (`LootRoller.enemy_hp`).
+- Melee is `CombatScale.melee(tier)` at the player's current story tier.
+- Acts open tiers; an act may span several. The tier a zone shows is the only number the player
+  needs to read about difficulty.
+- **Ascension** (a harder repeat of the game) is an offset added to the tier
+  (`Tier.power_mult(tier, ascension_offset)`), chosen before a run and never changed during it.
+- `ScalingCurve` and `Tier.anchor_for` / `effective_level` are left from the old curve and no longer
+  drive gun scaling.
 
-### Shipping tier table (10 tiers; `anchor_level = tier × 10`)
+### 1.1 Infusion
 
-Acts group tiers (a run may span several tiers); the 10 tiers are the *weapon power
-bands*, not necessarily 10 separate Acts. Anchors sample the GUN_SCALING §2 curve at
-even level steps. Because the curve is decelerating, the per-tier power jump shrinks from
-**~3.5× (T1→T2) to ~1.6× (T9→T10)** — fast early churn, gentle late (GUN_SCALING §2.4).
-Values below are the exact `pistol base 100 × level_multiplier(anchor)` (verified).
-
-| tier | display | anchor_level | worst-common | worst-mythic (×3) |
-|---|---|---|---|---|
-| tier_1  | Tier I    | 10  | 340      | 1,019     |
-| tier_2  | Tier II   | 20  | 1,205    | 3,615     |
-| tier_3  | Tier III  | 30  | 3,873    | 11,620    |
-| tier_4  | Tier IV   | 40  | 11,271   | 33,814    |
-| tier_5  | Tier V    | 50  | 29,663   | 88,990    |
-| tier_6  | Tier VI   | 60  | 70,533   | 211,599   |
-| tier_7  | Tier VII  | 70  | 151,366  | 454,099   |
-| tier_8  | Tier VIII | 80  | 292,869  | 878,608   |
-| tier_9  | Tier IX   | 90  | 510,331  | 1,530,994 |
-| tier_10 | Tier X    | 100 | 799,990  | 2,399,971 |
-
-> Anchors are the ONLY tuning knob for tier power spacing. Move an anchor → the whole
-> tier re-baselines from one number (the GUN_SCALING §0 "one number controls cadence"
-> pillar, preserved). These are the shipping reference numbers a `ScalingCurve` unit test
-> must reproduce (start_rate 0.15, end_rate 0.039866, max_level 100).
-
-### Effective hidden level
-
-```
-effective_level(tier) = tier.anchor_level + run.ascension_offset
-```
-
-- `tier.anchor_level` — fixed per zone.
-- `run.ascension_offset` — a per-run global constant chosen BEFORE the run starts
-  (see META_SPEC ascension). Never changes mid-run. Never changes from player activity.
-
-Loot rolls and enemy HP for a zone read `effective_level(tier)`, NOT a live player
-level. This is the entire coupling between progression and the gun/enemy systems.
+A gun keeps its drop tier until the player **infuses** it at a safehouse up to their current story
+tier: same gun, new base damage (COMBAT_DESIGN §1.2). Never above the current story tier.
 
 ---
 
-## 2. Loot pacing
+## 2. Player level
 
-### 2.1 Tier-capped drops (high floor, natural anti-camp)
+**Levels 1–100** from XP (kills, objectives, missions). Each level gives a skill point; some unlock
+an ability. Nothing grows automatically: health and shields rise only through skill-tree nodes the
+player chooses, capped at about +30% in all. The tree is in COMBAT_DESIGN §1.3 and §4.2.
 
-A zone drops gear rolled at its own tier's `effective_level`. Camping a tier yields no
-upgrades — the player exhausts that tier's power band in minutes. Boredom is the
-primary anti-camp limiter; no timer needed.
-
-### 2.2 Breadcrumb loot (tension → release)
-
-Near the end of an Act, tougher **invader** enemies (next tier's archetypes) spawn and,
-on death, drop **next-tier gear** rolled at the next tier's anchor. Restrict early
-breadcrumb drops to **Common/Uncommon** so the player can't grab a next-tier Legendary
-early and trivialize the following act.
-
-- Falls out for free: a next-tier gun samples a higher anchor → visibly stronger. No
-  special-case damage math.
-
-### 2.3 Enemy demotion (automatic)
-
-An enemy archetype's stats are fixed by its own definition; its *threat* comes from the
-gap between its HP and the player's current-tier gun band. So the Act 1 miniboss,
-reused in Act 3 unchanged, is fodder because Tier III guns sample a far higher anchor.
-No per-act rebalancing of the enemy — demotion is a side effect of the anchor gap.
+Because the level never enters a damage number, an over-levelled player in a low zone has more
+options, not a faster kill — the tier still decides that.
 
 ---
 
-## 3. Anti-farming (defense in depth)
+## 3. Loot pacing
 
-1. **Loot ceiling (primary).** §2.1 — nothing worth farming once the tier band is seen.
-2. **Currency cap (meta exploit plug).** Meta-currency (funds the class tree, see
-   META_SPEC) is capped per zone/run so a safe low tier can't be ground for account
-   progress. Diminishing drops or a per-zone bank cap.
-3. **Anti-camp spawn clock (reserve — add only if playtests show camping).** RoR2-style:
-   lingering in a room ramps spawn *intensity* (more/tougher mobs), resets on progress.
-   Raises **risk, not reward** — camping becomes dangerous, never profitable. Do NOT
-   ship preemptively.
+**File:** `scripts/loot/loot_roller.gd`.
+
+### 3.1 Drop tier
+
+`LootRoller.drop_tier(enemy_tier, player_tier) = max(enemy_tier, player_tier)`: an enemy above the
+player's tier drops at its own tier (the reward for punching up); one at or below drops at the
+player's. A low zone is never a downgrade machine or a farm.
+
+### 3.2 Rarity odds
+
+World drops use Borderlands 2's rates (`RARITY_WEIGHTS` 76 / 17 / 5.5 / 1.2 / 0.28 / 0.02, common to
+mythic). Luck tilts them: +7% a tier (`TIER_LUCK`), +55% for each tier the enemy is above the player
+(up to 3), and the archetype's own bonus (a boss 3.5×). Named legendaries roll separately and never
+get commoner from luck.
+
+### 3.3 Breadcrumb loot
+
+Near the end of an act, tougher **invader** enemies of the next tier may appear and drop next-tier
+gear — restricted to Common/Uncommon so a next-tier legendary cannot trivialise the next act. (Not
+built.)
+
+### 3.4 Enemy demotion
+
+An enemy kind's stats are fixed by its definition; its threat is the gap between its tier and the
+player's guns. The act 1 miniboss met again in act 3 at its old tier is fodder. No per-act
+rebalancing.
 
 ---
 
-## 4. What this spec deliberately does NOT do
+## 4. Anti-farming
 
-- No player XP bar, no player stat-level, no per-level player power. All permanent
-  player growth is horizontal and lives in META_SPEC.
-- The hidden level never increases from kills/time/rank. Only tier + ascension move it.
-- No unbounded difficulty scaling. Difficulty is bounded per tier; escalation is a
-  player-pulled ascension lever, not an automatic camp punishment.
+1. **Loot ceiling.** §3.1: nothing in a low zone is worth farming.
+2. **XP and currency caps.** XP and currency from a zone well below the player's story tier fall off,
+   so a safe zone cannot be ground for levels or materials.
+3. **Anti-camp spawn clock (reserve).** Only if playtests show camping: lingering ramps spawn
+   intensity and resets on progress — more risk, never more reward. Do not ship preemptively.
