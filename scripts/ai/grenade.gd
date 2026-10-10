@@ -29,6 +29,9 @@ var to := Vector3.ZERO
 var flight := 1.0
 var t0 := 0.0
 var landed := false
+## Up to this much at the middle of the blast. DAMAGE for a soldier's; a player's is
+## sized to the fight's tier (PlayerArsenal).
+var damage := DAMAGE
 var exploded := false
 ## [pawn, damage] for each body it hurt, for gates.
 var hits: Array = []
@@ -81,7 +84,7 @@ func _explode() -> void:
 	exploded = true
 	if _danger_id >= 0:
 		s.ai_world.remove_danger(_danger_id)
-	hits = blast(s, to, thrower, DAMAGE, RADIUS)
+	hits = blast(s, to, thrower, damage, RADIUS)
 	went_off.emit(to)
 	queue_free()
 

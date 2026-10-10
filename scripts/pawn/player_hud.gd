@@ -18,7 +18,8 @@ const RARITY_COLOURS: Array[Color] = [
 ]
 ## The key help at the bottom fades after this long.
 const HINT_SECONDS := 10.0
-const HINT := "WASD move · SHIFT sprint · SPACE jump (hold: higher) / climb · C slide, let go · Q grapple · RMB aim · LMB fire · R reload · V leave"
+const HINT := "WASD move · SHIFT sprint · SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · E melee · V leave"
+const HINT_2 := "R reload (hold: pick up) · TAB swap (hold: other group) · 1-4 guns · 5 ordnance · G grenade · I backpack"
 
 ## How solid the HUD is drawn (the Options menu's HUD Opacity).
 static var opacity := 1.0
@@ -79,6 +80,7 @@ class Overlay extends Control:
 		if hud._age < HINT_SECONDS:
 			var a := clampf((HINT_SECONDS - hud._age) / 2.0, 0.0, 1.0)
 			_text(font, HINT, Vector2(c.x, 34.0), 15, Color(1, 1, 1, 0.8 * a), true)
+			_text(font, HINT_2, Vector2(c.x, 54.0), 15, Color(1, 1, 1, 0.8 * a), true)
 
 	## Four ticks round a gap as wide as the cone, dimmed while the gun is down
 	## for a sprint, and a dot at the sights.
