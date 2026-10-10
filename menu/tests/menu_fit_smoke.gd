@@ -40,6 +40,8 @@ const SCREENS := {
 	"PauseMenu": "res://menu/ui/PauseMenu.gd",
 }
 
+const SCRATCH_CFG := "user://settings_menu_fit_smoke.cfg"
+
 var _pass := 0
 var _fail := 0
 var _sub: SubViewport
@@ -62,6 +64,9 @@ func _ready() -> void:
 
 func _run() -> void:
 	print("=== menu fit smoke ===")
+	# Everything this test saves goes to a file of its own, never the player's settings.cfg.
+	var players_md5 := FileAccess.get_md5(MenuSettings.CONFIG_PATH)
+	MenuSettings.use_scratch_file(SCRATCH_CFG)
 	_sub = SubViewport.new()
 	_sub.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(_sub)
@@ -78,7 +83,9 @@ func _run() -> void:
 	for edge in [&"safe_left", &"safe_right", &"safe_top", &"safe_bottom"]:
 		MenuSettings.set_value(edge, MenuSettings.default_of(edge), false)
 
+	_check(FileAccess.get_md5(MenuSettings.CONFIG_PATH) == players_md5, "the player's own settings.cfg is untouched")
 	print("=== %d passed, %d failed ===" % [_pass, _fail])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SCRATCH_CFG))
 	get_tree().quit(1 if _fail > 0 else 0)
 
 
