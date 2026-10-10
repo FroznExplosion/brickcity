@@ -16,6 +16,10 @@ var recipe: Dictionary = {}
 var weapon_class: WeaponClass
 var tier: int = 1
 var active_effects: PackedStringArray = PackedStringArray()
+## Its alt-fire (GunAltFire), &"" for none, and whether the player has it in that mode
+## (held reload flips it; GunController reads it). Kept on the gun, so a swap keeps it.
+var alt_fire: StringName = &""
+var alt_mode := false
 var merges: Array[MergeRule] = []
 ## What it was made from: dropped on the floor, it becomes a WorldGunPickup of this.
 var result: GunGenerator.Result
@@ -49,6 +53,7 @@ static func from_result(result: GunGenerator.Result,
 	gun.weapon_class = result.weapon_class
 	gun.tier = result.tier
 	gun.active_effects = result.active_effects
+	gun.alt_fire = result.alt_fire
 	gun.merges = result.merges
 	gun.name = "Gun_%d" % result.seed
 

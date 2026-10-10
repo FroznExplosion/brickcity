@@ -9,8 +9,10 @@ extends Node
 ##   5             the ordnance, and back
 ##   G             throw a grenade, gun up
 ##   R held        a floor gun in reach and in view: pick it up into the third hand.
-##                 Carrying one and none in view: stow it in the backpack. (Tapped,
-##                 R is still reload: the pawn does that.)
+##                 Carrying one and none in view: stow it in the backpack. Otherwise:
+##                 the gun in hand into its alt-fire mode and back (7.2). (Tapped, R
+##                 is still reload: the pawn does that; held, the reload its press
+##                 started is called off.)
 ##   I             the backpack: arrows or wheel choose, 1-4 swap into that slot, Backspace
 ##                 drops, I closes
 ##
@@ -84,6 +86,8 @@ func setup(p_player: PlayerController, p_gun: GunController, p_view: PlayerView,
 		_hud = ArsenalHud.new()
 		_hud.arsenal = self
 		add_child(_hud)
+	if gun != null and not gun.alt_refused.is_connected(_say):
+		gun.alt_refused.connect(_say)
 
 
 ## The starting kit: whatever the controller already holds in slot 1, then a pistol,
@@ -246,13 +250,17 @@ func _process(delta: float) -> void:
 		_reload_held += delta
 		if _reload_held >= HOLD_INTERACT and not _reload_used:
 			_reload_used = true
+			# The press reloaded; the hold meant something else.
+			if gun.is_reloading() and gun.reload_elapsed() <= _reload_held + 0.05:
+				gun.cancel_reload()
 			interact()
 	else:
 		_reload_held = -1.0
 
 
 ## The hold-reload action: the floor gun in view into the third hand, else the one in
-## the third hand into the backpack.
+## the third hand into the backpack, else the gun in hand into its alt-fire mode and
+## back (a gun with none ignores it).
 func interact() -> void:
 	if target_pickup != null:
 		pick_up(target_pickup)
@@ -262,6 +270,8 @@ func interact() -> void:
 			_say("Stowed in the backpack")
 		else:
 			_say("Backpack full")
+	elif gun.toggle_alt():
+		changed.emit()
 
 
 func pick_up(p: WorldGunPickup) -> void:
@@ -469,12 +479,54 @@ class ArsenalHud extends CanvasLayer:
 			var pw := font.get_string_size(prompt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
 			c.draw_string(font, Vector2(mid.x - pw * 0.5, mid.y + 70.0), prompt,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, pcol)
+		_alt(font, sz, right, y - 66.0)
 		if arsenal.note != "":
 			var nw := font.get_string_size(arsenal.note, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
 			c.draw_string(font, Vector2(mid.x - nw * 0.5, mid.y + 94.0), arsenal.note,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.85, 0.4))
 		if arsenal.inventory_open:
 			_backpack(font, sz)
+
+	## The alt-fire (COMBAT_DESIGN 7.2): its mode over the slots, its charge under the
+	## crosshair, and the dart's mark where it is in the world.
+	func _alt(font: Font, sz: Vector2, right: float, y: float) -> void:
+		var c := _draw_node
+		var gc := arsenal.gun
+		var id := gc.alt_fire()
+		if id == &"":
+			return
+		var cyan := Color(0.3, 1.0, 0.85)
+		var txt := ""
+		var col := Color(1, 1, 1, 0.5)
+		if gc.alt_on():
+			txt = "ALT  %s" % GunAltFire.display_name(id)
+			col = cyan
+		else:
+			txt = "hold R: %s" % GunAltFire.display_name(id)
+		if gc.alt_cooldown_left() > 0.0 and id == GunAltFire.ARC:
+			txt += "  %.1fs" % gc.alt_cooldown_left()
+		elif id == GunAltFire.CHARGE:
+			txt += "  (%d rounds)" % gc.charge_cost()
+		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+		c.draw_string(font, Vector2(right - w, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+		var mid := sz * 0.5
+		var k := gc.alt_charge_progress()
+		if gc.alt_on() and k > 0.0:
+			var bw := 90.0
+			c.draw_rect(Rect2(mid.x - bw * 0.5, mid.y + 30.0, bw, 5.0), Color(1, 1, 1, 0.25))
+			c.draw_rect(Rect2(mid.x - bw * 0.5, mid.y + 30.0, bw * k, 5.0),
+					cyan if k >= 1.0 else Color(1, 1, 1, 0.85))
+		if gc.has_mark():
+			var cam := c.get_viewport().get_camera_3d()
+			var at := gc.mark_point()
+			if cam != null and not cam.is_position_behind(at):
+				var s := cam.unproject_position(at)
+				var r := 11.0
+				var pts := PackedVector2Array([s + Vector2(0, -r), s + Vector2(r, 0),
+						s + Vector2(0, r), s + Vector2(-r, 0), s + Vector2(0, -r)])
+				c.draw_polyline(pts, cyan, 2.0)
+				var left := gc.mark_left() / GunController.MARK_SECONDS
+				c.draw_rect(Rect2(s.x - r, s.y + r + 4.0, 2.0 * r * left, 3.0), cyan)
 
 	func _backpack(font: Font, sz: Vector2) -> void:
 		var c := _draw_node

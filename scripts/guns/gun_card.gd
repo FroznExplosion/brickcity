@@ -111,6 +111,8 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 	var lines := PackedStringArray()
 	for m in res.modifiers:
 		lines.append("+ " + GunModifiers.describe(m))
+	if res.alt_fire != &"":
+		lines.append("» Alt-fire (hold R) — " + GunAltFire.describe(res.alt_fire))
 	for def: Variant in res.recipe.values():
 		if def is GunPartDef and (def as GunPartDef).tags.has("trade"):
 			lines.append("◇ %s: %s" % [(def as GunPartDef).display_name,
