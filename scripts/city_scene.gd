@@ -9730,11 +9730,47 @@ func _toggle_shader(param: String) -> bool:
 	return on
 
 
+# --- keys (Options > Controls, and > Developer) ----------------------------------
+
+## The player's actions the city handles itself, and the key each stands for in
+## _unhandled_input's match (its arms keep the default keys' names).
+const PLAYER_KEYS := {&"use_vehicle": KEY_M}
+## Developer mode's actions (project.godot's dev_*, rebound on Options >
+## Developer), by the key each stands for.
+const DEV_KEYS := {
+	&"dev_big_blast": KEY_X, &"dev_disasters": KEY_H, &"dev_stats": KEY_F1, &"dev_gun_out": KEY_1,
+	&"dev_gun_away": KEY_2, &"dev_spawn_soldier": KEY_K, &"dev_spawn_squad": KEY_U,
+	&"dev_spawn_enemy_mech": KEY_Y, &"dev_spawn_tank": KEY_Z, &"dev_play_on_foot": KEY_V,
+	&"dev_gun_class": KEY_T, &"dev_gun_reload": KEY_R, &"dev_ai_overlay": KEY_F4, &"dev_save": KEY_F5,
+	&"dev_load": KEY_F9, &"dev_view_structure": KEY_7, &"dev_view_interior": KEY_8,
+	&"dev_view_items": KEY_9, &"dev_terrain_menu": KEY_F10, &"dev_terrain_edit": KEY_F11,
+	&"dev_seams": KEY_L, &"dev_bevel": KEY_B, &"dev_finish": KEY_I, &"dev_overlap": KEY_J,
+	&"dev_slow_motion": KEY_O, &"dev_profiler": KEY_F2, &"dev_worst_frame": KEY_F3,
+	&"dev_brick_shells": KEY_N, &"dev_placer": KEY_P, &"dev_grids": KEY_G,
+}
+
+
+## The key `event` stands for, by the action it is bound to (so a rebinding
+## counts), or KEY_NONE. Modifiers are ignored: Shift+Z is still the tank key,
+## and its arm reads the Shift.
+static func _key_of(event: InputEvent) -> Key:
+	for a in PLAYER_KEYS:
+		if event.is_action_pressed(a):
+			return PLAYER_KEYS[a]
+	# The developer keys only in developer mode (DevMode, Options > Gameplay).
+	if not DevMode.on:
+		return KEY_NONE
+	for a in DEV_KEYS:
+		if event.is_action_pressed(a):
+			return DEV_KEYS[a]
+	return KEY_NONE
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	# Terrain edit mode: everything but these is the editor's.
 	if _edit_mode:
 		if event is InputEventKey and event.pressed and not event.echo:
-			match event.keycode:
+			match _key_of(event):
 				KEY_F11:
 					_toggle_terrain_edit()
 				KEY_F10:
@@ -9773,7 +9809,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
 	# HOLD, held while aiming sends it to attack where the crosshair is.
-	if event is InputEventKey and not event.echo and event.keycode == KEY_F \
+	if event is InputEventKey and not event.echo and event.is_action(&"mech_order") \
 			and _mech_cmd != null and _player.is_possessing():
 		if event.pressed:
 			_mech_cmd.press(ai_services.now())
@@ -9783,7 +9819,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	match event.keycode:
+	match _key_of(event):
 		KEY_X:
 			_fire(BIG_BLAST)
 		KEY_H:
@@ -9792,6 +9828,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_1:
+			# On foot 1 is the first gun slot (slot_1): the free camera's gun only.
+			if _player.is_possessing():
+				return
 			_arm_gun()
 		KEY_2:
 			if _player.is_possessing():

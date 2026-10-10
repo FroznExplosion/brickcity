@@ -7,6 +7,8 @@ extends Node
 ##
 ## W / S drive forward and back, A / D turn the hull (on the spot as well),
 ## LMB fires the cannon (one round per Tank.MAIN_RELOAD), RMB the machine gun.
+## Those are the defaults: it reads the move, fire and aim actions, rebound in
+## Options > Controls.
 
 ## The crosshair's reach, for where the turret should point.
 const AIM_RANGE := 400.0
@@ -43,15 +45,15 @@ func _process(_delta: float) -> void:
 		return
 	if _active() and not tank.is_wrecked():
 		var go := 0.0
-		if Input.is_key_pressed(KEY_W): go += 1.0
-		if Input.is_key_pressed(KEY_S): go -= 1.0
+		if Input.is_action_pressed(&"move_forward"): go += 1.0
+		if Input.is_action_pressed(&"move_back"): go -= 1.0
 		var turn := 0.0
-		if Input.is_key_pressed(KEY_A): turn += 1.0
-		if Input.is_key_pressed(KEY_D): turn -= 1.0
+		if Input.is_action_pressed(&"move_left"): turn += 1.0
+		if Input.is_action_pressed(&"move_right"): turn -= 1.0
 		tank.throttle = go
 		tank.steer = turn
-		tank.fire_main = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-		tank.fire_coax = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		tank.fire_main = Input.is_action_pressed(&"fire")
+		tank.fire_coax = Input.is_action_pressed(&"aim")
 	else:
 		tank.throttle = 0.0
 		tank.steer = 0.0
