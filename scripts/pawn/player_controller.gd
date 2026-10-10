@@ -20,6 +20,9 @@ extends Node
 
 var pawn: Pawn
 var camera: Camera3D
+## The player's level, XP and skill tree: the player's, not the pawn's -- it outlives a
+## pawn. The pawn possessed carries it (PlayerLevel.SOURCE_META), so its kills pay.
+var progress := PlayerLevel.new()
 ## Act on the keyboard without the mouse captured. For scripted gates, which
 ## synthesise keys and must not steal the cursor.
 var drive_uncaptured := false
@@ -46,6 +49,7 @@ func possess(p: Pawn, cam: Camera3D) -> void:
 	pawn = p
 	camera = cam
 	pawn.is_player = true
+	pawn.set_meta(PlayerLevel.SOURCE_META, progress)
 	pawn.intents.clear()
 	_eye_h = pawn.eye_height()
 	_sync_look()
@@ -56,6 +60,8 @@ func release() -> void:
 	if pawn != null:
 		pawn.intents.clear()
 		pawn.is_player = false
+		if is_instance_valid(pawn) and pawn.has_meta(PlayerLevel.SOURCE_META):
+			pawn.remove_meta(PlayerLevel.SOURCE_META)
 	pawn = null
 	camera = null
 

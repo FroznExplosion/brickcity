@@ -13,7 +13,7 @@ extends RefCounted
 const VERSION := 1
 const PATH := "user://character.json"
 
-var character := {"name": "Pilot", "level": 1, "max_health": 100.0}
+var character := {"name": "Pilot", "level": 1, "max_health": 100.0, "xp": 0, "skills": {}}
 var mech := {"gun": {"class": "lmg", "seed": 1, "tier": 1, "rarity": -1}}
 var guns: Array = []
 ## Mission id -> {"state": "open" | "done" | "failed", "progress": ...}.
@@ -64,6 +64,20 @@ static func load_from(path := PATH) -> CharacterSave:
 		push_warning("CharacterSave: %s is not a save -- a new character" % path)
 		return CharacterSave.new()
 	return from_dict(d)
+
+
+## The player's level, XP and skill tree, as saved (PlayerLevel.to_dict's shape).
+func progress_dict() -> Dictionary:
+	return {"level": character.get("level", 1), "xp": character.get("xp", 0),
+			"skills": character.get("skills", {})}
+
+
+## Keep `p`'s level, XP and skills.
+func take_progress(p: PlayerLevel) -> void:
+	var d := p.to_dict()
+	character["level"] = d.level
+	character["xp"] = d.xp
+	character["skills"] = d.skills
 
 
 ## The profile the next encounter's commander starts from.

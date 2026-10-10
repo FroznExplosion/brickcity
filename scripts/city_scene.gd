@@ -136,6 +136,10 @@ func _program_for(shape: Dictionary, index: int) -> Dictionary:
 ## The combat arena (WaveDirector, scenes/combat_arena.tscn): the player's pawn
 ## and waves of soldiers in and round one building. `--arena` does the same.
 @export var combat_arena := false
+## Firefight (FirefightDirector, scenes/firefight.tscn): waves of soldiers in a
+## walled-in ring of the city, in rounds and sets, with lives and a score.
+## `--firefight` does the same.
+@export var firefight := false
 ## The debris cap (Docs/Scale.md section 4.8, IslandManager). Exported because
 ## it is a player setting in the end -- Teardown ships exactly this pair, and
 ## the honest thing is to admit the cap exists rather than hide it.
@@ -826,6 +830,7 @@ var _wreck_state := {}
 var _wreck_dirty := {}
 var _soldier_mode := false
 var _arena_mode := false
+var _firefight_mode := false
 var arena: WaveDirector
 var _wreck_mode := false
 var _jam_mode := false
@@ -926,6 +931,7 @@ func _ready() -> void:
 	_nav_mode = "--nav" in args
 	_soldier_mode = "--soldier" in args
 	_arena_mode = combat_arena or "--arena" in args
+	_firefight_mode = firefight or "--firefight" in args
 	_wreck_mode = "--wreck" in args
 	_jam_mode = "--jam" in args
 	_drawn_mode = "--drawn" in args
@@ -1179,6 +1185,8 @@ func _ready() -> void:
 		_run_squad_pass()
 	elif _mechfall_mode:
 		_run_mechfall_pass()
+	elif _firefight_mode:
+		_start_firefight("--gate" in args)
 	elif _arena_mode:
 		_start_arena("--gate" in args)
 	elif _stress_mode:
@@ -1191,7 +1199,7 @@ func _ready() -> void:
 		_scripted = false
 	# The arena is in the chain and is the game, not a pass, unless it is run
 	# as its gate.
-	if _arena_mode and not ("--gate" in args):
+	if (_arena_mode or _firefight_mode) and not ("--gate" in args):
 		_scripted = false
 	if _scripted:
 		# A pass clicks for itself (--play, --mech), and a click is what takes
@@ -4178,12 +4186,28 @@ func _enter_pawn(feet: Vector3) -> void:
 		_arsenal.name = "Arsenal"
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
+		_load_progress()
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
 			arena.level if arena != null else 1)
 	_arsenal.fill_default(_loot_rng)
 	print("[city] playing: pawn at %v" % feet)
+
+
+## The player's level and skills from the character save, and kept there on every
+## change -- not in a pass or a test window: those never touch the player's save.
+func _load_progress() -> void:
+	if _scripted or TestWindow.is_test_window():
+		return
+	_player.progress.take(CharacterSave.load_from().progress_dict())
+	_player.progress.changed.connect(_save_progress)
+
+
+func _save_progress() -> void:
+	var s := CharacterSave.load_from()
+	s.take_progress(_player.progress)
+	s.save()
 
 
 ## The gun into the view's hands, its HUD up, the debug overlays away.
@@ -4410,6 +4434,8 @@ func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech.gun.equip(gi)
 	_mech.gun.rng = _combat_rng
 	_mech.gun.on_structure_hit = _gun.on_structure_hit
+	# The player's mech's kills are the player's XP (PlayerLevel).
+	_mech.gun.set_meta(PlayerLevel.SOURCE_META, _player.progress)
 	_wire_mech(_mech)
 	# Out of the cockpit it fights on its own, on the one button (AI.md 2.1).
 	var br := MechBrain.attach(ai_services, _mech, mech_nav, MechTree.companion(), 0)
@@ -6098,6 +6124,32 @@ func _run_soldier_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## The pools held from damage for the developer's invincible player (DevMode):
+## the pawn's, and the mech's or vehicle's while the player drives it. One left
+## behind -- the player got out -- takes damage again.
+var _invincible_pools: Array[HealthPool] = []
+
+
+func _sync_invincible() -> void:
+	var want: Array[HealthPool] = []
+	# A scripted pass measures the player being hurt; it is never invincible.
+	if DevMode.player_invincible() and not _scripted:
+		if _player_pawn != null and is_instance_valid(_player_pawn) and _player_pawn.health != null:
+			want.append(_player_pawn.health)
+		if _pilot.is_piloting() and _pilot.mech != null and is_instance_valid(_pilot.mech) 				and _pilot.mech.health != null:
+			want.append(_pilot.mech.health)
+		if _vehicle_pilot.is_driving() and _vehicle_pilot.vehicle != null 				and is_instance_valid(_vehicle_pilot.vehicle):
+			var vh = _vehicle_pilot.vehicle.get(&"health")
+			if vh is HealthPool:
+				want.append(vh)
+	for hp in _invincible_pools:
+		if is_instance_valid(hp) and not want.has(hp):
+			hp.invulnerable = false
+	for hp in want:
+		hp.invulnerable = true
+	_invincible_pools = want
+
+
 ## The combat arena: waves of soldiers in and round a building (WaveDirector).
 ## With `--gate`, the scripted check of where they are put, and quit.
 func _start_arena(gate: bool) -> void:
@@ -6123,6 +6175,26 @@ func _start_arena(gate: bool) -> void:
 		get_tree().quit(1 if _gate_fail > 0 else 0)
 	else:
 		arena.begin()
+
+
+## Firefight: waves of soldiers in a walled ring, in rounds and sets
+## (FirefightDirector). With `--gate`, its scripted check, and quit.
+func _start_firefight(gate: bool) -> void:
+	respawn_buildings = false
+	var ff := FirefightDirector.new()
+	ff.name = "Firefight"
+	arena = ff
+	add_child(ff)
+	ff.setup(self)
+	if gate:
+		ff.invulnerable = true
+		_player.drive_uncaptured = true
+		await ff.begin()
+		await ff.run_firefight_gate()
+		print("[firefight] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1 if _gate_fail > 0 else 0)
+	else:
+		ff.begin()
 
 
 ## The gate for wreckage weight in the city (Docs/AIPlan.md P5): a tower's top
@@ -8198,6 +8270,7 @@ func _mark(phase: String, t0: int) -> int:
 
 func _physics_process(_delta: float) -> void:
 	_prof = {}
+	_sync_invincible()
 	var t_tick := Time.get_ticks_usec()
 	var t := t_tick
 	# What the workers finished uploading since the last call into the

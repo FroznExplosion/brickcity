@@ -63,6 +63,10 @@ tier: same gun, new base damage (COMBAT_DESIGN §1.2). Never above the current s
 an ability. Nothing grows automatically: health and shields rise only through skill-tree nodes the
 player chooses, capped at about +30% in all. The tree is in COMBAT_DESIGN §1.3 and §4.2.
 
+Built (step 9): `PlayerLevel` and `SkillTree` (`scripts/progression/`). A tier of the tree opens
+on points spent anywhere in it, so by level 40 the whole tree is open; it holds more ranks than
+level 100 gives points. The skills are placeholder stats for now (COMBAT_DESIGN §14, step 9).
+
 Because the level never enters a damage number, an over-levelled player in a low zone has more
 options, not a faster kill — the tier still decides that.
 

@@ -90,6 +90,11 @@ var gun: GunInstance
 ## until mech weapons are rolled as classes of their own.
 var damage_scale: StringName = &""
 var damage_mult := 1.0
+## The holder's skills (PlayerArsenal.apply_skills), 1 for anyone else: the reload's
+## speed, the magazine's size, the alt-fire's charge and recharge speed. Never damage.
+var reload_mult := 1.0
+var mag_mult := 1.0
+var alt_mult := 1.0
 var rng: RandomNumberGenerator
 var range_m := 400.0
 var collision_mask := Layers.GUN_MASK
@@ -146,7 +151,7 @@ func equip(g: GunInstance) -> void:
 
 
 func mag_size() -> int:
-	return maxi(1, int(_stat(&"mag_size", 1.0)))
+	return maxi(1, int(_stat(&"mag_size", 1.0) * mag_mult))
 
 
 func is_reloading() -> bool:
@@ -160,7 +165,7 @@ func set_trigger(down: bool) -> void:
 func reload() -> void:
 	if gun == null or is_reloading() or ammo >= mag_size():
 		return
-	_reload_left = maxf(_stat(&"reload_time", 1.0), 0.05)
+	_reload_left = maxf(_stat(&"reload_time", 1.0) / maxf(reload_mult, 0.1), 0.05)
 	_reload_total = _reload_left
 	reload_started.emit(_reload_left)
 
@@ -478,9 +483,9 @@ func toggle_alt() -> bool:
 func alt_charge_time() -> float:
 	match alt_fire():
 		GunAltFire.DART:
-			return DART_CHARGE
+			return DART_CHARGE / maxf(alt_mult, 0.1)
 		GunAltFire.CHARGE:
-			return CHARGE_TIME
+			return CHARGE_TIME / maxf(alt_mult, 0.1)
 	return 0.0
 
 
@@ -571,7 +576,7 @@ func _fire_dart() -> bool:
 		alt_refused.emit("No ammo for a dart")
 		return false
 	ammo -= 1
-	_alt_cool = DART_COOLDOWN
+	_alt_cool = DART_COOLDOWN / maxf(alt_mult, 0.1)
 	_mark = {}
 	var b := aim.global_transform.basis
 	var dart := TrackingDart.launch(self, _effects_parent(), aim.global_position, -b.z)
@@ -676,7 +681,7 @@ func _fire_charge() -> bool:
 func _fire_arc() -> void:
 	if aim == null or not aim.is_inside_tree():
 		return
-	_alt_cool = ARC_COOLDOWN
+	_alt_cool = ARC_COOLDOWN / maxf(alt_mult, 0.1)
 	var b := aim.global_transform.basis
 	var dir := -b.z
 	var from := aim.global_position

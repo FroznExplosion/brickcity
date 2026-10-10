@@ -14,7 +14,11 @@ extends Node
 ##                 is still reload: the pawn does that; held, the reload its press
 ##                 started is called off.)
 ##   I             the backpack: arrows or wheel choose, 1-4 swap into that slot, Backspace
-##                 drops, I closes
+##                 drops, I closes. Tab turns to the skill tree's page (SkillScreen) and back.
+##
+## The player's skills (SkillTree, through PlayerController.progress) are put into the
+## hands here: `apply_skills`, on every change. A level up says so on the HUD, and the
+## HUD's bar shows the XP.
 ##
 ## One GunController fires whatever is in hand: a swap re-equips it, and each gun
 ## keeps its own magazine (`_ammo`). Guns not in hand wait, hidden, under `_holster`
@@ -49,10 +53,16 @@ var world_parent: Node3D
 ## The fight's tier: grenades are sized to it, and guns it rolls are of it.
 var tier := 1
 var grenades := GRENADES_MAX
+## What the skills make of GRENADES_MAX and GRENADE_RECHARGE (apply_skills).
+var grenades_max := GRENADES_MAX
+var grenade_recharge := GRENADE_RECHARGE
 ## The floor gun the player would pick up now (in reach, near the crosshair), or null.
 var target_pickup: WorldGunPickup
 var inventory_open := false
 var inventory_index := 0
+## The open screen's page: 0 the backpack, 1 the skill tree.
+var inventory_page := 0
+var skills: SkillScreen
 ## Short notes for the HUD ("Backpack full").
 var note := ""
 var _note_left := 0.0
@@ -88,6 +98,70 @@ func setup(p_player: PlayerController, p_gun: GunController, p_view: PlayerView,
 		add_child(_hud)
 	if gun != null and not gun.alt_refused.is_connected(_say):
 		gun.alt_refused.connect(_say)
+	if skills == null:
+		skills = SkillScreen.new()
+		skills.name = "Skills"
+		add_child(skills)
+	if player != null:
+		var pl := player.progress
+		skills.progress = pl
+		if gun != null:
+			gun.set_meta(PlayerLevel.SOURCE_META, pl)
+		if not pl.changed.is_connected(apply_skills):
+			pl.changed.connect(apply_skills)
+			pl.leveled_up.connect(_on_level_up)
+	apply_skills()
+
+
+## What the skill tree bought, into the hands, the legs and the body: the reload, the
+## magazine, the alt-fire, the grenades, the move speed, and health with its regen.
+## Placeholders (SkillTree): never a damage number.
+func apply_skills() -> void:
+	if player == null:
+		return
+	var t := player.progress.tree
+	if gun != null:
+		gun.reload_mult = 1.0 + t.total(&"reload_speed")
+		gun.mag_mult = 1.0 + t.total(&"mag_size")
+		gun.alt_mult = 1.0 + t.total(&"alt_speed")
+		gun.ammo = mini(gun.ammo, gun.mag_size())
+	grenades_max = GRENADES_MAX + int(t.total(&"grenade_max"))
+	grenades = mini(grenades, grenades_max)
+	grenade_recharge = GRENADE_RECHARGE / (1.0 + t.total(&"grenade_recharge"))
+	var pawn := player.pawn
+	if pawn != null and is_instance_valid(pawn):
+		pawn.move_mult = 1.0 + t.total(&"move_speed")
+		apply_health(pawn.health, t.total(&"max_health"), t.total(&"health_regen"))
+	changed.emit()
+
+
+## Health over its base by `share`, and `regen` a second after REGEN_DELAY unhurt. The
+## base is kept on the pool the first time, so it never compounds; more health bought is
+## health had at once.
+const REGEN_DELAY := 5.0
+static func apply_health(pool: HealthPool, share: float, regen: float) -> void:
+	if pool == null:
+		return
+	for i in pool.layer_configs.size():
+		var cfg := pool.layer_configs[i]
+		if cfg.layer_type != &"health":
+			continue
+		var key := StringName("skill_base_%d" % i)
+		if not pool.has_meta(key):
+			pool.set_meta(key, [cfg.max_value, cfg.regen_rate, cfg.regen_delay])
+		var base: Array = pool.get_meta(key)
+		var was := cfg.max_value
+		cfg.max_value = float(base[0]) * (1.0 + share)
+		cfg.regen_rate = float(base[1]) + regen
+		cfg.regen_delay = REGEN_DELAY if regen > 0.0 else float(base[2])
+		if i < pool._current.size() and not pool.is_dead():
+			pool._current[i] = clampf(pool._current[i] + maxf(cfg.max_value - was, 0.0), 0.0,
+					cfg.max_value)
+
+
+func _on_level_up(level: int) -> void:
+	var free := player.progress.points_free()
+	_say("Level %d!  %d skill point%s to spend (I, then Tab)" % [level, free, "" if free == 1 else "s"])
 
 
 ## The starting kit: whatever the controller already holds in slot 1, then a pistol,
@@ -171,6 +245,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif _pressed(event, &"inventory"):
 		inventory_open = true
 		inventory_index = clampi(inventory_index, 0, maxi(loadout.backpack.size() - 1, 0))
+		# Points to spend: open on the tree.
+		if player != null and player.progress.points_free() > 0:
+			inventory_page = 1
 	else:
 		handled = false
 	if handled:
@@ -200,6 +277,11 @@ func _inventory_input(event: InputEvent) -> void:
 	var n := loadout.backpack.size()
 	if _pressed(event, &"inventory"):
 		inventory_open = false
+	elif _pressed(event, &"swap_weapon"):
+		inventory_page = 1 - inventory_page
+	elif inventory_page == 1:
+		if skills != null:
+			skills.handle(event)
 	elif _step(event) != 0:
 		inventory_index = clampi(inventory_index + _step(event), 0, maxi(n - 1, 0))
 	elif event is InputEventKey and event.pressed and (event.keycode == KEY_BACKSPACE or event.keycode == KEY_DELETE):
@@ -220,9 +302,11 @@ func _process(delta: float) -> void:
 		_note_left -= delta
 		if _note_left <= 0.0:
 			note = ""
-	if grenades < GRENADES_MAX:
+	if skills != null:
+		skills.show_screen(inventory_open and inventory_page == 1 and _active())
+	if grenades < grenades_max:
 		_grenade_clock += delta
-		if _grenade_clock >= GRENADE_RECHARGE:
+		if _grenade_clock >= grenade_recharge:
 			_grenade_clock = 0.0
 			grenades += 1
 			changed.emit()
@@ -333,7 +417,7 @@ func throw_grenade() -> void:
 	var g := Grenade.throw(services, player.pawn, eye + fwd * 0.5, to, world_parent)
 	g.damage = CombatScale.melee(tier) * GRENADE_MELEES
 	grenades -= 1
-	if grenades == GRENADES_MAX - 1:
+	if grenades == grenades_max - 1:
 		_grenade_clock = 0.0
 	changed.emit()
 
@@ -459,7 +543,7 @@ class ArsenalHud extends CanvasLayer:
 				x -= 18.0
 		var ord := lo.ordnance as GunInstance
 		var ord_txt := "5 %s%s   G %s" % [_label(ord), "  (up)" if lo.ordnance_up else "",
-				"●".repeat(arsenal.grenades) + "○".repeat(PlayerArsenal.GRENADES_MAX - arsenal.grenades)]
+				"●".repeat(arsenal.grenades) + "○".repeat(maxi(arsenal.grenades_max - arsenal.grenades, 0))]
 		var ow := font.get_string_size(ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 		c.draw_string(font, Vector2(right - ow, y - 44.0), ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
 				Color(1, 1, 1, 0.8))
@@ -484,8 +568,30 @@ class ArsenalHud extends CanvasLayer:
 			var nw := font.get_string_size(arsenal.note, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
 			c.draw_string(font, Vector2(mid.x - nw * 0.5, mid.y + 94.0), arsenal.note,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.85, 0.4))
-		if arsenal.inventory_open:
+		_level(font, sz)
+		if arsenal.inventory_open and arsenal.inventory_page == 0:
 			_backpack(font, sz)
+
+	## The level and its XP, a thin bar at the bottom middle; the points waiting.
+	func _level(font: Font, sz: Vector2) -> void:
+		if arsenal.player == null:
+			return
+		var c := _draw_node
+		var pl := arsenal.player.progress
+		var need := PlayerLevel.xp_to_next(pl.level)
+		var bw := 260.0
+		var at := Vector2(sz.x * 0.5 - bw * 0.5, sz.y - 22.0)
+		c.draw_rect(Rect2(at, Vector2(bw, 4.0)), Color(1, 1, 1, 0.18))
+		if need > 0:
+			c.draw_rect(Rect2(at, Vector2(bw * float(pl.xp) / need, 4.0)), Color(0.4, 0.85, 1.0, 0.9))
+		var txt := "Lv %d" % pl.level
+		var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		c.draw_string(font, Vector2(at.x - tw - 8.0, at.y + 6.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+				Color(1, 1, 1, 0.8))
+		var free := pl.points_free()
+		if free > 0:
+			c.draw_string(font, Vector2(at.x + bw + 8.0, at.y + 6.0), "+%d skill point%s  (I)" % [free,
+					"" if free == 1 else "s"], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.85, 0.4))
 
 	## The alt-fire (COMBAT_DESIGN 7.2): its mode over the slots, its charge under the
 	## crosshair, and the dart's mark where it is in the world.
@@ -551,5 +657,5 @@ class ArsenalHud extends CanvasLayer:
 			c.draw_string(font, Vector2(r.position.x + 16, yy), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
 					_colour(g))
 		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 10),
-				"Arrows/wheel choose  ·  1-4 swap into slot  ·  Backspace drop  ·  I close",
+				"Arrows/wheel choose  ·  1-4 swap into slot  ·  Backspace drop  ·  Tab skills  ·  I close",
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.6))

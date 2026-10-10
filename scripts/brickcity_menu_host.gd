@@ -16,6 +16,7 @@ const MENU_SETTINGS := preload("res://menu/core/MenuSettings.gd")
 const CITY := "res://scenes/city.tscn"
 const BIG_CITY := "res://scenes/big_city.tscn"
 const ARENA := "res://scenes/combat_arena.tscn"
+const FIREFIGHT := "res://scenes/firefight.tscn"
 const WORKSHOP := "res://scenes/workshop.tscn"
 ## The scenes the pause menu opens over: the city's, which owns Escape for nothing else. The
 ## workshop and the terrain tools have their own Escape (menus, cancelling a grab).
@@ -43,6 +44,8 @@ func _main_menu_entries() -> Array:
 		{"label": "Combat Arena", "primary": true,
 			"tooltip": "Waves of soldiers in and around a building.",
 			"action": func() -> void: _goto(ARENA)},
+		{"label": "Firefight", "tooltip": "Hold out against waves of soldiers in a walled-in ring.",
+			"action": func() -> void: _goto(FIREFIGHT)},
 		{"label": "City", "tooltip": "A block of city to walk, fight and knock down.",
 			"action": func() -> void: _goto(CITY)},
 		{"label": "Big City", "action": func() -> void: _goto(BIG_CITY)},
@@ -123,14 +126,19 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			CalloutHud.shown = MENU_SETTINGS.truthy(value)
 		&"dev_mode":
 			DevMode.on = MENU_SETTINGS.truthy(value)
+		&"invincible":
+			DevMode.invincible = MENU_SETTINGS.truthy(value)
 
 
-## The game's own rows: developer mode, in Gameplay.
+## The game's own rows: developer mode and the invincible player, in Gameplay.
 func _setting_defs() -> Array:
 	return [
 		{"id": &"dev_mode", "tab": "gameplay", "type": MENU_SETTINGS.T_BOOL, "label": "Developer Mode",
 			"default": true, "hint": "The developer keys and tools (spawning, debug views, the terrain "
 			+ "and disaster tools), and a Developer tab here with buttons and their key bindings."},
+		{"id": &"invincible", "tab": "gameplay", "type": MENU_SETTINGS.T_BOOL, "label": "Invincible (Developer)",
+			"default": true, "hint": "While Developer Mode is on, you take no damage -- on foot, and in "
+			+ "the mech or vehicle you drive."},
 	]
 
 
@@ -242,12 +250,24 @@ func _build_dev_tab(page: VBoxContainer) -> void:
 	MenuFit.fit_label(head, false)
 	page.add_child(head)
 	var where := Label.new()
-	where.text = "They open over the city (the City, Big City and Combat Arena), and close the menu." \
-			if _city() != null else "Open in the City, Big City or the Combat Arena to use these."
+	where.text = "They open over the city (the City, Big City, Combat Arena and Firefight), and close the menu." \
+			if _city() != null else "Open in the City, Big City, the Combat Arena or Firefight to use these."
 	MenuFit.fit_label(where)
 	where.add_theme_color_override("font_color", MenuTheme.text_dim)
 	where.add_theme_font_size_override("font_size", MenuTheme.font_size(0.82))
 	page.add_child(where)
+	# The same setting as Gameplay's row, here where it is looked for.
+	var inv := CheckButton.new()
+	inv.text = "Invincible"
+	inv.button_pressed = DevMode.invincible
+	MenuFit.fit_button(inv)
+	inv.toggled.connect(func(v: bool) -> void:
+		var ms := (Engine.get_main_loop() as SceneTree).root.get_node_or_null(^"MenuSettings")
+		if ms != null:
+			ms.set_value(&"invincible", v)
+		else:
+			DevMode.invincible = v)
+	page.add_child(inv)
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
