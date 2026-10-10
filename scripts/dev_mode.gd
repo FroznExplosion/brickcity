@@ -10,3 +10,13 @@ extends RefCounted
 ## header): set from the saved setting, read by the city's key handler.
 
 static var on := true
+
+## Invincible (Options > Gameplay, and the Developer tab): the player -- on
+## foot, and the mech or vehicle they drive -- takes no damage. Only while
+## developer mode is on. On by default for now, while the modes are built.
+static var invincible := true
+
+
+## Whether the player's health is to be held full now.
+static func player_invincible() -> bool:
+	return on and invincible
