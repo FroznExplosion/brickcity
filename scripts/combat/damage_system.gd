@@ -76,6 +76,13 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	if packet.shield_mult != 1.0 and pool.top_layer_type() == &"shield":
 		extra *= packet.shield_mult
 
+	# The plasma charge: a shield up takes all of it, and the charge stops there.
+	if packet.strip_shield and pool.top_layer_type() == &"shield":
+		pool.apply_impact(1e12, &"", 1.0, false, true)
+		result.dealt = before - pool.total_current()
+		result.killed = pool.is_dead()
+		return result
+
 	# A melee is its own damage type and one step: it lands on the top layer and stops
 	# there, whatever it broke (COMBAT_DESIGN 4.1). Never a crit.
 	if packet.melee:
@@ -98,8 +105,15 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	# there (Elements), the kinetic part flat. The element goes first, so a plasma round
 	# strips the shield and its kinetic part meets what is under it. A crit-spot hit is
 	# not gated when it breaks a shield (4.4).
+	# The element part builds its status from what it dealt, on the layer it landed on
+	# (ElementStatus, COMBAT_DESIGN 5): always, never a dice roll.
 	if has_element and elemental_amount > 0.0:
+		var layer := pool.top_layer_type()
+		var before_el := pool.total_current()
 		pool.apply_impact(elemental_amount, packet.element.id, extra, packet.crit)
+		if not pool.is_dead():
+			ElementStatus.build(target_root, packet.element.id, layer,
+					before_el - pool.total_current())
 	if kinetic_amount > 0.0:
 		pool.apply_impact(kinetic_amount, &"", extra, packet.crit)
 

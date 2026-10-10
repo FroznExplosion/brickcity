@@ -78,6 +78,12 @@ var moves: PawnMoves
 var melee_tier := 1
 ## Seconds until the next melee may start (MeleeStrike.RECOVERY).
 var _melee_cool := 0.0
+## Element statuses (ElementStatus, COMBAT_DESIGN 5): a chill or a shock slows the legs
+## by this; a freeze stops the pawn where it stands -- no moving, firing or turning.
+var speed_mult := 1.0
+var frozen := false
+## A player's pawn: slowed by ice, never frozen (PlayerController sets it).
+var is_player := false
 
 var _capsule: CapsuleShape3D
 var _height := BODY_HEIGHT
@@ -262,10 +268,17 @@ func is_on_floor() -> bool:
 func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
+	if frozen:
+		intents.move = Vector3.ZERO
+		intents.jump = false
+		intents.fire = false
+		intents.melee = false
+		intents.reload = false
 	step(delta)
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
-		eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
+		if not frozen:
+			eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
 	_melee_cool = maxf(_melee_cool - delta, 0.0)
 	if intents.melee and _melee_cool <= 0.0:
 		melee()
@@ -331,6 +344,7 @@ func step(delta: float) -> void:
 		speed = AIM_SPEED
 	elif intents.run:
 		speed = RUN_SPEED
+	speed *= speed_mult
 
 	if moves != null:
 		moves.step(delta, wish, speed)
