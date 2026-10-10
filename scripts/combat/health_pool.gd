@@ -152,12 +152,18 @@ func apply_to_layer_type(amount: float, layer_type: StringName, element_id: Stri
 ## the damage sources that remembered, which is exactly as strong as not having the rule.
 var damage_filter: Callable
 
+## Nothing lands while this is set: the developer's invincible player (DevMode).
+## Here, in the one funnel, so no damage path gets past it.
+var invulnerable := false
+
 
 ## Returns how much actually landed, which is NOT always what was asked for once a
 ## [member damage_filter] is installed. Callers that loop over layers must use the return value:
 ## a layer that absorbed nothing is still the topmost living one, so treating the request as
 ## absorbed re-picks it forever.
 func _damage_index(idx: int, dmg: float, element_id: StringName = &"") -> float:
+	if invulnerable:
+		return 0.0
 	if damage_filter.is_valid():
 		dmg = maxf(float(damage_filter.call(dmg, idx, element_id)), 0.0)
 	if dmg <= 0.0:
