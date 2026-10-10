@@ -720,10 +720,20 @@ var _feedback: CombatFeedback
 var _pilot := MechPilot.new()
 var _mech: Mech
 ## Tanks (AIRoster.md RO10): Z puts an enemy one ahead with a squad screening it,
-## SHIFT+Z an empty one of ours; M beside any empty tank (or one of ours) gets
-## in, M again gets out on foot.
+## SHIFT+Z an empty one of ours; CTRL+Z an empty truck of ours, CTRL+SHIFT+Z an
+## enemy truck with a squad in the back, coming for the player. M beside a
+## vehicle gets in at the wheel, or on its deck when somebody else drives it;
+## E beside an enemy's climbs on a tank or takes a truck's cab (Halo's
+## boarding; Docs/AIVehicles.md 4).
 var tanks: Array[Tank] = []
-var _tank_pilot := TankPilot.new()
+## The trucks spawned here; the arena's are its own. All of them are in the
+## "trucks" group, which is what M and E look through.
+var trucks: Array[TransportTruck] = []
+var _vehicle_pilot := VehiclePilot.new()
+## When the player's side next looks for soldiers to hop on the player's vehicle.
+var _hop_in_at := 0.0
+## Friendly soldiers this near the player's vehicle, stopped, hop on its deck.
+const HOP_IN_RANGE := 15.0
 ## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
 ## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
 var weight: WeightTracker
@@ -740,6 +750,8 @@ var _chunk_owner := {}
 ## Mechs with no brain and no pilot (the --mechfall gate's).
 var _loose_mechs: Array[Mech] = []
 var _mech_mode := false
+## --vehicles: the player's vehicles by their keys (_run_vehicles_pass).
+var _vehicles_mode := false
 ## The AI's view of the city (Docs/AIPlan.md P2): what stands between two points,
 ## how long cover lasts, where not to stand. Synced once a tick; it reads the
 ## bricks and never changes them.
@@ -902,6 +914,7 @@ func _ready() -> void:
 	_gun_mode = "--gun" in args
 	_play_mode = "--play" in args
 	_mech_mode = "--mech" in args
+	_vehicles_mode = "--vehicles" in args
 	_no_ai = "--no-ai" in args
 	_nav_mode = "--nav" in args
 	_soldier_mode = "--soldier" in args
@@ -1137,6 +1150,8 @@ func _ready() -> void:
 		_run_play_pass()
 	elif _mech_mode:
 		_run_mech_pass()
+	elif _vehicles_mode:
+		_run_vehicles_pass()
 	elif _nav_mode:
 		_run_nav_pass()
 	elif _soldier_mode:
@@ -4295,12 +4310,20 @@ func _board_mech() -> void:
 	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
 
 
-## The mech the player's pawn is riding (Rodeo), or null.
-func _riding() -> Mech:
+## The enemy mech or tank the player's pawn is on (Rodeo, VehicleDeck), or null.
+func _riding() -> Object:
 	if _player_pawn == null or not is_instance_valid(_player_pawn) or not _player_pawn.has_meta(&"riding"):
 		return null
-	var m := _player_pawn.get_meta(&"riding") as Mech
+	var m: Object = _player_pawn.get_meta(&"riding")
 	return m if m != null and is_instance_valid(m) else null
+
+
+## The vehicle of ours the player's pawn rides on (VehicleDeck), or null.
+func _aboard() -> Node3D:
+	if _player_pawn == null or not is_instance_valid(_player_pawn) or not _player_pawn.has_meta(&"aboard"):
+		return null
+	var v: Node3D = _player_pawn.get_meta(&"aboard")
+	return v if v != null and is_instance_valid(v) else null
 
 
 ## E on foot: climb the enemy mech within reach, if there is one.
@@ -4314,13 +4337,27 @@ func _melee_context() -> bool:
 
 
 func _rodeo_climb() -> bool:
-	if _riding() != null:
+	if _riding() != null or _aboard() != null:
 		return false
 	for n in get_tree().get_nodes_in_group(&"mech_layers"):
 		var ml := n as MechLayers
 		if ml != null and not ml.dead and ml.mech.rodeo.can_climb(_player_pawn):
 			ml.mech.rodeo.climb(_player_pawn)
 			print("[city] on its back: hold E to plant the charge (%.1f s), jump to get off" % Rodeo.PLANT_SECONDS)
+			return true
+	# An enemy tank: onto its back deck, to pry the hatch (Halo's boarding).
+	for t in tanks:
+		if is_instance_valid(t) and t.rodeo.can_climb(_player_pawn):
+			t.rodeo.climb(_player_pawn)
+			print("[city] on its deck: hold E to pry the hatch open (%.1f s) and drag the crew out, jump to get off" % VehicleDeck.PRY_SECONDS)
+			return true
+	# An enemy truck: its cab, at once.
+	for n in get_tree().get_nodes_in_group(&"trucks"):
+		var tr := n as TransportTruck
+		if tr != null and tr.can_hijack(_player_pawn):
+			print("[city] hijacked a truck%s" % (": its squad is out at the tailgate" if not tr.cargo.is_empty() else ""))
+			tr.hijack(_player_pawn)
+			_drive_vehicle(tr)
 			return true
 	return false
 
@@ -4419,9 +4456,12 @@ func _spawn_tank(feet: Vector3, yaw: float, team: int, crewed: bool) -> Tank:
 			so.pawn.team = team
 			t.board(so.pawn, seat, true)
 	t.wrecked.connect(func(w: Tank) -> void:
-		print("[city] tank wrecked at %v" % w.feet())
-		if _tank_pilot.tank == w:
-			_leave_tank())
+		print("[city] tank wrecked at %v" % w.feet()))
+	_wire_deck(t)
+	t.player_thrown.connect(func() -> void:
+		if _vehicle_pilot.vehicle == t:
+			print("[city] a boarder pried the hatch open: you are dragged out")
+			_leave_vehicle(Tank.DRAGGED_HURT))
 	tanks.append(t)
 	print("[city] tank of side %d at %v, %s" % [team, feet, "crewed" if crewed else "empty"])
 	return t
@@ -4440,40 +4480,189 @@ func _spawn_enemy_tank(feet: Vector3, yaw: float) -> Tank:
 	return t
 
 
-## The tank whose side the player's pawn stands at, any side's; null for none.
-func _tank_at_side() -> Tank:
+## The vehicle -- a tank or a truck, any side's -- the player's pawn stands
+## beside; null for none.
+func _vehicle_at_side() -> CharacterBody3D:
 	if not _player.is_possessing() or _player_pawn == null or not is_instance_valid(_player_pawn):
 		return null
 	for t in tanks:
 		if is_instance_valid(t) and not t.is_wrecked() and t.can_reach(_player_pawn):
 			return t
+	for n in get_tree().get_nodes_in_group(&"trucks"):
+		var tr := n as TransportTruck
+		if tr != null and not tr.is_wrecked() and (tr.can_reach(_player_pawn)
+				or tr.rodeo.beside(_player_pawn, VehicleDeck.RIDE_REACH)):
+			return tr
 	return null
 
 
-## In: driver and gunner both. An empty tank of any side, or one of ours.
-func _board_tank(t: Tank) -> void:
-	if not t.take_player(_player_pawn.team):
+## M beside a vehicle (Halo): the wheel if nobody has it -- an empty one of any
+## side, a tank of ours with no driver, a truck from beside its cab -- and
+## otherwise a place on its deck, if it is ours.
+func _use_vehicle(v: CharacterBody3D) -> void:
+	var drive := false
+	if v is Tank:
+		var t := v as Tank
+		drive = not t.player_in and not Tank._alive(t.crew[Tank.Seat.DRIVER]) \
+				and (t.is_empty() or t.team == _player_pawn.team)
+	else:
+		var tr := v as TransportTruck
+		drive = tr.is_empty() and tr.can_reach(_player_pawn)
+	if drive:
+		_drive_vehicle(v)
+	elif v.rodeo.ride(_player_pawn):
+		print("[city] riding on it: shoot from there; jump or M to get off")
+	elif v.team == _player_pawn.team:
+		print("[city] no room on it")
+	else:
+		print("[city] not yours: E beside it to %s" % ("climb on and pry its hatch" if v is Tank else "take its cab"))
+
+
+## In at the wheel (a tank: both seats). An empty vehicle of any side, or one of ours.
+func _drive_vehicle(v: CharacterBody3D) -> void:
+	if not v.take_player(_player_pawn.team):
 		print("[city] its crew is in it: not yours to take")
 		return
 	_leave_pawn()
+	# The free camera's gun stays down: the buttons are the vehicle's (its view
+	# drew over the tank, and its left button fired beside the cannon).
+	_gun_armed = false
+	_gun.set_trigger(false)
+	if _gun.gun != null:
+		_gun.gun.visible = false
 	if camera.is_walking():
 		camera.set_walking(false)
-	if _tank_pilot.get_parent() == null:
-		_tank_pilot.name = "TankPilot"
-		add_child(_tank_pilot)
+	if _vehicle_pilot.get_parent() == null:
+		_vehicle_pilot.name = "VehiclePilot"
+		add_child(_vehicle_pilot)
 	camera.set_process(false)
 	camera.allow_walk = false
-	_tank_pilot.board(t, camera)
-	print("[city] driving a tank: WASD drive, LMB cannon, RMB machine gun, M to get out")
+	_vehicle_pilot.board(v, camera)
+	if not v.wrecked.is_connected(_on_driven_wrecked):
+		v.wrecked.connect(_on_driven_wrecked)
+	_hop_in_at = 0.0
+	if v is Tank:
+		print("[city] driving a tank: WASD drive, LMB cannon, RMB machine gun, C inside/behind, M to get out")
+	else:
+		print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
 
 
-func _leave_tank() -> void:
-	var t := _tank_pilot.tank
-	_tank_pilot.leave()
+## Out on foot beside it, `hurt` for a wreck or a boarder; its riders get down
+## with the driver -- they have a fight to get back to.
+func _leave_vehicle(hurt := 0.0) -> void:
+	var v := _vehicle_pilot.vehicle
+	_vehicle_pilot.leave()
 	camera.set_process(true)
 	camera.allow_walk = camera.capture_mouse
-	if t != null and is_instance_valid(t):
-		_enter_pawn(t.mount_point())
+	if v != null and is_instance_valid(v):
+		v.rodeo.all_off("driver out")
+		_enter_pawn(v.mount_point())
+		if hurt > 0.0 and _player_pawn != null and _player_pawn.health != null:
+			_player_pawn.health.apply_impact(hurt, &"")
+
+
+func _on_driven_wrecked(v: Node) -> void:
+	if _vehicle_pilot.vehicle == v:
+		print("[city] wrecked: you climb out")
+		_leave_vehicle(Tank.BAIL_HURT)
+
+
+## Halo's marines: while the player drives a vehicle of theirs and it stands
+## still, soldiers of the player's side near it go and get on its deck, as many
+## as it has room for. They ride and shoot until the player gets out.
+func _hop_in() -> void:
+	var now := ai_services.now()
+	if now < _hop_in_at or not _vehicle_pilot.is_driving():
+		return
+	_hop_in_at = now + 1.0
+	var v := _vehicle_pilot.vehicle
+	if v.is_wrecked() or Vector2(v.velocity.x, v.velocity.z).length() > 3.0:
+		return
+	var deck: VehicleDeck = v.rodeo
+	var room := deck.riders.size() - deck.rider_count()
+	var near := []
+	for p in ai_services.pawns:
+		if not is_instance_valid(p) or p.team != v.team or p.body == null:
+			continue
+		var so := p.body.get_node_or_null(^"Soldier") as Soldier
+		if so == null or p.health == null or p.health.is_dead():
+			continue
+		if so.board_vehicle == v:
+			room -= 1
+			continue
+		if so.board_vehicle != null or so.board_mech != null or so.rodeo_target != null \
+				or p.has_meta(&"riding") or p.has_meta(&"aboard") or p.has_meta(&"in_vehicle"):
+			continue
+		var d := p.feet().distance_to(v.feet())
+		if d < HOP_IN_RANGE:
+			near.append([d, so])
+	near.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
+	for i in mini(room, near.size()):
+		(near[i][1] as Soldier).ride_on(v)
+
+
+## What a deck does, in the log for the player.
+func _wire_deck(v: Node3D) -> void:
+	var d: VehicleDeck = v.rodeo
+	d.climbed.connect(func(p: Pawn) -> void:
+		if v == _vehicle_pilot.vehicle:
+			print("[city] a boarder on your tank! Get out (M) and shoot it off, before it pries the hatch")
+		elif p == _player_pawn:
+			pass)
+	d.noticed.connect(func(p: Pawn) -> void:
+		if p == _player_pawn:
+			print("[city] boarding: they have seen you"))
+	d.dropped.connect(func(p: Pawn, why: String) -> void:
+		if p == _player_pawn and why != "in":
+			print("[city] boarding: off (%s)" % why))
+	d.hijacked.connect(func(by: Pawn) -> void:
+		if by == _player_pawn:
+			print("[city] the hatch is open: its crew is out, and it is yours")
+			_drive_vehicle(v)
+		else:
+			print("[city] a boarder has a tank of side %d" % v.team))
+	d.rider_off.connect(func(p: Pawn, why: String) -> void:
+		if p == _player_pawn:
+			print("[city] off the deck (%s)" % why))
+
+
+## A truck of side `team` at `feet`, facing `yaw`, with `cargo` in the back
+## (put down at its tailgate when it stops: _truck_unload).
+func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]) -> TransportTruck:
+	var tr := TransportTruck.make(ai_services, self, feet, yaw)
+	tr.team = team
+	tr.cargo = cargo
+	tr.arrived.connect(_truck_unload)
+	_wire_deck(tr)
+	tr.wrecked.connect(func(w: TransportTruck) -> void:
+		print("[city] truck wrecked at %v%s" % [w.feet(), (" with %d aboard" % w.cargo.size()) if not w.cargo.is_empty() else ""])
+		w.cargo.clear()
+		trucks.erase(w)
+		get_tree().create_timer(10.0).timeout.connect(func() -> void:
+			if is_instance_valid(w):
+				w.queue_free()))
+	trucks.append(tr)
+	print("[city] truck of side %d at %v%s" % [team, feet, (", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
+	return tr
+
+
+## A truck spawned here has stopped (or was hijacked): its squad is put down at
+## the tailgate, on the side away from the player.
+func _truck_unload(tr: TransportTruck) -> void:
+	if tr.cargo.is_empty():
+		return
+	var threat := _player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn) \
+			else tr.global_position + Vector3.FORWARD
+	var spots := tr.tailgate_points(threat, tr.cargo.size())
+	var squad_at := Vector3.INF
+	for i in tr.cargo.size():
+		var at: Vector3 = spots[i] if i < spots.size() else ai_nav.snap(tr.global_position
+				+ tr.global_transform.basis.z * (TransportTruck.SIZE.z * 0.5 + 1.2 + i))
+		_spawn_soldier(at)
+		if squad_at == Vector3.INF:
+			squad_at = at
+	print("[city] truck unloaded %d at %v (%s)" % [tr.cargo.size(), tr.global_position, tr.stopped_because])
+	tr.cargo.clear()
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -4810,6 +4999,106 @@ func _run_mech_pass() -> void:
 	await _save("city_mech")
 	_check_log_replays()
 	print("[mech] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The player's vehicles, by their keys (Docs/AIVehicles.md 4; Halo's driving,
+## riding and boarding): a truck of ours got into with M and driven, the view
+## behind and inside; friends near hop in its bed; out with M, they get down.
+## An enemy's crewed tank: E beside it climbs on, E held pries the hatch, its
+## crew is dragged out and the player has it; its cannon fires.
+func _run_vehicles_pass() -> void:
+	print("[vehicles] driving, riding and boarding")
+	_vehicle_pilot.drive_uncaptured = true
+	_player.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 12.0)
+	camera.rotation = Vector3.ZERO
+	var truck_at := ai_services.vehicle_nav(&"truck").snap(_on_ground(open))
+	var tr := _spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
+	await _frames(20)
+	_enter_pawn(tr.mount_point())
+	await _frames(10)
+	_key(KEY_M, true)
+	await _frames(2)
+	_key(KEY_M, false)
+	await _frames(20)
+	_gate_ok("M beside a truck of ours: at the wheel", _vehicle_pilot.vehicle == tr and tr.player_in)
+	var cam_back := (camera.global_position - tr.global_position)
+	_gate_ok("the camera follows behind it (Halo)", cam_back.length() > 4.0 and cam_back.dot(camera.global_transform.basis.z) > 3.0,
+			"%.1f m from it" % cam_back.length())
+	_key(KEY_C, true)
+	await _frames(2)
+	_key(KEY_C, false)
+	await _frames(5)
+	_gate_ok("C puts the view inside the cab", camera.global_position.distance_to(tr.eye_interpolated()) < 0.3)
+	_key(KEY_C, true)
+	await _frames(2)
+	_key(KEY_C, false)
+	var from := tr.feet()
+	_key(KEY_W, true)
+	await _frames(120)
+	_key(KEY_W, false)
+	await _frames(60)
+	_gate_ok("W drives it", tr.feet().distance_to(from) > 8.0, "%.1f m" % tr.feet().distance_to(from))
+	# Friends near hop in its bed while it stands.
+	var friends: Array[Soldier] = []
+	for i in 2:
+		var so := _spawn_soldier(ai_nav.snap(tr.feet() + tr.global_transform.basis.x * (5.0 + i)))
+		so.team = 0
+		so.pawn.team = 0
+		friends.append(so)
+	await _frames(400)
+	_gate_ok("friends near hop in its bed", tr.rodeo.rider_count() == 2,
+			"%d on (%s)" % [tr.rodeo.rider_count(), ", ".join(friends.map(func(x: Soldier) -> String: return x.state))])
+	_key(KEY_M, true)
+	await _frames(2)
+	_key(KEY_M, false)
+	await _frames(20)
+	_gate_ok("M gets out, on foot beside it, and its riders get down", not _vehicle_pilot.is_driving()
+			and _player.is_possessing() and _player_pawn.feet().distance_to(tr.feet()) < 4.0
+			and tr.rodeo.rider_count() == 0, "%d still on" % tr.rodeo.rider_count())
+	for so in friends:
+		so.pawn.health.apply_impact(1e9, &"")
+
+	# An enemy's crewed tank: E beside it climbs on, E held pries the hatch.
+	var tank_at := ai_services.vehicle_nav(&"tank").snap(_on_ground(open + Vector3(25.0, 0.0, 0.0)))
+	var t := _spawn_tank(tank_at, PI * 0.5, 1, true)
+	(t.get_node(^"TankBrain") as TankBrain).enabled = false
+	await _frames(20)
+	var crew: Array = t.crew.values()
+	_player_pawn.place(t.rodeo._down_point(true))
+	await _frames(10)
+	_key(KEY_E, true)
+	await _frames(10)
+	_gate_ok("E beside an enemy's crewed tank: onto its deck", _riding() == t)
+	await _frames(int((VehicleDeck.PRY_SECONDS + 0.5) * 60.0))
+	_key(KEY_E, false)
+	await _frames(20)
+	var out := 0
+	for c in crew:
+		if c != null and is_instance_valid(c) and not (c as Pawn).has_meta(&"in_vehicle"):
+			out += 1
+	_gate_ok("held, it pries the hatch: the crew is dragged out and the tank is the player's",
+			_vehicle_pilot.vehicle == t and t.team == 0 and t.crew_count() == 0 and out == 2,
+			"driving %s, side %d, %d of 2 out" % [_vehicle_pilot.vehicle, t.team, out])
+	var shells := t.shells
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.parse_input_event(click)
+	await _frames(10)
+	click = click.duplicate()
+	click.pressed = false
+	Input.parse_input_event(click)
+	await _frames(20)
+	_gate_ok("LMB fires its cannon", t.shells > shells)
+	await _save("city_vehicles")
+	_key(KEY_M, true)
+	await _frames(2)
+	_key(KEY_M, false)
+	await _frames(10)
+	print("[vehicles] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
@@ -9449,6 +9738,7 @@ func _process(delta: float) -> void:
 	var ridden := _riding()
 	if ridden != null:
 		ridden.rodeo.planting = InputMap.has_action(&"melee") and Input.is_action_pressed(&"melee")
+	_hop_in()
 	_update_live_prof(delta)
 	if _view_owed or (DebugView.active() and Engine.get_process_frames() - _view_frame >= 2):
 		_view_sweep()
@@ -9791,6 +10081,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _riding() != null and event.is_action_pressed(&"jump"):
 			_riding().rodeo.drop("jumped")
 			return
+		if _aboard() != null and event.is_action_pressed(&"jump"):
+			_aboard().rodeo.get_off(_player_pawn, "jumped")
+			return
 	# On foot the buttons are the player's own (rebindable input actions,
 	# PlayerController): firing, aiming and reloading go through the pawn.
 	if event is InputEventMouseButton and _player.is_possessing():
@@ -9855,22 +10148,34 @@ func _unhandled_input(event: InputEvent) -> void:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
 			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
 		KEY_M:
-			if _tank_pilot.is_driving():
-				_leave_tank()
+			if _vehicle_pilot.is_driving():
+				_leave_vehicle()
 			elif _pilot.is_piloting():
 				_leave_mech()
-			elif _tank_at_side() != null:
-				_board_tank(_tank_at_side())
+			elif _aboard() != null:
+				_aboard().rodeo.get_off(_player_pawn, "jumped")
+			elif _vehicle_at_side() != null:
+				_use_vehicle(_vehicle_at_side())
 			else:
 				_board_mech()
 		KEY_Z:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
-			if event.shift_pressed:
+			var truck_nav := ai_services.vehicle_nav(&"truck")
+			if event.ctrl_pressed and event.shift_pressed:
+				# From further off, coming for the player with a squad in the back.
+				var far := camera.global_position - camera.global_transform.basis.z * 60.0
+				var tr := _spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,
+						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName])
+				tr.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
+						else _on_ground(camera.global_position))
+			elif event.ctrl_pressed:
+				_spawn_truck(truck_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, [] as Array[StringName])
+			elif event.shift_pressed:
 				_spawn_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, false)
 			else:
 				_spawn_enemy_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
 		KEY_V:
-			if _pilot.is_piloting() or _tank_pilot.is_driving():
+			if _pilot.is_piloting() or _vehicle_pilot.is_driving():
 				return
 			if _player.is_possessing():
 				_leave_pawn()

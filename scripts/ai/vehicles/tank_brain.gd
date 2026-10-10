@@ -240,7 +240,8 @@ func _driver(now: float) -> void:
 		state = "gave up"
 		_moved_at = now
 		return
-	if goal == Vector3.INF or _flat(goal - tank.feet()).length() < 3.0 			or (drive_to != Vector3.INF and _path_goal == goal and _flat(drive_to - tank.feet()).length() < 3.0):
+	if goal == Vector3.INF or _flat(goal - tank.feet()).length() < 3.0 \
+			or (drive_to != Vector3.INF and _path_goal == goal and _flat(drive_to - tank.feet()).length() < 3.0):
 		state = "hold" if goal != Vector3.INF else "idle"
 		_moved_at = now
 		return

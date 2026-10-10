@@ -14,11 +14,23 @@ extends CharacterBody3D
 ## where it was sent that a truck can reach -- the walking map's, as before, if
 ## there is none -- at DRIVE speed, turning no faster than TURN; it stops and
 ## lets them out when it is within DROP of where it was sent, when its path runs
-## out, or when it has been stuck for STUCK seconds. A brick-built body, seats
-## and moving cover are the steps after this one (AIVehicles.md 4).
+## out, or when it has been stuck for STUCK seconds.
+##
+## Anybody can drive one (Halo's Warthog, R14): M at an empty one of yours gets
+## in, WASD drives it as a car -- it steers only while it rolls -- and M gets
+## out. An enemy's is taken at the cab (`hijack`, melee beside its front half):
+## the squad in the back is put out at the tailgate there and then, and the
+## truck is yours. Its open bed takes six RIDERS of its side (VehicleDeck),
+## who shoot from it. Driven by the player it is a target everybody senses and
+## shoots (make_target); rounds are what hurt it, as they always did.
+##
+## A brick-built body and moving cover are the steps after this one
+## (AIVehicles.md 4).
 
 signal arrived(truck: TransportTruck)
 signal wrecked(truck: TransportTruck)
+## Taken at the cab by `by`.
+signal hijacked(by: Pawn)
 
 const DRIVE := 9.0
 const TURN := 1.6
@@ -35,12 +47,36 @@ const KERB_POP := 4.5
 const REVERSE := 1.5
 ## An empty truck leaves the board this long after unloading.
 const LEAVE_AFTER := 30.0
+## Driven by a player: top speed back, how fast it gets up to speed and stops,
+## and the speed at which it steers fully (slower, it steers less).
+const BACK_SPEED := 4.0
+const ACCEL := 6.0
+const BRAKE := 14.0
+const STEER_FULL := 3.0
+## Its cab is taken from within this of its front half's sides.
+const HIJACK_REACH := 2.0
+## The open bed: six riders' feet, two by three.
+const RIDE_SPOTS: Array[Vector3] = [Vector3(-0.55, 1.05, 0.1), Vector3(0.55, 1.05, 0.1),
+		Vector3(-0.55, 1.05, 1.1), Vector3(0.55, 1.05, 1.1), Vector3(-0.55, 1.05, 2.1),
+		Vector3(0.55, 1.05, 2.1)]
 
 var services: AIServices
+var team := 1
 ## The kinds of unit riding in it.
 var cargo: Array[StringName] = []
 var goal := Vector3.INF
-var state := "idle"   # idle, driving, arrived, wrecked
+## idle, driving, arrived, wrecked -- and taken: a player's, driven or parked.
+var state := "idle"
+## A player is driving it.
+var player_in := false
+## -1 (back) .. 1 (forward), and -1 (right) .. 1 (left): the player's keys.
+var throttle := 0.0
+var steer := 0.0
+## What everybody else senses and shoots at while a player drives it (make_target).
+var pawn: Pawn
+## Riders in the bed (VehicleDeck); Rodeo's name, as on a tank.
+var rodeo: VehicleDeck
+var _speed := 0.0
 var health: HealthPool
 ## Why it stopped: "there", "end of path", "stuck", "no way".
 var stopped_because := ""
@@ -89,6 +125,7 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> Transp
 			ws.position = Vector3(x, WHEEL, z)
 			t.add_child(ws)
 	t._build_look()
+	t.rodeo = VehicleDeck.attach(t, RIDE_SPOTS, Vector3.INF, Vector2(SIZE.x * 0.5, SIZE.z * 0.5))
 	var pool := HealthPool.new()
 	pool.name = "HealthPool"
 	var layer := DefenseLayer.new()
@@ -101,6 +138,7 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> Transp
 	t._yaw = yaw
 	t.rotation.y = yaw
 	pool.died.connect(t._on_wrecked)
+	t.add_to_group(&"trucks")
 	return t
 
 
@@ -137,6 +175,9 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= GRAVITY * delta
 	else:
 		velocity.y = maxf(velocity.y, 0.0)
+	if player_in:
+		_drive_keys(delta)
+		return
 	if state != "driving":
 		velocity.x = move_toward(velocity.x, 0.0, DRIVE * delta * 2.0)
 		velocity.z = move_toward(velocity.z, 0.0, DRIVE * delta * 2.0)
@@ -219,6 +260,139 @@ func _physics_process(delta: float) -> void:
 		_arrive("stuck")
 
 
+## The player's keys, as a car: throttle up to speed, steering that bites only
+## while it rolls (and turns the other way backing up).
+func _drive_keys(delta: float) -> void:
+	var want := throttle * (DRIVE if throttle > 0.0 else BACK_SPEED)
+	var rate := BRAKE if (want == 0.0 or signf(want) != signf(_speed)) and absf(_speed) > 0.1 else ACCEL
+	_speed = move_toward(_speed, want, rate * delta)
+	var bite := clampf(absf(_speed) / STEER_FULL, 0.0, 1.0) * signf(_speed)
+	_yaw = wrapf(_yaw + clampf(steer, -1.0, 1.0) * TURN * bite * delta, -PI, PI)
+	rotation.y = _yaw
+	var fwd := -global_transform.basis.z
+	velocity.x = fwd.x * _speed
+	velocity.z = fwd.z * _speed
+	move_and_slide()
+	if absf(throttle) > 0.1 and is_on_floor() and is_on_wall() \
+			and Vector2(velocity.x, velocity.z).length() < absf(_speed) * 0.3:
+		velocity.y = KERB_POP
+	# Into a wall it stops: what it went at is what it keeps.
+	_speed = Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z))
+
+
+func is_wrecked() -> bool:
+	return state == "wrecked"
+
+
+## Nobody at the wheel: a player's truck parked, or nobody's.
+func is_empty() -> bool:
+	return not player_in and state != "driving"
+
+
+func forward() -> Vector3:
+	return -global_transform.basis.z
+
+
+## Where the driver's eye is: in the cab, on the left.
+func eye_interpolated() -> Vector3:
+	var x := get_global_transform_interpolated()
+	return x.origin + x.basis * Vector3(-0.45, 1.75, -1.6)
+
+
+## Is `p` -- on foot, of another side -- beside the cab (its front half)?
+func can_hijack(p: Pawn) -> bool:
+	if p == null or not is_instance_valid(p) or is_wrecked() or p.team == team or player_in:
+		return false
+	if p.has_meta(&"riding") or p.has_meta(&"aboard") or p.has_meta(&"in_vehicle"):
+		return false
+	return can_reach(p)
+
+
+## Taken at the cab (Halo's hijack): the squad in the back is put out there and
+## then (its host's dismount, through `arrived`), and the truck is `by`'s side's,
+## stopped. Its host puts a player in.
+func hijack(by: Pawn) -> void:
+	if is_wrecked():
+		return
+	if state == "driving":
+		_arrive("hijacked")
+	state = "taken"
+	if team != by.team:
+		rodeo.all_off("changed side")
+		team = by.team
+		if pawn != null and is_instance_valid(pawn):
+			pawn.team = team
+	hijacked.emit(by)
+
+
+## A player gets in at the wheel: a truck nobody is driving -- an empty one of
+## any side (it changes side, R14); one on its way somewhere is hijacked.
+func take_player(p_team: int) -> bool:
+	if is_wrecked() or player_in or state == "driving":
+		return false
+	if p_team != team:
+		rodeo.all_off("changed side")
+		team = p_team
+	state = "taken"
+	player_in = true
+	make_target()
+	pawn.team = team
+	if services != null and not services.pawns.has(pawn):
+		services.add_pawn(pawn)
+	return true
+
+
+func release_player() -> void:
+	player_in = false
+	throttle = 0.0
+	steer = 0.0
+	# Parked, it is nobody's target: a truck, not a soldier.
+	if pawn != null and is_instance_valid(pawn) and services != null:
+		services.pawns.erase(pawn)
+		for t in [0, 1]:
+			services.knowledge_of(t).contacts.erase(pawn.get_instance_id())
+
+
+## The Pawn that stands for it while a player drives it -- not a heavy.
+func make_target() -> Pawn:
+	if pawn != null and is_instance_valid(pawn):
+		return pawn
+	var e := Node3D.new()
+	e.name = "Eye"
+	e.position = Vector3(0.0, 1.75, -1.6)
+	add_child(e)
+	var p := Pawn.new()
+	p.name = "Pawn"
+	p.team = team
+	p.health = health
+	p.eye = e
+	p.process_mode = Node.PROCESS_MODE_DISABLED
+	p.stand_height = SIZE.y
+	p._height = SIZE.y
+	p.set_meta(&"aggro_kind", "pilot")
+	p.set_meta(&"vehicle", self)
+	add_child(p)
+	pawn = p
+	return p
+
+
+## Where the driver gets out: beside the cab on the left.
+func mount_point() -> Vector3:
+	var at := feet() + global_transform.basis * Vector3(-SIZE.x * 0.5 - 1.0, 0.0, -1.4)
+	if services != null and services.ai_nav != null:
+		var snapped := services.ai_nav.snap(at)
+		if snapped.distance_to(at) < 2.0:
+			return snapped
+	return at
+
+
+## Is `p` beside the cab: its front half, either side.
+func can_reach(p: Pawn) -> bool:
+	var local := global_transform.basis.inverse() * (p.feet() - feet())
+	return absf(local.x) < SIZE.x * 0.5 + HIJACK_REACH and local.z < 0.5 and local.z > -SIZE.z * 0.5 - 1.0 \
+			and local.y > -1.0 and local.y < 2.0
+
+
 func _arrive(why: String) -> void:
 	if state != "driving":
 		return
@@ -226,7 +400,7 @@ func _arrive(why: String) -> void:
 	state = "arrived"
 	# Unloaded, it goes: an empty truck is in the next one's way.
 	get_tree().create_timer(LEAVE_AFTER).timeout.connect(func() -> void:
-		if is_instance_valid(self) and state == "arrived" and cargo.is_empty():
+		if is_instance_valid(self) and state == "arrived" and cargo.is_empty() and rodeo.rider_count() == 0:
 			queue_free())
 	if _path_id >= 0 and _nav != null:
 		_nav.release(_path_id)
@@ -268,6 +442,10 @@ func tailgate_points(threat: Vector3, n: int) -> Array[Vector3]:
 
 func _on_wrecked() -> void:
 	state = "wrecked"
+	throttle = 0.0
+	steer = 0.0
+	if pawn != null and is_instance_valid(pawn) and services != null:
+		services.pawns.erase(pawn)
 	wrecked.emit(self)
 
 
@@ -277,10 +455,12 @@ func _build_look() -> void:
 	var dark := StandardMaterial3D.new()
 	dark.albedo_color = Color(0.12, 0.12, 0.12)
 	var parts := [
-		# cab, bed, canopy
+		# cab, bed, and the bed's sides: open, for riders to stand in and shoot
 		[Vector3(2.2, 1.6, 1.8), Vector3(0.0, 1.2, -1.8), olive],
 		[Vector3(2.3, 0.5, 3.6), Vector3(0.0, 0.8, 0.9), olive],
-		[Vector3(2.2, 1.3, 3.4), Vector3(0.0, 1.75, 0.9), olive],
+		[Vector3(0.12, 0.5, 3.6), Vector3(-1.09, 1.3, 0.9), olive],
+		[Vector3(0.12, 0.5, 3.6), Vector3(1.09, 1.3, 0.9), olive],
+		[Vector3(2.3, 0.5, 0.12), Vector3(0.0, 1.3, 2.64), olive],
 	]
 	for p in parts:
 		var mi := MeshInstance3D.new()

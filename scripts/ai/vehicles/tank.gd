@@ -9,21 +9,28 @@ extends CharacterBody3D
 ## mech's pilot is (out of everybody's sight and aim). The driver is what makes
 ## it move, the gunner what makes it shoot; when it is wrecked they climb out,
 ## hurt, and fight on foot. The player can take it: in at the hatch, both seats
-## at once (TankPilot).
+## at once (VehiclePilot).
 ##
 ## What drives it is four numbers and a point, filled by its brain (TankBrain)
-## or the player's keys (TankPilot): `throttle` and `steer` for the hull,
+## or the player's keys (VehiclePilot): `throttle` and `steer` for the hull,
 ## `aim_point` for the turret, `fire_main` and `fire_coax` for the guns.
 ##
 ## It is armour, not flesh (AIRoster.md 4.6, R15): a person's rifle scratches
 ## it, a rocket or a mech's gun hurts it (ARMOUR). Everybody else senses and
 ## shoots it through `pawn` (make_target), as they do a mech.
 ##
+## On its deck (VehicleDeck, `rodeo`): four RIDERS of its side on the track
+## covers, shooting their own guns (Halo's Scorpion), and an enemy BOARDER on
+## the back deck, who pries the hatch open and drags the crew out -- the tank
+## is then the boarder's (hijack).
+##
 ## Greybox, as the mech is: boxes sized in bricks until vehicles are built of
-## bricks (AIVehicles.md 1). Not yet: crushing, damage zones, riding on it.
+## bricks (AIVehicles.md 1). Not yet: crushing, damage zones.
 
 signal wrecked(tank: Tank)
 signal crew_out(p: Pawn)
+## The player was in it when a boarder got the hatch open: they are out.
+signal player_thrown
 
 const STUD := 0.35
 const COURSE := 0.42
@@ -54,6 +61,14 @@ const KERB_POP := 4.0
 const MOUNT_REACH := 2.2
 ## What climbing out of a wreck costs a crewman.
 const BAIL_HURT := 25.0
+## What being dragged out of the hatch by a boarder costs.
+const DRAGGED_HURT := 20.0
+## The deck: riders' feet on the track covers either side of the turret, front
+## and back; a boarder's on the back deck behind it.
+const RIDE_SPOTS: Array[Vector3] = [Vector3(-1.3, CLEARANCE + COURSE * 4.0, -2.0),
+		Vector3(1.3, CLEARANCE + COURSE * 4.0, -2.0), Vector3(-1.3, CLEARANCE + COURSE * 4.0, 2.4),
+		Vector3(1.3, CLEARANCE + COURSE * 4.0, 2.4)]
+const BOARD_SPOT := Vector3(0.0, CLEARANCE + COURSE * 4.0, 2.55)
 
 enum Seat { DRIVER, GUNNER }
 
@@ -88,6 +103,8 @@ var main_gun: GunController
 var coax: GunController
 var main_ready_at := 0.0
 var shells := 0
+## Riders and a boarder (VehicleDeck): Rodeo's name, so the same callers drive both.
+var rodeo: VehicleDeck
 var _clock := 0.0
 var _main_pulse := false
 var _look: Array[MeshInstance3D] = []
@@ -136,6 +153,7 @@ static func make(s: AIServices, parent: Node, feet: Vector3, p_yaw: float, p_tea
 	t.main_gun = t._gun("MainGun", main, rng, on_structure_hit, &"mech", MAIN_MULT)
 	t.coax = t._gun("Coax", mg, rng, on_structure_hit, &"", 1.0)
 	t.main_gun.fired.connect(func(_i: Dictionary) -> void: t.shells += 1)
+	t.rodeo = VehicleDeck.attach(t, RIDE_SPOTS, BOARD_SPOT, Vector2(HULL.x * 0.5, HULL.z * 0.5))
 	parent.add_child(t)
 	t.global_position = feet + Vector3.UP * HEIGHT * 0.5
 	t.yaw = p_yaw
@@ -308,10 +326,30 @@ func crew_get_out(hurt := 0.0) -> Array[Pawn]:
 	return out
 
 
+## A boarder has the hatch open (VehicleDeck): the crew are dragged out, hurt --
+## the player too, if it was theirs (player_thrown) -- and a soldier who did it
+## takes the gun (no goal to drive to, but the gun turns on its old side). The
+## player who did it is put in by its host (VehicleDeck.hijacked).
+func hijack(by: Pawn) -> void:
+	if is_wrecked():
+		return
+	crew_get_out(DRAGGED_HURT)
+	if player_in:
+		release_player()
+		player_thrown.emit()
+	var so := by.body.get_node_or_null(^"Soldier") as Soldier if by != null and is_instance_valid(by) else null
+	if so != null:
+		so.rodeo_target = null
+		board(by, Seat.GUNNER, true)
+
+
 ## A tank changes side with whoever gets into it empty.
 func _take_side(p_team: int) -> void:
 	if p_team == team:
 		return
+	# Its riders were the other side's: off.
+	if rodeo != null:
+		rodeo.all_off("changed side")
 	team = p_team
 	if pawn != null and is_instance_valid(pawn):
 		pawn.team = p_team
