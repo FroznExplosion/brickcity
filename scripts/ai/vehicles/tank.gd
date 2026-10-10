@@ -636,7 +636,9 @@ func _physics_process(delta: float) -> void:
 ## CRUSH_HEIGHT, and nothing over that up to its own height -- it wears them off,
 ## a row across its width, low and high, every CRUSH_EVERY.
 func _crush(go: float) -> void:
-	if absf(go) < 0.1 or _clock < _crush_at or not on_crush.is_valid() or not is_inside_tree():
+	# Only pressed against something: two shape queries a tick for every tank
+	# on the move would be paid for nothing on an open road.
+	if absf(go) < 0.1 or _clock < _crush_at or not on_crush.is_valid() or not is_inside_tree() 			or not is_on_wall():
 		return
 	var nose := forward() * signf(go)
 	var b := Basis(Vector3.UP, yaw)
