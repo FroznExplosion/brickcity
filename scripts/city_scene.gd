@@ -714,6 +714,11 @@ var _feedback: CombatFeedback
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
 var _mech: Mech
+## Tanks (AIRoster.md RO10): Z puts an enemy one ahead with a squad screening it,
+## SHIFT+Z an empty one of ours; M beside any empty tank (or one of ours) gets
+## in, M again gets out on foot.
+var tanks: Array[Tank] = []
+var _tank_pilot := TankPilot.new()
 ## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
 ## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
 var weight: WeightTracker
@@ -4323,6 +4328,89 @@ func _leave_mech() -> void:
 		if _boarded_on_foot:
 			_boarded_on_foot = false
 			_enter_pawn(_mech.mount_point())
+
+
+# --- tanks (Docs/AIRoster.md RO10) --------------------------------------------------
+
+## A tank of side `team` on the ground at `feet`: a cannon that opens walls, a
+## machine gun, a brain for its crew -- and a crew of soldiers of its side in
+## both seats if `crewed`.
+func _spawn_tank(feet: Vector3, yaw: float, team: int, crewed: bool) -> Tank:
+	if ai_services.world3d == null:
+		ai_services.world3d = get_world_3d()
+		ai_services.on_structure_hit = _gun.on_structure_hit
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var main := GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+			WeaponClass.builtin(&"rocket_launcher"), 1))
+	var mg := GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+			WeaponClass.builtin(&"lmg"), 1))
+	var t := Tank.make(ai_services, self, feet, yaw, team, main, mg, _gun.on_structure_hit, _combat_rng)
+	ai_services.add_pawn(t.make_target())
+	TankBrain.attach(ai_services, t)
+	weight.add(t, t.feet, WeightTracker.MECH)
+	if crewed:
+		for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+			var so := _spawn_soldier(feet)
+			so.team = team
+			so.pawn.team = team
+			t.board(so.pawn, seat, true)
+	t.wrecked.connect(func(w: Tank) -> void:
+		print("[city] tank wrecked at %v" % w.feet())
+		if _tank_pilot.tank == w:
+			_leave_tank())
+	tanks.append(t)
+	print("[city] tank of side %d at %v, %s" % [team, feet, "crewed" if crewed else "empty"])
+	return t
+
+
+## The enemy's tank (Z), with a squad that screens it (AIVehicles.md 4): it goes
+## for the player at the squad's pace.
+func _spawn_enemy_tank(feet: Vector3, yaw: float) -> Tank:
+	var t := _spawn_tank(feet, yaw, 1, true)
+	var back := Basis(Vector3.UP, yaw).z
+	var q := _spawn_squad(ai_nav.snap(feet + back * 9.0))
+	var br := t.get_node(^"TankBrain") as TankBrain
+	br.escort = q
+	if _player_pawn != null and is_instance_valid(_player_pawn):
+		br.send(_player_pawn.feet())
+	return t
+
+
+## The tank whose side the player's pawn stands at, any side's; null for none.
+func _tank_at_side() -> Tank:
+	if not _player.is_possessing() or _player_pawn == null or not is_instance_valid(_player_pawn):
+		return null
+	for t in tanks:
+		if is_instance_valid(t) and not t.is_wrecked() and t.can_reach(_player_pawn):
+			return t
+	return null
+
+
+## In: driver and gunner both. An empty tank of any side, or one of ours.
+func _board_tank(t: Tank) -> void:
+	if not t.take_player(_player_pawn.team):
+		print("[city] its crew is in it: not yours to take")
+		return
+	_leave_pawn()
+	if camera.is_walking():
+		camera.set_walking(false)
+	if _tank_pilot.get_parent() == null:
+		_tank_pilot.name = "TankPilot"
+		add_child(_tank_pilot)
+	camera.set_process(false)
+	camera.allow_walk = false
+	_tank_pilot.board(t, camera)
+	print("[city] driving a tank: WASD drive, LMB cannon, RMB machine gun, M to get out")
+
+
+func _leave_tank() -> void:
+	var t := _tank_pilot.tank
+	_tank_pilot.leave()
+	camera.set_process(true)
+	camera.allow_walk = camera.capture_mouse
+	if t != null and is_instance_valid(t):
+		_enter_pawn(t.mount_point())
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -9667,12 +9755,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
 			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
 		KEY_M:
-			if _pilot.is_piloting():
+			if _tank_pilot.is_driving():
+				_leave_tank()
+			elif _pilot.is_piloting():
 				_leave_mech()
+			elif _tank_at_side() != null:
+				_board_tank(_tank_at_side())
 			else:
 				_board_mech()
+		KEY_Z:
+			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
+			if event.shift_pressed:
+				_spawn_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, false)
+			else:
+				_spawn_enemy_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
 		KEY_V:
-			if _pilot.is_piloting():
+			if _pilot.is_piloting() or _tank_pilot.is_driving():
 				return
 			if _player.is_possessing():
 				_leave_pawn()

@@ -640,7 +640,7 @@
   "screen_heavy": {
    "label": "Screen our armour",
    "group": "support",
-   "built": false,
+   "built": true,
    "max": 0,
    "pairs": [],
    "needs": [
@@ -657,7 +657,7 @@
   "heavy_leads": {
    "label": "Follow in our armour's lee",
    "group": "support",
-   "built": false,
+   "built": true,
    "max": 0,
    "pairs": [],
    "needs": [

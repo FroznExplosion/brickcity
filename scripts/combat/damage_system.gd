@@ -52,6 +52,11 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		var layers: Variant = target_root.get_meta(&"mech_layers")
 		if typeof(layers) == TYPE_OBJECT and is_instance_valid(layers):
 			return (layers as Object).call(&"take_packet", packet)
+	# Anything else with rules of its own for a hit -- a vehicle's armour (Tank).
+	if target_root.has_meta(&"takes_packet"):
+		var taker: Variant = target_root.get_meta(&"takes_packet")
+		if typeof(taker) == TYPE_OBJECT and is_instance_valid(taker):
+			return (taker as Object).call(&"take_packet", packet)
 
 	var pool: HealthPool = _find_health_pool(target_root)
 	if pool == null or pool.is_dead():

@@ -30,6 +30,8 @@ const HEARD_DUG_IN := 3.0
 const TEAM_NEAR := 15.0
 ## A friendly soldier outside the squad within this is "other squads near".
 const FRIENDS_NEAR := 40.0
+## Our tank or mech within this: "Our heavy support is here" (heavy_near).
+const HEAVY_NEAR := 30.0
 
 
 ## {moment, facts: Array[String], amounts: {dist, pcover, cover, hp, mag, squad, php}}.
@@ -50,6 +52,9 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	# A plane to call on (AirSupport): the casebook's call_air needs it.
 	if s.air_of(so.team).available():
 		add.call("air_avail")
+	# Our tank or mech near, crewed: the moment "Our heavy support is here".
+	if heavy_near(so) != null:
+		add.call("heavy_near")
 	if them.y - feet.y > LEVEL_DIFF:
 		add.call("p_high")
 	elif feet.y - them.y > LEVEL_DIFF:
@@ -244,6 +249,9 @@ static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amou
 		return "close_quarters"
 	if float(amounts.squad) <= 50.0 or (facts.has("we_alone") and float(amounts.hp) < 40.0):
 		return "losing"
+	# With our own armour beside us we are not outgunned: we screen it.
+	if facts.has("heavy_near"):
+		return "have_heavy"
 	if facts.has("p_mech"):
 		return "outgunned"
 	if facts.has("p_unaware"):
@@ -256,6 +264,32 @@ static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amou
 	if not c.visible:
 		return "lost_player"
 	return "first_contact"
+
+
+## The nearest heavy of `so`'s side within HEAVY_NEAR -- a tank with a crew, or a
+## mech that is piloted or fighting on auto -- or null. Not one the soldier is
+## inside.
+static func heavy_near(so: Soldier) -> Object:
+	var feet := so.pawn.feet()
+	var best: Object = null
+	var best_d := HEAVY_NEAR
+	for n in so.get_tree().get_nodes_in_group(&"tanks"):
+		var t := n as Tank
+		if t == null or t.team != so.team or t.is_wrecked() or (t.crew_count() == 0 and not t.player_in):
+			continue
+		var d := t.feet().distance_to(feet)
+		if d < best_d:
+			best = t
+			best_d = d
+	for n in so.get_tree().get_nodes_in_group(&"mech_layers"):
+		var ml := n as MechLayers
+		if ml == null or ml.dead or ml.mech.team != so.team or not (ml.piloted or ml.auto):
+			continue
+		var d := ml.mech.feet().distance_to(feet)
+		if d < best_d:
+			best = ml.mech
+			best_d = d
+	return best
 
 
 ## How hidden a body standing at `feet` is from an eye at `from`: 0 in the open,
