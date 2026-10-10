@@ -51,6 +51,9 @@ var shock_left := 0.0
 var _chill_hold := 0.0
 var _grace := 0.0
 var _tick := 0.0
+## Whose round built the last of it: a burn or a corrode that kills pays them
+## (PlayerLevel.credit_kill).
+var source: Object
 var _aura: MeshInstance3D
 var _aura_mat: StandardMaterial3D
 
@@ -72,7 +75,8 @@ static func of(root: Node, make := false) -> ElementStatus:
 
 ## A round's element part dealt `dealt` on a layer of type `layer` (DamageSystem): build
 ## that element's status.
-static func build(root: Node, element_id: StringName, layer: StringName, dealt: float) -> void:
+static func build(root: Node, element_id: StringName, layer: StringName, dealt: float,
+		by: Object = null) -> void:
 	if dealt <= 0.0 or root == null:
 		return
 	var builds := (element_id == Elements.FIRE and layer in FLESH) \
@@ -82,6 +86,8 @@ static func build(root: Node, element_id: StringName, layer: StringName, dealt: 
 	var s := of(root, true)
 	if s == null or s.pool == null:
 		return
+	if by != null:
+		s.source = by
 	match element_id:
 		Elements.FIRE:
 			s.add_burn(dealt * BURN_SHARE)
@@ -189,6 +195,7 @@ func step(delta: float) -> void:
 
 
 func _tick_dots() -> void:
+	var alive := not pool.is_dead()
 	if burn_left > 0.0:
 		var top := pool.top_layer_type()
 		if top in FLESH:
@@ -210,6 +217,9 @@ func _tick_dots() -> void:
 		corrode_time -= TICK
 		if corrode_time <= 0.0:
 			corrode_left = 0.0
+	# The burn or the corrode itself killed it: whose round built it is paid.
+	if alive and pool.is_dead() and source != null and is_instance_valid(source):
+		PlayerLevel.credit_kill(source, get_parent())
 
 
 ## Put the slow and the freeze on the pawn, and the look on the aura.

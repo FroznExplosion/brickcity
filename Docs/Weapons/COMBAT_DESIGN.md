@@ -73,6 +73,15 @@ damage moves to the new tier.
 - Where it lives: `CharacterSave.character` already has `level`; XP, skill points and bought nodes
   join it.
 
+**The tree's shape (built in step 9, `SkillTree`):** one tree, after Borderlands — a trunk at the
+bottom that forks into three limbs (Gunner, Survivor, Tactician), each forking again into two twigs
+and meeting at a top node. Eight tiers, bottom to top. **A tier opens on points spent anywhere in
+the tree** — 5 a tier, so the top tier opens at 35 spent (level 36) — and every point counts for
+every limb: a player who spent everything on one limb can still buy the top of another. No node
+needs its parent bought; the limbs are how the tree reads. By level 40 the whole tree is open, but
+it holds 140 ranks against the 99 points of level 100, so no one fills it: a build is what the
+player left out. Points come back only all at once (a free reset, for now).
+
 ## 2. Rarity
 
 Six rarities. Rarity buys **modifier slots and modifier quality**, and a **small** damage step so a
@@ -513,8 +522,9 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 7. ~~**Alt-fire and special weapons**: tracking dart first, then the charged plasma shot and the shock
    arc.~~ (built as alt-fires; the special ordnance weapons are still to come)
 8. ~~**Elements' statuses**: burn, corrode, ice slow/freeze.~~ (built)
-9. **Player level and the skill tree**: XP, points, the Vanguard Brawler branch, health/shield
-   nodes with their cap, the first abilities.
+9. ~~**Player level and the skill tree**: XP, points, the Vanguard Brawler branch, health/shield
+   nodes with their cap, the first abilities.~~ (the level, XP, the tree and its screen are built,
+   with placeholder stat nodes; the Brawler's nodes, shields and abilities are still to come)
 10. **Safehouse infusion**: workbench, materials, the same-gun-at-another-tier probe.
 
 ## 13. Open questions
@@ -705,25 +715,52 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   `FrozenStatus`/`ElementDoT` in `scripts/status/` have both, unused); no hit-number colours for
   status damage; a frozen soldier's brain still thinks (its body just does not move).
 
+**Step 9 — player level and the skill tree: built 2026-10-10.**
+- `PlayerLevel` (`scripts/progression/player_level.gd`): level 1–100, a point a level from level
+  2. XP to the next level `60 × level^1.2` (60 at level 1, 951 at 10, 5019 at 40). A kill pays
+  0.3125 XP a point of the target's whole health (a light enemy at tier 1, 64 health: 20 XP; at
+  most 600), 300 for a mech or a tank. Both grow with the tier, so a level costs about as many
+  kills all the way up. Placeholder numbers.
+- **Who gets the XP:** `DamageSystem.resolve` calls `PlayerLevel.credit_kill(packet.source,
+  target)` on a kill. A node the player owns carries their `PlayerLevel` under the meta
+  `player_level`: the possessed pawn (melee, grenades), the player's `GunController` (rounds, side
+  hits, the alt-fires), the player's mech's gun. A target pays once; never one of the player's own
+  side. A burn or a corrode that kills pays whose round built it (`ElementStatus.source`).
+- `SkillTree` (`scripts/progression/skill_tree.gd`): the data (35 nodes, 140 ranks), the tier gates,
+  buying, the reset, the stats' totals, the save (re-bought tier by tier, so a save holding more
+  than its level allows is trimmed).
+- **Placeholder skills**, all stats and none of them damage: max health (+30% in all, the cap),
+  health regen after 5 s unhurt, reload speed, magazine size, move speed, grenades carried and their
+  recharge, alt-fire charge and recharge. `PlayerArsenal.apply_skills` puts them into the
+  `GunController` (`reload_mult`, `mag_mult`, `alt_mult`), the pawn (`move_mult`, health) and the
+  grenades, on every change.
+- **The screen** (`SkillScreen`): the backpack's second page — I, then Tab (I opens straight on it
+  when there are points). Arrows choose, Enter spends, Backspace twice resets; `+` levels up in
+  developer mode. The HUD shows the level, an XP bar and the points waiting; a level up says so.
+- **Saved** in `CharacterSave.character` (`level`, `xp`, `skills`), loaded when the player first
+  takes a pawn and written on every change — never in a scripted pass or a test window.
+- `tools/skill_tree_probe.gd` (36 checks).
+- **Not yet:** the real nodes (the Vanguard Brawler's melee nodes §4.2, abilities, shields — the
+  player has no shield layer yet); XP for objectives and missions; a respec cost; the mouse on the
+  tree's screen; a co-op player's own level (one `PlayerLevel`, the host's player).
+
 ---
 
 ## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 8 is **built, tested and merged into `main`**. The player side it
+Everything above through step 9 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 9, player level and the skill tree
+### 15.1 Next: step 10, safehouse infusion
 
-What it must do (§1.3, §4.2, PROGRESSION_SPEC.md): XP from kills and objectives, a level 1–100
-with a skill point a level, the tree's data and its screen, the Vanguard Brawler branch first
-(melee nodes), health and shield nodes with their cap, the first abilities. `CharacterSave`
-already has an unused `character.level`.
+What it must do (§1.1–1.2, PROGRESSION_SPEC §1.1): a workbench that rewrites a saved gun's `tier`
+for materials, and the probe that the same seed at two tiers is the same gun except damage.
 
 ### 15.2 After that
 
-Steps 9–10 of §12, and what steps 7–8 left (§14): the tracking dart and other alt-fires; element statuses; the player level and
-skill tree; infusion. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
+What steps 7–9 left (§14): the real skill nodes (the Vanguard Brawler's, abilities, shields),
+the other alt-fires and special weapons, frozen enemies shattering. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
 loadout, co-op drops, pad bindings. Also open: helmets and head crits (switch `Pawn.head_crits` on when
 enemies are figures), and §13's questions.
 
@@ -742,13 +779,14 @@ enemies are figures), and §13's questions.
 | Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
 | Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
 | Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
+| Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
 | Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
@@ -776,6 +814,8 @@ health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_
   median damage, light enemies at 60) make it 4 of 15 and it fails, deterministically. The fight
   itself is unchanged (the soldier still leaves its cover with time in it). AI area: its gun is a
   seeded loot roll, so any loot change moves it.
+- **`threat_style_probe` crashes on exit** (exit 139, after "7 passed") on `main` as it is: its
+  checks pass; the crash is in the AI area's teardown.
 - **Physics runs at 30 ticks a second** (`project.godot`), not 60: a probe that waits seconds
   must count `Engine.physics_ticks_per_second` ticks.
 - **`loot_range_test --probe` rolls unseeded** (`_rng.randomize()`): its gun-vs-shield category

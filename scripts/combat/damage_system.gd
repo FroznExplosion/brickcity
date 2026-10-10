@@ -41,7 +41,15 @@ class DamageResult extends RefCounted:
 
 
 ## target_root must own a HealthPool and may own a StatusManager (looked up by node name/group).
+## A hit that kills pays its XP to the player whose it was (PlayerLevel.credit_kill).
 static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
+	var r := _resolve(packet, target_root)
+	if r.killed and packet != null and packet.source != null:
+		PlayerLevel.credit_kill(packet.source, target_root)
+	return r
+
+
+static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	var result := DamageResult.new()
 	if packet == null or target_root == null:
 		return result
@@ -113,7 +121,7 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		pool.apply_impact(elemental_amount, packet.element.id, extra, packet.crit)
 		if not pool.is_dead():
 			ElementStatus.build(target_root, packet.element.id, layer,
-					before_el - pool.total_current())
+					before_el - pool.total_current(), packet.source)
 	if kinetic_amount > 0.0:
 		pool.apply_impact(kinetic_amount, &"", extra, packet.crit)
 
