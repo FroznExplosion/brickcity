@@ -488,11 +488,15 @@ func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
 	back.y = 0.0
 	back = back.normalized() if back.length() > 0.1 else Vector3.BACK
 	var side := Vector3(-back.z, 0.0, back.x)
+	var base := _ally_spot(p.feet(), back)
+	if base == Vector3.INF:
+		print("[arena] allies: no ground behind the player to bring a squad onto")
+		return false
 	var members: Array[Soldier] = []
 	for i in kinds.size():
-		var want := p.feet() + back * ALLY_BEHIND + side * (1.5 * i - 2.25)
+		var want := base + side * (1.5 * i - 2.25)
 		var at: Vector3 = city.ai_nav.snap(want)
-		if not city.ai_nav.can_stand(at):
+		if not city.ai_nav.can_stand(at) or absf(at.y - base.y) > 1.5:
 			continue
 		var unit := UnitCatalog.get_unit(kinds[i])
 		if city._gun_library == null:
@@ -514,6 +518,20 @@ func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
 	allies.adopt(q)
 	print("[arena] allies: a squad of %d behind the player: %s" % [members.size(), ", ".join(kinds)])
 	return true
+
+
+## Ground behind the player for a friendly squad: ALLY_BEHIND out first, then
+## nearer and further, fanning out from straight behind to the sides -- at about
+## the player's level (not a roof, not a cellar). INF if there is none.
+func _ally_spot(feet: Vector3, back: Vector3) -> Vector3:
+	for r in [ALLY_BEHIND, 8.0, 16.0, 20.0]:
+		for deg in [0.0, 35.0, -35.0, 70.0, -70.0, 110.0, -110.0]:
+			var want: Vector3 = feet + back.rotated(Vector3.UP, deg_to_rad(deg)) * r
+			var at: Vector3 = city.ai_nav.snap(want)
+			if city.ai_nav.can_stand(at) and absf(at.y - feet.y) < 2.0 \
+					and Vector2(at.x - want.x, at.z - want.z).length() < 3.0:
+				return at
+	return Vector3.INF
 
 
 func _ally_report(now: float) -> void:
