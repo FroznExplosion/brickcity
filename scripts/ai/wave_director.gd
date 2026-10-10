@@ -118,7 +118,7 @@ var hq_building := -1
 ## Trucks bringing squads (TransportTruck).
 var trucks: Array[TransportTruck] = []
 ## The share of the last truck's road that was a truck wide (_truck_start).
-var _truck_road := 0.0
+var _truck_road := ""
 var _next_survey := 0.0
 var _floors: Array[Vector3] = []
 var _encounter: Encounter
@@ -1597,13 +1597,16 @@ func _send_truck(kinds: Array[StringName]) -> bool:
 	wave += 1
 	commander.note_fielded(UnitCatalog.points(&"truck"))
 	t.send(goal)
-	print("[arena] reinforcement %d by truck: %s, from %v (road wide enough for %d%% of the way; found in %.0f ms)" % [wave,
-			", ".join(kinds), start, roundi(_truck_road * 100.0), took])
+	print("[arena] reinforcement %d by truck: %s, from %v (start on the %s; found in %.0f ms)" % [wave,
+			", ".join(kinds), start, _truck_road, took])
 	return true
 
 
 ## Open ground TRUCK_OUT metres out from the focus, away from the player, where
-## a body stands and nothing is overhead.
+## a body stands and nothing is overhead -- and from where the vehicle map
+## (VehicleNav) has a road for a truck all the way to the fight. With no such
+## start, the one nearest that has a way on foot: the truck drives the walking
+## map from there, and lets its squad out where it sticks.
 func _truck_start() -> Vector3:
 	var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
 	var p := _player()
@@ -1611,20 +1614,20 @@ func _truck_start() -> Vector3:
 	away.y = 0.0
 	away = away.normalized() if away.length() > 0.1 else Vector3.FORWARD
 	var goal: Vector3 = _street_of(focus)
-	# The widest route found, if none is wide the whole way: the city's streets
-	# are three metres, and a soldier's path hugs the walls of them.
-	# ...and of those, the one a truck gets furthest along before it sticks: by
-	# share alone it took a road wide for four fifths of its length and narrow
-	# ten metres from the start, and let its squad out there.
-	var best := Vector3.INF
-	var best_share := -1.0
-	var best_run := -1.0
-	# Near the fight's own height: the foot map it drives climbs terraces a
-	# course at a time, and wheels do not (a vehicle map is AIVehicles.md 3).
+	# One look outward from the fight on the truck's map -- what it costs from
+	# every spot round it to get there -- in place of a path from each start.
+	var vn: AINav = city.ai_services.vehicle_nav(&"truck")
+	var field := -1
+	var drive_to := VehicleNav.reach_point(vn, goal)
+	if drive_to != Vector3.INF:
+		field = vn.request_field(drive_to, TRUCK_OUT + 15.0, 10.0)
+		var t_end := Time.get_ticks_msec() + 1500
+		while vn.get_field_status(field) == AINav.PENDING and Time.get_ticks_msec() < t_end:
+			vn.service(20000)
+	var by_foot := Vector3.INF
+	# Near the fight's own height: a truck does not climb terraces.
 	# All the way round, closely, and at five distances: with the player inside the
-	# focus "away" is any direction at all, and three rings of eight found no
-	# start as often as not -- or only one whose road was too narrow, and the
-	# truck stuck eight metres in.
+	# focus "away" is any direction at all.
 	for out in [TRUCK_OUT, TRUCK_OUT * 0.85, TRUCK_OUT * 0.7, TRUCK_OUT * 0.55, TRUCK_OUT * 0.4]:
 		for step in TRUCK_TURNS:
 			# 0, +1, -1, +2, -2 ... steps round: away from the player first.
@@ -1640,22 +1643,19 @@ func _truck_start() -> Vector3:
 			# Room to turn a truck round in.
 			if not TransportTruck.room_at(city.get_world_3d(), q):
 				continue
-			# And a way from there to the fight -- not a beach below the tide line
-			# -- wide enough for a truck all the way in.
-			var route: PackedVector3Array = city.ai_nav.find_path(q, goal, 20000)
-			if route.is_empty():
-				continue
-			var share := TransportTruck.route_width_share(city.get_world_3d(), route)
-			if share >= 1.0:
-				_truck_road = 1.0
-				return q + Vector3.UP * 0.3
-			var run := TransportTruck.route_clear_run(city.get_world_3d(), route)
-			if run > best_run:
-				best_run = run
-				best_share = share
-				best = q + Vector3.UP * 0.3
-	_truck_road = maxf(best_share, 0.0)
-	return best
+			if field >= 0 and vn.get_field_status(field) == AINav.DONE:
+				var vq := vn.snap(q)
+				if vn.can_stand(vq) and vn.field_cost(field, vq) < INF:
+					vn.release_field(field)
+					_truck_road = "vehicle map"
+					return vq + Vector3.UP * 0.3
+			# A way on foot, at least -- not a beach below the tide line.
+			if by_foot == Vector3.INF and not city.ai_nav.find_path(q, goal, 20000).is_empty():
+				by_foot = q + Vector3.UP * 0.3
+	if field >= 0:
+		vn.release_field(field)
+	_truck_road = "walking map: no road for a truck" if by_foot != Vector3.INF else ""
+	return by_foot
 
 
 func _dismount(t: TransportTruck) -> void:

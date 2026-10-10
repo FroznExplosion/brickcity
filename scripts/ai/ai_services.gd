@@ -219,6 +219,23 @@ func nav_for(size: String) -> AINav:
 	return n
 
 
+## The map a vehicle of `kind` drives (VehicleNav, Docs/AIVehicles.md 3), made
+## the first time it is asked for and served with the other sizes' maps; null
+## for a kind it does not know.
+func vehicle_nav(kind: StringName) -> AINav:
+	var key := "vehicle:" + String(kind)
+	if navs.has(key):
+		return navs[key]
+	if ai_world == null or not VehicleNav.has_kind(kind):
+		return null
+	var n := VehicleNav.make(ai_world, kind)
+	if ai_nav != null:
+		n.set_water_level(ai_nav.get_water_level())
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs[key] = n
+	return n
+
+
 ## Log a decision; the judge fills in its reward and flags when it closes.
 func log_decision(who: Node, obs: PackedFloat32Array, tactic: int) -> Dictionary:
 	var d := {"t": now(), "who": who.get_instance_id(), "obs": obs,

@@ -9,11 +9,13 @@ extends CharacterBody3D
 ## dismount), and until then they are the truck. Shoot the truck to pieces on
 ## the way and they die with it.
 ##
-## It drives one path, asked for once, at DRIVE speed, turning no faster than
-## TURN; it stops and lets them out when it is within DROP of where it was sent,
-## when its path runs out, or when it has been stuck for STUCK seconds. A
-## brick-built body, seats, moving cover and a vehicle map with clearance are
-## the steps after this one (AIVehicles.md 3-4).
+## It drives one path, asked for once, on the vehicle map (VehicleNav: only
+## where a truck fits, up nothing steeper than a kerb) to the nearest place to
+## where it was sent that a truck can reach -- the walking map's, as before, if
+## there is none -- at DRIVE speed, turning no faster than TURN; it stops and
+## lets them out when it is within DROP of where it was sent, when its path runs
+## out, or when it has been stuck for STUCK seconds. A brick-built body, seats
+## and moving cover are the steps after this one (AIVehicles.md 4).
 
 signal arrived(truck: TransportTruck)
 signal wrecked(truck: TransportTruck)
@@ -44,9 +46,12 @@ var health: HealthPool
 var stopped_because := ""
 ## What it was pressed against when it stuck.
 var stuck_on: Array[String] = []
+## Which map its path is on: "vehicle", or "foot" with no road on the vehicle map.
+var road := ""
 
 var _path := PackedVector3Array()
 var _path_id := -1
+var _nav: AINav
 var _wp := 0
 var _from := Vector3.ZERO
 var _moved_at := 0.0
@@ -104,9 +109,27 @@ func send(to: Vector3) -> void:
 	goal = to
 	state = "driving"
 	_path = PackedVector3Array()
-	_path_id = services.ai_nav.request_path(global_position, to, 8.0, 20000)
+	_ask_path(false)
 	_from = global_position
 	_moved_at = services.now()
+
+
+func _ask_path(on_foot: bool) -> void:
+	var vn := services.vehicle_nav(&"truck") if not on_foot else null
+	var to := VehicleNav.reach_point(vn, goal) if vn != null else Vector3.INF
+	var from := vn.snap(feet()) if vn != null else Vector3.INF
+	if vn != null and to != Vector3.INF and vn.can_stand(from):
+		_nav = vn
+		road = "vehicle"
+		_path_id = vn.request_path(from, to, 8.0, 40000)
+	else:
+		_nav = services.ai_nav
+		road = "foot"
+		_path_id = _nav.request_path(global_position, goal, 8.0, 20000)
+
+
+func feet() -> Vector3:
+	return global_position
 
 
 func _physics_process(delta: float) -> void:
@@ -130,14 +153,19 @@ func _physics_process(delta: float) -> void:
 		_moved_at = now
 		return
 	if _path.is_empty():
-		var st := services.ai_nav.get_status(_path_id)
+		var st := _nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			move_and_slide()
 			return
 		if st != AINav.DONE:
+			_nav.release(_path_id)
+			if road == "vehicle":
+				_ask_path(true)   # no road for a truck: the walking map's way
+				move_and_slide()
+				return
 			_arrive("no way")   # let them out here and walk
 			return
-		_path = services.ai_nav.get_path(_path_id)
+		_path = _nav.get_path(_path_id)
 		_wp = 1 if _path.size() > 1 else 0
 		# Face the way out before moving off: turning on the spot swings the
 		# tail into whatever it was parked beside.
@@ -200,8 +228,8 @@ func _arrive(why: String) -> void:
 	get_tree().create_timer(LEAVE_AFTER).timeout.connect(func() -> void:
 		if is_instance_valid(self) and state == "arrived" and cargo.is_empty():
 			queue_free())
-	if _path_id >= 0:
-		services.ai_nav.release(_path_id)
+	if _path_id >= 0 and _nav != null:
+		_nav.release(_path_id)
 	arrived.emit(self)
 
 
@@ -218,61 +246,6 @@ static func room_at(world: World3D, at: Vector3) -> bool:
 	q.transform = Transform3D(Basis(), at + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS | Layers.FALLING | Layers.WORLD
 	return world.direct_space_state.intersect_shape(q, 1).is_empty()
-
-
-## Is a route wide enough for a truck the whole way -- at every waypoint and
-## midway between them, a truck's width and a margin clear of buildings? A
-## stand-in for the vehicle map (AIVehicles.md 3) until there is one: the foot
-## map's paths squeeze between walls a body passes and a truck does not.
-static func route_wide(world: World3D, path: PackedVector3Array) -> bool:
-	return route_width_share(world, path) >= 1.0
-
-
-## The share of a route's points with a truck's width clear round them, 0..1.
-static func route_width_share(world: World3D, path: PackedVector3Array) -> float:
-	var q := PhysicsShapeQueryParameters3D.new()
-	var c := CylinderShape3D.new()
-	c.radius = SIZE.x * 0.5 + 0.35
-	c.height = SIZE.y - CLEARANCE
-	q.shape = c
-	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
-	var space := world.direct_space_state
-	var clear := 0
-	var total := 0
-	for i in path.size():
-		var pts := [path[i]]
-		if i > 0:
-			pts.append(path[i - 1].lerp(path[i], 0.5))
-		for p in pts:
-			total += 1
-			q.transform = Transform3D(Basis(), (p as Vector3) + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
-			if space.intersect_shape(q, 1).is_empty():
-				clear += 1
-	return float(clear) / maxf(total, 1)
-
-
-## How far along a route a truck gets before the first point it does not fit
-## through, in metres: the whole of it when it fits all the way.
-static func route_clear_run(world: World3D, path: PackedVector3Array) -> float:
-	var q := PhysicsShapeQueryParameters3D.new()
-	var c := CylinderShape3D.new()
-	c.radius = SIZE.x * 0.5 + 0.35
-	c.height = SIZE.y - CLEARANCE
-	q.shape = c
-	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
-	var space := world.direct_space_state
-	var run := 0.0
-	for i in path.size():
-		var pts := [path[i]]
-		if i > 0:
-			pts.push_front(path[i - 1].lerp(path[i], 0.5))
-		for p in pts:
-			q.transform = Transform3D(Basis(), (p as Vector3) + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
-			if not space.intersect_shape(q, 1).is_empty():
-				return run + (path[i - 1].distance_to(p) if i > 0 else 0.0)
-		if i > 0:
-			run += path[i - 1].distance_to(path[i])
-	return run
 
 
 ## Where the cargo gets out: behind and beside the truck, on the side away from
