@@ -4179,12 +4179,28 @@ func _enter_pawn(feet: Vector3) -> void:
 		_arsenal.name = "Arsenal"
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
+		_load_progress()
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
 			arena.level if arena != null else 1)
 	_arsenal.fill_default(_loot_rng)
 	print("[city] playing: pawn at %v" % feet)
+
+
+## The player's level and skills from the character save, and kept there on every
+## change -- not in a pass or a test window: those never touch the player's save.
+func _load_progress() -> void:
+	if _scripted or TestWindow.is_test_window():
+		return
+	_player.progress.take(CharacterSave.load_from().progress_dict())
+	_player.progress.changed.connect(_save_progress)
+
+
+func _save_progress() -> void:
+	var s := CharacterSave.load_from()
+	s.take_progress(_player.progress)
+	s.save()
 
 
 ## The gun into the view's hands, its HUD up, the debug overlays away.
@@ -4411,6 +4427,8 @@ func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech.gun.equip(gi)
 	_mech.gun.rng = _combat_rng
 	_mech.gun.on_structure_hit = _gun.on_structure_hit
+	# The player's mech's kills are the player's XP (PlayerLevel).
+	_mech.gun.set_meta(PlayerLevel.SOURCE_META, _player.progress)
 	_wire_mech(_mech)
 	# Out of the cockpit it fights on its own, on the one button (AI.md 2.1).
 	var br := MechBrain.attach(ai_services, _mech, mech_nav, MechTree.companion(), 0)

@@ -82,6 +82,8 @@ var _melee_cool := 0.0
 ## by this; a freeze stops the pawn where it stands -- no moving, firing or turning.
 var speed_mult := 1.0
 var frozen := false
+## The player's skill tree's move speed (PlayerArsenal.apply_skills): 1 for anyone else.
+var move_mult := 1.0
 ## A player's pawn: slowed by ice, never frozen (PlayerController sets it).
 var is_player := false
 
@@ -348,7 +350,7 @@ func step(delta: float) -> void:
 		speed = AIM_SPEED
 	elif intents.run:
 		speed = RUN_SPEED
-	speed *= speed_mult
+	speed *= speed_mult * move_mult
 
 	if moves != null:
 		moves.step(delta, wish, speed)
