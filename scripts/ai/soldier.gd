@@ -128,6 +128,11 @@ var board_mech: Mech
 ## Why the last boarding stopped short: "" (it got in), "blocked", "no way",
 ## "taken", "gone".
 var board_failed := ""
+## Our heavy (a Tank or a Mech) this soldier is screening -- the casebook's
+## screen_heavy, on its flank towards the threat -- or following in the lee of
+## (heavy_leads): BTManoeuvre goes there. Null for neither.
+var screen_of: Object
+var screen_move := ""
 ## The rodeo mod (4.5, R8): it goes round behind a hostile mech, climbs on and
 ## plants a charge on its hatch. The mech it is after, and when it may try again
 ## after being thrown off.

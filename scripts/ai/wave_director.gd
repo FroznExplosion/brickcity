@@ -267,6 +267,7 @@ func _physics_process(_delta: float) -> void:
 		if not so.pawn.no_crouch and not so._ducking and _now() - so._duck_until > 0.5:
 			_crouched += 1
 	_check_focus()
+	_tank_report(now)
 	if Engine.get_physics_frames() % 15 == 7:
 		_check_hq()
 	_player_tick(now)
@@ -320,6 +321,7 @@ func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> b
 	print("[arena] reinforcement %d: %s, %d floor spot(s) in building %d" % [
 		wave, ", ".join(kinds), _floors.size(), focus])
 	_air_wing()
+	_tank_wing()
 	return true
 
 
@@ -334,6 +336,8 @@ const AIR_KINDS: Array[StringName] = [&"gnat", &"gnat", &"drone"]
 const HOVER_KIND := &"skimmer"
 var hover: Flyer
 var air: Array[Flyer] = []
+## The enemy's tank (`-- --tank`, AIRoster.md RO10), and the squad screening it.
+var tank: Tank
 
 func _air_wing() -> void:
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
@@ -368,6 +372,59 @@ func _air_wing() -> void:
 		hover.set_loiter(Vector3(over.x, 0.0, over.z))
 		air.append(hover)
 	print("[arena] air wing: %s" % [air.map(func(f): return f.name_tag.text if f.name_tag != null else "flyer")])
+
+
+## A tank with the reinforcements (`-- --tank`; not in a gate, whose checks count
+## a wave's soldiers): crewed, it drives in from out past the fight -- where a
+## truck would start -- to the focus building's street, at the pace of the
+## wave's squad, who screen it. One at a time; a live one is sent on to the
+## new focus. (Free until the commander buys by points: RO11.)
+func _tank_wing() -> void:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--tank" in args or "--gate" in args or _player() == null:
+		return
+	var goal: Vector3 = _street_of(focus)
+	if tank != null and is_instance_valid(tank) and not tank.is_wrecked():
+		(tank.get_node(^"TankBrain") as TankBrain).send(goal)
+		return
+	var start := _truck_start()
+	if start == Vector3.INF:
+		print("[arena] no open ground for a tank to start from")
+		return
+	var to := goal - start
+	tank = city._spawn_tank(start, atan2(-to.x, -to.z), ENEMY_TEAM, true)
+	(tank.get_node(^"TankBrain") as TankBrain).send(goal)
+	print("[arena] tank from %v to the street of building %d" % [start, focus])
+
+
+## Every TANK_REPORT seconds while a tank is out: what it and its escort are
+## doing, for the log (`--tank`).
+const TANK_REPORT := 10.0
+var _tank_report_at := 0.0
+func _tank_report(now: float) -> void:
+	if tank == null or not is_instance_valid(tank) or now < _tank_report_at:
+		return
+	_tank_report_at = now + TANK_REPORT
+	if tank.is_wrecked():
+		print("[arena] tank: wrecked")
+		tank = null
+		return
+	var br := tank.get_node(^"TankBrain") as TankBrain
+	var near := 0
+	var screening := 0
+	for so in alive:
+		if is_instance_valid(so) and so.pawn.feet().distance_to(tank.feet()) < TacticsSense.HEAVY_NEAR:
+			near += 1
+			if so.state in ["screen", "lee"]:
+				screening += 1
+	var holds := br.take_hold_counts()
+	var ks := holds.keys()
+	ks.sort_custom(func(x, y): return int(holds[x]) > int(holds[y]))
+	print("[arena] tank: %s, %.0f hp, %d shell(s), %d crew, %.0f m from the player; %d soldier(s) within %.0f m, %d screening or in its lee; gunner %s" % [
+			br.state, tank.health.total_current(), tank.shells, tank.crew_count(),
+			tank.feet().distance_to(_player().feet()) if _player() != null else -1.0,
+			near, TacticsSense.HEAVY_NEAR, screening,
+			", ".join(ks.map(func(k): return "%s %d%%" % [k, roundi(100.0 * int(holds[k]) / maxf(1.0, float(holds.values().reduce(func(x, y): return x + y, 0))))]))])
 
 
 func _spawn_one() -> void:
@@ -461,6 +518,9 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 	if _wave_squad == null or not is_instance_valid(_wave_squad):
 		_wave_squad = Squad.make(city.ai_services, city, [so] as Array[Soldier], ENEMY_TEAM)
 		commander.adopt(_wave_squad)
+		# The tank goes at this squad's pace, and they screen it (AIVehicles.md 4).
+		if tank != null and is_instance_valid(tank) and not tank.is_wrecked():
+			(tank.get_node(^"TankBrain") as TankBrain).escort = _wave_squad
 	else:
 		_wave_squad.add(so)
 		commander.joined(_wave_squad, so)

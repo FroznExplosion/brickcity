@@ -29,6 +29,9 @@ const DOABLE := {
 	"call_help": -1, "mark": -1,
 	# A plane on the contact (AirSupport), then fire from cover.
 	"call_air": -1,
+	# Our armour near (TacticsSense.heavy_near): to its flank towards the
+	# threat, or into its lee as it leads -- BTManoeuvre, with Soldier.screen_of.
+	"screen_heavy": T.FLANK, "heavy_leads": T.PUSH,
 }
 ## Book move -> what a FLYER does with it (Flyer.Mode): circle and fire, a
 ## strafing run, break off upwards, or -- a bomber -- dive and go off.
@@ -102,6 +105,8 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 		move = _redraw(plan.rows, rng, so, c)
 	if move == "grenade":
 		so.throw_grenade(c.pos)
+	so.screen_of = TacticsSense.heavy_near(so) if move in ["screen_heavy", "heavy_leads"] else null
+	so.screen_move = move if so.screen_of != null else ""
 	var tactic := _tactic(move, cover) if move != "" else _fallback.decide(o, rng)
 	_count(done, move)
 	if SAID.has(move):
