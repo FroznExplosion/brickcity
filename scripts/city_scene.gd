@@ -706,6 +706,11 @@ var _play_mode := false
 ## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
 ## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
 var _view: PlayerView
+## The player's guns in play: two groups of two, ordnance, grenades, the floor and
+## the backpack (PlayerArsenal; COMBAT_DESIGN 7). Made on first entering the pawn.
+var _arsenal: PlayerArsenal
+## Loot rolls: their own stream, so a drop never moves the gun's or the fight's.
+var _loot_rng := RandomNumberGenerator.new()
 var _fps_hud: PlayerHud
 var _stats_were_visible := false
 ## Hitmarkers and numbers outside the arena, which has its own.
@@ -3927,19 +3932,44 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 		_gun_library = GunPlaceholderParts.build_library()
 	var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(class_id), 1)
 	var gi := GunInstance.from_result(res)
-	if _gun.gun != null:
-		_gun.gun.queue_free()
-	_gun.equip(gi)
-	if _view != null:
-		_view.hold(gi)
+	if _arsenal != null and _player.is_possessing():
+		# The hands are the arsenal's: the new gun takes the place of the one held.
+		_arsenal.replace_in_hand(gi)
 	else:
-		camera.add_child(gi)
-		gi.position = Vector3(0.22, -0.2, -0.45)
+		if _gun.gun != null:
+			_gun.gun.queue_free()
+		_gun.equip(gi)
+		if _view != null:
+			_view.hold(gi)
+		else:
+			camera.add_child(gi)
+			gi.position = Vector3(0.22, -0.2, -0.45)
 	var shot := StructuralDamage.for_shot(gi.weapon_class, gi.active_effects)
 	print("[city] gun: %s -- %s, %s" % [gi.gun_name, class_id,
 			("blast %.2f m" % float(shot.radius)) if bool(shot.blast)
 			else ("%d hits a brick" % StructuralDamage.hits_per_brick(gi.weapon_class))])
 	return gi
+
+
+## What a kill drops (LootRoller, Docs/Weapons/PROGRESSION_SPEC.md 3): guns of the
+## fight's tier on the floor round `at`, as `archetype` (trash .. boss) is generous.
+func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunPickup]:
+	var out: Array[WorldGunPickup] = []
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var t := arena.level if arena != null else 1
+	var drops := LootRoller.roll_drops(archetype, t, t, _loot_rng)
+	for i in drops.size():
+		var d: LootRoller.Drop = drops[i]
+		var cls: StringName = GUN_CLASSES[_loot_rng.randi() % GUN_CLASSES.size()]
+		var res := GunGenerator.generate(_gun_library, _loot_rng.randi(), WeaponClass.builtin(cls),
+				d.tier, d.rarity, d.luck)
+		var p := WorldGunPickup.create(_gun_library, res)
+		add_child(p)
+		var a := TAU * float(i) / float(maxi(drops.size(), 1))
+		p.global_position = at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0)
+		out.append(p)
+	return out
 
 
 ## The gate for the player's gun (Docs/AIPlan.md P1): a generated gun, fired at a
@@ -4119,6 +4149,16 @@ func _enter_pawn(feet: Vector3) -> void:
 		_mech_cmd.brain.leader = _player_pawn
 	_player_hud()
 	_fps_on()
+	if _arsenal == null:
+		_arsenal = PlayerArsenal.new()
+		_arsenal.name = "Arsenal"
+		add_child(_arsenal)
+		_loot_rng.seed = 0x1007
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
+			arena.level if arena != null else 1)
+	_arsenal.fill_default(_loot_rng)
 	print("[city] playing: pawn at %v" % feet)
 
 
@@ -9690,11 +9730,47 @@ func _toggle_shader(param: String) -> bool:
 	return on
 
 
+# --- keys (Options > Controls, and > Developer) ----------------------------------
+
+## The player's actions the city handles itself, and the key each stands for in
+## _unhandled_input's match (its arms keep the default keys' names).
+const PLAYER_KEYS := {&"use_vehicle": KEY_M}
+## Developer mode's actions (project.godot's dev_*, rebound on Options >
+## Developer), by the key each stands for.
+const DEV_KEYS := {
+	&"dev_big_blast": KEY_X, &"dev_disasters": KEY_H, &"dev_stats": KEY_F1, &"dev_gun_out": KEY_1,
+	&"dev_gun_away": KEY_2, &"dev_spawn_soldier": KEY_K, &"dev_spawn_squad": KEY_U,
+	&"dev_spawn_enemy_mech": KEY_Y, &"dev_spawn_tank": KEY_Z, &"dev_play_on_foot": KEY_V,
+	&"dev_gun_class": KEY_T, &"dev_gun_reload": KEY_R, &"dev_ai_overlay": KEY_F4, &"dev_save": KEY_F5,
+	&"dev_load": KEY_F9, &"dev_view_structure": KEY_7, &"dev_view_interior": KEY_8,
+	&"dev_view_items": KEY_9, &"dev_terrain_menu": KEY_F10, &"dev_terrain_edit": KEY_F11,
+	&"dev_seams": KEY_L, &"dev_bevel": KEY_B, &"dev_finish": KEY_I, &"dev_overlap": KEY_J,
+	&"dev_slow_motion": KEY_O, &"dev_profiler": KEY_F2, &"dev_worst_frame": KEY_F3,
+	&"dev_brick_shells": KEY_N, &"dev_placer": KEY_P, &"dev_grids": KEY_G,
+}
+
+
+## The key `event` stands for, by the action it is bound to (so a rebinding
+## counts), or KEY_NONE. Modifiers are ignored: Shift+Z is still the tank key,
+## and its arm reads the Shift.
+static func _key_of(event: InputEvent) -> Key:
+	for a in PLAYER_KEYS:
+		if event.is_action_pressed(a):
+			return PLAYER_KEYS[a]
+	# The developer keys only in developer mode (DevMode, Options > Gameplay).
+	if not DevMode.on:
+		return KEY_NONE
+	for a in DEV_KEYS:
+		if event.is_action_pressed(a):
+			return DEV_KEYS[a]
+	return KEY_NONE
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	# Terrain edit mode: everything but these is the editor's.
 	if _edit_mode:
 		if event is InputEventKey and event.pressed and not event.echo:
-			match event.keycode:
+			match _key_of(event):
 				KEY_F11:
 					_toggle_terrain_edit()
 				KEY_F10:
@@ -9733,7 +9809,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
 	# HOLD, held while aiming sends it to attack where the crosshair is.
-	if event is InputEventKey and not event.echo and event.keycode == KEY_F \
+	if event is InputEventKey and not event.echo and event.is_action(&"mech_order") \
 			and _mech_cmd != null and _player.is_possessing():
 		if event.pressed:
 			_mech_cmd.press(ai_services.now())
@@ -9743,7 +9819,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	match event.keycode:
+	match _key_of(event):
 		KEY_X:
 			_fire(BIG_BLAST)
 		KEY_H:
@@ -9752,6 +9828,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F1:
 			stats_label.visible = not stats_label.visible
 		KEY_1:
+			# On foot 1 is the first gun slot (slot_1): the free camera's gun only.
+			if _player.is_possessing():
+				return
 			_arm_gun()
 		KEY_2:
 			if _player.is_possessing():

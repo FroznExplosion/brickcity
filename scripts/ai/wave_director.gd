@@ -693,6 +693,9 @@ func _on_soldier_died(so: Soldier) -> void:
 	# died read as a soldier still standing there.
 	feedback.burst(so.pawn.feet(), Color(0.75, 0.25, 0.2))
 	last_dead_id = so.pawn.body.get_instance_id()
+	# Its loot on the floor (LootRoller): what the player picks up and tries
+	# (COMBAT_DESIGN 7.4). The officer is a boss's worth.
+	city.drop_loot(so.pawn.feet(), &"badass" if so == hq_officer else &"trash")
 	city.ai_services.pawns.erase(so.pawn)
 	city.soldiers.erase(so)
 	if so._path_id >= 0:

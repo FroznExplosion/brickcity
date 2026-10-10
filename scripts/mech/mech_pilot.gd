@@ -8,7 +8,9 @@ extends Node
 ## WASD drives relative to the TORSO, not the look -- the Titanfall feel the motor
 ## exists to keep: turn your head and the chassis follows at its own pace.
 ## SHIFT sprints, Q dashes, LMB fires the arm, R reloads, C lets off electric
-## smoke (a rider on its back is thrown off: Rodeo).
+## smoke (a rider on its back is thrown off: Rodeo). Those are the defaults: it
+## reads input actions (move, sprint, mech_dash, fire, reload, mech_smoke),
+## rebound in Options > Controls.
 
 ## The crosshair's reach, for converging the arm on what it points at.
 const AIM_RANGE := 400.0
@@ -44,10 +46,10 @@ func _active() -> bool:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if is_piloting() and _active() and event is InputEventKey and event.pressed \
-			and not event.echo and event.keycode == KEY_R:
+			and event.is_action_pressed(&"reload"):
 		mech.gun.reload()
 	if is_piloting() and _active() and event is InputEventKey and event.pressed \
-			and not event.echo and event.keycode == KEY_C:
+			and event.is_action_pressed(&"mech_smoke"):
 		if not mech.rodeo.smoke():
 			print("[mech] smoke not ready")
 
@@ -61,14 +63,14 @@ func _process(_delta: float) -> void:
 	it.aim_pitch = r.x
 	if _active():
 		var md := Vector2.ZERO
-		if Input.is_key_pressed(KEY_W): md.y += 1.0
-		if Input.is_key_pressed(KEY_S): md.y -= 1.0
-		if Input.is_key_pressed(KEY_D): md.x += 1.0
-		if Input.is_key_pressed(KEY_A): md.x -= 1.0
+		if Input.is_action_pressed(&"move_forward"): md.y += 1.0
+		if Input.is_action_pressed(&"move_back"): md.y -= 1.0
+		if Input.is_action_pressed(&"move_right"): md.x += 1.0
+		if Input.is_action_pressed(&"move_left"): md.x -= 1.0
 		it.move_dir = md.normalized() if md != Vector2.ZERO else Vector2.ZERO
-		it.sprint = Input.is_key_pressed(KEY_SHIFT)
-		it.dash = Input.is_key_pressed(KEY_Q)
-		mech.gun.set_trigger(Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT))
+		it.sprint = Input.is_action_pressed(&"sprint")
+		it.dash = Input.is_action_pressed(&"mech_dash")
+		mech.gun.set_trigger(Input.is_action_pressed(&"fire"))
 	else:
 		it.move_dir = Vector2.ZERO
 		it.sprint = false
