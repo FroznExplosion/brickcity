@@ -76,6 +76,9 @@ var steer := 0.0
 var pawn: Pawn
 ## Riders in the bed (VehicleDeck); Rodeo's name, as on a tank.
 var rodeo: VehicleDeck
+## Bodies it has run down (Splatter), and when each was last hit.
+var splats := 0
+var _splat_last := {}
 var _speed := 0.0
 var health: HealthPool
 ## Why it stopped: "there", "end of path", "stuck", "no way".
@@ -235,6 +238,7 @@ func _physics_process(delta: float) -> void:
 	velocity.x = fwd.x * speed
 	velocity.z = fwd.z * speed
 	move_and_slide()
+	_run_down(fwd)
 	# A kerb: pressed against something while on the ground and going nowhere,
 	# a pop up the way wheels climb one. Not a wall: a wall is still a wall,
 	# and STUCK lets them out there.
@@ -278,6 +282,12 @@ func _drive_keys(delta: float) -> void:
 		velocity.y = KERB_POP
 	# Into a wall it stops: what it went at is what it keeps.
 	_speed = Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z))
+	_run_down(fwd)
+
+
+func _run_down(fwd: Vector3) -> void:
+	splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(SIZE.x * 0.5, SIZE.z * 0.5),
+			Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z)), _splat_last)
 
 
 func is_wrecked() -> bool:

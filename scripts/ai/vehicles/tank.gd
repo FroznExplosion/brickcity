@@ -105,6 +105,9 @@ var main_ready_at := 0.0
 var shells := 0
 ## Riders and a boarder (VehicleDeck): Rodeo's name, so the same callers drive both.
 var rodeo: VehicleDeck
+## Bodies it has run down (Splatter), and when each was last hit.
+var splats := 0
+var _splat_last := {}
 var _clock := 0.0
 var _main_pulse := false
 var _look: Array[MeshInstance3D] = []
@@ -440,6 +443,9 @@ func _physics_process(delta: float) -> void:
 	velocity.x = move_toward(velocity.x, fwd.x * speed, DRIVE * delta * 2.0)
 	velocity.z = move_toward(velocity.z, fwd.z * speed, DRIVE * delta * 2.0)
 	move_and_slide()
+	if driven():
+		splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(HULL.x * 0.5, HULL.z * 0.5),
+				Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z)), _splat_last)
 	# A kerb: pressed against something, on the ground, going nowhere -- the
 	# tracks climb it (KERB_POP is about half a metre).
 	if absf(go) > 0.1 and is_on_floor() and is_on_wall() \

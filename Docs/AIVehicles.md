@@ -143,11 +143,15 @@ guns, and the other side takes it from you by jumping on. Built for the two vehi
 - The player at the wheel has no body: the tank's target pawn (and a truck's, made when a
   player first drives it) is what the other side senses and shoots. Wrecked, the player climbs
   out hurt (25).
+- **Splatter** (`Splatter`): a driven vehicle going faster than 4 m/s hits each body of another
+  side in the box just ahead of its nose for 30 a m/s over that, plus 30 -- a truck at speed
+  (9 m/s, 180) kills a soldier, a tank at its top (6 m/s, 90) nearly does -- once a second per
+  body. Its own side, riders, boarders and anybody inside a vehicle are spared.
 - The city: CTRL+Z an empty truck of ours, CTRL+SHIFT+Z an enemy's with four soldiers in the
-  back coming for the player. Gates: `vehicle_seats_probe` (14), the city's `--vehicles` pass.
+  back coming for the player. Gates: `vehicle_seats_probe` (16), the city's `--vehicles` pass.
 - Not yet: a gunner's seat of its own for the player (the player in a tank is both seats; an AI
-  gunner of ours in it sits idle); seat switching; a passenger seat in the cab; splatter (a
-  vehicle running a body down); the enemy boarding a truck.
+  gunner of ours in it sits idle); seat switching; a passenger seat in the cab; the enemy
+  boarding a truck; crushing bricks (§3).
 
 ---
 

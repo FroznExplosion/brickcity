@@ -18,6 +18,8 @@ extends SceneTree
 ## F. A truck: hijacked at the cab on its way in, its squad is put out there
 ##    and then and it is the player's; driven, it goes and steers as a car
 ##    (only while it rolls); its bed takes riders who stay on as it drives.
+## G. Splatter: driven at speed into an enemy, it runs it down; a friend in its
+##    way is spared.
 
 const Arena := preload("res://tools/ai_arena.gd")
 
@@ -154,6 +156,19 @@ func _begin(stage: String) -> void:
 				_log["cargo_then"] = x.cargo.size())
 			tr.send(Vector3(0.0, 0.0, -80.0))
 			me = a.player(Vector3(2.8, 0.0, -20.0))
+		"splat":
+			print("G. splatter")
+			_clear()
+			tr = TransportTruck.make(a.s, root, Vector3(-40.0, 0.0, 40.0), 0.0)
+			tr.team = 0
+			tr.take_player(0)
+			var enemy := Pawn.spawn(root, Vector3(-40.0, 0.0, 15.0), 1, true, 100.0)
+			var friend := Pawn.spawn(root, Vector3(-40.0, 0.0, 5.0), 0, true, 100.0)
+			for x in [enemy, friend]:
+				Soldier._greybox(x, x.team)
+				a.s.add_pawn(x)
+			_log["enemy"] = enemy
+			_log["friend"] = friend
 		"bed":
 			print("   its bed")
 			so = a.soldier(tr.feet() + Vector3(5.0, 0.0, 3.0), 0, 24)
@@ -259,6 +274,18 @@ func _check(el: float) -> bool:
 			_ok("driven, it goes, and steers as it rolls", went > 8.0 and turned > 0.5,
 					"%.1f m, turned %.0f deg" % [went, rad_to_deg(turned)])
 			return true
+		"splat":
+			tr.throttle = 1.0
+			if tr.feet().z < 0.0 or el > 8.0:
+				tr.throttle = 0.0
+				var enemy: Pawn = _log.enemy
+				var friend: Pawn = _log.friend
+				_ok("driven at speed into an enemy, it runs it down", enemy.health.is_dead() and tr.splats >= 1,
+						"enemy %.0f hp, %d splat(s)" % [enemy.health.total_current(), tr.splats])
+				_ok("a friend in its way is spared", friend.health.total_current() >= 100.0)
+				_forget(enemy)
+				_forget(friend)
+				return true
 		"bed":
 			if not _log.has("on_at") and tr.rodeo.rider_count() == 2:
 				_log["on_at"] = el
@@ -312,7 +339,7 @@ func _on_tick() -> void:
 		return
 	if _stage == "off":
 		return
-	var order := ["ride", "shoot", "off", "board", "thrown", "truck", "bed"]
+	var order := ["ride", "shoot", "off", "board", "thrown", "truck", "bed", "splat"]
 	var i := order.find(_stage)
 	if i + 1 < order.size():
 		_begin(order[i + 1])
