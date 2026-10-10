@@ -27,6 +27,8 @@ const DOABLE := {
 	"fall_back": T.FALL_BACK, "flee": T.FALL_BACK, "regroup": T.FALL_BACK, "hide": T.FALL_BACK,
 	# Said aloud (SAID), then fire from cover.
 	"call_help": -1, "mark": -1,
+	# A plane on the contact (AirSupport), then fire from cover.
+	"call_air": -1,
 }
 ## Book move -> what a FLYER does with it (Flyer.Mode): circle and fire, a
 ## strafing run, break off upwards, or -- a bomber -- dive and go off.
@@ -54,6 +56,7 @@ const THEN_GRENADE := 1.8
 const SAID := {
 	"call_help": ["Need help over here!", "Contact, send everyone!", "Get over here!"],
 	"mark": ["Marking him!", "He's there, on me!", "Target marked!"],
+	"call_air": ["Requesting air on my mark!", "Get me a gun run on him!", "Calling it in!"],
 }
 
 var book: TacticsBook
@@ -104,6 +107,8 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	if SAID.has(move):
 		var said: Array = SAID[move]
 		so.services.say(so.pawn, "book_" + move, said[rng.randi() % said.size()])
+	if move == "call_air":
+		so.services.air_of(so.team).request(c.pos, so.pawn)
 	var extras: Array = []
 	var not_yet: Array = []
 	for x in plan.extras:
@@ -116,6 +121,8 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 		elif SAID.has(x.move):
 			var lines: Array = SAID[x.move]
 			so.services.say(so.pawn, "book_" + str(x.move), lines[rng.randi() % lines.size()])
+			if x.move == "call_air":
+				so.services.air_of(so.team).request(c.pos, so.pawn)
 			extras.append(x.move)
 		elif not DOABLE.has(x.move):
 			# A follow-up the tree can do (fire, push...) comes as the next

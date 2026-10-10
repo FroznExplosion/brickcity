@@ -834,6 +834,64 @@
     "phases": []
    }
   },
+  "skimmer": {
+   "body": "hover",
+   "size": "large",
+   "class": "medium",
+   "grade": "regular",
+   "attack": "gunner",
+   "role": "defender",
+   "mods": [],
+   "phases": [],
+   "built": true,
+   "unit": "",
+   "derived": {
+    "tag": "Medium Gunner Hover craft",
+    "name": "Skimmer",
+    "errors": [],
+    "warnings": [],
+    "weapon": "lmg",
+    "attack": "gunner",
+    "role": "defender",
+    "grenades": 2,
+    "facts": [
+     "we_flyer",
+     "we_gunner",
+     "we_defender"
+    ],
+    "tier": "smart",
+    "size": {
+     "id": "large",
+     "l": "Large",
+     "tall": 2.6,
+     "wide": 1,
+     "nav": [
+      3,
+      19,
+      19,
+      4,
+      21,
+      12
+     ],
+     "fits": "wide doors and damaged walls",
+     "floors": "checked against the floor's headroom",
+     "eg": "a brute"
+    },
+    "layers": [
+     [
+      "armor",
+      3
+     ],
+     [
+      "health",
+      1
+     ]
+    ],
+    "melees": 4,
+    "points": 3.75,
+    "phases": []
+   }
+  },
   "hound": {
    "body": "walker",
    "size": "small",

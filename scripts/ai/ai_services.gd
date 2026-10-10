@@ -88,6 +88,7 @@ var round_listeners: Array[Callable] = []
 ## Every flash: [point, radius, time], for gates.
 var flashes: Array = []
 var _knowledge := {}
+var _air := {}
 var _aggro := {}
 var _suppressed := {}   # pawn instance id -> time a round last passed close
 var _tokens := {}       # target instance id -> {holder instance id: expires}
@@ -134,6 +135,14 @@ func _drop_idle_fields(t: float) -> void:
 
 func field_count() -> int:
 	return _fields.size()
+
+
+## The side's fast planes (AirSupport): a run on call, when it has somewhere to
+## put a plane (its `parent`).
+func air_of(team: int) -> AirSupport:
+	if not _air.has(team):
+		_air[team] = AirSupport.new(self, team)
+	return _air[team]
 
 
 func knowledge_of(team: int) -> FactionKnowledge:
