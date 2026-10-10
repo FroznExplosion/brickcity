@@ -18,7 +18,7 @@ const RARITY_COLOURS: Array[Color] = [
 ]
 ## The key help at the bottom fades after this long.
 const HINT_SECONDS := 10.0
-const HINT := "WASD move · SHIFT sprint · SPACE jump (hold: higher) / climb · C slide, let go · Q grapple · RMB aim · LMB fire · R reload · V leave"
+const HINT := "WASD move · SHIFT sprint · SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · R reload (hold: pick up) · E melee · TAB swap (hold: group) · 1-4 guns · 5 ordnance · G grenade · I backpack · V leave"
 
 ## How solid the HUD is drawn (the Options menu's HUD Opacity).
 static var opacity := 1.0
