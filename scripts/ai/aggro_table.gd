@@ -117,6 +117,9 @@ func _refresh() -> void:
 	var best: Entry = null
 	for id in entries:
 		var e: Entry = entries[id]
+		# One freed since the last decay (a player's body left for a vehicle).
+		if not is_instance_valid(e.who):
+			continue
 		if e != holder and (best == null or e.value > best.value):
 			best = e
 	if best == null:

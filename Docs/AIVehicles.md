@@ -1,8 +1,10 @@
 # AI vehicles and mechs — plan
 
-**Status: 2026-10-09. Step 1 is built in its smallest form, and step 3's tank in its first
+**Status: 2026-10-10. Step 1 is built in its smallest form, and step 3's tank in its first
 part (AIRoster.md RO10: crewed seats, a cannon that opens walls, armour, the player can drive
-it, infantry screen it -- no crushing, no brick body, no vehicle map yet); the rest is planned.**
+it, infantry screen it -- no crushing, no brick body yet). The vehicle map (§3) is built for
+wheels and tracks, and riding on and boarding vehicles (§4, after Halo) for the truck and the
+tank; the rest is planned.**
 The commander can name, cost and weigh every vehicle below (`UnitCatalog`), so the budget, the
 doctrine and the save format know them before each one drives; only the truck and the tank
 have `built = true` -- the tank a commander buys as support (AIRoster.md RO11), and the arena
@@ -10,13 +12,15 @@ have `built = true` -- the tank a commander buys as support (AIRoster.md RO11), 
 
 **What step 1 is today** (`scripts/ai/vehicles/transport_truck.gd`): a kinematic body with health
 that asks for one path and drives it (9 m/s, 1.6 rad/s turns, slower through a sharp one). What it
-carries is **cargo** -- the unit kinds the commander bought -- not bodies in seats: at the drop
+carries is **cargo** -- the unit kinds the commander bought -- not bodies in seats (its open bed
+takes riders, §4.1, but the commander's squads still ride as cargo): at the drop
 (within 22 m of where it was sent, the end of its path, or stuck 3 s) the host puts the squad
 down at the tailgate, on the side away from the threat. Shot to pieces on the way, its squad is
 lost with it. The commander buys "a squad by truck" as often as its doctrine's `truck_share`
-says (0.4; more against a sniper, less against a demolisher). Not yet: a brick-built body,
-seats, moving cover, a vehicle map with clearance -- it drives the foot map, and stops where
-that is too narrow for it. Read [AI.md](AI.md) first
+says (0.4; more against a sniper, less against a demolisher). It drives the vehicle map (§3),
+and the arena picks its start from where that map has a road to the fight. The player can
+drive one, ride in its bed, and hijack an enemy's (§4.1). Not yet: a brick-built body, moving
+cover. Read [AI.md](AI.md) first
 (§3.6 navigation per way of moving, §6.4 mechs, §9 the commander) and [AIPlan.md](AIPlan.md) P7.
 
 Prior art: Red Dawn (`C:\Users\lbaun\Documents\reddawn`) has six vehicle types and a
@@ -75,6 +79,24 @@ orders are the squad's.
 Shared as AI.md 4.3 says: **the vehicle paths, its squad rides** — a mounted squad asks for no
 paths at all. Flow fields for many vehicles to one place, later.
 
+**Built (wheeled and tracked, 2026-10-10): `VehicleNav`.** Not a new map but the walking map's
+machinery told a vehicle's numbers, as the mech map is (`AINav.set_agent`): the footprint is
+the vehicle's width plus a hand each side (`MARGIN`), square -- a truck 8 studs (2.8 m), a tank
+10 (3.5 m) -- the air it needs its height (a truck 18 plates, a tank 21), the step a kerb for a
+truck (2 plates) and a brick course for a tank (3), the drop a kerb's worth. So a path only goes
+where the whole vehicle fits between walls and under roofs, a staircase is no road for a truck,
+and a hole blown in a wall is a road the moment it is wide enough -- nothing is baked; the
+walking map's `nav_changed` invalidates it. One per kind, made on first use by
+`AIServices.vehicle_nav(kind)` and served in its tick with the other sizes' maps.
+`VehicleNav.reach_point` is the nearest place to a goal a vehicle fits (a goal down an alley:
+beside it or at its mouth). `TankBrain` and `TransportTruck` path on it to that point, and fall
+back to the walking map when it has no road (`road` says which). The arena chooses a truck's
+start with one flow field outward from the fight on the truck's map, in place of a foot path per
+candidate checked for width (the checks it replaced, `route_wide` and its kin, are gone). The
+city's narrowest street is 9 studs (3.15 m): a truck fits, a tank does not, and goes round.
+Not yet: rubble dearer than road; a tank crushing low walls and rubble (it goes round them);
+the mech, air and water maps of the table. Probe: `vehicle_nav_probe` (15).
+
 ---
 
 ## 4. The mounted squad (the coordinator, as a squad)
@@ -93,6 +115,43 @@ A vehicle is a `Squad` member with a role (`driver`), and the squad's plays lear
 - **Air insertion** — the transport helicopter hovers over a roof or street the survey (the
   arena's `SpawnSurvey`) has passed: it reads what the spot stands on the same way, so it never
   drops a squad onto a roof that has fallen in.
+
+### 4.1 Driving, riding and boarding (built, after Halo)
+
+Halo's vehicles are what this follows: anybody drives one, more ride on it and shoot their own
+guns, and the other side takes it from you by jumping on. Built for the two vehicles there are
+(2026-10-10); the mech's own rodeo is AIRoster.md 4.5.
+
+| | Tank | Truck |
+|---|---|---|
+| **Drive** (M at it) | an empty one of any side, or ours with no driver: both seats -- W/S, A/D turn on the spot, LMB cannon, RMB machine gun | an empty one, from beside the cab: W/S throttle and brake, A/D steer, only while it rolls |
+| **Camera** | behind and above, looking where the mouse looks, pulled in by walls (Halo's); C: the cupola | the same; C: the cab |
+| **Ride** (M at one somebody else drives; jump or M gets off) | four on the track covers | six in the open bed |
+| **Board an enemy's** (E beside it) | onto its back deck; E held 2 s pries the hatch: its crew is dragged out (20 hurt) and the player is put at the wheel. Noticed after 1 s, or at once if its side sees it: an aggro spike, as a mech's rider | its cab at once: the squad in the back is put out at the tailgate there and then, and it is the player's |
+
+- **Riders** (`VehicleDeck`, a vehicle's `rodeo`) are carried every tick on their spot, a
+  collision exception of the vehicle; they shoot their own guns at what they see -- no walking,
+  no tactics -- and are put down beside the hull when they get off or it is wrecked.
+- **Halo's marines:** while the player drives a vehicle of theirs and it stands still, soldiers
+  of the player's side within 15 m walk to it and get on, as many as it has room for
+  (`Soldier.ride_on`). They get down when the player gets out: they have a fight to get back to.
+- **The enemy boards too:** a soldier with the rodeo mod (the roster's "boarder") goes for a
+  hostile tank with somebody in it as it does a mech, climbs onto the deck and pries the hatch:
+  a player inside is thrown out hurt, and the soldier takes the gun -- the tank turns on its old
+  side. The tank's crew cannot turn the gun on its own deck; the player gets out and shoots it
+  off, or their side does.
+- The player at the wheel has no body: the tank's target pawn (and a truck's, made when a
+  player first drives it) is what the other side senses and shoots. Wrecked, the player climbs
+  out hurt (25).
+- **Splatter** (`Splatter`): a driven vehicle going faster than 4 m/s hits each body of another
+  side in the box just ahead of its nose for 30 a m/s over that, plus 30 -- a truck at speed
+  (9 m/s, 180) kills a soldier, a tank at its top (6 m/s, 90) nearly does -- once a second per
+  body. Its own side, riders, boarders and anybody inside a vehicle are spared.
+- The city: CTRL+Z an empty truck of ours, CTRL+SHIFT+Z an enemy's with four soldiers in the
+  back coming for the player. Gates: `vehicle_seats_probe` (16), the city's `--vehicles` pass.
+- Not yet: a gunner's seat of its own for the player (the player in a tank is both seats; an AI
+  gunner of ours in it sits idle); seat switching; a passenger seat in the cab; the enemy
+  boarding a truck; crushing bricks (§3).
 
 ---
 
@@ -118,7 +177,9 @@ built units, the budget is points. Still to come, with the first vehicle:
 
 1. **One wheeled transport** (truck): brick-built, `VehicleBody3D`, vehicle map, mount / ride /
    dismount. The commander buys "a squad by truck". Gate: a squad arrives by truck, dismounts
-   in the truck's lee, and fights; nobody is left inside.
+   in the truck's lee, and fights; nobody is left inside. *(Built: the truck, the vehicle map,
+   riders and the player's driving and hijacking. Not yet: brick-built, VehicleBody3D, its
+   squad as riders rather than cargo.)*
 2. **APC** as moving cover; **damage zones as brick groups** (engine, wheels, ammo).
 3. **Tank** (tracked motor, crushing, a gun that breaches), screened by infantry.
 4. **Transport helicopter** on the height field; roof insertion through the survey.

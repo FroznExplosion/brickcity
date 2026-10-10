@@ -134,11 +134,17 @@ var board_failed := ""
 var screen_of: Object
 var screen_move := ""
 ## The rodeo mod (4.5, R8): it goes round behind a hostile mech, climbs on and
-## plants a charge on its hatch. The mech it is after, and when it may try again
-## after being thrown off.
+## plants a charge on its hatch -- or onto a hostile tank's back deck and pries
+## its hatch open (VehicleDeck: the tank is then its side's). The mech or tank
+## it is after, and when it may try again after being thrown off.
 var rodeo := false
-var rodeo_target: Mech
+var rodeo_target: Object
 var _rodeo_retry_at := 0.0
+## A vehicle of its side to ride on (VehicleDeck): walked to and got on. Null
+## for none; given up after BOARD_VEHICLE_GIVE_UP or when there is no way.
+var board_vehicle: Node3D
+var _board_vehicle_since := 0.0
+const BOARD_VEHICLE_GIVE_UP := 15.0
 const RODEO_RANGE := 35.0
 const RODEO_RETRY := 3.0
 ## A bomber: it lights its fuse within DETONATE_REACH and goes off FUSE later, for
@@ -393,7 +399,12 @@ func _physics_process(_delta: float) -> void:
 	if pawn.has_meta(&"riding"):
 		_ride()
 		return
-	if board_mech != null:
+	if pawn.has_meta(&"aboard"):
+		_aboard(now)
+		return
+	if board_vehicle != null:
+		_board_vehicle_step(now)
+	elif board_mech != null:
 		_board_step()
 	elif rodeo_target != null:
 		_rodeo_step(now)
@@ -456,7 +467,8 @@ func _think() -> void:
 	_check_phase()
 	if rodeo and rodeo_target == null and now >= _rodeo_retry_at:
 		rodeo_target = _rodeo_pick()
-	if board_mech == null and rodeo_target == null and not pawn.has_meta(&"riding"):
+	if board_mech == null and rodeo_target == null and board_vehicle == null \
+			and not pawn.has_meta(&"riding") and not pawn.has_meta(&"aboard"):
 		brain.update(dt)
 	if services.judge != null:
 		services.judge.watch(self, dt)
@@ -680,30 +692,57 @@ func _board_step() -> void:
 
 
 ## A hostile mech near, known to the side, with its hatch still on and nobody
-## on it: the one to climb.
-func _rodeo_pick() -> Mech:
+## on it -- or a hostile tank with a crew (or a player) in it and nobody on its
+## deck: the one to climb.
+func _rodeo_pick() -> Object:
 	var k := knowledge()
 	var now := services.now()
-	var best: Mech = null
+	var best: Object = null
 	var best_d := RODEO_RANGE
 	for h in services.hostiles_of(team):
-		var ml := MechLayers.of(h.body)
-		if ml == null or ml.dead or ml.hatch_off or ml.mech.rodeo.rider != null:
-			continue
 		var c := k.of(h)
 		if c == null or c.age(now) > 4.0:
 			continue
-		var d := pawn.feet().distance_to(ml.mech.feet())
+		var ml := MechLayers.of(h.body)
+		var target: Object = null
+		var at := Vector3.INF
+		if ml != null:
+			if ml.dead or ml.hatch_off or ml.mech.rodeo.rider != null:
+				continue
+			target = ml.mech
+			at = ml.mech.feet()
+		else:
+			var tk := h.get_meta(&"vehicle") as Tank if h.has_meta(&"vehicle") else null
+			if tk == null or not _rodeo_ok(tk):
+				continue
+			target = tk
+			at = tk.feet()
+		var d := pawn.feet().distance_to(at)
 		if d < best_d:
 			best_d = d
-			best = ml.mech
+			best = target
 	return best
 
 
-## Round behind it and up: the spot behind its torso, then on when in reach.
+## Is `m` still one to climb: a mech with its hatch on, a tank someone is in,
+## and nobody else on it.
+static func _rodeo_ok(m: Object) -> bool:
+	if m == null or not is_instance_valid(m):
+		return false
+	if m is Mech:
+		var mm := m as Mech
+		return not mm.layers.dead and not mm.layers.hatch_off and mm.rodeo.rider == null
+	if m is Tank:
+		var t := m as Tank
+		return not t.is_wrecked() and not t.is_empty() and t.rodeo.rider == null
+	return false
+
+
+## Round behind it and up: the spot behind its torso (a tank's tail), then on
+## when in reach.
 func _rodeo_step(now: float) -> void:
 	var m := rodeo_target
-	if not is_instance_valid(m) or m.layers.dead or m.layers.hatch_off or m.rodeo.rider != null:
+	if not _rodeo_ok(m) or (m is Tank and (m as Tank).team == team):
 		rodeo_target = null
 		return
 	state = "rodeo"
@@ -712,16 +751,22 @@ func _rodeo_step(now: float) -> void:
 		stop()
 		m.rodeo.climb(pawn)
 		return
-	var back := Basis(Vector3.UP, m.motor.torso_yaw).z
-	var to := m.feet() + back * (Mech.RADIUS + 1.0)
+	var to: Vector3
+	if m is Mech:
+		var mm := m as Mech
+		to = mm.feet() + Basis(Vector3.UP, mm.motor.torso_yaw).z * (Mech.RADIUS + 1.0)
+	else:
+		var t := m as Tank
+		to = t.feet() + Basis(Vector3.UP, t.yaw).z * (Tank.HULL.z * 0.5 + 1.0)
 	if move_to(_nav().snap(to), true) == -1:
 		rodeo_target = null
 		_rodeo_retry_at = now + RODEO_RETRY
 
 
-## On a mech's back: hold on and plant. Thrown off, it tries again a little later.
+## On a mech's back: hold on and plant -- on a tank's deck, pry its hatch.
+## Thrown off, it tries again a little later.
 func _ride() -> void:
-	var m := pawn.get_meta(&"riding") as Mech
+	var m: Object = pawn.get_meta(&"riding")
 	state = "riding"
 	fire_ok = false
 	pawn.intents.move = Vector3.ZERO
@@ -734,6 +779,48 @@ func _ride() -> void:
 		m.rodeo.drop("jumped")
 		rodeo_target = null
 		_rodeo_retry_at = services.now() + RODEO_RETRY
+
+
+## On a vehicle of its side's deck (VehicleDeck): carried, it walks nowhere and
+## shoots what it sees -- fire at will, no tactics until it is down again.
+func _aboard(now: float) -> void:
+	state = "aboard"
+	pawn.intents.move = Vector3.ZERO
+	pawn.intents.crouch = false
+	fire_ok = true
+	suppress_point = Vector3.INF
+	_aim_and_fire(now)
+
+
+## Walk to `board_vehicle` and get on its deck; given up when it drives off,
+## fills, wrecks, or there is no way.
+func _board_vehicle_step(now: float) -> void:
+	var v := board_vehicle
+	var deck: VehicleDeck = v.rodeo if is_instance_valid(v) else null
+	if deck == null or v.is_wrecked() or v.team != team or deck.free_spot() < 0 \
+			or now - _board_vehicle_since > BOARD_VEHICLE_GIVE_UP:
+		board_vehicle = null
+		stop()
+		return
+	state = "boarding"
+	if deck.can_ride(pawn):
+		stop()
+		board_vehicle = null
+		deck.ride(pawn)
+		return
+	# To its side nearest this soldier.
+	var side: Vector3 = Basis(Vector3.UP, v.rotation.y).x
+	var out := deck.half.x + 1.0
+	var to: Vector3 = v.feet() + side * (out if (pawn.feet() - v.feet()).dot(side) >= 0.0 else -out)
+	if move_to(_nav().snap(to), true) == -1:
+		board_vehicle = null
+		stop()
+
+
+## Go and ride on `v` (a vehicle of this side).
+func ride_on(v: Node3D) -> void:
+	board_vehicle = v
+	_board_vehicle_since = services.now()
 
 
 func move_to(goal: Vector3, run := false) -> int:

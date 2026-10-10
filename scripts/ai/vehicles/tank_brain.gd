@@ -5,7 +5,10 @@ extends Node
 ##
 ## It SEES from the turret (and tells its side, as a mech does), and it is told
 ## where to go: `goal`, a point in the fight. The driver takes it there along the
-## walking map's path -- turning on the spot into a sharp bend, as tracks do --
+## vehicle map's path (VehicleNav: only where the whole tank fits, under nothing
+## it would hit, up nothing steeper than a brick course), to the nearest place
+## to the goal it can drive to -- turning on the spot into a sharp bend, as
+## tracks do. With no road there it tries the walking map, as it used to --
 ## and stops short when it has the enemy in its own sight within ENGAGE_RANGE
 ## (or in its side's within HOLD_RANGE): a tank is fire support, not a ram, and
 ## streets narrow as they near the fight. Stuck MAX_BACKOFFS times on the way
@@ -53,6 +56,12 @@ var escort: Squad
 var importance := 7.0
 ## What it is doing, for logs and probes: idle, drive, pivot, hold, wait, stuck.
 var state := "idle"
+## Which map its path is on: "vehicle" (VehicleNav), "foot" (none on the vehicle
+## map, so the walking one), or "" before it has asked.
+var road := ""
+## Where on the vehicle map it is driving to: the goal, or the nearest place to
+## it a tank fits.
+var drive_to := Vector3.INF
 var target: Pawn
 var blind_shots := 0
 ## Why the gunner is not firing now, for logs: "" when it is.
@@ -61,6 +70,8 @@ var hold_fire := ""
 var _path := PackedVector3Array()
 var _path_id := -1
 var _path_goal := Vector3.INF
+## The map the path in hand was asked of.
+var _nav: AINav
 var _wp := 0
 var _next_sense := -INF
 var _sense_queued := false
@@ -229,7 +240,8 @@ func _driver(now: float) -> void:
 		state = "gave up"
 		_moved_at = now
 		return
-	if goal == Vector3.INF or _flat(goal - tank.feet()).length() < 3.0:
+	if goal == Vector3.INF or _flat(goal - tank.feet()).length() < 3.0 \
+			or (drive_to != Vector3.INF and _path_goal == goal and _flat(drive_to - tank.feet()).length() < 3.0):
 		state = "hold" if goal != Vector3.INF else "idle"
 		_moved_at = now
 		return
@@ -243,20 +255,25 @@ func _driver(now: float) -> void:
 		if _path_id < 0:
 			state = "stuck"
 			return
-		var st := services.ai_nav.get_status(_path_id)
+		var st := _nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			return
 		if st != AINav.DONE:
-			services.ai_nav.release(_path_id)
+			_nav.release(_path_id)
 			_path_id = -1
+			# No road on the vehicle map: the walking map's way, which it may
+			# not fit along (what it did before there was a vehicle map).
+			if road == "vehicle":
+				_ask_path(true)
+				return
 			state = "stuck"
 			return
-		_path = services.ai_nav.get_path(_path_id)
+		_path = _nav.get_path(_path_id)
 		_wp = 1 if _path.size() > 1 else 0
 	var at := tank.global_position
 	while _wp < _path.size() and _flat(_path[_wp] - at).length() < 2.5:
 		_wp += 1
-	var to := (goal if _wp >= _path.size() else _path[_wp]) - at
+	var to := ((drive_to if drive_to != Vector3.INF else goal) if _wp >= _path.size() else _path[_wp]) - at
 	var off := wrapf(atan2(-to.x, -to.z) - tank.yaw, -PI, PI)
 	tank.steer = clampf(off * 2.0, -1.0, 1.0)
 	if absf(off) > PIVOT:
@@ -275,12 +292,27 @@ func _driver(now: float) -> void:
 		_backoffs += 1
 
 
-func _ask_path() -> void:
-	if _path_id >= 0:
-		services.ai_nav.release(_path_id)
+## A path to the goal: on the vehicle map to the nearest place to it a tank
+## fits, or -- with none there, or `on_foot` -- on the walking map.
+func _ask_path(on_foot := false) -> void:
+	if _path_id >= 0 and _nav != null:
+		_nav.release(_path_id)
 	_path = PackedVector3Array()
 	_path_goal = goal
-	_path_id = services.ai_nav.request_path(services.ai_nav.snap(tank.feet()), goal, 8.0, 20000)
+	_path_id = -1
+	var vn := services.vehicle_nav(&"tank") if not on_foot else null
+	var to := VehicleNav.reach_point(vn, goal) if vn != null else Vector3.INF
+	var from := vn.snap(tank.feet()) if vn != null else Vector3.INF
+	if vn != null and to != Vector3.INF and vn.can_stand(from):
+		_nav = vn
+		road = "vehicle"
+		drive_to = to
+		_path_id = vn.request_path(from, to, 8.0, 40000)
+	else:
+		_nav = services.ai_nav
+		road = "foot"
+		drive_to = goal
+		_path_id = _nav.request_path(_nav.snap(tank.feet()), goal, 8.0, 20000)
 	_from = tank.global_position
 	_moved_at = services.now()
 
@@ -301,6 +333,6 @@ static func _flat(v: Vector3) -> Vector2:
 
 
 func _exit_tree() -> void:
-	if _path_id >= 0 and services != null and services.ai_nav != null:
-		services.ai_nav.release(_path_id)
+	if _path_id >= 0 and _nav != null:
+		_nav.release(_path_id)
 		_path_id = -1

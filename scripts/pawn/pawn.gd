@@ -168,6 +168,10 @@ static func spawn(parent: Node, at_feet: Vector3, p_team := 0, with_health := tr
 		pool.layer_configs = [layer]
 		b.add_child(pool)
 		p.health = pool
+	# Where it stands before it is in the world, as well as after: added first,
+	# the body sat at the origin for a physics tick, and a tank parked there
+	# snapped onto it and rode away on its head.
+	p.place(at_feet)
 	parent.add_child(b)
 	p.place(at_feet)
 	return p
