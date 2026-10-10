@@ -21,6 +21,14 @@ extends WaveDirector
 ## to Commander.SQUAD_SIZE at a drop zone away from the player, as many at once
 ## as ALIVE_CAP allows, and every squad is told roughly where the player is.
 ##
+## ARMOUR comes with the later waves (_wave_armour): a squad by TRUCK from round
+## 2, a TANK with the heavy waves from round 2, and a MECH with round 3's heavy
+## wave -- more of all of it from the second set. Trucks and tanks drive in from
+## out past the barrier (it stops walkers, not vehicles: their masks leave out
+## the fixture layer); a mech, which the barrier would stop, is dropped in at a
+## drop zone. A wave is not over while its armour is still up, or a truck still
+## has its squad aboard. `-- --ff-armour` puts one of each on every wave.
+##
 ## Keys (developer mode): F8 ends the wave now, F7 the spawn survey overlay.
 ##
 ## `-- --gate` is the scripted check (run_firefight_gate).
@@ -62,6 +70,8 @@ const KILL_SCORE := 100.0
 const WAVE_BONUS := 250
 const ROUND_BONUS := 1000
 const SET_BONUS := 5000
+## A truck that has not let its squad out by now does so where it is.
+const TRUCK_PATIENCE := 60.0
 
 enum Phase { INTRO, WAVE, BREAK, GAME_OVER }
 
@@ -77,6 +87,15 @@ var deaths := 0
 ## Soldiers this wave still to come, all told (the squads not yet landed).
 var wave_left := 0
 var drop_zones: Array[Vector3] = []
+## This wave's armour: trucks still carrying their squad, tanks, enemy mechs.
+var wave_trucks: Array[TransportTruck] = []
+var wave_tanks: Array[Tank] = []
+var wave_mechs: Array[MechBrain] = []
+## What armour this wave still has to field once its first squad is down.
+var _armour_due := {}
+var _truck_sent_at := {}
+## Tanks fielded on a delay, not yet out: the wave waits on them too.
+var _tanks_pending := 0
 var barrier: Node3D
 var _phase_until := 0.0
 var _next_squad := 0.0
@@ -262,7 +281,13 @@ func start_wave() -> void:
 	var size := 4 + wave_in_round + 2 * round_index + 2 * set_index
 	if heavy:
 		size += 2
+	_armour_due = _wave_armour(heavy)
+	# A truck's squad is part of the wave's count.
+	size += int(_armour_due.trucks) * Commander.SQUAD_SIZE
 	wave_left = size
+	wave_trucks.clear()
+	wave_tanks.clear()
+	wave_mechs.clear()
 	_queue.clear()
 	_left_to_spawn = 0
 	_next_squad = _now()
@@ -272,8 +297,151 @@ func start_wave() -> void:
 		banner("Heavy wave", 2.5)
 	else:
 		banner("Wave %d" % (wave_in_round + 1), 2.0)
-	print("[firefight] set %d round %d wave %d: %d soldier(s)%s" % [set_index + 1,
-			round_index + 1, wave_in_round + 1, size, " (heavy)" if heavy else ""])
+	print("[firefight] set %d round %d wave %d: %d soldier(s)%s, armour %s" % [set_index + 1,
+			round_index + 1, wave_in_round + 1, size, " (heavy)" if heavy else "", _armour_due])
+
+
+## What armour this wave brings: {trucks, tanks, mechs}.
+func _wave_armour(heavy: bool) -> Dictionary:
+	if "--ff-armour" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		return {"trucks": 1, "tanks": 1, "mechs": 1}
+	var later := round_index >= 1 or set_index > 0
+	var trucks := 0
+	if not heavy and later and (wave_in_round == 1 or wave_in_round == 3 \
+			or (set_index > 0 and wave_in_round >= 1)):
+		trucks = 1
+	var tanks := 1 if heavy and later else 0
+	var mechs := 0
+	if heavy and (round_index == 2 or (set_index > 0 and round_index >= 1)):
+		mechs = 1 + (1 if set_index >= 2 else 0)
+	return {"trucks": trucks, "tanks": tanks, "mechs": mechs}
+
+
+## The armour due, fielded once the wave's first squad is down (the tank
+## escorts it).
+func _field_armour() -> void:
+	if _armour_due.is_empty():
+		return
+	var due := _armour_due
+	_armour_due = {}
+	for i in int(due.trucks):
+		var kinds: Array[StringName] = []
+		for k in Commander.SQUAD_SIZE:
+			kinds.append(_draw_kind())
+		var w := wave
+		var before := trucks.size()
+		if _send_truck(kinds):
+			var t: TransportTruck = trucks[trucks.size() - 1]
+			wave_trucks.append(t)
+			_truck_sent_at[t.get_instance_id()] = _now()
+			t.wrecked.connect(func(_t) -> void: _score_kill(&"truck"))
+			wave_left -= kinds.size()
+			banner("Incoming truck", 2.0)
+		elif trucks.size() == before:
+			print("[firefight] no road for a truck: its squad lands on foot")
+		wave = w
+	if int(due.tanks) > 0:
+		_tanks_pending += int(due.tanks)
+		# After the truck has pulled away: both start from the same open ground.
+		_field_tanks(int(due.tanks), 4.0 if int(due.trucks) > 0 else 0.0)
+	for i in int(due.mechs):
+		var br := _drop_mech()
+		if br != null:
+			wave_mechs.append(br)
+			br.mech.health.died.connect(func() -> void: _score_kill(&"mech"))
+			banner("Enemy mech inbound!", 2.5)
+
+
+func _field_tanks(n: int, after: float) -> void:
+	if after > 0.0:
+		await get_tree().create_timer(after, false).timeout
+	if phase != Phase.WAVE:
+		return
+	for i in n:
+		var was := tank
+		_field_tank()
+		if tank != null and tank != was and is_instance_valid(tank):
+			wave_tanks.append(tank)
+			tank.wrecked.connect(func(_t) -> void: _score_kill(&"tank"))
+			banner("Enemy tank!", 2.5)
+	_tanks_pending = maxi(0, _tanks_pending - n)
+
+
+## An enemy mech dropped in at the drop zone farthest from the player that has
+## room for it, facing the player. Null if none has.
+func _drop_mech() -> MechBrain:
+	var p := _player()
+	var from := p.feet() if p != null else centre
+	var zones: Array[Vector3] = drop_zones.duplicate()
+	zones.sort_custom(func(a: Vector3, b: Vector3) -> bool: return a.distance_to(from) > b.distance_to(from))
+	for z in zones:
+		var at: Vector3 = z
+		if city.mech_nav != null:
+			at = city.mech_nav.snap(z)
+			if not city.mech_nav.can_stand(at) or not in_ring(at, -3.0):
+				continue
+		var to := from - at
+		var br: MechBrain = city._spawn_enemy_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z))
+		feedback.burst(at + Vector3.UP * 2.0, Color(1.0, 0.55, 0.2))
+		_tip()
+		print("[firefight] enemy mech dropped in at %v" % at)
+		return br
+	print("[firefight] no drop zone with room for a mech")
+	return null
+
+
+func _score_kill(kind: StringName) -> void:
+	score += int(UnitCatalog.points(kind) * KILL_SCORE * (1.0 + 0.5 * set_index))
+
+
+## Armour of this wave still in the fight, by kind.
+func armour_up() -> Dictionary:
+	var tr: Array[TransportTruck] = []
+	for t in wave_trucks:
+		if is_instance_valid(t) and not t.is_wrecked() and not t.cargo.is_empty():
+			tr.append(t)
+	wave_trucks = tr
+	var tk: Array[Tank] = []
+	for t in wave_tanks:
+		if is_instance_valid(t) and not t.is_wrecked():
+			tk.append(t)
+	wave_tanks = tk
+	var mb: Array[MechBrain] = []
+	for br in wave_mechs:
+		if is_instance_valid(br) and is_instance_valid(br.mech) and not br.is_dead():
+			mb.append(br)
+	wave_mechs = mb
+	return {"trucks": wave_trucks.size(), "tanks": wave_tanks.size(), "mechs": wave_mechs.size()}
+
+
+func _armour_count() -> int:
+	var a := armour_up()
+	return int(a.trucks) + int(a.tanks) + int(a.mechs)
+
+
+## A truck's squad gets out where it stopped -- unless that is outside the
+## barrier, which would leave them walled out: then they land at a drop zone.
+func _dismount(t: TransportTruck) -> void:
+	if t.cargo.is_empty():
+		return
+	if in_ring(t.global_position, -2.0):
+		var w := wave
+		super(t)
+		wave = w
+		return
+	var kinds := t.cargo.duplicate()
+	t.cargo.clear()
+	print("[firefight] truck stopped outside the ring at %v: its squad lands inside" % t.global_position)
+	_land_squad(kinds)
+
+
+## Trucks that never get there let their squad out anyway.
+func _hurry_trucks(now: float) -> void:
+	for t in wave_trucks:
+		if is_instance_valid(t) and not t.is_wrecked() and not t.cargo.is_empty() \
+				and now - float(_truck_sent_at.get(t.get_instance_id(), now)) > TRUCK_PATIENCE:
+			print("[firefight] truck out of patience")
+			_dismount(t)
 
 
 func _draw_kind() -> StringName:
@@ -287,9 +455,11 @@ func _draw_kind() -> StringName:
 	return pool[_rng.randi() % pool.size()]
 
 
-## Land one squad: up to SQUAD_SIZE of what is left, as many as the cap allows.
-func _land_squad() -> void:
-	var n := mini(mini(Commander.SQUAD_SIZE, wave_left), ALIVE_CAP - alive.size())
+## Land one squad: up to SQUAD_SIZE of what is left, as many as the cap allows
+## -- or `given`, a truck's squad, all of it.
+func _land_squad(given: Array = []) -> void:
+	var n := given.size() if not given.is_empty() \
+			else mini(mini(Commander.SQUAD_SIZE, wave_left), ALIVE_CAP - alive.size())
 	if n <= 0:
 		return
 	var drop := _pick_drop()
@@ -315,16 +485,18 @@ func _land_squad() -> void:
 				break
 		if feet == Vector3.INF:
 			continue
-		_queue.append(_draw_kind())
+		_queue.append(given[i] if not given.is_empty() else _draw_kind())
 		_left_to_spawn += 1
 		_spawn_at(feet, -1)
 		others.append(alive[alive.size() - 1].pawn)
 		_note(feet, true)
 		landed += 1
-	wave_left -= landed
+	if given.is_empty():
+		wave_left -= landed
 	if landed > 0:
 		feedback.burst(drop + Vector3.UP * 1.0, Color(0.4, 0.8, 1.0))
 		_tip()
+		_field_armour()
 
 
 func _wave_over() -> void:
@@ -415,6 +587,26 @@ func clear_soldiers() -> void:
 	alive.clear()
 	_queue.clear()
 	_left_to_spawn = 0
+	# The armour, wrecked where it stands, and anybody who got out of it.
+	for t in wave_trucks:
+		if is_instance_valid(t):
+			t.cargo.clear()
+			t.health.apply_impact(1e9, &"")
+	for t in wave_tanks:
+		if is_instance_valid(t) and not t.is_wrecked():
+			t.health.apply_impact(1e9, &"")
+	for b in wave_mechs:
+		if is_instance_valid(b) and is_instance_valid(b.mech) and not b.is_dead():
+			b.mech.health.apply_impact(1e9, &"")
+	for so in city.soldiers.duplicate():
+		if is_instance_valid(so) and so.team == ENEMY_TEAM and so.pawn != null \
+				and is_instance_valid(so.pawn) and not so.pawn.health.is_dead():
+			so.pawn.health.apply_impact(1e9, &"")
+	wave_trucks.clear()
+	wave_tanks.clear()
+	wave_mechs.clear()
+	_armour_due = {}
+	_tanks_pending = 0
 
 
 # --- the tick ---------------------------------------------------------------------
@@ -437,7 +629,9 @@ func _physics_process(_delta: float) -> void:
 			if wave_left > 0 and now >= _next_squad and alive.size() < ALIVE_CAP:
 				_land_squad()
 				_next_squad = now + SQUAD_GAP
-			if wave_left <= 0 and alive.is_empty():
+			_hurry_trucks(now)
+			if wave_left <= 0 and alive.is_empty() and _armour_count() == 0 and _armour_due.is_empty() \
+					and _tanks_pending == 0:
 				_wave_over()
 		Phase.GAME_OVER:
 			if now >= _phase_until:
@@ -546,6 +740,13 @@ func _update_label() -> void:
 		"ENEMIES  %d" % (alive.size() + wave_left),
 		"LIVES  %d     SCORE  %d" % [lives, score],
 	]
+	var a := armour_up()
+	var armour := []
+	for k in [["tanks", "TANK"], ["mechs", "MECH"], ["trucks", "TRUCK"]]:
+		if int(a[k[0]]) > 0:
+			armour.append("%s%s" % [k[1], (" x%d" % int(a[k[0]])) if int(a[k[0]]) > 1 else ""])
+	if not armour.is_empty():
+		lines.append("ARMOUR  " + "  ".join(armour))
 	if p != null and _player_dead_at >= 0.0 and phase != Phase.GAME_OVER:
 		lines.append("back in %.0f s" % maxf(0.0, PLAYER_RESPAWN - (_now() - _player_dead_at)))
 	if phase == Phase.BREAK or phase == Phase.INTRO:
@@ -568,6 +769,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				for so in alive.duplicate():
 					if is_instance_valid(so):
 						so.pawn.health.apply_impact(1e9, &"")
+				_armour_due = {}
+				_kill_armour()
+				for t in wave_trucks:
+					if is_instance_valid(t) and not t.is_wrecked():
+						t.cargo.clear()
+						t.health.apply_impact(1e9, &"")
 			elif phase == Phase.INTRO or phase == Phase.BREAK:
 				_phase_until = _now()
 
@@ -640,3 +847,55 @@ func run_firefight_gate() -> void:
 	ok.call("a restart is the first wave, lives back", phase == Phase.INTRO and wave_in_round == 0
 			and lives == LIVES_START and alive.is_empty() and not p.health.is_dead())
 	invulnerable = true
+	await _armour_gate(ok)
+
+
+## Armour: a wave with a truck, a tank and a mech fields all three -- the mech
+## inside the ring -- is not over while they are up, and is once they are
+## down and the truck's squad is out and killed.
+func _armour_gate(ok: Callable) -> void:
+	_phase_until = _now()
+	await _until(func() -> bool: return phase == Phase.WAVE, 3.0)
+	_armour_due = {"trucks": 1, "tanks": 1, "mechs": 1}
+	wave_left += Commander.SQUAD_SIZE
+	await _until(func() -> bool: return _armour_due.is_empty() and _tanks_pending == 0, 15.0)
+	var a := armour_up()
+	ok.call("a truck sets out with a squad", int(a.trucks) == 1, "%s" % a)
+	ok.call("a tank sets out", int(a.tanks) == 1, "%s" % a)
+	ok.call("a mech drops in", int(a.mechs) == 1, "%s" % a)
+	if not wave_mechs.is_empty():
+		ok.call("the mech lands inside the ring", in_ring(wave_mechs[0].mech.feet()))
+	# The squads killed, the armour still up: not over.
+	for i in 20:
+		for so in alive.duplicate():
+			if is_instance_valid(so):
+				so.pawn.health.apply_impact(1e9, &"")
+		await _frames(3)
+	ok.call("not over while its armour is up", phase == Phase.WAVE)
+	# The truck gets its squad out (it is hurried), then everything goes down.
+	_truck_sent_at.clear()
+	for t in wave_trucks:
+		_truck_sent_at[t.get_instance_id()] = _now() - TRUCK_PATIENCE - 1.0
+	var score0 := score
+	var t0 := _now()
+	while phase == Phase.WAVE and _now() - t0 < 30.0:
+		for so in alive.duplicate():
+			if is_instance_valid(so):
+				so.pawn.health.apply_impact(1e9, &"")
+		_kill_armour()
+		await _frames(5)
+	ok.call("over once the armour is down and the truck's squad killed", phase == Phase.BREAK,
+			"phase %s, armour %s, alive %d, left %d" % [Phase.keys()[phase], armour_up(), alive.size(), wave_left])
+	ok.call("armour kills score", score >= score0 + int(UnitCatalog.points(&"tank") * KILL_SCORE),
+			"%d -> %d" % [score0, score])
+
+
+## Every tank and mech of the wave wrecked (F8, the gate). Trucks with their
+## squad aboard are left to let it out.
+func _kill_armour() -> void:
+	for t in wave_tanks:
+		if is_instance_valid(t) and not t.is_wrecked():
+			t.health.apply_impact(1e9, &"")
+	for b in wave_mechs:
+		if is_instance_valid(b) and is_instance_valid(b.mech) and not b.is_dead():
+			b.mech.health.apply_impact(1e9, &"")
