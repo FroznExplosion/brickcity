@@ -55,6 +55,18 @@ const SOURCES := {
 }
 
 
+## What a legendary's red text DOES, for the card, by legendary id. Only the effects
+## GunController runs are listed (COMBAT_DESIGN 12, step 6: the first red text).
+const EFFECT_TEXT := {
+	&"boilerplate": "Holding the trigger winds it up: up to +60% fire rate after 2 s.",
+	&"sermon": "A kill puts the round back in the magazine.",
+}
+
+
+static func effect_text(id: StringName) -> String:
+	return EFFECT_TEXT.get(id, "")
+
+
 static func get_def(id: StringName) -> LegendaryDef:
 	if not _PRESETS.has(id):
 		return null

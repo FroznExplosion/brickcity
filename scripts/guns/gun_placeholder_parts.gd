@@ -20,7 +20,7 @@ const TIER_COLORS: Array[Color] = [
 	Color(0.30, 0.60, 1.00),   # 3 rare - blue
 	Color(0.70, 0.35, 0.95),   # 4 unique - purple
 	Color(1.00, 0.60, 0.10),   # 5 legendary - orange
-	Color(1.00, 0.25, 0.35),   # 6 mythic - red
+	Color(0.95, 0.12, 0.12),   # 6 mythic - red
 ]
 
 ## Body fragments are NOUNS, barrel fragments are ADJECTIVES (QUALITY_NAMING §3).
@@ -86,6 +86,8 @@ static func _body(tier: int, variant: int) -> GunPartDef:
 	var def := GunReceiverDef.new()
 	_stamp(def, SLOT.BODY, tier, variant, "body")
 	def.name_fragment = BODY_NOUNS[(tier + variant) % BODY_NOUNS.size()]
+	if variant == 1:
+		_trade(def, "Rapid Receiver", TRADE_RAPID)
 
 	var root := _box(Vector3(0.10, 0.18, 0.46), tier)
 	root.name = "body_%d_%d" % [tier, variant]
@@ -106,6 +108,8 @@ static func _barrel(tier: int, variant: int) -> GunPartDef:
 	# Higher-tier barrels lean elemental, so the name's element word actually varies.
 	def.element_ratio = 0.0 if tier <= 2 else clampf(0.15 * float(tier - 2), 0.0, 0.6)
 	def.barrel_family = &"kinetic" if tier <= 2 else &"hybrid"
+	if variant == 1:
+		_trade(def, "Heavy Barrel", TRADE_HEAVY)
 
 	var root := _box(Vector3(0.07, 0.07, 0.40), tier)
 	root.name = "barrel_%d_%d" % [tier, variant]
@@ -133,13 +137,20 @@ static func _simple(slot: GunPartDef.Slot, tier: int, variant: int,
 
 # ---------------------------------------------------------------------- scaffolding
 
-## Effects a placeholder part may carry, drawn from the AbilityLoadout catalog so a
-## part and an ability trade in the same currency (QUALITY_NAMING §11). A SMALL pool on
-## purpose: with few effects to draw from, a high-rarity gun filling several slots will
-## sometimes roll the same one twice, which is exactly the part+part stacking case.
-const PART_EFFECTS: Array[StringName] = [
-	&"ricochet", &"explosive", &"lifesteal", &"fire_ramp",
-]
+## Named trade parts (Docs/Weapons/COMBAT_DESIGN.md 3.1): a part that changes HOW a gun
+## deals its damage, never much how much, inside +/-5-10% on any one stat, and says so on
+## the card. Every tier's second barrel is Heavy and its second receiver Rapid.
+const TRADE_HEAVY := {&"damage": 1.08, &"fire_rate": 0.90}
+const TRADE_RAPID := {&"damage": 0.92, &"fire_rate": 1.15}
+
+
+static func _trade(def: GunPartDef, display: String, mult: Dictionary) -> void:
+	def.display_name = display
+	var m: Dictionary[StringName, float] = {}
+	for k: StringName in mult:
+		m[k] = float(mult[k])
+	def.stat_mult = m
+	def.tags = PackedStringArray(["trade"])
 
 
 static func _stamp(def: GunPartDef, slot: GunPartDef.Slot, tier: int, variant: int,
@@ -154,12 +165,8 @@ static func _stamp(def: GunPartDef, slot: GunPartDef.Slot, tier: int, variant: i
 	def.max_rarity = mini(6, tier + 1)
 	def.manufacturer = BRANDS[(tier + variant) % BRANDS.size()]
 	def.weight = 1.0
-	# Rare and up carry an effect. Higher tiers draw from the same short pool, so the
-	# chance two slots land the same effect climbs with rarity — legendary/mythic guns
-	# self-upgrade an effect fairly often, which is the intended behaviour.
-	if tier >= 3:
-		def.effect_id = PART_EFFECTS[(tier * 3 + variant + int(slot)) % PART_EFFECTS.size()]
-		def.effect_min_rarity = 3
+	# No effects on placeholder parts: a gun's behaviours are its modifiers now
+	# (GunModifiers, COMBAT_DESIGN 6). Authored legendary barrels still carry theirs.
 
 
 static func _box(size: Vector3, tier: int) -> MeshInstance3D:

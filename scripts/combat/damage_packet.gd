@@ -30,6 +30,10 @@ var element_ratio: float = 0.0
 ## Crit damage multiplier applied when `crit` is true (from the gun's crit_mult).
 var crit_multiplier: float = 1.5
 
+## Multiplies the hit when it lands on a shield (the Shield Buster modifier,
+## COMBAT_DESIGN 6). 1 = no change.
+var shield_mult: float = 1.0
+
 ## The generator this hit's rolls draw from (the status proc). Null = DamageSystem.rng.
 ## Never the global RNG: in co-op the host rolls, and a roll only the host can repeat
 ## is a roll only the host may make (brickcity Docs/Multiplayer.md, D9).

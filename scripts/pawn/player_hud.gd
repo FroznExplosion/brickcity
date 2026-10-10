@@ -14,7 +14,7 @@ extends CanvasLayer
 ## Rarity tiers 1..6 in the usual loot colours.
 const RARITY_COLOURS: Array[Color] = [
 	Color(0.92, 0.92, 0.92), Color(0.35, 0.9, 0.35), Color(0.3, 0.6, 1.0),
-	Color(0.72, 0.4, 1.0), Color(1.0, 0.6, 0.15), Color(1.0, 0.3, 0.55),
+	Color(0.72, 0.4, 1.0), Color(1.0, 0.6, 0.15), Color(0.95, 0.12, 0.12),
 ]
 ## The key help at the bottom fades after this long.
 const HINT_SECONDS := 10.0

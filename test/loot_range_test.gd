@@ -676,29 +676,21 @@ func _take_shot() -> void:
 func _run_probe() -> void:
 	var fails := 0
 
-	# 1. THE TWO AUTHORED CALIBRATION POINTS. Tier.TIER_STEP and Rarity.MULTS were solved
-	# from exactly these, so if either drifts the whole economy has moved:
-	#     T1 Legendary == T3 Uncommon      (legendary is worth two tiers of uncommon)
-	#     T1 Legendary >= T2 Unique        (legendary clears unique by a full tier)
-	# 100 score = one tier, so a 10-point tolerance is a tenth of a tier.
+	# 1. THE CALIBRATION. 100 score = one tier, so a 10-point tolerance is a tenth of a
+	# tier. Combat design v2 (Docs/Weapons/COMBAT_DESIGN.md 2): the whole colour range is
+	# worth about half a tier (ln 1.12 / ln 1.25 = 0.51), and a gun's power past that is
+	# its modifiers, which the score leaves out and the card lists beside it. (v1's
+	# "a legendary is worth two tiers, a rare one" anchors went with v1's rarity steps;
+	# tools/combat_numbers_probe.gd holds the v2 shots-to-kill rows.)
 	var pistol := WeaponClass.builtin(&"pistol")
 	var t1_com := _mid_roll_score(pistol, 1, 1)
 	var t2_com := _mid_roll_score(pistol, 2, 1)
-	var t3_unc := _mid_roll_score(pistol, 3, 2)
-	var t2_uni := _mid_roll_score(pistol, 2, 4)
 	var t1_leg := _mid_roll_score(pistol, 1, 5)
-	var t2_rare := _mid_roll_score(pistol, 2, 3)
-	fails += _expect(absi(t1_leg - t3_unc) <= 10,
-		"CALIBRATION: T1 Legendary (%d) must match T3 Uncommon (%d)" % [t1_leg, t3_unc])
-	fails += _expect(t1_leg >= t2_uni - 4,
-		"CALIBRATION: T1 Legendary (%d) must be >= T2 Unique (%d)" % [t1_leg, t2_uni])
 	fails += _expect(absi((t2_com - t1_com) - 100) <= 10,
 		"one tier should be ~100 score, measured %d" % (t2_com - t1_com))
-	# Rare is the retuning anchor: worth exactly one tier, so a T1 Rare ties a T2 Common.
-	var t1_rare := _mid_roll_score(pistol, 1, 3)
-	fails += _expect(absi(t1_rare - t2_com) <= 10,
-		"ANCHOR: T1 Rare (%d) must be worth exactly one tier vs T2 Common (%d)" % [
-			t1_rare, t2_com])
+	fails += _expect(absi((t1_leg - t1_com) - 51) <= 10,
+		"CALIBRATION: T1 Legendary (%d) should be half a tier over T1 Common (%d)" % [
+			t1_leg, t1_com])
 
 	# 2. Tier luck must push rarity UP, not merely wobble it.
 	var lo := _rarity_mean(1, &"trash")
@@ -868,9 +860,7 @@ func _run_probe() -> void:
 			break
 
 	print("\n--- loot range probe: %s ---" % ("PASS" if fails == 0 else "%d FAIL" % fails))
-	print("  T1 Common %d | T1 Rare %d | T1 Legendary %d" % [t1_com, t1_rare, t1_leg])
-	print("  calib: T1 Leg %d ~= T3 Uncommon %d | T2 Unique %d | T2 Rare %d" % [
-		t1_leg, t3_unc, t2_uni, t2_rare])
+	print("  T1 Common %d | T1 Legendary %d (half a tier: ~51 apart)" % [t1_com, t1_leg])
 	print("  one tier = %d score (T1 Common %d -> T2 Common %d)" % [
 		t2_com - t1_com, t1_com, t2_com])
 	print("  mean rarity  T1 %.3f -> T10 %.3f" % [lo, hi])

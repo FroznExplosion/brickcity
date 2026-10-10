@@ -13,18 +13,18 @@ extends RefCounted
 ## part-picking RNG stream, so generate() and deserialize() produce identical numbers.
 
 ## ---------------------------------------------------------------- spread budget
-## EVERYTHING that multiplies into DPS shares one budget (QUALITY_NAMING §4.3):
-##     TOTAL = dps_window * fire_bonus_window * part_swing = 1.28 * 1.06 * 1.06 = 1.438
-## The law: smallest_1_step (1.231, uncommon->rare) < TOTAL < smallest_2_step (1.60,
-## common->rare). Above the 1-step, a god-roll of one rarity beats a floor-roll of the
-## next, so low-rarity guns are never auto-trash. Below the 2-step, colour still predicts
-## power across any gap of two. Exactly one rarity of overlap, never two.
+## EVERYTHING hidden that multiplies into DPS shares one budget:
+##     TOTAL = dps_window * fire_bonus_window * part_swing = 1.10 * 1.06 * 1.06 = 1.236
+## Combat design v2 (Docs/Weapons/COMBAT_DESIGN.md 3.1): two guns of one class, tier and
+## colour differ in HOW they deal damage, not how much. The hidden roll was 1.00-1.28,
+## wider than the whole rarity range (1.12); at 1.00-1.10 the roll alone rarely puts two
+## guns of one colour a shots-to-kill count apart. Power comes from MODIFIERS
+## (GunModifiers), which the player can read on the card.
 ##
-## Do NOT widen any of these three in isolation. The previous FIRE_RATE_HI of 1.5 gave
-## a real spread of 1.3 * 1.5 = 1.95 — wider than the Rare step — which meant a god-roll
-## Common out-DPSed every Rare in the game.
+## The median roll moved with it (1.14 -> 1.05), so the light enemy's health was
+## re-anchored (LootRoller.TRASH_BASE_HP) to keep a median common pistol at 6 body shots.
 const DPS_WINDOW_LO := 1.0
-const DPS_WINDOW_HI := 1.28
+const DPS_WINDOW_HI := 1.10
 const FIRE_BONUS_HI := 1.06
 const PART_SWING := 0.03
 

@@ -33,11 +33,12 @@ const ARCHETYPES: Dictionary[StringName, Dictionary] = {
 }
 
 ## Trash (the LIGHT enemy) HP at TIER 1. Everything else derives from it. Set by the
-## combat design's anchor (Docs/Weapons/COMBAT_DESIGN.md section 3): a median-roll common
-## pistol (11.05 a shot) kills it in 6 body shots, a legendary in 4, a legendary with
-## headshots in 2 -- each with some margin before the next boundary. A median common
-## rifle takes 8. tools/combat_numbers_probe.gd holds it. (Was 45: rifle 4-6.)
-const TRASH_BASE_HP := 64.0
+## combat design's anchor (Docs/Weapons/COMBAT_DESIGN.md section 3, v2): a median-roll
+## common pistol (10.3 a shot, before modifiers) kills it in 6 body shots and 3
+## headshots; a legendary with no modifiers still takes 6; one +20% damage modifier makes
+## it 5, two make it 4 body and 2 head. Every row holds for 57.7-61.8 hp; 60 sits in the
+## middle. tools/combat_numbers_probe.gd holds it. (v1, with a wider hidden roll: 64.)
+const TRASH_BASE_HP := 60.0
 
 
 static func archetype(id: StringName) -> Dictionary:

@@ -12,13 +12,14 @@ const RARITY_COLORS: Array[Color] = [
 	Color(0.30, 0.60, 1.00),   # rare
 	Color(0.70, 0.35, 0.95),   # unique
 	Color(1.00, 0.60, 0.10),   # legendary
-	Color(1.00, 0.25, 0.35),   # mythic
+	Color(0.95, 0.12, 0.12),   # mythic: red (COMBAT_DESIGN 2)
 ]
 
 var _name_label: Label
 var _sub_label: Label
 var _score_label: Label
 var _stats_box: VBoxContainer
+var _mods_label: Label
 var _effects_label: Label
 var _flavor_label: Label
 
@@ -44,6 +45,9 @@ func _ready() -> void:
 	_stats_box = VBoxContainer.new()
 	_stats_box.add_theme_constant_override(&"separation", 0)
 	root.add_child(_stats_box)
+
+	_mods_label = _mk_label(root, 12)
+	_mods_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	_effects_label = _mk_label(root, 12)
 	_effects_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -102,9 +106,24 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 	var shown: PackedStringArray = res.active_effects
 	if abilities != null:
 		shown = abilities.apply(res.active_effects)
+	# The modifiers, one a line: where this gun's power comes from (COMBAT_DESIGN 6),
+	# then the named trade parts (3.1) -- how it deals its damage.
+	var lines := PackedStringArray()
+	for m in res.modifiers:
+		lines.append("+ " + GunModifiers.describe(m))
+	for def: Variant in res.recipe.values():
+		if def is GunPartDef and (def as GunPartDef).tags.has("trade"):
+			lines.append("◇ %s: %s" % [(def as GunPartDef).display_name,
+					_trade_text((def as GunPartDef).stat_mult)])
+	_mods_label.text = "\n".join(lines)
+	_mods_label.visible = not lines.is_empty()
+	_mods_label.modulate = col.lerp(Color.WHITE, 0.45)
+
 	var bits := PackedStringArray()
 	for e in shown:
 		var eid := StringName(e)
+		if GunModifiers.DEFS.has(eid):
+			continue   # a modifier, listed above
 		if WeaponAbility.is_upgraded(eid):
 			bits.append("◆◆ %s+" % String(WeaponAbility.base_id(eid)).capitalize().replace("_", " "))
 		else:
@@ -112,15 +131,29 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 	for m in res.merges:
 		if m != null:
 			bits.append("★ %s" % String(m.id).capitalize().replace("_", " "))
+	_effects_label.visible = not bits.is_empty() or lines.is_empty()
 	if bits.is_empty():
-		_effects_label.text = "no special parts"
+		_effects_label.text = "no modifiers"
 		_effects_label.modulate = Color(0.5, 0.5, 0.52)
 	else:
 		_effects_label.text = " ".join(bits)
 		_effects_label.modulate = Color(1.0, 0.85, 0.4)
 
-	_flavor_label.text = res.flavor
-	_flavor_label.visible = res.flavor != ""
+	var red := res.flavor
+	var what := LegendaryTable.effect_text(res.legendary_id)
+	if what != "":
+		red += "\n" + what
+	_flavor_label.text = red
+	_flavor_label.visible = red != ""
+
+
+static func _trade_text(mult: Dictionary) -> String:
+	var bits := PackedStringArray()
+	for k: StringName in mult:
+		var pct := roundi((float(mult[k]) - 1.0) * 100.0)
+		bits.append("%s%d%% %s" % ["+" if pct >= 0 else "−", absi(pct),
+				String(k).replace("_", " ")])
+	return ", ".join(bits)
 
 
 func _stat_row(key: String, value: String) -> void:

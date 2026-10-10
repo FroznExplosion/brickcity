@@ -73,6 +73,8 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		extra *= maxf(1.0, packet.crit_multiplier)
 	if status_mgr != null:
 		extra *= status_mgr.damage_taken_multiplier()
+	if packet.shield_mult != 1.0 and pool.top_layer_type() == &"shield":
+		extra *= packet.shield_mult
 
 	# A melee is its own damage type and one step: it lands on the top layer and stops
 	# there, whatever it broke (COMBAT_DESIGN 4.1). Never a crit.
