@@ -226,6 +226,7 @@ func begin() -> void:
 	commander.players_at = func() -> Array:
 		var p := _player()
 		return [p.feet()] if p != null else []
+	_set_up_allies()
 	_set_up_hq()
 	_ready_to_fight = true
 	print("[arena] focus building %d, player at %v, %d floor spot(s) in it" % [
@@ -269,6 +270,7 @@ func _physics_process(_delta: float) -> void:
 			_crouched += 1
 	_check_focus()
 	_tank_report(now)
+	_ally_report(now)
 	if Engine.get_physics_frames() % 15 == 7:
 		_check_hq()
 	_player_tick(now)
@@ -440,6 +442,116 @@ func _field_tank() -> bool:
 		br.escort = _wave_squad
 	print("[arena] tank from %v to the street of building %d" % [start, focus])
 	return true
+
+
+# --- the friendly side (`-- --allies`; AIRoster.md 8, R11-R13) ---------------------
+
+## The player's side gets a commander of its own: it fields friendly squads
+## behind the player, and -- with no orders from the player -- reads what the
+## player does (PlayerIntent) and sends them to support it. Not in a gate.
+const ALLY_TEAM := 0
+const ALLY_CAP := 4
+## How far behind the player a friendly squad comes in.
+const ALLY_BEHIND := 12.0
+var allies: Commander
+var ally_soldiers: Array[Soldier] = []
+var _ally_report_at := 0.0
+
+
+func _set_up_allies() -> void:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--allies" in args or "--gate" in args:
+		return
+	allies = Commander.new()
+	allies.name = "AllyCommander"
+	add_child(allies)
+	allies.alive_cap = ALLY_CAP
+	allies.spawner = _field_allies
+	allies.setup(city.ai_services, ALLY_TEAM, 0xA11E5)
+	allies.intent = PlayerIntent.new(city.ai_services)
+	allies.intent.players = func() -> Array:
+		var p := _player()
+		return [p] if p != null else []
+	allies.intent.mechs = func() -> Array: return city.mech_brains.filter(
+			func(b): return is_instance_valid(b) and b.team == ALLY_TEAM)
+	allies.decided.connect(func(what: String) -> void: print("[allies] %s" % what))
+	print("[arena] allies: a friendly commander follows the player")
+
+
+## The friendly commander's reinforcement: `kinds`, on foot, behind the player.
+func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
+	var p := _player()
+	if p == null:
+		return false
+	ally_soldiers = ally_soldiers.filter(func(so): return is_instance_valid(so) and not so.is_dead())
+	var back := p.eye.global_basis.z if p.eye != null else Vector3.BACK
+	back.y = 0.0
+	back = back.normalized() if back.length() > 0.1 else Vector3.BACK
+	var side := Vector3(-back.z, 0.0, back.x)
+	var base := _ally_spot(p.feet(), back)
+	if base == Vector3.INF:
+		print("[arena] allies: no ground behind the player to bring a squad onto")
+		return false
+	var members: Array[Soldier] = []
+	for i in kinds.size():
+		var want := base + side * (1.5 * i - 2.25)
+		var at: Vector3 = city.ai_nav.snap(want)
+		if not city.ai_nav.can_stand(at) or absf(at.y - base.y) > 1.5:
+			continue
+		var unit := UnitCatalog.get_unit(kinds[i])
+		if city._gun_library == null:
+			city._gun_library = GunPlaceholderParts.build_library()
+		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
+				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
+		var so := Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ALLY_TEAM, gun)
+		so.set_meta(&"unit", kinds[i])
+		so.max_health = UnitCatalog.apply_health(so.pawn.health, kinds[i], level)
+		so.set_type(str(unit.get("recipe", "")), Roster.shared())
+		gun.visible = not so.no_gun
+		gun.position = Vector3(0.2, -0.28, -0.3)
+		city.soldiers.append(so)
+		ally_soldiers.append(so)
+		members.append(so)
+	if members.is_empty():
+		return false
+	var q := Squad.make(city.ai_services, city, members, ALLY_TEAM)
+	allies.adopt(q)
+	print("[arena] allies: a squad of %d behind the player: %s" % [members.size(), ", ".join(kinds)])
+	return true
+
+
+## Ground behind the player for a friendly squad: ALLY_BEHIND out first, then
+## nearer and further, fanning out from straight behind to the sides -- at about
+## the player's level (not a roof, not a cellar). INF if there is none.
+func _ally_spot(feet: Vector3, back: Vector3) -> Vector3:
+	for r in [ALLY_BEHIND, 8.0, 16.0, 20.0]:
+		for deg in [0.0, 35.0, -35.0, 70.0, -70.0, 110.0, -110.0]:
+			var want: Vector3 = feet + back.rotated(Vector3.UP, deg_to_rad(deg)) * r
+			var at: Vector3 = city.ai_nav.snap(want)
+			if city.ai_nav.can_stand(at) and absf(at.y - feet.y) < 2.0 \
+					and Vector2(at.x - want.x, at.z - want.z).length() < 3.0:
+				return at
+	return Vector3.INF
+
+
+func _ally_report(now: float) -> void:
+	if allies == null or now < _ally_report_at:
+		return
+	_ally_report_at = now + 10.0
+	var p := _player()
+	if p == null:
+		return
+	var up := ally_soldiers.filter(func(so): return is_instance_valid(so) and not so.is_dead())
+	var near := 0
+	var lane := 0
+	for so in up:
+		if so.pawn.feet().distance_to(p.feet()) < 25.0:
+			near += 1
+		if allies.intent.in_lane(so.pawn.feet()):
+			lane += 1
+	var f: Array = allies.intent.focus()
+	print("[allies] %d up, %d within 25 m of the player, %d in front of the player's gun; focus: %s" % [
+			up.size(), near, lane, f[1]])
 
 
 ## Every TANK_REPORT seconds while a tank is out: what it and its escort are

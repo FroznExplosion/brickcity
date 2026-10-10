@@ -8,10 +8,17 @@ extends BTAction
 ## blind to it behind bricks or smoke -- and holds, down and still, whenever it is
 ## not. Done when the squad is within STOP of the enemy; the members then fight
 ## on their own trees.
+##
+## An order with `to_point` bounds to its point instead -- the same bounds and
+## the same suppression on the enemy -- and is done when the whole squad is
+## there: its furthest member within ARRIVE_ALL of it, so the covering half is
+## not left behind.
 
 ## How far each bound tries to gain.
 const BOUND := 6.0
 const STOP := 12.0
+const ARRIVE := 3.0
+const ARRIVE_ALL := 6.0
 const BOUND_TIMEOUT := 12.0
 ## Contact older than this: the advance has nothing to advance on.
 const LOST := 8.0
@@ -47,9 +54,12 @@ func _tick(_delta: float) -> Status:
 	var target := c.pos
 	blackboard.set_var(&"target", target)
 	var nearest := INF
+	var furthest := 0.0
+	var goal := _goal(q, c)
 	for m in q.alive():
-		nearest = minf(nearest, m.pawn.feet().distance_to(target))
-	if nearest <= STOP:
+		nearest = minf(nearest, m.pawn.feet().distance_to(goal))
+		furthest = maxf(furthest, m.pawn.feet().distance_to(goal))
+	if (furthest <= ARRIVE_ALL) if goal != c.pos else (nearest <= STOP):
 		q.events["arrived"] = now
 		q.finish(SquadMsg.ReportKind.DONE)
 		return SUCCESS
@@ -66,6 +76,13 @@ func _tick(_delta: float) -> Status:
 	if _suppress_at == Vector3.INF or sp.distance_to(_suppress_at) > 1.0:
 		_suppress(q, sp)
 	return RUNNING
+
+
+## Where the bounds go: the enemy, or the order's own point (`to_point`).
+func _goal(q: Squad, c: FactionKnowledge.Contact) -> Vector3:
+	if q.order != null and q.order.to_point:
+		return q.order.point
+	return c.pos
 
 
 func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
@@ -89,17 +106,19 @@ func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
 	bounds += 1
 	q.events["bounds"] = bounds
 	var threat_eye := c.pos + Vector3.UP * CoverSearch.STAND_EYE
+	var goal := _goal(q, c)
+	var stop := ARRIVE if goal != c.pos else STOP
 	var k := 0
 	for m in _movers:
 		var feet := m.pawn.feet()
-		var to := c.pos - feet
+		var to := goal - feet
 		to.y = 0.0
 		var dir := to.normalized()
 		var side := dir.cross(Vector3.UP) * (k - (_movers.size() - 1) * 0.5) * 3.0
-		var ahead := feet + dir * minf(BOUND, maxf(to.length() - STOP + 1.0, 1.0)) + side
+		var ahead := feet + dir * minf(BOUND, maxf(to.length() - stop + 1.0, 1.0)) + side
 		var spot := ahead
 		var cov := CoverSearch.find(s, ahead, threat_eye)
-		if not cov.is_empty() and (cov.cover as Vector3).distance_to(c.pos) < feet.distance_to(c.pos) - 2.0:
+		if not cov.is_empty() and (cov.cover as Vector3).distance_to(goal) < feet.distance_to(goal) - 2.0:
 			spot = cov.cover
 		else:
 			spot = s.ai_nav.snap(ahead)
