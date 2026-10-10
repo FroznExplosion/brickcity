@@ -130,6 +130,7 @@ func _action_label(action: StringName) -> String:
 		"move_left": "Strafe Left", "move_right": "Strafe Right",
 		"sprint": "Sprint", "jump": "Jump (hold: higher) / Climb",
 		"crouch": "Crouch / Slide / Let Go", "grapple": "Grapple (hold)",
-		"fire": "Fire", "aim": "Aim Down Sights", "reload": "Reload", "pause": "Pause",
+		"fire": "Fire", "aim": "Aim Down Sights", "reload": "Reload",
+		"melee": "Melee / Climb a Mech", "pause": "Pause",
 	}
 	return String(NAMES.get(String(action), ""))

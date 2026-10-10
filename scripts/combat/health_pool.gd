@@ -89,8 +89,11 @@ func _multiplier_for(element_id: StringName, layer_index: int) -> float:
 ## `ungated`: a crit-spot hit. A body shot that breaks a SHIELD carries only
 ## CombatScale.SHIELD_GATE of what is left into the layer under it (shield gating,
 ## Docs/Weapons/COMBAT_DESIGN.md 4.4); a crit-spot hit carries all of it.
+##
+## `stop_at_layer`: nothing carries on past the first layer hit, whatever this pool's
+## carry-over says. A melee (4.1): one blow, one step.
 func apply_impact(amount: float, element_id: StringName, extra_multiplier: float = 1.0,
-		ungated := false) -> void:
+		ungated := false, stop_at_layer := false) -> void:
 	if _is_dead:
 		return
 	var raw_remaining: float = amount * extra_multiplier
@@ -103,7 +106,7 @@ func apply_impact(amount: float, element_id: StringName, extra_multiplier: float
 		var available: float = _current[idx]
 		var scaled_absorbed: float = minf(scaled_incoming, available)
 		var landed: float = _damage_index(idx, scaled_absorbed, element_id)
-		if not impact_carries_over:
+		if not impact_carries_over or stop_at_layer:
 			break
 		var gate := 1.0
 		if not ungated and _current[idx] <= 0.0 and layer_configs[idx].layer_type == &"shield":
@@ -161,6 +164,10 @@ func _damage_index(idx: int, dmg: float, element_id: StringName = &"") -> float:
 		return 0.0
 	var before: float = _current[idx]
 	_current[idx] = maxf(0.0, _current[idx] - dmg)
+	# A layer sized as N blows takes exactly N: rounding must not leave a sliver
+	# that needs one more (3 melees of armor less 3 melees, in floats).
+	if _current[idx] < layer_configs[idx].max_value * 1e-5:
+		_current[idx] = 0.0
 	_regen_timer[idx] = layer_configs[idx].regen_delay
 	if _current[idx] <= 0.0:
 		layer_depleted.emit(layer_configs[idx].layer_type)

@@ -74,6 +74,14 @@ static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	if status_mgr != null:
 		extra *= status_mgr.damage_taken_multiplier()
 
+	# A melee is its own damage type and one step: it lands on the top layer and stops
+	# there, whatever it broke (COMBAT_DESIGN 4.1). Never a crit.
+	if packet.melee:
+		pool.apply_impact(packet.amount, Elements.MELEE, extra, false, true)
+		result.dealt = before - pool.total_current()
+		result.killed = pool.is_dead()
+		return result
+
 	var has_element: bool = packet.element != null
 	if has_element:
 		result.element_color = packet.element.color

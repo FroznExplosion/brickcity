@@ -4105,6 +4105,9 @@ func _enter_pawn(feet: Vector3) -> void:
 	_player.possess(_player_pawn, camera)
 	_arm_gun()
 	_player_pawn.gun = _gun
+	# Melee hits at the fight's tier: the arena's level, else tier 1 (COMBAT_DESIGN 4.1).
+	_player_pawn.melee_tier = arena.level if arena != null else 1
+	_player.melee_context = _melee_context
 	# After the gun: add_pawn arms it, so its rounds suppress, are heard and
 	# earn aggro (AIServices).
 	ai_services.add_pawn(_player_pawn)
@@ -4138,6 +4141,10 @@ func _fps_on() -> void:
 		add_child(_feedback)
 		_feedback.setup(self)
 		_gun.fired.connect(_feedback.on_player_shot)
+	# A melee that lands marks like a round (its info is the same shape).
+	var fb: CombatFeedback = arena.feedback if arena != null else _feedback
+	if fb != null and not _player_pawn.meleed.is_connected(fb.on_player_shot):
+		_player_pawn.meleed.connect(fb.on_player_shot)
 	if stats_label != null:
 		_stats_were_visible = stats_label.visible
 		stats_label.visible = false
@@ -4251,15 +4258,25 @@ func _riding() -> Mech:
 
 
 ## E on foot: climb the enemy mech within reach, if there is one.
-func _rodeo_climb() -> void:
+## The melee button, before it is a melee (PlayerController.melee_context): on a
+## mech's back it is the charge's (held, _process); next to one it climbs. True when
+## it was used here.
+func _melee_context() -> bool:
 	if _riding() != null:
-		return
+		return true
+	return _rodeo_climb()
+
+
+func _rodeo_climb() -> bool:
+	if _riding() != null:
+		return false
 	for n in get_tree().get_nodes_in_group(&"mech_layers"):
 		var ml := n as MechLayers
 		if ml != null and not ml.dead and ml.mech.rodeo.can_climb(_player_pawn):
 			ml.mech.rodeo.climb(_player_pawn)
 			print("[city] on its back: hold E to plant the charge (%.1f s), jump to get off" % Rodeo.PLANT_SECONDS)
-			return
+			return true
+	return false
 
 
 ## What a rider on `m` hears of it: the player's own ride, in the log.
@@ -9385,7 +9402,7 @@ func _process(delta: float) -> void:
 	_update_reticle()
 	var ridden := _riding()
 	if ridden != null:
-		ridden.rodeo.planting = Input.is_key_pressed(KEY_E)
+		ridden.rodeo.planting = InputMap.has_action(&"melee") and Input.is_action_pressed(&"melee")
 	_update_live_prof(delta)
 	if _view_owed or (DebugView.active() and Engine.get_process_frames() - _view_frame >= 2):
 		_view_sweep()
@@ -9685,12 +9702,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				KEY_F1:
 					stats_label.visible = not stats_label.visible
 		return
-	# Rodeo (Docs/AIRoster.md 4.5): on foot, E climbs an enemy mech; on its back,
-	# E held plants the charge and jump gets off.
+	# Rodeo (Docs/AIRoster.md 4.5): on foot, melee (E) climbs an enemy mech in reach
+	# instead of striking (_melee_context); on its back, E held plants the charge and
+	# jump gets off.
 	if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
-		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
-			_rodeo_climb()
-			return
 		if _riding() != null and event.is_action_pressed(&"jump"):
 			_riding().rodeo.drop("jumped")
 			return

@@ -95,13 +95,18 @@ static func apply_health(pool: HealthPool, id: StringName, level: int) -> float:
 	var layers: Array[DefenseLayer] = []
 	if roster != null and u.has("recipe"):
 		layers = roster.layers(str(u.recipe), level)
+	var total := 0.0
 	if layers.is_empty():
-		return EnemyProfiles.apply(pool, u.get("profile", &"light"), level)
-	pool.layer_configs = layers
-	pool.vital_layer_index = -1
-	pool.impact_carries_over = true
-	pool.reset()
-	return pool.total_current()
+		total = EnemyProfiles.apply(pool, u.get("profile", &"light"), level)
+	else:
+		pool.layer_configs = layers
+		pool.vital_layer_index = -1
+		pool.impact_carries_over = true
+		pool.reset()
+		total = pool.total_current()
+	# Its shield and armor, seen (COMBAT_DESIGN 4.1: the counts must be readable).
+	DefenceLook.dress(pool)
+	return total
 
 
 static func points(id: StringName) -> float:

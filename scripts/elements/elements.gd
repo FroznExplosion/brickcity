@@ -23,6 +23,9 @@ const FIRE := &"fire"
 const ICE := &"ice"
 ## The elements a gun can roll (GunGenerator).
 const GUN_ELEMENTS: Array[StringName] = [PLASMA, CORROSIVE, ACID, FIRE, ICE]
+## Not an element a gun carries: the damage type of a melee (COMBAT_DESIGN 4.1), here
+## so a HealthPool's matrix gives it its 1.5x on shields like any other row.
+const MELEE := &"melee"
 
 ## [display name, colour, the word a gun's name takes from it]
 const INFO := {
@@ -40,6 +43,7 @@ const TABLE := {
 	ACID: {&"health": 1.5, &"flesh": 1.5},
 	FIRE: {&"vegetation": 2.0},
 	ICE: {},
+	MELEE: {&"shield": CombatScale.SHIELD_MELEE},
 }
 
 static var _defs := {}

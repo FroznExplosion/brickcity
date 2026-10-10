@@ -328,13 +328,18 @@ Explosive rounds also **wear bricks harder** (§8) — they chip walls faster bu
 
 ### 7.2 Alt-fire
 
-A gun may roll an **alt-fire** (its second trigger). It is part of the gun's personality, like its
-modifiers, and stays with it through infusion. Alt-fires are setup tools that still do real damage —
-never a zero-damage tag.
+A gun may roll an **alt-fire**. It is part of the gun's personality, like its modifiers, and stays
+with it through infusion. Alt-fires are setup tools that still do real damage — never a zero-damage
+tag.
+
+**It is a mode, switched by holding reload** (decided 2026-10-10). Tap reload reloads; hold it
+(~0.3 s) and the gun flips to its alt-fire mode — the fire button now fires the alt-fire — and
+holding it again flips back. Aim keeps its button, so no gun loses aim-down-sights for having an
+alt-fire. The HUD shows which mode the gun is in. A gun with no alt-fire ignores the hold.
 
 **Tracking dart** (hold to charge):
 
-- Hold the alt-fire to charge (~0.5 s), release to fire a heavy **dart**. It does real damage on
+- In alt-fire mode, hold fire to charge (~0.5 s), release to fire a heavy **dart**. It does real damage on
   the hit, as a heavy shot would.
 - The dart is a **projectile**, deliberately slow (start at about 40 m/s, to tune): the player
   leads a moving target. Landing it is the skill.
@@ -352,7 +357,7 @@ never a zero-damage tag.
 **Homing (any other homing source)** — a seeker round, a homing launcher: aims at the **centre of
 the target's body** and **can never crit**. Halo's needler, not an aimbot.
 
-**Charged shot** (the plasma pistol's): hold to charge, release a shot that takes a whole shield.
+**Charged shot** (the plasma pistol's): in alt-fire mode, hold fire to charge, release a shot that takes a whole shield.
 It costs the gun's heat (or a large ammo bite) so it cannot be spammed; it is a shield answer, not
 a damage answer.
 
@@ -377,10 +382,31 @@ the loadout:
 - **Hold X** (the interact key): pick it up into a **third hand**. The loadout is untouched.
 - **Tap swap** while holding it: drop it where you stand and draw the gun you had.
 - **Keep it**: hold **D-pad left** to put it in slot A of the active group, **D-pad up** for slot B.
-  The gun it replaces drops where you stand (a backpack is a later choice — §13).
+  The gun it replaces goes into the **backpack** (dropped where you stand only when the backpack
+  is full).
+- **Stow it**: hold **D-pad down** to send it straight to the backpack without touching the loadout.
 - Switching group, or picking up another floor gun, drops the one in the third hand.
 
-### 7.5 Input summary
+### 7.5 The backpack
+
+Borderlands' backpack (decided 2026-10-10): guns the player owns but is not carrying in the two
+groups. Opened from the inventory screen, where a gun is moved between the backpack and any of the
+four loadout slots, compared on its card, or dropped. It starts small (about 10 guns) and grows
+with skill points or upgrades. A saved gun is its recipe (`CharacterSave.gun_entry`), so the
+backpack is a list of those.
+
+### 7.6 Co-op loot
+
+- **Shared** (the default): a gun on the floor is one gun in the world, for everyone. A dropped gun —
+  discarded from the third hand, replaced, or thrown out of the backpack — lies there for any player
+  to pick up. First to take it owns it.
+- **Instanced** (an option in the session settings, as in Borderlands 3): each player sees and gets
+  their own drops; a gun one player drops is still a real gun the others can take, so trading still
+  works.
+- The host decides what drops either way (Multiplayer.md): an instanced drop is the host rolling one
+  gun per player and showing each only to its owner.
+
+### 7.7 Input summary
 
 | Input (pad / keyboard) | Does |
 |---|---|
@@ -391,11 +417,10 @@ the loadout:
 | G / right bumper | throw a grenade |
 | X hold / interact hold | pick a floor gun into the third hand |
 | D-pad left / up (holding a floor gun) | keep it in slot A / B of the active group |
-| Alt-fire (aim button on guns that have one, or its own key) | the gun's alt-fire |
-| Right stick click / E | melee |
-
-Alt-fire and aim share a button on a pad, so a gun with an alt-fire either has no aim-down-sights
-or puts the alt-fire on a separate bind; to decide when alt-fire is built (§13).
+| D-pad down (holding a floor gun) | stow it in the backpack |
+| Reload tap / R tap | reload |
+| Reload hold / R hold | switch the gun to its alt-fire mode and back |
+| Right stick click / E | melee (next to an enemy mech: climb it) |
 
 ## 8. Bricks
 
@@ -427,7 +452,8 @@ anchor was "a legendary pistol kills in 4 body / 2 head" (now that takes a built
 | Mythic colour `GunCard.RARITY_COLORS[5]` (1.0, 0.25, 0.35) | red | already red-ish; check it reads as red next to orange |
 | `CharacterSave.character.level` (unused) | player level 1–100, XP, skill points, nodes | new: XP sources, tree data, save fields |
 | `CombatScale.melee(level)` | the player's current story tier | "level" becomes story tier |
-| No pickup flow | third hand, keep to slot | new |
+| No pickup flow | third hand, keep to slot, backpack | new |
+| — | co-op loot shared, or instanced as a session option | new (Multiplayer) |
 | One gun in hand | two groups of two, ordnance on D-pad right, grenade on G | inventory, HUD, view (swap) |
 | Crit spots, layers, gating, five elements (built) | unchanged | — |
 | Fire burn, ice slow/freeze (not built) | + corrosive corrode; statuses always build | statuses (`scripts/status/` exists) |
@@ -454,11 +480,8 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 
 ## 13. Open questions
 
-- Keep a backpack (Borderlands) or only the four guns plus the floor (Halo)?
-- Co-op loot: shared floor guns (first to pick up owns it) or instanced per player?
-- Alt-fire bind on a pad (it collides with aim).
-- Melee key: E is free on a keyboard (V and F are taken in `city_scene.gd`); right stick click
-  on a pad.
+- The backpack's size and how it grows.
+- There are no pad bindings in `project.godot` yet: the pad column above is the plan.
 - Infusion materials: what they are and where they drop.
 - The other skill-tree branches and the ability list.
 
@@ -525,44 +548,60 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   are not yet SHOWN on the capsule; the player needs to read them (with melee, step 4). Helmets
   wait for head crits.
 
+**Step 4 — melee: built 2026-10-10.**
+- **E** (rebindable action `melee`; "Melee / Climb a Mech" in Options). `PawnIntents.melee`,
+  `Pawn.melee()`: a blow down the eye, then `MeleeStrike.RECOVERY` 0.65 s before the next; the gun
+  is down (no firing) for the first `GUN_DOWN` 0.35 s. Next to an enemy mech the same press climbs
+  it (`PlayerController.melee_context` -> `CityScene._melee_context`), and on its back E held
+  plants the charge, as before.
+- `MeleeStrike.strike`: a 1.8 m ray from the eye, else a 0.5 m sphere at the end of it for the
+  living body nearest the line that the eye can see (a blow forgives aim but never lands through a
+  wall). Damage `CombatScale.melee(Pawn.melee_tier)` — the arena's level, else 1.
+- `DamagePacket.melee`: `DamageSystem` lands it as damage type `Elements.MELEE` (1.5x on shields,
+  a row of the matrix), never a crit, and `HealthPool.apply_impact(..., stop_at_layer)` stops it at
+  the layer it hits. `HealthPool._damage_index` now zeroes a float sliver (< 1e-5 of the layer), so
+  N melees of a layer take exactly N.
+- The view: a gun bash (`PlayerView.MELEE_POS/ROT`), a shake and dip when it connects; a landed
+  blow shows the hitmarker and number like a round (`Pawn.meleed` -> `CombatFeedback.on_player_shot`).
+- **Readable defences**: `DefenceLook` dresses every capsule-bodied arena unit
+  (`UnitCatalog.apply_health`): a shield is a translucent cyan shell, brighter the fuller, that
+  flashes when hit and bursts when it breaks; armor is an amber chest plate that shrinks from the
+  shoulders as it wears and is gone when it breaks. It reads the HealthPool, so nothing else
+  needs to call it.
+- `tools/melee_probe.gd` (36 checks): every profile's count at tiers 1 and 6, a blow stops at the
+  layer it breaks, 1.5x on shields, never a crit, melee-then-headshot crits, a tier-1 blow on a
+  tier-2 enemy, reach / whiff / wall, the recovery, and the look.
+- **Not yet:** pad binding (no pad bindings exist yet); the soldiers' own melee
+  (`Soldier.melee`, a flat 45) is still theirs (AI area); a lunge toward the target (§4.2's
+  Kinetic Lunge is a skill).
+
 ---
 
-## 15. Handoff — pick up here (2026-10-06, next steps updated 2026-10-09)
+## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 3 is **built, tested and merged into `main`**. The player side it
+Everything above through step 4 is **built, tested and merged into `main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 4, melee
+### 15.1 Next: step 5, two groups, ordnance, grenades, pickups, backpack
 
-What it must do (§4.1, §4.6):
+What it must do (§7.1–7.7):
 
-- **One melee = `CombatScale.melee(level)`**, at the player's current story tier (§4.1; never
-  the player level). Against a shield it does 1.5×
-  (that is why a shield's layer health is ×1.5 in `CombatScale.layer_hp` — the two must match, so
-  one melee breaks exactly one shield-melee). Add the 1.5 as a damage type (e.g. a `&"melee"` row in
-  `Elements.TABLE` with `&"shield": 1.5`, or a packet flag read in `DamageSystem`).
-- **A melee stops at the layer it breaks**: no carry-over (call `apply_impact` with carry-over off
-  for that hit — add a packet flag rather than flipping the pool's `impact_carries_over`). That is
-  what keeps the table in §4.1 exact: a medium enemy is 3 + 1 = 4 melees, always.
-- **Input**: a new rebindable action `melee` in `project.godot` [input] (V is "leave the pawn" and F
-  the mech order in `city_scene.gd`; E is free; on a pad, right stick click). `PlayerController`
-  reads actions via `_pressed()`/`_down()`; `PawnIntents` gets an edge-triggered `melee`.
-- **Hit**: a short sphere/shape cast ahead of the eye (~1.5 m), the first body with a HealthPool,
-  through `DamageSystem.resolve` like a round. A quick view-model jab in `PlayerView` (a pose like
-  `RELOAD_POS`, ~0.25 s) and a small camera kick.
-- **Readability**: the enemy's shield and armor must be SEEN — a shimmer for a shield, plates for
-  armor, a crack/flash when one breaks — or the counts cannot be read. `EnemyProfiles.COLOURS` has
-  per-layer colours; the soldiers are greybox capsules (`Soldier._greybox`). `DamageResult` and
-  `HealthPool.layer_depleted` give the events.
-- **Test**: a probe that melees each profile and counts hits to kill (= the §4.1 table, at levels 1
-  and 6), checks a melee that breaks a defence leaves the flesh untouched, and the
-  melee-then-shoot loop.
+- **Loadout**: two groups of two gun slots; the player's `GunController` holds the active one.
+  Tap swap (the gun is out at once; `PlayerView.hold`), hold swap (~0.25 s) switches group. Number
+  keys 1–4 pick a slot.
+- **Ordnance** slot on its own key; **grenade** on G, thrown without lowering the gun.
+- **Floor pickups**: look at a `WorldGunPickup`, hold interact to carry it in a third hand; tap
+  swap drops it; keep it into slot A / B (replaced gun to the backpack) or stow it.
+- **Backpack**: a list of saved gun entries (`CharacterSave.gun_entry`); an inventory screen to
+  move guns between it and the four slots.
+- **HUD**: the four guns, which group is active, the third hand.
+- **Test**: a probe for the loadout state machine (tap / hold / slots / third hand / backpack)
+  without a window, then the arena gate.
 
 ### 15.2 After that
 
-Steps 5–10 of §12: two groups of two guns with ordnance on D-pad right, grenades and floor pickups;
-rarity v2 and the modifiers; the tracking dart and other alt-fires; element statuses; the player
+Steps 6–10 of §12: rarity v2 and the modifiers; the tracking dart and other alt-fires; element statuses; the player
 level and skill tree; infusion. Also open: helmets and head crits (switch `Pawn.head_crits` on when
 enemies are figures), and §13's questions.
 
@@ -585,7 +624,7 @@ enemies are figures), and §13's questions.
 ### 15.4 Tests to run before merging
 
 Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (15),
-`crit_probe` (10), `defence_probe` (19), `moves_probe` (39), and the AI ones that read soldier
+`crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
 (7), `res://scenes/combat_arena.tscn -- --gate` (31). Menu: `res://menu/tests/menu_smoke.tscn`

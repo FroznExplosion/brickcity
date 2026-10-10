@@ -83,6 +83,9 @@ const SPRINT_ROT := Vector3(-0.18, 0.5, 0.4)
 const RELOAD_POS := Vector3(-0.04, -0.02, -0.02)
 const RELOAD_ROT := Vector3(-0.22, 0.3, 0.65)
 const MANTLE_POS := Vector3(0.0, -0.05, 0.02)
+## A melee is a gun bash: the gun turns on its side and drives forward and in.
+const MELEE_POS := Vector3(-0.08, 0.02, -0.16)
+const MELEE_ROT := Vector3(0.1, 0.35, -0.9)
 const MANTLE_ROT := Vector3(-0.25, 0.1, 0.2)
 
 ## Look sway: the gun lags and leans in the wake of the turn rate (rad/s).
@@ -124,6 +127,7 @@ var _ads := 0.0
 var _sprint := 0.0
 var _reload := 0.0
 var _mantle := 0.0
+var _melee := 0.0
 var _hfov := HFOV
 var _roll := 0.0
 var _bob := 0.0
@@ -158,6 +162,7 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	camera.add_child(rig)
 	gun.fired.connect(_on_fired)
 	pawn.landed.connect(_on_landed)
+	pawn.meleed.connect(_on_meleed)
 	if pawn.moves != null:
 		pawn.moves.mantled.connect(_on_mantled)
 	_prev_look = Vector2(camera.rotation.y, camera.rotation.x)
@@ -180,6 +185,8 @@ func teardown() -> void:
 	if pawn != null and is_instance_valid(pawn):
 		if pawn.landed.is_connected(_on_landed):
 			pawn.landed.disconnect(_on_landed)
+		if pawn.meleed.is_connected(_on_meleed):
+			pawn.meleed.disconnect(_on_meleed)
 		if pawn.moves != null and pawn.moves.mantled.is_connected(_on_mantled):
 			pawn.moves.mantled.disconnect(_on_mantled)
 	if camera != null:
@@ -213,7 +220,7 @@ func hold(gi: GunInstance) -> void:
 ## Is the gun up? Not while it is still lowered from a sprint, or down while
 ## the hands climb or hold a lip.
 func can_fire() -> bool:
-	return _sprint < 0.35 and _mantle < 0.35
+	return _sprint < 0.35 and _mantle < 0.35 and not pawn.is_meleeing()
 
 
 ## Hanging and facing the lip: both hands are on it. Look away from the wall and
@@ -272,6 +279,9 @@ func _process(delta: float) -> void:
 	_reload = move_toward(_reload, 1.0 if reloading else 0.0, delta / RELOAD_TIME)
 	_mantle = move_toward(_mantle, 1.0 if mv != null and (mv.is_mantling() or _hands_on_lip())
 			else 0.0, delta / 0.1)
+	# Out fast, back slower: the blow lands in the first tenth of a second.
+	var bashing := pawn.is_meleeing()
+	_melee = move_toward(_melee, 1.0 if bashing else 0.0, delta / (0.07 if bashing else 0.2))
 	_since_shot += delta
 
 	# Where rounds go: tight at the eye, loose on the run and looser in the air.
@@ -355,6 +365,8 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	rot += RELOAD_ROT * _smooth(_reload)
 	pos += MANTLE_POS * _mantle
 	rot += MANTLE_ROT * _mantle
+	pos += MELEE_POS * _smooth(_melee)
+	rot += MELEE_ROT * _smooth(_melee)
 
 	if on_floor and not sliding and hv > 0.3:
 		_bob += hv * BOB_PER_M * TAU * delta
@@ -441,6 +453,14 @@ func _on_landed() -> void:
 	_dip_vel -= clampf(drop * 0.35, 0.2, 1.4)
 	if drop > 2.0:
 		add_shake(clampf(drop / 12.0, 0.1, 0.45))
+
+
+## A blow that connected jolts the view; a whiff only swings.
+func _on_meleed(info: Dictionary) -> void:
+	if info.is_empty():
+		return
+	add_shake(0.18)
+	_dip_vel += 0.25
 
 
 func _on_mantled() -> void:
