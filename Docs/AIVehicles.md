@@ -4,8 +4,9 @@
 part (AIRoster.md RO10: crewed seats, a cannon that opens walls, armour, the player can drive
 it, infantry screen it -- no crushing, no brick body, no vehicle map yet); the rest is planned.**
 The commander can name, cost and weigh every vehicle below (`UnitCatalog`), so the budget, the
-doctrine and the save format know them before each one drives; only the truck has `built =
-true` -- the tank is fielded by the arena (`--tank`) and the city (Z), not yet bought.
+doctrine and the save format know them before each one drives; only the truck and the tank
+have `built = true` -- the tank a commander buys as support (AIRoster.md RO11), and the arena
+(`--tank`) and the city (Z) field one free.
 
 **What step 1 is today** (`scripts/ai/vehicles/transport_truck.gd`): a kinematic body with health
 that asks for one path and drives it (9 m/s, 1.6 rad/s turns, slower through a sharp one). What it

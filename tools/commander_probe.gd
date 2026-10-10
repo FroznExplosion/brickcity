@@ -10,6 +10,12 @@ extends SceneTree
 ## its host, sends it in file to where the enemy was last heard, orders an
 ## advance once the enemy is in sight, grows desperate as it loses men, and
 ## fields more when it is short and can pay.
+##
+## Buying (AIRoster.md 8, RO11): the answers are made along a recipe's parts, so
+## a recipe the code never names is fielded, and a mech player meets anti-armour
+## and rodeo types, a careful one hunters; support -- air and a tank
+## -- is bought with points as the player's style says, never over its caps;
+## and a plane run costs its commander points.
 
 const Arena := preload("res://tools/ai_arena.gd")
 const LIMIT := 30 * 100
@@ -29,6 +35,7 @@ var _spawn_at := Vector3(0.0, 0.0, 0.0)
 func _init() -> void:
 	print("commander probe")
 	_paper()
+	_buying()
 	a = Arena.new(self, 31)
 	physics_frame.connect(_on_tick)
 
@@ -151,9 +158,118 @@ func _paper() -> void:
 			not f.step(1000.0, [Vector3(30.0, 0.0, 0.0)]) and f.result.is_empty())
 	_ok("and with nobody near, it does", f.step(1000.0, [Vector3(500.0, 0.0, 0.0)])
 			and f.result.name == "decisive attacker win")
-	_ok("vehicles and mechs are catalogued and costed, not yet fielded",
+	_ok("vehicles and mechs are catalogued and costed; the tank is fielded, a mech not yet",
 			UnitCatalog.UNITS.has(&"tank") and UnitCatalog.points(&"tank") > 10.0
-			and not bool(UnitCatalog.get_unit(&"tank").built) and not (&"mech" in UnitCatalog.built()))
+			and bool(UnitCatalog.get_unit(&"tank").built) and not (&"mech" in UnitCatalog.built()))
+
+
+# --- buying (RO11) ------------------------------------------------------------
+
+func _buying() -> void:
+	print("\nbuying")
+	var r := Roster.shared()
+	# A recipe authored on the page, that no code names: a hunter -- a light
+	# flanker with a rifle. Built, so it can be fielded.
+	var hunter := (r.recipe("assault") as Dictionary).duplicate(true)
+	hunter["role"] = "flanker"
+	hunter["unit"] = ""
+	hunter["built"] = true
+	r.recipes["probe_hunter"] = hunter
+	var d := Doctrine.new()
+	var careful := _profile("rusher")
+	careful.range_m = 20.0
+	careful.closeness = 0.3
+	d.update(careful, 0.0, 0.6)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9
+	var drawn := 0
+	for i in 300:
+		drawn += d.draw(4, 12.0, rng).count(&"probe_hunter")
+	_ok("it buys recipes: one authored on the page and named nowhere in the code is fielded",
+			Doctrine.recipe_ids().has(&"probe_hunter") and drawn > 0, "%d of 1200 drawn" % drawn)
+	var plain := Doctrine.new()
+	plain.update(ThreatProfile.new(), 0.0, 0.6)
+	_ok("against a careful pilot on foot: hunters, by their parts",
+			not careful.style() in ["sniper", "demolisher"] and float(d.roster[&"probe_hunter"]) > float(plain.roster[&"probe_hunter"])
+			and float(d.roster[&"boarder"]) > float(plain.roster[&"boarder"]),
+			"%s: the new hunter %.2f (%.2f), boarder %.2f (%.2f)" % [careful.style(), d.roster[&"probe_hunter"], plain.roster[&"probe_hunter"],
+			d.roster[&"boarder"], plain.roster[&"boarder"]])
+	var mech := ThreatProfile.new()
+	mech.evidence = 6.0
+	mech.mech_kills = 5.0
+	d.update(mech, 0.0, 0.6)
+	_ok("against a player whose mech kills: anti-armour and rodeo types, by their parts",
+			mech.armor_style() == "mech" and float(d.roster[&"boarder"]) >= Doctrine.base_of(&"boarder") * 1.9
+			and float(d.roster[&"rocketeer"]) >= Doctrine.base_of(&"rocketeer") * 1.9
+			and float(d.roster[&"brawler"]) < Doctrine.base_of(&"brawler"),
+			"boarder %.2f, rocketeer %.2f, brawler %.2f" % [d.roster[&"boarder"], d.roster[&"rocketeer"], d.roster[&"brawler"]])
+	var mech_tank := float(d.support[&"tank"])
+	var mech_air := float(d.support[&"air"])
+	d.update(_profile("demolisher"), 0.0, 0.6)
+	_ok("support: against a demolisher, air first; against a mech, a tank first",
+			float(d.support[&"air"]) > float(d.support[&"tank"]) and mech_tank > mech_air
+			and mech_tank > float(Doctrine.SUPPORT_BASE[&"tank"]),
+			"demolisher air %.2f tank %.2f | mech air %.2f tank %.2f" % [d.support[&"air"], d.support[&"tank"], mech_air, mech_tank])
+	var in_draw := false
+	for k in Doctrine.recipe_ids():
+		var rc := r.recipe(String(k))
+		if str(rc.get("body", "walker")) != "walker":
+			in_draw = true
+	_ok("and squads are drawn on foot only: flyers, hover craft and mechs come as support",
+			not in_draw and not Doctrine.recipe_ids().has(&"tank"))
+	r.recipes.erase("probe_hunter")
+
+	# The commander's purchases, through a host that fields anything.
+	var s := AIServices.new()
+	var c := Commander.new()
+	root.add_child(c)
+	c.setup(s, 1)
+	var bought: Array = []
+	var up := {&"air": 0, &"tank": 0}
+	c.support_spawner = func(kind: StringName, unit: StringName) -> bool:
+		bought.append([kind, unit])
+		up[kind] = int(up[kind]) + 1
+		return true
+	c.support_up = func() -> Dictionary: return up
+	c.budget = 30.0
+	var got := c.buy_support(&"tank")
+	_ok("it buys a tank with its points", got == &"tank" and is_equal_approx(c.budget, 10.0)
+			and c.fielded_points >= 20.0, "%s, budget 30 -> %.1f" % [got, c.budget])
+	c.budget = 30.0
+	_ok("but never over its cap: one tank at a time", c.buy_support(&"tank") == &"")
+	up[&"tank"] = 0
+	c.budget = 3.0
+	_ok("nor with points it does not have", c.buy_support(&"tank") == &"" and c.buy_support(&"air") == &"")
+	c.budget = 30.0
+	got = c.buy_support(&"air")
+	_ok("air is one of the roster's flyers or hover craft",
+			got == &"air" and str(r.recipe(String(bought.back()[1])).get("body", "")) in ["flyer", "hover"],
+			str(bought.back()))
+	# Unforced, over many reinforcements against a demolisher: some air, within the caps.
+	c.profile = _profile("demolisher")
+	c.doctrine.update(c.profile, 0.0, 0.6)
+	# In place: the host's callables hold this dictionary, not the name.
+	up[&"air"] = 0
+	up[&"tank"] = 0
+	bought.clear()
+	for i in 200:
+		c.budget = 30.0
+		c.buy_support()
+	var airs := bought.filter(func(b): return b[0] == &"air").size()
+	_ok("left to itself against a demolisher it buys air, up to its cap",
+			airs == int(Commander.SUPPORT_CAP[&"air"]), "%d air, %d tank" % [airs, bought.size() - airs])
+
+	# A plane run costs its commander points: none without them.
+	var air := s.air_of(1)
+	air.parent = root
+	c.budget = AirSupport.RUN_POINTS - 1.0
+	var poor := air.available()
+	c.budget = 20.0
+	var rich := air.available()
+	_ok("a plane run costs its commander points: none to call without them",
+			air.payer == c and not poor and rich)
+	air.parent = null
+	c.queue_free()
 
 
 # --- in an arena -----------------------------------------------------------------

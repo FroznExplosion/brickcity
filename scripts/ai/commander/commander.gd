@@ -64,6 +64,20 @@ var squads: Array[Squad] = []
 var spawner := Callable()
 ## The host can bring a squad by truck (TransportTruck).
 var can_truck := false
+## SUPPORT it buys besides squads (Doctrine.support; AIRoster.md RO11): air --
+## a flyer or hover craft of the roster -- or a tank. Every SUPPORT_GAP seconds
+## it considers one purchase: each kind under its cap comes up at the doctrine's
+## weight, and is bought if the points leave SUPPORT_RESERVE over. `support_spawner.call(kind, unit) -> bool` fields it;
+## `support_up.call() -> {kind: how many up}` keeps it under SUPPORT_CAP. A host
+## that sets neither buys none (a gate counting soldiers).
+var support_spawner := Callable()
+var support_up := Callable()
+const SUPPORT_CAP := {&"air": 3, &"tank": 1}
+const SUPPORT_RESERVE := 4.0
+const SUPPORT_GAP := 20.0
+var _support_at := 0.0
+## Support bought: [kind, unit, points].
+var support_bought: Array = []
 ## How many soldiers may be up at once (the host's cap), and how many are.
 var alive_cap := 8
 ## Where the fight is, when nobody knows where the enemy is (the arena's focus).
@@ -152,6 +166,16 @@ func setup(p_services: AIServices, p_team: int, p_seed := 0x0C0DE) -> void:
 	team = p_team
 	_rng.seed = p_seed
 	doctrine.update(profile, desperation, difficulty)
+	# Its side's plane runs are paid for from its budget (AirSupport.RUN_POINTS).
+	services.air_of(team).payer = self
+
+
+## Spend `points` on something its side used (a plane run): out of the budget,
+## into what it has fielded.
+func pay(points: float, what: String) -> void:
+	budget -= points
+	note_fielded(points)
+	_note("%s (%.1f pts)" % [what, points])
 
 
 # --- events -----------------------------------------------------------------
@@ -268,6 +292,9 @@ func think(dt: float) -> void:
 			_command(q)
 	if radio_up:
 		_reinforce(false)
+		if now >= _support_at:
+			_support_at = now + SUPPORT_GAP
+			buy_support()
 
 
 func _step_fronts(now: float) -> void:
@@ -409,6 +436,54 @@ func _reinforce(now_please: bool) -> bool:
 	_note("reinforce: %s%s (%.1f pts), answering %s" % [", ".join(kinds),
 			" by truck" if arrival == &"truck" else "", cost, doctrine.answering])
 	return true
+
+
+## With a reinforcement: support, if the doctrine wants it now and the points
+## are there (see support_spawner). `force` buys `force`'s kind whatever the
+## draw says, for gates. Returns what it bought, or &"".
+func buy_support(force: StringName = &"") -> StringName:
+	if not support_spawner.is_valid() or not commander_up or not radio_up:
+		return &""
+	var up: Dictionary = support_up.call() if support_up.is_valid() else {}
+	for kind in doctrine.support:
+		if force != &"" and kind != force:
+			continue
+		if int(up.get(kind, 0)) >= int(SUPPORT_CAP.get(kind, 1)):
+			continue
+		var unit := support_unit(kind)
+		if unit == &"":
+			continue
+		var cost := UnitCatalog.points(unit)
+		if budget < cost + (0.0 if force != &"" else SUPPORT_RESERVE):
+			continue
+		if force == &"" and _rng.randf() >= float(doctrine.support[kind]):
+			continue
+		if not support_spawner.call(kind, unit):
+			continue
+		budget -= cost
+		note_fielded(cost)
+		support_bought.append([kind, unit, cost])
+		_note("support: %s (%.1f pts), answering %s / %s" % [unit, cost, doctrine.answering,
+				doctrine.answering_armor])
+		return kind
+	return &""
+
+
+## Which unit stands for a kind of support: the tank; for air, one of the
+## roster's flyers and hover craft that can be fielded, drawn evenly.
+func support_unit(kind: StringName) -> StringName:
+	if kind == &"tank":
+		return &"tank" if bool(UnitCatalog.get_unit(&"tank").built) else &""
+	var r := Roster.shared()
+	if r == null:
+		return &""
+	var air: Array[StringName] = []
+	for rid in r.ids():
+		var rc := r.recipe(rid)
+		if str(rc.get("body", "")) in ["flyer", "hover"] and bool(rc.get("built", false)) and r.fit(rid):
+			air.append(StringName(rid))
+	air.sort()
+	return air[_rng.randi() % air.size()] if not air.is_empty() else &""
 
 
 ## The strength the side wants up, in points: more the more aggressive, and a
