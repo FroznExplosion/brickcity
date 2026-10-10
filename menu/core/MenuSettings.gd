@@ -19,6 +19,9 @@ extends Node
 
 const CONFIG_PATH := "user://settings.cfg"
 const CONFIG_VERSION := 1
+## Where the settings are read and written. A test points this at a file of its own
+## (`use_scratch_file`) so it never writes over the player's settings.
+var config_path := CONFIG_PATH
 
 ## Buses the module guarantees exist, in creation order, all sending to Master. A game that ships
 ## its own bus layout keeps it — anything already present is left alone.
@@ -859,7 +862,7 @@ func _write_action(action: StringName, events: Array[InputEvent]) -> void:
 
 func _apply_input_config() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) != OK:
+	if cfg.load(config_path) != OK:
 		return
 	if not cfg.has_section("input"):
 		return
@@ -888,6 +891,14 @@ func save_now() -> void:
 	_save()
 
 
+## For tests: from now on read and write `path` instead of the player's settings file,
+## starting it empty. The values already loaded stay as they are, in memory.
+func use_scratch_file(path: String) -> void:
+	config_path = path
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
 func _save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("meta", "version", CONFIG_VERSION)
@@ -902,7 +913,7 @@ func _save() -> void:
 		var defaults: Array = _default_events.get(action, [])
 		if not _event_lists_match(current, defaults):
 			cfg.set_value("input", String(action), current)
-	var err := cfg.save(CONFIG_PATH)
+	var err := cfg.save(config_path)
 	if err != OK:
 		push_warning("MenuSettings: could not save settings (%d)" % err)
 
@@ -910,7 +921,7 @@ func _save() -> void:
 func _load() -> void:
 	_loading = true
 	var cfg := ConfigFile.new()
-	var ok := cfg.load(CONFIG_PATH) == OK
+	var ok := cfg.load(config_path) == OK
 	for d in _all_defs:
 		var def: Dictionary = d
 		var id: StringName = def["id"]

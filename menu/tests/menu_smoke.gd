@@ -4,6 +4,8 @@ extends Node
 ##
 ## Run: godot --headless --path . res://menu/tests/menu_smoke.tscn
 
+const SCRATCH_CFG := "user://settings_menu_smoke.cfg"
+
 var _pass := 0
 var _fail := 0
 var _sub: SubViewport
@@ -25,6 +27,9 @@ func _ready() -> void:
 
 func _run() -> void:
 	print("=== menu smoke ===")
+	# Everything this test saves goes to a file of its own, never the player's settings.cfg.
+	var players_md5 := FileAccess.get_md5(MenuSettings.CONFIG_PATH)
+	MenuSettings.use_scratch_file(SCRATCH_CFG)
 	_sub = SubViewport.new()
 	_sub.size = Vector2i(1280, 720)
 	_sub.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -39,7 +44,9 @@ func _run() -> void:
 	await _test_options_screen()
 	await _test_pause_lifecycle()
 
+	_check(FileAccess.get_md5(MenuSettings.CONFIG_PATH) == players_md5, "the player's own settings.cfg is untouched")
 	print("=== %d passed, %d failed ===" % [_pass, _fail])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SCRATCH_CFG))
 	get_tree().quit(1 if _fail > 0 else 0)
 
 
@@ -108,7 +115,7 @@ func _test_values() -> void:
 func _test_persistence() -> void:
 	MenuSettings.set_value(&"vol_master", 0.33, true)
 	var cfg := ConfigFile.new()
-	var ok := cfg.load(MenuSettings.CONFIG_PATH) == OK
+	var ok := cfg.load(MenuSettings.config_path) == OK
 	_check(ok, "settings file written")
 	if ok:
 		_check(is_equal_approx(float(cfg.get_value("audio", "vol_master", -1.0)), 0.33),
