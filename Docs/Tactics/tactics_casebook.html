@@ -165,7 +165,7 @@ pre.json{max-height:260px;overflow:auto;background:var(--paper);border:1px solid
   <header class="top">
     <div>
       <h1>Brickcity Tactics Casebook</h1>
-      <p class="sub">Twelve broad moments any enemy can be in, each with many possible moves. What is around the soldier (the place, the player, distance and cover, its health and magazine, its squad, what it tried last) makes some moves likelier and rules others out. Set the odds, then try a moment to see what a squad would do.</p>
+      <p class="sub">Fifteen broad moments any enemy can be in, each with many possible moves. What is around the soldier (the place, the player, distance and cover, its health and magazine, its squad, what it tried last) makes some moves likelier and rules others out. Set the odds, then try a moment to see what a squad would do.</p>
     </div>
     <div>
       <div class="meter" id="meter"></div>
@@ -404,7 +404,7 @@ const MEMDEF = [
   ["same","The same move a squadmate is already doing","On top of the 'at most' limit below.",2],
 ];
 
-// The twelve moments. w: suggested starting weight of each move (0..100). imp: always true in this moment.
+// The moments. w: suggested starting weight of each move (0..100). imp: always true in this moment.
 const SITS = [
   {id:"first_contact", l:"Contact: the player is seen", who:"Anyone", imp:"p_seen",
    d:"A soldier or squad has just seen the player, or been shot at. Nobody has a plan yet.",
