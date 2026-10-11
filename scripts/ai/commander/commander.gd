@@ -445,8 +445,9 @@ func _command_friendly(q: Squad) -> void:
 ## How far the squad's nearest member is to the side of the line from the
 ## nearest player to the players' fight: all of it is out, or it is not.
 ## Members behind the player count too -- from there the straight way in is past
-## its gun -- unless `ahead_only`: going in already, only one actually in front
-## of the player matters, not the covering half left behind.
+## its gun -- unless `ahead_only`: going in already, the squad's centre, and only
+## if it is actually in front of the player -- not the covering half left behind,
+## nor one member straying.
 func _off_lane(q: Squad, f: Vector3, ahead_only := false) -> float:
 	var p := intent.nearest_player(f)
 	if p == null:
@@ -457,8 +458,17 @@ func _off_lane(q: Squad, f: Vector3, ahead_only := false) -> float:
 	u = u.normalized()
 	var least := INF
 	var length := Vector2(f.x - p.feet().x, f.z - p.feet().z).length()
-	for m in q.alive():
-		var rel := m.pawn.feet() - p.feet()
+	# Going in at the flank (ahead_only), the squad as a whole: one member
+	# straying into the lane -- a soldier's own flank or push -- is not the squad
+	# back in it, and turned every one of them round to go out again.
+	var feet_of: Array[Vector3] = []
+	if ahead_only:
+		feet_of.append(q.center())
+	else:
+		for m in q.alive():
+			feet_of.append(m.pawn.feet())
+	for at in feet_of:
+		var rel := at - p.feet()
 		rel.y = 0.0
 		var along := rel.dot(u)
 		if along < length and (along > 0.0 or not ahead_only):
