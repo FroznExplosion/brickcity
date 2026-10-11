@@ -24,23 +24,66 @@ extends CharacterBody3D
 ## who shoot from it. Driven by the player it is a target everybody senses and
 ## shoots (make_target); rounds are what hurt it, as they always did.
 ##
-## A brick-built body and moving cover are the steps after this one
-## (AIVehicles.md 4).
+## The APC (`kind` &"apc", Docs/AIVehicles.md 6 step 2) is the same body
+## armoured and armed: slower, ten times the hit points behind armour (APC_ARMOUR),
+## a turret with a heavy machine gun it aims itself from what it sees (a
+## player at the wheel aims it as a tank's), and it stops to let its squad out
+## at CONTACT -- the enemy in its own sight within CONTACT_STOP -- not at the
+## goal. Then it is MOVING COVER: told its squad (`escort`), it keeps itself
+## between them and the threat, at a walk, and its hull is cover the AI knows
+## (VehicleCover: a box in AIWorld, so a soldier's cover search finds its lee).
+##
+## Its body is BRICKS (VehicleBricks), in damage zones (AIVehicles.md 4.2): its
+## ENGINE under the hood -- shot out, it does not drive (a squad on its way is
+## let out where it stops) -- and its WHEELS -- two shot off, it goes at half
+## speed. Rounds knock bricks off where they land, as on a tank. Moving cover
+## is the step after this one (AIVehicles.md 4).
 
 signal arrived(truck: TransportTruck)
 signal wrecked(truck: TransportTruck)
 ## Taken at the cab by `by`.
 signal hijacked(by: Pawn)
+## A damage zone of its bricks is gone (VehicleBricks.zone_lost).
+signal damaged(zone: StringName)
 
 const DRIVE := 9.0
 const TURN := 1.6
 const DROP := 22.0
 const STUCK := 3.0
 const HP := 400.0
+## What each kind is: its box (width, height, length), top speed, hit points, the
+## vehicle map it drives, and how much of a hit by each scale gets through.
+const KINDS := {
+	&"truck": {"size": Vector3(2.3, 2.4, 5.6), "drive": 9.0, "hp": 400.0, "nav": &"truck",
+			"armour": {}, "cover": 2.0},
+	&"apc": {"size": Vector3(2.8, 2.5, 6.3), "drive": 7.0, "hp": 1800.0, "nav": &"apc",
+			"armour": {&"person": 0.08, &"explosive": 1.0, &"mech": 0.6}, "cover": 6.0},
+}
+## The APC: it sees from its turret this far, its gun reaches this far, and it
+## stops for its squad when it sees the enemy this near.
+const SIGHT := 90.0
+const GUN_RANGE := 70.0
+const CONTACT_STOP := 45.0
+const SENSE_EVERY := 0.25
+const GUN_TURN := deg_to_rad(90.0)
+const GUN_TOL := deg_to_rad(4.0)
+## A round from its gun against a body (GunController.damage_mult).
+const GUN_MULT := 2.5
+## Moving cover: it keeps this far ahead of its squad towards the threat, and
+## goes no faster than a walk doing it.
+const COVER_AHEAD := 6.0
+const COVER_SPEED := 2.5
 const GRAVITY := 20.0
 const SIZE := Vector3(2.3, 2.4, 5.6)
 const CLEARANCE := 0.55
 const WHEEL := 0.45
+## Hit points of a brick, by zone; a zone works down to this share of its bricks.
+const BRICK_HP := {&"body": 60.0, &"engine": 45.0, &"wheels": 50.0}
+const ZONE_KEEP := {&"engine": 0.5, &"wheels": 0.6}
+## How far from where a round struck its damage reaches into the bricks.
+const BRICK_REACH := {&"person": 0.5, &"mech": 0.8, &"explosive": 1.1}
+## On what wheels it has left, once it has lost them.
+const LIMP := 0.5
 ## Up-speed for a kerb: about half a metre at this gravity.
 const KERB_POP := 4.5
 ## Seconds it backs up the first time it is stuck.
@@ -62,6 +105,28 @@ const RIDE_SPOTS: Array[Vector3] = [Vector3(-0.55, 1.05, 0.1), Vector3(0.55, 1.0
 
 var services: AIServices
 var team := 1
+## &"truck" or &"apc" (KINDS).
+var kind := &"truck"
+var size := SIZE
+var drive := DRIVE
+## The APC's gun and turret; null on a truck.
+var gun: GunController
+var turret: Node3D
+var muzzle: Node3D
+var gun_yaw := 0.0
+## Where the gun should point (world), INF to hold; and its trigger -- the
+## player's keys, or its own eyes.
+var aim_point := Vector3.INF
+var fire_main := false
+var fire_coax := false
+## The squad it let out, that it covers (an APC's moving cover).
+var escort: Squad
+## Its hull as cover the AI knows (VehicleCover).
+var cover: VehicleCover
+## Why its gun is not firing, for logs: "" when it is.
+var hold_fire := ""
+var _next_sense := 0.0
+var _sees := {}
 ## The kinds of unit riding in it.
 var cargo: Array[StringName] = []
 var goal := Vector3.INF
@@ -87,6 +152,9 @@ var stopped_because := ""
 var stuck_on: Array[String] = []
 ## Which map its path is on: "vehicle", or "foot" with no road on the vehicle map.
 var road := ""
+## Its body (VehicleBricks): zones of bricks.
+var bricks: VehicleBricks
+var _smoke: CPUParticles3D
 
 var _path := PackedVector3Array()
 var _path_id := -1
@@ -99,9 +167,16 @@ var _reverse_until := -INF
 var _reversals := 0
 
 
-static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> TransportTruck:
+## A truck (or, `p_kind` &"apc", an APC armed with `p_gun` -- a GunInstance --
+## whose structure hits go to `on_hit`) on the ground at `at`, facing `yaw`.
+static func make(s: AIServices, parent: Node, at: Vector3, yaw: float, p_kind := &"truck",
+		p_gun: GunInstance = null, on_hit := Callable(), rng: RandomNumberGenerator = null) -> TransportTruck:
 	var t := TransportTruck.new()
-	t.name = "Truck"
+	t.kind = p_kind
+	var k: Dictionary = KINDS[p_kind]
+	t.size = k.size
+	t.drive = float(k.drive)
+	t.name = "APC" if p_kind == &"apc" else "Truck"
 	t.services = s
 	# Solid to pawns and to rounds, like wreckage: not brick, so not cover the
 	# AI knows of yet (AIVehicles.md: brick-built is the next step).
@@ -115,12 +190,12 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> Transp
 	# 14 cm step where a wheel rolls up it.
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(SIZE.x, SIZE.y - CLEARANCE, SIZE.z)
+	box.size = Vector3(t.size.x, t.size.y - CLEARANCE, t.size.z)
 	shape.shape = box
 	shape.position = Vector3.UP * (CLEARANCE + box.size.y * 0.5)
 	t.add_child(shape)
-	for x in [-SIZE.x * 0.4, SIZE.x * 0.4]:
-		for z in [-SIZE.z * 0.35, SIZE.z * 0.3]:
+	for x in [-t.size.x * 0.4, t.size.x * 0.4]:
+		for z in [-t.size.z * 0.35, t.size.z * 0.3]:
 			var ws := CollisionShape3D.new()
 			var sph := SphereShape3D.new()
 			sph.radius = WHEEL
@@ -128,21 +203,54 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float) -> Transp
 			ws.position = Vector3(x, WHEEL, z)
 			t.add_child(ws)
 	t._build_look()
-	t.rodeo = VehicleDeck.attach(t, RIDE_SPOTS, Vector3.INF, Vector2(SIZE.x * 0.5, SIZE.z * 0.5))
+	t.rodeo = VehicleDeck.attach(t, RIDE_SPOTS, Vector3.INF, Vector2(t.size.x * 0.5, t.size.z * 0.5))
 	var pool := HealthPool.new()
 	pool.name = "HealthPool"
 	var layer := DefenseLayer.new()
-	layer.max_value = HP
+	layer.max_value = float(k.hp)
 	pool.layer_configs = [layer]
 	t.add_child(pool)
 	t.health = pool
+	t.set_meta(&"takes_packet", t)
+	if p_kind == &"apc":
+		t._arm(p_gun, on_hit, rng)
 	parent.add_child(t)
+	t.cover = VehicleCover.make(s, Vector3(t.size.x, t.size.y - CLEARANCE * 0.5, t.size.z), float(k.cover))
 	t.global_position = at
 	t._yaw = yaw
 	t.rotation.y = yaw
 	pool.died.connect(t._on_wrecked)
 	t.add_to_group(&"trucks")
 	return t
+
+
+## The APC's turret and gun.
+func _arm(g: GunInstance, on_hit: Callable, rng: RandomNumberGenerator) -> void:
+	gun = GunController.new()
+	gun.name = "Gun"
+	gun.aim = muzzle
+	gun.rng = rng if rng != null else RandomNumberGenerator.new()
+	gun.exclude = [get_rid()] as Array[RID]
+	gun.on_structure_hit = on_hit
+	gun.damage_mult = GUN_MULT
+	add_child(gun)
+	if g != null:
+		g.visible = false
+		muzzle.add_child(g)
+		gun.equip(g)
+
+
+func is_apc() -> bool:
+	return kind == &"apc"
+
+
+## Does the player drive it, aim its gun? (VehiclePilot asks a tank the same.)
+func player_drives() -> bool:
+	return player_in
+
+
+func player_guns() -> bool:
+	return player_in and gun != null
 
 
 ## Drive to `to` and let the cargo out there.
@@ -156,7 +264,7 @@ func send(to: Vector3) -> void:
 
 
 func _ask_path(on_foot: bool) -> void:
-	var vn := services.vehicle_nav(&"truck") if not on_foot else null
+	var vn := services.vehicle_nav(StringName(KINDS[kind].nav)) if not on_foot else null
 	var to := VehicleNav.reach_point(vn, goal) if vn != null else Vector3.INF
 	var from := vn.snap(feet()) if vn != null else Vector3.INF
 	if vn != null and to != Vector3.INF and vn.can_stand(from):
@@ -178,20 +286,27 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= GRAVITY * delta
 	else:
 		velocity.y = maxf(velocity.y, 0.0)
+	if cover != null:
+		cover.update(self, feet() + Vector3.UP * (size.y + CLEARANCE * 0.5) * 0.5)
+	if gun != null:
+		_gunner(delta)
 	if player_in:
 		_drive_keys(delta)
 		return
+	if state == "arrived" and escort != null and is_apc() and not is_wrecked():
+		_cover_squad(delta)
+		return
 	if state != "driving":
-		velocity.x = move_toward(velocity.x, 0.0, DRIVE * delta * 2.0)
-		velocity.z = move_toward(velocity.z, 0.0, DRIVE * delta * 2.0)
+		velocity.x = move_toward(velocity.x, 0.0, drive * delta * 2.0)
+		velocity.z = move_toward(velocity.z, 0.0, drive * delta * 2.0)
 		move_and_slide()
 		return
 	var now := services.now()
 	if now < _reverse_until:
 		# Backing off what it was stuck on, before trying the way again.
 		var back := global_transform.basis.z
-		velocity.x = back.x * DRIVE * 0.35
-		velocity.z = back.z * DRIVE * 0.35
+		velocity.x = back.x * drive * 0.35
+		velocity.z = back.z * drive * 0.35
 		move_and_slide()
 		_from = global_position
 		_moved_at = now
@@ -222,8 +337,22 @@ func _physics_process(delta: float) -> void:
 	if Vector2(goal.x - at.x, goal.z - at.z).length() < DROP:
 		_arrive("there")
 		return
+	if not can_drive():
+		_arrive("engine")
+		return
+	# An APC lets its squad out at contact, behind it, not at the goal.
+	if is_apc() and _contact_within(CONTACT_STOP):
+		_arrive("contact")
+		return
 	while _wp < _path.size() and Vector2(_path[_wp].x - at.x, _path[_wp].z - at.z).length() < 2.0:
 		_wp += 1
+	# A flyer coming down ahead (Airspace pad): hold short until it is down and gone.
+	if services.airspace != null and services.airspace.blocks(at - global_transform.basis.z * (size.z * 0.5 + 4.0), size.x):
+		stopped_because = "a landing ahead"
+		_coast(delta)
+		_from = at
+		_moved_at = now
+		return
 	if _wp >= _path.size():
 		_arrive("end of path")
 		return
@@ -233,7 +362,7 @@ func _physics_process(delta: float) -> void:
 	_yaw += turn
 	rotation.y = _yaw
 	# Slower through a sharp turn.
-	var speed := DRIVE * clampf(1.0 - absf(wrapf(want - _yaw, -PI, PI)) / PI, 0.3, 1.0)
+	var speed := top_speed() * clampf(1.0 - absf(wrapf(want - _yaw, -PI, PI)) / PI, 0.3, 1.0)
 	var fwd := -global_transform.basis.z
 	velocity.x = fwd.x * speed
 	velocity.z = fwd.z * speed
@@ -267,7 +396,8 @@ func _physics_process(delta: float) -> void:
 ## The player's keys, as a car: throttle up to speed, steering that bites only
 ## while it rolls (and turns the other way backing up).
 func _drive_keys(delta: float) -> void:
-	var want := throttle * (DRIVE if throttle > 0.0 else BACK_SPEED)
+	var go := throttle if can_drive() else 0.0
+	var want := go * (top_speed() if go > 0.0 else BACK_SPEED * top_speed() / drive)
 	var rate := BRAKE if (want == 0.0 or signf(want) != signf(_speed)) and absf(_speed) > 0.1 else ACCEL
 	_speed = move_toward(_speed, want, rate * delta)
 	var bite := clampf(absf(_speed) / STEER_FULL, 0.0, 1.0) * signf(_speed)
@@ -286,12 +416,240 @@ func _drive_keys(delta: float) -> void:
 
 
 func _run_down(fwd: Vector3) -> void:
-	splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(SIZE.x * 0.5, SIZE.z * 0.5),
+	splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(size.x * 0.5, size.z * 0.5),
 			Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z)), _splat_last)
 
 
 func is_wrecked() -> bool:
 	return state == "wrecked"
+
+
+func _exit_tree() -> void:
+	if cover != null:
+		cover.remove()
+
+
+## Does it drive: an engine.
+func can_drive() -> bool:
+	return bricks == null or bricks.has(&"engine")
+
+
+## How fast it goes on what wheels it has.
+func top_speed() -> float:
+	return drive * (1.0 if bricks == null or bricks.has(&"wheels") else LIMP)
+
+
+## A hit through DamageSystem (the "takes_packet" meta): on its bricks where it
+## struck (a splash round its middle: a brick of its outside), and its health.
+func take_packet(packet: DamagePacket) -> DamageSystem.DamageResult:
+	var res := DamageSystem.DamageResult.new()
+	if is_wrecked():
+		return res
+	var before := health.total_current()
+	var scale := MechLayers.scale_of(packet)
+	var reach := float(BRICK_REACH.get(scale, 0.5))
+	var dmg := packet.amount * float((KINDS[kind].armour as Dictionary).get(scale, 1.0))
+	if packet.hit_position == Vector3.ZERO or packet.hit_position.distance_to(global_position) < 0.05:
+		bricks.hit_anywhere(dmg, reach)
+	else:
+		bricks.hit(packet.hit_position, dmg, reach)
+	if not is_wrecked():
+		health.apply_impact(dmg, &"")
+	res.dealt = before - health.total_current()
+	res.killed = health.is_dead()
+	return res
+
+
+# --- the APC: its eyes, its gun, moving cover ---------------------------------------
+
+## The enemy in its own sight within `r`?
+func _contact_within(r: float) -> bool:
+	for id in _sees:
+		var h = instance_from_id(id)
+		if h != null and is_instance_valid(h) and (h as Pawn).feet().distance_to(feet()) <= r:
+			return true
+	return false
+
+
+func eye() -> Vector3:
+	return global_position + Vector3.UP * (size.y + 0.5)
+
+
+## All round from its turret, within SIGHT, to the chest or the eye.
+func can_see(h: Pawn) -> bool:
+	if h == null or not is_instance_valid(h) or h.has_meta(&"in_vehicle") or h.has_meta(&"in_mech"):
+		return false
+	var e := eye()
+	if e.distance_to(h.chest()) > SIGHT:
+		return false
+	var ex: Array[RID] = [get_rid(), h.body.get_rid()]
+	for p in [h.chest(), h.eye.global_position]:
+		var q := PhysicsRayQueryParameters3D.create(e, p, Layers.HITSCAN_MASK, ex)
+		if get_world_3d().direct_space_state.intersect_ray(q).is_empty() \
+				and not services.ai_world.smoke_blocks(e, p):
+			return true
+	return false
+
+
+## Look (SENSE_EVERY), tell its side; and, nobody else at the gun, aim it at the
+## side's best contact in sight within GUN_RANGE and fire when on it -- never
+## with a friend near the line.
+func _gunner(delta: float) -> void:
+	if is_wrecked():
+		gun.set_trigger(false)
+		return
+	var now := services.now()
+	if now >= _next_sense:
+		_next_sense = now + SENSE_EVERY
+		var k := services.knowledge_of(team)
+		for h in services.hostiles_of(team):
+			if can_see(h):
+				k.saw(h, h.feet(), now, self)
+				_sees[h.get_instance_id()] = true
+			else:
+				k.lost_sight(h, self)
+				_sees.erase(h.get_instance_id())
+	if not player_in:
+		fire_main = false
+		var c := services.knowledge_of(team).best(now)
+		if c == null or c.pawn == null or not is_instance_valid(c.pawn) or not c.visible \
+				or c.pawn.health == null or c.pawn.health.is_dead():
+			hold_fire = "no contact"
+		elif c.pos.distance_to(feet()) > GUN_RANGE:
+			hold_fire = "out of range"
+		else:
+			aim_point = c.pawn.chest()
+			if _friend_near_line(muzzle.global_position, aim_point):
+				hold_fire = "friend in the line"
+			elif aim_error() > GUN_TOL:
+				hold_fire = "turning"
+			else:
+				hold_fire = ""
+				fire_main = true
+	_turn_gun(delta)
+	gun.set_trigger(fire_main and (bricks == null or bricks.has(&"gun")))
+
+
+func _turn_gun(delta: float) -> void:
+	if aim_point == Vector3.INF:
+		return
+	var to := aim_point - turret.global_position
+	var want := wrapf(atan2(-to.x, -to.z) - rotation.y, -PI, PI)
+	var rate := GUN_TURN if bricks == null or bricks.has(&"gun") else 0.0
+	gun_yaw = wrapf(gun_yaw + clampf(wrapf(want - gun_yaw, -PI, PI), -rate * delta, rate * delta), -PI, PI)
+	turret.rotation.y = gun_yaw
+	muzzle.rotation.x = clampf(atan2(to.y, Vector2(to.x, to.z).length()), deg_to_rad(-10.0), deg_to_rad(40.0))
+
+
+func aim_error() -> float:
+	if aim_point == Vector3.INF:
+		return 0.0
+	return (-muzzle.global_basis.z).angle_to((aim_point - muzzle.global_position).normalized())
+
+
+func _friend_near_line(from: Vector3, to: Vector3) -> bool:
+	var seg := to - from
+	var len2 := seg.length_squared()
+	if len2 < 0.01:
+		return false
+	for p in services.pawns:
+		if not is_instance_valid(p) or p.team != team or p == pawn or p.health == null or p.health.is_dead():
+			continue
+		var x := p.chest()
+		var t := clampf((x - from).dot(seg) / len2, 0.0, 1.0)
+		if t < 0.97 and x.distance_to(from + seg * t) < 2.0:
+			return true
+	return false
+
+
+## Moving cover: between its squad and the threat, COVER_AHEAD past their middle,
+## at a walk -- straight there while the way is open, holding when it is not.
+func _cover_squad(delta: float) -> void:
+	var mates := escort.alive()
+	if mates.is_empty() or not can_drive():
+		_coast(delta)
+		return
+	var mid := Vector3.ZERO
+	for so in mates:
+		mid += so.pawn.feet()
+	mid /= mates.size()
+	var c := services.knowledge_of(team).best(services.now())
+	var threat := c.pos if c != null else goal
+	if threat == Vector3.INF:
+		_coast(delta)
+		return
+	var dir := threat - mid
+	dir.y = 0.0
+	if dir.length() < 1.0:
+		_coast(delta)
+		return
+	var want := mid + dir.normalized() * COVER_AHEAD
+	var to := want - global_position
+	to.y = 0.0
+	if to.length() < 2.5:
+		_coast(delta)
+		return
+	_steer_to(want, minf(COVER_SPEED, top_speed()), delta)
+
+
+## Slowing to a stop.
+func _coast(delta: float) -> void:
+	velocity.x = move_toward(velocity.x, 0.0, drive * delta * 2.0)
+	velocity.z = move_toward(velocity.z, 0.0, drive * delta * 2.0)
+	move_and_slide()
+
+
+## Towards `at` at `speed`, turning no faster than TURN; backwards when it is
+## behind (short moves of cover need no three-point turns).
+func _steer_to(at: Vector3, speed: float, delta: float) -> void:
+	var to := at - global_position
+	var want := atan2(-to.x, -to.z)
+	var off := wrapf(want - _yaw, -PI, PI)
+	var back := absf(off) > PI * 0.6
+	if back:
+		off = wrapf(off + PI, -PI, PI)
+	_yaw += clampf(off, -TURN * delta, TURN * delta)
+	rotation.y = _yaw
+	var fwd := -global_transform.basis.z
+	var v := speed * (-1.0 if back else 1.0) * clampf(1.0 - absf(off) / PI, 0.3, 1.0)
+	velocity.x = fwd.x * v
+	velocity.z = fwd.z * v
+	move_and_slide()
+	_run_down(fwd)
+
+
+func _on_zone_lost(zone: StringName) -> void:
+	if is_wrecked():
+		return
+	if zone == &"engine":
+		_smoke_from(Vector3(0.0, 1.6, -size.z * 0.42))
+	damaged.emit(zone)
+
+
+func _smoke_from(at: Vector3) -> void:
+	if _smoke != null:
+		return
+	var s := CPUParticles3D.new()
+	s.name = "Smoke"
+	s.amount = 20
+	s.lifetime = 2.5
+	s.direction = Vector3.UP
+	s.spread = 12.0
+	s.initial_velocity_min = 1.0
+	s.initial_velocity_max = 2.0
+	s.gravity = Vector3.UP * 0.4
+	var m := SphereMesh.new()
+	m.radius = 0.3
+	m.height = 0.6
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.12, 0.12, 0.12, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.material = mat
+	s.mesh = m
+	s.position = at
+	add_child(s)
+	_smoke = s
 
 
 ## Nobody at the wheel: a player's truck parked, or nobody's.
@@ -306,7 +664,7 @@ func forward() -> Vector3:
 ## Where the driver's eye is: in the cab, on the left.
 func eye_interpolated() -> Vector3:
 	var x := get_global_transform_interpolated()
-	return x.origin + x.basis * Vector3(-0.45, 1.75, -1.6)
+	return x.origin + x.basis * (Vector3(-0.5, 1.95, -2.2) if is_apc() else Vector3(-0.45, 1.75, -1.6))
 
 
 ## Is `p` -- on foot, of another side -- beside the cab (its front half)?
@@ -377,8 +735,8 @@ func make_target() -> Pawn:
 	p.health = health
 	p.eye = e
 	p.process_mode = Node.PROCESS_MODE_DISABLED
-	p.stand_height = SIZE.y
-	p._height = SIZE.y
+	p.stand_height = size.y
+	p._height = size.y
 	p.set_meta(&"aggro_kind", "pilot")
 	p.set_meta(&"vehicle", self)
 	add_child(p)
@@ -388,7 +746,7 @@ func make_target() -> Pawn:
 
 ## Where the driver gets out: beside the cab on the left.
 func mount_point() -> Vector3:
-	var at := feet() + global_transform.basis * Vector3(-SIZE.x * 0.5 - 1.0, 0.0, -1.4)
+	var at := feet() + global_transform.basis * Vector3(-size.x * 0.5 - 1.0, 0.0, -1.4)
 	if services != null and services.ai_nav != null:
 		var snapped := services.ai_nav.snap(at)
 		if snapped.distance_to(at) < 2.0:
@@ -399,7 +757,7 @@ func mount_point() -> Vector3:
 ## Is `p` beside the cab: its front half, either side.
 func can_reach(p: Pawn) -> bool:
 	var local := global_transform.basis.inverse() * (p.feet() - feet())
-	return absf(local.x) < SIZE.x * 0.5 + HIJACK_REACH and local.z < 0.5 and local.z > -SIZE.z * 0.5 - 1.0 \
+	return absf(local.x) < size.x * 0.5 + HIJACK_REACH and local.z < 0.5 and local.z > -size.z * 0.5 - 1.0 \
 			and local.y > -1.0 and local.y < 2.0
 
 
@@ -409,9 +767,10 @@ func _arrive(why: String) -> void:
 	stopped_because = why
 	state = "arrived"
 	# Unloaded, it goes: an empty truck is in the next one's way.
-	get_tree().create_timer(LEAVE_AFTER).timeout.connect(func() -> void:
-		if is_instance_valid(self) and state == "arrived" and cargo.is_empty() and rodeo.rider_count() == 0:
-			queue_free())
+	if not is_apc():
+		get_tree().create_timer(LEAVE_AFTER).timeout.connect(func() -> void:
+			if is_instance_valid(self) and state == "arrived" and cargo.is_empty() and rodeo.rider_count() == 0:
+				queue_free())
 	if _path_id >= 0 and _nav != null:
 		_nav.release(_path_id)
 	arrived.emit(self)
@@ -439,7 +798,7 @@ func tailgate_points(threat: Vector3, n: int) -> Array[Vector3]:
 	var b := global_transform.basis
 	var side := b.x if (b.x.dot(global_position - threat) > 0.0) else -b.x
 	var rear := b.z
-	var base := global_position + rear * (SIZE.z * 0.5 + 1.0)
+	var base := global_position + rear * (size.z * 0.5 + 1.0)
 	for i in n * 3:
 		if out.size() >= n:
 			break
@@ -454,41 +813,87 @@ func _on_wrecked() -> void:
 	state = "wrecked"
 	throttle = 0.0
 	steer = 0.0
+	fire_main = false
+	if gun != null:
+		gun.set_trigger(false)
+	if bricks != null:
+		bricks.burn()
+	_smoke_from(Vector3(0.0, 1.6, -size.z * 0.3))
 	if pawn != null and is_instance_valid(pawn) and services != null:
 		services.pawns.erase(pawn)
 	wrecked.emit(self)
 
 
+## Its body in bricks (VehicleBricks), by zone. Studs across (x) and along (z,
+## forward is -z), plates up from the feet:
+##   wheels   four, a stud wide and two long, two courses, under the corners;
+##   chassis  two plates the whole length over them, the bed's floor;
+##   engine   the front three studs, from the chassis to the hood's top;
+##   cab      behind it, up to the roof; the bed's sides and tailgate one
+##            course high, open on top for riders.
 func _build_look() -> void:
-	var olive := StandardMaterial3D.new()
-	olive.albedo_color = Color(0.33, 0.38, 0.24)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.12, 0.12, 0.12)
-	var parts := [
-		# cab, bed, and the bed's sides: open, for riders to stand in and shoot
-		[Vector3(2.2, 1.6, 1.8), Vector3(0.0, 1.2, -1.8), olive],
-		[Vector3(2.3, 0.5, 3.6), Vector3(0.0, 0.8, 0.9), olive],
-		[Vector3(0.12, 0.5, 3.6), Vector3(-1.09, 1.3, 0.9), olive],
-		[Vector3(0.12, 0.5, 3.6), Vector3(1.09, 1.3, 0.9), olive],
-		[Vector3(2.3, 0.5, 0.12), Vector3(0.0, 1.3, 2.64), olive],
-	]
-	for p in parts:
-		var mi := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = p[0]
-		bm.material = p[2]
-		mi.mesh = bm
-		mi.position = p[1]
-		add_child(mi)
-	for x in [-1.1, 1.1]:
-		for z in [-1.9, 1.6]:
-			var w := MeshInstance3D.new()
-			var cm := CylinderMesh.new()
-			cm.top_radius = 0.45
-			cm.bottom_radius = 0.45
-			cm.height = 0.35
-			cm.material = dark
-			w.mesh = cm
-			w.rotation.z = PI * 0.5
-			w.position = Vector3(x, 0.45, z)
-			add_child(w)
+	if is_apc():
+		_build_apc()
+		return
+	var olive := Color(0.33, 0.38, 0.24)
+	var dark := Color(0.12, 0.12, 0.12)
+	var grille := Color(0.26, 0.24, 0.18)
+	var glass := Color(0.35, 0.45, 0.5)
+	bricks = VehicleBricks.attach(self)
+	var b := bricks.add_part(self)
+	var hp: Dictionary = BRICK_HP
+	for x in [-3.0, 2.0]:
+		for z in [-6.5, 3.5]:
+			bricks.fill(b, &"wheels", Vector3(x, 0, z), Vector3(x + 1.0, 6, z + 2.0), dark, hp[&"wheels"])
+	bricks.fill(b, &"body", Vector3(-3, 6, -5), Vector3(3, 8, 8), olive, hp[&"body"])
+	bricks.fill(b, &"engine", Vector3(-3, 6, -8), Vector3(3, 11, -5), grille, hp[&"engine"], true)
+	bricks.fill(b, &"body", Vector3(-3, 8, -5), Vector3(3, 11, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 11, -5), Vector3(3, 15, -4), glass, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 11, -4), Vector3(3, 15, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 15, -5), Vector3(3, 17, -1), olive, hp[&"body"], true)
+	bricks.fill(b, &"body", Vector3(-3, 8, -1), Vector3(-2, 11, 8), olive, hp[&"body"])
+	bricks.fill(b, &"body", Vector3(2, 8, -1), Vector3(3, 11, 8), olive, hp[&"body"])
+	bricks.fill(b, &"body", Vector3(-2, 8, 7), Vector3(2, 11, 8), olive, hp[&"body"], true)
+	for z in ZONE_KEEP:
+		bricks.keep(z, ZONE_KEEP[z])
+	bricks.finish()
+	bricks.zone_lost.connect(_on_zone_lost)
+
+
+## The APC in bricks, by zone (studs across and along, forward -z; plates up):
+##   wheels   four a side, a stud wide and two long, two courses;
+##   hull     a course of belly between them, then a box 8 studs wide to 13
+##            plates up, its back a door; the engine its front four studs;
+##   gun      a turret 3 studs square on the roof, and its barrel.
+func _build_apc() -> void:
+	var sand := Color(0.4, 0.39, 0.29)
+	var dark := Color(0.12, 0.12, 0.12)
+	var grille := Color(0.27, 0.25, 0.2)
+	bricks = VehicleBricks.attach(self)
+	var b := bricks.add_part(self)
+	var hp := {&"hull": 120.0, &"engine": 90.0, &"wheels": 70.0, &"gun": 80.0}
+	for x in [-4.0, 3.0]:
+		for z in [-8.0, -4.0, 2.0, 6.0]:
+			bricks.fill(b, &"wheels", Vector3(x, 0, z), Vector3(x + 1.0, 6, z + 2.0), dark, hp[&"wheels"])
+	bricks.fill(b, &"hull", Vector3(-3, 3, -9), Vector3(3, 6, 9), sand, hp[&"hull"])
+	bricks.fill(b, &"engine", Vector3(-3, 6, -9), Vector3(3, 13, -5), grille, hp[&"engine"], true)
+	bricks.fill(b, &"hull", Vector3(-4, 6, -9), Vector3(-3, 13, -5), sand, hp[&"hull"])
+	bricks.fill(b, &"hull", Vector3(3, 6, -9), Vector3(4, 13, -5), sand, hp[&"hull"])
+	bricks.fill(b, &"hull", Vector3(-4, 6, -5), Vector3(4, 13, 9), sand, hp[&"hull"])
+	turret = Node3D.new()
+	turret.name = "Turret"
+	turret.position = Vector3(0.0, 13 * VehicleBricks.PLATE, -0.5)
+	add_child(turret)
+	var tu := bricks.add_part(turret)
+	bricks.fill(tu, &"gun", Vector3(-1.5, 0, -1.5), Vector3(1.5, 4, 1.5), sand, hp[&"gun"], true)
+	muzzle = Node3D.new()
+	muzzle.name = "Muzzle"
+	muzzle.position = Vector3(0.0, 2 * VehicleBricks.PLATE, -1.5 * VehicleBricks.STUD)
+	turret.add_child(muzzle)
+	var g := bricks.add_part(muzzle)
+	bricks.fill(g, &"gun", Vector3(-0.5, -1, -6), Vector3(0.5, 1, 0), dark, hp[&"gun"])
+	bricks.keep(&"engine", 0.5)
+	bricks.keep(&"wheels", 0.6)
+	bricks.keep(&"gun", 0.5)
+	bricks.finish()
+	bricks.zone_lost.connect(_on_zone_lost)

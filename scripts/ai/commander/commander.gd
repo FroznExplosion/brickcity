@@ -64,6 +64,8 @@ var squads: Array[Squad] = []
 var spawner := Callable()
 ## The host can bring a squad by truck (TransportTruck).
 var can_truck := false
+## The host can field an APC (TransportTruck kind &"apc").
+var can_apc := false
 ## SUPPORT it buys besides squads (Doctrine.support; AIRoster.md RO11): air --
 ## a flyer or hover craft of the roster -- or a tank. Every SUPPORT_GAP seconds
 ## it considers one purchase: each kind under its cap comes up at the doctrine's
@@ -505,8 +507,13 @@ func _reinforce(now_please: bool) -> bool:
 	# How it comes: by truck, if it can pay and the doctrine likes it.
 	var arrival: StringName = &"foot"
 	var truck := UnitCatalog.points(&"truck")
-	if can_truck and bool(UnitCatalog.get_unit(&"truck").built) and budget >= cost + truck \
-			and _force_arrival != &"foot" \
+	var apc := UnitCatalog.points(&"apc")
+	if can_apc and bool(UnitCatalog.get_unit(&"apc").built) and budget >= cost + apc \
+			and (_force_arrival == &"apc" or (_force_arrival == &"" and _rng.randf() < doctrine.apc_share)):
+		arrival = &"apc"
+		cost += apc
+	elif can_truck and bool(UnitCatalog.get_unit(&"truck").built) and budget >= cost + truck \
+			and _force_arrival != &"foot" and _force_arrival != &"apc" \
 			and (_force_arrival == &"truck" or _rng.randf() < doctrine.truck_share):
 		arrival = &"truck"
 		cost += truck
@@ -521,7 +528,7 @@ func _reinforce(now_please: bool) -> bool:
 	_last_reinforce = now
 	reinforcements += 1
 	_note("reinforce: %s%s (%.1f pts), answering %s" % [", ".join(kinds),
-			" by truck" if arrival == &"truck" else "", cost, doctrine.answering])
+			"" if arrival == &"foot" else " by " + String(arrival), cost, doctrine.answering])
 	return true
 
 

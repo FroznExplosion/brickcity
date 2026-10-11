@@ -740,6 +740,13 @@ var _vehicle_pilot := VehiclePilot.new()
 var _hop_in_at := 0.0
 ## Friendly soldiers this near the player's vehicle, stopped, hop on its deck.
 const HOP_IN_RANGE := 15.0
+## What a tank's lost damage zone means, for the log (Tank, VehicleBricks).
+const ZONE_LOST_LINES := {&"engine": "engine destroyed -- it will not drive, and the turret turns by hand",
+		&"track_l": "left track thrown -- it can only turn", &"track_r": "right track thrown -- it can only turn",
+		&"turret": "turret jammed", &"gun": "cannon shot off -- the machine gun still works",
+		&"ammo": "AMMO RACK HIT -- it cooks off"}
+const TRUCK_ZONE_LOST_LINES := {&"engine": "engine shot out -- it will not drive",
+		&"wheels": "wheels shot off -- half speed", &"gun": "its gun shot off"}
 ## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
 ## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
 var weight: WeightTracker
@@ -1014,6 +1021,7 @@ func _ready() -> void:
 	_setup_gun()
 	ai_world.set_world(world)
 	ai_nav.set_ai_world(ai_world)
+	AIServices.use_hierarchy(ai_nav)
 	# NavChange (R17): the commands that change structure are the ones that say
 	# where navigation is stale.
 	authority.committed.connect(_nav_on_command)
@@ -1051,6 +1059,7 @@ func _ready() -> void:
 	mech_nav = MechBrain.mech_nav(ai_world)
 	# Whatever changes where a figure can walk changes where a mech can.
 	ai_nav.nav_changed.connect(mech_nav.invalidate_box)
+	ai_services.share_nav(mech_nav)
 	weight = WeightTracker.new(ai_world, world)
 	weight.on_load = _weight_load
 	weight.on_unload = _weight_unload
@@ -4531,7 +4540,10 @@ func _spawn_tank(feet: Vector3, yaw: float, team: int, crewed: bool) -> Tank:
 			so.pawn.team = team
 			t.board(so.pawn, seat, true)
 	t.wrecked.connect(func(w: Tank) -> void:
-		print("[city] tank wrecked at %v" % w.feet()))
+		print("[city] tank wrecked at %v%s" % [w.feet(), " -- its ammo cooked off" if w.cooked_off else ""]))
+	t.damaged.connect(func(zone: StringName) -> void:
+		var whose := "your tank" if _vehicle_pilot.vehicle == t else "a tank of side %d" % t.team
+		print("[city] %s: %s" % [whose, ZONE_LOST_LINES.get(zone, String(zone) + " gone")]))
 	_wire_deck(t)
 	t.player_thrown.connect(func() -> void:
 		if _vehicle_pilot.vehicle == t:
@@ -4577,9 +4589,10 @@ func _vehicle_at_side() -> CharacterBody3D:
 func _use_vehicle(v: CharacterBody3D) -> void:
 	var drive := false
 	if v is Tank:
+		# A seat: the driver's if it is free, the gunner's with one of ours driving.
 		var t := v as Tank
-		drive = not t.player_in and not Tank._alive(t.crew[Tank.Seat.DRIVER]) \
-				and (t.is_empty() or t.team == _player_pawn.team)
+		drive = not t.player_in and (t.is_empty() or (t.team == _player_pawn.team
+				and (t.seat_free(Tank.Seat.DRIVER) or t.seat_free(Tank.Seat.GUNNER))))
 	else:
 		var tr := v as TransportTruck
 		drive = tr.is_empty() and tr.can_reach(_player_pawn)
@@ -4617,9 +4630,12 @@ func _drive_vehicle(v: CharacterBody3D) -> void:
 		v.wrecked.connect(_on_driven_wrecked)
 	_hop_in_at = 0.0
 	if v is Tank:
-		print("[city] driving a tank: WASD drive, LMB cannon, RMB machine gun, C inside/behind, M to get out")
+		print("[city] in a tank, %s; C inside/behind, M to get out" % VehiclePilot.seat_line(v as Tank))
 	else:
-		print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
+		if (v as TransportTruck).is_apc():
+			print("[city] driving an APC: W/S throttle, A/D steer, LMB its gun, C inside/behind, M to get out")
+		else:
+			print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
 
 
 ## Out on foot beside it, `hurt` for a wreck or a boarder; its riders get down
@@ -4639,7 +4655,7 @@ func _leave_vehicle(hurt := 0.0) -> void:
 func _on_driven_wrecked(v: Node) -> void:
 	if _vehicle_pilot.vehicle == v:
 		print("[city] wrecked: you climb out")
-		_leave_vehicle(Tank.BAIL_HURT)
+		_leave_vehicle(float(v.get(&"bail_hurt")) if v is Tank else Tank.BAIL_HURT)
 
 
 ## Halo's marines: while the player drives a vehicle of theirs and it stands
@@ -4655,6 +4671,11 @@ func _hop_in() -> void:
 		return
 	var deck: VehicleDeck = v.rodeo
 	var room := deck.riders.size() - deck.rider_count()
+	# A tank's gunner's seat first, if the player drives it alone (Halo's
+	# marine on the Warthog's gun).
+	var tank := v as Tank
+	var seat := Tank.Seat.GUNNER if tank != null and tank.player_drives() \
+			and tank.seat_free(Tank.Seat.GUNNER) else -1
 	var near := []
 	for p in ai_services.pawns:
 		if not is_instance_valid(p) or p.team != v.team or p.body == null:
@@ -4663,7 +4684,10 @@ func _hop_in() -> void:
 		if so == null or p.health == null or p.health.is_dead():
 			continue
 		if so.board_vehicle == v:
-			room -= 1
+			if so.board_seat >= 0:
+				seat = -1
+			else:
+				room -= 1
 			continue
 		if so.board_vehicle != null or so.board_mech != null or so.rodeo_target != null \
 				or p.has_meta(&"riding") or p.has_meta(&"aboard") or p.has_meta(&"in_vehicle"):
@@ -4672,6 +4696,8 @@ func _hop_in() -> void:
 		if d < HOP_IN_RANGE:
 			near.append([d, so])
 	near.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
+	if seat >= 0 and not near.is_empty():
+		(near.pop_front()[1] as Soldier).ride_on(v, seat)
 	for i in mini(room, near.size()):
 		(near[i][1] as Soldier).ride_on(v)
 
@@ -4703,12 +4729,25 @@ func _wire_deck(v: Node3D) -> void:
 
 ## A truck of side `team` at `feet`, facing `yaw`, with `cargo` in the back
 ## (put down at its tailgate when it stops: _truck_unload).
-func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]) -> TransportTruck:
-	var tr := TransportTruck.make(ai_services, self, feet, yaw)
+func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName],
+		kind := &"truck") -> TransportTruck:
+	var gi: GunInstance = null
+	if kind == &"apc":
+		if ai_services.world3d == null:
+			ai_services.world3d = get_world_3d()
+			ai_services.on_structure_hit = _gun.on_structure_hit
+		if _gun_library == null:
+			_gun_library = GunPlaceholderParts.build_library()
+		gi = GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+				WeaponClass.builtin(&"lmg"), 1))
+	var tr := TransportTruck.make(ai_services, self, feet, yaw, kind, gi, _gun.on_structure_hit, _combat_rng)
 	tr.team = team
 	tr.cargo = cargo
 	tr.arrived.connect(_truck_unload)
 	_wire_deck(tr)
+	tr.damaged.connect(func(zone: StringName) -> void:
+		var whose := "your truck" if _vehicle_pilot.vehicle == tr else "a truck of side %d" % tr.team
+		print("[city] %s: %s" % [whose, TRUCK_ZONE_LOST_LINES.get(zone, String(zone) + " gone")]))
 	tr.wrecked.connect(func(w: TransportTruck) -> void:
 		print("[city] truck wrecked at %v%s" % [w.feet(), (" with %d aboard" % w.cargo.size()) if not w.cargo.is_empty() else ""])
 		w.cargo.clear()
@@ -4717,7 +4756,8 @@ func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]
 			if is_instance_valid(w):
 				w.queue_free()))
 	trucks.append(tr)
-	print("[city] truck of side %d at %v%s" % [team, feet, (", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
+	print("[city] %s of side %d at %v%s" % [tr.name.to_lower(), team, feet,
+			(", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
 	return tr
 
 
@@ -4729,15 +4769,25 @@ func _truck_unload(tr: TransportTruck) -> void:
 	var threat := _player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn) \
 			else tr.global_position + Vector3.FORWARD
 	var spots := tr.tailgate_points(threat, tr.cargo.size())
-	var squad_at := Vector3.INF
+	var members: Array[Soldier] = []
 	for i in tr.cargo.size():
 		var at: Vector3 = spots[i] if i < spots.size() else ai_nav.snap(tr.global_position
-				+ tr.global_transform.basis.z * (TransportTruck.SIZE.z * 0.5 + 1.2 + i))
-		_spawn_soldier(at)
-		if squad_at == Vector3.INF:
-			squad_at = at
-	print("[city] truck unloaded %d at %v (%s)" % [tr.cargo.size(), tr.global_position, tr.stopped_because])
+				+ tr.global_transform.basis.z * (tr.size.z * 0.5 + 1.2 + i))
+		members.append(_spawn_soldier(at))
+	print("[city] %s unloaded %d at %v (%s)" % [tr.name.to_lower(), tr.cargo.size(), tr.global_position,
+			tr.stopped_because])
 	tr.cargo.clear()
+	# An APC's squad is one, and it covers them (moving cover).
+	if tr.is_apc() and not members.is_empty():
+		var q := Squad.make(ai_services, self, members, 1)
+		squads.append(q)
+		if _player_pawn != null and is_instance_valid(_player_pawn):
+			var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+			o.point = _player_pawn.feet()
+			for m in members:
+				m.knowledge().heard(_player_pawn, _player_pawn.feet(), ai_services.now())
+			q.give(o)
+		tr.escort = q
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -5212,6 +5262,29 @@ func _run_vehicles_pass() -> void:
 	Input.parse_input_event(click)
 	await _frames(20)
 	_gate_ok("LMB fires its cannon", t.shells > shells)
+	# Its seats: Q to the gunner's -- nobody drives now -- and back.
+	_key(KEY_Q, true)
+	await _frames(2)
+	_key(KEY_Q, false)
+	await _frames(5)
+	var at_gun := t.feet()
+	_key(KEY_W, true)
+	await _frames(60)
+	_key(KEY_W, false)
+	_gate_ok("Q: the gunner's seat -- W drives nothing", t.player_seat == Tank.Seat.GUNNER
+			and t.feet().distance_to(at_gun) < 0.5, "seat %d, moved %.1f m" % [t.player_seat, t.feet().distance_to(at_gun)])
+	_key(KEY_Q, true)
+	await _frames(2)
+	_key(KEY_Q, false)
+	await _frames(5)
+	# Back at the wheel, standing: a friend near takes the gunner's seat.
+	var gunner := _spawn_soldier(ai_nav.snap(t.feet() + t.global_transform.basis.z * 7.0))
+	gunner.team = 0
+	gunner.pawn.team = 0
+	await _frames(600)
+	_gate_ok("Q back at the wheel; a friend near takes the gunner's seat", t.player_drives()
+			and t.crew[Tank.Seat.GUNNER] == gunner.pawn and not t.player_guns(),
+			"seat %d, gunner %s (%s)" % [t.player_seat, t.crew[Tank.Seat.GUNNER], gunner.state])
 	await _save("city_vehicles")
 	_key(KEY_M, true)
 	await _frames(2)
@@ -5409,8 +5482,13 @@ func _ai_tick(destruction_ms: float) -> void:
 		enc.step(func(id: int) -> void: _promote(id, false))
 	if ai_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 5.0, _nav_service)
+	elif ai_nav.warm_pending() > 0:
+		# Nothing asked: the hierarchy round the player, last in line (AINav.warm).
+		ai_sched.submit(AIScheduler.NAV, 1.0, _nav_service)
 	if mech_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 6.0, _mech_nav_service)
+	elif mech_nav.warm_pending() > 0:
+		ai_sched.submit(AIScheduler.NAV, 1.0, _mech_nav_service)
 	# Weight is structure: only the host turns it into commands (R5).
 	if authority.may_decide():
 		weight.tick(ai_services.now())
@@ -10595,7 +10673,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_Z:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
 			var truck_nav := ai_services.vehicle_nav(&"truck")
-			if event.ctrl_pressed and event.shift_pressed:
+			if event.alt_pressed and event.shift_pressed:
+				_spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(ahead)), camera.global_rotation.y, 0,
+						[] as Array[StringName], &"apc")
+			elif event.alt_pressed:
+				# An enemy APC from further off with a squad inside: it stops at
+				# contact, lets them out in its lee and covers them.
+				var far := camera.global_position - camera.global_transform.basis.z * 80.0
+				var apc := _spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(far)),
+						camera.global_rotation.y + PI, 1,
+						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName], &"apc")
+				apc.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
+						else _on_ground(camera.global_position))
+			elif event.ctrl_pressed and event.shift_pressed:
 				# From further off, coming for the player with a squad in the back.
 				var far := camera.global_position - camera.global_transform.basis.z * 60.0
 				var tr := _spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,

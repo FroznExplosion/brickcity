@@ -108,6 +108,8 @@ var spacing := 2.2
 var roster := BASE.duplicate()
 ## How often a reinforcement comes by truck, when the side can pay for one.
 var truck_share := 0.4
+## How often by APC (asked before the truck), when it can pay for one.
+var apc_share := 0.25
 ## Support kind (&"air", &"tank") -> its weight now (SUPPORT_BASE, answered).
 var support := SUPPORT_BASE.duplicate()
 ## What the tally taught it: "part:value" -> multiplier (learn).
@@ -167,6 +169,10 @@ func update(profile: ThreatProfile, desperation: float, difficulty: float) -> vo
 	# later against a demolisher (a truck is a target it will not miss).
 	truck_share = clampf(0.4 + (0.2 if style == "sniper" else 0.0)
 			- (0.25 if style == "demolisher" else 0.0), 0.0, 0.8)
+	# By APC: armour across a sniper's open ground, and cover to advance behind;
+	# against a demolisher, a vehicle is what its blasts do not stop.
+	apc_share = clampf(0.25 + (0.15 if style == "sniper" else 0.0)
+			+ (0.1 if style == "demolisher" else 0.0), 0.0, 0.6)
 
 
 ## Learn from a tally's data (TacticsTally.data): each move judged LEARN_MIN times

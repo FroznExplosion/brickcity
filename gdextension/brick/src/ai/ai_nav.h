@@ -26,6 +26,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -73,6 +74,61 @@ public:
     void set_agent(int span, int head_stand, int head_crouch, int step_up, int max_drop,
             int safe_drop);
     int get_span() const { return span; }
+
+    /// A tracked vehicle CRUSHES what is low enough (Docs/AIVehicles.md 3): a
+    /// run of bricks standing on the ground -- a garden wall, a barricade, a
+    /// heap of rubble -- more than a step high and no more than `plates`, is a
+    /// way THROUGH at its foot, for `cost_m` metres of driving more than the
+    /// road beside it. 0 (the default) crushes nothing. Forgets every column.
+    void set_crush(int plates, float cost_m);
+    int get_crush() const { return crush; }
+
+    /// An agent that BREACHES (Docs/AI.md 3.6, breach links): a column of
+    /// bricks in its way at the height it walks is a way through, for `cost_m`
+    /// metres of walking a column -- the time it takes it to open one, as
+    /// distance. A wall two studs thick is two columns. Bricks only: never the
+    /// terrain under the ground, never down through a floor. 0 (the default)
+    /// breaches nothing. Forgets every column. Where a path goes through bricks
+    /// is get_breaches / get_last_breaches.
+    void set_breach(float cost_m);
+    float get_breach() const { return breach_cost; }
+    /// The points where a finished path enters bricks it has to open, in order
+    /// (the first column of each run): for a request, and for the last find_path.
+    PackedVector3Array get_breaches(int id) const;
+    PackedVector3Array get_last_breaches() const { return last_breaches; }
+
+    // --- the hierarchy (HPA*, Docs/AI.md 4.3.1) -------------------------------
+    //
+    // A path between far points is found on a small graph first: the map cut
+    // into square CLUSTERS of `cluster` columns (sized to the agent: a tank's
+    // cluster is bigger than a soldier's), their ENTRANCES -- each run of the
+    // border between two clusters a body crosses, at each height, one node a
+    // side, sampled every RUN columns -- and what it costs to walk from one
+    // entrance of a cluster to another inside it (a Dijkstra in the cluster,
+    // worked out the first time a search needs it, kept until something there
+    // changes). A* on that graph is a few hundred nodes for a walk across the
+    // city; the brick-level path is then found a cluster at a time between the
+    // entrances it chose. What the agent can do -- climb, drop, crush, breach --
+    // is the same `_step` both levels walk, so every map (each size, each
+    // vehicle) gets its own hierarchy for free. An invalidation forgets the
+    // borders and costs of the clusters it touches.
+    //
+    // Used for a request whose ends are in different clusters, once the plain
+    // search has failed to find it in a few times the straight distance in
+    // nodes (PLAIN_FIRST): across open ground the plain search is the cheaper,
+    // round walls and through buildings the hierarchy. 0 turns it off.
+    void set_hierarchy(int cluster_columns);
+    int get_hierarchy() const { return cluster; }
+    /// A border run this long or shorter is one entrance; longer, two, a little
+    /// in from its ends.
+    static constexpr int HIER_RUN = 10;
+    static constexpr int PLAIN_FIRST = 48;
+    /// Work out the hierarchy round `at` -- every cluster within `radius_m` --
+    /// in service()'s spare time, before anybody asks: where the fight is, the
+    /// first searches find it ready. Nearest first; asked again, it starts over
+    /// from the new point.
+    void warm(const Vector3 &at, float radius_m);
+    int warm_pending() const { return (int)warm_queue.size(); }
 
     /// A path now, whatever it costs, up to `max_expansions` nodes. Empty if none.
     PackedVector3Array find_path(const Vector3 &from, const Vector3 &to, int max_expansions);
@@ -156,9 +212,14 @@ private:
     struct Floor {
         int16_t y = 0;       // plate the feet are on
         int16_t head = 0;    // plates of air above
+        int16_t crush = 0;   // plates of bricks the agent crushes to stand here
     };
     struct Column {
         std::vector<Floor> floors;
+        // A breaching agent's: plates up from the column's ground (terrain), and
+        // which plates over it are bricks, packed a bit a plate.
+        int16_t ground = 0;
+        std::vector<uint8_t> brick;
     };
     struct Node {
         int x = 0, z = 0, y = 0;
@@ -178,6 +239,7 @@ private:
         std::vector<Open> open;
         std::unordered_map<int64_t, float> cost;
     };
+    struct HpaState;
     struct Search {
         int id = 0;
         float priority = 0.0f;
@@ -191,7 +253,19 @@ private:
         int expansions = 0;
         int max_expansions = 60000;
         PackedVector3Array path;
+        PackedVector3Array breaches;
         uint32_t revision = 0;
+        // A hierarchical search's own state (null for a plain one).
+        std::shared_ptr<HpaState> hpa;
+        // start and goal are nodes already (a stretch of a hierarchical path).
+        bool presnapped = false;
+        // Far ends: the plain search had its few nodes first (PLAIN_FIRST).
+        bool tried_plain = false;
+        bool plain_first = false;
+        bool capped = false;
+        int full_cap = 0;
+        // The hierarchy ran out of budget: the plain search, all of it.
+        bool no_hier = false;
         // The columns it has read so far, as a box: an invalidation outside it
         // cannot have changed anything this search knows.
         int lo_x = 0, hi_x = -1, lo_z = 0, hi_z = -1;
@@ -205,6 +279,71 @@ private:
     int step_up = STEP_UP;
     int max_drop = MAX_DROP;
     int safe_drop = SAFE_DROP;
+    int crush = 0;
+    float crush_cost = 0.0f;
+    float breach_cost = 0.0f;
+    PackedVector3Array last_breaches;
+
+    // The hierarchy.
+    int cluster = 0;
+    struct Side {
+        Node node;
+        int cx = 0, cz = 0;      // its cluster
+        int partner = -1;        // the other side of its entrance
+        float cross = 0.0f;      // stepping over to the partner, INF if it cannot
+        bool alive = true;
+        uint32_t edges_rev = 0;  // its cluster's revision when edges were found
+        std::vector<std::pair<int, float>> edges;   // to other sides of its cluster
+    };
+    std::vector<Side> sides;
+    // Border (between cluster (cx, cz) and its +x or +z neighbour) -> its sides.
+    std::unordered_map<int64_t, std::vector<int>> borders;
+    std::unordered_map<int64_t, uint32_t> cluster_rev;
+    // Clusters to work out in spare time (warm), nearest first; and the time a
+    // cluster gets per turn.
+    std::vector<std::pair<int, int>> warm_queue;
+    void _warm_step(uint64_t until_usec);
+    uint64_t stat_hier_paths = 0;
+    uint64_t stat_hier_nodes = 0;
+    uint64_t stat_hier_dijkstra = 0;
+    uint64_t stat_hier_usec = 0;
+    static int64_t bkey(int cx, int cz, int axis) {
+        return ((int64_t)(cx & 0xFFFFF) << 22) | ((int64_t)(cz & 0xFFFFF) << 2) | (int64_t)axis;
+    }
+    int _cluster_of(int v) const { return v >= 0 ? v / cluster : -((-v - 1) / cluster) - 1; }
+    uint32_t _crev(int cx, int cz);
+    const std::vector<int> &_border(int cx, int cz, int axis);
+    void _cluster_sides(int cx, int cz, std::vector<int> &out);
+    void _side_edges(int sid);
+    /// Dijkstra from `from` over anchors inside the box, up to `cap` nodes.
+    void _local_costs(const Node &from, int x0, int z0, int x1, int z1, int cap,
+            std::unordered_map<int64_t, float> &g, const std::vector<int64_t> *targets = nullptr);
+    /// Cost from every node of the box TO `to` (reversed steps, as a field's).
+    void _local_costs_to(const Node &to, int x0, int z0, int x1, int z1, int cap,
+            std::unordered_map<int64_t, float> &g);
+    /// Run the hierarchical search `s` until done or `until_usec`. True when done.
+    bool _advance_hier(Search &s, uint64_t until_usec);
+    void _hier_forget(int x0, int z0, int x1, int z1);
+    /// Make `s` hierarchical if its ends are far apart; true if it did.
+    bool _hier_begin(Search &s);
+    /// Is the region round `seeds` (sides) closed: everything it joins, either
+    /// way, found within `limit` sides without meeting any of `other`? Then
+    /// there is no way between them (a sealed room, a roof with no way up).
+    /// False when not proven -- the limit reached, or `other` met.
+    bool _hier_enclosed(const std::vector<int> &seeds, const std::vector<int> &other, int limit);
+    static constexpr int ENCLOSED_LIMIT = 96;
+    uint64_t stat_hier_enclosed = 0;
+    /// Walk straight from `a` towards `b`, a _step at a time, inside the box:
+    /// its cost if it gets there, INF if it does not. Cheaper than a Dijkstra
+    /// across open ground; an upper bound, never a way that is not there.
+    float _straight(const Node &a, const Node &b, int x0, int z0, int x1, int z1);
+    /// Bricks in column (x, z) anywhere from plate y up through a crouch's air:
+    /// a breaching agent may go into it there.
+    bool _breachable(int x, int z, int y);
+    /// A node at (x, z, y) a breacher can take: bricks under its footprint
+    /// there, and every other column of it a floor at y or bricks too.
+    bool _breach_fit(int x, int z, int y);
+    int terrain_plate(float x, float z);
     float water_level = -1e30f;
     bool stand_only = true;
     std::unordered_map<int64_t, Column> columns;

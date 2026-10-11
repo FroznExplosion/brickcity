@@ -32,6 +32,20 @@ const TEAM_NEAR := 15.0
 const FRIENDS_NEAR := 40.0
 ## Our tank or mech within this: "Our heavy support is here" (heavy_near).
 const HEAVY_NEAR := 30.0
+## The player in a building (the moment "Player is in a building"): how its ways
+## in are judged -- a way in on foot this many times the straight distance (plus
+## a few metres) is close by, past WAY_FAR times it is a long way round, and a
+## breach this share of the walk is much the shorter -- and how long one look
+## at them is kept, for soldiers about as far off as each other.
+const WAY_NEAR := 1.5
+const WAY_FAR := 2.0
+const WAY_SLACK := 12.0
+const BREACH_SHORT := 0.6
+const WAY_KEEP := 4.0
+const WAY_GRID := 8.0
+## Nodes a look at the ways in may cost, each.
+const WAY_BUDGET := 8000
+static var _ways := {}
 
 
 ## {moment, facts: Array[String], amounts: {dist, pcover, cover, hp, mag, squad, php}}.
@@ -95,6 +109,18 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 		add.call("open")
 	if s.sight_mul < 0.8:
 		add.call("low_vis")
+	# The player in a building and us outside it: how we would get in.
+	if not inside and BTShelter.covered(s, them):
+		amounts["_p_inside"] = 1.0
+		var w := ways_in(so, them)
+		if bool(w.no_way):
+			add.call("no_way")
+		elif bool(w.far):
+			add.call("way_far")
+		else:
+			add.call("way_near")
+		if bool(w.breach_short):
+			add.call("breach_short")
 
 	# Us.
 	amounts["dist"] = dist
@@ -126,7 +152,61 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	if so.type_facts.is_empty() and StringName(so.get_meta(&"unit", &"")) == &"marksman":
 		add.call("we_marksman")
 
-	return {"moment": _moment(so, c, facts, amounts, now), "facts": facts, "amounts": amounts}
+	var moment := _moment(so, c, facts, amounts, now)
+	amounts.erase("_p_inside")
+	return {"moment": moment, "facts": facts, "amounts": amounts}
+
+
+## The ways into the building the player is in, from where `so` is: {walk,
+## breach, straight (metres; INF for none), no_way, far, breach_short, door --
+## where the walk goes under a roof, the way the player would come out -- or
+## INF}. One look serves every soldier about as far off for WAY_KEEP seconds.
+static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
+	var s := so.services
+	var feet := so.pawn.feet()
+	var now := s.now()
+	var key := "%d:%d:%d|%d:%d:%d" % [so.team, roundi(feet.x / WAY_GRID), roundi(feet.z / WAY_GRID),
+			roundi(them.x / 3.0), roundi(them.y / 3.0), roundi(them.z / 3.0)]
+	var held: Dictionary = _ways.get(key, {})
+	if not held.is_empty() and now - float(held.at) < WAY_KEEP:
+		return held
+	var nav := so._nav()
+	var walk_path := nav.find_path(nav.snap(feet), nav.snap(them), WAY_BUDGET)
+	var walk := _length(walk_path) if not walk_path.is_empty() else INF
+	var bn := s.foot_breach_nav()
+	var breach_path := bn.find_path(bn.snap(feet), bn.snap(them), WAY_BUDGET)
+	var breach := _length(breach_path) if not breach_path.is_empty() else INF
+	var straight := feet.distance_to(them)
+	# The door: where the walk goes under the roof -- the last stretch still out
+	# under the sky, walked half a metre at a time to the first step covered.
+	var door := Vector3.INF
+	for i in range(walk_path.size() - 1, -1, -1):
+		if not BTShelter.covered(s, walk_path[i]):
+			if i + 1 < walk_path.size():
+				var a: Vector3 = walk_path[i]
+				var b: Vector3 = walk_path[i + 1]
+				var n := maxi(1, int(a.distance_to(b) / 0.5))
+				for k in range(1, n + 1):
+					var q := a.lerp(b, float(k) / n)
+					if BTShelter.covered(s, q):
+						door = q
+						break
+			break
+	var w := {"at": now, "walk": walk, "breach": breach, "straight": straight, "door": door,
+			"no_way": walk == INF,
+			"far": walk != INF and walk > straight * WAY_FAR + WAY_SLACK,
+			"breach_short": breach != INF and breach < walk * BREACH_SHORT}
+	if _ways.size() > 256:
+		_ways.clear()
+	_ways[key] = w
+	return w
+
+
+static func _length(p: PackedVector3Array) -> float:
+	var n := 0.0
+	for i in range(1, p.size()):
+		n += p[i - 1].distance_to(p[i])
+	return n
 
 
 ## The same reading for a FLYER over `target` (Flyer): distance, how covered the
@@ -249,6 +329,10 @@ static func _moment(so: Soldier, c: FactionKnowledge.Contact, facts: Array, amou
 		return "close_quarters"
 	if float(amounts.squad) <= 50.0 or (facts.has("we_alone") and float(amounts.hp) < 40.0):
 		return "losing"
+	# The player in a building, us outside (read above): getting in, or not --
+	# before anything else, as it is the question the whole squad faces.
+	if amounts.has("_p_inside"):
+		return "player_inside"
 	# With our own armour beside us we are not outgunned: we screen it.
 	if facts.has("heavy_near"):
 		return "have_heavy"

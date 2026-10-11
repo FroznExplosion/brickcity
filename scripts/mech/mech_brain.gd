@@ -19,6 +19,18 @@ extends Node
 ## first brick between the mech and infantry it knows are in there, until the line
 ## is open. Structure goes through the owner's `on_structure_hit` -- in the city,
 ## the authority -- like any gun's.
+##
+## A mech BREACHES ITS WAY (Docs/AI.md 3.6): it walks the breaching mech map
+## (AIServices.mech_breach_nav: a wall is a way through at BREACH_COST a column,
+## about what its fists take), so a wall between it and where it is going is a
+## door it makes when that is shorter than going round. Its path says where it
+## goes into bricks; there it walks up to the wall and punches a hole its own
+## size (Mech.punch_wall, a blast through the structure hit, so co-op agrees) --
+## the first brick in the way at its knees, its waist and its head, across its
+## width (path_breach), with the launcher too if it has one -- until its own map
+## says a mech goes through there, and walks through. Given BREACH_GIVE_UP
+## seconds and still shut, it goes the plain map's way for a while. `can_breach`
+## off (a mech kept from wrecking its own side's base), it never does.
 
 enum Order { NONE, FOLLOW, HOLD, ATTACK_AREA }
 ## What the casebook's mech section has it doing (BookCombatPolicy.decide_mech;
@@ -58,6 +70,15 @@ const FOLLOW_NEAR := 5.0
 const FOLLOW_FAR := 8.0
 const WAYPOINT_REACHED := 1.0
 const STUCK_SECONDS := 2.0
+## A wall column on the breaching mech map: metres of walking it is worth. A
+## mech's footprint is ten columns, so a one-stud wall is some fifteen metres.
+const BREACH_COST := 3.0
+## It starts on a breach point from this far, and punches from within reach.
+const BREACH_STAND := 9.0
+const BREACH_GIVE_UP := 40.0
+const BREACH_NO_AGAIN := 30.0
+## How often it asks its own map whether a mech goes through the hole yet.
+const GAP_EVERY := 1.0
 ## How far off the arm may point and still fire.
 const FIRE_CONE_DEG := 4.0
 
@@ -105,6 +126,20 @@ var _think_queued := false
 var _target: Pawn
 ## Where the launcher is to put its rounds (a breach), or INF.
 var breach_point := Vector3.INF
+## The breaching mech map (a mech with a launcher), and where the path in hand
+## goes into bricks; the brick it is opening now, or INF.
+var breach_nav: AINav
+var can_breach := true
+var path_breach := Vector3.INF
+## Holes opened on the way, for gates.
+var breached := 0
+var _path_nav: AINav
+var _breaches := PackedVector3Array()
+var _bi := 0
+var _breach_since := -INF
+var _no_breach_until := -INF
+var _gap_checked := -INF
+var _gap_open := false
 var _want_dir := Vector3.ZERO
 var _goal := Vector3.INF
 var _path_id := -1
@@ -147,13 +182,15 @@ static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree
 
 ## The mech map's numbers for a mech: its footprint in studs, its height and its
 ## step in plates, and a drop no further than a storey's worth of fall rule.
-static func mech_nav(ai_world: AIWorld) -> AINav:
+static func mech_nav(ai_world: AIWorld, breach := 0.0) -> AINav:
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	var span := int(round(Mech.RADIUS * 2.0 / Mech.STUD))
 	var head := int(ceil(Mech.HEIGHT / 0.14))
 	n.set_agent(span, head, head, 9, 17, 17)
-	return n
+	if breach > 0.0 and n.has_method(&"set_breach"):
+		n.call(&"set_breach", breach)
+	return AIServices.use_hierarchy(n)
 
 
 ## A launcher on the arm: ordnance, for walls.
@@ -480,6 +517,8 @@ func _fire(_now: float) -> void:
 		aim_at = MechLayers.aim_point(_target, mech.muzzle.global_position)
 	elif breach_point != Vector3.INF:
 		aim_at = breach_point
+	elif path_breach != Vector3.INF:
+		aim_at = path_breach
 	if aim_at == Vector3.INF:
 		mech.aim_point = Vector3.INF
 		mech.gun.set_trigger(false)
@@ -550,24 +589,35 @@ func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
 	if _goal == Vector3.INF or goal.distance_to(_goal) > 1.5:
 		_goal = goal
-		if _path_id >= 0:
-			nav.release(_path_id)
-		_path_id = nav.request_path(mech.feet(), goal, importance, 30000)
+		if _path_id >= 0 and _path_nav != null:
+			_path_nav.release(_path_id)
+		# With a launcher it may make its own way, unless that just failed.
+		if breach_nav == null and can_breach:
+			breach_nav = services.mech_breach_nav()
+		_path_nav = breach_nav if can_breach and breach_nav != null and now >= _no_breach_until else nav
+		_path_id = _path_nav.request_path(mech.feet(), goal, importance, 30000)
 		_path = PackedVector3Array()
+		_breaches = PackedVector3Array()
+		_bi = 0
+		path_breach = Vector3.INF
 		_wp = 0
 		_stuck_from = mech.feet()
 		_stuck_at = now
 	if _path.is_empty():
-		var st := nav.get_status(_path_id)
+		var st := _path_nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			_want_dir = Vector3.ZERO
 			return 0
 		if st != AINav.DONE:
 			_want_dir = Vector3.ZERO
 			return -1
-		_path = nav.get_path(_path_id)
+		_path = _path_nav.get_path(_path_id)
+		if _path_nav.has_method(&"get_breaches"):
+			_breaches = _path_nav.call(&"get_breaches", _path_id)
 		_wp = 1 if _path.size() > 1 else 0
 	var feet := mech.feet()
+	if _breach_step(feet, now):
+		return 0
 	while _wp < _path.size():
 		var w: Vector3 = _path[_wp]
 		if Vector2(w.x - feet.x, w.z - feet.z).length() > WAYPOINT_REACHED:
@@ -588,6 +638,104 @@ func move_to(goal: Vector3, run := false) -> int:
 	return 0
 
 
+## At the next breach point of its path: stopped short of it, opening it (the
+## launcher, through _fire) until a hole its size is there. True while it is.
+func _breach_step(feet: Vector3, now: float) -> bool:
+	if _bi >= _breaches.size():
+		path_breach = Vector3.INF
+		return false
+	var b: Vector3 = _breaches[_bi]
+	if Vector2(b.x - feet.x, b.z - feet.z).length() > BREACH_STAND:
+		path_breach = Vector3.INF
+		return false
+	# Open when its own map -- which knows a mech's size -- has a short way
+	# through there now; asked once a second, not every think.
+	if now - _gap_checked >= GAP_EVERY:
+		_gap_checked = now
+		_gap_open = _gap_through(feet, b)
+	var wall := Vector3.INF
+	if not _gap_open:
+		wall = _wall_at(feet, b)
+		if wall == Vector3.INF:
+			# Nothing in the lines it looks along, but not a mech's way yet:
+			# the middle of the hole, to widen it.
+			wall = Vector3(b.x, feet.y + Mech.HEIGHT * 0.5, b.z)
+	if _gap_open:
+		# Open: on through it.
+		if path_breach != Vector3.INF:
+			breached += 1
+		path_breach = Vector3.INF
+		_breach_since = -INF
+		_gap_checked = -INF
+		_gap_open = false
+		_bi += 1
+		return false
+	if _breach_since == -INF:
+		_breach_since = now
+	elif now - _breach_since > BREACH_GIVE_UP:
+		# It will not open: the plain map's way, for a while.
+		_no_breach_until = now + BREACH_NO_AGAIN
+		_breach_since = -INF
+		path_breach = Vector3.INF
+		_goal = Vector3.INF
+		return false
+	state = "breach its way"
+	path_breach = wall
+	mech.intents.sprint = false
+	# Up to the wall, then fists.
+	var to_wall := Vector3(wall.x - feet.x, 0.0, wall.z - feet.z)
+	if to_wall.length() > Mech.MELEE_REACH - 0.6:
+		_want_dir = to_wall.normalized()
+	else:
+		_want_dir = Vector3.ZERO
+		mech.punch_wall(wall, mech.gun.on_structure_hit)
+	# Opening a wall is not being stuck.
+	_stuck_from = feet
+	_stuck_at = now
+	return true
+
+
+## Does the plain mech map have a way from here to just past breach point `b`,
+## not much longer than straight through?
+func _gap_through(feet: Vector3, b: Vector3) -> bool:
+	var dir := Vector3(b.x - feet.x, 0.0, b.z - feet.z)
+	if dir.length() < 0.1:
+		return false
+	var past := Vector3(b.x, feet.y, b.z) + dir.normalized() * (Mech.RADIUS * 2.0 + 1.0)
+	var p := nav.find_path(nav.snap(feet), nav.snap(past), 4000)
+	if p.is_empty():
+		return false
+	var walk := 0.0
+	for i in range(1, p.size()):
+		walk += p[i - 1].distance_to(p[i])
+	return walk < feet.distance_to(past) * 1.6 + 2.0
+
+
+## The first brick between the mech and just past breach point `b`, at its
+## knees, waist and head, either side of its middle and in it; INF when a mech
+## goes through there now.
+func _wall_at(feet: Vector3, b: Vector3) -> Vector3:
+	var dir := Vector3(b.x - feet.x, 0.0, b.z - feet.z)
+	if dir.length() < 0.1:
+		return Vector3.INF
+	dir = dir.normalized()
+	var side := Vector3(-dir.z, 0.0, dir.x)
+	var best := Vector3.INF
+	var best_d := INF
+	for h: float in [1.0, Mech.HEIGHT * 0.4, Mech.HEIGHT * 0.7, Mech.HEIGHT - 0.3]:
+		for s: float in [-Mech.RADIUS - 0.2, -Mech.RADIUS * 0.5, 0.0, Mech.RADIUS * 0.5, Mech.RADIUS + 0.2]:
+			var from := feet + Vector3.UP * h + side * s
+			var to := Vector3(b.x, feet.y, b.z) + dir * 2.5 + Vector3.UP * h + side * s
+			var hit: Dictionary = services.ai_world.trace(from, to)
+			if bool(hit.get("hit", false)):
+				var p: Vector3 = hit.point
+				var d := p.distance_to(feet)
+				if d < best_d:
+					best_d = d
+					best = p
+	return best
+
+
 func stop() -> void:
 	_want_dir = Vector3.ZERO
 	mech.intents.sprint = false
@@ -595,7 +743,7 @@ func stop() -> void:
 
 ## Face `p` with the torso when there is nothing to shoot.
 func face(p: Vector3) -> void:
-	if _target != null or breach_point != Vector3.INF:
+	if _target != null or breach_point != Vector3.INF or path_breach != Vector3.INF:
 		return
 	var to := p - mech.feet()
 	if Vector2(to.x, to.z).length() > 0.5:
@@ -613,5 +761,5 @@ func _steer() -> void:
 	it.move_dir = Vector2(_want_dir.dot(b.x), -_want_dir.dot(b.z))
 	# Nothing to shoot: face where it is going -- unless it is backing into a
 	# wall on purpose (CRUSH).
-	if _target == null and breach_point == Vector3.INF and stance != Stance.CRUSH:
+	if _target == null and breach_point == Vector3.INF and path_breach == Vector3.INF and stance != Stance.CRUSH:
 		it.aim_yaw = atan2(-_want_dir.x, -_want_dir.z)

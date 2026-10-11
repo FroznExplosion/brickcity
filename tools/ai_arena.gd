@@ -42,6 +42,7 @@ func _init(tree: SceneTree, seed := 1) -> void:
 	s.ai_world.set_world(w)
 	s.ai_nav = AINav.new()
 	s.ai_nav.set_ai_world(s.ai_world)
+	AIServices.use_hierarchy(s.ai_nav)
 	s.sched = AIScheduler.new()
 	s.world3d = root.get_world_3d()
 	s.on_structure_hit = structure_hit
@@ -76,6 +77,9 @@ func bricks(lo: Vector3i, size: Vector3i) -> int:
 	_shapes[c] = [body.get_rid(), built.map]
 	s.ai_world.sync()
 	s.ai_nav.clear_cache()
+	# Every other size's map and every vehicle's: they read the same bricks.
+	for n in s.navs.values():
+		(n as AINav).clear_cache()
 	return c
 
 

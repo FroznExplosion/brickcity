@@ -26,6 +26,13 @@ extends Node
 ## circles inside it and makes slow attack passes, and a target outside the area
 ## is fought from its edge, never chased. Shot down, any flyer falls; a hover
 ## craft comes down with a crash (CRASH).
+##
+## It shares the sky and the ground through its side's Airspace: it flies in its
+## own LANE (a few metres over or under others round the same target), is pushed
+## off any flyer too near and up off the top of a mech or a tank, and it LANDS
+## only on a pad it has claimed (`land`): a danger box soldiers clear and ground
+## vehicles hold short of; it waits over the pad while anybody is on it, comes
+## down while it is clear, and gives it up when it lifts off (`lift_off`).
 
 const THINK_HZ := 5.0
 const DIRECTED_THINK_HZ := 1.5
@@ -57,6 +64,10 @@ const HOVER_SPEED := 6.0
 const HOVER_RUN := 9.0
 const HOVER_UP := 12.0
 const LOITER := 40.0
+## Landing: the pad's radius, how fast it comes down, and how high it waits.
+const PAD_RADIUS := 4.0
+const LAND_SPEED := 3.0
+const PAD_WAIT := 8.0
 ## Coming down: gravity, and a hover craft's crash -- [damage, reach].
 const FALL_G := 20.0
 const CRASH := [90.0, 5.0]
@@ -109,6 +120,11 @@ var hover := false
 var loiter_center := Vector3.INF
 ## Shot down and on the ground.
 var crashed := false
+## Coming down on a pad (land): where, its pad, and whether it is down.
+var land_at := Vector3.INF
+var pad := -1
+var landed := false
+var _registered := false
 
 
 static func spawn(s: AIServices, parent: Node, at: Vector3, p_team: int, g: GunInstance,
@@ -162,7 +178,38 @@ static func spawn(s: AIServices, parent: Node, at: Vector3, p_team: int, g: GunI
 	parent.add_child(b)
 	b.global_position = at
 	f.tier_hsm = AgentTier.attach(f, start_tier)
+	s.air().register(f)
+	f._registered = true
 	return f
+
+
+## Come down at `at` (the ground there): its pad is claimed now, or false if
+## another flyer has one there.
+func land(at: Vector3) -> bool:
+	lift_off()
+	var id := services.air().claim_pad(self, at, PAD_RADIUS)
+	if id < 0:
+		return false
+	pad = id
+	land_at = at
+	landed = false
+	state = "to the pad"
+	return true
+
+
+## Up off the pad (or off its way down), and the pad given up.
+func lift_off() -> void:
+	if pad >= 0:
+		services.air().release_pad(pad)
+	pad = -1
+	land_at = Vector3.INF
+	landed = false
+
+
+func _exit_tree() -> void:
+	if _registered and services != null:
+		services.air().unregister(self)
+		_registered = false
 
 
 func set_tier(t: int) -> void:
@@ -262,6 +309,10 @@ func _top(x: float, z: float) -> float:
 func _physics_process(delta: float) -> void:
 	if is_dead():
 		gun.set_trigger(false)
+		if _registered:
+			services.air().unregister(self)
+			_registered = false
+			pad = -1
 		_fall(delta)
 		return
 	var now := services.now()
@@ -276,9 +327,13 @@ func _physics_process(delta: float) -> void:
 	lowest_clearance = minf(lowest_clearance, p.y - _top(p.x, p.z))
 	# Never below CLEARANCE over the height field -- round it and ahead of it --
 	# whatever it wants.
+	if land_at != Vector3.INF:
+		_land_step(p, delta)
+		_fire()
+		return
 	var ahead := p + Vector3(body.velocity.x, 0.0, body.velocity.z) * LOOK_AHEAD
 	var floor_h := maxf(height_at(p), height_at(ahead))
-	var v := _want
+	var v := _want + services.air().separation(self, p)
 	var min_y := floor_h + CLEARANCE
 	# A bomber on its last stretch comes down to its target: nothing else may.
 	if mode == Mode.DIVE and target != null and is_instance_valid(target) \
@@ -303,6 +358,37 @@ func _physics_process(delta: float) -> void:
 		body.velocity.y = maxf(body.velocity.y, (min_y + 1.5 - p.y) * 4.0)
 	body.move_and_slide()
 	_fire()
+
+
+## To its pad, over it, and down while it is clear -- back up to wait if
+## anybody comes onto it on the way down.
+func _land_step(p: Vector3, delta: float) -> void:
+	if landed:
+		state = "landed"
+		body.velocity = Vector3.ZERO
+		return
+	var air := services.air()
+	var wait_y := land_at.y + PAD_WAIT
+	var flat := Vector2(land_at.x - p.x, land_at.z - p.z)
+	var v := Vector3.ZERO
+	if flat.length() > 1.0:
+		state = "to the pad"
+		var alt := maxf(height_at(p) + CLEARANCE, wait_y)
+		v = Vector3(flat.x, 0.0, flat.y).normalized() * minf(HOVER_SPEED if hover else SPEED, flat.length() * 2.0)
+		v.y = (alt - p.y) * 2.0
+		v += air.separation(self, p)
+	elif not air.pad_clear(pad):
+		state = "waiting for the pad"
+		v = Vector3(flat.x, (wait_y - p.y) * 2.0, flat.y)
+	else:
+		state = "landing"
+		v = Vector3(flat.x * 2.0, -LAND_SPEED, flat.y * 2.0)
+		if p.y - land_at.y <= 0.7:
+			landed = true
+			body.velocity = Vector3.ZERO
+			return
+	body.velocity = body.velocity.lerp(v, clampf(delta * 3.0, 0.0, 1.0))
+	body.move_and_slide()
 
 
 ## Shot down: it falls, and a hover craft hits the ground with a crash.
@@ -338,6 +424,10 @@ func _think() -> void:
 	_hp_seen = hp
 	target = _pick_target()
 	var p := body.global_position
+	# Landing: its pad says where it goes (_land_step); it still picks a target
+	# to shoot at.
+	if land_at != Vector3.INF:
+		return
 	if target == null:
 		state = "patrol"
 		_want = Vector3.ZERO
@@ -376,7 +466,8 @@ func _think() -> void:
 		Mode.RUN:
 			state = "run"
 			var rs := HOVER_RUN if hover else RUN_SPEED
-			var alt := maxf(height_at(p), height_at(p + _run_dir * rs)) + CLEARANCE + 3.0
+			var alt := maxf(height_at(p), height_at(p + _run_dir * rs)) + CLEARANCE + 3.0 \
+					+ services.air().lane_of(self)
 			_want = _run_dir * rs + Vector3.UP * (alt - p.y) * 1.5
 			# A pass that would take a hover craft out of its area is broken off.
 			var next := p + _run_dir * rs * 1.5
@@ -400,7 +491,7 @@ func _think() -> void:
 			var rel := Vector2(p.x - t.x, p.z - t.z)
 			_orbit_angle = rel.angle() + 0.35 * orbit_dir
 			var spot := in_area(t + Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT)
-			spot.y = height_at(spot) + (HOVER_UP if hover else ORBIT_UP)
+			spot.y = height_at(spot) + (HOVER_UP if hover else ORBIT_UP) + services.air().lane_of(self)
 			var to := spot - p
 			_want = to.normalized() * minf(HOVER_SPEED if hover else SPEED, to.length() * 2.0)
 

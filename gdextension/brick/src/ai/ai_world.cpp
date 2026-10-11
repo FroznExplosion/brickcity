@@ -49,6 +49,8 @@ void AIWorld::_bind_methods() {
             &AIWorld::cover_seconds_batch);
     ClassDB::bind_method(D_METHOD("set_proxy", "id", "xform", "size", "bricks_per_metre"),
             &AIWorld::set_proxy);
+    ClassDB::bind_method(D_METHOD("set_cover", "id", "xform", "size", "bricks_per_metre"),
+            &AIWorld::set_cover);
     ClassDB::bind_method(D_METHOD("remove_proxy", "id"), &AIWorld::remove_proxy);
     ClassDB::bind_method(D_METHOD("clear_proxies"), &AIWorld::clear_proxies);
     ClassDB::bind_method(D_METHOD("get_proxy_count"), &AIWorld::get_proxy_count);
@@ -312,6 +314,14 @@ void AIWorld::_walk_proxy(Proxy &p, const Vector3 &from, const Vector3 &to, Accu
     if (!_segment_box(la, lb, AABB(-p.half, p.half * 2.0f), t0, t1)) {
         return;
     }
+    if (p.cover) {
+        const auto inside = [&p](const Vector3 &l) {
+            return std::fabs(l.x) <= p.half.x && std::fabs(l.y) <= p.half.y && std::fabs(l.z) <= p.half.z;
+        };
+        if (inside(la) || inside(lb)) {
+            return;
+        }
+    }
     acc.proxy_bricks += (t1 - t0) * from.distance_to(to) * p.bricks_per_metre;
     if (t0 < acc.first_t) {
         acc.first_t = t0;
@@ -424,6 +434,12 @@ void AIWorld::set_proxy(int id, const Transform3D &xform, const Vector3 &size,
     p.box = xform.xform(AABB(-p.half, size));
     proxies[id] = p;
     proxies_dirty = true;
+}
+
+void AIWorld::set_cover(int id, const Transform3D &xform, const Vector3 &size,
+        float bricks_per_metre) {
+    set_proxy(id, xform, size, bricks_per_metre);
+    proxies[id].cover = true;
 }
 
 void AIWorld::remove_proxy(int id) {
@@ -556,7 +572,7 @@ bool AIWorld::solid_at(const Vector3 &p) {
     if (pit != proxy_hash.end()) {
         for (int index : pit->second) {
             const Proxy &pr = proxy_list[index];
-            if (!pr.box.has_point(p)) {
+            if (pr.cover || !pr.box.has_point(p)) {
                 continue;
             }
             const Vector3 l = pr.inv.xform(p);
@@ -645,6 +661,9 @@ void AIWorld::column_solid(float x, float z, std::vector<char> &out) {
         for (int index : pit->second) {
             const Proxy &pr = proxy_list[index];
             const AABB &b = pr.box;
+            if (pr.cover) {
+                continue;
+            }
             if (x < b.position.x || x > b.position.x + b.size.x || z < b.position.z
                     || z > b.position.z + b.size.z) {
                 continue;
@@ -682,6 +701,9 @@ float AIWorld::top_at(float x, float z) {
     if (pit != proxy_hash.end()) {
         for (int index : pit->second) {
             const AABB &b = proxy_list[index].box;
+            if (proxy_list[index].cover) {
+                continue;
+            }
             if (x >= b.position.x && x <= b.position.x + b.size.x && z >= b.position.z
                     && z <= b.position.z + b.size.z) {
                 top = std::max(top, b.position.y + b.size.y);

@@ -21,9 +21,17 @@ static func of_piece(islands: IslandManager, isl: BrickIsland) -> AABB:
 	return box.merge(ahead).grow(MARGIN)
 
 
+## The pieces' danger ids set last time: only those are taken down again, so
+## the danger others keep there (Airspace's landing pads) stays.
+static var _ids: Array[int] = []
+
+
 ## Every big piece still moving, as danger boxes in `ai_world`.
 static func update(ai_world: AIWorld, islands: IslandManager) -> void:
-	ai_world.clear_danger()
+	for id in _ids:
+		ai_world.remove_danger(id)
+	_ids.clear()
 	for isl in islands.islands:
 		if isl.is_valid() and not isl.settled and not isl.disposable:
 			ai_world.set_danger(isl.chunk, of_piece(islands, isl))
+			_ids.append(isl.chunk)

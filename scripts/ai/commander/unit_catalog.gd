@@ -43,8 +43,10 @@ const UNITS := {
 	# Built: a squad can be bought "by truck" (TransportTruck, AIVehicles.md 6.1).
 	&"truck": {"name": "Truck", "points": 4.0, "mobility": &"wheeled", "role": &"transport",
 			"seats": 8, "built": true},
+	# Built: a squad can be bought "by APC" -- armoured, armed, moving cover
+	# (TransportTruck kind &"apc", AIVehicles.md 6 step 2).
 	&"apc": {"name": "APC", "points": 12.0, "mobility": &"wheeled", "role": &"apc",
-			"seats": 8, "built": false},
+			"seats": 8, "built": true},
 	&"ifv": {"name": "IFV", "points": 15.0, "mobility": &"tracked", "role": &"ifv",
 			"seats": 6, "built": false},
 	# Built (RO10): a commander buys it as support (Commander.buy_support).

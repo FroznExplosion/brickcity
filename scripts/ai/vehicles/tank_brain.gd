@@ -16,6 +16,13 @@ extends Node
 ## AIVehicles.md 4) it goes at the squad's pace: it waits when they fall more
 ## than WAIT_FOR behind it.
 ##
+## Each seat is the brain's only while a crewman is in it and the player is
+## not: with the player at the gun and one of theirs at the wheel, the driver
+## takes them to the fight -- the side's best contact, held off at HOLD_RANGE --
+## and with the player at the wheel, the gunner shoots on its own (Halo's).
+## A tank that cannot drive (an engine or a track gone, Tank.can_drive) holds
+## where it is.
+##
 ## The gunner points the turret at the side's best contact and fires the
 ## cannon when it is on (AIM_TOL), at what it sees -- and at where the enemy
 ## was last heard or seen, through the wall: the cannon opens walls (AI.md
@@ -54,7 +61,8 @@ var goal := Vector3.INF
 ## The squad screening it: it keeps their pace.
 var escort: Squad
 var importance := 7.0
-## What it is doing, for logs and probes: idle, drive, pivot, hold, wait, stuck.
+## What it is doing, for logs and probes: idle, drive, pivot, hold, wait, stuck,
+## immobile.
 var state := "idle"
 ## Which map its path is on: "vehicle" (VehicleNav), "foot" (none on the vehicle
 ## map, so the walking one), or "" before it has asked.
@@ -112,16 +120,29 @@ func take_hold_counts() -> Dictionary:
 
 
 func _physics_process(_delta: float) -> void:
-	if tank.is_wrecked() or not enabled or tank.player_in:
+	if tank.is_wrecked() or not enabled:
 		return
 	var now := services.now()
 	if now >= _next_sense and not _sense_queued and tank.crew_count() > 0:
 		_sense_queued = true
 		services.sched.submit(AIScheduler.PERCEPTION, importance, _sense)
-	_gunner(now)
-	var why := hold_fire if hold_fire != "" else "firing"
-	hold_ticks[why] = int(hold_ticks.get(why, 0)) + 1
-	_driver(now)
+	if not tank.player_in or tank.ai_guns():
+		_gunner(now)
+		var why := hold_fire if hold_fire != "" else "firing"
+		hold_ticks[why] = int(hold_ticks.get(why, 0)) + 1
+	if not tank.player_in or tank.ai_drives():
+		_to_the_fight(now)
+		_driver(now)
+
+
+## The player on the gun, one of theirs driving: to where the side's best
+## contact is, again when it has moved a way off.
+func _to_the_fight(now: float) -> void:
+	if tank.player_seat != Tank.Seat.GUNNER:
+		return
+	var c := knowledge().best(now)
+	if c != null and (goal == Vector3.INF or _flat(goal - c.pos).length() > 10.0):
+		send(c.pos)
 
 
 # --- eyes ---------------------------------------------------------------------------
@@ -223,6 +244,9 @@ func _driver(now: float) -> void:
 	if not tank.driven():
 		state = "idle"
 		return
+	if not tank.can_drive():
+		state = "immobile"
+		return
 	if now < _reverse_until:
 		tank.throttle = -1.0
 		state = "stuck"
@@ -278,6 +302,13 @@ func _driver(now: float) -> void:
 	tank.steer = clampf(off * 2.0, -1.0, 1.0)
 	if absf(off) > PIVOT:
 		state = "pivot"
+		_moved_at = now
+		return
+	# A flyer coming down ahead (Airspace pad): hold short of it.
+	if services.airspace != null and services.airspace.blocks(tank.feet() + tank.forward() * (Tank.HULL.z * 0.5 + 4.0),
+			Tank.HULL.x):
+		state = "landing ahead"
+		tank.steer = 0.0
 		_moved_at = now
 		return
 	state = "drive"

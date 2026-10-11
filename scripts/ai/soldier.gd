@@ -142,7 +142,24 @@ var rodeo_target: Object
 var _rodeo_retry_at := 0.0
 ## A vehicle of its side to ride on (VehicleDeck): walked to and got on. Null
 ## for none; given up after BOARD_VEHICLE_GIVE_UP or when there is no way.
+## The casebook's "breach": it walks the breaching map (AIServices.
+## foot_breach_nav) and plants a charge where its path goes into bricks.
+var breach_way := false
+## The casebook's "guard the ways out" / "wait": where to watch from cover --
+## the door the player would come out of -- or INF.
+var watch_point := Vector3.INF
+## Charges blown on the way in, for gates.
+var charges := 0
+## Seconds a charge takes to plant; it blows this big.
+const PLANT_SECONDS := 2.0
+const CHARGE_RADIUS := 1.3
+var _breaches := PackedVector3Array()
+var _bi := 0
+var _plant_since := -INF
+var _path_nav: AINav
 var board_vehicle: Node3D
+## A seat in `board_vehicle` (Tank.Seat) to take rather than its deck, or -1.
+var board_seat := -1
 var _board_vehicle_since := 0.0
 const BOARD_VEHICLE_GIVE_UP := 15.0
 const RODEO_RANGE := 35.0
@@ -808,12 +825,28 @@ func _aboard(now: float) -> void:
 func _board_vehicle_step(now: float) -> void:
 	var v := board_vehicle
 	var deck: VehicleDeck = v.rodeo if is_instance_valid(v) else null
-	if deck == null or v.is_wrecked() or v.team != team or deck.free_spot() < 0 \
+	var tank: Tank = v as Tank if is_instance_valid(v) else null
+	var seat := board_seat if tank != null and board_seat >= 0 and tank.seat_free(board_seat) else -1
+	if deck == null or v.is_wrecked() or v.team != team or (seat < 0 and deck.free_spot() < 0) \
 			or now - _board_vehicle_since > BOARD_VEHICLE_GIVE_UP:
 		board_vehicle = null
+		board_seat = -1
 		stop()
 		return
 	state = "boarding"
+	if seat >= 0:
+		# Its seat: in at the hatch.
+		if tank.can_reach(pawn):
+			stop()
+			board_vehicle = null
+			board_seat = -1
+			tank.board(pawn, seat)
+			return
+		if move_to(_nav().snap(tank.mount_point()), true) == -1:
+			board_vehicle = null
+			board_seat = -1
+			stop()
+		return
 	if deck.can_ride(pawn):
 		stop()
 		board_vehicle = null
@@ -828,15 +861,24 @@ func _board_vehicle_step(now: float) -> void:
 		stop()
 
 
-## Go and ride on `v` (a vehicle of this side).
-func ride_on(v: Node3D) -> void:
+## Go and ride on `v` (a vehicle of this side) -- or in it, at `seat` of a tank.
+func ride_on(v: Node3D, seat := -1) -> void:
 	board_vehicle = v
+	board_seat = seat
 	_board_vehicle_since = services.now()
 
 
 func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
-	var nav := _nav()
+	# Its own way in (breach_way): the breaching map, kept for the path in hand.
+	var want_nav := services.foot_breach_nav() if breach_way and self.nav == null else _nav()
+	if _path_nav != want_nav:
+		if _path_id >= 0 and _path_nav != null:
+			_path_nav.release(_path_id)
+			_path_id = -1
+		_path_nav = want_nav
+		_repath = true
+	var nav := _path_nav
 	# Trapped (no way anywhere, several times running): stop asking until it is
 	# time to look again -- rubble may have made a way down since.
 	if trapped:
@@ -873,11 +915,17 @@ func move_to(goal: Vector3, run := false) -> int:
 			_path_failed(now)
 			return -1
 		_path = nav.get_path(_path_id)
+		_breaches = nav.call(&"get_breaches", _path_id) if breach_way and nav.has_method(&"get_breaches") \
+				else PackedVector3Array()
+		_bi = 0
+		_plant_since = -INF
 		if not _fails.is_empty() and _fails.size() >= TRAP_FAILS:
 			print("[soldier] a way out after %.0f s trapped" % (now - _trapped_since))
 		_fails.clear()
 		_wp = 1 if _path.size() > 1 else 0
 	var feet := pawn.feet()
+	if _plant_step(feet, now):
+		return 0
 	while _wp < _path.size():
 		var w: Vector3 = _path[_wp]
 		# Level with it too: the far side of a drop is a step away across and a
@@ -1129,6 +1177,40 @@ func set_size(size: String, roster: Roster) -> void:
 	melee_reach = MELEE_REACH * maxf(1.0, sx * 0.6)
 	if name_tag != null:
 		name_tag.position = Vector3.UP * (tall * 0.5 + TAG_ABOVE)
+
+
+## At the next breach point of its path: stopped there, a charge planted for
+## PLANT_SECONDS and blown (services.on_breach, the ordinary damage path), then on
+## through the hole. True while it is planting.
+func _plant_step(feet: Vector3, now: float) -> bool:
+	if _bi >= _breaches.size():
+		return false
+	var b: Vector3 = _breaches[_bi]
+	if Vector2(b.x - feet.x, b.z - feet.z).length() > 1.8 or absf(b.y - feet.y) > 1.5:
+		return false
+	var dir := Vector3(b.x - feet.x, 0.0, b.z - feet.z)
+	dir = dir.normalized() if dir.length() > 0.05 else -pawn.body.global_basis.z
+	var at := Vector3(b.x, feet.y + 1.0, b.z) + dir * 0.2
+	# Bricks there still? Blown already, or never: on.
+	if services.ai_world.line_clear(feet + Vector3.UP * 1.0, at + dir * 0.8):
+		_bi += 1
+		_plant_since = -INF
+		return false
+	pawn.intents.move = Vector3.ZERO
+	state = "breaching"
+	_stuck_from = feet
+	_stuck_at = now
+	if _plant_since == -INF:
+		_plant_since = now
+		services.say(pawn, "breach", "Breaching!")
+	elif now - _plant_since >= PLANT_SECONDS:
+		if services.on_breach.is_valid():
+			services.on_breach.call(at, CHARGE_RADIUS)
+		charges += 1
+		_bi += 1
+		_plant_since = -INF
+		_repath = true
+	return true
 
 
 ## The map this body walks.

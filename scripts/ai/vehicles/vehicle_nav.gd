@@ -12,8 +12,11 @@ extends RefCounted
 ## not; and it drops no more than a kerb's worth. A hole shot in a wall is a way
 ## the moment it is wide enough, as it is for a body -- nothing is baked.
 ##
-## Not yet (AIVehicles.md 3): rubble dearer than road, and a tracked vehicle
-## crushing low walls and rubble -- a tank goes round them like a truck.
+## A tracked vehicle CRUSHES (AINav.set_crush): a run of bricks on the ground
+## more than its step and no more than `crush` plates -- a garden wall, a
+## barricade, a heap of rubble -- is a way through at its foot, for `crush_cost`
+## metres more than the road beside it (Tank._crush does it). Not yet: rubble
+## dearer than road for wheels.
 ##
 ## One map per KIND, kept by AIServices (vehicle_nav) and served in its tick.
 
@@ -28,7 +31,9 @@ const MARGIN := 0.15
 ## and plates it drops off an edge.
 const KINDS := {
 	&"truck": {"width": 2.3, "height": 2.4, "step": 2, "drop": 4, "mobility": &"wheeled"},
-	&"tank": {"width": 3.15, "height": 2.92, "step": 3, "drop": 5, "mobility": &"tracked"},
+	&"apc": {"width": 2.8, "height": 2.5, "step": 2, "drop": 4, "mobility": &"wheeled"},
+	&"tank": {"width": 3.15, "height": 2.92, "step": 3, "drop": 5, "mobility": &"tracked",
+			"crush": Tank.CRUSH_PLATES, "crush_cost": 4.0},
 }
 
 
@@ -42,7 +47,10 @@ static func make(ai_world: AIWorld, kind: StringName) -> AINav:
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	n.set_agent(span_of(kind), head_of(kind), head_of(kind), int(k.step), int(k.drop), int(k.drop))
-	return n
+	# An engine library built before set_crush: the tank goes round, as it did.
+	if k.has("crush") and n.has_method(&"set_crush"):
+		n.call(&"set_crush", int(k.crush), float(k.crush_cost))
+	return AIServices.use_hierarchy(n)
 
 
 ## Studs square a vehicle of `kind` takes on its map.

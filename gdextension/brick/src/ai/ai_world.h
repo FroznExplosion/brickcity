@@ -78,6 +78,14 @@ public:
     /// A box that stands in for bricks nobody has built: a pristine building's
     /// wall slab, a sleeping piece. `bricks_per_metre` of travel through it.
     void set_proxy(int id, const Transform3D &xform, const Vector3 &size, float bricks_per_metre);
+    /// A box that is COVER and nothing else: a vehicle (Docs/AIVehicles.md 4,
+    /// moving cover). Lines through it count it as a proxy's bricks -- sight,
+    /// fire, cover_seconds -- but it is not solid to navigation (it moves; the
+    /// walking map would be read again every time it did), and a line that
+    /// starts or ends inside it does not count it: that line is to the vehicle
+    /// itself, or from a crewman in it. The same ids as set_proxy; remove_proxy
+    /// removes it.
+    void set_cover(int id, const Transform3D &xform, const Vector3 &size, float bricks_per_metre);
     void remove_proxy(int id);
     void clear_proxies();
     int get_proxy_count() const { return (int)proxies.size(); }
@@ -154,6 +162,7 @@ private:
         Vector3 half;
         float bricks_per_metre = 0.0f;
         AABB box;
+        bool cover = false;  // set_cover: lines only
     };
     struct Sphere {
         Vector3 centre;

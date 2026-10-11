@@ -74,8 +74,11 @@ func _on_tick() -> void:
 	match _stage:
 		"build":
 			if _tick >= 10:
+				# Both runs start from a cold map: what one search learnt about
+				# the ground (the hierarchy's clusters) is not the other's.
+				a.s.ai_nav.clear_cache()
 				var st := _stats()
-				_exp0 = int(st.expansions)
+				_exp0 = (int(st.expansions) + int(st.get("hier_nodes", 0)))
 				_paths0 = int(st.paths)
 				var o := SquadMsg.Order.make(SquadMsg.OrderKind.MOVE)
 				o.point = GOAL
@@ -89,7 +92,7 @@ func _on_tick() -> void:
 					_log["report"] = r
 			if _log.has("report") or now - _t > 70.0:
 				var st := _stats()
-				_log["squad_exp"] = int(st.expansions) - _exp0
+				_log["squad_exp"] = (int(st.expansions) + int(st.get("hier_nodes", 0))) - _exp0
 				_log["squad_paths"] = int(st.paths) - _paths0
 				_log["squad_time"] = now - _t
 				_log["squad_arrived"] = _arrived()
@@ -103,8 +106,9 @@ func _on_tick() -> void:
 				_t = now
 		"reset":
 			if now - _t > 1.0:
+				a.s.ai_nav.clear_cache()
 				var st := _stats()
-				_exp0 = int(st.expansions)
+				_exp0 = (int(st.expansions) + int(st.get("hier_nodes", 0)))
 				_paths0 = int(st.paths)
 				_stage = "solo"
 				_t = now
@@ -119,7 +123,7 @@ func _on_tick() -> void:
 					done = false
 			if done or now - _t > 70.0:
 				var st := _stats()
-				_log["solo_exp"] = int(st.expansions) - _exp0
+				_log["solo_exp"] = (int(st.expansions) + int(st.get("hier_nodes", 0))) - _exp0
 				_log["solo_paths"] = int(st.paths) - _paths0
 				_log["solo_time"] = now - _t
 				_log["solo_arrived"] = _arrived()

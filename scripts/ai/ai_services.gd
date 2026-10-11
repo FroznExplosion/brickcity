@@ -26,9 +26,15 @@ const AGGRO_HZ := 5.0
 ## the owner's to draw.)
 signal flashed(point: Vector3, radius: float)
 
+## Every this many seconds the map round the player is warmed this far out.
+const WARM_EVERY := 3.0
+const WARM_RADIUS := 70.0
+var _next_warm := 0.0
 var ai_world: AIWorld
 var ai_nav: AINav
 var sched: AIScheduler
+## Flyers and the ground sharing space: lanes, separation, landing pads (air()).
+var airspace: Airspace
 ## The physics space sight rays are cast in.
 var world3d: World3D
 ## The weather (Docs/Collapse.md 4.4): true while the sky is dangerous -- a
@@ -55,6 +61,7 @@ var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
 var policy: CombatPolicy = CombatPolicy.from_args()
 const NAV_SIZE_USEC := 200
+const NAV_BUSY_USEC := 800
 ## A navigation map per SIZE of body (Roster's sizes, AIRoster.md 2.2): "person"
 ## is `ai_nav`; the others are made the first time a body of that size asks, with
 ## that size's numbers, and kept. The owner may put its own in (the city's mech
@@ -198,6 +205,84 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 		on_say.call(speaker, key, text, range_m)
 
 
+## The mech map for a mech with a launcher: walls a way through at a cost
+## (MechBrain.BREACH_COST, AINav.set_breach). Made the first time one asks,
+## served and warmed with the other maps, told what changes the walking map.
+func mech_breach_nav() -> AINav:
+	if navs.has("mech:breach"):
+		return navs["mech:breach"]
+	var n := MechBrain.mech_nav(ai_world, MechBrain.BREACH_COST)
+	if ai_nav != null:
+		n.set_water_level(ai_nav.get_water_level())
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs["mech:breach"] = n
+	return n
+
+
+## A soldier's map for making its own way in (the casebook's "breach"): the
+## walking map's body, with a wall a way through at FOOT_BREACH_COST a column
+## (a charge planted and blown). Made the first time one asks.
+const FOOT_BREACH_COST := 4.0
+
+
+func foot_breach_nav() -> AINav:
+	if navs.has("person:breach"):
+		return navs["person:breach"]
+	var n := AINav.new()
+	n.set_ai_world(ai_world)
+	if n.has_method(&"set_breach"):
+		n.call(&"set_breach", FOOT_BREACH_COST)
+	use_hierarchy(n)
+	if ai_nav != null:
+		n.set_water_level(ai_nav.get_water_level())
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs["person:breach"] = n
+	return n
+
+
+## Maps kept by others that are warmed with these (share_nav): the mech's.
+var shared_navs: Array[AINav] = []
+
+
+func share_nav(n: AINav) -> void:
+	if n != null and not shared_navs.has(n):
+		shared_navs.append(n)
+
+
+## Every map there is: the walking map, each size's and vehicle's, the shared.
+func all_navs() -> Array[AINav]:
+	var out: Array[AINav] = []
+	if ai_nav != null:
+		out.append(ai_nav)
+	for n in navs.values():
+		out.append(n as AINav)
+	for n in shared_navs:
+		if not out.has(n):
+			out.append(n)
+	return out
+
+
+## The airspace (Airspace), made the first time anybody asks.
+func air() -> Airspace:
+	if airspace == null:
+		airspace = Airspace.new(self)
+	return airspace
+
+
+## Columns a side of a map's clusters (AINav.set_hierarchy, HPA*): a soldier's
+## 24 (8.4 m, about a room); a bigger body's four of its own widths, so a cluster
+## always has room for it to turn in.
+static func hierarchy_of(span: int) -> int:
+	return maxi(24, span * 4)
+
+
+## Turn on `n`'s hierarchy, sized to who walks it.
+static func use_hierarchy(n: AINav) -> AINav:
+	if n != null and n.has_method(&"set_hierarchy"):
+		n.call(&"set_hierarchy", hierarchy_of(n.get_span()))
+	return n
+
+
 ## The map a body of `size` walks: where it fits is the map's to say, so a large
 ## body is simply not offered a door only a person fits.
 func nav_for(size: String) -> AINav:
@@ -212,6 +297,7 @@ func nav_for(size: String) -> AINav:
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	n.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
+	use_hierarchy(n)
 	# What changes the person's map changes this one.
 	if ai_nav != null:
 		ai_nav.nav_changed.connect(n.invalidate_box)
@@ -368,9 +454,26 @@ func tick() -> void:
 		for team in _aggro:
 			_aggro_tick(team, _aggro[team], dt)
 	callouts.tick(t, world3d, ai_world)
-	# The maps of the other sizes of body are served here, a little each.
+	# Every map's hierarchy worked out round the players in spare time
+	# (AINav.warm) -- the walking map, each size's, each vehicle's, the mech's:
+	# the fight is round them, and so are the searches.
+	if t >= _next_warm:
+		_next_warm = t + WARM_EVERY
+		var at := Vector3.INF
+		for p in pawns:
+			if is_instance_valid(p) and p.has_meta(&"player"):
+				at = p.feet()
+				break
+		if at != Vector3.INF:
+			for n in all_navs():
+				if n.has_method(&"warm"):
+					n.call(&"warm", at, WARM_RADIUS)
+	# The maps of the other sizes of body are served here, a little each -- more
+	# to one with a search waiting (a mech's way through a wall is thousands of
+	# nodes of a ten-stud body), the rest of it to warming.
 	for size in navs:
-		(navs[size] as AINav).service(NAV_SIZE_USEC)
+		var n := navs[size] as AINav
+		n.service(NAV_BUSY_USEC if n.pending() > 0 else NAV_SIZE_USEC)
 
 
 func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:

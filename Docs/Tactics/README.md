@@ -3,7 +3,7 @@
 How the enemy chooses what to do, authored as odds rather than code.
 
 - **The page:** `tactics_casebook.html` is the source of the hosted Tactics Casebook
-  (claude.ai artifact, private to the owner). Twelve broad *moments* (contact, lost the
+  (claude.ai artifact, private to the owner). Fifteen broad *moments* (contact, lost the
   player, close quarters...), 38 *moves*, *facts* that are true or not (inside a
   building, player above us, within melee reach, we're a melee fighter), *amounts* with
   curves (distance, cover, health, magazine, squad, player health), *combos* (grenade
@@ -34,6 +34,22 @@ How the enemy chooses what to do, authored as odds rather than code.
   smoke, breach...) is counted as *wanted* and the draw is made again among the
   doable moves. Every logged decision carries the plan (`--log-decisions=PATH`).
   `tools/tactics_sense_probe.gd` checks the readings and a fight.
+
+- **The player in a building** (2026-10-11): the moment "Player is in a building" is read
+  when the player is under a roof and the soldier is not (before everything but close
+  quarters and losing). `TacticsSense.ways_in` looks at the ways in by their route costs --
+  the soldier's walking map and a breaching one (`AIServices.foot_breach_nav`, a wall a
+  way through at 4 m a column), both through the hierarchy, kept 4 s for soldiers about as
+  far off -- and sets one of the facts *A way in close by* (the walk not much more than
+  straight there), *The way in is a long way round* (twice and more), *No way in on foot*,
+  and *Breaching in is much the shorter*. Health, ammo and explosives come in through the
+  amounts and facts the book already has. The moves are carried out: *Sweep* and *Flash,
+  then go in* push in by the door; *Make their own way in* pushes in on the breaching map,
+  and where its path goes into bricks the soldier plants a charge (2 s) and blows it
+  (`Soldier.breach_way`, through `on_breach`); *Guard the ways out* and *Wait them out* are
+  now built -- cover facing the door the player would come out of (where the walk goes under
+  the roof, `Soldier.watch_point`). `tools/inside_probe.gd` (8) checks the readings, the
+  odds and a soldier blowing its way in.
 
 - **What happened, counted:** while the city runs (not in a gate), `TacticsTally`
   counts every book decision by moment -- moves taken, moves asked for that could
