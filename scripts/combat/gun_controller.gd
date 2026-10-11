@@ -184,8 +184,17 @@ func equip(g: GunInstance) -> void:
 	_shot = StructuralDamage.for_shot(g.weapon_class, g.active_effects) if g != null else {}
 
 
+## The magazine in SHOTS -- what the trigger spends and the HUD shows. The stat is in
+## rounds: a heavy spends two a shot (COMBAT_DESIGN 7.8), so twelve rounds are six shots.
 func mag_size() -> int:
-	return maxi(1, int(_stat(&"mag_size", 1.0) * mag_mult))
+	return maxi(1, int(_stat(&"mag_size", 1.0) * mag_mult) / rounds_per_shot())
+
+
+## Rounds one shot spends: 2 on a heavy. For the ammo reserve, when there is one.
+func rounds_per_shot() -> int:
+	if gun == null or gun.weapon_class == null:
+		return 1
+	return maxi(1, gun.weapon_class.rounds_per_shot)
 
 
 func is_reloading() -> bool:

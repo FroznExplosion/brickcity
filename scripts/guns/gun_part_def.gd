@@ -74,6 +74,9 @@ const SLOT_BY_SUFFIX: Dictionary[String, Slot] = {
 @export var tags: PackedStringArray = []
 ## Optional name fragment used by the gun name generator ("Ravager", "Longbore").
 @export var name_fragment: String = ""
+## Which kind of gun this part is for (COMBAT_DESIGN 7.8): &"heavy" parts make a heavy
+## gun look like one and go on nothing else; empty fits any gun.
+@export var kind: StringName = &""
 
 
 func fits_rarity(rarity: int) -> bool:

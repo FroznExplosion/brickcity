@@ -50,6 +50,13 @@ static func build_library(per_tier: int = 2) -> GunPartLibrary:
 	# (QUALITY_NAMING §5) — a legendary part appears on its own legendary or nowhere.
 	for leg_id: StringName in LegendaryTable.all_ids():
 		parts.append(_legendary_barrel(LegendaryTable.get_def(leg_id)))
+	# The heavy kind's receivers and barrels (COMBAT_DESIGN 7.8): chunkier, a dark slab
+	# over the top, a braked muzzle -- a heavy reads as one at a glance. After the rest,
+	# and only ever on heavies, so no light gun's roll moves.
+	for tier in range(1, 7):
+		for variant in per_tier:
+			parts.append(_heavy_body(tier, variant))
+			parts.append(_heavy_barrel(tier, variant))
 
 	lib.parts = parts
 	return lib
@@ -97,6 +104,55 @@ static func _body(tier: int, variant: int) -> GunPartDef:
 	_socket(root, "socket_magazine", Vector3(0, -0.13, -0.06))
 	_socket(root, "socket_stock", Vector3(0, 0.0, 0.30))
 	_socket(root, "socket_sight", Vector3(0, 0.11, 0.02))
+	def.scene = _pack(root)
+	return def
+
+
+const HEAVY_NOUNS := ["Hammer", "Anvil", "Maul", "Bulwark", "Brute", "Sledge"]
+const HEAVY_ADJS := ["Stout", "Bored", "Braced", "Slugger", "Breaching", "Thick"]
+const SLAB := Color(0.16, 0.17, 0.19)
+
+
+static func _heavy_body(tier: int, variant: int) -> GunPartDef:
+	var def := GunReceiverDef.new()
+	_stamp(def, SLOT.BODY, tier, variant, "hbody")
+	def.kind = &"heavy"
+	def.name_fragment = HEAVY_NOUNS[(tier + variant) % HEAVY_NOUNS.size()]
+	var root := _box(Vector3(0.13, 0.22, 0.42), tier)
+	root.name = "hbody_%d_%d" % [tier, variant]
+	var slab := _box(Vector3(0.14, 0.05, 0.34), 1)
+	(slab.material_override as StandardMaterial3D).albedo_color = SLAB
+	slab.name = "slab"
+	slab.position = Vector3(0, 0.13, 0.01)
+	root.add_child(slab)
+	slab.owner = root
+	_socket(root, "socket_barrel", Vector3(0, 0.03, -0.27))
+	_socket(root, "socket_grip", Vector3(0, -0.16, 0.07))
+	_socket(root, "socket_magazine", Vector3(0, -0.15, -0.06))
+	_socket(root, "socket_stock", Vector3(0, 0.0, 0.28))
+	_socket(root, "socket_sight", Vector3(0, 0.17, 0.02))
+	def.scene = _pack(root)
+	return def
+
+
+static func _heavy_barrel(tier: int, variant: int) -> GunPartDef:
+	var def := GunBarrelDef.new()
+	_stamp(def, SLOT.BARREL, tier, variant, "hbarrel")
+	def.kind = &"heavy"
+	def.name_fragment = HEAVY_ADJS[(tier + variant) % HEAVY_ADJS.size()]
+	def.element_ratio = 0.0 if tier <= 2 else clampf(0.15 * float(tier - 2), 0.0, 0.6)
+	def.barrel_family = &"kinetic" if tier <= 2 else &"hybrid"
+	var root := _box(Vector3(0.11, 0.11, 0.34), tier)
+	root.name = "hbarrel_%d_%d" % [tier, variant]
+	var brake := _box(Vector3(0.15, 0.08, 0.07), 1)
+	(brake.material_override as StandardMaterial3D).albedo_color = SLAB
+	brake.name = "brake"
+	brake.position = Vector3(0, 0, -0.19)
+	root.add_child(brake)
+	brake.owner = root
+	_socket(root, "mount", Vector3(0, 0, 0.17))
+	_socket(root, "socket_muzzle", Vector3(0, 0, -0.23))
+	_socket(root, "socket_underbarrel", Vector3(0, -0.08, -0.08))
 	def.scene = _pack(root)
 	return def
 

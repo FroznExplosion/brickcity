@@ -492,7 +492,7 @@ backpack is a list of those.
 
 Every keyboard bind is an input action, rebindable in Options. Pad bindings do not exist yet.
 
-### 7.8 Light and heavy kinds of every class (decided 2026-10-11, not built)
+### 7.8 Light and heavy kinds of every class (decided and built 2026-10-11)
 
 The user's call: every gun class comes in two kinds, **light** and **heavy**. They are
 different guns to hold -- different models, different feel -- not a stat roll on one model.
@@ -526,9 +526,39 @@ heavy's damage, without the other kind's penalty.
 range). Nothing there needs to change when the kinds land -- only the property must exist on
 `GunInstance` with those two values.
 
-To build (combat area): the `archetype` property and its roll; per-kind base multipliers and
-parts per class; two rounds a shot on heavies through `GunController` and the HUD's count;
-the reserve; the legendary exceptions; tests for each.
+**As built** (`WeaponClass.KINDS`, `tools/gun_kind_probe.gd`):
+
+| Class | Heavy is | Heavy x damage / fire rate / reload | Light |
+|---|---|---|---|
+| pistol | Magnum | 2.5 / 0.42 / 1.15 | the class as it was |
+| revolver | Hand Cannon | 2.0 / 0.65 / 1.15 | as it was |
+| smg | Heavy SMG | 2.2 / 0.5 / 1.15 | as it was |
+| rifle | Battle Rifle | 2.3 / 0.5 / 1.15 | as it was |
+| lmg | Heavy Machine Gun | 2.2 / 0.5 / 1.15 | as it was |
+| dmr | Heavy DMR | 2.1 / 0.6 / 1.15 | as it was |
+| sniper | Anti-Materiel Rifle | 2.0 / 0.93 / 1.2 | as it was |
+| shotgun | Heavy Shotgun | 2.2 / 0.8 / 1.2 | Auto Shotgun: 0.55 damage, 1.8 fire rate, 1.4 magazine |
+
+- A heavy's damage a round is 1.0-1.25x the light's; its damage a second 1.05x (pistol) to 1.86x (sniper) (the slow
+  classes cannot halve their rate without going under the 1/s floor, so they pay in
+  magazine and reload). The score is read against the kind's own base, so a grade means the
+  same on both.
+- The kind is `WeaponClass.archetype`, made by `with_kind`; `WeaponClass.rolled(class, seed,
+  rarity)` rolls it on its own stream off the seed: heavies 15% of commons up to 40% of
+  mythics, a legendary or mythic crossed 35% of the time. A light gun rolls exactly the parts,
+  stats and name its seed always rolled.
+- Only the player's loot rolls a kind: the default kit (`PlayerArsenal._roll`) and enemy drops
+  (`CityScene`). A gun no one gave a kind -- an enemy's, a vehicle's -- is the class as it was.
+- Heavies are built of their own parts (`GunPartDef.kind`): the placeholder library's heavy
+  receivers and barrels are chunkier, with a dark slab and a braked muzzle.
+- The magazine stat stays in rounds; `GunController.mag_size()` is in shots (rounds /
+  `rounds_per_shot`), so the HUD, the AI and the arsenal count shots. The card shows
+  "6 (12 rounds)". The reserve, when built, spends `rounds_per_shot` a shot.
+- Saves keep the kind (`CharacterSave.gun_entry`: "kind", "crossed"); so does
+  `Result.serialize`. Old saves come back light.
+- In the hands a heavy is 12% longer and kicks 1.7x; the auto shotgun kicks 0.55x.
+- Not done: semi-auto versus full-auto (every gun fires while the trigger is held), and real
+  art per kind.
 
 ## 8. Bricks
 
@@ -929,8 +959,8 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 - Step 5's other leftovers: ammo reserves, co-op drops, pad bindings. (A swap now takes about
   half a second in the hands -- the old gun goes down out of view, the new one comes up,
   no firing while it is down: `PlayerView`, 2026-10-10.)
-- Light and heavy kinds of every class, heavies at two rounds a shot (§7.8, decided
-  2026-10-11). Hit reactions already read the kind.
+- Light and heavy kinds: built (§7.8). Left: semi- versus full-auto, real art per kind, and the
+  reserve's two-rounds-a-shot when reserves exist.
 - Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
   questions.
 
