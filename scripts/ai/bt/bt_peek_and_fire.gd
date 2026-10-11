@@ -17,6 +17,8 @@ const PEEK := [1.2, 2.0]
 const LOST := 3.0
 ## Seconds of cover left against the threat's gun at which to go.
 const LEAVE := 0.8
+## From a peek back into cover: closer than this to the cover spot, it is hidden.
+const BACK_IN := 0.4
 ## Closer than this, a soldier running for cover shoots as it goes.
 const FIRE_ON_THE_MOVE := 12.0
 
@@ -104,12 +106,17 @@ func _tick(_delta: float) -> Status:
 		else:
 			so.stop()
 	else:
-		so.state = "reload in cover" if reloading else "hide"
 		so.fire_ok = false
-		if cover.kind == "high":
-			so.move_to(at)
+		if cover.kind == "high" and Vector2(feet.x - at.x, feet.z - at.z).length() > BACK_IN:
+			# Still out at the peek: back behind it at a run -- not hidden yet.
+			so.state = "step back"
+			so.move_to(at, true)
 		else:
-			so.stop()
+			so.state = "reload in cover" if reloading else "hide"
+			if cover.kind == "high":
+				so.move_to(at)
+			else:
+				so.stop()
 	return RUNNING
 
 
