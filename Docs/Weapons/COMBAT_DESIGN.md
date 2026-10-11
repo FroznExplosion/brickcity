@@ -416,6 +416,13 @@ shotguns and revolvers.
 **Other alt-fires** come from the ordnance effects: an underbarrel grenade tube on a rifle, a shock
 arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldowns, like ordnance.
 
+As built: the **grenade tube** (rifles, LMGs) — press: a grenade lobbed down the aim (32 m/s, real
+drop) that bursts where it strikes, 6 rounds' worth to what it struck and less out to 3.5 m, a
+grenade's blast in the bricks; 6 s cooldown. The **thermal torch** (SMGs, shotguns; there is no beam
+class) — hold: a 6 m cone, 25° either side, 6 rounds' worth a second of pure corrosive (so armor
+takes 2× and corrodes) for up to 2 s of fuel, then 6 s to cool. Adding them moved some rifles',
+LMGs', SMGs' and shotguns' alt-fire roll.
+
 ### 7.3 Ordnance and grenades
 
 - **Ordnance** is its own slot (Borderlands 4): rocket launchers and **special weapons** — gated by
@@ -423,6 +430,9 @@ arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldow
   D-pad right again goes back to the gun you had.
 - Special weapons are where unusual effects live, **shock** first: the round arcs across several
   nearby enemies and slows them.
+  Built: the **arc caster** (`WeaponClass` `arc_caster`, ordnance, 2–3 charges): each charge is a
+  shock arc of its own damage through up to six enemies, each 85% of the last within 8 m, each
+  slowed 2.5 s. A third of ordnance drops (`CityScene.drop_loot`).
 - **Grenades** have a slot of their own and are **thrown with G** (right bumper on a pad) without
   putting the gun away. A grenade is ordnance for bricks (§8): it blasts.
 
@@ -739,9 +749,29 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   `PlayerController.possess`) keeps a player from being frozen.
 - The shock arc's slow is a status here too (`ElementStatus.shock`).
 - `tools/status_probe.gd` (19 checks).
-- **Not yet:** frozen enemies take no extra damage and do not shatter (the older
-  `FrozenStatus`/`ElementDoT` in `scripts/status/` have both, unused); no hit-number colours for
-  status damage; a frozen soldier's brain still thinks (its body just does not move).
+- **Not yet:** no hit-number colours for status damage; a frozen soldier's brain still thinks
+  (its body just does not move). (The shatter: "special fire", below.)
+
+**Special fire — the tube, the torch, the arc caster, the shatter, soldiers' alt-fires: built
+2026-10-10.**
+- `GunAltFire.TUBE` / `TORCH` and the arc caster: §7.2 and §7.3's built notes. `TubeGrenade`
+  (`scripts/combat/tube_grenade.gd`) flies and calls `GunController.tube_burst`; the torch is
+  `GunController._step_torch` / `_burn_cone`; the shock arc is now `_arc_down_aim` (amount,
+  jumps, range, falloff, slow), shared by the alt-fire and the arc caster.
+- **Frozen is brittle** (`ElementStatus`): every hit on a frozen thing lands 1.5×
+  (`DamageSystem._resolve`), and with its defences down it **shatters** — dies at once, an ice
+  burst — on a melee, or on a hit that leaves its flesh at a quarter or less
+  (`ElementStatus.try_shatter`, from `DamageSystem.resolve`; `DamageResult.shattered`). A shield or
+  armor up, no shatter. The old `FrozenStatus` stays unused.
+- **Soldiers use their alt-fires** (`GunController.ai_alt`, on in `Soldier`): while the trigger is
+  held, at most once every 6 s — the arc and the tube whenever, a dart to open a burst, the plasma
+  charge only when a shield is under the aim. Never the torch.
+- `tools/special_fire_probe.gd` (23 checks).
+- **Not yet:** a heat bar instead of the charge's ammo bite; the torch's flame look (a corrosive
+  puff stands in); other special weapons; a frozen brain; the shatter's pieces.
+- `fights_back_probe` fails one check ("while it hid, the rounds went into the wall": 4 of 15
+  reached it) on this branch from before this step too (checked at f2c42d8 and with `ai_alt` off) —
+  AI area's to look at.
 
 **Step 9 — player level and the skill tree: built 2026-10-10.**
 - `PlayerLevel` (`scripts/progression/player_level.gd`): level 1–100, a point a level from level
@@ -839,8 +869,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 - More of the skill kit: abilities past the Overshield and a second slot, a stagger for the
   Shockwave, the marksman and element branches (§4.2).
-- What steps 7–8 left: the other alt-fires and the special ordnance weapons, frozen enemies
-  shattering, AI soldiers using alt-fires.
+- Special weapons past the arc caster; a heat bar for the plasma charge; the torch's look.
 - Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
 - Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
   questions.
@@ -859,7 +888,8 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 | Gun fire, element on the round | `scripts/combat/gun_controller.gd`; element roll in `scripts/guns/gun_generator.gd` |
 | Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
 | Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
-| Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
+| Tube, torch, arc caster, AI alt-fire | `GunController` (`_fire_tube`, `tube_burst`, `_step_torch`, `_burn_cone`, `_arc_down_aim`, `_ai_alt`), `scripts/combat/tube_grenade.gd`, `WeaponClass` `arc_caster` |
+| Element statuses | `scripts/elements/element_status.gd` (the shatter: `try_shatter`); built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
 | Infusion and scrap | `scripts/progression/infusion.gd`, `workbench.gd`; `GunGenerator.retier`; the bench's page in `PlayerArsenal` (`open_bench`, `infuse`, `salvage`) |
 | The kit saved | `CharacterSave` (`gun_entry`, `make_result`, `loadout_dict`, `fill_loadout`); `PlayerArsenal.restore`, `kit_changed`; `CityScene._load_kit` |
 | Player shield, ability slot, Brawler | `PlayerArsenal` (`ensure_shield`, `use_ability`, `_on_meleed`, `shockwave`); `Pawn.melee_*`; `MeleeStrike.strike` (`reach`, `backstab`); `PlayerLevel.tactical` |
@@ -870,7 +900,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (30),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (30), `special_fire_probe` (23),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`

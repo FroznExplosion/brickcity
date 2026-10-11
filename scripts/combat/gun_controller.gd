@@ -82,6 +82,29 @@ const ARC_COOLDOWN := 5.0
 const ARC_SLOW_SECONDS := 1.5
 ## A shock arc into a wall still finds an enemy this near where it struck.
 const ARC_CATCH := 2.5
+## The grenade tube: its burst is TUBE_MULT rounds' worth at the middle, TUBE_RADIUS
+## round, SPLASH_EDGE of it at the edge; a cooldown, no ammo.
+const TUBE_MULT := 6.0
+const TUBE_RADIUS := 3.5
+const TUBE_COOLDOWN := 6.0
+## The thermal torch: a cone TORCH_RANGE long and TORCH_CONE_DEG either side of the aim,
+## TORCH_ROUNDS rounds' worth of corrosive a second to everything in it, for at most
+## TORCH_FUEL seconds held; then TORCH_COOLDOWN.
+const TORCH_RANGE := 6.0
+const TORCH_CONE_DEG := 25.0
+const TORCH_ROUNDS := 6.0
+const TORCH_TICK := 0.1
+const TORCH_FUEL := 2.0
+const TORCH_COOLDOWN := 6.0
+## The arc caster, the shock special weapon (ordnance, COMBAT_DESIGN 7.3): each charge is
+## a shock arc of its own damage, through up to ARC_CASTER_JUMPS more enemies.
+const ARC_CASTER := &"arc_caster"
+const ARC_CASTER_JUMPS := 5
+const ARC_CASTER_RANGE := 8.0
+const ARC_CASTER_FALLOFF := 0.85
+const ARC_CASTER_SLOW := 2.5
+## A soldier's alt-fire (`ai_alt`): at most one this often.
+const AI_ALT_GAP := 6.0
 
 var gun: GunInstance
 ## What scale of weapon this is to a target that cares (DamagePacket.scale); &""
@@ -95,6 +118,10 @@ var damage_mult := 1.0
 var reload_mult := 1.0
 var mag_mult := 1.0
 var alt_mult := 1.0
+## An AI holder's: the alt-fire goes on its own while the trigger is held, at most once
+## every AI_ALT_GAP -- the arc and the tube whenever, the dart to open a burst, the plasma
+## charge only at a shield (`_ai_alt`). Never the torch. Off for a player, who switches.
+var ai_alt := false
 var rng: RandomNumberGenerator
 var range_m := 400.0
 var collision_mask := Layers.GUN_MASK
@@ -132,6 +159,9 @@ var _charge := 0.0
 var _alt_armed := false
 var _need_release := false
 var _alt_cool := 0.0
+## The torch's fuel left while it burns, and its next tick.
+var _torch_left := 0.0
+var _torch_clock := 0.0
 ## The tracking dart's mark: {"dart", "target", "spot", "left"}. A dart in flight has no
 ## target yet. Empty: no dart.
 var _mark := {}
@@ -221,6 +251,8 @@ func step(delta: float) -> void:
 	if alt_on():
 		_step_alt(delta)
 		return
+	if ai_alt and _trigger and _alt_cool <= 0.0 and alt_fire() != &"" and _ai_alt():
+		return
 	if _need_release:
 		return
 	var interval := 1.0 / maxf(_stat(&"fire_rate", 1.0) * _wind_up(), 0.1)
@@ -264,6 +296,11 @@ func _wind_up() -> float:
 ## One round. `mult` scales its damage (a power shot's 2x).
 func _fire_one(mult := 1.0) -> void:
 	if aim == null or not aim.is_inside_tree():
+		return
+	# The arc caster's charge is a shock arc, not a round.
+	if gun.weapon_class != null and gun.weapon_class.id == ARC_CASTER:
+		_arc_down_aim(_stat(&"damage", 1.0) * damage_mult * mult, ARC_CASTER_JUMPS, ARC_CASTER_RANGE,
+				ARC_CASTER_FALLOFF, ARC_CASTER_SLOW)
 		return
 	var aim_basis := aim.global_transform.basis
 	var dir := _spread(-aim_basis.z, aim_basis)
@@ -358,16 +395,16 @@ func _on_kill(target: Node, point: Vector3, excess: float) -> void:
 ## The explosive attachment: everything near `at` takes up to `amount`, less toward the
 ## edge, none behind a wall -- never `struck` (the round already hit it) or the
 ## holder's own side. It wears bricks through StructuralDamage, not here.
-func _explode(at: Vector3, struck: Node, amount: float) -> void:
+func _explode(at: Vector3, struck: Node, amount: float, radius := SPLASH_RADIUS,
+		kind := &"explosive") -> void:
 	if gun.is_inside_tree():
-		SplashFlash.spawn(gun.get_tree().current_scene, at, SPLASH_RADIUS)
-	for n in _living_near(at, SPLASH_RADIUS):
+		SplashFlash.spawn(gun.get_tree().current_scene, at, radius)
+	for n in _living_near(at, radius):
 		if n == struck:
 			continue
 		var pos := (n as Node3D).global_position
 		var d := at.distance_to(pos)
-		_side(n, pos, amount * lerpf(1.0, SPLASH_EDGE, clampf(d / SPLASH_RADIUS, 0.0, 1.0)),
-				&"explosive")
+		_side(n, pos, amount * lerpf(1.0, SPLASH_EDGE, clampf(d / radius, 0.0, 1.0)), kind)
 
 
 ## A hit besides the round's own, through the same pipeline: the gun's element (none
@@ -532,10 +569,16 @@ func mark_dart() -> TrackingDart:
 func _step_alt(delta: float) -> void:
 	if not _alt_armed:
 		return
-	if alt_fire() == GunAltFire.ARC:
+	if alt_fire() == GunAltFire.ARC or alt_fire() == GunAltFire.TUBE:
 		if _trigger and _alt_cool <= 0.0:
-			_fire_arc()
+			if alt_fire() == GunAltFire.ARC:
+				_fire_arc()
+			else:
+				_fire_tube()
 			_alt_done()
+		return
+	if alt_fire() == GunAltFire.TORCH:
+		_step_torch(delta)
 		return
 	# Dart and charge: hold to charge, release to fire. Let go early and nothing goes.
 	if _trigger:
@@ -682,6 +725,16 @@ func _fire_arc() -> void:
 	if aim == null or not aim.is_inside_tree():
 		return
 	_alt_cool = ARC_COOLDOWN / maxf(alt_mult, 0.1)
+	_arc_down_aim(_stat(&"damage", 1.0) * damage_mult * ARC_MULT, ARC_JUMPS, ARC_RANGE, ARC_FALLOFF,
+			ARC_SLOW_SECONDS)
+
+
+## A shock arc down the aim: `amount` to the first, each jump `falloff` of the last, up
+## to `jumps` more enemies each within `jump_range` of the one before, each slowed
+## `slow` seconds. Returns how many it touched.
+func _arc_down_aim(amount: float, jumps: int, jump_range: float, falloff: float, slow: float) -> int:
+	if aim == null or not aim.is_inside_tree():
+		return 0
 	var b := aim.global_transform.basis
 	var dir := -b.z
 	var from := aim.global_position
@@ -696,20 +749,138 @@ func _fire_arc() -> void:
 			cur = _nearest_not(end, ARC_CATCH, [])
 			if cur != null:
 				points.append((cur as Node3D).global_position)
-	var amount := _stat(&"damage", 1.0) * damage_mult * ARC_MULT
 	var touched: Array[Node] = []
-	while cur != null and touched.size() <= ARC_JUMPS:
+	while cur != null and touched.size() <= jumps:
 		touched.append(cur)
 		var at := (cur as Node3D).global_position
 		if touched.size() > 1:
 			points.append(at)
 		_side(cur, at, amount, &"shock", true)
-		ElementStatus.shock(cur, ARC_SLOW_SECONDS)
-		amount *= ARC_FALLOFF
-		cur = _nearest_not(at, ARC_RANGE, touched)
+		ElementStatus.shock(cur, slow)
+		amount *= falloff
+		cur = _nearest_not(at, jump_range, touched)
 	ArcFlash.spawn(_effects_parent(), points)
 	if gun.is_inside_tree():
 		gun.play_shot_effects(end)
+	return touched.size()
+
+
+## The grenade tube: a grenade lobbed down the aim (TubeGrenade), on a cooldown.
+func _fire_tube() -> bool:
+	if aim == null or not aim.is_inside_tree() or _alt_cool > 0.0:
+		return false
+	_alt_cool = TUBE_COOLDOWN / maxf(alt_mult, 0.1)
+	var b := aim.global_transform.basis
+	TubeGrenade.launch(self, _effects_parent(), aim.global_position - b.z * 0.5 - b.y * 0.1,
+			(-b.z + b.y * 0.08).normalized())
+	if gun.is_inside_tree():
+		gun.play_shot_effects(aim.global_position - b.z * 2.0)
+	return true
+
+
+## A tube grenade went off at `at`: what it struck takes the whole burst, everything
+## near less toward the edge, and the bricks take a grenade's blast.
+func tube_burst(at: Vector3, normal: Vector3, collider: Object) -> void:
+	if gun == null:
+		return
+	var amount := _stat(&"damage", 1.0) * damage_mult * TUBE_MULT
+	var struck: Node = _living(collider) if collider != null else null
+	if struck != null:
+		_side(struck, at, amount, &"tube")
+	_explode(at + normal * 0.05, struck, amount, TUBE_RADIUS, &"tube")
+	if struck == null and collider != null and on_structure_hit.is_valid():
+		on_structure_hit.call(at - normal * INTO_SURFACE, -normal,
+				StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
+
+
+## The thermal torch, held: it burns while the trigger is down and there is fuel, then
+## the gun is back on its primary and the torch cools down.
+func _step_torch(delta: float) -> void:
+	if _alt_cool > 0.0:
+		if _trigger:
+			alt_refused.emit("Torch cooling: %d s" % ceili(_alt_cool))
+			_alt_done()
+		return
+	if _trigger:
+		if _torch_left <= 0.0:
+			_torch_left = TORCH_FUEL
+			_torch_clock = 0.0
+		_torch_left -= delta
+		_torch_clock -= delta
+		while _torch_clock <= 0.0:
+			_torch_clock += TORCH_TICK
+			_burn_cone(TORCH_TICK)
+		if _torch_left > 0.0:
+			return
+	elif _torch_left <= 0.0:
+		return   # not lit yet: waiting for the trigger
+	# Let go, or out of fuel.
+	_torch_left = 0.0
+	_alt_cool = TORCH_COOLDOWN / maxf(alt_mult, 0.1)
+	_alt_done()
+
+
+## One tick of the torch: everything alive in its cone, in clear line, not the holder's
+## side, takes `seconds` of it -- all corrosive, so armor melts (and corrodes).
+func _burn_cone(seconds: float) -> int:
+	if aim == null or not aim.is_inside_tree():
+		return 0
+	var from := aim.global_position
+	var fwd := -aim.global_transform.basis.z
+	var n := 0
+	for target in _living_near(from, TORCH_RANGE):
+		var at := (target as Node3D).global_position
+		var to := at - from
+		if to.length() > TORCH_RANGE or rad_to_deg(fwd.angle_to(to)) > TORCH_CONE_DEG:
+			continue
+		var p := DamagePacket.new(_stat(&"damage", 1.0) * damage_mult * TORCH_ROUNDS * seconds,
+				Elements.get_def(Elements.CORROSIVE), self)
+		p.scale = damage_scale
+		p.hit_position = at
+		p.element_ratio = 1.0
+		p.rng = rng
+		var r := DamageSystem.resolve(p, target)
+		side_hit.emit({"point": at, "normal": -fwd, "collider": target, "structure": false,
+				"result": r, "side": &"torch"})
+		n += 1
+	SplashFlash.spawn(_effects_parent(), from + fwd * TORCH_RANGE * 0.5, 0.6,
+			Elements.INFO[Elements.CORROSIVE][1])
+	return n
+
+
+## A soldier's alt-fire (`ai_alt`), with its trigger down: whichever its gun has, if it
+## suits what is under the aim. True if one went (the primary waits this tick).
+func _ai_alt() -> bool:
+	var went := false
+	match alt_fire():
+		GunAltFire.ARC:
+			_fire_arc()
+			went = true
+		GunAltFire.TUBE:
+			went = _fire_tube()
+		GunAltFire.DART:
+			_alt_cool = 0.0
+			went = _fire_dart()
+		GunAltFire.CHARGE:
+			if _aimed_at_shield():
+				went = _fire_charge()
+	_alt_cool = maxf(_alt_cool, AI_ALT_GAP)
+	return went
+
+
+## What is down the aim has a shield up.
+func _aimed_at_shield() -> bool:
+	if aim == null or not aim.is_inside_tree():
+		return false
+	var from := aim.global_position
+	var q := PhysicsRayQueryParameters3D.create(from, from - aim.global_transform.basis.z * range_m,
+			collision_mask, exclude)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return false
+	var target := _living(hit.collider)
+	var pool := DamageSystem._find_health_pool(target) if target != null else null
+	return pool != null and pool.top_layer_type() == &"shield"
 
 
 func _roll() -> RandomNumberGenerator:

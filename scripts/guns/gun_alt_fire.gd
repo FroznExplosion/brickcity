@@ -13,10 +13,15 @@ extends RefCounted
 ##            bite of the magazine. A shield answer, not a damage answer.
 ##   arc      press: a shock arc, the struck enemy and up to three near it, each slowed;
 ##            on a cooldown
+##   tube     press: an underbarrel grenade, lobbed; it bursts where it lands; a cooldown
+##   torch    hold: a short cone of corrosive flame that melts armor, until its fuel runs
+##            out or the trigger comes up; a cooldown
 
 const DART := &"dart"
 const CHARGE := &"charge"
 const ARC := &"arc"
+const TUBE := &"tube"
+const TORCH := &"torch"
 
 ## Chance a gun of each colour carries one (white .. mythic).
 const CHANCE: Array[float] = [0.10, 0.20, 0.30, 0.45, 0.70, 1.0]
@@ -29,6 +34,8 @@ const DEFS := {
 			"name": "Plasma charge"},
 	ARC: {"classes": [&"pistol", &"shotgun", &"revolver"], "w": 1.0,
 			"name": "Shock arc"},
+	TUBE: {"classes": [&"rifle", &"lmg"], "w": 1.0, "name": "Grenade tube"},
+	TORCH: {"classes": [&"smg", &"shotgun"], "w": 1.0, "name": "Thermal torch"},
 }
 
 
@@ -69,4 +76,8 @@ static func describe(id: StringName) -> String:
 			return "Plasma charge: charge and fire to take a whole shield"
 		ARC:
 			return "Shock arc: arcs through up to 4 enemies and slows them"
+		TUBE:
+			return "Grenade tube: lob a grenade that bursts where it lands"
+		TORCH:
+			return "Thermal torch: hold for a short cone of corrosive flame that melts armor"
 	return ""

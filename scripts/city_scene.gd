@@ -3990,7 +3990,12 @@ func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunP
 	for i in drops.size():
 		var d: LootRoller.Drop = drops[i]
 		var cls: StringName = GUN_CLASSES[_loot_rng.randi() % GUN_CLASSES.size()]
-		var res := GunGenerator.generate(_gun_library, _loot_rng.randi(), WeaponClass.builtin(cls),
+		var gen_seed := _loot_rng.randi()
+		# A third of the ordnance drops is the arc caster, the shock special weapon -- off
+		# the seed, so the loot stream draws what it always did.
+		if cls == &"rocket_launcher" and gen_seed % 3 == 0:
+			cls = GunController.ARC_CASTER
+		var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(cls),
 				d.tier, d.rarity, d.luck)
 		var p := WorldGunPickup.create(_gun_library, res)
 		add_child(p)

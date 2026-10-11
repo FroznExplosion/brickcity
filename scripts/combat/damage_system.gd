@@ -38,12 +38,21 @@ class DamageResult extends RefCounted:
 	var crit_absorbed: bool = false   ## a crit-spot hit a shield or armor took as a plain one
 	var procced_status: bool = false
 	var killed: bool = false          ## this hit dropped the target's vital layer
+	var shattered: bool = false       ## it killed a frozen thing by shattering it (ElementStatus)
 
 
 ## target_root must own a HealthPool and may own a StatusManager (looked up by node name/group).
 ## A hit that kills pays its XP to the player whose it was (PlayerLevel.credit_kill).
+## A frozen thing whose defences are down shatters on a melee, or on a hit that leaves its
+## flesh low (ElementStatus.try_shatter).
 static func resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	var r := _resolve(packet, target_root)
+	if not r.killed and packet != null and packet.amount > 0.0 and r.dealt > 0.0:
+		var left := ElementStatus.try_shatter(target_root, packet.melee)
+		if left >= 0.0:
+			r.dealt += left
+			r.killed = true
+			r.shattered = true
 	if r.killed and packet != null and packet.source != null:
 		PlayerLevel.credit_kill(packet.source, target_root)
 	return r
@@ -81,6 +90,10 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		extra *= maxf(1.0, packet.crit_multiplier)
 	if status_mgr != null:
 		extra *= status_mgr.damage_taken_multiplier()
+	# Frozen: brittle, every hit lands harder (COMBAT_DESIGN 5).
+	var es := ElementStatus.of(target_root)
+	if es != null and es.is_frozen():
+		extra *= ElementStatus.FROZEN_TAKEN
 	if packet.shield_mult != 1.0 and pool.top_layer_type() == &"shield":
 		extra *= packet.shield_mult
 

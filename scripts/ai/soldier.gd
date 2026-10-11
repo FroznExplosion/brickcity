@@ -272,6 +272,8 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 	g.rng = s.rng
 	g.exclude = [p.body.get_rid()] as Array[RID]
 	g.on_structure_hit = s.on_structure_hit
+	# Its gun's alt-fire goes on its own while it fires (GunController.ai_alt).
+	g.ai_alt = true
 	p.body.add_child(g)
 	if gun != null:
 		gun.visible = false
