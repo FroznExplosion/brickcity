@@ -1155,6 +1155,7 @@ Dictionary AINav::get_stats() const {
     d["hier_ms"] = (double)stat_hier_usec / 1000.0;
     d["hier_sides"] = (int)sides.size();
     d["hier_borders"] = (int)borders.size();
+    d["hier_enclosed"] = (int64_t)stat_hier_enclosed;
     return d;
 }
 

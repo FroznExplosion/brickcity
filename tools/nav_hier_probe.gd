@@ -18,6 +18,11 @@ extends SceneTree
 ## E. Every size: a tank's map with its own hierarchy finds the long way.
 ## F. Cost: the same long queries, plain against hierarchical, cold and warm
 ##    (with other runs going, numbers are rough).
+## G. No way, at once: into a sealed room the answer is no, proven (the
+##    goal's region is closed), in a fraction of the time the plain search
+##    grinds its whole budget for.
+## H. Warming: a tank's map warmed round a point in spare service time; a long
+##    search there then works nothing out.
 
 const Arena := preload("res://tools/ai_arena.gd")
 const STUD := 0.35
@@ -76,6 +81,8 @@ func _build() -> void:
 		a.bricks(Vector3i(140 + 2 * (k - 1), 0, 210), Vector3i(2, 6 - k, 6))
 	# A thick wall: 8 studs of bricks, 4 courses, z 300..308, x -60..60.
 	a.bricks(Vector3i(-60, 0, 300), Vector3i(120, 4, 8))
+	# A sealed room: no door, walls 6 courses, 30 studs square, far out at x 400.
+	a.room(400, 400, 30, 30, 6, 0, 0, 99)
 
 
 static func _len(p: PackedVector3Array) -> float:
@@ -205,3 +212,32 @@ func _run() -> void:
 		if run == "warm":
 			_ok("warm, the hierarchy is faster on long ways", times.hier < times.plain,
 					"%.1f ms against %.1f ms" % [times.hier, times.plain])
+
+	print("G. no way, at once")
+	var inside := _w(415, 415)
+	var outside := _w(380, 360)
+	var t1 := Time.get_ticks_usec()
+	var no_hier := hier.find_path(hier.snap(outside), hier.snap(inside), 60000)
+	var t_h := (Time.get_ticks_usec() - t1) / 1000.0
+	t1 = Time.get_ticks_usec()
+	var no_plain := plain.find_path(plain.snap(outside), plain.snap(inside), 60000)
+	var t_p := (Time.get_ticks_usec() - t1) / 1000.0
+	_ok("into a sealed room: no, proven, in a quarter of the plain search's time", no_hier.is_empty()
+			and no_plain.is_empty() and t_h < t_p * 0.25 and int(hier.get_stats().hier_enclosed) >= 1, "%.1f ms against the plain search's %.1f ms (%d proven closed)" % [t_h, t_p,
+			hier.get_stats().hier_enclosed])
+
+	print("H. warming")
+	var tw := VehicleNav.make(a.s.ai_world, &"tank")
+	var centre := _w(0, 200)
+	tw.warm(centre, 60.0)
+	var turns := 0
+	while tw.warm_pending() > 0 and turns < 2000:
+		tw.service(2000)
+		turns += 1
+	var d0 := int(tw.get_stats().hier_dijkstra)
+	tw.reset_stats()
+	var wp := tw.find_path(tw.snap(_w(-150, 200)), tw.snap(_w(150, 210)), 300000)
+	var after := tw.get_stats()
+	_ok("a tank's map warmed round a point: a long search there works nothing out", tw.warm_pending() == 0
+			and not wp.is_empty() and int(after.hier_dijkstra) == 0,
+			"warmed in %d turns (%d Dijkstras); the search then did %d" % [turns, d0, after.hier_dijkstra])

@@ -326,6 +326,13 @@ private:
     void _hier_forget(int x0, int z0, int x1, int z1);
     /// Make `s` hierarchical if its ends are far apart; true if it did.
     bool _hier_begin(Search &s);
+    /// Is the region round `seeds` (sides) closed: everything it joins, either
+    /// way, found within `limit` sides without meeting any of `other`? Then
+    /// there is no way between them (a sealed room, a roof with no way up).
+    /// False when not proven -- the limit reached, or `other` met.
+    bool _hier_enclosed(const std::vector<int> &seeds, const std::vector<int> &other, int limit);
+    static constexpr int ENCLOSED_LIMIT = 96;
+    uint64_t stat_hier_enclosed = 0;
     /// Walk straight from `a` towards `b`, a _step at a time, inside the box:
     /// its cost if it gets there, INF if it does not. Cheaper than a Dijkstra
     /// across open ground; an upper bound, never a way that is not there.

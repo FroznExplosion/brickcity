@@ -1059,6 +1059,7 @@ func _ready() -> void:
 	mech_nav = MechBrain.mech_nav(ai_world)
 	# Whatever changes where a figure can walk changes where a mech can.
 	ai_nav.nav_changed.connect(mech_nav.invalidate_box)
+	ai_services.share_nav(mech_nav)
 	weight = WeightTracker.new(ai_world, world)
 	weight.on_load = _weight_load
 	weight.on_unload = _weight_unload
@@ -5432,8 +5433,13 @@ func _ai_tick(destruction_ms: float) -> void:
 		enc.step(func(id: int) -> void: _promote(id, false))
 	if ai_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 5.0, _nav_service)
+	elif ai_nav.warm_pending() > 0:
+		# Nothing asked: the hierarchy round the player, last in line (AINav.warm).
+		ai_sched.submit(AIScheduler.NAV, 1.0, _nav_service)
 	if mech_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 6.0, _mech_nav_service)
+	elif mech_nav.warm_pending() > 0:
+		ai_sched.submit(AIScheduler.NAV, 1.0, _mech_nav_service)
 	# Weight is structure: only the host turns it into commands (R5).
 	if authority.may_decide():
 		weight.tick(ai_services.now())

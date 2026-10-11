@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 using namespace godot;
 
@@ -107,6 +108,52 @@ void AINav::_warm_step(uint64_t until_usec) {
             warm_queue.pop_back();
         }
     }
+}
+
+bool AINav::_hier_enclosed(const std::vector<int> &seeds, const std::vector<int> &other, int limit) {
+    const std::unordered_set<int> target(other.begin(), other.end());
+    std::unordered_set<int> seen;
+    std::unordered_set<int64_t> clusters_done;
+    std::vector<int> stack(seeds.begin(), seeds.end());
+    std::vector<int> in_cluster;
+    while (!stack.empty()) {
+        const int s = stack.back();
+        stack.pop_back();
+        if (s < 0 || !sides[(size_t)s].alive || !seen.insert(s).second) {
+            continue;
+        }
+        if (target.count(s)) {
+            return false;
+        }
+        if ((int)seen.size() > limit) {
+            return false;
+        }
+        const int cx = sides[(size_t)s].cx, cz = sides[(size_t)s].cz;
+        _cluster_sides(cx, cz, in_cluster);
+        if (clusters_done.insert(ckey(cx, cz)).second) {
+            for (int o : in_cluster) {
+                _side_edges(o);
+            }
+        }
+        // Either way: over the border, and inside the cluster to or from it.
+        const int partner = sides[(size_t)s].partner;
+        if (partner >= 0 && (sides[(size_t)s].cross < NO_WAY || sides[(size_t)partner].cross < NO_WAY)) {
+            stack.push_back(partner);
+        }
+        for (const auto &e : sides[(size_t)s].edges) {
+            stack.push_back(e.first);
+        }
+        for (int o : in_cluster) {
+            for (const auto &e : sides[(size_t)o].edges) {
+                if (e.first == s) {
+                    stack.push_back(o);
+                    break;
+                }
+            }
+        }
+    }
+    stat_hier_enclosed++;
+    return true;
 }
 
 bool AINav::_hier_begin(Search &s) {
@@ -563,6 +610,25 @@ bool AINav::_advance_hier(Search &s, uint64_t until_usec) {
             if (it != g.end()) {
                 h.to_goal[id] = it->second;
             }
+        }
+        // No way at all, found out before the graph is searched: no side of
+        // its cluster the start reaches, or none that reaches the goal; or the
+        // goal's region (or the start's) closed, a small flood either way
+        // finding nothing of the other's.
+        std::vector<int> from_start, to_goal_ids;
+        for (const auto &e : h.start_edges) {
+            from_start.push_back(e.first);
+        }
+        for (const auto &kv : h.to_goal) {
+            to_goal_ids.push_back(kv.first);
+        }
+        if (from_start.empty() || to_goal_ids.empty()
+                || _hier_enclosed(to_goal_ids, from_start, ENCLOSED_LIMIT)
+                || _hier_enclosed(from_start, to_goal_ids, ENCLOSED_LIMIT)) {
+            s.status = FAILED;
+            stat_failed++;
+            finish_time();
+            return true;
         }
         h.g[START] = 0.0f;
         h.open.push_back(Open{ 0.0f, START });

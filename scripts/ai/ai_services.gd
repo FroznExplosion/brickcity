@@ -204,6 +204,28 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 		on_say.call(speaker, key, text, range_m)
 
 
+## Maps kept by others that are warmed with these (share_nav): the mech's.
+var shared_navs: Array[AINav] = []
+
+
+func share_nav(n: AINav) -> void:
+	if n != null and not shared_navs.has(n):
+		shared_navs.append(n)
+
+
+## Every map there is: the walking map, each size's and vehicle's, the shared.
+func all_navs() -> Array[AINav]:
+	var out: Array[AINav] = []
+	if ai_nav != null:
+		out.append(ai_nav)
+	for n in navs.values():
+		out.append(n as AINav)
+	for n in shared_navs:
+		if not out.has(n):
+			out.append(n)
+	return out
+
+
 ## The airspace (Airspace), made the first time anybody asks.
 func air() -> Airspace:
 	if airspace == null:
@@ -396,14 +418,20 @@ func tick() -> void:
 		for team in _aggro:
 			_aggro_tick(team, _aggro[team], dt)
 	callouts.tick(t, world3d, ai_world)
-	# The walking map's hierarchy worked out round the players in spare time
-	# (AINav.warm): the fight is round them, and so are the searches.
-	if t >= _next_warm and ai_nav != null and ai_nav.has_method(&"warm"):
+	# Every map's hierarchy worked out round the players in spare time
+	# (AINav.warm) -- the walking map, each size's, each vehicle's, the mech's:
+	# the fight is round them, and so are the searches.
+	if t >= _next_warm:
 		_next_warm = t + WARM_EVERY
+		var at := Vector3.INF
 		for p in pawns:
 			if is_instance_valid(p) and p.has_meta(&"player"):
-				ai_nav.call(&"warm", p.feet(), WARM_RADIUS)
+				at = p.feet()
 				break
+		if at != Vector3.INF:
+			for n in all_navs():
+				if n.has_method(&"warm"):
+					n.call(&"warm", at, WARM_RADIUS)
 	# The maps of the other sizes of body are served here, a little each.
 	for size in navs:
 		(navs[size] as AINav).service(NAV_SIZE_USEC)
