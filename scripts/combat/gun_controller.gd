@@ -196,6 +196,10 @@ func set_trigger(down: bool) -> void:
 	_trigger = down
 
 
+func trigger_held() -> bool:
+	return _trigger
+
+
 func reload() -> void:
 	if gun == null or is_reloading() or ammo >= mag_size():
 		return

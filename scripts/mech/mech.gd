@@ -100,6 +100,9 @@ var aim_point := Vector3.INF
 var legs: Node3D
 var torso: Node3D
 var arm: Node3D
+## The dark slab across the front at the eye. Hidden while the player sits behind
+## it (MechPilot): from inside it was a black wall across the view.
+var canopy: MeshInstance3D
 ## Where rounds leave the arm. GunController's aim.
 var muzzle: Node3D
 ## Arm yaw relative to the torso, radians.
@@ -480,7 +483,7 @@ func _build_greybox() -> void:
 	_box(torso, Vector3(0.0, feet_y + COURSE * 11.5, 0.0),
 			Vector3(STUD * 9.0, COURSE * 5.0, STUD * 7.0), brick)
 	# The canopy: a darker slab across the front at the eye.
-	_box(torso, Vector3(0.0, feet_y + COCKPIT_Y + COURSE * 0.3, -STUD * 3.5),
+	canopy = _box(torso, Vector3(0.0, feet_y + COCKPIT_Y + COURSE * 0.3, -STUD * 3.5),
 			Vector3(STUD * 5.0, COURSE * 1.5, STUD * 0.6), dark)
 	_box(torso, Vector3(-STUD * 5.0, feet_y + COURSE * 12.5, 0.0),
 			Vector3(STUD * 2.0, COURSE * 3.0, STUD * 3.0), brick)
@@ -495,7 +498,7 @@ func _build_greybox() -> void:
 	arm.add_child(muzzle)
 
 
-static func _box(parent: Node3D, at: Vector3, size: Vector3, mat: Material) -> void:
+static func _box(parent: Node3D, at: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
@@ -503,3 +506,4 @@ static func _box(parent: Node3D, at: Vector3, size: Vector3, mat: Material) -> v
 	mi.material_override = mat
 	mi.position = at
 	parent.add_child(mi)
+	return mi
