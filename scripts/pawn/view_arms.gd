@@ -63,6 +63,9 @@ var reach_gap := [0.0, 0.0]
 
 var _bone := {}
 var _hands := [[], []]
+## Where a hand holds something (a grenade): the middle of its C.
+var _held_at: Array[Node3D] = [null, null]
+var _rope: MeshInstance3D
 var _shown := [Hand.C, Hand.C]
 var _want := [Hand.C, Hand.C]
 var _waited := [0.0, 0.0]
@@ -99,6 +102,13 @@ func _build() -> void:
 				Transform3D(Basis.IDENTITY, Vector3(0.0, FORE, 0.0)))
 		_dress(side, arm, fore, hand)
 	skeleton.reset_bone_poses()
+	_rope = MeshInstance3D.new()
+	_rope.name = "Rope"
+	_rope.mesh = _cylinder(0.005, 0.005, 1.0)
+	_rope.material_override = _mat(Color(0.12, 0.12, 0.13))
+	_rope.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_rope.visible = false
+	add_child(_rope)
 
 
 func _add_bone(n: String, parent: int, rest: Transform3D) -> int:
@@ -140,6 +150,11 @@ func _dress(side: int, arm: int, fore: int, hand: int) -> void:
 	_mesh(lo, _cylinder(0.031, 0.031, 0.03), cuff, Vector3(0.0, FORE - 0.015, 0.0))
 	var h := _attach(hand)
 	_mesh(h, _cylinder(0.018, 0.018, 0.03), skin, Vector3(0.0, 0.015, 0.0))
+	var at := Node3D.new()
+	at.name = "Held"
+	at.position = Vector3(0.0, HOLE_Y, 0.0)
+	h.add_child(at)
+	_held_at[side] = at
 	var shapes: Array = []
 	for kind in [Hand.C, Hand.PINCH, Hand.OPEN, Hand.FIST]:
 		var holder := Node3D.new()
@@ -268,6 +283,27 @@ func set_hand(side: int, kind: int) -> void:
 
 func shown_hand(side: int) -> int:
 	return _shown[side]
+
+
+## A node at the middle of this hand's C, to hang what it holds on.
+func held_point(side: int) -> Node3D:
+	return _held_at[side]
+
+
+## The middle of this hand's C last frame, in this node's (the camera's) space.
+func hole(side: int) -> Vector3:
+	return _hole[side]
+
+
+## A line from `a` to `b` (this node's space): the grapple's.
+func set_rope(a: Vector3, b: Vector3, on: bool) -> void:
+	var size := a.distance_to(b)
+	_rope.visible = on and size > 0.01
+	if not _rope.visible:
+		return
+	var ab := _aim(b - a, Vector3.BACK)
+	_rope.transform = Transform3D(Basis(ab.x, ab.y * size, ab.z),
+			(a + b) * 0.5)
 
 
 func _swap_hands(delta: float) -> void:
