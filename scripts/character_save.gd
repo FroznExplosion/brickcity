@@ -17,6 +17,9 @@ var character := {"name": "Pilot", "level": 1, "max_health": 100.0, "xp": 0, "sk
 		"scrap": 0, "story_tier": 1}
 var mech := {"gun": {"class": "lmg", "seed": 1, "tier": 1, "rarity": -1}}
 var guns: Array = []
+## The player's kit (PlayerArsenal), as `loadout_dict` keeps it: the four slots, the
+## ordnance and the backpack, each gun a `gun_entry`. Empty: no kit yet, the starting one.
+var loadout := {}
 ## Mission id -> {"state": "open" | "done" | "failed", "progress": ...}.
 var missions := {}
 ## ThreatProfile.to_dict().
@@ -27,7 +30,7 @@ var aggro := {"pilot": 0.5, "mech": 0.5}
 
 
 func to_dict() -> Dictionary:
-	return {"version": VERSION, "character": character, "mech": mech, "guns": guns,
+	return {"version": VERSION, "character": character, "mech": mech, "guns": guns, "loadout": loadout,
 			"missions": missions, "threat_profile": threat_profile, "aggro": aggro}
 
 
@@ -40,6 +43,7 @@ static func from_dict(d: Dictionary) -> CharacterSave:
 	s.character.merge(d.get("character", {}), true)
 	s.mech.merge(d.get("mech", {}), true)
 	s.guns = (d.get("guns", []) as Array).duplicate(true)
+	s.loadout = (d.get("loadout", {}) as Dictionary).duplicate(true)
 	s.missions = (d.get("missions", {}) as Dictionary).duplicate(true)
 	s.threat_profile = (d.get("threat_profile", {}) as Dictionary).duplicate(true)
 	s.aggro.merge(d.get("aggro", {}), true)
@@ -109,16 +113,100 @@ func take_encounter(commander: Commander, table: AggroTable, player := 0) -> voi
 		aggro = {"pilot": pilot / total, "mech": mech_share / total}
 
 
-## A gun, kept as what makes it: class, seed, tier, and the rarity it was FORCED
-## to when it was made (-1: rolled from its seed, as loot is). Its rarity comes
-## out of the seed then -- forcing it on the way back would roll a different gun.
+## A gun, kept as what makes it: class, seed, tier, the rarity it was FORCED to when it
+## was made (-1: rolled from its seed, as most loot is -- forcing it on the way back would
+## roll a different gun), the luck its parts rolled with, and the legendary it is, if one.
+## Its parts' ids ride along as a check: if the part library has changed under the save,
+## `make_gun` builds those parts instead of what the seed now rolls. Infused, its tier is
+## the tier it was lifted to (Infusion): made again there, it is the same gun.
 static func gun_entry(g: GunInstance, forced_rarity := -1) -> Dictionary:
-	return {"class": String(g.weapon_class.id) if g.weapon_class != null else "pistol",
-			"seed": g.gun_seed, "tier": g.tier, "rarity": forced_rarity}
+	var res := g.result
+	var e := {"class": String(g.weapon_class.id) if g.weapon_class != null else "pistol",
+			"seed": g.gun_seed, "tier": g.tier,
+			"rarity": res.forced_rarity if res != null and res.forced_rarity > 0 else forced_rarity}
+	if res != null:
+		e["luck"] = res.luck
+		if res.legendary_id != &"":
+			e["legendary"] = String(res.legendary_id)
+		var parts := {}
+		for slot: int in res.recipe:
+			parts[str(slot)] = String((res.recipe[slot] as GunPartDef).id)
+		e["parts"] = parts
+	return e
 
 
 ## The same gun, made again.
 static func make_gun(entry: Dictionary, lib: GunPartLibrary) -> GunInstance:
-	return GunInstance.from_result(GunGenerator.generate(lib, int(entry.get("seed", 1)),
-			WeaponClass.builtin(StringName(entry.get("class", "pistol"))), int(entry.get("tier", 1)),
-			int(entry.get("rarity", -1))))
+	return GunInstance.from_result(make_result(entry, lib))
+
+
+static func make_result(entry: Dictionary, lib: GunPartLibrary) -> GunGenerator.Result:
+	var gen_seed := int(entry.get("seed", 1))
+	var tier := clampi(int(entry.get("tier", 1)), 1, Tier.COUNT)
+	var luck := float(entry.get("luck", 1.0))
+	var leg := LegendaryTable.get_def(StringName(entry.get("legendary", "")))
+	var res: GunGenerator.Result
+	if leg != null:
+		res = GunGenerator.generate_legendary(lib, gen_seed, leg, tier, luck)
+	else:
+		res = GunGenerator.generate(lib, gen_seed,
+				WeaponClass.builtin(StringName(entry.get("class", "pistol"))), tier,
+				int(entry.get("rarity", -1)), luck)
+	var parts: Dictionary = entry.get("parts", {})
+	if parts.is_empty() or leg != null:
+		return res
+	for slot: int in res.recipe:
+		if String(parts.get(str(slot), "")) != String((res.recipe[slot] as GunPartDef).id):
+			return _from_parts(entry, lib, res)
+	if parts.size() != res.recipe.size():
+		return _from_parts(entry, lib, res)
+	return res
+
+
+## The seed no longer rolls the saved parts (the library changed): the saved parts, put
+## together again (GunGenerator.deserialize), at the rarity the seed made.
+static func _from_parts(entry: Dictionary, lib: GunPartLibrary,
+		rolled: GunGenerator.Result) -> GunGenerator.Result:
+	var ids := {}
+	for k in (entry.get("parts", {}) as Dictionary):
+		ids[int(k)] = StringName(entry.parts[k])
+	var data := {"seed": rolled.seed, "rarity": rolled.rarity, "tier": rolled.tier,
+			"class": rolled.weapon_class.id, "parts": ids, "luck": rolled.luck}
+	var res := GunGenerator.deserialize(lib, data)
+	if not res.recipe.has(GunPartDef.Slot.BODY):
+		return rolled
+	res.forced_rarity = rolled.forced_rarity
+	return res
+
+
+## A Loadout of GunInstances, as a save keeps it.
+static func loadout_dict(lo: Loadout) -> Dictionary:
+	var slots := []
+	for g in lo.slots:
+		slots.append(gun_entry(g) if g != null else null)
+	var pack := []
+	for g in lo.backpack:
+		pack.append(gun_entry(g))
+	return {"slots": slots, "ordnance": gun_entry(lo.ordnance) if lo.ordnance != null else null,
+			"backpack": pack, "backpack_size": lo.backpack_size, "group": lo.group,
+			"hand": lo.hand.duplicate()}
+
+
+## The kit `d` into the empty Loadout `lo`, every gun made again. A tried floor gun was
+## never the player's, so it is not kept.
+static func fill_loadout(lo: Loadout, d: Dictionary, lib: GunPartLibrary) -> void:
+	var slots: Array = d.get("slots", [])
+	for i in mini(slots.size(), Loadout.SLOTS):
+		if slots[i] is Dictionary:
+			lo.slots[i] = make_gun(slots[i], lib)
+	if d.get("ordnance") is Dictionary:
+		lo.ordnance = make_gun(d.ordnance, lib)
+	lo.backpack_size = maxi(int(d.get("backpack_size", Loadout.BACKPACK_START)), Loadout.BACKPACK_START)
+	for e in d.get("backpack", []):
+		if e is Dictionary and lo.backpack.size() < lo.backpack_size:
+			lo.backpack.append(make_gun(e, lib))
+	var hand: Array = d.get("hand", [0, 0])
+	if hand.size() == 2:
+		lo.hand = [clampi(int(hand[0]), 0, 1), clampi(int(hand[1]), 0, 1)]
+	lo.group = clampi(int(d.get("group", 0)), 0, 1)
+	lo._settle()

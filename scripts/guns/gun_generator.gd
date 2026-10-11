@@ -37,6 +37,10 @@ class Result:
 	@warning_ignore("shadowed_global_identifier")
 	var seed: int
 	var rarity: int
+	## The rarity it was made at when that was forced (LootRoller, a legendary), else -1:
+	## rolled from its seed. A save needs it -- forcing skips a roll, so the seed alone
+	## makes a different gun (CharacterSave.gun_entry).
+	var forced_rarity: int = -1
 	var recipe: Dictionary                       # Slot -> GunPartDef
 	var stats: Dictionary[StringName, float]
 	## The stats before modifiers. The score reads these: it is tiers of power from tier,
@@ -96,6 +100,7 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 	res.weapon_class = weapon_class if weapon_class != null else WeaponClass.builtin(&"pistol")
 	res.tier = tier
 	res.rarity = clampi(forced_rarity, 1, 6) if forced_rarity > 0 else _roll_rarity(rng)
+	res.forced_rarity = res.rarity if forced_rarity > 0 else -1
 	res.luck = luck
 	res.recipe = {}
 

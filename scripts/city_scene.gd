@@ -4186,6 +4186,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		_gun_library = GunPlaceholderParts.build_library()
 	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
 			arena.level if arena != null else 1)
+	_load_kit()
 	_arsenal.fill_default(_loot_rng)
 	print("[city] playing: pawn at %v" % feet)
 
@@ -4197,6 +4198,16 @@ func _load_progress() -> void:
 		return
 	_player.progress.take(CharacterSave.load_from().progress_dict())
 	_player.progress.changed.connect(_save_progress)
+
+
+## The player's saved kit (CharacterSave.loadout), made again -- once, the first time
+## the arsenal is set up, and not in a pass or a test window. From then on it is saved
+## whenever it changes (PlayerArsenal.kit_changed).
+func _load_kit() -> void:
+	if _scripted or TestWindow.is_test_window() or _arsenal.kit_changed.is_connected(_save_progress):
+		return
+	_arsenal.restore(CharacterSave.load_from().loadout)
+	_arsenal.kit_changed.connect(_save_progress)
 
 
 ## A safehouse workbench by where the player first stands (COMBAT_DESIGN 1.2): a stand-in
@@ -4218,6 +4229,8 @@ func _place_workbench(feet: Vector3) -> void:
 func _save_progress() -> void:
 	var s := CharacterSave.load_from()
 	s.take_progress(_player.progress)
+	if _arsenal != null and not _arsenal.loadout.all_guns().is_empty():
+		s.loadout = _arsenal.kit_dict()
 	s.save()
 
 
