@@ -59,6 +59,12 @@ damage moves to the new tier.
   `tier` in the entry. A probe must hold that: the same seed at two tiers gives the same gun except
   damage.
 
+As built (step 10): the material is **scrap** — kills drop it, and a gun broken down at the bench
+gives it. The bench lifts a gun straight to the story tier (the highest tier of fight the player
+has reached); it never lowers one. Infusing scales the gun's damage by the step between the two
+tiers and leaves everything else as it is, a legendary's signature and a forced rarity included
+(`GunGenerator.retier`).
+
 ### 1.3 Player level and the skill tree
 
 - **Levels 1–100**, from XP. Each level gives a **skill point**; some levels also unlock an
@@ -525,13 +531,15 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 9. ~~**Player level and the skill tree**: XP, points, the Vanguard Brawler branch, health/shield
    nodes with their cap, the first abilities.~~ (the level, XP, the tree and its screen are built,
    with placeholder stat nodes; the Brawler's nodes, shields and abilities are still to come)
-10. **Safehouse infusion**: workbench, materials, the same-gun-at-another-tier probe.
+10. ~~**Safehouse infusion**: workbench, materials, the same-gun-at-another-tier probe.~~ (built;
+    the workbench stands by the player's start until there are safehouses)
 
 ## 13. Open questions
 
 - The backpack's size and how it grows.
 - There are no pad bindings in `project.godot` yet: the pad column above is the plan.
-- Infusion materials: what they are and where they drop.
+- Infusion materials: one, scrap, for now (step 10). Kinds of material (a rare one for
+  legendaries, one per zone) are still open.
 - The other skill-tree branches and the ability list.
 
 ---
@@ -744,25 +752,50 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   player has no shield layer yet); XP for objectives and missions; a respec cost; the mouse on the
   tree's screen; a co-op player's own level (one `PlayerLevel`, the host's player).
 
+**Step 10 — safehouse infusion: built 2026-10-10.**
+- `Infusion` (`scripts/progression/infusion.gd`): the cost, `100 × 1.25^(t−1)` scrap for each tier
+  gained into tier t, times the rarity (white 1, green 1.25, blue 1.6, purple 2, legendary 2.5,
+  mythic 3): a white from tier 1 to 4 is 381. A broken-down gun gives `20 × rarity cost × rarity ×
+  1.25^(tier−1)` (a tier-3 purple: 250). A kill drops a quarter of its XP as scrap (a light enemy at
+  tier 1: 5). All three grow 1.25× a tier. Placeholder numbers.
+- `GunGenerator.retier(result, tier)`: the gun in place at another tier — its damage (and so its
+  score) times the step between the tiers, nothing re-rolled. The gun in hand fires at the new
+  damage at once. A saved gun's infusion is its entry's tier (`Infusion.infuse_entry`).
+- `PlayerLevel.scrap` and `story_tier` (the highest fight tier reached, `reach_tier`), saved with
+  the level in `CharacterSave.character`.
+- **The bench** (`Workbench`, `scripts/progression/workbench.gd`): a greybox counter with a lamp.
+  Looked at and held R, the backpack opens on its page: every gun the player holds, its tier and
+  what lifting it costs. Enter infuses; Backspace twice breaks a backpack gun down (never a kit
+  gun). Walking away closes it. `CityScene._place_workbench` sets one down by the player's start,
+  not in a scripted pass.
+- `tools/infusion_probe.gd` (23 checks).
+- **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; saving the
+  loadout (step 5's leftover), so an infused gun lasts the session; a story tier from the story
+  (today it is the highest fight tier reached).
+
 ---
 
 ## 15. Handoff — pick up here (updated 2026-10-10)
 
-Everything above through step 9 is **built, tested and merged into `main`**. The player side it
+Everything above through step 10 — the whole of §12's plan — is **built, tested and merged into
+`main`**. The player side it
 sits on (FPS movement, view model, HUD, settings menu) is documented in
 [../Reference/ceramicedge.md](../Reference/ceramicedge.md) §0, §2.3–2.4, §7.1.
 
-### 15.1 Next: step 10, safehouse infusion
+### 15.1 Next
 
-What it must do (§1.1–1.2, PROGRESSION_SPEC §1.1): a workbench that rewrites a saved gun's `tier`
-for materials, and the probe that the same seed at two tiers is the same gun except damage.
+§12's ten steps are built. What is left, by weight:
 
-### 15.2 After that
-
-What steps 7–9 left (§14): the real skill nodes (the Vanguard Brawler's, abilities, shields),
-the other alt-fires and special weapons, frozen enemies shattering. Step 5's leftovers: ammo reserves, a draw time on the swap, saving the
-loadout, co-op drops, pad bindings. Also open: helmets and head crits (switch `Pawn.head_crits` on when
-enemies are figures), and §13's questions.
+- **The real skill tree** (§1.3, §4.2): the Vanguard Brawler's melee nodes, the abilities (grapple,
+  overshield, ...), a player shield layer and its nodes. `SkillTree.NODES` is data; the placeholder
+  stat nodes give way to them.
+- **Saving the loadout** (step 5): the guns as `CharacterSave.gun_entry`s, so loot and infusion
+  outlast the session.
+- What steps 7–8 left: the other alt-fires and the special ordnance weapons, frozen enemies
+  shattering, AI soldiers using alt-fires.
+- Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
+- Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
+  questions.
 
 ### 15.3 Where things are
 
@@ -779,6 +812,7 @@ enemies are figures), and §13's questions.
 | Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
 | Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
 | Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
+| Infusion and scrap | `scripts/progression/infusion.gd`, `workbench.gd`; `GunGenerator.retier`; the bench's page in `PlayerArsenal` (`open_bench`, `infuse`, `salvage`) |
 | Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
@@ -786,7 +820,7 @@ enemies are figures), and §13's questions.
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`

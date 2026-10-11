@@ -4187,6 +4187,8 @@ func _enter_pawn(feet: Vector3) -> void:
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
 		_load_progress()
+		if not _scripted:
+			_place_workbench(feet)
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
@@ -4202,6 +4204,22 @@ func _load_progress() -> void:
 		return
 	_player.progress.take(CharacterSave.load_from().progress_dict())
 	_player.progress.changed.connect(_save_progress)
+
+
+## A safehouse workbench by where the player first stands (COMBAT_DESIGN 1.2): a stand-in
+## until there are safehouses. Set down on what is under it, a few steps ahead.
+func _place_workbench(feet: Vector3) -> void:
+	var yaw := _player_pawn.intents.look_yaw if _player_pawn != null else 0.0
+	var at := feet + Vector3(-sin(yaw), 0.0, -cos(yaw)) * 3.0 + Vector3(-cos(yaw), 0.0, sin(yaw)) * 1.5
+	var space := get_world_3d().direct_space_state
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(at + Vector3.UP * 2.0,
+			at + Vector3.DOWN * 6.0, Layers.WORLD))
+	if not hit.is_empty():
+		at = hit.position
+	var w := Workbench.create()
+	add_child(w)
+	w.global_position = at
+	w.rotation.y = yaw
 
 
 func _save_progress() -> void:

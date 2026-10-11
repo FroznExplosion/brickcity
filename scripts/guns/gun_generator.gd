@@ -140,6 +140,22 @@ static func _resolve(res: Result) -> void:
 	GunModifiers.apply(res.stats, res.modifiers)
 
 
+## The same gun at another tier (infusion, COMBAT_DESIGN 1.2): its parts, rolls,
+## modifiers, alt-fire, element and name stay; the stats are worked out again at `tier`,
+## which only moves damage (GunStats: the tier is one multiplier on it, and nothing
+## else reads it), and the score follows the damage. Nothing is re-rolled or worked out
+## again -- a gun whose rarity was forced, a legendary's signature -- so it is the gun it
+## was, its damage scaled by the step between the two tiers.
+static func retier(res: Result, tier: int) -> void:
+	var k := Tier.power_mult(tier) / Tier.power_mult(res.tier)
+	res.tier = tier
+	for s in [res.stats, res.base_stats]:
+		if s.has(&"damage"):
+			s[&"damage"] = s[&"damage"] * k
+	res.score = GunQuality.score(res.base_stats if not res.base_stats.is_empty() else res.stats,
+			res.weapon_class)
+
+
 ## Quality, score and name. Shared by generate() and deserialize() so a reassembled gun
 ## reports the identical grade word and score as the one that dropped.
 static func _finish(res: Result, rng: RandomNumberGenerator) -> void:
