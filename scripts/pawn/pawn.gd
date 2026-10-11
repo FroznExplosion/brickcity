@@ -78,10 +78,21 @@ var moves: PawnMoves
 var melee_tier := 1
 ## Seconds until the next melee may start (MeleeStrike.RECOVERY).
 var _melee_cool := 0.0
+## The player's skill tree's melee (PlayerArsenal.apply_skills, COMBAT_DESIGN 4.2); the
+## plain blow for anyone else. `melee_speed` shortens the recovery; `melee_reach` and
+## `melee_lunge` are Kinetic Lunge's (a blow past MeleeStrike.REACH carries the pawn in);
+## `melee_backstab` multiplies a blow from behind (Backstab), 1 for none.
+var melee_speed := 1.0
+var melee_reach := 1.0
+var melee_lunge := false
+var melee_backstab := 1.0
 ## Element statuses (ElementStatus, COMBAT_DESIGN 5): a chill or a shock slows the legs
 ## by this; a freeze stops the pawn where it stands -- no moving, firing or turning.
 var speed_mult := 1.0
 var frozen := false
+## Staggered (the Brawler's Shockwave, COMBAT_DESIGN 4.2): this long more of standing
+## reeling -- no moving, firing or turning, as frozen, but short. Never a player.
+var stagger_left := 0.0
 ## The player's skill tree's move speed (PlayerArsenal.apply_skills): 1 for anyone else.
 var move_mult := 1.0
 ## A player's pawn: slowed by ice, never frozen (PlayerController sets it).
@@ -274,7 +285,8 @@ func is_on_floor() -> bool:
 func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
-	if frozen:
+	stagger_left = maxf(stagger_left - delta, 0.0)
+	if is_held():
 		intents.move = Vector3.ZERO
 		intents.jump = false
 		intents.fire = false
@@ -283,7 +295,7 @@ func _physics_process(delta: float) -> void:
 	step(delta)
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
-		if not frozen:
+		if not is_held():
 			eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
 	_melee_cool = maxf(_melee_cool - delta, 0.0)
 	if intents.melee and _melee_cool <= 0.0:
@@ -297,22 +309,50 @@ func _physics_process(delta: float) -> void:
 	intents.reload = false
 
 
+## Frozen or staggered: the body stands where it is and does nothing, and a soldier's
+## brain waits (Soldier).
+func is_held() -> bool:
+	return frozen or stagger_left > 0.0
+
+
+## Reel for `seconds`, knocked by `push` (m/s, along the ground). Not a player.
+func stagger(seconds: float, push := Vector3.ZERO) -> void:
+	if is_player:
+		return
+	stagger_left = maxf(stagger_left, seconds)
+	if push == Vector3.ZERO:
+		return
+	# The plain walk sets the velocity every tick: a knock goes on the shove, which decays.
+	if moves == null:
+		shove += Vector3(push.x, 0.0, push.z)
+	elif body != null:
+		body.velocity += Vector3(push.x, 0.0, push.z)
+
+
 ## Throw a melee down the eye now (MeleeStrike). The blow's damage is this pawn's
 ## melee_tier; what it reached goes out on `meleed`.
 func melee() -> Dictionary:
-	_melee_cool = MeleeStrike.RECOVERY
+	_melee_cool = MeleeStrike.RECOVERY / melee_speed
 	if eye == null or not eye.is_inside_tree():
 		return {}
 	var ex: Array[RID] = [body.get_rid()]
+	var dir := -eye.global_transform.basis.z
 	var info := MeleeStrike.strike(body.get_world_3d(), eye.global_position,
-			-eye.global_transform.basis.z, melee_tier, ex, self)
+			dir, melee_tier, ex, self, Layers.GUN_MASK, melee_reach, melee_backstab)
+	# Kinetic Lunge: a blow that landed past the plain reach carries the pawn in.
+	if melee_lunge and not info.is_empty() \
+			and eye.global_position.distance_to(info.point) > MeleeStrike.REACH:
+		var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+		body.velocity = Vector3(flat.x * MeleeStrike.LUNGE_SPEED, body.velocity.y,
+				flat.z * MeleeStrike.LUNGE_SPEED)
+		info["lunged"] = true
 	meleed.emit(info)
 	return info
 
 
 ## In the gun-down part of a blow.
 func is_meleeing() -> bool:
-	return _melee_cool > MeleeStrike.RECOVERY - MeleeStrike.GUN_DOWN
+	return _melee_cool > (MeleeStrike.RECOVERY - MeleeStrike.GUN_DOWN) / melee_speed
 
 
 ## One tick of movement from `intents`.

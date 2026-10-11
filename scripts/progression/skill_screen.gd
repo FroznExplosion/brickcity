@@ -102,8 +102,18 @@ func handle(event: InputEvent) -> bool:
 	return false
 
 
-## A point into the node under the cursor.
+## A point into the node under the cursor. On an ability node already bought: the ability
+## into the slot (Q), or back out of it for the grapple.
 func spend() -> bool:
+	var n := SkillTree.node(cursor)
+	if n.has("ability") and progress.tree.rank(cursor) > 0:
+		if progress.ability() == n.ability:
+			progress.set_tactical(&"grapple")
+			_say("Q: the grapple")
+		else:
+			progress.set_tactical(n.ability)
+			_say("Q: %s" % n.name)
+		return true
 	var why := progress.tree.why_not(cursor, progress.points_free())
 	if why != "":
 		_say(why)
@@ -226,6 +236,8 @@ func _draw_all() -> void:
 		c.draw_string(font, Vector2(x0, fy + 20.0), tree.describe(cursor), HORIZONTAL_ALIGNMENT_LEFT, -1,
 				14, Color.WHITE)
 		var why := note if note != "" else tree.why_not(cursor, free)
+		if sel.has("ability") and tree.rank(cursor) > 0 and note == "":
+			why = "In the slot (Q) -- Enter: the grapple instead" if progress.ability() == sel.ability 					else "Enter: into the ability slot (Q)"
 		if why == "":
 			why = "Enter: a point into it"
 		var ww := font.get_string_size(why, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x

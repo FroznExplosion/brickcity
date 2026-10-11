@@ -29,6 +29,13 @@ extends WaveDirector
 ## drop zone. A wave is not over while its armour is still up, or a truck still
 ## has its squad aboard. `-- --ff-armour` puts one of each on every wave.
 ##
+## YOUR MECH is called in, Titanfall's way: the MECH meter fills over time
+## (MECH_FILL_SECONDS) and faster with kills (MECH_PER_POINT of a kill's points);
+## full, M on foot (where there is no hatch to climb into) calls it down where
+## you aim. A beacon stands there MECH_BEACON seconds, then it lands -- crushing
+## any soldier under it -- and M at its hatch boards it. One at a time: the meter
+## fills again only once it is destroyed.
+##
 ## Keys (developer mode): F8 ends the wave now, F7 the spawn survey overlay.
 ##
 ## `-- --gate` is the scripted check (run_firefight_gate).
@@ -70,6 +77,15 @@ const KILL_SCORE := 100.0
 const WAVE_BONUS := 250
 const ROUND_BONUS := 1000
 const SET_BONUS := 5000
+## The mech meter: full in this long on its own; each point of a kill adds this.
+const MECH_FILL_SECONDS := 150.0
+const MECH_PER_POINT := 0.03
+## The meter at the start of a game: full, so the first mech is there from the
+## first wave (a restart fills it again).
+const MECH_START := 1.0
+## Seconds the beacon stands before the mech lands, and how near it crushes.
+const MECH_BEACON := 4.0
+const MECH_CRUSH := 3.5
 ## A truck that has not let its squad out by now does so where it is.
 const TRUCK_PATIENCE := 60.0
 
@@ -94,6 +110,13 @@ var wave_mechs: Array[MechBrain] = []
 ## What armour this wave still has to field once its first squad is down.
 var _armour_due := {}
 var _truck_sent_at := {}
+## The player's mech meter, 0..1, and the call on its way down (INF: none).
+var mech_meter := MECH_START
+var mech_calls := 0
+var _beacon_at := Vector3.INF
+var _beacon_until := 0.0
+var _beacon: MeshInstance3D
+var _said_ready := false
 ## Tanks fielded on a delay, not yet out: the wave waits on them too.
 var _tanks_pending := 0
 var barrier: Node3D
@@ -392,6 +415,7 @@ func _drop_mech() -> MechBrain:
 
 func _score_kill(kind: StringName) -> void:
 	score += int(UnitCatalog.points(kind) * KILL_SCORE * (1.0 + 0.5 * set_index))
+	_fill_mech(UnitCatalog.points(kind) * MECH_PER_POINT)
 
 
 ## Armour of this wave still in the fight, by kind.
@@ -564,6 +588,9 @@ func restart() -> void:
 	level = 1
 	lives = LIVES_START
 	score = 0
+	mech_meter = MECH_START
+	_said_ready = false
+	_clear_beacon()
 	kills = 0
 	wave_left = 0
 	_player_dead_at = -1.0
@@ -618,6 +645,7 @@ func _physics_process(_delta: float) -> void:
 	_reap(now)
 	_keep_in_ring()
 	_player_tick(now)
+	_mech_tick(_delta, now)
 	match phase:
 		Phase.INTRO:
 			if now >= _phase_until:
@@ -727,7 +755,128 @@ func _on_player_died() -> void:
 func _on_soldier_died(so: Soldier) -> void:
 	var kind := StringName(so.get_meta(&"unit", &"rifleman"))
 	score += int(UnitCatalog.points(kind) * KILL_SCORE * (1.0 + 0.5 * set_index))
+	_fill_mech(UnitCatalog.points(kind) * MECH_PER_POINT)
 	super(so)
+
+
+# --- your mech ----------------------------------------------------------------------
+
+func player_mech_up() -> bool:
+	var m: Mech = city._mech
+	return m != null and is_instance_valid(m) and m.health != null and not m.health.is_dead()
+
+
+func _fill_mech(amount: float) -> void:
+	if player_mech_up() or _beacon_at != Vector3.INF:
+		return
+	mech_meter = minf(1.0, mech_meter + amount)
+
+
+func _mech_tick(delta: float, now: float) -> void:
+	if phase == Phase.WAVE or phase == Phase.BREAK:
+		_fill_mech(delta / MECH_FILL_SECONDS)
+	if mech_meter >= 1.0 and not _said_ready:
+		_said_ready = true
+		banner("MECH READY\npress M to call it in", 3.0)
+		print("[firefight] mech ready")
+	if _beacon_at != Vector3.INF and now >= _beacon_until:
+		_land_mech()
+
+
+## M on foot with no hatch in reach (CityScene._board_mech): call the mech down
+## near `aim`. True when this took the key -- it says why when it cannot.
+func call_mech(aim: Vector3) -> bool:
+	if player_mech_up():
+		banner("Your mech is already down\nM at its hatch to board", 2.5)
+		return true
+	if _beacon_at != Vector3.INF:
+		return true
+	if mech_meter < 1.0:
+		banner("Mech not ready: %d%%" % int(mech_meter * 100.0), 2.0)
+		return true
+	var spot := _mech_spot(aim)
+	if spot == Vector3.INF:
+		banner("No room for your mech there", 2.0)
+		return true
+	mech_meter = 0.0
+	_said_ready = false
+	mech_calls += 1
+	_beacon_at = spot
+	_beacon_until = _now() + MECH_BEACON
+	_show_beacon(spot)
+	banner("Mech inbound", 2.0)
+	print("[firefight] mech called in at %v" % spot)
+	return true
+
+
+## Where it lands: the aim point if a mech can stand there (pulled inside the
+## ring), else the nearest drop zone to the player that can take it.
+func _mech_spot(aim: Vector3) -> Vector3:
+	var tries: Array[Vector3] = []
+	if aim != Vector3.INF:
+		var flat := Vector3(aim.x - centre.x, 0.0, aim.z - centre.z)
+		if flat.length() > RING_RADIUS - 4.0:
+			flat = flat.normalized() * (RING_RADIUS - 4.0)
+		var a := centre + flat
+		a.y = city.ai_world.ground_at(a.x, a.z) if absf(aim.y - centre.y) > 6.0 else aim.y
+		tries.append(a)
+	var p := _player()
+	var from := p.feet() if p != null else centre
+	var zones: Array[Vector3] = drop_zones.duplicate()
+	zones.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.distance_to(from) < y.distance_to(from))
+	tries.append_array(zones)
+	for t in tries:
+		var at: Vector3 = t
+		if city.mech_nav != null:
+			at = city.mech_nav.snap(t)
+			if not city.mech_nav.can_stand(at):
+				continue
+		if not in_ring(at, -3.0) or _in_a_building(at) or at.distance_to(from) < 3.0:
+			continue
+		return at
+	return Vector3.INF
+
+
+func _show_beacon(at: Vector3) -> void:
+	if _beacon != null and is_instance_valid(_beacon):
+		_beacon.queue_free()
+	_beacon = MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.3
+	cm.bottom_radius = 0.3
+	cm.height = 80.0
+	_beacon.mesh = cm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.3, 1.0, 0.45, 0.55)
+	_beacon.material_override = mat
+	_beacon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	city.add_child(_beacon)
+	_beacon.global_position = at + Vector3.UP * 40.0
+
+
+func _clear_beacon() -> void:
+	if _beacon != null and is_instance_valid(_beacon):
+		_beacon.queue_free()
+	_beacon = null
+	_beacon_at = Vector3.INF
+
+
+## Down it comes: anybody under it is crushed, and it stands ready to board.
+func _land_mech() -> void:
+	var at := _beacon_at
+	_clear_beacon()
+	for so in alive.duplicate():
+		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn) \
+				and so.pawn.feet().distance_to(at) < MECH_CRUSH:
+			so.pawn.health.apply_impact(1e9, &"")
+	var p := _player()
+	var to := (p.feet() - at) if p != null else Vector3.FORWARD
+	city._spawn_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z) + PI)
+	feedback.burst(at + Vector3.UP * 1.5, Color(0.3, 1.0, 0.45))
+	banner("Mech down\nM at its hatch to board", 3.0)
+	print("[firefight] mech landed at %v" % at)
 
 
 # --- showing it ---------------------------------------------------------------------
@@ -747,6 +896,14 @@ func _update_label() -> void:
 			armour.append("%s%s" % [k[1], (" x%d" % int(a[k[0]])) if int(a[k[0]]) > 1 else ""])
 	if not armour.is_empty():
 		lines.append("ARMOUR  " + "  ".join(armour))
+	if player_mech_up():
+		lines.append("MECH  UP")
+	elif _beacon_at != Vector3.INF:
+		lines.append("MECH  INBOUND %.0f s" % maxf(0.0, _beacon_until - _now()))
+	elif mech_meter >= 1.0:
+		lines.append("MECH  READY -- press M")
+	else:
+		lines.append("MECH  %d%%" % int(mech_meter * 100.0))
 	if p != null and _player_dead_at >= 0.0 and phase != Phase.GAME_OVER:
 		lines.append("back in %.0f s" % maxf(0.0, PLAYER_RESPAWN - (_now() - _player_dead_at)))
 	if phase == Phase.BREAK or phase == Phase.INTRO:
@@ -848,6 +1005,30 @@ func run_firefight_gate() -> void:
 			and lives == LIVES_START and alive.is_empty() and not p.health.is_dead())
 	invulnerable = true
 	await _armour_gate(ok)
+	await _mech_gate(ok)
+
+
+## Your mech: refused while the meter is short, called when it is full -- the
+## meter spent, a beacon up -- landing inside the ring after MECH_BEACON, and
+## refused again while it is up.
+func _mech_gate(ok: Callable) -> void:
+	var p := _player()
+	if city._mech != null and is_instance_valid(city._mech):
+		city._mech.health.apply_impact(1e9, &"")
+	await _frames(2)
+	mech_meter = 0.5
+	var calls0 := mech_calls
+	call_mech(p.feet() + Vector3(6.0, 0.0, 0.0))
+	ok.call("no mech while the meter is short", mech_calls == calls0 and _beacon_at == Vector3.INF)
+	mech_meter = 1.0
+	call_mech(centre + Vector3(6.0, 0.0, 6.0))
+	ok.call("a full meter calls it in", mech_calls == calls0 + 1 and _beacon_at != Vector3.INF
+			and mech_meter == 0.0)
+	await _until(func() -> bool: return player_mech_up(), MECH_BEACON + 3.0)
+	ok.call("it lands, inside the ring", player_mech_up() and in_ring(city._mech.feet()))
+	mech_meter = 1.0
+	call_mech(centre)
+	ok.call("one at a time", mech_calls == calls0 + 1)
 
 
 ## Armour: a wave with a truck, a tank and a mech fields all three -- the mech

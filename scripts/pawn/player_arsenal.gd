@@ -20,17 +20,27 @@ extends Node
 ##                 drops, I closes. Tab turns to the skill tree's page (SkillScreen) and back.
 ##
 ## The player's skills (SkillTree, through PlayerController.progress) are put into the
-## hands here: `apply_skills`, on every change. A level up says so on the HUD, and the
+## hands here: `apply_skills`, on every change -- the guns, the legs, the body's health
+## and the player's SHIELD (a layer over the health, PLAYER_SHIELD, that recharges after
+## SHIELD_DELAY unhurt), the melee augments (the Brawler: Kinetic Lunge, Backstab on the
+## pawn; Shield-Shatter Shockwave and Vampiric Impact here, on what a blow did), and the
+## ability slot: Q fires the Overshield when the slot holds it (PlayerLevel.ability). A level up says so on the HUD, and the
 ## HUD's bar shows the XP.
 ##
 ## One GunController fires whatever is in hand: a swap re-equips it, and each gun
 ## keeps its own magazine (`_ammo`). Guns not in hand wait, hidden, under `_holster`
 ## -- in the tree, so nothing is ever freed out of it.
 ##
+## The kit is kept between sessions (CharacterSave.loadout): `restore` makes it again,
+## and `kit_changed` says when what is carried has changed -- a gun kept, stowed, dropped,
+## broken down or infused -- for the scene to save.
+##
 ## The keys are input actions (project.godot), so Options rebinds them. A key this
 ## handles is marked handled, so the scene's debug keys under it do not also fire.
 
 signal changed
+## What the kit holds changed (CharacterSave.loadout_dict differs): time to save it.
+signal kit_changed
 
 const HOLD_SWAP := 0.25
 const HOLD_INTERACT := 0.35
@@ -84,6 +94,37 @@ var _pre_tap_hand := 0
 var _reload_held := -1.0
 var _reload_used := false
 var _hud: ArsenalHud
+## The kit as last seen (CharacterSave.loadout_dict), checked every KIT_CHECK seconds.
+var _kit_seen := {}
+var _kit_clock := 0.0
+const KIT_CHECK := 2.0
+
+## The player's shield (COMBAT_DESIGN 1.3): a layer over the health, the size of half
+## of it, full again two seconds after it starts to recharge. The tree raises it
+## (SkillTree.SHIELD_CAP) and shortens the wait.
+const PLAYER_SHIELD := 50.0
+const SHIELD_RATE := 25.0
+const SHIELD_DELAY := 4.0
+const SHIELD_COLOUR := Color(0.35, 0.8, 1.0)
+## The Overshield ability: the shield's size doubled and filled, for OVERSHIELD_TIME;
+## OVERSHIELD_COOLDOWN from its start to the next (faster with the tree's ability recharge).
+const OVERSHIELD_MULT := 2.0
+const OVERSHIELD_TIME := 8.0
+const OVERSHIELD_COOLDOWN := 30.0
+## Shield-Shatter Shockwave: its reach, and the share of each enemy's shield it strips.
+const SHOCKWAVE_RADIUS := 4.0
+const SHOCKWAVE_STRIP := 0.25
+## ... and staggers every enemy in it, the struck one too, knocked away from the blow.
+const SHOCKWAVE_STAGGER := 1.0
+const SHOCKWAVE_PUSH := 4.0
+## Vampiric Impact: the share of the shield a melee kill gives back.
+const VAMPIRIC_SHIELD := 0.5
+const BACKSTAB_MULT := 2.5
+const LUNGE_REACH := 1.5
+
+var overshield_left := 0.0
+var ability_cool := 0.0
+var _melee_pawn: Pawn
 
 
 func setup(p_player: PlayerController, p_gun: GunController, p_view: PlayerView,
@@ -140,13 +181,167 @@ func apply_skills() -> void:
 	var pawn := player.pawn
 	if pawn != null and is_instance_valid(pawn):
 		pawn.move_mult = 1.0 + t.total(&"move_speed")
+		_apply_shield(pawn.health)
 		apply_health(pawn.health, t.total(&"max_health"), t.total(&"health_regen"))
+		pawn.melee_speed = 1.0 + t.total(&"melee_speed")
+		pawn.melee_lunge = t.has(&"lunge")
+		pawn.melee_reach = LUNGE_REACH if pawn.melee_lunge else 1.0
+		pawn.melee_backstab = BACKSTAB_MULT if t.has(&"backstab") else 1.0
+		if pawn.moves != null:
+			pawn.moves.cooldown_speed = 1.0 + t.total(&"ability_cooldown")
+		if _melee_pawn != pawn:
+			if _melee_pawn != null and is_instance_valid(_melee_pawn) \
+					and _melee_pawn.meleed.is_connected(_on_meleed):
+				_melee_pawn.meleed.disconnect(_on_meleed)
+			pawn.meleed.connect(_on_meleed)
+			_melee_pawn = pawn
 	changed.emit()
 
 
+## The player's shield from the tree, onto `pool`, the Overshield's too while it holds.
+func _apply_shield(pool: HealthPool) -> void:
+	var t := player.progress.tree
+	ensure_shield(pool, t.total(&"max_shield"), t.total(&"shield_delay"), t.total(&"shield_rate"),
+			OVERSHIELD_MULT if overshield_left > 0.0 else 1.0)
+
+
+## The player's shield layer on `pool`, put over its health the first time: PLAYER_SHIELD
+## grown by `share`, its wait shortened by `delay_cut`, its recharge sped by `rate`, and
+## `over` times its size while an Overshield holds. More shield bought is shield had at
+## once; a smaller one keeps no more than fits. A shield that breaks lets half of what is
+## left of the hit through (shield gating, COMBAT_DESIGN 4.5): the pool carries on.
+static func ensure_shield(pool: HealthPool, share := 0.0, delay_cut := 0.0, rate := 0.0,
+		over := 1.0) -> int:
+	if pool == null:
+		return -1
+	var idx := shield_index(pool)
+	if idx < 0:
+		var cfg := DefenseLayer.new()
+		cfg.layer_type = &"shield"
+		cfg.display_color = SHIELD_COLOUR
+		cfg.max_value = PLAYER_SHIELD
+		pool.layer_configs.insert(0, cfg)
+		pool._current.insert(0, PLAYER_SHIELD)
+		pool._regen_timer.insert(0, 0.0)
+		# The health stays the vital layer wherever it now sits.
+		pool.impact_carries_over = true
+		idx = 0
+	var c := pool.layer_configs[idx]
+	var was := c.max_value
+	c.max_value = PLAYER_SHIELD * (1.0 + share) * over
+	c.regen_rate = SHIELD_RATE * (1.0 + rate)
+	c.regen_delay = SHIELD_DELAY * maxf(1.0 - delay_cut, 0.2)
+	if idx < pool._current.size() and not pool.is_dead():
+		pool._current[idx] = clampf(pool._current[idx] + maxf(c.max_value - was, 0.0), 0.0, c.max_value)
+	return idx
+
+
+## Where the shield layer is in `pool`, -1 for none. Changes nothing.
+static func shield_index(pool: HealthPool) -> int:
+	if pool == null:
+		return -1
+	for i in pool.layer_configs.size():
+		if pool.layer_configs[i].layer_type == &"shield":
+			return i
+	return -1
+
+
+## The ability slot (Q) fired: the Overshield, if that is what it holds and it is ready.
+func use_ability() -> bool:
+	if player == null or player.progress.ability() != &"overshield":
+		return false
+	if ability_cool > 0.0:
+		_say("Overshield recharging: %d s" % ceili(ability_cool))
+		return false
+	overshield_left = OVERSHIELD_TIME
+	ability_cool = OVERSHIELD_COOLDOWN / (1.0 + player.progress.tree.total(&"ability_cooldown"))
+	var pawn := player.pawn
+	if pawn != null and is_instance_valid(pawn) and pawn.health != null:
+		_apply_shield(pawn.health)
+		var idx := shield_index(pawn.health)
+		pawn.health._current[idx] = pawn.health.layer_configs[idx].max_value
+	_say("Overshield!")
+	changed.emit()
+	return true
+
+
+func _overshield_over() -> void:
+	overshield_left = 0.0
+	var pawn := player.pawn if player != null else null
+	if pawn != null and is_instance_valid(pawn) and pawn.health != null:
+		_apply_shield(pawn.health)
+		var idx := shield_index(pawn.health)
+		pawn.health._current[idx] = minf(pawn.health._current[idx], pawn.health.layer_configs[idx].max_value)
+
+
+## What a blow of the player's did, for the Brawler's nodes: a shield broken sends the
+## Shockwave; a kill feeds Vampiric Impact.
+func _on_meleed(info: Dictionary) -> void:
+	if info.is_empty() or player == null:
+		return
+	var t := player.progress.tree
+	if t.has(&"shockwave") and info.get("broke_shield", false):
+		shockwave(info.point, info.get("target") as Node)
+	var r = info.get("result")
+	if t.has(&"vampiric") and r != null and r.killed:
+		var pawn := player.pawn
+		var idx := shield_index(pawn.health) if pawn != null else -1
+		if idx >= 0:
+			var c := pawn.health.layer_configs[idx]
+			pawn.health._current[idx] = minf(pawn.health._current[idx] + c.max_value * VAMPIRIC_SHIELD,
+					c.max_value)
+		if gun != null and gun.gun != null:
+			gun.ammo = gun.mag_size()
+		changed.emit()
+
+
+## Shield-Shatter Shockwave at `at`: every enemy within SHOCKWAVE_RADIUS, the struck one
+## `hit` too, is staggered SHOCKWAVE_STAGGER and knocked back; every other one loses
+## SHOCKWAVE_STRIP of its whole shield, if it has one up. Returns how many it stripped.
+func shockwave(at: Vector3, hit: Node = null) -> int:
+	var world := world_parent.get_world_3d() if world_parent != null else null
+	if world == null:
+		return 0
+	var team := player.pawn.team if player.pawn != null else 0
+	var sphere := SphereShape3D.new()
+	sphere.radius = SHOCKWAVE_RADIUS
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = sphere
+	q.transform = Transform3D(Basis.IDENTITY, at)
+	q.collision_mask = Layers.GUN_MASK
+	SplashFlash.spawn(world_parent, at, SHOCKWAVE_RADIUS, SHIELD_COLOUR)
+	var seen := {}
+	var n := 0
+	var found: Array = [hit] if hit != null else []
+	for r in world.direct_space_state.intersect_shape(q, 64):
+		found.append(GunController._living(r.collider))
+	for target in found:
+		if target == null or seen.has(target):
+			continue
+		seen[target] = true
+		var pawn := (target as Node).get_node_or_null(^"Pawn") as Pawn
+		if pawn != null and pawn.team == team:
+			continue
+		if pawn != null:
+			var away: Vector3 = pawn.feet() - at
+			away.y = 0.0
+			pawn.stagger(SHOCKWAVE_STAGGER, away.normalized() * SHOCKWAVE_PUSH if away.length() > 0.01
+					else Vector3.ZERO)
+		if target == hit:
+			continue
+		var pool := DamageSystem._find_health_pool(target)
+		if pool == null or pool.top_layer_type() != &"shield":
+			continue
+		var i := pool._index_of_living_type(&"shield")
+		pool.apply_to_layer_type(pool.layer_configs[i].max_value * SHOCKWAVE_STRIP, &"shield", &"")
+		n += 1
+	return n
+
+
 ## Health over its base by `share`, and `regen` a second after REGEN_DELAY unhurt. The
-## base is kept on the pool the first time, so it never compounds; more health bought is
-## health had at once.
+## base is kept on the layer the first time, so it never compounds (and a shield put
+## over it later, which moves its index, changes nothing); more health bought is health
+## had at once.
 const REGEN_DELAY := 5.0
 static func apply_health(pool: HealthPool, share: float, regen: float) -> void:
 	if pool == null:
@@ -155,10 +350,9 @@ static func apply_health(pool: HealthPool, share: float, regen: float) -> void:
 		var cfg := pool.layer_configs[i]
 		if cfg.layer_type != &"health":
 			continue
-		var key := StringName("skill_base_%d" % i)
-		if not pool.has_meta(key):
-			pool.set_meta(key, [cfg.max_value, cfg.regen_rate, cfg.regen_delay])
-		var base: Array = pool.get_meta(key)
+		if not cfg.has_meta(&"skill_base"):
+			cfg.set_meta(&"skill_base", [cfg.max_value, cfg.regen_rate, cfg.regen_delay])
+		var base: Array = cfg.get_meta(&"skill_base")
 		var was := cfg.max_value
 		cfg.max_value = float(base[0]) * (1.0 + share)
 		cfg.regen_rate = float(base[1]) + regen
@@ -188,6 +382,30 @@ func fill_default(rng: RandomNumberGenerator) -> void:
 		loadout.set_slot(i, _roll(kit[i], rng))
 	loadout.ordnance = _roll(&"rocket_launcher", rng)
 	_show()
+
+
+## The saved kit `d` (CharacterSave.loadout) made again, in place of an empty loadout;
+## the gun the controller held, not part of it, is let go. False when there was no kit to
+## make (nothing saved): the caller fills the starting kit then.
+func restore(d: Dictionary) -> bool:
+	if d.is_empty() or not loadout.all_guns().is_empty() or library == null:
+		return false
+	CharacterSave.fill_loadout(loadout, d, library)
+	if loadout.all_guns().is_empty():
+		return false
+	for g in loadout.all_guns():
+		_adopt(g)
+	var old := gun.gun
+	_show()
+	if old != null and is_instance_valid(old) and not loadout.all_guns().has(old):
+		old.queue_free()
+	_kit_seen = CharacterSave.loadout_dict(loadout)
+	return true
+
+
+## The kit as a save keeps it.
+func kit_dict() -> Dictionary:
+	return CharacterSave.loadout_dict(loadout)
 
 
 ## Swap the gun in hand for `g` (the debug gun cycle). The old one is freed.
@@ -251,6 +469,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_apply(loadout.toggle_ordnance())
 	elif _pressed(event, &"grenade"):
 		throw_grenade()
+	elif _pressed(event, &"grapple") and player != null and player.progress.ability() != &"grapple":
+		use_ability()
 	elif _pressed(event, &"inventory"):
 		inventory_open = true
 		inventory_index = clampi(inventory_index, 0, maxi(loadout.backpack.size() - 1, 0))
@@ -315,6 +535,16 @@ func _process(delta: float) -> void:
 			note = ""
 	if skills != null:
 		skills.show_screen(inventory_open and inventory_page == 1 and _active())
+	if ability_cool > 0.0:
+		ability_cool = maxf(ability_cool - delta, 0.0)
+	if overshield_left > 0.0:
+		overshield_left -= delta
+		if overshield_left <= 0.0:
+			_overshield_over()
+	_kit_clock += delta
+	if _kit_clock >= KIT_CHECK:
+		_kit_clock = 0.0
+		check_kit()
 	if grenades < grenades_max:
 		_grenade_clock += delta
 		if _grenade_clock >= grenade_recharge:
@@ -390,6 +620,16 @@ func pick_up(p: WorldGunPickup) -> void:
 
 
 ## The floor gun nearest the crosshair, in reach.
+## `kit_changed`, if the kit is not what it was last time.
+func check_kit() -> void:
+	if loadout.all_guns().is_empty():
+		return
+	var now := kit_dict()
+	if now != _kit_seen:
+		_kit_seen = now
+		kit_changed.emit()
+
+
 # --- the workbench (COMBAT_DESIGN 1.2) -------------------------------------------------
 
 const BENCH_REACH := 3.0
@@ -442,8 +682,12 @@ func infuse(g: GunInstance) -> bool:
 	if why != "":
 		_say(why)
 		return false
-	pl.spend_scrap(Infusion.cost(g.rarity, g.tier, pl.story_tier))
+	var cost := Infusion.cost(g.rarity, g.tier, pl.story_tier)
+	# The gun first, then the scrap: spending saves (PlayerLevel.changed), and the save
+	# should hold the infused gun with the scrap it cost.
 	Infusion.infuse(g, pl.story_tier)
+	pl.spend_scrap(cost)
+	_kit_seen = kit_dict()
 	_say("%s infused to tier %d" % [g.gun_name, g.tier])
 	changed.emit()
 	return true
@@ -516,6 +760,19 @@ func throw_grenade() -> void:
 	if grenades <= 0 or services == null or player == null or player.pawn == null:
 		_say("No grenades")
 		return
+	# The hands throw it (PlayerView.start_throw); it leaves when the arm lets go.
+	if view != null:
+		view.start_throw(_release_grenade)
+		return
+	_release_grenade(null)
+
+
+## The grenade leaves the hand: from `from` (world), else just ahead of the eye,
+## to where the crosshair is now.
+func _release_grenade(from: Variant) -> void:
+	if grenades <= 0 or services == null or player == null or player.pawn == null \
+			or not is_instance_valid(player.pawn):
+		return
 	var cam := get_viewport().get_camera_3d()
 	var eye := cam.global_position
 	var fwd := -cam.global_transform.basis.z
@@ -532,7 +789,8 @@ func throw_grenade() -> void:
 		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(far, far + Vector3.DOWN * 60.0,
 				Layers.PAWN_MASK, ex))
 		to = down.position if not down.is_empty() else far
-	var g := Grenade.throw(services, player.pawn, eye + fwd * 0.5, to, world_parent)
+	var start: Vector3 = from if from is Vector3 else eye + fwd * 0.5
+	var g := Grenade.throw(services, player.pawn, start, to, world_parent)
 	g.damage = CombatScale.melee(tier) * GRENADE_MELEES
 	grenades -= 1
 	if grenades == grenades_max - 1:
@@ -574,21 +832,26 @@ func _show() -> void:
 	var old := gun.gun
 	if old != null and is_instance_valid(old):
 		_ammo[old] = gun.ammo
+		# The view lowers it out of sight before it goes to the holster (a swap).
 		if loadout.all_guns().has(old):
-			old.reparent(_holster, false)
+			if view != null:
+				view.put_away(old, _holster)
+			else:
+				old.reparent(_holster, false)
 	gun.set_trigger(false)
 	gun.equip(want)
 	if want != null:
 		if _ammo.has(want):
 			gun.ammo = int(_ammo[want])
 		if view != null:
+			# Shown by the view when the old gun is down.
 			view.hold(want)
 		else:
 			var cam := get_viewport().get_camera_3d()
 			if want.get_parent() != cam:
 				want.reparent(cam, false)
 			want.position = Vector3(0.22, -0.2, -0.45)
-		want.visible = true
+			want.visible = true
 	changed.emit()
 
 
@@ -659,6 +922,7 @@ class ArsenalHud extends CanvasLayer:
 					c.draw_rect(Rect2(x - 4.0, row_y - 15.0, w + 8.0, 20.0), Color(1, 1, 1, 0.18))
 				c.draw_string(font, Vector2(x, row_y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
 				x -= 18.0
+		_ability(font, sz)
 		var ord := lo.ordnance as GunInstance
 		var ord_txt := "5 %s%s   G %s" % [_label(ord), "  (up)" if lo.ordnance_up else "",
 				"●".repeat(arsenal.grenades) + "○".repeat(maxi(arsenal.grenades_max - arsenal.grenades, 0))]
@@ -694,6 +958,26 @@ class ArsenalHud extends CanvasLayer:
 			_backpack(font, sz)
 		elif arsenal.inventory_open and arsenal.inventory_page == 2:
 			_bench(font, sz)
+
+	## The ability slot when it holds the Overshield, where PlayerHud draws the grapple's bar.
+	func _ability(font: Font, sz: Vector2) -> void:
+		var pl := arsenal.player.progress if arsenal.player != null else null
+		if pl == null or pl.ability() != &"overshield":
+			return
+		var pawn := arsenal.player.pawn
+		var bars := pawn.health.layer_count() if pawn != null and pawn.health != null else 1
+		var x := 32.0
+		var y := sz.y - 44.0 - 20.0 * bars - 6.0
+		var full := PlayerArsenal.OVERSHIELD_COOLDOWN / (1.0 + pl.tree.total(&"ability_cooldown"))
+		var f := 1.0 - arsenal.ability_cool / full
+		var col := PlayerArsenal.SHIELD_COLOUR if arsenal.ability_cool <= 0.0 else Color(0.6, 0.6, 0.6, 0.7)
+		var c := _draw_node
+		c.draw_rect(Rect2(x - 2, y - 2, 104, 10), Color(0, 0, 0, 0.55))
+		c.draw_rect(Rect2(x, y, 100.0 * clampf(f, 0.0, 1.0), 6), col)
+		var txt := "Q OVERSHIELD"
+		if arsenal.overshield_left > 0.0:
+			txt += "  %.0f s" % ceilf(arsenal.overshield_left)
+		c.draw_string(font, Vector2(x + 112.0, y + 8.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
 
 	## The workbench's page: every gun, its tier, what lifting it costs.
 	func _bench(font: Font, sz: Vector2) -> void:

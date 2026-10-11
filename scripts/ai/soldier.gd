@@ -274,6 +274,8 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 	g.rng = s.rng
 	g.exclude = [p.body.get_rid()] as Array[RID]
 	g.on_structure_hit = s.on_structure_hit
+	# Its gun's alt-fire goes on its own while it fires (GunController.ai_alt).
+	g.ai_alt = true
 	p.body.add_child(g)
 	if gun != null:
 		gun.visible = false
@@ -381,6 +383,15 @@ func _physics_process(_delta: float) -> void:
 	if _dead or pawn == null:
 		return
 	var now := services.now()
+	# Frozen or staggered (Pawn.is_held): the body stands, and the mind waits with it --
+	# no sensing, no thinking, no aim, no fire. Its think clock stops too, so it picks
+	# up where it was rather than with the frozen seconds as one long step.
+	if pawn.is_held():
+		pawn.intents.move = Vector3.ZERO
+		pawn.intents.fire = false
+		if _last_think > 0.0:
+			_last_think = now
+		return
 	# Ducking (duck()): low, whatever the task wants, until it is over.
 	if now < _duck_until:
 		# The one crouch let through (A21 says nobody crouches): a duck from a

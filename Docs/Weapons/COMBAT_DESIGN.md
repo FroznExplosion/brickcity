@@ -54,7 +54,7 @@ damage moves to the new tier.
 - The cost grows with the tiers gained and with the gun's rarity (an infused legendary costs more
   than an infused white).
 - This is what keeps a favourite gun alive. A god-roll purple from tier 2 can come along to tier 7.
-- Built on what is there: a saved gun is `{class, seed, tier, rarity}` (`CharacterSave.gun_entry`),
+- Built on what is there: a saved gun is `{class, seed, tier, rarity, ...}` (`CharacterSave.gun_entry`),
   and its tier only scales damage (`GunStats.compute`), never a roll — so infusion is rewriting
   `tier` in the entry. A probe must hold that: the same seed at two tiers gives the same gun except
   damage.
@@ -200,6 +200,12 @@ Melee damage itself never comes from the player level (§1). What the level buys
 These are the first branch; other branches (marksman, elements, mobility, survival — where the
 health and shield nodes live) are to design. The brawler loop they serve: **punch to break a
 defence, shoot to finish, refill the shield, push the next one.**
+
+As built (2026-10-10): the four are the Brawler limb of the tree (§14, "the skill kit"). The
+Shockwave staggers every enemy in it, the struck one too: 1 s held (`Pawn.stagger`, `is_held` —
+no moving, firing or turning, and a soldier's mind waits) and knocked 4 m/s away from the blow.
+Not yet: Kinetic Lunge's slide-punch launch, and Backstab past frontal armor plates (no enemy has
+plates yet) — Backstab is the 2.5x alone.
 
 ### 4.3 Defences sit over the flesh
 
@@ -412,6 +418,13 @@ shotguns and revolvers.
 **Other alt-fires** come from the ordnance effects: an underbarrel grenade tube on a rifle, a shock
 arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldowns, like ordnance.
 
+As built: the **grenade tube** (rifles, LMGs) — press: a grenade lobbed down the aim (32 m/s, real
+drop) that bursts where it strikes, 6 rounds' worth to what it struck and less out to 3.5 m, a
+grenade's blast in the bricks; 6 s cooldown. The **thermal torch** (SMGs, shotguns; there is no beam
+class) — hold: a 6 m cone, 25° either side, 6 rounds' worth a second of pure corrosive (so armor
+takes 2× and corrodes) for up to 2 s of fuel, then 6 s to cool. Adding them moved some rifles',
+LMGs', SMGs' and shotguns' alt-fire roll.
+
 ### 7.3 Ordnance and grenades
 
 - **Ordnance** is its own slot (Borderlands 4): rocket launchers and **special weapons** — gated by
@@ -419,6 +432,9 @@ arc on a pistol, a thermal torch on a corrosive beam (armor melt) — on cooldow
   D-pad right again goes back to the gun you had.
 - Special weapons are where unusual effects live, **shock** first: the round arcs across several
   nearby enemies and slows them.
+  Built: the **arc caster** (`WeaponClass` `arc_caster`, ordnance, 2–3 charges): each charge is a
+  shock arc of its own damage through up to six enemies, each 85% of the last within 8 m, each
+  slowed 2.5 s. A third of ordnance drops (`CityScene.drop_loot`).
 - **Grenades** have a slot of their own and are **thrown with G** (right bumper on a pad) without
   putting the gun away. A grenade is ordnance for bricks (§8): it blasts.
 
@@ -654,8 +670,24 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   line, AI area. `GunInstance.result` keeps what a gun was made from, so it can be dropped again.
 - `tools/loadout_probe.gd` (31 checks).
 - **Not yet:** ammo reserves per type (magazines still refill from nothing); the swap has no draw
-  time (swap speed as a stat needs one); the loadout is not saved (`CharacterSave.guns`); co-op
-  (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
+  time (swap speed as a stat needs one); co-op (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
+
+**The kit saved: built 2026-10-10** (step 5's leftover).
+- `CharacterSave.loadout`: the four slots, the ordnance, the backpack and its size, the group and
+  hand (`loadout_dict` / `fill_loadout`). A tried floor gun is not kept.
+- A gun's entry (`gun_entry`) is what makes it again: class, seed, tier, the rarity it was
+  **forced** to (`GunGenerator.Result.forced_rarity`; loot is forced, and forcing skips a roll, so
+  the seed alone would make a different gun), its luck, its legendary id, and its parts' ids as a
+  check — if the part library changed under the save, `make_result` builds the saved parts
+  (`GunGenerator.deserialize`) instead of what the seed now rolls. An infused gun is its entry at
+  the new tier.
+- `PlayerArsenal.restore` puts the saved kit in the hands (the controller's first gun let go);
+  `fill_default` only fills an empty kit. Every 2 s the arsenal compares the kit with what it last
+  saw and says `kit_changed`; `CityScene._load_kit` makes it once and saves on that signal (with
+  the level, `_save_progress`). Not in a pass or a test window. An infusion changes the gun before
+  spending the scrap, so the save the spend makes holds both.
+- `tools/kit_save_probe.gd` (21 checks).
+- **Not yet:** ammo in the magazines (a loaded kit comes back full); several characters.
 
 **Step 6 — rarity v2 and modifiers: built 2026-10-10.**
 - **Numbers**: `Rarity.MULTS` 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12; `GunStats.DPS_WINDOW_HI`
@@ -719,9 +751,45 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   `PlayerController.possess`) keeps a player from being frozen.
 - The shock arc's slow is a status here too (`ElementStatus.shock`).
 - `tools/status_probe.gd` (19 checks).
-- **Not yet:** frozen enemies take no extra damage and do not shatter (the older
-  `FrozenStatus`/`ElementDoT` in `scripts/status/` have both, unused); no hit-number colours for
-  status damage; a frozen soldier's brain still thinks (its body just does not move).
+- **Not yet:** no hit-number colours for status damage. (The shatter, and a frozen soldier's
+  mind held: "special fire" and "held", below.)
+
+**Special fire — the tube, the torch, the arc caster, the shatter, soldiers' alt-fires: built
+2026-10-10.**
+- `GunAltFire.TUBE` / `TORCH` and the arc caster: §7.2 and §7.3's built notes. `TubeGrenade`
+  (`scripts/combat/tube_grenade.gd`) flies and calls `GunController.tube_burst`; the torch is
+  `GunController._step_torch` / `_burn_cone`; the shock arc is now `_arc_down_aim` (amount,
+  jumps, range, falloff, slow), shared by the alt-fire and the arc caster.
+- **Frozen is brittle** (`ElementStatus`): every hit on a frozen thing lands 1.5×
+  (`DamageSystem._resolve`), and with its defences down it **shatters** — dies at once, an ice
+  burst — on a melee, or on a hit that leaves its flesh at a quarter or less
+  (`ElementStatus.try_shatter`, from `DamageSystem.resolve`; `DamageResult.shattered`). A shield or
+  armor up, no shatter. The old `FrozenStatus` stays unused.
+- **Soldiers use their alt-fires** (`GunController.ai_alt`, on in `Soldier`): while the trigger is
+  held, at most once every 6 s — the arc and the tube whenever, a dart to open a burst, the plasma
+  charge only when a shield is under the aim. Never the torch.
+- `tools/special_fire_probe.gd` (23 checks).
+- **Not yet:** a heat bar instead of the charge's ammo bite; other special weapons; the shatter's
+  pieces.
+
+**Held — frozen and staggered, body and mind; the torch's flame: built 2026-10-10.**
+- `Pawn.is_held()`: frozen, or staggered (`Pawn.stagger(seconds, push)`, `stagger_left`; never a
+  player). Held, the pawn's intents are zeroed and it does not turn. A held `Soldier` skips its
+  tick: no sensing, no thinking (its think clock stops with it, so it resumes where it was), no aim
+  or fire. A plain walker's knock goes on its `shove`.
+- The Shockwave staggers (§4.2's built note).
+- **The torch's flame** (`TorchFlame`, `scripts/combat/torch_flame.gd`): CPU particles out of the
+  muzzle down the aim, world-space so a swung torch leaves its fire behind — a narrow bright core
+  (added) inside a 9° jet of soft puffs (mixed, so it never clips to white over a bright wall)
+  that slows, billows and rises from yellow-green to dark green smoke over ~5 m, with a green
+  glow light. Dim at the nozzle so it does not cover the crosshair. Out on letting go, on running
+  dry, on a swap; switched off mid-burn it still cools. `tools/torch_look.gd` (not headless)
+  renders it to `shots/`.
+- `tools/frozen_soldier_probe.gd` (10 checks); the Shockwave's stagger in `skill_kit_probe` (33),
+  the flame in `special_fire_probe` (25).
+- `fights_back_probe` fails one check ("while it hid, the rounds went into the wall": 4 of 15
+  reached it) on this branch from before this step too (checked at f2c42d8 and with `ai_alt` off) —
+  AI area's to look at.
 
 **Step 9 — player level and the skill tree: built 2026-10-10.**
 - `PlayerLevel` (`scripts/progression/player_level.gd`): level 1–100, a point a level from level
@@ -748,9 +816,40 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Saved** in `CharacterSave.character` (`level`, `xp`, `skills`), loaded when the player first
   takes a pawn and written on every change — never in a scripted pass or a test window.
 - `tools/skill_tree_probe.gd` (36 checks).
-- **Not yet:** the real nodes (the Vanguard Brawler's melee nodes §4.2, abilities, shields — the
-  player has no shield layer yet); XP for objectives and missions; a respec cost; the mouse on the
-  tree's screen; a co-op player's own level (one `PlayerLevel`, the host's player).
+- **Not yet:** XP for objectives and missions; a respec cost; the mouse on the tree's screen; a
+  co-op player's own level (one `PlayerLevel`, the host's player). (The real nodes: "the skill
+  kit", below.)
+
+**The skill kit — the player's shield, the ability slot, the Brawler: built 2026-10-10.**
+- **The tree's limbs** are now Gunner (reload, magazines, alt-fire; unchanged), Survivor (health,
+  the shield, grenades, the Overshield) and **Brawler** (the Vanguard Brawler, §4.2, in place of
+  the Tactician: melee speed, mobility, ability recharge, and the four melee nodes). 40 nodes, 153
+  ranks. A node gives a stat (`SkillTree.total`) or, at one rank, a flag (`has`). An old save's
+  Tactician points come back free (`from_dict` drops a node that is gone).
+- **The player's shield** (`PlayerArsenal.ensure_shield`): a layer over the health, 50 (half the
+  health), recharging at 25/s after 4 s unhurt — a Halo shield. A body shot that breaks it lets half
+  of the rest through (shield gating, §4.5). Survivor's Shield Cells and Layered Cells grow it to
+  +30% (`SkillTree.SHIELD_CAP`), Fast Charge shortens the wait to 60%, Flash Charge speeds the
+  recharge. The HUD's bars already drew every layer. The health's skill base is kept on its layer
+  now, so the shield moving it down an index changes nothing.
+- **The ability slot (Q)**: holds the grapple until the tree buys an ability. `PlayerLevel.tactical`
+  (saved); Enter on a bought ability node puts it in the slot, again takes it out. With another
+  ability there, Q fires it (`PlayerArsenal.use_ability`) and the grapple's hold is off
+  (`PlayerController`). **Overshield** (Survivor, tier 3): the shield doubled and filled for 8 s,
+  30 s from one to the next; its bar sits where the grapple's does. Hook Shot and Quick Recovery
+  (Brawler) speed both its recharge and the grapple's (`PawnMoves.cooldown_speed`).
+- **The Brawler's melee** (`Pawn.melee_speed / melee_reach / melee_lunge / melee_backstab`,
+  `MeleeStrike.strike`'s `reach` and `backstab`): Heavy Hands, Brutal Rhythm and Iron Knuckles
+  shorten the recovery; **Kinetic Lunge** +50% reach, and a blow landed past the plain 1.8 m
+  carries the pawn in at 9 m/s; **Backstab** 2.5x when the blow travels the way the target faces;
+  **Shield-Shatter Shockwave** — a blow that breaks a shield strips 25% of every other enemy's
+  shield within 4 m; **Vampiric Impact** (the top) — a melee kill gives back half the shield and
+  refills the gun in hand. A blow's info now says what it hit, whether it broke a shield, and
+  whether it was a backstab.
+- `tools/skill_kit_probe.gd` (30 checks); `skill_tree_probe` moved to the new nodes and to the
+  health under the shield.
+- **Not yet:** more abilities and a second slot; the stagger, the slide-punch launch and armor
+  plates for Backstab (§4.2); the shield's break and recharge sounds and screen edge.
 
 **Step 10 — safehouse infusion: built 2026-10-10.**
 - `Infusion` (`scripts/progression/infusion.gd`): the cost, `100 × 1.25^(t−1)` scrap for each tier
@@ -769,8 +868,8 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   gun). Walking away closes it. `CityScene._place_workbench` sets one down by the player's start,
   not in a scripted pass.
 - `tools/infusion_probe.gd` (23 checks).
-- **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; saving the
-  loadout (step 5's leftover), so an infused gun lasts the session; a story tier from the story
+- **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; a story tier
+  from the story
   (today it is the highest fight tier reached).
 
 ---
@@ -786,13 +885,9 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 §12's ten steps are built. What is left, by weight:
 
-- **The real skill tree** (§1.3, §4.2): the Vanguard Brawler's melee nodes, the abilities (grapple,
-  overshield, ...), a player shield layer and its nodes. `SkillTree.NODES` is data; the placeholder
-  stat nodes give way to them.
-- **Saving the loadout** (step 5): the guns as `CharacterSave.gun_entry`s, so loot and infusion
-  outlast the session.
-- What steps 7–8 left: the other alt-fires and the special ordnance weapons, frozen enemies
-  shattering, AI soldiers using alt-fires.
+- More of the skill kit: abilities past the Overshield and a second slot, the marksman and
+  element branches (§4.2).
+- Special weapons past the arc caster; a heat bar for the plasma charge; the torch's look.
 - Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
 - Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
   questions.
@@ -811,8 +906,11 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 | Gun fire, element on the round | `scripts/combat/gun_controller.gd`; element roll in `scripts/guns/gun_generator.gd` |
 | Modifiers, slots and quality | `scripts/guns/gun_modifiers.gd`, `Rarity.SLOTS` / `QUALITY`; the card `scripts/guns/gun_card.gd` |
 | Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
-| Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
+| Tube, torch, arc caster, AI alt-fire | `GunController` (`_fire_tube`, `tube_burst`, `_step_torch`, `_burn_cone`, `_arc_down_aim`, `_ai_alt`), `scripts/combat/tube_grenade.gd`, `WeaponClass` `arc_caster` |
+| Element statuses | `scripts/elements/element_status.gd` (the shatter: `try_shatter`); built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
 | Infusion and scrap | `scripts/progression/infusion.gd`, `workbench.gd`; `GunGenerator.retier`; the bench's page in `PlayerArsenal` (`open_bench`, `infuse`, `salvage`) |
+| The kit saved | `CharacterSave` (`gun_entry`, `make_result`, `loadout_dict`, `fill_loadout`); `PlayerArsenal.restore`, `kit_changed`; `CityScene._load_kit` |
+| Player shield, ability slot, Brawler | `PlayerArsenal` (`ensure_shield`, `use_ability`, `_on_meleed`, `shockwave`); `Pawn.melee_*`; `MeleeStrike.strike` (`reach`, `backstab`); `PlayerLevel.tactical` |
 | Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
@@ -820,7 +918,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (33), `special_fire_probe` (25), `frozen_soldier_probe` (10),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
