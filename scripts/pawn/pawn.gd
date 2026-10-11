@@ -90,6 +90,9 @@ var melee_backstab := 1.0
 ## by this; a freeze stops the pawn where it stands -- no moving, firing or turning.
 var speed_mult := 1.0
 var frozen := false
+## Staggered (the Brawler's Shockwave, COMBAT_DESIGN 4.2): this long more of standing
+## reeling -- no moving, firing or turning, as frozen, but short. Never a player.
+var stagger_left := 0.0
 ## The player's skill tree's move speed (PlayerArsenal.apply_skills): 1 for anyone else.
 var move_mult := 1.0
 ## A player's pawn: slowed by ice, never frozen (PlayerController sets it).
@@ -282,7 +285,8 @@ func is_on_floor() -> bool:
 func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
-	if frozen:
+	stagger_left = maxf(stagger_left - delta, 0.0)
+	if is_held():
 		intents.move = Vector3.ZERO
 		intents.jump = false
 		intents.fire = false
@@ -291,7 +295,7 @@ func _physics_process(delta: float) -> void:
 	step(delta)
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
-		if not frozen:
+		if not is_held():
 			eye.rotation = Vector3(intents.look_pitch, intents.look_yaw, 0.0)
 	_melee_cool = maxf(_melee_cool - delta, 0.0)
 	if intents.melee and _melee_cool <= 0.0:
@@ -303,6 +307,26 @@ func _physics_process(delta: float) -> void:
 		if intents.reload:
 			gun.reload()
 	intents.reload = false
+
+
+## Frozen or staggered: the body stands where it is and does nothing, and a soldier's
+## brain waits (Soldier).
+func is_held() -> bool:
+	return frozen or stagger_left > 0.0
+
+
+## Reel for `seconds`, knocked by `push` (m/s, along the ground). Not a player.
+func stagger(seconds: float, push := Vector3.ZERO) -> void:
+	if is_player:
+		return
+	stagger_left = maxf(stagger_left, seconds)
+	if push == Vector3.ZERO:
+		return
+	# The plain walk sets the velocity every tick: a knock goes on the shove, which decays.
+	if moves == null:
+		shove += Vector3(push.x, 0.0, push.z)
+	elif body != null:
+		body.velocity += Vector3(push.x, 0.0, push.z)
 
 
 ## Throw a melee down the eye now (MeleeStrike). The blow's damage is this pawn's

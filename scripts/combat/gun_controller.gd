@@ -162,6 +162,8 @@ var _alt_cool := 0.0
 ## The torch's fuel left while it burns, and its next tick.
 var _torch_left := 0.0
 var _torch_clock := 0.0
+## The torch's fire (TorchFlame), made the first time it burns.
+var _flame: TorchFlame
 ## The tracking dart's mark: {"dart", "target", "spot", "left"}. A dart in flight has no
 ## target yet. Empty: no dart.
 var _mark := {}
@@ -177,6 +179,8 @@ func equip(g: GunInstance) -> void:
 	_charge = 0.0
 	_alt_armed = false
 	_need_release = false
+	_torch_left = 0.0
+	_flame_on(false)
 	_shot = StructuralDamage.for_shot(g.weapon_class, g.active_effects) if g != null else {}
 
 
@@ -510,6 +514,11 @@ func toggle_alt() -> bool:
 	if gun == null or gun.alt_fire == &"":
 		return false
 	gun.alt_mode = not gun.alt_mode
+	# Switched off mid-burn: out, and cooling all the same (no refuelling by switching).
+	if _torch_left > 0.0:
+		_torch_left = 0.0
+		_flame_on(false)
+		_alt_cool = TORCH_COOLDOWN / maxf(alt_mult, 0.1)
 	_charge = 0.0
 	# A trigger held through the switch fires nothing until it comes up.
 	_alt_armed = not _trigger
@@ -807,6 +816,7 @@ func _step_torch(delta: float) -> void:
 			_torch_clock = 0.0
 		_torch_left -= delta
 		_torch_clock -= delta
+		_flame_on(true)
 		while _torch_clock <= 0.0:
 			_torch_clock += TORCH_TICK
 			_burn_cone(TORCH_TICK)
@@ -815,9 +825,27 @@ func _step_torch(delta: float) -> void:
 	elif _torch_left <= 0.0:
 		return   # not lit yet: waiting for the trigger
 	# Let go, or out of fuel.
+	_flame_on(false)
 	_torch_left = 0.0
 	_alt_cool = TORCH_COOLDOWN / maxf(alt_mult, 0.1)
 	_alt_done()
+
+
+## The torch's fire at the muzzle, down the aim; or out.
+func _flame_on(on: bool) -> void:
+	if not on:
+		if _flame != null:
+			_flame.burn(false)
+		return
+	if aim == null or not aim.is_inside_tree():
+		return
+	if _flame == null:
+		_flame = TorchFlame.make()
+		add_child(_flame)
+	var from := aim.global_position - aim.global_transform.basis.z * 0.6
+	if gun != null and gun.is_inside_tree() and gun.get_muzzle_point() != null:
+		from = gun.get_muzzle_point().global_position
+	_flame.burn(true, from, aim.global_transform.basis)
 
 
 ## One tick of the torch: everything alive in its cone, in clear line, not the holder's
@@ -843,8 +871,6 @@ func _burn_cone(seconds: float) -> int:
 		side_hit.emit({"point": at, "normal": -fwd, "collider": target, "structure": false,
 				"result": r, "side": &"torch"})
 		n += 1
-	SplashFlash.spawn(_effects_parent(), from + fwd * TORCH_RANGE * 0.5, 0.6,
-			Elements.INFO[Elements.CORROSIVE][1])
 	return n
 
 

@@ -114,6 +114,9 @@ const OVERSHIELD_COOLDOWN := 30.0
 ## Shield-Shatter Shockwave: its reach, and the share of each enemy's shield it strips.
 const SHOCKWAVE_RADIUS := 4.0
 const SHOCKWAVE_STRIP := 0.25
+## ... and staggers every enemy in it, the struck one too, knocked away from the blow.
+const SHOCKWAVE_STAGGER := 1.0
+const SHOCKWAVE_PUSH := 4.0
 ## Vampiric Impact: the share of the shield a melee kill gives back.
 const VAMPIRIC_SHIELD := 0.5
 const BACKSTAB_MULT := 2.5
@@ -292,8 +295,9 @@ func _on_meleed(info: Dictionary) -> void:
 		changed.emit()
 
 
-## Shield-Shatter Shockwave at `at`: every other enemy within SHOCKWAVE_RADIUS loses
-## SHOCKWAVE_STRIP of its whole shield, if it has one up. Returns how many it reached.
+## Shield-Shatter Shockwave at `at`: every enemy within SHOCKWAVE_RADIUS, the struck one
+## `hit` too, is staggered SHOCKWAVE_STAGGER and knocked back; every other one loses
+## SHOCKWAVE_STRIP of its whole shield, if it has one up. Returns how many it stripped.
 func shockwave(at: Vector3, hit: Node = null) -> int:
 	var world := world_parent.get_world_3d() if world_parent != null else null
 	if world == null:
@@ -305,15 +309,25 @@ func shockwave(at: Vector3, hit: Node = null) -> int:
 	q.shape = sphere
 	q.transform = Transform3D(Basis.IDENTITY, at)
 	q.collision_mask = Layers.GUN_MASK
+	SplashFlash.spawn(world_parent, at, SHOCKWAVE_RADIUS, SHIELD_COLOUR)
 	var seen := {}
 	var n := 0
+	var found: Array = [hit] if hit != null else []
 	for r in world.direct_space_state.intersect_shape(q, 64):
-		var target := GunController._living(r.collider)
-		if target == null or target == hit or seen.has(target):
+		found.append(GunController._living(r.collider))
+	for target in found:
+		if target == null or seen.has(target):
 			continue
 		seen[target] = true
-		var pawn := target.get_node_or_null(^"Pawn") as Pawn
+		var pawn := (target as Node).get_node_or_null(^"Pawn") as Pawn
 		if pawn != null and pawn.team == team:
+			continue
+		if pawn != null:
+			var away: Vector3 = pawn.feet() - at
+			away.y = 0.0
+			pawn.stagger(SHOCKWAVE_STAGGER, away.normalized() * SHOCKWAVE_PUSH if away.length() > 0.01
+					else Vector3.ZERO)
+		if target == hit:
 			continue
 		var pool := DamageSystem._find_health_pool(target)
 		if pool == null or pool.top_layer_type() != &"shield":
