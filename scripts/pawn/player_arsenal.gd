@@ -574,21 +574,26 @@ func _show() -> void:
 	var old := gun.gun
 	if old != null and is_instance_valid(old):
 		_ammo[old] = gun.ammo
+		# The view lowers it out of sight before it goes to the holster (a swap).
 		if loadout.all_guns().has(old):
-			old.reparent(_holster, false)
+			if view != null:
+				view.put_away(old, _holster)
+			else:
+				old.reparent(_holster, false)
 	gun.set_trigger(false)
 	gun.equip(want)
 	if want != null:
 		if _ammo.has(want):
 			gun.ammo = int(_ammo[want])
 		if view != null:
+			# Shown by the view when the old gun is down.
 			view.hold(want)
 		else:
 			var cam := get_viewport().get_camera_3d()
 			if want.get_parent() != cam:
 				want.reparent(cam, false)
 			want.position = Vector3(0.22, -0.2, -0.45)
-		want.visible = true
+			want.visible = true
 	changed.emit()
 
 
