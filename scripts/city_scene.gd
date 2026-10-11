@@ -1018,6 +1018,7 @@ func _ready() -> void:
 	_setup_gun()
 	ai_world.set_world(world)
 	ai_nav.set_ai_world(ai_world)
+	AIServices.use_hierarchy(ai_nav)
 	# NavChange (R17): the commands that change structure are the ones that say
 	# where navigation is stale.
 	authority.committed.connect(_nav_on_command)

@@ -50,7 +50,7 @@ static func make(ai_world: AIWorld, kind: StringName) -> AINav:
 	# An engine library built before set_crush: the tank goes round, as it did.
 	if k.has("crush") and n.has_method(&"set_crush"):
 		n.call(&"set_crush", int(k.crush), float(k.crush_cost))
-	return n
+	return AIServices.use_hierarchy(n)
 
 
 ## Studs square a vehicle of `kind` takes on its map.

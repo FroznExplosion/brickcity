@@ -304,6 +304,13 @@ func _driver(now: float) -> void:
 		state = "pivot"
 		_moved_at = now
 		return
+	# A flyer coming down ahead (Airspace pad): hold short of it.
+	if services.airspace != null and services.airspace.blocks(tank.feet() + tank.forward() * (Tank.HULL.z * 0.5 + 4.0),
+			Tank.HULL.x):
+		state = "landing ahead"
+		tank.steer = 0.0
+		_moved_at = now
+		return
 	state = "drive"
 	tank.throttle = clampf(1.0 - absf(off) / PI, 0.4, 1.0)
 	if at.distance_to(_from) > 1.0:

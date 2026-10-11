@@ -153,7 +153,7 @@ static func mech_nav(ai_world: AIWorld) -> AINav:
 	var span := int(round(Mech.RADIUS * 2.0 / Mech.STUD))
 	var head := int(ceil(Mech.HEIGHT / 0.14))
 	n.set_agent(span, head, head, 9, 17, 17)
-	return n
+	return AIServices.use_hierarchy(n)
 
 
 ## A launcher on the arm: ordnance, for walls.

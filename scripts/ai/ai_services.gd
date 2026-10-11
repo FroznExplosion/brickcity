@@ -26,9 +26,15 @@ const AGGRO_HZ := 5.0
 ## the owner's to draw.)
 signal flashed(point: Vector3, radius: float)
 
+## Every this many seconds the map round the player is warmed this far out.
+const WARM_EVERY := 3.0
+const WARM_RADIUS := 70.0
+var _next_warm := 0.0
 var ai_world: AIWorld
 var ai_nav: AINav
 var sched: AIScheduler
+## Flyers and the ground sharing space: lanes, separation, landing pads (air()).
+var airspace: Airspace
 ## The physics space sight rays are cast in.
 var world3d: World3D
 ## The weather (Docs/Collapse.md 4.4): true while the sky is dangerous -- a
@@ -198,6 +204,27 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 		on_say.call(speaker, key, text, range_m)
 
 
+## The airspace (Airspace), made the first time anybody asks.
+func air() -> Airspace:
+	if airspace == null:
+		airspace = Airspace.new(self)
+	return airspace
+
+
+## Columns a side of a map's clusters (AINav.set_hierarchy, HPA*): a soldier's
+## 24 (8.4 m, about a room); a bigger body's four of its own widths, so a cluster
+## always has room for it to turn in.
+static func hierarchy_of(span: int) -> int:
+	return maxi(24, span * 4)
+
+
+## Turn on `n`'s hierarchy, sized to who walks it.
+static func use_hierarchy(n: AINav) -> AINav:
+	if n != null and n.has_method(&"set_hierarchy"):
+		n.call(&"set_hierarchy", hierarchy_of(n.get_span()))
+	return n
+
+
 ## The map a body of `size` walks: where it fits is the map's to say, so a large
 ## body is simply not offered a door only a person fits.
 func nav_for(size: String) -> AINav:
@@ -212,6 +239,7 @@ func nav_for(size: String) -> AINav:
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	n.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
+	use_hierarchy(n)
 	# What changes the person's map changes this one.
 	if ai_nav != null:
 		ai_nav.nav_changed.connect(n.invalidate_box)
@@ -368,6 +396,14 @@ func tick() -> void:
 		for team in _aggro:
 			_aggro_tick(team, _aggro[team], dt)
 	callouts.tick(t, world3d, ai_world)
+	# The walking map's hierarchy worked out round the players in spare time
+	# (AINav.warm): the fight is round them, and so are the searches.
+	if t >= _next_warm and ai_nav != null and ai_nav.has_method(&"warm"):
+		_next_warm = t + WARM_EVERY
+		for p in pawns:
+			if is_instance_valid(p) and p.has_meta(&"player"):
+				ai_nav.call(&"warm", p.feet(), WARM_RADIUS)
+				break
 	# The maps of the other sizes of body are served here, a little each.
 	for size in navs:
 		(navs[size] as AINav).service(NAV_SIZE_USEC)

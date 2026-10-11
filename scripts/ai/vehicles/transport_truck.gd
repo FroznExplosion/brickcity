@@ -346,6 +346,13 @@ func _physics_process(delta: float) -> void:
 		return
 	while _wp < _path.size() and Vector2(_path[_wp].x - at.x, _path[_wp].z - at.z).length() < 2.0:
 		_wp += 1
+	# A flyer coming down ahead (Airspace pad): hold short until it is down and gone.
+	if services.airspace != null and services.airspace.blocks(at - global_transform.basis.z * (size.z * 0.5 + 4.0), size.x):
+		stopped_because = "a landing ahead"
+		_coast(delta)
+		_from = at
+		_moved_at = now
+		return
 	if _wp >= _path.size():
 		_arrive("end of path")
 		return

@@ -239,6 +239,20 @@ Terrain does not deform — only buildings do — which removes Red Dawn's worst
 | **Flyers** | A 2.5D height field of building tops (recipes) and wreck summaries; A* on a coarse grid with an altitude band | A changed cell is one write |
 | **Swarms** | `SwarmCore` flow fields with vertical layers | Regenerated when goal or obstacles change |
 
+**Built, 2026-10-10 — breaching as a cost of the way (`AINav.set_breach`).** Not links baked
+per recipe but the map itself told that its agent breaches: a column of bricks in the way at the
+height it walks -- never the terrain, never down through a floor -- is a way through for
+`cost_m` metres of walking per column, the time it takes that agent to open one. Straight on
+only (a corner of a wall is not cut on the slant); the body's whole footprint is checked, so a
+two-stud body against a one-stud wall pays for both columns it must clear. A finished path says
+where it goes into bricks (`get_breaches`, `get_last_breaches`): the first column of each run, a
+point for the agent to open. A one-stud wall is a short way through for a breacher whose
+door is 70 m round; eight studs of wall cost more than the walk round, and it walks round
+(`nav_hier_probe` D). The tank's crushing (AIVehicles.md 3) is the same idea for low walls. **Not
+yet:** an agent that follows a breach point -- walks to it, opens it through the ordinary damage
+path, walks on -- so no map in the game has it switched on; the mech is the first (it already
+shoots walls between it and infantry, `BTMechBreach`).
+
 **Mechs in buildings (A3):** a recipe can declare mech-sized openings and mech-clearance storeys —
 hangars, garages, atriums, a warehouse ground floor — and those interiors go into the mech map's
 bake. A pilot-sized door has no polygons. Anything else opens up by breaching or collapse, after
@@ -409,6 +423,36 @@ enemies knowing where your mech saw you, which is cheating the player can feel.
    rooms — carries the long route. A* on it is microseconds and its results are cached by
    `(from, to, agent class)`, invalidated only when an event touches a portal on the route. The
    navmesh is asked only for the next couple of sectors.
+   *Built, 2026-10-10 (`AINav.set_hierarchy`, `ai_nav_hpa.cpp`): HPA\*, on every map.* Not
+   sectors and rooms from recipes but CLUSTERS of the brick map itself, square, sized to the
+   agent (`AIServices.hierarchy_of`: a soldier's 24 columns, 8.4 m, about a room; a bigger
+   body's four of its widths -- a tank's 40), so it works the same for every size, every
+   vehicle, every floor, terrain, a player's build and a building that has fallen: its
+   ENTRANCES are the crossings a body makes over each border between two clusters (the map's own
+   `_step`, both ways -- a drop is one way), grouped into runs at one height pair, an entrance in
+   the middle of a short run and two in from the ends of a long one; what it costs from one
+   entrance of a cluster to another is a straight walk where that gets there and a Dijkstra in
+   the cluster where it does not, found the first time a search needs it and kept until the
+   cluster changes. A request the plain search does not find in its first nodes (open ground is
+   cheaper that way), its ends in different clusters, goes to the hierarchy: the
+   start's and the goal's costs to their clusters' entrances, A* over the entrances, then the brick-level path between the entrances it chose, a cluster at a time.
+   Its total brick-level work is held to the request's budget. An invalidation forgets the borders and
+   costs of the clusters it touches, and the searches that crossed them start again.
+   A request first gets PLAIN_FIRST (48) times its straight distance in plain nodes, so a
+   squad's zigzag across a few streets costs what it always did (`squad_travel_probe`: 4,796
+   nodes); the hierarchy takes the long and the hard ones. Round the players it is worked out in
+   the search service's spare time before anybody asks (`AINav.warm`, every 3 s, 70 m round:
+   `AIServices.tick`), so the fight's searches find it ready.
+   Measured (`nav_hier_probe`, the arena's field of walls and rooms, 30 long queries, other runs
+   going, so rough): the same ways as the plain search wherever it finds one, at most 11 %
+   longer; **warm, 87 ms against 112 ms; cold -- ground nobody has crossed and nothing warmed --
+   214 ms against 128 ms**, the price of finding the entrances once. Where it wins outright is
+   what the plain search cannot afford: a door bricked up, it found the 144 m way round the
+   wall's end in 16 ms (4 ms asked again) where the plain search gave up after 94 ms in the same
+   budget. A hierarchical search that runs out of budget hands over to the plain search with
+   all of it, so nothing is found less often than before. **Not yet:** connected-component
+   labels so an unreachable goal is known at once; flow fields over the hierarchy; warming the
+   other sizes' and the vehicles' maps.
 2. **Squads path once.** The leader (or the squad's anchor point) paths; members follow the
    corridor at their formation offsets, snapped to the navmesh by a closest-point query. mvs-c's
    formation rule, and ten times fewer path queries.
@@ -441,6 +485,26 @@ enemies knowing where your mech saw you, which is cheating the player can feel.
 - **Weapon choice** — range band against class, element against the target's top defence layer.
 - **Attack tokens** — only so many shoot one target at once; aggro (§8) decides who gets them.
 - **Callouts** — every play, state change and discovery emits one (§6.5).
+
+### 5.2a Sharing the sky with the ground (built, 2026-10-10)
+
+`Airspace` (one per AIServices, `air()`) is the ledger flyers and the ground ask before they
+move into each other's way. Nothing in it moves anybody:
+
+- **Lanes:** flyers are given lanes in turn as they come, 3 m apart (three), and fly their orbit
+  and their runs that much higher -- two circling one target are not at one height.
+- **Separation:** a flyer is pushed off any other flyer within 6 m, harder the nearer, and up
+  off the top of a tall body (a mech, a tank -- a target pawn 2.5 m or more) it is low over.
+- **Landing pads:** a flyer comes down only on a pad it has claimed (`Flyer.land`): a circle on
+  the ground with a DANGER box over it in AIWorld (12 m up, its way down), so soldiers clear it
+  as they clear a falling piece's shadow (the same `BTEvade` and danger checks), a truck, an APC
+  or a tank AI-driven towards it holds short and drives on when it is gone, and no other flyer
+  can claim a pad over it. It flies to the pad, waits 8 m over it while anybody -- a body, a
+  vehicle, another flyer under it -- is on it, comes down while it is clear, and gives it up when
+  it lifts off (`lift_off`), dies or is freed. `Danger.update` now takes down only the pieces'
+  boxes, so the pads' stay. Probe: `airspace_probe` (8). **Not yet:** a flyer that lands in
+  play (the transport helicopter, AIVehicles.md 6 step 4, is the first: its pad from the spawn
+  survey); the player told where a pad is.
 
 ### 5.2 Archetypes
 

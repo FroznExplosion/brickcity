@@ -72,6 +72,14 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_span"), &AINav::get_span);
     ClassDB::bind_method(D_METHOD("set_crush", "plates", "cost_m"), &AINav::set_crush);
     ClassDB::bind_method(D_METHOD("get_crush"), &AINav::get_crush);
+    ClassDB::bind_method(D_METHOD("set_hierarchy", "cluster_columns"), &AINav::set_hierarchy);
+    ClassDB::bind_method(D_METHOD("get_hierarchy"), &AINav::get_hierarchy);
+    ClassDB::bind_method(D_METHOD("warm", "at", "radius_m"), &AINav::warm);
+    ClassDB::bind_method(D_METHOD("warm_pending"), &AINav::warm_pending);
+    ClassDB::bind_method(D_METHOD("set_breach", "cost_m"), &AINav::set_breach);
+    ClassDB::bind_method(D_METHOD("get_breach"), &AINav::get_breach);
+    ClassDB::bind_method(D_METHOD("get_breaches", "id"), &AINav::get_breaches);
+    ClassDB::bind_method(D_METHOD("get_last_breaches"), &AINav::get_last_breaches);
     ClassDB::bind_method(D_METHOD("request_field", "goal", "radius_m", "priority"), &AINav::request_field);
     ClassDB::bind_method(D_METHOD("get_field_status", "id"), &AINav::get_field_status);
     ClassDB::bind_method(D_METHOD("field_dir", "id", "point"), &AINav::field_dir);
@@ -154,13 +162,24 @@ const AINav::Column &AINav::_column(int x, int z) {
                 col.floors.push_back(Floor{ (int16_t)y, head, 0 });
             }
         }
+        // A breacher's: where the bricks are, over the ground.
+        if (breach_cost > 0.0f) {
+            const int g = terrain_plate(cx, cz);
+            col.ground = (int16_t)g;
+            col.brick.assign((size_t)(ymax + 1 + 7) / 8, 0);
+            for (int y = std::max(0, g); y <= ymax; ++y) {
+                if (solid[y]) {
+                    col.brick[(size_t)y >> 3] |= (uint8_t)(1u << (y & 7));
+                }
+            }
+        }
         // What a crushing agent drives through: the run of bricks standing on
         // the ground here, if it is over a step and no more than `crush`. Its
         // foot is a floor too, with the run's height and the air over it as
         // the head. Only on the ground -- what stands on a storey's floor is
         // that floor's run, and the terrain is not bricks.
         if (crush > 0) {
-            const int g = std::max(0, (int)std::lround(ai->ground_at(cx, cz) / PLATE));
+            const int g = terrain_plate(cx, cz);
             if (g <= ymax && solid[g]) {
                 int r = 0;
                 while (g + r <= ymax && solid[g + r]) {
@@ -309,6 +328,14 @@ bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
                 best_crush = f.crush;
             }
             if (best_y < 0) {
+                // No floor that way. A breacher goes into the bricks there, at
+                // the height it walks, and pays for opening them -- straight
+                // ahead only: a corner of a wall is not cut on the slant.
+                if (breach_cost > 0.0f && d < 4 && _breach_fit(nx, nz, n.y)) {
+                    out = Node{ nx, nz, n.y };
+                    cost = STUD + breach_cost;
+                    return true;
+                }
                 return false;
             }
             // No cutting a corner the body would not fit round. A body going
@@ -376,6 +403,23 @@ bool AINav::_step(const Node &n, int hn, int d, Node &out, float &cost) {
 }
 
 bool AINav::_advance(Search &s, uint64_t until_usec) {
+    // Far ends: a few nodes of the plain search first, then the hierarchy
+    // (ai_nav_hpa.cpp).
+    if (!s.started && !s.hpa && cluster > 0 && !s.presnapped && !s.tried_plain && !s.no_hier) {
+        s.tried_plain = true;
+        Node a, b;
+        if (_snap_node(s.from, a) && _snap_node(s.to, b)) {
+            const int dist = std::max(std::abs(a.x - b.x), std::abs(a.z - b.z));
+            if (_cluster_of(a.x) != _cluster_of(b.x) || _cluster_of(a.z) != _cluster_of(b.z)) {
+                s.plain_first = true;
+                s.full_cap = s.max_expansions;
+                s.max_expansions = std::min(s.max_expansions, std::max(600, dist * PLAIN_FIRST));
+            }
+        }
+    }
+    if (s.hpa) {
+        return _advance_hier(s, until_usec);
+    }
     const uint64_t t_start = now_usec();
     auto cmp = [](const Open &a, const Open &b) { return a.f > b.f; };
     // Octile distance: exact on an eight-way grid with nothing in the way, so
@@ -411,7 +455,7 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
         s.open.reserve(4096);
         s.expansions = 0;
         const uint64_t t_snap = now_usec();
-        const bool snapped = _snap_node(s.from, s.start) && _snap_node(s.to, s.goal);
+        const bool snapped = s.presnapped || (_snap_node(s.from, s.start) && _snap_node(s.to, s.goal));
         stat_worst_snap_usec = std::max(stat_worst_snap_usec, now_usec() - t_snap);
         if (!snapped) {
             s.status = FAILED;
@@ -451,6 +495,7 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
             return true;
         }
         if (++s.expansions > s.max_expansions) {
+            s.capped = true;
             break;
         }
         stat_expansions++;
@@ -483,9 +528,23 @@ bool AINav::_advance(Search &s, uint64_t until_usec) {
         }
         stat_worst_expand_usec = std::max(stat_worst_expand_usec, now_usec() - t_exp);
     }
+    stat_search_usec += now_usec() - t_start;
+    if (s.plain_first && s.capped && !s.no_hier) {
+        // Not found cheaply: the hierarchy's turn, with the whole budget.
+        s.plain_first = false;
+        s.capped = false;
+        s.max_expansions = s.full_cap;
+        s.started = false;
+        s.open.clear();
+        s.g.clear();
+        s.parent.clear();
+        if (_hier_begin(s)) {
+            return _advance_hier(s, until_usec);
+        }
+        return false;
+    }
     s.status = FAILED;
     stat_failed++;
-    stat_search_usec += now_usec() - t_start;
     return true;
 }
 
@@ -503,6 +562,19 @@ void AINav::_finish(Search &s, int64_t goal_key) {
         nodes.push_back(unkey(k));
     }
     std::reverse(nodes.begin(), nodes.end());
+    // Where it goes into bricks: the first node of each run that stands on no
+    // floor of its own (a breacher's step into a wall).
+    s.breaches.clear();
+    if (breach_cost > 0.0f) {
+        bool in_wall = false;
+        for (const Node &n : nodes) {
+            const bool wall = _node_head(n.x, n.z, n.y) < 0;
+            if (wall && !in_wall) {
+                s.breaches.push_back(_node_point(n));
+            }
+            in_wall = wall;
+        }
+    }
     // Only the corners: drop a point that carries on in the same direction at
     // the same height as the one before.
     s.path.clear();
@@ -511,7 +583,8 @@ void AINav::_finish(Search &s, int64_t goal_key) {
             const Node &a = nodes[i - 1];
             const Node &b = nodes[i];
             const Node &c = nodes[i + 1];
-            if (b.x - a.x == c.x - b.x && b.z - a.z == c.z - b.z && a.y == b.y && b.y == c.y) {
+            if (b.x - a.x == c.x - b.x && b.z - a.z == c.z - b.z && a.y == b.y && b.y == c.y
+                    && (breach_cost <= 0.0f || (_node_head(b.x, b.z, b.y) < 0) == (_node_head(a.x, a.z, a.y) < 0))) {
                 continue;
             }
         }
@@ -531,6 +604,7 @@ PackedVector3Array AINav::find_path(const Vector3 &from, const Vector3 &to, int 
     s.to = to;
     s.max_expansions = max_expansions;
     _advance(s, std::numeric_limits<uint64_t>::max());
+    last_breaches = s.status == DONE ? s.breaches : PackedVector3Array();
     return s.status == DONE ? s.path : PackedVector3Array();
 }
 
@@ -596,6 +670,10 @@ int AINav::service(int budget_usec) {
         if (_advance_field(*best, until)) {
             finished++;
         }
+    }
+    // And what is left of it: the hierarchy round where the fight is (warm).
+    if (!warm_queue.empty() && now_usec() < until) {
+        _warm_step(until);
     }
     return finished;
 }
@@ -815,6 +893,7 @@ void AINav::invalidate_box(const AABB &box) {
         }
     }
     revision++;
+    _hier_forget(x0, z0, x1, z1);
     // A field whose reach covers the box is worked out again.
     for (auto &kv : fields) {
         Field &f = kv.second;
@@ -840,6 +919,14 @@ void AINav::invalidate_box(const AABB &box) {
             continue;
         }
         s.started = false;
+        s.hpa.reset();
+        s.tried_plain = false;
+        s.plain_first = false;
+        s.capped = false;
+        s.no_hier = false;
+        if (s.full_cap > 0) {
+            s.max_expansions = s.full_cap;
+        }
     }
     emit_signal("nav_changed", box);
 }
@@ -855,6 +942,56 @@ void AINav::set_agent(int p_span, int p_head_stand, int p_head_crouch, int p_ste
     clear_cache();
 }
 
+bool AINav::_breachable(int x, int z, int y) {
+    const Column &col = _column(x, z);
+    if (y < col.ground) {
+        return false;
+    }
+    for (int p = y; p < y + head_crouch; ++p) {
+        if ((size_t)(p >> 3) < col.brick.size() && (col.brick[(size_t)p >> 3] & (1u << (p & 7)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AINav::_breach_fit(int x, int z, int y) {
+    bool any = false;
+    for (int i = 0; i < span * span; ++i) {
+        const int cx = x + i % span;
+        const int cz = z + i / span;
+        if (_breachable(cx, cz, y)) {
+            any = true;
+            continue;
+        }
+        bool floor = false;
+        for (const Floor &f : _column(cx, cz).floors) {
+            if (f.y >= y - step_up && f.y <= y + step_up) {
+                floor = true;
+                break;
+            }
+        }
+        if (!floor) {
+            return false;
+        }
+    }
+    return any;
+}
+
+int AINav::terrain_plate(float x, float z) {
+    return ai.is_valid() ? std::max(0, (int)std::lround(ai->ground_at(x, z) / PLATE)) : 0;
+}
+
+void AINav::set_breach(float cost_m) {
+    breach_cost = std::max(0.0f, cost_m);
+    clear_cache();
+}
+
+PackedVector3Array AINav::get_breaches(int id) const {
+    auto it = searches.find(id);
+    return it == searches.end() ? PackedVector3Array() : it->second.breaches;
+}
+
 void AINav::set_crush(int plates, float cost_m) {
     crush = std::max(0, plates);
     crush_cost = std::max(0.0f, cost_m);
@@ -865,6 +1002,13 @@ void AINav::clear_cache() {
     columns.clear();
     node_memo.clear();
     revision++;
+    set_hierarchy(cluster);
+    for (auto &kv : searches) {
+        if (kv.second.hpa) {
+            kv.second.hpa.reset();
+            kv.second.started = false;
+        }
+    }
 }
 
 void AINav::set_water_level(float metres) {
@@ -1005,10 +1149,20 @@ Dictionary AINav::get_stats() const {
     d["worst_expand_us"] = (int64_t)stat_worst_expand_usec;
     d["worst_snap_us"] = (int64_t)stat_worst_snap_usec;
     d["worst_column_us"] = (int64_t)stat_worst_column_usec;
+    d["hier_paths"] = (int64_t)stat_hier_paths;
+    d["hier_nodes"] = (int64_t)stat_hier_nodes;
+    d["hier_dijkstra"] = (int64_t)stat_hier_dijkstra;
+    d["hier_ms"] = (double)stat_hier_usec / 1000.0;
+    d["hier_sides"] = (int)sides.size();
+    d["hier_borders"] = (int)borders.size();
     return d;
 }
 
 void AINav::reset_stats() {
+    stat_hier_paths = 0;
+    stat_hier_nodes = 0;
+    stat_hier_dijkstra = 0;
+    stat_hier_usec = 0;
     stat_columns_read = 0;
     stat_expansions = 0;
     stat_paths = 0;
