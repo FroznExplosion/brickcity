@@ -993,7 +993,7 @@ func run_gate() -> void:
 		var walked := float(travelled.get(so.get_instance_id(), 0.0))
 		# Standing still is fine in cover that happened to be next to where it
 		# appeared; standing still anywhere else is what this is here to catch.
-		if walked > 3.0 or so.state in ["hide", "peek", "reload in cover"]:
+		if walked > 3.0 or so.state in ["hide", "peek", "step back", "reload in cover"]:
 			moved.append("%.1f m, %s" % [walked, so.state])
 		else:
 			stayed.append("%.1f m, %s" % [walked, so.state])
