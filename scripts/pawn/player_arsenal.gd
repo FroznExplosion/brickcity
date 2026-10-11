@@ -746,6 +746,19 @@ func throw_grenade() -> void:
 	if grenades <= 0 or services == null or player == null or player.pawn == null:
 		_say("No grenades")
 		return
+	# The hands throw it (PlayerView.start_throw); it leaves when the arm lets go.
+	if view != null:
+		view.start_throw(_release_grenade)
+		return
+	_release_grenade(null)
+
+
+## The grenade leaves the hand: from `from` (world), else just ahead of the eye,
+## to where the crosshair is now.
+func _release_grenade(from: Variant) -> void:
+	if grenades <= 0 or services == null or player == null or player.pawn == null \
+			or not is_instance_valid(player.pawn):
+		return
 	var cam := get_viewport().get_camera_3d()
 	var eye := cam.global_position
 	var fwd := -cam.global_transform.basis.z
@@ -762,7 +775,8 @@ func throw_grenade() -> void:
 		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(far, far + Vector3.DOWN * 60.0,
 				Layers.PAWN_MASK, ex))
 		to = down.position if not down.is_empty() else far
-	var g := Grenade.throw(services, player.pawn, eye + fwd * 0.5, to, world_parent)
+	var start: Vector3 = from if from is Vector3 else eye + fwd * 0.5
+	var g := Grenade.throw(services, player.pawn, start, to, world_parent)
 	g.damage = CombatScale.melee(tier) * GRENADE_MELEES
 	grenades -= 1
 	if grenades == grenades_max - 1:

@@ -7977,6 +7977,81 @@ func _run_arms_pass() -> void:
 	_gate_ok("a reload takes the magazine in a pinch hand", pinched)
 	_gate_ok("and the C goes back on the gun", arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.C)
 
+	# A grenade: the left hand goes out of view, comes back with it, cocks and throws.
+	var g0 := _arsenal.grenades
+	var count := func() -> int:
+		var n := 0
+		for c in get_children():
+			if c is Grenade:
+				n += 1
+		return n
+	var in_world: int = count.call()
+	var fetched_unseen := true
+	var was_shown := false
+	var let_go_at := -1.0
+	var from_hand := INF
+	var shots_taken := {}
+	_key(KEY_G, true)
+	await _frames(2)
+	_key(KEY_G, false)
+	for i in 90:
+		await _frames(1)
+		var shown := _view._grenade_in_hand.visible
+		if shown and not was_shown and arms._in_view(ViewArms.LEFT):
+			fetched_unseen = false
+		was_shown = shown
+		var p := _view._throw
+		if let_go_at < 0.0 and count.call() > in_world:
+			let_go_at = p
+			for c in get_children():
+				if c is Grenade:
+					from_hand = minf(from_hand, (c as Node3D).global_position.distance_to(
+							arms.global_transform * arms.hole(ViewArms.LEFT)))
+		if p > 0.42 and not shots_taken.has("cock"):
+			shots_taken["cock"] = true
+			await _save("arms_grenade_cock")
+		if p > 0.6 and not shots_taken.has("throw"):
+			shots_taken["throw"] = true
+			await _save("arms_grenade_throw")
+		if not _view.is_throwing():
+			break
+	_gate_ok("G throws a grenade from the left hand", _arsenal.grenades == g0 - 1
+			and let_go_at > 0.45 and from_hand < 0.25,
+			"%d -> %d grenades, let go at %.2f, %.2f m from the hand" % [g0, _arsenal.grenades,
+			let_go_at, from_hand])
+	_gate_ok("the hand fetched it out of view", fetched_unseen)
+	await _frames(20)
+	_gate_ok("and goes back on the gun as a C", arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.C
+			and arms.reach_gap[1] < 0.005 and not _view._grenade_in_hand.visible)
+
+	# A grapple: the left hand out toward a wall ahead, the line from its C.
+	var ahead := -camera.global_transform.basis.z
+	ahead = Vector3(ahead.x, 0.0, ahead.z).normalized()
+	var wall := _test_block(pawn.feet() + ahead * 14.0 + Vector3.UP * 4.0, Vector3(8.0, 8.0, 1.0))
+	wall.look_at(wall.global_position + ahead, Vector3.UP)
+	await _frames(4)
+	camera.rotation.x = 0.12
+	await _frames(2)
+	_key(KEY_Q, true)
+	var hooked := false
+	var rope_full := false
+	for i in 14:
+		await _frames(1)
+		hooked = hooked or pawn.moves.is_grappling()
+		rope_full = rope_full or _view.rope_amount() >= 1.0
+	await _save("arms_grapple")
+	var hand_out := arms.hole(ViewArms.LEFT).z < -0.4
+	_gate_ok("Q grapples, the left hand held out", hooked and hand_out,
+			"hooked %s, hand at %v" % [hooked, arms.hole(ViewArms.LEFT)])
+	_gate_ok("and the line runs from the hand to the hook", rope_full and arms._rope.visible)
+	_key(KEY_Q, false)
+	for i in 30:
+		await _frames(1)
+	_gate_ok("let go, the line comes back in", not arms._rope.visible)
+	wall.queue_free()
+	await _frames(60)
+	camera.rotation.x = -0.08
+
 	# A long fall: the muzzle slams down on landing.
 	pawn.place(pawn.feet() + Vector3(0.0, 9.0, 0.0))
 	await _frames(4)

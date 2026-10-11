@@ -22,6 +22,10 @@ extends Node
 ##     handguard -- or under the right hand, on a pistol. The left comes off to
 ##     swing open at a sprint, to fetch a magazine on a reload (a pinch hand), and
 ##     to punch with a melee (a fist); with no gun both hands swing open;
+##   * a GRENADE: the left hand goes down out of view, comes back with one, cocks
+##     it back and throws -- the grenade leaves from the hand (start_throw);
+##   * a GRAPPLE: the left hand is thrown out toward the hook and the line shoots
+##     out of its C to it, and back in when it lets go;
 ##   * a SWAP lowers the gun out of view, changes it (and any hand) down there, and
 ##     raises the new one;
 ##   * MOMENTUM: the gun lags a change of speed, floats up in a fall, and a hard
@@ -103,6 +107,15 @@ const SWAP_POS := Vector3(0.05, -0.36, 0.1)
 const SWAP_ROT := Vector3(-0.95, 0.3, 0.55)
 const SWAP_DOWN := 0.18
 const SWAP_UP := 0.3
+## A grenade throw: how long, and when in it the grenade leaves the hand. The gun
+## tips away to the right while the left hand is busy.
+const THROW_TIME := 0.8
+const THROW_RELEASE := 0.55
+const THROW_POS := Vector3(0.04, -0.05, 0.03)
+const THROW_ROT := Vector3(-0.15, -0.25, -0.3)
+## The grapple's line: how long it takes to reach the hook, and to come back in.
+const ROPE_OUT := 0.1
+const ROPE_IN := 0.08
 
 ## Look sway: the gun lags and leans in the wake of the turn rate (rad/s).
 const SWAY_POS := 0.004
@@ -182,6 +195,15 @@ var _outgoing_home: Node3D
 var swaps_done := 0
 ## The left hand off the gun (0 on it, 1 free), and its stride.
 var _left_free := 0.0
+## A grenade throw under way, 0..1 (-1 none), what to call when the grenade
+## leaves the hand, and the grenade shown in it.
+var _throw := -1.0
+var _throw_w := 0.0
+var _throw_release := Callable()
+var _grenade_in_hand: MeshInstance3D
+## The grapple: the arm out (0..1), and the line out from the hand (0..1).
+var _grapple := 0.0
+var _rope := 0.0
 var _retract := 0.0
 var _kick_left := 0.0
 var _since_shot := 1.0
@@ -205,6 +227,15 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	camera.add_child(rig)
 	arms = ViewArms.new()
 	arms.setup(camera)
+	_grenade_in_hand = MeshInstance3D.new()
+	var ball := SphereMesh.new()
+	ball.radius = 0.032
+	ball.height = 0.064
+	_grenade_in_hand.mesh = ball
+	_grenade_in_hand.material_override = ViewArms._mat(Color(0.25, 0.32, 0.18))
+	_grenade_in_hand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_grenade_in_hand.visible = false
+	arms.held_point(ViewArms.LEFT).add_child(_grenade_in_hand)
 	gun.fired.connect(_on_fired)
 	pawn.landed.connect(_on_landed)
 	pawn.meleed.connect(_on_meleed)
@@ -311,6 +342,25 @@ func landing_pitch() -> float:
 	return _dip_rot
 
 
+## Throw a grenade with the left hand: `release` is called with where it leaves
+## the hand (world), THROW_RELEASE into the throw. False if a throw is under way.
+func start_throw(release: Callable) -> bool:
+	if _throw >= 0.0 or arms == null:
+		return false
+	_throw = 0.0
+	_throw_release = release
+	return true
+
+
+func is_throwing() -> bool:
+	return _throw >= 0.0
+
+
+## The grapple's line, out from the hand: 0 in, 1 at the hook.
+func rope_amount() -> float:
+	return _rope
+
+
 ## Swapping: how far down, 0..1.
 func swap_amount() -> float:
 	return _swap
@@ -319,7 +369,8 @@ func swap_amount() -> float:
 ## Is the gun up? Not while it is still lowered from a sprint, or down while
 ## the hands climb or hold a lip, or on its way out or in.
 func can_fire() -> bool:
-	return _sprint < 0.35 and _mantle < 0.35 and _swap < 0.3 and not pawn.is_meleeing()
+	return _sprint < 0.35 and _mantle < 0.35 and _swap < 0.3 and _throw < 0.0 \
+			and not pawn.is_meleeing()
 
 
 ## Hanging and facing the lip: both hands are on it. Look away from the wall and
@@ -463,6 +514,7 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	_mom_vel += (-MOM_STIFF * _mom - MOM_DAMP * _mom_vel - _accel * MOM_GAIN * MOM_STIFF) * delta
 	_mom = (_mom + _mom_vel * delta).limit_length(MOM_MAX)
 	_step_swap(delta)
+	_step_throw(delta)
 
 	if not _fitted and gun.gun != null and gun.gun.is_inside_tree():
 		_fitted = true
@@ -486,6 +538,9 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	rot += MELEE_ROT * _smooth(_melee)
 	pos += SWAP_POS * _smooth(_swap)
 	rot += SWAP_ROT * _smooth(_swap)
+	_throw_w = move_toward(_throw_w, 1.0 if _throw >= 0.0 and _throw < 0.85 else 0.0, delta / 0.12)
+	pos += THROW_POS * _smooth(_throw_w)
+	rot += THROW_ROT * _smooth(_throw_w)
 
 	if on_floor and not sliding and hv > 0.3:
 		_bob += hv * BOB_PER_M * TAU * delta
@@ -595,6 +650,21 @@ static func _smooth(t: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+## The throw's clock: the grenade leaves the hand at THROW_RELEASE.
+func _step_throw(delta: float) -> void:
+	if _throw < 0.0:
+		return
+	var was := _throw
+	_throw += delta / THROW_TIME
+	if was < THROW_RELEASE and _throw >= THROW_RELEASE:
+		_grenade_in_hand.visible = false
+		if _throw_release.is_valid():
+			_throw_release.call(_grenade_in_hand.global_position)
+		_throw_release = Callable()
+	if _throw >= 1.0:
+		_throw = -1.0
+
+
 ## Down, and at the bottom the change: the old gun home, the new one shown. Then up.
 func _step_swap(delta: float) -> void:
 	if _lowering:
@@ -620,10 +690,13 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 	var reloading := gun.is_reloading() and held != null and held == gun.gun
 	if held == null or not held.has_meta(&"view_holds"):
 		# Nothing in hand: both open, swinging with the stride.
+		var bare := _swing(ViewArms.LEFT, stride, moving)
+		var lp := _left_action(delta, bare, bare, ViewArms.Hand.OPEN)
 		arms.set_hand(ViewArms.RIGHT, ViewArms.Hand.OPEN)
-		arms.set_hand(ViewArms.LEFT, ViewArms.Hand.OPEN)
+		arms.set_hand(ViewArms.LEFT, int(lp[1]))
 		arms.swivel = [0.0, 0.0]
-		arms.pose(_swing(ViewArms.RIGHT, stride, moving), _swing(ViewArms.LEFT, stride, moving), delta)
+		arms.pose(_swing(ViewArms.RIGHT, stride, moving), lp[0], delta)
+		_rope_to(delta)
 		return
 
 	var holds: Dictionary = held.get_meta(&"view_holds")
@@ -668,12 +741,76 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 		left = left.interpolate_with(fist, _smooth(_melee))
 		if _melee > 0.3:
 			left_hand = ViewArms.Hand.FIST
+	var act := _left_action(delta, left, on_gun, left_hand)
+	left = act[0]
+	left_hand = act[1]
 	arms.set_hand(ViewArms.RIGHT, ViewArms.Hand.C)
 	arms.set_hand(ViewArms.LEFT, left_hand)
 	# The elbows trail a turn, and wing out at a run.
 	var trail := clampf(-_look_rate.x * 0.06, -0.3, 0.3)
 	arms.swivel = [trail + 0.25 * _sprint, -trail + 0.15 * _sprint]
 	arms.pose(right, left, delta)
+	_rope_to(delta)
+
+
+## What the left hand does over everything else: a grenade throw, else a grapple.
+## `left` is the pose so far, `home` where it goes back to. [pose, hand].
+func _left_action(delta: float, left: Transform3D, home: Transform3D, hand: int) -> Array:
+	var mv := pawn.moves
+	var hooked := mv != null and mv.is_grappling()
+	_grapple = move_toward(_grapple, 1.0 if hooked else 0.0, delta / (0.08 if hooked else 0.2))
+	if _grapple > 0.0 and mv != null:
+		# Out toward the hook, the arm near straight, the line through the C.
+		var hook := camera.global_transform.affine_inverse() * mv.hook
+		var sh: Vector3 = ViewArms.SHOULDER[ViewArms.LEFT]
+		var dir := (hook - sh).normalized()
+		# Never back past the shoulder or out of the side of the view.
+		dir.z = minf(dir.z, -0.55)
+		dir.x = clampf(dir.x, -0.5, 0.35)
+		dir = dir.normalized()
+		var out := Transform3D(ViewArms.hand_basis(dir, Vector3(0.2, 1.0, 0.0)),
+				sh + dir * 0.56 + Vector3(0.04, 0.04, 0.0))
+		left = left.interpolate_with(out, _smooth(_grapple))
+		hand = ViewArms.Hand.C
+	if _throw >= 0.0:
+		var p := _throw
+		var down := Transform3D(ViewArms.hand_basis(Vector3.RIGHT, Vector3(0.2, 1.0, -0.3)),
+				Vector3(-0.14, -0.52, -0.2))
+		# Cocked back by the left of the view, then through past the crosshair and down.
+		var cocked := Transform3D(ViewArms.hand_basis(Vector3.RIGHT, Vector3(0.1, 1.0, 0.4)),
+				Vector3(-0.24, -0.06, -0.3))
+		var let_go := Transform3D(ViewArms.hand_basis(Vector3.RIGHT, Vector3(0.0, 0.3, -1.0)),
+				Vector3(-0.04, -0.02, -0.5))
+		var follow := Transform3D(ViewArms.hand_basis(Vector3.RIGHT, Vector3(0.3, -0.4, -1.0)),
+				Vector3(0.06, -0.46, -0.36))
+		var keys := [[0.0, left], [0.18, down], [0.42, cocked], [THROW_RELEASE, let_go],
+				[0.72, follow], [1.0, home]]
+		for i in keys.size() - 1:
+			var a: float = keys[i][0]
+			var b: float = keys[i + 1][0]
+			if p <= b:
+				var k := clampf((p - a) / (b - a), 0.0, 1.0)
+				# The throw itself is a snap, not an ease.
+				k = k if a >= 0.42 and b <= THROW_RELEASE else _smooth(k)
+				left = (keys[i][1] as Transform3D).interpolate_with(keys[i + 1][1], k)
+				break
+		# The grenade is picked up out of view, and let go of with an open hand.
+		_grenade_in_hand.visible = p >= 0.18 and p < THROW_RELEASE
+		hand = ViewArms.Hand.OPEN if p >= THROW_RELEASE and p < 0.8 else ViewArms.Hand.C
+	return [left, hand]
+
+
+## The grapple's line: out from the left hand's C to the hook, in when it lets go.
+func _rope_to(delta: float) -> void:
+	var mv := pawn.moves
+	var hooked := mv != null and mv.is_grappling()
+	_rope = move_toward(_rope, 1.0 if hooked else 0.0, delta / (ROPE_OUT if hooked else ROPE_IN))
+	if _rope <= 0.0 or mv == null:
+		arms.set_rope(Vector3.ZERO, Vector3.ZERO, false)
+		return
+	var from := arms.hole(ViewArms.LEFT)
+	var hook := camera.global_transform.affine_inverse() * mv.hook
+	arms.set_rope(from, from.lerp(hook, _rope), true)
 
 
 ## An open hand swinging with the stride, at the bottom of the view; `amount`
