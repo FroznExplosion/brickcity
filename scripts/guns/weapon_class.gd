@@ -60,11 +60,15 @@ const _PRESETS := {
 		"crit": 1.0, "rl": 0.0, "acc": 1.0, "ord": true, "cd": 2.00, "blast": 3.5},
 	&"drone": {"ammo": &"ordnance", "dmg": 40.0, "fr": 1.50, "mmin": 1, "mmax": 1,
 		"crit": 1.0, "rl": 0.0, "acc": 1.0, "ord": true, "cd": 0.67, "blast": 1.5},
+	# The shock special weapon (COMBAT_DESIGN 7.3): each charge is a shock arc through up
+	# to six enemies, each slowed (GunController.ARC_CASTER). No blast.
+	&"arc_caster": {"ammo": &"ordnance", "dmg": 120.0, "fr": 0.50, "mmin": 2, "mmax": 3,
+		"crit": 1.0, "rl": 0.0, "acc": 1.0, "ord": true, "cd": 2.00, "blast": 0.0},
 }
 
 ## Ordnance ids, for pools that must draw from one category or the other.
 const ORDNANCE_IDS: Array[StringName] = [
-	&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_layer", &"drone",
+	&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_layer", &"drone", &"arc_caster",
 ]
 ## Base damage is a 10× DOWNSCALE of the original table (pistol 100 -> 10), so a level-1
 ## rifle reads ~9 per shot instead of ~89. Enemy HP was divided by the SAME constant

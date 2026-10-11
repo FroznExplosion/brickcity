@@ -14,6 +14,10 @@ extends Node3D
 ##            for FREEZE_SECONDS. A player is slowed, never frozen.
 ##   shock    a shock arc's slow (GunController's alt-fire): not an element, a slow.
 ##
+## Frozen, a thing is brittle: it takes FROZEN_TAKEN from every hit, and once its
+## defences are down it SHATTERS -- dies at once -- on a melee, or on a hit that leaves
+## its flesh at SHATTER_SHARE or less (`try_shatter`, from DamageSystem.resolve).
+##
 ## The extra damage the statuses do is plain (the element's multiplier was already in
 ## the part that built it). A mech takes its hits by its own rules and has none of this.
 ##
@@ -35,6 +39,9 @@ const FREEZE_SECONDS := 2.0
 ## After a thaw, this long before ice can chill it again: no frozen lock.
 const THAW_GRACE := 1.5
 const SHOCK_SLOW := 0.4
+const FROZEN_TAKEN := 1.5
+const SHATTER_SHARE := 0.25
+const SHATTER_COLOUR := Color(0.75, 0.95, 1.0)
 const FLESH: Array[StringName] = [&"health", &"flesh", &"vegetation"]
 
 var pool: HealthPool
@@ -71,6 +78,30 @@ static func of(root: Node, make := false) -> ElementStatus:
 	s.pawn = root.get_node_or_null(^"Pawn") as Pawn
 	root.add_child(s)
 	return s
+
+
+## A hit just landed on `root`: if it is frozen with its flesh bare, and the hit was a
+## melee or its flesh is down to SHATTER_SHARE, it shatters. Returns the flesh the
+## shatter took, or -1 when it did not shatter.
+static func try_shatter(root: Node, melee: bool) -> float:
+	var s := of(root)
+	if s == null or not s.is_frozen() or s.pool == null or s.pool.is_dead():
+		return -1.0
+	var p := s.pool
+	var top := p.top_layer_type()
+	if not FLESH.has(top):
+		return -1.0
+	var idx := p._index_of_living_type(top)
+	if not melee and p.get_layer_fraction(idx) > SHATTER_SHARE:
+		return -1.0
+	var left := p.get_layer_value(idx)
+	p.apply_to_layer_type(left * 2.0 + 1.0, top, &"")
+	if not p.is_dead():
+		return -1.0
+	if root is Node3D and root.is_inside_tree():
+		SplashFlash.spawn(root.get_tree().current_scene, (root as Node3D).global_position, 1.4,
+				SHATTER_COLOUR)
+	return left
 
 
 ## A round's element part dealt `dealt` on a layer of type `layer` (DamageSystem): build
