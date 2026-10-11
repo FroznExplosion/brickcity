@@ -199,8 +199,12 @@ func _torch() -> void:
 	gun.set_trigger(true)
 	gun.step(0.001)
 	var burned := 0.0
+	gun.step(0.1)
+	_ok("burning, the flame is lit at the muzzle, down the aim", gun._flame != null and gun._flame.emitting
+			and gun._flame.global_transform.basis.z.dot(aim.global_transform.basis.z) > 0.99)
 	for i in 40:
 		gun.step(0.1)
+	_ok("and out when the fuel is", not gun._flame.emitting)
 	burned = _lost(flesh)
 	_ok("held, it runs out of fuel: back on the primary, cooling",
 			not gun.gun.alt_mode and gun.alt_cooldown_left() > 0.0)

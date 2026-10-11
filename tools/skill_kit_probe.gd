@@ -240,7 +240,8 @@ func _play() -> void:
 	var away := _enemy(Vector3(-6.0, 0.0, -1.2), 500.0, 100.0)
 	await _ticks(3)
 	pawn.melee()
-	_ok("without Shockwave a broken shield is only the one", is_equal_approx(near.health.get_layer_value(0), 100.0))
+	_ok("without Shockwave a broken shield is only the one", is_equal_approx(near.health.get_layer_value(0), 100.0)
+			and not struck.is_held() and not near.is_held())
 	struck.health.reset()
 	_buy(pl, [&"shockwave"])
 	await _ticks(2)
@@ -249,6 +250,14 @@ func _play() -> void:
 			and is_equal_approx(away.health.get_layer_value(0), 100.0)
 			and is_equal_approx(struck.health.get_layer_value(0), 0.0),
 			"near %.0f, away %.0f" % [near.health.get_layer_value(0), away.health.get_layer_value(0)])
+	_ok("Shockwave: the struck and the near are staggered, the far not", struck.is_held() and near.is_held()
+			and not away.is_held() and struck.stagger_left > 0.5)
+	var near_at := near.feet()
+	await _ticks(6)
+	_ok("and knocked away from the blow", near.feet().distance_to(pawn.feet()) > near_at.distance_to(pawn.feet()) + 0.1,
+			"%.2f m" % (near.feet().distance_to(pawn.feet()) - near_at.distance_to(pawn.feet())))
+	await _seconds(PlayerArsenal.SHOCKWAVE_STAGGER)
+	_ok("for a moment only", not struck.is_held() and not near.is_held())
 	for e in [struck, near, away]:
 		e.body.queue_free()
 	await _ticks(2)

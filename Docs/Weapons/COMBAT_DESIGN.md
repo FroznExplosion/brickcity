@@ -201,9 +201,11 @@ These are the first branch; other branches (marksman, elements, mobility, surviv
 health and shield nodes live) are to design. The brawler loop they serve: **punch to break a
 defence, shoot to finish, refill the shield, push the next one.**
 
-As built (2026-10-10): the four are the Brawler limb of the tree (§14, "the skill kit"). Not yet:
-Kinetic Lunge's slide-punch launch, the Shockwave's stagger (there is no stagger yet), and
-Backstab past frontal armor plates (no enemy has plates yet) — Backstab is the 2.5x alone.
+As built (2026-10-10): the four are the Brawler limb of the tree (§14, "the skill kit"). The
+Shockwave staggers every enemy in it, the struck one too: 1 s held (`Pawn.stagger`, `is_held` —
+no moving, firing or turning, and a soldier's mind waits) and knocked 4 m/s away from the blow.
+Not yet: Kinetic Lunge's slide-punch launch, and Backstab past frontal armor plates (no enemy has
+plates yet) — Backstab is the 2.5x alone.
 
 ### 4.3 Defences sit over the flesh
 
@@ -749,8 +751,8 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   `PlayerController.possess`) keeps a player from being frozen.
 - The shock arc's slow is a status here too (`ElementStatus.shock`).
 - `tools/status_probe.gd` (19 checks).
-- **Not yet:** no hit-number colours for status damage; a frozen soldier's brain still thinks
-  (its body just does not move). (The shatter: "special fire", below.)
+- **Not yet:** no hit-number colours for status damage. (The shatter, and a frozen soldier's
+  mind held: "special fire" and "held", below.)
 
 **Special fire — the tube, the torch, the arc caster, the shatter, soldiers' alt-fires: built
 2026-10-10.**
@@ -767,8 +769,24 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   held, at most once every 6 s — the arc and the tube whenever, a dart to open a burst, the plasma
   charge only when a shield is under the aim. Never the torch.
 - `tools/special_fire_probe.gd` (23 checks).
-- **Not yet:** a heat bar instead of the charge's ammo bite; the torch's flame look (a corrosive
-  puff stands in); other special weapons; a frozen brain; the shatter's pieces.
+- **Not yet:** a heat bar instead of the charge's ammo bite; other special weapons; the shatter's
+  pieces.
+
+**Held — frozen and staggered, body and mind; the torch's flame: built 2026-10-10.**
+- `Pawn.is_held()`: frozen, or staggered (`Pawn.stagger(seconds, push)`, `stagger_left`; never a
+  player). Held, the pawn's intents are zeroed and it does not turn. A held `Soldier` skips its
+  tick: no sensing, no thinking (its think clock stops with it, so it resumes where it was), no aim
+  or fire. A plain walker's knock goes on its `shove`.
+- The Shockwave staggers (§4.2's built note).
+- **The torch's flame** (`TorchFlame`, `scripts/combat/torch_flame.gd`): CPU particles out of the
+  muzzle down the aim, world-space so a swung torch leaves its fire behind — a narrow bright core
+  (added) inside a 9° jet of soft puffs (mixed, so it never clips to white over a bright wall)
+  that slows, billows and rises from yellow-green to dark green smoke over ~5 m, with a green
+  glow light. Dim at the nozzle so it does not cover the crosshair. Out on letting go, on running
+  dry, on a swap; switched off mid-burn it still cools. `tools/torch_look.gd` (not headless)
+  renders it to `shots/`.
+- `tools/frozen_soldier_probe.gd` (10 checks); the Shockwave's stagger in `skill_kit_probe` (33),
+  the flame in `special_fire_probe` (25).
 - `fights_back_probe` fails one check ("while it hid, the rounds went into the wall": 4 of 15
   reached it) on this branch from before this step too (checked at f2c42d8 and with `ai_alt` off) —
   AI area's to look at.
@@ -867,8 +885,8 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 §12's ten steps are built. What is left, by weight:
 
-- More of the skill kit: abilities past the Overshield and a second slot, a stagger for the
-  Shockwave, the marksman and element branches (§4.2).
+- More of the skill kit: abilities past the Overshield and a second slot, the marksman and
+  element branches (§4.2).
 - Special weapons past the arc caster; a heat bar for the plasma charge; the torch's look.
 - Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
 - Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
@@ -900,7 +918,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (30), `special_fire_probe` (23),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (33), `special_fire_probe` (25), `frozen_soldier_probe` (10),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
