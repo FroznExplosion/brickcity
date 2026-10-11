@@ -9,6 +9,9 @@ extends Node
 ##   5             the ordnance, and back
 ##   G             throw a grenade, gun up
 ##   R held        a floor gun in reach and in view: pick it up into the third hand.
+##                 A workbench in reach and in view (Workbench): the bench's page --
+##                 arrows choose a gun, Enter infuses it to the story tier for scrap,
+##                 Backspace twice breaks a backpack gun down for scrap (Infusion).
 ##                 Carrying one and none in view: stow it in the backpack. Otherwise:
 ##                 the gun in hand into its alt-fire mode and back (7.2). (Tapped, R
 ##                 is still reload: the pawn does that; held, the reload its press
@@ -58,9 +61,14 @@ var grenades_max := GRENADES_MAX
 var grenade_recharge := GRENADE_RECHARGE
 ## The floor gun the player would pick up now (in reach, near the crosshair), or null.
 var target_pickup: WorldGunPickup
+## The workbench the player would use now, or null; the one in use while its page is up.
+var target_bench: Workbench
+var bench: Workbench
+var bench_index := 0
+var _salvage_armed := 0.0
 var inventory_open := false
 var inventory_index := 0
-## The open screen's page: 0 the backpack, 1 the skill tree.
+## The open screen's page: 0 the backpack, 1 the skill tree, 2 the workbench (only at one).
 var inventory_page := 0
 var skills: SkillScreen
 ## Short notes for the HUD ("Backpack full").
@@ -105,6 +113,7 @@ func setup(p_player: PlayerController, p_gun: GunController, p_view: PlayerView,
 	if player != null:
 		var pl := player.progress
 		skills.progress = pl
+		pl.reach_tier(tier)
 		if gun != null:
 			gun.set_meta(PlayerLevel.SOURCE_META, pl)
 		if not pl.changed.is_connected(apply_skills):
@@ -278,10 +287,12 @@ func _inventory_input(event: InputEvent) -> void:
 	if _pressed(event, &"inventory"):
 		inventory_open = false
 	elif _pressed(event, &"swap_weapon"):
-		inventory_page = 1 - inventory_page
+		inventory_page = 1 if inventory_page == 0 else 0
 	elif inventory_page == 1:
 		if skills != null:
 			skills.handle(event)
+	elif inventory_page == 2:
+		_bench_input(event)
 	elif _step(event) != 0:
 		inventory_index = clampi(inventory_index + _step(event), 0, maxi(n - 1, 0))
 	elif event is InputEventKey and event.pressed and (event.keycode == KEY_BACKSPACE or event.keycode == KEY_DELETE):
@@ -316,6 +327,13 @@ func _process(delta: float) -> void:
 		target_pickup = null
 		return
 	target_pickup = _find_pickup()
+	target_bench = _find_bench() if target_pickup == null else null
+	_salvage_armed = maxf(_salvage_armed - delta, 0.0)
+	# Walked away from the bench: its page closes.
+	if inventory_open and inventory_page == 2 and (bench == null or not is_instance_valid(bench)
+			or player.pawn == null or player.pawn.feet().distance_to(bench.global_position) > BENCH_LEAVE):
+		inventory_open = false
+		inventory_page = 0
 	# Hold swap: undo the tap the press made, and change group instead.
 	if _swap_held >= 0.0:
 		if not Input.is_action_pressed(&"swap_weapon"):
@@ -348,6 +366,8 @@ func _process(delta: float) -> void:
 func interact() -> void:
 	if target_pickup != null:
 		pick_up(target_pickup)
+	elif target_bench != null:
+		open_bench(target_bench)
 	elif loadout.third_hand != null:
 		if loadout.stow():
 			_show()
@@ -370,6 +390,104 @@ func pick_up(p: WorldGunPickup) -> void:
 
 
 ## The floor gun nearest the crosshair, in reach.
+# --- the workbench (COMBAT_DESIGN 1.2) -------------------------------------------------
+
+const BENCH_REACH := 3.0
+const BENCH_LEAVE := 4.0
+const SALVAGE_WINDOW := 2.0
+
+
+func _find_bench() -> Workbench:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return null
+	var eye := cam.global_position
+	var fwd := -cam.global_transform.basis.z
+	var best: Workbench = null
+	var best_dot := cos(deg_to_rad(AIM_DEG + 10.0))
+	for n in get_tree().get_nodes_in_group(Workbench.GROUP):
+		var w := n as Workbench
+		if w == null or not w.is_inside_tree():
+			continue
+		var to := w.use_point() - eye
+		var d := to.length()
+		if d > BENCH_REACH or d < 0.01:
+			continue
+		var dot := to.normalized().dot(fwd)
+		if dot > best_dot:
+			best_dot = dot
+			best = w
+	return best
+
+
+## The bench's page, up: every gun the player holds, to infuse or break down.
+func open_bench(w: Workbench) -> void:
+	bench = w
+	inventory_open = true
+	inventory_page = 2
+	bench_index = clampi(bench_index, 0, maxi(loadout.all_guns().size() - 1, 0))
+	if player != null:
+		player.progress.reach_tier(tier)
+
+
+## Every gun at the bench, in the order its page lists them.
+func bench_guns() -> Array:
+	return loadout.all_guns()
+
+
+## `g` to the player's story tier, for its scrap.
+func infuse(g: GunInstance) -> bool:
+	var pl := player.progress
+	var why := Infusion.why_not(g, pl.story_tier, pl.scrap)
+	if why != "":
+		_say(why)
+		return false
+	pl.spend_scrap(Infusion.cost(g.rarity, g.tier, pl.story_tier))
+	Infusion.infuse(g, pl.story_tier)
+	_say("%s infused to tier %d" % [g.gun_name, g.tier])
+	changed.emit()
+	return true
+
+
+## The backpack's gun `g` broken down for scrap. Only from the backpack: a gun in a slot
+## is one the player is using.
+func salvage(g: GunInstance) -> bool:
+	var i := loadout.backpack.find(g)
+	if i < 0:
+		_say("Only a backpack gun can be broken down")
+		return false
+	var got := Infusion.salvage_value(g.rarity, g.tier)
+	loadout.backpack.remove_at(i)
+	_ammo.erase(g)
+	g.queue_free()
+	player.progress.add_scrap(got)
+	_say("Broken down: +%d scrap" % got)
+	changed.emit()
+	return true
+
+
+func _bench_input(event: InputEvent) -> void:
+	var guns := bench_guns()
+	if _step(event) != 0:
+		bench_index = clampi(bench_index + _step(event), 0, maxi(guns.size() - 1, 0))
+		_salvage_armed = 0.0
+	elif event is InputEventKey and event.pressed and not event.echo and bench_index < guns.size():
+		var g := guns[bench_index] as GunInstance
+		if event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+			infuse(g)
+		elif event.keycode in [KEY_BACKSPACE, KEY_DELETE]:
+			if loadout.backpack.find(g) < 0:
+				_say("Only a backpack gun can be broken down")
+			elif _salvage_armed > 0.0:
+				_salvage_armed = 0.0
+				salvage(g)
+				bench_index = clampi(bench_index, 0, maxi(bench_guns().size() - 1, 0))
+			else:
+				_salvage_armed = SALVAGE_WINDOW
+				_say("Backspace again: break it down for %d scrap"
+						% Infusion.salvage_value(g.rarity, g.tier))
+
+
 func _find_pickup() -> WorldGunPickup:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
@@ -557,6 +675,9 @@ class ArsenalHud extends CanvasLayer:
 					Rarity.NAMES[clampi(r.rarity - 1, 0, 5)],
 					String(r.weapon_class.id) if r.weapon_class != null else "", r.tier]
 			pcol = PlayerHud.RARITY_COLOURS[clampi(r.rarity - 1, 0, 5)]
+		elif arsenal.target_bench != null:
+			prompt = "Hold R  workbench: infuse guns to tier %d, break guns down for scrap" \
+					% maxi(arsenal.tier, arsenal.player.progress.story_tier if arsenal.player != null else 1)
 		elif lo.third_hand != null:
 			prompt = "Trying %s:  1-4 keep in that slot  ·  hold R stow  ·  Tab drop" % (lo.third_hand as GunInstance).gun_name
 		if prompt != "":
@@ -571,6 +692,48 @@ class ArsenalHud extends CanvasLayer:
 		_level(font, sz)
 		if arsenal.inventory_open and arsenal.inventory_page == 0:
 			_backpack(font, sz)
+		elif arsenal.inventory_open and arsenal.inventory_page == 2:
+			_bench(font, sz)
+
+	## The workbench's page: every gun, its tier, what lifting it costs.
+	func _bench(font: Font, sz: Vector2) -> void:
+		var c := _draw_node
+		var pl := arsenal.player.progress
+		var guns := arsenal.bench_guns()
+		var w := 640.0
+		var h := 96.0 + 22.0 * maxi(guns.size(), 1)
+		var r := Rect2(sz.x * 0.5 - w * 0.5, sz.y * 0.5 - h * 0.5, w, h)
+		c.draw_rect(r, Color(0.06, 0.05, 0.04, 0.9))
+		c.draw_string(font, r.position + Vector2(16, 26), "WORKBENCH   story tier %d" % pl.story_tier,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.85, 0.55))
+		var sc := "Scrap %d" % pl.scrap
+		var sw := font.get_string_size(sc, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		c.draw_string(font, Vector2(r.end.x - 16 - sw, r.position.y + 26), sc, HORIZONTAL_ALIGNMENT_LEFT,
+				-1, 16, Color(1.0, 0.85, 0.4))
+		for i in guns.size():
+			var g := guns[i] as GunInstance
+			var yy := r.position.y + 54.0 + 22.0 * i
+			if i == arsenal.bench_index:
+				c.draw_rect(Rect2(r.position.x + 8, yy - 15, w - 16, 20), Color(1, 1, 1, 0.15))
+			var where := "pack" if arsenal.loadout.backpack.has(g) else "kit"
+			c.draw_string(font, Vector2(r.position.x + 16, yy), "%s  %s" % [where, _label(g)],
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _colour(g))
+			var right := ""
+			var rc := Color(1, 1, 1, 0.5)
+			if g.tier >= pl.story_tier:
+				right = "on tier"
+			else:
+				var cost := Infusion.cost(g.rarity, g.tier, pl.story_tier)
+				right = "T%d -> T%d   %d scrap" % [g.tier, pl.story_tier, cost]
+				rc = Color(0.5, 1.0, 0.6) if cost <= pl.scrap else Color(1.0, 0.45, 0.4)
+			var rw := font.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+			c.draw_string(font, Vector2(r.end.x - 16 - rw, yy), right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, rc)
+		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 30),
+				"Infusing keeps the gun -- parts, modifiers, alt-fire, element, name -- and lifts its damage.",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.55))
+		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 10),
+				"Arrows/wheel choose  ·  Enter infuse  ·  Backspace twice: break a pack gun down  ·  I close",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.6))
 
 	## The level and its XP, a thin bar at the bottom middle; the points waiting.
 	func _level(font: Font, sz: Vector2) -> void:
@@ -642,6 +805,8 @@ class ArsenalHud extends CanvasLayer:
 		var r := Rect2(sz.x * 0.5 - w * 0.5, sz.y * 0.5 - h * 0.5, w, h)
 		c.draw_rect(r, Color(0.05, 0.06, 0.08, 0.85))
 		var title := "BACKPACK  %d / %d" % [lo.backpack.size(), lo.backpack_size]
+		if arsenal.player != null:
+			title += "      Scrap %d" % arsenal.player.progress.scrap
 		c.draw_string(font, r.position + Vector2(16, 26), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 16,
 				Color(1, 1, 1))
 		if lo.backpack.is_empty():

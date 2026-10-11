@@ -33,6 +33,10 @@ var xp := 0
 var tree := SkillTree.new()
 ## The side the player is on: a kill of their own side pays nothing.
 var team := 0
+## Scrap, the infusion material (Infusion): from kills and guns broken down.
+var scrap := 0
+## The highest tier of fight the player has reached: what a gun can be infused to.
+var story_tier := 1
 
 
 ## XP from `l` to the next level; 0 at the top.
@@ -93,6 +97,27 @@ func buy(id: StringName) -> bool:
 	return true
 
 
+## A fight of `tier` reached: the story tier rises to it, never falls.
+func reach_tier(tier: int) -> void:
+	if tier > story_tier:
+		story_tier = tier
+		changed.emit()
+
+
+## Scrap spent, if there is enough.
+func spend_scrap(n: int) -> bool:
+	if n < 0 or scrap < n:
+		return false
+	scrap -= n
+	changed.emit()
+	return true
+
+
+func add_scrap(n: int) -> void:
+	scrap += maxi(n, 0)
+	changed.emit()
+
+
 ## Every point back, to spend again.
 func reset_tree() -> void:
 	tree.reset()
@@ -124,11 +149,14 @@ static func credit_kill(source: Object, target: Node) -> void:
 	if pawn != null and pawn.team == who.team:
 		return
 	target.set_meta(PAID_META, true)
-	who.add_xp(kill_xp(target))
+	var xp_got := kill_xp(target)
+	who.scrap += roundi(xp_got * Infusion.SCRAP_PER_XP)
+	who.add_xp(xp_got)
 
 
 func to_dict() -> Dictionary:
-	return {"level": level, "xp": xp, "skills": tree.to_dict()}
+	return {"level": level, "xp": xp, "skills": tree.to_dict(), "scrap": scrap,
+			"story_tier": story_tier}
 
 
 ## Become the saved `d` (this object stays: the nodes that carry it keep it).
@@ -137,6 +165,8 @@ func take(d: Dictionary) -> void:
 	level = p.level
 	xp = p.xp
 	tree = p.tree
+	scrap = p.scrap
+	story_tier = p.story_tier
 	changed.emit()
 
 
@@ -145,4 +175,6 @@ static func from_dict(d: Dictionary) -> PlayerLevel:
 	p.level = clampi(int(d.get("level", 1)), 1, LEVEL_MAX)
 	p.xp = clampi(int(d.get("xp", 0)), 0, maxi(xp_to_next(p.level) - 1, 0))
 	p.tree = SkillTree.from_dict(d.get("skills", {}) as Dictionary, p.points_total())
+	p.scrap = maxi(int(d.get("scrap", 0)), 0)
+	p.story_tier = clampi(int(d.get("story_tier", 1)), 1, Tier.COUNT)
 	return p

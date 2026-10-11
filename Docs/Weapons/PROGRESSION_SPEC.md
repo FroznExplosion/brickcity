@@ -55,6 +55,9 @@ COMBAT_DESIGN overrides this file where they differ.
 A gun keeps its drop tier until the player **infuses** it at a safehouse up to their current story
 tier: same gun, new base damage (COMBAT_DESIGN §1.2). Never above the current story tier.
 
+Built (step 10): `Infusion` and the `Workbench`. The material is scrap, from kills and from guns
+broken down at the bench; the cost grows with the tiers gained and with rarity.
+
 ---
 
 ## 2. Player level
