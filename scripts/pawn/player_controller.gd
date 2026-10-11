@@ -126,7 +126,9 @@ func _process(delta: float) -> void:
 		it.run = (_sprint_on if toggle_sprint else _down(&"sprint")) and forward \
 				and not trigger and not it.aim
 		it.crouch = _crouch_on if toggle_crouch else _down(&"crouch")
-		it.grapple = _down(&"grapple")
+		# Q is the ability slot: the grapple's hold, unless the slot holds another
+		# ability (PlayerArsenal fires that one on the press).
+		it.grapple = _down(&"grapple") and progress.ability() == &"grapple"
 		it.jump_held = _down(&"jump")
 		# Held through a sprint, the round waits for the gun to come up.
 		it.fire = trigger and (view == null or view.can_fire())

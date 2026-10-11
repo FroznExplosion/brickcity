@@ -192,6 +192,9 @@ var _m_exit := Vector3.ZERO
 var _m_low := false
 var _grapple_was := false
 var _grapple_cd := 0.0
+## The player's skill tree's ability recharge (PlayerArsenal.apply_skills): the grapple
+## recharges this many times as fast.
+var cooldown_speed := 1.0
 var _g_t := 0.0
 var _g_rope := 0.0
 var _g_stall := 0.0
@@ -258,7 +261,7 @@ func is_grappling() -> bool:
 
 ## 0 when the line is ready, 1 just after it was used.
 func grapple_cooldown() -> float:
-	return clampf(_grapple_cd / GRAPPLE_COOLDOWN, 0.0, 1.0)
+	return clampf(_grapple_cd * cooldown_speed / GRAPPLE_COOLDOWN, 0.0, 1.0)
 
 
 ## One tick. `wish` is the move asked for (world, horizontal, length <= 1) and
@@ -1155,7 +1158,7 @@ func _hook_gone() -> bool:
 
 func _release_grapple() -> void:
 	state = State.WALK
-	_grapple_cd = GRAPPLE_COOLDOWN
+	_grapple_cd = GRAPPLE_COOLDOWN / cooldown_speed
 	_tuck_left = GRAPPLE_TUCK_AFTER
 	grapple_released.emit()
 

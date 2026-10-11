@@ -37,6 +37,9 @@ var team := 0
 var scrap := 0
 ## The highest tier of fight the player has reached: what a gun can be infused to.
 var story_tier := 1
+## What the ability slot (Q) holds: the grapple, or an ability the tree bought
+## (SkillTree.abilities). `ability()` is what it does now.
+var tactical := &"grapple"
 
 
 ## XP from `l` to the next level; 0 at the top.
@@ -118,6 +121,20 @@ func add_scrap(n: int) -> void:
 	changed.emit()
 
 
+## The ability in the slot: `tactical`, while the tree still has it; else the grapple.
+func ability() -> StringName:
+	return tactical if tree.abilities().has(tactical) else &"grapple"
+
+
+## `id` into the ability slot, if the tree has it.
+func set_tactical(id: StringName) -> bool:
+	if not tree.abilities().has(id):
+		return false
+	tactical = id
+	changed.emit()
+	return true
+
+
 ## Every point back, to spend again.
 func reset_tree() -> void:
 	tree.reset()
@@ -156,7 +173,7 @@ static func credit_kill(source: Object, target: Node) -> void:
 
 func to_dict() -> Dictionary:
 	return {"level": level, "xp": xp, "skills": tree.to_dict(), "scrap": scrap,
-			"story_tier": story_tier}
+			"story_tier": story_tier, "tactical": String(tactical)}
 
 
 ## Become the saved `d` (this object stays: the nodes that carry it keep it).
@@ -167,6 +184,7 @@ func take(d: Dictionary) -> void:
 	tree = p.tree
 	scrap = p.scrap
 	story_tier = p.story_tier
+	tactical = p.tactical
 	changed.emit()
 
 
@@ -177,4 +195,5 @@ static func from_dict(d: Dictionary) -> PlayerLevel:
 	p.tree = SkillTree.from_dict(d.get("skills", {}) as Dictionary, p.points_total())
 	p.scrap = maxi(int(d.get("scrap", 0)), 0)
 	p.story_tier = clampi(int(d.get("story_tier", 1)), 1, Tier.COUNT)
+	p.tactical = StringName(d.get("tactical", "grapple"))
 	return p

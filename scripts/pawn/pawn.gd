@@ -78,6 +78,14 @@ var moves: PawnMoves
 var melee_tier := 1
 ## Seconds until the next melee may start (MeleeStrike.RECOVERY).
 var _melee_cool := 0.0
+## The player's skill tree's melee (PlayerArsenal.apply_skills, COMBAT_DESIGN 4.2); the
+## plain blow for anyone else. `melee_speed` shortens the recovery; `melee_reach` and
+## `melee_lunge` are Kinetic Lunge's (a blow past MeleeStrike.REACH carries the pawn in);
+## `melee_backstab` multiplies a blow from behind (Backstab), 1 for none.
+var melee_speed := 1.0
+var melee_reach := 1.0
+var melee_lunge := false
+var melee_backstab := 1.0
 ## Element statuses (ElementStatus, COMBAT_DESIGN 5): a chill or a shock slows the legs
 ## by this; a freeze stops the pawn where it stands -- no moving, firing or turning.
 var speed_mult := 1.0
@@ -300,19 +308,27 @@ func _physics_process(delta: float) -> void:
 ## Throw a melee down the eye now (MeleeStrike). The blow's damage is this pawn's
 ## melee_tier; what it reached goes out on `meleed`.
 func melee() -> Dictionary:
-	_melee_cool = MeleeStrike.RECOVERY
+	_melee_cool = MeleeStrike.RECOVERY / melee_speed
 	if eye == null or not eye.is_inside_tree():
 		return {}
 	var ex: Array[RID] = [body.get_rid()]
+	var dir := -eye.global_transform.basis.z
 	var info := MeleeStrike.strike(body.get_world_3d(), eye.global_position,
-			-eye.global_transform.basis.z, melee_tier, ex, self)
+			dir, melee_tier, ex, self, Layers.GUN_MASK, melee_reach, melee_backstab)
+	# Kinetic Lunge: a blow that landed past the plain reach carries the pawn in.
+	if melee_lunge and not info.is_empty() \
+			and eye.global_position.distance_to(info.point) > MeleeStrike.REACH:
+		var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+		body.velocity = Vector3(flat.x * MeleeStrike.LUNGE_SPEED, body.velocity.y,
+				flat.z * MeleeStrike.LUNGE_SPEED)
+		info["lunged"] = true
 	meleed.emit(info)
 	return info
 
 
 ## In the gun-down part of a blow.
 func is_meleeing() -> bool:
-	return _melee_cool > MeleeStrike.RECOVERY - MeleeStrike.GUN_DOWN
+	return _melee_cool > (MeleeStrike.RECOVERY - MeleeStrike.GUN_DOWN) / melee_speed
 
 
 ## One tick of movement from `intents`.

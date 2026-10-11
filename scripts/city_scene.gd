@@ -6076,7 +6076,7 @@ func _run_soldier_pass() -> void:
 	camera.global_position = street + Vector3(0.0, 6.0, 0.0)
 	_enter_pawn(street)
 	_player.drive_uncaptured = true
-	_player_pawn.health.layer_configs[0].max_value = 100000.0
+	_player_pawn.health.layer_configs[-1].max_value = 100000.0
 	_player_pawn.health.reset()
 	camera.rotation = Vector3(0.0, 0.0, 0.0)   # the player looks down -Z, out of the street
 	await _frames(20)

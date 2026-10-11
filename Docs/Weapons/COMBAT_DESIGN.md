@@ -201,6 +201,10 @@ These are the first branch; other branches (marksman, elements, mobility, surviv
 health and shield nodes live) are to design. The brawler loop they serve: **punch to break a
 defence, shoot to finish, refill the shield, push the next one.**
 
+As built (2026-10-10): the four are the Brawler limb of the tree (§14, "the skill kit"). Not yet:
+Kinetic Lunge's slide-punch launch, the Shockwave's stagger (there is no stagger yet), and
+Backstab past frontal armor plates (no enemy has plates yet) — Backstab is the 2.5x alone.
+
 ### 4.3 Defences sit over the flesh
 
 An enemy is **flesh** (or, for plant-based enemies, **vegetation**) and may wear **shield** and/or
@@ -764,9 +768,40 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Saved** in `CharacterSave.character` (`level`, `xp`, `skills`), loaded when the player first
   takes a pawn and written on every change — never in a scripted pass or a test window.
 - `tools/skill_tree_probe.gd` (36 checks).
-- **Not yet:** the real nodes (the Vanguard Brawler's melee nodes §4.2, abilities, shields — the
-  player has no shield layer yet); XP for objectives and missions; a respec cost; the mouse on the
-  tree's screen; a co-op player's own level (one `PlayerLevel`, the host's player).
+- **Not yet:** XP for objectives and missions; a respec cost; the mouse on the tree's screen; a
+  co-op player's own level (one `PlayerLevel`, the host's player). (The real nodes: "the skill
+  kit", below.)
+
+**The skill kit — the player's shield, the ability slot, the Brawler: built 2026-10-10.**
+- **The tree's limbs** are now Gunner (reload, magazines, alt-fire; unchanged), Survivor (health,
+  the shield, grenades, the Overshield) and **Brawler** (the Vanguard Brawler, §4.2, in place of
+  the Tactician: melee speed, mobility, ability recharge, and the four melee nodes). 40 nodes, 153
+  ranks. A node gives a stat (`SkillTree.total`) or, at one rank, a flag (`has`). An old save's
+  Tactician points come back free (`from_dict` drops a node that is gone).
+- **The player's shield** (`PlayerArsenal.ensure_shield`): a layer over the health, 50 (half the
+  health), recharging at 25/s after 4 s unhurt — a Halo shield. A body shot that breaks it lets half
+  of the rest through (shield gating, §4.5). Survivor's Shield Cells and Layered Cells grow it to
+  +30% (`SkillTree.SHIELD_CAP`), Fast Charge shortens the wait to 60%, Flash Charge speeds the
+  recharge. The HUD's bars already drew every layer. The health's skill base is kept on its layer
+  now, so the shield moving it down an index changes nothing.
+- **The ability slot (Q)**: holds the grapple until the tree buys an ability. `PlayerLevel.tactical`
+  (saved); Enter on a bought ability node puts it in the slot, again takes it out. With another
+  ability there, Q fires it (`PlayerArsenal.use_ability`) and the grapple's hold is off
+  (`PlayerController`). **Overshield** (Survivor, tier 3): the shield doubled and filled for 8 s,
+  30 s from one to the next; its bar sits where the grapple's does. Hook Shot and Quick Recovery
+  (Brawler) speed both its recharge and the grapple's (`PawnMoves.cooldown_speed`).
+- **The Brawler's melee** (`Pawn.melee_speed / melee_reach / melee_lunge / melee_backstab`,
+  `MeleeStrike.strike`'s `reach` and `backstab`): Heavy Hands, Brutal Rhythm and Iron Knuckles
+  shorten the recovery; **Kinetic Lunge** +50% reach, and a blow landed past the plain 1.8 m
+  carries the pawn in at 9 m/s; **Backstab** 2.5x when the blow travels the way the target faces;
+  **Shield-Shatter Shockwave** — a blow that breaks a shield strips 25% of every other enemy's
+  shield within 4 m; **Vampiric Impact** (the top) — a melee kill gives back half the shield and
+  refills the gun in hand. A blow's info now says what it hit, whether it broke a shield, and
+  whether it was a backstab.
+- `tools/skill_kit_probe.gd` (30 checks); `skill_tree_probe` moved to the new nodes and to the
+  health under the shield.
+- **Not yet:** more abilities and a second slot; the stagger, the slide-punch launch and armor
+  plates for Backstab (§4.2); the shield's break and recharge sounds and screen edge.
 
 **Step 10 — safehouse infusion: built 2026-10-10.**
 - `Infusion` (`scripts/progression/infusion.gd`): the cost, `100 × 1.25^(t−1)` scrap for each tier
@@ -802,9 +837,8 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 §12's ten steps are built. What is left, by weight:
 
-- **The real skill tree** (§1.3, §4.2): the Vanguard Brawler's melee nodes, the abilities (grapple,
-  overshield, ...), a player shield layer and its nodes. `SkillTree.NODES` is data; the placeholder
-  stat nodes give way to them.
+- More of the skill kit: abilities past the Overshield and a second slot, a stagger for the
+  Shockwave, the marksman and element branches (§4.2).
 - What steps 7–8 left: the other alt-fires and the special ordnance weapons, frozen enemies
   shattering, AI soldiers using alt-fires.
 - Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
@@ -828,6 +862,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 | Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
 | Infusion and scrap | `scripts/progression/infusion.gd`, `workbench.gd`; `GunGenerator.retier`; the bench's page in `PlayerArsenal` (`open_bench`, `infuse`, `salvage`) |
 | The kit saved | `CharacterSave` (`gun_entry`, `make_result`, `loadout_dict`, `fill_loadout`); `PlayerArsenal.restore`, `kit_changed`; `CityScene._load_kit` |
+| Player shield, ability slot, Brawler | `PlayerArsenal` (`ensure_shield`, `use_ability`, `_on_meleed`, `shockwave`); `Pawn.melee_*`; `MeleeStrike.strike` (`reach`, `backstab`); `PlayerLevel.tactical` |
 | Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
@@ -835,7 +870,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (30),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
