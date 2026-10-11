@@ -31,6 +31,7 @@ const MARGIN := 0.15
 ## and plates it drops off an edge.
 const KINDS := {
 	&"truck": {"width": 2.3, "height": 2.4, "step": 2, "drop": 4, "mobility": &"wheeled"},
+	&"apc": {"width": 2.8, "height": 2.5, "step": 2, "drop": 4, "mobility": &"wheeled"},
 	&"tank": {"width": 3.15, "height": 2.92, "step": 3, "drop": 5, "mobility": &"tracked",
 			"crush": Tank.CRUSH_PLATES, "crush_cost": 4.0},
 }

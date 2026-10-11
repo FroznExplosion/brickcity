@@ -176,6 +176,7 @@ func setup(p_city: Node3D) -> void:
 	commander.alive_cap = ALIVE_CAP
 	commander.spawner = request_squad
 	commander.can_truck = true
+	commander.can_apc = true
 	commander.room_at = func(p: Vector3) -> Dictionary: return CityRooms.at(city, p)
 	_wire_support()
 
@@ -301,8 +302,8 @@ func _physics_process(_delta: float) -> void:
 func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> bool:
 	if not _ready_to_fight or kinds.is_empty():
 		return false
-	if arrival == &"truck":
-		return _send_truck(kinds)
+	if arrival == &"truck" or arrival == &"apc":
+		return _send_truck(kinds, arrival)
 	# A batch still going down when the next is asked for -- its spots kept
 	# failing (a building came down under them) -- is given up: the commander's
 	# new call is the one that counts, and waiting on the old one refused every
@@ -1580,25 +1581,33 @@ func _check_hq() -> void:
 ## A squad by truck (TransportTruck): from a start on open ground out past the
 ## fight, on the far side of it from the player, to the fight; its cargo is put
 ## down at the tailgate when it stops.
-func _send_truck(kinds: Array[StringName]) -> bool:
+func _send_truck(kinds: Array[StringName], kind := &"truck") -> bool:
 	var t0 := Time.get_ticks_usec()
-	var start := _truck_start()
+	var start := _truck_start(kind)
 	var took := float(Time.get_ticks_usec() - t0) / 1000.0
 	if start == Vector3.INF:
 		return false
 	var goal: Vector3 = _street_of(focus)
 	var to := goal - start
-	var t := TransportTruck.make(city.ai_services, city, start, atan2(-to.x, -to.z))
+	var gi: GunInstance = null
+	if kind == &"apc":
+		if city._gun_library == null:
+			city._gun_library = GunPlaceholderParts.build_library()
+		gi = GunInstance.from_result(GunGenerator.generate(city._gun_library, city._combat_rng.randi(),
+				WeaponClass.builtin(&"lmg"), 1))
+	var t := TransportTruck.make(city.ai_services, city, start, atan2(-to.x, -to.z), kind, gi,
+			city._gun.on_structure_hit, city._combat_rng)
+	t.team = ENEMY_TEAM
 	t.cargo = kinds.duplicate()
 	t.arrived.connect(_dismount)
 	t.wrecked.connect(_truck_wrecked)
 	# Its rounds hit the truck like a body (it has a HealthPool): it shows.
 	trucks.append(t)
 	wave += 1
-	commander.note_fielded(UnitCatalog.points(&"truck"))
+	commander.note_fielded(UnitCatalog.points(kind))
 	t.send(goal)
-	print("[arena] reinforcement %d by truck: %s, from %v (start on the %s; found in %.0f ms)" % [wave,
-			", ".join(kinds), start, _truck_road, took])
+	print("[arena] reinforcement %d by %s: %s, from %v (start on the %s; found in %.0f ms)" % [wave,
+			kind, ", ".join(kinds), start, _truck_road, took])
 	return true
 
 
@@ -1607,7 +1616,7 @@ func _send_truck(kinds: Array[StringName]) -> bool:
 ## (VehicleNav) has a road for a truck all the way to the fight. With no such
 ## start, the one nearest that has a way on foot: the truck drives the walking
 ## map from there, and lets its squad out where it sticks.
-func _truck_start() -> Vector3:
+func _truck_start(kind := &"truck") -> Vector3:
 	var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
 	var p := _player()
 	var away := (c - p.feet()) if p != null else Vector3.FORWARD
@@ -1616,7 +1625,7 @@ func _truck_start() -> Vector3:
 	var goal: Vector3 = _street_of(focus)
 	# One look outward from the fight on the truck's map -- what it costs from
 	# every spot round it to get there -- in place of a path from each start.
-	var vn: AINav = city.ai_services.vehicle_nav(&"truck")
+	var vn: AINav = city.ai_services.vehicle_nav(kind)
 	var field := -1
 	var drive_to := VehicleNav.reach_point(vn, goal)
 	if drive_to != Vector3.INF:
@@ -1675,12 +1684,15 @@ func _dismount(t: TransportTruck) -> void:
 				+ t.global_transform.basis.z * (TransportTruck.SIZE.z * 0.5 + 1.2 + i))
 		_spawn_at(at, -1)
 	t.cargo.clear()
+	# An APC covers the squad it let out (moving cover).
+	if t.is_apc() and _wave_squad != null and is_instance_valid(_wave_squad):
+		t.escort = _wave_squad
 	_tip()
-	print("[arena] truck unloaded %d at %v" % [n, t.global_position])
+	print("[arena] %s unloaded %d at %v (%s)" % [t.name.to_lower(), n, t.global_position, t.stopped_because])
 
 
 func _truck_wrecked(t: TransportTruck) -> void:
-	var lost := UnitCatalog.points(&"truck")
+	var lost := UnitCatalog.points(t.kind)
 	for k in t.cargo:
 		lost += UnitCatalog.points(k)
 	if not t.cargo.is_empty():

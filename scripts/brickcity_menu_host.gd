@@ -163,7 +163,7 @@ const ACTION_NAMES := {
 	"dev_stats": "Stats Overlay", "dev_gun_out": "Free Camera: Take the Gun Out",
 	"dev_gun_away": "Free Camera: Put the Gun Away", "dev_spawn_soldier": "Spawn a Soldier",
 	"dev_spawn_squad": "Spawn a Squad", "dev_spawn_enemy_mech": "Spawn an Enemy Mech",
-	"dev_spawn_tank": "Spawn an Enemy Tank (Shift: an empty one of ours; Ctrl: an empty truck; Ctrl+Shift: an enemy truck)",
+	"dev_spawn_tank": "Spawn an Enemy Tank (Shift: an empty one of ours; Ctrl: an empty truck; Ctrl+Shift: an enemy truck; Alt: an enemy APC; Alt+Shift: an empty APC of ours)",
 	"dev_play_on_foot": "Play on Foot / Free Camera", "dev_gun_class": "Free Camera: Next Gun Class",
 	"dev_gun_reload": "Free Camera: Reload", "dev_ai_overlay": "AI Overlay",
 	"dev_save": "Save Checkpoint", "dev_load": "Load Checkpoint",

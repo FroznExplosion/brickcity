@@ -4,11 +4,12 @@
 part (AIRoster.md RO10: crewed seats, a cannon that opens walls, armour, the player can drive
 it, infantry screen it, it crushes low walls). The vehicle map (§3) is built for wheels and
 tracks, riding on and boarding vehicles (§4.1, after Halo) and seats for the truck and the
-tank, and both have brick bodies in damage zones (§4.2); the rest is planned.**
+tank, and both have brick bodies in damage zones (§4.2). Step 2's APC is built (§4.3): armoured,
+armed, it lets its squad out at contact and is moving cover. The rest is planned.**
 The commander can name, cost and weigh every vehicle below (`UnitCatalog`), so the budget, the
-doctrine and the save format know them before each one drives; only the truck and the tank
-have `built = true` -- the tank a commander buys as support (AIRoster.md RO11), and the arena
-(`--tank`) and the city (Z) field one free.
+doctrine and the save format know them before each one drives; the truck, the APC and the tank
+have `built = true` -- a squad comes by truck or by APC, the tank a commander buys as support
+(AIRoster.md RO11), and the arena (`--tank`) and the city (Z) field one free.
 
 **What step 1 is today** (`scripts/ai/vehicles/transport_truck.gd`): a kinematic body with health
 that asks for one path and drives it (9 m/s, 1.6 rad/s turns, slower through a sharp one). What it
@@ -117,7 +118,9 @@ A vehicle is a `Squad` member with a role (`driver`), and the squad's plays lear
   the doctrine says: at a distance from the contact (transport), at contact behind the armour
   (APC), under fire (IFV suppresses first).
 - **Moving cover** — the lee of an APC/IFV/tank is cover AIWorld already rates (its bricks are
-  between the threat and the spot); `BTPlayAdvance` bounds into it as it moves.
+  between the threat and the spot); `BTPlayAdvance` bounds into it as it moves. *(Built for every
+  vehicle's hull, §4.3; not yet a play of its own: soldiers find the lee through their ordinary
+  cover search.)*
 - **Screen** — around a tank, members hold points on its flanks facing where rocket fire would
   come from; the aggro table (AI.md 8) says who draws the player's attention.
 - **Loss cascade** — the vehicle destroyed costs the squad morale as a leader's death does.
@@ -189,8 +192,35 @@ share of bricks are left; the vehicle's health is as before (the bricks are wher
 
 Drawn as one MultiMesh per part and brick size, and one of studs per part: a brick knocked off
 is a zero-scale instance and its part's studs laid again. Not yet: the bricks in the world's
-grid -- cover AIWorld knows, weight -- (AIPlan P7); the APC's zones. Probe:
+grid -- weight -- (AIPlan P7); what AIWorld knows of a vehicle is its hull's box (§4.3). Probe:
 `vehicle_bricks_probe` (26).
+
+### 4.3 The APC, and vehicles as cover (built)
+
+**Vehicles as cover** (`VehicleCover`): every vehicle's hull is a box in AIWorld
+(`AIWorld.set_cover`, C++) kept where it is -- moved when the vehicle has gone 0.4 m or turned
+6 degrees, at most five times a second. Lines through it count it as bricks (a tank's 8 a
+metre, an APC's 6, a truck's 2): sight, fire and a cover search's `cover_seconds` all see it, so
+a soldier with an enemy ahead finds the lee of a vehicle near it as it finds a wall's. It is not
+solid to the walking map (it moves, and would have the map read again each time), and a line to
+or from inside it does not count it -- that is a shot at the vehicle, or a look out of it.
+
+**The APC** (`TransportTruck` kind `&"apc"`: the truck's body, driving and cargo, armoured and
+armed): 2.8 m wide (its own vehicle map, `VehicleNav` `&"apc"`), 7 m/s, 1800 hit points behind
+armour (a person's round a twelfth, a rocket all, a mech's gun 60%), a turret with a heavy
+machine gun (an LMG at 2.5 times). It sees all round from the turret within 90 m and tells its
+side; its gun turns on the side's best contact in sight within 70 m and fires when on it, never
+with a friend near the line. It does not drive to the goal and stop: it stops at **contact** --
+the enemy in its own sight within 45 m -- and lets its squad out at the tailgate, on the side
+away from the threat. Then, told its squad (`escort`: the arena's and the city's unload hand it
+over), it is **moving cover**: 6 m past their middle towards the threat, at a walk, straight
+there while the way is open. It stays on the board (a truck leaves once empty). Zones: four
+wheels a side (half speed), the engine its front four studs (it stops), the gun -- a turret 3
+studs square and its barrel (no gun) -- and the hull. The player drives it as a truck and aims
+and fires its gun as a tank's. The commander buys "a squad by APC" (12 points) before it thinks
+of a truck, as often as `Doctrine.apc_share` says (0.25; more against a sniper or a demolisher);
+the arena picks its start on the APC's map. The city: ALT+Z an enemy APC with four soldiers
+coming for the player, ALT+SHIFT+Z an empty one of ours. Probe: `apc_probe` (12).
 
 ---
 
@@ -219,8 +249,8 @@ built units, the budget is points. Still to come, with the first vehicle:
    in the truck's lee, and fights; nobody is left inside. *(Built: the truck, the vehicle map,
    riders and the player's driving and hijacking. Not yet: brick-built, VehicleBody3D, its
    squad as riders rather than cargo.)*
-2. **APC** as moving cover; **damage zones as brick groups** (engine, wheels, ammo). *(Built for
-   the truck and the tank, §4.2. Not yet: the APC.)*
+2. **APC** as moving cover; **damage zones as brick groups** (engine, wheels, ammo). *(Built,
+   §4.2 and §4.3.)*
 3. **Tank** (tracked motor, crushing, a gun that breaches), screened by infantry. *(Built.)*
 4. **Transport helicopter** on the height field; roof insertion through the survey.
 5. **Attack helicopter**, **strike plane** — fire support the commander calls on a point.

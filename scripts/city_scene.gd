@@ -744,7 +744,7 @@ const ZONE_LOST_LINES := {&"engine": "engine destroyed -- it will not drive, and
 		&"turret": "turret jammed", &"gun": "cannon shot off -- the machine gun still works",
 		&"ammo": "AMMO RACK HIT -- it cooks off"}
 const TRUCK_ZONE_LOST_LINES := {&"engine": "engine shot out -- it will not drive",
-		&"wheels": "wheels shot off -- half speed"}
+		&"wheels": "wheels shot off -- half speed", &"gun": "its gun shot off"}
 ## Weight on bricks (Docs/AI.md 3.10, AIPlan P7): the host looks up what each
 ## pawn and mech stands on and commits LOAD / UNLOAD where it can matter.
 var weight: WeightTracker
@@ -4581,7 +4581,10 @@ func _drive_vehicle(v: CharacterBody3D) -> void:
 	if v is Tank:
 		print("[city] in a tank, %s; C inside/behind, M to get out" % VehiclePilot.seat_line(v as Tank))
 	else:
-		print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
+		if (v as TransportTruck).is_apc():
+			print("[city] driving an APC: W/S throttle, A/D steer, LMB its gun, C inside/behind, M to get out")
+		else:
+			print("[city] driving a truck: W/S throttle, A/D steer, C inside/behind, M to get out -- friends near hop in the back")
 
 
 ## Out on foot beside it, `hurt` for a wreck or a boarder; its riders get down
@@ -4675,8 +4678,18 @@ func _wire_deck(v: Node3D) -> void:
 
 ## A truck of side `team` at `feet`, facing `yaw`, with `cargo` in the back
 ## (put down at its tailgate when it stops: _truck_unload).
-func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]) -> TransportTruck:
-	var tr := TransportTruck.make(ai_services, self, feet, yaw)
+func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName],
+		kind := &"truck") -> TransportTruck:
+	var gi: GunInstance = null
+	if kind == &"apc":
+		if ai_services.world3d == null:
+			ai_services.world3d = get_world_3d()
+			ai_services.on_structure_hit = _gun.on_structure_hit
+		if _gun_library == null:
+			_gun_library = GunPlaceholderParts.build_library()
+		gi = GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
+				WeaponClass.builtin(&"lmg"), 1))
+	var tr := TransportTruck.make(ai_services, self, feet, yaw, kind, gi, _gun.on_structure_hit, _combat_rng)
 	tr.team = team
 	tr.cargo = cargo
 	tr.arrived.connect(_truck_unload)
@@ -4692,7 +4705,8 @@ func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]
 			if is_instance_valid(w):
 				w.queue_free()))
 	trucks.append(tr)
-	print("[city] truck of side %d at %v%s" % [team, feet, (", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
+	print("[city] %s of side %d at %v%s" % [tr.name.to_lower(), team, feet,
+			(", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
 	return tr
 
 
@@ -4704,15 +4718,25 @@ func _truck_unload(tr: TransportTruck) -> void:
 	var threat := _player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn) \
 			else tr.global_position + Vector3.FORWARD
 	var spots := tr.tailgate_points(threat, tr.cargo.size())
-	var squad_at := Vector3.INF
+	var members: Array[Soldier] = []
 	for i in tr.cargo.size():
 		var at: Vector3 = spots[i] if i < spots.size() else ai_nav.snap(tr.global_position
-				+ tr.global_transform.basis.z * (TransportTruck.SIZE.z * 0.5 + 1.2 + i))
-		_spawn_soldier(at)
-		if squad_at == Vector3.INF:
-			squad_at = at
-	print("[city] truck unloaded %d at %v (%s)" % [tr.cargo.size(), tr.global_position, tr.stopped_because])
+				+ tr.global_transform.basis.z * (tr.size.z * 0.5 + 1.2 + i))
+		members.append(_spawn_soldier(at))
+	print("[city] %s unloaded %d at %v (%s)" % [tr.name.to_lower(), tr.cargo.size(), tr.global_position,
+			tr.stopped_because])
 	tr.cargo.clear()
+	# An APC's squad is one, and it covers them (moving cover).
+	if tr.is_apc() and not members.is_empty():
+		var q := Squad.make(ai_services, self, members, 1)
+		squads.append(q)
+		if _player_pawn != null and is_instance_valid(_player_pawn):
+			var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+			o.point = _player_pawn.feet()
+			for m in members:
+				m.knowledge().heard(_player_pawn, _player_pawn.feet(), ai_services.now())
+			q.give(o)
+		tr.escort = q
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -10281,7 +10305,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_Z:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
 			var truck_nav := ai_services.vehicle_nav(&"truck")
-			if event.ctrl_pressed and event.shift_pressed:
+			if event.alt_pressed and event.shift_pressed:
+				_spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(ahead)), camera.global_rotation.y, 0,
+						[] as Array[StringName], &"apc")
+			elif event.alt_pressed:
+				# An enemy APC from further off with a squad inside: it stops at
+				# contact, lets them out in its lee and covers them.
+				var far := camera.global_position - camera.global_transform.basis.z * 80.0
+				var apc := _spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(far)),
+						camera.global_rotation.y + PI, 1,
+						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName], &"apc")
+				apc.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
+						else _on_ground(camera.global_position))
+			elif event.ctrl_pressed and event.shift_pressed:
 				# From further off, coming for the player with a squad in the back.
 				var far := camera.global_position - camera.global_transform.basis.z * 60.0
 				var tr := _spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,

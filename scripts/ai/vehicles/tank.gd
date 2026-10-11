@@ -132,6 +132,8 @@ var crushes := 0
 ## What climbing out of it costs now: more after a cook-off.
 var bail_hurt := BAIL_HURT
 var cooked_off := false
+## Its hull as cover the AI knows (VehicleCover): its lee is somewhere to hide.
+var cover: VehicleCover
 
 ## -1 (back) .. 1 (forward).
 var throttle := 0.0
@@ -215,6 +217,7 @@ static func make(s: AIServices, parent: Node, feet: Vector3, p_yaw: float, p_tea
 	t.rotation.y = p_yaw
 	t.reset_physics_interpolation()
 	pool.died.connect(t._on_wrecked)
+	t.cover = VehicleCover.make(s, Vector3(HULL.x, RING_Y, HULL.z), 8.0)
 	t.add_to_group(&"tanks")
 	return t
 
@@ -272,6 +275,11 @@ func forward() -> Vector3:
 
 func is_wrecked() -> bool:
 	return state == "wrecked"
+
+
+func _exit_tree() -> void:
+	if cover != null:
+		cover.remove()
 
 
 ## Is anybody at the controls? A driver in it (or the player), and not wrecked.
@@ -605,6 +613,8 @@ func _on_wrecked() -> void:
 
 func _physics_process(delta: float) -> void:
 	_clock += delta
+	if cover != null:
+		cover.update(self, feet() + Vector3.UP * RING_Y * 0.5)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:

@@ -13,14 +13,15 @@ extends Node
 ## between them): at the wheel the player drives, and has the gun too unless one
 ## of theirs sits in the gunner's; in the gunner's they aim and shoot while one
 ## of theirs drives (TankBrain). In a truck W / S are throttle and brake, A / D
-## steer -- only while it rolls. Those are the defaults: it reads the move, fire,
+## steer -- only while it rolls; an APC drives as a truck and its turret follows
+## the look as a tank's, LMB its gun. Those are the defaults: it reads the move, fire,
 ## aim, vehicle_view and vehicle_seat actions, rebound in Options > Controls.
 
 ## The crosshair's reach, for where the turret should point.
 const AIM_RANGE := 400.0
 ## The chase camera: how far behind the look, and how high over the vehicle.
-const CHASE_BACK := {"tank": 9.0, "truck": 7.5}
-const CHASE_UP := {"tank": 2.6, "truck": 2.4}
+const CHASE_BACK := {"tank": 9.0, "truck": 7.5, "apc": 8.5}
+const CHASE_UP := {"tank": 2.6, "truck": 2.4, "apc": 2.8}
 
 var vehicle: CharacterBody3D
 var camera: Camera3D
@@ -56,7 +57,12 @@ func truck() -> TransportTruck:
 
 
 func _kind() -> String:
-	return "tank" if vehicle is Tank else "truck"
+	return "tank" if vehicle is Tank else String((vehicle as TransportTruck).kind)
+
+
+## The vehicle, if the player has its gun (a tank's seat, an APC); else null.
+func _gunned() -> CharacterBody3D:
+	return vehicle if is_driving() and vehicle.has_method(&"player_guns") and vehicle.player_guns() else null
 
 
 func _active() -> bool:
@@ -98,16 +104,17 @@ func _process(_delta: float) -> void:
 	if t == null or t.player_drives():
 		vehicle.throttle = go
 		vehicle.steer = turn
-	if t != null and t.player_guns():
-		var on := _active() and not t.is_wrecked()
-		t.fire_main = on and Input.is_action_pressed(&"fire")
-		t.fire_coax = on and Input.is_action_pressed(&"aim")
+	var gv := _gunned()
+	if gv != null:
+		var on: bool = _active() and not gv.is_wrecked()
+		gv.fire_main = on and Input.is_action_pressed(&"fire")
+		gv.fire_coax = on and Input.is_action_pressed(&"aim")
 	_follow()
 
 
 func _physics_process(_delta: float) -> void:
-	var t := tank()
-	if t == null or not camera.is_inside_tree() or not t.player_guns():
+	var t := _gunned()
+	if t == null or not camera.is_inside_tree():
 		return
 	# Where the crosshair lands: the turret turns to it.
 	var from := camera.global_position
