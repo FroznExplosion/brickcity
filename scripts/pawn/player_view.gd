@@ -853,7 +853,11 @@ func _reload_left(p: float, on_gun: Transform3D, g: Transform3D, gx: Vector3, gy
 	return [pose, hand]
 
 
-func _on_fired(_info: Dictionary) -> void:
+func _on_fired(info: Dictionary) -> void:
+	# What the round does to whoever it hit: a flinch, or up close a stumble
+	# (HitReaction) -- and a stumble lands in the hands too.
+	if gun.aim != null and HitReaction.hit(gun.gun, gun.aim.global_position, info) > 0.0:
+		add_shake(0.06)
 	var f := _feel()
 	var kick := deg_to_rad(float(f[0])) * lerpf(1.0, 0.7, _ads)
 	var side := kick * 0.3 * _rng.randf_range(-1.0, 1.0)
