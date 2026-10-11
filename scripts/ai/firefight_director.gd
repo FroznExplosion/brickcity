@@ -80,6 +80,9 @@ const SET_BONUS := 5000
 ## The mech meter: full in this long on its own; each point of a kill adds this.
 const MECH_FILL_SECONDS := 150.0
 const MECH_PER_POINT := 0.03
+## The meter at the start of a game: full, so the first mech is there from the
+## first wave (a restart fills it again).
+const MECH_START := 1.0
 ## Seconds the beacon stands before the mech lands, and how near it crushes.
 const MECH_BEACON := 4.0
 const MECH_CRUSH := 3.5
@@ -108,7 +111,7 @@ var wave_mechs: Array[MechBrain] = []
 var _armour_due := {}
 var _truck_sent_at := {}
 ## The player's mech meter, 0..1, and the call on its way down (INF: none).
-var mech_meter := 0.0
+var mech_meter := MECH_START
 var mech_calls := 0
 var _beacon_at := Vector3.INF
 var _beacon_until := 0.0
@@ -585,7 +588,7 @@ func restart() -> void:
 	level = 1
 	lives = LIVES_START
 	score = 0
-	mech_meter = 0.0
+	mech_meter = MECH_START
 	_said_ready = false
 	_clear_beacon()
 	kills = 0
