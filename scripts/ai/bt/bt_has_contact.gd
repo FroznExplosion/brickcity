@@ -21,5 +21,8 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	if unsearched and c.searched:
 		return FAILURE
-	blackboard.set_var(&"threat_eye", c.pos + Vector3.UP * CoverSearch.STAND_EYE)
+	# Guarding a way out: cover against the door, guns on it.
+	var watch := so.watch_point if so.watch_point != Vector3.INF and so.tactic == CombatPolicy.Tactic.TAKE_COVER \
+			else c.pos
+	blackboard.set_var(&"threat_eye", watch + Vector3.UP * CoverSearch.STAND_EYE)
 	return SUCCESS

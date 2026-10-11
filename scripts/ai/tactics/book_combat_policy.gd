@@ -32,6 +32,12 @@ const DOABLE := {
 	# Our armour near (TacticsSense.heavy_near): to its flank towards the
 	# threat, or into its lee as it leads -- BTManoeuvre, with Soldier.screen_of.
 	"screen_heavy": T.FLANK, "heavy_leads": T.PUSH,
+	# Into the player's building (the moment "Player is in a building"): by its
+	# door, which the walking map finds -- or our own way in, on the breaching
+	# map, a charge where it goes into bricks (Soldier.breach_way). Or not in:
+	# in cover facing the way the player would come out (Soldier.watch_point).
+	"sweep": T.PUSH, "flash": T.PUSH, "breach": T.PUSH,
+	"guard_exits": T.TAKE_COVER, "wait": T.TAKE_COVER,
 }
 ## Book move -> what a FLYER does with it (Flyer.Mode): circle and fire, a
 ## strafing run, break off upwards, or -- a bomber -- dive and go off.
@@ -107,6 +113,12 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 		so.throw_grenade(c.pos)
 	so.screen_of = TacticsSense.heavy_near(so) if move in ["screen_heavy", "heavy_leads"] else null
 	so.screen_move = move if so.screen_of != null else ""
+	# Making its own way in, or watching the way out.
+	so.breach_way = move == "breach"
+	so.watch_point = Vector3.INF
+	if move in ["guard_exits", "wait"]:
+		var w := TacticsSense.ways_in(so, c.pos)
+		so.watch_point = w.door if w.door != Vector3.INF else c.pos
 	var tactic := _tactic(move, cover) if move != "" else _fallback.decide(o, rng)
 	_count(done, move)
 	if SAID.has(move):

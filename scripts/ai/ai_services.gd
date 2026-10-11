@@ -219,6 +219,27 @@ func mech_breach_nav() -> AINav:
 	return n
 
 
+## A soldier's map for making its own way in (the casebook's "breach"): the
+## walking map's body, with a wall a way through at FOOT_BREACH_COST a column
+## (a charge planted and blown). Made the first time one asks.
+const FOOT_BREACH_COST := 4.0
+
+
+func foot_breach_nav() -> AINav:
+	if navs.has("person:breach"):
+		return navs["person:breach"]
+	var n := AINav.new()
+	n.set_ai_world(ai_world)
+	if n.has_method(&"set_breach"):
+		n.call(&"set_breach", FOOT_BREACH_COST)
+	use_hierarchy(n)
+	if ai_nav != null:
+		n.set_water_level(ai_nav.get_water_level())
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs["person:breach"] = n
+	return n
+
+
 ## Maps kept by others that are warmed with these (share_nav): the mech's.
 var shared_navs: Array[AINav] = []
 
