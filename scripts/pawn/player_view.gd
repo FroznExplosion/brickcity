@@ -17,7 +17,15 @@ extends Node
 ##   * the right mouse button brings the sights to the eye: a narrower FOV, a
 ##     slower mouse, a tighter cone -- a scope on a sniper;
 ##   * the camera leans off a wall it is running, and widens a little at a sprint
-##     and a slide.
+##     and a slide;
+##   * ARMS hold it (ViewArms): the right hand's C on the grip, the left's on the
+##     handguard -- or under the right hand, on a pistol. The left comes off to
+##     swing open at a sprint, to fetch a magazine on a reload (a pinch hand), and
+##     to punch with a melee (a fist); with no gun both hands swing open;
+##   * a SWAP lowers the gun out of view, changes it (and any hand) down there, and
+##     raises the new one;
+##   * MOMENTUM: the gun lags a change of speed, floats up in a fall, and a hard
+##     landing slams it down, muzzle first, by how far the fall was.
 ##
 ## Cosmetic and local, apart from two things it sets on the gun: the cone's
 ## multiplier (aiming, moving, flying) and its bloom. Both only shape where the
@@ -66,6 +74,8 @@ const VIEW_LENGTH := {
 	&"grenade_launcher": 0.5,
 }
 const VIEW_LENGTH_DEFAULT := 0.5
+## Classes held in the right hand, the left cupped under it.
+const ONE_HAND: Array[StringName] = [&"pistol", &"revolver"]
 ## Classes that look through a scope rather than over iron sights.
 const SCOPED: Array[StringName] = [&"sniper"]
 ## How fast the view comes back down after a burst, once the trigger rests.
@@ -76,17 +86,23 @@ const KICK_RECOVER_AFTER := 0.1
 ## gun's model so that point is the rig's origin). At the hip: low and right. At
 ## the eye: centred, its top just under the line of sight. What a sprint and a
 ## reload do to it.
-const HIP := Vector3(0.14, -0.13, -0.24)
+const HIP := Vector3(0.12, -0.06, -0.3)
 const ADS := Vector3(0.0, -0.03, -0.2)
 const SPRINT_POS := Vector3(-0.05, 0.03, -0.02)
 const SPRINT_ROT := Vector3(-0.18, 0.5, 0.4)
-const RELOAD_POS := Vector3(-0.04, -0.02, -0.02)
-const RELOAD_ROT := Vector3(-0.22, 0.3, 0.65)
+const RELOAD_POS := Vector3(-0.07, 0.025, 0.03)
+const RELOAD_ROT := Vector3(0.12, 0.35, 0.75)
 const MANTLE_POS := Vector3(0.0, -0.05, 0.02)
 ## A melee is a gun bash: the gun turns on its side and drives forward and in.
 const MELEE_POS := Vector3(-0.08, 0.02, -0.16)
 const MELEE_ROT := Vector3(0.1, 0.35, -0.9)
 const MANTLE_ROT := Vector3(-0.25, 0.1, 0.2)
+## A swap: the gun drops out of the bottom of the view, muzzle down and rolled,
+## and comes back up. Seconds down, and up.
+const SWAP_POS := Vector3(0.05, -0.36, 0.1)
+const SWAP_ROT := Vector3(-0.95, 0.3, 0.55)
+const SWAP_DOWN := 0.18
+const SWAP_UP := 0.3
 
 ## Look sway: the gun lags and leans in the wake of the turn rate (rad/s).
 const SWAY_POS := 0.004
@@ -109,6 +125,14 @@ const RC_UP := 0.012
 const RC_PITCH := 0.07
 const DIP_STIFF := 120.0
 const DIP_DAMP := 14.0
+## The landing's pitch, muzzle down: heavier and slower than the drop.
+const DIP_ROT_STIFF := 80.0
+const DIP_ROT_DAMP := 9.0
+## Momentum: the gun lags a change of speed (m/s^2 in, metres out) on a soft spring.
+const MOM_GAIN := 0.0022
+const MOM_STIFF := 60.0
+const MOM_DAMP := 11.0
+const MOM_MAX := 0.06
 ## The gun pulled back off a wall close in front, instead of poking into it.
 const RETRACT_REACH := 0.9
 ## Wall-run lean, radians.
@@ -122,6 +146,8 @@ var pawn: Pawn
 var gun: GunController
 ## Hangs off the camera; the gun hangs off it.
 var rig: Node3D
+## The hands (and arms) on it.
+var arms: ViewArms
 
 var _ads := 0.0
 var _sprint := 0.0
@@ -139,6 +165,23 @@ var _rc_rot := Vector3.ZERO
 var _rc_rvel := Vector3.ZERO
 var _dip := 0.0
 var _dip_vel := 0.0
+var _dip_rot := 0.0
+var _dip_rot_vel := 0.0
+var _mom := Vector3.ZERO
+var _mom_vel := Vector3.ZERO
+var _prev_vel := Vector3.ZERO
+var _accel := Vector3.ZERO
+## A swap: how far down the gun is (0 up, 1 out of view), and whether it is going
+## down. The gun going away stays in the hands until it is out of sight, then goes
+## home (`put_away`); the new one, already the GunController's, waits hidden.
+var _swap := 0.0
+var _lowering := false
+var _outgoing: GunInstance
+var _outgoing_home: Node3D
+## Swaps that reached the bottom (the --arms pass counts them).
+var swaps_done := 0
+## The left hand off the gun (0 on it, 1 free), and its stride.
+var _left_free := 0.0
 var _retract := 0.0
 var _kick_left := 0.0
 var _since_shot := 1.0
@@ -160,6 +203,8 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	rig = Node3D.new()
 	rig.name = "Viewmodel"
 	camera.add_child(rig)
+	arms = ViewArms.new()
+	arms.setup(camera)
 	gun.fired.connect(_on_fired)
 	pawn.landed.connect(_on_landed)
 	pawn.meleed.connect(_on_meleed)
@@ -168,6 +213,9 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	_prev_look = Vector2(camera.rotation.y, camera.rotation.x)
 	if gun.gun != null:
 		hold(gun.gun)
+	# The first gun comes up from below.
+	_swap = 1.0
+	_prev_vel = pawn.body.velocity
 
 
 ## Hand the view back: the gun returns to the camera where it used to hang, and
@@ -179,7 +227,9 @@ func teardown() -> void:
 		gun.spread_mult = 1.0
 		gun.bloom_per_shot = 0.0
 		gun.bloom = 0.0
+		_finish_put_away()
 		if gun.gun != null and gun.gun.get_parent() == rig:
+			gun.gun.visible = true
 			gun.gun.reparent(camera, false)
 			gun.gun.transform = Transform3D(Basis.IDENTITY, Vector3(0.22, -0.2, -0.45))
 	if pawn != null and is_instance_valid(pawn):
@@ -198,10 +248,14 @@ func teardown() -> void:
 	if rig != null:
 		rig.queue_free()
 	rig = null
+	if arms != null:
+		arms.queue_free()
+	arms = null
 
 
 ## Take this gun into the hands. It is measured and fitted (_fit) once it is in
-## the tree.
+## the tree, and waits out of sight while the gun before it goes down (a swap);
+## it is shown at the bottom and comes up.
 func hold(gi: GunInstance) -> void:
 	if gi == null or rig == null:
 		return
@@ -211,16 +265,61 @@ func hold(gi: GunInstance) -> void:
 		else:
 			rig.add_child(gi)
 	gi.transform = Transform3D.IDENTITY
-	gi.visible = true
+	gi.visible = false
+	_lowering = true
 	_fitted = false
 	gun.bloom_per_shot = float(_feel()[2])
 	gun.bloom = 0.0
 
 
+## A gun swapped out: it goes down with the hands and only then to `home` (the
+## arsenal's holster). One not in sight -- the hidden gun of a swap still under
+## way, or with the hands already down -- goes now.
+func put_away(gi: GunInstance, home: Node3D) -> void:
+	if gi == null:
+		return
+	if rig == null or gi.get_parent() != rig or not gi.visible or _swap >= 1.0:
+		gi.reparent(home, false)
+		return
+	_finish_put_away()
+	_outgoing = gi
+	_outgoing_home = home
+	_lowering = true
+
+
+func _finish_put_away() -> void:
+	if _outgoing != null and is_instance_valid(_outgoing) and _outgoing.get_parent() == rig \
+			and _outgoing_home != null and is_instance_valid(_outgoing_home):
+		_outgoing.reparent(_outgoing_home, false)
+	_outgoing = null
+	_outgoing_home = null
+
+
+## The gun in the hands to look at: the one going down in a swap, else the
+## GunController's (null while it waits hidden, or with none).
+func _held() -> GunInstance:
+	if _outgoing != null and is_instance_valid(_outgoing) and _outgoing.get_parent() == rig:
+		return _outgoing
+	var g := gun.gun if gun != null else null
+	if g != null and is_instance_valid(g) and g.get_parent() == rig and g.visible:
+		return g
+	return null
+
+
+## The landing's dip of the muzzle, radians (negative is down).
+func landing_pitch() -> float:
+	return _dip_rot
+
+
+## Swapping: how far down, 0..1.
+func swap_amount() -> float:
+	return _swap
+
+
 ## Is the gun up? Not while it is still lowered from a sprint, or down while
-## the hands climb or hold a lip.
+## the hands climb or hold a lip, or on its way out or in.
 func can_fire() -> bool:
-	return _sprint < 0.35 and _mantle < 0.35 and not pawn.is_meleeing()
+	return _sprint < 0.35 and _mantle < 0.35 and _swap < 0.3 and not pawn.is_meleeing()
 
 
 ## Hanging and facing the lip: both hands are on it. Look away from the wall and
@@ -349,7 +448,21 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	_rc_rvel += (-RC_STIFF * _rc_rot - RC_DAMP * _rc_rvel) * delta
 	_rc_rot = (_rc_rot + _rc_rvel * delta).limit_length(RC_PITCH * 2.5)
 	_dip_vel += (-DIP_STIFF * _dip - DIP_DAMP * _dip_vel) * delta
-	_dip = clampf(_dip + _dip_vel * delta, -0.12, 0.12)
+	_dip = clampf(_dip + _dip_vel * delta, -0.15, 0.12)
+	_dip_rot_vel += (-DIP_ROT_STIFF * _dip_rot - DIP_ROT_DAMP * _dip_rot_vel) * delta
+	_dip_rot = clampf(_dip_rot + _dip_rot_vel * delta, -0.7, 0.3)
+	# Momentum: the change of the body's speed, in the view's frame, pushes the gun
+	# the other way on a soft spring -- set off and it trails, stop and it runs on.
+	# Not up and down: a fall and a landing have their own.
+	var vel := pawn.body.velocity
+	var acc := (vel - _prev_vel) / delta
+	_prev_vel = vel
+	acc.y = 0.0
+	acc = camera.global_transform.basis.orthonormalized().inverse() * acc
+	_accel = _accel.lerp(acc.limit_length(60.0), clampf(20.0 * delta, 0.0, 1.0))
+	_mom_vel += (-MOM_STIFF * _mom - MOM_DAMP * _mom_vel - _accel * MOM_GAIN * MOM_STIFF) * delta
+	_mom = (_mom + _mom_vel * delta).limit_length(MOM_MAX)
+	_step_swap(delta)
 
 	if not _fitted and gun.gun != null and gun.gun.is_inside_tree():
 		_fitted = true
@@ -357,7 +470,11 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 
 	var hip := 1.0 - _smooth(_ads)
 	var free := (1.0 - 0.85 * _ads) * (0.0 if reduce_motion else 1.0)
-	var pos := HIP.lerp(ADS, _smooth(_ads))
+	# A long gun is held nearer, its back end by the cheek, so the arms reach its
+	# handguard.
+	var held := _held()
+	var back := float(held.get_meta(&"view_back", 0.0)) if held != null else 0.0
+	var pos := (HIP + Vector3(0.0, 0.0, back)).lerp(ADS, _smooth(_ads))
 	var rot := Vector3.ZERO
 	pos += SPRINT_POS * _smooth(_sprint)
 	rot += SPRINT_ROT * _smooth(_sprint)
@@ -367,20 +484,30 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	rot += MANTLE_ROT * _mantle
 	pos += MELEE_POS * _smooth(_melee)
 	rot += MELEE_ROT * _smooth(_melee)
+	pos += SWAP_POS * _smooth(_swap)
+	rot += SWAP_ROT * _smooth(_swap)
 
 	if on_floor and not sliding and hv > 0.3:
 		_bob += hv * BOB_PER_M * TAU * delta
 	var bob_k := clampf(hv / Pawn.RUN_SPEED, 0.0, 1.0) * (1.0 if on_floor and not sliding else 0.0)
 	bob_k *= lerpf(1.0, 1.6, _sprint) * free
 	pos += Vector3(cos(_bob * 0.5) * BOB_X, -absf(sin(_bob * 0.5)) * BOB_Y * 2.0 + BOB_Y, 0.0) * bob_k
+	# Each step rocks the gun: a roll with the stride, and a nod as the foot lands;
+	# at a run the arms carry it, so it rocks more.
+	rot += Vector3(-absf(sin(_bob * 0.5)) * 0.03, 0.0, sin(_bob * 0.5) * 0.045) \
+			* bob_k * lerpf(0.5, 1.0, _sprint)
+	pos += _mom * free
 
 	var sway := Vector3(-_look_rate.x, _look_rate.y, 0.0) * SWAY_POS * free
 	pos += sway.limit_length(SWAY_MAX)
 	var tilt := Vector3(-_look_rate.y * SWAY_ROT, -_look_rate.x * SWAY_ROT,
 			_look_rate.x * SWAY_ROLL) * free
-	# Rising, the hands sink a little; falling, they float up.
+	# Rising, the hands sink a little; falling, they float up, the muzzle with them,
+	# the more the faster the fall -- the landing then slams it down (_on_landed).
 	if not on_floor:
-		pos.y += clampf(-pawn.body.velocity.y * 0.004, -0.04, 0.04) * free
+		var vy := pawn.body.velocity.y
+		pos.y += clampf(-vy * 0.004, -0.04, 0.05) * free
+		rot.x += clampf(-vy * 0.01, -0.05, 0.22) * free
 
 	# Pulled back off a wall close in front, and down with it.
 	var want := 0.0
@@ -396,14 +523,16 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	rot.x -= _retract * 0.6
 
 	pos += _rc_pos + Vector3(0.0, _dip, 0.0)
+	rot.x += _dip_rot
 	# The lean pivots about a point ahead, so the muzzle holds the crosshair.
 	var lean := Basis.from_euler(tilt)
 	var arm := Vector3(0.0, 0.0, TILT_PIVOT)
 	pos += lean * arm - arm
 	var b := lean * Basis.from_euler(rot) * Basis.from_euler(_rc_rot)
 	rig.transform = Transform3D(b, pos)
-	# Through a scope there is no gun to see.
+	# Through a scope there is no gun to see, nor hands.
 	rig.visible = not is_scoped()
+	_hands(delta, on_floor, hv)
 
 
 ## Scale the model to its class's length and move it so the top of its back end
@@ -423,12 +552,168 @@ func _fit(gi: GunInstance) -> void:
 		return
 	var id: StringName = gi.weapon_class.id if gi.weapon_class != null else &""
 	var s := float(VIEW_LENGTH.get(id, VIEW_LENGTH_DEFAULT)) / box.size.z
+	gi.set_meta(&"view_holds", _holds(gi, inv, box))
+	gi.set_meta(&"view_back", clampf((float(VIEW_LENGTH.get(id, VIEW_LENGTH_DEFAULT)) - 0.3) * 0.45,
+			0.0, 0.16))
 	gi.scale = Vector3.ONE * s
 	gi.position = -Vector3(box.get_center().x, box.end.y, box.end.z) * s
 
 
+## Where the hands take this gun, in its own frame (unscaled): the grip, the
+## handguard, the magazine. From its sockets where it has them (the parts are
+## put together on them, GunAssembler), else from its box.
+func _holds(gi: GunInstance, inv: Transform3D, box: AABB) -> Dictionary:
+	var c := box.get_center()
+	var grip := Vector3(c.x, box.position.y + box.size.y * 0.35, box.end.z - box.size.z * 0.25)
+	var mag := Vector3(c.x, box.position.y + box.size.y * 0.3, c.z)
+	var barrel := Vector3(c.x, c.y + box.size.y * 0.2, c.z)
+	var muzzle := Vector3(c.x, barrel.y, box.position.z)
+	var g := _socket(gi, "socket_grip")
+	if g != null:
+		grip = inv * g.global_position
+	var m := _socket(gi, "socket_magazine")
+	if m != null:
+		mag = inv * m.global_position
+	var b := _socket(gi, "socket_barrel")
+	if b != null:
+		barrel = inv * b.global_position
+	var mp := gi.get_muzzle_point()
+	if mp != null and mp != gi:
+		muzzle = inv * mp.global_position
+	# The handguard: under the barrel, ahead of the magazine.
+	var fore := Vector3(c.x, barrel.y, lerpf(mag.z, muzzle.z, 0.4))
+	var id: StringName = gi.weapon_class.id if gi.weapon_class != null else &""
+	return {grip = grip, mag = mag, fore = fore, one_hand = id in ONE_HAND}
+
+
+static func _socket(gi: GunInstance, prefix: String) -> Node3D:
+	var found := gi.find_children(prefix + "*", "Node3D", true, false)
+	return found[0] as Node3D if not found.is_empty() else null
+
+
 static func _smooth(t: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
+
+
+## Down, and at the bottom the change: the old gun home, the new one shown. Then up.
+func _step_swap(delta: float) -> void:
+	if _lowering:
+		_swap = move_toward(_swap, 1.0, delta / SWAP_DOWN)
+		if _swap >= 1.0:
+			_lowering = false
+			swaps_done += 1
+			_finish_put_away()
+			if gun.gun != null and is_instance_valid(gun.gun) and gun.gun.get_parent() == rig:
+				gun.gun.visible = true
+	else:
+		_swap = move_toward(_swap, 0.0, delta / SWAP_UP)
+
+
+## Where each hand goes this frame, and which hand it is.
+func _hands(delta: float, on_floor: bool, hv: float) -> void:
+	if arms == null:
+		return
+	arms.visible = rig.visible
+	var held := _held()
+	var moving := clampf(hv / Pawn.RUN_SPEED, 0.0, 1.0) * (1.0 if on_floor else 0.3)
+	var stride := _bob * 0.5
+	var reloading := gun.is_reloading() and held != null and held == gun.gun
+	if held == null or not held.has_meta(&"view_holds"):
+		# Nothing in hand: both open, swinging with the stride.
+		arms.set_hand(ViewArms.RIGHT, ViewArms.Hand.OPEN)
+		arms.set_hand(ViewArms.LEFT, ViewArms.Hand.OPEN)
+		arms.swivel = [0.0, 0.0]
+		arms.pose(_swing(ViewArms.RIGHT, stride, moving), _swing(ViewArms.LEFT, stride, moving), delta)
+		return
+
+	var holds: Dictionary = held.get_meta(&"view_holds")
+	var g := camera.global_transform.affine_inverse() * held.global_transform
+	var gb := g.basis.orthonormalized()
+	var gx := gb.x
+	var gy := gb.y
+	var gz := gb.z
+	# The right hand: its C round the grip, a little down it, the fingers ahead.
+	var grip_axis := (-gy + gz * 0.3).normalized()
+	var right := Transform3D(ViewArms.hand_basis(grip_axis, -gz),
+			g * (holds.grip as Vector3) + grip_axis * 0.02)
+	# The left: round the handguard from under it -- or, on a pistol, under and
+	# round the right hand.
+	var on_gun: Transform3D
+	if bool(holds.one_hand):
+		on_gun = Transform3D(ViewArms.hand_basis(grip_axis, -gz + gx * 0.7),
+				right.origin - gx * 0.04 - gy * 0.012 + gz * 0.01)
+	else:
+		on_gun = Transform3D(ViewArms.hand_basis(-gz, gy + gx * 0.4),
+				g * (holds.fore as Vector3) - gy * 0.03)
+
+	# Off the gun: at a run it swings open; on a lip it reaches; nothing else.
+	var off := _sprint > 0.5 or _mantle > 0.5
+	_left_free = move_toward(_left_free, 1.0 if off else 0.0, delta / 0.15)
+	var free_pose := _swing(ViewArms.LEFT, stride, maxf(moving, 0.6))
+	if _mantle > 0.0:
+		free_pose = free_pose.interpolate_with(_reach(ViewArms.LEFT), _mantle)
+	var left := on_gun.interpolate_with(free_pose, _smooth(_left_free))
+	# Asked for at once: going, the hand is changed once it has left the view; coming
+	# back, it is still out of it.
+	var left_hand := ViewArms.Hand.OPEN if off else ViewArms.Hand.C
+
+	if reloading:
+		var path := _reload_left(gun.reload_progress(), on_gun, g, gx, gy, holds)
+		left = path[0]
+		left_hand = path[1]
+	elif _melee > 0.0:
+		# A bash: the left hand leaves the gun as a fist, driving with it.
+		var fist := Transform3D(ViewArms.hand_basis(Vector3.UP, Vector3(0.1, 0.2, -1.0)),
+				Vector3(-0.07, -0.14, -0.4))
+		left = left.interpolate_with(fist, _smooth(_melee))
+		if _melee > 0.3:
+			left_hand = ViewArms.Hand.FIST
+	arms.set_hand(ViewArms.RIGHT, ViewArms.Hand.C)
+	arms.set_hand(ViewArms.LEFT, left_hand)
+	# The elbows trail a turn, and wing out at a run.
+	var trail := clampf(-_look_rate.x * 0.06, -0.3, 0.3)
+	arms.swivel = [trail + 0.25 * _sprint, -trail + 0.15 * _sprint]
+	arms.pose(right, left, delta)
+
+
+## An open hand swinging with the stride, at the bottom of the view; `amount`
+## is how hard (0 standing, 1 a run). The two hands swing opposite.
+func _swing(side: int, stride: float, amount: float) -> Transform3D:
+	var sx := 1.0 if side == ViewArms.RIGHT else -1.0
+	var ph := sin(stride + (0.0 if side == ViewArms.RIGHT else PI))
+	var at := Vector3(0.17 * sx, -0.36, -0.26)
+	at += Vector3(0.0, maxf(ph, 0.0) * 0.08, -ph * 0.14) * amount
+	var fingers := Vector3(-0.15 * sx, 0.35 + ph * 0.3 * amount, -1.0)
+	return Transform3D(ViewArms.hand_basis(Vector3.UP, fingers), at)
+
+
+## Reaching for a lip: an open hand out ahead and a little down.
+func _reach(side: int) -> Transform3D:
+	var sx := 1.0 if side == ViewArms.RIGHT else -1.0
+	return Transform3D(ViewArms.hand_basis(Vector3(sx * 0.3, 0.0, 1.0), Vector3(0.0, 0.4, -1.0)),
+			Vector3(0.16 * sx, -0.12, -0.42))
+
+
+## The left hand through a reload, by its progress: down out of view (a pinch
+## hand there), up to the magazine, down with the old one, up with the new, then
+## down again (the C back) and onto the gun. [pose, hand].
+func _reload_left(p: float, on_gun: Transform3D, g: Transform3D, gx: Vector3, gy: Vector3,
+		holds: Dictionary) -> Array:
+	var mag := Transform3D(ViewArms.hand_basis(gx, gy), g * (holds.mag as Vector3) - gy * 0.06)
+	var down := Transform3D(ViewArms.hand_basis(Vector3.RIGHT, Vector3(0.2, 1.0, -0.3)),
+			Vector3(-0.1, -0.52, -0.3))
+	var keys := [[0.0, on_gun], [0.15, down], [0.32, mag], [0.44, mag], [0.56, down],
+			[0.7, mag], [0.78, mag], [0.88, down], [1.0, on_gun]]
+	var pose: Transform3D = on_gun
+	for i in keys.size() - 1:
+		var a: float = keys[i][0]
+		var b: float = keys[i + 1][0]
+		if p <= b:
+			pose = (keys[i][1] as Transform3D).interpolate_with(keys[i + 1][1],
+					_smooth(clampf((p - a) / (b - a), 0.0, 1.0)))
+			break
+	var hand := ViewArms.Hand.PINCH if p > 0.12 and p < 0.86 else ViewArms.Hand.C
+	return [pose, hand]
 
 
 func _on_fired(_info: Dictionary) -> void:
@@ -450,7 +735,9 @@ func _on_landed() -> void:
 	var drop := pawn.last_fall
 	if drop < 0.2:
 		return
-	_dip_vel -= clampf(drop * 0.35, 0.2, 1.4)
+	_dip_vel -= clampf(drop * 0.35, 0.2, 1.8)
+	# The muzzle dips with it: a step down nods it, a long fall slams it.
+	_dip_rot_vel -= clampf(drop * 0.6, 0.15, 3.5)
 	if drop > 2.0:
 		add_shake(clampf(drop / 12.0, 0.1, 0.45))
 

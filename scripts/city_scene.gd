@@ -707,6 +707,8 @@ var _combat_rng := RandomNumberGenerator.new()
 var _player := PlayerController.new()
 var _player_pawn: Pawn
 var _play_mode := false
+## --arms: the first-person arms and hands (ViewArms), with pictures.
+var _arms_mode := false
 ## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
 ## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
 var _view: PlayerView
@@ -918,6 +920,7 @@ func _ready() -> void:
 	_checkpoint_mode = "--checkpoint" in args
 	_gun_mode = "--gun" in args
 	_play_mode = "--play" in args
+	_arms_mode = "--arms" in args
 	_mech_mode = "--mech" in args
 	_vehicles_mode = "--vehicles" in args
 	_no_ai = "--no-ai" in args
@@ -1154,6 +1157,8 @@ func _ready() -> void:
 		_run_gun_pass()
 	elif _play_mode:
 		_run_play_pass()
+	elif _arms_mode:
+		_run_arms_pass()
 	elif _mech_mode:
 		_run_mech_pass()
 	elif _vehicles_mode:
@@ -7871,6 +7876,161 @@ func _jam_touching(isl: BrickIsland, by_body: Dictionary) -> Array:
 ## lands, walks, steps a kerb and not a wall, ducks a beam from a brick floor --
 ## the debug walker's rules, now on the physics tick -- and shoots a wall from its
 ## own eye, through the authority, without shooting itself.
+## The first-person arms (ViewArms, PlayerView): the hands on the gun, a swap that
+## takes the gun out of view and changes it there, the walk and the run, a reload's
+## pinch hand, and a hard landing that slams the muzzle down. Pictures in
+## shots/arms_*.png.
+func _run_arms_pass() -> void:
+	print("[arms] the arms and hands in first person")
+	_player.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 0.0)
+	camera.rotation = Vector3.ZERO
+	_enter_pawn(open + Vector3(0.0, 4.0, 0.0))
+	await _frames(90)
+	var pawn := _player_pawn
+	var arms := _view.arms
+	camera.rotation = Vector3(-0.08, PI * 0.75, 0.0)
+	await _frames(40)
+	_gate_ok("the arms hang on the camera, on Mixamo's bones", arms != null
+			and arms.skeleton.find_bone("mixamorig_RightForeArm") >= 0
+			and arms.skeleton.find_bone("mixamorig_LeftHand") >= 0)
+	_gate_ok("both hands reach the gun", arms.reach_gap[0] < 0.005 and arms.reach_gap[1] < 0.005,
+			"short by %.3f / %.3f m" % [arms.reach_gap[0], arms.reach_gap[1]])
+	_gate_ok("in C hands", arms.shown_hand(ViewArms.RIGHT) == ViewArms.Hand.C
+			and arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.C)
+	print("[arms] holding %s (%s)" % [_gun.gun.gun_name, _gun.gun.weapon_class.id])
+	await _save("arms_idle")
+
+	# A swap: the gun goes down out of view, the new one comes up.
+	var first := _gun.gun
+	var bottoms := _view.swaps_done
+	var deepest := 0.0
+	var hidden_at_bottom := true
+	var early := false
+	var fired_down := false
+	var shot := false
+	_key(KEY_TAB, true)
+	await _frames(2)
+	_key(KEY_TAB, false)
+	var t := 0
+	while t < 90:
+		await _frames(1)
+		t += 1
+		var sw := _view.swap_amount()
+		deepest = maxf(deepest, sw)
+		if sw > 0.3 and _view.can_fire():
+			fired_down = true
+		var shown := _gun.gun != first and _gun.gun.visible
+		if shown and sw < 0.95 and deepest < 0.95:
+			early = true
+		if sw >= 0.95 and _arms_gun_in_view(first) or sw >= 0.95 and _arms_gun_in_view(_gun.gun):
+			hidden_at_bottom = false
+		if not shot and sw > 0.5 and deepest < 1.0:
+			shot = true
+			await _save("arms_swap_down")
+		if _view.swaps_done > bottoms and sw <= 0.0:
+			break
+	_gate_ok("Tab swaps the gun", _gun.gun != first and _gun.gun.get_parent() == _view.rig)
+	_gate_ok("the old one went all the way down, out of view",
+			_view.swaps_done == bottoms + 1 and hidden_at_bottom, "deepest %.2f" % deepest)
+	_gate_ok("the new one shows only at the bottom", not early)
+	_gate_ok("no firing while it is down", not fired_down)
+	_gate_ok("and it is back up inside half a second", _view.swap_amount() <= 0.0 and t < 40,
+			"%d frames" % t)
+	_gate_ok("the old one went to the holster", first.get_parent() != _view.rig)
+	print("[arms] now holding %s (%s)" % [_gun.gun.gun_name, _gun.gun.weapon_class.id])
+	await _frames(10)
+	await _save("arms_swapped")
+
+	# Walk, then run: at a run the left hand comes off, open.
+	_key(KEY_W, true)
+	await _frames(50)
+	await _save("arms_walk")
+	_key(KEY_SHIFT, true)
+	var left_open := false
+	for i in 120:
+		await _frames(1)
+		left_open = left_open or arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.OPEN
+	await _save("arms_sprint")
+	_key(KEY_SHIFT, false)
+	_key(KEY_W, false)
+	_gate_ok("at a run the left hand comes off the gun, open", left_open)
+	await _frames(60)
+	_gate_ok("and goes back on it as a C", arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.C
+			and arms.reach_gap[1] < 0.005)
+
+	# A reload: the left hand fetches the magazine in a pinch.
+	_gun.ammo = 0
+	_gun.reload()
+	var pinched := false
+	shot = false
+	for i in 300:
+		await _frames(1)
+		if not _gun.is_reloading():
+			break
+		pinched = pinched or arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.PINCH
+		if not shot and _gun.reload_progress() > 0.36:
+			shot = true
+			await _save("arms_reload")
+	await _frames(30)
+	_gate_ok("a reload takes the magazine in a pinch hand", pinched)
+	_gate_ok("and the C goes back on the gun", arms.shown_hand(ViewArms.LEFT) == ViewArms.Hand.C)
+
+	# A long fall: the muzzle slams down on landing.
+	pawn.place(pawn.feet() + Vector3(0.0, 9.0, 0.0))
+	await _frames(4)
+	var lowest := 0.0
+	var landed_at := -1
+	shot = false
+	for i in 240:
+		await _frames(1)
+		lowest = minf(lowest, _view.landing_pitch())
+		if landed_at < 0 and pawn.is_on_floor():
+			landed_at = i
+		if landed_at < 0 and i == 30:
+			await _save("arms_fall")
+		if landed_at >= 0 and not shot and i >= landed_at + 5:
+			shot = true
+			await _save("arms_land")
+		if landed_at >= 0 and i > landed_at + 40:
+			break
+	_gate_ok("a 9 m fall lands", landed_at >= 0, "fell %.1f m" % pawn.last_fall)
+	_gate_ok("and slams the muzzle down", lowest < -0.15, "%.2f rad" % lowest)
+	_gate_ok("and it settles", absf(_view.landing_pitch()) < 0.03,
+			"%.3f rad" % _view.landing_pitch())
+	# A long gun: slot 3.
+	_key(KEY_3, true)
+	await _frames(2)
+	_key(KEY_3, false)
+	await _frames(50)
+	print("[arms] slot 3: %s (%s)" % [_gun.gun.gun_name, _gun.gun.weapon_class.id])
+	_gate_ok("a long gun is held in both hands", arms.reach_gap[0] < 0.005
+			and arms.reach_gap[1] < 0.005, "short by %.3f / %.3f m" % [arms.reach_gap[0],
+			arms.reach_gap[1]])
+	await _save("arms_long")
+	_gate_ok("no hand was changed in plain view", arms.swaps_in_view == 0,
+			"%d" % arms.swaps_in_view)
+
+	_leave_pawn()
+	await _frames(4)
+	print("[arms] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Is any corner of this gun's model inside the view?
+func _arms_gun_in_view(gi: GunInstance) -> bool:
+	if gi == null or not is_instance_valid(gi) or not gi.is_inside_tree() or not gi.is_visible_in_tree():
+		return false
+	for n in gi.find_children("*", "VisualInstance3D", true, false):
+		var vi := n as VisualInstance3D
+		var bb := vi.get_aabb()
+		for k in 8:
+			if camera.is_position_in_frustum(vi.global_transform * bb.get_endpoint(k)):
+				return true
+	return false
+
+
 func _run_play_pass() -> void:
 	print("[play] a player pawn, driven by the keys")
 	_player.drive_uncaptured = true
