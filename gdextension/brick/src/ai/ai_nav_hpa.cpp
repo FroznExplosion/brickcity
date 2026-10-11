@@ -216,7 +216,8 @@ const std::vector<int> &AINav::_border(int cx, int cz, int axis) {
         const std::vector<Floor> fa = _column(xa, za).floors;
         for (const Floor &f : fa) {
             const int hn = _node_head(xa, za, f.y);
-            if (hn < 0) {
+            // A breacher's body may be in the bricks already where it crosses.
+            if (hn < 0 && !(breach_cost > 0.0f && _breach_fit(xa, za, f.y))) {
                 continue;
             }
             const Node na{ xa, za, f.y };
@@ -244,7 +245,7 @@ const std::vector<int> &AINav::_border(int cx, int cz, int axis) {
         const std::vector<Floor> fb = _column(xb, zb).floors;
         for (const Floor &f : fb) {
             const int hb = _node_head(xb, zb, f.y);
-            if (hb < 0) {
+            if (hb < 0 && !(breach_cost > 0.0f && _breach_fit(xb, zb, f.y))) {
                 continue;
             }
             const Node nb{ xb, zb, f.y };

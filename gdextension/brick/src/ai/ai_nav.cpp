@@ -566,7 +566,9 @@ void AINav::_finish(Search &s, int64_t goal_key) {
     // floor of its own (a breacher's step into a wall).
     s.breaches.clear();
     if (breach_cost > 0.0f) {
-        bool in_wall = false;
+        // A stretch of a hierarchical path that starts in the bricks carries
+        // on a breach the stretch before it began: not a new one.
+        bool in_wall = s.presnapped && !nodes.empty() && _node_head(nodes[0].x, nodes[0].z, nodes[0].y) < 0;
         for (const Node &n : nodes) {
             const bool wall = _node_head(n.x, n.z, n.y) < 0;
             if (wall && !in_wall) {

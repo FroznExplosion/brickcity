@@ -248,10 +248,18 @@ two-stud body against a one-stud wall pays for both columns it must clear. A fin
 where it goes into bricks (`get_breaches`, `get_last_breaches`): the first column of each run, a
 point for the agent to open. A one-stud wall is a short way through for a breacher whose
 door is 70 m round; eight studs of wall cost more than the walk round, and it walks round
-(`nav_hier_probe` D). The tank's crushing (AIVehicles.md 3) is the same idea for low walls. **Not
-yet:** an agent that follows a breach point -- walks to it, opens it through the ordinary damage
-path, walks on -- so no map in the game has it switched on; the mech is the first (it already
-shoots walls between it and infantry, `BTMechBreach`).
+(`nav_hier_probe` D). The tank's crushing (AIVehicles.md 3) is the same idea for low walls.
+**The mech breaches its way (built):** every mech walks the breaching mech map
+(`AIServices.mech_breach_nav`, 3 m a column -- about what its fists take); where its path goes
+into bricks it walks up to the wall and PUNCHES a hole its own size (`Mech.punch_wall`: a 1.5 m
+blast through the structure hit every 1.2 s, the fist's own rate, so co-op agrees), aiming at the
+first brick in the way at its knees, waist and head across its width, with its launcher too if
+it has one, until its own plain map says a mech goes through there; then on. Forty seconds and
+still shut, it goes the plain map's way for half a minute. `can_breach` off keeps a mech from
+it. A 6.7 m wall across its way, 120 m long: through in 19 s with five punches, a 37 m walk
+instead of 150 m round (`mech_breach_probe`). The hierarchy's entrances count a breacher's
+body already in the bricks, or a wide body would never cross a wall on a cluster border.
+**Not yet:** soldiers with charges breaching their way (they have the room-clearing breach).
 
 **Mechs in buildings (A3):** a recipe can declare mech-sized openings and mech-clearance storeys —
 hangars, garages, atriums, a warehouse ground floor — and those interiors go into the mech map's

@@ -47,6 +47,8 @@ const GUN_MULT := 8.0
 const MELEE_REACH := 5.0
 const MELEE_DAMAGE := 500.0
 const MELEE_GAP := 1.2
+## A fist on a wall (punch_wall): the blast it makes in the bricks.
+const PUNCH_RADIUS := 1.5
 ## What it weighs on the bricks it stands on (WeightTracker).
 const MASS := WeightTracker.MECH
 ## Getting in (Docs/AIRoster.md 4.4): a pilot stands this far out from the torso's
@@ -89,6 +91,8 @@ var pilot_pawn: Pawn
 var _stowed_layers := Vector2i.ZERO
 var _danger_id := -1
 var melee_ready_at := 0.0
+## Wall punches thrown (punch_wall), for gates.
+var wall_punches := 0
 var melee_hits := 0
 var _clock := 0.0
 ## Falling through floors (Docs/AI.md 3.11): the owner connects what it lands on
@@ -414,6 +418,21 @@ func melee(target: Mech) -> bool:
 	var flat := Vector3(-to.x, 0.0, -to.z).normalized()
 	var at := target.feet() + Vector3.UP * COCKPIT_Y + flat * RADIUS * 0.85
 	target.layers.melee(MELEE_DAMAGE, target.layers.zone_at(at))
+	return true
+
+
+## Punch the wall at `at` if it is in reach and the last blow was long enough
+## ago: a blast of PUNCH_RADIUS in the bricks, through `on_hit` (a gun's
+## structure hit -- in the city, the authority). True if it struck.
+func punch_wall(at: Vector3, on_hit: Callable) -> bool:
+	if not on_hit.is_valid() or _clock < melee_ready_at:
+		return false
+	var to := at - feet()
+	if Vector2(to.x, to.z).length() > MELEE_REACH or to.y < -0.5 or to.y > HEIGHT:
+		return false
+	melee_ready_at = _clock + MELEE_GAP
+	wall_punches += 1
+	on_hit.call(at, Vector3(to.x, 0.0, to.z).normalized(), {"blast": true, "radius": PUNCH_RADIUS, "hp": 0})
 	return true
 
 

@@ -61,6 +61,7 @@ var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).
 var policy: CombatPolicy = CombatPolicy.from_args()
 const NAV_SIZE_USEC := 200
+const NAV_BUSY_USEC := 800
 ## A navigation map per SIZE of body (Roster's sizes, AIRoster.md 2.2): "person"
 ## is `ai_nav`; the others are made the first time a body of that size asks, with
 ## that size's numbers, and kept. The owner may put its own in (the city's mech
@@ -202,6 +203,20 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 	callouts.say(squad_id, speaker, key, text, now(), key in URGENT_LINES, range_m)
 	if on_say.is_valid():
 		on_say.call(speaker, key, text, range_m)
+
+
+## The mech map for a mech with a launcher: walls a way through at a cost
+## (MechBrain.BREACH_COST, AINav.set_breach). Made the first time one asks,
+## served and warmed with the other maps, told what changes the walking map.
+func mech_breach_nav() -> AINav:
+	if navs.has("mech:breach"):
+		return navs["mech:breach"]
+	var n := MechBrain.mech_nav(ai_world, MechBrain.BREACH_COST)
+	if ai_nav != null:
+		n.set_water_level(ai_nav.get_water_level())
+		ai_nav.nav_changed.connect(n.invalidate_box)
+	navs["mech:breach"] = n
+	return n
 
 
 ## Maps kept by others that are warmed with these (share_nav): the mech's.
@@ -432,9 +447,12 @@ func tick() -> void:
 			for n in all_navs():
 				if n.has_method(&"warm"):
 					n.call(&"warm", at, WARM_RADIUS)
-	# The maps of the other sizes of body are served here, a little each.
+	# The maps of the other sizes of body are served here, a little each -- more
+	# to one with a search waiting (a mech's way through a wall is thousands of
+	# nodes of a ten-stud body), the rest of it to warming.
 	for size in navs:
-		(navs[size] as AINav).service(NAV_SIZE_USEC)
+		var n := navs[size] as AINav
+		n.service(NAV_BUSY_USEC if n.pending() > 0 else NAV_SIZE_USEC)
 
 
 func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:
