@@ -27,10 +27,16 @@ extends Node
 ## keeps its own magazine (`_ammo`). Guns not in hand wait, hidden, under `_holster`
 ## -- in the tree, so nothing is ever freed out of it.
 ##
+## The kit is kept between sessions (CharacterSave.loadout): `restore` makes it again,
+## and `kit_changed` says when what is carried has changed -- a gun kept, stowed, dropped,
+## broken down or infused -- for the scene to save.
+##
 ## The keys are input actions (project.godot), so Options rebinds them. A key this
 ## handles is marked handled, so the scene's debug keys under it do not also fire.
 
 signal changed
+## What the kit holds changed (CharacterSave.loadout_dict differs): time to save it.
+signal kit_changed
 
 const HOLD_SWAP := 0.25
 const HOLD_INTERACT := 0.35
@@ -84,6 +90,10 @@ var _pre_tap_hand := 0
 var _reload_held := -1.0
 var _reload_used := false
 var _hud: ArsenalHud
+## The kit as last seen (CharacterSave.loadout_dict), checked every KIT_CHECK seconds.
+var _kit_seen := {}
+var _kit_clock := 0.0
+const KIT_CHECK := 2.0
 
 
 func setup(p_player: PlayerController, p_gun: GunController, p_view: PlayerView,
@@ -188,6 +198,30 @@ func fill_default(rng: RandomNumberGenerator) -> void:
 		loadout.set_slot(i, _roll(kit[i], rng))
 	loadout.ordnance = _roll(&"rocket_launcher", rng)
 	_show()
+
+
+## The saved kit `d` (CharacterSave.loadout) made again, in place of an empty loadout;
+## the gun the controller held, not part of it, is let go. False when there was no kit to
+## make (nothing saved): the caller fills the starting kit then.
+func restore(d: Dictionary) -> bool:
+	if d.is_empty() or not loadout.all_guns().is_empty() or library == null:
+		return false
+	CharacterSave.fill_loadout(loadout, d, library)
+	if loadout.all_guns().is_empty():
+		return false
+	for g in loadout.all_guns():
+		_adopt(g)
+	var old := gun.gun
+	_show()
+	if old != null and is_instance_valid(old) and not loadout.all_guns().has(old):
+		old.queue_free()
+	_kit_seen = CharacterSave.loadout_dict(loadout)
+	return true
+
+
+## The kit as a save keeps it.
+func kit_dict() -> Dictionary:
+	return CharacterSave.loadout_dict(loadout)
 
 
 ## Swap the gun in hand for `g` (the debug gun cycle). The old one is freed.
@@ -315,6 +349,10 @@ func _process(delta: float) -> void:
 			note = ""
 	if skills != null:
 		skills.show_screen(inventory_open and inventory_page == 1 and _active())
+	_kit_clock += delta
+	if _kit_clock >= KIT_CHECK:
+		_kit_clock = 0.0
+		check_kit()
 	if grenades < grenades_max:
 		_grenade_clock += delta
 		if _grenade_clock >= grenade_recharge:
@@ -390,6 +428,16 @@ func pick_up(p: WorldGunPickup) -> void:
 
 
 ## The floor gun nearest the crosshair, in reach.
+## `kit_changed`, if the kit is not what it was last time.
+func check_kit() -> void:
+	if loadout.all_guns().is_empty():
+		return
+	var now := kit_dict()
+	if now != _kit_seen:
+		_kit_seen = now
+		kit_changed.emit()
+
+
 # --- the workbench (COMBAT_DESIGN 1.2) -------------------------------------------------
 
 const BENCH_REACH := 3.0
@@ -442,8 +490,12 @@ func infuse(g: GunInstance) -> bool:
 	if why != "":
 		_say(why)
 		return false
-	pl.spend_scrap(Infusion.cost(g.rarity, g.tier, pl.story_tier))
+	var cost := Infusion.cost(g.rarity, g.tier, pl.story_tier)
+	# The gun first, then the scrap: spending saves (PlayerLevel.changed), and the save
+	# should hold the infused gun with the scrap it cost.
 	Infusion.infuse(g, pl.story_tier)
+	pl.spend_scrap(cost)
+	_kit_seen = kit_dict()
 	_say("%s infused to tier %d" % [g.gun_name, g.tier])
 	changed.emit()
 	return true

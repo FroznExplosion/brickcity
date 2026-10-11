@@ -54,7 +54,7 @@ damage moves to the new tier.
 - The cost grows with the tiers gained and with the gun's rarity (an infused legendary costs more
   than an infused white).
 - This is what keeps a favourite gun alive. A god-roll purple from tier 2 can come along to tier 7.
-- Built on what is there: a saved gun is `{class, seed, tier, rarity}` (`CharacterSave.gun_entry`),
+- Built on what is there: a saved gun is `{class, seed, tier, rarity, ...}` (`CharacterSave.gun_entry`),
   and its tier only scales damage (`GunStats.compute`), never a roll — so infusion is rewriting
   `tier` in the entry. A probe must hold that: the same seed at two tiers gives the same gun except
   damage.
@@ -654,8 +654,24 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   line, AI area. `GunInstance.result` keeps what a gun was made from, so it can be dropped again.
 - `tools/loadout_probe.gd` (31 checks).
 - **Not yet:** ammo reserves per type (magazines still refill from nothing); the swap has no draw
-  time (swap speed as a stat needs one); the loadout is not saved (`CharacterSave.guns`); co-op
-  (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
+  time (swap speed as a stat needs one); co-op (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
+
+**The kit saved: built 2026-10-10** (step 5's leftover).
+- `CharacterSave.loadout`: the four slots, the ordnance, the backpack and its size, the group and
+  hand (`loadout_dict` / `fill_loadout`). A tried floor gun is not kept.
+- A gun's entry (`gun_entry`) is what makes it again: class, seed, tier, the rarity it was
+  **forced** to (`GunGenerator.Result.forced_rarity`; loot is forced, and forcing skips a roll, so
+  the seed alone would make a different gun), its luck, its legendary id, and its parts' ids as a
+  check — if the part library changed under the save, `make_result` builds the saved parts
+  (`GunGenerator.deserialize`) instead of what the seed now rolls. An infused gun is its entry at
+  the new tier.
+- `PlayerArsenal.restore` puts the saved kit in the hands (the controller's first gun let go);
+  `fill_default` only fills an empty kit. Every 2 s the arsenal compares the kit with what it last
+  saw and says `kit_changed`; `CityScene._load_kit` makes it once and saves on that signal (with
+  the level, `_save_progress`). Not in a pass or a test window. An infusion changes the gun before
+  spending the scrap, so the save the spend makes holds both.
+- `tools/kit_save_probe.gd` (21 checks).
+- **Not yet:** ammo in the magazines (a loaded kit comes back full); several characters.
 
 **Step 6 — rarity v2 and modifiers: built 2026-10-10.**
 - **Numbers**: `Rarity.MULTS` 1.00 / 1.03 / 1.06 / 1.09 / 1.12 / 1.12; `GunStats.DPS_WINDOW_HI`
@@ -769,8 +785,8 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   gun). Walking away closes it. `CityScene._place_workbench` sets one down by the player's start,
   not in a scripted pass.
 - `tools/infusion_probe.gd` (23 checks).
-- **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; saving the
-  loadout (step 5's leftover), so an infused gun lasts the session; a story tier from the story
+- **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; a story tier
+  from the story
   (today it is the highest fight tier reached).
 
 ---
@@ -789,8 +805,6 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 - **The real skill tree** (§1.3, §4.2): the Vanguard Brawler's melee nodes, the abilities (grapple,
   overshield, ...), a player shield layer and its nodes. `SkillTree.NODES` is data; the placeholder
   stat nodes give way to them.
-- **Saving the loadout** (step 5): the guns as `CharacterSave.gun_entry`s, so loot and infusion
-  outlast the session.
 - What steps 7–8 left: the other alt-fires and the special ordnance weapons, frozen enemies
   shattering, AI soldiers using alt-fires.
 - Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
@@ -813,6 +827,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 | Alt-fire | roll `scripts/guns/gun_alt_fire.gd`; firing `GunController` (alt-fire section); `scripts/combat/tracking_dart.gd`, `arc_flash.gd`; mode and HUD `scripts/pawn/player_arsenal.gd` |
 | Element statuses | `scripts/elements/element_status.gd`; built from `DamageSystem.resolve`; `Pawn.speed_mult` / `frozen` |
 | Infusion and scrap | `scripts/progression/infusion.gd`, `workbench.gd`; `GunGenerator.retier`; the bench's page in `PlayerArsenal` (`open_bench`, `infuse`, `salvage`) |
+| The kit saved | `CharacterSave` (`gun_entry`, `make_result`, `loadout_dict`, `fill_loadout`); `PlayerArsenal.restore`, `kit_changed`; `CityScene._load_kit` |
 | Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
@@ -820,7 +835,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23),
+Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
