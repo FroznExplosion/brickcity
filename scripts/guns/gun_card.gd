@@ -69,7 +69,9 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 	_name_label.modulate = col
 
 	var wc := res.weapon_class
-	var cls: String = String(wc.id).capitalize().replace("_", " ") if wc != null else "Gun"
+	var cls: String = wc.kind_name() if wc != null else "Gun"
+	if wc != null and wc.crossed:
+		cls += " (rapid)" if wc.archetype == &"heavy" else " (heavy rounds)"
 	_sub_label.text = "%s  ·  %s  ·  Tier %d" % [
 		Rarity.NAMES[clampi(res.rarity - 1, 0, 5)], cls, res.tier,
 	]
@@ -95,7 +97,10 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 	else:
 		_stat_row("Fire rate", "%.2f/s" % float(res.stats.get(&"fire_rate", 0.0)))
 		_stat_row("DPS", str(GunQuality.display(dps)))
-		_stat_row("Mag", str(int(res.stats.get(&"mag_size", 0.0))))
+		# A heavy's magazine in shots, and the rounds it takes (two a shot).
+		var rounds := int(res.stats.get(&"mag_size", 0.0))
+		var rps := wc.rounds_per_shot if wc != null else 1
+		_stat_row("Mag", str(rounds) if rps <= 1 else "%d  (%d rounds)" % [rounds / rps, rounds])
 		_stat_row("Reload", "%.2fs" % float(res.stats.get(&"reload_time", 0.0)))
 	_stat_row("Accuracy", "%d%%" % roundi(float(res.stats.get(&"accuracy", 0.0)) * 100.0))
 	_stat_row("Crit", "x%.2f" % float(res.stats.get(&"crit_mult", 1.0)))

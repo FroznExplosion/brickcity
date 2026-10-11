@@ -16,6 +16,17 @@ extends Resource
 ## score formula work unchanged.
 @export var cooldown: float = 0.0
 @export var blast_radius: float = 0.0
+## The kind of gun in this class (COMBAT_DESIGN 7.8): &"light" or &"heavy", a different
+## gun to hold. Empty is a gun no one chose a kind for -- an enemy's, a vehicle's -- and
+## it is the class as its preset stands, which is also what a light gun is (but for the
+## light shotgun, which fires faster and lighter: KINDS). `with_kind` makes one.
+@export var archetype: StringName = &""
+## Rounds a shot spends: 2 on a heavy. The magazine stat is counted in ROUNDS; what the
+## trigger and the HUD count is shots (GunController.mag_size).
+@export var rounds_per_shot: int = 1
+## A legendary that breaks its kind's trade (7.8): a heavy with a light's fire rate, or a
+## light with a heavy's damage, without the other kind's penalty.
+@export var crossed := false
 
 @export var base_damage: float = 100.0            ## worst-common, level-1 per-hit
 @export var base_fire_rate: float = 6.0           ## shots/sec at base
@@ -66,6 +77,30 @@ const _PRESETS := {
 		"crit": 1.0, "rl": 0.0, "acc": 1.0, "ord": true, "cd": 2.00, "blast": 0.0},
 }
 
+## The kinds, per gun class: what each multiplies of the class's preset --
+## [damage, fire rate, reload time, accuracy, magazine rounds] -- and its name.
+## A heavy spends two rounds a shot, so its damage a ROUND is above the light's, and
+## its damage a second about the same or a little over: it should hit hard and feel
+## it, not be a power weapon. Slow classes cannot halve their fire rate without going
+## under the 1/s floor (GunStats.STAT_FLOORS: base x 0.80, the worst roll, must clear
+## 1.0), so their heavies keep more of it and pay in magazine and reload instead.
+## Not listed: the class as it is (light) -- and ordnance has no kinds.
+const KINDS := {
+	&"pistol": {&"heavy": [2.5, 0.42, 1.15, 1.05, 1.0], &"heavy_name": "Magnum"},
+	&"revolver": {&"heavy": [2.0, 0.65, 1.15, 1.03, 1.0], &"heavy_name": "Hand Cannon"},
+	&"smg": {&"heavy": [2.2, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Heavy SMG"},
+	&"rifle": {&"heavy": [2.3, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Battle Rifle"},
+	&"lmg": {&"heavy": [2.2, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Heavy Machine Gun"},
+	&"dmr": {&"heavy": [2.1, 0.6, 1.15, 1.02, 1.0], &"heavy_name": "Heavy DMR"},
+	&"sniper": {&"heavy": [2.0, 0.93, 1.2, 1.0, 1.0], &"heavy_name": "Anti-Materiel Rifle"},
+	&"shotgun": {&"heavy": [2.2, 0.8, 1.2, 1.1, 1.0], &"heavy_name": "Heavy Shotgun",
+		&"light": [0.55, 1.8, 1.0, 1.0, 1.4], &"light_name": "Auto Shotgun"},
+}
+## How likely a dropped gun is heavy, by rarity (common..mythic): heavies are rarer.
+const HEAVY_CHANCE: Array[float] = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
+## Of legendaries and mythics, how many break their kind's trade.
+const CROSSED_CHANCE := 0.35
+
 ## Ordnance ids, for pools that must draw from one category or the other.
 const ORDNANCE_IDS: Array[StringName] = [
 	&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_layer", &"drone", &"arc_caster",
@@ -96,6 +131,60 @@ static func builtin(class_id: StringName) -> WeaponClass:
 	wc.cooldown = float(p.get("cd", 0.0))
 	wc.blast_radius = float(p.get("blast", 0.0))
 	return wc
+
+
+## This class as the given kind (&"light" / &"heavy"), crossed or not. Ordnance, and a
+## class with no kinds, come back as they are.
+func with_kind(kind: StringName, p_crossed := false) -> WeaponClass:
+	if is_ordnance or kind == &"" or not KINDS.has(id):
+		return self
+	var row: Dictionary = KINDS[id]
+	var wc := duplicate() as WeaponClass
+	wc.archetype = kind
+	wc.crossed = p_crossed
+	wc.rounds_per_shot = 2 if kind == &"heavy" else 1
+	var m: Array = row.get(kind, [1.0, 1.0, 1.0, 1.0, 1.0])
+	var dmg := float(m[0])
+	var fr := float(m[1])
+	if p_crossed:
+		# Without the other kind's penalty: a heavy fires at the light's rate, a light
+		# hits with the heavy's damage (and still spends one round).
+		var other: Array = row.get(&"light" if kind == &"heavy" else &"heavy", [1.0, 1.0, 1.0, 1.0, 1.0])
+		if kind == &"heavy":
+			fr = float(other[1])
+		else:
+			dmg = float(other[0])
+	wc.base_damage = base_damage * dmg
+	wc.base_fire_rate = base_fire_rate * fr
+	wc.base_reload = base_reload * float(m[2])
+	wc.base_accuracy = minf(base_accuracy * float(m[3]), 1.0)
+	wc.mag_min = roundf(mag_min * float(m[4]))
+	wc.mag_max = roundf(mag_max * float(m[4]))
+	wc.display_name = kind_name()
+	return wc
+
+
+## What the player calls it: "Magnum", "Auto Shotgun", "Rifle".
+func kind_name() -> String:
+	var plain := String(id).capitalize().replace("_", " ")
+	if archetype == &"" or not KINDS.has(id):
+		return plain
+	return String((KINDS[id] as Dictionary).get(StringName(String(archetype) + "_name"), plain))
+
+
+## A dropped gun's class: its kind rolled off its seed and rarity (rarity < 1: unknown
+## yet, the common chance). The roll is its own stream, so the parts and stats the seed
+## rolls are the ones it always rolled.
+static func rolled(class_id: StringName, gen_seed: int, rarity := -1) -> WeaponClass:
+	var wc := builtin(class_id)
+	if wc.is_ordnance or not KINDS.has(wc.id):
+		return wc
+	var r := RandomNumberGenerator.new()
+	r.seed = hash([gen_seed, 0x4EA7])
+	var i := clampi(rarity - 1, 0, HEAVY_CHANCE.size() - 1)
+	var kind := &"heavy" if r.randf() < HEAVY_CHANCE[i] else &"light"
+	var cross := rarity >= 5 and r.randf() < CROSSED_CHANCE
+	return wc.with_kind(kind, cross)
 
 
 static func all_ids() -> Array:

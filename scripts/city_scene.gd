@@ -4004,8 +4004,9 @@ func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunP
 		# the seed, so the loot stream draws what it always did.
 		if cls == &"rocket_launcher" and gen_seed % 3 == 0:
 			cls = GunController.ARC_CASTER
-		var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(cls),
-				d.tier, d.rarity, d.luck)
+		# A light or a heavy, off the seed and the rarity (COMBAT_DESIGN 7.8).
+		var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.rolled(cls, gen_seed,
+				d.rarity), d.tier, d.rarity, d.luck)
 		var p := WorldGunPickup.create(_gun_library, res)
 		add_child(p)
 		var a := TAU * float(i) / float(maxi(drops.size(), 1))
@@ -8140,7 +8141,7 @@ func _run_arms_pass() -> void:
 			let_go_at = p
 			for c in get_children():
 				if c is Grenade:
-					from_hand = minf(from_hand, (c as Node3D).global_position.distance_to(
+					from_hand = minf(from_hand, (c as Grenade).from.distance_to(
 							arms.global_transform * arms.hole(ViewArms.LEFT)))
 		if p > 0.42 and not shots_taken.has("cock"):
 			shots_taken["cock"] = true
@@ -8220,43 +8221,59 @@ func _run_arms_pass() -> void:
 			arms.reach_gap[1]])
 	await _save("arms_long")
 
-	# Hit reactions (HitReaction): the shotgun up close stumbles a soldier and knocks
-	# him back; from across the street he only flinches.
-	if _gun.gun.weapon_class.id == &"shotgun":
-		_gun.gun.stats[&"accuracy"] = 1.0
-		var fwd := -camera.global_transform.basis.z
-		fwd = Vector3(fwd.x, 0.0, fwd.z).normalized()
-		for leg in [[3.0, true], [11.0, false]]:
-			var dist: float = leg[0]
-			var target := Pawn.spawn(self, pawn.feet() + fwd * dist, 1, true, 100000.0)
-			Soldier._greybox(target, 1)
-			await _frames(20)
-			camera.look_at(target.chest(), Vector3.UP)
-			await _frames(2)
-			var at := target.feet()
-			_gun.call(&"_fire_one")
-			var held := target.stagger_left
-			var r := target.body.get_node_or_null(^"HitReaction") as HitReaction
-			var tipped := 0.0
-			for i in 12:
-				await _frames(1)
-				if r != null:
-					tipped = maxf(tipped, r.lean_angle())
-				if bool(leg[1]) and i == 5:
-					await _save("arms_hit_stumble")
-			await _frames(30)
-			var back := (target.feet() - at).dot(fwd)
-			if bool(leg[1]):
-				_gate_ok("a shotgun at %.0f m stumbles a soldier" % dist, held > 0.3 and tipped > 0.2,
-						"held %.2f s, leaned %.2f rad" % [held, tipped])
-				_gate_ok("and knocks him back", back > 0.3, "%.2f m" % back)
-				_gate_ok("and he stands up straight again", r != null and absf(r.lean_angle()) < 0.01)
-			else:
-				_gate_ok("at %.0f m it only makes him flinch" % dist, held == 0.0 and tipped > 0.02
-						and tipped < 0.2, "held %.2f s, leaned %.2f rad" % [held, tipped])
-			target.body.queue_free()
-			await _frames(4)
-		camera.rotation = Vector3(-0.08, camera.rotation.y, 0.0)
+	# The kinds (COMBAT_DESIGN 7.8): a magnum in the hands.
+	var magnum := GunInstance.from_result(GunGenerator.generate(_gun_library, 41,
+			WeaponClass.builtin(&"pistol").with_kind(&"heavy"), 1))
+	_arsenal.replace_in_hand(magnum)
+	await _frames(40)
+	_gate_ok("a magnum is held", _gun.gun == magnum and arms.reach_gap[0] < 0.005
+			and _gun.mag_size() == int(magnum.stats[&"mag_size"]) / 2,
+			"%d shots of %d rounds" % [_gun.mag_size(), int(magnum.stats[&"mag_size"])])
+	await _save("arms_magnum")
+
+	# Hit reactions (HitReaction): the light (auto) shotgun stumbles a soldier only up
+	# close and he only flinches from further; the heavy one throws him from 8 m.
+	var fwd := -camera.global_transform.basis.z
+	fwd = Vector3(fwd.x, 0.0, fwd.z).normalized()
+	var yaw := camera.rotation.y
+	for leg in [[&"light", 3.0, true], [&"light", 9.0, false], [&"heavy", 8.0, true]]:
+		var sg := GunInstance.from_result(GunGenerator.generate(_gun_library, 77,
+				WeaponClass.builtin(&"shotgun").with_kind(leg[0]), 1))
+		_arsenal.replace_in_hand(sg)
+		sg.stats[&"accuracy"] = 1.0
+		await _frames(30)
+		var dist: float = leg[1]
+		var target := Pawn.spawn(self, pawn.feet() + fwd * dist, 1, true, 100000.0)
+		Soldier._greybox(target, 1)
+		await _frames(20)
+		camera.look_at(target.chest(), Vector3.UP)
+		await _frames(2)
+		var at := target.feet()
+		_gun.call(&"_fire_one")
+		var held := target.stagger_left
+		var r := target.body.get_node_or_null(^"HitReaction") as HitReaction
+		var tipped := 0.0
+		for i in 12:
+			await _frames(1)
+			if r != null:
+				tipped = maxf(tipped, r.lean_angle())
+			if bool(leg[2]) and i == 5:
+				await _save("arms_hit_%s" % leg[0])
+		await _frames(30)
+		var back := (target.feet() - at).dot(fwd)
+		var what := "a %s shotgun at %.0f m" % [leg[0], dist]
+		if bool(leg[2]):
+			# A light gun's stumble is a lighter one (HitReaction.ARCHETYPE).
+			_gate_ok("%s stumbles a soldier" % what, held > 0.2 and tipped > 0.1,
+					"held %.2f s, leaned %.2f rad" % [held, tipped])
+			_gate_ok("and knocks him back", back > 0.2, "%.2f m" % back)
+			_gate_ok("and he stands up straight again", r != null and absf(r.lean_angle()) < 0.01)
+		else:
+			_gate_ok("%s only makes him flinch" % what, held == 0.0 and tipped > 0.02
+					and tipped < 0.2, "held %.2f s, leaned %.2f rad" % [held, tipped])
+		target.body.queue_free()
+		await _frames(4)
+	camera.rotation = Vector3(-0.08, yaw, 0.0)
 	_gate_ok("no hand was changed in plain view", arms.swaps_in_view == 0,
 			"%d" % arms.swaps_in_view)
 

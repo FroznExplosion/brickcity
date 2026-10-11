@@ -78,6 +78,11 @@ const VIEW_LENGTH := {
 	&"grenade_launcher": 0.5,
 }
 const VIEW_LENGTH_DEFAULT := 0.5
+## A heavy (COMBAT_DESIGN 7.8): this much longer in the hands, and its kick this much
+## harder -- a magnum bucks, the auto shotgun's light rounds barely do.
+const HEAVY_LENGTH := 1.12
+const HEAVY_KICK := 1.7
+const LIGHT_SHOTGUN_KICK := 0.55
 ## Classes held in the right hand, the left cupped under it.
 const ONE_HAND: Array[StringName] = [&"pistol", &"revolver"]
 ## Classes that look through a scope rather than over iron sights.
@@ -606,7 +611,11 @@ func _fit(gi: GunInstance) -> void:
 	if first or box.size.z < 0.01:
 		return
 	var id: StringName = gi.weapon_class.id if gi.weapon_class != null else &""
-	var s := float(VIEW_LENGTH.get(id, VIEW_LENGTH_DEFAULT)) / box.size.z
+	var length := float(VIEW_LENGTH.get(id, VIEW_LENGTH_DEFAULT))
+	# A heavy is the bigger gun of its class (COMBAT_DESIGN 7.8).
+	if gi.archetype == &"heavy":
+		length *= HEAVY_LENGTH
+	var s := length / box.size.z
 	gi.set_meta(&"view_holds", _holds(gi, inv, box))
 	gi.set_meta(&"view_back", clampf((float(VIEW_LENGTH.get(id, VIEW_LENGTH_DEFAULT)) - 0.3) * 0.45,
 			0.0, 0.16))
@@ -859,17 +868,27 @@ func _on_fired(info: Dictionary) -> void:
 	if gun.aim != null and HitReaction.hit(gun.gun, gun.aim.global_position, info) > 0.0:
 		add_shake(0.06)
 	var f := _feel()
-	var kick := deg_to_rad(float(f[0])) * lerpf(1.0, 0.7, _ads)
+	var kick := deg_to_rad(float(f[0])) * lerpf(1.0, 0.7, _ads) * _kick_kind()
 	var side := kick * 0.3 * _rng.randf_range(-1.0, 1.0)
 	camera.add_look(side, kick)
 	_kick_left += kick
 	_since_shot = 0.0
 	# The gun: back, up, muzzle up -- scaled to the kick, the pistol's the unit.
-	var s := clampf(float(f[0]) / 1.3, 0.3, 2.5) * lerpf(1.0, 0.5, _ads)
+	var s := clampf(float(f[0]) * _kick_kind() / 1.3, 0.3, 2.5) * lerpf(1.0, 0.5, _ads)
 	var imp := sqrt(RC_STIFF) * s
 	_rc_pvel += Vector3(0.0, RC_UP, RC_BACK) * imp
 	_rc_rvel += Vector3(RC_PITCH, side * 2.0, _rng.randf_range(-0.03, 0.03)) * imp
 	add_shake(clampf(float(f[0]) * 0.03, 0.02, 0.14))
+
+
+func _kick_kind() -> float:
+	if gun == null or gun.gun == null:
+		return 1.0
+	if gun.gun.archetype == &"heavy":
+		return HEAVY_KICK
+	if gun.gun.archetype == &"light" and gun.gun.weapon_class.id == &"shotgun":
+		return LIGHT_SHOTGUN_KICK
+	return 1.0
 
 
 func _on_landed() -> void:

@@ -14,6 +14,11 @@ var element_id: StringName = &""
 var stats: Dictionary[StringName, float] = {}
 var recipe: Dictionary = {}
 var weapon_class: WeaponClass
+## Its kind (COMBAT_DESIGN 7.8): &"light", &"heavy", or empty (a gun no one chose a
+## kind for, which is a light one). HitReaction reads it.
+var archetype: StringName:
+	get:
+		return weapon_class.archetype if weapon_class != null else &""
 var tier: int = 1
 var active_effects: PackedStringArray = PackedStringArray()
 ## Its alt-fire (GunAltFire), &"" for none, and whether the player has it in that mode

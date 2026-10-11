@@ -83,7 +83,11 @@ class Result:
 		for slot: int in recipe:
 			ids[slot] = (recipe[slot] as GunPartDef).id
 		var class_id: StringName = weapon_class.id if weapon_class != null else &"pistol"
-		return { "seed": seed, "rarity": rarity, "class": class_id, "tier": tier, "parts": ids }
+		var d := { "seed": seed, "rarity": rarity, "class": class_id, "tier": tier, "parts": ids }
+		if weapon_class != null and weapon_class.archetype != &"":
+			d["kind"] = weapon_class.archetype
+			d["crossed"] = weapon_class.crossed
+		return d
 
 
 ## `forced_rarity` (1..6) skips the internal roll — LootRoller owns the drop table, so
@@ -105,7 +109,8 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 	res.recipe = {}
 
 	# Body first: it decides the archetype and biases the manufacturer.
-	var body := _pick(library, Slot.BODY, res.rarity, &"", res.recipe, rng, luck)
+	var kind := res.weapon_class.archetype
+	var body := _pick(library, Slot.BODY, res.rarity, &"", res.recipe, rng, luck, kind)
 	if body == null:
 		push_error("GunGenerator: library has no BODY parts for rarity %d." % res.rarity)
 		return res
@@ -115,7 +120,7 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 	for slot in REQUIRED_SLOTS:
 		# 65% chance to stay on-brand per slot -> coherent but mixable guns.
 		var want_brand := brand if rng.randf() < 0.65 else &""
-		var def := _pick(library, slot, res.rarity, want_brand, res.recipe, rng, luck)
+		var def := _pick(library, slot, res.rarity, want_brand, res.recipe, rng, luck, kind)
 		if def != null:
 			res.recipe[slot] = def
 
@@ -123,7 +128,7 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 		var chance: float = OPTIONAL_SLOTS[slot] + 0.08 * float(res.rarity - 1)
 		if rng.randf() > chance:
 			continue
-		var def := _pick(library, slot, res.rarity, &"", res.recipe, rng, luck)
+		var def := _pick(library, slot, res.rarity, &"", res.recipe, rng, luck, kind)
 		if def != null:
 			res.recipe[slot] = def
 
@@ -247,7 +252,8 @@ static func deserialize(library: GunPartLibrary, data: Dictionary) -> Result:
 	res.seed = int(data.get("seed", 0))
 	res.rarity = int(data.get("rarity", 1))
 	res.tier = int(data.get("tier", 1))
-	res.weapon_class = WeaponClass.builtin(StringName(data.get("class", &"pistol")))
+	res.weapon_class = WeaponClass.builtin(StringName(data.get("class", &"pistol"))).with_kind(
+			StringName(data.get("kind", &"")), bool(data.get("crossed", false)))
 	res.recipe = {}
 	var ids: Dictionary = data.get("parts", {})
 	for slot in ids:
@@ -285,12 +291,12 @@ static func _roll_rarity(rng: RandomNumberGenerator) -> int:
 ## a hard legality gate and always wins.
 static func _pick(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
 		want_brand: StringName, placed: Dictionary, rng: RandomNumberGenerator,
-		luck: float = 1.0) -> GunPartDef:
+		luck: float = 1.0, kind: StringName = &"") -> GunPartDef:
 	var offset := GunQuality.roll_offset(rng, luck)
 	var target := clampi(rarity + offset, 1, 6)
 
 	while true:
-		var pool := _pool_at(library, slot, rarity, target, want_brand)
+		var pool := _pool_at(library, slot, rarity, target, want_brand, kind)
 		if not pool.is_empty():
 			return _filtered_pick(pool, placed, rng)
 		if target == rarity:
@@ -302,13 +308,20 @@ static func _pick(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
 ## Candidates legal for this gun that are AUTHORED at `target`. Legality is judged
 ## against the gun's rarity, not the target, so an offset can never smuggle in a part
 ## the gun was never allowed to carry.
+## A heavy gun takes its kind's parts where the slot has any (its look); every other
+## gun never takes them, so a light gun's pool is exactly what it was before kinds.
 static func _pool_at(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
-		target: int, want_brand: StringName) -> Array[GunPartDef]:
+		target: int, want_brand: StringName, kind: StringName = &"") -> Array[GunPartDef]:
 	var out: Array[GunPartDef] = []
+	var own: Array[GunPartDef] = []
 	for def in library.candidates(slot, rarity, want_brand):
-		if def.exclusive_to == &"" and def.tier() == target:
+		if def.exclusive_to != &"" or def.tier() != target:
+			continue
+		if def.kind == &"":
 			out.append(def)
-	return out
+		elif def.kind == kind:
+			own.append(def)
+	return own if not own.is_empty() else out
 
 
 static func _filtered_pick(pool: Array[GunPartDef], placed: Dictionary,

@@ -126,6 +126,9 @@ static func gun_entry(g: GunInstance, forced_rarity := -1) -> Dictionary:
 	var e := {"class": String(g.weapon_class.id) if g.weapon_class != null else "pistol",
 			"seed": g.gun_seed, "tier": g.tier,
 			"rarity": res.forced_rarity if res != null and res.forced_rarity > 0 else forced_rarity}
+	if g.weapon_class != null and g.weapon_class.archetype != &"":
+		e["kind"] = String(g.weapon_class.archetype)
+		e["crossed"] = g.weapon_class.crossed
 	if res != null:
 		e["luck"] = res.luck
 		if res.legendary_id != &"":
@@ -152,7 +155,8 @@ static func make_result(entry: Dictionary, lib: GunPartLibrary) -> GunGenerator.
 		res = GunGenerator.generate_legendary(lib, gen_seed, leg, tier, luck)
 	else:
 		res = GunGenerator.generate(lib, gen_seed,
-				WeaponClass.builtin(StringName(entry.get("class", "pistol"))), tier,
+				WeaponClass.builtin(StringName(entry.get("class", "pistol"))).with_kind(
+				StringName(entry.get("kind", "")), bool(entry.get("crossed", false))), tier,
 				int(entry.get("rarity", -1)), luck)
 	var parts: Dictionary = entry.get("parts", {})
 	if parts.is_empty() or leg != null:
@@ -173,7 +177,8 @@ static func _from_parts(entry: Dictionary, lib: GunPartLibrary,
 	for k in (entry.get("parts", {}) as Dictionary):
 		ids[int(k)] = StringName(entry.parts[k])
 	var data := {"seed": rolled.seed, "rarity": rolled.rarity, "tier": rolled.tier,
-			"class": rolled.weapon_class.id, "parts": ids, "luck": rolled.luck}
+			"class": rolled.weapon_class.id, "parts": ids, "luck": rolled.luck,
+			"kind": rolled.weapon_class.archetype, "crossed": rolled.weapon_class.crossed}
 	var res := GunGenerator.deserialize(lib, data)
 	if not res.recipe.has(GunPartDef.Slot.BODY):
 		return rolled

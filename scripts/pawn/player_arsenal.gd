@@ -425,7 +425,9 @@ func replace_in_hand(g: GunInstance) -> void:
 
 
 func _roll(class_id: StringName, rng: RandomNumberGenerator) -> GunInstance:
-	var res := GunGenerator.generate(library, rng.randi(), WeaponClass.builtin(class_id), tier)
+	# A light or a heavy, off the seed (COMBAT_DESIGN 7.8).
+	var gen_seed := rng.randi()
+	var res := GunGenerator.generate(library, gen_seed, WeaponClass.rolled(class_id, gen_seed), tier)
 	var g := GunInstance.from_result(res)
 	_adopt(g)
 	return g
@@ -1059,7 +1061,8 @@ class ArsenalHud extends CanvasLayer:
 		if gc.alt_cooldown_left() > 0.0 and id == GunAltFire.ARC:
 			txt += "  %.1fs" % gc.alt_cooldown_left()
 		elif id == GunAltFire.CHARGE:
-			txt += "  (%d rounds)" % gc.charge_cost()
+			# A heavy's magazine counts shots (two rounds each, COMBAT_DESIGN 7.8).
+			txt += "  (%d %s)" % [gc.charge_cost(), "shots" if gc.rounds_per_shot() > 1 else "rounds"]
 		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 		c.draw_string(font, Vector2(right - w, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
 		var mid := sz * 0.5
