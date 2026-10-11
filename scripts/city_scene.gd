@@ -4337,6 +4337,9 @@ func _board_mech() -> void:
 	if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
 		var near := _mech_at_hatch(_player_pawn)
 		if near == null:
+			# Firefight: no hatch in reach is a call for the mech (Titanfall's).
+			if arena is FirefightDirector and (arena as FirefightDirector).call_mech(_aim_point()):
+				return
 			print("[city] no mech's hatch within reach: walk to its hatch side")
 			return
 		if not near.layers.try_enter(_player_pawn.team):
