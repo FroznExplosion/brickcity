@@ -492,6 +492,44 @@ backpack is a list of those.
 
 Every keyboard bind is an input action, rebindable in Options. Pad bindings do not exist yet.
 
+### 7.8 Light and heavy kinds of every class (decided 2026-10-11, not built)
+
+The user's call: every gun class comes in two kinds, **light** and **heavy**. They are
+different guns to hold -- different models, different feel -- not a stat roll on one model.
+A light pistol is a Glock: fast semi-auto, or full-auto. A heavy pistol is a magnum, the Halo:
+Combat Evolved magnum. A light shotgun fires fast with little knock-back until it is nearly
+touching; a heavy shotgun hits harder and knocks back from further off. And so on for each
+class.
+
+**The kind is an archetype on the class, not a new class.** `shotgun`, `pistol` and the rest
+stay the classes (their tables, loot pools, saves and the view's feel all keyed by them); the
+gun carries `archetype` (`&"light"` / `&"heavy"`), rolled by the generator, which picks the
+kind's parts (its model) and scales the class's base numbers. Heavies roll rarer than lights.
+
+**A heavy spends two rounds a shot.** That is the ammo balance between the kinds, and the
+heavy's damage, fire rate, reload and knock-back are set to justify the cost: it should feel
+powerful, but not like a power weapon. How it reads to the player:
+
+- The **reserve** is counted in the class's rounds and is shared: 100 spare pistol rounds
+  carried with a light pistol in hand still show as 100 with a heavy pistol in hand.
+- The heavy's **magazine** shows shots, not rounds: a magazine that holds 12 rounds shows 6.
+  The magazine is the right size; a reload takes twice the rounds per shot shown out of the
+  reserve.
+- (Ammo reserves are not built yet, §15.1; this is what they must do when they are.)
+
+**Legendaries may break the trade**: a heavy with a light's fire rate, or a light with a
+heavy's damage, without the other kind's penalty.
+
+**Hit reactions read the kind already.** A round's flinch or stumble (`HitReaction`, built
+2026-10-11) is the class's impact by range; a gun's `archetype`, when it has one, scales it
+(`HitReaction.ARCHETYPE`: light 0.6x impact over half the range, heavy 1.6x over 1.6x the
+range). Nothing there needs to change when the kinds land -- only the property must exist on
+`GunInstance` with those two values.
+
+To build (combat area): the `archetype` property and its roll; per-kind base multipliers and
+parts per class; two rounds a shot on heavies through `GunController` and the HUD's count;
+the reserve; the legendary exceptions; tests for each.
+
 ## 8. Bricks
 
 Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive rounds chip
@@ -888,7 +926,11 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 - More of the skill kit: abilities past the Overshield and a second slot, the marksman and
   element branches (§4.2).
 - Special weapons past the arc caster; a heat bar for the plasma charge; the torch's look.
-- Step 5's other leftovers: ammo reserves, a draw time on the swap, co-op drops, pad bindings.
+- Step 5's other leftovers: ammo reserves, co-op drops, pad bindings. (A swap now takes about
+  half a second in the hands -- the old gun goes down out of view, the new one comes up,
+  no firing while it is down: `PlayerView`, 2026-10-10.)
+- Light and heavy kinds of every class, heavies at two rounds a shot (§7.8, decided
+  2026-10-11). Hit reactions already read the kind.
 - Helmets and head crits (switch `Pawn.head_crits` on when enemies are figures), and §13's
   questions.
 

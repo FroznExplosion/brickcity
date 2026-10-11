@@ -8092,6 +8092,44 @@ func _run_arms_pass() -> void:
 			and arms.reach_gap[1] < 0.005, "short by %.3f / %.3f m" % [arms.reach_gap[0],
 			arms.reach_gap[1]])
 	await _save("arms_long")
+
+	# Hit reactions (HitReaction): the shotgun up close stumbles a soldier and knocks
+	# him back; from across the street he only flinches.
+	if _gun.gun.weapon_class.id == &"shotgun":
+		_gun.gun.stats[&"accuracy"] = 1.0
+		var fwd := -camera.global_transform.basis.z
+		fwd = Vector3(fwd.x, 0.0, fwd.z).normalized()
+		for leg in [[3.0, true], [11.0, false]]:
+			var dist: float = leg[0]
+			var target := Pawn.spawn(self, pawn.feet() + fwd * dist, 1, true, 100000.0)
+			Soldier._greybox(target, 1)
+			await _frames(20)
+			camera.look_at(target.chest(), Vector3.UP)
+			await _frames(2)
+			var at := target.feet()
+			_gun.call(&"_fire_one")
+			var held := target.stagger_left
+			var r := target.body.get_node_or_null(^"HitReaction") as HitReaction
+			var tipped := 0.0
+			for i in 12:
+				await _frames(1)
+				if r != null:
+					tipped = maxf(tipped, r.lean_angle())
+				if bool(leg[1]) and i == 5:
+					await _save("arms_hit_stumble")
+			await _frames(30)
+			var back := (target.feet() - at).dot(fwd)
+			if bool(leg[1]):
+				_gate_ok("a shotgun at %.0f m stumbles a soldier" % dist, held > 0.3 and tipped > 0.2,
+						"held %.2f s, leaned %.2f rad" % [held, tipped])
+				_gate_ok("and knocks him back", back > 0.3, "%.2f m" % back)
+				_gate_ok("and he stands up straight again", r != null and absf(r.lean_angle()) < 0.01)
+			else:
+				_gate_ok("at %.0f m it only makes him flinch" % dist, held == 0.0 and tipped > 0.02
+						and tipped < 0.2, "held %.2f s, leaned %.2f rad" % [held, tipped])
+			target.body.queue_free()
+			await _frames(4)
+		camera.rotation = Vector3(-0.08, camera.rotation.y, 0.0)
 	_gate_ok("no hand was changed in plain view", arms.swaps_in_view == 0,
 			"%d" % arms.swaps_in_view)
 
