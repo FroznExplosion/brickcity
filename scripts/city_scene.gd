@@ -4373,6 +4373,11 @@ func _board_mech() -> void:
 	var br := _mech.body.get_node_or_null(^"MechBrain") as MechBrain
 	if br != null:
 		br.enabled = false
+	# The player's own gun is put down: the mech's arm is the only gun now.
+	_gun_armed = false
+	_gun.set_trigger(false)
+	if _gun.gun != null:
+		_gun.gun.visible = false
 	_pilot.board(_mech, camera)
 	_mech.occupy()
 	print("[city] piloting: mech at %v, %s" % [_mech.feet(), _mech.gun.gun.gun_name])
@@ -4957,10 +4962,24 @@ func _run_mech_pass() -> void:
 	_gate_ok("the camera is in the cockpit, ten courses up",
 			absf(camera.global_position.y - Mech.COCKPIT_Y) < 0.15,
 			"%.2f m" % camera.global_position.y)
+	# The seat (CockpitView): no canopy slab across the view, the pilot's hands on
+	# the two sticks.
+	var cv := _pilot.cockpit
+	_gate_ok("from the seat the canopy is not drawn across the view", not m.canopy.visible)
+	_gate_ok("the pilot's hands are on the sticks", cv != null and cv.arms != null
+			and cv.arms.reach_gap[0] < 0.02 and cv.arms.reach_gap[1] < 0.02,
+			"%.3f, %.3f m short" % [cv.arms.reach_gap[0], cv.arms.reach_gap[1]] if cv != null else "none")
+	camera.rotation = Vector3(-0.3, 0.0, 0.0)
+	await _frames(3)
+	await _save("mech_cockpit")
+	camera.rotation = Vector3.ZERO
+	await _frames(2)
 
 	_key(KEY_W, true)
 	await _frames(90)
 	var walk := m.motor.planar_speed()
+	_gate_ok("W leans the left stick ahead", cv != null and (cv.lean[ViewArms.LEFT] as Vector2).x > 0.7,
+			"%.2f" % (cv.lean[ViewArms.LEFT] as Vector2).x if cv != null else "")
 	_key(KEY_SHIFT, true)
 	await _frames(90)
 	var sprint := m.motor.planar_speed()
@@ -5067,6 +5086,36 @@ func _run_mech_pass() -> void:
 	camera.look_at(m.feet() + Vector3.UP * 3.5, Vector3.UP)
 	await _frames(3)
 	await _save("city_mech")
+
+	# On foot to the hatch and in: the player's own gun is put away, and the left
+	# button is the mech's arm's alone.
+	_enter_pawn(m.mount_point())
+	await _frames(30)
+	var own := [0]
+	var arm_shots := [0]
+	_gun.fired.connect(func(_i: Dictionary) -> void: own[0] += 1)
+	m.gun.fired.connect(func(_i: Dictionary) -> void: arm_shots[0] += 1)
+	_board_mech()
+	await _frames(10)
+	_gate_ok("in from the hatch, on foot", _pilot.is_piloting() and _boarded_on_foot)
+	_gate_ok("the player's own gun is put away", _gun.gun == null or not _gun.gun.visible)
+	camera.rotation = Vector3.ZERO
+	click = InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.parse_input_event(click)
+	await _frames(30)
+	click = click.duplicate()
+	click.pressed = false
+	Input.parse_input_event(click)
+	await _frames(5)
+	_gate_ok("the left button fires the mech's arm, not the player's gun",
+			own[0] == 0 and arm_shots[0] > 0, "player's %d, arm's %d" % [own[0], arm_shots[0]])
+	_leave_mech()
+	await _frames(20)
+	_gate_ok("out again on foot, the gun back in hand and the canopy back on",
+			_player.is_possessing() and _gun.gun != null and _gun.gun.visible and m.canopy.visible
+			and _pilot.cockpit == null)
 	_check_log_replays()
 	print("[mech] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
@@ -10471,7 +10520,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	# On foot the buttons are the player's own (rebindable input actions,
 	# PlayerController): firing, aiming and reloading go through the pawn.
-	if event is InputEventMouseButton and _player.is_possessing():
+	if event is InputEventMouseButton and (_player.is_possessing() or _pilot.is_piloting()):
 		return
 	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
 		_gun.set_trigger(false)

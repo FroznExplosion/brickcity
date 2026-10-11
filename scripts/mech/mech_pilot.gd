@@ -19,11 +19,17 @@ var mech: Mech
 var camera: Camera3D
 ## Act on the keyboard without the mouse captured, for scripted gates.
 var drive_uncaptured := false
+## The pilot's arms on the sticks, seen from the seat.
+var cockpit: CockpitView
 
 
 func board(m: Mech, cam: Camera3D) -> void:
 	mech = m
 	camera = cam
+	if m.canopy != null:
+		m.canopy.visible = false
+	cockpit = CockpitView.new()
+	cockpit.setup(cam, m)
 	_follow()
 
 
@@ -32,6 +38,11 @@ func leave() -> void:
 		mech.intents.clear(mech.motor.torso_yaw)
 		mech.aim_point = Vector3.INF
 		mech.gun.set_trigger(false)
+		if mech.canopy != null:
+			mech.canopy.visible = true
+	if cockpit != null and is_instance_valid(cockpit):
+		cockpit.queue_free()
+	cockpit = null
 	mech = null
 	camera = null
 
