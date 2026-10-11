@@ -171,6 +171,11 @@ class Overlay extends Control:
 		var mv := hud.pawn.moves
 		if mv == null:
 			return
+		# Another ability in the slot (PlayerLevel.ability): PlayerArsenal draws that one here.
+		var pl := hud.pawn.get_meta(PlayerLevel.SOURCE_META) as PlayerLevel \
+				if hud.pawn.has_meta(PlayerLevel.SOURCE_META) else null
+		if pl != null and pl.ability() != &"grapple":
+			return
 		var x := 32.0
 		var bars := hud.pawn.health.layer_count() if hud.pawn.health != null else 0
 		var y := size.y - 44.0 - 20.0 * bars - 6.0

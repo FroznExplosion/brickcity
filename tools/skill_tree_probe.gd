@@ -123,12 +123,12 @@ func _data() -> void:
 func _tiers() -> void:
 	var t := SkillTree.new()
 	_ok("tier 0 is open from the start, tier 1 is not", t.tier_open(0) and not t.tier_open(1))
-	_ok("a node of a shut tier is refused", not t.buy(&"light_step", 10)
-			and t.why_not(&"light_step", 10).begins_with("Opens at"))
+	_ok("a node of a shut tier is refused", not t.buy(&"heavy_hands", 10)
+			and t.why_not(&"heavy_hands", 10).begins_with("Opens at"))
 	for i in 5:
 		t.buy(&"quick_hands", 10)
 	_ok("not past a node's ranks", not t.buy(&"quick_hands", 10) and t.rank(&"quick_hands") == 5)
-	_ok("five points on the left open tier 1 on the right", t.tier_open(1) and t.buy(&"light_step", 10))
+	_ok("five points on the left open tier 1 on the right", t.tier_open(1) and t.buy(&"heavy_hands", 10))
 	_ok("no point, no buy", not t.buy(&"vitality", 0) and t.why_not(&"vitality", 0) == "No skill points")
 
 	# Level 40: every point down one side of the tree, lowest tiers first, until only
@@ -198,23 +198,23 @@ func _save() -> void:
 	pl.add_xp(7)
 	for i in 5:
 		pl.buy(&"vitality")
-	pl.buy(&"light_step")
-	pl.buy(&"light_step")
+	pl.buy(&"heavy_hands")
+	pl.buy(&"heavy_hands")
 	var cs := CharacterSave.new()
 	cs.take_progress(pl)
 	var back := CharacterSave.from_dict(JSON.parse_string(JSON.stringify(cs.to_dict())))
 	var pl2 := PlayerLevel.new()
 	pl2.take(back.progress_dict())
 	_ok("the level, XP and skills come back from a save", pl2.level == 12 and pl2.xp == 7
-			and pl2.tree.rank(&"vitality") == 5 and pl2.tree.rank(&"light_step") == 2
+			and pl2.tree.rank(&"vitality") == 5 and pl2.tree.rank(&"heavy_hands") == 2
 			and pl2.points_free() == 4)
 	var old := PlayerLevel.new()
 	old.take(CharacterSave.from_dict({"version": 1, "character": {"level": 3}}).progress_dict())
 	_ok("an older save, without skills, reads as none", old.level == 3 and old.tree.spent() == 0)
 	var cheat := PlayerLevel.from_dict({"level": 4, "xp": 0,
-			"skills": {"vitality": 9, "light_step": 2, "gone_node": 3}})
+			"skills": {"vitality": 9, "heavy_hands": 2, "gone_node": 3}})
 	_ok("a save holding more than its level allows is trimmed", cheat.tree.spent() == 3
-			and cheat.tree.rank(&"vitality") == 3 and cheat.tree.rank(&"light_step") == 0,
+			and cheat.tree.rank(&"vitality") == 3 and cheat.tree.rank(&"heavy_hands") == 0,
 			str(cheat.tree.to_dict()))
 
 
@@ -300,13 +300,15 @@ func _effects() -> void:
 
 	var mag0 := gc.mag_size()
 	var reload0 := _reload_time(gc)
-	var hp0 := pawn.health.layer_configs[0].max_value
+	# The health is the bottom layer: the shield sits over it (PlayerArsenal.ensure_shield).
+	var hi := pawn.health.layer_count() - 1
+	var hp0 := pawn.health.layer_configs[hi].max_value
 	var free_walk := await _walk(pawn, 30)
 	var pl := pc.progress
 	pl.set_level(100)
 	for id in [&"quick_hands", &"steady_hands", &"fast_hands", &"big_mags", &"drum_feed",
-			&"fleet_foot", &"light_step", &"deep_pockets", &"vitality", &"thick_skin",
-			&"second_wind", &"hard_to_kill", &"grenadier", &"sharp_mind"]:
+			&"fleet_foot", &"heavy_hands", &"deep_pockets", &"vitality", &"thick_skin",
+			&"second_wind", &"hard_to_kill", &"grenadier", &"quick_charge", &"light_step", &"sprinter"]:
 		while pl.tree.rank(id) < int(SkillTree.node(id).ranks) and pl.buy(id):
 			pass
 	var t := pl.tree
@@ -317,28 +319,28 @@ func _effects() -> void:
 			and gc.alt_mult > 1.0)
 	_ok("grenades: more, back sooner", ars.grenades_max == PlayerArsenal.GRENADES_MAX + 2
 			and ars.grenade_recharge < PlayerArsenal.GRENADE_RECHARGE)
-	var hp1 := pawn.health.layer_configs[0].max_value
+	var hp1 := pawn.health.layer_configs[hi].max_value
 	_ok("health: +30%, and had at once", is_equal_approx(hp1, hp0 * 1.3)
-			and is_equal_approx(pawn.health.get_layer_value(0), hp1), "%.1f" % hp1)
+			and is_equal_approx(pawn.health.get_layer_value(hi), hp1), "%.1f" % hp1)
 	ars.apply_skills()
 	ars.apply_skills()
-	_ok("and it never compounds", is_equal_approx(pawn.health.layer_configs[0].max_value, hp1))
+	_ok("and it never compounds", is_equal_approx(pawn.health.layer_configs[hi].max_value, hp1))
 	pawn.health.apply_to_layer_type(50.0, &"health", &"")
-	var hurt := pawn.health.get_layer_value(0)
+	var hurt := pawn.health.get_layer_value(hi)
 	await _seconds(2.0)
-	var early := pawn.health.get_layer_value(0)
+	var early := pawn.health.get_layer_value(hi)
 	await _seconds(PlayerArsenal.REGEN_DELAY)
 	_ok("health regen: after the wait, not before", is_equal_approx(early, hurt)
-			and pawn.health.get_layer_value(0) > hurt + 1.0,
-			"%.1f, %.1f, %.1f" % [hurt, early, pawn.health.get_layer_value(0)])
+			and pawn.health.get_layer_value(hi) > hurt + 1.0,
+			"%.1f, %.1f, %.1f" % [hurt, early, pawn.health.get_layer_value(hi)])
 	await _seconds(1.0)
 	var fast_walk := await _walk(pawn, 30)
 	_ok("move speed: farther in the same time", fast_walk > free_walk * 1.1,
 			"%.2f m against %.2f m" % [fast_walk, free_walk])
 	pl.reset_tree()
 	_ok("a reset takes it all back off", gc.mag_size() == mag0 and is_equal_approx(_reload_time(gc), reload0)
-			and is_equal_approx(pawn.health.layer_configs[0].max_value, hp0)
-			and pawn.health.get_layer_value(0) <= hp0 and is_equal_approx(pawn.move_mult, 1.0))
+			and is_equal_approx(pawn.health.layer_configs[hi].max_value, hp0)
+			and pawn.health.get_layer_value(hi) <= hp0 and is_equal_approx(pawn.move_mult, 1.0))
 	world.queue_free()
 	floor.queue_free()
 	await _ticks(2)
