@@ -31,8 +31,10 @@ const PART_SWING := 0.03
 ## Fire rate is split in two. `fire_base` is DPS-NEUTRAL — it trades against damage at
 ## constant product, so it is pure feel (slow hard-hitter vs fast light gun) and costs
 ## nothing from the budget. Only `fire_bonus` above counts as power.
-const FIRE_BASE_LO := 0.80
-const FIRE_BASE_HI := 1.25
+## Narrowed 0.80-1.25 -> 0.90-1.11 (2026-10-12): every gun is built from its shots to
+## kill (the Armory Ledger), and a +/-25% damage trade moved a count a shot either way.
+const FIRE_BASE_LO := 0.90
+const FIRE_BASE_HI := 1.11
 
 ## Secondary windows. These do NOT multiply into DPS, so they stay wide.
 const RELOAD_BEST := 0.5           ## lower is better → down to 50% of base time
@@ -43,7 +45,7 @@ const ACC_HI := 1.06
 ## (QUALITY_NAMING §4.4). Class base rates are chosen so this clamp never actually
 ## fires — clamping a rolled value upward would raise that gun's DPS above its roll.
 const STAT_FLOORS: Dictionary[StringName, float] = {
-	&"damage": 1.0, &"fire_rate": 1.0, &"mag_size": 1.0, &"reload_time": 0.3,
+	&"damage": 1.0, &"fire_rate": 0.4, &"mag_size": 1.0, &"reload_time": 0.3,
 	&"accuracy": 0.05, &"crit_mult": 1.0, &"element_ratio": 0.0,
 }
 

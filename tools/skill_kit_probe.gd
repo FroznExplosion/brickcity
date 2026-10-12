@@ -146,8 +146,8 @@ func _play() -> void:
 	ars.apply_skills()
 	_ok("and setting the skills again adds no second one", pool.layer_count() == 2)
 	pool.apply_impact(80.0, &"")
-	var through := (80.0 - PlayerArsenal.PLAYER_SHIELD) * CombatScale.SHIELD_GATE
-	_ok("a body shot takes the shield first, and half the rest gets through",
+	var through := 80.0 - PlayerArsenal.PLAYER_SHIELD
+	_ok("a body shot takes the shield first, and the rest gets through",
 			is_equal_approx(pool.get_layer_value(0), 0.0)
 			and is_equal_approx(pool.get_layer_value(1), 100.0 - through),
 			"%.1f / %.1f" % [pool.get_layer_value(0), pool.get_layer_value(1)])

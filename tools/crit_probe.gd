@@ -122,7 +122,7 @@ func _run() -> void:
 	target.intents.crouch = false
 	await _ticks(4)
 
-	# A shield over the flesh absorbs the crit; with it gone, crits come back.
+	# A shield over the flesh takes half the crit's extra; with it gone, the full crit.
 	var shielded := Pawn.spawn(root, Vector3(4.0, 0.0, 0.0), 1, true, 100000.0)
 	var shield := DefenseLayer.new()
 	shield.layer_type = &"shield"
@@ -134,11 +134,13 @@ func _run() -> void:
 	var sspots := shielded.body.get_node(^"CritSpots") as CritSpots
 	var on_shield := _shoot_at(sspots.centre_of(&"head"))
 	var r: DamageSystem.DamageResult = on_shield.get("result")
-	_ok("with a shield up the headshot lands plain", r != null and not r.was_crit and r.crit_absorbed
-			and absf(r.dealt - dmg) < 0.01, "dealt %.2f" % (r.dealt if r != null else -1.0))
+	var half := 1.0 + CombatScale.SHIELD_CRIT_SHARE * (WeaponClass.builtin(&"pistol").crit_mult - 1.0)
+	_ok("with a shield up the headshot lands half its extra on it", r != null and r.was_crit
+			and r.crit_absorbed and absf(r.dealt - dmg * half) < 0.01,
+			"dealt %.2f, want %.2f" % [(r.dealt if r != null else -1.0), dmg * half])
 	_shoot_at(sspots.centre_of(&"head"))
 	_shoot_at(sspots.centre_of(&"head"))
-	_ok("the shield breaks under plain hits", shielded.health.top_layer_type() == &"health",
+	_ok("the shield breaks under them", shielded.health.top_layer_type() == &"health",
 			"top now %s" % shielded.health.top_layer_type())
 	var bare := _shoot_at(sspots.centre_of(&"head"))
 	_ok("and with it gone the head crits again", _crit(bare))

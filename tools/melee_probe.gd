@@ -90,7 +90,8 @@ func _run() -> void:
 			and is_equal_approx(la.get_layer_value(1), la_flesh))
 
 	# --- shields --------------------------------------------------------------------
-	var ms := _pool(&"medium_shielded")
+	# A tier-3 shield is bigger than a tier-1 blow, so the blow is not cut short by it.
+	var ms := _pool(&"medium_shielded", 3)
 	var r := _melee(ms, 1)
 	_ok("a blow does 1.5x to a shield", is_equal_approx(r.dealt, CombatScale.melee(1) * 1.5),
 			"%.2f vs %.2f" % [r.dealt, CombatScale.melee(1) * 1.5])
@@ -199,13 +200,14 @@ func _run() -> void:
 	_ok("a bare enemy gets none", DefenceLook.dress(bare.health) != null
 			and DefenceLook.dress(bare.health)._shield == null
 			and DefenceLook.dress(bare.health)._armor == null)
+	_melee(armored.health, 1)   # a medium enemy's shield first
+	await process_frame
 	var plate_full := (alook._armor.mesh as CylinderMesh).height
 	_melee(armored.health, 1)
 	await process_frame
 	var plate_worn := (alook._armor.mesh as CylinderMesh).height
 	_ok("armor plates shrink as the armor wears", alook._armor.visible
 			and plate_worn < plate_full * 0.75, "%.2f -> %.2f" % [plate_full, plate_worn])
-	_melee(armored.health, 1)
 	_melee(armored.health, 1)
 	await process_frame
 	_ok("and are gone when it breaks", not alook._armor.visible)

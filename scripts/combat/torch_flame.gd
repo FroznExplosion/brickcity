@@ -41,10 +41,10 @@ static func make() -> TorchFlame:
 	var ramp := Gradient.new()
 	# Dim at the nozzle (it overlaps itself most there, and in first person it is right
 	# under the crosshair), brightest a metre or two out, then dark green smoke.
-	ramp.set_color(0, Color(0.9, 1.0, 0.5, 0.3))
-	ramp.set_color(1, Color(0.08, 0.16, 0.04, 0.0))
-	ramp.add_point(0.2, Color(0.65, 0.95, 0.15, 0.6))
-	ramp.add_point(0.55, Color(0.25, 0.55, 0.05, 0.45))
+	ramp.set_color(0, Color(1.0, 0.95, 0.6, 0.3))
+	ramp.set_color(1, Color(0.16, 0.06, 0.03, 0.0))
+	ramp.add_point(0.2, Color(1.0, 0.6, 0.15, 0.6))
+	ramp.add_point(0.55, Color(0.6, 0.2, 0.05, 0.45))
 	f.color_ramp = ramp
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.55, 0.55)
@@ -76,8 +76,8 @@ static func make() -> TorchFlame:
 	shrink.add_point(Vector2(1.0, 1.0))
 	core.scale_amount_curve = shrink
 	var core_ramp := Gradient.new()
-	core_ramp.set_color(0, Color(0.95, 1.0, 0.7, 0.4))
-	core_ramp.set_color(1, Color(0.7, 1.0, 0.35, 0.0))
+	core_ramp.set_color(0, Color(1.0, 0.98, 0.8, 0.4))
+	core_ramp.set_color(1, Color(1.0, 0.7, 0.3, 0.0))
 	core.color_ramp = core_ramp
 	var cq := QuadMesh.new()
 	cq.size = Vector2(0.18, 0.18)
@@ -90,7 +90,7 @@ static func make() -> TorchFlame:
 	f.add_child(core)
 	var light := OmniLight3D.new()
 	light.name = "Glow"
-	light.light_color = Color(0.7, 1.0, 0.3)
+	light.light_color = Color(1.0, 0.6, 0.25)
 	light.light_energy = 0.0
 	light.omni_range = 4.0
 	light.position = Vector3(0.0, 0.0, -1.5)

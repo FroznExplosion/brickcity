@@ -34,6 +34,8 @@ func _init() -> void:
 	for cls in GUNS:
 		var wc0 := WeaponClass.builtin(cls)
 		var kinds: Array = [&"light", &"heavy"]
+		if (WeaponClass.KINDS.get(cls, {}) as Dictionary).has(&"auto"):
+			kinds.append(&"auto")
 		md.append("#### %s" % String(cls).capitalize())
 		md.append("")
 		md.append("| Kind | Rarity | Damage / shot | Fire rate /s | DPS | Accuracy | Hip spread | ADS spread | Range m | Reload s | Magazine | Crit x |")

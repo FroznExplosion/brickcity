@@ -59,14 +59,19 @@ const MODES := {
 	&"pistol": {&"light": {SEMI: 0.5, AUTO: 0.3, BURST: 0.2}, &"heavy": {SEMI: 1.0}},
 	&"revolver": {&"light": {SEMI: 1.0}, &"heavy": {SEMI: 1.0}},
 	&"smg": {&"light": {AUTO: 0.7, BURST: 0.3}, &"heavy": {AUTO: 0.5, BURST: 0.5}},
-	&"rifle": {&"light": {AUTO: 0.5, BURST: 0.35, SEMI: 0.15}, &"heavy": {SEMI: 0.5, BURST: 0.5}},
+	&"rifle": {&"light": {AUTO: 1.0}, &"heavy": {BURST: 1.0}},
 	&"lmg": {&"light": {AUTO: 1.0}, &"heavy": {AUTO: 1.0}},
 	&"dmr": {&"light": {SEMI: 1.0}, &"heavy": {SEMI: 1.0}},
 	&"sniper": {&"light": {SEMI: 1.0}, &"heavy": {SEMI: 1.0}},
-	&"shotgun": {&"light": {AUTO: 0.6, BURST: 0.4}, &"heavy": {SEMI: 1.0}},
+	&"shotgun": {&"light": {SEMI: 1.0}, &"auto": {AUTO: 1.0}, &"heavy": {SEMI: 1.0}},
 }
 ## Burst counts and their weights.
 const BURST_COUNTS := {3: 0.5, 2: 0.2, 4: 0.2, 5: 0.1}
+## The heavy rifle is the burst rifle: always 3 rounds, 20 a second inside the burst, and
+## its fire rate (rounds a second over burst and gap) set so three bursts of headshots
+## kill a medium enemy as fast as four DMR headshots (the Armory Ledger).
+const BURST_RIFLE := 3
+const BURST_RIFLE_SPEED := 20.0 / 7.8
 ## Pellets per kind: [count lo, hi, spread deg lo, hi, near lo, hi, far lo, hi, falloff].
 const PELLETS := {
 	&"light": [6, 8, 8.0, 12.0, 3.0, 5.0, 10.0, 14.0, 0.15],
@@ -85,8 +90,11 @@ static func roll(gun_seed: int, rarity: int, wc: WeaponClass) -> Dictionary:
 		fm["burst"] = int(_weighted(rng, BURST_COUNTS))
 		# How much faster than the fire rate the rounds come inside a burst.
 		fm["burst_speed"] = rng.randf_range(2.0, 3.2)
+		if wc.id == &"rifle" and kind == &"heavy":
+			fm["burst"] = BURST_RIFLE
+			fm["burst_speed"] = BURST_RIFLE_SPEED
 	if wc.id == &"shotgun":
-		var p: Array = PELLETS[kind]
+		var p: Array = PELLETS.get(kind, PELLETS[&"light"])
 		fm["pellets"] = rng.randi_range(int(p[0]), int(p[1]))
 		fm["pellet_spread"] = rng.randf_range(float(p[2]), float(p[3]))
 		fm["near"] = rng.randf_range(float(p[4]), float(p[5]))

@@ -9,8 +9,9 @@ extends SceneTree
 ##              shotguns
 ##   tube       a press lobs a grenade that bursts where it lands: the struck enemy takes
 ##              the whole burst, a near one less, a far one none; then a cooldown
-##   torch      its cone burns what is in front, not what is beside; corrosive, so armor
-##              takes twice what flesh does; it runs out of fuel and cools down
+##   torch      its cone burns what is in front, not what is beside; fire (corrosive is for
+##              mechs and vehicles), so armor and flesh burn alike; it runs out of fuel and
+##              cools down
 ##   arc caster the ordnance's charge arcs through six enemies, each less, each slowed
 ##   shatter    frozen takes 1.5x; frozen and bare, a melee or a hit that leaves the flesh
 ##              low shatters it; a shield up, a high flesh, or no ice, and it does not
@@ -192,8 +193,8 @@ func _torch() -> void:
 	var n := gun._burn_cone(0.5)
 	_ok("the cone burns what is in front, not what is beside", n == 2 and _lost(beside) == 0.0,
 			"%d burned" % n)
-	_ok("corrosive: armor takes twice what flesh does",
-			is_equal_approx(_lost(armored), 2.0 * _lost(flesh)) and _lost(flesh) > 0.0,
+	_ok("fire, not corrosive: armor and flesh burn alike",
+			is_equal_approx(_lost(armored), _lost(flesh)) and _lost(flesh) > 0.0,
 			"%.1f vs %.1f" % [_lost(armored), _lost(flesh)])
 	gun.toggle_alt()
 	gun.set_trigger(true)

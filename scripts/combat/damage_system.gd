@@ -19,10 +19,8 @@ const _STATUS_MANAGER_META := &"_cc_status_manager"
 ## BrickWorld is seeded.
 static var rng := _seeded(0x5eed)
 
-## The layers a crit counts on (Docs/Weapons/COMBAT_DESIGN.md 4.2-4.3): flesh, by
-## whichever name it carries. A shield or armor over them ABSORBS the crit -- the hit
-## lands as a plain one -- so a headshot pays only once the defence is gone.
-const CRIT_LAYERS: Array[StringName] = [&"health", &"flesh", &"vegetation"]
+## A crit counts on every layer (Docs/Weapons/COMBAT_DESIGN.md 4.4): armor and flesh take
+## all of it, a shield only part of its extra (CombatScale.layer_crit, in HealthPool).
 
 
 static func _seeded(s: int) -> RandomNumberGenerator:
@@ -35,7 +33,7 @@ class DamageResult extends RefCounted:
 	var dealt: float = 0.0            ## ACTUAL damage removed from the target's layers
 	var element_color: Color = Color.WHITE
 	var was_crit: bool = false
-	var crit_absorbed: bool = false   ## a crit-spot hit a shield or armor took as a plain one
+	var crit_absorbed: bool = false   ## a crit-spot hit a shield took part of
 	var procced_status: bool = false
 	var killed: bool = false          ## this hit dropped the target's vital layer
 	var shattered: bool = false       ## it killed a frozen thing by shattering it (ElementStatus)
@@ -85,9 +83,8 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	# Compose external multipliers (crit + slag/frozen). The element-vs-layer matrix is
 	# NOT here — HealthPool applies it per layer.
 	var extra: float = 1.0
-	var crit := packet.crit and pool.top_layer_type() in CRIT_LAYERS
-	if crit:
-		extra *= maxf(1.0, packet.crit_multiplier)
+	var crit := maxf(1.0, packet.crit_multiplier) if packet.crit else 1.0
+	var shield_top := pool.top_layer_type() == &"shield"
 	if status_mgr != null:
 		extra *= status_mgr.damage_taken_multiplier()
 	# Frozen: brittle, every hit lands harder (COMBAT_DESIGN 5).
@@ -99,14 +96,14 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 
 	# The plasma charge: a shield up takes all of it, and the charge stops there.
 	if packet.strip_shield and pool.top_layer_type() == &"shield":
-		pool.apply_impact(1e12, &"", 1.0, false, true)
+		pool.apply_impact(1e12, &"", 1.0, 1.0, true)
 		result.dealt = before - pool.total_current()
 		result.killed = pool.is_dead()
 		return result
 
 	# A charged shot's armor break: armor on top takes all of it, and it stops there.
 	if packet.strip_armor and pool.top_layer_type() == &"armor":
-		pool.apply_impact(1e12, &"", 1.0, false, true)
+		pool.apply_impact(1e12, &"", 1.0, 1.0, true)
 		result.dealt = before - pool.total_current()
 		result.killed = pool.is_dead()
 		return result
@@ -114,7 +111,7 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	# A melee is its own damage type and one step: it lands on the top layer and stops
 	# there, whatever it broke (COMBAT_DESIGN 4.1). Never a crit.
 	if packet.melee:
-		pool.apply_impact(packet.amount, Elements.MELEE, extra, false, true)
+		pool.apply_impact(packet.amount, Elements.MELEE, extra, 1.0, true)
 		result.dealt = before - pool.total_current()
 		result.killed = pool.is_dead()
 		return result
@@ -131,22 +128,22 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	# Both parts land on the TOP living layer -- the defences sit over the flesh
 	# (Docs/Weapons/COMBAT_DESIGN.md 4.2) -- the element's part multiplied by the matrix
 	# there (Elements), the kinetic part flat. The element goes first, so a plasma round
-	# strips the shield and its kinetic part meets what is under it. A crit-spot hit is
-	# not gated when it breaks a shield (4.4).
+	# strips the shield and its kinetic part meets what is under it. A crit counts on each
+	# layer as CombatScale.layer_crit says, and everything left carries on (4.4).
 	# The element part builds its status from what it dealt, on the layer it landed on
 	# (ElementStatus, COMBAT_DESIGN 5): always, never a dice roll.
 	if has_element and elemental_amount > 0.0:
 		var layer := pool.top_layer_type()
 		var before_el := pool.total_current()
-		pool.apply_impact(elemental_amount, packet.element.id, extra, packet.crit)
+		pool.apply_impact(elemental_amount, packet.element.id, extra, crit)
 		if not pool.is_dead():
 			ElementStatus.build(target_root, packet.element.id, layer,
 					before_el - pool.total_current(), packet.source)
 	if kinetic_amount > 0.0:
-		pool.apply_impact(kinetic_amount, &"", extra, packet.crit)
+		pool.apply_impact(kinetic_amount, &"", extra, crit)
 
-	result.was_crit = crit
-	result.crit_absorbed = packet.crit and not crit
+	result.was_crit = packet.crit
+	result.crit_absorbed = packet.crit and shield_top
 
 	# Roll the status proc — only when the shot actually carries elemental content
 	# (ratio > 0); a pure-kinetic shot never procs, even with an element assigned.

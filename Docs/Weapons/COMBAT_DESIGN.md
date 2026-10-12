@@ -111,33 +111,50 @@ higher colour is felt in the hand — but not so much that a white stops working
 
 ## 3. Shots to kill — the anchor
 
-Halo's habit: design around shots-to-kill and keep them readable. The anchor, on level, against a
-light enemy (the `trash` archetype, `LootRoller.TRASH_BASE_HP` = 60 at tier 1), with a median-roll
-pistol (10.3 a shot at tier 1, before modifiers):
+Rewritten 2026-10-12 with the user, on the Armory Ledger's Time to kill tab (the page is the
+working copy; this is the record).
 
-| Light enemy, pistol, on level | Damage a shot | Body shots | Headshots (2×) |
-|---|---|---|---|
-| Common | 10.3 | **6** | **3** |
-| Legendary, no modifiers (1.12×) | 11.5 | 6 | 3 |
-| Common + one damage modifier (+20%) | 12.4 | 5 | 3 |
-| Legendary + one damage modifier (+20%) | 13.8 | 5 | 3 |
-| Purple or legendary + two damage modifiers (+40%) | 15.7–16.2 | **4** | **2** |
-| Any of the above, one tier behind (×0.8) | — | one more, usually | — |
+**The unit is a medium enemy's health**: 60 at tier 1, ×1.25 a tier — one melee
+(`CombatScale.MELEE_BASE`). Every enemy is stated in it (`EnemyProfiles`, §4.1) and so is every
+gun's damage a round (`WeaponClass._PRESETS`, `DMG_UNIT`), judged at **Unique** with a median
+roll and no modifiers, on level. Because guns and enemies grow by the same step, every count
+below holds at every tier.
 
-Every row holds for a light enemy of 57.7–61.8 health; 60 sits in the middle
-(`tools/combat_numbers_probe.gd` holds them).
+**The medium enemy: shield 0.6, armor 1.2, health 1** (2.8 in all). All damage carries into
+the next layer; a crit lands half its extra on a shield and all of it on armor and health (§4.4).
 
-**The colour gets you nothing alone; the build does.** A two-headshot kill takes a gun with the
-slots to carry two damage modifiers (purple and up) *and* the aim. That is the chase: a white works,
-a built purple works better, a legendary works better again because its red text does something no
-white can.
+| Gun (Unique) | Dmg / round | Crit | Rate /s | Health only: body / crit | Whole medium: body, time | Whole medium: crits, time |
+|---|---|---|---|---|---|---|
+| Pistol | 0.20 | ×2 | 8 | 5 / 3 | 14, 1.6 s | 8, 0.9 s |
+| Magnum (heavy pistol) | 0.55 | ×2 | 3 | 2 / 1 | 6, 1.7 s | 3, 0.7 s |
+| Revolver | 0.20 | ×2.5 | 8 | 5 / 2 | 14, 1.6 s | 7, 0.75 s |
+| Hand Cannon (heavy revolver) | 0.55 | ×2.5 | 3 | 2 / 1 | 6, 1.7 s | 3, 0.7 s |
+| SMG | 0.09 | ×2 | 14 | 11 / 6 | 31, 2.1 s | 17, 1.1 s |
+| Heavy SMG | 0.15 | ×2 | 9.5 | 7 / 4 | 19, 1.9 s | 10, 0.95 s |
+| Rifle (auto) | 0.12 | ×2 | 12 | 9 / 5 | 24, 1.9 s | 13, 1.0 s |
+| Battle Rifle (3-round burst) | 0.17 | ×2 | 7.8 (2.6 bursts) | 6 / 3 | 17, 2.0 s | 9 = 3 bursts, 0.87 s |
+| LMG | 0.126 | ×2 | 13 | 8 / 4 | 22, 1.6 s | 12, 0.85 s |
+| Heavy Machine Gun | 0.16 | ×2 | 9 | 7 / 4 | 18, 1.9 s | 10, 1.0 s |
+| DMR | 0.40 | ×2 | 3.5 | 3 / 2 | 7, 1.7 s | 4, 0.86 s |
+| Heavy DMR | 0.84 | ×2 | 1.8 | 2 / 1 | 4, 1.7 s | 2, 0.56 s |
+| Sniper | 1.00 | ×3 | 1.4 | 1 / 1 | 3, 1.4 s | 2, 0.7 s |
+| Anti-Materiel Rifle | 1.45 | ×3 | 0.7 | 1 / 1 | 2, 1.4 s | 1, instant |
+| Pump Shotgun (all pellets) | 1.00 a blast | ×2 | 1.4 | 1 / 1 | 3, 1.4 s | 2, 0.7 s |
+| Auto Shotgun | 0.45 a blast | ×2 | 2.8 | 3 / 2 | 7, 2.1 s | 4, 1.1 s |
+| Heavy Shotgun | 1.45 a blast | ×2 | 0.7 | 1 / 1 | 2, 1.4 s | 2, 1.4 s |
 
-Power-shot and double-fire modifiers (§6) change the count for some shots of a magazine rather than
-every shot; they are counted in their own rows when built.
+The intents behind it: every gun kills a whole medium in about 1.4–2.3 s of body shots and
+0.5–1.1 s of crits; the battle rifle's three headshot bursts match the DMR's four headshots; the
+magnum fires at about the DMR's pace; the heavy sniper fires half as fast as the light and one
+crit kills; the heavy shotgun is a blast and a melee; a shotgun loses damage as fewer pellets
+land (¾ of them: 4 pump blasts; half: 6).
 
-Every other class gets its own anchor row against the light enemy (a rifle ~8 body / 4 head, a
-sniper 2 body / 1 head, a shotgun 1–2 close), so a class's feel is set once and holds at every
-tier.
+`tools/combat_numbers_probe.gd` checks every row through the real DamageSystem at tiers 1, 5
+and 10. Each type's own anchor sets its heavy (`WeaponClass.KINDS`); the shotgun's light kind
+is the pump and half of light shotguns roll the auto kind (`AUTO_CHANCE`).
+
+**Modifiers are the build on top**: a damage modifier (+10–20%) can take a count down by one;
+the colour alone is about half a tier (§2).
 
 ### 3.1 Variance inside one colour
 
@@ -148,8 +165,9 @@ Two guns of the same class, tier and rarity differ in **how** they deal damage, 
   one stat.
 - The hidden power roll is small: a gun's DPS rolls **1.00–1.10×** (`GunStats.DPS_WINDOW`; v1's
   1.00–1.28× was wider than the whole rarity range), so two guns of one colour rarely sit a
-  shots-to-kill count apart on the roll alone. The damage-vs-fire-rate trade (`FIRE_BASE`
-  0.80–1.25) stays: it is feel, not power.
+  shots-to-kill count apart on the roll alone. The damage-vs-fire-rate trade (`FIRE_BASE`) is
+  feel, not power, and was narrowed to 0.90–1.11 (2026-10-12) so it moves a count by one at most
+  rarely. The fire-rate floor is 0.4/s (the heavy sniper and heavy shotgun fire 0.7/s).
   Shrinking it lowered the median roll (1.14× to 1.05×), so the light enemy's health was
   re-anchored with it (`TRASH_BASE_HP` 64 → 60) to keep a median common at 6 shots — the §3 table
   is in shots, and the shots are what must hold.
@@ -214,8 +232,8 @@ An enemy is **flesh** (or, for plant-based enemies, **vegetation**) and may wear
 
 | Layer | Regenerates | Weak to | Notes |
 |---|---|---|---|
-| Shield | yes, after a delay | **Plasma**, melee (1.5×) | Absorbs crits: no crit bonus while it holds |
-| Armor | no | **Corrosive** | Absorbs crits; can sit on the crit spot itself (a helmet) |
+| Shield | yes, after a delay | **Plasma**, melee (1.5×) | Takes half a crit's extra (§4.4) |
+| Armor | no | **Corrosive** (mechs and vehicles only) | Takes crits fully |
 | Flesh | no | **Acid** | Takes crits |
 | Vegetation | no | **Fire** | Plant enemies' flesh. Takes crits |
 
@@ -235,16 +253,17 @@ type's card lists both.
 A crit is a hit on a **crit spot** — usually the head, sometimes a weak point (a pack, a joint) per
 enemy type. Each pawn gets a small hurtbox per spot. There is no random crit roll.
 
-- **Crit multiplier**: 2× (a DMR or revolver 2.5×, a sniper 3×).
-- **Shields and armor absorb crits**: while a shield is up, or while a helmet covers the head, a
-  head hit does normal damage to that defence.
+- **Crit multiplier**: 2× (a revolver 2.5×, a sniper 3×; the DMR is 2× since 2026-10-12).
+- **A shield takes half a crit's extra** (`CombatScale.SHIELD_CRIT_SHARE`): a 2× crit lands
+  1.5× on it, a sniper's 3× lands 2×. **Armor and health take crits fully.** Each layer works
+  out its own share (`CombatScale.layer_crit`, in `HealthPool.apply_impact`). Helmets (crit-spot
+  armor) are deferred to bigger enemies.
 - Deterministic: where the round hit decides it — every co-op peer agrees for free.
 
-### 4.5 Shield gating
+### 4.5 Everything carries
 
-When a body shot breaks a shield, **only half the damage left over carries into the flesh.** When
-a **headshot** breaks it, the gate is skipped and the whole rest carries — the precision shot is
-rewarded even through the last sliver of shield.
+**All damage carries into the next layer** (2026-10-12; the old shield gate that halved a body
+shot's carry is gone). A melee is still one step: it breaks one layer and stops (§4.1).
 
 ### 4.6 The loop this is built to encourage (not force)
 
@@ -955,8 +974,8 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   ranks. A node gives a stat (`SkillTree.total`) or, at one rank, a flag (`has`). An old save's
   Tactician points come back free (`from_dict` drops a node that is gone).
 - **The player's shield** (`PlayerArsenal.ensure_shield`): a layer over the health, 50 (half the
-  health), recharging at 25/s after 4 s unhurt — a Halo shield. A body shot that breaks it lets half
-  of the rest through (shield gating, §4.5). Survivor's Shield Cells and Layered Cells grow it to
+  health), recharging at 25/s after 4 s unhurt — a Halo shield. What breaks it carries
+  on into the health (§4.5). Survivor's Shield Cells and Layered Cells grow it to
   +30% (`SkillTree.SHIELD_CAP`), Fast Charge shortens the wait to 60%, Flash Charge speeds the
   recharge. The HUD's bars already drew every layer. The health's skill base is kept on its layer
   now, so the shield moving it down an index changes nothing.
@@ -1013,6 +1032,7 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 §12's ten steps are built. What is left, by weight:
 
+- **The time-to-kill base (2026-10-12):** §3 and §4.4–4.5. The AI roster (`data/ai/roster.json`, AI area) still states its units' layers in old melees; it should be re-exported against the medium enemy (shield 0.6, armor 1.2, health 1), and `roster_probe` / `roster_field_probe` compare the two until it is.
 - More of the skill kit: abilities past the Overshield and a second slot, the marksman and
   element branches (§4.2).
 - Special weapons past the arc caster; a heat bar for the plasma charge.
