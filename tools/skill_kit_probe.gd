@@ -48,6 +48,11 @@ func _seconds(s: float) -> void:
 func _run() -> void:
 	_tree()
 	await _play()
+	var limbs_ok := true
+	for lc in SkillScreen.LIMB_COLUMNS:
+		limbs_ok = limbs_ok and SkillTree.LIMBS.has(lc[0])
+	_ok("the skill screen names only limbs the tree has", limbs_ok)
+
 	print("skill kit probe: %d ok, %d FAIL" % [_pass, _fail])
 	for c in root.get_children():
 		c.queue_free()

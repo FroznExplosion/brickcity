@@ -15,6 +15,9 @@ const BG := Color(0.05, 0.06, 0.08, 0.92)
 const DIM := Color(1, 1, 1, 0.45)
 const RESET_WINDOW := 2.0
 
+## Each limb's name over its middle column (SkillTree.LIMBS keys).
+const LIMB_COLUMNS := [[&"gunner", 1], [&"survivor", 4], [&"brawler", 7]]
+
 var progress: PlayerLevel
 var cursor: StringName = &"vitality"
 ## A line for the footer ("Opens at 15 points spent"), and how long it stays.
@@ -165,7 +168,7 @@ func _draw_all() -> void:
 	var row_h := area.size.y / SkillTree.TIERS
 	var bw := minf(col_w - 10.0, 108.0)
 	var bh := minf(row_h - 12.0, 44.0)
-	for limb in [[&"gunner", 1], [&"survivor", 4], [&"tactician", 7]]:
+	for limb in LIMB_COLUMNS:
 		var info: Array = SkillTree.LIMBS[limb[0]]
 		var name_s := String(info[0]).to_upper()
 		var nw := font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
