@@ -4011,14 +4011,23 @@ func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunP
 		# A light or a heavy, off the seed and the rarity (COMBAT_DESIGN 7.8).
 		var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.rolled(cls, gen_seed,
 				d.rarity), d.tier, d.rarity, d.luck)
-		var p := WorldGunPickup.create(_gun_library, res)
-		add_child(p)
 		var a := TAU * float(i) / float(maxi(drops.size(), 1))
-		# Up off the ground and tossed: it falls, lands and lies (WorldGunPickup).
-		p.global_position = at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0) 				+ Vector3.UP * 0.8
-		p.toss()
-		out.append(p)
+		out.append(drop_gun(res, at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0)
+				+ Vector3.UP * 0.8))
 	return out
+
+
+## A gun on the floor, made from what it is (the recipe, not a re-roll): up off the
+## ground at `at` and tossed, it falls, lands and lies (WorldGunPickup). What a dead
+## soldier's gun becomes, and every loot drop.
+func drop_gun(res: GunGenerator.Result, at: Vector3) -> WorldGunPickup:
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var p := WorldGunPickup.create(_gun_library, res)
+	add_child(p)
+	p.global_position = at
+	p.toss()
+	return p
 
 
 ## The gate for the player's gun (Docs/AIPlan.md P1): a generated gun, fired at a
