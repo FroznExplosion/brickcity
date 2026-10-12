@@ -152,4 +152,6 @@ func _notification(what: int) -> void:
 	var s := get_node_or_null("/root/MenuSettings")
 	if s == null or not s.get_bool(&"pause_on_focus_loss"):
 		return
-	open_pause()
+	# Deferred: focus can go while the tree is adding children (a scene still
+	# loading), and add_child under a busy parent fails.
+	open_pause.call_deferred()
