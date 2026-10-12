@@ -204,6 +204,8 @@ var dealt := 0.0
 ## Cover given up on -- no way there, or shot through -- as [spot, until]: not
 ## to be taken again for BAD_COVER_SECONDS (CoverSearch.find_for).
 var bad_cover: Array = []
+## Cover searches it has queued, by what asked (CoverSearch.find_queued).
+var cover_jobs := {}
 const BAD_COVER_SECONDS := 10.0
 ## A buddy's call for help: where to go, and until when it is worth going.
 var help_point := Vector3.INF

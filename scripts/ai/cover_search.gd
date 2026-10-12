@@ -43,6 +43,67 @@ static func find_for(so: Soldier, from: Vector3, threat_eye: Vector3) -> Diction
 	return found
 
 
+## find() through the nav queue (AINav.request_cover): null while it is being
+## looked for, then the answer, {} for none. One search per soldier per `slot`
+## (Soldier.cover_jobs); asked from more than `moved` metres off, or against a
+## threat that has moved, it starts over. A soldier asking from its own feet
+## moves while it waits: QUEUED_MOVE lets it -- restarting on every metre, one
+## on the run never got an answer. A squad asking for a fixed point passes less. Served a slice a tick by AIServices.tick,
+## the soldier the player is looking at, or nearest, first -- and by every
+## asker, so it moves wherever soldiers think (a probe runs no AIServices.tick). `skip_bad`: as
+## find_for, cover the soldier lately gave up on is none.
+static func find_queued(so: Soldier, slot: StringName, from: Vector3, threat_eye: Vector3,
+		skip_bad := true, moved := QUEUED_MOVE) -> Variant:
+	var nav := so.services.ai_nav
+	var job: Dictionary = so.cover_jobs.get(slot, {})
+	if not job.is_empty() and (from.distance_to(job.from) > moved
+			or threat_eye.distance_to(job.threat) > 3.0
+			or nav.get_cover_status(int(job.id)) == AINav.UNKNOWN):
+		nav.release_cover(int(job.id))
+		job = {}
+	if job.is_empty():
+		job = {"from": from, "threat": threat_eye,
+				"id": nav.request_cover(from, threat_eye, THREAT_HP, THREAT_RATE, IDEAL_RANGE, so.importance)}
+		so.cover_jobs[slot] = job
+	if nav.get_cover_status(int(job.id)) == AINav.PENDING:
+		serve(nav)
+	if nav.get_cover_status(int(job.id)) != AINav.DONE:
+		return null
+	var found := nav.get_cover(int(job.id))
+	nav.release_cover(int(job.id))
+	so.cover_jobs.erase(slot)
+	if skip_bad and not found.is_empty() and so.is_bad_cover(found.cover):
+		return {}
+	return found
+
+
+## How far a soldier may have moved while its search was queued and still take
+## the answer.
+const QUEUED_MOVE := 6.0
+## A fixed point asked about (a squad's bound or rally spot): another point.
+const POINT_MOVE := 1.0
+## Cover searching a physics tick, however many ask: a dense block's whole
+## search, 3-22 ms at once, is spread over a few ticks.
+const SERVE_USEC := 3000
+static var _serve_frame := -1
+static var _serve_usec := 0
+
+
+## Move the queued cover searches on, inside this tick's SERVE_USEC.
+static func serve(nav: AINav) -> void:
+	if nav.cover_pending() == 0:
+		return
+	var f := Engine.get_physics_frames()
+	if f != _serve_frame:
+		_serve_frame = f
+		_serve_usec = 0
+	if _serve_usec >= SERVE_USEC:
+		return
+	var t := Time.get_ticks_usec()
+	nav.service_cover(SERVE_USEC - _serve_usec)
+	_serve_usec += Time.get_ticks_usec() - t
+
+
 ## Is `p` cover against a threat whose eye is at `threat_eye`, and how good.
 static func rate(s: AIServices, p: Vector3, threat_eye: Vector3) -> Dictionary:
 	return s.ai_nav.rate_cover(p, threat_eye, THREAT_HP, THREAT_RATE)

@@ -531,6 +531,10 @@ func tick() -> void:
 		var n := navs[size] as AINav
 		n.service(NAV_BUSY_USEC if n.pending() > 0 else NAV_SIZE_USEC)
 		u = _tick_step("nav:%s" % size, u)
+	# Cover searches (CoverSearch.find_queued), with what this tick has left.
+	if ai_nav != null:
+		CoverSearch.serve(ai_nav)
+	u = _tick_step("cover", u)
 
 
 func _tick_step(step: String, since: int) -> int:
