@@ -112,14 +112,17 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	# The player in a building and us outside it: how we would get in.
 	if not inside and BTShelter.covered(s, them):
 		amounts["_p_inside"] = 1.0
-		var w := ways_in(so, them)
-		if bool(w.no_way):
+		# Not known yet (asked of the nav queue): no word on the way this time.
+		var w := ways_known(so, them)
+		if w.is_empty():
+			pass
+		elif bool(w.no_way):
 			add.call("no_way")
 		elif bool(w.far):
 			add.call("way_far")
 		else:
 			add.call("way_near")
-		if bool(w.breach_short):
+		if not w.is_empty() and bool(w.breach_short):
 			add.call("breach_short")
 
 	# Us.
@@ -165,22 +168,90 @@ static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 	var s := so.services
 	var feet := so.pawn.feet()
 	var now := s.now()
-	var key := "%d:%d:%d|%d:%d:%d" % [so.team, roundi(feet.x / WAY_GRID), roundi(feet.z / WAY_GRID),
-			roundi(them.x / 3.0), roundi(them.y / 3.0), roundi(them.z / 3.0)]
+	var key := _way_key(so.team, feet, them)
 	var held: Dictionary = _ways.get(key, {})
 	if not held.is_empty() and now - float(held.at) < WAY_KEEP:
 		return held
 	var nav := so._nav()
 	var walk_path := nav.find_path(nav.snap(feet), nav.snap(them), WAY_BUDGET)
-	var walk := _length(walk_path) if not walk_path.is_empty() else INF
 	var bn := s.foot_breach_nav()
 	var breach_path := bn.find_path(bn.snap(feet), bn.snap(them), WAY_BUDGET)
-	var breach := _length(breach_path) if not breach_path.is_empty() else INF
-	var wall := Vector3.INF
+	var holes := PackedVector3Array()
 	if not breach_path.is_empty() and bn.has_method(&"get_last_breaches"):
-		var holes: PackedVector3Array = bn.call(&"get_last_breaches")
-		if not holes.is_empty():
-			wall = holes[0]
+		holes = bn.call(&"get_last_breaches")
+	return _keep_way(key, _way_from(s, now, feet, them, walk_path, breach_path, holes))
+
+
+## ways_in() for a decision in the game: never waits. The two paths go through
+## the nav queue (a slice a tick, at the soldier's place in it) and are picked up
+## by a later call; meanwhile the last answer for here, however old, or {} when
+## there is none. Asked in one go, a way into a building nobody can reach ran
+## both searches to their caps in the tick: 0.35-1.2 s measured (arena gate).
+static func ways_known(so: Soldier, them: Vector3) -> Dictionary:
+	var s := so.services
+	var feet := so.pawn.feet()
+	var now := s.now()
+	var key := _way_key(so.team, feet, them)
+	var held: Dictionary = _ways.get(key, {})
+	if not held.is_empty() and now - float(held.at) < WAY_KEEP:
+		return held
+	var asked: Dictionary = _ways_asked.get(key, {})
+	if asked.is_empty():
+		if _ways_asked.size() > 64:
+			_forget_asked()
+		var nav := so._nav()
+		var bn := s.foot_breach_nav()
+		_ways_asked[key] = {"nav": nav, "bn": bn, "feet": feet, "them": them,
+				"walk": nav.request_path(nav.snap(feet), nav.snap(them), so.importance, WAY_BUDGET),
+				"breach": bn.request_path(bn.snap(feet), bn.snap(them), so.importance, WAY_BUDGET)}
+		return held
+	var an: AINav = asked.nav
+	var ab: AINav = asked.bn
+	var ws := an.get_status(int(asked.walk))
+	var bs := ab.get_status(int(asked.breach))
+	if ws == AINav.PENDING or bs == AINav.PENDING:
+		return held
+	_ways_asked.erase(key)
+	var walk_path := an.get_path(int(asked.walk)) if ws == AINav.DONE else PackedVector3Array()
+	var breach_path := ab.get_path(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
+	var holes := ab.get_breaches(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
+	an.release(int(asked.walk))
+	ab.release(int(asked.breach))
+	return _keep_way(key, _way_from(s, now, asked.feet, asked.them, walk_path, breach_path, holes))
+
+
+## Ways asked of the nav queue and not picked up yet (ways_known), by _ways' key.
+static var _ways_asked := {}
+
+
+static func _forget_asked() -> void:
+	for k in _ways_asked:
+		var e: Dictionary = _ways_asked[k]
+		if is_instance_valid(e.nav):
+			(e.nav as AINav).release(int(e.walk))
+		if is_instance_valid(e.bn):
+			(e.bn as AINav).release(int(e.breach))
+	_ways_asked.clear()
+
+
+static func _way_key(team: int, feet: Vector3, them: Vector3) -> String:
+	return "%d:%d:%d|%d:%d:%d" % [team, roundi(feet.x / WAY_GRID), roundi(feet.z / WAY_GRID),
+			roundi(them.x / 3.0), roundi(them.y / 3.0), roundi(them.z / 3.0)]
+
+
+static func _keep_way(key: String, w: Dictionary) -> Dictionary:
+	if _ways.size() > 256:
+		_ways.clear()
+	_ways[key] = w
+	return w
+
+
+static func _way_from(s: AIServices, now: float, feet: Vector3, them: Vector3,
+		walk_path: PackedVector3Array, breach_path: PackedVector3Array,
+		holes: PackedVector3Array) -> Dictionary:
+	var walk := _length(walk_path) if not walk_path.is_empty() else INF
+	var breach := _length(breach_path) if not breach_path.is_empty() else INF
+	var wall := holes[0] if not breach_path.is_empty() and not holes.is_empty() else Vector3.INF
 	var straight := feet.distance_to(them)
 	# The door: where the walk goes under the roof -- the last stretch still out
 	# under the sky, walked half a metre at a time to the first step covered.
@@ -197,14 +268,10 @@ static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 						door = q
 						break
 			break
-	var w := {"at": now, "walk": walk, "breach": breach, "straight": straight, "door": door, "wall": wall,
+	return {"at": now, "walk": walk, "breach": breach, "straight": straight, "door": door, "wall": wall,
 			"no_way": walk == INF,
 			"far": walk != INF and walk > straight * WAY_FAR + WAY_SLACK,
 			"breach_short": breach != INF and breach < walk * BREACH_SHORT}
-	if _ways.size() > 256:
-		_ways.clear()
-	_ways[key] = w
-	return w
 
 
 static func _length(p: PackedVector3Array) -> float:

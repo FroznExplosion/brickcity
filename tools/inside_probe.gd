@@ -55,6 +55,10 @@ func _w(cx: float, cz: float, plates := 0) -> Vector3:
 func _sense(so: Soldier) -> Dictionary:
 	a.s.knowledge_of(1).saw(p, p.feet(), a.s.now())
 	var c := so.contact()
+	# In the game the sense asks the nav queue for the ways in and has them a
+	# few ticks later (TacticsSense.ways_known); here they are looked up first,
+	# in one go, so the reading is the one a soldier settles on.
+	TacticsSense.ways_in(so, p.feet())
 	return TacticsSense.read(so, c, {})
 
 
