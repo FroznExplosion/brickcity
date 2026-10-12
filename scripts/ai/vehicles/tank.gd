@@ -232,6 +232,8 @@ func _gun(n: String, g: GunInstance, rng: RandomNumberGenerator, on_hit: Callabl
 	gc.on_structure_hit = on_hit
 	gc.damage_scale = scale
 	gc.damage_mult = mult
+	if g != null and g.weapon_class != null:
+		gc.damage_mult *= WeaponClass.enemy_damage_scale(g.weapon_class.id)
 	add_child(gc)
 	if g != null:
 		g.visible = false

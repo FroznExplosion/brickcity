@@ -298,6 +298,9 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		gun.visible = false
 		p.eye.add_child(gun)
 		g.equip(gun)
+		# An AI's gun hits as hard as before the time-to-kill rebalance (WeaponClass.ENEMY_DPS).
+		if gun.weapon_class != null:
+			g.damage_mult = WeaponClass.enemy_damage_scale(gun.weapon_class.id)
 	p.gun = g
 	g.fired.connect(so._on_fired)
 	g.hold_round = so._line_shut

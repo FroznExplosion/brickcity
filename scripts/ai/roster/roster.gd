@@ -103,9 +103,18 @@ func size_nav(size: String) -> Array:
 	return (parts.get("sizes", {}) as Dictionary).get(size, {}).get("nav", [])
 
 
-## Its health layers at `level`, top first, ready for a HealthPool -- built as
-## EnemyProfiles.layers builds a profile's. Empty for a mech (derived.mech).
+## Its health layers at `level`, top first, ready for a HealthPool: the EnemyProfiles
+## profile its recipe's layers stand for (EnemyProfiles.for_roster), in the time-to-kill
+## units (Docs/Weapons/COMBAT_DESIGN.md 3). Empty for a mech (derived.mech).
 func layers(id: String, level: int) -> Array[DefenseLayer]:
+	var rows: Array = derived(id).get("layers", [])
+	if rows.is_empty():
+		return [] as Array[DefenseLayer]
+	return EnemyProfiles.layers(EnemyProfiles.for_roster(rows), level)
+
+
+## Its layers as the recipe states them, in the old melees (what the AI page shows).
+func melee_layers(id: String, level: int) -> Array[DefenseLayer]:
 	var out: Array[DefenseLayer] = []
 	for row in derived(id).get("layers", []):
 		var type := StringName(str(row[0]))

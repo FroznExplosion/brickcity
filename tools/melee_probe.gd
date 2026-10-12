@@ -211,8 +211,7 @@ func _run() -> void:
 	_melee(armored.health, 1)
 	await process_frame
 	_ok("and are gone when it breaks", not alook._armor.visible)
-	for i in 3:
-		_melee(shielded.health, 1)
+	_melee(shielded.health, 1)   # one blow breaks a medium shielded enemy's shield
 	await process_frame
 	_ok("a broken shield bursts", slook._shield.visible and slook._burst > 0.0)
 	# Real time: headless frames are far shorter than a display's.

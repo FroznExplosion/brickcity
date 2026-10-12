@@ -233,6 +233,8 @@ func _arm(g: GunInstance, on_hit: Callable, rng: RandomNumberGenerator) -> void:
 	gun.exclude = [get_rid()] as Array[RID]
 	gun.on_structure_hit = on_hit
 	gun.damage_mult = GUN_MULT
+	if g != null and g.weapon_class != null:
+		gun.damage_mult *= WeaponClass.enemy_damage_scale(g.weapon_class.id)
 	add_child(gun)
 	if g != null:
 		g.visible = false
