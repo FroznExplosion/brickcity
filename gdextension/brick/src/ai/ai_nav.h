@@ -331,6 +331,10 @@ private:
     /// there is no way between them (a sealed room, a roof with no way up).
     /// False when not proven -- the limit reached, or `other` met.
     bool _hier_enclosed(const std::vector<int> &seeds, const std::vector<int> &other, int limit);
+    /// The same flood, a `_side_edges` at a time until `until_usec`: 1 closed,
+    /// 0 not proven, -1 out of time (call again with the same flood).
+    struct EnclosedFlood;
+    int _enclosed_step(EnclosedFlood &f, int limit, uint64_t until_usec);
     static constexpr int ENCLOSED_LIMIT = 96;
     uint64_t stat_hier_enclosed = 0;
     /// Walk straight from `a` towards `b`, a _step at a time, inside the box:
@@ -366,6 +370,13 @@ private:
     uint64_t stat_worst_expand_usec = 0;
     uint64_t stat_worst_snap_usec = 0;
     uint64_t stat_worst_column_usec = 0;
+    // The longest single call of each part that runs whole, with no clock
+    // check inside: where a service call can blow past its budget.
+    uint64_t stat_worst_service_usec = 0;
+    uint64_t stat_worst_hier_begin_usec = 0;
+    uint64_t stat_worst_enclosed_usec = 0;
+    uint64_t stat_worst_side_edges_usec = 0;
+    uint64_t stat_worst_cluster_sides_usec = 0;
 
     static int64_t ckey(int x, int z) { return ((int64_t)x << 32) ^ (int64_t)(uint32_t)z; }
     static int64_t nkey(int x, int z, int y) {

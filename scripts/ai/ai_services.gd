@@ -456,17 +456,26 @@ func tokens_on(target: Pawn) -> int:
 
 # --- the tick ------------------------------------------------------------------
 
+## How long each part of the last `tick` took, in ms: the city's AI spike
+## report reads it (CityScene._ai_track_worst).
+var tick_steps := {}
+
+
 func tick() -> void:
 	var t := now()
+	var u := Time.get_ticks_usec()
 	if Engine.get_physics_frames() % 30 == 0:
 		_drop_idle_fields(t)
+	u = _tick_step("fields", u)
 	if t >= _next_aggro:
 		_next_aggro = t + 1.0 / AGGRO_HZ
 		var dt := t - _last_aggro if _last_aggro >= 0.0 else 1.0 / AGGRO_HZ
 		_last_aggro = t
 		for team in _aggro:
 			_aggro_tick(team, _aggro[team], dt)
+	u = _tick_step("aggro", u)
 	callouts.tick(t, world3d, ai_world)
+	u = _tick_step("callouts", u)
 	# Every map's hierarchy worked out round the players in spare time
 	# (AINav.warm) -- the walking map, each size's, each vehicle's, the mech's:
 	# the fight is round them, and so are the searches.
@@ -481,12 +490,20 @@ func tick() -> void:
 			for n in all_navs():
 				if n.has_method(&"warm"):
 					n.call(&"warm", at, WARM_RADIUS)
+	u = _tick_step("warm", u)
 	# The maps of the other sizes of body are served here, a little each -- more
 	# to one with a search waiting (a mech's way through a wall is thousands of
 	# nodes of a ten-stud body), the rest of it to warming.
 	for size in navs:
 		var n := navs[size] as AINav
 		n.service(NAV_BUSY_USEC if n.pending() > 0 else NAV_SIZE_USEC)
+		u = _tick_step("nav:%s" % size, u)
+
+
+func _tick_step(step: String, since: int) -> int:
+	var now_us := Time.get_ticks_usec()
+	tick_steps[step] = float(now_us - since) / 1000.0
+	return now_us
 
 
 func _aggro_tick(team: int, table: AggroTable, dt: float) -> void:

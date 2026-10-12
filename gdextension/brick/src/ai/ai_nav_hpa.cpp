@@ -36,6 +36,14 @@ uint64_t hpa_usec() {
             .count();
 }
 
+// Keeps the longest run of the scope it is in.
+struct WorstOf {
+    uint64_t &worst;
+    uint64_t t0 = hpa_usec();
+    explicit WorstOf(uint64_t &w) : worst(w) {}
+    ~WorstOf() { worst = std::max(worst, hpa_usec() - t0); }
+};
+
 constexpr float STUD = brick::STUD_M;
 constexpr float PLATE = brick::PLATE_M;
 constexpr int DX[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
@@ -49,8 +57,39 @@ constexpr size_t SIDES_CAP = 400000;
 
 } // namespace
 
+// `_hier_enclosed`'s flood, kept between calls. Each new cluster it reaches has
+// every side's edges worked out (a Dijkstra each, up to a few ms), and a flood
+// of 96 sides done whole was a 120 ms search step: the frame spike of a squad
+// landing. Resumable, it pauses at the budget like the rest of the search.
+struct AINav::EnclosedFlood {
+    std::unordered_set<int> target;
+    std::unordered_set<int> seen;
+    std::unordered_set<int64_t> clusters_done;
+    std::vector<int> stack;
+    std::vector<int> in_cluster;
+    int cur = -1;        // the side being expanded, its cluster's edges under way
+    size_t edge_i = 0;   // the next side of in_cluster to work out
+
+    void reset(const std::vector<int> &seeds, const std::vector<int> &other) {
+        target = std::unordered_set<int>(other.begin(), other.end());
+        seen.clear();
+        clusters_done.clear();
+        stack.assign(seeds.begin(), seeds.end());
+        in_cluster.clear();
+        cur = -1;
+        edge_i = 0;
+    }
+};
+
 struct AINav::HpaState {
     int stage = 0;   // 0 ends, 1 the graph, 2 the bricks
+    // Stage 0 in parts: the ends' edges found, then the two enclosed floods
+    // (goal side, then start side), each able to pause.
+    bool ends_done = false;
+    int flood_pass = 0;
+    EnclosedFlood flood;
+    std::vector<int> from_start;
+    std::vector<int> to_goal_ids;
     // Brick-level nodes its Dijkstras had looked at when it began: all of them
     // together are held to the request's budget, as a plain search is.
     uint64_t work0 = 0;
@@ -111,49 +150,71 @@ void AINav::_warm_step(uint64_t until_usec) {
 }
 
 bool AINav::_hier_enclosed(const std::vector<int> &seeds, const std::vector<int> &other, int limit) {
-    const std::unordered_set<int> target(other.begin(), other.end());
-    std::unordered_set<int> seen;
-    std::unordered_set<int64_t> clusters_done;
-    std::vector<int> stack(seeds.begin(), seeds.end());
-    std::vector<int> in_cluster;
-    while (!stack.empty()) {
-        const int s = stack.back();
-        stack.pop_back();
-        if (s < 0 || !sides[(size_t)s].alive || !seen.insert(s).second) {
-            continue;
+    EnclosedFlood f;
+    f.reset(seeds, other);
+    return _enclosed_step(f, limit, UINT64_MAX) == 1;
+}
+
+int AINav::_enclosed_step(EnclosedFlood &f, int limit, uint64_t until_usec) {
+    // A side id from before a pause may be gone: the whole hierarchy is
+    // dropped past SIDES_CAP (set_hierarchy).
+    auto valid = [this](int id) { return id >= 0 && (size_t)id < sides.size(); };
+    while (true) {
+        if (f.cur < 0) {
+            if (f.stack.empty()) {
+                stat_hier_enclosed++;
+                return 1;
+            }
+            const int s = f.stack.back();
+            f.stack.pop_back();
+            if (!valid(s) || !sides[(size_t)s].alive || !f.seen.insert(s).second) {
+                continue;
+            }
+            if (f.target.count(s)) {
+                return 0;
+            }
+            if ((int)f.seen.size() > limit) {
+                return 0;
+            }
+            const int cx = sides[(size_t)s].cx, cz = sides[(size_t)s].cz;
+            _cluster_sides(cx, cz, f.in_cluster);
+            f.cur = s;
+            f.edge_i = f.clusters_done.insert(ckey(cx, cz)).second ? 0 : f.in_cluster.size();
         }
-        if (target.count(s)) {
-            return false;
-        }
-        if ((int)seen.size() > limit) {
-            return false;
-        }
-        const int cx = sides[(size_t)s].cx, cz = sides[(size_t)s].cz;
-        _cluster_sides(cx, cz, in_cluster);
-        if (clusters_done.insert(ckey(cx, cz)).second) {
-            for (int o : in_cluster) {
+        while (f.edge_i < f.in_cluster.size()) {
+            if (hpa_usec() >= until_usec) {
+                return -1;
+            }
+            const int o = f.in_cluster[f.edge_i++];
+            if (valid(o)) {
                 _side_edges(o);
             }
         }
+        const int s = f.cur;
+        f.cur = -1;
+        if (!valid(s)) {
+            continue;
+        }
         // Either way: over the border, and inside the cluster to or from it.
         const int partner = sides[(size_t)s].partner;
-        if (partner >= 0 && (sides[(size_t)s].cross < NO_WAY || sides[(size_t)partner].cross < NO_WAY)) {
-            stack.push_back(partner);
+        if (valid(partner) && (sides[(size_t)s].cross < NO_WAY || sides[(size_t)partner].cross < NO_WAY)) {
+            f.stack.push_back(partner);
         }
         for (const auto &e : sides[(size_t)s].edges) {
-            stack.push_back(e.first);
+            f.stack.push_back(e.first);
         }
-        for (int o : in_cluster) {
+        for (int o : f.in_cluster) {
+            if (!valid(o)) {
+                continue;
+            }
             for (const auto &e : sides[(size_t)o].edges) {
                 if (e.first == s) {
-                    stack.push_back(o);
+                    f.stack.push_back(o);
                     break;
                 }
             }
         }
     }
-    stat_hier_enclosed++;
-    return true;
 }
 
 bool AINav::_hier_begin(Search &s) {
@@ -337,6 +398,7 @@ const std::vector<int> &AINav::_border(int cx, int cz, int axis) {
 }
 
 void AINav::_cluster_sides(int cx, int cz, std::vector<int> &out) {
+    WorstOf timed(stat_worst_cluster_sides_usec);
     out.clear();
     const int keys[4][3] = { { cx, cz, 0 }, { cx, cz, 1 }, { cx - 1, cz, 0 }, { cx, cz - 1, 1 } };
     for (const auto &k : keys) {
@@ -499,6 +561,7 @@ float AINav::_straight(const Node &a, const Node &b, int x0, int z0, int x1, int
 }
 
 void AINav::_side_edges(int sid) {
+    WorstOf timed(stat_worst_side_edges_usec);
     const int cx = sides[(size_t)sid].cx;
     const int cz = sides[(size_t)sid].cz;
     const uint32_t rev = _crev(cx, cz);
@@ -580,7 +643,8 @@ bool AINav::_advance_hier(Search &s, uint64_t until_usec) {
     HpaState &h = *s.hpa;
     const int C = cluster;
     auto finish_time = [&]() { stat_hier_usec += hpa_usec() - t0; };
-    if (h.stage == 0) {
+    if (h.stage == 0 && !h.ends_done) {
+        WorstOf timed(stat_worst_hier_begin_usec);
         if (sides.size() > SIDES_CAP) {
             set_hierarchy(cluster);
         }
@@ -616,20 +680,38 @@ bool AINav::_advance_hier(Search &s, uint64_t until_usec) {
         // its cluster the start reaches, or none that reaches the goal; or the
         // goal's region (or the start's) closed, a small flood either way
         // finding nothing of the other's.
-        std::vector<int> from_start, to_goal_ids;
         for (const auto &e : h.start_edges) {
-            from_start.push_back(e.first);
+            h.from_start.push_back(e.first);
         }
         for (const auto &kv : h.to_goal) {
-            to_goal_ids.push_back(kv.first);
+            h.to_goal_ids.push_back(kv.first);
         }
-        if (from_start.empty() || to_goal_ids.empty()
-                || _hier_enclosed(to_goal_ids, from_start, ENCLOSED_LIMIT)
-                || _hier_enclosed(from_start, to_goal_ids, ENCLOSED_LIMIT)) {
+        if (h.from_start.empty() || h.to_goal_ids.empty()) {
             s.status = FAILED;
             stat_failed++;
             finish_time();
             return true;
+        }
+        h.ends_done = true;
+        h.flood.reset(h.to_goal_ids, h.from_start);
+    }
+    if (h.stage == 0) {
+        WorstOf timed(stat_worst_enclosed_usec);
+        while (h.flood_pass < 2) {
+            const int r = _enclosed_step(h.flood, ENCLOSED_LIMIT, until_usec);
+            if (r < 0) {
+                finish_time();
+                return false;
+            }
+            if (r == 1) {
+                s.status = FAILED;
+                stat_failed++;
+                finish_time();
+                return true;
+            }
+            if (++h.flood_pass == 1) {
+                h.flood.reset(h.from_start, h.to_goal_ids);
+            }
         }
         h.g[START] = 0.0f;
         h.open.push_back(Open{ 0.0f, START });

@@ -138,6 +138,9 @@ func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
 
 func _suppress(q: Squad, at: Vector3) -> void:
 	_suppress_at = at
+	# A coverer that died and was cleared away since the bound was given: handing
+	# it an assignment was an error on a freed object.
+	_cover = _cover.filter(func(m) -> bool: return is_instance_valid(m))
 	for m in _cover:
 		var a := SquadMsg.Assignment.make(SquadMsg.Task.SUPPRESS, at)
 		a.role = "suppress"
