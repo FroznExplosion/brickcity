@@ -48,6 +48,9 @@ const KNOCK_MULT := 3.0
 const CHARGE_START := 0.3
 ## A press this early is kept until the gun can fire.
 const SEMI_BUFFER := 0.15
+## Held down, a light semi gun keeps firing at this share of its fire rate (a heavy one
+## needs the trigger let go and pulled again).
+const HELD_SEMI_PACE := 0.6
 ## Chance a semi or burst gun charges, by colour (white .. mythic). Commons too.
 const CHARGE_CHANCE: Array[float] = [0.1, 0.15, 0.2, 0.35, 0.5, 0.7]
 

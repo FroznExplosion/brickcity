@@ -8,15 +8,17 @@ extends SceneTree
 ##                  kind (an enemy's fires as it always has); the magnum is semi; every
 ##                  shotgun of a kind fires pellets; only semi and burst guns charge,
 ##                  commons too
-##   semi           one round a press however long it is held; a press a little early is
-##                  kept, not lost
+##   semi           light: held, it keeps firing, slower than it can be tapped; heavy: one
+##                  round a pull however long it is held; a press a little early is kept
 ##   auto           rounds at the fire rate while held
-##   burst          a press is its count of rounds, fast; held, bursts run at the fire rate
+##   burst          a press is its count of rounds, fast; held, a light gun's bursts run at
+##                  the fire rate, a heavy's stop at one
 ##   pellets        one report a blast for each thing it hit, its damage summed; up close
 ##                  most pellets strike, and far off the falloff takes most of the damage
-##   charge         a tap still fires one round; held full and let go, the charged shot:
-##                  an overcharge that takes a shield whole for three shots, a hyper burst
-##                  that knocks back, an armor break; let go early, nothing
+##   charge         nothing on the press; a tap fires one round on its release; held full
+##                  and let go, the charged shot alone: an overcharge that takes a shield
+##                  whole for three shots, a hyper burst that knocks back, an armor break;
+##                  let go early, nothing
 
 const RANGE := 5.0
 
@@ -43,8 +45,8 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 
 
 ## A plain gun, 10 a round, 10 a second, dead accurate, firing as `fm` says.
-func _arm(fm: Dictionary, cls := &"rifle") -> GunInstance:
-	var res := GunGenerator.generate(_lib, 11, WeaponClass.builtin(cls), 1, 1)
+func _arm(fm: Dictionary, cls := &"rifle", kind := &"light") -> GunInstance:
+	var res := GunGenerator.generate(_lib, 11, WeaponClass.builtin(cls).with_kind(kind), 1, 1)
 	var gi := GunInstance.from_result(res)
 	for k: StringName in [&"power_shot_every", &"double_fire_every", &"double_fire_chance",
 			&"shield_buster", &"overkill_ricochet", &"explosive"]:
@@ -177,7 +179,12 @@ func _roll() -> void:
 func _semi() -> void:
 	_arm({"mode": GunFireMode.SEMI})
 	var held := _hold(1.0)
-	_ok("semi: one round a press, held a whole second", held == 1, "%d" % held)
+	_ok("semi, light: held a second, it keeps firing, slower than tapping", held >= 5 and held <= 8,
+			"%d in 1 s at 10/s" % held)
+	_rest(0.3)
+	_arm({"mode": GunFireMode.SEMI}, &"rifle", &"heavy")
+	held = _hold(1.0)
+	_ok("semi, heavy: one round a pull, held a whole second", held == 1, "%d" % held)
 	_rest(0.3)
 	var three := 0
 	for i in 3:
@@ -204,7 +211,12 @@ func _auto_burst() -> void:
 	_ok("burst: a press is three rounds", one == 3, "%d" % one)
 	_rest(0.5)
 	var held := _hold(3.0)
-	_ok("held, bursts run at the fire rate", held >= 27 and held <= 33, "%d in 3 s at 10/s" % held)
+	_ok("held, a light gun's bursts run at the fire rate", held >= 27 and held <= 33,
+			"%d in 3 s at 10/s" % held)
+	_arm({"mode": GunFireMode.BURST, "burst": 3, "burst_speed": 3.0}, &"rifle", &"heavy")
+	_rest(0.5)
+	held = _shots(3.0, 0.5)
+	_ok("held, a heavy gun's burst is one", held == 3, "%d" % held)
 
 
 func _pellets() -> void:
@@ -248,19 +260,26 @@ func _charge() -> void:
 	_look(t.chest())
 	_arm({"mode": GunFireMode.SEMI, "charge": GunFireMode.OVERCHARGE,
 			"effect": GunFireMode.SHIELD_BREAK, "charge_time": 0.8})
-	var tap := _hold(0.05)
+	var before := gun.ammo
+	gun.set_trigger(true)
+	for i in 5:
+		gun.step(0.01)
+	var on_press := before - gun.ammo
+	gun.set_trigger(false)
 	_rest(0.3)
-	_ok("a tap on a charging gun is one round", tap == 1 and t.health.total_current() < 1050.0
+	var tap := before - gun.ammo
+	_ok("a charging gun fires nothing on the press", on_press == 0, "%d" % on_press)
+	_ok("a tap fires one round on its release", tap == 1 and t.health.total_current() < 1050.0
 			and t.health.top_layer_type() == &"shield", "%d" % tap)
 	var early := _hold(0.6)
 	_rest(0.3)
-	_ok("let go before the charge is full, nothing more", early == 1, "%d" % early)
+	_ok("let go before the charge is full, nothing", early == 0, "%d" % early)
 	_fired.clear()
 	var full := _hold(1.3)
 	_rest(0.3)
-	_ok("held full: the overcharge takes the shield whole, for three shots",
-			full == 4 and t.health.top_layer_type() != &"shield",
-			"%d shots (1 on the press + 3), top layer %s" % [full, t.health.top_layer_type()])
+	_ok("held full: the overcharge alone takes the shield whole, for three shots",
+			full == 3 and t.health.top_layer_type() != &"shield",
+			"%d shots, top layer %s" % [full, t.health.top_layer_type()])
 	t.body.queue_free()
 
 	var armored := _target(Vector3(30.0, 0.0, 0.0), 1000.0, &"armor", 300.0)
@@ -283,6 +302,6 @@ func _charge() -> void:
 	_fired.clear()
 	var n := _shots(1.4, 1.0)
 	var knocked := _fired.filter(func(f: Dictionary) -> bool: return f.get("impact_mult", 1.0) > 1.0)
-	_ok("held full on a burst gun: a hyper burst of twice its count that knocks back",
-			n == 3 + 6 and knocked.size() == 6, "%d rounds, %d knocking" % [n, knocked.size()])
+	_ok("held full on a burst gun: a hyper burst of twice its count, alone, that knocks back",
+			n == 6 and knocked.size() == 6, "%d rounds, %d knocking" % [n, knocked.size()])
 	man.body.queue_free()
