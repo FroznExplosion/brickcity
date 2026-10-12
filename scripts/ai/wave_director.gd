@@ -712,8 +712,13 @@ func _on_soldier_died(so: Soldier) -> void:
 	# died read as a soldier still standing there.
 	feedback.burst(so.pawn.feet(), Color(0.75, 0.25, 0.2))
 	last_dead_id = so.pawn.body.get_instance_id()
-	# Its loot on the floor (LootRoller): what the player picks up and tries
-	# (COMBAT_DESIGN 7.4). The officer is a boss's worth.
+	# The gun in its hands always falls where it stood (COMBAT_DESIGN 7.4): the
+	# one the player saw it fire, card and all.
+	var held := held_gun_result(so)
+	if held != null:
+		city.drop_gun(held, so.pawn.feet() + so.pawn.body.global_basis.x * 0.35 + Vector3.UP * 1.1)
+	# And its loot besides (LootRoller), on chance: what the player picks up and
+	# tries. The officer is a boss's worth.
 	city.drop_loot(so.pawn.feet(), &"badass" if so == hq_officer else &"trash")
 	city.ai_services.pawns.erase(so.pawn)
 	city.soldiers.erase(so)
@@ -722,6 +727,15 @@ func _on_soldier_died(so: Soldier) -> void:
 	so.pawn.body.call_deferred("queue_free")
 	if _left_to_spawn <= 0 and alive.is_empty():
 		print("[arena] all down after reinforcement %d, %d kill(s)" % [wave, kills])
+
+
+## What a soldier holds, as a gun to lay on the floor: null for one with none (a
+## bomber, a brawler) or whose gun is gone.
+static func held_gun_result(so: Soldier) -> GunGenerator.Result:
+	if so == null or so.no_gun or so.pawn == null or so.pawn.gun == null:
+		return null
+	var g := so.pawn.gun.gun
+	return g.result if g != null and is_instance_valid(g) else null
 
 
 ## A soldier's round: what struck the player is shown, and from where.
