@@ -250,6 +250,7 @@ func _physics_process(_delta: float) -> void:
 		return
 	var now := _now()
 	_reap(now)
+	_road_tick(now)
 	if listener != null and not listener.views.is_empty():
 		heard_ticks += 1
 	_settle_check()
@@ -1660,53 +1661,139 @@ func _send_truck(kinds: Array[StringName], kind := &"truck") -> bool:
 ## (VehicleNav) has a road for a truck all the way to the fight. With no such
 ## start, the one nearest that has a way on foot: the truck drives the walking
 ## map from there, and lets its squad out where it sticks.
-func _truck_start(kind := &"truck") -> Vector3:
+##
+## Worked out AHEAD (_road_tick) for each kind of vehicle asked for: the spots
+## in order, a path from each on the vehicle map, through the nav queue a slice
+## a tick, until one has a road. Asked when the truck was, it was an 85 m flood
+## of the truck's map in one tick: 0.5-1.2 s measured.
+var _roads := {&"truck": {}}
+## Again this often, and whenever the focus moves.
+const ROAD_REFRESH := 10.0
+## A path's cap on the vehicle map, and spots looked at a tick.
+const ROAD_EXPANSIONS := 20000
+const ROAD_SPOTS_PER_TICK := 4
+## Not ready when asked: this many spots get a path in one go, then on foot.
+const ROAD_TRIES_NOW := 3
+const TRUCK_DISTANCES := [1.0, 0.85, 0.7, 0.55, 0.4]
+
+
+## Spot `i` of the TRUCK_DISTANCES x TRUCK_TURNS round the focus, or INF where a
+## truck cannot start: 0, +1, -1, +2, -2 ... steps round, away from the player
+## first, near the fight's own height (a truck does not climb terraces), on the
+## ground, with room to turn round in.
+func _truck_spot(i: int, c: Vector3, away: Vector3, goal: Vector3) -> Vector3:
+	var out := TRUCK_OUT * float(TRUCK_DISTANCES[i / TRUCK_TURNS])
+	var step := i % TRUCK_TURNS
+	var turn := float(ceili(step / 2.0)) * (TAU / float(TRUCK_TURNS)) * (1.0 if step % 2 == 1 else -1.0)
+	var q := c + away.rotated(Vector3.UP, turn) * out
+	q.y = city.ai_world.ground_at(q.x, q.z)
+	q = city.ai_nav.snap(q)
+	if not city.ai_nav.can_stand(q) or _in_a_building(q) or absf(q.y - goal.y) > TRUCK_LEVEL:
+		return Vector3.INF
+	if survey.what_is_under(q).on != SpawnSurvey.On.GROUND:
+		return Vector3.INF
+	if not TransportTruck.room_at(city.get_world_3d(), q):
+		return Vector3.INF
+	return q
+
+
+## The fight's centre, which way is away from the player, and the street to drive to.
+func _truck_frame() -> Array:
 	var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
 	var p := _player()
 	var away := (c - p.feet()) if p != null else Vector3.FORWARD
 	away.y = 0.0
 	away = away.normalized() if away.length() > 0.1 else Vector3.FORWARD
-	var goal: Vector3 = _street_of(focus)
-	# One look outward from the fight on the truck's map -- what it costs from
-	# every spot round it to get there -- in place of a path from each start.
+	return [c, away, _street_of(focus)]
+
+
+func _road_tick(now: float) -> void:
+	if focus < 0:
+		return
+	for kind in _roads:
+		var r: Dictionary = _roads[kind]
+		var vn: AINav = city.ai_services.vehicle_nav(kind)
+		var job: Dictionary = r.get("job", {})
+		if not job.is_empty() and int(job.focus) != focus:
+			if int(job.path) >= 0:
+				vn.release(int(job.path))
+			job = {}
+		if job.is_empty():
+			if int(r.get("focus", -1)) == focus and now < float(r.get("redo_at", 0.0)):
+				continue
+			var f := _truck_frame()
+			var drive_to := VehicleNav.reach_point(vn, f[2])
+			if drive_to == Vector3.INF:
+				r.focus = focus
+				r.start = Vector3.INF
+				r.redo_at = now + ROAD_REFRESH
+				continue
+			job = {"focus": focus, "c": f[0], "away": f[1], "goal": f[2], "to": drive_to,
+					"i": 0, "path": -1, "at": Vector3.INF}
+			r.job = job
+		if int(job.path) >= 0:
+			var st := vn.get_status(int(job.path))
+			if st == AINav.PENDING:
+				continue   # the nav queue serves it (AIServices.tick)
+			vn.release(int(job.path))
+			job.path = -1
+			if st == AINav.DONE:
+				r.start = (job.at as Vector3) + Vector3.UP * 0.3
+				r.focus = int(job.focus)
+				r.redo_at = now + ROAD_REFRESH
+				r.job = {}
+				continue
+			job.i = int(job.i) + 1
+		var n := TRUCK_DISTANCES.size() * TRUCK_TURNS
+		var looked := 0
+		while int(job.i) < n and looked < ROAD_SPOTS_PER_TICK:
+			looked += 1
+			var q := _truck_spot(int(job.i), job.c, job.away, job.goal)
+			var vq := vn.snap(q) if q != Vector3.INF else Vector3.INF
+			if vq == Vector3.INF or not vn.can_stand(vq):
+				job.i = int(job.i) + 1
+				continue
+			job.at = vq
+			job.path = vn.request_path(vq, job.to, 3.0, ROAD_EXPANSIONS)
+			break
+		if int(job.path) < 0 and int(job.i) >= n:
+			# No road from anywhere round: on foot, when it is asked.
+			r.start = Vector3.INF
+			r.focus = int(job.focus)
+			r.redo_at = now + ROAD_REFRESH
+			r.job = {}
+
+
+func _truck_start(kind := &"truck") -> Vector3:
+	if not _roads.has(kind):
+		_roads[kind] = {}
+	var r: Dictionary = _roads[kind]
 	var vn: AINav = city.ai_services.vehicle_nav(kind)
-	var field := -1
-	var drive_to := VehicleNav.reach_point(vn, goal)
-	if drive_to != Vector3.INF:
-		field = vn.request_field(drive_to, TRUCK_OUT + 15.0, 10.0)
-		var t_end := Time.get_ticks_msec() + 1500
-		while vn.get_field_status(field) == AINav.PENDING and Time.get_ticks_msec() < t_end:
-			vn.service(20000)
+	var ready: Vector3 = r.get("start", Vector3.INF)
+	if int(r.get("focus", -1)) == focus and ready != Vector3.INF 			and vn.can_stand(vn.snap(ready)) and TransportTruck.room_at(city.get_world_3d(), ready):
+		_truck_road = "vehicle map"
+		return ready
+	# Not worked out yet (or the spot is gone): a few spots now, then on foot.
+	var f := _truck_frame()
+	var drive_to := VehicleNav.reach_point(vn, f[2])
+	var no_road: bool = int(r.get("focus", -1)) == focus and r.has("start") and (r.get("job", {}) as Dictionary).is_empty()
+	var tries := 0 if drive_to == Vector3.INF or no_road else ROAD_TRIES_NOW
 	var by_foot := Vector3.INF
-	# Near the fight's own height: a truck does not climb terraces.
-	# All the way round, closely, and at five distances: with the player inside the
-	# focus "away" is any direction at all.
-	for out in [TRUCK_OUT, TRUCK_OUT * 0.85, TRUCK_OUT * 0.7, TRUCK_OUT * 0.55, TRUCK_OUT * 0.4]:
-		for step in TRUCK_TURNS:
-			# 0, +1, -1, +2, -2 ... steps round: away from the player first.
-			var turn := float(ceili(step / 2.0)) * (TAU / float(TRUCK_TURNS)) * (1.0 if step % 2 == 1 else -1.0)
-			var dir: Vector3 = away.rotated(Vector3.UP, turn)
-			var q := c + dir * float(out)
-			q.y = city.ai_world.ground_at(q.x, q.z)
-			q = city.ai_nav.snap(q)
-			if not city.ai_nav.can_stand(q) or _in_a_building(q) or absf(q.y - goal.y) > TRUCK_LEVEL:
-				continue
-			if survey.what_is_under(q).on != SpawnSurvey.On.GROUND:
-				continue
-			# Room to turn a truck round in.
-			if not TransportTruck.room_at(city.get_world_3d(), q):
-				continue
-			if field >= 0 and vn.get_field_status(field) == AINav.DONE:
-				var vq := vn.snap(q)
-				if vn.can_stand(vq) and vn.field_cost(field, vq) < INF:
-					vn.release_field(field)
-					_truck_road = "vehicle map"
-					return vq + Vector3.UP * 0.3
-			# A way on foot, at least -- not a beach below the tide line.
-			if by_foot == Vector3.INF and not city.ai_nav.find_path(q, goal, 20000).is_empty():
-				by_foot = q + Vector3.UP * 0.3
-	if field >= 0:
-		vn.release_field(field)
+	for i in TRUCK_DISTANCES.size() * TRUCK_TURNS:
+		if tries <= 0 and by_foot != Vector3.INF:
+			break
+		var q := _truck_spot(i, f[0], f[1], f[2])
+		if q == Vector3.INF:
+			continue
+		if tries > 0:
+			tries -= 1
+			var vq := vn.snap(q)
+			if vn.can_stand(vq) and not vn.find_path(vq, drive_to, ROAD_EXPANSIONS).is_empty():
+				_truck_road = "vehicle map"
+				return vq + Vector3.UP * 0.3
+		# A way on foot, at least -- not a beach below the tide line.
+		if by_foot == Vector3.INF and not city.ai_nav.find_path(q, f[2], 20000).is_empty():
+			by_foot = q + Vector3.UP * 0.3
 	_truck_road = "walking map: no road for a truck" if by_foot != Vector3.INF else ""
 	return by_foot
 
