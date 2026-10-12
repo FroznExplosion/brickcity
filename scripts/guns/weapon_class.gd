@@ -115,6 +115,26 @@ const SWAP_TIMES := {
 const SWAP_TIME_BASE := 0.48
 const SWAP_HEAVY := 1.25
 
+## What each gun did a second in an enemy's hands before the time-to-kill rebalance
+## (2026-10-12: base damage x fire rate). An enemy's gun is scaled back to it
+## (enemy_damage_scale), so the rebalance changed what the player's guns do to enemies,
+## not how hard enemies hit the player (100 health and a 50 shield). Raise one to make
+## that enemy weapon deadlier.
+const ENEMY_DPS := {
+	&"pistol": 60.0, &"smg": 58.5, &"rifle": 60.0, &"lmg": 65.0, &"dmr": 52.5,
+	&"sniper": 60.075, &"shotgun": 48.0, &"revolver": 64.0,
+}
+
+
+## The damage_mult an enemy's (or any AI's) gun of this class gets: its ENEMY_DPS over
+## what the class's base does now. 1 for a class not listed (ordnance).
+static func enemy_damage_scale(class_id: StringName) -> float:
+	if not ENEMY_DPS.has(class_id):
+		return 1.0
+	var wc := builtin(class_id)
+	return float(ENEMY_DPS[class_id]) / maxf(wc.base_damage * wc.base_fire_rate, 0.001)
+
+
 ## Ordnance ids, for pools that must draw from one category or the other.
 const ORDNANCE_IDS: Array[StringName] = [
 	&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_layer", &"drone", &"arc_caster",

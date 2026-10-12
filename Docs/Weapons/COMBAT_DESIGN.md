@@ -1032,7 +1032,13 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 §12's ten steps are built. What is left, by weight:
 
-- **The time-to-kill base (2026-10-12):** §3 and §4.4–4.5. The AI roster (`data/ai/roster.json`, AI area) still states its units' layers in old melees; it should be re-exported against the medium enemy (shield 0.6, armor 1.2, health 1), and `roster_probe` / `roster_field_probe` compare the two until it is.
+- **The time-to-kill base (2026-10-12):** §3 and §4.4–4.5. Arena and firefight enemies use it:
+  `Roster.layers` maps each roster unit's layers (still stated in old melees on the AI page) to
+  the EnemyProfiles profile of the same shape (`EnemyProfiles.for_roster`: a veteran is the
+  medium, an officer the shielded medium, a brute heavy). Enemies' guns hit the player as hard as
+  before the rebalance (`WeaponClass.ENEMY_DPS`, `enemy_damage_scale`, applied in `Soldier.spawn`
+  and to tank and truck guns); raise a class there to make that enemy weapon deadlier. The AI
+  page itself could restate its layers in the new units one day.
 - More of the skill kit: abilities past the Overshield and a second slot, the marksman and
   element branches (§4.2).
 - Special weapons past the arc caster; a heat bar for the plasma charge.

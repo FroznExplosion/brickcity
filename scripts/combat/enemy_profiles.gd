@@ -37,6 +37,34 @@ const COLOURS := {
 }
 
 
+## The profile an AI roster unit's layers stand for (data/ai/roster.json states them in the
+## old melees, from its class, grade and mods). By shape, so the AI page's choices keep
+## their meaning and every enemy takes the time-to-kill units: health alone is very light
+## (half) or light; one light defence is light armored or shielded; a big defence is the
+## medium (armor, with the medium's shield over it) or the shielded medium; shield, armor
+## and more health is heavy.
+static func for_roster(rows: Array) -> StringName:
+	var shield := 0.0
+	var armor := 0.0
+	var flesh := 0.0
+	for row in rows:
+		match StringName(str(row[0])):
+			SHIELD: shield += float(row[1])
+			ARMOR: armor += float(row[1])
+			_: flesh += float(row[1])
+	if shield > 0.0 and armor > 0.0:
+		return &"heavy" if flesh > 1.0 or shield + armor > 4.0 else &"medium"
+	if armor > 1.0:
+		return &"medium"
+	if armor > 0.0:
+		return &"light_armored"
+	if shield > 1.0:
+		return &"medium_shielded"
+	if shield > 0.0:
+		return &"very_light_shielded" if flesh < 1.0 else &"light_shielded"
+	return &"very_light" if flesh < 1.0 else &"light"
+
+
 static func has(id: StringName) -> bool:
 	return PROFILES.has(id)
 
