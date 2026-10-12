@@ -643,6 +643,7 @@ func _physics_process(_delta: float) -> void:
 		return
 	var now := _now()
 	_reap(now)
+	_road_tick(now)
 	_keep_in_ring()
 	_player_tick(now)
 	_mech_tick(_delta, now)

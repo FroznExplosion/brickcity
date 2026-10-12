@@ -61,6 +61,14 @@ constexpr size_t SIDES_CAP = 400000;
 // every side's edges worked out (a Dijkstra each, up to a few ms), and a flood
 // of 96 sides done whole was a 120 ms search step: the frame spike of a squad
 // landing. Resumable, it pauses at the budget like the rest of the search.
+struct AINav::LocalRun {
+    std::vector<Open> open;
+    std::unordered_map<int64_t, float> g;
+    int n_done = 0;
+    size_t left = 0;
+    bool begun = false;
+};
+
 struct AINav::EnclosedFlood {
     std::unordered_set<int> target;
     std::unordered_set<int> seen;
@@ -86,6 +94,11 @@ struct AINav::HpaState {
     // Stage 0 in parts: the ends' edges found, then the two enclosed floods
     // (goal side, then start side), each able to pause.
     bool ends_done = false;
+    int ends_step = 0;
+    std::vector<int> ss;
+    std::vector<int> gs;
+    std::vector<int64_t> targets;
+    LocalRun run;
     int flood_pass = 0;
     EnclosedFlood flood;
     std::vector<int> from_start;
@@ -414,27 +427,51 @@ void AINav::_cluster_sides(int cx, int cz, std::vector<int> &out) {
 
 void AINav::_local_costs(const Node &from, int x0, int z0, int x1, int z1, int cap,
         std::unordered_map<int64_t, float> &g, const std::vector<int64_t> *targets) {
-    // With targets: done once every one of them is settled.
-    size_t left = targets != nullptr ? targets->size() : 0;
+    LocalRun run;
+    _local_costs_run(run, from, x0, z0, x1, z1, cap, targets, UINT64_MAX);
+    g.swap(run.g);
+}
+
+void AINav::_local_costs_to(const Node &to, int x0, int z0, int x1, int z1, int cap,
+        std::unordered_map<int64_t, float> &g) {
+    LocalRun run;
+    _local_costs_to_run(run, to, x0, z0, x1, z1, cap, UINT64_MAX);
+    g.swap(run.g);
+}
+
+bool AINav::_local_costs_run(LocalRun &run, const Node &from, int x0, int z0, int x1, int z1, int cap,
+        const std::vector<int64_t> *targets, uint64_t until_usec) {
     auto cmp = [](const Open &a, const Open &b) { return a.f > b.f; };
-    std::vector<Open> open;
-    g.clear();
-    const int64_t k0 = nkey(from.x, from.z, from.y);
-    g[k0] = 0.0f;
-    open.push_back(Open{ 0.0f, k0 });
-    int n_done = 0;
-    while (!open.empty() && n_done < cap) {
-        std::pop_heap(open.begin(), open.end(), cmp);
-        const Open cur = open.back();
-        open.pop_back();
-        const float gn = g[cur.key];
+    if (!run.begun) {
+        run.begun = true;
+        // With targets: done once every one of them is settled.
+        run.left = targets != nullptr ? targets->size() : 0;
+        run.open.clear();
+        run.g.clear();
+        run.n_done = 0;
+        const int64_t k0 = nkey(from.x, from.z, from.y);
+        run.g[k0] = 0.0f;
+        run.open.push_back(Open{ 0.0f, k0 });
+    }
+    bool moved = false;
+    while (!run.open.empty() && run.n_done < cap) {
+        // At least one node a call, so a slice that is already spent still
+        // gets somewhere.
+        if (moved && hpa_usec() >= until_usec) {
+            return false;
+        }
+        moved = true;
+        std::pop_heap(run.open.begin(), run.open.end(), cmp);
+        const Open cur = run.open.back();
+        run.open.pop_back();
+        const float gn = run.g[cur.key];
         if (cur.f > gn + 1e-3f) {
             continue;
         }
-        n_done++;
+        run.n_done++;
         stat_hier_nodes++;
         if (targets != nullptr && std::find(targets->begin(), targets->end(), cur.key) != targets->end()) {
-            if (--left == 0) {
+            if (--run.left == 0) {
                 break;
             }
         }
@@ -451,35 +488,44 @@ void AINav::_local_costs(const Node &from, int x0, int z0, int x1, int z1, int c
             }
             const int64_t nk = nkey(nb.x, nb.z, nb.y);
             const float ng = gn + c;
-            auto it = g.find(nk);
-            if (it != g.end() && it->second <= ng) {
+            auto it = run.g.find(nk);
+            if (it != run.g.end() && it->second <= ng) {
                 continue;
             }
-            g[nk] = ng;
-            open.push_back(Open{ ng, nk });
-            std::push_heap(open.begin(), open.end(), cmp);
+            run.g[nk] = ng;
+            run.open.push_back(Open{ ng, nk });
+            std::push_heap(run.open.begin(), run.open.end(), cmp);
         }
     }
+    return true;
 }
 
-void AINav::_local_costs_to(const Node &to, int x0, int z0, int x1, int z1, int cap,
-        std::unordered_map<int64_t, float> &g) {
+bool AINav::_local_costs_to_run(LocalRun &run, const Node &to, int x0, int z0, int x1, int z1, int cap,
+        uint64_t until_usec) {
     auto cmp = [](const Open &a, const Open &b) { return a.f > b.f; };
-    std::vector<Open> open;
-    g.clear();
-    const int64_t k0 = nkey(to.x, to.z, to.y);
-    g[k0] = 0.0f;
-    open.push_back(Open{ 0.0f, k0 });
-    int n_done = 0;
-    while (!open.empty() && n_done < cap) {
-        std::pop_heap(open.begin(), open.end(), cmp);
-        const Open cur = open.back();
-        open.pop_back();
-        const float cn = g[cur.key];
+    if (!run.begun) {
+        run.begun = true;
+        run.open.clear();
+        run.g.clear();
+        run.n_done = 0;
+        const int64_t k0 = nkey(to.x, to.z, to.y);
+        run.g[k0] = 0.0f;
+        run.open.push_back(Open{ 0.0f, k0 });
+    }
+    bool moved = false;
+    while (!run.open.empty() && run.n_done < cap) {
+        if (moved && hpa_usec() >= until_usec) {
+            return false;
+        }
+        moved = true;
+        std::pop_heap(run.open.begin(), run.open.end(), cmp);
+        const Open cur = run.open.back();
+        run.open.pop_back();
+        const float cn = run.g[cur.key];
         if (cur.f > cn + 1e-3f) {
             continue;
         }
-        n_done++;
+        run.n_done++;
         stat_hier_nodes++;
         const Node n = unkey(cur.key);
         for (int d = 0; d < 8; ++d) {
@@ -504,16 +550,17 @@ void AINav::_local_costs_to(const Node &to, int x0, int z0, int x1, int z1, int 
                 }
                 const int64_t mk = nkey(px, pz, f.y);
                 const float nc = cn + c;
-                auto it = g.find(mk);
-                if (it != g.end() && it->second <= nc) {
+                auto it = run.g.find(mk);
+                if (it != run.g.end() && it->second <= nc) {
                     continue;
                 }
-                g[mk] = nc;
-                open.push_back(Open{ nc, mk });
-                std::push_heap(open.begin(), open.end(), cmp);
+                run.g[mk] = nc;
+                run.open.push_back(Open{ nc, mk });
+                std::push_heap(run.open.begin(), run.open.end(), cmp);
             }
         }
     }
+    return true;
 }
 
 float AINav::_straight(const Node &a, const Node &b, int x0, int z0, int x1, int z1) {
@@ -644,38 +691,77 @@ bool AINav::_advance_hier(Search &s, uint64_t until_usec) {
     const int C = cluster;
     auto finish_time = [&]() { stat_hier_usec += hpa_usec() - t0; };
     if (h.stage == 0 && !h.ends_done) {
+        // Four steps, each able to pause (a mech's map ran them whole in up to
+        // 11 ms): the start cluster's sides, the costs out to them, the goal
+        // cluster's sides, the costs in from them.
         WorstOf timed(stat_worst_hier_begin_usec);
-        if (sides.size() > SIDES_CAP) {
-            set_hierarchy(cluster);
-        }
         const int sx = _cluster_of(s.start.x), sz = _cluster_of(s.start.z);
         const int gx = _cluster_of(s.goal.x), gz = _cluster_of(s.goal.z);
-        std::vector<int> ss;
-        _cluster_sides(sx, sz, ss);
-        std::unordered_map<int64_t, float> g;
-        std::vector<int64_t> targets;
-        for (int id : ss) {
-            const Node &n = sides[(size_t)id].node;
-            targets.push_back(nkey(n.x, n.z, n.y));
-        }
-        _local_costs(s.start, sx * C, sz * C, sx * C + C - 1, sz * C + C - 1, C * C * 6, g, &targets);
-        for (int id : ss) {
-            const Node &n = sides[(size_t)id].node;
-            auto it = g.find(nkey(n.x, n.z, n.y));
-            if (it != g.end()) {
-                h.start_edges.push_back({ id, it->second });
+        auto valid = [this](int id) { return id >= 0 && (size_t)id < sides.size(); };
+        if (h.ends_step == 0) {
+            if (sides.size() > SIDES_CAP) {
+                set_hierarchy(cluster);
+            }
+            _cluster_sides(sx, sz, h.ss);
+            h.targets.clear();
+            for (int id : h.ss) {
+                const Node &n = sides[(size_t)id].node;
+                h.targets.push_back(nkey(n.x, n.z, n.y));
+            }
+            h.run = LocalRun();
+            h.ends_step = 1;
+            if (hpa_usec() >= until_usec) {
+                finish_time();
+                return false;
             }
         }
-        std::vector<int> gs;
-        _cluster_sides(gx, gz, gs);
-        _local_costs_to(s.goal, gx * C, gz * C, gx * C + C - 1, gz * C + C - 1, C * C * 6, g);
-        for (int id : gs) {
+        if (h.ends_step == 1) {
+            if (!_local_costs_run(h.run, s.start, sx * C, sz * C, sx * C + C - 1, sz * C + C - 1, C * C * 6,
+                        &h.targets, until_usec)) {
+                finish_time();
+                return false;
+            }
+            for (int id : h.ss) {
+                if (!valid(id)) {
+                    continue;
+                }
+                const Node &n = sides[(size_t)id].node;
+                auto it = h.run.g.find(nkey(n.x, n.z, n.y));
+                if (it != h.run.g.end()) {
+                    h.start_edges.push_back({ id, it->second });
+                }
+            }
+            h.ends_step = 2;
+            if (hpa_usec() >= until_usec) {
+                finish_time();
+                return false;
+            }
+        }
+        if (h.ends_step == 2) {
+            _cluster_sides(gx, gz, h.gs);
+            h.run = LocalRun();
+            h.ends_step = 3;
+            if (hpa_usec() >= until_usec) {
+                finish_time();
+                return false;
+            }
+        }
+        if (!_local_costs_to_run(h.run, s.goal, gx * C, gz * C, gx * C + C - 1, gz * C + C - 1, C * C * 6,
+                    until_usec)) {
+            finish_time();
+            return false;
+        }
+        for (int id : h.gs) {
+            if (!valid(id)) {
+                continue;
+            }
             const Node &n = sides[(size_t)id].node;
-            auto it = g.find(nkey(n.x, n.z, n.y));
-            if (it != g.end()) {
+            auto it = h.run.g.find(nkey(n.x, n.z, n.y));
+            if (it != h.run.g.end()) {
                 h.to_goal[id] = it->second;
             }
         }
+        h.run = LocalRun();
         // No way at all, found out before the graph is searched: no side of
         // its cluster the start reaches, or none that reaches the goal; or the
         // goal's region (or the start's) closed, a small flood either way

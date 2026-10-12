@@ -652,7 +652,10 @@ int AINav::service(int budget_usec) {
             break;
         }
         const uint64_t slice_end = std::min(until, now_usec() + SLICE_USEC);
-        if (_advance(*best, slice_end)) {
+        const uint64_t t_step = now_usec();
+        const bool done_search = _advance(*best, slice_end);
+        stat_worst_search_step_usec = std::max(stat_worst_search_step_usec, now_usec() - t_step);
+        if (done_search) {
             finished++;
         }
     }
@@ -670,13 +673,18 @@ int AINav::service(int budget_usec) {
         if (best == nullptr) {
             break;
         }
-        if (_advance_field(*best, until)) {
+        const uint64_t t_field = now_usec();
+        const bool done_field = _advance_field(*best, until);
+        stat_worst_field_step_usec = std::max(stat_worst_field_step_usec, now_usec() - t_field);
+        if (done_field) {
             finished++;
         }
     }
     // And what is left of it: the hierarchy round where the fight is (warm).
     if (!warm_queue.empty() && now_usec() < until) {
+        const uint64_t t_warm = now_usec();
         _warm_step(until);
+        stat_worst_warm_step_usec = std::max(stat_worst_warm_step_usec, now_usec() - t_warm);
     }
     stat_worst_service_usec = std::max(stat_worst_service_usec, now_usec() - t_service);
     return finished;
@@ -1154,6 +1162,9 @@ Dictionary AINav::get_stats() const {
     d["worst_snap_us"] = (int64_t)stat_worst_snap_usec;
     d["worst_column_us"] = (int64_t)stat_worst_column_usec;
     d["worst_service_us"] = (int64_t)stat_worst_service_usec;
+    d["worst_search_step_us"] = (int64_t)stat_worst_search_step_usec;
+    d["worst_field_step_us"] = (int64_t)stat_worst_field_step_usec;
+    d["worst_warm_step_us"] = (int64_t)stat_worst_warm_step_usec;
     d["worst_hier_begin_us"] = (int64_t)stat_worst_hier_begin_usec;
     d["worst_enclosed_us"] = (int64_t)stat_worst_enclosed_usec;
     d["worst_side_edges_us"] = (int64_t)stat_worst_side_edges_usec;
@@ -1183,6 +1194,9 @@ void AINav::reset_stats() {
     stat_worst_snap_usec = 0;
     stat_worst_column_usec = 0;
     stat_worst_service_usec = 0;
+    stat_worst_search_step_usec = 0;
+    stat_worst_field_step_usec = 0;
+    stat_worst_warm_step_usec = 0;
     stat_worst_hier_begin_usec = 0;
     stat_worst_enclosed_usec = 0;
     stat_worst_side_edges_usec = 0;

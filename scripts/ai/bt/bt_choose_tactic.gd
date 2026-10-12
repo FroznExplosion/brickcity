@@ -41,6 +41,11 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	if not _should_decide(so, now):
 		return SUCCESS
+	# Over this tick's budget for decisions: the tactic it has stands until its
+	# next think. One with none yet does what it does with no contact.
+	if not s.may_decide_tactic():
+		return SUCCESS if so.tactic >= 0 else FAILURE
+	var t_decide := Time.get_ticks_usec()
 	var threat := c.pos + Vector3.UP * CoverSearch.STAND_EYE
 	# The cover search is the expensive part of the observation, and the cover
 	# tactics use its answer: kept for them (BTFindCover reads it).
@@ -77,6 +82,7 @@ func _tick(_delta: float) -> Status:
 	if so.tactic != was and LINES.has(so.tactic) and s.rng.randf() < 0.7:
 		var lines: Array = LINES[so.tactic]
 		s.say(so.pawn, CombatPolicy.TACTIC_NAMES[so.tactic], lines[s.rng.randi() % lines.size()])
+	s.spent_deciding(Time.get_ticks_usec() - t_decide)
 	return SUCCESS
 
 

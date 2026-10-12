@@ -117,14 +117,15 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 	so.screen_of = TacticsSense.heavy_near(so) if move in ["screen_heavy", "heavy_leads", "heavy_way"] else null
 	so.screen_move = ("heavy_leads" if move == "heavy_way" else move) if so.screen_of != null else ""
 	if move == "heavy_way" and so.screen_of != null:
-		var wi := TacticsSense.ways_in(so, c.pos)
-		TacticsSense.ask_way(so.screen_of, wi.wall if wi.wall != Vector3.INF else c.pos, so.services.now())
+		var wi := TacticsSense.ways_known(so, c.pos)
+		var wall: Vector3 = wi.get("wall", Vector3.INF)
+		TacticsSense.ask_way(so.screen_of, wall if wall != Vector3.INF else c.pos, so.services.now())
 	# Making its own way in, or watching the way out.
 	so.breach_way = move == "breach"
 	so.watch_point = Vector3.INF
 	if move in ["guard_exits", "wait"]:
-		var w := TacticsSense.ways_in(so, c.pos)
-		so.watch_point = w.door if w.door != Vector3.INF else c.pos
+		var door: Vector3 = TacticsSense.ways_known(so, c.pos).get("door", Vector3.INF)
+		so.watch_point = door if door != Vector3.INF else c.pos
 	var tactic := _tactic(move, cover) if move != "" else _fallback.decide(o, rng)
 	_count(done, move)
 	if SAID.has(move):

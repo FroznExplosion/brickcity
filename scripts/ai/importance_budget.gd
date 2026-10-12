@@ -94,6 +94,12 @@ func tick(now: float) -> void:
 	var scored: Array = []
 	for a in live:
 		var imp := importance(a, now)
+		if a is Soldier:
+			# Its place in the AI queue (its thinks, senses and path requests):
+			# the soldier the player is looking at, or nearest, is served first
+			# when a tick cannot serve everyone. 4..7, round the queue's other
+			# jobs (nav 5, squads 6). Was a flat 5 for every soldier.
+			(a as Soldier).importance = 4.0 + 3.0 * clampf(imp / 150.0, 0.0, 1.0)
 		var smart_now: bool = a.tier_hsm.tier() == AgentTier.SMART
 		scored.append([imp * (HYSTERESIS if smart_now else 1.0), imp, a])
 	scored.sort_custom(func(x, y): return x[0] > y[0])

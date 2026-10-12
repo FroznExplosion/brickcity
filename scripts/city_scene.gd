@@ -5623,6 +5623,9 @@ func _report_ai_profile() -> void:
 	print("[ai-prof] %d AI tick(s) over %.0f ms; the worst:" % [_ai_spikes.size(), AI_SPIKE_MS])
 	for k in mini(12, spikes.size()):
 		print("[ai-prof]   %.1f ms at tick %d: %s" % [spikes[k][0], spikes[k][1], spikes[k][2]])
+	if ai_services != null:
+		print("[ai-prof] tactic decisions %d, worst %d us, %d put off to a later think" % [
+				ai_services.decisions_made, ai_services.decide_worst_usec, ai_services.decisions_deferred])
 	var navs: Array = ai_services.all_navs() if ai_services != null else []
 	if mech_nav != null and not navs.has(mech_nav):
 		navs.append(mech_nav)
@@ -5634,6 +5637,9 @@ func _report_ai_profile() -> void:
 				(n as AINav).get_span(), int(st.worst_service_us), int(st.worst_hier_begin_us), int(st.get("worst_enclosed_us", 0)),
 				int(st.worst_side_edges_us), int(st.worst_cluster_sides_us),
 				int(st.worst_column_us), int(st.worst_snap_us), int(st.worst_expand_us)])
+		print("[ai-prof]   of which one step: search %d us, flow field %d, warming %d" % [
+				int(st.get("worst_search_step_us", 0)), int(st.get("worst_field_step_us", 0)),
+				int(st.get("worst_warm_step_us", 0))])
 
 
 func _update_ai_label() -> void:
