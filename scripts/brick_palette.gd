@@ -570,6 +570,19 @@ static func names() -> Array:
 ## A flip leaves every extent unchanged (that is exactly why it is grid-legal),
 ## so only the axis suffix changes the size.
 static func size_of(name: String) -> Vector3i:
+	var s: Variant = _size_cache.get(name)
+	if s == null:
+		s = _parse_size(name)
+		_size_cache[name] = s
+	return s
+
+
+## `size_of`'s answers by name. The names are fixed, and the parse is string work
+## asked once per brick whenever a build is measured.
+static var _size_cache := {}
+
+
+static func _parse_size(name: String) -> Vector3i:
 	var n := name
 	if n.ends_with("_i"):
 		n = n.substr(0, n.length() - 2)

@@ -202,6 +202,18 @@ func _check_recipe_basics() -> void:
 	_ok("bounds start at the min corner", bounds[0] == Vector3i(0, 0, 0), "%v" % bounds[0])
 	_ok("bounds cover the far corner of the far part", bounds[1] == Vector3i(8, 3, 2),
 			"%v" % bounds[1])
+	# Bounds and chunk dims are cached (every bullet hit asks them); a block or
+	# fixture coming or going must still move them.
+	var dims_before := r.chunk_dims()
+	r.add("brick_2x4_x", Vector3i(8, 0, 0), 1)
+	_ok("an added block grows the cached bounds", r.bounds()[1] == Vector3i(12, 3, 2)
+			and r.chunk_dims() == Vector3i(12, 3, 2), "%v %v" % [r.bounds()[1], r.chunk_dims()])
+	r.pop()
+	_ok("and popping it shrinks them back", r.chunk_dims() == dims_before,
+			"%v" % r.chunk_dims())
+	bounds[1] = Vector3i.ZERO
+	_ok("a caller editing bounds' answer does not edit the cache",
+			r.bounds()[1] == Vector3i(8, 3, 2))
 
 
 func _check_order_is_identity() -> void:
