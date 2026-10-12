@@ -17,10 +17,21 @@
 #   gpu_mb      memory the GPU holds in shared (system) RAM, MB
 #   free_mb     free system RAM, MB
 #   godot       each Godot process: what it runs, and its RAM in MB
+#   limit       why the chip was held back, if it was: "hot" (temp_c at or over
+#               HOT_C -- the chip throttles ITSELF there and passive_pct does not
+#               show it; a long flat line near 100 C is the chip at its limit),
+#               "passive" (passive_pct under 100), "reasons" (throttle not 0);
+#               several joined by "+"; empty = not held back. Files begun before
+#               this column was added have no header for it.
+#
+# A summary of a test run (peak, time at the limit): python tools/heat_sum.py
 #
 # Run:  powershell -NoProfile -WindowStyle Hidden -File tools\heat_log.ps1
 # Only one copy runs at a time; a second start exits at once.
 param([int]$Every = 5)
+
+# The chip's own limit is 100 C; at this or over it is holding its clocks down.
+$HOT_C = 99.0
 
 $mutex = New-Object System.Threading.Mutex($false, 'Local\brickcity_heat_log')
 if (-not $mutex.WaitOne(0)) { exit }
@@ -56,7 +67,7 @@ while ($true) {
     $now = Get-Date
     $file = Join-Path $dir ('heat_{0:yyyy-MM-dd}.csv' -f $now)
     if (-not (Test-Path $file)) {
-        Add-Content -Path $file -Value 'time,temp_c,passive_pct,throttle,cpu_perf,gpu_3d,gpu_mb,free_mb,godot'
+        Add-Content -Path $file -Value 'time,temp_c,passive_pct,throttle,cpu_perf,gpu_3d,gpu_mb,free_mb,godot,limit'
     }
     $temp = ''; $passive = ''; $throttle = ''; $cpu = ''; $gpu = 0.0; $gpuMb = 0.0; $free = ''
     try {
@@ -77,8 +88,12 @@ while ($true) {
             $godot += '{0} {1}MB' -f (Describe-Godot $g.CommandLine), [int]($g.WorkingSetSize / 1MB)
         }
     } catch {}
-    $line = '{0:HH:mm:ss},{1},{2},{3},{4},{5},{6},{7},"{8}"' -f $now, $temp, $passive, $throttle, $cpu,
-        [int][Math]::Min(100, $gpu), [int]$gpuMb, $free, (($godot -join '; ') -replace '"', "'")
+    $limit = @()
+    if ($temp -ne '' -and [double]$temp -ge $HOT_C) { $limit += 'hot' }
+    if ($passive -ne '' -and $passive -lt 100) { $limit += 'passive' }
+    if ($throttle -ne '' -and $throttle -ne 0) { $limit += 'reasons' }
+    $line = '{0:HH:mm:ss},{1},{2},{3},{4},{5},{6},{7},"{8}",{9}' -f $now, $temp, $passive, $throttle, $cpu,
+        [int][Math]::Min(100, $gpu), [int]$gpuMb, $free, (($godot -join '; ') -replace '"', "'"), ($limit -join '+')
     try { Add-Content -Path $file -Value $line } catch {}
     Start-Sleep -Seconds $Every
 }
