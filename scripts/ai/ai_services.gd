@@ -343,6 +343,15 @@ func add_pawn(p: Pawn) -> void:
 func arm(p: Pawn) -> void:
 	if p.gun == null:
 		return
+	# A gun outlives its pawn (the player's, across respawns and getting in and out):
+	# drop the listeners bound to pawns gone since, or each shot calls them with a freed
+	# shooter.
+	for c in p.gun.fired.get_connections():
+		var old: Callable = c.callable
+		if old.get_object() == self and old.get_method() == &"_on_fired":
+			var args := old.get_bound_arguments()
+			if args.is_empty() or not is_instance_valid(args[0]):
+				p.gun.fired.disconnect(old)
 	var cb := _on_fired.bind(p)
 	if not p.gun.fired.is_connected(cb):
 		p.gun.fired.connect(cb)
@@ -375,8 +384,12 @@ func is_suppressed(p: Pawn) -> bool:
 	return p != null and now() - float(_suppressed.get(p.get_instance_id(), -INF)) <= SUPPRESS_HOLD
 
 
-func _on_fired(info: Dictionary, shooter: Pawn) -> void:
-	if not is_instance_valid(shooter) or shooter.gun == null or shooter.gun.aim == null:
+func _on_fired(info: Dictionary, shooter_ref: Variant) -> void:
+	# Untyped: a freed pawn cannot be passed as a Pawn at all.
+	if not is_instance_valid(shooter_ref) or not (shooter_ref is Pawn):
+		return
+	var shooter := shooter_ref as Pawn
+	if shooter.gun == null or shooter.gun.aim == null:
 		return
 	var t := now()
 	var aim := shooter.gun.aim

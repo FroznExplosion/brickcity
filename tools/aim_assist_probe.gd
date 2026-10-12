@@ -292,6 +292,20 @@ func _run() -> void:
 	s.pawns.append(foe)
 	await _frames(3)
 
+	# --- the player's gun outlives its pawn: re-armed for a new pawn, the old pawn's
+	# listener goes (AIServices.arm), so a shot never reaches a freed shooter.
+	var old := Pawn.spawn(root, Vector3(5.0, 0.0, 0.0), 0, true, 100.0)
+	old.gun = gun
+	s.arm(old)
+	old.body.free()
+	me.gun = gun
+	s.arm(me)
+	var n := 0
+	for c in gun.fired.get_connections():
+		if (c.callable as Callable).get_method() == &"_on_fired":
+			n += 1
+	_ok("re-armed for a new pawn, the freed pawn's listener is gone", n == 1, "%d listener(s)" % n)
+
 	# --- off
 	AimAssist.mouse_level = 0
 	_look(_chest(), 0.0)
