@@ -98,6 +98,8 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 	var out: Array = []
 	var from := at + Vector3.UP * 0.3
 	var done := {}
+	# Guns lying near it are thrown (WorldGunPickup).
+	WorldGunPickup.blast(at, radius * 1.5)
 	for p in services.pawns:
 		if not is_instance_valid(p) or p.health == null or p.health.is_dead() or done.has(p) or p == skip:
 			continue

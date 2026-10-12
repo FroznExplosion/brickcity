@@ -560,6 +560,45 @@ range). Nothing there needs to change when the kinds land -- only the property m
 - Not done: semi-auto versus full-auto (every gun fires while the trigger is held), and real
   art per kind.
 
+### 7.9 How a gun fires: trigger, pellets, charge (built 2026-10-11)
+
+The user's call: semi, full-auto and burst guns with different rates, burst sizes and gaps;
+shotgun blasts with different spreads and falloff; and "dual fire" -- a semi or burst gun
+that can be held to charge a different shot. `GunFireMode` rolls it off the seed (its own
+stream) for every gun of a kind (§7.8); a gun with no kind -- an enemy's -- fires as before.
+
+- **Trigger.** Semi: one round a press, at most the fire rate, a press up to 0.15 s early is
+  kept. Auto: rounds while held. Burst: 2-5 rounds (3 most often) at 2-3.2x the fire rate,
+  then a gap; held, burst follows burst, and over a burst and its gap the gun fires at its
+  fire rate, so a burst gun is shaped differently, not stronger. Per class and kind (magnum,
+  revolver, DMR, sniper, heavy shotgun: semi; LMG: auto; the rest mixed):
+  `GunFireMode.MODES`.
+- **Pellets** (shotguns of a kind). Light (the Auto Shotgun): 6-8 pellets, 8-12 deg, full
+  damage to 3-5 m, down to 15% by 10-14 m. Heavy: 8-10 pellets, 4-7 deg, full to 6-9 m, 25%
+  by 16-22 m. The pellets share the shot's damage. A blast reports once for each thing it
+  hit, damage summed (`pellets_hit` of `pellets`), and chips brick once. A stumble is
+  scaled by the share of pellets that struck: the light shotgun stumbles a soldier at arm's
+  length and only makes him flinch from a few steps.
+- **Charge** (semi and burst guns; 10% of greens up to 70% of mythics, never whites). A tap
+  fires as ever; held past 0.3 s the gun stops and charges (0.7-1.1 s), and let go full it
+  fires an *overcharge* (one shot at 3x, for three shots), a *hyper burst* (burst guns:
+  twice the burst at 1.6x its speed) or a *long burst* (semi guns: ten rounds). Each carries
+  one effect: *shield break* (a shield up is taken whole), *armor break* (armor on top
+  taken whole, `DamagePacket.strip_armor`) or *knockback* (a stumble 3x as hard). In the
+  hands the gun draws back and trembles while it charges, and bucks when it goes.
+- **The card** (`GunCard`, drawn by the arsenal's HUD): the floor gun looked at, or the gun
+  chosen in the backpack or at the bench -- rarity, kind, tier, score against the gun in
+  hand, damage, fire rate, trigger, pellets and range, DPS, magazine, reload, accuracy,
+  crit, modifiers, alt-fire, charge.
+- **A gun on the floor is a body** (`WorldGunPickup`): dropped, it is tossed and falls,
+  lies on its side and sleeps; every explosion (`WorldGunPickup.blast`: grenades, blasts in
+  the bricks, explosive rounds) wakes and throws it; a sleeping gun checks under itself
+  every half second and falls when the floor has gone. It is on the rubble layer: walkers
+  do not collide with it.
+
+Tests: `tools/fire_mode_probe.gd`, `tools/pickup_physics_probe.gd`, and the `--arms` pass
+(the card, a dropped gun at rest, the shotguns' stumbles).
+
 ## 8. Bricks
 
 Guns chip bricks (hits to break one brick per class, `StructuralDamage`); **explosive rounds chip

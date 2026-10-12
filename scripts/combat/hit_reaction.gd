@@ -71,8 +71,13 @@ static func hit(gun: GunInstance, from: Vector3, info: Dictionary) -> float:
 		return 0.0
 	var arch: Array = ARCHETYPE.get(gun.get(&"archetype") if &"archetype" in gun else &"", [1.0, 1.0])
 	var point: Vector3 = info.get("point", pawn.chest())
-	# Past its range a round still makes him flinch: every hit that lands reads.
+	# Past its range a round still makes him flinch: every hit that lands reads. A
+	# shotgun blast pushes by the share of its pellets that struck; a charged shot's
+	# knockback, KNOCK_MULT as hard (GunFireMode).
 	var k := impact(row, arch, from.distance_to(point))
+	if info.has("pellets"):
+		k *= float(info.pellets_hit) / maxf(float(info.pellets), 1.0)
+	k *= float(info.get("impact_mult", 1.0))
 	var dir := point - from
 	dir.y = 0.0
 	dir = dir.normalized() if dir.length() > 0.01 else Vector3.ZERO

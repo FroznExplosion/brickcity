@@ -96,6 +96,14 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 		_stat_row("Charges", str(int(res.stats.get(&"mag_size", 0.0))))
 	else:
 		_stat_row("Fire rate", "%.2f/s" % float(res.stats.get(&"fire_rate", 0.0)))
+		if not res.fire.is_empty():
+			_stat_row("Trigger", {GunFireMode.SEMI: "Semi-auto", GunFireMode.AUTO: "Full-auto",
+					GunFireMode.BURST: "Burst ×%d" % int(res.fire.get("burst", 3))}.get(
+					StringName(res.fire.mode), "—"))
+		if res.fire.has("pellets"):
+			_stat_row("Pellets", "%d  ·  %.0f°" % [int(res.fire.pellets), float(res.fire.pellet_spread)])
+			_stat_row("Range", "full to %.0f m, %d%% by %.0f m" % [float(res.fire.near),
+					roundi(float(res.fire.falloff) * 100.0), float(res.fire.far)])
 		_stat_row("DPS", str(GunQuality.display(dps)))
 		# A heavy's magazine in shots, and the rounds it takes (two a shot).
 		var rounds := int(res.stats.get(&"mag_size", 0.0))
@@ -118,6 +126,11 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 		lines.append("+ " + GunModifiers.describe(m))
 	if res.alt_fire != &"":
 		lines.append("» Alt-fire (hold R) — " + GunAltFire.describe(res.alt_fire))
+	# How it fires (GunFireMode): the burst's speed and the charged shot, if it has one.
+	var how := GunFireMode.describe(res.fire, float(res.stats.get(&"fire_rate", 0.0)))
+	for i in range(how.size()):
+		if how[i].begins_with("»") or how[i].begins_with("Burst"):
+			lines.append(how[i])
 	for def: Variant in res.recipe.values():
 		if def is GunPartDef and (def as GunPartDef).tags.has("trade"):
 			lines.append("◇ %s: %s" % [(def as GunPartDef).display_name,

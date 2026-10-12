@@ -746,7 +746,7 @@ func _find_pickup() -> WorldGunPickup:
 		var p := n as WorldGunPickup
 		if p == null or not p.is_inside_tree() or p.is_queued_for_deletion():
 			continue
-		var at := p.global_position + Vector3.UP * 0.55
+		var at := p.centre()
 		var to := at - eye
 		var d := to.length()
 		if d > REACH or d < 0.01:
@@ -822,7 +822,10 @@ func _drop(g: GunInstance) -> void:
 	var fwd := Vector3(-sin(pawn.intents.look_yaw), 0.0, -cos(pawn.intents.look_yaw))
 	var p := WorldGunPickup.create(library, g.result)
 	world_parent.add_child(p)
-	p.global_position = pawn.feet() + fwd * 1.0
+	# Out of the hands at chest height, tossed ahead: it falls and lies (WorldGunPickup).
+	p.global_position = pawn.feet() + fwd * 0.8 + Vector3.UP * 1.1
+	p.toss()
+	p.linear_velocity += fwd * 1.5
 
 
 ## Put what the loadout has in hand into the hands, if it is not there already.
@@ -874,6 +877,11 @@ func _exit_tree() -> void:
 class ArsenalHud extends CanvasLayer:
 	var arsenal: PlayerArsenal
 	var _draw_node: Control
+	## The weapon card (GunCard): the floor gun looked at, or the gun chosen in the
+	## backpack or at the bench -- its stats, tier, kind and how it fires, scored
+	## against the gun in hand. Rebuilt only when the gun it shows changes.
+	var card: GunCard
+	var _card_for: Object
 
 	func _ready() -> void:
 		layer = 4
@@ -889,6 +897,47 @@ class ArsenalHud extends CanvasLayer:
 		if on:
 			_draw_node.modulate.a = PlayerHud.opacity
 			_draw_node.queue_redraw()
+		_card_step(on)
+
+	## Which gun the card shows now, or null.
+	func card_gun() -> GunGenerator.Result:
+		if arsenal.inventory_open:
+			if arsenal.inventory_page == 0:
+				var bp := arsenal.loadout.backpack
+				var i := arsenal.inventory_index
+				if i >= 0 and i < bp.size() and bp[i] != null:
+					return (bp[i] as GunInstance).result
+			elif arsenal.inventory_page == 2:
+				var guns := arsenal.bench_guns()
+				var i := arsenal.bench_index
+				if i >= 0 and i < guns.size() and guns[i] != null:
+					return (guns[i] as GunInstance).result
+			return null
+		if arsenal.target_pickup != null and is_instance_valid(arsenal.target_pickup):
+			return arsenal.target_pickup.result
+		return null
+
+	func _card_step(on: bool) -> void:
+		if card == null:
+			card = GunCard.new()
+			card.name = "GunCard"
+			card.visible = false
+			add_child(card)
+		var res := card_gun() if on else null
+		card.visible = res != null
+		if res == null:
+			_card_for = null
+			return
+		if res != _card_for:
+			_card_for = res
+			var held := arsenal.gun.gun if arsenal.gun != null else null
+			var compare := held.result.score if held != null and held.result != null \
+					and held.result != res else -1
+			card.show_gun(res, compare)
+		# Fitted to what it holds now (the rows it dropped are only gone a frame later).
+		card.size = card.get_combined_minimum_size()
+		var vp := get_viewport().get_visible_rect().size
+		card.position = Vector2(vp.x - card.size.x - 40.0, (vp.y - card.size.y) * 0.45)
 
 	func _colour(g: GunInstance) -> Color:
 		if g == null:

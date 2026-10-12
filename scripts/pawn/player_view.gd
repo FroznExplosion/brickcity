@@ -242,6 +242,7 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	_grenade_in_hand.visible = false
 	arms.held_point(ViewArms.LEFT).add_child(_grenade_in_hand)
 	gun.fired.connect(_on_fired)
+	gun.charged_fired.connect(_on_charged)
 	pawn.landed.connect(_on_landed)
 	pawn.meleed.connect(_on_meleed)
 	if pawn.moves != null:
@@ -260,6 +261,8 @@ func teardown() -> void:
 	if gun != null:
 		if gun.fired.is_connected(_on_fired):
 			gun.fired.disconnect(_on_fired)
+		if gun.charged_fired.is_connected(_on_charged):
+			gun.charged_fired.disconnect(_on_charged)
 		gun.spread_mult = 1.0
 		gun.bloom_per_shot = 0.0
 		gun.bloom = 0.0
@@ -582,6 +585,11 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	pos += Vector3(0.0, -_retract * 0.35, _retract * 0.8)
 	rot.x -= _retract * 0.6
 
+	# A charge held (GunFireMode): the gun drawn back and trembling, more as it fills.
+	var ch := gun.hold_charge_progress()
+	if ch > 0.0:
+		pos += Vector3(0.0, -0.008, 0.03) * ch
+		pos += Vector3(_rng.randf_range(-1.0, 1.0), _rng.randf_range(-1.0, 1.0), 0.0) * 0.0025 * ch * ch
 	pos += _rc_pos + Vector3(0.0, _dip, 0.0)
 	rot.x += _dip_rot
 	# The lean pivots about a point ahead, so the muzzle holds the crosshair.
@@ -879,6 +887,15 @@ func _on_fired(info: Dictionary) -> void:
 	_rc_pvel += Vector3(0.0, RC_UP, RC_BACK) * imp
 	_rc_rvel += Vector3(RC_PITCH, side * 2.0, _rng.randf_range(-0.03, 0.03)) * imp
 	add_shake(clampf(float(f[0]) * 0.03, 0.02, 0.14))
+
+
+## A charged shot went: the hands take it -- an overcharge bucks hard, a charged burst
+## starts with a shove.
+func _on_charged(kind: StringName) -> void:
+	var k := 2.5 if kind == GunFireMode.OVERCHARGE else 1.2
+	_rc_pvel += Vector3(0.0, RC_UP, RC_BACK) * sqrt(RC_STIFF) * k
+	_rc_rvel += Vector3(RC_PITCH, 0.0, 0.0) * sqrt(RC_STIFF) * k
+	add_shake(0.12 * k)
 
 
 func _kick_kind() -> float:

@@ -75,6 +75,8 @@ class Result:
 	var modifiers: Array[Dictionary] = []
 	## Its alt-fire (GunAltFire), &"" for none. From the seed, like the modifiers.
 	var alt_fire: StringName = &""
+	## How it fires: trigger, pellets, charge (GunFireMode). Empty: as guns always have.
+	var fire: Dictionary = {}
 	var merges: Array[MergeRule] = []                              # active synergy bonuses
 
 	## Compact, save/network-friendly form.
@@ -142,6 +144,7 @@ static func generate(library: GunPartLibrary, gen_seed: int = -1,
 static func _resolve(res: Result) -> void:
 	res.modifiers = GunModifiers.roll(res.seed, res.rarity, res.weapon_class)
 	res.alt_fire = GunAltFire.roll(res.seed, res.rarity, res.weapon_class)
+	res.fire = GunFireMode.roll(res.seed, res.rarity, res.weapon_class)
 	res.active_effects = GunEffects.stack(
 			GunEffects.collect(res.recipe, res.rarity) + GunModifiers.effects(res.modifiers))
 	res.merges = MergeRule.detect(res.active_effects)

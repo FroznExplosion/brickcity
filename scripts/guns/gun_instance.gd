@@ -24,6 +24,8 @@ var active_effects: PackedStringArray = PackedStringArray()
 ## Its alt-fire (GunAltFire), &"" for none, and whether the player has it in that mode
 ## (held reload flips it; GunController reads it). Kept on the gun, so a swap keeps it.
 var alt_fire: StringName = &""
+## Its trigger, pellets and charge (GunFireMode); empty fires as guns always have.
+var fire: Dictionary = {}
 var alt_mode := false
 var merges: Array[MergeRule] = []
 ## What it was made from: dropped on the floor, it becomes a WorldGunPickup of this.
@@ -59,6 +61,7 @@ static func from_result(result: GunGenerator.Result,
 	gun.tier = result.tier
 	gun.active_effects = result.active_effects
 	gun.alt_fire = result.alt_fire
+	gun.fire = result.fire
 	gun.merges = result.merges
 	gun.name = "Gun_%d" % result.seed
 
