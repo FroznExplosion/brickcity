@@ -1294,6 +1294,36 @@ func run_gate() -> void:
 					alive.size() == up1 and commander.lost_points >= lost0 + UnitCatalog.points(&"truck") + 2.0,
 					"%d up (was %d); lost %.1f -> %.1f pts" % [alive.size(), up1, lost0, commander.lost_points])
 
+	# A squad by APC (AIVehicles.md 6 step 2): armoured and armed, it drives in,
+	# stops where it first has the player in sight (or at the street it was sent
+	# to), lets its squad out and stays as their cover. The doctrine sends one
+	# only now and then, so the gate asks for one.
+	(city.ai_services.judge as DecisionJudge).pause()
+	commander.budget = 0.0
+	for so in alive.duplicate():
+		so.pawn.health.apply_impact(1e9, &"")
+	await _frames(3)
+	(city.ai_services.judge as DecisionJudge).resume()
+	var trucks0 := trucks.size()
+	commander.budget = Commander.BUDGET_CAP
+	var apc_sent := commander.force_reinforce(&"apc")
+	commander.budget = 0.0
+	var apc: TransportTruck = trucks.back() if apc_sent and trucks.size() > trucks0 else null
+	ok.call("the commander sends a squad by APC", apc != null and apc.is_apc(),
+			"%s" % [commander.log.slice(maxi(commander.log.size() - 2, 0))])
+	if apc != null:
+		var a0 := apc.global_position
+		var up_a := alive.size()
+		await _until(func() -> bool: return not is_instance_valid(apc) or apc.state != "driving", 60.0)
+		await _frames(10)
+		if is_instance_valid(apc):
+			ok.call("it drives in, stops, and lets them out", apc.state == "arrived" and apc.cargo.is_empty()
+					and alive.size() - up_a >= 2 and apc.global_position.distance_to(a0) > 10.0,
+					"%s (%s), drove %.0f m, %d out" % [apc.state, apc.stopped_because,
+					apc.global_position.distance_to(a0), alive.size() - up_a])
+		else:
+			ok.call("it drives in, stops, and lets them out", false, "the APC is gone")
+
 	# The HQ: shoot the radio and nobody can be called; kill the officer and
 	# nothing more is decided.
 	ok.call("the commander has an HQ: an officer and a radio in building %d" % hq_building,
