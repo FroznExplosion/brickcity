@@ -970,7 +970,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   whether it was a backstab.
 - `tools/skill_kit_probe.gd` (30 checks); `skill_tree_probe` moved to the new nodes and to the
   health under the shield.
-- **Not yet:** more abilities and a second slot; the stagger, the slide-punch launch and armor
+- **Not yet:** more abilities and a second slot; the slide-punch launch and armor
   plates for Backstab (§4.2); the shield's break and recharge sounds and screen edge.
 
 **Step 10 — safehouse infusion: built 2026-10-10.**
@@ -1009,7 +1009,8 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 
 - More of the skill kit: abilities past the Overshield and a second slot, the marksman and
   element branches (§4.2).
-- Special weapons past the arc caster; a heat bar for the plasma charge; the torch's look.
+- Special weapons past the arc caster; a heat bar for the plasma charge.
+- Aim assist: built ([AIM_ASSIST.md](AIM_ASSIST.md)); controller look still to come.
 - Step 5's other leftovers: ammo reserves, co-op drops, pad bindings. (A swap now takes about
   half a second in the hands -- the old gun goes down out of view, the new one comes up,
   no firing while it is down: `PlayerView`, 2026-10-10.)

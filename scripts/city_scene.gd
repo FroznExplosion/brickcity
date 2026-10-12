@@ -724,6 +724,8 @@ var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
+## The player's aim assist on foot (AimAssist): the camera's look and the gun's rounds.
+var _aim_assist: AimAssist
 var _mech: Mech
 ## Tanks (AIRoster.md RO10): Z puts an enemy one ahead with a squad screening it,
 ## SHIFT+Z an empty one of ours; CTRL+Z an empty truck of ours, CTRL+SHIFT+Z an
@@ -4189,6 +4191,12 @@ func _enter_pawn(feet: Vector3) -> void:
 	# earn aggro (AIServices).
 	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
+	if _aim_assist == null:
+		_aim_assist = AimAssist.new()
+		_aim_assist.setup(camera, _gun, _player, ai_services)
+		add_child(_aim_assist)
+	camera.assist = _aim_assist
+	_gun.assist = _aim_assist
 	# A splash or a ricochet of the player's rounds spares the player's side.
 	_gun.team = _player_pawn.team
 	if not _player_pawn.has_meta(&"weight"):
