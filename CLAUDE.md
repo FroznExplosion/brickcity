@@ -83,9 +83,12 @@ driver (Legion Go, Ryzen Z1 Extreme, driver from Nov 2023).
   temperature, throttling, CPU/GPU load, free RAM and every running Godot
   process (what it runs, its RAM) about every 7 s to
   `%LOCALAPPDATA%\brickcity-heat\heat_<date>.csv`.
-- **After every windowed or long test run**, read the heat log lines covering
-  that run and say in chat the peak temperature and whether `passive_pct`
-  dropped below 100 (throttling).
+- **After every windowed or long test run**, say in chat the peak temperature
+  and whether the chip was held back: `python tools/heat_sum.py <start> [<end>]`
+  (or `--last <minutes>`). Held back is a sample at 99 C or more (the chip
+  throttles itself there; `passive_pct` does not show it), `passive_pct` under
+  100, or a throttle reason -- the log's `limit` column. If a run was held
+  back, do not start the next windowed run until it has cooled under 80 C.
 - **When the user says the PC crashed or was found off**, read the heat log
   first: the last lines before the gap show the temperature, load and which
   Godot runs were going. Match the gap with the System event log
