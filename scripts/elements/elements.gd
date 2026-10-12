@@ -72,6 +72,26 @@ static func word(id: StringName) -> String:
 
 
 ## The matrix every HealthPool uses unless it was given one of its own.
+## Its name on the card ("Fire"), "" for none.
+static func display_name(id: StringName) -> String:
+	return String(INFO[id][0]) if INFO.has(id) else ""
+
+
+## Its colour, white for none.
+static func color(id: StringName) -> Color:
+	return INFO[id][1] if INFO.has(id) else Color.WHITE
+
+
+## What it is strong against, for the card ("×2 vs shield"), "" for nothing.
+static func strong_against(id: StringName) -> String:
+	var t: Dictionary = TABLE.get(id, {})
+	for layer: StringName in t:
+		if layer == &"flesh":
+			continue
+		return "×%s vs %s" % [String.num(float(t[layer]), 1).trim_suffix(".0"), layer]
+	return ""
+
+
 static func matrix() -> EffectivenessMatrix:
 	if _matrix == null:
 		_matrix = EffectivenessMatrix.new()

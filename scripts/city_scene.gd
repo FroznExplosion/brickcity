@@ -4201,6 +4201,7 @@ func _enter_pawn(feet: Vector3) -> void:
 	if _arsenal == null:
 		_arsenal = PlayerArsenal.new()
 		_arsenal.name = "Arsenal"
+		_arsenal.board = _hold_board
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
 		_load_progress()
@@ -4470,6 +4471,22 @@ func _wire_rodeo(m: Mech) -> void:
 
 
 ## The mech whose hatch `p` stands at, any side's; null for none.
+## Hold reload on foot (PlayerArsenal.interact): into our mech at its hatch, or the
+## vehicle beside -- what M does, but only when there is one to get in. True if it did.
+func _hold_board() -> bool:
+	if not _player.is_possessing() or _player_pawn == null or not is_instance_valid(_player_pawn):
+		return false
+	var m := _mech_at_hatch(_player_pawn)
+	if m != null and m == _mech:
+		_board_mech()
+		return true
+	var v := _vehicle_at_side()
+	if v != null:
+		_use_vehicle(v)
+		return true
+	return false
+
+
 func _mech_at_hatch(p: Pawn) -> Mech:
 	for n in get_tree().get_nodes_in_group(&"mech_layers"):
 		var ml := n as MechLayers
@@ -8286,7 +8303,7 @@ func _run_arms_pass() -> void:
 	var lying := false
 	for i in 300:
 		await _frames(1)
-		if not dropped.is_empty() and dropped[0].sleeping:
+		if not dropped.is_empty() and dropped[0].resting():
 			lying = true
 			break
 	if not dropped.is_empty():
@@ -8299,8 +8316,48 @@ func _run_arms_pass() -> void:
 		var hud_card: GunCard = _arsenal._hud.card
 		_gate_ok("looked at, its card is up", _arsenal.target_pickup == lying_gun and hud_card != null
 				and hud_card.visible)
+		# The card's plain stats, then its special effects under them (Borderlands 4's).
+		var txt := hud_card.text() if hud_card != null else ""
+		var rows_ok := true
+		for k in ["Fire rate", "Fire mode", "Accuracy", "Reload", "Magazine", "Swap speed",
+				"Element", "Crit"]:
+			rows_ok = rows_ok and txt.contains(k)
+		_gate_ok("the card has its stats: fire rate, fire mode, accuracy, swap speed, element",
+				rows_ok and txt.contains("SPECIAL"), txt.replace("\n", " | ").left(200))
 		await _save("arms_card")
 		camera.rotation = Vector3(-0.08, camera.rotation.y, 0.0)
+		# Walked over, it does not move.
+		var lay := lying_gun.global_position
+		var lay_basis := lying_gun.global_basis
+		camera.look_at(Vector3(lay.x, camera.global_position.y, lay.z), Vector3.UP)
+		camera.rotation = Vector3(0.0, camera.rotation.y, 0.0)
+		_key(KEY_W, true)
+		await _frames(70)
+		_key(KEY_W, false)
+		await _frames(20)
+		var past := (pawn.feet() - lay).dot(-camera.global_transform.basis.z)
+		_gate_ok("walked over, the gun on the floor stays where it lies", is_instance_valid(lying_gun)
+				and lying_gun.global_position.distance_to(lay) < 0.01
+				and lying_gun.global_basis.z.dot(lay_basis.z) > 0.999 and past > 0.5,
+				"moved %.3f m; walked %.1f m past it" % [lying_gun.global_position.distance_to(lay)
+				if is_instance_valid(lying_gun) else -1.0, past])
+		# Standing over it, looking ahead: hold R takes it for keeps (Halo's).
+		pawn.place(Vector3(lay.x, pawn.feet().y, lay.z) + camera.global_transform.basis.z * 0.5)
+		camera.rotation = Vector3(-0.05, camera.rotation.y, 0.0)
+		await _frames(6)
+		var at_feet := _arsenal.target_pickup == lying_gun and not _arsenal.target_looked
+		var had := _arsenal.loadout.in_hand()
+		var lying_res := lying_gun.result
+		_key(KEY_R, true)
+		await _frames(40)
+		_key(KEY_R, false)
+		await _frames(30)
+		var now := _arsenal.loadout.in_hand() as GunInstance
+		_gate_ok("standing over it, not looking: hold R takes it for keeps, the old gun dropped",
+				at_feet and now != null and now != had and now.result == lying_res
+				and _arsenal.loadout.slots.has(now) and _arsenal.loadout.third_hand == null
+				and _view.swaps_done > 0,
+				"at the feet %s, in a slot %s" % [at_feet, _arsenal.loadout.slots.has(now)])
 	_gate_ok("no hand was changed in plain view", arms.swaps_in_view == 0,
 			"%d" % arms.swaps_in_view)
 

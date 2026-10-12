@@ -4,10 +4,11 @@ extends RigidBody3D
 ## it reads at distance, and the Result the card renders from.
 ##
 ## It is a body: dropped, it is tossed up a little and falls, tumbles and comes to rest
-## lying on its side, and sleeps there. It wakes when something moves it -- a blast
-## near it (`blast`, from every explosion), or the ground under it going (a floor
-## broken, a building fallen: a sleeping gun looks under itself now and then). It is
-## on the rubble layer, so a walker never trips on it and bullets do not stop at it.
+## lying on its side, and sleeps there. Asleep it is frozen (`rest`): nothing nudges it
+## -- not a walker, not a bump in the solver -- until a blast near it (`blast`, from
+## every explosion) or the ground under it going (a floor broken, a building fallen: a
+## resting gun looks under itself now and then) wakes it. It is on the rubble layer, so
+## a walker never trips on it.
 ##
 ## Owns no input and no UI. PlayerArsenal decides which pickup is being looked at and
 ## the HUD draws the single shared GunCard -- one card, many pickups, so the card's cost
@@ -23,6 +24,8 @@ const MASS := 3.0
 ## Asleep, it looks this far under itself this often; nothing there, it wakes and falls.
 const GROUND_CHECK := 0.5
 const GROUND_REACH := 0.3
+## Asleep this long, it is frozen where it lies.
+const FREEZE_AFTER := 0.3
 
 var result: GunGenerator.Result
 var gun: GunInstance
@@ -30,6 +33,7 @@ var gun: GunInstance
 var _beam_mi: MeshInstance3D
 var _half_height := 0.05
 var _check := 0.0
+var _asleep_for := 0.0
 
 
 static func create(library: GunPartLibrary, res: GunGenerator.Result) -> WorldGunPickup:
@@ -85,7 +89,8 @@ func _shape() -> void:
 	shape.size = Vector3(maxf(size.x, 0.04), maxf(size.y, 0.04), maxf(size.z, 0.08))
 	cs.shape = shape
 	add_child(cs)
-	_half_height = minf(size.x, size.y) * 0.5
+	# However it lies, its middle is no further than this over what it lies on.
+	_half_height = size.length() * 0.5
 
 
 ## The transform from `n` up to `top` (both out of the tree yet).
@@ -105,6 +110,18 @@ func toss(rng: RandomNumberGenerator = null) -> void:
 	rotation = Vector3(0.0, r.randf() * TAU, r.randf_range(-0.4, 0.4))
 	linear_velocity = Vector3(r.randf_range(-0.6, 0.6), r.randf_range(1.5, 2.5), r.randf_range(-0.6, 0.6))
 	angular_velocity = Vector3(r.randf_range(-3.0, 3.0), r.randf_range(-2.0, 2.0), r.randf_range(-3.0, 3.0))
+
+
+## At rest where it lies: frozen, or asleep and about to be.
+func resting() -> bool:
+	return freeze or sleeping
+
+
+## Moving again: unfrozen and awake (a blast, the floor gone).
+func wake() -> void:
+	freeze = false
+	sleeping = false
+	_asleep_for = 0.0
 
 
 ## Where the gun is: its middle (what the player reaches for and looks at).
@@ -128,7 +145,7 @@ static func blast(at: Vector3, radius: float, push := 6.0) -> void:
 			continue
 		var k := 1.0 - d / maxf(radius, 0.01)
 		var dir := (to / d if d > 0.01 else Vector3.UP) + Vector3.UP * 0.6
-		p.sleeping = false
+		p.wake()
 		p.apply_central_impulse(dir.normalized() * push * k * p.mass)
 		p.apply_torque_impulse(Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0),
 				randf_range(-1.0, 1.0)) * 0.05 * k * p.mass)
@@ -165,17 +182,24 @@ func _process(delta: float) -> void:
 		_beam_mi.global_transform = Transform3D(Basis.IDENTITY,
 				global_position + Vector3.UP * BEAM_HEIGHT * 0.5)
 	if _item >= 0:
-		if not sleeping:
+		if not freeze:
 			_items.move(_item, gun.global_transform)
 		# Its own model unless the card is standing in for it (not before
 		# the first pass has placed it, nor while the bake is still coming).
 		gun.visible = _items.tier_of(_item) != 2
-	if sleeping:
+	if sleeping and not freeze:
+		_asleep_for += delta
+		if _asleep_for >= FREEZE_AFTER:
+			freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+			freeze = true
+	elif not sleeping:
+		_asleep_for = 0.0
+	if freeze:
 		_check -= delta
 		if _check <= 0.0:
 			_check = GROUND_CHECK
 			if not _ground_under():
-				sleeping = false
+				wake()
 
 
 ## Is there anything right under it to lie on?

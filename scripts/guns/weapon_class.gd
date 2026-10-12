@@ -101,6 +101,15 @@ const HEAVY_CHANCE: Array[float] = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
 ## Of legendaries and mythics, how many break their kind's trade.
 const CROSSED_CHANCE := 0.35
 
+## Seconds to put the last gun away and bring this one up (PlayerView's swap), per
+## class: a pistol is quick, a long gun slow; a heavy takes SWAP_HEAVY as long.
+const SWAP_TIMES := {
+	&"pistol": 0.36, &"revolver": 0.4, &"smg": 0.42, &"rifle": 0.48, &"shotgun": 0.55,
+	&"dmr": 0.55, &"sniper": 0.7, &"lmg": 0.8,
+}
+const SWAP_TIME_BASE := 0.48
+const SWAP_HEAVY := 1.25
+
 ## Ordnance ids, for pools that must draw from one category or the other.
 const ORDNANCE_IDS: Array[StringName] = [
 	&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_layer", &"drone", &"arc_caster",
@@ -111,6 +120,12 @@ const ORDNANCE_IDS: Array[StringName] = [
 ## RATIO of DPS to class base (§4) so it is unaffected too. Base DPS parity holds at ~60.
 ## If this is ever rescaled again, the enemy HP table must move by the same factor or
 ## every shots-to-kill number in the spec silently becomes wrong.
+
+
+## How long a swap to a gun of this class takes, down and up (the card's swap speed).
+func swap_time() -> float:
+	var t := float(SWAP_TIMES.get(id, SWAP_TIME_BASE))
+	return t * (SWAP_HEAVY if archetype == &"heavy" and not crossed else 1.0)
 
 
 ## Build a class from a shipping preset (falls back to pistol).

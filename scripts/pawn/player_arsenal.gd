@@ -3,12 +3,17 @@ extends Node
 ## The player's guns in play (Docs/Weapons/COMBAT_DESIGN.md 7): the Loadout's rules
 ## put into the hands, the keys, the floor and the HUD.
 ##
-##   Tab           tap: the other gun in the group (the swap starts on the press); held
-##                 past HOLD_SWAP: the other group instead. The mouse wheel taps.
+##   C (or Tab)    tap: the other gun in the group (the swap starts on the press); held
+##                 past HOLD_SWAP: the other group instead. The mouse wheel taps. A floor
+##                 gun in reach: held, it is picked up into the third hand to try (the
+##                 tap then waits for the key to come up).
 ##   1-4           that slot. Carrying a floor gun: keep it in that slot.
 ##   5             the ordnance, and back
 ##   G             throw a grenade, gun up
-##   R held        a floor gun in reach and in view: pick it up into the third hand.
+##   R held        a floor gun in reach: take it for keeps, in place of the gun in hand
+##                 (which drops) or into the group's empty slot. In reach is in view and
+##                 near, or under the feet (Halo's): no need to look down at it. A mech's
+##                 hatch or a vehicle beside: get in (`board`; a gun in view comes first).
 ##                 A workbench in reach and in view (Workbench): the bench's page --
 ##                 arrows choose a gun, Enter infuses it to the story tier for scrap,
 ##                 Backspace twice breaks a backpack gun down for scrap (Infusion).
@@ -47,6 +52,8 @@ const HOLD_INTERACT := 0.35
 ## How far from the eye a floor gun can be picked up, and how near the crosshair.
 const REACH := 2.6
 const AIM_DEG := 28.0
+## ... or how near the feet, looked at or not (Halo's): standing over it is enough.
+const FOOT_REACH := 1.4
 const GRENADES_MAX := 3
 ## A stand-in until there are ammo pickups: one grenade back every this many seconds.
 const GRENADE_RECHARGE := 20.0
@@ -69,8 +76,13 @@ var grenades := GRENADES_MAX
 ## What the skills make of GRENADES_MAX and GRENADE_RECHARGE (apply_skills).
 var grenades_max := GRENADES_MAX
 var grenade_recharge := GRENADE_RECHARGE
-## The floor gun the player would pick up now (in reach, near the crosshair), or null.
+## The floor gun the player would pick up now (in reach, near the crosshair, or at the
+## feet), or null; and whether it is the one looked at.
 var target_pickup: WorldGunPickup
+var target_looked := false
+## Hold reload with no gun in view: get in what is beside the player (a mech at its
+## hatch, a vehicle), true if it did. The scene sets it (CityScene._hold_board).
+var board: Callable
 ## The workbench the player would use now, or null; the one in use while its page is up.
 var target_bench: Workbench
 var bench: Workbench
@@ -90,6 +102,9 @@ var _ammo := {}
 var _grenade_clock := 0.0
 var _swap_held := -1.0
 var _swap_grouped := false
+## The press came with a floor gun in reach: its tap waits for the release, since a hold
+## means "try the gun".
+var _swap_deferred := false
 var _pre_tap_hand := 0
 var _reload_held := -1.0
 var _reload_used := false
@@ -456,7 +471,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	var handled := true
 	if _pressed(event, &"swap_weapon"):
 		_pre_tap_hand = int(loadout.hand[loadout.group])
-		_apply(loadout.tap_swap())
+		_swap_deferred = target_pickup != null
+		if not _swap_deferred:
+			_apply(loadout.tap_swap())
 		_swap_held = 0.0
 		_swap_grouped = false
 	elif _pressed(event, &"slot_1"):
@@ -566,16 +583,24 @@ func _process(delta: float) -> void:
 			or player.pawn == null or player.pawn.feet().distance_to(bench.global_position) > BENCH_LEAVE):
 		inventory_open = false
 		inventory_page = 0
-	# Hold swap: undo the tap the press made, and change group instead.
+	# Hold swap: undo the tap the press made, and change group instead -- or, a floor gun
+	# in reach, try it in the third hand.
 	if _swap_held >= 0.0:
 		if not Input.is_action_pressed(&"swap_weapon"):
+			if _swap_deferred and not _swap_grouped:
+				_apply(loadout.tap_swap())
 			_swap_held = -1.0
+			_swap_deferred = false
 		else:
 			_swap_held += delta
 			if _swap_held >= HOLD_SWAP and not _swap_grouped:
 				_swap_grouped = true
-				loadout.hand[loadout.group] = _pre_tap_hand
-				_apply(loadout.switch_group())
+				if _swap_deferred and target_pickup != null:
+					pick_up(target_pickup)
+				else:
+					if not _swap_deferred:
+						loadout.hand[loadout.group] = _pre_tap_hand
+					_apply(loadout.switch_group())
 	# Hold reload: pick up, or stow.
 	if InputMap.has_action(&"reload") and Input.is_action_pressed(&"reload") and not inventory_open:
 		if _reload_held < 0.0:
@@ -592,12 +617,17 @@ func _process(delta: float) -> void:
 		_reload_held = -1.0
 
 
-## The hold-reload action: the floor gun in view into the third hand, else the one in
-## the third hand into the backpack, else the gun in hand into its alt-fire mode and
-## back (a gun with none ignores it).
+## The hold-reload action: the floor gun looked at, for keeps; else get in a mech or
+## vehicle beside; else the floor gun at the feet, for keeps; else the bench; else the
+## gun in the third hand into the backpack; else the gun in hand into its alt-fire mode
+## and back (a gun with none ignores it).
 func interact() -> void:
-	if target_pickup != null:
-		pick_up(target_pickup)
+	if target_pickup != null and target_looked:
+		take(target_pickup)
+	elif board.is_valid() and board.call():
+		pass
+	elif target_pickup != null:
+		take(target_pickup)
 	elif target_bench != null:
 		open_bench(target_bench)
 	elif loadout.third_hand != null:
@@ -610,15 +640,30 @@ func interact() -> void:
 		changed.emit()
 
 
+## The floor gun `p` into the third hand, to try (hold swap): the loadout untouched.
 func pick_up(p: WorldGunPickup) -> void:
-	if p == null or p.result == null:
-		return
+	var g := _lift(p)
+	if g != null:
+		_apply(loadout.pick_up(g))
+
+
+## The floor gun `p` for keeps (hold reload): the gun in hand drops (Loadout.take).
+func take(p: WorldGunPickup) -> void:
+	var g := _lift(p)
+	if g != null:
+		_apply(loadout.take(g))
+
+
+## `p` off the floor, as a gun of ours.
+func _lift(p: WorldGunPickup) -> GunInstance:
+	if p == null or p.result == null or p.is_queued_for_deletion():
+		return null
 	var g := GunInstance.from_result(p.result)
 	_adopt(g)
 	p.queue_free()
 	if target_pickup == p:
 		target_pickup = null
-	_apply(loadout.pick_up(g))
+	return g
 
 
 ## The floor gun nearest the crosshair, in reach.
@@ -740,8 +785,11 @@ func _find_pickup() -> WorldGunPickup:
 		return null
 	var eye := cam.global_position
 	var fwd := -cam.global_transform.basis.z
+	var feet := player.pawn.feet() if player != null and player.pawn != null else eye
 	var best: WorldGunPickup = null
 	var best_dot := cos(deg_to_rad(AIM_DEG))
+	var near: WorldGunPickup = null
+	var near_d := FOOT_REACH
 	for n in get_tree().get_nodes_in_group(WorldGunPickup.GROUP):
 		var p := n as WorldGunPickup
 		if p == null or not p.is_inside_tree() or p.is_queued_for_deletion():
@@ -755,7 +803,14 @@ func _find_pickup() -> WorldGunPickup:
 		if dot > best_dot:
 			best_dot = dot
 			best = p
-	return best
+		# Under the feet (Halo's): the nearest, looked at or not.
+		var up := at.y - feet.y
+		var flat := Vector2(at.x - feet.x, at.z - feet.z).length()
+		if up > -0.6 and up < 1.2 and flat < near_d:
+			near_d = flat
+			near = p
+	target_looked = best != null
+	return best if best != null else near
 
 
 func throw_grenade() -> void:
@@ -985,16 +1040,15 @@ class ArsenalHud extends CanvasLayer:
 		var prompt := ""
 		var pcol := Color(1, 1, 1, 0.9)
 		if arsenal.target_pickup != null and arsenal.target_pickup.result != null:
+			# The card beside it names the gun.
 			var r := arsenal.target_pickup.result
-			prompt = "Hold R  pick up %s  (%s %s, tier %d)" % [r.gun_name,
-					Rarity.NAMES[clampi(r.rarity - 1, 0, 5)],
-					String(r.weapon_class.id) if r.weapon_class != null else "", r.tier]
+			prompt = "Hold R  take it  ·  Hold C  try it"
 			pcol = PlayerHud.RARITY_COLOURS[clampi(r.rarity - 1, 0, 5)]
 		elif arsenal.target_bench != null:
 			prompt = "Hold R  workbench: infuse guns to tier %d, break guns down for scrap" \
 					% maxi(arsenal.tier, arsenal.player.progress.story_tier if arsenal.player != null else 1)
 		elif lo.third_hand != null:
-			prompt = "Trying %s:  1-4 keep in that slot  ·  hold R stow  ·  Tab drop" % (lo.third_hand as GunInstance).gun_name
+			prompt = "Trying %s:  1-4 keep in that slot  ·  hold R stow  ·  C drop" % (lo.third_hand as GunInstance).gun_name
 		if prompt != "":
 			var pw := font.get_string_size(prompt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
 			c.draw_string(font, Vector2(mid.x - pw * 0.5, mid.y + 70.0), prompt,
