@@ -456,6 +456,39 @@ func tokens_on(target: Pawn) -> int:
 
 # --- the tick ------------------------------------------------------------------
 
+## Tactic decisions (BTChooseTactic) are the one costly part of a think: a cover
+## search and the book. Past this much of them in a physics tick, the rest wait
+## for their next think. The first of a tick always goes, and the queue serves
+## the most important soldiers first (ImportanceBudget), so it is the ones
+## nearest the player, or in their sights, that decide this tick.
+const DECIDE_BUDGET_USEC := 2000
+var _decide_usec := 0
+var _decide_frame := -1
+## Decisions put off for the budget, for gates and the overlay.
+var decisions_deferred := 0
+## The longest single decision so far, and how many were made.
+var decide_worst_usec := 0
+var decisions_made := 0
+
+
+func may_decide_tactic() -> bool:
+	var f := Engine.get_physics_frames()
+	if f != _decide_frame:
+		_decide_frame = f
+		_decide_usec = 0
+		return true
+	if _decide_usec < DECIDE_BUDGET_USEC:
+		return true
+	decisions_deferred += 1
+	return false
+
+
+func spent_deciding(usec: int) -> void:
+	_decide_usec += usec
+	decide_worst_usec = maxi(decide_worst_usec, usec)
+	decisions_made += 1
+
+
 ## How long each part of the last `tick` took, in ms: the city's AI spike
 ## report reads it (CityScene._ai_track_worst).
 var tick_steps := {}
