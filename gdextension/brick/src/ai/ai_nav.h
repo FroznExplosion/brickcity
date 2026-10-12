@@ -319,6 +319,13 @@ private:
     void _local_costs(const Node &from, int x0, int z0, int x1, int z1, int cap,
             std::unordered_map<int64_t, float> &g, const std::vector<int64_t> *targets = nullptr);
     /// Cost from every node of the box TO `to` (reversed steps, as a field's).
+    /// Either Dijkstra kept between calls, to run a slice at a time: true once
+    /// done. Its costs are in `run.g`.
+    struct LocalRun;
+    bool _local_costs_run(LocalRun &run, const Node &from, int x0, int z0, int x1, int z1, int cap,
+            const std::vector<int64_t> *targets, uint64_t until_usec);
+    bool _local_costs_to_run(LocalRun &run, const Node &to, int x0, int z0, int x1, int z1, int cap,
+            uint64_t until_usec);
     void _local_costs_to(const Node &to, int x0, int z0, int x1, int z1, int cap,
             std::unordered_map<int64_t, float> &g);
     /// Run the hierarchical search `s` until done or `until_usec`. True when done.
@@ -373,6 +380,9 @@ private:
     // The longest single call of each part that runs whole, with no clock
     // check inside: where a service call can blow past its budget.
     uint64_t stat_worst_service_usec = 0;
+    uint64_t stat_worst_search_step_usec = 0;
+    uint64_t stat_worst_field_step_usec = 0;
+    uint64_t stat_worst_warm_step_usec = 0;
     uint64_t stat_worst_hier_begin_usec = 0;
     uint64_t stat_worst_enclosed_usec = 0;
     uint64_t stat_worst_side_edges_usec = 0;
