@@ -47,9 +47,12 @@ point** on that segment to the crosshair.
 
 ## 4. Limits
 
-- **Weapon range** (`AimAssist.WEAPONS`): a shotgun gives no assist past 14 m, an SMG past
-  28 m, a rifle past 60 m, a sniper rifle past 150 m. Strength fades out over the last fifth of
-  the range. These numbers stand in until guns have a real range stat.
+- **Weapon range** (`GunRange.of`, shown on the gun card): a pellet gun's range is its
+  pattern's `far` (10–22 m); every other gun's is its class's range (pistol 35 m, SMG 28 m,
+  rifle 60 m, LMG 55 m, DMR 90 m, sniper rifle 150 m) times (accuracy / the class's base
+  accuracy)², held to 0.75–1.35×. So the accuracy roll decides how far a gun reaches. From the
+  hip every gun is tight (`PlayerView.HIP_SPREAD` 0.4 of the accuracy cone, `ADS_SPREAD` 0.25).
+  Assist strength fades out over the last fifth of the range.
 - **Slow projectiles:** the grenade tube's lob gets more tracking (×1.5), and its aim line is
   led to where the target will be. A future plasma pistol adds a row to `WEAPONS` with its
   projectile speed.
@@ -98,5 +101,4 @@ is the host's own (`_build_aim_tab`), so the shared `menu/` folder is unchanged.
 
 - Controller look and bindings, and with them the controller assist felt in play.
 - In the mech: `MechPilot` drives its own camera; the assist is on foot only.
-- A real per-gun range stat, in place of the per-class table.
 - The release defaults for the mouse.

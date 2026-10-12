@@ -19,9 +19,10 @@ extends Node
 ## crosshair among those FACING the player (CritSpots; a mech's hatch and power cell), or
 ## its middle when none faces. A weak point on the far side is never aimed for.
 ##
-## Limited by the gun: past its class's assist range (WEAPONS) nothing helps -- a shotgun
-## does not pull toward a man it cannot reach. Slow projectiles (the grenade tube) get more
-## tracking and aim where the target will be (lead).
+## Limited by the gun: past its range (GunRange: a shotgun's pattern, the class's range
+## scaled by the accuracy roll) nothing helps -- a shotgun does not pull toward a man it
+## cannot reach. Slow projectiles (the grenade tube) get more tracking and aim where the
+## target will be (lead).
 ##
 ## Hip and sights blend by the sights' rise (PlayerView.ads_amount). Engagement: keeping a
 ## target in the cone while firing builds strength over ENGAGE_RISE seconds, lost fast.
@@ -65,14 +66,13 @@ const ENGAGE_FALL := 0.3
 ## Engaged, the tracking and centering are this much stronger.
 const ENGAGE_BOOST := 0.5
 const FRICTION_CAP := 0.8
-## Assist range (m), tracking multiplier, projectile speed (m/s, 0 = hitscan) per class.
+## Tracking multiplier and projectile speed (m/s, 0 = hitscan) per class. The range is
+## the gun's own (GunRange).
 const WEAPONS := {
-	&"pistol": [35.0, 1.0, 0.0], &"revolver": [40.0, 1.0, 0.0], &"smg": [28.0, 1.0, 0.0],
-	&"rifle": [60.0, 1.0, 0.0], &"lmg": [55.0, 1.0, 0.0], &"dmr": [90.0, 1.0, 0.0],
-	&"sniper": [150.0, 0.8, 0.0], &"shotgun": [14.0, 1.1, 0.0],
-	&"rocket_launcher": [60.0, 1.3, 0.0], &"grenade_launcher": [40.0, 1.3, 0.0],
-	&"arc_caster": [20.0, 1.0, 0.0],
+	&"sniper": [0.8, 0.0], &"shotgun": [1.1, 0.0],
+	&"rocket_launcher": [1.3, 0.0], &"grenade_launcher": [1.3, 0.0],
 }
+## [range, tracking mult, projectile speed].
 const DEFAULT_WEAPON := [40.0, 1.0, 0.0]
 ## The grenade tube's lob (TubeGrenade): slow, so more tracking, and led.
 const TUBE_WEAPON := [40.0, 1.5, 32.0]
@@ -135,10 +135,20 @@ func _input(event: InputEvent) -> void:
 ## calls it with every mouse move (DebugCamera.assist).
 func filter_look(d: Vector2) -> Vector2:
 	_look_in += d
-	if not active() or target.is_empty():
+	if not active() or not _target_alive():
 		return d
 	var f := minf(_blend(FRICTION) * level() * friction_scale * float(target.k), FRICTION_CAP)
 	return d * (1.0 - f)
+
+
+## The pick still there: a target freed since (killed, or a wreck cleared) is dropped.
+func _target_alive() -> bool:
+	if target.is_empty():
+		return false
+	if not is_instance_valid(target.owner) or not is_instance_valid(target.body):
+		target = {}
+		return false
+	return true
 
 
 func _blend(table: Array) -> float:
@@ -152,8 +162,9 @@ func weapon() -> Array:
 		return DEFAULT_WEAPON
 	if gun.gun.alt_fire == GunAltFire.TUBE and gun.alt_on():
 		return TUBE_WEAPON
-	var id := gun.gun.weapon_class.id if gun.gun.weapon_class != null else &""
-	return WEAPONS.get(id, DEFAULT_WEAPON)
+	var wc := gun.gun.weapon_class
+	var row: Array = WEAPONS.get(wc.id if wc != null else &"", [1.0, 0.0])
+	return [GunRange.of(wc, gun.gun.stats, gun.fire_mode()), row[0], row[1]]
 
 
 func _process(delta: float) -> void:
@@ -180,7 +191,7 @@ func _process(delta: float) -> void:
 		# Tracking: follow the line's motion across the view since last frame.
 		var dir: Vector3 = (target.point as Vector3) - camera.global_position
 		dir = dir.normalized()
-		if target.owner == _last_owner and _last_dir != Vector3.ZERO:
+		if is_instance_valid(_last_owner) and target.owner == _last_owner and _last_dir != Vector3.ZERO:
 			var moved := _angles(dir) - _angles(_last_dir)
 			moved.x = wrapf(moved.x, -PI, PI)
 			var tr := _blend(TRACKING) * lv * tracking_scale * float(w[1]) * boost * k
@@ -238,7 +249,7 @@ func pick(w: Array = DEFAULT_WEAPON) -> Dictionary:
 		var d := describe(o, from, w)
 		if d.is_empty():
 			continue
-		var score := float(d.score) * (0.75 if o == _last_owner else 1.0)
+		var score := float(d.score) * (0.75 if is_instance_valid(_last_owner) and o == _last_owner else 1.0)
 		found.append([score, d])
 	found.sort_custom(func(x: Array, y: Array) -> bool: return float(x[0]) < float(y[0]))
 	for i in mini(found.size(), 3):
@@ -409,7 +420,7 @@ static func facing(c: Vector3, feet: Vector3, from: Vector3, axis: float) -> boo
 ## miss -- within the target's half-width plus the bullet assist's degrees. The point it
 ## is bent to is on the line at the crosshair's height, so a head stays a head.
 func bend(from: Vector3, dir: Vector3) -> Vector3:
-	if not active() or target.is_empty() or bullet_scale <= 0.0:
+	if not active() or not _target_alive() or bullet_scale <= 0.0:
 		return dir
 	var feet: Vector3 = target.point
 	var shape := body_of(target.owner)
