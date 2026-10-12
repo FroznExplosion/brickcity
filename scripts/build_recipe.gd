@@ -132,6 +132,12 @@ var _welds := PackedInt32Array()
 ## fixture rebases with the build and needs no coordinate of its own.
 var _fixtures := []
 
+## `bounds()` and `chunk_dims()`, kept until a block or fixture is added or
+## removed. Every bullet hit asks every building's box (CityPlacer.box_of), and
+## walking every brick of every build for it stalled the frame.
+var _bounds_cache: Array = []
+var _dims_cache := Vector3i.ZERO
+
 
 func size() -> int:
 	return _parts.size()
@@ -167,6 +173,7 @@ func add(archetype_name: String, cell: Vector3i, colour: int, frame: int = 0,
 	_frames.push_back(maxi(frame, 0))
 	_decor.push_back(clampi(int(role), Role.STRUCTURE, Role.DETAIL))
 	_materials.push_back(clampi(material, 0, 255))
+	_shape_changed()
 	return id
 
 
@@ -441,6 +448,7 @@ func add_fixture(fixture_kind: String, cell: Vector3i, params: Dictionary,
 		"role": int(role),
 		"params": params.duplicate(true),
 	})
+	_shape_changed()
 	return _fixtures.size() - 1
 
 
@@ -473,6 +481,7 @@ func remove_fixture(i: int) -> bool:
 	if i < 0 or i >= _fixtures.size():
 		return false
 	_fixtures.remove_at(i)
+	_shape_changed()
 	return true
 
 
@@ -493,6 +502,7 @@ func pop() -> bool:
 func remove_at(id: int) -> bool:
 	if id < 0 or id >= _parts.size():
 		return false
+	_shape_changed()
 	_cells.remove_at(id * 3 + 2)
 	_cells.remove_at(id * 3 + 1)
 	_cells.remove_at(id * 3)
@@ -575,6 +585,18 @@ static func part_size(archetype_name: String) -> Vector3i:
 ## Grid AABB of everything placed, as (min corner, size in cells). Size is zero
 ## for an empty recipe.
 func bounds() -> Array:
+	if _bounds_cache.is_empty():
+		_bounds_cache = _measure_bounds()
+	return _bounds_cache.duplicate()
+
+
+## Forget the cached bounds: a block or fixture came or went.
+func _shape_changed() -> void:
+	_bounds_cache = []
+	_dims_cache = Vector3i.ZERO
+
+
+func _measure_bounds() -> Array:
 	if is_empty():
 		return [Vector3i.ZERO, Vector3i.ZERO]
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
@@ -598,6 +620,12 @@ func bounds() -> Array:
 ## a staircase taller than the walls around it still has to fit -- otherwise the
 ## flight is silently cut off at the roof line.
 func chunk_dims() -> Vector3i:
+	if _dims_cache == Vector3i.ZERO:
+		_dims_cache = _measure_dims()
+	return _dims_cache
+
+
+func _measure_dims() -> Vector3i:
 	var b := bounds()
 	var lo: Vector3i = b[0]
 	var d: Vector3i = b[1]
