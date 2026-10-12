@@ -259,7 +259,14 @@ still shut, it goes the plain map's way for half a minute. `can_breach` off keep
 it. A 6.7 m wall across its way, 120 m long: through in 19 s with five punches, a 37 m walk
 instead of 150 m round (`mech_breach_probe`). The hierarchy's entrances count a breacher's
 body already in the bricks, or a wide body would never cross a wall on a cluster border.
-**Not yet:** soldiers with charges breaching their way (they have the room-clearing breach).
+**Soldiers breach their way (built):** the casebook's "Make their own way in" walks the
+breaching soldier map (`AIServices.foot_breach_nav`, 4 m a column) and plants a charge where the
+path goes into bricks (`Soldier.breach_way`, `inside_probe`). **Our armour makes the way in
+(built, `heavy_way`):** a squad outside the player's building with its mech or tank near asks it
+(`TacticsSense.ask_way`) for a doorway where its own breaching way would go into the wall
+(`ways_in().wall`); the squad waits in the heavy's lee while the mech's launcher (going round to
+that side when its own line meets another wall first) or the tank's cannon opens it at a
+soldier's height, and then the way in is close by and they sweep in (`heavy_way_probe`).
 
 **Mechs in buildings (A3):** a recipe can declare mech-sized openings and mech-clearance storeys —
 hangars, garages, atriums, a warehouse ground floor — and those interiors go into the mech map's

@@ -72,6 +72,8 @@ var road := ""
 var drive_to := Vector3.INF
 var target: Pawn
 var blind_shots := 0
+## Doorways its squad asked for, opened, for gates.
+var made_ways := 0
 ## Why the gunner is not firing now, for logs: "" when it is.
 var hold_fire := ""
 
@@ -206,6 +208,16 @@ func _gunner(now: float) -> void:
 		return
 	target = c.pawn
 	var at := c.pawn.chest() if c.visible else c.pos + Vector3.UP * 1.0
+	# Asked by its squad for a way in (TacticsSense.ask_way): while it does not
+	# see the player, the doorway they asked for, at the knee, until it is open.
+	var way := TacticsSense.way_asked(tank, now)
+	if way != Vector3.INF and not c.visible:
+		var into := Vector3(c.pos.x - way.x, 0.0, c.pos.z - way.z).normalized()
+		if TacticsSense.way_open(services, way - into * 3.0, way):
+			TacticsSense.way_done(tank)
+			made_ways += 1
+		else:
+			at = way + into * 0.6 + Vector3.UP * 0.6
 	tank.aim_point = at
 	if _friend_near_line(tank.muzzle.global_position, at):
 		hold_fire = "friend in the line"
