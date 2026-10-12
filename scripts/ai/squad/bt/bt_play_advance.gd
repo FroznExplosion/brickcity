@@ -28,6 +28,13 @@ var _cover: Array[Soldier] = []
 var _bound_at := 0.0
 var _suppress_at := Vector3.INF
 var _first := true
+## Movers of this bound whose cover is still being looked for
+## (CoverSearch.find_queued): mover -> {ahead, feet, goal, threat}. Each goes
+## when its answer is in (_send_movers) -- a tick or a few, at most COVER_WAIT.
+## Sent at once and redirected when cover came in, the squad re-pathed mid-run
+## and took longer to get there.
+var _waiting := {}
+const COVER_WAIT := 0.5
 var bounds := 0
 
 ## This play's generation (Squad.begin_play).
@@ -53,6 +60,7 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	var target := c.pos
 	blackboard.set_var(&"target", target)
+	_send_movers(q, now)
 	var nearest := INF
 	var furthest := 0.0
 	var goal := _goal(q, c)
@@ -67,7 +75,8 @@ func _tick(_delta: float) -> Status:
 	_movers = _movers.filter(func(m) -> bool: return is_instance_valid(m))
 	var moved := true
 	for m in _movers:
-		if not (q.replied(m, SquadMsg.StatusKind.REACHED) or q.replied(m, SquadMsg.StatusKind.BLOCKED)):
+		if _waiting.has(m) or not (q.replied(m, SquadMsg.StatusKind.REACHED)
+				or q.replied(m, SquadMsg.StatusKind.BLOCKED)):
 			moved = false
 	if _movers.is_empty() or moved or now - _bound_at > BOUND_TIMEOUT:
 		_next_bound(q, c, now)
@@ -85,7 +94,35 @@ func _goal(q: Squad, c: FactionKnowledge.Contact) -> Vector3:
 	return c.pos
 
 
+func _bound_move(spot: Vector3) -> SquadMsg.Assignment:
+	var a := SquadMsg.Assignment.make(SquadMsg.Task.MOVE, spot)
+	a.run = true
+	a.masked = true
+	a.crouch = true
+	a.role = "bound"
+	return a
+
+
+## Movers whose cover answer is in go to it if it gets them nearer the goal,
+## else to their spot; past COVER_WAIT, to their spot whatever.
+func _send_movers(q: Squad, now: float) -> void:
+	for m in _waiting.keys():
+		if not is_instance_valid(m) or not _movers.has(m):
+			_waiting.erase(m)
+			continue
+		var u: Dictionary = _waiting[m]
+		var cov = CoverSearch.find_queued(m, &"bound", u.ahead, u.threat, false, CoverSearch.POINT_MOVE)
+		if cov == null and now - _bound_at < COVER_WAIT:
+			continue
+		_waiting.erase(m)
+		var spot: Vector3 = q.services.ai_nav.snap(u.ahead)
+		if cov != null and not (cov as Dictionary).is_empty() 				and (cov.cover as Vector3).distance_to(u.goal) < (u.feet as Vector3).distance_to(u.goal) - 2.0:
+			spot = cov.cover
+		q.assign(m, _bound_move(spot))
+
+
 func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
+	_waiting.clear()
 	var s := q.services
 	var alive := q.alive()
 	var a_half: Array[Soldier] = []
@@ -116,19 +153,10 @@ func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
 		var dir := to.normalized()
 		var side := dir.cross(Vector3.UP) * (k - (_movers.size() - 1) * 0.5) * 3.0
 		var ahead := feet + dir * minf(BOUND, maxf(to.length() - stop + 1.0, 1.0)) + side
-		var spot := ahead
-		var cov := CoverSearch.find(s, ahead, threat_eye)
-		if not cov.is_empty() and (cov.cover as Vector3).distance_to(goal) < feet.distance_to(goal) - 2.0:
-			spot = cov.cover
-		else:
-			spot = s.ai_nav.snap(ahead)
-		var a := SquadMsg.Assignment.make(SquadMsg.Task.MOVE, spot)
-		a.run = true
-		a.masked = true
-		a.crouch = true
-		a.role = "bound"
-		q.assign(m, a)
+		_waiting[m] = {"ahead": ahead, "feet": feet, "goal": goal, "threat": threat_eye}
 		k += 1
+	# Those whose cover is already in go now; the rest as theirs comes in.
+	_send_movers(q, now)
 	_suppress(q, c.pos + Vector3.UP * 1.5)
 	if not _movers.is_empty():
 		q.say(_movers[0], "moving", "Moving!")

@@ -21,12 +21,18 @@ func _tick(_delta: float) -> Status:
 	# again from FALL_BACK metres further from the threat, once per decision.
 	if so.tactic == CombatPolicy.Tactic.FALL_BACK \
 			and float(blackboard.get_var(&"fell_back_at", -INF, false)) < so.tactic_at:
-		blackboard.set_var(&"fell_back_at", now)
 		var feet := so.pawn.feet()
 		var away := Vector3(feet.x - threat.x, 0.0, feet.z - threat.z)
+		var back_cover := {}
 		if away.length() > 0.01:
 			var back := s.ai_nav.snap(feet + away.normalized() * FALL_BACK)
-			var back_cover := CoverSearch.find_for(so, back, threat)
+			var queued = CoverSearch.find_queued(so, &"back", back, threat)
+			if queued == null:
+				so.state = "fall back"
+				return RUNNING
+			back_cover = queued
+		blackboard.set_var(&"fell_back_at", now)
+		if away.length() > 0.01:
 			if not back_cover.is_empty() and (back_cover.cover as Vector3).distance_to(threat) \
 					> feet.distance_to(threat) + 2.0:
 				cover = back_cover
@@ -47,7 +53,10 @@ func _tick(_delta: float) -> Status:
 			and threat.distance_to(blackboard.get_var(&"cover_threat", threat, false)) < 3.0:
 		return FAILURE
 	so.state = "find cover"
-	var found := CoverSearch.find_for(so, so.pawn.feet(), threat)
+	var queued = CoverSearch.find_queued(so, &"find", so.pawn.feet(), threat)
+	if queued == null:
+		return RUNNING
+	var found: Dictionary = queued
 	if found.is_empty():
 		blackboard.set_var(&"cover_fail_at", now)
 		# A tactic that needs cover and has none: decide again.

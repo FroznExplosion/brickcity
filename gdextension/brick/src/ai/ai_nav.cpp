@@ -48,6 +48,14 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_wade"), &AINav::get_wade);
     ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::snap);
     ClassDB::bind_method(D_METHOD("can_stand", "point"), &AINav::can_stand);
+    ClassDB::bind_method(D_METHOD("request_cover", "from", "threat_eye", "hp_per_hit",
+                                 "hits_per_second", "ideal_range", "priority"),
+            &AINav::request_cover);
+    ClassDB::bind_method(D_METHOD("service_cover", "budget_usec"), &AINav::service_cover);
+    ClassDB::bind_method(D_METHOD("get_cover_status", "id"), &AINav::get_cover_status);
+    ClassDB::bind_method(D_METHOD("get_cover", "id"), &AINav::get_cover);
+    ClassDB::bind_method(D_METHOD("release_cover", "id"), &AINav::release_cover);
+    ClassDB::bind_method(D_METHOD("cover_pending"), &AINav::cover_pending);
     ClassDB::bind_method(D_METHOD("find_cover", "from", "threat_eye", "hp_per_hit",
                                  "hits_per_second", "ideal_range"),
             &AINav::find_cover);
@@ -1100,51 +1108,147 @@ Dictionary AINav::rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp
 
 Dictionary AINav::find_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
         float hits_per_second, float ideal_range) {
-    Dictionary best;
     if (ai.is_null()) {
-        return best;
+        return Dictionary();
     }
+    CoverJob j;
+    j.from = from;
+    j.threat_eye = threat_eye;
+    j.hp_per_hit = hp_per_hit;
+    j.hits_per_second = hits_per_second;
+    j.ideal_range = ideal_range;
+    while (!_cover_spot(j)) {
+    }
+    return j.best;
+}
+
+bool AINav::_cover_spot(CoverJob &j) {
+    if (j.next >= RINGS * PER_RING || ai.is_null()) {
+        return true;
+    }
+    const int ring = j.next / PER_RING;
+    const int k = j.next % PER_RING;
+    j.next++;
     AIWorld *w = ai.ptr();
     const Vector3 up(0, 1, 0);
-    float best_score = -std::numeric_limits<float>::infinity();
-    for (int ring = 0; ring < RINGS; ++ring) {
-        const float r = RING_STEP * (ring + 1);
-        for (int k = 0; k < PER_RING; ++k) {
-            const float a = (float)Math_TAU * ((float)k + 0.5f * (ring % 2)) / PER_RING;
-            const Vector3 want = from + Vector3(std::cos(a) * r, 0.0f, std::sin(a) * r);
-            // The cheap test first: most of the ring is open ground.
-            if (w->bricks_between(threat_eye, want + up * (stand_only ? STAND_EYE : CROUCH_EYE)) == 0) {
-                continue;
-            }
-            Node n;
-            if (!_snap_node(want + up * 0.3f, n, 0) && !_snap_node(want + up * 0.3f, n, 1)) {
-                continue;
-            }
-            const Vector3 p = _node_point(n);
-            if (p.distance_to(want) > 1.0f || std::fabs(p.y - from.y) > 1.0f) {
-                continue;
-            }
-            const Dictionary spot = rate_cover(p, threat_eye, hp_per_hit, hits_per_second);
-            if (spot.is_empty()) {
-                continue;
-            }
-            const float d = p.distance_to(threat_eye);
-            const float life = spot["life"];
-            const float hug = spot["hug"];
-            // Hugged, not stood six metres behind: a wall's shadow on open ground
-            // is cover on paper and a bad place to fight from.
-            float score = std::min(life, 10.0f) - from.distance_to(p) * 0.5f
-                    - std::fabs(d - ideal_range) * 0.1f - std::max(hug - 1.0f, 0.0f) * 1.5f;
-            if (w->danger_distance(p) < 2.0f) {
-                score -= 20.0f;
-            }
-            if (score > best_score) {
-                best_score = score;
-                best = spot;
-            }
+    const Vector3 &from = j.from;
+    const Vector3 &threat_eye = j.threat_eye;
+    const float r = RING_STEP * (ring + 1);
+    const float a = (float)Math_TAU * ((float)k + 0.5f * (ring % 2)) / PER_RING;
+    const Vector3 want = from + Vector3(std::cos(a) * r, 0.0f, std::sin(a) * r);
+    // The cheap test first: most of the ring is open ground.
+    if (w->bricks_between(threat_eye, want + up * (stand_only ? STAND_EYE : CROUCH_EYE)) == 0) {
+        return j.next >= RINGS * PER_RING;
+    }
+    Node n;
+    if (!_snap_node(want + up * 0.3f, n, 0) && !_snap_node(want + up * 0.3f, n, 1)) {
+        return j.next >= RINGS * PER_RING;
+    }
+    const Vector3 p = _node_point(n);
+    if (p.distance_to(want) > 1.0f || std::fabs(p.y - from.y) > 1.0f) {
+        return j.next >= RINGS * PER_RING;
+    }
+    const Dictionary spot = rate_cover(p, threat_eye, j.hp_per_hit, j.hits_per_second);
+    if (!spot.is_empty()) {
+        const float d = p.distance_to(threat_eye);
+        const float life = spot["life"];
+        const float hug = spot["hug"];
+        // Hugged, not stood six metres behind: a wall's shadow on open ground
+        // is cover on paper and a bad place to fight from.
+        float score = std::min(life, 10.0f) - from.distance_to(p) * 0.5f
+                - std::fabs(d - j.ideal_range) * 0.1f - std::max(hug - 1.0f, 0.0f) * 1.5f;
+        if (w->danger_distance(p) < 2.0f) {
+            score -= 20.0f;
+        }
+        if (score > j.best_score) {
+            j.best_score = score;
+            j.best = spot;
         }
     }
-    return best;
+    return j.next >= RINGS * PER_RING;
+}
+
+int AINav::request_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second, float ideal_range, float priority) {
+    CoverJob j;
+    j.from = from;
+    j.threat_eye = threat_eye;
+    j.hp_per_hit = hp_per_hit;
+    j.hits_per_second = hits_per_second;
+    j.ideal_range = ideal_range;
+    j.priority = priority;
+    const int id = next_id++;
+    covers.emplace(id, std::move(j));
+    return id;
+}
+
+int AINav::service_cover(int budget_usec) {
+    const uint64_t until = now_usec() + (uint64_t)std::max(budget_usec, 0);
+    cover_services++;
+    // Answers nobody came for (the asker died, or asked again): dropped.
+    for (auto it = covers.begin(); it != covers.end();) {
+        if (it->second.status != PENDING && cover_services - it->second.done_at > 600) {
+            it = covers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    int finished = 0;
+    bool moved = false;
+    while (!moved || now_usec() < until) {
+        CoverJob *best = nullptr;
+        int best_id = 0;
+        for (auto &kv : covers) {
+            CoverJob &c = kv.second;
+            if (c.status != PENDING) {
+                continue;
+            }
+            if (best == nullptr || c.priority > best->priority
+                    || (c.priority == best->priority && kv.first < best_id)) {
+                best = &c;
+                best_id = kv.first;
+            }
+        }
+        if (best == nullptr) {
+            break;
+        }
+        // A spot at a time, at least one a call: a spot is a few rays.
+        bool done = false;
+        do {
+            done = _cover_spot(*best);
+            moved = true;
+        } while (!done && now_usec() < until);
+        if (done) {
+            best->status = DONE;
+            best->done_at = cover_services;
+            finished++;
+        }
+    }
+    return finished;
+}
+
+int AINav::get_cover_status(int id) const {
+    auto it = covers.find(id);
+    return it == covers.end() ? UNKNOWN : it->second.status;
+}
+
+Dictionary AINav::get_cover(int id) const {
+    auto it = covers.find(id);
+    return it == covers.end() || it->second.status != DONE ? Dictionary() : it->second.best;
+}
+
+void AINav::release_cover(int id) {
+    covers.erase(id);
+}
+
+int AINav::cover_pending() const {
+    int n = 0;
+    for (const auto &kv : covers) {
+        if (kv.second.status == PENDING) {
+            n++;
+        }
+    }
+    return n;
 }
 
 Dictionary AINav::get_stats() const {

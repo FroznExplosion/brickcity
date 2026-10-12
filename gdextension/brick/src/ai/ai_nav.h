@@ -20,6 +20,7 @@
 
 #include "ai_world.h"
 
+#include <limits>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/aabb.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -199,6 +200,19 @@ public:
     Dictionary rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
             float hits_per_second);
 
+    /// find_cover through a queue: the same search, a spot at a time inside
+    /// service_cover's budget, best `priority` first. A whole search at once was
+    /// 3-22 ms in a dense block, in one tick (arena gate). get_cover_status is
+    /// PENDING, DONE or UNKNOWN; get_cover the answer once DONE; release_cover
+    /// when read. An answer nobody reads is dropped after a while.
+    int request_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second, float ideal_range, float priority);
+    int service_cover(int budget_usec);
+    int get_cover_status(int id) const;
+    Dictionary get_cover(int id) const;
+    void release_cover(int id);
+    int cover_pending() const;
+
     /// Nobody crouches (Docs/AI.md A21): cover has to hide a STANDING body, and
     /// every spot is "high" -- peeked by stepping to its side. On by default;
     /// off brings back low cover that hides a crouched body.
@@ -363,6 +377,23 @@ private:
     // column so an invalidation forgets only the region it touched.
     std::unordered_map<int64_t, std::vector<std::pair<int16_t, int16_t>>> node_memo;
     std::unordered_map<int, Search> searches;
+    struct CoverJob {
+        Vector3 from;
+        Vector3 threat_eye;
+        int hp_per_hit = 0;
+        float hits_per_second = 0.0f;
+        float ideal_range = 0.0f;
+        float priority = 0.0f;
+        int next = 0;   // the next spot of the rings to look at
+        Dictionary best;
+        float best_score = -std::numeric_limits<float>::infinity();
+        int status = PENDING;
+        uint64_t done_at = 0;   // service_cover's count when it finished
+    };
+    std::unordered_map<int, CoverJob> covers;
+    uint64_t cover_services = 0;
+    /// One spot of a cover search; true once every spot has been looked at.
+    bool _cover_spot(CoverJob &j);
     std::unordered_map<int, Field> fields;
     int next_id = 1;
     uint32_t revision = 1;

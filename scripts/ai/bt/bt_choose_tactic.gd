@@ -60,7 +60,11 @@ func _tick(_delta: float) -> Status:
 			cover = again
 			kept = true
 	if not kept:
-		cover = CoverSearch.find_for(so, so.pawn.feet(), threat)
+		var queued = CoverSearch.find_queued(so, &"decide", so.pawn.feet(), threat)
+		if queued == null:
+			# Being looked for (a few ticks): the tactic it has stands till then.
+			return SUCCESS if so.tactic >= 0 else FAILURE
+		cover = queued
 		blackboard.set_var(&"cover_at", now)
 		if cover.is_empty():
 			blackboard.set_var(&"cover_fail_at", now)
