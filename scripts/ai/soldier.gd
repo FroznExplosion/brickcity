@@ -298,6 +298,7 @@ static func spawn(s: AIServices, parent: Node, feet: Vector3, p_team: int,
 		g.equip(gun)
 	p.gun = g
 	g.fired.connect(so._on_fired)
+	g.hold_round = so._line_shut
 	g.reload_started.connect(so._on_reload)
 	so.brain = BTPlayer.new()
 	so.brain.name = "Brain"
@@ -593,6 +594,13 @@ func _friend_in_line(eye: Vector3, at: Vector3) -> bool:
 func _burst(now: float) -> bool:
 	var cycle := BURST_ON + BURST_OFF
 	return fmod(now - _burst_from, cycle) < BURST_ON
+
+
+## The gun's last look before a round leaves (GunController.hold_round): the
+## line to what it was aimed at may have closed since the trigger was pulled.
+func _line_shut() -> bool:
+	return _aim_target != null and is_instance_valid(_aim_target) \
+			and services.ai_world.bricks_between(eye_pos(), _aim_target.chest()) > 0
 
 
 func _on_fired(info: Dictionary) -> void:
