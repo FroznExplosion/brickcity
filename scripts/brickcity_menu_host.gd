@@ -128,6 +128,30 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			DevMode.on = MENU_SETTINGS.truthy(value)
 		&"invincible":
 			DevMode.invincible = MENU_SETTINGS.truthy(value)
+		&"aa_mouse":
+			AimAssist.mouse_level = int(value)
+		&"aa_pad":
+			AimAssist.pad_level = int(value)
+		&"aa_snap":
+			AimAssist.snap_on_aim = MENU_SETTINGS.truthy(value)
+		&"aa_friction":
+			AimAssist.friction_scale = float(value)
+		&"aa_tracking":
+			AimAssist.tracking_scale = float(value)
+		&"aa_centering":
+			AimAssist.centering_scale = float(value)
+		&"aa_bullet":
+			AimAssist.bullet_scale = float(value)
+		&"aa_snap_strength":
+			AimAssist.snap_strength = float(value)
+		&"aa_engage":
+			AimAssist.engage_on = MENU_SETTINGS.truthy(value)
+		&"aa_range":
+			AimAssist.range_limit = MENU_SETTINGS.truthy(value)
+		&"aa_vertical":
+			AimAssist.vertical_pull = MENU_SETTINGS.truthy(value)
+		&"aa_weak_points":
+			AimAssist.weak_points = MENU_SETTINGS.truthy(value)
 
 
 ## The game's own rows: developer mode and the invincible player, in Gameplay.
@@ -139,7 +163,47 @@ func _setting_defs() -> Array:
 		{"id": &"invincible", "tab": "gameplay", "type": MENU_SETTINGS.T_BOOL, "label": "Invincible (Developer)",
 			"default": true, "hint": "While Developer Mode is on, you take no damage -- on foot, and in "
 			+ "the mech or vehicle you drive."},
-	]
+	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
+
+
+## Options > Aim Assist (AimAssist). Off the built-in tabs: the tab is the host's own
+## (_build_aim_tab), so the simple rows can sit over an Advanced section.
+const AIM_LEVELS := ["Off", "Low", "Medium", "High"]
+const AIM_ASSIST_DEFS := [
+	{"id": &"aa_mouse", "tab": "aim_assist", "type": MENU_SETTINGS.T_ENUM, "label": "Mouse Aim Assist",
+		"default": 2, "choices": AIM_LEVELS,
+		"hint": "With a mouse: slows your aim over an enemy and helps it follow them. On for testing."},
+	{"id": &"aa_pad", "tab": "aim_assist", "type": MENU_SETTINGS.T_ENUM, "label": "Controller Aim Assist",
+		"default": 2, "choices": AIM_LEVELS,
+		"hint": "With a controller: stronger than the mouse's. Used once controller look is in."},
+	{"id": &"aa_snap", "tab": "aim_assist", "type": MENU_SETTINGS.T_BOOL, "label": "Snap When Aiming",
+		"default": true, "hint": "Raising the sights near an enemy eases your aim part of the way onto them."},
+]
+const AIM_ASSIST_ADVANCED := [
+	{"id": &"aa_friction", "tab": "aim_assist", "type": MENU_SETTINGS.T_SLIDER, "label": "Slowdown",
+		"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "suffix": "x",
+		"hint": "How much your aim slows over an enemy. Never moves your view."},
+	{"id": &"aa_tracking", "tab": "aim_assist", "type": MENU_SETTINGS.T_SLIDER, "label": "Tracking",
+		"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "suffix": "x",
+		"hint": "How much your view follows an enemy who moves. A still enemy is never pulled toward."},
+	{"id": &"aa_centering", "tab": "aim_assist", "type": MENU_SETTINGS.T_SLIDER, "label": "Centering",
+		"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "suffix": "x",
+		"hint": "A gentle pull to the enemy's middle while you turn or fire -- never against your turn."},
+	{"id": &"aa_bullet", "tab": "aim_assist", "type": MENU_SETTINGS.T_SLIDER, "label": "Bullet Magnetism",
+		"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "suffix": "x",
+		"hint": "Rounds that would just miss are bent onto the enemy. Your view does not move."},
+	{"id": &"aa_snap_strength", "tab": "aim_assist", "type": MENU_SETTINGS.T_SLIDER, "label": "Snap Strength",
+		"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05, "suffix": "%",
+		"hint": "How much of the gap the snap closes when you raise the sights."},
+	{"id": &"aa_engage", "tab": "aim_assist", "type": MENU_SETTINGS.T_BOOL, "label": "Stronger While Firing",
+		"default": true, "hint": "Staying on an enemy while firing builds the assist up over half a second."},
+	{"id": &"aa_range", "tab": "aim_assist", "type": MENU_SETTINGS.T_BOOL, "label": "Limit to Weapon Range",
+		"default": true, "hint": "No assist toward an enemy your gun cannot reach (a shotgun at 30 m)."},
+	{"id": &"aa_weak_points", "tab": "aim_assist", "type": MENU_SETTINGS.T_BOOL, "label": "Aim for Weak Points",
+		"default": true, "hint": "Help toward the weak point facing you (a head, a mech's hatch), never one round the back."},
+	{"id": &"aa_vertical", "tab": "aim_assist", "type": MENU_SETTINGS.T_BOOL, "label": "Vertical Help",
+		"default": false, "hint": "Off: the assist helps only side to side, so aiming at a head stays on the head."},
+]
 
 
 ## Names for the rebinding lists: Options > Controls (the player's) and Options >
@@ -202,9 +266,22 @@ static func _dev_actions() -> Array[StringName]:
 ## Options > Developer, while developer mode is on (turn it on in Gameplay and
 ## open Options again to see it).
 func _extra_option_tabs() -> Array:
-	if not DevMode.on:
-		return []
-	return [{"title": "Developer", "build": _build_dev_tab}]
+	var tabs: Array = [{"title": "Aim Assist", "build": _build_aim_tab}]
+	if DevMode.on:
+		tabs.append({"title": "Developer", "build": _build_dev_tab})
+	return tabs
+
+
+## Options > Aim Assist: the three simple rows, then the Advanced ones under a heading.
+func _build_aim_tab(page: VBoxContainer) -> void:
+	for d in AIM_ASSIST_DEFS:
+		page.add_child(OptionRow.create(d))
+	page.add_child(HSeparator.new())
+	var head := Label.new()
+	head.text = "Advanced"
+	page.add_child(head)
+	for d in AIM_ASSIST_ADVANCED:
+		page.add_child(OptionRow.create(d))
 
 
 ## The tools that open from a button, in the city: [label, what it does].

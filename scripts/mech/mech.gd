@@ -144,6 +144,7 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	pool.layer_configs = [layer]
 	b.add_child(pool)
 	m.health = pool
+	m.add_to_group(&"mechs")
 	m.layers = MechLayers.attach(m)
 	m._wire_layers()
 	m.rodeo = Rodeo.attach(m)

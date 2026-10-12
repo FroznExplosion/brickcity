@@ -137,6 +137,9 @@ var exclude: Array[RID] = []
 var team := -1
 ## Where bullets come from and which way: the camera for a player, the arm for a mech.
 var aim: Node3D
+## The player's aim assist (AimAssist): a round that would just miss is bent onto the
+## target's aim line, before the spread. Null for everyone else's guns.
+var assist: AimAssist
 ## The holder's say on the cone, multiplied in: narrower aimed down the sights,
 ## wider on the move or in the air (PlayerView sets it). 1 for a soldier.
 var spread_mult := 1.0
@@ -533,8 +536,11 @@ func _fire_one(mult := 1.0) -> void:
 				ARC_CASTER_FALLOFF, ARC_CASTER_SLOW)
 		return
 	var aim_basis := aim.global_transform.basis
-	var dir := _spread(-aim_basis.z, aim_basis)
 	var from := aim.global_position
+	var forward := -aim_basis.z
+	if assist != null and is_instance_valid(assist):
+		forward = assist.bend(from, forward)
+	var dir := _spread(forward, aim_basis)
 	# A tracking dart's mark: a round fired near it goes to it, spread and all
 	# (COMBAT_DESIGN 7.2). A cone, not an aimbot -- the player still points.
 	var bent := false

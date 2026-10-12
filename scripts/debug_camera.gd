@@ -103,6 +103,8 @@ var look_scale := 1.0
 ## The player's own sensitivity and pitch inversion (the Options menu, through
 ## BrickcityMenuHost). Static: one player, every camera.
 static var look_mult := 1.0
+## The player's aim assist (AimAssist), when on foot: it slows the look over a target.
+var assist: AimAssist
 static var invert_y := false
 ## Lean, radians: the tilt of a wall-run. Kept through mouse-look, which would
 ## otherwise level it on the next motion event.
@@ -184,7 +186,10 @@ func _set_captured(on: bool) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _captured:
 		var k := LOOK_SENSITIVITY * look_scale * look_mult
-		add_look(-event.relative.x * k, -event.relative.y * k * (-1.0 if invert_y else 1.0))
+		var d := Vector2(-event.relative.x * k, -event.relative.y * k * (-1.0 if invert_y else 1.0))
+		if assist != null and is_instance_valid(assist):
+			d = assist.filter_look(d)
+		add_look(d.x, d.y)
 
 
 ## Turn by `yaw` and `pitch` radians -- the mouse, or a gun's recoil. From where
