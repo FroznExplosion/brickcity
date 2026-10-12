@@ -112,6 +112,7 @@ const SWAP_POS := Vector3(0.05, -0.36, 0.1)
 const SWAP_ROT := Vector3(-0.95, 0.3, 0.55)
 const SWAP_DOWN := 0.18
 const SWAP_UP := 0.3
+var _swap_up := SWAP_UP
 ## A grenade throw: how long, and when in it the grenade leaves the hand. The gun
 ## tips away to the right while the left hand is busy.
 const THROW_TIME := 0.8
@@ -306,6 +307,9 @@ func hold(gi: GunInstance) -> void:
 	gi.transform = Transform3D.IDENTITY
 	gi.visible = false
 	_lowering = true
+	# The new gun comes up as fast as its class says (WeaponClass.swap_time).
+	var wc := gi.result.weapon_class if gi.result != null else null
+	_swap_up = maxf((wc.swap_time() if wc != null else SWAP_DOWN + SWAP_UP) - SWAP_DOWN, 0.12)
 	_fitted = false
 	gun.bloom_per_shot = float(_feel()[2])
 	gun.bloom = 0.0
@@ -693,7 +697,7 @@ func _step_swap(delta: float) -> void:
 			if gun.gun != null and is_instance_valid(gun.gun) and gun.gun.get_parent() == rig:
 				gun.gun.visible = true
 	else:
-		_swap = move_toward(_swap, 0.0, delta / SWAP_UP)
+		_swap = move_toward(_swap, 0.0, delta / _swap_up)
 
 
 ## Where each hand goes this frame, and which hand it is.

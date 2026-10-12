@@ -6,8 +6,8 @@ extends SceneTree
 ##
 ##   the roll       off the seed, the same every time; nothing for a gun no one gave a
 ##                  kind (an enemy's fires as it always has); the magnum is semi; every
-##                  shotgun of a kind fires pellets; only semi and burst guns charge, and
-##                  never a white one
+##                  shotgun of a kind fires pellets; only semi and burst guns charge,
+##                  commons too
 ##   semi           one round a press however long it is held; a press a little early is
 ##                  kept, not lost
 ##   auto           rounds at the fire rate while held
@@ -167,8 +167,8 @@ func _roll() -> void:
 	_ok("the fire mode is off the seed, the same every time", same)
 	_ok("a gun no one gave a kind has none (it fires as it always has)", plain_none)
 	_ok("every shotgun of a kind fires pellets", shotgun_pellets)
-	_ok("only semi and burst guns charge, never a white one, and some do", charge_ok
-			and not white_charge and any_charge > 30, "%d charge" % any_charge)
+	_ok("only semi and burst guns charge, commons too, and some do", charge_ok
+			and white_charge and any_charge > 30, "%d charge" % any_charge)
 	_ok("bursts are 2 to 5", bursts_ok)
 	var mag := WeaponClass.builtin(&"pistol").with_kind(&"heavy")
 	_ok("the magnum is semi-auto", GunFireMode.roll(5, 1, mag).mode == GunFireMode.SEMI)

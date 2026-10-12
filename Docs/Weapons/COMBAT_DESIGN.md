@@ -364,7 +364,11 @@ Explosive rounds also **wear bricks harder** (§8) — they chip walls faster bu
   runs instead. A tap never waits.
 - Two groups for now. A third is a later choice.
 - Swap speed is a real stat (modifiers, skill tree). Ammo per type (light / rifle / sniper / shell)
-  is shared across all four guns.
+  is shared across all four guns. As built: the time to put the last gun away and bring this
+  one up, by class (`WeaponClass.SWAP_TIMES`: pistol 0.36 s up to LMG 0.8 s; a heavy 1.25x),
+  on the card and in the hands (`PlayerView`).
+- **On the keyboard the swap key is C** (decided 2026-10-11; Tab and the wheel still work).
+  Crouch is Ctrl alone.
 - On a keyboard, number keys pick a slot directly (1–2 group 1, 3–4 group 2) as well as the swap
   key. All of it is rebindable.
 
@@ -440,11 +444,17 @@ LMGs', SMGs' and shotguns' alt-fire roll.
 
 ### 7.4 Picking up a gun off the floor
 
-A gun on the floor (`WorldGunPickup`, with its card and rarity beam) can be tried without touching
-the loadout:
+A gun on the floor (`WorldGunPickup`, with its card and rarity beam) is **in reach** when it is
+near the crosshair and within 2.6 m, or -- Halo's -- simply at the player's feet (within 1.4 m),
+looked at or not. Two holds (decided 2026-10-11):
 
-- **Hold reload** (R; X on a pad, as in Halo) with a floor gun in reach and near the crosshair:
-  pick it up into a **third hand**. The loadout is untouched. Tapped, reload still reloads.
+- **Hold reload** (R; X on a pad, as in Halo): **take it for keeps.** It goes into the active
+  group's empty slot if there is one, else in place of the gun in hand, which drops to the floor
+  (`Loadout.take`). Carrying a tried gun, that one drops and this one is kept as a slot key keeps
+  (the slot's gun to the backpack). Tapped, reload still reloads.
+- **Hold swap** (C): **try it** in a **third hand**. The loadout is untouched. With a floor gun in
+  reach a tap of swap waits for the key to come up (a hold may mean "try it") and then swaps as
+  ever; away from floor guns the tap starts on the press.
 - **Tap swap** while holding it: drop it where you stand and draw the gun you had.
 - **Keep it**: a slot key (1–4) puts it in that slot; on a pad, hold **D-pad left** for slot A of
   the active group, **D-pad up** for slot B. The gun it replaces goes into the **backpack**
@@ -452,8 +462,9 @@ the loadout:
 - **Stow it**: hold reload again with no floor gun in view (D-pad down on a pad) to send it
   straight to the backpack without touching the loadout.
 
-Hold reload is one button with three jobs, in this order: a floor gun in view → pick it up;
-carrying one → stow it; otherwise → the alt-fire mode switch (§7.2).
+Hold reload is one button with several jobs, in this order: a floor gun looked at → take it;
+a mech's hatch or a vehicle beside → get in (what M does); a floor gun at the feet → take it; a
+workbench → its page; carrying a tried gun → stow it; otherwise → the alt-fire mode switch (§7.2).
 - Switching group, or picking up another floor gun, drops the one in the third hand.
 
 ### 7.5 The backpack
@@ -479,13 +490,13 @@ backpack is a list of those.
 
 | Pad | Keyboard / mouse | Does |
 |---|---|---|
-| Y tap | Tab tap, mouse wheel | the other gun in the group |
-| Y hold | Tab hold | the other group |
+| Y tap | C (or Tab) tap, mouse wheel | the other gun in the group |
+| Y hold | C (or Tab) hold | the other group · a floor gun in reach: try it (third hand) |
 | — | 1–4 | that slot directly |
 | D-pad right | 5 | the ordnance, and back |
 | Right bumper | G | throw a grenade |
 | X tap | R tap | reload |
-| X hold | R hold | floor gun in view: pick it up · carrying one: stow it · else: alt-fire mode |
+| X hold | R hold | floor gun in reach: take it for keeps · beside a mech or vehicle: get in · carrying a tried gun: stow it · else: alt-fire mode |
 | D-pad left / up (carrying) | 1–4 (carrying) | keep the floor gun in that slot |
 | — | I | the backpack (arrows / wheel choose, 1–4 swap into a slot, Backspace drops) |
 | Right stick click | E | melee (next to an enemy mech: climb it) |
@@ -579,22 +590,26 @@ stream) for every gun of a kind (§7.8); a gun with no kind -- an enemy's -- fir
   hit, damage summed (`pellets_hit` of `pellets`), and chips brick once. A stumble is
   scaled by the share of pellets that struck: the light shotgun stumbles a soldier at arm's
   length and only makes him flinch from a few steps.
-- **Charge** (semi and burst guns; 10% of greens up to 70% of mythics, never whites). A tap
+- **Charge** (semi and burst guns; 10% of commons, 15% of greens, up to 70% of mythics). A tap
   fires as ever; held past 0.3 s the gun stops and charges (0.7-1.1 s), and let go full it
   fires an *overcharge* (one shot at 3x, for three shots), a *hyper burst* (burst guns:
   twice the burst at 1.6x its speed) or a *long burst* (semi guns: ten rounds). Each carries
   one effect: *shield break* (a shield up is taken whole), *armor break* (armor on top
   taken whole, `DamagePacket.strip_armor`) or *knockback* (a stumble 3x as hard). In the
   hands the gun draws back and trembles while it charges, and bucks when it goes.
-- **The card** (`GunCard`, drawn by the arsenal's HUD): the floor gun looked at, or the gun
-  chosen in the backpack or at the bench -- rarity, kind, tier, score against the gun in
-  hand, damage, fire rate, trigger, pellets and range, DPS, magazine, reload, accuracy,
-  crit, modifiers, alt-fire, charge.
+- **The card** (`GunCard`, drawn by the arsenal's HUD), laid out like Borderlands 4's: the
+  floor gun in reach, or the gun chosen in the backpack or at the bench. Name, rarity, kind,
+  tier and the score against the gun in hand; the damage large (x pellets), in the element's
+  colour; then the plain stats a row each -- fire rate, fire mode, range (shotguns),
+  accuracy, reload, magazine, swap speed, element (and what it is strong against), crit,
+  DPS; then **SPECIAL**, an entry each: the charge-up, the alt-fire, the burst, the
+  modifiers, the trade parts, abilities; the legendary's red text last.
 - **A gun on the floor is a body** (`WorldGunPickup`): dropped, it is tossed and falls,
   lies on its side and sleeps; every explosion (`WorldGunPickup.blast`: grenades, blasts in
   the bricks, explosive rounds) wakes and throws it; a sleeping gun checks under itself
   every half second and falls when the floor has gone. It is on the rubble layer: walkers
-  do not collide with it.
+  do not collide with it. At rest it is frozen where it lies, so nothing nudges it -- a
+  walker, a soldier, the solver -- until a blast or a missing floor wakes it.
 
 Tests: `tools/fire_mode_probe.gd`, `tools/pickup_physics_probe.gd`, and the `--arms` pass
 (the card, a dropped gun at rest, the shotguns' stumbles).

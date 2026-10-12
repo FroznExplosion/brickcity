@@ -48,8 +48,8 @@ const KNOCK_MULT := 3.0
 const CHARGE_START := 0.3
 ## A press this early is kept until the gun can fire.
 const SEMI_BUFFER := 0.15
-## Chance a semi or burst gun charges, by colour (white .. mythic).
-const CHARGE_CHANCE: Array[float] = [0.0, 0.1, 0.2, 0.35, 0.5, 0.7]
+## Chance a semi or burst gun charges, by colour (white .. mythic). Commons too.
+const CHARGE_CHANCE: Array[float] = [0.1, 0.15, 0.2, 0.35, 0.5, 0.7]
 
 ## Trigger weights per class and kind.
 const MODES := {
@@ -123,6 +123,19 @@ static func falloff(fm: Dictionary, dist: float) -> float:
 	var far := float(fm.get("far", 1e9))
 	var low := float(fm.get("falloff", 1.0))
 	return lerpf(1.0, low, clampf((dist - near) / maxf(far - near, 0.01), 0.0, 1.0))
+
+
+## The charge-up as the card's special entry: [title, what it does].
+static func charge_entry(fm: Dictionary) -> Array:
+	var title: String = {OVERCHARGE: "Charge-up: Overcharge", HYPER: "Charge-up: Hyper Burst",
+			LONG: "Charge-up: Long Burst"}[StringName(fm.charge)]
+	var what: String = {OVERCHARGE: "one shot at ×%d for %d shots' ammo" % [roundi(OVERCHARGE_MULT),
+			OVERCHARGE_COST], HYPER: "a burst twice as long, %.1f× as fast" % HYPER_RATE,
+			LONG: "a burst of %d" % LONG_BURST}[StringName(fm.charge)]
+	var eff: String = {SHIELD_BREAK: "breaks a shield whole", ARMOR_BREAK: "breaks armor whole",
+			KNOCKBACK: "knocks them flying"}[StringName(fm.effect)]
+	return [title, "Hold fire %.1f s and let go: %s that %s. A tap fires as normal." % [
+			float(fm.get("charge_time", 0.9)), what, eff]]
 
 
 ## The card's lines: the trigger, the pattern, the charge.

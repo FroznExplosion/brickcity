@@ -14,11 +14,16 @@ extends SceneTree
 ##                stowed, it goes to the backpack; a full backpack refuses and the
 ##                replaced gun goes to the floor instead
 ##   backpack     a backpack gun swaps into a slot; dropped, it leaves
+##   take         a floor gun for keeps (hold reload): into the group's empty slot, else in
+##                place of the gun in hand, which is let go; over a tried gun, that one
+##                is let go and the slot's gun goes to the backpack
 ##   nothing lost every gun let go of comes back to the caller
 ##   arsenal      the gun in hand is the controller's; each gun keeps its magazine
-##                over a swap; a dropped gun is a pickup on the floor; picking one up
-##                takes it off the floor; hold swap changes group, tap does not;
-##                hold reload picks up the gun in view
+##                over a swap; a dropped gun is a pickup on the floor; hold reload takes
+##                the gun in view for keeps, the old one to the floor; hold swap over a
+##                floor gun tries it (third hand), a tap there still swaps; a gun at the
+##                feet is in reach without looking at it (Halo); away from floor guns,
+##                hold swap changes group, tap does not
 
 var _pass := 0
 var _fail := 0
@@ -108,6 +113,23 @@ func _rules() -> void:
 	_ok("nothing lost: every gun is held or was handed back", all.size() == 6 and not all.has(a)
 			and not all.has(f), "%d held" % all.size())
 
+	# Taking for keeps.
+	var t := Loadout.new()
+	var ta := _gun("A"); var tb := _gun("B"); var tc := _gun("C")
+	t.set_slot(0, ta)
+	dropped = t.take(tb)
+	_ok("take: into the group's empty slot, in hand, nothing let go", dropped.is_empty()
+			and t.slots[1] == tb and t.in_hand() == tb and t.slots[0] == ta)
+	dropped = t.take(tc)
+	_ok("take with the group full: in place of the gun in hand, which is let go",
+			dropped == [tb] and t.slots[1] == tc and t.in_hand() == tc)
+	var td := _gun("D"); var te := _gun("E")
+	t.pick_up(td)
+	dropped = t.take(te)
+	_ok("take over a tried gun: that one let go, the slot's gun to the backpack",
+			dropped == [td] and t.slots[1] == te and t.in_hand() == te and t.backpack == [tc]
+			and t.third_hand == null)
+
 
 func _run() -> void:
 	_rules()
@@ -170,26 +192,75 @@ func _run() -> void:
 	# process_frame comes before the nodes' own _process: two, so the arsenal has looked.
 	await process_frame
 	await process_frame
-	_ok("a floor gun in reach and view is the target", ars.target_pickup == pickup)
+	_ok("a floor gun in reach and view is the target", ars.target_pickup == pickup
+			and ars.target_looked)
+	var held_res := (gc.gun as GunInstance).result
 	ars.interact()
 	await process_frame
 	var gone := not is_instance_valid(pickup) or pickup.is_queued_for_deletion()
-	_ok("hold reload picks it up: in hand, off the floor", lo.third_hand != null
-			and gc.gun == lo.third_hand and (lo.third_hand as GunInstance).gun_seed == 99 and gone)
+	var floor_guns := get_nodes_in_group(WorldGunPickup.GROUP).filter(
+			func(n: Node) -> bool: return not n.is_queued_for_deletion())
+	_ok("hold reload takes it for keeps: in the slot, in hand, off the floor", lo.third_hand == null
+			and gc.gun == lo.in_hand() and (gc.gun as GunInstance).gun_seed == 99
+			and lo.slots.has(gc.gun) and gone)
+	_ok("and the gun it replaced is on the floor", floor_guns.size() == 1
+			and (floor_guns[0] as WorldGunPickup).result == held_res)
+	# The old gun lies ahead. Look away: at the feet, it is still in reach (Halo's).
+	var old_on_floor := floor_guns[0] as WorldGunPickup
+	for i in 240:
+		await physics_frame
+		if old_on_floor.resting():
+			break
+	old_on_floor.global_position = pawn.feet() + Vector3(0.3, 0.1, 0.2)
+	cam.global_transform = Transform3D(Basis.looking_at(Vector3(0, 1.6, 10.0) - Vector3(0, 1.6, 0)),
+			Vector3(0, 1.6, 0))
+	await process_frame
+	await process_frame
+	_ok("a gun at the feet is in reach without looking at it", ars.target_pickup == old_on_floor
+			and not ars.target_looked)
+
+	# Hold swap over it: tried in the third hand.
+	var ev := InputEventAction.new()
+	ev.action = &"swap_weapon"
+	ev.pressed = true
+	var kept := gc.gun
+	Input.action_press(&"swap_weapon")
+	ars._unhandled_input(ev)
+	await process_frame
+	_ok("a swap pressed over a floor gun waits (a hold may mean try it)", gc.gun == kept)
+	await create_timer(PlayerArsenal.HOLD_SWAP + 0.15).timeout
+	await process_frame
+	Input.action_release(&"swap_weapon")
+	await process_frame
+	_ok("held: the floor gun in the third hand to try, the loadout untouched",
+			lo.third_hand != null and gc.gun == lo.third_hand and lo.slots.has(kept)
+			and (lo.third_hand as GunInstance).result == held_res)
 	var before := get_nodes_in_group(WorldGunPickup.GROUP).size()
 	ars._apply(lo.tap_swap())
 	await process_frame
 	var after := get_nodes_in_group(WorldGunPickup.GROUP)
-	_ok("tapped away, it is a pickup on the floor again", after.size() == before + 1
-			and (after[after.size() - 1] as WorldGunPickup).result.seed == 99)
-	_ok("and the hands have the gun they had", gc.gun == first)
+	_ok("tapped away, it is a pickup on the floor again", after.size() == before + 1)
+	_ok("and the hands have the gun they had", gc.gun == kept)
+	# A tap over a floor gun is still a swap, on the release.
+	await process_frame
+	await process_frame
+	var g_tap := gc.gun
+	Input.action_press(&"swap_weapon")
+	ars._unhandled_input(ev)
+	await process_frame
+	Input.action_release(&"swap_weapon")
+	await process_frame
+	await process_frame
+	_ok("a tap over a floor gun still swaps guns", ars.target_pickup != null and gc.gun != g_tap
+			and lo.third_hand == null)
 
-	# Hold vs tap on the real input action.
+	# Hold vs tap on the real input action, no floor gun about.
+	for n in get_nodes_in_group(WorldGunPickup.GROUP):
+		n.queue_free()
+	await process_frame
+	await process_frame
 	var g0 := lo.group
 	Input.action_press(&"swap_weapon")
-	var ev := InputEventAction.new()
-	ev.action = &"swap_weapon"
-	ev.pressed = true
 	ars._unhandled_input(ev)
 	await create_timer(PlayerArsenal.HOLD_SWAP + 0.15).timeout
 	await process_frame

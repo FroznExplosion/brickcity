@@ -114,6 +114,29 @@ func pick_up(gun: Object) -> Array:
 	return out
 
 
+## A floor gun for keeps (hold reload, Halo's): into the active group's empty slot if
+## it has one, else in place of the gun in hand, which is let go. Carrying a tried gun,
+## that one is let go and this one is kept as keep() keeps (the slot's gun to the
+## backpack). The ordnance goes away.
+func take(gun: Object) -> Array:
+	var out: Array = []
+	ordnance_up = false
+	if third_hand != null:
+		out.append(_take_third())
+		third_hand = gun
+		out.append_array(keep(active_slot()))
+		return out
+	var slot := active_slot()
+	var other := group * 2 + 1 - int(hand[group])
+	if slots[slot] != null and slots[other] == null:
+		slot = other
+	if slots[slot] != null:
+		out.append(slots[slot])
+	slots[slot] = gun
+	hand[group] = slot % 2
+	return out
+
+
 ## The third hand's gun into `slot`, which becomes the gun in hand. The gun it
 ## replaces goes to the backpack -- or, the backpack full, back to the floor.
 func keep(slot: int) -> Array:
