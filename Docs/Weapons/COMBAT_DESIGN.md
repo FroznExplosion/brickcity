@@ -790,6 +790,12 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Loot**: `CityScene.drop_loot` rolls `LootRoller` drops of the fight's tier on its own seeded
   stream; every arena soldier drops on death (the HQ officer as a badass) — WaveDirector, one
   line, AI area. `GunInstance.result` keeps what a gun was made from, so it can be dropped again.
+- **A dead soldier always drops the gun in its hands** (decided 2026-10-12): the very gun it
+  fired, beside where it fell (`WaveDirector.held_gun_result`, `CityScene.drop_gun`), and its
+  loot roll on top as before. A bomber or a brawler has none to drop.
+  `tools/held_gun_drop_probe.gd` (5 checks).
+- **Idea, not built:** a soldier lets go of its gun before death -- knocked back hard, or giving
+  up to a mech.
 - `tools/loadout_probe.gd` (31 checks).
 - **Not yet:** ammo reserves per type (magazines still refill from nothing); the swap has no draw
   time (swap speed as a stat needs one); co-op (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
