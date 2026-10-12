@@ -798,6 +798,13 @@ var ai_nav := AINav.new()
 ## AI.md 10.1: paths and nav, half a millisecond a frame.
 const NAV_BUDGET_US := 500
 var _nav_worst_us := 0
+## `_ai_tick`'s steps this tick, its worst tick and that tick's steps, and the
+## ticks over AI_SPIKE_MS (`_ai_track_worst`).
+var _ai_steps := {}
+var _ai_worst_ms := 0.0
+var _ai_worst_steps := {}
+var _ai_spikes: Array = []
+const AI_SPIKE_MS := 8.0
 var _nav_mode := false
 ## Fights in progress: their buildings are held materialised (R3).
 var _encounters: Array[Encounter] = []
@@ -1244,6 +1251,7 @@ func pause_allowed() -> bool:
 
 
 func _exit_tree() -> void:
+	_report_ai_profile()
 	if ai_services != null and ai_services.tally != null:
 		ai_services.tally.call(&"save")
 	# A band still uploading on a worker at shutdown was a crash on quit, as a
@@ -5490,12 +5498,17 @@ func _ai_tick(destruction_ms: float) -> void:
 	if _no_ai:
 		return
 	var t0 := Time.get_ticks_usec()
+	_ai_steps = {}
+	var ts := t0
 	ai_world.sync()
+	ts = _ai_step("world_sync", ts)
 	# Where not to stand: anything big still falling, swept to where it is going.
 	Danger.update(ai_world, islands)
+	ts = _ai_step("danger", ts)
 	# And whatever a disaster has marked: a meteor's ring, a funnel, a fire.
 	if disasters != null:
 		disasters.ctx.push_hazards(ai_world)
+	ts = _ai_step("hazards", ts)
 	# Wreckage that lost bricks since last tick: re-weigh it, a few a tick.
 	var n_wreck := 0
 	for pid in _wreck_dirty.keys():
@@ -5508,8 +5521,10 @@ func _ai_tick(destruction_ms: float) -> void:
 		n_wreck += 1
 		if n_wreck >= 4:
 			break
+	ts = _ai_step("wreck", ts)
 	for enc in _encounters:
 		enc.step(func(id: int) -> void: _promote(id, false))
+	ts = _ai_step("encounters", ts)
 	if ai_nav.pending() > 0:
 		ai_sched.submit(AIScheduler.NAV, 5.0, _nav_service)
 	elif ai_nav.warm_pending() > 0:
@@ -5522,22 +5537,29 @@ func _ai_tick(destruction_ms: float) -> void:
 	# Weight is structure: only the host turns it into commands (R5).
 	if authority.may_decide():
 		weight.tick(ai_services.now())
+	ts = _ai_step("weight", ts)
 	var t1 := Time.get_ticks_usec()
 	_ai_sync_ms = float(t1 - t0) / 1000.0
 	ai_sched.report_destruction_ms(destruction_ms)
 	_ai_heavy_run = _ai_heavy_run + 1 if destruction_ms > AI_HEAVY_MS else 0
 	_ai_heavy_run_max = maxi(_ai_heavy_run_max, _ai_heavy_run)
 	_ai_destruction_peak = maxf(_ai_destruction_peak, destruction_ms)
+	ts = Time.get_ticks_usec()
 	ai_sched.run()
+	ts = _ai_step("sched_run", ts)
 	# Aggro and callouts (AIServices.tick): never ran in the city before.
 	ai_services.tick()
+	ts = _ai_step("services", ts)
 	_ai_run_ms = float(Time.get_ticks_usec() - t1) / 1000.0
 	if budget != null:
 		budget.tick(ai_services.now())
+	ts = _ai_step("budget", ts)
 	if swarm != null and ai_services.now() >= _next_swarm_refresh:
 		# Buildings come down: the field goes round what is still standing.
 		_next_swarm_refresh = ai_services.now() + 5.0
 		swarm.refresh()
+	ts = _ai_step("swarm_refresh", ts)
+	_ai_track_worst(float(ts - t0) / 1000.0)
 	_prof["ai"] = _ai_sync_ms + _ai_run_ms + (swarm.tick_ms() if swarm != null else 0.0)
 	if _phase != "":
 		_ai_phase_level[_phase] = maxi(int(_ai_phase_level.get(_phase, 0)), ai_sched.get_level())
@@ -5546,6 +5568,63 @@ func _ai_tick(destruction_ms: float) -> void:
 		_ai_phase_level["n:" + _phase] = int(_ai_phase_level.get("n:" + _phase, 0)) + 1
 	if _ai_label != null and _ai_label.visible and Engine.get_physics_frames() % 10 == 0:
 		_update_ai_label()
+
+
+## One step of `_ai_tick`, timed into `_ai_steps`. The city's own spike report
+## (`_prof`) is taken before the AI runs, so without this an AI spike showed
+## only as "_ai_tick" in the profiler, with nothing to say which part.
+func _ai_step(step: String, since: int) -> int:
+	var now := Time.get_ticks_usec()
+	_ai_steps[step] = float(now - since) / 1000.0
+	return now
+
+
+## Keep the worst AI tick and its breakdown, and every tick over AI_SPIKE_MS
+## with its three biggest steps. Shown on F4, printed at exit.
+func _ai_track_worst(total_ms: float) -> void:
+	var s: Dictionary = ai_sched.get_stats()
+	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
+		_ai_steps["run:" + sub] = float((s[sub] as Dictionary).ms)
+	for k in ai_services.tick_steps:
+		_ai_steps["svc:" + k] = float(ai_services.tick_steps[k])
+	if total_ms > _ai_worst_ms:
+		_ai_worst_ms = total_ms
+		_ai_worst_steps = _ai_steps.duplicate()
+	if total_ms > AI_SPIKE_MS and _ai_spikes.size() < 200:
+		_ai_spikes.append([total_ms, Engine.get_physics_frames(), _ai_top(_ai_steps, 3)])
+
+
+static func _ai_top(steps: Dictionary, n: int) -> String:
+	var all: Array = []
+	for k in steps:
+		all.append([float(steps[k]), k])
+	all.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+	var out := ""
+	for i in mini(n, all.size()):
+		out += "%s %.1f  " % [all[i][1], all[i][0]]
+	return out
+
+
+func _report_ai_profile() -> void:
+	if _ai_worst_steps.is_empty():
+		return
+	print("[ai-prof] worst AI tick %.1f ms: %s" % [_ai_worst_ms, _ai_top(_ai_worst_steps, 6)])
+	var spikes := _ai_spikes.duplicate()
+	spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+	print("[ai-prof] %d AI tick(s) over %.0f ms; the worst:" % [_ai_spikes.size(), AI_SPIKE_MS])
+	for k in mini(12, spikes.size()):
+		print("[ai-prof]   %.1f ms at tick %d: %s" % [spikes[k][0], spikes[k][1], spikes[k][2]])
+	var navs: Array = ai_services.all_navs() if ai_services != null else []
+	if mech_nav != null and not navs.has(mech_nav):
+		navs.append(mech_nav)
+	for n in navs:
+		var st: Dictionary = (n as AINav).get_stats()
+		if not st.has("worst_service_us"):
+			continue
+		print("[ai-prof] nav span %d: worst service %d us, hier begin %d, enclosed %d, side edges %d, cluster sides %d, column %d, snap %d, expand %d" % [
+				(n as AINav).get_span(), int(st.worst_service_us), int(st.worst_hier_begin_us), int(st.get("worst_enclosed_us", 0)),
+				int(st.worst_side_edges_us), int(st.worst_cluster_sides_us),
+				int(st.worst_column_us), int(st.worst_snap_us), int(st.worst_expand_us)])
 
 
 func _update_ai_label() -> void:
@@ -5564,6 +5643,7 @@ func _update_ai_label() -> void:
 			int(ai_nav.get_stats().columns_cached), int(ai_nav.get_stats().pending),
 			int(ai_nav.get_stats().paths), int(ai_nav.get_stats().failed),
 			float(ai_nav.get_stats().search_ms), _nav_worst_us],
+		"worst     %.1f ms: %s" % [_ai_worst_ms, _ai_top(_ai_worst_steps, 4)],
 	]
 	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
 		var d: Dictionary = s[sub]

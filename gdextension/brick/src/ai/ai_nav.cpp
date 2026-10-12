@@ -623,7 +623,8 @@ int AINav::request_path(const Vector3 &from, const Vector3 &to, float priority,
 }
 
 int AINav::service(int budget_usec) {
-    const uint64_t until = now_usec() + (uint64_t)std::max(budget_usec, 0);
+    const uint64_t t_service = now_usec();
+    const uint64_t until = t_service + (uint64_t)std::max(budget_usec, 0);
     int finished = 0;
     while (now_usec() < until) {
         // Best first: the most important pending request -- and among equals,
@@ -677,6 +678,7 @@ int AINav::service(int budget_usec) {
     if (!warm_queue.empty() && now_usec() < until) {
         _warm_step(until);
     }
+    stat_worst_service_usec = std::max(stat_worst_service_usec, now_usec() - t_service);
     return finished;
 }
 
@@ -1151,6 +1153,11 @@ Dictionary AINav::get_stats() const {
     d["worst_expand_us"] = (int64_t)stat_worst_expand_usec;
     d["worst_snap_us"] = (int64_t)stat_worst_snap_usec;
     d["worst_column_us"] = (int64_t)stat_worst_column_usec;
+    d["worst_service_us"] = (int64_t)stat_worst_service_usec;
+    d["worst_hier_begin_us"] = (int64_t)stat_worst_hier_begin_usec;
+    d["worst_enclosed_us"] = (int64_t)stat_worst_enclosed_usec;
+    d["worst_side_edges_us"] = (int64_t)stat_worst_side_edges_usec;
+    d["worst_cluster_sides_us"] = (int64_t)stat_worst_cluster_sides_usec;
     d["hier_paths"] = (int64_t)stat_hier_paths;
     d["hier_nodes"] = (int64_t)stat_hier_nodes;
     d["hier_dijkstra"] = (int64_t)stat_hier_dijkstra;
@@ -1175,4 +1182,9 @@ void AINav::reset_stats() {
     stat_worst_expand_usec = 0;
     stat_worst_snap_usec = 0;
     stat_worst_column_usec = 0;
+    stat_worst_service_usec = 0;
+    stat_worst_hier_begin_usec = 0;
+    stat_worst_enclosed_usec = 0;
+    stat_worst_side_edges_usec = 0;
+    stat_worst_cluster_sides_usec = 0;
 }
