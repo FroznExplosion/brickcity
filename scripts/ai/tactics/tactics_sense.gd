@@ -160,7 +160,7 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 ## The ways into the building the player is in, from where `so` is: {walk,
 ## breach, straight (metres; INF for none), no_way, far, breach_short, door --
 ## where the walk goes under a roof, the way the player would come out -- or
-## INF}. One look serves every soldier about as far off for WAY_KEEP seconds.
+## INF, wall -- where the breaching way first goes into bricks, or INF}. One look serves every soldier about as far off for WAY_KEEP seconds.
 static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 	var s := so.services
 	var feet := so.pawn.feet()
@@ -176,6 +176,11 @@ static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 	var bn := s.foot_breach_nav()
 	var breach_path := bn.find_path(bn.snap(feet), bn.snap(them), WAY_BUDGET)
 	var breach := _length(breach_path) if not breach_path.is_empty() else INF
+	var wall := Vector3.INF
+	if not breach_path.is_empty() and bn.has_method(&"get_last_breaches"):
+		var holes: PackedVector3Array = bn.call(&"get_last_breaches")
+		if not holes.is_empty():
+			wall = holes[0]
 	var straight := feet.distance_to(them)
 	# The door: where the walk goes under the roof -- the last stretch still out
 	# under the sky, walked half a metre at a time to the first step covered.
@@ -192,7 +197,7 @@ static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 						door = q
 						break
 			break
-	var w := {"at": now, "walk": walk, "breach": breach, "straight": straight, "door": door,
+	var w := {"at": now, "walk": walk, "breach": breach, "straight": straight, "door": door, "wall": wall,
 			"no_way": walk == INF,
 			"far": walk != INF and walk > straight * WAY_FAR + WAY_SLACK,
 			"breach_short": breach != INF and breach < walk * BREACH_SHORT}
@@ -207,6 +212,49 @@ static func _length(p: PackedVector3Array) -> float:
 	for i in range(1, p.size()):
 		n += p[i - 1].distance_to(p[i])
 	return n
+
+
+## The casebook's "heavy_way": a squad asks its mech or tank (`heavy`) to blast a
+## doorway at `at` -- a wall it would go in by -- for WAY_ASK seconds. The
+## heavy's brain reads it (way_asked) and puts its rounds there while it does
+## not see the player; the squad waits in its lee (BTManoeuvre).
+const WAY_ASK := 12.0
+
+
+static func ask_way(heavy: Object, at: Vector3, now: float) -> void:
+	if heavy == null or not is_instance_valid(heavy) or at == Vector3.INF:
+		return
+	heavy.set_meta(&"way_for", at)
+	heavy.set_meta(&"way_until", now + WAY_ASK)
+
+
+## Where `heavy` has been asked to blast a way in, or INF.
+static func way_asked(heavy: Object, now: float) -> Vector3:
+	if heavy == null or not heavy.has_meta(&"way_for") or now > float(heavy.get_meta(&"way_until", 0.0)):
+		return Vector3.INF
+	return heavy.get_meta(&"way_for")
+
+
+## The way is open (or given up): the heavy fights as before.
+static func way_done(heavy: Object) -> void:
+	if heavy != null and heavy.has_meta(&"way_for"):
+		heavy.remove_meta(&"way_for")
+		heavy.remove_meta(&"way_until")
+
+
+## Is the wall at `at` open -- a doorway through it, both at the knee and at the
+## head, along the way from `from`?
+static func way_open(s: AIServices, from: Vector3, at: Vector3) -> bool:
+	var d := Vector3(at.x - from.x, 0.0, at.z - from.z)
+	if d.length() < 0.05:
+		return true
+	d = d.normalized() * 1.2
+	var base := Vector3(at.x, at.y, at.z)
+	for h: float in [0.5, 1.6]:
+		var p := base + Vector3.UP * h
+		if not s.ai_world.line_clear(p - d, p + d):
+			return false
+	return true
 
 
 ## The same reading for a FLYER over `target` (Flyer): distance, how covered the

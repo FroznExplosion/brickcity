@@ -131,8 +131,9 @@ var breach_point := Vector3.INF
 var breach_nav: AINav
 var can_breach := true
 var path_breach := Vector3.INF
-## Holes opened on the way, for gates.
+## Holes opened on the way, and doorways its squad asked for, for gates.
 var breached := 0
+var made_ways := 0
 var _path_nav: AINav
 var _breaches := PackedVector3Array()
 var _bi := 0
@@ -173,6 +174,7 @@ static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree
 	br.brain.set_scene_root_hint(m.body)
 	m.body.add_child(br.brain)
 	m.gun.fired.connect(br._on_fired)
+	m.gun.hold_round = br._line_shut
 	m.health.died.connect(func() -> void:
 		br.mech.intents.clear(br.mech.motor.torso_yaw)
 		br.mech.gun.set_trigger(false)
@@ -573,6 +575,14 @@ func _friend_in_line(from: Vector3, at: Vector3) -> bool:
 		if ch.distance_to(Geometry3D.get_closest_point_to_segment(ch, from, at)) < 1.5:
 			return true
 	return false
+
+
+## The gun's last look before a round leaves (GunController.hold_round): the
+## trigger was pulled on a clear line, but the target may have stepped behind
+## bricks since.
+func _line_shut() -> bool:
+	return _target != null and is_instance_valid(_target) \
+			and services.ai_world.bricks_between(mech.muzzle.global_position, _target.chest()) > 0
 
 
 func _on_fired(_info: Dictionary) -> void:

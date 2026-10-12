@@ -38,6 +38,9 @@ const DOABLE := {
 	# in cover facing the way the player would come out (Soldier.watch_point).
 	"sweep": T.PUSH, "flash": T.PUSH, "breach": T.PUSH,
 	"guard_exits": T.TAKE_COVER, "wait": T.TAKE_COVER,
+	# Our mech or tank blasts the doorway (TacticsSense.ask_way) while we wait
+	# in its lee; then the way in is close by, and we sweep.
+	"heavy_way": T.PUSH,
 }
 ## Book move -> what a FLYER does with it (Flyer.Mode): circle and fire, a
 ## strafing run, break off upwards, or -- a bomber -- dive and go off.
@@ -111,8 +114,11 @@ func decide_in(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary,
 		move = _redraw(plan.rows, rng, so, c)
 	if move == "grenade":
 		so.throw_grenade(c.pos)
-	so.screen_of = TacticsSense.heavy_near(so) if move in ["screen_heavy", "heavy_leads"] else null
-	so.screen_move = move if so.screen_of != null else ""
+	so.screen_of = TacticsSense.heavy_near(so) if move in ["screen_heavy", "heavy_leads", "heavy_way"] else null
+	so.screen_move = ("heavy_leads" if move == "heavy_way" else move) if so.screen_of != null else ""
+	if move == "heavy_way" and so.screen_of != null:
+		var wi := TacticsSense.ways_in(so, c.pos)
+		TacticsSense.ask_way(so.screen_of, wi.wall if wi.wall != Vector3.INF else c.pos, so.services.now())
 	# Making its own way in, or watching the way out.
 	so.breach_way = move == "breach"
 	so.watch_point = Vector3.INF

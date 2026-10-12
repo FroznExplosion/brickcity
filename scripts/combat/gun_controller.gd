@@ -130,6 +130,10 @@ var collision_mask := Layers.GUN_MASK
 ## (point: Vector3, direction: Vector3, shot: Dictionary) -> void. `shot` is
 ## StructuralDamage.for_shot of the equipped gun.
 var on_structure_hit := Callable()
+## () -> bool, an AI holder's: true holds the next round back -- its line to what it
+## is shooting at closed between the brain pulling the trigger and the round leaving
+## (the target stepped behind a wall). Not spent; a burst under way stops.
+var hold_round := Callable()
 ## Bodies the ray ignores -- the shooter's own.
 var exclude: Array[RID] = []
 ## The holder's team: a splash or a ricochet never lands on its own side (a body whose
@@ -303,6 +307,8 @@ func step(delta: float) -> void:
 		if ammo <= 0:
 			reload()
 			return
+		if hold_round.is_valid() and hold_round.call():
+			return
 		ammo -= 1
 		_cooldown += interval
 		_round += 1
@@ -378,10 +384,13 @@ func _run_burst(fr: float) -> void:
 
 
 ## One round out of the magazine (`mult` its damage): power shots and double fire as
-## ever. False when the magazine is empty (a reload starts).
+## ever. False when the magazine is empty (a reload starts), or the holder holds it
+## (hold_round).
 func _round_out(mult := 1.0) -> bool:
 	if ammo <= 0:
 		reload()
+		return false
+	if hold_round.is_valid() and hold_round.call():
 		return false
 	ammo -= 1
 	_round += 1
