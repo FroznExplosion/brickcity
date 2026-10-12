@@ -77,10 +77,12 @@ func _rally_spot(i: int, cov, plain: Vector3) -> Vector3:
 func _take_cover(q: Squad) -> void:
 	for i in _upgrade.keys():
 		var u: Dictionary = _upgrade[i]
-		var m: Soldier = u.member
-		if not is_instance_valid(m) or m.is_dead():
+		# A member killed and cleared away meanwhile: checked before it is typed,
+		# as assigning a freed one to a Soldier is an error of its own.
+		if not is_instance_valid(u.member) or (u.member as Soldier).is_dead():
 			_upgrade.erase(i)
 			continue
+		var m: Soldier = u.member
 		var cov = CoverSearch.find_queued(m, &"rally", u.want,
 				(u.threat as Vector3) + Vector3.UP * CoverSearch.STAND_EYE, false, CoverSearch.POINT_MOVE)
 		if cov == null:
