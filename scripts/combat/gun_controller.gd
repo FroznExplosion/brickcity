@@ -325,11 +325,18 @@ func step(delta: float) -> void:
 # --- the trigger (GunFireMode) ---------------------------------------------------------
 
 ## A gun with a fire mode: semi, auto or burst, and the charge if it has one.
+##
+## Held down, a light semi gun keeps firing at HELD_SEMI_PACE of its rate and a light
+## burst gun bursts again; a heavy one fires once a pull, the trigger let go between.
+## A semi or burst gun that charges fires nothing on the press: a tap fires on the
+## release, a hold past CHARGE_START charges (the Armory Ledger's trigger rules).
 func _step_mode(delta: float) -> void:
 	var pressed := _trigger and not _was_trigger
 	var released := not _trigger and _was_trigger
 	_was_trigger = _trigger
 	var fr := maxf(_stat(&"fire_rate", 1.0) * _wind_up(), 0.1)
+	var charges := _fm.has("charge")
+	var heavy := gun.weapon_class != null and gun.weapon_class.archetype == &"heavy"
 	# A burst under way runs out first: a burst gun's, or a charged one.
 	if _burst_left > 0:
 		_run_burst(fr)
@@ -347,7 +354,8 @@ func _step_mode(delta: float) -> void:
 			if full:
 				_fire_charged(fr)
 			return
-	if pressed:
+	# A charging gun's shot is the tap's release; any other gun's, the press.
+	if (released if charges else pressed):
 		_press_buffer = GunFireMode.SEMI_BUFFER + delta
 	_press_buffer = maxf(_press_buffer - delta, 0.0)
 	match StringName(_fm.mode):
@@ -361,9 +369,13 @@ func _step_mode(delta: float) -> void:
 				_press_buffer = 0.0
 				if _round_out():
 					_cooldown += 1.0 / fr
+			elif _trigger and not pressed and not heavy and not charges and _cooldown <= 0.0:
+				# Held, a light semi gun keeps firing, slower than it can be tapped.
+				if _round_out():
+					_cooldown += 1.0 / (fr * GunFireMode.HELD_SEMI_PACE)
 		GunFireMode.BURST:
-			# A press starts a burst; held (with no charge to build), burst follows burst.
-			if _cooldown <= 0.0 and (_press_buffer > 0.0 or (_trigger and not _fm.has("charge"))):
+			# A press starts a burst; held, a light gun with no charge bursts again.
+			if _cooldown <= 0.0 and (_press_buffer > 0.0 or (_trigger and not charges and not heavy)):
 				_press_buffer = 0.0
 				_burst_left = int(_fm.get("burst", 3))
 				_burst_rate = fr * float(_fm.get("burst_speed", 2.5))
