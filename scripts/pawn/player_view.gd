@@ -96,6 +96,10 @@ const KICK_RECOVER_AFTER := 0.1
 ## the eye: centred, its top just under the line of sight. What a sprint and a
 ## reload do to it.
 const HIP := Vector3(0.12, -0.06, -0.3)
+## The gun's spread from the hip and down the sights, of its accuracy's cone
+## (GunController.current_spread_deg): an SMG's 2 deg is 0.8 from the hip, 0.5 aimed.
+const HIP_SPREAD := 0.4
+const ADS_SPREAD := 0.25
 const ADS := Vector3(0.0, -0.03, -0.2)
 const SPRINT_POS := Vector3(-0.05, 0.03, -0.02)
 const SPRINT_ROT := Vector3(-0.18, 0.5, 0.4)
@@ -446,11 +450,12 @@ func _process(delta: float) -> void:
 	_melee = move_toward(_melee, 1.0 if bashing else 0.0, delta / (0.07 if bashing else 0.2))
 	_since_shot += delta
 
-	# Where rounds go: tight at the eye, loose on the run and looser in the air.
+	# Where rounds go: tight from the hip with every gun, tighter at the eye, a little
+	# looser on the run and in the air. A gun's accuracy is mostly its reach (GunRange).
 	var move_k := clampf(hv / Pawn.RUN_SPEED, 0.0, 1.0)
-	var spread := lerpf(1.0, 0.35, _ads) * (1.0 + 0.6 * move_k * (1.0 - 0.7 * _ads))
+	var spread := lerpf(HIP_SPREAD, ADS_SPREAD, _ads) * (1.0 + 0.4 * move_k * (1.0 - 0.7 * _ads))
 	if not on_floor and not wall_run:
-		spread *= 1.8
+		spread *= 1.5
 	gun.spread_mult = spread
 
 	_camera(delta, wall_run, sliding)

@@ -269,6 +269,29 @@ func _run() -> void:
 	await _wait(0.5)
 	_ok("and it is lost when the firing stops", aa.engagement < 0.05, "%.2f" % aa.engagement)
 
+	# --- range from the gun: the accuracy roll stretches it; a shotgun's is its pattern.
+	var wc := WeaponClass.builtin(&"rifle")
+	var tight := GunRange.of(wc, {&"accuracy": wc.base_accuracy * 1.06})
+	var loose := GunRange.of(wc, {&"accuracy": wc.base_accuracy * 0.94})
+	_ok("a tighter rifle reaches further than a looser one", tight > loose * 1.15,
+			"%.0f m against %.0f m" % [tight, loose])
+	_ok("a shotgun's range is its pattern's far", GunRange.of(WeaponClass.builtin(&"shotgun"), {},
+			{"pellets": 8, "far": 12.0}) == 12.0)
+
+	# --- a target freed between the pick and a round (killed, cleared): no harm.
+	_look(_chest(), 0.3)
+	await _frames(2)
+	var had := not aa.target.is_empty()
+	var f := cam.global_position
+	var fw := -cam.global_transform.basis.z
+	s.pawns.erase(foe)
+	foe.body.free()
+	_ok("a target freed under it: a round goes straight, the look is not slowed",
+			had and aa.bend(f, fw) == fw and is_equal_approx(aa.filter_look(Vector2(0.01, 0.0)).x, 0.01))
+	foe = Pawn.spawn(root, Vector3(0.0, 0.0, -20.0), 1, true, 1.0e6)
+	s.pawns.append(foe)
+	await _frames(3)
+
 	# --- off
 	AimAssist.mouse_level = 0
 	_look(_chest(), 0.0)

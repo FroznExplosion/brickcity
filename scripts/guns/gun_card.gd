@@ -146,6 +146,8 @@ func _stats(res: GunGenerator.Result) -> void:
 		if res.fire.has("pellets"):
 			_stat_row("Range", "full to %.0f m, %d%% by %.0f m" % [float(res.fire.near),
 					roundi(float(res.fire.falloff) * 100.0), float(res.fire.far)])
+		else:
+			_stat_row("Range", "%.0f m" % GunRange.of(wc, res.stats, res.fire))
 	_stat_row("Accuracy", "%d%%" % roundi(float(res.stats.get(&"accuracy", 0.0)) * 100.0))
 	if not ordnance:
 		_stat_row("Reload", "%.2f s" % float(res.stats.get(&"reload_time", 0.0)))
