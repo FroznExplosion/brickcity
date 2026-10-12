@@ -104,6 +104,13 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 		result.killed = pool.is_dead()
 		return result
 
+	# A charged shot's armor break: armor on top takes all of it, and it stops there.
+	if packet.strip_armor and pool.top_layer_type() == &"armor":
+		pool.apply_impact(1e12, &"", 1.0, false, true)
+		result.dealt = before - pool.total_current()
+		result.killed = pool.is_dead()
+		return result
+
 	# A melee is its own damage type and one step: it lands on the top layer and stops
 	# there, whatever it broke (COMBAT_DESIGN 4.1). Never a crit.
 	if packet.melee:

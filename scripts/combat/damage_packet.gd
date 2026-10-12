@@ -37,6 +37,8 @@ var shield_mult: float = 1.0
 ## The plasma charge (COMBAT_DESIGN 7.2): on a shield, it takes the whole shield and
 ## stops there. Off a shield it is a plain hit of `amount`.
 var strip_shield: bool = false
+## Armor on top is taken whole (a charged shot's armor break, GunFireMode).
+var strip_armor: bool = false
 
 ## The generator this hit's rolls draw from (the status proc). Null = DamageSystem.rng.
 ## Never the global RNG: in co-op the host rolls, and a roll only the host can repeat

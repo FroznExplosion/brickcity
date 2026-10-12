@@ -38,6 +38,8 @@ signal reload_started(seconds: float)
 ## An alt-fire that could not go: "Not enough ammo to charge".
 signal alt_refused(reason: String)
 signal reloaded
+## A charged shot went (GunFireMode): &"overcharge", &"hyper" or &"long".
+signal charged_fired(kind: StringName)
 
 ## Widest cone, in degrees, at accuracy 0. A 0.9-accuracy pistol spreads a tenth.
 const MAX_SPREAD_DEG := 8.0
@@ -167,6 +169,19 @@ var _flame: TorchFlame
 ## The tracking dart's mark: {"dart", "target", "spot", "left"}. A dart in flight has no
 ## target yet. Empty: no dart.
 var _mark := {}
+## How the gun in hand fires (GunFireMode): its trigger, pellets and charge. Empty: as
+## guns always have (an enemy's) -- rounds while the trigger is held.
+var _fm := {}
+var _was_trigger := false
+## A semi press kept until the gun can fire; the burst under way (rounds left, its
+## rate, whether it is a charged one); the charge held so far; the charged shot's
+## effect on what the rounds now going out hit.
+var _press_buffer := 0.0
+var _burst_left := 0
+var _burst_rate := 1.0
+var _charged_burst := false
+var _hold_charge := 0.0
+var _shot_effect := &""
 
 
 func equip(g: GunInstance) -> void:
@@ -182,6 +197,13 @@ func equip(g: GunInstance) -> void:
 	_torch_left = 0.0
 	_flame_on(false)
 	_shot = StructuralDamage.for_shot(g.weapon_class, g.active_effects) if g != null else {}
+	_fm = g.fire if g != null else {}
+	_was_trigger = false
+	_press_buffer = 0.0
+	_burst_left = 0
+	_charged_burst = false
+	_hold_charge = 0.0
+	_shot_effect = &""
 
 
 ## The magazine in SHOTS -- what the trigger spends and the HUD shows. The stat is in
@@ -271,6 +293,10 @@ func step(delta: float) -> void:
 	if ai_alt and _trigger and _alt_cool <= 0.0 and alt_fire() != &"" and _ai_alt():
 		return
 	if _need_release:
+		_was_trigger = _trigger
+		return
+	if not _fm.is_empty():
+		_step_mode(delta)
 		return
 	var interval := 1.0 / maxf(_stat(&"fire_rate", 1.0) * _wind_up(), 0.1)
 	while _trigger and _cooldown <= 0.0:
@@ -285,6 +311,193 @@ func step(delta: float) -> void:
 		if is_double_round(_round):
 			_fire_one()
 		bloom = minf(bloom + bloom_per_shot, BLOOM_MAX_DEG)
+
+
+# --- the trigger (GunFireMode) ---------------------------------------------------------
+
+## A gun with a fire mode: semi, auto or burst, and the charge if it has one.
+func _step_mode(delta: float) -> void:
+	var pressed := _trigger and not _was_trigger
+	var released := not _trigger and _was_trigger
+	_was_trigger = _trigger
+	var fr := maxf(_stat(&"fire_rate", 1.0) * _wind_up(), 0.1)
+	# A burst under way runs out first: a burst gun's, or a charged one.
+	if _burst_left > 0:
+		_run_burst(fr)
+		return
+	# Held past CHARGE_START: no more rounds, the charge builds. Let go full, and the
+	# charged shot goes; let go early, and nothing.
+	if _fm.has("charge"):
+		if _trigger and _held >= GunFireMode.CHARGE_START:
+			_hold_charge += delta
+			_press_buffer = 0.0
+			return
+		if released and _hold_charge > 0.0:
+			var full := _hold_charge >= hold_charge_time()
+			_hold_charge = 0.0
+			if full:
+				_fire_charged(fr)
+			return
+	if pressed:
+		_press_buffer = GunFireMode.SEMI_BUFFER + delta
+	_press_buffer = maxf(_press_buffer - delta, 0.0)
+	match StringName(_fm.mode):
+		GunFireMode.AUTO:
+			while _trigger and _cooldown <= 0.0:
+				if not _round_out():
+					return
+				_cooldown += 1.0 / fr
+		GunFireMode.SEMI:
+			if _press_buffer > 0.0 and _cooldown <= 0.0:
+				_press_buffer = 0.0
+				if _round_out():
+					_cooldown += 1.0 / fr
+		GunFireMode.BURST:
+			# A press starts a burst; held (with no charge to build), burst follows burst.
+			if _cooldown <= 0.0 and (_press_buffer > 0.0 or (_trigger and not _fm.has("charge"))):
+				_press_buffer = 0.0
+				_burst_left = int(_fm.get("burst", 3))
+				_burst_rate = fr * float(_fm.get("burst_speed", 2.5))
+				_charged_burst = false
+				_run_burst(fr)
+
+
+func _run_burst(fr: float) -> void:
+	while _burst_left > 0 and _cooldown <= 0.0:
+		if not _round_out():
+			_burst_left = 0
+			break
+		_burst_left -= 1
+		if _burst_left > 0:
+			_cooldown += 1.0 / _burst_rate
+		else:
+			_cooldown += 1.0 / fr if _charged_burst else GunFireMode.burst_gap(_fm, fr)
+	if _burst_left <= 0:
+		_charged_burst = false
+		_shot_effect = &""
+
+
+## One round out of the magazine (`mult` its damage): power shots and double fire as
+## ever. False when the magazine is empty (a reload starts).
+func _round_out(mult := 1.0) -> bool:
+	if ammo <= 0:
+		reload()
+		return false
+	ammo -= 1
+	_round += 1
+	_fire_one(mult * (GunModifiers.POWER_SHOT_MULT if is_power_round(_round) else 1.0))
+	if is_double_round(_round):
+		_fire_one()
+	bloom = minf(bloom + bloom_per_shot, BLOOM_MAX_DEG)
+	return true
+
+
+## The charged shot (GunFireMode): an overcharge, a hyper burst or a long burst, its
+## rounds carrying the gun's charge effect.
+func _fire_charged(fr: float) -> void:
+	_shot_effect = StringName(_fm.get("effect", &""))
+	match StringName(_fm.charge):
+		GunFireMode.OVERCHARGE:
+			if ammo <= 0:
+				_shot_effect = &""
+				reload()
+				return
+			var spend := mini(GunFireMode.OVERCHARGE_COST, ammo)
+			ammo -= spend - 1
+			_round_out(GunFireMode.OVERCHARGE_MULT * float(spend) / GunFireMode.OVERCHARGE_COST)
+			_shot_effect = &""
+			_cooldown = maxf(_cooldown, 0.0) + 1.0 / fr
+		GunFireMode.HYPER:
+			_burst_left = int(_fm.get("burst", 3)) * 2
+			_burst_rate = fr * float(_fm.get("burst_speed", 2.5)) * GunFireMode.HYPER_RATE
+			_charged_burst = true
+			_run_burst(fr)
+		GunFireMode.LONG:
+			_burst_left = GunFireMode.LONG_BURST
+			_burst_rate = fr * 2.5
+			_charged_burst = true
+			_run_burst(fr)
+	charged_fired.emit(StringName(_fm.charge))
+
+
+## Seconds a full charge takes; 0 for a gun that does not charge.
+func hold_charge_time() -> float:
+	return float(_fm.get("charge_time", 0.0))
+
+
+## 0..1: the primary's charge held so far.
+func hold_charge_progress() -> float:
+	var t := hold_charge_time()
+	return clampf(_hold_charge / t, 0.0, 1.0) if t > 0.0 else 0.0
+
+
+## How the gun in hand fires (GunFireMode), empty for the old way.
+func fire_mode() -> Dictionary:
+	return _fm
+
+
+## A shotgun's pellets (GunFireMode): each its own ray in the pattern, each its share of
+## the damage times the falloff for its range. What one blast does to each thing it hit
+## goes out on `fired` once, its damage summed, with how many pellets struck. Brick is
+## chipped once a blast, where the first pellet to strike brick struck.
+func _fire_pellets(from: Vector3, dir: Vector3, aim_basis: Basis, mult: float) -> void:
+	var n := maxi(int(_fm.pellets), 1)
+	var cone := tan(deg_to_rad(float(_fm.pellet_spread)))
+	var r := _roll()
+	var space := get_world_3d().direct_space_state
+	var by_target := {}
+	var order: Array = []
+	var brick := {}
+	var centre := from + dir * range_m
+	var struck := false
+	for i in n:
+		var rad := sqrt(r.randf()) * cone
+		var th := r.randf() * TAU
+		var pd := (dir + aim_basis.x * cos(th) * rad + aim_basis.y * sin(th) * rad).normalized()
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + pd * range_m,
+				collision_mask, exclude))
+		if hit.is_empty():
+			continue
+		var point: Vector3 = hit.position
+		if not struck:
+			centre = point
+			struck = true
+		var target := _living(hit.collider)
+		if target == null:
+			if brick.is_empty():
+				brick = {"point": point, "normal": hit.normal, "collider": hit.collider, "dir": pd}
+			continue
+		var k := GunFireMode.falloff(_fm, from.distance_to(point)) / float(n)
+		var res := _hit_living(target, point, hit.normal, mult * k)
+		if not by_target.has(target):
+			by_target[target] = {"point": point, "normal": hit.normal, "collider": hit.collider,
+					"dealt": 0.0, "killed": false, "crit": false, "n": 0, "colour": res.element_color}
+			order.append(target)
+		var e: Dictionary = by_target[target]
+		e.dealt += res.dealt
+		e.killed = e.killed or res.killed
+		e.crit = e.crit or res.was_crit
+		e.n += 1
+	if not brick.is_empty() and on_structure_hit.is_valid():
+		on_structure_hit.call(brick.point + brick.dir * INTO_SURFACE, brick.dir, _shot)
+	if gun.is_inside_tree():
+		gun.play_shot_effects(centre)
+	if order.is_empty():
+		fired.emit({} if brick.is_empty() else {"point": brick.point, "normal": brick.normal,
+				"collider": brick.collider, "structure": true, "result": null})
+		return
+	for t in order:
+		var e: Dictionary = by_target[t]
+		var sum := DamageSystem.DamageResult.new()
+		sum.dealt = e.dealt
+		sum.killed = e.killed
+		sum.was_crit = e.crit
+		sum.element_color = e.colour
+		var info := {"point": e.point, "normal": e.normal, "collider": e.collider,
+				"structure": false, "result": sum, "pellets_hit": e.n, "pellets": n}
+		if _shot_effect == GunFireMode.KNOCKBACK:
+			info["impact_mult"] = GunFireMode.KNOCK_MULT
+		fired.emit(info)
 
 
 ## Round `n` (1 = the first since the gun was drawn) is a power shot.
@@ -330,6 +543,9 @@ func _fire_one(mult := 1.0) -> void:
 		if to.length() > 0.01 and rad_to_deg((-aim_basis.z).angle_to(to)) <= MARK_CONE_DEG:
 			dir = to.normalized()
 			bent = true
+	if _fm.has("pellets"):
+		_fire_pellets(from, dir, aim_basis, mult)
+		return
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * range_m, collision_mask, exclude)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
@@ -341,6 +557,8 @@ func _fire_one(mult := 1.0) -> void:
 	var point: Vector3 = hit.position
 	var info := {"point": point, "normal": hit.normal, "collider": collider,
 			"structure": false, "result": null}
+	if _shot_effect == GunFireMode.KNOCKBACK:
+		info["impact_mult"] = GunFireMode.KNOCK_MULT
 	var target := _living(collider)
 	if target != null:
 		# Bent onto the mark and into what it marks: the round lands where the dart is,
@@ -390,6 +608,9 @@ func _hit_living(target: Node, point: Vector3, normal: Vector3,
 	p.element = Elements.get_def(gun.element_id)
 	p.rng = rng
 	p.shield_mult = 1.0 + _stat(&"shield_buster", 0.0)
+	# A charged shot's break (GunFireMode): the top layer of its kind, whole.
+	p.strip_shield = _shot_effect == GunFireMode.SHIELD_BREAK
+	p.strip_armor = _shot_effect == GunFireMode.ARMOR_BREAK
 	var r := DamageSystem.resolve(p, target)
 	if r.killed:
 		_on_kill(target, point, p.amount * (p.crit_multiplier if r.was_crit else 1.0) - r.dealt)
@@ -416,6 +637,7 @@ func _explode(at: Vector3, struck: Node, amount: float, radius := SPLASH_RADIUS,
 		kind := &"explosive") -> void:
 	if gun.is_inside_tree():
 		SplashFlash.spawn(gun.get_tree().current_scene, at, radius)
+	WorldGunPickup.blast(at, radius, 3.0)
 	for n in _living_near(at, radius):
 		if n == struck:
 			continue

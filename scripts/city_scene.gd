@@ -3806,6 +3806,8 @@ func _building_for_body(body: RID) -> int:
 func _blast(point: Vector3, radius: float) -> void:
 	if not authority.request(DamageLog.Kind.BLAST, -1, point, radius):
 		return
+	# Guns on the floor are thrown by it (and the ones it leaves without a floor fall).
+	WorldGunPickup.blast(point, radius * 2.0)
 	_damage_queue.append([point, radius])
 
 
@@ -4010,7 +4012,9 @@ func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunP
 		var p := WorldGunPickup.create(_gun_library, res)
 		add_child(p)
 		var a := TAU * float(i) / float(maxi(drops.size(), 1))
-		p.global_position = at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0)
+		# Up off the ground and tossed: it falls, lands and lies (WorldGunPickup).
+		p.global_position = at + Vector3(cos(a), 0.0, sin(a)) * (0.5 if drops.size() > 1 else 0.0) 				+ Vector3.UP * 0.8
+		p.toss()
 		out.append(p)
 	return out
 
@@ -8231,12 +8235,13 @@ func _run_arms_pass() -> void:
 			"%d shots of %d rounds" % [_gun.mag_size(), int(magnum.stats[&"mag_size"])])
 	await _save("arms_magnum")
 
-	# Hit reactions (HitReaction): the light (auto) shotgun stumbles a soldier only up
-	# close and he only flinches from further; the heavy one throws him from 8 m.
+	# Hit reactions (HitReaction): the light (auto) shotgun's wide pellets stumble a
+	# soldier only at arm's length, and from a few steps he only flinches; the heavy
+	# one's tight pattern throws him from 8 m.
 	var fwd := -camera.global_transform.basis.z
 	fwd = Vector3(fwd.x, 0.0, fwd.z).normalized()
 	var yaw := camera.rotation.y
-	for leg in [[&"light", 3.0, true], [&"light", 9.0, false], [&"heavy", 8.0, true]]:
+	for leg in [[&"light", 1.5, true], [&"light", 6.0, false], [&"heavy", 8.0, true]]:
 		var sg := GunInstance.from_result(GunGenerator.generate(_gun_library, 77,
 				WeaponClass.builtin(&"shotgun").with_kind(leg[0]), 1))
 		_arsenal.replace_in_hand(sg)
@@ -8274,6 +8279,28 @@ func _run_arms_pass() -> void:
 		target.body.queue_free()
 		await _frames(4)
 	camera.rotation = Vector3(-0.08, yaw, 0.0)
+	# A gun dropped on the floor: it falls, lies and sleeps; looked at, its card is up.
+	var ahead2 := -camera.global_transform.basis.z
+	ahead2 = Vector3(ahead2.x, 0.0, ahead2.z).normalized()
+	var dropped := drop_loot(pawn.feet() + ahead2 * 1.6, &"heavy")
+	var lying := false
+	for i in 300:
+		await _frames(1)
+		if not dropped.is_empty() and dropped[0].sleeping:
+			lying = true
+			break
+	if not dropped.is_empty():
+		var lying_gun: WorldGunPickup = dropped[0]
+		_gate_ok("a dropped gun falls and sleeps on the ground", lying
+				and absf(lying_gun.global_position.y - pawn.feet().y) < 0.25,
+				"%.2f m over the feet, asleep %s" % [lying_gun.global_position.y - pawn.feet().y, lying])
+		camera.look_at(lying_gun.centre(), Vector3.UP)
+		await _frames(10)
+		var hud_card: GunCard = _arsenal._hud.card
+		_gate_ok("looked at, its card is up", _arsenal.target_pickup == lying_gun and hud_card != null
+				and hud_card.visible)
+		await _save("arms_card")
+		camera.rotation = Vector3(-0.08, camera.rotation.y, 0.0)
 	_gate_ok("no hand was changed in plain view", arms.swaps_in_view == 0,
 			"%d" % arms.swaps_in_view)
 
