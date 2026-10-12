@@ -4,10 +4,10 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script res://tools/gun_kind_probe.gd
 ##
-##   the kinds      a heavy spends two rounds a shot and hits harder a ROUND than the
-##                  light; its damage a second is the light's or a little over, never a
-##                  power weapon's; no heavy's worst roll fires under one shot a second;
-##                  the light shotgun fires faster and lighter; ordnance has no kinds
+##   the kinds      a heavy spends two rounds a shot, hits harder a shot than the light
+##                  and fires slower (each kind's numbers come from its own shots to kill,
+##                  combat_numbers_probe); a light shotgun is a pump or the faster,
+##                  lighter auto; ordnance has no kinds
 ##   the roll       off the seed, the same every time, and never moving the parts or
 ##                  stats the seed rolls for a light gun; heavies rarer than lights, and
 ##                  commoner up the colours; only a legendary or mythic is ever crossed
@@ -51,8 +51,7 @@ func _run() -> void:
 
 
 func _kinds() -> void:
-	var round_ok := true
-	var dps_ok := true
+	var shot_ok := true
 	var floor_ok := true
 	var two := true
 	var worst := ""
@@ -60,25 +59,30 @@ func _kinds() -> void:
 		var light := WeaponClass.builtin(id).with_kind(&"light")
 		var heavy := WeaponClass.builtin(id).with_kind(&"heavy")
 		two = two and heavy.rounds_per_shot == 2 and light.rounds_per_shot == 1
-		var per_round := heavy.base_damage / 2.0 / light.base_damage
-		var dps := heavy.base_damage * heavy.base_fire_rate / (light.base_damage * light.base_fire_rate)
-		if per_round < 1.0:
-			round_ok = false
-			worst += " %s round %.2f" % [id, per_round]
-		if dps < 0.95 or dps > 1.9:
-			dps_ok = false
-			worst += " %s dps %.2f" % [id, dps]
-		if heavy.base_fire_rate * GunStats.FIRE_BASE_LO < 1.0:
+		if heavy.base_damage <= light.base_damage or heavy.base_fire_rate >= light.base_fire_rate:
+			shot_ok = false
+			worst += " %s" % id
+		if heavy.base_fire_rate * GunStats.FIRE_BASE_LO < GunStats.STAT_FLOORS[&"fire_rate"]:
 			floor_ok = false
 			worst += " %s fr %.2f" % [id, heavy.base_fire_rate * GunStats.FIRE_BASE_LO]
 	_ok("a heavy spends two rounds a shot, a light one", two)
-	_ok("a heavy hits harder a round than its light", round_ok, worst)
-	_ok("and a second about the same or more, never double", dps_ok, worst)
-	_ok("no heavy's worst roll fires under one shot a second", floor_ok, worst)
-	var ls := WeaponClass.builtin(&"shotgun").with_kind(&"light")
-	var plain := WeaponClass.builtin(&"shotgun")
-	_ok("the light shotgun is the auto shotgun: faster, lighter", ls.base_fire_rate > plain.base_fire_rate
-			* 1.5 and ls.base_damage < plain.base_damage and ls.kind_name() == "Auto Shotgun")
+	_ok("a heavy hits harder a shot than its light, and fires slower", shot_ok, worst)
+	_ok("no worst roll is clamped by the fire-rate floor", floor_ok, worst)
+	var pump := WeaponClass.builtin(&"shotgun").with_kind(&"light")
+	var auto := WeaponClass.builtin(&"shotgun").with_kind(&"auto")
+	_ok("a light shotgun is a pump, or the auto: faster, lighter", pump.kind_name() == "Pump Shotgun"
+			and auto.kind_name() == "Auto Shotgun" and auto.base_fire_rate > pump.base_fire_rate * 1.5
+			and auto.base_damage < pump.base_damage and auto.rounds_per_shot == 1)
+	var pumps := 0
+	var autos := 0
+	for i in 400:
+		var k := WeaponClass.rolled(&"shotgun", 5000 + i, 2).archetype
+		if k == &"light":
+			pumps += 1
+		elif k == &"auto":
+			autos += 1
+	_ok("light shotguns roll pump and auto about evenly", pumps > 100 and autos > 100,
+			"%d pumps, %d autos" % [pumps, autos])
 	_ok("a heavy pistol is a magnum", WeaponClass.builtin(&"pistol").with_kind(&"heavy").kind_name()
 			== "Magnum")
 	var rl := WeaponClass.builtin(&"rocket_launcher").with_kind(&"heavy")

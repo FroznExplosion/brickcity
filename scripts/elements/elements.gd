@@ -22,7 +22,8 @@ const ACID := &"acid"
 const FIRE := &"fire"
 const ICE := &"ice"
 ## The elements a gun can roll (GunGenerator).
-const GUN_ELEMENTS: Array[StringName] = [PLASMA, CORROSIVE, ACID, FIRE, ICE]
+## A human gun's elements. Corrosive is for mechs, tanks and the like (the Armory Ledger).
+const GUN_ELEMENTS: Array[StringName] = [PLASMA, ACID, FIRE, ICE]
 ## Not an element a gun carries: the damage type of a melee (COMBAT_DESIGN 4.1), here
 ## so a HealthPool's matrix gives it its 1.5x on shields like any other row.
 const MELEE := &"melee"

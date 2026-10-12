@@ -38,19 +38,22 @@ extends Resource
 
 ## Shipping presets (WEAPONS §2). Keyed by class id. "crit" is the HEADSHOT multiplier
 ## (Docs/Weapons/COMBAT_DESIGN.md 4.3): 2x across the board, more on the precision guns.
+## A gun's damage a round is stated in UNITS of a medium enemy's health at Unique, on
+## level (the Armory Ledger's Time to kill tab, COMBAT_DESIGN 3). DMG_UNIT turns a unit
+## into this table's base damage: a medium enemy's health at tier 1 (CombatScale.MELEE_BASE,
+## 60) over what the rolls and a Unique's rarity make of a base on the median
+## (GunStats; calibrated by tools/combat_numbers_probe.gd).
+const MEDIAN_UNIQUE := 1.123
+const DMG_UNIT := 60.0 / MEDIAN_UNIQUE
 const _PRESETS := {
-	&"pistol":   {"ammo": &"light",  "dmg": 10.0, "fr": 6.0,  "mmin": 10, "mmax": 16,  "crit": 2.00, "rl": 1.6, "acc": 0.90},
-	&"smg":      {"ammo": &"light",  "dmg": 4.5,  "fr": 13.0, "mmin": 25, "mmax": 40,  "crit": 2.00, "rl": 1.8, "acc": 0.75},
-	&"rifle":    {"ammo": &"rifle",  "dmg": 8.0,  "fr": 7.5,  "mmin": 24, "mmax": 40,  "crit": 2.00, "rl": 2.4, "acc": 0.85},
-	&"lmg":      {"ammo": &"rifle",  "dmg": 6.5,  "fr": 10.0, "mmin": 80, "mmax": 120, "crit": 2.00, "rl": 4.0, "acc": 0.70},
-	&"dmr":      {"ammo": &"sniper", "dmg": 15.0, "fr": 3.5,  "mmin": 12, "mmax": 18,  "crit": 2.50, "rl": 2.6, "acc": 0.95},
-	# fr 1.35 (not 1.2) so the worst FEEL roll still clears the 1.0 shots/sec floor:
-	# 1.35 * 0.80 = 1.08/s (QUALITY_NAMING §4.4). dmg re-solved to hold ~60 base DPS.
-	# Do NOT "fix" this by clamping the rolled fire rate — that raises the gun's DPS
-	# above its roll and punches a hole in the §4.3 spread budget for this class alone.
-	&"sniper":   {"ammo": &"sniper", "dmg": 44.5, "fr": 1.35, "mmin": 4,  "mmax": 6,   "crit": 3.00, "rl": 3.2, "acc": 0.98},
-	&"shotgun":  {"ammo": &"shell",  "dmg": 30.0, "fr": 1.6,  "mmin": 5,  "mmax": 8,   "crit": 2.00, "rl": 3.5, "acc": 0.50},
-	&"revolver": {"ammo": &"shell",  "dmg": 32.0, "fr": 2.0,  "mmin": 5,  "mmax": 7,   "crit": 2.50, "rl": 2.8, "acc": 0.88},
+	&"pistol":   {"ammo": &"light",  "dmg": DMG_UNIT * 0.2, "fr": 8.0,  "mmin": 10, "mmax": 16,  "crit": 2.0, "rl": 1.6, "acc": 0.90},
+	&"smg":      {"ammo": &"light",  "dmg": DMG_UNIT * 0.09, "fr": 14.0, "mmin": 25, "mmax": 40,  "crit": 2.0, "rl": 1.8, "acc": 0.75},
+	&"rifle":    {"ammo": &"rifle",  "dmg": DMG_UNIT * 0.12, "fr": 12.0,  "mmin": 24, "mmax": 40,  "crit": 2.0, "rl": 2.4, "acc": 0.85},
+	&"lmg":      {"ammo": &"rifle",  "dmg": DMG_UNIT * 0.126, "fr": 13.0, "mmin": 80, "mmax": 120, "crit": 2.0, "rl": 4.0, "acc": 0.70},
+	&"dmr":      {"ammo": &"sniper", "dmg": DMG_UNIT * 0.4, "fr": 3.5,  "mmin": 12, "mmax": 18,  "crit": 2.0, "rl": 2.6, "acc": 0.95},
+	&"sniper":   {"ammo": &"sniper", "dmg": DMG_UNIT * 1.0, "fr": 1.4, "mmin": 4,  "mmax": 6,   "crit": 3.0, "rl": 3.2, "acc": 0.98},
+	&"shotgun":  {"ammo": &"shell",  "dmg": DMG_UNIT * 1.0, "fr": 1.4,  "mmin": 5,  "mmax": 8,   "crit": 2.0, "rl": 3.5, "acc": 0.50},
+	&"revolver": {"ammo": &"shell",  "dmg": DMG_UNIT * 0.2, "fr": 8.0,  "mmin": 5,  "mmax": 7,   "crit": 2.5, "rl": 2.8, "acc": 0.88},
 
 	# --- ORDNANCE (the BL4-style second equip slot) ---
 	# Cooldown-gated, not magazine-gated: `fr` is exactly 1.0/cooldown, so base DPS lands
@@ -79,25 +82,27 @@ const _PRESETS := {
 
 ## The kinds, per gun class: what each multiplies of the class's preset --
 ## [damage, fire rate, reload time, accuracy, magazine rounds] -- and its name.
-## A heavy spends two rounds a shot, so its damage a ROUND is above the light's, and
-## its damage a second about the same or a little over: it should hit hard and feel
-## it, not be a power weapon. Slow classes cannot halve their fire rate without going
-## under the 1/s floor (GunStats.STAT_FLOORS: base x 0.80, the worst roll, must clear
-## 1.0), so their heavies keep more of it and pay in magazine and reload instead.
-## Not listed: the class as it is (light) -- and ordnance has no kinds.
+## A heavy spends two rounds a shot. Its damage and fire rate come from its own shots to
+## kill (the Armory Ledger's Time to kill tab): e.g. the Magnum kills a medium enemy's
+## health in one crit, firing 3 a second against the pistol's 8.
+## Not listed: the class as it is (light) -- and ordnance has no kinds. The shotgun's
+## light kind is the pump; its auto kind (AUTO_CHANCE of light shotguns) is weaker.
 const KINDS := {
-	&"pistol": {&"heavy": [2.5, 0.42, 1.15, 1.05, 1.0], &"heavy_name": "Magnum"},
-	&"revolver": {&"heavy": [2.0, 0.65, 1.15, 1.03, 1.0], &"heavy_name": "Hand Cannon"},
-	&"smg": {&"heavy": [2.2, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Heavy SMG"},
-	&"rifle": {&"heavy": [2.3, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Battle Rifle"},
-	&"lmg": {&"heavy": [2.2, 0.5, 1.15, 1.05, 1.0], &"heavy_name": "Heavy Machine Gun"},
-	&"dmr": {&"heavy": [2.1, 0.6, 1.15, 1.02, 1.0], &"heavy_name": "Heavy DMR"},
-	&"sniper": {&"heavy": [2.0, 0.93, 1.2, 1.0, 1.0], &"heavy_name": "Anti-Materiel Rifle"},
-	&"shotgun": {&"heavy": [2.2, 0.8, 1.2, 1.1, 1.0], &"heavy_name": "Heavy Shotgun",
-		&"light": [0.55, 1.8, 1.0, 1.0, 1.4], &"light_name": "Auto Shotgun"},
+	&"pistol": {&"heavy": [2.750, 0.375, 1.15, 1.05, 1.0], &"heavy_name": "Magnum"},
+	&"revolver": {&"heavy": [2.750, 0.375, 1.15, 1.03, 1.0], &"heavy_name": "Hand Cannon"},
+	&"smg": {&"heavy": [1.667, 0.679, 1.15, 1.05, 1.0], &"heavy_name": "Heavy SMG"},
+	&"rifle": {&"heavy": [1.417, 0.650, 1.15, 1.05, 1.0], &"heavy_name": "Battle Rifle"},
+	&"lmg": {&"heavy": [1.270, 0.692, 1.15, 1.05, 1.0], &"heavy_name": "Heavy Machine Gun"},
+	&"dmr": {&"heavy": [2.100, 0.514, 1.15, 1.02, 1.0], &"heavy_name": "Heavy DMR"},
+	&"sniper": {&"heavy": [1.450, 0.500, 1.2, 1.0, 1.0], &"heavy_name": "Anti-Materiel Rifle"},
+	&"shotgun": {&"heavy": [1.450, 0.500, 1.2, 1.1, 1.0], &"heavy_name": "Heavy Shotgun",
+		&"light_name": "Pump Shotgun",
+		&"auto": [0.45, 2.0, 1.0, 1.0, 1.4], &"auto_name": "Auto Shotgun"},
 }
 ## How likely a dropped gun is heavy, by rarity (common..mythic): heavies are rarer.
 const HEAVY_CHANCE: Array[float] = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
+## Of light shotguns, how many are the auto kind (the rest pumps).
+const AUTO_CHANCE := 0.5
 ## Of legendaries and mythics, how many break their kind's trade.
 const CROSSED_CHANCE := 0.35
 
@@ -199,6 +204,9 @@ static func rolled(class_id: StringName, gen_seed: int, rarity := -1) -> WeaponC
 	var i := clampi(rarity - 1, 0, HEAVY_CHANCE.size() - 1)
 	var kind := &"heavy" if r.randf() < HEAVY_CHANCE[i] else &"light"
 	var cross := rarity >= 5 and r.randf() < CROSSED_CHANCE
+	# A light shotgun is a pump or an auto, even odds (its own draw, after the others).
+	if kind == &"light" and (KINDS[wc.id] as Dictionary).has(&"auto") and r.randf() < AUTO_CHANCE:
+		kind = &"auto"
 	return wc.with_kind(kind, cross)
 
 

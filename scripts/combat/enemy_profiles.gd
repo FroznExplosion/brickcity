@@ -1,11 +1,12 @@
 class_name EnemyProfiles
 extends RefCounted
-## What an enemy wears over its flesh, in MELEES to break each layer
-## (Docs/Weapons/COMBAT_DESIGN.md 4.1-4.2; CombatScale for the unit).
+## What an enemy wears over its flesh, in UNITS: a unit is a medium enemy's health, which
+## is also one melee (CombatScale; Docs/Weapons/COMBAT_DESIGN.md 3, 4.1). Every gun is
+## built against the medium enemy -- shield 0.6, armor 1.2, health 1 -- so its shots to
+## kill are the same at every tier on level (the Armory Ledger's Time to kill tab).
 ##
-## The point is that a player who looks at an enemy knows the count: every enemy up to
-## medium has one melee of flesh, and its shield or armor says how many more. A very
-## light enemy's flesh is HALF a melee -- still one melee, but fewer rounds.
+## Melee counts stay readable: a melee breaks one layer and stops, and does 1.5x to a
+## shield, so a medium enemy is shield 1 + armor 2 + health 1 = 4 melees.
 ##
 ## Layers are listed top first: shield over armor over flesh. Shields regenerate after a
 ## pause (CombatScale); armor and flesh do not.
@@ -15,16 +16,16 @@ const ARMOR := &"armor"
 const FLESH := &"health"
 const VEGETATION := &"vegetation"
 
-## id -> [[layer type, melees], ...], top first. The last layer is the vital one.
+## id -> [[layer type, units], ...], top first. The last layer is the vital one.
 const PROFILES := {
 	&"very_light": [[FLESH, 0.5]],
-	&"very_light_shielded": [[SHIELD, 1.0], [FLESH, 0.5]],
+	&"very_light_shielded": [[SHIELD, 0.6], [FLESH, 0.5]],
 	&"light": [[FLESH, 1.0]],
-	&"light_shielded": [[SHIELD, 1.0], [FLESH, 1.0]],
-	&"light_armored": [[ARMOR, 1.0], [FLESH, 1.0]],
-	&"medium": [[ARMOR, 3.0], [FLESH, 1.0]],
-	&"medium_shielded": [[SHIELD, 3.0], [FLESH, 1.0]],
-	&"heavy": [[SHIELD, 2.0], [ARMOR, 3.0], [FLESH, 2.0]],
+	&"light_shielded": [[SHIELD, 0.6], [FLESH, 1.0]],
+	&"light_armored": [[ARMOR, 0.6], [FLESH, 1.0]],
+	&"medium": [[SHIELD, 0.6], [ARMOR, 1.2], [FLESH, 1.0]],
+	&"medium_shielded": [[SHIELD, 1.2], [FLESH, 1.0]],
+	&"heavy": [[SHIELD, 1.0], [ARMOR, 2.0], [FLESH, 2.0]],
 	&"plant": [[VEGETATION, 1.0]],
 }
 
@@ -46,7 +47,7 @@ static func layers(id: StringName, level: int) -> Array[DefenseLayer]:
 	for row in PROFILES.get(id, PROFILES[&"light"]):
 		var l := DefenseLayer.new()
 		l.layer_type = row[0]
-		l.max_value = CombatScale.layer_hp(row[0], float(row[1]), level)
+		l.max_value = CombatScale.units_hp(float(row[1]), level)
 		l.display_color = COLOURS.get(row[0], Color.WHITE)
 		if row[0] == SHIELD:
 			l.regen_delay = CombatScale.SHIELD_REGEN_DELAY
@@ -69,5 +70,6 @@ static func apply(pool: HealthPool, id: StringName, level: int) -> float:
 static func melee_counts(id: StringName) -> Array[float]:
 	var out: Array[float] = []
 	for row in PROFILES.get(id, PROFILES[&"light"]):
-		out.append(float(row[1]))
+		var per := CombatScale.SHIELD_MELEE if row[0] == SHIELD else 1.0
+		out.append(ceilf(float(row[1]) / per - 0.0001))
 	return out

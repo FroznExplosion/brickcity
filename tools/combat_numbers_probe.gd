@@ -5,31 +5,37 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script res://tools/combat_numbers_probe.gd
 ##
-## A gun's per-shot damage trades against its fire rate, so "a common pistol" is the
-## MEDIAN of many rolls; every number here is a median, taken BEFORE modifiers (the rows
-## of section 3 add them by hand). The light enemy is the `trash` archetype
-## (LootRoller.enemy_hp).
+## A gun's per-shot damage trades against its fire rate, so "a Unique rifle" is the MEDIAN
+## of many rolls, taken BEFORE modifiers (the build adds to it).
 ##
 ##   power curve   +25% a tier, guns and enemies alike
-##   the anchor    on tier, a common pistol kills a light enemy in 6 body shots, 3
-##                 headshots; the same at every tier
-##   the colour    alone gets nothing: a legendary without modifiers is still 6 / 3; the
-##                 whole range is about half a tier
-##   the build     one +20% damage modifier: 5 (white or legendary); two (+40%, a purple
-##                 or better has the slots): 4 body, 2 headshots; a tier behind, one more
+##   the base      every type and kind, at Unique, against the medium enemy (shield 0.6,
+##                 armor 1.2, health 1 -- EnemyProfiles), through the real DamageSystem:
+##                 its shots to kill the health alone and the whole enemy, body shots and
+##                 crits -- the Armory Ledger's Time to kill tab. The same at every tier on
+##                 level.
+##   the unit      WeaponClass.DMG_UNIT puts a median Unique on its target, just over it
+##   the colour    the whole range is about half a tier
 ##   the roll      the hidden DPS roll inside one colour is narrow (3.1)
 ##   slots         a gun carries 1 / 2 / 3 / 4 / 4 / 4 modifiers by colour, and a higher
 ##                 colour's modifiers roll higher
 ##   score         a tier is 100 points
-##
-## (v1's "a blue is worth a level" rows went with v1's rarity steps: v2 makes the colour
-## worth half a tier in all, and the build the rest.)
+
+## [class, kind, health body, health crit, whole body, whole crit] -- the Armory Ledger.
+const TARGETS := [
+	[&"pistol", &"light", 5, 3, 14, 8], [&"pistol", &"heavy", 2, 1, 6, 3],
+	[&"revolver", &"light", 5, 2, 14, 7], [&"revolver", &"heavy", 2, 1, 6, 3],
+	[&"smg", &"light", 11, 6, 31, 17], [&"smg", &"heavy", 7, 4, 19, 10],
+	[&"rifle", &"light", 9, 5, 24, 13], [&"rifle", &"heavy", 6, 3, 17, 9],
+	[&"lmg", &"light", 8, 4, 22, 12], [&"lmg", &"heavy", 7, 4, 18, 10],
+	[&"dmr", &"light", 3, 2, 7, 4], [&"dmr", &"heavy", 2, 1, 4, 2],
+	[&"sniper", &"light", 1, 1, 3, 2], [&"sniper", &"heavy", 1, 1, 2, 1],
+	[&"shotgun", &"light", 1, 1, 3, 2], [&"shotgun", &"auto", 3, 2, 7, 4], [&"shotgun", &"heavy", 1, 1, 2, 2],
+]
+## Unique: the colour every gun's base is judged at.
+const UNIQUE := 4
 
 const SAMPLES := 301
-## The crit-spot multiplier: the pistol class's (2x, section 4.3).
-var CRIT := WeaponClass.builtin(&"pistol").crit_mult
-## A damage modifier at the top of its band, as in section 3's table.
-const DAMAGE_MOD := 0.2
 
 var _pass := 0
 var _fail := 0
@@ -53,18 +59,18 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
 
 
-func _gun(class_id: StringName, rarity: int, tier: int, i: int) -> GunGenerator.Result:
-	return GunGenerator.generate(_lib, 1000 + i * 7919, WeaponClass.builtin(class_id), tier, rarity)
+func _gun(class_id: StringName, rarity: int, tier: int, i: int, kind := &"") -> GunGenerator.Result:
+	return GunGenerator.generate(_lib, 1000 + i * 7919, WeaponClass.builtin(class_id).with_kind(kind), tier, rarity)
 
 
 ## Median per-shot damage (before modifiers), DPS and score of `class_id` guns.
-func _median(class_id: StringName, rarity: int, tier: int) -> Dictionary:
+func _median(class_id: StringName, rarity: int, tier: int, kind := &"") -> Dictionary:
 	var dmg: Array[float] = []
 	var dps: Array[float] = []
 	var score: Array[float] = []
-	var wc := WeaponClass.builtin(class_id)
+	var wc := WeaponClass.builtin(class_id).with_kind(kind)
 	for i in SAMPLES:
-		var res := _gun(class_id, rarity, tier, i)
+		var res := _gun(class_id, rarity, tier, i, kind)
 		var base := GunStats.compute(res.recipe, res.rarity, wc, tier, res.seed)
 		dmg.append(float(base[&"damage"]))
 		dps.append(float(base[&"damage"]) * float(base[&"fire_rate"]))
@@ -76,8 +82,24 @@ func _median(class_id: StringName, rarity: int, tier: int) -> Dictionary:
 			"dps_lo": dps[SAMPLES / 20], "dps_hi": dps[SAMPLES - 1 - SAMPLES / 20]}
 
 
-static func _stk(hp: float, dmg: float) -> int:
-	return ceili(hp / maxf(dmg, 0.001) - 0.0001)
+## Shots of `dmg` (crits of `crit` when `crit` > 1) that kill a fresh `profile` enemy at
+## `level`, through the real DamageSystem.
+func _kills(profile: StringName, level: int, dmg: float, crit: float) -> int:
+	var holder := Node.new()
+	root.add_child(holder)
+	var pool := HealthPool.new()
+	pool.name = "HealthPool"
+	holder.add_child(pool)
+	EnemyProfiles.apply(pool, profile, level)
+	var n := 0
+	while not pool.is_dead() and n < 200:
+		var pk := DamagePacket.new(dmg, null, null)
+		pk.crit = crit > 1.0
+		pk.crit_multiplier = crit
+		DamageSystem.resolve(pk, holder)
+		n += 1
+	holder.free()
+	return n
 
 
 func _run() -> void:
@@ -86,47 +108,43 @@ func _run() -> void:
 	var hp_step := LootRoller.enemy_hp(&"trash", 6) / LootRoller.enemy_hp(&"trash", 5)
 	_ok("a tier is +25% for guns", is_equal_approx(step, 1.25), "%.3f" % step)
 	_ok("and for enemies", is_equal_approx(hp_step, 1.25), "%.3f" % hp_step)
+	_ok("a medium enemy's health is one melee, the loot table's light enemy",
+			is_equal_approx(CombatScale.melee(1), LootRoller.enemy_hp(&"trash", 1)))
 
-	# --- the anchor ---------------------------------------------------------------
-	var common := _median(&"pistol", 1, 1)
-	var light := LootRoller.enemy_hp(&"trash", 1)
-	var c: float = common.damage
-	_ok("on tier a common pistol kills a light enemy in 6 body shots", _stk(light, c) == 6,
-			"%d (median %.2f a shot vs %.0f hp)" % [_stk(light, c), c, light])
-	_ok("and 3 headshots", _stk(light, c * CRIT) == 3, "%d" % _stk(light, c * CRIT))
-	var same := true
-	for t in range(2, 11):
-		for r in [1, 5]:
-			if _stk(LootRoller.enemy_hp(&"trash", t), _median(&"pistol", r, t).damage) \
-					!= _stk(light, _median(&"pistol", r, 1).damage):
+	# --- the base: every type and kind against the medium enemy -----------------------
+	var unit_lo := INF
+	var unit_hi := 0.0
+	for row in TARGETS:
+		var cls: StringName = row[0]
+		var kind: StringName = row[1]
+		var wc := WeaponClass.builtin(cls).with_kind(kind)
+		var crit := wc.crit_mult
+		var name := "%s (%s)" % [wc.kind_name(), kind]
+		var got := []
+		var same := true
+		for lvl in [1, 5, 10]:
+			var d: float = _median(cls, UNIQUE, lvl, kind).damage
+			var counts := [_kills(&"light", lvl, d, 1.0), _kills(&"light", lvl, d, crit),
+					_kills(&"medium", lvl, d, 1.0), _kills(&"medium", lvl, d, crit)]
+			if lvl == 1:
+				got = counts
+				var u := d / (CombatScale.melee(1) * (wc.base_damage / WeaponClass.DMG_UNIT))
+				unit_lo = minf(unit_lo, u)
+				unit_hi = maxf(unit_hi, u)
+			elif counts != got:
 				same = false
-	_ok("the same at every tier, on tier", same)
+		var want := [row[2], row[3], row[4], row[5]]
+		_ok("%s: health %d body / %d crit, whole medium %d / %d" % [name, row[2], row[3], row[4], row[5]],
+				got == want, "got %s" % [got])
+		_ok("  and the same at tiers 5 and 10", same)
+	_ok("a median Unique sits on its target, just over it (DMG_UNIT)", unit_lo >= 1.0 and unit_hi <= 1.04,
+			"%.3f-%.3f of target" % [unit_lo, unit_hi])
 
-	# --- the colour alone -----------------------------------------------------------
-	var leg: float = _median(&"pistol", 5, 1).damage
-	_ok("a legendary with no modifiers is still 6 body shots", _stk(light, leg) == 6,
-			"%d (%.2f a shot)" % [_stk(light, leg), leg])
-	_ok("and 3 headshots", _stk(light, leg * CRIT) == 3, "%d" % _stk(light, leg * CRIT))
+	# --- the colour -----------------------------------------------------------------
 	var half := log(Rarity.damage_mult(6)) / log(Tier.TIER_STEP)
 	_ok("the whole colour range is about half a tier", absf(half - 0.5) < 0.05, "%.2f" % half)
 	_ok("mythic hits as hard as legendary", is_equal_approx(Rarity.damage_mult(6), Rarity.damage_mult(5)))
-
-	# --- the build --------------------------------------------------------------------
-	var one := 1.0 + DAMAGE_MOD
-	var two := 1.0 + 2.0 * DAMAGE_MOD
-	_ok("a common with one damage modifier: 5", _stk(light, c * one) == 5, "%d" % _stk(light, c * one))
-	_ok("a legendary with one: 5", _stk(light, leg * one) == 5, "%d" % _stk(light, leg * one))
-	var purple: float = _median(&"pistol", 4, 1).damage
-	_ok("a purple with two: 4 body shots", _stk(light, purple * two) == 4,
-			"%d" % _stk(light, purple * two))
-	_ok("and 2 headshots", _stk(light, purple * two * CRIT) == 2,
-			"%d" % _stk(light, purple * two * CRIT))
-	_ok("a legendary with two: 4 and 2", _stk(light, leg * two) == 4
-			and _stk(light, leg * two * CRIT) == 2)
-	var behind: float = _median(&"pistol", 5, 4).damage
-	var light5 := LootRoller.enemy_hp(&"trash", 5)
-	_ok("a tier behind, one more", _stk(light5, behind * two) == 5,
-			"%d" % _stk(light5, behind * two))
+	var common := _median(&"pistol", 1, 1)
 
 	# --- the roll ---------------------------------------------------------------------
 	var spread: float = common.dps_hi / common.dps_lo

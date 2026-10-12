@@ -1111,7 +1111,7 @@ func _flame_on(on: bool) -> void:
 
 
 ## One tick of the torch: everything alive in its cone, in clear line, not the holder's
-## side, takes `seconds` of it -- all corrosive, so armor melts (and corrodes).
+## side, takes `seconds` of it -- all fire, so it burns (corrosive is for mechs and vehicles).
 func _burn_cone(seconds: float) -> int:
 	if aim == null or not aim.is_inside_tree():
 		return 0
@@ -1124,7 +1124,7 @@ func _burn_cone(seconds: float) -> int:
 		if to.length() > TORCH_RANGE or rad_to_deg(fwd.angle_to(to)) > TORCH_CONE_DEG:
 			continue
 		var p := DamagePacket.new(_stat(&"damage", 1.0) * damage_mult * TORCH_ROUNDS * seconds,
-				Elements.get_def(Elements.CORROSIVE), self)
+				Elements.get_def(Elements.FIRE), self)
 		p.scale = damage_scale
 		p.hit_position = at
 		p.element_ratio = 1.0

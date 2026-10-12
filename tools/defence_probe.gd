@@ -52,6 +52,13 @@ func _hit(pool: HealthPool, amount: float, element := &"", ratio := 1.0, crit :=
 	return DamageSystem.resolve(pk, pool.get_parent()).dealt
 
 
+func _crit_hit(pool: HealthPool, amount: float, crit: float) -> void:
+	var pk := DamagePacket.new(amount, null, null)
+	pk.crit = true
+	pk.crit_multiplier = crit
+	DamageSystem.resolve(pk, pool.get_parent())
+
+
 func _run() -> void:
 	# --- melees ---------------------------------------------------------------------
 	var all_ok := true
@@ -60,13 +67,17 @@ func _run() -> void:
 		for lvl in [1, 6]:
 			var layers := EnemyProfiles.layers(id, lvl)
 			var counts := EnemyProfiles.melee_counts(id)
+			var rows: Array = EnemyProfiles.PROFILES[id]
 			for i in layers.size():
-				var want := counts[i] * CombatScale.melee(lvl) \
-						* (CombatScale.SHIELD_MELEE if layers[i].layer_type == &"shield" else 1.0)
+				var want := float(rows[i][1]) * CombatScale.melee(lvl)
 				if absf(layers[i].max_value - want) > 0.01:
 					all_ok = false
 					detail = "%s L%d layer %d: %.1f vs %.1f" % [id, lvl, i, layers[i].max_value, want]
-	_ok("every layer is its melee count times one melee, at every level", all_ok, detail)
+				var per := CombatScale.SHIELD_MELEE if layers[i].layer_type == &"shield" else 1.0
+				if counts[i] != ceilf(float(rows[i][1]) / per - 0.0001):
+					all_ok = false
+	_ok("every layer is its units times one melee (a medium enemy's health), at every level",
+			all_ok, detail)
 	var flesh_one := true
 	for id in [&"very_light", &"light", &"light_shielded", &"light_armored", &"medium",
 			&"medium_shielded"]:
@@ -74,7 +85,9 @@ func _run() -> void:
 		if c[c.size() - 1] > 1.0:
 			flesh_one = false
 	_ok("flesh is one melee for every enemy up to medium", flesh_one)
-	_ok("a medium enemy's armor is three melees", EnemyProfiles.melee_counts(&"medium")[0] == 3.0)
+	_ok("a medium enemy is shield 0.6, armor 1.2, health 1: 1 + 2 + 1 melees",
+			EnemyProfiles.melee_counts(&"medium") == ([1.0, 2.0, 1.0] as Array[float]),
+			"%s" % [EnemyProfiles.melee_counts(&"medium")])
 	_ok("a light enemy is the loot table's light enemy",
 			is_equal_approx(EnemyProfiles.layers(&"light", 4)[0].max_value,
 					LootRoller.enemy_hp(&"trash", 4)))
@@ -83,6 +96,8 @@ func _run() -> void:
 	var m := Elements.matrix()
 	_ok("plasma is 2x on shields", m.get_multiplier(Elements.PLASMA, &"shield") == 2.0)
 	_ok("corrosive is 2x on armor", m.get_multiplier(Elements.CORROSIVE, &"armor") == 2.0)
+	_ok("and is not a human gun's element (mechs and vehicles only)",
+			not Elements.GUN_ELEMENTS.has(Elements.CORROSIVE))
 	_ok("acid is 1.5x on flesh", m.get_multiplier(Elements.ACID, &"health") == 1.5)
 	_ok("fire is 2x on vegetation", m.get_multiplier(Elements.FIRE, &"vegetation") == 2.0)
 	var floor_ok := true
@@ -112,23 +127,38 @@ func _run() -> void:
 			is_equal_approx(acid_on_shield.get_layer_value(1), flesh0)
 			and acid_on_shield.get_layer_value(0) < acid_on_shield.layer_configs[0].max_value)
 
-	# --- gating ---------------------------------------------------------------------
+	# --- carry-over and crits (COMBAT_DESIGN 4.4) ------------------------------------
 	var g := _pool(&"light_shielded")
 	var shield_hp := g.get_layer_value(0)
-	var over := 40.0
+	var over := 20.0
 	_hit(g, shield_hp + over)
 	var took := g.layer_configs[1].max_value - g.get_layer_value(1)
-	_ok("a body shot breaking a shield carries half its leftover on",
-			is_equal_approx(took, over * CombatScale.SHIELD_GATE), "%.1f of %.1f" % [took, over])
-	var g2 := _pool(&"light_shielded")
-	_hit(g2, shield_hp + over, &"", 1.0, true)
-	took = g2.layer_configs[1].max_value - g2.get_layer_value(1)
-	_ok("a crit-spot hit carries all of it", is_equal_approx(took, over), "%.1f of %.1f" % [took, over])
+	_ok("a body shot breaking a shield carries all its leftover on", is_equal_approx(took, over),
+			"%.1f of %.1f" % [took, over])
 	var ar := _pool(&"light_armored")
 	var armor_hp := ar.get_layer_value(0)
 	_hit(ar, armor_hp + over)
 	took = ar.layer_configs[1].max_value - ar.get_layer_value(1)
-	_ok("armor does not gate", is_equal_approx(took, over), "%.1f of %.1f" % [took, over])
+	_ok("and so does one breaking armor", is_equal_approx(took, over), "%.1f of %.1f" % [took, over])
+	# A 2x crit: a shield takes 1.5x (half the extra), armor and flesh take 2x.
+	var cs := _pool(&"light_shielded")
+	_crit_hit(cs, 10.0, 2.0)
+	var on_shield := cs.layer_configs[0].max_value - cs.get_layer_value(0)
+	_ok("a 2x crit lands 1.5x on a shield", is_equal_approx(on_shield, 15.0), "%.1f" % on_shield)
+	var ca := _pool(&"light_armored")
+	_crit_hit(ca, 10.0, 2.0)
+	var on_armor := ca.layer_configs[0].max_value - ca.get_layer_value(0)
+	_ok("and the full 2x on armor", is_equal_approx(on_armor, 20.0), "%.1f" % on_armor)
+	var cf := _pool(&"light")
+	_crit_hit(cf, 10.0, 3.0)
+	var on_flesh := cf.layer_configs[0].max_value - cf.get_layer_value(0)
+	_ok("and a sniper's 3x on flesh", is_equal_approx(on_flesh, 30.0), "%.1f" % on_flesh)
+	var cc := _pool(&"light_shielded")
+	var s_hp := cc.get_layer_value(0)
+	_crit_hit(cc, s_hp / 1.5 + 10.0, 2.0)
+	var past := cc.layer_configs[1].max_value - cc.get_layer_value(1)
+	_ok("a crit through a shield crits fully on what is under it", is_equal_approx(past, 20.0),
+			"%.1f" % past)
 
 	# --- regen ----------------------------------------------------------------------
 	var r := _pool(&"heavy")
