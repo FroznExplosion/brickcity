@@ -87,6 +87,10 @@ def main() -> None:
         me = bpy.data.meshes.new(spec["name"])
         bm.to_mesh(me)
         bm.free()
+        if spec.get("smooth"):
+            # Soft where the surface turns gently, a crease where it turns hard.
+            me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+            me.set_sharp_from_angle(angle=math.radians(38.0))
         ob = bpy.data.objects.new(spec["name"], me)
         ob.color = tuple(spec.get("colour", [0.5, 0.5, 0.5])) + (1.0,)
         bpy.context.scene.collection.objects.link(ob)
@@ -125,17 +129,25 @@ def joint(spec):
 def bricks(spec, part, grid):
     """An outline filled with nano bricks, `wide` studs across, centred on the centre plane."""
     pitch, plate = grid["stud_pitch"], grid["plate"]
-    poly = spec["outline"]
-    x0 = math.floor(min(p[0] for p in poly) / pitch)
-    x1 = math.ceil(max(p[0] for p in poly) / pitch)
-    z0 = math.floor(min(p[1] for p in poly) / plate + 1e-6)
-    z1 = math.ceil(max(p[1] for p in poly) / plate - 1e-6)
     wide = spec["wide"]
-    solid = np.zeros((x1 - x0, wide, z1 - z0), dtype=bool)
-    for i in range(x1 - x0):
-        for k in range(z1 - z0):
-            if _inside(poly, (x0 + i + 0.5) * pitch, (z0 + k + 0.5) * plate, 0.0):
-                solid[i, :, k] = True
+    if "cells" in spec:
+        # Cells given outright, [stud along x, plate up z] on the lattice: a traced part.
+        x0, x1 = min(c[0] for c in spec["cells"]), max(c[0] for c in spec["cells"]) + 1
+        z0, z1 = min(c[1] for c in spec["cells"]), max(c[1] for c in spec["cells"]) + 1
+        solid = np.zeros((x1 - x0, wide, z1 - z0), dtype=bool)
+        for cx, cz in spec["cells"]:
+            solid[cx - x0, :, cz - z0] = True
+    else:
+        poly = spec["outline"]
+        x0 = math.floor(min(p[0] for p in poly) / pitch)
+        x1 = math.ceil(max(p[0] for p in poly) / pitch)
+        z0 = math.floor(min(p[1] for p in poly) / plate + 1e-6)
+        z1 = math.ceil(max(p[1] for p in poly) / plate - 1e-6)
+        solid = np.zeros((x1 - x0, wide, z1 - z0), dtype=bool)
+        for i in range(x1 - x0):
+            for k in range(z1 - z0):
+                if _inside(poly, (x0 + i + 0.5) * pitch, (z0 + k + 0.5) * plate, 0.0):
+                    solid[i, :, k] = True
     boxes = brickify.box_parts(grid["part_prefix"])
     best = None
     for course in range(3):
@@ -277,20 +289,26 @@ def loft(spec, part, grid):
     `axis` is the line: "x" along the gun, or "z" up it. Each station is at `t` on it, with
     `a` the section's reach across the other side-view direction (up for "x", along the gun
     for "z"), `w` its half width across the gun, and `round` how much of the smaller half
-    is cut from each corner.
+    is cut from each corner. `arc` is how many steps round each corner: 1 is a plain cut.
     """
     axis = spec["axis"]
     bm = bmesh.new()
     rings = []
     for st in spec["stations"]:
         a0, a1 = st["a"]
-        w, c = st["w"], _corner(st)
-        section = [(a0 + c, -w), (a1 - c, -w), (a1, -w + c), (a1, w - c),
-                   (a1 - c, w), (a0 + c, w), (a0, w - c), (a0, -w + c)]
+        w, c = st["w"], max(_corner(st), 0.02)
+        steps = spec.get("arc", 1)
+        section = []
+        for cq, cy, start in ((a1 - c, w - c, 0.0), (a0 + c, w - c, 90.0), (a0 + c, -w + c, 180.0),
+                              (a1 - c, -w + c, 270.0)):
+            for k in range(steps + 1):
+                ang = math.radians(start + 90.0 * k / steps)
+                section.append((cq + c * math.cos(ang), cy + c * math.sin(ang)))
         rings.append([bm.verts.new((st["t"], y, q) if axis == "x" else (q, y, st["t"])) for q, y in section])
+    n = len(rings[0])
     for r0, r1 in zip(rings, rings[1:]):
-        for k in range(8):
-            bm.faces.new([r0[k], r0[(k + 1) % 8], r1[(k + 1) % 8], r1[k]])
+        for k in range(n):
+            bm.faces.new([r0[k], r0[(k + 1) % n], r1[(k + 1) % n], r1[k]])
     bm.faces.new(rings[0])
     bm.faces.new(rings[-1])
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
@@ -571,15 +589,16 @@ def render(prefix, doc, objects, lo, hi) -> None:
         bpy.ops.render.render(write_still=True)
         print("wrote", sc.render.filepath)
 
-    shoot("side", Vector((0.0, -1.0, 0.0)), centre, long * 1.06)
-    shoot("iso", Vector((0.5, -1.0, 0.42)), centre, long * 1.06)
-    shoot("under", Vector((-0.35, -0.8, -1.0)), centre, long * 1.06)
+    # From the +y side, so the muzzle points right, as a reference photo usually has it.
+    shoot("side", Vector((0.0, 1.0, 0.0)), centre, long * 1.06)
+    shoot("iso", Vector((0.45, 1.0, 0.45)), centre, long * 1.06)
+    shoot("under", Vector((0.35, 0.8, -1.0)), centre, long * 1.06)
     away = {"barrel": (-10, 0), "muzzle": (-20, 0), "underbarrel": (-10, -12), "grip": (0, -12),
             "magazine": (0, -16), "stock": (12, 0), "sight": (0, 10)}
     for part in doc["parts"]:
         dx, dz = away.get(part["slot"], (0, 0)) if "mount" in part else (0, 0)
         objects[part["name"]].location = (dx, 0.0, dz)
-    shoot("parts", Vector((0.3, -1.0, 0.3)), centre + Vector((0, 0, -4)), (long + 36) * 1.06)
+    shoot("parts", Vector((0.3, 1.0, 0.3)), centre + Vector((0, 0, -4)), (long + 36) * 1.06)
 
 
 if __name__ == "__main__":
