@@ -158,9 +158,11 @@ func _paper() -> void:
 			not f.step(1000.0, [Vector3(30.0, 0.0, 0.0)]) and f.result.is_empty())
 	_ok("and with nobody near, it does", f.step(1000.0, [Vector3(500.0, 0.0, 0.0)])
 			and f.result.name == "decisive attacker win")
-	_ok("vehicles and mechs are catalogued and costed; the tank is fielded, a mech not yet",
+	_ok("vehicles and mechs are catalogued and costed; the tank and the mech are fielded, a helicopter not yet",
 			UnitCatalog.UNITS.has(&"tank") and UnitCatalog.points(&"tank") > 10.0
-			and bool(UnitCatalog.get_unit(&"tank").built) and not (&"mech" in UnitCatalog.built()))
+			and bool(UnitCatalog.get_unit(&"tank").built) and (&"mech" in UnitCatalog.built())
+			and UnitCatalog.points(&"mech") > UnitCatalog.points(&"tank")
+			and not (&"attack_heli" in UnitCatalog.built()))
 
 
 # --- buying (RO11) ------------------------------------------------------------
@@ -205,11 +207,16 @@ func _buying() -> void:
 			"boarder %.2f, rocketeer %.2f, brawler %.2f" % [d.roster[&"boarder"], d.roster[&"rocketeer"], d.roster[&"brawler"]])
 	var mech_tank := float(d.support[&"tank"])
 	var mech_air := float(d.support[&"air"])
+	var mech_mech := float(d.support[&"mech"])
 	d.update(_profile("demolisher"), 0.0, 0.6)
 	_ok("support: against a demolisher, air first; against a mech, a tank first",
 			float(d.support[&"air"]) > float(d.support[&"tank"]) and mech_tank > mech_air
 			and mech_tank > float(Doctrine.SUPPORT_BASE[&"tank"]),
 			"demolisher air %.2f tank %.2f | mech air %.2f tank %.2f" % [d.support[&"air"], d.support[&"tank"], mech_air, mech_tank])
+	_ok("and a mech of its own, sooner against a player whose mech kills -- inside the clamp",
+			mech_mech > float(Doctrine.SUPPORT_BASE[&"mech"]) and mech_mech <= float(Doctrine.SUPPORT_BASE[&"mech"]) * 2.0 + 0.001
+			and is_equal_approx(float(d.support[&"mech"]), float(Doctrine.SUPPORT_BASE[&"mech"])),
+			"against a mech %.2f, a demolisher %.2f (base %.2f)" % [mech_mech, d.support[&"mech"], Doctrine.SUPPORT_BASE[&"mech"]])
 	var in_draw := false
 	for k in Doctrine.recipe_ids():
 		var rc := r.recipe(String(k))
@@ -225,7 +232,7 @@ func _buying() -> void:
 	root.add_child(c)
 	c.setup(s, 1)
 	var bought: Array = []
-	var up := {&"air": 0, &"tank": 0}
+	var up := {&"air": 0, &"tank": 0, &"mech": 0}
 	c.support_spawner = func(kind: StringName, unit: StringName) -> bool:
 		bought.append([kind, unit])
 		up[kind] = int(up[kind]) + 1
@@ -258,6 +265,75 @@ func _buying() -> void:
 	var airs := bought.filter(func(b): return b[0] == &"air").size()
 	_ok("left to itself against a demolisher it buys air, up to its cap",
 			airs == int(Commander.SUPPORT_CAP[&"air"]), "%d air, %d tank" % [airs, bought.size() - airs])
+
+	# A mech (RO11): one of the roster's, by its recipe, one at a time.
+	c.profile = ThreatProfile.new()
+	c.doctrine.update(c.profile, 0.0, 0.6)
+	up[&"air"] = 0
+	up[&"tank"] = 0
+	up[&"mech"] = 0
+	bought.clear()
+	c.budget = 30.0
+	got = c.buy_support(&"mech")
+	var first: StringName = bought.back()[1] if not bought.is_empty() else &""
+	_ok("it buys a mech with its points: one of the roster's, by its recipe",
+			got == &"mech" and str(r.recipe(String(first)).get("body", "")) == "mech"
+			and is_equal_approx(c.budget, 30.0 - UnitCatalog.points(first)),
+			"%s (%.0f pts), budget 30 -> %.1f" % [first, UnitCatalog.points(first), c.budget])
+	c.budget = 30.0
+	_ok("one mech at a time", c.buy_support(&"mech") == &"")
+	up[&"mech"] = 0
+	# What the points in hand pay for: with 24, the light one only.
+	var seen := {}
+	for i in 60:
+		c.budget = 24.0
+		seen[c.support_unit(&"mech")] = true
+	var poor_set := seen.keys()
+	seen = {}
+	for i in 200:
+		c.budget = c.budget_cap()
+		seen[c.support_unit(&"mech")] = true
+	var early := seen.keys()
+	c.reinforcements = 6
+	seen = {}
+	for i in 200:
+		c.budget = c.budget_cap()
+		seen[c.support_unit(&"mech")] = true
+	var late := seen.keys()
+	c.reinforcements = 0
+	_ok("the bank grows with the encounter: a heavy is all of the first bank, a Nuker comes only late",
+			poor_set == [&"light_gunner"] and early.has(&"heavy_gunner") and not early.has(&"heavy_gunner_nuker")
+			and late.has(&"heavy_gunner_nuker") and is_equal_approx(c.budget_cap(), Commander.BUDGET_CAP),
+			"24 pts: %s | a full first bank (%.0f): %s | after 6 reinforcements (%.0f): %s" % [poor_set,
+			Commander.BUDGET_CAP, early, Commander.BUDGET_CAP + 6 * Commander.CAP_GROWTH, late])
+	# Unforced, the bank just holding a heavy: it is bought with all of it.
+	bought.clear()
+	c.doctrine.support[&"air"] = 0.0
+	c.doctrine.support[&"tank"] = 0.0
+	c.doctrine.support[&"mech"] = 1.0
+	var heavies := 0
+	for i in 60:
+		up[&"mech"] = 0
+		c.budget = 30.0
+		c.buy_support()
+		if not bought.is_empty() and bought.back()[1] == &"heavy_gunner":
+			heavies += 1
+		bought.clear()
+	_ok("a unit the bank can only just hold is bought with all of it", heavies > 0, "%d heavy of 60" % heavies)
+	c.doctrine.update(c.profile, 0.0, 0.6)
+	var foot := c.support_mechs()
+	var mk := ThreatProfile.new()
+	mk.evidence = 6.0
+	mk.mech_kills = 5.0
+	c.profile = mk
+	c.doctrine.update(mk, 0.0, 0.6)
+	var vs_mech := c.support_mechs()
+	_ok("a mech that fights with its fists comes only against a player whose mech kills",
+			not foot.has(&"light_melee_nuker") and vs_mech.has(&"light_melee_nuker") and foot.has(&"medium_gunner"),
+			"on foot %s | against a mech %s" % [foot, vs_mech])
+	c.profile = ThreatProfile.new()
+	c.doctrine.update(c.profile, 0.0, 0.6)
+	up[&"mech"] = 0
 
 	# A plane run costs its commander points: none without them.
 	var air := s.air_of(1)

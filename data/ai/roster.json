@@ -1110,7 +1110,7 @@
    "role": "attacker",
    "mods": [],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Light Gunner",
@@ -1170,7 +1170,7 @@
    "role": "attacker",
    "mods": [],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "mech",
    "derived": {
     "tag": "Medium Gunner",
@@ -1230,7 +1230,7 @@
    "role": "attacker",
    "mods": [],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Heavy Gunner",
@@ -1292,7 +1292,7 @@
     "nuker"
    ],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Heavy Gunner Nuker",
@@ -1354,7 +1354,7 @@
     "nuker"
    ],
    "phases": [],
-   "built": false,
+   "built": true,
    "unit": "",
    "derived": {
     "tag": "Light Melee Nuker",

@@ -43,9 +43,10 @@ extends RefCounted
 ## LEARN_RANGE; that is one more answer, inside the same clamp.
 ##
 ## And SUPPORT (`support`): what it buys besides squads -- AIR (the roster's
-## flyers and hover craft) and a TANK -- weighted the same way: against a
-## demolisher, what destruction does not stop (flyers); against a player on
-## roofs at range, air; against a mech, a tank; against a rusher, armour.
+## flyers and hover craft), a TANK and a MECH (one of the roster's, with a
+## soldier in it) -- weighted the same way: against a demolisher, what
+## destruction does not stop (flyers); against a player on roofs at range, air;
+## against a mech, a tank or a mech of its own; against a rusher, armour.
 
 ## Base roster weights, before the counters.
 const BASE := {&"rifleman": 4.0, &"assault": 2.0, &"breacher": 1.0, &"marksman": 0.6,
@@ -89,13 +90,14 @@ const LEARN_MIN := 10
 const LEARN_SCALE := 30.0
 const LEARN_RANGE := [0.75, 1.33]
 ## Support's base weights, before the answers: how readily, given the points,
-## it buys air or a tank with a reinforcement.
-const SUPPORT_BASE := {&"air": 0.25, &"tank": 0.15}
+## it buys air, a tank or a mech with a reinforcement.
+const SUPPORT_BASE := {&"air": 0.25, &"tank": 0.15, &"mech": 0.12}
 const SUPPORT_MULS := {
 	"sniper": {&"air": 1.6},
-	"rusher": {&"tank": 1.5},
+	"rusher": {&"tank": 1.5, &"mech": 1.3},
 	"demolisher": {&"air": 2.0, &"tank": 1.3},
-	"mech": {&"tank": 2.0, &"air": 0.7},
+	# Its mech does the killing: armour to meet it, a mech of our own among it.
+	"mech": {&"tank": 2.0, &"air": 0.7, &"mech": 1.8},
 	"pilot": {&"air": 1.2},
 }
 
@@ -110,7 +112,7 @@ var roster := BASE.duplicate()
 var truck_share := 0.4
 ## How often by APC (asked before the truck), when it can pay for one.
 var apc_share := 0.25
-## Support kind (&"air", &"tank") -> its weight now (SUPPORT_BASE, answered).
+## Support kind (&"air", &"tank", &"mech") -> its weight now (SUPPORT_BASE, answered).
 var support := SUPPORT_BASE.duplicate()
 ## What the tally taught it: "part:value" -> multiplier (learn).
 var learned := {}

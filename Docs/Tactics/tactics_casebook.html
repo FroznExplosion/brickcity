@@ -279,7 +279,7 @@ const FACTORS = [
   ["we_marksman","kind","We're a marksman","","relocate:5,trade:3,hold:4,climb:4,rush:0,melee:0,sweep:1,flash:1"],
   ["we_mech","kind","We're a mech or tank","Too big for doors and small rooms.","sweep:0,flash:0,breach:3,strip_cover:5,collapse:4,guard_exits:5,call_help:5,melee:2,hide:0,surrender:0,play_dead:0,screen_heavy:0,heavy_leads:0,heavy_way:0,call_armour:0"],
   ["we_flyer","kind","We're a flyer","Drone or helicopter.","flank:5,mark:5,strip_cover:4,air_window:5,sweep:0,breach:0,flash:0,climb:0,melee:0,seal:0,surrender:0,play_dead:0,hide:1,call_air:1"],
-  ["we_melee","kind","We're a melee fighter","Brute, dog, creature: it closes in to hit.","melee:5,rush:4,trade:1,suppress:0,grenade:1,relocate:1,mark:1,hold:2,reload:0"],
+  ["we_melee","kind","We're a melee fighter","Brute, dog, creature: it closes in to hit. A mech with fists and no gun: it walks its target down.","melee:5,rush:4,trade:1,suppress:0,grenade:1,relocate:1,mark:1,hold:2,reload:0,m_close:5,m_punch:5,m_fire:0,m_backoff:1"],
   ["we_swarm","kind","We're a swarm","Creatures, acting as one mass.","rush:5,climb:4,guard_exits:3,let_go:4,suppress:0,grenade:0,flash:0,smoke:0,call_help:0,call_armour:0,call_air:0,mark:0,surrender:0,play_dead:0,breach:0,seal:0,collapse:0,strip_cover:0,hide:2"],
   ["we_bomber","kind","We're a bomber","It carries no gun: it gets to the enemy and goes off.","detonate:5,rush:1,flank:1,advance:1,ambush:1,search:2,hide:1,call_help:1,climb:1,trade:0,suppress:0,hold:0,relocate:0,strip_cover:0,melee:0,grenade:0,flash:0,smoke:0,breach:0,collapse:0,seal:0,reload:0,mark:0,fall_back:0,flee:0,regroup:0,guard_exits:0,deny_escape:0,wait:0,let_go:0,sweep:0,recon:0,call_armour:0,call_air:0,screen_heavy:0,heavy_leads:0,surrender:0,play_dead:0"],
   ["we_grenadier","kind","We're a grenadier","Grenades first, the gun second.","grenade:5,trade:2,rush:2,melee:1"],
@@ -582,11 +582,11 @@ const RECIPES = {
   hound:{name:"Hound", body:"walker", size:"small", cls:"light", grade:"weak", attack:"melee", role:"fodder", mods:[], phases:[], built:true},
   boarder:{name:"", body:"walker", size:"person", cls:"light", grade:"tough", attack:"shooter", weapon:"smg", role:"flanker", mods:["rodeo"], phases:[], built:true},
   brute:{name:"Brute", body:"walker", size:"large", cls:"heavy", grade:"regular", attack:"shooter", weapon:"lmg", role:"attacker", mods:[], phases:[{when:"armour_gone", become:{attack:"melee"}}], built:true},
-  light_gunner:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false},
-  medium_gunner:{name:"", body:"mech", size:"huge", cls:"medium", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false, unit:"mech"},
-  heavy_gunner:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:false},
-  heavy_gunner_nuker:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:["nuker"], phases:[], built:false},
-  light_melee_nuker:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:["nuker"], phases:[], built:false},
+  light_gunner:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:true},
+  medium_gunner:{name:"", body:"mech", size:"huge", cls:"medium", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:true, unit:"mech"},
+  heavy_gunner:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:[], phases:[], built:true},
+  heavy_gunner_nuker:{name:"", body:"mech", size:"huge", cls:"heavy", grade:"regular", attack:"gunner", role:"attacker", mods:["nuker"], phases:[], built:true},
+  light_melee_nuker:{name:"", body:"mech", size:"huge", cls:"light", grade:"regular", attack:"melee", role:"attacker", mods:["nuker"], phases:[], built:true},
 };
 const cap = w => w ? w[0].toUpperCase() + w.slice(1) : "";
 function rAttackWord(r){ const a = R_ATTACKS[r.attack] || {}; return a.words ? (a.words[r.weapon || a.weapons[0]] || a.l) : (a.word || a.l || ""); }

@@ -4849,7 +4849,9 @@ func _wire_mech(m: Mech) -> void:
 
 ## The enemy's mech (Y), ahead of the camera: an LMG, a launcher for walls, and
 ## the enemy tree -- it breaches to get at infantry (AI.md 6.4).
-func _spawn_enemy_mech(feet: Vector3, yaw: float) -> MechBrain:
+## `recipe`: which of the roster's mechs it is (AIRoster.md RO11: a commander
+## buys one by its recipe).
+func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner") -> MechBrain:
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	var m := Mech.spawn(self, feet, yaw, 1)
@@ -4862,16 +4864,18 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float) -> MechBrain:
 	m.gun.on_structure_hit = _gun.on_structure_hit
 	_wire_mech(m)
 	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
-	# A medium mech by the roster: its layers and the name over it (AIRoster.md RO6).
-	m.set_type("medium_gunner", Roster.shared())
+	# A mech by the roster: its layers and the name over it (AIRoster.md RO6).
+	m.set_type(recipe, Roster.shared())
 	# Its pilot, a soldier of its side, inside: one who can bail out (RO8).
 	var pilot := _spawn_soldier(feet)
 	m.mount(pilot.pawn, true)
-	br.arm_launcher(GunInstance.from_result(GunGenerator.generate(_gun_library,
-			_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
-			_gun.on_structure_hit)
+	# One that fights with its fists carries no launcher: it punches its way.
+	if not m.no_gun:
+		br.arm_launcher(GunInstance.from_result(GunGenerator.generate(_gun_library,
+				_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
+				_gun.on_structure_hit)
 	mech_brains.append(br)
-	print("[city] enemy mech at %v" % feet)
+	print("[city] enemy mech (%s) at %v" % [m.name_tag.text if m.name_tag != null else recipe, feet])
 	return br
 
 
