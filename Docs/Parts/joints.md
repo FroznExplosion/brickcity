@@ -159,11 +159,12 @@ eye in the game (`city.tscn -- --arms`); nothing else changes when it does.
 
 **The grip.** Every held item has one, and it is the only thing the hand needs to know:
 
-- a clear section **1 x 2 nano studs** (4 x 8 mm printed) and at least **3 nano bricks** long
-  (14.4 mm), the long side fore and aft;
-- `socket_grip_0` at its centre, +X through the hand's hole, +Y up the hand. `socket_grip_1` is
-  the other hand's place (a handguard), if there is one;
-- `socket_muzzle_0` where rounds leave, +Z out.
+- a **round core 4.8 mm across** (a full stud's size, eight-sided) and at least **3 nano bricks**
+  long (14.4 mm). The grip's shape is built round it; where the hand closes, it is the core.
+  At 1/6 that is 0.035 m in the game, inside today's 0.038 m hole;
+- an empty `hold_0` at its centre, +X through the hand's hole, +Y up the hand. `hold_1` is the
+  other hand's place (a handguard), if there is one. Not `socket_...`: that prefix is the gun
+  assembler's, for where a part attaches ([custom.md](custom.md) section 4).
 
 A held item has three outputs from one build:
 

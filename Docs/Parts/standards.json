@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
   "scale": {
     "game_m_per_mm": 0.04375,
@@ -359,21 +359,53 @@
     "finger_groove_min_mm": 0.3
   },
   "held_grip": {
-    "section_nano_studs": [
-      1,
-      2
-    ],
+    "core_d": 4.8,
+    "core_sides": 8,
     "min_length_nano_bricks": 3,
-    "sockets": [
-      "socket_grip_0",
-      "socket_grip_1",
-      "socket_muzzle_0"
-    ],
-    "pinch_thickness_nano_studs": 1
+    "figure_print_bar_d": 3.2,
+    "holds": [
+      "hold_0",
+      "hold_1"
+    ]
   },
   "joint_pin": {
     "d": 3.2,
     "min_part_thickness": 4.8,
     "note": "every joint pin, figure and mech: a plate's height, the bar a C hand grips"
+  },
+  "part_roles": {
+    "bare": "custom, one piece, never breaks off",
+    "dressing": "nano bricks on a bare part's studs; breaks off",
+    "module": "on a connector that play takes off and puts back"
+  },
+  "module_kinds": [
+    "reload",
+    "overheat"
+  ],
+  "gun_slots": [
+    "body",
+    "barrel",
+    "stock",
+    "grip",
+    "magazine",
+    "sight",
+    "muzzle",
+    "underbarrel"
+  ],
+  "gun_slots_note": "GunPartDef.Slot; a receiving part has socket_<slot>, an attaching part has mount",
+  "mech_bare_parts": [
+    "chassis",
+    "arm segments",
+    "leg segments",
+    "hatch",
+    "head"
+  ],
+  "patches": {
+    "lattice": "the part's nano grid; every stud, socket and connector is on it",
+    "kinds": [
+      "studs_top",
+      "studs_side",
+      "sockets_under"
+    ]
   }
 }

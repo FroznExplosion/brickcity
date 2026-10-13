@@ -11,6 +11,7 @@ brick size. The per-part sheets are **generated** from the same code the game ba
 | `parts.json` | the same numbers for a Blender or build script to read |
 | [nano.md](nano.md) | nano bricks: the half-size grid every figure, mech, gun and small prop is built on |
 | [joints.md](joints.md) | figure and mech joints, the hands that swap on a wrist, the grip and `HELD_SCALE` |
+| [custom.md](custom.md) | custom (bare) parts, the bricks that dress them, modules, and how parts are made |
 | `standards.json` | nano.md's and joints.md's numbers for scripts (hand-written, not generated) |
 
 Regenerate after changing any part:
