@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
   "scale": {
     "game_m_per_mm": 0.04375,
@@ -407,5 +407,91 @@
       "studs_side",
       "sockets_under"
     ]
+  },
+  "gun_interfaces": {
+    "note": "What a mount and a socket must share to join. Our own shapes and sizes, on the nano grid: none is a real firearm's. v1 list, to grow.",
+    "barrel.collar": {
+      "slot": "barrel",
+      "connector": "keyed dovetail",
+      "shape": "a collar 6.4 across, 4.8 deep, one flat key underneath"
+    },
+    "stock.tube": {
+      "slot": "stock",
+      "connector": "keyed dovetail",
+      "shape": "a post 4.8 across, 9.6 long, out of the body's back in line with the barrel, one flat key underneath"
+    },
+    "stock.tang": {
+      "slot": "stock",
+      "connector": "keyed dovetail",
+      "shape": "a flat tongue 1.6 by 4.8, 6.4 long, low on the body's back"
+    },
+    "grip.pin": {
+      "slot": "grip",
+      "connector": "pin-and-clip",
+      "shape": "a 3.2 pin across the gun through a tongue 3.2 thick"
+    },
+    "mag.narrow": {
+      "slot": "magazine",
+      "connector": "pin-and-clip",
+      "shape": "a well one nano stud across, two long"
+    },
+    "mag.wide": {
+      "slot": "magazine",
+      "connector": "pin-and-clip",
+      "shape": "a well two nano studs across, three long"
+    },
+    "muzzle.pin": {
+      "slot": "muzzle",
+      "connector": "AXLE",
+      "shape": "a 3.2 pin along the barrel"
+    },
+    "guard.sleeve": {
+      "slot": "underbarrel",
+      "connector": "keyed dovetail",
+      "shape": "a sleeve over the barrel, keyed to the collar"
+    },
+    "rail": {
+      "slot": "sight",
+      "connector": "stud grid",
+      "shape": "a row of nano studs: any top patch"
+    }
+  },
+  "gun_adapters": {
+    "note": "A part with one interface as its mount and another as its socket. With it, a part of the second fits a gun of the first.",
+    "adapter_tang_tube": {
+      "mount": "stock.tang",
+      "socket": "stock.tube"
+    },
+    "adapter_tube_tang": {
+      "mount": "stock.tube",
+      "socket": "stock.tang"
+    },
+    "adapter_mag_wide_narrow": {
+      "mount": "mag.wide",
+      "socket": "mag.narrow"
+    }
+  },
+  "gun_platforms": {
+    "note": "A platform is a body's set of sockets. Bodies of one platform take the same parts. Letters until they have names.",
+    "A": {
+      "like": "an in-line rifle: the stock on a tube behind the barrel",
+      "sockets": {
+        "barrel": "barrel.collar",
+        "stock": "stock.tube",
+        "grip": "grip.pin",
+        "magazine": "mag.narrow",
+        "sight": "rail"
+      }
+    },
+    "B": {
+      "like": "a tang rifle: the stock on a tongue low on the body, a wide magazine",
+      "sockets": {
+        "barrel": "barrel.collar",
+        "stock": "stock.tang",
+        "grip": "grip.pin",
+        "magazine": "mag.wide",
+        "sight": "rail"
+      }
+    }
   }
 }

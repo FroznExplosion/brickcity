@@ -1,0 +1,47 @@
+{
+  "name": "rifle_a",
+  "note": "Build sheet (Docs/Parts/custom.md section 5). Lengths are mm at print size, in the model's frame: x along the gun from the muzzle, z up. The model is the user's own asset and is not in the repository.",
+  "source": "C:/Users/lbaun/Documents/nut-up/LowpolyAssets/Polygon-Mega Weapone Kit/Models/Assault_Rifle_5.56_Prototype.fbx",
+  "class": "held",
+  "platform": "A",
+  "print_length": 133.0,
+  "lattice": {"x": 3.5, "z": 0.0},
+  "parts": [
+    {"name": "handguard", "slot": "underbarrel", "take": {"x": [23, 64], "z": [15, 27]}, "widen": 1.15,
+     "mount": {"at": [63.6, 21.2], "interface": "guard.sleeve"},
+     "patches": [
+       {"name": "top", "face": "+z", "region": {"x": [25, 62], "y": [-0.1, 0.1]}},
+       {"name": "side_l", "face": "+y", "region": {"x": [25, 62], "z": [16, 26]}},
+       {"name": "side_r", "face": "-y", "region": {"x": [25, 62], "z": [16, 26]}}]},
+    {"name": "grip", "slot": "grip", "take": {"x": [85.5, 99.5], "z": [-1, 14.5]}, "widen": 1.9,
+     "grip_core": true,
+     "mount": {"at": [92.0, 14.2], "interface": "grip.pin"}},
+    {"name": "stock", "slot": "stock", "take": {"x": [95, 134], "z": [5, 25]}, "widen": 1.9,
+     "mount": {"at": [95.5, 21.2], "interface": "stock.tube"},
+     "patches": [
+       {"name": "side_l", "face": "+y", "region": {"x": [97, 132], "z": [6, 24]}},
+       {"name": "side_r", "face": "-y", "region": {"x": [97, 132], "z": [6, 24]}}]},
+    {"name": "barrel", "slot": "barrel", "take": {"x": [-1, 67.2], "z": [15, 31]}, "widen": 1.5,
+     "mount": {"at": [67.0, 21.2], "interface": "barrel.collar"},
+     "sockets": [
+       {"slot": "muzzle", "at": [0.0, 21.2], "interface": "muzzle.pin"},
+       {"slot": "underbarrel", "at": [63.6, 21.2], "interface": "guard.sleeve"}]},
+    {"name": "body", "slot": "body", "take": "rest", "widen": 1.9,
+     "sockets": [
+       {"slot": "barrel", "at": [67.0, 21.2], "interface": "barrel.collar"},
+       {"slot": "stock", "at": [95.5, 21.2], "interface": "stock.tube"},
+       {"slot": "grip", "at": [92.0, 14.2], "interface": "grip.pin"},
+       {"slot": "magazine", "at": [75.0, 9.6], "interface": "mag.narrow"},
+       {"slot": "sight", "at": [78.0, 31.4], "interface": "rail"}],
+     "patches": [
+       {"name": "rail", "face": "+z", "region": {"x": [68, 90], "y": [-0.1, 0.1]}},
+       {"name": "side_l", "face": "+y", "region": {"x": [67, 96], "z": [15, 26]}},
+       {"name": "side_r", "face": "-y", "region": {"x": [67, 96], "z": [15, 26]}}]}
+  ],
+  "dressing": [
+    {"brick": "n_plate_2x4", "on": "stock/side_r", "cell": [1, 0], "colour": [0.22, 0.24, 0.27]},
+    {"brick": "n_plate_1x2", "on": "stock/side_r", "cell": [6, 1], "colour": [0.9, 0.45, 0.1]},
+    {"brick": "n_plate_1x4", "on": "handguard/top", "cell": [2, 0], "colour": [0.22, 0.24, 0.27]},
+    {"brick": "n_plate_1x2", "on": "body/side_r", "cell": [1, 0], "colour": [0.9, 0.45, 0.1]}
+  ]
+}

@@ -61,6 +61,36 @@ coincide. Bare gun parts are those parts, so a rolled gun needs no new code:
 - A module is a part whose connector the game lets go of: `module: reload` or `module: overheat`
   on the part, and an animation that takes the hand to it.
 
+### 4.1 Interfaces, platforms and adapters
+
+Not every stock goes on every gun, and that is wanted: guns come in families. What decides it is
+the **interface** at the joint, and the rule is one line: **a mount joins a socket of the same slot
+and the same interface.**
+
+| | What | Example |
+|---|---|---|
+| **interface** | a named connector shape for one slot | `stock.tube`: a post out of the body's back, in line with the barrel. `stock.tang`: a flat tongue low on the body |
+| **platform** | a body's set of sockets, one interface per slot. Bodies of a platform take the same parts | `A`: tube stock, narrow magazine. `B`: tang stock, wide magazine |
+| **adapter** | a small part whose mount is one interface and whose socket is another | `adapter_tang_tube` lets any tube stock go on a tang body |
+
+So the rules "per gun" are per platform, shared by every gun of it, and a part made for one
+platform reaches another through an adapter. The lists are in [standards.json](standards.json)
+(`gun_interfaces`, `gun_platforms`, `gun_adapters`) and are a first set, to grow.
+
+The interfaces are our own shapes on the nano grid. None copies a real firearm's fitting or its
+dimensions (spec section 7), and the data does not use real guns' names.
+
+For the generator this is one more filter when it fills a socket: parts of that slot whose mount
+is the socket's interface, or reaches it through an adapter it then adds. `GunAssembler` matches by
+slot alone today; the interface has to be carried on `GunPartDef` and on the socket. Not built.
+
+### 4.2 Dressing breaks off a brick at a time
+
+Armour on a mech or a figure, and anything else pressed onto studs, comes off **per brick**: each
+dressing brick has its own hit points and leaves on its own. Bricks may be grouped into a plate
+that leaves as one where per brick costs too much; the group is a field on the dressing, not a
+different kind of part. `VehicleBricks` (scripts/ai/vehicles) already does this for a tank's zones.
+
 ## 5. How parts are made: rules in code, AI at the controls
 
 Neither "let an AI model it in Blender" nor "convert it automatically" alone. Three layers:
@@ -81,3 +111,10 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 **What brickify is for now:** dressing (filling a volume on a bare part with bricks), anything
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
+
+**Built so far:** [partkit.py](../../tools/brickify/partkit.py), v1, and one build sheet,
+[rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
+(barrel, handguard, body, grip, stock) with stud patches, mounts and sockets on the lattice, the
+grip core, a few dressing bricks, and the check. Still to come: one watertight solid per part,
+socket patches underneath, the interfaces' own shapes, STLs, and a scene the game's gun system
+loads.
