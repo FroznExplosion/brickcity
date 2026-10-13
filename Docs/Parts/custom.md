@@ -28,22 +28,24 @@ bone ([joints.md](joints.md) section 5), joined by its joints.
 
 **Figures** are bare all through.
 
-## 3. One lattice per part
+## 3. Studs go on the part's own faces
 
-Every bare part carries a lattice: the nano grid, 4 mm by 4 mm by 1.6 mm, fixed to the part.
-**Every stud, socket and connector on the part sits on it.** That is the whole rule, and it is what
-lets bricks on two faces of one part, or on two parts joined together, line up and bridge.
+Decided 2026-10-15, after two tries at more: **the model's shape is not changed. It is cut into
+parts, and studs are added.** No resizing, no softened edges, no faces moved, no pad under a patch.
 
-| Feature | Where | Rule |
-|---|---|---|
-| stud patch, top | flat or flattened tops: a rail along a body, the top of a handguard | studs on lattice points, a nano stud each |
-| stud patch, side | the flanks of a stock, a body, a limb | the same studs turned on their side, placed as a bracket's side studs are ([README](README.md) section 3): bricks stuck on them still land on the lattice |
-| socket patch, underside | under a stock, a handguard, a forearm | the underside of a brick, so the bottom reads as built and takes a brick from below |
-| connector | where the next part joins | the part's `mount`, or a `socket_<slot>`, on a lattice point |
+| Rule | |
+|---|---|
+| a stud stands square to its face | whichever way the face points: up, sideways, or along a slanted facet. Its foot is on the facet, its axis is the facet's normal |
+| studs come in neat patches | a run of nearly flat facets is one face; a grid of the stud pitch is laid on it, along the gun, and the biggest whole rectangle that fits gets studs |
+| a stud is whole | all of it on the face with a lip round it, and nothing of the gun over it |
+| not everywhere | no studs underneath (sockets go there), none on the ends where parts join, none on a grip or a barrel |
 
-A patch goes only where it makes sense: where a brick would sit flat, where a hand does not go,
-where a module does not slide. The surface under a patch is made flat to the lattice plane; the
-shape between patches is free.
+**The lattice** (the nano grid fixed to the part: 4 mm by 4 mm by 1.6 mm) still places every mount
+and socket. For studs it is where a face's grid starts, and the grid is then slid to where the
+most studs fit; the lattice's own position wins a tie. So studs on one face are always a stud
+pitch apart, but studs on two different faces line up with each other only where that cost
+nothing. On the first rifle one face in ten kept the lattice. If bricks must bridge two faces or
+two parts, those faces have to be told to keep it, and take fewer studs.
 
 ## 4. Guns are assembled by slot
 
@@ -55,11 +57,47 @@ coincide. Bare gun parts are those parts, so a rolled gun needs no new code:
   lattice. Any stock goes on any body; that is what a procedural gun needs from its parts.
 - The physical connector at a `mount` is the slot's own (spec section 7): a keyed dovetail for a
   barrel or a stock, pin-and-clip for a grip or a magazine, studs for a sight.
-- **The grip has a round core**, 4.8 mm across (a full stud's size) and at least 14.4 mm long,
-  eight-sided like a stud. The styled grip is built round it, but where the hand closes it is that
-  core, so a C hand fits every grip ([joints.md](joints.md) section 7).
+- **The grip has a round core**, 3.2 mm across -- the bar a brick figure's C hand grips, the
+  same size as every joint pin -- and at least 14.4 mm long, eight-sided like a stud. The styled
+  grip is built round it, but where the hand closes it is that core, so a C hand fits every grip
+  ([joints.md](joints.md) section 7).
+- **A sight is a single piece pressed onto a rail**, as one brick is pressed onto studs. A rail
+  is a row of studs: a flat top has one moulded in; a carry handle has a short row of its own
+  (`sight.handle`) that takes an **adapter** (`adapter_handle_rail`) with a rail on top. Planned:
+  a gooseneck adapter that reaches forward off the handle, and bodies whose sights are moulded in
+  and take none.
 - A module is a part whose connector the game lets go of: `module: reload` or `module: overheat`
   on the part, and an animation that takes the hand to it.
+
+### 4.1 Interfaces, platforms and adapters
+
+Not every stock goes on every gun, and that is wanted: guns come in families. What decides it is
+the **interface** at the joint, and the rule is one line: **a mount joins a socket of the same slot
+and the same interface.**
+
+| | What | Example |
+|---|---|---|
+| **interface** | a named connector shape for one slot | `stock.tube`: a post out of the body's back, in line with the barrel. `stock.tang`: a flat tongue low on the body |
+| **platform** | a body's set of sockets, one interface per slot. Bodies of a platform take the same parts | `A`: tube stock, narrow magazine. `B`: tang stock, wide magazine |
+| **adapter** | a small part whose mount is one interface and whose socket is another | `adapter_tang_tube` lets any tube stock go on a tang body |
+
+So the rules "per gun" are per platform, shared by every gun of it, and a part made for one
+platform reaches another through an adapter. The lists are in [standards.json](standards.json)
+(`gun_interfaces`, `gun_platforms`, `gun_adapters`) and are a first set, to grow.
+
+The interfaces are our own shapes on the nano grid. None copies a real firearm's fitting or its
+dimensions (spec section 7), and the data does not use real guns' names.
+
+For the generator this is one more filter when it fills a socket: parts of that slot whose mount
+is the socket's interface, or reaches it through an adapter it then adds. `GunAssembler` matches by
+slot alone today; the interface has to be carried on `GunPartDef` and on the socket. Not built.
+
+### 4.2 Dressing breaks off a brick at a time
+
+Armour on a mech or a figure, and anything else pressed onto studs, comes off **per brick**: each
+dressing brick has its own hit points and leaves on its own. Bricks may be grouped into a plate
+that leaves as one where per brick costs too much; the group is a field on the dressing, not a
+different kind of part. `VehicleBricks` (scripts/ai/vehicles) already does this for a tank's zones.
 
 ## 5. How parts are made: rules in code, AI at the controls
 
@@ -81,3 +119,13 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 **What brickify is for now:** dressing (filling a volume on a bare part with bricks), anything
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
+
+**Built so far:** [partkit.py](../../tools/brickify/partkit.py) and one build sheet,
+[rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
+(barrel, handguard, body, grip, stock) by the model's own loose shells, studs on their faces,
+mounts and sockets on the lattice, the grip core measured, and the check. Earlier tries are in the
+history and were dropped: a pad under each patch (read as a brick stuck on), moving a face onto
+the lattice, resizing and bevelling the parts, and fusing a part's shells on a voxel grid (the
+open ones came out in pieces). Still to come: one watertight solid per part, sockets underneath,
+the interfaces' own shapes, dressing and sights pressed on the new patches, STLs, and a scene the
+game's gun system loads.

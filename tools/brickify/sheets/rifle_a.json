@@ -1,0 +1,31 @@
+{
+  "name": "rifle_a",
+  "note": "Build sheet (Docs/Parts/custom.md section 5). Lengths are mm at print size, in the model's frame: x along the gun from the muzzle, z up. The model is the user's own asset and is not in the repository. The model's shape is not changed: it is cut into parts and given studs.",
+  "source": "C:/Users/lbaun/Documents/nut-up/LowpolyAssets/Polygon-Mega Weapone Kit/Models/Assault_Rifle_5.56_Prototype.fbx",
+  "class": "held",
+  "platform": "A",
+  "print_length": 133.0,
+  "lattice": {"x": 3.5, "z": 0.0},
+  "parts": [
+    {"name": "handguard", "slot": "underbarrel", "take": {"x": [23, 64], "z": [15, 27]},
+     "mount": {"at": [63.6, 21.2], "interface": "guard.sleeve"}},
+    {"name": "grip", "slot": "grip", "take": {"x": [85.5, 99.5], "z": [-1, 14.5]},
+     "studs": false, "grip_core": true,
+     "mount": {"at": [92.0, 14.2], "interface": "grip.pin"}},
+    {"name": "stock", "slot": "stock", "take": {"x": [95, 134], "z": [5, 25]},
+     "mount": {"at": [95.5, 21.2], "interface": "stock.tube"}},
+    {"name": "barrel", "slot": "barrel", "take": {"x": [-1, 67.2], "z": [15, 31]},
+     "studs": false,
+     "mount": {"at": [67.0, 21.2], "interface": "barrel.collar"},
+     "sockets": [
+       {"slot": "muzzle", "at": [0.0, 21.2], "interface": "muzzle.pin"},
+       {"slot": "underbarrel", "at": [63.6, 21.2], "interface": "guard.sleeve"}]},
+    {"name": "body", "slot": "body", "take": "rest",
+     "sockets": [
+       {"slot": "barrel", "at": [67.0, 21.2], "interface": "barrel.collar"},
+       {"slot": "stock", "at": [95.5, 21.2], "interface": "stock.tube"},
+       {"slot": "grip", "at": [92.0, 14.2], "interface": "grip.pin"},
+       {"slot": "magazine", "at": [75.0, 9.6], "interface": "mag.narrow"},
+       {"slot": "sight", "at": [78.0, 31.4], "interface": "sight.handle"}]}
+  ]
+}
