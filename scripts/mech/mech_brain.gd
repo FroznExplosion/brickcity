@@ -98,6 +98,10 @@ var state := "idle"
 var order := Order.NONE
 var order_point := Vector3.ZERO
 var leader: Pawn
+## Where its commander wants it while its side knows of nobody to fight (the
+## host that fielded it sets this: the fight's street). INF: it stands where it
+## is. Not an order -- with something to fight, it fights as it would anyway.
+var rally := Vector3.INF
 ## For gates.
 var shots := 0
 var blocked_shots := 0
@@ -143,6 +147,14 @@ var _gap_checked := -INF
 var _gap_open := false
 var _want_dir := Vector3.ZERO
 var _goal := Vector3.INF
+## With no way to the very spot asked for (a player in a doorway, on a stair, in
+## a street a mech does not fit): the places near it a mech can stand, nearest
+## first, tried one after another (move_to). Empty once all have failed.
+var _near_goals: Array[Vector3] = []
+var _near_tried := false
+## How far from the spot asked for it looks, and how many places it tries.
+const NEAR_OUT := [6.0, 12.0, 18.0]
+const NEAR_TRIES := 3
 var _path_id := -1
 var _path := PackedVector3Array()
 var _wp := 0
@@ -553,7 +565,8 @@ func _fire(_now: float) -> void:
 		# punched (the finisher), or left alone.
 		var theirs := MechLayers.of(_target.body)
 		var hold := theirs != null and theirs.doomed and theirs.nuker and order == Order.NONE
-		mech.gun.set_trigger(on and not friend and not hold and services.ai_world.bricks_between(from, aim_at) == 0)
+		mech.gun.set_trigger(on and not friend and not hold and not mech.no_gun
+				and services.ai_world.bricks_between(from, aim_at) == 0)
 		if launcher != null:
 			launcher.set_trigger(false)
 	else:
@@ -613,6 +626,8 @@ func move_to(goal: Vector3, run := false) -> int:
 		_wp = 0
 		_stuck_from = mech.feet()
 		_stuck_at = now
+		_near_goals.clear()
+		_near_tried = false
 	if _path.is_empty():
 		var st := _path_nav.get_status(_path_id)
 		if st == AINav.PENDING:
@@ -620,11 +635,30 @@ func move_to(goal: Vector3, run := false) -> int:
 			return 0
 		if st != AINav.DONE:
 			_want_dir = Vector3.ZERO
-			return -1
+			# No way to the very spot: the nearest place to it a mech can stand,
+			# then the next. It stood where it was put for a whole fight, its
+			# target in a street too narrow for it.
+			if not _near_tried:
+				_near_tried = true
+				_near_goals = _standing_near(goal)
+			if _near_goals.is_empty():
+				return -1
+			var near: Vector3 = _near_goals.pop_front()
+			_path_nav.release(_path_id)
+			# On the plain mech map: a way that needs no wall opened is found at
+			# once, where the breaching map's search across a city takes its time.
+			_path_nav = nav
+			_path_id = _path_nav.request_path(mech.feet(), near, importance, 30000)
+			return 0
 		_path = _path_nav.get_path(_path_id)
 		if _path_nav.has_method(&"get_breaches"):
 			_breaches = _path_nav.call(&"get_breaches", _path_id)
 		_wp = 1 if _path.size() > 1 else 0
+		# Stuck is counted from the first step, not from the asking: a way that
+		# took longer than STUCK_SECONDS to work out was thrown away the tick it
+		# came, and asked for again -- for good.
+		_stuck_from = mech.feet()
+		_stuck_at = now
 	var feet := mech.feet()
 	if _breach_step(feet, now):
 		return 0
@@ -646,6 +680,30 @@ func move_to(goal: Vector3, run := false) -> int:
 	elif now - _stuck_at > STUCK_SECONDS:
 		_goal = Vector3.INF
 	return 0
+
+
+## Places near `goal` a mech can stand, nearest first, NEAR_TRIES at most: for
+## when there is no way to `goal` itself.
+func _standing_near(goal: Vector3) -> Array[Vector3]:
+	var found: Array[Vector3] = []
+	var feet := mech.feet()
+	for out in NEAR_OUT:
+		for step in 10:
+			var a := step * TAU / 10.0
+			var q: Vector3 = nav.snap(goal + Vector3(cos(a), 0.0, sin(a)) * float(out))
+			if not nav.can_stand(q) or q.distance_to(feet) < 2.0:
+				continue
+			var fresh := true
+			for f in found:
+				if f.distance_to(q) < 3.0:
+					fresh = false
+					break
+			if fresh:
+				found.append(q)
+	found.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.distance_to(goal) < y.distance_to(goal))
+	if found.size() > NEAR_TRIES:
+		found.resize(NEAR_TRIES)
+	return found
 
 
 ## At the next breach point of its path: stopped short of it, opening it (the

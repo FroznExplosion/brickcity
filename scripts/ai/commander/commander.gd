@@ -32,6 +32,12 @@ const THINK_EVERY := 1.0
 ## Income, points a second, and what can be banked.
 const INCOME := 0.35
 const BUDGET_CAP := 30.0
+## The bank grows with the encounter (budget_cap): this much more with every
+## reinforcement it has sent, up to BUDGET_MAX. So what it can save up for gets
+## bigger as a fight goes on -- a heavy mech is the whole of the first bank, and
+## a Nuker comes only late.
+const CAP_GROWTH := 1.5
+const BUDGET_MAX := 45.0
 ## A squad is this many.
 const SQUAD_SIZE := 4
 ## Seconds between reinforcements, at least.
@@ -67,14 +73,16 @@ var can_truck := false
 ## The host can field an APC (TransportTruck kind &"apc").
 var can_apc := false
 ## SUPPORT it buys besides squads (Doctrine.support; AIRoster.md RO11): air --
-## a flyer or hover craft of the roster -- or a tank. Every SUPPORT_GAP seconds
+## a flyer or hover craft of the roster -- a tank, or a mech of the roster with a
+## soldier in it. Every SUPPORT_GAP seconds
 ## it considers one purchase: each kind under its cap comes up at the doctrine's
-## weight, and is bought if the points leave SUPPORT_RESERVE over. `support_spawner.call(kind, unit) -> bool` fields it;
+## weight, and is bought if the points leave SUPPORT_RESERVE over (or, for a
+## unit the bank can only just hold, whatever the bank leaves). `support_spawner.call(kind, unit) -> bool` fields it;
 ## `support_up.call() -> {kind: how many up}` keeps it under SUPPORT_CAP. A host
 ## that sets neither buys none (a gate counting soldiers).
 var support_spawner := Callable()
 var support_up := Callable()
-const SUPPORT_CAP := {&"air": 3, &"tank": 1}
+const SUPPORT_CAP := {&"air": 3, &"tank": 1, &"mech": 1}
 const SUPPORT_RESERVE := 4.0
 const SUPPORT_GAP := 20.0
 var _support_at := 0.0
@@ -303,7 +311,7 @@ func think(dt: float) -> void:
 	_step_fronts(now)
 	if not commander_up:
 		return   # nobody left to decide
-	budget = minf(budget + INCOME * dt, BUDGET_CAP)
+	budget = minf(budget + INCOME * dt, maxf(budget_cap(), budget))
 	_update_desperation()
 	doctrine.update(profile, desperation, difficulty)
 	services.aggro_of(team).bias["pilot"] = 1.0 + doctrine.pilot_focus
@@ -558,7 +566,10 @@ func buy_support(force: StringName = &"") -> StringName:
 		if unit == &"":
 			continue
 		var cost := UnitCatalog.points(unit)
-		if budget < cost + (0.0 if force != &"" else SUPPORT_RESERVE):
+		# Something over for squads -- but a unit the bank can only just hold
+		# is bought with all of it, or it would never come.
+		var reserve := 0.0 if force != &"" else minf(SUPPORT_RESERVE, maxf(budget_cap() - cost, 0.0))
+		if budget < cost + reserve:
 			continue
 		if force == &"" and _rng.randf() >= float(doctrine.support[kind]):
 			continue
@@ -573,11 +584,48 @@ func buy_support(force: StringName = &"") -> StringName:
 	return &""
 
 
+## What can be banked now: more as the encounter goes on.
+func budget_cap() -> float:
+	return minf(BUDGET_CAP + CAP_GROWTH * reinforcements, BUDGET_MAX)
+
+
+## The roster's mechs it would field now: built ones. One whose attack is its
+## fists is for a player whose MECH does the killing -- it runs at the mech; to
+## a pilot on foot its fists do nothing.
+func support_mechs() -> Array[StringName]:
+	var out: Array[StringName] = []
+	var r := Roster.shared()
+	if r == null:
+		return out
+	for rid in r.ids():
+		var rc := r.recipe(rid)
+		if str(rc.get("body", "")) != "mech" or not bool(rc.get("built", false)) or not r.fit(rid):
+			continue
+		if str(rc.get("attack", "")) == "melee" and doctrine.answering_armor != "mech":
+			continue
+		out.append(StringName(rid))
+	# By name: StringNames sort by where they are kept, which is not the same
+	# from one run to the next.
+	out.sort_custom(func(x: StringName, y: StringName) -> bool: return String(x) < String(y))
+	return out
+
+
 ## Which unit stands for a kind of support: the tank; for air, one of the
-## roster's flyers and hover craft that can be fielded, drawn evenly.
+## roster's flyers and hover craft that can be fielded, drawn evenly; for a
+## mech, one of support_mechs() the points in hand pay for, drawn evenly -- with
+## none it can pay for, the cheapest (which is then not bought).
 func support_unit(kind: StringName) -> StringName:
 	if kind == &"tank":
 		return &"tank" if bool(UnitCatalog.get_unit(&"tank").built) else &""
+	if kind == &"mech":
+		var all := support_mechs()
+		if all.is_empty():
+			return &""
+		var can := all.filter(func(id): return UnitCatalog.points(id) <= budget)
+		if can.is_empty():
+			all.sort_custom(func(a, b): return UnitCatalog.points(a) < UnitCatalog.points(b))
+			return all[0]
+		return can[_rng.randi() % can.size()]
 	var r := Roster.shared()
 	if r == null:
 		return &""

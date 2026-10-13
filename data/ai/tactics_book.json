@@ -1362,6 +1362,10 @@
     "melee": 5,
     "grenade": 1,
     "mark": 1,
+    "m_fire": 0,
+    "m_close": 5,
+    "m_punch": 5,
+    "m_backoff": 1,
     "reload": 0
    }
   },

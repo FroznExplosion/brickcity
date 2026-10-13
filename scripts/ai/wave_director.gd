@@ -272,6 +272,7 @@ func _physics_process(_delta: float) -> void:
 			_crouched += 1
 	_check_focus()
 	_tank_report(now)
+	_mech_report(now)
 	_ally_report(now)
 	if Engine.get_physics_frames() % 15 == 7:
 		_check_hq()
@@ -327,16 +328,19 @@ func request_squad(kinds: Array[StringName], arrival: StringName = &"foot") -> b
 		wave, ", ".join(kinds), _floors.size(), focus])
 	_air_wing()
 	_tank_wing()
+	_mech_wing()
 	return true
 
 
 ## Air and armour (AIRoster.md RO10, RO11): the COMMANDER buys them with its
 ## points as support (Commander.buy_support, Doctrine.support) -- a flyer or
-## hover craft of the roster, or a tank -- and this host fields them
-## (_field_support). Not in a gate: its checks count a wave's soldiers.
+## hover craft of the roster, a tank, or one of the roster's mechs with a
+## soldier in it -- and this host fields them (_field_support). Not in a gate:
+## its checks count a wave's soldiers.
 ##
-## Two switches field them free, for trying them out: `-- --air`, AIR_PER_WAVE
-## flyers and the Skimmer with every reinforcement; `-- --tank`, a tank.
+## Switches field them free, for trying them out: `-- --air`, AIR_PER_WAVE
+## flyers and the Skimmer with every reinforcement; `-- --tank`, a tank;
+## `-- --enemy-mech`, a mech (one at a time, each of the roster's in turn).
 const AIR_PER_WAVE := 2
 const AIR_KINDS: Array[StringName] = [&"gnat", &"gnat", &"drone"]
 ## A hover craft keeps to the area over the focus building (AIRoster.md R10).
@@ -345,6 +349,9 @@ var hover: Flyer
 var air: Array[Flyer] = []
 ## The enemy's tank, and the squad screening it.
 var tank: Tank
+## The enemy's mechs the commander bought (or `--enemy-mech` gave it), still up.
+var mechs: Array[MechBrain] = []
+var _mech_turn := 0
 
 
 ## The commander's support, wired when this is not a gate.
@@ -356,10 +363,11 @@ func _wire_support() -> void:
 	commander.support_up = func() -> Dictionary:
 		air = air.filter(func(f): return is_instance_valid(f) and not f.is_dead())
 		return {&"air": air.size(),
-				&"tank": 1 if tank != null and is_instance_valid(tank) and not tank.is_wrecked() else 0}
+				&"tank": 1 if tank != null and is_instance_valid(tank) and not tank.is_wrecked() else 0,
+				&"mech": _mechs_up()}
 
 
-## What the commander bought: `unit` of `kind` (&"air" or &"tank").
+## What the commander bought: `unit` of `kind` (&"air", &"tank" or &"mech").
 func _field_support(kind: StringName, unit: StringName) -> bool:
 	if _player() == null:
 		return false
@@ -368,6 +376,8 @@ func _field_support(kind: StringName, unit: StringName) -> bool:
 			commander.doctrine.answering_armor])
 	if kind == &"tank":
 		return _field_tank()
+	if kind == &"mech":
+		return _field_mech(unit) != null
 	return _field_flyer(unit) != null
 
 
@@ -414,6 +424,101 @@ func _field_flyer(kind: StringName) -> Flyer:
 	air.append(f)
 	print("[arena] in the air: %s" % (f.name_tag.text if f.name_tag != null else String(kind)))
 	return f
+
+
+func _mechs_up() -> int:
+	mechs = mechs.filter(func(b): return is_instance_valid(b) and is_instance_valid(b.mech) and not b.is_dead())
+	return mechs.size()
+
+
+## A mech with the reinforcements (`-- --enemy-mech`), one at a time: each of the
+## roster's built mechs in turn, so every one is seen.
+func _mech_wing() -> void:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if not "--enemy-mech" in args or "--gate" in args or _player() == null or Roster.shared() == null:
+		return
+	if _mechs_up() > 0:
+		return
+	var kinds: Array[StringName] = []
+	for rid in Roster.shared().ids():
+		var rc := Roster.shared().recipe(rid)
+		if str(rc.get("body", "")) == "mech" and bool(rc.get("built", false)) and Roster.shared().fit(rid):
+			kinds.append(StringName(rid))
+	if kinds.is_empty():
+		return
+	kinds.sort_custom(func(x: StringName, y: StringName) -> bool: return String(x) < String(y))
+	_field_mech(kinds[_mech_turn % kinds.size()])
+	_mech_turn += 1
+
+
+## Where an enemy mech is put down: DROPPED IN, as Firefight's are -- on the
+## nearest ground to the fight's street that a mech can stand on (the street
+## itself is often too narrow for one), not in a building, about the street's
+## level, and no nearer the player than MECH_NEAR. INF with none within
+## MECH_OUT.
+##
+## Not walked in from where a truck starts: a mech's way across this map is slow
+## to work out (its map is searched a slice a tick, and a search that fails
+## floods a terrace first) -- from seventy metres out one stood where it was
+## put for a whole fight -- and trying ways from candidate starts until one
+## was found stopped the game for half a second.
+const MECH_NEAR := 22.0
+const MECH_OUT := 48.0
+func _mech_start() -> Vector3:
+	var nav: AINav = city.mech_nav
+	var p := _player()
+	var street: Vector3 = _street_of(focus)
+	var best := Vector3.INF
+	var best_d := INF
+	for out in [6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 42.0, MECH_OUT]:
+		for step in 12:
+			var q: Vector3 = street + Vector3(cos(step * TAU / 12.0), 0.0, sin(step * TAU / 12.0)) * float(out)
+			q.y = city.ai_world.ground_at(q.x, q.z)
+			q = nav.snap(q)
+			if not nav.can_stand(q) or _in_a_building(q) or absf(q.y - street.y) > 3.5:
+				continue
+			if p != null and q.distance_to(p.feet()) < MECH_NEAR:
+				continue
+			if survey.what_is_under(q).on != SpawnSurvey.On.GROUND:
+				continue
+			var d := q.distance_to(street)
+			if d < best_d:
+				best_d = d
+				best = q
+		# The nearest ring with anywhere at all: further rings are further.
+		if best != Vector3.INF:
+			break
+	return best
+
+
+## One of the roster's mechs (`recipe`), a soldier of its side in it: dropped in
+## by the fight (_mech_start), facing the player. It fights as its side knows
+## the fight; with nobody known it keeps to where it was put (MechBrain.rally).
+## Lost, it costs its commander what it paid. Null with nowhere to put it.
+func _field_mech(recipe: StringName) -> MechBrain:
+	var p := _player()
+	if p == null or city.mech_nav == null:
+		return null
+	var t0 := Time.get_ticks_usec()
+	var at := _mech_start()
+	var took := float(Time.get_ticks_usec() - t0) / 1000.0
+	if at == Vector3.INF:
+		print("[arena] no ground for a mech by the fight (looked for %.1f ms)" % took)
+		return null
+	var to := p.feet() - at
+	var br: MechBrain = city._spawn_enemy_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z), String(recipe))
+	if br == null:
+		return null
+	var cost := UnitCatalog.points(recipe)
+	var m := br.mech
+	m.health.died.connect(func() -> void:
+		commander.note_loss(cost, m.feet() if is_instance_valid(m) else at))
+	br.rally = at
+	br.set_meta(&"full", m.health.total_current())
+	mechs.append(br)
+	print("[arena] enemy mech: %s (%.0f pts), dropped in at %v, %.0f m from the player (found in %.1f ms)" % [
+			m.name_tag.text if m.name_tag != null else String(recipe), cost, at, at.distance_to(p.feet()), took])
+	return br
 
 
 ## A tank with the reinforcements (`-- --tank`): see _field_tank.
@@ -554,6 +659,29 @@ func _ally_report(now: float) -> void:
 	var f: Array = allies.intent.focus()
 	print("[allies] %d up, %d within 25 m of the player, %d in front of the player's gun; focus: %s" % [
 			up.size(), near, lane, f[1]])
+
+
+## Every TANK_REPORT seconds while an enemy mech is out: what each is doing,
+## for the log.
+var _mech_report_at := 0.0
+func _mech_report(now: float) -> void:
+	if mechs.is_empty() or now < _mech_report_at:
+		return
+	_mech_report_at = now + TANK_REPORT
+	if _mechs_up() == 0:
+		print("[arena] mech: none left")
+		return
+	var p := _player()
+	for br in mechs:
+		var m := br.mech
+		var l := m.layers
+		print("[arena] mech %s: %s (%s), %.0f m from the player, hull %.0f%%%s; %d round(s), %d rocket(s), %d wall(s) opened, %d punch(es)" % [
+				m.name_tag.text if m.name_tag != null else m.type_id, br.state,
+				str(br.book.get("move", "-")),
+				m.feet().distance_to(p.feet()) if p != null else -1.0,
+				100.0 * m.health.total_current() / maxf(float(br.get_meta(&"full", 1.0)), 1.0),
+				(", doomed" if l.doomed else "") + (", on auto" if l.auto else "") if l != null else "",
+				br.shots, br.launched, br.breached, m.melee_hits])
 
 
 ## Every TANK_REPORT seconds while a tank is out: what it and its escort are

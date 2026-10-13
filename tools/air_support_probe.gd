@@ -73,12 +73,22 @@ func _begin(stage: String) -> void:
 	_log.clear()
 	match stage:
 		"hover":
+			# A book that asks for passes about as often as circling. On the
+			# casebook as it stands a defender with a heavy gun makes a pass one
+			# decision in twenty -- none at all in most runs of twenty seconds --
+			# and this stage is here for what a pass and a circle ARE, held to the
+			# area, not for how often the casebook asks for one.
+			var passes := TacticsBook.load_book()
+			for m in passes.moments:
+				passes.moments[m].weights = {"advance": 60.0, "trade": 40.0}
+			a.s.policy = BookCombatPolicy.new(passes)
 			f = _skimmer(Vector3.ZERO)
 			p = a.player(Vector3(18.0, 0.0, 0.0), 5000.0, false, 0)
 			_log["hp0"] = p.health.total_current()
 			_log["far"] = 0.0
 			_log["runs"] = 0
 		"crash":
+			a.s.policy = BookCombatPolicy.new()
 			# Under it, a body the crash should catch.
 			var at := f.body.global_position
 			off = a.player(Vector3(at.x, 0.0, at.z), 5000.0, false, 0)
