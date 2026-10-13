@@ -144,6 +144,44 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   before its range (`ImpostorItems.CULL_FADE`). Nothing visible changes today -- no scene has an
   `ImpostorItems` yet, so loot has no cull edge. `impostor_probe` 30.
 
+### 1.10 Proposed, not started: where a collapse still differs from a real brick model (2026-10-13)
+Read against [BrickFailure.md](BrickFailure.md) and the code as it is. What already matches: no
+compression failure; a landing peels a clump at the contact and severs one seam of studs at a
+storey line, destroying nothing (`fracture_on_impact`, `_snap_across`); a piece in the air is
+rigid. What does not, most worth doing first -- each is also less work for the machine:
+
+1. **A loose piece on the ground is still stress-solved when it is hit** (`solve_island`), as if
+   it stood on its lowest bricks. In `--big --shot` (three runs, 2026-10-08) a hit on a piece in
+   the air makes a body 7-9 % of the time (cut through, nothing else), a hit on a piece that is
+   down 32-42 %: 110-160 bodies a run are mostly wreckage coming apart under its own weight after
+   being shot, which a brick model lying on a table does not do. **Do:** a loose piece is a rigid chunk everywhere -- it comes apart
+   where a hit disconnects it and where a landing snaps it, and is never stress-solved. Takes the
+   piece stress solve (the worst single unit in the tick, 38 ms) out of the game, and most of
+   1.3 with it (single bricks come off a piece only because that solve sheds them).
+   **Check first:** more stays whole and moving, which is what 1.4's rule cost; needs 2.
+2. **Wreckage at rest is woken whole by any shot that reaches it**, and by every blast within
+   four radii (`wake`, `wake_near`). A pile of bricks that loses one brick does not start moving.
+   **Do:** a hit takes its bricks out of a settled piece where it lies; it wakes only if the hit
+   cut it in two or took what it rests on (`support_gone`, `_supported_below` already answer
+   that). Pieces down and moving are what the solver pays for (§3).
+3. **A blast deletes every brick in its radius.** Bricks separate, they do not vanish
+   (BrickFailure §5): the middle of a blast may be gone, the ring round it should come loose --
+   as crumbs, which are drawn and cost no body (`_crumble`). Check what `separate_near` already
+   does for buildings before changing anything.
+4. **Nothing is ever pushed.** There are no impulses (`DEBRIS_GRAVITY`'s note): a blast beside a
+   loose piece wakes it and leaves it where it is, and a landing never bounces (friction 1,
+   bounce 0). Light plastic is thrown by a blast and clatters. A feel change, and it costs
+   settling time -- after 1 and 2, when less is moving.
+5. **A snap goes at the storey line nearest the contact**, whatever is there. A brick model goes
+   at the weakest seam near it -- fewest studs across (a row of windows before a solid course).
+   `lateral_check` already weighs every course boundary of a building by its studs; the same
+   count for a piece picks the seam.
+6. **How strong a stud is.** 9.3 a stud is the toy's clutch scaled to a 0.35 m stud, which makes
+   the building 44 times weaker for its weight than the toy (BrickFailure §4.5): a hanging section
+   drops where on a table it would hold. That was chosen for the look. If the model is the toy
+   itself, the number goes up and far less comes off a damaged building by itself. One constant
+   (`set_tension_per_stud`); a decision, and it changes what "hanging in mid-air" looks like.
+
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
   carry what is above it tips or crushes (`_gravity_fail`, `CRUSH_PER_STUD`). A building left
@@ -165,12 +203,13 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   was first wanted for. Build it only if solve time shows up again.
 * ~~Collapses far off without the physics engine~~ — **decided 2026-10-06:** no. A far collapse
   stays physics, accurate, and is made cheap by rule instead; see §1.8.
-* **Should a shot shatter a section that is falling?** (2026-10-08, §3.) Today it does not: a piece
-  in the air is cut only where a hit disconnects it (1.4), which is the rule for every brick, and
-  it lands whole. Stress-solving it in the air as if it stood on its lowest bricks -- how it was
-  before 1.4 -- breaks it into many bodies on the way down, which is wrong by that rule and is
-  about a sixth faster in `--big --shot` (26.8 ms a frame against 20.5-21.7), because what lands is
-  smaller and comes to rest sooner. Kept as it is until decided.
+* ~~Should a shot shatter a section that is falling?~~ — **decided 2026-10-13 (user): no.** "I'm
+  trying to replicate real LEGOs breaking apart. A falling LEGO tower would likely stay as one
+  piece until it hits something." So a piece in the air is cut only where a hit disconnects it
+  (1.4) and lands whole, and the sixth it costs `--big --shot` (26.8 ms a frame against 20.5-21.7
+  with it off, §3) is paid. **The test for every collapse rule from here: is that what a real
+  brick model does?** ([BrickFailure.md](BrickFailure.md) is the note on what it does.) What that
+  asks for next is §1.10.
 * **Aim-ahead promotion** (`_aim_promote`, 100 m, kept 8 s) makes more buildings bricks while the
   player looks round. No spikes measured; if memory or frame time climbs, lengthen the dwell
   (`AIM_PROMOTE_TICKS`) or cap how many it keeps.
