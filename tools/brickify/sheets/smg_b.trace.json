@@ -1,0 +1,358 @@
+{
+ "name": "smg_b",
+ "note": "Trace config for trace.py: boxes are [[x from, x to], [y from, y to]] in the photo's pixels. The photo is the user's reference picture, kept outside the repository.",
+ "photo": "C:/Users/lbaun/Documents/brickcity-print/reference/guns_a.jpg",
+ "reference": "Traced from the user's reference photo of a brick-built 1928-pattern submachine gun (lower gun): 54 studs long.",
+ "platform": "B",
+ "px_per_stud": 22.2,
+ "grey_from": 0.44,
+ "muzzle_px": 1264,
+ "body_top_plates": 36,
+ "parts": [
+  {
+   "name": "body",
+   "kind": "bricks",
+   "slot": "body",
+   "colour": "grey",
+   "paint": [
+    0.47,
+    0.49,
+    0.52
+   ],
+   "box": [
+    [
+     400,
+     880
+    ],
+    [
+     286,
+     452
+    ]
+   ],
+   "wide": 3,
+   "studs_x": [
+    [
+     116,
+     126
+    ]
+   ],
+   "studs_y": [
+    0.0
+   ],
+   "close": 5,
+   "fill": "columns"
+  },
+  {
+   "name": "barrel",
+   "kind": "turned",
+   "slot": "barrel",
+   "colour": "grey",
+   "paint": [
+    0.4,
+    0.42,
+    0.45
+   ],
+   "box": [
+    [
+     880,
+     1270
+    ],
+    [
+     300,
+     372
+    ]
+   ],
+   "axis_px": 338,
+   "stretches": [
+    [
+     880,
+     1196
+    ],
+    [
+     1196,
+     1210
+    ],
+    [
+     1210,
+     1264
+    ]
+   ],
+   "boxes": [
+    [
+     [
+      10.2,
+      13.0
+     ],
+     [
+      -0.9,
+      0.9
+     ],
+     [
+      55.6,
+      62.6
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "magazine",
+   "kind": "profile",
+   "slot": "magazine",
+   "role": "module",
+   "module": "reload",
+   "colour": "grey",
+   "paint": [
+    0.4,
+    0.42,
+    0.45
+   ],
+   "box": [
+    [
+     762,
+     830
+    ],
+    [
+     452,
+     632
+    ]
+   ],
+   "thick": 7.0,
+   "bevel": 0.6
+  },
+  {
+   "name": "foregrip",
+   "kind": "loft",
+   "axis": "x",
+   "slot": "underbarrel",
+   "colour": "tan",
+   "paint": [
+    0.86,
+    0.74,
+    0.5
+   ],
+   "box": [
+    [
+     868,
+     1180
+    ],
+    [
+     322,
+     425
+    ]
+   ],
+   "round": 0.4,
+   "arc": 3,
+   "smooth": true,
+   "width": [
+    [
+     0.0,
+     5.2
+    ],
+    [
+     0.08,
+     6.4
+    ],
+    [
+     0.92,
+     6.4
+    ],
+    [
+     1.0,
+     5.2
+    ]
+   ],
+   "studs": [
+    {
+     "face": "+y",
+     "x": [
+      28,
+      60
+     ],
+     "z": [
+      48.0,
+      52.0
+     ]
+    },
+    {
+     "face": "-y",
+     "x": [
+      28,
+      60
+     ],
+     "z": [
+      48.0,
+      52.0
+     ]
+    }
+   ],
+   "under": {
+    "x": [
+     28,
+     60
+    ],
+    "depth": 1.4,
+    "rows": [
+     -2.0,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "grip",
+   "kind": "loft",
+   "axis": "z",
+   "slot": "grip",
+   "grip": true,
+   "colour": "tan",
+   "paint": [
+    0.86,
+    0.74,
+    0.5
+   ],
+   "box": [
+    [
+     548,
+     672
+    ],
+    [
+     408,
+     580
+    ]
+   ],
+   "round": 0.6,
+   "arc": 3,
+   "smooth": true,
+   "width": [
+    [
+     0.0,
+     3.6
+    ],
+    [
+     0.12,
+     4.4
+    ],
+    [
+     0.7,
+     4.3
+    ],
+    [
+     1.0,
+     4.0
+    ]
+   ],
+   "calm": 9
+  },
+  {
+   "name": "stock",
+   "kind": "loft",
+   "axis": "x",
+   "slot": "stock",
+   "colour": "tan",
+   "paint": [
+    0.86,
+    0.74,
+    0.5
+   ],
+   "box": [
+    [
+     55,
+     548
+    ],
+    [
+     372,
+     645
+    ]
+   ],
+   "round": 0.45,
+   "arc": 3,
+   "smooth": true,
+   "width": [
+    [
+     0.0,
+     4.8
+    ],
+    [
+     0.2,
+     6.4
+    ],
+    [
+     0.97,
+     6.4
+    ],
+    [
+     1.0,
+     5.4
+    ]
+   ],
+   "studs": [
+    {
+     "face": "+y",
+     "x": [
+      160,
+      208
+     ],
+     "z": [
+      4.8,
+      36.8
+     ],
+     "shape": "all"
+    },
+    {
+     "face": "-y",
+     "x": [
+      160,
+      208
+     ],
+     "z": [
+      4.8,
+      36.8
+     ],
+     "shape": "all"
+    }
+   ]
+  }
+ ],
+ "joints": [
+  {
+   "part": "barrel",
+   "at": [
+    "body_front",
+    "axis"
+   ],
+   "interface": "barrel.collar"
+  },
+  {
+   "part": "stock",
+   "at": [
+    "body_back",
+    "body_mid"
+   ],
+   "interface": "stock.tang"
+  },
+  {
+   "part": "grip",
+   "at": [
+    "mid",
+    "top"
+   ],
+   "interface": "grip.pin"
+  },
+  {
+   "part": "magazine",
+   "at": [
+    "mid",
+    "top"
+   ],
+   "interface": "mag.wide"
+  },
+  {
+   "part": "foregrip",
+   "at": [
+    "mid",
+    "top"
+   ],
+   "on": "barrel",
+   "interface": "guard.bar"
+  }
+ ]
+}

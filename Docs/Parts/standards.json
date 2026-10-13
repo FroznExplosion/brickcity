@@ -361,11 +361,11 @@
     "finger_groove_min_mm": 0.3
   },
   "held_grip": {
-    "note": "Our own grip, so one hand fits every gun. Measured where the hand closes, the middle three fifths of the grip, at print size. First numbers, from the first gun: to be settled as more are built.",
+    "note": "Our own grip, so one hand fits every gun. Measured where the hand closes, the middle three fifths of the grip, at print size. First numbers, from the reference gun's grip: to be settled as more are built.",
     "length_min": 24.0,
     "fore_aft": [
-      9.0,
-      12.5
+      10.0,
+      15.5
     ],
     "thick": [
       7.0,
