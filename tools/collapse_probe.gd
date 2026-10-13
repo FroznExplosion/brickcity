@@ -471,7 +471,11 @@ func _check_storeys() -> void:
 	for ob in city.registry.buildings:
 		if ob.is_build() or ob.toppled or ob.is_damaged():
 			continue
-		var r: Dictionary = city.world.gravity_check(city._promote(ob.id), city.CRUSH_PER_STUD)
+		# As CityScene._gravity_fail asks: the crush load is the same whatever a
+		# stud holds in tension (BrickStrength).
+		var oc: int = city._promote(ob.id)
+		var r: Dictionary = city.world.gravity_check(oc,
+				city.CRUSH_PER_STUD * BrickStrength.SCALED / city.world.get_tension_per_stud(oc))
 		worst = maxf(worst, float(r.ratio))
 	_ok("no undamaged building is near failing a storey", worst < 0.8, "worst %.2f of what it can" % worst)
 	# Two thin corners, diagonally: balanced, so it cannot tip -- and far too

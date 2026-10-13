@@ -170,7 +170,16 @@ func lateral(id: int, accel_g: float, dir: Vector3) -> Dictionary:
 	var b = registry.get_building(id)
 	if b == null or b.toppled or b.chunk < 0 or b.frames.size() > 1:
 		return {}
-	return city.world.lateral_check(b.chunk, accel_g, dir)
+	# Weighed against the studs the disasters' strengths were set against
+	# (BrickStrength.SCALED), not whatever a stud has been made to hold since:
+	# an earthquake that brought a tower down still does. Whoever retunes the
+	# disasters against stronger studs takes these three lines out.
+	var w: BrickWorld = city.world
+	var held := w.get_tension_per_stud(b.chunk)
+	w.set_tension_per_stud(b.chunk, BrickStrength.SCALED)
+	var r: Dictionary = w.lateral_check(b.chunk, accel_g, dir)
+	w.set_tension_per_stud(b.chunk, held)
+	return r
 
 
 ## Cut a building through on the horizontal plane at `point` (a course

@@ -5,6 +5,9 @@ extends "res://tools/collapse_probe.gd"
 ## falls for eight seconds -- and what the pieces did about it.
 ##
 ##     godot --headless --path . --script tools/barrage_probe.gd
+##     ... -- --stud=1      the same at another stud strength (BrickStrength.
+##                          times), to see what that number moves: read the
+##                          "studs at" line
 ##
 ## A loose piece is a rigid chunk: it parts where a hit disconnects it and
 ## where a landing snaps it, and is never stress-solved. And one at rest that
@@ -23,6 +26,9 @@ func _only(_name: String) -> bool:
 
 func _run() -> void:
 	print("barrage probe: wreckage under fire")
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--stud="):
+			BrickStrength.times = float(a.split("=", true, 1)[1])
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
 	await _ticks(30)
@@ -50,6 +56,7 @@ func _run() -> void:
 		await _ticks(90)
 	var isl: IslandManager = city.islands
 	print("  --   %s" % isl.hit_census_line())
+	print("  --   %s" % city.stud_census_line())
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,

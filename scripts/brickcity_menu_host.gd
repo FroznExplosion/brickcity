@@ -128,6 +128,12 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			DevMode.on = MENU_SETTINGS.truthy(value)
 		&"invincible":
 			DevMode.invincible = MENU_SETTINGS.truthy(value)
+		&"stud_strength":
+			# A headless run is a test, and keeps the default as a test window
+			# does (TestWindow.use_default_settings): a probe's answer must not
+			# be what somebody set here.
+			if DisplayServer.get_name() != "headless":
+				BrickStrength.times = float(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -163,6 +169,12 @@ func _setting_defs() -> Array:
 		{"id": &"invincible", "tab": "gameplay", "type": MENU_SETTINGS.T_BOOL, "label": "Invincible (Developer)",
 			"default": true, "hint": "While Developer Mode is on, you take no damage -- on foot, and in "
 			+ "the mech or vehicle you drive."},
+		{"id": &"stud_strength", "tab": "gameplay", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Stud Strength (Developer)", "default": BrickStrength.DEFAULT_TIMES,
+			"min": BrickStrength.MIN_TIMES, "max": BrickStrength.MAX_TIMES, "step": 0.5, "suffix": "x",
+			"hint": "How hard a stud holds: how much comes off a damaged building by itself. "
+			+ "1x is a building the game's size, 44x a toy on a table. Buildings take it at once; "
+			+ "what has already fallen is not put back."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 
