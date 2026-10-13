@@ -44,6 +44,8 @@ var _woken_ids: Array = []
 var _slept_id := -1
 var _snap_fall: PackedByteArray
 var _snap_rest: PackedByteArray
+var _snap_shot: PackedByteArray
+var _expect_shot: Dictionary
 var _expect_fall: Dictionary
 var _expect_rest: Dictionary
 var _snap_pending: PackedByteArray
@@ -187,7 +189,8 @@ func _tick() -> void:
 				_next()
 		3:
 			_check_load("mid-fall", _snap_fall, _expect_fall)
-			_check_load("settled, shot, one asleep", _snap_rest, _expect_rest)
+			_check_load("settled and shot", _snap_shot, _expect_shot)
+			_check_load("settled, shot, asleep", _snap_rest, _expect_rest)
 			_check_pending_load()
 			_finish()
 
@@ -326,6 +329,16 @@ func _after_rest() -> void:
 			hit_logged = true
 	_ok("changed: a shot piece is announced as changed, and the command names it",
 			_events.changed > changed_before and hit_logged)
+
+	# A save with it as it lies, shot. (A shot used to make a second piece of
+	# it, and the save below held that one awake beside the one asleep. A
+	# loose piece is a rigid chunk now -- Docs/CollapseNext.md 1.10 -- and the
+	# shot leaves it one piece, so it is saved both ways: awake here, asleep
+	# below.)
+	_expect_shot = _expectations(_host)
+	_snap_shot = AreaSnapshot.capture(authority.commands, islands).to_bytes()
+	_ok("the shot piece is still one piece", big.is_valid() and _expect_shot.pieces.size() == 1,
+			"%d piece(s) in the save" % _expect_shot.pieces.size())
 
 	# Sleep it: slept + removed(slept), and a record left behind.
 	var index := islands.islands.find(big)

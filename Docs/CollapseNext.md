@@ -6,17 +6,60 @@ to do it**, with the evidence for each and how to tell it is fixed. What was bui
 a second" on); the user's priorities are the ones reported in play — lag on the first hit, a pause
 before anything falls, things hanging in mid-air, things drawn that are not there.
 
-Last updated **2026-10-07**. First written 2026-10-03; items keep their numbers, because commits
+Last updated **2026-10-13**. First written 2026-10-03; items keep their numbers, because commits
 cite them ("CollapseNext.md 1.1"), and a finished one is struck, not removed.
+
+**The test for a collapse rule (user, 2026-10-13): is that what a real brick model does?** The aim
+is real LEGO breaking apart ([BrickFailure.md](BrickFailure.md)); a rule that is faster and wrong
+by that test is not taken.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
 `--wreck`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`storey_probe.gd`,
+`barrage_probe.gd`, `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
+
+---
+
+## 0. Everything that is left, in one list (2026-10-13)
+
+In the order to do it. Each line points at where the item is written up.
+
+**Done 2026-10-13** (timing still owed: §1.10)
+1. ~~A loose piece is a rigid chunk~~ -- never stress-solved; it parts where a hit cuts it and
+   where a landing snaps it. §1.10 (1).
+2. ~~Wreckage at rest stays at rest when it is shot~~ -- woken only if the hit cut it in two or
+   took what it rests on. §1.10 (2).
+
+**Next, the brick model (§1.10)**
+3. **Stud strength: try it stronger, then tune by feel** (user, 2026-10-13). §1.10 (6).
+4. A blast loosens the ring round it instead of deleting it. §1.10 (3).
+5. A snap goes at the weakest seam near the contact, not the nearest storey line. §1.10 (5).
+6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
+
+**Left over from earlier lists**
+7. Single bricks spraying off pieces (§1.3) -- expected to go with item 1; check, then strike.
+8. A queued blast in `--shot` hits pieces that came loose after it was fired: decide whether it
+   should, or have the pass fire its blasts at once (§3, last point).
+9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): furniture drawn on wreckage is not turned
+   to bricks when the wreckage is hit; a written-off piece leaves no debris; pieces the cap has
+   put to sleep carry no interior; a rolled gun swaps to its card at 12 m in one frame.
+10. Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching
+    (AIVehicles.md, AI.md) sit with these rules -- they damage buildings by their own paths.
+
+**Waiting on something else**
+11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
+12. Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status` (§4) -- needs the main
+    folder's uncommitted `Docs/Status.md` committed first.
+
+**Tests that are red or flicker (§4)**
+13. `--walk`: one check, the debug camera's walker does not duck under a beam.
+14. `--groups --programs`: one check, boxes drawn over a floor that has gone for a tick.
+15. `--jam --big`: about one run in six, a small piece resting on one still creeping.
+16. `--play`: the pawn's duck-under check, about one run in twelve.
 
 ---
 
@@ -144,6 +187,71 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   before its range (`ImpostorItems.CULL_FADE`). Nothing visible changes today -- no scene has an
   `ImpostorItems` yet, so loot has no cull edge. `impostor_probe` 30.
 
+### 1.10 Proposed, not started: where a collapse still differs from a real brick model (2026-10-13)
+Read against [BrickFailure.md](BrickFailure.md) and the code as it is. What already matches: no
+compression failure; a landing peels a clump at the contact and severs one seam of studs at a
+storey line, destroying nothing (`fracture_on_impact`, `_snap_across`); a piece in the air is
+rigid. What does not, most worth doing first -- each is also less work for the machine:
+
+1. ~~A loose piece on the ground is still stress-solved when it is hit~~ -- **done 2026-10-13.**
+   A loose piece is a rigid chunk everywhere: `IslandManager.solve_island` cuts off what a hit or
+   a landing has disconnected (`split_if_broken`) and does nothing else. The tension solve on
+   pieces is gone, with its command (`PIECE_SOLVE` is still read, for a log written when it was
+   written, and never written).
+   *Measured* (`tools/barrage_probe.gd`: four towers brought down headless, four blasts a tick
+   into each for eight seconds; two runs each way): a hit on a piece that was down made a new body
+   **14-18 % of the time before, 2-3 % now** (56-67 bodies a run, then 7-15).
+   *What the probe cases say, and do not:* no single piece could be built that the old solve
+   failed -- a tower lying on its side holed or slotted from end to end, with the city's studs,
+   passes float_probe before and after. The solve only failed pieces in the states a collapse
+   leaves them in (one solve in seven had a failure), so the proof is the count, and the line in
+   `barrage_probe` (under 8 %) is drawn between the two.
+2. ~~Wreckage at rest is woken whole by any shot that reaches it~~ -- **done 2026-10-13.** A hit
+   takes its bricks out of a settled piece where it lies (`damage`): frozen, merged, its boxes
+   rebuilt round the hole within six ticks. It wakes for two reasons only: the hit **cut it in
+   two** (`_shed`), or **took the bricks it stood on** -- `support_gone` over where the bricks
+   were, which wakes every settled piece touching that and not wholly below it, this one
+   included; the watchdog (`_audit_settled`) is behind that for what it misses.
+   The blanket wakes are gone from the shots' path: everything within six metres of a hit piece
+   (`damage`), within four radii of any blast (`CityScene._apply_blast`, which now wakes what
+   touches where a blast took bricks from a *building*) or bullet (`_fire`), within six metres of
+   a piece that shed something (`_shed`) or of a piece newly made (`adopt`).
+   A merged piece on the ground that sheds a *body* has its boxes rebuilt at once, not at the
+   rate a hit's rebuild is put off to: what leaves it lies exactly inside its old boxes.
+   *Measured* (the same probe): 23-34 hits a run found a piece at rest and 19-30 of them left it
+   at rest; merged rebuilds 512-577 a run before, 260 now. Under a barrage most hits (about 480
+   of 560) still land on pieces that are down and *moving* -- nothing gets time to settle; in
+   play, where firing stops, more of them will be at rest.
+   **Left as it was:** a piece struck by one that lands on it still wakes everything within six
+   metres (`shear`), as do a fire's burnt bricks (`CityScene.fire_burnt`) and the disasters'
+   own calls (`wake_near`): not shots, and the first is the next to look at.
+   **Not timed yet** (`--big --shot`, alternated, one windowed run at a time): §3 when it is.
+   Checks: `float_probe` 46 (ten new: a piece shot at rest stays one piece, frozen where it lay,
+   the piece beside it asleep; its boxes follow; a blast that takes nothing changes nothing; one
+   that takes what it stands on wakes it; what stood on the bricks taken wakes; cut clean
+   through, it is two and awake), `barrage_probe` 4, `snapshot_probe` 48 (a shot leaves the
+   piece whole, so it is saved both awake and asleep), and the rest of the list unchanged.
+3. **A blast deletes every brick in its radius.** Bricks separate, they do not vanish
+   (BrickFailure §5): the middle of a blast may be gone, the ring round it should come loose --
+   as crumbs, which are drawn and cost no body (`_crumble`). Check what `separate_near` already
+   does for buildings before changing anything.
+4. **Nothing is ever pushed.** There are no impulses (`DEBRIS_GRAVITY`'s note): a blast beside a
+   loose piece wakes it and leaves it where it is, and a landing never bounces (friction 1,
+   bounce 0). Light plastic is thrown by a blast and clatters. A feel change, and it costs
+   settling time -- after 1 and 2, when less is moving.
+5. **A snap goes at the storey line nearest the contact**, whatever is there. A brick model goes
+   at the weakest seam near it -- fewest studs across (a row of windows before a solid course).
+   `lateral_check` already weighs every course boundary of a building by its studs; the same
+   count for a piece picks the seam.
+6. **How strong a stud is.** 9.3 a stud is the toy's clutch scaled to a 0.35 m stud, which makes
+   the building 44 times weaker for its weight than the toy (BrickFailure §4.5): a hanging section
+   drops where on a table it would hold. That was chosen for the look. If the model is the toy
+   itself, the number goes up and far less comes off a damaged building by itself. One constant
+   (`set_tension_per_stud`), and it changes what "hanging in mid-air" looks like.
+   **Decided 2026-10-13 (user): try it stronger, and expect to tune it by feel afterwards.** So
+   it becomes one named number in one place, with the toy's value and the scaled one beside it,
+   and the first try is by eye in play, not by a pass.
+
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
   carry what is above it tips or crushes (`_gravity_fail`, `CRUSH_PER_STUD`). A building left
@@ -165,12 +273,13 @@ and one item drawing, faded by distance, rebuilt alone. Stages as Interiors.md �
   was first wanted for. Build it only if solve time shows up again.
 * ~~Collapses far off without the physics engine~~ — **decided 2026-10-06:** no. A far collapse
   stays physics, accurate, and is made cheap by rule instead; see §1.8.
-* **Should a shot shatter a section that is falling?** (2026-10-08, §3.) Today it does not: a piece
-  in the air is cut only where a hit disconnects it (1.4), which is the rule for every brick, and
-  it lands whole. Stress-solving it in the air as if it stood on its lowest bricks -- how it was
-  before 1.4 -- breaks it into many bodies on the way down, which is wrong by that rule and is
-  about a sixth faster in `--big --shot` (26.8 ms a frame against 20.5-21.7), because what lands is
-  smaller and comes to rest sooner. Kept as it is until decided.
+* ~~Should a shot shatter a section that is falling?~~ — **decided 2026-10-13 (user): no.** "I'm
+  trying to replicate real LEGOs breaking apart. A falling LEGO tower would likely stay as one
+  piece until it hits something." So a piece in the air is cut only where a hit disconnects it
+  (1.4) and lands whole, and the sixth it costs `--big --shot` (26.8 ms a frame against 20.5-21.7
+  with it off, §3) is paid. **The test for every collapse rule from here: is that what a real
+  brick model does?** ([BrickFailure.md](BrickFailure.md) is the note on what it does.) What that
+  asks for next is §1.10.
 * **Aim-ahead promotion** (`_aim_promote`, 100 m, kept 8 s) makes more buildings bricks while the
   player looks round. No spikes measured; if memory or frame time climbs, lengthen the dwell
   (`AIM_PROMOTE_TICKS`) or cap how many it keeps.
@@ -294,7 +403,10 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
   collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
   disaster_probe "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and
-  collapse_probe "rode it" vary with physics run to run. `impostor_probe` "no holes" was on this
+  collapse_probe "rode it" vary with physics run to run. Since 2026-10-13 (found then; main as
+  it was, before anything of that day's): collapse_probe "trapped" -- "asked again and again for a
+  way there is not, it is trapped", 20.0 s, every run -- the AI's, after its navigation changes.
+  `impostor_probe` "no holes" was on this
   list: fixed 2026-10-08 -- the probe's camera was interpolated, so its pictures were taken on the
   way to where it had been put (Interiors.md §8.13).
 
