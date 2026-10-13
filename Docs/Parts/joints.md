@@ -141,21 +141,24 @@ held gun; it is 0.038 m today (`c_mesh(0.019, ...)`).
 
 ## 7. Held items and `HELD_SCALE`
 
-A gun is built of nano bricks at a size worth printing, about 4 to 5 inches long. A figure that is
+A gun is built of nano bricks at a size worth printing, about 6 inches long. A figure that is
 38.4 mm tall cannot carry that, so the game draws a held item smaller:
 
     game size  = the nano build x HELD_SCALE
     print (mm) = game (m) / 0.04375 / HELD_SCALE
 
-**`HELD_SCALE` is one number, 1/6 to start**, in [standards.json](standards.json). It is the same
+**`HELD_SCALE` is one number, 1/8 to start**, in [standards.json](standards.json). It is the same
 for every held item, so a pistol stays smaller than a rifle at both sizes. It is to be tuned by
 eye in the game (`city.tscn -- --arms`); nothing else changes when it does.
 
-| At 1/6 | Game | Print | In nano studs |
+| At 1/8 | Game | Print | In nano studs |
 |---|---|---|---|
-| a rifle | 0.85 m | 116.6 mm (4.6 in) | 29 long |
-| a pistol | 0.20 m | 27.4 mm | 7 long |
-| a nano stud | 0.029 m apart | 4.0 mm | |
+| a rifle | 0.85 m | 155.4 mm (6.1 in) | 39 long |
+| a pistol | 0.20 m | 36.6 mm | 9 long |
+| a nano stud | 0.022 m apart | 4.0 mm | |
+
+It was 1/6. A gun of a real one's proportions is then under two nano studs thick (a 42 mm
+receiver is 5.8 mm) and cannot be built in bricks; at 1/8 it is two studs, six plates tall.
 
 **The grip.** Every held item has one, and it is the only thing the hand needs to know:
 

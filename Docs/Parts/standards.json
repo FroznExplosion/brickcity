@@ -1,10 +1,10 @@
 {
-  "version": 5,
+  "version": 6,
   "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
   "scale": {
     "game_m_per_mm": 0.04375,
-    "held_scale": 0.16666667,
-    "held_scale_note": "1/6. Game size of a held item = its nano build x this. Tuned by eye in the game."
+    "held_scale": 0.125,
+    "held_scale_note": "1/8. Game size of a held item = its nano build x this. At 1/6 a gun of real proportions is under two studs thick and cannot be built in bricks; at 1/8 a 42 mm receiver is two nano studs. Tuned by eye in the game."
   },
   "grids": {
     "full": {
@@ -459,6 +459,11 @@
       "slot": "sight",
       "connector": "stud grid",
       "shape": "the short row of studs moulded into the top of a carry handle"
+    },
+    "guard.bar": {
+      "slot": "underbarrel",
+      "connector": "keyed dovetail",
+      "shape": "a bar under the barrel that a handguard hangs on"
     }
   },
   "gun_adapters": {

@@ -514,4 +514,5 @@ def _object(sc, name, bm, colour):
     return ob
 
 
-main()
+if __name__ == "__main__":
+    main()
