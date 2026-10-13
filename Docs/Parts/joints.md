@@ -139,40 +139,47 @@ centre is `HOLE_Y` up the hand. Every shape has the same frame and the same wris
 the grip of a figure-sized gun (section 7). In the game the hole is whatever looks right round a
 held gun; it is 0.038 m today (`c_mesh(0.019, ...)`).
 
-## 7. Held items and `HELD_SCALE`
+## 7. Held items: quarter size, then shrunk
 
-A gun is built of nano bricks at a size worth printing, about 6 inches long. A figure that is
-38.4 mm tall cannot carry that, so the game draws a held item smaller:
+**A gun is a quarter-size model of a real one, built of nano bricks** (decided 2026-10-16). One
+nano stud is 16 mm of the real gun. The game then shrinks the model to fit a figure's hands.
 
-    game size  = the nano build x HELD_SCALE
-    print (mm) = game (m) / 0.04375 / HELD_SCALE
+    print (mm)  = real (mm) / 4
+    studs long  = real (mm) / 16
+    game size   = the model x HELD_SCALE,  HELD_SCALE = 4 / 43.75, about 1/11
 
-**`HELD_SCALE` is one number, 1/8 to start**, in [standards.json](standards.json). It is the same
-for every held item, so a pistol stays smaller than a rifle at both sizes. It is to be tuned by
-eye in the game (`city.tscn -- --arms`); nothing else changes when it does.
+`HELD_SCALE` follows from the quarter and is not tuned on its own: shrunk by it, the model is the
+real gun's size in the game. Both numbers are in [standards.json](standards.json).
 
-| At 1/8 | Game | Print | In nano studs |
+| | Real | Print | Nano studs | Game |
+|---|---|---|---|---|
+| a submachine gun | 852 mm | 213 mm (8.4 in) | 53 | 0.85 m |
+| a rifle | 1000 mm | 250 mm (9.8 in) | 62 | 1.00 m |
+| a pistol | 216 mm | 54 mm (2.1 in) | 13.5 | 0.22 m |
+| a nano stud | 16 mm | 4 mm | 1 | 0.016 m |
+
+Why a quarter: it is the size at which a gun has room to be built. A reference build the user
+liked measures 54 studs for an 852 mm gun. Two smaller sizes were tried first: at 1/6 of the
+game's shrink (29 studs) a receiver is 1.4 studs thick and cannot be built in bricks at all, and
+at 1/8 (39 studs) it is a plain box. A quarter-size gun is printed in its parts, each well under
+100 mm.
+
+**The grip is ours, and one hand fits every gun.** No bar or core inside it. Instead every pistol
+grip keeps inside one size where the hand closes -- the middle three fifths of its length -- and
+the game's C hand is made to that size, shrunk:
+
+| | Print (mm) | Nano studs | Game (m) |
 |---|---|---|---|
-| a rifle | 0.85 m | 155.4 mm (6.1 in) | 39 long |
-| a pistol | 0.20 m | 36.6 mm | 9 long |
-| a nano stud | 0.022 m apart | 4.0 mm | |
+| length, at least | 24 | 6 | 0.10 |
+| fore and aft | 9 to 12.5 | about 3 | 0.036 to 0.050 |
+| thickness | 7 to 9.5 | about 2 | 0.028 to 0.038 |
 
-It was 1/6. A gun of a real one's proportions is then under two nano studs thick (a 42 mm
-receiver is 5.8 mm) and cannot be built in bricks; at 1/8 it is two studs, six plates tall.
+First numbers, taken from the first gun; they settle as more guns are built. A printed figure's
+hand (section 6) still grips a 3.2 mm pin, which a quarter-size gun does not have: a figure-sized
+gun is a separate, later piece.
 
-**The grip.** Every held item has one, and it is the only thing the hand needs to know:
+- an empty `hold_0` at the grip's centre, +X through the hand's hole, +Y up the hand. `hold_1` is
+  the other hand's place (a handguard), if there is one. Not `socket_...`: that prefix is the gun
+  assembler's ([custom.md](custom.md) section 4).
 
-- a **round core 3.2 mm across** (the pin's size: what a brick figure's C hand grips,
-  eight-sided) and at least **3 nano bricks** long (14.4 mm). The grip's shape is built round
-  it; where the hand closes, it is the core;
-- an empty `hold_0` at its centre, +X through the hand's hole, +Y up the hand. `hold_1` is the
-  other hand's place (a handguard), if there is one. Not `socket_...`: that prefix is the gun
-  assembler's, for where a part attaches ([custom.md](custom.md) section 4).
-
-A held item has three outputs from one build:
-
-| Output | Size | How |
-|---|---|---|
-| game | x `HELD_SCALE` | one merged mesh, studs as fine detail |
-| collector print | 1:1 nano | resin, separate bricks, real 2.4 mm studs |
-| figure print (optional) | x `HELD_SCALE` | one piece for a printed figure's hand, its grip a 3.2 mm bar; studs are texture |
+A mech's weapon is not shrunk: it mounts on the wrist at full nano size (section 5).

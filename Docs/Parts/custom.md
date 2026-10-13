@@ -57,10 +57,8 @@ coincide. Bare gun parts are those parts, so a rolled gun needs no new code:
   lattice. Any stock goes on any body; that is what a procedural gun needs from its parts.
 - The physical connector at a `mount` is the slot's own (spec section 7): a keyed dovetail for a
   barrel or a stock, pin-and-clip for a grip or a magazine, studs for a sight.
-- **The grip has a round core**, 3.2 mm across -- the bar a brick figure's C hand grips, the
-  same size as every joint pin -- and at least 14.4 mm long, eight-sided like a stud. The styled
-  grip is built round it, but where the hand closes it is that core, so a C hand fits every grip
-  ([joints.md](joints.md) section 7).
+- **Every pistol grip keeps to one size** where the hand closes, so one C hand fits every gun
+  ([joints.md](joints.md) section 7). There is no bar inside it.
 - **A sight is a single piece pressed onto a rail**, as one brick is pressed onto studs. A rail
   is a row of studs: a flat top has one moulded in; a carry handle has a short row of its own
   (`sight.handle`) that takes an **adapter** (`adapter_handle_rail`) with a rail on top. Planned:
@@ -125,10 +123,39 @@ and [rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a model cut into f
 its own shells, studs square to its faces.
 
 **Built so far, our own:** [gunsmith.py](../../tools/brickify/gunsmith.py) and
-[smg_a.json](../../tools/brickify/sheets/smg_a.json), a drum-and-stick submachine gun drawn in the
-sheet. A part is one of three kinds: **bricks** (an outline filled by the packer, its top tiled
-but for the studs a sight sits on), **profile** (an outline with a thickness and cut-back edges:
-one closed solid, with stud patches on its sides and, where asked, the underside of a brick), and
-**turned** (round about the bore). First pass: 18 bricks and 7 custom parts, 46 studs, every joint
-on the lattice. Still to come: slopes and curves on the brick-built parts, finer custom shapes,
-the interfaces' own shapes, dressing, STLs, and a scene the game's gun system loads.
+[smg_a.json](../../tools/brickify/sheets/smg_a.json), a 1928-pattern submachine gun at quarter
+size, drawn in the sheet: 213 mm, 53 studs. A part is **bricks** (an outline filled by the packer,
+its top tiled but for the studs a sight sits on), a **profile** (an outline with a thickness and
+cut-back edges), a **loft** (cross-sections along a line, joined: a stock that deepens to its
+butt, a grip that swells in the palm), **turned** (round about the bore) or **blocks** (a small
+fixed detail). Every custom part is one closed solid. This one: 53 bricks, 8 custom parts, 92
+studs, every joint on the lattice, the foregrip's underside a brick's. Still to come: slopes and
+curves on the brick-built parts, finer sections (a wrist, flutes), the drum, the interfaces' own
+shapes, dressing, STLs, and a scene the game's gun system loads.
+
+## 6. What may be published
+
+**A part cut from a bought model is not ours to hand out.** The rifle the kit was built on is from
+Animpic Studio's "POLY - Mega Weapons Kit" (not Synty's). Its licence, read 2026-10-15
+(animpic.studio/license), lets the models go into video games we make, says that modifying a
+model does not make it ours, forbids sharing the models "for re-use by third parties" or as stock
+3D, and needs a written agreement for any product that is not a video game. An STL of a part cut
+from it, with or without studs, is the model shared for re-use. Synty's and the asset stores'
+licences are built the same way.
+
+So:
+
+- **Bought models are stand-ins.** They are for building and testing the kit, and may be in the
+  game as game assets. They are never exported: not as STLs, not from the workshop.
+- **Anything published or printable is made from our own shapes**: our bricks, and bare parts
+  authored here (a drawn profile, a thickness, the kit's studs and connectors). The kit works on
+  any mesh, so nothing else changes.
+- Turning a bought model into bricks does not make it ours either: the result is still made from
+  their model.
+- **Guns follow real weapons' proportions** (decided 2026-10-16): a real gun's general shape is
+  nobody's asset, and a build sheet names the pattern it follows. This overrules spec section 7's
+  "toy proportions". Its other rules stand: solid, no bore, no working parts, our own connectors,
+  and our own names in the data, never a maker's.
+
+This is a reading of the licence, not legal advice. For a firm answer on a paid product, ask the
+seller in writing: Animpic's licence allows other products by written agreement.

@@ -6,13 +6,19 @@
 Docs/Parts/custom.md. Nothing here comes from a bought model: every shape is an outline
 drawn in the build sheet, on the nano grid, so what it makes is ours to publish.
 
-A part is one of three kinds:
+Guns are quarter-size models of real ones: one nano stud is 16 mm of the real gun.
+
+A part is one of these kinds:
 
   bricks   an outline in side view, so many studs wide: filled with nano bricks by the packer
            of brickify.py. Its top is tiled smooth except where the sheet leaves studs.
   profile  an outline in side view, so thick, its edges cut back: one closed solid, a custom
            piece. It may carry stud patches on its sides and the underside of a brick below.
+  loft     cross-sections along a line, joined: a shaped custom piece -- a stock that
+           deepens to its butt, a grip that swells in the palm. Each section is a rectangle
+           with its corners cut, so it stays low-poly and keeps flat flanks for studs.
   turned   round about a line along the gun, eight-sided: a barrel, a muzzle piece.
+  blocks   plain boxes: a small fixed detail.
 
 Lengths are mm at print size: x along the gun from the muzzle, z up, y across with the centre
 plane at 0. The lattice is the nano grid from (0, 0, 0): stud lines every 4 mm along x and
@@ -67,6 +73,11 @@ def main() -> None:
             bm = bricks(spec, part, grid)
         elif spec["kind"] == "profile":
             bm = profile(spec, part, grid)
+        elif spec["kind"] == "loft":
+            bm = loft(spec, part, grid)
+        elif spec["kind"] == "blocks":
+            bm = bmesh.new()
+            part["closed"] = True
         else:
             bm = turned(spec, part)
         for b in spec.get("boxes", []):
@@ -80,8 +91,8 @@ def main() -> None:
         ob.color = tuple(spec.get("colour", [0.5, 0.5, 0.5])) + (1.0,)
         bpy.context.scene.collection.objects.link(ob)
         objects[spec["name"]] = ob
-        if spec.get("grip_core"):
-            part["grip_core"] = grip_core(ob, std["held_grip"])
+        if spec.get("grip"):
+            part["grip"] = grip_size(ob)
         lo = [min(v.co[k] for v in me.vertices) for k in range(3)]
         hi = [max(v.co[k] for v in me.vertices) for k in range(3)]
         part["box_mm"] = [[round(c, 2) for c in lo], [round(c, 2) for c in hi]]
@@ -153,7 +164,8 @@ def bricks(spec, part, grid):
                 if top < solid.shape[2] and solid[i, j, top]:
                     continue
                 at = origin + np.array([i + 0.5, j + 0.5, top]) * cell
-                if any(a <= at[0] <= b for a, b in spec.get("studs_x", [])):
+                if any(a <= at[0] <= b for a, b in spec.get("studs_x", [])) \
+                        and ("studs_y" not in spec or round(float(at[1]), 3) in spec["studs_y"]):
                     part["studs"].append({"at": [round(float(c), 4) for c in at],
                                           "normal": [0.0, 0.0, 1.0], "on": "top"})
     part["loose"] = len(loose)
@@ -168,13 +180,7 @@ def profile(spec, part, grid):
     With stud patches on its sides and, if asked, the underside of a brick below."""
     thick, bevel = spec["thick"], spec.get("bevel", 0.0)
     bm = _extrude(spec["outline"], thick, bevel)
-    for extra in spec.get("extras", []):
-        other = _extrude(extra["outline"], extra["thick"], extra.get("bevel", 0.0))
-        tmp = bpy.data.meshes.new("tmp")
-        other.to_mesh(tmp)
-        other.free()
-        bm.from_mesh(tmp)
-        bpy.data.meshes.remove(tmp)
+    _extras(bm, spec)
     part["closed"] = all(len(e.link_faces) == 2 for e in bm.edges)
     pitch, r = grid["stud_pitch"], grid["stud_d"] * 0.5
     for patch in spec.get("studs", []):
@@ -197,7 +203,8 @@ def profile(spec, part, grid):
                                       "normal": [0.0, sign, 0.0], "on": patch["face"], "z0": zo})
     under = spec.get("under")
     if under:
-        bm = _brick_underside(bm, spec, under, grid)
+        bm = _brick_underside(bm, under["x"], min(q[1] for q in spec["outline"]),
+                              thick * 0.5 - bevel - 0.5, under["depth"], under.get("rows", [0.0]), grid)
         part["under"] = under
     part["summary"] = "%s solid, %d studs%s" % ("closed" if part["closed"] else "OPEN", len(part["studs"]),
                                                 ", brick underside" if under else "")
@@ -216,19 +223,27 @@ def _extrude(outline, thick, bevel):
     return bm
 
 
-def _brick_underside(bm, spec, under, grid):
-    """Hollow the bottom like a brick's: a pocket with a wall round it, and the tubes that
-    grip studs along its middle."""
+def _extras(bm, spec) -> None:
+    """Thin outlines added to a part and made with it as one piece: a trigger guard."""
+    for extra in spec.get("extras", []):
+        other = _extrude(extra["outline"], extra["thick"], extra.get("bevel", 0.0))
+        tmp = bpy.data.meshes.new("tmp")
+        other.to_mesh(tmp)
+        other.free()
+        bm.from_mesh(tmp)
+        bpy.data.meshes.remove(tmp)
+
+
+def _brick_underside(bm, x_range, zb, half, depth, rows, grid):
+    """Hollow the bottom like a brick's: a pocket `half` to each side with a wall round it,
+    and the tubes that grip studs, a row at each y in `rows`."""
     pitch = grid["stud_pitch"]
-    wall = spec.get("bevel", 0.0) + 0.5
-    zb = min(p[1] for p in spec["outline"])
-    half = spec["thick"] * 0.5 - wall
     me = bpy.data.meshes.new("a")
     bm.to_mesh(me)
     bm.free()
     a = bpy.data.objects.new("a", me)
     cut = bmesh.new()
-    _box(cut, [under["x"][0], -half, zb - 1.0], [under["x"][1], half, zb + under["depth"]])
+    _box(cut, [x_range[0], -half, zb - 1.0], [x_range[1], half, zb + depth])
     cme = bpy.data.meshes.new("b")
     cut.to_mesh(cme)
     cut.free()
@@ -243,14 +258,99 @@ def _brick_underside(bm, spec, under, grid):
     for ob in (a, b):
         bpy.data.objects.remove(ob)
     tube_r = grid["stud_d"] * 0.5 * 1.354  # a brick's tube: 6.51 over a 4.8 stud
-    x = math.ceil((under["x"][0] + pitch * 0.5) / pitch) * pitch
-    while x <= under["x"][1] - pitch * 0.5 + 1e-6:
-        bmesh.ops.create_cone(out, cap_ends=False, segments=8, radius1=tube_r, radius2=tube_r,
-                              depth=under["depth"],
-                              matrix=Matrix.Translation(Vector((x, 0.0, zb + under["depth"] * 0.5)))
-                              @ Matrix.Rotation(math.radians(22.5), 4, "Z"))
+    x = math.ceil((x_range[0] + pitch * 0.5) / pitch) * pitch
+    while x <= x_range[1] - pitch * 0.5 + 1e-6:
+        for y in rows:
+            bmesh.ops.create_cone(out, cap_ends=False, segments=8, radius1=tube_r, radius2=tube_r,
+                                  depth=depth,
+                                  matrix=Matrix.Translation(Vector((x, y, zb + depth * 0.5)))
+                                  @ Matrix.Rotation(math.radians(22.5), 4, "Z"))
         x += pitch
     return out
+
+
+# ---------------------------------------------------------------------------------- loft
+
+def loft(spec, part, grid):
+    """Cross-sections along a line, joined into one closed solid.
+
+    `axis` is the line: "x" along the gun, or "z" up it. Each station is at `t` on it, with
+    `a` the section's reach across the other side-view direction (up for "x", along the gun
+    for "z"), `w` its half width across the gun, and `round` how much of the smaller half
+    is cut from each corner.
+    """
+    axis = spec["axis"]
+    bm = bmesh.new()
+    rings = []
+    for st in spec["stations"]:
+        a0, a1 = st["a"]
+        w, c = st["w"], _corner(st)
+        section = [(a0 + c, -w), (a1 - c, -w), (a1, -w + c), (a1, w - c),
+                   (a1 - c, w), (a0 + c, w), (a0, w - c), (a0, -w + c)]
+        rings.append([bm.verts.new((st["t"], y, q) if axis == "x" else (q, y, st["t"])) for q, y in section])
+    for r0, r1 in zip(rings, rings[1:]):
+        for k in range(8):
+            bm.faces.new([r0[k], r0[(k + 1) % 8], r1[(k + 1) % 8], r1[k]])
+    bm.faces.new(rings[0])
+    bm.faces.new(rings[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    _extras(bm, spec)
+    part["closed"] = all(len(e.link_faces) == 2 for e in bm.edges)
+    pitch, r = grid["stud_pitch"], grid["stud_d"] * 0.5
+    for patch in spec.get("studs", []):
+        sign = 1.0 if patch["face"] == "+y" else -1.0
+        zo = patch["z"][0]
+        nx = int(round((patch["x"][1] - patch["x"][0]) / pitch))
+        nz = int(round((patch["z"][1] - patch["z"][0]) / pitch))
+        ok = np.zeros((nx, nz), dtype=bool)
+        wide = np.zeros(nx)
+        for i in range(nx):
+            x = patch["x"][0] + (i + 0.5) * pitch
+            lo, hi = _section_at(spec["stations"], x - r - LIP), _section_at(spec["stations"], x + r + LIP)
+            if lo is None or hi is None or abs(lo[2] - hi[2]) > 1e-6:
+                continue  # the flank leans here: no stud
+            wide[i] = lo[2]
+            for k in range(nz):
+                z = zo + (k + 0.5) * pitch
+                ok[i, k] = all(sec[0] + sec[3] + LIP <= z - r and z + r <= sec[1] - sec[3] - LIP
+                               for sec in (lo, hi))
+        if patch.get("shape") != "all":
+            rect = _biggest_rectangle(ok)
+            keep = np.zeros_like(ok)
+            if rect is not None:
+                keep[rect[0]:rect[1], rect[2]:rect[3]] = True
+            ok = keep
+        for i in range(nx):
+            for k in range(nz):
+                if ok[i, k]:
+                    part["studs"].append({"at": [patch["x"][0] + (i + 0.5) * pitch, sign * float(wide[i]),
+                                                 round(zo + (k + 0.5) * pitch, 4)],
+                                          "normal": [0.0, sign, 0.0], "on": patch["face"], "z0": zo})
+    under = spec.get("under")
+    if under:
+        sec = _section_at(spec["stations"], (under["x"][0] + under["x"][1]) * 0.5)
+        bm = _brick_underside(bm, under["x"], sec[0], sec[2] - sec[3] - 0.5, under["depth"],
+                              under.get("rows", [0.0]), grid)
+        part["under"] = under
+    part["summary"] = "%s solid, %d sections, %d studs%s" % (
+        "closed" if part["closed"] else "OPEN", len(spec["stations"]), len(part["studs"]),
+        ", brick underside" if under else "")
+    return bm
+
+
+def _corner(st) -> float:
+    return st["round"] * min(st["w"], (st["a"][1] - st["a"][0]) * 0.5)
+
+
+def _section_at(stations, t):
+    """(a0, a1, w, corner) at `t` along a loft, between its stations; None beyond them."""
+    for s0, s1 in zip(stations, stations[1:]):
+        if s0["t"] - 1e-9 <= t <= s1["t"] + 1e-9:
+            f = (t - s0["t"]) / (s1["t"] - s0["t"])
+            mix = lambda u, v: u + (v - u) * f
+            return (mix(s0["a"][0], s1["a"][0]), mix(s0["a"][1], s1["a"][1]),
+                    mix(s0["w"], s1["w"]), mix(_corner(s0), _corner(s1)))
+    return None
 
 
 # ---------------------------------------------------------------------------------- turned
@@ -316,15 +416,15 @@ def _biggest_rectangle(ok):
     return best
 
 
-def grip_core(ob, held):
-    """The round core a hand closes on: along the grip's own long line, centred in it, and
-    how much of the grip is left round it over the middle three fifths of its length."""
+def grip_size(ob):
+    """How big a grip is where the hand closes on it -- the middle three fifths of its
+    length: its reach fore and aft and its thickness, least and most."""
     me = ob.data
     me.calc_loop_triangles()
     co = np.array([v.co[:] for v in me.vertices])
     tris = co[np.array([t.vertices[:] for t in me.loop_triangles], dtype=int)]
     # The grip itself is the thickest run of the part: leave thin extras (a guard) out.
-    wide = np.abs(tris[..., 1]).max(axis=1) >= np.abs(co[:, 1]).max() - 0.9
+    wide = np.abs(tris[..., 1]).max(axis=1) >= np.abs(co[:, 1]).max() - 1.2
     pts = tris[wide].reshape(-1, 3)
     bvh = BVHTree.FromPolygons([Vector(v) for v in tris.reshape(-1, 3)],
                                [(3 * t, 3 * t + 1, 3 * t + 2) for t in range(len(tris))])
@@ -335,8 +435,7 @@ def grip_core(ob, held):
     if along[1] < 0:
         along = -along
     t = xz @ along
-    r = held["core_d"] * 0.5
-    a, b = float(t.min()) + 1.0, float(t.max()) - 1.0
+    a, b = float(t.min()), float(t.max())
     axis = Vector((along[0], 0.0, along[1]))
     across = Vector((-along[1], 0.0, along[0]))
     up = Vector((0.0, 1.0, 0.0))
@@ -349,11 +448,11 @@ def grip_core(ob, held):
     stations = [float(s) for s in np.linspace(a + (b - a) * 0.2, b - (b - a) * 0.2, 5)]
     centre += across * float(np.mean([(reach(centre + axis * s, across) - reach(centre + axis * s, -across)) * 0.5
                                       for s in stations]))
-    side = min(min(reach(centre + axis * s, up), reach(centre + axis * s, -up)) for s in stations) - r
-    fore_aft = min(min(reach(centre + axis * s, across), reach(centre + axis * s, -across))
-                   for s in stations) - r
-    return {"d": held["core_d"], "length": round(b - a, 3),
-            "spare_side": round(float(side), 3), "spare_fore_aft": round(float(fore_aft), 3)}
+    fore_aft = [reach(centre + axis * s, across) + reach(centre + axis * s, -across) for s in stations]
+    thick = [reach(centre + axis * s, up) + reach(centre + axis * s, -up) for s in stations]
+    return {"length": round(b - a, 2),
+            "fore_aft": [round(min(fore_aft), 2), round(max(fore_aft), 2)],
+            "thick": [round(min(thick), 2), round(max(thick), 2)]}
 
 
 def _box(bm, lo, hi) -> None:
@@ -391,7 +490,9 @@ def check(doc, std, grid):
             x, y, z = s["at"]
             good = whole(x / pitch - 0.5)
             if s["on"] == "top":
-                good = good and whole(y / pitch - 0.5) and whole(z / plate)
+                # Across the gun the lattice is half a stud: a part an odd number of studs
+                # wide has a stud on the centre plane, an even one has it between two.
+                good = good and whole(2.0 * y / pitch) and whole(z / plate)
             else:
                 good = good and whole(y / tick) and whole((z - s["z0"]) / pitch - 0.5) and whole(s["z0"] / plate)
             if not good:
@@ -425,15 +526,17 @@ def check(doc, std, grid):
         ok("the body's sockets are platform %s's" % doc["platform"],
            all(have.get(k) == v for k, v in want.items()),
            ", ".join("%s: %s, not %s" % (k, have.get(k), v) for k, v in want.items() if have.get(k) != v))
+    want = std["held_grip"]
     for part in doc["parts"]:
-        core = part.get("grip_core")
-        if core:
-            need = std["held_grip"]["min_length_nano_bricks"] * grid["brick"]
-            ok("%s's core is %.1f across and %.1f long (at least %.1f)" % (part["name"], core["d"], core["length"], need),
-               core["length"] >= need - 1e-6)
-            ok("%s has material all round its core" % part["name"],
-               core["spare_side"] >= 0.0 and core["spare_fore_aft"] >= 0.0,
-               "to spare: %.2f mm at the sides, %.2f mm fore and aft" % (core["spare_side"], core["spare_fore_aft"]))
+        g = part.get("grip")
+        if g:
+            fits = g["length"] >= want["length_min"] \
+                and want["fore_aft"][0] <= g["fore_aft"][0] and g["fore_aft"][1] <= want["fore_aft"][1] \
+                and want["thick"][0] <= g["thick"][0] and g["thick"][1] <= want["thick"][1]
+            ok("%s is a grip the hand fits" % part["name"], fits,
+               "%.1f long (at least %.0f), %.1f-%.1f fore and aft (%.0f-%.0f), %.1f-%.1f thick (%.0f-%.0f)"
+               % (g["length"], want["length_min"], g["fore_aft"][0], g["fore_aft"][1], want["fore_aft"][0],
+                  want["fore_aft"][1], g["thick"][0], g["thick"][1], want["thick"][0], want["thick"][1]))
     bad = sum(1 for l in lines if not l["ok"])
     print("check: %d ok, %d FAIL" % (len(lines) - bad, bad))
     return lines
@@ -471,12 +574,12 @@ def render(prefix, doc, objects, lo, hi) -> None:
     shoot("side", Vector((0.0, -1.0, 0.0)), centre, long * 1.06)
     shoot("iso", Vector((0.5, -1.0, 0.42)), centre, long * 1.06)
     shoot("under", Vector((-0.35, -0.8, -1.0)), centre, long * 1.06)
-    away = {"barrel": (-8, 0), "muzzle": (-16, 0), "underbarrel": (-8, -9), "grip": (0, -9),
-            "magazine": (0, -12), "stock": (9, 0), "sight": (0, 8)}
+    away = {"barrel": (-10, 0), "muzzle": (-20, 0), "underbarrel": (-10, -12), "grip": (0, -12),
+            "magazine": (0, -16), "stock": (12, 0), "sight": (0, 10)}
     for part in doc["parts"]:
         dx, dz = away.get(part["slot"], (0, 0)) if "mount" in part else (0, 0)
         objects[part["name"]].location = (dx, 0.0, dz)
-    shoot("parts", Vector((0.3, -1.0, 0.3)), centre + Vector((0, 0, -3)), (long + 28) * 1.06)
+    shoot("parts", Vector((0.3, -1.0, 0.3)), centre + Vector((0, 0, -4)), (long + 36) * 1.06)
 
 
 if __name__ == "__main__":
