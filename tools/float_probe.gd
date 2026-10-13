@@ -295,24 +295,21 @@ a piece that is only furniture has nothing to draw")
 	_ok("the piece on top of the box wakes", not over.settled)
 	_ok("the piece under the box does not", under.settled)
 
-	# A piece in the air carries nothing: a hit cuts it where it DISCONNECTS it
-	# and nowhere else (IslandManager.solve_island; Docs/CollapseNext.md 1.4).
-	# Stood on its lowest bricks and stress-solved, as a piece on the ground
-	# is, a falling section failed all the way across for one shot: 174 bodies
-	# off 262 hits in the air in a --big --shot, where 155 on the ground made 12.
+	# A loose piece is a rigid chunk: a hit cuts it where it DISCONNECTS it and
+	# nowhere else (IslandManager.solve_island; Docs/CollapseNext.md 1.4 for a
+	# piece in the air, 1.10 for every piece). Stood on its lowest bricks and
+	# stress-solved, a falling section failed all the way across for one shot:
+	# 174 bodies off 262 hits in the air in a --big --shot.
 	print("\na hit on a piece in the air cuts it only where it disconnects it")
 	var tall := _piece(Vector3(160.0, 80.0, 0.0), 20, 20, 36)
 	await _ticks(2)
 	var tall_box := _m.world_aabb(tall)
 	var bodies := _m.islands.size()
-	var skipped: int = _m.air_solves_skipped
 	_m.damage(tall, Vector3(tall_box.position.x + 0.2, tall_box.get_center().y, tall_box.get_center().z), 1.2)
 	await _ticks(3)
-	_ok("a hole blown in a falling section's wall leaves it one piece, and it is not stress-solved",
-			tall.is_valid() and not tall.landed and _m.islands.size() == bodies
-			and _m.air_solves_skipped > skipped,
-			"%d bodies before, %d after; landed %s; %d solve(s) skipped" % [
-				bodies, _m.islands.size(), tall.landed, _m.air_solves_skipped - skipped])
+	_ok("a hole blown in a falling section's wall leaves it one piece",
+			tall.is_valid() and not tall.landed and _m.islands.size() == bodies,
+			"%d bodies before, %d after; landed %s" % [bodies, _m.islands.size(), tall.landed])
 	# Cut clean through, it is two.
 	var dims: Vector3i = _w.get_chunk_dims(tall.chunk)
 	var origin: Vector3i = _w.get_chunk_origin(tall.chunk)
@@ -332,11 +329,6 @@ a piece that is only furniture has nothing to draw")
 	_ok("cut clean through in the air, it is two pieces", _m.islands.size() == bodies + 1
 			and not tall.landed,
 			"%d brick(s) cut; %d bodies before, %d after" % [band.size(), bodies, _m.islands.size()])
-	# Down, the same question is the stress solve: nothing is skipped.
-	tall.landed = true
-	skipped = _m.air_solves_skipped
-	_m.solve_island(tall)
-	_ok("once it is down it is solved for what it can hold", _m.air_solves_skipped == skipped)
 	# And a solve still queued for a piece -- a landing's, or what one pass
 	# could not finish shedding -- is made before the piece is put to sleep,
 	# not lost with it. (A hit's own solve is made in the call, and queues
@@ -353,5 +345,144 @@ a piece that is only furniture has nothing to draw")
 	_m._decide_owed(other)
 	_ok("a decision queued for a piece is made before it sleeps", owed and not _m._resolve_queue.has(other))
 
+	await _check_at_rest()
+
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+## A 20 x 20 tower of 36 courses lying on its side on the ground, its grid's
+## corner at `at`: it runs fifteen metres back along -X from there, seven high.
+func _lying(at: Vector3) -> BrickIsland:
+	var c := _w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(20, 20, 36))
+	TowerRecipe.build(_w, c, _palette, 20, 20, 36)
+	# A stud as weak as the city's (CityScene: 9.3). A chunk made bare has the
+	# engine's default, forty times that, and nothing hung on it would fail
+	# however it was solved.
+	_w.set_tension_per_stud(c, 9.3)
+	_w.set_chunk_transform(c, Transform3D(Basis(Vector3(0.0, 0.0, 1.0), PI * 0.5), at))
+	var ids := PackedInt32Array()
+	for id in _w.get_block_count(c):
+		ids.append(id)
+	return _m.spawn(c, ids, Vector3.ZERO, Vector3.ZERO, -1, -1)
+
+
+## Docs/CollapseNext.md 1.10: a loose piece is a rigid chunk, and one at rest
+## that is shot stays at rest -- it wakes only if the shot cut it in two or
+## took the bricks it stood on. (The user, 2026-10-13: real LEGO. A model lying
+## on a table does not come apart under its own weight for losing a brick, and
+## the heap round it does not start to move.)
+func _check_at_rest() -> void:
+	print("\na piece at rest that is shot stays one piece, and stays at rest")
+	# Only what a cut DISCONNECTS leaves a piece. A tower lying at rest on its
+	# side, its roof -- the wall that is uppermost now -- slotted from end to
+	# end: each half of that wall hangs sideways off the wall beside it, across
+	# the studs. Stood on its lowest bricks along the grid axis nearest to down
+	# and asked what the studs could hold (the city's studs, 9.3), as a piece on
+	# the ground was, the halves were failed and came off. They are still
+	# clicked on; on a piece they stay.
+	var slotted := _lying(Vector3(-40.0, 0.02, -150.0))
+	await _ticks(25)
+	_m.settle_now(slotted)
+	slotted.landed = true
+	var sxf := slotted.chunk_transform()
+	_w.set_chunk_transform(slotted.chunk, sxf)
+	var cut := 0
+	var sy := 1.0
+	while sy <= 36.0 * 0.42 - 1.0:
+		cut += _w.apply_hit(slotted.chunk, sxf * Vector3(20.0 * 0.35 - 0.2, sy, 20.0 * 0.35 * 0.5), 1.0).size()
+		sy += 0.8
+	var parts: Array = _w.get_components(slotted.chunk)
+	var joined: int = (parts[0] as PackedInt32Array).size() if not parts.is_empty() else 0
+	for round_i in 8:
+		_m.solve_island(slotted)
+	_ok("a roof slotted from end to end: only what the cut disconnected leaves the piece",
+			cut > 0 and slotted.is_valid() and _w.get_alive_block_count(slotted.chunk) == joined,
+			"%d brick(s) cut, %d part(s) by its studs, the biggest %d; %d left on the piece after the solve" % [
+				cut, parts.size(), joined,
+				_w.get_alive_block_count(slotted.chunk) if slotted.is_valid() else -1])
+	# Lying on its side, everything above its lowest wall hangs ACROSS its
+	# studs. Stress-solved along the grid axis nearest to down, as a piece on
+	# the ground was, one hole in it let most of it go.
+	var lying := _lying(Vector3(-40.0, 0.02, -100.0))
+	# And a slab on the ground beside it: inside the six metres a hit used to
+	# wake everything within, and touching nothing the hit takes.
+	var beside := _piece(Vector3(-50.0, 0.05, -91.0))
+	await _ticks(25)
+	_m.settle_now(lying)
+	_m.settle_now(beside)
+	var lb := _m.world_aabb(lying)
+	var bodies := _m.islands.size()
+	var alive := _w.get_alive_block_count(lying.chunk)
+	var at_y := lying.body.global_position.y
+	# Through the wall that is its roof now, half way along.
+	_m.damage(lying, Vector3(lb.get_center().x, lb.end.y - 0.2, lb.get_center().z), 1.2)
+	await _ticks(3)
+	_ok("a hole in a piece lying on its side leaves it one piece: it is not solved for what it can hold",
+			lying.is_valid() and _m.islands.size() == bodies
+			and _w.get_alive_block_count(lying.chunk) < alive,
+			"%d bodies before, %d after; %d bricks, then %d" % [bodies, _m.islands.size(), alive,
+				_w.get_alive_block_count(lying.chunk) if lying.is_valid() else -1])
+	_ok("and it has not been woken: frozen, where it lay",
+			lying.is_valid() and lying.settled and lying.body.freeze
+			and absf(lying.body.global_position.y - at_y) < 0.001 and _m.rest_hits_kept == 1,
+			"settled %s, %d hit(s) left it at rest, %d woke it" % [lying.settled,
+				_m.rest_hits_kept, _m.rest_hits_woke])
+	_ok("nor the piece lying beside it", beside.is_valid() and beside.settled)
+	await _ticks(IslandManager.MOVING_RESHAPE_TICKS + 2)
+	_ok("its boxes are rebuilt round the hole while it lies frozen",
+			lying.merged and not lying.reshape_due and lying.settled)
+	# A blast that reaches it and takes nothing: nothing happens.
+	alive = _w.get_alive_block_count(lying.chunk)
+	_m.damage(lying, Vector3(lb.get_center().x, lb.end.y + 3.0, lb.get_center().z), 1.2)
+	await _ticks(2)
+	_ok("a blast that takes nothing from it changes nothing",
+			lying.settled and not lying.reshape_due
+			and _w.get_alive_block_count(lying.chunk) == alive)
+	# The bricks it stands on: now it has to move.
+	_m.damage(lying, Vector3(lb.get_center().x, lb.position.y + 0.2, lb.get_center().z), 1.2)
+	await _ticks(3)
+	_ok("a shot that takes the bricks it stands on wakes it",
+			lying.is_valid() and not lying.settled and _m.rest_hits_woke + _m.ripple_woken > 0,
+			"settled %s" % lying.settled)
+
+	# What rested on the bricks a shot took is woken, and what they were taken
+	# from is not.
+	var under := _lying(Vector3(-100.0, 0.02, -100.0))
+	await _ticks(25)
+	_m.settle_now(under)
+	var ub := _m.world_aabb(under)
+	var rider := _piece(Vector3(ub.get_center().x - 1.4, ub.end.y + 0.05, ub.get_center().z - 1.4))
+	await _ticks(25)
+	_m.settle_now(rider)
+	_m.settle_now(under)   # the slab coming down on it woke it
+	var rb := _m.world_aabb(rider)
+	_m.damage(under, Vector3(rb.get_center().x, ub.end.y - 0.2, rb.get_center().z), 1.2)
+	_ok("a shot through the roof under a slab leaves the piece it is the roof of at rest", under.settled)
+	await _ticks(2)
+	_ok("and wakes the slab that stood on those bricks", rider.is_valid() and not rider.settled)
+
+	# Cut clean through where it lies: two pieces, and what is left wakes --
+	# it may have been standing on what left.
+	var whole := _piece(Vector3(-160.0, 0.05, -100.0), 20, 20, 36)
+	await _ticks(25)
+	_m.settle_now(whole)
+	var dims: Vector3i = _w.get_chunk_dims(whole.chunk)
+	var origin: Vector3i = _w.get_chunk_origin(whole.chunk)
+	var band := PackedInt32Array()
+	@warning_ignore("integer_division")
+	var cut_y := dims.y / 2
+	for y in range(cut_y, cut_y + 6):
+		for x in dims.x:
+			for z in dims.z:
+				var blk: int = _w.block_at(whole.chunk, origin + Vector3i(x, y, z))
+				if blk >= 0 and not band.has(blk):
+					band.push_back(blk)
+	_w.kill_blocks(whole.chunk, band)
+	bodies = _m.islands.size()
+	_m.solve_island(whole)
+	_ok("cut clean through where it stands at rest, it is two pieces, and awake",
+			_m.islands.size() == bodies + 1 and not whole.settled,
+			"%d bodies before, %d after; settled %s" % [bodies, _m.islands.size(), whole.settled])
+	_ok("and its boxes no longer hold what left it",
+			whole.merged and not whole.reshape_due)
