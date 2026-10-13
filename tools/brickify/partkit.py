@@ -65,22 +65,24 @@ def main() -> None:
     built = {}
     taken = set()
     for spec in sheet["parts"]:
-        tris = take(shells, spec.get("take", "rest"), taken)
-        if tris is None:
+        got = take(shells, spec.get("take", "rest"), taken)
+        if got is None:
             raise SystemExit("part %s: no shell of the model is in its box" % spec["name"])
-        built[spec["name"]] = tris
-    whole = _bvh(np.concatenate(list(built.values())))
+        # The one change a sheet may make to a part's shape: wider, about the centre plane.
+        got[0][..., 1] = cy + (got[0][..., 1] - cy) * spec.get("widen", 1.0)
+        built[spec["name"]] = got
+    whole = _bvh(np.concatenate([tris for tris, _ in built.values()]))
 
     for spec in sheet["parts"]:
-        tris = built[spec["name"]]
+        tris, shell_of = built[spec["name"]]
         part = {"name": spec["name"], "role": spec.get("role", "bare"), "slot": spec["slot"],
-                "triangles": int(len(tris)), "patches": [], "sockets": []}
+                "widen": spec.get("widen", 1.0), "triangles": int(len(tris)), "patches": [], "sockets": []}
         if "mount" in spec:
             part["mount"] = joint_point(spec["mount"], lat)
         for s in spec.get("sockets", []):
             part["sockets"].append(joint_point(s, lat))
         if spec.get("studs", True):
-            part["patches"] = stud_faces(tris, _bvh(tris), whole, lat, grid, rules)
+            part["patches"] = stud_faces(tris, shell_of, _bvh(tris), whole, lat, grid, rules)
         if spec.get("grip_core"):
             part["grip_core"] = grip_core(tris, _bvh(tris), std["held_grip"])
         lo, hi = tris.min(axis=(0, 1)), tris.max(axis=(0, 1))
@@ -153,8 +155,9 @@ def load_shells(path: str, print_len: float):
 
 def take(shells, box, taken):
     """The triangles of every shell not yet taken that lies wholly inside `box`
-    ({"x": [a, b], "z": [a, b]}, either left out for "any"), or of all that are left."""
-    out = []
+    ({"x": [a, b], "z": [a, b]}, either left out for "any"), or of all that are left; and,
+    for each triangle, which shell it is of."""
+    out, ids = [], []
     for i, s in enumerate(shells):
         if i in taken:
             continue
@@ -167,7 +170,8 @@ def take(shells, box, taken):
                 continue
         taken.add(i)
         out.append(s["tris"].copy())
-    return np.concatenate(out) if out else None
+        ids.append(np.full(len(s["tris"]), i))
+    return (np.concatenate(out), np.concatenate(ids)) if out else None
 
 
 def _bvh(tris):
@@ -191,7 +195,7 @@ def joint_point(spec, lat):
                    round(snap(z, lat["oz"], lat["plate"]), 4)]}
 
 
-def stud_faces(tris, own, whole, lat, grid, rules):
+def stud_faces(tris, shell_of, own, whole, lat, grid, rules):
     """Studs on a part's own faces, each square to the facet it stands on.
 
     A face is a run of facets within `flat_deg` of each other. A grid of the stud pitch is
@@ -203,7 +207,12 @@ def stud_faces(tris, own, whole, lat, grid, rules):
     A place takes a stud if the whole stud is on the face with a lip to spare, the facet
     under it leans no more than `lean_deg` from the face, and nothing of the gun is over it.
     The stud's foot is on that facet and its axis is that facet's normal.
+
+    A stud never covers a detail. A model's details -- a selector, a catch, a bolt head --
+    are shells of their own lying on the part, so the stud's whole rim has to stand on the
+    same shell as its middle, with nothing over the rim either.
     """
+    rim = [(math.cos(k * math.pi / 4), math.sin(k * math.pi / 4)) for k in range(8)]
     pitch, r, h = lat["pitch"], grid["stud_d"] * 0.5, grid["stud_h"]
     lean = math.cos(math.radians(rules["lean_deg"]))
     bm = bmesh.new()
@@ -252,6 +261,19 @@ def stud_faces(tris, own, whole, lat, grid, rules):
                             continue
                         over = whole.ray_cast(hit[0] + facet * 0.02, facet)
                         if over[0] is not None and over[3] < h + rules["clear"]:
+                            continue
+                        clean = True
+                        for ca, sa_ in rim:
+                            q = origin + u * (a + ca * r) + v * (b + sa_ * r)
+                            under = own.ray_cast(q + n * 3.0, -n)
+                            if under[0] is None or shell_of[under[2]] != shell_of[hit[2]]:
+                                clean = False
+                                break
+                            above = whole.ray_cast(under[0] + facet * 0.02, facet)
+                            if above[0] is not None and above[3] < h + rules["clear"]:
+                                clean = False
+                                break
+                        if not clean:
                             continue
                         ok[i - i0, j - j0] = True
                         found[(i - i0, j - j0)] = (hit[0].copy(), facet.copy())
@@ -445,7 +467,7 @@ def render(prefix, doc, built, size) -> None:
     objects = {}
     for part in doc["parts"]:
         bm = bmesh.new()
-        for t in built[part["name"]]:
+        for t in built[part["name"]][0]:
             bm.faces.new([bm.verts.new(tuple(v)) for v in t])
         for p in part["patches"]:
             for s in p["studs"]:
