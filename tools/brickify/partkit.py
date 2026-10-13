@@ -11,11 +11,12 @@ lattice, and then checks the result it wrote against those standards.
 Writes <name>.parts.json (parts, patches with every stud, mounts, sockets, dressing, the check)
 and <name>_iso.png / <name>_parts.png.
 
-v1 makes: parts from a model's loose shells, widened about the centre plane; stud patches on
-tops and sides, on a pad where the surface is short of the lattice plane; mounts and sockets
-snapped to the lattice; the grip core; dressing bricks on patches.
-Not yet: one watertight solid per part (the shells are kept as they are), socket patches
-underneath, the connectors' own shapes at a mount, joints, STLs, a scene the game loads.
+v1 makes: parts from a model's loose shells, its small details left out, resized about
+their mounts, with the hardness taken off their edges; stud patches on tops and sides,
+the part's own face moved onto the lattice plane so the studs are moulded into it; mounts and
+sockets snapped to the lattice; the grip core; bricks, adapters and sights pressed on patches.
+Not yet: one watertight solid per part, socket patches underneath, the connectors' own shapes at a mount, joints, STLs, a
+scene the game loads.
 """
 import json
 import math
@@ -30,8 +31,8 @@ from mathutils.bvhtree import BVHTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARTS_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "Docs", "Parts"))
-## A stud stands on a pad when the surface is up to this far short of its plane (mm).
-MAX_GAP = 1.2
+## A face is moved onto its lattice plane when it is up to this far short of it (mm): a tick.
+MAX_GAP = 0.85
 AXES = {"+y": (1, 1.0), "-y": (1, -1.0), "+z": (2, 1.0)}
 
 
@@ -55,14 +56,20 @@ def main() -> None:
     built = {}
     taken = set()
     for spec in sheet["parts"]:
-        tris = take(shells, spec.get("take", "rest"), taken)
+        tris = take(shells, spec.get("take", "rest"), taken, sheet.get("drop_shells_under", 0.0))
         if tris is None:
             raise SystemExit("part %s: no shell of the model is in its box" % spec["name"])
-        tris[..., 1] = cy + (tris[..., 1] - cy) * spec.get("widen", 1.0)
-        bvh = BVHTree.FromPolygons([Vector(v) for v in tris.reshape(-1, 3)],
-                                   [(3 * t, 3 * t + 1, 3 * t + 2) for t in range(len(tris))])
+        # Resized about its mount, so the joint stays where it is; across, about the centre plane.
+        scale = spec.get("scale", [1.0, 1.0, 1.0])
+        lo, hi = tris.min(axis=(0, 1)), tris.max(axis=(0, 1))
+        px, pz = spec["mount"]["at"] if "mount" in spec else ((lo[0] + hi[0]) * 0.5, (lo[2] + hi[2]) * 0.5)
+        tris[..., 0] = px + (tris[..., 0] - px) * scale[0]
+        tris[..., 1] = cy + (tris[..., 1] - cy) * scale[1]
+        tris[..., 2] = pz + (tris[..., 2] - pz) * scale[2]
+        if "soften" in sheet:
+            tris = soften(tris, sheet["soften"])
         part = {"name": spec["name"], "role": spec.get("role", "bare"), "slot": spec["slot"],
-                "widen": spec.get("widen", 1.0), "patches": [], "sockets": []}
+                "scale": scale, "triangles": int(len(tris)), "patches": [], "sockets": []}
         if "module" in spec:
             part["module"] = spec["module"]
         if "mount" in spec:
@@ -70,11 +77,12 @@ def main() -> None:
         for s in spec.get("sockets", []):
             part["sockets"].append(joint_point(s, lat))
         for p in spec.get("patches", []):
-            made = stud_patch(bvh, p, lat)
+            made = stud_patch(tris, p, lat)
             if made:
                 part["patches"].append(made)
             else:
                 print("  %s/%s: no flat place for studs there" % (spec["name"], p["name"]))
+        bvh = _bvh(tris)
         if spec.get("grip_core"):
             part["grip_core"] = grip_core(tris, bvh, std["held_grip"], grid)
         lo, hi = tris.min(axis=(0, 1)), tris.max(axis=(0, 1))
@@ -145,12 +153,16 @@ def load_shells(path: str, print_len: float):
     return shells, (hi - lo) * k
 
 
-def take(shells, box, taken):
+def take(shells, box, taken, drop_under=0.0):
     """The triangles of every shell not yet taken that lies wholly inside `box`
-    ({"x": [a, b], "z": [a, b]}, either left out for "any"), or of all that are left."""
+    ({"x": [a, b], "z": [a, b]}, either left out for "any"), or of all that are left.
+    A shell smaller than `drop_under` mm every way is a detail, and is left out."""
     out = []
     for i, s in enumerate(shells):
         if i in taken:
+            continue
+        if float((s["hi"] - s["lo"]).max()) < drop_under:
+            taken.add(i)
             continue
         if box != "rest":
             inside = True
@@ -162,6 +174,44 @@ def take(shells, box, taken):
         taken.add(i)
         out.append(s["tris"].copy())
     return np.concatenate(out) if out else None
+
+
+def _bvh(tris):
+    return BVHTree.FromPolygons([Vector(v) for v in tris.reshape(-1, 3)],
+                                [(3 * t, 3 * t + 1, 3 * t + 2) for t in range(len(tris))])
+
+
+def soften(tris, how):
+    """Take the hardness off a part's edges and leave it low-poly: every edge sharper than
+    `angle_deg` is cut back by `bevel` mm, in `segments` steps.
+
+    The shells are kept as they are. Fusing them on a voxel grid was tried and is not the
+    way: an asset-pack shell with open edges comes out of it in pieces.
+    """
+    bm = bmesh.new()
+    for t in tris:
+        bm.faces.new([bm.verts.new(tuple(v)) for v in t])
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-4)
+    bmesh.ops.dissolve_limit(bm, angle_limit=math.radians(1.0), verts=bm.verts[:], edges=bm.edges[:])
+    me = bpy.data.meshes.new("soft")
+    bm.to_mesh(me)
+    bm.free()
+    ob = bpy.data.objects.new("soft", me)
+    bpy.context.scene.collection.objects.link(ob)
+    bevel = ob.modifiers.new("bevel", "BEVEL")
+    bevel.limit_method = "ANGLE"
+    bevel.angle_limit = math.radians(how.get("angle_deg", 30.0))
+    bevel.width = how.get("bevel", 0.35)
+    bevel.segments = how.get("segments", 2)
+    ob.modifiers.new("tri", "TRIANGULATE")
+    ev = ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    out = ev.to_mesh()
+    out.calc_loop_triangles()
+    co = np.array([v.co[:] for v in out.vertices], dtype=np.float64)
+    idx = np.array([t.vertices[:] for t in out.loop_triangles], dtype=int)
+    ev.to_mesh_clear()
+    bpy.data.objects.remove(ob)
+    return co[idx]
 
 
 # ---------------------------------------------------------------------------------- features
@@ -180,13 +230,15 @@ def joint_point(spec, lat):
                    round(snap(z, lat["oz"], lat["plate"]), 4)]}
 
 
-def stud_patch(bvh, spec, lat):
+def stud_patch(tris, spec, lat):
     """Studs on one face, inside the sheet's region, wherever the lattice puts them and the
     surface is flat enough to carry them: the biggest whole rectangle of such places.
 
-    The studs stand on a plane of the lattice at or just outside the surface. Where the
-    surface is short of it, a pad fills the difference.
+    The studs stand on a plane of the lattice at or just outside the surface, and the part's
+    own face is moved out onto that plane (`tris` is changed): the studs are moulded into
+    the part, not set on a slab.
     """
+    bvh = _bvh(tris)
     axis, sign = AXES[spec["face"]]
     pitch = lat["pitch"]
     region = spec["region"]
@@ -196,7 +248,7 @@ def stud_patch(bvh, spec, lat):
         ref, step = lat["cy"], lat["tick"]
     else:
         vs = _centres(region.get("y", [-0.1, 0.1]), 0.0, pitch, half=False) + lat["cy"]
-        ref, step = lat["oz"], lat["plate"]
+        ref, step = lat["oz"], lat["tick"]
     if not len(us) or not len(vs):
         return None
     depth = np.full((len(us), len(vs)), np.nan)
@@ -219,6 +271,20 @@ def stud_patch(bvh, spec, lat):
     if rect is None:
         return None
     i0, i1, j0, j1 = rect
+    # Move the face under the patch onto the plane: every triangle that faces this way and
+    # lies in the depths the patch found, and with it every corner that shares a place.
+    found = depth[i0:i1, j0:j1]
+    near, far = float(np.nanmin(found)) - 0.1, float(np.nanmax(found)) + 0.1
+    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+    normal = np.cross(b - a, c - a)
+    normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
+    d_all = sign * (tris[..., axis] - ref)
+    face = (np.abs(normal[:, axis]) >= 0.9) & (d_all.min(axis=1) >= near) & (d_all.max(axis=1) <= far)
+    flat = tris.reshape(-1, 3)
+    keys = {tuple(k) for k in np.round(tris[face].reshape(-1, 3) * 1000.0).astype(np.int64)}
+    every = np.round(flat * 1000.0).astype(np.int64)
+    move = np.array([tuple(k) in keys for k in every])
+    flat[move, axis] = ref + sign * plane
     studs = []
     for i in range(i0, i1):
         for j in range(j0, j1):
@@ -265,9 +331,10 @@ def _biggest_rectangle(ok):
 
 def grip_core(tris, bvh, held, grid):
     """The round core a hand closes on (Docs/Parts/custom.md section 4): along the grip's
-    own long line, and how much of the grip is left round it."""
+    own long line, centred in it, and how much of the grip is left round it where the hand
+    goes -- the middle three fifths of its length."""
     pts = tris.reshape(-1, 3)
-    mid = pts.mean(axis=0)
+    mid = (pts.min(axis=0) + pts.max(axis=0)) * 0.5
     xz = pts[:, [0, 2]] - mid[[0, 2]]
     _, vecs = np.linalg.eigh(np.cov(xz.T))
     along = vecs[:, -1]
@@ -278,30 +345,50 @@ def grip_core(tris, bvh, held, grid):
     a, b = float(t.min()) + 1.0, float(t.max()) - 1.0
     axis = Vector((along[0], 0.0, along[1]))
     across = Vector((-along[1], 0.0, along[0]))
-    # How much of the grip is left outside the core: to its sides, and fore and aft.
-    spare = {"side": 1e9, "fore_aft": 1e9}
-    for s in np.linspace(a + 1.0, b - 1.0, 5):
-        c = Vector((mid[0], mid[1], mid[2])) + axis * float(s)
-        for key, d in (("side", Vector((0, 1, 0))), ("side", Vector((0, -1, 0))),
-                       ("fore_aft", across), ("fore_aft", -across)):
-            hit = bvh.ray_cast(c, d)
-            spare[key] = min(spare[key], (hit[3] if hit[0] is not None else 0.0) - r)
+    up = Vector((0.0, 1.0, 0.0))
+    centre = Vector((float(mid[0]), float(mid[1]), float(mid[2])))
+
+    def reach(c, d):
+        hit = bvh.ray_cast(c, d)
+        return hit[3] if hit[0] is not None else 0.0
+
+    stations = [float(v) for v in np.linspace(a + (b - a) * 0.2, b - (b - a) * 0.2, 5)]
+    # Slide the line fore and aft to the middle of the grip, then measure what is left.
+    centre += across * float(np.mean([(reach(centre + axis * v, across) - reach(centre + axis * v, -across)) * 0.5
+                                      for v in stations]))
+    side = min(min(reach(centre + axis * v, up), reach(centre + axis * v, -up)) for v in stations) - r
+    fore_aft = min(min(reach(centre + axis * v, across), reach(centre + axis * v, -across))
+                   for v in stations) - r
     return {"d": held["core_d"], "sides": held["core_sides"], "length": round(b - a, 3),
-            "from": [round(float(c), 4) for c in Vector(mid) + axis * a],
-            "to": [round(float(c), 4) for c in Vector(mid) + axis * b],
-            "spare_side": round(float(spare["side"]), 3),
-            "spare_fore_aft": round(float(spare["fore_aft"]), 3)}
+            "from": [round(float(c), 4) for c in centre + axis * a],
+            "to": [round(float(c), 4) for c in centre + axis * b],
+            "spare_side": round(float(side), 3), "spare_fore_aft": round(float(fore_aft), 3)}
 
 
 def dress(spec, doc, catalogue, grid):
-    """A brick pressed onto a patch: `cell` is where its corner goes, in studs along the
-    patch; `turn` lays its long side across instead of along."""
-    base = spec["brick"][len(grid["part_prefix"]):]
-    w, l = catalogue[base]["studs_wl"]
-    su, sv = (w, l) if spec.get("turn") else (l, w)
-    return {"brick": spec["brick"], "on": spec["on"], "cell": spec["cell"], "studs": [su, sv],
-            "plates": catalogue[base]["plates"], "colour": spec.get("colour", [0.2, 0.22, 0.25]),
-            "breaks_off": True}
+    """Something pressed onto a patch. `cell` is where its corner goes, in studs along the
+    patch; `lift` is how many plates of other things are under it.
+
+    A catalogue brick (`brick`, with `turn` to lay its long side across), or a part made
+    here (`make`): a "rail" -- a strip with studs on top, as an adapter is -- or a "sight",
+    a single piece with no studs.
+    """
+    out = {"on": spec["on"], "cell": spec["cell"], "lift": spec.get("lift", 0),
+           "colour": spec.get("colour", [0.2, 0.22, 0.25]), "role": spec.get("role", "dressing")}
+    if "make" in spec:
+        out.update({"name": spec["name"], "shape": spec["make"], "studs": spec["studs"],
+                    "plates": spec["plates"]})
+        for key in ("slot", "mount", "socket"):
+            if key in spec:
+                out[key] = spec[key]
+    else:
+        base = spec["brick"][len(grid["part_prefix"]):]
+        w, l = catalogue[base]["studs_wl"]
+        out.update({"name": spec["brick"], "shape": "brick",
+                    "studs": [w, l] if spec.get("turn") else [l, w],
+                    "plates": catalogue[base]["plates"]})
+    out["breaks_off"] = out["role"] == "dressing"
+    return out
 
 
 def find_patch(doc, on):
@@ -343,7 +430,7 @@ def check(doc, std, grid):
                         and whole((s[1] - lat["cy"]) / lat["tick"])
                 else:
                     good = good and whole((s[1] - lat["cy"]) / lat["pitch"]) \
-                        and whole((s[2] - lat["oz"]) / lat["plate"])
+                        and whole((s[2] - lat["oz"]) / lat["tick"])
                 if not good:
                     off.append("%s/%s" % (part["name"], p["name"]))
             if p["max_gap"] > MAX_GAP:
@@ -394,12 +481,16 @@ def check(doc, std, grid):
     for d in doc["dressing"]:
         patch = find_patch(doc, d["on"])
         if patch is None:
-            ok("%s sits on studs of %s" % (d["brick"], d["on"]), False, "there is no such patch")
+            ok("%s sits on studs of %s" % (d["name"], d["on"]), False, "there is no such patch")
             continue
         fits =d["cell"][0] >= 0 and d["cell"][1] >= 0 \
             and d["cell"][0] + d["studs"][0] <= patch["cells"][0] \
             and d["cell"][1] + d["studs"][1] <= patch["cells"][1]
-        ok("%s sits on studs of %s" % (d["brick"], d["on"]), fits)
+        ok("%s sits on studs of %s" % (d["name"], d["on"]), fits)
+        for key in ("mount", "socket"):
+            if key in d:
+                ok("%s's %s is an interface the standards name (%s)" % (d["name"], key, d[key]),
+                   d[key] in known)
     bad = sum(1 for l in lines if not l["ok"])
     print("check: %d ok, %d FAIL" % (len(lines) - bad, bad))
     return lines
@@ -430,13 +521,6 @@ def render(prefix, doc, built, size) -> None:
             axis, sign = AXES[p["face"]]
             normal = Vector((0.0, 0.0, 0.0))
             normal[axis] = sign
-            if p["max_gap"] > 0.05:
-                thick = p["max_gap"] + 0.3
-                lo = [p["u"][0], 0.0, 0.0]
-                hi = [p["u"][1], 0.0, 0.0]
-                lo[3 - axis], hi[3 - axis] = p["v"][0], p["v"][1]
-                lo[axis], hi[axis] = sorted((p["plane"], p["plane"] - sign * thick))
-                _box(bm, lo, hi)
             for s in p["studs"]:
                 _stud(bm, Vector(s), normal, r, h)
         core = part.get("grip_core")
@@ -454,20 +538,34 @@ def render(prefix, doc, built, size) -> None:
         hi = [lo[0] + d["studs"][0] * pitch, 0.0, 0.0]
         lo[3 - axis] = patch["v"][0] + d["cell"][1] * pitch
         hi[3 - axis] = lo[3 - axis] + d["studs"][1] * pitch
-        thick = d["plates"] * lat["plate"]
-        outer = patch["plane"] + sign * thick
-        lo[axis], hi[axis] = sorted((patch["plane"], outer))
+        foot = patch["plane"] + sign * d["lift"] * lat["plate"]
+        thick = (1 if d["shape"] == "sight" else d["plates"]) * lat["plate"]
+        outer = foot + sign * thick
+        lo[axis], hi[axis] = sorted((foot, outer))
         bm = bmesh.new()
         g = pitch * 0.015
         shrink = [g, g, g]
         shrink[axis] = 0.0
         _box(bm, [lo[k] + shrink[k] for k in range(3)], [hi[k] - shrink[k] for k in range(3)])
-        for a in range(d["studs"][0]):
-            for b in range(d["studs"][1]):
-                at = [lo[0] + (a + 0.5) * pitch, 0.0, 0.0]
-                at[3 - axis] = lo[3 - axis] + (b + 0.5) * pitch
-                at[axis] = outer
-                _stud(bm, Vector(at), normal, r, h)
+        if d["shape"] == "sight":
+            # A base and two ears at its back end, a notch between them.
+            tall = (d["plates"] - 1) * lat["plate"]
+            u0 = lo[0] + (hi[0] - lo[0]) * 0.55
+            for side in (0, 1):
+                e_lo, e_hi = [u0, 0.0, 0.0], [hi[0] - g, 0.0, 0.0]
+                v_lo, v_hi = lo[3 - axis] + g, hi[3 - axis] - g
+                wide = (v_hi - v_lo) * 0.28
+                e_lo[3 - axis] = v_lo if side == 0 else v_hi - wide
+                e_hi[3 - axis] = v_lo + wide if side == 0 else v_hi
+                e_lo[axis], e_hi[axis] = sorted((outer, outer + sign * tall))
+                _box(bm, e_lo, e_hi)
+        else:
+            for a in range(d["studs"][0]):
+                for b in range(d["studs"][1]):
+                    at = [lo[0] + (a + 0.5) * pitch, 0.0, 0.0]
+                    at[3 - axis] = lo[3 - axis] + (b + 0.5) * pitch
+                    at[axis] = outer
+                    _stud(bm, Vector(at), normal, r, h)
         ob = _object(sc, "dress%d" % n, bm, tuple(d["colour"]) + (1,))
         ob.parent = objects[part_name]
 

@@ -41,6 +41,9 @@ lets bricks on two faces of one part, or on two parts joined together, line up a
 | socket patch, underside | under a stock, a handguard, a forearm | the underside of a brick, so the bottom reads as built and takes a brick from below |
 | connector | where the next part joins | the part's `mount`, or a `socket_<slot>`, on a lattice point |
 
+**Studs are moulded into the part.** The part's own face is moved onto the lattice plane and
+the studs stand on it: never a slab laid on the part with studs on the slab.
+
 A patch goes only where it makes sense: where a brick would sit flat, where a hand does not go,
 where a module does not slide. The surface under a patch is made flat to the lattice plane; the
 shape between patches is free.
@@ -55,9 +58,15 @@ coincide. Bare gun parts are those parts, so a rolled gun needs no new code:
   lattice. Any stock goes on any body; that is what a procedural gun needs from its parts.
 - The physical connector at a `mount` is the slot's own (spec section 7): a keyed dovetail for a
   barrel or a stock, pin-and-clip for a grip or a magazine, studs for a sight.
-- **The grip has a round core**, 4.8 mm across (a full stud's size) and at least 14.4 mm long,
-  eight-sided like a stud. The styled grip is built round it, but where the hand closes it is that
-  core, so a C hand fits every grip ([joints.md](joints.md) section 7).
+- **The grip has a round core**, 3.2 mm across -- the bar a brick figure's C hand grips, the
+  same size as every joint pin -- and at least 14.4 mm long, eight-sided like a stud. The styled
+  grip is built round it, but where the hand closes it is that core, so a C hand fits every grip
+  ([joints.md](joints.md) section 7).
+- **A sight is a single piece pressed onto a rail**, as one brick is pressed onto studs. A rail
+  is a row of studs: a flat top has one moulded in; a carry handle has a short row of its own
+  (`sight.handle`) that takes an **adapter** (`adapter_handle_rail`) with a rail on top. Planned:
+  a gooseneck adapter that reaches forward off the handle, and bodies whose sights are moulded in
+  and take none.
 - A module is a part whose connector the game lets go of: `module: reload` or `module: overheat`
   on the part, and an animation that takes the hand to it.
 
@@ -112,9 +121,13 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
 
+**A bare part is not the model it came from.** Its small details are left out, it is resized
+about its mount to toy proportions, and the hardness is taken off its edges; it stays low-poly.
+
 **Built so far:** [partkit.py](../../tools/brickify/partkit.py), v1, and one build sheet,
 [rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
-(barrel, handguard, body, grip, stock) with stud patches, mounts and sockets on the lattice, the
-grip core, a few dressing bricks, and the check. Still to come: one watertight solid per part,
-socket patches underneath, the interfaces' own shapes, STLs, and a scene the game's gun system
-loads.
+(barrel, handguard, body, grip, stock), resized and softened, with studs moulded into them, mounts
+and sockets on the lattice, the grip core, a sight adapter and a sight on the carry handle, two
+dressing bricks, and the check. Still to come: one watertight solid per part (fusing the model's
+shells on a voxel grid was tried and broke the open ones), socket patches underneath, the
+interfaces' own shapes, STLs, and a scene the game's gun system loads.
