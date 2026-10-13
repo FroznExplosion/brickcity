@@ -18,7 +18,7 @@ Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each a
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`barrage_probe.gd`, `storey_probe.gd`,
+`barrage_probe.gd`, `stud_strength_probe.gd`, `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -28,14 +28,16 @@ its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 
 In the order to do it. Each line points at where the item is written up.
 
-**Done 2026-10-13** (timing still owed: §1.10)
+**Done 2026-10-13** (timed: §1.10)
 1. ~~A loose piece is a rigid chunk~~ -- never stress-solved; it parts where a hit cuts it and
    where a landing snaps it. §1.10 (1).
 2. ~~Wreckage at rest stays at rest when it is shot~~ -- woken only if the hit cut it in two or
    took what it rests on. §1.10 (2).
 
+3. ~~Stud strength: try it stronger, then tune by feel~~ (user, 2026-10-13) -- four times what
+   it was, and a slider in Options to move it. §1.10 (6).
+
 **Next, the brick model (§1.10)**
-3. **Stud strength: try it stronger, then tune by feel** (user, 2026-10-13). §1.10 (6).
 4. A blast loosens the ring round it instead of deleting it. §1.10 (3).
 5. A snap goes at the weakest seam near the contact, not the nearest storey line. §1.10 (5).
 6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
@@ -225,13 +227,17 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    **Left as it was:** a piece struck by one that lands on it still wakes everything within six
    metres (`shear`), as do a fire's burnt bricks (`CityScene.fire_burnt`) and the disasters'
    own calls (`wake_near`): not shots, and the first is the next to look at.
-   **Timing: tried 2026-10-13, not a measurement.** Other chats were testing, and of six
-   `--big --shot` runs (one at a time, heat checked) two could not start and three had another
-   Godot start during them. The one clean run, after: 18.2 ms a frame, 23 of 906 over 33.3 ms, 14
-   ticks over 25 ms, 7.8 pieces in motion on average, 463 hits on pieces that were down making
-   no body. The runs before it, both with another Godot running: 21.8 and 42.3 ms, 54 and 491,
-   23-26 pieces in motion, 573 hits making 189 bodies. The count of pieces in motion (26 -> 8)
-   does not depend on the machine; the frame times are owed, alternated, on a quiet one.
+   **Timed 2026-10-13** (`--big --shot`, three alternated pairs, every run with no other Godot
+   before or after it, one windowed run at a time; 91 C at the peak, never held back):
+
+   | | frames mean, ms | of 906 over 33.3 ms | worst frame | pieces in motion | bodies off hits on pieces that were down |
+   |---|---|---|---|---|---|
+   | main before this (4d5cb64) | 24.7, 20.3, 20.8 -- **21.9** | 113, 41, 47 -- **67** | 155-159 | 27.8, 27.0, 21.6 | 107, 55, 73 |
+   | with it | 19.3, 19.2, 18.6 -- **19.0** | 37, 40, 43 -- **40** | 91-135 | 9.5, 7.5, 8.1 | 0, 0, 0 |
+
+   A seventh fewer milliseconds a frame, two fifths fewer slow frames, a third as many pieces
+   moving at once. Ticks over 25 ms are the same within the noise (12-28, then 24-29).
+   An earlier try that morning had other chats testing through it and is not counted.
    Checks: `float_probe` 46 (ten new: a piece shot at rest stays one piece, frozen where it lay,
    the piece beside it asleep; its boxes follow; a blast that takes nothing changes nothing; one
    that takes what it stands on wakes it; what stood on the bricks taken wakes; cut clean
@@ -249,14 +255,38 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    at the weakest seam near it -- fewest studs across (a row of windows before a solid course).
    `lateral_check` already weighs every course boundary of a building by its studs; the same
    count for a piece picks the seam.
-6. **How strong a stud is.** 9.3 a stud is the toy's clutch scaled to a 0.35 m stud, which makes
-   the building 44 times weaker for its weight than the toy (BrickFailure §4.5): a hanging section
-   drops where on a table it would hold. That was chosen for the look. If the model is the toy
-   itself, the number goes up and far less comes off a damaged building by itself. One constant
-   (`set_tension_per_stud`), and it changes what "hanging in mid-air" looks like.
-   **Decided 2026-10-13 (user): try it stronger, and expect to tune it by feel afterwards.** So
-   it becomes one named number in one place, with the toy's value and the scaled one beside it,
-   and the first try is by eye in play, not by a pass.
+6. ~~How strong a stud is~~ -- **done 2026-10-13: one number, tunable; the first try is four
+   times what it was.** `BrickStrength` (`scripts/brick_strength.gd`): `SCALED` 9.3 (the toy's
+   clutch on a 0.35 m stud, which the game ran on), `TOY` 408 (the toy itself, 44 times that), and
+   the game's `tension()` = `SCALED` x `times`. `times` is a setting -- **Options > Gameplay, "Stud
+   Strength (Developer)", 1x to 44x, default 4x** -- that buildings in bricks take the moment it
+   is moved (`CityScene._restud`); what has already fallen is not put back. The user's call:
+   try it stronger, then tune by feel. It is theirs to move from here.
+   *What it moves, counted* (`barrage_probe -- --stud=N`: four towers brought down under fire,
+   one run each): building solves with a joint failed in tension **17 of 437 at 1x (312
+   joints), 6 of 425 at 4x (54 joints), none at 44x**. And one case (`stud_strength_probe`): a tower
+   hanging over two thirds of its ground storey fails 2 joints and drops 34 bricks at 1x; at 4x
+   and at the toy's none fail and 19 drop -- the ones the shots cut off.
+   *What that says about the number:* a joint failing in tension was already rare -- one solve
+   in twenty-five at the old strength. Buildings come down because they are cut through, or their
+   weight is off what is left (toppling, `check_stability`; a storey tipping or crushed,
+   `gravity_check`). So this is not a big lever on how much falls; where it shows is an overhang
+   holding on, and **a top held down by its studs when it stands off a corner** (the tip rule
+   weighs studs at their lever, and follows it). `storey_probe` still tips a top off one corner
+   at 4x, 6x and 8x, by a margin that is not steady (1.2 to 2.5 times what it can hold): if tops
+   start standing on corners in play, that is this number too high.
+   *What does not follow it, on purpose:* an earthquake's or a wind's sideways load
+   (`DisasterContext.lateral`) is still weighed against 9.3 -- the disasters' strengths were set
+   against it -- and a storey is crushed at the same load whatever a stud holds
+   (`_gravity_fail` hands the check its limit over `times`). Whoever retunes the disasters takes
+   three lines out.
+   *Tests:* a headless run keeps the default whatever is saved in Options, as a test window does;
+   a checkpoint carries the strength it was saved at and is loaded at it (the log's solves are
+   that strength's). `stud_strength_probe` 9 (the name `stud_probe` is build mode's, for drawn
+   studs). At the new default: collapse_probe 62, storey 4, far_rules 9, barrage 4, float 46,
+   hang 10, snapshot 48, loopback 32, cap 17, dormant 33, debris 29; disaster_probe 153 of 155,
+   the two that fail failing the same without this; `--jam --big` 4, `--checkpoint` 9, `--wreck`
+   2, `--breaklag --big` 7, `--play` 15, `--groups --big` 23, `--dormant` 21.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
@@ -405,13 +435,22 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   panels keeps its place while most of its floor is still there (the rule, §8.10), and the gate
   counts its parts over the panel that has left -- which a built-in piece is too small to do.
   Either the rule or the gate's measure is wrong for wide pieces; trace which rows hang first.
+* **A `--big --shot` run crashed as it closed** (2026-10-13, one run of nine: signal 11 after the
+  whole report had printed; "2 RID allocations of type Mesh were leaked at exit", then
+  `~ArrayMesh` with the renderer already gone). Two meshes outlive the scene -- a stand-in built
+  on a worker and not collected, or a mesh kept in a static, are the places to look. It costs no
+  result; it is not the machine switching itself off.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
   collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
   disaster_probe "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and
   collapse_probe "rode it" vary with physics run to run. Since 2026-10-13 (found then; main as
   it was, before anything of that day's): collapse_probe "trapped" -- "asked again and again for a
-  way there is not, it is trapped", 20.0 s, every run -- the AI's, after its navigation changes.
+  way there is not, it is trapped", 20.0 s, every run that morning -- the AI's, after its
+  navigation changes; passing again by the afternoon, with main's later merges. And
+  disaster_probe's "soldiers react": "the ring is gone from the AI's world once it lands" and
+  "once out, neither is left" fail on main as it is (2026-10-13, with and without that day's
+  stud strength).
   `impostor_probe` "no holes" was on this
   list: fixed 2026-10-08 -- the probe's camera was interpolated, so its pictures were taken on the
   way to where it had been put (Interiors.md §8.13).

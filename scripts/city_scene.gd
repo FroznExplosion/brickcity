@@ -2649,7 +2649,7 @@ func _promote(id: int, solve: bool = true) -> int:
 	var chunk := registry.materialise(id)
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
-	world.set_tension_per_stud(chunk, 9.3)
+	world.set_tension_per_stud(chunk, BrickStrength.tension())
 	_dress(id, chunk, solve)
 	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	return chunk
@@ -2729,7 +2729,7 @@ func _promote_frames(id: int) -> void:
 		PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
 		PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
 		PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
-		world.set_tension_per_stud(c, 9.3)
+		world.set_tension_per_stud(c, BrickStrength.tension())
 		var built: Dictionary = world.add_chunk_shapes(body, c, Vector3.ZERO, false)
 		PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, xf)
 		PhysicsServer3D.body_set_space(body, get_world_3d().space)
@@ -2944,7 +2944,44 @@ func _topple(id: int) -> void:
 ##   CRUSH  too much on too little: everything in the storey under that
 ##          boundary is torn loose, and what is above comes down a floor.
 ## A command either way (SEVER), so every machine does the same.
-const CRUSH_PER_STUD := 20.0   ## x tension_per_stud: an intact tower asks at most 12.4 (big city), one corner left ~22
+## What the studs' strength decided: [building solves, of them with a joint
+## failed in tension, joints failed]. What BrickStrength.times moves.
+var stud_census := [0, 0, 0]
+
+
+func stud_census_line() -> String:
+	return "studs at x%.1f (%.1f each): %d building solve(s), %d with a joint failed in tension, %d joint(s) in all; storeys tipped %d, crushed %d" % [
+			BrickStrength.times, BrickStrength.tension(), stud_census[0], stud_census[1],
+			stud_census[2], int(gravity_fails.tip), int(gravity_fails.crush)]
+
+
+## What a stud holds, as the buildings that are bricks now have it. The
+## setting can be moved in play (Options > Gameplay, "Stud Strength";
+## BrickStrength.times): when it has, every building in bricks is given the new
+## value, and its next solve -- the next thing that hits it -- uses that.
+var _stud_times := BrickStrength.times
+
+
+func _restud() -> void:
+	_stud_times = BrickStrength.times
+	var t := BrickStrength.tension()
+	var n := 0
+	for id in _materialised:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		for c in b.chunks():
+			world.set_tension_per_stud(c, t)
+		n += 1
+	print("[city] stud strength x%.1f: a stud holds %.1f in %d building(s) of bricks" % [_stud_times, t, n])
+
+
+## In units of what a stud held in tension when this was set (BrickStrength.
+## SCALED): an intact tower asks at most 12.4 (big city), one corner left ~22.
+## A storey gives way at the same LOAD whatever a stud holds in tension now --
+## crushing is not the studs' doing -- so the check is handed this over how many
+## times stronger they have been made (_gravity_fail).
+const CRUSH_PER_STUD := 20.0
 var gravity_fails := {"tip": 0, "crush": 0}
 ## CRUSH_PER_STUD, settable: collapse_probe weakens one tower to crush it.
 var crush_per_stud := CRUSH_PER_STUD
@@ -2953,7 +2990,8 @@ var crush_per_stud := CRUSH_PER_STUD
 func _gravity_fail(b: BuildingRegistry.Building) -> bool:
 	if not authority.may_decide() or b.toppled or not b.is_materialised():
 		return false
-	var r: Dictionary = world.gravity_check(b.chunk, crush_per_stud)
+	var r: Dictionary = world.gravity_check(b.chunk,
+			crush_per_stud * BrickStrength.SCALED / world.get_tension_per_stud(b.chunk))
 	if float(r.get("ratio", 0.0)) < 1.0 or not r.has("level"):
 		return false
 	var level: Vector3 = r.level
@@ -8876,6 +8914,8 @@ func _mark(phase: String, t0: int) -> int:
 
 
 func _physics_process(_delta: float) -> void:
+	if _stud_times != BrickStrength.times:
+		_restud()
 	_prof = {}
 	_sync_invincible()
 	var t_tick := Time.get_ticks_usec()
@@ -8961,6 +9001,10 @@ func _physics_process(_delta: float) -> void:
 						director.collapsing.has(b.id)]
 		t = _mark("solve", t)
 		var res: Dictionary = solve.stress
+		stud_census[0] += 1
+		if int(res.get("failures", 0)) > 0:
+			stud_census[1] += 1
+			stud_census[2] += int(res.failures)
 		# Structural: joints failing, or the building off balance. A brick
 		# knocked loose by a shot is not a collapse (see the plan, below).
 		if int(res.get("failures", 0)) > 0 \
@@ -11359,8 +11403,11 @@ const CHECKPOINT_GATE_META := &"city_checkpoint_gate"
 ## Save the area exactly as it is -- the log, every piece where it is and how it
 ## is moving, what is asleep, what is queued -- to CHECKPOINT_PATH.
 func save_checkpoint() -> bool:
+	# The stud's strength with it: the log is what happened at THAT strength,
+	# and replayed at another the solves in it come out differently.
 	var scene := {"damage": _damage_queue.duplicate(true), "dirty": Array(_dirty),
-			"camera": camera.global_transform, "placed": _placed.duplicate(true)}
+			"camera": camera.global_transform, "placed": _placed.duplicate(true),
+			"stud_times": BrickStrength.times}
 	var bytes := AreaSnapshot.capture(authority.commands, islands, scene).to_bytes()
 	var f := FileAccess.open(CHECKPOINT_PATH, FileAccess.WRITE)
 	if f == null:
@@ -11431,6 +11478,14 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		push_error("[city] checkpoint: %s does not read back" % path)
 		return {}
 	_checkpoint_restored = true
+	# At the stud strength it was saved at (save_checkpoint), in memory: the
+	# setting in Options is not touched, and moving it again takes over.
+	var saved_times := float(snap.scene.get("stud_times", BrickStrength.times))
+	if not is_equal_approx(saved_times, BrickStrength.times):
+		print("[city] checkpoint: saved at stud strength x%.1f, the setting is x%.1f -- loaded at x%.1f" % [
+				saved_times, BrickStrength.times, saved_times])
+		BrickStrength.times = saved_times
+	_stud_times = BrickStrength.times
 	# The builds placed after the city was built, first and in order: the log
 	# names a building by its id, and theirs come after the city's own.
 	for d in snap.scene.get("placed", []):
@@ -11450,7 +11505,7 @@ func _restore_checkpoint(path: String) -> Dictionary:
 			var chunk := registry.materialise(id)
 			if chunk < 0:
 				return -1
-			world.set_tension_per_stud(chunk, 9.3)
+			world.set_tension_per_stud(chunk, BrickStrength.tension())
 			if not toppling.has(id):
 				shown.append(id)
 		var cs := b.chunks()
