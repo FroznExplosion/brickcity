@@ -28,25 +28,24 @@ bone ([joints.md](joints.md) section 5), joined by its joints.
 
 **Figures** are bare all through.
 
-## 3. One lattice per part
+## 3. Studs go on the part's own faces
 
-Every bare part carries a lattice: the nano grid, 4 mm by 4 mm by 1.6 mm, fixed to the part.
-**Every stud, socket and connector on the part sits on it.** That is the whole rule, and it is what
-lets bricks on two faces of one part, or on two parts joined together, line up and bridge.
+Decided 2026-10-15, after two tries at more: **the model's shape is not changed. It is cut into
+parts, and studs are added.** No resizing, no softened edges, no faces moved, no pad under a patch.
 
-| Feature | Where | Rule |
-|---|---|---|
-| stud patch, top | flat or flattened tops: a rail along a body, the top of a handguard | studs on lattice points, a nano stud each |
-| stud patch, side | the flanks of a stock, a body, a limb | the same studs turned on their side, placed as a bracket's side studs are ([README](README.md) section 3): bricks stuck on them still land on the lattice |
-| socket patch, underside | under a stock, a handguard, a forearm | the underside of a brick, so the bottom reads as built and takes a brick from below |
-| connector | where the next part joins | the part's `mount`, or a `socket_<slot>`, on a lattice point |
+| Rule | |
+|---|---|
+| a stud stands square to its face | whichever way the face points: up, sideways, or along a slanted facet. Its foot is on the facet, its axis is the facet's normal |
+| studs come in neat patches | a run of nearly flat facets is one face; a grid of the stud pitch is laid on it, along the gun, and the biggest whole rectangle that fits gets studs |
+| a stud is whole | all of it on the face with a lip round it, and nothing of the gun over it |
+| not everywhere | no studs underneath (sockets go there), none on the ends where parts join, none on a grip or a barrel |
 
-**Studs are moulded into the part.** The part's own face is moved onto the lattice plane and
-the studs stand on it: never a slab laid on the part with studs on the slab.
-
-A patch goes only where it makes sense: where a brick would sit flat, where a hand does not go,
-where a module does not slide. The surface under a patch is made flat to the lattice plane; the
-shape between patches is free.
+**The lattice** (the nano grid fixed to the part: 4 mm by 4 mm by 1.6 mm) still places every mount
+and socket. For studs it is where a face's grid starts, and the grid is then slid to where the
+most studs fit; the lattice's own position wins a tie. So studs on one face are always a stud
+pitch apart, but studs on two different faces line up with each other only where that cost
+nothing. On the first rifle one face in ten kept the lattice. If bricks must bridge two faces or
+two parts, those faces have to be told to keep it, and take fewer studs.
 
 ## 4. Guns are assembled by slot
 
@@ -121,13 +120,12 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
 
-**A bare part is not the model it came from.** Its small details are left out, it is resized
-about its mount to toy proportions, and the hardness is taken off its edges; it stays low-poly.
-
-**Built so far:** [partkit.py](../../tools/brickify/partkit.py), v1, and one build sheet,
+**Built so far:** [partkit.py](../../tools/brickify/partkit.py) and one build sheet,
 [rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
-(barrel, handguard, body, grip, stock), resized and softened, with studs moulded into them, mounts
-and sockets on the lattice, the grip core, a sight adapter and a sight on the carry handle, two
-dressing bricks, and the check. Still to come: one watertight solid per part (fusing the model's
-shells on a voxel grid was tried and broke the open ones), socket patches underneath, the
-interfaces' own shapes, STLs, and a scene the game's gun system loads.
+(barrel, handguard, body, grip, stock) by the model's own loose shells, studs on their faces,
+mounts and sockets on the lattice, the grip core measured, and the check. Earlier tries are in the
+history and were dropped: a pad under each patch (read as a brick stuck on), moving a face onto
+the lattice, resizing and bevelling the parts, and fusing a part's shells on a voxel grid (the
+open ones came out in pieces). Still to come: one watertight solid per part, sockets underneath,
+the interfaces' own shapes, dressing and sights pressed on the new patches, STLs, and a scene the
+game's gun system loads.
