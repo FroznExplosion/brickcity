@@ -129,3 +129,28 @@ the lattice, resizing and bevelling the parts, and fusing a part's shells on a v
 open ones came out in pieces). Still to come: one watertight solid per part, sockets underneath,
 the interfaces' own shapes, dressing and sights pressed on the new patches, STLs, and a scene the
 game's gun system loads.
+
+## 6. What may be published
+
+**A part cut from a bought model is not ours to hand out.** The rifle the kit was built on is from
+Animpic Studio's "POLY - Mega Weapons Kit" (not Synty's). Its licence, read 2026-10-15
+(animpic.studio/license), lets the models go into video games we make, says that modifying a
+model does not make it ours, forbids sharing the models "for re-use by third parties" or as stock
+3D, and needs a written agreement for any product that is not a video game. An STL of a part cut
+from it, with or without studs, is the model shared for re-use. Synty's and the asset stores'
+licences are built the same way.
+
+So:
+
+- **Bought models are stand-ins.** They are for building and testing the kit, and may be in the
+  game as game assets. They are never exported: not as STLs, not from the workshop.
+- **Anything published or printable is made from our own shapes**: our bricks, and bare parts
+  authored here (a drawn profile, a thickness, the kit's studs and connectors). The kit works on
+  any mesh, so nothing else changes.
+- Turning a bought model into bricks does not make it ours either: the result is still made from
+  their model.
+- A real gun's general shape is nobody's asset, but the spec's rule stands: toy proportions, not
+  a likeness of a real firearm.
+
+This is a reading of the licence, not legal advice. For a firm answer on a paid product, ask the
+seller in writing: Animpic's licence allows other products by written agreement.
