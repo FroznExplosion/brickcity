@@ -9,6 +9,9 @@ brick size. The per-part sheets are **generated** from the same code the game ba
 | `plates.md`, `bricks.md`, `tiles.md`, `columns.md`, `brackets.md`, `slopes.md`, `curves.md`, `rounds.md`, `archs.md` | one sheet per family: sizes, stud and tube positions, profiles |
 | `profiles/*.svg` | the cross-section of every shaped part, on a stud/plate grid, corners labelled in mm |
 | `parts.json` | the same numbers for a Blender or build script to read |
+| [nano.md](nano.md) | nano bricks: the half-size grid every figure, mech, gun and small prop is built on |
+| [joints.md](joints.md) | figure and mech joints, the hands that swap on a wrist, the grip and `HELD_SCALE` |
+| `standards.json` | nano.md's and joints.md's numbers for scripts (hand-written, not generated) |
 
 Regenerate after changing any part:
 
@@ -129,9 +132,14 @@ Settled (Sep 2026), and enforced by `tools/scale_probe.gd` part 3:
 | window | 3 courses: sill 2 bricks up, head 5 up | |
 | column | one storey, 18 plates | 57.6 mm |
 
-Our figure's **shape** is our own: big head, slim body, low-poly, no C hands, no stud-topped
-cylinder head, no minifig hip/leg/torso outline. Only its outer size follows section 5, so it
-fits anything built for a figure that size.
+Our figure's **shape** is our own: big head, slim body, low-poly, no stud-topped cylinder head,
+no minifig hip/leg/torso outline. Only its outer size follows section 5, so it fits anything
+built for a figure that size.
+
+**Hands (decided 2026-10-13):** the figure grips with a C-shaped hand, but not the smooth clip:
+ours has visible fingers, joined into one block, and it is one of five rigid shapes swapped whole
+([joints.md](joints.md) section 6). The legal brief lists C-shaped hands among the things to
+avoid; the visible fingers are what set ours apart.
 
 When the storey went from 4 courses to 6, **no building got taller**. Every city shape kept its
 height (or lost up to one storey of it) and got fewer floors: 11 floors became 7. Floors are three

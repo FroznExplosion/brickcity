@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
+  "scale": {
+    "game_m_per_mm": 0.04375,
+    "held_scale": 0.16666667,
+    "held_scale_note": "1/6. Game size of a held item = its nano build x this. Tuned by eye in the game."
+  },
+  "grids": {
+    "full": {"tick": 1.6, "stud_ticks": 5, "plate_ticks": 2, "plates_per_brick": 3,
+             "stud_pitch": 8.0, "plate": 3.2, "brick": 9.6,
+             "stud_d": 4.8, "stud_h": 1.7, "clearance_side": 0.1, "part_prefix": ""},
+    "nano": {"tick": 0.8, "stud_ticks": 5, "plate_ticks": 2, "plates_per_brick": 3,
+             "stud_pitch": 4.0, "plate": 1.6, "brick": 4.8,
+             "stud_d": 2.4, "stud_h": 0.85, "clearance_side": 0.05, "part_prefix": "n_",
+             "of_full": 0.5}
+  },
+  "classes": {
+    "world":  {"grid": "full", "game_scale": 1.0, "print_scale": 1.0, "process": "fdm"},
+    "entity": {"grid": "nano", "game_scale": 1.0, "print_scale": 1.0, "process": "resin"},
+    "held":   {"grid": "nano", "game_scale": "held_scale", "print_scale": 1.0, "process": "resin"}
+  },
+  "sizes": {
+    "figure": {"nano_bricks": 8, "mm": 38.4, "game_m": 1.68},
+    "mech":   {"nano_bricks": 28, "bricks": 14, "mm": 134.4, "game_m": 5.88}
+  },
+  "adapters": {
+    "adapter_1x1":    {"under": "full socket 1x1", "top": "nano studs 2x2", "plates": 1},
+    "adapter_2x2":    {"under": "full socket 2x2", "top": "nano studs 4x4", "plates": 1},
+    "adapter_up_1x1": {"under": "nano sockets 2x2", "top": "full stud 1x1", "plates": 1}
+  },
+  "joint_sizes": {"D2": 1.6, "D3": 2.4, "D4": 3.2, "D6": 4.8, "D8": 6.4},
+  "joint_connectors": {
+    "AXLE":    {"axis": "along the bone", "link": ["AXLE", "HINGE"],
+                "pin_d": 1.0, "pin_len": 1.5, "hole_extra_depth_mm": 0.4, "detent_mm": 0.1},
+    "KNUCKLE": {"axis": "across the bone", "link": ["HINGE"],
+                "pin_d": 1.0, "pin_len": 2.0, "tongue": 1.0, "cheek": 0.5, "barrel_d": 2.0},
+    "BALL":    {"axis": "cone and twist", "link": ["SWIVEL"],
+                "ball_d": 1.0, "neck_d": 0.5, "socket_wrap_deg": 220, "slots": 2},
+    "factors_note": "pin_d, pin_len, tongue, cheek, barrel_d, ball_d, neck_d are multiples of the size's diameter."
+  },
+  "joint_clearance_diameter": {
+    "resin": {"AXLE": 0.10, "KNUCKLE": 0.10, "BALL": 0.05},
+    "fdm":   {"AXLE": 0.25, "KNUCKLE": 0.25, "BALL": 0.15, "min_size": "D6"}
+  },
+  "joint_sweep_margin_nano_ticks": 1,
+  "bone_prefix": "mixamorig_",
+  "figure_joints": {
+    "neck":     {"parent": "Neck", "child": "Head", "connector": "AXLE", "size": "D3",
+                 "axis": "up", "range_deg": [-90, 90], "height_mm": 26.4},
+    "waist":    {"parent": "Hips", "child": "Spine", "connector": "AXLE", "size": "D4",
+                 "axis": "up", "range_deg": [-45, 45], "height_mm": 14.4},
+    "shoulder": {"parent": "Shoulder", "child": "Arm", "sides": true, "connector": "AXLE", "size": "D3",
+                 "axis": "across", "range_deg": [-180, 180], "height_mm": 24.8},
+    "elbow":    {"parent": "Arm", "child": "ForeArm", "sides": true, "connector": "KNUCKLE", "size": "D2",
+                 "axis": "across", "range_deg": [0, 135], "height_mm": 17.6},
+    "wrist":    {"parent": "ForeArm", "child": "Hand", "sides": true, "connector": "AXLE", "size": "D2",
+                 "axis": "along", "range_deg": null, "height_mm": 10.4, "takes": ["hand"]},
+    "hip":      {"parent": "Hips", "child": "UpLeg", "sides": true, "connector": "KNUCKLE", "size": "D3",
+                 "axis": "across", "range_deg": [-90, 45], "height_mm": 14.4},
+    "knee":     {"parent": "UpLeg", "child": "Leg", "sides": true, "connector": "KNUCKLE", "size": "D2",
+                 "axis": "across", "range_deg": [0, 120], "height_mm": 7.2}
+  },
+  "mech_joints": {
+    "ankle":    {"parent": "Leg", "child": "Foot", "sides": true, "connector": "KNUCKLE", "size": "D6",
+                 "axis": "across", "range_deg": [-30, 30], "height_nano_bricks": 2},
+    "knee":     {"parent": "UpLeg", "child": "Leg", "sides": true, "connector": "KNUCKLE", "size": "D8",
+                 "axis": "across", "range_deg": [0, 110], "height_nano_bricks": 8},
+    "hip":      {"parent": "Hips", "child": "UpLeg", "sides": true, "connector": "BALL", "size": "D8",
+                 "cone_deg": 40, "twist_deg": [-30, 30], "height_nano_bricks": 14},
+    "waist":    {"parent": "Hips", "child": "Spine", "connector": "AXLE", "size": "D8",
+                 "axis": "up", "range_deg": null, "height_nano_bricks": 16},
+    "shoulder": {"parent": "Spine", "child": "Shoulder", "sides": true, "connector": "AXLE", "size": "D8",
+                 "axis": "across", "range_deg": [-89, 89], "height_nano_bricks": 18},
+    "arm_yaw":  {"parent": "Shoulder", "child": "Arm", "sides": true, "connector": "KNUCKLE", "size": "D6",
+                 "axis": "up", "range_deg": [-55, 55], "height_nano_bricks": 18},
+    "elbow":    {"parent": "Arm", "child": "ForeArm", "sides": true, "connector": "KNUCKLE", "size": "D6",
+                 "axis": "across", "range_deg": [0, 120], "height_nano_bricks": null},
+    "wrist":    {"parent": "ForeArm", "child": "Hand", "sides": true, "connector": "AXLE", "size": "D6",
+                 "axis": "along", "range_deg": null, "height_nano_bricks": null, "takes": ["hand", "weapon"]},
+    "hatch":    {"parent": "Spine", "child": "Hatch", "connector": "KNUCKLE", "size": "D4",
+                 "axis": "across", "range_deg": [0, 100], "height_nano_bricks": 20}
+  },
+  "hands": {
+    "shapes": ["C", "PINCH", "FLAT", "FIST", "REST"],
+    "frame": "origin at the wrist, +Y to the fingers, +X through the C's hole, the C opens toward +Z",
+    "wrist_size": {"figure": "D2", "mech": "D6"},
+    "finger_groove_min_mm": 0.3
+  },
+  "held_grip": {
+    "section_nano_studs": [1, 2],
+    "min_length_nano_bricks": 3,
+    "sockets": ["socket_grip_0", "socket_grip_1", "socket_muzzle_0"],
+    "pinch_thickness_nano_studs": 1
+  }
+}
