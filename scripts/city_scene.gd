@@ -846,6 +846,7 @@ var arena: WaveDirector
 var _wreck_mode := false
 var _jam_mode := false
 var _drawn_mode := false
+var _ring_mode := false
 var _groups_mode := false
 var _squad_mode := false
 var _mechfall_mode := false
@@ -947,6 +948,7 @@ func _ready() -> void:
 	_wreck_mode = "--wreck" in args
 	_jam_mode = "--jam" in args
 	_drawn_mode = "--drawn" in args
+	_ring_mode = "--ring" in args
 	# `--rooms` was the gate of the interior drawing this replaced, and is the
 	# name other docs and habits still use for "the interiors gate".
 	_groups_mode = "--groups" in args or "--rooms" in args
@@ -1193,6 +1195,8 @@ func _ready() -> void:
 		_run_jam_pass()
 	elif _drawn_mode:
 		_run_drawn_pass()
+	elif _ring_mode:
+		_run_ring_pass()
 	elif _groups_mode:
 		_run_groups_pass()
 	elif _view_mode:
@@ -7141,6 +7145,61 @@ func _run_wreck_pass() -> void:
 ## on this building whole -- so the measure has slack for that.
 const DRAWN_SLACK := 0.02
 
+## A blast's ring, to look at (Docs/CollapseNext.md 1.10 (3)): one rocket into
+## a wall, a picture a tenth of a second on -- the bricks round the hole in the
+## air -- and one half a second on, as they fall. The counts are
+## tools/blast_ring_probe.gd's; this is what it looks like, and that a city's
+## blast goes that way.
+func _run_ring_pass() -> void:
+	print("[ring] a blast throws out the ring round its middle")
+	var b: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build():
+			continue
+		if b == null or absi(c.recipe.courses - 30) < absi(b.recipe.courses - 30):
+			b = c
+	var fx: float = b.recipe.footprint_x * STUD
+	var face: Vector3 = b.xform * Vector3(fx * 0.5, 5.0, 0.0)
+	var out: Vector3 = (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized()
+	var side: Vector3 = (b.xform.basis * Vector3(1.0, 0.0, 0.0)).normalized()
+	camera.global_position = face + out * 9.0 + side * 5.0 + Vector3(0.0, 1.0, 0.0)
+	camera.look_at(face + Vector3(0.0, -1.0, 0.0), Vector3.UP)
+	# The pictures are of the wall: the readout would be across the hole.
+	stats_label.visible = false
+	await _frames(90)
+	_gate_ok("building %d is bricks" % b.id, b.is_materialised())
+	var alive0 := world.get_alive_block_count(b.chunk)
+	var census0: Array = islands.blast_census.duplicate()
+	_blast(face - out * 0.3, 2.0)
+	var waited := 0
+	while islands.blast_census[0] == census0[0] and waited < 120:
+		await get_tree().physics_frame
+		waited += 1
+	var killed: int = islands.blast_census[0] - int(census0[0])
+	var thrown: int = islands.blast_census[2] - int(census0[2])
+	var core: int = islands.blast_census[1] - int(census0[1])
+	_gate_ok("the blast killed bricks, and the ones round its middle are in the air",
+			killed > 0 and thrown > 0 and thrown + core == killed and islands.crumb_count >= thrown,
+			"%d killed: %d in the core, %d thrown; %d crumb(s) drawn" % [
+				killed, core, thrown, islands.crumb_count])
+	_gate_ok("and the building has lost every one of them, thrown or not",
+			alive0 - world.get_alive_block_count(b.chunk) >= killed,
+			"%d fewer alive" % (alive0 - world.get_alive_block_count(b.chunk)))
+	print("[ring]   %d killed: %d in the core, %d thrown; %d crumb(s) drawn" % [
+			killed, core, thrown, islands.crumb_count])
+	await _frames(6)
+	await _save("city_ring_0")
+	await _frames(24)
+	await _save("city_ring_1")
+	for t in 150:
+		await get_tree().physics_frame
+	_gate_ok("two and a half seconds on the crumbs have gone", islands.crumb_count == 0,
+			"%d left" % islands.crumb_count)
+	_check_log_replays()
+	print("[ring] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
 func _run_drawn_pass() -> void:
 	print("[drawn] a building draws the bricks it has, and none it has lost")
 	# The recipe tower nearest thirty courses: the big city has none in the
@@ -8815,6 +8874,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 				if hit_frame.is_empty():
 					continue
 				took_bricks = true
+				islands.throw_killed(b.frames[fi], hit_frame, point, radius, chip_hp > 0)
 				if chip_hp > 0:
 					_nav_chip_broke(point, radius)
 				b.hit = true
@@ -8824,6 +8884,10 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		if killed.is_empty():
 			continue
 		took_bricks = true
+		# The middle of a blast is gone; the ring round it is thrown out, as
+		# crumbs (IslandManager.BLAST_CORE). Drawn only: the bricks are dead in
+		# the grid either way, and the log says what it always said.
+		islands.throw_killed(chunk, killed, point, radius, chip_hp > 0)
 		if chip_hp > 0:
 			_nav_chip_broke(point, radius)
 		b.hit = true
@@ -11312,6 +11376,8 @@ func _run_shot_pass() -> void:
 	for line in islands.body_census_lines():
 		print("[city]   bodies " + line)
 	print("[city]   " + islands.hit_census_line())
+	print("[city]   " + islands.blast_census_line())
+	print("[city]   " + islands.crumb_cost_line())
 	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms; landings snapped %d time(s), %d on a storey line" % [
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],

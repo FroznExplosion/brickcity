@@ -1404,6 +1404,38 @@ const CRUMB_SPIN := 5.0
 const CRUMBS_MAX := 1500
 const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
 
+## **A blast destroys the middle of what it reaches and throws the rest out**
+## (Docs/CollapseNext.md 1.10 (3); BrickFailure.md 5 -- bricks separate, they do
+## not vanish). Every brick a blast killed was there in one frame and not in the
+## next. Now only those whose middle is within this much of its radius are --
+## that is the round going through -- and the ring round them leaves as crumbs,
+## thrown from the hole (throw_killed).
+##
+## The STRUCTURE is what it was to the brick: they are dead in the grid the
+## moment the blast lands, so the damage log, a replay, a save and a client's
+## world are unchanged. Knocked loose instead, each would be a group of one for
+## the next solve to find, a command to record and a grid to cut out and free,
+## thirty times a blast, to end as the same crumb (DEBRIS_MAX_BLOCKS).
+const BLAST_CORE := 0.5
+## m/s off the face at most (CRUMB_KICK is a brick that only let go), and up to
+## three fifths of it again away from the middle of the blast.
+const BLAST_THROW := 3.0
+## m/s for the brick a gun's last round knocks off: enough to be out of the wall
+## before it has sunk into the course under it.
+const CHIP_THROW := 1.8
+## Crumbs one blast throws at most: past it, every so-manyth brick of the ring.
+const BLAST_CRUMBS_MAX := 48
+## A thrown brick that is out past the face of the hole before it has dropped
+## this far below what is under the hole comes down outside (_add_crumbs): a
+## course, so the bottom row of a ring leaves over the sill it stood on.
+const CRUMB_SILL := 0.45
+## Structural bricks blasts and guns have killed: all of them; those in a core;
+## those thrown as crumbs; and those not drawn -- too far, out of view, in a
+## wind, no room (CRUMBS_MAX, BLAST_CRUMBS_MAX).
+var blast_census := [0, 0, 0, 0, 0, 0, 0]
+## What throwing them cost: ms all told, and the worst blast.
+var blast_throw_ms := [0.0, 0.0]
+
 class Crumbs:
 	var mmi: MultiMeshInstance3D
 	var pos := PackedVector3Array()
@@ -1450,6 +1482,8 @@ var crumbled := 0            ## pieces that went as crumbs
 var crumb_bricks := 0        ## bricks that were drawn as crumbs
 var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
 var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
+var crumb_update_ms := 0.0   ## _update_crumbs, all told
+var crumb_peak := 0          ## the most drawn at once
 var crumble_worst_ms := 0.0  ## the slowest single _crumble
 var crumble_parts := [0.0, 0.0, 0.0]  ## ms, all told: drawing, cutting out, deciding
 var _wind := {}              ## who -> [centre, radius, until msec]: windy()
@@ -1533,25 +1567,129 @@ func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3,
 	return CRUMB_DRAWN if shown else CRUMB_GONE
 
 
-func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vector3) -> void:
+## What a blast or a gun has just killed in `source`, thrown out of it
+## (BLAST_CORE). `killed` is still in the grid -- dead, not yet cut out -- which
+## is where each brick's place, size and colour are read from. `at` and `radius`
+## are the blast's, in the world; `chip` is a gun's wear, which destroys nothing
+## and knocks every brick it finishes off whole. `linear` is what the source was
+## doing, for a piece on the move. Draws; changes nothing in the world.
+func throw_killed(source: int, killed: PackedInt32Array, at: Vector3, radius: float,
+		chip := false, linear := Vector3.ZERO) -> void:
+	if killed.is_empty():
+		return
+	var t0 := Time.get_ticks_usec()
+	_throw_killed(source, killed, at, radius, chip, linear)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	blast_throw_ms[0] += ms
+	blast_throw_ms[1] = maxf(blast_throw_ms[1], ms)
+
+
+func _throw_killed(source: int, killed: PackedInt32Array, at: Vector3, radius: float,
+		chip: bool, linear: Vector3) -> void:
+	var xf: Transform3D = world.get_chunk_transform(source)
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var core := 0.0 if chip else radius * BLAST_CORE
+	var ring := PackedInt32Array()
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	var bricks := 0
+	for id in killed:
+		# Furniture is not thrown: a lone block of it is a blank cube (_crumble).
+		if world.is_block_decorative(source, id):
+			continue
+		var t: Array = world.get_block_ticks(source, id)
+		if t.is_empty():
+			continue
+		bricks += 1
+		var p: Vector3 = xf * ((Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m)
+		if p.distance_to(at) < core:
+			continue
+		ring.append(id)
+		lo = lo.min(p)
+		hi = hi.max(p)
+	blast_census[0] += bricks
+	blast_census[1] += bricks - ring.size()
+	if ring.is_empty():
+		return
+	# This machine's own, as every crumb is: near enough, in view, out of the
+	# wind (a tornado's chips are the tornado's to draw), and room for them.
+	var box := AABB(lo, hi - lo).grow(0.25)
+	var dist := INF
+	if camera != null and is_instance_valid(camera):
+		dist = _distance_to_box(box, camera.global_position)
+	if dist > SMALL_KEEP_RANGE and dist < INF:
+		blast_census[3] += ring.size()
+		return
+	if not _box_seen(box):
+		blast_census[4] += ring.size()
+		return
+	if _in_wind(box):
+		blast_census[5] += ring.size()
+		return
+	if ring.size() > BLAST_CRUMBS_MAX:
+		# A big charge: every so-manyth brick, all the way round.
+		var step := ceili(float(ring.size()) / float(BLAST_CRUMBS_MAX))
+		var some := PackedInt32Array()
+		for i in range(0, ring.size(), step):
+			some.append(ring[i])
+		blast_census[6] += ring.size() - some.size()
+		ring = some
+	if crumb_count + ring.size() > CRUMBS_MAX:
+		crumbs_over += ring.size()
+		blast_census[6] += ring.size()
+		return
+	_add_crumbs(source, ring, box, linear, at, CHIP_THROW if chip else BLAST_THROW)
+	blast_census[2] += ring.size()
+
+
+func blast_census_line() -> String:
+	return "bricks blasts and guns killed: %d -- %d in a core and gone, %d thrown out as crumbs; not drawn: %d too far, %d out of view, %d in a wind, %d for want of room; throwing them %.1f ms all told, %.2f the worst blast" % [
+			blast_census[0], blast_census[1], blast_census[2], blast_census[3], blast_census[4],
+			blast_census[5], blast_census[6], blast_throw_ms[0], blast_throw_ms[1]]
+
+
+func crumb_cost_line() -> String:
+	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told, %.2f the worst tick" % [
+			crumb_peak, crumb_update_ms, crumb_worst_ms]
+
+
+## `burst` and `throw`: thrown from a blast at `burst` (throw_killed) -- `throw`
+## m/s off the face at most instead of CRUMB_KICK, and each brick its own way
+## from the middle of the blast as well.
+func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vector3,
+		burst := Vector3.ZERO, throw := 0.0) -> void:
 	var xf: Transform3D = world.get_chunk_transform(source)
 	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
 	var centre := box.get_center()
 	# Off the face it came from: away from the middle of its source's grid.
 	var mid: Vector3 = xf * (Vector3(world.get_chunk_dims(source)) * BrickWorld.get_cell_size() * 0.5)
 	var out := Vector3(centre.x - mid.x, 0.0, centre.z - mid.z)
-	var kick := out.normalized() * randf_range(0.3, 1.0) * CRUMB_KICK \
-			if out.length() > 0.01 else Vector3.ZERO
+	var out_dir := out.normalized() if out.length() > 0.01 else Vector3.ZERO
+	# A blast's are out of the wall before they have dropped a brick's height:
+	# slower, they sank through the wall under the hole on the way.
+	var kick := out_dir * (randf_range(0.6, 1.0) * throw if throw > 0.0
+			else randf_range(0.3, 1.0) * CRUMB_KICK)
 	# Where it comes down: one ray, from where the kick takes it, down onto the
 	# ground, a building or settled wreckage -- not onto anything still falling.
 	var floor_y := -INF
-	if is_inside_tree():
-		var from := centre + kick * 0.4
-		var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0,
-				CRUMB_FLOOR_MASK)
-		var hit := get_world_3d().direct_space_state.intersect_ray(q)
-		if not hit.is_empty():
-			floor_y = (hit.position as Vector3).y
+	# A blast's ring reaches metres into a building, and is thrown harder: one
+	# floor for all of it had the bricks that cleared the wall lying in the air
+	# beside the hole, at the height of the storey's floor. So two rays: what
+	# is under the hole, and what is under the air a metre past its face. A
+	# brick that is out past the face before it has dropped CRUMB_SILL below
+	# the first comes down on the second.
+	var floor_past := -INF
+	var face := INF
+	var g := 0.0
+	if throw > 0.0:
+		floor_y = _crumb_floor(Vector3(centre.x, box.position.y, centre.z))
+		if out_dir != Vector3.ZERO:
+			var reach := (absf(out_dir.x) * box.size.x + absf(out_dir.z) * box.size.z) * 0.5
+			face = centre.dot(out_dir) + reach
+			floor_past = _crumb_floor(Vector3(centre.x, box.end.y, centre.z) + out_dir * (reach + 1.0))
+		g = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
+	else:
+		floor_y = _crumb_floor(centre + kick * 0.4)
 	var frame_basis := xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
 	for id in block_ids:
@@ -1564,19 +1702,48 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
 		var cr := _crumb_set(size.snapped(Vector3.ONE * 0.001))
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		cr.pos.append(xf * local)
-		cr.vel.append(linear + kick + Vector3(randf_range(-1.0, 1.0), randf_range(0.0, 1.0),
-				randf_range(-1.0, 1.0)) * CRUMB_SCATTER)
+		var from_blast := Vector3.ZERO
+		if throw > 0.0:
+			var away: Vector3 = xf * local - burst
+			if away.length() > 0.01:
+				from_blast = away.normalized() * throw * randf_range(0.2, 0.6)
+		var at: Vector3 = xf * local
+		var vel := linear + kick + from_blast + Vector3(randf_range(-1.0, 1.0),
+				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER
+		var lands_on := floor_y
+		if face < INF:
+			var speed_out := vel.dot(out_dir)
+			var to_face := face - at.dot(out_dir)
+			if floor_y == -INF or to_face <= 0.0:
+				lands_on = floor_past
+			elif speed_out > 0.05:
+				# How far it has dropped by the time it is out past the face.
+				var clear := to_face / speed_out
+				var foot := at.y - size.y * 0.5 + vel.y * clear - 0.5 * g * clear * clear
+				if foot > floor_y - CRUMB_SILL:
+					lands_on = floor_past
+		cr.pos.append(at)
+		cr.vel.append(vel)
 		cr.base.append(frame_basis)
 		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
 		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
 		cr.born.append(now)
 		cr.landed.append(0)
-		cr.floor_y.append(floor_y)
+		cr.floor_y.append(lands_on)
 		cr.half_h.append(size.y * 0.5)
 		cr.colour.append(BrickWorld.get_filament_colour(world.get_block_colour(source, id)))
 		crumb_count += 1
 		crumb_bricks += 1
+
+
+## The first thing under `from` a crumb stops on, or -INF.
+func _crumb_floor(from: Vector3) -> float:
+	if not is_inside_tree():
+		return -INF
+	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0,
+			CRUMB_FLOOR_MASK)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	return (hit.position as Vector3).y if not hit.is_empty() else -INF
 
 
 func _crumb_set(key: Vector3) -> Crumbs:
@@ -1644,7 +1811,10 @@ func _update_crumbs() -> void:
 			var b := Basis(cr.axis[j], cr.rate[j] * float(turned) * dt) * cr.base[j]
 			mm.set_instance_transform(j, Transform3D(b.scaled(Vector3(s, s, s)), cr.pos[j]))
 			mm.set_instance_color(j, cr.colour[j])
-	crumb_worst_ms = maxf(crumb_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	crumb_worst_ms = maxf(crumb_worst_ms, ms)
+	crumb_update_ms += ms
+	crumb_peak = maxi(crumb_peak, crumb_count)
 
 
 ## Should this piece never become a body at all? Decided BEFORE anything is
@@ -2825,6 +2995,10 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	if chip <= 0:
 		_record(e)
 	isl.shed_cause = "hit"
+	# Thrown out of it, all but the middle (BLAST_CORE) -- and, like the box
+	# below, while their ids still mean these bricks.
+	throw_killed(isl.chunk, killed, world_point, radius, chip > 0,
+			Vector3.ZERO if isl.settled else isl.body.linear_velocity)
 	# Where those bricks were, before the piece is cut and their ids mean
 	# another chunk's bricks.
 	var gone_box: AABB = isl.chunk_transform() * world.get_blocks_box(isl.chunk, killed)

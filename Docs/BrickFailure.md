@@ -166,6 +166,10 @@ the wreckage — and it can be picked up, shot again, or printed.
 That also matters for the game's premise: every brick on screen is a real part. Deleting bricks to
 make a collapse look right would quietly break that.
 
+**2026-10-13:** a blast was the last thing that did -- every brick in its radius was there in one
+frame and not in the next. Now only the bricks in the middle of it are; the ring round them is
+thrown out and falls (`IslandManager.throw_killed`, [CollapseNext.md](CollapseNext.md) §1.10 (3)).
+
 ---
 
 ## 6. Consequences for the rest of the design

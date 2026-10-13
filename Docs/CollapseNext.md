@@ -14,11 +14,11 @@ is real LEGO breaking apart ([BrickFailure.md](BrickFailure.md)); a rule that is
 by that test is not taken.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
-`--wreck`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
+`--wreck`, `--ring`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`barrage_probe.gd`, `stud_strength_probe.gd`, `storey_probe.gd`,
+`barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -37,8 +37,11 @@ In the order to do it. Each line points at where the item is written up.
 3. ~~Stud strength: try it stronger, then tune by feel~~ (user, 2026-10-13) -- four times what
    it was, and a slider in Options to move it. §1.10 (6).
 
+4. ~~A blast loosens the ring round it instead of deleting it~~ -- the middle of a blast is
+   gone and the ring round it is thrown out as crumbs; the structure and the log are what they
+   were. §1.10 (3).
+
 **Next, the brick model (§1.10)**
-4. A blast loosens the ring round it instead of deleting it. §1.10 (3).
 5. A snap goes at the weakest seam near the contact, not the nearest storey line. §1.10 (5).
 6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
 
@@ -51,6 +54,14 @@ In the order to do it. Each line points at where the item is written up.
    put to sleep carry no interior; a rolled gun swaps to its card at 12 m in one frame.
 10. Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching
     (AIVehicles.md, AI.md) sit with these rules -- they damage buildings by their own paths.
+
+**Proposed, the user's call**
+17. Bricks that stay where they fall. A crumb is gone a second and a half after it comes loose
+    (`CRUMB_LIFE_MS`), so a hole has nothing lying under it. One that has landed costs nothing
+    to keep -- it is an instance in a MultiMesh that no longer moves -- so a pool of landed
+    bricks (a few thousand, the oldest taken first, none where a piece comes to rest on them)
+    would leave the heap a real wall leaves. They would be drawn only: nothing to stand on,
+    hide behind or pick up. Not started.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
@@ -243,11 +254,61 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    that takes what it stands on wakes it; what stood on the bricks taken wakes; cut clean
    through, it is two and awake), `barrage_probe` 4, `snapshot_probe` 48 (a shot leaves the
    piece whole, so it is saved both awake and asleep), and the rest of the list unchanged.
-3. **A blast deletes every brick in its radius.** Bricks separate, they do not vanish
-   (BrickFailure §5): the middle of a blast may be gone, the ring round it should come loose --
-   as crumbs, which are drawn and cost no body (`_crumble`). Check what `separate_near` already
-   does for buildings before changing anything.
-4. **Nothing is ever pushed.** There are no impulses (`DEBRIS_GRAVITY`'s note): a blast beside a
+3. ~~A blast deletes every brick in its radius~~ -- **done 2026-10-13: the middle goes, the
+   ring round it is thrown out.** Of the bricks a blast kills, those whose middle is within half
+   its radius (`IslandManager.BLAST_CORE`) are gone -- the round going through -- and the rest
+   leave as crumbs: drawn, thrown off the face (`BLAST_THROW`, 3 m/s at most) and each its own
+   way from the middle of the blast, falling, gone a second and a half on
+   (`IslandManager.throw_killed`, from `CityScene._apply_blast` for a building and `damage` for a
+   piece). A gun's wear destroys nothing: the brick the last round finishes is knocked off whole.
+   **The structure is what it was, to the brick.** They are dead in the grid the moment the blast
+   lands, as before, so the damage log, a replay, a save and a client's world do not change.
+   *Why not knocked loose and left for the solve* (what this item first said, and what
+   `separate_near` does: without `peel`, every brick in the ball is "joined to nothing"; a
+   landing uses `peel`, which cuts a clump off by its underside): a brick joined to nothing is a
+   group of one, and a group of eight or fewer is crumbled where it comes loose
+   (`DEBRIS_MAX_BLOCKS`). So the same brick ends as the same crumb -- after the next solve has
+   found it, a DETACH has been written for it, and a grid has been cut out for it and freed,
+   a dozen or two times a blast. It is drawn as the crumb straight away instead.
+   *Where they come down:* two rays a blast, not one -- what is under the hole, and what is under
+   the air a metre past its face; a brick comes down on the second if it is out past the face
+   before it has dropped a course below the first (`CRUMB_SILL`). With one floor for all of them
+   the bricks that cleared the wall lay in the air beside the hole, at the storey's floor.
+   *This machine's own, as every crumb is:* none drawn past 60 m, out of view, in a tornado's
+   wind (what it tears off is the tornado's to show), or past `CRUMBS_MAX`; a big charge throws
+   every so-manyth brick of its ring, 48 at most (`BLAST_CRUMBS_MAX`).
+   *Counted* (`barrage_probe`, four towers under 3,840 blasts of 1.3 m): 5,744 bricks killed --
+   **345 in a core, 5,390 thrown, 9 not drawn**. A brick is big beside a blast (a 2x4 is 1.4 m
+   long; the core of a 1.3 m blast is 0.65 m), so few have their middle in one: nineteen in
+   twenty of the bricks a blast takes now leave it in one piece.
+   *Left as it was:* furniture a blast kills is gone (a lone block of it is a blank cube); what
+   fire burns out is gone; a client draws none of it (§1.7, with every other crumb). **And a
+   crumb is gone in a second and a half** -- thrown out, the bricks still do not lie where they
+   fell. A heap that stays is §0's item 17.
+   **Timed 2026-10-13** (`--big --shot`, three alternated pairs on a quiet machine -- no editor,
+   no other Godot before or after any run -- one windowed run at a time; 87 C at the peak, never
+   held back):
+
+   | | frames mean, ms | of 906 over 33.3 ms | ticks over 25 ms |
+   |---|---|---|---|
+   | ring not thrown | 18.6, 17.8, 18.2 -- **18.2** | 31, 36, 20 -- **29** | 18, 12, 16 |
+   | thrown | 18.0, 17.8, 18.1 -- **18.0** | 46, 23, 26 -- **32** | 13, 12, 14 |
+
+   No difference to be seen -- **and that pass is not where one would show**: its blasts land
+   far from its camera, and of the 3,100 bricks they kill it draws 70 (2,800 are too far or out
+   of view). What it costs where they ARE drawn is counted in `barrage_probe`, camera 28 m off,
+   240 blasts a second for sixteen seconds: **throwing 5,390 bricks took 105 ms -- 0.02 ms a
+   brick, 1.4 ms the worst blast** (48 bricks, or the first of a size, which makes its mesh) --
+   and moving every crumb there was took 0.4 ms a tick on average, 1.6 ms at the worst, with 944
+   in the air at once. A rocket a second is twenty crumbs.
+   *Tests:* `tools/blast_ring_probe.gd` 19 (the grid is unchanged by the throw; ring and core
+   by count; where they start and which way they go; fallen and gone; a blast in the air; far,
+   unseen, wind, a big charge; a gun's last round; a piece in the street, which stays at rest),
+   `barrage_probe` 6 (the count above adds up; what throwing them costs), and
+   `city.tscn -- --ring` (4), which writes `shots/city_ring_0.png` and `_1.png` -- a tenth and
+   half a second after one rocket.
+4. **Nothing is ever pushed.** (2026-10-13: the bricks a blast kills are thrown now, as crumbs
+   -- (3). A piece still is not.) There are no impulses (`DEBRIS_GRAVITY`'s note): a blast beside a
    loose piece wakes it and leaves it where it is, and a landing never bounces (friction 1,
    bounce 0). Light plastic is thrown by a blast and clatters. A feel change, and it costs
    settling time -- after 1 and 2, when less is moving.
