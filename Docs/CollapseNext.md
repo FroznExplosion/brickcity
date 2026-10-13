@@ -6,8 +6,12 @@ to do it**, with the evidence for each and how to tell it is fixed. What was bui
 a second" on); the user's priorities are the ones reported in play — lag on the first hit, a pause
 before anything falls, things hanging in mid-air, things drawn that are not there.
 
-Last updated **2026-10-07**. First written 2026-10-03; items keep their numbers, because commits
+Last updated **2026-10-13**. First written 2026-10-03; items keep their numbers, because commits
 cite them ("CollapseNext.md 1.1"), and a finished one is struck, not removed.
+
+**The test for a collapse rule (user, 2026-10-13): is that what a real brick model does?** The aim
+is real LEGO breaking apart ([BrickFailure.md](BrickFailure.md)); a rule that is faster and wrong
+by that test is not taken.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
 `--wreck`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
@@ -17,6 +21,45 @@ its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
+
+---
+
+## 0. Everything that is left, in one list (2026-10-13)
+
+In the order to do it. Each line points at where the item is written up.
+
+**Being done**
+1. **A loose piece is a rigid chunk** -- never stress-solved; it parts where a hit cuts it and
+   where a landing snaps it. §1.10 (1).
+2. **Wreckage at rest stays at rest when it is shot** -- woken only if the hit cut it in two or
+   took what it rests on. §1.10 (2).
+
+**Next, the brick model (§1.10)**
+3. **Stud strength: try it stronger, then tune by feel** (user, 2026-10-13). §1.10 (6).
+4. A blast loosens the ring round it instead of deleting it. §1.10 (3).
+5. A snap goes at the weakest seam near the contact, not the nearest storey line. §1.10 (5).
+6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
+
+**Left over from earlier lists**
+7. Single bricks spraying off pieces (§1.3) -- expected to go with item 1; check, then strike.
+8. A queued blast in `--shot` hits pieces that came loose after it was fired: decide whether it
+   should, or have the pass fire its blasts at once (§3, last point).
+9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): furniture drawn on wreckage is not turned
+   to bricks when the wreckage is hit; a written-off piece leaves no debris; pieces the cap has
+   put to sleep carry no interior; a rolled gun swaps to its card at 12 m in one frame.
+10. Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching
+    (AIVehicles.md, AI.md) sit with these rules -- they damage buildings by their own paths.
+
+**Waiting on something else**
+11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
+12. Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status` (§4) -- needs the main
+    folder's uncommitted `Docs/Status.md` committed first.
+
+**Tests that are red or flicker (§4)**
+13. `--walk`: one check, the debug camera's walker does not duck under a beam.
+14. `--groups --programs`: one check, boxes drawn over a floor that has gone for a tick.
+15. `--jam --big`: about one run in six, a small piece resting on one still creeping.
+16. `--play`: the pawn's duck-under check, about one run in twelve.
 
 ---
 
@@ -180,7 +223,10 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    the building 44 times weaker for its weight than the toy (BrickFailure §4.5): a hanging section
    drops where on a table it would hold. That was chosen for the look. If the model is the toy
    itself, the number goes up and far less comes off a damaged building by itself. One constant
-   (`set_tension_per_stud`); a decision, and it changes what "hanging in mid-air" looks like.
+   (`set_tension_per_stud`), and it changes what "hanging in mid-air" looks like.
+   **Decided 2026-10-13 (user): try it stronger, and expect to tune it by feel afterwards.** So
+   it becomes one named number in one place, with the toy's value and the scaled one beside it,
+   and the first try is by eye in play, not by a pass.
 
 ### Done since, not from this list
 * **Storey by storey** (d560a66, 2026-10-05): `BrickWorld.gravity_check` — a storey that cannot
