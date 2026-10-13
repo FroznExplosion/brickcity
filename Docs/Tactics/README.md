@@ -76,6 +76,11 @@ How the enemy chooses what to do, authored as odds rather than code.
   (`derived.mech`); `Mech.set_type` applies them through `MechLayers`, which is how a
   mech is killed (`Docs/AIRoster.md` 4.2; `tools/mech_layers_probe.gd`).
 
+- **Mechs are fielded:** every mech recipe is `built`, and a commander buys one by its
+  recipe as support (`Docs/AIRoster.md` RO11, third part). A mech whose attack is
+  melee brings the fact `we_melee`, which sends it to close in and punch and never
+  to stand off and fire.
+
 - **A mech's moves:** the moment `mech_fight` and the facts "Mech against mech" are a
   mech's own page of the casebook. `TacticsSense.read_mech` reads them,
   `BookCombatPolicy.decide_mech` rolls, and `MechBrain` does it (stand off, close in,

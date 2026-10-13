@@ -81,6 +81,21 @@ var lanes := {}
 ## with no friendly commander.
 func in_lane(team: int, p: Vector3) -> bool:
 	return lanes.has(team) and (lanes[team] as Callable).call(p)
+
+
+## Is `p`, or anywhere `margin` round it, in a lane? For a place a soldier means
+## to GO to and stand: one picked on a lane's very edge has it drift in -- three
+## of them, and their squad is called back out by its commander the moment it
+## has reached the fight's flank (ally_probe).
+func near_lane(team: int, p: Vector3, margin := 2.5) -> bool:
+	if not lanes.has(team):
+		return false
+	var f := lanes[team] as Callable
+	for d in [Vector3.ZERO, Vector3(margin, 0.0, 0.0), Vector3(-margin, 0.0, 0.0),
+			Vector3(0.0, 0.0, margin), Vector3(0.0, 0.0, -margin)]:
+		if f.call(p + d):
+			return true
+	return false
 ## Every engage decision taken, for imitation data (CombatPolicy): {t, who,
 ## obs, tactic, policy}. The newest DECISIONS_KEPT.
 var decisions: Array[Dictionary] = []

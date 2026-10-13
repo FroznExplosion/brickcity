@@ -77,6 +77,9 @@ var gun: GunController
 ## What it is (Roster): its recipe, the casebook facts it brings, the name over it.
 var type_id := ""
 var type_facts: Array = []
+## A recipe whose attack is melee: its arm gun is never fired (MechBrain._fire);
+## it closes and punches, as the casebook's "we_melee" has it.
+var no_gun := false
 ## What everybody else sees and shoots at (make_target): a Pawn that does not
 ## walk -- the motor moves this body -- but has a chest, an eye, a side and this
 ## mech's health, so soldiers, flyers and other mechs sense and target a mech as
@@ -210,6 +213,7 @@ func set_type(id: String, roster: Roster) -> void:
 		return
 	type_id = id
 	type_facts = roster.facts(id).duplicate()
+	no_gun = str(d.get("attack", "")) == "melee"
 	var keep := layers.services if layers != null else null
 	if layers != null:
 		health.damage_filter = Callable()

@@ -255,6 +255,8 @@ built units, the budget is points. Still to come, with the first vehicle:
 4. **Transport helicopter** on the height field; roof insertion through the survey.
 5. **Attack helicopter**, **strike plane** — fire support the commander calls on a point.
 6. **Boats** once the sea's surface is a map (Water.md).
-7. **Enemy mech** — AIPlan P7, on the same seat and squad machinery.
+7. **Enemy mech** — AIPlan P7, on the same seat and squad machinery. *(Built: a soldier is
+   its pilot (AIRoster.md RO8), Firefight drops one in with its heavy waves, and a commander
+   buys one of the roster's as support (AIRoster.md RO11, third part).)*
 
 Each step is a unit with `built = true` in `UnitCatalog` and a gate in the arena.
