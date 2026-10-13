@@ -13,6 +13,10 @@ extends "res://tools/collapse_probe.gd"
 ## where a landing snaps it, and is never stress-solved. And one at rest that
 ## is shot stays at rest unless the shot cut it in two or took what it stood on.
 ##
+## And what the blasts kill is thrown out, all but the middle of each
+## (IslandManager.BLAST_CORE; the cases are tools/blast_ring_probe.gd): here it
+## is counted over a collapse, with what throwing it costs.
+##
 ## These are counts over a collapse, not one case: no single piece could be
 ## built that the old stress solve failed (float_probe has the cases, and they
 ## pass either way), yet over a barrage it made a body of a hit on a piece that
@@ -57,6 +61,8 @@ func _run() -> void:
 	var isl: IslandManager = city.islands
 	print("  --   %s" % isl.hit_census_line())
 	print("  --   %s" % city.stud_census_line())
+	print("  --   %s" % isl.blast_census_line())
+	print("  --   %s" % isl.crumb_cost_line())
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,
@@ -67,6 +73,21 @@ func _run() -> void:
 	_ok("some hits found wreckage at rest, and more of them left it at rest than woke it",
 			int(rest[0]) > 0 and isl.rest_hits_kept > isl.rest_hits_woke,
 			"%d at rest: %d left at rest, %d woke" % [int(rest[0]), isl.rest_hits_kept, isl.rest_hits_woke])
+	# What the blasts killed: the middle of each gone, the ring round it thrown
+	# out as crumbs where this machine could see it (IslandManager.BLAST_CORE).
+	var bc: Array = isl.blast_census
+	var undrawn := int(bc[3]) + int(bc[4]) + int(bc[5]) + int(bc[6])
+	_ok("the bricks the blasts killed are all accounted for, and most were thrown out, not gone in a core",
+			int(bc[0]) > 500 and int(bc[1]) + int(bc[2]) + undrawn == int(bc[0])
+			and int(bc[2]) * 2 > int(bc[0]),
+			"%d killed: %d in a core, %d thrown, %d not drawn" % [bc[0], bc[1], bc[2], undrawn])
+	# About 0.02 ms a brick and 1.5 ms the worst blast (48 bricks, or the first
+	# of a size, which makes its mesh), 2026-10-13; the lines are well clear of
+	# both, for a machine with other work on.
+	_ok("and throwing them is a small part of a blast",
+			isl.blast_throw_ms[1] < 5.0 and isl.blast_throw_ms[0] < float(bc[2]) * 0.08,
+			"%.1f ms for %d bricks, %.2f ms the worst blast" % [
+				isl.blast_throw_ms[0], int(bc[2]), isl.blast_throw_ms[1]])
 	# And when the firing stops, nothing is left moving or hanging: everything
 	# settles (the watchdog and support_gone are what say so, not this probe).
 	var moving := 0
