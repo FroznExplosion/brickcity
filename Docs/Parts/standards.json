@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
   "scale": {
     "game_m_per_mm": 0.04375,
@@ -359,14 +359,14 @@
     "finger_groove_min_mm": 0.3
   },
   "held_grip": {
-    "core_d": 4.8,
+    "core_d": 3.2,
     "core_sides": 8,
     "min_length_nano_bricks": 3,
-    "figure_print_bar_d": 3.2,
     "holds": [
       "hold_0",
       "hold_1"
-    ]
+    ],
+    "core_note": "the bar a brick figure's C hand grips: the pin's size"
   },
   "joint_pin": {
     "d": 3.2,
@@ -453,7 +453,12 @@
     "rail": {
       "slot": "sight",
       "connector": "stud grid",
-      "shape": "a row of nano studs: any top patch"
+      "shape": "a row of nano studs a sight presses onto: a flat top's, or an adapter's"
+    },
+    "sight.handle": {
+      "slot": "sight",
+      "connector": "stud grid",
+      "shape": "the short row of studs moulded into the top of a carry handle"
     }
   },
   "gun_adapters": {
@@ -469,18 +474,27 @@
     "adapter_mag_wide_narrow": {
       "mount": "mag.wide",
       "socket": "mag.narrow"
+    },
+    "adapter_handle_rail": {
+      "mount": "sight.handle",
+      "socket": "rail",
+      "is": "a strip on the handle's studs with a rail on top"
+    },
+    "adapter_gooseneck": {
+      "mount": "sight.handle",
+      "socket": "rail",
+      "is": "planned: reaches forward and down from the handle to a rail over the handguard"
     }
   },
   "gun_platforms": {
-    "note": "A platform is a body's set of sockets. Bodies of one platform take the same parts. Letters until they have names.",
+    "note": "A platform is a body's sockets for barrel, stock, grip and magazine. Bodies of one platform take the same parts. The sight socket is the body's own: a flat top has a rail, a carry handle has sight.handle. Letters until they have names.",
     "A": {
       "like": "an in-line rifle: the stock on a tube behind the barrel",
       "sockets": {
         "barrel": "barrel.collar",
         "stock": "stock.tube",
         "grip": "grip.pin",
-        "magazine": "mag.narrow",
-        "sight": "rail"
+        "magazine": "mag.narrow"
       }
     },
     "B": {
@@ -489,9 +503,9 @@
         "barrel": "barrel.collar",
         "stock": "stock.tang",
         "grip": "grip.pin",
-        "magazine": "mag.wide",
-        "sight": "rail"
+        "magazine": "mag.wide"
       }
     }
-  }
+  },
+  "gun_sights_note": "A sight is a single piece pressed on a rail, like one brick. A body may instead have its sights moulded in and no sight socket."
 }
