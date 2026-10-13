@@ -8693,6 +8693,7 @@ func _index_building(id: int) -> void:
 func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# A bullet has no radius, but it still has to find the building it struck.
 	var reach := maxf(radius, 0.25)
+	var took_bricks := false   ## from a building: what rested on them is woken
 	# Everything within the blast, not only what the ray touched — a rocket does
 	# not care which building it hit first.
 	for id in _near_buildings(point, reach):
@@ -8771,6 +8772,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 				authority.commit_entry(fe)
 				if hit_frame.is_empty():
 					continue
+				took_bricks = true
 				if chip_hp > 0:
 					_nav_chip_broke(point, radius)
 				b.hit = true
@@ -8779,6 +8781,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 				_queue_remesh(b.id)
 		if killed.is_empty():
 			continue
+		took_bricks = true
 		if chip_hp > 0:
 			_nav_chip_broke(point, radius)
 		b.hit = true
@@ -8798,11 +8801,16 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		# captures it there.
 		_queue_remesh(b.id)
 
-	# Loose pieces in range are damaged, and everything nearby is woken -- a
-	# settled section resting on a wall that has just gone must fall, not hang.
+	# Loose pieces in range are damaged. And a settled section resting on a
+	# wall that has just gone must fall, not hang: what touches where the blast
+	# took bricks from a building, and is not wholly below it, is woken
+	# (support_gone). Not everything within four radii, as it was -- wreckage at
+	# rest stays at rest until something is taken from under it (CollapseNext
+	# 1.10); a piece's own bricks say the same for themselves in damage().
 	var t_pieces := Time.get_ticks_usec()
 	islands.damage_near(point, radius, chip_hp)
-	islands.wake_near(point, reach * 4.0)
+	if took_bricks:
+		islands.support_gone(AABB(point - Vector3.ONE * reach, Vector3.ONE * reach * 2.0))
 	_part("dmg_pieces", t_pieces)
 
 
@@ -8841,7 +8849,6 @@ func _fire(radius: float) -> void:
 		if not authority.request(DamageLog.Kind.BLAST, -1, hit.position, radius):
 			return
 		islands.damage(struck, hit.position, radius)
-		islands.wake_near(hit.position, radius * 4.0)
 		return
 	_blast(hit.position, radius)
 

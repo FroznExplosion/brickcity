@@ -724,15 +724,17 @@ func _census_body(isl: BrickIsland, from: String, bricks: int, ms: float) -> voi
 ## but still moving, at rest -- as [hits, bodies they made]. What a shot at
 ## wreckage costs depends on which (Docs/CollapseNext.md 1.4).
 var hit_census := [[0, 0], [0, 0], [0, 0]]
-## Stress solves not run because the piece was in the air (solve_island).
-var air_solves_skipped := 0
+## Hits that took bricks from a piece at rest and left it at rest, and those
+## that woke it: it was cut in two, or lost what it stood on (damage).
+var rest_hits_kept := 0
+var rest_hits_woke := 0
 
 
 func hit_census_line() -> String:
 	return "hits on pieces -- in the air: %d made %d bodies; down and moving: %d made %d; at rest: %d made %d" % [
 			hit_census[0][0], hit_census[0][1], hit_census[1][0], hit_census[1][1],
-			hit_census[2][0], hit_census[2][1]] + "; %d solve(s) of a piece in the air left at where it was cut through; %d merged rebuild(s), %d tick(s) one was put off" % [
-			air_solves_skipped, merged_rebuilds, reshapes_put_off]
+			hit_census[2][0], hit_census[2][1]] + "; of the ones at rest %d left it at rest, %d woke it; %d merged rebuild(s), %d tick(s) one was put off" % [
+			rest_hits_kept, rest_hits_woke, merged_rebuilds, reshapes_put_off]
 
 
 ## The census as lines, for a pass to print.
@@ -1764,9 +1766,10 @@ func _reshape(isl: BrickIsland, merged: bool, force := false) -> void:
 ## Unless it is FALLING merged: then it is rebuilt merged once, at the end of the
 ## tick, from whatever its blocks are by then -- one shape build instead of the
 ## per-block rebuild this used to force at every landing, which on a toppled
-## building was the 285 ms tick.
+## building was the 285 ms tick. Or AT REST: a piece that is hit where it lies
+## stays where it lies (damage), frozen, and frozen it is merged.
 func _ensure_per_block(isl: BrickIsland) -> void:
-	if isl.merged and isl.fly_merged and not isl.settled:
+	if isl.merged and (isl.fly_merged or isl.settled):
 		if not isl.reshape_due:
 			isl.reshape_due = true
 			_reshape_list.append(isl)
@@ -1792,16 +1795,14 @@ const MOVING_RESHAPE_TICKS := 6
 var reshapes_put_off := 0
 
 
-## Rebuild, merged, every falling piece whose blocks changed this tick.
+## Rebuild, merged, every merged piece whose blocks changed -- falling, or hit
+## where it lay at rest (settle_now clears what settling has already rebuilt).
 func _flush_reshapes() -> void:
 	var later: Array[BrickIsland] = []
 	var now := Engine.get_physics_frames()
 	for isl in _reshape_list:
 		if not isl.is_valid() or not isl.reshape_due:
 			continue
-		if isl.settled:
-			isl.reshape_due = false
-			continue  # settling already rebuilt it
 		if now - isl.reshaped_tick < (MOVING_RESHAPE_TICKS if isl.landed else AIR_RESHAPE_TICKS):
 			later.append(isl)   # still due
 			reshapes_put_off += 1
@@ -2011,10 +2012,10 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 	isl.ripple_pending = true
 	islands.append(isl)
 	_census_body(isl, "adopted (toppled whole, or woken)", world.get_alive_block_count(isl.chunk), 0.0)
-	# Not while a save is being put back: what lies next to this piece is
-	# exactly as the save had it, asleep or not, and waking it is a difference.
-	if not _restoring:
-		wake_near(isl.body.global_position, WAKE_RADIUS)
+	# What had settled on it wakes when it moves (ripple_pending, above) and
+	# what it lands on when it touches (_wake_touched). Not everything within
+	# six metres of it for being near: wreckage at rest stays at rest until
+	# something is taken from under it (Docs/CollapseNext.md 1.10).
 	if announce:
 		piece_spawned.emit(isl)
 	return isl
@@ -2518,9 +2519,10 @@ func _patch_bands(isl: BrickIsland) -> bool:
 # Waking
 # ---------------------------------------------------------------------------
 
-## A frozen body never re-evaluates, so one that is shot -- or that has just lost
-## the piece it was resting on -- hangs exactly where it stopped. That is where
-## floating wreckage comes from.
+## A frozen body never re-evaluates, so one that has just lost the piece it was
+## resting on -- or been cut in two -- hangs exactly where it stopped. That is
+## where floating wreckage comes from. Being shot is not a reason by itself
+## (damage): what is taken from a piece at rest is gone, and the rest stays.
 func wake(isl: BrickIsland) -> void:
 	if not isl.is_valid() or not isl.settled:
 		return
@@ -2703,6 +2705,9 @@ func settle_now(isl: BrickIsland) -> void:
 	_apply_layers(isl)
 	# Inert now: give the solver as few boxes as the shape allows.
 	_reshape(isl, true)
+	# And those are its boxes as its bricks are now: nothing is still owed.
+	isl.reshape_due = false
+	isl.reshaped_tick = Engine.get_physics_frames()
 	settled += 1
 	# Where a landmark came to rest is the one piece of physics every
 	# machine has to agree on (DamageLog.Kind.PIECE_REST). Small pieces are
@@ -2795,10 +2800,17 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# but the rule belongs here as well as there.
 	if not decides:
 		return
-	wake(isl)
-	wake_near(world_point, WAKE_RADIUS)
+	# **A piece at rest that is hit stays at rest** (Docs/CollapseNext.md 1.10;
+	# the user, 2026-10-13: real LEGO). A heap of bricks that loses a brick does
+	# not start to move. It was woken first, whole, whether or not the blast
+	# took anything from it, and so was every piece within six metres -- under
+	# fire the wreckage never slept, and every box of a piece that is awake is
+	# the physics solver's to pay for. Now the bricks go, the piece stays
+	# frozen where it lies, and it wakes for one of two reasons only: the hit
+	# cut it in two (_shed), or took the bricks it stood on (support_gone,
+	# below -- and the watchdog, for what that misses).
+	var at_rest := isl.settled
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
-	_ensure_per_block(isl)
 	var e := _piece_entry(isl,
 			DamageLog.Kind.PIECE_CHIP if chip > 0 else DamageLog.Kind.PIECE_BLAST)
 	e.point = _to_grid(isl, world_point)
@@ -2813,13 +2825,20 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	if chip <= 0:
 		_record(e)
 	isl.shed_cause = "hit"
+	# Where those bricks were, before the piece is cut and their ids mean
+	# another chunk's bricks.
+	var gone_box: AABB = isl.chunk_transform() * world.get_blocks_box(isl.chunk, killed)
+	_ensure_per_block(isl)
 	isl.disable_blocks(killed)
 	_touched(isl)
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
-	# disposable pieces costs a stress solve, a connectivity walk and a chunk
-	# per group, to produce more of what is already being swept up in two and a
-	# half seconds.
-	hit_census[0 if not isl.landed else (2 if isl.settled else 1)][0] += 1
+	# disposable pieces costs a connectivity walk and a chunk per group, to
+	# produce more of what is already being swept up in two and a half seconds.
+	hit_census[0 if not isl.landed else (2 if at_rest else 1)][0] += 1
+	# Whatever rested on those bricks has lost them: every settled piece
+	# touching where they were and not wholly below it is woken next tick,
+	# and that is this piece too when they were the ones it stood on.
+	support_gone(gone_box)
 	# Solved here, in the call, once a blast -- NOT queued for the pieces' share
 	# of the tick. Queued (once a piece a tick however many blasts reached it;
 	# 2026-10-07 to 10-08) looked like less work and was more: a piece under
@@ -2832,6 +2851,11 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	if not isl.disposable:
 		solve_island(isl)
 	rebuild_mesh(isl)
+	if at_rest:
+		if isl.is_valid() and isl.settled:
+			rest_hits_kept += 1
+		else:
+			rest_hits_woke += 1
 
 
 ## Damage every loose piece whose volume reaches the blast, not every piece
@@ -2942,6 +2966,19 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		# body. A discarded one is deleted, not left behind as ghost collision.
 		isl.disable_blocks(moved, RID())
 		shed += 1
+	# A merged piece has no one block's box to switch off (disable_blocks), so
+	# what left it is still in its boxes until they are rebuilt -- and a piece
+	# on the ground collides with what it has just shed, lying exactly inside
+	# those boxes. Rebuilt here, while the body is out of its space, not at the
+	# rate a hit's rebuild is put off to (_flush_reshapes). A piece in the air
+	# passes through what leaves it (Layers.AIRBORNE_MASK), and waits; so does
+	# one that only shed crumbs or what was deleted, which have no body to be
+	# pushed out of it.
+	if bodies > 0 and isl.merged and isl.landed:
+		_reshape(isl, true, true)
+		isl.reshape_due = false
+		isl.reshaped_tick = Engine.get_physics_frames()
+		merged_rebuilds += 1
 	var _tb := Time.get_ticks_usec()
 	if space.is_valid():
 		PhysicsServer3D.body_set_space(rid, space)
@@ -2964,8 +3001,11 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	isl.body.mass = maxf(world.get_chunk_mass(isl.chunk) * MASS_SCALE, 0.5)
 	isl.fractures += 1
 	splits += 1
+	# Cut in two: what is left may have been standing on what left. It wakes,
+	# and settles again if it is still held. What rested on it wakes when it
+	# moves (wake sets its ripple), and what rested on a group that was deleted
+	# was woken above (support_gone) -- not everything within six metres.
 	wake(isl)
-	wake_near(isl.body.global_position, WAKE_RADIUS)
 	return shed
 
 
@@ -2977,65 +3017,35 @@ func split_if_broken(isl: BrickIsland) -> void:
 	_shed(isl, comps.slice(1))
 
 
-## Run the tension solve on a piece that has already fallen.
+## What a hit or a landing has cut off a loose piece comes away from it. That
+## is all there is to solve: **a loose piece is a rigid chunk** (Docs/
+## CollapseNext.md 1.10; the user, 2026-10-13: real LEGO breaking apart).
 ##
-## Standing buildings have had this since M2; islands never did, so a fallen
-## section was structurally frozen -- you could disconnect bits off it, but
-## undercutting it did nothing, because nothing re-asked whether what was left
-## could still hold itself up.
+## It was stress-solved: stood on its lowest bricks along whichever grid axis
+## was nearest to down, and asked what their joints could hold -- the tension
+## solve a standing building has, on a thing that is not standing on anything.
+## For a section in the air that hung a tower's weight on a row of studs that
+## held up nothing, and one shot failed it storey after storey (taken out
+## 2026-10-07, CollapseNext 1.4). For wreckage on the ground it was the same
+## mistake more quietly: a hit on a piece that was down made a new body a
+## third of the time, against a twelfth for one in the air -- wreckage coming
+## apart under its own weight after being shot, which a brick model lying on a
+## table does not do. Its studs hold it together; it parts where a hit
+## DISCONNECTS it and where a landing snaps it (fracture_on_impact: a clump
+## peeled at the contact, one seam severed), and nowhere else.
 ##
-## The catch is that **a chunk's grid does not rotate when the piece topples**.
-## Weight flows along world down, which for a building lying on its side is some
-## other grid axis entirely. So the world's down vector is rotated into chunk
-## space and snapped to the nearest grid axis, and the solver anchors to
-## whatever is lowest along it. A piece resting on a face -- which is where a
-## toppled building ends up -- gets an exact answer; one balanced at an angle
-## gets the nearest of six, which is still far better than pretending it is
-## upright.
+## DamageLog.Kind.PIECE_SOLVE is not written any more. It is still read, for a
+## log that was written when it was.
 func solve_island(isl: BrickIsland) -> void:
 	if not isl.is_valid() or world.get_alive_block_count(isl.chunk) == 0:
 		return
-	# Which way is down for a tumbled piece is this machine's physics. The host
-	# decides, and a client gets the answer as a PIECE_SOLVE with the gravity in.
+	# The host cuts; a client gets each piece that leaves as a DETACH.
 	if not decides:
 		return
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
-	# In the air nothing carries anything. The solve below stands the piece on
-	# its lowest bricks and asks what their joints can hold -- right for
-	# wreckage on the ground, and for a section in free fall it is a tower's
-	# weight hung on a row of studs that is holding up nothing: one shot at a
-	# falling section failed it all the way across, storey after storey. 262
-	# hits on pieces in the air made 174 bodies in a `--big --shot`, 159 of them
-	# 500 bricks or more (385 ms to make, and the worst ticks of the run), where
-	# 155 hits on pieces that were down made 12 (Docs/CollapseNext.md 1.4).
-	# A falling piece comes apart where a hit DISCONNECTS it, and nowhere else
-	# (the rule for every brick: it falls when nothing connects it or force
-	# breaks it). The landing breaks it, along its storeys, when it gets there.
-	if not isl.landed:
-		var _ta := Time.get_ticks_usec()
-		split_if_broken(isl)
-		_upart("split", _ta)
-		air_solves_skipped += 1
-		return
-	var down: Vector3 = isl.body.global_transform.basis.inverse() * Vector3.DOWN
-	# Scaled to integers so the extension can see which component dominates.
-	var e := _piece_entry(isl, DamageLog.Kind.PIECE_SOLVE)
-	e.normal = Vector3(roundi(down.x * 100.0), roundi(down.y * 100.0), roundi(down.z * 100.0))
-	var _tu := Time.get_ticks_usec()
-	var res := DamageLog.apply_entry(world, isl.chunk, e)
-	_tu = _upart("stress", _tu)
-	# A solve that failed nothing changed nothing, so there is nothing to send.
-	# What comes loose afterwards travels as DETACH, with its blocks named.
-	if not res.is_empty() and res[0] > 0:
-		_record(e)
-	# Tension failure marks joints, it does not move bricks. What comes loose is
-	# whatever can no longer trace a path to the ground.
-	var groups := world.find_detached_groups(isl.chunk)
-	_tu = _upart("groups", _tu)
-	_shed(isl, groups)
-	_tu = _upart("shed", _tu)
+	var _ta := Time.get_ticks_usec()
 	split_if_broken(isl)
-	_upart("split", _tu)
+	_upart("split", _ta)
 
 
 ## A hard landing SHEARS the joints in the contact band. It destroys nothing --

@@ -18,7 +18,7 @@ Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each a
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`storey_probe.gd`,
+`barrage_probe.gd`, `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -28,10 +28,10 @@ its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 
 In the order to do it. Each line points at where the item is written up.
 
-**Being done**
-1. **A loose piece is a rigid chunk** -- never stress-solved; it parts where a hit cuts it and
+**Done 2026-10-13** (timing still owed: §1.10)
+1. ~~A loose piece is a rigid chunk~~ -- never stress-solved; it parts where a hit cuts it and
    where a landing snaps it. §1.10 (1).
-2. **Wreckage at rest stays at rest when it is shot** -- woken only if the hit cut it in two or
+2. ~~Wreckage at rest stays at rest when it is shot~~ -- woken only if the hit cut it in two or
    took what it rests on. §1.10 (2).
 
 **Next, the brick model (§1.10)**
@@ -193,20 +193,44 @@ compression failure; a landing peels a clump at the contact and severs one seam 
 storey line, destroying nothing (`fracture_on_impact`, `_snap_across`); a piece in the air is
 rigid. What does not, most worth doing first -- each is also less work for the machine:
 
-1. **A loose piece on the ground is still stress-solved when it is hit** (`solve_island`), as if
-   it stood on its lowest bricks. In `--big --shot` (three runs, 2026-10-08) a hit on a piece in
-   the air makes a body 7-9 % of the time (cut through, nothing else), a hit on a piece that is
-   down 32-42 %: 110-160 bodies a run are mostly wreckage coming apart under its own weight after
-   being shot, which a brick model lying on a table does not do. **Do:** a loose piece is a rigid chunk everywhere -- it comes apart
-   where a hit disconnects it and where a landing snaps it, and is never stress-solved. Takes the
-   piece stress solve (the worst single unit in the tick, 38 ms) out of the game, and most of
-   1.3 with it (single bricks come off a piece only because that solve sheds them).
-   **Check first:** more stays whole and moving, which is what 1.4's rule cost; needs 2.
-2. **Wreckage at rest is woken whole by any shot that reaches it**, and by every blast within
-   four radii (`wake`, `wake_near`). A pile of bricks that loses one brick does not start moving.
-   **Do:** a hit takes its bricks out of a settled piece where it lies; it wakes only if the hit
-   cut it in two or took what it rests on (`support_gone`, `_supported_below` already answer
-   that). Pieces down and moving are what the solver pays for (§3).
+1. ~~A loose piece on the ground is still stress-solved when it is hit~~ -- **done 2026-10-13.**
+   A loose piece is a rigid chunk everywhere: `IslandManager.solve_island` cuts off what a hit or
+   a landing has disconnected (`split_if_broken`) and does nothing else. The tension solve on
+   pieces is gone, with its command (`PIECE_SOLVE` is still read, for a log written when it was
+   written, and never written).
+   *Measured* (`tools/barrage_probe.gd`: four towers brought down headless, four blasts a tick
+   into each for eight seconds; two runs each way): a hit on a piece that was down made a new body
+   **14-18 % of the time before, 2-3 % now** (56-67 bodies a run, then 7-15).
+   *What the probe cases say, and do not:* no single piece could be built that the old solve
+   failed -- a tower lying on its side holed or slotted from end to end, with the city's studs,
+   passes float_probe before and after. The solve only failed pieces in the states a collapse
+   leaves them in (one solve in seven had a failure), so the proof is the count, and the line in
+   `barrage_probe` (under 8 %) is drawn between the two.
+2. ~~Wreckage at rest is woken whole by any shot that reaches it~~ -- **done 2026-10-13.** A hit
+   takes its bricks out of a settled piece where it lies (`damage`): frozen, merged, its boxes
+   rebuilt round the hole within six ticks. It wakes for two reasons only: the hit **cut it in
+   two** (`_shed`), or **took the bricks it stood on** -- `support_gone` over where the bricks
+   were, which wakes every settled piece touching that and not wholly below it, this one
+   included; the watchdog (`_audit_settled`) is behind that for what it misses.
+   The blanket wakes are gone from the shots' path: everything within six metres of a hit piece
+   (`damage`), within four radii of any blast (`CityScene._apply_blast`, which now wakes what
+   touches where a blast took bricks from a *building*) or bullet (`_fire`), within six metres of
+   a piece that shed something (`_shed`) or of a piece newly made (`adopt`).
+   A merged piece on the ground that sheds a *body* has its boxes rebuilt at once, not at the
+   rate a hit's rebuild is put off to: what leaves it lies exactly inside its old boxes.
+   *Measured* (the same probe): 23-34 hits a run found a piece at rest and 19-30 of them left it
+   at rest; merged rebuilds 512-577 a run before, 260 now. Under a barrage most hits (about 480
+   of 560) still land on pieces that are down and *moving* -- nothing gets time to settle; in
+   play, where firing stops, more of them will be at rest.
+   **Left as it was:** a piece struck by one that lands on it still wakes everything within six
+   metres (`shear`), as do a fire's burnt bricks (`CityScene.fire_burnt`) and the disasters'
+   own calls (`wake_near`): not shots, and the first is the next to look at.
+   **Not timed yet** (`--big --shot`, alternated, one windowed run at a time): §3 when it is.
+   Checks: `float_probe` 46 (ten new: a piece shot at rest stays one piece, frozen where it lay,
+   the piece beside it asleep; its boxes follow; a blast that takes nothing changes nothing; one
+   that takes what it stands on wakes it; what stood on the bricks taken wakes; cut clean
+   through, it is two and awake), `barrage_probe` 4, `snapshot_probe` 48 (a shot leaves the
+   piece whole, so it is saved both awake and asleep), and the rest of the list unchanged.
 3. **A blast deletes every brick in its radius.** Bricks separate, they do not vanish
    (BrickFailure §5): the middle of a blast may be gone, the ring round it should come loose --
    as crumbs, which are drawn and cost no body (`_crumble`). Check what `separate_near` already
@@ -379,7 +403,10 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
   collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
   disaster_probe "a soldier in a meteor's ring runs out of it". `disaster_probe` "go over" and
-  collapse_probe "rode it" vary with physics run to run. `impostor_probe` "no holes" was on this
+  collapse_probe "rode it" vary with physics run to run. Since 2026-10-13 (found then; main as
+  it was, before anything of that day's): collapse_probe "trapped" -- "asked again and again for a
+  way there is not, it is trapped", 20.0 s, every run -- the AI's, after its navigation changes.
+  `impostor_probe` "no holes" was on this
   list: fixed 2026-10-08 -- the probe's camera was interpolated, so its pictures were taken on the
   way to where it had been put (Interiors.md §8.13).
 
