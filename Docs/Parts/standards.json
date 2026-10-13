@@ -1,10 +1,12 @@
 {
-  "version": 5,
+  "version": 7,
   "note": "Hand-written. The numbers of nano.md and joints.md for scripts: the model converter, the print generator, the game. Lengths are mm at print scale unless a key says otherwise.",
   "scale": {
     "game_m_per_mm": 0.04375,
-    "held_scale": 0.16666667,
-    "held_scale_note": "1/6. Game size of a held item = its nano build x this. Tuned by eye in the game."
+    "held_scale": 0.09142857,
+    "held_scale_note": "4 / 43.75, about 1/11: what brings a quarter-size model down to the game's size. It follows from gun_model; it is not tuned on its own.",
+    "gun_model": 0.25,
+    "gun_model_note": "A gun is built of nano bricks at a quarter of the real one's size: one nano stud is 16 mm of the real gun. A 852 mm gun is 213 mm and 53 studs."
   },
   "grids": {
     "full": {
@@ -359,14 +361,20 @@
     "finger_groove_min_mm": 0.3
   },
   "held_grip": {
-    "core_d": 3.2,
-    "core_sides": 8,
-    "min_length_nano_bricks": 3,
+    "note": "Our own grip, so one hand fits every gun. Measured where the hand closes, the middle three fifths of the grip, at print size. First numbers, from the first gun: to be settled as more are built.",
+    "length_min": 24.0,
+    "fore_aft": [
+      9.0,
+      12.5
+    ],
+    "thick": [
+      7.0,
+      9.5
+    ],
     "holds": [
       "hold_0",
       "hold_1"
-    ],
-    "core_note": "the bar a brick figure's C hand grips: the pin's size"
+    ]
   },
   "joint_pin": {
     "d": 3.2,
@@ -459,6 +467,11 @@
       "slot": "sight",
       "connector": "stud grid",
       "shape": "the short row of studs moulded into the top of a carry handle"
+    },
+    "guard.bar": {
+      "slot": "underbarrel",
+      "connector": "keyed dovetail",
+      "shape": "a bar under the barrel that a handguard hangs on"
     }
   },
   "gun_adapters": {

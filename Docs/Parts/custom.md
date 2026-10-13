@@ -57,10 +57,8 @@ coincide. Bare gun parts are those parts, so a rolled gun needs no new code:
   lattice. Any stock goes on any body; that is what a procedural gun needs from its parts.
 - The physical connector at a `mount` is the slot's own (spec section 7): a keyed dovetail for a
   barrel or a stock, pin-and-clip for a grip or a magazine, studs for a sight.
-- **The grip has a round core**, 3.2 mm across -- the bar a brick figure's C hand grips, the
-  same size as every joint pin -- and at least 14.4 mm long, eight-sided like a stud. The styled
-  grip is built round it, but where the hand closes it is that core, so a C hand fits every grip
-  ([joints.md](joints.md) section 7).
+- **Every pistol grip keeps to one size** where the hand closes, so one C hand fits every gun
+  ([joints.md](joints.md) section 7). There is no bar inside it.
 - **A sight is a single piece pressed onto a rail**, as one brick is pressed onto studs. A rail
   is a row of studs: a flat top has one moulded in; a carry handle has a short row of its own
   (`sight.handle`) that takes an **adapter** (`adapter_handle_rail`) with a rail on top. Planned:
@@ -120,15 +118,20 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
 
-**Built so far:** [partkit.py](../../tools/brickify/partkit.py) and one build sheet,
-[rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
-(barrel, handguard, body, grip, stock) by the model's own loose shells, studs on their faces,
-mounts and sockets on the lattice, the grip core measured, and the check. Earlier tries are in the
-history and were dropped: a pad under each patch (read as a brick stuck on), moving a face onto
-the lattice, resizing and bevelling the parts, and fusing a part's shells on a voxel grid (the
-open ones came out in pieces). Still to come: one watertight solid per part, sockets underneath,
-the interfaces' own shapes, dressing and sights pressed on the new patches, STLs, and a scene the
-game's gun system loads.
+**Built so far, from bought models (stand-ins):** [partkit.py](../../tools/brickify/partkit.py)
+and [rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a model cut into five bare parts by
+its own shells, studs square to its faces.
+
+**Built so far, our own:** [gunsmith.py](../../tools/brickify/gunsmith.py) and
+[smg_a.json](../../tools/brickify/sheets/smg_a.json), a 1928-pattern submachine gun at quarter
+size, drawn in the sheet: 213 mm, 53 studs. A part is **bricks** (an outline filled by the packer,
+its top tiled but for the studs a sight sits on), a **profile** (an outline with a thickness and
+cut-back edges), a **loft** (cross-sections along a line, joined: a stock that deepens to its
+butt, a grip that swells in the palm), **turned** (round about the bore) or **blocks** (a small
+fixed detail). Every custom part is one closed solid. This one: 53 bricks, 8 custom parts, 92
+studs, every joint on the lattice, the foregrip's underside a brick's. Still to come: slopes and
+curves on the brick-built parts, finer sections (a wrist, flutes), the drum, the interfaces' own
+shapes, dressing, STLs, and a scene the game's gun system loads.
 
 ## 6. What may be published
 
@@ -149,8 +152,10 @@ So:
   any mesh, so nothing else changes.
 - Turning a bought model into bricks does not make it ours either: the result is still made from
   their model.
-- A real gun's general shape is nobody's asset, but the spec's rule stands: toy proportions, not
-  a likeness of a real firearm.
+- **Guns follow real weapons' proportions** (decided 2026-10-16): a real gun's general shape is
+  nobody's asset, and a build sheet names the pattern it follows. This overrules spec section 7's
+  "toy proportions". Its other rules stand: solid, no bore, no working parts, our own connectors,
+  and our own names in the data, never a maker's.
 
 This is a reading of the licence, not legal advice. For a firm answer on a paid product, ask the
 seller in writing: Animpic's licence allows other products by written agreement.
