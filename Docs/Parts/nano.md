@@ -19,14 +19,18 @@ A nano brick is a brick at x0.5 on every axis. Its unit is the **nano tick**, 0.
 | nano stud pitch | 5 | 4.0 | 0.175 | half a stud |
 | nano brick (3 nano plates) | 6 | 4.8 | 0.21 | half a brick |
 | figure | 48 | 38.4 | 1.68 | 4 bricks = 8 nano bricks |
-| mech | 168 | 134.4 (5.29 in) | 5.88 | 14 bricks = 28 nano bricks |
+| mech | 192 | 153.6 (6.05 in) | 6.72 | 16 bricks = 32 nano bricks |
 
 So one full-grid cell (a stud square, a plate tall) is exactly 2 x 2 x 2 nano cells, and a nano
 build whose origin is on a whole tick lines up with the bricks it stands on. The game factor is the
 same 0.04375 m per mm; a nano build is the same chunk code drawn at half scale.
 
-**The mech is 14 bricks tall** (decided 2026-10-13): 28 nano bricks, 5.88 m in the game, 134.4 mm
-printed. `Mech.HEIGHT` in `scripts/mech/mech.gd` is 16 courses today and has to follow.
+**The mech is sized by its pilot's eye, not its top:** sitting in it, the player looks straight into
+a second-storey window. That window runs from plate 26 to plate 35 (3.64 m to 4.90 m: storey 1's
+walls start at plate 20, `TowerRecipe.STOREY_PLATES` + 1, with a sill two bricks up and a head five
+up), so its middle is 4.27 m. The cockpit eye is **10 bricks up, 4.2 m** (`Mech.COCKPIT_Y`), which
+is that window. The mech stays **16 bricks tall** (`Mech.HEIGHT`): 32 nano bricks, 6.72 m, 153.6 mm
+printed. Its top is free to change; the eye is not.
 
 ## 2. Anatomy of a nano brick (print, nominal)
 
@@ -76,7 +80,7 @@ are **not** mixed into a full-grid chunk; a nano build is its own frame (section
 |---|---|
 | A nano build standing on full bricks | **Adapter**, `adapter_1x1`: one full stud socket underneath, 2 x 2 nano studs on top. One plate (3.2 mm) tall. `adapter_2x2` likewise, 4 x 4 nano studs. |
 | Full bricks on a nano build | **Adapter**, `adapter_up_1x1`: 2 x 2 nano sockets underneath, one full stud on top. |
-| Joints | The joint size ladder ([joints.md](joints.md) section 2) uses diameters both grids already have: 2.4 (nano stud), 3.2 (bar), 4.8 (full stud). A D6 joint pin fits a full stud socket. |
+| Joints | Every joint pin is 3.2 mm ([joints.md](joints.md) section 2): a plate's height, two nano plates, and the bar a clip or a C hand grips. |
 | Real LEGO bricks | The full grid stays compatible both ways (README sections 2 and 3). Nano parts are our own size; they meet real bricks only through an adapter. |
 | Commercial nano blocks | Not a target. They share the 4 mm pitch but are 5 mm tall with a ridged underside, so they do not stack true with ours. |
 
