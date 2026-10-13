@@ -120,37 +120,15 @@ slots, a mech's bones, or a list), which parts are bare and which are bricks, an
 that should be all bricks (world props, buildings), and an all-brick variant of a part when one is
 wanted.
 
-**Built so far:** [partkit.py](../../tools/brickify/partkit.py) and one build sheet,
-[rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a whole rifle cut into five bare parts
-(barrel, handguard, body, grip, stock) by the model's own loose shells, studs on their faces,
-mounts and sockets on the lattice, the grip core measured, and the check. Earlier tries are in the
-history and were dropped: a pad under each patch (read as a brick stuck on), moving a face onto
-the lattice, resizing and bevelling the parts, and fusing a part's shells on a voxel grid (the
-open ones came out in pieces). Still to come: one watertight solid per part, sockets underneath,
-the interfaces' own shapes, dressing and sights pressed on the new patches, STLs, and a scene the
-game's gun system loads.
+**Built so far, from bought models (stand-ins):** [partkit.py](../../tools/brickify/partkit.py)
+and [rifle_a.json](../../tools/brickify/sheets/rifle_a.json): a model cut into five bare parts by
+its own shells, studs square to its faces.
 
-## 6. What may be published
-
-**A part cut from a bought model is not ours to hand out.** The rifle the kit was built on is from
-Animpic Studio's "POLY - Mega Weapons Kit" (not Synty's). Its licence, read 2026-10-15
-(animpic.studio/license), lets the models go into video games we make, says that modifying a
-model does not make it ours, forbids sharing the models "for re-use by third parties" or as stock
-3D, and needs a written agreement for any product that is not a video game. An STL of a part cut
-from it, with or without studs, is the model shared for re-use. Synty's and the asset stores'
-licences are built the same way.
-
-So:
-
-- **Bought models are stand-ins.** They are for building and testing the kit, and may be in the
-  game as game assets. They are never exported: not as STLs, not from the workshop.
-- **Anything published or printable is made from our own shapes**: our bricks, and bare parts
-  authored here (a drawn profile, a thickness, the kit's studs and connectors). The kit works on
-  any mesh, so nothing else changes.
-- Turning a bought model into bricks does not make it ours either: the result is still made from
-  their model.
-- A real gun's general shape is nobody's asset, but the spec's rule stands: toy proportions, not
-  a likeness of a real firearm.
-
-This is a reading of the licence, not legal advice. For a firm answer on a paid product, ask the
-seller in writing: Animpic's licence allows other products by written agreement.
+**Built so far, our own:** [gunsmith.py](../../tools/brickify/gunsmith.py) and
+[smg_a.json](../../tools/brickify/sheets/smg_a.json), a drum-and-stick submachine gun drawn in the
+sheet. A part is one of three kinds: **bricks** (an outline filled by the packer, its top tiled
+but for the studs a sight sits on), **profile** (an outline with a thickness and cut-back edges:
+one closed solid, with stud patches on its sides and, where asked, the underside of a brick), and
+**turned** (round about the bore). First pass: 18 bricks and 7 custom parts, 46 studs, every joint
+on the lattice. Still to come: slopes and curves on the brick-built parts, finer custom shapes,
+the interfaces' own shapes, dressing, STLs, and a scene the game's gun system loads.
