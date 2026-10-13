@@ -225,7 +225,13 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    **Left as it was:** a piece struck by one that lands on it still wakes everything within six
    metres (`shear`), as do a fire's burnt bricks (`CityScene.fire_burnt`) and the disasters'
    own calls (`wake_near`): not shots, and the first is the next to look at.
-   **Not timed yet** (`--big --shot`, alternated, one windowed run at a time): §3 when it is.
+   **Timing: tried 2026-10-13, not a measurement.** Other chats were testing, and of six
+   `--big --shot` runs (one at a time, heat checked) two could not start and three had another
+   Godot start during them. The one clean run, after: 18.2 ms a frame, 23 of 906 over 33.3 ms, 14
+   ticks over 25 ms, 7.8 pieces in motion on average, 463 hits on pieces that were down making
+   no body. The runs before it, both with another Godot running: 21.8 and 42.3 ms, 54 and 491,
+   23-26 pieces in motion, 573 hits making 189 bodies. The count of pieces in motion (26 -> 8)
+   does not depend on the machine; the frame times are owed, alternated, on a quiet one.
    Checks: `float_probe` 46 (ten new: a piece shot at rest stays one piece, frozen where it lay,
    the piece beside it asleep; its boxes follow; a blast that takes nothing changes nothing; one
    that takes what it stands on wakes it; what stood on the bricks taken wakes; cut clean
