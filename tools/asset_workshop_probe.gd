@@ -21,6 +21,15 @@ extends SceneTree
 ##              its own tag and an undo the last; each part keeps its own toolbar
 ##   run        holding LMB lays the brick again wherever the ghost moves
 ##   points     a mount placed, the same spot again takes it away, and they load back
+##
+## Phase 3:
+##
+##   packer     a box of cells is covered exactly; clean takes fewer bricks than random
+##   shapes     a cylinder and a sphere are rounder than their box, a wedge falls along x
+##   select     a box selects what is under it; re-pack, copy to the ghost, delete
+##   guide      a model loads, sized so its longest side is the real length asked
+##   section    a flat view cuts at the plane; perspective does not
+##   outlines   drawn when asked
 
 var _pass := 0
 var _fail := 0
@@ -53,6 +62,11 @@ func _tick() -> void:
 	_parts()
 	_run()
 	_points()
+	_packer()
+	_shapes()
+	_select()
+	_guide()
+	_section()
 	print("asset workshop probe: %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -234,3 +248,98 @@ func _points() -> void:
 	_ws._load_recipe(r)
 	_ok("points and part tags load back", _ws.points.size() == 1 and String(_ws.points[0].part) == "stock"
 			and Array(_ws.part_of) == tags, "%d points, tags %s" % [_ws.points.size(), _ws.part_of])
+
+
+func _cells_box(lo: Vector3i, hi: Vector3i) -> Dictionary:
+	var out := {}
+	for x in range(lo.x, hi.x + 1):
+		for y in range(lo.y, hi.y + 1):
+			for z in range(lo.z, hi.z + 1):
+				out[Vector3i(x, y, z)] = true
+	return out
+
+
+func _covered(packed: Array) -> int:
+	var n := 0
+	for pc in packed:
+		var size := BrickPalette.size_of(pc[0])
+		n += size.x * size.y * size.z
+	return n
+
+
+func _packer() -> void:
+	var cells := _cells_box(Vector3i(10, 1, 10), Vector3i(17, 6, 11))
+	var clean: Array = _ws.pack_cells(cells, false)
+	var mixed: Array = _ws.pack_cells(cells, true)
+	_ok("clean covers the box exactly", _covered(clean) == cells.size(), "%d of %d" % [_covered(clean), cells.size()])
+	_ok("random covers the box exactly", _covered(mixed) == cells.size(), "%d of %d" % [_covered(mixed), cells.size()])
+	_ok("clean takes fewer bricks than random", clean.size() < mixed.size(), "%d vs %d" % [clean.size(), mixed.size()])
+
+
+func _shapes() -> void:
+	var a := Vector3i(40, 1, 40)
+	var b := Vector3i(47, 1, 47)
+	var box: Dictionary = _ws.shape_cells("box", a, b, 3)
+	var cyl: Dictionary = _ws.shape_cells("cylinder", a, b, 3)
+	var sph: Dictionary = _ws.shape_cells("sphere", a, b, 3)
+	_ok("a box is every cell", box.size() == 8 * 8 * 3)
+	_ok("a cylinder is rounder than its box", cyl.size() < box.size() and cyl.size() > box.size() / 2, str(cyl.size()))
+	_ok("a sphere is as tall as it is wide", sph.has(Vector3i(43, 1 + 9, 43)) and not sph.has(Vector3i(40, 1, 40)), str(sph.size()))
+	var wedge: Dictionary = _ws.shape_cells("wedge", a, b, 6)
+	_ok("a wedge falls along the gun", wedge.has(Vector3i(40, 6, 40)) and not wedge.has(Vector3i(47, 2, 40))
+			and wedge.has(Vector3i(47, 1, 40)))
+	_ws._new_build()
+	var laid: int = _ws.fill_cells(_ws.shape_cells("box", Vector3i(30, 1, 30), Vector3i(35, 1, 31), 3))
+	_ok("a box shape is laid as bricks", laid > 0 and _ws.recipe.size() == laid, "%d laid" % laid)
+
+
+func _select() -> void:
+	var n: int = _ws.recipe.size()
+	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
+	_ok("a box over the shape selects all of it", _ws.selection.size() == n, "%d of %d" % [_ws.selection.size(), n])
+	var got: Array = _ws.repack_selection(true)
+	_ok("re-packed random, the same cells are still covered", _ws.recipe.size() == got[1] and got[1] > 0, str(got))
+	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
+	_ws._cell = Vector3i(50, 1, 50)
+	var copied: int = _ws.copy_selection_to_ghost(false)
+	_ok("copied to the ghost", copied == got[1], "%d of %d" % [copied, got[1]])
+	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
+	var gone: int = _ws.delete_selection()
+	_ok("the selection deletes", gone == got[1] and _ws.recipe.size() == copied, "%d gone, %d left" % [gone, _ws.recipe.size()])
+
+
+func _guide() -> void:
+	var scene := Node3D.new()
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.0, 1.0, 0.5)
+	mi.mesh = bm
+	scene.add_child(mi)
+	mi.owner = scene
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	doc.append_from_scene(scene, state)
+	var path := ProjectSettings.globalize_path("user://_probe_guide.glb")
+	doc.write_to_filesystem(state, path)
+	scene.free()
+	var i: int = _ws.load_guide(path, 160.0)
+	_ok("a guide model loads", i >= 0)
+	if i >= 0:
+		var size: Vector3 = _ws.guide_size(i)
+		var longest := maxf(size.x, maxf(size.y, size.z))
+		_ok("its longest side is the real length asked: 160 mm is 10 studs", absf(longest - 10.0 * STUD) < 1e-3,
+				"%.4f m" % longest)
+
+
+func _section() -> void:
+	_ws.set_view(1)
+	_ws.set_section(true)
+	_ok("a flat view with the section on cuts at the mirror plane", (_ws._camera as Camera3D).near > 1.0,
+			"near %.2f" % (_ws._camera as Camera3D).near)
+	_ws.set_view(0)
+	_ok("perspective does not cut", absf((_ws._camera as Camera3D).near - 0.05) < 1e-6)
+	_ws.set_section(false)
+	_ws.set_outlines(1)
+	_ws._draw_outlines()
+	_ok("outlines are drawn", (_ws._outline_lines.mesh as ImmediateMesh).get_surface_count() > 0)
+	_ws.set_outlines(0)

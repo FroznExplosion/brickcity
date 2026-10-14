@@ -12,7 +12,7 @@ It is the workshop ([Docs/BuildMode.md](BuildMode.md), `scripts/workshop.gd`) wi
 building, the hotbar, paint, undo, save and load -- works here unchanged. Tools that prove out
 can move into the main workshop later; that is the build-mode area's call.
 
-Status: phases 1 and 2 are built (2026-10-14). Phases 3 and 4 are not yet.
+Status: phases 1 to 3 are built (2026-10-14). Phase 4 is not yet.
 
 ---
 
