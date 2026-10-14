@@ -18,7 +18,7 @@ Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each a
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `storey_probe.gd`,
+`barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -41,8 +41,10 @@ In the order to do it. Each line points at where the item is written up.
    gone and the ring round it is thrown out as crumbs; the structure and the log are what they
    were. §1.10 (3).
 
+5. ~~A snap goes at the weakest seam near the contact, not the nearest storey line~~ -- a
+   tower's piece now parts along a row of windows, its columns pulled off their feet. §1.10 (5).
+
 **Next, the brick model (§1.10)**
-5. A snap goes at the weakest seam near the contact, not the nearest storey line. §1.10 (5).
 6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
 
 **Left over from earlier lists**
@@ -312,10 +314,35 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    loose piece wakes it and leaves it where it is, and a landing never bounces (friction 1,
    bounce 0). Light plastic is thrown by a blast and clatters. A feel change, and it costs
    settling time -- after 1 and 2, when less is moving.
-5. **A snap goes at the storey line nearest the contact**, whatever is there. A brick model goes
-   at the weakest seam near it -- fewest studs across (a row of windows before a solid course).
-   `lateral_check` already weighs every course boundary of a building by its studs; the same
-   count for a piece picks the seam.
+5. ~~A snap goes at the storey line nearest the contact~~ -- **done 2026-10-13: at the weakest
+   seam near it.** A landing that snaps a piece across its own Y (`_snap_across`) asks
+   `BrickWorld.seam_studs` what holds each course boundary within half a storey of the contact
+   (1.3 m on a build with no storeys), and severs the one that lets go of the fewest studs
+   (`IslandManager._weak_seam`): the nearer of two as weak as each other, and a storey line
+   unless something else is clearly weaker -- under three quarters of it
+   (`SEAM_PREFERS_FLOOR`; the slab goes with the walls it is the floor of, and the interiors
+   ride on that). Counted once a landing, not once a contact: the count walks every block of the
+   piece, about 0.2 ms on a tower of 859.
+   *What a recipe tower is held by* (28 x 16, first storeys): its storey line, 208 studs, nothing
+   running through; each course boundary in a row of windows, **112 studs**, with the six
+   columns of that storey running through it (a column is one block a storey tall). So a tower
+   that comes down across something parts through its windows now, as a brick model would.
+   *The columns:* a seam that a block runs through leaves the two sides joined by that block,
+   so `sever_seams` takes `through` -- such a block is cut too, at its own foot, and goes with
+   the upper side, as a pillar pulls off its studs at one end. In a recipe tower the columns are
+   stacks of their own (pad, column, pad, standing on the ground, joined to no wall: a tower whole
+   is one part of 793 bricks and six stacks of eleven), so there the walls part either way and
+   each stack parts at that storey; in a build, a column under a beam is what held the two sides.
+   The snap's command says so (`DamageLog.FLAG_STEP`), so a client and a replay cut the same --
+   and a snap recorded before it replays as it was made.
+   *Counted* (`barrage_probe`): 89 snaps, **54 at the weakest seam in reach**, 10 on a storey
+   line, 34 torn as a band (a piece long the other way, which has no seam to find -- unchanged);
+   the seams chosen held with 8,676 studs all told against 11,665 across the storey lines beside
+   them. `--shot`: 16 of 17. They used to be 137 of 147 on storey lines.
+   *Tests:* `tools/seam_probe.gd` 22 (the count, brick by brick; a column through a seam holding
+   the two sides, and pulled off its foot; a recipe tower's line and its windows; where a piece
+   of one snaps, and that it does; a wall with no windows still goes at its storey line; an old
+   command replays as it was made). Every other probe and gate as before.
 6. ~~How strong a stud is~~ -- **done 2026-10-13: one number, tunable; the first try is four
    times what it was.** `BrickStrength` (`scripts/brick_strength.gd`): `SCALED` 9.3 (the toy's
    clutch on a 0.35 m stud, which the game ran on), `TOY` 408 (the toy itself, 44 times that), and

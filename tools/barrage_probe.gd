@@ -63,6 +63,7 @@ func _run() -> void:
 	print("  --   %s" % city.stud_census_line())
 	print("  --   %s" % isl.blast_census_line())
 	print("  --   %s" % isl.crumb_cost_line())
+	print("  --   %s" % isl.snap_census_line())
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,

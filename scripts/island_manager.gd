@@ -811,7 +811,12 @@ var coarse_worst_ms := 0.0 ## the slowest of them
 var coarse_verts := 0      ## their vertices, all told
 var stand_ins := 0         ## pieces put to sleep that left a stand-in drawn
 var breaks := 0      ## times a landing snapped a piece across its width
-var floor_breaks := 0  ## of those, on a storey line (_floor_line)
+var floor_breaks := 0  ## of those, on a storey line (_is_floor_line)
+var seam_breaks := 0   ## of those, at the weakest seam in reach (_weak_seam)
+## Studs the weakest seams in reach of landings held with, and the storey
+## lines beside them -- where there was one of each to count.
+var seam_studs_chosen := 0
+var seam_studs_floor := 0
 var merged_shapes := 0  ## pieces whose collision has been merged down
 var merged_boxes := 0   ## boxes those pieces ended up with
 var unmerged_boxes := 0 ## boxes they had to go back to when hit
@@ -3424,17 +3429,27 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 	var used: Array[float] = []
 	# In the piece's own space: what the command carries (DamageLog._apply_local).
 	var points := PackedVector3Array()
+	var counted := {}   ## the piece's seams, counted once a landing (_weak_seam)
 	for c in contacts:
 		if planes >= BREAK_PLANES_MAX:
 			break
 		var local_point: Vector3 = inv_xf * (c.point as Vector3)
 		var at: float = local_point.dot(local_axis)
-		# Along a storey line, where there is one to break at: the slab goes
-		# with the walls it is the floor of (TowerRecipe.STOREY_PLATES).
-		var floor_at := _floor_line(isl, at, lo, hi) if local_axis.y > 0.5 else INF
-		if floor_at != INF:
-			local_point.y = floor_at
-			at = floor_at
+		# **At the weakest seam near where it was struck** (_weak_seam;
+		# Docs/CollapseNext.md 1.10 (5)): a brick model goes where the fewest
+		# studs hold it -- through a row of windows before a solid course. It
+		# went at the storey line nearest the contact whatever was there, and
+		# still does where no course boundary in reach is a clean seam.
+		var seam_at := INF
+		var weak := false
+		if local_axis.y > 0.5:
+			seam_at = _weak_seam(isl, at, lo, hi, counted)
+			weak = seam_at != INF
+			if not weak:
+				seam_at = _floor_line(isl, at, lo, hi)
+		if seam_at != INF:
+			local_point.y = seam_at
+			at = seam_at
 		# Severing right at an end shaves a cap off rather than breaking the
 		# piece, and severing twice in one place is one break.
 		if at - lo < BREAK_MIN_PIECE or hi - at < BREAK_MIN_PIECE:
@@ -3449,8 +3464,10 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		points.push_back(DamageLog.grid_frame(world, isl.chunk) * local_point)
 		used.append(at)
 		planes += 1
-		if floor_at != INF:
+		if seam_at != INF and _is_floor_line(isl, seam_at):
 			floor_breaks += 1
+		if weak:
+			seam_breaks += 1
 	if planes > 0:
 		# A SEAM first: sever one course of downward joints and leave both sides
 		# solid, which is how a brick model comes apart. Tearing a band into
@@ -3461,6 +3478,10 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		e.points = points
 		e.normal = local_axis
 		e.radius = BREAK_THICKNESS
+		# A block that runs through the seam pulls off at its foot (a column, in
+		# a wall snapped along its windows): without that the two sides stay
+		# joined by it and nothing parts.
+		e.flags = DamageLog.FLAG_STEP
 		torn = DamageLog.apply_entry(world, isl.chunk, e)
 		if not torn.is_empty():
 			_record(e)
@@ -3468,6 +3489,91 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 			band_breaks += planes
 		breaks += planes
 	return torn
+
+
+## How far either side of where a piece was struck its weakest seam is looked
+## for, in metres, when it has no storeys to say (a player's build): three
+## courses. A recipe tower's piece is searched half a storey either way.
+const SEAM_REACH := 1.3
+## A storey line is where it snaps unless some other seam in reach lets go of
+## fewer than this much of its studs: the slab goes with the walls it is the
+## floor of (the interiors ride on that), and two seams within a quarter of
+## each other are as weak as each other. A recipe tower's row of windows holds
+## with about three fifths of what its storey line does, columns and all.
+const SEAM_PREFERS_FLOOR := 0.75
+
+
+## Where a piece struck at `at` (metres up its own Y) snaps: the course
+## boundary in reach that lets go of the fewest studs (BrickWorld.seam_studs)
+## -- those meeting there, and those at the feet of the blocks that run
+## through it, which a stepped seam pulls off (DamageLog.FLAG_STEP). The
+## nearer of two as weak as each other; a storey line before anything not
+## clearly weaker (SEAM_PREFERS_FLOOR); BREAK_MIN_PIECE left either side. INF
+## when nothing in reach is a seam -- no two blocks meet at any boundary there.
+##
+## `counted` is the landing's own: the piece's boundaries are counted once, on
+## the first contact that asks -- seam_studs walks every block of the piece,
+## and a landing has up to nine contacts.
+func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
+		counted := {}) -> float:
+	var cy: float = BrickWorld.get_cell_size().y
+	var reach := SEAM_REACH
+	var per := int(storey_plates.call(isl.owner)) if storey_plates.is_valid() else 0
+	if per > 0:
+		reach = float(per) * cy * 0.5
+	var first := ceili((lo + BREAK_MIN_PIECE) / cy)
+	var last := floori((hi - BREAK_MIN_PIECE) / cy)
+	var k_at := roundi(at / cy)
+	var k0 := maxi(k_at - ceili(reach / cy), first)
+	var k1 := mini(k_at + ceili(reach / cy), last)
+	if k1 < k0:
+		return INF
+	if counted.is_empty():
+		counted["from"] = first
+		counted["studs"] = world.seam_studs(isl.chunk, first, last)
+	var studs: PackedInt32Array = counted["studs"]
+	var skip: int = k0 - int(counted["from"])
+	var origin_y: int = world.get_chunk_origin(isl.chunk).y
+	var best := -1
+	var best_cost := 0
+	var line := -1       ## the storey line in reach, nearest
+	var line_cost := 0
+	for i in k1 - k0 + 1:
+		var j := (skip + i) * 3
+		# Where no two blocks meet there is no seam to open, whatever runs through.
+		if studs[j] <= 0:
+			continue
+		var cost := studs[j] + studs[j + 2]
+		var nearer := best < 0 or absi(k0 + i - k_at) < absi(k0 + best - k_at)
+		if best < 0 or cost < best_cost or (cost == best_cost and nearer):
+			best = i
+			best_cost = cost
+		if per > 0 and posmod(k0 + i + origin_y, per) == 0 \
+				and (line < 0 or absi(k0 + i - k_at) < absi(k0 + line - k_at)):
+			line = i
+			line_cost = cost
+	if best < 0:
+		return INF
+	if line >= 0:
+		seam_studs_chosen += best_cost
+		seam_studs_floor += line_cost
+		if float(best_cost) >= float(line_cost) * SEAM_PREFERS_FLOOR:
+			best = line
+	return float(k0 + best) * cy
+
+
+func snap_census_line() -> String:
+	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d" % [
+			breaks, seam_breaks, floor_breaks, band_breaks, seam_studs_chosen, seam_studs_floor]
+
+
+## Is `y` (metres up the piece's own Y) one of its building's storey lines?
+func _is_floor_line(isl: BrickIsland, y: float) -> bool:
+	var per := int(storey_plates.call(isl.owner)) if storey_plates.is_valid() else 0
+	if per <= 0:
+		return false
+	return posmod(roundi(y / BrickWorld.get_cell_size().y)
+			+ world.get_chunk_origin(isl.chunk).y, per) == 0
 
 
 ## The storey line nearest `at` (along the piece's own Y, in its local metres)
@@ -4702,6 +4808,7 @@ func report() -> Dictionary:
 		"settled_jittering": settled_jittering,
 		"crumbled": crumbled,
 		"floor_breaks": floor_breaks,
+		"seam_breaks": seam_breaks,
 		"rises_capped": rises_capped,
 		"crumb_bricks": crumb_bricks,
 		"crumbs": crumb_count,
