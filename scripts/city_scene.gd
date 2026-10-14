@@ -11656,7 +11656,13 @@ func _run_checkpoint_pass() -> void:
 	while not _damage_queue.is_empty() and guard < 600:
 		await _frames(1)
 		guard += 1
-	await _frames(45)
+	# Saved while pieces are still coming down: three quarters of a second of
+	# physics, counted in ticks. It was 45 drawn frames -- the same at 60 a
+	# second, and four seconds with the display asleep and drawing at 11, by
+	# which time everything was at rest and "a moving piece still moving" had
+	# nothing to ask about (2026-10-14).
+	for t in roundi(0.75 * Engine.physics_ticks_per_second):
+		await get_tree().physics_frame
 
 	var want := {"buildings": {}, "pieces": {}, "dormant": 0, "moving": 0, "settled": 0}
 	var touched := {}
