@@ -6120,7 +6120,7 @@ PackedInt32Array BrickWorld::separate_near(int chunk_id, Vector3 world_point, fl
 
 
 PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_points,
-        Vector3 world_normal) {
+        Vector3 world_normal, bool through) {
     PackedInt32Array cut;
     if (!valid_chunk(chunk_id) || world_points.size() == 0) {
         return cut;
@@ -6172,9 +6172,75 @@ PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_
         if (std::find(planes.begin(), planes.end(), base_y) != planes.end()) {
             b.bottom_broken = true;
             cut.push_back((int32_t)bi);
+            continue;
+        }
+        // A block that runs THROUGH a seam -- a column a storey tall, in a
+        // wall snapped along a row of windows -- would hold the two sides
+        // together by itself. In a brick model it pulls off its studs at one
+        // end and goes with the other side: here, off its foot. Not
+        // furniture, which stands on a floor and holds nothing.
+        if (!through || b.decorative) {
+            continue;
+        }
+        const int32_t top_y = base_y + archetypes[b.archetype].size.y;
+        for (const int32_t k : planes) {
+            if (k > base_y && k < top_y) {
+                b.bottom_broken = true;
+                cut.push_back((int32_t)bi);
+                break;
+            }
         }
     }
     return cut;
+}
+
+PackedInt32Array BrickWorld::seam_studs(int chunk_id, int from_k, int to_k) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id) || to_k < from_k) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const int layers = to_k - from_k + 1;
+    out.resize(layers * 3);
+    out.fill(0);
+    int32_t *at = out.ptrw();
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const size_t n = c.blocks.size();
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        // Furniture holds nothing together: it stands on a floor and nothing
+        // stands on it.
+        if (!b.alive || b.decorative) {
+            continue;
+        }
+        const int bot = b.cell.y - c.origin.y;
+        const int top = bot + archetypes[b.archetype].size.y;
+        if (top <= from_k || bot > to_k) {
+            continue;
+        }
+        // The studs at its foot: its joints to the blocks it stands on. The
+        // cache leaves out a joint its upper block has let go (bottom_broken).
+        int foot = 0;
+        if (!b.support_broken) {
+            for_each_joint(c, jc, (int32_t)i, [&](int32_t nb, int count) {
+                const Block &o = c.blocks[nb];
+                if (o.decorative || o.support_broken
+                        || o.cell.y - c.origin.y + archetypes[o.archetype].size.y != bot) {
+                    return;
+                }
+                foot += count;
+            });
+        }
+        if (bot >= from_k) {
+            at[(bot - from_k) * 3] += foot;
+        }
+        // And it runs through every boundary strictly inside it.
+        for (int k = std::max(bot + 1, from_k); k < top && k <= to_k; ++k) {
+            at[(k - from_k) * 3 + 1] += 1;
+            at[(k - from_k) * 3 + 2] += foot;
+        }
+    }
+    return out;
 }
 
 // --- detachment ------------------------------------------------------------
@@ -7772,8 +7838,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("separate_near", "chunk_id", "world_point", "radius_m",
                     "max_blocks", "peel"),
             &BrickWorld::separate_near, DEFVAL(0), DEFVAL(false));
-    ClassDB::bind_method(D_METHOD("sever_seams", "chunk_id", "world_points", "world_normal"),
-            &BrickWorld::sever_seams);
+    ClassDB::bind_method(D_METHOD("sever_seams", "chunk_id", "world_points", "world_normal", "through"),
+            &BrickWorld::sever_seams, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("seam_studs", "chunk_id", "from_k", "to_k"),
+            &BrickWorld::seam_studs);
     ClassDB::bind_method(D_METHOD("detach_group", "chunk_id", "block_ids"), &BrickWorld::detach_group);
     ClassDB::bind_method(D_METHOD("get_block_boxes", "chunk_id"), &BrickWorld::get_block_boxes);
 

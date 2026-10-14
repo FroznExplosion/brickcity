@@ -120,6 +120,11 @@ const FLAG_SEAM := 32
 const FLAG_WHOLE := 64
 ## SCORCH: char the blocks in `blocks`, not a ball (fire, brick by brick).
 const FLAG_BLOCKS := 128
+## PIECE_SNAP: a block that runs through the seam is cut as well, at its own
+## foot (BrickWorld.sever_seams' `through`) -- a column a storey tall, in a wall
+## snapped along a row of windows. Every snap since 2026-10-13 carries it; one
+## recorded before replays as it was made.
+const FLAG_STEP := 256
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -302,7 +307,7 @@ static func _apply_local(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32
 		Kind.PIECE_SNAP:
 			# A seam first, and a torn band only where there is no seam -- the
 			# same order IslandManager._snap_across has always used.
-			out = world.sever_seams(chunk, e.points, e.normal)
+			out = world.sever_seams(chunk, e.points, e.normal, bool(e.flags & FLAG_STEP))
 			if out.is_empty():
 				out = world.separate_planes(chunk, e.points, e.normal, e.radius)
 				e.flags |= FLAG_BANDED

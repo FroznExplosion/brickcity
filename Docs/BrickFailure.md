@@ -38,7 +38,8 @@ Everything the brick-film aesthetic does follows from the ratio above:
 - **A toppling tower that strikes something mid-span splits in half there.** The contact applies a
   lateral load at mid-height; that bends the section; bending puts the joints on the far face into
   **tension**, where capacity is a thousandth of compression. It snaps clean at one course, and the
-  two halves stay whole.
+  two halves stay whole. (Which course: the one near the contact with the fewest studs across it
+  -- a row of windows before a floor; `IslandManager._weak_seam`, since 2026-10-13.)
 - **The material is stiff, not ductile.** ABS barely deflects before a joint lets go, so there is
   no progressive sagging. A structure is rigid, then a joint releases, then a whole piece moves.
   **Failure is a plane, not a gradient.**

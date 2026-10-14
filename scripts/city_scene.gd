@@ -11378,10 +11378,11 @@ func _run_shot_pass() -> void:
 	print("[city]   " + islands.hit_census_line())
 	print("[city]   " + islands.blast_census_line())
 	print("[city]   " + islands.crumb_cost_line())
-	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms; landings snapped %d time(s), %d on a storey line" % [
+	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms" % [
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
-			islands.crumble_parts[2], islands.breaks, islands.floor_breaks])
+			islands.crumble_parts[2]])
+	print("[city]   " + islands.snap_census_line())
 	# Started can pass built: a start is dropped when its chunk changes under
 	# the worker, and asked for again.
 	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [

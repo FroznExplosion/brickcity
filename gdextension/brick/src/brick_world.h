@@ -774,8 +774,26 @@ public:
     /// this severs one layer of downward joints and leaves both sides solid.
     /// Only works where the cut normal is the chunk's own Y (the only axis
     /// joints run along); returns empty otherwise so the caller can fall back.
+    ///
+    /// `through`: a block that runs through the seam (a column a storey tall)
+    /// is cut too, at its own foot, and goes with the upper side -- without
+    /// it such a block holds the two sides together and nothing parts. Off by
+    /// default: a command recorded before it existed replays as it was made.
     PackedInt32Array sever_seams(int chunk_id, PackedVector3Array world_points,
-            Vector3 world_normal);
+            Vector3 world_normal, bool through = false);
+
+    /// What holds a chunk together across each course boundary from `from_k`
+    /// to `to_k` -- boundaries as sever_seams counts them, in cells up the
+    /// chunk's own Y from its origin. Three numbers a boundary:
+    ///   studs          the stud contacts meeting there, between living
+    ///                  structural blocks whose joint is whole
+    ///   through        the living structural blocks that run THROUGH it
+    ///                  (the middle of a course; a column a storey tall)
+    ///   through_studs  the studs at the feet of those
+    /// A seam there with `through` lets go of studs + through_studs, and the
+    /// boundary near where a piece is struck that lets go of the fewest is
+    /// where it snaps (IslandManager._weak_seam). Pure query.
+    PackedInt32Array seam_studs(int chunk_id, int from_k, int to_k);
 
     // --- detachment --------------------------------------------------------
 
