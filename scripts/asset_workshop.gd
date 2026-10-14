@@ -15,6 +15,17 @@ extends "res://scripts/workshop.gd"
 ##   mirror      F8: every brick placed is placed again, mirrored across the plane down
 ##               the middle of the build; shift F8 puts the plane under the ghost
 ##
+## Phase 2 adds:
+##
+##   part toolbars  Y (shift Y back): a toolbar for each part of the asset -- body, barrel,
+##                  stock ... -- with its own nine slots. Every brick placed is tagged
+##                  with the part whose toolbar it came from, so the split lines are built
+##                  in as the asset is
+##   drag to lay    hold LMB and move: the brick is laid again wherever the ghost goes on
+##                  the plane of the first one -- a line, a wall, a floor
+##   connections    J: a mount or a socket for the current part, its slot and interface,
+##                  on the lattice under the ghost; J on one already there takes it away
+##
 ## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
 ## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
 ##
@@ -27,7 +38,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F2 photos   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom a flat view"
+const KEYS_TEXT := "F2 photos   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom a flat view\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -58,6 +69,37 @@ var _measure_line: MeshInstance3D
 var _measure_label: Label3D
 var _mirror_sheet: MeshInstance3D
 
+## The parts an asset is split into, by name; a gun's are its slots. Every brick has one.
+var part_names := PackedStringArray()
+## The part of each brick, by recipe index: kept beside the recipe, in step with it.
+var part_of := PackedInt32Array()
+var part_sel := 0
+## part name -> its toolbar's nine slots, as WorkshopHotbar.slots holds them.
+var toolbars := {}
+## Mounts and sockets: {part, kind, slot, interface, at: [studs along, plates up, studs across]}.
+var points: Array = []
+## Holding LMB to lay a run: the cell last laid, or NO_STUD between runs.
+var _run_last := NO_STUD
+var _run_on := false
+## A brick the workshop is about to delete, by recipe index, so its tag goes with it.
+var _removing := -1
+var _loading := false
+var _part_label: Label
+var _points_root: Node3D
+var _point_panel: PanelContainer
+var _point_kind: OptionButton
+var _point_slot: OptionButton
+var _point_iface: OptionButton
+var _interfaces := {}
+
+## Where the toolbars are remembered; a probe points it elsewhere.
+var toolbars_save := "user://asset_workshop_toolbars.json"
+## The parts a new asset starts with: a gun's slots (Docs/Parts/custom.md section 4).
+const GUN_PARTS := ["body", "barrel", "stock", "grip", "magazine", "sight", "muzzle", "underbarrel"]
+const PART_COLOURS := [Color(0.62, 0.66, 0.72), Color(0.95, 0.55, 0.2), Color(0.85, 0.72, 0.45),
+		Color(0.55, 0.85, 0.4), Color(0.4, 0.7, 1.0), Color(0.9, 0.4, 0.85), Color(1.0, 0.85, 0.3),
+		Color(0.45, 0.9, 0.85)]
+
 ## The plate is bigger than the workshop's: a rifle is 62 studs long here. 80 studs is
 ## 400 ticks, and so is 200 plates, which keeps the build volume a cube.
 const ASSET_PLATE_STUDS := 80
@@ -74,6 +116,7 @@ func _init() -> void:
 func _ready() -> void:
 	super()
 	_build_asset_tools()
+	_setup_parts()
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	if "--shot" in args:
 		call_deferred("_shot")
@@ -493,9 +536,17 @@ func _unhandled_input(e: InputEvent) -> void:
 			_measure_click()
 		get_viewport().set_input_as_handled()
 		return
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed and not _painting and _stamp == null:
+			_run_on = true
+			_run_last = _cell
+		elif not e.pressed:
+			_run_on = false
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		var mine := true
 		match e.keycode:
+			KEY_Y: select_part(part_sel + (-1 if e.shift_pressed else 1))
+			KEY_J: toggle_point_here()
 			KEY_F2: _toggle_panel()
 			KEY_F6: set_view((view + 1) % VIEWS.size())
 			KEY_F7: set_measure(not measure_on)
@@ -517,6 +568,14 @@ func _process(dt: float) -> void:
 	super._process(dt)
 	if _ruler == null:
 		return
+	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_run_on = false
+	run_step()
+	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
+			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
+	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
+	_part_label.position = Vector2((get_viewport().get_visible_rect().size.x - _part_label.size.x) * 0.5,
+			get_viewport().get_visible_rect().size.y - 104)
 	var vp := get_viewport().get_visible_rect().size
 	_ruler.position = Vector2(12, vp.y - 210)
 	_ruler.text = ruler_text()
@@ -757,11 +816,26 @@ func _store_asset_meta() -> void:
 		var c: Vector3 = p.centre
 		list.append({"path": p.path, "plane": p.plane, "px": [p.px.x, p.px.y], "mpp": p.mpp,
 				"centre": [c.x, c.y, c.z], "opacity": p.opacity, "shown": p.shown})
-	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z}}
+	var pts := []
+	for q in points:
+		pts.append(q.duplicate())
+	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
+			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts}
 
 
 func _restore_asset_meta() -> void:
 	var a: Dictionary = recipe.meta.get("asset", {})
+	var parts: Dictionary = a.get("parts", {})
+	if parts.has("names") and not (parts.names as Array).is_empty():
+		part_names = PackedStringArray(parts.names)
+	part_of = PackedInt32Array()
+	for v in parts.get("of", []):
+		part_of.append(int(v))
+	_reconcile_parts()
+	points = []
+	for q in a.get("points", []):
+		points.append(q)
+	_draw_points()
 	var m: Dictionary = a.get("mirror", {})
 	mirror_z = float(m.get("z", mirror_z))
 	set_mirror(bool(m.get("on", false)))
@@ -785,6 +859,10 @@ func _restore_asset_meta() -> void:
 
 func _reset_space() -> void:
 	super._reset_space()
+	part_of = PackedInt32Array()
+	points = []
+	if _points_root != null:
+		_draw_points()
 	for p in photos:
 		(p.node as Node).queue_free()
 	photos.clear()
@@ -795,5 +873,240 @@ func _reset_space() -> void:
 
 
 func _load_recipe(r: BuildRecipe) -> void:
+	# The workshop's load ends in an edit, and an edit saves this scene's state into the
+	# recipe: while loading, that state is still the last build's, so it waits.
+	_loading = true
 	super._load_recipe(r)
+	_loading = false
 	_restore_asset_meta()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: part toolbars
+# ---------------------------------------------------------------------------
+
+func _setup_parts() -> void:
+	if part_names.is_empty():
+		part_names = PackedStringArray(GUN_PARTS)
+	# Its own file: switching toolbars must never write over the main workshop's hotbar.
+	_hotbar.save_path = "user://asset_workshop_hotbar.json"
+	if FileAccess.file_exists(toolbars_save):
+		var d = JSON.parse_string(FileAccess.get_file_as_string(toolbars_save))
+		if d is Dictionary:
+			toolbars = d
+	_part_label = Label.new()
+	_style(_part_label, Color.WHITE, 16)
+	(_ruler.get_parent() as Node).add_child(_part_label)
+	_points_root = Node3D.new()
+	add_child(_points_root)
+	_load_interfaces()
+	_build_point_panel(_ruler.get_parent() as CanvasLayer)
+	_reconcile_parts()
+	_load_toolbar(part_names[part_sel])
+
+
+## Make part `i` current: its toolbar comes up, and the bricks laid from now are its.
+func select_part(i: int) -> void:
+	toolbars[part_names[part_sel]] = _hotbar.slots.duplicate(true)
+	part_sel = posmod(i, part_names.size())
+	_load_toolbar(part_names[part_sel])
+	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(toolbars))
+
+
+func _load_toolbar(part: String) -> void:
+	if toolbars.has(part):
+		var slots: Array = toolbars[part]
+		for k in mini(slots.size(), _hotbar.slots.size()):
+			_hotbar.slots[k] = (slots[k] as Array).duplicate()
+		_hotbar._refresh()
+	_hotbar.select(_hotbar.selected)
+
+
+## Keep a tag for every brick: one for each brick added since (the current part's) and
+## none for a brick taken away. A delete says which brick it took; anything else that
+## shortens the recipe (undo) takes from the end, as it does.
+func _reconcile_parts() -> void:
+	var n := recipe.size()
+	if _removing >= 0 and _removing < part_of.size() and part_of.size() == n + 1:
+		part_of.remove_at(_removing)
+	_removing = -1
+	while part_of.size() > n:
+		part_of.remove_at(part_of.size() - 1)
+	while part_of.size() < n:
+		part_of.append(part_sel)
+
+
+func _after_edit() -> void:
+	super._after_edit()
+	if _loading:
+		return
+	_reconcile_parts()
+	_store_asset_meta()
+
+
+func _delete_ray(from: Vector3, dir: Vector3) -> bool:
+	var hit := _first_hit(from, dir)
+	if not hit.is_empty():
+		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+	var done := super._delete_ray(from, dir)
+	if not done:
+		_removing = -1
+	return done
+
+
+## How many bricks each part has.
+func part_counts() -> Dictionary:
+	var out := {}
+	for name in part_names:
+		out[name] = 0
+	for i in part_of:
+		out[part_names[i]] += 1
+	return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: holding LMB lays a run
+# ---------------------------------------------------------------------------
+
+## While a run is held, the ghost stays on the plane it started on, as with E.
+func _hold_lock(on: bool) -> void:
+	super._hold_lock(on or _run_on)
+
+
+## Lay the held brick where the ghost has moved to, if it fits there.
+func run_step() -> void:
+	if not _run_on or _cell == _run_last:
+		return
+	_run_last = _cell
+	if _valid:
+		_place()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: connection points
+# ---------------------------------------------------------------------------
+
+func _load_interfaces() -> void:
+	var path := "res://Docs/Parts/standards.json"
+	if not FileAccess.file_exists(path):
+		return
+	var d = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if d is Dictionary:
+		for k in (d.get("gun_interfaces", {}) as Dictionary):
+			if k != "note":
+				_interfaces[k] = d.gun_interfaces[k]
+
+
+## The lattice point under the ghost: its first stud line along, the plate it stands on,
+## the middle of it across.
+func point_under_ghost() -> Array:
+	var size := BrickPalette.size_of(_archetype_name())
+	return [_cell.x, _cell.y, _cell.z + size.z * 0.5]
+
+
+## A mount or socket where the ghost is, for the current part; or, if one is there
+## already, take it away. Returns true if one was added.
+func toggle_point(at: Array, kind: String, slot: String, iface: String) -> bool:
+	for i in points.size():
+		if points[i].at == at:
+			points.remove_at(i)
+			_draw_points()
+			_store_asset_meta()
+			return false
+	points.append({"part": part_names[part_sel], "kind": kind, "slot": slot, "interface": iface, "at": at})
+	_draw_points()
+	_store_asset_meta()
+	return true
+
+
+func toggle_point_here() -> void:
+	var at := point_under_ghost()
+	for q in points:
+		if q.at == at:
+			toggle_point(at, "", "", "")
+			return
+	_point_panel.visible = true
+	_point_panel.set_meta("at", at)
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	_fill_point_ifaces()
+
+
+func _build_point_panel(layer: CanvasLayer) -> void:
+	_point_panel = PanelContainer.new()
+	_point_panel.visible = false
+	_point_panel.position = Vector2(12, 300)
+	layer.add_child(_point_panel)
+	var box := VBoxContainer.new()
+	_point_panel.add_child(box)
+	var title := Label.new()
+	title.text = "Connection point (J)"
+	box.add_child(title)
+	_point_kind = OptionButton.new()
+	for k in ["mount", "socket"]:
+		_point_kind.add_item(k)
+	box.add_child(_point_kind)
+	_point_slot = OptionButton.new()
+	for k in GUN_PARTS:
+		_point_slot.add_item(k)
+	_point_slot.item_selected.connect(func(_i: int) -> void: _fill_point_ifaces())
+	box.add_child(_point_slot)
+	_point_iface = OptionButton.new()
+	box.add_child(_point_iface)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	var ok := Button.new()
+	ok.text = "Place"
+	ok.pressed.connect(func() -> void:
+		if _point_iface.item_count > 0:
+			toggle_point(_point_panel.get_meta("at"), _point_kind.get_item_text(_point_kind.selected),
+					_point_slot.get_item_text(_point_slot.selected),
+					_point_iface.get_item_text(_point_iface.selected))
+		_point_panel.visible = false)
+	row.add_child(ok)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(func() -> void: _point_panel.visible = false)
+	row.add_child(cancel)
+
+
+## The interfaces of the chosen slot: a mount and a socket join only on the same one.
+func _fill_point_ifaces() -> void:
+	_point_iface.clear()
+	var slot := _point_slot.get_item_text(maxi(_point_slot.selected, 0))
+	for k in _interfaces:
+		if String(_interfaces[k].get("slot", "")) == slot:
+			_point_iface.add_item(k)
+
+
+func _draw_points() -> void:
+	for c in _points_root.get_children():
+		c.queue_free()
+	for q in points:
+		var at: Array = q.at
+		var where := Vector3(float(at[0]) * BrickPalette.STUD_M, float(at[1]) * BrickPalette.PLATE_M,
+				float(at[2]) * BrickPalette.STUD_M)
+		var mark := MeshInstance3D.new()
+		var m := SphereMesh.new()
+		m.radius = 0.09
+		m.height = 0.18
+		m.radial_segments = 8
+		m.rings = 4
+		mark.mesh = m
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.no_depth_test = true
+		mat.albedo_color = Color(0.3, 1.0, 0.4) if q.kind == "mount" else Color(1.0, 0.35, 0.3)
+		mark.material_override = mat
+		mark.position = where
+		_points_root.add_child(mark)
+		var label := Label3D.new()
+		label.text = "%s %s\n%s" % [q.part, q.kind, q.interface]
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.pixel_size = 0.003
+		label.font_size = 40
+		label.position = where + Vector3.UP * 0.25
+		_points_root.add_child(label)
