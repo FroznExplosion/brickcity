@@ -8955,6 +8955,7 @@ func _fire(radius: float) -> void:
 		if not authority.request(DamageLog.Kind.BLAST, -1, hit.position, radius):
 			return
 		islands.damage(struck, hit.position, radius)
+		islands.push_near(hit.position, radius)
 		return
 	_blast(hit.position, radius)
 
@@ -11378,6 +11379,7 @@ func _run_shot_pass() -> void:
 	print("[city]   " + islands.hit_census_line())
 	print("[city]   " + islands.blast_census_line())
 	print("[city]   " + islands.crumb_cost_line())
+	print("[city]   " + islands.push_census_line())
 	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms" % [
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],
@@ -11654,7 +11656,13 @@ func _run_checkpoint_pass() -> void:
 	while not _damage_queue.is_empty() and guard < 600:
 		await _frames(1)
 		guard += 1
-	await _frames(45)
+	# Saved while pieces are still coming down: three quarters of a second of
+	# physics, counted in ticks. It was 45 drawn frames -- the same at 60 a
+	# second, and four seconds with the display asleep and drawing at 11, by
+	# which time everything was at rest and "a moving piece still moving" had
+	# nothing to ask about (2026-10-14).
+	for t in roundi(0.75 * Engine.physics_ticks_per_second):
+		await get_tree().physics_frame
 
 	var want := {"buildings": {}, "pieces": {}, "dormant": 0, "moving": 0, "settled": 0}
 	var touched := {}
