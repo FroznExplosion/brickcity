@@ -26,6 +26,18 @@ extends "res://scripts/workshop.gd"
 ##   connections    J: a mount or a socket for the current part, its slot and interface,
 ##                  on the lattice under the ghost; J on one already there takes it away
 ##
+## Phase 3 adds:
+##
+##   shapes      K: drag a box, cylinder, sphere or wedge out on the ghost's plane; it is
+##               filled with bricks, clean (fewest) or random (mixed sizes)
+##   select      L: drag a box over the build; delete it, re-pack it, give it to the
+##               current part, copy or move it to the ghost
+##   guides      F3: a model (glTF, FBX) on a locked see-through layer, scaled to a real
+##               length, to build inside. Never exported
+##   section     O, in a flat view: cut away what is nearer than the mirror plane (side),
+##               above the ghost (top) or past it (front)
+##   outlines    P: every brick outlined in its part's colour; again, the current part only
+##
 ## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
 ## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
 ##
@@ -38,7 +50,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F2 photos   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom a flat view\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point"
+const KEYS_TEXT := "F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -91,6 +103,35 @@ var _point_kind: OptionButton
 var _point_slot: OptionButton
 var _point_iface: OptionButton
 var _interfaces := {}
+
+## Phase 3. The drag tool in hand: "", "shape" or "select".
+var tool := ""
+var shape_kind := "box"
+var shape_fill := "clean"
+## How many plates tall a box, cylinder or wedge is.
+var shape_plates := 3
+## Recipe ids of the bricks the select tool holds.
+var selection: Array[int] = []
+var section_on := false
+## 0 off, 1 every brick in its part's colour, 2 the current part's only.
+var outlines := 0
+## Each: {path, real_mm, offset, turn, opacity, node, box (AABB of the model as loaded)}.
+var guides: Array = []
+var _drag_from := Vector3i.ZERO
+var _drag_to := Vector3i.ZERO
+var _dragging := false
+var _tool_lines: MeshInstance3D
+var _outline_lines: MeshInstance3D
+var _outlines_dirty := false
+var _tool_panel: PanelContainer
+var _shape_box: VBoxContainer
+var _select_box: VBoxContainer
+var _guide_panel: PanelContainer
+var _guide_list: OptionButton
+var _guide_mm: LineEdit
+var _guide_dialog: FileDialog
+var _rng := RandomNumberGenerator.new()
+const SHAPES := ["box", "cylinder", "sphere", "wedge"]
 
 ## Where the toolbars are remembered; a probe points it elsewhere.
 var toolbars_save := "user://asset_workshop_toolbars.json"
@@ -482,6 +523,7 @@ func set_view(v: int) -> void:
 		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 		_camera.global_transform = _persp_xf
 		_camera.set_process_unhandled_input(true)
+		_apply_section()
 		return
 	# Looking straight at the build. The camera's own click-to-look is off: a flat view
 	# is built in with the cursor, and a captured mouse would turn it.
@@ -501,6 +543,7 @@ func set_view(v: int) -> void:
 		"front":
 			_camera.global_position = c + Vector3.RIGHT * 60.0
 			_camera.look_at(c, Vector3.UP)
+	_apply_section()
 
 
 func zoom(by: float) -> void:
@@ -536,6 +579,16 @@ func _unhandled_input(e: InputEvent) -> void:
 			_measure_click()
 		get_viewport().set_input_as_handled()
 		return
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool != "":
+		if e.pressed:
+			_drag_from = _cell
+			_drag_to = _cell
+			_dragging = true
+		elif _dragging:
+			_dragging = false
+			_finish_drag()
+		get_viewport().set_input_as_handled()
+		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 		if e.pressed and not _painting and _stamp == null:
 			_run_on = true
@@ -546,6 +599,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		var mine := true
 		match e.keycode:
 			KEY_Y: select_part(part_sel + (-1 if e.shift_pressed else 1))
+			KEY_K: set_tool("" if tool == "shape" else "shape")
+			KEY_L: set_tool("" if tool == "select" else "select")
+			KEY_F3: _toggle_guide_panel()
+			KEY_O: set_section(not section_on)
+			KEY_P: set_outlines((outlines + 1) % 3)
 			KEY_J: toggle_point_here()
 			KEY_F2: _toggle_panel()
 			KEY_F6: set_view((view + 1) % VIEWS.size())
@@ -571,6 +629,11 @@ func _process(dt: float) -> void:
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_run_on = false
 	run_step()
+	if _dragging:
+		_drag_to = _cell
+	_draw_tool()
+	if _outlines_dirty:
+		_draw_outlines()
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
@@ -819,8 +882,13 @@ func _store_asset_meta() -> void:
 	var pts := []
 	for q in points:
 		pts.append(q.duplicate())
+	var gds := []
+	for g in guides:
+		var o: Vector3 = g.offset
+		gds.append({"path": g.path, "real_mm": g.real_mm, "offset": [o.x, o.y, o.z],
+				"turn": g.turn, "opacity": g.opacity})
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
-			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts}
+			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds}
 
 
 func _restore_asset_meta() -> void:
@@ -836,6 +904,13 @@ func _restore_asset_meta() -> void:
 	for q in a.get("points", []):
 		points.append(q)
 	_draw_points()
+	for g in a.get("guides", []):
+		var i := load_guide(String(g.path), float(g.real_mm))
+		if i >= 0:
+			guides[i].offset = Vector3(float(g.offset[0]), float(g.offset[1]), float(g.offset[2]))
+			guides[i].turn = int(g.get("turn", 0))
+			guides[i].opacity = float(g.get("opacity", 0.35))
+			_fit_guide(guides[i])
 	var m: Dictionary = a.get("mirror", {})
 	mirror_z = float(m.get("z", mirror_z))
 	set_mirror(bool(m.get("on", false)))
@@ -863,6 +938,10 @@ func _reset_space() -> void:
 	points = []
 	if _points_root != null:
 		_draw_points()
+	for g in guides:
+		(g.node as Node).queue_free()
+	guides.clear()
+	selection.clear()
 	for p in photos:
 		(p.node as Node).queue_free()
 	photos.clear()
@@ -901,6 +980,7 @@ func _setup_parts() -> void:
 	add_child(_points_root)
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
+	_build_phase3(_ruler.get_parent() as CanvasLayer)
 	_reconcile_parts()
 	_load_toolbar(part_names[part_sel])
 
@@ -910,6 +990,7 @@ func select_part(i: int) -> void:
 	toolbars[part_names[part_sel]] = _hotbar.slots.duplicate(true)
 	part_sel = posmod(i, part_names.size())
 	_load_toolbar(part_names[part_sel])
+	_outlines_dirty = true
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(toolbars))
@@ -944,6 +1025,7 @@ func _after_edit() -> void:
 		return
 	_reconcile_parts()
 	_store_asset_meta()
+	_outlines_dirty = true
 
 
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
@@ -972,7 +1054,7 @@ func part_counts() -> Dictionary:
 
 ## While a run is held, the ghost stays on the plane it started on, as with E.
 func _hold_lock(on: bool) -> void:
-	super._hold_lock(on or _run_on)
+	super._hold_lock(on or _run_on or _dragging)
 
 
 ## Lay the held brick where the ghost has moved to, if it fits there.
@@ -1110,3 +1192,610 @@ func _draw_points() -> void:
 		label.font_size = 40
 		label.position = where + Vector3.UP * 0.25
 		_points_root.add_child(label)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: the packer -- cells to bricks
+# ---------------------------------------------------------------------------
+
+## The plain parts a fill is made of: plates and bricks, each way round, biggest first.
+## [archetype name, Vector3i size in studs along, plates up, studs across].
+func fill_parts() -> Array:
+	var out := []
+	for part in _parts():
+		var name := String(part)
+		if not (name.begins_with("plate_") or name.begins_with("brick_")) or name == "plate_10x10":
+			continue
+		var seen := {}
+		for yaw in 2:
+			var arch := BrickPalette.variant_name(name, yaw, false)
+			var size := BrickPalette.size_of(arch)
+			if not seen.has(size) and palette.has(arch):
+				seen[size] = true
+				out.append([arch, size])
+	out.sort_custom(func(a: Array, b: Array) -> bool:
+		var va: int = a[1].x * a[1].y * a[1].z
+		var vb: int = b[1].x * b[1].y * b[1].z
+		return va > vb)
+	return out
+
+
+## Cover `cells` (Vector3i -> true) with parts, bottom up. Clean takes the biggest part
+## that fits at each place; random takes any that fits, so sizes mix. Bricks start only
+## on shared courses, so neighbouring columns line up to be bridged; each layer grows
+## from the other corner to the one under it, so seams do not stack.
+## Returns [[archetype name, min cell]].
+func pack_cells(cells: Dictionary, random: bool = false) -> Array:
+	var left := cells.duplicate()
+	var parts := fill_parts()
+	var out := []
+	if left.is_empty():
+		return out
+	var ys := {}
+	for c in left:
+		ys[c.y] = true
+	var layers := ys.keys()
+	layers.sort()
+	var base: int = layers[0]
+	for y in layers:
+		var flip: bool = (y - base) % 2 == 1
+		var here := []
+		for c in left:
+			if c.y == y:
+				here.append(c)
+		here.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+			if a.x != b.x:
+				return (a.x > b.x) if flip else (a.x < b.x)
+			return (a.z > b.z) if flip else (a.z < b.z))
+		for c in here:
+			if not left.has(c):
+				continue
+			var fits := []
+			for pe in parts:
+				var size: Vector3i = pe[1]
+				if size.y > 1 and (y - base) % 3 != 0:
+					continue
+				var at := Vector3i(c.x - size.x + 1 if flip else c.x, y, c.z - size.z + 1 if flip else c.z)
+				if _box_in(left, at, size):
+					fits.append([pe[0], at, size])
+			if fits.is_empty():
+				continue
+			var pick: Array = fits[_rng.randi_range(0, fits.size() - 1)] if random else fits[0]
+			for dx in pick[2].x:
+				for dy in pick[2].y:
+					for dz in pick[2].z:
+						left.erase(pick[1] + Vector3i(dx, dy, dz))
+			out.append([pick[0], pick[1]])
+	return out
+
+
+static func _box_in(cells: Dictionary, at: Vector3i, size: Vector3i) -> bool:
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				if not cells.has(at + Vector3i(dx, dy, dz)):
+					return false
+	return true
+
+
+## Lay a named part at a cell in the upright grid, in the held colour and material, as
+## a click would. Returns false if it does not fit there.
+func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1) -> bool:
+	if not palette.has(arch) or _frame != 0:
+		return false
+	var id: int = palette[arch]
+	if world.would_connect(chunk, cell, id) < 0 or not asm.can_place(chunk, cell, id):
+		return false
+	var c := _colour if colour < 0 else colour
+	var m := _mat if mat < 0 else mat
+	var placed := asm.place(chunk, cell, id, c)
+	if placed < 0:
+		return false
+	if m != 0:
+		world.set_block_material(chunk, placed, m)
+	recipe.add(arch, cell, c, _recipe_frame_for(_frame), _role, m)
+	_placed_at.append([_frame, placed])
+	_edits.append("brick")
+	_after_edit()
+	return true
+
+
+## Fill cells with bricks, as one edit: the mesh is rebuilt once, at the end.
+func fill_cells(cells: Dictionary, random: bool = false) -> int:
+	var laid := 0
+	_batch = true
+	for pc in pack_cells(cells, random):
+		if place_named(pc[0], pc[1]):
+			laid += 1
+	_batch = false
+	_after_edit()
+	return laid
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: shapes and select
+# ---------------------------------------------------------------------------
+
+## The cells of a shape between two cells of one plane: `kind` is box, cylinder (an
+## upright ellipse), sphere (an ellipsoid as tall as it is wide) or wedge (falling from
+## full height to one plate along the gun).
+func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Dictionary:
+	var lo := Vector3i(mini(a.x, b.x), a.y, mini(a.z, b.z))
+	var hi := Vector3i(maxi(a.x, b.x), a.y, maxi(a.z, b.z))
+	var w := hi.x - lo.x + 1
+	var d := hi.z - lo.z + 1
+	var tall := plates
+	if kind == "sphere":
+		tall = maxi(1, int(round(maxf(w, d) * BrickPalette.STUD_M / BrickPalette.PLATE_M)))
+	var out := {}
+	for x in range(lo.x, hi.x + 1):
+		for z in range(lo.z, hi.z + 1):
+			var u := (x + 0.5 - lo.x) / w * 2.0 - 1.0
+			var v := (z + 0.5 - lo.z) / d * 2.0 - 1.0
+			for k in tall:
+				var t := (k + 0.5) / tall * 2.0 - 1.0
+				var inside := true
+				match kind:
+					"cylinder":
+						inside = u * u + v * v <= 1.0
+					"sphere":
+						inside = u * u + v * v + t * t <= 1.0
+					"wedge":
+						inside = k < maxi(1, int(ceil(tall * (1.0 - (x - lo.x) / float(w)))))
+				if inside:
+					out[Vector3i(x, lo.y + k, z)] = true
+	return out
+
+
+func set_tool(t: String) -> void:
+	tool = t
+	_dragging = false
+	_tool_panel.visible = t != ""
+	_shape_box.visible = t == "shape"
+	_select_box.visible = t == "select"
+	if t == "" :
+		selection.clear()
+	_outlines_dirty = true
+
+
+func _finish_drag() -> void:
+	if tool == "shape":
+		fill_cells(shape_cells(shape_kind, _drag_from, _drag_to, shape_plates), shape_fill == "random")
+	elif tool == "select":
+		select_box(_drag_from, _drag_to)
+
+
+## Every brick of the upright grid whose corner is over the rectangle, any height.
+func select_box(a: Vector3i, b: Vector3i) -> void:
+	selection.clear()
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var c := recipe.cell_of(i)
+		if c.x >= mini(a.x, b.x) and c.x <= maxi(a.x, b.x) and c.z >= mini(a.z, b.z) and c.z <= maxi(a.z, b.z):
+			selection.append(i)
+	_outlines_dirty = true
+
+
+## Delete the selection, top first, each as RMB would (so its part tag goes with it).
+func delete_selection() -> int:
+	var ids := selection.duplicate()
+	ids.sort_custom(func(a: int, b: int) -> bool: return recipe.cell_of(a).y > recipe.cell_of(b).y)
+	var cells := []
+	for i in ids:
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		cells.append(Vector3((c.x + size.x * 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M,
+				(c.z + size.z * 0.5) * BrickPalette.STUD_M))
+	selection.clear()
+	var gone := 0
+	for at in cells:
+		if _delete_ray(at, Vector3.DOWN):
+			gone += 1
+	_outlines_dirty = true
+	return gone
+
+
+## The cells the selection's plain bricks fill, and the colour most of them are.
+func _selection_cells() -> Array:
+	var cells := {}
+	var colours := {}
+	for i in selection:
+		var name := recipe.part_of(i)
+		if not (name.begins_with("plate_") or name.begins_with("brick_")):
+			continue
+		var size := BrickPalette.size_of(name)
+		var c := recipe.cell_of(i)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					cells[c + Vector3i(dx, dy, dz)] = true
+		colours[recipe.colour_of(i)] = colours.get(recipe.colour_of(i), 0) + 1
+	var best := _colour
+	for k in colours:
+		if colours[k] > colours.get(best, 0):
+			best = k
+	return [cells, best]
+
+
+## Lay the selection's plain bricks again, clean or random. Returns bricks before, after.
+func repack_selection(random: bool = false) -> Array:
+	var got := _selection_cells()
+	var before := selection.size()
+	selection = selection.filter(func(i: int) -> bool:
+		return recipe.part_of(i).begins_with("plate_") or recipe.part_of(i).begins_with("brick_"))
+	delete_selection()
+	var keep := _colour
+	_colour = got[1]
+	var after := fill_cells(got[0], random)
+	_colour = keep
+	return [before, after]
+
+
+## Give the selection to the current part.
+func assign_selection() -> void:
+	for i in selection:
+		if i < part_of.size():
+			part_of[i] = part_sel
+	_store_asset_meta()
+	_outlines_dirty = true
+
+
+## Copy the selection so its lowest corner lands on the ghost; with `move`, the original
+## goes. Returns how many bricks were laid.
+func copy_selection_to_ghost(move: bool = false) -> int:
+	if selection.is_empty():
+		return 0
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	for i in selection:
+		var c := recipe.cell_of(i)
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+	var off := _cell - lo
+	var items := []
+	for i in selection:
+		items.append([recipe.part_of(i), recipe.cell_of(i) + off, recipe.colour_of(i), recipe.material_of(i)])
+	if move:
+		delete_selection()
+	var laid := 0
+	_batch = true
+	items.sort_custom(func(a: Array, b: Array) -> bool: return a[1].y < b[1].y)
+	for it in items:
+		if place_named(it[0], it[1], it[2], it[3]):
+			laid += 1
+	_batch = false
+	_after_edit()
+	return laid
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: guide models
+# ---------------------------------------------------------------------------
+
+## Load a model to build inside: glTF or FBX, see-through, never built on, never exported.
+## `real_mm` is how long its longest side is on the real thing. Returns its index.
+func load_guide(path: String, real_mm: float) -> int:
+	var fbx := path.get_extension().to_lower() == "fbx"
+	var doc: GLTFDocument = FBXDocument.new() if fbx else GLTFDocument.new()
+	var state: GLTFState = FBXState.new() if fbx else GLTFState.new()
+	if doc.append_from_file(path, state) != OK:
+		push_warning("asset workshop: could not read %s" % path)
+		return -1
+	var scene := doc.generate_scene(state) as Node3D
+	if scene == null:
+		return -1
+	var holder := Node3D.new()
+	holder.add_child(scene)
+	add_child(holder)
+	var box := _model_box(scene, Transform3D())
+	var g := {"path": path, "real_mm": real_mm, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
+			"node": holder, "box": box}
+	guides.append(g)
+	_fit_guide(g)
+	_store_asset_meta()
+	_refresh_guide_panel()
+	return guides.size() - 1
+
+
+func _model_box(n: Node, xf: Transform3D) -> AABB:
+	var out := AABB()
+	var first := true
+	var here := xf * (n as Node3D).transform if n is Node3D else xf
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		out = here * (n as MeshInstance3D).mesh.get_aabb()
+		first = false
+	for c in n.get_children():
+		var b := _model_box(c, here)
+		if b.size == Vector3.ZERO:
+			continue
+		out = b if first else out.merge(b)
+		first = false
+	return out
+
+
+## Size, turn, place and shade a guide: its longest side to `real_mm` at quarter scale,
+## standing on the plate, centred on the mirror plane, then `offset` in studs.
+func _fit_guide(g: Dictionary) -> void:
+	var holder: Node3D = g.node
+	var box: AABB = g.box
+	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
+	if longest <= 0.0:
+		return
+	var k := float(g.real_mm) / (PRINT_MM_PER_STUD * REAL_PER_PRINT) * BrickPalette.STUD_M / longest
+	var turn := Basis(Vector3.UP, int(g.turn) * PI * 0.5)
+	var centre := box.get_center() * k
+	var bottom := box.position.y * k
+	var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	var at := Vector3(mid, BrickPalette.PLATE_M - bottom, mirror_z * BrickPalette.STUD_M) - turn * Vector3(centre.x, 0.0, centre.z)
+	holder.transform = Transform3D(turn.scaled(Vector3.ONE * k), at + (g.offset as Vector3) * BrickPalette.STUD_M)
+	_shade_guide(holder, float(g.opacity))
+
+
+func _shade_guide(n: Node, opacity: float) -> void:
+	if n is MeshInstance3D:
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(0.4, 0.85, 1.0, opacity)
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		(n as MeshInstance3D).material_override = mat
+		(n as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for c in n.get_children():
+		_shade_guide(c, opacity)
+
+
+## The guide's size as placed, in workshop metres.
+func guide_size(i: int) -> Vector3:
+	var g: Dictionary = guides[i]
+	var holder: Node3D = g.node
+	return (holder.transform.basis * (g.box as AABB).size).abs()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: section and outlines
+# ---------------------------------------------------------------------------
+
+## In a flat view, cut away what is nearer than a plane: the mirror plane from the side,
+## the ghost's plate from above, the ghost's stud line from the front.
+func set_section(on: bool) -> void:
+	section_on = on
+	_apply_section()
+
+
+func _apply_section() -> void:
+	if not section_on or view == 0:
+		_camera.near = 0.05
+		return
+	var cam := _camera.global_position
+	match VIEWS[view]:
+		"side":
+			_camera.near = maxf(0.05, cam.z - mirror_z * BrickPalette.STUD_M)
+		"top":
+			_camera.near = maxf(0.05, cam.y - (_cell.y + 1) * BrickPalette.PLATE_M)
+		"front":
+			_camera.near = maxf(0.05, cam.x - (_cell.x + 1) * BrickPalette.STUD_M)
+
+
+func set_outlines(mode: int) -> void:
+	outlines = mode
+	_outlines_dirty = true
+
+
+func _draw_outlines() -> void:
+	_outlines_dirty = false
+	var im := ImmediateMesh.new()
+	_outline_lines.mesh = im
+	var any := false
+	var sel := {}
+	for i in selection:
+		sel[i] = true
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var tag := part_of[i] if i < part_of.size() else 0
+		var show := sel.has(i) or outlines == 1 or (outlines == 2 and tag == part_sel)
+		if not show:
+			continue
+		if not any:
+			im.surface_begin(Mesh.PRIMITIVE_LINES)
+			any = true
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		var lo := Vector3(c.x * BrickPalette.STUD_M, c.y * BrickPalette.PLATE_M, c.z * BrickPalette.STUD_M)
+		var hi := lo + Vector3(size.x * BrickPalette.STUD_M, size.y * BrickPalette.PLATE_M, size.z * BrickPalette.STUD_M)
+		var col: Color = Color(1, 1, 1) if sel.has(i) else PART_COLOURS[tag % PART_COLOURS.size()]
+		_box_lines(im, lo, hi, col)
+	if any:
+		im.surface_end()
+
+
+func _draw_tool() -> void:
+	var im := ImmediateMesh.new()
+	_tool_lines.mesh = im
+	if not _dragging:
+		return
+	var a := _drag_from
+	var b := _drag_to
+	var lo := Vector3(mini(a.x, b.x) * BrickPalette.STUD_M, a.y * BrickPalette.PLATE_M, mini(a.z, b.z) * BrickPalette.STUD_M)
+	var tall := float(shape_plates) if tool == "shape" else 0.2
+	if tool == "shape" and shape_kind == "sphere":
+		tall = (maxi(absi(a.x - b.x), absi(a.z - b.z)) + 1) * BrickPalette.STUD_M / BrickPalette.PLATE_M
+	var hi := Vector3((maxi(a.x, b.x) + 1) * BrickPalette.STUD_M, a.y * BrickPalette.PLATE_M + tall * BrickPalette.PLATE_M,
+			(maxi(a.z, b.z) + 1) * BrickPalette.STUD_M)
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	_box_lines(im, lo, hi, Color(1.0, 0.9, 0.2) if tool == "shape" else Color(1, 1, 1))
+	im.surface_end()
+
+
+static func _box_lines(im: ImmediateMesh, lo: Vector3, hi: Vector3, col: Color) -> void:
+	var c := [Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z),
+			Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z)]
+	for e in [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]:
+		im.surface_set_color(col)
+		im.surface_add_vertex(c[e[0]])
+		im.surface_set_color(col)
+		im.surface_add_vertex(c[e[1]])
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: panels
+# ---------------------------------------------------------------------------
+
+func _build_phase3(layer: CanvasLayer) -> void:
+	_rng.seed = 1
+	for which in ["tool", "outline"]:
+		var mi := MeshInstance3D.new()
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.vertex_color_use_as_albedo = true
+		mat.no_depth_test = which == "tool"
+		mi.material_override = mat
+		add_child(mi)
+		if which == "tool":
+			_tool_lines = mi
+		else:
+			_outline_lines = mi
+
+	_tool_panel = PanelContainer.new()
+	_tool_panel.visible = false
+	_tool_panel.position = Vector2(12, 300)
+	layer.add_child(_tool_panel)
+	var box := VBoxContainer.new()
+	_tool_panel.add_child(box)
+
+	_shape_box = VBoxContainer.new()
+	box.add_child(_shape_box)
+	var t1 := Label.new()
+	t1.text = "Shapes (K): drag on the ghost's plane"
+	_shape_box.add_child(t1)
+	var kinds := OptionButton.new()
+	for k in SHAPES:
+		kinds.add_item(k)
+	kinds.item_selected.connect(func(i: int) -> void: shape_kind = SHAPES[i])
+	_shape_box.add_child(kinds)
+	var fills := OptionButton.new()
+	fills.add_item("clean: fewest bricks")
+	fills.add_item("random: mixed sizes")
+	fills.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
+	_shape_box.add_child(fills)
+	var hrow := HBoxContainer.new()
+	_shape_box.add_child(hrow)
+	var hl := Label.new()
+	hl.text = "plates tall"
+	hrow.add_child(hl)
+	var hs := SpinBox.new()
+	hs.min_value = 1
+	hs.max_value = 120
+	hs.value = shape_plates
+	hs.value_changed.connect(func(v: float) -> void: shape_plates = int(v))
+	hrow.add_child(hs)
+
+	_select_box = VBoxContainer.new()
+	box.add_child(_select_box)
+	var t2 := Label.new()
+	t2.text = "Select (L): drag a box over the build"
+	_select_box.add_child(t2)
+	for b in [["Delete", func() -> void: delete_selection()],
+			["Re-pack clean", func() -> void: repack_selection(false)],
+			["Re-pack random", func() -> void: repack_selection(true)],
+			["Give to current part", func() -> void: assign_selection()],
+			["Copy to ghost", func() -> void: copy_selection_to_ghost(false)],
+			["Move to ghost", func() -> void: copy_selection_to_ghost(true)]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		btn.pressed.connect(b[1])
+		_select_box.add_child(btn)
+
+	_guide_panel = PanelContainer.new()
+	_guide_panel.visible = false
+	layer.add_child(_guide_panel)
+	var g := VBoxContainer.new()
+	_guide_panel.add_child(g)
+	var t3 := Label.new()
+	t3.text = "Guide models (F3): to build inside, never exported"
+	g.add_child(t3)
+	var mm_row := HBoxContainer.new()
+	g.add_child(mm_row)
+	var mm_l := Label.new()
+	mm_l.text = "real length, mm"
+	mm_row.add_child(mm_l)
+	_guide_mm = LineEdit.new()
+	_guide_mm.text = "852"
+	_guide_mm.custom_minimum_size = Vector2(80, 0)
+	mm_row.add_child(_guide_mm)
+	var load_btn := Button.new()
+	load_btn.text = "Load model..."
+	load_btn.pressed.connect(func() -> void: _guide_dialog.popup_centered_ratio(0.6))
+	g.add_child(load_btn)
+	_guide_list = OptionButton.new()
+	g.add_child(_guide_list)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	g.add_child(grid)
+	for b in [["left", Vector3(-1, 0, 0)], ["right", Vector3(1, 0, 0)], ["up", Vector3(0, 1, 0)],
+			["down", Vector3(0, -1, 0)], ["nearer", Vector3(0, 0, 1)], ["farther", Vector3(0, 0, -1)]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		var step: Vector3 = b[1]
+		btn.pressed.connect(func() -> void:
+			var i := _guide_list.selected
+			if i >= 0:
+				guides[i].offset = (guides[i].offset as Vector3) + step
+				_fit_guide(guides[i])
+				_store_asset_meta())
+		grid.add_child(btn)
+	for b in [["turn 90", "turn"], ["set length", "length"], ["fainter", "fainter"], ["remove", "remove"]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		var what: String = b[1]
+		btn.pressed.connect(func() -> void: _guide_action(what))
+		grid.add_child(btn)
+	_guide_dialog = FileDialog.new()
+	_guide_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_guide_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_guide_dialog.use_native_dialog = true
+	_guide_dialog.filters = PackedStringArray(["*.glb, *.gltf, *.fbx ; Models"])
+	_guide_dialog.file_selected.connect(func(path: String) -> void:
+		load_guide(path, float(_guide_mm.text) if _guide_mm.text.is_valid_float() else 852.0))
+	layer.add_child(_guide_dialog)
+
+
+func _guide_action(what: String) -> void:
+	var i := _guide_list.selected
+	if i < 0 or i >= guides.size():
+		return
+	var g: Dictionary = guides[i]
+	match what:
+		"turn":
+			g.turn = (int(g.turn) + 1) % 4
+		"length":
+			if _guide_mm.text.is_valid_float():
+				g.real_mm = float(_guide_mm.text)
+		"fainter":
+			g.opacity = 0.6 if float(g.opacity) < 0.2 else float(g.opacity) * 0.6
+		"remove":
+			(g.node as Node).queue_free()
+			guides.remove_at(i)
+			_store_asset_meta()
+			_refresh_guide_panel()
+			return
+	_fit_guide(g)
+	_store_asset_meta()
+
+
+func _toggle_guide_panel() -> void:
+	_guide_panel.visible = not _guide_panel.visible
+	if _guide_panel.visible and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	var vp := get_viewport().get_visible_rect().size
+	_guide_panel.position = Vector2(vp.x - 420, 60)
+	_refresh_guide_panel()
+
+
+func _refresh_guide_panel() -> void:
+	if _guide_list == null:
+		return
+	_guide_list.clear()
+	for g in guides:
+		_guide_list.add_item((g.path as String).get_file())
+	if not guides.is_empty():
+		_guide_list.select(guides.size() - 1)
