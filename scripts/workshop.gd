@@ -64,14 +64,17 @@ static func _keys_text() -> String:
 
 ## Baseplate size in studs. Big enough for a house, small enough that the whole
 ## thing is on screen from the default camera.
-const PLATE_STUDS := 48
+## A variable rather than a constant so a scene built on this one can make the
+## plate bigger before `_ready` (the asset workshop: a rifle is 62 studs long).
+var plate_studs := 48
 ## Head room above the baseplate, in plates.
 ##
 ## 48 studs is 240 ticks and 120 plates is 240 ticks, so the build volume is a
 ## CUBE in tick space. That is not a coincidence worth losing: it means all six
 ## build grids cover exactly the same region whichever way they are turned, so
 ## switching grids never moves you somewhere else.
-const HEIGHT_PLATES := 120
+## Kept with `plate_studs` so the build volume stays a cube in tick space.
+var height_plates := 120
 
 ## The six build grids, by which world axis the grid's own "up" points along.
 ## Docs/BuildMode.md section 2 -- a sideways brick is a rotated FRAME, so
@@ -437,7 +440,7 @@ func _run_gate() -> void:
 ## Six co-located grids removes the whole class of problem: switching grid
 ## changes the orientation you build in and nothing else.
 func _build_frames() -> void:
-	var dims := Vector3i(PLATE_STUDS, HEIGHT_PLATES, PLATE_STUDS)
+	var dims := Vector3i(plate_studs, height_plates, plate_studs)
 	for up in FRAME_UPS:
 		var rot := _rotation_with_up(up)
 		if rot < 0:
@@ -491,8 +494,8 @@ func _origin_for(rot: int, dims: Vector3i) -> Vector3i:
 ## what makes "is it grounded" a real question in the workshop as well as the city.
 func _lay_baseplate() -> void:
 	var p: int = palette["plate_4x4"]
-	for x in range(0, PLATE_STUDS, 4):
-		for z in range(0, PLATE_STUDS, 4):
+	for x in range(0, plate_studs, 4):
+		for z in range(0, plate_studs, 4):
 			world.place_block(chunk, Vector3i(x, 0, z), p, 2)
 
 
@@ -531,7 +534,7 @@ func _build_camera() -> void:
 	_camera.set_script(load("res://scripts/debug_camera.gd"))
 	_camera.far = 400.0
 	_camera.set("e_climbs", false)   # E is the plane lock here; SPACE still climbs
-	var mid := PLATE_STUDS * BrickPalette.STUD_M * 0.5
+	var mid := plate_studs * BrickPalette.STUD_M * 0.5
 	var centre := Vector3(mid, 0.0, mid)
 	_camera.position = centre + Vector3(-mid * 0.9, mid * 0.75, mid * 1.35)
 	add_child(_camera)
@@ -1265,9 +1268,9 @@ func _continue_flight(face: Dictionary, column: Vector3i) -> void:
 ## Keep a part's cell inside the build volume.
 func _clamp_cell(c: Vector3i, size: Vector3i) -> Vector3i:
 	return Vector3i(
-		clampi(c.x, 0, PLATE_STUDS - size.x),
-		clampi(c.y, 0, HEIGHT_PLATES - size.y),
-		clampi(c.z, 0, PLATE_STUDS - size.z))
+		clampi(c.x, 0, plate_studs - size.x),
+		clampi(c.y, 0, height_plates - size.y),
+		clampi(c.z, 0, plate_studs - size.z))
 
 
 ## E held: the ghost follows the cursor across the locked plane.
@@ -1352,7 +1355,7 @@ func _enter_stud_frame(stud: Dictionary) -> bool:
 		hi.x if d.x > 0 else lo.x,
 		hi.y if d.y > 0 else lo.y,
 		hi.z if d.z > 0 else lo.z)
-	var dims := Vector3i(PLATE_STUDS, HEIGHT_PLATES, PLATE_STUDS)
+	var dims := Vector3i(plate_studs, height_plates, plate_studs)
 	var origin := _origin_on_plane(rot, dims, d, plane, stud.base)
 	var f := _asm_frame_for(rot, origin)
 	if f < 0:
@@ -1798,7 +1801,7 @@ func _drop_edit(kind: String, n: int) -> void:
 
 func _baseplate_blocks() -> int:
 	@warning_ignore("integer_division")
-	var n: int = (PLATE_STUDS / 4) * (PLATE_STUDS / 4)
+	var n: int = (plate_studs / 4) * (plate_studs / 4)
 	return n
 
 
@@ -2166,10 +2169,10 @@ func _build_grid() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
 	var s := BrickPalette.STUD_M
-	var span := PLATE_STUDS * s
+	var span := plate_studs * s
 	# Just above the plane itself, so it does not z-fight with the brick tops.
 	var y := 0.002
-	for i in PLATE_STUDS + 1:
+	for i in plate_studs + 1:
 		# Faint: a rotated grid's plane can sit right across the view, and it is
 		# an orientation cue rather than something to read.
 		var col := Color(1, 1, 1, 0.13 if i % 4 == 0 else 0.04)
@@ -2710,9 +2713,9 @@ func stamp_target(from: Vector3, dir: Vector3) -> Vector3i:
 	var x := int(floor(p.x / BrickPalette.STUD_M)) - d.x / 2
 	@warning_ignore("integer_division")
 	var z := int(floor(p.z / BrickPalette.STUD_M)) - d.z / 2
-	return Vector3i(clampi(x, 0, maxi(PLATE_STUDS - d.x, 0)),
-			clampi(y, 1, maxi(HEIGHT_PLATES - d.y, 1)),
-			clampi(z, 0, maxi(PLATE_STUDS - d.z, 0)))
+	return Vector3i(clampi(x, 0, maxi(plate_studs - d.x, 0)),
+			clampi(y, 1, maxi(height_plates - d.y, 1)),
+			clampi(z, 0, maxi(plate_studs - d.z, 0)))
 
 
 ## Cell offset for each of the stamp's frames beyond 0, in that frame's own
@@ -2755,8 +2758,8 @@ func _stamp_fits(at: Vector3i) -> bool:
 	for t in _stamp.towers:
 		var c := BuildRecipe.cell_from(t.cell) + off
 		var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
-		if c.x < 0 or c.z < 0 or c.x + d.x > PLATE_STUDS or c.z + d.z > PLATE_STUDS \
-				or c.y + d.y > HEIGHT_PLATES:
+		if c.x < 0 or c.z < 0 or c.x + d.x > plate_studs or c.z + d.z > plate_studs \
+				or c.y + d.y > height_plates:
 			return false
 	return true
 
@@ -2876,7 +2879,7 @@ const HANDLE_PICK_PX := 22.0
 
 
 func _tower_limit(cell: Vector3i) -> Vector3i:
-	return Vector3i(PLATE_STUDS - cell.x, HEIGHT_PLATES - cell.y, PLATE_STUDS - cell.z)
+	return Vector3i(plate_studs - cell.x, height_plates - cell.y, plate_studs - cell.z)
 
 
 ## Insert > Generated building: three panels by three, two storeys, near the
@@ -3218,9 +3221,9 @@ func drag_ray(from: Vector3, dir: Vector3) -> void:
 			var c := g - (_drag.grab as Vector3)
 			var d := TowerBlockout.dims(TowerBlockout.normalised(p))
 			new_at = Vector3i(
-					clampi(int(round(c.x / BrickPalette.STUD_M)), 0, PLATE_STUDS - d.x),
+					clampi(int(round(c.x / BrickPalette.STUD_M)), 0, plate_studs - d.x),
 					at.y,
-					clampi(int(round(c.z / BrickPalette.STUD_M)), 0, PLATE_STUDS - d.z))
+					clampi(int(round(c.z / BrickPalette.STUD_M)), 0, plate_studs - d.z))
 	var np := TowerBlockout.normalised(p, _tower_limit(new_at))
 	if np != TowerBlockout.normalised(t.params) or new_at != at:
 		_set_tower(i, new_at, np)
