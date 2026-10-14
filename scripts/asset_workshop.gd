@@ -1,0 +1,799 @@
+extends "res://scripts/workshop.gd"
+## The asset workshop: the workshop, with tools for blocking out assets -- guns first --
+## against a photo. Docs/AssetWorkshop.md.
+##
+##     godot --path . res://scenes/asset_workshop.tscn
+##
+## Everything the workshop does works here unchanged. Phase 1 adds:
+##
+##   the ruler   the ghost's cell and the build's size, in studs and plates and in
+##               print mm and real mm
+##   photos      F2: a reference picture on a plane behind the build -- side, top or
+##               front -- calibrated by two clicks and the real length between them
+##   flat views  F6: perspective, side, top, front in turn; Home / End zoom a flat view
+##   measure     F7: two clicks, the distance between them in all four units
+##   mirror      F8: every brick placed is placed again, mirrored across the plane down
+##               the middle of the build; shift F8 puts the plane under the ghost
+##
+## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
+## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
+##
+## What it adds to a build is kept in the recipe's `meta.asset`, which nothing structural
+## reads, so a build made here opens anywhere a build does.
+
+const PRINT_MM_PER_STUD := 4.0
+const PRINT_MM_PER_PLATE := 1.6
+## A gun's nano model is a quarter of the real one.
+const REAL_PER_PRINT := 4.0
+const PLANES := ["side", "top", "front"]
+const VIEWS := ["perspective", "side", "top", "front"]
+const KEYS_TEXT := "F2 photos   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom a flat view"
+
+## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
+var photos: Array = []
+var photo_sel := -1
+var mirror_on := false
+## Where the mirror plane is, in studs across (Z). Half a stud past a whole one is the
+## middle of a stud, so a part an odd number of studs wide sits centred on it.
+var mirror_z := 0.0
+var view := 0
+var measure_on := false
+var measure_points: Array[Vector3] = []
+## Points clicked while calibrating the selected photo; calibrating while not null.
+var calibrating = null
+
+var _ortho_size := 1.0
+var _persp_xf := Transform3D()
+var _ruler: Label
+var _panel: PanelContainer
+var _photo_list: OptionButton
+var _plane_list: OptionButton
+var _opacity: HSlider
+var _shown: CheckBox
+var _photo_info: Label
+var _file_dialog: FileDialog
+var _length_dialog: AcceptDialog
+var _length_edit: LineEdit
+var _measure_line: MeshInstance3D
+var _measure_label: Label3D
+var _mirror_sheet: MeshInstance3D
+
+## The plate is bigger than the workshop's: a rifle is 62 studs long here. 80 studs is
+## 400 ticks, and so is 200 plates, which keeps the build volume a cube.
+const ASSET_PLATE_STUDS := 80
+const ASSET_HEIGHT_PLATES := 200
+
+
+func _init() -> void:
+	plate_studs = ASSET_PLATE_STUDS
+	height_plates = ASSET_HEIGHT_PLATES
+	mirror_z = plate_studs * 0.5 + 0.5
+	_ortho_size = plate_studs * BrickPalette.STUD_M * 0.75
+
+
+func _ready() -> void:
+	super()
+	_build_asset_tools()
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if "--shot" in args:
+		call_deferred("_shot")
+	elif not ("--gate" in args):
+		print("[asset workshop] " + KEYS_TEXT)
+
+
+## `-- --shot [--photo=<file> --from=x,y --to=x,y --mm=<real length>]`: a photo on the
+## side plane, calibrated by two of its pixels and the real length between them, the
+## mirror on, pictures from the perspective and side views into user://asset_shots/.
+## For looking at the tools without driving them by hand.
+func _shot() -> void:
+	var opt := {"photo": "", "from": "", "to": "", "mm": ""}
+	for a in OS.get_cmdline_user_args():
+		for k in opt:
+			if a.begins_with("--%s=" % k):
+				opt[k] = a.substr(k.length() + 3)
+	if opt.photo != "":
+		var i := load_photo(opt.photo, "side")
+		if i >= 0 and opt.from != "" and opt.to != "" and opt.mm != "":
+			var f: PackedStringArray = opt.from.split(",")
+			var t: PackedStringArray = opt.to.split(",")
+			calibrate(i, photo_point(i, Vector2(float(f[0]), float(f[1]))),
+					photo_point(i, Vector2(float(t[0]), float(t[1]))), float(opt.mm))
+	set_mirror(true)
+	DirAccess.make_dir_recursive_absolute("user://asset_shots")
+	for v in [0, 1]:
+		set_view(v)
+		for _i in 12:
+			await get_tree().process_frame
+		var img := get_viewport().get_texture().get_image()
+		var path := "user://asset_shots/%s.png" % VIEWS[v]
+		img.save_png(path)
+		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
+	get_tree().quit()
+
+
+# ---------------------------------------------------------------------------
+# Units
+# ---------------------------------------------------------------------------
+
+static func studs_text(studs: float) -> String:
+	var mm := studs * PRINT_MM_PER_STUD
+	return "%s studs = %.1f mm print = %.0f mm real" % [_num(studs), mm, mm * REAL_PER_PRINT]
+
+
+static func plates_text(plates: float) -> String:
+	var mm := plates * PRINT_MM_PER_PLATE
+	return "%s plates = %.1f mm print = %.0f mm real" % [_num(plates), mm, mm * REAL_PER_PRINT]
+
+
+## Metres in the workshop to millimetres printed: a stud is 0.35 m here and 4 mm there.
+static func print_mm(metres: float) -> float:
+	return metres / BrickPalette.STUD_M * PRINT_MM_PER_STUD
+
+
+static func _num(v: float) -> String:
+	return str(int(round(v))) if absf(v - round(v)) < 0.005 else "%.2f" % v
+
+
+# ---------------------------------------------------------------------------
+# Photos
+# ---------------------------------------------------------------------------
+
+## Put a picture on a plane behind the build. Returns its index.
+func add_photo_image(img: Image, path: String, plane: String = "side") -> int:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = ImageTexture.create_from_image(img)
+	var node := MeshInstance3D.new()
+	node.mesh = QuadMesh.new()
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(node)
+	var p := {"path": path, "plane": plane, "px": Vector2i(img.get_width(), img.get_height()),
+			"mpp": plate_studs * BrickPalette.STUD_M * 0.9 / maxf(img.get_width(), 1.0),
+			"centre": _default_centre(plane), "opacity": 0.6, "shown": true, "node": node}
+	if plane != "top":
+		# Standing on the plate, not floating over it.
+		p.centre.y = BrickPalette.PLATE_M + img.get_height() * float(p.mpp) * 0.5
+	photos.append(p)
+	photo_sel = photos.size() - 1
+	_fit_photo(p)
+	_store_asset_meta()
+	_refresh_panel()
+	return photo_sel
+
+
+func load_photo(path: String, plane: String = "side") -> int:
+	var img := Image.load_from_file(path)
+	if img == null or img.is_empty():
+		push_warning("asset workshop: could not read %s" % path)
+		return -1
+	return add_photo_image(img, path, plane)
+
+
+func remove_photo(i: int) -> void:
+	if i < 0 or i >= photos.size():
+		return
+	(photos[i].node as Node).queue_free()
+	photos.remove_at(i)
+	photo_sel = mini(photo_sel, photos.size() - 1)
+	_store_asset_meta()
+	_refresh_panel()
+
+
+func set_photo_plane(i: int, plane: String) -> void:
+	var p: Dictionary = photos[i]
+	p.plane = plane
+	p.centre = _default_centre(plane)
+	_fit_photo(p)
+	_store_asset_meta()
+
+
+## Two points on a photo, and how far apart they are on the real thing (mm): the photo
+## is scaled about the first point, which stays where it is.
+func calibrate(i: int, a: Vector3, b: Vector3, real_mm: float) -> void:
+	var p: Dictionary = photos[i]
+	var d := a.distance_to(b)
+	if d < 1e-6 or real_mm <= 0.0:
+		return
+	var want := real_mm / (PRINT_MM_PER_STUD * REAL_PER_PRINT) * BrickPalette.STUD_M
+	var f := want / d
+	p.mpp = float(p.mpp) * f
+	p.centre = a + ((p.centre as Vector3) - a) * f
+	_fit_photo(p)
+	_store_asset_meta()
+	_refresh_panel()
+
+
+## Move a photo: `along` and `up` in its own plane, `out` towards the camera, in studs.
+func nudge_photo(i: int, along: float, up: float, out: float) -> void:
+	var p: Dictionary = photos[i]
+	var b := _photo_basis(p.plane)
+	p.centre = (p.centre as Vector3) + (b.x * along + b.y * up + b.z * out) * BrickPalette.STUD_M
+	_fit_photo(p)
+	_store_asset_meta()
+
+
+func set_photo_opacity(i: int, a: float) -> void:
+	photos[i].opacity = clampf(a, 0.05, 1.0)
+	_fit_photo(photos[i])
+	_store_asset_meta()
+
+
+func set_photo_shown(i: int, on: bool) -> void:
+	photos[i].shown = on
+	_fit_photo(photos[i])
+	_store_asset_meta()
+
+
+## A pixel of a photo, where it is in the workshop.
+func photo_point(i: int, px: Vector2) -> Vector3:
+	var p: Dictionary = photos[i]
+	var size := Vector2(p.px) * float(p.mpp)
+	var local := Vector3((px.x / float(p.px.x) - 0.5) * size.x, (0.5 - px.y / float(p.px.y)) * size.y, 0.0)
+	return (p.node as Node3D).transform * local
+
+
+## Where a ray meets a photo's plane, or null behind the camera or edge-on.
+func ray_on_photo(i: int, from: Vector3, dir: Vector3) -> Variant:
+	var node: Node3D = photos[i].node
+	var n := node.transform.basis.z.normalized()
+	var denom := n.dot(dir)
+	if absf(denom) < 1e-5:
+		return null
+	var t := n.dot(node.transform.origin - from) / denom
+	return from + dir * t if t > 0.0 else null
+
+
+func _default_centre(plane: String) -> Vector3:
+	var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	match plane:
+		"top":
+			return Vector3(mid, BrickPalette.PLATE_M + 0.004, mid)
+		"front":
+			return Vector3(BrickPalette.STUD_M, mid * 0.5, mid)
+	return Vector3(mid, mid * 0.5, BrickPalette.STUD_M)
+
+
+## The plane's axes: x along the picture, y up it, z out of it towards the viewer.
+static func _photo_basis(plane: String) -> Basis:
+	match plane:
+		"top":
+			return Basis(Vector3.RIGHT, -PI * 0.5)
+		"front":
+			return Basis(Vector3.UP, PI * 0.5)
+	return Basis()
+
+
+func _fit_photo(p: Dictionary) -> void:
+	var node: MeshInstance3D = p.node
+	(node.mesh as QuadMesh).size = Vector2(p.px) * float(p.mpp)
+	node.transform = Transform3D(_photo_basis(p.plane), p.centre)
+	var mat := node.material_override as StandardMaterial3D
+	mat.albedo_color = Color(1, 1, 1, float(p.opacity))
+	node.visible = bool(p.shown)
+
+
+# ---------------------------------------------------------------------------
+# Measure
+# ---------------------------------------------------------------------------
+
+## What a measurement says: how far along, up and across, and the straight distance.
+static func measure_text(a: Vector3, b: Vector3) -> String:
+	var d := (b - a).abs()
+	var straight := print_mm(a.distance_to(b))
+	return "%s along, %s up, %s across\n%.1f mm print, %.0f mm real" % [
+			_num(d.x / BrickPalette.STUD_M) + " studs", _num(d.y / BrickPalette.PLATE_M) + " plates",
+			_num(d.z / BrickPalette.STUD_M) + " studs", straight, straight * REAL_PER_PRINT]
+
+
+## Where a ray lands for measuring: a brick, else a shown photo, else the baseplate.
+func measure_point(from: Vector3, dir: Vector3) -> Variant:
+	var hit := _first_hit(from, dir)
+	if not hit.is_empty():
+		# The workshop's ray steps a third of a plate at a time, so its hit is somewhere
+		# inside the brick. Halve back onto the face: a measurement is between surfaces.
+		var outside := maxf(float(hit.t) - BrickPalette.PLATE_M * 0.34, 0.0)
+		var inside := float(hit.t)
+		for _i in 24:
+			var mid := (outside + inside) * 0.5
+			var p := from + dir * mid
+			var f: int = hit.frame
+			if world.block_at(f, _cell_in(f, p)) >= 0 and world.is_solid(f, _cell_in(f, p)):
+				inside = mid
+			else:
+				outside = mid
+		return from + dir * inside
+	if photo_sel >= 0 and bool(photos[photo_sel].shown):
+		var on = ray_on_photo(photo_sel, from, dir)
+		if on != null:
+			return on
+	if absf(dir.y) > 1e-5:
+		var t := (BrickPalette.PLATE_M - from.y) / dir.y
+		if t > 0.0:
+			return from + dir * t
+	return null
+
+
+func set_measure(on: bool) -> void:
+	measure_on = on
+	measure_points.clear()
+	_draw_measure()
+
+
+func _measure_click() -> void:
+	var ray := _mouse_ray()
+	var p = measure_point(ray[0], ray[1])
+	if p == null:
+		return
+	if measure_points.size() >= 2:
+		measure_points.clear()
+	measure_points.append(p)
+	_draw_measure()
+
+
+func _draw_measure() -> void:
+	var im := ImmediateMesh.new()
+	_measure_line.mesh = im
+	_measure_label.visible = false
+	if measure_points.is_empty():
+		return
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var tick := BrickPalette.STUD_M * 0.25
+	for p in measure_points:
+		for axis: Vector3 in [Vector3.RIGHT, Vector3.UP, Vector3.BACK]:
+			im.surface_add_vertex(p - axis * tick)
+			im.surface_add_vertex(p + axis * tick)
+	if measure_points.size() == 2:
+		im.surface_add_vertex(measure_points[0])
+		im.surface_add_vertex(measure_points[1])
+		_measure_label.text = measure_text(measure_points[0], measure_points[1])
+		_measure_label.position = (measure_points[0] + measure_points[1]) * 0.5 + Vector3.UP * 0.2
+		_measure_label.visible = true
+	im.surface_end()
+
+
+# ---------------------------------------------------------------------------
+# Mirror
+# ---------------------------------------------------------------------------
+
+## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
+func mirrored_z(z: int, width: int) -> int:
+	return int(round(2.0 * mirror_z - float(z + width)))
+
+
+func set_mirror(on: bool) -> void:
+	mirror_on = on
+	_mirror_sheet.visible = on
+	_place_mirror_sheet()
+	_store_asset_meta()
+
+
+## Put the plane down the middle of the ghost.
+func mirror_here() -> void:
+	mirror_z = _cell.z + BrickPalette.size_of(_archetype_name()).z * 0.5
+	_place_mirror_sheet()
+	_store_asset_meta()
+
+
+func _place() -> void:
+	var before := recipe.size()
+	super._place()
+	if mirror_on and recipe.size() > before and _frame == 0:
+		_place_mirrored()
+
+
+## The brick just placed, again, on the other side of the plane. A part with a front
+## that looks across the plane is turned to look the other way; one straddling the plane
+## exactly is its own mirror and is not placed twice. Upright grid only, for now.
+func _place_mirrored() -> void:
+	var arch := _archetype_name()
+	var size := BrickPalette.size_of(arch)
+	var z := mirrored_z(_cell.z, size.z)
+	if z == _cell.z:
+		return
+	var keep := [_cell, _yaw, _snapped]
+	var front := BrickPalette.front_of(arch)
+	if front.z != 0:
+		var want := Vector3i(front.x, front.y, -front.z)
+		for y in 4:
+			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
+				_yaw = y
+				break
+	_snapped = {}
+	_cell = Vector3i(_cell.x, _cell.y, z)
+	_update_ghost()
+	super._place()
+	_cell = keep[0]
+	_yaw = keep[1]
+	_snapped = keep[2]
+	_update_ghost()
+
+
+func _place_mirror_sheet() -> void:
+	var w := plate_studs * BrickPalette.STUD_M
+	var h := w * 0.4
+	var z := mirror_z * BrickPalette.STUD_M
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var corners := [Vector3(0, 0.15, z), Vector3(w, 0.15, z), Vector3(w, h, z), Vector3(0, h, z)]
+	for k in 4:
+		im.surface_add_vertex(corners[k])
+		im.surface_add_vertex(corners[(k + 1) % 4])
+	im.surface_end()
+	_mirror_sheet.mesh = im
+
+
+# ---------------------------------------------------------------------------
+# Flat views
+# ---------------------------------------------------------------------------
+
+func set_view(v: int) -> void:
+	if v == view:
+		return
+	if view == 0:
+		_persp_xf = _camera.global_transform
+	view = v
+	if v == 0:
+		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		_camera.global_transform = _persp_xf
+		_camera.set_process_unhandled_input(true)
+		return
+	# Looking straight at the build. The camera's own click-to-look is off: a flat view
+	# is built in with the cursor, and a captured mouse would turn it.
+	_camera.set_process_unhandled_input(false)
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	_camera.size = _ortho_size
+	var c := build_centre()
+	match VIEWS[v]:
+		"side":
+			_camera.global_position = c + Vector3.BACK * 60.0
+			_camera.look_at(c, Vector3.UP)
+		"top":
+			_camera.global_position = c + Vector3.UP * 60.0
+			_camera.look_at(c, Vector3.FORWARD)
+		"front":
+			_camera.global_position = c + Vector3.RIGHT * 60.0
+			_camera.look_at(c, Vector3.UP)
+
+
+func zoom(by: float) -> void:
+	_ortho_size = clampf(_ortho_size * by, 0.5, 80.0)
+	if view != 0:
+		_camera.size = _ortho_size
+
+
+## The middle of what has been built, or of the baseplate before anything is.
+func build_centre() -> Vector3:
+	if recipe.size() == 0:
+		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+		return Vector3(mid, 1.5, mid)
+	var b := recipe.bounds()
+	var lo: Vector3i = b[0]
+	var d: Vector3i = b[1]
+	return Vector3((lo.x + d.x * 0.5) * BrickPalette.STUD_M, (lo.y + d.y * 0.5) * BrickPalette.PLATE_M,
+			(lo.z + d.z * 0.5) * BrickPalette.STUD_M)
+
+
+# ---------------------------------------------------------------------------
+# Input, the ruler, the panel
+# ---------------------------------------------------------------------------
+
+func _unhandled_input(e: InputEvent) -> void:
+	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
+		return
+	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
+			and (calibrating != null or measure_on):
+		if calibrating != null:
+			_calibrate_click()
+		else:
+			_measure_click()
+		get_viewport().set_input_as_handled()
+		return
+	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
+		var mine := true
+		match e.keycode:
+			KEY_F2: _toggle_panel()
+			KEY_F6: set_view((view + 1) % VIEWS.size())
+			KEY_F7: set_measure(not measure_on)
+			KEY_F8:
+				if e.shift_pressed:
+					mirror_here()
+				else:
+					set_mirror(not mirror_on)
+			KEY_HOME: zoom(0.85)
+			KEY_END: zoom(1.0 / 0.85)
+			_: mine = false
+		if mine:
+			get_viewport().set_input_as_handled()
+			return
+	super._unhandled_input(e)
+
+
+func _process(dt: float) -> void:
+	super._process(dt)
+	if _ruler == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	_ruler.position = Vector2(12, vp.y - 210)
+	_ruler.text = ruler_text()
+	if _panel.visible:
+		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
+
+
+func ruler_text() -> String:
+	var size := BrickPalette.size_of(_archetype_name())
+	var lines := PackedStringArray()
+	lines.append("ghost: %d studs along, plate %d up, %d studs across; it is %s long" % [
+			_cell.x, _cell.y, _cell.z, studs_text(size.x)])
+	if recipe.size() > 0:
+		var d: Vector3i = recipe.bounds()[1]
+		lines.append("build: %d x %d studs, %d plates high -> %.0f x %.0f x %.1f mm print, %.0f x %.0f x %.0f mm real" % [
+				d.x, d.z, d.y, d.x * PRINT_MM_PER_STUD, d.z * PRINT_MM_PER_STUD, d.y * PRINT_MM_PER_PLATE,
+				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
+				d.y * PRINT_MM_PER_PLATE * REAL_PER_PRINT])
+	var modes := PackedStringArray(["view: " + VIEWS[view]])
+	if mirror_on:
+		modes.append("mirror at %s studs across" % _num(mirror_z))
+	if measure_on:
+		modes.append("MEASURE: click two points")
+	if calibrating != null:
+		modes.append("CALIBRATE: click point %d of 2 on the photo" % ((calibrating as Array).size() + 1))
+	lines.append("   ".join(modes))
+	if measure_on and measure_points.size() == 2:
+		lines.append(measure_text(measure_points[0], measure_points[1]).replace("\n", "   "))
+	lines.append(KEYS_TEXT)
+	return "\n".join(lines)
+
+
+func _build_asset_tools() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	_ruler = Label.new()
+	_style(_ruler, Color(1.0, 0.92, 0.6), 14)
+	layer.add_child(_ruler)
+
+	_measure_line = MeshInstance3D.new()
+	var line_mat := StandardMaterial3D.new()
+	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	line_mat.albedo_color = Color(1.0, 0.85, 0.1)
+	line_mat.no_depth_test = true
+	_measure_line.material_override = line_mat
+	add_child(_measure_line)
+	_measure_label = Label3D.new()
+	_measure_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_measure_label.no_depth_test = true
+	_measure_label.font_size = 48
+	_measure_label.pixel_size = 0.004
+	_measure_label.modulate = Color(1.0, 0.92, 0.4)
+	_measure_label.visible = false
+	add_child(_measure_label)
+
+	# An outline of the plane, not a sheet: face-on in the side view a sheet tinted all of it.
+	_mirror_sheet = MeshInstance3D.new()
+	var sheet_mat := StandardMaterial3D.new()
+	sheet_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sheet_mat.albedo_color = Color(1.0, 0.3, 0.9)
+	_mirror_sheet.material_override = sheet_mat
+	_mirror_sheet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_mirror_sheet.visible = false
+	add_child(_mirror_sheet)
+	_place_mirror_sheet()
+
+	_build_panel(layer)
+
+
+func _build_panel(layer: CanvasLayer) -> void:
+	_panel = PanelContainer.new()
+	_panel.visible = false
+	layer.add_child(_panel)
+	var box := VBoxContainer.new()
+	_panel.add_child(box)
+	var title := Label.new()
+	title.text = "Reference photos (F2)"
+	box.add_child(title)
+
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	var load_btn := Button.new()
+	load_btn.text = "Load photo..."
+	load_btn.pressed.connect(func() -> void: _file_dialog.popup_centered_ratio(0.6))
+	row.add_child(load_btn)
+	_photo_list = OptionButton.new()
+	_photo_list.item_selected.connect(func(i: int) -> void:
+		photo_sel = i
+		_refresh_panel())
+	row.add_child(_photo_list)
+
+	_plane_list = OptionButton.new()
+	for p in PLANES:
+		_plane_list.add_item("on the %s plane" % p)
+	_plane_list.item_selected.connect(func(i: int) -> void:
+		if photo_sel >= 0:
+			set_photo_plane(photo_sel, PLANES[i]))
+	box.add_child(_plane_list)
+
+	var cal := Button.new()
+	cal.text = "Calibrate: click two points, type the real length"
+	cal.pressed.connect(func() -> void:
+		if photo_sel >= 0:
+			calibrating = [])
+	box.add_child(cal)
+
+	var op_row := HBoxContainer.new()
+	box.add_child(op_row)
+	var op_label := Label.new()
+	op_label.text = "opacity"
+	op_row.add_child(op_label)
+	_opacity = HSlider.new()
+	_opacity.min_value = 0.05
+	_opacity.max_value = 1.0
+	_opacity.step = 0.05
+	_opacity.custom_minimum_size = Vector2(160, 0)
+	_opacity.value_changed.connect(func(v: float) -> void:
+		if photo_sel >= 0:
+			set_photo_opacity(photo_sel, v))
+	op_row.add_child(_opacity)
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	box.add_child(grid)
+	for b in [["left", -1, 0, 0], ["right", 1, 0, 0], ["up", 0, 1, 0], ["down", 0, -1, 0],
+			["nearer", 0, 0, 1], ["farther", 0, 0, -1], ["smaller", 0, 0, 0], ["bigger", 0, 0, 0]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		var name_: String = b[0]
+		var along: float = b[1]
+		var up: float = b[2]
+		var out: float = b[3]
+		btn.pressed.connect(func() -> void:
+			if photo_sel < 0:
+				return
+			if name_ == "smaller" or name_ == "bigger":
+				_scale_photo(photo_sel, 0.95 if name_ == "smaller" else 1.0 / 0.95)
+			else:
+				nudge_photo(photo_sel, along, up, out))
+		grid.add_child(btn)
+
+	var bottom := HBoxContainer.new()
+	box.add_child(bottom)
+	_shown = CheckBox.new()
+	_shown.text = "shown"
+	_shown.toggled.connect(func(on: bool) -> void:
+		if photo_sel >= 0:
+			set_photo_shown(photo_sel, on))
+	bottom.add_child(_shown)
+	var rm := Button.new()
+	rm.text = "Remove"
+	rm.pressed.connect(func() -> void: remove_photo(photo_sel))
+	bottom.add_child(rm)
+
+	_photo_info = Label.new()
+	box.add_child(_photo_info)
+
+	_file_dialog = FileDialog.new()
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.use_native_dialog = true
+	_file_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"])
+	_file_dialog.file_selected.connect(func(path: String) -> void:
+		load_photo(path, PLANES[maxi(_plane_list.selected, 0)]))
+	layer.add_child(_file_dialog)
+
+	_length_dialog = AcceptDialog.new()
+	_length_dialog.title = "Real length between the two points"
+	_length_edit = LineEdit.new()
+	_length_edit.placeholder_text = "mm on the real thing, e.g. 852"
+	_length_dialog.add_child(_length_edit)
+	_length_dialog.confirmed.connect(func() -> void:
+		var pts: Array = _length_dialog.get_meta("points", [])
+		if pts.size() == 2 and _length_edit.text.is_valid_float():
+			calibrate(photo_sel, pts[0], pts[1], float(_length_edit.text)))
+	layer.add_child(_length_dialog)
+	_refresh_panel()
+
+
+func _toggle_panel() -> void:
+	_panel.visible = not _panel.visible
+	if _panel.visible and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	_refresh_panel()
+
+
+func _scale_photo(i: int, f: float) -> void:
+	var p: Dictionary = photos[i]
+	p.mpp = float(p.mpp) * f
+	_fit_photo(p)
+	_store_asset_meta()
+	_refresh_panel()
+
+
+func _calibrate_click() -> void:
+	var ray := _mouse_ray()
+	var p = ray_on_photo(photo_sel, ray[0], ray[1])
+	if p == null:
+		return
+	(calibrating as Array).append(p)
+	if (calibrating as Array).size() < 2:
+		return
+	_length_dialog.set_meta("points", calibrating)
+	calibrating = null
+	_length_edit.text = ""
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	_length_dialog.popup_centered(Vector2i(360, 90))
+	_length_edit.grab_focus()
+
+
+func _refresh_panel() -> void:
+	if _photo_list == null:
+		return
+	_photo_list.clear()
+	for p in photos:
+		_photo_list.add_item((p.path as String).get_file())
+	if photo_sel < 0:
+		_photo_info.text = "no photo"
+		return
+	_photo_list.select(photo_sel)
+	var p: Dictionary = photos[photo_sel]
+	_plane_list.select(PLANES.find(p.plane))
+	_opacity.set_value_no_signal(float(p.opacity))
+	_shown.set_pressed_no_signal(bool(p.shown))
+	var w := float(p.px.x) * float(p.mpp) / BrickPalette.STUD_M
+	_photo_info.text = "%d x %d px, %.1f studs wide\n1 px = %.2f mm real" % [p.px.x, p.px.y, w,
+			float(p.mpp) / BrickPalette.STUD_M * PRINT_MM_PER_STUD * REAL_PER_PRINT]
+
+
+# ---------------------------------------------------------------------------
+# What is saved: the recipe's meta.asset
+# ---------------------------------------------------------------------------
+
+func _store_asset_meta() -> void:
+	var list := []
+	for p in photos:
+		var c: Vector3 = p.centre
+		list.append({"path": p.path, "plane": p.plane, "px": [p.px.x, p.px.y], "mpp": p.mpp,
+				"centre": [c.x, c.y, c.z], "opacity": p.opacity, "shown": p.shown})
+	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z}}
+
+
+func _restore_asset_meta() -> void:
+	var a: Dictionary = recipe.meta.get("asset", {})
+	var m: Dictionary = a.get("mirror", {})
+	mirror_z = float(m.get("z", mirror_z))
+	set_mirror(bool(m.get("on", false)))
+	for d in a.get("photos", []):
+		var img := Image.load_from_file(String(d.path)) if FileAccess.file_exists(String(d.path)) else null
+		if img == null or img.is_empty():
+			# Keep its place and size, so it saves back as it was: a grey stand-in.
+			img = Image.create(maxi(int(d.px[0]), 1), maxi(int(d.px[1]), 1), false, Image.FORMAT_RGBA8)
+			img.fill(Color(0.5, 0.5, 0.5, 0.5))
+			push_warning("asset workshop: photo not found, shown grey: %s" % d.path)
+		var i := add_photo_image(img, String(d.path), String(d.plane))
+		var p: Dictionary = photos[i]
+		p.mpp = float(d.mpp)
+		p.centre = Vector3(float(d.centre[0]), float(d.centre[1]), float(d.centre[2]))
+		p.opacity = float(d.opacity)
+		p.shown = bool(d.shown)
+		_fit_photo(p)
+	_store_asset_meta()
+	_refresh_panel()
+
+
+func _reset_space() -> void:
+	super._reset_space()
+	for p in photos:
+		(p.node as Node).queue_free()
+	photos.clear()
+	photo_sel = -1
+	measure_points.clear()
+	if _measure_line != null:
+		_draw_measure()
+
+
+func _load_recipe(r: BuildRecipe) -> void:
+	super._load_recipe(r)
+	_restore_asset_meta()
