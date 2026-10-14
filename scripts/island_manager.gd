@@ -729,8 +729,8 @@ var _shed_cause := ""
 ## a recipe tower, whose storeys a landing breaks it along (_snap_across). Set
 ## by the scene; unset, pieces break where they were struck, as they did.
 var storey_plates := Callable()
-const CENSUS_FROM := ["building", "piece: landing", "piece: struck", "piece: hit", "piece: other",
-		"adopted (toppled whole, or woken)"]
+const CENSUS_FROM := ["building", "piece: landing", "piece: landing: band", "piece: struck",
+		"piece: hit", "piece: other", "adopted (toppled whole, or woken)"]
 
 
 static func census_class(bricks: int) -> int:
@@ -758,17 +758,20 @@ func _census_body(isl: BrickIsland, from: String, bricks: int, ms: float) -> voi
 ## but still moving, at rest -- as [hits, bodies they made]. What a shot at
 ## wreckage costs depends on which (Docs/CollapseNext.md 1.4).
 var hit_census := [[0, 0], [0, 0], [0, 0]]
-## Hits that took bricks from a piece at rest and left it at rest, and those
-## that woke it: it was cut in two, or lost what it stood on (damage).
+## Hits that took bricks from a piece at rest: left at rest; woken because they
+## cut it in two (or took all of it); and woken with nothing cut -- which rule 2
+## says never happens (damage). What it stood on going is a wake a tick later
+## (support_gone), counted as kept here.
 var rest_hits_kept := 0
+var rest_hits_cut := 0
 var rest_hits_woke := 0
 
 
 func hit_census_line() -> String:
 	return "hits on pieces -- in the air: %d made %d bodies; down and moving: %d made %d; at rest: %d made %d" % [
 			hit_census[0][0], hit_census[0][1], hit_census[1][0], hit_census[1][1],
-			hit_census[2][0], hit_census[2][1]] + "; of the ones at rest %d left it at rest, %d woke it; %d merged rebuild(s), %d tick(s) one was put off" % [
-			rest_hits_kept, rest_hits_woke, merged_rebuilds, reshapes_put_off]
+			hit_census[2][0], hit_census[2][1]] + "; of the ones at rest %d left it at rest, %d cut it in two, %d woke it with nothing cut; %d merged rebuild(s), %d tick(s) one was put off" % [
+			rest_hits_kept, rest_hits_cut, rest_hits_woke, merged_rebuilds, reshapes_put_off]
 
 
 ## The census as lines, for a pass to print.
@@ -3002,6 +3005,12 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 	e.point = _to_grid(isl, world_point)
 	e.radius = radius
 	e.limit = SHEAR_MAX_BLOCKS
+	# peel: what it was struck on comes away as a clump, cut along its
+	# underside, as from a building (CityScene._shear_building) and a landing.
+	# Without it every brick in the ball was joined to nothing and the piece
+	# sprayed single bricks -- 234 of them in a barrage, against 20 groups of
+	# two to eight (Docs/CollapseNext.md 1.3).
+	e.flags = DamageLog.FLAG_PEEL
 	var loosened := DamageLog.apply_entry(world, isl.chunk, e)
 	if loosened.is_empty():
 		return
@@ -3079,12 +3088,15 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# physics solver's to pay for. Three alternated pairs, quiet machine:
 	# queued 31.1 ms a frame, 269 of 906 over 33.3 ms, 69 ticks over 25 ms;
 	# here 25.0, 132 and 44, the worst tick the same. Docs/CollapseNext.md 3.
+	var cut0 := int(spawn_census.shed[0])
 	if not isl.disposable:
 		solve_island(isl)
 	rebuild_mesh(isl)
 	if at_rest:
 		if isl.is_valid() and isl.settled:
 			rest_hits_kept += 1
+		elif not isl.is_valid() or int(spawn_census.shed[0]) > cut0:
+			rest_hits_cut += 1
 		else:
 			rest_hits_woke += 1
 
@@ -3194,6 +3206,20 @@ func shear_near(point: Vector3, radius: float, except: BrickIsland = null) -> in
 ## overlapped, the solver pushed at them forever, and the result was halves that
 ## stayed joined, pieces floating on nothing, and a section that jittered and
 ## slid across the ground.
+## What comes off pieces, by why (shed_cause: a hit, a landing, something
+## landing on it) and by size -- one brick, 2-8, 9-48, more: whether single
+## bricks still spray off pieces (Docs/CollapseNext.md 1.3) is the first column.
+var shed_census := {}
+
+
+func shed_census_line() -> String:
+	var parts := PackedStringArray()
+	for cause in shed_census:
+		var row: Array = shed_census[cause]
+		parts.append("%s %d / %d / %d / %d" % [cause, row[0], row[1], row[2], row[3]])
+	return "off pieces, groups of 1 / 2-8 / 9-48 / more: " + ("; ".join(parts) if not parts.is_empty() else "none")
+
+
 func _shed(isl: BrickIsland, groups: Array) -> int:
 	if groups.is_empty():
 		return 0
@@ -3222,6 +3248,12 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 			continue
 		spawn_census.shed[0] += 1
 		spawn_census.shed[1] += moved.size()
+		var cause := isl.shed_cause if isl.shed_cause != "" else "other"
+		if not shed_census.has(cause):
+			shed_census[cause] = [0, 0, 0, 0]
+		var n := moved.size()
+		(shed_census[cause] as Array)[0 if n == 1 else (1 if n <= DEBRIS_MAX_BLOCKS
+				else (2 if n <= LANDMARK_COUNT else 3))] += 1
 		var child := record_detach(isl.owner, isl, isl.chunk, moved)
 		var _ts := Time.get_ticks_usec()
 		_shedding = true
@@ -3425,8 +3457,11 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 			_record(e)
 			loosened.append_array(got)
 	_tu = _upart("land: shear", _tu)
+	var banded := false
 	if near:
+		var bands0 := band_breaks
 		loosened.append_array(_snap_across(isl, contacts, severity))
+		banded = band_breaks > bands0
 		_tu = _upart("land: snap", _tu)
 	else:
 		# Counted as a landing all the same, so a piece bouncing in the
@@ -3442,7 +3477,10 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	isl.impacts += 1
 	impacts += 1
 	impact_blocks += loosened.size()
-	isl.shed_cause = "landing"
+	# A band torn across a piece is said apart from the rest of a landing (the
+	# clump peeled where it touched, a seam): it is where single bricks come from
+	# (shed_census).
+	isl.shed_cause = "landing: band" if banded else "landing"
 	_touched(isl)
 	# Queued, not resolved here -- the same rule shear() follows. Cutting the
 	# pieces out means a connectivity walk and a spawn each, and doing it inline

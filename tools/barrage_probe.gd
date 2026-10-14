@@ -82,6 +82,7 @@ func _run() -> void:
 	print("  --   %s" % isl.crumb_cost_line())
 	print("  --   %s" % isl.snap_census_line())
 	print("  --   %s" % isl.push_census_line())
+	print("  --   %s" % isl.shed_census_line())
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,
@@ -89,9 +90,11 @@ func _run() -> void:
 	var share := float(down[1]) / maxf(float(down[0]), 1.0)
 	_ok("a hit on a piece that is down makes a new body less than one time in twelve",
 			share < 0.08, "%d of %d, %.1f %%" % [int(down[1]), int(down[0]), share * 100.0])
-	_ok("some hits found wreckage at rest, and more of them left it at rest than woke it",
-			int(rest[0]) > 0 and isl.rest_hits_kept > isl.rest_hits_woke,
-			"%d at rest: %d left at rest, %d woke" % [int(rest[0]), isl.rest_hits_kept, isl.rest_hits_woke])
+	_ok("some hits found wreckage at rest, and none woke it but by cutting it in two",
+			int(rest[0]) > 0 and isl.rest_hits_woke == 0
+			and isl.rest_hits_kept + isl.rest_hits_cut == int(rest[0]),
+			"%d at rest: %d left at rest, %d cut in two, %d woken with nothing cut" % [
+				int(rest[0]), isl.rest_hits_kept, isl.rest_hits_cut, isl.rest_hits_woke])
 	# What the blasts killed: the middle of each gone, the ring round it thrown
 	# out as crumbs where this machine could see it (IslandManager.BLAST_CORE).
 	var bc: Array = isl.blast_census

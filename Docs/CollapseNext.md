@@ -52,7 +52,9 @@ In the order to do it. Each line points at where the item is written up.
 **Next, the brick model (§1.10)**: nothing left on this list.
 
 **Left over from earlier lists**
-7. Single bricks spraying off pieces (§1.3) -- expected to go with item 1; check, then strike.
+7. ~~Single bricks spraying off pieces~~ (§1.3) -- checked 2026-10-14: the stress solve's
+   spray went with item 1; a piece struck by another now peels a clump, not a spray of bricks;
+   what is left comes from blasts and from bands (item 18).
 8. A queued blast in `--shot` hits pieces that came loose after it was fired: decide whether it
    should, or have the pass fire its blasts at once (§3, last point).
 9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): furniture drawn on wreckage is not turned
@@ -68,6 +70,11 @@ In the order to do it. Each line points at where the item is written up.
     bricks (a few thousand, the oldest taken first, none where a piece comes to rest on them)
     would leave the heap a real wall leaves. They would be drawn only: nothing to stand on,
     hide behind or pick up. Not started.
+
+18. A piece long the other way tears a band of loose bricks when it snaps (§1.3): the most
+    single bricks a landing makes now. Cracking it along its bond instead needs a joint cut on
+    its own -- the engine cuts all of a block's lower joints (`bottom_broken`) or all of them
+    (`support_broken`), never one pair. Not started.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
@@ -94,7 +101,24 @@ section's box is hidden the tick the section leaves. `collapse_probe` "crushdraw
 groups since 2026-10-08; `fakehide_probe` went with the fake drawing it measured -- the groups'
 form of it is `InteriorGroups.check_floors`).
 
-### 1.3 Single bricks still spray off PIECES
+### ~~1.3 Single bricks still spray off PIECES~~ — checked 2026-10-14; the bands are item 18
+**Checked 2026-10-14**, counting what comes off pieces by why and how big
+(`IslandManager.shed_census`, a line in `barrage_probe` and `--big --shot`). The stress solve
+on pieces, which this was about, went with 1.10 (1): nothing fails a piece's joints any more.
+Before this check a barrage made, in single bricks: 332 off hits, 211 off landings, **234 off
+pieces something landed on** -- that last one a shear with every brick in the ball "joined to
+nothing", where a building's and a landing's peel a clump off by its underside. It peels now
+(`IslandManager.shear`, `DamageLog.FLAG_PEEL`): **42**, and 79 groups of two to eight. What is
+left (one barrage, 2026-10-14): **328** off hits -- bricks whose neighbours a blast took, loose
+as a brick model's would be; **136** off landings -- the clump peeled where one touched down,
+some of them one brick; **241** off bands torn across pieces long the other way, a quarter as
+many breaks as make the rest (item 18 in §0). All of them are crumbs (eight or fewer), drawn
+falling and gone.
+And `barrage_probe`'s check on wreckage at rest asks what rule 2 says, now: no hit on a piece at
+rest wakes it but by cutting it in two (`rest_hits_cut`; `rest_hits_woke` is the rest, and stays
+0). It asked that more were left at rest than woken, which turned on how often a barrage cuts.
+
+The held-bricks note below is from before 1.10 (1), kept for the record:
 Held bricks (`Block::held`, `BrickWorld.reattach_held_groups`, groups of 8 or fewer) are on for
 buildings only. On pieces (`PIECE_SOLVE`) it made `collapse_probe`'s soldier stop riding a toppling
 building over in 2 of 3 full runs (0.4 m and 1.0 m against 13 m), so it was taken out. **Do:** find
