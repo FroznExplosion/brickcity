@@ -30,6 +30,13 @@ extends SceneTree
 ##   guide      a model loads, sized so its longest side is the real length asked
 ##   section    a flat view cuts at the plane; perspective does not
 ##   outlines   drawn when asked
+##
+## Phase 4:
+##
+##   undo       a fill and a mirrored pair each undo at once; redo lays them back, each
+##              brick in its own part
+##   wand       a click on a photo fills the patch of its colour, and nothing outside it
+##   export     the sheet has each part: as laid, or smooth as a loft; joints at the points
 
 var _pass := 0
 var _fail := 0
@@ -67,6 +74,9 @@ func _tick() -> void:
 	_select()
 	_guide()
 	_section()
+	_undo_redo()
+	_wand()
+	_export()
 	print("asset workshop probe: %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -343,3 +353,69 @@ func _section() -> void:
 	_ws._draw_outlines()
 	_ok("outlines are drawn", (_ws._outline_lines.mesh as ImmediateMesh).get_surface_count() > 0)
 	_ws.set_outlines(0)
+
+
+func _undo_redo() -> void:
+	_ws._new_build()
+	_ws.select_part(0)
+	var laid: int = _ws.fill_cells(_cells_box(Vector3i(20, 1, 20), Vector3i(25, 3, 21)))
+	_ws._undo()
+	_ok("a fill undoes at once", _ws.recipe.size() == 0, "%d of %d left" % [_ws.recipe.size(), laid])
+	var back: int = _ws.redo()
+	_ok("redo lays the fill back", back == laid and _ws.recipe.size() == laid, "%d of %d" % [back, laid])
+	_ws._undo()
+	_ws.set_mirror(true)
+	_ws.mirror_z = 30.5
+	_lay("plate_1x2", Vector3i(20, 1, 26))
+	_ok("a mirrored brick lays two", _ws.recipe.size() == 2, str(_ws.recipe.size()))
+	_ws._undo()
+	_ok("and they undo together", _ws.recipe.size() == 0, str(_ws.recipe.size()))
+	_ws.set_mirror(false)
+
+
+func _wand() -> void:
+	_ws._new_build()
+	var img := Image.create(100, 50, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.05, 0.05, 0.05))
+	img.fill_rect(Rect2i(20, 10, 40, 30), Color(0.85, 0.7, 0.45))
+	var i: int = _ws.add_photo_image(img, "(probe wand)", "side")
+	# 100 px to 25 studs: 400 mm real.
+	_ws.calibrate(i, _ws.photo_point(i, Vector2(0, 25)), _ws.photo_point(i, Vector2(100, 25)), 400.0)
+	var hit: Vector3 = _ws.photo_point(i, Vector2(40, 25))
+	var laid: int = _ws.wand_fill(i, hit, 2)
+	var lo: Vector3 = _ws.photo_point(i, Vector2(20, 40))
+	var hi: Vector3 = _ws.photo_point(i, Vector2(60, 10))
+	var inside := true
+	for k in _ws.recipe.size():
+		var c: Vector3i = _ws.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+		if c.x * STUD < lo.x - STUD or (c.x + size.x) * STUD > hi.x + STUD:
+			inside = false
+	_ok("the wand fills the patch under the click", laid > 0, "%d laid" % laid)
+	_ok("and nothing outside it", inside)
+	_ws.remove_photo(i)
+
+
+func _export() -> void:
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.fill_cells(_cells_box(Vector3i(20, 1, 39), Vector3i(29, 6, 41)))
+	_ws.select_part(2)
+	_ws.fill_cells(_cells_box(Vector3i(30, 1, 39), Vector3i(37, 3, 41)))
+	_ws.toggle_smooth()
+	_ws.toggle_point([30, 2, 40.5], "mount", "stock", "stock.tang")
+	var sheet: Dictionary = _ws.export_sheet()
+	# Kept for running the part kit on by hand: the chain past this probe.
+	var f := FileAccess.open("user://_probe_export.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify(sheet, " "))
+	f.close()
+	var by := {}
+	for p in sheet.parts:
+		by[p.name] = p
+	_ok("the export has the body and the stock", by.has("body") and by.has("stock"), str(by.keys()))
+	if by.has("body") and by.has("stock"):
+		_ok("the body goes as laid", by.body.kind == "placed" and (by.body.bricks as Array).size() > 0)
+		_ok("the smooth stock goes as a loft along the gun", by.stock.kind == "loft" and by.stock.axis == "x"
+				and (by.stock.stations as Array).size() >= 8, "%s, %d stations" % [by.stock.kind, (by.stock.get("stations", []) as Array).size()])
+		_ok("its mount is where the point is, in mm from the muzzle", by.stock.has("mount")
+				and absf(float(by.stock.mount.at[0]) - 40.0) < 1e-6, str(by.stock.get("mount", {})))

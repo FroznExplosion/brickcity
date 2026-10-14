@@ -19,6 +19,8 @@ A part is one of these kinds:
            with its corners cut, so it stays low-poly and keeps flat flanks for studs.
   turned   round about a line along the gun, eight-sided: a barrel, a muzzle piece.
   blocks   plain boxes: a small fixed detail.
+  placed   bricks exactly as someone laid them (the asset workshop's export): each its
+           part name, min corner and size; studs on every top nothing of the part covers.
 
 Lengths are mm at print size: x along the gun from the muzzle, z up, y across with the centre
 plane at 0. The lattice is the nano grid from (0, 0, 0): stud lines every 4 mm along x and
@@ -75,6 +77,8 @@ def main() -> None:
             bm = profile(spec, part, grid)
         elif spec["kind"] == "loft":
             bm = loft(spec, part, grid)
+        elif spec["kind"] == "placed":
+            bm = placed(spec, part, grid)
         elif spec["kind"] == "blocks":
             bm = bmesh.new()
             part["closed"] = True
@@ -182,6 +186,58 @@ def bricks(spec, part, grid):
                                           "normal": [0.0, 0.0, 1.0], "on": "top"})
     part["loose"] = len(loose)
     part["summary"] = "%d bricks, %d loose, %d studs left on top" % (len(placed), len(loose), len(part["studs"]))
+    return bm
+
+
+def placed(spec, part, grid):
+    """Bricks as they were laid. `bricks` are {part, min_mm: [along, across, up] of the min
+    corner, size: [studs along, studs across, plates up]}. Shaped parts are drawn as their
+    box for now."""
+    pitch, plate = grid["stud_pitch"], grid["plate"]
+    bm = bmesh.new()
+    gap = pitch * 0.012
+    cells = {}
+    boxes = []
+    for b in spec["bricks"]:
+        lo = b["min_mm"]
+        sx, sy, sz = b["size"]
+        hi = [lo[0] + sx * pitch, lo[1] + sy * pitch, lo[2] + sz * plate]
+        boxes.append((lo, hi, sx, sy, sz))
+        for i in range(sx):
+            for j in range(sy):
+                for k in range(sz):
+                    cells[(round(lo[0] / pitch) + i, round(lo[1] / pitch * 2) / 2 + j, round(lo[2] / plate) + k)] = len(boxes) - 1
+    part["bricks"] = []
+    for n, (lo, hi, sx, sy, sz) in enumerate(boxes):
+        _box(bm, [lo[0] + gap, lo[1] + gap, lo[2]], [hi[0] - gap, hi[1] - gap, hi[2] - gap * 0.4])
+        part["bricks"].append({"part": spec["bricks"][n]["part"], "min_mm": lo, "size": [sx, sy, sz]})
+        top = round(lo[2] / plate) + sz
+        for i in range(sx):
+            for j in range(sy):
+                key = (round(lo[0] / pitch) + i, round(lo[1] / pitch * 2) / 2 + j, top)
+                if key in cells:
+                    continue
+                at = [lo[0] + (i + 0.5) * pitch, lo[1] + (j + 0.5) * pitch, hi[2]]
+                part["studs"].append({"at": [round(c, 4) for c in at], "normal": [0.0, 0.0, 1.0], "on": "top"})
+    # Held: a brick shares a stud with another, over or under it.
+    parent = list(range(len(boxes)))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for (i, j, k), n in cells.items():
+        above = cells.get((i, j, k + 1))
+        if above is not None and above != n:
+            parent[find(n)] = find(above)
+    groups = {}
+    for n in range(len(boxes)):
+        groups.setdefault(find(n), []).append(n)
+    biggest = max((len(g) for g in groups.values()), default=0)
+    part["loose"] = len(boxes) - biggest
+    part["summary"] = "%d bricks as laid, %d not joined to the rest, %d studs" % (len(boxes), part["loose"], len(part["studs"]))
     return bm
 
 
@@ -516,11 +572,11 @@ def check(doc, std, grid):
             if not good:
                 off.append(part["name"])
     ok("every stud is on the lattice (%d studs)" % count, not off, ", ".join(sorted(set(off))))
-    built = [p for p in doc["parts"] if p["kind"] == "bricks"]
+    built = [p for p in doc["parts"] if p["kind"] in ("bricks", "placed")]
     ok("every brick is held by studs (%d bricks)" % sum(len(p["bricks"]) for p in built),
        all(p["loose"] == 0 for p in built),
        ", ".join("%s: %d loose" % (p["name"], p["loose"]) for p in built if p["loose"]))
-    custom = [p for p in doc["parts"] if p["kind"] != "bricks"]
+    custom = [p for p in doc["parts"] if p["kind"] not in ("bricks", "placed")]
     ok("every custom part is one closed solid (%d parts)" % len(custom), all(p["closed"] for p in custom),
        ", ".join(p["name"] for p in custom if not p["closed"]))
     points = [j for p in doc["parts"] for j in ([p["mount"]] if "mount" in p else []) + p["sockets"]]
@@ -537,8 +593,8 @@ def check(doc, std, grid):
             ok("%s's mount meets a socket_%s, the same interface (%s)" % (part["name"], part["slot"], m["interface"]),
                got == m["interface"], "" if got == m["interface"] else "socket there: %s" % got)
     platform = std.get("gun_platforms", {}).get(doc.get("platform", ""))
-    if platform:
-        body = next(p for p in doc["parts"] if p["slot"] == "body" and p["sockets"])
+    body = next((p for p in doc["parts"] if p["slot"] == "body" and p["sockets"]), None)
+    if platform and body is not None:
         have = {s["slot"]: s["interface"] for s in body["sockets"]}
         want = platform["sockets"]
         ok("the body's sockets are platform %s's" % doc["platform"],

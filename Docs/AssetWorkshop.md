@@ -12,7 +12,7 @@ It is the workshop ([Docs/BuildMode.md](BuildMode.md), `scripts/workshop.gd`) wi
 building, the hotbar, paint, undo, save and load -- works here unchanged. Tools that prove out
 can move into the main workshop later; that is the build-mode area's call.
 
-Status: phases 1 to 3 are built (2026-10-14). Phase 4 is not yet.
+Status: all four phases are built (2026-10-14) and checked by the probe (56 checks). The panels and drag tools have been driven by the probe, not yet by hand: what feels wrong in use is the next round.
 
 ---
 
@@ -69,10 +69,10 @@ real mm, so a part can be built straight from a real gun's numbers.
 | Tool | Key | What it does |
 |---|---|---|
 | **Mark smooth** | N | paint a part's role: stays bricks, or becomes a smooth custom piece (its brick outline is lofted, as the traced stock and grip were) |
-| **Fill from guide** | (panel) | fill the current part from a photo's outline, then fix it by hand |
-| **Live readout** | always on | bricks, print and game length, loose bricks, the grip against the grip standard |
-| **Export** | F12 | write the build sheet, run the part kit, show the rendered asset |
-| **Undo / redo** | Z / shift Z | many steps both ways (the workshop has undo-last) |
+| **Wand** | F4, click a photo | the patch of the photo's colour under the click, filled with bricks for the current part, so many studs across on the mirror plane; then fix it by hand |
+| **Live readout** | always on | each part's bricks (~ marks smooth ones) and the asset's length in the game; after an export, the part kit's checks: loose bricks, the grip, joints meeting |
+| **Export** | F12 | write the build sheet to `user://asset_exports/`, run the part kit in Blender (`BRICKCITY_BLENDER` if it is not in the usual place), and show its picture and checks here. A smooth part leaves as a loft of its brick outline -- along the gun if it is longer than tall, else up it; the rest leave as laid. The muzzle is the low-x end unless `meta.asset.muzzle` is `+x` |
+| **Undo / redo** | Z / shift Z | a fill, a copy or a mirrored pair undoes at once; redo lays it back, each brick in its own part |
 
 ---
 
@@ -88,7 +88,8 @@ does not change, so a build made here opens in the main workshop and the city as
 | `mirror` | on, and the plane |
 | `parts` | the part names, and which part each brick is, by recipe index. A brick deleted with RMB takes its own tag; anything else that shortens the recipe (undo, deleting an inserted group) takes tags from the end |
 | `points` | mounts and sockets: part, kind, slot, interface, and where: studs along, plates up, studs across |
-| `guides`, `smooth` (phases 3, 4) | guide models; which parts become smooth pieces |
+| `guides` | guide models: file, real length, offset, turn, opacity |
+| `smooth`, `muzzle` | which parts leave as smooth pieces; which end is the muzzle |
 
 A photo is referred to by its path and is not copied: a bought or borrowed picture stays out of
 the repository.

@@ -38,6 +38,16 @@ extends "res://scripts/workshop.gd"
 ##               above the ghost (top) or past it (front)
 ##   outlines    P: every brick outlined in its part's colour; again, the current part only
 ##
+## Phase 4 adds:
+##
+##   smooth      N: the current part becomes a smooth custom piece on export -- its brick
+##               outline lofted -- or goes back to bricks
+##   wand        F4, then click a photo: the patch of the photo's colour under the click,
+##               filled with bricks for the current part, so many studs across
+##   export      F12: the build sheet, the part kit run on it, and its picture shown here
+##   undo, redo  Z undoes a whole fill, copy or mirrored pair at once; shift Z redoes
+##   readout     the ruler adds each part's bricks and the asset's length in the game
+##
 ## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
 ## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
 ##
@@ -50,7 +60,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines"
+const KEYS_TEXT := "F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -132,6 +142,26 @@ var _guide_mm: LineEdit
 var _guide_dialog: FileDialog
 var _rng := RandomNumberGenerator.new()
 const SHAPES := ["box", "cylinder", "sphere", "wedge"]
+
+## Phase 4. Parts that leave as smooth custom pieces rather than bricks.
+var smooth_parts := PackedStringArray()
+## Which end of the build is the muzzle: "-x" (the low end) or "+x".
+var muzzle_end := "-x"
+## How many studs across the wand fills.
+var wand_width := 3
+## Groups of bricks undone, newest last, for shift Z: each a list of what to lay again.
+var _redo: Array = []
+## Edits that undo together: {end: the edit count after them, n: how many}.
+var _edit_groups: Array = []
+var _redoing := false
+## Where Blender is, to run the part kit. BRICKCITY_BLENDER overrides it.
+var blender_path := "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe"
+var _export_png := ""
+var _export_check := ""
+var _export_started := 0
+var _preview_panel: PanelContainer
+var _preview_image: TextureRect
+var _preview_text: Label
 
 ## Where the toolbars are remembered; a probe points it elsewhere.
 var toolbars_save := "user://asset_workshop_toolbars.json"
@@ -236,7 +266,7 @@ func add_photo_image(img: Image, path: String, plane: String = "side") -> int:
 	add_child(node)
 	var p := {"path": path, "plane": plane, "px": Vector2i(img.get_width(), img.get_height()),
 			"mpp": plate_studs * BrickPalette.STUD_M * 0.9 / maxf(img.get_width(), 1.0),
-			"centre": _default_centre(plane), "opacity": 0.6, "shown": true, "node": node}
+			"centre": _default_centre(plane), "opacity": 0.6, "shown": true, "node": node, "image": img}
 	if plane != "top":
 		# Standing on the plate, not floating over it.
 		p.centre.y = BrickPalette.PLATE_M + img.get_height() * float(p.mpp) * 0.5
@@ -464,8 +494,12 @@ func mirror_here() -> void:
 func _place() -> void:
 	var before := recipe.size()
 	super._place()
+	if recipe.size() > before:
+		_redo.clear()
 	if mirror_on and recipe.size() > before and _frame == 0:
 		_place_mirrored()
+		if recipe.size() == before + 2:
+			_edit_groups.append({"end": _edits.size(), "n": 2})
 
 
 ## The brick just placed, again, on the other side of the plane. A part with a front
@@ -579,6 +613,16 @@ func _unhandled_input(e: InputEvent) -> void:
 			_measure_click()
 		get_viewport().set_input_as_handled()
 		return
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool == "wand":
+		if e.pressed:
+			var ray := _mouse_ray()
+			for i in photos.size():
+				var hit = ray_on_photo(i, ray[0], ray[1])
+				if hit != null and bool(photos[i].shown):
+					wand_fill(i, hit, wand_width)
+					break
+		get_viewport().set_input_as_handled()
+		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool != "":
 		if e.pressed:
 			_drag_from = _cell
@@ -604,6 +648,14 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_F3: _toggle_guide_panel()
 			KEY_O: set_section(not section_on)
 			KEY_P: set_outlines((outlines + 1) % 3)
+			KEY_N: toggle_smooth()
+			KEY_F4: set_tool("" if tool == "wand" else "wand")
+			KEY_F12: export_and_preview()
+			KEY_Z:
+				if e.shift_pressed:
+					redo()
+				else:
+					mine = false
 			KEY_J: toggle_point_here()
 			KEY_F2: _toggle_panel()
 			KEY_F6: set_view((view + 1) % VIEWS.size())
@@ -634,6 +686,7 @@ func _process(dt: float) -> void:
 	_draw_tool()
 	if _outlines_dirty:
 		_draw_outlines()
+	_poll_export()
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
@@ -665,6 +718,17 @@ func ruler_text() -> String:
 	if calibrating != null:
 		modes.append("CALIBRATE: click point %d of 2 on the photo" % ((calibrating as Array).size() + 1))
 	lines.append("   ".join(modes))
+	if recipe.size() > 0:
+		var counts := part_counts()
+		var bits := PackedStringArray()
+		for name in part_names:
+			if counts[name] > 0:
+				bits.append("%s%s %d" % [name, "~" if smooth_parts.has(name) else "", counts[name]])
+		var d: Vector3i = recipe.bounds()[1]
+		lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m long" % [", ".join(bits),
+				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT / 1000.0])
+	if _export_check != "":
+		lines.append(_export_check)
 	if measure_on and measure_points.size() == 2:
 		lines.append(measure_text(measure_points[0], measure_points[1]).replace("\n", "   "))
 	lines.append(KEYS_TEXT)
@@ -888,7 +952,8 @@ func _store_asset_meta() -> void:
 		gds.append({"path": g.path, "real_mm": g.real_mm, "offset": [o.x, o.y, o.z],
 				"turn": g.turn, "opacity": g.opacity})
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
-			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds}
+			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
+			"smooth": Array(smooth_parts), "muzzle": muzzle_end}
 
 
 func _restore_asset_meta() -> void:
@@ -904,6 +969,8 @@ func _restore_asset_meta() -> void:
 	for q in a.get("points", []):
 		points.append(q)
 	_draw_points()
+	smooth_parts = PackedStringArray(a.get("smooth", []))
+	muzzle_end = String(a.get("muzzle", "-x"))
 	for g in a.get("guides", []):
 		var i := load_guide(String(g.path), float(g.real_mm))
 		if i >= 0:
@@ -942,6 +1009,9 @@ func _reset_space() -> void:
 		(g.node as Node).queue_free()
 	guides.clear()
 	selection.clear()
+	smooth_parts = PackedStringArray()
+	_redo.clear()
+	_edit_groups.clear()
 	for p in photos:
 		(p.node as Node).queue_free()
 	photos.clear()
@@ -981,6 +1051,10 @@ func _setup_parts() -> void:
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
 	_build_phase3(_ruler.get_parent() as CanvasLayer)
+	_build_preview(_ruler.get_parent() as CanvasLayer)
+	var env := OS.get_environment("BRICKCITY_BLENDER")
+	if env != "":
+		blender_path = env
 	_reconcile_parts()
 	_load_toolbar(part_names[part_sel])
 
@@ -1293,6 +1367,8 @@ func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1) 
 		return false
 	if m != 0:
 		world.set_block_material(chunk, placed, m)
+	if not _redoing:
+		_redo.clear()
 	recipe.add(arch, cell, c, _recipe_frame_for(_frame), _role, m)
 	_placed_at.append([_frame, placed])
 	_edits.append("brick")
@@ -1309,7 +1385,13 @@ func fill_cells(cells: Dictionary, random: bool = false) -> int:
 			laid += 1
 	_batch = false
 	_after_edit()
+	_group(laid)
 	return laid
+
+
+func _group(n: int) -> void:
+	if n > 1:
+		_edit_groups.append({"end": _edits.size(), "n": n})
 
 
 # ---------------------------------------------------------------------------
@@ -1355,6 +1437,7 @@ func set_tool(t: String) -> void:
 	_select_box.visible = t == "select"
 	if t == "" :
 		selection.clear()
+	_shape_box.get_parent().get_parent().visible = t in ["shape", "select"]
 	_outlines_dirty = true
 
 
@@ -1464,6 +1547,7 @@ func copy_selection_to_ghost(move: bool = false) -> int:
 			laid += 1
 	_batch = false
 	_after_edit()
+	_group(laid)
 	return laid
 
 
@@ -1799,3 +1883,342 @@ func _refresh_guide_panel() -> void:
 		_guide_list.add_item((g.path as String).get_file())
 	if not guides.is_empty():
 		_guide_list.select(guides.size() - 1)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: smooth parts, undo and redo
+# ---------------------------------------------------------------------------
+
+## The current part leaves as a smooth custom piece, or as bricks again.
+func toggle_smooth() -> void:
+	var name := part_names[part_sel]
+	var i := smooth_parts.find(name)
+	if i >= 0:
+		smooth_parts.remove_at(i)
+	else:
+		smooth_parts.append(name)
+	_store_asset_meta()
+
+
+## What laying the last brick again needs, if the last edit was a brick.
+func _last_brick() -> Variant:
+	if _edits.is_empty() or _edits.back() != "brick" or recipe.size() == 0:
+		return null
+	var i := recipe.size() - 1
+	return {"arch": recipe.part_of(i), "cell": recipe.cell_of(i), "colour": recipe.colour_of(i),
+			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
+
+
+## Z: a fill, a copy or a mirrored pair goes at once; anything else one edit at a time.
+func _undo() -> bool:
+	var n := 1
+	if not _edit_groups.is_empty() and int(_edit_groups.back().end) == _edits.size():
+		n = int(_edit_groups.pop_back().n)
+	var group := []
+	var any := false
+	for _k in n:
+		var b = _last_brick()
+		if not super._undo():
+			break
+		any = true
+		if b != null:
+			group.append(b)
+	if not group.is_empty():
+		_redo.append(group)
+	return any
+
+
+## Shift Z: lay the last undone group again, each brick back in its own part.
+func redo() -> int:
+	if _redo.is_empty():
+		return 0
+	var group: Array = _redo.pop_back()
+	group.reverse()
+	_redoing = true
+	var keep := part_sel
+	var laid := 0
+	_batch = true
+	for b in group:
+		part_sel = int(b.tag)
+		if place_named(b.arch, b.cell, b.colour, b.mat):
+			laid += 1
+	_batch = false
+	part_sel = keep
+	_after_edit()
+	_group(laid)
+	_redoing = false
+	return laid
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: the wand -- a patch of a photo's colour, filled
+# ---------------------------------------------------------------------------
+
+## The photo pixel under a point of the workshop, or (-1, -1) off the photo.
+func photo_pixel(i: int, at: Vector3) -> Vector2i:
+	var p: Dictionary = photos[i]
+	var node: Node3D = p.node
+	var size := Vector2(p.px) * float(p.mpp)
+	var local := node.transform.affine_inverse() * at
+	var px := Vector2i(int((local.x / size.x + 0.5) * p.px.x), int((0.5 - local.y / size.y) * p.px.y))
+	if px.x < 0 or px.y < 0 or px.x >= p.px.x or px.y >= p.px.y:
+		return Vector2i(-1, -1)
+	return px
+
+
+func _sample(img: Image, px: Vector2i) -> Color:
+	var c := Color(0, 0, 0, 0)
+	var n := 0
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			var q := px + Vector2i(dx, dy)
+			if q.x >= 0 and q.y >= 0 and q.x < img.get_width() and q.y < img.get_height():
+				c += img.get_pixelv(q)
+				n += 1
+	return c / maxf(n, 1)
+
+
+## Fill, for the current part, the cells in front of the patch of a side photo that has
+## the colour under `hit` and joins it, `width` studs across on the mirror plane.
+## Returns how many bricks were laid.
+func wand_fill(i: int, hit: Vector3, width: int, tolerance: float = 0.14) -> int:
+	var p: Dictionary = photos[i]
+	if p.plane != "side" or not p.has("image"):
+		return 0
+	var img: Image = p.image
+	var start := photo_pixel(i, hit)
+	if start.x < 0:
+		return 0
+	var want := _sample(img, start)
+	var z := (p.node as Node3D).transform.origin.z
+	var seed_cell := Vector2i(int(floor(hit.x / BrickPalette.STUD_M)), int(floor(hit.y / BrickPalette.PLATE_M)))
+	var seen := {}
+	var keep := {}
+	var todo: Array[Vector2i] = [seed_cell]
+	while not todo.is_empty():
+		var c: Vector2i = todo.pop_back()
+		if seen.has(c) or c.y < 1 or c.x < 0 or c.x >= plate_studs or c.y >= height_plates:
+			continue
+		seen[c] = true
+		var at := Vector3((c.x + 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M, z)
+		var px := photo_pixel(i, at)
+		if px.x < 0:
+			continue
+		var got := _sample(img, px)
+		if absf(got.r - want.r) + absf(got.g - want.g) + absf(got.b - want.b) > tolerance * 3.0:
+			continue
+		keep[c] = true
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			todo.append(c + d)
+	var z0 := int(round(mirror_z - width * 0.5))
+	var cells := {}
+	for c in keep:
+		for k in width:
+			cells[Vector3i(c.x, c.y, z0 + k)] = true
+	return fill_cells(cells)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: export to the part kit
+# ---------------------------------------------------------------------------
+
+## The build as a part-kit build sheet (tools/brickify/gunsmith.py), in its frame: mm at
+## print size, x along the gun from the muzzle, y across from the mirror plane, z up from
+## the plate. A smooth part's brick outline becomes a loft; the rest go as laid.
+func export_sheet() -> Dictionary:
+	var by_part := {}
+	var x_lo := 1 << 30
+	var x_hi := -(1 << 30)
+	var y_lo := 1 << 30
+	var z_lo := 1 << 30
+	var z_hi := -(1 << 30)
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		x_lo = mini(x_lo, c.x)
+		x_hi = maxi(x_hi, c.x + size.x)
+		y_lo = mini(y_lo, c.y)
+		z_lo = mini(z_lo, c.z)
+		z_hi = maxi(z_hi, c.z + size.z)
+		var tag := part_of[i] if i < part_of.size() else 0
+		by_part.get_or_add(tag, []).append(i)
+	var along := func(x: float) -> float:
+		return (x - x_lo) * PRINT_MM_PER_STUD if muzzle_end == "-x" else (x_hi - x) * PRINT_MM_PER_STUD
+	var up := func(y: float) -> float: return (y - y_lo) * PRINT_MM_PER_PLATE
+	# Across from the mirror plane when it is on -- it is the asset's middle -- else from
+	# the middle of what was built.
+	var mid_z := mirror_z if mirror_on else (z_lo + z_hi) * 0.5
+	var across := func(z: float) -> float: return (z - mid_z) * PRINT_MM_PER_STUD
+	var parts := []
+	var made := {}
+	for tag in by_part:
+		var name := part_names[tag]
+		var ids: Array = by_part[tag]
+		var spec := {"name": name, "slot": name if GUN_PARTS.has(name) else "body",
+				"colour": _part_colour(ids), "sockets": []}
+		if smooth_parts.has(name):
+			_loft_spec(spec, ids, along, up)
+		else:
+			spec["kind"] = "placed"
+			var bricks := []
+			for i in ids:
+				var size := BrickPalette.size_of(recipe.part_of(i))
+				var c := recipe.cell_of(i)
+				var x0: float = along.call(c.x) if muzzle_end == "-x" else along.call(c.x + size.x)
+				bricks.append({"part": recipe.part_of(i), "min_mm": [x0, across.call(c.z), up.call(c.y)],
+						"size": [size.x, size.z, size.y]})
+			spec["bricks"] = bricks
+		parts.append(spec)
+		made[name] = spec
+	for q in points:
+		var at: Array = q.at
+		var joint := {"at": [snappedf(along.call(float(at[0])), 0.001), snappedf(up.call(float(at[1])), 0.001)],
+				"interface": q.interface}
+		if not made.has(q.part):
+			continue
+		if q.kind == "mount":
+			made[q.part]["mount"] = joint
+		else:
+			joint["slot"] = q.slot
+			made[q.part]["sockets"].append(joint)
+	return {"name": slug(recipe.name) if recipe.name != "" else "asset",
+			"note": "Written by the asset workshop's export (Docs/AssetWorkshop.md).",
+			"reference": "asset workshop", "class": "held",
+			"platform": String(recipe.meta.get("asset", {}).get("platform", "")), "parts": parts}
+
+
+## A smooth part's loft: along the gun if it is longer than tall, else up it, one section
+## for each stud column (or plate row) of its bricks, its width the part's across.
+func _loft_spec(spec: Dictionary, ids: Array, along: Callable, up: Callable) -> void:
+	var cells := {}
+	for i in ids:
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					cells[c + Vector3i(dx, dy, dz)] = true
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in cells:
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
+	var w := (hi.z - lo.z + 1) * PRINT_MM_PER_STUD * 0.5
+	var long := (hi.x - lo.x + 1) * PRINT_MM_PER_STUD
+	var tall := (hi.y - lo.y + 1) * PRINT_MM_PER_PLATE
+	var stations := []
+	if long >= tall:
+		for x in range(lo.x, hi.x + 1):
+			var ys := []
+			for c in cells:
+				if c.x == x:
+					ys.append(c.y)
+			if ys.is_empty():
+				continue
+			var a := [up.call(float(ys.min())), up.call(float(ys.max() + 1))]
+			for edge in ([x, x + 1] if x == lo.x or x == hi.x else [x + 0.5]):
+				stations.append({"t": along.call(float(edge)), "a": a, "w": w, "round": 0.45})
+		spec["axis"] = "x"
+	else:
+		for y in range(lo.y, hi.y + 1):
+			var xs := []
+			for c in cells:
+				if c.y == y:
+					xs.append(c.x)
+			if xs.is_empty():
+				continue
+			var ends := [along.call(float(xs.min())), along.call(float(xs.max() + 1))]
+			ends.sort()
+			for edge in ([y, y + 1] if y == lo.y or y == hi.y else [y + 0.5]):
+				stations.append({"t": up.call(float(edge)), "a": ends, "w": w, "round": 0.5})
+		spec["axis"] = "z"
+	stations.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.t < b.t)
+	spec["kind"] = "loft"
+	spec["stations"] = stations
+	spec["arc"] = 3
+	spec["smooth"] = true
+
+
+func _part_colour(ids: Array) -> Array:
+	var count := {}
+	for i in ids:
+		var k := Vector2i(recipe.material_of(i), recipe.colour_of(i))
+		count[k] = count.get(k, 0) + 1
+	var best := Vector2i(0, _colour)
+	for k in count:
+		if count[k] > count.get(best, 0):
+			best = k
+	var c := WorkshopHotbar.rgb(best.x, best.y)
+	return [c.r, c.g, c.b]
+
+
+## F12: write the sheet, run the part kit on it in Blender, and show its picture here
+## when it is drawn.
+func export_and_preview() -> void:
+	var sheet := export_sheet()
+	if (sheet.parts as Array).is_empty():
+		_export_check = "export: nothing built yet"
+		return
+	var dir := ProjectSettings.globalize_path("user://asset_exports")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var sheet_path := "%s/%s.json" % [dir, sheet.name]
+	var f := FileAccess.open(sheet_path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(sheet, " "))
+	f.close()
+	if not FileAccess.file_exists(blender_path):
+		_export_check = "export: wrote %s; Blender not found at %s (set BRICKCITY_BLENDER)" % [sheet_path, blender_path]
+		return
+	var kit := ProjectSettings.globalize_path("res://tools/brickify/gunsmith.py")
+	var out := "%s/%s" % [dir, sheet.name]
+	_export_png = "%s/%s_iso.png" % [out, sheet.name]
+	_export_started = int(Time.get_unix_time_from_system())
+	OS.create_process(blender_path, ["--background", "--factory-startup", "--python", kit, "--", sheet_path, out])
+	_export_check = "export: the part kit is running..."
+
+
+func _poll_export() -> void:
+	if _export_png == "" or not FileAccess.file_exists(_export_png):
+		return
+	if FileAccess.get_modified_time(_export_png) < _export_started:
+		return
+	var img := Image.load_from_file(_export_png)
+	var parts_json := _export_png.replace("_iso.png", ".parts.json")
+	var good := 0
+	var bad := PackedStringArray()
+	if FileAccess.file_exists(parts_json):
+		var d = JSON.parse_string(FileAccess.get_file_as_string(parts_json))
+		if d is Dictionary:
+			for line in d.get("check", []):
+				if line.ok:
+					good += 1
+				else:
+					bad.append(String(line.what))
+	_export_check = "export: %d checks ok, %d failed%s   (%s)" % [good, bad.size(),
+			(": " + "; ".join(bad)) if not bad.is_empty() else "", _export_png.get_base_dir()]
+	_export_png = ""
+	if img != null and not img.is_empty():
+		_preview_image.texture = ImageTexture.create_from_image(img)
+		_preview_text.text = _export_check
+		_preview_panel.visible = true
+
+
+func _build_preview(layer: CanvasLayer) -> void:
+	_preview_panel = PanelContainer.new()
+	_preview_panel.visible = false
+	_preview_panel.position = Vector2(60, 60)
+	layer.add_child(_preview_panel)
+	var box := VBoxContainer.new()
+	_preview_panel.add_child(box)
+	_preview_image = TextureRect.new()
+	_preview_image.custom_minimum_size = Vector2(880, 360)
+	_preview_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_preview_image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	box.add_child(_preview_image)
+	_preview_text = Label.new()
+	box.add_child(_preview_text)
+	var close := Button.new()
+	close.text = "Close"
+	close.pressed.connect(func() -> void: _preview_panel.visible = false)
+	box.add_child(close)
