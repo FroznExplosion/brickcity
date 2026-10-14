@@ -55,8 +55,8 @@ In the order to do it. Each line points at where the item is written up.
 7. ~~Single bricks spraying off pieces~~ (§1.3) -- checked 2026-10-14: the stress solve's
    spray went with item 1; a piece struck by another now peels a clump, not a spray of bricks;
    what is left comes from blasts and from bands (item 18).
-8. A queued blast in `--shot` hits pieces that came loose after it was fired: decide whether it
-   should, or have the pass fire its blasts at once (§3, last point).
+8. ~~A queued blast in `--shot` hits pieces that came loose after it was fired~~ -- decided
+   2026-10-14: let it, and leave the pass as it is (§3, last point).
 9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): furniture drawn on wreckage is not turned
    to bricks when the wreckage is hit; a written-off piece leaves no debris; pieces the cap has
    put to sleep carry no interior; a rolled gun swaps to its card at 12 m in one frame.
@@ -547,10 +547,16 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   whatever is saved in Options, so numbers and pictures are comparable from here on. They were
   not before: the `--far` crossfade control read 8.8 %, 6.4 %, 5.1 % or 4.7 % by the anti-aliasing
   that happened to be saved.
-* `--shot` queues ~1,000 blasts that land at eight a tick; with cascades finishing in the tick,
+* ~~`--shot` queues ~1,000 blasts that land at eight a tick; with cascades finishing in the tick,
   towers come down while blasts are still landing, and those blasts shatter the falling chunks
   (one run made 136 bodies of 500+ bricks off hit pieces, another 4). Decide whether a queued blast
-  should hit pieces that came loose after it was fired, or make the pass fire its blasts at once.
+  should hit pieces that came loose after it was fired, or make the pass fire its blasts at once.~~
+  **Decided 2026-10-14: it should, and the pass stays as it is.** What made it matter has gone: a
+  piece is a rigid chunk (1.10 (1)), so a late blast on a falling one takes its bricks and cuts it
+  only where it disconnects it -- 95-135 such hits a `--big --shot` now make 10-13 bodies, all of
+  49-499 bricks, none bigger (three runs, 2026-10-13/14). In play a blast lands a tick or two after
+  it is fired; the queue only stretches out in this pass, and changing how the pass fires would
+  make every number in this section incomparable with the next.
 
 ---
 
