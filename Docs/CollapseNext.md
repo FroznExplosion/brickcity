@@ -18,7 +18,8 @@ Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each a
 its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
-`barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `storey_probe.gd`,
+`barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
+`storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
@@ -44,8 +45,11 @@ In the order to do it. Each line points at where the item is written up.
 5. ~~A snap goes at the weakest seam near the contact, not the nearest storey line~~ -- a
    tower's piece now parts along a row of windows, its columns pulled off their feet. §1.10 (5).
 
-**Next, the brick model (§1.10)**
-6. Things are pushed and bounce: a blast throws loose pieces, plastic clatters. §1.10 (4).
+6. ~~Things are pushed and bounce~~ -- a blast shoves the loose pieces it reaches (light ones
+   thrown, heavy wreckage hardly moved), and loose bricks bounce before they settle; a slider in
+   Options for each. §1.10 (4).
+
+**Next, the brick model (§1.10)**: nothing left on this list.
 
 **Left over from earlier lists**
 7. Single bricks spraying off pieces (§1.3) -- expected to go with item 1; check, then strike.
@@ -309,11 +313,40 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    `barrage_probe` 6 (the count above adds up; what throwing them costs), and
    `city.tscn -- --ring` (4), which writes `shots/city_ring_0.png` and `_1.png` -- a tenth and
    half a second after one rocket.
-4. **Nothing is ever pushed.** (2026-10-13: the bricks a blast kills are thrown now, as crumbs
-   -- (3). A piece still is not.) There are no impulses (`DEBRIS_GRAVITY`'s note): a blast beside a
-   loose piece wakes it and leaves it where it is, and a landing never bounces (friction 1,
-   bounce 0). Light plastic is thrown by a blast and clatters. A feel change, and it costs
-   settling time -- after 1 and 2, when less is moving.
+4. ~~Nothing is ever pushed~~ -- **done 2026-10-14: a blast shoves what it reaches, and loose
+   bricks clatter.** Both are feel numbers, each with a slider in **Options > Gameplay**:
+   *"Blast Push (Developer)"*, 0x to 3x, default 1x (`IslandManager.push_times`), and *"Brick
+   Bounce (Developer)"*, 0 to 0.8, default 0.25 (`crumb_bounce`). A headless run keeps the
+   defaults whatever is saved.
+   *The push* (`IslandManager.push_near`, from `damage_near` and the debug gun's direct hit on a
+   piece; a gun's wear pushes nothing): every loose piece within 2.5 radii of a blast is given a
+   shove away from it and a little up (`PUSH_LIFT`), at the side nearest the blast, so a blast at
+   one end of a beam turns it. 4 m/s for a piece of 20 bricks at the blast's middle, nothing at
+   the edge of its reach; a smaller piece faster by the cube root of how much smaller, a bigger
+   one slower by the whole of how much bigger -- a blast only meets as much face as is within its
+   reach, so past that size the shove is the same and the mass is not. A 256-brick heap a rocket
+   lands half a metre from gets 0.3 m/s. At most 8 m/s.
+   *What stays put:* a piece that is down -- at rest, or sliding to a stop -- takes no shove
+   under 1 m/s (`PUSH_WAKE_SPEED`); its friction would take it back in a moment, and pushing
+   every piece that was down kept everything under fire moving. So wreckage at rest still stays
+   at rest when it is shot, unless the shot moves it properly (1.10 (2)); a piece in the air
+   takes every shove.
+   *The bounce* (`_update_crumbs`): a crumb that comes down faster than 1.5 m/s
+   (`CRUMB_REST_SPEED`) goes back up at a quarter of that speed and on at half its speed along,
+   still turning; slower, it stops. Only crumbs: a brick or a handful is light, hard, and what a
+   blast throws. A section's landing is spent breaking it (`fracture_on_impact`), and one that
+   sprang back up would land and break again -- bodies keep bounce 0. At 0.35 a crumb from two
+   storeys up was still bouncing when it faded (`CRUMB_LIFE_MS`); 0.25 lets it come to rest.
+   *Under fire* (`barrage_probe`, now three bursts a tower with quiet between -- under a blast
+   every tick for eight seconds nothing got to rest at all, and what a shot does to wreckage at
+   rest is half of what it asks): about 1,600-1,900 shoves a run, 45 of them waking a piece from
+   rest, 1,800-2,100 shrugged off by pieces that were down; with the push off the same probe has
+   11 hits on wreckage at rest where it has 6-7 with it.
+TIMING   *Tests:* `tools/push_probe.gd` 16 (a handful knocked over, away and up; a heap of 256
+   shrugs; out of reach untouched; nearer is harder; 0 on the slider pushes nothing; a gun's wear
+   pushes nothing; a falling piece is knocked sideways; all of it settles; crumbs bounce, never
+   sink, and come to rest; 0 on the slider, no bounce), `barrage_probe` 6 (`-- --push=N`,
+   `--bounce=F` to see what the numbers move).
 5. ~~A snap goes at the storey line nearest the contact~~ -- **done 2026-10-13: at the weakest
    seam near it.** A landing that snaps a piece across its own Y (`_snap_across`) asks
    `BrickWorld.seam_studs` what holds each course boundary within half a storey of the contact

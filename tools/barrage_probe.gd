@@ -2,12 +2,15 @@ extends "res://tools/collapse_probe.gd"
 
 ## Wreckage under fire (Docs/CollapseNext.md 1.10): four towers brought down in
 ## a city of their own, each with four blasts a tick into and round where it
-## falls for eight seconds -- and what the pieces did about it.
+## falls, in three bursts of BURST_TICKS with QUIET_TICKS after each --
+## and what the pieces did about it.
 ##
 ##     godot --headless --path . --script tools/barrage_probe.gd
 ##     ... -- --stud=1      the same at another stud strength (BrickStrength.
 ##                          times), to see what that number moves: read the
 ##                          "studs at" line
+##     ... -- --push=N      a blast's push at N times (IslandManager.push_times)
+##     ... -- --bounce=F    a crumb's bounce (IslandManager.crumb_bounce)
 ##
 ## A loose piece is a rigid chunk: it parts where a hit disconnects it and
 ## where a landing snaps it, and is never stress-solved. And one at rest that
@@ -24,6 +27,12 @@ extends "res://tools/collapse_probe.gd"
 ## of this each way, 2026-10-13). The lines are drawn between the two.
 
 
+## Ticks of firing, then of quiet, then firing again. The quiet is long enough
+## for what was shoved to settle (IslandManager.SETTLE_SLOW_NEAR_MS and _MIN_MS).
+const BURST_TICKS := 40
+const QUIET_TICKS := 80
+
+
 func _only(_name: String) -> bool:
 	return false
 
@@ -33,6 +42,10 @@ func _run() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--stud="):
 			BrickStrength.times = float(a.split("=", true, 1)[1])
+		if a.begins_with("--push="):
+			IslandManager.push_times = float(a.split("=", true, 1)[1])
+		if a.begins_with("--bounce="):
+			IslandManager.crumb_bounce = float(a.split("=", true, 1)[1])
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
 	await _ticks(30)
@@ -50,12 +63,16 @@ func _run() -> void:
 		city._promote(id)
 		await _ticks(20)
 		_undercut(id)
-		# And keep firing into what comes down: low, in and round the footprint.
-		for t in 240:
-			for k in 4:
-				city._blast(Vector3(rng.randf_range(box.position.x - 6.0, box.end.x + 6.0),
-						rng.randf_range(0.3, 7.0),
-						rng.randf_range(box.position.z - 6.0, box.end.z + 6.0)), 1.3)
+		# And keep firing into what comes down: low, in and round the footprint,
+		# in bursts. Without a pause nothing under fire gets to rest at all --
+		# a blast pushes what it reaches (IslandManager.push_near) -- and what
+		# happens to wreckage at rest when it is shot is half of what this asks.
+		for t in 3 * (BURST_TICKS + QUIET_TICKS):
+			if t % (BURST_TICKS + QUIET_TICKS) < BURST_TICKS:
+				for k in 4:
+					city._blast(Vector3(rng.randf_range(box.position.x - 6.0, box.end.x + 6.0),
+							rng.randf_range(0.3, 7.0),
+							rng.randf_range(box.position.z - 6.0, box.end.z + 6.0)), 1.3)
 			await physics_frame
 		await _ticks(90)
 	var isl: IslandManager = city.islands
@@ -64,6 +81,7 @@ func _run() -> void:
 	print("  --   %s" % isl.blast_census_line())
 	print("  --   %s" % isl.crumb_cost_line())
 	print("  --   %s" % isl.snap_census_line())
+	print("  --   %s" % isl.push_census_line())
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,

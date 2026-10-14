@@ -404,8 +404,8 @@ const VISIBLE_RANGE := 140.0       ## beyond this, nobody is watching closely
 const DEBRIS_GRAVITY := 1.6
 const MAX_DEBRIS_SPEED := 30.0
 const MAX_DEBRIS_SPIN := 14.0
-## Nothing in this game throws a piece UP: there are no impulses, and a landing
-## does not bounce. What does is the solver pushing apart two pieces that
+## Nothing in this game throws a piece UP but a blast (push_near), a little, and
+## a landing does not bounce. What else does is the solver pushing apart two pieces that
 ## overlap -- two that passed through each other in the air (Layers.
 ## AIRBORNE_MASK), and then one landed -- and uncapped that threw a 22-brick
 ## piece off a 72-brick one at 11 m/s (--jam --big). A piece rises no faster
@@ -413,6 +413,40 @@ const MAX_DEBRIS_SPIN := 14.0
 ## flying. Not one the wind holds (hold_awake): a tornado lifts on purpose.
 const MAX_RISE_SPEED := 4.0
 var rises_capped := 0
+
+## **A blast pushes what it reaches** (Docs/CollapseNext.md 1.10 (4)). It used to
+## take bricks and push nothing: a piece beside it woke and stayed where it was.
+## Now every loose piece within PUSH_REACH of its radius is given a shove away
+## from it, and a little up -- light plastic is thrown, a section of a tower
+## barely moves. How much: PUSH_SPEED for a piece of PUSH_REF_BLOCKS bricks at
+## the blast's middle, falling to nothing at the edge of its reach. A smaller
+## piece goes faster by the cube root of how much smaller (what a blast meets is
+## a face, what it has to move is a volume); a bigger one slower by the whole of
+## how much bigger, because a blast only meets as much face as is within its
+## reach -- past that size the shove is the same and the mass is not. Given at
+## the side nearest the blast, so a blast at one end of a beam turns it.
+##
+## Wreckage that is down stays where it is unless the shove is at least
+## PUSH_WAKE_SPEED (1.10 (2)): a heap of a few hundred bricks shrugs off a rocket
+## beside it, a handful of them is knocked over. Not only one at rest: a piece
+## sliding to a stop given a shove its friction takes back in a moment only
+## takes that much longer to stop -- under a barrage, pushing every piece that
+## was down left almost nothing at rest (27 hits on wreckage at rest became 1,
+## barrage_probe). A piece in the air takes every shove.
+##
+## Feel numbers: Options > Gameplay, "Blast Push (Developer)" (push_times).
+const PUSH_SPEED := 4.0
+const PUSH_REF_BLOCKS := 20.0
+const PUSH_REACH := 2.5
+const PUSH_LIFT := 0.35
+const PUSH_WAKE_SPEED := 1.0
+const PUSH_MAX_SPEED := 8.0
+const PUSH_DEFAULT_TIMES := 1.0
+const PUSH_MAX_TIMES := 3.0
+static var push_times := PUSH_DEFAULT_TIMES
+## Pieces pushed; of those, woken from rest; pieces down that a blast reached
+## and that shrugged it off.
+var push_census := [0, 0, 0]
 
 var world: BrickWorld
 var brick_material: ShaderMaterial
@@ -1408,6 +1442,20 @@ const CRUMB_SPIN := 5.0
 ## LANDMARK_COUNT (_crumbles_off_a_piece).
 const CRUMBS_MAX := 1500
 const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
+## **Plastic clatters** (Docs/CollapseNext.md 1.10 (4)). A crumb that comes down
+## faster than CRUMB_REST_SPEED bounces: up at `crumb_bounce` of the speed it came
+## down at, along at CRUMB_SLIDE of what it had, turning still; slower, it stops
+## where it is. A crumb is a brick or a handful -- light, hard, and what a blast
+## throws -- so it is the one thing that bounces. A section coming down is not:
+## its landing is spent breaking it (fracture_on_impact), and one that sprang back
+## up would land, and break, again.
+## Feel numbers: Options > Gameplay, "Brick Bounce (Developer)" (crumb_bounce).
+const CRUMB_BOUNCE := 0.25
+const CRUMB_BOUNCE_MAX := 0.8
+const CRUMB_REST_SPEED := 1.5
+const CRUMB_SLIDE := 0.5
+static var crumb_bounce := CRUMB_BOUNCE
+var crumb_bounces := 0   ## times a crumb bounced
 
 ## **A blast destroys the middle of what it reaches and throws the rest out**
 ## (Docs/CollapseNext.md 1.10 (3); BrickFailure.md 5 -- bricks separate, they do
@@ -1798,7 +1846,11 @@ func _update_crumbs() -> void:
 				var p := cr.pos[i] + v * dt
 				if p.y - cr.half_h[i] <= cr.floor_y[i]:
 					p.y = cr.floor_y[i] + cr.half_h[i]
-					cr.landed[i] = now
+					if -v.y * crumb_bounce > CRUMB_REST_SPEED:
+						v = Vector3(v.x * CRUMB_SLIDE, -v.y * crumb_bounce, v.z * CRUMB_SLIDE)
+						crumb_bounces += 1
+					else:
+						cr.landed[i] = now
 				cr.pos[i] = p
 				cr.vel[i] = v
 			i += 1
@@ -3037,8 +3089,54 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 			rest_hits_woke += 1
 
 
+## Shove every loose piece within PUSH_REACH of a blast at `point` (see
+## PUSH_SPEED). The host's: a piece's motion is this machine's physics, and
+## only the host's shots reach pieces. Returns how many moved.
+func push_near(point: Vector3, radius: float) -> int:
+	if not decides or push_times <= 0.0 or radius <= 0.0:
+		return 0
+	var reach := radius * PUSH_REACH
+	var moved := 0
+	for i in islands.size():
+		var isl: BrickIsland = islands[i]
+		if not isl.is_valid() or isl.fade_since > 0:
+			continue
+		var com := isl.body.global_position
+		if com.distance_to(point) > isl.radius + reach:
+			continue
+		var box := world_aabb(isl)
+		var near := Vector3(clampf(point.x, box.position.x, box.end.x),
+				clampf(point.y, box.position.y, box.end.y), clampf(point.z, box.position.z, box.end.z))
+		var d := near.distance_to(point)
+		if d >= reach:
+			continue
+		var size := PUSH_REF_BLOCKS / float(maxi(world.get_alive_block_count(isl.chunk), 1))
+		var dv := minf(PUSH_SPEED * push_times * (1.0 - d / reach)
+				* (pow(size, 1.0 / 3.0) if size > 1.0 else size), PUSH_MAX_SPEED)
+		if isl.settled or isl.landed:
+			if dv < PUSH_WAKE_SPEED:
+				push_census[2] += 1
+				continue
+			if isl.settled:
+				wake(isl)
+				push_census[1] += 1
+		var away := com - point
+		away = away.normalized() if away.length() > 0.01 else Vector3.UP
+		var dir := (away + Vector3.UP * PUSH_LIFT).normalized()
+		isl.body.apply_impulse(dir * dv * isl.body.mass, near - com)
+		push_census[0] += 1
+		moved += 1
+	return moved
+
+
+func push_census_line() -> String:
+	return "blasts pushed %d piece(s), %d of them woken from rest; %d that were down shrugged one off" % [
+			push_census[0], push_census[1], push_census[2]]
+
+
 ## Damage every loose piece whose volume reaches the blast, not every piece
-## whose origin happens to sit near it. Returns how many were hit.
+## whose origin happens to sit near it, and push what it reaches (push_near).
+## Returns how many were hit.
 func damage_near(point: Vector3, radius: float, chip := 0) -> int:
 	var hit := 0
 	# A bullet has no radius but still has to find the piece it struck.
@@ -3059,6 +3157,10 @@ func damage_near(point: Vector3, radius: float, chip := 0) -> int:
 		if world_aabb(isl).grow(reach).has_point(point):
 			damage(isl, point, radius, chip)
 			hit += 1
+	# After the damage, so what a hit cut off is pushed as well. A gun's wear
+	# pushes nothing.
+	if chip <= 0:
+		push_near(point, radius)
 	return hit
 
 

@@ -134,6 +134,12 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			# be what somebody set here.
 			if DisplayServer.get_name() != "headless":
 				BrickStrength.times = float(value)
+		&"blast_push":
+			if DisplayServer.get_name() != "headless":
+				IslandManager.push_times = float(value)
+		&"brick_bounce":
+			if DisplayServer.get_name() != "headless":
+				IslandManager.crumb_bounce = float(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -175,6 +181,16 @@ func _setting_defs() -> Array:
 			"hint": "How hard a stud holds: how much comes off a damaged building by itself. "
 			+ "1x is a building the game's size, 44x a toy on a table. Buildings take it at once; "
 			+ "what has already fallen is not put back."},
+		{"id": &"blast_push", "tab": "gameplay", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Blast Push (Developer)", "default": IslandManager.PUSH_DEFAULT_TIMES,
+			"min": 0.0, "max": IslandManager.PUSH_MAX_TIMES, "step": 0.25, "suffix": "x",
+			"hint": "How hard a blast shoves the loose pieces near it. Light ones are thrown, "
+			+ "big wreckage hardly moves; 0 pushes nothing."},
+		{"id": &"brick_bounce", "tab": "gameplay", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Brick Bounce (Developer)", "default": IslandManager.CRUMB_BOUNCE,
+			"min": 0.0, "max": IslandManager.CRUMB_BOUNCE_MAX, "step": 0.05,
+			"hint": "How far a loose brick bounces when it lands, as a share of how fast it came "
+			+ "down. 0: it stops where it lands."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 
