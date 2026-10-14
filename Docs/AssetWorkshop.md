@@ -12,7 +12,7 @@ It is the workshop ([Docs/BuildMode.md](BuildMode.md), `scripts/workshop.gd`) wi
 building, the hotbar, paint, undo, save and load -- works here unchanged. Tools that prove out
 can move into the main workshop later; that is the build-mode area's call.
 
-Status: written 2026-10-14. Phase 1 is being built. Nothing below phase 1 exists yet.
+Status: phases 1 and 2 are built (2026-10-14). Phases 3 and 4 are not yet.
 
 ---
 
@@ -50,7 +50,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 
 | Tool | Key | What it does |
 |---|---|---|
-| **Part toolbars** | Y cycles | several hotbars, each bound to a part (barrel, stock, grip ...). Every brick placed is tagged with the part of the toolbar it came from, so the split lines are built in. Bricks are tinted by part on demand |
+| **Part toolbars** | Y cycles | several hotbars, each bound to a part (barrel, stock, grip ...). Every brick placed is tagged with the part of the toolbar it came from, so the split lines are built in. Each part keeps its own nine slots |
 | **Drag place** | hold LMB, drag | the held brick laid again and again on the plane of the first one, wherever the cursor passes: a line, a wall, a floor |
 | **Connection points** | J | place a mount or a socket on the lattice for the current part and pick its interface (`stock.tang` ...): the gun system's `socket_<slot>` / `mount` |
 
@@ -62,7 +62,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 | **Box select** | L, drag | a region: move, copy, delete, or re-pack it clean |
 | **Guide models** | F3 (panel) | load an existing model (glTF, FBX, OBJ) on its own locked, see-through layer, and build inside it. A bought model is a guide only: it is never exported ([custom.md](Parts/custom.md) section 6) |
 | **Section view** | O | hide everything past a plane, to build inside |
-| **Isolate / explode** | P | show only the current part, or pull the parts apart |
+| **Isolate / explode** | P | show only the current part, or pull the parts apart; tint bricks by part |
 
 ### Phase 4 -- out the other end
 
@@ -86,8 +86,8 @@ does not change, so a build made here opens in the main workshop and the city as
 |---|---|
 | `photos` | each photo: file, plane, centre, mm per pixel, opacity, shown |
 | `mirror` | on, and the plane |
-| `parts` (phase 2) | the part names, and which part each brick is |
-| `points` (phase 2) | mounts and sockets: part, slot, interface, cell |
+| `parts` | the part names, and which part each brick is, by recipe index. A brick deleted with RMB takes its own tag; anything else that shortens the recipe (undo, deleting an inserted group) takes tags from the end |
+| `points` | mounts and sockets: part, kind, slot, interface, and where: studs along, plates up, studs across |
 | `guides`, `smooth` (phases 3, 4) | guide models; which parts become smooth pieces |
 
 A photo is referred to by its path and is not copied: a bought or borrowed picture stays out of

@@ -14,6 +14,13 @@ extends SceneTree
 ##              part with a front turned to look the other way
 ##   views      a flat view is orthographic and perspective comes back
 ##   saved      photos and the mirror ride in the recipe's meta and load back
+##
+## Phase 2:
+##
+##   parts      a brick is tagged with the part whose toolbar it came from; a delete takes
+##              its own tag and an undo the last; each part keeps its own toolbar
+##   run        holding LMB lays the brick again wherever the ghost moves
+##   points     a mount placed, the same spot again takes it away, and they load back
 
 var _pass := 0
 var _fail := 0
@@ -33,13 +40,19 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	print("asset workshop probe (phase 1)")
+	# Nothing a probe does may land in the player's own files.
+	_ws._hotbar.save_path = "user://_probe_asset_hotbar.json"
+	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
+	print("asset workshop probe (phases 1 and 2)")
 	_units()
 	_photo()
 	_measure()
 	_mirror()
 	_views()
 	_saved()
+	_parts()
+	_run()
+	_points()
 	print("asset workshop probe: %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -152,3 +165,72 @@ func _saved() -> void:
 	_ok("the photo loads back at its scale", _ws.photos.size() == 1 and absf(float(_ws.photos[0].mpp) - mpp) < 1e-9,
 			"%d photos" % _ws.photos.size())
 	_ok("the mirror loads back on", _ws.mirror_on)
+
+
+func _lay(part_name: String, cell: Vector3i) -> bool:
+	var before: int = _ws.recipe.size()
+	_ws._part_index = _part_index(part_name)
+	_ws._yaw = 0
+	_ws._flip = false
+	_ws._cell = cell
+	_ws._update_ghost()
+	_ws._place()
+	return _ws.recipe.size() == before + 1
+
+
+func _parts() -> void:
+	_ws.set_mirror(false)
+	_ws._new_build()
+	_ok("a new build has a gun's parts", _ws.part_names.size() == 8 and _ws.part_names[2] == "stock")
+	_ws.select_part(2)
+	_lay("plate_1x2", Vector3i(30, 1, 30))
+	_ws.select_part(0)
+	_lay("plate_1x2", Vector3i(34, 1, 30))
+	_lay("plate_1x2", Vector3i(38, 1, 30))
+	_ok("each brick is tagged with its toolbar's part", Array(_ws.part_of) == [2, 0, 0], str(_ws.part_of))
+	# Delete the stock's brick, the first one: from straight above it.
+	var top := Vector3((30 + 0.5) * STUD, 3.0, (30 + 0.5) * STUD)
+	_ws._delete_ray(top, Vector3.DOWN)
+	_ok("a delete takes its own brick's tag", Array(_ws.part_of) == [0, 0], str(_ws.part_of))
+	_ws._undo()
+	_ok("an undo takes the last tag", Array(_ws.part_of) == [0], str(_ws.part_of))
+	_ws._hotbar.select(0)
+	_ws._hotbar.set_slot("brick_2x4", 3)
+	_ws.select_part(1)
+	_ws._hotbar.select(0)
+	_ws._hotbar.set_slot("round_1x1", 5)
+	_ws.select_part(0)
+	_ok("a part's toolbar comes back with it", String(_ws._hotbar.slots[0][0]) == "brick_2x4",
+			str(_ws._hotbar.slots[0]))
+	_ws.select_part(1)
+	_ok("and the other part's with it", String(_ws._hotbar.slots[0][0]) == "round_1x1", str(_ws._hotbar.slots[0]))
+
+
+func _run() -> void:
+	_ws._new_build()
+	_ws._part_index = _part_index("plate_1x1")
+	_ws._yaw = 0
+	_ws._cell = Vector3i(20, 1, 20)
+	_ws._update_ghost()
+	_ws._place()
+	_ws._run_on = true
+	_ws._run_last = _ws._cell
+	for x in [21, 22, 23]:
+		_ws._cell = Vector3i(x, 1, 20)
+		_ws._update_ghost()
+		_ws.run_step()
+	_ws._run_on = false
+	_ok("a held run lays a brick at each cell the ghost passes", _ws.recipe.size() == 4, "%d bricks" % _ws.recipe.size())
+
+
+func _points() -> void:
+	_ws.select_part(2)
+	var at := [30, 1, 20.5]
+	_ok("a mount is placed", _ws.toggle_point(at, "mount", "stock", "stock.tang") and _ws.points.size() == 1)
+	_ok("the same spot again takes it away", not _ws.toggle_point(at, "", "", "") and _ws.points.is_empty())
+	_ws.toggle_point(at, "mount", "stock", "stock.tang")
+	var tags := Array(_ws.part_of)
+	var r: BuildRecipe = BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	_ws._load_recipe(r)
+	_ok("points and part tags load back", _ws.points.size() == 1 and String(_ws.points[0].part) == "stock"
+			and Array(_ws.part_of) == tags, "%d points, tags %s" % [_ws.points.size(), _ws.part_of])
