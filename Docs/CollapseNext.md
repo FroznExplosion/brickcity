@@ -176,6 +176,25 @@ In the order to do it. Each line points at where the item is written up.
     reach, split in two with nothing but what was loose already coming off on its own; a row
     side by side holds nothing across), and the list below.
 
+**Hitches in a collapse** (after the list was done; the user's standing complaint is lag at a break)
+19. ~~The pieces' heavy work all lands in one tick~~ -- **spread 2026-10-15.** The worst ticks of
+    `--big --shot` (35-50 ms) were the pieces' tick (9-21 ms), spawning (5-13) and blasts on
+    wreckage (6-9) together. In the pieces' tick, every merged rebuild that was due ran in the
+    tick it fell due -- a 20,608-brick wreck's 2,626 boxes are 9.5 ms on their own -- and every
+    finished mesh was handed to the renderer at once (5 ms). Now the rebuilds go oldest first
+    while the tick's work budget lasts (`WORK_BUDGET_MS`), and one that has waited half a second
+    past its turn goes whatever (`RESHAPE_OVERDUE_TICKS`); finished meshes go up to 3 ms a tick
+    (`HARVEST_BUDGET_MS`). Three alternated pairs, quiet machine: **the worst pieces' tick 19.6-
+    28.8 ms -> 13.0-15.6**; frames 17.3 -> 17.2 ms, of 906 over 33.3 ms 14-22 -> 11-18. The worst
+    tick of all hardly moved (46.9-51.6 -> 41.5-49.2): what is left in it is
+    20. **Spawning's own meshes**: up to six new pieces a tick are given a mesh on the spot, so
+        none is ever invisible -- 2.2 ms for a piece of 76 bricks, of which the bake and the
+        upload are 0.5-0.8 (measured in a window); the rest is most likely the near tier's studs
+        and bevels for it (`BrickNear.track`, the build mode / materials area's). Not started.
+    21. **The first tick of a big city** (tick 24 of `--big --shot`): 33 ms of streaming the city
+        in, with 13 ms of the first blast laying a room's furniture as bricks in the same tick --
+        a load hitch, and the first-shot-at-furniture one. Not started.
+
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
 12. Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status` (§4) -- needs the main

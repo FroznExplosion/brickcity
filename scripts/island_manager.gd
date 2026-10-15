@@ -2232,9 +2232,21 @@ var reshapes_put_off := 0
 
 ## Rebuild, merged, every merged piece whose blocks changed -- falling, or hit
 ## where it lay at rest (settle_now clears what settling has already rebuilt).
+## A merged rebuild that has waited this long past its turn is made whatever
+## else the tick has done (_flush_reshapes): half a second of a piece colliding
+## with bricks it has lost, at the most.
+const RESHAPE_OVERDUE_TICKS := 15
+
+
+## The merged rebuilds that are due, oldest first, while the tick's work budget
+## lasts (WORK_BUDGET_MS) -- and one that is overdue whatever. They were all
+## made in the tick they fell due: a big wreck's is 9.5 ms on its own (20,608
+## bricks, 2,626 boxes), and two or three in the tick a collapse was spawning
+## and being shot made the worst ticks of --big --shot (2026-10-15).
 func _flush_reshapes() -> void:
 	var later: Array[BrickIsland] = []
 	var now := Engine.get_physics_frames()
+	var due: Array[BrickIsland] = []
 	for isl in _reshape_list:
 		if not isl.is_valid() or not isl.reshape_due:
 			continue
@@ -2242,11 +2254,28 @@ func _flush_reshapes() -> void:
 			later.append(isl)   # still due
 			reshapes_put_off += 1
 			continue
+		due.append(isl)
+	due.sort_custom(func(a: BrickIsland, b: BrickIsland) -> bool:
+		return a.reshaped_tick < b.reshaped_tick)
+	var overdue_done := false
+	for isl in due:
+		var waited := now - isl.reshaped_tick \
+				- (MOVING_RESHAPE_TICKS if isl.landed else AIR_RESHAPE_TICKS)
+		var overdue := waited >= RESHAPE_OVERDUE_TICKS and not overdue_done
+		if not _has_work_time() and not overdue:
+			later.append(isl)
+			reshapes_spread += 1
+			continue
+		overdue_done = overdue_done or overdue
 		isl.reshape_due = false
 		isl.reshaped_tick = now
 		_reshape(isl, true, true)
 		merged_rebuilds += 1
 	_reshape_list = later
+
+
+var reshapes_spread := 0   ## rebuilds left for a later tick: this one had spent its budget
+var harvests_spread := 0   ## finished meshes left for a later tick, the same
 
 
 ## Is anybody close enough to a landing for it to break the piece that landed?
@@ -2893,14 +2922,28 @@ func _exit_tree() -> void:
 
 ## Attach the meshes the workers have finished, and do what was asked of those
 ## pieces while they were being built.
+## A finished mesh is handed to the renderer here, and that is ~50 ns a vertex
+## on the main thread -- every one that was ready went in the same tick, 5 ms
+## of the worst tick of --big --shot (2026-10-15). Up to HARVEST_BUDGET_MS a
+## tick now, one at least; the rest the next tick.
+const HARVEST_BUDGET_MS := 3.0
+
+
 func _harvest_mesh_jobs() -> void:
 	var k := 0
+	var t0 := Time.get_ticks_usec()
+	var applied := 0
 	while k < _mesh_jobs.size():
 		var job: Array = _mesh_jobs[k]
 		var task: int = job[1]
 		if task < 0 or not WorkerThreadPool.is_task_completed(task):
 			k += 1
 			continue
+		if applied > 0 and Time.get_ticks_usec() - t0 > int(HARVEST_BUDGET_MS * 1000.0):
+			harvests_spread += 1
+			k += 1
+			continue
+		applied += 1
 		WorkerThreadPool.wait_for_task_completion(task)
 		_mesh_jobs.remove_at(k)
 		var isl: BrickIsland = job[0]

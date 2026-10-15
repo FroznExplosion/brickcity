@@ -11545,6 +11545,8 @@ func _run_shot_pass() -> void:
 	for line in islands.body_census_lines():
 		print("[city]   bodies " + line)
 	print("[city]   " + islands.hit_census_line())
+	print("[city]   pieces' heavy work left for a later tick: %d merged rebuild(s), %d finished mesh(es)" % [
+			islands.reshapes_spread, islands.harvests_spread])
 	print("[city]   " + islands.blast_census_line())
 	print("[city]   " + islands.crumb_cost_line())
 	print("[city]   " + islands.push_census_line())
