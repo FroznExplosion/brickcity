@@ -1148,6 +1148,7 @@ func _ready() -> void:
 	add_child(disasters)
 	disasters.setup(self)
 	InteriorGroups.warm(self)
+	_warm_shaders()
 	# One of the passes below, unless none of them is asked for (the `else` at
 	# the end of the chain).
 	_scripted = true
@@ -2581,6 +2582,29 @@ func _build_owed_glass() -> void:
 		if owed[3]:
 			_fade_out(glass)
 		(mi as MeshInstance3D).add_child(glass)
+
+
+## The shaders the first fight would otherwise have built in the middle of it,
+## built at load instead, as InteriorGroups.warm does its own: a speck far under
+## the world with each, for a second. The loose bricks' and the furniture's are
+## one StandardMaterial3D shader with vertex colour (FurnitureMesh.material, the
+## crumbs, the heap, single loose bricks), and whichever of them came first
+## built it -- 14 ms, in the tick of the first blast that laid a room's
+## furniture (2026-10-15). A collapse's dust is another.
+func _warm_shaders() -> void:
+	var specks := [[FurnitureMesh.unit_mesh(), FurnitureMesh.material()],
+			[CollapseDust._quad(), null]]
+	for speck in specks:
+		var mi := MeshInstance3D.new()
+		mi.mesh = speck[0]
+		if speck[1] != null:
+			mi.material_override = speck[1]
+		mi.position = Vector3(0.0, -2000.0, 0.0)
+		mi.scale = Vector3.ONE * 0.001
+		mi.extra_cull_margin = 16384.0   # drawn wherever the camera looks
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+		get_tree().create_timer(1.0).timeout.connect(mi.queue_free)
 
 
 ## A recipe building's shell mesh. An undamaged one is the same mesh for every
