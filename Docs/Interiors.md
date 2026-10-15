@@ -618,7 +618,9 @@ collision boxes; `_crush_drawn`; `hold_interiors_mid_collapse`.
   made in a building coming apart -- with the rule and, the same case, without -- and that nothing
   new is drawn on wreckage still moving. Same counts as before: 62 and 9.
 
-**Still not done:** a drawn piece on wreckage is not laid when the wreckage is hit; debris
+**2026-10-14:** a drawn piece on wreckage a blast reaches, and one wreckage crushes, now breaks
+into its parts as crumbs as it is written off ([CollapseNext.md](CollapseNext.md) §0, item 9).
+**Still not done (before that):** a drawn piece on wreckage is not laid when the wreckage is hit; debris
 particles for a written-off piece; pieces the cap has put to sleep carry no interior.
 
 ### 8.13 Stage 5 as built (2026-10-08): loot fades out before its range
