@@ -189,10 +189,22 @@ In the order to do it. Each line points at where the item is written up.
     (`HARVEST_BUDGET_MS`). Three alternated pairs, quiet machine: **the worst pieces' tick 19.6-
     28.8 ms -> 13.0-15.6**; frames 17.3 -> 17.2 ms, of 906 over 33.3 ms 14-22 -> 11-18. The worst
     tick of all hardly moved (46.9-51.6 -> 41.5-49.2): what is left in it is
-    20. **Spawning's own meshes**: up to six new pieces a tick are given a mesh on the spot, so
-        none is ever invisible -- 2.2 ms for a piece of 76 bricks, of which the bake and the
-        upload are 0.5-0.8 (measured in a window); the rest is most likely the near tier's studs
-        and bevels for it (`BrickNear.track`, the build mode / materials area's). Not started.
+    20. ~~Spawning's own meshes~~ -- **looked at 2026-10-15** (user: "lets do item 20"): up to
+        six new pieces a tick are given a mesh on the spot, so none is ever invisible. Not the
+        near tier: `BrickNear.track` is 0.03-0.06 ms a piece. A small piece's mesh is 0.3-0.9 ms
+        of building and 0.15-1.75 of upload (`add_surface_from_arrays`; the high ones with the
+        editor and a game running beside the pass), and no tick of a `--big --shot` run had
+        more than two: 1-3 ms. Left as it is. **What the spawn in the worst ticks was** is a
+        tower toppling whole (`CityScene._topple`): 8.7-12.3 ms for the 22,000-brick one, 6.5-9
+        of it its collision (`BrickWorld.merge_blocks_into`, 3,223 boxes). Not Jolt -- handing
+        it the boxes is 0.5 ms -- but the grid the merge walks: a byte a cell, 80x650x60 = 3.1
+        million cells and nearly all of it air, 2.3-3.6 ms to fill and ~3.5 to walk. **Bits
+        now**, a row of cells to a run of 64-bit words: the same walk, so the same boxes in the
+        same order (the old merge run beside the new on every call, 1,400+ merges in the probes
+        and a `--big --shot`: none differed). That tower's merge 4.2-5.8 -> 1.6-2.2 ms, side by
+        side in the same runs; a piece merged again after a hit gains the same. Left in a
+        topple: the body joining the space, 0.9-1.9 ms (Jolt building one compound of the
+        boxes), and the building's own collision freed, 1.2-1.5.
     21. **The first tick of a big city** (tick 24 of `--big --shot`): 33 ms of streaming the city
         in, with 13 ms of the first blast laying a room's furniture as bricks in the same tick.
         ~~The streaming~~ -- **cut 2026-10-15**: it was four shells, 4.7-11.9 ms each where the
