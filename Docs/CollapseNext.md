@@ -75,8 +75,17 @@ In the order to do it. Each line points at where the item is written up.
    *Tests:* `collapse_probe` "crushdrawn" (63: what was crushed broke into its parts), `--groups
    --big` (24: a blast at furniture drawn on wreckage breaks it, and it is drawn no more); the
    `--big --shot` report counts it ("furniture broken").
-10. Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching
-    (AIVehicles.md, AI.md) sit with these rules -- they damage buildings by their own paths.
+10. ~~Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching sit with
+    these rules~~ -- **looked at 2026-10-14: they go through the same doors.** A tank driven into
+    bricks wears a row off its front (`Tank._crush`: twelve gun hits of `CRUSH_HP`, through
+    `on_crush` = `on_structure_hit`); a mech punches (`Mech.punch_wall`: a blast of
+    `PUNCH_RADIUS`) and fires its launcher at a breach; soldiers', flyers' and trucks' guns and
+    the wave director's breaching blasts the same. Every one reaches `CityScene._blast` or
+    `chip`, and so `_apply_blast`: the ring thrown (a tank's crushing knocks whole bricks off),
+    pieces pushed by blasts and not by wear, furniture on wreckage broken, wreckage at rest left
+    at rest unless cut or unsupported. Nothing to change. The one family with paths of its own
+    is the disasters' (`DisasterContext`: `wake_near`, `_shear_building`, a lateral load), noted
+    under 1.10 (2) and theirs to change.
 
 **Proposed, the user's call**
 17. Bricks that stay where they fall. A crumb is gone a second and a half after it comes loose
