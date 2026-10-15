@@ -8376,7 +8376,18 @@ func _jam_touching(isl: BrickIsland, by_body: Dictionary) -> Array:
 			kind = "structure"
 		elif by_body.has(rid):
 			var o: BrickIsland = by_body[rid]
-			kind = ("settled piece" if o.settled else "falling piece")
+			# Not asleep yet is not falling. A piece that is down and slower than
+			# "stuck" itself (JAM_SLOW) is settling, and resting on it is not
+			# hanging on anything: the two runs in about six that failed "no
+			# piece hangs on another that is still falling" were a 268-brick
+			# piece on a 547-brick one at 0.00 m/s, and a 12-brick one wedged
+			# against a 121-brick one sliding at 0.52 (2026-10-08, -14).
+			if o.settled:
+				kind = "settled piece"
+			elif not o.landed or o.body.linear_velocity.length() >= JAM_SLOW:
+				kind = "falling piece"
+			else:
+				kind = "piece settling"
 		kinds[kind] = true
 	return kinds.keys()
 

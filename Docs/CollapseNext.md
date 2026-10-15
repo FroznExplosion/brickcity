@@ -109,7 +109,13 @@ In the order to do it. Each line points at where the item is written up.
 13. `--walk`: one check, the debug camera's walker does not duck under a beam.
 14. ~~`--groups --programs`: one check, boxes drawn over a floor that has gone for a tick~~ --
     fixed 2026-10-14: the check measured each part's footing, the rule an item's (§4).
-15. `--jam --big`: about one run in six, a small piece resting on one still creeping.
+15. ~~`--jam --big`: about one run in six, a small piece resting on one still creeping~~ --
+    fixed 2026-10-14, in the check: "no piece hangs on another that is still falling" called
+    every piece not yet asleep falling. The two failures on record were a 268-brick piece on a
+    547-brick one at 0.00 m/s, and a 12-brick one wedged against a 121-brick one sliding at
+    0.52 m/s -- nothing hanging. A piece that is down and slower than the gate's own "stuck"
+    (`JAM_SLOW`) is "settling" now (`CityScene._jam_touching`); in the air, or faster, it is
+    still falling. Three runs since, 4 of 4 each.
 16. `--play`: the pawn's duck-under check, about one run in twelve.
 
 ---
