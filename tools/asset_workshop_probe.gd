@@ -37,6 +37,16 @@ extends SceneTree
 ##              brick in its own part
 ##   wand       a click on a photo fills the patch of its colour, and nothing outside it
 ##   export     the sheet has each part: as laid, or smooth as a loft; joints at the points
+##
+## Round 2 (after the first use):
+##
+##   floor      there is none: an empty build has no bricks at all, and the starting brick
+##              is laid mid-air when the build is empty
+##   free       the ghost goes where the cursor meets the working plane
+##   lengths    a calibration length in mm or in studs
+##   sketch     an outline fills exactly the cells inside it, as thick as the part
+##   zoom       zooming a flat view keeps the point under the cursor where it was
+##   photo      "behind the build" puts a side photo just past the build's far side
 
 var _pass := 0
 var _fail := 0
@@ -77,6 +87,7 @@ func _tick() -> void:
 	_undo_redo()
 	_wand()
 	_export()
+	_round2()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -423,3 +434,61 @@ func _export() -> void:
 				and (by.stock.stations as Array).size() >= 8, "%s, %d stations" % [by.stock.kind, (by.stock.get("stations", []) as Array).size()])
 		_ok("its mount is where the point is, in mm from the muzzle", by.stock.has("mount")
 				and absf(float(by.stock.mount.at[0]) - 40.0) < 1e-6, str(by.stock.get("mount", {})))
+
+
+func _volume() -> int:
+	var n := 0
+	for k in _ws.recipe.size():
+		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+		n += size.x * size.y * size.z
+	return n
+
+
+func _round2() -> void:
+	_ws._new_build()
+	_ok("no floor: an empty build has nothing to hit", _ws.recipe.size() == 0
+			and (_ws._first_hit(Vector3(14.0, 5.0, 14.0), Vector3.DOWN) as Dictionary).is_empty())
+	_ws.auto_start_brick = true
+	_ws._ensure_start_brick()
+	_ws.auto_start_brick = false
+	_ok("the starting brick is laid mid-air", _ws.recipe.size() == 1
+			and _ws.recipe.cell_of(0).y == _ws.work_height, "%d bricks" % _ws.recipe.size())
+
+	_ws.work_plane = "side"
+	_ws.work_depth = 40.5
+	var hit = _ws.work_plane_hit(Vector3(3.0, 4.0, 30.0), Vector3(0, 0, -1))
+	_ok("a ray meets the side working plane at its depth", hit != null
+			and absf((hit as Vector3).z - 40.5 * STUD) < 1e-5, str(hit))
+	var c: Vector3i = _ws.free_cell(Vector3(10.2 * STUD, 30.5 * 0.14, 40.5 * STUD), Vector3i(2, 1, 1))
+	_ok("a 2-long part centres on the cursor, on the plane's depth", c == Vector3i(9, 30, 40), "%v" % c)
+
+	_ok("lengths: 852 is mm", _ws.length_mm("852") == 852.0)
+	_ok("lengths: 53s is 53 studs, 848 mm", _ws.length_mm("53s") == 848.0, str(_ws.length_mm("53s")))
+	_ok("lengths: 12 studs is 192 mm", _ws.length_mm("12 studs") == 192.0)
+
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.part_width["body"] = 3
+	var laid: int = _ws.sketch_fill([Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)])
+	_ok("a sketched square fills its cells, 3 studs thick", laid > 0 and _volume() == 6 * 6 * 3,
+			"%d laid, %d cells" % [laid, _volume()])
+	_ws._undo()
+	_ok("and undoes at once", _ws.recipe.size() == 0, "%d left" % _ws.recipe.size())
+
+	_ws.sketch_fill([Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)])
+	var img := Image.create(40, 20, false, Image.FORMAT_RGBA8)
+	var i: int = _ws.add_photo_image(img, "(probe depth)", "side")
+	_ws.set_photo_depth(i, "behind")
+	var lo: Vector3i = _ws.recipe.bounds()[0]
+	_ok("behind the build: just past its far side", absf((_ws.photos[i].centre as Vector3).z
+			- (lo.z - 0.5) * STUD) < 1e-5, str(_ws.photos[i].centre))
+	_ws.remove_photo(i)
+
+	_ws.set_view(1)
+	var cam := _ws._camera as Camera3D
+	var point := cam.global_position + Vector3(2.0, 1.0, -cam.global_position.z + 14.0)
+	var before := cam.unproject_position(point)
+	_ws.zoom_at(point, 0.7)
+	var after := cam.unproject_position(point)
+	_ok("zooming keeps the point under the cursor", before.distance_to(after) < 0.5, "%v -> %v" % [before, after])
+	_ws.set_view(0)
