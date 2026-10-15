@@ -203,8 +203,14 @@ In the order to do it. Each line points at where the item is written up.
         windows are a shell's own (its rooms' seed): built a tick or two after it, up to 2.5 ms a
         tick (`_build_owed_glass`, `GLASS_BUDGET_MS`). Three runs: that tick 38-49 ms ->
         out of the worst list twice, 25.6 the third (streaming 9.6 of it); worst tick of the run
-        35-41 ms against 42-52. **Left: the first blast's furniture**, 13-15 ms of laying a room's
-        pieces as bricks (`BuildingRegistry.compromise_items`). Not started.
+        35-41 ms against 42-52. ~~Left: the first blast's furniture~~, 13-15 ms -- **cut
+        2026-10-15**: not the laying (0.1 ms) but the redraw after it, and only the first one: the
+        furniture's material had its shader built the first time anything used it, 14 ms (in a
+        window, on its own). The loose bricks', the heap's and single bricks' are the same
+        shader, so whichever came first in a fight paid it. Built at load now, with a
+        collapse's dust (`CityScene._warm_shaders`, as `InteriorGroups.warm` does its own).
+        Three runs: nothing from the start of the city in the worst ticks any more; the worst
+        tick of a run is a collapse's, 37.3 ms each time.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
