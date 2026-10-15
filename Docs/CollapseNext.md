@@ -57,9 +57,24 @@ In the order to do it. Each line points at where the item is written up.
    what is left comes from blasts and from bands (item 18).
 8. ~~A queued blast in `--shot` hits pieces that came loose after it was fired~~ -- decided
    2026-10-14: let it, and leave the pass as it is (§3, last point).
-9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): furniture drawn on wreckage is not turned
-   to bricks when the wreckage is hit; a written-off piece leaves no debris; pieces the cap has
-   put to sleep carry no interior; a rolled gun swaps to its card at 12 m in one frame.
+9. Interiors ([Interiors.md](Interiors.md) §8.12-8.13): ~~furniture drawn on wreckage is not
+   turned to bricks when the wreckage is hit; a written-off piece leaves no debris~~ -- **done
+   2026-10-14: furniture breaks into its parts** (below). Left: pieces the cap has put to sleep
+   carry no interior (far from everybody, by the cap's own rule); a rolled gun swaps to its card
+   at 12 m in one frame (the weapons area's: the fade needs the gun's own materials).
+   *Furniture breaks into its parts* (`CityScene._break_items`, `IslandManager.throw_rows`):
+   furniture is drawn, not bricks, until somebody's blast lays it (Interiors.md 8.4) -- so
+   wreckage coming down on it wrote it off and it was gone between one frame and the next, and a
+   blast on the wreckage it stood on did nothing to it: it stood there whole while the bricks
+   round it flew. Now each part of its drawing (palette bricks, as `RoomManifest.draw_items`
+   lays them out) is thrown as a crumb of that size and colour from where it stood -- up to
+   3 m/s from a blast, 1 m/s from under a piece -- as it is written off, and the piece's drawing
+   is redone without it. A blast on wreckage takes the furniture it reaches before the bricks,
+   judged on the floor it stood on. Drawn only, this machine's own, like every crumb; a write-off
+   with nobody near (a blast at a building out of `ROOM_RANGE`) throws nothing anybody could see.
+   *Tests:* `collapse_probe` "crushdrawn" (63: what was crushed broke into its parts), `--groups
+   --big` (24: a blast at furniture drawn on wreckage breaks it, and it is drawn no more); the
+   `--big --shot` report counts it ("furniture broken").
 10. Not looked at yet: how the new brick vehicles' crushing and the mechs' breaching
     (AIVehicles.md, AI.md) sit with these rules -- they damage buildings by their own paths.
 

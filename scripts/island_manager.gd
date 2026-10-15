@@ -1698,6 +1698,65 @@ func _throw_killed(source: int, killed: PackedInt32Array, at: Vector3, radius: f
 	blast_census[2] += ring.size()
 
 
+## Drawn furniture that broke (CityScene._break_items): items, and the parts of
+## them thrown as crumbs.
+var furniture_broken := [0, 0]
+
+
+## A piece of drawn furniture breaks: each row of its drawing -- FurnitureMesh's
+## layout, a part of it in `xf`'s space -- is thrown as a crumb of that part's
+## size and colour from where it stood, away from `at` at up to `speed` m/s,
+## and comes down on the floor under it. Drawn only, and this machine's own,
+## like every crumb (none far, unseen, in a wind, or past CRUMBS_MAX).
+## Returns how many were thrown.
+func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: float) -> int:
+	@warning_ignore("integer_division")
+	var n := rows.size() / 16
+	if n == 0:
+		return 0
+	furniture_broken[0] += 1
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	for r in n:
+		var p: Vector3 = xf * Vector3(rows[r * 16 + 3], rows[r * 16 + 7], rows[r * 16 + 11])
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var box := AABB(lo, hi - lo).grow(0.25)
+	var dist := INF
+	if camera != null and is_instance_valid(camera):
+		dist = _distance_to_box(box, camera.global_position)
+	if (dist > SMALL_KEEP_RANGE and dist < INF) or not _box_seen(box) or _in_wind(box) \
+			or crumb_count + n > CRUMBS_MAX:
+		return 0
+	# It stood on a floor: one ray from under its middle finds it.
+	var floor_y := _crumb_floor(Vector3(box.get_center().x, box.position.y, box.get_center().z))
+	var frame_basis := xf.basis.orthonormalized()
+	var now := Engine.get_physics_frames()
+	for r in n:
+		var k := r * 16
+		var size := Vector3(absf(rows[k]), absf(rows[k + 5]), absf(rows[k + 10]))
+		var p: Vector3 = xf * Vector3(rows[k + 3], rows[k + 7], rows[k + 11])
+		var cr := _crumb_set(size.snapped(Vector3.ONE * 0.001))
+		var away := p - at
+		away = away.normalized() if away.length() > 0.01 else Vector3.UP
+		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
+		cr.pos.append(p)
+		cr.vel.append(away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
+				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER)
+		cr.base.append(frame_basis)
+		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
+		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
+		cr.born.append(now)
+		cr.landed.append(0)
+		cr.floor_y.append(floor_y)
+		cr.half_h.append(size.y * 0.5)
+		cr.colour.append(Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]))
+		crumb_count += 1
+		crumb_bricks += 1
+	furniture_broken[1] += n
+	return n
+
+
 func blast_census_line() -> String:
 	return "bricks blasts and guns killed: %d -- %d in a core and gone, %d thrown out as crumbs; not drawn: %d too far, %d out of view, %d in a wind, %d for want of room; throwing them %.1f ms all told, %.2f the worst blast" % [
 			blast_census[0], blast_census[1], blast_census[2], blast_census[3], blast_census[4],

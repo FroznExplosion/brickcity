@@ -597,6 +597,7 @@ func _check_crushdrawn() -> void:
 	var at: Vector3 = xf * item.get_center()
 	var gone0 := room.gone.size()
 	var crushed0: int = city.crushed_by_wreckage
+	var broken0: int = city.islands.furniture_broken[0]
 	# Four studs square and four courses (fewer is crumbs, no body), under
 	# the ceiling, over the item.
 	# Kept inside the room's walls: wedged in one, it never comes down.
@@ -631,6 +632,10 @@ func _check_crushdrawn() -> void:
 			"gone %d -> %d, still drawn %s, crushed rooms %d" % [gone0, room.gone.size(), still,
 			city.crushed_by_wreckage - crushed0])
 	_ok("and the rest of its storeys are still drawn", shown)
+	# Broken into its parts, not gone between one frame and the next
+	# (CityScene._break_items).
+	_ok("what was crushed broke into its parts", int(city.islands.furniture_broken[0]) > broken0,
+			"%d item(s) broken" % (int(city.islands.furniture_broken[0]) - broken0))
 
 
 func _check_farcut() -> void:
