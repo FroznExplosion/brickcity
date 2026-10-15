@@ -8137,29 +8137,36 @@ func _groups_shown_above(b: BuildingRegistry.Building, y: float) -> int:
 	return n
 
 
-## And of those, the ones with no brick anywhere in the twelve plates under
-## them: drawn over a floor that is not there any more.
+## What a group draws above `y` that its rooms, asked now, would not draw:
+## furniture left on screen over a floor that has gone. Asked of the rule
+## itself (RoomManifest.draw_items: an item stands while most of its floor is
+## there, Interiors.md 8.10), not of each part's own footing -- a bed with nine
+## tenths of its floor under it stands, the part of it over the hole with it,
+## and counting that part was what failed this check every run with
+## --programs, whose beds are wide (2026-10-14: 1-2 parts of 7 over a hole,
+## floor share 0.88-0.97, from the tick of the cut).
 func _groups_hanging(b: BuildingRegistry.Building, y: float) -> int:
-	var cs := BrickWorld.get_cell_size()
-	var origin: Vector3i = world.get_chunk_origin(b.chunk)
+	var offset: Vector3i = registry._rebase_of(b)
 	var n := 0
 	for g in interior_groups.known(b.id):
 		var node := interior_groups.piece_node(b.id, g.index)
 		if node == null:
 			continue
 		var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
+		var fresh := {}
+		for index in range(g.first_room, g.last_room):
+			var room := registry.get_room(b.id, index)
+			if room == null or room.items.is_empty():
+				continue
+			var rows: PackedFloat32Array = RoomManifest.draw_items(world, b.chunk,
+					registry.palette, room, offset).buffer
+			for r in range(0, rows.size(), 16):
+				fresh[Vector3(rows[r + 3], rows[r + 7], rows[r + 11]).snapped(Vector3.ONE * 0.01)] = true
 		for i in buffer.size() / FurnitureMesh.STRIDE:
 			var at := i * FurnitureMesh.STRIDE
 			if buffer[at + 7] <= y or absf(buffer[at]) + absf(buffer[at + 5]) + absf(buffer[at + 10]) <= 0.0001:
 				continue
-			var foot := Vector3(buffer[at + 3], buffer[at + 7] - buffer[at + 5] * 0.5, buffer[at + 11])
-			var cell := Vector3i(floori(foot.x / cs.x), roundi(foot.y / cs.y), floori(foot.z / cs.z)) + origin
-			var held := false
-			for down in range(1, 13):
-				if world.is_solid(b.chunk, Vector3i(cell.x, cell.y - down, cell.z)):
-					held = true
-					break
-			if not held:
+			if not fresh.has(Vector3(buffer[at + 3], buffer[at + 7], buffer[at + 11]).snapped(Vector3.ONE * 0.01)):
 				n += 1
 	return n
 
