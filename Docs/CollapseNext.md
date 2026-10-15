@@ -644,6 +644,14 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   `~ArrayMesh` with the renderer already gone). Two meshes outlive the scene -- a stand-in built
   on a worker and not collected, or a mesh kept in a static, are the places to look. It costs no
   result; it is not the machine switching itself off.
+  *Looked at 2026-10-14:* not seen again in the twelve timing runs since, nor in any other city
+  log of the two days -- once in about thirty `--big --shot` runs. What leaked was two indexed
+  meshes and nothing else (no scene instance), which fits a stand-in still being built on a
+  worker when the game quits more than a node left behind. `impostor_probe` leaks two meshes at
+  every exit too, but with two scene instances, a material and a shader: nodes the probe never
+  frees, not the same thing. Letting go of `ImpostorLod._lodded` when the last set leaves the
+  tree (a static that does hold two meshes) did not change the probe's leak, so it was not kept.
+  Still open; next step, if it comes back, is to wait for the islands' worker jobs on exit.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
   collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
