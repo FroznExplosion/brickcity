@@ -15,7 +15,9 @@ by that test is not taken.
 
 Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each also with `--big`),
 `--wreck`, `--ring`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
-its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
+its old name and runs it), `--view --big`, `big_city.tscn -- --far --buildings=150` (in the plain
+city every building is inside the shell range and three of its checks have nothing to look
+at); `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
 `barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
@@ -192,8 +194,17 @@ In the order to do it. Each line points at where the item is written up.
         upload are 0.5-0.8 (measured in a window); the rest is most likely the near tier's studs
         and bevels for it (`BrickNear.track`, the build mode / materials area's). Not started.
     21. **The first tick of a big city** (tick 24 of `--big --shot`): 33 ms of streaming the city
-        in, with 13 ms of the first blast laying a room's furniture as bricks in the same tick --
-        a load hitch, and the first-shot-at-furniture one. Not started.
+        in, with 13 ms of the first blast laying a room's furniture as bricks in the same tick.
+        ~~The streaming~~ -- **cut 2026-10-15**: it was four shells, 4.7-11.9 ms each where the
+        note on SHELLS_PER_TICK says 0.4 -- the mesh 1.2-8.4 ms and its windows 0.9-7.6. An
+        undamaged shell is the same mesh for every building of its footprint, height and tier,
+        and the big city's twelve towers are six designs: built once now and shared
+        (`CityScene._recipe_shell_mesh`; a shell's mesh is never edited, only replaced). The
+        windows are a shell's own (its rooms' seed): built a tick or two after it, up to 2.5 ms a
+        tick (`_build_owed_glass`, `GLASS_BUDGET_MS`). Three runs: that tick 38-49 ms ->
+        out of the worst list twice, 25.6 the third (streaming 9.6 of it); worst tick of the run
+        35-41 ms against 42-52. **Left: the first blast's furniture**, 13-15 ms of laying a room's
+        pieces as bricks (`BuildingRegistry.compromise_items`). Not started.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.

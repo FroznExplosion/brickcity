@@ -2509,10 +2509,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	elif nothing_left:
 		pass  # the node, for every "has a shell" question; nothing drawn
 	else:
-		mi.mesh = (BuildingShell.build_coarse_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses)
-				if coarse else
-				BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
-						damage))
+		mi.mesh = _recipe_shell_mesh(b, coarse, damage)
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	# Stage 5: a banded shell fades out over the fade band, blended over its
@@ -2529,18 +2526,10 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# hundred metres a window is a pixel -- and not on a player build, which
 	# has no recipe windows. A child of the shell, so it goes when the shell
 	# does, and with its own material so the brick material is untouched.
+	# Owed, not built here: _build_owed_glass makes them a tick or two later,
+	# so many in a tick, in its own budget.
 	if not coarse and not b.is_build() and not nothing_left:
-		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
-				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				damage, b.recipe.get("program", {}))
-		if panes != null:
-			var glass := MeshInstance3D.new()
-			glass.mesh = panes
-			glass.material_override = BuildingShell.window_material()
-			glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			if fades:
-				_fade_out(glass)
-			mi.add_child(glass)
+		_glass_owed.append([mi, id, damage, fades])
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
 	_far_sync(b)
@@ -2552,6 +2541,74 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 
 
 ## The collision boxes of a shell, and the AI's proxies of them.
+## A shell's windows -- panes with a room painted behind each -- are built
+## apart from the shell, up to GLASS_BUDGET_MS of them a tick (one at least):
+## a tall tower's are 1-8 ms, as much again as its shell, and a city streaming
+## in made four shells and their windows in one tick, 33 ms (2026-10-15). A
+## shell stands a tick or two without its glass -- solid bands where the panes
+## go, at a shell's distance.
+const GLASS_BUDGET_MS := 2.5
+var _glass_owed: Array = []   ## [shell node, building id, damage, fades]
+var glass_built := 0
+
+
+func _build_owed_glass() -> void:
+	var t0 := Time.get_ticks_usec()
+	var made := 0
+	while not _glass_owed.is_empty():
+		if made > 0 and Time.get_ticks_usec() - t0 > int(GLASS_BUDGET_MS * 1000.0):
+			return
+		var owed: Array = _glass_owed.pop_front()
+		var mi = owed[0]
+		var id: int = owed[1]
+		# Replaced or freed since -- its successor owes its own.
+		if not is_instance_valid(mi) or _shells.get(id) != mi:
+			continue
+		var b := registry.get_building(id)
+		if b == null:
+			continue
+		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
+				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
+				owed[2], b.recipe.get("program", {}))
+		made += 1
+		glass_built += 1
+		if panes == null:
+			continue
+		var glass := MeshInstance3D.new()
+		glass.mesh = panes
+		glass.material_override = BuildingShell.window_material()
+		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if owed[3]:
+			_fade_out(glass)
+		(mi as MeshInstance3D).add_child(glass)
+
+
+## A recipe building's shell mesh. An undamaged one is the same mesh for every
+## building of its footprint, height and tier, so it is built once and shared:
+## a tower's banded shell is 1-8 ms of the main thread, and a city repeats its
+## designs -- the big city's twelve towers are six, and the first tick it
+## streamed in made four of them, 33 ms (2026-10-15). A damaged one is its own.
+## Shared is safe: a shell's mesh is never edited, only replaced.
+var _shell_meshes := {}   ## Vector4i(x, z, courses, coarse) -> ArrayMesh
+var shell_meshes_shared := 0
+
+
+func _recipe_shell_mesh(b: BuildingRegistry.Building, coarse: bool, damage: Dictionary) -> Mesh:
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	if not coarse and not damage.is_empty():
+		return BuildingShell.build_mesh(fx, fz, courses, damage)
+	var key := Vector4i(fx, fz, courses, 1 if coarse else 0)
+	if _shell_meshes.has(key):
+		shell_meshes_shared += 1
+		return _shell_meshes[key]
+	var mesh: Mesh = BuildingShell.build_coarse_mesh(fx, fz, courses) if coarse \
+			else BuildingShell.build_mesh(fx, fz, courses, damage)
+	_shell_meshes[key] = mesh
+	return mesh
+
+
 func _make_shell_body(id: int) -> void:
 	_shell_far.erase(id)
 	var b := registry.get_building(id)
@@ -9512,6 +9569,8 @@ func _physics_process(_delta: float) -> void:
 	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	if not _glass_owed.is_empty():
+		_build_owed_glass()
 	if not _shadow_jobs.is_empty():
 		_harvest_shadow_jobs()
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
