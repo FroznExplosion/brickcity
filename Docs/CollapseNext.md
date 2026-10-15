@@ -366,7 +366,20 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    rest is half of what it asks): about 1,600-1,900 shoves a run, 45 of them waking a piece from
    rest, 1,800-2,100 shrugged off by pieces that were down; with the push off the same probe has
    11 hits on wreckage at rest where it has 6-7 with it.
-TIMING   *Tests:* `tools/push_probe.gd` 16 (a handful knocked over, away and up; a heap of 256
+   **Timed 2026-10-14** (`--big --shot`, three alternated pairs, push and bounce off then on, no
+   editor and no other Godot before or after any run, one windowed run at a time, the chip let
+   cool under 80 C before each; 85 C at the peak, never held back):
+
+   | | frames mean, ms | of 906 over 33.3 ms | ticks over 25 ms | pieces in motion |
+   |---|---|---|---|---|
+   | off | 18.3, 18.0, 18.1 -- **18.1** | 25, 24, 31 -- **27** | 18, 17, 16 | 12.3, 7.5, 8.9 |
+   | on | 19.8, 19.6, 17.6 -- **19.0** | 38, 41, 32 -- **37** | 21, 29, 8 | 14.2, 14.5, 12.9 |
+
+   **About a twentieth more a frame, a third more slow frames, and four more pieces moving** --
+   the shoves keep what they reach moving for longer, and that is what costs. The slider at 0
+   takes it all back. A first try that morning crawled at 76-90 ms a frame with the display
+   asleep and is not counted (a short `--ring` takes 13 s awake and 45 asleep).
+   *Tests:* `tools/push_probe.gd` 16 (a handful knocked over, away and up; a heap of 256
    shrugs; out of reach untouched; nearer is harder; 0 on the slider pushes nothing; a gun's wear
    pushes nothing; a falling piece is knocked sideways; all of it settles; crumbs bounce, never
    sink, and come to rest; 0 on the slider, no bounce), `barrage_probe` 6 (`-- --push=N`,
