@@ -11604,12 +11604,16 @@ func _run_shot_pass() -> void:
 		# Aim at an actual brick. A toppled building is hollow, so the centre
 		# of its bounding box is thin air and a blast there removes nothing --
 		# which is a bad measurement, not a bug.
+		# A LIVE one: the list has the dead too, and the middle of it was as
+		# often as not a brick the pass's own blasts had taken -- a hole, where
+		# a blast reached nothing (this printed FAIL in about half the runs
+		# since September; 2026-10-15).
 		var boxes: Array = world.get_block_boxes(biggest.chunk)
+		var live: Array = boxes.filter(func(b: Dictionary) -> bool: return bool(b.alive))
 		var aim := islands.world_aabb(biggest).get_center()
-		if not boxes.is_empty():
+		if not live.is_empty():
 			@warning_ignore("integer_division")
-			var mid := boxes.size() / 2
-			var pick: Dictionary = boxes[mid]
+			var pick: Dictionary = live[live.size() / 2]
 			aim = biggest.chunk_transform() * (pick.pos as Vector3)
 		var hits := islands.damage_near(aim, 1.4)
 		var after := world.get_alive_block_count(biggest.chunk)

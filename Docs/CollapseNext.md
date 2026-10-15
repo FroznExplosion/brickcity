@@ -19,7 +19,7 @@ its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
 `barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
-`heap_probe.gd`,
+`heap_probe.gd`, `crack_probe.gd`,
 `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
@@ -88,7 +88,7 @@ In the order to do it. Each line points at where the item is written up.
     is the disasters' (`DisasterContext`: `wake_near`, `_shear_building`, a lateral load), noted
     under 1.10 (2) and theirs to change.
 
-**Proposed, the user's call** (17 asked for and done, 2026-10-15)
+**Proposed, the user's call** (17 and 18 asked for and done, 2026-10-15)
 17. ~~Bricks that stay where they fall~~ -- **done 2026-10-15 (user: "17 please").** A crumb
     that comes to rest is laid in a heap (`scripts/brick_heap.gd`, `BrickHeap`): an instance in
     a MultiMesh that is written once and never moves, lying flat on one of its faces where it
@@ -143,10 +143,38 @@ In the order to do it. Each line points at where the item is written up.
     and `debris_probe` ask for what lies, not for what shrank away; `city.tscn -- --ring` writes
     `shots/city_ring_2.png`, the heap five seconds on.
 
-18. A piece long the other way tears a band of loose bricks when it snaps (§1.3): the most
-    single bricks a landing makes now. Cracking it along its bond instead needs a joint cut on
-    its own -- the engine cuts all of a block's lower joints (`bottom_broken`) or all of them
-    (`support_broken`), never one pair. Not started.
+18. ~~A piece long the other way tears a band of loose bricks when it snaps~~ -- **done
+    2026-10-15 (user: "18"): it cracks along its bond.** Joints run along a piece's own Y only,
+    so a slab or a wall lying flat, struck the long way, has no seam to part at; it tore a band
+    across itself into loose bricks (`BrickWorld.separate_planes`), the most single bricks a
+    landing made. Now each brick goes with the side its middle is on and the crack steps round
+    them, as a snapped slab of bricks does:
+    * `BrickWorld.crack_studs` counts, for each plane across the axis, the studs between bricks
+      whose middles are on opposite sides of it; `IslandManager._weak_crack` picks the plane
+      within 1.4 m (`CRACK_REACH`) of the blow that lets go of the fewest, nearer on ties.
+    * The piece keeps it (`BrickIsland.cracks_x` / `cracks_z`) -- it is no joint flag -- and the
+      split cuts the piece along it (`split_if_broken`, `BrickWorld.crack_components`, every
+      pass until it has come apart). What leaves goes as a DETACH, like anything a piece sheds:
+      no new command, and a client or a replay takes it as it is. A band recorded before replays
+      as it was made.
+    * A handful the crack cuts off from its own side but not from the brick across the crack it
+      is clicked to (eight bricks or fewer, into a group of more) stays with that brick: a crack
+      lets go of one side of a brick's joints, not all of them. Without it a plate held only by
+      the brick across it came off on its own.
+    *Counted* (`barrage_probe`): of 131 snaps, 77 cracked across and 3 tore a band (a seam asked
+    for where there was none); single bricks off snaps across **241 -> 32-69 a run**, and most
+    of those were joined to nothing before the crack -- across the split's passes, 154 such
+    bricks loose already against 173 with the crack. A crack can still come out as nothing: one
+    with no stud across any plane in reach does not snap.
+**Timed 2026-10-15** (`--big --shot`, three alternated pairs, the band put back by a switch
+    then the crack, no editor and no other Godot before or after any run; 81 C at the peak,
+    never held back): frames **17.3 ms (17.4, 17.2, 17.3) against 17.2 (17.3, 17.2, 17.2)**, 16-17
+    of 906 over 33.3 ms either way, ticks over 25 ms 6-8 against 3-8 -- nothing to choose; single
+    bricks off landings in that pass 132, 233, 245 against 65, 69, 17.
+    *Tests:* `tools/crack_probe.gd` 9 (three bricks: the count, the side the one across them goes,
+    one piece with no crack; a city slab lying flat: a crack and no band, the weakest plane in
+    reach, split in two with nothing but what was loose already coming off on its own; a row
+    side by side holds nothing across), and the list below.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
@@ -192,7 +220,8 @@ left (one barrage, 2026-10-14): **328** off hits -- bricks whose neighbours a bl
 as a brick model's would be; **136** off landings -- the clump peeled where one touched down,
 some of them one brick; **241** off bands torn across pieces long the other way, a quarter as
 many breaks as make the rest (item 18 in §0). All of them are crumbs (eight or fewer), drawn
-falling and gone.
+falling and gone. **Since 2026-10-15** those snaps crack along the bond instead (item 18):
+32-69 single bricks a barrage off them, most of them loose before the crack.
 And `barrage_probe`'s check on wreckage at rest asks what rule 2 says, now: no hit on a piece at
 rest wakes it but by cutting it in two (`rest_hits_cut`; `rest_hits_woke` is the rest, and stays
 0). It asked that more were left at rest than woken, which turned on how often a barrage cuts.

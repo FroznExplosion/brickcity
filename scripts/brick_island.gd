@@ -145,6 +145,11 @@ var census_from := ""
 ## What last broke it, for the census of what comes off it: "landing" (it
 ## landed), "struck" (something landed on it), "hit" (a blast or a shot).
 var shed_cause := ""
+## Cracks across this piece a landing has put in and the split has still to
+## cut it along (IslandManager.split_if_broken): planes in cells from its
+## grid's origin, along X and along Z (BrickWorld.crack_components).
+var cracks_x := PackedInt32Array()
+var cracks_z := PackedInt32Array()
 ## Ticks a landed piece has been falling fast and touching nothing: in the air
 ## again (IslandManager.AIRBORNE_AGAIN_TICKS).
 var air_ticks := 0

@@ -795,6 +795,24 @@ public:
     /// where it snaps (IslandManager._weak_seam). Pure query.
     PackedInt32Array seam_studs(int chunk_id, int from_k, int to_k);
 
+    /// A crack ACROSS a chunk's own X or Z -- a slab or a wall lying flat,
+    /// snapped the way no seam runs. Joints run along Y only, so a brick there
+    /// has no seam to part at: it goes with the side its middle is on, and the
+    /// crack steps round it, along the bond. Boundary k is the plane k cells
+    /// along `axis` (0 X, 2 Z) from the chunk's origin; for each k from `from_k`
+    /// to `to_k`, the stud contacts between bricks whose middles are on
+    /// opposite sides of it -- what that crack lets go of
+    /// (IslandManager._weak_crack). Pure query.
+    PackedInt32Array crack_studs(int chunk_id, int axis, int from_k, int to_k);
+
+    /// The chunk's parts as get_components gives them, with every joint across
+    /// a crack at the planes `planes_x` and `planes_z` (cells from the origin,
+    /// as crack_studs counts them) taken as let go: each brick on the side of
+    /// each plane its middle is on. Largest first. What a snap across a slab
+    /// cuts it into; nothing is changed in the chunk.
+    Array crack_components(int chunk_id, const PackedInt32Array &planes_x,
+            const PackedInt32Array &planes_z);
+
     // --- detachment --------------------------------------------------------
 
     /// Lift a group of blocks out of the chunk and hand back everything needed
