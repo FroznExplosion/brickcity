@@ -6780,6 +6780,224 @@ Array BrickWorld::get_components(int chunk_id) {
     return out;
 }
 
+PackedInt32Array BrickWorld::crack_studs(int chunk_id, int axis, int from_k, int to_k) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id) || to_k < from_k || (axis != 0 && axis != 2)) {
+        return out;
+    }
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const Chunk &c = chunks[chunk_id];
+    const int layers = to_k - from_k + 1;
+    // Added over a range of boundaries at once, summed at the end.
+    std::vector<int64_t> diff((size_t)layers + 1, 0);
+    // Twice a block's middle along the axis, in cells: whole numbers.
+    auto mid2 = [&](const Block &b) -> int {
+        const int at = (axis == 0 ? b.cell.x - c.origin.x : b.cell.z - c.origin.z);
+        const Vector3i sz = archetypes[b.archetype].size;
+        return 2 * at + (axis == 0 ? sz.x : sz.z);
+    };
+    // ceil(v / 2), for either sign.
+    auto ceil_half = [](int v) -> int { return v >= 0 ? (v + 1) / 2 : -((-v) / 2); };
+    const size_t n = c.blocks.size();
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.support_broken) {
+            continue;
+        }
+        const int mi = mid2(b);
+        for_each_joint(c, jc, (int32_t)i, [&](int32_t nb, int count) {
+            // Each pair once.
+            if (nb <= (int32_t)i) {
+                return;
+            }
+            const Block &o = c.blocks[nb];
+            if (!o.alive || o.support_broken) {
+                return;
+            }
+            const int mo = mid2(o);
+            const int lo2 = std::min(mi, mo);
+            const int hi2 = std::max(mi, mo);
+            // A brick is on the near side of plane k when 2 * middle <= 2k, so
+            // the two are apart for lo2 <= 2k < hi2.
+            const int k0 = std::max(ceil_half(lo2), from_k);
+            const int k1 = std::min(ceil_half(hi2) - 1, to_k);
+            if (k0 > k1) {
+                return;
+            }
+            diff[(size_t)(k0 - from_k)] += count;
+            diff[(size_t)(k1 - from_k + 1)] -= count;
+        });
+    }
+    out.resize(layers);
+    int64_t run = 0;
+    for (int k = 0; k < layers; ++k) {
+        run += diff[(size_t)k];
+        out.set(k, (int32_t)run);
+    }
+    return out;
+}
+
+Array BrickWorld::crack_components(int chunk_id, const PackedInt32Array &planes_x,
+        const PackedInt32Array &planes_z) {
+    Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    std::vector<int> px(planes_x.ptr(), planes_x.ptr() + planes_x.size());
+    std::vector<int> pz(planes_z.ptr(), planes_z.ptr() + planes_z.size());
+    // Which side of every plane each brick's middle is on, as one number.
+    std::vector<int32_t> side(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        const Vector3i sz = archetypes[b.archetype].size;
+        const int mx = 2 * (b.cell.x - c.origin.x) + sz.x;
+        const int mz = 2 * (b.cell.z - c.origin.z) + sz.z;
+        int sx = 0;
+        for (const int k : px) {
+            sx += (mx > 2 * k) ? 1 : 0;
+        }
+        int szi = 0;
+        for (const int k : pz) {
+            szi += (mz > 2 * k) ? 1 : 0;
+        }
+        side[i] = sx * 64 + szi;
+    }
+    std::vector<uint8_t> mark(n, 0);
+    std::vector<int32_t> queue;
+    std::vector<PackedInt32Array> groups;
+    for (size_t i = 0; i < n; ++i) {
+        if (!c.blocks[i].alive || mark[i]) {
+            continue;
+        }
+        PackedInt32Array group;
+        queue.clear();
+        queue.push_back((int32_t)i);
+        mark[i] = 1;
+        for (size_t head = 0; head < queue.size(); ++head) {
+            const int32_t bid = queue[head];
+            group.push_back(bid);
+            for_each_joint(c, jc, bid, [&](int32_t nb, int) {
+                if (mark[nb]) {
+                    return;
+                }
+                // As get_components: a sheared block is joined to nothing.
+                if (c.blocks[bid].support_broken || c.blocks[nb].support_broken) {
+                    return;
+                }
+                // Across a crack: let go.
+                if (side[bid] != side[nb]) {
+                    return;
+                }
+                mark[nb] = 1;
+                queue.push_back(nb);
+            });
+        }
+        group.sort();
+        groups.push_back(group);
+    }
+    // A handful the crack cut off from its own side but not from the brick
+    // it is clicked to across the crack stays with that brick: the crack
+    // lets go of one side of a brick's joints, and a plate held only by the
+    // brick across it goes with that brick, not off on its own. Merged in,
+    // smallest first, and only into a group of more than a handful: a side
+    // that is nothing but a handful is still a side, and parts.
+    constexpr int ORPHAN_MAX = 8;
+    std::vector<int32_t> comp(n, -1);
+    for (size_t g = 0; g < groups.size(); ++g) {
+        for (int k = 0; k < groups[g].size(); ++k) {
+            comp[groups[g][k]] = (int32_t)g;
+        }
+    }
+    std::vector<int32_t> owner(groups.size());
+    for (size_t g = 0; g < groups.size(); ++g) {
+        owner[g] = (int32_t)g;
+    }
+    auto find = [&](int32_t g) {
+        while (owner[g] != g) {
+            g = owner[g] = owner[owner[g]];
+        }
+        return g;
+    };
+    std::vector<size_t> order(groups.size());
+    for (size_t g = 0; g < groups.size(); ++g) {
+        order[g] = g;
+    }
+    std::stable_sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) { return groups[a].size() < groups[b].size(); });
+    std::vector<int64_t> size_of(groups.size());
+    for (size_t g = 0; g < groups.size(); ++g) {
+        size_of[g] = groups[g].size();
+    }
+    for (const size_t g : order) {
+        if (groups[g].size() > ORPHAN_MAX || find((int32_t)g) != (int32_t)g) {
+            continue;
+        }
+        // The group across the crack it holds most studs of.
+        std::vector<std::pair<int32_t, int>> held;   // group -> studs into it
+        for (int k = 0; k < groups[g].size(); ++k) {
+            const int32_t bid = groups[g][k];
+            if (c.blocks[bid].support_broken) {
+                continue;
+            }
+            for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+                if (c.blocks[nb].support_broken || comp[nb] < 0) {
+                    return;
+                }
+                const int32_t o = find(comp[nb]);
+                if (o == (int32_t)g) {
+                    return;
+                }
+                for (auto &h : held) {
+                    if (h.first == o) {
+                        h.second += count;
+                        return;
+                    }
+                }
+                held.push_back({o, count});
+            });
+        }
+        int32_t to = -1;
+        int most = 0;
+        for (const auto &kv : held) {
+            if (size_of[kv.first] <= ORPHAN_MAX) {
+                continue;
+            }
+            if (kv.second > most || (kv.second == most && kv.first < to)) {
+                most = kv.second;
+                to = kv.first;
+            }
+        }
+        if (to >= 0) {
+            owner[g] = to;
+            size_of[to] += size_of[g];
+        }
+    }
+    std::vector<PackedInt32Array> merged;
+    std::vector<int32_t> slot(groups.size(), -1);
+    for (size_t g = 0; g < groups.size(); ++g) {
+        const int32_t r = find((int32_t)g);
+        if (slot[r] < 0) {
+            slot[r] = (int32_t)merged.size();
+            merged.push_back(PackedInt32Array());
+        }
+        merged[slot[r]].append_array(groups[g]);
+    }
+    for (PackedInt32Array &m : merged) {
+        m.sort();
+    }
+    std::stable_sort(merged.begin(), merged.end(),
+            [](const PackedInt32Array &a, const PackedInt32Array &b) {
+                return a.size() > b.size();
+            });
+    for (const PackedInt32Array &g : merged) {
+        out.push_back(g);
+    }
+    return out;
+}
+
 Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_ids) {
     Dictionary out;
     if (!valid_chunk(chunk_id) || block_ids.is_empty()) {
@@ -7588,6 +7806,10 @@ void BrickWorld::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("split_island", "chunk_id", "block_ids"), &BrickWorld::split_island);
     ClassDB::bind_method(D_METHOD("get_components", "chunk_id"), &BrickWorld::get_components);
+    ClassDB::bind_method(D_METHOD("crack_studs", "chunk_id", "axis", "from_k", "to_k"),
+            &BrickWorld::crack_studs);
+    ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
+            &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);
     ClassDB::bind_method(D_METHOD("is_chunk_alive", "chunk_id"), &BrickWorld::is_chunk_alive);
     ClassDB::bind_method(D_METHOD("is_chunk_anchored", "chunk_id"), &BrickWorld::is_chunk_anchored);

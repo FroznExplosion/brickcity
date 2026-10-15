@@ -729,7 +729,8 @@ var _shed_cause := ""
 ## a recipe tower, whose storeys a landing breaks it along (_snap_across). Set
 ## by the scene; unset, pieces break where they were struck, as they did.
 var storey_plates := Callable()
-const CENSUS_FROM := ["building", "piece: landing", "piece: landing: band", "piece: struck",
+const CENSUS_FROM := ["building", "piece: landing", "piece: landing: band", "piece: landing: crack",
+		"piece: struck",
 		"piece: hit", "piece: other", "adopted (toppled whole, or woken)"]
 
 
@@ -850,6 +851,7 @@ var stand_ins := 0         ## pieces put to sleep that left a stand-in drawn
 var breaks := 0      ## times a landing snapped a piece across its width
 var floor_breaks := 0  ## of those, on a storey line (_is_floor_line)
 var seam_breaks := 0   ## of those, at the weakest seam in reach (_weak_seam)
+var crack_breaks := 0  ## of those, cracks across X or Z (_weak_crack)
 ## Studs the weakest seams in reach of landings held with, and the storey
 ## lines beside them -- where there was one of each to count.
 var seam_studs_chosen := 0
@@ -3532,8 +3534,15 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 
 ## Anything no longer joined to the rest becomes its own piece.
 func split_if_broken(isl: BrickIsland) -> void:
-	var comps: Array = world.get_components(isl.chunk)
+	# A crack a landing put in (_snap_across) is no joint flag: it is asked
+	# here, every pass until the piece has come apart along it, and forgotten
+	# then.
+	var cracked := not isl.cracks_x.is_empty() or not isl.cracks_z.is_empty()
+	var comps: Array = world.crack_components(isl.chunk, isl.cracks_x, isl.cracks_z) \
+			if cracked else world.get_components(isl.chunk)
 	if comps.size() <= 1:
+		isl.cracks_x = PackedInt32Array()
+		isl.cracks_z = PackedInt32Array()
 		return
 	_shed(isl, comps.slice(1))
 
@@ -3666,19 +3675,23 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 			loosened.append_array(got)
 	_tu = _upart("land: shear", _tu)
 	var banded := false
+	var cracked := false
 	if near:
 		var bands0 := band_breaks
+		var cracks0 := crack_breaks
 		loosened.append_array(_snap_across(isl, contacts, severity))
 		banded = band_breaks > bands0
+		cracked = crack_breaks > cracks0
 		_tu = _upart("land: snap", _tu)
 	else:
 		# Counted as a landing all the same, so a piece bouncing in the
 		# distance is not queued again every bounce (MAX_IMPACTS).
 		far_landings += 1
 		isl.impacts += 1
-	if loosened.is_empty() and near:
+	# A crack loosens nothing: the split cuts along it (split_if_broken).
+	if loosened.is_empty() and near and not cracked:
 		return
-	if loosened.is_empty():
+	if loosened.is_empty() and not cracked:
 		_hand_over(isl, contacts, severity)
 		return
 
@@ -3688,7 +3701,7 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	# A band torn across a piece is said apart from the rest of a landing (the
 	# clump peeled where it touched, a seam): it is where single bricks come from
 	# (shed_census).
-	isl.shed_cause = "landing: band" if banded else "landing"
+	isl.shed_cause = "landing: band" if banded else ("landing: crack" if cracked else "landing")
 	_touched(isl)
 	# Queued, not resolved here -- the same rule shear() follows. Cutting the
 	# pieces out means a connectivity walk and a spawn each, and doing it inline
@@ -3778,6 +3791,8 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 	# In the piece's own space: what the command carries (DamageLog._apply_local).
 	var points := PackedVector3Array()
 	var counted := {}   ## the piece's seams, counted once a landing (_weak_seam)
+	var cracking := false
+	var cracks := PackedInt32Array()
 	for c in contacts:
 		if planes >= BREAK_PLANES_MAX:
 			break
@@ -3795,9 +3810,20 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 			weak = seam_at != INF
 			if not weak:
 				seam_at = _floor_line(isl, at, lo, hi)
+		else:
+			# Across X or Z, where no seam runs: **a crack along the bond**
+			# (_weak_crack; Docs/CollapseNext.md 0, item 18). It tore a band
+			# into loose bricks here -- the most single bricks a landing made.
+			seam_at = _weak_crack(isl, 0 if local_axis.x > 0.5 else 2, at, lo, hi, counted)
+			if seam_at == INF:
+				continue   # nothing joined across there: nothing to snap
+			cracking = true
 		if seam_at != INF:
-			local_point.y = seam_at
-			at = seam_at
+			if cracking:
+				at = seam_at
+			else:
+				local_point.y = seam_at
+				at = seam_at
 		# Severing right at an end shaves a cap off rather than breaking the
 		# piece, and severing twice in one place is one break.
 		if at - lo < BREAK_MIN_PIECE or hi - at < BREAK_MIN_PIECE:
@@ -3809,13 +3835,27 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 				break
 		if crowded:
 			continue
-		points.push_back(DamageLog.grid_frame(world, isl.chunk) * local_point)
 		used.append(at)
 		planes += 1
+		if cracking:
+			cracks.append(roundi(at / _axis_cell(local_axis)))
+			continue
+		points.push_back(DamageLog.grid_frame(world, isl.chunk) * local_point)
 		if seam_at != INF and _is_floor_line(isl, seam_at):
 			floor_breaks += 1
 		if weak:
 			seam_breaks += 1
+	if cracking and not cracks.is_empty():
+		# Not a command of its own: the split cuts the piece along them, and
+		# what leaves goes as a DETACH like anything a piece sheds, which a
+		# client and a replay take as it is.
+		if local_axis.x > 0.5:
+			isl.cracks_x.append_array(cracks)
+		else:
+			isl.cracks_z.append_array(cracks)
+		crack_breaks += cracks.size()
+		breaks += cracks.size()
+		return torn
 	if planes > 0:
 		# A SEAM first: sever one course of downward joints and leave both sides
 		# solid, which is how a brick model comes apart. Tearing a band into
@@ -3911,8 +3951,52 @@ func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
 
 
 func snap_census_line() -> String:
-	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d" % [
-			breaks, seam_breaks, floor_breaks, band_breaks, seam_studs_chosen, seam_studs_floor]
+	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d cracked across, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d" % [
+			breaks, seam_breaks, floor_breaks, crack_breaks, band_breaks, seam_studs_chosen, seam_studs_floor]
+
+
+## A cell's size along a piece's own X, Y or Z.
+static func _axis_cell(local_axis: Vector3) -> float:
+	var cs := BrickWorld.get_cell_size()
+	return cs.x if local_axis.x > 0.5 else (cs.y if local_axis.y > 0.5 else cs.z)
+
+
+## How far either side of where a piece was struck its weakest crack is looked
+## for, across X or Z, in metres: four studs.
+const CRACK_REACH := 1.4
+
+
+## Where a piece struck at `at` (metres along its own X, `axis` 0, or Z, 2)
+## cracks: the plane in reach that lets go of the fewest studs, the bricks
+## going each with the side its middle is on (BrickWorld.crack_studs) -- the
+## crack steps round them, along the bond, as a snapped slab of bricks does.
+## The nearer of two as weak as each other; BREAK_MIN_PIECE left either side.
+## INF when nothing is joined across any plane in reach. `counted`, as for
+## _weak_seam: the piece's planes counted once a landing.
+func _weak_crack(isl: BrickIsland, axis: int, at: float, lo: float, hi: float,
+		counted := {}) -> float:
+	var cell := _axis_cell(Vector3.RIGHT if axis == 0 else Vector3.BACK)
+	var first := ceili((lo + BREAK_MIN_PIECE) / cell)
+	var last := floori((hi - BREAK_MIN_PIECE) / cell)
+	var k_at := roundi(at / cell)
+	var k0 := maxi(k_at - ceili(CRACK_REACH / cell), first)
+	var k1 := mini(k_at + ceili(CRACK_REACH / cell), last)
+	if k1 < k0:
+		return INF
+	var key := "crack%d" % axis
+	if not counted.has(key):
+		counted[key] = [first, world.crack_studs(isl.chunk, axis, first, last)]
+	var from: int = counted[key][0]
+	var studs: PackedInt32Array = counted[key][1]
+	var best := -1
+	for k in range(k0, k1 + 1):
+		var s := studs[k - from]
+		if s <= 0:
+			continue
+		if best < 0 or s < studs[best - from] or (s == studs[best - from]
+				and absi(k - k_at) < absi(best - k_at)):
+			best = k
+	return float(best) * cell if best >= 0 else INF
 
 
 ## Is `y` (metres up the piece's own Y) one of its building's storey lines?
