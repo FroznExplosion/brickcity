@@ -56,7 +56,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 | **Free placement**, on by default (Alt F aims at studs instead) | placing by aiming at studs kept snapping where it was not wanted. The ghost goes where the cursor meets the **working plane** -- the side plane at a depth, the top plane at a height, the front plane at a stud -- mid-air or not, flipped or not; only an overlap stops it. PgUp / PgDn move the plane; a flat view picks its own |
 | **No floor**: a floating build area and a starting brick, laid again whenever the build is empty | a floor got in the way |
 | **Photos**: a stud grid over a side photo, calibrating in studs ("53s") as well as mm, zoom about the cursor, Alt + drag moves the photo, and "behind the build" / "through its middle" | to check a photo is the size meant, and get it next to the build |
-| **Sketch** (Alt D): draw an outline on the side plane; it is filled with bricks for the current part, as thick as that part is set to be | blocking out by drawing. Plates and bricks only so far: the slopes and curves of the catalogue are the next step |
+| **Sketch** (Alt D): draw an outline on the side plane; it is filled with bricks for the current part, as thick as that part is set to be, and where its top edge climbs two plates a stud -- a slope's own pitch -- slopes are laid instead of a staircase (2 wide where the part is) | blocking out by drawing. Still to come from the catalogue: slopes under an edge (inverted), steeper and shallower edges, curves |
 | The workshop's own key list starts hidden (F1 shows it); F10 has this scene's keys | it covered half the screen |
 
 ### Phase 2 -- build a whole gun split by part

@@ -271,6 +271,12 @@ func _shot() -> void:
 			_draw_photo_grid()
 	set_mirror(true)
 	show_help(false)
+	if "--ramp" in OS.get_cmdline_user_args():
+		# A sketched ramp climbing a slope's pitch, to look at the slopes it lays.
+		for _i in 3:
+			await get_tree().process_frame
+		sketch_fill([Vector2(30, 24), Vector2(46, 24), Vector2(46, 48), Vector2(42, 48)])
+		_look_at_build()
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	for v in [0, 1]:
 		set_view(v)
@@ -2809,7 +2815,9 @@ func _sketch_add() -> void:
 
 ## Fill an outline drawn on the side plane -- points in (studs along, plates up) -- with
 ## bricks for the current part, as thick as the part is set to be, centred on the
-## working depth. Every cell whose middle is inside the outline is filled. One undo.
+## working depth. Every cell whose middle is inside the outline is filled, and where the
+## top edge climbs in steps of two plates a stud -- a slope's own pitch -- the step is a
+## slope instead of a staircase. One undo.
 func sketch_fill(outline: Array) -> int:
 	if outline.size() < 3:
 		return 0
@@ -2820,10 +2828,85 @@ func sketch_fill(outline: Array) -> int:
 		hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
 	var w := width_of(part_names[part_sel])
 	var z0 := int(round(work_depth - w * 0.5))
-	var cells := {}
+	var columns := {}
 	for x in range(int(floor(lo.x)), int(ceil(hi.x))):
 		for y in range(maxi(int(floor(lo.y)), 0), int(ceil(hi.y))):
 			if Geometry2D.is_point_in_polygon(Vector2(x + 0.5, y + 0.5), PackedVector2Array(outline)):
+				columns[Vector2i(x, y)] = true
+	var slopes := top_slopes(columns)
+	var cells := {}
+	for c in columns:
+		for k in w:
+			cells[Vector3i(c.x, c.y, z0 + k)] = true
+	var placements := []
+	for sl in slopes:
+		var x: int = sl.x
+		var b: int = sl.base
+		for dx in 2:
+			for dy in 3:
 				for k in w:
-					cells[Vector3i(x, y, z0 + k)] = true
-	return fill_cells(cells, shape_fill == "random")
+					cells.erase(Vector3i(x + dx, b + dy, z0 + k))
+		# Two wide where the part allows, one wide for what is left.
+		var k := 0
+		while k < w:
+			var wide := 2 if w - k >= 2 else 1
+			placements.append([slope_variant(wide, sl.rises), Vector3i(x, b, z0 + k)])
+			k += wide
+	var laid := 0
+	_batch = true
+	for pc in pack_cells(cells, shape_fill == "random"):
+		if place_named(pc[0], pc[1]):
+			laid += 1
+	for pl in placements:
+		if place_named(pl[0], pl[1]):
+			laid += 1
+	_batch = false
+	_after_edit()
+	_group(laid)
+	return laid
+
+
+## Where a slope goes on the top edge of a side-view fill (Vector2i(stud along, plate
+## up) -> true): wherever one column's top is exactly two plates above its neighbour's.
+## The slope sits over the lower column and the higher one -- its low front over the
+## lower, its flat back over the higher -- with its base a plate below the lower top.
+## [{x: its first column, base: its bottom plate, rises: +1 if it climbs along +x}]
+static func top_slopes(columns: Dictionary) -> Array:
+	var top := {}
+	for c in columns:
+		top[c.x] = maxi(int(top.get(c.x, -1)), c.y + 1)
+	var out := []
+	var used := {}
+	var xs := top.keys()
+	xs.sort()
+	for x in xs:
+		if not top.has(x + 1) or used.has(x) or used.has(x + 1):
+			continue
+		var d: int = top[x + 1] - top[x]
+		if absi(d) != 2:
+			continue
+		var low: int = x if d > 0 else x + 1
+		var base: int = top[low] - 1
+		# The whole box under the slope has to be the part's: no slope over a gap.
+		var solid := true
+		for dx in 2:
+			if not columns.has(Vector2i(x + dx, base)):
+				solid = false
+		if not solid:
+			continue
+		out.append({"x": x, "base": base, "rises": 1 if d > 0 else -1})
+		used[x] = true
+		used[x + 1] = true
+	return out
+
+
+## The slope that is `wide` studs across, 2 long along the gun, with its low front
+## toward -x if it `rises` along +x, else toward +x.
+func slope_variant(wide: int, rises: int) -> String:
+	var part := "slope_1x2" if wide == 1 else "slope_2x2"
+	var want := Vector3i(-1, 0, 0) if rises > 0 else Vector3i(1, 0, 0)
+	for yaw in 4:
+		var name := BrickPalette.variant_name(part, yaw, false)
+		if BrickPalette.front_of(name) == want and BrickPalette.size_of(name).x == 2:
+			return name
+	return BrickPalette.variant_name(part, 0, false)

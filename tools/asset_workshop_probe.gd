@@ -44,7 +44,8 @@ extends SceneTree
 ##              is laid mid-air when the build is empty
 ##   free       the ghost goes where the cursor meets the working plane
 ##   lengths    a calibration length in mm or in studs
-##   sketch     an outline fills exactly the cells inside it, as thick as the part
+##   sketch     an outline fills exactly the cells inside it, as thick as the part; a top
+##              edge climbing two plates a stud is laid as slopes facing the right way
 ##   zoom       zooming a flat view keeps the point under the cursor where it was
 ##   photo      "behind the build" puts a side photo just past the build's far side
 
@@ -475,6 +476,24 @@ func _round2() -> void:
 	_ws._undo()
 	_ok("and undoes at once", _ws.recipe.size() == 0, "%d left" % _ws.recipe.size())
 
+	# A ramp climbing 2 plates a stud along +x: its top edge is a slope's pitch.
+	_ws._new_build()
+	_ws.part_width["body"] = 2
+	_ws.sketch_fill([Vector2(10, 30), Vector2(20, 30), Vector2(20, 50)])
+	var slopes := 0
+	var facing_ok := true
+	for k in _ws.recipe.size():
+		var name: String = _ws.recipe.part_of(k)
+		if name.begins_with("slope_"):
+			slopes += 1
+			if BrickPalette.front_of(name) != Vector3i(-1, 0, 0):
+				facing_ok = false
+	_ok("a ramp's top edge is laid as slopes", slopes >= 3, "%d slopes of %d bricks" % [slopes, _ws.recipe.size()])
+	_ok("each slope's low front faces down the ramp", facing_ok)
+	_ok("a flat-topped outline has no slopes", _ws.top_slopes({Vector2i(0, 0): true, Vector2i(1, 0): true}).is_empty())
+	_ws.part_width["body"] = 3
+
+	_ws._new_build()
 	_ws.sketch_fill([Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)])
 	var img := Image.create(40, 20, false, Image.FORMAT_RGBA8)
 	var i: int = _ws.add_photo_image(img, "(probe depth)", "side")
