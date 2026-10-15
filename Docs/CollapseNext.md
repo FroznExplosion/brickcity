@@ -107,7 +107,8 @@ In the order to do it. Each line points at where the item is written up.
 
 **Tests that are red or flicker (§4)**
 13. `--walk`: one check, the debug camera's walker does not duck under a beam.
-14. `--groups --programs`: one check, boxes drawn over a floor that has gone for a tick.
+14. ~~`--groups --programs`: one check, boxes drawn over a floor that has gone for a tick~~ --
+    fixed 2026-10-14: the check measured each part's footing, the rule an item's (§4).
 15. `--jam --big`: about one run in six, a small piece resting on one still creeping.
 16. `--play`: the pawn's duck-under check, about one run in twelve.
 
@@ -616,7 +617,16 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   the beam and gets past": ducked, feet at 0.03 m -- off the brick course) and passed the three
   runs after it and every run before it that day. The pawn's version of the walker's check above;
   likely the same edge. One in about a dozen so far.
-* **`-- --groups --programs` fails one check** (found 2026-10-08; the same on the commit before
+* ~~**`-- --groups --programs` fails one check**~~ -- **fixed 2026-10-14, in the check.** Traced:
+  the parts counted were authored beds' -- one or two parts of seven over a hole in the floor, the
+  bed's floor share 0.88-0.97 -- from the tick of the cut, until the section left. The guess
+  below was right: by the rule an item stands while most of its floor is there (Interiors.md
+  8.10), as a bed with nine tenths of its floor under it would, and the check counted the part
+  of it over the hole. It now asks the rule's own question (`CityScene._groups_hanging`): what
+  a group draws that its rooms, asked now, would not. With the drawing's floor update switched
+  off it fails at once (55 ticks, up to 1,049 boxes), so it still catches what it is for. Both
+  `--groups --big` and `--groups --programs --big` pass, 24 each.
+  The note as it was: **`-- --groups --programs` fails one check** (found 2026-10-08; the same on the commit before
   stage 4, so not from it): "a section falls: ... none is left drawn over a floor that has gone" --
   1 tick, up to 3 boxes in the small city; 3 ticks, up to 9 with `--big`. Without `--programs` it
   passes. Not looked into. A guess, untested: an authored piece wide enough to stand on two floor
