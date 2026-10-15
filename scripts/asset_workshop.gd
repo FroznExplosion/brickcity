@@ -60,7 +60,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -213,6 +213,7 @@ func _shot() -> void:
 			calibrate(i, photo_point(i, Vector2(float(f[0]), float(f[1]))),
 					photo_point(i, Vector2(float(t[0]), float(t[1]))), float(opt.mm))
 	set_mirror(true)
+	show_help(false)
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	for v in [0, 1]:
 		set_view(v)
@@ -222,6 +223,11 @@ func _shot() -> void:
 		var path := "user://asset_shots/%s.png" % VIEWS[v]
 		img.save_png(path)
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
+	show_help(true)
+	for _i in 12:
+		await get_tree().process_frame
+	get_viewport().get_texture().get_image().save_png("user://asset_shots/help.png")
+	print("[asset workshop] wrote %s" % ProjectSettings.globalize_path("user://asset_shots/help.png"))
 	get_tree().quit()
 
 
@@ -657,6 +663,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				else:
 					mine = false
 			KEY_J: toggle_point_here()
+			KEY_F10: show_help(not _help.visible)
 			KEY_F2: _toggle_panel()
 			KEY_F6: set_view((view + 1) % VIEWS.size())
 			KEY_F7: set_measure(not measure_on)
@@ -1052,6 +1059,7 @@ func _setup_parts() -> void:
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
 	_build_phase3(_ruler.get_parent() as CanvasLayer)
 	_build_preview(_ruler.get_parent() as CanvasLayer)
+	_build_help(_ruler.get_parent() as CanvasLayer)
 	var env := OS.get_environment("BRICKCITY_BLENDER")
 	if env != "":
 		blender_path = env
@@ -2222,3 +2230,104 @@ func _build_preview(layer: CanvasLayer) -> void:
 	close.text = "Close"
 	close.pressed.connect(func() -> void: _preview_panel.visible = false)
 	box.add_child(close)
+
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+
+const HELP_SAVE := "user://asset_workshop.cfg"
+const HELP_TEXT := """[font_size=22][b]Asset workshop[/b][/font_size]
+Block out a gun (or any asset) in bricks against a photo. Each brick here becomes its nano twin when exported.
+
+[b]Sizes[/b]   1 stud here = 4 mm printed = 16 mm on the real gun.   1 plate = 1.6 mm printed = 6.4 mm real.
+A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
+
+[font_size=18][b]Getting started[/b][/font_size]
+[b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
+[b]2. Look at it flat.[/b]  F6 until the side view. Home / End zoom, WASD moves. ESC frees the mouse for the panels.
+[b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
+[b]4. Build.[/b]  LMB places, hold LMB and move to lay a row, RMB deletes, R turns, F flips. F8 mirrors: every brick is placed on the other side too.
+[b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
+[b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
+[b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
+
+[font_size=18][b]Tools[/b][/font_size]
+[b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
+[b]F6[/b] view: perspective, side, top, front   [b]F7[/b] measure: two clicks   [b]F8[/b] mirror (shift F8: plane under the ghost)
+[b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
+[b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the ghost
+[b]O[/b] section: in a flat view, cut away what is in front   [b]P[/b] outline bricks by part   [b]N[/b] part smooth / bricks
+[b]Z[/b] undo (a whole fill at once)   [b]shift Z[/b] redo   [b]F12[/b] export   [b]F1[/b] the workshop's own keys   [b]F10[/b] this page
+
+[font_size=18][b]Tips[/b][/font_size]
+Build the gun with its muzzle at the low end (left in the side view). Keep it on the mirror plane (the pink outline) so both halves match.
+The panels need a free mouse: ESC, then click. Click the scene again to look around.
+Exports land in your user folder, [i]asset_exports[/i]. Bought photos and models stay guides only: never exported."""
+
+var _help: PanelContainer
+
+
+func _build_help(layer: CanvasLayer) -> void:
+	_help = PanelContainer.new()
+	_help.visible = false
+	# Solid, so the scene and the workshop's own panels do not show through the text.
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.09, 0.11, 0.98)
+	sb.border_color = Color(1.0, 0.85, 0.4, 0.6)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	sb.set_content_margin_all(18)
+	_help.add_theme_stylebox_override("panel", sb)
+	layer.add_child(_help)
+	var box := VBoxContainer.new()
+	_help.add_child(box)
+	var text := RichTextLabel.new()
+	text.bbcode_enabled = true
+	text.text = HELP_TEXT
+	text.custom_minimum_size = Vector2(880, 500)
+	text.add_theme_font_size_override("normal_font_size", 15)
+	text.add_theme_font_size_override("bold_font_size", 15)
+	text.add_theme_font_size_override("italics_font_size", 15)
+	text.scroll_active = true
+	box.add_child(text)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	var at_start := CheckBox.new()
+	at_start.text = "show at start"
+	at_start.button_pressed = _help_at_start()
+	at_start.toggled.connect(func(on: bool) -> void:
+		var cfg := ConfigFile.new()
+		cfg.set_value("help", "at_start", on)
+		cfg.save(HELP_SAVE))
+	row.add_child(at_start)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+	var close := Button.new()
+	close.text = "Close (F10)"
+	close.pressed.connect(func() -> void: show_help(false))
+	row.add_child(close)
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if _help_at_start() and not ("--shot" in args or "--gate" in args) and DisplayServer.get_name() != "headless":
+		show_help.call_deferred(true)
+
+
+func _help_at_start() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(HELP_SAVE) != OK:
+		return true
+	return bool(cfg.get_value("help", "at_start", true))
+
+
+func show_help(on: bool) -> void:
+	_help.visible = on
+	# The workshop's key list sits behind it; it comes back as it was.
+	if _keys_panel != null:
+		_keys_panel.visible = _keys_on and not on
+	if on:
+		if _camera.has_method("_set_captured"):
+			_camera.call("_set_captured", false)
+		var vp := get_viewport().get_visible_rect().size
+		_help.reset_size()
+		_help.position = (vp - _help.get_combined_minimum_size()) * 0.5

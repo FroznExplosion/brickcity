@@ -40,6 +40,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 
 | Tool | Key | What it does |
 |---|---|---|
+| **Instructions** | F10 | a page on how to start and every key; opens on start until its tick box is cleared |
 | **Ruler** | always on | the cell under the cursor and the build's size, in studs/plates, print mm and real mm |
 | **Reference photo** | F2 (panel) | load an image onto a plane -- side, top or front -- behind the build. Calibrate: click two points on it and type the real length between them; the photo scales itself. Move it, set its opacity, hide it, remove it. It is never built on: rays pass through it |
 | **Ortho views** | F6 | perspective, side, top, front, in turn. The flat views line up with the photo planes. Home / End zoom a flat view |
