@@ -120,6 +120,22 @@ In the order to do it. Each line points at where the item is written up.
     middle half now -- and the crumbs' tick, laying included, 0.6 ms on average, 2.7 at the worst.
     In the barrage 2,262 were handed back to fall again and 4,724 cleared from under pieces.
 
+    **Timed 2026-10-15** (`--big --shot`, three alternated pairs, heap off then on, no editor
+    and no other Godot before or after any run, the chip let cool under 80 C before each; 85 C at
+    the peak, never held back):
+
+    | | frames mean, ms | of 906 over 33.3 ms | ticks over 25 ms |
+    |---|---|---|---|
+    | off | 18.3, 17.8, 17.3 -- **17.8** | 18, 24, 21 -- **21** | 12, 11, 7 |
+    | on | 17.8, 17.7, 17.1 -- **17.5** | 26, 18, 14 -- **19** | 10, 7, 6 |
+
+    Nothing to see -- and that pass leaves only 35-127 bricks lying, its blasts being far from
+    its camera. **The worst case, measured on the renderer's own clock** (a window of nothing
+    but the heap, 3,000 bricks of four sizes in 16 heaps all in view, a sun with shadows; two
+    runs each): **3.8-3.9 ms of GPU a frame against 1.5 without them -- 2.4 ms for a full heap in
+    view**, 1.7 ms with the heaps casting no shadow. It goes with how many are in view, so the
+    slider bounds it: 1,500 is about half. A first try at this timing, the day before, found the
+    display asleep and was not taken.
     *Tests:* `tools/heap_probe.gd` 11 (a blast's ring comes down and stays, each brick flat, on
     the street or on a brick under it, still there eight seconds on; what they lay on goes and
     they lie again; a piece comes to rest on them; a full square overwrites its oldest; the cap
