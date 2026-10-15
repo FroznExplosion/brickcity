@@ -77,6 +77,10 @@ func _tick() -> void:
 	_undo_redo()
 	_wand()
 	_export()
+	_ws.show_help(true)
+	_ok("the instructions open", _ws._help.visible)
+	_ws.show_help(false)
+	_ok("and close", not _ws._help.visible)
 	print("asset workshop probe: %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
