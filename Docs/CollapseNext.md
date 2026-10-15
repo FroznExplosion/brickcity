@@ -19,6 +19,7 @@ its old name and runs it), `--view --big`, `--far`; `tools/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
 `barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
+`heap_probe.gd`,
 `storey_probe.gd`,
 `far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
@@ -87,13 +88,44 @@ In the order to do it. Each line points at where the item is written up.
     is the disasters' (`DisasterContext`: `wake_near`, `_shear_building`, a lateral load), noted
     under 1.10 (2) and theirs to change.
 
-**Proposed, the user's call**
-17. Bricks that stay where they fall. A crumb is gone a second and a half after it comes loose
-    (`CRUMB_LIFE_MS`), so a hole has nothing lying under it. One that has landed costs nothing
-    to keep -- it is an instance in a MultiMesh that no longer moves -- so a pool of landed
-    bricks (a few thousand, the oldest taken first, none where a piece comes to rest on them)
-    would leave the heap a real wall leaves. They would be drawn only: nothing to stand on,
-    hide behind or pick up. Not started.
+**Proposed, the user's call** (17 asked for and done, 2026-10-15)
+17. ~~Bricks that stay where they fall~~ -- **done 2026-10-15 (user: "17 please").** A crumb
+    that comes to rest is laid in a heap (`scripts/brick_heap.gd`, `BrickHeap`): an instance in
+    a MultiMesh that is written once and never moves, lying flat on one of its faces where it
+    stopped -- not shrunk away a second and a half after it came loose. A hole has its bricks
+    lying under it, thrown ones in the street, a broken table's parts on the floor.
+    *How it lies:* on the face it came down on, weighed by how thin the brick is that way (by
+    the angle alone, one in five stood on its end); on the floor its ray found, or on the brick
+    already lying under its middle on that floor -- they pile, up to 1.3 m (`PILE_MAX`), past
+    which it is taken to have slid off to the floor. Asked under all of a long brick rather than
+    its middle, a heap at the foot of a wall grew into a stack up the wall.
+    *How many:* a 32 m square of the city holds up to 400 of each brick size (`CELL_CAP`), the
+    oldest overwritten; past the setting all told, the heaps laid in longest ago are swept first;
+    a heap is not drawn past 140 m (`DRAW_RANGE`). **Options > Gameplay, "Bricks Left Lying
+    (Developer)": 0 to 8,000, default 3,000; at 0 nothing is laid and crumbs shrink away as they
+    did.** While bricks are kept, a crumb falls until it lands (6 s at most, `CRUMB_FALL_MAX_MS`)
+    instead of shrinking at 1.4 s wherever it was.
+    *What it lies on goes* (`IslandManager._heap_support_gone`): bricks a blast takes, a piece
+    that moves or is removed (`support_gone`, `_wake_resting_on`), a group cut out of a building
+    or a piece (`spawn`), a fire's or a disaster's wake (`wake_near`) -- the bricks lying on it,
+    or up to 0.8 m over it, fall again as crumbs, their floor asked a couple of ticks on, when
+    what went has gone from the physics too. Not those on the ground itself (`Layers.WORLD`, what
+    the crumb's floor ray hit): handed back with the rest, the street's were thrown up 9,114 times
+    in one barrage to land where they lay. **A piece that comes to rest on bricks lying there**
+    clears them (`settle_now`, the piece's own box).
+    Drawn only, like every crumb: nothing stands on it, hides behind it or picks it up, and it is
+    this machine's own -- in no command and no save, so a load starts with the street swept.
+    *Cost* (`barrage_probe`, three bursts on four towers, camera close): 11,068 laid, 36 us each
+    -- 70 at first, most of it a height written under every stud a brick covered; under its
+    middle half now -- and the crumbs' tick, laying included, 0.6 ms on average, 2.7 at the worst.
+    In the barrage 2,262 were handed back to fall again and 4,724 cleared from under pieces.
+
+    *Tests:* `tools/heap_probe.gd` 11 (a blast's ring comes down and stays, each brick flat, on
+    the street or on a brick under it, still there eight seconds on; what they lay on goes and
+    they lie again; a piece comes to rest on them; a full square overwrites its oldest; the cap
+    sweeps the oldest heaps; not drawn past its range; at 0 nothing is laid); `blast_ring_probe`
+    and `debris_probe` ask for what lies, not for what shrank away; `city.tscn -- --ring` writes
+    `shots/city_ring_2.png`, the heap five seconds on.
 
 18. A piece long the other way tears a band of loose bricks when it snaps (§1.3): the most
     single bricks a landing makes now. Cracking it along its bond instead needs a joint cut on

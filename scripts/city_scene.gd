@@ -7285,8 +7285,12 @@ func _run_ring_pass() -> void:
 	await _save("city_ring_1")
 	for t in 150:
 		await get_tree().physics_frame
-	_gate_ok("two and a half seconds on the crumbs have gone", islands.crumb_count == 0,
-			"%d left" % islands.crumb_count)
+	_gate_ok("five seconds on none is falling: what came down lies there",
+			islands.crumb_count == 0 and (not BrickHeap.enabled()
+			or islands.heap.count >= thrown - IslandManager.HEAP_FALL_MAX),
+			"%d falling, %d lying (%d thrown)" % [islands.crumb_count, islands.heap.count, thrown])
+	await _frames(2)
+	await _save("city_ring_2")
 	_check_log_replays()
 	print("[ring] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
@@ -11545,6 +11549,7 @@ func _run_shot_pass() -> void:
 	print("[city]   " + islands.crumb_cost_line())
 	print("[city]   " + islands.push_census_line())
 	print("[city]   " + islands.shed_census_line())
+	print("[city]   " + islands.heap.census_line())
 	print("[city]   furniture broken: %d item(s), %d part(s) thrown; %d on wreckage a blast reached, %d crushed under it" % [
 			islands.furniture_broken[0], islands.furniture_broken[1], items_broken_on_wreckage,
 			crushed_by_wreckage])

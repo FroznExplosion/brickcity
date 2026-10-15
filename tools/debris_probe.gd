@@ -282,9 +282,13 @@ func _check_kept_in_view() -> void:
 				_crumb_y0, _crumb_land_y, _crumb_half])
 	var crumb_ms := int(float(_crumb_gone_frame - _crumb_frame0)
 			/ float(Engine.physics_ticks_per_second) * 1000.0)
-	_ok("and it is gone once it has shrunk away, in about a second and a half",
-			_crumb_gone_frame >= 0 and crumb_ms >= IslandManager.CRUMB_LIFE_MS - 100
-			and crumb_ms <= IslandManager.CRUMB_LIFE_MS + 200, "%d ms" % crumb_ms)
+	# Not shrunk away a second and a half on, as it was: once it has stopped it
+	# lies there, laid in the heap (BrickHeap, CollapseNext 0 item 17).
+	# (The brick dropped beside it in the wind comes to rest on that spot and
+	# takes it out of the heap again -- what a piece settles on goes.)
+	_ok("and once it has stopped, it lies there: no longer falling, laid in the heap",
+			_crumb_gone_frame >= 0 and crumb_ms < IslandManager.CRUMB_LIFE_MS
+			and _islands.heap.laid >= 1, "%d ms; %s" % [crumb_ms, _islands.heap.census_line()])
 	print("\ndebris in view stays in view")
 	_ok("the brick is still there two and a half seconds on",
 			_rubble != null and _rubble.is_valid() and _rubble_gone_frame < 0)

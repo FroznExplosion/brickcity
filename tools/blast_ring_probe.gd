@@ -71,6 +71,16 @@ func _ticks(n: int) -> void:
 		_m.tick()
 
 
+## Until nothing is falling: each crumb lands and is laid (BrickHeap), or fades
+## at the end of its fall (IslandManager.CRUMB_FALL_MAX_MS).
+func _settled_crumbs() -> void:
+	var most := int((IslandManager.CRUMB_FALL_MAX_MS + 200) * Engine.physics_ticks_per_second / 1000.0)
+	for t in most:
+		if _m.crumb_count == 0:
+			return
+		await _ticks(1)
+
+
 func _look(from: Vector3, at: Vector3) -> void:
 	_camera.global_position = from
 	_camera.look_at(at, Vector3.UP)
@@ -167,8 +177,9 @@ func _run() -> void:
 		lowest = minf(lowest, (c[0] as Vector3).y)
 	_ok("a third of a second on they are falling", fell < 0.0 and lowest < at.y,
 			"lowest at %.2f m" % lowest)
-	await _ticks(int(IslandManager.CRUMB_LIFE_MS * Engine.physics_ticks_per_second / 1000.0))
-	_ok("and a second and a half on they are gone", _m.crumb_count == 0,
+	await _settled_crumbs()
+	_ok("and soon none is falling: what came down lies where it stopped (BrickHeap)",
+			_m.crumb_count == 0 and _m.heap.count > 0,
 			"%d left" % _m.crumb_count)
 
 	# --- a blast that kills nothing ---------------------------------------------
@@ -238,7 +249,7 @@ func _run() -> void:
 	_ok("and they come from all the way round it, not one side",
 			mini(mini(left, right), mini(above, below)) >= crumbs.size() / 5,
 			"%d left, %d right, %d above, %d below" % [left, right, above, below])
-	await _ticks(int(IslandManager.CRUMB_LIFE_MS * Engine.physics_ticks_per_second / 1000.0) + 10)
+	await _settled_crumbs()
 
 	# --- a gun --------------------------------------------------------------------
 	print("\na gun's wear")
@@ -269,7 +280,7 @@ func _run() -> void:
 	_m.throw_killed(_tower, worn, at, 0.0, true)
 	_ok("the round that finishes it knocks it off whole: one brick, one crumb",
 			worn.size() == 1 and _m.crumb_count == 1, "after %d round(s)" % shots)
-	await _ticks(int(IslandManager.CRUMB_LIFE_MS * Engine.physics_ticks_per_second / 1000.0) + 10)
+	await _settled_crumbs()
 
 	# --- wreckage -----------------------------------------------------------------
 	print("\na blast on a piece lying in the street")

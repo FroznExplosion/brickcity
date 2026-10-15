@@ -170,6 +170,8 @@ make a collapse look right would quietly break that.
 **2026-10-13:** a blast was the last thing that did -- every brick in its radius was there in one
 frame and not in the next. Now only the bricks in the middle of it are; the ring round them is
 thrown out and falls (`IslandManager.throw_killed`, [CollapseNext.md](CollapseNext.md) §1.10 (3)).
+**2026-10-15:** and what falls stays, lying where it came down (`BrickHeap`, CollapseNext §0
+item 17), until something takes away what it lies on or a piece comes to rest on it.
 
 ---
 

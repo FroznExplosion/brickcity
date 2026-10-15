@@ -873,6 +873,15 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 	world = brick_world
 	brick_material = material
 	camera = view
+	if heap == null:
+		heap = BrickHeap.new()
+		heap.name = "BrickHeap"
+		heap.mesh_for = func(size: Vector3) -> Mesh: return PieceMeshes.chamfered_box(size)
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.roughness = 0.85
+		heap.material = mat
+		add_child(heap)
 
 
 ## Where people are: every player in a co-op game, and later every AI agent that
@@ -1229,6 +1238,9 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		inherit_linear := Vector3.ZERO, inherit_angular := Vector3.ZERO,
 		piece_id := -1, owner_id := -1) -> BrickIsland:
 	var _t0 := Time.get_ticks_usec()
+	# What lay on these bricks lies on nothing once they leave.
+	if heap != null and heap.count > 0:
+		_heap_support_gone(_group_box(source, block_ids))
 	# The host said it goes (MAX_MOVING): cut out and let go, as every other
 	# machine does with the same DETACH.
 	if _gone_pieces.has(piece_id):
@@ -1506,6 +1518,9 @@ class Crumbs:
 	var floor_y := PackedFloat32Array()
 	var half_h := PackedFloat32Array()
 	var colour := PackedColorArray()
+	## Its floor is the ground itself (Layers.WORLD), which nothing takes away:
+	## what the ray that found the floor hit (_crumb_floor), kept for the heap.
+	var on_ground := PackedByteArray()
 
 	func remove(i: int) -> void:
 		var last := pos.size() - 1
@@ -1520,6 +1535,7 @@ class Crumbs:
 			floor_y[i] = floor_y[last]
 			half_h[i] = half_h[last]
 			colour[i] = colour[last]
+			on_ground[i] = on_ground[last]
 		pos.resize(last)
 		vel.resize(last)
 		base.resize(last)
@@ -1530,8 +1546,21 @@ class Crumbs:
 		floor_y.resize(last)
 		half_h.resize(last)
 		colour.resize(last)
+		on_ground.resize(last)
 
 var _crumbs := {}            ## brick size, snapped -> Crumbs
+## Where a crumb goes when it comes to rest, while BrickHeap.max_bricks is not 0:
+## the bricks a collapse leaves lying (BrickHeap).
+var heap: BrickHeap
+## While bricks are kept, a crumb is not shrunk away a second and a half after
+## it came loose: it falls until it lands, for this long at most, and fades in
+## the last CRUMB_FADE_MS of that (one that found no floor).
+const CRUMB_FALL_MAX_MS := 6000
+const CRUMB_FADE_MS := 600
+## What lay on top of something that goes is within this far above it.
+const HEAP_LIFT := 0.8
+## Bricks one event hands back to fall again; past it the rest are just gone.
+const HEAP_FALL_MAX := 64
 var _crumbled_pieces := {}   ## piece id -> true: its DETACH said gone, and it crumbles
 var crumb_count := 0         ## bricks drawn as crumbs now
 var crumbled := 0            ## pieces that went as crumbs
@@ -1539,6 +1568,7 @@ var crumb_bricks := 0        ## bricks that were drawn as crumbs
 var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
 var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
 var crumb_update_ms := 0.0   ## _update_crumbs, all told
+var lay_us := 0              ## of that, laying crumbs that stopped in the heap (BrickHeap)
 var crumb_peak := 0          ## the most drawn at once
 var crumble_worst_ms := 0.0  ## the slowest single _crumble
 var crumble_parts := [0.0, 0.0, 0.0]  ## ms, all told: drawing, cutting out, deciding
@@ -1730,6 +1760,7 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 		return 0
 	# It stood on a floor: one ray from under its middle finds it.
 	var floor_y := _crumb_floor(Vector3(box.get_center().x, box.position.y, box.get_center().z))
+	var fixed := 1 if _floor_on_ground else 0
 	var frame_basis := xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
 	for r in n:
@@ -1751,6 +1782,7 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 		cr.floor_y.append(floor_y)
 		cr.half_h.append(size.y * 0.5)
 		cr.colour.append(Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]))
+		cr.on_ground.append(fixed)
 		crumb_count += 1
 		crumb_bricks += 1
 	furniture_broken[1] += n
@@ -1764,8 +1796,8 @@ func blast_census_line() -> String:
 
 
 func crumb_cost_line() -> String:
-	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told, %.2f the worst tick" % [
-			crumb_peak, crumb_update_ms, crumb_worst_ms]
+	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told (laying the ones that stopped %.1f), %.2f the worst tick" % [
+			crumb_peak, crumb_update_ms, float(lay_us) / 1000.0, crumb_worst_ms]
 
 
 ## `burst` and `throw`: thrown from a blast at `burst` (throw_killed) -- `throw`
@@ -1794,17 +1826,22 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 	# brick that is out past the face before it has dropped CRUMB_SILL below
 	# the first comes down on the second.
 	var floor_past := -INF
+	var fixed_y := 0
+	var fixed_past := 0
 	var face := INF
 	var g := 0.0
 	if throw > 0.0:
 		floor_y = _crumb_floor(Vector3(centre.x, box.position.y, centre.z))
+		fixed_y = 1 if _floor_on_ground else 0
 		if out_dir != Vector3.ZERO:
 			var reach := (absf(out_dir.x) * box.size.x + absf(out_dir.z) * box.size.z) * 0.5
 			face = centre.dot(out_dir) + reach
 			floor_past = _crumb_floor(Vector3(centre.x, box.end.y, centre.z) + out_dir * (reach + 1.0))
+			fixed_past = 1 if _floor_on_ground else 0
 		g = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
 	else:
 		floor_y = _crumb_floor(centre + kick * 0.4)
+		fixed_y = 1 if _floor_on_ground else 0
 	var frame_basis := xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
 	for id in block_ids:
@@ -1826,17 +1863,20 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 		var vel := linear + kick + from_blast + Vector3(randf_range(-1.0, 1.0),
 				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER
 		var lands_on := floor_y
+		var lands_fixed := fixed_y
 		if face < INF:
 			var speed_out := vel.dot(out_dir)
 			var to_face := face - at.dot(out_dir)
 			if floor_y == -INF or to_face <= 0.0:
 				lands_on = floor_past
+				lands_fixed = fixed_past
 			elif speed_out > 0.05:
 				# How far it has dropped by the time it is out past the face.
 				var clear := to_face / speed_out
 				var foot := at.y - size.y * 0.5 + vel.y * clear - 0.5 * g * clear * clear
 				if foot > floor_y - CRUMB_SILL:
 					lands_on = floor_past
+					lands_fixed = fixed_past
 		cr.pos.append(at)
 		cr.vel.append(vel)
 		cr.base.append(frame_basis)
@@ -1847,18 +1887,27 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 		cr.floor_y.append(lands_on)
 		cr.half_h.append(size.y * 0.5)
 		cr.colour.append(BrickWorld.get_filament_colour(world.get_block_colour(source, id)))
+		cr.on_ground.append(lands_fixed)
 		crumb_count += 1
 		crumb_bricks += 1
 
 
-## The first thing under `from` a crumb stops on, or -INF.
+## The first thing under `from` a crumb stops on, or -INF. Whether that was
+## the ground itself (Layers.WORLD) is left in _floor_on_ground.
 func _crumb_floor(from: Vector3) -> float:
+	_floor_on_ground = false
 	if not is_inside_tree():
 		return -INF
 	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0,
 			CRUMB_FLOOR_MASK)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	return (hit.position as Vector3).y if not hit.is_empty() else -INF
+	if hit.is_empty():
+		return -INF
+	_floor_on_ground = hit.collider is CollisionObject3D 			and ((hit.collider as CollisionObject3D).collision_layer & Layers.WORLD) != 0
+	return (hit.position as Vector3).y
+
+
+var _floor_on_ground := false
 
 
 func _crumb_set(key: Vector3) -> Crumbs:
@@ -1893,15 +1942,31 @@ func _update_crumbs() -> void:
 	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
 	var full := int(CRUMB_FULL_MS * tps / 1000.0)
 	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
+	var keep := heap != null and BrickHeap.enabled()
+	var fall_max := int(CRUMB_FALL_MAX_MS * tps / 1000.0)
+	var fade := maxi(int(CRUMB_FADE_MS * tps / 1000.0), 1)
 	for key in _crumbs:
 		var cr: Crumbs = _crumbs[key]
 		var i := 0
 		while i < cr.pos.size():
 			var age := now - cr.born[i]
-			if age >= life:
+			# Come to rest: it lies where it stopped, for good (BrickHeap).
+			if keep and cr.landed[i] > 0:
+				var t_lay := Time.get_ticks_usec()
+				_lay_crumb(cr, i, key, dt)
+				lay_us += Time.get_ticks_usec() - t_lay
 				cr.remove(i)
 				crumb_count -= 1
 				continue
+			if age >= (fall_max if keep else life):
+				cr.remove(i)
+				crumb_count -= 1
+				continue
+			# Handed back by the heap: its floor is asked once what took the old
+			# one has had its tick to go (_heap_support_gone).
+			if is_nan(cr.floor_y[i]) and age >= 2:
+				cr.floor_y[i] = _crumb_floor(cr.pos[i])
+				cr.on_ground[i] = 1 if _floor_on_ground else 0
 			if cr.landed[i] == 0:
 				var v := cr.vel[i]
 				v.y -= g * dt
@@ -1923,7 +1988,10 @@ func _update_crumbs() -> void:
 		for j in count:
 			var age := now - cr.born[j]
 			var s := 1.0
-			if age > full:
+			if keep:
+				if age > fall_max - fade:
+					s = maxf(float(fall_max - age) / float(fade), 0.01)
+			elif age > full:
 				s = maxf(1.0 - float(age - full) / float(life - full), 0.01)
 			# It stops turning when it stops falling.
 			var turned := (cr.landed[j] if cr.landed[j] > 0 else now) - cr.born[j]
@@ -1934,6 +2002,82 @@ func _update_crumbs() -> void:
 	crumb_worst_ms = maxf(crumb_worst_ms, ms)
 	crumb_update_ms += ms
 	crumb_peak = maxi(crumb_peak, crumb_count)
+
+
+## A crumb that has come to rest, laid in the heap: flat on whichever of its
+## faces was most nearly down (_lie_flat), on the floor it stopped on.
+func _lay_crumb(cr: Crumbs, i: int, size: Vector3, dt: float) -> void:
+	if not is_finite(cr.floor_y[i]):
+		return
+	var turned := cr.landed[i] - cr.born[i]
+	var b := Basis(cr.axis[i], cr.rate[i] * float(turned) * dt) * cr.base[i]
+	var flat := _lie_flat(b, size)
+	var p := cr.pos[i]
+	# On the floor it came down on, or on what already lies there (a pile).
+	p.y = heap.base_for(size, flat[0] as Basis, p, cr.floor_y[i]) + size[int(flat[1])] * 0.5
+	heap.lay(size, Transform3D(flat[0] as Basis, p), cr.colour[i], cr.floor_y[i],
+			cr.on_ground[i] != 0)
+
+
+## `b` turned to lie on a face: the axis it comes down on made vertical, the
+## next one levelled, which way it pointed kept. [basis, that axis]. Which face:
+## the most nearly down, weighed by how thin the brick is that way -- a brick
+## comes to rest on a broad face, and stands on its end only when it came down
+## very nearly upright (one in five of a heap stood on end, weighed by the
+## angle alone).
+static func _lie_flat(b: Basis, size := Vector3.ONE) -> Array:
+	var cols: Array[Vector3] = [b.x.normalized(), b.y.normalized(), b.z.normalized()]
+	var up := 0
+	var best := -1.0
+	for k in 3:
+		var score := absf(cols[k].y) / maxf(size[k], 0.001)
+		if score > best:
+			best = score
+			up = k
+	var a := (up + 1) % 3
+	var m := (up + 2) % 3
+	cols[up] = Vector3.UP if cols[up].y >= 0.0 else Vector3.DOWN
+	var h := Vector3(cols[a].x, 0.0, cols[a].z)
+	cols[a] = h.normalized() if h.length() > 0.001 else Vector3.RIGHT
+	# Right-handed: the axis after next is this one across the next.
+	cols[m] = cols[up].cross(cols[a])
+	return [Basis(cols[0], cols[1], cols[2]), up]
+
+
+## What lay on something that has gone falls again: the heap's bricks inside
+## `box` and up to HEAP_LIFT over it are handed back as crumbs, their floor
+## asked again a couple of ticks on (by when what went has gone from the
+## physics too). The first HEAP_FALL_MAX fall; the rest are just gone.
+func _heap_support_gone(box: AABB) -> void:
+	if heap == null or heap.count == 0 or box.size == Vector3.ZERO:
+		return
+	var reach := box.grow(RIPPLE_MARGIN)
+	reach.size.y += HEAP_LIFT
+	var lying := heap.take_in(reach)
+	if lying.is_empty():
+		return
+	heap.handed_back += lying.size()
+	var now := Engine.get_physics_frames()
+	for k in mini(lying.size(), HEAP_FALL_MAX):
+		if crumb_count >= CRUMBS_MAX:
+			break
+		var size: Vector3 = lying[k][0]
+		var xf: Transform3D = lying[k][1]
+		var b := xf.basis
+		var cr := _crumb_set(size)
+		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
+		cr.pos.append(xf.origin)
+		cr.vel.append(Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)))
+		cr.base.append(b)
+		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
+		cr.rate.append(randf_range(-1.5, 1.5))
+		cr.born.append(now)
+		cr.landed.append(0)
+		cr.floor_y.append(NAN)
+		cr.on_ground.append(0)
+		cr.half_h.append(0.5 * (absf(b.x.y) * size.x + absf(b.y.y) * size.y + absf(b.z.y) * size.z))
+		cr.colour.append(lying[k][2])
+		crumb_count += 1
 
 
 ## Should this piece never become a body at all? Decided BEFORE anything is
@@ -2848,6 +2992,7 @@ func wake(isl: BrickIsland) -> void:
 ## centre of mass, so an origin test leaves the far end of it hanging in the
 ## air after the wall under that end is shot away.
 func wake_near(origin: Vector3, radius: float) -> void:
+	_heap_support_gone(AABB(origin - Vector3.ONE * radius, Vector3.ONE * radius * 2.0))
 	for other in islands:
 		if not other.is_valid() or not other.settled:
 			continue
@@ -2878,6 +3023,7 @@ func _drain_ripples() -> void:
 ## touching it, and not wholly below it -- what is under a thing is holding it
 ## up, not held by it. Dormant records the same, marked to come back free to fall.
 func _wake_resting_on(box: AABB) -> void:
+	_heap_support_gone(box)
 	var grown := box.grow(RIPPLE_MARGIN)
 	var centre := grown.get_center()
 	var reach := grown.size.length() * 0.5
@@ -2992,6 +3138,9 @@ func settle_now(isl: BrickIsland) -> void:
 	isl.settled_blocks = world.get_alive_block_count(isl.chunk)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_apply_layers(isl)
+	# Come to rest on bricks lying there: they are under it, and go.
+	if heap != null and heap.count > 0:
+		heap.clear_in(isl.chunk_transform(), _island_aabb(isl))
 	# Inert now: give the solver as few boxes as the shape allows.
 	_reshape(isl, true)
 	# And those are its boxes as its bricks are now: nothing is still owed.
