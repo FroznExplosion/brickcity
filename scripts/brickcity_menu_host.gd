@@ -140,6 +140,9 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 		&"brick_bounce":
 			if DisplayServer.get_name() != "headless":
 				IslandManager.crumb_bounce = float(value)
+		&"brick_heap":
+			if DisplayServer.get_name() != "headless":
+				BrickHeap.max_bricks = int(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -191,6 +194,11 @@ func _setting_defs() -> Array:
 			"min": 0.0, "max": IslandManager.CRUMB_BOUNCE_MAX, "step": 0.05,
 			"hint": "How far a loose brick bounces when it lands, as a share of how fast it came "
 			+ "down. 0: it stops where it lands."},
+		{"id": &"brick_heap", "tab": "gameplay", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Bricks Left Lying (Developer)", "default": BrickHeap.DEFAULT_MAX,
+			"min": 0, "max": BrickHeap.MAX_MAX, "step": 500,
+			"hint": "How many loose bricks stay where they fell, all told; past it the oldest heaps "
+			+ "are swept up first. 0: they shrink away a second and a half after they come loose."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 
