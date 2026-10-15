@@ -202,8 +202,11 @@ In the order to do it. Each line points at where the item is written up.
         now**, a row of cells to a run of 64-bit words: the same walk, so the same boxes in the
         same order (the old merge run beside the new on every call, 1,400+ merges in the probes
         and a `--big --shot`: none differed). That tower's merge 4.2-5.8 -> 1.6-2.2 ms, side by
-        side in the same runs; a piece merged again after a hit gains the same. Left in a
-        topple: the body joining the space, 0.9-1.9 ms (Jolt building one compound of the
+        side in the same runs; a piece merged again after a hit gains the same. Three
+        alternated pairs against main's library, quiet machine: **worst tick 34.2-38.5 ->
+        27.9-30.8 ms**, ticks over 25 ms 3-4 -> 2; the two topple ticks 33.8-38.5 -> 26.2-30.8,
+        spawn in them 9.4-12.0 -> 5.1-8.4; physics a frame 21.2-22.6 -> 18.6-20.3 ms. Left in
+        a topple: the body joining the space, 0.9-1.9 ms (Jolt building one compound of the
         boxes), and the building's own collision freed, 1.2-1.5.
     21. **The first tick of a big city** (tick 24 of `--big --shot`): 33 ms of streaming the city
         in, with 13 ms of the first blast laying a room's furniture as bricks in the same tick.
