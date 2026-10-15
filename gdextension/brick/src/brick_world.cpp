@@ -12,6 +12,9 @@
 
 #include <algorithm>
 #include <chrono>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #include <climits>
 #include <limits>
 #include <cstring>
@@ -1725,6 +1728,80 @@ PackedInt32Array BrickWorld::add_band_shapes(const Array &bodies, int chunk_id, 
     return counts;
 }
 
+namespace {
+
+// A merge's cells are bits, a row of them to a run of 64-bit words
+// (BrickWorld::merge_blocks_into). These are the runs of a row, [x0, x1].
+inline int ctz64(uint64_t v) {
+#if defined(_MSC_VER)
+    unsigned long i;
+    _BitScanForward64(&i, v);
+    return (int)i;
+#else
+    return __builtin_ctzll(v);
+#endif
+}
+
+// The bits of word `w` that are in [x0, x1].
+inline uint64_t run_mask(int w, int x0, int x1) {
+    const int lo = x0 > (w << 6) ? x0 - (w << 6) : 0;
+    const int hi = x1 < (w << 6) + 63 ? x1 - (w << 6) : 63;
+    const uint64_t up = hi == 63 ? ~0ull : ((1ull << (hi + 1)) - 1);
+    return up & (~0ull << lo);
+}
+
+inline void bit_run_set(uint64_t *r, int x0, int x1) {
+    for (int w = x0 >> 6; w <= (x1 >> 6); ++w) {
+        r[w] |= run_mask(w, x0, x1);
+    }
+}
+
+inline void bit_run_clear(uint64_t *r, int x0, int x1) {
+    for (int w = x0 >> 6; w <= (x1 >> 6); ++w) {
+        r[w] &= ~run_mask(w, x0, x1);
+    }
+}
+
+inline bool bit_run_full(const uint64_t *r, int x0, int x1) {
+    for (int w = x0 >> 6; w <= (x1 >> 6); ++w) {
+        const uint64_t m = run_mask(w, x0, x1);
+        if ((r[w] & m) != m) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The first set bit at or after x, or n if there is none before n.
+inline int bit_next_set(const uint64_t *r, int x, int n) {
+    while (x < n) {
+        const int w = x >> 6;
+        const uint64_t v = r[w] & (~0ull << (x & 63));
+        if (v != 0) {
+            const int f = (w << 6) + ctz64(v);
+            return f < n ? f : n;
+        }
+        x = (w + 1) << 6;
+    }
+    return n;
+}
+
+// The first clear bit at or after x, or n.
+inline int bit_next_clear(const uint64_t *r, int x, int n) {
+    while (x < n) {
+        const int w = x >> 6;
+        const uint64_t v = ~r[w] & (~0ull << (x & 63));
+        if (v != 0) {
+            const int f = (w << 6) + ctz64(v);
+            return f < n ? f : n;
+        }
+        x = (w + 1) << 6;
+    }
+    return n;
+}
+
+} // namespace
+
 int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
         const std::vector<const Block *> &blocks) {
     PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
@@ -1748,9 +1825,18 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
     w_lo = w_lo < 0 ? 0 : w_lo;
     w_hi = w_hi >= d.y ? d.y - 1 : w_hi;
     const int wy = w_hi >= w_lo ? w_hi - w_lo + 1 : 0;
-    std::vector<uint8_t> solid((size_t)d.x * (size_t)wy * (size_t)d.z, 0);
-    auto at = [&](int x, int y, int z) -> uint8_t & {
-        return solid[(size_t)((int64_t)x + (int64_t)d.x * ((int64_t)(y - w_lo) + (int64_t)wy * z))];
+    // The cells as bits, a row of them (x) to a run of 64-bit words. Most of a
+    // building's box is air -- its rooms -- and at a byte a cell a 22,000-brick
+    // tower was 3.1 million of them: 2-4 ms to fill and 3-4 more to walk, most
+    // of the tick it toppled in (2026-10-15). In words the air goes by 64 cells
+    // at a time and a brick is marked a row at a stroke. The walk is the one it
+    // was -- z, then y, then x, each box as long in x, then as tall, then as
+    // deep as it goes -- so the boxes are the same ones, in the same order.
+    const int words = (d.x + 63) >> 6;
+    thread_local std::vector<uint64_t> bits;
+    bits.assign((size_t)words * (size_t)wy * (size_t)d.z, 0);
+    auto row = [&](int y, int z) -> uint64_t * {
+        return bits.data() + (size_t)words * ((size_t)(y - w_lo) + (size_t)wy * (size_t)z);
     };
     // Parts with authored hulls are kept out of the merge -- their cells are not
     // what they collide as -- and get their own shapes after it.
@@ -1765,6 +1851,25 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
             continue;
         }
         const Vector3i base = b.cell - c.origin;
+        if (a.is_full_box()) {
+            const int x0 = base.x < 0 ? 0 : base.x;
+            const int x1 = (base.x + a.size.x < d.x ? base.x + a.size.x : d.x) - 1;
+            const int y0 = base.y < w_lo ? w_lo : base.y;
+            const int y1 = base.y + a.size.y - 1 > w_hi ? w_hi : base.y + a.size.y - 1;
+            const int z0 = base.z < 0 ? 0 : base.z;
+            const int z1 = (base.z + a.size.z < d.z ? base.z + a.size.z : d.z) - 1;
+            if (x0 > x1 || y0 > y1 || z0 > z1) {
+                continue;
+            }
+            for (int z = z0; z <= z1; ++z) {
+                for (int y = y0; y <= y1; ++y) {
+                    bit_run_set(row(y, z), x0, x1);
+                }
+            }
+            y_lo = y0 < y_lo ? y0 : y_lo;
+            y_hi = y1 > y_hi ? y1 : y_hi;
+            continue;
+        }
         for (int lx = 0; lx < a.size.x; ++lx) {
             for (int ly = 0; ly < a.size.y; ++ly) {
                 for (int lz = 0; lz < a.size.z; ++lz) {
@@ -1775,7 +1880,7 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
                     if (x < 0 || y < w_lo || z < 0 || x >= d.x || y > w_hi || z >= d.z) {
                         continue;
                     }
-                    at(x, y, z) = 1;
+                    row(y, z)[x >> 6] |= 1ull << (x & 63);
                     y_lo = y < y_lo ? y : y_lo;
                     y_hi = y > y_hi ? y : y_hi;
                 }
@@ -1786,32 +1891,18 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
     int count = 0;
     for (int z = 0; z < d.z; ++z) {
         for (int y = y_lo; y <= y_hi; ++y) {
-            for (int x = 0; x < d.x; ++x) {
-                if (!at(x, y, z)) {
-                    continue;
-                }
-                int x1 = x;
-                while (x1 + 1 < d.x && at(x1 + 1, y, z)) {
-                    ++x1;
-                }
+            uint64_t *r = row(y, z);
+            for (int x = bit_next_set(r, 0, d.x); x < d.x;) {
+                const int x1 = bit_next_clear(r, x, d.x) - 1;
                 int y1 = y;
-                while (y1 + 1 <= y_hi) {
-                    bool row = true;
-                    for (int xx = x; xx <= x1 && row; ++xx) {
-                        row = at(xx, y1 + 1, z) != 0;
-                    }
-                    if (!row) {
-                        break;
-                    }
+                while (y1 + 1 <= y_hi && bit_run_full(row(y1 + 1, z), x, x1)) {
                     ++y1;
                 }
                 int z1 = z;
                 while (z1 + 1 < d.z) {
                     bool plane = true;
                     for (int yy = y; yy <= y1 && plane; ++yy) {
-                        for (int xx = x; xx <= x1 && plane; ++xx) {
-                            plane = at(xx, yy, z1 + 1) != 0;
-                        }
+                        plane = bit_run_full(row(yy, z1 + 1), x, x1);
                     }
                     if (!plane) {
                         break;
@@ -1820,9 +1911,7 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
                 }
                 for (int zz = z; zz <= z1; ++zz) {
                     for (int yy = y; yy <= y1; ++yy) {
-                        for (int xx = x; xx <= x1; ++xx) {
-                            at(xx, yy, zz) = 0;
-                        }
+                        bit_run_clear(row(yy, zz), x, x1);
                     }
                 }
 
@@ -1834,6 +1923,7 @@ int BrickWorld::merge_blocks_into(RID body, const Chunk &c, Vector3 offset,
                 ps->body_add_shape(body, box_shape_for(size),
                         Transform3D(Basis(), centre - offset));
                 ++count;
+                x = bit_next_set(r, x1 + 1, d.x);
             }
         }
     }
