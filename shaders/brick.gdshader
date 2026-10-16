@@ -156,10 +156,6 @@ void vertex() {
 
 const float TAU_F = 6.28318530718;
 
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
 void fragment() {
     vec3 albedo = COLOR.rgb;
     int mat = brick_material_id(COLOR.a);
@@ -273,13 +269,23 @@ void fragment() {
         float junction = 0.0;
         float join = 0.0;
         float gap = 0.0;
-        if (face != 0) {
+        float solid = 1.0;   // the underside: rim and ribs 1, the hollow 0
+        if (face == 2 && underside_hollow) {
+            // The underside is open (ps_underside): the first layer's loops
+            // round the rim and the ribs, and the hollow between them.
+            vec2 us = ps_underside(cell, fsize);
+            solid = us.x;
+            t = us.y;
+        } else if (face != 0) {
             // A top or bottom: the outline walked once per wall (two for
             // PLA), then ONE path zigzagging diagonally from one corner to
-            // the opposite one (ps_zigzag). Its direction is hashed off
-            // the piece, so two bricks side by side read as two printed
-            // parts; a bottom -- the first layer -- runs the other way to the
-            // top, as a slicer alternates.
+            // the opposite one (ps_zigzag) -- just what the sliced G-code
+            // does. Its direction is the part's own: every copy of a part
+            // has its top lines the same way round in its own frame, so a
+            // part turned a quarter has them turned, and its studs agree
+            // (ps_top_turned). A solid bottom -- the first layer, when the
+            // underside is not drawn open -- runs the other way to the top,
+            // as a slicer alternates.
             float bw = ps_bead(face, mat);
             float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
                            min(v_uv.y, fsize.y - v_uv.y));
@@ -290,11 +296,10 @@ void fragment() {
                 // The block's own corner, in the same world metres the
                 // mesher wrote, so every fragment of a block agrees.
                 vec2 origin = v_local.xz - v_uv;
-                float flip = hash21(floor(origin / 0.35 + 0.5)) < 0.5 ? -1.0 : 1.0;
+                vec2 n = ps_top_normal(ps_top_turned(fsize, origin));
                 if (face == 2) {
-                    flip = -flip;
+                    n.y = -n.y;
                 }
-                vec2 n = vec2(0.7071, flip * 0.7071);
                 t = dot(v_uv, n) / bw;
                 float e = d2 - wall;
                 vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
@@ -330,13 +335,34 @@ void fragment() {
             // with the rest of the pattern once it is under a pixel.
             float show = gap * (1.0 - smoothstep(print_fade_begin, print_fade_end, dist))
                     * (1.0 - smoothstep(resolve_begin, resolve_end, fwidth(t)));
-            albedo *= mix(1.0, 0.45, show);
+            albedo *= mix(1.0, skin_void_darken, show);
             print_rough += 0.4 * show;
         }
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
+            // The hollow: ten millimetres of shell deep, lit by what gets in
+            // past the rim. Not faded: it is as big as the part.
+            albedo *= mix(under_cavity, 1.0, solid);
+            print_rough += (1.0 - solid) * 0.35;
+        }
+        if (face == 0 && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
+            // The Z seam, on the part's low corner in X and Z: a face whose
+            // along-axis starts there (UV 0) has it just past the bevel.
+            vec3 sm = ps_seam(v_uv.x, chamfer_width + zseam_width, t, seed);
+            float sfade = (1.0 - smoothstep(print_fade_begin, print_fade_end, dist))
+                    * (1.0 - smoothstep(0.5, 1.5, fwidth(v_uv.x) / zseam_width));
+            float sw = sm.x * sfade;
+            if (sw > 0.0) {
+                vec3 gu = dFdx(VERTEX) * dFdx(v_uv.x) + dFdy(VERTEX) * dFdy(v_uv.x);
+                float gl = length(gu);
+                if (gl > 1e-8) {
+                    NORMAL = normalize(NORMAL + gu / gl * sm.y * sm.z * 0.55 * sw);
+                }
+                albedo *= 1.0 - 0.06 * sw * sm.z;
+                print_rough += 0.12 * sw;
+            }
         }
     }
 

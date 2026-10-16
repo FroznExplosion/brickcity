@@ -14,14 +14,19 @@
 
 group_uniforms top_paths;
 // 0: a 45-degree raster, what a slicer does on a flat top by default.
-// 1: a STUD. Its top is one path spiralling in to the centre, following the
-//    stud's own N-sided outline -- the slicer walks the shape it is given, and
-//    this stud is an octagon (PieceMeshes.stud).
+// 1: a STUD. Its top is what the sliced G-code shows on every stud: the
+//    outline walked twice (the walls, MAT_WALLS), following the stud's own
+//    N-sided shape -- the slicer walks the shape it is given, and this stud
+//    is an octagon (PieceMeshes.stud) -- and inside them a few short lines at
+//    45 degrees, the SAME way as its brick's top. It was a spiral in to the
+//    centre, which no slicer prints. The stud's own frame is turned with its
+//    brick (BrickWorld::stud_turn), so the lines here are one fixed diagonal.
 //
-//    The corners are ROUNDED, by a fifth of a bead. Concentric loops with sharp
-//    corners drew eight hard creases on every stud: the ridge normal swings
-//    straight across the corner's bisector. A real nozzle cannot turn on a
-//    point either, so the path rounds every corner a little, and so does this.
+//    The walls' corners are ROUNDED, by a fifth of a bead. Concentric loops
+//    with sharp corners drew eight hard creases on every stud: the ridge
+//    normal swings straight across the corner's bisector. A real nozzle
+//    cannot turn on a point either, so the path rounds every corner a little,
+//    and so does this.
 uniform int top_mode : hint_range(0, 1) = 0;
 uniform int contour_sides : hint_range(3, 16) = 8;
 uniform float contour_radius = 0.0685;   // the outline's corner radius: where the spiral starts
@@ -111,19 +116,28 @@ void fragment() {
     if (print_lines_enabled && ps_printed(mat)) {
         float t;
         float t_d;
+        float junction = 0.0;
         if (face != 0) {
             float bw = ps_bead(face, mat);
-            if (top_mode == 1) {
-                // One bead a turn, in to the centre, along the outline.
-                // `t` steps by exactly one where the angle wraps, which
-                // fract() never sees; the derivatives take the unwrapped
-                // count instead.
-                float turn = atan(v_local.z, v_local.x) / PS_TAU + 0.5;
-                // A finer line than a brick's skin: a real stud top is
-                // 4.8 mm across and takes five or six turns of 0.4 mm.
-                bw *= 0.7;
-                t_d = ngon_depth_round(v_local.xz, contour_sides, contour_radius, bw * 0.2) / bw;
-                t = t_d + turn;
+            if (top_mode == 1 && face == 1) {
+                // The walls round the outline, then the diagonals. A real
+                // stud top is 4.8 mm across: two 0.45 mm loops and about
+                // seven lines inside them.
+                float depth = ngon_depth_round(v_local.xz, contour_sides, contour_radius,
+                        bw * 0.2);
+                float wall = float(ps_walls(mat)) * bw;
+                if (depth < wall) {
+                    t = depth / bw;
+                } else {
+                    t = dot(v_local.xz, vec2(0.7071, 0.7071)) / bw;
+                }
+                t_d = t;
+                // Where the lines meet the inner wall, the fine dark line
+                // the brick's top has too.
+                if (wall > 0.0) {
+                    float jw = 0.18 * bw + fwidth(depth);
+                    junction = (1.0 - smoothstep(0.0, jw, abs(depth - wall))) * 0.6;
+                }
             } else {
                 t = dot(v_local.xz, vec2(0.7071, face == 2 ? -0.7071 : 0.7071)) / bw;
                 t_d = t;
@@ -139,7 +153,7 @@ void fragment() {
             t_d = t;
         }
         // A stud is one shared mesh: one seed for all of them.
-        ps_beads(t, t_d, face, mat, dist, VERTEX, 0.0, 0.0, 0.0,
+        ps_beads(t, t_d, face, mat, dist, VERTEX, 0.0, junction, 0.0,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);

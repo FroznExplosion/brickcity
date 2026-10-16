@@ -795,6 +795,22 @@ Array BrickWorld::split_studs(const PackedFloat32Array &buffer, Vector3 eye,
     return out;
 }
 
+// Which way a part's top was printed, in the chunk's frame: every copy of a
+// part comes off the printer with its top lines the same way round in its
+// own frame, so a part turned a quarter is a part whose lines are turned.
+// Long along X -- the way it was printed -- or along Z, turned. A square part
+// says nothing about how it was turned, so its corner cell's hash does.
+// brick.gdshader / print_surface.gdshaderinc (ps_top_turned) works the same
+// out of a face's own size and corner, and must agree: the hash is the same
+// integer one.
+bool BrickWorld::stud_turn(const Vector3i &size, const Vector3i &corner) {
+    if (size.x != size.z) {
+        return size.z > size.x;
+    }
+    const uint32_t h = ((uint32_t)corner.x * 73856093u) ^ ((uint32_t)corner.z * 19349663u);
+    return ((h >> 4) & 1u) != 0;
+}
+
 PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furniture) const {
     PackedFloat32Array out;
     if (!valid_chunk(chunk_id)) {
@@ -804,14 +820,21 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
 
     // Sixteen floats: three rows of four (basis columns interleaved with the
     // origin, as MultiMesh.set_buffer wants), then rgba.
-    auto push = [&out](float px, float py, float pz, bool down, const Color &col) {
+    auto push = [&out](float px, float py, float pz, bool down, bool turn, const Color &col) {
         // A downward stud is the same mesh turned 180 degrees about X -- a
         // proper rotation, so the winding stays right. A negative Y scale would
         // mirror it and the stud would render inside out.
         const float sy = down ? -1.0f : 1.0f;
-        out.push_back(1.0f); out.push_back(0.0f); out.push_back(0.0f); out.push_back(px);
-        out.push_back(0.0f); out.push_back(sy);   out.push_back(0.0f); out.push_back(py);
-        out.push_back(0.0f); out.push_back(0.0f); out.push_back(sy);   out.push_back(pz);
+        // A TURNED stud is the same mesh a quarter turn about Y first. Its
+        // shape does not change -- an octagon, or a square post, goes onto
+        // itself -- but its own frame does, and the printed surface reads the
+        // top's toolpath in that frame (printed_core.gdshaderinc): it lies the
+        // way its brick's top does (stud_turn).
+        // Rows of the basis: Rx(down) * Ry(turn).
+        const float t = turn ? 1.0f : 0.0f, u = turn ? 0.0f : 1.0f;
+        out.push_back(u);       out.push_back(0.0f); out.push_back(t);       out.push_back(px);
+        out.push_back(0.0f);    out.push_back(sy);   out.push_back(0.0f);    out.push_back(py);
+        out.push_back(-t * sy); out.push_back(0.0f); out.push_back(u * sy);  out.push_back(pz);
         // Alpha is the material (block_rgba), so a stud is shaded as what its
         // brick is made of: a steel brick has steel studs.
         out.push_back(col.r); out.push_back(col.g); out.push_back(col.b); out.push_back(col.a);
@@ -831,6 +854,7 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
         const Archetype &a = archetypes[b.archetype];
         const Vector3i base = b.cell - c.origin;
         const Color col = block_rgba(b.material, b.colour);
+        const bool turn = stud_turn(a.size, base);
 
         for (const Archetype::SurfaceCell &sc : a.top_cells) {
             if (a.up_at(sc.x, sc.z) != FACE_STUD) {
@@ -841,7 +865,7 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
                 continue; // covered: inside the brick above
             }
             push(((float)cell.x + 0.5f) * STUD_M, (float)(cell.y + 1) * PLATE_M,
-                    ((float)cell.z + 0.5f) * STUD_M, false, col);
+                    ((float)cell.z + 0.5f) * STUD_M, false, turn, col);
         }
         for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
             if (a.down_at(sc.x, sc.z) != FACE_STUD) {
@@ -852,7 +876,7 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
                 continue;
             }
             push(((float)cell.x + 0.5f) * STUD_M, (float)cell.y * PLATE_M,
-                    ((float)cell.z + 0.5f) * STUD_M, true, col);
+                    ((float)cell.z + 0.5f) * STUD_M, true, turn, col);
         }
     }
     return out;

@@ -18,6 +18,12 @@
 //            textured PEI a matte powder-coat grain. The first layer is
 //            squashed flattest of all, so its lines barely show.
 //
+// What a slicer really lays down was measured, not guessed (2026-10-16): the
+// printable bricks (Documents/brickcity-print) sliced in PrusaSlicer 2.9.6 at
+// 0.2 mm layers, 0.4 mm nozzle, Arachne walls, monotonic top and bottom,
+// 45-degree fill, and the G-code drawn layer by layer. What it said is below,
+// a uniform at a time; Docs/PrintLook.md has the pictures' findings.
+//
 // The lighting is already physically based (GGX, Schlick Fresnel at plastic's
 // 4 %): this decides the inputs -- roughness per face, the bead relief, and
 // ANISOTROPY with its direction, which is the one part a flat material cannot
@@ -43,10 +49,13 @@ uniform bool print_lines_enabled = true;
 // Snapped to a whole number a plate (ps_layer), so a material with coarser
 // or finer layers (MAT_LAYER) still finishes each brick on a whole layer.
 uniform float layer_height = 0.00875;
-// Top and bottom lines. Wider than a side layer is tall: the nozzle squashes
-// a skin line flat, and the first layer is squashed flatter still into the bed.
-uniform float top_bead_width = 0.028;
-uniform float bottom_bead_width = 0.032;
+// Top and bottom lines, centre to centre: 0.41 mm on the sliced top (a 0.45 mm
+// line overlapping its neighbour), 18 mm here. It was 28 -- half as coarse
+// again as the real thing, and that, more than anything, was what made the
+// tops read as corrugated rather than printed. The first layer's loops
+// (the rims and ribs of an underside) are a little wider, squashed into the bed.
+uniform float top_bead_width = 0.018;
+uniform float bottom_bead_width = 0.020;
 // Half-width of the shadow between two beads, as a fraction of one bead.
 uniform float bead_groove : hint_range(0.0, 0.5) = 0.17;
 uniform float layer_darken : hint_range(0.0, 1.0) = 0.86;
@@ -55,6 +64,10 @@ uniform float layer_relief : hint_range(0.0, 1.0) = 0.28;
 // No printer lays two identical layers -- a little more plastic, a degree
 // hotter. A per-layer shade wobble on the sides.
 uniform float layer_wobble : hint_range(0.0, 0.3) = 0.06;
+// ...and a per-layer wobble in how far each layer stands out: a layer a hair
+// fatter catches the light as a line of its own. The Z variation of a real
+// print, the same layer for the same seed every time.
+uniform float layer_relief_wobble : hint_range(0.0, 1.0) = 0.45;
 // Where the pattern starts and finishes dissolving, in beads a pixel. Below
 // ~0.3 a bead is several pixels and worth drawing; past ~0.75 it is under a
 // pixel and drawing it only makes it crawl (terrain.gdshader, the long version).
@@ -69,6 +82,29 @@ uniform float print_fade_end = 20.0;
 // distance: sub-pixel lines are exactly what anisotropy stands in for.
 uniform float print_anisotropy : hint_range(0.0, 0.9) = 0.55;
 
+// The voids where the top's diagonals meet the wall with no connector
+// between them (ps_zigzag): how dark. Sliced, they are small: a speck at the
+// end of every other line, not a tooth.
+uniform float skin_void_darken : hint_range(0.0, 1.0) = 0.7;
+// The Z seam: where every layer's outer wall starts and stops, all on one
+// corner ("aligned", the slicer default) -- a vertical line of small blobs.
+uniform float zseam_strength : hint_range(0.0, 1.0) = 0.6;
+uniform float zseam_width = 0.014;   // metres, half of it each side
+
+group_uniforms underside;
+// The underside of a printed part is OPEN: a brick is a shell, and what the
+// bed side shows is its rim, the ribs that stand in for tubes, and the
+// hollow between them. Sliced: a 1x1 has a rim alone; a 1xN a rim and solid
+// pins between the studs; a 2xN and up a lattice of diamonds -- one round
+// every inside corner of the stud grid, its points half a stud out -- with
+// ribs along the grid lines from the diamonds to the rim (ps_underside).
+uniform bool underside_hollow = true;
+uniform float under_rim = 0.057;        // 1.3 mm of wall
+uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
+uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
+// How dark the hollow reads: the inside of a shell ten millimetres deep.
+uniform float under_cavity : hint_range(0.0, 1.0) = 0.3;
+
 group_uniforms finish;
 // Added to the material's roughness on a printed side, taken off on a top.
 uniform float side_dullness : hint_range(0.0, 0.5) = 0.08;
@@ -78,7 +114,30 @@ uniform float top_gloss : hint_range(0.0, 0.5) = 0.06;
 uniform float molded_gloss : hint_range(0.1, 1.0) = 0.5;
 
 const float PS_PLATE = 0.14;   // brick_grid.h PLATE_M
+const float PS_STUD = 0.35;    // brick_grid.h STUD_M
 const float PS_TAU = 6.28318530718;
+
+// Is this part turned a quarter from the way it was printed? Its top's lines
+// lie the same way round in its own frame on every copy -- the bed decides,
+// not the part -- so a part lying along Z is one turned. A square part does
+// not say, so the hash of its corner cell does. BrickWorld::stud_turn decides
+// the same for its studs, the same integer hash, so a brick and its studs
+// agree. `fsize` is the top face's size, `corner` its low corner, both in the
+// chunk's metres.
+bool ps_top_turned(vec2 fsize, vec2 corner) {
+    if (abs(fsize.x - fsize.y) > 0.01) {
+        return fsize.y > fsize.x;
+    }
+    ivec2 cell = ivec2(floor(corner / PS_STUD + 0.5));
+    uint h = (uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u);
+    return ((h >> 4u) & 1u) != 0u;
+}
+
+// The direction the top's lines are counted along (t = dot(p, n) / bead):
+// one diagonal in the part's own frame, the other turned.
+vec2 ps_top_normal(bool turned) {
+    return turned ? vec2(0.7071, -0.7071) : vec2(0.7071, 0.7071);
+}
 
 // 0 side, 1 top, 2 bottom, from a normal in the part's own space.
 int ps_face(vec3 n) {
@@ -194,6 +253,11 @@ void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, fl
         // Where two beads are one path turning round there is no valley
         // between them, so no ridge either side of one.
         float ridge = sin(ph * PS_TAU) * mix(1.0, 0.25, join);
+        if (face == 0) {
+            // This layer's own height of bead: the Z variation.
+            float h = bm_hash(vec2(floor(t), seed * 53.0 + 7.0));
+            ridge *= 1.0 + (h - 0.5) * 2.0 * layer_relief_wobble;
+        }
         normal = normalize(normal + aniso_dir * ridge
                 * layer_relief * MAT_RELIEF[mat] * fk.y * fade * relief_k);
         // ...and roughness takes over what the normal drops: an unresolved
@@ -246,6 +310,55 @@ vec2 ps_zigzag(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float e, float bw, fl
     float g = abs(fract(t) - 0.5);
     float half_w = 0.3 * (1.0 - e / (0.7 * bw));
     return vec2(0.0, clamp((half_w - g) / max(aa, 1e-4) + 0.5, 0.0, 1.0));
+}
+
+// The underside of a part, open (see underside_hollow). `uv` is the point on
+// the bottom face, `fsize` the face, both in metres. Returns (how solid:
+// 1 on rim or rib, 0 in the hollow; the loop count across the solid, for the
+// beads -- the first layer's walls follow the shape they outline).
+vec2 ps_underside(vec2 uv, vec2 fsize) {
+    vec2 n = max(floor(fsize / PS_STUD + 0.5), vec2(1.0));
+    float edge = min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y));
+    float sd = edge - under_rim;                  // < 0: in the rim
+    vec2 p = uv / PS_STUD;
+    if (min(n.x, n.y) < 1.5) {
+        // 1xN: pins down the middle, between the studs.
+        if (max(n.x, n.y) > 1.5) {
+            bool along_x = n.x > n.y;
+            float l = along_x ? p.x : p.y;
+            float k = clamp(floor(l + 0.5), 1.0, max(n.x, n.y) - 1.0);
+            vec2 c = along_x ? vec2(k, 0.5) : vec2(0.5, k);
+            sd = min(sd, length(p - c) * PS_STUD - under_pin);
+        }
+    } else {
+        // A diamond round the nearest inside corner of the stud grid...
+        vec2 v = clamp(floor(p + 0.5), vec2(1.0), n - 1.0);
+        vec2 q = p - v;
+        float m = abs(q.x) + abs(q.y);
+        sd = min(sd, abs(m - 0.5) * 0.7071 * PS_STUD - under_rib);
+        // ...and the grid lines out from it, outside it.
+        if (m > 0.5) {
+            vec2 g = clamp(floor(p + 0.5), vec2(1.0), n - 1.0);
+            float dl = min(abs(p.x - g.x), abs(p.y - g.y)) * PS_STUD;
+            sd = min(sd, dl - under_rib);
+        }
+    }
+    float aa = max(fwidth(sd), 1e-5);
+    return vec2(clamp(0.5 - sd / aa, 0.0, 1.0), max(-sd, 0.0) / bottom_bead_width);
+}
+
+// The Z seam on a side face: a vertical line of blobs, one a layer, a little
+// in from the corner `at` (metres along the face). `u` is the point along the
+// face, `t` the layer count, `seed` the face's. Returns (how much seam, which
+// side of its line, the blob's height).
+vec3 ps_seam(float u, float at, float t, float seed) {
+    float d = u - at;
+    float w = 1.0 - smoothstep(zseam_width * 0.5, zseam_width, abs(d));
+    // A blob a layer, as big as that layer's start and stop happened to be.
+    float blob = 0.4 + 0.6 * bm_hash(vec2(floor(t), seed * 31.0 + 3.0));
+    float ph = fract(t) - 0.5;
+    blob *= 1.0 - 4.0 * ph * ph;
+    return vec3(w * zseam_strength, sign(d), blob);
 }
 
 // Textured PEI's powder-coat grain on a bottom face. `p` is the face in
