@@ -309,8 +309,9 @@ func _shot() -> void:
 			var t := a * TAU / 32.0
 			circle.append(Vector2(mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
 		sketch_fill(circle)
-		tool = "sketch"
 		work_plane = "side"
+		rail_pick("sketch")
+		sketch_draw = "brush"
 		_look_at_build()
 		var f := FileAccess.open("user://asset_shots/ramp.json", FileAccess.WRITE)
 		if f != null:
@@ -816,6 +817,10 @@ func _process(dt: float) -> void:
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_run_on = false
 	run_step()
+	if tool == "sketch":
+		_ghost.visible = false
+		_ghost_studs.visible = false
+	_rail_process()
 	if _dragging:
 		_drag_to = _cell
 	_draw_tool()
@@ -835,7 +840,7 @@ func _process(dt: float) -> void:
 	_ruler.text = ruler_text()
 	# Stacked on the part label, which sits on the hotbar: measured, not guessed.
 	_ruler.reset_size()
-	_ruler.position = Vector2(12, vp.y - 136 - _ruler.size.y)
+	_ruler.position = Vector2(_rail_right(), vp.y - 136 - _ruler.size.y)
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
 
@@ -1228,6 +1233,7 @@ func _setup_parts() -> void:
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
 	_build_phase3(_ruler.get_parent() as CanvasLayer)
+	_build_rail(_ruler.get_parent() as CanvasLayer)
 	_build_preview(_ruler.get_parent() as CanvasLayer)
 	_build_help(_ruler.get_parent() as CanvasLayer)
 	var env := OS.get_environment("BRICKCITY_BLENDER")
@@ -1434,7 +1440,7 @@ func toggle_point_here() -> void:
 func _build_point_panel(layer: CanvasLayer) -> void:
 	_point_panel = PanelContainer.new()
 	_point_panel.visible = false
-	_point_panel.position = Vector2(12, 300)
+	_point_panel.position = Vector2(RAIL_W + 24, 300)
 	layer.add_child(_point_panel)
 	var box := VBoxContainer.new()
 	_point_panel.add_child(box)
@@ -1681,14 +1687,14 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 func set_tool(t: String) -> void:
 	tool = t
 	_dragging = false
-	_tool_panel.visible = t != ""
 	_shape_box.visible = t == "shape"
 	_select_box.visible = t == "select"
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
-	_shape_box.get_parent().get_parent().visible = t in ["shape", "select", "sketch"]
 	_sketch_box.visible = t == "sketch"
+	if t != "" and _painting:
+		_set_painting(false)
 	_outlines_dirty = true
 
 
@@ -2594,8 +2600,8 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
-[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3).
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
 [b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
@@ -2978,15 +2984,18 @@ func _sketch_key() -> String:
 func _sketch_input(e: InputEvent) -> bool:
 	if tool != "sketch":
 		return false
+	if sketch_draw == "polygon":
+		return _polygon_input(e)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			_sketch.clear()
 			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
-			_sketch_add()
+			var q = _sketch_mouse()
+			if q != null:
+				_sketch_anchor = q
+				_sketch.append(q)
 		else:
-			if _sketch.size() >= 3:
-				sketch_region(_sketch, _sketch_out)
-			_sketch.clear()
+			_sketch_commit()
 		return true
 	if e is InputEventMouseMotion and not _sketch.is_empty() and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 			or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
@@ -2995,14 +3004,86 @@ func _sketch_input(e: InputEvent) -> bool:
 	return false
 
 
-func _sketch_add() -> void:
+## The point of the working plane under the mouse, in sketch numbers, or null.
+func _sketch_mouse() -> Variant:
 	var ray := _mouse_ray()
 	var hit = work_plane_hit(ray[0], ray[1])
-	if hit == null:
+	return null if hit == null else sketch_point(hit)
+
+
+func _sketch_add() -> void:
+	var q = _sketch_mouse()
+	if q == null:
 		return
-	var q := sketch_point(hit)
-	if _sketch.is_empty() or q.distance_to(_sketch.back()) > 0.3:
+	match sketch_draw:
+		"rect", "ellipse":
+			_sketch.assign(drag_shape(sketch_draw, _sketch_anchor, q))
+		"brush":
+			if _sketch.is_empty() or q.distance_to(_sketch.back()) > maxf(0.25, brush_size * 0.25):
+				_sketch.append(q)
+		_:
+			if _sketch.is_empty() or q.distance_to(_sketch.back()) > 0.3:
+				_sketch.append(q)
+
+
+## What the stroke under way comes to, into the sketch: an outline, or a brush's path.
+func _sketch_commit() -> void:
+	if sketch_draw == "brush" and not _sketch.is_empty():
+		sketch_region_entry(brush_entry(_sketch, brush_size, brush_shape == "square", work_plane), _sketch_out)
+	elif _sketch.size() >= 3:
+		sketch_region(_sketch, _sketch_out)
+	_sketch.clear()
+
+
+## Polygon: each click a corner (the first click's button says in or out); a click on
+## the first corner, a double click or Enter closes it, Backspace takes the last corner.
+func _polygon_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		var q = _sketch_mouse()
+		if q == null:
+			return true
+		if _sketch.is_empty():
+			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
+		elif e.double_click or (_sketch.size() >= 3 and q.distance_to(_sketch[0]) < 0.7):
+			_sketch_commit()
+			return true
 		_sketch.append(q)
+		return true
+	if e is InputEventKey and e.pressed and not _sketch.is_empty():
+		match e.keycode:
+			KEY_ENTER, KEY_KP_ENTER:
+				_sketch_commit()
+				return true
+			KEY_BACKSPACE:
+				_sketch.pop_back()
+				return true
+	return false
+
+
+## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline.
+static func drag_shape(kind: String, a: Vector2, b: Vector2) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var lo := Vector2(minf(a.x, b.x), minf(a.y, b.y))
+	var hi := Vector2(maxf(a.x, b.x), maxf(a.y, b.y))
+	if kind == "rect":
+		out.assign([lo, Vector2(hi.x, lo.y), hi, Vector2(lo.x, hi.y)])
+		return out
+	var c := (lo + hi) * 0.5
+	var r := (hi - lo) * 0.5
+	for i in 32:
+		var t := TAU * i / 32.0
+		out.append(c + Vector2(cos(t) * r.x, sin(t) * r.y))
+	return out
+
+
+## A brush stroke as a sketch entry: its path, and its reach across and up the plane (a
+## stud across is two and a half plates up on the side and front planes).
+static func brush_entry(path: Array, size: int, square: bool, plane: String) -> Dictionary:
+	var pts := []
+	for q in path:
+		pts.append([q.x, q.y])
+	var rx := maxf(0.5, float(size))
+	return {"brush": pts, "rx": rx, "ry": rx * (1.0 if plane == "top" else 2.5), "square": square}
 
 
 ## A point of the working plane in the sketch's own two numbers: across the plane and up
@@ -3028,10 +3109,17 @@ func _sketch_world(q: Vector2, plane: String, at: float) -> Vector3:
 ## `remove` area out. The part's bricks are worked out again from what the sketch holds,
 ## as one undo. Returns how many bricks it laid.
 func sketch_region(outline: Array, remove: bool = false) -> int:
-	var key := _sketch_key()
 	var plain := []
 	for q in outline:
 		plain.append([q.x, q.y])
+	return sketch_region_entry(plain, remove)
+
+
+## An outline ([[x, y] ...]) or a brush stroke (`brush_entry`) into the current part's
+## sketch on the working plane.
+func sketch_region_entry(entry: Variant, remove: bool = false) -> int:
+	var key := _sketch_key()
+	var plain = entry
 	var sk: Dictionary
 	if sketches.has(key):
 		sk = (sketches[key] as Dictionary).duplicate()
@@ -3209,7 +3297,9 @@ func sketch_cells(sk: Dictionary) -> Dictionary:
 	return cells
 
 
-static func region_cells(poly: Array) -> Dictionary:
+static func region_cells(poly: Variant) -> Dictionary:
+	if poly is Dictionary:
+		return brush_cells(poly)
 	var pts := PackedVector2Array()
 	for q in poly:
 		pts.append(Vector2(float(q[0]), float(q[1])))
@@ -3269,6 +3359,32 @@ static func region_cells(poly: Array) -> Dictionary:
 		for u in range(lo.x, hi.x):
 			if map[(v - lo.y + 1) * w + (u - lo.x + 1)] != 2:
 				out[Vector2i(u, v)] = true
+	return out
+
+
+## The cells a brush stroke covers: every cell whose centre is within its reach of the
+## path (an ellipse, or a box when square), the path walked in steps shorter than that.
+static func brush_cells(entry: Dictionary) -> Dictionary:
+	var out := {}
+	var rx := float(entry.get("rx", 0.5))
+	var ry := float(entry.get("ry", 0.5))
+	var square := bool(entry.get("square", false))
+	var path: Array = entry.get("brush", [])
+	var pts: Array[Vector2] = []
+	for i in path.size():
+		var b := Vector2(float(path[i][0]), float(path[i][1]))
+		if i > 0:
+			var a: Vector2 = pts.back()
+			var steps := int(ceil(maxf(absf(b.x - a.x) / (rx * 0.5), absf(b.y - a.y) / (ry * 0.5))))
+			for k in range(1, steps):
+				pts.append(a.lerp(b, float(k) / steps))
+		pts.append(b)
+	for p in pts:
+		for u in range(int(floor(p.x - rx)), int(ceil(p.x + rx)) + 1):
+			for v in range(int(floor(p.y - ry)), int(ceil(p.y + ry)) + 1):
+				var d := Vector2((u + 0.5 - p.x) / rx, (v + 0.5 - p.y) / ry)
+				if (maxf(absf(d.x), absf(d.y)) <= 1.0) if square else (d.length_squared() <= 1.0):
+					out[Vector2i(u, v)] = true
 	return out
 
 
@@ -3378,11 +3494,27 @@ func _draw_sketch(im: ImmediateMesh) -> void:
 					im.surface_set_color(Color(1.0, 0.9, 0.2))
 					im.surface_add_vertex(_sketch_world(Vector2(c) + corner, sk.plane, float(sk.at)))
 					any = true
-	if _sketch.size() >= 2:
-		var col := Color(1.0, 0.35, 0.3) if _sketch_out else Color(1, 1, 1)
-		for i in _sketch.size():
-			var a := _sketch[i]
-			var b := _sketch[(i + 1) % _sketch.size()]
+	var col := Color(1.0, 0.35, 0.3) if _sketch_out else Color(1, 1, 1)
+	var mouse = _sketch_mouse()
+	var line: Array[Vector2] = _sketch.duplicate()
+	var closed := sketch_draw in ["outline", "rect", "ellipse"]
+	if sketch_draw == "polygon" and not line.is_empty() and mouse != null:
+		line.append(mouse)
+	if sketch_draw == "brush" and mouse != null:
+		# The brush's reach round the cursor.
+		var e := brush_entry([mouse], brush_size, brush_shape == "square", work_plane)
+		var ring: Array[Vector2] = drag_shape("rect" if e.square else "ellipse",
+				mouse - Vector2(e.rx, e.ry), mouse + Vector2(e.rx, e.ry))
+		for i in ring.size():
+			im.surface_set_color(Color(0.6, 0.9, 1.0))
+			im.surface_add_vertex(_sketch_world(ring[i], work_plane, _plane_value(work_plane)))
+			im.surface_set_color(Color(0.6, 0.9, 1.0))
+			im.surface_add_vertex(_sketch_world(ring[(i + 1) % ring.size()], work_plane, _plane_value(work_plane)))
+			any = true
+	if line.size() >= 2:
+		for i in (line.size() if closed else line.size() - 1):
+			var a := line[i]
+			var b := line[(i + 1) % line.size()]
 			im.surface_set_color(col)
 			im.surface_add_vertex(_sketch_world(a, work_plane, _plane_value(work_plane)))
 			im.surface_set_color(col)
@@ -3491,3 +3623,243 @@ func _input(e: InputEvent) -> void:
 	super._input(e)
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
+
+
+# ---------------------------------------------------------------------------
+# Round 4: the tool rail and the brushes
+# ---------------------------------------------------------------------------
+
+## The rail's tools: id, name, key. "place" is no tool at all: the workshop's own hand.
+const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Sketch", "Alt D"],
+		["shape", "Shapes", "K"], ["select", "Select", "L"], ["measure", "Measure", "Alt M"]]
+const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
+		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
+const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
+
+const RAIL_W := 236.0
+var sketch_draw := "outline"
+var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
+var brush_shape := "round"   # or "square", for both
+var paint_what := "both"
+var _sketch_anchor := Vector2.ZERO
+var _rail: PanelContainer
+var _rail_buttons := {}
+var _brush_box: VBoxContainer
+var _brush_slider: HSlider
+var _brush_label: Label
+var _paint_box: VBoxContainer
+var _draw_box: VBoxContainer
+var _draws: OptionButton
+
+
+func _build_rail(layer: CanvasLayer) -> void:
+	_rail = PanelContainer.new()
+	_rail.position = Vector2(12, 60)
+	_rail.custom_minimum_size.x = RAIL_W
+	_rail.size.x = RAIL_W
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.11, 0.12, 0.15, 0.96)
+	bg.set_content_margin_all(8)
+	bg.set_corner_radius_all(4)
+	_rail.add_theme_stylebox_override("panel", bg)
+	layer.add_child(_rail)
+	var box := VBoxContainer.new()
+	_rail.add_child(box)
+	var title := Label.new()
+	title.text = "Tools"
+	box.add_child(title)
+	var group := ButtonGroup.new()
+	for t in RAIL_TOOLS:
+		var b := Button.new()
+		b.text = "%s   %s" % [t[1], t[2]]
+		b.toggle_mode = true
+		b.button_group = group
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(rail_pick.bind(String(t[0])))
+		box.add_child(b)
+		_rail_buttons[t[0]] = b
+	box.add_child(HSeparator.new())
+
+	# The brush: paint and sketch share it.
+	_brush_box = VBoxContainer.new()
+	box.add_child(_brush_box)
+	_brush_label = Label.new()
+	_brush_box.add_child(_brush_label)
+	_brush_slider = HSlider.new()
+	_brush_slider.min_value = 0
+	_brush_slider.max_value = 8
+	_brush_slider.step = 1
+	_brush_slider.focus_mode = Control.FOCUS_NONE
+	_brush_slider.value_changed.connect(func(v: float) -> void: set_brush_size(int(v)))
+	_brush_box.add_child(_brush_slider)
+	var shapes := OptionButton.new()
+	shapes.add_item("round")
+	shapes.add_item("square")
+	shapes.focus_mode = Control.FOCUS_NONE
+	shapes.item_selected.connect(func(i: int) -> void: brush_shape = "round" if i == 0 else "square")
+	_brush_box.add_child(shapes)
+
+	_paint_box = VBoxContainer.new()
+	box.add_child(_paint_box)
+	var paints := OptionButton.new()
+	for w in PAINT_WHAT:
+		paints.add_item("paints " + w[1])
+	paints.focus_mode = Control.FOCUS_NONE
+	paints.item_selected.connect(func(i: int) -> void: paint_what = PAINT_WHAT[i][0])
+	_paint_box.add_child(paints)
+
+	_draw_box = VBoxContainer.new()
+	box.add_child(_draw_box)
+	var dl := Label.new()
+	dl.text = "draw with"
+	_draw_box.add_child(dl)
+	var draws := OptionButton.new()
+	_draws = draws
+	for d in SKETCH_DRAWS:
+		draws.add_item(d[1])
+	draws.focus_mode = Control.FOCUS_NONE
+	draws.item_selected.connect(func(i: int) -> void:
+		sketch_draw = SKETCH_DRAWS[i][0]
+		_sketch.clear())
+	_draw_box.add_child(draws)
+
+	# The open tool's own options, which had a panel of their own.
+	var inner := _tool_panel.get_child(0)
+	_tool_panel.remove_child(inner)
+	box.add_child(inner)
+	_tool_panel.queue_free()
+	_tool_panel = null
+	_fit_rail(box)
+	set_brush_size(brush_size)
+
+
+## Everything in the rail kept to its width: labels wrap, choices clip their text.
+func _fit_rail(n: Node) -> void:
+	for c in n.get_children():
+		if c is Label:
+			(c as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			(c as Label).custom_minimum_size.x = RAIL_W - 16
+		elif c is OptionButton:
+			(c as OptionButton).clip_text = true
+			(c as OptionButton).custom_minimum_size.x = RAIL_W - 16
+		elif c is HBoxContainer:
+			for k in c.get_children():
+				if k is Label:
+					(k as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+					(k as Label).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					(k as Label).custom_minimum_size.x = 120
+		_fit_rail(c)
+
+
+## Where things to the right of the rail start.
+func _rail_right() -> float:
+	return 12.0 if _rail == null else _rail.position.x + maxf(RAIL_W, _rail.size.x) + 12.0
+
+
+## A rail button: the tool it names, everything else put down.
+func rail_pick(id: String) -> void:
+	match id:
+		"place":
+			set_tool("")
+			_set_painting(false)
+			set_measure(false)
+		"paint":
+			set_tool("")
+			set_measure(false)
+			_set_painting(true)
+		"measure":
+			set_tool("")
+			_set_painting(false)
+			set_measure(true)
+		_:
+			set_measure(false)
+			set_tool(id)
+
+
+func rail_active() -> String:
+	if _painting:
+		return "paint"
+	if measure_on:
+		return "measure"
+	if _rail_buttons.has(tool):
+		return tool
+	return "place"
+
+
+## The brush in hand: the paint brush while painting, else the sketch brush.
+func set_brush_size(n: int) -> void:
+	if _painting:
+		_paint_radius = clampi(n, 0, PAINT_RADIUS_MAX)
+		if _paint_palette != null:
+			_paint_palette.info = _paint_info()
+	else:
+		brush_size = clampi(n, 0, 8)
+
+
+## Each frame: the rail shows the tool in hand, the brush its size (the - and = keys
+## size the paint brush), and only the options of what is open.
+func _rail_process() -> void:
+	if _rail == null:
+		return
+	var on := rail_active()
+	for id in _rail_buttons:
+		(_rail_buttons[id] as Button).set_pressed_no_signal(id == on)
+	var n := _paint_radius if on == "paint" else brush_size
+	_brush_slider.set_value_no_signal(n)
+	_brush_box.visible = on == "paint" or (on == "sketch" and sketch_draw == "brush")
+	if on == "paint" and n == 0:
+		_brush_label.text = "brush: one brick"
+	elif n == 0:
+		_brush_label.text = "brush: half a stud round"
+	else:
+		_brush_label.text = "brush: %d stud%s round" % [n, "" if n == 1 else "s"]
+	_paint_box.visible = on == "paint"
+	_draw_box.visible = on == "sketch"
+	_rail.position.y = 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	_rail.size.x = RAIL_W
+	if _paint_palette != null:
+		_paint_palette.position = Vector2(_rail_right(), _rail.position.y)
+	# The workshop's own readout moves over beside the rail.
+	_hud.position = Vector2(_rail_right(), _rail.position.y)
+	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(sketch_draw))
+
+
+## Paint only what the rail says: colour, material, or both (the workshop's own).
+func _paint_one(rid: int) -> bool:
+	if paint_what == "both":
+		return super._paint_one(rid)
+	if rid < 0:
+		return false
+	var c := _colour if paint_what == "colour" else recipe.colour_of(rid)
+	var m := _mat if paint_what == "material" else recipe.material_of(rid)
+	if recipe.colour_of(rid) == c and recipe.material_of(rid) == m:
+		return false
+	for e in _stroke:
+		if int(e[0]) == rid:
+			return false
+	_stroke.append([rid, recipe.colour_of(rid), recipe.material_of(rid)])
+	_repaint(rid, c, m)
+	return true
+
+
+## A square brush reaches a box round the dot rather than a ball.
+func _bricks_near(point: Vector3, reach: float) -> Array[int]:
+	if brush_shape != "square":
+		return super._bricks_near(point, reach)
+	var out: Array[int] = []
+	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+	for rid in _placed_at.size():
+		var at: Array = _placed_at[rid]
+		if int(at[0]) < 0:
+			continue
+		var box: Array = world.get_block_ticks(asm.frames[at[0]], at[1])
+		if box.is_empty():
+			continue
+		var lo := Vector3(box[0] as Vector3i) * tick
+		var hi := lo + Vector3(box[1] as Vector3i) * tick
+		var q := Vector3(clampf(point.x, lo.x, hi.x), clampf(point.y, lo.y, hi.y), clampf(point.z, lo.z, hi.z))
+		var d := (q - point).abs()
+		if maxf(d.x, maxf(d.y, d.z)) <= reach:
+			out.append(rid)
+	return out
