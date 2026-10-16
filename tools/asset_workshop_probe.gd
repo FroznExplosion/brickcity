@@ -99,6 +99,7 @@ func _tick() -> void:
 	_export()
 	_round2()
 	_round3()
+	_round4()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -658,4 +659,41 @@ func _round3() -> void:
 	_ok("and fills exactly what is left", _volume() == (30 * 30 - 4 * 4) * 2, "%d cells" % _volume())
 	_ws._undo()
 	_ok("one Z puts the corner back", _volume() == 30 * 30 * 2, "%d cells" % _volume())
+	_ws.part_width["body"] = 3
+
+
+func _round4() -> void:
+	# Stage 1: the rail and the brushes.
+	_ws.rail_pick("sketch")
+	_ok("the rail opens sketch", _ws.tool == "sketch" and _ws.rail_active() == "sketch")
+	_ws.rail_pick("paint")
+	_ok("and paint, putting sketch down", _ws._painting and _ws.tool == "" and _ws.rail_active() == "paint")
+	_ws.rail_pick("place")
+	_ok("place puts everything down", not _ws._painting and _ws.tool == "" and _ws.rail_active() == "place")
+	var rect: Array = _ws.drag_shape("rect", Vector2(14, 36), Vector2(10, 30))
+	_ok("a rectangle dragged either way has its four corners", rect.size() == 4 and rect[0] == Vector2(10, 30)
+			and rect[2] == Vector2(14, 36), str(rect))
+	var round_cells: Dictionary = _ws.brush_cells(_ws.brush_entry([Vector2(20.5, 40.5)], 2, false, "side"))
+	var square_cells: Dictionary = _ws.brush_cells(_ws.brush_entry([Vector2(20.5, 40.5)], 2, true, "side"))
+	_ok("a square brush of 2 studs on the side plane covers 5 studs by 11 plates", square_cells.size() == 55,
+			str(square_cells.size()))
+	_ok("a round one less, its middle in", round_cells.size() < 55 and round_cells.has(Vector2i(20, 40)),
+			str(round_cells.size()))
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.part_width["body"] = 2
+	_ws.sketch_region_entry(_ws.brush_entry([Vector2(10.5, 30.5), Vector2(20.5, 30.5)], 1, true, "side"))
+	_ok("a brush stroke sketches what it swept: 13 studs by 5 plates, 2 deep", _volume() == 130, "%d cells" % _volume())
+	_ws._new_build()
+	_lay("brick_1x2", Vector3i(20, 1, 20))
+	_ws._repaint(0, 3, 1)
+	_ws.paint_what = "colour"
+	_ws._colour = 5
+	_ws._mat = 0
+	_ws._stroke = []
+	_ws._paint_one(0)
+	_ok("paint, colour only, leaves the material", _ws.recipe.colour_of(0) == 5 and _ws.recipe.material_of(0) == 1,
+			"colour %d material %d" % [_ws.recipe.colour_of(0), _ws.recipe.material_of(0)])
+	_ws._end_stroke()
+	_ws.paint_what = "both"
 	_ws.part_width["body"] = 3

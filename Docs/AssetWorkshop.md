@@ -69,6 +69,26 @@ real mm, so a part can be built straight from a real gun's numbers.
 | An outline is filled **to its outermost line**, by winding rather than even-odd, with enclosed holes filled; the yellow line shows the outline of what is filled | a stroke that crossed itself or went round twice left holes |
 | **Eager slopes**: slopes on edges climbing one to three plates a stud, a plate proud of or short of the line, not only at their own two; 2x4 slopes where a part is four deep | more slopes, fewer stairs |
 
+### Round 4 (2026-10-16): tools on the left, sketch in three views, studs, explode, hands
+
+Sketching and editing by hand stutter-free first: a sketch stroke works out only the
+bricks near what changed (~140 ms -> ~12 ms on a 500-brick part), and a delete no longer
+copies every sketch.
+
+| Stage | What | How it works |
+|---|---|---|
+| 1 | **Tool rail** down the left: Place, Paint, Sketch, Shapes, Select, Studs, Points, Measure, then Explode and Hands; under them the open tool's options | the panels the keys already opened, gathered in one place; every key still works |
+| 1 | **Brushes**: paint with a brush of 0-8 studs, round or square, painting colour and material, colour only, or material only. Sketch with the same brush (drag a round or square brush to paint area in or out), or by outline, rectangle, ellipse or clicked polygon | one brush for paint and sketch, sized the same way |
+| 1 | In sketch no brick ghost: the brush or the outline is the cursor | nothing is placed one brick at a time there |
+| 2 | **A part in three views.** The first plane a part is sketched on is its base and gives it its thickness. An outline drawn for the same part on another plane is a view *through* it: area drawn in keeps only what is inside it, area drawn out cuts right through. So a receiver is a side rectangle, its charging handle slot and ejection port drawn out from the side, then from the front its top corners drawn out at an angle | three views of one part, as a draughtsman draws it. Slopes come from the side and the front: an edge seen at a slope's pitch from either gets one |
+| 2 | **Cut depth**: RMB cuts through, or N studs in from the face nearest the camera | a port is a pocket, not a hole through the gun |
+| 2 | The other parts' outlines faint on the plane; Y moves on to the next part in sketch, as anywhere | sketch a part, then the next, against the ones done |
+| 3 | **Studs anywhere**: a stud on any face of any brick, any of its six ways, on the half-stud lattice of that face. Kept with the build, drawn and exported with it | studs where a gun needs them, not only where bricks put them |
+| 3 | **Connection points on studs**: a mount or socket is placed on a stud (J on a stud) and carries its interface | a connection is where two parts meet on studs |
+| 4 | **Exploded view** (one button): every part pulled apart about ten bricks along where it sits -- barrel forward of the receiver, stock behind, grip under it, underbarrel under the barrel; the magazine where it is. Edit as normal while apart: what is placed lands in the part's own place when it closes | see and work on a part with nothing in the way |
+| 4 | **Move a whole part**: drag it (and with it the assembled place of it) | a magazine or a sight goes where the gun needs it |
+| 5 | **Hands**: the big brick hands at gun scale, the right C on the grip's point, the left on the underbarrel's (or the handguard's); **play** runs a cycle -- shoulder, fire, reload with the magazine out and in -- from the parts' points. Baked first if a part has changed (its pieces need building to move apart) | see the gun held and worked before it goes in the game |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |
