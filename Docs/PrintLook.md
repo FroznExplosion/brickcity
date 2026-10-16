@@ -33,6 +33,31 @@ brightness by print order, the seam marked):
 | The hollow's depth | about 2 mm under a plate, 8 under a brick | the view ray walked up into it six steps (`ps_under_sd`), a wall met on the way seen as one (`under_depth` 0.12, `under_wall`); flat past `under_depth_range` |
 | Slopes, cheese, rounds, arches, curves | the same 57 layers; a slope is a staircase of them -- risers and treads, wide terraces on a shallow one | layers counted up the part's height (an authored surface has no face rectangle to count in, and had NO layers until 2026-10-16); `ps_stairs`: of each layer's band, the riser takes 1 - n.y^2, the tread n.y^2 (`stair_strength`) |
 
+## 2.1 Parts that are not boxes
+
+A slope, a cheese, a round brick, an arch or a curve is an AUTHORED surface (Archetype::mesh):
+triangles, not a face rectangle, so for a long time it took none of a box's rules -- no outline, no
+bevel, no walls round its top, no layers. Now the part's own edges are found when its mesh is set
+(`BrickWorld::mark_feature_edges`), and the bake hands every triangle its distance to them, which
+is what a box's rectangle gives it:
+
+* **Real edges**: where the mesh ends, or turns by more than 30 degrees. Round a curve (22.5 a
+  facet) or across a flat face, the triangulation's own edges are not.
+* **T-junctions split first**: where a vertex lies along another triangle's edge -- an arch's beam
+  over its pillars -- that edge is cut there, so every edge is shared whole or not at all.
+* **Distance to the nearest real edges of the face**, up to three, not just the triangle's own:
+  a long edge split between two triangles is known to both, or the outline thins at the split.
+  As LINES, so linear across a triangle, written per vertex in UV and UV2.x; UV2.y marks the face
+  authored (300, or 400 turned as `stud_turn` says).
+* **A face with a notch** (an arch's front, round its opening) has edges whose lines run on across
+  it. It is cut along the perpendiculars at the ends of each such edge first; a piece then takes
+  that edge's line only where it lies beside it.
+
+From that distance `brick.gdshader` gives an authored face the outline, the shaded 45-degree bevel
+(at every distance: the near mesh copies authored surfaces as they are, so there is no real one),
+a flat top's two walls and turned diagonals, a flat bottom's open rim. Its layers are counted up
+its height and stair-step on slopes (above).
+
 ## 3. What it costs
 
 Nothing new to hold: no textures, no vertex data. The stud's turn is in the instance transform it
@@ -45,8 +70,8 @@ faces only; the stud top lost an `atan`. Not timed.
 * The first layer's elephant's foot (a slight flare at the bed).
 * One hollow depth for every part (a face does not know its part's height): a plate's reads a
   little deep, a brick's a little shallow.
-* An authored part's flat top has the lines one fixed way, not turned with the part, and no walls
-  round it; its flat bottom is the bed's, not open.
+* An authored part's flat bottom is open at the rim only: its ribs and pins need the footprint,
+  which a triangle does not know. No Z seam on authored parts. Their bevel is shaded, not built.
 * Godot 4.8's texture streaming changes nothing here: there are no textures to stream. A baked
   per-footprint toolpath map, straight from G-code, is the next step if the drawn rules are not
   enough -- a few MB, one texture read a pixel.

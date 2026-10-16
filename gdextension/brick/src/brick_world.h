@@ -222,6 +222,15 @@ public:
     /// Whether a part at `corner` (chunk cells) of `size` lies turned a quarter
     /// from the way it was printed (chunk_studs; ps_top_turned in the shader).
     static bool stud_turn(const Vector3i &size, const Vector3i &corner);
+    /// Archetype::MeshTri::feature, for a part's whole mesh.
+    static void mark_feature_edges(std::vector<brick::Archetype::MeshTri> &mesh);
+    /// An authored triangle's UV2 (bake_faces_into; brick.gdshader reads them):
+    /// x is this plus the third edge distance, y one of the two marks.
+    static constexpr float AUTHORED_UV2 = 200.0f;
+    static constexpr float AUTHORED_UV2Y = 300.0f;
+    static constexpr float AUTHORED_TURNED = 400.0f;
+    /// The distance an edge that is not a real one is given: far past any band.
+    static constexpr float AUTHORED_FAR = 30.0f;
     /// A stud buffer (as the two above give) sorted into rings round `eye`,
     /// which is in the buffer's own space: one buffer for the studs nearer
     /// than each of `rings` (metres, rising) and not nearer than the one

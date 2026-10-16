@@ -98,6 +98,21 @@ struct Archetype {
     struct MeshTri {
         Vector3 p[3];
         Vector3 n[3]; // per-vertex normals, so a curved wall can shade smooth
+        // Bit k: the edge OPPOSITE p[k] is one of the part's real edges -- the
+        // mesh ends there, or turns by more than a crease (FEATURE_CREASE) --
+        // rather than a seam of the triangulation across a flat face or round
+        // a curve. The printed surface outlines and bevels those, as it does
+        // a box's face rectangle (bake_faces_into writes the distances).
+        uint8_t feature = 0;
+        // The (up to) three real edges nearest this triangle on its own flat
+        // face -- its own, or a neighbour's: where a long edge is split
+        // between two triangles, the one touching it at a corner only has to
+        // know of it too, or the outline thins there to nothing. As lines
+        // (edge_a[i] to edge_b[i]); a face is convex, so a point's distance
+        // to each is linear across the triangle. `edges` of them are set.
+        Vector3 edge_a[3];
+        Vector3 edge_b[3];
+        uint8_t edges = 0;
     };
     std::vector<MeshTri> mesh;
 
