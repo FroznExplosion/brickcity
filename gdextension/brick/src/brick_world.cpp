@@ -329,6 +329,12 @@ int BrickWorld::bake_variant(int base_archetype, const String &name, int yaw, bo
                 r.p[k] = lin(t.p[k]) + shift;
                 r.n[k] = lin(t.n[k]);
             }
+            r.feature = t.feature; // edge k is still opposite vertex k
+            r.edges = t.edges;
+            for (int k = 0; k < t.edges; ++k) {
+                r.edge_a[k] = lin(t.edge_a[k]) + shift;
+                r.edge_b[k] = lin(t.edge_b[k]) + shift;
+            }
             a.mesh.push_back(r);
         }
         for (const PackedVector3Array &h : base.hulls) {
@@ -1250,15 +1256,40 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                 }
                 const Vector3 vs[4] = { p0, p1, p2, p1 };
                 const Vector3 ns[4] = { n0, n1, n2, n1 };
+                // How far each corner is from each of the triangle's REAL
+                // edges (MeshTri::feature): its height over the edge opposite
+                // it, nothing to the other two. Linear across the triangle,
+                // so what the shader gets at a point is exactly its distance
+                // to that edge -- what a box's face rectangle gives it. An
+                // edge that is not a real one is far off at every corner. UV
+                // carries the first two, UV2.x the third (+ AUTHORED_UV2),
+                // UV2.y says authored, and whether the part lies turned
+                // (stud_turn: its top's lines, as a box's).
+                // ...to the real edges nearest it on its face (MeshTri::
+                // edge_a), as lines: linear across the triangle all the same.
+                const Vector3 pp[3] = { p0, p1, p2 };
+                float dist[3][3];
+                for (int j = 0; j < 3; ++j) {
+                    for (int i = 0; i < 3; ++i) {
+                        if (j >= t.edges) {
+                            dist[i][j] = BrickWorld::AUTHORED_FAR;
+                            continue;
+                        }
+                        const Vector3 ea = t.edge_a[j], eb = t.edge_b[j];
+                        const Vector3 dir = (eb - ea).normalized();
+                        const Vector3 off = pp[i] - ea;
+                        dist[i][j] = (off - dir * off.dot(dir)).length();
+                    }
+                }
+                const float turned = BrickWorld::stud_turn(a.size, base) ? BrickWorld::AUTHORED_TURNED : BrickWorld::AUTHORED_UV2Y;
+                const int corner_of[4] = { 0, 1, 2, 1 };
                 for (int k = 0; k < 4; ++k) {
+                    const float *dv = dist[corner_of[k]];
                     fb.verts.push_back(block_origin + vs[k]);
                     fb.normals.push_back(ns[k]);
                     fb.colours.push_back(col);
-                    // The seam shader outlines a face at the edge of its UV2
-                    // rectangle. An authored surface has no rectangle, so it
-                    // is handed one far larger than itself and draws no seam.
-                    fb.uvs.push_back(Vector2(50.0f, 50.0f));
-                    fb.uv2s.push_back(Vector2(100.0f, 100.0f));
+                    fb.uvs.push_back(Vector2(dv[0], dv[1]));
+                    fb.uv2s.push_back(Vector2(BrickWorld::AUTHORED_UV2 + dv[2], turned));
                 }
                 fb.owner.push_back((int32_t)bi);
                 fb.other.push_back(other);
@@ -8008,6 +8039,369 @@ void BrickWorld::set_archetype_mesh(int archetype_id, const PackedVector3Array &
             t.n[k] = normals[i + k].normalized();
         }
         a.mesh.push_back(t);
+    }
+    mark_feature_edges(a.mesh);
+}
+
+// Which triangle edges are the part's real edges (Archetype::MeshTri::feature):
+// an edge no other triangle shares, or shares turning by more than a crease.
+// Positions are matched to a tenth of a millimetre. Round a curve, flat across
+// a face, the triangulation's own edges are not.
+void BrickWorld::mark_feature_edges(std::vector<Archetype::MeshTri> &mesh) {
+    // First, no T-junctions. Where a vertex of one triangle lies along the
+    // edge of another -- an arch's beam over the tops of its pillars -- that
+    // edge is split there, so every edge is shared exactly or not at all.
+    // Otherwise the beam's long underside edge, real over the opening and
+    // not over the pillars, could only be one or the other.
+    {
+        std::vector<Vector3> verts;
+        for (const Archetype::MeshTri &t : mesh) {
+            for (int k = 0; k < 3; ++k) {
+                bool seen = false;
+                for (const Vector3 &v : verts) {
+                    if ((v - t.p[k]).length_squared() < 1e-10f) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    verts.push_back(t.p[k]);
+                }
+            }
+        }
+        for (int pass = 0; pass < 8; ++pass) {
+            bool split = false;
+            std::vector<Archetype::MeshTri> out;
+            out.reserve(mesh.size());
+            for (const Archetype::MeshTri &t : mesh) {
+                int at_k = -1;
+                float at_s = 0.0f;
+                Vector3 at_v;
+                for (int k = 0; k < 3 && at_k < 0; ++k) {
+                    const Vector3 a = t.p[(k + 1) % 3], b = t.p[(k + 2) % 3];
+                    const Vector3 ab = b - a;
+                    const float l2 = ab.length_squared();
+                    if (l2 < 1e-10f) {
+                        continue;
+                    }
+                    for (const Vector3 &v : verts) {
+                        const float sv = (v - a).dot(ab) / l2;
+                        if (sv > 1e-3f && sv < 1.0f - 1e-3f && (a + ab * sv - v).length() < 1e-4f) {
+                            at_k = k;
+                            at_s = sv;
+                            at_v = v;
+                            break;
+                        }
+                    }
+                }
+                if (at_k < 0) {
+                    out.push_back(t);
+                    continue;
+                }
+                split = true;
+                const int k0 = at_k, k1 = (at_k + 1) % 3, k2 = (at_k + 2) % 3;
+                const Vector3 nv = t.n[k1].lerp(t.n[k2], at_s).normalized();
+                Archetype::MeshTri x = t, y = t;
+                // (p0, a, b) cut at v on a-b: (p0, a, v) and (p0, v, b),
+                // wound as the original.
+                x.p[k0] = t.p[k0]; x.p[k1] = t.p[k1]; x.p[k2] = at_v;
+                x.n[k0] = t.n[k0]; x.n[k1] = t.n[k1]; x.n[k2] = nv;
+                y.p[k0] = t.p[k0]; y.p[k1] = at_v; y.p[k2] = t.p[k2];
+                y.n[k0] = t.n[k0]; y.n[k1] = nv; y.n[k2] = t.n[k2];
+                out.push_back(x);
+                out.push_back(y);
+            }
+            mesh.swap(out);
+            if (!split) {
+                break;
+            }
+        }
+    }
+    const float crease = std::cos(30.0f * 3.14159265f / 180.0f);
+    struct Key {
+        int64_t a[3], b[3];
+        bool operator<(const Key &o) const {
+            for (int i = 0; i < 3; ++i) {
+                if (a[i] != o.a[i]) return a[i] < o.a[i];
+            }
+            for (int i = 0; i < 3; ++i) {
+                if (b[i] != o.b[i]) return b[i] < o.b[i];
+            }
+            return false;
+        }
+    };
+    const auto q = [](const Vector3 &v, int64_t out[3]) {
+        out[0] = (int64_t)std::llround(v.x * 10000.0f);
+        out[1] = (int64_t)std::llround(v.y * 10000.0f);
+        out[2] = (int64_t)std::llround(v.z * 10000.0f);
+    };
+    std::map<Key, std::vector<std::pair<int, int>>> edges;
+    std::vector<Vector3> fn(mesh.size());
+    for (size_t i = 0; i < mesh.size(); ++i) {
+        const Archetype::MeshTri &t = mesh[i];
+        Vector3 n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]);
+        fn[i] = n.length_squared() > 1e-16f ? n.normalized() : Vector3();
+        for (int k = 0; k < 3; ++k) {
+            int64_t a[3], b[3];
+            q(t.p[(k + 1) % 3], a);
+            q(t.p[(k + 2) % 3], b);
+            Key key;
+            const bool swap = std::lexicographical_compare(b, b + 3, a, a + 3);
+            for (int j = 0; j < 3; ++j) {
+                key.a[j] = swap ? b[j] : a[j];
+                key.b[j] = swap ? a[j] : b[j];
+            }
+            edges[key].push_back({ (int)i, k });
+        }
+    }
+    for (Archetype::MeshTri &t : mesh) {
+        t.feature = 0;
+    }
+    for (const auto &e : edges) {
+        const std::vector<std::pair<int, int>> &users = e.second;
+        bool feature = users.size() != 2;
+        if (!feature) {
+            // Winding may differ (a mirrored variant), so compare as lines.
+            feature = std::abs(fn[(size_t)users[0].first].dot(fn[(size_t)users[1].first])) < crease;
+        }
+        if (feature) {
+            for (const auto &u : users) {
+                mesh[(size_t)u.first].feature |= (uint8_t)(1u << u.second);
+            }
+        }
+    }
+
+    // Each triangle's nearest real edges on its flat face (MeshTri::edge_a).
+    // A face: the triangles in one plane. A curved surface's triangles each
+    // have a plane of their own, and keep their own edges.
+    const auto face_normal = [&](size_t i) -> Vector3 {
+        const Archetype::MeshTri &t = mesh[i];
+        const Vector3 n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]);
+        return n.length_squared() > 1e-16f ? n.normalized() : Vector3();
+    };
+    const auto same_plane = [&](size_t i, size_t j) -> bool {
+        const Vector3 a = face_normal(i), b = face_normal(j);
+        return std::abs(a.dot(b)) > 0.9995f && std::abs(a.dot(mesh[j].p[0] - mesh[i].p[0])) < 1e-4f;
+    };
+    const auto face_of = [&](size_t i) -> std::vector<size_t> {
+        std::vector<size_t> f;
+        for (size_t j = 0; j < mesh.size(); ++j) {
+            if (j == i || same_plane(i, j)) {
+                f.push_back(j);
+            }
+        }
+        return f;
+    };
+    // Whether the face lies all on one side of the line a-b: a convex face's
+    // every edge. A face with a notch in it (an arch's front, round its
+    // opening) has edges whose lines run on across it.
+    const auto supports = [&](const std::vector<size_t> &face, const Vector3 &n,
+            const Vector3 &a, const Vector3 &b) -> bool {
+        const Vector3 side = n.cross(b - a);
+        float lo = 0.0f, hi = 0.0f;
+        for (size_t j : face) {
+            for (int k = 0; k < 3; ++k) {
+                const float sd = side.dot(mesh[j].p[k] - a);
+                lo = std::min(lo, sd);
+                hi = std::max(hi, sd);
+            }
+        }
+        const float tol = 1e-5f * std::max(side.length(), 1e-6f);
+        return lo > -tol || hi < tol;
+    };
+
+    // Such an edge's line is its distance only beside it -- between the
+    // perpendiculars through its ends. So the face is cut along those
+    // perpendiculars first: every piece then lies wholly beside the edge or
+    // wholly past its end, and takes the line or does not.
+    {
+        struct Cut {
+            Vector3 o, m;   // the points with (p - o).m == 0
+        };
+        std::vector<Cut> cuts;
+        std::vector<bool> done(mesh.size(), false);
+        for (size_t i = 0; i < mesh.size(); ++i) {
+            if (done[i]) {
+                continue;
+            }
+            const std::vector<size_t> face = face_of(i);
+            const Vector3 n = face_normal(i);
+            for (size_t j : face) {
+                done[j] = true;
+                const Archetype::MeshTri &t = mesh[j];
+                for (int k = 0; k < 3; ++k) {
+                    if (((t.feature >> k) & 1u) == 0) {
+                        continue;
+                    }
+                    const Vector3 a = t.p[(k + 1) % 3], b = t.p[(k + 2) % 3];
+                    if (face.size() < 2 || supports(face, n, a, b)) {
+                        continue;
+                    }
+                    const Vector3 m = (b - a).normalized();
+                    cuts.push_back({ a, m });
+                    cuts.push_back({ b, m });
+                }
+            }
+        }
+        for (const Cut &cut : cuts) {
+            std::vector<Archetype::MeshTri> out;
+            out.reserve(mesh.size());
+            for (const Archetype::MeshTri &t : mesh) {
+                // Only a triangle of a face the cut lies in: one whose plane
+                // holds the cut's line.
+                const Vector3 tn = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]);
+                const bool in_plane = tn.length_squared() > 1e-16f
+                        && std::abs(tn.normalized().dot(cut.m)) < 1e-4f
+                        && std::abs(tn.normalized().dot(cut.o - t.p[0])) < 1e-4f;
+                float f[3];
+                int neg = 0, pos = 0;
+                for (int k = 0; k < 3; ++k) {
+                    f[k] = (t.p[k] - cut.o).dot(cut.m);
+                    neg += f[k] < -1e-5f ? 1 : 0;
+                    pos += f[k] > 1e-5f ? 1 : 0;
+                }
+                if (!in_plane || neg == 0 || pos == 0) {
+                    out.push_back(t);
+                    continue;
+                }
+                // The vertex alone on its side (a vertex on the line itself
+                // counts with neither: then the triangle is cut in two).
+                int lone = -1;
+                for (int k = 0; k < 3; ++k) {
+                    const int sk = f[k] < -1e-5f ? -1 : (f[k] > 1e-5f ? 1 : 0);
+                    const int s1 = f[(k + 1) % 3] < -1e-5f ? -1 : (f[(k + 1) % 3] > 1e-5f ? 1 : 0);
+                    const int s2 = f[(k + 2) % 3] < -1e-5f ? -1 : (f[(k + 2) % 3] > 1e-5f ? 1 : 0);
+                    if (sk != 0 && s1 != sk && s2 != sk && (s1 == -sk || s2 == -sk)) {
+                        lone = k;
+                        break;
+                    }
+                }
+                if (lone < 0) {
+                    out.push_back(t);
+                    continue;
+                }
+                const int i0 = lone, i1 = (lone + 1) % 3, i2 = (lone + 2) % 3;
+                const uint8_t fi = (t.feature >> i0) & 1u, fj = (t.feature >> i1) & 1u,
+                              fk = (t.feature >> i2) & 1u;
+                const auto at = [&](int x, int y, Vector3 &pp, Vector3 &nn) {
+                    const float u = f[x] / (f[x] - f[y]);
+                    pp = t.p[x].lerp(t.p[y], u);
+                    nn = t.n[x].lerp(t.n[y], u).normalized();
+                };
+                Vector3 pa, na, pb, nb;
+                at(i0, i1, pa, na);   // on i0-i1, the edge opposite i2
+                at(i0, i2, pb, nb);   // on i2-i0, the edge opposite i1
+                const bool j_on = std::abs(f[i1]) <= 1e-5f;
+                const bool k_on = std::abs(f[i2]) <= 1e-5f;
+                Archetype::MeshTri x = t, y = t, z = t;
+                if (j_on || k_on) {
+                    // The line runs through a corner: two pieces.
+                    // Through i1: cut i2-i0 at pb -> (i0, i1, pb), (pb, i1, i2).
+                    // Through i2: cut i0-i1 at pa -> (i0, pa, i2), (pa, i1, i2).
+                    if (j_on) {
+                        x.p[0] = t.p[i0]; x.p[1] = t.p[i1]; x.p[2] = pb;
+                        x.n[0] = t.n[i0]; x.n[1] = t.n[i1]; x.n[2] = nb;
+                        x.feature = (uint8_t)(0u | (fj << 1) | (fk << 2));
+                        y.p[0] = pb; y.p[1] = t.p[i1]; y.p[2] = t.p[i2];
+                        y.n[0] = nb; y.n[1] = t.n[i1]; y.n[2] = t.n[i2];
+                        y.feature = (uint8_t)(fi | (fj << 1) | 0u);
+                    } else {
+                        x.p[0] = t.p[i0]; x.p[1] = pa; x.p[2] = t.p[i2];
+                        x.n[0] = t.n[i0]; x.n[1] = na; x.n[2] = t.n[i2];
+                        x.feature = (uint8_t)(0u | (fj << 1) | (fk << 2));
+                        y.p[0] = pa; y.p[1] = t.p[i1]; y.p[2] = t.p[i2];
+                        y.n[0] = na; y.n[1] = t.n[i1]; y.n[2] = t.n[i2];
+                        y.feature = (uint8_t)(fi | 0u | (fk << 2));
+                    }
+                    out.push_back(x);
+                    out.push_back(y);
+                    continue;
+                }
+                // (i0, pa, pb); (pa, i1, i2); (pa, i2, pb).
+                x.p[0] = t.p[i0]; x.p[1] = pa; x.p[2] = pb;
+                x.n[0] = t.n[i0]; x.n[1] = na; x.n[2] = nb;
+                x.feature = (uint8_t)(0u | (fj << 1) | (fk << 2));
+                y.p[0] = pa; y.p[1] = t.p[i1]; y.p[2] = t.p[i2];
+                y.n[0] = na; y.n[1] = t.n[i1]; y.n[2] = t.n[i2];
+                y.feature = (uint8_t)(fi | 0u | (fk << 2));
+                z.p[0] = pa; z.p[1] = t.p[i2]; z.p[2] = pb;
+                z.n[0] = na; z.n[1] = t.n[i2]; z.n[2] = nb;
+                z.feature = (uint8_t)(fj | 0u | 0u);
+                out.push_back(x);
+                out.push_back(y);
+                out.push_back(z);
+            }
+            mesh.swap(out);
+        }
+    }
+
+    const auto seg_dist = [](const Vector3 &a, const Vector3 &b, const Vector3 &p) -> float {
+        const Vector3 ab = b - a;
+        const float l2 = ab.length_squared();
+        const float s = l2 > 1e-12f ? std::clamp((p - a).dot(ab) / l2, 0.0f, 1.0f) : 0.0f;
+        return (a + ab * s - p).length();
+    };
+    for (size_t i = 0; i < mesh.size(); ++i) {
+        Archetype::MeshTri &t = mesh[i];
+        const Vector3 c = (t.p[0] + t.p[1] + t.p[2]) / 3.0f;
+        const std::vector<size_t> face = face_of(i);
+        const Vector3 n = face_normal(i);
+        // Beside the edge: every corner of this triangle between the
+        // perpendiculars through its ends (the cuts above made it one or the
+        // other).
+        const auto beside = [&](const Vector3 &a, const Vector3 &b) -> bool {
+            const Vector3 ab = b - a;
+            const float l2 = ab.length_squared();
+            for (int k = 0; k < 3; ++k) {
+                const float sk = l2 > 1e-12f ? (t.p[k] - a).dot(ab) / l2 : 0.0f;
+                if (sk < -1e-3f || sk > 1.0f + 1e-3f) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        struct Cand {
+            Vector3 a, b;
+            float d;
+        };
+        std::vector<Cand> cands;
+        for (size_t j : face) {
+            const Archetype::MeshTri &o = mesh[j];
+            for (int k = 0; k < 3; ++k) {
+                if (((o.feature >> k) & 1u) == 0) {
+                    continue;
+                }
+                const Vector3 a = o.p[(k + 1) % 3], b = o.p[(k + 2) % 3];
+                if (face.size() > 1 && !supports(face, n, a, b) && !beside(a, b)) {
+                    continue;
+                }
+                cands.push_back({ a, b, seg_dist(a, b, c) });
+            }
+        }
+        std::sort(cands.begin(), cands.end(), [](const Cand &x, const Cand &y) { return x.d < y.d; });
+        t.edges = 0;
+        for (const Cand &cd : cands) {
+            if (t.edges >= 3) {
+                break;
+            }
+            // One line once: a long edge split in two is one line.
+            bool dup = false;
+            const Vector3 dir = (cd.b - cd.a).normalized();
+            for (int k = 0; k < t.edges; ++k) {
+                const Vector3 od = (t.edge_b[k] - t.edge_a[k]).normalized();
+                const Vector3 off = cd.a - t.edge_a[k];
+                if (std::abs(dir.dot(od)) > 0.9999f
+                        && (off - od * off.dot(od)).length() < 1e-4f) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                t.edge_a[t.edges] = cd.a;
+                t.edge_b[t.edges] = cd.b;
+                ++t.edges;
+            }
+        }
     }
 }
 

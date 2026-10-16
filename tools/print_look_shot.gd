@@ -35,6 +35,7 @@ const VIEWS := [
 	["seam", Vector3(-0.42, 0.3, -0.3), Vector3(0.05, 0.2, 0.05)],
 	["shapes", Vector3(2.3, 1.1, 8.6), Vector3(2.3, 0.25, 6.0)],
 	["shapes_close", Vector3(1.0, 0.75, 7.0), Vector3(0.8, 0.2, 6.0)],
+	["arch_close", Vector3(5.95, 0.4, 7.1), Vector3(5.95, 0.25, 5.75)],
 	["wall", Vector3(6.5, 1.6, 9.0), Vector3(5.6, 0.8, 0.7)],
 ]
 

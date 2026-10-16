@@ -178,8 +178,22 @@ void fragment() {
     vec2 cell = mod(v_uv, fsize);
     vec2 to_edge = min(cell, fsize - cell);
     float d = min(to_edge.x, to_edge.y);
+    // An AUTHORED surface -- a slope, a cheese, a round brick, an arch -- has
+    // no face rectangle. bake_faces_into gives it instead its distance to the
+    // part's real edges (where the mesh ends or creases; Archetype::MeshTri::
+    // feature) in UV and UV2.x, and marks it in UV2.y: 300, or 400 where the
+    // part lies turned (BrickWorld::stud_turn). From that one distance it
+    // takes the rules a box takes from its rectangle: the outline, the
+    // bevel, a top's walls.
+    bool authored = v_face.y > 250.0;
+    if (authored) {
+        d = min(min(v_uv.x, v_uv.y), v_face.x - 200.0);
+    }
     float dist = length(VERTEX);
-    float outline_w = geo_bevel > 0.5
+    // An authored surface is copied as it is into the chamfered near mesh
+    // (Docs/BrickBevel.md 2.3): it has no real bevel there, so its shaded one
+    // stays at every distance.
+    float outline_w = geo_bevel > 0.5 && !authored
             ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
 
     if (seams_enabled) {
@@ -201,6 +215,32 @@ void fragment() {
         // The real thing: already at 45 degrees, and as glossy as the shaded
         // one is made.
         roughness *= chamfer_gloss;
+    } else if (authored && chamfer_enabled && chamfer_width > 0.0) {
+        // The same 45-degree band, along whichever real edge is nearest: the
+        // edge's direction is the gradient of the distance to it, worked out
+        // in the surface from the screen derivatives (a 2x2 solve: the
+        // gradient g with g.dp_x = dd_x and g.dp_y = dd_y).
+        vec3 dp_x = dFdx(VERTEX);
+        vec3 dp_y = dFdy(VERTEX);
+        float dd_x = dFdx(d);
+        float dd_y = dFdy(d);
+        float xx = dot(dp_x, dp_x);
+        float xy = dot(dp_x, dp_y);
+        float yy = dot(dp_y, dp_y);
+        float det = xx * yy - xy * xy;
+        if (det > 1e-20) {
+            vec3 g = dp_x * ((dd_x * yy - dd_y * xy) / det)
+                    + dp_y * ((dd_y * xx - dd_x * xy) / det);
+            float gl = length(g);
+            if (gl > 1e-4) {
+                vec3 away = g / gl;   // into the face, away from the edge
+                float inside = smoothstep(chamfer_width, chamfer_width + max(fwidth(d), 1e-5), d);
+                float fade = (1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist));
+                float on_bevel = (1.0 - inside) * fade;
+                NORMAL = normalize(mix(NORMAL, normalize(NORMAL - away), on_bevel));
+                roughness = mix(roughness, roughness * chamfer_gloss, on_bevel);
+            }
+        }
     } else if (chamfer_enabled && chamfer_width > 0.0) {
         // A tangent frame from the UV mapping rather than from the vertex data:
         // the mesher writes no TANGENT, and every face here is axis-aligned in
@@ -243,8 +283,8 @@ void fragment() {
     // This face's own corner, in the chunk's metres: v_local less the UV
     // walked back along the face's own axes. One seed a face: the grain of a
     // wood brick, the wobble of a printed one's layers.
-    float seed = 0.0;
-    {
+    float seed = authored ? 0.37 : 0.0;   // an authored face has no corner to hash
+    if (!authored) {
         vec3 dlx = dFdx(v_local);
         vec3 dly = dFdy(v_local);
         vec2 dux = dFdx(v_uv);
@@ -272,19 +312,36 @@ void fragment() {
         float solid = 1.0;   // the underside: rim and ribs 1, the hollow 0
         float stairs = 0.0;  // a sloped authored face: how much staircase
         int bead_face = face;
-        // An AUTHORED surface -- a slope, a cheese, a round brick, an arch --
-        // has no face rectangle (bake_faces_into hands it a UV2 far larger
-        // than itself), so nothing above could find its layers in its UV and
-        // it was drawn with none at all. Its layers are counted up the
-        // part's own height instead, wrapped every 64 plates so a tower a
-        // hundred metres up keeps them sharp (the reason the boxes count in
-        // UV); a plate is a whole number of layers, so the wrap is invisible.
-        bool authored = v_face.x > 99.0;
+        // An AUTHORED surface has no face rectangle, so its layers are
+        // counted up the part's own height instead, wrapped every 64 plates
+        // so a tower a hundred metres up keeps them sharp (the reason the
+        // boxes count in UV); a plate is a whole number of layers, so the
+        // wrap is invisible. Its flat top and bottom go by `d`, its distance
+        // to its own edges, as a box's do by their rectangle.
         if (authored) {
             float ny = v_local_normal.y;
-            if (abs(ny) > 0.995) {
-                // Flat: a top's lines, or a bottom off the bed.
-                t = dot(v_local.xz, ps_top_normal(false)) / ps_bead(face, mat);
+            if (ny > 0.995) {
+                // A flat top: the walls round its outline, then the
+                // diagonals, turned as the part lies.
+                float bw = ps_bead(face, mat);
+                float wall = float(ps_walls(mat)) * bw;
+                if (d < wall) {
+                    t = d / bw;
+                } else {
+                    t = dot(v_local.xz, ps_top_normal(v_face.y > 350.0)) / bw;
+                }
+                if (wall > 0.0) {
+                    float jw = 0.18 * bw + fwidth(d);
+                    junction = (1.0 - smoothstep(0.0, jw, abs(d - wall))) * 0.6;
+                }
+            } else if (ny < -0.995) {
+                // A flat bottom: open, as a box's -- the rim round the
+                // outline and the hollow inside it. (Its ribs need the
+                // part's footprint, which an authored face does not have.)
+                float sd = d - under_rim;
+                solid = underside_hollow
+                        ? clamp(0.5 - sd / max(fwidth(sd), 1e-5), 0.0, 1.0) : 1.0;
+                t = max(-sd, 0.0) / bottom_bead_width;
             } else {
                 float wrap = PS_PLATE * 64.0;
                 t = (v_local.y - floor(v_local.y / wrap) * wrap) / ps_layer(mat);
@@ -367,7 +424,10 @@ void fragment() {
             albedo *= mix(1.0, skin_void_darken, show);
             print_rough += 0.4 * show;
         }
-        if (face == 2 && !authored) {
+        if (face == 2 && authored) {
+            albedo *= mix(under_cavity, 1.0, solid);
+            print_rough += (1.0 - solid) * 0.35;
+        } else if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
@@ -427,8 +487,12 @@ void fragment() {
     vec3 emission = vec3(0.0);
     if (tex != 0 && v_face.x > 0.0 && v_face.y > 0.0) {
         // Along the grain = along this face's longer side, which on a brick
-        // is its length: a 1x6 of oak is a board, not end grain.
+        // is its length: a 1x6 of oak is a board, not end grain. An authored
+        // face has no sides to go by: the part's own coordinates, as a stud's.
         vec2 p = fsize.x >= fsize.y ? v_uv : v_uv.yx;
+        if (authored) {
+            p = abs(v_local_normal.y) > 0.7 ? v_local.xz : vec2(v_local.x + v_local.z, v_local.y);
+        }
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
         if (tex == 1) {
             albedo = bm_wood(albedo, p, seed, tfade, roughness);
