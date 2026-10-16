@@ -265,6 +265,8 @@ func _ready() -> void:
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
 	_save_path = ASSET_QUICK_SAVE
+	if _menu != null:
+		_menu.asset_mode(ASSET_KINDS)
 	_set_asset_kind(recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
@@ -1324,7 +1326,7 @@ func _reset_space() -> void:
 
 
 const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
-const ASSET_KINDS := ["gun", "mech"]
+const ASSET_KINDS := BuildRecipe.ASSET_KINDS
 
 
 ## A build here is one of the asset kinds; anything else (a build saved before guns had a
@@ -5630,3 +5632,9 @@ func _draw_shape_brush(im: ImmediateMesh) -> void:
 					im.surface_set_color(col)
 					im.surface_add_vertex(mid + u * cos(t) + v * sin(t))
 	im.surface_end()
+
+
+## Enter (and the building workshop's "Test in city"): a gun is not a building to stand in
+## the city. Its way out is Export (F12).
+func _place_in_city() -> void:
+	print("[asset workshop] a gun does not go in the city: F12 exports its parts")

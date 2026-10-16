@@ -981,6 +981,9 @@ const LIBRARY_DIRS := {
 	"gun": ["res://guns/", "user://guns/"],
 	"mech": ["res://mechs/", "user://mechs/"],
 }
+## The kinds made in the asset workshop, not the building workshop: each workshop's
+## Open lists only its own.
+const ASSET_KINDS := ["gun", "mech"]
 ## The workshop's one quick-save slot (F5 there), and what the city places
 ## when it is asked for a build without being told which (`--build`, P).
 const QUICK_SAVE := "user://workshop_build.json"

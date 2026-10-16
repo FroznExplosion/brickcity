@@ -30,6 +30,9 @@ var _bar: PanelContainer
 var _title: Label
 var _file: MenuButton
 var _insert: MenuButton
+var _edit: MenuButton
+## The asset workshop's kinds (gun, mech) when this is its bar: Open lists only them.
+var _asset_kinds: Array = []
 var _finish: MenuButton
 var _type: MenuButton
 var _layer: MenuButton
@@ -152,7 +155,7 @@ func _build_bar() -> void:
 		["Test in city (Enter)", F_CITY, 0],
 	], _on_file)
 
-	_menu(row, "Edit", [
+	_edit = _menu(row, "Edit", [
 		["Undo (Z)", E_UNDO, 0],
 		[],
 		["Select inserted build under cursor (X)", E_SELECT, 0],
@@ -344,9 +347,7 @@ func _build_open_dialog() -> void:
 	l.text = "Show:"
 	row.add_child(l)
 	_open_filter = OptionButton.new()
-	for k in BuildRecipe.LIBRARY_DIRS:
-		_open_filter.add_item(KIND_LABELS[k])
-		_open_filter.set_item_metadata(_open_filter.item_count - 1, k)
+	_fill_filter()
 	_open_filter.item_selected.connect(func(_i: int) -> void: _fill_open())
 	row.add_child(_open_filter)
 	_open_list = ItemList.new()
@@ -357,9 +358,48 @@ func _build_open_dialog() -> void:
 	_open_dialog.confirmed.connect(_open_chosen)
 
 
+## The kinds Open can show: the building workshop's libraries, or only the asset kinds.
+## Guns and mechs are the asset workshop's: the building workshop does not list them.
+func _fill_filter() -> void:
+	_open_filter.clear()
+	for k in BuildRecipe.LIBRARY_DIRS:
+		if _asset_kinds.is_empty() == BuildRecipe.ASSET_KINDS.has(k):
+			continue
+		if not _asset_kinds.is_empty() and not _asset_kinds.has(k):
+			continue
+		_open_filter.add_item(KIND_LABELS[k])
+		_open_filter.set_item_metadata(_open_filter.item_count - 1, k)
+
+
+## The asset workshop's bar: what it makes is saved and opened as a gun or a mech, and
+## the building menus -- Insert, Type, Layer, Generated, Test in city, the inserted-build
+## part of Edit -- are not there (nor their shortcuts).
+func asset_mode(kinds: Array) -> void:
+	_asset_kinds = kinds.duplicate()
+	for mb: MenuButton in [_insert, _type, _layer, _gen]:
+		mb.visible = false
+		var p := mb.get_popup()
+		for i in p.item_count:
+			p.set_item_shortcut(i, null)
+	var fp := _file.get_popup()
+	var city := fp.get_item_index(F_CITY)
+	if city >= 0:
+		fp.remove_item(city)
+		if city > 0 and fp.is_item_separator(city - 1):
+			fp.remove_item(city - 1)
+	var ep := _edit.get_popup()
+	for id in [E_SELECT, E_MOVE, E_COPY, E_DELETE]:
+		var i := ep.get_item_index(id)
+		if i >= 0:
+			ep.remove_item(i)
+	while ep.item_count > 0 and ep.is_item_separator(ep.item_count - 1):
+		ep.remove_item(ep.item_count - 1)
+	_fill_filter()
+
+
 func show_open(mode: String) -> void:
 	_open_mode = mode
-	_open_dialog.title = "Open a build" if mode == "open" else "Insert a build into this one"
+	_open_dialog.title = ("Open a build" if _asset_kinds.is_empty() else "Open an asset") if mode == "open" 			else "Insert a build into this one"
 	_open_dialog.ok_button_text = "Open" if mode == "open" else "Pick up"
 	# Opening defaults to the kind being authored; inserting is usually a building.
 	var want := _kind if mode == "open" and BuildRecipe.LIBRARY_DIRS.has(_kind) else "building"

@@ -949,6 +949,14 @@ func _round7() -> void:
 	# Saved as a gun, in the guns' library, and opened back with everything.
 	_ok("what is made here is a gun", _ws.recipe.kind == "gun", _ws.recipe.kind)
 	_ok("guns have a library of their own", BuildRecipe.player_dir("gun") == "user://guns/")
+	var m: WorkshopMenu = _ws._menu
+	var shown := []
+	for i in m._open_filter.item_count:
+		shown.append(m._open_filter.get_item_metadata(i))
+	_ok("Open lists only assets", shown == ["gun", "mech"], str(shown))
+	_ok("no building menus: Insert, Type, Layer, Generated hidden", not m._insert.visible and not m._type.visible
+			and not m._layer.visible and not m._gen.visible)
+	_ok("and no Test in city", m._file.get_popup().get_item_index(WorkshopMenu.F_CITY) < 0)
 	_ws._new_build()
 	_ws.select_part(_ws.part_names.find("grip"))
 	_lay("brick_2x4", Vector3i(30, 1, 20))
