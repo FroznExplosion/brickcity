@@ -103,6 +103,7 @@ func _tick() -> void:
 	_round5()
 	_round6()
 	_round7()
+	_round8()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -973,3 +974,103 @@ func _round7() -> void:
 	_ws._builds_dir = BuildRecipe.player_dir()
 	_ws.extra_studs.clear()
 	_ws._draw_studs()
+
+
+func _round8() -> void:
+	# Out to the game: each part a scene, put back together by the game's own assembler.
+	_ws._new_build()
+	_ws.work_plane = "side"
+	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
+			["grip", 3, [Vector2(34, 14), Vector2(38, 14), Vector2(39, 30), Vector2(35, 30)]],
+			["barrel", 1, [Vector2(8, 35), Vector2(20, 35), Vector2(20, 38), Vector2(8, 38)]],
+			["muzzle", 1, [Vector2(5, 34), Vector2(8, 34), Vector2(8, 39), Vector2(5, 39)]]]:
+		_ws.select_part(_ws.part_names.find(spec[0]))
+		_ws.part_width[spec[0]] = spec[1]
+		_ws.sketch_region(spec[2])
+	_ws.select_part(0)
+	var dir := "user://_probe_gun_game/"
+	var out: Dictionary = _ws.export_game(dir)
+	_ok("export to game writes a scene a part", out.get("ok", false) and (out.parts as Dictionary).size() == 4,
+			str(out))
+	var recipe := {}
+	for name in out.parts:
+		var def := GunPartDef.new()
+		def.id = StringName("probe_" + name)
+		def.slot = GunPartDef.SLOT_BY_SUFFIX[name]
+		def.scene = load(out.parts[name])
+		recipe[def.slot] = def
+	var gun := GunAssembler.assemble(recipe)
+	root.add_child(gun)
+	var placed := {}
+	for n in gun.find_children("*", "Node3D", true, false):
+		if n.is_in_group(GunAssembler.PART_GROUP):
+			placed[String(GunPartDef.Slot.keys()[n.get_meta(&"part_slot")]).to_lower()] = n
+	placed["body"] = gun
+	_ok("the game's assembler puts every part on", placed.size() == 4, str(placed.keys()))
+	# Each part where it was built: its bricks' middle, in the game's frame from the body's.
+	var b: Basis = _ws.game_basis()
+	var ids := {}
+	for i in _ws.recipe.size():
+		(ids.get_or_add(_ws.part_names[_ws.part_of[i]], []) as Array).append(i)
+	var body_c: Vector3 = _ws._cells_centre(ids.body)
+	var worst := 0.0
+	for name in ["grip", "barrel", "muzzle"]:
+		var want: Vector3 = b * (_ws._cells_centre(ids[name]) - body_c)
+		worst = maxf(worst, ((placed[name] as Node3D).global_position - gun.global_position).distance_to(want))
+	_ok("each part sits where it was built (within a millimetre)", worst < 0.001, "%.4f m off" % worst)
+	var grip_mesh: MeshInstance3D = (placed.grip as Node3D).find_child("Bricks", true, false)
+	var gb := grip_mesh.global_transform * grip_mesh.get_aabb()
+	_ok("real size: a 16-plate grip is 6.4 cm tall... (16 plates x 1.6 mm x 4)", absf(gb.size.y - 0.1024) < 0.005,
+			"%.3f m" % gb.size.y)
+	# The muzzle socket the game fires from: the deepest, at the front, the muzzle along -Z.
+	var best: Node3D = null
+	var depth := -1
+	for n in gun.find_children("socket_muzzle*", "Node3D", true, false):
+		var d := 0
+		var cur: Node = n
+		while cur != gun:
+			d += 1
+			cur = cur.get_parent()
+		if d > depth:
+			depth = d
+			best = n
+	var front := INF
+	for n in placed.values():
+		var mi: MeshInstance3D = (n as Node3D).find_child("Bricks", true, false)
+		front = minf(front, (mi.global_transform * mi.get_aabb()).position.z)
+	_ok("it fires from the muzzle's tip, the gun pointing -Z", best != null and best.get_parent() == placed.muzzle
+			and absf(best.global_position.z - front) < 0.01, "%s at %.3f, front %.3f" % [best, best.global_position.z if best else 0.0, front])
+	_ok("its length in the game", absf(float(out.length_m) - 35 * 4.0 * 4.0 / 1000.0) < 0.01, "%.3f m" % float(out.length_m))
+	gun.queue_free()
+	# Built the other way round (muzzle toward +x): it still comes out pointing -Z.
+	_ws._new_build()
+	_ws.muzzle_end = "-x"
+	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
+			["barrel", 1, [Vector2(40, 35), Vector2(52, 35), Vector2(52, 38), Vector2(40, 38)]],
+			["stock", 3, [Vector2(8, 30), Vector2(20, 30), Vector2(20, 40), Vector2(8, 40)]]]:
+		_ws.select_part(_ws.part_names.find(spec[0]))
+		_ws.part_width[spec[0]] = spec[1]
+		_ws.sketch_region(spec[2])
+	_ws.select_part(0)
+	out = _ws.export_game(dir)
+	recipe = {}
+	for name in out.parts:
+		var def := GunPartDef.new()
+		def.id = StringName("probe2_" + name)
+		def.slot = GunPartDef.SLOT_BY_SUFFIX[name]
+		def.scene = ResourceLoader.load(out.parts[name], "", ResourceLoader.CACHE_MODE_IGNORE)
+		recipe[def.slot] = def
+	gun = GunAssembler.assemble(recipe)
+	root.add_child(gun)
+	var zs := {}
+	for n in [gun] + gun.find_children("*", "Node3D", true, false):
+		if n == gun or n.is_in_group(GunAssembler.PART_GROUP):
+			var mi: MeshInstance3D = (n as Node3D).find_child("Bricks", true, false)
+			zs[String(n.name)] = (mi.global_transform * mi.get_aabb()).get_center().z
+	_ok("built muzzle toward +x, it is read off the build and still points -Z", _ws.muzzle_end == "+x"
+			and float(zs.get("probe2_barrel", 0.0)) < float(zs.get("body", 0.0)) - 0.05
+			and float(zs.get("probe2_stock", 0.0)) > float(zs.get("body", 0.0)) + 0.05, str(zs))
+	gun.queue_free()
+	_ws.muzzle_end = "-x"
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + f)
