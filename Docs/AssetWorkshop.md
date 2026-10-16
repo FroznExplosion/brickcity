@@ -59,6 +59,16 @@ real mm, so a part can be built straight from a real gun's numbers.
 | **Sketch** (Alt D): draw an outline on the working plane -- side, front (a drum is a circle there) or top -- and it is filled with bricks for the current part, as thick as that part is set to be, packed round anything already built. On the side and front planes, an edge climbing two plates a stud gets slopes, an end rounding over three plates in two studs gets a curve; on top edges the right way up, under bottom edges flipped | blocking out by drawing. The catalogue has no piece for an edge shallower or steeper than those, so those stay stepped |
 | The workshop's own key list starts hidden (F1 shows it); F10 has this scene's keys | it covered half the screen |
 
+### Round 3 (2026-10-16)
+
+| Change | Why |
+|---|---|
+| **An RMB delete undoes** (Z lays it back, shift Z takes it again); a box-select delete undoes at once | the workshop dropped a deleted brick from its edits, so it could not come back |
+| **One brick a click**: a held click lays a run only once the mouse has moved 14 px and 150 ms have passed | a hand that moved a little while clicking laid two bricks |
+| **Sketch is a mode**: each part's sketch is kept (per plane and depth, saved with the build). LMB draws area in, RMB draws it out, the thickness or slope setting changes, and the part's bricks are worked out again -- the old ones taken up, the new ones packed -- as one undo that puts the sketch back too. "Clear this part's sketch" takes it all up | to edit a blocked-out part by drawing, not by hand |
+| An outline is filled **to its outermost line**, by winding rather than even-odd, with enclosed holes filled; the yellow line shows the outline of what is filled | a stroke that crossed itself or went round twice left holes |
+| **Eager slopes**: slopes on edges climbing one to three plates a stud, a plate proud of or short of the line, not only at their own two; 2x4 slopes where a part is four deep | more slopes, fewer stairs |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |

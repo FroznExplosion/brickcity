@@ -50,6 +50,13 @@ extends SceneTree
 ##              top planes sketch too
 ##   zoom       zooming a flat view keeps the point under the cursor where it was
 ##   photo      "behind the build" puts a side photo just past the build's far side
+##
+## Round 3:
+##
+##   delete     an RMB delete undoes and redoes
+##   one click  a held click lays nothing more until the mouse has really moved
+##   sketch     kept: area drawn out takes bricks away; an outline round twice fills whole;
+##              a change undoes at once, sketch and bricks; eager slopes on a one-plate step
 
 var _pass := 0
 var _fail := 0
@@ -91,6 +98,7 @@ func _tick() -> void:
 	_wand()
 	_export()
 	_round2()
+	_round3()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -235,7 +243,10 @@ func _parts() -> void:
 	_ws._delete_ray(top, Vector3.DOWN)
 	_ok("a delete takes its own brick's tag", Array(_ws.part_of) == [0, 0], str(_ws.part_of))
 	_ws._undo()
-	_ok("an undo takes the last tag", Array(_ws.part_of) == [0], str(_ws.part_of))
+	_ok("an undo lays the deleted brick back, in its own part", Array(_ws.part_of) == [0, 0, 2], str(_ws.part_of))
+	_ws._undo()
+	_ws._undo()
+	_ok("and further undos take the last tags", Array(_ws.part_of) == [0], str(_ws.part_of))
 	_ws._hotbar.select(0)
 	_ws._hotbar.set_slot("brick_2x4", 3)
 	_ws.select_part(1)
@@ -257,6 +268,17 @@ func _run() -> void:
 	_ws._place()
 	_ws._run_on = true
 	_ws._run_last = _ws._cell
+	# Held still, a click lays nothing more however the ghost settles.
+	_ws._run_moved = 0.0
+	_ws._run_press_ms = Time.get_ticks_msec()
+	_ws._cell = Vector3i(21, 1, 20)
+	_ws._update_ghost()
+	_ws.run_step()
+	_ok("a click held still lays one brick", _ws.recipe.size() == 1, "%d bricks" % _ws.recipe.size())
+	# Dragged, it lays a run.
+	_ws._run_moved = 40.0
+	_ws._run_press_ms = Time.get_ticks_msec() - 1000
+	_ws._run_last = Vector3i(20, 1, 20)
 	for x in [21, 22, 23]:
 		_ws._cell = Vector3i(x, 1, 20)
 		_ws._update_ghost()
@@ -565,3 +587,54 @@ func _round2() -> void:
 	var after := cam.unproject_position(point)
 	_ok("zooming keeps the point under the cursor", before.distance_to(after) < 0.5, "%v -> %v" % [before, after])
 	_ws.set_view(0)
+
+
+func _round3() -> void:
+	_ws.work_plane = "side"
+	_ws.work_depth = 40.5
+	_ws._new_build()
+	_lay("brick_1x2", Vector3i(20, 1, 20))
+	var top := Vector3(20.5 * STUD, 1.5 * 0.14, 20.5 * STUD)
+	_ws._delete_ray(top, Vector3.DOWN)
+	_ok("RMB deletes", _ws.recipe.size() == 0)
+	_ws._undo()
+	_ok("Z lays a deleted brick back", _ws.recipe.size() == 1 and _ws.recipe.cell_of(0) == Vector3i(20, 1, 20),
+			"%d bricks" % _ws.recipe.size())
+	_ws.redo()
+	_ok("shift Z deletes it again", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+
+	# A square drawn round twice: even-odd would leave a hole where it crosses itself.
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.part_width["body"] = 2
+	var square := [Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)]
+	var twice := []
+	for _i in 2:
+		for q in square:
+			twice.append(q + Vector2(randf() * 0.01, 0))
+	_ws.sketch_region(twice)
+	_ok("an outline drawn round twice fills whole", _volume() == 6 * 6 * 2, "%d cells" % _volume())
+	# Its right half drawn out: the bricks are worked out again.
+	_ws.sketch_region([Vector2(13, 29), Vector2(17, 29), Vector2(17, 37), Vector2(13, 37)], true)
+	var right := 0
+	for k in _ws.recipe.size():
+		var at: Vector3i = _ws.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+		if at.x + size.x > 13:
+			right += 1
+	_ok("RMB area drawn out takes those bricks away", _volume() == 3 * 6 * 2 and right == 0, "%d cells" % _volume())
+	_ws._undo()
+	_ok("and one Z puts them back, sketch and all", _volume() == 6 * 6 * 2
+			and (_ws.sketches[_ws._sketch_key()].subs as Array).is_empty(), "%d cells" % _volume())
+	_ws.redo()
+	_ok("shift Z takes them out again", _volume() == 3 * 6 * 2, "%d cells" % _volume())
+
+	# A one-plate step: a slope only when eager.
+	# Not at an end (an end rounding over is a curve's): flat, flat, one plate up.
+	var step := {}
+	for u in [-1, 0, 1]:
+		for v in (4 if u == 1 else 3):
+			step[Vector2i(u, v)] = true
+	_ok("a one-plate step gets no slope at the slope's own pitch", _ws.edge_pieces(step, false).is_empty())
+	_ok("and one when slopes are eager", _ws.edge_pieces(step, true).size() == 1, str(_ws.edge_pieces(step, true)))
+	_ws.part_width["body"] = 3
