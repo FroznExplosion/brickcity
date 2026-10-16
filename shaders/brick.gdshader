@@ -270,7 +270,28 @@ void fragment() {
         float join = 0.0;
         float gap = 0.0;
         float solid = 1.0;   // the underside: rim and ribs 1, the hollow 0
-        if (face == 2 && underside_hollow) {
+        float stairs = 0.0;  // a sloped authored face: how much staircase
+        int bead_face = face;
+        // An AUTHORED surface -- a slope, a cheese, a round brick, an arch --
+        // has no face rectangle (bake_faces_into hands it a UV2 far larger
+        // than itself), so nothing above could find its layers in its UV and
+        // it was drawn with none at all. Its layers are counted up the
+        // part's own height instead, wrapped every 64 plates so a tower a
+        // hundred metres up keeps them sharp (the reason the boxes count in
+        // UV); a plate is a whole number of layers, so the wrap is invisible.
+        bool authored = v_face.x > 99.0;
+        if (authored) {
+            float ny = v_local_normal.y;
+            if (abs(ny) > 0.995) {
+                // Flat: a top's lines, or a bottom off the bed.
+                t = dot(v_local.xz, ps_top_normal(false)) / ps_bead(face, mat);
+            } else {
+                float wrap = PS_PLATE * 64.0;
+                t = (v_local.y - floor(v_local.y / wrap) * wrap) / ps_layer(mat);
+                stairs = 1.0;
+                bead_face = 0;
+            }
+        } else if (face == 2 && underside_hollow) {
             // The underside is open (ps_underside): the first layer's loops
             // round the rim and the ribs, and the hollow between them.
             vec2 us = ps_underside(cell, fsize);
@@ -328,8 +349,16 @@ void fragment() {
             // itself away completely.
             t = v_uv.y / ps_layer(mat);
         }
-        ps_beads(t, t, face, mat, dist, VERTEX, seed, junction, join,
+        ps_beads(t, t, bead_face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
+        if (stairs > 0.0) {
+            float aa = max(fwidth(t), 1e-5);
+            float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
+            float k = stair_strength * resolved * resolved
+                    * (1.0 - smoothstep(print_fade_begin, print_fade_end, dist));
+            vec3 up = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[1].xyz);
+            NORMAL = ps_stairs(NORMAL, up, v_local_normal.y, t, aa, k);
+        }
         if (gap > 0.0) {
             // A void reaches down a layer: dark, and no shine in it. Gone
             // with the rest of the pattern once it is under a pixel.
@@ -338,16 +367,43 @@ void fragment() {
             albedo *= mix(1.0, skin_void_darken, show);
             print_rough += 0.4 * show;
         }
-        if (face == 2) {
+        if (face == 2 && !authored) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
-            // The hollow: ten millimetres of shell deep, lit by what gets in
-            // past the rim. Not faded: it is as big as the part.
-            albedo *= mix(under_cavity, 1.0, solid);
+            // The hollow: a shell deep, lit by what gets in past the rim. Not
+            // faded: it is as big as the part. Near, the view ray is walked
+            // up into it: a rib or the rim met on the way is its wall, seen
+            // past the edge it stands on.
+            float shade = under_cavity;
+            if (underside_hollow && solid < 0.99 && dist < under_depth_range) {
+                vec3 d = transpose(mat3(MODEL_MATRIX))
+                        * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
+                if (d.y > 0.05) {
+                    vec2 run = d.xz / d.y * under_depth;
+                    // Where between the last step outside and the first
+                    // inside the wall is, from the two distances: without
+                    // it the walls came out in six bands.
+                    float hit = 1.0;
+                    float prev = ps_under_sd(cell, fsize);
+                    for (int i = 1; i <= 6; i++) {
+                        float f = float(i) / 6.0;
+                        float sd_i = ps_under_sd(cell + run * f, fsize);
+                        if (sd_i < 0.0) {
+                            hit = f - (1.0 / 6.0) * (-sd_i) / max(prev - sd_i, 1e-5);
+                            break;
+                        }
+                        prev = sd_i;
+                    }
+                    shade = hit < 1.0 ? mix(under_wall, under_cavity, hit) : under_cavity * 0.85;
+                    shade = mix(under_cavity, shade,
+                            1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist));
+                }
+            }
+            albedo *= mix(shade, 1.0, solid);
             print_rough += (1.0 - solid) * 0.35;
         }
-        if (face == 0 && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
+        if (face == 0 && !authored && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
             // The Z seam, on the part's low corner in X and Z: a face whose
             // along-axis starts there (UV 0) has it just past the bevel.
             vec3 sm = ps_seam(v_uv.x, chamfer_width + zseam_width, t, seed);
