@@ -30,7 +30,8 @@ Files: `gdextension/brick/src/brick_world.cpp` (`bake_faces_into`, `chamfer_face
   over a pixel (17.8 / distance); past that the drawn seam is the edge, as before.
 
 Measured on a 20 x 16 stud, 24-course tower (`brick_bevel_probe`): 18,938 triangles chamfered to
-the flat mesh's 3,102, **6.1x**, built in 1.1 ms for the whole chunk. Standing six metres from a
+the flat mesh's 3,102, **6.1x**, built in 1.1 ms for the whole chunk -- 17,104, **5.5x**, since
+inside corners are square (§2.2). Standing six metres from a
 638-brick building: three bands, 50,274 triangles, and 3,188 of its 8,734 studs.
 
 ## 2. The mesh
@@ -54,6 +55,8 @@ made and never again. What a face knows is its own four sides (`brick::EDGE_*`, 
 | `CONVEX_QUIET` | a free edge whose facet the face round the corner draws, that one being open to the air for good | drawn in, no facet |
 | `EXTEND` | not an edge of the brick: the same face goes on, under another brick or as another rectangle | pushed **out** by the bevel |
 | `FLUSH` | part free edge, part not (a shaped part only) | left alone |
+
+An **inside corner** (`EDGE_INNER_SHIFT`, a bit a side) is a free edge coded `EXTEND` (§2.2).
 
 and four kinds of backing, each for a slit the gap probe found:
 
@@ -80,13 +83,49 @@ The first version of (3) kept a strip on every *hidden* face along its brick's f
 while the contact held. It closed the same slits and cost a plain wall **12x** the flat mesh's
 triangles; it is gone.
 
-### 2.2 What it does not do
+### 2.2 Inside corners are square
+
+Added 2026-10-16. Every free edge used to be bevelled, the foot of a wall on a floor as much as
+the corner of a brick in the open. Where one brick stands against another's face and that face
+goes on past it, the two bevels met in a notch: a 45-degree V along the foot of every wall, and
+where a floor's seam ran into that, a channel with square corners -- hard, dark, and nothing a
+real wall has. A face's side is an **inside corner** when, along all of it, a plain brick stands
+against the face round the edge (the floor under the wall) **and** a plain brick is diagonally
+across, out past this face's plane (the floor in front of it). "Plain": a full box that hides
+this face, not furniture, not an authored shape, not see-through -- and nothing of an authored
+shape within a cell of it, since a cheese slope or a round brick does not fill its cells and what
+closes a square corner beside one is not worked out (the bevel stays there).
+
+Such a side is coded `EXTEND`: no bevel, the face pushed out under the brick round the corner,
+which does the same back. Each backs the other, and the corner is square.
+
+What runs into it from the face's other sides is decided in the bake, a corner at a time
+(`FaceBake::corner`, `brick::CORNER_*`), because a facet pushed out with the face would stand in
+the other brick's bevel. It stops at the brick's own corner, and then:
+
+| Corner | When | Drawn as |
+|---|---|---|
+| `CAP` | the face round the edge is square there too (a plain brick diagonally below it), or the facet is a groove's | capped across its end: past it is the inside of the brick behind, drawing nothing |
+| `MITRE` | the face round the edge is bevelled along the corner | its far edge a bevel short; it meets that bevel in a mitre, as at a plug |
+| `COVERED` | the floor's own top is pushed out under that end and shows there | nothing more: a cap would fight it |
+
+And a corner whose *third* edge -- the one between the two faces round it -- is an inside corner
+is a plug: the bevels either side of a square foot meet in a mitre. That includes a side whose
+facet the face round the edge draws (`CONVEX_QUIET`): its facet runs on to the mitre too.
+
+Each rule here is a slit the gap probe found when it was missing. The room case is new for this:
+a floor of 2x4s and two walls of 1x4s meeting in an inside corner, whole and shot through.
+
+### 2.3 What it does not do
 
 * A shaped part's `FLUSH` side has no bevel and no backing. The heap case of the gap probe (every
   palette part, any way they fit) shows no slit from it.
 * An authored surface (a round brick, a spiral step) is copied as it is.
 * A facet that was one wall of a groove stays shaded as one after the brick that made the groove
   is shot away. It is the rim of a crater.
+* An inside corner stays square after the brick that made it is shot away: the face that was
+  pushed out under it hangs a bevel past its edge, and the facet behind is seen past that lip.
+  Closed, not re-meshed (§1).
 
 ## 3. The near tier (`BrickNear`)
 
@@ -162,7 +201,7 @@ the drawn seam was there to stop.
 
 | | |
 |---|---|
-| `tools/brick_bevel_gap_probe.gd` (not headless) | A magenta core inside every brick, a centimetre in from each face; counted over 200 close views of a tower, the tower shot through, a heap of every palette part, and the heap with three bricks in ten gone. A view may show `LONE_PIXELS` (8) and no more. Flat mesh: 39 / 34 / 19 / 30 pixels in all (rasteriser cracks, one to four a view). Chamfered: 20 / 19 / 14 / 19. Writes `shots/brick_bevel_off.png` and `_on.png`. |
+| `tools/brick_bevel_gap_probe.gd` (not headless) | A magenta core inside every brick, a centimetre in from each face; counted over 280 close views of a tower, the tower shot through, a room's inside corners, the room shot through, a heap of every palette part, and the heap with three bricks in ten gone. A view may show `LONE_PIXELS` (8) and no more. Flat mesh: 39 / 34 / 19 / 7 / 19 / 30 pixels in all (rasteriser cracks, one to four a view). Chamfered, square inside corners (2026-10-16): 23 / 33 / 16 / 33 / 12 / 20, worst view 7 (they were 20 / 19 / 9 / 27 / 14 / 19 bevelled). `GAP_WHERE=1` names the cell and parts behind each view's worst patch. Writes `shots/brick_bevel_off.png` and `_on.png`. |
 | `tools/brick_bevel_probe.gd` (headless) | Bands add up to the chunk; every triangle faces its normal; a hit's patches give exactly a fresh build; a stale bake is refused; studs band by band are the chunk's and follow the workshop's rule. |
 | `city.tscn -- --chamfer` | A wall a metre and a half off is chamfered and studded; after a hit the bands' index buffers, read back, draw exactly the bricks left; at a hundred metres nothing is held and the picture is the same either way. |
 | `city.tscn -- --chamfer --cost [--no-near \| --no-studs \| --no-bevel]` | Frame times, and the renderer's own CPU and GPU time, beside a building while it is shot at and brought down. A timing run. |

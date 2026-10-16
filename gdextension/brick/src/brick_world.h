@@ -1340,6 +1340,7 @@ private:
         const Vector2 *uvs = nullptr;
         const Vector2 *uv2s = nullptr;
         const uint32_t *edge = nullptr;   // one a face
+        const uint8_t *corner = nullptr;  // one a face (FaceBake::corner)
         const uint8_t *drawn = nullptr;   // one a face, or null for every face
         /// The run's facet floors (FaceBake::floors), and the bake's number
         /// for the run's first face (a floor names its face by that).
@@ -1373,6 +1374,7 @@ private:
         PackedVector2Array uvs;
         PackedVector2Array uv2s;
         std::vector<uint32_t> edge;
+        std::vector<uint8_t> corner;
         std::vector<brick::FaceBake::Floor> floors;
         ChamferIn in;
         ChamferOut out;

@@ -1239,6 +1239,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                 fb.owner.push_back((int32_t)bi);
                 fb.other.push_back(other);
                 fb.edge.push_back(brick::EDGE_RAW);
+                fb.corner.push_back(0);
             }
             continue;
         }
@@ -1390,10 +1391,35 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                         // this same face.
                         const int32_t this_face = (int32_t)fb.owner.size() - 1;
                         uint32_t edge_grooves = 0; // brick::EDGE_GROOVE_SHIFT
+                        uint32_t edge_inner = 0;   // brick::EDGE_INNER_SHIFT
+                        const auto local_of = [&](int aa, int bb) -> Vector3i {
+                            int lc[3] = { 0, 0, 0 };
+                            lc[sa] = si;
+                            lc[pa] = aa;
+                            lc[pb] = bb;
+                            return Vector3i(base.x + lc[0], base.y + lc[1], base.z + lc[2]);
+                        };
+                        // A block that can back an inside corner: a plain
+                        // brick for good, that hides this face. Not furniture,
+                        // which reads as open air; not an authored shape,
+                        // which need not fill its cells; not a see-through
+                        // one.
+                        const auto backs = [&](int32_t blk) -> bool {
+                            return blk >= 0 && blk != (int32_t)bi && !c.blocks[blk].decorative
+                                    && parts[c.blocks[blk].archetype].mesh.empty()
+                                    && brick_material_hides(b.material, c.blocks[blk].material);
+                        };
                         const auto side = [&](int which, int a_from, int a_to, int b_from,
                                 int b_to, int da, int db) -> uint32_t {
                             bool free_edge = false, more_face = false, open = true;
                             bool walled = true;
+                            // brick::EDGE_INNER_SHIFT: every cell along the
+                            // side is an inside corner.
+                            bool inner = a.is_full_box();
+                            // ...or would be one for the face ROUND the edge,
+                            // where that one is open: it does not draw the
+                            // facet this side would leave to it (QUIET).
+                            bool inner_beyond = false;
                             // The facet floors (FaceBake::floors): runs of
                             // cells along this side with a block against the
                             // face round the edge AND one diagonally across.
@@ -1426,13 +1452,29 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                     const Vector3i beyond(base.x + lc[0], base.y + lc[1],
                                             base.z + lc[2]);
                                     const int32_t against = c.block_at(beyond);
+                                    const int32_t across = c.block_at(beyond + FACE_DIR[f]);
                                     if (against >= 0) {
                                         open = false;
+                                        if (!backs(against) || !backs(across)) {
+                                            inner = false;
+                                        }
+                                        // Not beside a part with an authored
+                                        // shape either (a cheese slope, a round
+                                        // brick): it does not fill its cells,
+                                        // and what closes a square corner
+                                        // against one is not worked out. The
+                                        // bevel stays there.
+                                        for (int n = 0; inner && n < 27; ++n) {
+                                            const Vector3i d(n % 3 - 1, (n / 3) % 3 - 1, n / 9 - 1);
+                                            const int32_t nb = c.block_at(beyond + d);
+                                            if (nb >= 0 && !parts[c.blocks[nb].archetype].mesh.empty()) {
+                                                inner = false;
+                                            }
+                                        }
                                         // A third brick, not more of the one
                                         // this stands against: that one's
                                         // face goes on past the edge and is
                                         // pushed out under this (EXTEND).
-                                        const int32_t across = c.block_at(beyond + FACE_DIR[f]);
                                         if (across < 0 || across == against) {
                                             close_run();
                                         } else if (run_from < 0) {
@@ -1440,6 +1482,15 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                         }
                                     } else {
                                         walled = false;
+                                        inner = false;
+                                        // The face round the edge, seen from
+                                        // there: the block this face stands
+                                        // against, and one past it beyond.
+                                        if (a.is_full_box()
+                                                && backs(c.block_at(local_of(aa, bb) + FACE_DIR[f]))
+                                                && backs(across)) {
+                                            inner_beyond = true;
+                                        }
                                         close_run();
                                     }
                                 }
@@ -1451,6 +1502,22 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             }
                             if (!free_edge) {
                                 return brick::EDGE_EXTEND;
+                            }
+                            // An inside corner: square, and pushed out under
+                            // the brick round it, which backs it -- no facet,
+                            // so no facet floors either.
+                            if (inner) {
+                                fb.floors.resize(floors_before);
+                                edge_inner |= 1u << which;
+                                return brick::EDGE_EXTEND;
+                            }
+                            // The face round the edge is square there and
+                            // draws no facet, so this one does -- shaded as
+                            // the groove that one's would have been, so the
+                            // two never differ where both are drawn.
+                            if (inner_beyond) {
+                                edge_grooves |= 1u << which;
+                                return brick::EDGE_CONVEX;
                             }
                             // One facet for the two faces that share it, where
                             // the one round the corner is open to the air for
@@ -1488,13 +1555,31 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             return c.block_at(Vector3i(base.x + lc[0], base.y + lc[1],
                                     base.z + lc[2])) >= 0;
                         };
+                        // Or whose third edge -- the one between those two
+                        // faces -- is an INSIDE corner (brick::EDGE_INNER_SHIFT):
+                        // square, so the two bevels either side of it meet in
+                        // a mitre there too, the wall's end and its foot.
+                        // Corner k's cell, and its two outward steps in the
+                        // plane.
+                        Vector3i corner_cell[4], out_a[4], out_b[4];
                         for (int k = 0; k < 4; ++k) {
                             const Vector3i o = FACE_CORNERS[f][k];
                             const int oc[3] = { o.x, o.y, o.z };
                             const int ca = oc[pa] ? a1 : ai;
                             const int cb = oc[pb] ? b1 : bj;
-                            if (taken_at(ca + (oc[pa] ? 1 : -1), cb)
-                                    && taken_at(ca, cb + (oc[pb] ? 1 : -1))) {
+                            corner_cell[k] = local_of(ca, cb);
+                            out_a[k] = Vector3i();
+                            out_b[k] = Vector3i();
+                            out_a[k][pa] = oc[pa] ? 1 : -1;
+                            out_b[k][pb] = oc[pb] ? 1 : -1;
+                            const Vector3i &cc = corner_cell[k];
+                            const bool third_inner = a.is_full_box()
+                                    && ((backs(c.block_at(cc + out_a[k]))
+                                                && backs(c.block_at(cc + out_a[k] + out_b[k])))
+                                            || (backs(c.block_at(cc + out_b[k]))
+                                                && backs(c.block_at(cc + out_b[k] + out_a[k]))));
+                            if ((taken_at(ca + (oc[pa] ? 1 : -1), cb)
+                                    && taken_at(ca, cb + (oc[pb] ? 1 : -1))) || third_inner) {
                                 edge |= 1u << (brick::EDGE_PLUG_SHIFT + k);
                             }
                         }
@@ -1535,8 +1620,59 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             caps |= (a_hi_on && tunnel_at(a1 + 1, b1, 0, 1)) ? 1u << 7 : 0u;
                         }
                         edge |= caps << brick::EDGE_CAP_SHIFT;
+                        // A bevelled side running into an INSIDE corner at
+                        // one end (brick::EDGE_INNER_SHIFT). Its facet stops
+                        // at the brick's corner there, and either:
+                        //   * the face round the edge is square at that end
+                        //     too (a brick diagonally below it), or the facet
+                        //     is a groove: the facet is CAPPED across its end
+                        //     (the cap bit of that end) -- unless the floor
+                        //     the corner stands on is pushed out under it and
+                        //     shows there already, when a cap would fight it;
+                        //   * or that face is bevelled along the corner's
+                        //     edge: the two bevels meet in a MITRE (the plug
+                        //     bit of the corner), as at a plug.
+                        const Vector3i fd = FACE_DIR[f];
+                        uint8_t corners = 0;
+                        for (int k = 0; k < 4; ++k) {
+                            const Vector3i o = FACE_CORNERS[f][k];
+                            const int ia = o[pa] ? 1 : 0;           // the A side at k
+                            const int ib = 2 + (o[pb] ? 1 : 0);     // the B side at k
+                            const bool inner_a = (edge_inner >> ia) & 1u;
+                            const bool inner_b = (edge_inner >> ib) & 1u;
+                            if (inner_a == inner_b) {
+                                continue;
+                            }
+                            edge &= ~(1u << (brick::EDGE_PLUG_SHIFT + k));
+                            const int s_side = inner_a ? ib : ia;
+                            if (code_of(s_side * 2) != brick::EDGE_CONVEX) {
+                                continue;
+                            }
+                            const Vector3i g1 = inner_a ? out_a[k] : out_b[k];
+                            const Vector3i g2 = inner_a ? out_b[k] : out_a[k];
+                            const Vector3i &cc = corner_cell[k];
+                            // A groove's other wall: a plain brick there. An
+                            // authored shape or a see-through one is drawn
+                            // against as open air, and is that here too.
+                            const int32_t pb_blk = backs(c.block_at(cc + g2)) ? c.block_at(cc + g2) : -1;
+                            const int32_t d_blk = c.block_at(cc + g1 + g2);
+                            uint8_t state;
+                            if (pb_blk < 0 && !backs(d_blk)) {
+                                state = brick::CORNER_MITRE;
+                            } else {
+                                const int32_t e_blk = c.block_at(cc + g1 + g2 + fd);
+                                const int32_t y_blk = c.block_at(cc + g1 + fd);
+                                const bool e_inner = backs(e_blk) && backs(c.block_at(cc + g2 + fd));
+                                const bool covered = (e_blk >= 0 && e_blk == y_blk) || e_inner
+                                        || (pb_blk < 0 && e_blk >= 0 && e_blk == d_blk);
+                                state = covered ? brick::CORNER_COVERED : brick::CORNER_CAP;
+                            }
+                            corners |= (uint8_t)(state << (k * 2));
+                        }
                         edge |= edge_grooves << brick::EDGE_GROOVE_SHIFT;
+                        edge |= edge_inner << brick::EDGE_INNER_SHIFT;
                         fb.edge.push_back(edge);
+                        fb.corner.push_back(corners);
                     }
                 }
             }
@@ -2742,11 +2878,51 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
             // stop a bevel short for a corner triangle: its far edge runs on
             // to the brick's corner, and the facet of the other side meets it
             // there along the mitre. Two facets close the corner between them.
-            Vector3 far1 = q[k1] + step, far2 = q[k2] + step;
+            // Where it runs into an INSIDE corner (brick::EDGE_INNER_SHIFT)
+            // it stops at the brick's own corner, not pushed out with the face:
+            // past it is the other brick's bevel, and the facet would stand
+            // in it. Then (bake_faces_into decides) either its far edge stops
+            // a bevel short, where the face round the edge is bevelled along
+            // the corner -- the two meet in a mitre (the plug bit) -- or it
+            // runs on square and is capped across its end (the cap bit): what
+            // is past the end of a groove that runs into a square corner is
+            // the inside of the brick behind, which draws nothing there. (A
+            // wall's seam coming down to the floor, a floor's seam running up
+            // to a wall.) With neither, the floor pushed out under the corner
+            // shows there.
+            Vector3 near1 = q[k1], near2 = q[k2];
+            Vector3 far1 = near1 + step, far2 = near2 + step;
+            for (int end = 0; end < 2; ++end) {
+                const int k = end == 0 ? k1 : k2;
+                const int other_hi = on_a ? hi_b[k] : hi_a[k];
+                const int other_side = on_a ? 2 + other_hi : other_hi;
+                if ((e & (1u << (brick::EDGE_INNER_SHIFT + other_side))) == 0) {
+                    continue;
+                }
+                const int state = (in.corner[i] >> (k * 2)) & 3;
+                const bool mitre = state == brick::CORNER_MITRE;
+                const bool cap = state == brick::CORNER_CAP;
+                const Vector3 axis = on_a ? B : A;
+                const Vector3 in_step = axis * (other_hi ? -c : c);
+                Vector3 &at = end == 0 ? near1 : near2;
+                Vector3 &far = end == 0 ? far1 : far2;
+                at += in_step;
+                far = at + step;
+                if (mitre) {
+                    far += in_step;
+                } else if (cap) {
+                    n = axis * (other_hi ? -1.0f : 1.0f);
+                    quad(at, at + step, at + o * c, at + o * c, shallow, deep, deep, deep);
+                    ++quads;
+                }
+            }
             for (int end = 0; end < 2; ++end) {
                 const int k = end == 0 ? k1 : k2;
                 const int other_code = on_a ? code_b[hi_b[k]] : code_a[hi_a[k]];
-                if (other_code != brick::EDGE_CONVEX
+                // QUIET too: a corner mitred because the edge between the two
+                // faces round it is an inside corner may have one side whose
+                // facet the face round the edge draws -- mitred there.
+                if ((other_code != brick::EDGE_CONVEX && other_code != brick::EDGE_CONVEX_QUIET)
                         || (e & (1u << (brick::EDGE_PLUG_SHIFT + k))) == 0) {
                     continue;
                 }
@@ -2754,12 +2930,16 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
                 (end == 0 ? far1 : far2) += run_out;
             }
             n = (face_n + o).normalized();
-            quad(q[k1], q[k2], far2, far1, shallow, shallow, deep, deep);
+            quad(near1, near2, far2, far1, shallow, shallow, deep, deep);
             ++quads;
             // The caps (brick::EDGE_CAP_SHIFT): the facet's own cross-section,
             // across the end it stops at, facing back along it.
             for (int end = 0; end < 2; ++end) {
                 if ((e & (1u << (brick::EDGE_CAP_SHIFT + s * 2 + end))) == 0) {
+                    continue;
+                }
+                // An inside corner's cap is drawn above.
+                if ((e & (1u << (brick::EDGE_INNER_SHIFT + (on_a ? 2 + end : end)))) != 0) {
                     continue;
                 }
                 const int k = ((on_a ? hi_b[k1] : hi_a[k1]) == end) ? k1 : k2;
@@ -2916,6 +3096,7 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
     in.uvs = c.bake.uvs.ptr();
     in.uv2s = c.bake.uv2s.ptr();
     in.edge = c.bake.edge.data();
+    in.corner = c.bake.corner.data();
     in.drawn = drawn.data();
     in.floors = c.bake.floors.data();
     in.floor_count = (int)c.bake.floors.size();
@@ -2989,12 +3170,14 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     job->uvs = c.bake.uvs;
     job->uv2s = c.bake.uv2s;
     job->edge.assign(c.bake.edge.begin() + first, c.bake.edge.begin() + first + faces);
+    job->corner.assign(c.bake.corner.begin() + first, c.bake.corner.begin() + first + faces);
     job->in.verts = job->verts.ptr() + (size_t)first * 4;
     job->in.normals = job->normals.ptr() + (size_t)first * 4;
     job->in.colours = job->colours.ptr() + (size_t)first * 4;
     job->in.uvs = job->uvs.ptr() + (size_t)first * 4;
     job->in.uv2s = job->uv2s.ptr() + (size_t)first * 4;
     job->in.edge = job->edge.data();
+    job->in.corner = job->corner.data();
     {
         const auto before = [](const brick::FaceBake::Floor &l, int face) {
             return l.face < face;
