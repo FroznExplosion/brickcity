@@ -824,3 +824,42 @@ func _round4() -> void:
 	_ok("closed, the parts are one build again", _ws._display.is_empty() and _ws.part_offset("barrel") == Vector3.ZERO)
 	_ws.extra_studs.clear()
 	_ws._draw_studs()
+
+	# Stage 5: the hands, and the gun worked. A body, a grip leaning back under it, a
+	# magazine in front of the grip, a barrel.
+	_ws._new_build()
+	_ws.work_plane = "side"
+	for spec in [["body", 3, [Vector2(20, 30), Vector2(50, 30), Vector2(50, 44), Vector2(20, 44)]],
+			["grip", 3, [Vector2(40, 12), Vector2(45, 12), Vector2(48, 30), Vector2(43, 30)]],
+			["magazine", 3, [Vector2(28, 10), Vector2(33, 10), Vector2(33, 30), Vector2(28, 30)]],
+			["barrel", 1, [Vector2(4, 36), Vector2(20, 36), Vector2(20, 40), Vector2(4, 40)]]]:
+		_ws.select_part(_ws.part_names.find(spec[0]))
+		_ws.part_width[spec[0]] = spec[1]
+		_ws.sketch_region(spec[2])
+	_ws.select_part(0)
+	_ws.set_hands(true)
+	var t: Dictionary = _ws.hand_targets()
+	var right: Node3D = _ws._hand_nodes[0]
+	var k: float = 1.0 / float(_ws.GAME_PER_WORKSHOP)
+	var hole := right.transform * Vector3(0, ViewArms.HOLE_Y, 0)
+	_ok("the right hand's C is round the grip", t.has("right") and hole.distance_to(t.right[0]) < 0.01
+			and absf(right.transform.basis.x.normalized().y) > 0.8, "%s %s" % [hole, str(t.get("right"))])
+	_ok("at the gun's scale: its hole is a grip's thickness (7-9.5 mm print)",
+			absf(0.019 * 2.0 * k / BrickPalette.STUD_M * 4.0 - 8.3) < 1.3, "%.1f mm" % (0.019 * 2.0 * k / BrickPalette.STUD_M * 4.0))
+	_ok("the left hand on the barrel, its hole along the gun", t.get("fore") == "barrel"
+			and absf((_ws._hand_nodes[1] as Node3D).transform.basis.x.normalized().x) > 0.9, str(t.get("fore")))
+	_ws._play = {"t": 0.0, "last": 0}
+	_ws._rebuild_display()
+	_ws.play_pose(0.06)
+	var body_d: Dictionary = _ws._display.body
+	_ok("a shot kicks the gun back", ((body_d.mesh as Node3D).transform.origin - (body_d.xform as Transform3D).origin).x > 0.05,
+			str((body_d.mesh as Node3D).transform.origin - (body_d.xform as Transform3D).origin))
+	_ws.play_pose(3.0)
+	var mag_d: Dictionary = _ws._display.magazine
+	_ok("reloading, the magazine comes out under the gun, the left hand pinching it",
+			((mag_d.mesh as Node3D).transform.origin - (mag_d.xform as Transform3D).origin).y < -2.0
+			and ((_ws._hand_nodes[1] as Node3D).get_node("PINCH") as Node3D).visible,
+			str((mag_d.mesh as Node3D).transform.origin - (mag_d.xform as Transform3D).origin))
+	_ws._play = {}
+	_ws._clear_display()
+	_ws.set_hands(false)

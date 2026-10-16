@@ -371,7 +371,10 @@ func _shot() -> void:
 				work_plane = "side"
 				sketch_region(spec[2])
 			select_part(0)
-			set_exploded(true)
+			if "--hands" in OS.get_cmdline_user_args():
+				set_hands(true)
+			else:
+				set_exploded(true)
 		_look_at_build()
 		views = [0, 1, 3]
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
@@ -383,6 +386,19 @@ func _shot() -> void:
 		var path := "user://asset_shots/%s.png" % VIEWS[v]
 		img.save_png(path)
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
+	if hands_on:
+		# Mid-reload: the magazine out, the left hand pinching it.
+		set_view(1)
+		_play = {"t": 3.0, "last": Time.get_ticks_msec()}
+		_display_dirty = true
+		_rebuild_display()
+		for _i in 3:
+			_play.t = 3.0
+			_play.last = Time.get_ticks_msec()
+			await get_tree().process_frame
+		get_viewport().get_texture().get_image().save_png("user://asset_shots/reload.png")
+		_play = {}
+		_clear_display()
 	show_help(true)
 	for _i in 12:
 		await get_tree().process_frame
@@ -832,6 +848,8 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_U: set_tool("" if tool == "stud" else "stud")
 			KEY_G: set_tool("" if tool == "move" else "move")
 			KEY_E: set_exploded(not exploded)
+			KEY_H: set_hands(not hands_on)
+			KEY_P: play_cycle()
 			_: alt = false
 		if alt:
 			get_viewport().set_input_as_handled()
@@ -2732,7 +2750,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -4125,6 +4143,7 @@ var _draw_box: VBoxContainer
 var _draws: OptionButton
 var _rail_scroll: ScrollContainer
 var _explode_button: Button
+var _hands_button: Button
 var _rail_box: VBoxContainer
 
 
@@ -4170,6 +4189,19 @@ func _build_rail(layer: CanvasLayer) -> void:
 	_explode_button.focus_mode = Control.FOCUS_NONE
 	_explode_button.toggled.connect(func(on: bool) -> void: set_exploded(on))
 	box.add_child(_explode_button)
+	_hands_button = Button.new()
+	_hands_button.text = "Hands   Alt H"
+	_hands_button.toggle_mode = true
+	_hands_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_hands_button.focus_mode = Control.FOCUS_NONE
+	_hands_button.toggled.connect(func(on: bool) -> void: set_hands(on))
+	box.add_child(_hands_button)
+	var play := Button.new()
+	play.text = "Play: fire, reload   Alt P"
+	play.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	play.focus_mode = Control.FOCUS_NONE
+	play.pressed.connect(func() -> void: play_cycle())
+	box.add_child(play)
 	box.add_child(HSeparator.new())
 
 	# The brush: paint and sketch share it.
@@ -4637,7 +4669,7 @@ func _ray_offset() -> Vector3:
 func _rebuild_display() -> void:
 	_display_dirty = false
 	_clear_display()
-	_offsets = explode_offsets()
+	_offsets = explode_offsets() if exploded else {}
 	var by_part := {}
 	for i in recipe.size():
 		if recipe.frame_of(i) == 0:
@@ -4694,7 +4726,8 @@ func _rebuild_display() -> void:
 			pm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, plain)
 			pick = pm.generate_triangle_mesh()
 		world.release_chunk(c)
-		_display[name] = {"mesh": mi, "pick": pick, "xform": xform, "offset": _offsets.get(name, Vector3.ZERO)}
+		_display[name] = {"mesh": mi, "pick": pick, "xform": xform, "offset": _offsets.get(name, Vector3.ZERO),
+				"centre": xform * (Vector3(hi - lo) * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M) * 0.5)}
 	_draw_studs()
 	_draw_points()
 
@@ -4708,13 +4741,16 @@ func _clear_display() -> void:
 ## Each frame, exploded: the parts built again if an edit changed them, the build itself
 ## hidden behind them, and what follows the mouse drawn where its part is.
 func _explode_process() -> void:
+	var apart := exploded or not _play.is_empty()
 	for f in _frame_meshes:
-		(_frame_meshes[f] as Node3D).visible = not exploded
+		(_frame_meshes[f] as Node3D).visible = not apart
+	if apart and _display_dirty:
+		_rebuild_display()
+	_play_process()
+	_place_hands()
 	if not exploded:
 		_tool_lines.position = Vector3.ZERO
 		return
-	if _display_dirty:
-		_rebuild_display()
 	var off := _ray_offset()
 	_ghost.global_position += off
 	_tool_lines.position = off
@@ -4914,3 +4950,259 @@ func _move_input(e: InputEvent) -> bool:
 					int(round(d.z / BrickPalette.STUD_M)))
 		return true
 	return false
+
+
+# ---------------------------------------------------------------------------
+# Round 4: the hands, and the gun worked
+# ---------------------------------------------------------------------------
+
+## A game metre in the workshop's metres: the gun is real size in the game (the readout's
+## "in the game"), a quarter-size model in nano bricks here.
+const GAME_PER_WORKSHOP := PRINT_MM_PER_STUD * REAL_PER_PRINT / 1000.0 / BrickPalette.STUD_M
+## The play cycle's times, seconds: three shots, then the magazine out and in.
+const PLAY_SHOT := 0.4
+const PLAY_LENGTH := 4.6
+var hands_on := false
+var _hand_nodes := [null, null]   # right, left: Node3D, shapes under it by name
+var _play := {}                    # the cycle under way: {t}
+
+
+func set_hands(on: bool) -> void:
+	hands_on = on
+	if on and _hand_nodes[0] == null:
+		for side in 2:
+			_hand_nodes[side] = _build_hand(side)
+	if _hands_button != null:
+		_hands_button.set_pressed_no_signal(on)
+	_place_hands()
+
+
+## The game's own brick hand, the first-person arms' (ViewArms), at the gun's scale here:
+## a wrist, a stub of forearm, and the C (or, reaching for a magazine, the pinch).
+func _build_hand(side: int) -> Node3D:
+	var root := Node3D.new()
+	root.name = "HandR" if side == 0 else "HandL"
+	var skin := StandardMaterial3D.new()
+	skin.albedo_color = ViewArms.SKIN
+	skin.roughness = 0.6
+	var add := func(m: Mesh, at: Vector3, label: String) -> MeshInstance3D:
+		var mi := MeshInstance3D.new()
+		mi.mesh = m
+		mi.material_override = skin
+		mi.position = at
+		mi.name = label
+		root.add_child(mi)
+		return mi
+	var wrist := CylinderMesh.new()
+	wrist.top_radius = 0.018
+	wrist.bottom_radius = 0.018
+	wrist.height = 0.03
+	add.call(wrist, Vector3(0, 0.015, 0), "Wrist")
+	var fore := CylinderMesh.new()
+	fore.top_radius = 0.027
+	fore.bottom_radius = 0.032
+	fore.height = 0.22
+	var sleeve: MeshInstance3D = add.call(fore, Vector3(0, -0.11, 0), "Forearm")
+	var cloth := StandardMaterial3D.new()
+	cloth.albedo_color = ViewArms.SLEEVE
+	sleeve.material_override = cloth
+	add.call(ViewArms.c_mesh(0.019, 0.034, 0.042, deg_to_rad(70.0)), Vector3.ZERO, "C")
+	var pinch: MeshInstance3D = add.call(ViewArms.c_mesh(0.009, 0.024, 0.034, deg_to_rad(110.0)), Vector3.ZERO, "PINCH")
+	pinch.visible = false
+	root.visible = false
+	add_child(root)
+	return root
+
+
+func _hand_shape(side: int, shape: String) -> void:
+	var h: Node3D = _hand_nodes[side]
+	if h == null:
+		return
+	(h.get_node("C") as Node3D).visible = shape == "C"
+	(h.get_node("PINCH") as Node3D).visible = shape == "PINCH"
+
+
+## Where each hand holds the gun, assembled, in the workshop's metres: the middle of its
+## C's hole and its frame (X along the hole, Y to the fingers; ViewArms' hand frame).
+## The right hand round the grip, its hole along the grip's length, fingers forward; the
+## left round the underbarrel -- or the barrel, or the front of the body -- its hole along
+## the gun, fingers up. {right: [hole, Basis], left: ..., grip: part, fore: part}.
+func hand_targets() -> Dictionary:
+	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
+	var out := {}
+	var grip := _part_cells("grip")
+	if grip.is_empty():
+		grip = _part_cells("body")
+	if not grip.is_empty():
+		var c := _centroid(grip)
+		var axis := _long_axis(grip, c)
+		if axis.y < 0.0:
+			axis = -axis
+		out["right"] = [c, ViewArms.hand_basis(axis, fwd)]
+		out["grip"] = "grip" if not _part_cells("grip").is_empty() else "body"
+	for part in ["underbarrel", "barrel", "body"]:
+		var cells := _part_cells(part)
+		if cells.is_empty():
+			continue
+		var c := _centroid(cells)
+		if part == "body":
+			# The front third of the body.
+			var lo := INF
+			var hi := -INF
+			for p in cells:
+				lo = minf(lo, p.dot(fwd))
+				hi = maxf(hi, p.dot(fwd))
+			var front := []
+			for p in cells:
+				if p.dot(fwd) > lo + (hi - lo) * 0.66:
+					front.append(p)
+			c = _centroid(front)
+		out["left"] = [c, ViewArms.hand_basis(fwd, Vector3.UP)]
+		out["fore"] = part
+		break
+	return out
+
+
+## The centres of a part's bricks' cells, in metres.
+func _part_cells(part: String) -> Array:
+	var tag := part_names.find(part)
+	var out := []
+	if tag < 0:
+		return out
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0 or i >= part_of.size() or part_of[i] != tag:
+			continue
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					out.append(Vector3((c.x + dx + 0.5) * BrickPalette.STUD_M, (c.y + dy + 0.5) * BrickPalette.PLATE_M,
+							(c.z + dz + 0.5) * BrickPalette.STUD_M))
+	return out
+
+
+static func _centroid(pts: Array) -> Vector3:
+	var s := Vector3.ZERO
+	for p in pts:
+		s += p
+	return s / maxf(1.0, pts.size())
+
+
+## The way a part runs longest in the side view (along and up the gun).
+static func _long_axis(pts: Array, c: Vector3) -> Vector3:
+	var xx := 0.0
+	var yy := 0.0
+	var xy := 0.0
+	for p in pts:
+		var d: Vector3 = p - c
+		xx += d.x * d.x
+		yy += d.y * d.y
+		xy += d.x * d.y
+	var a := 0.5 * atan2(2.0 * xy, xx - yy)
+	return Vector3(cos(a), sin(a), 0.0)
+
+
+## A hand's node put on its target: its frame, scaled to the gun, the wrist back from the
+## hole along its fingers, and the extra `move` (the play cycle's) on top.
+func _put_hand(side: int, hole: Vector3, b: Basis, move: Transform3D = Transform3D()) -> void:
+	var h: Node3D = _hand_nodes[side]
+	if h == null:
+		return
+	var k := 1.0 / GAME_PER_WORKSHOP
+	var wrist := hole - b.y * ViewArms.HOLE_Y * k
+	h.transform = move * Transform3D(b.scaled(Vector3.ONE * k), wrist)
+
+
+func _place_hands() -> void:
+	for side in 2:
+		if _hand_nodes[side] != null:
+			(_hand_nodes[side] as Node3D).visible = hands_on
+	if not hands_on or not _play.is_empty():
+		return
+	var t := hand_targets()
+	if t.has("right"):
+		_put_hand(0, t.right[0] + part_offset(String(t.grip)), t.right[1])
+	if t.has("left"):
+		_put_hand(1, t.left[0] + part_offset(String(t.fore)), t.left[1])
+	_hand_shape(1, "C")
+
+
+## Play the gun: three shots (the whole gun kicks back and its muzzle rises, about the
+## grip), then the left hand goes to the magazine, takes it out and puts it back. The parts
+## are baked first -- each laid again on its own (as Explode does) -- so they can move apart.
+func play_cycle() -> void:
+	if not _play.is_empty():
+		return
+	set_hands(true)
+	_display_dirty = true
+	_play = {"t": 0.0, "last": Time.get_ticks_msec()}
+
+
+func _play_process() -> void:
+	if _play.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	_play.t = float(_play.t) + (now - int(_play.last)) / 1000.0
+	_play.last = now
+	if float(_play.t) >= PLAY_LENGTH:
+		_play = {}
+		_display_dirty = true
+		if not exploded:
+			_clear_display()
+		for name in _display:
+			(_display[name].mesh as Node3D).transform = _display[name].xform
+		_place_hands()
+		return
+	play_pose(float(_play.t))
+
+
+## The cycle at time `t`: each part's mesh and both hands where they are then.
+func play_pose(t: float) -> void:
+	var targets := hand_targets()
+	if not targets.has("right"):
+		return
+	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
+	var pivot: Vector3 = targets.right[0] + part_offset(String(targets.grip))
+	var kick := 0.0
+	if t < PLAY_SHOT * 3.0:
+		var u := fmod(t, PLAY_SHOT) / PLAY_SHOT
+		kick = exp(-u * 9.0) * (1.0 - exp(-u * 60.0))
+	# Recoil: back along the gun and the muzzle up, about the grip.
+	var rise := Basis(Vector3(0, 0, 1), deg_to_rad(6.0) * kick * signf(fwd.x))
+	var recoil := Transform3D(Basis(), pivot) * Transform3D(rise, -fwd * BrickPalette.STUD_M * 0.8 * kick) \
+			* Transform3D(Basis(), -pivot)
+	# Reload: the left hand to the magazine, the magazine down and out with it, and back.
+	var mag_out := 0.0
+	var reach := 0.0
+	if t > 1.6 and t < 2.2:
+		reach = (t - 1.6) / 0.6
+	elif t >= 2.2 and t <= 3.8:
+		reach = 1.0
+	elif t > 3.8 and t < 4.4:
+		reach = 1.0 - (t - 3.8) / 0.6
+	if t > 2.2 and t < 2.8:
+		mag_out = (t - 2.2) / 0.6
+	elif t >= 2.8 and t <= 3.2:
+		mag_out = 1.0
+	elif t > 3.2 and t < 3.8:
+		mag_out = 1.0 - (t - 3.2) / 0.6
+	mag_out = smoothstep(0.0, 1.0, mag_out)
+	reach = smoothstep(0.0, 1.0, reach)
+	var mag_move := Vector3.DOWN * BrickPalette.STUD_M * 8.0 * mag_out + fwd * BrickPalette.STUD_M * 1.5 * mag_out
+	for name in _display:
+		var d: Dictionary = _display[name]
+		var x: Transform3D = recoil * (d.xform as Transform3D)
+		if name == "magazine":
+			x = x.translated(mag_move)
+		(d.mesh as Node3D).transform = x
+	_put_hand(0, targets.right[0] + part_offset(String(targets.grip)), targets.right[1], recoil)
+	if targets.has("left"):
+		var hole: Vector3 = targets.left[0] + part_offset(String(targets.fore))
+		var b: Basis = targets.left[1]
+		if _display.has("magazine") and reach > 0.0:
+			var mag: Vector3 = (_display.magazine.centre as Vector3) + mag_move
+			hole = hole.lerp(mag, reach)
+			b = b.slerp(ViewArms.hand_basis(fwd, Vector3.UP), reach)
+		_hand_shape(1, "PINCH" if reach > 0.9 else "C")
+		_put_hand(1, hole, b, recoil)
