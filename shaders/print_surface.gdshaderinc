@@ -91,6 +91,12 @@ uniform float skin_void_darken : hint_range(0.0, 1.0) = 0.7;
 uniform float zseam_strength : hint_range(0.0, 1.0) = 0.6;
 uniform float zseam_width = 0.014;   // metres, half of it each side
 
+// A slope or a curve is printed as a staircase of layers: each layer stands
+// a bead out past the one above (or below) it, so a sloped face is risers --
+// the layers' walls, standing up -- and treads, the tops (or undersides) of
+// the layers between them. How strongly the steps show in the shading.
+uniform float stair_strength : hint_range(0.0, 1.0) = 0.55;
+
 group_uniforms underside;
 // The underside of a printed part is OPEN: a brick is a shell, and what the
 // bed side shows is its rim, the ribs that stand in for tubes, and the
@@ -104,6 +110,14 @@ uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
 uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
 // How dark the hollow reads: the inside of a shell ten millimetres deep.
 uniform float under_cavity : hint_range(0.0, 1.0) = 0.3;
+// The hollow has DEPTH: the view ray is walked up into it (ps_under_sd), and
+// where it meets a rib or the rim before the roof that wall is seen, lit
+// more the nearer the open bottom. One depth for every part -- a face knows
+// its footprint, not its height -- between a plate's hollow (2 mm, 0.1 here)
+// and a brick's (8 mm).
+uniform float under_depth = 0.12;
+uniform float under_wall : hint_range(0.0, 1.0) = 0.7;
+uniform float under_depth_range = 25.0;   // metres: past it, flat
 
 group_uniforms finish;
 // Added to the material's roughness on a printed side, taken off on a top.
@@ -312,11 +326,30 @@ vec2 ps_zigzag(vec2 uv, vec2 lo, vec2 hi, vec2 n, float t, float e, float bw, fl
     return vec2(0.0, clamp((half_w - g) / max(aa, 1e-4) + 0.5, 0.0, 1.0));
 }
 
+// A sloped face as its staircase of layers (stair_strength). `normal` is the
+// face's, in view space; `up` the part's up, in view space; `ny` the face's
+// normal's up component in the part's own space (+ faces up, - down); `t` the
+// layer count up the part; `aa` its fwidth. Of each layer's band of the
+// face, the riser takes 1 - ny^2 and the tread ny^2: a steep face is nearly all
+// wall, a shallow one wide terraces -- as a sliced cheese slope is.
+vec3 ps_stairs(vec3 normal, vec3 up, float ny, float t, float aa, float k) {
+    vec3 riser = normal - up * dot(normal, up);
+    float rl = length(riser);
+    if (rl < 1e-4 || k <= 0.0) {
+        return normal;
+    }
+    riser /= rl;
+    float r = clamp(1.0 - ny * ny, 0.0, 1.0);
+    float tread = smoothstep(r - aa, r + aa, fract(t));
+    vec3 step_n = normalize(mix(riser, up * sign(ny), tread));
+    return normalize(mix(normal, step_n, k));
+}
+
 // The underside of a part, open (see underside_hollow). `uv` is the point on
-// the bottom face, `fsize` the face, both in metres. Returns (how solid:
+// the bottom face, `fsize` the face, both in metres. ps_underside returns (how solid:
 // 1 on rim or rib, 0 in the hollow; the loop count across the solid, for the
 // beads -- the first layer's walls follow the shape they outline).
-vec2 ps_underside(vec2 uv, vec2 fsize) {
+float ps_under_sd(vec2 uv, vec2 fsize) {
     vec2 n = max(floor(fsize / PS_STUD + 0.5), vec2(1.0));
     float edge = min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y));
     float sd = edge - under_rim;                  // < 0: in the rim
@@ -343,6 +376,13 @@ vec2 ps_underside(vec2 uv, vec2 fsize) {
             sd = min(sd, dl - under_rib);
         }
     }
+    return sd;
+}
+
+// ps_under_sd is the signed distance to the rim and ribs (< 0 inside them),
+// metres, with no derivatives in it -- it is walked in a loop.
+vec2 ps_underside(vec2 uv, vec2 fsize) {
+    float sd = ps_under_sd(uv, fsize);
     float aa = max(fwidth(sd), 1e-5);
     return vec2(clamp(0.5 - sd / aa, 0.0, 1.0), max(-sd, 0.0) / bottom_bead_width);
 }

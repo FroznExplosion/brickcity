@@ -33,6 +33,8 @@ const VIEWS := [
 	["tops", Vector3(6.2, 1.25, 5.9), Vector3(6.2, 0.42, 3.9)],
 	["tops_close", Vector3(5.6, 0.9, 4.1), Vector3(5.6, 0.42, 3.4)],
 	["seam", Vector3(-0.42, 0.3, -0.3), Vector3(0.05, 0.2, 0.05)],
+	["shapes", Vector3(2.3, 1.1, 8.6), Vector3(2.3, 0.25, 6.0)],
+	["shapes_close", Vector3(1.0, 0.75, 7.0), Vector3(0.8, 0.2, 6.0)],
 	["wall", Vector3(6.5, 1.6, 9.0), Vector3(5.6, 0.8, 0.7)],
 ]
 
@@ -104,6 +106,17 @@ func _build() -> void:
 	]
 	for f in field:
 		w.place_block(c, f[1], pal[f[0]], f[2])
+	# A row of the parts that are not boxes -- authored surfaces, every one:
+	# slopes, a cheese, a round brick, a curve, an arch.
+	var x := 0
+	for name in ["slope_2x2_y0", "slope_2x4_y0", "cheese_2x2_y0", "round_2x2", "curve_2x2_y0",
+			"arch_1x4_x", "round_1x1"]:
+		if not pal.has(name):
+			print("print_look_shot: no part ", name)
+			continue
+		var arch: int = pal[name]
+		w.place_block(c, Vector3i(x, 0, 16), arch, [4, 8, 6, 0, 2][x % 5])
+		x += w.get_archetype_size(arch).x + 1
 	for b in [red, blue, yel]:
 		w.set_block_material(c, b, 0)
 	var mat := ShaderMaterial.new()

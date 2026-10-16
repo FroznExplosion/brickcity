@@ -30,19 +30,23 @@ brightness by print order, the seam marked):
 | The seam | every layer's outer wall starts and stops on one corner: a vertical line of blobs | `ps_seam` on the part's low-X, low-Z corner, `zseam_*` |
 | The underside | OPEN. A 1x1: a rim alone. A 1xN: a rim and solid pins between the studs. 2xN and up: a diamond round each inside corner of the stud grid, ribs along the grid lines out to the rim | `ps_underside`, `under_*`; the hollow darkened (`under_cavity`) |
 | Layer to layer | no two alike | `layer_wobble` (shade) and `layer_relief_wobble` (how proud), per layer, per face |
+| The hollow's depth | about 2 mm under a plate, 8 under a brick | the view ray walked up into it six steps (`ps_under_sd`), a wall met on the way seen as one (`under_depth` 0.12, `under_wall`); flat past `under_depth_range` |
+| Slopes, cheese, rounds, arches, curves | the same 57 layers; a slope is a staircase of them -- risers and treads, wide terraces on a shallow one | layers counted up the part's height (an authored surface has no face rectangle to count in, and had NO layers until 2026-10-16); `ps_stairs`: of each layer's band, the riser takes 1 - n.y^2, the tread n.y^2 (`stair_strength`) |
 
 ## 3. What it costs
 
 Nothing new to hold: no textures, no vertex data. The stud's turn is in the instance transform it
-already had. The underside is a handful of arithmetic on bottom faces only; the stud top lost an
-`atan`. Not timed.
+already had. The underside is a handful of arithmetic on bottom faces only, plus seven distance
+evaluations within 25 m when the hollow is in view; the stairs are a normal blend on authored
+faces only; the stud top lost an `atan`. Not timed.
 
 ## 4. Not done
 
 * The first layer's elephant's foot (a slight flare at the bed).
-* Slopes and curves as stair-steps of layers: a sloped face still takes the side pattern.
-* The underside's walls and ribs are flat drawing, not depth: from straight below that is what is
-  seen, at a glancing angle the hollow has no sides.
+* One hollow depth for every part (a face does not know its part's height): a plate's reads a
+  little deep, a brick's a little shallow.
+* An authored part's flat top has the lines one fixed way, not turned with the part, and no walls
+  round it; its flat bottom is the bed's, not open.
 * Godot 4.8's texture streaming changes nothing here: there are no textures to stream. A baked
   per-footprint toolpath map, straight from G-code, is the next step if the drawn rules are not
   enough -- a few MB, one texture read a pixel.
