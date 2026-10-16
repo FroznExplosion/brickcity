@@ -1121,7 +1121,7 @@ func _store_asset_meta() -> void:
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
-			"sketches": sketches.duplicate(true)}
+			"sketches": sketches}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1278,6 +1278,8 @@ func _after_edit() -> void:
 	if _loading:
 		return
 	_reconcile_parts()
+	if _batch:
+		return   # the batch's own closing _after_edit does the rest, once
 	_store_asset_meta()
 	_outlines_dirty = true
 	_autosave_dirty = true
@@ -1310,31 +1312,42 @@ func _brick_info(i: int) -> Dictionary:
 			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
 
 
-## The upright-grid brick of this part at this cell, by recipe index, or -1.
+## The upright-grid brick of this part at this cell, by recipe index, or -1. Found
+## through the world's own cell lookup, not by walking the recipe.
 func find_brick(arch: String, cell: Vector3i) -> int:
-	for i in range(recipe.size() - 1, -1, -1):
-		if recipe.frame_of(i) == 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
-			return i
+	var size := BrickPalette.size_of(arch)
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				var block := world.block_at(chunk, cell + Vector3i(dx, dy, dz))
+				if block < 0:
+					continue
+				var i := _recipe_id_at(0, block)
+				if i >= 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
+					return i
 	return -1
 
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
 func remove_brick(arch: String, cell: Vector3i) -> bool:
 	var i := find_brick(arch, cell)
-	if i < 0:
+	return i >= 0 and take_brick(i)
+
+
+## Take up the brick at recipe index `i` as RMB does -- world, recipe, edits and paint
+## renumbered together (`_remove_rid`) -- and keep it, so Z can lay it back.
+func take_brick(i: int) -> bool:
+	if i < 0 or i >= recipe.size():
 		return false
-	var block: int = _placed_at[i][1]
-	var size := BrickPalette.size_of(arch)
-	# From inside one of its own cells: a slope or a curve is not solid everywhere in its box.
-	for dx in size.x:
-		for dy in size.y:
-			for dz in size.z:
-				var c := cell + Vector3i(dx, dy, dz)
-				if world.block_at(chunk, c) == block and world.is_solid(chunk, c):
-					var at := Vector3((c.x + 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M,
-							(c.z + 0.5) * BrickPalette.STUD_M)
-					return _delete_ray(at, Vector3.DOWN)
-	return false
+	var took := _brick_info(i)
+	_removing = i
+	_remove_rid(i)
+	_after_edit()
+	_edits.append("delete")
+	_deleted.append(took)
+	if not _redoing:
+		_redo.clear()
+	return true
 
 
 ## How many bricks each part has.
@@ -1527,12 +1540,13 @@ func fill_parts() -> Array:
 ## on shared courses, so neighbouring columns line up to be bridged; each layer grows
 ## from the other corner to the one under it, so seams do not stack.
 ## Returns [[archetype name, min cell]].
-func pack_cells(cells: Dictionary, random: bool = false) -> Array:
+func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, course: int = 1 << 30) -> Array:
 	# Cells something is already built in are not the fill's: packed as if empty, the big
 	# parts that hit what is there are refused when laid, and leave holes round it.
+	# `free`: cells built in now that will be empty when this is laid.
 	var left := {}
 	for c in cells:
-		if not world.is_solid(chunk, c):
+		if free.has(c) or not world.is_solid(chunk, c):
 			left[c] = true
 	var parts := fill_parts()
 	var out := []
@@ -1543,9 +1557,11 @@ func pack_cells(cells: Dictionary, random: bool = false) -> Array:
 		ys[c.y] = true
 	var layers := ys.keys()
 	layers.sort()
-	var base: int = layers[0]
+	# `course`: the layer courses count from, when it is not the lowest packed here (a
+	# part packed again in places keeps its courses).
+	var base: int = layers[0] if course == 1 << 30 else course
 	for y in layers:
-		var flip: bool = (y - base) % 2 == 1
+		var flip: bool = posmod(y - base, 2) == 1
 		var here := []
 		for c in left:
 			if c.y == y:
@@ -1560,7 +1576,7 @@ func pack_cells(cells: Dictionary, random: bool = false) -> Array:
 			var fits := []
 			for pe in parts:
 				var size: Vector3i = pe[1]
-				if size.y > 1 and (y - base) % 3 != 0:
+				if size.y > 1 and posmod(y - base, 3) != 0:
 					continue
 				var at := Vector3i(c.x - size.x + 1 if flip else c.x, y, c.z - size.z + 1 if flip else c.z)
 				if _box_in(left, at, size):
@@ -3018,7 +3034,9 @@ func sketch_region(outline: Array, remove: bool = false) -> int:
 		plain.append([q.x, q.y])
 	var sk: Dictionary
 	if sketches.has(key):
-		sk = (sketches[key] as Dictionary).duplicate(true)
+		sk = (sketches[key] as Dictionary).duplicate()
+		sk.adds = (sk.adds as Array).duplicate()
+		sk.subs = (sk.subs as Array).duplicate()
 	else:
 		sk = {"part": part_names[part_sel], "plane": work_plane, "at": _plane_value(work_plane),
 				"width": width_of(part_names[part_sel]), "adds": [], "subs": [], "bricks": []}
@@ -3036,36 +3054,143 @@ func clear_sketch(key: String) -> void:
 		resketch(key, {"adds": [], "subs": []})
 
 
-## Change a sketch -- `change` is merged into it -- and lay its bricks again: the old ones
-## taken up, the new ones packed from what it holds now. One undo, which puts the sketch
-## and its bricks back. Returns how many bricks it laid.
+## Change a sketch -- `change` is merged into it -- and lay its bricks again. One undo,
+## which puts the sketch and its bricks back. Returns how many bricks it has.
+##
+## Worked out near the change only: a brick of the old layout two studs (and a course)
+## clear of every cell drawn in or out stays where it is, and only the rest is packed
+## again. A new thickness or slope setting, or a new sketch, is worked out whole. Taking
+## every brick up and laying it again was ~140 ms on a 500-brick part -- a hitch per stroke.
 func resketch(key: String, change: Dictionary) -> int:
 	if not sketches.has(key) and not change.has("adds"):
 		return 0
-	var before = (sketches[key] as Dictionary).duplicate(true) if sketches.has(key) else null
-	var sk: Dictionary = (sketches.get(key, {}) as Dictionary).duplicate(true)
+	# Stored sketches are never changed in place (here or in sketch_region), so the undo
+	# can hold them as they are rather than as copies.
+	var before = sketches.get(key)
+	var sk: Dictionary = (sketches.get(key, {}) as Dictionary).duplicate()
 	sk.merge(change, true)
+	var grid := sketch_cells(sk)
+	var whole: bool = before == null or change.is_empty() or int(before.width) != int(sk.width)
+	var old_grid: Dictionary = {} if before == null else (
+			_sketch_cache[key] if _sketch_cache.has(key) else sketch_cells(before))
+	var near := {}   # 2D cells worked out again
+	if not whole:
+		for g in grid:
+			if not old_grid.has(g):
+				_mark_near(near, g)
+		for g in old_grid:
+			if not grid.has(g):
+				_mark_near(near, g)
+	var plane: String = sk.plane
+	var rid_of := {}
+	for i in _placed_at.size():
+		if int(_placed_at[i][0]) == 0:
+			rid_of[int(_placed_at[i][1])] = i
+	# The old bricks: kept (a plain brick clear of the change), or going.
+	var laid := []
+	var kept := {}    # "arch|cell" of the old bricks still there afterwards
+	var going := {}   # "arch|cell" -> recipe index
+	var free := {}    # cells of the going bricks: built in now, empty when the new are laid
+	var redo2 := near.duplicate()   # 2D cells to pack: near the change, and under any brick going
+	for b in sk.get("bricks", []):
+		var arch := String(b[0])
+		var cell := Vector3i(int(b[1][0]), int(b[1][1]), int(b[1][2]))
+		var size := BrickPalette.size_of(arch)
+		var stays := not whole and not BrickPalette.is_shaped(BrickPalette.part_of(arch))
+		if stays:
+			# Its face on the sketch plane: the depth repeats it.
+			var g0 := _sketch_grid(cell, plane)
+			var face := _sketch_grid(size, plane)
+			for du in face.x:
+				for dv in face.y:
+					var g := g0 + Vector2i(du, dv)
+					if near.has(g) or not grid.has(g):
+						stays = false
+		var k := "%s|%s" % [arch, cell]
+		if stays:
+			kept[k] = true
+			laid.append(b)
+			continue
+		var cells := []
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					cells.append(cell + Vector3i(dx, dy, dz))
+		var i := _rid_at(cells, rid_of)
+		if i < 0:
+			continue   # taken up some other way since
+		going[k] = i
+		for c in cells:
+			free[c] = true
+			redo2[_sketch_grid(c, plane)] = true
+	var plan := _plan_sketch(sk, grid, free, {} if whole else redo2)
+	# A going brick the new layout lays again, the same part in the same place, stays.
+	var lay := []
+	for pk in plan:
+		var k := "%s|%s" % [pk[0], pk[1]]
+		if going.has(k):
+			going.erase(k)
+			laid.append([pk[0], [pk[1].x, pk[1].y, pk[1].z]])
+		elif not kept.has(k):
+			lay.append(pk)
+	var gone: Array = going.values()
+	gone.sort()
+	gone.reverse()   # from the end, so the indices still to go do not move
 	var ops := 0
 	_batch = true
-	for b in sk.get("bricks", []):
-		if remove_brick(String(b[0]), Vector3i(int(b[1][0]), int(b[1][1]), int(b[1][2]))):
+	for i in gone:
+		if take_brick(int(i)):
 			ops += 1
-	var laid := _lay_sketch(sk, sketch_cells(sk))
-	ops += laid.size()
+	var keep_sel := part_sel
+	var idx := part_names.find(String(sk.part))
+	if idx >= 0:
+		part_sel = idx
+	for pk in lay:
+		if place_named(pk[0], pk[1]):
+			laid.append([pk[0], [pk[1].x, pk[1].y, pk[1].z]])
+			ops += 1
+	part_sel = keep_sel
 	sk.bricks = laid
 	_batch = false
 	_after_edit()
-	var after = null if (sk.adds as Array).is_empty() else sk.duplicate(true)
+	var after = null if (sk.adds as Array).is_empty() else sk
 	_set_sketch(key, after)
+	if after != null:
+		_sketch_cache[key] = grid
 	_group_with(ops, {"key": key, "before": before, "after": after})
 	return laid.size()
+
+
+## Mark a changed sketch cell and the cells round it that are worked out again: two studs
+## across, a course (three plates) up and down.
+static func _mark_near(near: Dictionary, g: Vector2i) -> void:
+	for du in range(-2, 3):
+		for dv in range(-3, 4):
+			near[g + Vector2i(du, dv)] = true
+
+
+## A cell of the build as a sketch cell (across, up): `_sketch_cell` the other way.
+static func _sketch_grid(c: Vector3i, plane: String) -> Vector2i:
+	match plane:
+		"front": return Vector2i(c.z, c.y)
+		"top": return Vector2i(c.x, c.z)
+	return Vector2i(c.x, c.y)
+
+
+## The recipe index of the brick in these cells, through block id -> index.
+func _rid_at(cells: Array, rid_of: Dictionary) -> int:
+	for c in cells:
+		var block := world.block_at(chunk, c)
+		if block >= 0 and rid_of.has(block):
+			return int(rid_of[block])
+	return -1
 
 
 func _set_sketch(key: String, state) -> void:
 	if state == null:
 		sketches.erase(key)
 	else:
-		sketches[key] = (state as Dictionary).duplicate(true)
+		sketches[key] = state
 	_sketch_cache.erase(key)
 	_store_asset_meta()
 
@@ -3095,25 +3220,54 @@ static func region_cells(poly: Array) -> Dictionary:
 	for q in pts:
 		lo = Vector2i(mini(lo.x, int(floor(q.x))), mini(lo.y, int(floor(q.y))))
 		hi = Vector2i(maxi(hi.x, int(ceil(q.x))), maxi(hi.y, int(ceil(q.y))))
-	# Inside by winding, not even-odd: a stretch circled twice is in, not cancelled out.
-	var inside := {}
-	for u in range(lo.x, hi.x):
-		for v in range(lo.y, hi.y):
-			if _winding(pts, Vector2(u + 0.5, v + 0.5)) != 0:
-				inside[Vector2i(u, v)] = true
-	# Outermost: whatever the outside cannot reach is in, holes the crossing made included.
-	var outside := {}
-	var todo: Array[Vector2i] = [Vector2i(lo.x - 1, lo.y - 1)]
-	while not todo.is_empty():
-		var c: Vector2i = todo.pop_back()
-		if outside.has(c) or inside.has(c) or c.x < lo.x - 1 or c.y < lo.y - 1 or c.x > hi.x or c.y > hi.y:
+	# A bitmap one cell wider all round, so the outside is connected: 1 inside, 2 outside.
+	var w := hi.x - lo.x + 2
+	var h := hi.y - lo.y + 2
+	var map := PackedByteArray()
+	map.resize(w * h)
+	# Inside by winding, not even-odd (a stretch circled twice is in, not cancelled out),
+	# a row at a time: where each edge crosses the row's centre line, and which way.
+	var n := pts.size()
+	for v in range(lo.y, hi.y):
+		var y := v + 0.5
+		var xs := []
+		for i in n:
+			var a := pts[i]
+			var b := pts[(i + 1) % n]
+			if (a.y <= y) == (b.y <= y):
+				continue
+			xs.append([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), 1 if b.y > a.y else -1])
+		if xs.is_empty():
 			continue
-		outside[c] = true
-		todo.append_array([c + Vector2i(1, 0), c - Vector2i(1, 0), c + Vector2i(0, 1), c - Vector2i(0, 1)])
+		xs.sort_custom(func(p: Array, q: Array) -> bool: return p[0] < q[0])
+		var wind := 0
+		for j in xs.size() - 1:
+			wind += int(xs[j][1])
+			if wind == 0:
+				continue
+			# Cells whose centres lie between this crossing and the next.
+			var u0 := maxi(lo.x, int(ceil(float(xs[j][0]) - 0.5)))
+			var u1 := mini(hi.x - 1, int(ceil(float(xs[j + 1][0]) - 0.5)) - 1)
+			for u in range(u0, u1 + 1):
+				map[(v - lo.y + 1) * w + (u - lo.x + 1)] = 1
+	# Outermost: whatever the outside cannot reach is in, holes the crossing made included.
+	var todo := PackedInt32Array([0])
+	map[0] = 2
+	while not todo.is_empty():
+		var at := todo[todo.size() - 1]
+		todo.resize(todo.size() - 1)
+		var ax := at % w
+		@warning_ignore("integer_division")
+		var ay := at / w
+		for nb in [at - 1 if ax > 0 else -1, at + 1 if ax < w - 1 else -1, at - w if ay > 0 else -1,
+				at + w if ay < h - 1 else -1]:
+			if nb >= 0 and map[nb] == 0:
+				map[nb] = 2
+				todo.append(nb)
 	var out := {}
-	for u in range(lo.x, hi.x):
-		for v in range(lo.y, hi.y):
-			if not outside.has(Vector2i(u, v)):
+	for v in range(lo.y, hi.y):
+		for u in range(lo.x, hi.x):
+			if map[(v - lo.y + 1) * w + (u - lo.x + 1)] != 2:
 				out[Vector2i(u, v)] = true
 	return out
 
@@ -3138,7 +3292,9 @@ static func _winding(pts: PackedVector2Array, q: Vector2) -> int:
 ## the gun from the side, along it from the front, upward from the top, a stud being two
 ## and a half plates), packed round what is already built. On the side and front planes,
 ## edges at a catalogue piece's pitch get that piece. Returns [[archetype, [x, y, z]]].
-func _lay_sketch(sk: Dictionary, grid: Dictionary) -> Array:
+## `own`: cells built in now that will be empty when it is laid. `only`, if given: the
+## sketch cells to pack (edge pieces are still found along the whole outline).
+func _plan_sketch(sk: Dictionary, grid: Dictionary, own: Dictionary = {}, only: Dictionary = {}) -> Array:
 	var plane: String = sk.plane
 	var at: float = float(sk.at)
 	var w := int(sk.width)
@@ -3157,8 +3313,9 @@ func _lay_sketch(sk: Dictionary, grid: Dictionary) -> Array:
 				grid.erase(g)
 	var cells := {}
 	for g in grid:
-		for k in depth:
-			cells[_sketch_cell(g, k, plane)] = true
+		if only.is_empty() or only.has(g):
+			for k in depth:
+				cells[_sketch_cell(g, k, plane)] = true
 	var placements := []
 	if plane != "top":
 		for pc in edge_pieces(grid, slope_eager):
@@ -3171,7 +3328,7 @@ func _lay_sketch(sk: Dictionary, grid: Dictionary) -> Array:
 					for k in depth:
 						var c := _sketch_cell(Vector2i(pc.u + du, pc.base + dv), k, plane)
 						box.append(c)
-						if world.is_solid(chunk, c):
+						if world.is_solid(chunk, c) and not own.has(c):
 							clear = false
 			if not clear:
 				continue
@@ -3184,16 +3341,13 @@ func _lay_sketch(sk: Dictionary, grid: Dictionary) -> Array:
 				placements.append([edge_variant(pc.kind, wide, pc.rises, pc.under, plane),
 						_sketch_cell(Vector2i(pc.u, pc.base), depth[k], plane)])
 				k += wide
-	var keep := part_sel
-	var idx := part_names.find(String(sk.part))
-	if idx >= 0:
-		part_sel = idx
-	var laid := []
-	for pk in pack_cells(cells, shape_fill == "random") + placements:
-		if place_named(pk[0], pk[1]):
-			laid.append([pk[0], [pk[1].x, pk[1].y, pk[1].z]])
-	part_sel = keep
-	return laid
+	var course := 1 << 30
+	if plane != "top":
+		for g in grid:
+			course = mini(course, g.y)
+	elif not depth.is_empty():
+		course = depth[0]
+	return pack_cells(cells, shape_fill == "random", own, course) + placements
 
 
 ## A sketch cell (across the plane, up it) at depth `k`, as a cell of the build. A

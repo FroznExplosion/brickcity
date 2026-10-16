@@ -637,4 +637,25 @@ func _round3() -> void:
 			step[Vector2i(u, v)] = true
 	_ok("a one-plate step gets no slope at the slope's own pitch", _ws.edge_pieces(step, false).is_empty())
 	_ok("and one when slopes are eager", _ws.edge_pieces(step, true).size() == 1, str(_ws.edge_pieces(step, true)))
+
+	# A small change to a big part works out only the bricks near it (each stroke laying
+	# the whole part again was a hitch), and still fills exactly what is drawn.
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.sketch_region([Vector2(10, 30), Vector2(40, 30), Vector2(40, 60), Vector2(10, 60)])
+	var had := {}
+	for k in _ws.recipe.size():
+		had["%s|%s" % [_ws.recipe.part_of(k), _ws.recipe.cell_of(k)]] = true
+	var t0 := Time.get_ticks_msec()
+	_ws.sketch_region([Vector2(36, 56), Vector2(41, 56), Vector2(41, 61), Vector2(36, 61)], true)
+	var ms := Time.get_ticks_msec() - t0
+	var same := 0
+	for k in _ws.recipe.size():
+		if had.has("%s|%s" % [_ws.recipe.part_of(k), _ws.recipe.cell_of(k)]):
+			same += 1
+	_ok("a small cut keeps the bricks clear of it", same * 10 >= _ws.recipe.size() * 8,
+			"%d of %d kept, %d ms" % [same, _ws.recipe.size(), ms])
+	_ok("and fills exactly what is left", _volume() == (30 * 30 - 4 * 4) * 2, "%d cells" % _volume())
+	_ws._undo()
+	_ok("one Z puts the corner back", _volume() == 30 * 30 * 2, "%d cells" % _volume())
 	_ws.part_width["body"] = 3
