@@ -84,7 +84,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D sketch   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D sketch   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
