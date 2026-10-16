@@ -262,6 +262,10 @@ func _init() -> void:
 
 func _ready() -> void:
 	super()
+	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
+	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
+	_save_path = ASSET_QUICK_SAVE
+	_set_asset_kind(recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
@@ -1319,12 +1323,25 @@ func _reset_space() -> void:
 		_draw_measure()
 
 
+const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
+const ASSET_KINDS := ["gun", "mech"]
+
+
+## A build here is one of the asset kinds; anything else (a build saved before guns had a
+## library) becomes a gun.
+func _set_asset_kind(k: String) -> void:
+	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
+	if _menu != null:
+		_menu.set_kind(recipe.kind)
+
+
 func _load_recipe(r: BuildRecipe) -> void:
 	# The workshop's load ends in an edit, and an edit saves this scene's state into the
 	# recipe: while loading, that state is still the last build's, so it waits.
 	_loading = true
 	super._load_recipe(r)
 	_loading = false
+	_set_asset_kind(recipe.kind)
 	_restore_asset_meta()
 
 
@@ -2777,7 +2794,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.

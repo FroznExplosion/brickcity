@@ -977,6 +977,9 @@ const LIBRARY_DIRS := {
 	"building": ["res://builds/", "user://builds/"],
 	"room": ["res://rooms/", "user://rooms/"],
 	"item": ["res://items/", "user://items/"],
+	# Made in the asset workshop (Docs/AssetWorkshop.md): bricks plus meta.asset.
+	"gun": ["res://guns/", "user://guns/"],
+	"mech": ["res://mechs/", "user://mechs/"],
 }
 ## The workshop's one quick-save slot (F5 there), and what the city places
 ## when it is asked for a build without being told which (`--build`, P).

@@ -102,6 +102,7 @@ func _tick() -> void:
 	_round4()
 	_round5()
 	_round6()
+	_round7()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -942,3 +943,25 @@ func _round6() -> void:
 	_ok("in its own part", parts_ok)
 	_ws._undo()
 	_ok("one Z fills the hole", _volume() == 160, "%d cells" % _volume())
+
+
+func _round7() -> void:
+	# Saved as a gun, in the guns' library, and opened back with everything.
+	_ok("what is made here is a gun", _ws.recipe.kind == "gun", _ws.recipe.kind)
+	_ok("guns have a library of their own", BuildRecipe.player_dir("gun") == "user://guns/")
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("grip"))
+	_lay("brick_2x4", Vector3i(30, 1, 20))
+	_ws.extra_studs.append({"part": "grip", "at": [31.0, 3.0, 21.0], "dir": [0.0, 1.0, 0.0], "colour": 0, "mat": 0})
+	_ws._store_asset_meta()
+	_ws._builds_dir = "user://_probe_guns/"
+	var path: String = _ws._save_as("Probe Gun")
+	_ok("Save As writes the gun", path.ends_with("probe_gun.json") and FileAccess.file_exists(path), path)
+	_ws._new_build()
+	_ok("opened back: its bricks, its parts, its studs", _ws._open_path(path) and _ws.recipe.size() == 1
+			and _ws.part_of[0] == _ws.part_names.find("grip") and _ws.extra_studs.size() == 1
+			and _ws.recipe.kind == "gun", "%d bricks, studs %d" % [_ws.recipe.size(), _ws.extra_studs.size()])
+	DirAccess.remove_absolute(path)
+	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.extra_studs.clear()
+	_ws._draw_studs()

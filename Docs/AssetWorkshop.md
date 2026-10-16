@@ -102,6 +102,12 @@ copies every sketch.
 |---|---|
 | **Shape brush, in any tool**: Ctrl + LMB lays a shape round the ghost's cell -- a ball, cube or cylinder, or a flat circle or square lying on the plane the ghost is on (a brick top, E's locked height, or the working plane when placing freely; a cylinder runs through that plane). Ctrl + RMB carves the shape out of whatever is built: every brick it touches is taken up and the rest of it laid again in its own part, colour and material. Held and dragged it stamps every half a shape; a stroke is one undo. Ctrl + wheel sizes it (1-24 studs across, two and a half plates up a stud); its shape and a flat one's thickness are on the rail. Alt + wheel still zooms a flat view | lay and carve blocks of material without changing tool |
 
+### Round 7 (2026-10-16): saving a gun
+
+| Change | Why |
+|---|---|
+| A build here is a **gun** (recipe kind `gun`; `mech` too): File > Save, Save As and Open use the guns' library -- `res://guns/` shipped, `user://guns/` the player's (`BuildRecipe.LIBRARY_DIRS`) -- not the buildings'. A build saved before (kind `building`) opens as a gun. F5 has its own quick-save slot (`user://asset_workshop_quick.json`), not the building workshop's. The autosave stays | the only save options were for buildings |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |
