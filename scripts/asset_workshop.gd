@@ -349,7 +349,17 @@ func _shot() -> void:
 		sketch_region([Vector2(z - 2.5, 28), Vector2(z + 2.5, 28), Vector2(z + 2.5, 42), Vector2(z + 0.5, 46),
 				Vector2(z - 0.5, 46), Vector2(z - 2.5, 42)])
 		work_plane = "side"
-		rail_pick("sketch")
+		# Studs on its flank, a row, and one on a chamfer.
+		for x in [22.0, 23.0, 24.0, 44.0, 45.0]:
+			var h := stud_hit(Vector3(x * BrickPalette.STUD_M, 33.0 * BrickPalette.PLATE_M, 60.0 * BrickPalette.STUD_M),
+					Vector3.FORWARD)
+			if not h.is_empty():
+				stud_edit(true, h)
+		var lean := stud_hit(Vector3(46.0 * BrickPalette.STUD_M, 60.0 * BrickPalette.PLATE_M, (mirror_z + 2.0) * BrickPalette.STUD_M),
+				Vector3(0, -1, -0.6).normalized())
+		if not lean.is_empty():
+			stud_edit(true, lean)
+		rail_pick("stud")
 		_look_at_build()
 		views = [0, 1, 3]
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
@@ -753,7 +763,7 @@ func build_centre() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
-	if _photo_input(e) or _zoom_input(e) or _sketch_input(e):
+	if _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e):
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
@@ -807,6 +817,7 @@ func _unhandled_input(e: InputEvent) -> void:
 					set_mirror(not mirror_on)
 			KEY_F: set_free(not free_place)
 			KEY_D: set_tool("" if tool == "sketch" else "sketch")
+			KEY_U: set_tool("" if tool == "stud" else "stud")
 			_: alt = false
 		if alt:
 			get_viewport().set_input_as_handled()
@@ -852,9 +863,10 @@ func _process(dt: float) -> void:
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_run_on = false
 	run_step()
-	if tool == "sketch":
+	if tool in ["sketch", "stud"]:
 		_ghost.visible = false
 		_ghost_studs.visible = false
+	_stud_ghost_process()
 	_rail_process()
 	if _dragging:
 		_drag_to = _cell
@@ -1161,7 +1173,7 @@ func _store_asset_meta() -> void:
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
-			"sketches": sketches, "part_bricks": part_bricks}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1184,6 +1196,8 @@ func _restore_asset_meta() -> void:
 		part_width[k] = int(widths[k])
 	sketches = (a.get("sketches", {}) as Dictionary).duplicate(true)
 	part_bricks = (a.get("part_bricks", {}) as Dictionary).duplicate(true)
+	extra_studs = (a.get("studs", []) as Array).duplicate(true)
+	_draw_studs()
 	_part_vol.clear()
 	_sketch_seq = 0
 	for k in sketches:
@@ -1242,6 +1256,8 @@ func _reset_space() -> void:
 	_deleted.clear()
 	sketches.clear()
 	part_bricks.clear()
+	extra_studs.clear()
+	_draw_studs()
 	_part_vol.clear()
 	_sketch_cache.clear()
 	for p in photos:
@@ -1336,6 +1352,7 @@ func _after_edit() -> void:
 	_reconcile_parts()
 	if _batch:
 		return   # the batch's own closing _after_edit does the rest, once
+	_pick_dirty = true
 	_store_asset_meta()
 	_outlines_dirty = true
 	_autosave_dirty = true
@@ -1461,14 +1478,17 @@ func point_under_ghost() -> Array:
 
 ## A mount or socket where the ghost is, for the current part; or, if one is there
 ## already, take it away. Returns true if one was added.
-func toggle_point(at: Array, kind: String, slot: String, iface: String) -> bool:
+func toggle_point(at: Array, kind: String, slot: String, iface: String, dir: Array = []) -> bool:
 	for i in points.size():
 		if points[i].at == at:
 			points.remove_at(i)
 			_draw_points()
 			_store_asset_meta()
 			return false
-	points.append({"part": part_names[part_sel], "kind": kind, "slot": slot, "interface": iface, "at": at})
+	var q := {"part": part_names[part_sel], "kind": kind, "slot": slot, "interface": iface, "at": at}
+	if not dir.is_empty():
+		q["dir"] = dir   # on a stud: the way the stud faces
+	points.append(q)
 	_draw_points()
 	_store_asset_meta()
 	return true
@@ -1482,6 +1502,7 @@ func toggle_point_here() -> void:
 			return
 	_point_panel.visible = true
 	_point_panel.set_meta("at", at)
+	_point_panel.set_meta("dir", [])
 	if _camera.has_method("_set_captured"):
 		_camera.call("_set_captured", false)
 	_fill_point_ifaces()
@@ -1516,7 +1537,7 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 		if _point_iface.item_count > 0:
 			toggle_point(_point_panel.get_meta("at"), _point_kind.get_item_text(_point_kind.selected),
 					_point_slot.get_item_text(_point_slot.selected),
-					_point_iface.get_item_text(_point_iface.selected))
+					_point_iface.get_item_text(_point_iface.selected), _point_panel.get_meta("dir", []))
 		_point_panel.visible = false)
 	row.add_child(ok)
 	var cancel := Button.new()
@@ -2293,6 +2314,13 @@ func _undo() -> bool:
 	for _k in n:
 		if _edits.is_empty():
 			break
+		if _edits.back() == "stud":
+			_edits.pop_back()
+			var rec: Dictionary = _stud_log.pop_back()
+			_stud_apply(rec, false)
+			items.append({"op": "stud", "rec": rec})
+			any = true
+			continue
 		if _edits.back() == "delete":
 			# Laid back after the loop: laying one now adds an edit the loop would undo next.
 			_edits.pop_back()
@@ -2337,7 +2365,10 @@ func redo() -> int:
 	var done := 0
 	_batch = true
 	for b in items:
-		if b.get("op", "place") == "remove":
+		if b.get("op", "place") == "stud":
+			stud_edit(b.rec.op == "add", b.rec.stud)
+			done += 1
+		elif b.get("op", "place") == "remove":
 			if remove_brick(b.arch, b.cell):
 				done += 1
 		else:
@@ -2490,10 +2521,26 @@ func export_sheet() -> Dictionary:
 			spec["bricks"] = bricks
 		parts.append(spec)
 		made[name] = spec
+	# Studs put on by hand: where and which way, in the gun's frame (along, across, up).
+	var sign := 1.0 if muzzle_end == "-x" else -1.0
+	for st in extra_studs:
+		if not made.has(st.part):
+			continue
+		var a: Array = st.at
+		var d: Array = st.dir
+		(made[st.part].get_or_add("studs_extra", []) as Array).append({
+				"at": [snappedf(along.call(float(a[0])), 0.001), snappedf(across.call(float(a[2])), 0.001),
+						snappedf(up.call(float(a[1])), 0.001)],
+				"normal": [snappedf(float(d[0]) * sign, 0.0001), snappedf(float(d[2]), 0.0001), snappedf(float(d[1]), 0.0001)]})
 	for q in points:
 		var at: Array = q.at
 		var joint := {"at": [snappedf(along.call(float(at[0])), 0.001), snappedf(up.call(float(at[1])), 0.001)],
 				"interface": q.interface}
+		if q.has("dir"):
+			var d: Array = q.dir
+			joint["across"] = snappedf(across.call(float(at[2])), 0.001)
+			joint["normal"] = [snappedf(float(d[0]) * sign, 0.0001), snappedf(float(d[2]), 0.0001),
+					snappedf(float(d[1]), 0.0001)]
 		if not made.has(q.part):
 			continue
 		if q.kind == "mount":
@@ -2666,7 +2713,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -4032,7 +4079,8 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 
 ## The rail's tools: id, name, key. "place" is no tool at all: the workshop's own hand.
 const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Sketch", "Alt D"],
-		["shape", "Shapes", "K"], ["select", "Select", "L"], ["measure", "Measure", "Alt M"]]
+		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
+		["measure", "Measure", "Alt M"]]
 const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
@@ -4274,3 +4322,203 @@ func _bricks_near(point: Vector3, reach: float) -> Array[int]:
 		if maxf(d.x, maxf(d.y, d.z)) <= reach:
 			out.append(rid)
 	return out
+
+
+# ---------------------------------------------------------------------------
+# Round 4: studs anywhere, and connection points on them
+# ---------------------------------------------------------------------------
+
+## Studs put on by hand: {part, at: [studs along, plates up, studs across] of the stud's
+## foot, dir: the way it faces, colour, mat}. Any face of any brick, a slope's too.
+var extra_studs := []
+var _stud_log := []          # what each "stud" edit did, for undo: {op: "add" or "remove", stud}
+var _pick_mesh: TriangleMesh
+var _pick_dirty := true
+var _studs_mmi: MultiMeshInstance3D
+var _stud_ghost: MeshInstance3D
+const STUD_SNAP := 0.5       # the lattice studs go on: half a stud across a face, half a plate up a side
+
+
+## Where a stud would go for this ray: on the face it meets, snapped to the face's half-
+## stud lattice. {at, dir, part (tag), colour, mat}, or {} off the build.
+##
+## Found on the drawn surface, not the cells: a slope's face leans, and its stud leans
+## with it. Plain (unbevelled) geometry, so an edge's bevel never reads as a face.
+func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
+	if _pick_dirty or _pick_mesh == null:
+		_pick_dirty = false
+		var arrays := world.build_chunk_mesh(chunk)
+		var m := ArrayMesh.new()
+		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			_pick_mesh = m.generate_triangle_mesh()
+		else:
+			_pick_mesh = null
+	if _pick_mesh == null:
+		return {}
+	var inv := world.get_chunk_transform(chunk).affine_inverse()
+	var r := _pick_mesh.intersect_ray(inv * from, inv.basis * dir)
+	if r.is_empty():
+		return {}
+	var p: Vector3 = r.position
+	var n: Vector3 = (r.normal as Vector3).normalized()
+	if n.dot(dir) > 0.0:
+		n = -n
+	var ax := n.abs()
+	var axis := -1
+	if ax.x > 0.94:
+		axis = 0
+	elif ax.y > 0.94:
+		axis = 1
+	elif ax.z > 0.94:
+		axis = 2
+	if axis >= 0:
+		var sgn := signf(n[axis])
+		n = Vector3.ZERO
+		n[axis] = sgn
+	var cell := _cell_in(chunk, p - n * 0.02)
+	var block := world.block_at(chunk, cell)
+	if block < 0:
+		return {}
+	var rid := _recipe_id_at(0, block)
+	if rid < 0:
+		return {}
+	var q: Vector3
+	if axis >= 0:
+		q = Vector3(p.x / BrickPalette.STUD_M, p.y / BrickPalette.PLATE_M, p.z / BrickPalette.STUD_M)
+		for a in 3:
+			if a != axis:
+				q[a] = snappedf(q[a], STUD_SNAP)
+	else:
+		# A leaning face: half studs across it and up it, from the brick's own corner.
+		var box: Array = world.get_block_ticks(chunk, block)
+		var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
+		var origin := Vector3(box[0] as Vector3i) * tick
+		var across := n.cross(Vector3.UP).normalized()
+		var upward := across.cross(n).normalized()
+		var d := p - origin
+		var step := BrickPalette.STUD_M * STUD_SNAP
+		var w := origin + across * snappedf(d.dot(across), step) + upward * snappedf(d.dot(upward), step) \
+				+ n * d.dot(n)
+		q = Vector3(w.x / BrickPalette.STUD_M, w.y / BrickPalette.PLATE_M, w.z / BrickPalette.STUD_M)
+	return {"at": [snappedf(q.x, 0.0001), snappedf(q.y, 0.0001), snappedf(q.z, 0.0001)],
+			"dir": [snappedf(n.x, 0.0001), snappedf(n.y, 0.0001), snappedf(n.z, 0.0001)],
+			"part": part_names[part_of[rid] if rid < part_of.size() else part_sel],
+			"colour": recipe.colour_of(rid), "mat": recipe.material_of(rid)}
+
+
+## The stud put on by hand at this spot, by index, or -1.
+func stud_at(at: Array) -> int:
+	for i in extra_studs.size():
+		var a: Array = extra_studs[i].at
+		if Vector3(a[0], a[1], a[2]).distance_to(Vector3(at[0], at[1], at[2])) < 0.3:
+			return i
+	return -1
+
+
+## Put a stud on, or take one off: an edit of its own, undone with Z.
+func stud_edit(add: bool, stud: Dictionary) -> bool:
+	var i := stud_at(stud.at)
+	if add == (i >= 0):
+		return false
+	var rec := {"op": "add" if add else "remove", "stud": stud if add else extra_studs[i]}
+	_stud_apply(rec, true)
+	_edits.append("stud")
+	_stud_log.append(rec)
+	if not _redoing:
+		_redo.clear()
+	return true
+
+
+func _stud_apply(rec: Dictionary, forward: bool) -> void:
+	var add: bool = (rec.op == "add") == forward
+	var i := stud_at(rec.stud.at)
+	if add and i < 0:
+		extra_studs.append(rec.stud)
+	elif not add and i >= 0:
+		extra_studs.remove_at(i)
+	_draw_studs()
+	_store_asset_meta()
+	_autosave_dirty = true
+
+
+## The stud tool: LMB puts a stud on, RMB takes one off, shift LMB makes a stud a
+## connection point (the panel asks which).
+func _stud_input(e: InputEvent) -> bool:
+	if tool != "stud" or not (e is InputEventMouseButton and e.pressed):
+		return false
+	if not e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		return false
+	var ray := _mouse_ray()
+	var hit := stud_hit(ray[0], ray[1])
+	if hit.is_empty():
+		return true
+	if e.button_index == MOUSE_BUTTON_RIGHT:
+		var i := stud_at(hit.at)
+		if i >= 0:
+			stud_edit(false, extra_studs[i])
+	elif e.shift_pressed:
+		point_on_stud(hit)
+	else:
+		stud_edit(true, hit)
+	return true
+
+
+## A connection point on a stud: one there already goes, else the panel asks for it.
+func point_on_stud(hit: Dictionary) -> void:
+	for q in points:
+		if Vector3(q.at[0], q.at[1], q.at[2]).distance_to(Vector3(hit.at[0], hit.at[1], hit.at[2])) < 0.3:
+			toggle_point(q.at, "", "", "")
+			return
+	_point_panel.visible = true
+	_point_panel.set_meta("at", hit.at)
+	_point_panel.set_meta("dir", hit.dir)
+	_fill_point_ifaces()
+
+
+## Every stud put on by hand, as one MultiMesh: the build's own stud, in its brick's paint.
+func _draw_studs() -> void:
+	if _studs_mmi == null:
+		_studs_mmi = MultiMeshInstance3D.new()
+		_studs_mmi.material_override = _stud_material()
+		_studs_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_studs_mmi)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.stud()
+	mm.instance_count = extra_studs.size()
+	for i in extra_studs.size():
+		var st: Dictionary = extra_studs[i]
+		mm.set_instance_transform(i, _stud_transform(st))
+		mm.set_instance_color(i, BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0))))
+	_studs_mmi.multimesh = mm
+
+
+static func _stud_transform(st: Dictionary) -> Transform3D:
+	var a: Array = st.at
+	var d: Array = st.dir
+	return Transform3D(_basis_up(Vector3(d[0], d[1], d[2])),
+			Vector3(float(a[0]) * BrickPalette.STUD_M, float(a[1]) * BrickPalette.PLATE_M, float(a[2]) * BrickPalette.STUD_M))
+
+
+## In the stud tool, a see-through stud where one would go.
+func _stud_ghost_process() -> void:
+	if _stud_ghost == null:
+		_stud_ghost = MeshInstance3D.new()
+		_stud_ghost.mesh = PieceMeshes.stud()
+		var mat := StandardMaterial3D.new()
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(1.0, 0.95, 0.4, 0.6)
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_stud_ghost.material_override = mat
+		add_child(_stud_ghost)
+	_stud_ghost.visible = false
+	if tool != "stud":
+		return
+	var ray := _mouse_ray()
+	var hit := stud_hit(ray[0], ray[1])
+	if hit.is_empty():
+		return
+	_stud_ghost.visible = true
+	_stud_ghost.transform = _stud_transform(hit)

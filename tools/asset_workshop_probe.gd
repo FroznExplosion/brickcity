@@ -739,3 +739,51 @@ func _round4() -> void:
 			"%d bricks" % _ws.recipe.size())
 	_ws.work_plane = "side"
 	_ws.part_width["body"] = 3
+
+	# Stage 3: studs anywhere. A brick's side, from +z.
+	_ws._new_build()
+	_ws.select_part(0)
+	_lay("brick_2x4", Vector3i(20, 1, 20))
+	var size := BrickPalette.size_of(_ws.recipe.part_of(0))
+	var hit: Dictionary = _ws.stud_hit(Vector3((20 + size.x * 0.5 + 0.1) * STUD, 2.4 * 0.14, 30 * STUD), Vector3.BACK * -1)
+	_ok("a stud on a brick's side faces out of it", not hit.is_empty() and Array(hit.dir) == [0.0, 0.0, 1.0]
+			and is_equal_approx(float(hit.at[2]), 20 + size.z), str(hit))
+	_ok("on the side's half-stud lattice", not hit.is_empty() and is_equal_approx(fmod(float(hit.at[0]) * 2.0, 1.0), 0.0)
+			and is_equal_approx(fmod(float(hit.at[1]) * 2.0, 1.0), 0.0), str(hit.get("at")))
+	_ws.stud_edit(true, hit)
+	_ok("put on", _ws.extra_studs.size() == 1)
+	_ws._undo()
+	_ok("Z takes it off", _ws.extra_studs.is_empty())
+	_ws.redo()
+	_ok("shift Z puts it back", _ws.extra_studs.size() == 1)
+	var sheet: Dictionary = _ws.export_sheet()
+	var extra := []
+	for sp in sheet.parts:
+		extra.append_array(sp.get("studs_extra", []))
+	_ok("it leaves with the part, facing across the gun", extra.size() == 1
+			and is_equal_approx(absf(float(extra[0].normal[1])), 1.0), str(extra))
+	# A connection point on it, facing the way it does.
+	_ws.point_on_stud(hit)
+	_ok("a stud as a connection point asks which", _ws._point_panel.visible and Array(_ws._point_panel.get_meta("dir")) == Array(hit.dir))
+	_ws._point_panel.visible = false
+	_ws.toggle_point(hit.at, "mount", "body", "stock.tang", hit.dir)
+	sheet = _ws.export_sheet()
+	var mount := {}
+	for sp in sheet.parts:
+		if sp.has("mount"):
+			mount = sp.mount
+	_ok("and leaves facing that way", mount.has("normal") and is_equal_approx(absf(float(mount.normal[1])), 1.0), str(mount))
+	_ws.toggle_point(hit.at, "", "", "")
+	# A slope's leaning face: the stud leans with it.
+	_ws._new_build()
+	var slope: String = _ws.edge_variant("slope", 1, 1, false, "side")
+	_ws.place_named(slope, Vector3i(30, 1, 20))
+	var ss := BrickPalette.size_of(slope)
+	var lean := {}
+	for x in [30.2, 30.5, 30.8, 31.2, 31.5, 31.8]:
+		var h: Dictionary = _ws.stud_hit(Vector3(x * STUD, 3.0, (20 + ss.z * 0.5) * STUD), Vector3.DOWN)
+		if not h.is_empty() and absf(float(h.dir[1])) < 0.94 and float(h.dir[1]) > 0.0:
+			lean = h
+	_ok("a stud on a slope leans with its face", not lean.is_empty(), str(lean))
+	_ws.extra_studs.clear()
+	_ws._draw_studs()

@@ -310,6 +310,10 @@ def placed(spec, part, grid):
                     continue
                 at = [lo[0] + (i + 0.5) * pitch, lo[1] + (j + 0.5) * pitch, hi[2]]
                 part["studs"].append({"at": [round(c, 4) for c in at], "normal": [0.0, 0.0, 1.0], "on": "top"})
+    # Studs put on by hand in the asset workshop: any face, any way, already on its lattice.
+    for st in spec.get("studs_extra", []):
+        part["studs"].append({"at": [round(float(c), 4) for c in st["at"]],
+                              "normal": [float(c) for c in st["normal"]], "on": "extra"})
     # Held: a brick shares a stud with another, over or under it.
     parent = list(range(len(boxes)))
 
@@ -651,6 +655,8 @@ def check(doc, std, grid):
     off, count = [], 0
     for part in doc["parts"]:
         for s in part["studs"]:
+            if s["on"] == "extra":
+                continue   # put on by hand, snapped to its own face's lattice there
             count += 1
             x, y, z = s["at"]
             good = whole(x / pitch - 0.5)
