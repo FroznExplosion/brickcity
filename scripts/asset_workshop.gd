@@ -360,6 +360,18 @@ func _shot() -> void:
 		if not lean.is_empty():
 			stud_edit(true, lean)
 		rail_pick("stud")
+		if "--explode" in OS.get_cmdline_user_args():
+			# The rest of a gun round it, then pulled apart.
+			for spec in [["barrel", 1, [Vector2(4, 37), Vector2(20, 37), Vector2(20, 41), Vector2(4, 41)]],
+					["stock", 3, [Vector2(50, 33), Vector2(66, 30), Vector2(66, 44), Vector2(50, 45)]],
+					["grip", 3, [Vector2(42, 14), Vector2(47, 14), Vector2(48, 30), Vector2(43, 30)]],
+					["magazine", 3, [Vector2(30, 12), Vector2(36, 12), Vector2(36, 30), Vector2(30, 30)]]]:
+				select_part(part_names.find(spec[0]))
+				part_width[spec[0]] = spec[1]
+				work_plane = "side"
+				sketch_region(spec[2])
+			select_part(0)
+			set_exploded(true)
 		_look_at_build()
 		views = [0, 1, 3]
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
@@ -763,7 +775,7 @@ func build_centre() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
-	if _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e):
+	if _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) or _move_input(e):
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
@@ -818,6 +830,8 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_F: set_free(not free_place)
 			KEY_D: set_tool("" if tool == "sketch" else "sketch")
 			KEY_U: set_tool("" if tool == "stud" else "stud")
+			KEY_G: set_tool("" if tool == "move" else "move")
+			KEY_E: set_exploded(not exploded)
 			_: alt = false
 		if alt:
 			get_viewport().set_input_as_handled()
@@ -863,10 +877,11 @@ func _process(dt: float) -> void:
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_run_on = false
 	run_step()
-	if tool in ["sketch", "stud"]:
+	if tool in ["sketch", "stud", "move"]:
 		_ghost.visible = false
 		_ghost_studs.visible = false
 	_stud_ghost_process()
+	_explode_process()
 	_rail_process()
 	if _dragging:
 		_drag_to = _cell
@@ -1353,6 +1368,7 @@ func _after_edit() -> void:
 	if _batch:
 		return   # the batch's own closing _after_edit does the rest, once
 	_pick_dirty = true
+	_display_dirty = true
 	_store_asset_meta()
 	_outlines_dirty = true
 	_autosave_dirty = true
@@ -1561,7 +1577,7 @@ func _draw_points() -> void:
 	for q in points:
 		var at: Array = q.at
 		var where := Vector3(float(at[0]) * BrickPalette.STUD_M, float(at[1]) * BrickPalette.PLATE_M,
-				float(at[2]) * BrickPalette.STUD_M)
+				float(at[2]) * BrickPalette.STUD_M) + part_offset(String(q.part))
 		var mark := MeshInstance3D.new()
 		var m := SphereMesh.new()
 		m.radius = 0.09
@@ -2026,6 +2042,9 @@ func _draw_tool() -> void:
 	_tool_lines.mesh = im
 	if tool == "sketch":
 		_draw_sketch(im)
+		return
+	if tool == "move":
+		_draw_move(im)
 		return
 	if not _dragging:
 		return
@@ -2713,7 +2732,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -3439,6 +3458,11 @@ func _restore_sketch(g: Dictionary, which: String) -> void:
 		_set_sketch(k, states[k])
 	part_bricks[String(g.part)] = g.get("bricks_" + which, [])
 	_part_vol.erase(String(g.part))
+	if g.has("studs_" + which):
+		extra_studs = (g["studs_" + which] as Array).duplicate()
+		points = (g["points_" + which] as Array).duplicate()
+		_draw_studs()
+		_draw_points()
 	_store_asset_meta()
 
 
@@ -4080,7 +4104,7 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 ## The rail's tools: id, name, key. "place" is no tool at all: the workshop's own hand.
 const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Sketch", "Alt D"],
 		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
-		["measure", "Measure", "Alt M"]]
+		["move", "Move part", "Alt G"], ["measure", "Measure", "Alt M"]]
 const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
@@ -4100,6 +4124,7 @@ var _paint_box: VBoxContainer
 var _draw_box: VBoxContainer
 var _draws: OptionButton
 var _rail_scroll: ScrollContainer
+var _explode_button: Button
 var _rail_box: VBoxContainer
 
 
@@ -4136,6 +4161,15 @@ func _build_rail(layer: CanvasLayer) -> void:
 		b.pressed.connect(rail_pick.bind(String(t[0])))
 		box.add_child(b)
 		_rail_buttons[t[0]] = b
+	box.add_child(HSeparator.new())
+
+	_explode_button = Button.new()
+	_explode_button.text = "Explode   Alt E"
+	_explode_button.toggle_mode = true
+	_explode_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_explode_button.focus_mode = Control.FOCUS_NONE
+	_explode_button.toggled.connect(func(on: bool) -> void: set_exploded(on))
+	box.add_child(_explode_button)
 	box.add_child(HSeparator.new())
 
 	# The brush: paint and sketch share it.
@@ -4490,7 +4524,7 @@ func _draw_studs() -> void:
 	mm.instance_count = extra_studs.size()
 	for i in extra_studs.size():
 		var st: Dictionary = extra_studs[i]
-		mm.set_instance_transform(i, _stud_transform(st))
+		mm.set_instance_transform(i, _stud_transform(st).translated(part_offset(String(st.get("part", "")))))
 		mm.set_instance_color(i, BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0))))
 	_studs_mmi.multimesh = mm
 
@@ -4521,4 +4555,362 @@ func _stud_ghost_process() -> void:
 	if hit.is_empty():
 		return
 	_stud_ghost.visible = true
-	_stud_ghost.transform = _stud_transform(hit)
+	_stud_ghost.transform = _stud_transform(hit).translated(_ray_offset())
+
+
+# ---------------------------------------------------------------------------
+# Round 4: the exploded view, and whole parts moved
+# ---------------------------------------------------------------------------
+
+const EXPLODE_GAP := 10      # studs between a part and the one it sits on, exploded
+var exploded := false
+var _display := {}           # part -> {mesh, pick (TriangleMesh), xform, offset}
+var _display_dirty := true
+var _offsets := {}           # part -> where it is drawn, exploded (metres)
+var _ray_part := ""          # the part the last mouse ray was taken into
+var _move := {}              # a part being dragged: {part, from (plane point), normal, by}
+
+
+func set_exploded(on: bool) -> void:
+	exploded = on
+	_display_dirty = true
+	if not on:
+		_clear_display()
+		_offsets.clear()
+	if _explode_button != null:
+		_explode_button.set_pressed_no_signal(on)
+	_draw_studs()
+	_draw_points()
+	_outlines_dirty = true
+
+
+## Where each part goes, exploded: the body stays, the barrel goes forward of it, the
+## muzzle further, the stock behind, the grip under it, the underbarrel under the barrel,
+## the sight over it. Anything else (a magazine sits where the gun has it) goes out the
+## way it already is from the body, twice as far.
+func explode_offsets() -> Dictionary:
+	var sums := {}
+	var counts := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := recipe.cell_of(i)
+		var m := Vector3((c.x + size.x * 0.5) * BrickPalette.STUD_M, (c.y + size.y * 0.5) * BrickPalette.PLATE_M,
+				(c.z + size.z * 0.5) * BrickPalette.STUD_M)
+		sums[name] = sums.get(name, Vector3.ZERO) + m
+		counts[name] = int(counts.get(name, 0)) + 1
+	var body: Vector3 = sums["body"] / counts["body"] if sums.has("body") else Vector3.ZERO
+	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
+	var g := EXPLODE_GAP * BrickPalette.STUD_M
+	var out := {}
+	for name in sums:
+		match name:
+			"body": out[name] = Vector3.ZERO
+			"barrel": out[name] = fwd * g
+			"muzzle": out[name] = fwd * g * 2.0
+			"stock": out[name] = -fwd * g
+			"grip": out[name] = Vector3.DOWN * g
+			"sight": out[name] = Vector3.UP * g
+			"underbarrel": out[name] = fwd * g + Vector3.DOWN * g
+			_:
+				var d: Vector3 = sums[name] / counts[name] - body
+				out[name] = (d.normalized() if d.length() > 0.01 else Vector3.DOWN) * g * 2.0
+	return out
+
+
+## Where a part is drawn: its exploded place, or where it is.
+func part_offset(part: String) -> Vector3:
+	return _offsets.get(part, Vector3.ZERO) if exploded else Vector3.ZERO
+
+
+## The offset the last mouse ray was taken in by: the part it met, else the current part.
+func _ray_offset() -> Vector3:
+	if not exploded:
+		return Vector3.ZERO
+	return part_offset(_ray_part if _ray_part != "" else part_names[part_sel])
+
+
+## Each part as its own mesh -- its bricks laid again in a chunk of their own -- so the
+## parts can be drawn apart (and, later, moved by the hands). Built again after an edit.
+func _rebuild_display() -> void:
+	_display_dirty = false
+	_clear_display()
+	_offsets = explode_offsets()
+	var by_part := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) == 0:
+			(by_part.get_or_add(part_names[part_of[i] if i < part_of.size() else part_sel], []) as Array).append(i)
+	var base := world.get_chunk_transform(chunk)
+	for name in by_part:
+		var ids: Array = by_part[name]
+		var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+		var hi := -lo
+		for i in ids:
+			lo = lo.min(recipe.cell_of(i))
+			hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
+		var c := world.create_chunk(Vector3i.ZERO, hi - lo)
+		for i in ids:
+			var arch := String(recipe.part_of(i))
+			if not palette.has(arch):
+				continue
+			var bid := world.place_block(c, recipe.cell_of(i) - lo, palette[arch], recipe.colour_of(i))
+			if bid >= 0 and recipe.material_of(i) != 0:
+				world.set_block_material(c, bid, recipe.material_of(i))
+		var xform := base * Transform3D(Basis(), Vector3(lo.x * BrickPalette.STUD_M, lo.y * BrickPalette.PLATE_M,
+				lo.z * BrickPalette.STUD_M))
+		xform = xform.translated(_offsets.get(name, Vector3.ZERO))
+		var mi := MeshInstance3D.new()
+		mi.material_override = _material
+		var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+				else world.build_chunk_mesh(c)
+		var m := ArrayMesh.new()
+		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		mi.mesh = m
+		mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
+		mi.transform = xform
+		add_child(mi)
+		var studs: PackedFloat32Array = world.get_chunk_studs(c)
+		@warning_ignore("integer_division")
+		var count := studs.size() / 16
+		if count > 0:
+			var mmi := MultiMeshInstance3D.new()
+			mmi.material_override = _stud_material()
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = PieceMeshes.stud()
+			mm.instance_count = count
+			mm.set_buffer(studs)
+			mmi.multimesh = mm
+			mi.add_child(mmi)
+		var plain := world.build_chunk_mesh(c)
+		var pm := ArrayMesh.new()
+		var pick: TriangleMesh = null
+		if plain.size() > 0 and not (plain[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+			pm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, plain)
+			pick = pm.generate_triangle_mesh()
+		world.release_chunk(c)
+		_display[name] = {"mesh": mi, "pick": pick, "xform": xform, "offset": _offsets.get(name, Vector3.ZERO)}
+	_draw_studs()
+	_draw_points()
+
+
+func _clear_display() -> void:
+	for name in _display:
+		(_display[name].mesh as Node).queue_free()
+	_display.clear()
+
+
+## Each frame, exploded: the parts built again if an edit changed them, the build itself
+## hidden behind them, and what follows the mouse drawn where its part is.
+func _explode_process() -> void:
+	for f in _frame_meshes:
+		(_frame_meshes[f] as Node3D).visible = not exploded
+	if not exploded:
+		_tool_lines.position = Vector3.ZERO
+		return
+	if _display_dirty:
+		_rebuild_display()
+	var off := _ray_offset()
+	_ghost.global_position += off
+	_tool_lines.position = off
+	if _sketch_static != null:
+		_sketch_static.position = part_offset(part_names[part_sel])
+
+
+## Exploded, the mouse ray is taken into the part it meets: moved back by that part's
+## offset and started just short of it, so everything after (the ghost, a place, a delete,
+## a stud, paint) works on the build where it really is. A ray that meets no part is
+## the current part's.
+func _mouse_ray() -> Array:
+	return ray_into_parts(super._mouse_ray())
+
+
+func ray_into_parts(r: Array) -> Array:
+	_ray_part = ""
+	if not exploded:
+		return r
+	if _display_dirty:
+		_rebuild_display()
+	var best_t := INF
+	for name in _display:
+		var d: Dictionary = _display[name]
+		if d.pick == null:
+			continue
+		var inv := (d.xform as Transform3D).affine_inverse()
+		var hit := (d.pick as TriangleMesh).intersect_ray(inv * (r[0] as Vector3), inv.basis * (r[1] as Vector3))
+		if hit.is_empty():
+			continue
+		var t := ((d.xform as Transform3D) * (hit.position as Vector3) - (r[0] as Vector3)).length()
+		if t < best_t:
+			best_t = t
+			_ray_part = name
+	var off := _ray_offset()
+	var from: Vector3 = r[0]
+	if _ray_part != "":
+		from += (r[1] as Vector3) * maxf(best_t - 0.05, 0.0)
+	return [from - off, r[1]]
+
+
+## Move a whole part by `by` cells: its bricks taken up and laid again there, its
+## sketches, studs and connection points with it, as one undo. Refused (false) if
+## anything else is in the way.
+func move_part(part: String, by: Vector3i) -> bool:
+	var tag := part_names.find(part)
+	if tag < 0 or by == Vector3i.ZERO:
+		return false
+	var ids := []
+	var own := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) == 0 and (part_of[i] if i < part_of.size() else -1) == tag:
+			ids.append(i)
+			var size := BrickPalette.size_of(recipe.part_of(i))
+			for dx in size.x:
+				for dy in size.y:
+					for dz in size.z:
+						own[recipe.cell_of(i) + Vector3i(dx, dy, dz)] = true
+	if ids.is_empty():
+		return false
+	for c in own:
+		var t: Vector3i = c + by
+		if t.x < 0 or t.y < 0 or t.z < 0 or t.x >= plate_studs or t.y >= height_plates or t.z >= plate_studs:
+			return false
+		if not own.has(t) and world.block_at(chunk, t) >= 0:
+			return false
+	var items := []
+	for i in ids:
+		items.append(_brick_info(i))
+	var g := {"part": part, "before": {}, "after": {}, "bricks_before": part_bricks.get(part, []),
+			"studs_before": extra_studs.duplicate(), "points_before": points.duplicate()}
+	ids.sort()
+	ids.reverse()
+	var ops := 0
+	_batch = true
+	for i in ids:
+		if take_brick(int(i)):
+			ops += 1
+	items.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.cell.y < b.cell.y)
+	var keep := part_sel
+	for b in items:
+		part_sel = int(b.tag)
+		if place_named(b.arch, b.cell + by, b.colour, b.mat):
+			ops += 1
+	part_sel = keep
+	_batch = false
+	_after_edit()
+	for k in sketches.keys():
+		var sk: Dictionary = sketches[k]
+		if String(sk.part) != part:
+			continue
+		var moved := shift_sketch(sk, by)
+		var nk := "%s|%s|%s" % [part, moved.plane, _num(float(moved.at))]
+		g.before[k] = sk
+		if not g.before.has(nk):
+			g.before[nk] = sketches.get(nk)
+		g.after[k] = null
+		g.after[nk] = moved
+	var bricks := []
+	for b in part_bricks.get(part, []):
+		bricks.append([b[0], [int(b[1][0]) + by.x, int(b[1][1]) + by.y, int(b[1][2]) + by.z]])
+	g["bricks_after"] = bricks
+	var studs := []
+	for st in extra_studs:
+		var moved_st: Dictionary = st.duplicate()
+		if String(st.part) == part:
+			moved_st.at = [float(st.at[0]) + by.x, float(st.at[1]) + by.y, float(st.at[2]) + by.z]
+		studs.append(moved_st)
+	g["studs_after"] = studs
+	var pts := []
+	for q in points:
+		var moved_q: Dictionary = q.duplicate()
+		if String(q.part) == part:
+			moved_q.at = [float(q.at[0]) + by.x, float(q.at[1]) + by.y, float(q.at[2]) + by.z]
+		pts.append(moved_q)
+	g["points_after"] = pts
+	_restore_sketch(g, "after")
+	_group_with(ops, g)
+	return true
+
+
+## While a part is dragged: the box round it, where it would go.
+func _draw_move(im: ImmediateMesh) -> void:
+	if _move.is_empty():
+		return
+	var tag := part_names.find(String(_move.part))
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for i in recipe.size():
+		if recipe.frame_of(i) == 0 and i < part_of.size() and part_of[i] == tag:
+			lo = lo.min(recipe.cell_of(i))
+			hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
+	if lo.x > hi.x:
+		return
+	var by: Vector3i = _move.by
+	var cell := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	_box_lines(im, Vector3(lo + by) * cell, Vector3(hi + by) * cell, Color(0.4, 1.0, 0.6))
+	im.surface_end()
+
+
+## A sketch moved by `by` cells: its outlines across and up its plane, its depth along it.
+static func shift_sketch(sk: Dictionary, by: Vector3i) -> Dictionary:
+	var d := Vector3(by)
+	match String(sk.plane):
+		"front": d = Vector3(by.z, by.y, by.x)
+		"top": d = Vector3(by.x, by.z, by.y)
+	var out := sk.duplicate()
+	out.at = float(sk.at) + d.z
+	out.adds = (sk.adds as Array).map(func(e: Variant) -> Variant: return _shift_entry(e, d.x, d.y))
+	out.subs = (sk.subs as Array).map(func(e: Variant) -> Variant: return _shift_entry(e, d.x, d.y))
+	return out
+
+
+static func _shift_entry(e: Variant, du: float, dv: float) -> Variant:
+	if e is Dictionary:
+		var out: Dictionary = (e as Dictionary).duplicate()
+		if out.has("cut"):
+			out.cut = _shift_entry(out.cut, du, dv)
+		if out.has("brush"):
+			out.brush = (out.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + du, float(q[1]) + dv])
+		return out
+	return (e as Array).map(func(q: Array) -> Array: return [float(q[0]) + du, float(q[1]) + dv])
+
+
+## The move tool: press on a part and drag it across the view's plane; let go to put it
+## there. Exploded, it moves where it is drawn and where it belongs together.
+func _move_input(e: InputEvent) -> bool:
+	if tool != "move":
+		return false
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed:
+			var ray := _mouse_ray()
+			var hit := _first_hit(ray[0], ray[1])
+			if hit.is_empty() or hit.frame != chunk:
+				return true
+			var rid := _recipe_id_at(0, hit.block)
+			if rid < 0:
+				return true
+			var n := -(_camera.global_transform.basis.z)
+			var ax := n.abs()
+			var normal := Vector3(signf(n.x), 0, 0) if ax.x >= ax.y and ax.x >= ax.z else (
+					Vector3(0, signf(n.y), 0) if ax.y >= ax.z else Vector3(0, 0, signf(n.z)))
+			select_part(part_of[rid] if rid < part_of.size() else part_sel)
+			_move = {"part": part_names[part_sel], "from": hit.point, "normal": normal, "by": Vector3i.ZERO}
+		elif not _move.is_empty():
+			move_part(String(_move.part), _move.by)
+			_move = {}
+		return true
+	if e is InputEventMouseMotion and not _move.is_empty():
+		var ray := _mouse_ray()
+		var pl := Plane(_move.normal, _move.from)
+		var at = pl.intersects_ray(ray[0], ray[1])
+		if at != null:
+			var d: Vector3 = at - _move.from
+			_move.by = Vector3i(int(round(d.x / BrickPalette.STUD_M)), int(round(d.y / BrickPalette.PLATE_M)),
+					int(round(d.z / BrickPalette.STUD_M)))
+		return true
+	return false
