@@ -101,6 +101,7 @@ func _tick() -> void:
 	_round3()
 	_round4()
 	_round5()
+	_round6()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -903,3 +904,41 @@ func _round5() -> void:
 	_ws.sketch_region(cut, true)
 	_ok("switched off, RMB leaves other bricks alone", _ws.recipe.size() == 2)
 	_ws.erase_any = true
+
+
+func _round6() -> void:
+	# The shape brush: Ctrl + LMB lays a shape, Ctrl + RMB carves one, in any tool.
+	var cube: Dictionary = _ws.brush_shape_cells("cube", Vector3i(30, 20, 30), 4)
+	var box: Array = _ws.brush_shape_box("cube", Vector3i(30, 20, 30), 4)
+	_ok("a 4-stud cube: 4 studs by 10 plates by 4", cube.size() == 160 and box[1] - box[0] == Vector3i(4, 10, 4),
+			"%d cells %s" % [cube.size(), str(box)])
+	_ok("a 1-stud ball is one stud, 3 plates", _ws.brush_shape_cells("ball", Vector3i(30, 20, 30), 1).size() == 3)
+	var disc: Dictionary = _ws.brush_shape_cells("circle", Vector3i(30, 20, 30), 4, 1, 1)
+	var flat := true
+	for c in disc:
+		flat = flat and c.y == 20
+	_ok("a flat circle lies on its plane, one cell thick, corners off", flat and disc.size() == 12, "%d cells" % disc.size())
+	var upright: Dictionary = _ws.brush_shape_cells("square", Vector3i(30, 20, 30), 4, 2, 2)
+	var zs := {}
+	for c in upright:
+		zs[c.z] = true
+	_ok("on the side plane it stands up, its thickness across", zs.size() == 2 and upright.size() == 4 * 10 * 2,
+			"%d cells, %d deep" % [upright.size(), zs.size()])
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.shape_place(cube)
+	_ok("laid: the cube's cells, filled", _volume() == 160, "%d cells" % _volume())
+	var ball: Dictionary = _ws.brush_shape_cells("ball", Vector3i(32, 24, 32), 4)
+	var both := 0
+	for c in ball:
+		if cube.has(c):
+			both += 1
+	_ws._group(_ws.shape_carve(ball))
+	_ok("carved: what the ball covered is gone, the rest laid again", _volume() == 160 - both and both > 0,
+			"%d cells, %d carved" % [_volume(), both])
+	var parts_ok := true
+	for k in _ws.recipe.size():
+		parts_ok = parts_ok and _ws.part_of[k] == 0
+	_ok("in its own part", parts_ok)
+	_ws._undo()
+	_ok("one Z fills the hole", _volume() == 160, "%d cells" % _volume())
