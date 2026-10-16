@@ -87,7 +87,7 @@ copies every sketch.
 | 3 | **Connection points on studs**: a mount or socket is placed on a stud (J on a stud) and carries its interface | a connection is where two parts meet on studs |
 | 4 | **Exploded view** (one button): every part pulled apart about ten bricks along where it sits -- barrel forward of the receiver, stock behind, grip under it, underbarrel under the barrel; the magazine where it is. Edit as normal while apart: what is placed lands in the part's own place when it closes | see and work on a part with nothing in the way |
 | 4 | **Move a whole part**: drag it (and with it the assembled place of it) | a magazine or a sight goes where the gun needs it |
-| 5 | **Hands**: the big brick hands at gun scale, the right C on the grip's point, the left on the underbarrel's (or the handguard's); **play** runs a cycle -- shoulder, fire, reload with the magazine out and in -- from the parts' points. Baked first if a part has changed (its pieces need building to move apart) | see the gun held and worked before it goes in the game |
+| 5 | **Hands**: the game's own brick hands (ViewArms' C and pinch) at the gun's scale -- a game metre is the gun's real size, so the C's hole comes to ~8 mm at print, a grip's thickness. The right C round the grip, its hole along the grip's long axis (from its cells), fingers forward; the left round the underbarrel, else the barrel, else the front of the body. **Play** runs a cycle: three shots (the gun kicks back and its muzzle rises about the grip), then the left hand goes to the magazine, pinches it, takes it out under the gun and puts it back. The parts are baked first -- each laid again on its own, as Explode does -- so they can move apart; making animations here is left for later | see the gun held and worked before it goes in the game |
 
 ### Phase 2 -- build a whole gun split by part
 
@@ -133,6 +133,9 @@ does not change, so a build made here opens in the main workshop and the city as
 | `points` | mounts and sockets: part, kind, slot, interface, and where: studs along, plates up, studs across |
 | `guides` | guide models: file, real length, offset, turn, opacity |
 | `smooth`, `muzzle` | which parts leave as smooth pieces; which end is the muzzle |
+| `sketches` | each sketch: part, plane, where, thickness, areas drawn in and out (outlines, brush strokes, depth cuts), and its order (a part's first plane is its base) |
+| `part_bricks` | the bricks each part's sketches laid, so a change lays only what differs |
+| `studs` | studs put on by hand: part, foot, the way it faces, its brick's paint |
 
 A photo is referred to by its path and is not copied: a bought or borrowed picture stays out of
 the repository.
