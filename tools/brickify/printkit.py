@@ -3,7 +3,8 @@ each part one watertight solid at print size, to slice and print.
 
     blender --background --factory-startup --python printkit.py -- <sheet.json> <out dir>
 
-Writes <out dir>/<part>.stl (millimetres), <out dir>/<name>_print_iso.png and
+Writes <out dir>/<part>.stl (millimetres) to print the parts apart and plug them together,
+<out dir>/<name>_whole.stl to print the gun as one piece, <out dir>/<name>_print_iso.png and
 <out dir>/<name>.print.json (each part: watertight or not, pieces, studs, stud holes, size).
 
 How a part is made (Docs/AssetWorkshop.md, "Into the game, stage 3"):
@@ -84,11 +85,6 @@ def main() -> None:
         p["loose_bits"] = sum(1 for b in p.get("piece_boxes_mm", [])
                               if max(b[1][k] - b[0][k] for k in range(3)) < small)
     report["ok"] = all(p["watertight"] and p["loose_bits"] == 0 for p in report["parts"])
-    with open(os.path.join(out_dir, sheet["name"] + ".print.json"), "w", encoding="utf-8", newline="\n") as f:
-        json.dump(report, f, indent=1)
-    print("%s: %d parts, %.1f x %.1f x %.1f mm printed, %s" % (
-        sheet["name"], len(report["parts"]), *report["print_mm"],
-        "every part watertight, no loose bits" if report["ok"] else "SOME NOT CLEAN"))
     prefix = os.path.join(out_dir, sheet["name"] + "_print")
     # gunsmith's pictures; its "parts" one pulls each part (all but the body) off by slot.
     gs.render(prefix, {"parts": [dict({"name": n, "slot": n}, **({} if n == "body" else {"mount": True}))
@@ -97,6 +93,45 @@ def main() -> None:
     for n, ob in objects.items():
         ob.location = Vector(ob.location) * 2.5
     under(prefix + "_holes.png", objects)
+
+    # The whole gun as one solid, to print in one go: every part again, without the stud
+    # holes between them (each stud fills where its hole would be), all unioned. After the
+    # pictures, which are of the parts.
+    for ob in objects.values():
+        ob.hide_render = True
+    whole = None
+    rest = []
+    for spec in parts:
+        ob = build(spec, layout[spec["name"]], [], grid)
+        if whole is None:
+            whole = ob
+            whole.name = sheet["name"] + "_whole"
+        else:
+            bm = bmesh.new()
+            bm.from_mesh(ob.data)
+            rest.append(bm)
+            bpy.data.objects.remove(ob)
+    if whole is not None:
+        if rest:
+            boolean(whole, rest, "UNION")
+        info = inspect(whole)
+        path = os.path.join(out_dir, sheet["name"] + "_whole.stl")
+        export_stl(whole, path)
+        info["stl"] = path
+        info["loose_bits"] = sum(1 for b in info.get("piece_boxes_mm", [])
+                                 if max(b[1][k] - b[0][k] for k in range(3)) < small)
+        report["whole"] = info
+        print("  %-12s %s, %d piece(s), %.1f x %.1f x %.1f mm%s" % (
+            "WHOLE", "watertight" if info["watertight"] else "NOT WATERTIGHT", info["pieces"], *info["size_mm"],
+            ("  (%d edge(s) where blocks touch only along a line)" % info["pinched_edges"]) if info["pinched_edges"] else ""))
+        report["ok"] = report["ok"] and info["watertight"] and info["loose_bits"] == 0
+
+    # Last: the workshop takes this file appearing as "done".
+    with open(os.path.join(out_dir, sheet["name"] + ".print.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(report, f, indent=1)
+    print("%s: %d parts and the whole, %.1f x %.1f x %.1f mm printed, %s" % (
+        sheet["name"], len(report["parts"]), *report["print_mm"],
+        "every one watertight, no loose bits" if report["ok"] else "SOME NOT CLEAN"))
 
 
 # ------------------------------------------------------------------------------- layout

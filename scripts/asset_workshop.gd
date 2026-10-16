@@ -5997,7 +5997,8 @@ func _poll_print() -> void:
 		text = "print: %d parts, %.0f x %.0f x %.0f mm, %s   (%s)" % [(d.parts as Array).size(),
 				float(size[0]), float(size[1]), float(size[2]),
 				("every part watertight, no loose bits" if bad.is_empty() else "NOT CLEAN: " + ", ".join(bad))
-				+ ("; touching only along a line: " + ", ".join(pinched) if not pinched.is_empty() else ""),
+				+ ("; touching only along a line: " + ", ".join(pinched) if not pinched.is_empty() else "")
+				+ _whole_text(d.get("whole", {})),
 				_print_report.get_base_dir()]
 	var png := _print_report.replace(".print.json", "_print_iso.png")
 	_print_report = ""
@@ -6008,3 +6009,12 @@ func _poll_print() -> void:
 		_preview_image.texture = ImageTexture.create_from_image(img)
 		_preview_text.text = text
 		_preview_panel.visible = true
+
+
+## The one-piece print's line of the report.
+static func _whole_text(w: Dictionary) -> String:
+	if w.is_empty():
+		return ""
+	return "; whole gun in one piece: %s%s" % ["watertight" if bool(w.watertight) and int(w.get("pieces", 0)) == 1
+			else "NOT CLEAN", (", %d edge(s) touching only along a line" % int(w.pinched_edges))
+			if int(w.get("pinched_edges", 0)) > 0 else ""]
