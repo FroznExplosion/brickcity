@@ -312,7 +312,9 @@ func _shot() -> void:
 		for _i in 3:
 			await get_tree().process_frame
 		sketch_fill([Vector2(30, 36), Vector2(38, 52), Vector2(46, 52), Vector2(46, 20), Vector2(38, 20)])
-		# And a drum, a circle on the front plane.
+		# And a drum magazine, a circle on the front plane (on the body it would be a view
+		# through it, cutting it to the circle).
+		select_part(part_names.find("magazine"))
 		work_plane = "front"
 		work_x = 52
 		var circle := []
@@ -320,6 +322,7 @@ func _shot() -> void:
 			var t := a * TAU / 32.0
 			circle.append(Vector2(mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
 		sketch_fill(circle)
+		select_part(0)
 		work_plane = "side"
 		rail_pick("sketch")
 		sketch_draw = "brush"
@@ -2149,12 +2152,12 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_sketch_box = VBoxContainer.new()
 	box.add_child(_sketch_box)
 	var t4 := Label.new()
-	t4.text = "Sketch (Alt D): draw an outline on the working plane"
+	t4.text = "Sketch (Alt D) on the working plane"
 	_sketch_box.add_child(t4)
 	var wrow := HBoxContainer.new()
 	_sketch_box.add_child(wrow)
 	var wl := Label.new()
-	wl.text = "this part's thickness, studs"
+	wl.text = "thickness, studs"
 	wrow.add_child(wl)
 	_width_spin = SpinBox.new()
 	_width_spin.min_value = 1
@@ -2171,8 +2174,8 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	sk_fill.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
 	_sketch_box.add_child(sk_fill)
 	var sk_slopes := OptionButton.new()
-	sk_slopes.add_item("slopes: only at a slope's own pitch")
-	sk_slopes.add_item("slopes: eager (1-3 plates a stud)")
+	sk_slopes.add_item("slopes: own pitch only")
+	sk_slopes.add_item("slopes: eager (1-3 plates)")
 	sk_slopes.item_selected.connect(func(i: int) -> void:
 		slope_eager = i == 1
 		resketch(_sketch_key(), {}))
@@ -2180,7 +2183,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	var crow := HBoxContainer.new()
 	_sketch_box.add_child(crow)
 	var cl := Label.new()
-	cl.text = "RMB cuts in, studs (0: through)"
+	cl.text = "cut depth (0: through)"
 	crow.add_child(cl)
 	var cs := SpinBox.new()
 	cs.min_value = 0
@@ -2188,8 +2191,14 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	cs.value = cut_deep
 	cs.value_changed.connect(func(v: float) -> void: cut_deep = int(v))
 	crow.add_child(cs)
+	var any := CheckBox.new()
+	any.text = "RMB erases any brick"
+	any.button_pressed = erase_any
+	any.focus_mode = Control.FOCUS_NONE
+	any.toggled.connect(func(on: bool) -> void: erase_any = on)
+	_sketch_box.add_child(any)
 	var hint := Label.new()
-	hint.text = "LMB draws area in, RMB draws it out. The first plane a part is drawn on gives it its thickness; drawn on another plane, area in keeps only what is inside it, area out cuts through."
+	hint.text = "LMB draws in, RMB draws out. A part's first plane sets its thickness; on another plane, in keeps what is inside, out cuts through."
 	_sketch_box.add_child(hint)
 	var clear := Button.new()
 	clear.text = "Clear this view"
@@ -2751,7 +2760,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
 [b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
-[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
+[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
 [b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
@@ -3279,6 +3288,12 @@ func sketch_region_entry(entry: Variant, remove: bool = false) -> int:
 		sk = {"part": part_names[part_sel], "plane": work_plane, "at": _plane_value(work_plane),
 				"width": width_of(part_names[part_sel]), "adds": [], "subs": [], "n": _sketch_seq}
 		_sketch_seq += 1
+	var erase := []
+	if remove and erase_any:
+		erase = bricks_under(region_cells(plain), work_plane, cut_deep, _camera_side(work_plane))
+		if part_sketches(part_names[part_sel]).is_empty():
+			# Nothing sketched for this part: the stroke only takes up what is under it.
+			return erase_bricks(erase)
 	if remove and cut_deep > 0:
 		plain = {"cut": plain, "deep": cut_deep, "from": _camera_side(work_plane)}
 	(sk.subs if remove else sk.adds).append(plain)
@@ -3287,7 +3302,7 @@ func sketch_region_entry(entry: Variant, remove: bool = false) -> int:
 	var area := {}
 	if remove or _base_plane(String(sk.part)) in ["", work_plane]:
 		area = region_cells(plain.cut if plain is Dictionary and plain.has("cut") else plain)
-	return resketch(key, sk, area)
+	return resketch(key, sk, area, erase)
 
 
 ## The plane a part was first drawn on, or "".
@@ -3330,7 +3345,7 @@ func clear_part_sketch(part: String) -> void:
 ## Change a sketch -- `change` is merged into it -- and lay its part's bricks again. One
 ## undo, which puts the sketch and the bricks back. Returns how many bricks the part has.
 ## `area`, if given: the sketch cells the change drew over -- nothing outside them changed.
-func resketch(key: String, change: Dictionary, area: Dictionary = {}) -> int:
+func resketch(key: String, change: Dictionary, area: Dictionary = {}, erase: Array = []) -> int:
 	if not sketches.has(key) and not change.has("adds"):
 		return 0
 	# Stored sketches are never changed in place (here or in sketch_region), so the undo
@@ -3340,7 +3355,7 @@ func resketch(key: String, change: Dictionary, area: Dictionary = {}) -> int:
 	var empty: bool = (sk.adds as Array).is_empty() and (sk.subs as Array).is_empty()
 	var thicker: bool = sketches.has(key) and int(sketches[key].width) != int(sk.width)
 	return resketch_part(String(sk.part), {key: null if empty else sk}, change.is_empty() or thicker,
-			String(sk.plane), area)
+			String(sk.plane), area, erase)
 
 
 ## A part's sketches changed (`change`: key -> its new state, or null for gone), and its
@@ -3350,8 +3365,11 @@ func resketch(key: String, change: Dictionary, area: Dictionary = {}) -> int:
 ## clear of every cell that came or went stays where it is, and only the rest is packed
 ## again. `whole` (a new thickness or slope setting) lays it all again. Taking every brick
 ## up and laying it again was ~140 ms on a 500-brick part -- a hitch per stroke.
+##
+## `erase`: the recipe indices of other bricks to take up with it (RMB over bricks that
+## are not this sketch's), as part of the same undo.
 func resketch_part(part: String, change: Dictionary, whole: bool = false, plane: String = "",
-		area: Dictionary = {}) -> int:
+		area: Dictionary = {}, erase: Array = []) -> int:
 	var before := {}
 	for k in change:
 		before[k] = sketches.get(k)
@@ -3428,6 +3446,27 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 		for c in cells:
 			free[c] = true
 			only[c] = true
+	var taken := {}
+	for i in going.values():
+		taken[int(i)] = true
+	for i in erase:
+		if taken.has(int(i)):
+			continue
+		var arch := String(recipe.part_of(int(i)))
+		var cell := recipe.cell_of(int(i))
+		var k := "%s|%s" % [arch, cell]
+		if kept.has(k):
+			kept.erase(k)
+			laid = laid.filter(func(b: Array) -> bool: return "%s|%s" % [b[0], Vector3i(int(b[1][0]), int(b[1][1]), int(b[1][2]))] != k)
+		taken[int(i)] = true
+		going["erase|%d" % i] = int(i)
+		var size := BrickPalette.size_of(arch)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c := cell + Vector3i(dx, dy, dz)
+					free[c] = true
+					only[c] = true
 	var plan := _plan_volume(list, vol, free, {} if whole else only, {} if whole else near)
 	# A going brick the new layout lays again, the same part in the same place, stays.
 	var lay := []
@@ -4127,7 +4166,8 @@ const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
 
-const RAIL_W := 236.0
+const RAIL_W := 184.0
+const RAIL_FONT := 12
 var sketch_draw := "outline"
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
@@ -4154,9 +4194,28 @@ func _build_rail(layer: CanvasLayer) -> void:
 	_rail.size.x = RAIL_W
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.11, 0.12, 0.15, 0.96)
-	bg.set_content_margin_all(8)
+	bg.set_content_margin_all(5)
 	bg.set_corner_radius_all(4)
 	_rail.add_theme_stylebox_override("panel", bg)
+	# Small type and tight buttons: the rail is a strip, not a panel.
+	var theme := Theme.new()
+	theme.default_font_size = RAIL_FONT
+	for kind in ["Button", "OptionButton"]:
+		for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.2, 0.22, 0.27) if state in ["pressed", "hover_pressed"] else (
+					Color(0.16, 0.17, 0.21) if state == "hover" else Color(0.13, 0.14, 0.17))
+			if state == "focus":
+				sb.draw_center = false
+			sb.content_margin_left = 6
+			sb.content_margin_right = 6
+			sb.content_margin_top = 2
+			sb.content_margin_bottom = 2
+			sb.set_corner_radius_all(3)
+			theme.set_stylebox(state, kind, sb)
+	theme.set_constant("separation", "VBoxContainer", 2)
+	theme.set_constant("separation", "HBoxContainer", 4)
+	_rail.theme = theme
 	layer.add_child(_rail)
 	# Scrolls when the open tool's options run past the bottom of the screen.
 	_rail_scroll = ScrollContainer.new()
@@ -4267,11 +4326,15 @@ func _fit_rail(n: Node) -> void:
 			(c as OptionButton).clip_text = true
 			(c as OptionButton).custom_minimum_size.x = RAIL_W - 16
 		elif c is HBoxContainer:
+			# A label and its number side by side: the label takes what the number leaves.
 			for k in c.get_children():
 				if k is Label:
 					(k as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 					(k as Label).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-					(k as Label).custom_minimum_size.x = 120
+					(k as Label).custom_minimum_size.x = RAIL_W - 16 - 72
+				elif k is SpinBox:
+					(k as SpinBox).custom_minimum_size.x = 64
+			continue
 		_fit_rail(c)
 
 
@@ -5206,3 +5269,74 @@ func play_pose(t: float) -> void:
 			b = b.slerp(ViewArms.hand_basis(fwd, Vector3.UP), reach)
 		_hand_shape(1, "PINCH" if reach > 0.9 else "C")
 		_put_hand(1, hole, b, recoil)
+
+
+# ---------------------------------------------------------------------------
+# Round 5: a sketch's RMB takes up whatever is under it
+# ---------------------------------------------------------------------------
+
+## RMB in sketch also takes up every brick under the stroke, not only the sketch's own.
+var erase_any := true
+
+
+## The upright-grid bricks under an area of a plane, by recipe index, highest first: right
+## through, or with `deep` (studs) only that far in from the face toward the camera.
+func bricks_under(area: Dictionary, plane: String, deep: int, from: int) -> Array:
+	var axis := 2 if plane == "side" else (0 if plane == "front" else 1)
+	var reach := {}   # sketch cell -> [first cell in, last cell in] along the axis
+	if deep > 0:
+		var n := deep if axis != 1 else int(round(deep * 2.5))
+		var dims := Vector3i(plate_studs, height_plates, plate_studs)
+		for g in area:
+			var ks := range(dims[axis] - 1, -1, -1) if from > 0 else range(dims[axis])
+			for k in ks:
+				if world.is_solid(chunk, _sketch_cell(g, k, plane)):
+					reach[g] = [mini(k, k - (n - 1) * from), maxi(k, k - (n - 1) * from)]
+					break
+	var out := []
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var cell := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var hit := false
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c := cell + Vector3i(dx, dy, dz)
+					var g := _sketch_grid(c, plane)
+					if not area.has(g):
+						continue
+					if deep <= 0 or (reach.has(g) and c[axis] >= int(reach[g][0]) and c[axis] <= int(reach[g][1])):
+						hit = true
+		if hit:
+			out.append(i)
+	return out
+
+
+## Take these bricks up (recipe indices), as one undo. Returns how many went.
+func erase_bricks(ids: Array) -> int:
+	var order := ids.duplicate()
+	order.sort()
+	order.reverse()
+	var n := 0
+	_batch = true
+	for i in order:
+		if take_brick(int(i)):
+			n += 1
+	_batch = false
+	_after_edit()
+	_group(n)
+	return n
+
+
+## How many cells of bricks have some of themselves between x0 and x1 (studs): for checks.
+func _volume_in(x0: int, x1: int) -> int:
+	var n := 0
+	for i in recipe.size():
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		for dx in size.x:
+			if c.x + dx >= x0 and c.x + dx < x1:
+				n += size.y * size.z
+	return n

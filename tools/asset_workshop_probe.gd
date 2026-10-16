@@ -100,6 +100,7 @@ func _tick() -> void:
 	_round2()
 	_round3()
 	_round4()
+	_round5()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -863,3 +864,42 @@ func _round4() -> void:
 	_ws._play = {}
 	_ws._clear_display()
 	_ws.set_hands(false)
+
+
+func _round5() -> void:
+	# RMB in sketch takes up any brick under the stroke, not only the sketch's own.
+	_ws._new_build()
+	_ws.work_plane = "side"
+	_ws.select_part(_ws.part_names.find("barrel"))
+	_lay("brick_2x4", Vector3i(30, 1, 20))
+	_ws.select_part(0)
+	var cut := [Vector2(29, 0), Vector2(33, 0), Vector2(33, 5), Vector2(29, 5)]
+	_ws.sketch_region(cut, true)
+	_ok("RMB in sketch takes up a hand-laid brick of another part", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+	_ws._undo()
+	_ok("and Z lays it back", _ws.recipe.size() == 1)
+	# Over a sketch of this part: its bricks and the other brick, one undo.
+	_ws.part_width["body"] = 3
+	_ws.sketch_region([Vector2(20, 6), Vector2(40, 6), Vector2(40, 12), Vector2(20, 12)])
+	var with_sketch: int = _ws.recipe.size()
+	_ws.sketch_region([Vector2(28, 0), Vector2(34, 0), Vector2(34, 13), Vector2(28, 13)], true)
+	var hand_gone := true
+	for k in _ws.recipe.size():
+		hand_gone = hand_gone and _ws.recipe.cell_of(k) != Vector3i(30, 1, 20)
+	_ok("a cut over a sketch takes its bricks and the other brick", hand_gone and _ws._volume_in(28, 34) == 0,
+			"%d bricks" % _ws.recipe.size())
+	_ws._undo()
+	_ok("one Z puts both back", _ws.recipe.size() == with_sketch, "%d of %d" % [_ws.recipe.size(), with_sketch])
+	# A depth cut takes only the nearest brick in.
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("barrel"))
+	_lay("brick_2x4", Vector3i(30, 1, 20))
+	_lay("brick_2x4", Vector3i(30, 1, 30))
+	var near_ids: Array = _ws.bricks_under(_ws.region_cells([[29, 0], [33, 0], [33, 5], [29, 5]]), "side", 1, 1)
+	_ok("a depth cut reaches only the brick nearest the camera", near_ids.size() == 1
+			and _ws.recipe.cell_of(near_ids[0]) == Vector3i(30, 1, 30), str(near_ids))
+	_ws.erase_any = false
+	_ws.select_part(0)
+	_ws.sketch_region(cut, true)
+	_ok("switched off, RMB leaves other bricks alone", _ws.recipe.size() == 2)
+	_ws.erase_any = true
