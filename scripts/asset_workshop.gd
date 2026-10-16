@@ -871,6 +871,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_H: set_hands(not hands_on)
 			KEY_P: play_cycle()
 			KEY_X: export_game()
+			KEY_B: export_print()
 			_: alt = false
 		if alt:
 			get_viewport().set_input_as_handled()
@@ -931,6 +932,7 @@ func _process(dt: float) -> void:
 	if _outlines_dirty:
 		_draw_outlines()
 	_poll_export()
+	_poll_print()
 	if _autosave_dirty and not _no_autosave and Time.get_ticks_msec() > _autosave_at:
 		_autosave_dirty = false
 		_autosave_at = Time.get_ticks_msec() + 4000
@@ -4310,6 +4312,12 @@ func _build_rail(layer: CanvasLayer) -> void:
 	to_game.focus_mode = Control.FOCUS_NONE
 	to_game.pressed.connect(func() -> void: export_game())
 	box.add_child(to_game)
+	var to_print := Button.new()
+	to_print.text = "Export to print   Alt B"
+	to_print.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	to_print.focus_mode = Control.FOCUS_NONE
+	to_print.pressed.connect(func() -> void: export_print())
+	box.add_child(to_print)
 	box.add_child(HSeparator.new())
 
 	# The shape brush: Ctrl + LMB lays a shape, Ctrl + RMB carves it out, in any tool.
@@ -5920,3 +5928,83 @@ func settle_muzzle() -> void:
 		lean -= float(c.stock) - mid
 	if absf(lean) > 0.5:
 		muzzle_end = "-x" if lean < 0.0 else "+x"
+
+
+# ---------------------------------------------------------------------------
+# Out to the printer: each part one watertight STL (tools/brickify/printkit.py)
+# ---------------------------------------------------------------------------
+
+var _print_report := ""
+var _print_started := 0
+
+
+## Where a gun's print files go: beside the other print files, outside the repository
+## (Documents/brickcity-print/guns/<name>/).
+func print_dir() -> String:
+	var sheet_name := slug(recipe.name if recipe.name != "untitled" else "gun")
+	return OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS).replace("\\", "/") + "/brickcity-print/guns/" + sheet_name
+
+
+## Export the gun for printing: its build sheet, then Blender's print kit makes each part
+## one watertight solid at print size (one nano stud is 4 mm) -- its bricks one shell,
+## slopes and studs unioned on, a stud hole wherever it sits on another part's studs --
+## as <part>.stl, with pictures and a report. Runs in the background; the report shows
+## when it is done. `run` false only writes the sheet (for checks). Returns the folder.
+func export_print(run: bool = true) -> String:
+	var sheet := export_sheet()
+	if (sheet.parts as Array).is_empty():
+		_export_check = "print: nothing built yet"
+		return ""
+	var dir := ProjectSettings.globalize_path("user://asset_exports")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var sheet_path := "%s/%s.json" % [dir, sheet.name]
+	var f := FileAccess.open(sheet_path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(sheet, " "))
+	f.close()
+	var out := print_dir()
+	if not run:
+		return out
+	if not FileAccess.file_exists(blender_path):
+		_export_check = "print: Blender not found at %s (set BRICKCITY_BLENDER)" % blender_path
+		return out
+	DirAccess.make_dir_recursive_absolute(out)
+	var kit := ProjectSettings.globalize_path("res://tools/brickify/printkit.py")
+	_print_report = "%s/%s.print.json" % [out, sheet.name]
+	_print_started = int(Time.get_unix_time_from_system())
+	OS.create_process(blender_path, ["--background", "--factory-startup", "--python", kit, "--", sheet_path, out])
+	_export_check = "print: making the STLs..."
+	print("[asset workshop] print files going to %s" % out)
+	return out
+
+
+func _poll_print() -> void:
+	if _print_report == "" or not FileAccess.file_exists(_print_report):
+		return
+	if FileAccess.get_modified_time(_print_report) < _print_started:
+		return
+	var d = JSON.parse_string(FileAccess.get_file_as_string(_print_report))
+	var text := "print: no report"
+	if d is Dictionary:
+		var bad := PackedStringArray()
+		for p in d.get("parts", []):
+			if not bool(p.watertight) or int(p.get("loose_bits", 0)) > 0:
+				bad.append(String(p.part))
+		var pinched := PackedStringArray()
+		for p in d.get("parts", []):
+			if int(p.get("pinched_edges", 0)) > 0:
+				pinched.append("%s %d" % [p.part, int(p.pinched_edges)])
+		var size: Array = d.get("print_mm", [0, 0, 0])
+		text = "print: %d parts, %.0f x %.0f x %.0f mm, %s   (%s)" % [(d.parts as Array).size(),
+				float(size[0]), float(size[1]), float(size[2]),
+				("every part watertight, no loose bits" if bad.is_empty() else "NOT CLEAN: " + ", ".join(bad))
+				+ ("; touching only along a line: " + ", ".join(pinched) if not pinched.is_empty() else ""),
+				_print_report.get_base_dir()]
+	var png := _print_report.replace(".print.json", "_print_iso.png")
+	_print_report = ""
+	_export_check = text
+	print("[asset workshop] " + text)
+	var img := Image.load_from_file(png) if FileAccess.file_exists(png) else null
+	if img != null and not img.is_empty():
+		_preview_image.texture = ImageTexture.create_from_image(img)
+		_preview_text.text = text
+		_preview_panel.visible = true

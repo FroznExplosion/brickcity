@@ -128,6 +128,16 @@ copies every sketch.
 | **The magazine comes off** | a magazine part tagged `detaches` (every exported one) goes with the left hand through a reload, down with the old one and up with the new (`PlayerView._carry_magazine`), and is back home after |
 | **To try it** | in developer mode, T cycles the gun classes and then each exported gun. The pass `city.tscn -- --asset-gun=thompson` holds it, fires it and reloads it (shots/asset_gun_*.png) |
 
+### Into the game, stage 3 (2026-10-16): print files
+
+| What | How |
+|---|---|
+| **Export to print** (rail, Alt B) | the build sheet, then Blender's print kit (`tools/brickify/printkit.py`) in the background: each part one watertight STL at print size (one nano stud = 4 mm), `Documents/brickcity-print/guns/<name>/<part>.stl`, outside the repository like the brick generator's files, with pictures (`_print_iso`, `_print_side`, `_print_under`, `_print_parts`, `_print_holes`) and `<name>.print.json`. The workshop shows the picture and the report when it is done |
+| One solid a part | its plain bricks as ONE shell (the outside faces of their cells -- bricks side by side print as one piece, not boxes that only touch); slopes and curves from the catalogue (gunsmith's), welded closed and grown a hair; studs sunk a hair; all unioned (each piece its own operand: pieces overlapping inside one operand are not unioned) |
+| Plugging together | where a part sits on another part's studs, a stud hole cut up into it: the stud's diameter plus the grid's side clearance (nano 2.4 + 2 x 0.05 mm), 0.15 mm deeper than the stud. The lower part keeps its studs |
+| Checks | every part watertight; no loose bit the size of a stud (a part may be several real pieces -- the Thompson's front and rear sight); edges where two blocks touch only along a line are counted and named ("pinched": printable, nothing holds there). Never a coplanar face in a boolean: every overlap is a deliberate hair, hole cutters start well below the face |
+| The Thompson | 8 parts, 220 x 12 x 59 mm, every part watertight, no loose bits; its body has one pinched edge |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |
