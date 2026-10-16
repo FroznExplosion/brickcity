@@ -2316,6 +2316,15 @@ func _loft_spec(spec: Dictionary, ids: Array, along: Callable, up: Callable) -> 
 			for edge in ([x, x + 1] if x == lo.x or x == hi.x else [x + 0.5]):
 				stations.append({"t": along.call(float(edge)), "a": a, "w": w, "round": 0.45})
 		spec["axis"] = "x"
+		# Studs on both flat sides, wherever a whole stud fits (the reference's furniture has
+		# them); a grip, held in the hand, gets none.
+		if spec.slot != "grip":
+			var x0: float = along.call(float(lo.x))
+			var x1: float = along.call(float(hi.x + 1))
+			var span := [minf(x0, x1), maxf(x0, x1)]
+			var zs := [up.call(float(lo.y)), up.call(float(hi.y + 1))]
+			spec["studs"] = [{"face": "+y", "x": span, "z": zs, "shape": "all"},
+					{"face": "-y", "x": span, "z": zs, "shape": "all"}]
 	else:
 		for y in range(lo.y, hi.y + 1):
 			var xs := []
