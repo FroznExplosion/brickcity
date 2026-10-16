@@ -425,7 +425,7 @@ func _export() -> void:
 	_ws.select_part(0)
 	_ws.fill_cells(_cells_box(Vector3i(20, 1, 39), Vector3i(29, 6, 41)))
 	_ws.select_part(2)
-	_ws.fill_cells(_cells_box(Vector3i(30, 1, 39), Vector3i(37, 3, 41)))
+	_ws.fill_cells(_cells_box(Vector3i(30, 1, 39), Vector3i(37, 8, 41)))
 	_ws.toggle_smooth()
 	_ws.toggle_point([30, 2, 40.5], "mount", "stock", "stock.tang")
 	var sheet: Dictionary = _ws.export_sheet()
@@ -441,6 +441,7 @@ func _export() -> void:
 		_ok("the body goes as laid", by.body.kind == "placed" and (by.body.bricks as Array).size() > 0)
 		_ok("the smooth stock goes as a loft along the gun", by.stock.kind == "loft" and by.stock.axis == "x"
 				and (by.stock.stations as Array).size() >= 8, "%s, %d stations" % [by.stock.kind, (by.stock.get("stations", []) as Array).size()])
+		_ok("the smooth stock has studs on both sides", (by.stock.get("studs", []) as Array).size() == 2)
 		_ok("its mount is where the point is, in mm from the muzzle", by.stock.has("mount")
 				and absf(float(by.stock.mount.at[0]) - 40.0) < 1e-6, str(by.stock.get("mount", {})))
 

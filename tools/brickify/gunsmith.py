@@ -659,7 +659,9 @@ def check(doc, std, grid):
                 # wide has a stud on the centre plane, an even one has it between two.
                 good = good and whole(2.0 * y / pitch) and whole(z / plate)
             else:
-                good = good and whole(y / tick) and whole((z - s["z0"]) / pitch - 0.5) and whole(s["z0"] / plate)
+                # A side's plane is on a tick, or on the half-stud line a part an odd number of
+                # studs wide has its sides on.
+                good = good and (whole(y / tick) or whole(2.0 * y / pitch))                     and whole((z - s["z0"]) / pitch - 0.5) and whole(s["z0"] / plate)
             if not good:
                 off.append(part["name"])
     ok("every stud is on the lattice (%d studs)" % count, not off, ", ".join(sorted(set(off))))
