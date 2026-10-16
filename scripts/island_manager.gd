@@ -888,6 +888,10 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 	world = brick_world
 	brick_material = material
 	camera = view
+	# Every search from what changed checked against a whole walk
+	# (split_if_broken; the count is in shed_census_line). For test passes.
+	if OS.has_environment("BC_COMPONENTS_CHECK"):
+		world.set_components_check(true)
 	if heap == null:
 		heap = BrickHeap.new()
 		heap.name = "BrickHeap"
@@ -3486,7 +3490,10 @@ func shed_census_line() -> String:
 	for cause in shed_census:
 		var row: Array = shed_census[cause]
 		parts.append("%s %d / %d / %d / %d" % [cause, row[0], row[1], row[2], row[3]])
-	return "off pieces, groups of 1 / 2-8 / 9-48 / more: " + ("; ".join(parts) if not parts.is_empty() else "none")
+	var st: PackedInt64Array = world.get_components_near_stats()
+	return "off pieces, groups of 1 / 2-8 / 9-48 / more: " + ("; ".join(parts) if not parts.is_empty() else "none") \
+			+ " -- found by %d search(es), %.1f ms all told, %.2f the worst: %d whole with nothing changed, %d from what changed (%d bricks walked), %d walked whole, %d not as said; %d differing from a whole walk" % [
+			int(find_ms[2]), find_ms[0], find_ms[1], st[1], st[2], st[3], st[4], st[6], st[5]]
 
 
 func _shed(isl: BrickIsland, groups: Array) -> int:
@@ -3508,6 +3515,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	var shed := 0
 	var bodies := 0
 	var more := false
+	_shed_left = false
 	for g in groups:
 		var moved: PackedInt32Array = g
 		if moved.is_empty():
@@ -3562,6 +3570,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	# passes through what leaves it (Layers.AIRBORNE_MASK), and waits; so does
 	# one that only shed crumbs or what was deleted, which have no body to be
 	# pushed out of it.
+	_shed_left = more
 	if bodies > 0 and isl.merged and isl.landed:
 		_reshape(isl, true, true)
 		isl.reshape_due = false
@@ -3597,19 +3606,40 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	return shed
 
 
+## Whether the last _shed left groups for another pass.
+var _shed_left := false
+## What split_if_broken's searches took: [ms all told, the worst, how many].
+var find_ms := [0.0, 0.0, 0]
+
+
 ## Anything no longer joined to the rest becomes its own piece.
+##
+## Searched from what has changed (BrickWorld.get_components_near): a piece
+## known to be in one piece is walked out from the bricks a hit, a landing or a
+## cut changed since, not end to end. Walked whole, a hit that cut nothing off
+## the 22,000-brick tower was 1.5-3.5 ms, and a --big --shot had 146-187 of
+## them (2026-10-16, CollapseNext item 23).
 func split_if_broken(isl: BrickIsland) -> void:
 	# A crack a landing put in (_snap_across) is no joint flag: it is asked
 	# here, every pass until the piece has come apart along it, and forgotten
 	# then.
 	var cracked := not isl.cracks_x.is_empty() or not isl.cracks_z.is_empty()
+	var t0 := Time.get_ticks_usec()
 	var comps: Array = world.crack_components(isl.chunk, isl.cracks_x, isl.cracks_z) \
-			if cracked else world.get_components(isl.chunk)
+			if cracked else world.get_components_near(isl.chunk)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	find_ms[0] += ms
+	find_ms[1] = maxf(find_ms[1], ms)
+	find_ms[2] += 1
 	if comps.size() <= 1:
 		isl.cracks_x = PackedInt32Array()
 		isl.cracks_z = PackedInt32Array()
 		return
 	_shed(isl, comps.slice(1))
+	# Every group it found is cut away: what is left is one piece, and the next
+	# search starts from what changes it.
+	if not _shed_left:
+		world.mark_chunk_whole(isl.chunk)
 
 
 ## What a hit or a landing has cut off a loose piece comes away from it. That

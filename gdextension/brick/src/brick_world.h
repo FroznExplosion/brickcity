@@ -842,6 +842,29 @@ public:
     /// Largest first, same as find_detached_groups.
     Array get_components(int chunk_id);
 
+    /// get_components, from what has changed: for a chunk known to be in one
+    /// piece -- get_components found it so, or the caller has cut away every
+    /// other group it found (mark_chunk_whole) -- the search starts at the
+    /// blocks changed since (killed, cut, sheared, placed, removed) and their
+    /// neighbours, all at once, and stops when every walk has met another (one
+    /// piece still) or all but one have run out: those are the groups that came
+    /// off, and the one still going is the rest. The first group is then the
+    /// rest, EMPTY -- nobody walked it -- and the others are as get_components
+    /// gives them, largest first. A group bigger than the rest, or a chunk not
+    /// known to be whole, is answered by walking everything, as
+    /// get_components does (and in its form).
+    Array get_components_near(int chunk_id);
+    /// Every group but the first that get_components(_near) gave has been cut
+    /// away: what is left is one piece.
+    void mark_chunk_whole(int chunk_id);
+    /// Walk everything beside each get_components_near, and count where the
+    /// two differ (get_components_near_stats). For probes.
+    void set_components_check(bool on);
+    /// [calls, answered whole with nothing changed, searched from what
+    /// changed, blocks those walked, answered by walking everything, check
+    /// differences, the chunk was not what it was said to be (walked all)].
+    PackedInt64Array get_components_near_stats() const;
+
     /// Free a chunk's storage. Ids are not reused, so anything still holding
     /// this id gets an empty answer rather than somebody else's blocks.
     void release_chunk(int chunk_id);
@@ -1207,6 +1230,37 @@ private:
     // One per chunk, built the first time a chunk is solved and dropped when a
     // block is placed in it or removed from it. See brick::JointCache.
     std::vector<brick::JointCache> joint_cache;
+    // One per chunk: whether it is known to be in one piece, and the blocks
+    // changed since (get_components_near). Every place a block dies, is cut
+    // (support_broken, bottom_broken), placed or removed says so (conn_touch);
+    // what changes a chunk wholesale says it is not known any more
+    // (conn_forget). Past CONN_TOUCHED_MAX changes it is not known either.
+    struct ConnWatch {
+        bool whole = false;
+        std::vector<int32_t> touched;
+    };
+    std::vector<ConnWatch> conn_watch;
+    static constexpr size_t CONN_TOUCHED_MAX = 4096;
+    void conn_touch(int chunk_id, int32_t bid) {
+        ConnWatch &w = conn_watch[(size_t)chunk_id];
+        if (!w.whole) {
+            return;
+        }
+        if (w.touched.size() >= CONN_TOUCHED_MAX) {
+            w.whole = false;
+            w.touched.clear();
+            return;
+        }
+        w.touched.push_back(bid);
+    }
+    void conn_forget(int chunk_id) {
+        ConnWatch &w = conn_watch[(size_t)chunk_id];
+        w.whole = false;
+        w.touched.clear();
+    }
+    Array components_all(int chunk_id);
+    bool components_check = false;
+    int64_t near_stats[7] = { 0, 0, 0, 0, 0, 0, 0 };
     struct ChunkTemplate {
         Vector3i origin;
         Vector3i dims;

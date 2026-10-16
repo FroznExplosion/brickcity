@@ -25,6 +25,10 @@ extends "res://tools/collapse_probe.gd"
 ## pass either way), yet over a barrage it made a body of a hit on a piece that
 ## was down 14-18 % of the time, where cutting alone makes one 2-3 % (two runs
 ## of this each way, 2026-10-13). The lines are drawn between the two.
+##
+## And what comes off a piece is found from what changed in it, not by
+## walking it end to end (BrickWorld.get_components_near; CollapseNext item
+## 23): every one of those searches here is checked against a whole walk.
 
 
 ## Ticks of firing, then of quiet, then firing again. The quiet is long enough
@@ -49,6 +53,7 @@ func _run() -> void:
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
 	await _ticks(30)
+	city.world.set_components_check(true)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 12345
 	var towers := 0
@@ -123,5 +128,13 @@ func _run() -> void:
 		if moving == 0:
 			break
 	_ok("once the firing stops, every piece comes to rest", moving == 0, "%d still moving" % moving)
+	# Hundreds of searches from what changed (377 of 442, 78 bricks walked
+	# each, 2026-10-16), each walked whole beside it: the same groups every
+	# time, and no chunk that had changed without saying so.
+	var st: PackedInt64Array = city.world.get_components_near_stats()
+	_ok("what comes off a piece is found from what changed, and is what walking all of it finds",
+			st[2] > 100 and st[5] == 0 and st[6] == 0,
+			"%d of %d searches from what changed, %d bricks walked; %d differing from a whole walk, %d chunks not as said" % [
+				st[2], st[0], st[3], st[5], st[6]])
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)

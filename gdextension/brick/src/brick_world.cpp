@@ -468,6 +468,7 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     chunks.push_back(std::move(c));
     chunk_live.push_back(1);
     joint_cache.push_back(brick::JointCache());
+    conn_watch.push_back(ConnWatch());
     stats.push_back(MeshStats());
     solve_stats.push_back(SolveStats());
     stress.push_back(StressState());
@@ -537,6 +538,7 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
             }
         }
     }
+    conn_touch(chunk_id, id);
     if (joint_cache[chunk_id].valid) {
         std::vector<int32_t> touching;
         blocks_touching(c, id, touching);
@@ -591,6 +593,20 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     const bool keep_joints = joint_cache[chunk_id].valid;
     if (keep_joints) {
         blocks_touching(c, block_id, touching);
+    }
+    // A chunk known to be in one piece is told what this touched
+    // (get_components_near): a removed block has no joints left to ask.
+    if (conn_watch[(size_t)chunk_id].whole) {
+        std::vector<int32_t> near;
+        if (keep_joints) {
+            near = touching;
+        } else {
+            blocks_touching(c, block_id, near);
+        }
+        conn_touch(chunk_id, block_id);
+        for (const int32_t o : near) {
+            conn_touch(chunk_id, o);
+        }
     }
 
     // Release only the cells this block actually owns. A masked part left its
@@ -716,6 +732,7 @@ int BrickWorld::kill_block(int chunk_id, Vector3i cell) {
         return -1;
     }
     c.blocks[id].alive = false;
+    conn_touch(chunk_id, id);
     c.blocks[id].hp = 0;
     return id;
 }
@@ -731,6 +748,7 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
             continue;
         }
         c.blocks[bid].alive = false;
+        conn_touch(chunk_id, bid);
         c.blocks[bid].hp = 0;
     }
 }
@@ -4291,6 +4309,7 @@ Dictionary BrickWorld::solve_stress(int chunk_id) {
 
             if (pull > capacity && !b.support_broken) {
                 b.support_broken = true;
+                conn_forget(chunk_id);
                 b.strained = true;
                 separated.push_back(bid);
                 ++sx.failures;
@@ -4939,6 +4958,7 @@ void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
     Block &b = c.blocks[block_id];
     b.support_broken = (joints & JOINT_SUPPORT_BROKEN) != 0;
     b.bottom_broken = (joints & JOINT_BOTTOM_BROKEN) != 0;
+    conn_touch(chunk_id, block_id);
     b.strained = (joints & JOINT_STRAINED) != 0;
     b.held = (joints & JOINT_HELD) != 0;
 }
@@ -5320,6 +5340,7 @@ bool BrickWorld::load_template(int template_id, int chunk_id) {
     // place_block writes, for every block at once. A removed block claims
     // nothing, as it claimed nothing when the template was saved.
     c.blocks = t.blocks;
+    conn_forget(chunk_id);
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
         if (b.removed) {
@@ -5534,6 +5555,7 @@ PackedInt32Array BrickWorld::apply_hit(int chunk_id, Vector3 world_point, float 
             continue;
         }
         b.alive = false;
+        conn_touch(chunk_id, nearest[i].first);
         b.hp = 0;
         killed.push_back(nearest[i].first);
     }
@@ -5586,6 +5608,7 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
         b.hp = b.hp > wear ? (uint8_t)(b.hp - wear) : (uint8_t)0;
         if (b.hp == 0) {
             b.alive = false;
+            conn_touch(chunk_id, bid);
             killed.push_back(bid);
         }
     }
@@ -5985,6 +6008,7 @@ Dictionary BrickWorld::fire_step(int chunk_id, float dt, Vector3 wind, float dam
                 fb.fuel -= dt;
                 if (fb.fuel <= 0.0f) {
                     b.alive = false;
+                    conn_touch(chunk_id, id);
                     b.hp = 0;
                     killed.push_back(id);
                     it = fs->erase(it);
@@ -6147,6 +6171,7 @@ PackedInt32Array BrickWorld::separate_near(int chunk_id, Vector3 world_point, fl
             }
             // Loose, not gone.
             c.blocks[cand.bid].support_broken = true;
+            conn_touch(chunk_id, cand.bid);
             loosened.push_back(cand.bid);
             ++taken;
         }
@@ -6202,6 +6227,7 @@ PackedInt32Array BrickWorld::separate_near(int chunk_id, Vector3 world_point, fl
             continue;
         }
         b.bottom_broken = true;
+        conn_touch(chunk_id, bid);
         loosened.push_back(bid);
     }
     loosened.sort();
@@ -6261,6 +6287,7 @@ PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_
         const int32_t base_y = b.cell.y - c.origin.y;
         if (std::find(planes.begin(), planes.end(), base_y) != planes.end()) {
             b.bottom_broken = true;
+            conn_touch(chunk_id, (int32_t)bi);
             cut.push_back((int32_t)bi);
             continue;
         }
@@ -6276,6 +6303,7 @@ PackedInt32Array BrickWorld::sever_seams(int chunk_id, PackedVector3Array world_
         for (const int32_t k : planes) {
             if (k > base_y && k < top_y) {
                 b.bottom_broken = true;
+                conn_touch(chunk_id, (int32_t)bi);
                 cut.push_back((int32_t)bi);
                 break;
             }
@@ -6562,6 +6590,7 @@ Dictionary BrickWorld::detach_group(int chunk_id, const PackedInt32Array &block_
     for (size_t i = 0; i < n; ++i) {
         if (mask[i]) {
             c.blocks[i].alive = false;
+            conn_touch(chunk_id, (int32_t)i);
             c.blocks[i].detached = true;
             taken.push_back((int32_t)i);
         }
@@ -6758,6 +6787,7 @@ PackedInt32Array BrickWorld::separate_planes(int chunk_id, PackedVector3Array wo
             if (std::abs(d - o) <= half) {
                 // Torn across, not gone.
                 b.support_broken = true;
+                conn_touch(chunk_id, (int32_t)bi);
                 loosened.push_back((int32_t)bi);
                 break;
             }
@@ -6795,6 +6825,7 @@ PackedInt32Array BrickWorld::separate_plane(int chunk_id, Vector3 world_point,
         }
         // Loose, not gone.
         b.support_broken = true;
+        conn_touch(chunk_id, (int32_t)bi);
         loosened.push_back((int32_t)bi);
     }
     return loosened;
@@ -6812,6 +6843,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     chunk_live[chunk_id] = 0;
     fire_clear(chunk_id);
     joint_cache[chunk_id] = brick::JointCache();
+    conn_watch[(size_t)chunk_id] = ConnWatch();
 }
 
 // --- islands ---------------------------------------------------------------
@@ -6819,6 +6851,17 @@ void BrickWorld::release_chunk(int chunk_id) {
 thread_local int BrickWorld::scratch_slot = 0;
 
 Array BrickWorld::get_components(int chunk_id) {
+    Array out = components_all(chunk_id);
+    if (valid_chunk(chunk_id)) {
+        // In one piece, or about to be cut until it is (mark_chunk_whole).
+        ConnWatch &w = conn_watch[(size_t)chunk_id];
+        w.whole = out.size() <= 1;
+        w.touched.clear();
+    }
+    return out;
+}
+
+Array BrickWorld::components_all(int chunk_id) {
     SolveScratch &scratch = solve_scratch();
     std::vector<uint8_t> &scratch_mark = scratch.mark;
     std::vector<int32_t> &scratch_queue = scratch.queue;
@@ -6866,6 +6909,287 @@ Array BrickWorld::get_components(int chunk_id) {
             });
     for (const PackedInt32Array &g : groups) {
         out.push_back(g);
+    }
+    return out;
+}
+
+// A block's runs as the cache holds them, with nothing applied: every block
+// its faces meet through a stud, whatever has died or been cut since. Where a
+// change can have parted something, these are what it parted.
+template <typename F>
+static inline void for_each_run_raw(const brick::JointCache &jc, int32_t bid, F &&fn) {
+    const brick::JointRun *r;
+    const brick::JointRun *end;
+    if (!jc.over_at.empty() && jc.over_at[bid] >= 0) {
+        r = jc.over_runs.data() + jc.over_at[bid];
+        end = r + jc.over_n[bid];
+    } else {
+        r = jc.runs.data() + jc.at[bid];
+        end = jc.runs.data() + jc.at[bid + 1];
+    }
+    for (; r != end; ++r) {
+        fn(r->nb);
+    }
+}
+
+Array BrickWorld::get_components_near(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    near_stats[0]++;
+    ConnWatch &w = conn_watch[(size_t)chunk_id];
+    if (!w.whole) {
+        near_stats[4]++;
+        return get_components(chunk_id);
+    }
+    Array out;
+    if (w.touched.empty()) {
+        near_stats[1]++;
+        out.push_back(PackedInt32Array());
+    } else {
+        near_stats[2]++;
+        const brick::JointCache &jc = joints_of(chunk_id);
+        const Chunk &c = chunks[chunk_id];
+        const int32_t n = (int32_t)c.blocks.size();
+
+        // Which walk each block was reached by, stamped so that a walk of a
+        // few hundred blocks does not clear an array of twenty thousand.
+        thread_local std::vector<uint32_t> stamp;
+        thread_local std::vector<int32_t> walk_of;
+        thread_local uint32_t gen = 0;
+        if (stamp.size() < (size_t)n) {
+            stamp.resize((size_t)n, 0);
+            walk_of.resize((size_t)n, -1);
+        }
+        if (++gen == 0) {
+            std::fill(stamp.begin(), stamp.end(), 0);
+            gen = 1;
+        }
+        auto reached = [&](int32_t b) { return stamp[(size_t)b] == gen; };
+
+        // One walk from each live block a change touched, and from each live
+        // block its faces met -- all of them in ONE queue, breadth first, so a
+        // block costs what it costs a whole walk. `open` is how many blocks of
+        // a union of walks are queued and not yet looked at.
+        thread_local std::vector<int32_t> queue;
+        queue.clear();
+        auto seed = [&](int32_t b) {
+            if (b < 0 || b >= n || reached(b)) {
+                return;
+            }
+            const Block &bb = c.blocks[(size_t)b];
+            if (!bb.alive || bb.removed) {
+                return;
+            }
+            stamp[(size_t)b] = gen;
+            walk_of[(size_t)b] = (int32_t)queue.size();
+            queue.push_back(b);
+        };
+        for (const int32_t t : w.touched) {
+            if (t < 0 || t >= n) {
+                continue;
+            }
+            seed(t);
+            if (!c.blocks[(size_t)t].removed) {
+                for_each_run_raw(jc, t, [&](int32_t nb) { seed(nb); });
+            }
+        }
+        w.touched.clear();
+
+        // Walks that meet are one: a union of them. `left` is how many unions
+        // still have blocks queued.
+        const int32_t m = (int32_t)queue.size();
+        std::vector<int32_t> parent((size_t)m);
+        std::vector<int64_t> open((size_t)m, 1), size((size_t)m, 1);
+        for (int32_t i = 0; i < m; ++i) {
+            parent[(size_t)i] = i;
+        }
+        auto find = [&](int32_t a) {
+            while (parent[(size_t)a] != a) {
+                parent[(size_t)a] = parent[(size_t)parent[(size_t)a]];
+                a = parent[(size_t)a];
+            }
+            return a;
+        };
+        int32_t left = m;
+        int64_t alive_n = -1;
+        auto count_alive = [&]() {
+            if (alive_n < 0) {
+                alive_n = 0;
+                for (const Block &b : c.blocks) {
+                    alive_n += b.alive ? 1 : 0;
+                }
+            }
+        };
+        bool all_of_it = false;
+        size_t head = 0;
+        for (;;) {
+            if (left <= 1 && !all_of_it) {
+                if (left == 0) {
+                    break;
+                }
+                // One still going: the rest -- unless a group that came off is
+                // bigger than it, when the rest is walked too, to be cut off
+                // in its turn (the biggest stays the piece).
+                count_alive();
+                int64_t off = 0, biggest = 0;
+                for (int32_t i = 0; i < m; ++i) {
+                    if (find(i) == i && open[(size_t)i] == 0) {
+                        off += size[(size_t)i];
+                        biggest = std::max(biggest, size[(size_t)i]);
+                    }
+                }
+                if (biggest <= alive_n - off) {
+                    break;
+                }
+                all_of_it = true;
+            }
+            if (head >= queue.size()) {
+                break;
+            }
+            const int32_t v = queue[head++];
+            const int32_t L = walk_of[(size_t)v];
+            // A sheared block is joined to nothing (get_components).
+            if (!c.blocks[(size_t)v].support_broken) {
+                for_each_joint(c, jc, v, [&](int32_t nb, int) {
+                    if (c.blocks[(size_t)nb].support_broken) {
+                        return;
+                    }
+                    if (!reached(nb)) {
+                        stamp[(size_t)nb] = gen;
+                        walk_of[(size_t)nb] = L;
+                        queue.push_back(nb);
+                        const int32_t R = find(L);
+                        open[(size_t)R]++;
+                        size[(size_t)R]++;
+                        return;
+                    }
+                    int32_t A = find(L);
+                    int32_t B = find(walk_of[(size_t)nb]);
+                    if (A == B) {
+                        return;
+                    }
+                    if (size[(size_t)A] < size[(size_t)B]) {
+                        std::swap(A, B);
+                    }
+                    if (open[(size_t)A] > 0 && open[(size_t)B] > 0) {
+                        --left;
+                    }
+                    parent[(size_t)B] = A;
+                    open[(size_t)A] += open[(size_t)B];
+                    size[(size_t)A] += size[(size_t)B];
+                });
+            }
+            const int32_t R = find(L);
+            if (--open[(size_t)R] == 0) {
+                --left;
+            }
+        }
+        near_stats[3] += (int64_t)head;
+
+        // The unions that ran out are the groups; every block reached is in the
+        // queue, with the walk that reached it.
+        std::vector<int32_t> slot((size_t)m, -1);
+        std::vector<PackedInt32Array> groups;
+        bool going = false;
+        for (int32_t i = 0; i < m; ++i) {
+            if (find(i) == i) {
+                if (open[(size_t)i] == 0) {
+                    slot[(size_t)i] = (int32_t)groups.size();
+                    groups.push_back(PackedInt32Array());
+                } else {
+                    going = true;
+                }
+            }
+        }
+        for (const int32_t b : queue) {
+            const int32_t at = slot[(size_t)find(walk_of[(size_t)b])];
+            if (at >= 0) {
+                groups[(size_t)at].push_back(b);
+            }
+        }
+        for (PackedInt32Array &g : groups) {
+            g.sort();
+        }
+        std::stable_sort(groups.begin(), groups.end(),
+                [](const PackedInt32Array &a, const PackedInt32Array &b) {
+                    return a.size() > b.size();
+                });
+        if (going || m == 0) {
+            // m == 0: what changed had no live block on it or beside it, so
+            // nothing live can have been parted by it.
+            out.push_back(PackedInt32Array());
+            for (const PackedInt32Array &g : groups) {
+                out.push_back(g);
+            }
+        } else {
+            // Everything walked. It is all of the chunk only if the chunk was
+            // in one piece when it was said to be: if a live block was reached
+            // by no walk, something changed it without saying so -- walked
+            // whole, and counted.
+            count_alive();
+            if ((int64_t)queue.size() != alive_n) {
+                near_stats[6]++;
+                return get_components(chunk_id);
+            }
+            for (const PackedInt32Array &g : groups) {
+                out.push_back(g);
+            }
+        }
+        // Still one piece, or about to be cut until it is (mark_chunk_whole).
+        w.whole = out.size() <= 1;
+    }
+
+    if (components_check) {
+        // The same question, walked whole, without touching the watch.
+        const Array all = components_all(chunk_id);
+        bool same = all.size() == out.size();
+        if (same && out.size() > 1) {
+            const Chunk &c = chunks[chunk_id];
+            std::vector<int32_t> comp(c.blocks.size(), -1);
+            for (int64_t k = 0; k < all.size(); ++k) {
+                const PackedInt32Array g = all[k];
+                for (int64_t i = 0; i < g.size(); ++i) {
+                    comp[(size_t)g[i]] = (int32_t)k;
+                }
+            }
+            const int64_t biggest = ((PackedInt32Array)all[0]).size();
+            for (int64_t k = 1; k < out.size() && same; ++k) {
+                const PackedInt32Array g = out[k];
+                const int32_t at = g.is_empty() ? -1 : comp[(size_t)g[0]];
+                same = at >= 0 && ((PackedInt32Array)all[at]).size() == g.size()
+                        && (at > 0 || g.size() == biggest);
+                for (int64_t i = 1; i < g.size() && same; ++i) {
+                    same = comp[(size_t)g[i]] == at;
+                }
+            }
+        }
+        if (!same) {
+            near_stats[5]++;
+            UtilityFunctions::push_warning("BrickWorld: get_components_near on chunk ", chunk_id,
+                    " found ", out.size(), " group(s), walked whole ", all.size());
+        }
+    }
+    return out;
+}
+
+void BrickWorld::mark_chunk_whole(int chunk_id) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    ConnWatch &w = conn_watch[(size_t)chunk_id];
+    w.whole = true;
+    w.touched.clear();
+}
+
+void BrickWorld::set_components_check(bool on) {
+    components_check = on;
+}
+
+PackedInt64Array BrickWorld::get_components_near_stats() const {
+    PackedInt64Array out;
+    for (int i = 0; i < 7; ++i) {
+        out.push_back(near_stats[i]);
     }
     return out;
 }
@@ -6933,6 +7257,8 @@ Array BrickWorld::crack_components(int chunk_id, const PackedInt32Array &planes_
     if (!valid_chunk(chunk_id)) {
         return out;
     }
+    // Cut along cracks next, whole or not: not known to be in one piece.
+    conn_forget(chunk_id);
     const brick::JointCache &jc = joints_of(chunk_id);
     const Chunk &c = chunks[chunk_id];
     const size_t n = c.blocks.size();
@@ -7187,6 +7513,7 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
             }
         }
         chunks[chunk_id].blocks[bid].alive = false;
+        conn_touch(chunk_id, bid);
         chunks[chunk_id].blocks[bid].detached = true;
         taken.push_back(bid);
     }
@@ -7896,6 +8223,10 @@ void BrickWorld::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("split_island", "chunk_id", "block_ids"), &BrickWorld::split_island);
     ClassDB::bind_method(D_METHOD("get_components", "chunk_id"), &BrickWorld::get_components);
+    ClassDB::bind_method(D_METHOD("get_components_near", "chunk_id"), &BrickWorld::get_components_near);
+    ClassDB::bind_method(D_METHOD("mark_chunk_whole", "chunk_id"), &BrickWorld::mark_chunk_whole);
+    ClassDB::bind_method(D_METHOD("set_components_check", "on"), &BrickWorld::set_components_check);
+    ClassDB::bind_method(D_METHOD("get_components_near_stats"), &BrickWorld::get_components_near_stats);
     ClassDB::bind_method(D_METHOD("crack_studs", "chunk_id", "axis", "from_k", "to_k"),
             &BrickWorld::crack_studs);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
