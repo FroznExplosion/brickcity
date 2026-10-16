@@ -63,6 +63,15 @@ extends "res://scripts/workshop.gd"
 ##   sketch      Alt D: draw an outline on the side plane; it is filled with bricks for
 ##               the current part, as thick as that part is set to be
 ##
+## Round 3 (2026-10-16):
+##
+##   undo        an RMB delete undoes (Z) and redoes (shift Z) like anything else
+##   one click   one brick: a held click lays a run only once the mouse has really moved
+##   sketch mode the sketch is kept: LMB draws area in, RMB draws it out, and the part's
+##               bricks are worked out again from what is left. An outline that crosses
+##               itself is filled to its outermost line. Slopes can be eager: on any edge
+##               climbing one to three plates a stud, not only at a slope's own pitch
+##
 ## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
 ## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
 ##
@@ -183,6 +192,21 @@ var photo_grid := false
 ## A sketch being drawn: points on the side plane, (studs along, plates up).
 var _sketch: Array[Vector2] = []
 var _photo_drag = null
+## An RMB delete, for undo: what it took, newest last, one for each "delete" edit.
+var _deleted: Array = []
+## A held click lays a run only after the mouse has moved this far, this long after.
+const RUN_START_PX := 14.0
+const RUN_START_MS := 150
+var _run_moved := 0.0
+var _run_press_ms := 0
+## The kept sketches: "part|plane|where" -> {part, plane, at, width, adds, subs, bricks}.
+## adds and subs are outlines ([[across, up], ...]); bricks are what the sketch laid,
+## [[archetype, [x, y, z]], ...], so it can take them up again when it changes.
+var sketches := {}
+## Slopes on any edge climbing one to three plates a stud, not only two.
+var slope_eager := false
+var _sketch_out := false
+var _sketch_cache := {}
 
 ## Phase 4. Parts that leave as smooth custom pieces rather than bricks.
 var smooth_parts := PackedStringArray()
@@ -285,6 +309,7 @@ func _shot() -> void:
 			var t := a * TAU / 32.0
 			circle.append(Vector2(mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
 		sketch_fill(circle)
+		tool = "sketch"
 		work_plane = "side"
 		_look_at_build()
 		var f := FileAccess.open("user://asset_shots/ramp.json", FileAccess.WRITE)
@@ -727,6 +752,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		if e.pressed and not _painting and _stamp == null:
 			_run_on = true
 			_run_last = _cell
+			_run_moved = 0.0
+			_run_press_ms = Time.get_ticks_msec()
 		elif not e.pressed:
 			_run_on = false
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed and e.alt_pressed:
@@ -1093,7 +1120,8 @@ func _store_asset_meta() -> void:
 				"turn": g.turn, "opacity": g.opacity})
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
-			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate()}
+			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
+			"sketches": sketches.duplicate(true)}
 
 
 func _restore_asset_meta() -> void:
@@ -1114,6 +1142,8 @@ func _restore_asset_meta() -> void:
 	var widths: Dictionary = a.get("part_width", {})
 	for k in widths:
 		part_width[k] = int(widths[k])
+	sketches = (a.get("sketches", {}) as Dictionary).duplicate(true)
+	_sketch_cache.clear()
 	muzzle_end = String(a.get("muzzle", "-x"))
 	for g in a.get("guides", []):
 		var i := load_guide(String(g.path), float(g.real_mm))
@@ -1156,6 +1186,9 @@ func _reset_space() -> void:
 	smooth_parts = PackedStringArray()
 	_redo.clear()
 	_edit_groups.clear()
+	_deleted.clear()
+	sketches.clear()
+	_sketch_cache.clear()
 	for p in photos:
 		(p.node as Node).queue_free()
 	photos.clear()
@@ -1254,12 +1287,54 @@ func _after_edit() -> void:
 
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	var hit := _first_hit(from, dir)
+	var took = null
 	if not hit.is_empty():
 		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
+		if _removing >= 0:
+			took = _brick_info(_removing)
 	var done := super._delete_ray(from, dir)
 	if not done:
 		_removing = -1
+	elif took != null:
+		# The workshop drops a deleted brick from its edits; this puts the delete in as an
+		# edit of its own, so Z can lay it back.
+		_edits.append("delete")
+		_deleted.append(took)
+		if not _redoing:
+			_redo.clear()
 	return done
+
+
+func _brick_info(i: int) -> Dictionary:
+	return {"arch": recipe.part_of(i), "cell": recipe.cell_of(i), "colour": recipe.colour_of(i),
+			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
+
+
+## The upright-grid brick of this part at this cell, by recipe index, or -1.
+func find_brick(arch: String, cell: Vector3i) -> int:
+	for i in range(recipe.size() - 1, -1, -1):
+		if recipe.frame_of(i) == 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
+			return i
+	return -1
+
+
+## Take a brick up as RMB would, found by part and cell. True if it went.
+func remove_brick(arch: String, cell: Vector3i) -> bool:
+	var i := find_brick(arch, cell)
+	if i < 0:
+		return false
+	var block: int = _placed_at[i][1]
+	var size := BrickPalette.size_of(arch)
+	# From inside one of its own cells: a slope or a curve is not solid everywhere in its box.
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				var c := cell + Vector3i(dx, dy, dz)
+				if world.block_at(chunk, c) == block and world.is_solid(chunk, c):
+					var at := Vector3((c.x + 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M,
+							(c.z + 0.5) * BrickPalette.STUD_M)
+					return _delete_ray(at, Vector3.DOWN)
+	return false
 
 
 ## How many bricks each part has.
@@ -1281,9 +1356,12 @@ func _hold_lock(on: bool) -> void:
 	super._hold_lock(on or _run_on or _dragging)
 
 
-## Lay the held brick where the ghost has moved to, if it fits there.
+## Lay the held brick where the ghost has moved to, if it fits there -- once the click
+## has become a drag: a hand that shook a little while clicking laid two bricks.
 func run_step() -> void:
 	if not _run_on or _cell == _run_last:
+		return
+	if _run_moved < RUN_START_PX or Time.get_ticks_msec() - _run_press_ms < RUN_START_MS:
 		return
 	_run_last = _cell
 	if _valid:
@@ -1632,6 +1710,7 @@ func delete_selection() -> int:
 	for at in cells:
 		if _delete_ray(at, Vector3.DOWN):
 			gone += 1
+	_group(gone)
 	_outlines_dirty = true
 	return gone
 
@@ -1852,12 +1931,8 @@ func _draw_outlines() -> void:
 func _draw_tool() -> void:
 	var im := ImmediateMesh.new()
 	_tool_lines.mesh = im
-	if tool == "sketch" and _sketch.size() >= 2:
-		im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
-		for q in _sketch + [_sketch[0]]:
-			im.surface_set_color(Color(1.0, 0.9, 0.2))
-			im.surface_add_vertex(_sketch_world(q))
-		im.surface_end()
+	if tool == "sketch":
+		_draw_sketch(im)
 		return
 	if not _dragging:
 		return
@@ -1957,13 +2032,28 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_width_spin.value = 3
 	_width_spin.value_changed.connect(func(v: float) -> void:
 		part_width[part_names[part_sel]] = int(v)
-		_store_asset_meta())
+		_store_asset_meta()
+		resketch(_sketch_key(), {"width": int(v)}))
 	wrow.add_child(_width_spin)
 	var sk_fill := OptionButton.new()
 	sk_fill.add_item("clean: fewest bricks")
 	sk_fill.add_item("random: mixed sizes")
 	sk_fill.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
 	_sketch_box.add_child(sk_fill)
+	var sk_slopes := OptionButton.new()
+	sk_slopes.add_item("slopes: only at a slope's own pitch")
+	sk_slopes.add_item("slopes: eager (1-3 plates a stud)")
+	sk_slopes.item_selected.connect(func(i: int) -> void:
+		slope_eager = i == 1
+		resketch(_sketch_key(), {}))
+	_sketch_box.add_child(sk_slopes)
+	var hint := Label.new()
+	hint.text = "LMB draws area in, RMB draws it out.\nThe part's bricks are worked out again each time."
+	_sketch_box.add_child(hint)
+	var clear := Button.new()
+	clear.text = "Clear this part's sketch"
+	clear.pressed.connect(func() -> void: clear_sketch(_sketch_key()))
+	_sketch_box.add_child(clear)
 
 	_select_box = VBoxContainer.new()
 	box.add_child(_select_box)
@@ -2101,45 +2191,90 @@ func _last_brick() -> Variant:
 			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
 
 
-## Z: a fill, a copy or a mirrored pair goes at once; anything else one edit at a time.
+## Z: a fill, a copy, a mirrored pair or a sketch change goes at once; anything else one
+## edit at a time. An RMB delete is laid back.
 func _undo() -> bool:
 	var n := 1
+	var sketch = null
 	if not _edit_groups.is_empty() and int(_edit_groups.back().end) == _edits.size():
-		n = int(_edit_groups.pop_back().n)
-	var group := []
+		var g: Dictionary = _edit_groups.pop_back()
+		n = int(g.n)
+		sketch = g.get("sketch")
+	var items := []
+	var lay_back := []
 	var any := false
 	for _k in n:
+		if _edits.is_empty():
+			break
+		if _edits.back() == "delete":
+			# Laid back after the loop: laying one now adds an edit the loop would undo next.
+			_edits.pop_back()
+			lay_back.append(_deleted.pop_back())
+			any = true
+			continue
 		var b = _last_brick()
 		if not super._undo():
 			break
 		any = true
 		if b != null:
-			group.append(b)
-	if not group.is_empty():
-		_redo.append(group)
+			items.append(b)
+	if not lay_back.is_empty():
+		_redoing = true
+		var keep := part_sel
+		_batch = true
+		for b in lay_back:
+			part_sel = int(b.tag)
+			if place_named(b.arch, b.cell, b.colour, b.mat):
+				items.append({"op": "remove", "arch": b.arch, "cell": b.cell})
+		_batch = false
+		part_sel = keep
+		_after_edit()
+		_redoing = false
+	if sketch != null:
+		_set_sketch(sketch.key, sketch.before)
+	if not items.is_empty() or sketch != null:
+		_redo.append({"items": items, "sketch": sketch})
 	return any
 
 
-## Shift Z: lay the last undone group again, each brick back in its own part.
+## Shift Z: do the last undone group again -- each brick back in its own part, each
+## delete taken up again, a sketch back to what it was.
 func redo() -> int:
 	if _redo.is_empty():
 		return 0
-	var group: Array = _redo.pop_back()
-	group.reverse()
+	var entry: Dictionary = _redo.pop_back()
+	var items: Array = (entry.items as Array).duplicate()
+	items.reverse()
 	_redoing = true
 	var keep := part_sel
-	var laid := 0
+	var done := 0
 	_batch = true
-	for b in group:
-		part_sel = int(b.tag)
-		if place_named(b.arch, b.cell, b.colour, b.mat):
-			laid += 1
+	for b in items:
+		if b.get("op", "place") == "remove":
+			if remove_brick(b.arch, b.cell):
+				done += 1
+		else:
+			part_sel = int(b.tag)
+			if place_named(b.arch, b.cell, b.colour, b.mat):
+				done += 1
 	_batch = false
 	part_sel = keep
 	_after_edit()
-	_group(laid)
+	var sketch = entry.get("sketch")
+	if sketch != null:
+		_set_sketch(sketch.key, sketch.after)
+	_group_with(done, sketch)
 	_redoing = false
-	return laid
+	return done
+
+
+## Edits that undo together, with the sketch they changed, if any.
+func _group_with(n: int, sketch) -> void:
+	if n > 1 or (sketch != null and n > 0):
+		var g := {"end": _edits.size(), "n": n}
+		if sketch != null:
+			g["sketch"] = sketch
+		_edit_groups.append(g)
 
 
 # ---------------------------------------------------------------------------
@@ -2443,8 +2578,8 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. LMB places, hold LMB and move to lay a row, RMB deletes, R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
-[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw its outline on the working plane: it fills with bricks, and edges at a slope's or curve's pitch get slopes and curves (flipped under bottom edges). Draw a drum magazine as a circle on the front plane (Alt 3).
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out, and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
 [b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
@@ -2812,19 +2947,33 @@ func width_of(part: String) -> int:
 	return int(part_width.get(part, 3))
 
 
+func _plane_value(plane: String) -> float:
+	match plane:
+		"front": return float(work_x)
+		"top": return float(work_height)
+	return work_depth
+
+
+## Which kept sketch the current part, plane and depth draw into.
+func _sketch_key() -> String:
+	return "%s|%s|%s" % [part_names[part_sel], work_plane, _num(_plane_value(work_plane))]
+
+
 func _sketch_input(e: InputEvent) -> bool:
 	if tool != "sketch":
 		return false
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			_sketch.clear()
+			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
 			_sketch_add()
 		else:
 			if _sketch.size() >= 3:
-				sketch_fill(_sketch)
+				sketch_region(_sketch, _sketch_out)
 			_sketch.clear()
 		return true
-	if e is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not _sketch.is_empty():
+	if e is InputEventMouseMotion and not _sketch.is_empty() and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+			or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
 		_sketch_add()
 		return true
 	return false
@@ -2850,113 +2999,254 @@ func sketch_point(at: Vector3) -> Vector2:
 	return Vector2(at.x / BrickPalette.STUD_M, at.y / BrickPalette.PLATE_M)
 
 
-func _sketch_world(q: Vector2) -> Vector3:
+func _sketch_world(q: Vector2, plane: String, at: float) -> Vector3:
 	var s := BrickPalette.STUD_M
 	var pl := BrickPalette.PLATE_M
-	match work_plane:
-		"front": return Vector3(work_x * s, q.y * pl, q.x * s)
-		"top": return Vector3(q.x * s, work_height * pl, q.y * s)
-	return Vector3(q.x * s, q.y * pl, work_depth * s)
+	match plane:
+		"front": return Vector3(at * s, q.y * pl, q.x * s)
+		"top": return Vector3(q.x * s, at * pl, q.y * s)
+	return Vector3(q.x * s, q.y * pl, at * s)
 
 
-## Fill an outline drawn on the working plane with bricks for the current part, as one
-## undo. Its thickness is the part's, in studs, centred on the plane: across the gun on
-## the side plane, along it on the front plane, and on the top plane upward from the
-## plane, a stud being two and a half plates. Every cell whose middle is inside the
-## outline is filled. On the side and front planes, where an edge climbs a stud at a
-## time the way a catalogue piece does, that piece is laid instead of a staircase: a
-## slope where the edge climbs two plates a stud, a curve where it rounds over three
-## plates in two studs; on top edges the right way up, under bottom edges flipped.
-func sketch_fill(outline: Array) -> int:
-	if outline.size() < 3:
-		return 0
-	var poly := PackedVector2Array(outline)
-	var lo := Vector2(INF, INF)
-	var hi := Vector2(-INF, -INF)
+## Draw an outline into the current part's sketch on the working plane: area in, or with
+## `remove` area out. The part's bricks are worked out again from what the sketch holds,
+## as one undo. Returns how many bricks it laid.
+func sketch_region(outline: Array, remove: bool = false) -> int:
+	var key := _sketch_key()
+	var plain := []
 	for q in outline:
-		lo = Vector2(minf(lo.x, q.x), minf(lo.y, q.y))
-		hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
-	var w := width_of(part_names[part_sel])
-	var grid := {}
-	for u in range(int(floor(lo.x)), int(ceil(hi.x))):
-		for v in range(int(floor(lo.y)), int(ceil(hi.y))):
-			if Geometry2D.is_point_in_polygon(Vector2(u + 0.5, v + 0.5), poly):
-				grid[Vector2i(u, v)] = true
-	var pieces := []
-	if work_plane != "top":
-		pieces = edge_pieces(grid)
-	# The cells, in the build's grid.
-	var depth := []
-	match work_plane:
-		"side":
-			var z0 := int(round(work_depth - w * 0.5))
-			for k in w:
-				depth.append(z0 + k)
-		"front":
-			var x0 := int(round(work_x - w * 0.5))
-			for k in w:
-				depth.append(x0 + k)
-		"top":
-			for k in maxi(1, int(round(w * 2.5))):
-				depth.append(work_height + k)
-	var cells := {}
-	for g in grid:
-		if g.y < 0 and work_plane != "top":
-			continue
-		for k in depth:
-			cells[_sketch_cell(g, k)] = true
-	var placements := []
-	for pc in pieces:
-		# A piece over something already built would be refused and leave a hole: its
-		# cells are packed as plain bricks instead.
-		var box := []
-		var clear := true
-		for du in 2:
-			for dv in 3:
-				for k in depth:
-					var c := _sketch_cell(Vector2i(pc.u + du, pc.base + dv), k)
-					box.append(c)
-					if world.is_solid(chunk, c):
-						clear = false
-		if not clear:
-			continue
-		for c in box:
-			cells.erase(c)
-		var k := 0
-		while k < depth.size():
-			var wide := 2 if depth.size() - k >= 2 else 1
-			var at := _sketch_cell(Vector2i(pc.u, pc.base), depth[k])
-			placements.append([edge_variant(pc.kind, wide, pc.rises, pc.under), at])
-			k += wide
-	var laid := 0
+		plain.append([q.x, q.y])
+	var sk: Dictionary
+	if sketches.has(key):
+		sk = (sketches[key] as Dictionary).duplicate(true)
+	else:
+		sk = {"part": part_names[part_sel], "plane": work_plane, "at": _plane_value(work_plane),
+				"width": width_of(part_names[part_sel]), "adds": [], "subs": [], "bricks": []}
+	(sk.subs if remove else sk.adds).append(plain)
+	return resketch(key, sk)
+
+
+## The old way in, kept: an outline filled for the current part.
+func sketch_fill(outline: Array) -> int:
+	return sketch_region(outline, false)
+
+
+func clear_sketch(key: String) -> void:
+	if sketches.has(key):
+		resketch(key, {"adds": [], "subs": []})
+
+
+## Change a sketch -- `change` is merged into it -- and lay its bricks again: the old ones
+## taken up, the new ones packed from what it holds now. One undo, which puts the sketch
+## and its bricks back. Returns how many bricks it laid.
+func resketch(key: String, change: Dictionary) -> int:
+	if not sketches.has(key) and not change.has("adds"):
+		return 0
+	var before = (sketches[key] as Dictionary).duplicate(true) if sketches.has(key) else null
+	var sk: Dictionary = (sketches.get(key, {}) as Dictionary).duplicate(true)
+	sk.merge(change, true)
+	var ops := 0
 	_batch = true
-	for pk in pack_cells(cells, shape_fill == "random"):
-		if place_named(pk[0], pk[1]):
-			laid += 1
-	for pl in placements:
-		if place_named(pl[0], pl[1]):
-			laid += 1
+	for b in sk.get("bricks", []):
+		if remove_brick(String(b[0]), Vector3i(int(b[1][0]), int(b[1][1]), int(b[1][2]))):
+			ops += 1
+	var laid := _lay_sketch(sk, sketch_cells(sk))
+	ops += laid.size()
+	sk.bricks = laid
 	_batch = false
 	_after_edit()
-	_group(laid)
+	var after = null if (sk.adds as Array).is_empty() else sk.duplicate(true)
+	_set_sketch(key, after)
+	_group_with(ops, {"key": key, "before": before, "after": after})
+	return laid.size()
+
+
+func _set_sketch(key: String, state) -> void:
+	if state == null:
+		sketches.erase(key)
+	else:
+		sketches[key] = (state as Dictionary).duplicate(true)
+	_sketch_cache.erase(key)
+	_store_asset_meta()
+
+
+## What a sketch fills, as (across, up) cells: every area drawn in, less every area drawn
+## out. An outline's area is everything inside its outermost line, so one that crosses
+## itself or goes round twice is filled whole.
+func sketch_cells(sk: Dictionary) -> Dictionary:
+	var cells := {}
+	for poly in sk.get("adds", []):
+		for c in region_cells(poly):
+			cells[c] = true
+	for poly in sk.get("subs", []):
+		for c in region_cells(poly):
+			cells.erase(c)
+	return cells
+
+
+static func region_cells(poly: Array) -> Dictionary:
+	var pts := PackedVector2Array()
+	for q in poly:
+		pts.append(Vector2(float(q[0]), float(q[1])))
+	if pts.size() < 3:
+		return {}
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := Vector2i(-(1 << 30), -(1 << 30))
+	for q in pts:
+		lo = Vector2i(mini(lo.x, int(floor(q.x))), mini(lo.y, int(floor(q.y))))
+		hi = Vector2i(maxi(hi.x, int(ceil(q.x))), maxi(hi.y, int(ceil(q.y))))
+	# Inside by winding, not even-odd: a stretch circled twice is in, not cancelled out.
+	var inside := {}
+	for u in range(lo.x, hi.x):
+		for v in range(lo.y, hi.y):
+			if _winding(pts, Vector2(u + 0.5, v + 0.5)) != 0:
+				inside[Vector2i(u, v)] = true
+	# Outermost: whatever the outside cannot reach is in, holes the crossing made included.
+	var outside := {}
+	var todo: Array[Vector2i] = [Vector2i(lo.x - 1, lo.y - 1)]
+	while not todo.is_empty():
+		var c: Vector2i = todo.pop_back()
+		if outside.has(c) or inside.has(c) or c.x < lo.x - 1 or c.y < lo.y - 1 or c.x > hi.x or c.y > hi.y:
+			continue
+		outside[c] = true
+		todo.append_array([c + Vector2i(1, 0), c - Vector2i(1, 0), c + Vector2i(0, 1), c - Vector2i(0, 1)])
+	var out := {}
+	for u in range(lo.x, hi.x):
+		for v in range(lo.y, hi.y):
+			if not outside.has(Vector2i(u, v)):
+				out[Vector2i(u, v)] = true
+	return out
+
+
+## How many times an outline goes round a point, counting direction.
+static func _winding(pts: PackedVector2Array, q: Vector2) -> int:
+	var w := 0
+	var n := pts.size()
+	for i in n:
+		var a := pts[i]
+		var b := pts[(i + 1) % n]
+		var side := (b.x - a.x) * (q.y - a.y) - (q.x - a.x) * (b.y - a.y)
+		if a.y <= q.y:
+			if b.y > q.y and side > 0.0:
+				w += 1
+		elif b.y <= q.y and side < 0.0:
+			w -= 1
+	return w
+
+
+## Lay a sketch's cells as bricks of its part: its thickness centred on its plane (across
+## the gun from the side, along it from the front, upward from the top, a stud being two
+## and a half plates), packed round what is already built. On the side and front planes,
+## edges at a catalogue piece's pitch get that piece. Returns [[archetype, [x, y, z]]].
+func _lay_sketch(sk: Dictionary, grid: Dictionary) -> Array:
+	var plane: String = sk.plane
+	var at: float = float(sk.at)
+	var w := int(sk.width)
+	var depth := []
+	match plane:
+		"side", "front":
+			var k0 := int(round(at - w * 0.5))
+			for k in w:
+				depth.append(k0 + k)
+		"top":
+			for k in maxi(1, int(round(w * 2.5))):
+				depth.append(int(at) + k)
+	if plane != "top":
+		for g in grid.keys():
+			if g.y < 0:
+				grid.erase(g)
+	var cells := {}
+	for g in grid:
+		for k in depth:
+			cells[_sketch_cell(g, k, plane)] = true
+	var placements := []
+	if plane != "top":
+		for pc in edge_pieces(grid, slope_eager):
+			# A piece over something already built would be refused and leave a hole: its
+			# cells are packed as plain bricks instead.
+			var box := []
+			var clear := true
+			for du in 2:
+				for dv in 3:
+					for k in depth:
+						var c := _sketch_cell(Vector2i(pc.u + du, pc.base + dv), k, plane)
+						box.append(c)
+						if world.is_solid(chunk, c):
+							clear = false
+			if not clear:
+				continue
+			for c in box:
+				cells.erase(c)
+			var k := 0
+			while k < depth.size():
+				var left := depth.size() - k
+				var wide := 4 if pc.kind == "slope" and left >= 4 else (2 if left >= 2 else 1)
+				placements.append([edge_variant(pc.kind, wide, pc.rises, pc.under, plane),
+						_sketch_cell(Vector2i(pc.u, pc.base), depth[k], plane)])
+				k += wide
+	var keep := part_sel
+	var idx := part_names.find(String(sk.part))
+	if idx >= 0:
+		part_sel = idx
+	var laid := []
+	for pk in pack_cells(cells, shape_fill == "random") + placements:
+		if place_named(pk[0], pk[1]):
+			laid.append([pk[0], [pk[1].x, pk[1].y, pk[1].z]])
+	part_sel = keep
 	return laid
 
 
 ## A sketch cell (across the plane, up it) at depth `k`, as a cell of the build. A
 ## piece's min corner is its cell at its lowest across-and-up.
-func _sketch_cell(g: Vector2i, k: int) -> Vector3i:
-	match work_plane:
+static func _sketch_cell(g: Vector2i, k: int, plane: String) -> Vector3i:
+	match plane:
 		"front": return Vector3i(k, g.y, g.x)
 		"top": return Vector3i(g.x, k, g.y)
 	return Vector3i(g.x, g.y, k)
+
+
+func _draw_sketch(im: ImmediateMesh) -> void:
+	var key := _sketch_key()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var any := false
+	if sketches.has(key):
+		if not _sketch_cache.has(key):
+			_sketch_cache[key] = sketch_cells(sketches[key])
+		var sk: Dictionary = sketches[key]
+		var cells: Dictionary = _sketch_cache[key]
+		# The outline of what is filled: what the drawing comes to, overlaps and all.
+		for c in cells:
+			for e in [[Vector2i(0, -1), Vector2(0, 0), Vector2(1, 0)], [Vector2i(0, 1), Vector2(0, 1), Vector2(1, 1)],
+					[Vector2i(-1, 0), Vector2(0, 0), Vector2(0, 1)], [Vector2i(1, 0), Vector2(1, 0), Vector2(1, 1)]]:
+				if cells.has(c + e[0]):
+					continue
+				for corner in [e[1], e[2]]:
+					im.surface_set_color(Color(1.0, 0.9, 0.2))
+					im.surface_add_vertex(_sketch_world(Vector2(c) + corner, sk.plane, float(sk.at)))
+					any = true
+	if _sketch.size() >= 2:
+		var col := Color(1.0, 0.35, 0.3) if _sketch_out else Color(1, 1, 1)
+		for i in _sketch.size():
+			var a := _sketch[i]
+			var b := _sketch[(i + 1) % _sketch.size()]
+			im.surface_set_color(col)
+			im.surface_add_vertex(_sketch_world(a, work_plane, _plane_value(work_plane)))
+			im.surface_set_color(col)
+			im.surface_add_vertex(_sketch_world(b, work_plane, _plane_value(work_plane)))
+			any = true
+	if not any:
+		im.surface_add_vertex(Vector3.ZERO)
+		im.surface_add_vertex(Vector3.ZERO)
+	im.surface_end()
 
 
 ## Where catalogue pieces go on the edges of a sketch (Vector2i(across, up) -> true):
 ## [{kind: "slope" or "curve", u: its first column, base: its bottom plate, rises: +1
 ## if the edge climbs toward +u, under: true for a bottom edge (the piece flipped)}].
 ## A bottom edge is a top edge of the sketch turned upside down, so one rule does both.
-static func edge_pieces(grid: Dictionary) -> Array:
-	var out := _top_pieces(grid)
+## `eager` lays slopes on edges climbing one to three plates a stud, not only two.
+static func edge_pieces(grid: Dictionary, eager: bool = false) -> Array:
+	var out := _top_pieces(grid, {}, eager)
 	var flipped := {}
 	for g in grid:
 		flipped[Vector2i(g.x, -g.y - 1)] = true
@@ -2964,7 +3254,7 @@ static func edge_pieces(grid: Dictionary) -> Array:
 	for pc in out:
 		used[pc.u] = true
 		used[pc.u + 1] = true
-	for pc in _top_pieces(flipped, used):
+	for pc in _top_pieces(flipped, used, eager):
 		# Back the right way up: the flipped box held plates base .. base + 2.
 		pc.base = -pc.base - 3
 		pc.under = true
@@ -2972,7 +3262,7 @@ static func edge_pieces(grid: Dictionary) -> Array:
 	return out
 
 
-static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}) -> Array:
+static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}, eager: bool = false) -> Array:
 	var top := {}
 	for g in grid:
 		top[g.x] = maxi(int(top.get(g.x, -(1 << 30))), g.y + 1)
@@ -2980,17 +3270,20 @@ static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}) -> Arra
 	var used := used_already.duplicate()
 	var us := top.keys()
 	us.sort()
-	# Slopes first: an edge climbing two plates over a stud is a slope's own pitch. Its
-	# low front sits over the lower column, its flat back over the higher.
+	# Slopes first. A slope's flat back sits over the higher column, its top level with that
+	# column's; its low front over the lower column. At its own pitch the edge climbs two
+	# plates a stud; eager, one to three, the slope a plate proud of or short of the line.
+	var climbs := [1, 2, 3] if eager else [2]
 	for u in us:
 		if not top.has(u + 1) or used.has(u) or used.has(u + 1):
 			continue
 		var d: int = top[u + 1] - top[u]
-		if absi(d) != 2:
+		if not (absi(d) in climbs):
 			continue
 		var low: int = u if d > 0 else u + 1
-		var base: int = top[low] - 1
-		if not (grid.has(Vector2i(u, base)) and grid.has(Vector2i(u + 1, base))):
+		var high: int = u + 1 if d > 0 else u
+		var base: int = top[high] - 3
+		if not grid.has(Vector2i(high, base)) or top[low] < base:
 			continue
 		out.append({"kind": "slope", "u": u, "base": base, "rises": 1 if d > 0 else -1, "under": false})
 		used[u] = true
@@ -3019,16 +3312,28 @@ static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}) -> Arra
 	return out
 
 
-## The catalogue piece for an edge: a slope or curve, `wide` studs deep, 2 long across the
-## plane, its low front looking down the edge, flipped under a bottom edge.
-func edge_variant(kind: String, wide: int, rises: int, under: bool) -> String:
-	var part := "%s_%s" % [kind, "1x2" if wide == 1 else "2x2"]
-	var along := Vector3i(1, 0, 0) if work_plane != "front" else Vector3i(0, 0, 1)
+## The catalogue piece for an edge: a slope or curve, `wide` studs deep (a 2x4 slope for
+## four), 2 long across the plane, its low front looking down the edge, flipped under a
+## bottom edge.
+func edge_variant(kind: String, wide: int, rises: int, under: bool, plane: String = "") -> String:
+	if plane == "":
+		plane = work_plane
+	var part := "%s_%s" % [kind, {1: "1x2", 2: "2x2", 4: "2x4"}[wide]]
+	var along := Vector3i(1, 0, 0) if plane != "front" else Vector3i(0, 0, 1)
 	var want := along * (-1 if rises > 0 else 1)
 	for yaw in 4:
 		var name := BrickPalette.variant_name(part, yaw, under)
 		var size := BrickPalette.size_of(name)
-		var long := size.x if work_plane != "front" else size.z
-		if BrickPalette.front_of(name) == want and long == 2:
+		var long := size.x if plane != "front" else size.z
+		var deep := size.z if plane != "front" else size.x
+		if BrickPalette.front_of(name) == want and long == 2 and deep == wide:
 			return name
 	return BrickPalette.variant_name(part, 0, under)
+
+
+## How far the mouse moves while a click is held: a run starts only past RUN_START_PX.
+## Seen here, ahead of the camera, which takes the motion when the mouse is captured.
+func _input(e: InputEvent) -> void:
+	super._input(e)
+	if _run_on and e is InputEventMouseMotion:
+		_run_moved += (e as InputEventMouseMotion).relative.length()
