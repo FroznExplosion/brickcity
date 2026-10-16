@@ -242,6 +242,26 @@ static func generate_legendary(library: GunPartLibrary, gen_seed: int,
 	return res
 
 
+## A gun whose parts are given -- a design made in the asset workshop (AssetGuns): every
+## part fixed, everything else (modifiers, alt fire, stats, element, quality) rolled from
+## the seed as for any gun, and the design's own name after the grade word.
+static func generate_fixed(recipe: Dictionary, gen_seed: int, weapon_class: WeaponClass,
+		tier: int, rarity: int, display_name: String) -> Result:
+	var res := Result.new()
+	res.seed = gen_seed
+	res.weapon_class = weapon_class if weapon_class != null else WeaponClass.builtin(&"smg")
+	res.tier = tier
+	res.rarity = clampi(rarity, 1, 6)
+	res.forced_rarity = res.rarity
+	res.recipe = recipe.duplicate()
+	_resolve(res)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = res.seed
+	_finish(res, rng)
+	res.gun_name = ("%s %s" % [res.grade_word, display_name]).strip_edges()
+	return res
+
+
 static func _exclusive_barrel(library: GunPartLibrary, leg_id: StringName) -> GunPartDef:
 	for def in library.parts:
 		if def != null and def.exclusive_to == leg_id and def.slot == Slot.BARREL:

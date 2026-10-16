@@ -59,6 +59,8 @@ static func build_library(per_tier: int = 2) -> GunPartLibrary:
 			parts.append(_heavy_barrel(tier, variant))
 
 	lib.parts = parts
+	# The guns made in the asset workshop: on the end, each fenced to its own design.
+	AssetGuns.add_to(lib)
 	return lib
 
 
