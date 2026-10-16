@@ -58,7 +58,7 @@ extends "res://scripts/workshop.gd"
 ##               plane at a stud -- with no stud to aim at; PgUp / PgDn move the plane
 ##   no floor    a floating build area and a starting brick, laid again if all are gone
 ##   photos      a stud grid over a photo, calibrating in studs as well as mm, zoom at the
-##               cursor in a flat view (Alt or Ctrl + wheel), Alt + drag moves a photo, and
+##               cursor in a flat view (Alt + wheel), Alt + drag moves a photo, and
 ##               buttons that put it behind the build or through its middle
 ##   sketch      Alt D: draw an outline on the side plane; it is filled with bricks for
 ##               the current part, as thick as that part is set to be
@@ -332,6 +332,16 @@ func _shot() -> void:
 			f.store_string(JSON.stringify(export_sheet(), " "))
 			f.close()
 	var views := [0, 1]
+	if "--brush" in OS.get_cmdline_user_args():
+		# The shape brush: a cube laid, a ball carved out of its corner, a flat circle on top.
+		for _i in 3:
+			await get_tree().process_frame
+		set_mirror(false)
+		var at := Vector3i(40, 40, 40)
+		shape_place(brush_shape_cells("cube", at, 8))
+		shape_carve(brush_shape_cells("ball", at + Vector3i(4, 10, 4), 8))
+		shape_place(brush_shape_cells("circle", at + Vector3i(0, 10, 0), 6, 1, 1))
+		_look_at_build()
 	if "--receiver" in OS.get_cmdline_user_args():
 		# A receiver in three views: a side slab, a charging slot cut through and a port cut
 		# a stud in, then its top corners chamfered from the front.
@@ -794,7 +804,8 @@ func build_centre() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
-	if _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) or _move_input(e):
+	if _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
+			or _move_input(e):
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
@@ -899,6 +910,9 @@ func _process(dt: float) -> void:
 		_run_on = false
 	run_step()
 	if tool in ["sketch", "stud", "move"]:
+		_ghost.visible = false
+		_ghost_studs.visible = false
+	if _shape_brush_on():
 		_ghost.visible = false
 		_ghost_studs.visible = false
 	_stud_ghost_process()
@@ -1109,7 +1123,7 @@ func _build_panel(layer: CanvasLayer) -> void:
 		_draw_photo_grid())
 	box.add_child(grid_box)
 	var hint := Label.new()
-	hint.text = "Alt + drag moves the photo.  Alt / Ctrl + wheel zooms a flat view."
+	hint.text = "Alt + drag moves the photo.  Alt + wheel zooms a flat view."
 	box.add_child(hint)
 	_photo_info = Label.new()
 	box.add_child(_photo_info)
@@ -1740,7 +1754,7 @@ func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1) 
 
 
 ## Fill cells with bricks, as one edit: the mesh is rebuilt once, at the end.
-func fill_cells(cells: Dictionary, random: bool = false) -> int:
+func fill_cells(cells: Dictionary, random: bool = false, group: bool = true) -> int:
 	var laid := 0
 	_batch = true
 	for pc in pack_cells(cells, random):
@@ -1748,7 +1762,8 @@ func fill_cells(cells: Dictionary, random: bool = false) -> int:
 			laid += 1
 	_batch = false
 	_after_edit()
-	_group(laid)
+	if group:
+		_group(laid)
 	return laid
 
 
@@ -2066,6 +2081,9 @@ func _draw_tool() -> void:
 		return
 	if tool == "move":
 		_draw_move(im)
+		return
+	if _shape_brush_on():
+		_draw_shape_brush(im)
 		return
 	if not _dragging:
 		return
@@ -2757,9 +2775,9 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 
 [font_size=18][b]Getting started[/b][/font_size]
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
-[b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
+[b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -3063,11 +3081,12 @@ func _photo_input(e: InputEvent) -> bool:
 	return false
 
 
-## Alt or Ctrl + wheel in a flat view: zoom about the point under the cursor.
+## Alt + wheel in a flat view: zoom about the point under the cursor (Ctrl + wheel sizes the
+## shape brush).
 func _zoom_input(e: InputEvent) -> bool:
 	if view == 0 or not (e is InputEventMouseButton) or not e.pressed:
 		return false
-	if not (e.alt_pressed or e.ctrl_pressed):
+	if not e.alt_pressed:
 		return false
 	if e.button_index != MOUSE_BUTTON_WHEEL_UP and e.button_index != MOUSE_BUTTON_WHEEL_DOWN:
 		return false
@@ -4182,6 +4201,9 @@ var _paint_box: VBoxContainer
 var _draw_box: VBoxContainer
 var _draws: OptionButton
 var _rail_scroll: ScrollContainer
+var _shape_box2: VBoxContainer
+var _shape_size_label: Label
+var _shape_size_slider: HSlider
 var _explode_button: Button
 var _hands_button: Button
 var _rail_box: VBoxContainer
@@ -4261,6 +4283,40 @@ func _build_rail(layer: CanvasLayer) -> void:
 	play.focus_mode = Control.FOCUS_NONE
 	play.pressed.connect(func() -> void: play_cycle())
 	box.add_child(play)
+	box.add_child(HSeparator.new())
+
+	# The shape brush: Ctrl + LMB lays a shape, Ctrl + RMB carves it out, in any tool.
+	_shape_box2 = VBoxContainer.new()
+	box.add_child(_shape_box2)
+	var sbt := Label.new()
+	sbt.text = "Shape brush: Ctrl + LMB lays, Ctrl + RMB carves"
+	_shape_box2.add_child(sbt)
+	var kinds2 := OptionButton.new()
+	for k in BRUSH_SHAPES:
+		kinds2.add_item(k[1])
+	kinds2.focus_mode = Control.FOCUS_NONE
+	kinds2.item_selected.connect(func(i: int) -> void: brush3d = BRUSH_SHAPES[i][0])
+	_shape_box2.add_child(kinds2)
+	_shape_size_label = Label.new()
+	_shape_box2.add_child(_shape_size_label)
+	_shape_size_slider = HSlider.new()
+	_shape_size_slider.min_value = 1
+	_shape_size_slider.max_value = SHAPE_SIZE_MAX
+	_shape_size_slider.step = 1
+	_shape_size_slider.focus_mode = Control.FOCUS_NONE
+	_shape_size_slider.value_changed.connect(func(v: float) -> void: shape_size = int(v))
+	_shape_box2.add_child(_shape_size_slider)
+	var trow := HBoxContainer.new()
+	_shape_box2.add_child(trow)
+	var tl := Label.new()
+	tl.text = "flat ones, thick"
+	trow.add_child(tl)
+	var ts := SpinBox.new()
+	ts.min_value = 1
+	ts.max_value = 12
+	ts.value = shape_thick
+	ts.value_changed.connect(func(v: float) -> void: shape_thick = int(v))
+	trow.add_child(ts)
 	box.add_child(HSeparator.new())
 
 	# The brush: paint and sketch share it.
@@ -4402,6 +4458,13 @@ func _rail_process() -> void:
 		_brush_label.text = "brush: %d stud%s round" % [n, "" if n == 1 else "s"]
 	_paint_box.visible = on == "paint"
 	_draw_box.visible = on == "sketch"
+	_shape_box.visible = tool == "shape"
+	_sketch_box.visible = tool == "sketch"
+	_select_box.visible = tool == "select"
+	_shape_box2.visible = on in ["place", "shape", "select"] or _shape_brush_on()
+	_shape_size_slider.set_value_no_signal(shape_size)
+	_shape_size_label.text = "%d stud%s across%s" % [shape_size, "" if shape_size == 1 else "s",
+			"  (Ctrl + wheel)" if on == "place" else ""]
 	_rail.position.y = 12.0 + (_menu.bar_height() if _menu != null else 0.0)
 	var room := get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
 	_rail_scroll.custom_minimum_size = Vector2(RAIL_W - 16, minf(_rail_box.get_combined_minimum_size().y, room))
@@ -5340,3 +5403,213 @@ func _volume_in(x0: int, x1: int) -> int:
 			if c.x + dx >= x0 and c.x + dx < x1:
 				n += size.y * size.z
 	return n
+
+
+# ---------------------------------------------------------------------------
+# Round 6: the shape brush -- Ctrl + click, in any tool
+# ---------------------------------------------------------------------------
+
+## The shape brush's shapes: solid ones round where the ghost is, flat ones lying on the
+## plane the ghost is on (E's locked height, the working plane, or a brick top).
+const BRUSH_SHAPES := [["ball", "ball"], ["cube", "cube"], ["cylinder", "cylinder (through the plane)"],
+		["circle", "circle (flat)"], ["square", "square (flat)"]]
+const SHAPE_SIZE_MAX := 24
+var brush3d := "ball"
+var shape_size := 4          # studs across (up: two and a half plates a stud)
+var shape_thick := 1         # a flat shape's thickness: cells off its plane
+var _sb := {}                # a stroke under way: {erase, start (edits), last (centre)}
+
+
+func _shape_brush_on() -> bool:
+	return Input.is_key_pressed(KEY_CTRL) or not _sb.is_empty()
+
+
+## The axis a flat shape lies across: the plane the ghost is on. 1 (up) on a brick top or
+## the locked height, else the working plane's normal when placing freely on it.
+func shape_axis() -> int:
+	if not _lock.is_empty() or not free_place:
+		return 1
+	match work_plane:
+		"side": return 2
+		"front": return 0
+	return 1
+
+
+## The cells of a shape `size` studs across round `centre` (a cell): even sizes centred
+## on its corner, odd ones on its middle, so a shape is exactly that many cells across.
+## Up is in plates, two and a half a stud. `axis`: a flat shape's or a cylinder's.
+static func brush_shape_cells(kind: String, centre: Vector3i, size: int, axis: int = 1, thick: int = 1) -> Dictionary:
+	var dims := Vector3i(size, int(round(size * 2.5)), size)
+	var flat := kind in ["circle", "square"]
+	if flat:
+		dims[axis] = thick
+	var half := Vector3(dims) * 0.5
+	var c := Vector3(centre) + Vector3(dims.x % 2, dims.y % 2, dims.z % 2) * 0.5
+	if flat:
+		c[axis] = centre[axis] + thick * 0.5   # from the plane outward
+	var lo := Vector3i((c - half).floor())
+	var out := {}
+	for x in range(lo.x, lo.x + dims.x + 1):
+		for y in range(lo.y, lo.y + dims.y + 1):
+			for z in range(lo.z, lo.z + dims.z + 1):
+				var u := (Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5) - c) / half
+				if maxf(absf(u.x), maxf(absf(u.y), absf(u.z))) > 1.0 + 1e-6:
+					continue
+				var inside := true
+				match kind:
+					"ball":
+						inside = u.length_squared() <= 1.0 + 1e-6
+					"cylinder", "circle":
+						var r := u
+						r[axis] = 0.0
+						inside = r.length_squared() <= 1.0 + 1e-6
+				if inside:
+					out[Vector3i(x, y, z)] = true
+	return out
+
+
+## The box round `brush_shape_cells`: [min cell, max cell + 1].
+static func brush_shape_box(kind: String, centre: Vector3i, size: int, axis: int = 1, thick: int = 1) -> Array:
+	var dims := Vector3i(size, int(round(size * 2.5)), size)
+	if kind in ["circle", "square"]:
+		dims[axis] = thick
+	var c := Vector3(centre) + Vector3(dims.x % 2, dims.y % 2, dims.z % 2) * 0.5
+	if kind in ["circle", "square"]:
+		c[axis] = centre[axis] + thick * 0.5
+	var lo := Vector3i((c - Vector3(dims) * 0.5).round())
+	return [lo, lo + dims]
+
+
+## Lay a shape's cells as bricks of the current part (what is built there stays).
+## Returns how many bricks went down.
+func shape_place(cells: Dictionary) -> int:
+	var free := {}
+	for c in cells:
+		if c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates and c.z < plate_studs:
+			free[c] = true
+	return fill_cells(free, shape_fill == "random", false)
+
+
+## Carve a shape out of whatever is built: every brick it touches is taken up and what of
+## it lies outside the shape laid again, in its own part, colour and material. Returns
+## how many edits that made (bricks taken up and laid), for the undo.
+func shape_carve(cells: Dictionary) -> int:
+	var rid_of := {}
+	for i in _placed_at.size():
+		if int(_placed_at[i][0]) == 0:
+			rid_of[int(_placed_at[i][1])] = i
+	var touched := {}
+	for c in cells:
+		var b := world.block_at(chunk, c)
+		if b >= 0 and rid_of.has(b):
+			touched[int(rid_of[b])] = true
+	if touched.is_empty():
+		return 0
+	var left := {}   # [tag, colour, mat] -> cells to lay again
+	var ids := touched.keys()
+	for i in ids:
+		var info := _brick_info(i)
+		var size := BrickPalette.size_of(info.arch)
+		var what := [int(info.tag), int(info.colour), int(info.mat)]
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c: Vector3i = info.cell + Vector3i(dx, dy, dz)
+					if not cells.has(c) and world.block_at(chunk, c) == int(_placed_at[i][1]) and world.is_solid(chunk, c):
+						(left.get_or_add(what, {}) as Dictionary)[c] = true
+	ids.sort()
+	ids.reverse()
+	var n := 0
+	_batch = true
+	for i in ids:
+		if take_brick(int(i)):
+			n += 1
+	var keep := [part_sel, _colour, _mat]
+	for what in left:
+		part_sel = int(what[0])
+		_colour = int(what[1])
+		_mat = int(what[2])
+		for pc in pack_cells(left[what], false):
+			if place_named(pc[0], pc[1]):
+				n += 1
+	part_sel = int(keep[0])
+	_colour = int(keep[1])
+	_mat = int(keep[2])
+	_batch = false
+	_after_edit()
+	return n
+
+
+## Where a stamp goes: laying, the ghost's cell; carving, the cell of the brick the mouse
+## is on (or the ghost's, over nothing).
+func _shape_centre(erase: bool) -> Vector3i:
+	if erase:
+		var ray := _mouse_ray()
+		var hit := _first_hit(ray[0], ray[1])
+		if not hit.is_empty() and hit.frame == chunk:
+			return _cell_in(chunk, (hit.point as Vector3) + (ray[1] as Vector3) * 0.01)
+	return _cell
+
+
+func _stamp_shape(erase: bool) -> void:
+	var centre := _shape_centre(erase)
+	_sb.last = centre
+	var cells := brush_shape_cells(brush3d, centre, shape_size, shape_axis(), shape_thick)
+	# Counted, not read off the edit list: a brick taken up swaps its own edit for a delete.
+	_sb.ops = int(_sb.get("ops", 0)) + (shape_carve(cells) if erase else shape_place(cells))
+
+
+## Ctrl + LMB lays the shape, Ctrl + RMB carves it; held and dragged, it goes on doing
+## it every half a shape. One stroke is one undo. Ctrl + wheel sizes it.
+func _shape_brush_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.pressed and e.ctrl_pressed \
+			and e.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		shape_size = clampi(shape_size + (1 if e.button_index == MOUSE_BUTTON_WHEEL_UP else -1), 1, SHAPE_SIZE_MAX)
+		return true
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if e.pressed and e.ctrl_pressed and _sb.is_empty():
+			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "start": _edits.size(), "last": _cell,
+					"button": e.button_index}
+			_stamp_shape(bool(_sb.erase))
+			return true
+		if not e.pressed and not _sb.is_empty() and e.button_index == int(_sb.button):
+			_group(int(_sb.get("ops", 0)))
+			_sb = {}
+			return true
+	if e is InputEventMouseMotion and not _sb.is_empty():
+		var at := _shape_centre(bool(_sb.erase))
+		if Vector3(at - (_sb.last as Vector3i)).length() >= maxf(1.0, shape_size * 0.5):
+			_stamp_shape(bool(_sb.erase))
+		return true
+	return false
+
+
+## The shape brush where it would go: its box, and its round outline across the plane.
+func _draw_shape_brush(im: ImmediateMesh) -> void:
+	var erase: bool = bool(_sb.get("erase", Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)))
+	# Its box worked out, not its cells: this is drawn every frame Ctrl is down.
+	var box := brush_shape_box(brush3d, _shape_centre(erase), shape_size, shape_axis(), shape_thick)
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
+	var cell := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	var a := Vector3(lo) * cell
+	var b := Vector3(hi) * cell
+	var col := Color(1.0, 0.35, 0.3) if erase else Color(0.4, 1.0, 0.55)
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	_box_lines(im, a, b, col)
+	if brush3d in ["ball", "cylinder", "circle"]:
+		var mid := (a + b) * 0.5
+		var r := (b - a) * 0.5
+		var axes := [0, 1, 2] if brush3d == "ball" else [shape_axis()]
+		for ax in axes:
+			var u := Vector3.ZERO
+			var v := Vector3.ZERO
+			var ua: int = (int(ax) + 1) % 3
+			var va: int = (int(ax) + 2) % 3
+			u[ua] = r[ua]
+			v[va] = r[va]
+			for i in 32:
+				for t in [TAU * i / 32.0, TAU * (i + 1) / 32.0]:
+					im.surface_set_color(col)
+					im.surface_add_vertex(mid + u * cos(t) + v * sin(t))
+	im.surface_end()

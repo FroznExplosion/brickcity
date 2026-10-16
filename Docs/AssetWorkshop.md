@@ -43,7 +43,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 | **Instructions** | F10 | a page on how to start and every key; opens on start until its tick box is cleared |
 | **Ruler** | always on | the cell under the cursor and the build's size, in studs/plates, print mm and real mm |
 | **Reference photo** | F2 (panel) | load an image onto a plane -- side, top or front -- behind the build. Calibrate: click two points on it and type the real length between them; the photo scales itself. Move it, set its opacity, hide it, remove it. It is never built on: rays pass through it |
-| **Ortho views** | Alt 0-3 | perspective, side, top, front. The flat views line up with the photo planes. Alt or Ctrl + wheel zooms about the cursor, Home / End about the middle |
+| **Ortho views** | Alt 0-3 | perspective, side, top, front. The flat views line up with the photo planes. Alt + wheel zooms about the cursor, Home / End about the middle |
 | **Measure** | Alt M | click two points (on bricks, a photo or the floor): the distance in all four units, drawn as a line |
 | **Mirror** | Alt S (Alt shift S: plane under the ghost) | every brick placed is placed again mirrored across the centre plane (a gun's long axis runs along X; the plane is Z = its middle). The plane sits on the middle of a stud, so an odd width (a 3-stud body) is centred |
 
@@ -95,6 +95,12 @@ copies every sketch.
 |---|---|
 | The rail is narrower (~190 px from ~335): small type, tight buttons, shorter labels | it took a quarter of the screen |
 | **RMB in sketch takes up any brick under the stroke** -- hand-laid ones, other parts' -- right through, or only `cut depth` studs in from the camera's side; in the same undo as the sketch change. With nothing sketched for the part, the stroke only erases. A tick box turns it off | the brush could only cut the part's own sketch |
+
+### Round 6 (2026-10-16): the shape brush
+
+| Change | Why |
+|---|---|
+| **Shape brush, in any tool**: Ctrl + LMB lays a shape round the ghost's cell -- a ball, cube or cylinder, or a flat circle or square lying on the plane the ghost is on (a brick top, E's locked height, or the working plane when placing freely; a cylinder runs through that plane). Ctrl + RMB carves the shape out of whatever is built: every brick it touches is taken up and the rest of it laid again in its own part, colour and material. Held and dragged it stamps every half a shape; a stroke is one undo. Ctrl + wheel sizes it (1-24 studs across, two and a half plates up a stud); its shape and a flat one's thickness are on the rail. Alt + wheel still zooms a flat view | lay and carve blocks of material without changing tool |
 
 ### Phase 2 -- build a whole gun split by part
 
