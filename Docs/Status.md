@@ -1694,6 +1694,29 @@ them from hits on pieces, every one landmark-sized.
 solves) from 1,368 ms (1,030), and cascades finish in the tick without it; a solve on rigid storeys
 would also decide differently what fails, so it is a change of model, not of speed.
 
+### Pieces floating that nobody's grid has: buildings drew bricks they had lost
+
+Reported: after a break, pieces float that are not real -- no grid holds them -- and a collapsing
+building hangs on something inside it.
+
+* **Leftover drawing** (4931ed0, 2026-10-02). A building's bands are index-patched on a hit against
+  a baseline of what they draw (`BrickWorld.update_index_regions`). The baseline was set the first
+  time a patch was asked for -- AFTER the hit it was for, so that hit diffed as no change and was
+  never drawn -- and with the bake invalid (a room laid or cleared) or no baseline, the patch came
+  back with no regions, which `CityScene._remesh` read as patched. Now each band writes what it draws
+  into the baseline as it is built (not the whole chunk at once: that was 57 ms on a big tower), a
+  new or adopted bake clears it, and "cannot patch" comes back as section -1, which `_remesh` and
+  `IslandManager._patch_bands` already rebuild on.
+* **`--drawn`**, a new gate: three 5.8 m blasts into a wall of the recipe tower nearest thirty
+  courses, then every drawn triangle checked for a live brick behind it. Before: 3,467 of 9,516 with
+  none -- a staircase, a slab and walls floating in the hole. After: 22 of 6,332, all edges of shaped
+  parts the check cannot see into (246 of 15,106 over the building whole).
+* **Furniture holds nothing up.** A building's furniture body (drawn and real rooms' contents) was
+  STRUCTURE, so a falling section landed on a table and hung there. It is FIXTURE now: walkers and
+  bullets meet it, nothing that falls does.
+* **Held bricks** (`Block::held`) only for crumb-sized groups, 8 bricks rather than 48: wall chunks
+  that size hung on a few studs where they should have fallen.
+
 ### Windows on far buildings: a room behind the glass that is not there
 
 A building that is still a shell has no openings -- its walls are solid bands -- so the fake rung
