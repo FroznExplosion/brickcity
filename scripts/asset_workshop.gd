@@ -48,6 +48,21 @@ extends "res://scripts/workshop.gd"
 ##   undo, redo  Z undoes a whole fill, copy or mirrored pair at once; shift Z redoes
 ##   readout     the ruler adds each part's bricks and the asset's length in the game
 ##
+## After the first use (2026-10-15):
+##
+##   keys        nothing on F5-F8: run from the Godot editor, those are the editor's (F8
+##               stopped the game and lost a build). Views, measure and mirror moved to
+##               Alt chords, and the build is autosaved every few seconds
+##   free place  on by default (Alt F): the ghost goes where the cursor meets the working
+##               plane -- the side plane at a depth, the top plane at a height, the front
+##               plane at a stud -- with no stud to aim at; PgUp / PgDn move the plane
+##   no floor    a floating build area and a starting brick, laid again if all are gone
+##   photos      a stud grid over a photo, calibrating in studs as well as mm, zoom at the
+##               cursor in a flat view (Alt or Ctrl + wheel), Alt + drag moves a photo, and
+##               buttons that put it behind the build or through its middle
+##   sketch      Alt D: draw an outline on the side plane; it is filled with bricks for
+##               the current part, as thick as that part is set to be
+##
 ## A stud here is a nano stud on export: 4 mm printed, 16 mm of the real thing. A plate
 ## is 1.6 mm printed, 6.4 mm real (Docs/Parts/joints.md section 7).
 ##
@@ -60,7 +75,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   F6 view   F7 measure   F8 mirror (shift: plane under the ghost)   Home / End zoom\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D sketch   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -136,12 +151,38 @@ var _outlines_dirty := false
 var _tool_panel: PanelContainer
 var _shape_box: VBoxContainer
 var _select_box: VBoxContainer
+var _sketch_box: VBoxContainer
+var _width_spin: SpinBox
 var _guide_panel: PanelContainer
 var _guide_list: OptionButton
 var _guide_mm: LineEdit
 var _guide_dialog: FileDialog
 var _rng := RandomNumberGenerator.new()
 const SHAPES := ["box", "cylinder", "sphere", "wedge"]
+
+## Free placement: the ghost goes where the cursor meets the working plane.
+var free_place := true
+## The working plane: "side" (at `work_depth` studs across), "top" (at `work_height`
+## plates up) or "front" (at `work_x` studs along). A flat view picks its own.
+var work_plane := "side"
+var work_depth := 40.5
+var work_height := 30
+var work_x := 40
+## Lay a starting brick when the build is empty (off in a headless run: probes count bricks).
+var auto_start_brick := true
+## How thick each part is across the gun, in studs, for sketching it.
+var part_width := {}
+const AUTOSAVE := "user://asset_workshop_autosave.json"
+var _autosave_dirty := false
+## A scripted run (--shot, --gate) must never write over the user's autosave.
+var _no_autosave := false
+var _autosave_at := 0
+var _plane_lines: MeshInstance3D
+var _photo_lines: MeshInstance3D
+var photo_grid := false
+## A sketch being drawn: points on the side plane, (studs along, plates up).
+var _sketch: Array[Vector2] = []
+var _photo_drag = null
 
 ## Phase 4. Parts that leave as smooth custom pieces rather than bricks.
 var smooth_parts := PackedStringArray()
@@ -189,10 +230,23 @@ func _ready() -> void:
 	_build_asset_tools()
 	_setup_parts()
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	var headless := DisplayServer.get_name() == "headless"
+	auto_start_brick = not headless
+	_no_autosave = headless or "--shot" in args or "--gate" in args
+	work_depth = mirror_z
 	if "--shot" in args:
 		call_deferred("_shot")
 	elif not ("--gate" in args):
 		print("[asset workshop] " + KEYS_TEXT)
+		if not headless and FileAccess.file_exists(AUTOSAVE):
+			call_deferred("_restore_autosave")
+	_grid.visible = not free_place
+	# The workshop's own key list starts hidden here (F1 shows it): it covers half the
+	# screen, and F10 lists this scene's keys.
+	_keys_on = false
+	_keys_panel.visible = false
+	call_deferred("_ensure_start_brick")
+	call_deferred("_look_at_build")
 
 
 ## `-- --shot [--photo=<file> --from=x,y --to=x,y --mm=<real length>]`: a photo on the
@@ -212,8 +266,31 @@ func _shot() -> void:
 			var t: PackedStringArray = opt.to.split(",")
 			calibrate(i, photo_point(i, Vector2(float(f[0]), float(f[1]))),
 					photo_point(i, Vector2(float(t[0]), float(t[1]))), float(opt.mm))
+			set_photo_depth(i, "behind")
+			photo_grid = true
+			_draw_photo_grid()
 	set_mirror(true)
 	show_help(false)
+	DirAccess.make_dir_recursive_absolute("user://asset_shots")
+	if "--ramp" in OS.get_cmdline_user_args():
+		# A sketched ramp climbing a slope's pitch, to look at the slopes it lays.
+		for _i in 3:
+			await get_tree().process_frame
+		sketch_fill([Vector2(30, 36), Vector2(38, 52), Vector2(46, 52), Vector2(46, 20), Vector2(38, 20)])
+		# And a drum, a circle on the front plane.
+		work_plane = "front"
+		work_x = 52
+		var circle := []
+		for a in 32:
+			var t := a * TAU / 32.0
+			circle.append(Vector2(mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
+		sketch_fill(circle)
+		work_plane = "side"
+		_look_at_build()
+		var f := FileAccess.open("user://asset_shots/ramp.json", FileAccess.WRITE)
+		if f != null:
+			f.store_string(JSON.stringify(export_sheet(), " "))
+			f.close()
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	for v in [0, 1]:
 		set_view(v)
@@ -387,6 +464,8 @@ static func _photo_basis(plane: String) -> Basis:
 
 
 func _fit_photo(p: Dictionary) -> void:
+	if _photo_lines != null:
+		_draw_photo_grid.call_deferred()
 	var node: MeshInstance3D = p.node
 	(node.mesh as QuadMesh).size = Vector2(p.px) * float(p.mpp)
 	node.transform = Transform3D(_photo_basis(p.plane), p.centre)
@@ -572,6 +651,8 @@ func set_view(v: int) -> void:
 		_camera.call("_set_captured", false)
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_camera.size = _ortho_size
+	work_plane = VIEWS[v]
+	_draw_work_plane()
 	var c := build_centre()
 	match VIEWS[v]:
 		"side":
@@ -611,6 +692,9 @@ func build_centre() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
+	if _photo_input(e) or _zoom_input(e) or _sketch_input(e):
+		get_viewport().set_input_as_handled()
+		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
 			and (calibrating != null or measure_on):
 		if calibrating != null:
@@ -629,7 +713,7 @@ func _unhandled_input(e: InputEvent) -> void:
 					break
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool != "":
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool in ["shape", "select"]:
 		if e.pressed:
 			_drag_from = _cell
 			_drag_to = _cell
@@ -645,6 +729,30 @@ func _unhandled_input(e: InputEvent) -> void:
 			_run_last = _cell
 		elif not e.pressed:
 			_run_on = false
+	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed and e.alt_pressed:
+		var alt := true
+		match e.keycode:
+			KEY_0: set_view(0)
+			KEY_1: set_view(1)
+			KEY_2: set_view(2)
+			KEY_3: set_view(3)
+			KEY_M: set_measure(not measure_on)
+			KEY_S:
+				if e.shift_pressed:
+					mirror_here()
+				else:
+					set_mirror(not mirror_on)
+			KEY_F: set_free(not free_place)
+			KEY_D: set_tool("" if tool == "sketch" else "sketch")
+			_: alt = false
+		if alt:
+			get_viewport().set_input_as_handled()
+			return
+	if e is InputEventKey and e.pressed and not e.ctrl_pressed and not e.alt_pressed and free_place \
+			and not _painting and e.keycode in [KEY_PAGEUP, KEY_PAGEDOWN]:
+		move_work_plane(1 if e.keycode == KEY_PAGEUP else -1)
+		get_viewport().set_input_as_handled()
+		return
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		var mine := true
 		match e.keycode:
@@ -665,13 +773,6 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_J: toggle_point_here()
 			KEY_F10: show_help(not _help.visible)
 			KEY_F2: _toggle_panel()
-			KEY_F6: set_view((view + 1) % VIEWS.size())
-			KEY_F7: set_measure(not measure_on)
-			KEY_F8:
-				if e.shift_pressed:
-					mirror_here()
-				else:
-					set_mirror(not mirror_on)
 			KEY_HOME: zoom(0.85)
 			KEY_END: zoom(1.0 / 0.85)
 			_: mine = false
@@ -694,14 +795,20 @@ func _process(dt: float) -> void:
 	if _outlines_dirty:
 		_draw_outlines()
 	_poll_export()
+	if _autosave_dirty and not _no_autosave and Time.get_ticks_msec() > _autosave_at:
+		_autosave_dirty = false
+		_autosave_at = Time.get_ticks_msec() + 4000
+		recipe.save_to(AUTOSAVE)
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
 	_part_label.position = Vector2((get_viewport().get_visible_rect().size.x - _part_label.size.x) * 0.5,
 			get_viewport().get_visible_rect().size.y - 104)
 	var vp := get_viewport().get_visible_rect().size
-	_ruler.position = Vector2(12, vp.y - 210)
 	_ruler.text = ruler_text()
+	# Stacked on the part label, which sits on the hotbar: measured, not guessed.
+	_ruler.reset_size()
+	_ruler.position = Vector2(12, vp.y - 136 - _ruler.size.y)
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
 
@@ -718,6 +825,12 @@ func ruler_text() -> String:
 				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
 				d.y * PRINT_MM_PER_PLATE * REAL_PER_PRINT])
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
+	if free_place:
+		modes.append("FREE on the %s plane at %s (PgUp/PgDn)" % [work_plane, _plane_at_text()])
+	else:
+		modes.append("aiming at studs (Alt F frees)")
+	if tool == "sketch":
+		modes.append("SKETCH %s: draw on the %s plane, %d studs thick" % [part_names[part_sel], work_plane, width_of(part_names[part_sel])])
 	if mirror_on:
 		modes.append("mirror at %s studs across" % _num(mirror_z))
 	if measure_on:
@@ -738,7 +851,7 @@ func ruler_text() -> String:
 		lines.append(_export_check)
 	if measure_on and measure_points.size() == 2:
 		lines.append(measure_text(measure_points[0], measure_points[1]).replace("\n", "   "))
-	lines.append(KEYS_TEXT)
+	lines.append("F10: how to start, and every key")
 	return "\n".join(lines)
 
 
@@ -864,6 +977,25 @@ func _build_panel(layer: CanvasLayer) -> void:
 	rm.pressed.connect(func() -> void: remove_photo(photo_sel))
 	bottom.add_child(rm)
 
+	var depth := HBoxContainer.new()
+	box.add_child(depth)
+	for b in [["behind the build", "behind"], ["through its middle", "middle"]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		var where: String = b[1]
+		btn.pressed.connect(func() -> void:
+			if photo_sel >= 0:
+				set_photo_depth(photo_sel, where))
+		depth.add_child(btn)
+	var grid_box := CheckBox.new()
+	grid_box.text = "stud grid on the photo (side)"
+	grid_box.toggled.connect(func(on: bool) -> void:
+		photo_grid = on
+		_draw_photo_grid())
+	box.add_child(grid_box)
+	var hint := Label.new()
+	hint.text = "Alt + drag moves the photo.  Alt / Ctrl + wheel zooms a flat view."
+	box.add_child(hint)
 	_photo_info = Label.new()
 	box.add_child(_photo_info)
 
@@ -879,12 +1011,13 @@ func _build_panel(layer: CanvasLayer) -> void:
 	_length_dialog = AcceptDialog.new()
 	_length_dialog.title = "Real length between the two points"
 	_length_edit = LineEdit.new()
-	_length_edit.placeholder_text = "mm on the real thing, e.g. 852"
+	_length_edit.placeholder_text = "852 (mm on the real thing) or 53s (studs here)"
 	_length_dialog.add_child(_length_edit)
 	_length_dialog.confirmed.connect(func() -> void:
 		var pts: Array = _length_dialog.get_meta("points", [])
-		if pts.size() == 2 and _length_edit.text.is_valid_float():
-			calibrate(photo_sel, pts[0], pts[1], float(_length_edit.text)))
+		var mm := length_mm(_length_edit.text)
+		if pts.size() == 2 and mm > 0.0:
+			calibrate(photo_sel, pts[0], pts[1], mm))
 	layer.add_child(_length_dialog)
 	_refresh_panel()
 
@@ -960,7 +1093,7 @@ func _store_asset_meta() -> void:
 				"turn": g.turn, "opacity": g.opacity})
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
-			"smooth": Array(smooth_parts), "muzzle": muzzle_end}
+			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate()}
 
 
 func _restore_asset_meta() -> void:
@@ -977,6 +1110,10 @@ func _restore_asset_meta() -> void:
 		points.append(q)
 	_draw_points()
 	smooth_parts = PackedStringArray(a.get("smooth", []))
+	part_width = {}
+	var widths: Dictionary = a.get("part_width", {})
+	for k in widths:
+		part_width[k] = int(widths[k])
 	muzzle_end = String(a.get("muzzle", "-x"))
 	for g in a.get("guides", []):
 		var i := load_guide(String(g.path), float(g.real_mm))
@@ -1073,6 +1210,8 @@ func select_part(i: int) -> void:
 	part_sel = posmod(i, part_names.size())
 	_load_toolbar(part_names[part_sel])
 	_outlines_dirty = true
+	if _width_spin != null:
+		_width_spin.set_value_no_signal(width_of(part_names[part_sel]))
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(toolbars))
@@ -1108,6 +1247,9 @@ func _after_edit() -> void:
 	_reconcile_parts()
 	_store_asset_meta()
 	_outlines_dirty = true
+	_autosave_dirty = true
+	if recipe.size() == 0:
+		_ensure_start_brick.call_deferred()
 
 
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
@@ -1308,7 +1450,12 @@ func fill_parts() -> Array:
 ## from the other corner to the one under it, so seams do not stack.
 ## Returns [[archetype name, min cell]].
 func pack_cells(cells: Dictionary, random: bool = false) -> Array:
-	var left := cells.duplicate()
+	# Cells something is already built in are not the fill's: packed as if empty, the big
+	# parts that hit what is there are refused when laid, and leave holes round it.
+	var left := {}
+	for c in cells:
+		if not world.is_solid(chunk, c):
+			left[c] = true
 	var parts := fill_parts()
 	var out := []
 	if left.is_empty():
@@ -1445,7 +1592,9 @@ func set_tool(t: String) -> void:
 	_select_box.visible = t == "select"
 	if t == "" :
 		selection.clear()
-	_shape_box.get_parent().get_parent().visible = t in ["shape", "select"]
+	_sketch.clear()
+	_shape_box.get_parent().get_parent().visible = t in ["shape", "select", "sketch"]
+	_sketch_box.visible = t == "sketch"
 	_outlines_dirty = true
 
 
@@ -1703,6 +1852,13 @@ func _draw_outlines() -> void:
 func _draw_tool() -> void:
 	var im := ImmediateMesh.new()
 	_tool_lines.mesh = im
+	if tool == "sketch" and _sketch.size() >= 2:
+		im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+		for q in _sketch + [_sketch[0]]:
+			im.surface_set_color(Color(1.0, 0.9, 0.2))
+			im.surface_add_vertex(_sketch_world(q))
+		im.surface_end()
+		return
 	if not _dragging:
 		return
 	var a := _drag_from
@@ -1734,18 +1890,22 @@ static func _box_lines(im: ImmediateMesh, lo: Vector3, hi: Vector3, col: Color) 
 
 func _build_phase3(layer: CanvasLayer) -> void:
 	_rng.seed = 1
-	for which in ["tool", "outline"]:
+	for which in ["tool", "outline", "plane", "photo"]:
 		var mi := MeshInstance3D.new()
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.vertex_color_use_as_albedo = true
 		mat.no_depth_test = which == "tool"
+		if which in ["plane", "photo"]:
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mi.material_override = mat
 		add_child(mi)
-		if which == "tool":
-			_tool_lines = mi
-		else:
-			_outline_lines = mi
+		match which:
+			"tool": _tool_lines = mi
+			"outline": _outline_lines = mi
+			"plane": _plane_lines = mi
+			"photo": _photo_lines = mi
+	_draw_work_plane()
 
 	_tool_panel = PanelContainer.new()
 	_tool_panel.visible = false
@@ -1780,6 +1940,30 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	hs.value = shape_plates
 	hs.value_changed.connect(func(v: float) -> void: shape_plates = int(v))
 	hrow.add_child(hs)
+
+	_sketch_box = VBoxContainer.new()
+	box.add_child(_sketch_box)
+	var t4 := Label.new()
+	t4.text = "Sketch (Alt D): draw an outline on the working plane"
+	_sketch_box.add_child(t4)
+	var wrow := HBoxContainer.new()
+	_sketch_box.add_child(wrow)
+	var wl := Label.new()
+	wl.text = "this part's thickness, studs"
+	wrow.add_child(wl)
+	_width_spin = SpinBox.new()
+	_width_spin.min_value = 1
+	_width_spin.max_value = 20
+	_width_spin.value = 3
+	_width_spin.value_changed.connect(func(v: float) -> void:
+		part_width[part_names[part_sel]] = int(v)
+		_store_asset_meta())
+	wrow.add_child(_width_spin)
+	var sk_fill := OptionButton.new()
+	sk_fill.add_item("clean: fewest bricks")
+	sk_fill.add_item("random: mixed sizes")
+	sk_fill.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
+	_sketch_box.add_child(sk_fill)
 
 	_select_box = VBoxContainer.new()
 	box.add_child(_select_box)
@@ -2070,6 +2254,9 @@ func export_sheet() -> Dictionary:
 			_loft_spec(spec, ids, along, up)
 		else:
 			spec["kind"] = "placed"
+			# Built muzzle-right, the gun's frame runs the other way: a shaped part is drawn
+			# mirrored along the gun to match.
+			spec["mirror_along"] = muzzle_end == "+x"
 			var bricks := []
 			for i in ids:
 				var size := BrickPalette.size_of(recipe.part_of(i))
@@ -2129,6 +2316,15 @@ func _loft_spec(spec: Dictionary, ids: Array, along: Callable, up: Callable) -> 
 			for edge in ([x, x + 1] if x == lo.x or x == hi.x else [x + 0.5]):
 				stations.append({"t": along.call(float(edge)), "a": a, "w": w, "round": 0.45})
 		spec["axis"] = "x"
+		# Studs on both flat sides, wherever a whole stud fits (the reference's furniture has
+		# them); a grip, held in the hand, gets none.
+		if spec.slot != "grip":
+			var x0: float = along.call(float(lo.x))
+			var x1: float = along.call(float(hi.x + 1))
+			var span := [minf(x0, x1), maxf(x0, x1)]
+			var zs := [up.call(float(lo.y)), up.call(float(hi.y + 1))]
+			spec["studs"] = [{"face": "+y", "x": span, "z": zs, "shape": "all"},
+					{"face": "-y", "x": span, "z": zs, "shape": "all"}]
 	else:
 		for y in range(lo.y, hi.y + 1):
 			var xs := []
@@ -2245,16 +2441,18 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 
 [font_size=18][b]Getting started[/b][/font_size]
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
-[b]2. Look at it flat.[/b]  F6 until the side view. Home / End zoom, WASD moves. ESC frees the mouse for the panels.
+[b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt or Ctrl + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  LMB places, hold LMB and move to lay a row, RMB deletes, R turns, F flips. F8 mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. LMB places, hold LMB and move to lay a row, RMB deletes, R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw its outline on the working plane: it fills with bricks, and edges at a slope's or curve's pitch get slopes and curves (flipped under bottom edges). Draw a drum magazine as a circle on the front plane (Alt 3).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
 [b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
 
 [font_size=18][b]Tools[/b][/font_size]
 [b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
-[b]F6[/b] view: perspective, side, top, front   [b]F7[/b] measure: two clicks   [b]F8[/b] mirror (shift F8: plane under the ghost)
+[b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] mirror (Alt shift S: plane under the ghost)
+[b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] sketch an outline   [b]Alt + drag[/b] move a photo
 [b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
 [b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the ghost
 [b]O[/b] section: in a flat view, cut away what is in front   [b]P[/b] outline bricks by part   [b]N[/b] part smooth / bricks
@@ -2263,6 +2461,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [font_size=18][b]Tips[/b][/font_size]
 Build the gun with its muzzle at the low end (left in the side view). Keep it on the mirror plane (the pink outline) so both halves match.
 The panels need a free mouse: ESC, then click. Click the scene again to look around.
+[b]Run it outside the editor, or turn off the editor's game embedding:[/b] F5-F8 belong to the Godot editor (run, run scene, pause, stop) and the workshop's F5 / F9 quick save / load can be taken by it. The build is autosaved every few seconds and comes back next start.
 Exports land in your user folder, [i]asset_exports[/i]. Bought photos and models stay guides only: never exported."""
 
 var _help: PanelContainer
@@ -2331,3 +2530,505 @@ func show_help(on: bool) -> void:
 		var vp := get_viewport().get_visible_rect().size
 		_help.reset_size()
 		_help.position = (vp - _help.get_combined_minimum_size()) * 0.5
+
+
+# ---------------------------------------------------------------------------
+# Round 2: free placement on a working plane
+# ---------------------------------------------------------------------------
+
+func set_free(on: bool) -> void:
+	free_place = on
+	_grid.visible = _grid_on and not on
+	_draw_work_plane()
+
+
+func move_work_plane(d: int) -> void:
+	match work_plane:
+		"side": work_depth += d
+		"top": work_height = clampi(work_height + d, 0, height_plates - 1)
+		"front": work_x = clampi(work_x + d, 0, plate_studs - 1)
+	_draw_work_plane()
+
+
+func _plane_at_text() -> String:
+	match work_plane:
+		"top": return "plate %d" % work_height
+		"front": return "stud %d along" % work_x
+	return "%s studs across" % _num(work_depth)
+
+
+## Where a ray meets the working plane, or null.
+func work_plane_hit(from: Vector3, dir: Vector3) -> Variant:
+	var n := Vector3.BACK
+	var at := work_depth * BrickPalette.STUD_M
+	match work_plane:
+		"top":
+			n = Vector3.UP
+			at = work_height * BrickPalette.PLATE_M
+		"front":
+			n = Vector3.RIGHT
+			at = work_x * BrickPalette.STUD_M
+	var denom := n.dot(dir)
+	if absf(denom) < 1e-5:
+		return null
+	var t := (at - n.dot(from)) / denom
+	return from + dir * t if t > 0.0 else null
+
+
+## The cell a part of `size` takes with its middle under `hit`, on the working plane.
+func free_cell(hit: Vector3, size: Vector3i) -> Vector3i:
+	var x := int(floor(hit.x / BrickPalette.STUD_M - size.x * 0.5 + 0.5))
+	var y := int(floor(hit.y / BrickPalette.PLATE_M - size.y * 0.5 + 0.5))
+	var z := int(floor(hit.z / BrickPalette.STUD_M - size.z * 0.5 + 0.5))
+	match work_plane:
+		"side": z = int(round(work_depth - size.z * 0.5))
+		"top": y = work_height
+		"front": x = int(round(work_x - size.x * 0.5))
+	return _clamp_cell(Vector3i(x, y, z), size)
+
+
+## Free placement: no stud is aimed at; the ghost goes where the cursor meets the plane,
+## mid-air or not, flipped or not. Only an overlap stops it.
+func _aim() -> void:
+	if not free_place:
+		super._aim()
+		return
+	var ray := _mouse_ray()
+	_lock = {}
+	_snapped = {}
+	_stud = NO_STUD
+	_studs = []
+	_frame = 0
+	var hit = work_plane_hit(ray[0], ray[1])
+	if hit != null:
+		_cell = free_cell(hit, BrickPalette.size_of(_archetype_name()))
+
+
+func _draw_work_plane() -> void:
+	if _plane_lines == null:
+		return
+	var im := ImmediateMesh.new()
+	_plane_lines.mesh = im
+	if not free_place:
+		return
+	var s := BrickPalette.STUD_M
+	var p := BrickPalette.PLATE_M
+	var span := plate_studs * s
+	var tall := height_plates * p
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var line := func(a: Vector3, b: Vector3, strong: bool) -> void:
+		var col := Color(1, 1, 1, 0.16 if strong else 0.05)
+		im.surface_set_color(col)
+		im.surface_add_vertex(a)
+		im.surface_set_color(col)
+		im.surface_add_vertex(b)
+	match work_plane:
+		"side":
+			var z := work_depth * s
+			for i in plate_studs + 1:
+				line.call(Vector3(i * s, 0, z), Vector3(i * s, tall, z), i % 4 == 0)
+			for j in range(0, height_plates + 1, 3):
+				line.call(Vector3(0, j * p, z), Vector3(span, j * p, z), j % 12 == 0)
+		"top":
+			var y := work_height * p
+			for i in plate_studs + 1:
+				line.call(Vector3(i * s, y, 0), Vector3(i * s, y, span), i % 4 == 0)
+				line.call(Vector3(0, y, i * s), Vector3(span, y, i * s), i % 4 == 0)
+		"front":
+			var x := work_x * s
+			for i in plate_studs + 1:
+				line.call(Vector3(x, 0, i * s), Vector3(x, tall, i * s), i % 4 == 0)
+			for j in range(0, height_plates + 1, 3):
+				line.call(Vector3(x, j * p, 0), Vector3(x, j * p, span), j % 12 == 0)
+	im.surface_end()
+
+
+# ---------------------------------------------------------------------------
+# Round 2: a floating build area, a starting brick, autosave
+# ---------------------------------------------------------------------------
+
+## No floor here: a build floats, and starts from one brick.
+func _lay_baseplate() -> void:
+	pass
+
+
+func _baseplate_blocks() -> int:
+	return 0
+
+
+## The brick a build starts from: a 1x4 along the gun on the mirror plane, mid-air.
+func _ensure_start_brick() -> void:
+	if not auto_start_brick or recipe.size() > 0 or _loading:
+		return
+	var arch := ""
+	for yaw in 2:
+		var name := BrickPalette.variant_name("brick_1x4", yaw, false)
+		if BrickPalette.size_of(name).x == 4:
+			arch = name
+	if arch == "":
+		return
+	var keep := _batch
+	_batch = true
+	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, int(floor(mirror_z))))
+	_batch = keep
+	_after_edit()
+	_edit_groups.clear()
+
+
+func _look_at_build() -> void:
+	if view != 0:
+		return
+	var c := build_centre()
+	_camera.global_position = c + Vector3(-5.0, 3.0, 8.0)
+	_camera.look_at(c, Vector3.UP)
+
+
+func _restore_autosave() -> void:
+	var r := BuildRecipe.load_from(AUTOSAVE)
+	if r == null or not r.has_content():
+		return
+	_load_recipe(r)
+	_current_path = ""
+	print("[asset workshop] the last session's build is back (autosave). Ctrl N starts a new one.")
+
+
+# ---------------------------------------------------------------------------
+# Round 2: photos -- a stud grid, depth, dragging, calibrating in studs
+# ---------------------------------------------------------------------------
+
+## "852" is mm on the real thing; "53s" or "53 studs" is studs here (16 mm each).
+static func length_mm(text: String) -> float:
+	var t := text.strip_edges().to_lower()
+	var studs := t.ends_with("s") or t.contains("stud")
+	t = t.replace("studs", "").replace("stud", "").rstrip("s").strip_edges()
+	if not t.is_valid_float():
+		return -1.0
+	return float(t) * (PRINT_MM_PER_STUD * REAL_PER_PRINT if studs else 1.0)
+
+
+## Put a side photo just behind the build, or through the middle of it.
+func set_photo_depth(i: int, where: String) -> void:
+	var p: Dictionary = photos[i]
+	if p.plane != "side":
+		return
+	var z := mirror_z * BrickPalette.STUD_M
+	if where == "behind" and recipe.size() > 0:
+		var b := recipe.bounds()
+		z = (b[0] as Vector3i).z * BrickPalette.STUD_M - BrickPalette.STUD_M * 0.5
+	p.centre = Vector3((p.centre as Vector3).x, (p.centre as Vector3).y, z)
+	_fit_photo(p)
+	_store_asset_meta()
+
+
+## Alt + LMB on the selected photo drags it about its plane.
+func _photo_input(e: InputEvent) -> bool:
+	if photo_sel < 0:
+		return false
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed and e.alt_pressed:
+			var ray := _mouse_ray()
+			var hit = ray_on_photo(photo_sel, ray[0], ray[1])
+			if hit == null:
+				return false
+			_photo_drag = [hit, photos[photo_sel].centre]
+			return true
+		if not e.pressed and _photo_drag != null:
+			_photo_drag = null
+			_store_asset_meta()
+			return true
+	if e is InputEventMouseMotion and _photo_drag != null:
+		var ray := _mouse_ray()
+		var hit = ray_on_photo(photo_sel, ray[0], ray[1])
+		if hit != null:
+			var p: Dictionary = photos[photo_sel]
+			p.centre = (_photo_drag[1] as Vector3) + ((hit as Vector3) - (_photo_drag[0] as Vector3))
+			_fit_photo(p)
+		return true
+	return false
+
+
+## Alt or Ctrl + wheel in a flat view: zoom about the point under the cursor.
+func _zoom_input(e: InputEvent) -> bool:
+	if view == 0 or not (e is InputEventMouseButton) or not e.pressed:
+		return false
+	if not (e.alt_pressed or e.ctrl_pressed):
+		return false
+	if e.button_index != MOUSE_BUTTON_WHEEL_UP and e.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+		return false
+	var ray := _mouse_ray()
+	zoom_at(ray[0], 0.85 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 0.85)
+	return true
+
+
+## Zoom a flat view by `by`, keeping the point at `under` (on the camera's own plane)
+## where it is on the screen.
+func zoom_at(under: Vector3, by: float) -> void:
+	var n := -_camera.global_transform.basis.z
+	var cam := _camera.global_position
+	var d := cam - under
+	var flat := d - n * d.dot(n)
+	zoom(by)
+	_camera.global_position = under + flat * by + n * d.dot(n)
+
+
+func _draw_photo_grid() -> void:
+	var im := ImmediateMesh.new()
+	_photo_lines.mesh = im
+	if not photo_grid or photo_sel < 0 or photo_sel >= photos.size():
+		return
+	var p: Dictionary = photos[photo_sel]
+	if p.plane != "side" or not bool(p.shown):
+		return
+	var size := Vector2(p.px) * float(p.mpp)
+	var c: Vector3 = p.centre
+	var x0 := c.x - size.x * 0.5
+	var x1 := c.x + size.x * 0.5
+	var y0 := c.y - size.y * 0.5
+	var y1 := c.y + size.y * 0.5
+	var z := c.z + 0.01
+	var s := BrickPalette.STUD_M
+	var brick := BrickPalette.PLATE_M * 3.0
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for i in range(int(ceil(x0 / s)), int(floor(x1 / s)) + 1):
+		var col := Color(1.0, 0.95, 0.3, 0.75 if i % 10 == 0 else 0.3)
+		im.surface_set_color(col)
+		im.surface_add_vertex(Vector3(i * s, y0, z))
+		im.surface_set_color(col)
+		im.surface_add_vertex(Vector3(i * s, y1, z))
+	for j in range(int(ceil(y0 / brick)), int(floor(y1 / brick)) + 1):
+		var col := Color(1.0, 0.95, 0.3, 0.3)
+		im.surface_set_color(col)
+		im.surface_add_vertex(Vector3(x0, j * brick, z))
+		im.surface_set_color(col)
+		im.surface_add_vertex(Vector3(x1, j * brick, z))
+	im.surface_end()
+
+
+# ---------------------------------------------------------------------------
+# Round 2: sketch -- draw an outline, fill it with bricks
+# ---------------------------------------------------------------------------
+
+func width_of(part: String) -> int:
+	return int(part_width.get(part, 3))
+
+
+func _sketch_input(e: InputEvent) -> bool:
+	if tool != "sketch":
+		return false
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed:
+			_sketch.clear()
+			_sketch_add()
+		else:
+			if _sketch.size() >= 3:
+				sketch_fill(_sketch)
+			_sketch.clear()
+		return true
+	if e is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not _sketch.is_empty():
+		_sketch_add()
+		return true
+	return false
+
+
+func _sketch_add() -> void:
+	var ray := _mouse_ray()
+	var hit = work_plane_hit(ray[0], ray[1])
+	if hit == null:
+		return
+	var q := sketch_point(hit)
+	if _sketch.is_empty() or q.distance_to(_sketch.back()) > 0.3:
+		_sketch.append(q)
+
+
+## A point of the working plane in the sketch's own two numbers: across the plane and up
+## it. Side: studs along, plates up. Front: studs across, plates up. Top: studs along,
+## studs across.
+func sketch_point(at: Vector3) -> Vector2:
+	match work_plane:
+		"front": return Vector2(at.z / BrickPalette.STUD_M, at.y / BrickPalette.PLATE_M)
+		"top": return Vector2(at.x / BrickPalette.STUD_M, at.z / BrickPalette.STUD_M)
+	return Vector2(at.x / BrickPalette.STUD_M, at.y / BrickPalette.PLATE_M)
+
+
+func _sketch_world(q: Vector2) -> Vector3:
+	var s := BrickPalette.STUD_M
+	var pl := BrickPalette.PLATE_M
+	match work_plane:
+		"front": return Vector3(work_x * s, q.y * pl, q.x * s)
+		"top": return Vector3(q.x * s, work_height * pl, q.y * s)
+	return Vector3(q.x * s, q.y * pl, work_depth * s)
+
+
+## Fill an outline drawn on the working plane with bricks for the current part, as one
+## undo. Its thickness is the part's, in studs, centred on the plane: across the gun on
+## the side plane, along it on the front plane, and on the top plane upward from the
+## plane, a stud being two and a half plates. Every cell whose middle is inside the
+## outline is filled. On the side and front planes, where an edge climbs a stud at a
+## time the way a catalogue piece does, that piece is laid instead of a staircase: a
+## slope where the edge climbs two plates a stud, a curve where it rounds over three
+## plates in two studs; on top edges the right way up, under bottom edges flipped.
+func sketch_fill(outline: Array) -> int:
+	if outline.size() < 3:
+		return 0
+	var poly := PackedVector2Array(outline)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for q in outline:
+		lo = Vector2(minf(lo.x, q.x), minf(lo.y, q.y))
+		hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
+	var w := width_of(part_names[part_sel])
+	var grid := {}
+	for u in range(int(floor(lo.x)), int(ceil(hi.x))):
+		for v in range(int(floor(lo.y)), int(ceil(hi.y))):
+			if Geometry2D.is_point_in_polygon(Vector2(u + 0.5, v + 0.5), poly):
+				grid[Vector2i(u, v)] = true
+	var pieces := []
+	if work_plane != "top":
+		pieces = edge_pieces(grid)
+	# The cells, in the build's grid.
+	var depth := []
+	match work_plane:
+		"side":
+			var z0 := int(round(work_depth - w * 0.5))
+			for k in w:
+				depth.append(z0 + k)
+		"front":
+			var x0 := int(round(work_x - w * 0.5))
+			for k in w:
+				depth.append(x0 + k)
+		"top":
+			for k in maxi(1, int(round(w * 2.5))):
+				depth.append(work_height + k)
+	var cells := {}
+	for g in grid:
+		if g.y < 0 and work_plane != "top":
+			continue
+		for k in depth:
+			cells[_sketch_cell(g, k)] = true
+	var placements := []
+	for pc in pieces:
+		# A piece over something already built would be refused and leave a hole: its
+		# cells are packed as plain bricks instead.
+		var box := []
+		var clear := true
+		for du in 2:
+			for dv in 3:
+				for k in depth:
+					var c := _sketch_cell(Vector2i(pc.u + du, pc.base + dv), k)
+					box.append(c)
+					if world.is_solid(chunk, c):
+						clear = false
+		if not clear:
+			continue
+		for c in box:
+			cells.erase(c)
+		var k := 0
+		while k < depth.size():
+			var wide := 2 if depth.size() - k >= 2 else 1
+			var at := _sketch_cell(Vector2i(pc.u, pc.base), depth[k])
+			placements.append([edge_variant(pc.kind, wide, pc.rises, pc.under), at])
+			k += wide
+	var laid := 0
+	_batch = true
+	for pk in pack_cells(cells, shape_fill == "random"):
+		if place_named(pk[0], pk[1]):
+			laid += 1
+	for pl in placements:
+		if place_named(pl[0], pl[1]):
+			laid += 1
+	_batch = false
+	_after_edit()
+	_group(laid)
+	return laid
+
+
+## A sketch cell (across the plane, up it) at depth `k`, as a cell of the build. A
+## piece's min corner is its cell at its lowest across-and-up.
+func _sketch_cell(g: Vector2i, k: int) -> Vector3i:
+	match work_plane:
+		"front": return Vector3i(k, g.y, g.x)
+		"top": return Vector3i(g.x, k, g.y)
+	return Vector3i(g.x, g.y, k)
+
+
+## Where catalogue pieces go on the edges of a sketch (Vector2i(across, up) -> true):
+## [{kind: "slope" or "curve", u: its first column, base: its bottom plate, rises: +1
+## if the edge climbs toward +u, under: true for a bottom edge (the piece flipped)}].
+## A bottom edge is a top edge of the sketch turned upside down, so one rule does both.
+static func edge_pieces(grid: Dictionary) -> Array:
+	var out := _top_pieces(grid)
+	var flipped := {}
+	for g in grid:
+		flipped[Vector2i(g.x, -g.y - 1)] = true
+	var used := {}
+	for pc in out:
+		used[pc.u] = true
+		used[pc.u + 1] = true
+	for pc in _top_pieces(flipped, used):
+		# Back the right way up: the flipped box held plates base .. base + 2.
+		pc.base = -pc.base - 3
+		pc.under = true
+		out.append(pc)
+	return out
+
+
+static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}) -> Array:
+	var top := {}
+	for g in grid:
+		top[g.x] = maxi(int(top.get(g.x, -(1 << 30))), g.y + 1)
+	var out := []
+	var used := used_already.duplicate()
+	var us := top.keys()
+	us.sort()
+	# Slopes first: an edge climbing two plates over a stud is a slope's own pitch. Its
+	# low front sits over the lower column, its flat back over the higher.
+	for u in us:
+		if not top.has(u + 1) or used.has(u) or used.has(u + 1):
+			continue
+		var d: int = top[u + 1] - top[u]
+		if absi(d) != 2:
+			continue
+		var low: int = u if d > 0 else u + 1
+		var base: int = top[low] - 1
+		if not (grid.has(Vector2i(u, base)) and grid.has(Vector2i(u + 1, base))):
+			continue
+		out.append({"kind": "slope", "u": u, "base": base, "rises": 1 if d > 0 else -1, "under": false})
+		used[u] = true
+		used[u + 1] = true
+	# Then curves: an end that rounds over -- a column two plates up from nothing (or from
+	# two plates lower), then one more plate -- is a curve's profile, three plates in two
+	# studs from its front edge.
+	for u in us:
+		for dir in [1, -1]:
+			var a: int = u
+			var b: int = u + dir
+			if not top.has(b) or used.has(a) or used.has(b):
+				continue
+			if top[b] - top[a] != 1:
+				continue
+			var before: int = top.get(a - dir, -(1 << 30))
+			if top[a] - before < 2:
+				continue
+			var base: int = top[b] - 3
+			var first := mini(a, b)
+			if not (grid.has(Vector2i(a, base)) and grid.has(Vector2i(b, base)) and grid.has(Vector2i(a, base + 1))):
+				continue
+			out.append({"kind": "curve", "u": first, "base": base, "rises": dir, "under": false})
+			used[a] = true
+			used[b] = true
+	return out
+
+
+## The catalogue piece for an edge: a slope or curve, `wide` studs deep, 2 long across the
+## plane, its low front looking down the edge, flipped under a bottom edge.
+func edge_variant(kind: String, wide: int, rises: int, under: bool) -> String:
+	var part := "%s_%s" % [kind, "1x2" if wide == 1 else "2x2"]
+	var along := Vector3i(1, 0, 0) if work_plane != "front" else Vector3i(0, 0, 1)
+	var want := along * (-1 if rises > 0 else 1)
+	for yaw in 4:
+		var name := BrickPalette.variant_name(part, yaw, under)
+		var size := BrickPalette.size_of(name)
+		var long := size.x if work_plane != "front" else size.z
+		if BrickPalette.front_of(name) == want and long == 2:
+			return name
+	return BrickPalette.variant_name(part, 0, under)

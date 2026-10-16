@@ -43,9 +43,21 @@ real mm, so a part can be built straight from a real gun's numbers.
 | **Instructions** | F10 | a page on how to start and every key; opens on start until its tick box is cleared |
 | **Ruler** | always on | the cell under the cursor and the build's size, in studs/plates, print mm and real mm |
 | **Reference photo** | F2 (panel) | load an image onto a plane -- side, top or front -- behind the build. Calibrate: click two points on it and type the real length between them; the photo scales itself. Move it, set its opacity, hide it, remove it. It is never built on: rays pass through it |
-| **Ortho views** | F6 | perspective, side, top, front, in turn. The flat views line up with the photo planes. Home / End zoom a flat view |
-| **Measure** | F7 | click two points (on bricks, a photo or the floor): the distance in all four units, drawn as a line |
-| **Mirror** | F8 | every brick placed is placed again mirrored across the centre plane (a gun's long axis runs along X; the plane is Z = its middle). The plane sits on the middle of a stud, so an odd width (a 3-stud body) is centred |
+| **Ortho views** | Alt 0-3 | perspective, side, top, front. The flat views line up with the photo planes. Alt or Ctrl + wheel zooms about the cursor, Home / End about the middle |
+| **Measure** | Alt M | click two points (on bricks, a photo or the floor): the distance in all four units, drawn as a line |
+| **Mirror** | Alt S (Alt shift S: plane under the ghost) | every brick placed is placed again mirrored across the centre plane (a gun's long axis runs along X; the plane is Z = its middle). The plane sits on the middle of a stud, so an odd width (a 3-stud body) is centred |
+
+### After the first use (2026-10-15)
+
+| Change | Why |
+|---|---|
+| **No F5-F8.** Views, measure and mirror are on Alt chords | run from the Godot editor, F5-F8 are the editor's (run, run scene, pause, stop): F8 stopped the game and lost a build. The workshop's own F5 / F9 can be taken the same way, so run the scene outside the editor or with the editor's game embedding off |
+| **Autosave** every few seconds to `user://asset_workshop_autosave.json`, loaded on the next start | so a stop or a crash costs seconds. Scripted runs never write it |
+| **Free placement**, on by default (Alt F aims at studs instead) | placing by aiming at studs kept snapping where it was not wanted. The ghost goes where the cursor meets the **working plane** -- the side plane at a depth, the top plane at a height, the front plane at a stud -- mid-air or not, flipped or not; only an overlap stops it. PgUp / PgDn move the plane; a flat view picks its own |
+| **No floor**: a floating build area and a starting brick, laid again whenever the build is empty | a floor got in the way |
+| **Photos**: a stud grid over a side photo, calibrating in studs ("53s") as well as mm, zoom about the cursor, Alt + drag moves the photo, and "behind the build" / "through its middle" | to check a photo is the size meant, and get it next to the build |
+| **Sketch** (Alt D): draw an outline on the working plane -- side, front (a drum is a circle there) or top -- and it is filled with bricks for the current part, as thick as that part is set to be, packed round anything already built. On the side and front planes, an edge climbing two plates a stud gets slopes, an end rounding over three plates in two studs gets a curve; on top edges the right way up, under bottom edges flipped | blocking out by drawing. The catalogue has no piece for an edge shallower or steeper than those, so those stay stepped |
+| The workshop's own key list starts hidden (F1 shows it); F10 has this scene's keys | it covered half the screen |
 
 ### Phase 2 -- build a whole gun split by part
 

@@ -20,7 +20,9 @@ A part is one of these kinds:
   turned   round about a line along the gun, eight-sided: a barrel, a muzzle piece.
   blocks   plain boxes: a small fixed detail.
   placed   bricks exactly as someone laid them (the asset workshop's export): each its
-           part name, min corner and size; studs on every top nothing of the part covers.
+           part name, min corner and size. A plate or brick is its box, with studs on every
+           top nothing of the part covers; a slope, curve or round is its own profile from
+           parts.json, turned as its name says, with its own studs.
 
 Lengths are mm at print size: x along the gun from the muzzle, z up, y across with the centre
 plane at 0. The lattice is the nano grid from (0, 0, 0): stud lines every 4 mm along x and
@@ -189,12 +191,93 @@ def bricks(spec, part, grid):
     return bm
 
 
+_CATALOGUE = None
+
+
+def _catalogue():
+    global _CATALOGUE
+    if _CATALOGUE is None:
+        _CATALOGUE = json.load(open(os.path.join(PARTS_DIR, "parts.json"), encoding="utf-8"))
+    return _CATALOGUE
+
+
+def _orientation(name):
+    """A workshop archetype name -> (catalogue part, quarter turns about up, flipped):
+    `slope_1x2_y3_i` is slope_1x2 turned three times and upside down, `brick_1x4_x` is
+    brick_1x4 turned once (BrickPalette.orientation_of)."""
+    n, flip = (name[:-2], True) if name.endswith("_i") else (name, False)
+    yaw = 0
+    if len(n) > 3 and n[-3:-1] == "_y" and n[-1].isdigit():
+        yaw, n = int(n[-1]), n[:-3]
+    elif n.endswith("_x"):
+        yaw, n = 1, n[:-2]
+    elif n.endswith("_z"):
+        n = n[:-2]
+    return n, yaw, flip
+
+
+def _turn(v, yaw, flip):
+    """A part-local vector in the workshop's axes (x across, y up, z along the part), turned
+    the way BrickPalette.front_of turns a front: `yaw` quarter turns about up, then flipped
+    half a turn about x."""
+    x, y, z = v
+    for _ in range(yaw % 4):
+        x, z = -z, x
+    if flip:
+        y, z = -y, -z
+    return (x, y, z)
+
+
+def _shaped(bm, b, part_name, catalogue_part, yaw, flip, mirror_along, grid):
+    """A shaped part from its catalogue profile, at nano size, into its laid box. Returns
+    its studs as [at, normal] in the gun's frame."""
+    cat = _catalogue()[catalogue_part]
+    k = grid["stud_pitch"] / 8.0          # the catalogue is in full-size mm
+    w, h, l = (c * k for c in cat["grid_mm"])
+    centre_local = (w * 0.5, h * 0.5, l * 0.5)
+    lo = b["min_mm"]
+    sx, sy, sz = b["size"]
+    centre = (lo[0] + sx * grid["stud_pitch"] * 0.5, lo[1] + sy * grid["stud_pitch"] * 0.5,
+              lo[2] + sz * grid["plate"] * 0.5)
+
+    def place(p):
+        d = _turn((p[0] - centre_local[0], p[1] - centre_local[1], p[2] - centre_local[2]), yaw, flip)
+        # Workshop (x along the gun, y up, z across) to the gun's (along, across, up).
+        return (centre[0] + (-d[0] if mirror_along else d[0]), centre[1] + d[2], centre[2] + d[1])
+
+    for prof in cat["profiles"]:
+        pts = [(a * k, c * k) for a, c in prof["points_mm"]]
+        e0, e1 = (v * k for v in prof["extrude_mm"])
+        axis = prof["extrude_axis"]
+
+        def at(a, c, e):
+            if prof["plane"] == "zy":
+                return (e, c, a)
+            if prof["plane"] == "xy":
+                return (a, c, e)
+            return (a, e, c)       # "xz", extruded up
+
+        ring0 = [place(at(a, c, e0)) for a, c in pts]
+        ring1 = [place(at(a, c, e1)) for a, c in pts]
+        faces = [ring0, list(reversed(ring1))]
+        n = len(pts)
+        for i in range(n):
+            faces.append([ring0[i], ring0[(i + 1) % n], ring1[(i + 1) % n], ring1[i]])
+        for f in faces:
+            bm.faces.new([bm.verts.new(v) for v in f])
+    studs = []
+    if not flip:
+        for sxz in cat["studs_top_xz_mm"]:
+            studs.append([place((sxz[0] * k, h, sxz[1] * k)), [0.0, 0.0, 1.0]])
+    return studs
+
+
 def placed(spec, part, grid):
     """Bricks as they were laid. `bricks` are {part, min_mm: [along, across, up] of the min
-    corner, size: [studs along, studs across, plates up]}. Shaped parts are drawn as their
-    box for now."""
+    corner, size: [studs along, studs across, plates up]}."""
     pitch, plate = grid["stud_pitch"], grid["plate"]
     bm = bmesh.new()
+    shaped_studs = []
     gap = pitch * 0.012
     cells = {}
     boxes = []
@@ -209,8 +292,16 @@ def placed(spec, part, grid):
                     cells[(round(lo[0] / pitch) + i, round(lo[1] / pitch * 2) / 2 + j, round(lo[2] / plate) + k)] = len(boxes) - 1
     part["bricks"] = []
     for n, (lo, hi, sx, sy, sz) in enumerate(boxes):
+        name = spec["bricks"][n]["part"]
+        part["bricks"].append({"part": name, "min_mm": lo, "size": [sx, sy, sz]})
+        base, yaw, flip = _orientation(name)
+        cat = _catalogue().get(base)
+        if cat is not None and cat.get("profiles"):
+            for at, normal in _shaped(bm, spec["bricks"][n], name, base, yaw, flip,
+                                      spec.get("mirror_along", False), grid):
+                part["studs"].append({"at": [round(c, 4) for c in at], "normal": normal, "on": "top"})
+            continue
         _box(bm, [lo[0] + gap, lo[1] + gap, lo[2]], [hi[0] - gap, hi[1] - gap, hi[2] - gap * 0.4])
-        part["bricks"].append({"part": spec["bricks"][n]["part"], "min_mm": lo, "size": [sx, sy, sz]})
         top = round(lo[2] / plate) + sz
         for i in range(sx):
             for j in range(sy):
@@ -568,7 +659,9 @@ def check(doc, std, grid):
                 # wide has a stud on the centre plane, an even one has it between two.
                 good = good and whole(2.0 * y / pitch) and whole(z / plate)
             else:
-                good = good and whole(y / tick) and whole((z - s["z0"]) / pitch - 0.5) and whole(s["z0"] / plate)
+                # A side's plane is on a tick, or on the half-stud line a part an odd number of
+                # studs wide has its sides on.
+                good = good and (whole(y / tick) or whole(2.0 * y / pitch))                     and whole((z - s["z0"]) / pitch - 0.5) and whole(s["z0"] / plate)
             if not good:
                 off.append(part["name"])
     ok("every stud is on the lattice (%d studs)" % count, not off, ", ".join(sorted(set(off))))
@@ -633,7 +726,9 @@ def render(prefix, doc, objects, lo, hi) -> None:
     sc.collection.objects.link(cam)
     sc.camera = cam
     centre = Vector([(lo[k] + hi[k]) * 0.5 for k in range(3)])
-    long = hi[0] - lo[0]
+    # Framed to its length or its height, whichever fills the picture first: a tall build
+    # framed by length alone ran off the top and bottom.
+    long = max(hi[0] - lo[0], (hi[2] - lo[2]) * 2200.0 / 900.0 * 1.1)
 
     def shoot(tag, d, at, scale, res=(2200, 900)):
         d = d.normalized()
