@@ -31,6 +31,8 @@ brightness by print order, the seam marked):
 | The underside | OPEN. A 1x1: a rim alone. A 1xN: a rim and solid pins between the studs. 2xN and up: a diamond round each inside corner of the stud grid, ribs along the grid lines out to the rim | `ps_underside`, `under_*`; the hollow darkened (`under_cavity`) |
 | Layer to layer | no two alike | `layer_wobble` (shade) and `layer_relief_wobble` (how proud), per layer, per face |
 | The hollow's depth | about 2 mm under a plate, 8 under a brick | the view ray walked up into it six steps (`ps_under_sd`), a wall met on the way seen as one (`under_depth` 0.12, `under_wall`); flat past `under_depth_range` |
+| A bevel | printed with the rest: a vertical edge's has the side's layers across it, a top or bottom edge's is a 45-degree staircase | facets counted up the height and stair-stepped (`ps_stairs`); they were left unprinted, smooth strips |
+| A top line's profile | ironed flat by the nozzle, a narrow groove between lines | `ps_beads`: a top's slope is all at its edges (|x|^4); a side's stays round (a sine) |
 | Slopes, cheese, rounds, arches, curves | the same 57 layers; a slope is a staircase of them -- risers and treads, wide terraces on a shallow one | layers counted up the part's height (an authored surface has no face rectangle to count in, and had NO layers until 2026-10-16); `ps_stairs`: of each layer's band, the riser takes 1 - n.y^2, the tread n.y^2 (`stair_strength`) |
 
 ## 2.1 Parts that are not boxes

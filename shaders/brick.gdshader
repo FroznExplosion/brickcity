@@ -88,7 +88,7 @@ uniform float chamfer_fade_end = 55.0;
 // the part the mould polished. Dropping roughness inside the band puts a
 // specular line along every edge, which is most of what says "plastic" rather
 // than "painted box".
-uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.45;
+uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.7;
 // On a mesh with REAL chamfer geometry (BrickWorld's chamfered bands; the node
 // sets geo_bevel = 1) the drawn seam and the shaded chamfer fade IN with
 // distance, as terrain.gdshader's do: none inside outline_blend_begin, where
@@ -111,7 +111,7 @@ uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.45;
 instance uniform float geo_bevel = 0.0;
 uniform float outline_blend_begin = 3.0;
 uniform float outline_blend_end = 9.0;
-uniform float groove_darken : hint_range(0.0, 1.0) = 0.6;    // 1.0 = invisible
+uniform float groove_darken : hint_range(0.0, 1.0) = 0.78;   // 1.0 = invisible
 
 // The printed surface -- layer lines, top and bottom toolpaths, the finish of
 // each face, the bed, printed or injection moulded -- is in
@@ -304,7 +304,12 @@ void fragment() {
     float print_rough = 0.0;
     vec3 aniso_dir = vec3(0.0);
     float aniso = 0.0;
-    if (print_lines_enabled && ps_printed(mat) && v_face.x > 0.0 && v_face.y > 0.0) {  // not a facet
+    // A FACET too: a printed brick's bevelled edge is printed like the rest
+    // of it -- a vertical edge's bevel has the side's layers running across
+    // it, a top or bottom edge's is a 45-degree staircase of them. Counted
+    // up the height, as an authored surface's: a plate is a whole number of
+    // layers, so they line up with the faces either side.
+    if (print_lines_enabled && ps_printed(mat) && (facet || (v_face.x > 0.0 && v_face.y > 0.0))) {
         float t;
         float junction = 0.0;
         float join = 0.0;
@@ -318,7 +323,12 @@ void fragment() {
         // boxes count in UV); a plate is a whole number of layers, so the
         // wrap is invisible. Its flat top and bottom go by `d`, its distance
         // to its own edges, as a box's do by their rectangle.
-        if (authored) {
+        if (facet) {
+            float wrap = PS_PLATE * 64.0;
+            t = (v_local.y - floor(v_local.y / wrap) * wrap) / ps_layer(mat);
+            stairs = abs(v_local_normal.y) < 0.995 ? 1.0 : 0.0;
+            bead_face = 0;
+        } else if (authored) {
             float ny = v_local_normal.y;
             if (ny > 0.995) {
                 // A flat top: the walls round its outline, then the
@@ -427,7 +437,7 @@ void fragment() {
         if (face == 2 && authored) {
             albedo *= mix(under_cavity, 1.0, solid);
             print_rough += (1.0 - solid) * 0.35;
-        } else if (face == 2) {
+        } else if (face == 2 && !facet) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
@@ -463,7 +473,7 @@ void fragment() {
             albedo *= mix(shade, 1.0, solid);
             print_rough += (1.0 - solid) * 0.35;
         }
-        if (face == 0 && !authored && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
+        if (face == 0 && !authored && !facet && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
             // The Z seam, on the part's low corner in X and Z: a face whose
             // along-axis starts there (UV 0) has it just past the bevel.
             vec3 sm = ps_seam(v_uv.x, chamfer_width + zseam_width, t, seed);

@@ -266,7 +266,17 @@ void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, fl
         float relief_k = resolved * resolved;
         // Where two beads are one path turning round there is no valley
         // between them, so no ridge either side of one.
-        float ridge = sin(ph * PS_TAU) * mix(1.0, 0.25, join);
+        // The bead's profile. A side's layer is a squashed cylinder: round,
+        // a sine's slope. A top's line is IRONED by the nozzle passing over
+        // it -- flat across its middle, turning down only into the narrow
+        // groove beside the next -- so its slope is all at its edges: the
+        // sine had every top rippling like corrugated sheet.
+        float ridge = sin(ph * PS_TAU);
+        if (face != 0) {
+            float x = fract(ph + 0.5) * 2.0 - 1.0;   // -1..1 across, 0 the bead's middle
+            ridge = sign(x) * pow(abs(x), 4.0);
+        }
+        ridge *= mix(1.0, 0.25, join);
         if (face == 0) {
             // This layer's own height of bead: the Z variation.
             float h = bm_hash(vec2(floor(t), seed * 53.0 + 7.0));
