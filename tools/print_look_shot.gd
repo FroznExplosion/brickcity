@@ -33,6 +33,7 @@ const VIEWS := [
 	["tops", Vector3(6.2, 1.25, 5.9), Vector3(6.2, 0.42, 3.9)],
 	["tops_close", Vector3(5.6, 0.9, 4.1), Vector3(5.6, 0.42, 3.4)],
 	["seam", Vector3(-0.42, 0.3, -0.3), Vector3(0.05, 0.2, 0.05)],
+	["corner", Vector3(6.6, 0.62, 3.85), Vector3(6.3, 0.44, 3.5)],
 	["shapes", Vector3(2.3, 1.1, 8.6), Vector3(2.3, 0.25, 6.0)],
 	["shapes_close", Vector3(1.0, 0.75, 7.0), Vector3(0.8, 0.2, 6.0)],
 	["arch_close", Vector3(5.95, 0.4, 7.1), Vector3(5.95, 0.25, 5.75)],
@@ -107,6 +108,11 @@ func _build() -> void:
 	]
 	for f in field:
 		w.place_block(c, f[1], pal[f[0]], f[2])
+	# Two wall bricks standing on that floor, side by side: the foot of a wall,
+	# a wall seam coming down to it, a floor seam running up to it -- the
+	# inside corner, seen from a hand's breadth (corner view).
+	w.place_block(c, Vector3i(14, 3, 8), pal["brick_2x4_x"], 2)
+	w.place_block(c, Vector3i(18, 3, 8), pal["brick_2x4_x"], 2)
 	# A row of the parts that are not boxes -- authored surfaces, every one:
 	# slopes, a cheese, a round brick, a curve, an arch.
 	var x := 0
