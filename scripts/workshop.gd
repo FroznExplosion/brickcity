@@ -2045,12 +2045,20 @@ func _restud(frame: int, parent: MeshInstance3D) -> void:
 ## The extension draws top and bottom studs only. Without these a bracket looks
 ## exactly like a plain brick, and a player has no way to see that it is the
 ## part to build sideways off, or where.
+##
+## Run on every edit over every brick, so a brick whose part has no side studs
+## (nearly all of them) is passed over on its archetype alone.
 func _side_stud_instances(frame_chunk: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	var fi := asm.frames.find(frame_chunk)
 	var inv := world.get_chunk_transform(frame_chunk).affine_inverse()
 	for at in _placed_at:
 		if int(at[0]) != fi or int(at[1]) < 0:
+			continue
+		var arch := world.get_block_archetype(frame_chunk, int(at[1]))
+		if not _arch_side_studs.has(arch):
+			_arch_side_studs[arch] = not world.get_archetype_side_studs(arch).is_empty()
+		if not _arch_side_studs[arch]:
 			continue
 		var col := BrickWorld.get_material_colour(world.get_block_material(frame_chunk, int(at[1])),
 				world.get_block_colour(frame_chunk, int(at[1])))
@@ -2069,6 +2077,10 @@ func _side_stud_floats(frame_chunk: int, block: int, inv: Transform3D,
 				b.x.z, b.y.z, b.z.z, o.z, col.r, col.g, col.b, col.a]:
 			out.push_back(v)
 	return out
+
+
+## Archetype id -> whether its part has side studs at all.
+var _arch_side_studs := {}
 
 
 ## A rotation taking +Y (the way a stud mesh points) to `n`.
