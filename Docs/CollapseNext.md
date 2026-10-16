@@ -226,6 +226,31 @@ In the order to do it. Each line points at where the item is written up.
         collapse's dust (`CityScene._warm_shaders`, as `InteriorGroups.warm` does its own).
         Three runs: nothing from the start of the city in the worst ticks any more; the worst
         tick of a run is a collapse's, 37.3 ms each time.
+    22. ~~A piece let go of what came loose one group a tick~~ -- **done 2026-10-15** (user: "start
+        next"). A pass cut one group off a piece (`SHEDS_PER_PASS`, for the 2,000-brick halves
+        no clock can interrupt) and queued the piece again, and the next pass found all of its
+        groups again to cut the next one. A landing's sheared band is a few hundred single
+        bricks, each joined to nothing: they came off one a tick for four seconds and more --
+        loose bricks hanging on a piece that had let go of them -- and a `--big --shot` had 912
+        passes over a millisecond, 1.4 s of finding groups (`BrickWorld.get_components`,
+        1.5-2.7 ms on the 22,000-brick tower) and 0.8 s of cutting. Now after the first, every
+        group of crumbs' size (`SHED_MORE_MAX_BLOCKS`, 48: no body) goes in the same pass, 32
+        whatever the clock says (`SHED_CRUMBS_ANYWAY`, ~17 us each) and the rest while the tick's
+        work clock lasts; a bigger one still waits a pass. Traced: 912 -> 234 slow passes, 1,404
+        -> 408 ms finding, 826 -> 181 cutting. Three alternated pairs, quiet machine: frames over
+        33.3 ms 8-13 -> 5-6 of 906, physics a frame 19.0-19.6 -> 16.8-18.5 ms, pieces in motion
+        10.5-13.5 -> 8.9-9.7 and their boxes 5,400-7,000 -> 3,300-3,800 (pieces done coming apart
+        sooner come to rest sooner); the worst tick 26.7-31.6 -> 26.7-35.7, the same within what
+        one run varies.
+    23. **A hit that cuts nothing still searches the whole piece** -- what is left of item 22:
+        146-187 passes a `--big --shot` of 1-3.5 ms finding a piece whole, ~300 ms all told (and
+        a second or third pass on the same piece in one tick, after other hits). The search
+        starts from nothing each time. What would do it: start from the bricks the hit or
+        landing changed and walk out from each of their neighbours at once, stopping when all
+        the walks have met (whole: a few hundred bricks walked, not 22,000) or when all but one
+        have run out (those are the groups that came off). Needs the bricks each change touched
+        handed to the search (`damage_near`, the shear, a seam, a crack), and a fall back to the
+        whole search when it is not sure. C++ (`BrickWorld`). Not started.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.

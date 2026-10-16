@@ -390,6 +390,19 @@ const WORK_MIN := 1
 ## halves out inside one indivisible work unit is 300 ms that no clock can
 ## interrupt. The rest are re-queued and come away over the next few ticks.
 const SHEDS_PER_PASS := 1
+## ... and after it, in the same pass, groups of up to this many bricks:
+## crumbs, off a piece (_crumbles_off_a_piece), with no body to make --
+## SHED_CRUMBS_ANYWAY of them whatever the clock says, and more while the
+## tick's work clock lasts (_has_work_time). One a pass was a landing's sheared
+## band -- a few hundred single bricks, each joined to nothing -- coming off one
+## brick a tick for four seconds and more, every pass finding all the piece's
+## groups again to cut the next one: 900 passes of a `--big --shot` over a
+## millisecond, 1.4 s of finding groups and 0.8 s of cutting them
+## (2026-10-15). A crumb is ~17 us to cut once its pass has found it -- 32 are
+## half a millisecond -- and finding them again 1.5-2.7 ms on a 22,000-brick
+## piece. A brick that has come loose falls now.
+const SHED_MORE_MAX_BLOCKS := LANDMARK_COUNT
+const SHED_CRUMBS_ANYWAY := 32
 const VISIBLE_RANGE := 140.0       ## beyond this, nobody is watching closely
 ## A thin, wide piece -- a floor slab especially -- can spawn overlapping what
 ## it just left and get a huge separation impulse out of the solver, which
@@ -3327,7 +3340,10 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
 	# disposable pieces costs a connectivity walk and a chunk per group, to
 	# produce more of what is already being swept up in two and a half seconds.
-	hit_census[0 if not isl.landed else (2 if at_rest else 1)][0] += 1
+	# At rest first: a piece cut off one that lay still can come to rest with
+	# no landing of its own, and was counted in the air -- and in the rest
+	# counts below, which ask only whether it was at rest.
+	hit_census[2 if at_rest else (1 if isl.landed else 0)][0] += 1
 	# Whatever rested on those bricks has lost them: every settled piece
 	# touching where they were and not wholly below it is woken next tick,
 	# and that is this piece too when they were the ones it stood on.
@@ -3493,12 +3509,18 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	var bodies := 0
 	var more := false
 	for g in groups:
-		if shed >= SHEDS_PER_PASS:
-			more = true
-			break
 		var moved: PackedInt32Array = g
 		if moved.is_empty():
 			continue
+		if shed >= SHEDS_PER_PASS:
+			# Biggest first: one that is too big waits for the next pass, and
+			# the crumbs after it go now.
+			if moved.size() > SHED_MORE_MAX_BLOCKS:
+				more = true
+				continue
+			if shed > SHED_CRUMBS_ANYWAY and not _has_work_time():
+				more = true
+				break
 		spawn_census.shed[0] += 1
 		spawn_census.shed[1] += moved.size()
 		var cause := isl.shed_cause if isl.shed_cause != "" else "other"
@@ -3552,7 +3574,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 	if more and not _resolve_queue.has(isl):
 		_resolve_queue.append(isl)
 	if isl.shed_cause == "hit":
-		hit_census[0 if not isl.landed else (2 if isl.settled else 1)][1] += bodies
+		hit_census[2 if isl.settled else (1 if isl.landed else 0)][1] += bodies
 	if shed == 0:
 		return 0
 	# And redraw what is standing in it. Furniture is not in the face bake, so
