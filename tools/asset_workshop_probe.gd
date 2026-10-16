@@ -45,7 +45,9 @@ extends SceneTree
 ##   free       the ghost goes where the cursor meets the working plane
 ##   lengths    a calibration length in mm or in studs
 ##   sketch     an outline fills exactly the cells inside it, as thick as the part; a top
-##              edge climbing two plates a stud is laid as slopes facing the right way
+##              edge climbing two plates a stud is laid as slopes facing the right way,
+##              a bottom edge as flipped ones, a rounding end as a curve; the front and
+##              top planes sketch too
 ##   zoom       zooming a flat view keeps the point under the cursor where it was
 ##   photo      "behind the build" puts a side photo just past the build's far side
 
@@ -317,6 +319,12 @@ func _shapes() -> void:
 	_ws._new_build()
 	var laid: int = _ws.fill_cells(_ws.shape_cells("box", Vector3i(30, 1, 30), Vector3i(35, 1, 31), 3))
 	_ok("a box shape is laid as bricks", laid > 0 and _ws.recipe.size() == laid, "%d laid" % laid)
+	# Filled again over itself and a brick beside it: nothing is laid where bricks are, and
+	# the rest of the box is filled whole round them.
+	_ws._new_build()
+	_lay("brick_1x1", Vector3i(32, 1, 30))
+	_ws.fill_cells(_ws.shape_cells("box", Vector3i(30, 1, 30), Vector3i(35, 1, 31), 3))
+	_ok("a fill packs round a brick already there, leaving no hole", _volume() == 6 * 2 * 3, "%d cells" % _volume())
 
 
 func _select() -> void:
@@ -490,7 +498,52 @@ func _round2() -> void:
 				facing_ok = false
 	_ok("a ramp's top edge is laid as slopes", slopes >= 3, "%d slopes of %d bricks" % [slopes, _ws.recipe.size()])
 	_ok("each slope's low front faces down the ramp", facing_ok)
-	_ok("a flat-topped outline has no slopes", _ws.top_slopes({Vector2i(0, 0): true, Vector2i(1, 0): true}).is_empty())
+	_ok("a flat outline has no edge pieces", _ws.edge_pieces({Vector2i(0, 0): true, Vector2i(1, 0): true}).is_empty())
+	# A bottom edge falling two plates a stud along +x: flipped slopes under it.
+	_ws._new_build()
+	_ws.part_width["body"] = 2
+	_ws.sketch_fill([Vector2(10, 50), Vector2(20, 50), Vector2(20, 30)])
+	var under := 0
+	for k in _ws.recipe.size():
+		var name: String = _ws.recipe.part_of(k)
+		if name.begins_with("slope_") and name.ends_with("_i"):
+			under += 1
+	_ok("a falling bottom edge is laid as flipped slopes", under >= 3, "%d of %d bricks" % [under, _ws.recipe.size()])
+	# An end that rounds over: two plates up from nothing, then one more.
+	var grid := {}
+	for v in 2:
+		grid[Vector2i(0, v)] = true
+	for u in [1, 2]:
+		for v in 3:
+			grid[Vector2i(u, v)] = true
+	var found: Array = _ws.edge_pieces(grid)
+	_ok("an end rounding over three plates in two studs is a curve", found.size() >= 1 and found[0].kind == "curve"
+			and found[0].u == 0 and found[0].base == 0 and found[0].rises == 1, str(found))
+
+	# A drum on the front plane: a circle, two studs thick along the gun.
+	_ws._new_build()
+	_ws.work_plane = "front"
+	_ws.work_x = 40
+	var circle := []
+	for a in 24:
+		var t := a * TAU / 24.0
+		circle.append(Vector2(40.5 + 5.0 * cos(t), 60.0 + 12.5 * sin(t)))
+	var drum: int = _ws.sketch_fill(circle)
+	var along_ok := true
+	for k in _ws.recipe.size():
+		var at: Vector3i = _ws.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+		if at.x < 39 or at.x + size.x > 41:
+			along_ok = false
+	_ok("a circle on the front plane fills, two studs along the gun", drum > 0 and along_ok, "%d laid" % drum)
+	# A square on the top plane: two studs thick is five plates up.
+	_ws._new_build()
+	_ws.work_plane = "top"
+	_ws.work_height = 20
+	_ws.sketch_fill([Vector2(10, 30), Vector2(14, 30), Vector2(14, 34), Vector2(10, 34)])
+	_ok("a square on the top plane fills 4 x 4 studs, 5 plates up", _volume() == 4 * 4 * 5, "%d cells" % _volume())
+	_ws.work_plane = "side"
+	_ws.work_height = 30
 	_ws.part_width["body"] = 3
 
 	_ws._new_build()
