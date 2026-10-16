@@ -870,6 +870,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_E: set_exploded(not exploded)
 			KEY_H: set_hands(not hands_on)
 			KEY_P: play_cycle()
+			KEY_X: export_game()
 			_: alt = false
 		if alt:
 			get_viewport().set_input_as_handled()
@@ -2555,6 +2556,7 @@ func wand_fill(i: int, hit: Vector3, width: int, tolerance: float = 0.14) -> int
 ## print size, x along the gun from the muzzle, y across from the mirror plane, z up from
 ## the plate. A smooth part's brick outline becomes a loft; the rest go as laid.
 func export_sheet() -> Dictionary:
+	settle_muzzle()
 	var by_part := {}
 	var x_lo := 1 << 30
 	var x_hi := -(1 << 30)
@@ -2796,7 +2798,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -4302,6 +4304,12 @@ func _build_rail(layer: CanvasLayer) -> void:
 	play.focus_mode = Control.FOCUS_NONE
 	play.pressed.connect(func() -> void: play_cycle())
 	box.add_child(play)
+	var to_game := Button.new()
+	to_game.text = "Export to game   Alt X"
+	to_game.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	to_game.focus_mode = Control.FOCUS_NONE
+	to_game.pressed.connect(func() -> void: export_game())
+	box.add_child(to_game)
 	box.add_child(HSeparator.new())
 
 	# The shape brush: Ctrl + LMB lays a shape, Ctrl + RMB carves it out, in any tool.
@@ -4766,6 +4774,7 @@ func set_exploded(on: bool) -> void:
 ## the sight over it. Anything else (a magazine sits where the gun has it) goes out the
 ## way it already is from the body, twice as far.
 func explode_offsets() -> Dictionary:
+	settle_muzzle()
 	var sums := {}
 	var counts := {}
 	for i in recipe.size():
@@ -5173,6 +5182,7 @@ func _hand_shape(side: int, shape: String) -> void:
 ## left round the underbarrel -- or the barrel, or the front of the body -- its hole along
 ## the gun, fingers up. {right: [hole, Basis], left: ..., grip: part, fore: part}.
 func hand_targets() -> Dictionary:
+	settle_muzzle()
 	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
 	var out := {}
 	var grip := _part_cells("grip")
@@ -5638,3 +5648,275 @@ func _draw_shape_brush(im: ImmediateMesh) -> void:
 ## the city. Its way out is Export (F12).
 func _place_in_city() -> void:
 	print("[asset workshop] a gun does not go in the city: F12 exports its parts")
+
+
+# ---------------------------------------------------------------------------
+# Out to the game: each part a scene the game's GunAssembler puts together
+# ---------------------------------------------------------------------------
+
+## Which part each part attaches to (its socket is there): the barrel to the body, the
+## muzzle and underbarrel to the barrel (or the body without one), the rest to the body.
+const GAME_HOST := {"barrel": "body", "stock": "body", "grip": "body", "magazine": "body",
+		"sight": "body", "muzzle": "barrel", "underbarrel": "barrel"}
+
+
+## Where this gun's game parts go: a folder beside its file (user://guns/thompson/).
+func game_dir() -> String:
+	var base := _current_path
+	if base == "":
+		base = BuildRecipe.player_dir(recipe.kind) + slug(recipe.name if recipe.name != "untitled" else "gun") + ".json"
+	return base.get_basename() + "/"
+
+
+## The workshop's frame to the game's: the gun real size (a game metre is the gun's
+## real metre, GAME_PER_WORKSHOP), its muzzle along -Z, up up; across the gun is X.
+func game_basis() -> Basis:
+	var turn := -PI * 0.5 if muzzle_end == "-x" else PI * 0.5
+	return Basis(Vector3.UP, turn).scaled(Vector3.ONE * GAME_PER_WORKSHOP)
+
+
+## Export the gun for the game: each part (of the gun's slots) as a scene of its own --
+## its bricks and studs, in their colours, real size, muzzle along -Z -- with the
+## game's assembly nodes: a `mount` on each part but the body, and on the part it
+## attaches to a `socket_<slot>` at the same point, so GunAssembler puts it back exactly
+## where it was built. The point is the part's connection point (a mount) if it has
+## one, else the middle of its bricks -- which is also where the game's hands take the
+## grip, the magazine and the barrel. The barrel (or whatever is foremost) carries a
+## `socket_muzzle` at its tip. Writes <dir>/<part>.scn and <dir>/gun.json.
+## Returns {ok, dir, parts, length_m} or {ok: false, why}.
+func export_game(dir: String = "") -> Dictionary:
+	if dir == "":
+		dir = game_dir()
+	settle_muzzle()
+	var by_part := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
+		if GUN_PARTS.has(name):
+			(by_part.get_or_add(name, []) as Array).append(i)
+	if not by_part.has("body"):
+		print("[asset workshop] export to game: the gun needs a body")
+		return {"ok": false, "why": "no body"}
+	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
+	# Each part's point: its mount, else the middle of its bricks.
+	var at := {}
+	for name in by_part:
+		at[name] = _cells_centre(by_part[name])
+	for q in points:
+		if q.kind == "mount" and by_part.has(String(q.part)):
+			at[q.part] = Vector3(float(q.at[0]) * BrickPalette.STUD_M, float(q.at[1]) * BrickPalette.PLATE_M,
+					float(q.at[2]) * BrickPalette.STUD_M)
+	var host := {}
+	for name in by_part:
+		if name == "body":
+			continue
+		var h: String = GAME_HOST.get(name, "body")
+		host[name] = h if by_part.has(h) else "body"
+	# The muzzle socket: on the muzzle part's tip, else the barrel's, else the body's.
+	var front := "muzzle" if by_part.has("muzzle") else ("barrel" if by_part.has("barrel") else "body")
+	var b := game_basis()
+	DirAccess.make_dir_recursive_absolute(dir)
+	var written := {}
+	for name in by_part:
+		var root := Node3D.new()
+		root.name = name
+		var model := Node3D.new()
+		model.name = "Model"
+		model.transform = Transform3D(b, -(b * (at[name] as Vector3)))
+		root.add_child(model)
+		var mi := _bake_part_mesh(by_part[name])
+		model.add_child(mi)
+		var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
+		if not extra.is_empty():
+			model.add_child(_studs_node(extra))
+		if name != "body":
+			var mount := Node3D.new()
+			mount.name = "mount"
+			root.add_child(mount)
+		for child in host:
+			if host[child] == name:
+				_game_node(root, "socket_" + String(child), b * ((at[child] as Vector3) - (at[name] as Vector3)))
+		if name == front:
+			_game_node(root, "socket_muzzle", b * (_tip(by_part[name], fwd) - (at[name] as Vector3)))
+		_own(root, root)
+		var ps := PackedScene.new()
+		var err := ps.pack(root)
+		root.free()
+		var path: String = dir + name + ".scn"
+		if err == OK:
+			err = ResourceSaver.save(ps, path)
+		if err != OK:
+			print("[asset workshop] export to game: %s failed (%s)" % [name, error_string(err)])
+			return {"ok": false, "why": "%s: %s" % [name, error_string(err)]}
+		written[name] = path
+	# How long it is in the game, muzzle to butt.
+	var lo := INF
+	var hi := -INF
+	for name in by_part:
+		for i in by_part[name]:
+			var c := recipe.cell_of(i)
+			var size := BrickPalette.size_of(recipe.part_of(i))
+			lo = minf(lo, c.x * BrickPalette.STUD_M)
+			hi = maxf(hi, (c.x + size.x) * BrickPalette.STUD_M)
+	var length := (hi - lo) * GAME_PER_WORKSHOP
+	var manifest := {"name": recipe.name, "source": _current_path, "parts": written,
+			"hosts": host, "length_m": snappedf(length, 0.001)}
+	var f := FileAccess.open(dir + "gun.json", FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	print("[asset workshop] exported %d parts to %s, %.2f m long in the game" % [written.size(),
+			ProjectSettings.globalize_path(dir), length])
+	return {"ok": true, "dir": dir, "parts": written, "length_m": length}
+
+
+## The middle of some bricks' cells, workshop metres.
+func _cells_centre(ids: Array) -> Vector3:
+	var sum := Vector3.ZERO
+	var n := 0
+	for i in ids:
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					sum += Vector3((c.x + dx + 0.5) * BrickPalette.STUD_M, (c.y + dy + 0.5) * BrickPalette.PLATE_M,
+							(c.z + dz + 0.5) * BrickPalette.STUD_M)
+					n += 1
+	return sum / maxf(1.0, n)
+
+
+## The foremost face of some bricks, at the middle of what is there: where a shot leaves.
+func _tip(ids: Array, fwd: Vector3) -> Vector3:
+	var best := -INF
+	var cells := []
+	for i in ids:
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var p := Vector3((c.x + dx + 0.5) * BrickPalette.STUD_M, (c.y + dy + 0.5) * BrickPalette.PLATE_M,
+							(c.z + dz + 0.5) * BrickPalette.STUD_M)
+					var d := p.dot(fwd)
+					if d > best + 1e-4:
+						best = d
+						cells = [p]
+					elif absf(d - best) <= 1e-4:
+						cells.append(p)
+	var mid := Vector3.ZERO
+	for p in cells:
+		mid += p
+	mid /= maxf(1.0, cells.size())
+	return mid + fwd * BrickPalette.STUD_M * 0.5
+
+
+## Some bricks laid on their own and meshed as the workshop draws them, studs and all:
+## a MeshInstance3D in workshop metres (its studs a child), at their box's corner.
+func _bake_part_mesh(ids: Array) -> MeshInstance3D:
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for i in ids:
+		lo = lo.min(recipe.cell_of(i))
+		hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
+	var c := world.create_chunk(Vector3i.ZERO, hi - lo)
+	for i in ids:
+		var arch := String(recipe.part_of(i))
+		if not palette.has(arch):
+			continue
+		var bid := world.place_block(c, recipe.cell_of(i) - lo, palette[arch], recipe.colour_of(i))
+		if bid >= 0 and recipe.material_of(i) != 0:
+			world.set_block_material(c, bid, recipe.material_of(i))
+	var mi := MeshInstance3D.new()
+	mi.name = "Bricks"
+	mi.material_override = _material
+	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+			else world.build_chunk_mesh(c)
+	var m := ArrayMesh.new()
+	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mi.mesh = m
+	mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
+	mi.position = Vector3(lo.x * BrickPalette.STUD_M, lo.y * BrickPalette.PLATE_M, lo.z * BrickPalette.STUD_M)
+	var studs: PackedFloat32Array = world.get_chunk_studs(c)
+	@warning_ignore("integer_division")
+	var count := studs.size() / 16
+	if count > 0:
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "Studs"
+		mmi.material_override = _stud_material()
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = PieceMeshes.stud()
+		mm.instance_count = count
+		mm.set_buffer(studs)
+		mmi.multimesh = mm
+		mi.add_child(mmi)
+	world.release_chunk(c)
+	return mi
+
+
+## Studs put on by hand, as the workshop draws them (workshop metres).
+func _studs_node(list: Array) -> MultiMeshInstance3D:
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "HandStuds"
+	mmi.material_override = _stud_material()
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.stud()
+	mm.instance_count = list.size()
+	for i in list.size():
+		var st: Dictionary = list[i]
+		mm.set_instance_transform(i, _stud_transform(st))
+		mm.set_instance_color(i, BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0))))
+	mmi.multimesh = mm
+	return mmi
+
+
+static func _game_node(parent: Node3D, node_name: String, pos: Vector3) -> void:
+	var n := Node3D.new()
+	n.name = node_name
+	n.position = pos
+	parent.add_child(n)
+
+
+## A packed scene keeps only the nodes the root owns.
+static func _own(n: Node, root: Node) -> void:
+	for c in n.get_children():
+		c.owner = root
+		_own(c, root)
+
+
+## Which end the muzzle is, read off the build: the barrel (and the muzzle) forward of the
+## body, the stock behind it. Left as it was when the build cannot say (no barrel or
+## stock yet). The Thompson was built muzzle toward +x and came out of the first export
+## backwards: nothing had said so.
+func settle_muzzle() -> void:
+	var sum := {}
+	var n := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0 or i >= part_of.size():
+			continue
+		var name := part_names[part_of[i]]
+		if not name in ["body", "barrel", "muzzle", "stock"]:
+			continue
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		sum[name] = float(sum.get(name, 0.0)) + (recipe.cell_of(i).x + size.x * 0.5) * size.x * size.y * size.z
+		n[name] = int(n.get(name, 0)) + size.x * size.y * size.z
+	var c := {}
+	for k in sum:
+		c[k] = float(sum[k]) / int(n[k])
+	var lean := 0.0
+	var mid: float = c.get("body", (float(c.get("barrel", 0.0)) + float(c.get("stock", 0.0))) * 0.5)
+	for k in ["barrel", "muzzle"]:
+		if c.has(k):
+			lean += float(c[k]) - mid
+	if c.has("stock"):
+		lean -= float(c.stock) - mid
+	if absf(lean) > 0.5:
+		muzzle_end = "-x" if lean < 0.0 else "+x"
