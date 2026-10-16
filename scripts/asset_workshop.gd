@@ -271,6 +271,7 @@ func _shot() -> void:
 			_draw_photo_grid()
 	set_mirror(true)
 	show_help(false)
+	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	if "--ramp" in OS.get_cmdline_user_args():
 		# A sketched ramp climbing a slope's pitch, to look at the slopes it lays.
 		for _i in 3:
@@ -286,6 +287,10 @@ func _shot() -> void:
 		sketch_fill(circle)
 		work_plane = "side"
 		_look_at_build()
+		var f := FileAccess.open("user://asset_shots/ramp.json", FileAccess.WRITE)
+		if f != null:
+			f.store_string(JSON.stringify(export_sheet(), " "))
+			f.close()
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	for v in [0, 1]:
 		set_view(v)
@@ -2249,6 +2254,9 @@ func export_sheet() -> Dictionary:
 			_loft_spec(spec, ids, along, up)
 		else:
 			spec["kind"] = "placed"
+			# Built muzzle-right, the gun's frame runs the other way: a shaped part is drawn
+			# mirrored along the gun to match.
+			spec["mirror_along"] = muzzle_end == "+x"
 			var bricks := []
 			for i in ids:
 				var size := BrickPalette.size_of(recipe.part_of(i))
