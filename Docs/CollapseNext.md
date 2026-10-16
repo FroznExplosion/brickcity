@@ -242,15 +242,30 @@ In the order to do it. Each line points at where the item is written up.
         10.5-13.5 -> 8.9-9.7 and their boxes 5,400-7,000 -> 3,300-3,800 (pieces done coming apart
         sooner come to rest sooner); the worst tick 26.7-31.6 -> 26.7-35.7, the same within what
         one run varies.
-    23. **A hit that cuts nothing still searches the whole piece** -- what is left of item 22:
-        146-187 passes a `--big --shot` of 1-3.5 ms finding a piece whole, ~300 ms all told (and
-        a second or third pass on the same piece in one tick, after other hits). The search
-        starts from nothing each time. What would do it: start from the bricks the hit or
-        landing changed and walk out from each of their neighbours at once, stopping when all
-        the walks have met (whole: a few hundred bricks walked, not 22,000) or when all but one
-        have run out (those are the groups that came off). Needs the bricks each change touched
-        handed to the search (`damage_near`, the shear, a seam, a crack), and a fall back to the
-        whole search when it is not sure. C++ (`BrickWorld`). Not started.
+    23. ~~A hit that cuts nothing still searches the whole piece~~ -- **done 2026-10-16** (user:
+        "yes please"). `BrickWorld.get_components_near`: a chunk known to be in one piece (the
+        whole search found it so, or every other group it found has been cut away,
+        `mark_chunk_whole`) keeps the blocks changed since -- every place in the extension a
+        block dies, is cut (`support_broken`, `bottom_broken`), placed or removed says so
+        (`conn_touch`); what changes a chunk wholesale (a stress solve, a template, a crack)
+        says it is not known (`conn_forget`). The search walks out from those blocks and their
+        neighbours, all in one breadth-first queue, and stops when every walk has met another
+        (one piece) or all but one have run out (those came off; the one still going is the
+        rest, not walked). A group bigger than the rest, a chunk not known whole, or one that
+        changed without saying so (a live block no walk reached) is walked whole. A first try
+        with a queue a walk was as slow as the whole walk in the bad case (two big halves:
+        re-solves of 10-11 ms); one queue for all of them is what a whole walk costs a block.
+        Checked: `set_components_check` walks whole beside every search and counts where the
+        two differ -- 0 in ten probes and a `--big --shot` (1,613 searches); `barrage_probe`
+        keeps the check on and fails on a difference. A `--big --shot`: 760-1,337 searches from
+        what changed, ~70 bricks walked each, 65-140 walked whole; **finding what came off 369-
+        642 ms a run -> 52-100 ms**, the worst search 3.1-7.2 -> 2.0-3.0 ms. Frames the same in
+        the one pair the display stayed awake for (6 of 906 over 33.3 ms each, worst tick 30.0 /
+        29.7): it is ~0.35 ms a frame. Seen in both, and not this: a tick now and then of
+        50-85 ms, all `islands` (item 24).
+    24. **A tick of 50-85 ms, all `islands`**, now and then in a `--big --shot` (tick 398-478 or
+        later, one or two a run, with and without item 23; 2026-10-16). Not traced. Not
+        started.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
