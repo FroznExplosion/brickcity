@@ -219,6 +219,9 @@ public:
     /// draws -- so none of furniture's, which no band does (FurnitureMesh). A
     /// building's studs are drawn band by band, near the camera only.
     PackedFloat32Array get_chunk_studs_section(int chunk_id, int section) const;
+    /// Whether a part at `corner` (chunk cells) of `size` lies turned a quarter
+    /// from the way it was printed (chunk_studs; ps_top_turned in the shader).
+    static bool stud_turn(const Vector3i &size, const Vector3i &corner);
     /// A stud buffer (as the two above give) sorted into rings round `eye`,
     /// which is in the buffer's own space: one buffer for the studs nearer
     /// than each of `rings` (metres, rising) and not nearer than the one
