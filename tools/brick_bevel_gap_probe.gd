@@ -24,6 +24,10 @@ extends SceneTree
 ## chamfered mesh no more in all than CRACK_RATE a view.
 ##
 ## It leaves the on/off pair in shots/brick_bevel_off.png and _on.png.
+##
+## With GAP_WHERE=1 in the environment it also says, for each view's biggest
+## patch, which cell the ray through it meets first, the blocks round that
+## cell and their parts: enough to work out which arrangement opened it.
 
 const MAGENTA := Color(1, 0, 1)
 const CORE_INSET := 0.010
@@ -40,6 +44,8 @@ var _mat: ShaderMaterial
 var _core_mat: StandardMaterial3D
 var _holder: Node3D
 var _case_n := 0
+var _dbg_w: BrickWorld
+var _dbg_chunk := -1
 
 
 func _initialize() -> void:
@@ -232,6 +238,8 @@ func _zoom(img: Image, tag: String) -> void:
 	if most == 0:
 		return
 	var at: Vector2i = best * 32 + Vector2i(16, 16)
+	if OS.get_environment("GAP_WHERE") != "":
+		_where(img, best)
 	var box := Rect2i(at - Vector2i(64, 36), Vector2i(128, 72)).intersection(
 			Rect2i(Vector2i.ZERO, img.get_size()))
 	var cut := img.get_region(box)
@@ -239,8 +247,56 @@ func _zoom(img: Image, tag: String) -> void:
 	cut.save_png("res://shots/brick_bevel_gap_%s_zoom.png" % tag)
 
 
+## Which brick's core the biggest patch shows, and the cells round the point
+## the ray meets it: for working out which arrangement opens a slit.
+func _where(img: Image, best: Vector2i) -> void:
+	var px := Vector2i(-1, -1)
+	for y in range(best.y * 32, mini(best.y * 32 + 32, img.get_height())):
+		for x in range(best.x * 32, mini(best.x * 32 + 32, img.get_width())):
+			var c := img.get_pixel(x, y)
+			if px.x < 0 and c.r > 0.85 and c.b > 0.85 and c.g < 0.2:
+				px = Vector2i(x, y)
+	if px.x < 0:
+		return
+	var o := _cam.project_ray_origin(Vector2(px))
+	var d := _cam.project_ray_normal(Vector2(px))
+	var w := _dbg_w
+	var cs: Vector3 = w.get_cell_size()
+	var t := 0.0
+	while t < 8.0:
+		var p := o + d * t
+		var cell: Vector3i = w.world_to_grid(p)
+		var blk := w.block_at(_dbg_chunk, cell)
+		if blk >= 0:
+			var frac := (p - w.grid_to_world(cell)) / cs
+			print("    patch at px %s: ray enters block %d at cell %s, %.2f m, in-cell %s, ray dir %s"
+					% [px, blk, cell, t, frac, d])
+			var rows := []
+			for dy in [1, 0, -1]:
+				for dz in [-1, 0, 1]:
+					var row := "      y%+d z%+d:" % [dy, dz]
+					for dx in [-1, 0, 1]:
+						row += " %5d" % w.block_at(_dbg_chunk, cell + Vector3i(dx, dy, dz))
+					rows.append(row)
+			print("\n".join(rows))
+			var seen := {}
+			for dx in [-1, 0, 1]:
+				for dy in [-1, 0, 1]:
+					for dz in [-1, 0, 1]:
+						var b := w.block_at(_dbg_chunk, cell + Vector3i(dx, dy, dz))
+						if b >= 0 and not seen.has(b):
+							seen[b] = true
+							var arch := w.get_block_archetype(_dbg_chunk, b)
+							print("      %d: %s %s mesh %d" % [b, w.get_archetype_name(arch),
+									w.get_archetype_size(arch), w.get_archetype_mesh_triangles(arch)])
+			return
+		t += 0.002
+
+
 func _case(what: String, w: BrickWorld, chunk: int, views: int, seed_: int, shot := false) -> void:
 	print("\n%s" % what)
+	_dbg_w = w
+	_dbg_chunk = chunk
 	var v := _views(w, chunk, views, seed_)
 	if shot:
 		# The pair: a wall at the couple of metres a player stands from one.
@@ -298,6 +354,44 @@ func _heap(w: BrickWorld) -> int:
 	return chunk
 
 
+## A room's corner: a floor of 2x4s and two walls of 1x4s standing on it,
+## meeting at an inside corner, two courses of each. Every foot of a wall and
+## the corner where the walls meet is an INSIDE corner (brick::EDGE_INNER_SHIFT):
+## square, each face pushed out under the other.
+func _room(w: BrickWorld) -> int:
+	var palette := BrickPalette.bake(w)
+	var floor_arch := -1
+	var run_x := -1
+	var run_z := -1
+	for name in palette:
+		var s := w.get_archetype_size(int(palette[name]))
+		if String(name).begins_with("brick_2x4") and s == Vector3i(2, 3, 4):
+			floor_arch = int(palette[name])
+		elif String(name).begins_with("brick_1x4") and s == Vector3i(4, 3, 1):
+			run_x = int(palette[name])
+		elif String(name).begins_with("brick_1x4") and s == Vector3i(1, 3, 4):
+			run_z = int(palette[name])
+	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(16, 9, 16))
+	w.set_chunk_transform(chunk, Transform3D.IDENTITY)
+	var colour := 0
+	for x in range(0, 16, 2):
+		for z in range(0, 16, 4):
+			w.place_block(chunk, Vector3i(x, 0, z), floor_arch, colour % 3)
+			colour += 1
+	# The back wall along x at z = 3, the side wall along z at x = 3: they
+	# meet at (3, 3), and both stand on the floor with floor in front.
+	for course in 2:
+		var y := 3 + course * 3
+		var shift := course * 2
+		for x in range(3 + shift, 15, 4):
+			if x + 4 <= 16:
+				w.place_block(chunk, Vector3i(x, y, 3), run_x, 4 + course)
+		for z in range(4 + shift, 15, 4):
+			if z + 4 <= 16:
+				w.place_block(chunk, Vector3i(3, y, z), run_z, 6 + course)
+	return chunk
+
+
 func _run() -> void:
 	print("brick bevel gap probe")
 	if DisplayServer.get_name() == "headless":
@@ -316,6 +410,17 @@ func _run() -> void:
 	w.apply_hit(tower, Vector3(2.5, 2.6, 0.2), 0.9)
 	w.apply_hit(tower, Vector3(3.9, 0.6, 3.2), 1.3)
 	await _case("the same tower, shot through", w, tower, 40, 12)
+
+	var room := _room(w)
+	await _case("a room's inside corners", w, room, 40, 15)
+	var gone := PackedInt32Array()
+	var rr := RandomNumberGenerator.new()
+	rr.seed = 9
+	for i in w.get_block_count(room):
+		if rr.randf() < 0.3:
+			gone.append(i)
+	w.kill_blocks(room, gone)
+	await _case("the room with three bricks in ten gone", w, room, 40, 16)
 
 	var heap := _heap(w)
 	await _case("a heap of every part in the palette", w, heap, 60, 13)

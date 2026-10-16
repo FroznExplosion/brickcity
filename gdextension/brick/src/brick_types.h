@@ -414,6 +414,10 @@ struct FaceBake {
     // authored surface).
     // Four bytes a face, against the 224 bytes of its four vertices.
     std::vector<uint32_t> edge;
+    // And one more: two bits a corner (CORNER_* below, the face's four in
+    // the bake's order), for a corner where a bevelled side runs into an
+    // INSIDE corner (EDGE_INNER_SHIFT).
+    std::vector<uint8_t> corner;
     // The FLOORS of the facets, in face order.
     //
     // A facet runs from its face back to the plane of the face round the edge
@@ -478,6 +482,7 @@ struct FaceBake {
         owner.clear();
         other.clear();
         edge.clear();
+        corner.clear();
         floors.clear();
         valid = false;
     }
@@ -496,6 +501,7 @@ struct FaceBake {
 //   CONVEX_QUIET  a free edge whose facet the face round the corner draws:
 //           that one is open to the air for as long as the brick lives, so
 //           one of the two is enough (bake_faces_into says which).
+//   An INSIDE corner (EDGE_INNER_SHIFT) is a free edge coded EXTEND.
 enum : uint32_t {
     EDGE_FLUSH = 0,
     EDGE_CONVEX = 1,
@@ -525,6 +531,31 @@ enum : uint32_t {
     // between two bricks, not the corner of a brick in the open, and is shaded
     // as one: darker toward the bottom (brick.gdshader).
     EDGE_GROOVE_SHIFT = 24,
+    // One bit a side, from here: the side is an INSIDE corner -- a brick
+    // stands against the face round the edge, and that brick (or another)
+    // goes on out past this face's plane, like the floor at the foot of a wall
+    // or the wall a wall runs into. The side is coded EXTEND, not CONVEX: no
+    // bevel, the face pushed out under the other one, which does the same
+    // back. Each backs the other, the corner is square, and a facet that runs
+    // into it from another side stops at the brick's own corner (pushed out
+    // with the face, it would stand in the other brick's bevel).
+    EDGE_INNER_SHIFT = 28,
+};
+
+// What the facet of a bevelled side does at a corner where it runs into an
+// INSIDE corner (FaceBake::corner), two bits a corner:
+//
+//   COVERED  stops at the brick's own corner: the floor pushed out under the
+//            corner shows past its end.
+//   CAP      stops there and is capped across its end: the face round the
+//            edge is square there too, or the facet is a groove's, and past
+//            its end is the inside of the brick behind.
+//   MITRE    stops there with its far edge a bevel short: the face round the
+//            edge is bevelled along the corner, and the two meet in a mitre.
+enum : uint8_t {
+    CORNER_COVERED = 0,
+    CORNER_CAP = 1,
+    CORNER_MITRE = 2,
 };
 
 struct Chunk {
