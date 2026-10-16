@@ -696,4 +696,46 @@ func _round4() -> void:
 			"colour %d material %d" % [_ws.recipe.colour_of(0), _ws.recipe.material_of(0)])
 	_ws._end_stroke()
 	_ws.paint_what = "both"
+
+	# Stage 2: a part in three views. A receiver: a side rectangle 10 studs by 15 plates,
+	# 4 thick (z 39..42 round the plane at 40.5).
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.part_width["body"] = 4
+	_ws.work_plane = "side"
+	_ws.sketch_region([Vector2(10, 30), Vector2(20, 30), Vector2(20, 45), Vector2(10, 45)])
+	_ok("a side view: a slab its thickness deep", _volume() == 10 * 15 * 4, "%d cells" % _volume())
+	# From the front (studs across, plates up): area drawn in keeps only what is inside it.
+	_ws.work_plane = "front"
+	_ws.work_x = 25
+	_ws.sketch_region([Vector2(39, 20), Vector2(41, 20), Vector2(41, 50), Vector2(39, 50)])
+	_ok("a front view keeps only what is inside it", _volume() == 10 * 15 * 2, "%d cells" % _volume())
+	_ws._undo()
+	_ok("and undoes", _volume() == 10 * 15 * 4, "%d cells" % _volume())
+	# Area drawn out from the front cuts right through, along the whole part.
+	_ws.sketch_region([Vector2(38, 42), Vector2(44, 42), Vector2(44, 50), Vector2(38, 50)], true)
+	_ok("area drawn out from the front cuts through", _volume() == 10 * 12 * 4, "%d cells" % _volume())
+	_ws._undo()
+	# A port: a depth cut from the side, one stud in from the face toward the camera.
+	_ws.work_plane = "side"
+	_ws.cut_deep = 1
+	_ws.sketch_region([Vector2(12, 36), Vector2(16, 36), Vector2(16, 40), Vector2(12, 40)], true)
+	_ws.cut_deep = 0
+	_ok("a depth cut makes a pocket, not a hole", _volume() == 10 * 15 * 4 - 4 * 4, "%d cells" % _volume())
+	_ws._undo()
+	_ok("one Z fills it", _volume() == 10 * 15 * 4, "%d cells" % _volume())
+	# A chamfer seen from the front, at a slope's pitch: slopes along the part.
+	_ws.slope_eager = true
+	_ws.work_plane = "front"
+	_ws.sketch_region([Vector2(39, 30), Vector2(43, 30), Vector2(43, 45), Vector2(41, 45), Vector2(39, 41)])
+	var slopes := 0
+	for k in _ws.recipe.size():
+		if String(_ws.recipe.part_of(k)).begins_with("slope"):
+			slopes += 1
+	_ok("a chamfer from the front gets slopes (%d)" % slopes, slopes > 0, "%d slopes, %d cells" % [slopes, _volume()])
+	_ws.slope_eager = false
+	_ws.clear_part_sketch("body")
+	_ok("clearing the part takes every view's bricks", _ws.recipe.size() == 0 and _ws.sketches.is_empty(),
+			"%d bricks" % _ws.recipe.size())
+	_ws.work_plane = "side"
 	_ws.part_width["body"] = 3
