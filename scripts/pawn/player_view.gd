@@ -767,6 +767,7 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 		left = left.interpolate_with(fist, _smooth(_melee))
 		if _melee > 0.3:
 			left_hand = ViewArms.Hand.FIST
+	_carry_magazine(held, gun.reload_progress() if reloading else -1.0, left, g, gy, holds)
 	var act := _left_action(delta, left, on_gun, left_hand)
 	left = act[0]
 	left_hand = act[1]
@@ -877,6 +878,37 @@ func _reload_left(p: float, on_gun: Transform3D, g: Transform3D, gx: Vector3, gy
 			break
 	var hand := ViewArms.Hand.PINCH if p > 0.12 and p < 0.86 else ViewArms.Hand.C
 	return [pose, hand]
+
+
+## A magazine that comes off (its part tagged "detaches": a gun made in the asset
+## workshop) goes with the left hand while the hand has it -- down with the old one, up
+## with the new (`_reload_left`'s keys 0.44 to 0.70) -- and is back home otherwise.
+func _carry_magazine(held: GunInstance, p: float, hand: Transform3D, g: Transform3D, gy: Vector3,
+		holds: Dictionary) -> void:
+	if not held.has_meta(&"view_mag"):
+		var found: Node3D = null
+		var def := held.recipe.get(GunPartDef.Slot.MAGAZINE) as GunPartDef
+		if def != null and def.tags.has("detaches"):
+			for n in held.find_children("*", "Node3D", true, false):
+				if n.is_in_group(GunAssembler.PART_GROUP) and n.get_meta(&"part_slot", -1) == GunPartDef.Slot.MAGAZINE:
+					found = n
+					break
+		# False, not null, for none: a null meta is no meta, and this would look again
+		# every frame.
+		held.set_meta(&"view_mag", found if found != null else false)
+		if found != null:
+			held.set_meta(&"view_mag_rest", found.transform)
+	var mag = held.get_meta(&"view_mag")
+	if not (mag is Node3D):
+		return
+	var rest: Transform3D = held.get_meta(&"view_mag_rest")
+	mag.transform = rest
+	if p < 0.44 or p > 0.70:
+		return
+	# The hand's way from where it took the magazine, in the world, moves the magazine.
+	var at_mag := g * (holds.mag as Vector3) - gy * 0.06
+	var cam := camera.global_transform.basis
+	mag.global_position += cam * (hand.origin - at_mag)
 
 
 func _on_fired(info: Dictionary) -> void:

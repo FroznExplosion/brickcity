@@ -119,6 +119,15 @@ copies every sketch.
 | Muzzle | `socket_muzzle` at the tip of the foremost part (the muzzle, else the barrel, else the body): the deepest one is where the game fires from |
 | Which way it points | read off the build (`settle_muzzle`): the barrel and muzzle forward of the body, the stock behind. The Thompson, built muzzle toward +x, first came out backwards |
 
+### Into the game, stage 2 (2026-10-16): a gun to hold and fire
+
+| What | How |
+|---|---|
+| **The game finds them** | `AssetGuns` (scripts/guns/asset_guns.gd) reads every exported gun -- `res://guns/<id>/` shipped, `user://guns/<id>/` the player's -- and makes part defs of its scenes. `GunPlaceholderParts.build_library` puts them on the end of the game's part library, each fenced to its own design with `exclusive_to` (as a legendary's barrel is): no random gun takes one, no other gun's roll moves, a saved one loads back by its part ids |
+| **A gun of one** | `AssetGuns.generate(lib, id, seed)` -> `GunGenerator.generate_fixed`: the design's own parts, everything else (modifiers, alt fire, stats, quality) rolled from the seed as for any gun, the design's name after the grade word ("Gutter Thompson"). It fires as the class its `gun.json` names, an SMG by default. Brand `workshop`: no skin is set for it, so its bricks keep their colours |
+| **The magazine comes off** | a magazine part tagged `detaches` (every exported one) goes with the left hand through a reload, down with the old one and up with the new (`PlayerView._carry_magazine`), and is back home after |
+| **To try it** | in developer mode, T cycles the gun classes and then each exported gun. The pass `city.tscn -- --asset-gun=thompson` holds it, fires it and reloads it (shots/asset_gun_*.png) |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |

@@ -709,6 +709,8 @@ var _player_pawn: Pawn
 var _play_mode := false
 ## --arms: the first-person arms and hands (ViewArms), with pictures.
 var _arms_mode := false
+## `--asset-gun=<id>`: the asset gun pass with that gun (one exported from the asset workshop).
+var _asset_gun := &""
 ## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
 ## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
 var _view: PlayerView
@@ -938,6 +940,9 @@ func _ready() -> void:
 	_gun_mode = "--gun" in args
 	_play_mode = "--play" in args
 	_arms_mode = "--arms" in args
+	for a: String in args:
+		if a.begins_with("--asset-gun="):
+			_asset_gun = StringName(a.trim_prefix("--asset-gun="))
 	_mech_mode = "--mech" in args
 	_vehicles_mode = "--vehicles" in args
 	_no_ai = "--no-ai" in args
@@ -1178,6 +1183,8 @@ func _ready() -> void:
 		_run_gun_pass()
 	elif _play_mode:
 		_run_play_pass()
+	elif _asset_gun != &"":
+		_run_asset_gun_pass()
 	elif _arms_mode:
 		_run_arms_pass()
 	elif _mech_mode:
@@ -4195,6 +4202,22 @@ func _equip_gun(class_id: StringName, gen_seed: int) -> GunInstance:
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	var res := GunGenerator.generate(_gun_library, gen_seed, WeaponClass.builtin(class_id), 1)
+	return _equip_result(res, class_id)
+
+
+## A gun made in the asset workshop (AssetGuns) into the player's hands, or null if
+## there is no such design.
+func _equip_asset_gun(id: StringName, gen_seed: int) -> GunInstance:
+	if _gun_library == null:
+		_gun_library = GunPlaceholderParts.build_library()
+	var res := AssetGuns.generate(_gun_library, id, gen_seed, 1)
+	if res == null:
+		print("[city] no asset gun '%s' (export it from the asset workshop, Alt X)" % id)
+		return null
+	return _equip_result(res, res.weapon_class.id)
+
+
+func _equip_result(res: GunGenerator.Result, class_id: StringName) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	if _arsenal != null and _player.is_possessing():
 		# The hands are the arsenal's: the new gun takes the place of the one held.
@@ -8485,6 +8508,72 @@ func _jam_touching(isl: BrickIsland, by_body: Dictionary) -> Array:
 ## takes the gun out of view and changes it there, the walk and the run, a reload's
 ## pinch hand, and a hard landing that slams the muzzle down. Pictures in
 ## shots/arms_*.png.
+## `-- --asset-gun=<id>`: a gun made in the asset workshop, in the player's hands. It is
+## held (both hands on it), fired, and reloaded with its magazine coming off in the left
+## hand and going back; pictures asset_gun_*.png. Docs/AssetWorkshop.md, "Into the game".
+func _run_asset_gun_pass() -> void:
+	print("[asset gun] %s in the hands" % _asset_gun)
+	_player.drive_uncaptured = true
+	var open := Vector3(-70.0, 0.0, -70.0)
+	camera.global_position = open + Vector3(0.0, 6.0, 0.0)
+	camera.rotation = Vector3.ZERO
+	_enter_pawn(open + Vector3(0.0, 4.0, 0.0))
+	await _frames(90)
+	camera.rotation = Vector3(-0.08, PI * 0.75, 0.0)
+	var gi := _equip_asset_gun(_asset_gun, 7)
+	_gate_ok("the asset gun is made", gi != null)
+	if gi == null:
+		_finish_asset_gun_pass()
+		return
+	await _frames(60)
+	var arms := _view.arms
+	print("[asset gun] holding %s (%s): %s" % [gi.gun_name, gi.weapon_class.id, gi.describe().replace("
+", " | ")])
+	_gate_ok("it is the one in hand, its own parts", _gun.gun == gi
+			and String((gi.recipe[GunPartDef.Slot.BODY] as GunPartDef).id).begins_with("asset_"))
+	_gate_ok("both hands reach it", arms.reach_gap[0] < 0.005 and arms.reach_gap[1] < 0.005,
+			"short by %.3f / %.3f m" % [arms.reach_gap[0], arms.reach_gap[1]])
+	await _save("asset_gun_idle")
+	# Fire a burst.
+	_gun.set_trigger(true)
+	await _frames(8)
+	await _save("asset_gun_fire")
+	await _frames(20)
+	_gun.set_trigger(false)
+	await _frames(20)
+	# Reload: the magazine comes off in the left hand and goes back.
+	var mag: Node3D = null
+	for n in gi.find_children("*", "Node3D", true, false):
+		if n.is_in_group(GunAssembler.PART_GROUP) and n.get_meta(&"part_slot", -1) == GunPartDef.Slot.MAGAZINE:
+			mag = n
+	var home := gi.to_local(mag.global_position) if mag != null else Vector3.ZERO
+	var furthest := 0.0
+	var shot := false
+	_gun.ammo = 0
+	_gun.reload()
+	for i in 400:
+		await _frames(1)
+		if not _gun.is_reloading():
+			break
+		if mag != null:
+			furthest = maxf(furthest, gi.to_local(mag.global_position).distance_to(home) * gi.scale.x)
+		if not shot and _gun.reload_progress() > 0.5:
+			shot = true
+			await _save("asset_gun_mag_out")
+	await _frames(20)
+	_gate_ok("reloading, its magazine comes off with the hand", mag != null and furthest > 0.05,
+			"%.3f m at most" % furthest)
+	_gate_ok("and is back home after", mag != null
+			and gi.to_local(mag.global_position).distance_to(home) < 0.001)
+	await _save("asset_gun_reloaded")
+	_finish_asset_gun_pass()
+
+
+func _finish_asset_gun_pass() -> void:
+	print("[asset gun] gate: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
 func _run_arms_pass() -> void:
 	print("[arms] the arms and hands in first person")
 	_player.drive_uncaptured = true
@@ -11281,8 +11370,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_enter_pawn(camera.global_position - Vector3.UP * Pawn.EYE_HEIGHT)
 		KEY_T:
-			_gun_class = (_gun_class + 1) % GUN_CLASSES.size()
-			_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+			# The classes, then each gun made in the asset workshop.
+			var made := AssetGuns.ids()
+			_gun_class = (_gun_class + 1) % (GUN_CLASSES.size() + made.size())
+			if _gun_class < GUN_CLASSES.size():
+				_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
+			else:
+				_equip_asset_gun(made[_gun_class - GUN_CLASSES.size()], _combat_rng.randi())
 			_gun_armed = true
 		KEY_R:
 			if _gun_armed and not _player.is_possessing():
