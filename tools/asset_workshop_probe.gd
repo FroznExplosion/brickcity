@@ -787,3 +787,40 @@ func _round4() -> void:
 	_ok("a stud on a slope leans with its face", not lean.is_empty(), str(lean))
 	_ws.extra_studs.clear()
 	_ws._draw_studs()
+
+	# Stage 4: exploded, and parts moved whole. A body, and a barrel forward of it (-x).
+	_ws._new_build()
+	_ws.select_part(0)
+	_lay("brick_2x4", Vector3i(30, 1, 20))
+	_ws.select_part(_ws.part_names.find("barrel"))
+	_lay("brick_2x4", Vector3i(26, 1, 20))
+	var bsize := BrickPalette.size_of(_ws.recipe.part_of(1))
+	_ws.select_part(0)
+	_ws.set_exploded(true)
+	_ws._rebuild_display()
+	_ok("exploded, each part is drawn on its own", _ws._display.has("body") and _ws._display.has("barrel"))
+	var off: Vector3 = _ws._offsets.get("barrel", Vector3.ZERO)
+	_ok("the barrel goes forward of the body, the body stays", off.x < -3.0 and _ws._offsets.get("body") == Vector3.ZERO, str(off))
+	# A ray down onto the barrel where it is drawn is taken into the barrel where it is.
+	var above := Vector3((26 + bsize.x * 0.5) * STUD + off.x, 5.0, (20 + bsize.z * 0.5) * STUD)
+	var into: Array = _ws.ray_into_parts([above, Vector3.DOWN])
+	var met: Dictionary = _ws._first_hit(into[0], into[1])
+	_ok("a ray onto a drawn-apart part meets it where it really is", _ws._ray_part == "barrel" and not met.is_empty()
+			and _ws._recipe_id_at(0, met.block) == 1, "%s %s" % [_ws._ray_part, str(met)])
+	# Moved whole, as one undo, studs with it; refused onto another part.
+	var st: Dictionary = _ws.stud_hit(Vector3((26 + bsize.x * 0.5 + 0.1) * STUD, 2.4 * 0.14, 30 * STUD), Vector3.FORWARD)
+	_ws.stud_edit(true, st)
+	_ok("a part will not move into another", not _ws.move_part("barrel", Vector3i(4, 0, 0)))
+	_ok("moved whole", _ws.move_part("barrel", Vector3i(-3, 2, 0)) and _ws.recipe.cell_of(_ws.recipe.size() - 1) == Vector3i(23, 3, 20),
+			str(_ws.recipe.cell_of(_ws.recipe.size() - 1)))
+	_ok("its studs go with it", is_equal_approx(float(_ws.extra_studs[0].at[0]), float(st.at[0]) - 3.0), str(_ws.extra_studs))
+	_ws._undo()
+	var back := false
+	for k in _ws.recipe.size():
+		back = back or _ws.recipe.cell_of(k) == Vector3i(26, 1, 20)
+	_ok("one Z puts it back, studs and all", back and is_equal_approx(float(_ws.extra_studs[0].at[0]), float(st.at[0])),
+			str(_ws.extra_studs))
+	_ws.set_exploded(false)
+	_ok("closed, the parts are one build again", _ws._display.is_empty() and _ws.part_offset("barrel") == Vector3.ZERO)
+	_ws.extra_studs.clear()
+	_ws._draw_studs()
