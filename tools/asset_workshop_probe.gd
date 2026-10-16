@@ -1071,6 +1071,10 @@ func _round8() -> void:
 			and float(zs.get("probe2_barrel", 0.0)) < float(zs.get("body", 0.0)) - 0.05
 			and float(zs.get("probe2_stock", 0.0)) > float(zs.get("body", 0.0)) + 0.05, str(zs))
 	gun.queue_free()
+	var pdir: String = _ws.export_print(false)
+	_ok("print files go beside the other print files, outside the repository",
+			pdir.ends_with("/brickcity-print/guns/" + _ws.slug(_ws.recipe.name if _ws.recipe.name != "untitled" else "gun"))
+			and not pdir.begins_with(ProjectSettings.globalize_path("res://")), pdir)
 	_ws.muzzle_end = "-x"
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(dir + f)
