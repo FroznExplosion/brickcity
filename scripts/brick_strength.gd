@@ -48,6 +48,12 @@ const MAX_TIMES := 44.0
 ## x SCALED. Set from the saved setting (BrickcityMenuHost); a headless run is
 ## a test and keeps the default, as a test window does.
 static var times := DEFAULT_TIMES
+## How far a floor reaches past what holds it up, in studs, for a brick of
+## plain PLA; stronger materials reach that many times their toughness
+## (BrickWorld.cut_spans; Docs/Structures.md 2.3). Options > Gameplay, "Floor
+## Reach" (BrickcityMenuHost).
+const SPAN_DEFAULT := 20.0
+static var span_reach := SPAN_DEFAULT
 
 
 ## What a stud holds in tension, in the solve's mass units.
