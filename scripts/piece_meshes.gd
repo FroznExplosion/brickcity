@@ -27,6 +27,8 @@ const SIDES := 8
 static var _stud: ArrayMesh = null
 static var _stud_plain: ArrayMesh = null
 static var _stud_square: ArrayMesh = null
+static var _stud_card: ArrayMesh = null
+static var _stud_card_material: ShaderMaterial = null
 static var _round_plate: ArrayMesh = null
 static var _tuft: ArrayMesh = null
 static var _pebble: ArrayMesh = null
@@ -146,6 +148,40 @@ static func stud_square() -> ArrayMesh:
 		Vector3(top, STUD_H, top), Vector3(-top, STUD_H, top))
 	_stud_square = st.commit()
 	return _stud_square
+
+
+## The FAR stud: one quad, two triangles, for bricks past BrickNear.stud_radius.
+## Its corners are only where it starts: shaders/stud_card.gdshader turns it to
+## face the camera and sizes it to the stud's outline every frame, so its UV is
+## the card's own coordinates (x across, -1..1; y up, 0..1) and its box is set
+## to hold the card whichever way it turns.
+static func stud_card() -> ArrayMesh:
+	if _stud_card != null:
+		return _stud_card
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	var tall := STUD_H + STUD_R * 2.0
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3(-STUD_R, 0, 0), Vector3(STUD_R, 0, 0),
+			Vector3(STUD_R, tall, 0), Vector3(-STUD_R, tall, 0)])
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([Vector3.BACK, Vector3.BACK, Vector3.BACK,
+			Vector3.BACK])
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([Vector2(-1, 0), Vector2(1, 0), Vector2(1, 1),
+			Vector2(-1, 1)])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 2, 1, 0, 3, 2])
+	_stud_card = ArrayMesh.new()
+	_stud_card.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_stud_card.custom_aabb = AABB(Vector3(-STUD_R * 2.0, -STUD_R, -STUD_R * 2.0),
+			Vector3(STUD_R * 4.0, tall + STUD_R * 2.0, STUD_R * 4.0))
+	return _stud_card
+
+
+static func stud_card_material() -> ShaderMaterial:
+	if _stud_card_material == null:
+		_stud_card_material = ShaderMaterial.new()
+		_stud_card_material.shader = load("res://shaders/stud_card.gdshader")
+		_stud_card_material.set_shader_parameter("stud_radius", STUD_R)
+		_stud_card_material.set_shader_parameter("stud_height", STUD_H)
+	return _stud_card_material
 
 
 ## A 1x1 round plate: the water surface piece (spec §4). Octagonal skirt plus a

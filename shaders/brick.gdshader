@@ -190,13 +190,21 @@ void fragment() {
         d = min(min(v_uv.x, v_uv.y), v_face.x - 200.0);
     }
     float dist = length(VERTEX);
+    // FAR is cheap. Most of a city view is bricks too far off for any of the
+    // detail below to show: past where each part has faded to nothing it is
+    // not worked out at all -- the drawn seam past seam_fade_end, the shaded
+    // bevel past chamfer_fade_end, the printed paths (walls, zigzag, stairs,
+    // seam, voids) past print_fade_end, the underside's roof past
+    // under_depth_range. What is left out there is the colour, the face's
+    // finish and the layers' anisotropy, a handful of instructions.
+    bool print_near = dist < print_fade_end;
     // An authored surface is copied as it is into the chamfered near mesh
     // (Docs/BrickBevel.md 2.3): it has no real bevel there, so its shaded one
     // stays at every distance.
     float outline_w = geo_bevel > 0.5 && !authored
             ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
 
-    if (seams_enabled) {
+    if (seams_enabled && dist < seam_fade_end) {
         // One screen pixel, measured in the same metres. Keeps the seam
         // visible at range instead of aliasing into a dotted mess.
         float aa = max(fwidth(d), 1e-5);
@@ -215,7 +223,7 @@ void fragment() {
         // The real thing: already at 45 degrees, and as glossy as the shaded
         // one is made.
         roughness *= chamfer_gloss;
-    } else if (authored && chamfer_enabled && chamfer_width > 0.0) {
+    } else if (authored && chamfer_enabled && chamfer_width > 0.0 && dist < chamfer_fade_end) {
         // The same 45-degree band, along whichever real edge is nearest: the
         // edge's direction is the gradient of the distance to it, worked out
         // in the surface from the screen derivatives (a 2x2 solve: the
@@ -248,7 +256,7 @@ void fragment() {
                 roughness = mix(roughness, roughness * chamfer_gloss, on_bevel);
             }
         }
-    } else if (chamfer_enabled && chamfer_width > 0.0) {
+    } else if (chamfer_enabled && chamfer_width > 0.0 && dist < chamfer_fade_end) {
         // A tangent frame from the UV mapping rather than from the vertex data:
         // the mesher writes no TANGENT, and every face here is axis-aligned in
         // its own chunk but the chunk can be at any angle once it is falling.
@@ -299,7 +307,7 @@ void fragment() {
     // walked back along the face's own axes. One seed a face: the grain of a
     // wood brick, the wobble of a printed one's layers.
     float seed = authored ? 0.37 : 0.0;   // an authored face has no corner to hash
-    if (!authored) {
+    if (!authored && dist < print_fade_end * 2.0) {
         vec3 dlx = dFdx(v_local);
         vec3 dly = dFdy(v_local);
         vec2 dux = dFdx(v_uv);
@@ -353,12 +361,12 @@ void fragment() {
                 // diagonals, turned as the part lies.
                 float bw = ps_bead(face, mat);
                 float wall = float(ps_walls(mat)) * bw;
-                if (d < wall) {
+                if (d < wall && print_near) {
                     t = d / bw;
                 } else {
                     t = dot(v_local.xz, ps_top_normal(v_face.y > 350.0)) / bw;
                 }
-                if (wall > 0.0) {
+                if (wall > 0.0 && print_near) {
                     float jw = 0.18 * bw + fwidth(d);
                     junction = (1.0 - smoothstep(0.0, jw, abs(d - wall))) * 0.6;
                 }
@@ -396,7 +404,7 @@ void fragment() {
             float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
                            min(v_uv.y, fsize.y - v_uv.y));
             float wall = float(ps_walls(mat)) * bw;
-            if (d2 < wall) {
+            if (d2 < wall && print_near) {
                 t = d2 / bw;
             } else {
                 // The block's own corner, in the same world metres the
@@ -407,18 +415,20 @@ void fragment() {
                     n.y = -n.y;
                 }
                 t = dot(v_uv, n) / bw;
-                float e = d2 - wall;
-                vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
-                        fwidth(t));
-                if (zz.x > 0.5) {
-                    // On a connector: one bead along the wall, a bead wide.
-                    t = e / bw + 0.5;
+                if (print_near) {
+                    float e = d2 - wall;
+                    vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
+                            fwidth(t));
+                    if (zz.x > 0.5) {
+                        // On a connector: one bead along the wall, a bead wide.
+                        t = e / bw + 0.5;
+                    }
+                    gap = zz.y;
                 }
-                gap = zz.y;
             }
             // Where the raster meets the innermost wall the two never quite
             // fuse: a fine dark line round the infill.
-            if (wall > 0.0) {
+            if (wall > 0.0 && print_near) {
                 float jw = 0.18 * bw + fwidth(d2);
                 junction = (1.0 - smoothstep(0.0, jw, abs(d2 - wall))) * 0.6;
             }
@@ -436,7 +446,7 @@ void fragment() {
         }
         ps_beads(t, t, bead_face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
-        if (stairs > 0.0) {
+        if (stairs > 0.0 && print_near) {
             float aa = max(fwidth(t), 1e-5);
             float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
             float k = stair_strength * resolved * resolved
@@ -444,7 +454,7 @@ void fragment() {
             vec3 up = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[1].xyz);
             NORMAL = ps_stairs(NORMAL, up, v_local_normal.y, t, aa, k);
         }
-        if (gap > 0.0) {
+        if (gap > 0.0 && print_near) {
             // A void reaches down a layer: dark, and no shine in it. Gone
             // with the rest of the pattern once it is under a pixel.
             float show = gap * (1.0 - smoothstep(print_fade_begin, print_fade_end, dist))
@@ -471,7 +481,9 @@ void fragment() {
             // with its walls found by walking the view ray up into it: a
             // cave, and at range the walk came apart in stripes.)
             float shade = 1.0;
-            if (underside_hollow && solid < 0.99) {
+            if (underside_hollow && solid < 0.99 && dist >= under_depth_range) {
+                shade = mix(under_wall, under_cavity, 0.5);
+            } else if (underside_hollow && solid < 0.99) {
                 const float SD_STEP = 0.003;
                 float s0 = ps_under_sd(cell, fsize);
                 vec2 g = vec2(ps_under_sd(cell + vec2(SD_STEP, 0.0), fsize) - s0,
@@ -492,7 +504,8 @@ void fragment() {
             occlusion = mix(shade * 0.8, 1.0, solid);
             print_rough += (1.0 - solid) * 0.6;
         }
-        if (face == 0 && !authored && !facet && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
+        if (print_near && face == 0 && !authored && !facet
+                && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
             // The Z seam, on the part's low corner in X and Z: a face whose
             // along-axis starts there (UV 0) has it just past the bevel.
             vec3 sm = ps_seam(v_uv.x, chamfer_width + zseam_width, t, seed);
