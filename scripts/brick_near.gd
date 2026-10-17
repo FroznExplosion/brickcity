@@ -398,6 +398,7 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	band.near = near
 	band.mesh = mesh
 	band.state = NEAR
+	@warning_ignore("integer_division")
 	band.tris = mesh.surface_get_array_index_len(0) / 3
 	chamfered_bands += 1
 	chamfered_tris += band.tris
