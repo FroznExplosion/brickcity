@@ -129,6 +129,33 @@ const FLAG_STEP := 256
 ## `radius` is the reach in studs; every machine finds the same rim from the
 ## same bricks and cuts it.
 const FLAG_SPAN := 512
+## SEVER: a storey crushed under one REGION of the building only
+## (BrickWorld.gravity_check's region_ratio; Docs/Structures.md 2.3): the slab
+## `point`, `normal`, `radius` cuts, kept to the blocks whose middle is inside
+## `points[0]`..`points[1]` on plan (x and z, the chunk's own metres).
+const FLAG_REGION := 1024
+
+## The SEVER for a storey crushed under one region (FLAG_REGION), from what
+## BrickWorld.gravity_check answered: the storey under `region_level_cell`,
+## `storey` metres thick, kept to `region` on plan. Tick and target are the
+## caller's.
+static func region_crush(world: BrickWorld, chunk: int, r: Dictionary, storey: float) -> Entry:
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(chunk)
+	var area: Rect2i = r.region
+	var y := float(int(r.region_level_cell) - origin.y) * cs.y
+	var lo := Vector3(float(area.position.x - origin.x) * cs.x, 0.0, float(area.position.y - origin.z) * cs.z)
+	var hi := Vector3(float(area.end.x - origin.x) * cs.x, 0.0, float(area.end.y - origin.z) * cs.z)
+	var e := Entry.new()
+	e.kind = Kind.SEVER
+	e.normal = Vector3.UP
+	e.flags = FLAG_REGION
+	e.point = world.get_chunk_transform(chunk) * Vector3((lo.x + hi.x) * 0.5, y - storey * 0.5,
+			(lo.z + hi.z) * 0.5)
+	e.radius = storey
+	e.points = PackedVector3Array([lo, hi])
+	return e
+
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -235,6 +262,11 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 				return world.cut_spans(chunk, e.radius, true)
 			if e.flags & FLAG_SEAM:
 				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
+			if e.flags & FLAG_REGION and e.points.size() >= 2:
+				var lo: Vector3 = e.points[0]
+				var hi: Vector3 = e.points[1]
+				return world.separate_plane(chunk, e.point, e.normal, e.radius,
+						Rect2(lo.x, lo.z, hi.x - lo.x, hi.z - lo.z))
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)
 		Kind.SOLVE:
 			# As the host's solve went (BrickWorld.solve_structure): `limit` stress
