@@ -3114,9 +3114,10 @@ var stud_census := [0, 0, 0]
 
 
 func stud_census_line() -> String:
-	return "studs at x%.1f (%.1f each): %d building solve(s), %d with a joint failed in tension, %d joint(s) in all; storeys tipped %d, crushed %d" % [
+	return "studs at x%.1f (%.1f each): %d building solve(s), %d with a joint failed in tension, %d joint(s) in all; storeys tipped %d, crushed %d, crushed under one region %d" % [
 			BrickStrength.times, BrickStrength.tension(), stud_census[0], stud_census[1],
-			stud_census[2], int(gravity_fails.tip), int(gravity_fails.crush)]
+			stud_census[2], int(gravity_fails.tip), int(gravity_fails.crush),
+			int(gravity_fails.get("region", 0))]
 
 
 ## What a stud holds, as the buildings that are bricks now have it. The
@@ -3146,7 +3147,7 @@ func _restud() -> void:
 ## crushing is not the studs' doing -- so the check is handed this over how many
 ## times stronger they have been made (_gravity_fail).
 const CRUSH_PER_STUD := 20.0
-var gravity_fails := {"tip": 0, "crush": 0}
+var gravity_fails := {"tip": 0, "crush": 0, "region": 0}
 ## CRUSH_PER_STUD, settable: collapse_probe weakens one tower to crush it.
 var crush_per_stud := CRUSH_PER_STUD
 
@@ -3157,7 +3158,7 @@ func _gravity_fail(b: BuildingRegistry.Building) -> bool:
 	var r: Dictionary = world.gravity_check(b.chunk,
 			crush_per_stud * BrickStrength.SCALED / world.get_tension_per_stud(b.chunk))
 	if float(r.get("ratio", 0.0)) < 1.0 or not r.has("level"):
-		return false
+		return _region_fail(b, r)
 	var level: Vector3 = r.level
 	var kind := str(r.kind)
 	var e := DamageLog.Entry.new()
@@ -3182,6 +3183,31 @@ func _gravity_fail(b: BuildingRegistry.Building) -> bool:
 	print("[city] building %d: storey at %.1f m %s (%.1fx what it can, %.0f above)" % [
 			b.id, level.y, "tips over" if kind == "tip" else "is crushed", float(r.ratio),
 			float(r.get("mass_above", 0.0))])
+	return true
+
+
+## The whole boundary holds; does each part of it? (gravity_check's regions,
+## Docs/Structures.md 2.3.) A sum over the whole boundary hardly moves when one
+## part of a building loses what holds it -- the columns under a tower standing
+## on a wide base thinned to a few. Where a region cannot carry what stands over
+## it, the storey under it is torn loose there, and only there: what is above
+## is then held by its neighbours, or not (the stress solve, the span rule).
+func _region_fail(b: BuildingRegistry.Building, r: Dictionary) -> bool:
+	if float(r.get("region_ratio", 0.0)) < 1.0 or not r.has("region"):
+		return false
+	var storey := float(TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
+	var e := DamageLog.region_crush(world, b.chunk, r, storey)
+	e.tick = Engine.get_physics_frames()
+	e.target = b.id
+	if not authority.request(DamageLog.Kind.SEVER, b.id, e.point, e.radius, Vector3.UP):
+		return false
+	if DamageLog.apply_entry(world, b.chunk, e).is_empty():
+		return false
+	authority.commit_entry(e)
+	gravity_fails["region"] = int(gravity_fails.get("region", 0)) + 1
+	print("[city] building %d: storey at %.1f m is crushed under %s studs of it (%.1fx what it can, %.0f above)" % [
+			b.id, e.point.y + storey * 0.5, str(r.region), float(r.region_ratio),
+			float(r.get("region_mass_above", 0.0))])
 	return true
 
 

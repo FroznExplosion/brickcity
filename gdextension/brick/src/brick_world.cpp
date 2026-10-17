@@ -4991,6 +4991,19 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
     // Per boundary h (index h - lo): mass whose bottom is at h and its
     // moments; stud contact at h, its moments, and how far it reaches.
     std::vector<double> m(layers, 0.0), mx(layers, 0.0), mz(layers, 0.0);
+    // And the same mass and contact by REGION: the footprint cut into columns
+    // of GRAVITY_REGION studs, each weighed on its own (Structures.md 2.3). A
+    // sum over the whole boundary hardly moves when one part of a wide
+    // building loses what holds it up.
+    const int rnx = std::max(1, (x1 - x0 + GRAVITY_REGION - 1) / GRAVITY_REGION);
+    const int rnz = std::max(1, (z1 - z0 + GRAVITY_REGION - 1) / GRAVITY_REGION);
+    const int regions = rnx * rnz;
+    std::vector<double> rm((size_t)layers * regions, 0.0), rj((size_t)layers * regions, 0.0);
+    auto region_of = [&](double cx, double cz) {
+        const int rx = std::clamp((int)std::floor((cx - x0) / GRAVITY_REGION), 0, rnx - 1);
+        const int rz = std::clamp((int)std::floor((cz - z0) / GRAVITY_REGION), 0, rnz - 1);
+        return rz * rnx + rx;
+    };
     std::vector<double> j(layers, 0.0), jx(layers, 0.0), jz(layers, 0.0);
     std::vector<double> ex0(layers, 1e30), ex1(layers, -1e30), ez0(layers, 1e30), ez1(layers, -1e30);
     auto touch = [&](int k, double a0, double a1, double b0, double b1, double studs) {
@@ -4999,6 +5012,7 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
         j[k] += studs;
         jx[k] += studs * cx;
         jz[k] += studs * cz;
+        rj[(size_t)k * regions + region_of(cx / cs.x, cz / cs.z)] += studs;
         ex0[k] = std::min(ex0[k], a0);
         ex1[k] = std::max(ex1[k], a1);
         ez0[k] = std::min(ez0[k], b0);
@@ -5020,6 +5034,7 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
         m[bot - lo] += mass;
         mx[bot - lo] += mass * (ax0 + ax1) * 0.5;
         mz[bot - lo] += mass * (az0 + az1) * 0.5;
+        rm[(size_t)(bot - lo) * regions + region_of(b.cell.x + sz.x * 0.5, b.cell.z + sz.z * 0.5)] += mass;
         // Solid plastic through every boundary strictly inside it.
         for (int h = bot + 1; h < top; ++h) {
             touch(h - lo, ax0, ax1, az0, az1, (double)sz.x * (double)sz.z * SOLID_STUDS);
@@ -5055,11 +5070,30 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
     double best_w = 0.0;
     bool best_crush = false;
     int boundaries = 0;
+    std::vector<double> rW((size_t)regions, 0.0);
+    double rbest = 0.0;
+    int rbest_h = -1;
+    int rbest_r = -1;
+    double rbest_w = 0.0;
     for (int h = hi; h > lo; --h) {
         const int k = h - lo;
         W += m[k];
         WX += mx[k];
         WZ += mz[k];
+        for (int r = 0; r < regions; ++r) {
+            rW[(size_t)r] += rm[(size_t)k * regions + r];
+            const double studs = rj[(size_t)k * regions + r];
+            if (h <= floor_y || rW[(size_t)r] <= 0.0 || studs <= 0.0) {
+                continue; // nothing meets here: what is above is the span rule's
+            }
+            const double rc = rW[(size_t)r] / (studs * crush_cap);
+            if (rc > rbest) {
+                rbest = rc;
+                rbest_h = h;
+                rbest_r = r;
+                rbest_w = rW[(size_t)r];
+            }
+        }
         if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
             continue;
         }
@@ -5097,6 +5131,16 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
         out["level_cell"] = best_h;
         out["mass_above"] = best_w / (double)brick::MASS_FIXED;
         out["kind"] = best_crush ? "crush" : "tip";
+    }
+    out["region_ratio"] = rbest;
+    if (rbest_h >= 0) {
+        const int rx = rbest_r % rnx;
+        const int rz = rbest_r / rnx;
+        const int ax = x0 + rx * GRAVITY_REGION;
+        const int az = z0 + rz * GRAVITY_REGION;
+        out["region"] = Rect2i(ax, az, std::min(GRAVITY_REGION, x1 - ax), std::min(GRAVITY_REGION, z1 - az));
+        out["region_level_cell"] = rbest_h;
+        out["region_mass_above"] = rbest_w / (double)brick::MASS_FIXED;
     }
     return out;
 }
@@ -7207,7 +7251,7 @@ PackedInt32Array BrickWorld::separate_planes(int chunk_id, PackedVector3Array wo
 }
 
 PackedInt32Array BrickWorld::separate_plane(int chunk_id, Vector3 world_point,
-        Vector3 world_normal, float thickness) {
+        Vector3 world_normal, float thickness, Rect2 within) {
     PackedInt32Array loosened;
     if (!valid_chunk(chunk_id) || thickness <= 0.0f) {
         return loosened;
@@ -7231,6 +7275,9 @@ PackedInt32Array BrickWorld::separate_plane(int chunk_id, Vector3 world_point,
         Vector3 centre, size;
         block_extent(c, b, centre, size);
         if (std::abs((centre - p).dot(n)) > half) {
+            continue;
+        }
+        if (within.has_area() && !within.has_point(Vector2(centre.x, centre.z))) {
             continue;
         }
         // Loose, not gone.
@@ -9262,8 +9309,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_chunk_anchored", "chunk_id", "anchored"),
             &BrickWorld::set_chunk_anchored);
     ClassDB::bind_method(D_METHOD("get_chunk_com", "chunk_id"), &BrickWorld::get_chunk_com);
-    ClassDB::bind_method(D_METHOD("separate_plane", "chunk_id", "world_point", "world_normal", "thickness"),
-            &BrickWorld::separate_plane);
+    ClassDB::bind_method(D_METHOD("separate_plane", "chunk_id", "world_point", "world_normal", "thickness",
+            "within"), &BrickWorld::separate_plane, DEFVAL(Rect2()));
     ClassDB::bind_method(D_METHOD("separate_planes", "chunk_id", "world_points", "world_normal", "thickness"),
             &BrickWorld::separate_planes);
     ClassDB::bind_method(D_METHOD("set_chunk_transform", "chunk_id", "xform"),

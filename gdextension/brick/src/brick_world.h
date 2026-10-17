@@ -475,6 +475,10 @@ public:
     /// horizontal axis.
     Dictionary lateral_check(int chunk_id, float accel_g, Vector3 world_dir);
 
+    /// Studs across a region of the load check (gravity_check): a tile's
+    /// width (Docs/Structures.md 2.2, 2.3).
+    static constexpr int GRAVITY_REGION = 32;
+
     /// Gravity alone, storey by storey (Docs/Collapse.md, "per-floor"). The
     /// stress solve fails only joints in tension, and the stability test asks
     /// only whether the whole building stands on its foundation -- so a top
@@ -490,6 +494,11 @@ public:
     ///          stud bearing `crush_per_stud` times tension_per_stud.
     /// Returns {ratio, kind ("tip" or "crush"), level, level_cell, mass_above,
     /// boundaries} for the worst boundary; ratio >= 1 fails there.
+    ///   And CRUSH by REGION: the footprint cut into columns GRAVITY_REGION
+    ///          studs square, each weighed against its own contact -- one bay
+    ///          of a wide building losing what holds it hardly moves the sum
+    ///          over the whole boundary. {region_ratio, region (Rect2i, cells
+    ///          x/z), region_level_cell, region_mass_above} for the worst.
     Dictionary gravity_check(int chunk_id, float crush_per_stud);
 
     /// How far a floor reaches between its supports (Docs/Structures.md 2.3).
@@ -919,8 +928,11 @@ public:
     /// cross-section at the point of impact, so it comes apart in two long
     /// pieces rather than shedding a handful of bricks around the contact.
     /// `thickness` is the full width of the band, in metres.
+    /// `within`, when it has an area, keeps the slab to the blocks whose
+    /// middle is inside it on plan: chunk-space metres, x and z (a region of
+    /// the load check, gravity_check).
     PackedInt32Array separate_plane(int chunk_id, Vector3 world_point,
-            Vector3 world_normal, float thickness);
+            Vector3 world_normal, float thickness, Rect2 within = Rect2());
 
     /// Several parallel breaks in ONE walk of the chunk.
     ///
