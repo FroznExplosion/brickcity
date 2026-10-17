@@ -22,8 +22,9 @@ wide building, a castle or a hall shows up:
 1. **Bands are slices across the whole building** (`Chunk::section_of_y`). Mesh, collision, the near
    tier and every rebuild after a hit are a band at a time. A band of a 240 x 80-stud floor plan is
    all of it at that height: one hit, the whole floor rebuilt.
-2. **The load check takes a whole boundary at once.** One bay of a wide building with its columns
-   shot away hardly moves the sum over the boundary, so it never fails.
+2. ~~**The load check takes a whole boundary at once.**~~ One bay of a wide building with its columns
+   shot away hardly moves the sum over the boundary, so it never fails. (By region as well since
+   2026-10-17, 2.3; a bay shot across falls by the span rule.)
 3. **Interiors and a landing's floor-line snap use the recipe's storey height**
    (`TowerRecipe.STOREY_PLATES`). A double-height hall or a mezzanine half a storey up is not a
    storey.
@@ -72,7 +73,7 @@ a castle tiles along its walls. A hit rebuilds a tile. `Chunk::section_of_y` bec
 the band code paths (`build_chunk_mesh_section`, `add_band_shapes`, `BrickNear` bands, the shell
 bands) take tiles.
 
-### 2.3 Loads by region, and spans — the span rule built 2026-10-16
+### 2.3 Loads by region, and spans — the span rule built 2026-10-16, regions 2026-10-17
 **Built: how far a floor reaches** (`BrickWorld.cut_spans`, `cut_spans_resting`). A stud column of
 a block is **held** when it stands on the foundation, or on the block under it held in that same
 column and joined to it; a block is held when any column of it is. (By block, not column, "held"
@@ -97,8 +98,27 @@ as one piece.
   pieces by rule (cut there, a far one came down in three, `collapse_probe`). Cut on the host;
   what leaves is a DETACH like any piece's. Resting on another piece does not hold it yet, and on
   terrain the ground does not (no seeds there: nothing is cut).
-`tools/span_probe.gd`, 6. Still to do: the load check by region (`gravity_check` over the whole
-boundary misses one bay's columns gone in a wide building), and the reach tuned by feel (the slider is in).
+`tools/span_probe.gd`, 6. Still to do: the reach tuned by feel (the slider is in).
+
+**Built 2026-10-17: the load check by region.** `BrickWorld.gravity_check` weighs, besides the
+whole boundary, each **region** of it: the footprint cut into columns `GRAVITY_REGION` (32) studs
+square, a tile's width (2.2), each region's mass above against its own stud contact, crushed past
+the same limit (`region_ratio`, `region`). Where the whole boundary holds and a region does not,
+`CityScene._region_fail` tears loose the storey under that region only -- a SEVER with
+`DamageLog.FLAG_REGION`, the slab a crush cuts kept to the region on plan (`separate_plane`'s
+`within`; `DamageLog.region_crush` makes it) -- and what stood on it is then held by its neighbours
+or not (the stress solve, the span rule). A region with no contact at all is skipped: what hangs
+over nothing is the span rule's.
+*What it is for, measured first:* one bay of a wide building shot out across its depth already
+falls by the span rule (120 x 40, 40 studs of ground storey gone: a rim of 58 cut; the whole
+boundary read 0.05, the region 0.31), and a bay inside with its walls kept stands, its floor
+reaching 15 studs to a wall. The region check is for **one part much heavier than the rest** --
+a tower on a wide base, a castle tower on its wall: the 80 x 60 tower cut down to three storeys
+but for a 32-stud corner, the columns under the corner shot out, reads **0.22 over the whole
+boundary before and after, and 1.52 in the region under the tower**.
+*No false alarms:* every shape the city builds, whole, has its worst region at 0.02-0.54 (the
+246-course tower; its whole boundary 0.54), at most 0.12 over its whole boundary.
+`tools/region_probe.gd`, 6.
 
 The plan as it was:
 The load check per column of tiles rather than over the whole boundary, and a **span rule**: a floor
