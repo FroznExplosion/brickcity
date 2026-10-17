@@ -3179,6 +3179,14 @@ func _pay_span_owed() -> void:
 	for id in _span_owed.keys():
 		if now - int(_span_asked.get(id, -1000000)) < SPAN_EVERY_MS:
 			continue
+		# Not while it is still coming apart: what the stress solve, the
+		# storeys' check (tipping over a corner left, crushing) and the collapse
+		# director make of it first; a span is asked of what is left hanging
+		# once it is quiet. Asked first, it cut the floors over a storey shot
+		# down to one corner, which should tip off it whole (storey_probe), and
+		# broke a close collapse into three pieces (collapse_probe).
+		if _mid_collapse(id):
+			continue
 		_span_owed.erase(id)
 		_span_asked[id] = now
 		var b := registry.get_building(id)
@@ -5701,8 +5709,15 @@ func _drop_proxies(id: int) -> void:
 func _wreck_settled(isl: BrickIsland) -> void:
 	if not authority.may_decide() or not isl.is_valid() or not isl.landmark or isl.piece_id < 0:
 		return
-	if _span_piece(isl):
-		return
+	_wreck_load(isl)
+	# Then does it reach what holds it? (Its weight first: what it lies on
+	# breaking under it is what brings the rest down -- asked first, a close
+	# collapse came down in three pieces where it came down in more.)
+	if isl.is_valid():
+		_span_piece(isl)
+
+
+func _wreck_load(isl: BrickIsland) -> void:
 	var xf := isl.chunk_transform()
 	var contacts := {}   # building id -> Array of absolute cells
 	var total := 0
@@ -5767,10 +5782,17 @@ var _wreck_load_count := 0
 ## does (BrickWorld.cut_spans_resting; Docs/Structures.md 2.3): the rim is cut,
 ## and what it bounded is shed from the piece and falls, a DETACH for every
 ## machine as any piece's. Resting on another piece is not held, yet. True when
-## it was cut (it has moved: what it lies on is asked again when it settles).
+## it was cut.
 func _span_piece(isl: BrickIsland) -> bool:
 	var box := islands.world_aabb(isl)
 	if maxf(box.size.x, box.size.z) < span_reach * BrickPalette.STUD_M * 2.0:
+		return false
+	# Far from everybody a collapse is a few big pieces by rule, and a landing
+	# there breaks nothing (IslandManager.FRACTURE_RANGE); nor does this. Cut
+	# there, a far collapse came down in three pieces where it is one
+	# (collapse_probe).
+	var points := islands.interest_points()
+	if points.is_empty() or islands._nearest_interest(box.get_center(), points) > IslandManager.FRACTURE_RANGE:
 		return false
 	var chunks := PackedInt32Array()
 	for id in _near_buildings(box.get_center(), maxf(box.size.x, box.size.z) * 0.5 + 0.3):

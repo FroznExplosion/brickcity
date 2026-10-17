@@ -84,12 +84,17 @@ toughness (stone 2.5, metal 4) it has nothing near enough under it, and the **ri
 nothing -- its blocks joined to what has -- is cut (joined to nothing): what the rim bounded falls
 as one piece.
 * **A standing building**: owed after a solve that finds nothing falling, paid one building a tick,
-  each at most every `SPAN_EVERY_MS` (`CityScene._pay_span_owed`); a cut is a SEVER command with
+  each at most every `SPAN_EVERY_MS`, and never while it is still coming apart (`_mid_collapse`:
+  the stress solve, the storeys' tip and crush and the director first -- asked first, it cut the
+  floors over a storey shot down to one corner, which tips off it whole) (`CityScene._pay_span_owed`);
+  a cut is a SEVER command with
   `DamageLog.FLAG_SPAN` (every machine finds the same rim from the same bricks). 2.9 ms for the
   23,000-brick tower, 0.6 ms for a 2,500-brick wide building; nothing whole is ever near it (floor
   panels lie on columns every PANEL studs).
-* **A piece come to rest lying level** (`CityScene._span_piece`, from `_wreck_settled`): held where
-  it rests -- a brick with a building's solid cell or the ground just under it. Cut on the host;
+* **A piece come to rest lying level** (`CityScene._span_piece`, from `_wreck_settled`, after its
+  weight is put on what it lies on): held where it rests -- a brick with a building's solid cell or
+  the ground just under it. Not past `FRACTURE_RANGE` of everybody, where a collapse is a few big
+  pieces by rule (cut there, a far one came down in three, `collapse_probe`). Cut on the host;
   what leaves is a DETACH like any piece's. Resting on another piece does not hold it yet, and on
   terrain the ground does not (no seeds there: nothing is cut).
 `tools/span_probe.gd`, 6. Still to do: the load check by region (`gravity_check` over the whole
