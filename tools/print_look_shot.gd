@@ -38,7 +38,28 @@ const VIEWS := [
 	["shapes_close", Vector3(1.0, 0.75, 7.0), Vector3(0.8, 0.2, 6.0)],
 	["arch_close", Vector3(5.95, 0.4, 7.1), Vector3(5.95, 0.25, 5.75)],
 	["wall", Vector3(6.5, 1.6, 9.0), Vector3(5.6, 0.8, 0.7)],
+	# The ceiling (ROOM, away from the rest, so it shades nothing of it).
+	["ceiling", Vector3(41.4, 0.9, 4.2), Vector3(42.6, 2.3, 3.0)],
+	["ceiling_close", Vector3(42.2, 1.6, 3.6), Vector3(42.5, 2.3, 3.1)],
+	["ledge", Vector3(41.0, 1.4, 5.6), Vector3(41.5, 2.6, 4.4)],
+	# Terraces of bricks at range, their studs drawn by BrickNear as in the
+	# game: cards past 18 m (_card on, _nocard with that ring off).
+	["far22_card", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0)],
+	["far22_nocard", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0), 0.0],
+	["far35_card", Vector3(84.0, 12.0, 43.0), Vector3(84.0, 1.0, 4.0)],
+	["far35_nocard", Vector3(84.0, 12.0, 43.0), Vector3(84.0, 1.0, 4.0), 0.0],
+	["far17", Vector3(84.0, 6.5, 24.0), Vector3(84.0, 1.0, 4.0)],
+	# The same through a long lens: the tiers at their distance, blown up.
+	["far22_card_zoom", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0), 45.0, 12.0],
+	["far22_nocard_zoom", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0), 0.0, 12.0],
+	["far17_zoom", Vector3(84.0, 6.5, 24.0), Vector3(84.0, 1.0, 4.0), 45.0, 12.0],
+	# One top, through a very long lens: as a card at 30 m, a square post at 15.
+	["one_card", Vector3(84.0, 8.0, 30.0), Vector3(84.2, 2.55, 0.7), 45.0, 2.5],
+	["one_square", Vector3(84.0, 4.5, 15.5), Vector3(84.2, 2.55, 0.7), 45.0, 5.0],
 ]
+const ROOM := Vector3(40, 0, 0)
+const FAR := Vector3(80, 0, 0)
+var _near: BrickNear
 
 var _out := "user://"
 var _looks := ["glass"]
@@ -156,6 +177,46 @@ func _build() -> void:
 	mmi.material_override = stud_mat
 	root3.add_child(mmi)
 
+	# A ceiling overhead, as a storey's floor is seen from the room under it:
+	# 2x4s in a running bond, its front edge a ledge with a wall standing on
+	# it (ceiling, ledge views).
+	var room := w.create_chunk(Vector3i.ZERO, Vector3i(16, 24, 16))
+	for row in 6:
+		for k in 4:
+			var xx := k * 4 + (row % 2) * 2
+			if xx + 4 <= 16:
+				w.place_block(room, Vector3i(xx, 15, row * 2), pal["brick_2x4_x"], [0, 2, 4][(row + k) % 3])
+	for xx in [0, 4, 8]:
+		w.place_block(room, Vector3i(xx, 18, 10), pal["brick_2x4_x"], 6)
+	w.place_block(room, Vector3i(2, 21, 10), pal["brick_2x4_x"], 6)
+	var room_arrays: Array = w.build_chunk_chamfer_mesh(room, BrickNear.BEVEL)
+	var room_mesh := ArrayMesh.new()
+	room_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, room_arrays)
+	var rmi := MeshInstance3D.new()
+	rmi.mesh = room_mesh
+	rmi.material_override = mat
+	rmi.position = ROOM
+	root3.add_child(rmi)
+	rmi.set_instance_shader_parameter("geo_bevel", 1.0)
+
+	# Terraces for range: courses stepping back so every top shows.
+	var far := w.create_chunk(Vector3i.ZERO, Vector3i(24, 18, 24))
+	for course in 6:
+		for z in range(0, 21 - course * 4, 4):
+			for xx in range(0, 23, 2):
+				w.place_block(far, Vector3i(xx, course * 3, z), pal["brick_2x4_z"],
+						[0, 2, 4, 6, 8][(course + xx / 2 + z / 4) % 5])
+	var far_arrays: Array = w.build_chunk_mesh(far)
+	var far_mesh := ArrayMesh.new()
+	far_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, far_arrays)
+	var fmi := MeshInstance3D.new()
+	fmi.mesh = far_mesh
+	fmi.material_override = mat
+	fmi.position = FAR
+	root3.add_child(fmi)
+	_near = BrickNear.new(w)
+	_near.track(fmi, far)
+
 	_cam = Camera3D.new()
 	_cam.fov = 50.0
 	root3.add_child(_cam)
@@ -174,6 +235,9 @@ func _process(_d: float) -> bool:
 	if phase == 0:
 		BrickMaterials.set_look(look[1], look[2], false)
 		_cam.look_at_from_position(v[1], v[2])
+		BrickNear.stud_card_radius = v[3] if v.size() > 3 else 45.0
+		_cam.fov = v[4] if v.size() > 4 else 50.0
+		_near.settle(_cam.global_position)
 	elif phase == 5:
 		var path := "%s/print_look_%s_%s.png" % [_out, look[0], v[0]]
 		get_root().get_texture().get_image().save_png(path)

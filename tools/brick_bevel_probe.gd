@@ -243,17 +243,21 @@ func _check_studs() -> void:
 	var tiled := w.get_chunk_studs_section(c, -1).size() / 16
 	_ok("a smooth tile on that covers them and shows none", tiled == 4, "%d" % tiled)
 
-	# The three studs a band steps through (BrickNear._stud_mesh), nearest first.
+	# The four studs a band steps through (BrickNear._sort_studs), nearest
+	# first: the last the far card, two triangles (indexed, the others not).
 	var tris := []
 	for m in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
 		tris.append((m.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3)
-	_ok("each stud tier is fewer triangles than the one before", tris == [38, 22, 10],
+	tris.append((PieceMeshes.stud_card().surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+			as PackedInt32Array).size() / 3)
+	_ok("each stud tier is fewer triangles than the one before", tris == [38, 22, 10, 2],
 			"%s" % [tris])
-	_ok("bevelled inside plain inside square inside none",
+	_ok("bevelled inside plain inside square inside card inside none",
 			BrickNear.stud_bevel_radius <= BrickNear.stud_round_radius
-			and BrickNear.stud_round_radius <= BrickNear.stud_radius,
-			"%.0f, %.0f, %.0f m" % [BrickNear.stud_bevel_radius, BrickNear.stud_round_radius,
-				BrickNear.stud_radius])
+			and BrickNear.stud_round_radius <= BrickNear.stud_radius
+			and BrickNear.stud_radius <= BrickNear.stud_card_radius,
+			"%.0f, %.0f, %.0f, %.0f m" % [BrickNear.stud_bevel_radius, BrickNear.stud_round_radius,
+				BrickNear.stud_radius, BrickNear.stud_card_radius])
 
 	# An instanced build's one mesh is chamfered, and says so.
 	var was := BrickNear.enabled

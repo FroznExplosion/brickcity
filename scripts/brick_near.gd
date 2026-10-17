@@ -17,7 +17,8 @@ extends RefCounted
 ##     (BrickWorld.get_chunk_studs_section: the workshop's rule -- none where a
 ##     brick covers it, none on a smooth plate), each STUD by its own distance:
 ##     bevelled inside `stud_bevel_radius`, a plain octagon to
-##     `stud_round_radius`, a square post to `stud_radius`, nothing past it.
+##     `stud_round_radius`, a square post to `stud_radius`, a flat card to
+##     `stud_card_radius`, nothing past it.
 ##   * `damaged` patches the chamfered bands of a chunk as the owner patches
 ##     its flat ones, and has the studs counted again.
 ##
@@ -51,6 +52,12 @@ static var stud_radius := 18.0
 ## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square.
 static var stud_bevel_radius := 8.0
 static var stud_round_radius := 13.0
+## And past `stud_radius`, to here, a CARD: two triangles that turn to face the
+## camera, sized to the stud's outline from there, flat colour, no print
+## (PieceMeshes.stud_card). Past 18 m a stud is under fifteen pixels; what has
+## to read is that the tops are studded, so a building across a square is not
+## a stack of smooth boxes. Set it to `stud_radius` to turn the ring off.
+static var stud_card_radius := 45.0
 ## A band goes back to flat this much further out than it came in.
 const MARGIN := 2.0
 ## A band is left alone this long after it was last (re)built: one being
@@ -67,6 +74,7 @@ const STUD_BUILDS := 2
 ## How far the camera moves, in a band's own space, before that band's studs
 ## are sorted into their rings again. The rings' edges move in steps this big.
 const STUD_RESORT := 1.0
+const STUD_RESORT_FAR := 4.0
 
 enum { FLAT, PENDING, UPLOADING, NEAR }
 
@@ -87,7 +95,7 @@ class Band:
 	var task := -1
 	var holder: Array
 	var discard := false
-	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square
+	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square, card
 	var stud_buffer := PackedFloat32Array()      ## every stud of the band
 	var stud_eye := Vector3.INF                  ## where they were last sorted from
 	var stud_bevelled := true                    ## ... and with `enabled` as it was
@@ -130,7 +138,9 @@ func _init(w: BrickWorld) -> void:
 	PieceMeshes.stud()
 	PieceMeshes.stud_plain()
 	PieceMeshes.stud_square()
+	PieceMeshes.stud_card()
 	TerrainTile.stud_material()
+	PieceMeshes.stud_card_material()
 
 
 ## A band of `chunk` is drawn by `node` from here on (again: its mesh was
@@ -431,13 +441,18 @@ func _to_flat(band: Band) -> void:
 func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 	# The band's box against the furthest ring; a stud's own distance decides
 	# the rest (_sort_studs).
-	if dist >= stud_radius + (MARGIN if not band.studs.is_empty() else 0.0):
+	var outer := maxf(stud_radius, stud_card_radius)
+	if dist >= outer + (MARGIN if not band.studs.is_empty() else 0.0):
 		if not band.studs.is_empty():
 			_drop_studs(band)
 		return
 	var fetch := band.studs.is_empty() or band.studs_dirty
+	# Out among the cards only the outer ring's edge moves, and a card coming
+	# or going a few metres late out there is not seen: sorted again less
+	# often.
+	var resort := STUD_RESORT if dist < stud_radius + MARGIN else STUD_RESORT_FAR
 	if not fetch and band.stud_bevelled == enabled \
-			and local_eye.distance_squared_to(band.stud_eye) < STUD_RESORT * STUD_RESORT:
+			and local_eye.distance_squared_to(band.stud_eye) < resort * resort:
 		return
 	if int(budget[0]) <= 0:
 		return
@@ -455,10 +470,12 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 func _sort_studs(band: Band, local_eye: Vector3) -> void:
 	if band.studs.is_empty():
 		var layers := band.layers if band.state == NEAR else _layers_of(band.node)
-		for mesh in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
+		for mesh in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square(),
+				PieceMeshes.stud_card()]:
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "Studs"
-			mmi.material_override = TerrainTile.stud_material()
+			mmi.material_override = PieceMeshes.stud_card_material() \
+					if mesh == PieceMeshes.stud_card() else TerrainTile.stud_material()
 			# Studs never cast (Terrain.md 7.4).
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -474,10 +491,11 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 	band.stud_bevelled = enabled
 	# With the tier off there is no bevelled ring: its studs are plain.
 	var rings := PackedFloat32Array([stud_bevel_radius if enabled else 0.0,
-			maxf(stud_round_radius, stud_bevel_radius), stud_radius])
+			maxf(stud_round_radius, stud_bevel_radius), stud_radius,
+			maxf(stud_card_radius, stud_radius)])
 	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings)
 	var drawn := 0
-	for k in 3:
+	for k in 4:
 		var part: PackedFloat32Array = parts[k]
 		var mm := band.studs[k].multimesh
 		@warning_ignore("integer_division")
