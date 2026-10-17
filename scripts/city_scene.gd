@@ -2563,6 +2563,12 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	add_child(mi)
 	_shells[id] = mi
 	_shell_coarse[id] = coarse
+	# Damaged and still in bricks (_demesh): drawn from its bricks as they are
+	# once a coarse mesh of them is made (_far_real); the shell meanwhile.
+	var real := b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
+			and not damage.is_empty() and not _toppling.has(id)
+	if real:
+		_far_real(id, mi)
 	# Its windows, with a room painted behind each: a shell has no openings, so
 	# the fake rung cannot show through it. Not on the coarse tier -- past a
 	# hundred metres a window is a pixel -- and not on a player build, which
@@ -2570,7 +2576,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# does, and with its own material so the brick material is untouched.
 	# Owed, not built here: _build_owed_glass makes them a tick or two later,
 	# so many in a tick, in its own budget.
-	if not coarse and not b.is_build() and not nothing_left:
+	if not coarse and not b.is_build() and not nothing_left and not real:
 		_glass_owed.append([mi, id, damage, fades])
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
@@ -10623,9 +10629,60 @@ static func _far_box_mesh() -> ArrayMesh:
 	return mesh
 
 
+## A building in bricks past DEMESH_RANGE that is damaged is drawn from its
+## bricks as they are: a coarse mesh of its own grid, as a far piece's stand-in
+## is (IslandManager._build_coarse), on a worker past COARSE_ASYNC_BLOCKS. Its
+## shell draws its damage as holes in each band, and a hole cannot say a floor
+## has come down: a collapsed wide building stood as a skeleton of floors and
+## columns from far off, rubble from close (user, 2026-10-16; Docs/Structures.md
+## 2.1). The shell node stays -- its collision, and every "has a shell" question
+## -- and draws the shell until the coarse mesh is ready. No windows: a coarse
+## mesh has its holes where the bricks are gone. Asked again whenever the shell
+## is (_shell_stale, after a hit).
+var _far_real_owed := {}   ## building id -> the shell node waiting for its mesh
+var far_real_built := 0
+
+
+func _far_real(id: int, mi: MeshInstance3D) -> void:
+	var b := registry.get_building(id)
+	if world.get_alive_block_count(b.chunk) < IslandManager.COARSE_ASYNC_BLOCKS:
+		_far_real_apply(mi, world.build_chunk_coarse_mesh(b.chunk))
+		return
+	if not world.coarse_pending(b.chunk):
+		world.coarse_chunk_async(b.chunk)
+	_far_real_owed[id] = mi
+
+
+func _harvest_far_real() -> void:
+	for id in _far_real_owed.keys():
+		var mi = _far_real_owed[id]
+		var b := registry.get_building(id)
+		if not is_instance_valid(mi) or _shells.get(id) != mi or b == null or not b.is_materialised():
+			_far_real_owed.erase(id)
+			continue
+		if world.coarse_ready(b.chunk):
+			_far_real_owed.erase(id)
+			_far_real_apply(mi, world.take_coarse_mesh(b.chunk))
+		elif not world.coarse_pending(b.chunk):
+			# Settled by an edit (BrickWorld.settle_coarse_job): asked again.
+			world.coarse_chunk_async(b.chunk)
+
+
+func _far_real_apply(mi: MeshInstance3D, arrays: Array) -> void:
+	var m := ArrayMesh.new()
+	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	if mi.mesh != null:
+		_retirer.retire(mi.mesh)
+	mi.mesh = m
+	far_real_built += 1
+
+
 ## Drop the mesh of resident buildings nobody can see the bricks of, and put it
 ## back for ones that have come close again. See DEMESH_RANGE.
 func _stream_detail() -> void:
+	if not _far_real_owed.is_empty():
+		_harvest_far_real()
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
 	var until := t0 + int(DEMESH_BUDGET_MS * 1000.0)

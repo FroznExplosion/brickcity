@@ -35,7 +35,18 @@ wide building, a castle or a hall shows up:
 
 ## 2. The plan, in order
 
-### 2.1 Far view from the real bricks — not started
+### 2.1 Far view from the real bricks — built 2026-10-16
+A damaged recipe building in bricks, past `DEMESH_RANGE`, is drawn by a coarse mesh of its own grid
+(`CityScene._far_real`; a worker past `IslandManager.COARSE_ASYNC_BLOCKS`), the shell drawing until
+it is ready; asked again whenever the shell is (`_shell_stale`, after a hit). No windows on it: its
+holes are where its bricks are gone. The shell node stays, with its collision. `--far` 19 of 19
+unchanged (its damaged-build checks read the shell node, which is still there).
+
+What the test pass showed instead (a 200 x 80 building, its ground storey shot through along its
+length): the three floors above stood on what was left -- a few columns and the end walls. That is
+2.3's to fix, not this.
+
+The plan as it was:
 A damaged building's far tier is a coarse mesh of its own grid (`BrickWorld.coarse_chunk_async`, as
 a far piece's stand-in already is), rebuilt when its bricks change, on a worker. An undamaged one
 keeps the shared recipe shell (cheap, `CityScene._recipe_shell_mesh`).
