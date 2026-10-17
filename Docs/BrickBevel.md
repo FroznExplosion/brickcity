@@ -127,31 +127,35 @@ a floor of 2x4s and two walls of 1x4s meeting in an inside corner, whole and sho
   pushed out under it hangs a bevel past its edge, and the facet behind is seen past that lip.
   Closed, not re-meshed (§1).
 
-### 2.4 Bottoms are flat
+### 2.4 A brick resting on bricks has a flat bottom
 
-Added 2026-10-17. A printed part comes off the bed flat: its bottom edges are square. So none is
-bevelled:
+Added 2026-10-17, narrowed the same day. Where a brick sits on bricks its bottom edges are square,
+as two printed parts stacked meet; anywhere else -- an overhang, a ledge, a part over air -- the
+bottom keeps its bevel. (Flat everywhere was tried first: an overhang's square bottom edge looked
+wrong.)
 
-* A side face's bottom side that would have been a bevel is `FLUSH`: the face runs square down
-  to the bottom's plane, and its upright bevels run all the way down with it.
-* The bottom face's bevels are laid FLAT, in its own plane (`chamfer_faces_into`, the face
-  direction -Y): the same strips, corner triangles, plugs and mitres as ever, but coplanar, part
-  of the face -- its normal, its UV, no facet mark. So the face reaches out to its edges and only
-  its corners are cut, where an upright edge is bevelled. A flat strip has no end to cap.
-* A brick standing flush on another leaves only the lower one's top bevel: a half-groove, open
-  above under the upper brick's bottom, which is hidden. The lower face's top side gets a
-  **floor** there (`FaceBake::floors`, the run's `trim` bits): the strip of the upper brick's
-  bottom over the bevel, cut at 45 degrees where the upper brick's corner is open, to meet its
-  upright bevel.
-* A side face's bottom keeps the third brick's floors (§2.1, 3), cut the same way at its own
-  open corners: the brick under it may still have a bevel nobody else closes.
-* An inside corner at a wall's foot no longer mitres into a bottom bevel that is gone: where the
-  corner pass (§2.2) would have said `MITRE` for a bottom edge, it says `COVERED` -- the facet
-  stops at the corner, over the bevel of the brick it stands on, or the air.
+* A side face's bottom side that would have been a bevel is `FLUSH` -- the face runs square down
+  to the bottom's plane, its upright bevels with it -- when every cell of the brick's bottom row
+  on that side has a plain brick under it (`row_supported`: the whole row, so every rectangle of
+  that face agrees, and so does the brick below when it decides on a floor).
+* A bottom face resting on a brick (its `other`) lays its bevels FLAT in its own plane
+  (`chamfer_faces_into`; the bake marks it `EDGE_DIR_FLAT_BOTTOM` in place of the direction):
+  the same strips, corner triangles, plugs and mitres, but coplanar and part of the face. So it
+  reaches out to its edges and only its corners are cut. Hidden while the brick under it stands;
+  when that one is shot away, it is a flat bottom with no slit beside a `FLUSH` side.
+* The brick under a flat bottom keeps its own top bevel: a half-groove, open above under the
+  hidden bottom. Its top side gets a **floor** there (`FaceBake::floors`, the run's `trim` bits):
+  the strip of the upper brick's bottom over the bevel, cut at 45 degrees where the upper
+  brick's corner is open, to meet its upright bevel.
+* A `FLUSH` bottom keeps the third brick's floors (§2.1, 3), cut the same way at its own open
+  corners.
+* An inside corner at a wall's foot does not mitre into a bottom bevel that is not there: where
+  the corner pass (§2.2) would say `MITRE` and the face round the corner is `FLUSH`, it says
+  `COVERED` -- the facet stops at the corner, over the bevel of the brick it stands on.
 
-The shaded bevel (§4) skips bottom faces and a side's bottom edge the same way, an authored
-surface's lower edges too. Each rule here is a slit the gap probe found when it was missing; its
-locator now also names whose core shows, and which bricks are shot away.
+The shaded bevel (§4) is unchanged: it does not know what a face rests on. Each rule here is a
+slit the gap probe found when it was missing; its locator now also names whose core shows, and
+which bricks are shot away.
 
 ## 3. The near tier (`BrickNear`)
 

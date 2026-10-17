@@ -34,7 +34,7 @@ brightness by print order, the seam marked):
 | A bevel | printed with the rest: a vertical edge's has the side's layers across it, a top or bottom edge's is a 45-degree staircase | facets counted up the height and stair-stepped (`ps_stairs`); they were left unprinted, smooth strips |
 | A top line's profile | NOT ironed (no default profile irons): a squashed bead, flat-ish over its middle, rounding into a shallow V beside the next | `ps_beads`: a top's slope goes as x\|x\| across the bead (it was \|x\|^4, ironed, and the lines all but vanished); a side's stays round (a sine) |
 | A stud's top edge | the outer wall's bead turning over: rounded by about half a layer | `PieceMeshes.STUD_BEVEL` 5 mm (it was 13: a wide shiny ring on every stud) |
-| The bottom edges | square: a part comes off the bed flat | not bevelled in the near mesh (Docs/BrickBevel.md 2.4) nor shaded |
+| The bottom edges | square: a part comes off the bed flat | square in the near mesh where a brick rests on bricks (Docs/BrickBevel.md 2.4); bevelled where it overhangs, which looked wrong square |
 | Slopes, cheese, rounds, arches, curves | the same 57 layers; a slope is a staircase of them -- risers and treads, wide terraces on a shallow one | layers counted up the part's height (an authored surface has no face rectangle to count in, and had NO layers until 2026-10-16); `ps_stairs`: of each layer's band, the riser takes 1 - n.y^2, the tread n.y^2 (`stair_strength`) |
 
 ## 1.1 Side by side with the G-code
