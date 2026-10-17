@@ -323,6 +323,13 @@ dev_grids={
 
 host_script="res://scripts/brickcity_menu_host.gd"
 
+[shader_globals]
+
+lod_zoom={
+"type": "float",
+"value": 1.0
+}
+
 [physics]
 
 common/physics_ticks_per_second=30

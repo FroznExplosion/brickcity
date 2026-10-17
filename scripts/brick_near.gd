@@ -57,7 +57,13 @@ static var stud_round_radius := 13.0
 ## (PieceMeshes.stud_card). Past 18 m a stud is under fifteen pixels; what has
 ## to read is that the tops are studded, so a building across a square is not
 ## a stack of smooth boxes. Set it to `stud_radius` to turn the ring off.
-static var stud_card_radius := 45.0
+static var stud_card_radius := 70.0
+## Through a scope the world is as near as it looks: `step`'s zoom (the
+## unzoomed field of view's tangent over the camera's now, 1 or more) divides
+## every distance here, so a wall seen through 4x glass is chamfered and
+## studded as one a quarter as far off. The shaders take the same factor
+## (the lod_zoom global, its inverse).
+var zoom := 1.0
 ## A band goes back to flat this much further out than it came in.
 const MARGIN := 2.0
 ## A band is left alone this long after it was last (re)built: one being
@@ -98,6 +104,7 @@ class Band:
 	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square, card
 	var stud_buffer := PackedFloat32Array()      ## every stud of the band
 	var stud_eye := Vector3.INF                  ## where they were last sorted from
+	var stud_zoom := 1.0                         ## ... and through what zoom
 	var stud_bevelled := true                    ## ... and with `enabled` as it was
 	var stud_count := 0                          ## drawn now, the three together
 	var studs_dirty := true
@@ -225,8 +232,10 @@ func _patch(chunk: int, by_section: Dictionary, sections: PackedInt32Array) -> v
 						int(d.offset), d.data)
 
 
-## Every frame, with the camera's position.
-func step(eye: Vector3) -> void:
+## Every frame, with the camera's position and how far it is zoomed in (see
+## `zoom`).
+func step(eye: Vector3, zoom_in := 1.0) -> void:
+	zoom = maxf(zoom_in, 1.0)
 	if _order.is_empty():
 		return
 	var t0 := Time.get_ticks_usec()
@@ -319,7 +328,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 	band.at = xf.origin
 	var local := xf.affine_inverse() * eye
 	var nearest := local.clamp(band.box.position, band.box.end)
-	var dist := local.distance_to(nearest)
+	var dist := local.distance_to(nearest) / zoom
 
 	var want := enabled and dist < radius + (MARGIN if band.state != FLAT else 0.0)
 	match band.state:
@@ -450,8 +459,9 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 	# Out among the cards only the outer ring's edge moves, and a card coming
 	# or going a few metres late out there is not seen: sorted again less
 	# often.
-	var resort := STUD_RESORT if dist < stud_radius + MARGIN else STUD_RESORT_FAR
+	var resort := (STUD_RESORT if dist < stud_radius + MARGIN else STUD_RESORT_FAR) * zoom
 	if not fetch and band.stud_bevelled == enabled \
+			and absf(band.stud_zoom - zoom) < 0.1 * zoom \
 			and local_eye.distance_squared_to(band.stud_eye) < resort * resort:
 		return
 	if int(budget[0]) <= 0:
@@ -488,11 +498,12 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			band.node.add_child(mmi)
 			band.studs.append(mmi)
 	band.stud_eye = local_eye
+	band.stud_zoom = zoom
 	band.stud_bevelled = enabled
 	# With the tier off there is no bevelled ring: its studs are plain.
-	var rings := PackedFloat32Array([stud_bevel_radius if enabled else 0.0,
-			maxf(stud_round_radius, stud_bevel_radius), stud_radius,
-			maxf(stud_card_radius, stud_radius)])
+	var rings := PackedFloat32Array([(stud_bevel_radius if enabled else 0.0) * zoom,
+			maxf(stud_round_radius, stud_bevel_radius) * zoom, stud_radius * zoom,
+			maxf(stud_card_radius, stud_radius) * zoom])
 	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings)
 	var drawn := 0
 	for k in 4:

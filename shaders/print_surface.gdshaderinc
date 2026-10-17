@@ -109,12 +109,13 @@ uniform float under_rim = 0.057;        // 1.3 mm of wall
 uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
 uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
 // The hollow's roof (brick.gdshader): 45-degree terraces out from every
-// wall, `under_slope` wide (about 1.3 mm sliced), then bridged flat. How
+// wall, `under_slope` wide (wider than sliced: at 1.3 mm the hollow read
+// flat, a drawing on the part), then bridged flat. How
 // much sky (ambient occlusion) its flat roof sees, and its terraces' foot by
 // the walls; past under_depth_range, the average of the two.
 uniform float under_cavity : hint_range(0.0, 1.0) = 0.75;
 uniform float under_wall : hint_range(0.0, 1.0) = 0.85;
-uniform float under_slope = 0.055;
+uniform float under_slope = 0.10;
 uniform float under_depth_range = 25.0;
 
 group_uniforms finish;
@@ -128,6 +129,16 @@ uniform float molded_gloss : hint_range(0.1, 1.0) = 0.5;
 const float PS_PLATE = 0.14;   // brick_grid.h PLATE_M
 const float PS_STUD = 0.35;    // brick_grid.h STUD_M
 const float PS_TAU = 6.28318530718;
+const float PS_BEVEL = 0.013;  // BrickNear.BEVEL: a brick's bevel, each side
+
+// From a distance to a block face's outline (its rectangle) to the distance
+// to the edge of the face that is DRAWN flat: the bevel takes the first
+// PS_BEVEL all round. The walls a slicer lays round a top or a rim follow
+// the part's real outline, which is that one -- so they start where the
+// bevel stops, not out on it. Negative on the bevel.
+float ps_inset(float d) {
+    return d - PS_BEVEL;
+}
 
 // Is this part turned a quarter from the way it was printed? Its top's lines
 // lie the same way round in its own frame on every copy -- the bed decides,
@@ -363,7 +374,7 @@ vec3 ps_stairs(vec3 normal, vec3 up, float ny, float t, float aa, float k) {
 // beads -- the first layer's walls follow the shape they outline).
 float ps_under_sd(vec2 uv, vec2 fsize) {
     vec2 n = max(floor(fsize / PS_STUD + 0.5), vec2(1.0));
-    float edge = min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y));
+    float edge = ps_inset(min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y)));
     float sd = edge - under_rim;                  // < 0: in the rim
     vec2 p = uv / PS_STUD;
     if (min(n.x, n.y) < 1.5) {

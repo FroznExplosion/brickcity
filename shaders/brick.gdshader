@@ -109,6 +109,7 @@ uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.7;
 // the thing the drawn seam was there to stop. Evenly, not by depth: the two
 // copies of a facet count depth from opposite sides.
 instance uniform float geo_bevel = 0.0;
+global uniform float lod_zoom;
 uniform float outline_blend_begin = 3.0;
 uniform float outline_blend_end = 9.0;
 uniform float groove_darken : hint_range(0.0, 1.0) = 0.78;   // 1.0 = invisible
@@ -189,7 +190,10 @@ void fragment() {
     if (authored) {
         d = min(min(v_uv.x, v_uv.y), v_face.x - 200.0);
     }
-    float dist = length(VERTEX);
+    // Through a scope the world is as near as it looks: every distance
+    // below is scaled by the zoom (lod_zoom, a global the scene sets from the
+    // camera; 1 unzoomed), so a zoomed-in wall gets its detail back.
+    float dist = length(VERTEX) * lod_zoom;
     // FAR is cheap. Most of a city view is bricks too far off for any of the
     // detail below to show: past where each part has faded to nothing it is
     // not worked out at all -- the drawn seam past seam_fade_end, the shaded
@@ -388,8 +392,14 @@ void fragment() {
             float bw = ps_bead(face, mat);
             float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
                            min(v_uv.y, fsize.y - v_uv.y));
+            // From the bevel's inner edge (ps_inset): the walls follow the
+            // top as it is drawn flat, not the rectangle the bevel cut into.
+            // On the bevel itself (the shaded one, far off) no path at all.
+            d2 = ps_inset(d2);
             float wall = float(ps_walls(mat)) * bw;
-            if (d2 < wall && print_near) {
+            if (d2 < 0.0) {
+                t = 0.0;
+            } else if (d2 < wall && print_near) {
                 t = d2 / bw;
             } else {
                 // The block's own corner, in the same world metres the
@@ -402,8 +412,8 @@ void fragment() {
                 t = dot(v_uv, n) / bw;
                 if (print_near) {
                     float e = d2 - wall;
-                    vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
-                            fwidth(t));
+                    vec2 zz = ps_zigzag(v_uv, vec2(wall + PS_BEVEL),
+                            fsize - vec2(wall + PS_BEVEL), n, t, e, bw, fwidth(t));
                     if (zz.x > 0.5) {
                         // On a connector: one bead along the wall, a bead wide.
                         t = e / bw + 0.5;
@@ -500,6 +510,9 @@ void fragment() {
             // What the hollow loses is sky: ambient light and reflections
             // (AO), not the sun's light or its own colour.
             occlusion = mix(shade, 1.0, solid);
+            // ...and a little of its light: enough that the terraces read as
+            // a hollow going up into the part, not a pattern drawn on it.
+            albedo *= mix(mix(1.0, shade, 0.6), 1.0, solid);
             print_rough += (1.0 - solid) * 0.45;
         }
         if (print_near && face == 0 && !authored && !facet

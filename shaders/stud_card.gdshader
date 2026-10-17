@@ -18,6 +18,8 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 uniform float stud_radius = 0.105;   // PieceMeshes.STUD_R
 uniform float stud_height = 0.074;   // PieceMeshes.STUD_H
+uniform float max_tilt = 0.6;        // radians back from upright, at most
+uniform float stud_taper = 0.86;     // PieceMeshes.STUD_TAPER
 uniform float surface_roughness : hint_range(0.0, 1.0) = 0.42;
 uniform float surface_specular : hint_range(0.0, 1.0) = 0.55;
 
@@ -42,14 +44,29 @@ void vertex() {
     float fl = length(front);
     front = fl > 1e-3 ? front / fl : normalize(MODEL_MATRIX[2].xyz);
     vec3 right = cross(up, front);
-    // Up the screen, in the plane facing the camera.
-    vec3 us = up - v * e;
-    float ul = length(us);
-    us = ul > 1e-3 ? us / ul : -front;
+    // The card never tips back further than `max_tilt` from upright: seen
+    // from high above, a card facing the camera lay down flat on the top
+    // and read as a square tile. It stays stood up, and is drawn long enough
+    // that from where the camera is it covers what the stud would: its
+    // outline's height, a cylinder's (its height from the side, its diameter
+    // from above), over how much of the card's length the view sees.
     float ae = abs(e);
-    float side_h = stud_height * sqrt(max(1.0 - e * e, 0.0));
-    float h = side_h + 2.0 * stud_radius * ae;
-    vec3 world = c + front * stud_radius + right * (UV.x * stud_radius) + us * (UV.y * h);
+    float et = min(ae, sin(max_tilt)) * sign(e);
+    vec3 vt = front * sqrt(max(1.0 - et * et, 0.0)) + up * et;   // the way it faces
+    vec3 us = normalize(up - vt * et);                            // up the card
+    // The stud is tapered (its top `stud_taper` of its foot) and its rim
+    // rounded: from its front foot to the back of its top, not the back of
+    // its foot. Taller than that, a card stood above the 3D stud it turns
+    // into through a scope.
+    float side_h = stud_height * sqrt(max(1.0 - e * e, 0.0)) * 0.85;
+    float outline = side_h + stud_radius * (1.0 + stud_taper) * ae;
+    float seen = sqrt(max(1.0 - dot(us, v) * dot(us, v), 0.0));
+    float h = outline / max(seen, 0.35);
+    // And a skirt below its foot, into the brick: the brick's top hides it,
+    // and the card meets the top with no line of sky between.
+    float skirt = stud_height * 0.5;
+    float y = mix(-skirt, h, UV.y);
+    vec3 world = c + front * stud_radius + right * (UV.x * stud_radius) + us * y;
     // A see-through stud is not drawn this far out.
     if (MAT_TRANSLUCENT[v_mat] > 0.5) {
         world = c;
@@ -58,8 +75,8 @@ void vertex() {
     VERTEX = transpose(mat3(MODEL_MATRIX)) * (world - c);
     NORMAL = transpose(mat3(MODEL_MATRIX)) * front;
     v_x = UV.x;
-    v_y = UV.y * h;
-    v_side = side_h;
+    v_y = y;
+    v_side = side_h / max(seen, 0.35);
     v_right = normalize(mat3(VIEW_MATRIX) * right);
     v_front = normalize(mat3(VIEW_MATRIX) * front);
     v_up = normalize(mat3(VIEW_MATRIX) * up);
@@ -70,7 +87,9 @@ void fragment() {
     vec3 side_n = normalize(v_right * x + v_front * sqrt(max(1.0 - x * x, 0.0)));
     float top = smoothstep(v_side - 0.004, v_side + 0.004, v_y);
     NORMAL = normalize(mix(side_n, v_up, top));
-    ALBEDO = v_colour;
+    // A little darker round its outline, so from high above -- where its
+    // top is the brick's top again, lit the same -- it still reads as a stud.
+    ALBEDO = v_colour * (1.0 - 0.18 * smoothstep(0.7, 1.0, abs(x)));
     ROUGHNESS = clamp(MAT_ROUGH[v_mat] + (surface_roughness - MAT_ROUGH[0]), 0.0, 1.0);
     SPECULAR = clamp(MAT_SPEC[v_mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
     METALLIC = MAT_METAL[v_mat];
