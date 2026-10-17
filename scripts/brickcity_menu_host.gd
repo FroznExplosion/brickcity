@@ -143,6 +143,9 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 		&"brick_heap":
 			if DisplayServer.get_name() != "headless":
 				BrickHeap.max_bricks = int(value)
+		&"floor_reach":
+			if DisplayServer.get_name() != "headless":
+				BrickStrength.span_reach = float(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -199,6 +202,12 @@ func _setting_defs() -> Array:
 			"min": 0, "max": BrickHeap.MAX_MAX, "step": 500,
 			"hint": "How many loose bricks stay where they fell, all told; past it the oldest heaps "
 			+ "are swept up first. 0: they shrink away a second and a half after they come loose."},
+		{"id": &"floor_reach", "tab": "gameplay", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Floor Reach (Developer)", "default": BrickStrength.SPAN_DEFAULT,
+			"min": 6.0, "max": 80.0, "step": 2.0, "suffix": " studs",
+			"hint": "How far a floor reaches past what holds it up before it gives way: a floor "
+			+ "over a gap, an overhang, wreckage lying across two stubs. Stone reaches 2.5 times "
+			+ "as far, metal 4. Asked once a building has stopped coming apart."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 

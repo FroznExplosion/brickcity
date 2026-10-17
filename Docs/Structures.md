@@ -79,7 +79,7 @@ column and joined to it; a block is held when any column of it is. (By block, no
 crept half a brick a course out over a gap through a wall's bond -- a corbel 36 studs long over
 three storeys; by the block under its middle, a floor panel lying on walls at its edges was not
 held. Both tried, `span_probe`.) Every other block's **reach** is its distance on plan, through its
-joints, from the nearest held block; past `CityScene.span_reach` (20 studs) times its material's
+joints, from the nearest held block; past `BrickStrength.span_reach` (20 studs; Options > Gameplay, "Floor Reach") times its material's
 toughness (stone 2.5, metal 4) it has nothing near enough under it, and the **rim** of what has
 nothing -- its blocks joined to what has -- is cut (joined to nothing): what the rim bounded falls
 as one piece.
@@ -98,7 +98,7 @@ as one piece.
   what leaves is a DETACH like any piece's. Resting on another piece does not hold it yet, and on
   terrain the ground does not (no seeds there: nothing is cut).
 `tools/span_probe.gd`, 6. Still to do: the load check by region (`gravity_check` over the whole
-boundary misses one bay's columns gone in a wide building), and a slider for the reach.
+boundary misses one bay's columns gone in a wide building), and the reach tuned by feel (the slider is in).
 
 The plan as it was:
 The load check per column of tiles rather than over the whole boundary, and a **span rule**: a floor
