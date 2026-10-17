@@ -117,6 +117,8 @@ uniform float under_cavity : hint_range(0.0, 1.0) = 0.75;
 uniform float under_wall : hint_range(0.0, 1.0) = 0.85;
 uniform float under_slope = 0.10;
 uniform float under_depth_range = 25.0;
+// Metres: inside it the hollow has real depth (parallax, brick.gdshader).
+uniform float under_parallax_range = 10.0;
 
 group_uniforms finish;
 // Added to the material's roughness on a printed side, taken off on a top.

@@ -28,6 +28,12 @@ const VIEWS := [
 	["skin", Vector3(0.72, 1.12, 1.88), Vector3(0.62, 0.84, 1.68)],
 	["stud", Vector3(0.5, 1.12, 0.95), Vector3(0.15, 0.9, 0.55)],
 	["top", Vector3(0.55, 1.55, 1.25), Vector3(0.35, 0.85, 0.55)],
+	# A top's edge and its bevel, from where a player's eye is: close, and
+	# at arm's length.
+	["edge_macro", Vector3(0.62, 0.98, 1.0), Vector3(0.5, 0.84, 0.78)],
+	["edge_eye", Vector3(1.4, 1.7, 2.4), Vector3(0.5, 0.84, 0.7)],
+	["corner_down", Vector3(0.8, 1.05, 1.88), Vector3(0.68, 0.84, 1.72)],
+	["under_corner", Vector3(2.75, 0.85, 0.3), Vector3(2.15, 1.26, -0.1)],
 	["bottom", Vector3(2.2, 0.05, 1.3), Vector3(2.45, 0.6, 0.6)],
 	["under", Vector3(3.3, 0.15, 1.5), Vector3(3.3, 0.84, 0.35)],
 	["tops", Vector3(6.2, 1.25, 5.9), Vector3(6.2, 0.42, 3.9)],
@@ -67,6 +73,7 @@ var _near: BrickNear
 
 var _out := "user://"
 var _looks := ["glass"]
+var _views: Array = []   ## only these (all when empty)
 var _shots: Array = []
 var _frame := 0
 var _cam: Camera3D
@@ -79,6 +86,8 @@ func _init() -> void:
 			_out = a.substr(6)
 		elif a.begins_with("--looks="):
 			_looks = Array(a.substr(8).split(","))
+		elif a.begins_with("--views="):
+			_views = Array(a.substr(8).split(","))
 	BrickMaterials.load_look()
 	_was = [BrickMaterials.finish, BrickMaterials.bed]
 	_build()
@@ -86,7 +95,8 @@ func _init() -> void:
 		if not _looks.has(look[0]):
 			continue
 		for v in VIEWS:
-			_shots.append([look, v])
+			if _views.is_empty() or _views.has(v[0]):
+				_shots.append([look, v])
 
 
 func _build() -> void:
