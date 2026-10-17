@@ -102,14 +102,37 @@ func _arena() -> void:
 	var c := _chamfer(streamer)
 	_ok("its ground near the camera is chamfered", int(c.tris) > 0 and int(c.shown) > 0,
 			"%d chamfered triangles held, %d tile(s) showing them" % [c.tris, c.shown])
+	# Streamed like the heightfield test (Terrain.md 22.18): the city's square
+	# is pinned, so every tile of it is resident with a collider, but one
+	# outside the streamed square is not drawn -- coarse ground is.
+	var keep: Rect2i = streamer._keep_rect(streamer._centre.x, streamer._centre.y)
+	var pinned_all := streamer.pinned.has_area()
+	var hidden := 0
+	var drawn := 0
+	for dz in streamer.pinned.size.y:
+		for dx in streamer.pinned.size.x:
+			var pc := streamer.pinned.position + Vector2i(dx, dz)
+			var t: TerrainTile = streamer._tiles.get(pc)
+			if t == null or not t._body.is_valid():
+				pinned_all = false
+				continue
+			if not keep.has_point(pc):
+				hidden += 1
+				if t.visible:
+					drawn += 1
+	_ok("the city's square is resident with colliders, drawn only inside the streamed square",
+			pinned_all and drawn == 0, "pinned %s, %d outside the square, %d of them drawn"
+			% [streamer.pinned, hidden, drawn])
 
 	scene._toggle_terrain_dev_menu()
 	var menu: Node = scene._terrain_dev_menu
 	_ok("F10 opens the terrain dev menu", menu != null)
 	if menu != null:
 		var rows := _rows(menu)
-		_ok("no rows for a detail square that follows the camera: the city's does not",
-				not rows.has("Freeze LOD streaming"), "%s" % [rows])
+		# The city's detail square follows the camera now (Terrain.md 22.18),
+		# so it offers the streaming rows the heightfield test does.
+		_ok("the rows for a detail square that follows the camera",
+				rows.has("Freeze LOD streaming"), "%s" % [rows])
 		_press(menu, "LOD colour view")
 		_ok("LOD colour view tints the ground",
 				bool(scene._terrain_mat.get_shader_parameter("lod_debug")))
