@@ -469,40 +469,53 @@ void fragment() {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
-            // The hollow. A printed brick's has no flat roof: nothing can be
-            // bridged across it, so it is roofed in 45-degree slopes rising
-            // from every rib and the rim to a ridge -- a hip roof over each
-            // cell, which is what the bed side of the printable brick shows
-            // (Docs/PrintLook.md). Its depth over a point is that point's
-            // distance from the nearest wall, so the roof's slope there faces
-            // down and AWAY from that wall: the gradient of ps_under_sd. Lit
-            // by its normal, the facets read as the pyramids they are, a
-            // little darker the deeper they go. (It was a dark flat hollow
-            // with its walls found by walking the view ray up into it: a
-            // cave, and at range the walk came apart in stripes.)
+            // The hollow, as the sliced G-code builds it (tools/
+            // toolpath_compare.gd): from every rib and the rim its walls
+            // step in a layer at a time at 45 degrees -- a band of terraces,
+            // a line at every step -- and then the rest is roofed flat,
+            // BRIDGED, straight lines across in one direction. On a plate
+            // the band is all there is room for; on a brick it is the same
+            // band before the bridge. Lit like any other face: the hollow is
+            // a little dimmer for what it sees of the sky, not a cave. (It was
+            // a dark flat hollow with its walls found by walking the view ray
+            // up into it, and at range the walk came apart in stripes.)
             float shade = 1.0;
             if (underside_hollow && solid < 0.99 && dist >= under_depth_range) {
                 shade = mix(under_wall, under_cavity, 0.5);
             } else if (underside_hollow && solid < 0.99) {
                 const float SD_STEP = 0.003;
-                float s0 = ps_under_sd(cell, fsize);
-                vec2 g = vec2(ps_under_sd(cell + vec2(SD_STEP, 0.0), fsize) - s0,
-                              ps_under_sd(cell + vec2(0.0, SD_STEP), fsize) - s0);
-                float gl = length(g);
+                float s0 = max(ps_under_sd(cell, fsize), 0.0);
                 float near = 1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist);
-                if (gl > 1e-7) {
-                    vec2 a = g / gl;
-                    vec3 roof = normalize(NORMAL + (ax_u * a.x + ax_v * a.y));
-                    NORMAL = normalize(mix(NORMAL, roof, (1.0 - solid) * near));
+                float slope = 1.0 - smoothstep(under_slope - fwidth(s0), under_slope, s0);
+                vec3 roof_n = NORMAL;
+                if (slope > 0.0) {
+                    vec2 g = vec2(ps_under_sd(cell + vec2(SD_STEP, 0.0), fsize) - s0,
+                                  ps_under_sd(cell + vec2(0.0, SD_STEP), fsize) - s0);
+                    float gl = length(g);
+                    if (gl > 1e-7) {
+                        vec2 a = g / gl;
+                        roof_n = normalize(NORMAL + (ax_u * a.x + ax_v * a.y));
+                    }
                 }
-                shade = mix(under_wall, under_cavity,
-                        smoothstep(0.0, under_depth, max(s0, 0.0)) * near + (1.0 - near) * 0.5);
+                // The steps' lines and the bridge's, as one count: a step a
+                // layer up the slope, a bridge line a bead across.
+                float lt = slope > 0.5 ? s0 / ps_layer(mat) : cell.x / bottom_bead_width;
+                float aa = max(fwidth(lt), 1e-5);
+                float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
+                float ph = fract(lt);
+                float ink = (1.0 - smoothstep(0.0, max(aa * 1.4, 0.18), abs(ph - 0.5)))
+                        * resolved * near;
+                NORMAL = normalize(mix(NORMAL, roof_n, slope * (1.0 - solid) * near));
+                shade = mix(under_wall, under_cavity, near * mix(1.0, s0 / under_slope, slope)
+                        + (1.0 - near) * 0.5);
+                albedo *= mix(1.0, 0.82, ink * (1.0 - solid));
             }
             // In there it sees little of the sky, and the roof is printed
             // overhang, not the bed: dull, and lit mostly by what gets in.
-            albedo *= mix(shade, 1.0, solid);
-            occlusion = mix(shade * 0.8, 1.0, solid);
-            print_rough += (1.0 - solid) * 0.6;
+            // What the hollow loses is sky: ambient light and reflections
+            // (AO), not the sun's light or its own colour.
+            occlusion = mix(shade, 1.0, solid);
+            print_rough += (1.0 - solid) * 0.45;
         }
         if (print_near && face == 0 && !authored && !facet
                 && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {

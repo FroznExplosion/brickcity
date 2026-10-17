@@ -108,13 +108,13 @@ uniform bool underside_hollow = true;
 uniform float under_rim = 0.057;        // 1.3 mm of wall
 uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
 uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
-// The hollow's roof is 45-degree slopes from every wall (brick.gdshader):
-// how dark it is where it is deepest, and at its foot by the walls, and how
-// far up a slope goes before it reads as all the way in. Past
-// under_depth_range the slopes give way to the flat average.
-uniform float under_cavity : hint_range(0.0, 1.0) = 0.38;
-uniform float under_depth = 0.10;
-uniform float under_wall : hint_range(0.0, 1.0) = 0.75;
+// The hollow's roof (brick.gdshader): 45-degree terraces out from every
+// wall, `under_slope` wide (about 1.3 mm sliced), then bridged flat. How
+// much sky (ambient occlusion) its flat roof sees, and its terraces' foot by
+// the walls; past under_depth_range, the average of the two.
+uniform float under_cavity : hint_range(0.0, 1.0) = 0.75;
+uniform float under_wall : hint_range(0.0, 1.0) = 0.85;
+uniform float under_slope = 0.055;
 uniform float under_depth_range = 25.0;
 
 group_uniforms finish;
@@ -205,7 +205,7 @@ vec2 ps_face_k(int face) {
         return vec2(0.6, 0.6);
     }
     if (face == 1) {
-        return vec2(0.9, 0.7);
+        return vec2(0.9, 0.85);
     }
     if (PRINT_BED == 0) {
         return vec2(0.2, 0.1);
@@ -271,8 +271,12 @@ void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, fl
         // sine had every top rippling like corrugated sheet.
         float ridge = sin(ph * PS_TAU);
         if (face != 0) {
+            // Not ironed (no slicer irons by default, and the sliced top
+            // showed none): a squashed bead, flat-ish over the middle and
+            // rounding down into a shallow V beside the next. Between the
+            // sine's corrugation and an ironed line's flat.
             float x = fract(ph + 0.5) * 2.0 - 1.0;   // -1..1 across, 0 the bead's middle
-            ridge = sign(x) * pow(abs(x), 4.0);
+            ridge = x * abs(x);
         }
         ridge *= mix(1.0, 0.25, join);
         if (face == 0) {

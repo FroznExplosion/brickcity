@@ -127,6 +127,32 @@ a floor of 2x4s and two walls of 1x4s meeting in an inside corner, whole and sho
   pushed out under it hangs a bevel past its edge, and the facet behind is seen past that lip.
   Closed, not re-meshed (§1).
 
+### 2.4 Bottoms are flat
+
+Added 2026-10-17. A printed part comes off the bed flat: its bottom edges are square. So none is
+bevelled:
+
+* A side face's bottom side that would have been a bevel is `FLUSH`: the face runs square down
+  to the bottom's plane, and its upright bevels run all the way down with it.
+* The bottom face's bevels are laid FLAT, in its own plane (`chamfer_faces_into`, the face
+  direction -Y): the same strips, corner triangles, plugs and mitres as ever, but coplanar, part
+  of the face -- its normal, its UV, no facet mark. So the face reaches out to its edges and only
+  its corners are cut, where an upright edge is bevelled. A flat strip has no end to cap.
+* A brick standing flush on another leaves only the lower one's top bevel: a half-groove, open
+  above under the upper brick's bottom, which is hidden. The lower face's top side gets a
+  **floor** there (`FaceBake::floors`, the run's `trim` bits): the strip of the upper brick's
+  bottom over the bevel, cut at 45 degrees where the upper brick's corner is open, to meet its
+  upright bevel.
+* A side face's bottom keeps the third brick's floors (§2.1, 3), cut the same way at its own
+  open corners: the brick under it may still have a bevel nobody else closes.
+* An inside corner at a wall's foot no longer mitres into a bottom bevel that is gone: where the
+  corner pass (§2.2) would have said `MITRE` for a bottom edge, it says `COVERED` -- the facet
+  stops at the corner, over the bevel of the brick it stands on, or the air.
+
+The shaded bevel (§4) skips bottom faces and a side's bottom edge the same way, an authored
+surface's lower edges too. Each rule here is a slit the gap probe found when it was missing; its
+locator now also names whose core shows, and which bricks are shot away.
+
 ## 3. The near tier (`BrickNear`)
 
 Whoever draws a chunk goes on drawing it as before and says `track(node, chunk, section)` for
@@ -157,10 +183,20 @@ a mesh of the whole chunk.
   | `stud_bevel_radius`, 8 m | `PieceMeshes.stud()`, the rim bevelled | 38 |
   | `stud_round_radius`, 13 m | `stud_plain()`, an octagon | 22 |
   | `stud_radius`, 18 m | `stud_square()`, a tapered square post of the same plan area | 10 |
+  | `stud_card_radius`, 45 m | `stud_card()`, a card turned to the camera | 2 |
 
   A stud is 0.21 m: 36 pixels wide at 8 m, 22 at 13, 16 at 18 (1080p). Square is visibly square
   at 8 m and a bump at 18, which is why it starts at 13; set `stud_round_radius` to
   `stud_bevel_radius` to go straight to it.
+
+  Past 18 m there were none, and a building across a square was a stack of smooth boxes. The
+  card (`shaders/stud_card.gdshader`) is the cheapest stud there is: two triangles, turned to
+  the camera in the vertex shader and sized to the outline a cylinder of the stud's radius and
+  height has from there -- its height from the side, its diameter from straight above -- its
+  foot on the stud's front edge so the brick's top never hides it; flat colour, a normal that
+  rounds across it and faces up over its top; no print. A band beyond `stud_radius` holds only
+  cards and is sorted again every `STUD_RESORT_FAR` (4 m) of camera travel, not every metre.
+  Set `stud_card_radius` to `stud_radius` to turn the ring off.
 * **Damage.** The owner patches its flat bands and calls `damaged(chunk, sections)` with the
   bands that patch moved. The chamfered ones are re-indexed and patched the same way
   (`update_chamfer_regions`), and those bands' studs are counted again, two bands a frame.
@@ -168,7 +204,8 @@ a mesh of the whole chunk.
   from; one built from a bake that has gone is not handed over, and one held from it is called
   stale and dropped rather than patched.
 
-`BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius` and `stud_round_radius` are
+`BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius`, `stud_round_radius` and
+`stud_card_radius` are
 static and can be set at run time. The city takes `-- --no-near` for a run without the tier.
 
 The workshop does not use the tracker: it is a few hundred bricks an arm's length away, rebuilt

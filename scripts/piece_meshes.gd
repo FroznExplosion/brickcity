@@ -21,6 +21,7 @@ const STUD_R := 0.105
 const STUD_H := 0.074
 ## Spec §2: slightly tapered, so it reads as printed and grips.
 const STUD_TAPER := 0.86
+const STUD_BEVEL := 0.005
 
 const SIDES := 8
 
@@ -58,7 +59,10 @@ static func stud() -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var top_r := STUD_R * STUD_TAPER
 	# The bevel eats the last slice of height and the last sliver of radius.
-	var bev: float = minf(0.013, minf(top_r * 0.34, STUD_H * 0.34))
+	# A printed stud's top edge is the outer wall's bead turning over: about
+	# half a layer of rounding, not a 13 mm cut (the sliced G-code, drawn by
+	# tools/toolpath_compare.gd) -- that was a wide shiny ring on every stud.
+	var bev: float = minf(STUD_BEVEL, minf(top_r * 0.34, STUD_H * 0.34))
 	var rim_y := STUD_H - bev
 	var cap_r := top_r - bev
 
