@@ -235,6 +235,13 @@ void fragment() {
             if (gl > 1e-4) {
                 vec3 away = g / gl;   // into the face, away from the edge
                 float inside = smoothstep(chamfer_width, chamfer_width + max(fwidth(d), 1e-5), d);
+                // A printed part's bottom is flat: no bevel on a bottom face,
+                // nor along a face's lower edge (the edge below it, `away`
+                // pointing up).
+                vec3 up_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[1].xyz);
+                if (v_local_normal.y < -0.995 || dot(away, up_v) > 0.8) {
+                    inside = 1.0;
+                }
                 float fade = (1.0 - smoothstep(chamfer_fade_begin, chamfer_fade_end, dist));
                 float on_bevel = (1.0 - inside) * fade;
                 NORMAL = normalize(mix(NORMAL, normalize(NORMAL - away), on_bevel));
@@ -266,6 +273,14 @@ void fragment() {
             vec2 inside = smoothstep(band, band + aa2, to_edge);
             vec2 side = vec2(cell.x * 2.0 < fsize.x ? -1.0 : 1.0,
                              cell.y * 2.0 < fsize.y ? -1.0 : 1.0);
+            // A printed part's bottom is flat (bake_faces_into): no bevel on
+            // the bottom face, nor along a side's bottom edge -- UV.y is a
+            // side's height.
+            if (face == 2) {
+                inside = vec2(1.0);
+            } else if (face == 0 && side.y < 0.0) {
+                inside.y = 1.0;
+            }
 
             // 45 degrees is equal parts face normal and edge direction.
             vec3 bevel = NORMAL
