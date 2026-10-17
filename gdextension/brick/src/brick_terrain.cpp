@@ -584,7 +584,9 @@ bool edits_empty() {
 
 // --- sampling --------------------------------------------------------------
 
-bool g_slope_pieces = true;
+// Off by default (2026-10-16): the user prefers terrace edges as plain
+// bricks. The pieces still work; F10's dev menu turns them back on.
+bool g_slope_pieces = false;
 
 void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     out.tx = tx;

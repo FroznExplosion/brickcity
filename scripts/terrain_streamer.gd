@@ -50,6 +50,16 @@ extends Node3D
 ## city got 144 of its 625 tiles and the far half of it stood on coarse
 ## ground.
 @export var whole_world := false
+## Tiles held resident WITH A COLLIDER wherever the camera is, but drawn only
+## while the streamed square would hold them (Docs/Terrain.md §22.18).
+##
+## For a city that streams its ground like the heightfield test: what is SEEN
+## follows the camera, detail near and coarse beyond, while everything that
+## stands on the ground -- an enemy across the map, debris from a collapse
+## two streets away -- still has a floor. Hidden tiles are not drawn and the
+## coarse tier is not hidden over them (`has_tile` answers for drawn tiles).
+## Empty: nothing pinned.
+var pinned := Rect2i()
 ## How long assembly may take in one frame. Three milliseconds of a sixteen
 ## millisecond frame is a fifth of the budget and invisible in practice.
 @export var budget_ms := 1.5
@@ -108,6 +118,8 @@ var _finish_pending := true
 ## studs); `bevel_radius` bakes one ring further ahead so it is ready.
 @export var near_show_radius := 1
 var _near_centre := Vector2i(1 << 30, 0)
+## The centre pinned tiles were last shown or hidden for.
+var _shown_centre := Vector2i(1 << 30, 0)
 ## Chamfered bakes in flight: tile coord -> [task id, result holder, tile].
 var _bevel_tasks := {}
 const BEVEL_IN_FLIGHT := 2
@@ -160,6 +172,11 @@ func follow(camera_xz: Vector2) -> void:
 	_drop(cx, cz)
 	_assemble()
 	_bevel_step()
+	if _shown_centre != _centre and pinned.has_area():
+		_shown_centre = _centre
+		var keep := _keep_rect(cx, cz)
+		for c in _tiles:
+			(_tiles[c] as Node3D).visible = _shown(c, keep)
 	if _near_centre != _centre:
 		_near_centre = _centre
 		for c in _tiles:
@@ -211,7 +228,7 @@ func _bevel_step() -> void:
 func settle(camera_xz: Vector2, rounds := 4000) -> void:
 	for i in rounds:
 		follow(camera_xz)
-		if _tasks.is_empty() and _wanted_missing(camera_xz) == 0:
+		if _tasks.is_empty() and _dirty.is_empty() and _wanted_missing(camera_xz) == 0:
 			# One more pass with no budget, so a settled world is whole and
 			# not three frames from being whole.
 			var saved := budget_ms
@@ -264,6 +281,7 @@ func invalidate(rect: Rect2i) -> void:
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		_dirty.erase(c)
 		tile.queue_free()
 
 
@@ -281,8 +299,10 @@ func reset_stats() -> void:
 ## hides itself, and the difference matters: the wanted region fills at a few
 ## tiles a frame, so hiding against the region opened a black pit the size of
 ## the detail square every time the camera jumped.
+## Is a tile DRAWN here -- what the coarse tier hides itself against. A
+## pinned tile held only for its collider is not.
 func has_tile(c: Vector2i) -> bool:
-	return _tiles.has(c)
+	return _tiles.has(c) and (_tiles[c] as Node3D).visible
 
 
 ## The coordinates of every resident tile. For the gate, which has to ask
@@ -345,16 +365,42 @@ func _snap_up(v: int) -> int:
 
 func _wanted_missing(camera_xz: Vector2) -> int:
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
-	var r := region(int(floor(camera_xz.x / tile_m)), int(floor(camera_xz.y / tile_m)))
 	var n := 0
-	for dz in r.size.y:
-		for dx in r.size.x:
-			var c := Vector2i(r.position.x + dx, r.position.y + dz)
-			if absi(c.x) > world_half or absi(c.y) > world_half:
-				continue
-			if not _tiles.has(c):
-				n += 1
+	for r in _wanted_rects(int(floor(camera_xz.x / tile_m)), int(floor(camera_xz.y / tile_m))):
+		for dz in r.size.y:
+			for dx in r.size.x:
+				var c := Vector2i(r.position.x + dx, r.position.y + dz)
+				if absi(c.x) > world_half or absi(c.y) > world_half:
+					continue
+				if not _tiles.has(c):
+					n += 1
 	return n
+
+
+## The rectangles of tiles to hold: the streamed region, and the pinned one.
+## (A tile in both is counted once by the callers' own checks.)
+func _wanted_rects(cx: int, cz: int) -> Array[Rect2i]:
+	var out: Array[Rect2i] = [region(cx, cz)]
+	if pinned.has_area():
+		out.append(pinned)
+	return out
+
+
+## The square resident tiles are kept in: the region grown by the
+## hysteresis, in whole blocks.
+func _keep_rect(cx: int, cz: int) -> Rect2i:
+	# Grown by whole BLOCKS, so the resident set stays a union of aligned
+	# blocks. Growing by two loose tiles left a fringe that no coarse block
+	# could be hidden against, and those tiles drew on top of coarse ground:
+	# 129 tiles drawn twice, which is what the coverage check reported.
+	return region(cx, cz).grow(align * maxi(1, int(ceil(
+			float(keep_radius - near_radius) / float(align)))))
+
+
+## A pinned tile outside the streamed square is held for its collider and
+## not drawn: the coarse tier shows the ground there, as it would anywhere.
+func _shown(c: Vector2i, keep: Rect2i) -> bool:
+	return keep.has_point(c) or not pinned.has_point(c)
 
 
 ## Start bakes for the nearest tiles that are missing, up to the in-flight cap.
@@ -362,14 +408,25 @@ func _collect(cx: int, cz: int) -> void:
 	if _free_slots.is_empty():
 		return
 	var want: Array[Vector2i] = []
-	var r := region(cx, cz)
-	for dz in r.size.y:
-		for dx in r.size.x:
-			var c := Vector2i(r.position.x + dx, r.position.y + dz)
-			if absi(c.x) > world_half or absi(c.y) > world_half:
-				continue   # the world ends here
-			if (_tiles.has(c) and not _dirty.has(c)) or _tasks.has(c):
-				continue
+	var seen := {}
+	for r in _wanted_rects(cx, cz):
+		for dz in r.size.y:
+			for dx in r.size.x:
+				var c := Vector2i(r.position.x + dx, r.position.y + dz)
+				if absi(c.x) > world_half or absi(c.y) > world_half:
+					continue   # the world ends here
+				if (_tiles.has(c) and not _dirty.has(c)) or _tasks.has(c):
+					continue
+				if seen.has(c):
+					continue   # in both the region and the pinned rect
+				seen[c] = true
+				want.append(c)
+	# A resident tile an edit made stale is rebuilt even in the hysteresis
+	# ring past the region: otherwise it is drawn from the old field until
+	# the camera walks away and back (a dev menu rebuild left 28 such tiles).
+	for c in _dirty:
+		if not seen.has(c) and not _tasks.has(c) and _tiles.has(c):
+			seen[c] = true
 			want.append(c)
 	if want.is_empty():
 		return
@@ -426,6 +483,8 @@ func _assemble() -> void:
 		tile.phases = true          # surface now, the rest on later frames
 		add_child(tile)
 		tile.build(c.x, c.y, _material, data)
+		if pinned.has_area():
+			tile.visible = _shown(c, _keep_rect(_centre.x, _centre.y))
 		if replacing:
 			# The ground under something that is standing on it -- a
 			# building, the brush's own aim, debris -- must not go a frame
@@ -467,14 +526,18 @@ func _finish(t0: int) -> void:
 		tile.set_casts_shadow(absi(c.x - _centre.x) <= shadow_radius
 				and absi(c.y - _centre.y) <= shadow_radius)
 		var t1 := Time.get_ticks_usec()
-		tile.add_instances()
+		# A hidden (pinned) tile's studs and scatter wait until it is shown:
+		# the centre moving sets _finish_pending again.
+		if tile.visible:
+			tile.add_instances()
 		var ms := float(Time.get_ticks_usec() - t1) / 1000.0
 		if ms > 0.05:
 			_worst_inst_ms = maxf(_worst_inst_ms, ms)
 			_worst_tile_ms = maxf(_worst_tile_ms, ms)
 		# Collision only where you could stand. It is the most expensive phase
-		# and the only one nobody can see.
-		if collide_radius < 0 or (absi(c.x - _centre.x) <= collide_radius
+		# and the only one nobody can see. Pinned tiles always: that is what
+		# they are held for.
+		if collide_radius < 0 or pinned.has_point(c) or (absi(c.x - _centre.x) <= collide_radius
 				and absi(c.y - _centre.y) <= collide_radius):
 			var t2 := Time.get_ticks_usec()
 			if not tile.add_collision(shapes_per_frame):
@@ -489,18 +552,14 @@ func _finish(t0: int) -> void:
 ## Everything past `keep_radius` goes. The gap to `near_radius` is what stops
 ## a tile being rebuilt every time the camera crosses a boundary.
 func _drop(cx: int, cz: int) -> void:
-	# Grown by whole BLOCKS, so the resident set stays a union of aligned
-	# blocks. Growing by two loose tiles left a fringe that no coarse block
-	# could be hidden against, and those tiles drew on top of coarse ground:
-	# 129 tiles drawn twice, which is what the coverage check reported.
-	var keep := region(cx, cz).grow(align * maxi(1, int(ceil(
-			float(keep_radius - near_radius) / float(align)))))
+	var keep := _keep_rect(cx, cz)
 	var gone: Array[Vector2i] = []
 	for c in _tiles:
-		if not keep.has_point(c):
+		if not keep.has_point(c) and not pinned.has_point(c):
 			gone.append(c)
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		_dirty.erase(c)
 		tile.queue_free()
 		_dropped += 1
