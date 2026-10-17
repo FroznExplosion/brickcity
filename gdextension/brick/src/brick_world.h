@@ -492,6 +492,28 @@ public:
     /// boundaries} for the worst boundary; ratio >= 1 fails there.
     Dictionary gravity_check(int chunk_id, float crush_per_stud);
 
+    /// How far a floor reaches between its supports (Docs/Structures.md 2.3).
+    /// A block is HELD FROM BELOW when any stud column of it is: a column
+    /// stands on the foundation, or on the block under it held in that same
+    /// column and joined to it -- a wall, a column, what stands on them, a
+    /// panel lying on them at its edges; not a corbel stepping out. Every other block is carried across: its reach is how
+    /// far it is, across the floor plan and through its joints, from the
+    /// nearest block held from below. A block whose reach is more than
+    /// `reach_studs` times its material's toughness has nothing near enough
+    /// under it; the RIM of what has nothing -- those of its blocks joined to
+    /// one that has -- is what gives. With `apply` the rim's blocks are joined
+    /// to nothing (support_broken) and what they bounded falls as one piece at
+    /// the next solve; without, nothing changes. Returns the rim, sorted.
+    /// Standing chunks only (down is -y).
+    PackedInt32Array cut_spans(int chunk_id, float reach_studs, bool apply);
+    /// The same for a piece at rest, lying level (its up within ~25 degrees of
+    /// the world's): what holds it is the bricks of it resting on something --
+    /// a solid cell of one of `building_chunks` just under the brick, or the
+    /// ground (`ground_y`, world metres). A wide slab lying across two stubs
+    /// is held at its ends and gives way past its reach in between.
+    PackedInt32Array cut_spans_resting(int piece_chunk, const Transform3D &piece_xform,
+            const PackedInt32Array &building_chunks, float ground_y, float reach_studs, bool apply);
+
     // --- snow cover (Docs/Disasters.md 21) ----------------------------------
 
     /// Snow on a chunk: smooth tiles, `thickness` metres thick, on every top
@@ -1271,6 +1293,8 @@ private:
         w.touched.clear();
     }
     Array components_all(int chunk_id);
+    PackedInt32Array spans_from(int chunk_id, float reach_studs, const std::vector<uint8_t> *seeds,
+            bool apply);
     bool components_check = false;
     int64_t near_stats[7] = { 0, 0, 0, 0, 0, 0, 0 };
     struct ChunkTemplate {

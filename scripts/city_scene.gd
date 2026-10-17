@@ -3153,6 +3153,62 @@ func _gravity_fail(b: BuildingRegistry.Building) -> bool:
 	return true
 
 
+## How far a floor reaches between its supports, in studs, for a brick of
+## plain PLA; stronger materials reach that many times their toughness (stone
+## 2.5, metal 4). BrickWorld.cut_spans; Docs/Structures.md 2.3. A tower's floor
+## panels lie on columns every PANEL studs, so a whole building is never near
+## it; a wide one with its ground storey shot out between its ends is, and the
+## floors over the middle come down as one piece where they stood on nothing.
+static var span_reach := 20.0
+## Each building asked at most this often; one a tick.
+const SPAN_EVERY_MS := 250
+var _span_owed := {}      ## building id -> true: solved since its floors were asked
+var _span_asked := {}     ## building id -> when they last were
+var span_cuts := [0, 0]   ## cuts made, bricks in their rims
+
+
+## One building owed the question, if one is due: does every floor still reach
+## something holding it up? Where one does not, a SEVER command (FLAG_SPAN)
+## cuts its rim on every machine, and the building is solved again -- what the
+## rim bounded is loose then, and leaves as a piece.
+func _pay_span_owed() -> void:
+	if not authority.may_decide():
+		_span_owed.clear()
+		return
+	var now := Time.get_ticks_msec()
+	for id in _span_owed.keys():
+		if now - int(_span_asked.get(id, -1000000)) < SPAN_EVERY_MS:
+			continue
+		_span_owed.erase(id)
+		_span_asked[id] = now
+		var b := registry.get_building(id)
+		if b == null or b.is_build() or b.toppled or not b.is_materialised() or _toppling.has(id):
+			return
+		var rim := world.cut_spans(b.chunk, span_reach, false)
+		if rim.is_empty():
+			return
+		var e := DamageLog.Entry.new()
+		e.tick = Engine.get_physics_frames()
+		e.kind = DamageLog.Kind.SEVER
+		e.target = b.id
+		e.normal = Vector3.UP
+		e.flags = DamageLog.FLAG_SPAN
+		e.radius = span_reach
+		e.point = world.get_chunk_transform(b.chunk) * world.get_blocks_box(b.chunk, rim).get_center()
+		if not authority.request(DamageLog.Kind.SEVER, b.id, e.point, e.radius, Vector3.UP):
+			return
+		var cut := DamageLog.apply_entry(world, b.chunk, e)
+		if cut.is_empty():
+			return
+		authority.commit_entry(e)
+		span_cuts[0] += 1
+		span_cuts[1] += cut.size()
+		_mark_dirty(b.id)
+		print("[city] building %d: a floor past its reach (%.0f studs) gives way, %d bricks round it" % [
+				b.id, span_reach, cut.size()])
+		return
+
+
 ## The staircase goes with the floors it serves (Docs/Collapse.md 2.1). Its
 ## blocks have no joint to any slab -- they are grounded by their own column,
 ## down to the ground -- so a section breaking off left them standing, and fell
@@ -5645,6 +5701,8 @@ func _drop_proxies(id: int) -> void:
 func _wreck_settled(isl: BrickIsland) -> void:
 	if not authority.may_decide() or not isl.is_valid() or not isl.landmark or isl.piece_id < 0:
 		return
+	if _span_piece(isl):
+		return
 	var xf := isl.chunk_transform()
 	var contacts := {}   # building id -> Array of absolute cells
 	var total := 0
@@ -5700,6 +5758,36 @@ func _wreck_settled(isl: BrickIsland) -> void:
 
 
 var _wreck_load_count := 0
+
+
+## A piece come to rest lying level -- a building's floors that came away whole
+## when its ground storey went, lying across what is left of it -- is held only
+## where it rests on something: a building's bricks, or the ground. Past its
+## reach from those (span_reach) it gives way, as a standing building's floor
+## does (BrickWorld.cut_spans_resting; Docs/Structures.md 2.3): the rim is cut,
+## and what it bounded is shed from the piece and falls, a DETACH for every
+## machine as any piece's. Resting on another piece is not held, yet. True when
+## it was cut (it has moved: what it lies on is asked again when it settles).
+func _span_piece(isl: BrickIsland) -> bool:
+	var box := islands.world_aabb(isl)
+	if maxf(box.size.x, box.size.z) < span_reach * BrickPalette.STUD_M * 2.0:
+		return false
+	var chunks := PackedInt32Array()
+	for id in _near_buildings(box.get_center(), maxf(box.size.x, box.size.z) * 0.5 + 0.3):
+		var b := registry.get_building(id)
+		if b != null and b.is_materialised():
+			chunks.append(b.chunk)
+	var ground := -1.0e9 if _terrain_mode else 0.0
+	var rim := world.cut_spans_resting(isl.chunk, isl.chunk_transform(), chunks, ground, span_reach, true)
+	if rim.is_empty():
+		return false
+	span_cuts[0] += 1
+	span_cuts[1] += rim.size()
+	print("[city] piece %d: lying across what holds it, past its reach (%.0f studs) -- gives way, %d bricks round it" % [
+			isl.piece_id, span_reach, rim.size()])
+	islands.solve_island(isl)
+	islands.rebuild_mesh(isl)
+	return true
 
 
 func _wreck_unload(piece_id: int) -> void:
@@ -9385,6 +9473,9 @@ func _physics_process(_delta: float) -> void:
 	# See IslandManager.UPLOAD_VERTS_PER_TICK.
 	RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
 	t = _mark("render", t)
+	if not _span_owed.is_empty():
+		_pay_span_owed()
+		t = _mark("solve", t)
 	var spawn_until := Time.get_ticks_usec() + int(SPAWN_BUDGET_MS * 1000.0)
 	var spawned := 0
 	var crumbs_cut := 0
@@ -9508,6 +9599,10 @@ func _physics_process(_delta: float) -> void:
 			if not b.is_build() and _gravity_fail(b):
 				_mark_dirty(b.id)
 				continue
+			# And does every floor reach its supports? Owed, not asked here:
+			# a big tower's check is 4 ms (_pay_span_owed).
+			if not b.is_build():
+				_span_owed[b.id] = true
 			# Nothing failed, nothing is falling, nothing is unbalanced: this
 			# building is at rest and does not need looking at again until
 			# something hits it.

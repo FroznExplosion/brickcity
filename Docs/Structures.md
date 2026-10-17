@@ -42,9 +42,9 @@ it is ready; asked again whenever the shell is (`_shell_stale`, after a hit). No
 holes are where its bricks are gone. The shell node stays, with its collision. `--far` 19 of 19
 unchanged (its damaged-build checks read the shell node, which is still there).
 
-What the test pass showed instead (a 200 x 80 building, its ground storey shot through along its
-length): the three floors above stood on what was left -- a few columns and the end walls. That is
-2.3's to fix, not this.
+(First read of the test pass's picture -- a 200 x 80 building, its ground storey shot through
+along its length -- was floors standing over the gap. Wrong: they had dropped the storey and lay on
+the ground, in sections 14-49 m long, the debris in front hiding where they met it.)
 
 The plan as it was:
 A damaged building's far tier is a coarse mesh of its own grid (`BrickWorld.coarse_chunk_async`, as
@@ -72,7 +72,30 @@ a castle tiles along its walls. A hit rebuilds a tile. `Chunk::section_of_y` bec
 the band code paths (`build_chunk_mesh_section`, `add_band_shapes`, `BrickNear` bands, the shell
 bands) take tiles.
 
-### 2.3 Loads by region, and spans — not started
+### 2.3 Loads by region, and spans — the span rule built 2026-10-16
+**Built: how far a floor reaches** (`BrickWorld.cut_spans`, `cut_spans_resting`). A stud column of
+a block is **held** when it stands on the foundation, or on the block under it held in that same
+column and joined to it; a block is held when any column of it is. (By block, not column, "held"
+crept half a brick a course out over a gap through a wall's bond -- a corbel 36 studs long over
+three storeys; by the block under its middle, a floor panel lying on walls at its edges was not
+held. Both tried, `span_probe`.) Every other block's **reach** is its distance on plan, through its
+joints, from the nearest held block; past `CityScene.span_reach` (20 studs) times its material's
+toughness (stone 2.5, metal 4) it has nothing near enough under it, and the **rim** of what has
+nothing -- its blocks joined to what has -- is cut (joined to nothing): what the rim bounded falls
+as one piece.
+* **A standing building**: owed after a solve that finds nothing falling, paid one building a tick,
+  each at most every `SPAN_EVERY_MS` (`CityScene._pay_span_owed`); a cut is a SEVER command with
+  `DamageLog.FLAG_SPAN` (every machine finds the same rim from the same bricks). 2.9 ms for the
+  23,000-brick tower, 0.6 ms for a 2,500-brick wide building; nothing whole is ever near it (floor
+  panels lie on columns every PANEL studs).
+* **A piece come to rest lying level** (`CityScene._span_piece`, from `_wreck_settled`): held where
+  it rests -- a brick with a building's solid cell or the ground just under it. Cut on the host;
+  what leaves is a DETACH like any piece's. Resting on another piece does not hold it yet, and on
+  terrain the ground does not (no seeds there: nothing is cut).
+`tools/span_probe.gd`, 6. Still to do: the load check by region (`gravity_check` over the whole
+boundary misses one bay's columns gone in a wide building), and a slider for the reach.
+
+The plan as it was:
 The load check per column of tiles rather than over the whole boundary, and a **span rule**: a floor
 reaches so far between supports -- further for a thicker one, further for a stronger material
 (`BRICK_MATERIALS[].toughness`: stone 2.5, metal 4) -- and past that sags and breaks mid-span. That
