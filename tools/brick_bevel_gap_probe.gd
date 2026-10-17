@@ -261,6 +261,34 @@ func _where(img: Image, best: Vector2i) -> void:
 	var o := _cam.project_ray_origin(Vector2(px))
 	var d := _cam.project_ray_normal(Vector2(px))
 	var w := _dbg_w
+	# Whose core it is, and where on it the ray lands: which brick is open.
+	var best_t := INF
+	var best_b := {}
+	for bx in w.get_block_boxes(_dbg_chunk):
+		if not bx.alive:
+			continue
+		var h: Vector3 = bx.size * 0.5 - Vector3.ONE * CORE_INSET
+		var lo: Vector3 = bx.pos - h
+		var hi: Vector3 = bx.pos + h
+		var t0 := 0.0
+		var t1 := INF
+		var hit := true
+		for ax in 3:
+			if absf(d[ax]) < 1e-9:
+				if o[ax] < lo[ax] or o[ax] > hi[ax]:
+					hit = false
+				continue
+			var ta := (lo[ax] - o[ax]) / d[ax]
+			var tb := (hi[ax] - o[ax]) / d[ax]
+			t0 = maxf(t0, minf(ta, tb))
+			t1 = minf(t1, maxf(ta, tb))
+		if hit and t0 <= t1 and t0 < best_t:
+			best_t = t0
+			best_b = bx
+	if not best_b.is_empty():
+		var at: Vector3 = o + d * best_t
+		print("    the core is block %d's, met at %s (its box %s .. %s)" % [int(best_b.block), at,
+				best_b.pos - best_b.size * 0.5, best_b.pos + best_b.size * 0.5])
 	var cs: Vector3 = w.get_cell_size()
 	var t := 0.0
 	while t < 8.0:
@@ -280,6 +308,10 @@ func _where(img: Image, best: Vector2i) -> void:
 					rows.append(row)
 			print("\n".join(rows))
 			var seen := {}
+			var dead := {}
+			for bx in w.get_block_boxes(_dbg_chunk):
+				if not bx.alive:
+					dead[int(bx.block)] = true
 			for dx in [-1, 0, 1]:
 				for dy in [-1, 0, 1]:
 					for dz in [-1, 0, 1]:
@@ -287,8 +319,9 @@ func _where(img: Image, best: Vector2i) -> void:
 						if b >= 0 and not seen.has(b):
 							seen[b] = true
 							var arch := w.get_block_archetype(_dbg_chunk, b)
-							print("      %d: %s %s mesh %d" % [b, w.get_archetype_name(arch),
-									w.get_archetype_size(arch), w.get_archetype_mesh_triangles(arch)])
+							print("      %d: %s %s mesh %d%s" % [b, w.get_archetype_name(arch),
+									w.get_archetype_size(arch), w.get_archetype_mesh_triangles(arch),
+									"  (shot away)" if dead.has(b) else ""])
 			return
 		t += 0.002
 

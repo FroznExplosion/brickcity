@@ -457,6 +457,11 @@ struct FaceBake {
         uint16_t from;  // cells along the side, [from, to)
         uint16_t to;
         uint8_t side;   // 0..3: A low, A high, B low, B high
+        // Bit 0: the run's low end, bit 1 its high end, is where the brick
+        // ABOVE has an open corner -- a floor under a flat bottom (below):
+        // its edge there stops a bevel short, cut at 45 degrees to meet that
+        // brick's bevelled upright edge.
+        uint8_t trim = 0;
     };
     std::vector<Floor> floors;
     // Which bake this is, counted up across every bake made. A chamfered band

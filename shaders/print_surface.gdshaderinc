@@ -108,16 +108,14 @@ uniform bool underside_hollow = true;
 uniform float under_rim = 0.057;        // 1.3 mm of wall
 uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
 uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
-// How dark the hollow reads: the inside of a shell ten millimetres deep.
-uniform float under_cavity : hint_range(0.0, 1.0) = 0.3;
-// The hollow has DEPTH: the view ray is walked up into it (ps_under_sd), and
-// where it meets a rib or the rim before the roof that wall is seen, lit
-// more the nearer the open bottom. One depth for every part -- a face knows
-// its footprint, not its height -- between a plate's hollow (2 mm, 0.1 here)
-// and a brick's (8 mm).
-uniform float under_depth = 0.12;
-uniform float under_wall : hint_range(0.0, 1.0) = 0.7;
-uniform float under_depth_range = 25.0;   // metres: past it, flat
+// The hollow's roof (brick.gdshader): 45-degree terraces out from every
+// wall, `under_slope` wide (about 1.3 mm sliced), then bridged flat. How
+// much sky (ambient occlusion) its flat roof sees, and its terraces' foot by
+// the walls; past under_depth_range, the average of the two.
+uniform float under_cavity : hint_range(0.0, 1.0) = 0.75;
+uniform float under_wall : hint_range(0.0, 1.0) = 0.85;
+uniform float under_slope = 0.055;
+uniform float under_depth_range = 25.0;
 
 group_uniforms finish;
 // Added to the material's roughness on a printed side, taken off on a top.
@@ -207,7 +205,7 @@ vec2 ps_face_k(int face) {
         return vec2(0.6, 0.6);
     }
     if (face == 1) {
-        return vec2(0.9, 0.7);
+        return vec2(0.9, 0.85);
     }
     if (PRINT_BED == 0) {
         return vec2(0.2, 0.1);
@@ -273,8 +271,12 @@ void ps_beads(float t, float t_d, int face, int mat, float dist, vec3 vertex, fl
         // sine had every top rippling like corrugated sheet.
         float ridge = sin(ph * PS_TAU);
         if (face != 0) {
+            // Not ironed (no slicer irons by default, and the sliced top
+            // showed none): a squashed bead, flat-ish over the middle and
+            // rounding down into a shallow V beside the next. Between the
+            // sine's corrugation and an ironed line's flat.
             float x = fract(ph + 0.5) * 2.0 - 1.0;   // -1..1 across, 0 the bead's middle
-            ridge = sign(x) * pow(abs(x), 4.0);
+            ridge = x * abs(x);
         }
         ridge *= mix(1.0, 0.25, join);
         if (face == 0) {
@@ -390,7 +392,8 @@ float ps_under_sd(vec2 uv, vec2 fsize) {
 }
 
 // ps_under_sd is the signed distance to the rim and ribs (< 0 inside them),
-// metres, with no derivatives in it -- it is walked in a loop.
+// metres, with no derivatives in it -- it is sampled beside itself for the
+// slope of the hollow's roof (brick.gdshader).
 vec2 ps_underside(vec2 uv, vec2 fsize) {
     float sd = ps_under_sd(uv, fsize);
     float aa = max(fwidth(sd), 1e-5);
