@@ -311,7 +311,7 @@ In the order to do it. Each line points at where the item is written up.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
-12. ~~Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status`~~ -- merged 2026-10-15,
+12. ~~Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status`~~ -- merged 2026-10-17,
     with the `--drawn` section that was missing (§4). The main folder's uncommitted edit that held
     it back was whitespace only (five lines' indent turned to tabs, 10-11), dropped at the user's
     word ("discard 12").
@@ -818,7 +818,7 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
 
 ## 4. Housekeeping
 
-* ~~**Status notes not on main.**~~ Merged 2026-10-15 (`far-coarse-status`, 8 commits), with a
+* ~~**Status notes not on main.**~~ Merged 2026-10-17 (`far-coarse-status`, 8 commits), with a
   section for the leftover-drawing fix (`--drawn`, 4931ed0).
 * **`--walk` fails one check with storey groups on** ("gets past it rather than stopping dead",
   the debug camera's walker on a brick course under a beam): it ducks, then stays at the beam's
