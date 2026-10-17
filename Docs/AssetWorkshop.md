@@ -145,6 +145,12 @@ copies every sketch.
 |---|---|
 | Every action a key does is in a menu on the bar -- View, Part, Brick, Gun, Photos, Help, and Redo under Edit -- with its key beside it (`WorkshopMenu.add_menu`; the menus do not bind the keys, the scene's own handlers keep them, so nothing fires twice). The tools stay on the rail, with a part picker at its top. Held or aimed things (Tab, hold E, the number keys and wheel, the middle button, Ctrl + click) stay keys and are listed under Help | the user should not have to remember a key |
 
+### The shape brush is the Shapes tool's (2026-10-16)
+
+| Change | Why |
+|---|---|
+| Shapes (K) chooses **drag a box** (fill it, as before) or **brush**: then a plain LMB lays the shape, RMB carves it, held and dragged it goes on, and its options (ball, cube, cylinder, flat circle or square; size; a flat one's thickness; clean or random) are under it. Ctrl + click still does it from any tool | holding Ctrl to use a tool was one more thing to remember |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |
