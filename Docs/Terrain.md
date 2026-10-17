@@ -3458,3 +3458,38 @@ resident with its collider wherever the camera is, but a pinned tile outside
 the streamed square is hidden (and its studs wait) and the coarse tier is
 drawn there instead. `has_tile` answers for DRAWN tiles, which is what the
 coarse tier hides itself against.
+
+### 22.19 Walking without hitches: the far tier never waits, tiles drop a few a frame (2026-10-17)
+
+Reported: lag spikes while the terrain streams and the player moves. Measured
+with the heightfield bench's walk (70 m at 14 m/s), now reporting frames over
+25 ms and the far tier's worst main-thread swap:
+
+| | worst frame | frames > 25 ms |
+|---|---|---|
+| before (two runs) | 66.7 ms, always at the block crossing (frame 267) | 1-3 |
+| after (two runs) | 33.3 ms, one frame, at no fixed place | 1 |
+
+* **The far tier no longer waits on the main thread.** `relod` (each tile the
+  camera enters) and `_refine_for` (a split the detail walks into) started
+  their bakes on worker threads and then WAITED for them. Now they start the
+  bakes and return; a later frame swaps the meshes in (relod under
+  `APPLY_BUDGET_MS`, a split all at once so no frame draws ground twice or
+  not at all). Worst swap measured 1.7-2.4 ms. `cover`/`relod` block by
+  default (a build, a capture, the bench's coverage check must see an exact
+  world); the per-frame calls in the heightfield test and the city pass
+  `wait = false`. Edits, `rebuild` and `_exit_tree` land a job in flight
+  first. A group task's id is waited on ONCE and polled with
+  `is_group_task_completed` (`_job_done`/`_job_wait`).
+* **The big one was not the far tier.** Crossing a block boundary drops a
+  whole block row, 48 tiles, and freeing them in one frame cost 50-67 ms two
+  frames later. `TerrainStreamer.drops_per_frame` (4) drops the furthest first
+  and the rest on later frames; a tile waiting stays whole and drawn, and
+  `settle` waits for the queue.
+* **Exit crash.** Once the city streamed (22.18) it dropped tiles, so
+  TerrainTile's static MultiMesh pool held meshes at quit, freed after the
+  RenderingServer: "~ArrayMesh: RenderingServer is null", then signal 11 on the
+  arena gate's way out (2 of 3 runs). The streamer empties the pool in its
+  `_exit_tree` (`TerrainTile.clear_pool`): 0 crashes and no mesh leak in two
+  runs after.
+

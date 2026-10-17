@@ -11406,8 +11406,8 @@ func _process(delta: float) -> void:
 	if _terrain_streamer != null and not _lod_frozen:
 		var lod_at := camera.global_position
 		_terrain_streamer.follow(Vector2(lod_at.x, lod_at.z))
-		_terrain_coarse.cover(_terrain_streamer)
-		_terrain_coarse.relod(lod_at)
+		_terrain_coarse.cover(_terrain_streamer, false)
+		_terrain_coarse.relod(lod_at, false)
 	# How far the camera is zoomed in (a scope, any narrowed view): the
 	# unzoomed horizontal field over the camera's, as tangents. Detail goes by
 	# distance over that -- the near tier's and the shaders' (lod_zoom).

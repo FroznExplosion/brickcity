@@ -520,8 +520,8 @@ func _process(delta: float) -> void:
 	if _streamer != null:
 		if not _lod_frozen:
 			_streamer.follow(Vector2(lod_at.x, lod_at.z))
-			_far.cover(_streamer)
-			_far.relod(lod_at)
+			_far.cover(_streamer, false)
+			_far.relod(lod_at, false)
 		_tiles.assign(_streamer.tiles())
 	if _sea != null and _sea.enabled:
 		_sea.follow(lod_at, delta)
@@ -987,8 +987,13 @@ func _bench_walk() -> void:
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
 	var start := _camera.position
 	_streamer.reset_stats()
+	if "worst_main_ms" in _far:
+		_far.worst_main_ms = 0.0
 	var worst := 0.0
 	var worst_at := 0
+	# Frames over 25 ms: a hitch you feel, which a single worst frame hides
+	# the count of (Terrain.md 22.19).
+	var slow := 0
 	var frames := 300
 	var speed := 14.0            # m/s, a fast sprint
 	for i in frames:
@@ -999,8 +1004,12 @@ func _bench_walk() -> void:
 		if i > 10 and ms > worst:
 			worst = ms
 			worst_at = i
-	print("[bench] walk: %.0f m at %.0f m/s, worst frame %.1f ms (frame %d)" % [
-		float(frames) * speed / 60.0, speed, worst, worst_at])
+		if i > 10 and ms > 25.0:
+			slow += 1
+	print("[bench] walk: %.0f m at %.0f m/s, worst frame %.1f ms (frame %d), %d frames over 25 ms" % [
+		float(frames) * speed / 60.0, speed, worst, worst_at, slow])
+	if "worst_main_ms" in _far:
+		print("[bench]   far tier: worst main-thread swap %.1f ms" % _far.worst_main_ms)
 	print("[bench]   %s" % _streamer.report())
 	print("[bench]   tile is %.1f m, so that crossed %.0f of them" % [
 		tile_m, float(frames) * speed / 60.0 / tile_m])

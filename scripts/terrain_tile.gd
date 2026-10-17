@@ -468,6 +468,12 @@ func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
 	return mm
 
 
+## Let every pooled MultiMesh go. For a streamer leaving the tree (see its
+## `_exit_tree`); the pool fills again from the next tiles that leave.
+static func clear_pool() -> void:
+	_mm_pool.clear()
+
+
 func _release_multimeshes() -> void:
 	for pair in _mms:
 		if not _mm_pool.has(pair[0]):

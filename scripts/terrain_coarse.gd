@@ -78,6 +78,24 @@ var _relod_at := Vector2i(1 << 30, 0)
 ## Tile -> the sample step of the block covering it AS BUILT, for `height_at`.
 var _tile_step := {}
 
+## FOLLOWING NEVER WAITS (Terrain.md 22.19). `relod` and `_refine_for` used to
+## start their bakes on the worker threads and then WAIT for them, on the main
+## thread, every time the camera entered a new tile -- the hitch when walking.
+## Now each starts its bakes and returns; a later frame swaps the results in,
+## under APPLY_BUDGET_MS. Until then the old blocks keep drawing. One job of
+## each kind at a time; the camera having moved on meanwhile is caught by the
+## next call. An edit (`field_changed`), a `rebuild` and leaving the tree
+## finish a job in flight first, blocking -- they are rare.
+const APPLY_BUDGET_MS := 1.5
+## {task, redo, want, baked, nodes, next}: a relod in flight, or empty.
+var _relod_job := {}
+## {task, todo, new_rects, baked, spans, ring_live, ring_baked}: a split in
+## flight, or empty.
+var _refine_job := {}
+## The longest a frame spent on this tier's main-thread work (swapping meshes
+## in), for the bench and the probe.
+var worst_main_ms := 0.0
+
 
 ## Lay the tier out to `reach_tiles` of the origin and bake it.
 ##
@@ -254,9 +272,47 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 		_far_blocks += merged[span].size()
 
 
+## Leaving the tree with bakes in flight: wait for them. A worker still
+## inside BrickTerrain when the scene goes away crashed the engine on the way
+## out (TerrainStreamer._exit_tree, Terrain.md 22.15).
+func _exit_tree() -> void:
+	_wait_jobs()
+	_relod_job = {}
+	_refine_job = {}
+
+
+## Finish whatever is in flight now, blocking: before something that changes
+## the blocks under it.
+func _wait_jobs() -> void:
+	_job_wait(_relod_job)
+	_job_wait(_refine_job)
+
+
+## A group task may be waited on ONCE: its id is gone after. So a job
+## remembers that it was, and asks `is_group_task_completed` (not
+## `is_task_completed`, which knows nothing of group ids) until then.
+static func _job_wait(job: Dictionary) -> void:
+	if job.is_empty() or job.get("waited", false):
+		return
+	WorkerThreadPool.wait_for_group_task_completion(job.task)
+	job["waited"] = true
+
+
+static func _job_done(job: Dictionary) -> bool:
+	if job.get("waited", false):
+		return true
+	if not WorkerThreadPool.is_group_task_completed(job.task):
+		return false
+	_job_wait(job)
+	return true
+
+
 ## Everything again, as `build` was last asked: after the smooth step changed
 ## (the dev menu), or to see a border as the build lays it out.
 func rebuild() -> void:
+	_wait_jobs()
+	_relod_job = {}
+	_refine_job = {}
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -330,9 +386,11 @@ func _rebuild_ring(span: int, have: Array[Dictionary] = []) -> void:
 		var arrays: Array = baked[k]["mesh"]
 		if arrays.is_empty():
 			continue
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
-			_offset_surface(arrays, Vector3(_all_rects[live[k]].position.x * tile_studs * stud,
-				0.0, _all_rects[live[k]].position.y * tile_studs * stud)),
+		# A bake from a following job was offset on its worker already.
+		if not baked[k].get("offset", false):
+			arrays = _offset_surface(arrays, Vector3(_all_rects[live[k]].position.x
+					* tile_studs * stud, 0.0, _all_rects[live[k]].position.y * tile_studs * stud))
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays,
 			[], {}, TerrainTile.CUSTOM0_FLAGS)
 	if _ring_nodes.has(span):
 		(_ring_nodes[span] as MeshInstance3D).queue_free()
@@ -381,10 +439,18 @@ static func lod_of_step(step: int) -> float:
 ##
 ## Both tiers are on the same lattice (`split_to` is the streamer's `align`),
 ## so a block is covered or it is not; there is no partial case to get wrong.
-func cover(streamer: TerrainStreamer) -> void:
+##
+## `wait` false (the per-frame call) never blocks: a split the detail needs
+## lands a few frames later. True (the default: a build, a capture, a bench)
+## finishes every split now, so what is drawn is exact when it returns.
+func cover(streamer: TerrainStreamer, wait := true) -> void:
 	if _far_nodes.is_empty():
 		return
 	_refine_for(streamer.current_region())
+	while wait and not _refine_job.is_empty():
+		_job_wait(_refine_job)
+		_refine_for(streamer.current_region())    # lands it
+		_refine_for(streamer.current_region())    # and starts any further split
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:
@@ -428,6 +494,10 @@ func cover(streamer: TerrainStreamer) -> void:
 ## becomes about fifteen smaller ones rather than a thousand. Refined blocks
 ## are kept -- walking back and forth over the same ground bakes once.
 func _refine_for(detail: Rect2i) -> void:
+	if not _refine_job.is_empty():
+		if _job_done(_refine_job):
+			_apply_refine()
+		return           # one split at a time; the next call sees the rest
 	var todo: Array[int] = []
 	for i in _all_rects.size():
 		if _all_rects[i].size.x <= _split_to:
@@ -440,9 +510,73 @@ func _refine_for(detail: Rect2i) -> void:
 		return
 
 	var new_rects: Array[Rect2i] = []
-	var dirty_rings := {}
+	var spans := {}
 	for i in todo:
 		_split(_all_rects[i], detail, new_rects)
+		if not _all_node.has(i):
+			spans[_all_rects[i].size.x] = true
+	# The rings that lose a member, baked as they will be once it is gone:
+	# every live member except the ones being split.
+	var ring_live := {}
+	var jobs: Array = []     # [span or -1, index into new_rects or ring_live]
+	for span in spans:
+		var live: Array[int] = []
+		for i in (_ring_members.get(span, [] as Array[int]) as Array[int]):
+			if _all_owner[i] != -2 and not (i in todo):
+				live.append(i)
+		ring_live[span] = live
+		for k in live.size():
+			jobs.append([span, k])
+	for k in new_rects.size():
+		jobs.append([-1, k])
+	var baked: Array[Dictionary] = []
+	baked.resize(new_rects.size())
+	var ring_baked := {}
+	for span in spans:
+		var b: Array[Dictionary] = []
+		b.resize((ring_live[span] as Array).size())
+		ring_baked[span] = b
+	var tile_studs := BrickTerrain.get_tile_studs()
+	var stud := BrickWorld.get_stud_metres()
+	# Copies: the workers must not read arrays the main thread writes.
+	var rects := _all_rects.duplicate()
+	var steps := _all_steps.duplicate()
+	# Bake the children and the shrunk rings in parallel, like everything else
+	# that reads the field and nothing else -- and do not wait for them.
+	var task := WorkerThreadPool.add_group_task(
+		func(j: int) -> void:
+			var span: int = jobs[j][0]
+			var k: int = jobs[j][1]
+			if span < 0:
+				@warning_ignore("integer_division")
+				baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
+					new_rects[k].position.y, new_rects[k].size.x,
+					STEP * (new_rects[k].size.x / SPAN))
+			else:
+				var i: int = ring_live[span][k]
+				var r: Rect2i = rects[i]
+				var d: Dictionary = BrickTerrain.build_coarse(r.position.x, r.position.y,
+					span, steps[i])
+				var arrays: Array = d["mesh"]
+				if not arrays.is_empty():
+					d["mesh"] = _offset_surface(arrays, Vector3(r.position.x * tile_studs * stud,
+						0.0, r.position.y * tile_studs * stud))
+				d["offset"] = true
+				ring_baked[span][k] = d,
+		jobs.size(), -1, true, "coarse refine")
+	_refine_job = {"task": task, "todo": todo, "new_rects": new_rects, "baked": baked,
+			"spans": spans, "ring_baked": ring_baked}
+
+
+## A split's bakes are in: retire the blocks that were split, swap in their
+## children and the shrunk rings. All at once, so no frame draws the same
+## ground twice or none at all.
+func _apply_refine() -> void:
+	var t0 := Time.get_ticks_usec()
+	var job := _refine_job
+	_refine_job = {}
+	_job_wait(job)
+	for i in (job.todo as Array[int]):
 		# A block that came from an EARLIER split is in `_far_nodes` too, and
 		# freeing it without letting go of it there left `cover` setting
 		# `visible` on a freed node the next frame -- the crash flying out
@@ -453,26 +587,11 @@ func _refine_for(detail: Rect2i) -> void:
 		if _all_node.has(i):
 			(_all_node[i] as MeshInstance3D).queue_free()
 			_all_node.erase(i)
-		else:
-			dirty_rings[_all_rects[i].size.x] = true
-	for span in dirty_rings:
-		_rebuild_ring(span)
-	if new_rects.is_empty():
-		return
+	for span in job.spans:
+		_rebuild_ring(span, job.ring_baked[span])
 
-	# Bake the children in parallel, like everything else that reads the
-	# field and nothing else.
-	var baked: Array[Dictionary] = []
-	baked.resize(new_rects.size())
-	var task := WorkerThreadPool.add_group_task(
-		func(k: int) -> void:
-			@warning_ignore("integer_division")
-			baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
-				new_rects[k].position.y, new_rects[k].size.x,
-				STEP * (new_rects[k].size.x / SPAN)),
-		new_rects.size(), -1, true, "coarse refine")
-	WorkerThreadPool.wait_for_group_task_completion(task)
-
+	var new_rects: Array[Rect2i] = job.new_rects
+	var baked: Array[Dictionary] = job.baked
 	var tile_studs := BrickTerrain.get_tile_studs()
 	var stud := BrickWorld.get_stud_metres()
 	for k in new_rects.size():
@@ -493,6 +612,10 @@ func _refine_for(detail: Rect2i) -> void:
 		_far_rects.append(new_rects[k])
 		_far_tris += int(baked[k]["triangle_count"])
 		_far_blocks += 1
+	# A split child's step is its build step: the relod brings it to the
+	# camera's on the next tile entered -- or now, if the camera has not moved.
+	_relod_at = Vector2i(1 << 30, 0)
+	worst_main_ms = maxf(worst_main_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
 
 ## Four children, and only the ones that touch the detail split again.
@@ -518,7 +641,15 @@ func _split(rect: Rect2i, detail: Rect2i, out: Array[Rect2i]) -> void:
 ## the step its distance from the camera calls for -- the same rings the tier
 ## is laid out in, measured from the camera instead of the origin -- whenever
 ## the camera enters a new tile. Smooth past LOD 1, as the rest is.
-func relod(at: Vector3) -> void:
+##
+## `wait` false (the per-frame call) never blocks; true finishes it now.
+func relod(at: Vector3, wait := true) -> void:
+	if wait:
+		_wait_jobs_relod()
+	if not _relod_job.is_empty():
+		if _job_done(_relod_job):
+			_apply_relod()
+		return           # the camera's new tile is looked at once this is in
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
 	var c := Vector2i(floori(at.x / tile_m), floori(at.z / tile_m))
 	if c == _relod_at:
@@ -526,6 +657,7 @@ func relod(at: Vector3) -> void:
 	_relod_at = c
 	var redo: Array[int] = []
 	var want: Array[int] = []
+	var nodes: Array = []
 	for i in _all_rects.size():
 		if _all_owner[i] < 0 or not _all_node.has(i):
 			continue
@@ -542,28 +674,61 @@ func relod(at: Vector3) -> void:
 		if step != _all_steps[i]:
 			redo.append(i)
 			want.append(step)
+			nodes.append(_all_node[i])
 	if redo.is_empty():
 		return
 	var baked: Array[Dictionary] = []
 	baked.resize(redo.size())
+	var rects: Array[Rect2i] = []
+	for i in redo:
+		rects.append(_all_rects[i])
 	var task := WorkerThreadPool.add_group_task(
 		func(k: int) -> void:
-			var r: Rect2i = _all_rects[redo[k]]
-			baked[k] = BrickTerrain.build_coarse(r.position.x, r.position.y, r.size.x, want[k]),
+			baked[k] = BrickTerrain.build_coarse(rects[k].position.x, rects[k].position.y,
+				rects[k].size.x, want[k]),
 		redo.size(), -1, true, "coarse relod")
-	WorkerThreadPool.wait_for_group_task_completion(task)
-	for k in redo.size():
+	_relod_job = {"task": task, "redo": redo, "want": want, "baked": baked,
+			"nodes": nodes, "next": 0}
+
+
+## Land a relod in flight now, all of it.
+func _wait_jobs_relod() -> void:
+	if _relod_job.is_empty():
+		return
+	_job_wait(_relod_job)
+	while not _relod_job.is_empty():
+		_apply_relod(INF)
+
+
+## Swap a relod's meshes in, as many as fit the frame's budget; the rest
+## next frame. Each block is swapped whole, so a block is never half old.
+func _apply_relod(budget_ms := APPLY_BUDGET_MS) -> void:
+	var t0 := Time.get_ticks_usec()
+	var job := _relod_job
+	_job_wait(job)
+	var redo: Array[int] = job.redo
+	var k: int = job.next
+	while k < redo.size():
 		var i: int = redo[k]
-		var mi := _all_node[i] as MeshInstance3D
-		var arrays: Array = baked[k]["mesh"]
-		if not is_instance_valid(mi) or arrays.is_empty():
-			continue
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				TerrainTile.CUSTOM0_FLAGS)
-		mi.mesh = mesh
-		mi.set_instance_shader_parameter("lod_level", lod_of_step(want[k]))
-		_all_steps[i] = want[k]
+		var mi = job.nodes[k]
+		var arrays: Array = job.baked[k]["mesh"]
+		# Split or freed since the bake started: its children took over.
+		if is_instance_valid(mi) and _all_owner[i] >= 0 and _all_node.get(i) == mi \
+				and not arrays.is_empty():
+			var mesh := ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+					TerrainTile.CUSTOM0_FLAGS)
+			(mi as MeshInstance3D).mesh = mesh
+			(mi as MeshInstance3D).set_instance_shader_parameter("lod_level",
+					lod_of_step(job.want[k]))
+			_all_steps[i] = job.want[k]
+		k += 1
+		if float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
+			break
+	job.next = k
+	if k >= redo.size():
+		_relod_job = {}
+	worst_main_ms = maxf(worst_main_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +737,13 @@ func relod(at: Vector3) -> void:
 ## build): bake the blocks over them again, each at the step it was built
 ## with -- a merged ring as a whole, since a ring is one mesh.
 func field_changed(tiles: Rect2i) -> void:
+	# A job in flight baked from the field as it was: land it first, then
+	# this re-bakes over it from the field as it is.
+	_wait_jobs()
+	if not _refine_job.is_empty():
+		_apply_refine()
+	while not _relod_job.is_empty():
+		_apply_relod(INF)
 	var dirty_rings := {}
 	var nodes: Array[int] = []
 	for i in _all_rects.size():
