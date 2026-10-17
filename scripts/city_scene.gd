@@ -83,6 +83,20 @@ const BIG_SHAPES := [
 	{"x": 80, "z": 60, "courses": 204},
 	{"x": 30, "z": 30, "courses": 246},
 ]
+## `--big` also has wide, low buildings past the far edge of the grid: two to
+## four floors of ordinary rooms, 42-84 m long (user, 2026-10-16: "a couple wide
+## building of varying lengths and height"). Everything here was made with
+## towers in mind -- bands that are slices across the whole building, a load
+## check over a whole storey at once -- and these are what a big floor plan
+## does to it (Docs/CollapseNext.md item 25). Rows of the grid beyond its last,
+## packed along x with WIDE_GAP_STUDS between; the grid's own buildings keep
+## their places and their ids. `--no-wide` leaves them out, for numbers that
+## compare with the big city before them.
+const WIDE_SHAPES := [
+	[{"x": 240, "z": 50, "courses": 12}, {"x": 160, "z": 60, "courses": 18}],
+	[{"x": 200, "z": 80, "courses": 24}, {"x": 120, "z": 40, "courses": 12}],
+]
+const WIDE_GAP_STUDS := 40
 ## What each building's rooms are for (Docs/Workshop.md, Stage F). A shape row
 ## may carry its own "program"; otherwise, with `--programs` (or the export
 ## below), buildings take these mixes in turn. Off by default: with no
@@ -160,6 +174,8 @@ func _program_for(shape: Dictionary, index: int) -> Dictionary:
 @export_range(0, 2000) var debris_large_max := 24
 @export_range(0, 4000) var debris_total_max := 96
 var _big := false
+var _wide := false   ## the big city's wide buildings (WIDE_SHAPES)
+var _wide_ids := {}  ## their building ids
 ## Metres between buildings. Big ones need more, or they start inside each
 ## other -- the shapes above are up to 28 m across against a 13 m pitch.
 const BIG_SPACING := 46.0
@@ -934,6 +950,7 @@ func _ready() -> void:
 	_windows_mode = "--windows" in args
 	# The scene's settings first, the command line over the top of them.
 	_big = big_shapes or "--big" in args
+	_wide = _big and not "--no-wide" in args and not combat_arena and not firefight
 	_city_size = maxi(building_count, 1)
 	_chamfer_mode = "--chamfer" in args
 	_checkpoint_mode = "--checkpoint" in args
@@ -1320,6 +1337,8 @@ func _build_city() -> void:
 				_place_building(shape.x, shape.z, shape.courses, pos,
 						_program_for(shape, index))
 				index += 1
+		if _wide:
+			_place_wide_buildings(side, spacing, index)
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
 	# Each tower shape's bricks, built once now so no promotion builds them
 	# (BuildingRegistry.prepare_templates).
@@ -1356,6 +1375,21 @@ func _grid_spacing(shapes: Array) -> int:
 	for s in shapes:
 		widest = maxi(widest, maxi(int(s.x), int(s.z)))
 	return maxi(spacing, widest + STREET_STUDS)
+
+
+## The wide buildings (WIDE_SHAPES), in rows past the grid's last.
+func _place_wide_buildings(side: int, spacing: int, index: int) -> void:
+	@warning_ignore("integer_division")
+	var half := (side - 1) * spacing / 2
+	for r in WIDE_SHAPES.size():
+		var x := -half
+		var z := (side + r) * spacing - half
+		for shape: Dictionary in WIDE_SHAPES[r]:
+			var id := _place_building(shape.x, shape.z, shape.courses,
+					BrickWorld.grid_to_world(Vector3i(x, 0, z)), _program_for(shape, index))
+			_wide_ids[id] = true
+			index += 1
+			x += int(shape.x) + WIDE_GAP_STUDS
 
 
 ## One building into the registry, with its stair, its index and its shell.
@@ -6712,7 +6746,10 @@ func _run_breaklag_pass() -> void:
 	var biggest: BuildingRegistry.Building = null
 	var ordinary: Array = []
 	for c in registry.buildings:
-		if c.is_build():
+		# Towers, as this was written for. The big city's wide buildings are
+		# 12-24 courses, which made them its "ordinary" ones -- where it had
+		# none -- and they fail what a tower is asked (CollapseNext item 25).
+		if c.is_build() or _wide_ids.has(c.id):
 			continue
 		var size: int = c.recipe.courses * c.recipe.footprint_x * c.recipe.footprint_z
 		if biggest == null or size > biggest.recipe.courses * biggest.recipe.footprint_x \
@@ -6724,7 +6761,8 @@ func _run_breaklag_pass() -> void:
 	# the shot, and drawn by its shell until its bands are up.
 	var shell: BuildingRegistry.Building = null
 	for c in registry.buildings:
-		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest:
+		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest \
+				or _wide_ids.has(c.id):
 			continue
 		if shell == null or absi(c.recipe.courses - 24) < absi(shell.recipe.courses - 24):
 			shell = c
@@ -6733,7 +6771,8 @@ func _run_breaklag_pass() -> void:
 	# Another shell, aimed at before it is shot (_aim_promote).
 	var aimed: BuildingRegistry.Building = null
 	for c in registry.buildings:
-		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest or c == shell:
+		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest or c == shell \
+				or _wide_ids.has(c.id):
 			continue
 		aimed = c
 		break
@@ -6743,7 +6782,7 @@ func _run_breaklag_pass() -> void:
 	var under: BuildingRegistry.Building = null
 	for c in registry.buildings:
 		if c.is_build() or c.is_materialised() or ordinary.has(c) or c == biggest \
-				or c == shell or c == aimed:
+				or c == shell or c == aimed or _wide_ids.has(c.id):
 			continue
 		under = c
 		break
@@ -12943,8 +12982,12 @@ func _run_tree_pass() -> void:
 ## body, and a shot still lands on it; walking back in gives the body back.
 func _run_far_pass() -> void:
 	print("[far] the city past SHELL_RANGE")
-	# Outside the corner, low enough to see a skyline rather than a map.
-	var span := _world_box(registry.buildings[registry.buildings.size() - 1]).end
+	# Outside the corner, low enough to see a skyline rather than a map. The
+	# grid's last tower: the big city's wide buildings are rows past it.
+	var last := registry.buildings.size() - 1
+	while last > 0 and _wide_ids.has(last):
+		last -= 1
+	var span := _world_box(registry.buildings[last]).end
 	var corner := Vector3(-120.0, 40.0, -120.0)
 	camera.global_position = corner
 	camera.look_at(Vector3(span.x, 0.0, span.z) * 0.5, Vector3.UP)
@@ -12999,6 +13042,9 @@ func _run_far_pass() -> void:
 	var far_id := -1
 	var far_d := 0.0
 	for id in _far_on:
+		# Towers, as this was written for (CollapseNext item 25).
+		if _wide_ids.has(id):
+			continue
 		var d := registry.get_building(id).xform.origin.distance_to(here)
 		if d > far_d:
 			far_d = d

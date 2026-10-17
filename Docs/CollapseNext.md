@@ -266,6 +266,35 @@ In the order to do it. Each line points at where the item is written up.
     24. **A tick of 50-85 ms, all `islands`**, now and then in a `--big --shot` (tick 398-478 or
         later, one or two a run, with and without item 23; 2026-10-16). Not traced. Not
         started.
+    25. **Wide buildings** (user, 2026-10-16: "think about a huge wide building with huge open
+        rooms"). In the big city now (`CityScene.WIDE_SHAPES`; `--no-wide` leaves them out): four
+        low ones past the grid's far edge -- 240 x 50 studs and two floors, 160 x 60 and three,
+        200 x 80 and four, 120 x 40 and two -- for the user to play with first. What breaking
+        does is not tied to floors: the stress solve, the load check (every plate boundary, not
+        storey lines), the weakest-seam snap and the search for what came off all go by the
+        bricks. What is, and what a wide building would show up:
+        * **Bands are slices across the whole building** (`Chunk::section_of_y`): mesh, collision
+          and rebuilds are a band at a time, and a band of a 240 x 80 floor plan is all of it at
+          that height -- one hit, a big rebuild. Tiles across as well as up.
+        * **The load check takes a whole boundary at once** (`gravity_check`): one bay of a wide
+          building with its columns shot away hardly moves the sum, so it never fails. By region,
+          and a span rule -- a floor reaches so far between supports, more for a thicker one,
+          and past that sags and breaks mid-span.
+        * **Interiors and a landing's floor-line snap use the recipe's storey height**
+          (`TowerRecipe.STOREY_PLATES`): they should use the floors found in the bricks, so a
+          double-height hall or a mezzanine half a storey up is a floor like any other.
+        * **A mega collapse is cut bottom to top** (`CollapseDirector`): a wide one by region.
+        First what the user finds playing them, then a recipe with a double-height hall and a
+        mezzanine, and the passes run on it, before any of the above is changed.
+        **Found already:** `--breaklag --big` took them for its "ordinary" buildings (12-30
+        courses; no tower in the big city is) and asked them a tower's questions. A ground
+        storey shot through all round brought nothing down on the 240-stud one (no piece at
+        all); on the 160-stud one the body came off 15 ticks after the first piece (3 is the
+        line); its far shell never came back in 300 ticks; the shot showed on the 120-stud
+        one's shell at tick 16 (15 is the line). The pass keeps to towers now
+        (`CityScene._wide_ids`), as written; these are for the wide buildings' own checks. So
+        does `--far` (`big_city.tscn -- --far --buildings=150`), which shot the farthest building
+        -- a wide one, made bricks where a tower is still a banded shell (2 of 19 failed).
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
