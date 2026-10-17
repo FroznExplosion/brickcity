@@ -264,8 +264,17 @@ In the order to do it. Each line points at where the item is written up.
         29.7): it is ~0.35 ms a frame. Seen in both, and not this: a tick now and then of
         50-85 ms, all `islands` (item 24).
     24. **A tick of 50-85 ms, all `islands`**, now and then in a `--big --shot` (tick 398-478 or
-        later, one or two a run, with and without item 23; 2026-10-16). Not traced. Not
-        started.
+        later, one or two a run, with and without item 23; 2026-10-16). **Looked at 2026-10-16,
+        with the display asleep** (the user away): then it is not one tick but a run of them,
+        every other tick from about tick 730 to the end, 150-180 ms each -- and where it lands
+        moves: once all in the debris cap (`islands.tick` "loop ... debris cap 161.6"), once all in
+        resolve (485 ms: harvest, upload, the mesh queue). Timed inside the cap's sleeps: a
+        147-brick piece's `_retire` 27-30 ms, a 2,806-brick piece's stand-in 6.3 ms -- calls that
+        hand the renderer a mesh or free one, waiting on a renderer the display's sleep holds to
+        ~11 frames a second. So the runs of them are the sleeping display, not play (see
+        `display-sleep-throttles-runs` in memory: check `--ring` first). **Left:** the single
+        50-66 ms tick of a run with the display awake -- trace it awake, the same way (the
+        `[prof] worst islands.tick` line and its "of which" lines say which part).
     25. **Wide buildings** (user, 2026-10-16: "think about a huge wide building with huge open
         rooms"). In the big city now (`CityScene.WIDE_SHAPES`; `--no-wide` leaves them out): four
         low ones past the grid's far edge -- 240 x 50 studs and two floors, 160 x 60 and three,
