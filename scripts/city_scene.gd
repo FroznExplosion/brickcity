@@ -873,6 +873,7 @@ var arena: WaveDirector
 var _wreck_mode := false
 var _jam_mode := false
 var _drawn_mode := false
+var _floating_mode := false
 var _ring_mode := false
 var _groups_mode := false
 var _squad_mode := false
@@ -979,6 +980,7 @@ func _ready() -> void:
 	_wreck_mode = "--wreck" in args
 	_jam_mode = "--jam" in args
 	_drawn_mode = "--drawn" in args
+	_floating_mode = "--floating" in args
 	_ring_mode = "--ring" in args
 	# `--rooms` was the gate of the interior drawing this replaced, and is the
 	# name other docs and habits still use for "the interiors gate".
@@ -1229,6 +1231,8 @@ func _ready() -> void:
 		_run_jam_pass()
 	elif _drawn_mode:
 		_run_drawn_pass()
+	elif _floating_mode:
+		_run_floating_pass()
 	elif _ring_mode:
 		_run_ring_pass()
 	elif _groups_mode:
@@ -3507,7 +3511,6 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# instead, and it runs when this one is done.
 	if _bands_building(id):
 		_band_redo[id] = true
-		_band_hits[id] = int(_band_hits.get(id, 0)) + 1
 		return
 	var bands: Array = _brick_bands.get(id, [])
 	if not bands.is_empty() and not force_full:
@@ -3582,11 +3585,6 @@ func _rebuild_bands(id: int, chunk: int) -> void:
 	_brick_band_meshes[id] = meshes
 	_brick_band_bytes[id] = bytes
 	_band_cursor[id] = 0
-	_band_todo.erase(id)
-	var built_at := PackedInt32Array()
-	built_at.resize(n)
-	built_at.fill(-1)
-	_band_built_at[id] = built_at
 	_band_pass[id] = int(_band_pass.get(id, 0)) + 1
 	# The parent draws nothing itself; it is the transform the bands hang off
 	# and the node the furniture is parented to.
@@ -3606,13 +3604,7 @@ func _build_one_band(id: int) -> bool:
 		_band_cursor.erase(id)
 		return false
 	var nodes: Array = _brick_bands.get(id, [])
-	# A pass over some bands only (_bands_done): the cursor walks that list.
-	var todo: PackedInt32Array = _band_todo.get(id, PackedInt32Array())
-	var count := todo.size() if not todo.is_empty() else nodes.size()
-	if pos >= count:
-		_band_cursor.erase(id)
-		return false
-	var at: int = todo[pos] if not todo.is_empty() else pos
+	var at := pos
 	if at >= nodes.size():
 		_band_cursor.erase(id)
 		return false
@@ -3628,12 +3620,6 @@ func _build_one_band(id: int) -> bool:
 	var _t0 := Time.get_ticks_usec()
 	var arrays: Array = world.build_chunk_mesh_section(b.chunk, at)
 	var _t1 := Time.get_ticks_usec()
-	# What this band was built from: the bricks as they are after every hit
-	# counted so far.
-	var built_at: PackedInt32Array = _band_built_at.get(id, PackedInt32Array())
-	if at < built_at.size():
-		built_at[at] = int(_band_hits.get(id, 0))
-		_band_built_at[id] = built_at
 	var ok := not arrays.is_empty() \
 			and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at])
 	if ok:
@@ -3654,7 +3640,7 @@ func _build_one_band(id: int) -> bool:
 	_band_builds += 1
 	_band_worst = maxf(_band_worst, float(_t2 - _t0) / 1000.0)
 	_band_cursor[id] = pos + 1
-	if pos + 1 >= count:
+	if pos + 1 >= nodes.size():
 		_band_cursor.erase(id)
 		return false
 	return true
@@ -3819,21 +3805,21 @@ func _bands_done(id: int) -> void:
 		_band_redo.erase(id)
 		var rb := registry.get_building(id)
 		if rb != null and rb.is_materialised():
-			var hits := int(_band_hits.get(id, 0))
-			var built_at: PackedInt32Array = _band_built_at.get(id, PackedInt32Array())
-			var stale := PackedInt32Array()
-			for si in built_at.size():
-				if built_at[si] < hits:
-					stale.append(si)
 			var nodes: Array = _brick_bands.get(id, [])
-			if built_at.size() != nodes.size():
+			if nodes.size() != world.get_chunk_sections(rb.chunk):
 				_rebuild_bands(id, rb.chunk)
-			elif not stale.is_empty():
-				_band_todo[id] = stale
-				_band_cursor[id] = 0
-				_band_pass[id] = int(_band_pass.get(id, 0)) + 1
 			else:
+				# Every band is drawn now, and each wrote the index baseline it
+				# was built with (BrickWorld.build_chunk_mesh_section): a patch
+				# finds exactly the bands hit since and moves only those. The
+				# second pass this was -- every band built before the last hit
+				# built again, behind the shell -- kept a mega tower under fire
+				# drawn whole by its shell for 30 ticks with its storey shot
+				# through, and nothing could leave it until then (CityScene's
+				# solve waits on the shell): the walls showed unbroken, then it
+				# all came down at once (user, big city, 2026-10-16).
 				_free_shell(id)
+				_remesh(id)
 	else:
 		# Finished: the shell it was hiding behind can go.
 		_free_shell(id)
@@ -3873,9 +3859,6 @@ func _take_bands(id: int) -> Array:
 	var nodes: Array = _brick_bands.get(id, [])
 	_band_cursor.erase(id)
 	_band_redo.erase(id)
-	_band_hits.erase(id)
-	_band_built_at.erase(id)
-	_band_todo.erase(id)
 	_brick_bands.erase(id)
 	_brick_band_meshes.erase(id)
 	_brick_band_bytes.erase(id)
@@ -7644,6 +7627,238 @@ func _run_drawn_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## Furniture floating where a building came down (user, 2026-10-16: "furniture
+## appears floating where a collapsing building used to be" in the small city,
+## walking up to it).
+##
+##     godot --path . scenes/city.tscn -- --floating
+##
+## A building is brought down -- its ground storey shot through -- once with
+## the camera beside it and once from far off, and left to settle; then the
+## camera walks in from 160 m. Every few frames each interior drawing within
+## its range (storey groups, a piece's own drawing, riders, laid furniture) is
+## asked, part by part, whether anything is under it: a brick of a building or
+## a piece in the grid, or the ground. Writes shots/floating_*.png.
+func _run_floating_pass() -> void:
+	print("[floating] no furniture is drawn with nothing under it")
+	# As the game plays: a damaged building out of range is given back to its
+	# shell (_trim_quiet) and made bricks again as it is walked up to.
+	respawn_buildings = "--no-respawn" not in OS.get_cmdline_user_args()
+	var picks: Array = []
+	for c in registry.buildings:
+		if c.is_build() or _wide_ids.has(c.id):
+			continue
+		if c.recipe.courses >= 18 and c.recipe.courses <= 60:
+			picks.append(c)
+	picks.sort_custom(func(a, c) -> bool: return a.xform.origin.length() < c.xform.origin.length())
+	_gate_ok("three towers to bring down", picks.size() >= 3, "%d found" % picks.size())
+	if picks.size() < 3:
+		print("[floating] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+	# Shot through all round: at its ground storey, watched from beside it; a
+	# third of the way up, from well out of range; and one corner of its
+	# ground storey, from beside it.
+	for k in 3:
+		var b: BuildingRegistry.Building = picks[k]
+		var fx: float = b.recipe.footprint_x * STUD
+		var fz: float = b.recipe.footprint_z * STUD
+		var mid: Vector3 = b.xform * Vector3(fx * 0.5, 0.0, fz * 0.5)
+		var away := Vector3(mid.x, 0.0, mid.z).normalized()
+		if away.length() < 0.5:
+			away = Vector3(1.0, 0.0, 0.0)
+		var off := 170.0 if k == 1 else 35.0
+		var cut_y := TowerRecipe.total_plates(b.recipe.courses) * PLATE / 3.0 if k == 1 else 1.2
+		camera.global_position = mid + away * off + Vector3(0.0, 14.0, 0.0)
+		camera.look_at(mid + Vector3(0.0, 8.0, 0.0), Vector3.UP)
+		_promote(b.id)
+		await _frames(40)
+		# Its groups come up while it stands, if it is in range.
+		for t in 60:
+			await get_tree().physics_frame
+		var step := 2.5
+		var x := 0.0
+		while x <= fx + 0.01:
+			var z := 0.0
+			while z <= fz + 0.01:
+				if k != 2 or (x < fx * 0.5 and z < fz * 0.5):
+					_blast(b.xform * Vector3(minf(x, fx), cut_y, minf(z, fz)), 2.2)
+				z += step
+			x += step
+		# Until it has settled: nothing of it moving for two seconds.
+		var still := 0
+		var t := 0
+		while t < 1200 and still < 120:
+			await get_tree().physics_frame
+			t += 1
+			still = still + 1 if islands.moving_of(b.id) == 0 and _damage_queue.is_empty() else 0
+		var left := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
+		print("  building %d (%d courses): settled after %d ticks, %d bricks standing, %d pieces of it, %d bricks lying"
+				% [b.id, b.recipe.courses, t, left, _pieces_of(b.id),
+				islands.heap.count if islands.heap != null else -1])
+		if k != 1:
+			_floating_report("watched it come down, from %d m" % int(off), _floating_furniture())
+		# Away for long enough to be given back (TRIM_RADIUS, TRIM_AFTER_MS),
+		# then walk in from 160 m to 8 m, 6 m a second, looking at it.
+		camera.global_position = mid + away * 260.0 + Vector3(0.0, 30.0, 0.0)
+		for w in 15 * 60:
+			await get_tree().physics_frame
+		print("  given back while away: %s, %d pieces of it" % [not b.is_materialised(), _pieces_of(b.id)])
+		var d := 160.0
+		var seen_worst := 0
+		var worst_at := -1.0
+		var shot := false
+		var n := 0
+		while d > 8.0:
+			d -= 0.1
+			camera.global_position = mid + away * d + Vector3(0.0, 1.7, 0.0)
+			camera.look_at(mid + Vector3(0.0, 3.0, 0.0), Vector3.UP)
+			await get_tree().physics_frame
+			n += 1
+			if n % 50 != 0:
+				continue
+			var f: Array = _floating_furniture()
+			if f.size() > seen_worst:
+				seen_worst = f.size()
+				worst_at = d
+				if not shot and f.size() >= 3:
+					await _frames(3)
+					_save("floating_%d" % k)
+					shot = true
+					_floating_report("first seen at %d m" % int(d), f)
+		await _frames(30)
+		_floating_report("walked in to 8 m (worst %d parts at %d m)" % [seen_worst, int(worst_at)],
+				_floating_furniture())
+		if not shot:
+			_save("floating_%d" % k)
+	print("[floating] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+func _pieces_of(id: int) -> int:
+	var n := 0
+	for isl in islands.islands:
+		if isl.is_valid() and isl.owner == id:
+			n += 1
+	return n
+
+
+func _floating_report(what: String, found: Array) -> void:
+	var kinds := {}
+	for f in found:
+		kinds[f[0]] = int(kinds.get(f[0], 0)) + 1
+	var some := ""
+	for f in found.slice(0, 4):
+		some += " [%s at %s]" % [f[0], str((f[1] as Vector3).snapped(Vector3.ONE * 0.1))]
+	_gate_ok("%s: no furniture with nothing under it (%d parts drawn)" % [what, _float_seen],
+			found.is_empty(), "%d parts: %s;%s" % [found.size(), str(kinds), some])
+
+
+## Every part of an interior drawing within its range of the camera with
+## nothing under its foot for FLOAT_REACH -- no brick of a building or a piece
+## in the grid, and no ground. [kind, foot in world space].
+const FLOAT_REACH := 1.5
+var _float_seen := 0   ## parts asked, the last time
+func _floating_furniture() -> Array:
+	var out: Array = []
+	_float_seen = 0
+	var here := camera.global_position
+	var cs := BrickWorld.get_cell_size()
+	# Every chunk that could hold something up: buildings in bricks near, and
+	# pieces. [chunk, world -> chunk space, origin]
+	var chunks: Array = []
+	for id in _near_buildings(here, InteriorGroups.INTERIOR_RANGE + 60.0):
+		var b := registry.get_building(id)
+		if b != null and b.is_materialised() and b.chunk >= 0:
+			chunks.append([b.chunk, world.get_chunk_transform(b.chunk).affine_inverse(),
+					world.get_chunk_origin(b.chunk)])
+	for isl in islands.islands:
+		if isl.is_valid() and isl.chunk >= 0:
+			chunks.append([isl.chunk, world.get_chunk_transform(isl.chunk).affine_inverse(),
+					world.get_chunk_origin(isl.chunk)])
+	var riders := {}
+	for r in _group_riders:
+		riders[r[1]] = true
+	var brick_parents := {}
+	for id in _brick_nodes:
+		brick_parents[_brick_nodes[id]] = true
+	var space := get_world_3d().direct_space_state
+	for node in get_tree().get_nodes_in_group(DebugView.GROUP_INTERIOR):
+		if not (node is MultiMeshInstance3D) or not (node as Node3D).is_visible_in_tree():
+			continue
+		var mm: MultiMesh = (node as MultiMeshInstance3D).multimesh
+		if mm == null:
+			continue
+		var kind := "laid"
+		if riders.has(node):
+			kind = "rider"
+		elif brick_parents.has((node as Node).get_parent()):
+			kind = "group"
+		elif (node as MultiMeshInstance3D).material_override == InteriorGroups.piece_material():
+			kind = "piece"
+		var xf0: Transform3D = (node as Node3D).global_transform
+		for i in mm.instance_count:
+			var xf: Transform3D = xf0 * mm.get_instance_transform(i)
+			if xf.basis.get_scale().length() < 0.001:
+				continue   # taken out
+			if xf.origin.distance_to(here) > InteriorGroups.INTERIOR_RANGE:
+				continue   # faded out
+			_float_seen += 1
+			var hy := 0.5 * (absf(xf.basis.x.y) + absf(xf.basis.y.y) + absf(xf.basis.z.y))
+			var foot := xf.origin - Vector3(0.0, hy, 0.0)
+			var q := PhysicsRayQueryParameters3D.create(foot + Vector3(0.0, 0.05, 0.0),
+					foot - Vector3(0.0, FLOAT_REACH, 0.0))
+			q.collision_mask = Layers.WORLD
+			if not space.intersect_ray(q).is_empty():
+				continue
+			var held := false
+			var s := 0.02
+			while s < FLOAT_REACH and not held:
+				var p := foot - Vector3(0.0, s, 0.0)
+				for c in chunks:
+					var local: Vector3 = (c[1] as Transform3D) * p
+					if world.is_solid(int(c[0]), Vector3i((local / cs).floor()) + (c[2] as Vector3i)):
+						held = true
+						break
+				s += cs.y * 0.5
+			if not held:
+				out.append([kind, foot])
+	# And bricks lying in the heap (BrickHeap): a broken piece of furniture's
+	# parts are its bricks, in its colours.
+	var heap: BrickHeap = islands.heap
+	if heap != null:
+		for h in heap._heaps.values():
+			for i in (h.used as PackedByteArray).size():
+				if h.used[i] == 0 or h.fixed[i] != 0:
+					continue
+				var xf: Transform3D = h.xf[i]
+				if xf.origin.distance_to(here) > BrickHeap.DRAW_RANGE:
+					continue
+				_float_seen += 1
+				var size: Vector3 = h.size
+				var hy := 0.5 * (absf(xf.basis.x.y) * size.x + absf(xf.basis.y.y) * size.y
+						+ absf(xf.basis.z.y) * size.z)
+				var foot := xf.origin - Vector3(0.0, hy, 0.0)
+				var q := PhysicsRayQueryParameters3D.create(foot + Vector3(0.0, 0.05, 0.0),
+						foot - Vector3(0.0, FLOAT_REACH, 0.0))
+				q.collision_mask = Layers.WORLD
+				if not space.intersect_ray(q).is_empty():
+					continue
+				var held := false
+				var s := 0.02
+				while s < FLOAT_REACH and not held:
+					var p := foot - Vector3(0.0, s, 0.0)
+					for c in chunks:
+						var local: Vector3 = (c[1] as Transform3D) * p
+						if world.is_solid(int(c[0]), Vector3i((local / cs).floor()) + (c[2] as Vector3i)):
+							held = true
+							break
+					s += cs.y * 0.5
+				if not held:
+					out.append(["heap", foot])
+	return out
+
+
 ## The storey groups' gate (Docs/Interiors.md 8.2 and 8.7, stage 1).
 ##
 ##     godot --path . --resolution 1280x720 scenes/city.tscn -- --groups --big
@@ -10303,14 +10518,6 @@ const SMALL_SHADOW_RANGE := 30.0
 ## keep the first cascades as tight as the 100 m default had them.
 const SUN_SHADOW_DISTANCE := 400.0
 
-## Hits a building took while its bands were being built (_remesh), and the
-## count each band was built at: a band built before the latest hit is out of
-## date, one built after it is not (_bands_done). And the bands a pass is to
-## build, when it is not all of them.
-var _band_hits := {}      ## building id -> int
-var _band_built_at := {}  ## building id -> PackedInt32Array, per band
-var _band_todo := {}      ## building id -> PackedInt32Array of band indices
-
 var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
 ## Proxies being built on a worker: building id -> [task, [mesh], alive bricks
 ## it was built from, dropped since]. The old proxy -- or, before the first,
@@ -10954,9 +11161,9 @@ var _aim_target := -1
 var _aim_since := 0
 var _aimed_at := {}   ## building id -> msec it was last aimed at
 ## Building id -> true: aimed at, behind its shell -- its bands go first
-## (_advance_bands). Not one being shot: its bands built while the hits are
-## still landing are built again after the last one (_band_hits), and going
-## first made that more of them -- the shot showed at 15 ticks, not 9.
+## (_advance_bands). Not one being shot: going first made the shot show on
+## it later -- at 15 ticks, not 9 -- when the bands built before the last hit
+## were built again (they are patched now: _bands_done).
 var _band_first := {}
 var aim_promotions := 0
 ## Drawn rooms a landing piece crushed furniture in (_crush_drawn).

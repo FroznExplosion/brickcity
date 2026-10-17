@@ -309,6 +309,33 @@ In the order to do it. Each line points at where the item is written up.
         does `--far` (`big_city.tscn -- --far --buildings=150`), which shot the farthest building
         -- a wide one, made bricks where a tower is still a banded shell (2 of 19 failed).
 
+**Seen in play (user, 2026-10-16)**
+26. **Small city: furniture floating where a collapsing building used to be**, seen walking up to
+    it. **Not reproduced yet (2026-10-17).** A pass for it: `city.tscn -- --floating` (Bash, with
+    `override.cfg`). Three towers come down -- the ground storey shot through all round, watched
+    from 35 m (it toppled whole); a storey a third up, from 170 m; one corner of the ground storey,
+    from 35 m -- each settles, the camera goes 260 m off for 15 s (long enough to be given back to
+    its shell, respawn on as in play) and walks back in from 160 m. Every 50 ticks each part of
+    every interior drawing within its range (storey groups, a piece's own drawing, riders, laid
+    furniture) and every brick lying in the heap is asked for something under its foot within
+    1.5 m: a brick of a building or piece in the grid, or the ground. 6 of 6, 1,200-3,000 parts
+    asked each time. So it is none of those paths as that pass drives them; next is what play does
+    that the pass does not (a mech or a disaster bringing it down, a building that fell on
+    another, a piece put to sleep and woken) -- a picture or the way it came down narrows it.
+27. ~~**Big city: walls look unbroken, then lag and catch up**~~ -- **found and fixed 2026-10-17.**
+    A tower made bricks by a shot is drawn by its shell until its bands are up, and nothing may
+    leave it meanwhile (the solve waits: a piece let go fell out of a wall still drawn whole). A
+    hit while the bands were building made a **second pass**: every band built before the last
+    hit built again, the shell kept up all the while. On a 22,000-brick tower shot through a
+    storey (`--breaklag --big`), the solve had the falling groups from tick 7 and the shell hid
+    the hole to tick 37; then every group went at once, 21 of them, and the tower came down in
+    one lurch -- **pieces moving at tick 34** (the gate's line is 10; it failed). The second pass
+    was not needed: each band writes the index baseline it was built with
+    (`BrickWorld.build_chunk_mesh_section`), so once all are up a patch (`update_index_regions`)
+    finds exactly the bands hit since. `CityScene._bands_done` now frees the shell and patches.
+    Same gate: the shell gone at tick 7, **pieces moving at 7**; the first shot at a shell shows at
+    8 ticks (11). 7 of 7. `shell_probe` 35, `collapse_probe` 63 (with one flaky check, §4).
+
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
 12. ~~Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status`~~ -- merged 2026-10-17,
@@ -862,6 +889,14 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
   frees, not the same thing. Letting go of `ImpostorLod._lodded` when the last set leaves the
   tree (a static that does hold two meshes) did not change the probe's leak, so it was not kept.
   Still open; next step, if it comes back, is to wait for the islands' worker jobs on exit.
+* **Red on main, 2026-10-17** (found while landing item 27; the same on main without it): `city.tscn
+  -- --drawn` "whole, it draws nothing but bricks" (1,495 of 40,640 triangles with no brick
+  behind them); `big_city.tscn -- --drawn` stops on a script error in `_drawn_stale` ("Out of
+  bounds get index" on a PackedVector3Array) and hangs to the timeout; `city.tscn -- --breaklag`
+  "drawn with the damage it has, not what it had" and "a hit taken while far shows on it" (the
+  far tier: likely its checks read the shell, which Structures.md 2.1 no longer draws for a
+  damaged building -- to rewrite against `_far_real`); `collapse_probe` "building 14: pushed
+  over, it turns" fails 2 runs in 3 (0.0 deg), main as well.
 * **Tests failing on main that are not this area's:** `squad_advance_probe` (flaky),
   `threat_style_probe` (crashes on exit after passing), and since the several-disasters merge
   collapse_probe "a lightning storm" (passed in the one run since main's c5314fa, 2026-10-08) and
