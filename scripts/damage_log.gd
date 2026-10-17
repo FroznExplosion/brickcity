@@ -125,6 +125,10 @@ const FLAG_BLOCKS := 128
 ## snapped along a row of windows. Every snap since 2026-10-13 carries it; one
 ## recorded before replays as it was made.
 const FLAG_STEP := 256
+## SEVER: a floor past its reach (BrickWorld.cut_spans; Docs/Structures.md 2.3).
+## `radius` is the reach in studs; every machine finds the same rim from the
+## same bricks and cuts it.
+const FLAG_SPAN := 512
 
 ## A piece's id: the seq of the command that created it, and for a toppled
 ## multi-frame build, which frame. The same on every machine.
@@ -227,6 +231,8 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 			return world.separate_near(chunk, e.point, e.radius, e.limit,
 					not (e.flags & FLAG_WHOLE))
 		Kind.SEVER:
+			if e.flags & FLAG_SPAN:
+				return world.cut_spans(chunk, e.radius, true)
 			if e.flags & FLAG_SEAM:
 				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
 			return world.separate_plane(chunk, e.point, e.normal, e.radius)

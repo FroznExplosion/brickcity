@@ -11,6 +11,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <queue>
 #include <chrono>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -7341,6 +7342,255 @@ static inline void for_each_run_raw(const brick::JointCache &jc, int32_t bid, F 
     }
 }
 
+PackedInt32Array BrickWorld::cut_spans(int chunk_id, float reach_studs, bool apply) {
+    if (!valid_chunk(chunk_id) || chunk_down[chunk_id] != Vector3i(0, -1, 0)) {
+        return PackedInt32Array();
+    }
+    return spans_from(chunk_id, reach_studs, nullptr, apply);
+}
+
+PackedInt32Array BrickWorld::cut_spans_resting(int piece_chunk, const Transform3D &piece_xform,
+        const PackedInt32Array &building_chunks, float ground_y, float reach_studs, bool apply) {
+    if (!valid_chunk(piece_chunk)) {
+        return PackedInt32Array();
+    }
+    // Lying level: its own up near the world's.
+    const Vector3 up = piece_xform.basis.get_column(1).normalized();
+    if (up.y < 0.9f) {
+        return PackedInt32Array();
+    }
+    const Chunk &c = chunks[piece_chunk];
+    std::vector<uint8_t> seeds(c.blocks.size(), 0);
+    const Basis &bs = piece_xform.basis;
+    const double ax = std::abs((double)bs.rows[1][0]);
+    const double ay = std::abs((double)bs.rows[1][1]);
+    const double az = std::abs((double)bs.rows[1][2]);
+    const Vector3 cs = cell_size();
+    bool any = false;
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || !b.alive || b.support_broken) {
+            continue;
+        }
+        // The point just under it, as rest_contacts finds it.
+        Vector3 centre, size;
+        block_extent(c, b, centre, size);
+        const Vector3 at = piece_xform.xform(centre);
+        const double hy = ax * (double)size.x * 0.5 + ay * (double)size.y * 0.5 + az * (double)size.z * 0.5;
+        const Vector3 under = at - Vector3(0, 1, 0) * (real_t)(hy + 0.05);
+        bool rests = under.y <= ground_y;
+        for (int64_t k = 0; k < building_chunks.size() && !rests; ++k) {
+            const int bcid = building_chunks[k];
+            if (!valid_chunk(bcid)) {
+                continue;
+            }
+            const Chunk &bc = chunks[bcid];
+            const Vector3 local = bc.xform.affine_inverse().xform(under);
+            const Vector3i rel((int)std::floor((double)local.x / (double)cs.x),
+                    (int)std::floor((double)local.y / (double)cs.y),
+                    (int)std::floor((double)local.z / (double)cs.z));
+            rests = bc.in_bounds(rel) && bc.solid_at(rel);
+        }
+        if (rests) {
+            seeds[i] = 1;
+            any = true;
+        }
+    }
+    if (!any) {
+        return PackedInt32Array();
+    }
+    return spans_from(piece_chunk, reach_studs, &seeds, apply);
+}
+
+PackedInt32Array BrickWorld::spans_from(int chunk_id, float reach_studs, const std::vector<uint8_t> *seeds,
+        bool apply) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id) || reach_studs <= 0.0f) {
+        return out;
+    }
+    const brick::JointCache &jc = joints_of(chunk_id);
+    Chunk &c = chunks[chunk_id];
+    const int32_t n = (int32_t)c.blocks.size();
+    const int floor_y = foundation_level[chunk_id];
+    auto usable = [&](int32_t i) {
+        const Block &b = c.blocks[(size_t)i];
+        return b.alive && !b.removed && !b.support_broken;
+    };
+
+    // 1. Held from below, lowest first: a block's neighbours below it start
+    // lower than it does.
+    std::vector<int32_t> order;
+    order.reserve((size_t)n);
+    for (int32_t i = 0; i < n; ++i) {
+        if (usable(i)) {
+            order.push_back(i);
+        }
+    }
+    std::sort(order.begin(), order.end(), [&](int32_t a, int32_t b) {
+        const int ya = c.blocks[(size_t)a].cell.y;
+        const int yb = c.blocks[(size_t)b].cell.y;
+        return ya != yb ? ya < yb : a < b;
+    });
+    // Held by stud COLUMN: a column of a block's footprint is held when the
+    // block under it in that column is held in that column and joined to it,
+    // or the block stands on the foundation. A block is held when any column
+    // of it is. Not by block: a brick resting half on a held one would then be
+    // held, and in a wall laid in a bond every brick does -- "held" crept half
+    // a brick out over a gap a course, 36 studs over a three-storey building
+    // (span_probe, 2026-10-16). Not by the block under its middle either: a
+    // floor panel lies on walls at its edges.
+    std::vector<int64_t> at((size_t)n + 1, 0);
+    for (int32_t i = 0; i < n; ++i) {
+        const Vector3i sz = archetypes[c.blocks[(size_t)i].archetype].size;
+        at[(size_t)i + 1] = at[(size_t)i] + (int64_t)sz.x * sz.z;
+    }
+    std::vector<uint8_t> col((size_t)at[(size_t)n], 0);
+    std::vector<uint8_t> held((size_t)n, 0);
+    auto joined_below = [&](int32_t bid, int32_t nb) {
+        const brick::JointRun *r;
+        const brick::JointRun *end;
+        if (!jc.over_at.empty() && jc.over_at[(size_t)bid] >= 0) {
+            r = jc.over_runs.data() + jc.over_at[(size_t)bid];
+            end = r + jc.over_n[(size_t)bid];
+        } else {
+            r = jc.runs.data() + jc.at[(size_t)bid];
+            end = jc.runs.data() + jc.at[(size_t)bid + 1];
+        }
+        for (; r != end; ++r) {
+            if (r->up == 0 && r->nb == nb) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const int32_t bid : order) {
+        const Block &b = c.blocks[(size_t)bid];
+        const Vector3i sz = archetypes[b.archetype].size;
+        const bool ground = seeds != nullptr ? (*seeds)[(size_t)bid] != 0 : b.cell.y <= floor_y;
+        if (!ground && b.bottom_broken) {
+            continue;
+        }
+        int32_t last = -1;
+        bool last_joined = false;
+        for (int dx = 0; dx < sz.x; ++dx) {
+            for (int dz = 0; dz < sz.z; ++dz) {
+                bool ok = ground;
+                if (!ok) {
+                    const Vector3i cell(b.cell.x + dx, b.cell.y - 1, b.cell.z + dz);
+                    const int32_t u = c.block_at(cell - c.origin);
+                    if (u >= 0 && u != bid && usable(u) && held[(size_t)u]) {
+                        if (u != last) {
+                            last = u;
+                            last_joined = joined_below(bid, u);
+                        }
+                        if (last_joined) {
+                            const Block &ub = c.blocks[(size_t)u];
+                            const Vector3i usz = archetypes[ub.archetype].size;
+                            const int ux = cell.x - ub.cell.x;
+                            const int uz = cell.z - ub.cell.z;
+                            ok = ux >= 0 && uz >= 0 && ux < usz.x && uz < usz.z
+                                    && col[(size_t)(at[(size_t)u] + (int64_t)ux * usz.z + uz)];
+                        }
+                    }
+                }
+                if (ok) {
+                    col[(size_t)(at[(size_t)bid] + (int64_t)dx * sz.z + dz)] = 1;
+                    held[(size_t)bid] = 1;
+                }
+            }
+        }
+    }
+
+    // 2. Reach: nearest first from every block held from below, through the
+    // joints, a step costing how far apart the two blocks' middles are on plan.
+    auto middle = [&](int32_t i) {
+        const Block &b = c.blocks[(size_t)i];
+        const Vector3i sz = archetypes[b.archetype].size;
+        return Vector2(b.cell.x + sz.x * 0.5f, b.cell.z + sz.z * 0.5f);
+    };
+    // A held block's reach is nothing; the walk starts from the held blocks
+    // next to unheld ones and goes on through unheld ones only -- in a
+    // standing building a few hundred blocks, not all of it.
+    std::vector<float> reach((size_t)n, std::numeric_limits<float>::infinity());
+    using Item = std::pair<float, int32_t>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> q;
+    for (const int32_t bid : order) {
+        if (!held[(size_t)bid]) {
+            continue;
+        }
+        reach[(size_t)bid] = 0.0f;
+        bool edge = false;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
+            if (!edge && usable(nb) && !held[(size_t)nb]) {
+                edge = true;
+            }
+        });
+        if (edge) {
+            q.push({ 0.0f, bid });
+        }
+    }
+    // Nothing reaches further than the toughest material lets it.
+    const float most = reach_studs * 4.0f;
+    while (!q.empty()) {
+        const Item top = q.top();
+        q.pop();
+        const int32_t u = top.second;
+        if (top.first > reach[(size_t)u] || top.first > most) {
+            continue;
+        }
+        const Vector2 mu = middle(u);
+        for_each_joint(c, jc, u, [&](int32_t nb, int) {
+            if (!usable(nb) || held[(size_t)nb]) {
+                return;
+            }
+            const float d = top.first + (middle(nb) - mu).length();
+            if (d < reach[(size_t)nb]) {
+                reach[(size_t)nb] = d;
+                q.push({ d, nb });
+            }
+        });
+    }
+
+    // 3. Past its reach: nothing near enough under it. (Out of reach of every
+    // block held from below is not this: that is loose, and the solve's.)
+    std::vector<uint8_t> past((size_t)n, 0);
+    bool any = false;
+    for (const int32_t bid : order) {
+        const float r = reach[(size_t)bid];
+        if (!held[(size_t)bid] && r < std::numeric_limits<float>::infinity()
+                && r > reach_studs * brick_material_toughness(c.blocks[(size_t)bid].material)) {
+            past[(size_t)bid] = 1;
+            any = true;
+        }
+    }
+    if (!any) {
+        return out;
+    }
+    // 4. The rim: what has nothing, where it is joined to what has.
+    for (const int32_t bid : order) {
+        if (!past[(size_t)bid]) {
+            continue;
+        }
+        bool rim = false;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
+            if (!rim && usable(nb) && !past[(size_t)nb]) {
+                rim = true;
+            }
+        });
+        if (rim) {
+            out.push_back(bid);
+        }
+    }
+    out.sort();
+    if (apply) {
+        for (int64_t i = 0; i < out.size(); ++i) {
+            c.blocks[(size_t)out[i]].support_broken = true;
+            conn_touch(chunk_id, out[i]);
+        }
+    }
+    return out;
+}
+
 Array BrickWorld::get_components_near(int chunk_id) {
     if (!valid_chunk(chunk_id)) {
         return Array();
@@ -8996,6 +9246,9 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("split_island", "chunk_id", "block_ids"), &BrickWorld::split_island);
     ClassDB::bind_method(D_METHOD("get_components", "chunk_id"), &BrickWorld::get_components);
     ClassDB::bind_method(D_METHOD("get_components_near", "chunk_id"), &BrickWorld::get_components_near);
+    ClassDB::bind_method(D_METHOD("cut_spans", "chunk_id", "reach_studs", "apply"), &BrickWorld::cut_spans);
+    ClassDB::bind_method(D_METHOD("cut_spans_resting", "piece_chunk", "piece_xform", "building_chunks",
+            "ground_y", "reach_studs", "apply"), &BrickWorld::cut_spans_resting);
     ClassDB::bind_method(D_METHOD("mark_chunk_whole", "chunk_id"), &BrickWorld::mark_chunk_whole);
     ClassDB::bind_method(D_METHOD("set_components_check", "on"), &BrickWorld::set_components_check);
     ClassDB::bind_method(D_METHOD("get_components_near_stats"), &BrickWorld::get_components_near_stats);
