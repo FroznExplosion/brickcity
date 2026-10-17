@@ -50,6 +50,7 @@ uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 // pass that draws see-through studs.
 uniform bool glass_pass = false;
 
+global uniform float lod_zoom;
 varying vec3 v_local;
 varying vec3 v_colour;
 varying vec3 v_flat_normal;
@@ -105,7 +106,7 @@ float ngon_depth_round(vec2 p, int n, float radius, float soft) {
 
 void fragment() {
     vec3 albedo = v_colour;
-    float dist = length(VERTEX);
+    float dist = length(VERTEX) * lod_zoom;   // scaled through a scope (brick.gdshader)
 
     int mat = v_mat;
     int face = ps_face(v_flat_normal);
