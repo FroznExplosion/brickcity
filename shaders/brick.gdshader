@@ -392,12 +392,14 @@ void fragment() {
             float bw = ps_bead(face, mat);
             float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
                            min(v_uv.y, fsize.y - v_uv.y));
-            // The brick's corners are bevelled, so its outline is cut at 45
-            // degrees there, and the walls the nozzle walks round it turn
-            // the corner the same way (ps_corner_cut).
-            d2 = ps_corner_cut(v_uv, fsize, d2);
+            // From the bevel's inner edge (ps_inset): the walls follow the
+            // top as it is drawn flat, not the rectangle the bevel cut into.
+            // On the bevel itself (the shaded one, far off) no path at all.
+            d2 = ps_inset(d2);
             float wall = float(ps_walls(mat)) * bw;
-            if (d2 < wall && print_near) {
+            if (d2 < 0.0) {
+                t = 0.0;
+            } else if (d2 < wall && print_near) {
                 t = d2 / bw;
             } else {
                 // The block's own corner, in the same world metres the
@@ -410,8 +412,8 @@ void fragment() {
                 t = dot(v_uv, n) / bw;
                 if (print_near) {
                     float e = d2 - wall;
-                    vec2 zz = ps_zigzag(v_uv, vec2(wall), fsize - vec2(wall), n, t, e, bw,
-                            fwidth(t));
+                    vec2 zz = ps_zigzag(v_uv, vec2(wall + PS_BEVEL),
+                            fsize - vec2(wall + PS_BEVEL), n, t, e, bw, fwidth(t));
                     if (zz.x > 0.5) {
                         // On a connector: one bead along the wall, a bead wide.
                         t = e / bw + 0.5;

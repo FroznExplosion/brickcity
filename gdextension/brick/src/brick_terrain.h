@@ -682,8 +682,8 @@ public:
     ///
     /// Returns: mesh (ARRAY_MAX arrays), triangle_count, build_ms.
     static Dictionary build_coarse(int tx0, int tz0, int span, int step);
-    /// Slope and curved-slope pieces along terrace edges (19.22). On by
-    /// default; off draws every edge as a flat brick, as before.
+    /// Slope and curved-slope pieces along terrace edges (19.22). OFF by
+    /// default (the plain-brick look was preferred); on draws them.
     static void set_slope_pieces(bool on);
     static bool get_slope_pieces();
     /// Coarse blocks sampled this coarsely or more are built SMOOTH: one

@@ -654,6 +654,15 @@ const TERRAIN_REACH_TILES := 40
 ## city can stand on.
 const TERRAIN_SEED := 20260921
 var _terrain_streamer: TerrainStreamer = null
+## The same streamer under the name the terrain dev menu reads (a host whose
+## detail square follows the camera: terrain_dev_menu.gd's header).
+var _streamer: TerrainStreamer:
+	get:
+		return _terrain_streamer
+## Full-detail tiles either side of the camera, and the hysteresis past it:
+## the heightfield test's NEAR_TILES, so every scene on terrain streams the
+## same ground the same way (Docs/Terrain.md §22.18).
+const TERRAIN_NEAR_TILES := 4
 # Preloaded rather than named: a brand new `class_name` is not in the global
 # class cache until the editor has scanned for it, and a headless run of this
 # scene must not depend on that having happened.
@@ -1524,10 +1533,12 @@ func _setup_terrain_field() -> void:
 
 ## The ground the city stands on, when it stands on ground.
 ##
-## The detail tier covers the CITY and stops there: this is an authored place
-## of a known size, not an infinite world, so `world_half` is a real edge and
-## the resident square never moves. Everything out to the horizon is the
-## coarse tier, with a fixed hole cut for the city (TerrainCoarse).
+## STREAMED, as in the heightfield test (Docs/Terrain.md §22.18): full detail
+## in a square round the camera, the coarse tier everywhere else out to
+## TERRAIN_REACH_TILES, hidden under the detail as it moves. The city's own
+## square is PINNED: held resident with its collider wherever the camera is,
+## so an enemy across the map and the debris of a collapse two streets away
+## still stand on something -- but drawn only while the square reaches it.
 func _build_terrain_ground() -> void:
 	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
@@ -1547,14 +1558,13 @@ func _build_terrain_ground() -> void:
 
 	_terrain_streamer = TerrainStreamer.new()
 	_terrain_streamer.name = "TerrainStreamer"
-	# THE WHOLE CITY, RESIDENT. Not a camera-centred square: a scripted pass
-	# stands outside the city looking in, and a camera-centred region would
-	# leave the far half of it standing on coarse ground.
-	_terrain_streamer.world_half = half
-	_terrain_streamer.whole_world = true
-	# COLLISION EVERYWHERE IN THE CITY, not just under the camera. Debris from
-	# a collapse two streets away still has to land on something.
-	_terrain_streamer.collide_radius = -1
+	_terrain_streamer.near_radius = TERRAIN_NEAR_TILES
+	_terrain_streamer.keep_radius = TERRAIN_NEAR_TILES + 2
+	# Detail can be walked to anywhere the coarse ground reaches.
+	_terrain_streamer.world_half = TERRAIN_REACH_TILES
+	# COLLISION EVERYWHERE IN THE CITY, not just under the camera: the
+	# pinned square always has its collider.
+	_terrain_streamer.pinned = Rect2i(-half, -half, half * 2 + 1, half * 2 + 1)
 	add_child(_terrain_streamer)
 	_terrain_streamer.setup(_terrain_mat)
 	# The camera can start inside a hill: its position was chosen against a
@@ -1587,22 +1597,40 @@ func _build_terrain_coarse() -> void:
 	_terrain_coarse = TerrainCoarseScript.new()
 	_terrain_coarse.name = "TerrainCoarse"
 	add_child(_terrain_coarse)
-	# A FIXED HOLE: the detail tier covers the city and never moves.
-	_terrain_coarse.build(TERRAIN_REACH_TILES, _terrain_mat, Rect2i(-_terrain_half,
-			-_terrain_half, _terrain_half * 2 + 1, _terrain_half * 2 + 1))
+	# No hole: the detail square moves, so the coarse tier covers the world
+	# and hides under it, down to the block the two are aligned on -- as in
+	# the heightfield test.
+	_terrain_coarse.build(TERRAIN_REACH_TILES, _terrain_mat, Rect2i(),
+			_terrain_streamer.align)
+	_terrain_coarse.cover(_terrain_streamer)
 
 
 # ---------------------------------------------------------------------------
 # The terrain dev menu (terrain_dev_menu.gd, Docs/Terrain.md §20.10, §22.15).
 #
 # F10 on terrain: the same menu the heightfield test opens, on this scene's
-# ground and sea. What it asks of a host is in its header; the rows about a
-# detail square that follows the camera are not offered here, because this
-# one covers the city and never moves.
+# ground and sea. What it asks of a host is in its header; the detail square
+# follows the camera here too, so Freeze LOD and Detail radius are offered.
 
 const TerrainDevMenu := preload("res://scripts/terrain_dev_menu.gd")
 var _terrain_dev_menu = null
 var _lod_debug := false
+var _lod_frozen := false
+var _frozen_at := Vector3.ZERO
+
+
+func set_lod_frozen(on: bool) -> void:
+	_lod_frozen = on
+	_frozen_at = camera.global_position
+
+
+func set_detail_radius(tiles: int) -> void:
+	_terrain_streamer.near_radius = tiles
+	_terrain_streamer.keep_radius = tiles + 2
+	if _lod_frozen:
+		# One step at the frozen spot, so the change is seen while frozen.
+		_terrain_streamer.settle(Vector2(_frozen_at.x, _frozen_at.z))
+		_terrain_coarse.cover(_terrain_streamer)
 
 
 func _toggle_terrain_dev_menu() -> void:
@@ -1657,8 +1685,8 @@ func dev_sea():
 
 ## Every detail tile again from the field, behind the ones on screen.
 func rebuild_detail() -> void:
-	_terrain_streamer.refresh(Rect2i(-_terrain_half, -_terrain_half,
-			_terrain_half * 2 + 1, _terrain_half * 2 + 1))
+	var h: int = _terrain_streamer.world_half
+	_terrain_streamer.refresh(Rect2i(-h, -h, h * 2 + 1, h * 2 + 1))
 
 
 ## The coarse tier from scratch: after the smooth step changed.
@@ -1720,7 +1748,7 @@ func edit_context() -> Dictionary:
 	return {
 		"camera": camera, "streamer": _terrain_streamer,
 		"world_path": _terrain_world_path, "seed": int(BrickTerrain.get_seed()),
-		"drowned": _terrain_drowned, "world_half": _terrain_half,
+		"drowned": _terrain_drowned, "world_half": _terrain_streamer.world_half,
 		"status": "editing %s" % _terrain_world_path.get_file(), "sites": false,
 		# Under the arena's readout, which has the top right.
 		"hud_top": 190.0,
@@ -11142,9 +11170,13 @@ func _demote(id: int, _dist: float) -> void:
 
 
 func _process(delta: float) -> void:
-	if _terrain_streamer != null:
-		_terrain_streamer.follow(Vector2(camera.global_position.x,
-				camera.global_position.z))
+	# Frozen (F10), the detail square and the coarse tier's hiding hold still
+	# for where the camera WAS, as in the heightfield test.
+	if _terrain_streamer != null and not _lod_frozen:
+		var lod_at := camera.global_position
+		_terrain_streamer.follow(Vector2(lod_at.x, lod_at.z))
+		_terrain_coarse.cover(_terrain_streamer)
+		_terrain_coarse.relod(lod_at)
 	# How far the camera is zoomed in (a scope, any narrowed view): the
 	# unzoomed horizontal field over the camera's, as tangents. Detail goes by
 	# distance over that -- the near tier's and the shaders' (lod_zoom).

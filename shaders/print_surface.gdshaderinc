@@ -131,14 +131,13 @@ const float PS_STUD = 0.35;    // brick_grid.h STUD_M
 const float PS_TAU = 6.28318530718;
 const float PS_BEVEL = 0.013;  // BrickNear.BEVEL: a brick's bevel, each side
 
-// Distance to a face's outline `d` (the nearest of its four sides, metres),
-// with the face's corners cut at 45 degrees by the bevel of the upright edge
-// there: what the slicer's walls follow, so the loops round a top or a rim
-// turn each corner on the diagonal instead of running into a square one.
-float ps_corner_cut(vec2 uv, vec2 fsize, float d) {
-    float ex = min(uv.x, fsize.x - uv.x);
-    float ey = min(uv.y, fsize.y - uv.y);
-    return min(d, (ex + ey - PS_BEVEL) * 0.70710678);
+// From a distance to a block face's outline (its rectangle) to the distance
+// to the edge of the face that is DRAWN flat: the bevel takes the first
+// PS_BEVEL all round. The walls a slicer lays round a top or a rim follow
+// the part's real outline, which is that one -- so they start where the
+// bevel stops, not out on it. Negative on the bevel.
+float ps_inset(float d) {
+    return d - PS_BEVEL;
 }
 
 // Is this part turned a quarter from the way it was printed? Its top's lines
@@ -375,8 +374,7 @@ vec3 ps_stairs(vec3 normal, vec3 up, float ny, float t, float aa, float k) {
 // beads -- the first layer's walls follow the shape they outline).
 float ps_under_sd(vec2 uv, vec2 fsize) {
     vec2 n = max(floor(fsize / PS_STUD + 0.5), vec2(1.0));
-    float edge = ps_corner_cut(uv, fsize,
-            min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y)));
+    float edge = ps_inset(min(min(uv.x, fsize.x - uv.x), min(uv.y, fsize.y - uv.y)));
     float sd = edge - under_rim;                  // < 0: in the rim
     vec2 p = uv / PS_STUD;
     if (min(n.x, n.y) < 1.5) {

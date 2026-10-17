@@ -2467,6 +2467,10 @@ ground only.
 
 ### 19.22 Slopes and curves along terrace edges (after LEGO Worlds)
 
+**Off by default since 2026-10-16** (`g_slope_pieces = false`): the plain
+brick terrace edges looked better. Everything below still works; F10's
+"Slopes and curves on terrace edges" turns it back on for a look.
+
 `Docs/Reference/lego-worlds.md`: LEGO Worlds' hills are rows of slopes and
 curved slopes laid along the contour, not 1x1 ramps (which we tried and turned
 off, `RAMPS_ENABLED`, because a 50-degree face a third of a metre wide read as
@@ -3436,3 +3440,21 @@ test. Leaving edit mode with unsaved edits says so and keeps them in the field. 
 `tools/ground_tools_probe.gd` holds it (27 checks with §22.15's): F11 in and out, the site tool
 refused, a building's pad unmoved by delete, resize and move, the raise brush raising open ground
 in the city's square, undo putting it back, and the heightfield test's tools in hand with sites.
+
+### 22.18 The city streams its ground like the heightfield test (2026-10-16)
+
+The firefight, the combat arena and the city on terrain used to hold the
+WHOLE city's detail resident (`whole_world`) with a fixed hole in the coarse
+tier. Now every scene on terrain streams the same way: full detail in a
+square round the camera (`TERRAIN_NEAR_TILES` = the heightfield's
+`NEAR_TILES`, 4), keep radius +2, the coarse tier with no hole hidden under
+the detail as it moves (`TerrainCoarse.cover` / `relod` each frame), out to
+`TERRAIN_REACH_TILES`. F10 offers Freeze LOD and Detail radius in the city too.
+
+Collision could not stream with it: pawns, mechs and debris stand on the
+tiles' colliders, and an enemy across the map would fall through coarse
+ground. So the city's square is **pinned** (`TerrainStreamer.pinned`):
+resident with its collider wherever the camera is, but a pinned tile outside
+the streamed square is hidden (and its studs wait) and the coarse tier is
+drawn there instead. `has_tile` answers for DRAWN tiles, which is what the
+coarse tier hides itself against.
