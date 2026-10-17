@@ -105,6 +105,7 @@ func _tick() -> void:
 	_round7()
 	_round8()
 	_round9()
+	_round10()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1121,3 +1122,27 @@ func _round9() -> void:
 	_ws._part_pick.select(0)
 	_ws._part_pick.item_selected.emit(0)
 	_ok("the rail's part picker picks the part", _ws.part_sel == 0)
+
+
+func _round10() -> void:
+	# The shape brush is the Shapes tool's brush: a plain click lays, a plain right click carves.
+	_ws._new_build()
+	_ws.select_part(0)
+	_ws.rail_pick("shape")
+	_ws.shape_mode = "brush"
+	_ws.brush3d = "cube"
+	_ws.shape_size = 2
+	_ws._cell = Vector3i(30, 20, 30)
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	_ok("Shapes as a brush takes a plain click", _ws._shape_brush_input(click))
+	click = click.duplicate()
+	click.pressed = false
+	_ws._shape_brush_input(click)
+	_ok("and lays the shape: 2 studs by 5 plates by 2", _volume() == 2 * 5 * 2, "%d cells" % _volume())
+	_ws.shape_mode = "drag"
+	click = click.duplicate()
+	click.pressed = true
+	_ok("set to drag a box, a plain click is the drag's", not _ws._shape_brush_input(click))
+	_ws.rail_pick("place")

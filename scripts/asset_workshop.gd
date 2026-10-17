@@ -348,6 +348,8 @@ func _shot() -> void:
 		shape_place(brush_shape_cells("cube", at, 8))
 		shape_carve(brush_shape_cells("ball", at + Vector3i(4, 10, 4), 8))
 		shape_place(brush_shape_cells("circle", at + Vector3i(0, 10, 0), 6, 1, 1))
+		rail_pick("shape")
+		shape_mode = "brush"
 		_look_at_build()
 	if "--receiver" in OS.get_cmdline_user_args():
 		# A receiver in three views: a side slab, a charging slot cut through and a port cut
@@ -2174,20 +2176,30 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shape_box = VBoxContainer.new()
 	box.add_child(_shape_box)
 	var t1 := Label.new()
-	t1.text = "Shapes (K): drag on the ghost's plane"
+	t1.text = "Shapes (K)"
 	_shape_box.add_child(t1)
+	var modes := OptionButton.new()
+	modes.add_item("drag a box: fill it")
+	modes.add_item("brush: LMB lays, RMB carves")
+	modes.item_selected.connect(func(i: int) -> void:
+		shape_mode = "drag" if i == 0 else "brush"
+		_dragging = false)
+	_shape_box.add_child(modes)
+	_shape_mode_pick = modes
+	_drag_box = VBoxContainer.new()
+	_shape_box.add_child(_drag_box)
 	var kinds := OptionButton.new()
 	for k in SHAPES:
 		kinds.add_item(k)
 	kinds.item_selected.connect(func(i: int) -> void: shape_kind = SHAPES[i])
-	_shape_box.add_child(kinds)
+	_drag_box.add_child(kinds)
 	var fills := OptionButton.new()
 	fills.add_item("clean: fewest bricks")
 	fills.add_item("random: mixed sizes")
 	fills.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
 	_shape_box.add_child(fills)
 	var hrow := HBoxContainer.new()
-	_shape_box.add_child(hrow)
+	_drag_box.add_child(hrow)
 	var hl := Label.new()
 	hl.text = "plates tall"
 	hrow.add_child(hl)
@@ -2809,7 +2821,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -4344,7 +4356,7 @@ func _build_rail(layer: CanvasLayer) -> void:
 	_shape_box2 = VBoxContainer.new()
 	box.add_child(_shape_box2)
 	var sbt := Label.new()
-	sbt.text = "Shape brush: Ctrl + LMB lays, Ctrl + RMB carves"
+	sbt.text = "drag to go on; Ctrl + click does it in any tool"
 	_shape_box2.add_child(sbt)
 	var kinds2 := OptionButton.new()
 	for k in BRUSH_SHAPES:
@@ -4423,6 +4435,10 @@ func _build_rail(layer: CanvasLayer) -> void:
 	box.add_child(inner)
 	_tool_panel.queue_free()
 	_tool_panel = null
+	# The brush's options under the Shapes tool's own choice of drag or brush.
+	_shape_box2.get_parent().remove_child(_shape_box2)
+	_shape_box.add_child(_shape_box2)
+	_shape_box.move_child(_shape_box2, _shape_mode_pick.get_index() + 1)
 	_fit_rail(box)
 	set_brush_size(brush_size)
 
@@ -4522,7 +4538,9 @@ func _rail_process() -> void:
 	_shape_box.visible = tool == "shape"
 	_sketch_box.visible = tool == "sketch"
 	_select_box.visible = tool == "select"
-	_shape_box2.visible = on in ["place", "shape", "select"] or _shape_brush_on()
+	_shape_box2.visible = (tool == "shape" and shape_mode == "brush") or _shape_brush_on()
+	_drag_box.visible = shape_mode == "drag"
+	_shape_mode_pick.select(0 if shape_mode == "drag" else 1)
 	_shape_size_slider.set_value_no_signal(shape_size)
 	_shape_size_label.text = "%d stud%s across%s" % [shape_size, "" if shape_size == 1 else "s",
 			"  (Ctrl + wheel)" if on == "place" else ""]
@@ -5478,13 +5496,21 @@ const BRUSH_SHAPES := [["ball", "ball"], ["cube", "cube"], ["cylinder", "cylinde
 		["circle", "circle (flat)"], ["square", "square (flat)"]]
 const SHAPE_SIZE_MAX := 24
 var brush3d := "ball"
+var shape_mode := "drag"     # the Shapes tool: "drag" a box and fill it, or "brush"
+var _shape_mode_pick: OptionButton
+var _drag_box: VBoxContainer
 var shape_size := 4          # studs across (up: two and a half plates a stud)
 var shape_thick := 1         # a flat shape's thickness: cells off its plane
 var _sb := {}                # a stroke under way: {erase, start (edits), last (centre)}
 
 
 func _shape_brush_on() -> bool:
-	return Input.is_key_pressed(KEY_CTRL) or not _sb.is_empty()
+	return brushing_shapes() or Input.is_key_pressed(KEY_CTRL) or not _sb.is_empty()
+
+
+## The Shapes tool set to brush: its clicks lay and carve with no Ctrl.
+func brushing_shapes() -> bool:
+	return tool == "shape" and shape_mode == "brush"
 
 
 ## The axis a flat shape lies across: the plane the ghost is on. 1 (up) on a brick top or
@@ -5630,7 +5656,7 @@ func _shape_brush_input(e: InputEvent) -> bool:
 		shape_size = clampi(shape_size + (1 if e.button_index == MOUSE_BUTTON_WHEEL_UP else -1), 1, SHAPE_SIZE_MAX)
 		return true
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		if e.pressed and e.ctrl_pressed and _sb.is_empty():
+		if e.pressed and (e.ctrl_pressed or brushing_shapes()) and _sb.is_empty():
 			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "start": _edits.size(), "last": _cell,
 					"button": e.button_index}
 			_stamp_shape(bool(_sb.erase))
@@ -6146,7 +6172,7 @@ func _build_menus() -> void:
 			["  lock the height, slide anywhere", "hold E", func() -> void: pass],
 			["  toolbar slot", "1-9, wheel", func() -> void: pass],
 			["  pick the brick under the cursor", "MMB", func() -> void: pass],
-			["  shape brush: lay / carve, size", "Ctrl + LMB / RMB, Ctrl + wheel", func() -> void: pass],
+			["  shape brush from any tool, its size", "Ctrl + LMB / RMB, Ctrl + wheel", func() -> void: pass],
 		]],
 	]
 	for m in menus:
