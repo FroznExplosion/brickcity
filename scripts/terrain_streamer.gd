@@ -85,6 +85,11 @@ var pinned := Rect2i()
 ## in the space. Added before the body joins (TerrainTile.add_collision) a
 ## whole 670-box tile is 0.77 ms, so it goes in one call.
 @export var shapes_per_frame := 0
+## Tiles dropped per frame at most; the rest wait their turn (`_drop`).
+## 0 drops every one at once.
+@export var drops_per_frame := 4
+## Tiles still waiting to be dropped after the last `_drop`.
+var _drops_pending := 0
 
 var _material: Material = null
 var _tiles := {}          ## Vector2i -> TerrainTile
@@ -158,6 +163,13 @@ func _exit_tree() -> void:
 	for c in _bevel_tasks:
 		WorkerThreadPool.wait_for_task_completion(_bevel_tasks[c][0])
 	_bevel_tasks.clear()
+	# The tiles have left already (children go first) and handed their
+	# MultiMeshes to TerrainTile's static pool. Empty it now, while the
+	# renderer is still up: a static holding meshes past the end of the
+	# program frees them after the RenderingServer is gone, and the combat
+	# arena's gate crashed on its way out (signal 11 after "~ArrayMesh:
+	# RenderingServer is null") once the city streamed and dropped tiles.
+	TerrainTile.clear_pool()
 
 
 ## Call every frame with the camera's world position.
@@ -228,7 +240,7 @@ func _bevel_step() -> void:
 func settle(camera_xz: Vector2, rounds := 4000) -> void:
 	for i in rounds:
 		follow(camera_xz)
-		if _tasks.is_empty() and _dirty.is_empty() and _wanted_missing(camera_xz) == 0:
+		if _tasks.is_empty() and _dirty.is_empty() and _drops_pending == 0 				and _wanted_missing(camera_xz) == 0:
 			# One more pass with no budget, so a settled world is whole and
 			# not three frames from being whole.
 			var saved := budget_ms
@@ -557,6 +569,18 @@ func _drop(cx: int, cz: int) -> void:
 	for c in _tiles:
 		if not keep.has_point(c) and not pinned.has_point(c):
 			gone.append(c)
+	# A FEW A FRAME, furthest first. Crossing a block boundary drops a whole
+	# block row -- 48 tiles -- and freeing them in one frame was a 50-67 ms
+	# hitch two frames later, the renderer releasing their meshes (the
+	# heightfield bench's walk, frame 267; Terrain.md 22.19). A tile waiting
+	# its turn stays whole and drawn, so nothing is uncovered meanwhile.
+	if drops_per_frame > 0 and gone.size() > drops_per_frame:
+		gone.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - Vector2i(cx, cz)).length_squared() 					> (b - Vector2i(cx, cz)).length_squared())
+		_drops_pending = gone.size() - drops_per_frame
+		gone.resize(drops_per_frame)
+	else:
+		_drops_pending = 0
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
