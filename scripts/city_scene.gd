@@ -13721,6 +13721,34 @@ func _run_chamfer_pass() -> void:
 	_gate_ok("but does not repaint the whole wall -- it is edges, not a tint",
 			near_diff < 0.75, "%.1f%%" % (near_diff * 100.0))
 
+	# Pictures, not checks: a roof's edge from a stride back on it, as a
+	# player stands there, and a storey's ceiling from the room under it.
+	var space := get_world_3d().direct_space_state
+	var inward: Vector3 = b.xform.basis * Vector3(0.0, 0.0, 1.0)
+	var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+			wall + inward * 1.2 + Vector3.UP * 200.0, wall + inward * 1.2 + Vector3.DOWN * 50.0))
+	if not down.is_empty():
+		var roof: Vector3 = down.position
+		camera.global_position = roof + Vector3.UP * 0.55
+		camera.look_at(roof - inward * 1.25 + Vector3.DOWN * 0.1, Vector3.UP)
+		await _frames(30)
+		brick_near.settle(camera.global_position)
+		await _frames(6)
+		await _save("chamfer_roof")
+	var up := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+			wall + inward * 2.0 + Vector3.DOWN * 0.8, wall + inward * 2.0 + Vector3.UP * 20.0))
+	if not up.is_empty():
+		var ceil_at: Vector3 = up.position
+		camera.global_position = ceil_at + Vector3.DOWN * 0.7 + inward * 0.6
+		camera.look_at(ceil_at + inward * -0.4, Vector3.UP)
+		await _frames(30)
+		brick_near.settle(camera.global_position)
+		await _frames(6)
+		await _save("chamfer_ceiling")
+	camera.global_position = wall - Vector3(0.0, 0.0, 1.6)
+	camera.look_at(wall, Vector3.UP)
+	await _frames(10)
+
 	# Shot at: the chamfered bands are patched as the flat ones are. What their
 	# index buffers draw is read back and set against the bricks left alive.
 	var before: Dictionary = brick_near.audit()
