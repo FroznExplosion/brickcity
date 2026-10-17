@@ -43,24 +43,24 @@ enum { _INSIDE, _WALL, _OUTSIDE }
 ## and `hi` bound the grid (hi exclusive). Returns
 ##   {ok, why, floor_y, ceil_y, columns: Array[Vector2i], openings: Array}
 ## with each opening {kind, cells: Array[Vector3i]}. Docs/Structures.md 3.2.
-static func find_space(seed: Vector3i, cell_kind: Callable, lo: Vector3i, hi: Vector3i) -> Dictionary:
+static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: Vector3i) -> Dictionary:
 	var out := {"ok": false, "why": "", "floor_y": 0, "ceil_y": 0, "columns": [], "openings": []}
-	if not _in(seed, lo, hi) or int(cell_kind.call(seed)) != Cell.AIR:
+	if not _in(start, lo, hi) or int(cell_kind.call(start)) != Cell.AIR:
 		out.why = "not in the air of a room"
 		return out
 	# 1. The floor under the click and the ceiling over it.
-	var floor_y := seed.y - 1
-	while floor_y >= lo.y and seed.y - floor_y <= MAX_REACH \
-			and int(cell_kind.call(Vector3i(seed.x, floor_y, seed.z))) == Cell.AIR:
+	var floor_y := start.y - 1
+	while floor_y >= lo.y and start.y - floor_y <= MAX_REACH \
+			and int(cell_kind.call(Vector3i(start.x, floor_y, start.z))) == Cell.AIR:
 		floor_y -= 1
-	var ceil_y := seed.y + 1
-	while ceil_y < hi.y and ceil_y - seed.y <= MAX_REACH \
-			and int(cell_kind.call(Vector3i(seed.x, ceil_y, seed.z))) == Cell.AIR:
+	var ceil_y := start.y + 1
+	while ceil_y < hi.y and ceil_y - start.y <= MAX_REACH \
+			and int(cell_kind.call(Vector3i(start.x, ceil_y, start.z))) == Cell.AIR:
 		ceil_y += 1
-	if floor_y < lo.y or seed.y - floor_y > MAX_REACH:
+	if floor_y < lo.y or start.y - floor_y > MAX_REACH:
 		out.why = "no floor under it"
 		return out
-	if ceil_y >= hi.y or ceil_y - seed.y > MAX_REACH:
+	if ceil_y >= hi.y or ceil_y - start.y > MAX_REACH:
 		out.why = "no ceiling over it"
 		return out
 	out.floor_y = floor_y
@@ -74,12 +74,12 @@ static func find_space(seed: Vector3i, cell_kind: Callable, lo: Vector3i, hi: Ve
 		var k := _column(c, floor_y, ceil_y, cell_kind, lo, hi)
 		what[c] = k
 		return k
-	var start := Vector2i(seed.x, seed.z)
-	if int(col.call(start)) != _INSIDE:
+	var first := Vector2i(start.x, start.z)
+	if int(col.call(first)) != _INSIDE:
 		out.why = "not in the air of a room"
 		return out
-	var columns: Array[Vector2i] = [start]
-	var seen := {start: true}
+	var columns: Array[Vector2i] = [first]
+	var seen := {first: true}
 	var edge := {}   # boundary column -> [the room columns beside it, as directions]
 	var head := 0
 	while head < columns.size():
@@ -222,14 +222,14 @@ static func for_tower(world: BrickWorld, chunk: int, footprint_x: int, footprint
 			return Cell.DOOR
 		return Cell.SOLID
 	for room: Room in RoomManifest.rooms_for(footprint_x, footprint_z, courses, building_seed, program):
-		var seed := _free_cell(room, origin, kind)
-		if seed.x == -1000000000:
+		var start := _free_cell(room, origin, kind)
+		if start.x == -1000000000:
 			continue
-		var found := find_space(seed, kind, lo, hi)
+		var found := find_space(start, kind, lo, hi)
 		if not found.ok:
 			continue
 		var space_kind: String = room.kind if KINDS.has(room.kind) else "other"
-		var made := record_space(room.id, space_kind, 0, seed, found)
+		var made := record_space(room.id, space_kind, 0, start, found)
 		rec.spaces.append(made[0])
 		rec.openings.append_array(made[1])
 	return rec
@@ -263,9 +263,9 @@ static func empty() -> Dictionary:
 ## A space found from `seed`, as the record keeps it, with its openings --
 ## the kinds set by hand on `old` openings kept where the same cells are
 ## still an opening.
-static func record_space(id: int, kind: String, frame: int, seed: Vector3i, found: Dictionary,
+static func record_space(id: int, kind: String, frame: int, start: Vector3i, found: Dictionary,
 		old_openings: Array = []) -> Array:
-	var space := {"id": id, "kind": kind, "frame": frame, "seed": [seed.x, seed.y, seed.z],
+	var space := {"id": id, "kind": kind, "frame": frame, "seed": [start.x, start.y, start.z],
 			"floor_y": int(found.floor_y), "ceil_y": int(found.ceil_y), "columns": []}
 	for c: Vector2i in found.columns:
 		(space.columns as Array).append([c.x, c.y])
