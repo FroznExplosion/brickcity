@@ -317,6 +317,9 @@ void fragment() {
     // Only a printed material has beads, and only while the finish is
     // printed. Wood, metal and stone are what they say, not a print of them.
     float print_rough = 0.0;
+    // How much of the sky a point sees: only the hollow under a part is
+    // anything but open (ambient and reflections, not the sun).
+    float occlusion = 1.0;
     vec3 aniso_dir = vec3(0.0);
     float aniso = 0.0;
     // A FACET too: a printed brick's bevelled edge is printed like the rest
@@ -456,37 +459,38 @@ void fragment() {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
-            // The hollow: a shell deep, lit by what gets in past the rim. Not
-            // faded: it is as big as the part. Near, the view ray is walked
-            // up into it: a rib or the rim met on the way is its wall, seen
-            // past the edge it stands on.
-            float shade = under_cavity;
-            if (underside_hollow && solid < 0.99 && dist < under_depth_range) {
-                vec3 d = transpose(mat3(MODEL_MATRIX))
-                        * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
-                if (d.y > 0.05) {
-                    vec2 run = d.xz / d.y * under_depth;
-                    // Where between the last step outside and the first
-                    // inside the wall is, from the two distances: without
-                    // it the walls came out in six bands.
-                    float hit = 1.0;
-                    float prev = ps_under_sd(cell, fsize);
-                    for (int i = 1; i <= 6; i++) {
-                        float f = float(i) / 6.0;
-                        float sd_i = ps_under_sd(cell + run * f, fsize);
-                        if (sd_i < 0.0) {
-                            hit = f - (1.0 / 6.0) * (-sd_i) / max(prev - sd_i, 1e-5);
-                            break;
-                        }
-                        prev = sd_i;
-                    }
-                    shade = hit < 1.0 ? mix(under_wall, under_cavity, hit) : under_cavity * 0.85;
-                    shade = mix(under_cavity, shade,
-                            1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist));
+            // The hollow. A printed brick's has no flat roof: nothing can be
+            // bridged across it, so it is roofed in 45-degree slopes rising
+            // from every rib and the rim to a ridge -- a hip roof over each
+            // cell, which is what the bed side of the printable brick shows
+            // (Docs/PrintLook.md). Its depth over a point is that point's
+            // distance from the nearest wall, so the roof's slope there faces
+            // down and AWAY from that wall: the gradient of ps_under_sd. Lit
+            // by its normal, the facets read as the pyramids they are, a
+            // little darker the deeper they go. (It was a dark flat hollow
+            // with its walls found by walking the view ray up into it: a
+            // cave, and at range the walk came apart in stripes.)
+            float shade = 1.0;
+            if (underside_hollow && solid < 0.99) {
+                const float SD_STEP = 0.003;
+                float s0 = ps_under_sd(cell, fsize);
+                vec2 g = vec2(ps_under_sd(cell + vec2(SD_STEP, 0.0), fsize) - s0,
+                              ps_under_sd(cell + vec2(0.0, SD_STEP), fsize) - s0);
+                float gl = length(g);
+                float near = 1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist);
+                if (gl > 1e-7) {
+                    vec2 a = g / gl;
+                    vec3 roof = normalize(NORMAL + (ax_u * a.x + ax_v * a.y));
+                    NORMAL = normalize(mix(NORMAL, roof, (1.0 - solid) * near));
                 }
+                shade = mix(under_wall, under_cavity,
+                        smoothstep(0.0, under_depth, max(s0, 0.0)) * near + (1.0 - near) * 0.5);
             }
+            // In there it sees little of the sky, and the roof is printed
+            // overhang, not the bed: dull, and lit mostly by what gets in.
             albedo *= mix(shade, 1.0, solid);
-            print_rough += (1.0 - solid) * 0.35;
+            occlusion = mix(shade * 0.8, 1.0, solid);
+            print_rough += (1.0 - solid) * 0.6;
         }
         if (face == 0 && !authored && !facet && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
             // The Z seam, on the part's low corner in X and Z: a face whose
@@ -569,4 +573,6 @@ void fragment() {
     EMISSION = emission;
     RIM = surface_rim * (1.0 - MAT_METAL[mat]);
     RIM_TINT = 0.4;
+    AO = occlusion;
+    AO_LIGHT_AFFECT = 0.0;
 }

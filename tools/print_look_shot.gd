@@ -38,7 +38,12 @@ const VIEWS := [
 	["shapes_close", Vector3(1.0, 0.75, 7.0), Vector3(0.8, 0.2, 6.0)],
 	["arch_close", Vector3(5.95, 0.4, 7.1), Vector3(5.95, 0.25, 5.75)],
 	["wall", Vector3(6.5, 1.6, 9.0), Vector3(5.6, 0.8, 0.7)],
+	# The ceiling (ROOM, away from the rest, so it shades nothing of it).
+	["ceiling", Vector3(41.4, 0.9, 4.2), Vector3(42.6, 2.3, 3.0)],
+	["ceiling_close", Vector3(42.2, 1.6, 3.6), Vector3(42.5, 2.3, 3.1)],
+	["ledge", Vector3(41.0, 1.4, 5.6), Vector3(41.5, 2.6, 4.4)],
 ]
+const ROOM := Vector3(40, 0, 0)
 
 var _out := "user://"
 var _looks := ["glass"]
@@ -155,6 +160,28 @@ func _build() -> void:
 	mmi.multimesh = mm
 	mmi.material_override = stud_mat
 	root3.add_child(mmi)
+
+	# A ceiling overhead, as a storey's floor is seen from the room under it:
+	# 2x4s in a running bond, its front edge a ledge with a wall standing on
+	# it (ceiling, ledge views).
+	var room := w.create_chunk(Vector3i.ZERO, Vector3i(16, 24, 16))
+	for row in 6:
+		for k in 4:
+			var xx := k * 4 + (row % 2) * 2
+			if xx + 4 <= 16:
+				w.place_block(room, Vector3i(xx, 15, row * 2), pal["brick_2x4_x"], [0, 2, 4][(row + k) % 3])
+	for xx in [0, 4, 8]:
+		w.place_block(room, Vector3i(xx, 18, 10), pal["brick_2x4_x"], 6)
+	w.place_block(room, Vector3i(2, 21, 10), pal["brick_2x4_x"], 6)
+	var room_arrays: Array = w.build_chunk_chamfer_mesh(room, BrickNear.BEVEL)
+	var room_mesh := ArrayMesh.new()
+	room_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, room_arrays)
+	var rmi := MeshInstance3D.new()
+	rmi.mesh = room_mesh
+	rmi.material_override = mat
+	rmi.position = ROOM
+	root3.add_child(rmi)
+	rmi.set_instance_shader_parameter("geo_bevel", 1.0)
 
 	_cam = Camera3D.new()
 	_cam.fov = 50.0
