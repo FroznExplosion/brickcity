@@ -19,6 +19,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 uniform float stud_radius = 0.105;   // PieceMeshes.STUD_R
 uniform float stud_height = 0.074;   // PieceMeshes.STUD_H
 uniform float max_tilt = 0.6;        // radians back from upright, at most
+uniform float stud_taper = 0.86;     // PieceMeshes.STUD_TAPER
 uniform float surface_roughness : hint_range(0.0, 1.0) = 0.42;
 uniform float surface_specular : hint_range(0.0, 1.0) = 0.55;
 
@@ -53,8 +54,12 @@ void vertex() {
     float et = min(ae, sin(max_tilt)) * sign(e);
     vec3 vt = front * sqrt(max(1.0 - et * et, 0.0)) + up * et;   // the way it faces
     vec3 us = normalize(up - vt * et);                            // up the card
-    float side_h = stud_height * sqrt(max(1.0 - e * e, 0.0));
-    float outline = side_h + 2.0 * stud_radius * ae;
+    // The stud is tapered (its top `stud_taper` of its foot) and its rim
+    // rounded: from its front foot to the back of its top, not the back of
+    // its foot. Taller than that, a card stood above the 3D stud it turns
+    // into through a scope.
+    float side_h = stud_height * sqrt(max(1.0 - e * e, 0.0)) * 0.85;
+    float outline = side_h + stud_radius * (1.0 + stud_taper) * ae;
     float seen = sqrt(max(1.0 - dot(us, v) * dot(us, v), 0.0));
     float h = outline / max(seen, 0.35);
     // And a skirt below its foot, into the brick: the brick's top hides it,
