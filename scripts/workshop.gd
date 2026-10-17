@@ -43,6 +43,8 @@ const KEY_ROWS := [
 	["", "C", "copy it", "DEL", "delete it"],
 	["ROOM", "U", "room template: guide size", "", ""],
 	["", "I", "layer: structure / interior / detail", "", ""],
+	["SPACES", "O", "rooms + openings (LMB room/opening)", "K", "room kind (shift: back)"],
+	["", "RMB", "forget a room (in O)", "P", "point (shift P: kind)"],
 	["VIEW", "G", "grid", "H", "stress overlay"],
 	["FILE", "ESC", "free the mouse for the menus", "ctrl N / O", "new / open"],
 	["", "ctrl S", "save", "ctrl shift S", "save as"],
@@ -120,6 +122,9 @@ var _grid: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
+## The spaces tool (O): rooms, openings and points (WorkshopSpaces;
+## Docs/Structures.md 3.2).
+var _spaces: WorkshopSpaces
 var _dot: ColorRect
 const DOT_PX := 8.0
 var _keys: GridContainer
@@ -290,6 +295,9 @@ func _ready() -> void:
 	_build_lights()
 	_build_camera()
 	_build_hud()
+	_spaces = WorkshopSpaces.new()
+	add_child(_spaces)
+	_spaces.setup(self)
 	_remesh()
 	if "--gate" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
 		call_deferred("_run_gate")
@@ -914,9 +922,13 @@ func _process(_dt: float) -> void:
 	if not _drag.is_empty():
 		_drag_process()
 	_place_handles()
+	if _spaces != null:
+		_spaces.process()
 	if _stamp != null:
 		_ghost.visible = false
 		_stamp_process()
+	elif _spaces != null and _spaces.active:
+		_ghost.visible = false
 	elif _painting:
 		_paint_process()
 	else:
@@ -1510,6 +1522,8 @@ func _update_hud() -> void:
 				_stamp_label, _stamp.size(), "" if _stamp_ok else "  [does not fit]"]
 	elif _drag.size() > 0:
 		state = "sizing the generated building"
+	elif _spaces != null and _spaces.active:
+		state = _spaces.status()
 	var gen := ""
 	if recipe.kind == "room":
 		gen += "
@@ -1557,6 +1571,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _stamp != null and _stamp_input(e):
 		return
+	if _spaces != null and _spaces_input(e):
+		return
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
@@ -1603,6 +1619,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_Z: _undo()
 		KEY_V: _snap_on = not _snap_on
 		KEY_B: _set_painting(not _painting)
+		KEY_O:
+			if _spaces != null:
+				if _painting:
+					_set_painting(false)
+				_spaces.toggle()
 		KEY_G: _grid_on = not _grid_on; _grid.visible = _grid_on
 		KEY_F1: _keys_on = not _keys_on; _keys_panel.visible = _keys_on
 		KEY_H: _overlay_on = not _overlay_on; _stress_dirty = true; _refresh_overlay()
@@ -1613,6 +1634,38 @@ func _unhandled_input(e: InputEvent) -> void:
 				_save()
 		KEY_F9: _load()
 		KEY_ENTER, KEY_KP_ENTER: _place_in_city()
+
+
+## The spaces tool's share of the input, while it is out (O).
+func _spaces_input(e: InputEvent) -> bool:
+	if not _spaces.active:
+		return false
+	if e is InputEventMouseButton and e.pressed:
+		var ray := _mouse_ray()
+		match e.button_index:
+			MOUSE_BUTTON_LEFT:
+				_spaces.click(ray[0], ray[1])
+				return true
+			MOUSE_BUTTON_RIGHT:
+				_spaces.right_click(ray[0], ray[1])
+				return true
+			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
+				_spaces.cycle_kind(-1 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+				return true
+		return false
+	if e is InputEventKey and e.pressed and not e.echo:
+		match e.keycode:
+			KEY_K:
+				_spaces.cycle_kind(-1 if e.shift_pressed else 1)
+				return true
+			KEY_P:
+				if e.shift_pressed:
+					_spaces.cycle_point_kind()
+				else:
+					var ray := _mouse_ray()
+					_spaces.toggle_point(ray[0], ray[1])
+				return true
+	return false
 
 
 func _place() -> void:
@@ -1903,6 +1956,8 @@ func _recipe_frame_for(asm_frame: int) -> int:
 
 func _after_edit() -> void:
 	_dirty = true
+	if _spaces != null:
+		_spaces.edited()
 	if _batch:
 		return
 	_select_group(_selected)   # ids move under it; redraw or drop the box
@@ -2259,6 +2314,8 @@ func _reset_space() -> void:
 	_clear_towers()
 	_stamp_marks.clear()
 	_tower_undo.clear()
+	if _spaces != null:
+		_spaces.edited()
 	# Drop every frame, not just the one being built in.
 	for f in asm.frames:
 		world.release_chunk(f)

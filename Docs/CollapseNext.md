@@ -285,7 +285,11 @@ In the order to do it. Each line points at where the item is written up.
           double-height hall or a mezzanine half a storey up is a floor like any other.
         * **A mega collapse is cut bottom to top** (`CollapseDirector`): a wide one by region.
         First what the user finds playing them, then a recipe with a double-height hall and a
-        mezzanine, and the passes run on it, before any of the above is changed.
+        mezzanine, and the passes run on it, before any of the above is changed. **The plan for
+        all of it is [Structures.md](Structures.md)** (2026-10-16): tiles not bands, loads by
+        region and spans, floors found in the bricks, collapse in three tiers, rooms as the unit
+        of interiors -- and what a structure describes (spaces, openings, points), with the
+        workshop's spaces tool and the generator's record built.
         **Found already:** `--breaklag --big` took them for its "ordinary" buildings (12-30
         courses; no tower in the big city is) and asked them a tower's questions. A ground
         storey shot through all round brought nothing down on the 240-stud one (no piece at

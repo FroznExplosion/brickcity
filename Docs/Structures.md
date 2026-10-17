@@ -1,0 +1,212 @@
+# Structures: any shape, described once, broken by the bricks
+
+Written 2026-10-16 from the user's questions after the big city got its wide buildings
+(CollapseNext item 25):
+
+> "wide buildings will likely be much more than tall buildings so we should support them more.
+> ideally the system is as automatic as possible other than in the build mode we just need to
+> describe what the structure, interior and items are ... ideally I'd like to support any type of
+> structure: castle walls that are huge with connecting long rooms in the walls and towers at
+> corners, wide buildings with towers, and still tall buildings with many rooms and rooms hanging
+> off the side."
+
+This is the plan, and the record of what is built of it. Status per section.
+
+## 1. What is tied to towers today
+
+What breaks a building does not know about floors: the stress solve on stud joints, the load
+check (`BrickWorld.gravity_check`, every plate boundary), the weakest-seam snap, and the search for
+what came off (`get_components_near`) all go by the bricks. What does know about floors, and what a
+wide building, a castle or a hall shows up:
+
+1. **Bands are slices across the whole building** (`Chunk::section_of_y`). Mesh, collision, the near
+   tier and every rebuild after a hit are a band at a time. A band of a 240 x 80-stud floor plan is
+   all of it at that height: one hit, the whole floor rebuilt.
+2. **The load check takes a whole boundary at once.** One bay of a wide building with its columns
+   shot away hardly moves the sum over the boundary, so it never fails.
+3. **Interiors and a landing's floor-line snap use the recipe's storey height**
+   (`TowerRecipe.STOREY_PLATES`). A double-height hall or a mezzanine half a storey up is not a
+   storey.
+4. **A mega collapse is cut bottom to top** (`CollapseDirector`).
+5. **Far off, a building in bricks draws its recipe's coarse shell** with holes punched where bands
+   are damaged (`CityScene.DEMESH_RANGE`, 110 m). A hole cannot say "this fell down": from far away
+   a collapsed wide building stood as a skeleton of floors and columns while close up it was rubble
+   (user's pictures, 2026-10-16).
+
+## 2. The plan, in order
+
+### 2.1 Far view from the real bricks — not started
+A damaged building's far tier is a coarse mesh of its own grid (`BrickWorld.coarse_chunk_async`, as
+a far piece's stand-in already is), rebuilt when its bricks change, on a worker. An undamaged one
+keeps the shared recipe shell (cheap, `CityScene._recipe_shell_mesh`).
+
+### 2.2 Tiles, not bands — not started
+Every structure is cut into 3D tiles of about 32 x 32 studs by one storey, each with its own mesh,
+collision, near tier, far mesh and dirty flag. A tower is a stack of tiles, a wide building a grid,
+a castle tiles along its walls. A hit rebuilds a tile. `Chunk::section_of_y` becomes a tile index;
+the band code paths (`build_chunk_mesh_section`, `add_band_shapes`, `BrickNear` bands, the shell
+bands) take tiles.
+
+### 2.3 Loads by region, and spans — not started
+The load check per column of tiles rather than over the whole boundary, and a **span rule**: a floor
+reaches so far between supports -- further for a thicker one, further for a stronger material
+(`BRICK_MATERIALS[].toughness`: stone 2.5, metal 4) -- and past that sags and breaks mid-span. That
+is what an open hall, a long room in a castle wall and a room hanging off the side need.
+
+### 2.4 Floors found in the bricks — not started
+A floor is a wide layer of plates, found in the grid at whatever height it is. Interiors, the
+floor-line snap and the space finder (3.2) use found floors, so a mezzanine or a double-height hall
+is a floor like any other.
+
+### 2.5 Collapse in three tiers — not started
+* **Hot** -- the damaged tiles and the tiles within ~30 m of the player: real bricks, crumbs,
+  furniture with collision, items with physics.
+* **The rest** -- big rigid chunks cut along tile edges, merged collision, coarse meshes, no
+  interiors, no crumbs.
+* **Far** -- big chunks only, small pieces deleted (`IslandManager._far_and_small`), resolved rather
+  than simulated, dust.
+
+A player **in** a room that falls keeps that room's tile hot: its furniture rides the chunk (built:
+`_rider_add`), and loose items take physics when the floor tilts past a limit or the room hits
+something. Chunks at rest merge into one static rubble mesh.
+
+### 2.6 Rooms as the unit of interiors — not started (see 4)
+The spaces (3) are the rooms it will use.
+
+## 3. What a structure describes
+
+Everything else is found: floors, ground contact (a building's lowest row is ground), supports,
+what hangs off the side, far meshes.
+
+| What | Who says it | Used for |
+|---|---|---|
+| **Roles**: structure / interior / detail | build mode (`BuildRecipe.Role`, key I) -- built | what holds it up, what is furniture, what is an item |
+| **Spaces**: rooms, halls, corridors, stairwells, with a kind | build mode (spaces tool) or the generator | interiors, visibility, AI, the procedural fill (4.3) |
+| **Openings**: doorway, door, window, glass, arch, open side | found, then set by hand where wrong | the faked room behind glass, what is seen into, AI routes |
+| **Points** (optional): spawn, loot, cover | build mode | play |
+| **Materials** | per brick -- built (`set_block_material`) | strength, the span rule, glass |
+
+### 3.1 The record — built 2026-10-16
+In a build: `recipe.meta["structure"]`, saved with it. From the generator: the same dictionary,
+made from a generated building's bricks (`StructureSpaces.for_tower`, 3.3). One reader and one
+finder for both (`scripts/structure_spaces.gd`).
+
+```
+{"spaces":   [{"id": 0, "kind": "office", "frame": 0, "seed": [x, y, z],
+               "floor_y": y, "ceil_y": y, "columns": [[x, z], ...]}],
+ "openings": [{"id": 0, "kind": "window", "space": 0, "cells": [[x, y, z], ...],
+               "set": false}],
+ "points":   [{"kind": "loot", "at": [x, y, z]}]}
+```
+
+Cells are the build's grid (studs across, plates up). `set` is true where somebody chose the kind
+by hand: it survives the space being found again after an edit.
+
+### 3.2 Finding a room (the spaces tool) — built 2026-10-16
+Click the floor of a room. From the cell above the click:
+1. **Floor and ceiling**: down to the first solid cell (the floor), up to the next (the ceiling).
+2. **The room's footprint**: from that column, across the floor in four directions. A column is
+   **inside** when it has the floor under it, the ceiling over it and air all the way between; it is
+   a **wall** when any cell between floor and ceiling is solid; it is **outside** when the floor or
+   the ceiling is missing. The fill goes through inside columns only.
+3. **Openings**: every wall column and outside column the footprint touches, and their cells
+   between floor and ceiling. A run of air cells in a wall is an opening -- a **doorway** when it
+   starts at the floor, a **window** when there is wall under it (a sill). A run of see-through
+   bricks (`translucent` materials) is **glass**; a door part (an archetype named `door...`, none
+   yet) is a **door**. An outside column is an **open** side. Neighbouring cells of one kind are one
+   opening.
+4. A fill that grows past `MAX_COLUMNS` stops and says so: a click outside, or a room with a whole
+   wall missing.
+
+A wrong kind is clicked to cycle it; a missing opening is a wall that should not be one (no
+window was left). The space is found again from its seed after every edit, and the kinds set by
+hand stay on the openings that are still there.
+
+**In the workshop** (`scripts/workshop_spaces.gd`, key **O**; the build's other tools are as they
+were):
+
+| | |
+|---|---|
+| O | the spaces tool out / away (the ghost brick goes while it is out) |
+| LMB on a room's floor | find the room, as a space of the kind K is on |
+| LMB on an opening | its kind, round: doorway, door, window, glass, arch, open (the same hole seen from the room on its other side turns with it) |
+| LMB in a room found | select it |
+| K / shift K, or the wheel | the selected room's kind; with none selected, the next room's |
+| RMB in a room | forget it |
+| P / shift P | a point (spawn, loot, cover) where the cursor is, or take it away; shift: which kind P puts |
+
+Rooms are outlined at floor and ceiling (yellow selected, red when the room cannot be found any
+more and why), openings boxed in their kind's colour, points crossed, each room's kind written over
+it. Furniture and detail (the I layer) are air to the finder: a room is not walled by its desks.
+Only the upright grid is looked at yet. The asset workshop has its own O, K and P and never sees
+this tool.
+
+Limits as built: a beam below the ceiling is a wall to the finder, so it splits a room (with a
+doorway between the halves); a room needs a ceiling; a wall built sideways is not seen.
+
+`tools/spaces_probe.gd` (9: the finder, and a generated building) and
+`tools/workshop_spaces_probe.gd` (8: the tool in the workshop, an edit, a save and load).
+
+### 3.3 The generator — built 2026-10-16
+`StructureSpaces.for_tower(world, chunk, footprint_x, footprint_z, courses, building_seed,
+program)`: every room `RoomManifest.rooms_for` gives a generated building, found from the free cell
+nearest its middle by the same finder, as a space of the room's own kind. A two-storey 30 x 30 tower:
+8 of 8 rooms, 24 windows and 8 doorways, 18 ms -- about 2 ms a room, so it is asked for a building
+when something wants it (its interiors, its AI), not for a city at load.
+
+### 3.3.1 Room kinds
+`office, corridor, hall, stairwell, storeroom, kitchen, bathroom, bedroom, living, shop, lab,
+armory, barracks, workshop, empty, other` -- the city's room kinds (`Room.KINDS`) are all among
+them by the same names.
+
+### 3.4 Stairs
+The staircase every generated building has now (`staircase_recipe.gd`, a spiral in a stairwell) will
+not be the one every building uses. A stairwell is a **space** of kind `stairwell` that spans floors,
+joined to each floor by an opening; what fills it is chosen by its footprint and height -- straight
+run, switchback, spiral, ladder, ramp, lift shaft -- the way a room's kind chooses its furniture.
+Castle towers want spirals, wide buildings switchbacks and ramps, a tower lifts.
+
+## 4. Interiors
+
+### 4.1 Today
+Rooms come from the recipe's program (office, storeroom, kitchen, ...). A room holds **interior
+pieces** (desks, tables, shelves: `Role.INTERIOR`, seen to ~100 m) and **items** (cups, books,
+guns, ammo: `Role.DETAIL` and loot, to ~20 m). Both are drawn per **storey group** (up to four
+storeys, `InteriorGroups`) and faded in and out by distance; interior pieces get collision only near
+the player. An item stands while most of its floor does (Interiors.md 8.10); a piece that is shot
+becomes bricks, alone (8.11). Past ~100 m the shell's windows paint a room behind the glass.
+
+### 4.2 The plan: a room has three states
+1. **Faked** -- a room painted in the window itself (an interior-mapping shader on the opening), for
+   buildings in bricks as well as shells. Nothing per item.
+2. **Drawn** -- its furniture drawn, no physics, only when it can be seen through an opening.
+3. **Live** -- collision, items that can be picked up, physics in a collapse: the room the player is
+   in and its neighbours.
+
+A room that is not live when it comes down is resolved, not simulated: a few crumbs and its loot
+where its floor lands.
+
+### 4.3 Generated interiors
+A space's kind is what a procedural fill reads: "generate office" lays an office's pieces in that
+space, against its walls and clear of its openings. Not started.
+
+## 5. If every building were 1x1 plates
+
+Measured 2026-10-16 (four big-city buildings made bricks; every solid cell is one 1x1 plate):
+
+| building | bricks | as 1x1 plates | x |
+|---|---|---|---|
+| 40 x 30 studs, 60 courses | 2,806 | 68,610 | 24.5 |
+| 80 x 60, 204 courses | 22,354 | 665,938 | 29.8 |
+| wide 240 x 50, 12 courses | 3,602 | 111,442 | 30.9 |
+| wide 200 x 80, 24 courses | 8,845 | 272,976 | 30.9 |
+
+**25-31 times the blocks.** What grows with them: block memory (48 bytes each; these four went
+from 1.8 MB to ~55 MB), the joints, and every walk over a chunk -- the stress solve, the grounding
+walk, the search for what came off, a piece's shapes when it is small enough to be a box a brick --
+all roughly 25-30 times the work. What does not: the occupancy grid (by cells, already the biggest
+part, 20.7 MB for these four), the far tiers, and merged collision (by cells too).
+
+And it would not stand as a brick wall does: a 1x1 plate meets only the plates straight above and
+below it, so a wall of them is a row of separate columns with nothing across. Bricks laid in a bond
+are what make a wall one thing. Plates where plates belong -- floors, trim, detail.
