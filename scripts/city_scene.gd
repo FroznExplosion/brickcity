@@ -3165,6 +3165,19 @@ const SPAN_EVERY_MS := 250
 var _span_owed := {}      ## building id -> true: solved since its floors were asked
 var _span_asked := {}     ## building id -> when they last were
 var span_cuts := [0, 0]   ## cuts made, bricks in their rims
+var span_asks := [0, 0.0, 0.0]   ## checks made (buildings and pieces), ms all told, the worst
+
+
+func _span_time(t0: int) -> void:
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	span_asks[0] += 1
+	span_asks[1] += ms
+	span_asks[2] = maxf(span_asks[2], ms)
+
+
+func span_line() -> String:
+	return "floors past their reach: %d check(s), %.1f ms all told, %.2f the worst; %d cut, %d bricks in their rims" % [
+			int(span_asks[0]), float(span_asks[1]), float(span_asks[2]), int(span_cuts[0]), int(span_cuts[1])]
 
 
 ## One building owed the question, if one is due: does every floor still reach
@@ -3192,7 +3205,9 @@ func _pay_span_owed() -> void:
 		var b := registry.get_building(id)
 		if b == null or b.is_build() or b.toppled or not b.is_materialised() or _toppling.has(id):
 			return
+		var t0 := Time.get_ticks_usec()
 		var rim := world.cut_spans(b.chunk, span_reach, false)
+		_span_time(t0)
 		if rim.is_empty():
 			return
 		var e := DamageLog.Entry.new()
@@ -5800,7 +5815,9 @@ func _span_piece(isl: BrickIsland) -> bool:
 		if b != null and b.is_materialised():
 			chunks.append(b.chunk)
 	var ground := -1.0e9 if _terrain_mode else 0.0
+	var t0 := Time.get_ticks_usec()
 	var rim := world.cut_spans_resting(isl.chunk, isl.chunk_transform(), chunks, ground, span_reach, true)
+	_span_time(t0)
 	if rim.is_empty():
 		return false
 	span_cuts[0] += 1
@@ -11958,6 +11975,7 @@ func _run_shot_pass() -> void:
 	print("[city]   " + islands.crumb_cost_line())
 	print("[city]   " + islands.push_census_line())
 	print("[city]   " + islands.shed_census_line())
+	print("[city]   " + span_line())
 	print("[city]   " + islands.heap.census_line())
 	print("[city]   furniture broken: %d item(s), %d part(s) thrown; %d on wreckage a blast reached, %d crushed under it" % [
 			islands.furniture_broken[0], islands.furniture_broken[1], items_broken_on_wreckage,
