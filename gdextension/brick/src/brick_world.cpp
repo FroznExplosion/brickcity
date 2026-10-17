@@ -1464,15 +1464,53 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                     && parts[c.blocks[blk].archetype].mesh.empty()
                                     && brick_material_hides(b.material, c.blocks[blk].material);
                         };
-                        // A printed part comes off the bed FLAT: its bottom
-                        // edges are square, not bevelled. So a side face's
-                        // bottom side is never a bevel (FLUSH, run straight
-                        // down to the bottom's plane), and the bottom face's
-                        // bevels are laid flat in its own plane
-                        // (chamfer_faces_into): it reaches out to its edges
-                        // and only its corners are cut, where an upright
-                        // edge is bevelled.
+                        // A brick SITTING ON BRICKS has a flat bottom: its
+                        // bottom edges are square where they rest on the
+                        // brick below, the two meeting like printed parts
+                        // stacked. Anywhere else -- an overhang, a ledge, a
+                        // part over air -- the bottom keeps its bevel. So:
+                        //   * a side face's bottom side is FLUSH (straight
+                        //     down to the bottom's plane) when every cell
+                        //     along the brick's bottom row on that side has
+                        //     a plain brick under it (row_supported: the
+                        //     whole row, so every rectangle of the face
+                        //     agrees, and so does the brick below, which
+                        //     floors the half-groove under it);
+                        //   * a bottom face resting on a brick (`other`) has
+                        //     its bevels laid flat in its own plane
+                        //     (chamfer_faces_into, EDGE_DIR_FLAT_BOTTOM): it
+                        //     reaches out to its edges, only its corners cut
+                        //     where an upright edge is bevelled. Hidden while
+                        //     that brick stands; flat when it is shot away.
                         const bool side_face = f != 2 && f != 3;
+                        const auto row_supported = [&](int32_t blk, const Vector3i &dir) -> bool {
+                            if (blk < 0 || c.blocks[blk].decorative) {
+                                return false;
+                            }
+                            const Archetype &pa_ = parts[c.blocks[blk].archetype];
+                            if (!pa_.mesh.empty() || !pa_.is_full_box()) {
+                                return false;
+                            }
+                            const Vector3i p0 = c.blocks[blk].cell - c.origin;
+                            const Vector3i sz = pa_.size;
+                            const int ax = dir.x != 0 ? 0 : 2;     // across the face
+                            const int run = ax == 0 ? 2 : 0;       // along it
+                            Vector3i at = p0;
+                            at[ax] = (dir[ax] > 0) ? p0[ax] + sz[ax] - 1 : p0[ax];
+                            for (int k = 0; k < sz[run]; ++k) {
+                                Vector3i cell = at;
+                                cell[run] = p0[run] + k;
+                                const int32_t under = c.block_at(cell - Vector3i(0, 1, 0));
+                                if (under < 0 || under == blk || c.blocks[under].decorative
+                                        || !parts[c.blocks[under].archetype].mesh.empty()
+                                        || !brick_material_hides(c.blocks[blk].material,
+                                                c.blocks[under].material)) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        };
+                        const bool flat_bottom = f == 3 && a.is_full_box() && other >= 0;
                         const auto side_raw = [&](int which, int a_from, int a_to, int b_from,
                                 int b_to, int da, int db) -> uint32_t {
                             // Which way this side faces out, and whether it is
@@ -1483,7 +1521,8 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             // hidden. So it gets a floor (below).
                             const int out_axis = da != 0 ? pa : pb;
                             const bool top_edge = side_face && out_axis == 1 && da + db > 0;
-                            const bool bottom_edge = side_face && out_axis == 1 && da + db < 0;
+                            const bool bottom_edge = side_face && out_axis == 1 && da + db < 0
+                                    && row_supported((int32_t)bi, FACE_DIR[f]);
                             const int along_axis = da != 0 ? pb : pa;
                             Vector3i along_dir;
                             along_dir[along_axis] = 1;
@@ -1578,9 +1617,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                         // standing on this flush: its flat
                                         // bottom over this one's bevel.
                                         const bool flat_above = top_edge && across < 0
-                                                && !c.blocks[against].decorative
-                                                && brick_material_hides(c.blocks[against].material,
-                                                        b.material);
+                                                && row_supported(against, FACE_DIR[f]);
                                         if ((across < 0 && !flat_above) || across == against) {
                                             close_run();
                                         } else {
@@ -1665,19 +1702,21 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                 return code;
                             }
                             const int out_axis = da != 0 ? pa : pb;
-                            if (side_face && out_axis == 1 && da + db < 0) {
-                                // A side face's bottom: square, straight down.
+                            if (side_face && out_axis == 1 && da + db < 0
+                                    && row_supported((int32_t)bi, FACE_DIR[f])) {
+                                // A side face's bottom, resting on bricks:
+                                // square, straight down.
                                 // Its floors stay: where a third brick is
                                 // diagonally across, the brick under this one
                                 // may have a bevel nobody else closes.
                                 edge_grooves &= ~(1u << which);
                                 return brick::EDGE_FLUSH;
                             }
-                            if (f == 3) {
-                                // The bottom face: it draws its own flat
-                                // strip out to the edge, always (the side
-                                // face round the edge no longer has a facet
-                                // to draw for it), and needs no floor.
+                            if (flat_bottom) {
+                                // A bottom face resting on a brick: it draws
+                                // its own flat strip out to the edge, always
+                                // (the side face round the edge may have no
+                                // facet to draw for it), and needs no floor.
                                 fb.floors.resize(floors_before);
                                 return brick::EDGE_CONVEX;
                             }
@@ -1688,7 +1727,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                                 | (side(1, a1, a1, bj, b1, 1, 0) << brick::EDGE_A_HI)
                                 | (side(2, ai, a1, bj, bj, 0, -1) << brick::EDGE_B_LO)
                                 | (side(3, ai, a1, b1, b1, 0, 1) << brick::EDGE_B_HI)
-                                | (f << brick::EDGE_DIR_SHIFT));
+                                | ((flat_bottom ? brick::EDGE_DIR_FLAT_BOTTOM : f) << brick::EDGE_DIR_SHIFT));
                         // The plugs (brick::EDGE_PLUG_SHIFT): a corner whose
                         // other two faces both have a block against them.
                         const auto taken_at = [&](int aa, int bb) -> bool {
@@ -1801,14 +1840,16 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
                             const int32_t pb_blk = backs(c.block_at(cc + g2)) ? c.block_at(cc + g2) : -1;
                             const int32_t d_blk = c.block_at(cc + g1 + g2);
                             // The bevel a mitre would meet runs along a
-                            // BOTTOM edge -- the inside corner is a side
-                            // face's foot, or this is the bottom face -- and a
-                            // bottom edge has none now (side() above). The
-                            // facet just stops at the corner: under it is the
-                            // bevel of the brick this stands on, or the air.
-                            const bool bottom_corner = f == 3
+                            // bottom edge that rests on bricks -- the inside
+                            // corner is a side face's foot and the face round
+                            // the corner is FLUSH there, or this is a flat
+                            // bottom -- and has none (side() above). The facet
+                            // just stops at the corner: under it is the bevel
+                            // of the brick this stands on.
+                            const bool bottom_corner = flat_bottom
                                     || (side_face && (inner_a ? pa : pb) == 1
-                                            && !((inner_a ? o[pa] : o[pb]) != 0));
+                                            && !((inner_a ? o[pa] : o[pb]) != 0)
+                                            && row_supported((int32_t)bi, g2));
                             uint8_t state;
                             if (pb_blk < 0 && !backs(d_blk)) {
                                 state = bottom_corner ? brick::CORNER_COVERED : brick::CORNER_MITRE;
@@ -2972,7 +3013,13 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
             continue;
         }
 
-        const int f = (e >> brick::EDGE_DIR_SHIFT) & 7;
+        int f = (e >> brick::EDGE_DIR_SHIFT) & 7;
+        // A bottom face resting on a brick (bake_faces_into) lays its bevels
+        // flat; it is the -Y face all the same.
+        const bool flat = f == brick::EDGE_DIR_FLAT_BOTTOM;
+        if (flat) {
+            f = 3;
+        }
         Vector3 A, B;
         A[PLANE_A[f]] = 1.0f;
         B[PLANE_B[f]] = 1.0f;
@@ -3012,7 +3059,6 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
         // to the edge, part of the face -- its normal, its UV, no facet mark
         // -- and its corner triangles cut the corner where an upright edge is
         // bevelled. Caps close a bevel's end, and a flat one has none.
-        const bool flat = f == 3;
         const Vector3 uv_o = in.verts[v];
         const Vector2 uv_at = in.uvs[v];
         const auto uv_of = [&](const Vector3 &p) -> Vector2 {

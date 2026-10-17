@@ -533,6 +533,9 @@ enum : uint32_t {
     EDGE_B_HI = 6,
     EDGE_RAW = 1 << 8,
     EDGE_DIR_SHIFT = 9,
+    // In place of the direction 3 (-Y): a bottom face resting on a brick,
+    // its bevels laid flat (bake_faces_into).
+    EDGE_DIR_FLAT_BOTTOM = 6,
     // One bit a corner (the face's four, in the bake's order), from here: both
     // faces that meet this one at the corner stood against another brick when
     // the bake was made. With both of them hidden, the three bevels that meet
