@@ -4127,15 +4127,15 @@ func fire_burnt(id: int, frame: int, killed: PackedInt32Array, charred: PackedIn
 		return
 	var pf := Engine.get_physics_frames()
 	if not charred.is_empty():
-		var e := DamageLog.Entry.new()
-		e.tick = pf
-		e.kind = DamageLog.Kind.SCORCH
-		e.target = id
-		e.frame = frame
-		e.flags = DamageLog.FLAG_BLOCKS
-		e.blocks = charred
-		e.point = at
-		authority.commit_entry(e)
+		var charred_entry := DamageLog.Entry.new()
+		charred_entry.tick = pf
+		charred_entry.kind = DamageLog.Kind.SCORCH
+		charred_entry.target = id
+		charred_entry.frame = frame
+		charred_entry.flags = DamageLog.FLAG_BLOCKS
+		charred_entry.blocks = charred
+		charred_entry.point = at
+		authority.commit_entry(charred_entry)
 		if not _recolour.has(id):
 			_recolour[id] = pf + RECOLOUR_TICKS
 	if killed.is_empty():
@@ -4479,10 +4479,13 @@ func _enter_pawn(feet: Vector3) -> void:
 	print("[city] playing: pawn at %v" % feet)
 
 
+const TestWindowScript := preload("res://scripts/test_window.gd")
+
+
 ## The player's level and skills from the character save, and kept there on every
 ## change -- not in a pass or a test window: those never touch the player's save.
 func _load_progress() -> void:
-	if _scripted or TestWindow.is_test_window():
+	if _scripted or TestWindowScript.is_test_window():
 		return
 	_player.progress.take(CharacterSave.load_from().progress_dict())
 	_player.progress.changed.connect(_save_progress)
@@ -4492,7 +4495,7 @@ func _load_progress() -> void:
 ## the arsenal is set up, and not in a pass or a test window. From then on it is saved
 ## whenever it changes (PlayerArsenal.kit_changed).
 func _load_kit() -> void:
-	if _scripted or TestWindow.is_test_window() or _arsenal.kit_changed.is_connected(_save_progress):
+	if _scripted or TestWindowScript.is_test_window() or _arsenal.kit_changed.is_connected(_save_progress):
 		return
 	_arsenal.restore(CharacterSave.load_from().loadout)
 	_arsenal.kit_changed.connect(_save_progress)
@@ -4704,11 +4707,11 @@ func _rodeo_climb() -> bool:
 			return true
 	# An enemy truck: its cab, at once.
 	for n in get_tree().get_nodes_in_group(&"trucks"):
-		var tr := n as TransportTruck
-		if tr != null and tr.can_hijack(_player_pawn):
-			print("[city] hijacked a truck%s" % (": its squad is out at the tailgate" if not tr.cargo.is_empty() else ""))
-			tr.hijack(_player_pawn)
-			_drive_vehicle(tr)
+		var truck := n as TransportTruck
+		if truck != null and truck.can_hijack(_player_pawn):
+			print("[city] hijacked a truck%s" % (": its squad is out at the tailgate" if not truck.cargo.is_empty() else ""))
+			truck.hijack(_player_pawn)
+			_drive_vehicle(truck)
 			return true
 	return false
 
@@ -4861,10 +4864,10 @@ func _vehicle_at_side() -> CharacterBody3D:
 		if is_instance_valid(t) and not t.is_wrecked() and t.can_reach(_player_pawn):
 			return t
 	for n in get_tree().get_nodes_in_group(&"trucks"):
-		var tr := n as TransportTruck
-		if tr != null and not tr.is_wrecked() and (tr.can_reach(_player_pawn)
-				or tr.rodeo.beside(_player_pawn, VehicleDeck.RIDE_REACH)):
-			return tr
+		var truck := n as TransportTruck
+		if truck != null and not truck.is_wrecked() and (truck.can_reach(_player_pawn)
+				or truck.rodeo.beside(_player_pawn, VehicleDeck.RIDE_REACH)):
+			return truck
 	return null
 
 
@@ -4879,8 +4882,8 @@ func _use_vehicle(v: CharacterBody3D) -> void:
 		drive = not t.player_in and (t.is_empty() or (t.team == _player_pawn.team
 				and (t.seat_free(Tank.Seat.DRIVER) or t.seat_free(Tank.Seat.GUNNER))))
 	else:
-		var tr := v as TransportTruck
-		drive = tr.is_empty() and tr.can_reach(_player_pawn)
+		var truck := v as TransportTruck
+		drive = truck.is_empty() and truck.can_reach(_player_pawn)
 	if drive:
 		_drive_vehicle(v)
 	elif v.rodeo.ride(_player_pawn):
@@ -5025,45 +5028,45 @@ func _spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName]
 			_gun_library = GunPlaceholderParts.build_library()
 		gi = GunInstance.from_result(GunGenerator.generate(_gun_library, _combat_rng.randi(),
 				WeaponClass.builtin(&"lmg"), 1))
-	var tr := TransportTruck.make(ai_services, self, feet, yaw, kind, gi, _gun.on_structure_hit, _combat_rng)
-	tr.team = team
-	tr.cargo = cargo
-	tr.arrived.connect(_truck_unload)
-	_wire_deck(tr)
-	tr.damaged.connect(func(zone: StringName) -> void:
-		var whose := "your truck" if _vehicle_pilot.vehicle == tr else "a truck of side %d" % tr.team
+	var truck := TransportTruck.make(ai_services, self, feet, yaw, kind, gi, _gun.on_structure_hit, _combat_rng)
+	truck.team = team
+	truck.cargo = cargo
+	truck.arrived.connect(_truck_unload)
+	_wire_deck(truck)
+	truck.damaged.connect(func(zone: StringName) -> void:
+		var whose := "your truck" if _vehicle_pilot.vehicle == truck else "a truck of side %d" % truck.team
 		print("[city] %s: %s" % [whose, TRUCK_ZONE_LOST_LINES.get(zone, String(zone) + " gone")]))
-	tr.wrecked.connect(func(w: TransportTruck) -> void:
+	truck.wrecked.connect(func(w: TransportTruck) -> void:
 		print("[city] truck wrecked at %v%s" % [w.feet(), (" with %d aboard" % w.cargo.size()) if not w.cargo.is_empty() else ""])
 		w.cargo.clear()
 		trucks.erase(w)
 		get_tree().create_timer(10.0).timeout.connect(func() -> void:
 			if is_instance_valid(w):
 				w.queue_free()))
-	trucks.append(tr)
-	print("[city] %s of side %d at %v%s" % [tr.name.to_lower(), team, feet,
+	trucks.append(truck)
+	print("[city] %s of side %d at %v%s" % [truck.name.to_lower(), team, feet,
 			(", %d in the back" % cargo.size()) if not cargo.is_empty() else ", empty"])
-	return tr
+	return truck
 
 
 ## A truck spawned here has stopped (or was hijacked): its squad is put down at
 ## the tailgate, on the side away from the player.
-func _truck_unload(tr: TransportTruck) -> void:
-	if tr.cargo.is_empty():
+func _truck_unload(truck: TransportTruck) -> void:
+	if truck.cargo.is_empty():
 		return
 	var threat := _player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn) \
-			else tr.global_position + Vector3.FORWARD
-	var spots := tr.tailgate_points(threat, tr.cargo.size())
+			else truck.global_position + Vector3.FORWARD
+	var spots := truck.tailgate_points(threat, truck.cargo.size())
 	var members: Array[Soldier] = []
-	for i in tr.cargo.size():
-		var at: Vector3 = spots[i] if i < spots.size() else ai_nav.snap(tr.global_position
-				+ tr.global_transform.basis.z * (tr.size.z * 0.5 + 1.2 + i))
+	for i in truck.cargo.size():
+		var at: Vector3 = spots[i] if i < spots.size() else ai_nav.snap(truck.global_position
+				+ truck.global_transform.basis.z * (truck.size.z * 0.5 + 1.2 + i))
 		members.append(_spawn_soldier(at))
-	print("[city] %s unloaded %d at %v (%s)" % [tr.name.to_lower(), tr.cargo.size(), tr.global_position,
-			tr.stopped_because])
-	tr.cargo.clear()
+	print("[city] %s unloaded %d at %v (%s)" % [truck.name.to_lower(), truck.cargo.size(), truck.global_position,
+			truck.stopped_because])
+	truck.cargo.clear()
 	# An APC's squad is one, and it covers them (moving cover).
-	if tr.is_apc() and not members.is_empty():
+	if truck.is_apc() and not members.is_empty():
 		var q := Squad.make(ai_services, self, members, 1)
 		squads.append(q)
 		if _player_pawn != null and is_instance_valid(_player_pawn):
@@ -5072,7 +5075,7 @@ func _truck_unload(tr: TransportTruck) -> void:
 			for m in members:
 				m.knowledge().heard(_player_pawn, _player_pawn.feet(), ai_services.now())
 			q.give(o)
-		tr.escort = q
+		truck.escort = q
 
 
 ## A mech's weight and its fall rule, on this city (Docs/AI.md 3.10, 3.11).
@@ -5473,49 +5476,49 @@ func _run_vehicles_pass() -> void:
 	camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	camera.rotation = Vector3.ZERO
 	var truck_at := ai_services.vehicle_nav(&"truck").snap(_on_ground(open))
-	var tr := _spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
+	var truck := _spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
 	await _frames(20)
-	_enter_pawn(tr.mount_point())
+	_enter_pawn(truck.mount_point())
 	await _frames(10)
 	_key(KEY_M, true)
 	await _frames(2)
 	_key(KEY_M, false)
 	await _frames(20)
-	_gate_ok("M beside a truck of ours: at the wheel", _vehicle_pilot.vehicle == tr and tr.player_in)
-	var cam_back := (camera.global_position - tr.global_position)
+	_gate_ok("M beside a truck of ours: at the wheel", _vehicle_pilot.vehicle == truck and truck.player_in)
+	var cam_back := (camera.global_position - truck.global_position)
 	_gate_ok("the camera follows behind it (Halo)", cam_back.length() > 4.0 and cam_back.dot(camera.global_transform.basis.z) > 3.0,
 			"%.1f m from it" % cam_back.length())
 	_key(KEY_C, true)
 	await _frames(2)
 	_key(KEY_C, false)
 	await _frames(5)
-	_gate_ok("C puts the view inside the cab", camera.global_position.distance_to(tr.eye_interpolated()) < 0.3)
+	_gate_ok("C puts the view inside the cab", camera.global_position.distance_to(truck.eye_interpolated()) < 0.3)
 	_key(KEY_C, true)
 	await _frames(2)
 	_key(KEY_C, false)
-	var from := tr.feet()
+	var from := truck.feet()
 	_key(KEY_W, true)
 	await _frames(120)
 	_key(KEY_W, false)
 	await _frames(60)
-	_gate_ok("W drives it", tr.feet().distance_to(from) > 8.0, "%.1f m" % tr.feet().distance_to(from))
+	_gate_ok("W drives it", truck.feet().distance_to(from) > 8.0, "%.1f m" % truck.feet().distance_to(from))
 	# Friends near hop in its bed while it stands.
 	var friends: Array[Soldier] = []
 	for i in 2:
-		var so := _spawn_soldier(ai_nav.snap(tr.feet() + tr.global_transform.basis.x * (5.0 + i)))
+		var so := _spawn_soldier(ai_nav.snap(truck.feet() + truck.global_transform.basis.x * (5.0 + i)))
 		so.team = 0
 		so.pawn.team = 0
 		friends.append(so)
 	await _frames(400)
-	_gate_ok("friends near hop in its bed", tr.rodeo.rider_count() == 2,
-			"%d on (%s)" % [tr.rodeo.rider_count(), ", ".join(friends.map(func(x: Soldier) -> String: return x.state))])
+	_gate_ok("friends near hop in its bed", truck.rodeo.rider_count() == 2,
+			"%d on (%s)" % [truck.rodeo.rider_count(), ", ".join(friends.map(func(x: Soldier) -> String: return x.state))])
 	_key(KEY_M, true)
 	await _frames(2)
 	_key(KEY_M, false)
 	await _frames(20)
 	_gate_ok("M gets out, on foot beside it, and its riders get down", not _vehicle_pilot.is_driving()
-			and _player.is_possessing() and _player_pawn.feet().distance_to(tr.feet()) < 4.0
-			and tr.rodeo.rider_count() == 0, "%d still on" % tr.rodeo.rider_count())
+			and _player.is_possessing() and _player_pawn.feet().distance_to(truck.feet()) < 4.0
+			and truck.rodeo.rider_count() == 0, "%d still on" % truck.rodeo.rider_count())
 	for so in friends:
 		so.pawn.health.apply_impact(1e9, &"")
 
@@ -7486,6 +7489,7 @@ func _run_groups_pass() -> void:
 		await get_tree().physics_frame
 		if _brick_nodes.has(b.id) and not _bands_building(b.id):
 			break
+	@warning_ignore("integer_division")
 	_gate_ok("building %d (%d storeys) is bricks, its bands drawn" % [b.id,
 			int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR],
 			b.is_materialised() and _brick_nodes.has(b.id) and not _bands_building(b.id))
@@ -7665,6 +7669,7 @@ func _run_groups_pass() -> void:
 
 	# A section comes off: nothing of a group stays drawn where its floor has left.
 	var wb := _world_box(b)
+	@warning_ignore("integer_division")
 	var cut_storey := mini(9, int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR - 3)
 	# A metre up its storey: the blasts (1.3 m) stop short of the slab above.
 	var cut_world := wb.position.y + float(1 + cut_storey * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
@@ -7790,7 +7795,9 @@ func _run_groups_pass() -> void:
 		if g.shown:
 			before_any += 1
 	var wb2 := _world_box(b2)
+	@warning_ignore("integer_division")
 	var storeys2: int = int(b2.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+	@warning_ignore("integer_division")
 	var cut2 := wb2.position.y + float(1 + (storeys2 * 2 / 3) * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
 	_groups_cut(wb2, cut2)
 	_groups_look(face2, out2, 30.0, eye)
@@ -8056,12 +8063,12 @@ func _view_tally(b: BuildingRegistry.Building) -> Dictionary:
 		var kind := DebugView.kind_of(g)
 		if kind == DebugView.Kind.ITEMS:
 			continue
-		var name := "structure" if kind == DebugView.Kind.STRUCTURE else "interior"
-		t[name] += 1
+		var key := "structure" if kind == DebugView.Kind.STRUCTURE else "interior"
+		t[key] += 1
 		if g.layers == DebugView.HIDDEN_LAYER:
-			t[name + "_hidden"] += 1
+			t[key + "_hidden"] += 1
 		if is_equal_approx(g.transparency, DebugView.CLEAR):
-			t[name + "_clear"] += 1
+			t[key + "_clear"] += 1
 	return t
 
 
@@ -8238,6 +8245,7 @@ func _groups_shown_above(b: BuildingRegistry.Building, y: float) -> int:
 		if node == null:
 			continue
 		var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
+		@warning_ignore("integer_division")
 		for i in buffer.size() / FurnitureMesh.STRIDE:
 			var at := i * FurnitureMesh.STRIDE
 			if buffer[at + 7] > y and absf(buffer[at]) + absf(buffer[at + 5]) + absf(buffer[at + 10]) > 0.0001:
@@ -8270,6 +8278,7 @@ func _groups_hanging(b: BuildingRegistry.Building, y: float) -> int:
 					registry.palette, room, offset).buffer
 			for r in range(0, rows.size(), 16):
 				fresh[Vector3(rows[r + 3], rows[r + 7], rows[r + 11]).snapped(Vector3.ONE * 0.01)] = true
+		@warning_ignore("integer_division")
 		for i in buffer.size() / FurnitureMesh.STRIDE:
 			var at := i * FurnitureMesh.STRIDE
 			if buffer[at + 7] <= y or absf(buffer[at]) + absf(buffer[at + 5]) + absf(buffer[at + 10]) <= 0.0001:
@@ -11352,9 +11361,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif event.ctrl_pressed and event.shift_pressed:
 				# From further off, coming for the player with a squad in the back.
 				var far := camera.global_position - camera.global_transform.basis.z * 60.0
-				var tr := _spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,
+				var truck := _spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,
 						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName])
-				tr.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
+				truck.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
 						else _on_ground(camera.global_position))
 			elif event.ctrl_pressed:
 				_spawn_truck(truck_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, [] as Array[StringName])
@@ -11936,7 +11945,6 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		var cs := b.chunks()
 		return cs[frame] if frame < cs.size() else -1
 	var on_toppled := func(id: int) -> void:
-		var b := registry.get_building(id)
 		_free_shell(id)
 		_drop_groups(id)
 		registry.hand_over(id)

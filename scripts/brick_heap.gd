@@ -119,14 +119,14 @@ func _heap_for(size: Vector3, cell: Vector2i) -> Heap:
 	return h
 
 
-## The studs of the street a brick of `size` turned by `basis` covers at `at`.
-static func _footprint(size: Vector3, basis: Basis, at: Vector3) -> Array:
+## The studs of the street a brick of `size` turned by `b_basis` covers at `at`.
+static func _footprint(size: Vector3, b_basis: Basis, at: Vector3) -> Array:
 	var cs := BrickWorld.get_cell_size()
 	var hx := 0.0
 	var hz := 0.0
 	for k in 3:
-		hx += absf(basis[k].x) * size[k] * 0.5
-		hz += absf(basis[k].z) * size[k] * 0.5
+		hx += absf(b_basis[k].x) * size[k] * 0.5
+		hz += absf(b_basis[k].z) * size[k] * 0.5
 	var out := []
 	for cx in range(floori((at.x - hx) / cs.x + 0.01), floori((at.x + hx) / cs.x - 0.01) + 1):
 		for cz in range(floori((at.z - hz) / cs.z + 0.01), floori((at.z + hz) / cs.z - 0.01) + 1):
@@ -159,10 +159,10 @@ func _top(h: Heap, slot: int, add: bool) -> void:
 		if add:
 			if not _tops.has(c):
 				_tops[c] = []
-			var list: Array = _tops[c]
-			list.append([top, h.ground[slot]])
-			if list.size() > TOPS_KEPT:
-				list.remove_at(0)
+			var kept: Array = _tops[c]
+			kept.append([top, h.ground[slot]])
+			if kept.size() > TOPS_KEPT:
+				kept.remove_at(0)
 			continue
 		var list: Array = _tops.get(c, [])
 		for i in list.size():
