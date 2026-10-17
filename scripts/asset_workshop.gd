@@ -267,6 +267,7 @@ func _ready() -> void:
 	_save_path = ASSET_QUICK_SAVE
 	if _menu != null:
 		_menu.asset_mode(ASSET_KINDS)
+		_build_menus()
 	_set_asset_kind(recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
@@ -405,6 +406,14 @@ func _shot() -> void:
 		var path := "user://asset_shots/%s.png" % VIEWS[v]
 		img.save_png(path)
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
+	if "--menu" in OS.get_cmdline_user_args():
+		# The Gun menu open, to see the menus.
+		for c in _menu._spacer.get_parent().get_children():
+			if c is MenuButton and (c as MenuButton).text == "Gun":
+				(c as MenuButton).show_popup()
+		for _i in 6:
+			await get_tree().process_frame
+		get_viewport().get_texture().get_image().save_png("user://asset_shots/menu.png")
 	if hands_on:
 		# Mid-reload: the magazine out, the left hand pinching it.
 		set_view(1)
@@ -2800,7 +2809,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them; every key still works. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shape brush[/b], in any tool: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -4224,6 +4233,7 @@ var _paint_box: VBoxContainer
 var _draw_box: VBoxContainer
 var _draws: OptionButton
 var _rail_scroll: ScrollContainer
+var _part_pick: OptionButton
 var _shape_box2: VBoxContainer
 var _shape_size_label: Label
 var _shape_size_slider: HSlider
@@ -4270,6 +4280,16 @@ func _build_rail(layer: CanvasLayer) -> void:
 	box.custom_minimum_size.x = RAIL_W - 16
 	_rail_scroll.add_child(box)
 	_rail_box = box
+	var prow := HBoxContainer.new()
+	box.add_child(prow)
+	var pl := Label.new()
+	pl.text = "Part"
+	prow.add_child(pl)
+	_part_pick = OptionButton.new()
+	_part_pick.focus_mode = Control.FOCUS_NONE
+	_part_pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_part_pick.item_selected.connect(func(i: int) -> void: select_part(i))
+	prow.add_child(_part_pick)
 	var title := Label.new()
 	title.text = "Tools"
 	box.add_child(title)
@@ -4480,6 +4500,12 @@ func _rail_process() -> void:
 	if _rail == null:
 		return
 	var on := rail_active()
+	if _part_pick.item_count != part_names.size():
+		_part_pick.clear()
+		for n in part_names:
+			_part_pick.add_item(n)
+	if _part_pick.selected != part_sel:
+		_part_pick.select(part_sel)
 	for id in _rail_buttons:
 		(_rail_buttons[id] as Button).set_pressed_no_signal(id == on)
 	var n := _paint_radius if on == "paint" else brush_size
@@ -6018,3 +6044,116 @@ static func _whole_text(w: Dictionary) -> String:
 	return "; whole gun in one piece: %s%s" % ["watertight" if bool(w.watertight) and int(w.get("pieces", 0)) == 1
 			else "NOT CLEAN", (", %d edge(s) touching only along a line" % int(w.pinched_edges))
 			if int(w.get("pinched_edges", 0)) > 0 else ""]
+
+
+# ---------------------------------------------------------------------------
+# Every key in a menu: nothing to remember (2026-10-16)
+# ---------------------------------------------------------------------------
+
+## The bar's menus for this scene: every action a key does, with the key beside it. The
+## keys still work; a menu item only calls the same thing. What is held or aimed (Tab,
+## hold E, the number keys, the wheel, the mouse buttons) stays a key and is listed under
+## Help.
+var _menu_actions: Array[Callable] = []
+
+
+func _menu_items(rows: Array) -> Array:
+	var out := []
+	for r in rows:
+		if (r as Array).is_empty():
+			out.append([])
+			continue
+		out.append(["%s      %s" % [r[0], r[1]] if String(r[1]) != "" else String(r[0]), 1000 + _menu_actions.size()])
+		_menu_actions.append(r[2])
+	return out
+
+
+func _on_asset_menu(id: int) -> void:
+	if id >= 1000 and id - 1000 < _menu_actions.size():
+		_menu_actions[id - 1000].call()
+
+
+func _build_menus() -> void:
+	var menus := [
+		["Edit", [
+			["Redo", "Shift Z", func() -> void: redo()],
+		]],
+		["View", [
+			["3D view", "Alt 0", func() -> void: set_view(0)],
+			["Side view", "Alt 1", func() -> void: set_view(1)],
+			["Top view", "Alt 2", func() -> void: set_view(2)],
+			["Front view", "Alt 3", func() -> void: set_view(3)],
+			["Zoom in", "Home", func() -> void: zoom(0.85)],
+			["Zoom out", "End", func() -> void: zoom(1.0 / 0.85)],
+			[],
+			["Section: hide what is past the plane", "O", func() -> void: set_section(not section_on)],
+			["Outlines: none / all parts / this part", "P", func() -> void: set_outlines((outlines + 1) % 3)],
+			["Grid", "G", func() -> void:
+				_grid_on = not _grid_on
+				_grid.visible = _grid_on],
+			[],
+			["Free placement on the working plane", "Alt F", func() -> void: set_free(not free_place)],
+			["Working plane forward", "PgUp", func() -> void: move_work_plane(1)],
+			["Working plane back", "PgDn", func() -> void: move_work_plane(-1)],
+			[],
+			["Mirror", "Alt S", func() -> void: set_mirror(not mirror_on)],
+			["Mirror plane where the ghost is", "Alt Shift S", func() -> void: mirror_here()],
+		]],
+		["Part", [
+			["Next part", "Y", func() -> void: select_part(part_sel + 1)],
+			["Previous part", "Shift Y", func() -> void: select_part(part_sel - 1)],
+			[],
+			["This part leaves smooth / as bricks", "N", func() -> void: toggle_smooth()],
+			["Connection point where the ghost is", "J", func() -> void: toggle_point_here()],
+			[],
+			["Clear this view's sketch", "", func() -> void: clear_sketch(_sketch_key())],
+			["Clear the part's sketch, every view", "", func() -> void: clear_part_sketch(part_names[part_sel])],
+		]],
+		["Brick", [
+			["Turn the brick in hand", "R", func() -> void:
+				_yaw = (_yaw + 1) % 4],
+			["Flip it (studs down)", "F", func() -> void:
+				_flip = not _flip],
+			["Turn the last one placed", "T", func() -> void: _rotate_last()],
+			[],
+			["Next colour", ".", func() -> void: _hotbar.set_colour(_colour + 1)],
+			["Previous colour", ",", func() -> void: _hotbar.set_colour(_colour - 1)],
+			["Paint", "B", func() -> void: rail_pick("place" if _painting else "paint")],
+		]],
+		["Gun", [
+			["Explode: pull the parts apart", "Alt E", func() -> void: set_exploded(not exploded)],
+			["Hands", "Alt H", func() -> void: set_hands(not hands_on)],
+			["Play: fire and reload", "Alt P", func() -> void: play_cycle()],
+			[],
+			["Export to game", "Alt X", func() -> void: export_game()],
+			["Export to print (parts and whole)", "Alt B", func() -> void: export_print()],
+			["Export and preview in Blender", "F12", func() -> void: export_and_preview()],
+		]],
+		["Photos", [
+			["Photos panel", "F2", func() -> void: _toggle_panel()],
+			["Guide models panel", "F3", func() -> void: _toggle_guide_panel()],
+			["Wand: fill a patch of a photo", "F4", func() -> void: set_tool("" if tool == "wand" else "wand")],
+			["Measure", "Alt M", func() -> void: set_measure(not measure_on)],
+		]],
+		["Help", [
+			["How to start, and every key", "F10", func() -> void: show_help(not _help.visible)],
+			["The building workshop's key list", "F1", func() -> void:
+				_keys_on = not _keys_on
+				_keys_panel.visible = _keys_on],
+			[],
+			["Held or aimed, keys only:", "", func() -> void: pass],
+			["  all parts browser", "Tab", func() -> void: pass],
+			["  lock the height, slide anywhere", "hold E", func() -> void: pass],
+			["  toolbar slot", "1-9, wheel", func() -> void: pass],
+			["  pick the brick under the cursor", "MMB", func() -> void: pass],
+			["  shape brush: lay / carve, size", "Ctrl + LMB / RMB, Ctrl + wheel", func() -> void: pass],
+		]],
+	]
+	for m in menus:
+		var mb: MenuButton = _menu.add_menu(String(m[0]), _menu_items(m[1]), _on_asset_menu)
+		if m[0] == "Help":
+			# The key-only rows are a list, not actions.
+			var p := mb.get_popup()
+			for i in p.item_count:
+				if p.get_item_text(i).begins_with("  ") or p.get_item_text(i).begins_with("Held"):
+					p.set_item_disabled(i, true)

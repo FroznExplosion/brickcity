@@ -139,6 +139,12 @@ copies every sketch.
 | Apart or in one | every export makes both: `<part>.stl` to print the parts apart and plug them together, and `<name>_whole.stl`, the gun as one solid -- each part again without the stud holes between them (a stud fills where its hole would be), all unioned -- to print in one go |
 | The Thompson | 8 parts, 220 x 12 x 59 mm, every part watertight, no loose bits; its body has one pinched edge. Whole: one piece, watertight, 3 pinched edges (the front sight's sides, the grip where it meets the body) |
 
+### Nothing to remember (2026-10-16)
+
+| Change | Why |
+|---|---|
+| Every action a key does is in a menu on the bar -- View, Part, Brick, Gun, Photos, Help, and Redo under Edit -- with its key beside it (`WorkshopMenu.add_menu`; the menus do not bind the keys, the scene's own handlers keep them, so nothing fires twice). The tools stay on the rail, with a part picker at its top. Held or aimed things (Tab, hold E, the number keys and wheel, the middle button, Ctrl + click) stay keys and are listed under Help | the user should not have to remember a key |
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |

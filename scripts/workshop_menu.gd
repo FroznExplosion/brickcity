@@ -33,6 +33,7 @@ var _insert: MenuButton
 var _edit: MenuButton
 ## The asset workshop's kinds (gun, mech) when this is its bar: Open lists only them.
 var _asset_kinds: Array = []
+var _spacer: Control
 var _finish: MenuButton
 var _type: MenuButton
 var _layer: MenuButton
@@ -223,6 +224,7 @@ func _build_bar() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
+	_spacer = spacer
 	_title = Label.new()
 	_title.add_theme_color_override("font_color", Color(0.84, 0.87, 0.93))
 	row.add_child(_title)
@@ -574,3 +576,35 @@ func show_program(program: Dictionary) -> void:
 	for k in _program_spins:
 		(_program_spins[k] as SpinBox).value = int(program.get(k, 0 if not program.is_empty() else 1))
 	_program_dialog.popup_centered()
+
+
+## A menu of the caller's own on the bar (before the title), or, if one of that name is
+## there already, its items added under a separator. `items` rows are [label, id] or []
+## for a separator; `handler` gets the id. The ids are the caller's: give ones an
+## existing menu does not use. Nothing is bound to a key here -- a key the caller handles
+## itself is written into the label, so a menu and a key never both fire.
+func add_menu(label: String, items: Array, handler: Callable) -> MenuButton:
+	var row := _spacer.get_parent()
+	var mb: MenuButton = null
+	for c in row.get_children():
+		if c is MenuButton and (c as MenuButton).text == label:
+			mb = c
+	var p: PopupMenu
+	if mb == null:
+		mb = MenuButton.new()
+		mb.text = label
+		mb.flat = true
+		mb.switch_on_hover = true
+		row.add_child(mb)
+		row.move_child(mb, _spacer.get_index())
+		p = mb.get_popup()
+	else:
+		p = mb.get_popup()
+		p.add_separator()
+	for it in items:
+		if (it as Array).is_empty():
+			p.add_separator()
+		else:
+			p.add_item(String(it[0]), int(it[1]))
+	p.id_pressed.connect(handler)
+	return mb
