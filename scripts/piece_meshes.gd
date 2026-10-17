@@ -174,8 +174,9 @@ static func stud_card() -> ArrayMesh:
 	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 2, 1, 0, 3, 2])
 	_stud_card = ArrayMesh.new()
 	_stud_card.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	_stud_card.custom_aabb = AABB(Vector3(-STUD_R * 2.0, -STUD_R, -STUD_R * 2.0),
-			Vector3(STUD_R * 4.0, tall + STUD_R * 2.0, STUD_R * 4.0))
+	# Drawn up to three times its outline long from steep above (max_tilt).
+	_stud_card.custom_aabb = AABB(Vector3(-STUD_R * 4.0, -STUD_R, -STUD_R * 4.0),
+			Vector3(STUD_R * 8.0, tall * 3.0 + STUD_R * 2.0, STUD_R * 8.0))
 	return _stud_card
 
 

@@ -56,6 +56,10 @@ const VIEWS := [
 	# One top, through a very long lens: as a card at 30 m, a square post at 15.
 	["one_card", Vector3(84.0, 8.0, 30.0), Vector3(84.2, 2.55, 0.7), 45.0, 2.5],
 	["one_square", Vector3(84.0, 4.5, 15.5), Vector3(84.2, 2.55, 0.7), 45.0, 5.0],
+	# The same lens with the detail left at the bare distance: the far tiers
+	# themselves, magnified (the views above are a scope, and get theirs back).
+	["one_card_raw", Vector3(84.0, 8.0, 30.0), Vector3(84.2, 2.55, 0.7), 70.0, 2.5, false],
+	["one_card_high", Vector3(84.0, 22.0, 18.0), Vector3(84.2, 2.55, 0.7), 70.0, 2.5, false],
 ]
 const ROOM := Vector3(40, 0, 0)
 const FAR := Vector3(80, 0, 0)
@@ -235,8 +239,13 @@ func _process(_d: float) -> bool:
 	if phase == 0:
 		BrickMaterials.set_look(look[1], look[2], false)
 		_cam.look_at_from_position(v[1], v[2])
-		BrickNear.stud_card_radius = v[3] if v.size() > 3 else 45.0
+		BrickNear.stud_card_radius = v[3] if v.size() > 3 else 70.0
 		_cam.fov = v[4] if v.size() > 4 else 50.0
+		# A long lens is a scope: detail goes by distance over the zoom, as
+		# the city does it (lod_zoom, BrickNear.zoom).
+		_near.zoom = tan(deg_to_rad(25.0)) / tan(deg_to_rad(_cam.fov * 0.5)) \
+				if v.size() <= 5 or v[5] else 1.0
+		RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / _near.zoom)
 		_near.settle(_cam.global_position)
 	elif phase == 5:
 		var path := "%s/print_look_%s_%s.png" % [_out, look[0], v[0]]

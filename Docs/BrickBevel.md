@@ -187,7 +187,7 @@ a mesh of the whole chunk.
   | `stud_bevel_radius`, 8 m | `PieceMeshes.stud()`, the rim bevelled | 38 |
   | `stud_round_radius`, 13 m | `stud_plain()`, an octagon | 22 |
   | `stud_radius`, 18 m | `stud_square()`, a tapered square post of the same plan area | 10 |
-  | `stud_card_radius`, 45 m | `stud_card()`, a card turned to the camera | 2 |
+  | `stud_card_radius`, 70 m | `stud_card()`, a card turned to the camera | 2 |
 
   A stud is 0.21 m: 36 pixels wide at 8 m, 22 at 13, 16 at 18 (1080p). Square is visibly square
   at 8 m and a bump at 18, which is why it starts at 13; set `stud_round_radius` to
@@ -200,7 +200,16 @@ a mesh of the whole chunk.
   foot on the stud's front edge so the brick's top never hides it; flat colour, a normal that
   rounds across it and faces up over its top; no print. A band beyond `stud_radius` holds only
   cards and is sorted again every `STUD_RESORT_FAR` (4 m) of camera travel, not every metre.
-  Set `stud_card_radius` to `stud_radius` to turn the ring off.
+  Set `stud_card_radius` to `stud_radius` to turn the ring off. The card never tips back more
+  than `max_tilt` (0.6 rad) from upright -- from high above, facing the camera, it lay flat on the
+  top as a square tile -- and is drawn long enough that it still covers the stud's outline from
+  there; a skirt below its foot, hidden by the brick's top, closes the line of sky under it.
+
+* **Zoom.** Through a scope the world is as near as it looks. The city passes `step` the zoom
+  (the unzoomed field of view's tangent over the camera's, capped at 6) and every distance here
+  is divided by it: a wall seen through 4x glass is chamfered and studded -- bevelled studs, not
+  cards -- as one a quarter as far off. The shaders take the same factor as the `lod_zoom`
+  shader global (its inverse; `project.godot`), so the printed detail comes back too.
 * **Damage.** The owner patches its flat bands and calls `damaged(chunk, sections)` with the
   bands that patch moved. The chamfered ones are re-indexed and patched the same way
   (`update_chamfer_regions`), and those bands' studs are counted again, two bands a frame.

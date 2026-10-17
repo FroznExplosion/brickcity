@@ -109,6 +109,7 @@ uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.7;
 // the thing the drawn seam was there to stop. Evenly, not by depth: the two
 // copies of a facet count depth from opposite sides.
 instance uniform float geo_bevel = 0.0;
+global uniform float lod_zoom;
 uniform float outline_blend_begin = 3.0;
 uniform float outline_blend_end = 9.0;
 uniform float groove_darken : hint_range(0.0, 1.0) = 0.78;   // 1.0 = invisible
@@ -189,7 +190,10 @@ void fragment() {
     if (authored) {
         d = min(min(v_uv.x, v_uv.y), v_face.x - 200.0);
     }
-    float dist = length(VERTEX);
+    // Through a scope the world is as near as it looks: every distance
+    // below is scaled by the zoom (lod_zoom, a global the scene sets from the
+    // camera; 1 unzoomed), so a zoomed-in wall gets its detail back.
+    float dist = length(VERTEX) * lod_zoom;
     // FAR is cheap. Most of a city view is bricks too far off for any of the
     // detail below to show: past where each part has faded to nothing it is
     // not worked out at all -- the drawn seam past seam_fade_end, the shaded
@@ -388,6 +392,10 @@ void fragment() {
             float bw = ps_bead(face, mat);
             float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
                            min(v_uv.y, fsize.y - v_uv.y));
+            // The brick's corners are bevelled, so its outline is cut at 45
+            // degrees there, and the walls the nozzle walks round it turn
+            // the corner the same way (ps_corner_cut).
+            d2 = ps_corner_cut(v_uv, fsize, d2);
             float wall = float(ps_walls(mat)) * bw;
             if (d2 < wall && print_near) {
                 t = d2 / bw;
@@ -500,6 +508,9 @@ void fragment() {
             // What the hollow loses is sky: ambient light and reflections
             // (AO), not the sun's light or its own colour.
             occlusion = mix(shade, 1.0, solid);
+            // ...and a little of its light: enough that the terraces read as
+            // a hollow going up into the part, not a pattern drawn on it.
+            albedo *= mix(mix(1.0, shade, 0.6), 1.0, solid);
             print_rough += (1.0 - solid) * 0.45;
         }
         if (print_near && face == 0 && !authored && !facet

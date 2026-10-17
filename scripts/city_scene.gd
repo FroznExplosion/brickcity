@@ -11011,8 +11011,16 @@ func _process(delta: float) -> void:
 	if _terrain_streamer != null:
 		_terrain_streamer.follow(Vector2(camera.global_position.x,
 				camera.global_position.z))
+	# How far the camera is zoomed in (a scope, any narrowed view): the
+	# unzoomed horizontal field over the camera's, as tangents. Detail goes by
+	# distance over that -- the near tier's and the shaders' (lod_zoom).
+	var aspect := get_viewport().get_visible_rect().size.aspect()
+	var zoom_in := maxf(tan(deg_to_rad(PlayerView.hfov) * 0.5)
+			/ maxf(tan(deg_to_rad(camera.fov) * 0.5) * aspect, 1e-4), 1.0)
+	zoom_in = minf(zoom_in, 6.0)   # a scripted shot through a pinhole is not a scope
+	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
-		brick_near.step(camera.global_position)
+		brick_near.step(camera.global_position, zoom_in)
 	if _sea != null:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
