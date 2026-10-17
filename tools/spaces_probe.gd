@@ -98,8 +98,8 @@ func _cell_kind(c: Vector3i) -> int:
 	return StructureSpaces.Cell.SOLID
 
 
-func _find(seed: Vector3i) -> Dictionary:
-	return StructureSpaces.find_space(seed, _cell_kind, Vector3i.ZERO, Vector3i(30, 30, 30))
+func _find(start: Vector3i) -> Dictionary:
+	return StructureSpaces.find_space(start, _cell_kind, Vector3i.ZERO, Vector3i(30, 30, 30))
 
 
 func _kinds(found: Dictionary) -> Dictionary:

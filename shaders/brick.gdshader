@@ -338,7 +338,14 @@ void fragment() {
         // boxes count in UV); a plate is a whole number of layers, so the
         // wrap is invisible. Its flat top and bottom go by `d`, its distance
         // to its own edges, as a box's do by their rectangle.
-        if (facet) {
+        if (facet && abs(v_local_normal.y) > 0.3) {
+            // The bevel along a top or bottom edge, and the corner caps: no
+            // lines. Sliced it is two layers of staircase, and drawn they
+            // read as the top's own loops running out over the bevel -- the
+            // top's texture has to stop where the bevel starts.
+            t = 0.0;
+            bead_face = 0;
+        } else if (facet) {
             float wrap = PS_PLATE * 64.0;
             t = (v_local.y - floor(v_local.y / wrap) * wrap) / ps_layer(mat);
             stairs = abs(v_local_normal.y) < 0.995 ? 1.0 : 0.0;
@@ -479,13 +486,44 @@ void fragment() {
                 shade = mix(under_wall, under_cavity, 0.5);
             } else if (underside_hollow && solid < 0.99) {
                 const float SD_STEP = 0.003;
-                float s0 = max(ps_under_sd(cell, fsize), 0.0);
+                // Depth: the view ray is walked up into the hollow, whose
+                // roof is `under_slope` above the bottom less what the
+                // terraces take (min(sd, under_slope): 45 degrees from every
+                // wall). Stepped by how much room is left over how fast the
+                // ray crosses it, it cannot step through a wall (the roof
+                // rises at most 1:1), so it lands on the terrace or the
+                // bridge the eye really sees -- and the rim and the ribs hide
+                // the hollow behind them, and it moves as the eye does. Near
+                // only; out to under_parallax_range it flattens to the roof
+                // straight overhead, the picture past it.
+                vec2 hp = cell;
+                float pfade = 1.0 - smoothstep(under_parallax_range * 0.6,
+                        under_parallax_range, dist);
+                if (pfade > 0.0) {
+                    vec3 dv = transpose(mat3(MODEL_MATRIX))
+                            * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
+                    if (dv.y > 0.02) {
+                        vec2 run = dv.xz / dv.y * pfade;
+                        float lip = 1.0 + length(run);
+                        float hs = 0.0;
+                        for (int i = 0; i < 10; i++) {
+                            float room = clamp(ps_under_sd(hp, fsize), 0.0, under_slope) - hs;
+                            if (room < 0.0005) {
+                                break;
+                            }
+                            float st = room / lip;
+                            hs += st;
+                            hp += run * st;
+                        }
+                    }
+                }
+                float s0 = max(ps_under_sd(hp, fsize), 0.0);
                 float near = 1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist);
                 float slope = 1.0 - smoothstep(under_slope - fwidth(s0), under_slope, s0);
                 vec3 roof_n = NORMAL;
                 if (slope > 0.0) {
-                    vec2 g = vec2(ps_under_sd(cell + vec2(SD_STEP, 0.0), fsize) - s0,
-                                  ps_under_sd(cell + vec2(0.0, SD_STEP), fsize) - s0);
+                    vec2 g = vec2(ps_under_sd(hp + vec2(SD_STEP, 0.0), fsize) - s0,
+                                  ps_under_sd(hp + vec2(0.0, SD_STEP), fsize) - s0);
                     float gl = length(g);
                     if (gl > 1e-7) {
                         vec2 a = g / gl;
@@ -494,7 +532,7 @@ void fragment() {
                 }
                 // The steps' lines and the bridge's, as one count: a step a
                 // layer up the slope, a bridge line a bead across.
-                float lt = slope > 0.5 ? s0 / ps_layer(mat) : cell.x / bottom_bead_width;
+                float lt = slope > 0.5 ? s0 / ps_layer(mat) : hp.x / bottom_bead_width;
                 float aa = max(fwidth(lt), 1e-5);
                 float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
                 float ph = fract(lt);

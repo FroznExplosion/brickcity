@@ -102,16 +102,16 @@ func refind() -> void:
 	var openings: Array = rec.openings
 	var kept := []
 	for s: Dictionary in rec.spaces:
-		var seed := _v3(s.seed)
+		var start := _v3(s.seed)
 		var mine := openings.filter(func(o) -> bool: return int(o.space) == int(s.id))
-		var found := _find(seed)
+		var found := _find(start)
 		if not found.ok:
 			# Keep what it was, and say why it cannot be found now.
 			s["lost"] = found.why
 			kept.append_array(mine)
 			continue
 		s.erase("lost")
-		var made := StructureSpaces.record_space(int(s.id), String(s.kind), 0, seed, found, mine)
+		var made := StructureSpaces.record_space(int(s.id), String(s.kind), 0, start, found, mine)
 		s.floor_y = made[0].floor_y
 		s.ceil_y = made[0].ceil_y
 		s.columns = made[0].columns
@@ -139,19 +139,19 @@ func click(from: Vector3, dir: Vector3) -> void:
 	if aim.is_empty():
 		message = "nothing there"
 		return
-	var seed: Vector3i = aim[0]
-	var si := StructureSpaces.space_at(rec, seed)
+	var start: Vector3i = aim[0]
+	var si := StructureSpaces.space_at(rec, start)
 	if si >= 0:
 		selected = si
 		message = "selected: %s" % rec.spaces[si].kind
 		draw()
 		return
 	_collect_decor()
-	var found := _find(seed)
+	var found := _find(start)
 	if not found.ok:
 		message = "no room there: %s" % found.why
 		return
-	var made := StructureSpaces.record_space(_next_id(), kind, 0, seed, found)
+	var made := StructureSpaces.record_space(_next_id(), kind, 0, start, found)
 	rec.spaces.append(made[0])
 	rec.openings.append_array(made[1])
 	selected = rec.spaces.size() - 1
@@ -240,11 +240,11 @@ func _next_id() -> int:
 	return id
 
 
-func _find(seed: Vector3i) -> Dictionary:
+func _find(start: Vector3i) -> Dictionary:
 	var f: int = ws.asm.frames[0]
 	var lo: Vector3i = ws.world.get_chunk_origin(f)
 	var hi: Vector3i = lo + ws.world.get_chunk_dims(f)
-	return StructureSpaces.find_space(seed, _cell_kind, lo, hi)
+	return StructureSpaces.find_space(start, _cell_kind, lo, hi)
 
 
 ## What the finder sees in a cell of the upright grid: furniture and detail
@@ -375,27 +375,27 @@ func draw() -> void:
 	for i in (rec.spaces as Array).size():
 		var s: Dictionary = rec.spaces[i]
 		var col := ROOM_LOST if s.has("lost") else (ROOM_SELECTED if i == selected else ROOM)
-		var set := {}
+		var cols := {}
 		for c in s.columns:
-			set[Vector2i(int(c[0]), int(c[1]))] = true
+			cols[Vector2i(int(c[0]), int(c[1]))] = true
 		var y0 := int(s.floor_y) + 1
 		var y1 := int(s.ceil_y)
 		var sum := Vector2.ZERO
-		for c: Vector2i in set:
+		for c: Vector2i in cols:
 			sum += Vector2(c)
 			for side in [[Vector2i(-1, 0), Vector2i(0, 0), Vector2i(0, 1)],
 					[Vector2i(1, 0), Vector2i(1, 0), Vector2i(1, 1)],
 					[Vector2i(0, -1), Vector2i(0, 0), Vector2i(1, 0)],
 					[Vector2i(0, 1), Vector2i(0, 1), Vector2i(1, 1)]]:
-				if set.has(c + (side[0] as Vector2i)):
+				if cols.has(c + (side[0] as Vector2i)):
 					continue
 				var a: Vector2i = c + (side[1] as Vector2i)
 				var b: Vector2i = c + (side[2] as Vector2i)
 				for y in [y0, y1]:
 					_line(im, Vector3i(a.x, y, a.y), Vector3i(b.x, y, b.y), col)
 					any = true
-		if not set.is_empty():
-			var mid := sum / float(set.size())
+		if not cols.is_empty():
+			var mid := sum / float(cols.size())
 			var l := Label3D.new()
 			l.text = String(s.kind) + ("  (lost)" if s.has("lost") else "")
 			l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
