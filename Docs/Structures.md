@@ -40,6 +40,20 @@ A damaged building's far tier is a coarse mesh of its own grid (`BrickWorld.coar
 a far piece's stand-in already is), rebuilt when its bricks change, on a worker. An undamaged one
 keeps the shared recipe shell (cheap, `CityScene._recipe_shell_mesh`).
 
+**Where to start (handoff, 2026-10-16).** Past `DEMESH_RANGE` the demesh loop
+(`CityScene`, the loop over `_materialised` just above `_demesh`) calls `_demesh(id)`, which drops
+the bake and the brick node and calls `_make_shell(id, true)`: the RECIPE's shell with its bands'
+damage punched in -- what drew the standing skeleton. `_shell_stale` re-makes it when the bricks
+change. The change: in `_demesh` (and where `_shell_stale` is served), a building whose bricks are
+damaged (`b.damage_profile` not empty, or fewer live bricks than its template) gets a node drawing
+`BrickWorld.coarse_chunk_async(b.chunk)` instead, taken when done the way
+`IslandManager._build_coarse` / `_coarse_jobs` / `_finish_coarse` take a far piece's (copy that
+pattern; the stand-in is in chunk space, so the node's transform is `b.xform` as the brick node's
+is). Keep the shell's collision as it is (`_make_shell_body`); only the drawing changes. Check:
+`big_city.tscn -- --far --buildings=150` (its "damaged build ... far shell" check reads the shell and
+will want to read the stand-in instead -- say so in the commit), `--view --big`, and a picture of a
+collapsed wide building from 150 m against one from 20 m (the user's two pictures).
+
 ### 2.2 Tiles, not bands — not started
 Every structure is cut into 3D tiles of about 32 x 32 studs by one storey, each with its own mesh,
 collision, near tier, far mesh and dirty flag. A tower is a stack of tiles, a wide building a grid,
