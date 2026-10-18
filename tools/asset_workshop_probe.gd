@@ -106,6 +106,7 @@ func _tick() -> void:
 	_round8()
 	_round9()
 	_round10()
+	_form()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1159,4 +1160,112 @@ func _round10() -> void:
 	click = click.duplicate()
 	click.pressed = true
 	_ok("set to drag a box, a plain click is the drag's", not _ws._shape_brush_input(click))
+	_ws.rail_pick("place")
+
+
+func _brush(button: MouseButton, cells: Array) -> void:
+	# A shape-brush stroke: pressed on the first cell, dragged over the rest, let go.
+	_ws._cell = cells[0]
+	var e := InputEventMouseButton.new()
+	e.button_index = button
+	e.pressed = true
+	_ws._shape_brush_input(e)
+	for c in cells.slice(1):
+		_ws._cell = c
+		_ws._shape_brush_input(InputEventMouseMotion.new())
+	e = e.duplicate()
+	e.pressed = false
+	_ws._shape_brush_input(e)
+
+
+func _form() -> void:
+	# The shape brush lays into the part's form (Docs/AssetWorkshop.md, "The form"): a
+	# stroke is kept with the part, its bricks are the part's sketch bricks, so the part can
+	# be laid again from what was drawn -- what the size and curve sliders will do.
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.rail_pick("shape")
+	_ws.shape_mode = "brush"
+	_ws.brush3d = "cube"
+	_ws.shape_size = 2
+	_brush(MOUSE_BUTTON_LEFT, [Vector3i(30, 20, 30), Vector3i(33, 20, 30)])
+	var solids := []
+	for k in _ws.sketches:
+		if _ws.sketches[k].has("solid"):
+			solids.append(_ws.sketches[k])
+	_ok("a brush stroke is kept in the part's form, one entry, a stamp a centre",
+			solids.size() == 1 and (solids[0].solid.at as Array).size() == 2 and solids[0].part == "body", str(solids))
+	_ok("and filled: two cubes of 2 x 5 plates x 2", _volume() == 40, "%d cells" % _volume())
+	_ok("its bricks are the form's", (_ws.part_bricks.get("body", []) as Array).size() == _ws.recipe.size()
+			and _ws.recipe.size() > 0, "%d listed, %d laid" % [(_ws.part_bricks.get("body", []) as Array).size(), _ws.recipe.size()])
+	_ws._undo()
+	var left := 0
+	for k in _ws.sketches:
+		left += 1
+	_ok("one Z takes the stroke and its bricks", _volume() == 0 and left == 0, "%d cells, %d sketches" % [_volume(), left])
+	_ws.redo()
+	_ok("shift Z puts them back", _volume() == 40 and _ws.sketches.size() == 1, "%d cells" % _volume())
+	# A sketch and a shape in one part, and a carve through both.
+	_ws.rail_pick("sketch")
+	_ws.work_plane = "side"
+	_ws.work_depth = 31.0
+	_ws.part_width["body"] = 2
+	_ws.sketch_region([Vector2(20, 20), Vector2(30, 20), Vector2(30, 25), Vector2(20, 25)])
+	var both := _volume()
+	var want := {}
+	for c in _ws.brush_shape_cells("cube", Vector3i(30, 20, 30), 2).keys() + _ws.brush_shape_cells("cube", Vector3i(33, 20, 30), 2).keys():
+		want[c] = true
+	for x in range(20, 30):
+		for y in range(20, 25):
+			for z in [30, 31]:
+				want[Vector3i(x, y, z)] = true
+	var got := 0
+	for c in want:
+		if _ws.world.is_solid(_ws.chunk, c):
+			got += 1
+	var form: int = _ws.part_volume(_ws.part_sketches("body")).size()
+	_ok("a sketch beside it adds to the same part", form == want.size() and got == want.size(),
+			"form %d, filled %d, wanted %d" % [form, got, want.size()])
+	_ws.rail_pick("shape")
+	_ws.shape_mode = "brush"
+	_ws.brush3d = "cube"
+	_ws.shape_size = 2
+	_brush(MOUSE_BUTTON_RIGHT, [Vector3i(25, 22, 31)])
+	var carved := 0
+	for c in _ws.brush_shape_cells("cube", Vector3i(25, 22, 31), 2):
+		if c.x >= 20 and c.x < 30 and c.y >= 20 and c.y < 25 and c.z >= 30 and c.z < 32:
+			carved += 1
+	_ok("carving cuts the part's form, the sketch and the stamp kept", _volume() == both - carved and carved > 0
+			and _ws.sketches.size() == 3, "%d cells, %d carved, %d entries" % [_volume(), carved, _ws.sketches.size()])
+	var vol: Dictionary = _ws.part_volume(_ws.part_sketches("body"))
+	var filled := 0
+	for c in vol:
+		if _ws.world.is_solid(_ws.chunk, c):
+			filled += 1
+	var stray := 0
+	for k in _ws.recipe.size():
+		var arch := String(_ws.recipe.part_of(k))
+		if not (arch.begins_with("brick_") or arch.begins_with("plate_")):
+			continue
+		var size := BrickPalette.size_of(arch)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					if not vol.has(_ws.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
+						stray += 1
+	_ok("the bricks laid are the form: all of it filled, no plain brick outside it", filled == vol.size() and stray == 0,
+			"form %d, filled %d, stray %d" % [vol.size(), filled, stray])
+	_ws._undo()
+	_ok("one Z fills the carve", _volume() == both, "%d cells" % _volume())
+	# Kept with the gun: saved and opened back, the form lays the same bricks.
+	_ws._store_asset_meta()
+	_ws._builds_dir = "user://_probe_guns/"
+	var path: String = _ws._save_as("Probe Form")
+	_ws._new_build()
+	var opened: bool = _ws._open_path(path)
+	var back: int = _ws.part_volume(_ws.part_sketches("body")).size()
+	_ok("opened back: the stroke is in the form", opened and _ws.sketches.size() == 2 and back == want.size(),
+			"opened %s, %d entries, form %d of %d" % [opened, _ws.sketches.size(), back, want.size()])
+	DirAccess.remove_absolute(path)
+	_ws._builds_dir = BuildRecipe.player_dir()
 	_ws.rail_pick("place")

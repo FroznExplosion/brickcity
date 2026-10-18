@@ -163,6 +163,20 @@ within a brick and no further (`bake_faces_into`), so two bricks stacked keep a 
 each, and the hidden faces between them are culled. At hand size the chamfer is too small
 to see; the brick outlines are the shader's already.
 
+### The form, stage 1 (2026-10-17): the shape brush draws into it
+
+A part's **form** is everything drawn for it: its sketches (outlines and brush strokes,
+kept finer than the grid) and now its shape-brush strokes. Its bricks are always worked
+out from the form -- edge pieces from the views, the inside packed biggest brick first,
+bricks on the courses and plates between -- so the form can be laid again whole, which
+is what the sliders will do.
+
+| Change | Why |
+|---|---|
+| A **shape-brush stroke** (Shapes as a brush, or Ctrl + click) is kept in the part's form: one entry a stroke, `"<part>|solid|<n>"` in `sketches`, holding the shape, its size, plane and thickness, lay or carve, and every stamp's centre. Laying goes into the current part; carving into every part whose form it touches, and bricks no form laid (laid by hand) are carved as before. Shapes are laid over the sketch, in the order they were made. A stroke is one undo, whatever parts it touched; moving a part moves its shapes; saved with the gun | brushed shapes laid loose bricks, which nothing could lay again: a slider would have lost them |
+
+The drag box of the Shapes tool (K) still lays loose bricks.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 Each part keeps a smooth **form** (its sketch outlines, which are already finer than the
@@ -174,7 +188,7 @@ a custom part off the grid, from the form's surface in by a chosen thickness, it
 hugging the brick core; placed by region, selected and changed afterwards. Where a shell
 meets the rest it is cut round real bricks embedded in it, which give it its studs and
 sockets, so it models none; faces between them are culled. In order: the triangle readout
-(done), the form and the core fill, the sliders, shells, embedded bricks and culling,
+(done), the form and the core fill (stage 1 done), the sliders, shells, embedded bricks and culling,
 selecting and changing shells.
 
 ### Phase 2 -- build a whole gun split by part
