@@ -1251,6 +1251,8 @@ func _ready() -> void:
 		_run_roomcost_pass()
 	elif "--roomsview" in OS.get_cmdline_user_args():
 		_run_roomsview_pass()
+	elif "--breakshape" in OS.get_cmdline_user_args():
+		_run_breakshape_pass()
 	elif _ring_mode:
 		_run_ring_pass()
 	elif _groups_mode:
@@ -7937,6 +7939,95 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 			"none" if bricks == null else ("shown" if bricks.visible else "hidden"),
 			_bands_building(b.id),
 			_pieces_of(b.id), islands.moving_of(b.id), b.damage_profile.size()])
+
+
+## Which way buildings break (user, 2026-10-18: "they break in half
+## vertically, when lego breaks along the layers"). Towers shot close up (the
+## hot tier), and every piece of 50 bricks or more that leaves one measured in
+## the building's own studs and plates the tick it is first seen, before it has
+## moved: a LAYER spans the building's plan (80% of it both ways); a SLICE is
+## two storeys tall or more and does not. For each cut face of a slice -- a
+## side of its box that is not the building's own face -- where it lies: on a
+## floor panel line (TowerRecipe.PANEL), a 32-stud region line, the edge of a
+## window column, or elsewhere.
+##
+##     godot --path . scenes/big_city.tscn -- --breakshape
+func _run_breakshape_pass() -> void:
+	print("[breakshape] towers shot close up, every piece measured as it leaves")
+	respawn_buildings = false
+	var picks: Array = []
+	for c in registry.buildings:
+		if not c.is_build() and not _wide_ids.has(c.id) and c.recipe.courses >= 30:
+			picks.append(c)
+	picks.sort_custom(func(a, c) -> bool: return a.id < c.id)
+	picks = picks.slice(0, 4)
+	var storey_m := TowerRecipe.STOREY_PLATES * PLATE
+	var tally := {"layer": 0, "slice": 0, "other": 0}
+	var faces := {"panel": 0, "region": 0, "window": 0, "elsewhere": 0}
+	var shots := [[0.5, 0.5, 6.0], [0.05, 0.5, 8.0], [0.5, 0.15, 7.0]]
+	for b: BuildingRegistry.Building in picks:
+		for shot in shots:
+			if b.toppled:
+				break
+			var fx: float = b.recipe.footprint_x * STUD
+			var fz: float = b.recipe.footprint_z * STUD
+			var tall := TowerRecipe.total_plates(b.recipe.courses) * PLATE
+			var aim: Vector3 = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), 0.0)
+			camera.global_position = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), -30.0)
+			camera.look_at(aim, Vector3.UP)
+			await _frames(20)
+			var known := {}
+			for isl in islands.islands:
+				if isl.is_valid():
+					known[isl] = true
+			_blast(aim, float(shot[2]))
+			var inv := b.xform.affine_inverse()
+			for t in 360:
+				await get_tree().physics_frame
+				for isl in islands.islands:
+					if not isl.is_valid() or known.has(isl) or isl.owner != b.id:
+						continue
+					known[isl] = true
+					var n := world.get_alive_block_count(isl.chunk)
+					if n < 50:
+						continue
+					var wb := islands.world_aabb(isl)
+					var lb := inv * wb
+					var lo := Vector2(lb.position.x / STUD, lb.position.z / STUD)
+					var hi := Vector2(lb.end.x / STUD, lb.end.z / STUD)
+					var share := Vector2((hi.x - lo.x) / b.recipe.footprint_x,
+							(hi.y - lo.y) / b.recipe.footprint_z)
+					var storeys := lb.size.y / storey_m
+					var what := "other"
+					if share.x >= 0.8 and share.y >= 0.8:
+						what = "layer"
+					elif storeys >= 2.0:
+						what = "slice"
+					tally[what] += 1
+					var cuts := []
+					if what == "slice":
+						for pair in [[lo.x, b.recipe.footprint_x], [hi.x, b.recipe.footprint_x],
+								[lo.y, b.recipe.footprint_z], [hi.y, b.recipe.footprint_z]]:
+							var v := roundi(float(pair[0]))
+							if v <= 1 or v >= int(pair[1]) - 1:
+								continue   # the building's own face
+							var on := "elsewhere"
+							if v % TowerRecipe.PANEL <= 1 or v % TowerRecipe.PANEL >= TowerRecipe.PANEL - 1:
+								on = "panel"
+							elif v % 32 <= 1 or v % 32 >= 31:
+								on = "region"
+							else:
+								for g in TowerRecipe.window_gaps(int(pair[1])):
+									if absi(v - (g as Vector2i).x) <= 1 or absi(v - (g as Vector2i).y) <= 1:
+										on = "window"
+							faces[on] += 1
+							cuts.append("%d:%s" % [v, on])
+					print("[breakshape]   building %d shot %s: %s, %d bricks, plan %.0f%% x %.0f%%, %.1f storeys, y %.1f..%.1f m %s" % [
+							b.id, str(shot), what, n, share.x * 100.0, share.y * 100.0, storeys,
+							lb.position.y, lb.end.y, str(cuts) if not cuts.is_empty() else ""])
+			_save("breakshape_%d_%d" % [b.id, shots.find(shot)])
+	print("[breakshape] pieces of 50+: %s; a slice's cut faces lie on %s" % [str(tally), str(faces)])
+	get_tree().quit(0)
 
 
 ## The rooms view (Shift+O, SpacesView) on a tower, for pictures: one of
