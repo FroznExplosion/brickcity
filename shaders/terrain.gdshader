@@ -188,6 +188,8 @@ varying vec3 v_flat_normal;
 // triangle anyway — half-stone is not a material.
 varying flat float v_material;
 varying float v_smooth_far;
+// CUSTOM0.b: a real bevel facet of the near mesh (MeshBuf::facet).
+varying flat float v_facet;
 
 void vertex() {
     v_uv = UV;
@@ -197,6 +199,7 @@ void vertex() {
     v_flat_normal = normalize(NORMAL);
     v_material = CUSTOM0.r;
     v_smooth_far = CUSTOM0.g;
+    v_facet = CUSTOM0.b;
 }
 
 const float TAU_F = 6.28318530718;
@@ -387,6 +390,13 @@ void fragment() {
     float print_rough = 0.0;
     if (print_lines_enabled) {
         float fade = 1.0 - smoothstep(print_fade_begin, print_fade_end, dist);
+        // A top's bevel facet is plain: the nozzle's paths stop at the edge
+        // of the top rather than running on down the bevel (they carry the
+        // top's UV, so they would). An upright facet keeps its layers, which
+        // do wrap round a printed corner.
+        if (v_facet > 0.5 && v_flat_normal.y > 0.3) {
+            fade = 0.0;
+        }
         if (fade > 0.0) {
             // `t` counts beads or layers, and it stays CONTINUOUS: the
             // ridge normal below comes from its screen-space gradient, and

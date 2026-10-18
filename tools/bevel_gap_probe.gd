@@ -8,7 +8,10 @@ extends SceneTree
 ## plane is put far under the world; any magenta pixel seen from above the
 ## ground is a hole through it. Many low views (where a slit shows) round the
 ## origin, inside the chamfer's range, with the geometry chamfer OFF and ON.
-## The chamfer must add no holes.
+## The chamfer must add no holes. A second pass looks through a scope (12
+## degrees, close in): the holes at the foot of a terrace and at a cut corner
+## are a bevel wide, under a pixel in the wide views, and that is how a player
+## found them.
 
 const MAGENTA := Color(1, 0, 1)
 
@@ -54,8 +57,28 @@ func _views(scene: Node3D) -> Array:
 	return out
 
 
-func _count(scene: Node3D, views: Array, tag: String) -> int:
+## Close, low views through a narrow lens, like a sniper scope.
+func _scope_views() -> Array:
+	var out := []
+	var plate := BrickWorld.get_plate_metres()
+	var stud := BrickWorld.get_stud_metres()
+	for k in 48:
+		var a := TAU * k / 48.0
+		var r := 3.0 + float(k % 6) * 1.5
+		var x := cos(a) * r
+		var z := sin(a) * r
+		var g := float(BrickTerrain.surface_plate(int(floor(x / stud)), int(floor(z / stud))) + 1) * plate
+		var eye := Vector3(x, g + 0.4 + float(k % 3) * 0.5, z)
+		var look := Vector3(x + cos(a + 2.2) * 4.0, g - 0.2, z + sin(a + 2.2) * 4.0)
+		out.append(Transform3D(Basis(), eye).looking_at(look))
+	return out
+
+
+func _count(scene: Node3D, views: Array, tag: String, fov := 0.0) -> int:
 	var cam: Camera3D = scene._camera
+	var fov0 := cam.fov
+	if fov > 0.0:
+		cam.fov = fov
 	var total := 0
 	var worst := 0
 	var worst_i := -1
@@ -72,6 +95,7 @@ func _count(scene: Node3D, views: Array, tag: String) -> int:
 			worst = n
 			worst_i = i
 			img.save_png("res://shots/bevel_gap_%s.png" % tag)
+	cam.fov = fov0
 	print("  [%s] magenta pixels over %d views: %d (worst view %d: %d)" % [tag, views.size(), total, worst_i, worst])
 	return total
 
@@ -106,18 +130,23 @@ func _run() -> void:
 	floor_mi.position = Vector3(0, -80, 0)
 	scene.add_child(floor_mi)
 	var views := _views(scene)
+	var scope := _scope_views()
 
 	TerrainTile.bevel_enabled = false
 	_rebuild(scene)
 	var off := await _count(scene, views, "off")
+	var scope_off := await _count(scene, scope, "scope_off", 12.0)
 	TerrainTile.bevel_enabled = true
 	_rebuild(scene)
 	var on := await _count(scene, views, "on")
+	var scope_on := await _count(scene, scope, "scope_on", 12.0)
 	var tris := 0
 	for t in scene._streamer.tiles():
 		tris += t.bevel_tri_count
 	_ok("the chamfered tiles were built", tris > 0, "%d chamfered triangles held" % tris)
 	_ok("the chamfer opens no holes in the ground", on <= off,
 			"%d magenta with it, %d without" % [on, off])
+	_ok("...nor through a scope", scope_on <= scope_off,
+			"%d magenta with it, %d without" % [scope_on, scope_off])
 	print("bevel gap probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)

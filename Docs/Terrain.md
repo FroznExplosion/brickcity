@@ -3493,3 +3493,25 @@ with the heightfield bench's walk (70 m at 14 m/s), now reporting frames over
   `_exit_tree` (`TerrainTile.clear_pool`): 0 crashes and no mesh leak in two
   runs after.
 
+
+### 22.20 Holes at the foot of a terrace; free corners cut upright; bevels plain (2026-10-18)
+
+Seen through a sniper scope: daylight through the ground at the foot of a step, and the
+top's bevel standing square over a sharp upright corner, its print paths running down the
+bevel. `bevel_gap_probe` had been failing on main (93 magenta with the chamfer, 7 without).
+
+- **The holes.** A piece's side one brick tall over a floor one brick down stopped at that
+  floor's top, and so did a mask wall standing on a floor. The floor's seam grooves (a bevel
+  deep) ran up to it and ended in triangles open into the unmeshed ground. Both now reach a
+  bevel and a half below (`bevel_reach`), hidden except down a groove.
+- **Free corners.** A top corner whose two sides both drop to the SAME height is cut at 45
+  degrees upright too, like a city brick (BrickBevel.md 2.5): `MeshBuf::quad`'s `cut_corner`
+  stops the two strips a bevel short and draws the corner triangle; the sides stop a bevel
+  short; an upright facet joins them, down as far as the sides reach. Where the ground beside
+  is no lower than the piece's foot, a triangle level with it floors the cut. Uneven sides
+  keep the square corner (one side's wall would stand open beside the other's floor).
+- **Plain bevels.** Every bevel facet carries `CUSTOM0.b = 255`; `terrain.gdshader` draws a
+  top's facets without the top's paths. Upright facets keep their layers.
+
+`bevel_gap_probe` now also looks through a 12-degree lens at 48 close views. Chamfered
+triangles over the probe's field: 272k to 318k (+17%).
