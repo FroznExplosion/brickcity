@@ -109,6 +109,7 @@ func _tick() -> void:
 	_form()
 	_resize()
 	_curves()
+	_sideways()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1396,3 +1397,59 @@ func _curves() -> void:
 	_ok("and is still all filled", _form_filled("body")[1] == _form_filled("body")[0], str(_form_filled("body")))
 	_ws.set_curves(2)
 	_ws.rail_pick("place")
+
+
+func _sideways() -> void:
+	# Bricks built sideways (in a turned grid) go out with the rest: Export to game meshes
+	# them where they are, the triangle count counts them, the print sheet turns them
+	# (Docs/AssetWorkshop.md, "Sideways bricks go out too").
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("body"))
+	_ok("a 2x4 laid upright", _ws.place_named(BrickPalette.variant_name("brick_2x4", 0, false), Vector3i(500, 30, 500)))
+	var flat: Dictionary = _ws.triangle_stats()
+	# A 1x1 plate on the brick's -z side, laid in the grid whose up is -z.
+	var af := -1
+	for k in _ws.asm.frames.size():
+		if _ws.FRAME_UPS[k] == Vector3(0, 0, -1):
+			af = k
+	var f0: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var at: Vector3 = f0 * Vector3(501.5 * BrickPalette.STUD_M, 31.5 * BrickPalette.PLATE_M, 500.0 * BrickPalette.STUD_M - 0.002)
+	var cell: Vector3i = _ws._cell_in(_ws.asm.frames[af], at)
+	_ok("a plate laid in the sideways grid", af > 0 and _ws.place_named("plate_1x1", cell, -1, -1, af)
+			and _ws._brick_frame(_ws.recipe.size() - 1) == af, "frame %d cell %v" % [af, cell])
+	var side: int = _ws.recipe.size() - 1
+	var box: AABB = _ws._brick_box(side)
+	_ok("it sits on the brick's side, a plate out", absf(box.end.z - 500.0 * BrickPalette.STUD_M) < 1e-3
+			and absf(box.size.z - BrickPalette.PLATE_M) < 1e-3, str(box))
+	var stats: Dictionary = _ws.triangle_stats()
+	_ok("the triangle count has it", int(stats.total) > int(flat.total), "%d -> %d" % [flat.total, stats.total])
+	var dir := "user://_probe_gun_side/"
+	var out: Dictionary = _ws.export_game(dir)
+	var scene: PackedScene = ResourceLoader.load(out.parts.body, "", ResourceLoader.CACHE_MODE_IGNORE)
+	var body: Node3D = scene.instantiate()
+	var drawn := 0
+	var sideways: MeshInstance3D = null
+	for n in body.find_children("*", "", true, false):
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+			drawn += _ws._mesh_triangles((n as MeshInstance3D).mesh)
+			if String(n.name).begins_with("Bricks") and n.name != "Bricks":
+				sideways = n
+		elif n is MultiMeshInstance3D and (n as MultiMeshInstance3D).multimesh != null:
+			var mm: MultiMesh = (n as MultiMeshInstance3D).multimesh
+			drawn += _ws._mesh_triangles(mm.mesh) * mm.instance_count
+	_ok("exported: a mesh of its own, and the count is what it draws", sideways != null and drawn == int(stats.total),
+			"drawn %d, counted %d" % [drawn, stats.total])
+	if sideways != null:
+		var mid: Vector3 = sideways.transform * sideways.get_aabb().get_center()
+		_ok("where it was built", mid.distance_to(box.get_center()) < 0.01, "%v vs %v" % [mid, box.get_center()])
+	body.free()
+	for fname in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + fname)
+	var sheet: Dictionary = _ws.export_sheet()
+	var spec: Dictionary = {}
+	for ps in sheet.parts:
+		if ps.name == "body":
+			spec = ps
+	var turned := (spec.get("bricks", []) as Array).filter(func(b: Dictionary) -> bool: return b.has("turn"))
+	_ok("the print sheet turns it, its stud with it", turned.size() == 1 and (spec.get("studs_extra", []) as Array).size() == 1
+			and absf(float(turned[0].turn[1][1]) + 1.0) < 1e-3, str(turned))
