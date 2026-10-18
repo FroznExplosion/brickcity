@@ -3513,5 +3513,16 @@ bevel. `bevel_gap_probe` had been failing on main (93 magenta with the chamfer, 
 - **Plain bevels.** Every bevel facet carries `CUSTOM0.b = 255`; `terrain.gdshader` draws a
   top's facets without the top's paths. Upright facets keep their layers.
 
+Then, seen again through the scope, two leftovers at a cut corner, both fixed:
+- **Slivers round the top corner.** `MeshBuf::quad` took an edge's outward direction from
+  the midpoints of the rim and the inset edge, which leans when one end of the edge is square
+  and the other inset; the corner triangle sat off the corner. It is now square to the edge.
+- **Something sticking out of the cut.** The piece's backing (its footprint a bevel and a half
+  down) was a whole rectangle and its corner stood out through the upright facet. A piece with
+  a cut corner draws it with that corner cut too. And the cut's floor is no longer flat: its
+  corner point sits a bevel down, where the bevels of the bricks below meet, so it carries
+  their groove on instead of standing over it.
+
+`tools/terrain_corner_shot.gd` frames free corners by drop height, for looking at this.
 `bevel_gap_probe` now also looks through a 12-degree lens at 48 close views. Chamfered
-triangles over the probe's field: 272k to 318k (+17%).
+triangles over the probe's field: 272k to 333k (+22%).
