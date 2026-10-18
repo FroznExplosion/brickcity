@@ -151,6 +151,32 @@ copies every sketch.
 |---|---|
 | Shapes (K) chooses **drag a box** (fill it, as before) or **brush**: then a plain LMB lays the shape, RMB carves it, held and dragged it goes on, and its options (ball, cube, cylinder, flat circle or square; size; a flat one's thickness; clean or random) are under it. Ctrl + click still does it from any tool | holding Ctrl to use a tool was one more thing to remember |
 
+### Triangles (2026-10-17)
+
+| Change | Why |
+|---|---|
+| The readout has a **triangle line**: the gun's triangles as Export to game meshes it, its draws, how many of them are studs, the count without the chamfer, and each part's, biggest first. Counted again 0.4 s after the last edit (`triangle_stats`, ~4 ms for the Thompson); the probe checks it equals what the exported gun draws | to see what a gun costs while it is built, and what curves, shells or fewer studs save |
+
+What it showed, the Thompson as saved: **16,196 triangles in 16 draws**. Studs are 7,524 of
+them (198 studs at 38 each), the chamfer 2,928, the brick faces 5,744. The bake merges faces
+within a brick and no further (`bake_faces_into`), so two bricks stacked keep a side face
+each, and the hidden faces between them are culled. At hand size the chamfer is too small
+to see; the brick outlines are the shader's already.
+
+### Planned: the form, sliders and shells (2026-10-17, not built)
+
+Each part keeps a smooth **form** (its sketch outlines, which are already finer than the
+grid, and shape brushes as smooth solids); bricks are always worked out again from it, on
+the grid, the inside always filled largest brick first. Sliders: size, how many curves (a
+curve or slope fitted in any of its 24 turns where the form's surface leans), smoothness.
+**Slopes at any pitch** are an option: a generated `ShapedParts` profile per pitch. **Shells**:
+a custom part off the grid, from the form's surface in by a chosen thickness, its inner side
+hugging the brick core; placed by region, selected and changed afterwards. Where a shell
+meets the rest it is cut round real bricks embedded in it, which give it its studs and
+sockets, so it models none; faces between them are culled. In order: the triangle readout
+(done), the form and the core fill, the sliders, shells, embedded bricks and culling,
+selecting and changing shells.
+
 ### Phase 2 -- build a whole gun split by part
 
 | Tool | Key | What it does |

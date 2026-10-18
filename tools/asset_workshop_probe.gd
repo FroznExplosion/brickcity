@@ -1072,6 +1072,22 @@ func _round8() -> void:
 	_ok("built muzzle toward +x, it is read off the build and still points -Z", _ws.muzzle_end == "+x"
 			and float(zs.get("probe2_barrel", 0.0)) < float(zs.get("body", 0.0)) - 0.05
 			and float(zs.get("probe2_stock", 0.0)) > float(zs.get("body", 0.0)) + 0.05, str(zs))
+	# The readout's triangle count is what the exported gun draws (Docs/AssetWorkshop.md,
+	# "Triangles"): its bricks' meshes plus every stud instance.
+	var drawn := 0
+	for n in gun.find_children("*", "", true, false):
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+			drawn += _ws._mesh_triangles((n as MeshInstance3D).mesh)
+		elif n is MultiMeshInstance3D and (n as MultiMeshInstance3D).multimesh != null:
+			var mm: MultiMesh = (n as MultiMeshInstance3D).multimesh
+			drawn += _ws._mesh_triangles(mm.mesh) * mm.instance_count
+	var stats: Dictionary = _ws.triangle_stats()
+	_ok("the triangle readout is what the exported gun draws", drawn > 0 and int(stats.total) == drawn,
+			"readout %d, exported %d" % [stats.total, drawn])
+	_ok("and without the chamfer it is fewer", int(stats.flat_total) < int(stats.total) or not BrickNear.enabled,
+			"%d vs %d" % [stats.flat_total, stats.total])
+	_ws._tris = stats
+	_ok("the readout shows it", _ws.ruler_text().contains("triangles: "), _ws.ruler_text())
 	gun.queue_free()
 	var pdir: String = _ws.export_print(false)
 	_ok("print files go beside the other print files, outside the repository",
