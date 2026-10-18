@@ -271,6 +271,39 @@ The Thompson, stock and grip shelled at 4 samples a stud, 1,500 triangles each: 
 watertight, the stock 6 studs and the grip 7 into the body (19 stud holes), the whole gun
 one piece.
 
+### The SDF block-out (2026-10-18, being built)
+
+**What the user wants** (2026-10-18): the block-out is sculpted in 3D as a smooth signed
+distance field -- as Zylann's voxel tools sculpt terrain -- tracing a photo, a 3D model, both
+or neither. While drawing there are **no bricks**, only the smooth surface; the sliders act
+on it; a **Convert** button turns it into the asset. Areas marked as **brick zones** become
+bricks, the rest become custom smooth parts joined to them. Each part of the asset (barrel,
+handguard ...) stays its own: parts blend while sculpting, the split is what is saved. It
+can go back and forth: brick edits made after a convert show in the SDF, and converting
+again keeps them. Old saves with the 2D sketch form may be dropped.
+
+**The engine side: `SdfForm`** (gdextension/brick/src/sdf_form.cpp), checked by
+`tools/sdf_form_probe.gd` (headless, 26 checks):
+
+| What | How |
+|---|---|
+| One field for the whole asset | a sample a **tick** (a stud 5, a plate 2), so it lines up with the brick grid; distances kept within 6 samples of the surface, in 16^3 blocks stored only where something was drawn |
+| A part label and a brick-zone flag on every sample | an add labels what it changed; Paint relabels; Mark / Unmark set the zone. Parts are one surface while sculpting; `part_field` gives one part's distances, ending where its label does (for its shell) |
+| Brushes | add (union), remove (subtraction), both optionally smooth (Quilez's smooth min), smooth (blur in the brush), as capsules or boxes -- as Zylann's VoxelTool does them |
+| A 3D model as a solid | `stamp_mesh`: distance to the nearest triangle, inside by ray parity |
+| Bricks out | `cells`: a brick cell is solid when the middle of it is inside; its part and zone from that sample |
+| Bricks back in, 1:1 | `sync_cells(before, after)` writes only the cells that changed: a brick added is a box unioned, a brick taken a box carved, a part changed relabelled. Untouched smooth surface stays as it was, and `cells` gives back exactly the bricks synced (the field is 1-Lipschitz, so a box never flips a neighbour's middle). A bricks-only asset goes in the same way |
+| Whole-asset sliders | `scale` about a pivot, `blur` |
+| Live view | `mesh_block`: surface nets a block at a time, each edge meshed by one block so they meet without cracks, normals from the field, colour by part (alpha 0.5 in a brick zone) |
+| Drawing on a surface | `raycast` (sphere tracing) |
+| Undo, saving | `begin_edit` / `end_edit` record the blocks an edit touched; `swap_blocks` undoes and gives the redo; `to_bytes` / `from_bytes` |
+
+**Next**, in order: the Block out tool on it (3D brush on the surface or a movable work
+plane, live smooth view, undo, saved with the asset); a 3D model as a reference beside the
+photos (glb, see-through, "fill from reference"); sliders on the SDF, the brick-zone brush
+and **Convert** (zones to bricks, the rest to custom parts per part, shells from
+`part_field`), and back; then the old 2D sketch form removed.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
