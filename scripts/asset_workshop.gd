@@ -234,6 +234,11 @@ var _redoing := false
 var blender_path := "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe"
 var _export_png := ""
 var _export_check := ""
+## The last triangle count (`triangle_stats`), and when to count again: a moment after
+## the last edit, so a sketch stroke or a held run is counted once, when it stops.
+var _tris := {}
+var _tris_due := 0
+const TRIS_SETTLE_MS := 400
 var _export_started := 0
 var _preview_panel: PanelContainer
 var _preview_image: TextureRect
@@ -948,6 +953,9 @@ func _process(dt: float) -> void:
 		_autosave_dirty = false
 		_autosave_at = Time.get_ticks_msec() + 4000
 		recipe.save_to(AUTOSAVE)
+	if _tris_due >= 0 and Time.get_ticks_msec() >= _tris_due:
+		_tris_due = -1
+		_tris = triangle_stats()
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
@@ -996,6 +1004,9 @@ func ruler_text() -> String:
 		var d: Vector3i = recipe.bounds()[1]
 		lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m long" % [", ".join(bits),
 				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT / 1000.0])
+	var tris := triangles_text()
+	if tris != "":
+		lines.append(tris)
 	if _export_check != "":
 		lines.append(_export_check)
 	if measure_on and measure_points.size() == 2:
@@ -1440,6 +1451,7 @@ func _after_edit() -> void:
 	_store_asset_meta()
 	_outlines_dirty = true
 	_autosave_dirty = true
+	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
 	if recipe.size() == 0:
 		_ensure_start_brick.call_deferred()
 
@@ -4711,6 +4723,7 @@ func _stud_apply(rec: Dictionary, forward: bool) -> void:
 	_draw_studs()
 	_store_asset_meta()
 	_autosave_dirty = true
+	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
 
 
 ## The stud tool: LMB puts a stud on, RMB takes one off, shift LMB makes a stud a
@@ -5872,9 +5885,9 @@ func _tip(ids: Array, fwd: Vector3) -> Vector3:
 	return mid + fwd * BrickPalette.STUD_M * 0.5
 
 
-## Some bricks laid on their own and meshed as the workshop draws them, studs and all:
-## a MeshInstance3D in workshop metres (its studs a child), at their box's corner.
-func _bake_part_mesh(ids: Array) -> MeshInstance3D:
+## Some bricks laid on their own in a chunk of their own: [chunk, the cell of its corner].
+## The caller releases the chunk.
+func _part_chunk(ids: Array) -> Array:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
 	for i in ids:
@@ -5888,6 +5901,15 @@ func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 		var bid := world.place_block(c, recipe.cell_of(i) - lo, palette[arch], recipe.colour_of(i))
 		if bid >= 0 and recipe.material_of(i) != 0:
 			world.set_block_material(c, bid, recipe.material_of(i))
+	return [c, lo]
+
+
+## Some bricks laid on their own and meshed as the workshop draws them, studs and all:
+## a MeshInstance3D in workshop metres (its studs a child), at their box's corner.
+func _bake_part_mesh(ids: Array) -> MeshInstance3D:
+	var made := _part_chunk(ids)
+	var c: int = made[0]
+	var lo: Vector3i = made[1]
 	var mi := MeshInstance3D.new()
 	mi.name = "Bricks"
 	mi.material_override = _material
@@ -5917,6 +5939,93 @@ func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 		mi.add_child(mmi)
 	world.release_chunk(c)
 	return mi
+
+
+## What the gun costs to draw, as Export to game would mesh it: each part's triangles
+## (its bricks, and its studs -- every stud is the stud mesh again) and the draws. `flat`
+## is the same bricks without the chamfer (BrickNear), the brick outlines left to the
+## shader. {parts: {name: {bricks, flat, studs, draws}}, total, flat_total, draws, ms}.
+func triangle_stats() -> Dictionary:
+	var t0 := Time.get_ticks_usec()
+	var by_part := {}
+	for i in recipe.size():
+		if recipe.frame_of(i) != 0:
+			continue
+		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
+		(by_part.get_or_add(name, []) as Array).append(i)
+	var stud_tris := _mesh_triangles(PieceMeshes.stud())
+	var parts := {}
+	var total := 0
+	var flat_total := 0
+	var draws := 0
+	for name in by_part:
+		var made := _part_chunk(by_part[name])
+		var c: int = made[0]
+		var plain := world.build_chunk_mesh(c)
+		var flat := _arrays_triangles(plain)
+		var bricks := _arrays_triangles(world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL)) \
+				if BrickNear.enabled else flat
+		@warning_ignore("integer_division")
+		var n_studs: int = (world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
+		world.release_chunk(c)
+		var hand := 0
+		for st in extra_studs:
+			if String(st.get("part", "")) == name:
+				hand += 1
+		var studs := (n_studs + hand) * stud_tris
+		var d := (1 if bricks > 0 else 0) + (1 if n_studs > 0 else 0) + (1 if hand > 0 else 0)
+		parts[name] = {"bricks": bricks, "flat": flat, "studs": studs, "draws": d}
+		total += bricks + studs
+		flat_total += flat + studs
+		draws += d
+	return {"parts": parts, "total": total, "flat_total": flat_total, "draws": draws,
+			"ms": (Time.get_ticks_usec() - t0) / 1000.0}
+
+
+static func _arrays_triangles(arrays: Array) -> int:
+	if arrays.is_empty():
+		return 0
+	var idx = arrays[Mesh.ARRAY_INDEX]
+	if idx != null and (idx as PackedInt32Array).size() > 0:
+		@warning_ignore("integer_division")
+		return (idx as PackedInt32Array).size() / 3
+	@warning_ignore("integer_division")
+	return (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+
+
+static func _mesh_triangles(m: Mesh) -> int:
+	var n := 0
+	for s in m.get_surface_count():
+		n += _arrays_triangles(m.surface_get_arrays(s))
+	return n
+
+
+## The readout's triangle line, from the last count (worked out again a moment after an edit).
+func triangles_text() -> String:
+	if _tris.is_empty() or int(_tris.total) == 0:
+		return ""
+	var bits := PackedStringArray()
+	var parts: Dictionary = _tris.parts
+	var names := parts.keys()
+	names.sort_custom(func(a, b) -> bool:
+		return parts[a].bricks + parts[a].studs > parts[b].bricks + parts[b].studs)
+	for name in names:
+		bits.append("%s %s" % [name, _thousands(parts[name].bricks + parts[name].studs)])
+	var studs := 0
+	for name in parts:
+		studs += int(parts[name].studs)
+	return "triangles: %s in %d draws (studs %s; %s without the chamfer)   %s" % [
+			_thousands(_tris.total), _tris.draws, _thousands(studs), _thousands(_tris.flat_total),
+			", ".join(bits)]
+
+
+static func _thousands(n: int) -> String:
+	var s := str(absi(n))
+	var out := ""
+	while s.length() > 3:
+		out = "," + s.right(3) + out
+		s = s.left(s.length() - 3)
+	return ("-" if n < 0 else "") + s + out
 
 
 ## Studs put on by hand, as the workshop draws them (workshop metres).
