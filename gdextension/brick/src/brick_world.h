@@ -1130,6 +1130,11 @@ public:
     /// -- that is the point of a frame.
     static int rotation_count();
 
+    /// Chunks with more cells than this hold their occupancy in pages, allocated
+    /// only where blocks are (Occupancy, brick_types.h). A script asks before making
+    /// a huge chunk: a library without paging would allocate it whole.
+    static int64_t paged_chunk_cells();
+
     /// A block's axis-aligned bounding box in WORLD TICKS, as (min, size).
     /// Exact integers whatever the frame's rotation.
     Array get_block_ticks(int chunk_id, int block_id) const;

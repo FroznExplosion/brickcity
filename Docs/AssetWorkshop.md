@@ -187,6 +187,17 @@ The Thompson: x0.6 is 80 pieces and 4,594 triangles, x1.4 is 438 pieces and 26,1
 triangles, laid in ~100 ms; x1.5 is refused (81 studs long, the build area is 80). Undoing
 the x1.4 takes ~1.2 s: it lays hundreds of bricks back one by one.
 
+### Build area (2026-10-17): 1000 studs
+
+| Change | Why |
+|---|---|
+| The build area is **1000 studs along and across and 2500 plates up** (a cube, 5000 ticks each way), from 80 x 200; a new build starts in its middle. The working plane's grid, the mirror sheet, a new photo's size and the flat views' zoom stay an 80-stud window round the build, and follow it | mechs and vehicles, not only guns |
+| The engine holds a chunk that big **paged** (`Occupancy`, brick_types.h): pages of 16,384 cells, allocated on a block's first write. Dense, the area would be 2.5 billion cells, 10 GB a frame and six frames; paged it is ~4 MB of page table a frame and 64 KB a page the bricks touch. Every chunk the game makes is under the line (64 M cells; the biggest building is ~1.6 M) and stays dense, one branch from the plain array it was | a dense grid cannot be that big |
+| A library without paging (`BrickWorld.paged_chunk_cells` missing: an old DLL) gets the old 80-stud area and a warning, not a 60 GB allocation | other worktrees and the main folder run old DLLs until they rebuild |
+
+A resize that would not fit is now refused from the forms' box, before anything is worked
+out at that size (a x200 form was minutes of packing).
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's

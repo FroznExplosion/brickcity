@@ -239,6 +239,8 @@ var _export_check := ""
 var _tris := {}
 var _tris_due := 0
 const TRIS_SETTLE_MS := 400
+## The `view_box` the grid and the mirror sheet were last drawn round.
+var _view_drawn := []
 var _export_started := 0
 var _preview_panel: PanelContainer
 var _preview_image: TextureRect
@@ -252,17 +254,32 @@ const PART_COLOURS := [Color(0.62, 0.66, 0.72), Color(0.95, 0.55, 0.2), Color(0.
 		Color(0.55, 0.85, 0.4), Color(0.4, 0.7, 1.0), Color(0.9, 0.4, 0.85), Color(1.0, 0.85, 0.3),
 		Color(0.45, 0.9, 0.85)]
 
-## The plate is bigger than the workshop's: a rifle is 62 studs long here. 80 studs is
-## 400 ticks, and so is 200 plates, which keeps the build volume a cube.
-const ASSET_PLATE_STUDS := 80
-const ASSET_HEIGHT_PLATES := 200
+## The build area: 1000 studs each way and 2500 plates up (a cube: 5000 ticks each way),
+## for mechs and vehicles as well as guns. The engine holds a grid this big paged, only
+## where there are bricks (`Occupancy`, brick_types.h). A new build starts in its middle.
+const ASSET_PLATE_STUDS := 1000
+const ASSET_HEIGHT_PLATES := 2500
+## The area before paging (80 studs, 200 plates): what a brick library without
+## `BrickWorld.paged_chunk_cells` gets, since it would allocate the big one whole.
+const SMALL_PLATE_STUDS := 80
+const SMALL_HEIGHT_PLATES := 200
+## What is drawn and framed round the build -- the working plane's grid, the mirror
+## sheet, a new photo's size, the flat views' zoom: this many studs, not the whole area.
+const VIEW_STUDS := 80
 
 
 func _init() -> void:
 	plate_studs = ASSET_PLATE_STUDS
 	height_plates = ASSET_HEIGHT_PLATES
+	if not ClassDB.class_has_method("BrickWorld", "paged_chunk_cells"):
+		push_warning("[asset workshop] this brick library cannot page a chunk: build area %d studs, not %d (rebuild the extension)"
+				% [SMALL_PLATE_STUDS, ASSET_PLATE_STUDS])
+		plate_studs = SMALL_PLATE_STUDS
+		height_plates = SMALL_HEIGHT_PLATES
 	mirror_z = plate_studs * 0.5 + 0.5
-	_ortho_size = plate_studs * BrickPalette.STUD_M * 0.75
+	@warning_ignore("integer_division")
+	work_x = plate_studs / 2
+	_ortho_size = VIEW_STUDS * BrickPalette.STUD_M * 0.75
 
 
 func _ready() -> void:
@@ -482,7 +499,7 @@ func add_photo_image(img: Image, path: String, plane: String = "side") -> int:
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
 	var p := {"path": path, "plane": plane, "px": Vector2i(img.get_width(), img.get_height()),
-			"mpp": plate_studs * BrickPalette.STUD_M * 0.9 / maxf(img.get_width(), 1.0),
+			"mpp": VIEW_STUDS * BrickPalette.STUD_M * 0.9 / maxf(img.get_width(), 1.0),
 			"centre": _default_centre(plane), "opacity": 0.6, "shown": true, "node": node, "image": img}
 	if plane != "top":
 		# Standing on the plate, not floating over it.
@@ -578,13 +595,29 @@ func ray_on_photo(i: int, from: Vector3, dir: Vector3) -> Variant:
 
 
 func _default_centre(plane: String) -> Vector3:
-	var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	var c := build_centre()
+	var up := VIEW_STUDS * BrickPalette.STUD_M * 0.25
+	var box := view_box()
 	match plane:
 		"top":
-			return Vector3(mid, BrickPalette.PLATE_M + 0.004, mid)
+			return Vector3(c.x, BrickPalette.PLATE_M + 0.004, c.z)
 		"front":
-			return Vector3(BrickPalette.STUD_M, mid * 0.5, mid)
-	return Vector3(mid, mid * 0.5, BrickPalette.STUD_M)
+			return Vector3((box[0] as Vector3i).x * BrickPalette.STUD_M, up, c.z)
+	return Vector3(c.x, up, (box[0] as Vector3i).z * BrickPalette.STUD_M)
+
+
+## The cells drawn round the build (`VIEW_STUDS` along and across, two and a half times
+## that in plates up), inside the build area: [min cell, max cell + 1].
+func view_box() -> Array:
+	var c := build_centre()
+	var half := Vector3i(VIEW_STUDS / 2, int(VIEW_STUDS * 1.25), VIEW_STUDS / 2)
+	var mid := Vector3i(int(c.x / BrickPalette.STUD_M), int(c.y / BrickPalette.PLATE_M), int(c.z / BrickPalette.STUD_M))
+	var area := Vector3i(plate_studs, height_plates, plate_studs)
+	var lo := (mid - half).clamp(Vector3i.ZERO, area)
+	var hi := (mid + half).clamp(Vector3i.ZERO, area)
+	if lo.y == 0:
+		hi.y = mini(area.y, half.y * 2)
+	return [lo, hi]
 
 
 ## The plane's axes: x along the picture, y up it, z out of it towards the viewer.
@@ -749,12 +782,15 @@ func _place_mirrored() -> void:
 
 
 func _place_mirror_sheet() -> void:
-	var w := plate_studs * BrickPalette.STUD_M
-	var h := w * 0.4
+	var box := view_box()
+	var x0 := (box[0] as Vector3i).x * BrickPalette.STUD_M
+	var w := (box[1] as Vector3i).x * BrickPalette.STUD_M
+	var y0 := maxf(0.15, (box[0] as Vector3i).y * BrickPalette.PLATE_M)
+	var h := y0 + VIEW_STUDS * BrickPalette.STUD_M * 0.4
 	var z := mirror_z * BrickPalette.STUD_M
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var corners := [Vector3(0, 0.15, z), Vector3(w, 0.15, z), Vector3(w, h, z), Vector3(0, h, z)]
+	var corners := [Vector3(x0, y0, z), Vector3(w, y0, z), Vector3(w, h, z), Vector3(x0, h, z)]
 	for k in 4:
 		im.surface_add_vertex(corners[k])
 		im.surface_add_vertex(corners[(k + 1) % 4])
@@ -1452,6 +1488,12 @@ func _after_edit() -> void:
 	_outlines_dirty = true
 	_autosave_dirty = true
 	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
+	# The grid and the mirror sheet are drawn round the build: they follow it.
+	var vb := view_box()
+	if vb != _view_drawn:
+		_view_drawn = vb
+		_draw_work_plane()
+		_place_mirror_sheet()
 	if recipe.size() == 0:
 		_ensure_start_brick.call_deferred()
 
@@ -3038,8 +3080,10 @@ func _draw_work_plane() -> void:
 		return
 	var s := BrickPalette.STUD_M
 	var p := BrickPalette.PLATE_M
-	var span := plate_studs * s
-	var tall := height_plates * p
+	# Round the build only: the area is 1000 studs, a line a stud would be thousands.
+	var box := view_box()
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 	var line := func(a: Vector3, b: Vector3, strong: bool) -> void:
 		var col := Color(1, 1, 1, 0.16 if strong else 0.05)
@@ -3050,21 +3094,22 @@ func _draw_work_plane() -> void:
 	match work_plane:
 		"side":
 			var z := work_depth * s
-			for i in plate_studs + 1:
-				line.call(Vector3(i * s, 0, z), Vector3(i * s, tall, z), i % 4 == 0)
-			for j in range(0, height_plates + 1, 3):
-				line.call(Vector3(0, j * p, z), Vector3(span, j * p, z), j % 12 == 0)
+			for i in range(lo.x, hi.x + 1):
+				line.call(Vector3(i * s, lo.y * p, z), Vector3(i * s, hi.y * p, z), i % 4 == 0)
+			for j in range(lo.y - lo.y % 3, hi.y + 1, 3):
+				line.call(Vector3(lo.x * s, j * p, z), Vector3(hi.x * s, j * p, z), j % 12 == 0)
 		"top":
 			var y := work_height * p
-			for i in plate_studs + 1:
-				line.call(Vector3(i * s, y, 0), Vector3(i * s, y, span), i % 4 == 0)
-				line.call(Vector3(0, y, i * s), Vector3(span, y, i * s), i % 4 == 0)
+			for i in range(lo.x, hi.x + 1):
+				line.call(Vector3(i * s, y, lo.z * s), Vector3(i * s, y, hi.z * s), i % 4 == 0)
+			for i in range(lo.z, hi.z + 1):
+				line.call(Vector3(lo.x * s, y, i * s), Vector3(hi.x * s, y, i * s), i % 4 == 0)
 		"front":
 			var x := work_x * s
-			for i in plate_studs + 1:
-				line.call(Vector3(x, 0, i * s), Vector3(x, tall, i * s), i % 4 == 0)
-			for j in range(0, height_plates + 1, 3):
-				line.call(Vector3(x, j * p, 0), Vector3(x, j * p, span), j % 12 == 0)
+			for i in range(lo.z, hi.z + 1):
+				line.call(Vector3(x, lo.y * p, i * s), Vector3(x, hi.y * p, i * s), i % 4 == 0)
+			for j in range(lo.y - lo.y % 3, hi.y + 1, 3):
+				line.call(Vector3(x, j * p, lo.z * s), Vector3(x, j * p, hi.z * s), j % 12 == 0)
 	im.surface_end()
 
 
@@ -5218,6 +5263,17 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 	if is_equal_approx(s, 1.0) or s <= 0.0 or sketches.is_empty():
 		return false
 	var at: Vector3 = form_pivot() if pivot == null else pivot
+	if pivot != null:
+		form_pivot()
+	# Too big is told from the forms' box before anything is worked out at that size: a
+	# form a hundred times over is millions of cells.
+	var span := Vector3(_forms_hi - _forms_lo + Vector3i.ONE) * s
+	var room := Vector3(plate_studs, height_plates, plate_studs)
+	for i in 3:
+		if span[i] > room[i] + 1.0:
+			print("[asset workshop] resize x%.2f refused: %d cells %s, the build area is %d" % [s,
+					int(span[i]), ["along", "up", "across"][i], int(room[i])])
+			return false
 	var scaled := {}   # part -> {old key: scaled sketch}
 	for k in sketches:
 		var sk: Dictionary = sketches[k]
@@ -5265,8 +5321,13 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 	return true
 
 
+## The box round every part's form, as `form_pivot` last found it.
+var _forms_lo := Vector3i.ZERO
+var _forms_hi := -Vector3i.ONE
+
+
 ## Where `scale_form` scales about: the middle of every part's form along and across,
-## and its bottom.
+## and its bottom. Notes the box round the forms (`_forms_lo`, `_forms_hi`).
 func form_pivot() -> Vector3:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
@@ -5276,7 +5337,10 @@ func form_pivot() -> Vector3:
 			continue
 		lo = lo.min(_box[0])
 		hi = hi.max(_box[1])
+	_forms_lo = lo
+	_forms_hi = hi
 	if lo.x > hi.x:
+		_forms_hi = lo - Vector3i.ONE
 		return Vector3.ZERO
 	return Vector3((lo.x + hi.x + 1) * 0.5, lo.y, (lo.z + hi.z + 1) * 0.5)
 

@@ -469,7 +469,7 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     Chunk c;
     c.origin = origin;
     c.dims = dims;
-    c.occupancy.assign((size_t)c.cell_count(), -1);
+    c.occupancy.reset(c.cell_count());
     c.xform = Transform3D(Basis(), brick::grid_to_world(origin));
     c.anchored = true;
     chunks.push_back(std::move(c));
@@ -541,7 +541,7 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
                     continue;
                 }
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
-                c.occupancy[c.index_of(l)] = id;
+                c.occupancy.set(c.index_of(l), id);
             }
         }
     }
@@ -626,7 +626,7 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
                 }
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
                 if (c.in_bounds(l) && c.occupancy[c.index_of(l)] == block_id) {
-                    c.occupancy[c.index_of(l)] = -1;
+                    c.occupancy.set(c.index_of(l), -1);
                 }
             }
         }
@@ -2556,7 +2556,7 @@ Dictionary BrickWorld::get_memory_report() const {
         }
         ++live;
         const Chunk &c = chunks[i];
-        occupancy += (int64_t)c.occupancy.size() * sizeof(int32_t);
+        occupancy += c.occupancy.bytes();
         blocks += (int64_t)c.blocks.size() * sizeof(Block);
         total_blocks += (int)c.blocks.size();
 
@@ -5823,8 +5823,8 @@ bool BrickWorld::load_template(int template_id, int chunk_id) {
             for (int y = 0; y < a.size.y; ++y) {
                 for (int z = 0; z < a.size.z; ++z) {
                     if (a.solid_at(x, y, z)) {
-                        c.occupancy[c.index_of(Vector3i(base.x + x, base.y + y, base.z + z))]
-                                = (int32_t)i;
+                        c.occupancy.set(c.index_of(Vector3i(base.x + x, base.y + y, base.z + z)),
+                                (int32_t)i);
                     }
                 }
             }
@@ -8229,8 +8229,8 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
             for (int y = 0; y < a.size.y; ++y) {
                 for (int z = 0; z < a.size.z; ++z) {
                     if (a.solid_at(x, y, z)) {
-                        isl.occupancy[isl.index_of(Vector3i(base.x + x, base.y + y, base.z + z))]
-                                = nid;
+                        isl.occupancy.set(isl.index_of(Vector3i(base.x + x, base.y + y, base.z + z)),
+                                nid);
                     }
                 }
             }
@@ -8967,6 +8967,8 @@ Array BrickWorld::get_side_studs(int chunk_id, int block_id) const {
 int BrickWorld::ticks_per_plate() { return TICKS_PLATE; }
 int BrickWorld::rotation_count() { return (int)rotations().size(); }
 
+int64_t BrickWorld::paged_chunk_cells() { return Occupancy::PAGED_ABOVE; }
+
 void BrickWorld::set_chunk_frame(int chunk_id, int rotation, Vector3i origin_ticks) {
     if (!valid_chunk(chunk_id)) {
         return;
@@ -9585,6 +9587,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::ticks_per_plate);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("rotation_count"),
             &BrickWorld::rotation_count);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("paged_chunk_cells"),
+            &BrickWorld::paged_chunk_cells);
     ClassDB::bind_method(D_METHOD("set_chunk_frame", "chunk_id", "rotation", "origin_ticks"),
             &BrickWorld::set_chunk_frame);
     ClassDB::bind_method(D_METHOD("get_chunk_rotation", "chunk_id"),

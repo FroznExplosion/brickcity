@@ -1331,7 +1331,7 @@ func _resize() -> void:
 	_ws.redo()
 	_ok("shift Z: big again", _form_filled("body") == body2, str(_form_filled("body")))
 	var n: int = _ws.recipe.size()
-	_ok("too big for the build area: refused, nothing changed", not _ws.scale_form(20.0) and _ws.recipe.size() == n
+	_ok("too big for the build area: refused, nothing changed", not _ws.scale_form(200.0) and _ws.recipe.size() == n
 			and _form_filled("body") == body2)
 	_ws.scale_form(0.5)
 	_ok("and halved: back to the first size", _form_filled("body") == body0 and _form_filled("grip") == grip0,
