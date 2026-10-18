@@ -1505,6 +1505,20 @@ func remove_brick(arch: String, cell: Vector3i) -> bool:
 
 ## Take up the brick at recipe index `i` as RMB does -- world, recipe, edits and paint
 ## renumbered together (`_remove_rid`) -- and keep it, so Z can lay it back.
+## As the workshop's, and a shape stroke under way keeps count: an edit from before it
+## dropped out of the list moves where its own edits start.
+func _drop_edit(kind: String, n: int) -> void:
+	for i in _edits.size():
+		if _edits[i] != kind:
+			continue
+		if n == 0:
+			_edits.remove_at(i)
+			if not _sb.is_empty() and i < int(_sb.start):
+				_sb.start = int(_sb.start) - 1
+			return
+		n -= 1
+
+
 func take_brick(i: int) -> bool:
 	if i < 0 or i >= recipe.size():
 		return false
@@ -3427,7 +3441,7 @@ func resketch(key: String, change: Dictionary, area: Dictionary = {}, erase: Arr
 	# can hold them as they are rather than as copies.
 	var sk: Dictionary = (sketches.get(key, {}) as Dictionary).duplicate()
 	sk.merge(change, true)
-	var empty: bool = (sk.adds as Array).is_empty() and (sk.subs as Array).is_empty()
+	var empty: bool = (sk.adds as Array).is_empty() and (sk.subs as Array).is_empty() and not sk.has("solid")
 	var thicker: bool = sketches.has(key) and int(sketches[key].width) != int(sk.width)
 	return resketch_part(String(sk.part), {key: null if empty else sk}, change.is_empty() or thicker,
 			String(sk.plane), area, erase)
@@ -3584,7 +3598,16 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 
 ## Put a part's sketches and its brick list back as they were (`which`: "before") or as
 ## they became ("after"), for undo and redo; the bricks themselves are the edits'.
-func _restore_sketch(g: Dictionary, which: String) -> void:
+## `g` may be a list of them (a shape stroke over several stamps and parts): put back in
+## reverse for "before", in order for "after".
+func _restore_sketch(g: Variant, which: String) -> void:
+	if g is Array:
+		var list: Array = (g as Array).duplicate()
+		if which == "before":
+			list.reverse()
+		for one in list:
+			_restore_sketch(one, which)
+		return
 	var states: Dictionary = g.get(which, {})
 	for k in states:
 		_set_sketch(k, states[k])
@@ -3631,7 +3654,8 @@ func part_sketches(part: String, change: Dictionary = {}) -> Array:
 ## it is its base: its sketches there are slabs, their thickness centred on their plane.
 ## A sketch on another plane is a view through the part -- area drawn in keeps only what
 ## is inside it, area drawn out cuts right through. A depth cut, from any view, takes so
-## many studs in from the face toward the camera when it was drawn.
+## many studs in from the face toward the camera when it was drawn. Shapes stamped with
+## the shape brush (entries with a `solid`) are laid over all that, or carved out of it.
 func part_volume(list: Array) -> Dictionary:
 	_course = 1 << 30
 	_box = [Vector3i(1 << 30, 1 << 30, 1 << 30), -Vector3i(1 << 30, 1 << 30, 1 << 30)]
@@ -3641,8 +3665,29 @@ func part_volume(list: Array) -> Dictionary:
 			base = e[1].plane
 			break
 	var vol := {}
-	if base == "":
-		return vol
+	if base != "":
+		_sketched_volume(list, base, vol)
+	# Shapes stamped with the shape brush: over the sketch, in the order they were made.
+	for e in list:
+		var sk: Dictionary = e[1]
+		if not sk.has("solid"):
+			continue
+		var cells := _cells_of(e[0], sk)
+		if bool(sk.solid.carve):
+			for c in cells:
+				vol.erase(c)
+		else:
+			for c in cells:
+				vol[c] = true
+				_box[0] = (_box[0] as Vector3i).min(c)
+				_box[1] = (_box[1] as Vector3i).max(c)
+	_course = (_box[0] as Vector3i).y
+	return vol
+
+
+## The sketches' part of `part_volume`: the slabs on the base plane, cut by the views
+## through the part and the pockets.
+func _sketched_volume(list: Array, base: String, vol: Dictionary) -> void:
 	for e in list:
 		var sk: Dictionary = e[1]
 		if sk.plane != base or (sk.adds as Array).is_empty():
@@ -3675,10 +3720,9 @@ func part_volume(list: Array) -> Dictionary:
 		var c1 := _sketch_cell(ghi, int(depth[depth.size() - 1]), pl)
 		_box[0] = (_box[0] as Vector3i).min(c0.min(c1))
 		_box[1] = (_box[1] as Vector3i).max(c0.max(c1))
-	_course = (_box[0] as Vector3i).y
 	for e in list:
 		var sk: Dictionary = e[1]
-		if sk.plane == base:
+		if sk.plane == base or sk.has("solid"):
 			continue
 		var keep := not (sk.adds as Array).is_empty()
 		var g2: Dictionary = _cells_of(e[0], sk) if keep else through_cuts(sk)
@@ -3689,7 +3733,6 @@ func part_volume(list: Array) -> Dictionary:
 		for cut in e[1].subs:
 			if cut is Dictionary and cut.has("cut"):
 				_cut_pocket(vol, region_cells(cut.cut), e[1].plane, int(cut.deep), int(cut.get("from", 1)))
-	return vol
 
 
 ## A sketch's own cells (area in, less area cut right through), kept until it changes.
@@ -3759,7 +3802,7 @@ func _plan_volume(list: Array, vol: Dictionary, own: Dictionary, only: Dictionar
 	var views := []
 	for e in list:
 		var pl: String = e[1].plane
-		if pl != "top" and not views.has(pl):
+		if pl != "top" and not views.has(pl) and not e[1].has("solid"):
 			views.append(pl)
 	var used := {}
 	var placements := []
@@ -3906,6 +3949,8 @@ func _set_sketch(key: String, state) -> void:
 ## out. An outline's area is everything inside its outermost line, so one that crosses
 ## itself or goes round twice is filled whole.
 func sketch_cells(sk: Dictionary) -> Dictionary:
+	if sk.has("solid"):
+		return solid_cells(sk.solid)
 	var cells := {}
 	for poly in sk.get("adds", []):
 		for c in region_cells(poly):
@@ -3914,6 +3959,18 @@ func sketch_cells(sk: Dictionary) -> Dictionary:
 		for c in through_cuts(sk):
 			cells.erase(c)
 	return cells
+
+
+## The cells of a shape-brush stroke kept in a part's form: its shape stamped at each of
+## its centres, inside the build area. `solid`: {kind, size, axis, thick, carve, at: [[x, y, z] ...]}.
+func solid_cells(solid: Dictionary) -> Dictionary:
+	var out := {}
+	for q in solid.at:
+		var centre := Vector3i(int(q[0]), int(q[1]), int(q[2]))
+		for c in brush_shape_cells(String(solid.kind), centre, int(solid.size), int(solid.axis), int(solid.thick)):
+			if c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates and c.z < plate_studs:
+				out[c] = true
+	return out
 
 
 static func region_cells(poly: Variant) -> Dictionary:
@@ -5062,7 +5119,7 @@ func move_part(part: String, by: Vector3i) -> bool:
 		if String(sk.part) != part:
 			continue
 		var moved := shift_sketch(sk, by)
-		var nk := "%s|%s|%s" % [part, moved.plane, _num(float(moved.at))]
+		var nk: String = k if sk.has("solid") else "%s|%s|%s" % [part, moved.plane, _num(float(moved.at))]
 		g.before[k] = sk
 		if not g.before.has(nk):
 			g.before[nk] = sketches.get(nk)
@@ -5113,6 +5170,12 @@ func _draw_move(im: ImmediateMesh) -> void:
 
 ## A sketch moved by `by` cells: its outlines across and up its plane, its depth along it.
 static func shift_sketch(sk: Dictionary, by: Vector3i) -> Dictionary:
+	if sk.has("solid"):
+		var shifted := sk.duplicate()
+		shifted.solid = (sk.solid as Dictionary).duplicate()
+		shifted.solid.at = (sk.solid.at as Array).map(func(q: Array) -> Array:
+			return [int(q[0]) + by.x, int(q[1]) + by.y, int(q[2]) + by.z])
+		return shifted
 	var d := Vector3(by)
 	match String(sk.plane):
 		"front": d = Vector3(by.z, by.y, by.x)
@@ -5653,12 +5716,73 @@ func _shape_centre(erase: bool) -> Vector3i:
 	return _cell
 
 
+## One stamp of the brush. It goes into the parts' forms, not straight into bricks: laying,
+## the current part's; carving, every part whose form it touches -- so the bricks there
+## are that part's, worked out again with its sketch, and a part can be laid again from
+## its form later (Docs/AssetWorkshop.md, "The form"). Bricks no form laid (laid by hand,
+## or a part with no form) are carved as before.
 func _stamp_shape(erase: bool) -> void:
 	var centre := _shape_centre(erase)
 	_sb.last = centre
 	var cells := brush_shape_cells(brush3d, centre, shape_size, shape_axis(), shape_thick)
-	# Counted, not read off the edit list: a brick taken up swaps its own edit for a delete.
-	_sb.ops = int(_sb.get("ops", 0)) + (shape_carve(cells) if erase else shape_place(cells))
+	if not erase:
+		form_stamp(part_names[part_sel], centre, false)
+		return
+	for part in part_names:
+		if part_sketches(part).is_empty():
+			continue
+		if not _part_vol.has(part):
+			_part_vol[part] = part_volume(part_sketches(part))
+			_part_box[part] = _box.duplicate()
+		var vol: Dictionary = _part_vol[part]
+		for c in cells:
+			if vol.has(c):
+				form_stamp(part, centre, true)
+				break
+	shape_carve(cells)
+
+
+## Put a stamp of the brush (its shape, size and plane as set now) at `centre` into a
+## part's form, and lay the part again. A stroke's stamps in one part are one entry.
+func form_stamp(part: String, centre: Vector3i, carve: bool) -> void:
+	var keys: Dictionary = _sb.get_or_add("keys", {})
+	var key := String(keys.get(part, ""))
+	var sk: Dictionary
+	if key == "" or not sketches.has(key):
+		key = "%s|solid|%d" % [part, _sketch_seq]
+		sk = {"part": part, "plane": "solid", "at": 0.0, "width": 0, "adds": [], "subs": [], "n": _sketch_seq,
+				"solid": {"kind": brush3d, "size": shape_size, "axis": shape_axis(), "thick": shape_thick,
+					"carve": carve, "at": []}}
+		_sketch_seq += 1
+		keys[part] = key
+	else:
+		sk = (sketches[key] as Dictionary).duplicate()
+		sk.solid = (sk.solid as Dictionary).duplicate()
+		sk.solid.at = (sk.solid.at as Array).duplicate()
+	sk.solid.at.append([centre.x, centre.y, centre.z])
+	resketch(key, sk)
+
+
+## A stroke's undo: every edit since `edits_from` as one group, the groups its stamps made
+## since `groups_from` folded into it with every sketch change they held.
+func _fold_groups(groups_from: int, edits_from: int) -> void:
+	var n := _edits.size() - edits_from
+	var records := []
+	while _edit_groups.size() > groups_from:
+		var g: Dictionary = _edit_groups.pop_back()
+		var s = g.get("sketch")
+		if s is Array:
+			var flat: Array = (s as Array).duplicate()
+			flat.reverse()
+			records.append_array(flat)
+		elif s != null:
+			records.append(s)
+	records.reverse()
+	if n > 1 or not records.is_empty():
+		var g := {"end": _edits.size(), "n": n}
+		if not records.is_empty():
+			g["sketch"] = records
+		_edit_groups.append(g)
 
 
 ## Ctrl + LMB lays the shape, Ctrl + RMB carves it; held and dragged, it goes on doing
@@ -5671,11 +5795,11 @@ func _shape_brush_input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed and (e.ctrl_pressed or brushing_shapes()) and _sb.is_empty():
 			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "start": _edits.size(), "last": _cell,
-					"button": e.button_index}
+					"button": e.button_index, "groups": _edit_groups.size()}
 			_stamp_shape(bool(_sb.erase))
 			return true
 		if not e.pressed and not _sb.is_empty() and e.button_index == int(_sb.button):
-			_group(int(_sb.get("ops", 0)))
+			_fold_groups(int(_sb.groups), int(_sb.start))
 			_sb = {}
 			return true
 	if e is InputEventMouseMotion and not _sb.is_empty():
