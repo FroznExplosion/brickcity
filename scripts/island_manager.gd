@@ -163,7 +163,7 @@ const MERGE_FALLING_BLOCKS := 200
 ## on -- and landmarks are never deleted, because every machine has to have
 ## them. So the only way to have fewer of them far away is not to make them.
 ## The host decides, and what it decides is recorded, so every machine agrees.
-const FRACTURE_RANGE := 60.0
+const FRACTURE_RANGE := CollapseTier.HOT_RANGE
 const WAKE_RADIUS := 6.0
 
 ## Impact shear. A landing releases joints; it destroys nothing.
@@ -228,7 +228,7 @@ const FURNITURE_FALL_RANGE := 6.0
 ## A small piece breaks off only this close to the player, and in view. Anywhere
 ## else it is deleted where it came loose. Per machine: small pieces are that
 ## machine's presentation, so its own camera decides.
-const SMALL_KEEP_RANGE := 60.0
+const SMALL_KEEP_RANGE := CollapseTier.HOT_RANGE
 ## A group of this many bricks or fewer is DEBRIS, however far it spans: a floor
 ## panel on its own is a sheet of plastic, not cover. Presentation only -- the
 ## RUBBLE layer, which no pawn collides with -- and each machine keeps or drops
@@ -691,7 +691,7 @@ class Dormant:
 ## Far enough that a piece is not part of the scene any more, and close enough
 ## that walking back brings it out again. The gap is hysteresis: a piece on the
 ## line must not sleep and wake every tick.
-const SLEEP_RANGE := 150.0
+const SLEEP_RANGE := CollapseTier.FAR_RANGE
 const WAKE_RANGE := 120.0
 ## How long a piece has to have been settled first. Long enough that a collapse
 ## finishes before anything in it is put away.
