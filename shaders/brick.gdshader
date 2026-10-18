@@ -471,76 +471,95 @@ void fragment() {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
             vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
             ps_bed_grain(v_local.xz, ax_u, ax_v, albedo, NORMAL, print_rough);
-            // The hollow, as the sliced G-code builds it (tools/
-            // toolpath_compare.gd): from every rib and the rim its walls
-            // step in a layer at a time at 45 degrees -- a band of terraces,
-            // a line at every step -- and then the rest is roofed flat,
-            // BRIDGED, straight lines across in one direction. On a plate
-            // the band is all there is room for; on a brick it is the same
-            // band before the bridge. Lit like any other face: the hollow is
-            // a little dimmer for what it sees of the sky, not a cave. (It was
-            // a dark flat hollow with its walls found by walking the view ray
-            // up into it, and at range the walk came apart in stripes.)
+            // The hollow: upright walls -- the rim's and the ribs' inner
+            // faces, a line at every layer -- and a flat roof `under_depth`
+            // up, BRIDGED, straight lines across one way. The slicer steps
+            // the roof out from the walls at 45 degrees for a millimetre or
+            // so, but drawn that way it read as a ceiling of pyramids, not
+            // the square cells of a brick. Lit like any other face: dimmer
+            // for what it sees of the sky, not a cave.
             float shade = 1.0;
             if (underside_hollow && solid < 0.99 && dist >= under_depth_range) {
                 shade = mix(under_wall, under_cavity, 0.5);
             } else if (underside_hollow && solid < 0.99) {
                 const float SD_STEP = 0.003;
-                // Depth: the view ray is walked up into the hollow, whose
-                // roof is `under_slope` above the bottom less what the
-                // terraces take (min(sd, under_slope): 45 degrees from every
-                // wall). Stepped by how much room is left over how fast the
-                // ray crosses it, it cannot step through a wall (the roof
-                // rises at most 1:1), so it lands on the terrace or the
-                // bridge the eye really sees -- and the rim and the ribs hide
-                // the hollow behind them, and it moves as the eye does. Near
-                // only; out to under_parallax_range it flattens to the roof
-                // straight overhead, the picture past it.
+                // Depth: the view ray is walked up into the hollow, in steps
+                // of the distance to the nearest rim or rib (ps_under_sd --
+                // sphere tracing, in the plane), so it cannot pass a wall and
+                // needs no fixed step count: it stops ON the wall it meets,
+                // or at the roof. (A fixed six steps came apart in stripes at
+                // range.) The rim and ribs hide what is behind them, and it
+                // moves as the eye does. Out to under_parallax_range it
+                // flattens to the roof straight overhead, the picture past it.
                 vec2 hp = cell;
+                float hs = under_depth;   // where the ray stopped, metres up
+                bool on_wall = false;
                 float pfade = 1.0 - smoothstep(under_parallax_range * 0.6,
                         under_parallax_range, dist);
                 if (pfade > 0.0) {
                     vec3 dv = transpose(mat3(MODEL_MATRIX))
                             * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
                     if (dv.y > 0.02) {
-                        vec2 run = dv.xz / dv.y * pfade;
-                        float lip = 1.0 + length(run);
-                        float hs = 0.0;
-                        for (int i = 0; i < 10; i++) {
-                            float room = clamp(ps_under_sd(hp, fsize), 0.0, under_slope) - hs;
-                            if (room < 0.0005) {
+                        vec2 run = dv.xz / dv.y * pfade;   // across, a metre up
+                        float rl = max(length(run), 1e-4);
+                        hs = 0.0;
+                        for (int i = 0; i < 16; i++) {
+                            float sd = ps_under_sd(hp, fsize);
+                            if (sd < 0.001) {
+                                on_wall = true;
                                 break;
                             }
-                            float st = room / lip;
+                            float st = sd / rl;
+                            if (hs + st >= under_depth) {
+                                hp += run * (under_depth - hs);
+                                hs = under_depth;
+                                break;
+                            }
                             hs += st;
                             hp += run * st;
                         }
+                        if (!on_wall && hs < under_depth) {
+                            // Still going at a graze, along a wall: taken as
+                            // the roof. (As a wall it got a sideways normal
+                            // at a pixel here and there: sparkles.)
+                            hs = under_depth;
+                        }
                     }
                 }
-                float s0 = max(ps_under_sd(hp, fsize), 0.0);
                 float near = 1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist);
-                float slope = 1.0 - smoothstep(under_slope - fwidth(s0), under_slope, s0);
-                vec3 roof_n = NORMAL;
-                if (slope > 0.0) {
+                float up = hs / under_depth;   // 0 at the bottom, 1 the roof
+                if (on_wall) {
+                    // Facing out of the wall: the way its distance grows.
+                    float s0 = ps_under_sd(hp, fsize);
                     vec2 g = vec2(ps_under_sd(hp + vec2(SD_STEP, 0.0), fsize) - s0,
                                   ps_under_sd(hp + vec2(0.0, SD_STEP), fsize) - s0);
                     float gl = length(g);
                     if (gl > 1e-7) {
-                        vec2 a = g / gl;
-                        roof_n = normalize(NORMAL + (ax_u * a.x + ax_v * a.y));
+                        vec2 dir = g / gl;
+                        // Turned only a little: a wall in there sees the
+                        // wall opposite, not the sky, and turned upright it
+                        // caught the sun and the bright horizon and shone
+                        // brighter than the rim below it. Its lines and its
+                        // shade are what show it upright.
+                        vec3 wall_n = normalize(ax_u * dir.x * 0.25 + ax_v * dir.y * 0.25 + NORMAL);
+                        NORMAL = normalize(mix(NORMAL, wall_n, near));
                     }
                 }
-                // The steps' lines and the bridge's, as one count: a step a
-                // layer up the slope, a bridge line a bead across.
-                float lt = slope > 0.5 ? s0 / ps_layer(mat) : hp.x / bottom_bead_width;
+                // The walls' lines a layer apart up them, the roof's a bead
+                // apart across it.
+                float lt = on_wall ? hs / ps_layer(mat) : hp.x / bottom_bead_width;
                 float aa = max(fwidth(lt), 1e-5);
                 float resolved = 1.0 - smoothstep(resolve_begin, resolve_end, aa);
                 float ph = fract(lt);
                 float ink = (1.0 - smoothstep(0.0, max(aa * 1.4, 0.18), abs(ph - 0.5)))
                         * resolved * near;
-                NORMAL = normalize(mix(NORMAL, roof_n, slope * (1.0 - solid) * near));
-                shade = mix(under_wall, under_cavity, near * mix(1.0, s0 / under_slope, slope)
+                // Darker the deeper in, and darkest in the roof's corners.
+                shade = mix(under_wall, under_cavity, near * (on_wall ? up : 1.0)
                         + (1.0 - near) * 0.5);
+                if (on_wall) {
+                    // Lit from the opening: brightest at its foot.
+                    shade *= mix(1.0, 0.8, up * near);
+                }
                 albedo *= mix(1.0, 0.82, ink * (1.0 - solid));
             }
             // In there it sees little of the sky, and the roof is printed
@@ -548,10 +567,13 @@ void fragment() {
             // What the hollow loses is sky: ambient light and reflections
             // (AO), not the sun's light or its own colour.
             occlusion = mix(shade, 1.0, solid);
-            // ...and a little of its light: enough that the terraces read as
-            // a hollow going up into the part, not a pattern drawn on it.
+            // ...and a little of its light: enough that the hollow reads as
+            // going up into the part, not a pattern drawn on it.
             albedo *= mix(mix(1.0, shade, 0.6), 1.0, solid);
-            print_rough += (1.0 - solid) * 0.45;
+            // Not much rougher than the rim: rougher, it lost the rim's
+            // dark reflection of the floor and shone brighter than the rim,
+            // a raised panel instead of a hollow.
+            print_rough += (1.0 - solid) * 0.1;
         }
         if (print_near && face == 0 && !authored && !facet
                 && (v_local_normal.x < -0.5 || v_local_normal.z < -0.5)) {
