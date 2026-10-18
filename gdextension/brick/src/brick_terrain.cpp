@@ -2039,12 +2039,15 @@ struct MeshBuf {
     PackedByteArray custom0;
     /// What `quad`/`tri` stamp into custom0 for the vertices they emit.
     uint8_t material = 0;
+    /// custom0.b: 255 on a real bevel facet, which the shader draws plain
+    /// (the top's print paths stop at the edge instead of running down it).
+    uint8_t facet = 0;
 
     void push_custom(int n) {
         for (int i = 0; i < n; ++i) {
             custom0.push_back(material);
             custom0.push_back(0);
-            custom0.push_back(0);
+            custom0.push_back(facet);
             custom0.push_back(255);
         }
     }
@@ -2154,10 +2157,17 @@ struct MeshBuf {
     ///
     /// A square edge is not inset at all, so the face reaches its full
     /// extent and butts against the geometry it meets.
+    ///
+    /// `cut_corner` is one bit a CORNER (bit i the corner at the i-th
+    /// vertex): a corner whose upright edge below is bevelled too, the corner
+    /// of a whole brick standing free. There the two strips stop a bevel
+    /// short of the corner, where that upright facet meets them, and this face
+    /// draws the corner triangle between the three -- the corner cut at 45
+    /// degrees all round instead of standing square over the upright edge.
     void quad(const Vector3 &n, const Color &c, const Vector2 &face,
             const Vector3 &a, const Vector3 &b, const Vector3 &d, const Vector3 &e,
             const Vector2 &ua, const Vector2 &ub, const Vector2 &ud, const Vector2 &ue,
-            uint8_t convex = 0, uint8_t square = 0) {
+            uint8_t convex = 0, uint8_t square = 0, uint8_t cut_corner = 0) {
         const float bev = g_face_bevel;
         if (bev <= 0.0f) {
             raw_quad(n, c, face, a, b, d, e, ua, ub, ud, ue);
@@ -2200,6 +2210,7 @@ struct MeshBuf {
 
         raw_quad(n, c, face, in[0], in[1], in[2], in[3],
             inuv[0], inuv[1], inuv[2], inuv[3]);
+        facet = 255;
 
         // Every edge gets its strip, running from the inset edge back to the
         // rim pushed one bevel BEHIND the face plane.
@@ -2250,11 +2261,15 @@ struct MeshBuf {
             }
             const Vector3 off = back;
             const Vector3 sn = (n + out).normalized();
+            // At a cut corner the strip ends a bevel short of the corner.
+            const Vector3 along = (rim[j] - rim[i]).normalized() * cut;
+            const Vector3 ri = rim[i] + off + ((cut_corner & (1u << i)) ? along : Vector3());
+            const Vector3 rj = rim[j] + off - ((cut_corner & (1u << j)) ? along : Vector3());
             // j FIRST. Wound the other way the strip's cross product comes
             // out along +sn instead of -sn, so every chamfer facet faced
             // inward: visible from behind the surface and invisible from in
             // front, which is what the capture showed.
-            raw_quad(sn, c, face, in[j], in[i], rim[i] + off, rim[j] + off,
+            raw_quad(sn, c, face, in[j], in[i], ri, rj,
                 inuv[j], inuv[i], ruv[i], ruv[j]);
         }
 
@@ -2271,17 +2286,19 @@ struct MeshBuf {
         // must own it. The three normals lie on three DIFFERENT axes, so
         // "lowest axis index wins" picks one and only one.
         for (int i = 0; i < 4; ++i) {
-            // Only where TWO convex edges meet is there a third face and so a
-            // corner hole. A corner between coplanar edges is already closed
-            // by the two half-facets.
-            if (!(convex & (1u << ((i + 3) % 4))) || !(convex & (1u << i))) {
-                continue;
-            }
             const Vector3 o1 = edge_out[(i + 3) % 4];
             const Vector3 o2 = edge_out[i];
-            const int an = axis_of(n);
-            if (an > axis_of(o1) || an > axis_of(o2)) {
-                continue;   // a neighbouring face owns this corner
+            if ((cut_corner & (1u << i)) == 0) {
+                // Only where TWO convex edges meet is there a third face and
+                // so a corner hole. A corner between coplanar edges is
+                // already closed by the two half-facets.
+                if (!(convex & (1u << ((i + 3) % 4))) || !(convex & (1u << i))) {
+                    continue;
+                }
+                const int an = axis_of(n);
+                if (an > axis_of(o1) || an > axis_of(o2)) {
+                    continue;   // a neighbouring face owns this corner
+                }
             }
             // The three points where each PAIR of the corner's facets meet.
             // Using rim - n*cut and friends made a triangle twice the size
@@ -2292,6 +2309,7 @@ struct MeshBuf {
             tri_facing((n + o1 + o2).normalized(), c, face, p0, p1, p2,
                 ruv[i], ruv[i], ruv[i]);
         }
+        facet = 0;
     }
 };
 
@@ -2703,6 +2721,19 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         a0, b0, c0, d0,
                         Vector2(0, 0), Vector2(fsz.x, 0), fsz, Vector2(0, fsz.y),
                         convex, square);
+                    // A wall standing on a floor reaches a bevel below it.
+                    // The floor's seam grooves run up to the wall's foot, and
+                    // a wall stopping at the floor's top left each groove's
+                    // end a triangle open into the unmeshed ground: daylight
+                    // at the foot of every terrace (bevel_gap_probe at a
+                    // bigger bevel). Edge 0 of a side is its bottom.
+                    if (dy == 0 && g_face_bevel > 0.0f && (square & 1u) != 0) {
+                        const Vector3 down(0.0f, bevel_reach(), 0.0f);
+                        const Vector2 sk(fsz.x, bevel_reach());
+                        m.raw_quad(Vector3((float)dx, 0.0f, (float)dz), col, sk,
+                            a0 - down, b0 - down, b0, a0,
+                            Vector2(0, 0), Vector2(sk.x, 0), sk, Vector2(0, sk.y));
+                    }
                     u += wdt;
                 }
             }
@@ -3753,11 +3784,49 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 //
                 // On a floor seen at a grazing angle the top edge is the only
                 // one that reads, which is where this started.
+                //
+                // A CORNER STANDING FREE -- the ground drops away on both
+                // sides of it -- is cut at 45 degrees upright as well, the
+                // way a whole brick's is (Docs/BrickBevel.md 2.5): its two
+                // sides stop a bevel short, an upright facet joins them, and
+                // the top's strips and corner triangle close over it. A
+                // square corner there stood the top's bevel over a sharp
+                // upright edge, which read as the top hanging over the side.
+                const float cut = g_face_bevel > 0.0f
+                        ? std::min(g_face_bevel, std::min(x1 - x0, z1 - z0) * 0.34f) : 0.0f;
+                // Corner k: its x side (-1/+1) and its z side.
+                static const int CX[4] = { -1, 1, 1, -1 };
+                static const int CZ[4] = { -1, -1, 1, 1 };
+                uint8_t cutc = 0;
+                // Where the air the cut leaves stops: the top of the ground
+                // on both sides of the corner, or (below this piece's foot)
+                // nowhere -- the mask's walls below bevel that corner too.
+                float cap_y[4] = { 0, 0, 0, 0 };
+                bool capped[4] = { false, false, false, false };
+                if (cut > 1e-5f) {
+                    // The two top edges meeting at corner k (bits of `square`).
+                    static const uint8_t EX[4] = { 8u, 2u, 2u, 8u };
+                    static const uint8_t EZ[4] = { 1u, 1u, 4u, 4u };
+                    for (int k = 0; k < 4; ++k) {
+                        const int ix = CX[k] < 0 ? p.ox : p.ox + p.sx - 1;
+                        const int iz = CZ[k] < 0 ? p.oz : p.oz + p.sz - 1;
+                        const int axz = s.tp[TileSample::idx(ix + CX[k], iz)];
+                        const int azx = s.tp[TileSample::idx(ix, iz + CZ[k])];
+                        // Both sides the SAME height: the cut's air then has
+                        // one floor to stop on. Uneven, one side's wall would
+                        // stand open beside the other's floor.
+                        if (axz < p.top && axz == azx && (square & (EX[k] | EZ[k])) == 0) {
+                            cutc |= (uint8_t)(1u << k);
+                            cap_y[k] = (float)(axz + 1) * PLATE_M;
+                            capped[k] = cap_y[k] >= top - BRICK_M - 1e-4f;
+                        }
+                    }
+                }
                 m.quad(Vector3(0, 1, 0), col, face,
                     Vector3(x0, top, z0), Vector3(x1, top, z0),
                     Vector3(x1, top, z1), Vector3(x0, top, z1),
                     Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y),
-                    0, square);
+                    0, square, cutc);
                 // THE SKIRT. A square edge beside a LEVEL neighbour can still
                 // face that neighbour's half-groove: the rule above decides a
                 // whole piece edge, so a 2x4 edge that is square because one
@@ -3809,44 +3878,84 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 // brick as its top. Only where the ground drops away; level
                 // with a neighbour the face is interior. SQUARE: the top's
                 // strip already runs down onto them.
-                const uint8_t SQ = 0xF;
                 const float yb = top - BRICK_M;
-                const Vector2 fzy(z1 - z0, BRICK_M);
-                const Vector2 fxy(x1 - x0, BRICK_M);
                 // A side STOPS where the top's chamfer meets it: the strip
                 // runs down to `top - cut` on this plane, so a side drawn on
                 // up to `top` stood a 13 mm sheet of brick outside the bevel,
                 // its texture floating past the edge. Same cut as
                 // MeshBuf::quad's. A square edge has no strip: full height.
-                const float cut = g_face_bevel > 0.0f
-                        ? std::min(g_face_bevel, std::min(x1 - x0, z1 - z0) * 0.34f) : 0.0f;
-                const float t_zm = (square & 1u) ? top : top - cut;
-                const float t_xp = (square & 2u) ? top : top - cut;
-                const float t_zp = (square & 4u) ? top : top - cut;
-                const float t_xm = (square & 8u) ? top : top - cut;
+                //
+                // Below the side, a bevel more of it: a side one brick tall
+                // over a floor one brick down stopped at that floor's top,
+                // and the floor's seam grooves running up to it ended in
+                // triangles open into the ground under the wall (the holes
+                // at the foot of a terrace). Hidden except down a groove.
+                const float yr = yb - bevel_reach();
+                // One side, from corner ka to corner kb (wound as before),
+                // each end a bevel short where that corner is cut.
+                const auto side = [&](const Vector3 &n, int ka, int kb, float xa, float za,
+                        float xb, float zb, float yt) {
+                    const Vector3 dir = Vector3(xb - xa, 0.0f, zb - za).normalized();
+                    const float len = std::fabs(xb - xa) + std::fabs(zb - za);
+                    const float sa = (cutc & (1u << ka)) ? cut : 0.0f;
+                    const float sb = (cutc & (1u << kb)) ? cut : 0.0f;
+                    const Vector3 pa = Vector3(xa, 0.0f, za) + dir * sa;
+                    const Vector3 pb = Vector3(xb, 0.0f, zb) - dir * sb;
+                    const Vector2 f(len, BRICK_M);
+                    const auto at = [](const Vector3 &q, float y) { return Vector3(q.x, y, q.z); };
+                    m.quad(n, col, f, at(pa, yb), at(pb, yb), at(pb, yt), at(pa, yt),
+                        Vector2(sa, 0), Vector2(len - sb, 0), Vector2(len - sb, f.y), Vector2(sa, f.y),
+                        0, 0xF);
+                    if (g_face_bevel > 0.0f) {
+                        const Vector2 r(len, yb - yr);
+                        m.raw_quad(n, col, r, at(pa, yr), at(pb, yr), at(pb, yb), at(pa, yb),
+                            Vector2(sa, 0), Vector2(len - sb, 0), Vector2(len - sb, r.y), Vector2(sa, r.y));
+                    }
+                };
                 if (lo_xm) {
-                    m.quad(Vector3(-1, 0, 0), col, fzy,
-                        Vector3(x0, yb, z1), Vector3(x0, yb, z0),
-                        Vector3(x0, t_xm, z0), Vector3(x0, t_xm, z1),
-                        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
+                    side(Vector3(-1, 0, 0), 3, 0, x0, z1, x0, z0, (square & 8u) ? top : top - cut);
                 }
                 if (lo_xp) {
-                    m.quad(Vector3(1, 0, 0), col, fzy,
-                        Vector3(x1, yb, z0), Vector3(x1, yb, z1),
-                        Vector3(x1, t_xp, z1), Vector3(x1, t_xp, z0),
-                        Vector2(0, 0), Vector2(fzy.x, 0), fzy, Vector2(0, fzy.y), 0, SQ);
+                    side(Vector3(1, 0, 0), 1, 2, x1, z0, x1, z1, (square & 2u) ? top : top - cut);
                 }
                 if (lo_zm) {
-                    m.quad(Vector3(0, 0, -1), col, fxy,
-                        Vector3(x0, yb, z0), Vector3(x1, yb, z0),
-                        Vector3(x1, t_zm, z0), Vector3(x0, t_zm, z0),
-                        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
+                    side(Vector3(0, 0, -1), 0, 1, x0, z0, x1, z0, (square & 1u) ? top : top - cut);
                 }
                 if (lo_zp) {
-                    m.quad(Vector3(0, 0, 1), col, fxy,
-                        Vector3(x1, yb, z1), Vector3(x0, yb, z1),
-                        Vector3(x0, t_zp, z1), Vector3(x1, t_zp, z1),
-                        Vector2(0, 0), Vector2(fxy.x, 0), fxy, Vector2(0, fxy.y), 0, SQ);
+                    side(Vector3(0, 0, 1), 2, 3, x1, z1, x0, z1, (square & 4u) ? top : top - cut);
+                }
+                // The upright facet of every cut corner, from a bevel under
+                // the side's foot up to where the top's corner triangle sits.
+                if (cutc != 0) {
+                    m.facet = 255;
+                    for (int k = 0; k < 4; ++k) {
+                        if ((cutc & (1u << k)) == 0) {
+                            continue;
+                        }
+                        const float cx = CX[k] < 0 ? x0 : x1;
+                        const float cz = CZ[k] < 0 ? z0 : z1;
+                        const Vector3 fn = Vector3((float)CX[k], 0.0f, (float)CZ[k]).normalized();
+                        // Where the x side ends, and where the z side ends.
+                        const float qx_z = cz - (float)CZ[k] * cut;
+                        const float qz_x = cx - (float)CX[k] * cut;
+                        // Down past the cap as far as the sides reach: the
+                        // floor's seam grooves run in under the corner.
+                        const float y_lo = yr;
+                        const float y_hi = top - cut;
+                        const Vector2 f(cut * 1.4142f, BRICK_M);
+                        const Vector2 mid = f * 0.5f;
+                        const Vector3 a(cx, y_lo, qx_z), b(qz_x, y_lo, cz);
+                        const Vector3 c(qz_x, y_hi, cz), d(cx, y_hi, qx_z);
+                        m.tri_facing(fn, col, f, a, b, c, mid, mid, mid);
+                        m.tri_facing(fn, col, f, a, c, d, mid, mid, mid);
+                        if (capped[k]) {
+                            // The cut's floor, level with the ground beside.
+                            const float yc = cap_y[k];
+                            m.tri_facing(Vector3(0, 1, 0), col, f, Vector3(cx, yc, cz),
+                                Vector3(cx, yc, qx_z), Vector3(qz_x, yc, cz), mid, mid, mid);
+                        }
+                    }
+                    m.facet = 0;
                 }
             }
         }
