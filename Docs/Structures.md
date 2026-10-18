@@ -145,7 +145,26 @@ A floor is a wide layer of plates, found in the grid at whatever height it is. I
 floor-line snap and the space finder (3.2) use found floors, so a mezzanine or a double-height hall
 is a floor like any other.
 
-### 2.5 Collapse in three tiers — not started
+### 2.5 Collapse in three tiers — built, as rules already there; named 2026-10-18
+Looked at before building it: most of this was already in, spread over ten constants. They now
+read two numbers, `CollapseTier.HOT_RANGE` (60 m) and `FAR_RANGE` (150 m) (`scripts/collapse_tier.gd`),
+so the tiers move together:
+
+| tier | from the nearest player | what it does today |
+|---|---|---|
+| hot | under 60 m | every group the solve lets go is a piece; a landing breaks what lands; small pieces, crumbs and the brick heap; furniture falls within 6 m; a mega building in chunks of 1,500 bricks |
+| rest | 60-150 m | a landing breaks nothing (`FRACTURE_RANGE`); a small piece is deleted where it comes loose (`SMALL_KEEP_RANGE`); a mega building in chunks of 4,000 |
+| far | past 150 m | any building in a few big chunks, furniture written off (`CollapseDirector.is_far`); settled pieces put to sleep, drawn by a stand-in (`SLEEP_RANGE`) |
+
+Measured (`collapse_probe` "far", a 5-storey tower undercut): 3-14 pieces from 30 m, 2-3 from 100 m,
+1 from 260 m. Hot at 60 m, not the ~30 m written below: 60 m is where landings stop breaking
+today, and moving it in changes what the player sees at 30-60 m.
+**Not built, and why not yet:** far collapses *resolved without physics* (a far collapse is 1-3
+bodies; there is little to save), chunks cut *along tile edges* (they are cut between storeys), and
+pieces at rest *merged into one static rubble mesh* (settled pieces are frozen bodies, and past
+150 m asleep). Each is worth doing when a measurement says it costs something.
+
+The plan as it was:
 * **Hot** -- the damaged tiles and the tiles within ~30 m of the player: real bricks, crumbs,
   furniture with collision, items with physics.
 * **The rest** -- big rigid chunks cut along tile edges, merged collision, coarse meshes, no

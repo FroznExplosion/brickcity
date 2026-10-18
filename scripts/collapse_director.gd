@@ -33,8 +33,8 @@ const BREAKAGE_MS := 2000
 ## undercut it is the building giving way, not a chip.
 const BREAKAGE_MAX_BLOCKS := 200
 ## Bricks a chunk aims for, by the nearest player's distance to the building.
-const NEAR_RANGE := 60.0
-const FAR_RANGE := 150.0
+const NEAR_RANGE := CollapseTier.HOT_RANGE
+const FAR_RANGE := CollapseTier.FAR_RANGE
 const CHUNK_NEAR := 1500
 const CHUNK_MID := 4000
 ## Beyond FAR_RANGE a round's groups become at most this many chunks.
