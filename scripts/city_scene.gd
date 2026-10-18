@@ -1233,6 +1233,8 @@ func _ready() -> void:
 		_run_drawn_pass()
 	elif _floating_mode:
 		_run_floating_pass()
+	elif "--lodbreak" in OS.get_cmdline_user_args():
+		_run_lodbreak_pass()
 	elif _ring_mode:
 		_run_ring_pass()
 	elif _groups_mode:
@@ -7630,7 +7632,7 @@ func _run_drawn_pass() -> void:
 			b.is_materialised() and _brick_nodes.has(b.id) and not _bands_building(b.id))
 	var before := _drawn_stale(b)
 	_gate_ok("whole, it draws nothing but bricks", float(before[1]) <= float(before[0]) * DRAWN_SLACK,
-			"%d of %d triangles with no brick behind them" % [before[1], before[0]])
+			"%d of %d triangles with no brick behind them: %s" % [before[1], before[0], before[2]])
 	for shot in 3:
 		_blast(face + Vector3(0.0, float(shot) * 2.5 - 2.0, 0.0) + out * 0.5, 5.8)
 		await _frames(20)
@@ -7759,6 +7761,136 @@ func _run_floating_pass() -> void:
 			_save("floating_%d" % k)
 	print("[floating] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## The user's way of breaking a building (2026-10-17 pictures): a 12 m blast
+## fired at a tower's foot from each of the building's distance tiers -- 25 m
+## (bricks), 60 m (bricks, mesh), 160 m (past DEMESH_RANGE: its far drawing)
+## and 320 m (past SHELL_RANGE: a recipe) -- then watched from there and flown
+## up to at 20 m/s. Pictures at every stop (shots/lodbreak_*); what each says
+## of the building, its studs and the furniture and bricks lying near it.
+##
+##     godot --path . scenes/big_city.tscn -- --lodbreak [--at=<m>] [--pick=<n>] [--foot]
+##
+## Gates, at each tower's end: no brick of the heap lying in mid-air (a crumb's
+## floor gone before it got there: IslandManager._crumb_floor_gone) and no stud
+## drawn on a brick that has gone (BrickNear.stale_studs). Furniture riding a
+## piece lying on its side reads as floating to _floating_furniture: printed,
+## not gated.
+func _run_lodbreak_pass() -> void:
+	print("[lodbreak] a tower shot down from each tier, then flown up to")
+	respawn_buildings = false
+	var picks: Array = []
+	for c in registry.buildings:
+		if c.is_build() or _wide_ids.has(c.id):
+			continue
+		if c.recipe.courses >= 40:
+			picks.append(c)
+	picks.sort_custom(func(a, c) -> bool: return a.recipe.courses > c.recipe.courses)
+	var dists := [60.0, 90.0, 160.0, 320.0]
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--at="):
+			dists = [float(a.substr(5))]
+		if a.begins_with("--pick="):
+			picks = picks.slice(int(a.substr(7)))
+	for k in mini(dists.size(), picks.size()):
+		var b: BuildingRegistry.Building = picks[k]
+		var d: float = dists[k]
+		var fx: float = b.recipe.footprint_x * STUD
+		var fz: float = b.recipe.footprint_z * STUD
+		var mid: Vector3 = b.xform * Vector3(fx * 0.5, 0.0, fz * 0.5)
+		var away := Vector3(mid.x, 0.0, mid.z).normalized()
+		if away.length() < 0.5:
+			away = Vector3(1.0, 0.0, 0.0)
+		var aim_y := TowerRecipe.total_plates(b.recipe.courses) * PLATE * 0.5
+		if "--foot" in OS.get_cmdline_user_args():
+			aim_y = 3.0
+		camera.global_position = mid + away * d + Vector3(0.0, aim_y, 0.0)
+		camera.look_at(mid + Vector3(0.0, aim_y, 0.0), Vector3.UP)
+		await _frames(90)
+		_lodbreak_say(b, "%d m, before" % int(d))
+		_fire(12.0)
+		for sec in [1, 3, 8]:
+			await _frames(60 if sec == 1 else 120 if sec == 3 else 300)
+			_lodbreak_say(b, "%d m, after" % int(d))
+			_save("lodbreak_%d_%dm_wait%d" % [k, int(d), sec])
+		var at := d
+		var marks := [110.0, 60.0, 30.0, 12.0]
+		var mi := 0
+		while at > 12.0:
+			at -= 20.0 / 60.0
+			camera.global_position = mid + away * at + Vector3(0.0, aim_y, 0.0)
+			camera.look_at(mid + Vector3(0.0, aim_y * 0.7, 0.0), Vector3.UP)
+			await get_tree().physics_frame
+			if mi < marks.size() and at <= marks[mi]:
+				if marks[mi] < d:
+					await _frames(30)
+					_lodbreak_say(b, "flown in to %d m" % int(marks[mi]))
+					_save("lodbreak_%d_%dm_at%d" % [k, int(d), int(marks[mi])])
+				mi += 1
+		await _frames(120)
+		_lodbreak_say(b, "2 s at 12 m")
+		var lying := 0
+		for f in _floating_furniture():
+			if f[0] == "heap":
+				lying += 1
+		_gate_ok("%d m: no brick lying in mid-air" % int(d), lying == 0, "%d" % lying)
+		var ss: Array = brick_near.stale_studs()
+		_gate_ok("%d m: no stud drawn on a brick that has gone" % int(d), int(ss[1]) == 0,
+				"%d of %d" % [ss[1], ss[0]])
+		_save("lodbreak_%d_%dm_settled" % [k, int(d)])
+		var ff: Array = _floating_furniture()
+		if not ff.is_empty():
+			var foot: Vector3 = ff[ff.size() / 2][1]
+			for f in ff:
+				if f[0] == "heap":
+					foot = f[1]
+					break
+			for side in 2:
+				camera.global_position = foot + (Vector3(7.0, 3.0, 5.0) if side == 0 else Vector3(-6.0, 2.0, -7.0))
+				camera.look_at(foot, Vector3.UP)
+				await _frames(60)
+				_lodbreak_say(b, "looking at a floating part at %s" % str(foot.snapped(Vector3.ONE * 0.1)))
+				if side == 0:
+					var q := PhysicsRayQueryParameters3D.create(foot + Vector3.UP * 0.02, foot + Vector3.DOWN * 60.0)
+					q.collision_mask = 0xFFFF
+					var hit := get_world_3d().direct_space_state.intersect_ray(q)
+					var under := "nothing"
+					if not hit.is_empty():
+						var isl := islands.find_by_body(hit.collider)
+						under = "%s at %.2f m below (layer %d%s)" % [str(hit.collider), foot.y - (hit.position as Vector3).y,
+								(hit.collider as CollisionObject3D).collision_layer if hit.collider is CollisionObject3D else -1,
+								", a piece settled %s" % isl.settled if isl != null else ""]
+					print("    under it: %s" % under)
+				_save("lodbreak_%d_%dm_float%d" % [k, int(d), side])
+	print("[lodbreak] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
+	var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else -1
+	var shell: MeshInstance3D = _shells.get(b.id)
+	var bricks: Node3D = _brick_nodes.get(b.id)
+	var ss: Array = brick_near.stale_studs()
+	var ff: Array = _floating_furniture()
+	var fk := {}
+	for f in ff:
+		fk[f[0]] = int(fk.get(f[0], 0)) + 1
+	print("    studs held %d, %d with no brick under them %s; furniture parts %d, %d floating %s"
+			% [ss[0], ss[1], str(ss[2]), _float_seen, ff.size(), str(fk)])
+	var gboxes := 0
+	var gl: Array = interior_groups.known(b.id)
+	for gi in gl.size():
+		var pn := interior_groups.piece_node(b.id, gi)
+		if pn != null and pn.is_visible_in_tree() and pn.multimesh != null:
+			gboxes += pn.multimesh.visible_instance_count if pn.multimesh.visible_instance_count >= 0 else pn.multimesh.instance_count
+	print("    its storey groups draw %d piece box(es)" % gboxes)
+	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
+			% [b.id, what, camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
+			"none" if shell == null else ("shown" if shell.visible else "hidden"),
+			"none" if bricks == null else ("shown" if bricks.visible else "hidden"),
+			_bands_building(b.id),
+			_pieces_of(b.id), islands.moving_of(b.id), b.damage_profile.size()])
 
 
 func _pieces_of(id: int) -> int:

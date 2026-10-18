@@ -301,6 +301,32 @@ func audit() -> Dictionary:
 	return {"bands": bands, "drawn": drawn, "wanted": wanted}
 
 
+## For a gate: the studs held now (every band's last fetch, which is what its
+## rings draw) with no live brick under them -- a stud left standing on a
+## brick that died. [studs, of them stale, of the stale the chunks].
+func stale_studs() -> Array:
+	var cs := BrickWorld.get_cell_size()
+	var n := 0
+	var stale := 0
+	var chunks := {}
+	for b in _bands.values():
+		var band: Band = b
+		if band.studs.is_empty() or not is_instance_valid(band.node) 				or not band.node.is_inside_tree() or not world.is_chunk_alive(band.chunk):
+			continue
+		var xf: Transform3D = world.get_chunk_transform(band.chunk).affine_inverse() 				* band.node.global_transform
+		var origin: Vector3i = world.get_chunk_origin(band.chunk)
+		var buf := band.stud_buffer
+		for i in range(0, buf.size(), 16):
+			n += 1
+			var up := Vector3(buf[i + 1], buf[i + 5], buf[i + 9]).normalized()
+			var at: Vector3 = xf * (Vector3(buf[i + 3], buf[i + 7], buf[i + 11]) - up * 0.03)
+			var cell := origin + Vector3i(floori(at.x / cs.x), floori(at.y / cs.y), floori(at.z / cs.z))
+			if not world.is_solid(band.chunk, cell):
+				stale += 1
+				chunks[band.chunk] = int(chunks.get(band.chunk, 0)) + 1
+	return [n, stale, chunks]
+
+
 ## Give everything back (the scene is closing, or `enabled` went off).
 func clear() -> void:
 	for key in _order.duplicate():
