@@ -105,7 +105,7 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("part_near", "p"), &SdfForm::part_near);
     ClassDB::bind_method(D_METHOD("bounds"), &SdfForm::bounds);
     ClassDB::bind_method(D_METHOD("block_count"), &SdfForm::block_count);
-    ClassDB::bind_method(D_METHOD("part_field", "part", "lo", "dims"), &SdfForm::part_field);
+    ClassDB::bind_method(D_METHOD("part_field", "part", "lo", "dims", "smooth_only"), &SdfForm::part_field, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("to_bytes"), &SdfForm::to_bytes);
     ClassDB::bind_method(D_METHOD("from_bytes", "bytes"), &SdfForm::from_bytes);
     BIND_CONSTANT(ADD);
@@ -761,7 +761,7 @@ AABB SdfForm::bounds() const {
 
 int SdfForm::block_count() const { return (int)blocks.size(); }
 
-PackedFloat32Array SdfForm::part_field(int part, const Vector3i &lo, const Vector3i &dims) const {
+PackedFloat32Array SdfForm::part_field(int part, const Vector3i &lo, const Vector3i &dims, bool smooth_only) const {
     PackedFloat32Array out;
     if (dims.x <= 0 || dims.y <= 0 || dims.z <= 0) return out;
     out.resize((int64_t)dims.x * dims.y * dims.z);
@@ -771,7 +771,10 @@ PackedFloat32Array SdfForm::part_field(int part, const Vector3i &lo, const Vecto
         for (int y = 0; y < dims.y; ++y)
             for (int x = 0; x < dims.x; ++x, ++i) {
                 float d = d_at(lo.x + x, lo.y + y, lo.z + z);
-                if (part != 0 && part_at(lo.x + x, lo.y + y, lo.z + z) != part) d = std::max(d, 0.5f);
+                if ((part != 0 && part_at(lo.x + x, lo.y + y, lo.z + z) != part) ||
+                        (smooth_only && flag_at(lo.x + x, lo.y + y, lo.z + z))) {
+                    d = std::max(d, 0.5f);
+                }
                 w[i] = d;
             }
     return out;

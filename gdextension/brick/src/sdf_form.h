@@ -135,8 +135,9 @@ public:
 
     /// Dense distances of part `part` (0: every part) over `dims` samples from `lo`:
     /// another part's solid counts as just outside, so each part ends where its label
-    /// does. For shells.
-    PackedFloat32Array part_field(int part, const Vector3i &lo, const Vector3i &dims) const;
+    /// does. `smooth_only`: brick-zone samples count as just outside too, so a custom
+    /// part ends where its bricks begin. For shells.
+    PackedFloat32Array part_field(int part, const Vector3i &lo, const Vector3i &dims, bool smooth_only = false) const;
 
     PackedByteArray to_bytes() const;
     bool from_bytes(const PackedByteArray &bytes);
