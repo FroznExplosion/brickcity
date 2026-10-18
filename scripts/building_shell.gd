@@ -631,6 +631,18 @@ static func _wall_boxes(out: Array, side: int, mask: int, y0: float, y1: float,
 				out.append({"pos": Vector3(w - tw * 0.5, y, mid), "size": Vector3(tw, h, run_len)})
 
 
+## The tile a face of `size` gets for a brick-sized `unit`: as near the unit as
+## divides the face into WHOLE tiles. The shader draws every tile as a brick --
+## outline, bevel, a top's walls and infill -- so a face that ended part way
+## through one ended in a cut brick: its paths ran straight out to the face's
+## real corner with no bevel there, and a strip of shifted ones beside it
+## (seen through a scope, where these shells stand at 110 m and more). A tile
+## a few percent long or short does not show; a cut one did.
+static func fit_unit(unit: Vector2, size: Vector2) -> Vector2:
+	return Vector2(size.x / maxf(roundf(size.x / unit.x), 1.0),
+			size.y / maxf(roundf(size.y / unit.y), 1.0))
+
+
 ## `unit` is the rectangle the seam shader tiles: pass a brick-sized one and the
 ## face gets a grid of brick outlines rather than a single outline around the
 ## whole thing. Zero means "the face is one brick", which is what the real brick
@@ -640,8 +652,7 @@ static func _quad(verts: PackedVector3Array, normals: PackedVector3Array,
 		indices: PackedInt32Array, col: Color,
 		a: Vector3, b: Vector3, c: Vector3, dd: Vector3, n: Vector3, size: Vector2,
 		unit: Vector2 = Vector2.ZERO) -> void:
-	var seam := size if unit == Vector2.ZERO else Vector2(
-			minf(unit.x, size.x), minf(unit.y, size.y))
+	var seam := size if unit == Vector2.ZERO else fit_unit(unit, size)
 	var v0 := verts.size()
 	for p in [a, b, c, dd]:
 		verts.push_back(p)
