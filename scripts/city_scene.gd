@@ -1247,6 +1247,8 @@ func _ready() -> void:
 		_run_floating_pass()
 	elif "--lodbreak" in OS.get_cmdline_user_args():
 		_run_lodbreak_pass()
+	elif "--roomcost" in OS.get_cmdline_user_args():
+		_run_roomcost_pass()
 	elif _ring_mode:
 		_run_ring_pass()
 	elif _groups_mode:
@@ -7926,12 +7928,97 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 		print("    its shell: %s mesh, %d painted window(s)%s" % [
 				"a" if shell.mesh != null else "no", panes,
 				", from its bricks" if _far_real_owed.has(b.id) or far_real_built > 0 else ""])
+	_pieces_say(b.id)
 	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
 			% [b.id, what, camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
 			"none" if shell == null else ("shown" if shell.visible else "hidden"),
 			"none" if bricks == null else ("shown" if bricks.visible else "hidden"),
 			_bands_building(b.id),
 			_pieces_of(b.id), islands.moving_of(b.id), b.damage_profile.size()])
+
+
+## What the drawn rooms cost to draw (Docs/Structures.md 4.2, the drawn
+## state): the renderer's own clock with the interior pieces and items shown,
+## then hidden, from the foot of the tallest tower and from above the city.
+##
+##     godot --path . scenes/big_city.tscn -- --roomcost
+##
+## Timing: the editor closed and no other run going (CLAUDE.md).
+func _run_roomcost_pass() -> void:
+	print("[roomcost] drawn rooms, shown and hidden")
+	respawn_buildings = false
+	var best: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if not c.is_build() and (best == null or c.recipe.courses > best.recipe.courses):
+			best = c
+	var fx: float = best.recipe.footprint_x * STUD
+	var fz: float = best.recipe.footprint_z * STUD
+	var mid: Vector3 = best.xform * Vector3(fx * 0.5, 0.0, fz * 0.5)
+	var away := Vector3(mid.x, 0.0, mid.z).normalized()
+	if away.length() < 0.5:
+		away = Vector3(1.0, 0.0, 0.0)
+	var views := [["street", mid + away * (maxf(fx, fz) * 0.5 + 8.0) + Vector3(0, 1.7, 0),
+			mid + Vector3(0, 12.0, 0)],
+			["above", mid + away * 70.0 + Vector3(0, 40.0, 0), mid + Vector3(0, 10.0, 0)]]
+	for v in views:
+		camera.global_position = v[1]
+		camera.look_at(v[2], Vector3.UP)
+		await _frames(480)
+		var groups := 0
+		var boxes := 0
+		for id in interior_groups.known_ids():
+			var gl: Array = interior_groups.known(id)
+			for gi in gl.size():
+				for mm in [interior_groups.piece_node(id, gi), interior_groups.item_node(id, gi)]:
+					if mm != null and mm.is_visible_in_tree() and mm.multimesh != null:
+						groups += 1
+						boxes += mm.multimesh.visible_instance_count 								if mm.multimesh.visible_instance_count >= 0 else mm.multimesh.instance_count
+		var shown: Array = await _frame_times(240)
+		_view_set(DebugView.Mode.SHOWN, DebugView.Mode.HIDDEN, DebugView.Mode.HIDDEN)
+		await _frames(30)
+		var hidden: Array = await _frame_times(240)
+		_view_set(DebugView.Mode.SHOWN, DebugView.Mode.SHOWN, DebugView.Mode.SHOWN)
+		await _frames(30)
+		print("[roomcost] %s: %d drawing(s), %d box(es) of rooms" % [v[0], groups, boxes])
+		print("[roomcost]   shown:  %s" % _frame_line(shown))
+		print("[roomcost]   hidden: %s" % _frame_line(hidden))
+		_save("roomcost_%s" % v[0])
+	get_tree().quit(0)
+
+
+## Each piece of a building: how big, where, at rest or not, and what is
+## under it -- what the lodbreak pass says of a collapse that stops in the air.
+func _pieces_say(id: int) -> void:
+	var b := registry.get_building(id)
+	if b != null and b.is_materialised():
+		var sb := world.get_blocks_box(b.chunk, PackedInt32Array())
+		print("    standing part: %d bricks, box y %.1f..%.1f (chunk space)" % [
+				world.get_alive_block_count(b.chunk), sb.position.y, sb.end.y])
+	for isl in islands.islands:
+		if not isl.is_valid() or isl.owner != id:
+			continue
+		var box := islands.world_aabb(isl)
+		var space := isl.body.get_world_3d().direct_space_state
+		var c := box.get_center()
+		var q := PhysicsRayQueryParameters3D.create(Vector3(c.x, box.position.y + 0.1, c.z),
+				Vector3(c.x, box.position.y - 60.0, c.z), isl.body.collision_mask, [isl.body.get_rid()])
+		q.hit_from_inside = true
+		var hit := space.intersect_ray(q)
+		print("    (perched tips so far %d) piece %d: %d bricks, y %.1f..%.1f, %s%s, speed %.2f, %s under its middle%s" % [islands.perched_tipped,
+				isl.piece_id, world.get_alive_block_count(isl.chunk), box.position.y, box.end.y,
+				"settled" if isl.settled else "loose", " frozen" if isl.body.freeze else "",
+				isl.body.linear_velocity.length(),
+				("%s %.1f m down" % [str(hit.collider.name) if hit.collider != null else "?",
+				box.position.y + 0.1 - hit.position.y]) if not hit.is_empty() else "nothing",
+				", supported" if islands._supported_below(isl) else ", NOT supported"])
+		var drawn := "no mesh node"
+		if isl.mesh != null and is_instance_valid(isl.mesh):
+			drawn = "mesh %s at y %.1f (body y %.1f), %s" % [
+					"shown" if isl.mesh.is_visible_in_tree() else "hidden",
+					isl.mesh.global_position.y, isl.body.global_position.y,
+					"has a mesh" if isl.mesh.mesh != null else "no mesh"]
+		print("      drawn: %s; coarse %s, coarse drawn %s, fly merged %s, mm key %s" % [
+				drawn, isl.coarse, isl.coarse_drawn, isl.fly_merged, str(isl.mm_key)])
 
 
 func _pieces_of(id: int) -> int:
@@ -9046,10 +9133,10 @@ func _run_jam_pass() -> void:
 		if moving == 0 and t_quiet < 0 and t > 60:
 			t_quiet = Engine.get_physics_frames() - blasted_at
 	var r := islands.report()
-	print("[jam]   %d blasts; %d pieces came loose; stuck %d, by what they touch %s; thrown %d (fastest up %.1f m/s); all still after %s tick(s); settled by rule %d (jittering %d), by age %d; landed %d" % [
+	print("[jam]   %d blasts; %d pieces came loose; stuck %d, by what they touch %s; thrown %d (fastest up %.1f m/s); all still after %s tick(s); settled by rule %d (jittering %d), by age %d; landed %d; perched and tipped %d" % [
 			blasts, islands.islands.size() - spawned0, reported.size(), on, thrown, worst_up,
 			str(t_quiet) if t_quiet >= 0 else "never", int(r.settled_by_rule),
-			int(r.get("settled_jittering", 0)), int(r.settled_by_age), int(r.get("landings_noted", 0))])
+			int(r.get("settled_jittering", 0)), int(r.settled_by_age), int(r.get("landings_noted", 0)), islands.perched_tipped])
 	print("[jam]   crumbs: %d piece(s), %d brick(s) drawn, %d not (CRUMBS_MAX); worst crumb tick %.2f ms, worst crumble %.2f ms; small bodies %d; rises capped %d" % [
 			int(r.crumbled), int(r.crumb_bricks), int(r.crumbs_over), float(r.crumb_worst_ms),
 			float(r.crumble_worst_ms), int(islands.spawn_census.small[0]), int(r.rises_capped)])

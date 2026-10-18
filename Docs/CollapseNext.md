@@ -355,9 +355,25 @@ In the order to do it. Each line points at where the item is written up.
     (a) shot from mid range (LOD 2), parts of the wall drawn that should be gone, there until the
     player comes close; (b) shot from far (LOD 3), the building sometimes vanishes, then close up
     its interiors are drawn whole and its walls invisible, until it is shot again; (c) in a
-    collapse, a big part hanging in the air with nothing holding it. What the pass did see: a
+    collapse, a big part hanging in the air with nothing holding it. ~~What the pass did see: a
     12 m blast at the middle of a tower leaves its top standing on the stair core and what is left
-    of the walls, which is held as the rules stand.
+    of the walls, which is held as the rules stand.~~ Wrong, and (c) **found and fixed
+    2026-10-18**: the top was not held by the building at all. It came away as a piece (3,523
+    bricks, 65 m tall), dropped 1.3 m onto a strand of single bricks under it, and -- shot from
+    160 m, past `FRACTURE_RANGE`, where a piece is frozen after only 350 ms slow and a landing
+    breaks nothing -- was frozen there before it had begun to tip, for good (the pass's new piece
+    lines: "settled frozen ... 1.3 m down"). Now a big piece (`PERCH_FOOT`, 3 m on plan) whose
+    contacts under it are narrower than a fifth of it, or do not have its centre of mass over
+    them, is tipped over instead of frozen (`IslandManager._tip_if_perched`), `SUPPORT_TRIES`
+    times as a piece with nothing under it is nudged. Only on the far settle window (closer, a
+    piece has 1.5 s to begin tipping by itself) and not on a piece lying on other pieces: done in
+    heaps too, it levered pieces out of them (`--jam --big` failed "none is thrown" 2 runs of 3;
+    with the heap left alone 4 of 4 clean, as without the rule). Same pass: the top tips, falls
+    43 m and lies on the ground in pieces; `--lodbreak` 8/8, `collapse_probe` 63, `hang_probe` 10,
+    `float_probe` 46, `debris_probe` 29. The pass now prints every piece of the tower (size,
+    height, frozen, what is under it). Still to look at: from 320 m an 829-brick piece 37 m tall
+    stays frozen inside the tower's crater at 54 m, 22 m over what is under its middle -- wedged
+    against the walls, or hanging; not seen in a picture yet.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.

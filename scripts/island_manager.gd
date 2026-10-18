@@ -138,6 +138,29 @@ const TOUCH_MARGIN := 0.15
 ## each; a city's worth of settled pieces is audited every few seconds.
 const AUDIT_PER_TICK := 4
 var unsupported_nudges := 0
+## And PERCHED: a big piece whose contacts under it are a point next to its own
+## size, or do not have its centre of mass over them, is tipped, not frozen.
+## Far from everybody a piece is frozen after SETTLE_SLOW_FAR_MS slow, and a
+## landing there breaks nothing (FRACTURE_RANGE), so the top half of a tower
+## shot from 160 m dropped a metre onto a strand of single bricks it hung over
+## the stump, was frozen there before it had begun to tip, and stood 65 m tall
+## on that strand for good -- "never falls, just floats" (user, 2026-10-17;
+## big_city --lodbreak --at=160). The same SUPPORT_TRIES as a piece with
+## nothing under it; past them it settles where it is. Only on the far window:
+## closer in a piece has SETTLE_SLOW_MS to be slow before it is frozen, time
+## enough to begin tipping by itself. Nor on a piece lying on other pieces:
+## tipped in a heap, one levered its neighbours out (--jam --big, two runs of
+## three threw one, where without the rule none did in three).
+##
+## PERCH_FOOT: a piece narrower than this on plan is never perched -- rubble
+## lying on a corner is what rubble does. PERCH_SHARE: contacts spread over
+## less than this share of its narrower side are a point. PERCH_EDGE_SPEED:
+## how fast its farthest brick is set moving, m/s -- a spin, about the line it
+## tips over, of this over its radius, so a 65 m piece is not flung.
+const PERCH_FOOT := 3.0
+const PERCH_SHARE := 0.2
+const PERCH_EDGE_SPEED := 1.5
+var perched_tipped := 0
 const RIPPLE_START_SPEED := 0.6
 const RIPPLES_PER_TICK := 16
 var _ripples: Array[AABB] = []
@@ -3161,6 +3184,55 @@ func _supported_below(isl: BrickIsland) -> bool:
 	return false
 
 
+## A big piece standing on a point (PERCH_FOOT, PERCH_SHARE), or with its
+## centre of mass past what is under it, is set tipping over the edge it would
+## fall from, and true; otherwise false and nothing is done. Read from the
+## solver's contacts: with none -- a body asleep -- it is not asked.
+func _tip_if_perched(isl: BrickIsland) -> bool:
+	var box := world_aabb(isl)
+	var foot := minf(box.size.x, box.size.z)
+	if foot < PERCH_FOOT:
+		return false
+	var st := PhysicsServer3D.body_get_direct_state(isl.body.get_rid())
+	if st == null:
+		return false
+	var com := isl.body.global_position
+	var under := Rect2()
+	var any := false
+	for i in st.get_contact_count():
+		var n := st.get_contact_local_normal(i)
+		var at := st.get_contact_local_position(i)
+		if absf(n.y) < LANDED_NORMAL_Y or at.y > com.y:
+			continue   # a wall it leans on, or something on top of it
+		# Lying in a heap, on other pieces: theirs to settle together. Tipped
+		# there, one levered its neighbours out of the heap (--jam --big).
+		if st.get_contact_collider_object(i) is RigidBody3D:
+			return false
+		var p := Vector2(at.x, at.z)
+		if not any:
+			under = Rect2(p, Vector2.ZERO)
+			any = true
+		else:
+			under = under.expand(p)
+	if not any:
+		return false
+	var c := Vector2(com.x, com.z)
+	var over := under.grow(0.05).has_point(c)
+	if over and minf(under.size.x, under.size.y) >= foot * PERCH_SHARE:
+		return false
+	# Tip it over the side its weight is towards; straight over a point, the
+	# way its id says, so every run of a replay tips it the same way.
+	var off := c - under.get_center()
+	if off.length() < 0.01:
+		var a := float(isl.piece_id % 8) * TAU / 8.0
+		off = Vector2(cos(a), sin(a))
+	var axis := Vector3.UP.cross(Vector3(off.x, 0.0, off.y)).normalized()
+	isl.body.sleeping = false
+	isl.body.angular_velocity += axis * PERCH_EDGE_SPEED / maxf(isl.radius, 1.0)
+	perched_tipped += 1
+	return true
+
+
 ## Is any other body within TOUCH_MARGIN of this piece's world box? One box
 ## query. The box is axis-aligned round a piece that may be turned, so this
 ## errs towards "touching" -- which only ever lets a wedged piece settle, never
@@ -4511,6 +4583,11 @@ func tick() -> void:
 			isl.jitter_since = 0
 			isl.body.sleeping = false
 			isl.body.linear_velocity += Vector3.DOWN * SUPPORT_NUDGE
+			continue
+		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK 				and not isl.disposable and isl.unsupported_tries < SUPPORT_TRIES 				and _slow_window(isl) == SETTLE_SLOW_FAR_MS and _tip_if_perched(isl):
+			isl.unsupported_tries += 1
+			isl.slow_since = 0
+			isl.jitter_since = 0
 			continue
 		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK:
 			settles += 1
