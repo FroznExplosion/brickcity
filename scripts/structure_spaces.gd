@@ -202,15 +202,24 @@ static func _in(c: Vector3i, lo: Vector3i, hi: Vector3i) -> bool:
 ## room's own kind. One description of a room for a build and for the city
 ## (Docs/Structures.md 3.1). About a millisecond a room: asked for one building
 ## when it is wanted, not for a city at load.
+##
+## The stairwell (`stair`, in the building's own studs; TowerRecipe.stair_rect)
+## is solid to the finder, every storey of it: a room beside it is sealed by it
+## as by a wall. It is a shaft through every slab, and the hole read as "no
+## floor" -- an open side -- to each room it cut through (user, 2026-10-18).
 static func for_tower(world: BrickWorld, chunk: int, footprint_x: int, footprint_z: int,
-		courses: int, building_seed: int, program: Dictionary = {}) -> Dictionary:
+		courses: int, building_seed: int, program: Dictionary = {},
+		stair: Rect2i = TowerRecipe.stair_rect(footprint_x, footprint_z)) -> Dictionary:
 	var rec := empty()
 	if chunk < 0 or not world.is_chunk_alive(chunk):
 		return rec
 	var origin := world.get_chunk_origin(chunk)
 	var lo := origin
 	var hi := origin + world.get_chunk_dims(chunk)
+	var shaft := Rect2i(stair.position + Vector2i(origin.x, origin.z), stair.size)
 	var kind := func(c: Vector3i) -> int:
+		if shaft.has_point(Vector2i(c.x, c.z)):
+			return Cell.SOLID
 		if not world.is_solid(chunk, c):
 			return Cell.AIR
 		var id := world.block_at(chunk, c)

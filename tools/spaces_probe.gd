@@ -163,6 +163,7 @@ func _run() -> void:
 			StructureSpaces.space_at(rec, Vector3i(6, 4, 5)) == 0
 			and StructureSpaces.space_at(rec, Vector3i(12, 8, 5)) == -1)
 	_generated()
+	_generated_with_stairs()
 
 
 ## A generated building, two storeys of 30 x 30 studs, as the city lays one.
@@ -189,3 +190,33 @@ func _generated() -> void:
 			"%d of %d rooms, %.1f ms" % [(rec.spaces as Array).size(), rooms.size(), ms])
 	_ok("with windows out and doorways between them",
 			int(k.get("window", 0)) > 0 and int(k.get("doorway", 0)) > 0, str(k))
+
+
+## A generated building as the city lays it, its stairwell carved through every
+## slab: the shaft is solid to the finder, so every room beside it is sealed --
+## no side of it open where the slab has its hole (Docs/Structures.md 3.3).
+func _generated_with_stairs() -> void:
+	var fx := 40
+	var fz := 40
+	var courses := 18
+	var stair := TowerRecipe.stair_rect(fx, fz)
+	# A world of its own: the recipe lays its bricks from the origin.
+	var w := BrickWorld.new()
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
+	TowerRecipe.build(w, c, TowerRecipe.bake_palette(w), fx, fz, courses, [stair])
+	var open_rooms := func(rec: Dictionary) -> int:
+		var leaky := {}
+		for o in rec.openings:
+			if String(o.kind) == "open":
+				leaky[int(o.space)] = true
+		return leaky.size()
+	var before: Dictionary = StructureSpaces.for_tower(w, c, fx, fz, courses, 7, {}, Rect2i())
+	var after: Dictionary = StructureSpaces.for_tower(w, c, fx, fz, courses, 7)
+	var rooms := RoomManifest.rooms_for(fx, fz, courses, 7).size()
+	print("  (the stairwell %s; with it read as holes: %d of %d rooms found, %d of them open)" % [
+			str(stair), (before.spaces as Array).size(), RoomManifest.rooms_for(fx, fz, courses, 7).size(), open_rooms.call(before)])
+	_ok("with its stairwell solid, every room of a building with stairs is sealed",
+			stair.size != Vector2i.ZERO and int(open_rooms.call(after)) == 0
+			and (after.spaces as Array).size() > 0,
+			"%d of %d rooms found, %d open" % [(after.spaces as Array).size(), rooms,
+			int(open_rooms.call(after))])
