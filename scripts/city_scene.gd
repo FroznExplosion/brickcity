@@ -541,6 +541,8 @@ const SHELL_DETAIL_RANGE := 110.0
 ## Making a shell is ~0.4 ms and freeing one is less, so a handful per tick is
 ## invisible and still keeps up with anything short of teleporting.
 const SHELLS_PER_TICK := 4
+## Past this, a shell pass makes no more shells (one at least; _stream_shells).
+const SHELL_BUDGET_MS := 2.0
 var _promote_queue: Array[int] = []
 var _remesh_queue: Array[int] = []
 ## Buildings fire has charred -> the physics frame their bands are rebuilt on
@@ -10463,7 +10465,14 @@ func _stream_shells() -> void:
 	# trees in it the register is ten times the city, and a fixed slice left a
 	# building waiting seconds for its tier.
 	var slice := mini(count, maxi(SHELLS_PER_TICK * 16, floori(count / 8.0) + 1))
+	# And a time budget, as the glass has: a tall tower's shell and its
+	# collision are several ms, and four in one tick was a 5+ ms hitch. The
+	# rest wait for the next pass, a quarter of a tick-group later.
+	var t0 := Time.get_ticks_usec()
 	while looked < slice and shell_budget > 0:
+		if shell_budget < SHELLS_PER_TICK \
+				and Time.get_ticks_usec() - t0 > int(SHELL_BUDGET_MS * 1000.0):
+			break
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
 		looked += 1
@@ -11606,13 +11615,46 @@ func _process(delta: float) -> void:
 
 # ---------------------------------------------------------------------------
 
+## The HUD's counts, each a walk of something big (every building, every
+## room, every island): together 7 ms, six times a second. One of them is
+## brought up to date per refresh, in turn, so each is under a second old
+## and no refresh walks them all; none while the stats are hidden (F1).
+const _HUD_PARTS := ["mem", "rep", "isl", "rooms", "groups"]
+var _hud_cache := {}
+var _hud_turn := 0
+
+
+func _hud_part(key: String) -> Variant:
+	match key:
+		"mem":
+			return world.get_memory_report()
+		"rep":
+			return registry.report()
+		"isl":
+			return islands.report()
+		"rooms":
+			return registry.room_report()
+		_:
+			return _groups_hud_line()
+
+
 func _update_hud() -> void:
-	if stats_label == null:
+	if stats_label == null or not stats_label.visible:
 		return
-	var mem: Dictionary = world.get_memory_report()
-	var rep: Dictionary = registry.report()
-	var isl: Dictionary = islands.report()
-	var rooms: Dictionary = registry.room_report()
+	# Shown or hidden before the city is built (visibility_changed).
+	if registry == null or islands == null or world == null:
+		return
+	if _hud_cache.size() < _HUD_PARTS.size():
+		for key in _HUD_PARTS:
+			_hud_cache[key] = _hud_part(key)
+	else:
+		var key: String = _HUD_PARTS[_hud_turn % _HUD_PARTS.size()]
+		_hud_cache[key] = _hud_part(key)
+		_hud_turn += 1
+	var mem: Dictionary = _hud_cache.mem
+	var rep: Dictionary = _hud_cache.rep
+	var isl: Dictionary = _hud_cache.isl
+	var rooms: Dictionary = _hud_cache.rooms
 	stats_label.text = "\n".join([
 		"buildings     %d  (%d materialised, %d damaged)" % [
 			rep.buildings, rep.materialised, rep.damaged],
@@ -11631,7 +11673,7 @@ func _update_hud() -> void:
 		"fixtures      %d, built with the buildings that hold them" % rep.fixtures,
 		"rooms         %d  (%d with a diff, %d piece(s) laid as bricks)" % [
 			rooms.rooms, rooms.changed, rooms.laid],
-		_groups_hud_line(),
+		_hud_cache.groups,
 		_view_hud_line(),
 		"",
 		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
@@ -15336,6 +15378,11 @@ func _build_scenery() -> void:
 	stats_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	stats_label.add_theme_constant_override("outline_size", 4)
 	layer.add_child(stats_label)
+	# Not refreshed while hidden (_update_hud), so brought up to date the
+	# moment it shows, whoever shows it (F1, the menu, a pass ending).
+	stats_label.visibility_changed.connect(func() -> void:
+		_hud_cache.clear()
+		_update_hud())
 
 	# The live profiler, top right, off until F2. Monospace, because a column
 	# of numbers that will not line up is a column of numbers nobody reads.
