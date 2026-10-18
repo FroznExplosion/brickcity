@@ -381,8 +381,16 @@ static func build_mesh(footprint_x: int, footprint_z: int, courses: int,
 ##
 ## `program` is the building's room mix (RoomManifest.kind_index), so a window
 ## shows the kind of room the program really put behind it.
+##
+## `standing`, for a building still in bricks (Docs/Structures.md 4.2, the
+## faked state): asked of each pane with the cells that make it a window -- the
+## sill under it, the lintel over it, the floor of the room behind it, in
+## the building's own cells -- and the pane is drawn only if it says they are
+## all there. A wall with its window knocked out, or with the floor behind it
+## fallen, shows its hole and not a room.
 static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
-		building_seed: int, damage: Dictionary = {}, program: Dictionary = {}) -> ArrayMesh:
+		building_seed: int, damage: Dictionary = {}, program: Dictionary = {},
+		standing: Callable = Callable()) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var tangents := PackedFloat32Array()
@@ -422,35 +430,51 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 				break
 		var y0: float = int(band.y) * PLATE
 		var y1 := y0 + tall
+		var sill_y := int(band.y) - 1
+		var lintel_y := int(band.y) + TowerRecipe.WINDOW_COURSES * TowerRecipe.PLATES_PER_COURSE
+		var floor_y: int = int(storeys[storey].floor_y) - 1 if storey >= 0 else sill_y
+		var inner := int(reach)
 		# Front (-Z) and back (+Z) along X; left (-X) and right (+X) along Z.
 		for g in gx:
 			var a: float = (g as Vector2i).x * STUD
 			var b: float = (g as Vector2i).y * STUD
 			var mid := float((g as Vector2i).x + (g as Vector2i).y) * 0.5
-			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
-					Vector3(a, y0, -GLASS_PROUD), Vector3(b, y0, -GLASS_PROUD),
-					Vector3(a, y1, -GLASS_PROUD), Vector3(b, y1, -GLASS_PROUD),
-					Vector3(0, 0, -1), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(mid, reach), 0, g, program))
-			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
-					Vector3(b, y0, d + GLASS_PROUD), Vector3(a, y0, d + GLASS_PROUD),
-					Vector3(b, y1, d + GLASS_PROUD), Vector3(a, y1, d + GLASS_PROUD),
-					Vector3(0, 0, 1), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(mid, footprint_z - reach), 1, g, program))
+			var m := int(mid)
+			if _pane_stands(standing, Vector3i(m, sill_y, 0), Vector3i(m, lintel_y, 0),
+					Vector3i(m, floor_y, inner)):
+				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
+						Vector3(a, y0, -GLASS_PROUD), Vector3(b, y0, -GLASS_PROUD),
+						Vector3(a, y1, -GLASS_PROUD), Vector3(b, y1, -GLASS_PROUD),
+						Vector3(0, 0, -1), _pane_colour(footprint_x, footprint_z, courses,
+						building_seed, storey, Vector2(mid, reach), 0, g, program))
+			var zb := footprint_z - 1
+			if _pane_stands(standing, Vector3i(m, sill_y, zb), Vector3i(m, lintel_y, zb),
+					Vector3i(m, floor_y, zb - inner)):
+				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
+						Vector3(b, y0, d + GLASS_PROUD), Vector3(a, y0, d + GLASS_PROUD),
+						Vector3(b, y1, d + GLASS_PROUD), Vector3(a, y1, d + GLASS_PROUD),
+						Vector3(0, 0, 1), _pane_colour(footprint_x, footprint_z, courses,
+						building_seed, storey, Vector2(mid, footprint_z - reach), 1, g, program))
 		for g in gz:
 			var a: float = (g as Vector2i).x * STUD
 			var b: float = (g as Vector2i).y * STUD
 			var mid := float((g as Vector2i).x + (g as Vector2i).y) * 0.5
-			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
-					Vector3(-GLASS_PROUD, y0, b), Vector3(-GLASS_PROUD, y0, a),
-					Vector3(-GLASS_PROUD, y1, b), Vector3(-GLASS_PROUD, y1, a),
-					Vector3(-1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(reach, mid), 2, g, program))
-			_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
-					Vector3(w + GLASS_PROUD, y0, a), Vector3(w + GLASS_PROUD, y0, b),
-					Vector3(w + GLASS_PROUD, y1, a), Vector3(w + GLASS_PROUD, y1, b),
-					Vector3(1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
-					building_seed, storey, Vector2(footprint_x - reach, mid), 3, g, program))
+			var m := int(mid)
+			if _pane_stands(standing, Vector3i(0, sill_y, m), Vector3i(0, lintel_y, m),
+					Vector3i(inner, floor_y, m)):
+				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
+						Vector3(-GLASS_PROUD, y0, b), Vector3(-GLASS_PROUD, y0, a),
+						Vector3(-GLASS_PROUD, y1, b), Vector3(-GLASS_PROUD, y1, a),
+						Vector3(-1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
+						building_seed, storey, Vector2(reach, mid), 2, g, program))
+			var xb := footprint_x - 1
+			if _pane_stands(standing, Vector3i(xb, sill_y, m), Vector3i(xb, lintel_y, m),
+					Vector3i(xb - inner, floor_y, m)):
+				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
+						Vector3(w + GLASS_PROUD, y0, a), Vector3(w + GLASS_PROUD, y0, b),
+						Vector3(w + GLASS_PROUD, y1, a), Vector3(w + GLASS_PROUD, y1, b),
+						Vector3(1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
+						building_seed, storey, Vector2(footprint_x - reach, mid), 3, g, program))
 	if verts.is_empty():
 		return null
 	var arrays := []
@@ -465,6 +489,15 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
+
+
+## Whether a pane is drawn: always, with no `standing` to ask; otherwise only
+## if its sill, lintel and floor cells are all there.
+static func _pane_stands(standing: Callable, sill: Vector3i, lintel: Vector3i,
+		floor_cell: Vector3i) -> bool:
+	if not standing.is_valid():
+		return true
+	return standing.call(sill) and standing.call(lintel) and standing.call(floor_cell)
 
 
 ## The material the panes are drawn with, its room sized from the recipe: the
