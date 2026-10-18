@@ -434,6 +434,17 @@ static func stair_line(footprint: int) -> int:
 	return best
 
 
+## The stairwell on plan, in studs: the floor cell CityScene._add_staircase
+## puts the staircase in, through every storey. Empty when there is no cell for
+## one.
+static func stair_rect(footprint_x: int, footprint_z: int) -> Rect2i:
+	var sx := stair_line(footprint_x)
+	var sz := stair_line(footprint_z)
+	if sx < 0 or sz < 0:
+		return Rect2i()
+	return Rect2i(sx, sz, PANEL, PANEL)
+
+
 ## Does this footprint divide into whole panels? Everything below assumes so.
 static func conforming(footprint: int) -> bool:
 	return footprint % PANEL == 0

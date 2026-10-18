@@ -260,6 +260,20 @@ nearest its middle by the same finder, as a space of the room's own kind. A two-
 8 of 8 rooms, 24 windows and 8 doorways, 18 ms -- about 2 ms a room, so it is asked for a building
 when something wants it (its interiors, its AI), not for a city at load.
 
+**The stairwell is solid to the finder (2026-10-18).** It is a shaft one floor cell wide
+(`TowerRecipe.stair_rect`) through every slab, and the slab's hole read as "no floor" to the
+rooms it cut through: on a 40 x 40 two-storey tower with its shaft carved, 3 of 12 rooms could not
+be found at all. With the shaft solid, 12 of 12, every one sealed (`spaces_probe`, 10). A
+staircase is a space of its own later (3.4); until then it is a wall to the rooms beside it.
+
+**Seeing it in the city: Shift+O** (`SpacesView`) draws what the finder makes of the nearest
+building in bricks -- each room outlined at floor and ceiling, cyan when sealed and red with
+"OPEN" when a side of it is open, its kind over it, every opening boxed in its kind's colour
+(doorway green, window blue, glass pale, door dark green, open red), the stairwell orange storey
+by storey -- found again a second after its bricks change, so a shot shows what it did to the
+rooms. `big_city.tscn -- --roomsview` takes its pictures: a 40 x 30 tower of 60 courses, 40 of
+40 rooms found and sealed, 160 windows, 40 doorways, 106 ms.
+
 ### 3.3.1 Room kinds
 `office, corridor, hall, stairwell, storeroom, kitchen, bathroom, bedroom, living, shop, lab,
 armory, barracks, workshop, empty, other` -- the city's room kinds (`Room.KINDS`) are all among

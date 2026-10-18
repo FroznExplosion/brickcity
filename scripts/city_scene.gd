@@ -1249,6 +1249,8 @@ func _ready() -> void:
 		_run_lodbreak_pass()
 	elif "--roomcost" in OS.get_cmdline_user_args():
 		_run_roomcost_pass()
+	elif "--roomsview" in OS.get_cmdline_user_args():
+		_run_roomsview_pass()
 	elif _ring_mode:
 		_run_ring_pass()
 	elif _groups_mode:
@@ -7937,6 +7939,55 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 			_pieces_of(b.id), islands.moving_of(b.id), b.damage_profile.size()])
 
 
+## The rooms view (Shift+O, SpacesView) on a tower, for pictures: one of
+## eight storeys or more, in bricks, its structure see-through, from a corner
+## outside and from above. Prints what the finder made of it.
+##
+##     godot --path . scenes/big_city.tscn -- --roomsview [--pick=N]
+func _run_roomsview_pass() -> void:
+	print("[roomsview] the rooms of a tower, as the finder makes them")
+	respawn_buildings = false
+	var picks: Array = []
+	for c in registry.buildings:
+		if not c.is_build() and not _wide_ids.has(c.id) and c.recipe.courses >= 48:
+			picks.append(c)
+	picks.sort_custom(func(a, c) -> bool: return a.recipe.courses < c.recipe.courses)
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--pick="):
+			picks = picks.slice(int(a.substr(7)))
+	if picks.is_empty():
+		print("[roomsview] no tower of eight storeys")
+		get_tree().quit(1)
+		return
+	var b: BuildingRegistry.Building = picks[0]
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	var tall := TowerRecipe.total_plates(b.recipe.courses) * PLATE
+	var corner: Vector3 = b.xform * Vector3(-0.6 * fx, 0.0, -0.6 * fz)
+	var mid: Vector3 = b.xform * Vector3(fx * 0.5, 0.0, fz * 0.5)
+	camera.global_position = corner + Vector3(0, tall * 0.35, 0)
+	camera.look_at(mid + Vector3(0, tall * 0.25, 0), Vector3.UP)
+	await _frames(30)
+	_promote(b.id)
+	await _frames(60)
+	_view_set(DebugView.Mode.CLEAR, DebugView.Mode.HIDDEN, DebugView.Mode.HIDDEN)
+	_toggle_spaces_view()
+	_spaces_ms = 0
+	await _frames(90)
+	print("[roomsview] building %d, %d x %d studs, %d courses: %s" % [b.id, b.recipe.footprint_x,
+			b.recipe.footprint_z, b.recipe.courses, _spaces_view.report()])
+	_save("roomsview_corner")
+	camera.global_position = mid + Vector3(0.01, tall + 25.0, 0)
+	camera.look_at(mid + Vector3(0, tall * 0.5, 0), Vector3.FORWARD)
+	await _frames(30)
+	_save("roomsview_above")
+	camera.global_position = b.xform * Vector3(fx * 0.5, TowerRecipe.STOREY_PLATES * PLATE * 1.5, -6.0)
+	camera.look_at(mid + Vector3(0, TowerRecipe.STOREY_PLATES * PLATE * 1.2, 0), Vector3.UP)
+	await _frames(30)
+	_save("roomsview_storey")
+	get_tree().quit(0)
+
+
 ## What the drawn rooms cost to draw (Docs/Structures.md 4.2, the drawn
 ## state): the renderer's own clock with the interior pieces and items shown,
 ## then hidden, from the foot of the tallest tower and from above the city.
@@ -11667,6 +11718,59 @@ func _demote(id: int, _dist: float) -> void:
 		_demote_worst = _w
 
 
+## The rooms view (Shift+O; SpacesView): the rooms the finder makes of the
+## nearest building in bricks, outlined, sealed or not, with their openings.
+## Found again when the camera's nearest building changes, and a second after
+## its bricks do.
+var _spaces_view: SpacesView
+var _spaces_of := -1
+var _spaces_alive := -1
+var _spaces_ms := 0
+
+
+func _toggle_spaces_view() -> void:
+	if _spaces_view != null:
+		_spaces_view.queue_free()
+		_spaces_view = null
+		print("[city] rooms view off")
+		return
+	_spaces_view = SpacesView.new()
+	add_child(_spaces_view)
+	_spaces_of = -1
+	print("[city] rooms view on: the nearest building in bricks (walk up to one, or shoot it)")
+
+
+func _follow_spaces_view() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _spaces_ms < 1000:
+		return
+	_spaces_ms = now
+	var here := camera.global_position
+	var best: BuildingRegistry.Building = null
+	var best_d := INF
+	for id in _near_buildings(here, 120.0):
+		var b := registry.get_building(id)
+		if b == null or b.is_build() or not b.is_materialised():
+			continue
+		var d := here.distance_to(b.xform * Vector3(b.recipe.footprint_x * STUD * 0.5, 0.0,
+				b.recipe.footprint_z * STUD * 0.5))
+		if d < best_d:
+			best = b
+			best_d = d
+	if best == null:
+		if _spaces_of >= 0:
+			_spaces_view.clear()
+			_spaces_of = -1
+		return
+	var alive := world.get_alive_block_count(best.chunk)
+	if best.id == _spaces_of and alive == _spaces_alive:
+		return
+	_spaces_of = best.id
+	_spaces_alive = alive
+	_spaces_view.show_building(world, best, registry.room_seed_of(best.id))
+	print("[city] rooms of building %d: %s" % [best.id, _spaces_view.report()])
+
+
 func _process(delta: float) -> void:
 	# Frozen (F10), the detail square and the coarse tier's hiding hold still
 	# for where the camera WAS, as in the heightfield test.
@@ -11685,6 +11789,8 @@ func _process(delta: float) -> void:
 	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
 		brick_near.step(camera.global_position, zoom_in)
+	if _spaces_view != null:
+		_follow_spaces_view()
 	if _sea != null:
 		_sea.follow(camera.global_position, delta)
 	_update_reticle()
@@ -12244,6 +12350,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					"(a new piece and its parent both draw, briefly)"
 					if IslandManager.OVERLAP_FRAMES > 0
 					else "OFF -- watch for the one-frame flash"])
+		KEY_O when event.shift_pressed:
+			_toggle_spaces_view()
 		KEY_O:
 			# Slow motion, so a one-tick artefact lasts long enough to attribute
 			# to something. Cycles rather than toggles: 0.05 makes a single
