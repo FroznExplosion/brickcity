@@ -1,0 +1,132 @@
+class_name AssetSculpt
+extends Node3D
+
+## The asset workshop's SDF block-out in the scene (Docs/AssetWorkshop.md, "The SDF
+## block-out"): the field (`SdfForm`, gdextension/brick/src/sdf_form.cpp), its surface
+## a mesh a block, and the brush under the cursor. Its own transform maps samples (ticks)
+## to the workshop: the upright grid's transform, scaled a tick.
+
+var form := SdfForm.new()
+## A colour a part label (0: none).
+var palette := PackedColorArray([Color(0.8, 0.8, 0.8)])
+var _meshes := {}   # Vector3i block -> MeshInstance3D
+var _mat := StandardMaterial3D.new()
+var _cursor := MeshInstance3D.new()
+var _cursor_mat := StandardMaterial3D.new()
+
+
+func _init() -> void:
+	_mat.vertex_color_use_as_albedo = true
+	_mat.roughness = 0.55
+	_cursor.mesh = SphereMesh.new()
+	(_cursor.mesh as SphereMesh).radius = 1.0
+	(_cursor.mesh as SphereMesh).height = 2.0
+	_cursor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_cursor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_cursor_mat.no_depth_test = true
+	_cursor.material_override = _cursor_mat
+	_cursor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_cursor.visible = false
+	add_child(_cursor)
+
+
+## Samples on the grid `grid` (the upright chunk's transform), `tick` metres a sample.
+func place(grid: Transform3D, tick: float) -> void:
+	transform = grid * Transform3D(Basis.from_scale(Vector3.ONE * tick), Vector3.ZERO)
+
+
+## A colour for each part (labels are part index + 1).
+func set_parts(count: int) -> void:
+	palette = PackedColorArray([Color(0.8, 0.8, 0.8)])
+	for i in count:
+		palette.append(Color.from_hsv(fmod(0.08 + i * 0.618034, 1.0), 0.45, 0.92))
+	remesh_all()
+
+
+func to_sample(p: Vector3) -> Vector3:
+	return global_transform.affine_inverse() * p
+
+
+func to_world(s: Vector3) -> Vector3:
+	return global_transform * s
+
+
+## A ray of the workshop as a ray of samples: [from, dir], dir unit.
+func ray_to_samples(from: Vector3, dir: Vector3) -> Array:
+	var inv := global_transform.affine_inverse()
+	var a := inv * from
+	var b := inv * (from + dir)
+	return [a, (b - a).normalized()]
+
+
+## The surface where a workshop ray first meets it, in samples, or null.
+func hit(from: Vector3, dir: Vector3) -> Variant:
+	var r := ray_to_samples(from, dir)
+	return form.raycast(r[0], r[1], 20000.0)
+
+
+## Re-mesh the blocks that changed.
+func remesh() -> void:
+	for b in form.take_dirty():
+		_mesh(b)
+
+
+func remesh_all() -> void:
+	for b in _meshes:
+		(_meshes[b] as Node).queue_free()
+	_meshes.clear()
+	form.take_dirty()
+	for b in form.block_keys():
+		_mesh(b)
+
+
+func _mesh(b: Vector3i) -> void:
+	var arrays: Array = form.mesh_block(b, palette)
+	var mi: MeshInstance3D = _meshes.get(b)
+	if arrays.is_empty():
+		if mi != null:
+			mi.queue_free()
+			_meshes.erase(b)
+		return
+	if mi == null:
+		mi = MeshInstance3D.new()
+		mi.material_override = _mat
+		add_child(mi)
+		_meshes[b] = mi
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mi.mesh = m
+
+
+## The brush: a ball `radius` samples round `at`, coloured by what it does.
+func show_cursor(at: Variant, radius: float, col: Color) -> void:
+	_cursor.visible = at != null
+	if at == null:
+		return
+	_cursor.position = at
+	_cursor.scale = Vector3.ONE * maxf(radius, 0.3)
+	col.a = 0.25
+	_cursor_mat.albedo_color = col
+
+
+func triangles() -> int:
+	var n := 0
+	for b in _meshes:
+		var m: ArrayMesh = (_meshes[b] as MeshInstance3D).mesh
+		n += m.surface_get_array_index_len(0) / 3
+	return n
+
+
+## Saved with the asset: the field, compressed, as text.
+func save_meta() -> Dictionary:
+	var raw := form.to_bytes()
+	return {"size": raw.size(), "data": Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_ZSTD))}
+
+
+func load_meta(m: Variant) -> void:
+	form.clear()
+	if m is Dictionary and m.has("data"):
+		var raw := Marshalls.base64_to_raw(String(m.data)).decompress(int(m.size), FileAccess.COMPRESSION_ZSTD)
+		if not form.from_bytes(raw):
+			push_warning("asset workshop: the saved block-out could not be read")
+	remesh_all()

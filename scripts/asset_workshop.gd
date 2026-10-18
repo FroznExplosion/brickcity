@@ -382,6 +382,31 @@ func _shot() -> void:
 		rail_pick("shape")
 		shape_mode = "brush"
 		_look_at_build()
+	if "--sculpt" in OS.get_cmdline_user_args():
+		# The SDF block-out: a body, a barrel, a stock blended on and a grip, each its part.
+		for _i in 3:
+			await get_tree().process_frame
+		set_mirror(false)
+		var base := Vector3(recipe.cell_of(0)) if recipe.size() > 0 else Vector3(500, 30, mirror_z)
+		base.z = mirror_z
+		var at := func(x: float, y: float) -> Vector3:
+			return sculpt.to_sample(Vector3((base.x + x) * BrickPalette.STUD_M, (base.y + y) * BrickPalette.PLATE_M,
+					base.z * BrickPalette.STUD_M))
+		sculpt.form.begin_edit()
+		_sculpt_op = SdfForm.ADD
+		for st in [["body", 1.5, 0.0, 0.0, 8.0, 20.0, 8.0], ["barrel", 0.6, 0.0, 20.0, 12.0, 40.0, 12.0],
+				["stock", 1.3, 1.0, 0.0, 6.0, -14.0, -2.0], ["grip", 0.8, 0.6, 4.0, 2.0, 2.0, -24.0]]:
+			select_part(maxi(0, part_names.find(st[0])))
+			sculpt_radius = st[1]
+			sculpt_blend = st[2]
+			_sculpt_dab(at.call(st[3], st[4]), at.call(st[5], st[6]))
+		_sculpt_record(sculpt.form.end_edit())
+		sculpt_blend = 0.0
+		rail_pick("sketch")
+		var bb := sculpt.form.bounds()
+		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
+				sculpt.triangles(), sculpt.form.cells().size() / 5, str(bb)])
+		_look_at_build()
 	if "--receiver" in OS.get_cmdline_user_args():
 		# A receiver in three views: a side slab, a charging slot cut through and a port cut
 		# a stud in, then its top corners chamfered from the front.
@@ -1304,7 +1329,7 @@ func _store_asset_meta() -> void:
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
-			"shells": shells}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"shells": shells, "sdf": _sdf_meta}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1343,6 +1368,10 @@ func _restore_asset_meta() -> void:
 		_sketch_seq = maxi(_sketch_seq, int(sk.n) + 1)
 	_sketch_cache.clear()
 	curve_level = int(a.get("curves", 2))
+	_sdf_meta = a.get("sdf", {})
+	if sculpt != null:
+		sculpt.set_parts(part_names.size())
+		sculpt.load_meta(_sdf_meta)
 	shells = (a.get("shells", {}) as Dictionary).duplicate(true)
 	for part in _shell_nodes.keys():
 		_shell_mesh(String(part), {})
@@ -1449,6 +1478,10 @@ func _setup_parts() -> void:
 	(_ruler.get_parent() as Node).add_child(_part_label)
 	_points_root = Node3D.new()
 	add_child(_points_root)
+	sculpt = AssetSculpt.new()
+	add_child(sculpt)
+	sculpt.place(world.get_chunk_transform(asm.frames[0]), BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
+	sculpt.set_parts(part_names.size())
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
 	_build_phase3(_ruler.get_parent() as CanvasLayer)
@@ -2318,6 +2351,10 @@ func _build_phase3(layer: CanvasLayer) -> void:
 			+ "3. Add balls, cubes and cylinders with the Shapes tool's brush (K).\n"
 			+ "4. Then finish it below: size, curves, and a smooth shell.")
 	_sketch_box.add_child(how)
+	_sketch_how = how
+	how.visible = sketch_draw != "sculpt"
+	_build_sculpt_box()
+	_sketch_box.move_child(_sculpt_box, 1)
 	var wrow := HBoxContainer.new()
 	_sketch_box.add_child(wrow)
 	var wl := Label.new()
@@ -3407,6 +3444,8 @@ func _sketch_key() -> String:
 func _sketch_input(e: InputEvent) -> bool:
 	if tool != "sketch":
 		return false
+	if sketch_draw == "sculpt":
+		return _sculpt_input(e)
 	if sketch_draw == "polygon":
 		return _polygon_input(e)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
@@ -3426,6 +3465,231 @@ func _sketch_input(e: InputEvent) -> bool:
 		return true
 	return false
 
+
+# ---------------------------------------------------------------------------
+# The SDF block-out: sculpting (Docs/AssetWorkshop.md, "The SDF block-out")
+# ---------------------------------------------------------------------------
+
+## LMB / RMB with the sculpt brush: one stroke is one undo. Shift smooths whatever the
+## mode. A stroke that adds keeps the depth it started at (the surface it is adding to
+## would pull it toward the camera); the others follow the surface.
+func _sculpt_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if e.pressed:
+			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
+			_sculpt_op = _sculpt_op_for(right, e.shift_pressed)
+			var p = _sculpt_point(true)
+			if p == null:
+				return true
+			_sculpt_on = true
+			sculpt.form.begin_edit()
+			_sculpt_dab(p, p)
+		elif _sculpt_on:
+			_sculpt_end()
+		return true
+	if e is InputEventMouseMotion:
+		var p = _sculpt_point(false)
+		sculpt.show_cursor(p, _sculpt_r(), _sculpt_colour())
+		if _sculpt_on and p != null and p.distance_to(_sculpt_last) > maxf(0.3, _sculpt_r() * 0.25):
+			_sculpt_dab(_sculpt_last, p)
+		return _sculpt_on
+	return false
+
+
+func _sculpt_op_for(right: bool, shift: bool) -> int:
+	if shift or sculpt_mode == "smooth":
+		return SdfForm.SMOOTH
+	match sculpt_mode:
+		"paint": return SdfForm.PAINT
+		"zone": return SdfForm.UNMARK if right else SdfForm.MARK
+	return SdfForm.REMOVE if right else SdfForm.ADD
+
+
+## The brush's radius in samples (a stud is 5).
+func _sculpt_r() -> float:
+	return maxf(0.5, sculpt_radius * BrickWorld.ticks_per_stud())
+
+
+func _sculpt_colour() -> Color:
+	if _sculpt_on and _sculpt_op == SdfForm.REMOVE:
+		return Color(1.0, 0.35, 0.3)
+	if sculpt_mode == "paint" and part_sel + 1 < sculpt.palette.size():
+		return sculpt.palette[part_sel + 1]
+	return Color(0.6, 0.9, 1.0)
+
+
+## Where the brush is, in samples, or null: on the block-out's surface under the mouse,
+## else on the working plane; while an add is under way, at the depth it started.
+func _sculpt_point(start: bool) -> Variant:
+	var ray := _mouse_ray()
+	var r := sculpt.ray_to_samples(ray[0], ray[1])
+	if _sculpt_on and not start and _sculpt_op == SdfForm.ADD:
+		return r[0] + r[1] * _sculpt_depth
+	var h = sculpt.hit(ray[0], ray[1])
+	if h == null:
+		var w = work_plane_hit(ray[0], ray[1])
+		if w == null:
+			return null
+		h = sculpt.to_sample(w)
+	if start:
+		_sculpt_depth = (h - r[0]).length()
+	return h
+
+
+## A capsule of the brush from `a` to `b`, and its mirror image when the mirror is on.
+func _sculpt_dab(a: Vector3, b: Vector3) -> void:
+	if sculpt.palette.size() < part_names.size() + 1:
+		sculpt.set_parts(part_names.size())
+	var blend := 0.5 if _sculpt_op == SdfForm.SMOOTH else sculpt_blend * BrickWorld.ticks_per_stud()
+	sculpt.form.stroke(_sculpt_op, a, b, _sculpt_r(), blend, part_sel + 1)
+	if mirror_on:
+		var z := mirror_z * BrickPalette.STUD_M
+		var ma := sculpt.to_world(a)
+		var mb := sculpt.to_world(b)
+		ma.z = 2.0 * z - ma.z
+		mb.z = 2.0 * z - mb.z
+		sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+	sculpt.remesh()
+	_sculpt_last = b
+
+
+func _sculpt_end() -> void:
+	_sculpt_on = false
+	_sculpt_record(sculpt.form.end_edit())
+
+
+## An edit of the field, as one undo.
+func _sculpt_record(rec: PackedByteArray) -> void:
+	_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [{"sdf": rec}]})
+	_redo.clear()
+	_sdf_meta = sculpt.save_meta()
+	_store_asset_meta()
+	_autosave_dirty = true
+
+
+## The guide models made solid in the field, in this part: a quick start from a model.
+func sculpt_fill_from_guides() -> int:
+	var n := 0
+	sculpt.form.begin_edit()
+	for g in guides:
+		n += _stamp_node(g.node, SdfForm.ADD)
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+	return n
+
+
+func _stamp_node(node: Node, op: int) -> int:
+	var n := 0
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		var mi := node as MeshInstance3D
+		var to_s := sculpt.global_transform.affine_inverse() * mi.global_transform
+		for si in mi.mesh.get_surface_count():
+			var arr := mi.mesh.surface_get_arrays(si)
+			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var idx = arr[Mesh.ARRAY_INDEX]
+			if idx == null or (idx as PackedInt32Array).is_empty():
+				idx = PackedInt32Array(range(v.size()))
+			for i in v.size():
+				v[i] = to_s * v[i]
+			sculpt.form.stamp_mesh(op, v, idx, part_sel + 1)
+			n += 1
+	for c in node.get_children():
+		n += _stamp_node(c, op)
+	return n
+
+
+## Size and smoothness of the whole block-out, each one undo.
+func sculpt_scale(factor: float) -> void:
+	var bb := sculpt.form.bounds()
+	if bb.size == Vector3.ZERO or is_equal_approx(factor, 1.0):
+		return
+	sculpt.form.begin_edit()
+	sculpt.form.scale(factor, Vector3(bb.get_center().x, bb.position.y, bb.get_center().z))
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+func sculpt_smooth(passes: int) -> void:
+	sculpt.form.begin_edit()
+	sculpt.form.blur(passes)
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+func sculpt_clear() -> void:
+	sculpt.form.begin_edit()
+	sculpt.form.clear()
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+
+## The sculpt brush's options, at the top of the Block out panel.
+func _build_sculpt_box() -> void:
+	_sculpt_box = VBoxContainer.new()
+	_sculpt_box.visible = sketch_draw == "sculpt"
+	_sketch_box.add_child(_sculpt_box)
+	var how := Label.new()
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	how.custom_minimum_size.x = RAIL_W - 16
+	how.text = ("Sculpt in 3D: LMB adds to this part, RMB carves, Shift smooths. "
+			+ "The brush starts on the working plane, then follows the surface; an add keeps "
+			+ "the depth it started at. Parts blend while sculpting; each has its colour.")
+	_sculpt_box.add_child(how)
+	var modes := OptionButton.new()
+	for m in SCULPT_MODES:
+		modes.add_item(m[1])
+	modes.focus_mode = Control.FOCUS_NONE
+	modes.item_selected.connect(func(i: int) -> void: sculpt_mode = SCULPT_MODES[i][0])
+	_sculpt_box.add_child(modes)
+	var slider := func(text: String, lo: float, hi: float, step: float, v: float, set_v: Callable) -> HSlider:
+		var l := Label.new()
+		_sculpt_box.add_child(l)
+		var hs := HSlider.new()
+		hs.min_value = lo
+		hs.max_value = hi
+		hs.step = step
+		hs.focus_mode = Control.FOCUS_NONE
+		hs.custom_minimum_size.x = 150
+		hs.value_changed.connect(func(x: float) -> void:
+			l.text = text % x
+			set_v.call(x))
+		hs.value = v
+		l.text = text % v
+		_sculpt_box.add_child(hs)
+		return hs
+	slider.call("brush radius: %.1f studs", 0.2, 10.0, 0.1, sculpt_radius,
+			func(x: float) -> void: sculpt_radius = x)
+	slider.call("blend: %.1f studs", 0.0, 3.0, 0.1, sculpt_blend,
+			func(x: float) -> void: sculpt_blend = x)
+	# Size: let go and the whole block-out is scaled about its bottom middle, one undo.
+	var size_label := Label.new()
+	var size_s := HSlider.new()
+	size_s.min_value = 25
+	size_s.max_value = 300
+	size_s.step = 5
+	size_s.value = 100
+	size_s.focus_mode = Control.FOCUS_NONE
+	size_s.custom_minimum_size.x = 150
+	size_label.text = "size of the block-out: 100%"
+	size_s.value_changed.connect(func(x: float) -> void: size_label.text = "size of the block-out: %d%%" % int(x))
+	size_s.drag_ended.connect(func(_c: bool) -> void:
+		sculpt_scale(size_s.value / 100.0)
+		size_s.set_value_no_signal(100)
+		size_label.text = "size of the block-out: 100%")
+	_sculpt_box.add_child(size_label)
+	_sculpt_box.add_child(size_s)
+	var row := HFlowContainer.new()
+	_sculpt_box.add_child(row)
+	for b in [["smoother", func() -> void: sculpt_smooth(1)],
+			["fill from guides", func() -> void: sculpt_fill_from_guides()],
+			["clear", func() -> void: sculpt_clear()]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(b[1])
+		row.add_child(btn)
+	_sculpt_box.add_child(HSeparator.new())
 
 ## The point of the working plane under the mouse, in sketch numbers, or null.
 func _sketch_mouse() -> Variant:
@@ -3789,6 +4053,12 @@ func _restore_sketch(g: Variant, which: String) -> void:
 			list.reverse()
 		for one in list:
 			_restore_sketch(one, which)
+		return
+	if g.has("sdf"):
+		g.sdf = sculpt.form.swap_blocks(g.sdf)
+		sculpt.remesh()
+		_sdf_meta = sculpt.save_meta()
+		_store_asset_meta()
 		return
 	if g.has("curves_" + which):
 		_show_curves(int(g["curves_" + which]))
@@ -4505,13 +4775,27 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Block out", "Alt D"],
 		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
 		["move", "Move part", "Alt G"], ["measure", "Measure", "Alt M"]]
-const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
+const SKETCH_DRAWS := [["sculpt", "sculpt in 3D"], ["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
 
 const RAIL_W := 184.0
 const RAIL_FONT := 12
-var sketch_draw := "outline"
+var sketch_draw := "sculpt"
+## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): its brush.
+const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["smooth", "smooth"], ["paint", "paint this part"],
+		["zone", "brick zone (LMB) / smooth zone (RMB)"]]
+var sculpt: AssetSculpt
+var sculpt_mode := "shape"
+var sculpt_radius := 1.0     # studs
+var sculpt_blend := 0.0      # studs: how far an add or a carve blends into what is there
+var _sculpt_on := false
+var _sculpt_op := 0
+var _sculpt_last := Vector3.ZERO
+var _sculpt_depth := 0.0
+var _sculpt_box: VBoxContainer
+var _sketch_how: Label
+var _sdf_meta := {}
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
 var paint_what := "both"
@@ -4706,6 +4990,9 @@ func _build_rail(layer: CanvasLayer) -> void:
 	draws.focus_mode = Control.FOCUS_NONE
 	draws.item_selected.connect(func(i: int) -> void:
 		sketch_draw = SKETCH_DRAWS[i][0]
+		_sculpt_box.visible = sketch_draw == "sculpt"
+		_sketch_how.visible = sketch_draw != "sculpt"
+		sculpt.show_cursor(null, 0.0, Color.WHITE)
 		_sketch.clear())
 	_draw_box.add_child(draws)
 

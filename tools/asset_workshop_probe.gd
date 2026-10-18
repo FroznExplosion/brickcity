@@ -111,6 +111,7 @@ func _tick() -> void:
 	_curves()
 	_sideways()
 	_shells()
+	_sculpt()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1561,4 +1562,60 @@ func _shells() -> void:
 	_ok("the cells against it are embedded bricks, on the sheet with the shell", at_end and kept > 0,
 			"%d join cells %s, %d bricks on the sheet" % [joins.size(), str(joins.keys().slice(0, 4)), kept])
 	_ws.set_shell("body", null)
+	_ws.rail_pick("place")
+
+
+## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): a stroke is in the
+## field, not in bricks; one undo each; saved with the gun.
+func _sculpt() -> void:
+	_ws.rail_pick("sketch")
+	_ok("sculpt is the Block out tool's first way to draw", _ws.sketch_draw == "sculpt")
+	_ws.sculpt_clear()
+	var bricks: int = _ws.recipe.size()
+	var at: Vector3 = _ws.sculpt.to_sample(Vector3(10, 4, 8) * STUD)
+	_ws._sculpt_op = SdfForm.ADD
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	_ok("a stroke makes surface, and no bricks", _ws.sculpt.triangles() > 0 and _ws.recipe.size() == bricks,
+			"%d tris, %d -> %d bricks" % [_ws.sculpt.triangles(), bricks, _ws.recipe.size()])
+	var cells: PackedInt32Array = _ws.sculpt.form.cells()
+	_ok("labelled with the part", cells.size() > 0 and cells[3] == _ws.part_sel + 1, str(cells.slice(0, 5)))
+	_ws._sculpt_op = SdfForm.REMOVE
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(at, at)
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var carved: PackedInt32Array = _ws.sculpt.form.cells()
+	_ok("a carve takes some away", carved.size() < cells.size())
+	_ws._undo()
+	_ok("one Z puts the carve back", _ws.sculpt.form.cells() == cells)
+	_ws.redo()
+	_ok("Shift Z carves again", _ws.sculpt.form.cells() == carved)
+	var meta: Dictionary = _ws.recipe.meta.asset.sdf
+	var f := SdfForm.new()
+	var raw := Marshalls.base64_to_raw(String(meta.data)).decompress(int(meta.size), FileAccess.COMPRESSION_ZSTD)
+	_ok("saved with the gun", f.from_bytes(raw) and f.cells() == carved)
+	_ws.sculpt_scale(2.0)
+	_ok("the size slider scales it", _ws.sculpt.form.cells().size() > carved.size() * 5,
+			"%d -> %d" % [carved.size() / 5, _ws.sculpt.form.cells().size() / 5])
+	_ws._undo()
+	_ok("one undo", _ws.sculpt.form.cells() == carved)
+	# A guide model made solid.
+	_ws.sculpt_clear()
+	var holder := Node3D.new()
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(4, 2, 2) * STUD
+	mi.mesh = bm
+	mi.position = Vector3(20, 3, 20) * STUD
+	holder.add_child(mi)
+	_ws.add_child(holder)
+	_ws.guides.append({"path": "", "real_mm": 1.0, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
+			"node": holder})
+	_ok("fill from guides stamps the model", _ws.sculpt_fill_from_guides() == 1)
+	var n: int = _ws.sculpt.form.cells().size() / 5
+	_ok("a 4 x 2 x 2-stud box is about 4 x 5 x 2 cells", n >= 30 and n <= 50, str(n))
+	_ws.guides.pop_back()
+	holder.queue_free()
+	_ws.sculpt_clear()
 	_ws.rail_pick("place")
