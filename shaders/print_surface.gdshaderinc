@@ -108,14 +108,13 @@ uniform bool underside_hollow = true;
 uniform float under_rim = 0.057;        // 1.3 mm of wall
 uniform float under_rib = 0.020;        // half a rib: two 0.45 mm loops
 uniform float under_pin = 0.072;        // a 1xN's pin, radius (1.65 mm)
-// The hollow's roof (brick.gdshader): 45-degree terraces out from every
-// wall, `under_slope` wide (wider than sliced: at 1.3 mm the hollow read
-// flat, a drawing on the part), then bridged flat. How
-// much sky (ambient occlusion) its flat roof sees, and its terraces' foot by
-// the walls; past under_depth_range, the average of the two.
+// The hollow (brick.gdshader): upright walls and a flat roof `under_depth`
+// up (metres: between a plate's hollow, 0.1, and a brick's, 0.37). How much
+// sky (ambient occlusion) its roof sees, and its walls' foot; past
+// under_depth_range, the average of the two.
 uniform float under_cavity : hint_range(0.0, 1.0) = 0.75;
 uniform float under_wall : hint_range(0.0, 1.0) = 0.85;
-uniform float under_slope = 0.10;
+uniform float under_depth = 0.16;
 uniform float under_depth_range = 25.0;
 // Metres: inside it the hollow has real depth (parallax, brick.gdshader).
 uniform float under_parallax_range = 10.0;
