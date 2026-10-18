@@ -581,6 +581,70 @@ enum : uint8_t {
     CORNER_MITRE = 2,
 };
 
+// The occupancy grid: a block index per cell, -1 for empty. DENSE (one array) for every
+// chunk the game makes -- one predictable branch away from the plain vector it was.
+// PAGED for a chunk too big to hold that way: pages of 16,384 cells, allocated on the
+// first write of a block, so a nearly empty grid costs its page table and the pages its
+// bricks touch. The asset workshop's 1000-stud build area is 2.5 billion cells: 10 GB
+// dense, ~4 MB of page table paged, a frame (Docs/AssetWorkshop.md, "Build area").
+struct Occupancy {
+    // 64 M cells (256 MB dense). The biggest building is ~1.6 M.
+    static constexpr int64_t PAGED_ABOVE = int64_t(1) << 26;
+    static constexpr int PAGE_BITS = 14;
+    static constexpr int64_t PAGE_MASK = (int64_t(1) << PAGE_BITS) - 1;
+
+    std::vector<int32_t> dense;
+    std::vector<std::vector<int32_t>> pages;
+    int64_t count = 0;
+    bool paged = false;
+
+    void reset(int64_t cells) {
+        count = cells;
+        paged = cells > PAGED_ABOVE;
+        dense.clear();
+        pages.clear();
+        if (paged) {
+            pages.resize((size_t)((cells + PAGE_MASK) >> PAGE_BITS));
+        } else {
+            dense.assign((size_t)cells, -1);
+        }
+    }
+
+    int32_t operator[](int64_t i) const {
+        if (!paged) {
+            return dense[(size_t)i];
+        }
+        const std::vector<int32_t> &p = pages[(size_t)(i >> PAGE_BITS)];
+        return p.empty() ? -1 : p[(size_t)(i & PAGE_MASK)];
+    }
+
+    void set(int64_t i, int32_t v) {
+        if (!paged) {
+            dense[(size_t)i] = v;
+            return;
+        }
+        std::vector<int32_t> &p = pages[(size_t)(i >> PAGE_BITS)];
+        if (p.empty()) {
+            if (v < 0) {
+                return; // clearing a cell nothing was written to
+            }
+            p.assign((size_t)PAGE_MASK + 1, -1);
+        }
+        p[(size_t)(i & PAGE_MASK)] = v;
+    }
+
+    int64_t bytes() const {
+        if (!paged) {
+            return (int64_t)dense.size() * (int64_t)sizeof(int32_t);
+        }
+        int64_t n = (int64_t)pages.size() * (int64_t)sizeof(std::vector<int32_t>);
+        for (const std::vector<int32_t> &p : pages) {
+            n += (int64_t)p.size() * (int64_t)sizeof(int32_t);
+        }
+        return n;
+    }
+};
+
 struct Chunk {
     Vector3i origin;               // grid coords of the min corner
     Vector3i dims;                 // size in cells
@@ -605,7 +669,7 @@ struct Chunk {
         return (dims.y + section_plates - 1) / section_plates;
     }
 
-    std::vector<int32_t> occupancy; // dims.x * dims.y * dims.z, -1 = empty
+    Occupancy occupancy; // dims.x * dims.y * dims.z, -1 = empty; write with set()
     std::vector<Block> blocks;
     FaceBake bake;
 
@@ -643,15 +707,15 @@ struct Chunk {
     // what splits them), but "reaches the foundation" does not.
     bool anchored = true;
 
-    int cell_count() const { return dims.x * dims.y * dims.z; }
+    int64_t cell_count() const { return (int64_t)dims.x * dims.y * dims.z; }
 
     bool in_bounds(const Vector3i &local) const {
         return local.x >= 0 && local.y >= 0 && local.z >= 0 &&
                local.x < dims.x && local.y < dims.y && local.z < dims.z;
     }
 
-    int index_of(const Vector3i &local) const {
-        return local.x + dims.x * (local.y + dims.y * local.z);
+    int64_t index_of(const Vector3i &local) const {
+        return (int64_t)local.x + (int64_t)dims.x * ((int64_t)local.y + (int64_t)dims.y * local.z);
     }
 
     // -1 when empty or out of bounds.
