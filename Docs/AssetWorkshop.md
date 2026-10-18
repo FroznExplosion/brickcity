@@ -187,6 +187,32 @@ The Thompson: x0.6 is 80 pieces and 4,594 triangles, x1.4 is 438 pieces and 26,1
 triangles, laid in ~100 ms; x1.5 is refused (81 studs long, the build area is 80). Undoing
 the x1.4 takes ~1.2 s: it lays hundreds of bricks back one by one.
 
+### The form, stage 3 (2026-10-17): the curve slider
+
+| Change | Why |
+|---|---|
+| **Curves** (Sketch tool; it replaces the slopes drop-down): 0 steps only, 1 slopes, 2 slopes and curves (as before), 3 fitted from the side and the front whatever views the part was drawn in, 4 eager slopes too. Let go and every part is laid again from its form, as one undo that puts the level back too; saved with the gun | how much a block-out is smoothed is a choice, made once for the whole asset |
+| Level 3 is what gives **shape-brush shapes** slopes and curves: they come from no sketch view, so before it they had none | a brushed ball was all steps |
+| Slopes at their own pitch, then curves, then eager slopes on what is left: eager slopes no longer take a curve's columns | at eager, the Thompson lost every curve |
+
+The Thompson, every part laid again:
+
+| Level | Pieces | Slopes | Curves | Triangles |
+|---|---|---|---|---|
+| 0 | 279 | 0 | 0 | 12,424 |
+| 1 | 281 | 8 | 0 | 13,068 |
+| 2 | 285 | 8 | 10 | 13,116 |
+| 3 | 285 | 8 | 10 | 13,116 |
+| 4 | 291 | 19 | 7 | 12,678 |
+
+Each takes 20-40 ms. Level 3 adds nothing to the Thompson: its parts are outlines drawn
+from the side, so seen from the front they are rectangles.
+
+**Not yet: pieces turned on their side.** Slopes and curves fall along the gun or across it,
+right way up or flipped; a corner rounded seen from above wants one lying on its side. The
+workshop can build sideways (its six frames), but Export to game, the triangle count and
+the print files take only the upright frame's bricks: sideways pieces need those first.
+
 ### Build area (2026-10-17): 1000 studs
 
 | Change | Why |
@@ -222,7 +248,7 @@ extruded -- made into one custom part with the same triangle slider, taking the 
 covers on the grid.
 
 In order: the triangle readout (done), the form and the core fill (done), the size slider
-(done), the curve slider, shells with their triangle slider, embedded bricks and culling,
+(done), the curve slider (done; sideways pieces next), shells with their triangle slider, embedded bricks and culling,
 selecting and changing shells, small custom parts.
 
 ### Phase 2 -- build a whole gun split by part

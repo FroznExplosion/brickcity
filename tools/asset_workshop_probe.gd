@@ -108,6 +108,7 @@ func _tick() -> void:
 	_round10()
 	_form()
 	_resize()
+	_curves()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1336,4 +1337,62 @@ func _resize() -> void:
 	_ws.scale_form(0.5)
 	_ok("and halved: back to the first size", _form_filled("body") == body0 and _form_filled("grip") == grip0,
 			"%s %s" % [str(_form_filled("body")), str(_form_filled("grip"))])
+	_ws.rail_pick("place")
+
+
+func _pieces_of(kind: String) -> int:
+	var n := 0
+	for k in _ws.recipe.size():
+		if String(_ws.recipe.part_of(k)).begins_with(kind):
+			n += 1
+	return n
+
+
+func _curves() -> void:
+	# The curve slider: every part laid again from its form with more or fewer slopes and
+	# curves, as one undo, the level with it (Docs/AssetWorkshop.md, "The form, stage 3").
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.rail_pick("sketch")
+	_ws.work_plane = "side"
+	_ws.work_depth = 31.0
+	_ws.part_width["body"] = 2
+	_ws.curve_level = 2
+	# An end that rounds over (its last column a plate lower), and a ramp climbing two plates
+	# a stud: a curve's and a slope's profiles.
+	_ws.sketch_region([Vector2(20, 20), Vector2(30, 20), Vector2(30, 23), Vector2(29, 23), Vector2(29, 24),
+			Vector2(20, 24)])
+	_ws.sketch_region([Vector2(40, 20), Vector2(48, 20), Vector2(48, 28), Vector2(44, 28)])
+	var full: int = _form_filled("body")[0]
+	var slopes2 := _pieces_of("slope")
+	var curves2 := _pieces_of("curve")
+	_ok("slopes and curves (2): both", slopes2 > 0 and curves2 > 0, "%d slopes, %d curves" % [slopes2, curves2])
+	_ws.set_curves(0)
+	_ok("steps only (0): none, and the form still filled", _pieces_of("slope") == 0 and _pieces_of("curve") == 0
+			and _form_filled("body")[1] == full, "%d slopes, %d curves, %s" % [_pieces_of("slope"), _pieces_of("curve"), str(_form_filled("body"))])
+	_ws.set_curves(1)
+	_ok("slopes (1): slopes, no curves", _pieces_of("slope") > 0 and _pieces_of("curve") == 0,
+			"%d slopes, %d curves" % [_pieces_of("slope"), _pieces_of("curve")])
+	_ws._undo()
+	_ok("one Z: steps again, the level with them", _pieces_of("slope") == 0 and _ws.curve_level == 0,
+			"%d slopes, level %d" % [_pieces_of("slope"), _ws.curve_level])
+	_ws.redo()
+	_ok("shift Z: slopes again", _pieces_of("slope") > 0 and _ws.curve_level == 1)
+	# A ball from the shape brush has no sketch view to be fitted from: at 3 it is fitted
+	# from the side and the front.
+	_ws._new_build()
+	_ws.set_curves(2)
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.rail_pick("shape")
+	_ws.shape_mode = "brush"
+	_ws.brush3d = "ball"
+	_ws.shape_size = 8
+	_brush(MOUSE_BUTTON_LEFT, [Vector3i(30, 30, 30)])
+	var ball2 := _pieces_of("slope") + _pieces_of("curve")
+	_ws.set_curves(3)
+	var ball3 := _pieces_of("slope") + _pieces_of("curve")
+	_ok("a brushed ball gets slopes and curves from the side and front (3)", ball2 == 0 and ball3 > 0,
+			"%d -> %d" % [ball2, ball3])
+	_ok("and is still all filled", _form_filled("body")[1] == _form_filled("body")[0], str(_form_filled("body")))
+	_ws.set_curves(2)
 	_ws.rail_pick("place")
