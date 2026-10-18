@@ -271,7 +271,7 @@ The Thompson, stock and grip shelled at 4 samples a stud, 1,500 triangles each: 
 watertight, the stock 6 studs and the grip 7 into the body (19 stud holes), the whole gun
 one piece.
 
-### The SDF block-out (2026-10-18, being built)
+### The SDF block-out (2026-10-18)
 
 **What the user wants** (2026-10-18): the block-out is sculpted in 3D as a smooth signed
 distance field -- as Zylann's voxel tools sculpt terrain -- tracing a photo, a 3D model, both
@@ -298,11 +298,25 @@ again keeps them. Old saves with the 2D sketch form may be dropped.
 | Drawing on a surface | `raycast` (sphere tracing) |
 | Undo, saving | `begin_edit` / `end_edit` record the blocks an edit touched; `swap_blocks` undoes and gives the redo; `to_bytes` / `from_bytes` |
 
-**Next**, in order: the Block out tool on it (3D brush on the surface or a movable work
-plane, live smooth view, undo, saved with the asset); a 3D model as a reference beside the
-photos (glb, see-through, "fill from reference"); sliders on the SDF, the brick-zone brush
-and **Convert** (zones to bricks, the rest to custom parts per part, shells from
-`part_field`), and back; then the old 2D sketch form removed.
+**In the workshop** (`scripts/asset_sculpt.gd` holds the field in the scene; the tool is in
+`asset_workshop.gd`; the probe's `_sculpt` and `_convert` check it):
+
+| What | How |
+|---|---|
+| **Sculpt in 3D** | the Block out tool's first way to draw (and the default). LMB adds to the current part, RMB carves, Shift smooths; modes for smooth, paint this part, brick zone (LMB marks, RMB clears). The brush starts on the block-out's surface under the mouse, else on the working plane; an add keeps the depth it started at. The mirror applies. Brush radius 0.2-10 studs, blend 0-3 studs |
+| **While sculpting** | only the smooth surface, a mesh a block, coloured by part; no bricks. A stroke is one undo; the field is saved with the asset (`asset.sdf`, zstd) |
+| **Sliders and buttons** | size 25-300% (let go: scaled about the bottom middle, one undo), smoother, **fill from guides** (the guide models made solid in this part), clear |
+| **Convert** | every solid cell into the asset, in its part. Brick-zone cells: bricks. A part's other cells: its **custom piece** -- a shell straight from the field (`part_field`, brick zones and other parts left out, a sample a tick, `tris` budget) -- over bricks only where the surface holds the whole cell or where it meets bricks (the join: real bricks with studs). Cells the piece fills with no brick (its edge) are kept as the piece's. A brick from before goes back where its cells still are its part's, colour and shape kept; the rest packed biggest first. One undo. The test gun converts in ~0.1 s |
+| **Edit as SDF** | the bricks back into the field -- only cells that changed since the last Convert (a brick added unions a box, a brick taken carves one), the piece's own cells counted as still there -- and the block-out shown again; the bricks are put aside for the next Convert. A bricks-only build (the Thompson) goes in whole. Convert again gives the same cells. One undo |
+
+`-- --shot --sculpt [--convert]` draws a test gun (four parts, the barrel's end a brick zone)
+and takes the usual pictures.
+
+**Not yet**: a converted brick's slope or curve goes back into the field as a whole cell;
+colours of packed bricks are the hotbar's; the piece's triangle slider is the old shell
+panel's; Explode and Move part do not move the field. Next: removing the old 2D sketch
+form, then shell regions are brick zones already -- what is left from the old list is
+selecting a piece to change its look, and small custom parts (a lathe brush).
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
