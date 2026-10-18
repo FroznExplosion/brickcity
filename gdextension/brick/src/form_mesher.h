@@ -27,8 +27,15 @@ protected:
 
 public:
     /// `field`: dims.x * dims.y * dims.z bytes, x fastest, then y, then z; non-zero
-    /// is solid. Sample (x, y, z) is at ((x, y, z) + 0.5) * `cell` from the origin.
+    /// is solid; 2 is solid and PINNED -- a cube touching one is not smoothed, so a face
+    /// where the solid meets something else stays flat, exactly where the samples end.
+    /// Sample (x, y, z) is at ((x, y, z) + 0.5) * `cell` from the origin.
     /// Returns ArrayMesh surface arrays (vertex, normal, index), wound as the
     /// project's brick meshes are, or an empty Array for an empty field.
     static Array surface(const PackedByteArray &field, const Vector3i &dims, const Vector3 &cell, int smooth);
+
+    /// The field shrunk: a sample stays solid only if every sample within `reach`
+    /// of it (a box, `reach` samples each way along each axis) is solid -- outside
+    /// the field counts as empty. What a shell's thickness leaves for its bricks.
+    static PackedByteArray erode(const PackedByteArray &field, const Vector3i &dims, const Vector3i &reach);
 };

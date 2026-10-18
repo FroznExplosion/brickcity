@@ -1001,6 +1001,10 @@ func _process(dt: float) -> void:
 	if _tris_due >= 0 and Time.get_ticks_msec() >= _tris_due:
 		_tris_due = -1
 		_tris = triangle_stats()
+		_sync_shell_ui(false)
+	if _shell_ui_part != part_sel:
+		_shell_ui_part = part_sel
+		_sync_shell_ui(true)
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
@@ -1299,7 +1303,8 @@ func _store_asset_meta() -> void:
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
-			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
+			"shells": shells}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1338,6 +1343,11 @@ func _restore_asset_meta() -> void:
 		_sketch_seq = maxi(_sketch_seq, int(sk.n) + 1)
 	_sketch_cache.clear()
 	curve_level = int(a.get("curves", 2))
+	shells = (a.get("shells", {}) as Dictionary).duplicate(true)
+	for part in _shell_nodes.keys():
+		_shell_mesh(String(part), {})
+	for part in shells:
+		_refresh_shell(String(part))
 	muzzle_end = String(a.get("muzzle", "-x"))
 	for g in a.get("guides", []):
 		var i := load_guide(String(g.path), float(g.real_mm))
@@ -1382,6 +1392,9 @@ func _reset_space() -> void:
 	_edit_groups.clear()
 	_deleted.clear()
 	sketches.clear()
+	shells.clear()
+	for part in _shell_nodes.keys():
+		_shell_mesh(String(part), {})
 	part_bricks.clear()
 	extra_studs.clear()
 	_draw_studs()
@@ -2331,6 +2344,40 @@ func _build_phase3(layer: CanvasLayer) -> void:
 		if int(_curve_slider.value) != curve_level:
 			set_curves(int(_curve_slider.value)))
 	_sketch_box.add_child(_curve_slider)
+	# The part's shell: a smooth outside over its bricks (Docs/AssetWorkshop.md, "Shells").
+	_shell_check = CheckBox.new()
+	_shell_check.text = "smooth shell on this part"
+	_shell_check.focus_mode = Control.FOCUS_NONE
+	_shell_check.toggled.connect(func(on: bool) -> void:
+		var part := part_names[part_sel]
+		if on:
+			set_shell(part, {"thick": _shell_thick.value, "res": int(_shell_res.value)})
+		else:
+			set_shell(part, null)
+		_sync_shell_ui(true))
+	_sketch_box.add_child(_shell_check)
+	_shell_label = Label.new()
+	_sketch_box.add_child(_shell_label)
+	_shell_thick = HSlider.new()
+	_shell_thick.min_value = 0.0
+	_shell_thick.max_value = 3.0
+	_shell_thick.step = 0.25
+	_shell_thick.value = 0.5
+	_shell_res = HSlider.new()
+	_shell_res.min_value = 1
+	_shell_res.max_value = 8
+	_shell_res.step = 1
+	_shell_res.value = 4
+	for sl: HSlider in [_shell_thick, _shell_res]:
+		sl.focus_mode = Control.FOCUS_NONE
+		sl.custom_minimum_size.x = 150
+		sl.value_changed.connect(func(_v: float) -> void: _sync_shell_ui(false))
+		sl.drag_ended.connect(func(_changed: bool) -> void:
+			var part := part_names[part_sel]
+			if shells.has(part):
+				set_shell(part, {"thick": _shell_thick.value, "res": int(_shell_res.value)})
+			_sync_shell_ui(true))
+		_sketch_box.add_child(sl)
 	# Resize the whole block-out: let go of the slider and every part is laid again at that
 	# size, as one undo, and the slider is back at 100%.
 	var size_label := Label.new()
@@ -2741,6 +2788,9 @@ func export_sheet() -> Dictionary:
 			# mirrored along the gun to match.
 			spec["mirror_along"] = muzzle_end == "+x"
 			var bricks := []
+			if _shell_nodes.has(name):
+				spec["shell"] = _shell_sheet(name, along, across, up)
+				ids = _uncovered(name, ids)
 			for i in ids:
 				var size := BrickPalette.size_of(recipe.part_of(i))
 				var c := recipe.cell_of(i)
@@ -3567,6 +3617,10 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 	var old_box: Array = _part_box[part] if _part_box.has(part) and _part_vol.has(part) else _box.duplicate()
 	var list := part_sketches(part, change)
 	var vol := part_volume(list)
+	var sf := {}
+	if shells.has(part):
+		sf = shell_field(part, list, vol)
+		vol = shell_core(part, sf)
 	whole = whole or old_vol.is_empty()
 	var near := {}   # cells worked out again
 	var near_lo := Vector3i(1 << 30, 1 << 30, 1 << 30)   # and the box round them
@@ -3657,7 +3711,9 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 					var c := cell + Vector3i(dx, dy, dz)
 					free[c] = true
 					only[c] = true
+	_no_edges = shells.has(part)
 	var plan := _plan_volume(list, vol, free, {} if whole else only, {} if whole else near)
+	_no_edges = false
 	# A going brick the new layout lays again, the same part in the same place, stays.
 	var lay := []
 	for pk in plan:
@@ -3691,6 +3747,7 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 	part_bricks[part] = laid
 	_part_vol[part] = vol
 	_part_box[part] = _box.duplicate()
+	_shell_mesh(part, sf)
 	_store_asset_meta()
 	_group_with(ops, {"part": part, "before": before, "after": change.duplicate(),
 			"bricks_before": bricks_before, "bricks_after": laid})
@@ -3712,11 +3769,20 @@ func _restore_sketch(g: Variant, which: String) -> void:
 	if g.has("curves_" + which):
 		_show_curves(int(g["curves_" + which]))
 		return
+	if g.has("shell_part"):
+		var was = g["shell_" + which]
+		if was == null:
+			shells.erase(String(g.shell_part))
+		else:
+			shells[String(g.shell_part)] = was
+		_refresh_shell(String(g.shell_part))
+		return
 	var states: Dictionary = g.get(which, {})
 	for k in states:
 		_set_sketch(k, states[k])
 	part_bricks[String(g.part)] = g.get("bricks_" + which, [])
 	_part_vol.erase(String(g.part))
+	_refresh_shell(String(g.part))
 	if g.has("studs_" + which):
 		extra_studs = (g["studs_" + which] as Array).duplicate()
 		points = (g["points_" + which] as Array).duplicate()
@@ -3904,7 +3970,9 @@ static func _sketch_depth(sk: Dictionary) -> Array:
 func _plan_volume(list: Array, vol: Dictionary, own: Dictionary, only: Dictionary,
 		near: Dictionary = {}) -> Array:
 	var views := []
-	if curve_level >= 3:
+	if _no_edges:
+		pass
+	elif curve_level >= 3:
 		views = ["side", "front"]
 	elif curve_level >= 1:
 		for e in list:
@@ -4075,7 +4143,8 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 	for q in solid.at:
 		var centre := Vector3i(int(q[0]), int(q[1]), int(q[2]))
 		for c in brush_shape_cells(String(solid.kind), centre, int(solid.size), int(solid.axis), int(solid.thick)):
-			if c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates and c.z < plate_studs:
+			if _no_clip or (c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates
+					and c.z < plate_studs):
 				out[c] = true
 	return out
 
@@ -5373,6 +5442,178 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 	return true
 
 
+## Give a part a shell (`settings`: {thick, res}, or null to take it off) and lay it again:
+## its bricks become the form shrunk by the thickness, inside one smooth surface. One undo,
+## which puts the settings back too.
+func set_shell(part: String, settings: Variant) -> void:
+	var was = (shells[part] as Dictionary).duplicate() if shells.has(part) else null
+	if settings == null:
+		shells.erase(part)
+	else:
+		var st: Dictionary = (settings as Dictionary).duplicate()
+		st["thick"] = clampf(float(st.get("thick", 0.5)), 0.0, 4.0)
+		st["res"] = clampi(int(st.get("res", 4)), 1, 8)
+		if not st.has("colour"):
+			st["colour"] = was.colour if was != null else _colour
+			st["mat"] = was.mat if was != null else _mat
+		shells[part] = st
+	var now = (shells[part] as Dictionary).duplicate() if shells.has(part) else null
+	_store_asset_meta()
+	_begin_gather()
+	if not part_sketches(part).is_empty():
+		resketch_part(part, {}, true)
+	_end_gather()
+	var rec := {"shell_part": part, "shell_before": was, "shell_after": now}
+	if not _edit_groups.is_empty() and _edit_groups.back().get("sketch") is Array \
+			and int(_edit_groups.back().end) == _edits.size():
+		(_edit_groups.back().sketch as Array).push_front(rec)
+	else:
+		_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [rec]})
+	_refresh_shell(part)
+
+
+## A part's form sampled finely for its shell: {field, dims, lo, k} -- `field` a byte a
+## sample, `lo` the first sample, samples 1/k of a stud along and across and 1/k of a
+## plate up -- or {} when it has no form. The sketches are scaled k times and laid out as
+## a part's volume is (`scale_sketch`, `part_volume`): the same outlines, finer cells.
+## A sample on a face where the form meets a brick that is not its own is pinned (2): the
+## shell stays flat there, on the face, so it meets the next part rather than shrinking
+## off it as the smoothing rounds everything else. `form`: the part's cells, if known.
+func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dictionary:
+	if not shells.has(part):
+		return {}
+	if list.is_empty():
+		list = part_sketches(part)
+	if form.is_empty():
+		var keep := _box.duplicate()
+		var keep_c := _course
+		form = part_volume(list)
+		_box = keep
+		_course = keep_c
+	var k := int(shells[part].res)
+	var scaled := []
+	for e in list:
+		scaled.append([e[0], scale_sketch(e[1], float(k), Vector3.ZERO)])
+	var keep_box := _box.duplicate()
+	var keep_course := _course
+	_no_clip = true
+	var fine := part_volume(scaled)
+	_no_clip = false
+	_box = keep_box
+	_course = keep_course
+	if fine.is_empty():
+		return {}
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in fine:
+		lo = lo.min(c)
+		hi = hi.max(c)
+	var dims := hi - lo + Vector3i.ONE
+	var field := PackedByteArray()
+	field.resize(dims.x * dims.y * dims.z)
+	for c in fine:
+		var d: Vector3i = c - lo
+		var v := 1
+		var cell := Vector3i(floori(c.x / float(k)), floori(c.y / float(k)), floori(c.z / float(k)))
+		var r: Vector3i = c - cell * k
+		for axis in 3:
+			for side in [-1, 1]:
+				if (side < 0 and r[axis] != 0) or (side > 0 and r[axis] != k - 1):
+					continue
+				var nb := cell
+				nb[axis] += side
+				if not form.has(nb) and world.is_solid(chunk, nb):
+					v = 2
+		field[d.x + dims.x * (d.y + dims.y * d.z)] = v
+	return {"field": field, "dims": dims, "lo": lo, "k": k}
+
+
+## The cells a shelled part's bricks fill: every cell of the grid whose samples are all
+## inside the form shrunk by the shell's thickness.
+func shell_core(part: String, sf: Dictionary) -> Dictionary:
+	var core := {}
+	if sf.is_empty():
+		return core
+	var k: int = sf.k
+	var t := float(shells[part].thick)
+	var reach := Vector3i(int(ceil(t * k)), int(ceil(t * 2.5 * k)), int(ceil(t * k)))
+	var dims: Vector3i = sf.dims
+	var lo: Vector3i = sf.lo
+	var left: PackedByteArray = FormMesher.erode(sf.field, dims, reach)
+	var cells := {}
+	for z in dims.z:
+		for y in dims.y:
+			for x in dims.x:
+				if left[x + dims.x * (y + dims.y * z)] != 0:
+					var f := lo + Vector3i(x, y, z)
+					var c := Vector3i(floori(f.x / float(k)), floori(f.y / float(k)), floori(f.z / float(k)))
+					cells[c] = int(cells.get(c, 0)) + 1
+	var whole := k * k * k
+	for c in cells:
+		if int(cells[c]) == whole:
+			core[c] = true
+	return core
+
+
+## Make (or take away) a part's shell mesh from its sampled form.
+func _shell_mesh(part: String, sf: Dictionary) -> void:
+	var mi: MeshInstance3D = _shell_nodes.get(part)
+	if sf.is_empty() or not shells.has(part):
+		if mi != null:
+			mi.queue_free()
+			_shell_nodes.erase(part)
+		_shell_tris.erase(part)
+		return
+	var k: int = sf.k
+	var cell := CELL_M / float(k)
+	var arrays := FormMesher.surface(sf.field, sf.dims, cell, SHELL_SMOOTH)
+	if mi == null:
+		mi = MeshInstance3D.new()
+		mi.name = "Shell_" + part
+		add_child(mi)
+		_shell_nodes[part] = mi
+	var m := ArrayMesh.new()
+	if not arrays.is_empty():
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mi.mesh = m
+	mi.material_override = shell_material(part)
+	mi.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), Vector3(sf.lo) * cell)
+	_shell_tris[part] = 0 if arrays.is_empty() else (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
+
+
+## A part's shell drawn again from what is saved (after an undo, a load).
+func _refresh_shell(part: String) -> void:
+	_shell_mesh(part, shell_field(part) if shells.has(part) else {})
+
+
+## A shell's look: the colour and material it was given, smooth and plain (no brick seams).
+func shell_material(part: String) -> StandardMaterial3D:
+	var st: Dictionary = shells.get(part, {})
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0)))
+	mat.roughness = 0.55
+	return mat
+
+
+## The bricks of some that a form laid (`part_bricks`), as "arch|cell" keys: inside a
+## shell they are covered, and the game and the count leave them out.
+func _form_laid(part: String) -> Dictionary:
+	var out := {}
+	for b in part_bricks.get(part, []):
+		out["%s|%s" % [b[0], Vector3i(int(b[1][0]), int(b[1][1]), int(b[1][2]))]] = true
+	return out
+
+
+## Some bricks of a part less those its shell covers.
+func _uncovered(part: String, ids: Array) -> Array:
+	if not shells.has(part) or not _shell_nodes.has(part):
+		return ids
+	var laid := _form_laid(part)
+	return ids.filter(func(i: int) -> bool:
+		return _brick_frame(i) != 0 or not laid.has("%s|%s" % [recipe.part_of(i), recipe.cell_of(i)]))
+
+
 ## Lay every part again from its form with `level` slopes and curves (`curve_level`), as
 ## one undo. Returns how many parts were laid.
 func set_curves(level: int) -> int:
@@ -5400,6 +5641,27 @@ func _show_curves(level: int) -> void:
 
 
 var _curve_slider: HSlider
+var _shell_check: CheckBox
+var _shell_label: Label
+var _shell_thick: HSlider
+var _shell_res: HSlider
+var _shell_ui_part := -1
+
+
+## The shell controls: the current part's settings when it changes (or `from_part`), and
+## the line over the sliders -- thickness, detail and what the shell costs.
+func _sync_shell_ui(from_part: bool) -> void:
+	if _shell_check == null:
+		return
+	var part := part_names[part_sel]
+	var st: Dictionary = shells.get(part, {})
+	if from_part:
+		_shell_check.set_pressed_no_signal(not st.is_empty())
+		if not st.is_empty():
+			_shell_thick.set_value_no_signal(float(st.thick))
+			_shell_res.set_value_no_signal(int(st.res))
+	_shell_label.text = "shell %.2f studs thick, %d samples a stud%s" % [_shell_thick.value, int(_shell_res.value),
+			(": %s triangles" % _thousands(int(_shell_tris.get(part, 0)))) if _shell_tris.has(part) else ""]
 
 
 ## The box round every part's form, as `form_pivot` last found it.
@@ -5778,6 +6040,18 @@ func play_pose(t: float) -> void:
 var erase_any := true
 ## Edits being gathered into one undo (`_begin_gather`): {start, groups}, or empty.
 var _gather := {}
+
+## Shells (Docs/AssetWorkshop.md, "Shells"): part -> {thick: studs, res: samples a stud,
+## colour, mat}. A shelled part's form is sampled `res` times finer than the grid and
+## wrapped in one smooth closed surface; its bricks are the form shrunk by `thick`,
+## snapped down to whole cells, and lie inside the shell.
+var shells := {}
+var _shell_nodes := {}       # part -> MeshInstance3D, in the upright grid
+var _shell_tris := {}        # part -> triangles of its shell
+var _no_clip := false        # sampling a form finely: shapes are not cut to the build area
+var _no_edges := false       # laying a shelled part: no slopes or curves, the shell is the outside
+## How many times a shell's surface is smoothed: a stair of samples becomes a slope.
+const SHELL_SMOOTH := 16
 
 
 ## The upright-grid bricks under an area of a plane, by recipe index, highest first: right
@@ -6214,12 +6488,21 @@ func export_game(dir: String = "") -> Dictionary:
 		model.transform = Transform3D(b, -(b * (at[name] as Vector3)))
 		root.add_child(model)
 		# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
-		var groups := _by_frame(by_part[name])
+		var groups := _by_frame(_uncovered(name, by_part[name]))
 		for af in groups:
 			var mi := _bake_part_mesh(groups[af], af)
 			if af != groups.keys()[0]:
 				mi.name = "Bricks%d" % af
 			model.add_child(mi)
+		if _shell_nodes.has(name):
+			# The shell, in the workshop metres the bricks are in; the bricks it covers left out.
+			var sh := MeshInstance3D.new()
+			sh.name = "Shell"
+			var src: MeshInstance3D = _shell_nodes[name]
+			sh.mesh = src.mesh
+			sh.material_override = src.material_override
+			sh.transform = world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
+			model.add_child(sh)
 		var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
 		if not extra.is_empty():
 			model.add_child(_studs_node(extra))
@@ -6291,6 +6574,21 @@ func _tip(ids: Array, fwd: Vector3) -> Vector3:
 		mid += p
 	mid /= maxf(1.0, cells.size())
 	return mid + fwd * BrickPalette.STUD_M * 0.5
+
+
+## A part's shell for the print sheet: {verts: [[along, across, up] mm ...], tris: [i ...]}.
+## The kit makes it the part's solid (its winding is put right there: the gun's frame is
+## the workshop's mirrored).
+func _shell_sheet(part: String, along: Callable, across: Callable, up: Callable) -> Dictionary:
+	var mi: MeshInstance3D = _shell_nodes[part]
+	var a: Array = mi.mesh.surface_get_arrays(0)
+	var xf: Transform3D = world.get_chunk_transform(asm.frames[0]).affine_inverse() * mi.transform
+	var verts := []
+	for p: Vector3 in a[Mesh.ARRAY_VERTEX]:
+		var w := xf * p
+		verts.append([snappedf(along.call(w.x / BrickPalette.STUD_M), 0.001), snappedf(across.call(w.z / BrickPalette.STUD_M), 0.001),
+				snappedf(up.call(w.y / BrickPalette.PLATE_M), 0.001)])
+	return {"verts": verts, "tris": Array(a[Mesh.ARRAY_INDEX] as PackedInt32Array)}
 
 
 ## A sideways brick for the print sheet: its middle in the gun's frame (mm: along, across,
@@ -6458,7 +6756,7 @@ func triangle_stats() -> Dictionary:
 		var bricks := 0
 		var n_studs := 0
 		var meshes := 0
-		var groups := _by_frame(by_part[name])
+		var groups := _by_frame(_uncovered(name, by_part[name]))
 		for af in groups:
 			var made := _part_chunk(groups[af])
 			var c: int = made[0]
@@ -6474,7 +6772,10 @@ func triangle_stats() -> Dictionary:
 				hand += 1
 		var studs := (n_studs + hand) * stud_tris
 		var d := meshes + (groups.size() if n_studs > 0 else 0) + (1 if hand > 0 else 0)
-		parts[name] = {"bricks": bricks, "studs": studs, "draws": d}
+		var shell := int(_shell_tris.get(name, 0))
+		bricks += shell
+		d += 1 if shell > 0 else 0
+		parts[name] = {"bricks": bricks, "studs": studs, "draws": d, "shell": shell}
 		total += bricks + studs
 		draws += d
 	return {"parts": parts, "total": total, "draws": draws,

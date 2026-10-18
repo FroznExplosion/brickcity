@@ -110,5 +110,25 @@ func _init() -> void:
 		print("       smoothed %d: %d triangles, furthest off the sphere %.2f samples" % [smooth, idx.size() / 3, worst / cell.x])
 		if smooth == 4:
 			_ok("smoothed, it is round: within a sample of the sphere", worst < cell.x, "%.2f samples" % (worst / cell.x))
+	# Erosion: what a shell's thickness leaves for the bricks inside it.
+	var cube := PackedByteArray()
+	cube.resize(1000)
+	cube.fill(1)
+	var left := FormMesher.erode(cube, Vector3i(10, 10, 10), Vector3i(2, 2, 2))
+	var count := 0
+	var inside := true
+	for z in 10:
+		for y in 10:
+			for x in 10:
+				if left[x + 10 * (y + 10 * z)] != 0:
+					count += 1
+					inside = inside and x >= 2 and x < 8 and y >= 2 and y < 8 and z >= 2 and z < 8
+	_ok("a 10-cube eroded by 2 is the 6-cube in its middle", count == 216 and inside, "%d left" % count)
+	var flat := FormMesher.erode(cube, Vector3i(10, 10, 10), Vector3i(0, 3, 0))
+	var rows := 0
+	for x in 10:
+		rows += 1 if flat[x + 10 * (5 + 10 * 5)] != 0 else 0
+	_ok("by 3 up and down only: a slab 4 high, all the way across", rows == 10
+			and flat[5 + 10 * (2 + 10 * 5)] == 0 and flat[5 + 10 * (3 + 10 * 5)] != 0)
 	print("form mesher probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)

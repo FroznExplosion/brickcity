@@ -12,6 +12,51 @@
 void FormMesher::_bind_methods() {
     ClassDB::bind_static_method("FormMesher", D_METHOD("surface", "field", "dims", "cell", "smooth"),
             &FormMesher::surface);
+    ClassDB::bind_static_method("FormMesher", D_METHOD("erode", "field", "dims", "reach"), &FormMesher::erode);
+}
+
+PackedByteArray FormMesher::erode(const PackedByteArray &field, const Vector3i &dims, const Vector3i &reach) {
+    const int64_t n = (int64_t)dims.x * dims.y * dims.z;
+    PackedByteArray out;
+    if (dims.x <= 0 || dims.y <= 0 || dims.z <= 0 || field.size() < n) {
+        return out;
+    }
+    std::vector<uint8_t> a(field.ptr(), field.ptr() + n);
+    std::vector<uint8_t> b((size_t)n);
+    const int64_t stride[3] = {1, dims.x, (int64_t)dims.x * dims.y};
+    const int len[3] = {dims.x, dims.y, dims.z};
+    // A box erosion is three line erosions. Along a line: how far back the last empty
+    // sample is and how far ahead the next, both counted in one pass each way.
+    for (int axis = 0; axis < 3; ++axis) {
+        const int r = reach[axis];
+        if (r <= 0) {
+            continue;
+        }
+        const int L = len[axis];
+        const int64_t s = stride[axis];
+        std::vector<int> run((size_t)L);
+        for (int64_t base = 0; base < n; ++base) {
+            // Each line once: from its first sample.
+            if ((base / s) % L != 0) {
+                continue;
+            }
+            int since = 0; // solid samples in a row up to here (the edge is empty)
+            for (int i = 0; i < L; ++i) {
+                since = a[(size_t)(base + i * s)] ? since + 1 : 0;
+                run[(size_t)i] = since; // solid samples ending here, this one counted
+            }
+            int ahead = 0;
+            for (int i = L - 1; i >= 0; --i) {
+                ahead = a[(size_t)(base + i * s)] ? ahead + 1 : 0;
+                // Solid r back and r ahead: the run through here reaches both.
+                b[(size_t)(base + i * s)] = (run[(size_t)i] > r && ahead > r) ? 1 : 0;
+            }
+        }
+        a.swap(b);
+    }
+    out.resize(n);
+    std::copy(a.begin(), a.end(), out.ptrw());
+    return out;
 }
 
 Array FormMesher::surface(const PackedByteArray &field, const Vector3i &dims, const Vector3 &cell, int smooth) {
@@ -39,6 +84,7 @@ Array FormMesher::surface(const PackedByteArray &field, const Vector3i &dims, co
     std::vector<int32_t> vert_of((size_t)cx * cy * cz, -1);
     std::vector<Vector3> pos;      // in samples: sample (x, y, z) is at (x, y, z)
     std::vector<Vector3i> home;    // each vertex's cube
+    std::vector<uint8_t> pinned;   // a cube with a pinned sample (2): not smoothed
     static const int CORNER[8][3] = {
         {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}};
     static const int EDGE[12][2] = {
@@ -48,9 +94,14 @@ Array FormMesher::surface(const PackedByteArray &field, const Vector3i &dims, co
             for (int x = -1; x < dims.x; ++x) {
                 bool s[8];
                 int count = 0;
+                bool pin = false;
                 for (int k = 0; k < 8; ++k) {
-                    s[k] = solid(x + CORNER[k][0], y + CORNER[k][1], z + CORNER[k][2]);
+                    const int sx = x + CORNER[k][0], sy = y + CORNER[k][1], sz = z + CORNER[k][2];
+                    s[k] = solid(sx, sy, sz);
                     count += s[k] ? 1 : 0;
+                    if (s[k] && f[(int64_t)sx + (int64_t)dims.x * ((int64_t)sy + (int64_t)dims.y * sz)] == 2) {
+                        pin = true;
+                    }
                 }
                 if (count == 0 || count == 8) {
                     continue;
@@ -68,6 +119,7 @@ Array FormMesher::surface(const PackedByteArray &field, const Vector3i &dims, co
                 vert_of[(size_t)cube_index(x, y, z)] = (int32_t)pos.size();
                 pos.push_back(Vector3((float)x, (float)y, (float)z) + sum / (float)crossings);
                 home.push_back(Vector3i(x, y, z));
+                pinned.push_back(pin ? 1 : 0);
             }
         }
     }
@@ -147,7 +199,7 @@ Array FormMesher::surface(const PackedByteArray &field, const Vector3i &dims, co
     std::vector<Vector3> next(pos.size());
     for (int it = 0; it < smooth; ++it) {
         for (size_t i = 0; i < pos.size(); ++i) {
-            if (nbr[i].empty()) {
+            if (nbr[i].empty() || pinned[i]) {
                 next[i] = pos[i];
                 continue;
             }
