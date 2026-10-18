@@ -12041,7 +12041,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F11:
 			_toggle_terrain_edit()
 		KEY_L:
-			print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
+			if event.shift_pressed:
+				# What drew each brick pixel (brick.gdshader tier_debug).
+				var on := not bool(_shader_toggles.get("tier_debug", false))
+				_shader_toggles["tier_debug"] = on
+				brick_material.set_shader_parameter("tier_debug", on)
+				print("[city] tier debug: %s" % ("ON" if on else "OFF"))
+			else:
+				print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
 		KEY_B:
 			# Both halves of the bevel: the shaded one, and the real one near
 			# the camera (BrickNear), so the key shows the wall with and

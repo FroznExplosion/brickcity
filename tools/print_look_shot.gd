@@ -84,6 +84,7 @@ var _near: BrickNear
 var _out := "user://"
 var _looks := ["glass"]
 var _views: Array = []   ## only these (all when empty)
+var _tiers := false      ## --tiers: brick.gdshader's tier_debug tint
 var _shots: Array = []
 var _frame := 0
 var _cam: Camera3D
@@ -96,6 +97,8 @@ func _init() -> void:
 			_out = a.substr(6)
 		elif a.begins_with("--looks="):
 			_looks = Array(a.substr(8).split(","))
+		elif a == "--tiers":
+			_tiers = true
 		elif a.begins_with("--views="):
 			_views = Array(a.substr(8).split(","))
 	BrickMaterials.load_look()
@@ -174,6 +177,7 @@ func _build() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/brick.gdshader")
 	BrickMaterials.add_glass(mat)
+	mat.set_shader_parameter("tier_debug", _tiers)
 	var arrays: Array = w.build_chunk_chamfer_mesh(c, BrickNear.BEVEL)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
