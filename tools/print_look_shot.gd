@@ -33,6 +33,14 @@ const VIEWS := [
 	["edge_macro", Vector3(0.62, 0.98, 1.0), Vector3(0.5, 0.84, 0.78)],
 	["edge_eye", Vector3(1.4, 1.7, 2.4), Vector3(0.5, 0.84, 0.7)],
 	["corner_down", Vector3(0.8, 1.05, 1.88), Vector3(0.68, 0.84, 1.72)],
+	# A top's outer corner from above and outside, and a hanging brick's
+	# bottom corner from below and outside, close (the scope's view).
+	["corner_above", Vector3(0.86, 1.08, 1.93), Vector3(0.7, 0.84, 1.75)],
+	["corner_below", Vector3(2.97, 0.62, 1.6), Vector3(2.8, 0.84, 1.4)],
+	# Where two neighbours' seam reaches the edge: from above (the floor of
+	# tops) and from below (the ceiling's front edge).
+	["seam_above", Vector3(4.62, 0.72, 3.68), Vector3(4.9, 0.42, 3.5)],
+	["seam_below", Vector3(42.28, 1.86, 4.42), Vector3(42.1, 2.1, 4.2)],
 	["under_corner", Vector3(2.75, 0.85, 0.3), Vector3(2.15, 1.26, -0.1)],
 	["bottom", Vector3(2.2, 0.05, 1.3), Vector3(2.45, 0.6, 0.6)],
 	["under", Vector3(3.3, 0.15, 1.5), Vector3(3.3, 0.84, 0.35)],

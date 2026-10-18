@@ -1404,6 +1404,13 @@ private:
         int face_base = 0;
         int faces = 0;
         float bevel = 0.0f;
+        /// One a face, or null: the block that owns it, the block on its far
+        /// side (-1 open air), and whether its block is a plain box. A box is
+        /// drawn as a WHOLE bevelled box of its own (chamfer_faces_into),
+        /// carried by its first face.
+        const int32_t *owner = nullptr;
+        const int32_t *other = nullptr;
+        const uint8_t *box = nullptr;
     };
     struct ChamferOut {
         std::vector<Vector3> vv;
@@ -1414,6 +1421,9 @@ private:
         /// Per face, the first of its quads (four vertices each); one more
         /// closes the last. A face not drawn (ChamferIn::drawn) has none.
         std::vector<int32_t> quad_first;
+        /// Per face: 1 where it carries its block's whole box -- drawn while
+        /// the block lives, whatever stands against the face.
+        std::vector<uint8_t> carrier;
         double ms = 0.0;
     };
     static void chamfer_faces_into(const ChamferIn &in, ChamferOut &out);
@@ -1431,6 +1441,9 @@ private:
         std::vector<uint32_t> edge;
         std::vector<uint8_t> corner;
         std::vector<brick::FaceBake::Floor> floors;
+        std::vector<int32_t> owner;
+        std::vector<int32_t> other;
+        std::vector<uint8_t> box;
         ChamferIn in;
         ChamferOut out;
         std::atomic<bool> done{false};
@@ -1441,13 +1454,18 @@ private:
     struct ChamferBand {
         uint32_t serial = 0;
         std::vector<int32_t> quad_first;
+        std::vector<uint8_t> carrier;
         PackedInt32Array live;
     };
     std::map<std::pair<int, int>, ChamferBand> chamfer_bands;
     /// A chamfered band's indices for the bricks alive now: six a quad, zeros
     /// for a face not drawn, so the length never changes.
+    /// Which faces of a run belong to plain boxes (ChamferIn::box).
+    void chamfer_box_flags(const brick::Chunk &c, int first, int faces,
+            std::vector<uint8_t> &out) const;
     static void chamfer_indices(const brick::Chunk &c, int section,
-            const std::vector<int32_t> &quad_first, PackedInt32Array &out);
+            const std::vector<int32_t> &quad_first, PackedInt32Array &out,
+            const std::vector<uint8_t> &carrier = {});
     static Array chamfer_arrays(const ChamferOut &o);
     PackedFloat32Array chunk_studs(int chunk_id, int section, bool furniture) const;
     int last_chamfer_tris = 0;
