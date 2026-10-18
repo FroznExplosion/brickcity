@@ -84,7 +84,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D sketch   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -1036,7 +1036,7 @@ func ruler_text() -> String:
 	else:
 		modes.append("aiming at studs (Alt F frees)")
 	if tool == "sketch":
-		modes.append("SKETCH %s: draw on the %s plane, %d studs thick" % [part_names[part_sel], work_plane, width_of(part_names[part_sel])])
+		modes.append("BLOCK OUT %s: draw on the %s plane, %d studs thick" % [part_names[part_sel], work_plane, width_of(part_names[part_sel])])
 	if mirror_on:
 		modes.append("mirror at %s studs across" % _num(mirror_z))
 	if measure_on:
@@ -2306,8 +2306,18 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_sketch_box = VBoxContainer.new()
 	box.add_child(_sketch_box)
 	var t4 := Label.new()
-	t4.text = "Sketch (Alt D) on the working plane"
+	t4.text = "Block out (Alt D)"
 	_sketch_box.add_child(t4)
+	var how := Label.new()
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	how.custom_minimum_size.x = RAIL_W - 16
+	how.text = ("1. Pick the part (top of the rail, or Y).\n"
+			+ "2. Draw its shape on the working plane: LMB draws in, RMB draws out. "
+			+ "Alt 1 / 2 / 3 for side, top, front; PgUp / PgDn move the plane. "
+			+ "Draw the same part from another view to cut it to that outline too.\n"
+			+ "3. Add balls, cubes and cylinders with the Shapes tool's brush (K).\n"
+			+ "4. Then finish it below: size, curves, and a smooth shell.")
+	_sketch_box.add_child(how)
 	var wrow := HBoxContainer.new()
 	_sketch_box.add_child(wrow)
 	var wl := Label.new()
@@ -2345,6 +2355,10 @@ func _build_phase3(layer: CanvasLayer) -> void:
 			set_curves(int(_curve_slider.value)))
 	_sketch_box.add_child(_curve_slider)
 	# The part's shell: a smooth outside over its bricks (Docs/AssetWorkshop.md, "Shells").
+	_sketch_box.add_child(HSeparator.new())
+	var shell_title := Label.new()
+	shell_title.text = "Smooth shell (this part)"
+	_sketch_box.add_child(shell_title)
 	_shell_check = CheckBox.new()
 	_shell_check.text = "smooth shell on this part"
 	_shell_check.focus_mode = Control.FOCUS_NONE
@@ -2378,6 +2392,10 @@ func _build_phase3(layer: CanvasLayer) -> void:
 				set_shell(part, {"thick": _shell_thick.value, "res": int(_shell_res.value)})
 			_sync_shell_ui(true))
 		_sketch_box.add_child(sl)
+	var finish := Label.new()
+	finish.text = "Finish the block-out (whole asset)"
+	_sketch_box.add_child(HSeparator.new())
+	_sketch_box.add_child(finish)
 	# Resize the whole block-out: let go of the slider and every part is laid again at that
 	# size, as one undo, and the slider is back at 100%.
 	var size_label := Label.new()
@@ -2996,7 +3014,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
 [b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
-[b]   Or sketch it.[/b]  Alt D, set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
+[b]   Or block it out.[/b]  The [i]Block out[/i] tool on the rail (Alt D): its panel says how, step by step. Draw each part's shape, add shapes with the Shapes brush, then at the bottom of the panel [i]size of the block-out[/i] scales the whole asset, [i]curves[/i] sets how many slopes and curves it is laid with, and [i]smooth shell[/i] gives a part a smooth custom outside (thickness: how far in the bricks start; detail: how many triangles). In detail: set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
 [b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
@@ -3004,7 +3022,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [font_size=18][b]Tools[/b][/font_size]
 [b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
 [b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] mirror (Alt shift S: plane under the ghost)
-[b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] sketch an outline   [b]Alt + drag[/b] move a photo
+[b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] block out   [b]Alt + drag[/b] move a photo
 [b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
 [b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the ghost
 [b]O[/b] section: in a flat view, cut away what is in front   [b]P[/b] outline bricks by part   [b]N[/b] part smooth / bricks
@@ -4478,7 +4496,7 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 	return out
 
 ## The rail's tools: id, name, key. "place" is no tool at all: the workshop's own hand.
-const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Sketch", "Alt D"],
+const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Block out", "Alt D"],
 		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
 		["move", "Move part", "Alt G"], ["measure", "Measure", "Alt M"]]
 const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
@@ -7057,8 +7075,20 @@ func _build_menus() -> void:
 			["This part leaves smooth / as bricks", "N", func() -> void: toggle_smooth()],
 			["Connection point where the ghost is", "J", func() -> void: toggle_point_here()],
 			[],
-			["Clear this view's sketch", "", func() -> void: clear_sketch(_sketch_key())],
-			["Clear the part's sketch, every view", "", func() -> void: clear_part_sketch(part_names[part_sel])],
+		]],
+		["Block out", [
+			["Block out tool (draw a part's shape)", "Alt D", func() -> void: rail_pick("sketch")],
+			["Shapes brush (balls, cubes, cylinders)", "K", func() -> void:
+				rail_pick("shape")
+				shape_mode = "brush"],
+			[],
+			["Smooth shell on this part / off", "", func() -> void:
+				var part := part_names[part_sel]
+				set_shell(part, null if shells.has(part) else {"thick": 0.5, "res": 4})
+				_sync_shell_ui(true)],
+			[],
+			["Clear this view's block-out", "", func() -> void: clear_sketch(_sketch_key())],
+			["Clear the part's block-out, every view", "", func() -> void: clear_part_sketch(part_names[part_sel])],
 		]],
 		["Brick", [
 			["Turn the brick in hand", "R", func() -> void:
