@@ -651,6 +651,12 @@ func get_building(id: int) -> Building:
 	return buildings[id] if id >= 0 and id < buildings.size() else null
 
 
+## Goes up every time any building takes a chunk: an answer "this chunk is no
+## building's" holds until it changes.
+func materialise_count() -> int:
+	return _materialise_count
+
+
 ## Build the real bricks. Idempotent: already-materialised buildings are returned
 ## as they are.
 func materialise(id: int) -> int:

@@ -800,6 +800,7 @@ var _mech_cmd: MechCommand
 ## The player got into the mech on foot, and gets out on foot (_leave_mech).
 var _boarded_on_foot := false
 var _chunk_owner := {}
+var _chunk_not_owned := {}   ## chunk -> registry.materialise_count() when it was no building's
 ## Mechs with no brain and no pilot (the --mechfall gate's).
 var _loose_mechs: Array[Mech] = []
 var _mech_mode := false
@@ -5398,10 +5399,16 @@ func _building_of_chunk(chunk: int) -> int:
 		var b := registry.get_building(id)
 		if b != null and b.is_materialised() and b.chunk == chunk:
 			return id
+	# A miss -- a loose piece's chunk -- walked the whole register, up to
+	# seventeen times a tick per mech standing on rubble (_block_under_footprint).
+	# Remembered until any building next takes a chunk.
+	if int(_chunk_not_owned.get(chunk, -1)) == registry.materialise_count():
+		return -1
 	for b in registry.buildings:
 		if b.is_materialised() and b.chunk == chunk:
 			_chunk_owner[chunk] = b.id
 			return b.id
+	_chunk_not_owned[chunk] = registry.materialise_count()
 	return -1
 
 
