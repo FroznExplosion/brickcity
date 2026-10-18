@@ -107,6 +107,7 @@ func _tick() -> void:
 	_round9()
 	_round10()
 	_form()
+	_resize()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1268,4 +1269,71 @@ func _form() -> void:
 			"opened %s, %d entries, form %d of %d" % [opened, _ws.sketches.size(), back, want.size()])
 	DirAccess.remove_absolute(path)
 	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.rail_pick("place")
+
+
+func _form_filled(part: String) -> Array:
+	# [the part's form cells, how many of them have a brick, plain-brick cells outside it]
+	var vol: Dictionary = _ws.part_volume(_ws.part_sketches(part))
+	var filled := 0
+	for c in vol:
+		if _ws.world.is_solid(_ws.chunk, c):
+			filled += 1
+	var stray := 0
+	var tag: int = _ws.part_names.find(part)
+	for k in _ws.recipe.size():
+		var arch := String(_ws.recipe.part_of(k))
+		if _ws.part_of[k] != tag or not (arch.begins_with("brick_") or arch.begins_with("plate_")):
+			continue
+		var size := BrickPalette.size_of(arch)
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					if not vol.has(_ws.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
+						stray += 1
+	return [vol.size(), filled, stray]
+
+
+func _resize() -> void:
+	# The size slider: the block-out scaled and every part laid again from its form, as one
+	# undo (Docs/AssetWorkshop.md, "The form, stage 2").
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.rail_pick("sketch")
+	_ws.work_plane = "side"
+	_ws.work_depth = 31.0
+	_ws.part_width["body"] = 2
+	_ws.sketch_region([Vector2(20, 20), Vector2(30, 20), Vector2(30, 25), Vector2(20, 25)])
+	_ws.select_part(_ws.part_names.find("grip"))
+	_ws.rail_pick("shape")
+	_ws.shape_mode = "brush"
+	_ws.brush3d = "cube"
+	_ws.shape_size = 2
+	_brush(MOUSE_BUTTON_LEFT, [Vector3i(26, 28, 31)])
+	var keys_before: Array = _ws.sketches.keys()
+	keys_before.sort()
+	var body0: Array = _form_filled("body")
+	var grip0: Array = _form_filled("grip")
+	var box0: Array = _ws._box.duplicate()
+	_ok("resized x2: done", _ws.scale_form(2.0))
+	var body2: Array = _form_filled("body")
+	var grip2: Array = _form_filled("grip")
+	_ok("the sketched part is eight times the cells, and all of it laid", body2[0] == body0[0] * 8
+			and body2[1] == body2[0] and body2[2] == 0, "%s -> %s" % [str(body0), str(body2)])
+	_ok("the shape too: twice the size", grip2[0] == grip0[0] * 8 and grip2[1] == grip2[0] and grip2[2] == 0,
+			"%s -> %s" % [str(grip0), str(grip2)])
+	_ok("the parts keep their sketches, one each", _ws.sketches.size() == keys_before.size(), str(_ws.sketches.keys()))
+	_ws._undo()
+	var keys_after: Array = _ws.sketches.keys()
+	keys_after.sort()
+	_ok("one Z: the old size, sketches and bricks", keys_after == keys_before and _form_filled("body") == body0
+			and _form_filled("grip") == grip0, "%s %s" % [str(keys_after), str(_form_filled("body"))])
+	_ws.redo()
+	_ok("shift Z: big again", _form_filled("body") == body2, str(_form_filled("body")))
+	var n: int = _ws.recipe.size()
+	_ok("too big for the build area: refused, nothing changed", not _ws.scale_form(20.0) and _ws.recipe.size() == n
+			and _form_filled("body") == body2)
+	_ws.scale_form(0.5)
+	_ok("and halved: back to the first size", _form_filled("body") == body0 and _form_filled("grip") == grip0,
+			"%s %s" % [str(_form_filled("body")), str(_form_filled("grip"))])
 	_ws.rail_pick("place")

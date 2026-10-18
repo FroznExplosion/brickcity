@@ -1505,16 +1505,16 @@ func remove_brick(arch: String, cell: Vector3i) -> bool:
 
 ## Take up the brick at recipe index `i` as RMB does -- world, recipe, edits and paint
 ## renumbered together (`_remove_rid`) -- and keep it, so Z can lay it back.
-## As the workshop's, and a shape stroke under way keeps count: an edit from before it
-## dropped out of the list moves where its own edits start.
+## As the workshop's, and edits being gathered into one undo keep count: an edit from
+## before them dropped out of the list moves where they start.
 func _drop_edit(kind: String, n: int) -> void:
 	for i in _edits.size():
 		if _edits[i] != kind:
 			continue
 		if n == 0:
 			_edits.remove_at(i)
-			if not _sb.is_empty() and i < int(_sb.start):
-				_sb.start = int(_sb.start) - 1
+			if not _gather.is_empty() and i < int(_gather.start):
+				_gather.start = int(_gather.start) - 1
 			return
 		n -= 1
 
@@ -2267,6 +2267,27 @@ func _build_phase3(layer: CanvasLayer) -> void:
 		slope_eager = i == 1
 		resketch(_sketch_key(), {}))
 	_sketch_box.add_child(sk_slopes)
+	# Resize the whole block-out: let go of the slider and every part is laid again at that
+	# size, as one undo, and the slider is back at 100%.
+	var size_label := Label.new()
+	size_label.text = "size of the block-out: 100%"
+	_sketch_box.add_child(size_label)
+	var size_slider := HSlider.new()
+	size_slider.min_value = 25
+	size_slider.max_value = 300
+	size_slider.step = 5
+	size_slider.value = 100
+	size_slider.focus_mode = Control.FOCUS_NONE
+	size_slider.custom_minimum_size.x = 150
+	size_slider.value_changed.connect(func(v: float) -> void:
+		size_label.text = "size of the block-out: %d%% (let go to apply)" % int(v))
+	size_slider.drag_ended.connect(func(changed: bool) -> void:
+		if not changed or is_equal_approx(size_slider.value, 100.0):
+			return
+		var ok := scale_form(size_slider.value / 100.0)
+		size_label.text = "size of the block-out: 100%%%s" % ("" if ok else "  (too big for the build area)")
+		size_slider.set_value_no_signal(100))
+	_sketch_box.add_child(size_slider)
 	var crow := HBoxContainer.new()
 	_sketch_box.add_child(crow)
 	var cl := Label.new()
@@ -5187,6 +5208,119 @@ static func shift_sketch(sk: Dictionary, by: Vector3i) -> Dictionary:
 	return out
 
 
+## Resize the block-out: every part's form scaled by `s` about `pivot` (a cell: studs
+## along, plates up, studs across; by default the middle of the forms, on their bottom)
+## and every part laid again from it, as one undo. If that runs off the build area but
+## would fit in it, the whole block-out slides back in. Bricks no form laid, hand studs
+## and connection points stay as they are. Refused (false, nothing changed) when it is
+## too big for the build area.
+func scale_form(s: float, pivot: Variant = null) -> bool:
+	if is_equal_approx(s, 1.0) or s <= 0.0 or sketches.is_empty():
+		return false
+	var at: Vector3 = form_pivot() if pivot == null else pivot
+	var scaled := {}   # part -> {old key: scaled sketch}
+	for k in sketches:
+		var sk: Dictionary = sketches[k]
+		(scaled.get_or_add(String(sk.part), {}) as Dictionary)[k] = scale_sketch(sk, s, at)
+	# The box round every part as it would be, then what slides it back in.
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for part in scaled:
+		var list := []
+		for k in scaled[part]:
+			list.append([k, scaled[part][k]])
+		list.sort_custom(func(a: Array, b: Array) -> bool: return int(a[1].get("n", 0)) < int(b[1].get("n", 0)))
+		if part_volume(list).is_empty():
+			continue
+		lo = lo.min(_box[0])
+		hi = hi.max(_box[1])
+	var area := Vector3i(plate_studs, height_plates, plate_studs)
+	var by := Vector3i.ZERO
+	for i in 3:
+		if lo[i] > hi[i]:
+			break
+		if hi[i] - lo[i] + 1 > area[i]:
+			print("[asset workshop] resize x%.2f refused: %d cells %s, the build area is %d" % [s,
+					hi[i] - lo[i] + 1, ["along", "up", "across"][i], area[i]])
+			return false
+		by[i] = maxi(0, -lo[i]) - maxi(0, hi[i] - (area[i] - 1))
+	var gone := {}   # part -> {old key: null}
+	var made := {}   # part -> {new key: its sketch}
+	for part in scaled:
+		for k in scaled[part]:
+			var sk: Dictionary = scaled[part][k]
+			if by != Vector3i.ZERO:
+				sk = shift_sketch(sk, by)
+			var nk: String = k if sk.has("solid") else "%s|%s|%s" % [part, sk.plane, _num(float(sk.at))]
+			(gone.get_or_add(part, {}) as Dictionary)[k] = null
+			(made.get_or_add(part, {}) as Dictionary)[nk] = sk
+	_begin_gather()
+	# Every part taken up before any is laid again: a part grown into where another's old
+	# bricks still were would be laid round them.
+	for part in gone:
+		resketch_part(part, gone[part], true)
+	for part in made:
+		resketch_part(part, made[part], true)
+	_end_gather()
+	return true
+
+
+## Where `scale_form` scales about: the middle of every part's form along and across,
+## and its bottom.
+func form_pivot() -> Vector3:
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for part in part_names:
+		var list := part_sketches(part)
+		if list.is_empty() or part_volume(list).is_empty():
+			continue
+		lo = lo.min(_box[0])
+		hi = hi.max(_box[1])
+	if lo.x > hi.x:
+		return Vector3.ZERO
+	return Vector3((lo.x + hi.x + 1) * 0.5, lo.y, (lo.z + hi.z + 1) * 0.5)
+
+
+## A sketch scaled by `s` about `pivot` (a cell, as `scale_form`): its outlines and brush
+## strokes across and up its plane, its depth and thickness along it, its pockets' depth;
+## a shape's centres, size and thickness.
+static func scale_sketch(sk: Dictionary, s: float, pivot: Vector3) -> Dictionary:
+	var out := sk.duplicate()
+	if sk.has("solid"):
+		var so: Dictionary = (sk.solid as Dictionary).duplicate()
+		so.at = (sk.solid.at as Array).map(func(q: Array) -> Array:
+			var c := pivot + (Vector3(float(q[0]), float(q[1]), float(q[2])) - pivot) * s
+			return [int(round(c.x)), int(round(c.y)), int(round(c.z))])
+		so.size = maxi(1, int(round(float(so.size) * s)))
+		so.thick = maxi(1, int(round(float(so.thick) * s)))
+		out.solid = so
+		return out
+	var p := Vector3(pivot.x, pivot.y, pivot.z)   # across, up, along the normal
+	match String(sk.plane):
+		"front": p = Vector3(pivot.z, pivot.y, pivot.x)
+		"top": p = Vector3(pivot.x, pivot.z, pivot.y)
+	out.at = p.z + (float(sk.at) - p.z) * s
+	out.width = maxi(1, int(round(float(sk.width) * s)))
+	out.adds = (sk.adds as Array).map(func(e: Variant) -> Variant: return _scale_entry(e, s, p.x, p.y))
+	out.subs = (sk.subs as Array).map(func(e: Variant) -> Variant: return _scale_entry(e, s, p.x, p.y))
+	return out
+
+
+static func _scale_entry(e: Variant, s: float, pu: float, pv: float) -> Variant:
+	if e is Dictionary:
+		var out: Dictionary = (e as Dictionary).duplicate()
+		if out.has("cut"):
+			out.cut = _scale_entry(out.cut, s, pu, pv)
+			out.deep = maxi(1, int(round(float(out.deep) * s)))
+		if out.has("brush"):
+			out.brush = _scale_entry(out.brush, s, pu, pv)
+			out.rx = float(out.rx) * s
+			out.ry = float(out.ry) * s
+		return out
+	return (e as Array).map(func(q: Array) -> Array:
+		return [pu + (float(q[0]) - pu) * s, pv + (float(q[1]) - pv) * s])
+
+
 static func _shift_entry(e: Variant, du: float, dv: float) -> Variant:
 	if e is Dictionary:
 		var out: Dictionary = (e as Dictionary).duplicate()
@@ -5497,6 +5631,8 @@ func play_pose(t: float) -> void:
 
 ## RMB in sketch also takes up every brick under the stroke, not only the sketch's own.
 var erase_any := true
+## Edits being gathered into one undo (`_begin_gather`): {start, groups}, or empty.
+var _gather := {}
 
 
 ## The upright-grid bricks under an area of a plane, by recipe index, highest first: right
@@ -5763,10 +5899,19 @@ func form_stamp(part: String, centre: Vector3i, carve: bool) -> void:
 	resketch(key, sk)
 
 
-## A stroke's undo: every edit since `edits_from` as one group, the groups its stamps made
-## since `groups_from` folded into it with every sketch change they held.
-func _fold_groups(groups_from: int, edits_from: int) -> void:
-	var n := _edits.size() - edits_from
+## Edits made from now to `_end_gather` undo as one: a shape stroke's stamps, a resize.
+func _begin_gather() -> void:
+	_gather = {"start": _edits.size(), "groups": _edit_groups.size()}
+
+
+## Every edit since `_begin_gather` as one group, the groups made since folded into it
+## with every sketch change they held.
+func _end_gather() -> void:
+	if _gather.is_empty():
+		return
+	var n := _edits.size() - int(_gather.start)
+	var groups_from := int(_gather.groups)
+	_gather = {}
 	var records := []
 	while _edit_groups.size() > groups_from:
 		var g: Dictionary = _edit_groups.pop_back()
@@ -5795,11 +5940,12 @@ func _shape_brush_input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed and (e.ctrl_pressed or brushing_shapes()) and _sb.is_empty():
 			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "start": _edits.size(), "last": _cell,
-					"button": e.button_index, "groups": _edit_groups.size()}
+					"button": e.button_index}
+			_begin_gather()
 			_stamp_shape(bool(_sb.erase))
 			return true
 		if not e.pressed and not _sb.is_empty() and e.button_index == int(_sb.button):
-			_fold_groups(int(_sb.groups), int(_sb.start))
+			_end_gather()
 			_sb = {}
 			return true
 	if e is InputEventMouseMotion and not _sb.is_empty():
