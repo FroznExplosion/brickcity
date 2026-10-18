@@ -2984,9 +2984,167 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
         }
     };
 
+    out.carrier.assign((size_t)in.faces, 0);
     int32_t quads = 0;
+
+    // A PLAIN BOX is drawn whole, as the brick it is: its six faces, each
+    // drawn in by the bevel, the twelve 45-degree facets between them and the
+    // eight corner triangles -- every edge and every corner of it cut, the
+    // same whatever stands next to it (Docs/BrickBevel.md 2.5). Two bricks
+    // side by side are two boxes, and the groove between them is their two
+    // facets meeting where they touch; nothing is pushed out under a
+    // neighbour, plugged or capped. Every box is closed, so no seam between
+    // two can be seen through. Its hidden faces are drawn too (the depth
+    // prepass buries them): a brick shot away uncovers a whole brick behind
+    // it, with no rebuild. (The rules this replaced -- extended faces, plugs,
+    // caps, floors -- kept the bevels clear of each other, and left square
+    // corners standing over the upright bevels at every seam.)
+    const auto emit_box = [&](int i0, int i1) {
+        Vector3 lo = in.verts[(size_t)i0 * 4], hi = lo;
+        float covered[6] = { 0, 0, 0, 0, 0, 0 };
+        float area[6] = { 0, 0, 0, 0, 0, 0 };
+        for (int j = i0; j < i1; ++j) {
+            for (int k = 0; k < 4; ++k) {
+                const Vector3 &p = in.verts[(size_t)j * 4 + k];
+                lo = Vector3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+                hi = Vector3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+            }
+            const Vector3 &fn = in.normals[(size_t)j * 4];
+            const int d = fn.x > 0.5f ? 0 : fn.x < -0.5f ? 1 : fn.y > 0.5f ? 2
+                    : fn.y < -0.5f ? 3 : fn.z > 0.5f ? 4 : 5;
+            const Vector3 e1 = in.verts[(size_t)j * 4 + 1] - in.verts[(size_t)j * 4];
+            const Vector3 e2 = in.verts[(size_t)j * 4 + 2] - in.verts[(size_t)j * 4];
+            const float a = e1.cross(e2).length();
+            area[d] += a;
+            if (in.other != nullptr && in.other[j] >= 0) {
+                covered[d] += a;
+            }
+        }
+        const Vector3 size = hi - lo;
+        const float cb = std::min(c, 0.45f * std::min(size.x, std::min(size.y, size.z)));
+        bool against[6];
+        for (int d = 0; d < 6; ++d) {
+            against[d] = area[d] > 0.0f && covered[d] > 0.5f * area[d];
+        }
+        // The face of direction d: its axis, its sign, its plane.
+        const auto axis_of = [](int d) { return d / 2; };
+        const auto sign_of = [](int d) { return (d & 1) ? -1.0f : 1.0f; };
+        const auto face_uv = [&](int d, const Vector3 &p) -> Vector2 {
+            const Vector3 r = p - lo;
+            switch (d) {
+                case 0: case 1: return Vector2(r.z, r.y);
+                case 2: case 3: return Vector2(r.x, r.z);
+                default:        return Vector2(r.x, r.y);
+            }
+        };
+        const auto face_size = [&](int d) -> Vector2 {
+            switch (d) {
+                case 0: case 1: return Vector2(size.z, size.y);
+                case 2: case 3: return Vector2(size.x, size.z);
+                default:        return Vector2(size.x, size.y);
+            }
+        };
+        // A point of the box: on each axis -1 the low side, +1 the high,
+        // 0 inset from the low side by the bevel, 2 inset from the high.
+        const auto at = [&](int ix, int iy, int iz) -> Vector3 {
+            const int idx[3] = { ix, iy, iz };
+            Vector3 p;
+            for (int ax = 0; ax < 3; ++ax) {
+                switch (idx[ax]) {
+                    case -1: p[ax] = lo[ax]; break;
+                    case 1:  p[ax] = hi[ax]; break;
+                    case 0:  p[ax] = lo[ax] + cb; break;
+                    default: p[ax] = hi[ax] - cb; break;
+                }
+            }
+            return p;
+        };
+        // The six faces.
+        for (int d = 0; d < 6; ++d) {
+            const int ax = axis_of(d);
+            const int side = (d & 1) ? -1 : 1;
+            const int u = (ax + 1) % 3, w = (ax + 2) % 3;
+            int ia[3], ib[3], ic[3], id[3];
+            ia[ax] = ib[ax] = ic[ax] = id[ax] = side;
+            ia[u] = 0; ia[w] = 0;
+            ib[u] = 2; ib[w] = 0;
+            ic[u] = 2; ic[w] = 2;
+            id[u] = 0; id[w] = 2;
+            const Vector3 pa = at(ia[0], ia[1], ia[2]);
+            const Vector3 pb = at(ib[0], ib[1], ib[2]);
+            const Vector3 pc = at(ic[0], ic[1], ic[2]);
+            const Vector3 pd = at(id[0], id[1], id[2]);
+            n = FACE_NORMAL[d];
+            u2 = face_size(d);
+            quad(pa, pb, pc, pd, face_uv(d, pa), face_uv(d, pb), face_uv(d, pc), face_uv(d, pd));
+            ++quads;
+        }
+        // The twelve facets: one an edge, between faces d1 (axis a1) and d2
+        // (axis a2), along the third axis.
+        for (int a1 = 0; a1 < 3; ++a1) {
+            for (int a2 = a1 + 1; a2 < 3; ++a2) {
+                const int along = 3 - a1 - a2;
+                for (int s1 = 0; s1 < 2; ++s1) {
+                    for (int s2 = 0; s2 < 2; ++s2) {
+                        const int d1 = a1 * 2 + s1, d2 = a2 * 2 + s2;
+                        const int e1 = s1 ? -1 : 1, e2 = s2 ? -1 : 1;
+                        const int in1 = s1 ? 0 : 2, in2 = s2 ? 0 : 2;
+                        int p[4][3];
+                        // On face d1: its plane on a1, inset on a2.
+                        p[0][a1] = e1; p[0][a2] = in2; p[0][along] = 0;
+                        p[1][a1] = e1; p[1][a2] = in2; p[1][along] = 2;
+                        // On face d2.
+                        p[2][a1] = in1; p[2][a2] = e2; p[2][along] = 2;
+                        p[3][a1] = in1; p[3][a2] = e2; p[3][along] = 0;
+                        const float groove = (against[d1] || against[d2]) ? 1.0f : 0.0f;
+                        const Vector2 fu(0.5f, groove);
+                        n = (FACE_NORMAL[d1] + FACE_NORMAL[d2]).normalized();
+                        u2 = -face_size(d1);
+                        quad(at(p[0][0], p[0][1], p[0][2]), at(p[1][0], p[1][1], p[1][2]),
+                                at(p[2][0], p[2][1], p[2][2]), at(p[3][0], p[3][1], p[3][2]),
+                                fu, fu, fu, fu);
+                        ++quads;
+                    }
+                }
+            }
+        }
+        // The eight corners.
+        for (int sx = 0; sx < 2; ++sx) {
+            for (int sy = 0; sy < 2; ++sy) {
+                for (int sz = 0; sz < 2; ++sz) {
+                    const int ex = sx ? -1 : 1, ey = sy ? -1 : 1, ez = sz ? -1 : 1;
+                    const int ix = sx ? 0 : 2, iy = sy ? 0 : 2, iz = sz ? 0 : 2;
+                    const Vector3 px = at(ex, iy, iz);
+                    const Vector3 py = at(ix, ey, iz);
+                    const Vector3 pz = at(ix, iy, ez);
+                    const bool g = against[sx] || against[2 + sy] || against[4 + sz];
+                    const Vector2 fu(0.5f, g ? 1.0f : 0.0f);
+                    n = Vector3(sign_of(sx), sign_of(2 + sy), sign_of(4 + sz)).normalized();
+                    u2 = -face_size(2 + sy);
+                    quad(px, py, pz, pz, fu, fu, fu, fu);
+                    ++quads;
+                }
+            }
+        }
+    };
+
     for (int i = 0; i < in.faces; ++i) {
         out.quad_first[(size_t)i] = quads;
+        if (in.box != nullptr && in.box[i] != 0 && c > 0.0f) {
+            // Its block's first face carries the box; the rest draw nothing.
+            if (i == 0 || in.owner[i - 1] != in.owner[i]) {
+                out.carrier[(size_t)i] = 1;
+                if (in.drawn == nullptr || in.drawn[i] != 0) {
+                    int i1 = i + 1;
+                    while (i1 < in.faces && in.owner[i1] == in.owner[i]) {
+                        ++i1;
+                    }
+                    col = in.colours[(size_t)i * 4];
+                    emit_box(i, i1);
+                }
+            }
+            continue;
+        }
         // This face's facet floors, whether or not it is drawn.
         while (floor_at < in.floor_count && in.floors[floor_at].face - in.face_base < i) {
             ++floor_at;
@@ -3268,8 +3426,21 @@ Array BrickWorld::chamfer_arrays(const ChamferOut &o) {
     return arrays;
 }
 
+void BrickWorld::chamfer_box_flags(const Chunk &c, int first, int faces,
+        std::vector<uint8_t> &out) const {
+    out.assign((size_t)faces, 0);
+    for (int f = 0; f < faces; ++f) {
+        const int32_t owner = c.bake.owner[(size_t)(first + f)];
+        const Block &b = c.blocks[owner];
+        out[(size_t)f] = (uint8_t)(valid_archetype(b.archetype)
+                && archetypes[b.archetype].is_full_box()
+                && (c.bake.edge[(size_t)(first + f)] & brick::EDGE_RAW) == 0);
+    }
+}
+
 void BrickWorld::chamfer_indices(const Chunk &c, int section,
-        const std::vector<int32_t> &quad_first, PackedInt32Array &out) {
+        const std::vector<int32_t> &quad_first, PackedInt32Array &out,
+        const std::vector<uint8_t> &carrier) {
     // A section, or with section < 0 the chunk.
     const int first = section < 0 ? 0 : c.bake.section_first[(size_t)section];
     const int faces = section < 0 ? c.bake.face_count() : c.bake.section_faces[(size_t)section];
@@ -3278,8 +3449,9 @@ void BrickWorld::chamfer_indices(const Chunk &c, int section,
     for (int f = 0; f < faces; ++f) {
         const int32_t owner = c.bake.owner[(size_t)(first + f)];
         const int32_t other = c.bake.other[(size_t)(first + f)];
+        const bool box = (size_t)f < carrier.size() && carrier[(size_t)f] != 0;
         const bool drawn = c.blocks[owner].alive
-                && (other < 0 || !c.blocks[other].alive);
+                && (box || other < 0 || !c.blocks[other].alive);
         for (int32_t qi = quad_first[(size_t)f]; qi < quad_first[(size_t)f + 1]; ++qi) {
             int32_t *at = w + (size_t)qi * 6;
             if (!drawn) {
@@ -3310,13 +3482,21 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
     if (faces == 0) {
         return Array();
     }
+    // With no bevel there is nothing to build boxes for: the flat faces.
+    std::vector<uint8_t> box;
+    chamfer_box_flags(c, 0, bevel > 0.0 ? faces : 0, box);
+    box.resize((size_t)faces, 0);
     std::vector<uint8_t> drawn((size_t)faces, 0);
     for (int f = 0; f < faces; ++f) {
         const int32_t owner = c.bake.owner[(size_t)f];
         const int32_t other = c.bake.other[(size_t)f];
-        drawn[(size_t)f] = c.blocks[owner].alive && (other < 0 || !c.blocks[other].alive);
+        drawn[(size_t)f] = c.blocks[owner].alive
+                && (box[(size_t)f] != 0 || other < 0 || !c.blocks[other].alive);
     }
     ChamferIn in;
+    in.owner = c.bake.owner.data();
+    in.other = c.bake.other.data();
+    in.box = box.data();
     in.verts = c.bake.verts.ptr();
     in.normals = c.bake.normals.ptr();
     in.colours = c.bake.colours.ptr();
@@ -3405,6 +3585,12 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     job->in.uv2s = job->uv2s.ptr() + (size_t)first * 4;
     job->in.edge = job->edge.data();
     job->in.corner = job->corner.data();
+    job->owner.assign(c.bake.owner.begin() + first, c.bake.owner.begin() + first + faces);
+    job->other.assign(c.bake.other.begin() + first, c.bake.other.begin() + first + faces);
+    chamfer_box_flags(c, first, faces, job->box);
+    job->in.owner = job->owner.data();
+    job->in.other = job->other.data();
+    job->in.box = job->box.data();
     {
         const auto before = [](const brick::FaceBake::Floor &l, int face) {
             return l.face < face;
@@ -3447,7 +3633,8 @@ Array BrickWorld::take_chamfer_section(int chunk_id, int section) {
             ChamferBand &band = chamfer_bands[std::make_pair(chunk_id, section)];
             band.serial = job->serial;
             band.quad_first = std::move(job->out.quad_first);
-            chamfer_indices(chunks[chunk_id], section, band.quad_first, band.live);
+            band.carrier = std::move(job->out.carrier);
+            chamfer_indices(chunks[chunk_id], section, band.quad_first, band.live, band.carrier);
             arrays[Mesh::ARRAY_INDEX] = band.live;
             last_chamfer_tris = (int)(band.live.size() / 3);
             last_chamfer_ms = job->out.ms;
@@ -3490,7 +3677,7 @@ Array BrickWorld::update_chamfer_regions(int chunk_id, const PackedInt32Array &s
             out.push_back(d);
             continue;
         }
-        chamfer_indices(c, section, band.quad_first, next);
+        chamfer_indices(c, section, band.quad_first, next, band.carrier);
         const int n = (int)next.size();
         if (n != band.live.size()) {
             d["stale"] = true;
@@ -3547,7 +3734,7 @@ int BrickWorld::get_chamfer_expected_triangles(int chunk_id, int section) const 
         return -1;
     }
     PackedInt32Array idx;
-    chamfer_indices(c, section, band.quad_first, idx);
+    chamfer_indices(c, section, band.quad_first, idx, band.carrier);
     int tris = 0;
     const int32_t *r = idx.ptr();
     for (int64_t i = 0; i + 2 < idx.size(); i += 3) {

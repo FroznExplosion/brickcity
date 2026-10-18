@@ -127,35 +127,39 @@ a floor of 2x4s and two walls of 1x4s meeting in an inside corner, whole and sho
   pushed out under it hangs a bevel past its edge, and the facet behind is seen past that lip.
   Closed, not re-meshed (§1).
 
-### 2.4 A brick resting on bricks has a flat bottom
+### 2.4 A brick resting on bricks had a flat bottom
 
-Added 2026-10-17, narrowed the same day. Where a brick sits on bricks its bottom edges are square,
-as two printed parts stacked meet; anywhere else -- an overhang, a ledge, a part over air -- the
-bottom keeps its bevel. (Flat everywhere was tried first: an overhang's square bottom edge looked
-wrong.)
+Tried 2026-10-17 and gone with 2.5: a plain brick's bottom is bevelled like every other edge, so
+courses have a groove between them, as real bricks do.
 
-* A side face's bottom side that would have been a bevel is `FLUSH` -- the face runs square down
-  to the bottom's plane, its upright bevels with it -- when every cell of the brick's bottom row
-  on that side has a plain brick under it (`row_supported`: the whole row, so every rectangle of
-  that face agrees, and so does the brick below when it decides on a floor).
-* A bottom face resting on a brick (its `other`) lays its bevels FLAT in its own plane
-  (`chamfer_faces_into`; the bake marks it `EDGE_DIR_FLAT_BOTTOM` in place of the direction):
-  the same strips, corner triangles, plugs and mitres, but coplanar and part of the face. So it
-  reaches out to its edges and only its corners are cut. Hidden while the brick under it stands;
-  when that one is shot away, it is a flat bottom with no slit beside a `FLUSH` side.
-* The brick under a flat bottom keeps its own top bevel: a half-groove, open above under the
-  hidden bottom. Its top side gets a **floor** there (`FaceBake::floors`, the run's `trim` bits):
-  the strip of the upper brick's bottom over the bevel, cut at 45 degrees where the upper
-  brick's corner is open, to meet its upright bevel.
-* A `FLUSH` bottom keeps the third brick's floors (§2.1, 3), cut the same way at its own open
-  corners.
-* An inside corner at a wall's foot does not mitre into a bottom bevel that is not there: where
-  the corner pass (§2.2) would say `MITRE` and the face round the corner is `FLUSH`, it says
-  `COVERED` -- the facet stops at the corner, over the bevel of the brick it stands on.
+### 2.5 A plain brick is a whole bevelled box
 
-The shaded bevel (§4) is unchanged: it does not know what a face rests on. Each rule here is a
-slit the gap probe found when it was missing; its locator now also names whose core shows, and
-which bricks are shot away.
+Since 2026-10-18 a plain box brick (its archetype `is_full_box`, its faces not `EDGE_RAW`) is not
+built from its bake rectangles and their edge codes at all. `chamfer_faces_into` draws it whole,
+as the standalone brick it is -- six faces each drawn in by the bevel, twelve 45-degree facets, eight
+corner triangles, under fifty triangles -- carried by its first face in the bake (`ChamferOut::
+carrier`), the block's other faces drawing nothing. That is how Brickadia builds its bricks: the
+edge is part of each brick's own mesh, and the texture is fitted to it, so the two cannot disagree.
+
+Why. Sections 2.1-2.4 kept a brick's bevels clear of its neighbours' -- faces pushed out under the
+next brick, corners plugged into mitres, facets capped, floors, flat bottoms -- and so wherever a
+brick met another its corner stayed square: a top's or a bottom's corner stood out over the
+upright bevel at every seam, and through a scope that was all anyone saw. A box has every corner
+cut, whatever is next to it.
+
+* Two bricks side by side are two boxes: the groove between them is their two facets, meeting
+  where the bricks touch. Every box is closed, so there is no slit to see into a brick through
+  (the gap probe: none in any view, where the rules above left a few pixels). Where four corners
+  meet, the four upright bevels leave a small diamond channel between the bricks, as real ones do.
+* Its hidden faces are drawn as well -- the depth prepass buries them -- so a brick shot away
+  uncovers the whole brick behind it with no rebuild: the carrier's quads are drawn while the
+  block lives, whatever stands against the face (`chamfer_indices`).
+* A facet is shaded as a groove's (`uv.y` 1) where the face either side of it is mostly against
+  another brick (`ChamferIn::other`).
+* With no bevel there are no boxes: the flat faces, as before.
+
+Shaped parts (`EDGE_RAW`) are copied as they were, and a block that is not a plain box still goes
+by 2.1-2.3.
 
 ## 3. The near tier (`BrickNear`)
 

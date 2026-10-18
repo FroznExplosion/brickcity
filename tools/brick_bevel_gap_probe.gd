@@ -109,6 +109,16 @@ func _stage() -> void:
 
 
 ## The bricks of a chunk, flat or chamfered, and a core in every live one.
+## The chamfered mesh's facet vertices (its UV2 is negative).
+func _facets(w: BrickWorld, chunk: int) -> int:
+	var arrays: Array = w.build_chunk_chamfer_mesh(chunk, BEVEL)
+	var n := 0
+	for u in arrays[Mesh.ARRAY_TEX_UV2]:
+		if u.x < 0.0:
+			n += 1
+	return n
+
+
 func _show(w: BrickWorld, chunk: int, chamfered: bool) -> int:
 	for c in _holder.get_children():
 		c.free()
@@ -345,9 +355,14 @@ func _case(what: String, w: BrickWorld, chunk: int, views: int, seed_: int, shot
 	_ok("nor does the chamfered one", on[1] <= LONE_PIXELS
 			and float(on[0]) <= CRACK_RATE * v.size(),
 			"%d in its worst view, %d in all to the flat mesh's %d" % [on[1], on[0], off[0]])
-	_ok("and it is chamfered", tris > flat_tris,
-			"%d triangles to the flat mesh's %d (x%.1f), %.2f ms" % [tris, flat_tris,
-				float(tris) / maxf(flat_tris, 1.0), w.get_last_chamfer_ms()])
+	# Chamfered: it has bevel facets (UV2 negative). Not "more triangles than
+	# the flat mesh": a plain brick is now a whole box of its own, under
+	# fifty triangles, and a heap shot through has its flat mesh's uncovered
+	# faces outnumber them (Docs/BrickBevel.md 2.5).
+	_ok("and it is chamfered", _facets(w, chunk) > 0,
+			"%d triangles to the flat mesh's %d (x%.1f), %d facet vertices, %.2f ms" % [tris,
+				flat_tris, float(tris) / maxf(flat_tris, 1.0), _facets(w, chunk),
+				w.get_last_chamfer_ms()])
 
 
 func _tower(w: BrickWorld, x: int, z: int, courses: int) -> int:
