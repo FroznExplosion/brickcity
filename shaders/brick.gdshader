@@ -30,6 +30,11 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
 group_uniforms seams;
 uniform bool seams_enabled = true;
+// Debugging only (Shift+L in the city): tint every pixel by what drew it --
+// green the chamfered near mesh, yellow its real bevel facets, red a brick's
+// flat mesh, blue a far shell's tiled face, magenta an authored part -- and
+// darken the band the SHADED bevel bends. Finds which tier a fault is in.
+uniform bool tier_debug = false;
 uniform float seam_width : hint_range(0.0, 0.05) = 0.010;   // metres, per side
 uniform float seam_darken : hint_range(0.0, 1.0) = 0.55;    // 1.0 = invisible
 uniform float seam_fade_begin = 30.0;                        // metres from camera
@@ -385,7 +390,8 @@ void fragment() {
             // round the rim and the ribs, and the hollow between them.
             vec2 us = ps_underside(cell, fsize);
             solid = us.x;
-            t = us.y;
+            // The rim's loops only where the edge is real (see below).
+            t = geo_bevel > 0.5 ? us.y : 0.0;
         } else if (face != 0) {
             // A top or bottom: the outline walked once per wall (two for
             // PLA), then ONE path zigzagging diagonally from one corner to
@@ -407,7 +413,16 @@ void fragment() {
             // On the bevel itself (the shaded one, far off) no path at all.
             d2 = ps_inset(d2);
             float wall = float(ps_walls(mat)) * bw;
-            if (d2 < 0.0) {
+            // ONLY where the edge is real geometry (the chamfered near mesh,
+            // geo_bevel): a top's paths run round its outline, and on a flat
+            // far face -- a brick's flat mesh, a building's shell -- that
+            // outline is a square edge with a shaded bevel on it, which a
+            // scope blows up into loops running over the corner. As other
+            // brick games do (Brickadia drops its edges at range), the
+            // detail that follows an edge goes with the edge: out there a
+            // top or bottom is its colour and finish.
+            bool real_edge = geo_bevel > 0.5;
+            if (d2 < 0.0 || !real_edge) {
                 t = 0.0;
             } else if (d2 < wall && print_near) {
                 t = d2 / bw;
@@ -433,7 +448,7 @@ void fragment() {
             }
             // Where the raster meets the innermost wall the two never quite
             // fuse: a fine dark line round the infill.
-            if (wall > 0.0 && print_near) {
+            if (wall > 0.0 && print_near && real_edge) {
                 float jw = 0.18 * bw + fwidth(d2);
                 junction = (1.0 - smoothstep(0.0, jw, abs(d2 - wall))) * 0.6;
             }
@@ -649,6 +664,22 @@ void fragment() {
     if (weather_snowcap > 0.0) {
         emission += weather_burn_surface(albedo, out_rough,
                 (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz, TIME) * 0.4;
+    }
+    if (tier_debug) {
+        vec3 tint = vec3(1.0, 0.15, 0.1);                    // flat brick mesh
+        if (authored) {
+            tint = vec3(0.9, 0.2, 0.9);
+        } else if (facet) {
+            tint = vec3(1.0, 0.9, 0.1);
+        } else if (geo_bevel > 0.5) {
+            tint = vec3(0.15, 0.9, 0.2);
+        } else if (any(greaterThan(abs(v_uv), fsize * 1.001))) {
+            tint = vec3(0.15, 0.35, 1.0);                    // a tiled shell face
+        }
+        albedo = mix(albedo, tint, 0.55);
+        if (!facet && chamfer_enabled && d < chamfer_width) {
+            albedo *= 0.35;
+        }
     }
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
