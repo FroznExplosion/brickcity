@@ -3618,7 +3618,7 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 	var list := part_sketches(part, change)
 	var vol := part_volume(list)
 	var sf := {}
-	if shells.has(part):
+	if shells.has(part) and ClassDB.class_exists("FormMesher"):
 		sf = shell_field(part, list, vol)
 		vol = shell_core(part, sf)
 	whole = whole or old_vol.is_empty()
@@ -5539,7 +5539,9 @@ func shell_core(part: String, sf: Dictionary) -> Dictionary:
 	var reach := Vector3i(int(ceil(t * k)), int(ceil(t * 2.5 * k)), int(ceil(t * k)))
 	var dims: Vector3i = sf.dims
 	var lo: Vector3i = sf.lo
-	var left: PackedByteArray = FormMesher.erode(sf.field, dims, reach)
+	var left: PackedByteArray = _form_mesher("erode", [sf.field, dims, reach])
+	if left.is_empty():
+		return core
 	var cells := {}
 	for z in dims.z:
 		for y in dims.y:
@@ -5566,7 +5568,7 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 		return
 	var k: int = sf.k
 	var cell := CELL_M / float(k)
-	var arrays := FormMesher.surface(sf.field, sf.dims, cell, SHELL_SMOOTH)
+	var arrays: Array = _form_mesher("surface", [sf.field, sf.dims, cell, SHELL_SMOOTH])
 	if mi == null:
 		mi = MeshInstance3D.new()
 		mi.name = "Shell_" + part
@@ -5580,6 +5582,21 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 	mi.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), Vector3(sf.lo) * cell)
 	_shell_tris[part] = 0 if arrays.is_empty() else (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
 	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
+
+
+## FormMesher's `method`, through ClassDB: a brick library built before it (an old DLL)
+## has no FormMesher, and naming the class would stop this script loading at all. There,
+## shells are simply not made (and say so once).
+func _form_mesher(method: String, args: Array) -> Variant:
+	if not ClassDB.class_exists("FormMesher"):
+		if not _warned_mesher:
+			_warned_mesher = true
+			push_warning("[asset workshop] this brick library has no FormMesher: no shells (rebuild the extension)")
+		return PackedByteArray() if method == "erode" else []
+	return ClassDB.class_call_static.callv(["FormMesher", method] + args)
+
+
+var _warned_mesher := false
 
 
 ## A part's shell drawn again from what is saved (after an undo, a load).
