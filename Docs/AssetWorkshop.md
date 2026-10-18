@@ -241,6 +241,35 @@ prints -- one watertight piece, 10 studs, the plate's stud pointing out of the e
 Still upright only: Explode, moving a part and the hands' baked parts leave a part's
 sideways bricks where they are.
 
+### Shells, stage 1 (2026-10-18)
+
+A **shell** is a part's smooth outside: a custom piece off the grid, with the part's bricks
+inside it.
+
+| What | How |
+|---|---|
+| **Make one** | Sketch tool: "smooth shell on this part", then **thickness** (0-3 studs) and **detail** (1-8 samples a stud: the triangle slider) -- let go and the part is laid again, one undo that puts the settings back too; saved with the gun |
+| **The surface** | the part's form sampled `detail` times finer than the grid (its sketches scaled and laid out as a part's volume is: the same outlines, finer cells) and wrapped by `FormMesher.surface` (surface nets, gdextension/brick/src/form_mesher.cpp): one closed surface, smoothed 16 times, no vertex leaving its own cube of samples |
+| **The bricks inside** | the form shrunk by the thickness (`FormMesher.erode`), every grid cell whose samples are all left: packed as usual, no slopes or curves (the shell is the outside). Thicker, fewer bricks: the Thompson's stock is 121 bricks bare, 89 inside a shell 0 thick, 35 at half a stud, none at 1.5 |
+| **Where it meets another part** | a sample next to a brick that is not the part's own is pinned: the shell stays flat on that face instead of the smoothing pulling it off (the stock came loose from the body without it) |
+| **The game** | Export to game writes the shell (`Shell`) and leaves out the bricks it covers; the triangle count counts the shell, not them |
+| **Print** | the sheet carries the shell's triangles; the kit makes them the part's solid, grown a hair to weld. The Thompson with its stock and grip shelled: every part watertight, the whole gun one piece |
+
+**Not good enough yet -- the next two stages:**
+
+- **Teeth on edges.** Sampled as in-or-out, an edge running at a slant (a sketch's slanted
+  outline meeting the flat side) stays a staircase of samples however much it is
+  smoothed. The fix is a *distance* field: how far each sample is from the drawn outline,
+  so the surface lands on the line itself (the outlines are exact; only the sampling
+  loses them). C++, beside the mesher.
+- **Too many triangles.** Surface nets is as dense on a flat side as on a curve: the
+  stock's shell is 7,196 triangles at 2 samples a stud, 28,744 at 4, 64,624 at 6, where its
+  bricks and studs were ~5,000. The triangle slider should be a budget: decimate the
+  surface (quadric edge collapse) to that many, flat sides first.
+
+Also still to come: embedded connection bricks (studs where the shell meets other parts),
+regions (a shell over part of a part), selecting and changing shells.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
