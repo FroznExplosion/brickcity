@@ -375,6 +375,18 @@ In the order to do it. Each line points at where the item is written up.
     stays frozen inside the tower's crater at 54 m, 22 m over what is under its middle -- wedged
     against the walls, or hanging; not seen in a picture yet.
 
+30. **Buildings break in vertical slices, along the floor panels** (user, 2026-10-18: "buildings
+    break in half vertically, when lego breaks along the layer lines"). Measured with
+    `big_city.tscn -- --breakshape` (towers shot close up, each piece of 50+ bricks measured in
+    the building's studs the tick it leaves): of 21 pieces from 4 towers, **20 were slices two to
+    twenty storeys tall and 0 were layers** spanning the plan; their cut faces lay on the 10-stud
+    floor panel lines (`TowerRecipe.PANEL`) far more than anywhere else, a few on window edges,
+    none on the 32-stud regions. Why: a floor is one layer of 10 x 10 panels side by side, and
+    plates side by side are not joined -- across a seam there is only the 2 x 2 column at each
+    corner and an interior wall every third line -- and the seams line up storey over storey. A
+    vertical plane down a seam cuts a few studs a storey; a horizontal one cuts every stud of every
+    wall and column. The generator's, not the solve's. Not changed yet: options to the user.
+
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
 12. ~~Status notes for 2026-09-30 to 10-02, on branch `far-coarse-status`~~ -- merged 2026-10-17,
