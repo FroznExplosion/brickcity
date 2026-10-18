@@ -19,7 +19,7 @@ check (`BrickWorld.gravity_check`, every plate boundary), the weakest-seam snap,
 what came off (`get_components_near`) all go by the bricks. What does know about floors, and what a
 wide building, a castle or a hall shows up:
 
-1. **Bands are slices across the whole building** (`Chunk::section_of_y`). Mesh, collision, the near
+1. ~~**Bands are slices across the whole building**~~ (tiles since 2026-10-17, 2.2) (`Chunk::section_of_y`). Mesh, collision, the near
    tier and every rebuild after a hit are a band at a time. A band of a 240 x 80-stud floor plan is
    all of it at that height: one hit, the whole floor rebuilt.
 2. ~~**The load check takes a whole boundary at once.**~~ One bay of a wide building with its columns
@@ -66,7 +66,21 @@ is). Keep the shell's collision as it is (`_make_shell_body`); only the drawing 
 will want to read the stand-in instead -- say so in the commit), `--view --big`, and a picture of a
 collapsed wide building from 150 m against one from 20 m (the user's two pictures).
 
-### 2.2 Tiles, not bands — not started
+### 2.2 Tiles, not bands — built 2026-10-17 (the drawing and collision)
+**Built.** A building's sections are tiles: `BrickWorld.set_chunk_section_studs` cuts each layer of
+sections (`set_chunk_section_plates`, as before: at least 24 plates, at most 16 layers) into squares
+`CityScene.SECTION_STUDS` (32) studs across -- the load check's region width. A block is in the
+tile its lowest corner is in (`Chunk::section_of`), and tiles are numbered layer by layer from the
+bottom, so everything that went by a section number -- the face bake's order, a band's mesh, its
+index patch, its collision body (`BuildingCollision`), the near tier's chamfered meshes and studs,
+the bands a toppling building hands its piece -- takes tiles without a change of its own. A tower
+30 studs wide is one tile a layer, as it was one band; the 80 x 60 tower is 6 a layer (up to 96),
+the 240 x 50 wide building 16. `section_probe` 32 (8 on tiles: a 120 x 70 building's tiles are
+exactly its mesh, each at most a brick past 32 studs, and a blast at one end of the ground floor
+moves its own tile, not that floor's other three).
+Not tiles yet: the shell's bands (a recipe drawing, `BuildingShell`), and the interiors' storey groups.
+
+The plan as it was:
 Every structure is cut into 3D tiles of about 32 x 32 studs by one storey, each with its own mesh,
 collision, near tier, far mesh and dirty flag. A tower is a stack of tiles, a wide building a grid,
 a castle tiles along its walls. A hit rebuilds a tile. `Chunk::section_of_y` becomes a tile index;

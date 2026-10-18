@@ -252,6 +252,12 @@ var _spare_shapes := {}
 ## the HEIGHT keeps an ordinary building as one or two.
 const SECTION_PLATES := 24
 const SECTION_MAX := 16
+## And across: a section is a TILE of this many studs square on plan, not a
+## band across the whole building (Docs/Structures.md 2.2) -- so a hit on a
+## 240 x 80 building rebuilds the tile it landed in, not the whole of that
+## floor. The load check's region is the same width (GRAVITY_REGION). A tower
+## no wider than this is one tile a layer, as it was a band.
+const SECTION_STUDS := 32
 ## building id -> its band nodes, its band meshes, and the index bytes each
 ## band's surface holds. Parallel arrays, one entry per band.
 ## building id -> the next band to build, for a rebuild in progress.
@@ -265,8 +271,11 @@ var _band_builds := 0
 var _band_worst := 0.0
 ## How much band building a tick may do. A band of one of the big shapes is a
 ## few milliseconds; the point is that a building's worth of them is not one
-## frame's problem.
-const BANDS_PER_TICK := 2
+## frame's problem. A count of 2 was for bands across the whole building; a
+## tile (SECTION_STUDS) is a sixth of the big tower's band, and at 2 a tick its
+## 96 tiles kept the shell up -- and the solve waiting -- 40 ticks after a hit
+## (--breaklag --big). The time and the vertices below are what bound a tick.
+const BANDS_PER_TICK := 12
 const BAND_BUDGET_MS := 6.0
 ## And how many vertices of band meshes may be handed over in one tick. A mesh
 ## built on a worker is not free on this thread: the worker packs the arrays,
@@ -2834,6 +2843,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# bake this promotion is waiting on -- the shell never comes down and the
 	# building never finishes promoting.
 	world.set_chunk_section_plates(chunk, _section_plates(chunk))
+	world.set_chunk_section_studs(chunk, SECTION_STUDS)
 
 	# The shell STAYS UP. Bricks and collision exist from this instant, but the
 	# mesh that draws them is baked on a worker and arrives a tick or two later

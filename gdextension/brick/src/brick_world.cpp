@@ -855,7 +855,7 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
         // A block is drawn by the band its lowest cell is in (FaceBake) -- and
         // furniture by none of them: it is not in the bake (FurnitureMesh).
         if ((b.decorative && !furniture)
-                || (section >= 0 && c.section_of_y(b.cell.y) != section)) {
+                || (section >= 0 && c.section_of(b.cell) != section)) {
             continue;
         }
         const Archetype &a = archetypes[b.archetype];
@@ -1179,7 +1179,7 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         if (b.removed || b.decorative) {
             continue;
         }
-        by_section[(size_t)c.section_of_y(b.cell.y)].push_back((int32_t)i);
+        by_section[(size_t)c.section_of(b.cell)].push_back((int32_t)i);
     }
     fb.section_first.assign((size_t)section_n, 0);
     fb.section_faces.assign((size_t)section_n, 0);
@@ -2031,7 +2031,7 @@ Dictionary BrickWorld::add_merged_shapes(RID body, int chunk_id, Vector3 offset,
     blocks.reserve(c.blocks.size());
     for (const Block &b : c.blocks) {
         if (b.alive && !(skip_decorative && b.decorative)
-                && (section < 0 || c.section_of_y(b.cell.y) == section)) {
+                && (section < 0 || c.section_of(b.cell) == section)) {
             blocks.push_back(&b);
         }
     }
@@ -2066,7 +2066,7 @@ PackedInt32Array BrickWorld::add_band_shapes(const Array &bodies, int chunk_id, 
         if (!b.alive || (skip_decorative && b.decorative)) {
             continue;
         }
-        const int k = slot[(size_t)c.section_of_y(b.cell.y)];
+        const int k = slot[(size_t)c.section_of(b.cell)];
         if (k >= 0) {
             lists[(size_t)k].push_back(&b);
         }
@@ -2327,7 +2327,7 @@ Dictionary BrickWorld::add_chunk_shapes(RID body, int chunk_id, Vector3 offset, 
         if (b.removed || (skip_dead && !b.alive)) {
             continue;
         }
-        if (section >= 0 && c.section_of_y(b.cell.y) != section) {
+        if (section >= 0 && c.section_of(b.cell) != section) {
             continue;
         }
         if (skip_decorative && b.decorative) {
@@ -2409,7 +2409,7 @@ PackedInt32Array BrickWorld::get_block_sections(int chunk_id,
         const int32_t bid = block_ids[i];
         if (bid >= 0 && bid < (int32_t)c.blocks.size()
                 && !(skip_decorative && c.blocks[(size_t)bid].decorative)) {
-            out.set(i, c.section_of_y(c.blocks[(size_t)bid].cell.y));
+            out.set(i, c.section_of(c.blocks[(size_t)bid].cell));
         }
     }
     return out;
@@ -2682,6 +2682,23 @@ void BrickWorld::set_chunk_section_plates(int chunk_id, int plates) {
     c.section_plates = want;
     // The face ORDER depends on this, so anything already baked is now baked
     // in the wrong order.
+    c.bake.valid = false;
+    if (bake_pending(chunk_id)) {
+        settle_bake_job(chunk_id, false);
+    }
+}
+
+void BrickWorld::set_chunk_section_studs(int chunk_id, int studs) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    Chunk &c = chunks[chunk_id];
+    const int want = studs > 0 ? studs : 0;
+    if (c.section_studs == want) {
+        return;
+    }
+    c.section_studs = want;
+    // As set_chunk_section_plates: the face order follows the sections.
     c.bake.valid = false;
     if (bake_pending(chunk_id)) {
         settle_bake_job(chunk_id, false);
@@ -9436,6 +9453,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_mesh_stats", "chunk_id"), &BrickWorld::get_mesh_stats);
     ClassDB::bind_method(D_METHOD("set_chunk_section_plates", "chunk_id", "plates"),
             &BrickWorld::set_chunk_section_plates);
+    ClassDB::bind_method(D_METHOD("set_chunk_section_studs", "chunk_id", "studs"),
+            &BrickWorld::set_chunk_section_studs);
     ClassDB::bind_method(D_METHOD("get_chunk_sections", "chunk_id"),
             &BrickWorld::get_chunk_sections);
     ClassDB::bind_method(D_METHOD("has_bake", "chunk_id"), &BrickWorld::has_bake);
