@@ -335,6 +335,29 @@ In the order to do it. Each line points at where the item is written up.
     finds exactly the bands hit since. `CityScene._bands_done` now frees the shell and patches.
     Same gate: the shell gone at tick 7, **pieces moving at 7**; the first shot at a shell shows at
     8 ticks (11). 7 of 7. `shell_probe` 35, `collapse_probe` 63 (with one flaky check, §4).
+28. ~~**Single bricks lying in mid-air where what they came down on had gone**~~ -- **found and
+    fixed 2026-10-17** (user: "single bricks parts that break off will settle on a falling part of a
+    building then stays there floating even after what the parts settled on has moved"). A crumb's
+    floor was asked once, when it came loose; the fall takes a second or more, and a 12 m blast at
+    a tower's middle sends its ring down onto the floors over the hole -- which then break off and
+    fall as the tower's top. The crumbs got to where the floor had been and were laid there, in
+    the heap, for good: **32 bricks at 42 m with nothing under them for 42 m** (`--lodbreak`, big
+    city). Now the floor is asked again on landing (`IslandManager._crumb_floor_gone`, one ray a
+    crumb): gone or lower, it falls on. Same run: 0. `heap_probe` 11, `blast_ring_probe` 19,
+    `debris_probe` 29, `collapse_probe` 63, `--ring` 4.
+    **The pass**, `big_city.tscn -- --lodbreak` (8): a 12 m blast at a tower from 60, 90, 160 and
+    320 m, the user's way, then flown up to; pictures at each stop. Gated: no brick of the heap in
+    mid-air, no stud drawn on a brick that has gone (`BrickNear.stale_studs`: 0 every time, so the
+    ghost walls in the user's pictures of 2026-10-17 are not stale stud cards). Not yet found
+    with it: those ghost walls seen from mid range, and a building shot from far that vanishes and
+    comes back as undamaged interiors with no walls (both still open, item 29).
+29. **Open, from the user's pictures of 2026-10-17**, not reproduced yet by `--lodbreak`:
+    (a) shot from mid range (LOD 2), parts of the wall drawn that should be gone, there until the
+    player comes close; (b) shot from far (LOD 3), the building sometimes vanishes, then close up
+    its interiors are drawn whole and its walls invisible, until it is shot again; (c) in a
+    collapse, a big part hanging in the air with nothing holding it. What the pass did see: a
+    12 m blast at the middle of a tower leaves its top standing on the stair core and what is left
+    of the walls, which is held as the rules stand.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.

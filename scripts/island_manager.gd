@@ -1476,6 +1476,10 @@ const CRUMB_SPIN := 5.0
 ## LANDMARK_COUNT (_crumbles_off_a_piece).
 const CRUMBS_MAX := 1500
 const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
+## A crumb's floor asked again on landing (_crumb_floor_gone), from this far
+## over where it was; lower by more than the slack, it had gone.
+const CRUMB_FLOOR_RECHECK := 0.3
+const CRUMB_FLOOR_SLACK := 0.05
 ## **Plastic clatters** (Docs/CollapseNext.md 1.10 (4)). A crumb that comes down
 ## faster than CRUMB_REST_SPEED bounces: up at `crumb_bounce` of the speed it came
 ## down at, along at CRUMB_SLIDE of what it had, turning still; slower, it stops
@@ -1927,6 +1931,28 @@ func _crumb_floor(from: Vector3) -> float:
 
 
 var _floor_on_ground := false
+var crumb_floors_gone := 0   ## crumbs whose floor had gone when they reached it
+
+
+## A crumb's floor is asked once, when it comes loose, and a fall takes a
+## second or more: what it was going to land on may have gone meanwhile -- the
+## storey a blast's ring came down on breaking off and falling as a section,
+## a settled piece woken. It was laid where that floor had been, in mid-air,
+## and lay there for good (user, 2026-10-17: "single bricks ... settle on a
+## falling part of a building then stay there floating"). So on reaching it the
+## floor is asked again, from a little above: gone or lower, the crumb falls on
+## to the new one. True when it does.
+func _crumb_floor_gone(cr: Crumbs, i: int, p: Vector3) -> bool:
+	var was := cr.floor_y[i]
+	if not is_finite(was):
+		return false
+	var now_y := _crumb_floor(Vector3(p.x, was + CRUMB_FLOOR_RECHECK, p.z))
+	if now_y >= was - CRUMB_FLOOR_SLACK:
+		return false
+	cr.floor_y[i] = now_y
+	cr.on_ground[i] = 1 if _floor_on_ground else 0
+	crumb_floors_gone += 1
+	return true
 
 
 func _crumb_set(key: Vector3) -> Crumbs:
@@ -1990,7 +2016,7 @@ func _update_crumbs() -> void:
 				var v := cr.vel[i]
 				v.y -= g * dt
 				var p := cr.pos[i] + v * dt
-				if p.y - cr.half_h[i] <= cr.floor_y[i]:
+				if p.y - cr.half_h[i] <= cr.floor_y[i] and not _crumb_floor_gone(cr, i, p):
 					p.y = cr.floor_y[i] + cr.half_h[i]
 					if -v.y * crumb_bounce > CRUMB_REST_SPEED:
 						v = Vector3(v.x * CRUMB_SLIDE, -v.y * crumb_bounce, v.z * CRUMB_SLIDE)
