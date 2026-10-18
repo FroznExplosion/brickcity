@@ -216,6 +216,15 @@ var _part_box := {}       # part -> the box round its volume, as last laid
 var _sketch_static: MeshInstance3D
 ## Slopes on any edge climbing one to three plates a stud, not only two.
 var slope_eager := false
+## How many slopes and curves a part's form is laid with (the curve slider): 0 steps only,
+## 1 slopes, 2 slopes and curves, 3 those fitted from the side and the front whichever
+## views the part was drawn in, 4 slopes eager too (a plate proud of or short of the line).
+var curve_level := 2:
+	set(v):
+		curve_level = clampi(v, 0, CURVE_LEVELS.size() - 1)
+		slope_eager = curve_level >= 4
+const CURVE_LEVELS := ["steps only", "slopes", "slopes and curves", "from the side and front",
+		"eager slopes too"]
 var _sketch_out := false
 var _sketch_cache := {}
 
@@ -1290,7 +1299,7 @@ func _store_asset_meta() -> void:
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
-			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1328,6 +1337,7 @@ func _restore_asset_meta() -> void:
 			sk["n"] = _sketch_seq
 		_sketch_seq = maxi(_sketch_seq, int(sk.n) + 1)
 	_sketch_cache.clear()
+	curve_level = int(a.get("curves", 2))
 	muzzle_end = String(a.get("muzzle", "-x"))
 	for g in a.get("guides", []):
 		var i := load_guide(String(g.path), float(g.real_mm))
@@ -2302,13 +2312,23 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	sk_fill.add_item("random: mixed sizes")
 	sk_fill.item_selected.connect(func(i: int) -> void: shape_fill = "clean" if i == 0 else "random")
 	_sketch_box.add_child(sk_fill)
-	var sk_slopes := OptionButton.new()
-	sk_slopes.add_item("slopes: own pitch only")
-	sk_slopes.add_item("slopes: eager (1-3 plates)")
-	sk_slopes.item_selected.connect(func(i: int) -> void:
-		slope_eager = i == 1
-		resketch(_sketch_key(), {}))
-	_sketch_box.add_child(sk_slopes)
+	# Curves: let go and every part is laid again from its form with that many, as one undo.
+	var curve_label := Label.new()
+	curve_label.text = "curves: " + CURVE_LEVELS[curve_level]
+	_sketch_box.add_child(curve_label)
+	_curve_slider = HSlider.new()
+	_curve_slider.min_value = 0
+	_curve_slider.max_value = CURVE_LEVELS.size() - 1
+	_curve_slider.step = 1
+	_curve_slider.value = curve_level
+	_curve_slider.focus_mode = Control.FOCUS_NONE
+	_curve_slider.custom_minimum_size.x = 150
+	_curve_slider.value_changed.connect(func(v: float) -> void:
+		curve_label.text = "curves: " + CURVE_LEVELS[int(v)])
+	_curve_slider.drag_ended.connect(func(_changed: bool) -> void:
+		if int(_curve_slider.value) != curve_level:
+			set_curves(int(_curve_slider.value)))
+	_sketch_box.add_child(_curve_slider)
 	# Resize the whole block-out: let go of the slider and every part is laid again at that
 	# size, as one undo, and the slider is back at 100%.
 	var size_label := Label.new()
@@ -3674,6 +3694,9 @@ func _restore_sketch(g: Variant, which: String) -> void:
 		for one in list:
 			_restore_sketch(one, which)
 		return
+	if g.has("curves_" + which):
+		_show_curves(int(g["curves_" + which]))
+		return
 	var states: Dictionary = g.get(which, {})
 	for k in states:
 		_set_sketch(k, states[k])
@@ -3866,10 +3889,13 @@ static func _sketch_depth(sk: Dictionary) -> Array:
 func _plan_volume(list: Array, vol: Dictionary, own: Dictionary, only: Dictionary,
 		near: Dictionary = {}) -> Array:
 	var views := []
-	for e in list:
-		var pl: String = e[1].plane
-		if pl != "top" and not views.has(pl) and not e[1].has("solid"):
-			views.append(pl)
+	if curve_level >= 3:
+		views = ["side", "front"]
+	elif curve_level >= 1:
+		for e in list:
+			var pl: String = e[1].plane
+			if pl != "top" and not views.has(pl) and not e[1].has("solid"):
+				views.append(pl)
 	var used := {}
 	var placements := []
 	for view in views:
@@ -3933,7 +3959,7 @@ func _edge_runs(list: Array, vol: Dictionary, view: String, own: Dictionary, use
 		if straight and once != null:
 			pieces = once
 		else:
-			pieces = edge_pieces(slices[k], slope_eager)
+			pieces = edge_pieces(slices[k], slope_eager, curve_level >= 2)
 			once = pieces
 		for pc in pieces:
 			if pc.u + 1 < lo.x or pc.u > hi.x:
@@ -4196,8 +4222,9 @@ func _draw_sketch(im: ImmediateMesh) -> void:
 ## if the edge climbs toward +u, under: true for a bottom edge (the piece flipped)}].
 ## A bottom edge is a top edge of the sketch turned upside down, so one rule does both.
 ## `eager` lays slopes on edges climbing one to three plates a stud, not only two.
-static func edge_pieces(grid: Dictionary, eager: bool = false) -> Array:
-	var out := _top_pieces(grid, {}, eager)
+## `curves` false: slopes only.
+static func edge_pieces(grid: Dictionary, eager: bool = false, curves: bool = true) -> Array:
+	var out := _top_pieces(grid, {}, eager, curves)
 	var flipped := {}
 	for g in grid:
 		flipped[Vector2i(g.x, -g.y - 1)] = true
@@ -4205,7 +4232,7 @@ static func edge_pieces(grid: Dictionary, eager: bool = false) -> Array:
 	for pc in out:
 		used[pc.u] = true
 		used[pc.u + 1] = true
-	for pc in _top_pieces(flipped, used, eager):
+	for pc in _top_pieces(flipped, used, eager, curves):
 		# Back the right way up: the flipped box held plates base .. base + 2.
 		pc.base = -pc.base - 3
 		pc.under = true
@@ -4213,7 +4240,8 @@ static func edge_pieces(grid: Dictionary, eager: bool = false) -> Array:
 	return out
 
 
-static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}, eager: bool = false) -> Array:
+static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}, eager: bool = false,
+		curves: bool = true) -> Array:
 	var top := {}
 	for g in grid:
 		top[g.x] = maxi(int(top.get(g.x, -(1 << 30))), g.y + 1)
@@ -4221,28 +4249,13 @@ static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}, eager: 
 	var used := used_already.duplicate()
 	var us := top.keys()
 	us.sort()
-	# Slopes first. A slope's flat back sits over the higher column, its top level with that
-	# column's; its low front over the lower column. At its own pitch the edge climbs two
-	# plates a stud; eager, one to three, the slope a plate proud of or short of the line.
-	var climbs := [1, 2, 3] if eager else [2]
-	for u in us:
-		if not top.has(u + 1) or used.has(u) or used.has(u + 1):
-			continue
-		var d: int = top[u + 1] - top[u]
-		if not (absi(d) in climbs):
-			continue
-		var low: int = u if d > 0 else u + 1
-		var high: int = u + 1 if d > 0 else u
-		var base: int = top[high] - 3
-		if not grid.has(Vector2i(high, base)) or top[low] < base:
-			continue
-		out.append({"kind": "slope", "u": u, "base": base, "rises": 1 if d > 0 else -1, "under": false})
-		used[u] = true
-		used[u + 1] = true
+	# Slopes at their own pitch first, then curves, then (eager) slopes a plate off the line
+	# where neither went: an eager slope must not take a curve's columns.
+	_slopes_into(out, grid, top, us, used, [2])
 	# Then curves: an end that rounds over -- a column two plates up from nothing (or from
 	# two plates lower), then one more plate -- is a curve's profile, three plates in two
 	# studs from its front edge.
-	for u in us:
+	for u in (us if curves else []):
 		for dir in [1, -1]:
 			var a: int = u
 			var b: int = u + dir
@@ -4260,7 +4273,31 @@ static func _top_pieces(grid: Dictionary, used_already: Dictionary = {}, eager: 
 			out.append({"kind": "curve", "u": first, "base": base, "rises": dir, "under": false})
 			used[a] = true
 			used[b] = true
+	if eager:
+		_slopes_into(out, grid, top, us, used, [1, 3])
 	return out
+
+
+## Slopes on edges climbing `climbs` plates a stud. A slope's flat back sits over the
+## higher column, its top level with that column's; its low front over the lower column.
+## At its own pitch the edge climbs two plates a stud; eager, one or three too, the slope a
+## plate proud of or short of the line.
+static func _slopes_into(out: Array, grid: Dictionary, top: Dictionary, us: Array, used: Dictionary,
+		climbs: Array) -> void:
+	for u in us:
+		if not top.has(u + 1) or used.has(u) or used.has(u + 1):
+			continue
+		var d: int = top[u + 1] - top[u]
+		if not (absi(d) in climbs):
+			continue
+		var low: int = u if d > 0 else u + 1
+		var high: int = u + 1 if d > 0 else u
+		var base: int = top[high] - 3
+		if not grid.has(Vector2i(high, base)) or top[low] < base:
+			continue
+		out.append({"kind": "slope", "u": u, "base": base, "rises": 1 if d > 0 else -1, "under": false})
+		used[u] = true
+		used[u + 1] = true
 
 
 ## The catalogue piece for an edge: a slope or curve, `wide` studs deep (a 2x4 slope for
@@ -5319,6 +5356,35 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 		resketch_part(part, made[part], true)
 	_end_gather()
 	return true
+
+
+## Lay every part again from its form with `level` slopes and curves (`curve_level`), as
+## one undo. Returns how many parts were laid.
+func set_curves(level: int) -> int:
+	var was := curve_level
+	_show_curves(level)
+	var n := 0
+	_begin_gather()
+	for part in part_names:
+		if not part_sketches(part).is_empty():
+			resketch_part(part, {}, true)
+			n += 1
+	_end_gather()
+	# The level goes back and forth with the bricks.
+	if not _edit_groups.is_empty() and _edit_groups.back().get("sketch") is Array:
+		(_edit_groups.back().sketch as Array).append({"curves_before": was, "curves_after": curve_level})
+	return n
+
+
+func _show_curves(level: int) -> void:
+	curve_level = level
+	if _curve_slider != null:
+		_curve_slider.set_value_no_signal(curve_level)
+		_curve_slider.value_changed.emit(curve_level)
+	_store_asset_meta()
+
+
+var _curve_slider: HSlider
 
 
 ## The box round every part's form, as `form_pivot` last found it.
