@@ -110,6 +110,7 @@ func _tick() -> void:
 	_resize()
 	_curves()
 	_sideways()
+	_shells()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1453,3 +1454,83 @@ func _sideways() -> void:
 	var turned := (spec.get("bricks", []) as Array).filter(func(b: Dictionary) -> bool: return b.has("turn"))
 	_ok("the print sheet turns it, its stud with it", turned.size() == 1 and (spec.get("studs_extra", []) as Array).size() == 1
 			and absf(float(turned[0].turn[1][1]) + 1.0) < 1e-3, str(turned))
+
+
+func _shells() -> void:
+	# A shell: the part's form sampled finer than the grid and wrapped in one smooth closed
+	# surface, its bricks the form shrunk by the thickness (Docs/AssetWorkshop.md, "Shells").
+	_ws._new_build()
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.rail_pick("sketch")
+	_ws.work_plane = "side"
+	_ws.work_depth = 31.0
+	_ws.part_width["body"] = 4
+	_ws.sketch_region([Vector2(20, 20), Vector2(32, 20), Vector2(32, 30), Vector2(26, 34), Vector2(20, 30)])
+	var bare: Array = _form_filled("body")
+	var bricks_bare: int = _ws.recipe.size()
+	_ws.set_shell("body", {"thick": 0.5, "res": 2})
+	var mi: MeshInstance3D = _ws._shell_nodes.get("body")
+	_ok("a shell on the part: one mesh", mi != null and int(_ws._shell_tris.get("body", 0)) > 0,
+			str(_ws._shell_tris))
+	if mi != null:
+		var idx: PackedInt32Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+		var edges := {}
+		var twice := true
+		for t in range(0, idx.size(), 3):
+			for k in 3:
+				var e := Vector2i(idx[t + k], idx[t + (k + 1) % 3])
+				twice = twice and not edges.has(e)
+				edges[e] = true
+		for e: Vector2i in edges:
+			twice = twice and edges.has(Vector2i(e.y, e.x))
+		_ok("closed: every edge twice, once each way", twice)
+		var box: AABB = mi.transform * mi.get_aabb()
+		var want := AABB(Vector3(20, 20, 29) * _ws.CELL_M, Vector3(12, 14, 4) * _ws.CELL_M)
+		_ok("the size of the form (within a sample)", box.position.distance_to(want.position) < BrickPalette.STUD_M * 0.6
+				and box.size.distance_to(want.size) < BrickPalette.STUD_M * 1.2, "%s vs %s" % [box, want])
+	var core_cells: Dictionary = _ws._part_vol.get("body", {})
+	var core_filled := 0
+	for c in core_cells:
+		if _ws.world.is_solid(_ws.chunk, c):
+			core_filled += 1
+	var inside := true
+	var full: Dictionary = _ws.part_volume(_ws.part_sketches("body"))
+	for k in _ws.recipe.size():
+		inside = inside and full.has(_ws.recipe.cell_of(k))
+	_ok("its bricks: fewer, all inside the form", _ws.recipe.size() > 0 and _ws.recipe.size() < bricks_bare
+			and core_filled == core_cells.size() and core_cells.size() > 0 and inside,
+			"%d -> %d bricks, core %d of %d filled" % [bricks_bare, _ws.recipe.size(), core_filled, core_cells.size()])
+	var stats: Dictionary = _ws.triangle_stats()
+	_ok("counted: the shell, not the bricks it covers", int(stats.parts.body.shell) == int(_ws._shell_tris.body)
+			and int(stats.parts.body.studs) == 0, str(stats.parts.body))
+	var dir := "user://_probe_gun_shell/"
+	var out: Dictionary = _ws.export_game(dir)
+	var body: Node3D = (ResourceLoader.load(out.parts.body, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
+	var drawn := 0
+	for n in body.find_children("*", "", true, false):
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+			drawn += _ws._mesh_triangles((n as MeshInstance3D).mesh)
+		elif n is MultiMeshInstance3D and (n as MultiMeshInstance3D).multimesh != null:
+			var mm: MultiMesh = (n as MultiMeshInstance3D).multimesh
+			drawn += _ws._mesh_triangles(mm.mesh) * mm.instance_count
+	_ok("exported: the shell, and the count is what it draws", body.find_child("Shell", true, false) != null
+			and drawn == int(stats.total), "drawn %d, counted %d" % [drawn, stats.total])
+	body.free()
+	for fname in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + fname)
+	var sheet: Dictionary = _ws.export_sheet()
+	var has_shell := false
+	for ps in sheet.parts:
+		if ps.name == "body":
+			has_shell = ps.has("shell") and (ps.shell.verts as Array).size() > 0 and (ps.bricks as Array).is_empty()
+	_ok("the print sheet has the shell, not the bricks inside it", has_shell)
+	var thin: int = _ws.recipe.size()
+	_ws.set_shell("body", {"thick": 1.5, "res": 2})
+	_ok("thicker: fewer bricks inside", _ws.recipe.size() < thin, "%d -> %d" % [thin, _ws.recipe.size()])
+	_ws._undo()
+	_ok("one Z: the thin shell back", _ws.recipe.size() == thin and float(_ws.shells.body.thick) == 0.5,
+			"%d bricks, %s" % [_ws.recipe.size(), str(_ws.shells.get("body"))])
+	_ws._undo()
+	_ok("and again: no shell, every brick of the form back", not _ws.shells.has("body")
+			and not _ws._shell_nodes.has("body") and _form_filled("body") == bare, str(_form_filled("body")))
+	_ws.rail_pick("place")

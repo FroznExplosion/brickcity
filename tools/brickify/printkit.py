@@ -219,6 +219,27 @@ def build(spec, me, holes, grid):
         return verts[key]
 
     solid = {c for c, plain in me["cells"].items() if plain}
+    shell = None
+    if spec.get("shell"):
+        # A shelled part (the asset workshop's smooth outside): its own closed surface.
+        shell = bmesh.new()
+        sv = [shell.verts.new(tuple(p)) for p in spec["shell"]["verts"]]
+        t = spec["shell"]["tris"]
+        for n in range(0, len(t) - 2, 3):
+            try:
+                shell.faces.new((sv[t[n]], sv[t[n + 1]], sv[t[n + 2]]))
+            except ValueError:
+                pass  # a face twice over: the surface is closed without it
+        bmesh.ops.recalc_face_normals(shell, faces=shell.faces)
+        # Grown a hair, as a slope is: it ends on the next part's face, and a union of
+        # faces that only touch leaves them apart.
+        shell.normal_update()
+        for p in shell.verts:
+            p.co += p.normal * HAIR
+        if not solid:
+            bm.free()
+            bm = shell
+            shell = None
     for (i, j, k) in solid:
         # Each face whose neighbour is not plain brick, wound to face out.
         if (i - 1, j, k) not in solid:
@@ -238,7 +259,7 @@ def build(spec, me, holes, grid):
     # Everything that joins it: slopes and curves (welded, grown a hair), studs (sunk a hair).
     # Each its own object: pieces that overlap one another inside ONE operand are not
     # unioned (a stud on a slope came out loose that way).
-    extra = []
+    extra = [] if shell is None else [shell]
     for b in me["shaped"]:
         base, yaw, flip = gs._orientation(b["part"])
         one = bmesh.new()
