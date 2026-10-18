@@ -158,15 +158,19 @@ class Building:
 	func is_damaged() -> bool:
 		if hit or not dead.is_empty():
 			return true
-		for ids in dead_frames.values():
-			if not (ids as PackedInt32Array).is_empty():
-				return true
+		# Asked several times per building per shell pass: an untouched one
+		# answers without values(), which copies the dictionary into an Array.
+		if not dead_frames.is_empty():
+			for ids in dead_frames.values():
+				if not (ids as PackedInt32Array).is_empty():
+					return true
 		# Bricks that left as a piece: nothing died, and the building is still
 		# a different shape. A tower cut clean through had its top fall off,
 		# and was handed back with no profile -- its shell drawn whole again.
-		for ids in gone.values():
-			if not (ids as PackedInt32Array).is_empty():
-				return true
+		if not gone.is_empty():
+			for ids in gone.values():
+				if not (ids as PackedInt32Array).is_empty():
+					return true
 		return false
 
 
@@ -647,6 +651,12 @@ func get_building(id: int) -> Building:
 	return buildings[id] if id >= 0 and id < buildings.size() else null
 
 
+## Goes up every time any building takes a chunk: an answer "this chunk is no
+## building's" holds until it changes.
+func materialise_count() -> int:
+	return _materialise_count
+
+
 ## Build the real bricks. Idempotent: already-materialised buildings are returned
 ## as they are.
 func materialise(id: int) -> int:
@@ -895,13 +905,16 @@ func trim(keep_near: Vector3, radius: float, min_age_ms: int, budget: int = 8) -
 func report() -> Dictionary:
 	var damaged := 0
 	var blocks := 0
+	var fixtures := 0
 	for b in buildings:
 		if b.is_damaged():
 			damaged += 1
-		for c in b.chunks():
-			blocks += world.get_block_count(c)
-	var fixtures := 0
-	for b in buildings:
+		# Only a building holding bricks has chunks to count (chunks() is
+		# empty otherwise), and most of the register -- trees and far
+		# towers -- holds none.
+		if b.chunk >= 0 or not b.frames.is_empty():
+			for c in b.chunks():
+				blocks += world.get_block_count(c)
 		fixtures += b.fixtures.size()
 	return {
 		"buildings": buildings.size(),
