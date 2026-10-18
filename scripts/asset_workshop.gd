@@ -5904,8 +5904,10 @@ func _part_chunk(ids: Array) -> Array:
 	return [c, lo]
 
 
-## Some bricks laid on their own and meshed as the workshop draws them, studs and all:
-## a MeshInstance3D in workshop metres (its studs a child), at their box's corner.
+## Some bricks laid on their own and meshed for the game, studs and all: a MeshInstance3D
+## in workshop metres (its studs a child), at their box's corner. No chamfer: at a held
+## gun's size it is too small to see and cost 18% of the Thompson's triangles; the shader
+## draws the brick outlines and its own bevel (geo_bevel 0).
 func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 	var made := _part_chunk(ids)
 	var c: int = made[0]
@@ -5913,13 +5915,12 @@ func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.name = "Bricks"
 	mi.material_override = _material
-	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
-			else world.build_chunk_mesh(c)
+	var arrays := world.build_chunk_mesh(c)
 	var m := ArrayMesh.new()
 	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
-	mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
+	mi.set_instance_shader_parameter("geo_bevel", 0.0)
 	mi.position = Vector3(lo.x * BrickPalette.STUD_M, lo.y * BrickPalette.PLATE_M, lo.z * BrickPalette.STUD_M)
 	var studs: PackedFloat32Array = world.get_chunk_studs(c)
 	@warning_ignore("integer_division")
@@ -5941,10 +5942,9 @@ func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 	return mi
 
 
-## What the gun costs to draw, as Export to game would mesh it: each part's triangles
-## (its bricks, and its studs -- every stud is the stud mesh again) and the draws. `flat`
-## is the same bricks without the chamfer (BrickNear), the brick outlines left to the
-## shader. {parts: {name: {bricks, flat, studs, draws}}, total, flat_total, draws, ms}.
+## What the gun costs to draw, as Export to game meshes it: each part's triangles (its
+## bricks, and its studs -- every stud is the stud mesh again) and the draws.
+## {parts: {name: {bricks, studs, draws}}, total, draws, ms}.
 func triangle_stats() -> Dictionary:
 	var t0 := Time.get_ticks_usec()
 	var by_part := {}
@@ -5956,15 +5956,11 @@ func triangle_stats() -> Dictionary:
 	var stud_tris := _mesh_triangles(PieceMeshes.stud())
 	var parts := {}
 	var total := 0
-	var flat_total := 0
 	var draws := 0
 	for name in by_part:
 		var made := _part_chunk(by_part[name])
 		var c: int = made[0]
-		var plain := world.build_chunk_mesh(c)
-		var flat := _arrays_triangles(plain)
-		var bricks := _arrays_triangles(world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL)) \
-				if BrickNear.enabled else flat
+		var bricks := _arrays_triangles(world.build_chunk_mesh(c))
 		@warning_ignore("integer_division")
 		var n_studs: int = (world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
 		world.release_chunk(c)
@@ -5974,11 +5970,10 @@ func triangle_stats() -> Dictionary:
 				hand += 1
 		var studs := (n_studs + hand) * stud_tris
 		var d := (1 if bricks > 0 else 0) + (1 if n_studs > 0 else 0) + (1 if hand > 0 else 0)
-		parts[name] = {"bricks": bricks, "flat": flat, "studs": studs, "draws": d}
+		parts[name] = {"bricks": bricks, "studs": studs, "draws": d}
 		total += bricks + studs
-		flat_total += flat + studs
 		draws += d
-	return {"parts": parts, "total": total, "flat_total": flat_total, "draws": draws,
+	return {"parts": parts, "total": total, "draws": draws,
 			"ms": (Time.get_ticks_usec() - t0) / 1000.0}
 
 
@@ -6014,9 +6009,8 @@ func triangles_text() -> String:
 	var studs := 0
 	for name in parts:
 		studs += int(parts[name].studs)
-	return "triangles: %s in %d draws (studs %s; %s without the chamfer)   %s" % [
-			_thousands(_tris.total), _tris.draws, _thousands(studs), _thousands(_tris.flat_total),
-			", ".join(bits)]
+	return "triangles: %s in %d draws (studs %s)   %s" % [
+			_thousands(_tris.total), _tris.draws, _thousands(studs), ", ".join(bits)]
 
 
 static func _thousands(n: int) -> String:

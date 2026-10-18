@@ -1084,8 +1084,6 @@ func _round8() -> void:
 	var stats: Dictionary = _ws.triangle_stats()
 	_ok("the triangle readout is what the exported gun draws", drawn > 0 and int(stats.total) == drawn,
 			"readout %d, exported %d" % [stats.total, drawn])
-	_ok("and without the chamfer it is fewer", int(stats.flat_total) < int(stats.total) or not BrickNear.enabled,
-			"%d vs %d" % [stats.flat_total, stats.total])
 	_ws._tris = stats
 	_ok("the readout shows it", _ws.ruler_text().contains("triangles: "), _ws.ruler_text())
 	gun.queue_free()
