@@ -2234,8 +2234,17 @@ struct MeshBuf {
         Vector3 edge_out[4];
         for (int i = 0; i < 4; ++i) {
             const int j = (i + 1) % 4;
-            edge_out[i] = ((rim[i] + rim[j]) * 0.5f
-                    - (in[i] + in[j]) * 0.5f).normalized();
+            // Square to the edge, in the face's plane, away from its middle.
+            // The midpoints of the rim and the inset edge gave this once,
+            // and leaned it whenever one end of the edge was square and the
+            // other inset: the corner triangle then sat off the corner and
+            // left slivers round it.
+            const Vector3 centre = (rim[0] + rim[1] + rim[2] + rim[3]) * 0.25f;
+            Vector3 o = n.cross(rim[j] - rim[i]).normalized();
+            if (o.dot((rim[i] + rim[j]) * 0.5f - centre) < 0.0f) {
+                o = -o;
+            }
+            edge_out[i] = o;
         }
         for (int i = 0; i < 4; ++i) {
             const int j = (i + 1) % 4;
@@ -3845,10 +3854,39 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     // the skirt); with a floor under every chamfered top a hole
                     // shows brick, never the void. Section 17.21's backing, for
                     // the price of two triangles a piece.
-                    m.raw_quad(Vector3(0, 1, 0), col, face,
-                        Vector3(x0, ys, z0), Vector3(x1, ys, z0),
-                        Vector3(x1, ys, z1), Vector3(x0, ys, z1),
-                        Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                    if (cutc == 0) {
+                        m.raw_quad(Vector3(0, 1, 0), col, face,
+                            Vector3(x0, ys, z0), Vector3(x1, ys, z0),
+                            Vector3(x1, ys, z1), Vector3(x0, ys, z1),
+                            Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                    } else {
+                        // With its cut corners cut too, or the corner of it
+                        // stood out through the upright facet.
+                        Vector3 ring[8];
+                        int rn = 0;
+                        for (int k = 0; k < 4; ++k) {
+                            const float cx = CX[k] < 0 ? x0 : x1;
+                            const float cz = CZ[k] < 0 ? z0 : z1;
+                            if ((cutc & (1u << k)) == 0) {
+                                ring[rn++] = Vector3(cx, ys, cz);
+                            } else if ((k & 1) == 0) {
+                                // Corners 0 and 2 are reached along X first.
+                                ring[rn++] = Vector3(cx, ys, cz - (float)CZ[k] * cut);
+                                ring[rn++] = Vector3(cx - (float)CX[k] * cut, ys, cz);
+                            } else {
+                                ring[rn++] = Vector3(cx - (float)CX[k] * cut, ys, cz);
+                                ring[rn++] = Vector3(cx, ys, cz - (float)CZ[k] * cut);
+                            }
+                        }
+                        const Vector3 mid((x0 + x1) * 0.5f, ys, (z0 + z1) * 0.5f);
+                        const Vector2 muv = face * 0.5f;
+                        for (int k = 0; k < rn; ++k) {
+                            const Vector3 &a = ring[k];
+                            const Vector3 &b = ring[(k + 1) % rn];
+                            m.tri_facing(Vector3(0, 1, 0), col, face, mid, a, b,
+                                muv, Vector2(a.x - x0, a.z - z0), Vector2(b.x - x0, b.z - z0));
+                        }
+                    }
                     if ((square & 1u) && eq_zm) {
                         m.raw_quad(Vector3(0, 0, -1), col, skx,
                             Vector3(x0, ys, z0), Vector3(x1, ys, z0),
@@ -3949,10 +3987,18 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                         m.tri_facing(fn, col, f, a, b, c, mid, mid, mid);
                         m.tri_facing(fn, col, f, a, c, d, mid, mid, mid);
                         if (capped[k]) {
-                            // The cut's floor, level with the ground beside.
+                            // The cut's floor, level with the ground beside at
+                            // its two inner points and a bevel down at the
+                            // corner, where the bevels of the bricks below
+                            // meet: it carries their groove on, instead of
+                            // standing flat over it.
                             const float yc = cap_y[k];
-                            m.tri_facing(Vector3(0, 1, 0), col, f, Vector3(cx, yc, cz),
-                                Vector3(cx, yc, qx_z), Vector3(qz_x, yc, cz), mid, mid, mid);
+                            const Vector3 p0(cx, yc - cut, cz), p1(cx, yc, qx_z), p2(qz_x, yc, cz);
+                            Vector3 cn = (p1 - p0).cross(p2 - p0).normalized();
+                            if (cn.y < 0.0f) {
+                                cn = -cn;
+                            }
+                            m.tri_facing(cn, col, f, p0, p1, p2, mid, mid, mid);
                         }
                     }
                     m.facet = 0;
