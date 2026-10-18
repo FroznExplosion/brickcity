@@ -253,7 +253,8 @@ static func _quad(verts: PackedVector3Array, normals: PackedVector3Array,
 		colours: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
 		indices: PackedInt32Array, col: Color,
 		a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3, size: Vector2) -> void:
-	var seam := Vector2(minf(SEAM_UNIT.x, size.x), minf(SEAM_UNIT.y, size.y))
+	# Whole tiles only (BuildingShell.fit_unit): a cut one is a cut brick.
+	var seam := BuildingShell.fit_unit(SEAM_UNIT, size)
 	var v0 := verts.size()
 	for p in [a, b, c, d]:
 		verts.push_back(p)

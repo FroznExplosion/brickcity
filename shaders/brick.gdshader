@@ -397,8 +397,11 @@ void fragment() {
             // underside is not drawn open -- runs the other way to the top,
             // as a slicer alternates.
             float bw = ps_bead(face, mat);
-            float d2 = min(min(v_uv.x, fsize.x - v_uv.x),
-                           min(v_uv.y, fsize.y - v_uv.y));
+            // By the CELL: a building's far shell tiles one face with
+            // brick-sized cells (BuildingShell), each drawn as its own top;
+            // on a brick's own face the cell is the face.
+            float d2 = min(min(cell.x, fsize.x - cell.x),
+                           min(cell.y, fsize.y - cell.y));
             // From the bevel's inner edge (ps_inset): the walls follow the
             // top as it is drawn flat, not the rectangle the bevel cut into.
             // On the bevel itself (the shaded one, far off) no path at all.
@@ -411,15 +414,15 @@ void fragment() {
             } else {
                 // The block's own corner, in the same world metres the
                 // mesher wrote, so every fragment of a block agrees.
-                vec2 origin = v_local.xz - v_uv;
+                vec2 origin = v_local.xz - cell;
                 vec2 n = ps_top_normal(ps_top_turned(fsize, origin));
                 if (face == 2) {
                     n.y = -n.y;
                 }
-                t = dot(v_uv, n) / bw;
+                t = dot(cell, n) / bw;
                 if (print_near) {
                     float e = d2 - wall;
-                    vec2 zz = ps_zigzag(v_uv, vec2(wall + PS_BEVEL),
+                    vec2 zz = ps_zigzag(cell, vec2(wall + PS_BEVEL),
                             fsize - vec2(wall + PS_BEVEL), n, t, e, bw, fwidth(t));
                     if (zz.x > 0.5) {
                         // On a connector: one bead along the wall, a bead wide.

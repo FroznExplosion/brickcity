@@ -59,6 +59,15 @@ const VIEWS := [
 	["far22_card_zoom", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0), 45.0, 12.0],
 	["far22_nocard_zoom", Vector3(84.0, 8.0, 30.0), Vector3(84.0, 1.0, 4.0), 0.0, 12.0],
 	["far17_zoom", Vector3(84.0, 6.5, 24.0), Vector3(84.0, 1.0, 4.0), 45.0, 12.0],
+	# A top's corner through a sniper's scope, from above and lower down.
+	["corner_scope_low", Vector3(87.0, 3.0, 25.0), Vector3(84.7, 0.84, 7.0), 70.0, 3.0],
+	# A far shell's top corner through a scope, 110 m off and above it.
+	["shell_scope", Vector3(380.0, 40.0, 80.0), Vector3(302.45, 5.04, 3.15), 70.0, 4.0],
+	["shell_scope_side", Vector3(400.0, 12.0, 50.0), Vector3(302.45, 4.5, 3.15), 70.0, 4.0],
+	# Close, the same detail a scope gives it at 110 m (detail goes by
+	# distance over the zoom).
+	["shell_corner", Vector3(304.0, 6.6, 5.2), Vector3(302.45, 5.04, 3.15)],
+	["shell_slab", Vector3(304.2, 2.2, 5.0), Vector3(302.45, 2.6, 3.15)],
 	# One top, through a very long lens: as a card at 30 m, a square post at 15.
 	["one_card", Vector3(84.0, 8.0, 30.0), Vector3(84.2, 2.55, 0.7), 45.0, 2.5],
 	["one_square", Vector3(84.0, 4.5, 15.5), Vector3(84.2, 2.55, 0.7), 45.0, 5.0],
@@ -69,6 +78,7 @@ const VIEWS := [
 ]
 const ROOM := Vector3(40, 0, 0)
 const FAR := Vector3(80, 0, 0)
+const SHELL := Vector3(300, 0, 0)
 var _near: BrickNear
 
 var _out := "user://"
@@ -230,6 +240,14 @@ func _build() -> void:
 	root3.add_child(fmi)
 	_near = BrickNear.new(w)
 	_near.track(fmi, far)
+
+	# A building's far shell (BuildingShell), as one is drawn past 110 m: an
+	# odd footprint, so its faces are not whole numbers of brick tiles.
+	var shell := MeshInstance3D.new()
+	shell.mesh = BuildingShell.build_mesh(7, 9, 12)
+	shell.material_override = mat
+	shell.position = SHELL
+	root3.add_child(shell)
 
 	_cam = Camera3D.new()
 	_cam.fov = 50.0
