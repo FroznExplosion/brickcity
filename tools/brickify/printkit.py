@@ -143,7 +143,12 @@ def lay_out(spec, grid):
     cells = {}
     plain = []
     shaped = []
+    turned = []
     for b in spec["bricks"]:
+        if "turn" in b:
+            # Built in a sideways grid: off this part's cells, laid as a solid of its own.
+            turned.append(b)
+            continue
         lo = b["min_mm"]
         sx, sy, sz = b["size"]
         base, _yaw, _flip = gs._orientation(b["part"])
@@ -174,7 +179,15 @@ def lay_out(spec, grid):
     for st in spec.get("studs_extra", []):
         n = Vector(st["normal"]).normalized()
         studs.append([tuple(st["at"]), tuple(n)])
-    return {"cells": cells, "plain": plain, "shaped": shaped, "studs": studs}
+    for b in turned:
+        base, yaw, flip = gs._orientation(b["part"])
+        cat = gs._catalogue().get(base)
+        if cat is not None and cat.get("profiles"):
+            scratch = bmesh.new()
+            for at, normal in gs._shaped(scratch, b, b["part"], base, yaw, flip, False, grid):
+                studs.append([tuple(at), tuple(normal)])
+            scratch.free()
+    return {"cells": cells, "plain": plain, "shaped": shaped, "turned": turned, "studs": studs}
 
 
 def key_at(lo, i, j, k, grid):
@@ -237,6 +250,22 @@ def build(spec, me, holes, grid):
             d = p.co - centre
             p.co = centre + Vector((d.x + math.copysign(HAIR, d.x), d.y + math.copysign(HAIR, d.y),
                                     d.z + math.copysign(HAIR, d.z)))
+        extra.append(one)
+    for b in me.get("turned", []):
+        # Sideways bricks: a turned box or a turned catalogue piece, grown a hair to weld.
+        base, yaw, flip = gs._orientation(b["part"])
+        cat = gs._catalogue().get(base)
+        one = bmesh.new()
+        if cat is not None and cat.get("profiles"):
+            gs._shaped(one, b, b["part"], base, yaw, flip, False, grid)
+            bmesh.ops.remove_doubles(one, verts=one.verts, dist=1e-4)
+            bmesh.ops.recalc_face_normals(one, faces=one.faces)
+            centre = sum((p.co for p in one.verts), Vector()) / max(1, len(one.verts))
+            for p in one.verts:
+                d = p.co - centre
+                p.co = centre + d * (1.0 + HAIR / max(d.length, 1e-6))
+        else:
+            gs._turned_box(one, b, grid, grow=HAIR)
         extra.append(one)
     r, h = grid["stud_d"] * 0.5, grid["stud_h"]
     for at, normal in me["studs"]:

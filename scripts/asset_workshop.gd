@@ -1842,23 +1842,25 @@ static func _box_in(cells: Dictionary, at: Vector3i, size: Vector3i) -> bool:
 
 ## Lay a named part at a cell in the upright grid, in the held colour and material, as
 ## a click would. Returns false if it does not fit there.
-func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1) -> bool:
-	if not palette.has(arch) or _frame != 0:
+## `af`: lay it in that frame's grid (`asm.frames`; a sideways one), at a cell of that grid.
+func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1, af: int = 0) -> bool:
+	if not palette.has(arch) or (af == 0 and _frame != 0) or af < 0 or af >= asm.frames.size():
 		return false
+	var f: int = asm.frames[af]
 	var id: int = palette[arch]
-	if world.would_connect(chunk, cell, id) < 0 or not asm.can_place(chunk, cell, id):
+	if world.would_connect(f, cell, id) < 0 or not asm.can_place(f, cell, id):
 		return false
 	var c := _colour if colour < 0 else colour
 	var m := _mat if mat < 0 else mat
-	var placed := asm.place(chunk, cell, id, c)
+	var placed := asm.place(f, cell, id, c)
 	if placed < 0:
 		return false
 	if m != 0:
-		world.set_block_material(chunk, placed, m)
+		world.set_block_material(f, placed, m)
 	if not _redoing:
 		_redo.clear()
-	recipe.add(arch, cell, c, _recipe_frame_for(_frame), _role, m)
-	_placed_at.append([_frame, placed])
+	recipe.add(arch, cell, c, _recipe_frame_for(af), _role, m)
+	_placed_at.append([af, placed])
 	_edits.append("brick")
 	_after_edit()
 	return true
@@ -2696,15 +2698,25 @@ func export_sheet() -> Dictionary:
 	var z_lo := 1 << 30
 	var z_hi := -(1 << 30)
 	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+		var af := _brick_frame(i)
+		if af < 0:
 			continue
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
-		x_lo = mini(x_lo, c.x)
-		x_hi = maxi(x_hi, c.x + size.x)
-		y_lo = mini(y_lo, c.y)
-		z_lo = mini(z_lo, c.z)
-		z_hi = maxi(z_hi, c.z + size.z)
+		if af == 0:
+			var size := BrickPalette.size_of(recipe.part_of(i))
+			var c := recipe.cell_of(i)
+			x_lo = mini(x_lo, c.x)
+			x_hi = maxi(x_hi, c.x + size.x)
+			y_lo = mini(y_lo, c.y)
+			z_lo = mini(z_lo, c.z)
+			z_hi = maxi(z_hi, c.z + size.z)
+		else:
+			# A sideways brick's box, in cells of the upright grid (not whole ones).
+			var box := _brick_box(i)
+			x_lo = mini(x_lo, int(floor(box.position.x / BrickPalette.STUD_M + 1e-4)))
+			x_hi = maxi(x_hi, int(ceil(box.end.x / BrickPalette.STUD_M - 1e-4)))
+			y_lo = mini(y_lo, int(floor(box.position.y / BrickPalette.PLATE_M + 1e-4)))
+			z_lo = mini(z_lo, int(floor(box.position.z / BrickPalette.STUD_M + 1e-4)))
+			z_hi = maxi(z_hi, int(ceil(box.end.z / BrickPalette.STUD_M - 1e-4)))
 		var tag := part_of[i] if i < part_of.size() else 0
 		by_part.get_or_add(tag, []).append(i)
 	var along := func(x: float) -> float:
@@ -2732,9 +2744,12 @@ func export_sheet() -> Dictionary:
 			for i in ids:
 				var size := BrickPalette.size_of(recipe.part_of(i))
 				var c := recipe.cell_of(i)
-				var x0: float = along.call(c.x) if muzzle_end == "-x" else along.call(c.x + size.x)
-				bricks.append({"part": recipe.part_of(i), "min_mm": [x0, across.call(c.z), up.call(c.y)],
-						"size": [size.x, size.z, size.y]})
+				if _brick_frame(i) == 0:
+					var x0: float = along.call(c.x) if muzzle_end == "-x" else along.call(c.x + size.x)
+					bricks.append({"part": recipe.part_of(i), "min_mm": [x0, across.call(c.z), up.call(c.y)],
+							"size": [size.x, size.z, size.y]})
+				else:
+					bricks.append(_turned_brick(i, along, across, up, spec))
 			spec["bricks"] = bricks
 		parts.append(spec)
 		made[name] = spec
@@ -6163,7 +6178,7 @@ func export_game(dir: String = "") -> Dictionary:
 	settle_muzzle()
 	var by_part := {}
 	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
 		if GUN_PARTS.has(name):
@@ -6198,8 +6213,13 @@ func export_game(dir: String = "") -> Dictionary:
 		model.name = "Model"
 		model.transform = Transform3D(b, -(b * (at[name] as Vector3)))
 		root.add_child(model)
-		var mi := _bake_part_mesh(by_part[name])
-		model.add_child(mi)
+		# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
+		var groups := _by_frame(by_part[name])
+		for af in groups:
+			var mi := _bake_part_mesh(groups[af], af)
+			if af != groups.keys()[0]:
+				mi.name = "Bricks%d" % af
+			model.add_child(mi)
 		var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
 		if not extra.is_empty():
 			model.add_child(_studs_node(extra))
@@ -6228,10 +6248,9 @@ func export_game(dir: String = "") -> Dictionary:
 	var hi := -INF
 	for name in by_part:
 		for i in by_part[name]:
-			var c := recipe.cell_of(i)
-			var size := BrickPalette.size_of(recipe.part_of(i))
-			lo = minf(lo, c.x * BrickPalette.STUD_M)
-			hi = maxf(hi, (c.x + size.x) * BrickPalette.STUD_M)
+			var box := _brick_box(i)
+			lo = minf(lo, box.position.x)
+			hi = maxf(hi, box.end.x)
 	var length := (hi - lo) * GAME_PER_WORKSHOP
 	var manifest := {"name": recipe.name, "source": _current_path, "parts": written,
 			"hosts": host, "length_m": snappedf(length, 0.001)}
@@ -6244,19 +6263,14 @@ func export_game(dir: String = "") -> Dictionary:
 	return {"ok": true, "dir": dir, "parts": written, "length_m": length}
 
 
-## The middle of some bricks' cells, workshop metres.
+## The middle of some bricks' cells, workshop metres (sideways ones too).
 func _cells_centre(ids: Array) -> Vector3:
 	var sum := Vector3.ZERO
 	var n := 0
 	for i in ids:
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		for dx in size.x:
-			for dy in size.y:
-				for dz in size.z:
-					sum += Vector3((c.x + dx + 0.5) * BrickPalette.STUD_M, (c.y + dy + 0.5) * BrickPalette.PLATE_M,
-							(c.z + dz + 0.5) * BrickPalette.STUD_M)
-					n += 1
+		for p in _cell_points(i):
+			sum += p
+			n += 1
 	return sum / maxf(1.0, n)
 
 
@@ -6265,19 +6279,13 @@ func _tip(ids: Array, fwd: Vector3) -> Vector3:
 	var best := -INF
 	var cells := []
 	for i in ids:
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		for dx in size.x:
-			for dy in size.y:
-				for dz in size.z:
-					var p := Vector3((c.x + dx + 0.5) * BrickPalette.STUD_M, (c.y + dy + 0.5) * BrickPalette.PLATE_M,
-							(c.z + dz + 0.5) * BrickPalette.STUD_M)
-					var d := p.dot(fwd)
-					if d > best + 1e-4:
-						best = d
-						cells = [p]
-					elif absf(d - best) <= 1e-4:
-						cells.append(p)
+		for p: Vector3 in _cell_points(i):
+			var d := p.dot(fwd)
+			if d > best + 1e-4:
+				best = d
+				cells = [p]
+			elif absf(d - best) <= 1e-4:
+				cells.append(p)
 	var mid := Vector3.ZERO
 	for p in cells:
 		mid += p
@@ -6285,8 +6293,96 @@ func _tip(ids: Array, fwd: Vector3) -> Vector3:
 	return mid + fwd * BrickPalette.STUD_M * 0.5
 
 
+## A sideways brick for the print sheet: its middle in the gun's frame (mm: along, across,
+## up), `turn` -- where its own grid's x, y and z point in the gun's frame -- and its size
+## as an upright brick's (studs, studs, plates). The kit lays it as a solid of its own, off
+## the upright grid's cells. A plain brick's studs (those with nothing of its grid on them)
+## go into the part's hand studs, which the kit already lays; a shaped piece's come from
+## its catalogue profile, turned.
+func _turned_brick(i: int, along: Callable, across: Callable, up: Callable, spec: Dictionary) -> Dictionary:
+	var af := _brick_frame(i)
+	var rel := _frame_rel(af)
+	var arch := String(recipe.part_of(i))
+	var size := BrickPalette.size_of(arch)
+	var c := recipe.cell_of(i)
+	var gun := func(p: Vector3) -> Array:
+		return [snappedf(along.call(p.x / BrickPalette.STUD_M), 0.001), snappedf(across.call(p.z / BrickPalette.STUD_M), 0.001),
+				snappedf(up.call(p.y / BrickPalette.PLATE_M), 0.001)]
+	var sign := 1.0 if muzzle_end == "-x" else -1.0
+	var dir := func(v: Vector3) -> Array:
+		var d := rel.basis * v
+		return [snappedf(d.x * sign, 0.0001), snappedf(d.z, 0.0001), snappedf(d.y, 0.0001)]
+	var centre := rel * ((Vector3(c) + Vector3(size) * 0.5) * CELL_M)
+	if arch.begins_with("brick_") or arch.begins_with("plate_"):
+		var f: int = asm.frames[af]
+		for dx in size.x:
+			for dz in size.z:
+				if world.is_solid(f, c + Vector3i(dx, size.y, dz)):
+					continue
+				var foot := rel * ((Vector3(c.x + dx + 0.5, c.y + size.y, c.z + dz + 0.5)) * CELL_M)
+				(spec.get_or_add("studs_extra", []) as Array).append({"at": gun.call(foot), "normal": dir.call(Vector3.UP)})
+	return {"part": arch, "centre_mm": gun.call(centre), "size": [size.x, size.z, size.y],
+			"turn": [dir.call(Vector3.RIGHT), dir.call(Vector3.UP), dir.call(Vector3.BACK)]}
+
+
+## The frame of the workshop a brick is laid in (`asm.frames` index: 0 upright, else a
+## sideways grid), or -1 for a brick in a frame this workshop has no grid for.
+func _brick_frame(i: int) -> int:
+	return int(_placed_at[i][0]) if i < _placed_at.size() else -1
+
+
+## A frame's grid in the upright one's: frame-local metres to the workshop metres every
+## export works in.
+func _frame_rel(af: int) -> Transform3D:
+	if af <= 0:
+		return Transform3D.IDENTITY
+	return world.get_chunk_transform(asm.frames[0]).affine_inverse() * world.get_chunk_transform(asm.frames[af])
+
+
+## Some bricks by the frame they are laid in, the upright one first: frame -> ids.
+func _by_frame(ids: Array) -> Dictionary:
+	var out := {}
+	var frames := []
+	for i in ids:
+		var af := _brick_frame(i)
+		if af < 0:
+			continue
+		if not out.has(af):
+			frames.append(af)
+			out[af] = []
+		(out[af] as Array).append(i)
+	frames.sort()
+	var sorted := {}
+	for af in frames:
+		sorted[af] = out[af]
+	return sorted
+
+
+const CELL_M := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+
+
+## The middles of a brick's cells, in workshop metres, whichever grid it is laid in.
+func _cell_points(i: int) -> Array:
+	var rel := _frame_rel(_brick_frame(i))
+	var c := recipe.cell_of(i)
+	var size := BrickPalette.size_of(recipe.part_of(i))
+	var out := []
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				out.append(rel * ((Vector3(c + Vector3i(dx, dy, dz)) + Vector3(0.5, 0.5, 0.5)) * CELL_M))
+	return out
+
+
+## A brick's box in workshop metres, whichever grid it is laid in.
+func _brick_box(i: int) -> AABB:
+	var c := recipe.cell_of(i)
+	var size := BrickPalette.size_of(recipe.part_of(i))
+	return _frame_rel(_brick_frame(i)) * AABB(Vector3(c) * CELL_M, Vector3(size) * CELL_M)
+
+
 ## Some bricks laid on their own in a chunk of their own: [chunk, the cell of its corner].
-## The caller releases the chunk.
+## The bricks are all of one frame; their cells are that frame's. The caller releases it.
 func _part_chunk(ids: Array) -> Array:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
@@ -6308,7 +6404,8 @@ func _part_chunk(ids: Array) -> Array:
 ## in workshop metres (its studs a child), at their box's corner. No chamfer: at a held
 ## gun's size it is too small to see and cost 18% of the Thompson's triangles; the shader
 ## draws the brick outlines and its own bevel (geo_bevel 0).
-func _bake_part_mesh(ids: Array) -> MeshInstance3D:
+## `af`: the frame they are laid in -- the mesh is placed where that grid is.
+func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 	var made := _part_chunk(ids)
 	var c: int = made[0]
 	var lo: Vector3i = made[1]
@@ -6321,7 +6418,7 @@ func _bake_part_mesh(ids: Array) -> MeshInstance3D:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
 	mi.set_instance_shader_parameter("geo_bevel", 0.0)
-	mi.position = Vector3(lo.x * BrickPalette.STUD_M, lo.y * BrickPalette.PLATE_M, lo.z * BrickPalette.STUD_M)
+	mi.transform = _frame_rel(af) * Transform3D(Basis(), Vector3(lo) * CELL_M)
 	var studs: PackedFloat32Array = world.get_chunk_studs(c)
 	@warning_ignore("integer_division")
 	var count := studs.size() / 16
@@ -6349,7 +6446,7 @@ func triangle_stats() -> Dictionary:
 	var t0 := Time.get_ticks_usec()
 	var by_part := {}
 	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
 		(by_part.get_or_add(name, []) as Array).append(i)
@@ -6358,18 +6455,25 @@ func triangle_stats() -> Dictionary:
 	var total := 0
 	var draws := 0
 	for name in by_part:
-		var made := _part_chunk(by_part[name])
-		var c: int = made[0]
-		var bricks := _arrays_triangles(world.build_chunk_mesh(c))
-		@warning_ignore("integer_division")
-		var n_studs: int = (world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
-		world.release_chunk(c)
+		var bricks := 0
+		var n_studs := 0
+		var meshes := 0
+		var groups := _by_frame(by_part[name])
+		for af in groups:
+			var made := _part_chunk(groups[af])
+			var c: int = made[0]
+			var t := _arrays_triangles(world.build_chunk_mesh(c))
+			bricks += t
+			meshes += 1 if t > 0 else 0
+			@warning_ignore("integer_division")
+			n_studs += (world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
+			world.release_chunk(c)
 		var hand := 0
 		for st in extra_studs:
 			if String(st.get("part", "")) == name:
 				hand += 1
 		var studs := (n_studs + hand) * stud_tris
-		var d := (1 if bricks > 0 else 0) + (1 if n_studs > 0 else 0) + (1 if hand > 0 else 0)
+		var d := meshes + (groups.size() if n_studs > 0 else 0) + (1 if hand > 0 else 0)
 		parts[name] = {"bricks": bricks, "studs": studs, "draws": d}
 		total += bricks + studs
 		draws += d
@@ -6463,14 +6567,14 @@ func settle_muzzle() -> void:
 	var sum := {}
 	var n := {}
 	for i in recipe.size():
-		if recipe.frame_of(i) != 0 or i >= part_of.size():
+		if _brick_frame(i) < 0 or i >= part_of.size():
 			continue
 		var name := part_names[part_of[i]]
 		if not name in ["body", "barrel", "muzzle", "stock"]:
 			continue
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		sum[name] = float(sum.get(name, 0.0)) + (recipe.cell_of(i).x + size.x * 0.5) * size.x * size.y * size.z
-		n[name] = int(n.get(name, 0)) + size.x * size.y * size.z
+		for p: Vector3 in _cell_points(i):
+			sum[name] = float(sum.get(name, 0.0)) + p.x / BrickPalette.STUD_M
+			n[name] = int(n.get(name, 0)) + 1
 	var c := {}
 	for k in sum:
 		c[k] = float(sum[k]) / int(n[k])

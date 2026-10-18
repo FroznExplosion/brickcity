@@ -228,20 +228,55 @@ def _turn(v, yaw, flip):
     return (x, y, z)
 
 
+def _turned(b, d):
+    """A point `d` in a sideways brick's own grid (workshop axes: x, y up, z), from its
+    middle, in the gun's frame: the brick's `turn` is where its grid's x, y and z point
+    there (the asset workshop's sheet, `_turned_brick`)."""
+    tx, ty, tz = b["turn"]
+    c = b["centre_mm"]
+    return tuple(c[i] + tx[i] * d[0] + ty[i] * d[1] + tz[i] * d[2] for i in range(3))
+
+
+def _turned_box(bm, b, grid, inset=0.0, grow=0.0):
+    """A sideways plain brick: its box in its own grid, turned into the gun's frame."""
+    sx, sy, sz = b["size"]
+    hx = sx * grid["stud_pitch"] * 0.5 - inset + grow
+    hy = sz * grid["plate"] * 0.5 - inset + grow
+    hz = sy * grid["stud_pitch"] * 0.5 - inset + grow
+    v = {}
+    for ix in (-1, 1):
+        for iy in (-1, 1):
+            for iz in (-1, 1):
+                v[(ix, iy, iz)] = bm.verts.new(_turned(b, (ix * hx, iy * hy, iz * hz)))
+    new = []
+    for f in ([(-1, -1, -1), (-1, -1, 1), (-1, 1, 1), (-1, 1, -1)], [(1, -1, -1), (1, 1, -1), (1, 1, 1), (1, -1, 1)],
+              [(-1, -1, -1), (1, -1, -1), (1, -1, 1), (-1, -1, 1)], [(-1, 1, -1), (-1, 1, 1), (1, 1, 1), (1, 1, -1)],
+              [(-1, -1, -1), (-1, 1, -1), (1, 1, -1), (1, -1, -1)], [(-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)]):
+        new.append(bm.faces.new([v[k] for k in f]))
+    bmesh.ops.recalc_face_normals(bm, faces=new)
+
+
 def _shaped(bm, b, part_name, catalogue_part, yaw, flip, mirror_along, grid):
     """A shaped part from its catalogue profile, at nano size, into its laid box. Returns
-    its studs as [at, normal] in the gun's frame."""
+    its studs as [at, normal] in the gun's frame. A sideways one (`turn`) is placed by its
+    middle and its turn, not its box."""
     cat = _catalogue()[catalogue_part]
     k = grid["stud_pitch"] / 8.0          # the catalogue is in full-size mm
     w, h, l = (c * k for c in cat["grid_mm"])
     centre_local = (w * 0.5, h * 0.5, l * 0.5)
-    lo = b["min_mm"]
-    sx, sy, sz = b["size"]
-    centre = (lo[0] + sx * grid["stud_pitch"] * 0.5, lo[1] + sy * grid["stud_pitch"] * 0.5,
-              lo[2] + sz * grid["plate"] * 0.5)
+    turned = "turn" in b
+    if turned:
+        centre = b["centre_mm"]
+    else:
+        lo = b["min_mm"]
+        sx, sy, sz = b["size"]
+        centre = (lo[0] + sx * grid["stud_pitch"] * 0.5, lo[1] + sy * grid["stud_pitch"] * 0.5,
+                  lo[2] + sz * grid["plate"] * 0.5)
 
     def place(p):
         d = _turn((p[0] - centre_local[0], p[1] - centre_local[1], p[2] - centre_local[2]), yaw, flip)
+        if turned:
+            return _turned(b, d)
         # Workshop (x along the gun, y up, z across) to the gun's (along, across, up).
         return (centre[0] + (-d[0] if mirror_along else d[0]), centre[1] + d[2], centre[2] + d[1])
 
@@ -267,8 +302,9 @@ def _shaped(bm, b, part_name, catalogue_part, yaw, flip, mirror_along, grid):
             bm.faces.new([bm.verts.new(v) for v in f])
     studs = []
     if not flip:
+        up = list(b["turn"][1]) if turned else [0.0, 0.0, 1.0]
         for sxz in cat["studs_top_xz_mm"]:
-            studs.append([place((sxz[0] * k, h, sxz[1] * k)), [0.0, 0.0, 1.0]])
+            studs.append([place((sxz[0] * k, h, sxz[1] * k)), up])
     return studs
 
 
@@ -281,7 +317,10 @@ def placed(spec, part, grid):
     gap = pitch * 0.012
     cells = {}
     boxes = []
+    turned = [b for b in spec["bricks"] if "turn" in b]
     for b in spec["bricks"]:
+        if "turn" in b:
+            continue
         lo = b["min_mm"]
         sx, sy, sz = b["size"]
         hi = [lo[0] + sx * pitch, lo[1] + sy * pitch, lo[2] + sz * plate]
@@ -291,13 +330,25 @@ def placed(spec, part, grid):
                 for k in range(sz):
                     cells[(round(lo[0] / pitch) + i, round(lo[1] / pitch * 2) / 2 + j, round(lo[2] / plate) + k)] = len(boxes) - 1
     part["bricks"] = []
+    upright = [b for b in spec["bricks"] if "turn" not in b]
+    # Sideways bricks (built in a turned grid): each its own turned solid. Their plain
+    # studs came in the hand studs; a shaped one's from its profile.
+    for b in turned:
+        part["bricks"].append({"part": b["part"], "centre_mm": b["centre_mm"], "turn": b["turn"], "size": b["size"]})
+        base, yaw, flip = _orientation(b["part"])
+        cat = _catalogue().get(base)
+        if cat is not None and cat.get("profiles"):
+            for at, normal in _shaped(bm, b, b["part"], base, yaw, flip, False, grid):
+                part["studs"].append({"at": [round(c, 4) for c in at], "normal": normal, "on": "top"})
+        else:
+            _turned_box(bm, b, grid, inset=gap)
     for n, (lo, hi, sx, sy, sz) in enumerate(boxes):
-        name = spec["bricks"][n]["part"]
+        name = upright[n]["part"]
         part["bricks"].append({"part": name, "min_mm": lo, "size": [sx, sy, sz]})
         base, yaw, flip = _orientation(name)
         cat = _catalogue().get(base)
         if cat is not None and cat.get("profiles"):
-            for at, normal in _shaped(bm, spec["bricks"][n], name, base, yaw, flip,
+            for at, normal in _shaped(bm, upright[n], name, base, yaw, flip,
                                       spec.get("mirror_along", False), grid):
                 part["studs"].append({"at": [round(c, 4) for c in at], "normal": normal, "on": "top"})
             continue

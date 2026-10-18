@@ -224,6 +224,23 @@ the print files take only the upright frame's bricks: sideways pieces need those
 A resize that would not fit is now refused from the forms' box, before anything is worked
 out at that size (a x200 form was minutes of packing).
 
+### Sideways bricks go out too (2026-10-18)
+
+Bricks built sideways live in grids of their own (the workshop's six frames). Every way
+out of the workshop took only the upright grid's; now:
+
+| Where | How |
+|---|---|
+| **Export to game** | a part's bricks are meshed a frame at a time, each mesh placed where its grid is (`_frame_rel`: the frame's grid in the upright one's); the first is `Bricks`, the others `Bricks<frame>`. Its point, its muzzle tip, which way it points and the gun's length read every brick's cells wherever they are laid (`_cell_points`, `_brick_box`) |
+| **Triangle count** | the same meshes: it still equals what the exported gun draws |
+| **Print sheet and kit** | a sideways brick is not on the upright grid's cells (on its side a plate is 2 ticks thick along the gun, a stud 5), so the sheet gives it its middle, its `turn` (where its grid's x, y and z point in the gun's frame) and its size. The kit lays it as a solid of its own -- a turned box, or a turned catalogue piece -- welded on like a slope; a plain one's studs come as hand studs, a shaped one's from its profile, turned |
+
+Checked: a 2x4 with a plate and a slope laid sideways on its end exports, counts and
+prints -- one watertight piece, 10 studs, the plate's stud pointing out of the end.
+
+Still upright only: Explode, moving a part and the hands' baked parts leave a part's
+sideways bricks where they are.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
