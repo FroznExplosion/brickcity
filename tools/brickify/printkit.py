@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gunsmith as gs  # noqa: E402  (its catalogue, shaped parts, orientation, studs)
 
 HAIR = 0.02          # mm: how far a stud sinks, a slope grows, a hole reaches past a face
+SHELL_GROW = 0.08    # mm: how far a shell grows to weld to the parts it meets (asset workshop shells)
 HOLE_SEGMENTS = 16
 
 
@@ -230,12 +231,15 @@ def build(spec, me, holes, grid):
                 shell.faces.new((sv[t[n]], sv[t[n + 1]], sv[t[n + 2]]))
             except ValueError:
                 pass  # a face twice over: the surface is closed without it
+        # Corners at one place are one vertex: the game mesh gives each corner its own
+        # normal (hard edges), which would leave the solid open along every edge.
+        bmesh.ops.remove_doubles(shell, verts=shell.verts, dist=1e-4)
         bmesh.ops.recalc_face_normals(shell, faces=shell.faces)
-        # Grown a hair, as a slope is: it ends on the next part's face, and a union of
-        # faces that only touch leaves them apart.
+        # Grown, as a slope is but more: it ends on the next part's face (to within the
+        # sampling), and a union of faces that only touch leaves them apart.
         shell.normal_update()
         for p in shell.verts:
-            p.co += p.normal * HAIR
+            p.co += p.normal * SHELL_GROW
         if not solid:
             bm.free()
             bm = shell

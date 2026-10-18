@@ -255,20 +255,21 @@ inside it.
 | **The game** | Export to game writes the shell (`Shell`) and leaves out the bricks it covers; the triangle count counts the shell, not them |
 | **Print** | the sheet carries the shell's triangles; the kit makes them the part's solid, grown a hair to weld. The Thompson with its stock and grip shelled: every part watertight, the whole gun one piece |
 
-**Not good enough yet -- the next two stages:**
+### Shells, stage 2 (2026-10-18): exact edges, a triangle budget, embedded joins
 
-- **Teeth on edges.** Sampled as in-or-out, an edge running at a slant (a sketch's slanted
-  outline meeting the flat side) stays a staircase of samples however much it is
-  smoothed. The fix is a *distance* field: how far each sample is from the drawn outline,
-  so the surface lands on the line itself (the outlines are exact; only the sampling
-  loses them). C++, beside the mesher.
-- **Too many triangles.** Surface nets is as dense on a flat side as on a curve: the
-  stock's shell is 7,196 triangles at 2 samples a stud, 28,744 at 4, 64,624 at 6, where its
-  bricks and studs were ~5,000. The triangle slider should be a budget: decimate the
-  surface (quadric edge collapse) to that many, flat sides first.
+| Change | Why |
+|---|---|
+| **The surface is where the outlines are drawn**: the form is sampled as *distances* (`FormMesher.polygon_distance`: each sample's distance to the part's outlines, exact; brush strokes as round strokes; slabs cut to their thickness; views through it intersected, cut-throughs taken out) and the surface laid where the distance crosses zero, interpolated (`FormMesher.surface_sdf`) | sampled as in or out, a slanted outline meeting a flat side stayed a staircase of samples however it was smoothed -- the teeth |
+| A part with a depth pocket or a shape-brush shape keeps the in-or-out samples, blurred before the surface is laid (a staircase becomes a slope) | those are not composed as distances yet |
+| **Triangles** (a third shell slider, 100 to 30,000 a part, log scale; 1,500 unless set): the surface is decimated to about that many (quadric edge collapse, flat areas first, never folding a face, kept closed, no fan over 14). **Detail** stays: how finely the form is sampled | surface nets put as many triangles on a flat side as on a curve: the stock was 7,196-64,624 |
+| **Hard edges**: a corner's normal averages only the faces within 40 degrees of its own | the big flat sides shaded with smudges where the normals were averaged round a sharp edge |
+| **Embedded joins**: every cell where a shelled part meets another part's bricks stays a real brick inside the shell, kept in the game and the print. Only another part's bricks pin the shell flat (its own old slopes did, and held their stairs) | the drawn stock stops a little short of the body: the exact surface stood off it and printed loose. The bricks meet it exactly -- and bring their studs, so the body gets the stud holes and the parts plug together |
+| The print kit welds a shell by position and grows it 0.08 mm (`SHELL_GROW`) | a hard edge gives each corner its own vertex; a grown hair (0.02 mm) did not reach |
 
-Also still to come: embedded connection bricks (studs where the shell meets other parts),
-regions (a shell over part of a part), selecting and changing shells.
+The Thompson, stock and grip shelled at 4 samples a stud, 1,500 triangles each: the gun is
+9,516 triangles (13,268 all bricks); a shell takes 70-570 ms; printed, every part
+watertight, the stock 6 studs and the grip 7 into the body (19 stud holes), the whole gun
+one piece.
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
