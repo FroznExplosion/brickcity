@@ -305,6 +305,8 @@ public:
     /// 0 means one band, which is what every chunk is until asked otherwise.
     /// Re-bakes on change.
     void set_chunk_section_plates(int chunk_id, int plates);
+    /// Sections `studs` across on plan as well: tiles, not bands (0: bands).
+    void set_chunk_section_studs(int chunk_id, int studs);
     int get_chunk_sections(int chunk_id) const;
     /// Is this chunk's face bake current? A band built while it is not pays
     /// for re-baking the WHOLE chunk on the calling thread -- 55 ms against

@@ -22,7 +22,11 @@ extends SceneTree
 ##   * every index in a band points inside that band's own vertices;
 ##   * a band's face range is contiguous and the ranges tile the bake;
 ##   * damage in one band moves only that band's index bytes;
-##   * the structural answers do not change when the section height does.
+##   * the structural answers do not change when the section height does;
+##   * TILES (set_chunk_section_studs, Docs/Structures.md 2.2): a wide
+##     building cut into 32-stud tiles is still exactly the whole mesh, every
+##     block in one tile, and a blast moves the tiles it is in, not the rest of
+##     that floor.
 
 var _pass := 0
 var _fail := 0
@@ -33,6 +37,7 @@ func _init() -> void:
 	_check_bands_are_the_whole_mesh()
 	_check_damage_touches_one_band()
 	_check_structure_is_unchanged()
+	_check_tiles()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -175,3 +180,79 @@ func _check_structure_is_unchanged() -> void:
 			and (balance_two.com as Vector3).distance_to(balance_one.com as Vector3) < 0.0001)
 	_ok("and the collision is the same",
 			(w.get_body_boxes(chunk).get("boxes", []) as Array).size() == boxes_one)
+
+
+func _check_tiles() -> void:
+	print("
+tiles: a wide building cut across as well as up")
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, pal)
+	var id := reg.register(120, 70, 12, Transform3D())
+	var chunk := reg.materialise(id)
+	var whole: Array = w.build_chunk_mesh(chunk)
+	var whole_v: int = (whole[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var whole_drawn: int = _count(whole[Mesh.ARRAY_INDEX], whole_v)[0]
+	w.set_chunk_section_plates(chunk, 24)
+	var layers := w.get_chunk_sections(chunk)
+	w.set_chunk_section_studs(chunk, 32)
+	var n := w.get_chunk_sections(chunk)
+	var dims: Vector3i = w.get_chunk_dims(chunk)
+	var want := layers * ceili(dims.x / 32.0) * ceili(dims.z / 32.0)
+	_ok("%d layer(s) of %d x %d studs: %d tiles" % [layers, dims.x, dims.z, n], n == want,
+			"%d, wanted %d" % [n, want])
+	var sv := 0
+	var sd := 0
+	var bad := 0
+	var boxes: Array[AABB] = []
+	for s in n:
+		var a: Array = w.build_chunk_mesh_section(chunk, s)
+		if a.is_empty():
+			boxes.append(AABB())
+			continue
+		var verts: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+		var counted := _count(a[Mesh.ARRAY_INDEX], verts.size())
+		sv += verts.size()
+		sd += int(counted[0])
+		bad += int(counted[1])
+		var box := AABB(verts[0], Vector3.ZERO)
+		for v in verts:
+			box = box.expand(v)
+		boxes.append(box)
+	_ok("the tiles hold every vertex", sv == whole_v, "%d against %d" % [sv, whole_v])
+	_ok("  and draw exactly the faces the whole mesh draws", sd == whole_drawn,
+			"%d against %d" % [sd, whole_drawn])
+	_ok("  with no index outside its own tile", bad == 0, "%d" % bad)
+	var cell := BrickWorld.get_cell_size()
+	var narrow := 0
+	var widest := 0.0
+	for box in boxes:
+		widest = maxf(widest, maxf(box.size.x, box.size.z))
+		if maxf(box.size.x, box.size.z) <= (32 + 9) * cell.x:
+			narrow += 1
+	# A brick belongs to the tile its lowest corner is in, so a tile's drawing
+	# reaches a brick's length past its edge, no further.
+	_ok("  and every tile is 32 studs across or a brick more, not the building's width",
+			narrow == boxes.size(), "%d of %d; widest %.1f studs" % [narrow, boxes.size(), widest / cell.x])
+
+	var ids := PackedInt32Array()
+	for i in w.get_block_count(chunk):
+		ids.append(i)
+	var secs := w.get_block_sections(chunk, ids)
+	var outside := 0
+	for s in secs:
+		if s < 0 or s >= n:
+			outside += 1
+	_ok("every brick is in a tile", outside == 0, "%d not" % outside)
+
+	_ok("an untouched building uploads nothing", w.update_index_regions(chunk, 4).is_empty())
+	var at := w.get_chunk_transform(chunk) * Vector3(100 * cell.x, 4 * cell.y, 2 * cell.z)
+	var killed: PackedInt32Array = w.apply_hit(chunk, at, 1.2)
+	var moved: Array = w.update_index_regions(chunk, 4)
+	var hit := {}
+	for d in moved:
+		hit[int((d as Dictionary).section)] = true
+	var on_floor := n / layers
+	_ok("a blast at one end of the ground floor moves its tile(s), not the whole floor",
+			killed.size() > 0 and hit.size() > 0 and hit.size() < on_floor,
+			"%d killed, %d of %d tiles of that layer moved" % [killed.size(), hit.size(), on_floor])

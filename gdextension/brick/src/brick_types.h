@@ -10,6 +10,7 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -589,20 +590,57 @@ struct Chunk {
     // nothing changes for islands, fixtures or anything small.
     int section_plates = 0;
 
-    /// Which section a cell's Y belongs to.
+    // How many cells (studs) across a section is on plan, or 0 for the whole
+    // width: a section is then a band across the chunk, as it always was. Set,
+    // a section is a TILE -- section_studs square by section_plates tall --
+    // and a hit rebuilds the tile it lands in, not the whole floor of a wide
+    // building (Docs/Structures.md 2.2).
+    int section_studs = 0;
+
+    /// Which layer of sections a cell's Y belongs to.
     int section_of_y(int y) const {
         if (section_plates <= 0) {
             return 0;
         }
         const int s = (y - origin.y) / section_plates;
-        return s < 0 ? 0 : (s >= sections() ? sections() - 1 : s);
+        const int n = section_layers();
+        return s < 0 ? 0 : (s >= n ? n - 1 : s);
     }
 
-    int sections() const {
+    int section_layers() const {
         if (section_plates <= 0) {
             return 1;
         }
         return (dims.y + section_plates - 1) / section_plates;
+    }
+
+    int section_tiles_x() const {
+        return section_studs <= 0 ? 1 : std::max(1, (dims.x + section_studs - 1) / section_studs);
+    }
+
+    int section_tiles_z() const {
+        return section_studs <= 0 ? 1 : std::max(1, (dims.z + section_studs - 1) / section_studs);
+    }
+
+    /// Which section a cell is in: its layer, then its tile across the layer.
+    /// Numbered layer by layer from the bottom, so a band chunk (no tiles)
+    /// numbers its sections as it always did.
+    int section_of(const Vector3i &cell) const {
+        const int layer = section_of_y(cell.y);
+        if (section_studs <= 0) {
+            return layer;
+        }
+        const int nx = section_tiles_x();
+        const int nz = section_tiles_z();
+        int tx = (cell.x - origin.x) / section_studs;
+        int tz = (cell.z - origin.z) / section_studs;
+        tx = tx < 0 ? 0 : (tx >= nx ? nx - 1 : tx);
+        tz = tz < 0 ? 0 : (tz >= nz ? nz - 1 : tz);
+        return (layer * nz + tz) * nx + tx;
+    }
+
+    int sections() const {
+        return section_layers() * section_tiles_x() * section_tiles_z();
     }
 
     std::vector<int32_t> occupancy; // dims.x * dims.y * dims.z, -1 = empty
