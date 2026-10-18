@@ -177,19 +177,42 @@ is what the sliders will do.
 
 The drag box of the Shapes tool (K) still lays loose bricks.
 
+### The form, stage 2 (2026-10-17): the size slider
+
+| Change | Why |
+|---|---|
+| **Size of the block-out** (Sketch tool, under the slope setting): 25-300%. Let go and every part's form is scaled about the middle of the block-out, on its bottom -- outlines, brush strokes, thicknesses, pocket depths, shapes -- and every part laid again, as one undo; the slider is back at 100%. If the bigger block-out runs off the build area but would fit in it, it slides back in; too big, it is refused and says so. Bricks laid by hand, hand studs and connection points stay where they are | the block-out is drawn at whatever size is handy, then sized |
+
+The Thompson: x0.6 is 80 pieces and 4,594 triangles, x1.4 is 438 pieces and 26,134
+triangles, laid in ~100 ms; x1.5 is refused (81 studs long, the build area is 80). Undoing
+the x1.4 takes ~1.2 s: it lays hundreds of bricks back one by one.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
+
+**How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
+shape, size it, then fine-tune with the other tools; it is not expected to be used again on
+that asset. So the sliders act on the block-out before the hand work, and nothing has to
+keep hand edits in step with the form.
 
 Each part keeps a smooth **form** (its sketch outlines, which are already finer than the
 grid, and shape brushes as smooth solids); bricks are always worked out again from it, on
-the grid, the inside always filled largest brick first. Sliders: size, how many curves (a
-curve or slope fitted in any of its 24 turns where the form's surface leans), smoothness.
-**Slopes at any pitch** are an option: a generated `ShapedParts` profile per pitch. **Shells**:
-a custom part off the grid, from the form's surface in by a chosen thickness, its inner side
-hugging the brick core; placed by region, selected and changed afterwards. Where a shell
-meets the rest it is cut round real bricks embedded in it, which give it its studs and
-sockets, so it models none; faces between them are culled. In order: the triangle readout
-(done), the form and the core fill (stage 1 done), the sliders, shells, embedded bricks and culling,
-selecting and changing shells.
+the grid, the inside always filled largest brick first. Sliders: size (done), how many
+curves (a curve or slope fitted in any of its 24 turns where the form's surface leans),
+smoothness. **Slopes at any pitch** are an option: a generated `ShapedParts` profile per
+pitch. **Shells**: a custom part off the grid, from the form's surface in by a chosen
+thickness, its inner side hugging the brick core; placed by region, selected and changed
+afterwards, with a **triangle slider** of its own (low poly to smooth). Where a shell meets
+the rest it is cut round real bricks embedded in it, which give it its studs and sockets,
+so it models none; faces between them are culled.
+
+**Small custom parts** (a coffee cup a 1x1 brick big, low poly): a block-out finer than the
+grid -- a profile turned round an axis (as `gunsmith.py`'s turned parts), or drawn and
+extruded -- made into one custom part with the same triangle slider, taking the cells it
+covers on the grid.
+
+In order: the triangle readout (done), the form and the core fill (done), the size slider
+(done), the curve slider, shells with their triangle slider, embedded bricks and culling,
+selecting and changing shells, small custom parts.
 
 ### Phase 2 -- build a whole gun split by part
 
