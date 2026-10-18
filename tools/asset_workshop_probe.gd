@@ -1473,7 +1473,17 @@ func _shells() -> void:
 	_ok("a shell on the part: one mesh", mi != null and int(_ws._shell_tris.get("body", 0)) > 0,
 			str(_ws._shell_tris))
 	if mi != null:
-		var idx: PackedInt32Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+		var arr: Array = mi.mesh.surface_get_arrays(0)
+		var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+		# Corners at one place are one vertex (a hard edge gives each its own normal).
+		var first := {}
+		var welded := PackedInt32Array()
+		for i in idx:
+			var key: Vector3 = ((arr[Mesh.ARRAY_VERTEX] as PackedVector3Array)[i] * 1e6).round()
+			if not first.has(key):
+				first[key] = first.size()
+			welded.append(int(first[key]))
+		idx = welded
 		var edges := {}
 		var twice := true
 		for t in range(0, idx.size(), 3):
@@ -1533,4 +1543,22 @@ func _shells() -> void:
 	_ws._undo()
 	_ok("and again: no shell, every brick of the form back", not _ws.shells.has("body")
 			and not _ws._shell_nodes.has("body") and _form_filled("body") == bare, str(_form_filled("body")))
+	# Against another part: real bricks embedded where they meet, kept in the game and the
+	# print -- the join, with its studs.
+	_ws.select_part(_ws.part_names.find("barrel"))
+	_ok("a barrel brick against the body's end", _ws.place_named(BrickPalette.variant_name("brick_1x2", 0, false),
+			Vector3i(32, 21, 30)))
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.set_shell("body", {"thick": 0.5, "res": 2})
+	var joins: Dictionary = _ws._shell_joins.get("body", {})
+	var at_end := not joins.is_empty()
+	for c in joins:
+		at_end = at_end and c.x == 31
+	var kept := 0
+	for ps in _ws.export_sheet().parts:
+		if ps.name == "body":
+			kept = (ps.bricks as Array).size()
+	_ok("the cells against it are embedded bricks, on the sheet with the shell", at_end and kept > 0,
+			"%d join cells %s, %d bricks on the sheet" % [joins.size(), str(joins.keys().slice(0, 4)), kept])
+	_ws.set_shell("body", null)
 	_ws.rail_pick("place")

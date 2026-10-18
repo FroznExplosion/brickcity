@@ -2365,7 +2365,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shell_check.toggled.connect(func(on: bool) -> void:
 		var part := part_names[part_sel]
 		if on:
-			set_shell(part, {"thick": _shell_thick.value, "res": int(_shell_res.value)})
+			set_shell(part, _shell_settings())
 		else:
 			set_shell(part, null)
 		_sync_shell_ui(true))
@@ -2382,14 +2382,20 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shell_res.max_value = 8
 	_shell_res.step = 1
 	_shell_res.value = 4
-	for sl: HSlider in [_shell_thick, _shell_res]:
+	# Triangles: a budget, on a log scale -- 100 to 30,000.
+	_shell_budget = HSlider.new()
+	_shell_budget.min_value = 2.0
+	_shell_budget.max_value = 4.5
+	_shell_budget.step = 0.05
+	_shell_budget.value = log(SHELL_TRIS) / log(10.0)
+	for sl: HSlider in [_shell_thick, _shell_res, _shell_budget]:
 		sl.focus_mode = Control.FOCUS_NONE
 		sl.custom_minimum_size.x = 150
 		sl.value_changed.connect(func(_v: float) -> void: _sync_shell_ui(false))
 		sl.drag_ended.connect(func(_changed: bool) -> void:
 			var part := part_names[part_sel]
 			if shells.has(part):
-				set_shell(part, {"thick": _shell_thick.value, "res": int(_shell_res.value)})
+				set_shell(part, _shell_settings())
 			_sync_shell_ui(true))
 		_sketch_box.add_child(sl)
 	var finish := Label.new()
@@ -5471,6 +5477,7 @@ func set_shell(part: String, settings: Variant) -> void:
 		var st: Dictionary = (settings as Dictionary).duplicate()
 		st["thick"] = clampf(float(st.get("thick", 0.5)), 0.0, 4.0)
 		st["res"] = clampi(int(st.get("res", 4)), 1, 8)
+		st["tris"] = clampi(int(st.get("tris", was.get("tris", SHELL_TRIS) if was != null else SHELL_TRIS)), 50, 50000)
 		if not st.has("colour"):
 			st["colour"] = was.colour if was != null else _colour
 			st["mat"] = was.mat if was != null else _mat
@@ -5494,7 +5501,7 @@ func set_shell(part: String, settings: Variant) -> void:
 ## sample, `lo` the first sample, samples 1/k of a stud along and across and 1/k of a
 ## plate up -- or {} when it has no form. The sketches are scaled k times and laid out as
 ## a part's volume is (`scale_sketch`, `part_volume`): the same outlines, finer cells.
-## A sample on a face where the form meets a brick that is not its own is pinned (2): the
+## A sample on a face where the form meets another part's brick is pinned (2): the
 ## shell stays flat there, on the face, so it meets the next part rather than shrinking
 ## off it as the smoothing rounds everything else. `form`: the part's cells, if known.
 func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dictionary:
@@ -5529,6 +5536,14 @@ func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dicti
 	var dims := hi - lo + Vector3i.ONE
 	var field := PackedByteArray()
 	field.resize(dims.x * dims.y * dims.z)
+	# Another part's bricks, by block: this part's own (old slopes, a brick laid by hand)
+	# are not a face it meets -- pinned there, the shell kept their stairs.
+	var tag := part_names.find(part)
+	var other := {}
+	for i in _placed_at.size():
+		if int(_placed_at[i][0]) == 0 and i < part_of.size() and part_of[i] != tag:
+			other[int(_placed_at[i][1])] = true
+	var joins := {}   # the part's cells against another part's bricks
 	for c in fine:
 		var d: Vector3i = c - lo
 		var v := 1
@@ -5540,20 +5555,212 @@ func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dicti
 					continue
 				var nb := cell
 				nb[axis] += side
-				if not form.has(nb) and world.is_solid(chunk, nb):
+				if not form.has(nb) and other.has(world.block_at(chunk, nb)):
 					v = 2
+					if form.has(cell):
+						joins[cell] = true
 		field[d.x + dims.x * (d.y + dims.y * d.z)] = v
-	return {"field": field, "dims": dims, "lo": lo, "k": k}
+	var sf := {"field": field, "dims": dims, "lo": lo, "k": k, "joins": joins}
+	_shell_distance(list, sf)
+	return sf
+
+
+## The form as distances (studs; negative inside) on the samples round `sf`'s, one more
+## all round: what the drawn outlines are, exactly, not which samples they cover -- so the
+## shell follows a slanted outline and its corners instead of stepping with the samples.
+## Into `sf` as `distance`, `dlo`, `ddims`, `pins`. Only for forms of sketches (outlines and
+## brush strokes, in every view): a part with a pocket or a shape-brush shape keeps the
+## samples (and its shell is the blurred one).
+func _shell_distance(list: Array, sf: Dictionary) -> void:
+	var base := ""
+	for e in list:
+		var sk: Dictionary = e[1]
+		if sk.has("solid") or _has_pocket(sk):
+			return
+		if base == "" and not (sk.adds as Array).is_empty():
+			base = String(sk.plane)
+	if base == "" or not ClassDB.class_exists("FormMesher"):
+		return
+	var k: int = sf.k
+	var lo: Vector3i = sf.lo - Vector3i.ONE
+	var dims: Vector3i = sf.dims + Vector3i(2, 2, 2)
+	var n := dims.x * dims.y * dims.z
+	var dist := PackedFloat32Array()
+	dist.resize(n)
+	dist.fill(INF)
+	# The slabs on the base plane: each its outline's distance, cut to its thickness.
+	for e in list:
+		var sk: Dictionary = e[1]
+		if String(sk.plane) != base or (sk.adds as Array).is_empty():
+			continue
+		var grid := _sketch_distance(sk, lo, dims, k)
+		var axis := _plane_axis(base)
+		var lo_d: float
+		var hi_d: float
+		if base == "top":
+			lo_d = float(int(sk.at)) * 0.4
+			hi_d = lo_d + maxi(1, int(round(int(sk.width) * 2.5))) * 0.4
+		else:
+			lo_d = float(roundi(float(sk.at) - int(sk.width) * 0.5))
+			hi_d = lo_d + int(sk.width)
+		var scale_d := 0.4 if axis == 1 else 1.0
+		for z in dims.z:
+			for y in dims.y:
+				for x in dims.x:
+					var cell := Vector3i(x, y, z)
+					var a := ((lo + cell)[axis] + 0.5) / float(k) * scale_d
+					var depth := maxf(lo_d - a, a - hi_d)
+					var i := x + dims.x * (y + dims.y * z)
+					var g := _plane_cell(cell, base)
+					var v := maxf(grid[g.x + _plane_size(dims, base).x * g.y], depth)
+					dist[i] = minf(dist[i], v)
+	# Views through it: drawn in, only what is inside; drawn out, cut right through.
+	for e in list:
+		var sk: Dictionary = e[1]
+		var pl := String(sk.plane)
+		if pl == base:
+			continue
+		var keep := not (sk.adds as Array).is_empty()
+		var grid := _sketch_distance(sk, lo, dims, k, not keep)
+		var w := _plane_size(dims, pl).x
+		for z in dims.z:
+			for y in dims.y:
+				for x in dims.x:
+					var g := _plane_cell(Vector3i(x, y, z), pl)
+					var i := x + dims.x * (y + dims.y * z)
+					var v: float = grid[g.x + w * g.y]
+					dist[i] = maxf(dist[i], v if keep else -v)
+	var pins := PackedByteArray()
+	pins.resize(n)
+	var fd: Vector3i = sf.dims
+	var field: PackedByteArray = sf.field
+	for z in fd.z:
+		for y in fd.y:
+			for x in fd.x:
+				if field[x + fd.x * (y + fd.y * z)] == 2:
+					pins[(x + 1) + dims.x * ((y + 1) + dims.y * (z + 1))] = 1
+	sf["distance"] = dist
+	sf["dlo"] = lo
+	sf["ddims"] = dims
+	sf["pins"] = pins
+
+
+## Which axis of the build a plane's normal is.
+static func _plane_axis(plane: String) -> int:
+	match plane:
+		"front": return 0
+		"top": return 1
+	return 2
+
+
+## A sample of the box as a cell of a plane's grid (across, up): `_sketch_grid` for samples.
+static func _plane_cell(c: Vector3i, plane: String) -> Vector2i:
+	match plane:
+		"front": return Vector2i(c.z, c.y)
+		"top": return Vector2i(c.x, c.z)
+	return Vector2i(c.x, c.y)
+
+
+static func _plane_size(dims: Vector3i, plane: String) -> Vector2i:
+	return _plane_cell(dims, plane)
+
+
+## A sketch's outlines as distances (studs) over the box's samples seen from its plane:
+## its area drawn in (outlines and brush strokes), less what is cut right through -- or,
+## `cuts`, the cut-through area alone.
+func _sketch_distance(sk: Dictionary, lo: Vector3i, dims: Vector3i, k: int, cuts: bool = false) -> PackedFloat32Array:
+	var pl := String(sk.plane)
+	var size := _plane_size(dims, pl)
+	var origin := Vector2(_plane_cell(lo, pl)) / float(k)
+	var step := Vector2.ONE / float(k)
+	var sc := Vector2(1.0, 1.0) if pl == "top" else Vector2(1.0, 0.4)
+	var area := _entries_distance(sk.subs if cuts else sk.adds, origin, step, size, sc, cuts)
+	if cuts:
+		return area
+	var subs := _entries_distance(sk.subs, origin, step, size, sc, true)
+	if subs.is_empty():
+		return area
+	for i in area.size():
+		area[i] = maxf(area[i], -subs[i])
+	return area
+
+
+## The distance to some sketch entries -- outlines and brush strokes -- over a plane's
+## samples. `through_only`: only the entries that cut right through (not depth pockets).
+func _entries_distance(entries: Array, origin: Vector2, step: Vector2, size: Vector2i, sc: Vector2,
+		through_only: bool) -> PackedFloat32Array:
+	var polys := []
+	var brushes := []
+	for e in entries:
+		if e is Dictionary:
+			if e.has("cut"):
+				continue
+			if e.has("brush"):
+				brushes.append(e)
+		else:
+			var pts := PackedVector2Array()
+			for q in e:
+				pts.append(Vector2(float(q[0]), float(q[1])))
+			polys.append(pts)
+	var out := PackedFloat32Array()
+	if polys.is_empty() and brushes.is_empty():
+		return out
+	if not polys.is_empty():
+		out = ClassDB.class_call_static("FormMesher", "polygon_distance", polys, origin, step, size, sc)
+	else:
+		out.resize(size.x * size.y)
+		out.fill(INF)
+	# A brush stroke: within its reach of its path (round, its reach in studs).
+	for b in brushes:
+		var path: Array = b.brush
+		var r := float(b.get("rx", 0.5)) * sc.x
+		for v in size.y:
+			for u in size.x:
+				var q := Vector2((origin.x + (u + 0.5) * step.x) * sc.x, (origin.y + (v + 0.5) * step.y) * sc.y)
+				var best := INF
+				for j in path.size():
+					var a := Vector2(float(path[j][0]) * sc.x, float(path[j][1]) * sc.y)
+					var c := a if j + 1 >= path.size() else Vector2(float(path[j + 1][0]) * sc.x, float(path[j + 1][1]) * sc.y)
+					best = minf(best, Geometry2D.get_closest_point_to_segment(q, a, c).distance_to(q))
+				var i := u + size.x * v
+				out[i] = minf(out[i], best - r)
+	return out
 
 
 ## The cells a shelled part's bricks fill: every cell of the grid whose samples are all
-## inside the form shrunk by the shell's thickness.
+## inside the form shrunk by the shell's thickness -- and every cell where the part meets
+## another part's bricks: real bricks there, embedded in the shell, join it to that part
+## exactly (a drawn outline that stops a little short of the body still meets it).
 func shell_core(part: String, sf: Dictionary) -> Dictionary:
-	var core := {}
+	var core := (sf.get("joins", {}) as Dictionary).duplicate()
 	if sf.is_empty():
 		return core
 	var k: int = sf.k
 	var t := float(shells[part].thick)
+	if sf.has("distance"):
+		# Every sample of the cell at least the thickness inside the drawn surface.
+		var dd: Vector3i = sf.ddims
+		var dlo: Vector3i = sf.dlo
+		var dist: PackedFloat32Array = sf.distance
+		var worst := {}
+		for z in dd.z:
+			for y in dd.y:
+				for x in dd.x:
+					var f := dlo + Vector3i(x, y, z)
+					var c := Vector3i(floori(f.x / float(k)), floori(f.y / float(k)), floori(f.z / float(k)))
+					var v := dist[x + dd.x * (y + dd.y * z)]
+					worst[c] = maxf(float(worst.get(c, -INF)), v)
+		var counted := {}
+		for z in dd.z:
+			for y in dd.y:
+				for x in dd.x:
+					var f := dlo + Vector3i(x, y, z)
+					var c := Vector3i(floori(f.x / float(k)), floori(f.y / float(k)), floori(f.z / float(k)))
+					counted[c] = int(counted.get(c, 0)) + 1
+		for c in worst:
+			if int(counted[c]) == k * k * k and float(worst[c]) <= -t:
+				core[c] = true
+		return core
 	var reach := Vector3i(int(ceil(t * k)), int(ceil(t * 2.5 * k)), int(ceil(t * k)))
 	var dims: Vector3i = sf.dims
 	var lo: Vector3i = sf.lo
@@ -5583,10 +5790,20 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 			mi.queue_free()
 			_shell_nodes.erase(part)
 		_shell_tris.erase(part)
+		_shell_joins.erase(part)
 		return
 	var k: int = sf.k
 	var cell := CELL_M / float(k)
-	var arrays: Array = _form_mesher("surface", [sf.field, sf.dims, cell, SHELL_SMOOTH])
+	var st: Dictionary = shells[part]
+	var arrays: Array
+	var at: Vector3i = sf.lo
+	if sf.has("distance"):
+		arrays = _form_mesher("surface_sdf", [sf.distance, sf.pins, sf.ddims, cell, SHELL_SMOOTH_EXACT,
+				int(st.get("tris", SHELL_TRIS))])
+		at = sf.dlo
+	else:
+		arrays = _form_mesher("surface", [sf.field, sf.dims, cell, SHELL_SMOOTH, shell_blur(k),
+				int(st.get("tris", SHELL_TRIS))])
 	if mi == null:
 		mi = MeshInstance3D.new()
 		mi.name = "Shell_" + part
@@ -5597,8 +5814,9 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
 	mi.material_override = shell_material(part)
-	mi.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), Vector3(sf.lo) * cell)
+	mi.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), Vector3(at) * cell)
 	_shell_tris[part] = 0 if arrays.is_empty() else (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	_shell_joins[part] = sf.get("joins", {})
 	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
 
 
@@ -5640,13 +5858,24 @@ func _form_laid(part: String) -> Dictionary:
 	return out
 
 
-## Some bricks of a part less those its shell covers.
+## Some bricks of a part less those its shell covers. The embedded bricks where it meets
+## another part are kept: they are the join.
 func _uncovered(part: String, ids: Array) -> Array:
 	if not shells.has(part) or not _shell_nodes.has(part):
 		return ids
 	var laid := _form_laid(part)
+	var joins: Dictionary = _shell_joins.get(part, {})
 	return ids.filter(func(i: int) -> bool:
-		return _brick_frame(i) != 0 or not laid.has("%s|%s" % [recipe.part_of(i), recipe.cell_of(i)]))
+		if _brick_frame(i) != 0 or not laid.has("%s|%s" % [recipe.part_of(i), recipe.cell_of(i)]):
+			return true
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					if joins.has(c + Vector3i(dx, dy, dz)):
+						return true
+		return false)
 
 
 ## Lay every part again from its form with `level` slopes and curves (`curve_level`), as
@@ -5680,7 +5909,14 @@ var _shell_check: CheckBox
 var _shell_label: Label
 var _shell_thick: HSlider
 var _shell_res: HSlider
+var _shell_budget: HSlider
 var _shell_ui_part := -1
+
+
+## The shell sliders as settings: thickness, detail, triangles.
+func _shell_settings() -> Dictionary:
+	return {"thick": _shell_thick.value, "res": int(_shell_res.value),
+			"tris": int(round(pow(10.0, _shell_budget.value)))}
 
 
 ## The shell controls: the current part's settings when it changes (or `from_part`), and
@@ -5695,8 +5931,10 @@ func _sync_shell_ui(from_part: bool) -> void:
 		if not st.is_empty():
 			_shell_thick.set_value_no_signal(float(st.thick))
 			_shell_res.set_value_no_signal(int(st.res))
-	_shell_label.text = "shell %.2f studs thick, %d samples a stud%s" % [_shell_thick.value, int(_shell_res.value),
-			(": %s triangles" % _thousands(int(_shell_tris.get(part, 0)))) if _shell_tris.has(part) else ""]
+			_shell_budget.set_value_no_signal(log(float(st.get("tris", SHELL_TRIS))) / log(10.0))
+	_shell_label.text = "thickness %.2f studs, detail %d a stud, up to %s triangles%s" % [_shell_thick.value,
+			int(_shell_res.value), _thousands(int(round(pow(10.0, _shell_budget.value)))),
+			(" (now %s)" % _thousands(int(_shell_tris.get(part, 0)))) if _shell_tris.has(part) else ""]
 
 
 ## The box round every part's form, as `form_pivot` last found it.
@@ -6083,10 +6321,23 @@ var _gather := {}
 var shells := {}
 var _shell_nodes := {}       # part -> MeshInstance3D, in the upright grid
 var _shell_tris := {}        # part -> triangles of its shell
+var _shell_joins := {}       # part -> its cells against other parts: embedded bricks
 var _no_clip := false        # sampling a form finely: shapes are not cut to the build area
 var _no_edges := false       # laying a shelled part: no slopes or curves, the shell is the outside
-## How many times a shell's surface is smoothed: a stair of samples becomes a slope.
-const SHELL_SMOOTH := 16
+## How many times a shell's surface is smoothed, after its samples are blurred.
+const SHELL_SMOOTH := 4
+## Laid from the drawn outlines' distances, the surface is already where they are: only a
+## touch of smoothing, to even out the sampling.
+const SHELL_SMOOTH_EXACT := 1
+## A shell's triangles unless set: its surface is decimated to about this many.
+const SHELL_TRIS := 1500
+
+
+## How many times a shell's samples are blurred before the surface is laid (FormMesher):
+## a staircase of samples becomes the slant it stood for. Fewer at a coarse detail, where
+## a blur would round a thin part away.
+static func shell_blur(res: int) -> int:
+	return 2 if res >= 4 else (1 if res >= 2 else 0)
 
 
 ## The upright-grid bricks under an area of a plane, by recipe index, highest first: right
