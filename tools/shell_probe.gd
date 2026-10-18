@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_damage_shows()
 	_check_profile_survives_dematerialise()
 	_check_windows()
+	_check_windows_in_bricks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -264,3 +265,48 @@ func _check_windows() -> void:
 	var left: int = (hurt.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 4
 	_ok("a damaged storey shows no glass", left == panes - per_storey,
 			"%d panes, expected %d" % [left, panes - per_storey])
+
+
+## A building still in bricks gets its painted windows too (Docs/Structures.md
+## 4.2, the faked state), each only where the bricks still make a window: the
+## sill under it, the lintel over it and the floor behind it.
+func _check_windows_in_bricks() -> void:
+	print("\na building in bricks has its windows where its bricks still frame them")
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	var fx := 40
+	var fz := 30
+	var courses := 18
+	var id := reg.register(fx, fz, courses, Transform3D())
+	var seed := reg.room_seed_of(id)
+	var chunk := reg.materialise(id)
+	var origin := w.get_chunk_origin(chunk)
+	var standing := func(cell: Vector3i) -> bool: return w.is_solid(chunk, origin + cell)
+	var count := func(m: ArrayMesh) -> int:
+		if m == null:
+			return 0
+		@warning_ignore("integer_division")
+		return (m.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 4
+	var whole: int = count.call(BuildingShell.build_window_mesh(fx, fz, courses, seed))
+	var real: int = count.call(BuildingShell.build_window_mesh(fx, fz, courses, seed, {}, {},
+			standing))
+	_ok("every window of a whole building in bricks is painted", real == whole and whole > 0,
+			"%d of %d" % [real, whole])
+
+	# Knock out the sill under the first front window of the first storey.
+	var band: Dictionary = {}
+	for b in TowerRecipe.layout(courses):
+		if b.kind == "course" and TowerRecipe.is_window_course(int(b.index), courses):
+			band = b
+			break
+	var g: Vector2i = TowerRecipe.window_gaps(fx)[0]
+	@warning_ignore("integer_division")
+	var sill := Vector3i((g.x + g.y) / 2, int(band.y) - 1, 0)
+	_ok("the sill under a window is a brick", standing.call(sill))
+	w.kill_block(chunk, origin + sill)
+	var after: int = count.call(BuildingShell.build_window_mesh(fx, fz, courses, seed, {}, {},
+			standing))
+	_ok("a window with its sill shot out is not painted", after == whole - 1,
+			"%d panes, expected %d" % [after, whole - 1])
+	reg.dematerialise(id)

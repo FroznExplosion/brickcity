@@ -284,7 +284,14 @@ becomes bricks, alone (8.11). Past ~100 m the shell's windows paint a room behin
 
 ### 4.2 The plan: a room has three states
 1. **Faked** -- a room painted in the window itself (an interior-mapping shader on the opening), for
-   buildings in bricks as well as shells. Nothing per item.
+   buildings in bricks as well as shells. Nothing per item. **Built for bricks 2026-10-18:** a
+   damaged building past `DEMESH_RANGE`, drawn from its bricks (`CityScene._far_real`), had no
+   windows at all; it now gets the shell's panes (`BuildingShell.build_window_mesh`, its
+   `standing` question), each only where the bricks still frame it -- the sill under it, the lintel
+   over it, the floor 4 studs in behind it. A tower shot through at 160 m: 0 painted windows before,
+   201 after (`big_city.tscn -- --lodbreak --at=160`); `shell_probe` checks a whole building in
+   bricks gets every pane and one with a sill shot out loses that one. Inside `DEMESH_RANGE` the
+   drawn rooms (InteriorGroups, to 100 m) are what shows through a brick building's openings.
 2. **Drawn** -- its furniture drawn, no physics, only when it can be seen through an opening.
 3. **Live** -- collision, items that can be picked up, physics in a collapse: the room the player is
    in and its neighbours.

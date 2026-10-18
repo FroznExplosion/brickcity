@@ -2619,8 +2619,12 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# does, and with its own material so the brick material is untouched.
 	# Owed, not built here: _build_owed_glass makes them a tick or two later,
 	# so many in a tick, in its own budget.
-	if not coarse and not b.is_build() and not nothing_left and not real:
-		_glass_owed.append([mi, id, damage, fades])
+	# A damaged one drawn from its bricks (`real`) gets them too, each pane
+	# only where its window still stands in the bricks (Docs/Structures.md
+	# 4.2, the faked state): it used to get none, and past DEMESH_RANGE a
+	# damaged building was the one building with empty black windows.
+	if not coarse and not b.is_build() and not nothing_left:
+		_glass_owed.append([mi, id, {} if real else damage, fades, real])
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
 	_far_sync(b)
@@ -2639,7 +2643,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 ## shell stands a tick or two without its glass -- solid bands where the panes
 ## go, at a shell's distance.
 const GLASS_BUDGET_MS := 2.5
-var _glass_owed: Array = []   ## [shell node, building id, damage, fades]
+var _glass_owed: Array = []   ## [shell node, building id, damage, fades, drawn from its bricks]
 var glass_built := 0
 
 
@@ -2658,9 +2662,12 @@ func _build_owed_glass() -> void:
 		var b := registry.get_building(id)
 		if b == null:
 			continue
+		var standing := Callable()
+		if owed[4] and b.is_materialised():
+			standing = _cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk))
 		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
 				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				owed[2], b.recipe.get("program", {}))
+				owed[2], b.recipe.get("program", {}), standing)
 		made += 1
 		glass_built += 1
 		if panes == null:
@@ -2672,6 +2679,12 @@ func _build_owed_glass() -> void:
 		if owed[3]:
 			_fade_out(glass)
 		(mi as MeshInstance3D).add_child(glass)
+
+
+## Is this cell of a building's own grid (cells from its corner) a brick?
+## BuildingShell's question of a window still in bricks.
+func _cell_standing(cell: Vector3i, chunk: int, origin: Vector3i) -> bool:
+	return world.is_solid(chunk, origin + cell)
 
 
 ## The shaders the first fight would otherwise have built in the middle of it,
@@ -7895,6 +7908,15 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 		if pn != null and pn.is_visible_in_tree() and pn.multimesh != null:
 			gboxes += pn.multimesh.visible_instance_count if pn.multimesh.visible_instance_count >= 0 else pn.multimesh.instance_count
 	print("    its storey groups draw %d piece box(es)" % gboxes)
+	if shell != null:
+		var panes := 0
+		for c in shell.get_children():
+			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+				@warning_ignore("integer_division")
+				panes += (c as MeshInstance3D).mesh.surface_get_array_len(0) / 4
+		print("    its shell: %s mesh, %d painted window(s)%s" % [
+				"a" if shell.mesh != null else "no", panes,
+				", from its bricks" if _far_real_owed.has(b.id) or far_real_built > 0 else ""])
 	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
 			% [b.id, what, camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
 			"none" if shell == null else ("shown" if shell.visible else "hidden"),
