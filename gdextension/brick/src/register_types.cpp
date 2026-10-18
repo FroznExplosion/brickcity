@@ -5,6 +5,7 @@
 #include "impostor_set.h"
 #include "mesh_merge.h"
 #include "shaped_sampler.h"
+#include "form_mesher.h"
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
@@ -34,6 +35,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<MeshMerge>();
     // ShapedParts' cell sampling (scripts/shaped_parts.gd).
     ClassDB::register_class<ShapedSampler>();
+    // The asset workshop's shells: a smooth surface round a sampled form.
+    ClassDB::register_class<FormMesher>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();
