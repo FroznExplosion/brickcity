@@ -41,9 +41,12 @@ const NEWEL := 2
 ## continuous helicoid rather than a ladder with gaps to fall through.
 const STEP_PLATES := 2
 
-## Steps per course of the host building. A course is 3 plates and a step rises
-## 2, so a storey of six courses is nine steps.
-const STEPS_PER_COURSE := 1.5
+## Steps per course of the host building: a storey's height in steps over its
+## courses (steps_for_courses). A storey is six courses and a two-plate slab,
+## 20 plates, so ten steps -- exactly one storey a flight's ten. When the slab
+## was one plate a storey was 19, and nine steps a storey (1.5 a course) left
+## the flight a plate short of every floor and a storey short of the top of a
+## tall tower.
 
 
 ## Bake the eight sector archetypes. Returns sector index -> archetype id, as a
@@ -310,7 +313,8 @@ static func _mask(sector: int) -> PackedByteArray:
 
 ## How many steps reach the top of a building of this many courses.
 static func steps_for_courses(courses: int) -> int:
-	return maxi(int(round(float(courses) * STEPS_PER_COURSE)), STEPS_PER_TURN)
+	var per_course := float(TowerRecipe.STOREY_PLATES) 			/ float(TowerRecipe.COURSES_PER_FLOOR * STEP_PLATES)
+	return maxi(int(round(float(courses) * per_course)), STEPS_PER_TURN)
 
 
 ## The chunk a flight of this many steps needs, with its foot at the origin:

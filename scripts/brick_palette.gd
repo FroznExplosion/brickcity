@@ -127,6 +127,11 @@ const _PARTS := {
 	## 50,535-block tower -- so the size of the floor unit is the single biggest
 	## number in the whole brick budget.
 	"plate_10x10": Vector3i(10, 1, 10),
+	## Half and quarter panels: the edges of a floor's upper layer, which is
+	## laid half a panel over from the lower so every seam of one is bridged by
+	## the other (TowerRecipe._lay_slab). Structural parts, as the panel is.
+	"plate_5x10": Vector3i(5, 1, 10),
+	"plate_5x5": Vector3i(5, 1, 5),
 
 	# --- columns, six bricks tall ---------------------------------------
 	# One block each rather than six stacked bricks, because a column is a

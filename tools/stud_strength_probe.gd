@@ -31,7 +31,7 @@ func _overhang(tension: float) -> Array:
 	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(FOOT_X, FOOT_Z, COURSES))
 	TowerRecipe.build(w, c, palette, FOOT_X, FOOT_Z, COURSES)
 	w.set_tension_per_stud(c, tension)
-	var top: float = float(1 + TowerRecipe.STOREY_PLATES) * BrickWorld.get_cell_size().y
+	var top: float = float(TowerRecipe.SLAB_PLATES + TowerRecipe.STOREY_PLATES) * BrickWorld.get_cell_size().y
 	var y := 0.5
 	while y < top:
 		var x := 0.0

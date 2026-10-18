@@ -281,7 +281,7 @@ func _check_section(w: BrickWorld, reg: BuildingRegistry, groups: InteriorGroups
 	var cs := BrickWorld.get_cell_size()
 	var dims: Vector3i = w.get_chunk_dims(b.chunk)
 	var origin: Vector3i = w.get_chunk_origin(b.chunk)
-	var cut_y := 1 + 6 * TowerRecipe.STOREY_PLATES + 7
+	var cut_y := TowerRecipe.SLAB_PLATES + 6 * TowerRecipe.STOREY_PLATES + 7
 	var slab := PackedInt32Array()
 	for y in range(cut_y, cut_y + 6):
 		for x in dims.x:

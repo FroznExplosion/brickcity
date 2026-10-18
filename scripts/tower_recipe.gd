@@ -31,9 +31,11 @@ const PLATES_PER_COURSE := 3
 ## changed -- the city's shapes kept their height and lost floors instead, and
 ## floors are three quarters of a building's bricks (Docs/Scale.md).
 const COURSES_PER_FLOOR := 6
-const SLAB_PLATES := 1
-## A storey, slab and walls: the base slab is plates [0, 1), storey n's walls
-## [19n + 1, 19n + 19) and the slab over them 19(n + 1). So a block's storey is
+## Two plates: a floor is two layers of panels, the upper laid half a panel
+## over from the lower (_lay_slab).
+const SLAB_PLATES := 2
+## A storey, slab and walls: the base slab is plates [0, 2), storey n's walls
+## [20n + 2, 20n + 20) and the slab over them [20(n + 1), 20(n + 1) + 2). So a block's storey is
 ## its cell's y / STOREY_PLATES, in a piece of the building as much as in the
 ## building -- a piece keeps the building's cells (BrickWorld.split_island) --
 ## and a cut on a multiple of it frees a slab from the walls under it, leaving
@@ -606,16 +608,22 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					world.place_block(chunk_id, Vector3i(x, band.y, 0), palette.buttress_2x2, 1)
 
 
-## A floor: one whole panel per lattice cell, the outer ones under the walls.
+## A floor: one whole panel per lattice cell, the outer ones under the walls --
+## and over them a second layer, laid half a panel over (_lay_upper).
 ##
-## One plate thick, standing on the walls round its edge and on columns inside. It used to be two offset plate layers
-## -- plates side by side in one layer are not joined to each other at all, so a
-## single layer was held only at its edges and dropped out on the first solve --
-## and that fix cost **75% of every block in the building**: 30,855 plate_4x4
-## and 7,140 plate_2x2 of a 50,535-block tower.
+## Plates side by side in one layer are not joined to each other at all. One
+## layer of panels was held across each seam only by the column at its corners
+## and the interior wall on every third line, and the seams stood one over the
+## other up the building: a tower shot close up came apart in vertical slices,
+## 20 of 21 pieces, cut down the panel lines (Docs/CollapseNext.md 30; user,
+## 2026-10-18, "lego breaks along the layer lines"). Two layers offset is how a
+## LEGO floor is built: every panel of the upper layer sits across four of the
+## lower. It was two layers once before, of 4x4 plates -- 75% of every block in
+## a tower (30,855 plate_4x4 and 7,140 plate_2x2 of 50,535) -- and went to one
+## for that. Of panels it is about a twentieth more parts.
 ##
-## One panel per cell, and no fill anywhere, because the footprint divides. See
-## the lattice.
+## One panel per cell in the lower layer, and no fill anywhere, because the
+## footprint divides. See the lattice. Returns what the lower layer laid.
 static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		y: int, footprint_x: int, footprint_z: int, colour: int,
 		keepouts: Array, pl: Dictionary) -> Array:
@@ -653,7 +661,70 @@ static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		_fill_rect(world, chunk_id, palette, y, 0, t, t, footprint_z - t, colour, [])
 		_fill_rect(world, chunk_id, palette, y, footprint_x - t, t, footprint_x,
 				footprint_z - t, colour, [])
+	_lay_upper(world, chunk_id, palette, y + 1, footprint_x, footprint_z, colour, keepouts)
 	return laid
+
+
+## A floor's upper layer: panels on a grid half a panel over from the
+## lattice, so each covers the corners of four below; the strips that leaves
+## at the faces are half panels, the corners quarter panels. A cell part over a
+## keep-out -- a stairwell is whole lattice cells, so a quarter of an offset
+## cell is in it or not -- is laid as the quarters that are not, joined in
+## pairs where two are side by side.
+static func _lay_upper(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, footprint_x: int, footprint_z: int, colour: int, keepouts: Array) -> void:
+	@warning_ignore("integer_division")
+	var h := PANEL / 2
+	var cuts := func(span: int) -> Array:
+		var out := [0]
+		var at := h
+		while at < span:
+			out.append(at)
+			at += PANEL
+		out.append(span)
+		return out
+	var xs: Array = cuts.call(footprint_x)
+	var zs: Array = cuts.call(footprint_z)
+	for i in xs.size() - 1:
+		var x0: int = xs[i]
+		var x1: int = xs[i + 1]
+		for j in zs.size() - 1:
+			var z0: int = zs[j]
+			var z1: int = zs[j + 1]
+			if not _blocked(keepouts, x0, z0, x1 - x0, z1 - z0):
+				_plate(world, chunk_id, palette, y, x0, z0, x1 - x0, z1 - z0, colour)
+				continue
+			# The quarters (h x h) of this cell that are floor.
+			var free := {}
+			for qx in range(x0, x1, h):
+				for qz in range(z0, z1, h):
+					if not _blocked(keepouts, qx, qz, h, h):
+						free[Vector2i(qx, qz)] = true
+			for q: Vector2i in free.keys():
+				if not free.has(q):
+					continue
+				free.erase(q)
+				if free.has(q + Vector2i(h, 0)):
+					free.erase(q + Vector2i(h, 0))
+					_plate(world, chunk_id, palette, y, q.x, q.y, 2 * h, h, colour)
+				elif free.has(q + Vector2i(0, h)):
+					free.erase(q + Vector2i(0, h))
+					_plate(world, chunk_id, palette, y, q.x, q.y, h, 2 * h, colour)
+				else:
+					_plate(world, chunk_id, palette, y, q.x, q.y, h, h, colour)
+
+
+## One floor plate of `w` x `l` studs (a panel, half or quarter) at x, z.
+static func _plate(world: BrickWorld, chunk_id: int, palette: Dictionary, y: int,
+		x: int, z: int, w: int, l: int, colour: int) -> void:
+	var part := "plate_10x10"
+	if w != l:
+		part = "plate_5x10_x" if w > l else "plate_5x10_z"
+		if BrickPalette.size_of(part).x != w:
+			part = "plate_5x10_z" if w > l else "plate_5x10_x"
+	elif w < PANEL:
+		part = "plate_5x5"
+	world.place_block(chunk_id, Vector3i(x, y, z), palette[part], colour)
 
 
 ## Fill a rectangle with the largest parts that fit, biggest first, and say

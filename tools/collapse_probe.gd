@@ -281,7 +281,7 @@ func _check_interior() -> void:
 	_ok("far off, its drawing is let go", city.interior_groups.known(id).is_empty(),
 			"%d group(s) kept" % city.interior_groups.known(id).size())
 	var v0: int = b.structure_version
-	var slab_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var slab_y := box.position.y + (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
 	var x := box.position.x + 0.8
 	while x < box.end.x:
 		var z := box.position.z + 0.8
@@ -317,7 +317,7 @@ func _check_interior() -> void:
 ## middle: everything above comes away.
 func _undercut(id: int) -> void:
 	var box := _box(id)
-	var y := box.position.y + (1 + 1 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M + 1.2
+	var y := box.position.y + (TowerRecipe.SLAB_PLATES + 1 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
 	# Round the stairwell, not through it: a cut that spares the staircase is the
 	# one that left a section hanging on it (Docs/Collapse.md 2.1).
 	var shaft := AABB()
@@ -377,7 +377,7 @@ func _check_handover() -> void:
 		var b = city.registry.get_building(id)
 		if b.toppled or not b.is_materialised():
 			continue
-		var cut_y := (1 + 1 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M + 2.5
+		var cut_y := (TowerRecipe.SLAB_PLATES + 1 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 2.5
 		var dead := {}
 		for bid in city.world.get_dead_blocks(b.chunk):
 			dead[bid] = true
@@ -435,7 +435,7 @@ func _storey_left(id: int, keep: Array) -> Dictionary:
 	while (city._bands_building(id) or w < 30) and w < 30 * 20:
 		await physics_frame
 		w += 1
-	var y := box.position.y + (1 + TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
+	var y := box.position.y + (TowerRecipe.SLAB_PLATES + TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
 	var f0: Dictionary = city.gravity_fails.duplicate()
 	for pass_i in 2:
 		var x := box.position.x + 0.6
@@ -796,10 +796,10 @@ func _check_trapped() -> void:
 	city._mark_dirty(id)
 	await _drain()
 	await _ticks(30)
-	var storey_h := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	var storey_h := TowerRecipe.STOREY_PLATES * BrickPalette.PLATE_M
 	# The SECOND floor: with the stairs dead the shaft is an open drop, but from
 	# here it is two storeys -- further than anyone drops.
-	var floor_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var floor_y := box.position.y + (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
 	var cz := box.get_center().z
 	var inside: Vector3 = city.ai_nav.snap(Vector3(box.position.x + 2.2, floor_y + 0.2, cz))
 	var below: Vector3 = city.ai_nav.snap(Vector3(box.position.x + 2.2, box.position.y + 0.4, cz + 2.0))
@@ -1128,8 +1128,8 @@ func _check_shelter() -> void:
 	# The TOP storey: only its roof is over it. (Lower down, any slab above
 	# counts, and rightly -- a floor two up still keeps the lightning off.)
 	var storeys := ceili(float(city.registry.get_building(id).recipe.courses) / TowerRecipe.COURSES_PER_FLOOR)
-	var storey_h := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
-	var floor_y := box.position.y + (1 + (storeys - 1) * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var storey_h := TowerRecipe.STOREY_PLATES * BrickPalette.PLATE_M
+	var floor_y := box.position.y + (TowerRecipe.SLAB_PLATES + (storeys - 1) * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
 	var cz := box.get_center().z
 	# A top-storey spot with its roof over it: the first of a few that has one
 	# (the roof has openings -- the shaft, a light well -- so do not assume).
@@ -1290,7 +1290,7 @@ func _sever(id: int, storey: int) -> float:
 	var chunk: int = city._promote(id)
 	var fx := float(b.recipe.footprint_x) * BrickPalette.STUD_M
 	var fz := float(b.recipe.footprint_z) * BrickPalette.STUD_M
-	var y := (1 + storey * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var y := (TowerRecipe.SLAB_PLATES + storey * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
 	var cut: Vector3 = b.xform * Vector3(fx * 0.5, y, fz * 0.5)
 	city.world.separate_plane(chunk, cut, Vector3.UP, 0.14)
 	city.authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SEVER, id, cut, 0.14, Vector3.UP)
@@ -1423,7 +1423,7 @@ func _check_inside_topple() -> void:
 	while (city._bands_building(id) or w < 30) and w < 30 * 20:
 		await physics_frame
 		w += 1
-	var floor_y := box.position.y + (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * BrickPalette.PLATE_M
+	var floor_y := box.position.y + (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
 	# Off the middle: the stairwell is there, open to the ground.
 	var at: Vector3 = city.ai_nav.snap(Vector3(c.x - box.size.x * 0.3, floor_y + 0.2, c.z + box.size.z * 0.3))
 	_ok("the soldier stands on the second floor", absf(at.y - floor_y) < 0.5, "%.2f / %.2f" % [at.y, floor_y])
