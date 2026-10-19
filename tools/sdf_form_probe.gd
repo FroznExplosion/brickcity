@@ -167,6 +167,15 @@ func _init() -> void:
 	_ok("twice the size is about eight times the bricks", b1 > b0 * 6 and b1 < b0 * 10, "%d -> %d" % [b0, b1])
 	big.blur(2)
 	_ok("blurred stays about the same", absf(_cell_map(big.cells()).size() - b1) < b1 * 0.1)
+	# Two balls apart apart, halved: no blocks in the empty space between (it once filled the
+	# whole box round them, and ran out of memory on a long sculpt).
+	var apart := SdfForm.new()
+	apart.stroke(SdfForm.ADD, c, c, 6.0, 0.0, 1)
+	apart.stroke(SdfForm.ADD, c + Vector3(0, 0, 2000), c + Vector3(0, 0, 2000), 6.0, 0.0, 1)
+	var ab := apart.block_count()
+	apart.scale(0.5, c)
+	_ok("scaled down, empty space stays empty", apart.block_count() <= ab and apart.cells().size() > 0,
+			"%d -> %d blocks" % [ab, apart.block_count()])
 
 	# Two parts joined: each part's field ends where its label does.
 	var t := SdfForm.new()

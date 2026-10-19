@@ -382,35 +382,41 @@ void SdfForm::scale(float factor, const Vector3 &pivot) {
     if (factor <= 0.0f || blocks.empty()) {
         return;
     }
-    Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+    // Only the blocks a stored block lands on (not the whole box round them: a stroke
+    // far off made that box hundreds of thousands of blocks, minutes of work), and a
+    // sample is kept near only where its source is within the band -- empty space has
+    // no block, and scaled down it must stay empty, not become BAND * factor.
+    std::unordered_map<int64_t, bool> want;
     for (const auto &kv : blocks) {
         const Vector3 o = Vector3(unkey(kv.first)) * (float)B;
-        mn = mn.min(o);
-        mx = mx.max(o + Vector3(B, B, B));
+        const Vector3i lo = floor3(pivot + (o - pivot) * factor) - Vector3i(1, 1, 1);
+        const Vector3i hi = ceil3(pivot + (o + Vector3(B, B, B) - pivot) * factor) + Vector3i(1, 1, 1);
+        for (int bz = fdiv(lo.z, B); bz <= fdiv(hi.z, B); ++bz)
+            for (int by = fdiv(lo.y, B); by <= fdiv(hi.y, B); ++by)
+                for (int bx = fdiv(lo.x, B); bx <= fdiv(hi.x, B); ++bx)
+                    want[key(bx, by, bz)] = true;
     }
-    const Vector3i lo = floor3(pivot + (mn - pivot) * factor) - Vector3i(1, 1, 1);
-    const Vector3i hi = ceil3(pivot + (mx - pivot) * factor) + Vector3i(1, 1, 1);
     std::unordered_map<int64_t, std::unique_ptr<Block>> out;
-    for (int bz = fdiv(lo.z, B); bz <= fdiv(hi.z, B); ++bz)
-        for (int by = fdiv(lo.y, B); by <= fdiv(hi.y, B); ++by)
-            for (int bx = fdiv(lo.x, B); bx <= fdiv(hi.x, B); ++bx) {
-                auto nb = std::make_unique<Block>();
-                bool near = false;
-                for (int z = 0; z < B; ++z)
-                    for (int y = 0; y < B; ++y)
-                        for (int x = 0; x < B; ++x) {
-                            const Vector3 p((float)(bx * B + x) + 0.5f, (float)(by * B + y) + 0.5f, (float)(bz * B + z) + 0.5f);
-                            const Vector3 src = pivot + (p - pivot) / factor;
-                            const float d = clampb(trilinear(src) * factor);
-                            const Vector3i s = floor3(src);
-                            const int i = sidx(x, y, z);
-                            nb->d[i] = d;
-                            nb->part[i] = part_at(s.x, s.y, s.z);
-                            nb->flag[i] = flag_at(s.x, s.y, s.z);
-                            near = near || d < BAND;
-                        }
-                if (near) out[key(bx, by, bz)] = std::move(nb);
-            }
+    for (const auto &w : want) {
+        const Vector3i bc = unkey(w.first);
+        auto nb = std::make_unique<Block>();
+        bool near = false;
+        for (int z = 0; z < B; ++z)
+            for (int y = 0; y < B; ++y)
+                for (int x = 0; x < B; ++x) {
+                    const Vector3 p((float)(bc.x * B + x) + 0.5f, (float)(bc.y * B + y) + 0.5f, (float)(bc.z * B + z) + 0.5f);
+                    const Vector3 src = pivot + (p - pivot) / factor;
+                    const float ds = trilinear(src);
+                    const float d = ds < BAND ? clampb(ds * factor) : BAND;
+                    const Vector3i s = floor3(src);
+                    const int i = sidx(x, y, z);
+                    nb->d[i] = d;
+                    nb->part[i] = part_at(s.x, s.y, s.z);
+                    nb->flag[i] = flag_at(s.x, s.y, s.z);
+                    near = near || d < BAND;
+                }
+        if (near) out[w.first] = std::move(nb);
+    }
     for (const auto &kv : blocks) touch(kv.first, false);
     for (const auto &kv : out) {
         if (recording && undo.find(kv.first) == undo.end()) {

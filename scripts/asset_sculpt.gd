@@ -13,6 +13,8 @@ var _meshes := {}   # Vector3i block -> MeshInstance3D
 var _mat := StandardMaterial3D.new()
 var _cursor := MeshInstance3D.new()
 var _cursor_mat := StandardMaterial3D.new()
+## The plane a stroke will stay on, as a disc round the brush.
+var _disc := MeshInstance3D.new()
 
 
 func _init() -> void:
@@ -28,6 +30,22 @@ func _init() -> void:
 	_cursor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_cursor.visible = false
 	add_child(_cursor)
+	var dm := CylinderMesh.new()
+	dm.top_radius = 1.0
+	dm.bottom_radius = 1.0
+	dm.height = 0.02
+	dm.radial_segments = 48
+	dm.rings = 1
+	_disc.mesh = dm
+	var disc_mat := StandardMaterial3D.new()
+	disc_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	disc_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disc_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	disc_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.12)
+	_disc.material_override = disc_mat
+	_disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_disc.visible = false
+	add_child(_disc)
 
 
 ## Samples on the grid `grid` (the upright chunk's transform), `tick` metres a sample.
@@ -98,15 +116,22 @@ func _mesh(b: Vector3i) -> void:
 	mi.mesh = m
 
 
-## The brush: a ball `radius` samples round `at`, coloured by what it does.
-func show_cursor(at: Variant, radius: float, col: Color) -> void:
+## The brush: a ball `radius` samples round `at`, coloured by what it does; with a
+## `normal`, a disc of the plane its stroke stays on.
+func show_cursor(at: Variant, radius: float, col: Color, normal: Vector3 = Vector3.ZERO) -> void:
 	_cursor.visible = at != null
+	_disc.visible = at != null and normal != Vector3.ZERO
 	if at == null:
 		return
 	_cursor.position = at
 	_cursor.scale = Vector3.ONE * maxf(radius, 0.3)
 	col.a = 0.25
 	_cursor_mat.albedo_color = col
+	if _disc.visible:
+		var up := normal.normalized()
+		var side := up.cross(Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT).normalized()
+		var r := maxf(radius, 0.3) * 4.0
+		_disc.transform = Transform3D(Basis(side * r, up, side.cross(up) * r), at)
 
 
 func triangles() -> int:
