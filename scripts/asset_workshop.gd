@@ -400,13 +400,15 @@ func _shot() -> void:
 			sculpt_radius = st[1]
 			sculpt_blend = st[2]
 			_sculpt_dab(at.call(st[3], st[4]), at.call(st[5], st[6]))
-		# All marked smooth but the barrel's far half, which stays bricks.
-		_sculpt_op = SdfForm.MARK
-		sculpt_radius = 20.0
-		_sculpt_dab(at.call(-16.0, 0.0), at.call(30.0, 0.0))
-		_sculpt_op = SdfForm.UNMARK
-		sculpt_radius = 3.0
-		_sculpt_dab(at.call(30.0, 12.0), at.call(42.0, 12.0))
+		# All marked smooth but the barrel's far half, which stays bricks (--plain: nothing
+		# marked, all bricks, slopes and curves on the edges).
+		if not "--plain" in OS.get_cmdline_user_args():
+			_sculpt_op = SdfForm.MARK
+			sculpt_radius = 20.0
+			_sculpt_dab(at.call(-16.0, 0.0), at.call(30.0, 0.0))
+			_sculpt_op = SdfForm.UNMARK
+			sculpt_radius = 3.0
+			_sculpt_dab(at.call(30.0, 12.0), at.call(42.0, 12.0))
 		_sculpt_record(sculpt.form.end_edit())
 		sculpt_blend = 0.0
 		if "--convert" in OS.get_cmdline_user_args():
@@ -907,6 +909,11 @@ func build_centre() -> Vector3:
 
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
+		return
+	# The wheel over the rail scrolls the rail only: at its end it must not go on to the
+	# hotbar (or zoom).
+	if e is InputEventMouseButton and _over_rail():
+		get_viewport().set_input_as_handled()
 		return
 	if _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
 			or _move_input(e):
@@ -3524,7 +3531,8 @@ func _sculpt_input(e: InputEvent) -> bool:
 		return true
 	if e is InputEventMouseMotion:
 		var p = _sculpt_point(false)
-		sculpt.show_cursor(p, _sculpt_r(), _sculpt_colour())
+		sculpt.show_cursor(p, _sculpt_r(), _sculpt_colour(),
+				_sculpt_plane.normal if sculpt_place != "surface" else Vector3.ZERO)
 		if _sculpt_on and p != null and p.distance_to(_sculpt_last) > maxf(0.3, _sculpt_r() * 0.25):
 			_sculpt_dab(_sculpt_last, p)
 		return _sculpt_on
@@ -3553,22 +3561,41 @@ func _sculpt_colour() -> Color:
 	return Color(0.6, 0.9, 1.0)
 
 
-## Where the brush is, in samples, or null: on the block-out's surface under the mouse,
-## else on the working plane; while an add is under way, at the depth it started.
+## Where the brush is, in samples, or null (after Blender's Grease Pencil "stroke
+## placement"). A stroke starts on the block-out's surface under the mouse, else on the
+## working plane. Then, placed "on a plane", it stays on the plane through its start that
+## faces the camera most squarely (one of the grid's three), and "on the working plane"
+## on a plane parallel to that one -- kept for the whole stroke, so turning or flying the
+## camera does not bend it (a fixed distance from the camera once did: strokes curved
+## round the player). "On the surface" follows the surface all the way.
 func _sculpt_point(start: bool) -> Variant:
 	var ray := _mouse_ray()
 	var r := sculpt.ray_to_samples(ray[0], ray[1])
-	if _sculpt_on and not start and _sculpt_op == SdfForm.ADD:
-		return r[0] + r[1] * _sculpt_depth
-	var h = sculpt.hit(ray[0], ray[1])
+	if _sculpt_on and not start and sculpt_place != "surface":
+		return _sculpt_plane.intersects_ray(r[0], r[1])
+	var h = sculpt.hit(ray[0], ray[1]) if sculpt_place != "work" else null
 	if h == null:
 		var w = work_plane_hit(ray[0], ray[1])
 		if w == null:
 			return null
 		h = sculpt.to_sample(w)
-	if start:
-		_sculpt_depth = (h - r[0]).length()
+	if not _sculpt_on or start:
+		_sculpt_plane = Plane(_sculpt_normal(r[1]), h)
 	return h
+
+
+## The normal of the plane a stroke stays on: the working plane's, or the grid axis the
+## view looks along most (samples run along the grid's axes).
+func _sculpt_normal(dir: Vector3) -> Vector3:
+	if sculpt_place == "work":
+		match work_plane:
+			"top": return Vector3.UP
+			"front": return Vector3.RIGHT
+		return Vector3.BACK
+	var a := dir.abs()
+	if a.x >= a.y and a.x >= a.z:
+		return Vector3.RIGHT
+	return Vector3.UP if a.y >= a.z else Vector3.BACK
 
 
 ## A capsule of the brush from `a` to `b`, and its mirror image when the mirror is on.
@@ -3685,6 +3712,12 @@ func _build_sculpt_box() -> void:
 	modes.focus_mode = Control.FOCUS_NONE
 	modes.item_selected.connect(func(i: int) -> void: sculpt_mode = SCULPT_MODES[i][0])
 	_sculpt_box.add_child(modes)
+	var places := OptionButton.new()
+	for m in SCULPT_PLACES:
+		places.add_item(m[1])
+	places.focus_mode = Control.FOCUS_NONE
+	places.item_selected.connect(func(i: int) -> void: sculpt_place = SCULPT_PLACES[i][0])
+	_sculpt_box.add_child(places)
 	var slider := func(text: String, lo: float, hi: float, step: float, v: float, set_v: Callable) -> HSlider:
 		var l := Label.new()
 		_sculpt_box.add_child(l)
@@ -3760,16 +3793,31 @@ func _build_sculpt_box() -> void:
 ## Every upright brick's cells with its part: as `SdfForm.cells` gives them (label is the
 ## part + 1), for `sync_cells`.
 func _brick_cell_list() -> PackedInt32Array:
+	# A slope or a curve fills only part of its box: the cells of it the field had at the
+	# last Convert are what it stands for (so one Convert laid goes back unchanged); one
+	# laid since counts whole.
+	var had := {}
+	for i in range(0, _sdf_cells.size(), 5):
+		had[Vector3i(_sdf_cells[i], _sdf_cells[i + 1], _sdf_cells[i + 2])] = true
 	var m := {}
 	for i in recipe.size():
 		if _brick_frame(i) != 0:
 			continue
 		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
+		var arch := recipe.part_of(i)
+		var size := BrickPalette.size_of(arch)
+		var part := (part_of[i] if i < part_of.size() else 0) + 1
+		var cs := []
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
-					m[c + Vector3i(dx, dy, dz)] = (part_of[i] if i < part_of.size() else 0) + 1
+					cs.append(c + Vector3i(dx, dy, dz))
+		if BrickPalette.is_shaped(BrickPalette.part_of(arch)):
+			var kept := cs.filter(func(k: Vector3i) -> bool: return had.has(k))
+			if not kept.is_empty():
+				cs = kept
+		for k in cs:
+			m[k] = part
 	var out := PackedInt32Array()
 	for c in m:
 		out.append_array([c.x, c.y, c.z, m[c], 0])
@@ -3927,7 +3975,32 @@ func sculpt_convert() -> void:
 	for label in by_part:
 		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
 		var col: Array = part_col.get(part_sel + 1, [-1, -1])
-		for b in pack_cells(by_part[label]):
+		var left: Dictionary = by_part[label]
+		# Slopes and curves on the brick cells' edges, as the curve slider has them -- seen
+		# from the side and from the front, as the sketch's form lays them.
+		if curve_level >= 1:
+			var vol := {}
+			for c in left:
+				if zone.has(c):
+					vol[c] = true
+			var taken := {}
+			var edges := []
+			for view in ["side", "front"]:
+				edges.append_array(_edge_runs([], vol, view, {}, taken))
+			for b in edges:
+				var at: Vector3i = b[1]
+				var size := BrickPalette.size_of(String(b[0]))
+				var cs := []
+				for dx in size.x:
+					for dy in size.y:
+						for dz in size.z:
+							var c := at + Vector3i(dx, dy, dz)
+							if left.has(c):
+								cs.append(c)
+				if not cs.is_empty() and place_named(String(b[0]), at, col[0], col[1]):
+					for c in cs:
+						left.erase(c)
+		for b in pack_cells(left):
 			var at: Vector3i = b[1]
 			if place_named(String(b[0]), at, col[0], col[1]):
 				var size := BrickPalette.size_of(String(b[0]))
@@ -5095,6 +5168,14 @@ func edge_variant(kind: String, wide: int, rises: int, under: bool, plane: Strin
 ## How far the mouse moves while a click is held: a run starts only past RUN_START_PX.
 ## Seen here, ahead of the camera, which takes the motion when the mouse is captured.
 func _input(e: InputEvent) -> void:
+	# The rail keeps no keyboard focus once the mouse is off it: Space (fly up) and the
+	# arrows would press or step whatever was clicked last. A text or number box keeps it
+	# while it is being typed in.
+	if (e is InputEventKey or e is InputEventMouseMotion) and _rail != null:
+		var f := get_viewport().gui_get_focus_owner()
+		if f != null and _rail.is_ancestor_of(f) and not (f is LineEdit or f is SpinBox or f is TextEdit) \
+				and (e is InputEventKey or not _over_rail()):
+			f.release_focus()
 	super._input(e)
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
@@ -5187,7 +5268,11 @@ var sculpt_blend := 0.0      # studs: how far an add or a carve blends into what
 var _sculpt_on := false
 var _sculpt_op := 0
 var _sculpt_last := Vector3.ZERO
-var _sculpt_depth := 0.0
+## Where the brush sits; the plane a stroke stays on (samples).
+const SCULPT_PLACES := [["plane", "brush on a plane facing you"], ["surface", "brush on the surface"],
+		["work", "brush on the working plane"]]
+var sculpt_place := "plane"
+var _sculpt_plane := Plane(Vector3.BACK, 0.0)
 var _sculpt_box: VBoxContainer
 var _sculpt_note: Label
 var _sketch_how: Label
@@ -5435,6 +5520,11 @@ func _fit_rail(n: Node) -> void:
 					(k as SpinBox).custom_minimum_size.x = 64
 			continue
 		_fit_rail(c)
+
+
+func _over_rail() -> bool:
+	return _rail != null and _rail.is_visible_in_tree() \
+			and _rail.get_global_rect().has_point(_rail.get_global_mouse_position())
 
 
 ## Where things to the right of the rail start.

@@ -1739,6 +1739,15 @@ func _convert_plain() -> void:
 	_ok("unmarked: Convert lays only bricks", sdf_pieces == 0 and _ws._sdf_shell.is_empty()
 			and _ws._brick_cell_list().size() / 5 == n, "%d pieces, %d of %d cells bricks" % [sdf_pieces,
 			_ws._brick_cell_list().size() / 5, n])
+	var shaped := 0
+	for i in _ws.recipe.size():
+		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.recipe.part_of(i))))
+	_ok("its rounded edges get slopes and curves", shaped > 0, "%d shaped of %d" % [shaped, _ws.recipe.size()])
+	var first := _asset_cells()
+	_ws.sculpt_to_sdf()
+	_ws.sculpt_convert()
+	_ok("and back and converted again: the same cells", _asset_cells() == first,
+			"%d vs %d" % [_asset_cells().size(), first.size()])
 
 
 ## The asset's cells after a Convert: its bricks', and those its custom pieces fill alone.
