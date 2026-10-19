@@ -18,7 +18,7 @@
 using namespace godot;
 
 /// The asset workshop's block-out: one signed distance field for the whole asset,
-/// sculpted in 3D, with a part label and a brick-zone flag on every sample
+/// sculpted in 3D, with a part label and a smooth flag on every sample
 /// (Docs/AssetWorkshop.md, "The SDF block-out").
 ///
 /// Units: one sample a TICK (a stud is 5, a plate 2; 0.07 m), so the field lines up
@@ -36,7 +36,7 @@ using namespace godot;
 /// add changed; paint relabels without changing the shape.
 ///
 /// Bricks and the field: `cells` reads which brick cells are solid (the middle of
-/// the cell inside) and which part and zone each is; `sync_cells` writes back only
+/// the cell inside) and which part and smooth flag each has; `sync_cells` writes back only
 /// the cells that changed -- a brick added is a box unioned, a brick taken a box
 /// carved -- so the smooth surface stays smooth wherever the bricks were not
 /// touched, and `cells` gives back exactly the bricks that were synced.
@@ -90,7 +90,7 @@ private:
 public:
     /// A capsule from `a` to `b` (samples), `radius` round it: a sphere when a == b.
     /// `op`: ADD, REMOVE, SMOOTH (blur, `blend` its strength 0-1), PAINT (label
-    /// `part`), MARK / UNMARK (brick zone). `blend`: for ADD and REMOVE, how far
+    /// `part`), MARK / UNMARK (smooth: a custom piece on Convert; unmarked is bricks). `blend`: for ADD and REMOVE, how far
     /// (samples) the shape blends into what is there.
     void stroke(int op, const Vector3 &a, const Vector3 &b, float radius, float blend, int part);
     /// A box, `center` and `half` its half size (samples).
@@ -121,8 +121,8 @@ public:
     Array take_dirty();
     Array block_keys() const;
     /// The surface in block `b` (surface nets, normals from the field), in samples
-    /// from the grid's corner: ArrayMesh arrays with COLOR from `palette[part]` (alpha
-    /// 0.5 where the brick zone is), or empty.
+    /// from the grid's corner: ArrayMesh arrays with COLOR from `palette[part]` (lighter
+    /// where marked smooth), or empty.
     Array mesh_block(const Vector3i &b, const PackedColorArray &palette) const;
 
     /// The first surface point along a ray (samples), or null.
@@ -135,8 +135,8 @@ public:
 
     /// Dense distances of part `part` (0: every part) over `dims` samples from `lo`:
     /// another part's solid counts as just outside, so each part ends where its label
-    /// does. `smooth_only`: brick-zone samples count as just outside too, so a custom
-    /// part ends where its bricks begin. For shells.
+    /// does. `smooth_only`: unmarked (brick) samples count as just outside too, so a
+    /// custom part ends where its bricks begin. For shells.
     PackedFloat32Array part_field(int part, const Vector3i &lo, const Vector3i &dims, bool smooth_only = false) const;
 
     PackedByteArray to_bytes() const;
