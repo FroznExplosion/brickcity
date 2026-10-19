@@ -768,13 +768,25 @@ PackedFloat32Array BrickWorld::get_chunk_studs_section(int chunk_id, int section
     return chunk_studs(chunk_id, section, false);
 }
 
+PackedByteArray BrickWorld::get_chunk_studs_open(int chunk_id, int section) const {
+    std::vector<uint8_t> open;
+    chunk_studs(chunk_id, section, false, &open);
+    PackedByteArray out;
+    out.resize((int64_t)open.size());
+    if (!open.empty()) {
+        std::memcpy(out.ptrw(), open.data(), open.size());
+    }
+    return out;
+}
+
 Array BrickWorld::split_studs(const PackedFloat32Array &buffer, Vector3 eye,
-        const PackedFloat32Array &rings) {
+        const PackedFloat32Array &rings, const PackedByteArray &open, int closed_rings) {
     Array out;
     const int ring_n = (int)rings.size();
     std::vector<std::vector<float>> parts((size_t)ring_n);
     const float *r = buffer.ptr();
     const int64_t n = buffer.size() / 16;
+    const uint8_t *o = open.size() == n ? open.ptr() : nullptr;
     for (int64_t i = 0; i < n; ++i) {
         // Sixteen floats: three rows of the basis with the origin in each
         // row's fourth, then the colour (chunk_studs).
@@ -783,7 +795,8 @@ Array BrickWorld::split_studs(const PackedFloat32Array &buffer, Vector3 eye,
         const float dy = at[7] - (float)eye.y;
         const float dz = at[11] - (float)eye.z;
         const float d2 = dx * dx + dy * dy + dz * dz;
-        for (int k = 0; k < ring_n; ++k) {
+        const int last = (o != nullptr && o[i] == 0) ? std::min(ring_n, closed_rings) : ring_n;
+        for (int k = 0; k < last; ++k) {
             if (d2 < rings[k] * rings[k]) {
                 parts[(size_t)k].insert(parts[(size_t)k].end(), at, at + 16);
                 break;
@@ -818,7 +831,8 @@ bool BrickWorld::stud_turn(const Vector3i &size, const Vector3i &corner) {
     return ((h >> 4) & 1u) != 0;
 }
 
-PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furniture) const {
+PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furniture,
+        std::vector<uint8_t> *open) const {
     PackedFloat32Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -873,6 +887,18 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
             }
             push(((float)cell.x + 0.5f) * STUD_M, (float)(cell.y + 1) * PLATE_M,
                     ((float)cell.z + 0.5f) * STUD_M, false, turn, col);
+            if (open != nullptr) {
+                // Up the column to the first brick: on a storey's floor that
+                // is the slab over it, a storey up, so this stops soon.
+                uint8_t clear = 1;
+                for (int y = cell.y + 2; y < c.dims.y; ++y) {
+                    if (c.solid_at(Vector3i(cell.x, y, cell.z))) {
+                        clear = 0;
+                        break;
+                    }
+                }
+                open->push_back(clear);
+            }
         }
         for (const Archetype::SurfaceCell &sc : a.bottom_cells) {
             if (a.down_at(sc.x, sc.z) != FACE_STUD) {
@@ -884,6 +910,16 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
             }
             push(((float)cell.x + 0.5f) * STUD_M, (float)cell.y * PLATE_M,
                     ((float)cell.z + 0.5f) * STUD_M, true, turn, col);
+            if (open != nullptr) {
+                uint8_t clear = 1;
+                for (int y = cell.y - 2; y >= 0; --y) {
+                    if (c.solid_at(Vector3i(cell.x, y, cell.z))) {
+                        clear = 0;
+                        break;
+                    }
+                }
+                open->push_back(clear);
+            }
         }
     }
     return out;
@@ -9568,8 +9604,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_studs", "chunk_id"), &BrickWorld::get_chunk_studs);
     ClassDB::bind_method(D_METHOD("get_chunk_studs_section", "chunk_id", "section"),
             &BrickWorld::get_chunk_studs_section);
-    ClassDB::bind_static_method("BrickWorld", D_METHOD("split_studs", "buffer", "eye", "rings"),
-            &BrickWorld::split_studs);
+    ClassDB::bind_method(D_METHOD("get_chunk_studs_open", "chunk_id", "section"),
+            &BrickWorld::get_chunk_studs_open);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("split_studs", "buffer", "eye", "rings",
+            "open", "closed_rings"), &BrickWorld::split_studs, DEFVAL(PackedByteArray()), DEFVAL(0));
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
             &BrickWorld::build_chunk_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),

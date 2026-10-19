@@ -2964,6 +2964,12 @@ func _submit_mesh_job(isl: BrickIsland, arrays: Array, coarse := false) -> void:
 
 ## Start the mesh jobs submitted this tick. The tick's own last act, or the
 ## scene's (defer_job_start) when it has more to do after this manager's tick.
+## Mesh jobs submitted and not yet attached: uploads that may be running on a
+## worker now (BrickNear.uploads).
+func mesh_jobs() -> int:
+	return _mesh_jobs.size()
+
+
 func start_mesh_jobs() -> void:
 	for job in _mesh_jobs:
 		if int(job[1]) != JOB_NOT_STARTED:

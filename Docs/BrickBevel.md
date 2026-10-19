@@ -209,6 +209,21 @@ a mesh of the whole chunk.
   top as a square tile -- and is drawn long enough that it still covers the stud's outline from
   there; a skirt below its foot, hidden by the brick's top, closes the line of sky under it.
 
+  Only an OPEN stud gets a card: one with no live brick over it anywhere up its column in the
+  chunk (`get_chunk_studs_open`, a byte a stud in the same order; `split_studs` puts a closed
+  one in the first `CLOSED_RINGS` rings only). A roof, a ledge, a floor a blast opened. A
+  storey's floor is under the slab above and seen, if at all, through a window -- and in the big
+  city it was 95% of the cards: walking past every building held 200,657 stud instances, 9,827
+  without them (2026-10-19), and every band of them was re-sent to the renderer every 4 m.
+* **Uploads in flight.** The first renderer call that makes a band's stud instances, or changes
+  their count or buffer, waits for any mesh upload running on a worker to finish -- a building
+  turning to bricks sends its bands that way. Walking the big city that wait was 9-20 ms, on the
+  5% of frames with uploads in flight, and showed in the profiler as `step`, `_visit` and
+  `_studs` (one cost, three nested functions). So the owner says how many of its uploads are in
+  flight (`uploads`, every frame) and while there are any, or any chamfered band of this class's
+  own is uploading, no band's studs are touched; `settle` does not wait. Two runs each way: near
+  spikes over 5 ms 16 and 34 without, 6 and 8 with; step mean 0.60-0.85 ms against 0.51.
+
 * **Zoom.** Through a scope the world is as near as it looks. The city passes `step` the zoom
   (the unzoomed field of view's tangent over the camera's, capped at 6) and every distance here
   is divided by it: a wall seen through 4x glass is chamfered and studded -- bevelled studs, not

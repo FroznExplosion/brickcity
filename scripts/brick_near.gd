@@ -57,6 +57,13 @@ static var stud_round_radius := 13.0
 ## (PieceMeshes.stud_card). Past 18 m a stud is under fifteen pixels; what has
 ## to read is that the tops are studded, so a building across a square is not
 ## a stack of smooth boxes. Set it to `stud_radius` to turn the ring off.
+##
+## Only OPEN studs get a card (BrickWorld.get_chunk_studs_open): nothing over
+## them in the chunk -- a roof, a ledge, a floor a blast opened. A storey's
+## floor is under the slab above and is seen, if at all, through a window: in
+## the big city those were 95% of the cards (200,657 studs held on a walk past
+## every building, 9,827 without them), each band of them re-sent to the
+## renderer every few metres the camera moved.
 static var stud_card_radius := 70.0
 ## Through a scope the world is as near as it looks: `step`'s zoom (the
 ## unzoomed field of view's tangent over the camera's now, 1 or more) divides
@@ -81,6 +88,8 @@ const STUD_BUILDS := 2
 ## are sorted into their rings again. The rings' edges move in steps this big.
 const STUD_RESORT := 1.0
 const STUD_RESORT_FAR := 4.0
+## The rings a closed stud (one under a ceiling) is drawn in: all but the card.
+const CLOSED_RINGS := 3
 
 enum { FLAT, PENDING, UPLOADING, NEAR }
 
@@ -103,6 +112,7 @@ class Band:
 	var discard := false
 	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square, card
 	var stud_buffer := PackedFloat32Array()      ## every stud of the band
+	var stud_open := PackedByteArray()           ## ... and which have nothing over them
 	var stud_eye := Vector3.INF                  ## where they were last sorted from
 	var stud_zoom := 1.0                         ## ... and through what zoom
 	var stud_bevelled := true                    ## ... and with `enabled` as it was
@@ -128,6 +138,14 @@ var worst_damage_ms := 0.0
 var worst_take_ms := 0.0
 var worst_show_ms := 0.0
 var worst_studs_ms := 0.0
+## Meshes being uploaded on worker threads right now, the owner's (set every
+## frame, before `step`). While there are any -- or any of this class's own --
+## band studs are left as they are: the first call that changes the renderer's
+## instances or buffers waits for those uploads to finish, and measured walking
+## the big city that was 9-20 ms a time, on the 5% of frames a building turning
+## to bricks has its bands in flight. A frame or two later costs nothing seen.
+var uploads := 0
+var _held := false
 
 var _bands := {}              ## flat node's instance id -> Band
 var _order: Array[int] = []
@@ -241,6 +259,11 @@ func step(eye: Vector3, zoom_in := 1.0) -> void:
 	var t0 := Time.get_ticks_usec()
 	var now := Time.get_ticks_msec()
 	var stud_budget := [STUD_BUILDS]
+	_held = uploads > 0
+	for key in _busy:
+		var b: Band = _bands.get(key)
+		if b != null and b.state == UPLOADING:
+			_held = true
 	for key in _busy.duplicate():
 		_visit(key, eye, now, stud_budget)
 	var n := mini(SLICE, _order.size())
@@ -268,6 +291,7 @@ func report() -> String:
 
 ## Everything the camera wants, now, blocking: for a capture or a gate.
 func settle(eye: Vector3, rounds := 4000) -> void:
+	_held = false   # blocking anyway: the wait is the point
 	for band in _bands.values():
 		(band as Band).since = 0
 	for i in rounds:
@@ -490,13 +514,14 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 			and absf(band.stud_zoom - zoom) < 0.1 * zoom \
 			and local_eye.distance_squared_to(band.stud_eye) < resort * resort:
 		return
-	if int(budget[0]) <= 0:
+	if int(budget[0]) <= 0 or _held:
 		return
 	budget[0] = int(budget[0]) - 1
 	var t_studs := Time.get_ticks_usec()
 	if fetch:
 		band.studs_dirty = false
 		band.stud_buffer = world.get_chunk_studs_section(band.chunk, band.section)
+		band.stud_open = world.get_chunk_studs_open(band.chunk, band.section)
 	_sort_studs(band, local_eye)
 	worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
 
@@ -530,7 +555,8 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 	var rings := PackedFloat32Array([(stud_bevel_radius if enabled else 0.0) * zoom,
 			maxf(stud_round_radius, stud_bevel_radius) * zoom, stud_radius * zoom,
 			maxf(stud_card_radius, stud_radius) * zoom])
-	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings)
+	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings,
+			band.stud_open, CLOSED_RINGS)
 	var drawn := 0
 	for k in 4:
 		var part: PackedFloat32Array = parts[k]
@@ -552,6 +578,7 @@ func _drop_studs(band: Band) -> void:
 			mmi.queue_free()
 	band.studs.clear()
 	band.stud_buffer = PackedFloat32Array()
+	band.stud_open = PackedByteArray()
 	band.stud_eye = Vector3.INF
 	band.studs_dirty = true
 	stud_instances -= band.stud_count

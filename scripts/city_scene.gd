@@ -11964,6 +11964,7 @@ func _process(delta: float) -> void:
 	zoom_in = minf(zoom_in, 6.0)   # a scripted shot through a pinhole is not a scope
 	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
+		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs()
 		brick_near.step(camera.global_position, zoom_in)
 	if _spaces_view != null:
 		_follow_spaces_view()
