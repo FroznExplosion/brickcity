@@ -318,7 +318,46 @@ and takes the usual pictures.
 a join brick's studs can show above a piece's top; Move part does not move the field.
 **Explode** works only once converted (or with nothing sculpted); Edit as SDF closes it.
 The old 2D sketch (drawing in bricks) **stays** -- the user still wants it (2026-10-18).
-Next: small custom parts (a lathe brush).
+
+**Fixed 2026-10-19** (the user's report): Size hung or crashed -- `scale` walked the whole box
+round every block (their strokes had drifted 160 m), and scaled down filled empty space;
+now only the blocks a block lands on (104 s -> 1.3 s grow, 0.05 s shrink). Strokes curved
+round the player -- an add kept a fixed distance from the moving camera; now a stroke stays
+on a fixed plane (below). Convert never laid slopes or curves -- it only packed; now it runs
+the form's `_edge_runs` (side and front) on the brick cells, as the curve slider has them.
+The rail kept keyboard focus (Space pressed buttons) and passed the wheel on to the hotbar.
+
+| Brush placement | after Blender's Grease Pencil "stroke placement" (origin / 3D cursor / surface, drawing plane front / side / top / view) |
+|---|---|
+| **on a plane facing you** (default) | the stroke starts on the surface under the mouse (else the working plane) and stays on the plane through that point square to the grid axis the camera looks along most; a disc shows it |
+| **on the working plane** | the same, the plane parallel to the working plane (PgUp / PgDn) |
+| **on the surface** | follows the surface the whole stroke (an add builds up toward the camera, as clay buildup does) |
+
+**Tools other SDF sculptors have** (research 2026-10-19), and what we have:
+
+| Tool | Where | Here |
+|---|---|---|
+| Add / carve sphere, smooth blend | Zylann `do_sphere` (union / subtract, smoothness) | yes |
+| Smooth | Zylann `smooth_sphere`; Substance Modeler: hold Shift | yes (Shift) |
+| Grow / shrink gradually | Zylann `grow_sphere`; Substance Modeler Inflate; Blender Inflate | not yet |
+| Stamp a mesh | Zylann `stamp_sdf` / `do_mesh` (`VoxelMeshSDF`) | fill from guides (all guides) |
+| Primitive stamps: box, cylinder, cone, capsule | Dreams stamp / smear; MagicaCSG, Womp primitives | not yet (box only in code) |
+| Flatten to a plane | Substance Modeler Flatten (hard surface); Blender Flatten | not yet |
+| Move / grab | Blender Grab; Substance Modeler Warp / Elastic | not yet |
+| Crease | Substance Modeler Crease | not yet |
+| Split into a new layer, crop | Substance Modeler Split / Crop | paint this part (relabels) |
+| Mirror, repeat | Dreams, MagicaCSG, Chisel mirror; arrays | mirror only |
+| Hard / soft blend switch | Dreams (a gesture) | blend slider |
+| Guides to align | Dreams guides | working plane, photos, guide models |
+
+Next, suggested order for guns: primitive stamps (box, cylinder) dragged out on the stroke
+plane; flatten; a straight-line stroke (shift click to click); a lathe for round parts;
+grow / shrink; move.
+
+Sources: voxel-tools.readthedocs.io (VoxelTool, VoxelToolLodTerrain, changelog);
+helpx.adobe.com/substance-3d-modeler (tools, shortcuts); docs.blender.org (sculpt brushes,
+Grease Pencil stroke placement); docs.indreams.me (art tips, gestures); blenderartists.org
+"The big SDF thread"; womp.com.
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
