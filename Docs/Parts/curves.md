@@ -11,6 +11,9 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 |---|---|---|---|---|---|---|---|
 | `curve_1x2` | 1 x 2 | 3 | 8 x 16 x 9.6 | 7.8 x 15.8 x 9.6 | 0.35 x 0.7 x 0.42 | 0 | 0.5 |
 | `curve_2x2` | 2 x 2 | 3 | 16 x 16 x 9.6 | 15.8 x 15.8 x 9.6 | 0.7 x 0.7 x 0.42 | 0 | 1 |
+| `curve_1x3` | 1 x 3 | 3 | 8 x 24 x 9.6 | 7.8 x 23.8 x 9.6 | 0.35 x 1.05 x 0.42 | 0 | 0.6 |
+| `curve_1x4` | 1 x 4 | 3 | 8 x 32 x 9.6 | 7.8 x 31.8 x 9.6 | 0.35 x 1.4 x 0.42 | 0 | 0.9 |
+| `curve_2x4` | 2 x 4 | 3 | 16 x 32 x 9.6 | 15.8 x 31.8 x 9.6 | 0.7 x 1.4 x 0.42 | 0 | 1.8 |
 
 ## `curve_1x2`
 
@@ -36,4 +39,42 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
   ![curve_2x2 profile](profiles/curve_2x2.svg)
 
 - **Orientations:** curve_2x2_y0, curve_2x2_y0_i, curve_2x2_y1, curve_2x2_y1_i, curve_2x2_y2, curve_2x2_y2_i, curve_2x2_y3, curve_2x2_y3_i
+
+## `curve_1x3`
+
+- **Grid** 8 x 24 x 9.6 mm; **real** 7.8 x 23.8 x 9.6 mm; studs add 1.7 mm on top.
+- **Studs on top** (0, Ø4.8 x 1.7 mm, centres x, z): none
+- **Underside tubes** (Ø6.51 outer / Ø4.8 inner, centres x, z): none
+- **Underside anti-stud pins** (one-wide part, between sockets; centres x, z): (4, 8), (4, 16)
+- **Profile** in the ZY plane (first number Z, second Y), extruded along X from 0 to 8 mm:
+  (0, 0), (24, 0), (24, 9.6), (7.03, 6.79)
+
+  ![curve_1x3 profile](profiles/curve_1x3.svg)
+
+- **Orientations:** curve_1x3_y0, curve_1x3_y0_i, curve_1x3_y1, curve_1x3_y1_i, curve_1x3_y2, curve_1x3_y2_i, curve_1x3_y3, curve_1x3_y3_i
+
+## `curve_1x4`
+
+- **Grid** 8 x 32 x 9.6 mm; **real** 7.8 x 31.8 x 9.6 mm; studs add 1.7 mm on top.
+- **Studs on top** (0, Ø4.8 x 1.7 mm, centres x, z): none
+- **Underside tubes** (Ø6.51 outer / Ø4.8 inner, centres x, z): none
+- **Underside anti-stud pins** (one-wide part, between sockets; centres x, z): (4, 8), (4, 16), (4, 24)
+- **Profile** in the ZY plane (first number Z, second Y), extruded along X from 0 to 8 mm:
+  (0, 0), (32, 0), (32, 9.6), (9.37, 6.79)
+
+  ![curve_1x4 profile](profiles/curve_1x4.svg)
+
+- **Orientations:** curve_1x4_y0, curve_1x4_y0_i, curve_1x4_y1, curve_1x4_y1_i, curve_1x4_y2, curve_1x4_y2_i, curve_1x4_y3, curve_1x4_y3_i
+
+## `curve_2x4`
+
+- **Grid** 16 x 32 x 9.6 mm; **real** 15.8 x 31.8 x 9.6 mm; studs add 1.7 mm on top.
+- **Studs on top** (0, Ø4.8 x 1.7 mm, centres x, z): none
+- **Underside tubes** (Ø6.51 outer / Ø4.8 inner, centres x, z): (8, 8), (8, 16), (8, 24)
+- **Profile** in the ZY plane (first number Z, second Y), extruded along X from 0 to 16 mm:
+  (0, 0), (32, 0), (32, 9.6), (9.37, 6.79)
+
+  ![curve_2x4 profile](profiles/curve_2x4.svg)
+
+- **Orientations:** curve_2x4_y0, curve_2x4_y0_i, curve_2x4_y1, curve_2x4_y1_i, curve_2x4_y2, curve_2x4_y2_i, curve_2x4_y3, curve_2x4_y3_i
 

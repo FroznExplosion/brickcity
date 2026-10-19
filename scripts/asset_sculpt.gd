@@ -164,6 +164,9 @@ func show_ghost(d: Dictionary, col: Color = Color.WHITE) -> void:
 			m.height = d.size.y * 2.0
 			_ghost.mesh = m
 			_ghost.transform = d.xform
+		"lathe":
+			_ghost.mesh = _lathe_mesh(d.profile)
+			_ghost.transform = d.xform
 		_:
 			var a: Vector3 = d.a
 			var b: Vector3 = d.b
@@ -175,6 +178,33 @@ func show_ghost(d: Dictionary, col: Color = Color.WHITE) -> void:
 			var y := (b - a).normalized() if a.distance_to(b) > 0.01 else Vector3.UP
 			var x := y.cross(Vector3.UP if absf(y.y) < 0.9 else Vector3.RIGHT).normalized()
 			_ghost.transform = Transform3D(Basis(x, y, x.cross(y)), (a + b) * 0.5)
+
+
+## A lathe's outline (out, along) turned about y: closed down to the axis at both ends,
+## 32 steps round. The axis alone while there is no outline yet.
+static func _lathe_mesh(profile: PackedVector2Array) -> Mesh:
+	var pts := PackedVector2Array()
+	if profile.is_empty():
+		pts = PackedVector2Array([Vector2(0.4, -1), Vector2(0.4, 1)])
+	else:
+		pts.append(Vector2(0, profile[0].y))
+		pts.append_array(profile)
+		pts.append(Vector2(0, profile[profile.size() - 1].y))
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const STEPS := 32
+	for i in pts.size() - 1:
+		var p := pts[i]
+		var q := pts[i + 1]
+		for k in STEPS:
+			var a0 := TAU * k / STEPS
+			var a1 := TAU * (k + 1) / STEPS
+			var v := [Vector3(cos(a0) * p.x, p.y, sin(a0) * p.x), Vector3(cos(a1) * p.x, p.y, sin(a1) * p.x),
+					Vector3(cos(a1) * q.x, q.y, sin(a1) * q.x), Vector3(cos(a0) * q.x, q.y, sin(a0) * q.x)]
+			for j in [0, 1, 2, 0, 2, 3]:
+				st.add_vertex(v[j])
+	st.generate_normals()
+	return st.commit()
 
 
 func triangles() -> int:

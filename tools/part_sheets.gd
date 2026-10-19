@@ -32,6 +32,9 @@ const FAMILIES := [
 	["bracket", "Brackets", "A brick with studs down one long side, for building sideways."],
 	["slope", "Slopes", "A brick whose top falls to the front; studs only on the flat back strip."],
 	["curve", "Curved slopes", "A slope that bows outward; smooth all over, no studs."],
+	["cheese", "Cheese slopes", "One plate tall: one straight face from the top of the back to the front of the floor; no studs."],
+	["wedge", "Wedges", "A plate or a brick cut corner to corner across its footprint, for an edge running diagonally in plan. Studs where the top is whole.",
+			["wedge", "wedgeplate"]],
 	["round", "Round bricks", "An octagonal brick, flats on the footprint edges."],
 	["arch", "Arches", "Pillars at each end, a beam over an opening."],
 	# One sheet, two families: the two windings are the same part mirrored.

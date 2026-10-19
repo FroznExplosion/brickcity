@@ -1127,7 +1127,7 @@ func _round9() -> void:
 	for t in _ws.RAIL_TOOLS:
 		rail_keys.append(t[2])
 	_ok("every key's action is in a menu", missing.is_empty(), str(missing))
-	_ok("and every tool's on the rail", rail_keys.has("Alt D") and rail_keys.has("Alt U") and rail_keys.has("Alt G")
+	_ok("and every tool's on the rail", rail_keys.has("Alt D") and rail_keys.has("Alt V") and rail_keys.has("Alt U") and rail_keys.has("Alt G")
 			and rail_keys.has("K") and rail_keys.has("L"), str(rail_keys))
 	var pick := func(label: String) -> void:
 		for t in items:
@@ -1569,7 +1569,11 @@ func _shells() -> void:
 ## field, not in bricks; one undo each; saved with the gun.
 func _sculpt() -> void:
 	_ws.rail_pick("sketch")
-	_ok("sculpt is the Block out tool's first way to draw", _ws.sketch_draw == "sculpt")
+	_ok("the Sketch tool draws in 2D", _ws.sketch_draw != "sculpt" and _ws.rail_active() == "sketch"
+			and not _ws._sculpt_box.visible and _ws._sketch2d_box.visible)
+	_ws.rail_pick("sculpt")
+	_ok("the Sculpt tool sculpts in 3D, its own panel", _ws.sketch_draw == "sculpt" and _ws.rail_active() == "sculpt"
+			and _ws._sculpt_box.visible and not _ws._sketch2d_box.visible)
 	_ws.sculpt_clear()
 	var bricks: int = _ws.recipe.size()
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(10, 4, 8) * STUD)
@@ -1612,15 +1616,20 @@ func _sculpt() -> void:
 	_ws.add_child(holder)
 	_ws.guides.append({"path": "", "real_mm": 1.0, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
 			"node": holder})
-	_ok("fill from guides stamps the model", _ws.sculpt_fill_from_guides() == 1)
+	_ok("a model goes into the part as SDF", _ws.sculpt_model_into(_ws.guides.size() - 1, SdfForm.ADD) == 1)
 	var n: int = _ws.sculpt.form.cells().size() / 5
 	_ok("a 4 x 2 x 2-stud box is about 4 x 5 x 2 cells", n >= 30 and n <= 50, str(n))
+	_ws.sculpt_model_into(_ws.guides.size() - 1, SdfForm.REMOVE)
+	_ok("and carves it out again", _ws.sculpt.form.cells().is_empty())
+	_ws._undo()
+	_ok("one undo puts it back", _ws.sculpt.form.cells().size() / 5 == n)
 	_ws.guides.pop_back()
 	holder.queue_free()
 	_ws.sculpt_clear()
 	_convert()
 	_convert_plain()
 	_stamp_box()
+	_lathe()
 	_ws.rail_pick("place")
 
 
@@ -1628,7 +1637,7 @@ func _sculpt() -> void:
 ## bricks; brick edits back into the field 1:1.
 func _convert() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	var body: int = _ws.part_names.find("body")
 	var barrel: int = _ws.part_names.find("barrel")
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
@@ -1724,7 +1733,7 @@ func _convert() -> void:
 ## Nothing marked smooth: Convert makes it all bricks, no custom pieces.
 func _convert_plain() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
 	_ws.sculpt.form.begin_edit()
 	_ws._sculpt_op = SdfForm.ADD
@@ -1751,10 +1760,42 @@ func _convert_plain() -> void:
 			"%d vs %d" % [_asset_cells().size(), first.size()])
 
 
+## A lathe (Docs/AssetWorkshop.md, "SDF tools, round 3"): an axis, an outline clicked
+## point by point, laid with a click on the last point; one undo; Escape drops one.
+func _lathe() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_mode = "stamp"
+	_ws.sculpt_shape = "lathe"
+	var z := 5.0 * 30
+	_ws._sculpt_plane = Plane(Vector3.BACK, z)
+	_ws._lathe_axis = [Vector3(50, 40, z), Vector3(100, 40, z)]
+	_ws._lathe_op = SdfForm.ADD
+	for p in [Vector3(50, 46, z), Vector3(80, 50, z), Vector3(100, 44, z)]:
+		_ws.lathe_click(p)
+	_ok("a lathe's outline is drawn point by point", _ws._lathe_pts.size() == 3 and _ws.sculpt.form.cells().is_empty())
+	_ws.lathe_click(Vector3(100, 44.2, z))
+	var cells: int = _ws.sculpt.form.cells().size() / 5
+	_ok("a click on the last point lays it: round, fat in the middle", cells > 50 and _ws._lathe_axis.is_empty()
+			and _ws.sculpt.form.sample(Vector3(80, 40 + 9, z)) < 0.0 and _ws.sculpt.form.sample(Vector3(80, 40, z + 9)) < 0.0
+			and _ws.sculpt.form.sample(Vector3(52, 40 + 9, z)) > 0.0, str(cells))
+	_ws._undo()
+	_ok("one undo takes it off", _ws.sculpt.form.cells().is_empty())
+	_ws._lathe_axis = [Vector3(50, 40, z), Vector3(100, 40, z)]
+	_ws.lathe_click(Vector3(60, 45, z))
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_ok("Escape drops a lathe being drawn", _ws._lathe_key(esc) and _ws._lathe_axis.is_empty()
+			and _ws.sculpt.form.cells().is_empty())
+	_ws.sculpt_shape = "box"
+	_ws.sculpt_mode = "shape"
+
+
 ## A box stamp snapped to the grid: one undo, and Convert makes exactly its cells bricks.
 func _stamp_box() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	_ws.sculpt_mode = "stamp"
 	_ws.sculpt_shape = "box"
 	_ws.sculpt_snap = true

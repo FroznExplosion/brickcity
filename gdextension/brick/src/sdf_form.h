@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2.hpp>
@@ -114,6 +115,19 @@ public:
     /// A closed mesh (triangles `index` into `verts`, samples) as a solid: inside by
     /// ray parity along x, distance to its nearest triangle.
     void stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part);
+    /// A lathe: `profile` (out from the axis, along it; samples) closed down to the axis
+    /// at both ends and turned about the local y axis, placed by `xform`.
+    void lathe(int op, const Transform3D &xform, const PackedVector2Array &profile, float blend, int part);
+
+    /// Catalogue pieces fitted to the field (Docs/AssetWorkshop.md, "SDF tools, round 3").
+    /// `cells`: x, y, z of the brick cells a piece may take. `pieces`: [{grid:
+    /// PackedByteArray (1 solid, x fastest, a byte a sample: 5 x 2 x 5 a cell), size:
+    /// Vector3i cells, normal: Vector3 (its open side)}]. A piece is tried where its box
+    /// covers a surface cell, its open side within 45 degrees of the field's, its box only
+    /// `cells` or empty; it goes in when it matches the field's samples better than the
+    /// box's cells as bricks by `min_gain` of its samples, the biggest gain first, none
+    /// overlapping. Returns piece, x, y, z for each.
+    PackedInt32Array fit_pieces(const PackedInt32Array &cells, const Array &pieces, float min_gain) const;
 
     /// The whole form scaled by `factor` about `pivot` (samples).
     void scale(float factor, const Vector3 &pivot);

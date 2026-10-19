@@ -75,6 +75,64 @@ static func _closed(index: PackedInt32Array) -> bool:
 	return true
 
 
+## Round 3 (Docs/AssetWorkshop.md, "SDF tools, round 3"): catalogue pieces fitted to the
+## field. A ramp at a slope's pitch gets slopes facing down it; a wall turned 45 degrees in
+## plan gets wedges; a box on the grid gets nothing.
+func _fit_checks() -> void:
+	var kit := FitKit.kit(true)
+	var tilt := atan2(4.0, 5.0)   # two plates a stud
+	var f := SdfForm.new()
+	f.shape(SdfForm.ADD, SdfForm.SHAPE_BOX, Transform3D(Basis(Vector3.BACK, tilt), Vector3(100, 60, 100)),
+			Vector3(45, 14, 16), 0.0, 1)
+	var got := _fit_names(f, kit)
+	var down := 0
+	for n in got:
+		if String(n).begins_with("slope_") and not BrickPalette.is_inverted(n) 				and BrickPalette.front_of(n) == Vector3i(-1, 0, 0):
+			down += 1
+	_ok("a ramp at a slope's pitch gets slopes facing down it", down >= 3, "%d of %s" % [down, str(got)])
+	f = SdfForm.new()
+	f.shape(SdfForm.ADD, SdfForm.SHAPE_BOX, Transform3D(Basis(Vector3.UP, PI / 4), Vector3(100, 60, 100)),
+			Vector3(21.213, 6, 21.213), 0.0, 1)
+	got = _fit_names(f, kit)
+	var wedges := got.filter(func(n: String) -> bool: return n.begins_with("wedge"))
+	_ok("a wall turned 45 degrees in plan gets wedges", wedges.size() >= 4, str(got))
+	f = SdfForm.new()
+	f.box(SdfForm.ADD, Vector3(62.5, 56, 62.5), Vector3(12.5, 6, 12.5), 0.0, 1)
+	got = _fit_names(f, kit)
+	_ok("a box on the grid gets no pieces", got.is_empty(), str(got))
+
+
+func _fit_names(f: SdfForm, kit: Dictionary) -> Array:
+	var free := PackedInt32Array()
+	var cs := f.cells()
+	for i in range(0, cs.size(), 5):
+		free.append_array([cs[i], cs[i + 1], cs[i + 2]])
+	var fit := f.fit_pieces(free, kit.pieces, 0.08)
+	var out := []
+	for i in range(0, fit.size(), 4):
+		out.append(kit.names[fit[i]])
+	return out
+
+
+## A lathe of a straight outline is the cylinder or cone a stamp makes.
+func _lathe_checks() -> void:
+	var at := Transform3D(Basis(), Vector3(60, 60, 60))
+	var a := SdfForm.new()
+	a.lathe(SdfForm.ADD, at, PackedVector2Array([Vector2(8, -10), Vector2(8, 10)]), 0.0, 1)
+	var b := SdfForm.new()
+	b.shape(SdfForm.ADD, SdfForm.SHAPE_CONE, at, Vector3(8, 10, 8), 0.0, 1)
+	_ok("a lathe of a straight outline is a cylinder", _cell_map(a.cells()) == _cell_map(b.cells()),
+			"%d vs %d cells" % [_cell_map(a.cells()).size(), _cell_map(b.cells()).size()])
+	a = SdfForm.new()
+	a.lathe(SdfForm.ADD, at, PackedVector2Array([Vector2(9, -10), Vector2(3, 10)]), 0.0, 1)
+	b = SdfForm.new()
+	b.shape(SdfForm.ADD, SdfForm.SHAPE_CONE, at, Vector3(9, 10, 3), 0.0, 1)
+	_ok("and a slanted one a cone", _cell_map(a.cells()) == _cell_map(b.cells()),
+			"%d vs %d cells" % [_cell_map(a.cells()).size(), _cell_map(b.cells()).size()])
+	a.lathe(SdfForm.REMOVE, at, PackedVector2Array([Vector2(20, -20), Vector2(20, 20)]), 0.0, 1)
+	_ok("a lathe carves", a.cells().is_empty())
+
+
 func _init() -> void:
 	print("sdf_form_probe")
 	var c := Vector3(52.5, 51.0, 52.5) # the middle of cell (10, 25, 10)
@@ -238,5 +296,7 @@ func _init() -> void:
 		flagged += tc[i + 4]
 	_ok("marked cells carry the smooth flag", flagged > 0 and flagged < tc.size() / 5)
 
+	_fit_checks()
+	_lathe_checks()
 	print("sdf_form_probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)

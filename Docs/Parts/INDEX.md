@@ -5,13 +5,15 @@ change the part and re-run. Conventions and anatomy: [README](README.md).
 
 | Family | Parts | What it is |
 |---|---|---|
-| [Plates](plates.md) | 8 | One plate (3.2 mm) tall. Studs on top, sockets underneath. |
+| [Plates](plates.md) | 10 | One plate (3.2 mm) tall. Studs on top, sockets underneath. |
 | [Bricks](bricks.md) | 6 | Three plates (9.6 mm) tall. Studs on top, sockets underneath. |
 | [Tiles](tiles.md) | 7 | One plate tall with a SMOOTH top: sockets underneath, nothing on top. |
 | [Columns](columns.md) | 2 | Eighteen plates (six bricks, 57.6 mm) tall: one storey of the city's frame. |
 | [Brackets](brackets.md) | 4 | A brick with studs down one long side, for building sideways. |
-| [Slopes](slopes.md) | 3 | A brick whose top falls to the front; studs only on the flat back strip. |
-| [Curved slopes](curves.md) | 2 | A slope that bows outward; smooth all over, no studs. |
+| [Slopes](slopes.md) | 5 | A brick whose top falls to the front; studs only on the flat back strip. |
+| [Curved slopes](curves.md) | 5 | A slope that bows outward; smooth all over, no studs. |
+| [Cheese slopes](cheeses.md) | 3 | One plate tall: one straight face from the top of the back to the front of the floor; no studs. |
+| [Wedges](wedges.md) | 4 | A plate or a brick cut corner to corner across its footprint, for an edge running diagonally in plan. Studs where the top is whole. |
 | [Round bricks](rounds.md) | 2 | An octagonal brick, flats on the footprint edges. |
 | [Arches](archs.md) | 2 | Pillars at each end, a beam over an opening. |
 | [Spiral stairs](spirals.md) | 2 | A quarter turn of stair: a round-2x2 newel and two 45-degree steps. Clockwise (cw) or anticlockwise (ccw) seen from above. |
