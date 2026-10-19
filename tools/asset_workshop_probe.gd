@@ -1679,7 +1679,22 @@ func _convert() -> void:
 	_ok("Edit as SDF: the field is the bricks, edits and all", got == want and _ws.sculpt.visible,
 			"%d vs %d" % [got.size(), want.size()])
 	_ok("and the bricks are put aside", _ws._brick_cell_list().is_empty() and not _ws._sdf_stash.is_empty())
+	# New bricks take their part's colour, not the hotbar's.
+	var used_colours := {}
+	for s in _ws._sdf_stash:
+		used_colours[int(s[4])] = true
+	var keep_colour: int = _ws._colour
+	var odd := 0
+	while used_colours.has(odd):
+		odd += 1
+	_ws._colour = odd
 	_ws.sculpt_convert()
+	_ws._colour = keep_colour
+	var hotbar_coloured := 0
+	for i in _ws.recipe.size():
+		hotbar_coloured += int(_ws.recipe.colour_of(i) == odd)
+	_ok("Convert colours new bricks by their part, not the hotbar", hotbar_coloured == 0,
+			"%d bricks in the hotbar's colour" % hotbar_coloured)
 	var again := _asset_cells()
 	var bl: PackedInt32Array = _ws._brick_cell_list()
 	_ok("converted again: the same cells", again == want, "%d vs %d" % [again.size(), want.size()])
@@ -1687,6 +1702,13 @@ func _convert() -> void:
 	_ok("one Z: back to sculpting", _ws.sculpt_state == "sdf" and _ws._brick_cell_list().is_empty())
 	_ws.redo()
 	_ok("Shift Z: converted again", _ws.sculpt_state == "bricks" and _ws._brick_cell_list().size() == bl.size())
+	# A piece's look: fewer triangles, one undo.
+	var fine := int(_ws._shell_tris.get("body", 0))
+	_ws.sculpt_piece_detail("body", 300)
+	var coarse := int(_ws._shell_tris.get("body", 0))
+	_ws._undo()
+	_ok("a piece's detail slider, and undo", coarse < fine and int(_ws._shell_tris.get("body", 0)) == fine,
+			"%d -> %d -> %d" % [fine, coarse, int(_ws._shell_tris.get("body", 0))])
 
 
 ## The asset's cells after a Convert: its bricks', and those its custom pieces fill alone.

@@ -3704,6 +3704,23 @@ func _build_sculpt_box() -> void:
 		size_label.text = "size of the block-out: 100%")
 	_sculpt_box.add_child(size_label)
 	_sculpt_box.add_child(size_s)
+	# Detail of this part's custom piece (after Convert): its triangles, applied on let go.
+	var tris_label := Label.new()
+	var tris_s := HSlider.new()
+	tris_s.min_value = 2.5
+	tris_s.max_value = 4.5
+	tris_s.step = 0.05
+	tris_s.value = log(float(SDF_PIECE_TRIS)) / log(10.0)
+	tris_s.focus_mode = Control.FOCUS_NONE
+	tris_s.custom_minimum_size.x = 150
+	var tris_text := func(x: float) -> void:
+		tris_label.text = "this part's piece: %d triangles" % int(pow(10.0, x))
+	tris_text.call(tris_s.value)
+	tris_s.value_changed.connect(tris_text)
+	tris_s.drag_ended.connect(func(_c: bool) -> void:
+		sculpt_piece_detail(part_names[clampi(part_sel, 0, part_names.size() - 1)], int(pow(10.0, tris_s.value))))
+	_sculpt_box.add_child(tris_label)
+	_sculpt_box.add_child(tris_s)
 	var row := HFlowContainer.new()
 	_sculpt_box.add_child(row)
 	for b in [["smoother", func() -> void: sculpt_smooth(1)],
@@ -3842,6 +3859,23 @@ func sculpt_convert() -> void:
 	var used := {}
 	var colour_of := {}   # part -> [colour, material] of its first brick, for its piece
 	var laid := {}   # part -> [[arch, [x, y, z]]] in smooth cells
+	# Bricks packed new take their part's colour: the one most of its old bricks had, else
+	# its piece's, else the hotbar's.
+	var tally := {}   # label -> {[colour, material]: count}
+	for s in _sdf_stash:
+		var cm := [int(s[4]), int(s[5])]
+		var t: Dictionary = tally.get_or_add(int(s[6]) + 1, {})
+		t[cm] = int(t.get(cm, 0)) + 1
+	var part_col := {}   # label -> [colour, material]
+	for label in range(1, part_names.size() + 1):
+		var st: Dictionary = shells.get(part_names[label - 1], {})
+		part_col[label] = [int(st.colour), int(st.get("mat", 0))] if st.has("colour") else [-1, -1]
+		var best := 0
+		var t: Dictionary = tally.get(label, {})
+		for cm in t:
+			if t[cm] > best:
+				best = t[cm]
+				part_col[label] = cm
 	_batch = true
 	for s in _sdf_stash:
 		var arch := String(s[0])
@@ -3871,9 +3905,10 @@ func sculpt_convert() -> void:
 			(by_part.get_or_add(maxi(1, int(label_of[c])), {}) as Dictionary)[c] = true
 	for label in by_part:
 		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
+		var col: Array = part_col.get(part_sel + 1, [-1, -1])
 		for b in pack_cells(by_part[label]):
 			var at: Vector3i = b[1]
-			if place_named(String(b[0]), at):
+			if place_named(String(b[0]), at, col[0], col[1]):
 				var size := BrickPalette.size_of(String(b[0]))
 				var cs := []
 				for dx in size.x:
@@ -3894,7 +3929,7 @@ func sculpt_convert() -> void:
 		part_bricks[part] = laid.get(part, [])
 		var st: Dictionary = shells.get(part, {})
 		var col: Array = colour_of.get(part, [int(st.get("colour", 0)), int(st.get("mat", 0))])
-		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SHELL_TRIS)),
+		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SDF_PIECE_TRIS)),
 				"colour": col[0], "mat": col[1]}
 	sculpt_state = "bricks"
 	_sdf_cells = cells
@@ -3921,6 +3956,20 @@ static func _cell_joins(c: Vector3i, label_of: Dictionary, zone: Dictionary) -> 
 		if label_of.has(n) and (zone.has(n) or label_of[n] != label_of[c]):
 			return true
 	return false
+
+
+## How many triangles a part's custom piece is made of: its look. One undo.
+func sculpt_piece_detail(part: String, tris: int) -> void:
+	if not shells.has(part) or not shells[part].get("sdf", false):
+		return
+	var was := _sculpt_state()
+	shells[part]["tris"] = clampi(tris, 50, 50000)
+	var now := _sculpt_state()
+	_edit_groups.append({"end": _edits.size(), "n": 0,
+			"sketch": [{"sculpt_before": was, "sculpt_after": now}]})
+	_redo.clear()
+	_set_sculpt_state(now)
+	_autosave_dirty = true
 
 
 ## A brick laid by Convert in a part's smooth cells: one its shell covers.
@@ -3977,6 +4026,19 @@ func _sdf_shell_field(part: String) -> Dictionary:
 				for x in per.x:
 					pins[(o.x + x) + dims.x * ((o.y + y) + dims.y * (o.z + z))] = 1
 	var dist: PackedFloat32Array = sculpt.form.part_field(label, slo, dims, true)
+	# A join cell holds a brick (its studs meet the bricks beside it): the piece wraps the
+	# brick's box, so the brick never shows through where the surface is thinner.
+	var half := Vector3(per) * 0.5
+	for c in joins:
+		var o: Vector3i = c * per - slo
+		var mid := Vector3(o) + half
+		for z in range(maxi(o.z - 2, 0), mini(o.z + per.z + 2, dims.z)):
+			for y in range(maxi(o.y - 2, 0), mini(o.y + per.y + 2, dims.y)):
+				for x in range(maxi(o.x - 2, 0), mini(o.x + per.x + 2, dims.x)):
+					var q := (Vector3(x, y, z) + Vector3.ONE * 0.5 - mid).abs() - half
+					var box := q.max(Vector3.ZERO).length() + minf(maxf(q.x, maxf(q.y, q.z)), 0.0)
+					var i := x + dims.x * (y + dims.y * z)
+					dist[i] = minf(dist[i], box)
 	return {"distance": dist, "pins": pins, "ddims": dims, "dlo": slo, "k": 1, "tick": true,
 			"joins": joins, "lo": slo, "dims": dims}
 
@@ -6924,6 +6986,8 @@ const SHELL_SMOOTH := 4
 const SHELL_SMOOTH_EXACT := 1
 ## A shell's triangles unless set: its surface is decimated to about this many.
 const SHELL_TRIS := 1500
+## A custom piece from the SDF block-out: finer, its surface is curved all over.
+const SDF_PIECE_TRIS := 4000
 
 
 ## How many times a shell's samples are blurred before the surface is laid (FormMesher):
