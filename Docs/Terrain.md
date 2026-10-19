@@ -1833,6 +1833,71 @@ all-brick was 9,186, 65.9k triangles against 34.2k. **Curves cost about twice th
 packed brick** — one quad a cell against one quad a 2x4 — which is the price of the look and the
 reason it is a region and not the whole map.
 
+### 18.6 "Slopes" ground: curved hillsides, laid-brick flats (2026-10-19)
+
+The step from laid brick to smooth far ground at LOD 2 (§19.14) shows,
+because the two are different SHAPES: near, a hill is a staircase of
+terraces; far, it is a slope, and the outline of every hill changes at the
+border. Making the near ground curved where it slopes takes the staircase out
+of the part that changes -- the far tier draws the same slope, and the flats,
+which the two tiers agree about anyway, stay laid brick.
+
+So a world can now be laid one of three ways (`"ground"` in the world file,
+`TerrainWorld.GROUNDS`; F10 Ground; C in `heightfield_test` cycles them):
+
+| ground | what curves |
+|---|---|
+| `brick` | nothing -- every world so far, and the default |
+| `hills` | the odd hillside, by biome; steep ground bricked (§18.5) |
+| `slopes` | ground steeper than `curve_slope` (0.25 plates a stud, regional); flats, pads and cliffs are brick |
+
+**The same machinery as §18.5, with the rule turned round.** Seams, studs on
+flat spots, collision and the one-top-surface-a-cell rule are unchanged; only
+`smooth_column` decides differently. In slopes mode, in order:
+
+1. **Painted** (`BrickTerrain.paint_form`, editor tool 9, the BRICK brush:
+   `, .` cycles BRICK / CURVE / RULE). A byte per column in the sculpt tiles,
+   so it shares their copy-on-write, undo strokes and world file (`"form"`
+   per tile, base64).
+2. **A pad's flat is brick** -- somewhere a thing stands.
+3. **Steeper than `CLIFF_SLOPE`** (1.5 plates a stud, ~31°, steeper than the
+   generator makes) is brick: a cliff is stacked courses.
+4. Otherwise **curved where the slope is over `curve_slope`**.
+
+**The slope is the 8-stud block slopes BLENDED between block middles**, not
+the block's own value. A threshold on a per-column slope speckled (§18.5); on
+blocks it would cut 8-stud squares. On the blend it is a smooth contour -- an
+organic edge -- and cannot speckle. Block slopes are cached per thread
+(`block_slope`, keyed by seed, sculpt generation and a pad generation).
+
+**The biome rule's per-column cliff test is not used here.** Where the
+plate-step mask quantises to whole bricks every terrace edge is a 3-plate
+step; that test bricked all of them, so a slope there never curved and its
+flat tops came out as lone curved cells (the probe found one). The curve is
+drawn from the unquantised surface, so a brick step under it is not a wall.
+
+**Placing a build on a hill** (`city_placer.ground_top`): the build stands at
+the HIGHEST drawn ground under its whole footprint, on the course at or above
+it, and the pad the city cuts at its floor (§21.8) fills bricks up to it. A
+pad's flat is brick, so on slopes ground the plinth is laid brick and the
+skirt round it curves back down to the hill.
+
+Measured, `heightfield_test -- --slopeshot [--curve=X]` (the same four views
+on each ground, whole frame; far ground smooth from LOD 1 on slopes ground):
+
+| | curved | detail tris | far tris | frame tris (4 views) |
+|---|---|---|---|---|
+| brick | 0% | 381k–409k | 468k | 824k–985k |
+| slopes, 0.25 | 59% (probe field) / 80% (view) | 789k | 369k | 998k–1,187k |
+| slopes, 0.10 | 96% | 853k | 369k | 1,019k–1,217k |
+
+So it is **not cheaper**: a curve is one quad a stud where packed brick is
+one quad a 2x4, and the near tier doubles while the far tier saves a fifth.
+At 0.10 the ground still reads as brick -- course lines on the curve, studs
+on its flat spots -- and the outline of every hill is the far tier's. What
+would make it cheaper is a curve with a vertex every two studs where it is
+gentle, not built yet.
+
 ---
 
 ## 19. View distance, and what it actually costs
@@ -3022,8 +3087,9 @@ floor:
 * **A site's floor can be set** (`-` `=` on a selected site in the editor,
   a course at a time; `"level"` in the world file). The building stays on the
   grid and the ground comes to it — a plinth when raised, a cut when lowered.
-* **A build placed with P lands on the hillside** at the course nearest the
-  ground it was aimed at, and the city cuts a pad for it at its floor — the
+* **A build placed with P lands on the hillside** at the course at or above
+  the HIGHEST ground under its footprint (was: nearest the aim point, which
+  sank the uphill side; §18.6), and the city cuts a pad for it at its floor — the
   building never moves to suit the hill; the hill gives
   (`city_scene._ground_building`). Only on the ground: a build set on a roof
   or at a height held with E cuts nothing.

@@ -46,13 +46,17 @@ extends Node3D
 ##   8 PAINT BRUSH  what the ground is made of AND its colour, a stud at a
 ##                  time (§20.7). The palette picks both; I picks them up
 ##                  from the ground under the cursor.
+##   9 BRICK BRUSH  laid brick or curved ground, a stud at a time, whatever
+##                  the slope rule says (§18.6). , . cycles BRICK / CURVE /
+##                  RULE (hand the column back). Only shows on "slopes"
+##                  ground (F10 Ground, or C in heightfield_test).
 ##
 ## A brush goes into the field UNDER the pads, so a building's pad stays
 ## flat whatever is painted round it, and the ground meets its floor.
 ##
 ## Keys:
 ##   0            LOOK: no tool, so a click only takes the mouse
-##   1 .. 8       pick the tool
+##   1 .. 9       pick the tool
 ##   LEFT CLICK   place under the cursor, or select what is already there
 ##                (brushes: hold and drag)
 ##   CTRL+Z       undo the last brush stroke
@@ -68,9 +72,15 @@ const World := preload("res://scripts/terrain_world.gd")
 ## `-- --world=<name>` opens a different level.
 var _world_path := "res://worlds/heightfield.json"
 
-enum Tool { LOOK, PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH }
+enum Tool { LOOK, PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH,
+		BRICK_BRUSH }
 const TOOL_NAMES := ["LOOK", "PAD", "PAINT", "SITE", "RAISE", "LOWER", "FLATTEN", "SMOOTH",
-		"PAINT BRUSH"]
+		"PAINT BRUSH", "BRICK BRUSH"]
+## What the brick brush lays: BrickTerrain.paint_form's 0 brick, 1 curve,
+## -1 back to the slope rule.
+const FORMS := [0, 1, -1]
+const FORM_NAMES := ["BRICK", "CURVE", "RULE"]
+var _form := 0
 const PaintPalette := preload("res://scripts/paint_palette.gd")
 ## What the paint brush lays: a terrain material (or KEEP / NATURAL) and a
 ## filament colour (or KEEP / the material's OWN). BrickTerrain.paint_surface.
@@ -342,6 +352,8 @@ func _brush_tick(delta: float) -> void:
 	if _tool == Tool.PAINT_BRUSH:
 		touched = BrickTerrain.paint_surface(gx, gz, _brush_radius,
 				_brush_material, _brush_colour)
+	elif _tool == Tool.BRICK_BRUSH:
+		touched = BrickTerrain.paint_form(gx, gz, _brush_radius, FORMS[_form])
 	else:
 		touched = BrickTerrain.sculpt(gx, gz, _brush_radius, mode, amount, _flatten_to)
 	_pending = touched if _pending.size.x <= 0 else _pending.merge(touched)
@@ -493,6 +505,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_tool(Tool.SMOOTH)
 		KEY_8:
 			_set_tool(Tool.PAINT_BRUSH)
+		KEY_9:
+			_set_tool(Tool.BRICK_BRUSH)
+			if World.ground() != "slopes":
+				_status = "brick brush: only shows on \"slopes\" ground (F10 Ground)"
 		KEY_I:
 			if _tool == Tool.PAINT_BRUSH:
 				_pick_paint()
@@ -515,11 +531,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_COMMA:
 			if _tool == Tool.PAINT_BRUSH:
 				_palette.step_colour(-1)
+			elif _tool == Tool.BRICK_BRUSH:
+				_form = (_form + FORMS.size() - 1) % FORMS.size()
+				_status = "laying %s" % FORM_NAMES[_form]
 			else:
 				_nudge_selected(0, -1, 0.0)
 		KEY_PERIOD:
 			if _tool == Tool.PAINT_BRUSH:
 				_palette.step_colour(1)
+			elif _tool == Tool.BRICK_BRUSH:
+				_form = (_form + 1) % FORMS.size()
+				_status = "laying %s" % FORM_NAMES[_form]
 			else:
 				_nudge_selected(0, 1, 0.0)
 		KEY_MINUS:
@@ -952,7 +974,8 @@ func _update_hud() -> void:
 		"tool         %s%s" % [TOOL_NAMES[int(_tool)],
 			("   brush: %s" % MATERIALS[_paint_material]) if _tool == Tool.PAINT
 			else ("   radius %d%s   %d to undo" % [int(_brush_radius),
-				"" if _tool == Tool.PAINT_BRUSH else "   strength %.2f" % _brush_rate,
+				("   laying %s" % FORM_NAMES[_form]) if _tool == Tool.BRICK_BRUSH
+				else "" if _tool == Tool.PAINT_BRUSH else "   strength %.2f" % _brush_rate,
 				BrickTerrain.sculpt_undo_depth()])
 			if _is_brush() else ""],
 		"status       %s" % _status,
@@ -978,7 +1001,9 @@ func _update_hud() -> void:
 		lines.append(">>> GRABBED — aim and click to drop, ESC to cancel")
 	lines.append("0 look  1 pad  2 paint  3 site   CLICK place/select")
 	lines.append("G grab  DEL remove")
-	lines.append("4 raise  5 lower  6 flatten  7 smooth  8 paint")
+	lines.append("4 raise  5 lower  6 flatten  7 smooth  8 paint  9 brick")
+	if _tool == Tool.BRICK_BRUSH:
+		lines.append(", . BRICK / CURVE / RULE   ground: %s" % World.ground())
 	lines.append("brushes: HOLD LEFT and drag   CTRL+Z undo")
 	if _tool == Tool.PAINT_BRUSH:
 		lines.append("painting %s" % _paint_name())

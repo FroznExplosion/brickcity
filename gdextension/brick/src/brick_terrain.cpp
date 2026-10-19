@@ -129,6 +129,12 @@ constexpr float COLLIDE_QUANTUM = PLATE_M * 0.25f;
 
 /// Curved ground. See BrickTerrain::set_smooth_terrain.
 static bool g_smooth_terrain = false;
+/// Which ground curves. See BrickTerrain::set_smooth_slopes.
+static bool g_smooth_slopes = false;
+/// Plates a stud: regional steepness above which a slope curves.
+static float g_curve_slope = 0.25f;
+/// Bumped by every pad edit, so a cache of the field can tell it moved.
+static std::atomic<uint32_t> g_pad_gen{ 1 };
 
 namespace smoothcfg {
 /// ~67 studs (23 m) a biome patch.
@@ -173,6 +179,10 @@ constexpr int REGION = 8;
 /// plates to bricks, and the drawn step there is a whole brick. The probe
 /// found a 3-plate cliff under a curve on the first run.
 constexpr int MAX_QSTEP = 2;
+/// Slopes mode's cliff, in plates a stud, regional: steeper than this is
+/// stacked courses. 1.5 is ~31 degrees, steeper than anything the generator
+/// makes (max 0.67); it is for sculpted and dug ground.
+constexpr float CLIFF_SLOPE = 1.5f;
 }
 
 /// Steepness at a column, in plates a stud: the larger of the two central
@@ -183,10 +193,72 @@ static float surface_slope(const Field &f, int x, int z) {
     return std::max(std::abs(dx), std::abs(dz));
 }
 
+static int layer_form(int x, int z);
+static bool on_pad_flat(int x, int z);
+static uint64_t sculpt_gen_now();
+
+/// Steepness of the 8-stud block whose middle is (bx, bz), remembered: the
+/// slope rule asks four blocks a column and a tile asks the same few dozen
+/// over and over. Direct-mapped, per thread, keyed by the block and by
+/// everything that moves the field (seed, sculpt, pads).
+static float block_slope(const Field &f, int bx, int bz) {
+    struct Slot { int x, z; uint32_t seed, pads; uint64_t sculpt; float v; bool ok; };
+    thread_local Slot slots[256] = {};
+    const uint32_t pads = g_pad_gen.load(std::memory_order_acquire);
+    const uint64_t sculpt = sculpt_gen_now();
+    Slot &s = slots[((uint32_t)bx * 73856093u ^ (uint32_t)bz * 19349663u) & 255u];
+    if (!s.ok || s.x != bx || s.z != bz || s.seed != f.seed || s.pads != pads
+            || s.sculpt != sculpt) {
+        s = { bx, bz, f.seed, pads, sculpt, surface_slope(f, bx, bz), true };
+    }
+    return s.v;
+}
+
+/// Steepness for the slope rule: the block slopes, blended bilinearly
+/// between block middles. A threshold on that is a smooth CONTOUR -- an
+/// organic edge between laid brick and curved ground, not 8-stud squares --
+/// and still cannot speckle, because the blend never flips between
+/// neighbours the way a per-column slope does (§18.5).
+static float regional_slope(const Field &f, int x, int z) {
+    const int r = smoothcfg::REGION;
+    const int h = r / 2;
+    const int x0 = floor_div(x - h, r) * r + h;
+    const int z0 = floor_div(z - h, r) * r + h;
+    const float tx = (float)(x - x0) / (float)r;
+    const float tz = (float)(z - z0) / (float)r;
+    const float a = block_slope(f, x0, z0);
+    const float b = block_slope(f, x0 + r, z0);
+    const float c = block_slope(f, x0, z0 + r);
+    const float d = block_slope(f, x0 + r, z0 + r);
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+}
+
 /// Curve or bricks, for one column. `qstep` is the largest step to a
 /// neighbour on the QUANTISED surface, in plates -- the caller has it to
 /// hand, and recomputing it would be four more field evaluations a cell.
 static bool smooth_column(const Field &f, int x, int z, int qstep) {
+    // SLOPES mode (Terrain.md 18.6): the ground is curved where it slopes
+    // and laid brick where it is flat -- the other way round from the biome
+    // rule below. What the author painted wins; a pad is somewhere a thing
+    // stands, so it is brick; a cliff stays stacked courses.
+    //
+    // A cliff here is REGIONAL steepness, not the drawn step: where the
+    // plate-step mask quantises to whole bricks every terrace edge is a
+    // 3-plate step, and the per-column test below bricked all of them --
+    // the slope could never curve, and its flat tops came out as lone
+    // curved cells. The curve is drawn from the unquantised surface, so a
+    // brick step under it is not a wall.
+    if (g_smooth_slopes) {
+        const int painted = layer_form(x, z);
+        if (painted != 0xFF) {
+            return painted == 1;
+        }
+        if (on_pad_flat(x, z)) {
+            return false;
+        }
+        const float s = regional_slope(f, x, z);
+        return s > g_curve_slope && s < smoothcfg::CLIFF_SLOPE;
+    }
     // A real cliff stays brick wherever it is. This is per COLUMN because a
     // step of more than two plates is a wall, and a wall is a wall whatever
     // the ground around it is doing.
@@ -242,6 +314,15 @@ static float pad_weight(const Pad &p, int x, int z) {
     return 1.0f - (t * t * (3.0f - 2.0f * t));
 }
 
+static bool on_pad_flat(int x, int z) {
+    for (const Pad &p : g_pads) {
+        if (pad_weight(p, x, z) >= 1.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // --- sculpt ------------------------------------------------------------------
 //
 // A height offset per stud column, in plates, stored per tile. Tiles bake on
@@ -256,9 +337,12 @@ struct SculptTile {
     /// Surface paint (§20.7): material and colour per column, 255 = none.
     uint8_t mat[TILE * TILE];
     uint8_t col[TILE * TILE];
+    /// Brick or curve, painted (§18.6): 0 brick, 1 curve, 255 = the rule's.
+    uint8_t form[TILE * TILE];
     SculptTile() {
         std::fill(std::begin(mat), std::end(mat), (uint8_t)0xFF);
         std::fill(std::begin(col), std::end(col), (uint8_t)0xFF);
+        std::fill(std::begin(form), std::end(form), (uint8_t)0xFF);
     }
 };
 using SculptMap = std::unordered_map<int64_t, std::shared_ptr<const SculptTile>>;
@@ -306,6 +390,16 @@ static int layer_colour(int x, int z) {
     int i = 0;
     const SculptTile *t = layer_tile(x, z, i);
     return t == nullptr ? 0xFF : t->col[i];
+}
+
+static int layer_form(int x, int z) {
+    int i = 0;
+    const SculptTile *t = layer_tile(x, z, i);
+    return t == nullptr ? 0xFF : t->form[i];
+}
+
+static uint64_t sculpt_gen_now() {
+    return g_sculpt_gen.load(std::memory_order_acquire);
 }
 
 /// Set while reading the field as generated (BrickTerrain::generated_plate).
@@ -1376,9 +1470,13 @@ void BrickTerrain::add_pad(int x, int z, int radius, int skirt, double height_m,
     // 128.99999 plates floored to the plate below the building's floor.
     p.plates = (float)(std::round(height_m / (double)PLATE_M * 64.0) / 64.0);
     g_pads.push_back(p);
+    g_pad_gen.fetch_add(1, std::memory_order_acq_rel);
 }
 
-void BrickTerrain::clear_pads() { g_pads.clear(); }
+void BrickTerrain::clear_pads() {
+    g_pads.clear();
+    g_pad_gen.fetch_add(1, std::memory_order_acq_rel);
+}
 int BrickTerrain::pad_count() { return (int)g_pads.size(); }
 
 int BrickTerrain::pad_at(int x, int z) {
@@ -1419,6 +1517,7 @@ void BrickTerrain::set_pad(int index, int x, int z, int radius, int skirt,
     // Snapped to 1/64 plate: a height that came back through a float as
     // 128.99999 plates floored to the plate below the building's floor.
     p.plates = (float)(std::round(height_m / (double)PLATE_M * 64.0) / 64.0);
+    g_pad_gen.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void BrickTerrain::remove_pad(int index) {
@@ -1426,6 +1525,7 @@ void BrickTerrain::remove_pad(int index) {
         return;
     }
     g_pads.erase(g_pads.begin() + index);
+    g_pad_gen.fetch_add(1, std::memory_order_acq_rel);
 }
 
 Rect2i BrickTerrain::pad_bounds(int index) {
@@ -1665,6 +1765,79 @@ Rect2i BrickTerrain::paint_surface(int x, int z, double radius, int material, in
     return box;
 }
 
+Rect2i BrickTerrain::paint_form(int x, int z, double radius, int form) {
+    const float r = (float)std::max(radius, 0.5);
+    const int ri = (int)std::ceil(r);
+    const Rect2i box(x - ri, z - ri, ri * 2 + 1, ri * 2 + 1);
+    const int code = form < 0 ? 0xFF : std::clamp(form, 0, 1);
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    Stroke *stroke = g_strokes.empty() ? nullptr : &g_strokes.back();
+    std::unordered_map<int64_t, std::shared_ptr<SculptTile>> writable;
+    for (int cz = box.position.y; cz < box.position.y + box.size.y; ++cz) {
+        for (int cx = box.position.x; cx < box.position.x + box.size.x; ++cx) {
+            const float d2 = (float)((cx - x) * (cx - x) + (cz - z) * (cz - z));
+            if (d2 > r * r) {
+                continue;
+            }
+            const int tx = floor_div(cx, TILE);
+            const int tz = floor_div(cz, TILE);
+            const int64_t key = sculpt_key(tx, tz);
+            const int i = (cz - tz * TILE) * TILE + (cx - tx * TILE);
+            auto wit = writable.find(key);
+            if (wit == writable.end()) {
+                auto old = next->find(key);
+                std::shared_ptr<const SculptTile> was = old == next->end() ? nullptr : old->second;
+                if ((was ? was->form[i] : 0xFF) == code) {
+                    continue;   // nothing to change, and no tile worth cloning
+                }
+                if (stroke != nullptr && stroke->before.find(key) == stroke->before.end()) {
+                    stroke->before.emplace(key, was);
+                }
+                auto fresh = was ? std::make_shared<SculptTile>(*was) : std::make_shared<SculptTile>();
+                wit = writable.emplace(key, fresh).first;
+                (*next)[key] = fresh;
+            }
+            wit->second->form[i] = (uint8_t)code;
+        }
+    }
+    publish(std::move(next));
+    if (stroke != nullptr) {
+        stroke->bounds = merge_rect(stroke->bounds, box);
+    }
+    return box;
+}
+
+int BrickTerrain::form_at(int x, int z) { return layer_form(x, z); }
+
+PackedByteArray BrickTerrain::get_form_tile(int tx, int tz) {
+    PackedByteArray out;
+    auto m = std::atomic_load(&g_sculpt);
+    auto it = m->find(sculpt_key(tx, tz));
+    if (it == m->end()) {
+        return out;
+    }
+    out.resize(TILE * TILE);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        out.set(i, it->second->form[i]);
+    }
+    return out;
+}
+
+void BrickTerrain::set_form_tile(int tx, int tz, const PackedByteArray &bytes) {
+    if (bytes.size() != TILE * TILE) {
+        return;
+    }
+    auto next = std::make_shared<SculptMap>(*std::atomic_load(&g_sculpt));
+    auto old = next->find(sculpt_key(tx, tz));
+    auto t = old == next->end() ? std::make_shared<SculptTile>()
+                                : std::make_shared<SculptTile>(*old->second);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        t->form[i] = bytes[i];
+    }
+    (*next)[sculpt_key(tx, tz)] = t;
+    publish(std::move(next));
+}
+
 Vector2i BrickTerrain::surface_paint_at(int x, int z) {
     return Vector2i(layer_material(x, z), layer_colour(x, z));
 }
@@ -1829,6 +2002,12 @@ bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
 
 void BrickTerrain::set_smooth_terrain(bool on) { g_smooth_terrain = on; }
 bool BrickTerrain::get_smooth_terrain() { return g_smooth_terrain; }
+void BrickTerrain::set_smooth_slopes(bool on) { g_smooth_slopes = on; }
+bool BrickTerrain::get_smooth_slopes() { return g_smooth_slopes; }
+void BrickTerrain::set_curve_slope(double plates_per_stud) {
+    g_curve_slope = (float)std::max(0.0, plates_per_stud);
+}
+double BrickTerrain::get_curve_slope() { return (double)g_curve_slope; }
 
 double BrickTerrain::surface_raw(int x, int z) {
     // The half plate matches the mesher: the curve runs through the middle
@@ -4267,6 +4446,22 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_smooth_terrain);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_terrain"),
         &BrickTerrain::get_smooth_terrain);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_smooth_slopes", "on"),
+        &BrickTerrain::set_smooth_slopes);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_slopes"),
+        &BrickTerrain::get_smooth_slopes);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_curve_slope", "plates_per_stud"),
+        &BrickTerrain::set_curve_slope);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_curve_slope"),
+        &BrickTerrain::get_curve_slope);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("paint_form", "x", "z", "radius", "form"),
+        &BrickTerrain::paint_form);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("form_at", "x", "z"),
+        &BrickTerrain::form_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_form_tile", "tx", "tz"),
+        &BrickTerrain::get_form_tile);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_form_tile", "tx", "tz", "bytes"),
+        &BrickTerrain::set_form_tile);
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("add_pad", "x", "z", "radius", "skirt", "height_m", "radius_z"),
         &BrickTerrain::add_pad, DEFVAL(-1));

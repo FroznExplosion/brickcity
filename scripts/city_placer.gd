@@ -33,6 +33,12 @@ var on_placed := Callable()
 ## ghost then stands on the hillside, at the COURSE nearest it, and the scene
 ## cuts a pad for it when it lands (`on_ground`).
 var ground_ray := Callable()
+## The top of the drawn ground over a stud column, in metres:
+## `func(x, z) -> float`. With it a build on the ground stands at the
+## HIGHEST ground under its whole footprint, on the course at or above it,
+## and the scene fills bricks up to its floor (Terrain.md 18.6) -- it never
+## sinks into the uphill side. Without it, the course nearest the aim point.
+var ground_top := Callable()
 ## Whether the last aim put the build on the ground -- rather than on top of a
 ## building, or on a height held with E. Only a build on the ground gets the
 ## terrain shaped to its floor.
@@ -274,7 +280,27 @@ func aim_ray(from: Vector3, dir: Vector3) -> void:
 	_target = hit.cell
 	on_ground = bool(hit.get("ground", false))
 	_cell = _fit_over(_target, d, half)
+	if on_ground and ground_top.is_valid():
+		_cell.y = _floor_over(_cell, d)
 	_update()
+
+
+## The course at or above the highest ground under a footprint whose min
+## corner is `c`. Every other stud and both far edges: a build tens of studs
+## across is a few hundred samples, every aim.
+func _floor_over(c: Vector3i, d: Vector3i) -> int:
+	var cell := BrickWorld.get_cell_size()
+	var top := -INF
+	var xs := range(0, d.x, 2)
+	var zs := range(0, d.z, 2)
+	xs.append(d.x - 1)
+	zs.append(d.z - 1)
+	for dx in xs:
+		for dz in zs:
+			top = maxf(top, float(ground_top.call(c.x + dx, c.z + dz)))
+	var per := roundi(BrickTerrain.get_brick_metres() / cell.y)
+	# A hair under, so ground exactly on a course is not lifted a course.
+	return ceili((top - 0.005) / (cell.y * per)) * per
 
 
 ## The first surface along the ray: the top of a building (a side counts as the

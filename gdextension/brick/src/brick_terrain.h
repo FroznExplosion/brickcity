@@ -499,6 +499,25 @@ public:
     static void set_smooth_terrain(bool on);
     static bool get_smooth_terrain();
 
+    /// With smooth terrain on, WHICH ground curves (Docs/Terrain.md 18.6).
+    /// Off: the biome rule -- the odd curved hillside, steep ground bricked.
+    /// On: the slope rule -- ground that slopes more than `curve_slope`
+    /// (plates a stud, regional) curves, flat ground is laid brick, pads and
+    /// cliffs are brick, and what `paint_form` painted beats all of it.
+    static void set_smooth_slopes(bool on);
+    static bool get_smooth_slopes();
+    static void set_curve_slope(double plates_per_stud);
+    static double get_curve_slope();
+    /// Paint brick (0) or curve (1) over a disc, or -1 to hand it back to
+    /// the rule. Same tiles and undo strokes as the sculpt. Returns the stud
+    /// rectangle touched.
+    static Rect2i paint_form(int x, int z, double radius, int form);
+    /// What a column was painted: 0 brick, 1 curve, 255 not painted.
+    static int form_at(int x, int z);
+    /// For the world file: TILE*TILE bytes.
+    static PackedByteArray get_form_tile(int tx, int tz);
+    static void set_form_tile(int tx, int tz, const PackedByteArray &bytes);
+
     /// BAKED SUN SHADOW. Direction TO the sun, world space.
     ///
     /// The ground is a static heightfield, so which of it the sun reaches is
