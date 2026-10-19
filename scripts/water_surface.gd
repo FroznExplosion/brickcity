@@ -1,7 +1,8 @@
 class_name WaterSurface
 extends MultiMeshInstance3D
 
-## Water tier 0: real 1x1 round plates, 0–20 m, camera-following.
+## Water tier 0: real 1x1 round plates round the camera (and, at pitch 2,
+## the 2x2 ring past them), drawn in culled chunks (Docs/Water.md §9.11).
 ## [Docs/Water.md](../Docs/Water.md) §3.0.
 ##
 ## The wave itself lives in `BrickWave` (D1). The CPU's entire per-frame job
@@ -49,6 +50,14 @@ var _pitch := STUD
 
 var _mat: ShaderMaterial = null
 var _side := 0
+## Pieces a side of one chunk. The pieces are drawn in square chunks, one
+## MultiMesh each, so the engine's frustum culling drops the ones off screen:
+## as one disc round the camera its box always held the camera and every
+## piece went through the vertex shader -- five wave evaluations a vertex --
+## including the two thirds of them behind it (2026-10-19).
+const CHUNK_PIECES := 24
+## [node, x offset in pieces, z offset, width, depth], one per chunk.
+var _chunks: Array = []
 var _time := 0.0
 var _camera_y := 0.0
 const WaterColliderFx := preload("res://scripts/water_collider.gd")
@@ -61,17 +70,6 @@ func _ready() -> void:
 	# Odd, so there is a cell centred on the camera and the snap is symmetric.
 	if _side % 2 == 0:
 		_side += 1
-
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = PieceMeshes.unit_plate()
-	mm.instance_count = _side * _side
-	# Every instance is written ONCE, with identity. The vertex shader places
-	# it from INSTANCE_ID, so nothing here is ever rewritten -- that is the
-	# whole point of §3.4.
-	for i in mm.instance_count:
-		mm.set_instance_transform(i, Transform3D.IDENTITY)
-	multimesh = mm
 
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/water.gdshader")
@@ -91,14 +89,9 @@ func _ready() -> void:
 	_mat.set_shader_parameter("water_outside_field", true)
 	_mat.set_shader_parameter("fade_radius", radius)
 	material_override = _mat
-
-	# A brick-thick moving surface casting a shadow map is not worth what it
-	# costs, and the ground under it is already dark from depth colour.
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# The instances are placed in the vertex shader, so Godot's own culling
-	# sees an empty AABB and throws the whole thing away.
-	custom_aabb = AABB(Vector3(-radius, -40.0, -radius),
-		Vector3(radius * 2.0, 80.0, radius * 2.0))
+	_mat.set_shader_parameter("chunked", true)
+	_build_chunks()
 
 	if collide:
 		_collider = WaterColliderFx.new()
@@ -128,8 +121,84 @@ func set_print_lines(on: bool) -> void:
 	_mat.set_shader_parameter("print_lines_enabled", on)
 
 
+## The chunks: this node draws nothing itself. A chunk wholly outside the
+## disc, or wholly inside `inner_radius`, is never made -- the square's
+## corners were a fifth of the pieces, all dropped in the shader.
+func _build_chunks() -> void:
+	@warning_ignore("integer_division")
+	var half := _side / 2
+	var z := 0
+	while z < _side:
+		var x := 0
+		var d := mini(CHUNK_PIECES, _side - z)
+		while x < _side:
+			var w := mini(CHUNK_PIECES, _side - x)
+			# The chunk's nearest and farthest points from the middle, in
+			# pieces; a piece of slack either way for the snap.
+			var dx0 := float(x - half)
+			var dx1 := float(x + w - 1 - half)
+			var dz0 := float(z - half)
+			var dz1 := float(z + d - 1 - half)
+			var nx := 0.0 if dx0 <= 0.0 and dx1 >= 0.0 else minf(absf(dx0), absf(dx1))
+			var nz := 0.0 if dz0 <= 0.0 and dz1 >= 0.0 else minf(absf(dz0), absf(dz1))
+			var fx := maxf(absf(dx0), absf(dx1))
+			var fz := maxf(absf(dz0), absf(dz1))
+			var near_m := Vector2(nx, nz).length() * _pitch - _pitch
+			var far_m := Vector2(fx, fz).length() * _pitch + _pitch
+			if near_m < radius and far_m >= inner_radius:
+				_add_chunk(x, z, w, d)
+			x += CHUNK_PIECES
+		z += CHUNK_PIECES
+
+
+func _add_chunk(x: int, z: int, w: int, d: int) -> void:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = true
+	mm.mesh = PieceMeshes.unit_plate()
+	mm.instance_count = w * d
+	# Every instance is written ONCE: identity, and its cell in the grid. The
+	# vertex shader places it from that, so nothing here is ever rewritten --
+	# that is the whole point of §3.4.
+	for i in mm.instance_count:
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+		@warning_ignore("integer_division")
+		mm.set_instance_custom_data(i, Color(float(x + i % w), float(z + i / w), 0.0, 0.0))
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "Chunk_%d_%d" % [x, z]
+	mmi.multimesh = mm
+	mmi.material_override = _mat
+	# A brick-thick moving surface casting a shadow map is not worth what it
+	# costs, and the ground under it is already dark from depth colour.
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mmi)
+	_chunks.append([mmi, x, z, w, d])
+	_place_chunk(_chunks.back(), Vector2.ZERO)
+
+
+## A chunk's culling box, round where its pieces are for this grid origin.
+## The pieces are placed in the vertex shader, so without it Godot's culling
+## sees an empty box and throws the chunk away.
+func _place_chunk(c: Array, origin_xz: Vector2) -> void:
+	@warning_ignore("integer_division")
+	var half := _side / 2
+	var x0 := origin_xz.x + (float(int(c[1]) - half) - 0.5) * _pitch
+	var z0 := origin_xz.y + (float(int(c[2]) - half) - 0.5) * _pitch
+	var sea := BrickWave.get_sea_level()
+	(c[0] as MultiMeshInstance3D).custom_aabb = AABB(Vector3(x0, sea - 40.0, z0),
+			Vector3(float(int(c[3])) * _pitch, 80.0, float(int(c[4])) * _pitch))
+
+
+## Pieces actually built (the chunks'), not the square they came from.
 func instance_count() -> int:
-	return _side * _side
+	var n := 0
+	for c in _chunks:
+		n += int(c[3]) * int(c[4])
+	return n
+
+
+func chunk_count() -> int:
+	return _chunks.size()
 
 
 ## Called every frame with the camera position. Two uniform writes.
@@ -167,9 +236,8 @@ func follow(camera_xz: Vector2, delta: float, camera_y: float = 0.0) -> void:
 	# origin: away from it the engine culled the whole tier whenever that
 	# box was off screen -- the near water vanishing, and coming back when
 	# the camera turned toward the origin.
-	var sea := BrickWave.get_sea_level()
-	custom_aabb = AABB(Vector3(origin_xz.x - radius, sea - 40.0, origin_xz.y - radius),
-		Vector3(radius * 2.0, 80.0, radius * 2.0))
+	for c in _chunks:
+		_place_chunk(c, origin_xz)
 	_mat.set_shader_parameter("wave_time", _time)
 	_mat.set_shader_parameter("camera_submerged",
 			submerged_at(Vector3(camera_xz.x, _camera_y, camera_xz.y)))

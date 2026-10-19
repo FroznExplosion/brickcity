@@ -95,6 +95,14 @@ uniform float fade_radius = 20.0;
 // One sheet that stops at 20 m is a disc of water with a cliff round it, in
 // every wide shot. A second ring costs one more MultiMesh and no new code.
 uniform float inner_radius = 0.0;
+// The studded tiers are drawn in square chunks (WaterSurface._build_chunks),
+// one MultiMesh each so the engine culls those off screen. Each piece then
+// carries its cell in the tier's grid in its custom data (x, y), written once.
+// Not instance uniforms: their buffer is shared by the whole project and the
+// chunks ran it out.
+uniform bool chunked = false;
+// What the L view calls this tier: 0 the 1x1 bricks, 7 (pink) the 2x2 ring.
+uniform float piece_lod = 0.0;
 // TIER 2 (Water 3.2). The mesh is already a sheet in world space, so there
 // is no instance to place and no brick to build: the vertex is moved
 // straight onto the continuous wave. Past 80 m a 0.42 m step is under a
@@ -442,6 +450,10 @@ void vertex() {
     int id = INSTANCE_ID;
     int gx = id % grid_side;
     int gz = id / grid_side;
+    if (chunked) {
+        gx = int(INSTANCE_CUSTOM.x + 0.5);
+        gz = int(INSTANCE_CUSTOM.y + 0.5);
+    }
     // FLOORED, so the grid lands on whole cells.
     //
     // `grid_side` is odd (WaterSurface makes it so), so half of it ends in
@@ -465,7 +477,7 @@ void vertex() {
     float taper = 1.0;
     float raw = surface_offset(cell, t, taper, 0.0);
     float top = sea_level + raw;
-    v_lod = 0.0;
+    v_lod = piece_lod;
     if (brick_steps) {
         top = floor(top / step_m) * step_m;
     }
