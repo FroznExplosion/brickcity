@@ -18,6 +18,10 @@ const WaterPoolsFx := preload("res://scripts/water_pools.gd")
 
 ## Tier 0: brick pieces a stud across, round the camera.
 var near: WaterSurface = null
+## Tier 0b: 2x2 pieces from `fine_radius` out to `near_radius` -- the same
+## bricks, a quarter of the pieces where each is two or three pixels
+## (2026-10-19). Null when `fine_radius` reaches `near_radius`.
+var mid: WaterSurface = null
 ## There is no tier 1 any more: the four-stud blocks between the studded
 ## water and the sheet were the blocky donut round the camera, and cost more
 ## than the sheet (Water.md §8). Kept as a name, always null.
@@ -40,6 +44,14 @@ var enabled := true
 ## How far the studded tier reaches. 20 m read as a small blocky island in
 ## a smooth sea; 40 m is where a brick is ~2 px at 1080p.
 var near_radius := 40.0
+## How far the 1x1 pieces reach; 2x2 pieces from here to `near_radius`. The
+## four-stud ring this replaced was a blocky donut (above) because it jumped
+## from studs to a block four times the size; two is a step the eye takes for
+## distance. Set to `near_radius` for 1x1 all the way, as before.
+var fine_radius := 20.0
+## How far the 2x2 ring reaches in under the 1x1 tier's edge: each tier is
+## snapped to its own pitch, so with no overlap their edges leave slits.
+const MID_OVERLAP := 0.7
 ## The wave height gain the tiers are built with (BrickWave.set_wave_gain).
 var wave_gain := 2.2
 var _outer_metres := 600.0
@@ -86,11 +98,25 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 
 	near = WaterSurface.new()
 	near.name = "Water"
-	# LOD 0: studded bricks to 40 m round the camera; the smooth sheet past it.
-	near.radius = near_radius
+	# LOD 0: studded bricks round the camera, 2x2 pieces past them to 40 m,
+	# the smooth sheet past that.
+	var split := fine_radius < near_radius - MID_OVERLAP
+	near.radius = fine_radius if split else near_radius
 	near.wave_gain = wave_gain
 	add_child(near)
 	near.set_seabed(seabed, origin, extent)
+	if split:
+		mid = WaterSurface.new()
+		mid.name = "WaterMid"
+		mid.pitch_studs = 2
+		mid.radius = near_radius
+		mid.inner_radius = maxf(fine_radius - MID_OVERLAP, 0.0)
+		mid.wave_gain = wave_gain
+		# The swimmer's collider is the 1x1 tier's, round the camera.
+		mid.collide = false
+		add_child(mid)
+		mid.set_seabed(seabed, origin, extent)
+		mid._mat.set_shader_parameter("piece_lod", 7.0)
 
 	sheet = WaterSheetFx.new()
 	sheet.name = "WaterSheet"
@@ -170,6 +196,8 @@ func follow(camera: Vector3, delta: float) -> void:
 	# The sheet is flat rings and cheap; the brick tiers are not, and are shown
 	# only where there is water inside their reach.
 	near.visible = enabled and wet_near(camera, near.radius)
+	if mid != null:
+		mid.visible = enabled and wet_near(camera, mid.radius)
 	sheet.visible = enabled
 	if pools != null:
 		pools.visible = enabled
@@ -182,6 +210,8 @@ func follow(camera: Vector3, delta: float) -> void:
 		_update_mask(camera)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
+	if mid != null:
+		mid.follow(xz, delta, camera.y)
 	# The sheet leaves a hole exactly where the studded tier draws, and none
 	# when it does not -- so there is never water twice, or none.
 	# The hole a few metres INSIDE the studded tier's edge: the two overlap
@@ -189,8 +219,12 @@ func follow(camera: Vector3, delta: float) -> void:
 	# between them is water whichever way the waves lean.
 	# The centre is passed always: the sheet's wave LOD is by distance from
 	# it, hole or no hole.
-	sheet.follow(near.time(), xz, near.centre_for(xz),
-			maxf(near.radius - SEAM_OVERLAP, 0.0) if near.visible else 0.0)
+	# Round the outermost brick tier that is showing.
+	var outer := near
+	if mid != null and mid.visible:
+		outer = mid
+	sheet.follow(near.time(), xz, outer.centre_for(xz),
+			maxf(outer.radius - SEAM_OVERLAP, 0.0) if outer.visible else 0.0)
 
 
 ## Keep the sea from drawing over pools: a stud mask over a window round the
@@ -226,7 +260,7 @@ func _update_mask(camera: Vector3) -> void:
 
 
 func _set_mask_param(param: String, value: Variant) -> void:
-	for tier in [near, sheet]:
+	for tier in tiers():
 		if tier != null and tier._mat != null:
 			tier._mat.set_shader_parameter(param, value)
 
@@ -240,6 +274,7 @@ func rebuild() -> void:
 		remove_child(child)
 		child.queue_free()
 	near = null
+	mid = null
 	sheet = null
 	pools = null
 	_mask_tex = null
@@ -292,18 +327,26 @@ func surge() -> float:
 ## The sea state changed (gain, shore strength, steering): into both tiers.
 func push_waves() -> void:
 	BrickWave.set_wave_gain(wave_gain)
-	if near != null:
-		near.wave_gain = wave_gain
-		near.push_waves()
+	for tier in [near, mid]:
+		if tier != null:
+			tier.wave_gain = wave_gain
+			tier.push_waves()
 	if sheet != null:
 		sheet.push_waves()
 
 
 func set_lod_debug(on: bool) -> void:
-	if near != null:
-		near.set_lod_debug(on)
-	if sheet != null:
-		sheet.set_lod_debug(on)
+	for tier in tiers():
+		tier.set_lod_debug(on)
+
+
+## Every tier that draws sea, for a setting all of them take.
+func tiers() -> Array:
+	var out := []
+	for tier in [near, mid, sheet]:
+		if tier != null and tier._mat != null:
+			out.append(tier)
+	return out
 
 
 ## The water's surface over a point: a pool's where there is one, -INF

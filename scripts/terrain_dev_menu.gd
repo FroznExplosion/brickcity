@@ -117,6 +117,9 @@ func setup(p_host) -> void:
 	_slider("Studded water radius (m)", 10.0, 100.0, 5.0, sea.near_radius, func(v: float) -> void:
 		sea.near_radius = v
 		sea.rebuild())
+	_slider("1x1 water radius (m), 2x2 past it", 5.0, 100.0, 5.0, sea.fine_radius, func(v: float) -> void:
+		sea.fine_radius = v
+		sea.rebuild())
 	_slider("Tile lean (0 flat)", 0.0, 1.0, 0.05, 0.0, func(v: float) -> void:
 		host.set_water_param("tile_tilt", v))
 	_check("Grid lines", true, func(on: bool) -> void:

@@ -897,6 +897,33 @@ fraction keeps it (the city's worlds, 0.20, 10.3 m).
 (A first attempt drew a new sand band 1.3 m above wherever the sea was; that
 moved the sand instead of the water, and is gone.)
 
+## 9.11 The studded tier in culled chunks, and a 2x2 ring (2026-10-19)
+
+The studded tier was one MultiMesh, a square of 1x1 pieces round the camera
+(52k at 40 m). Its culling box always held the camera, so every piece went
+through the vertex shader -- five wave evaluations a vertex -- every frame,
+the two thirds behind the camera and the square's corners outside the disc
+included. Two changes, neither meant to be visible:
+
+* **Chunks.** `WaterSurface` draws its pieces as 24x24-piece chunks, one
+  MultiMesh each, so the engine culls those off screen; a chunk wholly
+  outside the disc (or inside `inner_radius`) is never made. Each piece
+  carries its cell in its custom data. Not `instance uniform`: that buffer is
+  shared by the whole project, and the chunks ran it out.
+* **A 2x2 ring.** 1x1 pieces to `WaterSea.fine_radius` (20 m), 2x2 from there
+  to `near_radius` (40 m), overlapping by `MID_OVERLAP`; the sheet's hole
+  follows the outer ring. The four-stud ring of §9.5 was a blocky donut; two
+  studs reads as distance. Pink in the L view. Dev menu: "1x1 water radius" --
+  at `near_radius` it is 1x1 all the way, as before.
+
+Measured, heightfield_test over open sea (a temporary bench: four headings,
+water on and off), triangles exact:
+
+| | whole frame, heading 0 | the sea's share | GPU frame (noisy) |
+|---|---|---|---|
+| before | 1,169k | 551k | 8.1-9.8 ms |
+| after | 769k | 176k | 5.3-7.3 ms |
+
 ## 10. Order of work
 
 Water comes after [Terrain.md §14](Terrain.md)'s T0–T4, because the seabed, the stud shader and

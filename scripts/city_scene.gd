@@ -1702,9 +1702,8 @@ func set_ground_param(param: String, value: Variant) -> void:
 func set_water_param(param: String, value: Variant) -> void:
 	if _sea == null:
 		return
-	for tier in [_sea.near, _sea.sheet]:
-		if tier != null and tier._mat != null:
-			tier._mat.set_shader_parameter(param, value)
+	for tier in _sea.tiers():
+		tier._mat.set_shader_parameter(param, value)
 
 
 func dev_sea():
