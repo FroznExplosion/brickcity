@@ -2308,6 +2308,15 @@ func _stream_pieces(here: Vector3) -> void:
 		if groups.piece_work(entry[2], isl.chunk, lo, hi, isl.edits, isl.mesh, until,
 				world.get_alive_block_count(isl.chunk)):
 			_pieces_owed -= 1
+			var p: InteriorGroups.PieceDraw = groups.piece(isl.chunk)
+			if p != null and p.laid > 0:
+				# Its furniture is bricks now: drawn, solid, counted. Asked
+				# again only when something else changes it.
+				islands.rebuild_chunk(isl.chunk)
+				p.laid = 0
+				p.edits = isl.edits
+				p.alive = world.get_alive_block_count(isl.chunk)
+				p.gone_sum = groups.piece_gone_sum(p)
 		else:
 			break
 
@@ -4221,53 +4230,6 @@ func _break_items(b: BuildingRegistry.Building, chunk: int, room: Room, items: D
 	for i in items:
 		room.gone[i] = true
 	return broke
-
-
-## A blast on WRECKAGE breaks the furniture drawn on it within its radius
-## (_break_items): what stands on a piece of a building is drawn on that piece
-## (InteriorGroups.piece_work), and nothing laid it as bricks or wrote it off when
-## the piece was shot -- it stood there whole while the bricks round it flew.
-func _break_piece_items(point: Vector3, radius: float) -> void:
-	for isl in islands.islands:
-		if not isl.is_valid() or isl.owner < 0:
-			continue
-		var p: InteriorGroups.PieceDraw = interior_groups.piece(isl.chunk)
-		if p == null or not p.shown:
-			continue
-		if isl.body.global_position.distance_to(point) > isl.radius + radius:
-			continue
-		var b := registry.get_building(isl.owner)
-		if b == null:
-			continue
-		# Where the piece IS: the grid's own transform is brought up to date only
-		# when something asks the grid.
-		world.set_chunk_transform(isl.chunk, isl.chunk_transform())
-		var local: Vector3 = world.get_chunk_transform(isl.chunk).affine_inverse() * point
-		var offset: Vector3i = registry._rebase_of(b)
-		var any := false
-		for index in p.rooms:
-			var room := registry.get_room(b.id, index)
-			if room == null:
-				continue
-			var d := RoomManifest.draw_items(world, isl.chunk, registry.palette, room, offset)
-			var boxes: Array = d.boxes
-			var pieces: PackedInt32Array = d.pieces
-			var reached := {}
-			for k in range(0, pieces.size(), 6):
-				if pieces[k + 5] < 0:
-					continue
-				var box: AABB = boxes[pieces[k + 5]]
-				if local.clamp(box.position, box.end).distance_to(local) <= radius:
-					reached[pieces[k]] = true
-			if not reached.is_empty():
-				items_broken_on_wreckage += _break_items(b, isl.chunk, room, reached, point,
-						BLAST_ITEM_THROW)
-				any = true
-		if any:
-			p.dirty = true   # drawn again at once, without them
-
-
-var items_broken_on_wreckage := 0
 
 
 ## Shear, not destroy: a brick struck by falling masonry comes loose.
@@ -8641,67 +8603,50 @@ func _run_groups_pass() -> void:
 			"%d piece(s) lost their floor, %d rode; up to %d section(s) carrying some; %d found off its section" % [
 				_group_orphans - orphans0, _group_rides - rides0, riding_most, rider_off])
 	# The wreckage is not empty (user, 2026-10-07: "the building just stays
-	# empty"). Once its pieces are still, what stood on a floor is drawn on
-	# the piece that has that floor -- and nothing is made on one still moving.
+	# empty"). Once its pieces are still, what stood on a floor is laid as
+	# bricks on the piece that has that floor (Interiors 8.14: solid, shot as
+	# bricks, there at every distance) -- and nothing is laid on one still
+	# moving.
 	var wreck: Dictionary = await _groups_wreck_settle(b)
-	_gate_ok("the wreckage has its interior: still pieces draw what stood on their floors",
+	_gate_ok("the wreckage has its interior: still pieces carry what stood on their floors, as bricks",
 			int(wreck.pieces) > 0 and int(wreck.boxes) > 0 and int(wreck.made_moving) == 0,
-			"%d piece(s) with a drawing, %d box(es); %d drawing(s) made on a piece still moving; still after %d tick(s)" % [
+			"%d piece(s) with furniture, %d brick(s) of it; %d laid on a piece still moving; still after %d tick(s)" % [
 				wreck.pieces, wreck.boxes, wreck.made_moving, wreck.ticks])
-	_gate_ok("  each is what its own chunk holds, and no rider is left on a piece that has one",
+	_gate_ok("  none of it is left only drawn, and no rider is left on a piece that has its own",
 			int(wreck.wrong) == 0 and int(wreck.riders) == 0,
-			"%d drawing(s) not what the piece's chunk gives, %d rider(s) on a piece with a drawing;%s" % [
+			"%d piece(s) with furniture still to lay, %d rider(s) on a piece that has it;%s" % [
 				wreck.wrong, wreck.riders, wreck.get("why", "")])
 	await _save("interior_groups_wreck")
 
-	# A blast at furniture drawn on wreckage breaks it into its parts
-	# (_break_items): written off, thrown, drawn no more. It stood there whole.
+	# A blast at furniture on wreckage breaks its bricks, as any blast does.
 	var target: BrickIsland = null
-	var target_room: Room = null
-	var target_item := -1
 	var target_at := Vector3.ZERO
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
 	for isl in islands.islands:
-		if target != null:
-			break
-		if not isl.is_valid() or not isl.settled:
+		if not isl.is_valid() or not isl.settled or isl.owner != b.id:
 			continue
-		var pd: InteriorGroups.PieceDraw = interior_groups.piece(isl.chunk)
-		var ob := registry.get_building(isl.owner)
-		if pd == null or not pd.shown or ob == null:
+		var deco: PackedInt32Array = world.get_decorative_blocks(isl.chunk)
+		if deco.is_empty():
 			continue
-		for index in pd.rooms:
-			var r := registry.get_room(ob.id, index)
-			if r == null:
-				continue
-			var dd := RoomManifest.draw_items(world, isl.chunk, registry.palette, r,
-					registry._rebase_of(ob))
-			var pcs: PackedInt32Array = dd.pieces
-			for k in range(0, pcs.size(), 6):
-				if pcs[k + 5] >= 0:
-					target = isl
-					target_room = r
-					target_item = pcs[k]
-					target_at = isl.chunk_transform() * (dd.boxes[pcs[k + 5]] as AABB).get_center()
-					break
-			if target != null:
-				break
+		var ticks: Array = world.get_block_ticks(isl.chunk, deco[deco.size() / 2])
+		if ticks.is_empty():
+			continue
+		var lo: Vector3 = Vector3(ticks[0] as Vector3i) * tick_m
+		var size: Vector3 = Vector3(ticks[1] as Vector3i) * tick_m
+		target = isl
+		target_at = isl.chunk_transform() * (lo + size * 0.5)
+		break
 	if target != null:
-		var items0: int = islands.furniture_broken[0]
-		var parts0: int = islands.furniture_broken[1]
-		var broken0 := items_broken_on_wreckage
+		var deco0 := _wreck_furniture(b.id)
 		_blast(target_at, 0.6)
 		for t in 24:
 			await get_tree().physics_frame
-		_gate_ok("a blast at furniture on wreckage breaks it into its parts, and it is drawn no more",
-				target_room.gone.has(target_item) and items_broken_on_wreckage > broken0
-				and int(islands.furniture_broken[0]) > items0
-				and int(islands.furniture_broken[1]) > parts0,
-				"room %d item %d: gone %s; %d item(s) broken on wreckage, %d part(s) thrown" % [
-					target_room.id, target_item, target_room.gone.has(target_item),
-					items_broken_on_wreckage - broken0, int(islands.furniture_broken[1]) - parts0])
+		var deco1 := _wreck_furniture(b.id)
+		_gate_ok("a blast at furniture on wreckage breaks its bricks",
+				deco1 < deco0, "%d furniture brick(s) on the wreckage before, %d after" % [deco0, deco1])
 	else:
-		_gate_ok("a blast at furniture on wreckage breaks it into its parts", false,
-				"no furniture drawn on a still piece to shoot")
+		_gate_ok("a blast at furniture on wreckage breaks its bricks", false,
+				"no furniture on a still piece to shoot")
 
 	# A building that is coming apart when somebody arrives gets no groups
 	# until it is still; then the storeys left standing get theirs.
@@ -8776,7 +8721,7 @@ func _run_groups_pass() -> void:
 		var wreck2: Dictionary = await _groups_wreck_settle(b2)
 		_gate_ok("  and what is left of it on the ground has its interior",
 				int(wreck2.pieces) > 0 and int(wreck2.boxes) > 0 and int(wreck2.wrong) == 0,
-				"%d piece(s) with a drawing, %d box(es), %d wrong; still after %d tick(s);%s" % [
+				"%d piece(s) with furniture, %d brick(s), %d with some still to lay; still after %d tick(s);%s" % [
 					wreck2.pieces, wreck2.boxes, wreck2.wrong, wreck2.ticks, wreck2.get("why", "")])
 	else:
 		_gate_ok("a tower that goes over whole takes its furniture with it", false,
@@ -9054,11 +8999,11 @@ func _groups_pick(n: int) -> Array:
 	return found
 
 
-## Wait for a building's pieces to come to rest and for the piece drawings to
-## catch up, then say what the wreckage is drawing: {pieces with a drawing,
-## their boxes, drawings that are not what the piece's own chunk gives when
-## asked afresh, riders left on a piece that has a drawing, drawings first
-## seen on a piece that was not still, ticks waited}.
+## Wait for a building's pieces to come to rest and their furniture to be
+## laid, then say what the wreckage carries: {pieces with furniture bricks,
+## those bricks, pieces where an item still stands on its floor unlaid (asked
+## of the piece's own chunk afresh), riders left on a piece whose furniture is
+## laid, records first made on a piece that was not still, ticks waited}.
 func _groups_wreck_settle(b: BuildingRegistry.Building) -> Dictionary:
 	var out := {"pieces": 0, "boxes": 0, "wrong": 0, "riders": 0, "made_moving": 0, "ticks": 0}
 	var seen := {}
@@ -9087,26 +9032,35 @@ func _groups_wreck_settle(b: BuildingRegistry.Building) -> Dictionary:
 		for rider in _group_riders:
 			if (rider[0] as BrickIsland).is_valid() and (rider[0] as BrickIsland).chunk == int(chunk):
 				out.riders += 1
-		if p.boxes > 0:
+		var deco := world.get_decorative_blocks(int(chunk)).size()
+		if deco > 0:
 			out.pieces += 1
-			out.boxes += p.boxes
+			out.boxes += deco
 		# Asked afresh, of every room of the building and not only the ones
-		# its box was thought to reach.
-		var want := 0
+		# its box was thought to reach: nothing standing here is left unlaid.
+		var left := 0
 		for room in rooms:
 			if room.items.is_empty():
 				continue
 			@warning_ignore("integer_division")
-			want += (RoomManifest.draw_items(world, int(chunk), registry.palette, room,
+			left += (RoomManifest.draw_items(world, int(chunk), registry.palette, room,
 					offset).buffer as PackedFloat32Array).size() / FurnitureMesh.STRIDE
-		if want != p.boxes:
+		if left > 0:
 			out.wrong += 1
 			var isl := islands.find_by_chunk(int(chunk))
-			out["why"] = "%s piece %d: draws %d, its chunk gives %d; %d room(s) tried; drawn at edit %d, now %d; settled %s, %d brick(s)" % [
-					out.get("why", ""), int(chunk), p.boxes, want, p.rooms.size(), p.edits,
-					isl.edits if isl != null else -1, isl.settled if isl != null else false,
-					world.get_alive_block_count(int(chunk))]
+			out["why"] = "%s piece %d: %d box(es) still to lay; %d room(s) tried; settled %s, %d brick(s)" % [
+					out.get("why", ""), int(chunk), left, p.rooms.size(),
+					isl.settled if isl != null else false, world.get_alive_block_count(int(chunk))]
 	return out
+
+
+## Furniture bricks on a building's wreckage, all its pieces together.
+func _wreck_furniture(id: int) -> int:
+	var n := 0
+	for isl in islands.islands:
+		if isl.is_valid() and isl.owner == id:
+			n += world.get_decorative_blocks(isl.chunk).size()
+	return n
 
 
 ## Stand `dist` out from the foot of a face, `eye` up it, looking at it.
@@ -10182,10 +10136,6 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# rest stays at rest until something is taken from under it (CollapseNext
 	# 1.10); a piece's own bricks say the same for themselves in damage().
 	var t_pieces := Time.get_ticks_usec()
-	# The furniture on wreckage first, judged on the floor it stood on: after
-	# the blast has taken that floor, what stood there is not standing anywhere.
-	if chip_hp <= 0:
-		_break_piece_items(point, radius)
 	islands.damage_near(point, radius, chip_hp)
 	if took_bricks:
 		islands.support_gone(AABB(point - Vector3.ONE * reach, Vector3.ONE * reach * 2.0))
@@ -10226,7 +10176,6 @@ func _fire(radius: float) -> void:
 		# A client asks; the host's blast finds the same piece by its volume.
 		if not authority.request(DamageLog.Kind.BLAST, -1, hit.position, radius):
 			return
-		_break_piece_items(hit.position, radius)
 		islands.damage(struck, hit.position, radius)
 		islands.push_near(hit.position, radius)
 		return
@@ -12832,9 +12781,8 @@ func _run_shot_pass() -> void:
 	print("[city]   " + islands.shed_census_line())
 	print("[city]   " + span_line())
 	print("[city]   " + islands.heap.census_line())
-	print("[city]   furniture broken: %d item(s), %d part(s) thrown; %d on wreckage a blast reached, %d crushed under it" % [
-			islands.furniture_broken[0], islands.furniture_broken[1], items_broken_on_wreckage,
-			crushed_by_wreckage])
+	print("[city]   furniture broken: %d item(s), %d part(s) thrown; %d crushed under wreckage" % [
+			islands.furniture_broken[0], islands.furniture_broken[1], crushed_by_wreckage])
 	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms" % [
 			islands.crumbled, islands.crumb_bricks, islands.crumbs_over, islands.crumb_worst_ms,
 			islands.crumble_worst_ms, islands.crumble_parts[0], islands.crumble_parts[1],

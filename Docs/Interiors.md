@@ -521,8 +521,8 @@ cracked under a table leaves the table on the bigger part and never on both).
   somewhere else -- each of those did, and the last showed up as a wreck drawing ten boxes it
   should not have had.
 
-It is still a drawing: it holds nothing, nothing lands on it, and a piece on its side has its
-furniture standing out of the wall its floor has become. **Not covered:** a piece the piece cap
+It was still a drawing: it held nothing, nothing landed on it, and a piece on its side had its
+furniture standing out of the wall its floor had become. **Since 2026-10-19 it is bricks (§8.14).** **Not covered:** a piece the piece cap
 has put to sleep is a stand-in with no chunk to ask, so it carries nothing until it wakes; and a
 landing piece does not crush what another piece carries.
 
@@ -656,3 +656,33 @@ a scene that draws hundreds of frames a tick -- a picture taken four frames afte
 moved was taken from somewhere on the way there. It is what made its "a tree mid-band has no
 holes" check fail some runs and pass others. The probe's camera is not interpolated now; the check
 has passed every run since (five).
+
+### 8.14 Wreckage furniture is bricks (2026-10-19)
+
+The user, playing the big city: furniture "spawned in and floating in destroyed areas of a building",
+"no collision", "cannot be destroyed", "disappears if [I] change a LOD level". All four were §8.10's
+piece drawing doing what it was built to do: a drawing made only for a still piece within
+`INTERIOR_RANGE` (so it appeared after the wreck settled), holding nothing and colliding with
+nothing, broken only by `_break_piece_items` asking afresh what a blast reached, and dropped with
+every other drawing past `INTERIOR_RANGE` + `RELEASE`.
+
+Now, when `_stream_pieces` picks a piece (the same rule: still, near, `PIECE_INTERIOR_BLOCKS` or
+more), `InteriorGroups.piece_work` **lays** its items into the piece's chunk as decorative bricks
+(`BuildingRegistry.lay_item_into`, §8.4's laying for one item, into any chunk) and the city rebuilds
+the piece once (`IslandManager.rebuild_chunk`: mesh, collision, its furniture drawing). From then on
+it is the piece's own bricks: drawn with them, solid, broken by a blast as bricks are, and there at
+every distance and after the piece sleeps and wakes. `room.laid` is set, so neither the building nor
+a later piece of it lays or draws it again; it is not in the building's `laid_rooms` (its blocks are
+the piece's, and go where its bricks go).
+
+On a piece lying on its side, the furniture is still on its floor, which is now a wall: snapped on, as
+LEGO is (the brick attachment rule). `--lodbreak`'s floating count reads those as floating (it looks
+straight down): 143-214 parts per tower after this, all "laid", where it was 243-321 "piece" before.
+
+What went: `_break_piece_items` and `items_broken_on_wreckage` (a blast breaks bricks itself).
+Riders (§8.9) still carry the drawing down and are taken off once the piece's furniture is laid.
+
+Checks: `interior_group_probe` 33 (the cut tower's top: the 37 items that left the building are
+laid on the piece, 112 bricks, each on the piece's floors, none twice, kept when the record goes);
+`-- --groups --big` 24 (still pieces carry their furniture as bricks, none left only drawn, no
+rider on a piece that has its own; a blast at furniture on wreckage breaks its bricks).
