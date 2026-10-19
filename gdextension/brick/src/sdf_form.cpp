@@ -701,7 +701,8 @@ Array SdfForm::mesh_block(const Vector3i &bc, const PackedColorArray &palette) c
         const Vector3i s = floor3(p);
         const int part = part_at(s.x, s.y, s.z);
         Color col = part < palette.size() ? palette[part] : Color(1, 1, 1);
-        col.a = flag_at(s.x, s.y, s.z) ? 0.5f : 1.0f;
+        // Marked smooth: lighter, so the areas that will be custom pieces stand out.
+        if (flag_at(s.x, s.y, s.z)) col = col.lerp(Color(1, 1, 1), 0.45f);
         colors.set(i, col);
     }
     Array out;
@@ -772,7 +773,7 @@ PackedFloat32Array SdfForm::part_field(int part, const Vector3i &lo, const Vecto
             for (int x = 0; x < dims.x; ++x, ++i) {
                 float d = d_at(lo.x + x, lo.y + y, lo.z + z);
                 if ((part != 0 && part_at(lo.x + x, lo.y + y, lo.z + z) != part) ||
-                        (smooth_only && flag_at(lo.x + x, lo.y + y, lo.z + z))) {
+                        (smooth_only && !flag_at(lo.x + x, lo.y + y, lo.z + z))) {
                     d = std::max(d, 0.5f);
                 }
                 w[i] = d;

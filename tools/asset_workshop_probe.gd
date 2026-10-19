@@ -1619,6 +1619,7 @@ func _sculpt() -> void:
 	holder.queue_free()
 	_ws.sculpt_clear()
 	_convert()
+	_convert_plain()
 	_ws.rail_pick("place")
 
 
@@ -1639,12 +1640,17 @@ func _convert() -> void:
 	_ws.sculpt_radius = 0.8
 	_ws._sculpt_dab(at + Vector3(40, 0, 0), at + Vector3(80, 0, 0))
 	_ws._sculpt_op = SdfForm.MARK
+	_ws.sculpt_radius = 12.0
+	_ws._sculpt_dab(at, at + Vector3(80, 0, 0))   # all smooth...
+	_ws._sculpt_op = SdfForm.UNMARK
 	_ws.sculpt_radius = 3.0
-	_ws._sculpt_dab(at + Vector3(70, 0, 0), at + Vector3(90, 0, 0))   # the barrel's end: bricks
+	_ws._sculpt_dab(at + Vector3(70, 0, 0), at + Vector3(90, 0, 0))   # ...but the barrel's end: bricks
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
 	var cells: PackedInt32Array = _ws.sculpt.form.cells()
 	var n_cells := cells.size() / 5
 	var before: int = _ws.recipe.size()
+	_ws.set_exploded(true)
+	_ok("Explode is refused while sculpting", not _ws.exploded)
 	_ws.sculpt_convert()
 	_ok("converted: the block-out is hidden", _ws.sculpt_state == "bricks" and not _ws.sculpt.visible)
 	var covered: int = _asset_cells().size()
@@ -1654,13 +1660,16 @@ func _convert() -> void:
 	_ok("both parts have a custom piece", _ws.shells.has("body") and _ws.shells.has("barrel")
 			and int(_ws._shell_tris.get("body", 0)) > 0 and int(_ws._shell_tris.get("barrel", 0)) > 0,
 			str(_ws._shell_tris))
+	_ws.set_exploded(true)
+	_ok("and works once converted", _ws.exploded)
+	_ws.set_exploded(false)
 	var zone_bricks := 0
 	var shown := 0
 	for ps in _ws.export_sheet().parts:
 		if ps.name == "barrel":
 			shown = (ps.bricks as Array).size()
 	for i in range(0, cells.size(), 5):
-		zone_bricks += cells[i + 4]
+		zone_bricks += 1 - cells[i + 4]   # not marked smooth
 	_ok("the brick zone stays bricks on the sheet, the rest under the shell", shown > 0 and zone_bricks > 0,
 			"%d barrel bricks on the sheet, %d zone cells" % [shown, zone_bricks])
 	# Edit the bricks, then back to the SDF: exactly those edits show.
@@ -1709,6 +1718,27 @@ func _convert() -> void:
 	_ws._undo()
 	_ok("a piece's detail slider, and undo", coarse < fine and int(_ws._shell_tris.get("body", 0)) == fine,
 			"%d -> %d -> %d" % [fine, coarse, int(_ws._shell_tris.get("body", 0))])
+
+
+## Nothing marked smooth: Convert makes it all bricks, no custom pieces.
+func _convert_plain() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sketch")
+	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_op = SdfForm.ADD
+	_ws.select_part(_ws.part_names.find("body"))
+	_ws.sculpt_radius = 1.5
+	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var n: int = _ws.sculpt.form.cells().size() / 5
+	_ws.sculpt_convert()
+	var sdf_pieces := 0
+	for part in _ws.shells:
+		sdf_pieces += int(_ws.shells[part].get("sdf", false))
+	_ok("unmarked: Convert lays only bricks", sdf_pieces == 0 and _ws._sdf_shell.is_empty()
+			and _ws._brick_cell_list().size() / 5 == n, "%d pieces, %d of %d cells bricks" % [sdf_pieces,
+			_ws._brick_cell_list().size() / 5, n])
 
 
 ## The asset's cells after a Convert: its bricks', and those its custom pieces fill alone.
