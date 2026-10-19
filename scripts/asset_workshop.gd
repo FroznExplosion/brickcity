@@ -1832,7 +1832,7 @@ func fill_parts() -> Array:
 	var out := []
 	for part in _parts():
 		var name := String(part)
-		if not (name.begins_with("plate_") or name.begins_with("brick_")) or name == "plate_10x10":
+		if not (name.begins_with("plate_") or name.begins_with("brick_")) 				or name in ["plate_10x10", "plate_5x10", "plate_5x5"]:
 			continue
 		var seen := {}
 		for yaw in 2:

@@ -158,9 +158,9 @@ func _run() -> void:
 	print("\na tower of the city's kind")
 	var t := _tower(Vector3(40.0, 0.0, 0.0))
 	var line := _seam(t, per)
-	# The second storey's slab tops out a plate over its storey line; three
+	# The second storey's slab tops out SLAB_PLATES over its storey line; three
 	# courses up from there is the middle of its windows.
-	var window_k := per + 1 + 3 * 3
+	var window_k := per + TowerRecipe.SLAB_PLATES + 3 * 3
 	var windows := _seam(t, window_k)
 	_ok("its storey line is a clean seam: studs all round, nothing through it",
 			int(line[0]) > 0 and int(line[1]) == 0, str(line))

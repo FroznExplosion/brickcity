@@ -118,10 +118,16 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 	# again: two descriptions of one layout is how items came to be laid a
 	# plate above the floor.
 	var posts: Array[Rect2i] = []
-	for entry in (pl.columns as Array):
+	for entry in (pl.all_columns as Array):
 		posts.append(entry)
+	# The ones a storey with rooms stands when it is not carrying much
+	# (TowerRecipe.columned).
+	var props := {}
+	for entry in (pl.columns as Array):
+		props[entry] = true
 	var rects: Array[Rect2i] = []
 	var mine: Array = []
+	var mine_few: Array = []
 	var m := WALL_MARGIN
 	var t := TowerRecipe.WALL_THICK
 	for entry in (pl.rooms as Array):
@@ -131,11 +137,15 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 			continue
 		rects.append(inset)
 		var here: Array[Rect2i] = []
+		var few: Array[Rect2i] = []
 		for q in posts:
 			if (q as Rect2i).intersects(inset):
 				here.append(q)
+				if props.has(q):
+					few.append(q)
 		mine.append(here)
-	return {"rects": rects, "posts": mine, "storeys": storeys_of(courses)}
+		mine_few.append(few)
+	return {"rects": rects, "posts": mine, "props": mine_few, "storeys": storeys_of(courses)}
 
 
 ## Which rooms lie within `radius` metres of a point in the building's own
@@ -214,14 +224,17 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 	var rects: Array = lat.rects
 	if rects.is_empty():
 		return out
-	for storey in (lat.storeys as Array):
+	var count := (lat.storeys as Array).size()
+	for si in count:
+		var storey: Dictionary = lat.storeys[si]
+		var every := TowerRecipe.columned(si, count)
 		for ri in rects.size():
 			var box: Rect2i = rects[ri]
 			var r := Room.new()
 			r.id = out.size()
 			r.lo = Vector3i(box.position.x, int(storey.floor_y), box.position.y)
 			r.size = Vector3i(box.size.x, int(storey.height), box.size.y)
-			r.posts = (lat.posts as Array)[ri]
+			r.posts = (lat.posts as Array)[ri] if every else (lat.props as Array)[ri]
 			r.room_seed = hash3(building_seed, r.id, 0x9E37)
 			r.kind = Room.KINDS[kind_index(r.room_seed, program)]
 			out.append(r)

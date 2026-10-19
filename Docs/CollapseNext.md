@@ -385,7 +385,16 @@ In the order to do it. Each line points at where the item is written up.
     plates side by side are not joined -- across a seam there is only the 2 x 2 column at each
     corner and an interior wall every third line -- and the seams line up storey over storey. A
     vertical plane down a seam cuts a few studs a storey; a horizontal one cuts every stud of every
-    wall and column. The generator's, not the solve's. Not changed yet: options to the user.
+    wall and column. The generator's, not the solve's.
+    **Changed 2026-10-18 (user: two-layer floors, and drop support beams where they can go):** a
+    floor is two layers, the upper laid half a panel over (`TowerRecipe._lay_slab`, `_lay_upper`;
+    `SLAB_PLATES` 2, a storey 20 plates), so every upper panel sits across four lower ones. A
+    storey with rooms stands no column where a wall is within a panel of it -- none, in rooms three
+    panels across -- except a storey carrying `COLUMN_STOREYS` (10) or more above it, which takes
+    them all (`TowerRecipe.columned`; without them the big towers' ground storeys measured 0.78 of
+    their boundary, `region_probe`, now 0.63 at worst). Measured on `--breakshape` before the
+    columns went: 13 pieces against 21, still slices -- what a face shot leaves hangs sideways
+    off the floors and parts on a vertical line, which is what it physically does.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.

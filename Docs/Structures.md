@@ -104,8 +104,8 @@ as one piece.
   floors over a storey shot down to one corner, which tips off it whole) (`CityScene._pay_span_owed`);
   a cut is a SEVER command with
   `DamageLog.FLAG_SPAN` (every machine finds the same rim from the same bricks). 2.9 ms for the
-  23,000-brick tower, 0.6 ms for a 2,500-brick wide building; nothing whole is ever near it (floor
-  panels lie on columns every PANEL studs).
+  23,000-brick tower, 0.6 ms for a 2,500-brick wide building; nothing whole is ever near it (no point
+  of a floor is more than a panel from a wall or a column, TowerRecipe.plan).
 * **A piece come to rest lying level** (`CityScene._span_piece`, from `_wreck_settled`, after its
   weight is put on what it lies on): held where it rests -- a brick with a building's solid cell or
   the ground just under it. Not past `FRACTURE_RANGE` of everybody, where a collapse is a few big

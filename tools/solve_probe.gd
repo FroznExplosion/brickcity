@@ -158,7 +158,8 @@ func _furnish_ops(w: BrickWorld, chunk: int, palette: Dictionary) -> Array:
 	var dims := w.get_chunk_dims(chunk)
 	var origin := w.get_chunk_origin(chunk)
 	var placed := 0
-	for y in range(3, dims.y - 3, 12):
+	# On each floor: the first plate over a slab.
+	for y in range(TowerRecipe.SLAB_PLATES, dims.y - 3, TowerRecipe.STOREY_PLATES):
 		for x in range(1, dims.x - 1, 3):
 			for z in range(1, dims.z - 1, 3):
 				var at := origin + Vector3i(x, y, z)

@@ -11,7 +11,11 @@ extends "res://tools/collapse_probe.gd"
 ## until it is quiet, at the strength of a building the game's size, at the
 ## game's setting, and at the toy's.
 
-const FOOT_X := 20
+## Forty long. At twenty, once floors were two layers (TowerRecipe._lay_slab),
+## the third left standing held the rest at 1x as well: no joint failed at any
+## strength and the check said nothing. The same cut on a longer tower hangs
+## twice the arm off it.
+const FOOT_X := 40
 const FOOT_Z := 16
 const COURSES := 60
 
@@ -31,7 +35,7 @@ func _overhang(tension: float) -> Array:
 	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(FOOT_X, FOOT_Z, COURSES))
 	TowerRecipe.build(w, c, palette, FOOT_X, FOOT_Z, COURSES)
 	w.set_tension_per_stud(c, tension)
-	var top: float = float(1 + TowerRecipe.STOREY_PLATES) * BrickWorld.get_cell_size().y
+	var top: float = float(TowerRecipe.SLAB_PLATES + TowerRecipe.STOREY_PLATES) * BrickWorld.get_cell_size().y
 	var y := 0.5
 	while y < top:
 		var x := 0.0

@@ -228,11 +228,13 @@ tiles: a wide building cut across as well as up")
 	var widest := 0.0
 	for box in boxes:
 		widest = maxf(widest, maxf(box.size.x, box.size.z))
-		if maxf(box.size.x, box.size.z) <= (32 + 9) * cell.x:
+		# A floor panel starting on the tile's last stud (the upper layer's,
+		# half a panel over) is the longest reach past it: 31 + PANEL.
+		if maxf(box.size.x, box.size.z) <= (31 + TowerRecipe.PANEL) * cell.x + 0.001:
 			narrow += 1
 	# A brick belongs to the tile its lowest corner is in, so a tile's drawing
 	# reaches a brick's length past its edge, no further.
-	_ok("  and every tile is 32 studs across or a brick more, not the building's width",
+	_ok("  and every tile is 32 studs across or a panel more, not the building's width",
 			narrow == boxes.size(), "%d of %d; widest %.1f studs" % [narrow, boxes.size(), widest / cell.x])
 
 	var ids := PackedInt32Array()

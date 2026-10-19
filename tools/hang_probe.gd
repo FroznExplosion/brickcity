@@ -53,7 +53,7 @@ func _case(kind: String, rounds: int) -> void:
 	TowerRecipe.build(w, c, palette, FOOT_X, FOOT_Z, COURSES)
 	w.set_tension_per_stud(c, TENSION)
 	var plate: float = BrickWorld.get_cell_size().y
-	var y: float = (1 + storey * TowerRecipe.STOREY_PLATES + 6) * plate
+	var y: float = (TowerRecipe.SLAB_PLATES + storey * TowerRecipe.STOREY_PLATES + 6) * plate
 	var fx := FOOT_X * STUD
 	var fz := FOOT_Z * STUD
 	match kind:
