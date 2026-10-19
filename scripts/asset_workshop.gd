@@ -411,6 +411,49 @@ func _shot() -> void:
 			_sculpt_dab(at.call(30.0, 12.0), at.call(42.0, 12.0))
 		_sculpt_record(sculpt.form.end_edit())
 		sculpt_blend = 0.0
+		if "--stamps" in OS.get_cmdline_user_args():
+			# Round 2's tools: a box stamp over the body, a cylinder and a cone on the
+			# barrel, the body's side flattened, the grip grown; a box's ghost left showing.
+			sculpt.form.begin_edit()
+			_sculpt_plane = Plane(Vector3.BACK, at.call(0.0, 0.0).z)
+			sculpt_snap = true
+			sculpt_radius = 1.0
+			select_part(maxi(0, part_names.find("body")))
+			sculpt_shape = "box"
+			_stamp_from = _stamp_snap(at.call(2.0, 9.0))
+			_stamp_to = _stamp_snap(at.call(14.0, 15.0))
+			_lay_stamp(_stamp_desc(), SdfForm.ADD)
+			select_part(maxi(0, part_names.find("barrel")))
+			sculpt_shape = "cylinder"
+			sculpt_radius = 0.8
+			_stamp_from = at.call(20.0, 12.0)
+			_stamp_to = at.call(34.0, 12.0)
+			_lay_stamp(_stamp_desc(), SdfForm.ADD)
+			sculpt_shape = "cone"
+			sculpt_radius = 1.2
+			_stamp_from = at.call(34.0, 12.0)
+			_stamp_to = at.call(40.0, 12.0)
+			_lay_stamp(_stamp_desc(), SdfForm.ADD)
+			select_part(maxi(0, part_names.find("body")))
+			sculpt_radius = 2.0
+			sculpt_strength = 1.0
+			_sculpt_op = OP_FLATTEN
+			var side: Vector3 = at.call(8.0, 4.0) + Vector3(0, 0, 4)
+			_flat_point = side
+			_flat_normal = Vector3.BACK
+			_sculpt_dab(side, side)
+			_sculpt_dab(side + Vector3(20, 0, 0), side + Vector3(20, 0, 0))
+			select_part(maxi(0, part_names.find("grip")))
+			_sculpt_op = SdfForm.GROW
+			sculpt_strength = 1.0
+			_sculpt_dab(at.call(3.0, -20.0), at.call(3.0, -20.0))
+			sculpt.remesh()
+			_sculpt_record(sculpt.form.end_edit())
+			sculpt_shape = "box"
+			_stamp_from = _stamp_snap(at.call(-12.0, 16.0))
+			_stamp_to = _stamp_snap(at.call(-4.0, 24.0))
+			_sculpt_op = SdfForm.ADD
+			_show_stamp()
 		if "--convert" in OS.get_cmdline_user_args():
 			var t0 := Time.get_ticks_msec()
 			sculpt_convert()
@@ -3516,6 +3559,7 @@ func _sculpt_input(e: InputEvent) -> bool:
 			_show_sculpt_note(true)
 			return true
 		return false
+	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
@@ -3524,19 +3568,135 @@ func _sculpt_input(e: InputEvent) -> bool:
 			if p == null:
 				return true
 			_sculpt_on = true
+			if stamping:
+				# A stamp: dragged out on the stroke plane, laid when let go.
+				_stamp_from = _stamp_snap(p)
+				_stamp_to = _stamp_from
+				_show_stamp()
+				return true
+			if sculpt_mode == "flatten" and not e.shift_pressed:
+				_flat_point = p
+				_flat_normal = _sculpt_plane.normal if sculpt_place == "work" else _field_normal(p)
 			sculpt.form.begin_edit()
 			_sculpt_dab(p, p)
 		elif _sculpt_on:
+			if stamping:
+				_sculpt_on = false
+				sculpt.show_ghost({})
+				sculpt.form.begin_edit()
+				_lay_stamp(_stamp_desc(), _sculpt_op)
+				sculpt.remesh()
+				_sculpt_record(sculpt.form.end_edit())
+				return true
 			_sculpt_end()
 		return true
 	if e is InputEventMouseMotion:
 		var p = _sculpt_point(false)
 		sculpt.show_cursor(p, _sculpt_r(), _sculpt_colour(),
-				_sculpt_plane.normal if sculpt_place != "surface" else Vector3.ZERO)
+				_sculpt_plane.normal if sculpt_place != "surface" or stamping else Vector3.ZERO)
+		if _sculpt_on and stamping:
+			if p != null:
+				_stamp_to = _stamp_snap(p)
+				_show_stamp()
+			return true
 		if _sculpt_on and p != null and p.distance_to(_sculpt_last) > maxf(0.3, _sculpt_r() * 0.25):
 			_sculpt_dab(_sculpt_last, p)
 		return _sculpt_on
 	return false
+
+
+## The surface's outward direction at `p` (samples): the field's gradient.
+func _field_normal(p: Vector3) -> Vector3:
+	var f := sculpt.form
+	var g := Vector3(f.sample(p + Vector3.RIGHT) - f.sample(p + Vector3.LEFT),
+			f.sample(p + Vector3.UP) - f.sample(p + Vector3.DOWN),
+			f.sample(p + Vector3.BACK) - f.sample(p + Vector3.FORWARD))
+	return g.normalized() if g.length_squared() > 1e-6 else _sculpt_plane.normal
+
+
+## A stamp's drag point on the brick grid when snapping: half a stud along and across, a
+## plate up (samples: 2.5 and 2), so a box's faces land on brick faces.
+func _stamp_snap(p: Vector3) -> Vector3:
+	if not sculpt_snap:
+		return p
+	var s := Vector3(BrickWorld.ticks_per_stud() * 0.5, BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud() * 0.5)
+	return (p / s).round() * s
+
+
+## The stamp being dragged, as what to lay: {kind: "box", center, half} | {kind: "cone",
+## xform, size} | {kind: "line", a, b, r}. Empty when there is nothing to lay yet.
+func _stamp_desc() -> Dictionary:
+	var a := _stamp_from
+	var b := _stamp_to
+	var r := _sculpt_r()
+	var n := _sculpt_plane.normal.abs()
+	match sculpt_shape:
+		"box":
+			# The footprint corner to corner on the plane; across it the brush's diameter.
+			var lo := a.min(b)
+			var hi := a.max(b)
+			var mid := (lo + hi) * 0.5
+			var half := (hi - lo) * 0.5
+			var across := r
+			if sculpt_snap:
+				var step := n.dot(Vector3(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud()))
+				across = maxf(step * 0.5, roundf(r * 2.0 / step) * step * 0.5)
+			half = half * (Vector3.ONE - n) + n * across
+			half = half.max(Vector3.ONE * 0.5)
+			return {"kind": "box", "center": mid, "half": half}
+		"cylinder", "cone":
+			if a.distance_to(b) < 0.5:
+				return {}
+			return _cone_desc(a, b, r, r if sculpt_shape == "cylinder" else 0.0)
+		"ball":
+			return {"kind": "line", "a": a, "b": a, "r": maxf(a.distance_to(b), 0.5)}
+	return {"kind": "line", "a": a, "b": b, "r": r}
+
+
+## A capped cone from `a` (radius `r1`) to `b` (radius `r2`), samples: a rigid frame with y
+## along the axis.
+func _cone_desc(a: Vector3, b: Vector3, r1: float, r2: float) -> Dictionary:
+	var y := (b - a).normalized()
+	var x := y.cross(Vector3.UP if absf(y.y) < 0.9 else Vector3.RIGHT).normalized()
+	return {"kind": "cone", "a": a, "b": b, "xform": Transform3D(Basis(x, y, x.cross(y)), (a + b) * 0.5),
+			"size": Vector3(r1, a.distance_to(b) * 0.5, r2)}
+
+
+func _show_stamp() -> void:
+	sculpt.show_ghost(_stamp_desc(), Color(1.0, 0.4, 0.35) if _sculpt_op == SdfForm.REMOVE else Color(0.6, 0.9, 1.0))
+
+
+## Lay a stamp (and its mirror image when the mirror is on).
+func _lay_stamp(d: Dictionary, op: int) -> void:
+	if d.is_empty():
+		return
+	if sculpt.palette.size() < part_names.size() + 1:
+		sculpt.set_parts(part_names.size())
+	var blend := sculpt_blend * BrickWorld.ticks_per_stud()
+	var part := part_sel + 1
+	match String(d.kind):
+		"box": sculpt.form.box(op, d.center, d.half, blend, part)
+		"cone": sculpt.form.shape(op, SdfForm.SHAPE_CONE, d.xform, d.size, blend, part)
+		_: sculpt.form.stroke(op, d.a, d.b, d.r, blend, part)
+	if mirror_on:
+		var m := d.duplicate()
+		match String(d.kind):
+			"box": m.center = _mirror_sample(d.center)
+			"cone": m = _cone_desc(_mirror_sample(d.a), _mirror_sample(d.b), d.size.x, d.size.z)
+			_:
+				m.a = _mirror_sample(d.a)
+				m.b = _mirror_sample(d.b)
+		match String(m.kind):
+			"box": sculpt.form.box(op, m.center, m.half, blend, part)
+			"cone": sculpt.form.shape(op, SdfForm.SHAPE_CONE, m.xform, m.size, blend, part)
+			_: sculpt.form.stroke(op, m.a, m.b, m.r, blend, part)
+
+
+## A sample point mirrored across the mirror plane.
+func _mirror_sample(s: Vector3) -> Vector3:
+	var w := sculpt.to_world(s)
+	w.z = 2.0 * mirror_z * BrickPalette.STUD_M - w.z
+	return sculpt.to_sample(w)
 
 
 func _sculpt_op_for(right: bool, shift: bool) -> int:
@@ -3545,6 +3705,8 @@ func _sculpt_op_for(right: bool, shift: bool) -> int:
 	match sculpt_mode:
 		"paint": return SdfForm.PAINT
 		"zone": return SdfForm.UNMARK if right else SdfForm.MARK
+		"grow": return SdfForm.GROW
+		"flatten": return OP_FLATTEN
 	return SdfForm.REMOVE if right else SdfForm.ADD
 
 
@@ -3571,7 +3733,7 @@ func _sculpt_colour() -> Color:
 func _sculpt_point(start: bool) -> Variant:
 	var ray := _mouse_ray()
 	var r := sculpt.ray_to_samples(ray[0], ray[1])
-	if _sculpt_on and not start and sculpt_place != "surface":
+	if _sculpt_on and not start and (sculpt_place != "surface" or sculpt_mode == "stamp"):
 		return _sculpt_plane.intersects_ray(r[0], r[1])
 	var h = sculpt.hit(ray[0], ray[1]) if sculpt_place != "work" else null
 	if h == null:
@@ -3602,7 +3764,18 @@ func _sculpt_normal(dir: Vector3) -> Vector3:
 func _sculpt_dab(a: Vector3, b: Vector3) -> void:
 	if sculpt.palette.size() < part_names.size() + 1:
 		sculpt.set_parts(part_names.size())
+	if _sculpt_op == OP_FLATTEN:
+		sculpt.form.flatten(b, _sculpt_r(), _flat_normal, _flat_point, sculpt_strength, part_sel + 1)
+		if mirror_on:
+			sculpt.form.flatten(_mirror_sample(b), _sculpt_r(), _flat_normal * Vector3(1, 1, -1),
+					_mirror_sample(_flat_point), sculpt_strength, part_sel + 1)
+		sculpt.remesh()
+		_sculpt_last = b
+		return
 	var blend := 0.5 if _sculpt_op == SdfForm.SMOOTH else sculpt_blend * BrickWorld.ticks_per_stud()
+	if _sculpt_op == SdfForm.GROW:
+		# Samples a dab: LMB swells, RMB shrinks.
+		blend = sculpt_strength * 1.5 * (-1.0 if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) else 1.0)
 	sculpt.form.stroke(_sculpt_op, a, b, _sculpt_r(), blend, part_sel + 1)
 	if mirror_on:
 		var z := mirror_z * BrickPalette.STUD_M
@@ -3710,8 +3883,43 @@ func _build_sculpt_box() -> void:
 	for m in SCULPT_MODES:
 		modes.add_item(m[1])
 	modes.focus_mode = Control.FOCUS_NONE
-	modes.item_selected.connect(func(i: int) -> void: sculpt_mode = SCULPT_MODES[i][0])
 	_sculpt_box.add_child(modes)
+	# Stamp: its shape and the grid snap; flatten and grow: their strength.
+	var shapes := OptionButton.new()
+	for m in SCULPT_SHAPES:
+		shapes.add_item(m[1])
+	shapes.focus_mode = Control.FOCUS_NONE
+	shapes.item_selected.connect(func(i: int) -> void: sculpt_shape = SCULPT_SHAPES[i][0])
+	_sculpt_box.add_child(shapes)
+	var snap := CheckBox.new()
+	snap.text = "snap to the brick grid"
+	snap.button_pressed = sculpt_snap
+	snap.focus_mode = Control.FOCUS_NONE
+	snap.toggled.connect(func(on: bool) -> void: sculpt_snap = on)
+	_sculpt_box.add_child(snap)
+	var strength_label := Label.new()
+	var strength := HSlider.new()
+	strength.min_value = 0.05
+	strength.max_value = 1.0
+	strength.step = 0.05
+	strength.value = sculpt_strength
+	strength.focus_mode = Control.FOCUS_NONE
+	strength.custom_minimum_size.x = 150
+	strength_label.text = "strength: %.2f" % sculpt_strength
+	strength.value_changed.connect(func(x: float) -> void:
+		sculpt_strength = x
+		strength_label.text = "strength: %.2f" % x)
+	_sculpt_box.add_child(strength_label)
+	_sculpt_box.add_child(strength)
+	var show_for := func(mode: String) -> void:
+		shapes.visible = mode == "stamp"
+		snap.visible = mode == "stamp"
+		strength_label.visible = mode in ["flatten", "grow"]
+		strength.visible = mode in ["flatten", "grow"]
+	show_for.call(sculpt_mode)
+	modes.item_selected.connect(func(i: int) -> void:
+		sculpt_mode = SCULPT_MODES[i][0]
+		show_for.call(sculpt_mode))
 	var places := OptionButton.new()
 	for m in SCULPT_PLACES:
 		places.add_item(m[1])
@@ -5259,8 +5467,21 @@ const RAIL_W := 184.0
 const RAIL_FONT := 12
 var sketch_draw := "sculpt"
 ## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): its brush.
-const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["smooth", "smooth"], ["paint", "paint this part"],
-		["zone", "mark smooth (LMB) / back to bricks (RMB)"]]
+const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a shape (drag)"],
+		["flatten", "flatten"], ["grow", "grow (LMB) / shrink (RMB)"], ["smooth", "smooth"],
+		["paint", "paint this part"], ["zone", "mark smooth (LMB) / back to bricks (RMB)"]]
+## Stamp shapes (Docs/AssetWorkshop.md, "SDF tools, round 2").
+const SCULPT_SHAPES := [["box", "box: corner to corner"], ["cylinder", "cylinder: end to end"],
+		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"]]
+## Not an SdfForm op: the flatten brush, which calls `SdfForm.flatten`.
+const OP_FLATTEN := 100
+var sculpt_shape := "box"
+var sculpt_snap := true
+var sculpt_strength := 0.5   # flatten and grow, 0-1
+var _stamp_from := Vector3.ZERO
+var _stamp_to := Vector3.ZERO
+var _flat_point := Vector3.ZERO
+var _flat_normal := Vector3.UP
 var sculpt: AssetSculpt
 var sculpt_mode := "shape"
 var sculpt_radius := 1.0     # studs

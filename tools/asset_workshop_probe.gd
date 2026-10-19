@@ -1620,6 +1620,7 @@ func _sculpt() -> void:
 	_ws.sculpt_clear()
 	_convert()
 	_convert_plain()
+	_stamp_box()
 	_ws.rail_pick("place")
 
 
@@ -1748,6 +1749,45 @@ func _convert_plain() -> void:
 	_ws.sculpt_convert()
 	_ok("and back and converted again: the same cells", _asset_cells() == first,
 			"%d vs %d" % [_asset_cells().size(), first.size()])
+
+
+## A box stamp snapped to the grid: one undo, and Convert makes exactly its cells bricks.
+func _stamp_box() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sketch")
+	_ws.sculpt_mode = "stamp"
+	_ws.sculpt_shape = "box"
+	_ws.sculpt_snap = true
+	_ws.sculpt_radius = 1.0
+	_ws.select_part(_ws.part_names.find("body"))
+	var z := 5.0 * 30
+	_ws._sculpt_plane = Plane(Vector3.BACK, z)
+	# Off the grid a little each way: the snap puts the corners on cell corners.
+	_ws._stamp_from = _ws._stamp_snap(Vector3(50.6, 40.3, z))
+	_ws._stamp_to = _ws._stamp_snap(Vector3(69.7, 51.8, z))
+	_ws.sculpt.form.begin_edit()
+	_ws._lay_stamp(_ws._stamp_desc(), SdfForm.ADD)
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var want := {}
+	for x in range(10, 14):
+		for y in range(20, 26):
+			for zz in range(29, 31):
+				want[Vector3i(x, y, zz)] = _ws.part_names.find("body") + 1
+	var got := {}
+	var sc: PackedInt32Array = _ws.sculpt.form.cells()
+	for i in range(0, sc.size(), 5):
+		got[Vector3i(sc[i], sc[i + 1], sc[i + 2])] = sc[i + 3]
+	_ok("a box stamp snaps to the grid: its cells exactly", got == want, "%d vs %d cells" % [got.size(), want.size()])
+	_ws._undo()
+	_ok("one Z takes the stamp off", _ws.sculpt.form.cells().is_empty())
+	_ws.redo()
+	_ws.sculpt_convert()
+	var shaped := 0
+	for i in _ws.recipe.size():
+		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.recipe.part_of(i))))
+	_ok("converted: the box's bricks, no slopes", _asset_cells() == want and shaped == 0,
+			"%d cells, %d shaped" % [_asset_cells().size(), shaped])
+	_ws.sculpt_mode = "shape"
 
 
 ## The asset's cells after a Convert: its bricks', and those its custom pieces fill alone.
