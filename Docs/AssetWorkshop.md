@@ -414,6 +414,76 @@ helpx.adobe.com/substance-3d-modeler (tools, shortcuts); docs.blender.org (sculp
 Grease Pencil stroke placement); docs.indreams.me (art tips, gestures); blenderartists.org
 "The big SDF thread"; womp.com.
 
+### SDF tools, round 3: two tools, a lathe, models, fitted pieces (2026-10-19)
+
+The user (2026-10-19): do the next step (the lathe); more angled and curved bricks in
+Convert; a tool that adds a 3D model as SDF; slopes are rare, and come mostly along the
+grid's planes; the 2D sketch inside the SDF tool is confusing -- split them: **3D is SDF, 2D
+goes straight into bricks**. Written here first, then built in this order.
+
+**1. Two tools on the rail.** The rail's "Block out" becomes two tools:
+
+| Tool | Key | What it is |
+|---|---|---|
+| **Sculpt** (3D) | Alt V | the SDF block-out: the sculpt panel only (modes, shapes, placement, Convert / Edit as SDF). No bricks while sculpting |
+| **Sketch** (2D) | Alt D | the old sketch: outline, brush, rectangle, ellipse, polygon on a plane, laid straight into bricks. No SDF panel |
+
+Inside they stay one tool (`tool == "sketch"`, `sketch_draw == "sculpt"` or a 2D draw), so
+saves, undo and the probes are unchanged; the rail shows which. The Sketch tool's draw list
+loses "sculpt in 3D"; it remembers the last 2D draw (outline at first). Bricks a 2D sketch lays
+while an SDF block-out is showing go into the field at the next Convert, as hand-laid bricks
+already do.
+
+**2. Convert fits pieces to the surface.** Before, Convert laid slopes only where a
+*slice* of the cells, seen from the side or the front, had a top edge climbing exactly two
+plates a stud (or a curve's three plates in two studs). A sculpted surface almost never steps
+like that, and a slope could only face along x or z with its high side up -- never on a wall
+turning in plan, never a corner. Now each candidate piece is tested against the **field
+itself**:
+
+- Surface cells: a part's brick cells with an empty neighbour. The field's slope there
+  (its gradient) picks the candidates: every shaped piece, in every turn and flip, whose
+  open side faces within ~45 degrees of it, placed every way its box covers that cell.
+- A candidate's box must hold only this part's brick cells (not yet taken) or empty space.
+- Its **fit** is counted on the field's own samples (5 x 2 x 5 a cell): where the piece is
+  solid and the field inside, or the piece empty and the field outside. The plain cells
+  (the box's cells as bricks) are counted the same way. A piece goes in when it fits better
+  by a margin (8% of its samples; eager, at curve level 4: 4%), best gain first, no two
+  overlapping.
+- In C++ (`SdfForm.fit_pieces`): the piece's samples come from the catalogue's shapes
+  (`ShapedParts`), turned as `BrickWorld` turns a part, built once per piece in GDScript.
+- The curve slider keeps its meaning: 0 steps only, 1 slopes, wedges and cheese, 2 and up
+  curves too, 4 eager. A fitted piece stands for its box's cells the field had, so Edit as
+  SDF and Convert again give the same cells, as before.
+
+**New pieces**, all profiles extruded (so the print kit and the game draw them as they do
+slopes): `slope_1x3`, `slope_2x3` (one plate a stud, the shallow 33-degree slope);
+**wedge plates** `wedgeplate_2x2`, `wedgeplate_2x4` (a plate cut corner to corner across its
+footprint: an edge running diagonally in plan) and **wedge bricks** `wedge_2x2`,
+`wedge_2x4` (the same, three plates high). Flipped, a wedge is its mirror image. Convert also
+uses the pieces the sketch never did: `cheese_*`, `curve_1x3`, `curve_1x4`, `curve_2x4`.
+
+**3. The lathe** (a stamp shape, "lathe: axis, then outline"): drag the axis as for a
+cylinder (LMB to add, RMB to carve); then each LMB click adds a point of the outline -- how
+far along the axis, how far out from it, on the stroke plane. The outline turned round the
+axis shows as lines on both sides of it as it grows. Enter (or a click on the last point)
+lays it, Backspace takes the last point back, Escape drops it. One undo. In C++:
+`SdfForm.lathe(op, transform, profile, blend, part)`: the profile (out, along) closed down
+to the axis at its two ends, turned about the local y axis (IQ's polygon distance in the
+(r, y) half-plane).
+
+**4. A 3D model as SDF.** The sculpt panel gets **add a 3D model...** (glTF, GLB, FBX):
+the model loads as a guide (its real length from the guide panel's box, turned and nudged
+there) and goes straight into the current part's field (`SdfForm.stamp_mesh`, which was
+"fill from guides"), one undo; the guide stays, faint, to trace by. **Model into this part**
+and **carve the model out** act on the guide picked in the guide panel, after it is moved.
+
+Checks: `sdf_form_probe` (a lathe's cone and cylinder against the stamp's, fit_pieces lays a
+slope on a 45-degree ramp, a wedge on a ramp turned 45 degrees in plan, nothing on a box),
+`asset_workshop_probe` (the two rail tools, a sculpted ramp converts with slopes and round
+trips, the lathe one undo, a model stamped from a mesh). `palette_probe` and `shaped_probe`
+cover the new pieces.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
