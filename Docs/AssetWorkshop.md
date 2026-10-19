@@ -354,6 +354,61 @@ Next, suggested order for guns: primitive stamps (box, cylinder) dragged out on 
 plane; flatten; a straight-line stroke (shift click to click); a lathe for round parts;
 grow / shrink; move.
 
+### SDF tools, round 2: stamps, flatten, grow (2026-10-19)
+
+The user (2026-10-19): start implementing the tools from the research, written here first.
+They start each gun clean (not from the Thompson). Built in this order; lathe and move come
+after.
+
+**Modes** (the sculpt panel's first dropdown; LMB / RMB as before, Shift still smooths):
+
+| Mode | LMB | RMB | Like |
+|---|---|---|---|
+| add / carve | brush strokes, as now | carve | Zylann `do_sphere` |
+| **stamp** | drag a shape out, let go: added | the same, carved | Dreams stamp; MagicaCSG / Womp primitives |
+| **flatten** | drag over the surface: pulled onto a plane | -- | Substance Modeler Flatten, Blender Flatten |
+| **grow** | drag: the surface swells a little at a time | shrinks | Zylann `grow_sphere`, Substance Modeler Inflate |
+| smooth, paint, mark smooth | as now | | |
+
+**Stamp shapes** (a second dropdown, shown in stamp mode). Every shape is dragged on the
+stroke plane (the placement dropdown: facing you / working plane / surface start), from where
+LMB went down to where the mouse is; a see-through ghost shows it until let go. One undo.
+
+| Shape | The drag | Across the plane |
+|---|---|---|
+| **box** | corner to corner: its footprint on the plane | thickness = the brush's diameter, centred on the plane |
+| **cylinder** | end to end: its axis (a rod: barrels, rails) | radius = the brush radius |
+| **cone** | base to tip | base radius = the brush radius, tip 0 (a taper: muzzles, sights) |
+| **ball** | centre to edge: the radius | -- |
+| **line** | end to end: a straight stroke (the brush's capsule) | radius = the brush radius |
+
+**Snap to the grid** (a checkbox, on by default): a stamp's drag points snap to the brick grid
+-- half a stud along, a plate up -- so a box's faces land on brick faces and convert to clean
+bricks. The blend slider applies to stamps as to strokes (0: hard edges, as for bricks).
+
+**Flatten**: at the stroke's start the plane is fixed through the surface point under the
+mouse, square to the surface there (the field's gradient). While dragging, every sample in
+the brush moves toward its distance from that plane, by the strength slider (fills dents,
+cuts bumps): a flat side for a receiver. With the placement "on the working plane" the plane
+is parallel to the working plane instead, so a side can be flattened square to the grid.
+
+**Grow**: within the brush every sample's distance goes down (LMB, swells) or up (RMB,
+shrinks) by the strength slider each dab, full in the middle, fading to the brush's edge.
+
+**Engine** (`SdfForm`): `shape(op, kind, transform, size, blend, part)` -- a box (half extents)
+or a capped cone (radius at each end; equal ends: a cylinder) in a local frame placed by a
+rigid transform (samples), for ADD / REMOVE / PAINT / MARK; `flatten(center, radius, normal,
+point, strength, part)`; op GROW in `stroke` (blend is the signed amount). Checked in
+`sdf_form_probe` (each shape's cells, flatten makes a face flat, grow and shrink change the
+volume and back) and `asset_workshop_probe` (a stamp is one undo, snaps to the grid,
+converts to the box's bricks exactly).
+
+**Built 2026-10-19**, as above. sdf_form_probe 32 (5 new), asset_workshop_probe 244 (3 new).
+`-- --shot --sculpt --stamps` adds a box stamp, a cylinder and a cone on the barrel, two
+flatten dabs on the body's side and a grow on the grip, and leaves a box's ghost showing.
+Shift during a stamp drag does nothing new (Shift at the press smooths, as everywhere).
+Next: a lathe for round parts, then move / grab.
+
 Sources: voxel-tools.readthedocs.io (VoxelTool, VoxelToolLodTerrain, changelog);
 helpx.adobe.com/substance-3d-modeler (tools, shortcuts); docs.blender.org (sculpt brushes,
 Grease Pencil stroke placement); docs.indreams.me (art tips, gestures); blenderartists.org

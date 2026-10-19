@@ -8,6 +8,8 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
+#include <godot_cpp/variant/transform3d.hpp>
+#include <godot_cpp/variant/vector2.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
@@ -50,7 +52,8 @@ public:
     static constexpr int STUD = 5;          // samples a stud
     static constexpr int PLATE = 2;         // samples a plate
 
-    enum Op { ADD = 0, REMOVE = 1, SMOOTH = 2, PAINT = 3, MARK = 4, UNMARK = 5 };
+    enum Op { ADD = 0, REMOVE = 1, SMOOTH = 2, PAINT = 3, MARK = 4, UNMARK = 5, GROW = 6 };
+    enum Shape { SHAPE_BOX = 0, SHAPE_CONE = 1 };
 
     struct Block {
         float d[B3];
@@ -86,15 +89,28 @@ private:
     void apply_shape(int op, const Vector3i &lo, const Vector3i &hi, float blend, int part,
             float (*sdf)(const Vector3 &, const void *), const void *ctx);
     void cell_box(const Vector3i &c, int op, int part);
+    void grow(const Vector3 &a, const Vector3 &b, float radius, float amount, int part);
 
 public:
     /// A capsule from `a` to `b` (samples), `radius` round it: a sphere when a == b.
+    /// GROW (Zylann's grow_sphere): every sample's distance down by `blend` samples in
+    /// the middle, fading to the edge (negative: shrinks).
     /// `op`: ADD, REMOVE, SMOOTH (blur, `blend` its strength 0-1), PAINT (label
     /// `part`), MARK / UNMARK (smooth: a custom piece on Convert; unmarked is bricks). `blend`: for ADD and REMOVE, how far
     /// (samples) the shape blends into what is there.
     void stroke(int op, const Vector3 &a, const Vector3 &b, float radius, float blend, int part);
     /// A box, `center` and `half` its half size (samples).
     void box(int op, const Vector3 &center, const Vector3 &half, float blend, int part);
+    /// A shape in its own frame, placed by the rigid `xform` (local to samples): SHAPE_BOX
+    /// (`size` its half extents) or SHAPE_CONE, a capped cone along local y (`size.x` the
+    /// radius at y = -size.y, `size.z` at y = +size.y; equal: a cylinder). Ops as `stroke`
+    /// but SMOOTH and GROW.
+    void shape(int op, int kind, const Transform3D &xform, const Vector3 &size, float blend, int part);
+    /// Flatten (Substance Modeler, Blender): within the ball every sample moves toward
+    /// its distance from the plane through `point` square to `normal` (outward), by
+    /// `strength` (0-1) in the middle, fading to the edge. Fills below it with `part`.
+    void flatten(const Vector3 &center, float radius, const Vector3 &normal, const Vector3 &point,
+            float strength, int part);
     /// A closed mesh (triangles `index` into `verts`, samples) as a solid: inside by
     /// ray parity along x, distance to its nearest triangle.
     void stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part);
