@@ -177,6 +177,44 @@ func _init() -> void:
 	_ok("scaled down, empty space stays empty", apart.block_count() <= ab and apart.cells().size() > 0,
 			"%d -> %d blocks" % [ab, apart.block_count()])
 
+	# Shapes placed by a transform (stamps): a box like `box`, a cylinder, a cone.
+	var sb := SdfForm.new()
+	sb.shape(SdfForm.ADD, SdfForm.SHAPE_BOX, Transform3D(Basis(), c), Vector3(10, 4, 5), 0.0, 1)
+	var bx := SdfForm.new()
+	bx.box(SdfForm.ADD, c, Vector3(10, 4, 5), 0.0, 1)
+	_ok("a placed box is the same as a box", sb.cells() == bx.cells() and sb.cells().size() > 0)
+	var turned := SdfForm.new()
+	turned.shape(SdfForm.ADD, SdfForm.SHAPE_BOX, Transform3D(Basis(Vector3.UP, PI / 2), c), Vector3(5, 4, 10), 0.0, 1)
+	_ok("and turned a quarter, the same cells", _cell_map(turned.cells()) == _cell_map(bx.cells()))
+	var cyl := SdfForm.new()
+	cyl.shape(SdfForm.ADD, SdfForm.SHAPE_CONE, Transform3D(Basis(Vector3.BACK, PI / 2), c), Vector3(6, 20, 6), 0.0, 1)
+	var cone := SdfForm.new()
+	cone.shape(SdfForm.ADD, SdfForm.SHAPE_CONE, Transform3D(Basis(Vector3.BACK, PI / 2), c), Vector3(6, 20, 0), 0.0, 1)
+	var nc := _cell_map(cyl.cells()).size()
+	var nk := _cell_map(cone.cells()).size()
+	var lying := cyl.sample(c + Vector3(18, 0, 0)) < 0.0 and cyl.sample(c + Vector3(0, 10, 0)) > 0.0
+	_ok("a cylinder lies along its turned axis; a cone is about a third of it", lying and nk > nc / 5 and nk < nc / 2,
+			"%d cylinder, %d cone cells" % [nc, nk])
+
+	# Flatten: a ball's top cut flat at a plane through it.
+	var fl := SdfForm.new()
+	fl.stroke(SdfForm.ADD, c, c, 10.0, 0.0, 1)
+	fl.flatten(c + Vector3(0, 6, 0), 8.0, Vector3.UP, c + Vector3(0, 5, 0), 1.0, 1)
+	var flat_top := fl.sample(c + Vector3(0, 7, 0)) > 0.0 and fl.sample(c + Vector3(0, 4, 0)) < 0.0 \
+			and absf(fl.sample(c + Vector3(1.5, 5, 0))) < 0.6
+	_ok("flatten cuts the top flat at the plane", flat_top, "%.2f %.2f" % [fl.sample(c + Vector3(0, 7, 0)),
+			fl.sample(c + Vector3(1.5, 5, 0))])
+
+	# Grow and shrink.
+	var gr := SdfForm.new()
+	gr.stroke(SdfForm.ADD, c, c, 8.0, 0.0, 1)
+	var g0 := _cell_map(gr.cells()).size()
+	gr.stroke(SdfForm.GROW, c, c, 14.0, 2.0, 1)
+	var g1 := _cell_map(gr.cells()).size()
+	gr.stroke(SdfForm.GROW, c, c, 14.0, -2.0, 1)
+	var g2 := _cell_map(gr.cells()).size()
+	_ok("grow swells it, shrink takes it back", g1 > g0 and absi(g2 - g0) <= g0 / 10, "%d -> %d -> %d" % [g0, g1, g2])
+
 	# Two parts joined: each part's field ends where its label does.
 	var t := SdfForm.new()
 	t.box(SdfForm.ADD, Vector3(20, 10, 10), Vector3(10, 4, 5), 0.0, 1)

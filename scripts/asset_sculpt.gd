@@ -15,6 +15,9 @@ var _cursor := MeshInstance3D.new()
 var _cursor_mat := StandardMaterial3D.new()
 ## The plane a stroke will stay on, as a disc round the brush.
 var _disc := MeshInstance3D.new()
+## A stamp being dragged out.
+var _ghost := MeshInstance3D.new()
+var _ghost_mat := StandardMaterial3D.new()
 
 
 func _init() -> void:
@@ -46,6 +49,13 @@ func _init() -> void:
 	_disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_disc.visible = false
 	add_child(_disc)
+	_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ghost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_ghost.material_override = _ghost_mat
+	_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ghost.visible = false
+	add_child(_ghost)
 
 
 ## Samples on the grid `grid` (the upright chunk's transform), `tick` metres a sample.
@@ -132,6 +142,39 @@ func show_cursor(at: Variant, radius: float, col: Color, normal: Vector3 = Vecto
 		var side := up.cross(Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT).normalized()
 		var r := maxf(radius, 0.3) * 4.0
 		_disc.transform = Transform3D(Basis(side * r, up, side.cross(up) * r), at)
+
+
+## A stamp's ghost (`AssetWorkshop._stamp_desc`, samples); empty hides it.
+func show_ghost(d: Dictionary, col: Color = Color.WHITE) -> void:
+	_ghost.visible = not d.is_empty()
+	if d.is_empty():
+		return
+	col.a = 0.35
+	_ghost_mat.albedo_color = col
+	match String(d.kind):
+		"box":
+			var m := BoxMesh.new()
+			m.size = d.half * 2.0
+			_ghost.mesh = m
+			_ghost.transform = Transform3D(Basis(), d.center)
+		"cone":
+			var m := CylinderMesh.new()
+			m.bottom_radius = d.size.x
+			m.top_radius = d.size.z
+			m.height = d.size.y * 2.0
+			_ghost.mesh = m
+			_ghost.transform = d.xform
+		_:
+			var a: Vector3 = d.a
+			var b: Vector3 = d.b
+			var r: float = d.r
+			var m := CapsuleMesh.new()
+			m.radius = r
+			m.height = a.distance_to(b) + 2.0 * r
+			_ghost.mesh = m
+			var y := (b - a).normalized() if a.distance_to(b) > 0.01 else Vector3.UP
+			var x := y.cross(Vector3.UP if absf(y.y) < 0.9 else Vector3.RIGHT).normalized()
+			_ghost.transform = Transform3D(Basis(x, y, x.cross(y)), (a + b) * 0.5)
 
 
 func triangles() -> int:

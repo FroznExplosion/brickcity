@@ -88,6 +88,9 @@ bool bget(const PackedByteArray &in, int64_t &at, T &v) {
 void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("stroke", "op", "a", "b", "radius", "blend", "part"), &SdfForm::stroke);
     ClassDB::bind_method(D_METHOD("box", "op", "center", "half", "blend", "part"), &SdfForm::box);
+    ClassDB::bind_method(D_METHOD("shape", "op", "kind", "xform", "size", "blend", "part"), &SdfForm::shape);
+    ClassDB::bind_method(D_METHOD("flatten", "center", "radius", "normal", "point", "strength", "part"),
+            &SdfForm::flatten);
     ClassDB::bind_method(D_METHOD("stamp_mesh", "op", "verts", "index", "part"), &SdfForm::stamp_mesh);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
@@ -114,6 +117,9 @@ void SdfForm::_bind_methods() {
     BIND_CONSTANT(PAINT);
     BIND_CONSTANT(MARK);
     BIND_CONSTANT(UNMARK);
+    BIND_CONSTANT(GROW);
+    BIND_CONSTANT(SHAPE_BOX);
+    BIND_CONSTANT(SHAPE_CONE);
 }
 
 int64_t SdfForm::key(int bx, int by, int bz) {
@@ -270,6 +276,23 @@ float box_fn(const Vector3 &p, const void *c) {
     const Box *k = (const Box *)c;
     return box_sdf(p, k->c, k->h);
 }
+// Inigo Quilez's capped cone: r1 at y = -h, r2 at y = +h.
+float capped_cone_sdf(const Vector3 &p, float h, float r1, float r2) {
+    const Vector2 q(Vector2(p.x, p.z).length(), p.y);
+    const Vector2 k1(r2, h);
+    const Vector2 k2(r2 - r1, 2.0f * h);
+    const Vector2 ca(q.x - std::min(q.x, q.y < 0.0f ? r1 : r2), std::abs(q.y) - h);
+    const Vector2 cb = q - k1 + k2 * std::clamp((k1 - q).dot(k2) / k2.dot(k2), 0.0f, 1.0f);
+    const float s = (cb.x < 0.0f && ca.y < 0.0f) ? -1.0f : 1.0f;
+    return s * std::sqrt(std::min(ca.dot(ca), cb.dot(cb)));
+}
+struct Placed { Transform3D inv; int kind; Vector3 size; };
+float placed_fn(const Vector3 &p, const void *c) {
+    const Placed *k = (const Placed *)c;
+    const Vector3 l = k->inv.xform(p);
+    if (k->kind == SdfForm::SHAPE_BOX) return box_sdf(l, Vector3(), k->size);
+    return capped_cone_sdf(l, k->size.y, k->size.x, k->size.z);
+}
 Vector3i floor3(const Vector3 &v) {
     return Vector3i((int)std::floor(v.x), (int)std::floor(v.y), (int)std::floor(v.z));
 }
@@ -279,6 +302,10 @@ Vector3i ceil3(const Vector3 &v) {
 } // namespace
 
 void SdfForm::stroke(int op, const Vector3 &a, const Vector3 &b, float radius, float blend, int part) {
+    if (op == GROW) {
+        grow(a, b, radius, blend, part);
+        return;
+    }
     const Capsule c{a, b, std::max(radius, 0.01f)};
     const float reach = c.r + BAND + std::max(blend, 0.0f) + 1.0f;
     const Vector3 r(reach, reach, reach);
@@ -290,6 +317,55 @@ void SdfForm::box(int op, const Vector3 &center, const Vector3 &half, float blen
     const float reach = BAND + std::max(blend, 0.0f) + 1.0f;
     const Vector3 r = k.h + Vector3(reach, reach, reach);
     apply_shape(op, floor3(center - r), ceil3(center + r), blend, part, box_fn, &k);
+}
+
+void SdfForm::shape(int op, int kind, const Transform3D &xform, const Vector3 &size, float blend, int part) {
+    if (op == SMOOTH || op == GROW) return;
+    const Vector3 s = size.abs();
+    const Placed k{xform.affine_inverse(), kind, s};
+    const Vector3 ext = kind == SHAPE_BOX ? s : Vector3(std::max(s.x, s.z), s.y, std::max(s.x, s.z));
+    const float reach = BAND + std::max(blend, 0.0f) + 1.0f;
+    Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+    for (int c = 0; c < 8; ++c) {
+        const Vector3 p = xform.xform(Vector3(c & 1 ? ext.x : -ext.x, c & 2 ? ext.y : -ext.y, c & 4 ? ext.z : -ext.z));
+        mn = mn.min(p);
+        mx = mx.max(p);
+    }
+    const Vector3 r(reach, reach, reach);
+    apply_shape(op, floor3(mn - r), ceil3(mx + r), blend, part, placed_fn, &k);
+}
+
+void SdfForm::grow(const Vector3 &a, const Vector3 &b, float radius, float amount, int part) {
+    const float r = std::max(radius, 0.5f);
+    const uint8_t label = (uint8_t)std::clamp(part, 0, 255);
+    const Vector3 e(r + 1.0f, r + 1.0f, r + 1.0f);
+    each(floor3(a.min(b) - e), ceil3(a.max(b) + e), amount > 0.0f, [&](Block *blk, int i, const Vector3i &s) {
+        const float v = capsule_sdf(Vector3(s.x + 0.5f, s.y + 0.5f, s.z + 0.5f), a, b, r);
+        const float w = std::clamp(-v / r, 0.0f, 1.0f);
+        if (w <= 0.0f) return;
+        const float old = blk->d[i];
+        const float nd = clampb(old - amount * w);
+        if (nd < 0.0f && old >= 0.0f) blk->part[i] = label;
+        blk->d[i] = nd;
+    });
+}
+
+void SdfForm::flatten(const Vector3 &center, float radius, const Vector3 &normal, const Vector3 &point,
+        float strength, int part) {
+    const float r = std::max(radius, 0.5f);
+    const Vector3 n = normal.length_squared() > 0.0f ? normal.normalized() : Vector3(0, 1, 0);
+    const float k = std::clamp(strength, 0.0f, 1.0f);
+    const uint8_t label = (uint8_t)std::clamp(part, 0, 255);
+    const Vector3 e(r + 1.0f, r + 1.0f, r + 1.0f);
+    each(floor3(center - e), ceil3(center + e), true, [&](Block *blk, int i, const Vector3i &s) {
+        const Vector3 p(s.x + 0.5f, s.y + 0.5f, s.z + 0.5f);
+        const float w = k * std::clamp((r - p.distance_to(center)) / (0.5f * r), 0.0f, 1.0f);
+        if (w <= 0.0f) return;
+        const float old = blk->d[i];
+        const float nd = clampb(old + (n.dot(p - point) - old) * w);
+        if (nd < 0.0f && old >= 0.0f) blk->part[i] = label;
+        blk->d[i] = nd;
+    });
 }
 
 void SdfForm::cell_box(const Vector3i &c, int op, int part) {

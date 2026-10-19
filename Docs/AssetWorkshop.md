@@ -403,6 +403,12 @@ point, strength, part)`; op GROW in `stroke` (blend is the signed amount). Check
 volume and back) and `asset_workshop_probe` (a stamp is one undo, snaps to the grid,
 converts to the box's bricks exactly).
 
+**Built 2026-10-19**, as above. sdf_form_probe 32 (5 new), asset_workshop_probe 244 (3 new).
+`-- --shot --sculpt --stamps` adds a box stamp, a cylinder and a cone on the barrel, two
+flatten dabs on the body's side and a grow on the grip, and leaves a box's ghost showing.
+Shift during a stamp drag does nothing new (Shift at the press smooths, as everywhere).
+Next: a lathe for round parts, then move / grab.
+
 Sources: voxel-tools.readthedocs.io (VoxelTool, VoxelToolLodTerrain, changelog);
 helpx.adobe.com/substance-3d-modeler (tools, shortcuts); docs.blender.org (sculpt brushes,
 Grease Pencil stroke placement); docs.indreams.me (art tips, gestures); blenderartists.org
