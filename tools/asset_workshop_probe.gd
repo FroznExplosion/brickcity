@@ -111,6 +111,7 @@ func _tick() -> void:
 	_curves()
 	_sideways()
 	_shells()
+	_sculpt()
 	_ws.show_help(true)
 	_ok("the instructions open", _ws._help.visible)
 	_ws.show_help(false)
@@ -1562,3 +1563,136 @@ func _shells() -> void:
 			"%d join cells %s, %d bricks on the sheet" % [joins.size(), str(joins.keys().slice(0, 4)), kept])
 	_ws.set_shell("body", null)
 	_ws.rail_pick("place")
+
+
+## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): a stroke is in the
+## field, not in bricks; one undo each; saved with the gun.
+func _sculpt() -> void:
+	_ws.rail_pick("sketch")
+	_ok("sculpt is the Block out tool's first way to draw", _ws.sketch_draw == "sculpt")
+	_ws.sculpt_clear()
+	var bricks: int = _ws.recipe.size()
+	var at: Vector3 = _ws.sculpt.to_sample(Vector3(10, 4, 8) * STUD)
+	_ws._sculpt_op = SdfForm.ADD
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	_ok("a stroke makes surface, and no bricks", _ws.sculpt.triangles() > 0 and _ws.recipe.size() == bricks,
+			"%d tris, %d -> %d bricks" % [_ws.sculpt.triangles(), bricks, _ws.recipe.size()])
+	var cells: PackedInt32Array = _ws.sculpt.form.cells()
+	_ok("labelled with the part", cells.size() > 0 and cells[3] == _ws.part_sel + 1, str(cells.slice(0, 5)))
+	_ws._sculpt_op = SdfForm.REMOVE
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(at, at)
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var carved: PackedInt32Array = _ws.sculpt.form.cells()
+	_ok("a carve takes some away", carved.size() < cells.size())
+	_ws._undo()
+	_ok("one Z puts the carve back", _ws.sculpt.form.cells() == cells)
+	_ws.redo()
+	_ok("Shift Z carves again", _ws.sculpt.form.cells() == carved)
+	var meta: Dictionary = _ws.recipe.meta.asset.sdf
+	var f := SdfForm.new()
+	var raw := Marshalls.base64_to_raw(String(meta.data)).decompress(int(meta.size), FileAccess.COMPRESSION_ZSTD)
+	_ok("saved with the gun", f.from_bytes(raw) and f.cells() == carved)
+	_ws.sculpt_scale(2.0)
+	_ok("the size slider scales it", _ws.sculpt.form.cells().size() > carved.size() * 5,
+			"%d -> %d" % [carved.size() / 5, _ws.sculpt.form.cells().size() / 5])
+	_ws._undo()
+	_ok("one undo", _ws.sculpt.form.cells() == carved)
+	# A guide model made solid.
+	_ws.sculpt_clear()
+	var holder := Node3D.new()
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(4, 2, 2) * STUD
+	mi.mesh = bm
+	mi.position = Vector3(20, 3, 20) * STUD
+	holder.add_child(mi)
+	_ws.add_child(holder)
+	_ws.guides.append({"path": "", "real_mm": 1.0, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
+			"node": holder})
+	_ok("fill from guides stamps the model", _ws.sculpt_fill_from_guides() == 1)
+	var n: int = _ws.sculpt.form.cells().size() / 5
+	_ok("a 4 x 2 x 2-stud box is about 4 x 5 x 2 cells", n >= 30 and n <= 50, str(n))
+	_ws.guides.pop_back()
+	holder.queue_free()
+	_ws.sculpt_clear()
+	_convert()
+	_ws.rail_pick("place")
+
+
+## Convert and back: zones to bricks, the rest to each part's custom piece over hidden
+## bricks; brick edits back into the field 1:1.
+func _convert() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sketch")
+	var body: int = _ws.part_names.find("body")
+	var barrel: int = _ws.part_names.find("barrel")
+	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_op = SdfForm.ADD
+	_ws.select_part(body)
+	_ws.sculpt_radius = 1.5
+	_ws._sculpt_dab(at, at + Vector3(40, 0, 0))
+	_ws.select_part(barrel)
+	_ws.sculpt_radius = 0.8
+	_ws._sculpt_dab(at + Vector3(40, 0, 0), at + Vector3(80, 0, 0))
+	_ws._sculpt_op = SdfForm.MARK
+	_ws.sculpt_radius = 3.0
+	_ws._sculpt_dab(at + Vector3(70, 0, 0), at + Vector3(90, 0, 0))   # the barrel's end: bricks
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var cells: PackedInt32Array = _ws.sculpt.form.cells()
+	var n_cells := cells.size() / 5
+	var before: int = _ws.recipe.size()
+	_ws.sculpt_convert()
+	_ok("converted: the block-out is hidden", _ws.sculpt_state == "bricks" and not _ws.sculpt.visible)
+	var covered: int = _asset_cells().size()
+	var hidden: int = _ws._sdf_shell.size() / 5
+	_ok("every solid cell is a brick or inside a custom piece", covered == n_cells and hidden > 0,
+			"%d cells, %d covered, %d by pieces alone (%d bricks before)" % [n_cells, covered, hidden, before])
+	_ok("both parts have a custom piece", _ws.shells.has("body") and _ws.shells.has("barrel")
+			and int(_ws._shell_tris.get("body", 0)) > 0 and int(_ws._shell_tris.get("barrel", 0)) > 0,
+			str(_ws._shell_tris))
+	var zone_bricks := 0
+	var shown := 0
+	for ps in _ws.export_sheet().parts:
+		if ps.name == "barrel":
+			shown = (ps.bricks as Array).size()
+	for i in range(0, cells.size(), 5):
+		zone_bricks += cells[i + 4]
+	_ok("the brick zone stays bricks on the sheet, the rest under the shell", shown > 0 and zone_bricks > 0,
+			"%d barrel bricks on the sheet, %d zone cells" % [shown, zone_bricks])
+	# Edit the bricks, then back to the SDF: exactly those edits show.
+	var i0: int = _ws.recipe.size() - 1
+	var gone_cell: Vector3i = _ws.recipe.cell_of(i0)
+	_ws.take_brick(i0)
+	_ws.select_part(body)
+	var top := Vector3i(gone_cell.x, gone_cell.y + 20, gone_cell.z)
+	_ok("a brick laid by hand", _ws.place_named(BrickPalette.variant_name("brick_1x1", 0, false), top))
+	var want := _asset_cells()
+	_ws.sculpt_to_sdf()
+	var got: Dictionary = {}
+	var sc: PackedInt32Array = _ws.sculpt.form.cells()
+	for i in range(0, sc.size(), 5):
+		got[Vector3i(sc[i], sc[i + 1], sc[i + 2])] = sc[i + 3]
+	_ok("Edit as SDF: the field is the bricks, edits and all", got == want and _ws.sculpt.visible,
+			"%d vs %d" % [got.size(), want.size()])
+	_ok("and the bricks are put aside", _ws._brick_cell_list().is_empty() and not _ws._sdf_stash.is_empty())
+	_ws.sculpt_convert()
+	var again := _asset_cells()
+	var bl: PackedInt32Array = _ws._brick_cell_list()
+	_ok("converted again: the same cells", again == want, "%d vs %d" % [again.size(), want.size()])
+	_ws._undo()
+	_ok("one Z: back to sculpting", _ws.sculpt_state == "sdf" and _ws._brick_cell_list().is_empty())
+	_ws.redo()
+	_ok("Shift Z: converted again", _ws.sculpt_state == "bricks" and _ws._brick_cell_list().size() == bl.size())
+
+
+## The asset's cells after a Convert: its bricks', and those its custom pieces fill alone.
+func _asset_cells() -> Dictionary:
+	var out := {}
+	for l in [_ws._brick_cell_list(), _ws._sdf_shell]:
+		for i in range(0, l.size(), 5):
+			out[Vector3i(l[i], l[i + 1], l[i + 2])] = l[i + 3]
+	return out

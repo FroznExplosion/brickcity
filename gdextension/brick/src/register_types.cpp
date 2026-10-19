@@ -6,6 +6,7 @@
 #include "mesh_merge.h"
 #include "shaped_sampler.h"
 #include "form_mesher.h"
+#include "sdf_form.h"
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
@@ -37,6 +38,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<ShapedSampler>();
     // The asset workshop's shells: a smooth surface round a sampled form.
     ClassDB::register_class<FormMesher>();
+    // The asset workshop's SDF block-out (Docs/AssetWorkshop.md).
+    ClassDB::register_class<SdfForm>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();

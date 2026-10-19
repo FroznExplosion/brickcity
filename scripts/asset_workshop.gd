@@ -382,6 +382,40 @@ func _shot() -> void:
 		rail_pick("shape")
 		shape_mode = "brush"
 		_look_at_build()
+	if "--sculpt" in OS.get_cmdline_user_args():
+		# The SDF block-out: a body, a barrel, a stock blended on and a grip, each its part.
+		for _i in 3:
+			await get_tree().process_frame
+		set_mirror(false)
+		var base := Vector3(recipe.cell_of(0)) if recipe.size() > 0 else Vector3(500, 30, mirror_z)
+		base.z = mirror_z
+		var at := func(x: float, y: float) -> Vector3:
+			return sculpt.to_sample(Vector3((base.x + x) * BrickPalette.STUD_M, (base.y + y) * BrickPalette.PLATE_M,
+					base.z * BrickPalette.STUD_M))
+		sculpt.form.begin_edit()
+		_sculpt_op = SdfForm.ADD
+		for st in [["body", 1.5, 0.0, 0.0, 8.0, 20.0, 8.0], ["barrel", 0.6, 0.0, 20.0, 12.0, 40.0, 12.0],
+				["stock", 1.3, 1.0, 0.0, 6.0, -14.0, -2.0], ["grip", 0.8, 0.6, 4.0, 2.0, 2.0, -24.0]]:
+			select_part(maxi(0, part_names.find(st[0])))
+			sculpt_radius = st[1]
+			sculpt_blend = st[2]
+			_sculpt_dab(at.call(st[3], st[4]), at.call(st[5], st[6]))
+		# The barrel's far half a brick zone, so it stays bricks.
+		_sculpt_op = SdfForm.MARK
+		sculpt_radius = 3.0
+		_sculpt_dab(at.call(30.0, 12.0), at.call(42.0, 12.0))
+		_sculpt_record(sculpt.form.end_edit())
+		sculpt_blend = 0.0
+		if "--convert" in OS.get_cmdline_user_args():
+			var t0 := Time.get_ticks_msec()
+			sculpt_convert()
+			print("[sculpt] converted in %d ms: %d bricks, shells %s" % [Time.get_ticks_msec() - t0, recipe.size(),
+					str(_shell_tris)])
+		rail_pick("sketch")
+		var bb := sculpt.form.bounds()
+		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
+				sculpt.triangles(), sculpt.form.cells().size() / 5, str(bb)])
+		_look_at_build()
 	if "--receiver" in OS.get_cmdline_user_args():
 		# A receiver in three views: a side slab, a charging slot cut through and a port cut
 		# a stud in, then its top corners chamfered from the front.
@@ -1304,7 +1338,8 @@ func _store_asset_meta() -> void:
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
-			"shells": shells}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
+			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1343,6 +1378,16 @@ func _restore_asset_meta() -> void:
 		_sketch_seq = maxi(_sketch_seq, int(sk.n) + 1)
 	_sketch_cache.clear()
 	curve_level = int(a.get("curves", 2))
+	_sdf_meta = a.get("sdf", {})
+	var sst: Dictionary = a.get("sculpt", {})
+	sculpt_state = String(sst.get("state", "sdf"))
+	_sdf_cells = PackedInt32Array(sst.get("cells", []))
+	_sdf_stash = (sst.get("stash", []) as Array).duplicate(true)
+	_sdf_shell = PackedInt32Array(sst.get("shell_cells", []))
+	if sculpt != null:
+		sculpt.set_parts(part_names.size())
+		sculpt.load_meta(_sdf_meta)
+		sculpt.visible = sculpt_state == "sdf"
 	shells = (a.get("shells", {}) as Dictionary).duplicate(true)
 	for part in _shell_nodes.keys():
 		_shell_mesh(String(part), {})
@@ -1396,6 +1441,15 @@ func _reset_space() -> void:
 	for part in _shell_nodes.keys():
 		_shell_mesh(String(part), {})
 	part_bricks.clear()
+	if sculpt != null:
+		sculpt.form.clear()
+		sculpt.remesh()
+		sculpt.visible = true
+	sculpt_state = "sdf"
+	_sdf_cells = PackedInt32Array()
+	_sdf_stash = []
+	_sdf_shell = PackedInt32Array()
+	_sdf_meta = {}
 	extra_studs.clear()
 	_draw_studs()
 	_part_vol.clear()
@@ -1449,6 +1503,10 @@ func _setup_parts() -> void:
 	(_ruler.get_parent() as Node).add_child(_part_label)
 	_points_root = Node3D.new()
 	add_child(_points_root)
+	sculpt = AssetSculpt.new()
+	add_child(sculpt)
+	sculpt.place(world.get_chunk_transform(asm.frames[0]), BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
+	sculpt.set_parts(part_names.size())
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
 	_build_phase3(_ruler.get_parent() as CanvasLayer)
@@ -2318,6 +2376,10 @@ func _build_phase3(layer: CanvasLayer) -> void:
 			+ "3. Add balls, cubes and cylinders with the Shapes tool's brush (K).\n"
 			+ "4. Then finish it below: size, curves, and a smooth shell.")
 	_sketch_box.add_child(how)
+	_sketch_how = how
+	how.visible = sketch_draw != "sculpt"
+	_build_sculpt_box()
+	_sketch_box.move_child(_sculpt_box, 1)
 	var wrow := HBoxContainer.new()
 	_sketch_box.add_child(wrow)
 	var wl := Label.new()
@@ -3407,6 +3469,8 @@ func _sketch_key() -> String:
 func _sketch_input(e: InputEvent) -> bool:
 	if tool != "sketch":
 		return false
+	if sketch_draw == "sculpt":
+		return _sculpt_input(e)
 	if sketch_draw == "polygon":
 		return _polygon_input(e)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
@@ -3425,6 +3489,496 @@ func _sketch_input(e: InputEvent) -> bool:
 		_sketch_add()
 		return true
 	return false
+
+
+# ---------------------------------------------------------------------------
+# The SDF block-out: sculpting (Docs/AssetWorkshop.md, "The SDF block-out")
+# ---------------------------------------------------------------------------
+
+## LMB / RMB with the sculpt brush: one stroke is one undo. Shift smooths whatever the
+## mode. A stroke that adds keeps the depth it started at (the surface it is adding to
+## would pull it toward the camera); the others follow the surface.
+func _sculpt_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if e.pressed:
+			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
+			_sculpt_op = _sculpt_op_for(right, e.shift_pressed)
+			var p = _sculpt_point(true)
+			if p == null:
+				return true
+			_sculpt_on = true
+			sculpt.form.begin_edit()
+			_sculpt_dab(p, p)
+		elif _sculpt_on:
+			_sculpt_end()
+		return true
+	if e is InputEventMouseMotion:
+		var p = _sculpt_point(false)
+		sculpt.show_cursor(p, _sculpt_r(), _sculpt_colour())
+		if _sculpt_on and p != null and p.distance_to(_sculpt_last) > maxf(0.3, _sculpt_r() * 0.25):
+			_sculpt_dab(_sculpt_last, p)
+		return _sculpt_on
+	return false
+
+
+func _sculpt_op_for(right: bool, shift: bool) -> int:
+	if shift or sculpt_mode == "smooth":
+		return SdfForm.SMOOTH
+	match sculpt_mode:
+		"paint": return SdfForm.PAINT
+		"zone": return SdfForm.UNMARK if right else SdfForm.MARK
+	return SdfForm.REMOVE if right else SdfForm.ADD
+
+
+## The brush's radius in samples (a stud is 5).
+func _sculpt_r() -> float:
+	return maxf(0.5, sculpt_radius * BrickWorld.ticks_per_stud())
+
+
+func _sculpt_colour() -> Color:
+	if _sculpt_on and _sculpt_op == SdfForm.REMOVE:
+		return Color(1.0, 0.35, 0.3)
+	if sculpt_mode == "paint" and part_sel + 1 < sculpt.palette.size():
+		return sculpt.palette[part_sel + 1]
+	return Color(0.6, 0.9, 1.0)
+
+
+## Where the brush is, in samples, or null: on the block-out's surface under the mouse,
+## else on the working plane; while an add is under way, at the depth it started.
+func _sculpt_point(start: bool) -> Variant:
+	var ray := _mouse_ray()
+	var r := sculpt.ray_to_samples(ray[0], ray[1])
+	if _sculpt_on and not start and _sculpt_op == SdfForm.ADD:
+		return r[0] + r[1] * _sculpt_depth
+	var h = sculpt.hit(ray[0], ray[1])
+	if h == null:
+		var w = work_plane_hit(ray[0], ray[1])
+		if w == null:
+			return null
+		h = sculpt.to_sample(w)
+	if start:
+		_sculpt_depth = (h - r[0]).length()
+	return h
+
+
+## A capsule of the brush from `a` to `b`, and its mirror image when the mirror is on.
+func _sculpt_dab(a: Vector3, b: Vector3) -> void:
+	if sculpt.palette.size() < part_names.size() + 1:
+		sculpt.set_parts(part_names.size())
+	var blend := 0.5 if _sculpt_op == SdfForm.SMOOTH else sculpt_blend * BrickWorld.ticks_per_stud()
+	sculpt.form.stroke(_sculpt_op, a, b, _sculpt_r(), blend, part_sel + 1)
+	if mirror_on:
+		var z := mirror_z * BrickPalette.STUD_M
+		var ma := sculpt.to_world(a)
+		var mb := sculpt.to_world(b)
+		ma.z = 2.0 * z - ma.z
+		mb.z = 2.0 * z - mb.z
+		sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+	sculpt.remesh()
+	_sculpt_last = b
+
+
+func _sculpt_end() -> void:
+	_sculpt_on = false
+	_sculpt_record(sculpt.form.end_edit())
+
+
+## An edit of the field, as one undo.
+func _sculpt_record(rec: PackedByteArray) -> void:
+	_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [{"sdf": rec}]})
+	_redo.clear()
+	_sdf_meta = sculpt.save_meta()
+	_store_asset_meta()
+	_autosave_dirty = true
+
+
+## The guide models made solid in the field, in this part: a quick start from a model.
+func sculpt_fill_from_guides() -> int:
+	var n := 0
+	sculpt.form.begin_edit()
+	for g in guides:
+		n += _stamp_node(g.node, SdfForm.ADD)
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+	return n
+
+
+func _stamp_node(node: Node, op: int) -> int:
+	var n := 0
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		var mi := node as MeshInstance3D
+		var to_s := sculpt.global_transform.affine_inverse() * mi.global_transform
+		for si in mi.mesh.get_surface_count():
+			var arr := mi.mesh.surface_get_arrays(si)
+			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var idx = arr[Mesh.ARRAY_INDEX]
+			if idx == null or (idx as PackedInt32Array).is_empty():
+				idx = PackedInt32Array(range(v.size()))
+			for i in v.size():
+				v[i] = to_s * v[i]
+			sculpt.form.stamp_mesh(op, v, idx, part_sel + 1)
+			n += 1
+	for c in node.get_children():
+		n += _stamp_node(c, op)
+	return n
+
+
+## Size and smoothness of the whole block-out, each one undo.
+func sculpt_scale(factor: float) -> void:
+	var bb := sculpt.form.bounds()
+	if bb.size == Vector3.ZERO or is_equal_approx(factor, 1.0):
+		return
+	sculpt.form.begin_edit()
+	sculpt.form.scale(factor, Vector3(bb.get_center().x, bb.position.y, bb.get_center().z))
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+func sculpt_smooth(passes: int) -> void:
+	sculpt.form.begin_edit()
+	sculpt.form.blur(passes)
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+func sculpt_clear() -> void:
+	sculpt.form.begin_edit()
+	sculpt.form.clear()
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+
+## The sculpt brush's options, at the top of the Block out panel.
+func _build_sculpt_box() -> void:
+	_sculpt_box = VBoxContainer.new()
+	_sculpt_box.visible = sketch_draw == "sculpt"
+	_sketch_box.add_child(_sculpt_box)
+	var how := Label.new()
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	how.custom_minimum_size.x = RAIL_W - 16
+	how.text = ("Sculpt in 3D: LMB adds to this part, RMB carves, Shift smooths. "
+			+ "The brush starts on the working plane, then follows the surface; an add keeps "
+			+ "the depth it started at. Parts blend while sculpting; each has its colour.")
+	_sculpt_box.add_child(how)
+	var modes := OptionButton.new()
+	for m in SCULPT_MODES:
+		modes.add_item(m[1])
+	modes.focus_mode = Control.FOCUS_NONE
+	modes.item_selected.connect(func(i: int) -> void: sculpt_mode = SCULPT_MODES[i][0])
+	_sculpt_box.add_child(modes)
+	var slider := func(text: String, lo: float, hi: float, step: float, v: float, set_v: Callable) -> HSlider:
+		var l := Label.new()
+		_sculpt_box.add_child(l)
+		var hs := HSlider.new()
+		hs.min_value = lo
+		hs.max_value = hi
+		hs.step = step
+		hs.focus_mode = Control.FOCUS_NONE
+		hs.custom_minimum_size.x = 150
+		hs.value_changed.connect(func(x: float) -> void:
+			l.text = text % x
+			set_v.call(x))
+		hs.value = v
+		l.text = text % v
+		_sculpt_box.add_child(hs)
+		return hs
+	slider.call("brush radius: %.1f studs", 0.2, 10.0, 0.1, sculpt_radius,
+			func(x: float) -> void: sculpt_radius = x)
+	slider.call("blend: %.1f studs", 0.0, 3.0, 0.1, sculpt_blend,
+			func(x: float) -> void: sculpt_blend = x)
+	# Size: let go and the whole block-out is scaled about its bottom middle, one undo.
+	var size_label := Label.new()
+	var size_s := HSlider.new()
+	size_s.min_value = 25
+	size_s.max_value = 300
+	size_s.step = 5
+	size_s.value = 100
+	size_s.focus_mode = Control.FOCUS_NONE
+	size_s.custom_minimum_size.x = 150
+	size_label.text = "size of the block-out: 100%"
+	size_s.value_changed.connect(func(x: float) -> void: size_label.text = "size of the block-out: %d%%" % int(x))
+	size_s.drag_ended.connect(func(_c: bool) -> void:
+		sculpt_scale(size_s.value / 100.0)
+		size_s.set_value_no_signal(100)
+		size_label.text = "size of the block-out: 100%")
+	_sculpt_box.add_child(size_label)
+	_sculpt_box.add_child(size_s)
+	var row := HFlowContainer.new()
+	_sculpt_box.add_child(row)
+	for b in [["smoother", func() -> void: sculpt_smooth(1)],
+			["fill from guides", func() -> void: sculpt_fill_from_guides()],
+			["clear", func() -> void: sculpt_clear()],
+			["Convert", func() -> void: sculpt_convert()],
+			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(b[1])
+		row.add_child(btn)
+	_sculpt_box.add_child(HSeparator.new())
+
+# ---------------------------------------------------------------------------
+# The SDF block-out: Convert, and back (Docs/AssetWorkshop.md, "The SDF block-out")
+# ---------------------------------------------------------------------------
+
+## Every upright brick's cells with its part: as `SdfForm.cells` gives them (label is the
+## part + 1), for `sync_cells`.
+func _brick_cell_list() -> PackedInt32Array:
+	var m := {}
+	for i in recipe.size():
+		if _brick_frame(i) != 0:
+			continue
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					m[c + Vector3i(dx, dy, dz)] = (part_of[i] if i < part_of.size() else 0) + 1
+	var out := PackedInt32Array()
+	for c in m:
+		out.append_array([c.x, c.y, c.z, m[c], 0])
+	return out
+
+
+## What Convert and Edit as SDF change besides bricks and the field, for undo.
+func _sculpt_state() -> Dictionary:
+	return {"state": sculpt_state, "cells": _sdf_cells.duplicate(), "stash": _sdf_stash.duplicate(true),
+			"shell_cells": _sdf_shell.duplicate(),
+			"part_bricks": part_bricks.duplicate(true), "shells": shells.duplicate(true)}
+
+
+func _set_sculpt_state(st: Dictionary) -> void:
+	sculpt_state = String(st.state)
+	_sdf_cells = PackedInt32Array(st.cells)
+	_sdf_stash = (st.stash as Array).duplicate(true)
+	_sdf_shell = PackedInt32Array(st.get("shell_cells", []))
+	part_bricks = (st.part_bricks as Dictionary).duplicate(true)
+	shells = (st.shells as Dictionary).duplicate(true)
+	sculpt.visible = sculpt_state == "sdf"
+	for part in _shell_nodes.keys():
+		_shell_mesh(String(part), {})
+	for part in shells:
+		_refresh_shell(String(part))
+	_sdf_meta = sculpt.save_meta()
+	_store_asset_meta()
+
+
+## The upright bricks into the field (the cells that changed since `before`) and taken up,
+## kept so Convert can lay each back where the field still has it. Inside a gather.
+func _bricks_into_field(before: PackedInt32Array, shell_cells := PackedInt32Array()) -> void:
+	var after := _brick_cell_list()
+	var have := {}
+	for i in range(0, after.size(), 5):
+		have[Vector3i(after[i], after[i + 1], after[i + 2])] = true
+	for i in range(0, shell_cells.size(), 5):
+		if not have.has(Vector3i(shell_cells[i], shell_cells[i + 1], shell_cells[i + 2])):
+			after.append_array(shell_cells.slice(i, i + 5))
+	sculpt.form.sync_cells(before, after)
+	_batch = true
+	for i in range(recipe.size() - 1, -1, -1):
+		if _brick_frame(i) != 0:
+			continue
+		var b := _brick_info(i)
+		var c: Vector3i = b.cell
+		_sdf_stash.append([b.arch, c.x, c.y, c.z, b.colour, b.mat, b.tag])
+		take_brick(i)
+	_batch = false
+	_after_edit()
+
+
+## Edit as SDF: the bricks back into the block-out -- only the cells changed since the
+## last Convert, so the smooth surface stays where they were not touched -- and the
+## block-out shown again. A build never converted (bricks only) goes in whole. One undo.
+func sculpt_to_sdf() -> void:
+	# Not yet converted: whatever bricks there are (a bricks-only gun) go in whole.
+	var before := _sdf_cells if sculpt_state == "bricks" else PackedInt32Array()
+	_begin_gather()
+	var was := _sculpt_state()
+	sculpt.form.begin_edit()
+	_bricks_into_field(before, _sdf_shell if sculpt_state == "bricks" else PackedInt32Array())
+	var rec := sculpt.form.end_edit()
+	for part in shells.keys():
+		if shells[part].get("sdf", false):
+			shells.erase(part)
+	sculpt_state = "sdf"
+	_sdf_cells = sculpt.form.cells()
+	_sculpt_finish(was, rec)
+	_end_gather()
+
+
+## Convert: the block-out into the asset. Every solid cell gets a brick, in its part; a
+## brick that was there before goes back where all its cells are still the part's, with
+## its colour and shape; the rest packed biggest first. Cells in a brick zone stay bricks;
+## the rest of a part becomes its custom piece -- a shell from the field, over bricks the
+## game and the print leave out except where it meets bricks (the join, with studs).
+## Bricks laid in the meantime go into the field first. One undo.
+func sculpt_convert() -> void:
+	if sculpt_state == "bricks":
+		return
+	_begin_gather()
+	var was := _sculpt_state()
+	sculpt.form.begin_edit()
+	_bricks_into_field(PackedInt32Array())
+	var rec := sculpt.form.end_edit()
+	var cells := sculpt.form.cells()
+	var label_of := {}
+	var zone := {}
+	for i in range(0, cells.size(), 5):
+		var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+		label_of[c] = cells[i + 3]
+		if cells[i + 4] != 0:
+			zone[c] = true
+	# A brick in every zone cell; in a part's smooth cells only where the surface holds the
+	# whole cell (inside its custom piece) or where it meets a brick (the join).
+	var brick_at := {}
+	_sdf_shell = PackedInt32Array()
+	for c in label_of:
+		if zone.has(c) or _cell_inside(c) or _cell_joins(c, label_of, zone):
+			brick_at[c] = true
+		else:
+			_sdf_shell.append_array([c.x, c.y, c.z, label_of[c], 0])
+	var keep_sel := part_sel
+	var used := {}
+	var colour_of := {}   # part -> [colour, material] of its first brick, for its piece
+	var laid := {}   # part -> [[arch, [x, y, z]]] in smooth cells
+	_batch = true
+	for s in _sdf_stash:
+		var arch := String(s[0])
+		var at := Vector3i(int(s[1]), int(s[2]), int(s[3]))
+		var label := int(s[6]) + 1
+		var size := BrickPalette.size_of(arch)
+		var fits := true
+		var cs := []
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c := at + Vector3i(dx, dy, dz)
+					fits = fits and int(label_of.get(c, -1)) == label and brick_at.has(c) and not used.has(c)
+					cs.append(c)
+		if not fits:
+			continue
+		part_sel = label - 1
+		if place_named(arch, at, int(s[4]), int(s[5])):
+			for c in cs:
+				used[c] = true
+			_note_laid(laid, arch, at, cs, zone)
+			colour_of.get_or_add(part_names[part_sel], [int(s[4]), int(s[5])])
+	_sdf_stash = []
+	var by_part := {}
+	for c in brick_at:
+		if not used.has(c):
+			(by_part.get_or_add(maxi(1, int(label_of[c])), {}) as Dictionary)[c] = true
+	for label in by_part:
+		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
+		for b in pack_cells(by_part[label]):
+			var at: Vector3i = b[1]
+			if place_named(String(b[0]), at):
+				var size := BrickPalette.size_of(String(b[0]))
+				var cs := []
+				for dx in size.x:
+					for dy in size.y:
+						for dz in size.z:
+							cs.append(at + Vector3i(dx, dy, dz))
+				_note_laid(laid, String(b[0]), at, cs, zone)
+				var last: int = recipe.size() - 1
+				colour_of.get_or_add(part_names[part_sel], [recipe.colour_of(last), recipe.material_of(last)])
+	_batch = false
+	part_sel = keep_sel
+	_after_edit()
+	var smooth_parts_now := {}
+	for c in label_of:
+		if not zone.has(c):
+			smooth_parts_now[part_names[clampi(int(label_of[c]) - 1, 0, part_names.size() - 1)]] = true
+	for part in smooth_parts_now:
+		part_bricks[part] = laid.get(part, [])
+		var st: Dictionary = shells.get(part, {})
+		var col: Array = colour_of.get(part, [int(st.get("colour", 0)), int(st.get("mat", 0))])
+		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SHELL_TRIS)),
+				"colour": col[0], "mat": col[1]}
+	sculpt_state = "bricks"
+	_sdf_cells = cells
+	_sculpt_finish(was, rec)
+	_end_gather()
+
+
+## The surface holds the whole cell: its corners and middle all inside the field.
+func _cell_inside(c: Vector3i) -> bool:
+	var per := Vector3(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud())
+	var o := Vector3(c) * per
+	if sculpt.form.sample(o + per * 0.5) >= 0.0:
+		return false
+	for k in 8:
+		if sculpt.form.sample(o + per * Vector3(k & 1, (k >> 1) & 1, (k >> 2) & 1)) >= 0.0:
+			return false
+	return true
+
+
+## A part's smooth cell beside a brick zone or another part: where its piece meets bricks.
+static func _cell_joins(c: Vector3i, label_of: Dictionary, zone: Dictionary) -> bool:
+	for d in [Vector3i.LEFT, Vector3i.RIGHT, Vector3i.UP, Vector3i.DOWN, Vector3i.FORWARD, Vector3i.BACK]:
+		var n: Vector3i = c + d
+		if label_of.has(n) and (zone.has(n) or label_of[n] != label_of[c]):
+			return true
+	return false
+
+
+## A brick laid by Convert in a part's smooth cells: one its shell covers.
+func _note_laid(laid: Dictionary, arch: String, at: Vector3i, cs: Array, zone: Dictionary) -> void:
+	for c in cs:
+		if zone.has(c):
+			return
+	var part := part_names[clampi(part_sel, 0, part_names.size() - 1)]
+	(laid.get_or_add(part, []) as Array).append([arch, [at.x, at.y, at.z]])
+
+
+func _sculpt_finish(was: Dictionary, rec: PackedByteArray) -> void:
+	var now := _sculpt_state()
+	_edit_groups.append({"end": _edits.size(), "n": 0,
+			"sketch": [{"sdf": rec}, {"sculpt_before": was, "sculpt_after": now}]})
+	_set_sculpt_state(now)
+	_autosave_dirty = true
+
+
+## A part's custom piece from the field: its smooth samples (not its brick zone, not
+## another part's) as distances, the surface where they cross zero, a sample a tick.
+## Pinned (kept flat) in the cells where it meets a brick it does not cover: the join.
+func _sdf_shell_field(part: String) -> Dictionary:
+	var label := part_names.find(part) + 1
+	var mine := {}
+	var bricks := {}   # every other solid cell: a zone, or another part
+	for i in range(0, _sdf_cells.size(), 5):
+		var c := Vector3i(_sdf_cells[i], _sdf_cells[i + 1], _sdf_cells[i + 2])
+		if _sdf_cells[i + 3] == label and _sdf_cells[i + 4] == 0:
+			mine[c] = true
+		else:
+			bricks[c] = true
+	if mine.is_empty():
+		return {}
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in mine:
+		lo = lo.min(c)
+		hi = hi.max(c)
+	var per := Vector3i(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud())
+	var slo := (lo - Vector3i.ONE) * per
+	var dims := (hi - lo + Vector3i(3, 3, 3)) * per
+	var joins := {}
+	for c in mine:
+		for d in [Vector3i.LEFT, Vector3i.RIGHT, Vector3i.UP, Vector3i.DOWN, Vector3i.FORWARD, Vector3i.BACK]:
+			if bricks.has(c + d):
+				joins[c] = true
+	var pins := PackedByteArray()
+	pins.resize(dims.x * dims.y * dims.z)
+	for c in joins:
+		var o: Vector3i = c * per - slo
+		for z in per.z:
+			for y in per.y:
+				for x in per.x:
+					pins[(o.x + x) + dims.x * ((o.y + y) + dims.y * (o.z + z))] = 1
+	var dist: PackedFloat32Array = sculpt.form.part_field(label, slo, dims, true)
+	return {"distance": dist, "pins": pins, "ddims": dims, "dlo": slo, "k": 1, "tick": true,
+			"joins": joins, "lo": slo, "dims": dims}
 
 
 ## The point of the working plane under the mouse, in sketch numbers, or null.
@@ -3789,6 +4343,15 @@ func _restore_sketch(g: Variant, which: String) -> void:
 			list.reverse()
 		for one in list:
 			_restore_sketch(one, which)
+		return
+	if g.has("sdf"):
+		g.sdf = sculpt.form.swap_blocks(g.sdf)
+		sculpt.remesh()
+		_sdf_meta = sculpt.save_meta()
+		_store_asset_meta()
+		return
+	if g.has("sculpt_" + which):
+		_set_sculpt_state(g["sculpt_" + which])
 		return
 	if g.has("curves_" + which):
 		_show_curves(int(g["curves_" + which]))
@@ -4505,13 +5068,36 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Block out", "Alt D"],
 		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
 		["move", "Move part", "Alt G"], ["measure", "Measure", "Alt M"]]
-const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
+const SKETCH_DRAWS := [["sculpt", "sculpt in 3D"], ["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
 
 const RAIL_W := 184.0
 const RAIL_FONT := 12
-var sketch_draw := "outline"
+var sketch_draw := "sculpt"
+## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): its brush.
+const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["smooth", "smooth"], ["paint", "paint this part"],
+		["zone", "brick zone (LMB) / smooth zone (RMB)"]]
+var sculpt: AssetSculpt
+var sculpt_mode := "shape"
+var sculpt_radius := 1.0     # studs
+var sculpt_blend := 0.0      # studs: how far an add or a carve blends into what is there
+var _sculpt_on := false
+var _sculpt_op := 0
+var _sculpt_last := Vector3.ZERO
+var _sculpt_depth := 0.0
+var _sculpt_box: VBoxContainer
+var _sketch_how: Label
+var _sdf_meta := {}
+## "sdf" while the block-out is sculpted; "bricks" once converted.
+var sculpt_state := "sdf"
+## The field's cells at the last Convert or Edit as SDF: what the bricks are synced from.
+var _sdf_cells := PackedInt32Array()
+## Bricks Edit as SDF took up, for Convert to lay back: [arch, x, y, z, colour, mat, part].
+var _sdf_stash := []
+## Cells a converted part's custom piece fills with no brick inside (its edge): still the
+## asset's for Edit as SDF. x, y, z, label, 0 each, as `SdfForm.cells`.
+var _sdf_shell := PackedInt32Array()
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
 var paint_what := "both"
@@ -4706,6 +5292,9 @@ func _build_rail(layer: CanvasLayer) -> void:
 	draws.focus_mode = Control.FOCUS_NONE
 	draws.item_selected.connect(func(i: int) -> void:
 		sketch_draw = SKETCH_DRAWS[i][0]
+		_sculpt_box.visible = sketch_draw == "sculpt"
+		_sketch_how.visible = sketch_draw != "sculpt"
+		sculpt.show_cursor(null, 0.0, Color.WHITE)
 		_sketch.clear())
 	_draw_box.add_child(draws)
 
@@ -5507,6 +6096,8 @@ func set_shell(part: String, settings: Variant) -> void:
 func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dictionary:
 	if not shells.has(part):
 		return {}
+	if shells[part].get("sdf", false):
+		return _sdf_shell_field(part)
 	if list.is_empty():
 		list = part_sketches(part)
 	if form.is_empty():
@@ -5794,6 +6385,8 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 		return
 	var k: int = sf.k
 	var cell := CELL_M / float(k)
+	if sf.get("tick", false):
+		cell = Vector3.ONE * BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
 	var st: Dictionary = shells[part]
 	var arrays: Array
 	var at: Vector3i = sf.lo
