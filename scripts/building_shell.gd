@@ -391,6 +391,30 @@ static func build_mesh(footprint_x: int, footprint_z: int, courses: int,
 static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int, damage: Dictionary = {}, program: Dictionary = {},
 		standing: Callable = Callable()) -> ArrayMesh:
+	var arrays := window_arrays(footprint_x, footprint_z, courses, building_seed,
+			TowerRecipe.layout(courses), RoomManifest.lattice_for(footprint_x, footprint_z, courses),
+			damage, program, standing)
+	if arrays.is_empty():
+		return null
+	return window_mesh_of(arrays)
+
+
+## The ArrayMesh of what window_arrays made.
+static func window_mesh_of(arrays: Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+## build_window_mesh's work, safe on a worker thread: the band layout and the
+## room lattice are handed in, already made, so nothing here touches the
+## static caches they live in (TowerRecipe._layouts, RoomManifest._lattices),
+## which the main thread may be filling at the same time. Empty if there are
+## no windows. `standing`, if given, must be safe on the calling thread.
+static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
+		building_seed: int, layout: Array, lattice: Dictionary,
+		damage: Dictionary = {}, program: Dictionary = {},
+		standing: Callable = Callable()) -> Array:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var tangents := PackedFloat32Array()
@@ -403,12 +427,12 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 	var d := footprint_z * STUD
 	var gx: Array = TowerRecipe.window_gaps(footprint_x)
 	var gz: Array = TowerRecipe.window_gaps(footprint_z)
-	var storeys := RoomManifest.storeys_of(courses)
+	var storeys: Array = lattice.storeys
 	var first := TowerRecipe.COURSES_PER_FLOOR - 1 - TowerRecipe.WINDOW_COURSES
 	var tall := TowerRecipe.WINDOW_COURSES * TowerRecipe.PLATES_PER_COURSE * PLATE
 	var reach := float(TowerRecipe.WALL_THICK) + 2.0  # studs in from the face
 	var band_index := -1
-	for band in TowerRecipe.layout(courses):
+	for band in layout:
 		band_index += 1
 		if band.kind != "course":
 			continue
@@ -445,7 +469,7 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 						Vector3(a, y0, -GLASS_PROUD), Vector3(b, y0, -GLASS_PROUD),
 						Vector3(a, y1, -GLASS_PROUD), Vector3(b, y1, -GLASS_PROUD),
-						Vector3(0, 0, -1), _pane_colour(footprint_x, footprint_z, courses,
+						Vector3(0, 0, -1), _pane_colour(lattice,
 						building_seed, storey, Vector2(mid, reach), 0, g, program))
 			var zb := footprint_z - 1
 			if _pane_stands(standing, Vector3i(m, sill_y, zb), Vector3i(m, lintel_y, zb),
@@ -453,7 +477,7 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 						Vector3(b, y0, d + GLASS_PROUD), Vector3(a, y0, d + GLASS_PROUD),
 						Vector3(b, y1, d + GLASS_PROUD), Vector3(a, y1, d + GLASS_PROUD),
-						Vector3(0, 0, 1), _pane_colour(footprint_x, footprint_z, courses,
+						Vector3(0, 0, 1), _pane_colour(lattice,
 						building_seed, storey, Vector2(mid, footprint_z - reach), 1, g, program))
 		for g in gz:
 			var a: float = (g as Vector2i).x * STUD
@@ -465,7 +489,7 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 						Vector3(-GLASS_PROUD, y0, b), Vector3(-GLASS_PROUD, y0, a),
 						Vector3(-GLASS_PROUD, y1, b), Vector3(-GLASS_PROUD, y1, a),
-						Vector3(-1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
+						Vector3(-1, 0, 0), _pane_colour(lattice,
 						building_seed, storey, Vector2(reach, mid), 2, g, program))
 			var xb := footprint_x - 1
 			if _pane_stands(standing, Vector3i(xb, sill_y, m), Vector3i(xb, lintel_y, m),
@@ -473,10 +497,10 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 				_pane(verts, normals, tangents, colours, uvs, uv2s, indices,
 						Vector3(w + GLASS_PROUD, y0, a), Vector3(w + GLASS_PROUD, y0, b),
 						Vector3(w + GLASS_PROUD, y1, a), Vector3(w + GLASS_PROUD, y1, b),
-						Vector3(1, 0, 0), _pane_colour(footprint_x, footprint_z, courses,
+						Vector3(1, 0, 0), _pane_colour(lattice,
 						building_seed, storey, Vector2(footprint_x - reach, mid), 3, g, program))
 	if verts.is_empty():
-		return null
+		return []
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
@@ -486,9 +510,7 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
 	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
+	return arrays
 
 
 ## Whether a pane is drawn: always, with no `standing` to ask; otherwise only
@@ -530,11 +552,10 @@ const GLASS_PROUD := 0.004
 ## What a pane knows about its room, packed in a vertex colour: r and b are
 ## seeds for layout, g is how brightly the room is lit, a is the room's kind as
 ## the room's window style (Room.WINDOW_STYLE), divided by sixteen.
-static func _pane_colour(footprint_x: int, footprint_z: int, courses: int,
+static func _pane_colour(lattice: Dictionary,
 		building_seed: int, storey: int, plan: Vector2, side: int, gap: Vector2i,
 		program: Dictionary = {}) -> Color:
-	var kind := RoomManifest.kind_at(footprint_x, footprint_z, courses, building_seed,
-			storey, plan, program)
+	var kind := RoomManifest.kind_in(lattice, building_seed, storey, plan, program)
 	if kind < 0:
 		kind = Room.KINDS.find("empty")
 	kind = int(Room.WINDOW_STYLE.get(Room.KINDS[kind], 3))

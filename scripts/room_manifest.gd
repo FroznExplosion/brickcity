@@ -241,7 +241,14 @@ static func rooms_for(footprint_x: int, footprint_z: int, courses: int,
 ## point on the wall itself is fine, it is matched to the nearest room.
 static func kind_at(footprint_x: int, footprint_z: int, courses: int,
 		building_seed: int, storey: int, plan: Vector2, program: Dictionary = {}) -> int:
-	var lat := lattice_for(footprint_x, footprint_z, courses)
+	return kind_in(lattice_for(footprint_x, footprint_z, courses), building_seed, storey,
+			plan, program)
+
+
+## kind_at with the lattice already in hand: touches no cache, so a worker
+## building windows can ask it (BuildingShell.window_arrays).
+static func kind_in(lat: Dictionary, building_seed: int, storey: int, plan: Vector2,
+		program: Dictionary = {}) -> int:
 	var rects: Array = lat.rects
 	if rects.is_empty() or storey < 0 or storey >= (lat.storeys as Array).size():
 		return -1
