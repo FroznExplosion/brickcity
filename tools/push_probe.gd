@@ -87,7 +87,11 @@ func _run() -> void:
 
 	# --- light and heavy ------------------------------------------------------------
 	print("\na rocket beside a handful of bricks, and beside a heap of a thousand")
-	var light := await _resting(Vector3(0.0, 0.05, 0.0), 8, 8, 2)
+	# Twenty bricks. It was 8 x 8 and two courses, also twenty, until floors
+	# were two layers: on a footprint that is not whole panels the upper layer
+	# is small plates, and it came to 45 -- not a handful, and the shove is by
+	# the brick (IslandManager.push_near).
+	var light := await _resting(Vector3(0.0, 0.05, 0.0), 10, 10, 1)
 	var heavy := await _resting(Vector3(40.0, 0.05, 0.0), 28, 16, 8)
 	var far := await _resting(Vector3(80.0, 0.05, 0.0), 8, 8, 2)
 	var n_light := _w.get_alive_block_count(light.chunk)

@@ -11,7 +11,11 @@ extends "res://tools/collapse_probe.gd"
 ## until it is quiet, at the strength of a building the game's size, at the
 ## game's setting, and at the toy's.
 
-const FOOT_X := 20
+## Forty long. At twenty, once floors were two layers (TowerRecipe._lay_slab),
+## the third left standing held the rest at 1x as well: no joint failed at any
+## strength and the check said nothing. The same cut on a longer tower hangs
+## twice the arm off it.
+const FOOT_X := 40
 const FOOT_Z := 16
 const COURSES := 60
 

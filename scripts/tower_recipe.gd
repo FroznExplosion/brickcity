@@ -54,6 +54,11 @@ const SLAB_COLOUR := 2
 ## A column stands CENTRED on its lattice point, so its top carries the corner
 ## of all four panels that meet there and ties them together -- plates side by
 ## side are not joined, and a column under one panel's corner joined nothing.
+## Since floors are two layers the upper one ties those corners, and a building
+## with rooms stands a column only where no wall is within a panel of it: in a
+## room three panels across, none (`plan`, "columns"; "all_columns" is every
+## point) -- except on a storey with COLUMN_STOREYS or more above it, which
+## takes every column (`columned`).
 ##
 ## It only works if the footprint DIVIDES: `k * PANEL`. Five earlier attempts
 ## stretched the lattice to fit arbitrary footprints and every one failed in
@@ -77,6 +82,12 @@ const COLUMN_PLATES := COURSES_PER_FLOOR * PLATES_PER_COURSE
 ## are held by nothing but the walls. Measured in Docs/Scale.md.
 const COLUMN_STUDS := 2
 const COLUMN_COLOUR := 3
+## A storey carrying this many storeys or more stands every column, rooms or
+## not: the weight comes down through its studs, and the walls alone are not
+## enough of them. The big towers' ground storeys measured 0.78 of what their
+## boundary holds without (tools/region_probe.gd; 0.52 with), against 0.67 for
+## the whole building -- the walls are where the load is not.
+const COLUMN_STOREYS := 10
 
 ## How many panels wide a room is. It is a cost decision before it is a spatial
 ## one: an interior wall is COURSES_PER_FLOOR of brickwork running the width of
@@ -318,6 +329,21 @@ static func _build_plan(footprint_x: int, footprint_z: int) -> Dictionary:
 				break
 		if not taken:
 			columns.append(r)
+	# The columns a building with rooms still needs: the floor is two layers
+	# and ties its own seams, so a column is there to hold up a span, and a
+	# point within PANEL of a wall -- outer or interior -- is held by it.
+	var props: Array[Rect2i] = []
+	var lines_x: Array = [t, footprint_x - t] + _wall_lines(xs, footprint_x)
+	var lines_z: Array = [t, footprint_z - t] + _wall_lines(zs, footprint_z)
+	for c in columns:
+		var mid := c.get_center()
+		var near := false
+		for line in lines_x:
+			near = near or absf(mid.x - float(line)) <= PANEL
+		for line in lines_z:
+			near = near or absf(mid.y - float(line)) <= PANEL
+		if not near or c.size.x < COLUMN_STUDS:
+			props.append(c)
 	# Interior walls, on lattice lines, as the WALL'S near face: a two-stud
 	# wall straddles the seam, a one-stud wall stands just past it.
 	@warning_ignore("integer_division")
@@ -339,7 +365,7 @@ static func _build_plan(footprint_x: int, footprint_z: int) -> Dictionary:
 			if ex.y - ex.x >= 4 and ez.y - ez.x >= 4:
 				rects.append(Rect2i(ex.x, ez.x, ex.y - ex.x, ez.y - ez.x))
 	return {"xs": xs, "zs": zs, "wall_x": wall_x, "wall_z": wall_z,
-			"rooms": rects, "panels": panels, "columns": columns}
+			"rooms": rects, "panels": panels, "columns": props, "all_columns": columns}
 
 
 ## The clear spans along one axis between the exterior walls and the interior
@@ -573,8 +599,10 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					# The columns carrying it, standing on the floor below --
 					# after that storey's walls, so a wall on a lattice line IS
 					# the column there.
+					var under: int = int(walled.get(int(band.y) - STOREY_PLATES, 0))
+					var every := not rooms or columned(under, walled.size())
 					_lay_columns(world, chunk_id, palette, int(band.y) - COLUMN_PLATES,
-							pl, clear)
+							pl.all_columns if every else pl.columns, clear)
 				if rooms:
 					_lay_room_walls(world, chunk_id, palette, band, footprint_x,
 							footprint_z, pl, clear, walled, columns_first)
@@ -654,14 +682,16 @@ static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		if r.position.x < t or r.position.y < t or r.end.x > footprint_x - t \
 				or r.end.y > footprint_z - t:
 			touches_band = true
-	if touches_band:
-		_fill_rect(world, chunk_id, palette, y, 0, 0, footprint_x, t, colour, [])
-		_fill_rect(world, chunk_id, palette, y, 0, footprint_z - t, footprint_x,
-				footprint_z, colour, [])
-		_fill_rect(world, chunk_id, palette, y, 0, t, t, footprint_z - t, colour, [])
-		_fill_rect(world, chunk_id, palette, y, footprint_x - t, t, footprint_x,
-				footprint_z - t, colour, [])
 	_lay_upper(world, chunk_id, palette, y + 1, footprint_x, footprint_z, colour, keepouts)
+	# In both layers: the walls above stand on the upper one.
+	if touches_band:
+		for ly in [y, y + 1]:
+			_fill_rect(world, chunk_id, palette, ly, 0, 0, footprint_x, t, colour, [])
+			_fill_rect(world, chunk_id, palette, ly, 0, footprint_z - t, footprint_x,
+					footprint_z, colour, [])
+			_fill_rect(world, chunk_id, palette, ly, 0, t, t, footprint_z - t, colour, [])
+			_fill_rect(world, chunk_id, palette, ly, footprint_x - t, t, footprint_x,
+					footprint_z - t, colour, [])
 	return laid
 
 
@@ -691,6 +721,11 @@ static func _lay_upper(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		for j in zs.size() - 1:
 			var z0: int = zs[j]
 			var z1: int = zs[j + 1]
+			# A footprint that does not divide leaves cells of other sizes at
+			# its far faces: filled as the lower layer's are.
+			if (x1 - x0 != PANEL and x1 - x0 != h) or (z1 - z0 != PANEL and z1 - z0 != h):
+				_fill_rect(world, chunk_id, palette, y, x0, z0, x1, z1, colour, keepouts)
+				continue
 			if not _blocked(keepouts, x0, z0, x1 - x0, z1 - z0):
 				_plate(world, chunk_id, palette, y, x0, z0, x1 - x0, z1 - z0, colour)
 				continue
@@ -712,6 +747,12 @@ static func _lay_upper(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					_plate(world, chunk_id, palette, y, q.x, q.y, h, 2 * h, colour)
 				else:
 					_plate(world, chunk_id, palette, y, q.x, q.y, h, h, colour)
+
+
+## Whether storey `storey` of `count` stands every column (`all_columns`)
+## rather than only the ones a span needs (`columns`). See COLUMN_STOREYS.
+static func columned(storey: int, count: int) -> bool:
+	return count - 1 - storey >= COLUMN_STOREYS
 
 
 ## One floor plate of `w` x `l` studs (a panel, half or quarter) at x, z.
@@ -795,14 +836,14 @@ static func _lay_storey_columns(world: BrickWorld, chunk_id: int, palette: Dicti
 	var y := floor_y + SLAB_PLATES
 	if not slabs.has(y + COLUMN_PLATES):
 		return
-	_lay_columns(world, chunk_id, palette, y, pl, keepouts)
+	_lay_columns(world, chunk_id, palette, y, pl.columns, keepouts)
 
 
 static func _lay_columns(world: BrickWorld, chunk_id: int, palette: Dictionary,
-		y: int, pl: Dictionary, keepouts: Array) -> void:
+		y: int, columns: Array, keepouts: Array) -> void:
 	if y < 0:
 		return
-	for entry in (pl.columns as Array):
+	for entry in columns:
 		var r: Rect2i = entry
 		if _blocked(keepouts, r.position.x, r.position.y, r.size.x, r.size.y):
 			continue

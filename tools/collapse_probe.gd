@@ -315,14 +315,16 @@ func _check_interior() -> void:
 
 ## Cut building `id` through its second storey, all round and through the
 ## middle: everything above comes away.
-func _undercut(id: int) -> void:
+## Blasts 1.6 m apart, so their 1.3 m reaches overlap: 2 m apart left a pier
+## at the middle of every four, and with two-layer floors a tower stood on them.
+func _undercut(id: int, spare_stairs := true) -> void:
 	var box := _box(id)
 	var y := box.position.y + (TowerRecipe.SLAB_PLATES + 1 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
 	# Round the stairwell, not through it: a cut that spares the staircase is the
 	# one that left a section hanging on it (Docs/Collapse.md 2.1).
 	var shaft := AABB()
 	var b = city.registry.get_building(id)
-	if b.is_materialised():
+	if b.is_materialised() and spare_stairs:
 		var ids := PackedInt32Array()
 		for f in b.fixtures:
 			ids.append_array(f.blocks)
@@ -338,8 +340,8 @@ func _undercut(id: int) -> void:
 			if shaft.size == Vector3.ZERO or not (p.x > shaft.position.x and p.x < shaft.end.x
 					and p.z > shaft.position.z and p.z < shaft.end.z):
 				city._blast(p, 1.3)
-			z += 2.0
-		x += 2.0
+			z += 1.6
+		x += 1.6
 
 
 func _check_handover() -> void:
@@ -902,6 +904,10 @@ func _spawned() -> int:
 
 ## Bring building `id` down (cut through its second storey) with the camera at
 ## `eye`, and count the pieces it became.
+##
+## Stairwell and all: with two-layer floors (TowerRecipe._lay_slab) a 30 x 30
+## tower cut round its shaft stood on the core left there, and nothing came
+## down to count.
 func _bring_down(id: int, eye: Vector3) -> Dictionary:
 	city.camera.global_position = eye
 	city.camera.look_at(_box(id).get_center())
@@ -909,7 +915,7 @@ func _bring_down(id: int, eye: Vector3) -> Dictionary:
 	await _ticks(20)
 	var s0 := _spawned()
 	var f0: int = city.director.far_collapses
-	_undercut(id)
+	_undercut(id, false)
 	await _ticks(30 * 10)
 	return {"pieces": _spawned() - s0, "far": city.director.far_collapses - f0}
 
