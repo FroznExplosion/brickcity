@@ -221,6 +221,36 @@ func _check_studs() -> void:
 		@warning_ignore("integer_division")
 		sum += w.get_chunk_studs_section(chunk, s).size() / 16
 	_ok("the bands' studs are the chunk's", sum == all and all > 0, "%d and %d" % [sum, all])
+
+	# Open studs (nothing over them) are the only ones drawn as far cards:
+	# the roof's, not a storey's floor under the slab above.
+	var buf := w.get_chunk_studs_section(chunk, -1)
+	var open := w.get_chunk_studs_open(chunk, -1)
+	var open_n := 0
+	var open_low := INF     # the lowest open stud
+	var closed_high := -INF # the highest closed one
+	for i in open.size():
+		var y := buf[i * 16 + 7]
+		if open[i] == 1:
+			open_n += 1
+			open_low = minf(open_low, y)
+		else:
+			closed_high = maxf(closed_high, y)
+	_ok("a byte a stud says which are open", open.size() * 16 == buf.size(),
+			"%d bytes, %d studs" % [open.size(), buf.size() / 16])
+	_ok("the roof's studs are open, every floor's under it is not",
+			open_n > 0 and open_n < open.size() and open_low > closed_high,
+			"%d of %d open, the lowest at %.2f m, the highest closed at %.2f m" % [open_n,
+					open.size(), open_low, closed_high])
+	var far := float(BrickNear.stud_card_radius) * 4.0
+	var rings := PackedFloat32Array([0.0, 0.0, 0.0, far])
+	@warning_ignore("integer_division")
+	var cards := (BrickWorld.split_studs(buf, Vector3.ZERO, rings, open,
+			BrickNear.CLOSED_RINGS)[3] as PackedFloat32Array).size() / 16
+	@warning_ignore("integer_division")
+	var every := (BrickWorld.split_studs(buf, Vector3.ZERO, rings)[3] as PackedFloat32Array).size() / 16
+	_ok("only the open ones are cards", cards == open_n and every == open.size(),
+			"%d cards, %d open, %d with no mask" % [cards, open_n, every])
 	w.apply_hit(chunk, Vector3(0.4, 2.0, 2.5), 1.6)
 	@warning_ignore("integer_division")
 	var after := w.get_chunk_studs_section(chunk, -1).size() / 16

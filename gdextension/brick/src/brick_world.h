@@ -219,6 +219,12 @@ public:
     /// draws -- so none of furniture's, which no band does (FurnitureMesh). A
     /// building's studs are drawn band by band, near the camera only.
     PackedFloat32Array get_chunk_studs_section(int chunk_id, int section) const;
+    /// One byte a stud, in get_chunk_studs_section's order: 1 when nothing in
+    /// the chunk is over it -- a top stud with no live brick anywhere above it
+    /// in its column, a bottom stud with none below. A roof, a ledge, a floor
+    /// a blast opened. 0 is a stud under a ceiling: a storey's floor, seen
+    /// only through a window. BrickNear draws those near and not as far cards.
+    PackedByteArray get_chunk_studs_open(int chunk_id, int section) const;
     /// Whether a part at `corner` (chunk cells) of `size` lies turned a quarter
     /// from the way it was printed (chunk_studs; ps_top_turned in the shader).
     static bool stud_turn(const Vector3i &size, const Vector3i &corner);
@@ -236,8 +242,13 @@ public:
     /// than each of `rings` (metres, rising) and not nearer than the one
     /// before; a stud past the last is in none. For drawing each ring with a
     /// stud mesh of its own (BrickNear).
+    ///
+    /// With `open` (get_chunk_studs_open, the same studs), a stud whose byte
+    /// is 0 is put only in the first `closed_rings` rings: past them it is in
+    /// none.
     static Array split_studs(const PackedFloat32Array &buffer, Vector3 eye,
-            const PackedFloat32Array &rings);
+            const PackedFloat32Array &rings, const PackedByteArray &open = PackedByteArray(),
+            int closed_rings = 0);
 
     /// Gate G1b: what the cheap representation needs to know about the damage.
     ///
@@ -1467,7 +1478,8 @@ private:
             const std::vector<int32_t> &quad_first, PackedInt32Array &out,
             const std::vector<uint8_t> &carrier = {});
     static Array chamfer_arrays(const ChamferOut &o);
-    PackedFloat32Array chunk_studs(int chunk_id, int section, bool furniture) const;
+    PackedFloat32Array chunk_studs(int chunk_id, int section, bool furniture,
+            std::vector<uint8_t> *open = nullptr) const;
     int last_chamfer_tris = 0;
     double last_chamfer_ms = 0.0;
 
