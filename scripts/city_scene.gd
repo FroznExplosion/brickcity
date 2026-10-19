@@ -1322,6 +1322,10 @@ func _exit_tree() -> void:
 		if int(job[2]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(job[2]))
 	_band_jobs.clear()
+	# And a shell's windows.
+	for job in _glass_jobs:
+		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
+	_glass_jobs.clear()
 	# And a shadow proxy being built.
 	for job in _shadow_jobs.values():
 		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
@@ -2627,7 +2631,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# has no recipe windows. A child of the shell, so it goes when the shell
 	# does, and with its own material so the brick material is untouched.
 	# Owed, not built here: _build_owed_glass makes them a tick or two later,
-	# so many in a tick, in its own budget.
+	# nearest first, on a worker.
 	# A damaged one drawn from its bricks (`real`) gets them too, each pane
 	# only where its window still stands in the bricks (Docs/Structures.md
 	# 4.2, the faked state): it used to get none, and past DEMESH_RANGE a
@@ -2646,23 +2650,48 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 
 ## The collision boxes of a shell, and the AI's proxies of them.
 ## A shell's windows -- panes with a room painted behind each -- are built
-## apart from the shell, up to GLASS_BUDGET_MS of them a tick (one at least):
-## a tall tower's are 1-8 ms, as much again as its shell, and a city streaming
-## in made four shells and their windows in one tick, 33 ms (2026-10-15). A
-## shell stands a tick or two without its glass -- solid bands where the panes
-## go, at a shell's distance.
+## apart from the shell: a tall tower's are 1-10 ms, as much again as its
+## shell, and a city streaming in made four shells and their windows in one
+## tick, 33 ms (2026-10-15). A shell stands a tick or two without its glass --
+## solid bands where the panes go, at a shell's distance.
+##
+## Built on workers (BuildingShell.window_arrays), GLASS_JOBS at a time, the
+## nearest owed first; the main thread only turns the arrays into a mesh and
+## hangs it on the shell. On the main thread it was 2.7 ms every tick of a
+## bench over an 800-building city, 10 ms at worst (2026-10-18), and most of
+## it for shells the streamer was about to take back: so a shell past the
+## line where its banded tier is swapped for the coarse one waits (kept owed,
+## not built) until it is either replaced -- its successor owes its own -- or
+## near again. A shell drawn from its bricks (`real`) asks the live bricks
+## about each pane, which a worker may not, so those are still built here,
+## up to GLASS_BUDGET_MS a tick (one at least).
 const GLASS_BUDGET_MS := 2.5
+const GLASS_JOBS := 4
 var _glass_owed: Array = []   ## [shell node, building id, damage, fades, drawn from its bricks]
+var _glass_jobs: Array = []   ## [task, [arrays], shell node, building id, fades]
 var glass_built := 0
 
 
 func _build_owed_glass() -> void:
-	var t0 := Time.get_ticks_usec()
-	var made := 0
-	while not _glass_owed.is_empty():
-		if made > 0 and Time.get_ticks_usec() - t0 > int(GLASS_BUDGET_MS * 1000.0):
-			return
-		var owed: Array = _glass_owed.pop_front()
+	# Land what the workers finished.
+	for i in range(_glass_jobs.size() - 1, -1, -1):
+		var job: Array = _glass_jobs[i]
+		if not WorkerThreadPool.is_task_completed(int(job[0])):
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		_glass_jobs.remove_at(i)
+		var arrays: Array = job[1][0]
+		if arrays.is_empty() or not is_instance_valid(job[2]) or _shells.get(int(job[3])) != job[2]:
+			continue
+		_hang_glass(job[2], BuildingShell.window_mesh_of(arrays), job[4])
+	if _glass_owed.is_empty():
+		return
+	# The owed, nearest first; the gone dropped, the about-to-go kept back.
+	var here := camera.global_position if camera != null else Vector3.ZERO
+	var swap_at := SHELL_DETAIL_RANGE + SHELL_HYSTERESIS
+	var live: Array = []
+	var ready: Array = []   ## [distance, index into live]
+	for owed in _glass_owed:
 		var mi = owed[0]
 		var id: int = owed[1]
 		# Replaced or freed since -- its successor owes its own.
@@ -2671,23 +2700,80 @@ func _build_owed_glass() -> void:
 		var b := registry.get_building(id)
 		if b == null:
 			continue
-		var standing := Callable()
-		if owed[4] and b.is_materialised():
-			standing = _cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk))
-		var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
-				b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-				owed[2], b.recipe.get("program", {}), standing)
-		made += 1
-		glass_built += 1
-		if panes == null:
-			continue
-		var glass := MeshInstance3D.new()
-		glass.mesh = panes
-		glass.material_override = BuildingShell.window_material()
-		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		if owed[3]:
-			_fade_out(glass)
-		(mi as MeshInstance3D).add_child(glass)
+		live.append(owed)
+		var dist := b.xform.origin.distance_to(here)
+		if dist <= swap_at:
+			ready.append([dist, live.size() - 1])
+	_glass_owed = live
+	if ready.is_empty():
+		return
+	ready.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
+	var t0 := Time.get_ticks_usec()
+	var taken := {}
+	var made_here := 0
+	for r in ready:
+		var owed: Array = _glass_owed[int(r[1])]
+		if owed[4]:
+			if made_here > 0 and Time.get_ticks_usec() - t0 > int(GLASS_BUDGET_MS * 1000.0):
+				continue
+			_build_glass_here(owed)
+			made_here += 1
+			taken[int(r[1])] = true
+		elif _glass_jobs.size() < GLASS_JOBS:
+			_submit_glass(owed)
+			taken[int(r[1])] = true
+	if not taken.is_empty():
+		var left: Array = []
+		for i in _glass_owed.size():
+			if not taken.has(i):
+				left.append(_glass_owed[i])
+		_glass_owed = left
+
+
+func _submit_glass(owed: Array) -> void:
+	var id: int = owed[1]
+	var b := registry.get_building(id)
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	var room_seed := registry.room_seed_of(id)
+	# Made here, where the caches they come from are filled; the worker only
+	# reads them. Its own copies of the rest, which this thread may change.
+	var layout := TowerRecipe.layout(courses)
+	var lattice := RoomManifest.lattice_for(fx, fz, courses)
+	var damage: Dictionary = (owed[2] as Dictionary).duplicate(true)
+	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
+	var holder := [[]]
+	var task := WorkerThreadPool.add_task(func() -> void:
+		holder[0] = BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
+				lattice, damage, program), true, "shell glass")
+	glass_built += 1
+	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
+
+
+## A window still in bricks: its panes asked of the live bricks, so here.
+func _build_glass_here(owed: Array) -> void:
+	var id: int = owed[1]
+	var b := registry.get_building(id)
+	var standing := Callable()
+	if b.is_materialised():
+		standing = _cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk))
+	var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
+			b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
+			owed[2], b.recipe.get("program", {}), standing)
+	glass_built += 1
+	if panes != null:
+		_hang_glass(owed[0], panes, owed[3])
+
+
+func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
+	var glass := MeshInstance3D.new()
+	glass.mesh = panes
+	glass.material_override = BuildingShell.window_material()
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if fades:
+		_fade_out(glass)
+	mi.add_child(glass)
 
 
 ## Is this cell of a building's own grid (cells from its corner) a brick?
@@ -10539,7 +10625,7 @@ func _physics_process(_delta: float) -> void:
 	var t_sh := Time.get_ticks_usec()
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
-	if not _glass_owed.is_empty():
+	if not _glass_owed.is_empty() or not _glass_jobs.is_empty():
 		_build_owed_glass()
 	if not _shadow_jobs.is_empty():
 		_harvest_shadow_jobs()
