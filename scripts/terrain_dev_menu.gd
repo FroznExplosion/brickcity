@@ -80,6 +80,17 @@ func setup(p_host) -> void:
 	_option("Smooth far terrain from", ["off", "every 8 studs (LOD 2+)", "every 16 studs (LOD 3+)",
 			"every 4 studs (LOD 1+)"], [0, 8, 16, 4].find(_smooth_step),
 		func(i: int) -> void: _smooth_step = [0, 8, 16, 4][i])
+	# How the ground is laid (TerrainWorld.GROUNDS, Terrain.md 18.6). Saved
+	# with the world on CTRL+S in the editor.
+	_option("Ground", ["laid brick", "curved hillsides (biome)", "curved slopes, brick flats"],
+			TerrainWorld.GROUNDS.find(TerrainWorld.ground()), func(i: int) -> void:
+		TerrainWorld.set_ground(TerrainWorld.GROUNDS[i])
+		host.rebuild_detail())
+	_slider("Curve slopes steeper than (plates a stud)", 0.05, 0.6, 0.05,
+			BrickTerrain.get_curve_slope(), func(v: float) -> void:
+		BrickTerrain.set_curve_slope(v)
+		if TerrainWorld.ground() == "slopes":
+			host.rebuild_detail())
 	_check("Slopes and curves on terrace edges", BrickTerrain.get_slope_pieces(), func(on: bool) -> void:
 		BrickTerrain.set_slope_pieces(on)
 		host.rebuild_detail())

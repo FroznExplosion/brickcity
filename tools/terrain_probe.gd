@@ -36,6 +36,7 @@ func _initialize() -> void:
 	_check_chamfer_mesh()
 	_check_flat_mode()
 	_check_smooth_terrain()
+	_check_smooth_slopes()
 	_check_volumetric()
 	_check_pads()
 	_check_wave()
@@ -757,6 +758,135 @@ func _check_smooth_terrain() -> void:
 	_ok("and the boxes still merge", int(data["box_count"]) < 500,
 		"%d boxes on a mixed tile" % int(data["box_count"]))
 
+	BrickTerrain.set_plate_steps(false)
+	BrickTerrain.set_flat_mode(false)
+	BrickTerrain.configure(20260919)
+
+
+## "slopes" ground -- §18.6: curved where it slopes, laid brick where it is
+## flat, pads and cliffs brick, and the brick brush beats the rule.
+func _check_smooth_slopes() -> void:
+	print("curved slopes, brick flats (§18.6)")
+	BrickTerrain.set_flat_mode(true)
+	BrickTerrain.set_plate_steps(true)
+	BrickTerrain.configure(20260921)
+	BrickTerrain.clear_sculpt()
+	TerrainWorld.set_ground("slopes")
+
+	# Which ground curves: the steeper half. Slope on the unquantised
+	# surface, a 2-stud central difference, against the rule's choice.
+	var n := 0
+	var curved := 0
+	var slope_curved := 0.0
+	var slope_brick := 0.0
+	var cliff_curved := 0
+	var lone := 0
+	for gz in range(-80, 80, 2):
+		for gx in range(-80, 80, 2):
+			n += 1
+			var s := maxf(absf(BrickTerrain.surface_raw(gx + 1, gz) - BrickTerrain.surface_raw(gx - 1, gz)),
+					absf(BrickTerrain.surface_raw(gx, gz + 1) - BrickTerrain.surface_raw(gx, gz - 1)))
+			var c := BrickTerrain.smooth_at(gx, gz)
+			if c:
+				curved += 1
+				slope_curved += s
+				var t := BrickTerrain.surface_plate(gx, gz)
+				for d in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+					if absi(BrickTerrain.surface_plate(gx + d.x, gz + d.y) - t) > 2:
+						cliff_curved += 1
+						break
+			else:
+				slope_brick += s
+			# A column unlike all four neighbours is salt and pepper: the
+			# thing §18.5 had to make regional, and the blend must keep.
+			var same := 0
+			for d in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+				if BrickTerrain.smooth_at(gx + d.x, gz + d.y) == c:
+					same += 1
+			# ...except a cliff column, which is brick by design whatever is
+			# round it: a wall is a wall (§18.5).
+			var step := 0
+			var top := BrickTerrain.surface_plate(gx, gz)
+			for d in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+				step = maxi(step, absi(BrickTerrain.surface_plate(gx + d.x, gz + d.y) - top))
+			if same == 0 and step <= 2:
+				lone += 1
+	var share := float(curved) / maxf(float(n), 1.0)
+	var mc := slope_curved / maxf(float(curved), 1.0)
+	var mb := slope_brick / maxf(float(n - curved), 1.0)
+	_ok("some ground curves and some is brick", share > 0.05 and share < 0.9,
+		"%.0f%% curved" % (share * 100.0))
+	_ok("and it is the sloping ground that curves", mc > mb * 1.5,
+		"mean fall %.3f m over 2 studs curved, %.3f brick" % [mc, mb])
+	# Not "a cliff is never curved" as for the biome rule: here a curve may
+	# run over a whole-brick step, because it is drawn from the unquantised
+	# surface -- bricking those steps left the lone cells below.
+	print("  info  %d curved columns over a whole-brick step" % cliff_curved)
+	_ok("no lone columns", lone == 0, "%d of %d" % [lone, n])
+
+	# Painted form beats the rule, both ways, and RULE hands it back.
+	var cx := 0
+	var cz := 0
+	var bx := 0
+	var bz := 0
+	var found_c := false
+	var found_b := false
+	for gz in range(-60, 60, 3):
+		for gx in range(-60, 60, 3):
+			if not found_c and BrickTerrain.smooth_at(gx, gz):
+				cx = gx; cz = gz; found_c = true
+			if not found_b and not BrickTerrain.smooth_at(gx, gz) \
+					and BrickTerrain.pad_at(gx, gz) < 0:
+				bx = gx; bz = gz; found_b = true
+	BrickTerrain.paint_form(cx, cz, 2.0, 0)
+	BrickTerrain.paint_form(bx, bz, 2.0, 1)
+	var painted_ok := not BrickTerrain.smooth_at(cx, cz) and BrickTerrain.smooth_at(bx, bz) \
+			and BrickTerrain.form_at(cx, cz) == 0 and BrickTerrain.form_at(bx, bz) == 1
+	_ok("the brick brush beats the rule, both ways", found_c and found_b and painted_ok,
+		"curve at %d,%d bricked, brick at %d,%d curved" % [cx, cz, bx, bz])
+
+	# Round trip through the world file's sculpt list.
+	var saved := TerrainWorld.sculpt_to_list()
+	BrickTerrain.clear_sculpt()
+	var cleared := BrickTerrain.smooth_at(cx, cz) and BrickTerrain.form_at(cx, cz) == 255
+	TerrainWorld.sculpt_from_list(saved)
+	_ok("and it saves with the world", cleared and BrickTerrain.form_at(cx, cz) == 0
+		and BrickTerrain.form_at(bx, bz) == 1, "%d tiles" % saved.size())
+
+	BrickTerrain.paint_form(cx, cz, 2.0, -1)
+	BrickTerrain.paint_form(bx, bz, 2.0, -1)
+	_ok("RULE hands the column back", BrickTerrain.smooth_at(cx, cz)
+		and not BrickTerrain.smooth_at(bx, bz))
+
+	# One top surface a cell, as for the biome rule: the seam code is the
+	# same, but the boundary is everywhere now rather than round a patch.
+	var tile := BrickTerrain.get_tile_studs()
+	var covered_ok := true
+	var worst_cell := ""
+	var tris_mixed := 0
+	for tz in range(-1, 2):
+		for tx in range(-1, 2):
+			var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+			tris_mixed += int(d.get("triangle_count", 0))
+			var total := int(d["curve_cells"]) + int(d["owned_cells"])
+			if total != tile * tile:
+				covered_ok = false
+				worst_cell = "tile %d,%d: %d of %d" % [tx, tz, total, tile * tile]
+	_ok("every cell has exactly one top surface", covered_ok,
+		worst_cell if worst_cell != "" else "9 tiles")
+
+	# A pad is somewhere a thing stands: brick, however its skirt slopes.
+	BrickTerrain.add_pad(cx, cz, 4, 6, BrickTerrain.surface_raw(cx, cz))
+	var pad_curved := 0
+	for dz in range(-4, 5):
+		for dx in range(-4, 5):
+			if BrickTerrain.smooth_at(cx + dx, cz + dz):
+				pad_curved += 1
+	BrickTerrain.remove_pad(BrickTerrain.pad_count() - 1)
+	_ok("a pad is laid brick", pad_curved == 0, "%d of 81 pad columns curved" % pad_curved)
+
+	TerrainWorld.set_ground("brick")
+	BrickTerrain.clear_sculpt()
 	BrickTerrain.set_plate_steps(false)
 	BrickTerrain.set_flat_mode(false)
 	BrickTerrain.configure(20260919)

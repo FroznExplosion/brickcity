@@ -266,7 +266,28 @@ static func to_dict(seed_value: int, drowned: float) -> Dictionary:
 		"paints": paints,
 		"sites": site_list,
 		"sculpt": sculpt_to_list(),
+		"ground": ground(),
+		"curve_slope": BrickTerrain.get_curve_slope(),
 	}
+
+
+## How the ground is laid (Docs/Terrain.md 18.6), one of GROUNDS:
+##   brick    every column laid brick (the default, and every world so far)
+##   hills    the odd curved hillside, by biome (§18.5)
+##   slopes   curved wherever it slopes, laid brick where it is flat, and
+##            the BRICK brush (editor tool 9) says otherwise where it likes
+const GROUNDS := ["brick", "hills", "slopes"]
+
+
+static func ground() -> String:
+	if not BrickTerrain.get_smooth_terrain():
+		return "brick"
+	return "slopes" if BrickTerrain.get_smooth_slopes() else "hills"
+
+
+static func set_ground(name: String) -> void:
+	BrickTerrain.set_smooth_terrain(name != "brick")
+	BrickTerrain.set_smooth_slopes(name == "slopes")
 
 
 ## The sculpted strokes (§20.6) and the surface paint (§20.7), a tile at a
@@ -287,6 +308,11 @@ static func sculpt_to_list() -> Array[Dictionary]:
 			if v != 255:
 				row["paint"] = Marshalls.raw_to_base64(paint)
 				break
+		var form: PackedByteArray = BrickTerrain.get_form_tile(c.x, c.y)
+		for v in form:
+			if v != 255:
+				row["form"] = Marshalls.raw_to_base64(form)
+				break
 		if row.size() > 2:
 			out.append(row)
 	return out
@@ -302,6 +328,8 @@ static func sculpt_from_list(list: Array) -> void:
 		if t.has("paint"):
 			BrickTerrain.set_surface_paint_tile(tx, tz,
 					Marshalls.base64_to_raw(String(t["paint"])))
+		if t.has("form"):
+			BrickTerrain.set_form_tile(tx, tz, Marshalls.base64_to_raw(String(t["form"])))
 
 
 ## Put the world back, pads and all. Returns the seed.
@@ -317,6 +345,8 @@ static func from_dict(d: Dictionary) -> Dictionary:
 	# generated, so digging a lake does not move the ocean.
 	settle_sea(float(d.get("drowned", DEFAULT_DROWNED)))
 	sculpt_from_list(d.get("sculpt", []))
+	set_ground(String(d.get("ground", "brick")))
+	BrickTerrain.set_curve_slope(float(d.get("curve_slope", 0.25)))
 	sites = []
 	for p in d.get("pads", []):
 		BrickTerrain.add_pad(int(p.get("x", 0)), int(p.get("z", 0)),
@@ -379,8 +409,9 @@ static func open_world(path: String, seed_value: int) -> Dictionary:
 	# Half-brick steps: the relief cut into plates (0.14 m) rather than
 	# bricks (0.42 m), so a slope is three shallower stairs instead of one.
 	BrickTerrain.set_plate_steps(true)
-	# Curved ground has no PIECES in it (§18.5), and the game is laid brick.
-	BrickTerrain.set_smooth_terrain(false)
+	# Laid brick unless the world file says otherwise ("ground", §18.6):
+	# curved ground has no PIECES in it (§18.5).
+	set_ground("brick")
 	BrickTerrain.configure(seed_value)
 	var loaded := load_world(path)
 	var file_seed := int(loaded.get("seed", seed_value))

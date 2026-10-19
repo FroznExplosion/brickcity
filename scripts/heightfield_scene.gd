@@ -65,6 +65,8 @@ const DROWNED := World.DEFAULT_DROWNED
 const World := preload("res://scripts/terrain_world.gd")
 
 var _tiles: Array[TerrainTile] = []
+## `-- --slopeshot`: the same views on laid brick and on "slopes" ground.
+var _slope_shots := false
 ## The sea, as one node (water_sea.gd): the three tiers, the seabed they share,
 ## and the brick tiers shown only where there is water to draw.
 const WaterSeaScript := preload("res://scripts/water_sea.gd")
@@ -132,6 +134,9 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--shot":
 			_shot_mode = true
+		elif arg == "--slopeshot":
+			_shot_mode = true
+			_slope_shots = true
 		elif arg.begins_with("--tiles="):
 			TILES = maxi(1, int(arg.split("=")[1]))
 		elif arg == "--bench":
@@ -588,11 +593,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_water.set_print_lines(on)
 			print("[heightfield] print lines: %s" % ("ON" if on else "OFF"))
 		KEY_C:
-			BrickTerrain.set_smooth_terrain(not BrickTerrain.get_smooth_terrain())
+			# Laid brick -> curved hillsides -> curved slopes, brick flats.
+			var g: int = (World.GROUNDS.find(World.ground()) + 1) % World.GROUNDS.size()
+			World.set_ground(World.GROUNDS[g])
 			for tile in _tiles:
 				tile.rebuild(_mat)
-			print("[heightfield] curved ground: %s"
-					% ("ON" if BrickTerrain.get_smooth_terrain() else "OFF"))
+			rebuild_detail()
+			print("[heightfield] ground: %s" % World.GROUNDS[g])
 		KEY_V:
 			_water.set_brick_steps(not _water.brick_steps)
 			print("[heightfield] water: %s" % ("brick steps + stop motion"
@@ -687,6 +694,10 @@ func _update_hud() -> void:
 
 func _run_shots() -> void:
 	await _frames(4)
+	if _slope_shots:
+		await _run_slope_shots()
+		get_tree().quit()
+		return
 	await _shot("hf_wide", Vector3(-34.0, 22.0, -34.0), Vector3(-0.52, -2.36, 0.0))
 	await _shot("hf_close", Vector3(2.4, 1.5, 2.4), Vector3(-0.22, -2.30, 0.0))
 	await _shot_topdown()
@@ -1303,3 +1314,57 @@ func _frames(n: int) -> void:
 		_streamer.settle(Vector2(_camera.position.x, _camera.position.z))
 	for i in n:
 		await RenderingServer.frame_post_draw
+
+
+## "slopes" ground against laid brick (Terrain.md 18.6): the same views on
+## each, and the whole frame's triangles. A hillside close up, the same one
+## from further off, and a low look across the distance where the LOD
+## borders are.
+func _run_slope_shots() -> void:
+	var stud := BrickWorld.get_stud_metres()
+	World.set_ground("slopes")
+	var hill := Vector2i(0, 0)
+	var found := false
+	for r in range(6, 70):
+		for a in range(0, 360, 9):
+			var gx := int(round(cos(deg_to_rad(a)) * r))
+			var gz := int(round(sin(deg_to_rad(a)) * r))
+			# Curved here, laid brick a few studs on: a slope meeting a flat.
+			if BrickTerrain.smooth_at(gx, gz) and not BrickTerrain.smooth_at(gx + 6, gz):
+				hill = Vector2i(gx, gz)
+				found = true
+				break
+		if found:
+			break
+	var at := Vector3((hill.x + 0.5) * stud, BrickTerrain.surface_raw(hill.x, hill.y), (hill.y + 0.5) * stud)
+	print("[slopes] hillside at %s" % hill)
+	var views := [
+		["close", at + Vector3(2.2, 1.4, 2.2), at],
+		["mid", at + Vector3(9.0, 5.0, 9.0), at],
+		["across", at + Vector3(0.0, 4.0, 0.0), at + Vector3(-60.0, -2.0, -60.0)],
+		["wide", at + Vector3(-30.0, 22.0, -30.0), at],
+	]
+	var curve := 0.25
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--curve="):
+			curve = float(arg.split("=")[1])
+	BrickTerrain.set_curve_slope(curve)
+	for g in ["brick", "slopes"]:
+		World.set_ground(g)
+		BrickTerrain.set_coarse_smooth_step(4 if g == "slopes" else 8)
+		rebuild_detail()
+		rebuild_far()
+		for v in views:
+			var pos: Vector3 = v[1]
+			_camera.position = pos
+			_camera.look_at(v[2], Vector3.UP)
+			_streamer.settle(Vector2(pos.x, pos.z))
+			_far.cover(_streamer)
+			await _frames(10)
+			var tris := RenderingServer.get_rendering_info(
+					RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
+			var shot_name := "hf_ground_%s_%s" % [g if g == "brick" else "slopes%.2f" % curve, v[0]]
+			get_viewport().get_texture().get_image().save_png("res://shots/%s.png" % shot_name)
+			print("[slopes] %-28s %8d tris" % [shot_name, tris])
+	World.set_ground("brick")
+	BrickTerrain.set_coarse_smooth_step(8)

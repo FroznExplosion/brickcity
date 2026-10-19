@@ -1182,6 +1182,10 @@ func _ready() -> void:
 			var q := PhysicsRayQueryParameters3D.create(from, from + dir * 800.0, Layers.WORLD)
 			var hit := get_world_3d().direct_space_state.intersect_ray(q)
 			return Vector3.INF if hit.is_empty() else hit["position"]
+		# The drawn top: a curve's own height, else the column's brick top.
+		_placer.ground_top = func(x: int, z: int) -> float:
+			var brick := float(BrickTerrain.surface_plate(x, z) + 1) * BrickWorld.get_plate_metres()
+			return BrickTerrain.surface_raw(x, z) if BrickTerrain.smooth_at(x, z) else brick
 	_material_fx = MaterialFx.new()
 	_material_fx.name = "MaterialFx"
 	add_child(_material_fx)
