@@ -38,7 +38,8 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 const float STUD = 0.35;
 const float PLATE = 0.14;
-const float STOREY_PLATES = 19.0;   // six courses of three, and a slab
+const float SLAB = 2.0;             // a slab is two plates (TowerRecipe.SLAB_PLATES)
+const float STOREY_PLATES = 20.0;   // six courses of three, and a slab
 const float WINDOW_INSET = 4.0;
 const float WINDOW_WIDE = 4.0;
 const float WINDOW_PITCH = 8.0;
@@ -88,19 +89,19 @@ vec3 storey_integral(float x) {
     for (int k = 0; k < 6; k++) {
         s += course_colours[k] * clamp(x - 3.0 * float(k), 0.0, 3.0);
     }
-    return s + slab_colour * clamp(x - 18.0, 0.0, 1.0);
+    return s + slab_colour * clamp(x - 18.0, 0.0, SLAB);
 }
 
 // Colour integrated from the ground up to p plates.
 vec3 wall_integral(float p) {
-    vec3 s = base_colour * clamp(p, 0.0, 1.0);
-    float q = max(p - 1.0, 0.0);
+    vec3 s = base_colour * clamp(p, 0.0, SLAB);
+    float q = max(p - SLAB, 0.0);
     float n = floor(q / STOREY_PLATES);
     return s + n * storey_integral(STOREY_PLATES) + storey_integral(q - n * STOREY_PLATES);
 }
 
 // How much of [0, x) plates above the base is window height: courses 2-4 of
-// every storey, [6, 15) of its 19 plates.
+// every storey, [6, 15) of its 20 plates.
 float window_rows_integral(float x) {
     x = max(x, 0.0);
     float n = floor(x / STOREY_PLATES);
@@ -165,8 +166,8 @@ void fragment() {
         float p = lp.y / PLATE;
         int band = 0;
         int storey = 0;
-        if (p >= 1.0) {
-            float q = p - 1.0;
+        if (p >= SLAB) {
+            float q = p - SLAB;
             storey = int(floor(q / STOREY_PLATES));
             float within = q - float(storey) * STOREY_PLATES;
             band = 1 + storey * 7 + min(int(floor(within / 3.0)), 6);
@@ -189,7 +190,7 @@ void fragment() {
         // agree across the swap.
         float u = along / STUD;
         bool storey_has_slab = (storey + 1) * 6 <= courses;
-        bool glazed = storey_has_slab && p >= 1.0;
+        bool glazed = storey_has_slab && p >= SLAB;
         if (glazed && row >= 0) {
             for (int k = 2; k <= 4 && glazed; k++) {
                 for (int sd = 0; sd < 4; sd++) {
@@ -204,7 +205,7 @@ void fragment() {
             float hu = max(0.5 * fwidth(u), 1e-3);
             float s = span / STUD;
             float cov_u = (window_cols_integral(u + hu, s) - window_cols_integral(u - hu, s)) / (2.0 * hu);
-            float cov_v = (window_rows_integral(p - 1.0 + hp) - window_rows_integral(p - 1.0 - hp)) / (2.0 * hp);
+            float cov_v = (window_rows_integral(p - SLAB + hp) - window_rows_integral(p - SLAB - hp)) / (2.0 * hp);
             float idx = floor((u - WINDOW_INSET) / WINDOW_PITCH);
             float lit = hash(vec3(seed, float(storey) * 4.0 + float(side), idx));
             col = mix(col, window_colour * mix(0.55, 1.25, lit), cov_u * cov_v);

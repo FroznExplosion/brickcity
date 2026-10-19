@@ -400,8 +400,11 @@ func _shot() -> void:
 			sculpt_radius = st[1]
 			sculpt_blend = st[2]
 			_sculpt_dab(at.call(st[3], st[4]), at.call(st[5], st[6]))
-		# The barrel's far half a brick zone, so it stays bricks.
+		# All marked smooth but the barrel's far half, which stays bricks.
 		_sculpt_op = SdfForm.MARK
+		sculpt_radius = 20.0
+		_sculpt_dab(at.call(-16.0, 0.0), at.call(30.0, 0.0))
+		_sculpt_op = SdfForm.UNMARK
 		sculpt_radius = 3.0
 		_sculpt_dab(at.call(30.0, 12.0), at.call(42.0, 12.0))
 		_sculpt_record(sculpt.form.end_edit())
@@ -1829,7 +1832,7 @@ func fill_parts() -> Array:
 	var out := []
 	for part in _parts():
 		var name := String(part)
-		if not (name.begins_with("plate_") or name.begins_with("brick_")) or name == "plate_10x10":
+		if not (name.begins_with("plate_") or name.begins_with("brick_")) 				or name in ["plate_10x10", "plate_5x10", "plate_5x5"]:
 			continue
 		var seen := {}
 		for yaw in 2:
@@ -3499,6 +3502,13 @@ func _sketch_input(e: InputEvent) -> bool:
 ## mode. A stroke that adds keeps the depth it started at (the surface it is adding to
 ## would pull it toward the camera); the others follow the surface.
 func _sculpt_input(e: InputEvent) -> bool:
+	if sculpt_state == "bricks":
+		# Converted: only bricks are shown. Edit as SDF brings the block-out back.
+		sculpt.show_cursor(null, 0.0, Color.WHITE)
+		if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+			_show_sculpt_note(true)
+			return true
+		return false
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
@@ -3659,8 +3669,16 @@ func _build_sculpt_box() -> void:
 	how.custom_minimum_size.x = RAIL_W - 16
 	how.text = ("Sculpt in 3D: LMB adds to this part, RMB carves, Shift smooths. "
 			+ "The brush starts on the working plane, then follows the surface; an add keeps "
-			+ "the depth it started at. Parts blend while sculpting; each has its colour.")
+			+ "the depth it started at. Parts blend while sculpting; each has its colour. "
+			+ "Convert makes it all bricks, except what is marked smooth (lighter): that "
+			+ "becomes the part's custom piece.")
 	_sculpt_box.add_child(how)
+	_sculpt_note = Label.new()
+	_sculpt_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_sculpt_note.custom_minimum_size.x = RAIL_W - 16
+	_sculpt_note.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	_sculpt_box.add_child(_sculpt_note)
+	_show_sculpt_note()
 	var modes := OptionButton.new()
 	for m in SCULPT_MODES:
 		modes.add_item(m[1])
@@ -3773,6 +3791,9 @@ func _set_sculpt_state(st: Dictionary) -> void:
 	part_bricks = (st.part_bricks as Dictionary).duplicate(true)
 	shells = (st.shells as Dictionary).duplicate(true)
 	sculpt.visible = sculpt_state == "sdf"
+	if sculpt_state == "sdf" and exploded:
+		set_exploded(false)
+	_show_sculpt_note()
 	for part in _shell_nodes.keys():
 		_shell_mesh(String(part), {})
 	for part in shells:
@@ -3844,7 +3865,7 @@ func sculpt_convert() -> void:
 	for i in range(0, cells.size(), 5):
 		var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
 		label_of[c] = cells[i + 3]
-		if cells[i + 4] != 0:
+		if cells[i + 4] == 0:   # not marked smooth: bricks
 			zone[c] = true
 	# A brick in every zone cell; in a part's smooth cells only where the surface holds the
 	# whole cell (inside its custom piece) or where it meets a brick (the join).
@@ -3958,6 +3979,25 @@ static func _cell_joins(c: Vector3i, label_of: Dictionary, zone: Dictionary) -> 
 	return false
 
 
+## The SDF block-out is what is shown: something sculpted, not yet converted.
+func _sculpting() -> bool:
+	return sculpt != null and sculpt_state == "sdf" and sculpt.form.block_count() > 0
+
+
+## The sculpt panel's line on where things stand; `loud` after a click it refused.
+func _show_sculpt_note(loud: bool = false, text: String = "") -> void:
+	if _sculpt_note == null:
+		return
+	if text == "":
+		text = ("Converted: these are bricks now. Edit as SDF to sculpt again." if sculpt_state == "bricks"
+				else "Sculpting: no bricks yet. Convert when the shape is right.")
+	_sculpt_note.text = text
+	if loud:
+		var tw := _sculpt_note.create_tween()
+		_sculpt_note.modulate = Color(1.6, 1.6, 1.6)
+		tw.tween_property(_sculpt_note, "modulate", Color.WHITE, 0.6)
+
+
 ## How many triangles a part's custom piece is made of: its look. One undo.
 func sculpt_piece_detail(part: String, tris: int) -> void:
 	if not shells.has(part) or not shells[part].get("sdf", false):
@@ -3998,7 +4038,7 @@ func _sdf_shell_field(part: String) -> Dictionary:
 	var bricks := {}   # every other solid cell: a zone, or another part
 	for i in range(0, _sdf_cells.size(), 5):
 		var c := Vector3i(_sdf_cells[i], _sdf_cells[i + 1], _sdf_cells[i + 2])
-		if _sdf_cells[i + 3] == label and _sdf_cells[i + 4] == 0:
+		if _sdf_cells[i + 3] == label and _sdf_cells[i + 4] != 0:
 			mine[c] = true
 		else:
 			bricks[c] = true
@@ -5139,7 +5179,7 @@ const RAIL_FONT := 12
 var sketch_draw := "sculpt"
 ## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): its brush.
 const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["smooth", "smooth"], ["paint", "paint this part"],
-		["zone", "brick zone (LMB) / smooth zone (RMB)"]]
+		["zone", "mark smooth (LMB) / back to bricks (RMB)"]]
 var sculpt: AssetSculpt
 var sculpt_mode := "shape"
 var sculpt_radius := 1.0     # studs
@@ -5149,6 +5189,7 @@ var _sculpt_op := 0
 var _sculpt_last := Vector3.ZERO
 var _sculpt_depth := 0.0
 var _sculpt_box: VBoxContainer
+var _sculpt_note: Label
 var _sketch_how: Label
 var _sdf_meta := {}
 ## "sdf" while the block-out is sculpted; "bricks" once converted.
@@ -5741,6 +5782,9 @@ var _move := {}              # a part being dragged: {part, from (plane point), 
 
 
 func set_exploded(on: bool) -> void:
+	if on and _sculpting():
+		on = false
+		_show_sculpt_note(true, "Explode works once the block-out is converted to bricks.")
 	exploded = on
 	_display_dirty = true
 	if not on:

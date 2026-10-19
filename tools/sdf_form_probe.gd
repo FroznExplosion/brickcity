@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## SdfForm (gdextension/brick/src/sdf_form.cpp), the asset workshop's SDF block-out:
-## one signed distance field for the whole asset, a part label and a brick-zone flag on
+## one signed distance field for the whole asset, a part label and a smooth flag on
 ## every sample (Docs/AssetWorkshop.md, "The SDF block-out"). Headless:
 ##
 ##     godot --headless --path . --script res://tools/sdf_form_probe.gd
@@ -181,7 +181,7 @@ func _init() -> void:
 		parts[v] = true
 	_ok("cells carry both parts", parts.has(1) and parts.has(2))
 
-	# Paint and brick zones.
+	# Paint and smooth marks.
 	t.stroke(SdfForm.PAINT, Vector3(15, 10, 10), Vector3(15, 10, 10), 3.0, 0.0, 2)
 	_ok("paint relabels", t.part_near(Vector3(15.5, 10.5, 10.5)) == 2)
 	t.box(SdfForm.MARK, Vector3(40, 10, 10), Vector3(10, 4, 5), 0.0, 0)
@@ -189,7 +189,7 @@ func _init() -> void:
 	var tc := t.cells()
 	for i in range(0, tc.size(), 5):
 		flagged += tc[i + 4]
-	_ok("marked cells carry the brick-zone flag", flagged > 0 and flagged < tc.size() / 5)
+	_ok("marked cells carry the smooth flag", flagged > 0 and flagged < tc.size() / 5)
 
 	print("sdf_form_probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)

@@ -3424,7 +3424,7 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 	if b.is_build() or b.fixtures.is_empty() or group.size() < STAIR_SECTION_BLOCKS:
 		return group
 	var box := world.get_blocks_box(b.chunk, group)
-	if box.size.y < (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M:
+	if box.size.y < TowerRecipe.STOREY_PLATES * BrickPalette.PLATE_M:
 		return group
 	var leaving := {}
 	for bid in group:
@@ -3460,7 +3460,7 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 	# own top course, which the section sat on -- not a floor beside the stairs.
 	# (It held every cut-free top on its staircase: Docs/Collapse.md 6.)
 	var shaft := world.get_blocks_box(b.chunk, candidates).grow(1.2)
-	var from_y := box.position.y + (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M * 0.5
+	var from_y := box.position.y + TowerRecipe.STOREY_PLATES * BrickPalette.PLATE_M * 0.5
 	shaft = AABB(Vector3(shaft.position.x, from_y, shaft.position.z),
 			Vector3(shaft.size.x, maxf(box.end.y + 1.0 - from_y, 0.1), shaft.size.z))
 	# Anything live, not stairs and not leaving, centred in the shaft? (Dead and
@@ -6476,7 +6476,7 @@ func _run_nav_pass() -> void:
 	# hillside is, so both are measured from the ground rather than from 0.
 	var floor0 := b.xform.origin.y
 	var street := _on_ground(b.xform * Vector3(fx * 0.5, 0.0, -4.0))
-	var storey_y := (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * PLATE
+	var storey_y := (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * PLATE
 	var room := ai_nav.snap(b.xform * Vector3(fx * 0.3, storey_y + 0.05, fz * 0.3))
 	_gate_ok("there is floor to stand on two storeys up",
 			absf(room.y - floor0 - storey_y) < 0.3,
@@ -6886,7 +6886,7 @@ func _run_mechfall_pass() -> void:
 		if e.kind == DamageLog.Kind.SHEAR and e.flags & DamageLog.FLAG_WHOLE:
 			shears += 1
 	var judged := m.fall.landings.map(func(l): return "%.1f%s" % [float(l[1]), "!" if l[2] else ""])
-	var storeys := (roof - m.feet().y) / ((TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * PLATE)
+	var storeys := (roof - m.feet().y) / (TowerRecipe.STOREY_PLATES * PLATE)
 	_gate_ok("dropped twelve bricks onto the roof, it goes through three floors",
 			m.fall.breaks == 3 and shears == 3,
 			"%d broken, %d SHEAR(s); landings (bricks of energy) %s" % [m.fall.breaks, shears, judged])
@@ -7180,7 +7180,7 @@ func _orphan_stairs(b: BuildingRegistry.Building) -> Array:
 	var ids := PackedInt32Array()
 	for e in live:
 		ids.append(int(e[2]))
-	var storey := (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * BrickPalette.PLATE_M
+	var storey := TowerRecipe.STOREY_PLATES * BrickPalette.PLATE_M
 	var shaft := world.get_blocks_box(b.chunk, ids)
 	var ring := AABB(shaft.position - Vector3(STAIR_RING, storey, STAIR_RING),
 			shaft.size + Vector3(2.0 * STAIR_RING, 2.0 * storey, 2.0 * STAIR_RING))
@@ -7633,7 +7633,7 @@ func _run_wreck_pass() -> void:
 	await _frames(20)
 	# Cut the tower through at a storey's slab, as a collision would.
 	# On the joint plane between the second storey's slab and the course above.
-	var cut := b.xform * Vector3(fx * 0.5, (1 + 2 * (TowerRecipe.COURSES_PER_FLOOR * 3 + 1)) * PLATE, fz * 0.5)
+	var cut := b.xform * Vector3(fx * 0.5, (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * PLATE, fz * 0.5)
 	if authority.request(DamageLog.Kind.SEVER, b.id, cut, 0.14, Vector3.UP):
 		world.separate_plane(b.chunk, cut, Vector3.UP, 0.14)
 		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SEVER, b.id, cut, 0.14,
@@ -8599,7 +8599,7 @@ func _run_groups_pass() -> void:
 	@warning_ignore("integer_division")
 	var cut_storey := mini(9, int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR - 3)
 	# A metre up its storey: the blasts (1.3 m) stop short of the slab above.
-	var cut_world := wb.position.y + float(1 + cut_storey * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
+	var cut_world := wb.position.y + float(TowerRecipe.SLAB_PLATES + cut_storey * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
 	var cut_local: float = (b.xform.affine_inverse() * Vector3(face.x, cut_world, face.z)).y
 	_groups_look(face, out, 30.0, eye + 10.0)
 	await _groups_settle(b)
@@ -8725,7 +8725,7 @@ func _run_groups_pass() -> void:
 	@warning_ignore("integer_division")
 	var storeys2: int = int(b2.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
 	@warning_ignore("integer_division")
-	var cut2 := wb2.position.y + float(1 + (storeys2 * 2 / 3) * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
+	var cut2 := wb2.position.y + float(TowerRecipe.SLAB_PLATES + (storeys2 * 2 / 3) * TowerRecipe.STOREY_PLATES) * PLATE + 1.0
 	_groups_cut(wb2, cut2)
 	_groups_look(face2, out2, 30.0, eye)
 	var mid_ticks := 0
@@ -9306,7 +9306,7 @@ func _run_jam_pass() -> void:
 	for b in picks:
 		var fx: float = b.recipe.footprint_x * STUD
 		var fz: float = b.recipe.footprint_z * STUD
-		var y: float = 1.2 + (TowerRecipe.COURSES_PER_FLOOR * 3 + 1) * PLATE
+		var y: float = 1.2 + TowerRecipe.STOREY_PLATES * PLATE
 		var x := 0.0
 		while x <= fx + 0.01:
 			var z := 0.0

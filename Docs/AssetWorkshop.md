@@ -277,7 +277,9 @@ one piece.
 distance field -- as Zylann's voxel tools sculpt terrain -- tracing a photo, a 3D model, both
 or neither. While drawing there are **no bricks**, only the smooth surface; the sliders act
 on it; a **Convert** button turns it into the asset. Areas marked as **brick zones** become
-bricks, the rest become custom smooth parts joined to them. Each part of the asset (barrel,
+bricks, the rest become custom smooth parts joined to them. **Changed the same day**: bricks
+are the default -- Convert makes everything bricks except areas **marked smooth**, which
+become the part's custom piece (the user had marked nothing and got all smooth pieces). Each part of the asset (barrel,
 handguard ...) stays its own: parts blend while sculpting, the split is what is saved. It
 can go back and forth: brick edits made after a convert show in the SDF, and converting
 again keeps them. Old saves with the 2D sketch form may be dropped.
@@ -288,13 +290,13 @@ again keeps them. Old saves with the 2D sketch form may be dropped.
 | What | How |
 |---|---|
 | One field for the whole asset | a sample a **tick** (a stud 5, a plate 2), so it lines up with the brick grid; distances kept within 6 samples of the surface, in 16^3 blocks stored only where something was drawn |
-| A part label and a brick-zone flag on every sample | an add labels what it changed; Paint relabels; Mark / Unmark set the zone. Parts are one surface while sculpting; `part_field` gives one part's distances, ending where its label does (for its shell) |
+| A part label and a smooth flag on every sample | an add labels what it changed; Paint relabels; Mark / Unmark set the flag (unmarked = bricks). Parts are one surface while sculpting; `part_field` gives one part's distances, ending where its label does (for its shell) |
 | Brushes | add (union), remove (subtraction), both optionally smooth (Quilez's smooth min), smooth (blur in the brush), as capsules or boxes -- as Zylann's VoxelTool does them |
 | A 3D model as a solid | `stamp_mesh`: distance to the nearest triangle, inside by ray parity |
-| Bricks out | `cells`: a brick cell is solid when the middle of it is inside; its part and zone from that sample |
+| Bricks out | `cells`: a brick cell is solid when the middle of it is inside; its part and smooth flag from that sample |
 | Bricks back in, 1:1 | `sync_cells(before, after)` writes only the cells that changed: a brick added is a box unioned, a brick taken a box carved, a part changed relabelled. Untouched smooth surface stays as it was, and `cells` gives back exactly the bricks synced (the field is 1-Lipschitz, so a box never flips a neighbour's middle). A bricks-only asset goes in the same way |
 | Whole-asset sliders | `scale` about a pivot, `blur` |
-| Live view | `mesh_block`: surface nets a block at a time, each edge meshed by one block so they meet without cracks, normals from the field, colour by part (alpha 0.5 in a brick zone) |
+| Live view | `mesh_block`: surface nets a block at a time, each edge meshed by one block so they meet without cracks, normals from the field, colour by part (lighter where marked smooth) |
 | Drawing on a surface | `raycast` (sphere tracing) |
 | Undo, saving | `begin_edit` / `end_edit` record the blocks an edit touched; `swap_blocks` undoes and gives the redo; `to_bytes` / `from_bytes` |
 
@@ -303,20 +305,20 @@ again keeps them. Old saves with the 2D sketch form may be dropped.
 
 | What | How |
 |---|---|
-| **Sculpt in 3D** | the Block out tool's first way to draw (and the default). LMB adds to the current part, RMB carves, Shift smooths; modes for smooth, paint this part, brick zone (LMB marks, RMB clears). The brush starts on the block-out's surface under the mouse, else on the working plane; an add keeps the depth it started at. The mirror applies. Brush radius 0.2-10 studs, blend 0-3 studs |
+| **Sculpt in 3D** | the Block out tool's first way to draw (and the default). LMB adds to the current part, RMB carves, Shift smooths; modes for smooth, paint this part, mark smooth (LMB marks, RMB back to bricks; marked areas show lighter). A line under the hint says which state it is in; once converted, clicks do not sculpt (Edit as SDF first). The brush starts on the block-out's surface under the mouse, else on the working plane; an add keeps the depth it started at. The mirror applies. Brush radius 0.2-10 studs, blend 0-3 studs |
 | **While sculpting** | only the smooth surface, a mesh a block, coloured by part; no bricks. A stroke is one undo; the field is saved with the asset (`asset.sdf`, zstd) |
 | **Sliders and buttons** | size 25-300% (let go: scaled about the bottom middle, one undo), **this part's piece** (its triangles after Convert, 300-30000, default 4000; let go, one undo), smoother, **fill from guides** (the guide models made solid in this part), clear |
-| **Convert** | every solid cell into the asset, in its part. Brick-zone cells: bricks. A part's other cells: its **custom piece** -- a shell straight from the field (`part_field`, brick zones and other parts left out, a sample a tick, `tris` budget) -- over bricks only where the surface holds the whole cell or where it meets bricks (the join: real bricks with studs; the piece wraps each join brick's box, so it never shows through a thin surface). Cells the piece fills with no brick (its edge) are kept as the piece's. A brick from before goes back where its cells still are its part's, colour and shape kept; the rest packed biggest first, in the colour most of the part's old bricks had (else its piece's, else the hotbar's). One undo. The test gun converts in ~0.1 s |
+| **Convert** | every solid cell into the asset, in its part. Unmarked cells: bricks (nothing marked: all bricks, no pieces). A part's marked cells: its **custom piece** -- a shell straight from the field (`part_field`, unmarked samples and other parts left out, a sample a tick, `tris` budget) -- over bricks only where the surface holds the whole cell or where it meets bricks (the join: real bricks with studs; the piece wraps each join brick's box, so it never shows through a thin surface). Cells the piece fills with no brick (its edge) are kept as the piece's. A brick from before goes back where its cells still are its part's, colour and shape kept; the rest packed biggest first, in the colour most of the part's old bricks had (else its piece's, else the hotbar's). One undo. The test gun converts in ~0.1 s |
 | **Edit as SDF** | the bricks back into the field -- only cells that changed since the last Convert (a brick added unions a box, a brick taken carves one), the piece's own cells counted as still there -- and the block-out shown again; the bricks are put aside for the next Convert. A bricks-only build (the Thompson) goes in whole. Convert again gives the same cells. One undo |
 
-`-- --shot --sculpt [--convert]` draws a test gun (four parts, the barrel's end a brick zone)
+`-- --shot --sculpt [--convert]` draws a test gun (four parts, all marked smooth but the barrel's far half)
 and takes the usual pictures.
 
 **Not yet**: a converted brick's slope or curve goes back into the field as a whole cell;
-a join brick's studs can show above a piece's top; Explode and Move part do not move the
-field. Next: removing the old 2D sketch
-form, then shell regions are brick zones already -- what is left from the old list is
-selecting a piece to change its look, and small custom parts (a lathe brush).
+a join brick's studs can show above a piece's top; Move part does not move the field.
+**Explode** works only once converted (or with nothing sculpted); Edit as SDF closes it.
+The old 2D sketch (drawing in bricks) **stays** -- the user still wants it (2026-10-18).
+Next: small custom parts (a lathe brush).
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
