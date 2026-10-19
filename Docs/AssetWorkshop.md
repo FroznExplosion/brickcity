@@ -307,7 +307,7 @@ again keeps them. Old saves with the 2D sketch form may be dropped.
 |---|---|
 | **Sculpt in 3D** | the Block out tool's first way to draw (and the default). LMB adds to the current part, RMB carves, Shift smooths; modes for smooth, paint this part, mark smooth (LMB marks, RMB back to bricks; marked areas show lighter). A line under the hint says which state it is in; once converted, clicks do not sculpt (Edit as SDF first). The brush starts on the block-out's surface under the mouse, else on the working plane; an add keeps the depth it started at. The mirror applies. Brush radius 0.2-10 studs, blend 0-3 studs |
 | **While sculpting** | only the smooth surface, a mesh a block, coloured by part; no bricks. A stroke is one undo; the field is saved with the asset (`asset.sdf`, zstd) |
-| **Sliders and buttons** | size 25-300% (let go: scaled about the bottom middle, one undo), **this part's piece** (its triangles after Convert, 300-30000, default 4000; let go, one undo), smoother, **fill from guides** (the guide models made solid in this part), clear |
+| **Sliders and buttons** | size 25-300% (let go: scaled about the bottom middle, one undo), **this part's piece** (its triangles after Convert, 300-30000, default 4000; let go, one undo), smoother, **add a 3D model...** / **model into this part** / **carve the model out** (round 3), clear |
 | **Convert** | every solid cell into the asset, in its part. Unmarked cells: bricks (nothing marked: all bricks, no pieces). A part's marked cells: its **custom piece** -- a shell straight from the field (`part_field`, unmarked samples and other parts left out, a sample a tick, `tris` budget) -- over bricks only where the surface holds the whole cell or where it meets bricks (the join: real bricks with studs; the piece wraps each join brick's box, so it never shows through a thin surface). Cells the piece fills with no brick (its edge) are kept as the piece's. A brick from before goes back where its cells still are its part's, colour and shape kept; the rest packed biggest first, in the colour most of the part's old bricks had (else its piece's, else the hotbar's). One undo. The test gun converts in ~0.1 s |
 | **Edit as SDF** | the bricks back into the field -- only cells that changed since the last Convert (a brick added unions a box, a brick taken carves one), the piece's own cells counted as still there -- and the block-out shown again; the bricks are put aside for the next Convert. A bricks-only build (the Thompson) goes in whole. Convert again gives the same cells. One undo |
 
@@ -340,7 +340,7 @@ The rail kept keyboard focus (Space pressed buttons) and passed the wheel on to 
 | Add / carve sphere, smooth blend | Zylann `do_sphere` (union / subtract, smoothness) | yes |
 | Smooth | Zylann `smooth_sphere`; Substance Modeler: hold Shift | yes (Shift) |
 | Grow / shrink gradually | Zylann `grow_sphere`; Substance Modeler Inflate; Blender Inflate | not yet |
-| Stamp a mesh | Zylann `stamp_sdf` / `do_mesh` (`VoxelMeshSDF`) | fill from guides (all guides) |
+| Stamp a mesh | Zylann `stamp_sdf` / `do_mesh` (`VoxelMeshSDF`) | add a 3D model / model into this part (round 3) |
 | Primitive stamps: box, cylinder, cone, capsule | Dreams stamp / smear; MagicaCSG, Womp primitives | not yet (box only in code) |
 | Flatten to a plane | Substance Modeler Flatten (hard surface); Blender Flatten | not yet |
 | Move / grab | Blender Grab; Substance Modeler Warp / Elastic | not yet |
@@ -483,6 +483,23 @@ slope on a 45-degree ramp, a wedge on a ramp turned 45 degrees in plan, nothing 
 `asset_workshop_probe` (the two rail tools, a sculpted ramp converts with slopes and round
 trips, the lathe one undo, a model stamped from a mesh). `palette_probe` and `shaped_probe`
 cover the new pieces.
+
+**Built 2026-10-19**, as above, with these differences found on the way:
+
+- The fit's margin is **3%** of a piece's samples (eager 1.5%), not 8%: a wall running
+  diagonally in plan matches a wedge exactly only where its line passes through the wedge's
+  corners; elsewhere a wedge beats the stairs by 2-4%. The test gun (`-- --shot --sculpt
+  --plain --convert`) now converts to 196 bricks of which 122 are shaped (82 cheese 1x1, 21
+  curve 2x2, slopes 1x2 / 2x2 / 2x4, a wedge), in 0.13 s; the slice rule gave it almost none.
+- "fill from guides" went (it stamped every guide at once); **model into this part** and
+  **carve the model out** act on the one picked.
+- A lathe being drawn is dropped when another shape or tool is picked.
+- The part sheets (`tools/part_sheets.gd`, Docs/Parts) were behind: cheese and the long curves
+  had no sheet or profile; they and the new pieces have now.
+
+sdf_form_probe 38 (6 new), asset_workshop_probe 251, palette_probe 1858 (its family-height
+rule knows a wedge is a brick), shaped_probe 424, orient_probe 51, workshop_probe 96.
+`-- --shot --sculpt --stamps` adds a lathe (a muzzle brake) and leaves a lathe's ghost showing.
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 

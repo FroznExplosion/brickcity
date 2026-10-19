@@ -413,7 +413,7 @@ func _shot() -> void:
 		sculpt_blend = 0.0
 		if "--stamps" in OS.get_cmdline_user_args():
 			# Round 2's tools: a box stamp over the body, a cylinder and a cone on the
-			# barrel, the body's side flattened, the grip grown; a box's ghost left showing.
+			# barrel, the body's side flattened, the grip grown; round 3's lathe, and a lathe's ghost left showing.
 			sculpt.form.begin_edit()
 			_sculpt_plane = Plane(Vector3.BACK, at.call(0.0, 0.0).z)
 			sculpt_snap = true
@@ -449,16 +449,30 @@ func _shot() -> void:
 			_sculpt_dab(at.call(3.0, -20.0), at.call(3.0, -20.0))
 			sculpt.remesh()
 			_sculpt_record(sculpt.form.end_edit())
-			sculpt_shape = "box"
-			_stamp_from = _stamp_snap(at.call(-12.0, 16.0))
-			_stamp_to = _stamp_snap(at.call(-4.0, 24.0))
-			_sculpt_op = SdfForm.ADD
-			_show_stamp()
+			# A lathe: a muzzle brake turned on the barrel's end, and one being drawn below.
+			select_part(maxi(0, part_names.find("barrel")))
+			sculpt_shape = "lathe"
+			_lathe_axis = [at.call(40.0, 12.0), at.call(47.0, 12.0)]
+			_lathe_op = SdfForm.ADD
+			for q in [Vector2(40, 13), Vector2(41, 14.5), Vector2(44, 14.5), Vector2(45, 13.5), Vector2(47, 14)]:
+				lathe_click(at.call(q.x, q.y))
+			lathe_finish()
+			rail_pick("sculpt")
+			sculpt_mode = "stamp"
+			_lathe_axis = [at.call(10.0, 24.0), at.call(24.0, 24.0)]
+			for q in [Vector2(10, 26), Vector2(16, 29)]:
+				lathe_click(at.call(q.x, q.y))
+			_show_stamp(at.call(24.0, 27.0))
 		if "--convert" in OS.get_cmdline_user_args():
 			var t0 := Time.get_ticks_msec()
 			sculpt_convert()
-			print("[sculpt] converted in %d ms: %d bricks, shells %s" % [Time.get_ticks_msec() - t0, recipe.size(),
-					str(_shell_tris)])
+			var shaped := {}
+			for i in recipe.size():
+				var part := BrickPalette.part_of(recipe.part_of(i))
+				if BrickPalette.is_shaped(part):
+					shaped[part] = int(shaped.get(part, 0)) + 1
+			print("[sculpt] converted in %d ms: %d bricks, shaped %s, shells %s" % [Time.get_ticks_msec() - t0,
+					recipe.size(), str(shaped), str(_shell_tris)])
 		rail_pick("sculpt")
 		var bb := sculpt.form.bounds()
 		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
@@ -2644,7 +2658,17 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_guide_dialog.use_native_dialog = true
 	_guide_dialog.filters = PackedStringArray(["*.glb, *.gltf, *.fbx ; Models"])
 	_guide_dialog.file_selected.connect(func(path: String) -> void:
-		load_guide(path, float(_guide_mm.text) if _guide_mm.text.is_valid_float() else 852.0))
+		var i := load_guide(path, float(_guide_mm.text) if _guide_mm.text.is_valid_float() else 852.0)
+		if _guide_into_sdf and i >= 0:
+			# Added from the sculpt panel: straight into the current part, the guide kept
+			# faint to trace by and its panel open to move it.
+			sculpt_model_into(i, SdfForm.ADD)
+			guides[i].opacity = 0.15
+			_fit_guide(guides[i])
+			if not _guide_panel.visible:
+				_toggle_guide_panel()
+		_guide_into_sdf = false)
+	_guide_dialog.canceled.connect(func() -> void: _guide_into_sdf = false)
 	layer.add_child(_guide_dialog)
 
 
@@ -3574,6 +3598,15 @@ func _sculpt_input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
+			if stamping and sculpt_shape == "lathe" and not _lathe_axis.is_empty():
+				# The axis is down: LMB adds a point of the outline, RMB lays it.
+				if right:
+					lathe_finish()
+				else:
+					var q = _sculpt_point(false)
+					if q != null:
+						lathe_click(q)
+				return true
 			_sculpt_op = _sculpt_op_for(right, e.shift_pressed)
 			var p = _sculpt_point(true)
 			if p == null:
@@ -3591,6 +3624,17 @@ func _sculpt_input(e: InputEvent) -> bool:
 			sculpt.form.begin_edit()
 			_sculpt_dab(p, p)
 		elif _sculpt_on:
+			if stamping and sculpt_shape == "lathe":
+				# The axis dragged: now the outline, a click a point.
+				_sculpt_on = false
+				if _stamp_from.distance_to(_stamp_to) >= 1.0:
+					_lathe_axis = [_stamp_from, _stamp_to]
+					_lathe_pts = PackedVector2Array()
+					_lathe_op = SdfForm.REMOVE if _sculpt_op == SdfForm.REMOVE else SdfForm.ADD
+				_show_stamp()
+				_show_sculpt_note(false, "Lathe: click the outline's points, out from the axis. "
+						+ "Enter or RMB lays it, Backspace takes a point back, Esc drops it.")
+				return true
 			if stamping:
 				_sculpt_on = false
 				sculpt.show_ghost({})
@@ -3610,6 +3654,9 @@ func _sculpt_input(e: InputEvent) -> bool:
 				_stamp_to = _stamp_snap(p)
 				_show_stamp()
 			return true
+		if stamping and sculpt_shape == "lathe" and not _lathe_axis.is_empty():
+			_show_stamp(p)
+			return false
 		if _sculpt_on and p != null and p.distance_to(_sculpt_last) > maxf(0.3, _sculpt_r() * 0.25):
 			_sculpt_dab(_sculpt_last, p)
 		return _sculpt_on
@@ -3635,13 +3682,22 @@ func _stamp_snap(p: Vector3) -> Vector3:
 
 
 ## The stamp being dragged, as what to lay: {kind: "box", center, half} | {kind: "cone",
-## xform, size} | {kind: "line", a, b, r}. Empty when there is nothing to lay yet.
-func _stamp_desc() -> Dictionary:
+## xform, size} | {kind: "line", a, b, r} | {kind: "lathe", xform, profile}. Empty when
+## there is nothing to lay yet. `mouse`: a lathe's next point, shown before it is clicked.
+func _stamp_desc(mouse: Variant = null) -> Dictionary:
 	var a := _stamp_from
 	var b := _stamp_to
 	var r := _sculpt_r()
 	var n := _sculpt_plane.normal.abs()
 	match sculpt_shape:
+		"lathe":
+			if _lathe_axis.is_empty():
+				# Dragging the axis: shown as a thin rod.
+				return {"kind": "line", "a": a, "b": b, "r": 0.4}
+			var prof := _lathe_pts.duplicate()
+			if mouse != null:
+				prof.append(_lathe_point(mouse))
+			return _lathe_desc(_lathe_axis[0], _lathe_axis[1], prof)
 		"box":
 			# The footprint corner to corner on the plane; across it the brush's diameter.
 			var lo := a.min(b)
@@ -3673,8 +3729,75 @@ func _cone_desc(a: Vector3, b: Vector3, r1: float, r2: float) -> Dictionary:
 			"size": Vector3(r1, a.distance_to(b) * 0.5, r2)}
 
 
-func _show_stamp() -> void:
-	sculpt.show_ghost(_stamp_desc(), Color(1.0, 0.4, 0.35) if _sculpt_op == SdfForm.REMOVE else Color(0.6, 0.9, 1.0))
+func _show_stamp(mouse: Variant = null) -> void:
+	var carve := _lathe_op == SdfForm.REMOVE if not _lathe_axis.is_empty() else _sculpt_op == SdfForm.REMOVE
+	sculpt.show_ghost(_stamp_desc(mouse), Color(1.0, 0.4, 0.35) if carve else Color(0.6, 0.9, 1.0))
+
+
+## A lathe on the axis from `a` to `b` (samples): a frame with y along the axis from its
+## middle, and the outline as (out, along) in it.
+func _lathe_desc(a: Vector3, b: Vector3, prof: PackedVector2Array) -> Dictionary:
+	var c := _cone_desc(a, b, 0.0, 0.0)
+	return {"kind": "lathe", "a": a, "b": b, "xform": c.xform, "profile": prof}
+
+
+## A point on the stroke plane as a lathe outline point: how far out from the axis, how
+## far along it from its middle.
+func _lathe_point(p: Vector3) -> Vector2:
+	var a: Vector3 = _lathe_axis[0]
+	var b: Vector3 = _lathe_axis[1]
+	var y := (b - a).normalized()
+	var mid := (a + b) * 0.5
+	var along := (p - mid).dot(y)
+	return Vector2((p - mid - y * along).length(), along)
+
+
+## A click while drawing a lathe's outline: a point, or -- on the last point -- lay it.
+func lathe_click(p: Vector3) -> void:
+	var q := _lathe_point(p)
+	if not _lathe_pts.is_empty() and q.distance_to(_lathe_pts[_lathe_pts.size() - 1]) < 1.0:
+		lathe_finish()
+		return
+	_lathe_pts.append(q)
+	_show_stamp(p)
+
+
+## Lay the lathe drawn so far (one undo), or drop it if its outline has no length.
+func lathe_finish() -> void:
+	if _lathe_axis.is_empty():
+		return
+	if _lathe_pts.size() >= 2:
+		sculpt.form.begin_edit()
+		_lay_stamp(_lathe_desc(_lathe_axis[0], _lathe_axis[1], _lathe_pts), _lathe_op)
+		sculpt.remesh()
+		_sculpt_record(sculpt.form.end_edit())
+	lathe_drop()
+
+
+func lathe_drop() -> void:
+	_lathe_axis = []
+	_lathe_pts = PackedVector2Array()
+	sculpt.show_ghost({})
+	_show_sculpt_note()
+
+
+## Keys while a lathe's outline is drawn: Enter lays it, Backspace takes a point back,
+## Escape drops it. True when the key was the lathe's.
+func _lathe_key(e: InputEvent) -> bool:
+	if _lathe_axis.is_empty() or not (e is InputEventKey and e.pressed):
+		return false
+	match (e as InputEventKey).keycode:
+		KEY_ENTER, KEY_KP_ENTER:
+			lathe_finish()
+		KEY_BACKSPACE:
+			if not _lathe_pts.is_empty():
+				_lathe_pts.resize(_lathe_pts.size() - 1)
+			_show_stamp()
+		KEY_ESCAPE:
+			lathe_drop()
+		_:
+			return false
+	return true
 
 
 ## Lay a stamp (and its mirror image when the mirror is on).
@@ -3688,18 +3811,21 @@ func _lay_stamp(d: Dictionary, op: int) -> void:
 	match String(d.kind):
 		"box": sculpt.form.box(op, d.center, d.half, blend, part)
 		"cone": sculpt.form.shape(op, SdfForm.SHAPE_CONE, d.xform, d.size, blend, part)
+		"lathe": sculpt.form.lathe(op, d.xform, d.profile, blend, part)
 		_: sculpt.form.stroke(op, d.a, d.b, d.r, blend, part)
 	if mirror_on:
 		var m := d.duplicate()
 		match String(d.kind):
 			"box": m.center = _mirror_sample(d.center)
 			"cone": m = _cone_desc(_mirror_sample(d.a), _mirror_sample(d.b), d.size.x, d.size.z)
+			"lathe": m = _lathe_desc(_mirror_sample(d.a), _mirror_sample(d.b), d.profile)
 			_:
 				m.a = _mirror_sample(d.a)
 				m.b = _mirror_sample(d.b)
 		match String(m.kind):
 			"box": sculpt.form.box(op, m.center, m.half, blend, part)
 			"cone": sculpt.form.shape(op, SdfForm.SHAPE_CONE, m.xform, m.size, blend, part)
+			"lathe": sculpt.form.lathe(op, m.xform, m.profile, blend, part)
 			_: sculpt.form.stroke(op, m.a, m.b, m.r, blend, part)
 
 
@@ -3814,14 +3940,30 @@ func _sculpt_record(rec: PackedByteArray) -> void:
 
 
 ## The guide models made solid in the field, in this part: a quick start from a model.
-func sculpt_fill_from_guides() -> int:
-	var n := 0
+## A guide model into the current part's field (ADD) or carved out of it (REMOVE), where
+## the guide stands now. One undo. Returns how many meshes went in.
+func sculpt_model_into(i: int, op: int) -> int:
+	if i < 0 or i >= guides.size():
+		_show_sculpt_note(true, "No model yet: add a 3D model first.")
+		return 0
+	if sculpt.palette.size() < part_names.size() + 1:
+		sculpt.set_parts(part_names.size())
 	sculpt.form.begin_edit()
-	for g in guides:
-		n += _stamp_node(g.node, SdfForm.ADD)
+	var n := _stamp_node(guides[i].node, op)
 	sculpt.remesh()
 	_sculpt_record(sculpt.form.end_edit())
+	_show_sculpt_note(false, "%s %s %s." % [String(guides[i].path).get_file(),
+			"went into" if op == SdfForm.ADD else "was carved out of", part_names[part_sel]])
 	return n
+
+
+## The guide picked in the guide panel, else the last one loaded; -1 for none.
+func _picked_guide() -> int:
+	if guides.is_empty():
+		return -1
+	if _guide_list != null and _guide_list.selected >= 0 and _guide_list.selected < guides.size():
+		return _guide_list.selected
+	return guides.size() - 1
 
 
 func _stamp_node(node: Node, op: int) -> int:
@@ -3900,7 +4042,9 @@ func _build_sculpt_box() -> void:
 	for m in SCULPT_SHAPES:
 		shapes.add_item(m[1])
 	shapes.focus_mode = Control.FOCUS_NONE
-	shapes.item_selected.connect(func(i: int) -> void: sculpt_shape = SCULPT_SHAPES[i][0])
+	shapes.item_selected.connect(func(i: int) -> void:
+		lathe_drop()
+		sculpt_shape = SCULPT_SHAPES[i][0])
 	_sculpt_box.add_child(shapes)
 	var snap := CheckBox.new()
 	snap.text = "snap to the brick grid"
@@ -3994,7 +4138,11 @@ func _build_sculpt_box() -> void:
 	var row := HFlowContainer.new()
 	_sculpt_box.add_child(row)
 	for b in [["smoother", func() -> void: sculpt_smooth(1)],
-			["fill from guides", func() -> void: sculpt_fill_from_guides()],
+			["add a 3D model...", func() -> void:
+				_guide_into_sdf = true
+				_guide_dialog.popup_centered_ratio(0.6)],
+			["model into this part", func() -> void: sculpt_model_into(_picked_guide(), SdfForm.ADD)],
+			["carve the model out", func() -> void: sculpt_model_into(_picked_guide(), SdfForm.REMOVE)],
 			["clear", func() -> void: sculpt_clear()],
 			["Convert", func() -> void: sculpt_convert()],
 			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
@@ -4195,17 +4343,18 @@ func sculpt_convert() -> void:
 		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
 		var col: Array = part_col.get(part_sel + 1, [-1, -1])
 		var left: Dictionary = by_part[label]
-		# Slopes and curves on the brick cells' edges, as the curve slider has them -- seen
-		# from the side and from the front, as the sketch's form lays them.
+		# Slopes, wedges and curves fitted to the field where they match it better than
+		# the cells as bricks, as the curve slider has them (FitKit, SdfForm.fit_pieces).
 		if curve_level >= 1:
-			var vol := {}
+			var free := PackedInt32Array()
 			for c in left:
 				if zone.has(c):
-					vol[c] = true
-			var taken := {}
+					free.append_array([c.x, c.y, c.z])
+			var kit := FitKit.kit(curve_level >= 2)
+			var fit := sculpt.form.fit_pieces(free, kit.pieces, SDF_FIT_EAGER if slope_eager else SDF_FIT_GAIN)
 			var edges := []
-			for view in ["side", "front"]:
-				edges.append_array(_edge_runs([], vol, view, {}, taken))
+			for i in range(0, fit.size(), 4):
+				edges.append([kit.names[fit[i]], Vector3i(fit[i + 1], fit[i + 2], fit[i + 3])])
 			for b in edges:
 				var at: Vector3i = b[1]
 				var size := BrickPalette.size_of(String(b[0]))
@@ -5395,6 +5544,9 @@ func _input(e: InputEvent) -> void:
 		if f != null and _rail.is_ancestor_of(f) and not (f is LineEdit or f is SpinBox or f is TextEdit) \
 				and (e is InputEventKey or not _over_rail()):
 			f.release_focus()
+	if _lathe_key(e):
+		get_viewport().set_input_as_handled()
+		return
 	super._input(e)
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
@@ -5487,13 +5639,27 @@ const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a 
 		["paint", "paint this part"], ["zone", "mark smooth (LMB) / back to bricks (RMB)"]]
 ## Stamp shapes (Docs/AssetWorkshop.md, "SDF tools, round 2").
 const SCULPT_SHAPES := [["box", "box: corner to corner"], ["cylinder", "cylinder: end to end"],
-		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"]]
+		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
+		["lathe", "lathe: axis, then outline"]]
 ## Not an SdfForm op: the flatten brush, which calls `SdfForm.flatten`.
 const OP_FLATTEN := 100
+## How much better a fitted piece must match the field than its box's cells as bricks, as
+## a share of its samples; eager (curve level 4) lower.
+const SDF_FIT_GAIN := 0.03
+const SDF_FIT_EAGER := 0.015
 var sculpt_shape := "box"
 var sculpt_snap := true
 var sculpt_strength := 0.5   # flatten and grow, 0-1
 var _stamp_from := Vector3.ZERO
+## The lathe being drawn (Docs/AssetWorkshop.md, "SDF tools, round 3"): its axis [from, to]
+## (samples) once dragged, the outline's points (out from the axis, along it from its
+## middle) clicked since, and whether it adds or carves. No axis: nothing pending.
+var _lathe_axis := []
+var _lathe_pts := PackedVector2Array()
+var _lathe_op := SdfForm.ADD
+## The guide dialog was opened by the sculpt panel's "add a 3D model": the model goes
+## into the field once loaded.
+var _guide_into_sdf := false
 var _stamp_to := Vector3.ZERO
 var _flat_point := Vector3.ZERO
 var _flat_normal := Vector3.UP
@@ -5771,6 +5937,8 @@ func _rail_right() -> float:
 
 ## A rail button: the tool it names, everything else put down.
 func rail_pick(id: String) -> void:
+	if not _lathe_axis.is_empty() and id != rail_active():
+		lathe_drop()
 	match id:
 		"sculpt", "sketch":
 			set_measure(false)

@@ -78,7 +78,7 @@ static func build(kind: String, size: Vector3i, axis := "z") -> Dictionary:
 	# A curved slope is smooth all over, like the real part: nothing clips to a
 	# curve, and a stud stood on one would float half in the air.
 	# Nor on a one-plate wedge: it is a slope all the way to its back edge.
-	if kind == "curve" or size.y == 1:
+	if kind == "curve" or (kind == "slope" and size.y == 1):
 		out["studs"] = _zeros(size.x * size.z)
 	_built[memo] = out
 	return out
@@ -106,6 +106,9 @@ static func _shape(kind: String, size: Vector3i, axis: String) -> Dictionary:
 			return {"draw": [p], "pieces": [p]}
 		"round":
 			var p := _round_prism(size)
+			return {"draw": [p], "pieces": [p]}
+		"wedge":
+			var p := _wedge_prism(size)
 			return {"draw": [p], "pieces": [p]}
 		"arch":
 			return _arch(size)
@@ -183,6 +186,15 @@ static func _round_prism(size: Vector3i) -> Dictionary:
 		poly.append(c + Vector2(cos(a), sin(a)) * r)
 		smooth.append(true)
 	return _prism(poly, "xz", 0.0, size.y * P, smooth)
+
+
+## A wedge: the footprint cut corner to corner, from (W, 0) to (0, L), the corner at
+## the origin cut away; as tall as the part. Flipped, it is its own mirror image.
+static func _wedge_prism(size: Vector3i) -> Dictionary:
+	var w := size.x * S
+	var l := size.z * S
+	var poly := PackedVector2Array([Vector2(w, 0), Vector2(w, l), Vector2(0, l)])
+	return _prism(poly, "xz", 0.0, size.y * P)
 
 
 ## An arch along its length (Z): a pillar one stud long at each end, a beam one

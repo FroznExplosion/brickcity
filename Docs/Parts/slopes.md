@@ -12,6 +12,8 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
 | `slope_1x2` | 1 x 2 | 3 | 8 x 16 x 9.6 | 7.8 x 15.8 x 9.6 | 0.35 x 0.7 x 0.42 | 1 | 0.5 |
 | `slope_2x2` | 2 x 2 | 3 | 16 x 16 x 9.6 | 15.8 x 15.8 x 9.6 | 0.7 x 0.7 x 0.42 | 2 | 1 |
 | `slope_2x4` | 2 x 4 | 3 | 16 x 32 x 9.6 | 15.8 x 31.8 x 9.6 | 0.7 x 1.4 x 0.42 | 4 | 2 |
+| `slope_1x3` | 1 x 3 | 3 | 8 x 24 x 9.6 | 7.8 x 23.8 x 9.6 | 0.35 x 1.05 x 0.42 | 1 | 0.8 |
+| `slope_2x3` | 2 x 3 | 3 | 16 x 24 x 9.6 | 15.8 x 23.8 x 9.6 | 0.7 x 1.05 x 0.42 | 2 | 1.6 |
 
 ## `slope_1x2`
 
@@ -49,4 +51,29 @@ uses; **real** is the outline to model, 0.1 mm in from the grid on every side.
   ![slope_2x4 profile](profiles/slope_2x4.svg)
 
 - **Orientations:** slope_2x4_y0, slope_2x4_y0_i, slope_2x4_y1, slope_2x4_y1_i, slope_2x4_y2, slope_2x4_y2_i, slope_2x4_y3, slope_2x4_y3_i
+
+## `slope_1x3`
+
+- **Grid** 8 x 24 x 9.6 mm; **real** 7.8 x 23.8 x 9.6 mm; studs add 1.7 mm on top.
+- **Studs on top** (1, Ø4.8 x 1.7 mm, centres x, z): (4, 20)
+- **Underside tubes** (Ø6.51 outer / Ø4.8 inner, centres x, z): none
+- **Underside anti-stud pins** (one-wide part, between sockets; centres x, z): (4, 8), (4, 16)
+- **Profile** in the ZY plane (first number Z, second Y), extruded along X from 0 to 8 mm:
+  (0, 0), (24, 0), (24, 9.6), (16, 9.6), (0, 3.2)
+
+  ![slope_1x3 profile](profiles/slope_1x3.svg)
+
+- **Orientations:** slope_1x3_y0, slope_1x3_y0_i, slope_1x3_y1, slope_1x3_y1_i, slope_1x3_y2, slope_1x3_y2_i, slope_1x3_y3, slope_1x3_y3_i
+
+## `slope_2x3`
+
+- **Grid** 16 x 24 x 9.6 mm; **real** 15.8 x 23.8 x 9.6 mm; studs add 1.7 mm on top.
+- **Studs on top** (2, Ø4.8 x 1.7 mm, centres x, z): (4, 20), (12, 20)
+- **Underside tubes** (Ø6.51 outer / Ø4.8 inner, centres x, z): (8, 8), (8, 16)
+- **Profile** in the ZY plane (first number Z, second Y), extruded along X from 0 to 16 mm:
+  (0, 0), (24, 0), (24, 9.6), (16, 9.6), (0, 3.2)
+
+  ![slope_2x3 profile](profiles/slope_2x3.svg)
+
+- **Orientations:** slope_2x3_y0, slope_2x3_y0_i, slope_2x3_y1, slope_2x3_y1_i, slope_2x3_y2, slope_2x3_y2_i, slope_2x3_y3, slope_2x3_y3_i
 

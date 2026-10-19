@@ -92,6 +92,8 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("flatten", "center", "radius", "normal", "point", "strength", "part"),
             &SdfForm::flatten);
     ClassDB::bind_method(D_METHOD("stamp_mesh", "op", "verts", "index", "part"), &SdfForm::stamp_mesh);
+    ClassDB::bind_method(D_METHOD("lathe", "op", "xform", "profile", "blend", "part"), &SdfForm::lathe);
+    ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
     ClassDB::bind_method(D_METHOD("clear"), &SdfForm::clear);
@@ -452,6 +454,184 @@ void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedIn
         return (*k->sd)[(size_t)x + (size_t)k->D.x * ((size_t)y + (size_t)k->D.y * z)];
     };
     apply_shape(op, lo, hi, 0.0f, part, fn, &ctx);
+}
+
+namespace {
+struct Lathe { Transform3D inv; std::vector<Vector2> poly; };
+// Inigo Quilez's polygon distance, in the (out, along) half-plane.
+float lathe_fn(const Vector3 &p, const void *c) {
+    const Lathe *k = (const Lathe *)c;
+    const Vector3 l = k->inv.xform(p);
+    const Vector2 q(Vector2(l.x, l.z).length(), l.y);
+    const std::vector<Vector2> &v = k->poly;
+    const size_t n = v.size();
+    float d = (q - v[0]).length_squared();
+    float s = 1.0f;
+    for (size_t i = 0, j = n - 1; i < n; j = i, ++i) {
+        const Vector2 e = v[j] - v[i], w = q - v[i];
+        const float ee = e.length_squared();
+        const Vector2 b = w - e * (ee > 0.0f ? std::clamp(w.dot(e) / ee, 0.0f, 1.0f) : 0.0f);
+        d = std::min(d, b.length_squared());
+        const bool c1 = q.y >= v[i].y, c2 = q.y < v[j].y, c3 = e.x * w.y > e.y * w.x;
+        if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) s = -s;
+    }
+    return s * std::sqrt(d);
+}
+} // namespace
+
+void SdfForm::lathe(int op, const Transform3D &xform, const PackedVector2Array &profile, float blend, int part) {
+    if (op == SMOOTH || op == GROW || profile.size() < 2) return;
+    Lathe k{xform.affine_inverse(), {}};
+    float rmax = 0.0f, ylo = 1e30f, yhi = -1e30f;
+    k.poly.push_back(Vector2(0.0f, profile[0].y));
+    for (int64_t i = 0; i < profile.size(); ++i) {
+        const Vector2 v(std::max(profile[i].x, 0.0f), profile[i].y);
+        k.poly.push_back(v);
+        rmax = std::max(rmax, v.x);
+        ylo = std::min(ylo, v.y);
+        yhi = std::max(yhi, v.y);
+    }
+    k.poly.push_back(Vector2(0.0f, profile[profile.size() - 1].y));
+    if (rmax <= 0.0f) return;
+    const float reach = BAND + std::max(blend, 0.0f) + 1.0f;
+    Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+    for (int c = 0; c < 8; ++c) {
+        const Vector3 p = xform.xform(Vector3(c & 1 ? rmax : -rmax, c & 2 ? yhi : ylo, c & 4 ? rmax : -rmax));
+        mn = mn.min(p);
+        mx = mx.max(p);
+    }
+    const Vector3 r(reach, reach, reach);
+    apply_shape(op, floor3(mn - r), ceil3(mx + r), blend, part, lathe_fn, &k);
+}
+
+PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array &pieces, float min_gain) const {
+    PackedInt32Array out;
+    struct Piece { PackedByteArray grid; Vector3i size; Vector3 normal; int solid = 0; };
+    std::vector<Piece> kit;
+    for (int64_t i = 0; i < pieces.size(); ++i) {
+        const Dictionary d = pieces[i];
+        Piece p;
+        p.grid = d.get("grid", PackedByteArray());
+        p.size = d.get("size", Vector3i());
+        p.normal = Vector3(d.get("normal", Vector3())).normalized();
+        if ((int64_t)p.size.x * STUD * p.size.y * PLATE * p.size.z * STUD != p.grid.size()) p.size = Vector3i();
+        kit.push_back(p);
+    }
+    auto ckey = [](const Vector3i &c) {
+        return ((int64_t)(c.x + OFF) << 42) | ((int64_t)(c.y + OFF) << 21) | (int64_t)(c.z + OFF);
+    };
+    std::unordered_map<int64_t, bool> allowed;   // -> taken
+    for (int64_t i = 0; i + 2 < cells.size(); i += 3) {
+        allowed[ckey(Vector3i(cells[i], cells[i + 1], cells[i + 2]))] = false;
+    }
+    // A cell's 50 samples: which are inside (bit per sample), and whether its middle is.
+    std::unordered_map<int64_t, uint64_t> inside;
+    auto bits = [&](const Vector3i &c) -> uint64_t {
+        const int64_t k = ckey(c);
+        auto it = inside.find(k);
+        if (it != inside.end()) return it->second;
+        uint64_t m = 0;
+        int n = 0;
+        for (int z = 0; z < STUD; ++z)
+            for (int y = 0; y < PLATE; ++y)
+                for (int x = 0; x < STUD; ++x, ++n)
+                    if (d_at(c.x * STUD + x, c.y * PLATE + y, c.z * STUD + z) < 0.0f) m |= uint64_t(1) << n;
+        inside[k] = m;
+        return m;
+    };
+    auto mid_inside = [&](const Vector3i &c) {
+        return trilinear(Vector3(c.x * STUD + 2.5f, c.y * PLATE + 1.0f, c.z * STUD + 2.5f)) < 0.0f;
+    };
+    struct Cand { int piece; Vector3i at; int gain; };
+    std::vector<Cand> cands;
+    std::vector<std::unordered_map<int64_t, bool>> tried(kit.size());
+    const Vector3i nb[6] = {Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+            Vector3i(0, 0, 1), Vector3i(0, 0, -1)};
+    for (const auto &kv : allowed) {
+        const Vector3i c((int)((kv.first >> 42) & 0x1FFFFF) - (int)OFF, (int)((kv.first >> 21) & 0x1FFFFF) - (int)OFF,
+                (int)(kv.first & 0x1FFFFF) - (int)OFF);
+        bool surface = false;
+        for (const Vector3i &d : nb) {
+            const Vector3i n = c + d;
+            surface = surface || (!allowed.count(ckey(n)) && !mid_inside(n));
+        }
+        if (!surface) continue;
+        const Vector3 m(c.x * STUD + 2.5f, c.y * PLATE + 1.0f, c.z * STUD + 2.5f);
+        Vector3 g(trilinear(m + Vector3(1, 0, 0)) - trilinear(m - Vector3(1, 0, 0)),
+                trilinear(m + Vector3(0, 1, 0)) - trilinear(m - Vector3(0, 1, 0)),
+                trilinear(m + Vector3(0, 0, 1)) - trilinear(m - Vector3(0, 0, 1)));
+        if (g.length_squared() < 1e-6f) continue;
+        g = g.normalized();
+        for (int pi = 0; pi < (int)kit.size(); ++pi) {
+            const Piece &p = kit[pi];
+            if (p.size == Vector3i() || p.normal.dot(g) < 0.7f) continue;
+            for (int oz = 0; oz < p.size.z; ++oz)
+                for (int oy = 0; oy < p.size.y; ++oy)
+                    for (int ox = 0; ox < p.size.x; ++ox) {
+                        const Vector3i at = c - Vector3i(ox, oy, oz);
+                        if (!tried[pi].emplace(ckey(at), true).second) continue;
+                        // Its box: this part's free cells or empty space only.
+                        int mp = 0, mb = 0;
+                        bool ok = true;
+                        const uint8_t *gr = p.grid.ptr();
+                        const int gx = p.size.x * STUD, gy = p.size.y * PLATE;
+                        for (int bz = 0; bz < p.size.z && ok; ++bz)
+                            for (int by = 0; by < p.size.y && ok; ++by)
+                                for (int bx = 0; bx < p.size.x && ok; ++bx) {
+                                    const Vector3i bc = at + Vector3i(bx, by, bz);
+                                    const bool mine = allowed.count(ckey(bc)) > 0;
+                                    if (!mine && mid_inside(bc)) { ok = false; break; }
+                                    const uint64_t in = bits(bc);
+                                    int n = 0;
+                                    for (int z = 0; z < STUD; ++z)
+                                        for (int y = 0; y < PLATE; ++y)
+                                            for (int x = 0; x < STUD; ++x, ++n) {
+                                                const bool f = (in >> n) & 1;
+                                                const bool s = gr[(bx * STUD + x) + gx * ((by * PLATE + y) + gy * (bz * STUD + z))] != 0;
+                                                mp += s == f;
+                                                mb += mine == f;
+                                            }
+                                }
+                        const int total = p.size.x * p.size.y * p.size.z * STUD * PLATE * STUD;
+                        if (ok && mp - mb > 0 && (float)(mp - mb) >= min_gain * total) {
+                            cands.push_back({pi, at, mp - mb});
+                        }
+                    }
+        }
+    }
+    std::sort(cands.begin(), cands.end(), [](const Cand &a, const Cand &b) {
+        if (a.gain != b.gain) return a.gain > b.gain;
+        if (a.piece != b.piece) return a.piece < b.piece;
+        if (a.at.x != b.at.x) return a.at.x < b.at.x;
+        if (a.at.y != b.at.y) return a.at.y < b.at.y;
+        return a.at.z < b.at.z;
+    });
+    std::unordered_map<int64_t, bool> used;   // empty cells a piece took
+    for (const Cand &cd : cands) {
+        const Piece &p = kit[cd.piece];
+        bool free = true;
+        for (int bz = 0; bz < p.size.z && free; ++bz)
+            for (int by = 0; by < p.size.y && free; ++by)
+                for (int bx = 0; bx < p.size.x && free; ++bx) {
+                    const int64_t k = ckey(cd.at + Vector3i(bx, by, bz));
+                    auto it = allowed.find(k);
+                    free = it != allowed.end() ? !it->second : !used.count(k);
+                }
+        if (!free) continue;
+        for (int bz = 0; bz < p.size.z; ++bz)
+            for (int by = 0; by < p.size.y; ++by)
+                for (int bx = 0; bx < p.size.x; ++bx) {
+                    const int64_t k = ckey(cd.at + Vector3i(bx, by, bz));
+                    auto it = allowed.find(k);
+                    if (it != allowed.end()) it->second = true;
+                    else used[k] = true;
+                }
+        out.append(cd.piece);
+        out.append(cd.at.x);
+        out.append(cd.at.y);
+        out.append(cd.at.z);
+    }
+    return out;
 }
 
 void SdfForm::scale(float factor, const Vector3 &pivot) {

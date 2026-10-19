@@ -1616,15 +1616,20 @@ func _sculpt() -> void:
 	_ws.add_child(holder)
 	_ws.guides.append({"path": "", "real_mm": 1.0, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
 			"node": holder})
-	_ok("fill from guides stamps the model", _ws.sculpt_fill_from_guides() == 1)
+	_ok("a model goes into the part as SDF", _ws.sculpt_model_into(_ws.guides.size() - 1, SdfForm.ADD) == 1)
 	var n: int = _ws.sculpt.form.cells().size() / 5
 	_ok("a 4 x 2 x 2-stud box is about 4 x 5 x 2 cells", n >= 30 and n <= 50, str(n))
+	_ws.sculpt_model_into(_ws.guides.size() - 1, SdfForm.REMOVE)
+	_ok("and carves it out again", _ws.sculpt.form.cells().is_empty())
+	_ws._undo()
+	_ok("one undo puts it back", _ws.sculpt.form.cells().size() / 5 == n)
 	_ws.guides.pop_back()
 	holder.queue_free()
 	_ws.sculpt_clear()
 	_convert()
 	_convert_plain()
 	_stamp_box()
+	_lathe()
 	_ws.rail_pick("place")
 
 
@@ -1753,6 +1758,38 @@ func _convert_plain() -> void:
 	_ws.sculpt_convert()
 	_ok("and back and converted again: the same cells", _asset_cells() == first,
 			"%d vs %d" % [_asset_cells().size(), first.size()])
+
+
+## A lathe (Docs/AssetWorkshop.md, "SDF tools, round 3"): an axis, an outline clicked
+## point by point, laid with a click on the last point; one undo; Escape drops one.
+func _lathe() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_mode = "stamp"
+	_ws.sculpt_shape = "lathe"
+	var z := 5.0 * 30
+	_ws._sculpt_plane = Plane(Vector3.BACK, z)
+	_ws._lathe_axis = [Vector3(50, 40, z), Vector3(100, 40, z)]
+	_ws._lathe_op = SdfForm.ADD
+	for p in [Vector3(50, 46, z), Vector3(80, 50, z), Vector3(100, 44, z)]:
+		_ws.lathe_click(p)
+	_ok("a lathe's outline is drawn point by point", _ws._lathe_pts.size() == 3 and _ws.sculpt.form.cells().is_empty())
+	_ws.lathe_click(Vector3(100, 44.2, z))
+	var cells: int = _ws.sculpt.form.cells().size() / 5
+	_ok("a click on the last point lays it: round, fat in the middle", cells > 50 and _ws._lathe_axis.is_empty()
+			and _ws.sculpt.form.sample(Vector3(80, 40 + 9, z)) < 0.0 and _ws.sculpt.form.sample(Vector3(80, 40, z + 9)) < 0.0
+			and _ws.sculpt.form.sample(Vector3(52, 40 + 9, z)) > 0.0, str(cells))
+	_ws._undo()
+	_ok("one undo takes it off", _ws.sculpt.form.cells().is_empty())
+	_ws._lathe_axis = [Vector3(50, 40, z), Vector3(100, 40, z)]
+	_ws.lathe_click(Vector3(60, 45, z))
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_ok("Escape drops a lathe being drawn", _ws._lathe_key(esc) and _ws._lathe_axis.is_empty()
+			and _ws.sculpt.form.cells().is_empty())
+	_ws.sculpt_shape = "box"
+	_ws.sculpt_mode = "shape"
 
 
 ## A box stamp snapped to the grid: one undo, and Convert makes exactly its cells bricks.

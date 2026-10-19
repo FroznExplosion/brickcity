@@ -106,7 +106,7 @@ func _check_names(palette: Dictionary) -> void:
 		# gap between one floor and the next, so it stands on the floor below
 		# and the floor above stands on it.
 		var expect_y := 1
-		if bits[0] in ["brick", "bracket", "slope", "curve", "round", "arch"]:
+		if bits[0] in ["brick", "bracket", "slope", "curve", "round", "arch", "wedge"]:
 			expect_y = 3
 		elif bits[0] == "column":
 			expect_y = TowerRecipe.COLUMN_PLATES   # one storey: six courses
