@@ -541,9 +541,13 @@ func item_node(building_id: int, group: int) -> MultiMeshInstance3D:
 ## is not empty: what stood on a floor is still on that floor, wherever the
 ## floor ended up and whichever way up, whether or not anybody watched it fall.
 ##
-## It is a drawing, not bricks: it holds nothing and collides with nothing.
-## CityScene decides which pieces get one (`_stream_pieces`): still ones, near
-## the player -- nothing is made for wreckage nobody is near, or still moving.
+## Not a drawing any more (Interiors §8.14): the items are LAID into the
+## piece's chunk as bricks (BuildingRegistry.lay_item_into) and are the
+## piece's furniture from then on -- drawn with its bricks, solid, shot as
+## bricks are, and still there whatever the distance. This is the record of
+## which rooms a piece was asked for. CityScene decides which pieces are
+## (`_stream_pieces`): still ones, near the player -- nothing is laid on
+## wreckage nobody is near, or still moving.
 class PieceDraw:
 	extends RefCounted
 	var chunk := -1
@@ -566,6 +570,9 @@ class PieceDraw:
 	## or blasted since shows as that moving on.
 	var gone_sum := -1
 	var boxes := 0
+	## Blocks laid into the piece since its mesh and collision were last
+	## rebuilt: CityScene rebuilds them once the working out is done.
+	var laid := 0
 
 
 var _piece_draws := {}        ## piece chunk -> PieceDraw
@@ -597,12 +604,12 @@ func piece_drop(chunk: int) -> void:
 	_piece_draws.erase(chunk)
 
 
-## Work out one piece's interior, until `until_usec` (a room is always done),
-## and put it on screen under `parent` -- the piece's own node -- once every
-## room is. `lo`..`hi` is the piece's box in cells (the building's grid).
-## True when it is drawn and up to date.
+## Lay one piece's interior as bricks, until `until_usec` (a room is always
+## done). `lo`..`hi` is the piece's box in cells (the building's grid). True
+## when every room has been asked; `PieceDraw.laid` then says how many blocks
+## went in, for the caller to rebuild the piece with.
 func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vector3i,
-		edits: int, parent: Node3D, until_usec: int, alive: int = -1) -> bool:
+		edits: int, _parent: Node3D, until_usec: int, alive: int = -1) -> bool:
 	var t0 := Time.get_ticks_usec()
 	var p: PieceDraw = _piece_draws.get(chunk)
 	if p == null:
@@ -616,8 +623,6 @@ func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vect
 		p.edits = edits
 		p.alive = alive
 		p.cursor = 0
-		p.pieces.clear()
-		p.items.clear()
 		p.rooms = PackedInt32Array()
 		for room in rooms:
 			# Its FLOOR is the cell under it; its plan is its own box.
@@ -627,7 +632,6 @@ func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vect
 					or room.lo.z >= hi.z or room.lo.z + room.size.z <= lo.z:
 				continue
 			p.rooms.push_back(room.id)
-	var offset: Vector3i = registry._rebase_of(b)
 	var worked := 0
 	while p.cursor < p.rooms.size():
 		if worked > 0 and Time.get_ticks_usec() >= until_usec:
@@ -638,21 +642,9 @@ func piece_work(b: BuildingRegistry.Building, chunk: int, lo: Vector3i, hi: Vect
 		worked += 1
 		if room.items.is_empty():
 			room.items = RoomManifest.items_for(room)
-		if room.items.is_empty():
-			continue
-		var d := RoomManifest.draw_items(world, chunk, registry.palette, room, offset)
-		if not (d.buffer as PackedFloat32Array).is_empty():
-			p.pieces.append(d.buffer)
-		if not (d.details as PackedFloat32Array).is_empty():
-			p.items.append(d.details)
+		for i in room.items.size():
+			p.laid += registry.lay_item_into(b.id, room.id, i, chunk)
 	rooms_worked += worked
-	p.boxes = FurnitureMesh.attach_group(p.pieces, parent, _piece_nodes_p, chunk, piece_material())
-	FurnitureMesh.attach_group(p.items, parent, _piece_nodes_i, chunk, item_material())
-	var items = _piece_nodes_i.get(chunk)
-	if items != null and is_instance_valid(items):
-		(items as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		if not (items as Node).is_in_group(DebugView.GROUP_ITEMS):
-			DebugView.tag(items as MultiMeshInstance3D, DebugView.Kind.ITEMS)
 	if not p.shown:
 		pieces_drawn += 1
 	p.shown = true

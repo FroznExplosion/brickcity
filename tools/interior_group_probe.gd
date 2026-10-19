@@ -317,40 +317,58 @@ func _check_section(w: BrickWorld, reg: BuildingRegistry, groups: InteriorGroups
 			lost.size() > 0 and left == before - lost_rows and left > 0 and not any_written_off,
 			"%d box(es) before, %d taken out with %d piece(s), %d left" % [
 				before, lost_rows, lost.size(), left])
+	# The piece's furniture is laid into it as bricks (Interiors 8.14): every
+	# item that left the building with this floor, and nothing else.
 	var on_piece := Node3D.new()
 	root.add_child(on_piece)
 	var p_origin: Vector3i = w.get_chunk_origin(piece_chunk)
 	var p_dims: Vector3i = w.get_chunk_dims(piece_chunk)
+	var laid0 := reg.items_laid
+	var deco0 := w.get_decorative_blocks(piece_chunk).size()
 	var done := groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
 			p_origin + p_dims + Vector3i.ONE, 0, on_piece, far)
-	var drawn: InteriorGroups.PieceDraw = groups.piece(piece_chunk)
-	_ok("and the piece draws exactly that: the same boxes, on the piece",
-			done and drawn != null and drawn.shown and drawn.boxes == lost_rows
-			and on_piece.get_child_count() >= 1,
-			"%d box(es) on the piece for %d that left the building" % [
-				drawn.boxes if drawn != null else -1, lost_rows])
-	# In the piece's own space: a box that was at height h in the building is
-	# at h less the piece's origin, so the lowest thing on the piece stands
-	# just above the piece's own bottom, not 16 m up it.
-	var lowest := INF
-	var node: MultiMeshInstance3D = on_piece.get_child(0) if on_piece.get_child_count() > 0 else null
-	if node != null:
-		var buffer: PackedFloat32Array = node.get_meta(&"buffer", PackedFloat32Array())
-		for i in buffer.size() / FurnitureMesh.STRIDE:
-			lowest = minf(lowest, buffer[i * FurnitureMesh.STRIDE + 7])
-	_ok("in the piece's own space, standing on the piece's floors",
-			lowest > 0.0 and lowest < float(TowerRecipe.STOREY_PLATES) * cs.y,
-			"the lowest box is %.2f m up the piece" % lowest)
+	var rec: InteriorGroups.PieceDraw = groups.piece(piece_chunk)
+	var deco := w.get_decorative_blocks(piece_chunk).size()
+	var gone_after := 0
+	for o in lost:
+		if reg.get_room(b.id, int(o.room)).gone.has(int(o.item)):
+			gone_after += 1
+	_ok("and the piece lays exactly that, as bricks: every item that left with its floor",
+			done and rec != null and rec.shown and reg.items_laid - laid0 > 0
+			and reg.items_laid - laid0 + gone_after == lost.size()
+			and deco > deco0 and rec.laid == deco - deco0 and on_piece.get_child_count() == 0,
+			"%d item(s) laid (%d block(s)), %d with wreckage where they stood, of %d that left the building; %d node(s) drawn" % [
+				reg.items_laid - laid0, deco - deco0, gone_after, lost.size(), on_piece.get_child_count()])
+	# On the piece's floors: each laid item stands on bricks of the piece, and
+	# nothing it holds is left to draw.
+	var off_floor := 0
+	var still_drawn := 0
+	var offset: Vector3i = reg._rebase_of(b)
+	for o in lost:
+		var room := reg.get_room(b.id, int(o.room))
+		if room.laid.has(int(o.item)):
+			var item: Dictionary = room.items[int(o.item)]
+			if RoomManifest.item_floor_share(w, piece_chunk, str(item.type),
+					(item.cell as Vector3i) - offset) <= 0.5:
+				off_floor += 1
+	for index in rec.rooms:
+		var d := RoomManifest.draw_items(w, piece_chunk, reg.palette, reg.get_room(b.id, index), offset)
+		still_drawn += (d.buffer as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+	_ok("standing on the piece's own floors, with nothing of it left to draw",
+			off_floor == 0 and still_drawn == 0,
+			"%d laid off a floor, %d box(es) a drawing would still give" % [off_floor, still_drawn])
 	var again := groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
 			p_origin + p_dims + Vector3i.ONE, 0, on_piece, far)
 	var worked := groups.rooms_worked
 	groups.piece_work(b, piece_chunk, p_origin - Vector3i.ONE,
 			p_origin + p_dims + Vector3i.ONE, 1, on_piece, far)
-	_ok("asked again it is the same drawing; told the piece changed, it is worked out again",
-			again and groups.piece(piece_chunk).boxes == lost_rows and groups.rooms_worked > worked)
+	_ok("asked again nothing more is laid; told the piece changed, it is asked again and lays nothing twice",
+			again and groups.rooms_worked > worked
+			and w.get_decorative_blocks(piece_chunk).size() == deco,
+			"%d block(s), then %d" % [deco, w.get_decorative_blocks(piece_chunk).size()])
 	groups.piece_drop(piece_chunk)
-	_ok("a piece let go draws nothing", groups.piece(piece_chunk) == null
-			and on_piece.get_child_count() == 0 or (on_piece.get_child(0) as Node).is_queued_for_deletion())
+	_ok("a piece let go keeps its furniture: it is its bricks", groups.piece(piece_chunk) == null
+			and w.get_decorative_blocks(piece_chunk).size() == deco)
 	on_piece.queue_free()
 
 

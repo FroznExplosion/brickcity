@@ -398,6 +398,41 @@ func lay_item(building_id: int, index: int, i: int) -> int:
 var items_laid := 0   ## items laid as bricks one at a time, all told
 
 
+## Lay ONE item of a room as bricks into a PIECE of the building: `chunk`, an
+## island that came off it and kept the building's cells. Wreckage furniture
+## is bricks (Interiors §8.14): it collides, it can be shot, it stays on its
+## floor whichever way up the piece lies and at every distance. Returns how
+## many blocks were laid.
+##
+## Only an item whose floor is mostly in `chunk` (item_floor_share), as for
+## the building. Not recorded in the building's `laid_rooms` and its blocks are
+## not kept: they are the piece's, and go where its bricks go. `room.laid`
+## stays set, so neither the building nor a later piece lays or draws it again.
+func lay_item_into(building_id: int, index: int, i: int, chunk: int) -> int:
+	var b := get_building(building_id)
+	var room := get_room(building_id, index)
+	if b == null or room == null or chunk < 0:
+		return 0
+	if room.items.is_empty():
+		room.items = RoomManifest.items_for(room)
+	if i < 0 or i >= room.items.size() or room.gone.has(i) or room.laid.has(i):
+		return 0
+	var item: Dictionary = room.items[i]
+	var offset := _rebase_of(b)
+	if RoomManifest.item_floor_share(world, chunk, str(item.type),
+			(item.cell as Vector3i) - offset) <= 0.5:
+		return 0
+	var blocks := RoomManifest.build_item(world, chunk, palette,
+			{"type": item.type, "cell": item.cell, "yaw": item.yaw}, 4 + int(i % 8), offset)
+	if blocks.is_empty():
+		# Wreckage where it stood: it cannot be both, as in lay_item.
+		room.gone[i] = true
+		return 0
+	room.laid[i] = true
+	items_laid += 1
+	return blocks.size()
+
+
 ## Every interior piece a blast reaches, where it stands: laid as bricks if
 ## somebody could see it (`build`), written off if nobody could -- for the
 ## pieces inside `radius` of the point and no others. Returns
