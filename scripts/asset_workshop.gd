@@ -459,7 +459,7 @@ func _shot() -> void:
 			sculpt_convert()
 			print("[sculpt] converted in %d ms: %d bricks, shells %s" % [Time.get_ticks_msec() - t0, recipe.size(),
 					str(_shell_tris)])
-		rail_pick("sketch")
+		rail_pick("sculpt")
 		var bb := sculpt.form.bounds()
 		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
 				sculpt.triangles(), sculpt.form.cells().size() / 5, str(bb)])
@@ -1012,7 +1012,8 @@ func _unhandled_input(e: InputEvent) -> void:
 				else:
 					set_mirror(not mirror_on)
 			KEY_F: set_free(not free_place)
-			KEY_D: set_tool("" if tool == "sketch" else "sketch")
+			KEY_D: rail_pick("place" if rail_active() == "sketch" else "sketch")
+			KEY_V: rail_pick("place" if rail_active() == "sculpt" else "sculpt")
 			KEY_U: set_tool("" if tool == "stud" else "stud")
 			KEY_G: set_tool("" if tool == "move" else "move")
 			KEY_E: set_exploded(not exploded)
@@ -2417,8 +2418,9 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_sketch_box = VBoxContainer.new()
 	box.add_child(_sketch_box)
 	var t4 := Label.new()
-	t4.text = "Block out (Alt D)"
+	t4.text = "Sculpt in 3D (Alt V)"
 	_sketch_box.add_child(t4)
+	_sketch_title = t4
 	var how := Label.new()
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	how.custom_minimum_size.x = RAIL_W - 16
@@ -2430,7 +2432,6 @@ func _build_phase3(layer: CanvasLayer) -> void:
 			+ "4. Then finish it below: size, curves, and a smooth shell.")
 	_sketch_box.add_child(how)
 	_sketch_how = how
-	how.visible = sketch_draw != "sculpt"
 	_build_sculpt_box()
 	_sketch_box.move_child(_sculpt_box, 1)
 	var wrow := HBoxContainer.new()
@@ -2558,6 +2559,16 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	var hint := Label.new()
 	hint.text = "LMB draws in, RMB draws out. A part's first plane sets its thickness; on another plane, in keeps what is inside, out cuts through."
 	_sketch_box.add_child(hint)
+	# Everything after the sculpt panel but the curves (Convert uses them too) is the 2D
+	# sketch's own: its box, shown only with the Sketch tool.
+	_sketch2d_box = VBoxContainer.new()
+	var keep := [t4, _sculpt_box, curve_label, _curve_slider]
+	for c in _sketch_box.get_children():
+		if not keep.has(c):
+			_sketch_box.remove_child(c)
+			_sketch2d_box.add_child(c)
+	_sketch_box.add_child(_sketch2d_box)
+	_sync_sketch_panels()
 	var clear := Button.new()
 	clear.text = "Clear this view"
 	clear.pressed.connect(func() -> void: clear_sketch(_sketch_key()))
@@ -5456,16 +5467,20 @@ static func _seen_from(vol: Dictionary, plane: String) -> Dictionary:
 	return out
 
 ## The rail's tools: id, name, key. "place" is no tool at all: the workshop's own hand.
-const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sketch", "Block out", "Alt D"],
-		["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
+## Sculpt and Sketch are one tool inside ("sketch"): sculpt draws into the SDF in 3D, the
+## sketch's 2D draws lay bricks (Docs/AssetWorkshop.md, "SDF tools, round 3").
+const RAIL_TOOLS := [["place", "Place", "Esc"], ["paint", "Paint", "B"], ["sculpt", "Sculpt (3D)", "Alt V"],
+		["sketch", "Sketch (2D)", "Alt D"], ["shape", "Shapes", "K"], ["select", "Select", "L"], ["stud", "Studs", "Alt U"],
 		["move", "Move part", "Alt G"], ["measure", "Measure", "Alt M"]]
-const SKETCH_DRAWS := [["sculpt", "sculpt in 3D"], ["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
+const SKETCH_DRAWS := [["outline", "outline (freehand)"], ["brush", "brush"], ["rect", "rectangle"],
 		["ellipse", "ellipse"], ["polygon", "polygon (click corners)"]]
 const PAINT_WHAT := [["both", "colour and material"], ["colour", "colour only"], ["material", "material only"]]
 
 const RAIL_W := 184.0
 const RAIL_FONT := 12
 var sketch_draw := "sculpt"
+## The Sketch tool's last 2D draw, for when it is picked again.
+var _draw_2d := "outline"
 ## The SDF block-out (Docs/AssetWorkshop.md, "The SDF block-out"): its brush.
 const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a shape (drag)"],
 		["flatten", "flatten"], ["grow", "grow (LMB) / shrink (RMB)"], ["smooth", "smooth"],
@@ -5497,6 +5512,8 @@ var _sculpt_plane := Plane(Vector3.BACK, 0.0)
 var _sculpt_box: VBoxContainer
 var _sculpt_note: Label
 var _sketch_how: Label
+var _sketch2d_box: VBoxContainer
+var _sketch_title: Label
 var _sdf_meta := {}
 ## "sdf" while the block-out is sculpted; "bricks" once converted.
 var sculpt_state := "sdf"
@@ -5701,9 +5718,8 @@ func _build_rail(layer: CanvasLayer) -> void:
 	draws.focus_mode = Control.FOCUS_NONE
 	draws.item_selected.connect(func(i: int) -> void:
 		sketch_draw = SKETCH_DRAWS[i][0]
-		_sculpt_box.visible = sketch_draw == "sculpt"
-		_sketch_how.visible = sketch_draw != "sculpt"
-		sculpt.show_cursor(null, 0.0, Color.WHITE)
+		_draw_2d = sketch_draw
+		_sync_sketch_panels()
 		_sketch.clear())
 	_draw_box.add_child(draws)
 
@@ -5756,6 +5772,15 @@ func _rail_right() -> float:
 ## A rail button: the tool it names, everything else put down.
 func rail_pick(id: String) -> void:
 	match id:
+		"sculpt", "sketch":
+			set_measure(false)
+			_set_painting(false)
+			var draw := "sculpt" if id == "sculpt" else _draw_2d
+			if draw != sketch_draw:
+				_sketch.clear()
+			sketch_draw = draw
+			set_tool("sketch")
+			_sync_sketch_panels()
 		"place":
 			set_tool("")
 			_set_painting(false)
@@ -5778,9 +5803,24 @@ func rail_active() -> String:
 		return "paint"
 	if measure_on:
 		return "measure"
+	if tool == "sketch":
+		return "sculpt" if sketch_draw == "sculpt" else "sketch"
 	if _rail_buttons.has(tool):
 		return tool
 	return "place"
+
+
+## The Sculpt tool's panel or the Sketch tool's, as the tool in hand is.
+func _sync_sketch_panels() -> void:
+	if _sculpt_box == null:
+		return
+	var sculpting := sketch_draw == "sculpt"
+	_sculpt_box.visible = sculpting
+	_sketch2d_box.visible = not sculpting
+	_sketch_title.text = "Sculpt in 3D (Alt V)" if sculpting else "Sketch in 2D: bricks (Alt D)"
+	if not sculpting and sculpt != null:
+		sculpt.show_cursor(null, 0.0, Color.WHITE)
+		sculpt.show_ghost({}, Color.WHITE)
 
 
 ## The brush in hand: the paint brush while painting, else the sketch brush.
@@ -5835,7 +5875,7 @@ func _rail_process() -> void:
 		_paint_palette.position = Vector2(_rail_right(), _rail.position.y)
 	# The workshop's own readout moves over beside the rail.
 	_hud.position = Vector2(_rail_right(), _rail.position.y)
-	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(sketch_draw))
+	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(_draw_2d))
 
 
 ## Paint only what the rail says: colour, material, or both (the workshop's own).
@@ -8340,7 +8380,8 @@ func _build_menus() -> void:
 			[],
 		]],
 		["Block out", [
-			["Block out tool (draw a part's shape)", "Alt D", func() -> void: rail_pick("sketch")],
+			["Sculpt tool (3D, the SDF block-out)", "Alt V", func() -> void: rail_pick("sculpt")],
+			["Sketch tool (2D, straight into bricks)", "Alt D", func() -> void: rail_pick("sketch")],
 			["Shapes brush (balls, cubes, cylinders)", "K", func() -> void:
 				rail_pick("shape")
 				shape_mode = "brush"],

@@ -1127,7 +1127,7 @@ func _round9() -> void:
 	for t in _ws.RAIL_TOOLS:
 		rail_keys.append(t[2])
 	_ok("every key's action is in a menu", missing.is_empty(), str(missing))
-	_ok("and every tool's on the rail", rail_keys.has("Alt D") and rail_keys.has("Alt U") and rail_keys.has("Alt G")
+	_ok("and every tool's on the rail", rail_keys.has("Alt D") and rail_keys.has("Alt V") and rail_keys.has("Alt U") and rail_keys.has("Alt G")
 			and rail_keys.has("K") and rail_keys.has("L"), str(rail_keys))
 	var pick := func(label: String) -> void:
 		for t in items:
@@ -1569,7 +1569,11 @@ func _shells() -> void:
 ## field, not in bricks; one undo each; saved with the gun.
 func _sculpt() -> void:
 	_ws.rail_pick("sketch")
-	_ok("sculpt is the Block out tool's first way to draw", _ws.sketch_draw == "sculpt")
+	_ok("the Sketch tool draws in 2D", _ws.sketch_draw != "sculpt" and _ws.rail_active() == "sketch"
+			and not _ws._sculpt_box.visible and _ws._sketch2d_box.visible)
+	_ws.rail_pick("sculpt")
+	_ok("the Sculpt tool sculpts in 3D, its own panel", _ws.sketch_draw == "sculpt" and _ws.rail_active() == "sculpt"
+			and _ws._sculpt_box.visible and not _ws._sketch2d_box.visible)
 	_ws.sculpt_clear()
 	var bricks: int = _ws.recipe.size()
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(10, 4, 8) * STUD)
@@ -1628,7 +1632,7 @@ func _sculpt() -> void:
 ## bricks; brick edits back into the field 1:1.
 func _convert() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	var body: int = _ws.part_names.find("body")
 	var barrel: int = _ws.part_names.find("barrel")
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
@@ -1724,7 +1728,7 @@ func _convert() -> void:
 ## Nothing marked smooth: Convert makes it all bricks, no custom pieces.
 func _convert_plain() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(30, 10, 30) * STUD)
 	_ws.sculpt.form.begin_edit()
 	_ws._sculpt_op = SdfForm.ADD
@@ -1754,7 +1758,7 @@ func _convert_plain() -> void:
 ## A box stamp snapped to the grid: one undo, and Convert makes exactly its cells bricks.
 func _stamp_box() -> void:
 	_ws._reset_space()
-	_ws.rail_pick("sketch")
+	_ws.rail_pick("sculpt")
 	_ws.sculpt_mode = "stamp"
 	_ws.sculpt_shape = "box"
 	_ws.sculpt_snap = true
