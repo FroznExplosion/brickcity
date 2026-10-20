@@ -504,6 +504,15 @@ public:
     /// On: the slope rule -- ground that slopes more than `curve_slope`
     /// (plates a stud, regional) curves, flat ground is laid brick, pads and
     /// cliffs are brick, and what `paint_form` painted beats all of it.
+    /// Low-poly curves (Terrain.md 18.7): studs a side of one curve quad
+    /// where a whole block and the ring round it are curve. 1 is a quad a
+    /// stud, as before; it must divide the tile.
+    /// Bricks poking out of curved ground (Terrain.md 18.7): the share of
+    /// curve cells a brick starts on. 0 for none.
+    static void set_curve_bricks(double share);
+    static double get_curve_bricks();
+    static void set_curve_step(int studs);
+    static int get_curve_step();
     static void set_smooth_slopes(bool on);
     static bool get_smooth_slopes();
     static void set_curve_slope(double plates_per_stud);

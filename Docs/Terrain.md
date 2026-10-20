@@ -1898,6 +1898,58 @@ on its flat spots -- and the outline of every hill is the far tier's. What
 would make it cheaper is a curve with a vertex every two studs where it is
 gentle, not built yet.
 
+### 18.7 Low-poly curves, plain curves, bricks poking out (2026-10-20)
+
+What the user asked for after trying 18.6: ground that is nearly all smooth low-poly, laid brick on
+the flats, and sparse bricks in patches -- "somewhat similar to real LEGO games that don't have
+bricks as terrain" -- because pressing C showed curves but "it never removes the bricks". Three
+changes, all only where ground is curved (the `hills` and `slopes` grounds; `brick` is untouched):
+
+* **Low-poly.** `BrickTerrain.set_curve_step(4)` (default): on a grid of 4-stud blocks, every
+  4-stud edge with curve on both sides has the corners along it moved onto the straight line
+  between its ends, and a block whose 16 cells are curve and whose four edges were moved is ONE
+  quad. Both tiles sharing a tile edge see the cells either side of it (the sample's one-cell
+  border), so they move the same corners and nothing opens at the tile seam; an edge next to brick
+  is never moved, so the brick seam (18.5) is as it was. Collision and studs read the moved
+  corners, so they stand on what is drawn. The first version needed a ring of curve round a block
+  and kept blocks off the tile's edge: 23% fewer triangles. Edges first: **42% fewer** (9 tiles,
+  curve threshold 0.25: 23,166 → 13,356).
+* **Plain curves.** `plain_curves` in `terrain.gdshader` (on): no layer lines or nozzle paths on
+  curved ground. On a slope the layer lines are contours a course apart -- they were the terraces
+  the curve had removed, drawn back on. Studs on its flat spots keep theirs.
+* **Bricks poking out.** `set_curve_bricks(1/110)`: a 2x2 or 2x4 brick starts on one curve cell
+  in 110, level, its top a plate over the highest ground under it and deep enough to reach the
+  lowest -- buried uphill, proud downhill, never floating -- with studs, and one in four has a 2x2
+  stacked on it. Each is its own instance on the stud grid (`bricks` buffer, drawn to 70 m), not
+  cells of the ground: the patch-on-its-own-frame Planets.md 9.4 asks for. No collision, like
+  scatter. 55 on the probe's 9 tiles.
+
+On "slopes" ground two more things kept it reading as brick from a distance, and are off there:
+
+* **Studs on every level-ish cell.** `plate` means the four columns are on one plate, which on
+  gentle curved ground is most of it -- 73,000 studs over the test field, terraces of studs. Now a
+  curve cell takes a stud only where the DRAWN curve is level (corners within a quarter plate),
+  and then one in eight: 20,000.
+* **The curve was studded and tinted per cell.** Studded means the shader paints a stud on the
+  cell past the geometry studs' 18 m; tinted per cell, a hill was a mosaic of 1x1 squares. A curve
+  on slopes ground is unstudded and drifts a few percent in colour over ~30 studs.
+
+Measured, `heightfield_test -- --slopeshot --curve=0.1` (curve threshold 0.1: 96% curved), the
+whole frame in four views, against laid brick:
+
+| | detail tris | far tris | studs | frame tris |
+|---|---|---|---|---|
+| laid brick | 381k–409k | 468k | 52k–54k | 824k–985k |
+| slopes, a quad a stud (18.6) | 853k | 369k | 62k | 1,019k–1,217k |
+| **slopes, 18.7** | **431k** | 369k | 20k | **827k–984k** |
+
+So curved ground now costs what laid brick does, frame for frame, where 18.6 cost a fifth more;
+what is still dear is the 1x1 curve cells beside every bit of brick (the edge rule cannot merge
+across brick). F10 has the threshold, the curve quad size and the brick share.
+
+`terrain_probe` checks the triangle saving, one top surface a cell with the merge, and that bricks
+appear; the §18.5 collision check runs at a quad a stud, the curve it rebuilds.
+
 ---
 
 ## 19. View distance, and what it actually costs
