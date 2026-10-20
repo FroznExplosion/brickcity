@@ -354,7 +354,8 @@ room in it) and **one item drawing** (all its items). No per-room, outer-room or
 what is drawn; only the group's distance does:
 
 * interior pieces shown inside `INTERIOR_RANGE` (~100 m — the shell's painted windows take over past
-  it, as today);
+  it, as today; **60 m since 2026-10-19**, with painted windows on a building in bricks too --
+  [DestructionLod.md](DestructionLod.md) §5.2);
 * items shown inside `ITEM_RANGE` (~20 m);
 * **no pop**: both fade in and out over a band with the same screen-door dither the impostor ladder
   uses (`ImpostorLod._fading`), so nothing appears or vanishes in one frame. Loot gets the same fade at

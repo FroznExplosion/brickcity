@@ -69,7 +69,7 @@ The near tier's own ranges (14 / 70 m) are drawing detail, not a ring, and stay.
 | case | today | wanted |
 |---|---|---|
 | walk in while a far collapse falls | pieces keep far rules; a landing is judged when it lands | same |
-| walk up to a building that fell far away | far collapse writes its furniture off (`CollapseDirector.is_far`): an empty wreck | not written off; laid on the pieces when somebody is near (§8.14) |
+| walk up to a building that fell far away | its pieces carry what stood on their floors, laid when somebody is near (Interiors §8.14); only furniture already laid as bricks before a far collapse is deleted (`CollapseDirector`, its "furniture" group) | same -- corrected 2026-10-19: the manifest's items were never written off by a far collapse |
 | walk away from a collapse | pieces sleep 6 s after settling; laid furniture stays | same |
 | walk back to sleeping wreckage | a sleeping stand-in carries nothing until woken at 120 m | same; it is laid on waking if it was not before |
 | shoot a shell from mid range | it becomes bricks and its furniture pops in | bricks, still painted windows until near |
@@ -92,7 +92,7 @@ are looked at again: those that no longer fire on the passes are candidates to g
 A building made bricks by a hit, outside the near ring, keeps the shell's painted windows
 (the `_far_real` panes, Structures §4.2) and builds no storey groups. Storey groups are made for
 the near ring only. A building hit inside the near ring holds its groups as today while it comes
-apart. Far collapse no longer writes furniture off: what was on a floor is on that floor.
+apart.
 
 ### 3.3 One set of rings
 The ranges of §1.3 read from `CollapseTier` (near 60, far 150), with hysteresis where they have
@@ -144,3 +144,26 @@ Checks: `float_probe` 50 (new: waits on a moving piece, not on a still one; froz
 rest on the one under it; that one -- never frozen -- moving off wakes it, with no ripple); `hang` 10,
 `debris` 29, `collapse_probe` 63; `--jam --big` 4, `--lodbreak` 8 (no brick in mid-air at any
 range), `--wreck` 2. `--big --shot` census: 7 settles put off for a piece under still moving.
+
+### 5.2 Damage does not change the interior; rooms in the near ring (2026-10-19) -- §3.2, §3.3
+* `InteriorGroups.INTERIOR_RANGE` is `CollapseTier.HOT_RANGE`, 60 m (was 100).
+* **A building in bricks has painted windows** past that (`CityScene._tend_brick_panes`): the
+  shell's panes, each only where its window still stands in the bricks, hung on the brick node,
+  one building a pass, nearest first, made again once its bricks have changed and it is quiet.
+  The window shader hides them inside `near_hide` (the rooms' range, an instance uniform; 0 on a
+  shell) on the same dither the storey groups fade out on, the other way round -- each pixel of a
+  window is either the painted room or the drawn one, crossing over from 45 to 60 m.
+* **No storey group is made for a building that is not known to be standing**
+  (`_interior_unsure`): bands still building, its floors' reach not asked yet (`_span_owed`), or
+  hit within `COLLAPSE_QUIET_MS` (`_touched_ms`, set by `_mark_dirty` -- not by being made bricks).
+  Before, a building shot from 40 m drew its rooms and then the span rule cut it.
+* **The other ranges of §1.3 stay.** Looked at: 110 m (bricks drawn as a shell) is drawing
+  detail; 120/150 m (wake/sleep) is one ring with its hysteresis; 140 m (the heap) is the bricks'
+  own draw distance. None changes what a player sees happen; moving them is churn.
+
+Checks: `-- --groups --big` 25 (ranges now 14, 40 and 55 m; the last come to from outside the
+range, since collision and shadows are kept a way past where they come on; new: past the range
+its windows are painted on its bricks, hidden where its rooms are drawn -- `interior_groups_panes`,
+and `interior_groups_55` shows the crossover); `interior_group_probe` 33, `interior` 87, `fixture`
+47, `shell` 38; `--breaklag --big` 7; `--lodbreak` 8 (one run of two had 3 fails, one brick of a
+blast's ring lying in mid-air through the run -- the heap's floor ray, CollapseNext 28; not this).
