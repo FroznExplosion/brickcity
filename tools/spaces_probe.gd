@@ -190,6 +190,43 @@ func _generated() -> void:
 			"%d of %d rooms, %.1f ms" % [(rec.spaces as Array).size(), rooms.size(), ms])
 	_ok("with windows out and doorways between them",
 			int(k.get("window", 0)) > 0 and int(k.get("doorway", 0)) > 0, str(k))
+	_frame()
+
+
+## The frame, made by the generator (Docs/DestructionLod.md 4): every column it
+## names is bricks, and every floor it names is bricks across its panels. Twelve
+## storeys, so the lower ones carry COLUMN_STOREYS and stand their columns (a
+## two-storey one has none: its room walls carry it).
+func _frame() -> void:
+	var fx := 30
+	var fz := 30
+	var courses := 12 * TowerRecipe.COURSES_PER_FLOOR
+	var w := BrickWorld.new()
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
+	TowerRecipe.build(w, c, TowerRecipe.bake_palette(w), fx, fz, courses)
+	var rec := StructureSpaces.empty()
+	rec.merge(TowerRecipe.frame(fx, fz, courses, [], true, w, c), true)
+	var holes := 0
+	for col in rec.columns:
+		for y in range(int(col[4]), int(col[4]) + int(col[5])):
+			for x in range(int(col[0]), int(col[0]) + int(col[2])):
+				for z in range(int(col[1]), int(col[1]) + int(col[3])):
+					if not w.is_solid(c, Vector3i(x, y, z)):
+						holes += 1
+	var thin := 0
+	for f in rec.floors:
+		for p: Vector3i in TowerRecipe.plan(fx, fz).panels:
+			@warning_ignore("integer_division")
+			var mid := Vector2i(p.x + p.z / 2, p.y + p.z / 2)
+			for y in range(int(f[0]), int(f[0]) + int(f[1])):
+				if not w.is_solid(c, Vector3i(mid.x, y, mid.y)):
+					thin += 1
+	_ok("its frame: floors and columns as the generator laid them, every cell of them bricks",
+			(rec.floors as Array).size() == TowerRecipe.layout(courses).filter(
+				func(b: Dictionary) -> bool: return b.kind == "base" or b.kind == "slab").size()
+			and (rec.columns as Array).size() > 0 and holes == 0 and thin == 0,
+			"%d floor(s), %d column(s); %d column cell(s) not bricks, %d floor cell(s)" % [
+				(rec.floors as Array).size(), (rec.columns as Array).size(), holes, thin])
 
 
 ## A generated building as the city lays it, its stairwell carved through every

@@ -241,6 +241,13 @@ static func for_tower(world: BrickWorld, chunk: int, footprint_x: int, footprint
 		var made := record_space(room.id, space_kind, 0, start, found)
 		rec.spaces.append(made[0])
 		rec.openings.append_array(made[1])
+	# The frame, from the recipe (Docs/DestructionLod.md 4): its floors, its
+	# columns and its stair core, made with the building, never searched for.
+	var f := TowerRecipe.frame(footprint_x, footprint_z, courses,
+			[] if stair.size == Vector2i.ZERO else [stair], true, world, chunk)
+	rec["floors"] = f.floors
+	rec["columns"] = f.columns
+	rec["core"] = f.core
 	return rec
 
 
@@ -265,8 +272,11 @@ static func _free_cell(room: Room, origin: Vector3i, kind: Callable) -> Vector3i
 # ---------------------------------------------------------------------------
 # The record (Docs/Structures.md 3.1): plain arrays, so it saves as JSON.
 
+## "floors", "columns" and "core" are the frame (TowerRecipe.frame): a
+## generated building's record has them from the generator; a build's are
+## empty until they are found in its bricks (Structures.md 2.4).
 static func empty() -> Dictionary:
-	return {"spaces": [], "openings": [], "points": []}
+	return {"spaces": [], "openings": [], "points": [], "floors": [], "columns": [], "core": []}
 
 
 ## A space found from `seed`, as the record keeps it, with its openings --
