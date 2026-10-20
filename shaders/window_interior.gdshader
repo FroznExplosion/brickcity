@@ -30,6 +30,17 @@ uniform vec3 sky_colour : source_color = vec3(0.62, 0.72, 0.84);
 // with the lights on and not as a grey panel.
 uniform vec3 light_colour : source_color = vec3(1.05, 0.96, 0.82);
 uniform float frame = 0.035;   // dark rim round the glass, metres
+// On a building in bricks (CityScene._tend_brick_panes) the panes stand in for
+// its drawn rooms only past the rooms' range: inside `near_hide` they dither
+// out on the same pattern the interior groups dither in
+// (shaders/interior_group.gdshader, gone where ign < t), the other way round,
+// so each pixel of a window has one of the two. 0 on a shell: always shown.
+instance uniform float near_hide = 0.0;
+uniform float near_band = 15.0;
+
+float ign(vec2 px) {
+	return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+}
 
 const vec3 PALETTE[6] = vec3[6](
 		vec3(0.78, 0.22, 0.16), vec3(0.92, 0.55, 0.14), vec3(0.92, 0.80, 0.22),
@@ -63,6 +74,12 @@ vec3 furniture_shade(vec3 base, vec3 n) {
 }
 
 void fragment() {
+	if (near_hide > 0.0) {
+		float t = clamp((length(VERTEX) - (near_hide - near_band)) / near_band, 0.0, 1.0);
+		if (ign(FRAGCOORD.xy) >= t) {
+			discard;
+		}
+	}
 	vec2 size = UV2;
 	// The ray from the eye through this pixel, in the glass's own frame:
 	// x along the glass, y up, z into the building.

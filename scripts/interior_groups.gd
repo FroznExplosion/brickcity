@@ -40,10 +40,12 @@ const GROUP_PIECES := 300
 ## What a room holds on average: the manifest draws two to five, and a quarter
 ## of rooms are empty.
 const PIECES_PER_ROOM := 3.5
-## Interior pieces are shown inside this, measured to each piece. Past it a
-## building that is still bricks shows its rooms empty; one that is a shell
-## shows painted windows (BuildingShell.build_window_mesh), as it always has.
-const INTERIOR_RANGE := 100.0
+## Interior pieces are shown inside this, measured to each piece: the near
+## ring (Docs/DestructionLod.md 2; it was 100 m). Past it every building shows
+## painted windows (BuildingShell.build_window_mesh) -- a shell as it always
+## has, one in bricks on its own panes (CityScene._tend_brick_panes), which
+## dither in over INTERIOR_BAND as the pieces dither out.
+const INTERIOR_RANGE := CollapseTier.HOT_RANGE
 const INTERIOR_BAND := 15.0
 ## Items are shown inside this.
 const ITEM_RANGE := 20.0

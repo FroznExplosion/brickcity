@@ -1974,6 +1974,20 @@ func _take_shape(id: int, body: RID, size: Vector3, xform: Transform3D) -> int:
 const COLLAPSE_QUIET_MS := 2000
 var _broke_ms := {}   ## building id -> msec its solve last had something loose, failing or unbalanced
 var interior_waits := 0   ## storey groups not made, a pass at a time, because of _mid_collapse
+var _touched_ms := {}     ## building id -> when its bricks last changed (_mark_dirty)
+
+
+## Hit, and not yet known to be standing: its bands still building (nothing
+## leaves it until they are), its floors' reach not asked yet (_span_owed), or
+## hit within COLLAPSE_QUIET_MS. No storey group is made for it meanwhile.
+## Damage does not change how an interior is drawn (Docs/DestructionLod.md
+## 1.2): a building shot from 40 m made bricks, drew its rooms, and then the
+## span rule cut it and it fell -- "when a building takes any damage it spawns
+## everything inside then starts to fall" (user, 2026-10-19).
+func _interior_unsure(id: int) -> bool:
+	if _mid_collapse(id) or _bands_building(id) or _span_owed.has(id):
+		return true
+	return Time.get_ticks_msec() - int(_touched_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS
 ## Off: interiors are made in a building whatever it is doing, as they were.
 ## For far_rules_probe, which has to fail without the rule.
 var hold_interiors_mid_collapse := true
@@ -2198,7 +2212,7 @@ func _stream_groups(here: Vector3) -> void:
 				continue
 			if not g.shown:
 				if held < 0:
-					held = 1 if _mid_collapse(id) else 0
+					held = 1 if _interior_unsure(id) else 0
 				if held == 1:
 					interior_waits += 1
 					continue
@@ -3001,6 +3015,8 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	_promote_frames(id)
 	if solve:
 		_mark_dirty(id)
+		# Made bricks is not hit: a hit marks it after this (_interior_unsure).
+		_touched_ms.erase(id)
 	_promotions += 1
 
 
@@ -3601,6 +3617,8 @@ func _merge_quiet_buildings() -> void:
 func _mark_dirty(id: int, y_lo: float = -INF, y_hi: float = INF) -> void:
 	if not _dirty.has(id):
 		_dirty.append(id)
+	_touched_ms[id] = Time.get_ticks_msec()
+	_panes_owed[id] = true
 	var b := registry.get_building(id)
 	if b != null:
 		b.structure_version += 1
@@ -8368,7 +8386,9 @@ func _run_groups_pass() -> void:
 	var face: Vector3 = picks[0][1]
 	var out: Vector3 = picks[0][2]
 	var eye := 8.0
-	var ranges := [14.0, 50.0, 92.0]
+	# Inside InteriorGroups.INTERIOR_RANGE, the near ring (60 m since
+	# 2026-10-19, Docs/DestructionLod.md; 14, 50 and 92 m before).
+	var ranges := [14.0, 40.0, 55.0]
 	# Nothing over the picture, and the same 22 m of wall filling it from each
 	# range (the lens narrowed, not the picture cropped): what changes between
 	# the shots is how the interior is drawn, not how big it is.
@@ -8388,9 +8408,19 @@ func _run_groups_pass() -> void:
 
 	var layout: Array = interior_groups.layout(b)
 	for k in ranges.size():
+		if k == ranges.size() - 1:
+			# Come in from outside the range: collision and shadows are kept a
+			# way past where they come on (ROOM_SLEEP_RANGE, SHADOW_RELEASE),
+			# and with the range at 60 m every stop is inside those from the
+			# one before.
+			_groups_look(face, out, InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE + 6.0, eye)
+			for t in 40:
+				await get_tree().physics_frame
 		_groups_look(face, out, ranges[k], eye)
 		camera.fov = rad_to_deg(2.0 * atan(11.0 / float(ranges[k])))
 		var took: int = await _groups_settle(b)
+		# Made afresh if they were let go (the last stop comes in from outside).
+		layout = interior_groups.layout(b)
 		var local: Vector3 = b.xform.affine_inverse() * camera.global_position
 		var in_range := 0
 		var shown := 0
@@ -8468,6 +8498,19 @@ func _run_groups_pass() -> void:
 		if g.shown or interior_groups.piece_node(b.id, g.index) != null:
 			left += 1
 	_gate_ok("past the range and its margin no group of it is kept", left == 0, "%d kept" % left)
+	# And its windows are painted on its bricks there, as a shell's are
+	# (Docs/DestructionLod.md 3.2), hidden inside the range the rooms are in.
+	for t in 200:
+		if _brick_panes.has(b.id):
+			break
+		await get_tree().physics_frame
+	var panes = _brick_panes.get(b.id)
+	_gate_ok("  its windows are painted on its bricks, hidden where its rooms are drawn",
+			panes != null and is_instance_valid(panes) and (panes as MeshInstance3D).mesh != null
+			and is_equal_approx(float((panes as GeometryInstance3D).get_instance_shader_parameter(
+				"near_hide")), InteriorGroups.INTERIOR_RANGE),
+			"panes %s; %d made, %.1f ms all told" % [panes != null, brick_panes_built, brick_panes_ms])
+	await _save("interior_groups_panes")
 
 	# One shot. The groups at its height are asked again; the top ones are not.
 	_groups_look(face, out, ranges[0], eye)
@@ -11523,6 +11566,7 @@ func _far_real_apply(mi: MeshInstance3D, arrays: Array) -> void:
 func _stream_detail() -> void:
 	if not _far_real_owed.is_empty():
 		_harvest_far_real()
+	_tend_brick_panes()
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
 	var until := t0 + int(DEMESH_BUDGET_MS * 1000.0)
@@ -11557,6 +11601,64 @@ func _stream_detail() -> void:
 			_make_shell(id, true)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+
+
+## A building drawn in bricks has painted windows too, past the range its rooms
+## are drawn in (Docs/DestructionLod.md 3.2): the shell's panes, each only
+## where its window still stands in the bricks (`_cell_standing`, as a
+## demeshed one's, Structures.md 4.2), hidden inside InteriorGroups'
+## range by the shader's `near_hide` -- the rooms dither in as they dither out.
+## Before, a building in bricks showed its rooms empty past INTERIOR_RANGE and
+## a shot from mid range changed painted windows into drawn furniture.
+## Made again once its bricks have changed and it is quiet (_interior_unsure),
+## nearest first, one a pass.
+var _brick_panes := {}    ## building id -> its pane node, a child of its brick node
+var _panes_owed := {}     ## building id -> true: its bricks changed since its panes were made
+var brick_panes_built := 0
+var brick_panes_ms := 0.0
+func _tend_brick_panes() -> void:
+	var here := camera.global_position
+	var best := -1
+	var best_d := INF
+	for id in _brick_nodes:
+		var b := registry.get_building(id)
+		if b == null or b.is_build() or b.toppled or _toppling.has(id):
+			continue
+		var have = _brick_panes.get(id)
+		if have != null and not is_instance_valid(have):
+			_brick_panes.erase(id)
+			have = null
+		if have != null and not _panes_owed.has(id):
+			continue
+		if _interior_unsure(id):
+			continue
+		var d := b.xform.origin.distance_to(here)
+		if d < best_d:
+			best_d = d
+			best = id
+	if best < 0:
+		return
+	var t0 := Time.get_ticks_usec()
+	var b := registry.get_building(best)
+	_panes_owed.erase(best)
+	var old = _brick_panes.get(best)
+	if old != null and is_instance_valid(old):
+		(old as Node).queue_free()
+	_brick_panes.erase(best)
+	var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
+			b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(best),
+			{}, b.recipe.get("program", {}),
+			_cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk)))
+	if panes != null:
+		var glass := MeshInstance3D.new()
+		glass.mesh = panes
+		glass.material_override = BuildingShell.window_material()
+		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glass.set_instance_shader_parameter("near_hide", InteriorGroups.INTERIOR_RANGE)
+		(_brick_nodes[best] as Node3D).add_child(glass)
+		_brick_panes[best] = glass
+	brick_panes_built += 1
+	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
 
 ## Give back the bake and the mesh; keep the chunk and the collision.
