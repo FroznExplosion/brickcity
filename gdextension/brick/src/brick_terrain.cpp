@@ -131,6 +131,12 @@ constexpr float COLLIDE_QUANTUM = PLATE_M * 0.25f;
 static bool g_smooth_terrain = false;
 /// Which ground curves. See BrickTerrain::set_smooth_slopes.
 static bool g_smooth_slopes = false;
+/// Studs a side of one LOW-POLY curve quad. See BrickTerrain::set_curve_step.
+static int g_curve_step = 4;
+/// Share of curve cells a brick patch starts on. See set_curve_bricks.
+static float g_curve_bricks = 1.0f / 110.0f;
+/// On "slopes" ground, the share of level curve cells that take a stud.
+constexpr float CURVE_STUD_CHANCE = 0.125f;
 /// Plates a stud: regional steepness above which a slope curves.
 static float g_curve_slope = 0.25f;
 /// Bumped by every pad edit, so a cache of the field can tell it moved.
@@ -2002,6 +2008,8 @@ bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
 
 void BrickTerrain::set_smooth_terrain(bool on) { g_smooth_terrain = on; }
 bool BrickTerrain::get_smooth_terrain() { return g_smooth_terrain; }
+void BrickTerrain::set_curve_step(int studs) { g_curve_step = std::max(1, studs); }
+int BrickTerrain::get_curve_step() { return g_curve_step; }
 void BrickTerrain::set_smooth_slopes(bool on) { g_smooth_slopes = on; }
 bool BrickTerrain::get_smooth_slopes() { return g_smooth_slopes; }
 void BrickTerrain::set_curve_slope(double plates_per_stud) {
@@ -2014,6 +2022,11 @@ double BrickTerrain::surface_raw(int x, int z) {
     // of the staircase it replaces, not along its top.
     return ((double)g_field.raw_plate(x, z) + 0.5) * (double)PLATE_M;
 }
+
+void BrickTerrain::set_curve_bricks(double share) {
+    g_curve_bricks = (float)std::max(0.0, std::min(1.0, share));
+}
+double BrickTerrain::get_curve_bricks() { return (double)g_curve_bricks; }
 
 bool BrickTerrain::smooth_at(int x, int z) {
     if (!g_smooth_terrain) {
@@ -2929,6 +2942,16 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     }
 }
 
+/// A box instance (a brick poking out of curved ground, §18.7): axis-aligned
+/// on the stud grid, `sx` x `sy` x `sz` times the unit mesh.
+void push_box_instance(PackedFloat32Array &buf, float px, float py, float pz,
+        const Color &c, float sx, float sy, float sz) {
+    buf.push_back(sx);   buf.push_back(0.0f); buf.push_back(0.0f); buf.push_back(px);
+    buf.push_back(0.0f); buf.push_back(sy);   buf.push_back(0.0f); buf.push_back(py);
+    buf.push_back(0.0f); buf.push_back(0.0f); buf.push_back(sz);   buf.push_back(pz);
+    buf.push_back(c.r);  buf.push_back(c.g);  buf.push_back(c.b); buf.push_back(c.a);
+}
+
 void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
         float yaw, const Color &c, float scale = 1.0f, float scale_y = -1.0f) {
     // XZ and Y scale separately. A single uniform scale made a 3-stud boulder
@@ -3600,6 +3623,93 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             }
         }
     }
+    // LOW-POLY CURVES (Terrain.md 18.7). A curve drawn one quad a stud costs
+    // about twice the triangles of packed brick (§18.5). On a grid of K-stud
+    // blocks:
+    //
+    //  1. EDGES. Every K-long edge of the grid with curve on BOTH sides of it
+    //     along its whole length has the corners along it moved onto the
+    //     straight line between its two ends. Both tiles that share a tile
+    //     edge see the cells either side of it (the sample carries a cell of
+    //     border), so they move the same corners the same way, and a 1x1
+    //     curve cell next to a merged block reads the block's edge exactly --
+    //     no gap. An edge next to brick is never moved: its corners take the
+    //     brick's exact top (above), which is what keeps that seam shut.
+    //  2. BLOCKS. A block whose K x K cells are all curve and whose four edges
+    //     were all moved is drawn as ONE quad, and the corners inside it are
+    //     moved onto that quad so collision and studs agree with the drawing.
+    const int K = (g_smooth_terrain && g_curve_step > 1 && TILE % g_curve_step == 0)
+            ? g_curve_step : 1;
+    const int KB = TILE / K;
+    std::vector<uint8_t> coarse;
+    if (K > 1) {
+        auto at = [&](int cx, int cz) -> float & {
+            return cy[(size_t)(cx - CLO) + CSPAN * (cz - CLO)];
+        };
+        auto sm = [&](int lx, int lz) -> bool { return s.smooth[TileSample::idx(lx, lz)] != 0; };
+        // Edges along X at z = j*K (cells z-1 and z either side), and along Z.
+        std::vector<uint8_t> ex((size_t)KB * (KB + 1), 0), ez((size_t)(KB + 1) * KB, 0);
+        for (int j = 0; j <= KB; ++j) {
+            for (int i = 0; i < KB; ++i) {
+                const int x0 = i * K, z = j * K;
+                bool all = true;
+                for (int k = 0; k < K && all; ++k) {
+                    all = sm(x0 + k, z - 1) && sm(x0 + k, z);
+                }
+                if (all) {
+                    ex[(size_t)i + KB * j] = 1;
+                    const float a = at(x0, z), b = at(x0 + K, z);
+                    for (int k = 1; k < K; ++k) {
+                        at(x0 + k, z) = a + (b - a) * ((float)k / (float)K);
+                    }
+                }
+                const int x = j * K, z0 = i * K;
+                all = true;
+                for (int k = 0; k < K && all; ++k) {
+                    all = sm(x - 1, z0 + k) && sm(x, z0 + k);
+                }
+                if (all) {
+                    ez[(size_t)j + (KB + 1) * i] = 1;
+                    const float a = at(x, z0), b = at(x, z0 + K);
+                    for (int k = 1; k < K; ++k) {
+                        at(x, z0 + k) = a + (b - a) * ((float)k / (float)K);
+                    }
+                }
+            }
+        }
+        coarse.assign((size_t)KB * KB, 0);
+        for (int bz = 0; bz < KB; ++bz) {
+            for (int bx = 0; bx < KB; ++bx) {
+                if (!ex[(size_t)bx + KB * bz] || !ex[(size_t)bx + KB * (bz + 1)]
+                        || !ez[(size_t)bx + (KB + 1) * bz] || !ez[(size_t)(bx + 1) + (KB + 1) * bz]) {
+                    continue;
+                }
+                const int x0 = bx * K, z0 = bz * K;
+                bool all = true;
+                for (int lz = z0; lz < z0 + K && all; ++lz) {
+                    for (int lx = x0; lx < x0 + K; ++lx) {
+                        if (!sm(lx, lz)) {
+                            all = false;
+                            break;
+                        }
+                    }
+                }
+                if (!all) {
+                    continue;
+                }
+                coarse[(size_t)bx + KB * bz] = 1;
+                const float a = at(x0, z0), b = at(x0 + K, z0);
+                const float c = at(x0 + K, z0 + K), d = at(x0, z0 + K);
+                for (int cz = z0 + 1; cz < z0 + K; ++cz) {
+                    for (int cx = x0 + 1; cx < x0 + K; ++cx) {
+                        const float u = (float)(cx - x0) / (float)K;
+                        const float v = (float)(cz - z0) / (float)K;
+                        at(cx, cz) = (a + (b - a) * u) * (1.0f - v) + (d + (c - d) * u) * v;
+                    }
+                }
+            }
+        }
+    }
     auto corner_y = [&](int cx, int cz) -> float {
         return cy[(size_t)(cx - CLO) + CSPAN * (cz - CLO)];
     };
@@ -3731,30 +3841,62 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     continue;
                 }
                 ++curve_cells;
-                const float x0 = (float)lx * STUD_M, x1 = (float)(lx + 1) * STUD_M;
-                const float z0 = (float)lz * STUD_M, z1 = (float)(lz + 1) * STUD_M;
+                // A cell of a merged block: its block's first cell draws the
+                // whole block, and no skirt is ever needed (its ring is all
+                // curve). The rest draw nothing.
+                int span = 1;
+                if (K > 1 && coarse[(size_t)(lx / K) + KB * (lz / K)]) {
+                    if (lx % K != 0 || lz % K != 0) {
+                        continue;
+                    }
+                    span = K;
+                }
+                const float x0 = (float)lx * STUD_M, x1 = (float)(lx + span) * STUD_M;
+                const float z0 = (float)lz * STUD_M, z1 = (float)(lz + span) * STUD_M;
                 const float y00 = corner_y(lx, lz);
-                const float y10 = corner_y(lx + 1, lz);
-                const float y11 = corner_y(lx + 1, lz + 1);
-                const float y01 = corner_y(lx, lz + 1);
+                const float y10 = corner_y(lx + span, lz);
+                const float y11 = corner_y(lx + span, lz + span);
+                const float y01 = corner_y(lx, lz + span);
                 // UV2 ZERO says "no piece here" to the shader: no outline to
                 // draw and no perimeter for the nozzle to walk, because a
                 // curve is not a moulded part with edges.
                 const Vector2 face(0.0f, 0.0f);
                 m.material = (uint8_t)s.mat[i];
-                const Color col = piece_colour(s, lx, lz, s.mat[i], true);
+                // On "slopes" ground a curve is NOT studded: the shader paints
+                // a stud on every studded cell past the geometry studs' range,
+                // and across a curved hillside that drew the brick grid back
+                // over it from a distance (18.7). Its few real studs are
+                // instances.
+                Color col = piece_colour(s, lx, lz, s.mat[i], !g_smooth_slopes);
+                if (g_smooth_slopes) {
+                    // ...and not tinted cell by cell. A brick gets its own
+                    // shade of the filament so neighbouring pieces read as
+                    // pieces; on a curve that shade per stud cell drew a
+                    // mosaic of 1x1 squares over the hill. A slow drift of
+                    // a few percent instead, so a slope is not one flat
+                    // colour either.
+                    const int painted = s.col[i];
+                    const Color base = filament_colour(painted != 0xFF ? painted
+                            : material_filament(s.mat[i]));
+                    const float t = 1.0f + 0.05f * value_noise((float)(gx0 + lx) * 0.03f,
+                            (float)(gz0 + lz) * 0.03f, g_field.seed + 911U);
+                    col = Color(base.r * t, base.g * t, base.b * t, 0.0f);
+                }
                 const Vector3 v[4] = {
                     Vector3(x0, y00, z0), Vector3(x1, y10, z0),
                     Vector3(x1, y11, z1), Vector3(x0, y01, z1),
                 };
                 const Vector3 nrm[4] = {
-                    corner_n(lx, lz), corner_n(lx + 1, lz),
-                    corner_n(lx + 1, lz + 1), corner_n(lx, lz + 1),
+                    corner_n(lx, lz), corner_n(lx + span, lz),
+                    corner_n(lx + span, lz + span), corner_n(lx, lz + span),
                 };
                 const Vector2 uv[4] = {
                     Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1), Vector2(x0, z1),
                 };
                 m.quad_soft(col, face, v, nrm, uv);
+                if (span > 1) {
+                    continue;
+                }
 
                 // The skirt. Wherever the neighbouring column's surface is
                 // BELOW this cell's edge, a wall closes the difference --
@@ -4204,10 +4346,99 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     PackedFloat32Array studs;
     PackedFloat32Array tufts;
     PackedFloat32Array pebbles;
+    PackedFloat32Array bricks;
     int stud_count = 0;
     int scatter_count = 0;
+    int brick_count = 0;
 
     std::vector<uint8_t> blocked((size_t)TILE * TILE, 0);
+
+    // BRICKS POKING OUT OF CURVED GROUND (Terrain.md 18.7). Curved ground has
+    // no pieces, so a hillside of it is plastic with no bricks in it at all;
+    // a few laid bricks half in the slope say what the world is made of, the
+    // way LEGO games dress smooth ground. Each is its OWN instance on the
+    // stud grid -- not cells of the ground -- which is also what a patch on a
+    // planet has to be (Planets.md 9.4).
+    //
+    // Level, its top a plate over the highest ground under it, and as deep
+    // as it must be to reach the lowest: buried uphill, standing proud
+    // downhill, never floating. Studs on top, from the stud buffer; one in
+    // four gets a 2x2 stacked on it. No collision, like scatter.
+    if (g_smooth_terrain && g_curve_bricks > 0.0f) {
+        auto all_curve = [&](int lx, int lz, int w, int d) {
+            if (lx + w > TILE || lz + d > TILE) {
+                return false;
+            }
+            for (int dz = 0; dz < d; ++dz) {
+                for (int dx = 0; dx < w; ++dx) {
+                    if (blocked[(size_t)(lx + dx) + TILE * (lz + dz)]
+                            || !s.smooth[TileSample::idx(lx + dx, lz + dz)]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        auto lay = [&](int lx, int lz, int w, int d, float top, float bottom, const Color &c) {
+            push_box_instance(bricks, ((float)lx + (float)w * 0.5f) * STUD_M,
+                    (top + bottom) * 0.5f, ((float)lz + (float)d * 0.5f) * STUD_M, c,
+                    (float)w, (top - bottom) / BRICK_M, (float)d);
+            for (int dz = 0; dz < d; ++dz) {
+                for (int dx = 0; dx < w; ++dx) {
+                    push_instance(studs, ((float)(lx + dx) + 0.5f) * STUD_M, top,
+                            ((float)(lz + dz) + 0.5f) * STUD_M, 0.0f, c);
+                    ++stud_count;
+                }
+            }
+            ++brick_count;
+        };
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                const int i = TileSample::idx(lx, lz);
+                if (!s.smooth[i] || s.mat[i] == MAT_ROAD) {
+                    continue;
+                }
+                const int gx = gx0 + lx;
+                const int gz = gz0 + lz;
+                if (hashf(gx, gz, 0xB51C) >= g_curve_bricks) {
+                    continue;
+                }
+                const float r = hashf(gx, gz, 0xB52D);
+                int w = 2, d = r < 0.4f ? 2 : 4;
+                if (hashf(gx, gz, 0xB53E) < 0.5f) {
+                    std::swap(w, d);
+                }
+                if (!all_curve(lx, lz, w, d)) {
+                    if (!all_curve(lx, lz, 2, 2)) {
+                        continue;
+                    }
+                    w = d = 2;
+                }
+                // The drawn ground at the brick's corners and middle.
+                float hi = -1e9f, lo = 1e9f;
+                for (int cz = lz; cz <= lz + d; ++cz) {
+                    for (int cx = lx; cx <= lx + w; ++cx) {
+                        const float y = corner_y(cx, cz);
+                        hi = std::max(hi, y);
+                        lo = std::min(lo, y);
+                    }
+                }
+                const float top = hi + PLATE_M;
+                const float bottom = std::min(top - BRICK_M, lo - PLATE_M);
+                Color c = piece_colour(s, lx, lz, s.mat[i], true);
+                c.a = 1.0f;
+                lay(lx, lz, w, d, top, bottom, c);
+                if (hashf(gx, gz, 0xB54F) < 0.25f) {
+                    lay(lx + (w - 2) / 2, lz + (d - 2) / 2, 2, 2, top + BRICK_M, top, c);
+                }
+                for (int dz = 0; dz < d; ++dz) {
+                    for (int dx = 0; dx < w; ++dx) {
+                        blocked[(size_t)(lx + dx) + TILE * (lz + dz)] = 1;
+                    }
+                }
+            }
+        }
+    }
 
     // Does an n x n footprint at (lx, lz) sit on one flat, plate, unoccupied
     // patch? A boulder half on a terrace edge would float.
@@ -4331,7 +4562,21 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 // takes no stud.
                 const bool tiled = hashf(gx0 + lx, gz0 + lz,
                         (int32_t)(g_field.seed ^ 0x7113U)) < TILE_CHANCE;
-                if (s.plate[i] && !tiled && material_studded(s.mat[i])) {
+                // On "slopes" ground (18.7) studs are SCATTERED: one flat cell
+                // in eight, and flat means the drawn curve is level there --
+                // `plate` only says the four columns are on one plate, which
+                // on gentle curved ground is most of it, and a stud on every
+                // such cell drew terraces of studs across the hills.
+                bool scattered = true;
+                if (g_smooth_slopes) {
+                    const float c0 = corner_y(lx, lz), c1 = corner_y(lx + 1, lz);
+                    const float c2 = corner_y(lx + 1, lz + 1), c3 = corner_y(lx, lz + 1);
+                    const float spread = std::max(std::max(c0, c1), std::max(c2, c3))
+                            - std::min(std::min(c0, c1), std::min(c2, c3));
+                    scattered = spread < PLATE_M * 0.25f
+                            && hashf(gx0 + lx, gz0 + lz, 0x57D5) < CURVE_STUD_CHANCE;
+                }
+                if (s.plate[i] && !tiled && scattered && material_studded(s.mat[i])) {
                     Color c = piece_colour(s, lx, lz, s.mat[i], true);
                     c.a = 1.0f;
                     // On the CURVE's own surface. The column top is up to
@@ -4384,6 +4629,8 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     out["studs"] = studs;
     out["tufts"] = tufts;
     out["pebbles"] = pebbles;
+    out["bricks"] = bricks;
+    out["brick_count"] = brick_count;
     out["boxes"] = boxes;
     out["box_count"] = boxes.size() / 6;
     out["piece_count"] = (int)pieces.size();
@@ -4446,6 +4693,14 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_smooth_terrain);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_terrain"),
         &BrickTerrain::get_smooth_terrain);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_curve_bricks", "share"),
+        &BrickTerrain::set_curve_bricks);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_curve_bricks"),
+        &BrickTerrain::get_curve_bricks);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_curve_step", "studs"),
+        &BrickTerrain::set_curve_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_curve_step"),
+        &BrickTerrain::get_curve_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_smooth_slopes", "on"),
         &BrickTerrain::set_smooth_slopes);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_slopes"),

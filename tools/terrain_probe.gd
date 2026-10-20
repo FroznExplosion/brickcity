@@ -606,6 +606,12 @@ func _check_bevel_width() -> void:
 ## Curved ground — §18.5, biome AND steepness.
 func _check_smooth_terrain() -> void:
 	print("curved ground (§18.5)")
+	# A quad a stud: the collision check below rebuilds the drawn curve from
+	# the raw field cell by cell, which is what a curve is without the
+	# low-poly merge (§18.7, checked in _check_smooth_slopes). Merged, the
+	# collider reads the same moved corners the drawing does.
+	var step_was := BrickTerrain.get_curve_step()
+	BrickTerrain.set_curve_step(1)
 	BrickTerrain.set_flat_mode(true)
 	BrickTerrain.set_plate_steps(true)
 	BrickTerrain.set_smooth_terrain(true)
@@ -757,6 +763,7 @@ func _check_smooth_terrain() -> void:
 		"worst %.3f m off the curve" % worst)
 	_ok("and the boxes still merge", int(data["box_count"]) < 500,
 		"%d boxes on a mixed tile" % int(data["box_count"]))
+	BrickTerrain.set_curve_step(step_was)
 
 	BrickTerrain.set_plate_steps(false)
 	BrickTerrain.set_flat_mode(false)
@@ -874,6 +881,31 @@ func _check_smooth_slopes() -> void:
 				worst_cell = "tile %d,%d: %d of %d" % [tx, tz, total, tile * tile]
 	_ok("every cell has exactly one top surface", covered_ok,
 		worst_cell if worst_cell != "" else "9 tiles")
+
+	# LOW-POLY CURVES (§18.7): a block of curve with curve all round it is one
+	# quad, not K x K. Fewer triangles, and still one top surface a cell --
+	# the merged cells count as curve cells, they are just drawn together.
+	var step_was := BrickTerrain.get_curve_step()
+	var tris := [0, 0]
+	var covered := [true, true]
+	for k in 2:
+		BrickTerrain.set_curve_step(1 if k == 0 else 4)
+		for tz in range(-1, 2):
+			for tx in range(-1, 2):
+				var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+				tris[k] += int(d["triangle_count"])
+				if int(d["curve_cells"]) + int(d["owned_cells"]) != tile * tile:
+					covered[k] = false
+	BrickTerrain.set_curve_step(step_was)
+	_ok("4-stud curves draw fewer triangles", tris[1] < tris[0],
+		"%d a quad a stud, %d at 4 studs (%.0f%%)" % [tris[0], tris[1],
+			100.0 * float(tris[1]) / maxf(float(tris[0]), 1.0)])
+	_ok("and every cell still has one top surface", covered[1])
+	var bricks := 0
+	for tz in range(-1, 2):
+		for tx in range(-1, 2):
+			bricks += int(BrickTerrain.build_tile(tx, tz).get("brick_count", 0))
+	_ok("bricks poke out of the curved ground (§18.7)", bricks > 0, "%d on 9 tiles" % bricks)
 
 	# A pad is somewhere a thing stands: brick, however its skirt slopes.
 	BrickTerrain.add_pad(cx, cz, 4, 6, BrickTerrain.surface_raw(cx, cz))

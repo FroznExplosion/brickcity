@@ -1348,6 +1348,8 @@ func _run_slope_shots() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--curve="):
 			curve = float(arg.split("=")[1])
+		elif arg.begins_with("--curvestep="):
+			BrickTerrain.set_curve_step(int(arg.split("=")[1]))
 	BrickTerrain.set_curve_slope(curve)
 	for g in ["brick", "slopes"]:
 		World.set_ground(g)
@@ -1363,7 +1365,7 @@ func _run_slope_shots() -> void:
 			await _frames(10)
 			var tris := RenderingServer.get_rendering_info(
 					RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
-			var shot_name := "hf_ground_%s_%s" % [g if g == "brick" else "slopes%.2f" % curve, v[0]]
+			var shot_name := "hf_ground_%s_%s" % [g if g == "brick" else "slopes%.2f_k%d" % [curve, BrickTerrain.get_curve_step()], v[0]]
 			get_viewport().get_texture().get_image().save_png("res://shots/%s.png" % shot_name)
 			print("[slopes] %-28s %8d tris" % [shot_name, tris])
 	World.set_ground("brick")

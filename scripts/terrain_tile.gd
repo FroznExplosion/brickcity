@@ -44,6 +44,7 @@ static var bevel_enabled := true
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
 
 const SCATTER_RANGE := 30.0   ## §8.
+const BRICK_RANGE := 70.0     ## Terrain.md 18.7: bricks in curved ground.
 const RANGE_FADE := 6.0
 
 ## MultiMesh.set_buffer, TRANSFORM_3D with use_colors: twelve floats of
@@ -170,6 +171,12 @@ func add_instances() -> void:
 	_add_instances("Tufts", PieceMeshes.tuft(), _data["tufts"], SCATTER_RANGE,
 			tuft_material())
 	_add_instances("Pebbles", PieceMeshes.pebble(), _data["pebbles"], SCATTER_RANGE)
+	# Bricks poking out of curved ground (Terrain.md 18.7): further than the
+	# scatter, because a brick is big enough to be missed when it goes.
+	_add_instances("Bricks", PieceMeshes.chamfered_box(Vector3(
+			BrickWorld.get_stud_metres(), BrickTerrain.get_brick_metres(),
+			BrickWorld.get_stud_metres())), _data.get("bricks", PackedFloat32Array()),
+			BRICK_RANGE)
 
 
 ## The collider: 200-300 merged boxes through the physics server.

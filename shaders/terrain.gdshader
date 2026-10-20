@@ -111,6 +111,11 @@ group_uniforms print;
 // 48 layers. At 0.42 m that is 8.75 mm a layer -- visible close, gone by
 // about fifteen metres, and it has to fade or it aliases into a moire.
 uniform bool print_lines_enabled = true;
+// Curved ground (UV2 zero) drawn PLAIN: no layer lines or nozzle paths. On a
+// slope the layer lines are contours a course apart, and they read as the
+// terraces the curve replaced (Terrain.md 18.7). Studs on its flat spots keep
+// theirs.
+uniform bool plain_curves = true;
 // 0.46 mm layers through a 0.55 mm nozzle, at 1:43.75 -- twenty-one layers
 // a course. 0.2 mm is the commoner real setting and was tried first;
 // at this scale it is 8.75 mm, which is one screen pixel at two metres,
@@ -395,6 +400,9 @@ void fragment() {
         // top's UV, so they would). An upright facet keeps its layers, which
         // do wrap round a printed corner.
         if (v_facet > 0.5 && v_flat_normal.y > 0.3) {
+            fade = 0.0;
+        }
+        if (no_piece && plain_curves && has_stud < 0.5) {
             fade = 0.0;
         }
         if (fade > 0.0) {

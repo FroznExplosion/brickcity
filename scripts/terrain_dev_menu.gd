@@ -91,6 +91,15 @@ func setup(p_host) -> void:
 		BrickTerrain.set_curve_slope(v)
 		if TerrainWorld.ground() == "slopes":
 			host.rebuild_detail())
+	_option("Curve quads (low-poly)", ["1 stud", "2 studs", "4 studs"],
+			[1, 2, 4].find(BrickTerrain.get_curve_step()), func(i: int) -> void:
+		BrickTerrain.set_curve_step([1, 2, 4][i])
+		host.rebuild_detail())
+	_slider("Bricks poking out of curves (1 in N cells)", 0.0, 400.0, 10.0,
+			0.0 if BrickTerrain.get_curve_bricks() <= 0.0 else 1.0 / BrickTerrain.get_curve_bricks(),
+			func(v: float) -> void:
+		BrickTerrain.set_curve_bricks(0.0 if v < 1.0 else 1.0 / v)
+		host.rebuild_detail())
 	_check("Slopes and curves on terrace edges", BrickTerrain.get_slope_pieces(), func(on: bool) -> void:
 		BrickTerrain.set_slope_pieces(on)
 		host.rebuild_detail())
