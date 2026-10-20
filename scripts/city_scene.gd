@@ -1985,6 +1985,11 @@ var _touched_ms := {}     ## building id -> when its bricks last changed (_mark_
 ## span rule cut it and it fell -- "when a building takes any damage it spawns
 ## everything inside then starts to fall" (user, 2026-10-19).
 func _interior_unsure(id: int) -> bool:
+	# The switch off is interiors made whatever the building is doing, as they
+	# were (hold_interiors_mid_collapse): far_rules_probe's case without the
+	# rule, which has to draw them.
+	if not hold_interiors_mid_collapse:
+		return false
 	if _mid_collapse(id) or _bands_building(id) or _span_owed.has(id):
 		return true
 	return Time.get_ticks_msec() - int(_touched_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS
