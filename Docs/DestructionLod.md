@@ -179,3 +179,21 @@ them yet: the room-open flag and rooms as the unit (§3.4) are next, then the fl
 
 Checks: `spaces_probe` 11 (new: a 12-storey tower's frame -- 13 floors, 7 columns -- every cell of
 them bricks), `workshop_spaces_probe` 8.
+
+### 5.4 Rooms as the unit (§3.4): measured first, not built (2026-10-20)
+Drawing only the rooms that can be seen into saves something only where a room has no opening
+to the outside. Counted over every shape the city builds (`RoomManifest.rooms_for`, a room
+within two studs of the outer wall's inner face counts as outer): **every room of every tower
+is against an outer wall** -- 12 of 12 up to 204 of 204 -- and so is every room of the
+240 x 50 wide building; only the 200 x 80 one has inner rooms, 20 of 84 (45 of its 200 items).
+Every room has windows, so every room is seen from outside, and the open flag would draw what
+is drawn now. Left until the generator makes deep plans (halls, cores of rooms).
+
+**Where a collapse's time goes instead** (`--big --shot`, 2026-10-20, editor closed but two other
+chats' headless runs going -- rough): the script's tick 9.5 ms on average, of which damage 5.6
+(`loose pieces`: blasts on falling pieces) and the pieces' tick 2.4; the physics step on top, with
+18 pieces in motion on average carrying 5,260 collision boxes (53 and 9,460 at the peak). The
+worst ticks: a merged rebuild of a 24,000-brick piece (36 ms of rebuilds in one tick, 8.2 ms for
+the worst single one, 2,564 boxes), a 44 ms damage tick, the first frame's render. So "nearly
+free" is in the moving phase -- fewer boxes on falling pieces, cheaper hits on them -- not in
+interiors or wreckage at rest (24 settled pieces at the end of that pass).
