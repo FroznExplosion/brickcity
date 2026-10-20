@@ -54,6 +54,7 @@ func _run() -> void:
 	root.add_child(city)
 	await _ticks(30)
 	city.world.set_components_check(true)
+	city.world.set_index_check(true)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 12345
 	var towers := 0
@@ -136,5 +137,12 @@ func _run() -> void:
 			st[2] > 100 and st[5] == 0 and st[6] == 0,
 			"%d of %d searches from what changed, %d bricks walked; %d differing from a whole walk, %d chunks not as said" % [
 				st[2], st[0], st[3], st[5], st[6]])
+	# A piece's mesh patched from what changed (BrickWorld.refill_changed,
+	# 2026-10-20), each patch checked against a fill of every face beside it.
+	var ix: PackedInt64Array = city.world.get_index_patch_stats()
+	_ok("a piece's mesh is patched from what changed, and is what filling all of it gives",
+			ix[0] > 50 and ix[3] == 0,
+			"%d patch(es) from what changed (%d faces written), %d full fill(s); %d differing" % [
+				ix[0], ix[2], ix[1], ix[3]])
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)

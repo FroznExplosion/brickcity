@@ -197,3 +197,28 @@ worst ticks: a merged rebuild of a 24,000-brick piece (36 ms of rebuilds in one 
 the worst single one, 2,564 boxes), a 44 ms damage tick, the first frame's render. So "nearly
 free" is in the moving phase -- fewer boxes on falling pieces, cheaper hits on them -- not in
 interiors or wreckage at rest (24 settled pieces at the end of that pass).
+
+### 5.5 Hits on falling pieces: a patch from what changed (2026-10-20)
+Of the damage pass's 5.5 ms a tick (`--big --shot`), 5.1 was `IslandManager.damage_near`, and of
+that, 1.65 s of the run's 1.95 s was the mesh update each hit made on the spot: a big piece -- one
+mesh, 24,000 bricks -- had its index buffer refilled from every face it has, 2-9 ms a hit,
+`BrickWorld.update_index_region`, and a piece under automatic fire paid it once a bullet.
+* **Once a piece a tick** (`IslandManager._mesh_later`, `flush_meshes`): the bricks and the
+  collision change in the hit, the drawing at the end of the tick's hits (CityScene, after its
+  damage queue; the pieces' tick for hits from anywhere else).
+* **Only the faces a change reaches** (`BrickWorld.refill_changed`): the buffer keeps a slot a
+  face, so a patch needs only the faces of blocks whose alive flag changed since the last fill
+  and the faces those blocks hid. Each chunk keeps what its buffer was filled against
+  (`track_indices`: a byte a block, each block's faces, and for each block the faces it hides);
+  which blocks changed is a byte compare a block, not a walk of the faces. A change of bake, or a
+  quarter of the blocks, fills in full as before.
+`barrage_probe` checks every patch against a full fill beside it (`set_index_check`,
+`get_index_patch_stats`): 347-387 patches a run, **0 differing**.
+
+**What it did** (three alternated pairs, editor closed, no other Godot running): a hit on a piece
+**0.57 ms -> 0.076 ms**; the damage pass **3.5-4.4 -> 1.9 ms a tick**; mesh updates of hits
+1.0-1.5 s -> 0.11-0.12 s a run. Frames came out *slower* -- 17.2-18.1 ms -> 19.7-20.2, 15-37 of 906
+over 33.3 ms -> 48-81 -- and not from this: the old hits used up `DAMAGE_BUDGET_MS`, so the
+pass's blasts queued, and 3,028 of them had landed by the end against 4,436 now. All of them
+landing on time is ~40% more pieces moving (13.9 -> 19.9 on average, 5,500 -> 8,000 boxes), and
+that is the physics step's. Which is §5.6.

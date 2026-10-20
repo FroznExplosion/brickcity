@@ -3477,9 +3477,13 @@ func shear(isl: BrickIsland, world_point: Vector3, radius: float) -> void:
 
 ## `chip` > 0 wears bricks by that much hp instead of destroying them
 ## (DamageLog.Kind.PIECE_CHIP, StructuralDamage).
+## Where a hit on a piece spends its time, ms all told: [the hit (apply_entry),
+## throwing what it killed, cutting their shapes out, the solve, the mesh].
+var damage_ms := [0.0, 0.0, 0.0, 0.0, 0.0]
 func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) -> void:
 	if not isl.is_valid():
 		return
+	var tq := Time.get_ticks_usec()
 	# The scene only calls this on the host -- a client's shot is a request --
 	# but the rule belongs here as well as there.
 	if not decides:
@@ -3501,6 +3505,7 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	e.radius = radius
 	e.limit = chip
 	var killed := DamageLog.apply_entry(world, isl.chunk, e)
+	tq = _dms(0, tq)
 	# A chip that killed nothing still took hp, and hp is state.
 	if chip > 0:
 		_record(e)
@@ -3513,12 +3518,14 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# below, while their ids still mean these bricks.
 	throw_killed(isl.chunk, killed, world_point, radius, chip > 0,
 			Vector3.ZERO if isl.settled else isl.body.linear_velocity)
+	tq = _dms(1, tq)
 	# Where those bricks were, before the piece is cut and their ids mean
 	# another chunk's bricks.
 	var gone_box: AABB = isl.chunk_transform() * world.get_blocks_box(isl.chunk, killed)
 	_ensure_per_block(isl)
 	isl.disable_blocks(killed)
 	_touched(isl)
+	tq = _dms(2, tq)
 	# Rubble is not re-solved. Cutting a disposable piece into smaller
 	# disposable pieces costs a connectivity walk and a chunk per group, to
 	# produce more of what is already being swept up in two and a half seconds.
@@ -3540,9 +3547,12 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 	# queued 31.1 ms a frame, 269 of 906 over 33.3 ms, 69 ticks over 25 ms;
 	# here 25.0, 132 and 44, the worst tick the same. Docs/CollapseNext.md 3.
 	var cut0 := int(spawn_census.shed[0])
+	tq = _dms(2, tq)
 	if not isl.disposable:
 		solve_island(isl)
-	rebuild_mesh(isl)
+	tq = _dms(3, tq)
+	_mesh_later(isl)
+	tq = _dms(4, tq)
 	if at_rest:
 		if isl.is_valid() and isl.settled:
 			rest_hits_kept += 1
@@ -3550,6 +3560,37 @@ func damage(isl: BrickIsland, world_point: Vector3, radius: float, chip := 0) ->
 			rest_hits_cut += 1
 		else:
 			rest_hits_woke += 1
+
+
+## A hit's mesh update, once a piece a tick however many hits it took
+## (flush_meshes). Done in the hit, it was 1.65 s of a `--big --shot`'s 1.95 s of
+## hits on pieces (2026-10-20): a piece under automatic fire patched -- a walk
+## of its every face -- or rebuilt once a bullet. Its bricks and collision
+## change in the hit; only the drawing waits, to the end of the damage pass.
+var _mesh_due: Array[BrickIsland] = []
+func _mesh_later(isl: BrickIsland) -> void:
+	if not _mesh_due.has(isl):
+		_mesh_due.append(isl)
+
+
+## The meshes hits have owed since the last call. CityScene calls it after the
+## tick's hits; the pieces' tick calls it too, for hits from anywhere else.
+func flush_meshes() -> void:
+	if _mesh_due.is_empty():
+		return
+	var due := _mesh_due
+	_mesh_due = []
+	var t0 := Time.get_ticks_usec()
+	for isl in due:
+		if isl.is_valid():
+			rebuild_mesh(isl)
+	damage_ms[4] += float(Time.get_ticks_usec() - t0) / 1000.0
+
+
+func _dms(k: int, t0: int) -> int:
+	var now := Time.get_ticks_usec()
+	damage_ms[k] += float(now - t0) / 1000.0
+	return now
 
 
 ## Shove every loose piece within PUSH_REACH of a blast at `point` (see
@@ -3600,12 +3641,20 @@ func push_census_line() -> String:
 ## Damage every loose piece whose volume reaches the blast, not every piece
 ## whose origin happens to sit near it, and push what it reaches (push_near).
 ## Returns how many were hit.
+## Where damage_near's time goes, ms all told: [waking sleepers, finding the
+## pieces, damaging them, pushing them, calls].
+var damage_near_ms := [0.0, 0.0, 0.0, 0.0, 0]
 func damage_near(point: Vector3, radius: float, chip := 0) -> int:
 	var hit := 0
+	var t0 := Time.get_ticks_usec()
+	damage_near_ms[4] += 1
 	# A bullet has no radius but still has to find the piece it struck.
 	var reach := maxf(radius, 0.25) if chip > 0 else radius
 	# What is asleep is still there to be hit.
 	wake_dormant_near(point, reach)
+	var t1 := Time.get_ticks_usec()
+	damage_near_ms[0] += float(t1 - t0) / 1000.0
+	var in_damage := 0
 	# Walk by index up to the count we started with: damaging a piece can
 	# append new ones, and copying the list per call is itself O(islands).
 	var n := islands.size()
@@ -3618,12 +3667,18 @@ func damage_near(point: Vector3, radius: float, chip := 0) -> int:
 		if isl.body.global_position.distance_to(point) > isl.radius + reach:
 			continue
 		if world_aabb(isl).grow(reach).has_point(point):
+			var td := Time.get_ticks_usec()
 			damage(isl, point, radius, chip)
+			in_damage += Time.get_ticks_usec() - td
 			hit += 1
+	var t2 := Time.get_ticks_usec()
+	damage_near_ms[1] += float(t2 - t1 - in_damage) / 1000.0
+	damage_near_ms[2] += float(in_damage) / 1000.0
 	# After the damage, so what a hit cut off is pushed as well. A gun's wear
 	# pushes nothing.
 	if chip <= 0:
 		push_near(point, radius)
+	damage_near_ms[3] += float(Time.get_ticks_usec() - t2) / 1000.0
 	return hit
 
 
@@ -4500,6 +4555,7 @@ func _slow_window(isl: BrickIsland) -> int:
 
 
 func tick() -> void:
+	flush_meshes()
 	var _t_loop := Time.get_ticks_usec()
 	if camera != null and is_instance_valid(camera):
 		_frustum = camera.get_frustum()

@@ -2580,6 +2580,120 @@ void BrickWorld::fill_indices(Chunk &c, MeshStats &st, PackedInt32Array &out) {
     }
 }
 
+void BrickWorld::track_indices(Chunk &c, int emitted) {
+    const FaceBake &fb = c.bake;
+    const int faces = fb.face_count();
+    const size_t nb = c.blocks.size();
+    c.idx_alive.resize(nb);
+    for (size_t i = 0; i < nb; ++i) {
+        c.idx_alive[i] = c.blocks[i].alive ? 1 : 0;
+    }
+    c.idx_own_first.assign(nb, 0);
+    c.idx_own_n.assign(nb, 0);
+    c.idx_rev_at.assign(nb + 1, 0);
+    for (int f = 0; f < faces; ++f) {
+        const int32_t o = fb.owner[f];
+        if (c.idx_own_n[(size_t)o] == 0) {
+            c.idx_own_first[(size_t)o] = f;
+        }
+        ++c.idx_own_n[(size_t)o];
+        const int32_t other = fb.other[f];
+        if (other >= 0) {
+            ++c.idx_rev_at[(size_t)other + 1];
+        }
+    }
+    for (size_t i = 0; i < nb; ++i) {
+        c.idx_rev_at[i + 1] += c.idx_rev_at[i];
+    }
+    c.idx_rev.resize((size_t)c.idx_rev_at[nb]);
+    std::vector<int32_t> at(c.idx_rev_at.begin(), c.idx_rev_at.end() - 1);
+    for (int f = 0; f < faces; ++f) {
+        const int32_t other = fb.other[f];
+        if (other >= 0) {
+            c.idx_rev[(size_t)at[(size_t)other]++] = f;
+        }
+    }
+    c.idx_serial = fb.serial;
+    c.idx_emitted = emitted;
+    ++index_stats[1];
+}
+
+bool BrickWorld::refill_changed(Chunk &c, std::vector<int32_t> &changed) {
+    const FaceBake &fb = c.bake;
+    const int faces = fb.face_count();
+    const size_t nb = c.blocks.size();
+    if (!fb.valid || c.idx_serial != fb.serial || c.idx_alive.size() != nb
+            || c.idx_own_n.size() != nb || c.live_indices.size() != (int64_t)faces * 6) {
+        return false;
+    }
+    // Which blocks changed: a byte a block, against a walk of every face.
+    std::vector<int32_t> dirty;
+    for (size_t i = 0; i < nb; ++i) {
+        if ((c.blocks[i].alive ? 1 : 0) != c.idx_alive[i]) {
+            dirty.push_back((int32_t)i);
+        }
+    }
+    // Most of it changed: the full fill is the cheaper walk.
+    if (dirty.size() > nb / 4 + 64) {
+        return false;
+    }
+    int32_t *w = c.live_indices.ptrw();
+    auto redo = [&](int f) {
+        const int32_t owner = fb.owner[f];
+        const int32_t other = fb.other[f];
+        const bool drawn = c.blocks[owner].alive && (other < 0 || !c.blocks[other].alive);
+        const int base = f * 6;
+        // Slot 1 is v0 + 1 when drawn and 0 when not (slot 0 is 0 both ways
+        // for the first face).
+        if (drawn == (w[base + 1] != 0)) {
+            return;
+        }
+        if (drawn) {
+            const int v0 = f * 4;
+            w[base + 0] = v0 + 0;
+            w[base + 1] = v0 + 1;
+            w[base + 2] = v0 + 2;
+            w[base + 3] = v0 + 1;
+            w[base + 4] = v0 + 3;
+            w[base + 5] = v0 + 2;
+            ++c.idx_emitted;
+        } else {
+            for (int k = 0; k < 6; ++k) {
+                w[base + k] = 0;
+            }
+            --c.idx_emitted;
+        }
+        changed.push_back(f);
+    };
+    for (int32_t x : dirty) {
+        const int32_t f0 = c.idx_own_first[(size_t)x];
+        const int32_t n = c.idx_own_n[(size_t)x];
+        for (int32_t f = f0; f < f0 + n; ++f) {
+            redo(f);
+        }
+        for (int32_t k = c.idx_rev_at[(size_t)x]; k < c.idx_rev_at[(size_t)x + 1]; ++k) {
+            redo(c.idx_rev[(size_t)k]);
+        }
+        c.idx_alive[(size_t)x] = c.blocks[(size_t)x].alive ? 1 : 0;
+    }
+    ++index_stats[0];
+    index_stats[2] += (int64_t)changed.size();
+    if (index_check) {
+        index_verify(c);
+    }
+    return true;
+}
+
+void BrickWorld::index_verify(Chunk &c) {
+    MeshStats scratch;
+    PackedInt32Array full;
+    fill_indices(c, scratch, full);
+    if (full.size() != c.live_indices.size()
+            || memcmp(full.ptr(), c.live_indices.ptr(), (size_t)full.size() * 4) != 0) {
+        ++index_stats[3];
+    }
+}
+
 Dictionary BrickWorld::get_memory_report() const {
     Dictionary d;
     int64_t occupancy = 0, blocks = 0, bake_verts = 0, bake_topology = 0, indices = 0, joints = 0;
@@ -2650,24 +2764,39 @@ Dictionary BrickWorld::update_index_region(int chunk_id, int index_bytes) {
     st.faces_emitted = 0;
     st.faces_culled = 0;
 
-    PackedInt32Array next;
-    fill_indices(c, st, next);
-
-    const int n = next.size();
-    const int32_t *a = c.live_indices.ptr();
-    const int32_t *b = next.ptr();
-
     int first = -1;
     int last = -1;
-    for (int i = 0; i < n; ++i) {
-        if (a[i] != b[i]) {
-            if (first < 0) {
-                first = i;
-            }
-            last = i;
+    int n = 0;
+    const int32_t *b = nullptr;
+    std::vector<int32_t> changed;
+    // Only what changed, when it can: a 24,000-brick piece under fire walked
+    // all of its faces for every hit, 2-9 ms each (2026-10-20).
+    if (refill_changed(c, changed)) {
+        n = c.live_indices.size();
+        b = c.live_indices.ptr();
+        st.faces_emitted = c.idx_emitted;
+        for (int32_t f : changed) {
+            first = (first < 0 || f * 6 < first) ? f * 6 : first;
+            last = (f * 6 + 5 > last) ? f * 6 + 5 : last;
         }
+    } else {
+        PackedInt32Array next;
+        fill_indices(c, st, next);
+        n = next.size();
+        const int32_t *a = c.live_indices.ptr();
+        const int32_t *nb = next.ptr();
+        for (int i = 0; i < n; ++i) {
+            if (a[i] != nb[i]) {
+                if (first < 0) {
+                    first = i;
+                }
+                last = i;
+            }
+        }
+        c.live_indices = next;
+        track_indices(c, st.faces_emitted);
+        b = c.live_indices.ptr();
     }
-    c.live_indices = next;
 
     st.indices = n;
     st.compact_ms = std::chrono::duration<double, std::milli>(
@@ -2942,6 +3071,7 @@ Array BrickWorld::build_chunk_mesh(int chunk_id) {
     st.baked_faces = c.bake.face_count();
 
     fill_indices(c, st, c.live_indices);
+    track_indices(c, st.faces_emitted);
     st.vertices = c.bake.verts.size();
     st.indices = c.live_indices.size();
     for (const Block &b : c.blocks) {
@@ -9540,6 +9670,8 @@ void BrickWorld::_bind_methods() {
             "ground_y", "reach_studs", "apply"), &BrickWorld::cut_spans_resting);
     ClassDB::bind_method(D_METHOD("mark_chunk_whole", "chunk_id"), &BrickWorld::mark_chunk_whole);
     ClassDB::bind_method(D_METHOD("set_components_check", "on"), &BrickWorld::set_components_check);
+    ClassDB::bind_method(D_METHOD("set_index_check", "on"), &BrickWorld::set_index_check);
+    ClassDB::bind_method(D_METHOD("get_index_patch_stats"), &BrickWorld::get_index_patch_stats);
     ClassDB::bind_method(D_METHOD("get_components_near_stats"), &BrickWorld::get_components_near_stats);
     ClassDB::bind_method(D_METHOD("crack_studs", "chunk_id", "axis", "from_k", "to_k"),
             &BrickWorld::crack_studs);

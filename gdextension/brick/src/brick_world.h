@@ -1518,6 +1518,28 @@ private:
     /// Fill c.live_indices for the current alive state. Fixed length: six per
     /// baked face, degenerate where the face is not drawn.
     void fill_indices(brick::Chunk &c, MeshStats &st, PackedInt32Array &out);
+    /// After a full fill_indices into c.live_indices: what it was filled
+    /// against, for refill_changed.
+    void track_indices(brick::Chunk &c, int emitted);
+    /// Redo, in c.live_indices, only the faces of blocks whose alive flag has
+    /// changed since the last fill, and the faces they hid. The faces written
+    /// go in `changed`. False when it cannot (no fill to go from, another bake,
+    /// too much changed): the caller fills in full.
+    bool refill_changed(brick::Chunk &c, std::vector<int32_t> &changed);
+    /// Probes: every patch made by refill_changed is checked against a full
+    /// fill. get_index_patch_stats: [patches made from what changed, full
+    /// fills, faces written, patches that differed from a full fill].
+    bool index_check = false;
+    int64_t index_stats[4] = { 0, 0, 0, 0 };
+    void set_index_check(bool on) { index_check = on; }
+    PackedInt64Array get_index_patch_stats() const {
+        PackedInt64Array a;
+        for (int i = 0; i < 4; ++i) {
+            a.push_back(index_stats[i]);
+        }
+        return a;
+    }
+    void index_verify(brick::Chunk &c);
 
     /// Shared meshing core. mask == nullptr means "every live block"; otherwise
     /// only masked blocks are meshed AND only masked blocks cull each other's
