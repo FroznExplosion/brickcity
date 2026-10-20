@@ -167,3 +167,15 @@ its windows are painted on its bricks, hidden where its rooms are drawn -- `inte
 and `interior_groups_55` shows the crossover); `interior_group_probe` 33, `interior` 87, `fixture`
 47, `shell` 38; `--breaklag --big` 7; `--lodbreak` 8 (one run of two had 3 fails, one brick of a
 blast's ring lying in mid-air through the run -- the heap's floor ray, CollapseNext 28; not this).
+
+### 5.3 The frame, made by the generator (2026-10-19) -- §4
+`TowerRecipe.frame(footprint_x, footprint_z, courses, keepouts, rooms, world, chunk)` says from
+the recipe what `build` lays that holds a building up: `floors` (`[y, plates]`, the base and every
+slab), `columns` (`[x, z, w, l, y, plates]`, each as build lays it -- given the bricks, only where
+it stands whole: on a wall line with a doorway the wall took its place) and `core` (the stairwell
+on plan). `StructureSpaces.for_tower` puts them in the record beside the rooms; `empty()` has them
+empty, for a build, until they are found in its bricks (Structures §2.4, not done). Nothing reads
+them yet: the room-open flag and rooms as the unit (§3.4) are next, then the floor-line snap.
+
+Checks: `spaces_probe` 11 (new: a 12-storey tower's frame -- 13 floors, 7 columns -- every cell of
+them bricks), `workshop_spaces_probe` 8.

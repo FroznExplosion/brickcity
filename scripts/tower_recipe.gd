@@ -749,6 +749,72 @@ static func _lay_upper(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					_plate(world, chunk_id, palette, y, q.x, q.y, h, h, colour)
 
 
+## What `build` lays that holds the building up, said once, from the recipe
+## alone (Docs/DestructionLod.md 4): every one is structural bricks already
+## (Role structure); this says which of them are what, so nothing has to search
+## the bricks to find a floor or a column. Cells are the building's own (studs
+## across, plates up, from its corner).
+##
+##   "floors":  [[y, plates], ...] -- the base and every slab, bottom up
+##   "columns": [[x, z, w, l, y, plates], ...] -- each column as build tries to
+##              lay it; where a room wall stands on its line the wall is the
+##              column there (place_block refuses the second brick), still
+##              structural either way
+##   "core":    [x, z, w, l] -- the stairwell on plan (stair_rect), every storey
+##
+## The same keep-outs and `rooms` as the build it describes. Given the bricks
+## (`world`, `chunk`), a column is named only where it stands whole: on a wall
+## line with a doorway through it the wall took its place and the doorway left
+## part of it air (a 30 x 30 tower's ground storey).
+static func frame(footprint_x: int, footprint_z: int, courses: int,
+		keepouts: Array = [], rooms: bool = true, world: BrickWorld = null,
+		chunk: int = -1) -> Dictionary:
+	var origin := world.get_chunk_origin(chunk) if world != null else Vector3i.ZERO
+	var clear := snap_keepouts(keepouts, footprint_x, footprint_z)
+	var pl := plan(footprint_x, footprint_z)
+	var bands := layout(courses)
+	var walled := {}
+	for i in bands.size() - 1:
+		var b: Dictionary = bands[i]
+		if (b.kind == "base" or b.kind == "slab") and bands[i + 1].kind == "course":
+			walled[int(b.y)] = walled.size()
+	var floors := []
+	var columns := []
+	for band in bands:
+		if band.kind != "base" and band.kind != "slab":
+			continue
+		floors.append([int(band.y), SLAB_PLATES])
+		if band.kind != "slab":
+			continue
+		var y := int(band.y) - COLUMN_PLATES
+		if y < 0:
+			continue
+		var under: int = int(walled.get(int(band.y) - STOREY_PLATES, 0))
+		var every := not rooms or columned(under, walled.size())
+		for entry in (pl.all_columns if every else pl.columns):
+			var r: Rect2i = entry
+			if _blocked(clear, r.position.x, r.position.y, r.size.x, r.size.y):
+				continue
+			if world != null and not _stands(world, chunk,
+					origin + Vector3i(r.position.x, y, r.position.y),
+					Vector3i(r.size.x, COLUMN_PLATES, r.size.y)):
+				continue
+			columns.append([r.position.x, r.position.y, r.size.x, r.size.y, y, COLUMN_PLATES])
+	var core := stair_rect(footprint_x, footprint_z)
+	return {"floors": floors, "columns": columns,
+			"core": [] if core.size == Vector2i.ZERO else [core.position.x, core.position.y,
+				core.size.x, core.size.y]}
+
+
+static func _stands(world: BrickWorld, chunk: int, lo: Vector3i, size: Vector3i) -> bool:
+	for y in size.y:
+		for x in size.x:
+			for z in size.z:
+				if not world.is_solid(chunk, lo + Vector3i(x, y, z)):
+					return false
+	return true
+
+
 ## Whether storey `storey` of `count` stands every column (`all_columns`)
 ## rather than only the ones a span needs (`columns`). See COLUMN_STOREYS.
 static func columned(storey: int, count: int) -> bool:
