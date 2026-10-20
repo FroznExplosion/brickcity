@@ -1055,10 +1055,10 @@ func _ready() -> void:
 	# its tick (IslandManager._submit_mesh_job).
 	islands.defer_job_start = true
 	islands.on_impact = _on_island_impact
-	# A recipe tower's pieces break along its storeys (IslandManager._floor_line).
-	islands.storey_plates = func(id: int) -> int:
-		var ob := registry.get_building(id)
-		return TowerRecipe.STOREY_PLATES if ob != null and not ob.is_build() else 0
+	# A building's pieces break along its floors (IslandManager._floor_line):
+	# the floors its structure record names (Docs/DestructionLod.md 4).
+	islands.floor_lines = func(id: int) -> PackedInt32Array:
+		return registry.floor_lines(id)
 	director = CollapseDirector.new(world)
 	# A client's shot arrives as a request; the host takes it exactly as it takes
 	# its own. Shears are never requested -- they come from the host's physics.
@@ -10420,7 +10420,7 @@ func _physics_process(_delta: float) -> void:
 		# Breakage as it always was; a mega building's collapse as a few big
 		# chunks, its furniture split out to be written off (CollapseDirector).
 		var plan: Array = director.plan(b.id, b.chunk, b.blocks, _world_box(b), groups,
-				islands.interest_points(), 0 if b.is_build() else TowerRecipe.STOREY_PLATES,
+				islands.interest_points(), registry.floor_lines(b.id),
 				int(res.get("failures", 0)) > 0)
 		for entry in plan:
 			if entry[1] != &"breakage" and entry[1] != &"furniture":

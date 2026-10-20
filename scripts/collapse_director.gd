@@ -114,12 +114,13 @@ static func is_mega(blocks: int) -> bool:
 ## building's size, `box` its world box, `points` where the players are.
 ## Returns [ids, kind] pairs, kind one of &"breakage", &"group", &"chunk",
 ## &"furniture" -- in a fixed order, since the host records each as it spawns.
-## `storey_plates`: a recipe tower's storey height (TowerRecipe.STOREY_PLATES),
-## so a mega collapse's chunks end where a storey does; 0 for anything else.
+## `floors`: the plate heights of the building's floors
+## (BuildingRegistry.floor_lines), so a mega collapse's chunks end where a
+## storey does; empty for a building with none named.
 ## `failing`: the solve that found these groups was still failing joints -- the
 ## cascade is running, whatever the brick count says (STALL_ROUNDS).
 func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
-		points: PackedVector3Array, storey_plates := 0, failing := false) -> Array:
+		points: PackedVector3Array, floors := PackedInt32Array(), failing := false) -> Array:
 	var out: Array = []
 	var collapse: Array = []
 	for g in groups:
@@ -228,18 +229,19 @@ func plan(id: int, chunk: int, blocks: int, box: AABB, groups: Array,
 	# A chunk is closed between storeys, not inside one: once it has its
 	# target, the groups still starting on the storey it reached go with it,
 	# so what falls is whole floors (Docs/Status.md, "floor units").
-	var per_tick := BrickWorld.ticks_per_plate() * maxi(storey_plates, 1)
+	var per_plate := BrickWorld.ticks_per_plate()
 	for k in ordered.size():
 		var entry: Array = ordered[k]
 		var structure: PackedInt32Array = entry[2]
 		current.append_array(structure)
 		if current.size() < target:
 			continue
-		if storey_plates > 0 and k + 1 < ordered.size():
+		if not floors.is_empty() and k + 1 < ordered.size():
+			# The storey each starts on: how many floors are at or under it.
 			@warning_ignore("integer_division")
-			var here := int(entry[0]) / per_tick
+			var here := floors.bsearch(int(entry[0]) / per_plate, false)
 			@warning_ignore("integer_division")
-			var next := int(ordered[k + 1][0]) / per_tick
+			var next := floors.bsearch(int(ordered[k + 1][0]) / per_plate, false)
 			if next == here:
 				continue
 		out.append([current, &"chunk"])
