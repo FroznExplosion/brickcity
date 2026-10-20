@@ -1,7 +1,9 @@
 # AI — enemies, squads and the commander
 
-**Status: planning, 2026-09-23. Nothing here is built.** §0 records what has been decided; §14 is
-what is still open.
+**Status: partly built.** Planned 2026-09-23; since then much of it has been built, and each
+section says so where it is (*Built, <date>*). Where the plan and the build differ, the build note
+is the truth -- navigation most of all: §3.6 was planned as navmeshes and was built as the brick
+grid, `AINav`. §0 records what has been decided; §14 is what is still open.
 
 The game is a co-op FPS with Titanfall-style mechs in the destructible brick city. Enemies are
 mechs, flyers, infantry, animals and swarms. They shoot, melee, dodge, plan and fight as squads —
@@ -234,7 +236,7 @@ Terrain does not deform — only buildings do — which removes Red Dawn's worst
 
 | Mover | Representation | Destruction |
 |---|---|---|
-| **Infantry, small animals** | Navmesh per terrain tile, buildings as obstacles; interiors as **per-storey regions baked once per recipe**, placed by transform and joined by door and stair links; the room graph for long routes | A change in a tile queues an async tile rebake, budgeted. Source is boxes (`get_body_boxes`, `get_block_boxes`, wreck summaries), never a trimesh |
+| **Infantry, small animals** | *Planned:* navmesh per terrain tile, interiors as per-storey regions per recipe. **Built instead: `AINav`, the brick grid** -- a node per stud column and floor, read live from `AIWorld` (bricks at any rotation, proxy boxes, the terrain field), HPA* over it (§4.3). **Next: buildings by their rooms, §3.6.1** | A shot forgets only the columns it touched; they are read again when asked. No rebake |
 | **Mechs** | A separate map at mech radius, plus **breach links**, plus mech-rated storeys (§3.11) | A breach link crosses a wall at the cost of cutting a mech-sized hole; taking it runs a *Breach* action through the ordinary damage path |
 | **Flyers** | A 2.5D height field of building tops (recipes) and wreck summaries; A* on a coarse grid with an altitude band | A changed cell is one write |
 | **Swarms** | `SwarmCore` flow fields with vertical layers | Regenerated when goal or obstacles change |
@@ -277,6 +279,100 @@ which the clearance is recomputed.
 hole in it — each becomes an off-mesh link of the right kind (walk, vault, climb through, drop),
 found from the opening's size in the grid. F.E.A.R.'s window dives and rail vaults fall out of
 this, on geometry the player made.
+
+### 3.6.1 Buildings by their rooms: what the AI knows of a building, and when
+
+*Design, 2026-10-19. Not built.* Replaces, for buildings, "read every column of every storey".
+
+**Today.** A pristine building is its shell's proxy boxes: a wall with **no door** (`ai_nav.h`).
+To go in, an encounter materialises the buildings in its zone (§3.2), and from then on the AI
+walks the building column by column: a 40 x 30 tower of ten storeys is ~12,000 nodes to the grid,
+and the grid does not know which of them is a door, a stair or a window -- the room-clearing plays
+(§6.2) have to find that out again from the bricks (`RoomManifest.openings_for`, which needs the
+building materialised).
+
+**The idea.** A building is three different things to the AI, depending on what it needs:
+
+| state | what the AI sees | when |
+|---|---|---|
+| **closed** | a solid box with **openings**: doors, doorways, windows, breaches, from the recipe or the build's structure record. No rooms, no stairs | always, for every building. Costs nothing |
+| **known** | its **layout**: a graph of spaces (rooms, halls, stairwells) joined by openings, storey by storey | only when it must: a player or a target inside, a squad planning to go in, a defender posted in it |
+| **broken here** | the rooms that are damaged are walked on the brick grid inside their own box; the rest of the building stays a graph | when the bricks of a room change |
+
+**Outside: normal pathfinding, buildings closed.** The outdoor grid is as now, except a building's
+proxy box gets its openings as **portals**: a doorway is a way in for a walker, a window a way in
+for a vault (a nav link of that kind, §3.6 "nav links from destruction"), a breach what the
+breach cost says (§3.6, built). A route that passes a building goes round it as now; a route whose
+goal is inside it ends at a portal. Nothing inside is read.
+
+**Inside: the layout graph, only on need.** The layout is the building's **structure record**
+(Structures.md 3.1): `spaces` (each with a kind, floor and ceiling, its columns), `openings`
+(doorway, door, window, glass, arch, open; which spaces they join) and the stairwell spanning
+storeys. It already exists for both kinds of building:
+
+* a build from the workshop carries it (`recipe.meta["structure"]`, the spaces tool, key O);
+* a generated tower gets it from `StructureSpaces.for_tower` -- today from the bricks (2 ms a
+  room, 106 ms for a 40-room tower); for the AI it should come from **the recipe alone**
+  (`TowerRecipe.plan`: `wall_x`/`wall_z` and `_door_span`; `layout` for the windows;
+  `stair_rect` for the shaft), baked once per recipe and placed by transform, so knowing a pristine
+  building never materialises it (§3.2).
+
+A route into a known building is three short searches, each small:
+
+1. **outdoors** on the grid, to the portal chosen (§4.3's HPA* as now);
+2. **the layout graph**, portal to the space the goal is in: tens of nodes, up the stairwell storey
+   by storey -- microseconds, cached by (building, from, to) and dropped when an opening on it
+   changes;
+3. **inside a space**, a straight walk (rooms are boxes between walls), or the brick grid in that
+   space's box where it is broken or furnished in the way.
+
+**Damage: fall back, room by room.** A room whose bricks change -- `DamageLog`, the same event that
+compromises a room for the interiors (Interiors.md §5) -- is marked *broken*. A broken room is
+walked on the brick grid inside its own box; its new holes become openings when the finder sees it
+again (Structures.md 3.3: the spaces are found again a second after their bricks change), and a
+room whose floor or walls are gone stops being a space at all -- that area is ordinary brick grid,
+joined to the graph wherever a body can cross. A door the graph thinks is open but rubble has
+blocked is checked on the grid (the door's own columns) before a squad commits to it.
+
+**What the layout buys the plays.** The stack (§6.2) knows the door before it gets there: stack
+slots from the opening (`RoomTactics.stack_slots`, built), entry points and room corners from the
+space. "Is the player reachable" is a question on the graph: is there a way from a portal, up the
+stairwell, to the player's room -- if so, *enter, climb, stack, clear*; if not (stairs shot out,
+doors bricked), *breach* (built), *flush*, or *wait them out*. A search of the building over the
+room graph from the last known position (§6.3) is the graph itself.
+
+**When a building becomes known** (and stops being known):
+
+* a player or a target is inside it (the player's room comes from the graph: which space's columns
+  they stand in);
+* a squad's plan goes in (clear, breach, post a defender, search);
+* an agent is inside it already (it was posted there, or chased in).
+
+It is forgotten when none of these is true for a while. Knowing is a *computation*, not knowledge
+of contacts (§4.2): the layout is ground truth for every side, as the walls are (§4.1); it is just
+not worked out for buildings nobody is going into.
+
+**What it costs and saves (estimates).** A 40-room tower: ~40 spaces, ~40 doorways, a stairwell a
+storey -- a graph of about a hundred nodes against ~12,000 grid nodes, and none of it read until
+the building is known. A pristine building is routed into without being materialised; it is
+materialised as the squad arrives at its door, the same budgeted step a player walking up causes.
+The grid search shrinks to the outdoors and to broken rooms.
+
+**On a planet** (Planets.md §7) the layout graph is in building space, so curvature never reaches
+it.
+
+**Build order.**
+
+1. Openings as portals on the proxy box of a closed building, from the recipe -- AI can route to
+   a pristine building's door and window without materialising it. Gate: a squad reaches a door
+   of a building nobody has visited, and the building materialises only as it arrives.
+2. The layout graph per recipe (generated towers) and from the structure record (builds); the
+   three-part route. Gate: `squad` reaches a player on the third floor by the stairs; node counts
+   against the grid route.
+3. Broken rooms on the grid, re-found openings, the blocked-door check. Gate: shoot out the
+   stairwell between them -- the squad breaches or holds instead of standing at the foot.
+4. The plays read the graph (stack, clear, search). `bt_play_clear_room` already takes an opening
+   and stack slots.
 
 ### 3.7 Cover is a number: how long it will last
 
@@ -435,7 +531,8 @@ enemies knowing where your mech saw you, which is cheating the player can feel.
 ### 4.3 Pathfinding shared, in four ways
 
 1. **Hierarchical.** A small abstract graph — street sectors, building openings and breaches,
-   rooms — carries the long route. A* on it is microseconds and its results are cached by
+   rooms — carries the long route. (Inside buildings this is §3.6.1, not built yet; outdoors it is
+   the HPA* below.) A* on it is microseconds and its results are cached by
    `(from, to, agent class)`, invalidated only when an event touches a portal on the route. The
    navmesh is asked only for the next couple of sectors.
    *Built, 2026-10-10 (`AINav.set_hierarchy`, `ai_nav_hpa.cpp`): HPA\*, on every map.* Not
