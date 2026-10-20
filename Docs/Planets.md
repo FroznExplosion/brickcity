@@ -1,27 +1,37 @@
-# Planets — curved horizon now, spherical planets deferred
+# Planets — real spheres, brick patches, buildings on their own grids
 
-Status (2026-10-05): **deferred.** Nothing here is scheduled. If the game wants the look of a
-planet from the ground, §2 is the route and it is small. If it ever wants real planets — landing
-from orbit, walking all the way round, several bodies — §3 is the route, and it is large.
+Status (2026-10-19): **design, not scheduled.** Replaces the 2026-10-05 version, which deferred
+real planets because every system would have to change. Two decisions since then make the large
+route much smaller:
 
-Prior art, both ours: STA's cubed-sphere blocky planets (`Docs/Reference/sta.md`,
-STA `Docs/23_CUBED_SPHERE_BLOCKY.md`) and zylanntest's curvature shader
+* **The ground stops being a brick grid.** Smooth low-poly ground with sparse patches of bricks
+  (Terrain.md 18.6 and §3 here) needs no global stud grid, so it does not have to wrap a sphere.
+* **On a planet the ground is indestructible; buildings stay destructible.** The ground becomes
+  baked static data, and everything destructible already lives on each building's own grid.
+
+Prior art, both ours: STA (`C:\Users\lbaun\Documents\sta`: smooth SDF planets on Zylann's voxel
+engine, radial gravity, floating origin, orbits, simple Gerstner water; its cubed-sphere study is
+`Docs/23_CUBED_SPHERE_BLOCKY.md` and `25_PLANET_SHAPES.md`) and zylanntest's curvature shader
 (`Docs/Reference/zylanntest.md`).
+
+§9 lists what can be changed NOW, in the flat game, so the move costs less later.
 
 ---
 
-## 1. The question, and the answer in one line
+## 1. The two routes
 
-Can the brick terrain sit on a real sphere? **Yes** — a cubed sphere puts our heightfield on each
-of six faces, and STA has measured that it holds up. But every system that assumes "up is +Y"
-changes with it. A curved HORIZON on a flat world is a vertex-shader bend and changes no gameplay.
+| | cheap: a bent picture (§2) | large: real planets (§3–§8) |
+|---|---|---|
+| what it is | the flat world drawn falling away at the horizon | spherical bodies you land on, walk round and fly between |
+| gameplay change | none | gravity, AI outdoors, terrain, coordinates |
+| cost | days | months; much less after §9 |
 
 ---
 
 ## 2. The cheap route: bend the flat world in the vertex shader
 
-What zylanntest does (`shaders/blocky_terrain.gdshader`, `Docs/voxel_planet_game_design.md` §5):
-every vertex drops by its horizontal distance from the player squared over twice a radius.
+Every vertex drops by its horizontal distance from the player squared over twice a radius
+(zylanntest `shaders/blocky_terrain.gdshader`):
 
 ```glsl
 vec3 d3 = world_pos - player_pos;
@@ -29,112 +39,279 @@ vec3 horiz = d3 - up * dot(d3, up);
 VERTEX.y -= min(dot(horiz, horiz) / (2.0 * planet_radius), 10000.0) * strength;
 ```
 
-`strength` is blended by the player's altitude (`u_curve_low_altitude` .. `u_curve_high_altitude`),
-so the curve can be faint on the ground and full from the air, and it is 0 in a flat editor
-(zylanntest zeroes it for its structure builder).
+`strength` blends in with the player's altitude, so the curve is faint on the ground and full from
+the air, and 0 in an editor.
 
-### 2.1 What it gives and what it does not
+* **Gives:** a planet's horizon from any height for a few ALU a vertex. Gameplay, physics, AI,
+  water, the city grid and saving are untouched.
+* **Does not give:** going round, orbit, several bodies, gravity to a centre. Far things are drawn
+  lower than they are: 4.5 m at 300 m on a 10 km radius -- fade the bend in past weapon range.
 
-* **Gives:** the ground falls away at the horizon like a planet's, from any height, at the cost
-  of a few ALU per vertex. Gameplay, physics, AI, water simulation, the city grid, buildings,
-  weapons and saving are all untouched: the world IS flat; only its picture curves.
-* **Does not give:** going round, orbit, several planets, gravity toward a centre. What you see
-  far off is drawn lower than where it really is, so a long-range shot at something on the
-  horizon aims at where it is, not where it is drawn. At 300 m on a 10 km radius that is 4.5 m —
-  noticeable for a sniper, invisible for a mech brawl. Keep the radius large enough, or fade the
-  bend in only past weapon range.
+| R | drop at 100 m | at 300 m | at 1 km |
+|---|---|---|---|
+| 2 km | 2.5 m | 22 m | 250 m |
+| 10 km | 0.5 m | 4.5 m | 50 m |
+| 50 km | 0.1 m | 0.9 m | 10 m |
 
-### 2.2 Radius
+Applying it: one `curvature.gdshaderinc` with a global uniform, included by every world shader
+(terrain tiers, studs, scatter, water, bricks, impostors, printed parts, glass). Traps: culling
+uses unbent bounds (extra margin on far tiers); shadows need the include too. A few days.
 
-The drop at distance `d` is `d^2 / 2R`:
-
-| R | drop at 100 m | at 300 m | at 1 km | feel |
-|---|---|---|---|---|
-| 2 km | 2.5 m | 22 m | 250 m | a small moon, horizon very close |
-| 10 km | 0.5 m | 4.5 m | 50 m | visibly a planet from a mech's height |
-| 50 km | 0.1 m | 0.9 m | 10 m | a hint at the horizon only |
-
-Start at ~10 km with the altitude blend, tune by eye.
-
-### 2.3 What applying it here takes
-
-Every shader that draws the world needs the same bend, or things float off the ground at range:
-
-* `shaders/terrain*` (detail and coarse tiers, studs and scatter instances),
-* `shaders/water.gdshader` (both tiers and the sheet), `water_pool.gdshader`,
-* `shaders/brick*` (buildings, debris), `impostor.gdshader` and the near-tree fade copy that
-  `ImpostorLod._fading` injects, `printed*.gdshader` (studs, tufts, pebbles),
-* the sky / horizon (the sea sheet already reaches the world's edge; past the curve it drops below
-  the horizon naturally).
-
-Best done as one `#include` (a `curvature.gdshaderinc` beside `weather.gdshaderinc`) with one
-global shader uniform for the player position and radius, so no material has to be told.
-
-Traps: culling uses the UNBENT bounds, so far objects bent down can be culled while still on
-screen near the horizon — give the far tiers an extra cull margin. Shadows are drawn bent too, so
-the sun's shadow camera needs the same include (it does, if every shader has it). Picking and
-physics rays stay flat, which is right.
-
-Effort: a few days, mostly touching every shader and checking the far tiers line up.
+It also makes a good LANDING transition for §3: from orbit you see the real sphere (STA's impostor),
+and on the ground the bent picture of the local chart, the two agreeing at the switch altitude.
 
 ---
 
-## 3. The large route: a real spherical planet (STA's cubed sphere)
+## 3. The ground on a planet: smooth low-poly, brick patches, never broken
 
-### 3.1 The geometry
+### 3.1 Why bricks cannot wrap a sphere, and why that stops mattering
 
-A cube whose six faces are projected onto a sphere. Each face is a flat 2-D grid — which is what
-our heightfield already is — so each face is our terrain: tiles, slopes, pools, LOD, with every
-vertex mapped through the sphere function and height measured outward from the centre.
+A quad grid closed round a sphere has at least 8 irregular corners (Euler: total defect `4χ = 8`;
+STA doc 23 measured them). A stud grid laid round a planet is therefore never exactly a stud grid.
 
-STA measured, at `R = 2000 m` (`23_CUBED_SPHERE_BLOCKY.md` §4, §16, §26–27):
+The ground Terrain.md 18.6 is heading to does not need one. It is a smooth low-poly surface with
+**bricks in patches** -- flat ground and the odd scatter -- and each patch can carry its OWN little
+grid, laid flat in the local tangent plane. The sag of a flat thing of width `w` on a sphere of
+radius `R` is `w² / 8R`:
 
-* With an equiangular warp (blend 0.48) cells are square to within 3.8% everywhere except the 8
-  cube corners; size drifts 1.49:1 from a face's middle to its corner — never visible, because
-  neighbours differ by a fraction of a percent.
-* A CONFORMAL map makes cells exact squares everywhere and the face seams meet at 90.00°; the cost
-  is that corner cells shrink (to 13.5% at the very corner). Past a 10% margin it beats the warp on
-  area too. STA covers the corners with a pre-warp and hides what is left under terrain.
-* The 8 corners are irreducible (a quad grid cannot close round a sphere without them).
-* Unedited ground stores nothing — "the heightmap is the store, which is also the far LOD"
-  (§31.1), the same principle as our heightfield and Terrain.md §22.
-
-### 3.2 What changes in this game
-
-| system | change | size |
+| width | R = 1.5 km | R = 6 km |
 |---|---|---|
-| terrain mesher, slopes, LOD | the same mesher in face (u, v, height) coordinates, a quadtree per face, seams between faces | moderate |
-| bricks | a stud is no longer exactly 0.35 m everywhere (drifts with the face scale); pieces are very slightly trapezoid | accept, or keep LEGO-exact pieces only near the player |
-| gravity, player, mechs, camera | gravity to the centre (Godot Area3D point gravity), every controller's "up" is local | large |
-| AI navigation | AINav is one flat grid: one per face, joined across seams | large |
-| sea and waves | the sea becomes a spherical shell; BrickWave's plane waves run in the local tangent plane; pools work per face | moderate |
-| city and buildings | each building stays its own flat brick grid on its pad, tilted to local up. Ground under a 30 m building on a 2 km planet drops ~6 cm at its edge — under half a plate | small |
-| weapons, debris, ballistics | fall toward the centre; long shots curve over the horizon | medium |
-| saving, multiplayer | positions become (face, u, v, height) or stay Cartesian with a face lookup | medium |
+| 6 m patch | 3 mm | 1 mm |
+| 40 m | 0.13 m (a plate) | 0.03 m |
+| 70 m | 0.42 m (a brick) | 0.10 m |
+| 140 m | 1.6 m | 0.42 m (a brick) |
+| 300 m | 7.5 m | 1.9 m |
 
-### 3.3 Size decides the feel
+A brick patch of a few metres is flat to a fraction of a plate on any planet worth landing on.
 
-Horizon distance on a sphere, `sqrt(2 R h)`:
+### 3.2 The surface itself
+
+A **cubed sphere of heightmap chunks** -- the same tiles we stream now, mapped through the sphere
+on each of six faces, height measured outward from the centre, a LOD quadtree per face. STA
+measured the mapping (doc 23 §4, §16, §26–32): cells square to within 4% except at the 8 corners,
+which are hidden under terrain.
+
+**Not** STA's voxel terrain. Zylann's SDF voxels are what made STA's planets destructible, with
+caves and overhangs, and they are its most expensive system: transvoxel meshing, edit storage,
+re-meshing. Indestructible ground needs none of it. Caves and overhangs, where wanted, are
+authored meshes placed on the surface, like buildings.
+
+### 3.3 What "indestructible" buys
+
+| | today (flat, editable in the editor) | planet ground (static) |
+|---|---|---|
+| mesh | generated per tile while streaming | **baked once** (at world build or first visit, cached to disk) and simplified per chunk -- flat ground collapses to a few triangles |
+| collision | 100–200 merged boxes a tile | one heightmap shape a chunk, baked |
+| lighting | sun shadow baked per vertex already | the same, plus baked AO |
+| navigation outdoors | brick-column grid, read live | **baked once** per chunk (§7) |
+| edit store | copy-on-write sculpt tiles | none at runtime |
+| explosions | (already do not dig) | scorch decals |
+
+Streaming becomes LOADING, not generating -- which is where most of this month's terrain hitches
+came from. Triangles: indestructibility does not remove any by itself; it permits offline
+simplification. With the low-poly look (Terrain.md 18.6 follow-up) the near ground estimate is
+~100–190k triangles where laid brick is ~400k; offline simplification of the far ground could
+plausibly halve its ~370k again. **Estimates, not measured.**
+
+### 3.4 Size decides the feel
+
+Horizon distance `sqrt(2 R h)`:
 
 | R | eye 1.7 m | mech 10 m |
 |---|---|---|
-| 2 km | ~80 m | ~200 m |
+| 1.5 km (STA's moon) | ~70 m | ~170 m |
+| 6 km (STA's planets) | ~140 m | ~350 m |
 | 10 km | ~180 m | ~450 m |
 
-A small planet reads well from space and closes in on the ground. A mech shooter wants sight lines,
-so a real planet here would be 10 km or more — 6 faces of ~45,000 studs a side, streamed.
-
-### 3.4 If it is ever taken up
-
-1. A stand-alone prototype: one planet of our tiles on a conformal cubed sphere, radial gravity,
-   a walking player, no game systems. Gate: seams invisible, walking over an edge seamless.
-2. Per-face LOD and streaming.
-3. The sea shell; pools per face.
-4. Controllers and camera with local up; then AI per face; then the city.
+A mech shooter wants sight lines: 6 km or more for a planet you fight on; small bodies for
+set pieces. STA's planets are 5–6 km with a 1.5 km moon.
 
 ---
 
-## 4. Decision
+## 4. Buildings: rigid grids, or bent grids
 
-Deferred. If curvature is wanted before then, §2 (the shader) is the route: it costs days and
-changes no gameplay. §3 only if the game grows real planets.
+Every building already has its own brick grid and transform (`BuildingRegistry`, `b.xform`).
+On a planet each one is placed in the local tangent frame at its site.
+
+### 4.1 Rigid (the default)
+
+The building stays exactly as it is; the ground comes to it: the pad and brick fill already built
+for placing on hillsides (Terrain.md 21.8, 18.6), which is also what STA's structure builder does
+(STA doc 16 §3, "flatten pad"). From the §3.1 table, no visible problem below about a brick of sag
+-- ~70 m on a 1.5 km body, ~140 m on 6 km. Wider, the plinth shows at the edges as a terrace.
+
+**The real limit is gravity, not the look.** On a flat 300 m roof on a 1.5 km body, radial gravity
+is 5.7° off the roof's normal at its edges: the roof feels like a slope. The fix is a **gravity
+zone per building**: inside its box, down is the building's down (Godot `Area3D` gravity override,
+the Mario Galaxy way). With that, any width works rigidly.
+
+### 4.2 Bent (for wide buildings on small bodies, and long things)
+
+Render-only curvature, as asked: the bricks are never printed bent and the curve belongs only to
+that planet's grids.
+
+**Simulate flat, draw bent.** The building is simulated in its flat building space exactly as now
+-- placement, damage, stress, collapse, rooms, AI -- and only drawn wrapped onto the sphere:
+
+```
+world(p_building) = centre + (R + p.y) * dir(azimuthal_map(p.x, p.z))
+```
+
+What that gives:
+
+* **Gravity comes out right by itself.** Flat-space −Y maps to "toward the centre" everywhere, so
+  the stress solver, the hang check and collapse need no change, and no gravity zone is needed.
+* **No width limit in practice.** The azimuthal map's distortion over 300 m on a 1.5 km body is
+  ~0.07%.
+
+What it costs:
+
+1. **Bricks widen with height** by `(R + h) / R`: 6.7% at the top of a 100 m tower on a 1.5 km
+   body. Unavoidable on a sphere without gaps; invisible except beside an unbent copy.
+2. **Collision cannot bend.** Each collision box gets its own small rigid transform (a box is a
+   brick or a merged run, so its own bend is nothing). Chunk boxes, slab colliders, the roofs a
+   player stands on.
+3. **Everything that crosses between world and building space** -- bullets, `AIWorld`'s DDA,
+   explosion radii, the placer's aim, debris breaking off -- converts through ONE pair of
+   functions per building (`to_building(p)`, `to_world(p)`). Short rays go straight in building
+   space; long ones in segments. **This is most of the work, and §9.2 makes it cheaper now.**
+4. **Debris** that breaks off becomes an ordinary rigid body at its bent pose.
+5. **Every drawing of a building bends the same way:** chunk meshes, instanced bricks, stud cards,
+   shells, impostors, glass -- a few lines of vertex shader each, or bent at bake.
+6. Two buildings never share one continuous wall: each is its own island (true today).
+
+Rigid with a gravity zone is the default; bent is the tool for very wide buildings on small bodies,
+and for long runs -- roads, walls, ring cities -- that would otherwise need a terrace every 70 m.
+
+---
+
+## 5. Gravity, controllers and physics
+
+* **Bodies:** Godot's `Area3D` point gravity on each planet, an override inside each building
+  zone. Rigid bodies (debris, falling bricks, ragdolls, loot) then need no code.
+* **Controllers** (player, soldiers, mechs, vehicles, camera): local up = `-gravity_at(p)`.
+  STA has a radial-gravity character controller (STA doc 05) to copy from.
+* **Projectiles:** fall toward the centre; long shots curve over the horizon.
+
+Today: 515 uses of `Vector3.UP` in 104 GDScript files (many are only `look_at` up-vectors) and
+~21 hard-coded gravity constants. §9.1.
+
+---
+
+## 6. Coordinates, travel and water
+
+* **Floating origin: STA has it.** `solar_system.gd` rebases the world every 500 m
+  (`_rebase_distance`), and anything that must move with it joins the `origin_shift` group (its
+  build system, goo and effects do). For us: everything on a planet lives in **that planet's
+  local frame**; building grids are local to their buildings already, so a rebase moves the
+  planet node and touches nothing inside them. The C++ that holds absolute positions --
+  `AIWorld`'s spatial hash, `AINav`'s columns, `BrickWorld` chunk transforms, the registry's
+  boxes -- either works in planet-local coordinates or joins the shift.
+* **Seamless space travel:** STA's impostor and LOD tier swap (STA doc 02 §6–7) carries a planet
+  from orbit to the surface.
+* **Water: STA's simple water** -- Gerstner surfaces on a spherical shell at sea level, no flow
+  simulation (STA doc 20). Our `BrickWave` plane waves run in the local tangent plane; pools stay
+  per chunk. The brick-stepped wave look (Water.md) carries over as a shader.
+
+---
+
+## 7. AI and pathfinding on a planet
+
+The hard part was always the outdoors: `AINav` is one flat grid of stud columns, height up.
+Three things make it tractable:
+
+1. **Buildings route by their rooms** (Docs/AI.md §3.6.1, worth doing in the flat game now): the
+   inside of a building is a graph of spaces, openings and stairwells in **building space**, so
+   curvature never reaches it.
+2. **The ground is static**, so the outdoor map is baked once per chunk -- a flat grid in each
+   chunk's own tangent frame (a cubed-sphere face chart), joined at chunk edges. The HPA* that
+   exists (`ai_nav_hpa.cpp`) is already a graph of clusters joined at borders; a chunk is a
+   cluster with its own frame.
+3. **What stays live is small:** damaged rooms, wreckage and vehicles -- the brick grid, read
+   locally, in the frame of the building or the chunk it is in.
+
+Flow fields for swarms run on the chunk charts; a fight is a few hundred metres across, so it
+rarely spans more than a few charts.
+
+---
+
+## 8. What happens to each system
+
+| system | flat game today | on a planet | size |
+|---|---|---|---|
+| ground | brick heightfield, streamed | static cubed-sphere heightmap, baked, brick patches on local grids | large (new mesher path, reuses tiles) |
+| buildings | own grid + transform | the same, tangent-frame placement; rigid + gravity zone or bent | small (rigid) / medium (bent) |
+| destruction | building space | unchanged; debris under point gravity | small |
+| gravity / controllers | +Y | local up | large, smaller after §9.1 |
+| AI indoors | brick grid (room graph planned) | room graph, unchanged | none after AI.md §3.6.1 |
+| AI outdoors | brick grid | baked per-chunk charts | medium |
+| water | sea plane + pools | STA simple water on a shell | medium |
+| coordinates | world space | planet-local + STA's floating origin | medium |
+| saving / co-op | world positions | (body, local) positions | medium |
+
+---
+
+## 9. What to change now, in the flat game, to make the switch cheaper
+
+Each of these is worth doing for the flat game on its own, or costs nothing in it. None changes how
+the game plays.
+
+### 9.1 One source of "up" and of gravity
+
+`Gravity.up_at(p)` and `Gravity.at(p)` (an autoload, or statics on an existing one) returning +Y
+and the project gravity today. Move the ~21 hard-coded gravity constants to it first, then the
+`Vector3.UP` uses that mean "away from the ground" -- not the `look_at` up-vectors, which can wait.
+Do it as files are touched anyway; no big-bang pass. Rigid bodies already take the project's
+gravity, so they need nothing.
+
+### 9.2 Building space through one door
+
+Every query that goes from world space into a building -- `AIWorld`'s DDA, bullets, explosions,
+the placer, debris -- should go through the building's transform (`b.xform` and its inverse), not
+through `CityPlacer.box_of`'s "a building is on the grid at a quarter turn, so its box is an AABB"
+(14 call sites, 7 of `on_grid`). Keep the AABB as a broad phase only. That makes buildings tilted
+in a tangent frame free later, and a bent building one function swap.
+
+### 9.3 Room-graph pathfinding
+
+Docs/AI.md §3.6.1. Faster and smarter in the flat game (fewer nodes, doors and stairs understood,
+no materialising to route), and it is the half of planet AI that then costs nothing.
+
+### 9.4 The low-poly ground with brick patches on their own frames
+
+Terrain.md 18.6's follow-up: smooth low-poly ground almost everywhere, bricks in patches. Build the
+patches as small grids with their own transform (as scatter and buildings are) rather than as
+cells of the world's stud grid, wherever the look allows. On a planet those are exactly the
+tangent-plane patches of §3.1. In the flat game it is also what lets a patch sit on a slope.
+
+### 9.5 Bake the static ground
+
+Cache built tile meshes and colliders to disk, keyed by world, edits generation and tile. Streaming
+then loads instead of generating -- the hitches go, and §3.3 is already half done.
+
+### 9.6 Keep positions local where they are stored
+
+Saves, the AI's caches and the registry store positions relative to a building or a tile where they
+can. A world-space position in a save is the one thing a floating origin cannot shift for you.
+
+### 9.7 The bent horizon (§2)
+
+Optional, days. It gives the planet look now and becomes the landing transition later.
+
+### Not now
+
+The cubed-sphere mesher, radial controllers, the per-chunk outdoor charts and the floating origin
+are planet-only work with no payoff in the flat game: they wait for the decision to go to planets.
+
+---
+
+## 10. If it is taken up: order of work
+
+1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked,
+   STA's radial controller and floating origin, one rigid building on a pad with a gravity zone.
+   Gate: seams invisible, walking over a face edge seamless, the building's roof level.
+2. Streaming and LOD per face; STA's impostor from orbit.
+3. Buildings: tangent placement through §9.2; destruction under point gravity.
+4. AI: room graphs (already done by then, §9.3), outdoor charts per chunk.
+5. Water shell; co-op and saving in planet-local positions.
+6. Bent buildings, if wide buildings on small bodies are wanted.
