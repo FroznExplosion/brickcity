@@ -769,10 +769,30 @@ var spawn_census := {"landmark": [0, 0], "small": [0, 0], "deleted": [0, 0],
 var body_census := {}
 var _shedding := false
 var _shed_cause := ""
-## (building id) -> plates per storey, or 0: the building a piece came from is
-## a recipe tower, whose storeys a landing breaks it along (_snap_across). Set
-## by the scene; unset, pieces break where they were struck, as they did.
-var storey_plates := Callable()
+## (building id) -> the plate heights of its floors in its own grid, bottom up
+## (BuildingRegistry.floor_lines; Docs/DestructionLod.md 4): the lines a
+## landing prefers to break a piece of it along (_snap_across). Set by the
+## scene; unset or empty, pieces break where they are weakest.
+var floor_lines := Callable()
+
+
+func _lines_of(isl: BrickIsland) -> PackedInt32Array:
+	return floor_lines.call(isl.owner) if floor_lines.is_valid() else PackedInt32Array()
+
+
+## Plates from the floor at or under `plate` to the one over it: the storey
+## there -- under the lowest floor or over the top one, the storey nearest. 0
+## with fewer than two floors.
+static func _storey_at(lines: PackedInt32Array, plate: int) -> int:
+	if lines.size() < 2:
+		return 0
+	var i := clampi(lines.bsearch(plate, false), 1, lines.size() - 1)   # floors at or under it
+	return lines[i] - lines[i - 1]
+
+
+static func _on_line(lines: PackedInt32Array, plate: int) -> bool:
+	var i := lines.bsearch(plate)
+	return i < lines.size() and lines[i] == plate
 const CENSUS_FROM := ["building", "piece: landing", "piece: landing: band", "piece: landing: crack",
 		"piece: struck",
 		"piece: hit", "piece: other", "adopted (toppled whole, or woken)"]
@@ -4234,7 +4254,8 @@ func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
 		counted := {}) -> float:
 	var cy: float = BrickWorld.get_cell_size().y
 	var reach := SEAM_REACH
-	var per := int(storey_plates.call(isl.owner)) if storey_plates.is_valid() else 0
+	var lines := _lines_of(isl)
+	var per := _storey_at(lines, roundi(at / cy) + world.get_chunk_origin(isl.chunk).y)
 	if per > 0:
 		reach = float(per) * cy * 0.5
 	var first := ceili((lo + BREAK_MIN_PIECE) / cy)
@@ -4264,7 +4285,7 @@ func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
 		if best < 0 or cost < best_cost or (cost == best_cost and nearer):
 			best = i
 			best_cost = cost
-		if per > 0 and posmod(k0 + i + origin_y, per) == 0 \
+		if _on_line(lines, k0 + i + origin_y) \
 				and (line < 0 or absi(k0 + i - k_at) < absi(k0 + line - k_at)):
 			line = i
 			line_cost = cost
@@ -4329,29 +4350,30 @@ func _weak_crack(isl: BrickIsland, axis: int, at: float, lo: float, hi: float,
 
 ## Is `y` (metres up the piece's own Y) one of its building's storey lines?
 func _is_floor_line(isl: BrickIsland, y: float) -> bool:
-	var per := int(storey_plates.call(isl.owner)) if storey_plates.is_valid() else 0
-	if per <= 0:
-		return false
-	return posmod(roundi(y / BrickWorld.get_cell_size().y)
-			+ world.get_chunk_origin(isl.chunk).y, per) == 0
+	return _on_line(_lines_of(isl), roundi(y / BrickWorld.get_cell_size().y)
+			+ world.get_chunk_origin(isl.chunk).y)
 
 
 ## The storey line nearest `at` (along the piece's own Y, in its local metres)
 ## that leaves BREAK_MIN_PIECE either side, or INF: a piece of a building with
 ## no storeys, or none in reach.
 func _floor_line(isl: BrickIsland, at: float, lo: float, hi: float) -> float:
-	if not storey_plates.is_valid():
-		return INF
-	var per := int(storey_plates.call(isl.owner))
-	if per <= 0:
+	var lines := _lines_of(isl)
+	if lines.is_empty():
 		return INF
 	var cy: float = BrickWorld.get_cell_size().y
 	var origin_y: int = world.get_chunk_origin(isl.chunk).y
 	# In plates of the building's grid, which the piece kept.
 	var plates := at / cy + float(origin_y)
-	var n := roundi(plates / float(per))
-	for k in [n, n - 1, n + 1]:
-		var y := (float(k * per - origin_y)) * cy
+	# The floor nearest, then the ones either side of it.
+	var i := lines.bsearch(roundi(plates))
+	var near := i
+	if i >= lines.size() or (i > 0 and absf(plates - lines[i - 1]) < absf(lines[i] - plates)):
+		near = i - 1
+	for k in [near, near - 1, near + 1]:
+		if k < 0 or k >= lines.size():
+			continue
+		var y := float(lines[k] - origin_y) * cy
 		if y - lo >= BREAK_MIN_PIECE and hi - y >= BREAK_MIN_PIECE:
 			return y
 	return INF

@@ -30,6 +30,14 @@ var _palette: Dictionary
 var _m: IslandManager
 
 
+
+## Floors every `per` plates, from the ground up, as a recipe tower has them.
+func _every(per: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for k in 40:
+		out.append(k * per)
+	return out
+
 func _init() -> void:
 	print("a piece snaps at the weakest seam near where it is struck")
 	_w = BrickWorld.new()
@@ -175,7 +183,7 @@ func _run() -> void:
 
 	# --- where a piece snaps ----------------------------------------------------------
 	print("\nwhere a piece of it snaps")
-	_m.storey_plates = func(_id: int) -> int: return per
+	_m.floor_lines = func(_id: int) -> PackedInt32Array: return _every(per)
 	var src := _tower(Vector3(0.0, 0.05, 0.0))
 	var ids := PackedInt32Array()
 	for id in _w.get_block_count(src):
@@ -223,7 +231,7 @@ func _run() -> void:
 	ids = PackedInt32Array()
 	for id in _w.get_block_count(wall):
 		ids.append(id)
-	_m.storey_plates = func(_id: int) -> int: return 9
+	_m.floor_lines = func(_id: int) -> PackedInt32Array: return _every(9)
 	var wall_piece := _m.spawn(wall, ids, Vector3.ZERO, Vector3.ZERO, -1, -1)
 	await physics_frame
 	local = _m._island_aabb(wall_piece)
@@ -233,6 +241,18 @@ func _run() -> void:
 	k = roundi(at / cy)
 	_ok("struck a course off a storey line, it goes at the line: nothing near is clearly weaker",
 			at != INF and posmod(k + origin_y, 9) == 0, "boundary %d" % (k + origin_y))
+	# Floors where the building's record says, not every so many plates
+	# (Docs/DestructionLod.md 4): a mezzanine at 30, between floors at 27 and 45.
+	_m.floor_lines = func(_id: int) -> PackedInt32Array: return PackedInt32Array([0, 9, 18, 30, 45])
+	at = _m._weak_seam(wall_piece, float(31 - origin_y) * cy, local.position.y, local.end.y)
+	k = roundi(at / cy)
+	var line_at: float = _m._floor_line(wall_piece, float(31 - origin_y) * cy,
+			local.position.y, local.end.y)
+	_ok("floors where the record names them: struck by one off the beat, it goes at that floor",
+			at != INF and k + origin_y == 30 and roundi(line_at / cy) + origin_y == 30
+			and _m._is_floor_line(wall_piece, line_at)
+			and not _m._is_floor_line(wall_piece, float(27 - origin_y) * cy),
+			"boundary %d, nearest floor %d" % [k + origin_y, roundi(line_at / cy) + origin_y])
 
 	# --- an old command -----------------------------------------------------------------
 	print("\na snap recorded before columns were pulled off")

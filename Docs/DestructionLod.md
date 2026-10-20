@@ -222,3 +222,30 @@ over 33.3 ms -> 48-81 -- and not from this: the old hits used up `DAMAGE_BUDGET_
 pass's blasts queued, and 3,028 of them had landed by the end against 4,436 now. All of them
 landing on time is ~40% more pieces moving (13.9 -> 19.9 on average, 5,500 -> 8,000 boxes), and
 that is the physics step's. Which is §5.6.
+
+### 5.6 Coarser collision while falling: measured, not kept (2026-10-20)
+Built and timed: a falling piece's merged boxes on a 2-stud grid across (every plate up, a cell
+solid where any of it is), rebuilt exact when it settles. Three alternated `--big --shot` pairs
+showed nothing: frames 19.1-19.6 ms either way, boxes in motion 5,900-7,500 coarse against
+6,500-6,600 exact. Asked directly of whole towers (`add_chunk_shapes` merged): 310 -> 291 boxes
+(30 x 30), 728 -> 691 (40 x 40), 2,522 -> 2,435 (80 x 60) -- **3-6% fewer**; 3 or 4 studs, 25%. A
+piece's boxes are set by its layers -- slabs, window rows, courses -- and the height is the one
+thing a falling piece must keep exact to come to rest where its bricks do. Taken out again.
+
+### 5.7 Floors from the record, not every 20 plates (2026-10-20) -- §4
+`BuildingRegistry.floor_lines(id)`: the plate heights of a building's floors from its structure
+record -- a generated building's frame (`TowerRecipe.frame`), a build's own `floors` when it has
+them -- worked out once a building. What used one storey height for everything reads them:
+* a landing's snap (`IslandManager._weak_seam`, `_floor_line`, `_is_floor_line`): the floor
+  lines it prefers, and how far it looks (half the storey there);
+* a mega collapse's chunks (`CollapseDirector.plan`): closed between floors.
+A recipe tower's floors are every 20 plates from 0, as the constant had them, so towers break as
+before; a floor anywhere else -- a mezzanine, a build with floors marked -- is a floor too.
+`seam_probe` 23 (new: floors at 0, 9, 18, 30, 45, struck a plate over 30, it goes at 30, and 27
+is no floor). `storey` 4, `far_rules` 9, `float` 50, `debris` 29.
+
+**`collapse_probe` flickers since 2026-10-20**: "an untouched tower of 6 storeys to test on --
+20 of 22 buildings used already", 3 runs of 4 with these floors and 3 of 4 without them, so not
+this. The probe takes twenty of the city's twenty-two towers and any collateral damage to the
+last two leaves its last section none. Suspect: §5.5's hits landing on time (more of each blast's
+work done, more collateral); the A/B without it was stopped for low memory, not finished.

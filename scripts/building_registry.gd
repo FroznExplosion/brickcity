@@ -82,6 +82,8 @@ class Building:
 	var recipe_version := 0
 	var blocks := 0               ## what the recipe would produce, known after one build
 	var materialised_at := 0      ## msec, for LRU de-materialisation
+	## floor_lines, worked out once; null until asked.
+	var floors_memo = null
 	## Gate G1b: what the CHEAP representation needs to know about the damage.
 	##
 	## band index -> four segment masks, one per wall side. Computed when the
@@ -425,6 +427,33 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 	room.openings = RoomManifest.openings_for(
 			world, b.chunk, room, b.recipe.footprint_x, b.recipe.footprint_z)
 	return room.openings
+
+
+## The plate heights of a building's floors, in its own grid, bottom up: where
+## a landing snaps a piece of it and a big collapse cuts it (IslandManager,
+## CollapseDirector). From the structure record (Docs/DestructionLod.md 4): a
+## generated building's frame (TowerRecipe.frame), a build's own `floors` when
+## it has them (found or marked), and nothing otherwise -- a piece of it breaks
+## where it is weakest, with no floor to prefer.
+func floor_lines(building_id: int) -> PackedInt32Array:
+	var b := get_building(building_id)
+	if b == null:
+		return PackedInt32Array()
+	if b.floors_memo != null:
+		return b.floors_memo
+	var lines := PackedInt32Array()
+	var floors: Array = []
+	if b.is_build():
+		var meta: Dictionary = b.recipe.get("meta", {})
+		floors = (meta.get("structure", {}) as Dictionary).get("floors", [])
+	else:
+		floors = TowerRecipe.frame(b.recipe.footprint_x, b.recipe.footprint_z,
+				b.recipe.courses).floors
+	for f in floors:
+		lines.append(int(f[0]))
+	lines.sort()
+	b.floors_memo = lines
+	return lines
 
 
 ## Lay ONE item of a room into the building's chunk as bricks.
