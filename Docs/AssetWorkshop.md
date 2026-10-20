@@ -616,6 +616,58 @@ half a stud off converts badly; and which model files load.
 
 asset_workshop_probe 279 (8 new).
 
+### Symmetric Convert, and what a bigger gun costs (2026-10-20)
+
+The user: a symmetrical SDF (a T-posed robot) converts to bricks that are not symmetrical,
+however it is moved left or right; is it the size? A middle line on the stud grid to line
+the SDF up with. And: should guns be more studs for detail -- what do 2x studs cost?
+
+**Why it is never symmetrical.** Two causes, and moving only fixes the first:
+
+1. *Where the middle falls.* Cells are solid where their middle is inside. A shape is
+   symmetrical in cells only if its middle plane is on a stud line or a stud's middle. A model
+   is spawned at the class's length (an SMG 53.25 studs), so its middle lands a quarter stud
+   off; "snap to studs" put its *corner* on a stud, which leaves the middle off for a width
+   that is not whole.
+2. *The packer.* `pack_cells` sweeps each layer along x then z (back and forth a layer, for
+   the bond) and takes the first brick that fits, and `fit_pieces` takes the best gain first.
+   Even symmetrical cells come out as different bricks on each side.
+
+**The fix.** With the mirror on (Alt S, its plane across z: the gun's left and right):
+
+- **Centre on the mirror** (sculpt panel): moves the placed model, else the block-out, across
+  z so its middle is on the mirror plane; and the plane is kept on a **stud line** (a whole
+  stud), not a stud's middle -- see the next point. The plane shows as the mirror sheet.
+- **Convert mirrors one half.** The cells on the near side (z below the plane) are the truth;
+  the far side is made their mirror image. The two columns either side of the plane are packed
+  first, only with bricks two studs across (a 1 x 2 turned, a 2 x N) sitting on the plane, so
+  the halves are joined -- bricks mirrored half against half would leave the gun in two pieces
+  that nothing holds together. The near half is packed and fitted (slopes, wedges, curves) on
+  its own, and every brick and piece is mirrored across: a plain brick to the mirrored place,
+  a shaped piece to the turn of it whose samples are the mirror image (found by comparing the
+  kit's grids). Old bricks are not reused at a symmetrical Convert.
+- A plane on a stud's middle cannot be bridged symmetrically (it would need bricks an odd number
+  of studs across, centred), so Centre puts it on a stud line, and Convert moves a plane left on
+  a stud's middle half a stud first, saying so.
+
+**What 2x studs cost** (measured: the box SMG and the TestRobot, converted at 1x and at 2x):
+
+| | Bricks | Triangles | of them studs | Convert |
+|---|---|---|---|---|
+| box SMG, 53 studs | 186 | 9,700 | 2,900 | 0.3 s |
+| box SMG, 2x (107 studs) | 907 | 46,300 | 20,400 | 1.8 s |
+| TestRobot, 52 studs | 835 | 33,500 | 6,000 | 1.0 s |
+| TestRobot, 2x | 4,119 | 151,600 | 22,600 | 4.9 s |
+
+Triangles go up about 4.5-5x (the surface, not the volume: hidden faces are not drawn). One
+held gun at 50k is cheap; every enemy's gun at that, near, is not (twenty is a million), so
+2x guns would want the studs dropped at a distance. The print doubles: an SMG 426 mm instead
+of 213, and the shared grip 12 studs. In the game every gun is shown at its class's length
+(an SMG 0.4 m), so 2x studs make each stud half as big on screen -- finer detail, and studs
+small enough to shimmer. Not decided; the user is told the numbers.
+
+**Built 2026-10-20** as planned. "centre on mirror" (sculpt panel) turns the mirror on if it is off. All 136 turns of the fitted pieces have a mirror twin among their part's turns (52 are their own). asset_workshop_probe 281: a capsule placed a quarter stud off, centred and converted -- every brick has its mirror image, and bricks cross the plane. The mirror plane is across z (the gun's left and right): a model symmetrical left to right as seen from the side (the T-posed robot facing the camera) is turned a quarter first (the gizmo's green ring).
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's

@@ -1957,7 +1957,8 @@ func fill_parts() -> Array:
 ## on shared courses, so neighbouring columns line up to be bridged; each layer grows
 ## from the other corner to the one under it, so seams do not stack.
 ## Returns [[archetype name, min cell]].
-func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, course: int = 1 << 30) -> Array:
+func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, course: int = 1 << 30,
+		z_width: int = 0) -> Array:
 	# Cells something is already built in are not the fill's: packed as if empty, the big
 	# parts that hit what is there are refused when laid, and leave holes round it.
 	# `free`: cells built in now that will be empty when this is laid.
@@ -1994,6 +1995,9 @@ func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, 
 			for pe in parts:
 				var size: Vector3i = pe[1]
 				if size.y > 1 and posmod(y - base, 3) != 0:
+					continue
+				# `z_width`: only parts this many studs across (a symmetric Convert's middle).
+				if z_width > 0 and size.z != z_width:
 					continue
 				var at := Vector3i(c.x - size.x + 1 if flip else c.x, y, c.z - size.z + 1 if flip else c.z)
 				if _box_in(left, at, size):
@@ -4183,6 +4187,7 @@ func _build_sculpt_box() -> void:
 			["carve the model out", func() -> void: model_op(SdfForm.REMOVE)],
 			["lay the model (Enter)", func() -> void: lay_model()],
 			["snap to studs", func() -> void: snap_to_studs()],
+			["centre on mirror", func() -> void: centre_on_mirror()],
 			["clear", func() -> void: sculpt_clear()],
 			["Convert", func() -> void: sculpt_convert()],
 			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
@@ -4334,6 +4339,23 @@ func sculpt_convert() -> void:
 			brick_at[c] = true
 		else:
 			_sdf_shell.append_array([c.x, c.y, c.z, label_of[c], 0])
+	# With the mirror on, the near half is the truth and the far half its mirror image
+	# (Docs/AssetWorkshop.md, "Symmetric Convert"); the plane on a stud line.
+	var sym := mirror_on
+	var pz := 0
+	if sym:
+		if not is_equal_approx(mirror_z, roundf(mirror_z)):
+			set_mirror_z(ceilf(mirror_z))
+			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
+					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
+		pz = int(roundf(mirror_z))
+		_symmetric(label_of, pz)
+		_symmetric(zone, pz)
+		_symmetric(brick_at, pz)
+		_sdf_shell = PackedInt32Array()
+		for c in label_of:
+			if not brick_at.has(c):
+				_sdf_shell.append_array([c.x, c.y, c.z, label_of[c], 0])
 	var keep_sel := part_sel
 	var used := {}
 	var colour_of := {}   # part -> [colour, material] of its first brick, for its piece
@@ -4356,6 +4378,9 @@ func sculpt_convert() -> void:
 				best = t[cm]
 				part_col[label] = cm
 	_batch = true
+	if sym:
+		# Old bricks are one-sided: not laid again.
+		_sdf_stash = []
 	for s in _sdf_stash:
 		var arch := String(s[0])
 		var at := Vector3i(int(s[1]), int(s[2]), int(s[3]))
@@ -4386,6 +4411,21 @@ func sculpt_convert() -> void:
 		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
 		var col: Array = part_col.get(part_sel + 1, [-1, -1])
 		var left: Dictionary = by_part[label]
+		var mirror := false
+		if sym:
+			# The two columns either side of the plane first, bricks two studs across on it:
+			# they join the halves. Then the near half, each brick mirrored across.
+			var band := {}
+			var near := {}
+			for c in left:
+				if c.z == pz - 1 or c.z == pz:
+					band[c] = true
+				elif c.z < pz - 1:
+					near[c] = true
+			for b in pack_cells(band, false, {}, 1 << 30, 2):
+				_lay_converted(String(b[0]), b[1], col, laid, zone, colour_of, false)
+			left = near
+			mirror = true
 		# Slopes, wedges and curves fitted to the field where they match it better than
 		# the cells as bricks, as the curve slider has them (FitKit, SdfForm.fit_pieces).
 		if curve_level >= 1:
@@ -4411,18 +4451,10 @@ func sculpt_convert() -> void:
 				if not cs.is_empty() and place_named(String(b[0]), at, col[0], col[1]):
 					for c in cs:
 						left.erase(c)
+					if mirror:
+						_lay_mirrored(String(b[0]), at, col)
 		for b in pack_cells(left):
-			var at: Vector3i = b[1]
-			if place_named(String(b[0]), at, col[0], col[1]):
-				var size := BrickPalette.size_of(String(b[0]))
-				var cs := []
-				for dx in size.x:
-					for dy in size.y:
-						for dz in size.z:
-							cs.append(at + Vector3i(dx, dy, dz))
-				_note_laid(laid, String(b[0]), at, cs, zone)
-				var last: int = recipe.size() - 1
-				colour_of.get_or_add(part_names[part_sel], [recipe.colour_of(last), recipe.material_of(last)])
+			_lay_converted(String(b[0]), b[1], col, laid, zone, colour_of, mirror)
 	_batch = false
 	part_sel = keep_sel
 	_after_edit()
@@ -4440,6 +4472,90 @@ func sculpt_convert() -> void:
 	_sdf_cells = cells
 	_sculpt_finish(was, rec)
 	_end_gather()
+
+
+## A packed brick laid by Convert, noted for its part's piece; `mirror`: and again across
+## the mirror plane.
+func _lay_converted(arch: String, at: Vector3i, col: Array, laid: Dictionary, zone: Dictionary,
+		colour_of: Dictionary, mirror: bool) -> void:
+	if not place_named(arch, at, col[0], col[1]):
+		return
+	var size := BrickPalette.size_of(arch)
+	var cs := []
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				cs.append(at + Vector3i(dx, dy, dz))
+	_note_laid(laid, arch, at, cs, zone)
+	var last: int = recipe.size() - 1
+	colour_of.get_or_add(part_names[part_sel], [recipe.colour_of(last), recipe.material_of(last)])
+	if mirror:
+		var m := _lay_mirrored(arch, at, col)
+		if m != _NO_CELL:
+			var ms := []
+			for c in cs:
+				ms.append(Vector3i(c.x, c.y, 2 * int(roundf(mirror_z)) - 1 - c.z))
+			_note_laid(laid, arch, m, ms, zone)
+
+
+const _NO_CELL := Vector3i(-1073741824, 0, 0)
+
+
+## A brick or shaped piece laid again across the mirror plane: a shaped one turned to its
+## mirror image (FitKit.mirror_name). Where it went, or _NO_CELL when it could not be.
+func _lay_mirrored(arch: String, at: Vector3i, col: Array) -> Vector3i:
+	var size := BrickPalette.size_of(arch)
+	var name := arch
+	if BrickPalette.is_shaped(BrickPalette.part_of(arch)):
+		name = FitKit.mirror_name(arch)
+		if name == "":
+			return _NO_CELL
+	var m := Vector3i(at.x, at.y, mirrored_z(at.z, size.z))
+	return m if place_named(name, m, col[0], col[1]) else _NO_CELL
+
+
+## Cells made symmetric about the stud line `pz`: the near side's kept and mirrored onto
+## the far side, the far side's own dropped.
+static func _symmetric(cells: Dictionary, pz: int) -> void:
+	var far := []
+	for c in cells:
+		if c.z >= pz:
+			far.append(c)
+	for c in far:
+		cells.erase(c)
+	var near := cells.keys()
+	for c in near:
+		cells[Vector3i(c.x, c.y, 2 * pz - 1 - c.z)] = cells[c]
+
+
+## Move the mirror plane (studs across), the sheet with it.
+func set_mirror_z(z: float) -> void:
+	mirror_z = z
+	_place_mirror_sheet()
+	_store_asset_meta()
+
+
+## Centre the placed model, else the block-out, on the mirror plane across z, the plane put
+## on a stud line first: then Convert can mirror it brick for brick.
+func centre_on_mirror() -> void:
+	if not mirror_on:
+		set_mirror(true)
+	set_mirror_z(roundf(mirror_z))
+	var plane := mirror_z * BrickPalette.STUD_M
+	if not _placed.is_empty():
+		var bb := (_placed.xf as Transform3D) * (_placed.box as AABB)
+		var xf: Transform3D = _placed.xf
+		_placed.xf = Transform3D(xf.basis, xf.origin + Vector3(0, 0, plane - bb.get_center().z))
+		_stamp_placed()
+		_gizmo.position = _placed_centre()
+		return
+	if sculpt_state == "bricks" or sculpt.form.block_count() == 0:
+		return
+	# The field's own middle across, from its inside samples: moved by whole samples (or a
+	# half, resampled) so it sits on the plane.
+	var bb := sculpt.form.bounds()
+	var mid := bb.position.z + bb.size.z * 0.5
+	move_field(Vector3(0, 0, roundf((mirror_z * BrickWorld.ticks_per_stud() - mid) * 2.0) * 0.5))
 
 
 ## The surface holds the whole cell: its corners and middle all inside the field.
