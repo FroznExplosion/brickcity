@@ -12801,8 +12801,9 @@ func _run_shot_pass() -> void:
 			director.breakage_out, director.furniture_out, director.collapsing.size()])
 	print("[city]   sleep: %d piece(s) put to sleep (%d by the cap), %d woken (%d of the cap's), %d asleep now" % [
 			islands.slept, islands.cap_slept, islands.woken, islands.cap_woken, islands.dormant.size()])
-	print("[city]   support: %d settled piece(s) woken because what held them went, %d because something landed on them; %d nudged down instead of settling with nothing under them; %d jolt(s) not taken for landings" % [
-			islands.ripple_woken, islands.touch_woken, islands.unsupported_nudges, islands.jolts_ignored])
+	print("[city]   support: %d settled piece(s) woken because what held them went, %d because something landed on them; %d nudged down instead of settling with nothing under them; %d jolt(s) not taken for landings; %d woken as the piece under them moved off, %d settle(s) put off for a piece under still moving" % [
+			islands.ripple_woken, islands.touch_woken, islands.unsupported_nudges, islands.jolts_ignored,
+			islands.holder_woken, islands.settle_waits])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
