@@ -668,6 +668,59 @@ small enough to shimmer. Not decided; the user is told the numbers.
 
 **Built 2026-10-20** as planned. "centre on mirror" (sculpt panel) turns the mirror on if it is off. All 136 turns of the fitted pieces have a mirror twin among their part's turns (52 are their own). asset_workshop_probe 281: a capsule placed a quarter stud off, centred and converted -- every brick has its mirror image, and bricks cross the plane. The mirror plane is across z (the gun's left and right): a model symmetrical left to right as seen from the side (the T-posed robot facing the camera) is turned a quarter first (the gizmo's green ring).
 
+### Models as objects, pieces as parts, spawning at the grid (2026-10-20)
+
+The user (2026-10-20): models (and the ruler) still spawn away from the grid -- why? Keep the
+sizes. Each imported model its own thing, several in a scene; a model of several pieces
+imported with a colour each, so each piece can be given to one of the gun's parts; the gizmo
+comes back after the first placing (it is gone for good once laid, even back in SDF). And:
+how would this scale to building-sized models?
+
+**Why away from the grid.** The grid is drawn round the bricks (`build_centre`, the middle of
+the recipe); while sculpting that is only the starting brick, the field not counted. A model
+spawned at a fixed place instead -- the middle of the 1000-stud area, on its bottom plate --
+and the starting brick stands 30 plates up, or wherever a loaded gun's bricks are. The ruler
+starts at the model's end and lies on the bottom plate, so it was off too. Fix: one centre.
+`build_centre` counts the field and the models while sculpting; a model spawns centred
+there (on the mirror plane across); the ruler lies under the build's own bottom; the grid is
+drawn again after a model is added or moved.
+
+**1. Models are objects.** Each imported model is kept as itself, not stamped into the
+block-out: its own small field (`SdfForm`), drawn as the block-out is (so what is seen is what
+converts), moved by the gizmo at any time -- also after Convert and Edit as SDF. Several in a
+scene.
+
+- **Pick one**: the sculpt mode **models: pick and move** -- LMB on a model selects it and
+  the gizmo comes back; LMB on nothing deselects. Also the models list in the sculpt panel.
+  Enter or Esc deselects. **Remove** takes it away.
+- Moving one stamps only its own field again (0.3 s for the test robot). Every add, move,
+  nudge, part change and removal is one undo.
+- **Convert** joins the block-out and every model (`SdfForm.combine`, union or carve) before
+  making bricks, and takes them out again after, so the models stay objects. Bricks taken
+  away inside a model come back at the next Convert; **bake into SDF** joins a model into the
+  block-out for good (then the brushes carve and smooth it, and it is no longer an object).
+  The brushes act on the block-out only; to carve a model, bake it.
+- Saved with the gun: each model's file, where it stands and its pieces' parts (the file is
+  read again on load).
+
+**2. Pieces.** A model is read as its pieces: each mesh node of a glTF / FBX, each `o` or `g`
+of an OBJ (an STL is one piece). Each piece is drawn in a colour of its own until it is given
+a part; the models section lists the selected model's pieces, each with a part picker (the gun's
+parts: body, barrel, stock, grip ...). A piece given a part takes that part's colour and its
+cells are that part's at Convert; the rest go to the part that was current when the model was
+added. A piece must be closed to fill solid (as before).
+
+**3. Building-sized models, later.** Written down, not built: see the answer in chat
+(2026-10-20) -- the field is sparse (only blocks near a surface), but Convert's packer and
+fitting are GDScript and go about 800 bricks a second; the stamp builds a dense box (refused
+over 400 million samples, about 1000 studs long); and the brick mesher would need distance
+levels. A building would want the same field at the building's stud (a stud a sample block
+of 5), Convert in C++ chunk by chunk, stamping in chunks, and far levels from the field.
+
+Checks: `asset_workshop_probe` -- two models in a scene, picked by a ray, moved, one undo each,
+a piece given a part converts to that part, the models survive Convert and Edit as SDF, bake
+joins one into the block-out, spawn at the build's centre; `sdf_form_probe` -- combine.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
