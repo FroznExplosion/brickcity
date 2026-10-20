@@ -136,6 +136,11 @@ public:
     /// The whole form moved `by` samples: exact for whole samples, resampled (trilinear,
     /// labels from the nearest) for a part of one -- half a stud is 2.5.
     void move(const Vector3 &by);
+    /// Another form joined into this one, sample for sample (both on the same grid): ADD a
+    /// union -- where it is inside, its label through `labels` (labels[its label], kept
+    /// when out of range) and its flag -- or REMOVE a carve. A model object into the
+    /// block-out (Docs/AssetWorkshop.md, "Models as objects").
+    void combine(const Ref<SdfForm> &other, int op, const PackedInt32Array &labels);
     /// The whole form blurred `passes` times (each sample to the mean of its 27).
     void blur(int passes);
     void clear();

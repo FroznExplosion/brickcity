@@ -96,6 +96,7 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("move", "by"), &SdfForm::move);
+    ClassDB::bind_method(D_METHOD("combine", "other", "op", "labels"), &SdfForm::combine);
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
     ClassDB::bind_method(D_METHOD("clear"), &SdfForm::clear);
     ClassDB::bind_method(D_METHOD("cells"), &SdfForm::cells);
@@ -641,6 +642,34 @@ void SdfForm::scale(float factor, const Vector3 &pivot) {
 
 void SdfForm::move(const Vector3 &by) {
     remap(1.0f, Vector3(), by);
+}
+
+void SdfForm::combine(const Ref<SdfForm> &other, int op, const PackedInt32Array &labels) {
+    if (other.is_null() || other.ptr() == this) {
+        return;
+    }
+    for (const auto &kv : other->blocks) {
+        const Block *ob = kv.second.get();
+        Block *b = touch(kv.first, op == ADD);
+        if (!b) {
+            continue;
+        }
+        for (int i = 0; i < B3; ++i) {
+            const float o = ob->d[i];
+            if (op == ADD) {
+                if (o < b->d[i]) {
+                    b->d[i] = o;
+                    if (o < 0.0f) {
+                        const int l = ob->part[i];
+                        b->part[i] = (uint8_t)(l < labels.size() ? labels[l] : l);
+                        b->flag[i] = ob->flag[i];
+                    }
+                }
+            } else if (op == REMOVE) {
+                b->d[i] = std::max(b->d[i], -o);
+            }
+        }
+    }
 }
 
 void SdfForm::remap(float factor, const Vector3 &pivot, const Vector3 &by) {

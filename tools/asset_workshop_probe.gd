@@ -1839,8 +1839,10 @@ func _flatten() -> void:
 	root.free()
 
 
-## A placed model: on the grid at the class's length, moved by the gizmo and stamped again,
-## one undo when laid, Escape leaves the field as it was.
+## Model objects (Docs/AssetWorkshop.md, "Models as objects"): spawned at the build's
+## centre, each its own field (not the block-out's), moved and picked again any time, one
+## undo each; pieces given parts convert to those parts; Convert and Edit as SDF keep them;
+## bake joins one into the block-out.
 func _placed_model() -> void:
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
@@ -1852,15 +1854,19 @@ func _placed_model() -> void:
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
 	var groups: int = _ws._edit_groups.size()
-	_ok("a model is placed", _ws.place_mesh(am, "box.glb"))
+	var centre: Vector3 = _ws.build_centre()
+	_ok("a model is added, selected, one undo", _ws.place_mesh(am, "box.glb") and not _ws.placed_model().is_empty()
+			and _ws._edit_groups.size() == groups + 1 and _ws._gizmo.visible)
 	var s: Vector3 = _ws.placed_size()
 	_ok("along x, as long as an SMG (53 studs)", absf(s.x - 53.25) < 0.01 and s.z < 6.0, str(s))
 	var bb: AABB = _ws.size_box()
-	_ok("standing on the plate, on the mirror plane", absf(bb.position.y - BrickPalette.PLATE_M) < 0.01
-			and absf(bb.get_center().z - _ws.mirror_z * STUD) < 0.01, str(bb))
-	var field := _field_box()
-	_ok("and in the field where it stands", field.size != Vector3.ZERO and absf(field.size.x - bb.size.x) < STUD
-			and absf(field.get_center().x - bb.get_center().x) < STUD, "%s vs %s" % [field, bb])
+	_ok("spawned at the build's centre (the grid's), on the mirror plane", absf(bb.get_center().x - centre.x) < 0.01
+			and bb.position.y >= BrickPalette.PLATE_M - 0.001 and absf(bb.get_center().z - _ws.mirror_z * STUD) < 0.01,
+			"%s vs %s" % [bb, centre])
+	var node: AssetSculpt = _ws._placed.node
+	var own := _form_box(node)
+	_ok("its own field where it stands, the block-out untouched", own.size != Vector3.ZERO
+			and absf(own.size.x - bb.size.x) < STUD and _ws.sculpt.form.block_count() == 0, "%s vs %s" % [own, bb])
 	# The gizmo's drags, snapped.
 	_ws._gizmo_xf0 = _ws._placed.xf
 	var turned: Transform3D = _ws.dragged_xf({"turn": [Vector3.UP, 0.2]}, false)
@@ -1868,42 +1874,86 @@ func _placed_model() -> void:
 	_ok("a turn snaps to 15 degrees", is_equal_approx(by, deg_to_rad(15.0)), str(rad_to_deg(by)))
 	var sized: Transform3D = _ws.dragged_xf({"size": 1.234}, false)
 	_ok("a resize snaps to 1%", is_equal_approx(sized.basis.get_scale().x / (_ws._placed.xf as Transform3D).basis.get_scale().x, 1.23))
-	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(2.1 * STUD, 0, 0)}, false)
-	_ws._stamp_placed()
-	var moved := _field_box()
-	_ok("a move snaps to a quarter stud, and the field follows", absf(moved.position.x - field.position.x - 2.0 * STUD) < 0.05,
-			"%.3f studs" % ((moved.position.x - field.position.x) / STUD))
-	_ok("nothing to undo while it is placed", _ws._edit_groups.size() == groups)
+	groups = _ws._edit_groups.size()
+	_ws.nudge_whole = true
+	_ws.nudge(Vector3i(1, 0, 0))
+	_ws.nudge(Vector3i(1, 0, 0))
+	_ws.nudge_whole = false
+	var moved := _form_box(node)
+	_ok("moved, its field follows; one undo a move", absf(moved.position.x - own.position.x - 2.0 * STUD) < 0.05
+			and _ws._edit_groups.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
+	_ws._undo()
+	_ok("Z moves it back a stud", absf(_form_box(node).position.x - own.position.x - STUD) < 0.05)
+	_ws.select_model(_ws.models[0])
 	var esc := InputEventKey.new()
 	esc.keycode = KEY_ESCAPE
 	esc.pressed = true
-	_ok("Escape takes it back out", _ws._placed_key(esc) and _ws.placed_model().is_empty()
-			and _ws.sculpt.form.cells().is_empty())
-	_ws.place_mesh(am, "box.glb")
+	_ok("Escape lets it go: still there, no gizmo", _ws._placed_key(esc) and _ws.placed_model().is_empty()
+			and _ws.models.size() == 1 and not _ws._gizmo.visible)
+	var c: Vector3 = _ws.size_box().get_center()
+	var picked = _ws.pick_model(c + Vector3(0, 0, 40), Vector3.FORWARD)
+	_ws.select_model(picked)
+	_ok("a ray picks it again, the gizmo back", picked != null and not _ws.placed_model().is_empty() and _ws._gizmo.visible)
+	# A second model, two pieces: one given the barrel.
+	var b1 := BoxMesh.new()
+	b1.size = Vector3(1.0, 0.3, 0.3)
+	var b2 := BoxMesh.new()
+	b2.size = Vector3(0.3, 0.3, 0.3)
+	var m1 := ArrayMesh.new()
+	m1.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, b1.get_mesh_arrays())
+	var a2 := b2.get_mesh_arrays()
+	var v2: PackedVector3Array = a2[Mesh.ARRAY_VERTEX]
+	for i in v2.size():
+		v2[i] += Vector3(1.0, 0, 0)
+	a2[Mesh.ARRAY_VERTEX] = v2
+	var m2 := ArrayMesh.new()
+	m2.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a2)
+	_ws.select_part(maxi(0, _ws.part_names.find("body")))
+	_ws.add_model([["receiver", m1], ["muzzle", m2]], "two.glb")
+	var barrel: int = _ws.part_names.find("barrel")
+	_ws.set_piece_part(1, barrel)
+	var pal: PackedColorArray = (_ws._placed.node as AssetSculpt).palette
+	_ok("two models; a piece given a part takes its colour", _ws.models.size() == 2 and _ws._placed.parts[1] == barrel
+			and pal[2] == _ws.sculpt.palette[barrel + 1] and pal[1] != pal[2])
 	_ws._gizmo_xf0 = _ws._placed.xf
-	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 3.0 * STUD)}, false)
+	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 20.0 * STUD)}, false)
 	_ws._stamp_placed()
-	_ws.model_op(SdfForm.ADD)
-	var cells: PackedInt32Array = _ws.sculpt.form.cells()
 	_ws.lay_model()
-	_ok("laid: one undo, the field kept", _ws._edit_groups.size() == groups + 1 and _ws.sculpt.form.cells() == cells
-			and not _ws._gizmo.visible)
+	_ws.sculpt_convert()
+	var tags := {}
+	for i in _ws.recipe.size():
+		tags[_ws.part_names[_ws.part_of[i]]] = true
+	_ok("Convert joins the models: the piece's cells are the barrel's", _ws.recipe.size() > 20 and tags.has("barrel")
+			and tags.has("body"), str(tags.keys()))
+	_ws.sculpt_to_sdf()
+	_ok("Convert and Edit as SDF leave them objects", _ws.models.size() == 2 and _ws.sculpt.form.block_count() == 0)
+	_ws.select_model(_ws.models[0])
+	_ws.drop_model()
+	_ok("remove takes one away", _ws.models.size() == 1)
 	_ws._undo()
-	_ok("one Z takes the model out", _ws.sculpt.form.cells().is_empty())
-	_ws.redo()
-	_ok("Shift Z puts it back", _ws.sculpt.form.cells() == cells)
+	_ok("Z brings it back", _ws.models.size() == 2)
+	_ws.select_model(_ws.models[1])
+	_ws.bake_model()
+	_ok("bake joins it into the block-out", _ws.models.size() == 1 and _ws.sculpt.form.block_count() > 0)
+	_ws._undo()
+	_ok("Z unbakes it", _ws.models.size() == 2 and _ws.sculpt.form.block_count() == 0)
 	# The gizmo's handles under the mouse's ray.
-	_ws.place_mesh(am, "box.glb")
+	_ws.select_model(_ws.models[0])
 	var g: ModelGizmo = _ws._gizmo
 	g.scale = Vector3.ONE * 2.0
 	var at: Vector3 = g.global_position
 	_ok("the gizmo's arrow, ring and cube are picked by a ray", g.pick(at + Vector3(1.2, 0, 10), Vector3.FORWARD) == "move0"
 			and g.pick(at + Vector3(1.018, 10, 1.018), Vector3.DOWN) == "turn1" and g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD) == "size"
-			and g.pick(at + Vector3(5, 5, 10), Vector3.FORWARD) == "",
-			"%s %s %s" % [g.pick(at + Vector3(1.2, 0, 10), Vector3.FORWARD), g.pick(at + Vector3(1.018, 10, 1.018), Vector3.DOWN),
-			g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD)])
-	_ws.drop_model()
-	_ws.sculpt_clear()
+			and g.pick(at + Vector3(5, 5, 10), Vector3.FORWARD) == "")
+	_ws._reset_space()
+
+
+## A form's box in workshop space.
+func _form_box(node: AssetSculpt) -> AABB:
+	var bb: AABB = node.form.bounds()
+	if bb.size == Vector3.ZERO:
+		return AABB()
+	return _ws.global_transform.affine_inverse() * node.global_transform * bb
 
 
 ## The gizmo's resize can no longer blow a model out of the field (it was the mouse's
@@ -1939,7 +1989,7 @@ func _nudges() -> void:
 	var off := Vector3(fposmod(snapped.position.x / STUD + 0.5, 1.0) - 0.5, fposmod(snapped.position.y / BrickPalette.PLATE_M + 0.5, 1.0) - 0.5,
 			fposmod(snapped.position.z / STUD + 0.5, 1.0) - 0.5)
 	_ok("snap to studs puts its corner on a stud, its bottom on a plate", off.length() < 0.001, str(off))
-	_ws.lay_model()
+	_ws.bake_model()
 	var lo: Vector3 = _ws.sculpt.form.bounds().position
 	var n: int = _ws.sculpt.form.cells().size()
 	var groups: int = _ws._edit_groups.size()
