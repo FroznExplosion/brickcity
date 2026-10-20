@@ -162,6 +162,14 @@ const PERCH_SHARE := 0.2
 const PERCH_EDGE_SPEED := 1.5
 var perched_tipped := 0
 const RIPPLE_START_SPEED := 0.6
+## How far a piece that others were frozen on may move before they are woken
+## (_note_holders). A heap's jitter is centimetres; a piece that falls away
+## is gone past this in a tick or two.
+const HOLDER_SLIP := 0.3
+## frozen body's instance id -> [[piece frozen on it, where it was], ...]
+var _holders := {}
+var holder_woken := 0      ## pieces woken because what they were frozen on moved or went
+var settle_waits := 0      ## settles put off because what was under was still moving
 const RIPPLES_PER_TICK := 16
 var _ripples: Array[AABB] = []
 var ripple_woken := 0
@@ -3167,9 +3175,17 @@ func _wake_resting_on(box: AABB) -> void:
 func _supported_below(isl: BrickIsland) -> bool:
 	if not isl.is_valid() or not isl.body.is_inside_tree():
 		return true
+	return not _under(isl, false).is_empty()
+
+
+## What the rays of _supported_below hit under a piece: every collider, or
+## (`all` false) the first one. A piece with no box answers [null] -- held, as
+## _supported_below has always taken it.
+func _under(isl: BrickIsland, all: bool) -> Array:
+	var out := []
 	var box := world_aabb(isl)
 	if box.size == Vector3.ZERO:
-		return true
+		return [null]
 	var space := isl.body.get_world_3d().direct_space_state
 	var y := box.position.y + 0.1
 	var skip: Array[RID] = [isl.body.get_rid()]
@@ -3185,9 +3201,65 @@ func _supported_below(isl: BrickIsland) -> bool:
 			# and woken by every piece that came to rest on it (--jam: the last
 			# two stuck pieces of a collapse).
 			q.hit_from_inside = true
-			if not space.intersect_ray(q).is_empty():
-				return true
+			var hit := space.intersect_ray(q)
+			if hit.is_empty():
+				continue
+			if not all:
+				return [hit.collider]
+			if not out.has(hit.collider):
+				out.append(hit.collider)
+	return out
+
+
+## Is what this piece would be frozen on still moving? A piece under it that is
+## not frozen and faster than SETTLE_SPEED: wait for it (Docs/DestructionLod.md
+## 3.1). Frozen there, it stayed when that one fell away -- "hanging up on
+## something that's actively falling, then it goes to sleep as the other thing
+## falls away" (user, 2026-10-19).
+func _resting_on_moving(isl: BrickIsland) -> bool:
+	for c in _under(isl, true):
+		var rb := c as RigidBody3D
+		if rb != null and not rb.freeze and rb.linear_velocity.length() > SETTLE_SPEED:
+			return true
 	return false
+
+
+## Remember the pieces a piece was frozen on, and where they were: one that
+## later moves HOLDER_SLIP from there, or goes, wakes it (_check_holders).
+## Ripples (support_gone) only came from a piece that had been frozen and was
+## woken; a piece that never froze moved out from under others without a word.
+func _note_holders(isl: BrickIsland) -> void:
+	for c in _under(isl, true):
+		var rb := c as RigidBody3D
+		if rb == null:
+			continue   # the ground or a building: their bricks going has its own doors
+		var key := rb.get_instance_id()
+		if not _holders.has(key):
+			_holders[key] = []
+		(_holders[key] as Array).append([isl, rb.global_position])
+
+
+## A piece that holds others up is moving (the tick, for every piece not
+## frozen) or gone (_retire): wake the ones it has moved out from under.
+func _check_holders(body: Node3D, gone: bool) -> void:
+	var key := body.get_instance_id()
+	var held: Array = _holders.get(key, [])
+	if held.is_empty():
+		return
+	var keep := []
+	for h in held:
+		var dep: BrickIsland = h[0]
+		if not dep.is_valid() or not dep.settled:
+			continue   # woken already: nothing to keep
+		if gone or body.global_position.distance_to(h[1]) > HOLDER_SLIP:
+			wake(dep)
+			holder_woken += 1
+		else:
+			keep.append(h)
+	if keep.is_empty():
+		_holders.erase(key)
+	else:
+		_holders[key] = keep
 
 
 ## A big piece standing on a point (PERCH_FOOT, PERCH_SHARE), or with its
@@ -3304,6 +3376,8 @@ func settle_now(isl: BrickIsland) -> void:
 	isl.settled_blocks = world.get_alive_block_count(isl.chunk)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_apply_layers(isl)
+	if isl.body.is_inside_tree():
+		_note_holders(isl)
 	# Come to rest on bricks lying there: they are under it, and go.
 	if heap != null and heap.count > 0:
 		heap.clear_in(isl.chunk_transform(), _island_aabb(isl))
@@ -4508,6 +4582,8 @@ func tick() -> void:
 			isl.body.linear_velocity = risen
 			speed = risen.length()
 			rises_capped += 1
+		if not _holders.is_empty():
+			_check_holders(isl.body, false)
 		var spin := isl.body.angular_velocity.length()
 		if spin > MAX_DEBRIS_SPIN:
 			isl.body.angular_velocity = isl.body.angular_velocity.normalized() * MAX_DEBRIS_SPIN
@@ -4594,6 +4670,10 @@ func tick() -> void:
 			isl.unsupported_tries += 1
 			isl.slow_since = 0
 			isl.jitter_since = 0
+			continue
+		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK \
+				and _resting_on_moving(isl):
+			settle_waits += 1
 			continue
 		if now - isl.born_ms >= SETTLE_MIN_MS and rested and settles < SETTLES_PER_TICK:
 			settles += 1
@@ -5390,6 +5470,9 @@ func _retire(isl: BrickIsland, index: int, reason: StringName = &"swept") -> voi
 	# where they were.
 	if reason != &"slept" and isl.is_valid():
 		support_gone(world_aabb(isl))
+		_check_holders(isl.body, true)
+	if isl.is_valid():
+		_holders.erase(isl.body.get_instance_id())
 	piece_removed.emit(isl, reason)
 	FurnitureMesh.drop(isl.chunk, _furniture)
 	_mesh_queue.erase(isl)

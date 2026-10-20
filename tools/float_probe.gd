@@ -127,7 +127,34 @@ func _run() -> void:
 	b3.body.linear_velocity = Vector3(4.0, 0.0, 0.0)
 	await _ticks(5)
 	_ok("once it moves off, what rested on it is woken", not a3.settled)
-	_ok("counted", _m.ripple_woken >= 2, "%d" % _m.ripple_woken)
+	# By the ripple, or first by the link to what it was frozen on (3.1 below).
+	_ok("counted", _m.ripple_woken + _m.holder_woken >= 2, "%d by ripple, %d by holder" % [
+			_m.ripple_woken, _m.holder_woken])
+
+	# --- frozen on a piece that never froze, which then falls away ----------------
+	# Docs/DestructionLod.md 3.1: no ripple comes from a piece that was never
+	# frozen, so this is the link from what a piece was frozen on.
+	print("\nfrozen on a piece still moving, which then goes")
+	var b4 := _piece(Vector3(80.0, 0.05, 0.0))
+	_m.hold_awake(b4, 1000000)
+	var a4 := _piece(Vector3(80.3, 1.5, 0.3))
+	await _ticks(90)
+	b4.body.linear_velocity = Vector3(2.0, 0.0, 0.0)
+	_ok("resting on a piece that moves, it waits", _m._resting_on_moving(a4))
+	b4.body.linear_velocity = Vector3.ZERO
+	_ok("on one that is still, it does not", not _m._resting_on_moving(a4))
+	_m.settle_now(a4)
+	_ok("frozen, it is known to rest on the one under it",
+			_m._holders.has(b4.body.get_instance_id()) and not b4.settled)
+	var ripples4 := _m.ripple_woken
+	var held4 := _m.holder_woken
+	b4.body.linear_velocity = Vector3(4.0, 0.0, 0.0)
+	await _ticks(8)
+	_ok("that one moving off wakes it, with no ripple to do it",
+			not a4.settled and _m.holder_woken > held4 and _m.ripple_woken == ripples4,
+			"settled %s, %d woken by holder, %d by ripple" % [a4.settled,
+				_m.holder_woken - held4, _m.ripple_woken - ripples4])
+	b4.hold_until_ms = 0
 
 	# --- a frozen piece in mid-air, landed on ------------------------------------
 	print("\na floater is landed on")
