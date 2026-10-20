@@ -264,6 +264,13 @@ and the project gravity today. Move the ~21 hard-coded gravity constants to it f
 Do it as files are touched anyway; no big-bang pass. Rigid bodies already take the project's
 gravity, so they need nothing.
 
+*Built 2026-10-20:* `scripts/gravity.gd` (`Gravity.down_at`, `up_at`, `at`, `strength`). Every
+per-frame fall in the game goes through it -- pawn (walk, air, slide, grapple), titan, tank,
+truck, flyer, debug camera, grenade, dart, VFX shards, rain and hail particles -- and every read of
+the project's gravity (debris, danger volumes, the mech fall rule, the city's path-ahead). Each
+system keeps its own magnitude. What is left is the `.y` logic round it -- "on the floor, zero the
+vertical speed" and the like -- which becomes "along up_at" when a controller goes radial.
+
 ### 9.2 Building space through one door
 
 Every query that goes from world space into a building -- `AIWorld`'s DDA, bullets, explosions,

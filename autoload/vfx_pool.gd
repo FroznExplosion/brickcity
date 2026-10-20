@@ -211,8 +211,9 @@ func _process(delta: float) -> void:
 		var rs_mm := b.mmi.multimesh.get_rid()
 		var n := b.mmi.multimesh.instance_count
 		var fade := 1.0 - smoothstep(0.6, 1.0, t)
+		var fall := Gravity.down_at(b.mmi.global_position) * 9.8 * delta * 1.5
 		for i in n:
-			b.vel[i].y -= 9.8 * delta * 1.5
+			b.vel[i] += fall
 			b.pos[i] += b.vel[i] * delta
 			if b.pos[i].y < b.floor_y + 0.05:   # bounce on the enemy's floor
 				b.pos[i].y = b.floor_y + 0.05

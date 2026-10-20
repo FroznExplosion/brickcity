@@ -127,7 +127,7 @@ func _land(y: float) -> bool:
 			_through_y = below + 0.3
 	_through_until = _now() + PASS_SECONDS
 	mech.body.collision_mask = _saved_mask & ~(Layers.STRUCTURE | PIECE_LAYERS)
-	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) \
+	var g := Gravity.strength() \
 			* mech.motor.gravity_scale
 	mech.body.velocity.y = -sqrt(2.0 * g * maxf(_carry, 0.0) * BRICK)
 	_peak_y = y

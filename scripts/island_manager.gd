@@ -1892,7 +1892,7 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 			face = centre.dot(out_dir) + reach
 			floor_past = _crumb_floor(Vector3(centre.x, box.end.y, centre.z) + out_dir * (reach + 1.0))
 			fixed_past = 1 if _floor_on_ground else 0
-		g = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
+		g = Gravity.strength() * DEBRIS_GRAVITY
 	else:
 		floor_y = _crumb_floor(centre + kick * 0.4)
 		fixed_y = 1 if _floor_on_ground else 0
@@ -2017,7 +2017,7 @@ func _update_crumbs() -> void:
 	var dt := 1.0 / tps
 	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
 	var full := int(CRUMB_FULL_MS * tps / 1000.0)
-	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * DEBRIS_GRAVITY
+	var g := Gravity.strength() * DEBRIS_GRAVITY
 	var keep := heap != null and BrickHeap.enabled()
 	var fall_max := int(CRUMB_FALL_MAX_MS * tps / 1000.0)
 	var fade := maxi(int(CRUMB_FADE_MS * tps / 1000.0), 1)

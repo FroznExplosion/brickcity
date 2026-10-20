@@ -618,7 +618,7 @@ func _physics_process(delta: float) -> void:
 	if cover != null:
 		cover.update(self, feet() + Vector3.UP * RING_Y * 0.5)
 	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
+		velocity += Gravity.down_at(global_position) * GRAVITY * delta
 	else:
 		velocity.y = maxf(velocity.y, 0.0)
 	var go := throttle if driven() and can_drive() else 0.0

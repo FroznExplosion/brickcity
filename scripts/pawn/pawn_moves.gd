@@ -356,7 +356,7 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 		var hs := h.length()
 		if _air_time > 0.5 and hs > Pawn.RUN_SPEED * 1.2:
 			h = h * (maxf(hs - AIR_DRAG * delta, Pawn.RUN_SPEED * 1.2) / hs)
-		b.velocity.y -= Pawn.GRAVITY * delta
+		b.velocity += Gravity.down_at(b.global_position) * Pawn.GRAVITY * delta
 	b.velocity.x = h.x
 	b.velocity.z = h.z
 	if not on_floor:
@@ -452,7 +452,7 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 			b.velocity.y = 0.0
 	else:
 		_slide_air += delta
-		b.velocity.y -= Pawn.GRAVITY * delta
+		b.velocity += Gravity.down_at(b.global_position) * Pawn.GRAVITY * delta
 	# Off the end of something: fly on with the speed. Let go of crouch, or slow
 	# to a crawl: stand up (Pawn does, if there is room).
 	if _slide_air > COYOTE or not it.crouch or hs < SLIDE_END:
@@ -1141,7 +1141,7 @@ func _grapple_tick(delta: float, wish: Vector3) -> void:
 		_g_stall = 0.0
 	var dir := to / d
 	var v := b.velocity + dir * GRAPPLE_ACCEL * delta + wish * GRAPPLE_STEER * delta
-	v.y -= Pawn.GRAVITY * GRAPPLE_GRAVITY * delta
+	v += Gravity.down_at(b.global_position) * Pawn.GRAVITY * GRAPPLE_GRAVITY * delta
 	# The line only shortens: moving away from the hook is taken out of the motion.
 	_g_rope = minf(_g_rope, d)
 	var out := -v.dot(dir)

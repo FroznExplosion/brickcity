@@ -285,7 +285,7 @@ func feet() -> Vector3:
 
 func _physics_process(delta: float) -> void:
 	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
+		velocity += Gravity.down_at(global_position) * GRAVITY * delta
 	else:
 		velocity.y = maxf(velocity.y, 0.0)
 	if cover != null:

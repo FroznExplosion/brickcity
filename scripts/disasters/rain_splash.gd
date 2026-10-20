@@ -94,7 +94,7 @@ func _build(rain_proc: ParticleProcessMaterial, colour: Color) -> void:
 	_proc.spread = 55.0
 	_proc.initial_velocity_min = 1.0
 	_proc.initial_velocity_max = 2.2
-	_proc.gravity = Vector3(0.0, -9.8, 0.0)
+	_proc.gravity = Gravity.down_at(Vector3.ZERO) * 9.8
 	_proc.scale_min = 0.6
 	_proc.scale_max = 1.4
 	var g := Gradient.new()
