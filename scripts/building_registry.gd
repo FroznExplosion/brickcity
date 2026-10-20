@@ -203,14 +203,84 @@ func _init(brick_world: BrickWorld, part_palette: Dictionary) -> void:
 ## -- and dropped workshop builds in at 23 degrees, so every building's bricks
 ## sat a fraction of a stud off the terrain's and off each other's. Snapped here,
 ## at the one door every building comes in by, so no caller can get it wrong.
+##
+## Snapped in the GRID FRAME at the spot (`grid_frame_at`): the world's own
+## today, so this is the world grid exactly as before. On a planet it is the
+## tangent frame there (Docs/Planets.md 9.2), and a building stands on that.
 static func on_grid(xform: Transform3D) -> Transform3D:
-	var yaw := xform.basis.get_euler().y
+	var frame := grid_frame_at(xform.origin)
+	var local := frame.affine_inverse() * xform
+	var yaw := local.basis.get_euler().y
 	var quarter := int(round(yaw / (PI * 0.5)))
-	var o := xform.origin
+	var o := local.origin
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
-	return Transform3D(Basis(Vector3.UP, quarter * PI * 0.5),
+	return frame * Transform3D(Basis(Vector3.UP, quarter * PI * 0.5),
 			Vector3(round(o.x / stud) * stud, round(o.y / plate) * plate, round(o.z / stud) * stud))
+
+
+## The frame the stud grid is laid in at a world point: identity on the flat
+## world. On a planet, the tangent frame at that point (Planets.md 4).
+static func grid_frame_at(_p: Vector3) -> Transform3D:
+	return Transform3D.IDENTITY
+
+
+# --- building space: the one door (Docs/Planets.md 9.2) ----------------------
+#
+# A query that goes from the world into a building -- is this point in it,
+# where does this ray meet it -- goes through these, in the building's own
+# space, not through its world AABB. Today every building is on the world grid
+# at a quarter turn and the two agree; a building tilted to a tangent frame, or
+# drawn bent (Planets.md 4.2), changes only `to_building` and `to_world`.
+
+## The building's box in its OWN space: corner at the origin, its cells' size.
+static func own_box(b) -> AABB:
+	var cell := BrickWorld.get_cell_size()
+	var size: Vector3
+	if b.is_build():
+		var d: Vector3i = b.build.chunk_dims()
+		size = Vector3(d.x * cell.x, d.y * cell.y, d.z * cell.z)
+	else:
+		size = Vector3(int(b.recipe.footprint_x) * cell.x,
+				TowerRecipe.total_plates(int(b.recipe.courses)) * cell.y,
+				int(b.recipe.footprint_z) * cell.z)
+	return AABB(Vector3.ZERO, size)
+
+
+static func to_building(b, p: Vector3) -> Vector3:
+	return b.xform.affine_inverse() * p
+
+
+static func to_world(b, p: Vector3) -> Vector3:
+	return b.xform * p
+
+
+## Is a world point inside the building's box, within `margin` metres?
+static func contains(b, p: Vector3, margin := 0.0) -> bool:
+	return own_box(b).grow(margin).has_point(to_building(b, p))
+
+
+## How far along a world ray (unit `dir`) it first meets the building's box:
+## INF for a miss or a box behind it. Distances survive the rigid transform.
+static func ray_hit(b, from: Vector3, dir: Vector3) -> float:
+	var inv: Transform3D = b.xform.affine_inverse()
+	var f := inv * from
+	var d := inv.basis * dir
+	var box := own_box(b)
+	var t0 := -INF
+	var t1 := INF
+	for a in 3:
+		if absf(d[a]) < 1e-9:
+			if f[a] < box.position[a] or f[a] > box.end[a]:
+				return INF
+			continue
+		var ta := (box.position[a] - f[a]) / d[a]
+		var tb := (box.end[a] - f[a]) / d[a]
+		t0 = maxf(t0, minf(ta, tb))
+		t1 = minf(t1, maxf(ta, tb))
+	if t1 < maxf(t0, 0.0):
+		return INF
+	return maxf(t0, 0.0)
 
 
 ## Record a building. No chunk, no blocks, no mesh — just what it is and where.

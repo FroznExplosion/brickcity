@@ -293,7 +293,7 @@ func building_at(point: Vector3, margin := 0.3) -> int:
 	if registry == null:
 		return -1
 	for b in registry.buildings:
-		if not b.toppled and CityPlacer.box_of(b).grow(margin).has_point(point):
+		if not b.toppled and BuildingRegistry.contains(b, point, margin):
 			return b.id
 	return -1
 
