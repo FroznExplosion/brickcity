@@ -1633,6 +1633,7 @@ func _sculpt() -> void:
 	_flatten()
 	_placed_model()
 	_nudges()
+	_symmetric_convert()
 	_size_and_view()
 	_ws.rail_pick("place")
 
@@ -1969,6 +1970,58 @@ func _nudges() -> void:
 			and is_equal_approx(ms.get_aabb().size.x, 2.0) and is_equal_approx(ms.get_aabb().size.y, 3.0))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(obj))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(stl))
+
+
+## A symmetrical model placed off the middle converts to symmetrical bricks once centred
+## on the mirror (Docs/AssetWorkshop.md, "Symmetric Convert"): every brick has its mirror
+## image across the plane, and bricks cross the plane to join the halves.
+func _symmetric_convert() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws.curve_level = 2
+	# A capsule lying across x, a quarter stud off any stud line.
+	var cm := CapsuleMesh.new()
+	cm.radius = 0.12
+	cm.height = 1.0
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, cm.get_mesh_arrays())
+	_ws.place_mesh(am, "capsule.glb")
+	var xf: Transform3D = _ws._placed.xf
+	_ws._placed.xf = Transform3D(Basis(Vector3.BACK, PI * 0.5) * xf.basis, xf.origin + Vector3(0, 3.0, 0.27 * STUD))
+	_ws._stamp_placed()
+	_ws.set_mirror_z(_ws.mirror_z + 0.5)
+	_ws.centre_on_mirror()
+	var pz := int(_ws.mirror_z)
+	_ok("centre on mirror: the plane on a stud line, the model's middle on it", is_equal_approx(_ws.mirror_z, float(pz))
+			and absf(_ws.size_box().get_center().z - pz * STUD) < 0.01, "%.2f, %s" % [_ws.mirror_z, _ws.size_box()])
+	_ws.lay_model()
+	_ws.sculpt_convert()
+	var have := {}
+	for i in _ws.recipe.size():
+		have["%s %s" % [_ws.recipe.part_of(i), _ws.recipe.cell_of(i)]] = true
+	var missing := []
+	var crossing := 0
+	var shaped := 0
+	for i in _ws.recipe.size():
+		var arch: String = _ws.recipe.part_of(i)
+		var at: Vector3i = _ws.recipe.cell_of(i)
+		var size := BrickPalette.size_of(arch)
+		if at.z < pz and at.z + size.z > pz:
+			crossing += 1
+			continue
+		var m := arch
+		if BrickPalette.is_shaped(BrickPalette.part_of(arch)):
+			shaped += 1
+			m = FitKit.mirror_name(arch)
+		if not have.has("%s %s" % [m, Vector3i(at.x, at.y, 2 * pz - at.z - size.z)]):
+			missing.append("%s %s" % [arch, at])
+	_ok("converted symmetrical: every brick mirrored, some across the plane", _ws.recipe.size() > 20 and missing.is_empty()
+			and crossing > 0, "%d bricks, %d across, %d shaped, unmatched %s" % [_ws.recipe.size(), crossing, shaped,
+			str(missing.slice(0, 6))])
+	_ws.set_mirror(false)
+	_ws.sculpt_to_sdf()
+	_ws.sculpt_clear()
 
 
 ## The field's box in workshop space.

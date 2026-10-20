@@ -16,6 +16,7 @@ const SLOPES := ["slope_1x2", "slope_2x2", "slope_2x4", "slope_1x3", "slope_2x3"
 const CURVES := ["curve_1x2", "curve_2x2", "curve_1x3", "curve_1x4", "curve_2x4"]
 
 static var _kits := {}
+static var _mirrors := {}
 
 
 ## {names: [archetype name], pieces: [{grid, size, normal}]}, built once each way.
@@ -38,6 +39,37 @@ static func kit(curves: bool) -> Dictionary:
 			pieces.append({"grid": grid, "size": BrickPalette.size_of(name), "normal": n})
 	_kits[curves] = {"names": names, "pieces": pieces}
 	return _kits[curves]
+
+
+## The turn of a shaped piece that is its mirror image across z (Docs/AssetWorkshop.md,
+## "Symmetric Convert"): the variant of its part whose samples are this one's flipped
+## front to back. Its own name if it is its own mirror, "" if no turn of it is.
+static func mirror_name(name: String) -> String:
+	if _mirrors.has(name):
+		return _mirrors[name]
+	var part := BrickPalette.part_of(name)
+	var spec: Dictionary = BrickPalette._SHAPED.get(part, {})
+	if spec.is_empty():
+		return name
+	var size := BrickPalette.part_size(part)
+	var base := canonical(String(spec.kind), size, String(spec.get("axis", "z")))
+	var grid_of := func(n: String) -> PackedByteArray:
+		var o := BrickPalette.orientation_of(n)
+		return turned(base, size * PER, o.x, o.y != 0)
+	var d := BrickPalette.size_of(name) * PER
+	var src: PackedByteArray = grid_of.call(name)
+	var want := PackedByteArray()
+	want.resize(src.size())
+	for z in d.z:
+		for y in d.y:
+			for x in d.x:
+				want[x + d.x * (y + d.y * (d.z - 1 - z))] = src[x + d.x * (y + d.y * z)]
+	_mirrors[name] = ""
+	for v in BrickPalette.variants_of(part):
+		if BrickPalette.size_of(v) == BrickPalette.size_of(name) and grid_of.call(v) == want:
+			_mirrors[name] = v
+			break
+	return _mirrors[name]
 
 
 ## A part in its canonical orientation, a byte a field sample (1: solid), x fastest.

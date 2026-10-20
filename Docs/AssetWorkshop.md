@@ -666,6 +666,8 @@ of 213, and the shared grip 12 studs. In the game every gun is shown at its clas
 (an SMG 0.4 m), so 2x studs make each stud half as big on screen -- finer detail, and studs
 small enough to shimmer. Not decided; the user is told the numbers.
 
+**Built 2026-10-20** as planned. "centre on mirror" (sculpt panel) turns the mirror on if it is off. All 136 turns of the fitted pieces have a mirror twin among their part's turns (52 are their own). asset_workshop_probe 281: a capsule placed a quarter stud off, centred and converted -- every brick has its mirror image, and bricks cross the plane. The mirror plane is across z (the gun's left and right): a model symmetrical left to right as seen from the side (the T-posed robot facing the camera) is turned a quarter first (the gizmo's green ring).
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
