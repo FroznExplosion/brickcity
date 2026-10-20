@@ -84,7 +84,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -478,6 +478,36 @@ func _shot() -> void:
 		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
 				sculpt.triangles(), sculpt.form.cells().size() / 5, str(bb)])
 		_look_at_build()
+	if "--model" in OS.get_cmdline_user_args():
+		# Round 4: a gun-shaped model (boxes under an armature at 1/100, lying across) placed
+		# by its gizmo, moved up and turned, with the SMG's ruler and grip box; --gameview
+		# lays it and looks through the game's first-person view.
+		for _i in 3:
+			await get_tree().process_frame
+		set_mirror(false)
+		rail_pick("sculpt")
+		var scene := _test_gun_scene()
+		place_mesh(ModelMesh.flatten(scene), "test_gun.glb")
+		scene.free()
+		muzzle_end = "-x"
+		_gizmo_xf0 = _placed.xf
+		_gizmo.position = _placed_centre()
+		_placed.xf = dragged_xf({"move": Vector3(0, BrickPalette.STUD_M * 4.0, 0)}, false)
+		_gizmo_xf0 = _placed.xf
+		_gizmo.position = _placed_centre()
+		_placed.xf = dragged_xf({"turn": [Vector3.BACK, deg_to_rad(5.0)]}, false)
+		_stamp_placed()
+		_show_gizmo()
+		_gizmo.set_hover("turn2")
+		_size_sig = ""
+		draw_size_marks()
+		print("[model] placed %s studs, field %d blocks" % [str(placed_size()), sculpt.form.block_count()])
+		if "--gameview" in OS.get_cmdline_user_args():
+			lay_model()
+			set_game_view(true)
+			views = [0]
+		else:
+			_frame_placed()
 	if "--receiver" in OS.get_cmdline_user_args():
 		# A receiver in three views: a side slab, a charging slot cut through and a port cut
 		# a stud in, then its top corners chamfered from the front.
@@ -528,11 +558,12 @@ func _shot() -> void:
 		views = [0, 1, 3]
 	DirAccess.make_dir_recursive_absolute("user://asset_shots")
 	for v in views:
-		set_view(v)
+		if not game_view_on:
+			set_view(v)
 		for _i in 12:
 			await get_tree().process_frame
 		var img := get_viewport().get_texture().get_image()
-		var path := "user://asset_shots/%s.png" % VIEWS[v]
+		var path := "user://asset_shots/%s.png" % ("game" if game_view_on else VIEWS[v])
 		img.save_png(path)
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
 	if "--menu" in OS.get_cmdline_user_args():
@@ -908,6 +939,8 @@ func _place_mirror_sheet() -> void:
 # ---------------------------------------------------------------------------
 
 func set_view(v: int) -> void:
+	if game_view_on:
+		set_game_view(false)
 	if v == view:
 		return
 	if view == 0:
@@ -1016,6 +1049,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		var alt := true
 		match e.keycode:
 			KEY_0: set_view(0)
+			KEY_C: set_game_view(not game_view_on)
 			KEY_1: set_view(1)
 			KEY_2: set_view(2)
 			KEY_3: set_view(3)
@@ -1096,6 +1130,7 @@ func _process(dt: float) -> void:
 		_draw_outlines()
 	_poll_export()
 	_poll_print()
+	_size_marks_process()
 	if _autosave_dirty and not _no_autosave and Time.get_ticks_msec() > _autosave_at:
 		_autosave_dirty = false
 		_autosave_at = Time.get_ticks_msec() + 4000
@@ -1768,6 +1803,10 @@ func _load_interfaces() -> void:
 		for k in (d.get("gun_interfaces", {}) as Dictionary):
 			if k != "note":
 				_interfaces[k] = d.gun_interfaces[k]
+		if d.get("held_grip") is Dictionary:
+			for k in ["length_min", "fore_aft", "thick"]:
+				if d.held_grip.has(k):
+					_grip_std[k] = d.held_grip[k]
 
 
 ## The lattice point under the ghost: its first stud line along, the plate it stands on,
@@ -2060,6 +2099,7 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 
 
 func set_tool(t: String) -> void:
+	lay_model()
 	tool = t
 	_dragging = false
 	_shape_box.visible = t == "shape"
@@ -2191,19 +2231,17 @@ func copy_selection_to_ghost(move: bool = false) -> int:
 ## Load a model to build inside: glTF or FBX, see-through, never built on, never exported.
 ## `real_mm` is how long its longest side is on the real thing. Returns its index.
 func load_guide(path: String, real_mm: float) -> int:
-	var fbx := path.get_extension().to_lower() == "fbx"
-	var doc: GLTFDocument = FBXDocument.new() if fbx else GLTFDocument.new()
-	var state: GLTFState = FBXState.new() if fbx else GLTFState.new()
-	if doc.append_from_file(path, state) != OK:
-		push_warning("asset workshop: could not read %s" % path)
-		return -1
-	var scene := doc.generate_scene(state) as Node3D
-	if scene == null:
+	# One mesh in the model's frame, a skinned one posed (ModelMesh): drawn, sized and
+	# stamped from the same vertices.
+	var mesh := ModelMesh.read(path)
+	if mesh == null:
 		return -1
 	var holder := Node3D.new()
-	holder.add_child(scene)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	holder.add_child(mi)
 	add_child(holder)
-	var box := _model_box(scene, Transform3D())
+	var box := mesh.get_aabb()
 	var g := {"path": path, "real_mm": real_mm, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
 			"node": holder, "box": box}
 	guides.append(g)
@@ -2211,22 +2249,6 @@ func load_guide(path: String, real_mm: float) -> int:
 	_store_asset_meta()
 	_refresh_guide_panel()
 	return guides.size() - 1
-
-
-func _model_box(n: Node, xf: Transform3D) -> AABB:
-	var out := AABB()
-	var first := true
-	var here := xf * (n as Node3D).transform if n is Node3D else xf
-	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
-		out = here * (n as MeshInstance3D).mesh.get_aabb()
-		first = false
-	for c in n.get_children():
-		var b := _model_box(c, here)
-		if b.size == Vector3.ZERO:
-			continue
-		out = b if first else out.merge(b)
-		first = false
-	return out
 
 
 ## Size, turn, place and shade a guide: its longest side to `real_mm` at quarter scale,
@@ -2658,16 +2680,12 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_guide_dialog.use_native_dialog = true
 	_guide_dialog.filters = PackedStringArray(["*.glb, *.gltf, *.fbx ; Models"])
 	_guide_dialog.file_selected.connect(func(path: String) -> void:
-		var i := load_guide(path, float(_guide_mm.text) if _guide_mm.text.is_valid_float() else 852.0)
-		if _guide_into_sdf and i >= 0:
-			# Added from the sculpt panel: straight into the current part, the guide kept
-			# faint to trace by and its panel open to move it.
-			sculpt_model_into(i, SdfForm.ADD)
-			guides[i].opacity = 0.15
-			_fit_guide(guides[i])
-			if not _guide_panel.visible:
-				_toggle_guide_panel()
-		_guide_into_sdf = false)
+		if _guide_into_sdf:
+			# Added from the sculpt panel: into the field only, placed, the gizmo on it.
+			_guide_into_sdf = false
+			place_model(path)
+			return
+		load_guide(path, float(_guide_mm.text) if _guide_mm.text.is_valid_float() else 852.0))
 	_guide_dialog.canceled.connect(func() -> void: _guide_into_sdf = false)
 	layer.add_child(_guide_dialog)
 
@@ -2741,6 +2759,8 @@ func _last_brick() -> Variant:
 ## Z: a fill, a copy, a mirrored pair or a sketch change goes at once; anything else one
 ## edit at a time. An RMB delete is laid back.
 func _undo() -> bool:
+	# A placed model is laid, then this undoes it: Z takes it back out.
+	lay_model()
 	var n := 1
 	var sketch = null
 	if not _edit_groups.is_empty() and int(_edit_groups.back().end) == _edits.size():
@@ -2794,6 +2814,7 @@ func _undo() -> bool:
 ## Shift Z: do the last undone group again -- each brick back in its own part, each
 ## delete taken up again, a sketch back to what it was.
 func redo() -> int:
+	lay_model()
 	if _redo.is_empty():
 		return 0
 	var entry: Dictionary = _redo.pop_back()
@@ -3594,9 +3615,13 @@ func _sculpt_input(e: InputEvent) -> bool:
 			_show_sculpt_note(true)
 			return true
 		return false
+	if _gizmo_input(e):
+		return true
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
+			# Sculpting on: a placed model is laid first (its stamp is one undo before this).
+			lay_model()
 			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
 			if stamping and sculpt_shape == "lathe" and not _lathe_axis.is_empty():
 				# The axis is down: LMB adds a point of the outline, RMB lays it.
@@ -3949,7 +3974,10 @@ func sculpt_model_into(i: int, op: int) -> int:
 	if sculpt.palette.size() < part_names.size() + 1:
 		sculpt.set_parts(part_names.size())
 	sculpt.form.begin_edit()
-	var n := _stamp_node(guides[i].node, op)
+	var n := 0
+	for mi in (guides[i].node as Node).find_children("*", "MeshInstance3D", true, false):
+		_stamp_soup(_mesh_soup((mi as MeshInstance3D).mesh), (mi as MeshInstance3D).global_transform, op)
+		n += 1
 	sculpt.remesh()
 	_sculpt_record(sculpt.form.end_edit())
 	_show_sculpt_note(false, "%s %s %s." % [String(guides[i].path).get_file(),
@@ -3966,24 +3994,34 @@ func _picked_guide() -> int:
 	return guides.size() - 1
 
 
-func _stamp_node(node: Node, op: int) -> int:
-	var n := 0
-	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
-		var mi := node as MeshInstance3D
-		var to_s := sculpt.global_transform.affine_inverse() * mi.global_transform
-		for si in mi.mesh.get_surface_count():
-			var arr := mi.mesh.surface_get_arrays(si)
-			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
-			var idx = arr[Mesh.ARRAY_INDEX]
-			if idx == null or (idx as PackedInt32Array).is_empty():
-				idx = PackedInt32Array(range(v.size()))
-			for i in v.size():
-				v[i] = to_s * v[i]
-			sculpt.form.stamp_mesh(op, v, idx, part_sel + 1)
-			n += 1
-	for c in node.get_children():
-		n += _stamp_node(c, op)
-	return n
+## A mesh's surfaces as one triangle soup [vertices, index]: a model split by material
+## into surfaces is still one closed solid, and the stamp tells inside from outside by
+## counting crossings through all of it at once.
+static func _mesh_soup(mesh: Mesh) -> Array:
+	var v := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for si in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(si)
+		var sv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var si_idx = arr[Mesh.ARRAY_INDEX]
+		var base := v.size()
+		v.append_array(sv)
+		if si_idx == null or (si_idx as PackedInt32Array).is_empty():
+			for k in sv.size():
+				idx.append(base + k)
+		else:
+			for k in (si_idx as PackedInt32Array):
+				idx.append(base + k)
+	return [v, idx]
+
+
+## A soup into the current part's field, placed by `xf` (global). Inside an edit.
+func _stamp_soup(soup: Array, xf: Transform3D, op: int) -> void:
+	var to_s := sculpt.global_transform.affine_inverse() * xf
+	var v: PackedVector3Array = (soup[0] as PackedVector3Array).duplicate()
+	for i in v.size():
+		v[i] = to_s * v[i]
+	sculpt.form.stamp_mesh(op, v, soup[1], part_sel + 1)
 
 
 ## Size and smoothness of the whole block-out, each one undo.
@@ -4141,8 +4179,9 @@ func _build_sculpt_box() -> void:
 			["add a 3D model...", func() -> void:
 				_guide_into_sdf = true
 				_guide_dialog.popup_centered_ratio(0.6)],
-			["model into this part", func() -> void: sculpt_model_into(_picked_guide(), SdfForm.ADD)],
-			["carve the model out", func() -> void: sculpt_model_into(_picked_guide(), SdfForm.REMOVE)],
+			["model into this part", func() -> void: model_op(SdfForm.ADD)],
+			["carve the model out", func() -> void: model_op(SdfForm.REMOVE)],
+			["lay the model (Enter)", func() -> void: lay_model()],
 			["clear", func() -> void: sculpt_clear()],
 			["Convert", func() -> void: sculpt_convert()],
 			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
@@ -4151,6 +4190,7 @@ func _build_sculpt_box() -> void:
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(b[1])
 		row.add_child(btn)
+	_build_size_row(_sculpt_box)
 	_sculpt_box.add_child(HSeparator.new())
 
 # ---------------------------------------------------------------------------
@@ -4267,6 +4307,7 @@ func sculpt_to_sdf() -> void:
 ## game and the print leave out except where it meets bricks (the join, with studs).
 ## Bricks laid in the meantime go into the field first. One undo.
 func sculpt_convert() -> void:
+	lay_model()
 	if sculpt_state == "bricks":
 		return
 	_begin_gather()
@@ -5544,7 +5585,7 @@ func _input(e: InputEvent) -> void:
 		if f != null and _rail.is_ancestor_of(f) and not (f is LineEdit or f is SpinBox or f is TextEdit) \
 				and (e is InputEventKey or not _over_rail()):
 			f.release_focus()
-	if _lathe_key(e):
+	if _lathe_key(e) or _placed_key(e) or _game_view_input(e):
 		get_viewport().set_input_as_handled()
 		return
 	super._input(e)
@@ -8523,6 +8564,7 @@ func _build_menus() -> void:
 			["Side view", "Alt 1", func() -> void: set_view(1)],
 			["Top view", "Alt 2", func() -> void: set_view(2)],
 			["Front view", "Alt 3", func() -> void: set_view(3)],
+			["The game's view: the gun in the hands (RMB aims)", "Alt C", func() -> void: set_game_view(not game_view_on)],
 			["Zoom in", "Home", func() -> void: zoom(0.85)],
 			["Zoom out", "End", func() -> void: zoom(1.0 / 0.85)],
 			[],
@@ -8577,6 +8619,11 @@ func _build_menus() -> void:
 			["Explode: pull the parts apart", "Alt E", func() -> void: set_exploded(not exploded)],
 			["Hands", "Alt H", func() -> void: set_hands(not hands_on)],
 			["Play: fire and reload", "Alt P", func() -> void: play_cycle()],
+			["Size marks: ruler and grip box", "", func() -> void: set_size_marks(not size_marks_on)],
+			["Size: SMG (53 studs)", "", func() -> void: set_gun_class("smg")],
+			["Size: rifle (62 studs)", "", func() -> void: set_gun_class("rifle")],
+			["Size: pistol (13.5 studs)", "", func() -> void: set_gun_class("pistol")],
+			["Turn the ruler (which end is the butt)", "", func() -> void: flip_butt()],
 			[],
 			["Export to game", "Alt X", func() -> void: export_game()],
 			["Export to print (parts and whole)", "Alt B", func() -> void: export_print()],
@@ -8610,3 +8657,560 @@ func _build_menus() -> void:
 			for i in p.item_count:
 				if p.get_item_text(i).begins_with("  ") or p.get_item_text(i).begins_with("Held"):
 					p.set_item_disabled(i, true)
+
+
+# ---------------------------------------------------------------------------
+# Round 4: a placed model, the gun's size, the game's view (Docs/AssetWorkshop.md,
+# "SDF tools, round 4")
+# ---------------------------------------------------------------------------
+
+## The model being placed: {path, mesh (the model's own frame), box (its box there), soup
+## ([vertices, index]), op, xf (where it stands, workshop space), rec (the field as it was
+## before the model: put back before each new stamp, or on Escape)}. Empty when none is.
+var _placed := {}
+var _gizmo: ModelGizmo
+var _placed_ghost: MeshInstance3D
+var _gizmo_xf0 := Transform3D()
+
+## The gun classes the size marks know (Docs/Parts/joints.md section 7): the real length.
+## How long the game shows each in the hands is PlayerView.VIEW_LENGTH's.
+const GUN_CLASSES := {
+	"smg": {"name": "SMG", "real_mm": 852.0},
+	"rifle": {"name": "rifle", "real_mm": 1000.0},
+	"pistol": {"name": "pistol", "real_mm": 216.0},
+}
+## The shared grip leans back like a real pistol grip, and sits this share of the gun's
+## length from the butt (an SMG's).
+const GRIP_RAKE_DEG := 15.0
+const GRIP_AT := 0.25
+var gun_class := "smg"
+var size_marks_on := true
+## The shared grip at print size, mm (standards.json "held_grip"; these until it is read).
+var _grip_std := {"length_min": 24.0, "fore_aft": [10.0, 15.5], "thick": [7.0, 9.5]}
+var _size_marks: MeshInstance3D
+var _size_labels: Node3D
+var _size_sig := ""
+var _size_at := 0
+var _size_pick: OptionButton
+## The game's first-person view (Alt C): on, aiming down the sights, the camera as it was.
+var game_view_on := false
+var game_view_ads := false
+var _game_view_was := {}
+
+
+## Studs long the class's gun is: its real length over 16 mm a nano stud.
+func class_studs(c: String = gun_class) -> float:
+	return float(GUN_CLASSES[c].real_mm) / (PRINT_MM_PER_STUD * REAL_PER_PRINT)
+
+
+## A model file into the current part's field as a placed model. False if it cannot be
+## read.
+func place_model(path: String, op: int = SdfForm.ADD) -> bool:
+	var mesh := ModelMesh.read(path)
+	if mesh == null:
+		_show_sculpt_note(true, "Could not read %s." % path.get_file())
+		return false
+	return place_mesh(mesh, path, op)
+
+
+## A mesh (its own frame) placed: its long side along x and as long as the class's gun,
+## standing on the plate in the middle of the build area on the mirror plane; stamped,
+## the gizmo on it, the view on it.
+func place_mesh(mesh: ArrayMesh, path: String, op: int = SdfForm.ADD) -> bool:
+	lay_model()
+	if sculpt_state == "bricks":
+		sculpt_to_sdf()
+	var box := mesh.get_aabb()
+	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
+	if longest <= 0.0:
+		return false
+	var turn := Basis(Vector3.UP, PI * 0.5) if box.size.z > box.size.x and box.size.z >= box.size.y else Basis()
+	var b := turn * Basis.from_scale(Vector3.ONE * class_studs() * BrickPalette.STUD_M / longest)
+	var on := Transform3D(b, Vector3.ZERO) * box
+	var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	var at := Vector3(mid - on.get_center().x, BrickPalette.PLATE_M - on.position.y,
+			mirror_z * BrickPalette.STUD_M - on.get_center().z)
+	_placed = {"path": path, "mesh": mesh, "box": box, "soup": _mesh_soup(mesh), "op": op,
+			"xf": Transform3D(b, at), "rec": PackedByteArray()}
+	_stamp_placed()
+	_show_gizmo()
+	_frame_placed()
+	return true
+
+
+## The placed model stamped where it stands now: the field put back as it was before it,
+## then stamped. Only the last stamp's record is kept: the ones before it were put back.
+func _stamp_placed() -> void:
+	var f := sculpt.form
+	if not (_placed.rec as PackedByteArray).is_empty():
+		f.swap_blocks(_placed.rec)
+	if sculpt.palette.size() < part_names.size() + 1:
+		sculpt.set_parts(part_names.size())
+	f.begin_edit()
+	_stamp_soup(_placed.soup, global_transform * (_placed.xf as Transform3D), int(_placed.op))
+	_placed.rec = f.end_edit()
+	sculpt.remesh()
+	_show_placed_note()
+
+
+## The placed model adds (ADD) or carves (REMOVE); with none placed, the guide picked in
+## the guide panel goes in or out.
+func model_op(op: int) -> void:
+	if _placed.is_empty():
+		sculpt_model_into(_picked_guide(), op)
+		return
+	_placed.op = op
+	_stamp_placed()
+	_show_gizmo()
+
+
+## Lay the placed model: it stays in the field, the gizmo goes, and its stamps are one undo.
+func lay_model() -> void:
+	if _placed.is_empty():
+		return
+	var rec: PackedByteArray = _placed.rec
+	var name := String(_placed.path).get_file()
+	_placed = {}
+	_hide_gizmo()
+	if not rec.is_empty():
+		_sculpt_record(rec)
+	_show_sculpt_note(false, "%s laid (Z takes it back out)." % name)
+
+
+## Take the placed model back out: the field as it was before it. Nothing to undo.
+func drop_model() -> void:
+	if _placed.is_empty():
+		return
+	var rec: PackedByteArray = _placed.rec
+	_placed = {}
+	_hide_gizmo()
+	if not rec.is_empty():
+		sculpt.form.swap_blocks(rec)
+		sculpt.remesh()
+	_sdf_meta = sculpt.save_meta()
+	_store_asset_meta()
+	_show_sculpt_note()
+
+
+func placed_model() -> Dictionary:
+	return _placed
+
+
+## The placed model's box as it stands, in studs (x along, y up, z across: a stud's length
+## each way).
+func placed_size() -> Vector3:
+	if _placed.is_empty():
+		return Vector3.ZERO
+	return ((_placed.xf as Transform3D) * (_placed.box as AABB)).size / BrickPalette.STUD_M
+
+
+func _show_placed_note() -> void:
+	var s := placed_size()
+	_show_sculpt_note(false, ("%s %s: %.1f studs long (%.0f mm real, %.0f mm print), %.1f up, %.1f across. "
+			+ "Arrows move it, rings turn it, the cube resizes it (Shift: no snap). Enter lays it, "
+			+ "Esc takes it out.") % [String(_placed.path).get_file(),
+			"carves" if int(_placed.op) == SdfForm.REMOVE else "placed", s.x,
+			s.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, s.x * PRINT_MM_PER_STUD, s.y, s.z])
+
+
+func _placed_centre() -> Vector3:
+	return (_placed.xf as Transform3D) * (_placed.box as AABB).get_center()
+
+
+func _show_gizmo() -> void:
+	if _gizmo == null:
+		_gizmo = ModelGizmo.new()
+		add_child(_gizmo)
+		_placed_ghost = MeshInstance3D.new()
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_placed_ghost.material_override = m
+		_placed_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_placed_ghost)
+	_gizmo.visible = true
+	_gizmo.position = _placed_centre()
+	_placed_ghost.visible = false
+	_placed_ghost.mesh = _placed.mesh
+	var col: Color = Color(1.0, 0.4, 0.35) if int(_placed.op) == SdfForm.REMOVE else \
+			(sculpt.palette[part_sel + 1] if part_sel + 1 < sculpt.palette.size() else Color(0.8, 0.8, 0.8))
+	col.a = 0.4
+	(_placed_ghost.material_override as StandardMaterial3D).albedo_color = col
+
+
+func _hide_gizmo() -> void:
+	if _gizmo != null:
+		_gizmo.visible = false
+		_gizmo.end()
+		_placed_ghost.visible = false
+
+
+## The view on a model just placed: from the side, above and a little ahead.
+func _frame_placed() -> void:
+	if view != 0 or game_view_on:
+		return
+	var bb := (_placed.xf as Transform3D) * (_placed.box as AABB)
+	var c := bb.get_center()
+	_camera.global_position = c + Vector3(0.3, 0.4, 1.0).normalized() * maxf(bb.size.length(), 2.0) * 1.1
+	_camera.look_at(c, Vector3.UP)
+
+
+## The gizmo: LMB on a handle drags it; the model shows as a ghost while it goes and is
+## stamped again where it is let go. True when the event was the gizmo's.
+func _gizmo_input(e: InputEvent) -> bool:
+	if _placed.is_empty() or _gizmo == null or not _gizmo.visible:
+		return false
+	var ray := _mouse_ray()
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed:
+			var id := _gizmo.pick(ray[0], ray[1])
+			if id == "":
+				return false
+			_gizmo_xf0 = _placed.xf
+			_gizmo.begin(id, ray[0], ray[1], e.position, _camera)
+			return true
+		if _gizmo.dragging() == "":
+			return false
+		_gizmo.end()
+		_placed_ghost.visible = false
+		if not (_placed.xf as Transform3D).is_equal_approx(_gizmo_xf0):
+			_stamp_placed()
+		_gizmo.position = _placed_centre()
+		return true
+	if e is InputEventMouseMotion:
+		if _gizmo.dragging() != "":
+			_placed.xf = dragged_xf(_gizmo.drag_delta(ray[0], ray[1], e.position), e.shift_pressed)
+			_placed_ghost.transform = _placed.xf
+			_placed_ghost.visible = true
+			_show_placed_note()
+			return true
+		_gizmo.set_hover(_gizmo.pick(ray[0], ray[1]))
+	return false
+
+
+## Where a drag puts the model, from where it stood when the drag began: moved a quarter
+## stud at a time, turned 15 degrees, resized 1% (`free`: as dragged).
+func dragged_xf(d: Dictionary, free: bool) -> Transform3D:
+	var xf := _gizmo_xf0
+	var c := _gizmo.position
+	if d.has("move"):
+		var m: Vector3 = d.move
+		if not free:
+			var q := BrickPalette.STUD_M * 0.25
+			m = (m / q).round() * q
+		return Transform3D(xf.basis, xf.origin + m)
+	if d.has("turn"):
+		var a: float = d.turn[1]
+		if not free:
+			a = snappedf(a, deg_to_rad(15.0))
+		var r := Basis(d.turn[0] as Vector3, a)
+		return Transform3D(r, c - r * c) * xf
+	if d.has("size"):
+		var f: float = d.size
+		if not free:
+			f = maxf(snappedf(f, 0.01), 0.01)
+		return Transform3D(Basis.from_scale(Vector3.ONE * f), c - c * f) * xf
+	return xf
+
+
+## Enter lays a placed model, Escape takes it out. True when the key was the model's.
+func _placed_key(e: InputEvent) -> bool:
+	if _placed.is_empty() or not (e is InputEventKey and e.pressed and not e.echo):
+		return false
+	match (e as InputEventKey).keycode:
+		KEY_ENTER, KEY_KP_ENTER:
+			lay_model()
+		KEY_ESCAPE:
+			drop_model()
+		_:
+			return false
+	return true
+
+
+## The picture pass's model: an SMG of boxes -- receiver, barrel, stock, grip, magazine --
+## touching but not overlapping (the stamp counts crossings), under an armature at 1/100
+## and turned to lie along z, as exported characters often are.
+static func _test_gun_scene() -> Node3D:
+	var root := Node3D.new()
+	var arm := Node3D.new()
+	arm.scale = Vector3.ONE * 0.01
+	arm.rotation.y = PI * 0.5
+	root.add_child(arm)
+	for b in [[Vector3(-150, 0, -25), Vector3(300, 80, 50)], [Vector3(150, 40, -12), Vector3(260, 24, 24)],
+			[Vector3(-400, 5, -20), Vector3(250, 65, 40)], [Vector3(-110, -150, -20), Vector3(55, 150, 40)],
+			[Vector3(10, -180, -15), Vector3(45, 180, 30)]]:
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = b[1]
+		mi.mesh = bm
+		mi.position = (b[0] as Vector3) + (b[1] as Vector3) * 0.5
+		arm.add_child(mi)
+	return root
+
+
+# The gun's size on the grid ----------------------------------------------------------
+
+func set_gun_class(c: String) -> void:
+	if not GUN_CLASSES.has(c):
+		return
+	gun_class = c
+	if _size_pick != null:
+		_size_pick.select(GUN_CLASSES.keys().find(c))
+	_size_sig = ""
+	if game_view_on:
+		_place_game_camera()
+
+
+func set_size_marks(on: bool) -> void:
+	size_marks_on = on
+	_size_sig = ""
+
+
+## Which end is the butt: the ruler runs from it toward the muzzle (muzzle_end, which
+## export also reads off the build).
+func flip_butt() -> void:
+	muzzle_end = "-x" if muzzle_end == "+x" else "+x"
+	_size_sig = ""
+	_store_asset_meta()
+
+
+## The sculpt panel's size row: the gun class, the marks on or off, which end is the butt.
+func _build_size_row(box: Container) -> void:
+	var row := HFlowContainer.new()
+	box.add_child(row)
+	_size_pick = OptionButton.new()
+	_size_pick.focus_mode = Control.FOCUS_NONE
+	for c in GUN_CLASSES:
+		_size_pick.add_item("size: %s %s studs" % [GUN_CLASSES[c].name, String.num(class_studs(c), 1).trim_suffix(".0")])
+	_size_pick.select(GUN_CLASSES.keys().find(gun_class))
+	_size_pick.item_selected.connect(func(i: int) -> void: set_gun_class(GUN_CLASSES.keys()[i]))
+	row.add_child(_size_pick)
+	var marks := CheckBox.new()
+	marks.text = "marks"
+	marks.button_pressed = size_marks_on
+	marks.focus_mode = Control.FOCUS_NONE
+	marks.toggled.connect(func(on: bool) -> void: set_size_marks(on))
+	row.add_child(marks)
+	var flip := Button.new()
+	flip.text = "turn ruler"
+	flip.focus_mode = Control.FOCUS_NONE
+	flip.pressed.connect(flip_butt)
+	row.add_child(flip)
+
+
+## The box the size marks and the game's view measure, workshop space: the placed model,
+## else the field while sculpting, else the bricks. Empty with none of them.
+func size_box() -> AABB:
+	if not _placed.is_empty():
+		return (_placed.xf as Transform3D) * (_placed.box as AABB)
+	if sculpt != null and sculpt_state == "sdf" and sculpt.form.block_count() > 0:
+		var bb := sculpt.form.bounds()
+		if bb.size != Vector3.ZERO:
+			return global_transform.affine_inverse() * sculpt.global_transform * bb
+	if recipe.size() > 0:
+		var b := recipe.bounds()
+		var lo: Vector3i = b[0]
+		var d: Vector3i = b[1]
+		var s := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+		return AABB(Vector3(lo) * s, Vector3(d) * s)
+	return AABB()
+
+
+## The ruler's start (x of the butt, workshop space) and which way it runs (+1 / -1).
+func size_ruler() -> Vector2:
+	var dir := 1.0 if muzzle_end == "+x" else -1.0
+	var bb := size_box()
+	if bb.size == Vector3.ZERO:
+		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+		return Vector2(mid - dir * class_studs() * BrickPalette.STUD_M * 0.5, dir)
+	return Vector2(bb.position.x if dir > 0.0 else bb.end.x, dir)
+
+
+## Drawn again when what they measure may have changed (an edit, the placed model, the
+## class), looked at twice a second.
+func _size_marks_process() -> void:
+	if Time.get_ticks_msec() < _size_at:
+		return
+	_size_at = Time.get_ticks_msec() + 500
+	var sig := "%s %s %s %d %d %s %s %s" % [size_marks_on, gun_class, muzzle_end, _edits.size(), _edit_groups.size(),
+			sculpt_state, str(_placed.get("xf", "")), mirror_z]
+	if sig != _size_sig:
+		_size_sig = sig
+		draw_size_marks()
+
+
+## The ruler along x on the plate from the butt -- a tick a stud, numbers every five, the
+## class's length marked tall and banded -- and the shared grip's box.
+func draw_size_marks() -> void:
+	if _size_marks == null:
+		_size_marks = MeshInstance3D.new()
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.vertex_color_use_as_albedo = true
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_size_marks.material_override = m
+		_size_marks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_size_marks)
+		_size_labels = Node3D.new()
+		add_child(_size_labels)
+	for c in _size_labels.get_children():
+		c.queue_free()
+	# Not in the game's view: it is to see the gun as the player will.
+	var on := size_marks_on and not game_view_on
+	_size_marks.visible = on
+	_size_labels.visible = on
+	if not on:
+		return
+	var S := BrickPalette.STUD_M
+	var P := BrickPalette.PLATE_M
+	var r := size_ruler()
+	var dir := r.y
+	var y := P + 0.01
+	var z := mirror_z * S
+	var n := class_studs()
+	var at := func(studs: float) -> float: return r.x + dir * studs * S
+	var im := ImmediateMesh.new()
+	# The band to the class's length, faint on the plate.
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	var band := Color(1.0, 0.85, 0.3, 0.2)
+	var x0: float = at.call(0.0)
+	var x1: float = at.call(n)
+	for q in [Vector3(x0, y, z - S), Vector3(x1, y, z - S), Vector3(x1, y, z + S),
+			Vector3(x0, y, z - S), Vector3(x1, y, z + S), Vector3(x0, y, z + S)]:
+		im.surface_set_color(band)
+		im.surface_add_vertex(q)
+	im.surface_end()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var line := func(a: Vector3, b: Vector3, col: Color) -> void:
+		im.surface_set_color(col)
+		im.surface_add_vertex(a)
+		im.surface_set_color(col)
+		im.surface_add_vertex(b)
+	var past := ceili(n) + 6
+	line.call(Vector3(x0, y, z), Vector3(at.call(past), y, z), Color(1.0, 0.92, 0.6, 0.9))
+	for i in past + 1:
+		var h := P * (4.0 if i % 10 == 0 else (2.5 if i % 5 == 0 else 1.0))
+		var col := Color(1.0, 0.92, 0.6, 0.9) if i <= n else Color(0.7, 0.7, 0.7, 0.5)
+		var x: float = at.call(float(i))
+		line.call(Vector3(x, y, z), Vector3(x, y + h, z), col)
+		if i % 5 == 0:
+			_size_label(str(i), Vector3(x, y + h + P, z), col)
+	var end := Color(1.0, 0.45, 0.25)
+	line.call(Vector3(x1, y, z), Vector3(x1, y + P * 10.0, z), end)
+	_size_label("%s: %s studs = %.0f mm real, %.0f mm print" % [GUN_CLASSES[gun_class].name,
+			String.num(n, 1).trim_suffix(".0"), float(GUN_CLASSES[gun_class].real_mm),
+			float(GUN_CLASSES[gun_class].real_mm) / REAL_PER_PRINT], Vector3(x1, y + P * 11.0, z), end)
+	_size_label("butt", Vector3(x0, y + P * 6.0, z), Color(1.0, 0.92, 0.6))
+	# The grip box: where the hand closes, the one size every gun keeps -- the smallest and
+	# the largest it may be across, as tall as the least it must be.
+	var g := Color(0.45, 0.95, 1.0)
+	var rake := deg_to_rad(GRIP_RAKE_DEG)
+	var up := Vector3(dir * sin(rake), cos(rake), 0.0)
+	var fwd := Vector3(dir * cos(rake), -sin(rake), 0.0)
+	var base := Vector3(at.call(n * GRIP_AT), y, z)
+	var mm := PRINT_MM_PER_STUD
+	var length := float(_grip_std.length_min) / mm * S
+	for k in 2:
+		var f := float(_grip_std.fore_aft[k]) / mm * S * 0.5
+		var t := float(_grip_std.thick[k]) / mm * S * 0.5
+		var col := g if k == 1 else Color(g, 0.5)
+		var c := []
+		for corner in 8:
+			c.append(base + up * (length if corner & 4 else 0.0) + fwd * (f if corner & 1 else -f)
+					+ Vector3(0, 0, t if corner & 2 else -t))
+		for e in [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]]:
+			line.call(c[e[0]], c[e[1]], col)
+	_size_label("grip: the hand closes here, %s studs (%.0f mm print) or more" % [
+			String.num(float(_grip_std.length_min) / mm, 1).trim_suffix(".0"), float(_grip_std.length_min)],
+			base + up * (length + P * 2.0), g)
+	im.surface_end()
+	_size_marks.mesh = im
+
+
+func _size_label(text: String, at: Vector3, col: Color) -> void:
+	var l := Label3D.new()
+	l.text = text
+	l.position = at
+	l.modulate = col
+	l.font_size = 32
+	l.outline_size = 8
+	l.pixel_size = 0.012
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.render_priority = 5
+	_size_labels.add_child(l)
+
+
+# The game's view ----------------------------------------------------------------------
+
+## The workshop's camera as the game's first-person one, framing the gun as PlayerView
+## does (`_fit` and the hip pose): off, the camera goes back where it was.
+func set_game_view(on: bool) -> void:
+	if on == game_view_on:
+		return
+	if on:
+		if size_box().size == Vector3.ZERO:
+			_show_sculpt_note(true, "Nothing to hold yet: sculpt, place a model or lay bricks first.")
+			return
+		if view != 0:
+			set_view(0)
+		_game_view_was = {"xf": _camera.global_transform, "fov": _camera.fov, "near": _camera.near,
+				"process": _camera.is_processing(), "physics": _camera.is_physics_processing(),
+				"input": _camera.is_processing_unhandled_input()}
+		if _camera.has_method("_set_captured"):
+			_camera.call("_set_captured", false)
+		_camera.set_process(false)
+		_camera.set_physics_process(false)
+		_camera.set_process_unhandled_input(false)
+		game_view_on = true
+		game_view_ads = false
+		_place_game_camera()
+		draw_size_marks()
+	else:
+		game_view_on = false
+		var w := _game_view_was
+		_camera.global_transform = w.xf
+		_camera.fov = w.fov
+		_camera.near = w.near
+		_camera.set_process(w.process)
+		_camera.set_physics_process(w.physics)
+		_camera.set_process_unhandled_input(w.input)
+		draw_size_marks()
+
+
+## The camera where the game's would be: the gun scaled to its class's view length (the
+## game scales every model to it), the top of its back end at the hip pose (or the sights'),
+## muzzle ahead; the game's horizontal field of view.
+func _place_game_camera() -> void:
+	var bb := size_box()
+	if bb.size.x <= 0.0:
+		return
+	var d := 1.0 if muzzle_end == "+x" else -1.0
+	var length := float(PlayerView.VIEW_LENGTH.get(StringName(gun_class), PlayerView.VIEW_LENGTH_DEFAULT))
+	var k := bb.size.x / length   # workshop metres a metre in the game's view
+	var back_top := Vector3(bb.position.x if d > 0.0 else bb.end.x, bb.end.y, bb.get_center().z)
+	var basis := Basis(Vector3(0, 0, d), Vector3.UP, Vector3(-d, 0, 0))
+	var pose: Vector3 = PlayerView.ADS if game_view_ads else PlayerView.HIP
+	_camera.global_transform = global_transform * Transform3D(basis, back_top - basis * (pose * k))
+	var vp := get_viewport().get_visible_rect().size
+	var aspect := vp.x / maxf(vp.y, 1.0)
+	_camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(PlayerView.hfov) * 0.5) / aspect))
+	_camera.near = 0.02 * k
+
+
+## In the game's view: RMB aims down the sights and back, Escape leaves; other clicks do
+## nothing (the view is to look). True when the event was the view's.
+func _game_view_input(e: InputEvent) -> bool:
+	if not game_view_on:
+		return false
+	if e is InputEventKey and e.pressed and not e.echo and (e as InputEventKey).keycode == KEY_ESCAPE:
+		set_game_view(false)
+		return true
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT] and not _over_rail():
+		if e.pressed and e.button_index == MOUSE_BUTTON_RIGHT:
+			game_view_ads = not game_view_ads
+			_place_game_camera()
+		return true
+	return false

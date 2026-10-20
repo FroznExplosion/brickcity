@@ -575,6 +575,26 @@ leaves the field as before, the spawn stands on the grid, the ruler's SMG length
 the game view's camera puts the gun's back top at the hip pose. Picture pass: `-- --shot
 --sculpt --model` (a placed model with its gizmo, the ruler and grip box) and `--gameview`.
 
+**Built 2026-10-19**, as above, with these differences found on the way:
+
+- The skinned test robot (`TestRobot.glb`, armature at 1/100) now reads standing; its field's
+  box matches the model's to 0.05 stud. Godot's own `bake_mesh_from_current_skeleton_pose`
+  refuses a scene not yet in the tree, so `ModelMesh` (scripts/model_mesh.gd) skins by hand:
+  bone pose times bind pose, weighted. Reading it and the first stamp take about 0.6 s; a
+  stamp again on letting go of the gizmo about half that.
+- A model's surfaces are stamped as **one** triangle soup (a model split by material is one
+  closed solid; stamped a surface at a time, each open surface counted inside wrongly). The
+  guide panel's "model into this part" does the same.
+- A brush stroke, a tool change, Z / Shift Z or Convert lays a placed model first, so its
+  record never covers someone else's edit.
+- The size marks are hidden in the game's view. The view takes RMB to aim; Escape, Alt C or a
+  view key leaves it.
+
+asset_workshop_probe 271 (20 new: a skinned mesh flattened, a model placed, moved, snapped,
+dropped, laid as one undo, the gizmo's handles picked, the ruler, the game view's camera at the
+hip and the sights), sdf_form_probe 38, workshop_probe 96. `-- --shot --model` (the gizmo, the
+ruler and grip box) and `-- --shot --model --gameview`.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
