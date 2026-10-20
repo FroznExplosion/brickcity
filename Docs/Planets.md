@@ -301,6 +301,13 @@ then loads instead of generating -- the hitches go, and §3.3 is already half do
 Saves, the AI's caches and the registry store positions relative to a building or a tile where they
 can. A world-space position in a save is the one thing a floating origin cannot shift for you.
 
+*Built 2026-10-20:* `scripts/world_frame.gd`. A save and the damage log's wire form carry world
+positions in the BODY's frame (`WorldFrame.to_body` out, `from_body` in): hit points of the
+building commands, a resting piece's origin, every piece's transform in a checkpoint, the camera,
+the placed builds and the hits still queued. Grid coordinates -- the piece commands, a region's
+corners, LOAD's cells -- were never world positions and go as they are. `WorldFrame.origin` is
+zero until a floating origin moves it; `tools/world_frame_probe.gd` moves it and checks each.
+
 ### 9.7 The bent horizon (§2)
 
 Optional, days. It gives the planet look now and becomes the landing transition later.

@@ -65,7 +65,7 @@ static func capture(history: DamageLog, islands: IslandManager,
 		s.pieces.append({
 			"id": isl.piece_id,
 			"owner": isl.owner,
-			"xform": isl.chunk_transform(),
+			"xform": WorldFrame.xform_to_body(isl.chunk_transform()),
 			"linear": isl.body.linear_velocity,
 			"angular": isl.body.angular_velocity,
 			"at_rest": isl.settled,
@@ -170,7 +170,8 @@ func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 				refused += 1
 		# A save from before pieces said so was of pieces that were always
 		# solved: landed.
-		if islands.restore_piece(chunk, id, int(p.owner), p.xform, p.linear, p.angular,
+		if islands.restore_piece(chunk, id, int(p.owner), WorldFrame.xform_from_body(p.xform),
+				p.linear, p.angular,
 				bool(p.at_rest), bool(p.disposable),
 				bool((p as Dictionary).get("landed", true))) != null:
 			kept[id] = true
