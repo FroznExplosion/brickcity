@@ -36,6 +36,40 @@ static func read(path: String) -> ArrayMesh:
 	return out
 
 
+## The file as its pieces, each [name, mesh] in the model's frame (Docs/AssetWorkshop.md,
+## "Models as objects"): a glTF / FBX's mesh nodes, an OBJ's objects and groups, an STL
+## whole. Empty if it cannot be read.
+static func read_pieces(path: String) -> Array:
+	match path.get_extension().to_lower():
+		"obj":
+			var out := []
+			for p in _read_obj_pieces(path):
+				var m := _soup_mesh([p[1], p[2]])
+				if m != null:
+					out.append([p[0], m])
+			return out
+		"stl":
+			var m := _soup_mesh(_read_stl(path))
+			return [] if m == null else [[path.get_file().get_basename(), m]]
+	var fbx := path.get_extension().to_lower() == "fbx"
+	var doc: GLTFDocument = FBXDocument.new() if fbx else GLTFDocument.new()
+	var state: GLTFState = FBXState.new() if fbx else GLTFState.new()
+	if doc.append_from_file(path, state) != OK:
+		push_warning("model mesh: could not read %s" % path)
+		return []
+	var scene := doc.generate_scene(state) as Node3D
+	if scene == null:
+		return []
+	var out := []
+	for n in scene.find_children("*", "MeshInstance3D", true, false):
+		var one := ArrayMesh.new()
+		_add_one(n as MeshInstance3D, scene, one)
+		if one.get_surface_count() > 0:
+			out.append([String(n.name), one])
+	scene.free()
+	return out
+
+
 ## Every mesh under `root` as one mesh in root's frame: vertices and triangles only (it
 ## is drawn unshaded, and stamped). Null when there is none.
 static func flatten(root: Node) -> ArrayMesh:
@@ -45,8 +79,15 @@ static func flatten(root: Node) -> ArrayMesh:
 
 
 static func _add(n: Node, root: Node, out: ArrayMesh) -> void:
-	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
-		var mi := n as MeshInstance3D
+	if n is MeshInstance3D:
+		_add_one(n as MeshInstance3D, root, out)
+	for c in n.get_children():
+		_add(c, root, out)
+
+
+## One mesh node's surfaces into `out`, in root's frame.
+static func _add_one(mi: MeshInstance3D, root: Node, out: ArrayMesh) -> void:
+	if mi.mesh != null:
 		var sk := mi.get_node_or_null(mi.skeleton) as Skeleton3D if mi.skin != null else null
 		for si in mi.mesh.get_surface_count():
 			if mi.mesh is ArrayMesh and (mi.mesh as ArrayMesh).surface_get_primitive_type(si) != Mesh.PRIMITIVE_TRIANGLES:
@@ -67,8 +108,6 @@ static func _add(n: Node, root: Node, out: ArrayMesh) -> void:
 			if arr[Mesh.ARRAY_INDEX] != null and not (arr[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
 				s[Mesh.ARRAY_INDEX] = arr[Mesh.ARRAY_INDEX]
 			out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s)
-	for c in n.get_children():
-		_add(c, root, out)
 
 
 ## [vertices, index] as a mesh; null when empty.
@@ -106,6 +145,39 @@ static func _read_obj(path: String) -> Array:
 			for k in range(1, corners.size() - 1):
 				idx.append_array([corners[0], corners[k], corners[k + 1]])
 	return [v, idx]
+
+
+## An OBJ's pieces: [name, vertices, index] for each `o` or `g` that has faces (indices
+## are the file's, shared by all, so every piece keeps every vertex).
+static func _read_obj_pieces(path: String) -> Array:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return []
+	var v := PackedVector3Array()
+	var pieces := []
+	var name := path.get_file().get_basename()
+	var idx := PackedInt32Array()
+	while not f.eof_reached():
+		var line := f.get_line().strip_edges()
+		if line.begins_with("v "):
+			var p := line.substr(2).split(" ", false)
+			if p.size() >= 3:
+				v.append(Vector3(float(p[0]), float(p[1]), float(p[2])))
+		elif line.begins_with("o ") or line.begins_with("g "):
+			if not idx.is_empty():
+				pieces.append([name, idx])
+			idx = PackedInt32Array()
+			name = line.substr(2).strip_edges()
+		elif line.begins_with("f "):
+			var corners := PackedInt32Array()
+			for c in line.substr(2).split(" ", false):
+				var i := int(c.get_slice("/", 0))
+				corners.append(i - 1 if i > 0 else v.size() + i)
+			for k in range(1, corners.size() - 1):
+				idx.append_array([corners[0], corners[k], corners[k + 1]])
+	if not idx.is_empty():
+		pieces.append([name, idx])
+	return pieces.map(func(p: Array) -> Array: return [p[0], v, p[1]])
 
 
 ## STL, binary or text: every facet's three corners.

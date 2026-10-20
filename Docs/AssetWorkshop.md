@@ -721,6 +721,8 @@ Checks: `asset_workshop_probe` -- two models in a scene, picked by a ray, moved,
 a piece given a part converts to that part, the models survive Convert and Edit as SDF, bake
 joins one into the block-out, spawn at the build's centre; `sdf_form_probe` -- combine.
 
+**Built 2026-10-20** as planned, but the combine is checked in `asset_workshop_probe` (Convert tags a piece's cells with its part; bake) rather than in `sdf_form_probe`. Undo and Remove deselect; Escape and Enter let the selected model go without removing it. asset_workshop_probe 286 (the old placed-model checks rewritten for objects), sdf_form_probe 38. `-- --shot --model`: the model inside the grid, the ruler under it.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
