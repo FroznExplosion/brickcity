@@ -2678,7 +2678,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_guide_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_guide_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_guide_dialog.use_native_dialog = true
-	_guide_dialog.filters = PackedStringArray(["*.glb, *.gltf, *.fbx ; Models"])
+	_guide_dialog.filters = PackedStringArray(["*.glb, *.gltf, *.fbx, *.obj, *.stl ; Models"])
 	_guide_dialog.file_selected.connect(func(path: String) -> void:
 		if _guide_into_sdf:
 			# Added from the sculpt panel: into the field only, placed, the gizmo on it.
@@ -4182,6 +4182,7 @@ func _build_sculpt_box() -> void:
 			["model into this part", func() -> void: model_op(SdfForm.ADD)],
 			["carve the model out", func() -> void: model_op(SdfForm.REMOVE)],
 			["lay the model (Enter)", func() -> void: lay_model()],
+			["snap to studs", func() -> void: snap_to_studs()],
 			["clear", func() -> void: sculpt_clear()],
 			["Convert", func() -> void: sculpt_convert()],
 			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
@@ -4190,6 +4191,7 @@ func _build_sculpt_box() -> void:
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(b[1])
 		row.add_child(btn)
+	_build_nudge_row(_sculpt_box)
 	_build_size_row(_sculpt_box)
 	_sculpt_box.add_child(HSeparator.new())
 
@@ -8683,6 +8685,10 @@ const GUN_CLASSES := {
 ## length from the butt (an SMG's).
 const GRIP_RAKE_DEG := 15.0
 const GRIP_AT := 0.25
+## The longest a placed model may be, studs (four rifles): past ~1000 the stamp refuses.
+const MODEL_MAX_STUDS := 250.0
+## The nudge buttons' step: half a stud (up and down: a plate) or a whole one (a brick).
+var nudge_whole := false
 var gun_class := "smg"
 var size_marks_on := true
 ## The shared grip at print size, mm (standards.json "held_grip"; these until it is read).
@@ -8861,7 +8867,11 @@ func _frame_placed() -> void:
 func _gizmo_input(e: InputEvent) -> bool:
 	if _placed.is_empty() or _gizmo == null or not _gizmo.visible:
 		return false
+	# The ray under the event's own position (a free cursor), else the aimed one.
 	var ray := _mouse_ray()
+	if e is InputEventMouse and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		var at: Vector2 = (e as InputEventMouse).position
+		ray = [_camera.project_ray_origin(at), _camera.project_ray_normal(at)]
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 		if e.pressed:
 			var id := _gizmo.pick(ray[0], ray[1])
@@ -8908,6 +8918,10 @@ func dragged_xf(d: Dictionary, free: bool) -> Transform3D:
 		return Transform3D(r, c - r * c) * xf
 	if d.has("size"):
 		var f: float = d.size
+		# Held between a stud and MODEL_MAX_STUDS long: past that the stamp refuses it.
+		var now := ((xf * (_placed.box as AABB)).size / BrickPalette.STUD_M)
+		var longest := maxf(now.x, maxf(now.y, now.z))
+		f = clampf(f, 1.0 / maxf(longest, 0.01), MODEL_MAX_STUDS / maxf(longest, 0.01))
 		if not free:
 			f = maxf(snappedf(f, 0.01), 0.01)
 		return Transform3D(Basis.from_scale(Vector3.ONE * f), c - c * f) * xf
@@ -8947,6 +8961,85 @@ static func _test_gun_scene() -> Node3D:
 		mi.position = (b[0] as Vector3) + (b[1] as Vector3) * 0.5
 		arm.add_child(mi)
 	return root
+
+
+# Nudges: off half a stud, a model converts badly -------------------------------------
+
+## Move the placed model, else the whole block-out, one step `dir` (x along: right / left
+## as the side view shows it; y up; z front / back): half a stud or a stud along and
+## across, a plate or a brick up and down. A laid block-out moved is one undo.
+func nudge(dir: Vector3i) -> void:
+	var step := 1.0 if nudge_whole else 0.5
+	var plates := 3.0 if nudge_whole else 1.0
+	var by := Vector3(dir.x * step * BrickPalette.STUD_M, dir.y * plates * BrickPalette.PLATE_M,
+			dir.z * step * BrickPalette.STUD_M)
+	if not _placed.is_empty():
+		var xf: Transform3D = _placed.xf
+		_placed.xf = Transform3D(xf.basis, xf.origin + by)
+		_stamp_placed()
+		_gizmo.position = _placed_centre()
+		return
+	move_field(Vector3(dir.x * step * BrickWorld.ticks_per_stud(), dir.y * plates * BrickWorld.ticks_per_plate(), dir.z * step * BrickWorld.ticks_per_stud()))
+
+
+## The whole block-out moved `by` samples, one undo. Not once converted: bricks move with
+## Move part (Alt G).
+func move_field(by: Vector3) -> void:
+	if sculpt_state == "bricks":
+		_show_sculpt_note(true, "Converted: these are bricks. Move part (Alt G) moves them, or Edit as SDF first.")
+		return
+	if sculpt.form.block_count() == 0 or by == Vector3.ZERO:
+		return
+	sculpt.form.begin_edit()
+	sculpt.form.move(by)
+	sculpt.remesh()
+	_sculpt_record(sculpt.form.end_edit())
+
+
+## Line the placed model (else the block-out) up with the bricks: the near corner of its
+## box on a whole stud along and across, its bottom on a plate. Then a box-shaped model
+## converts to whole bricks instead of half-filled ones.
+func snap_to_studs() -> void:
+	if not _placed.is_empty():
+		var bb := (_placed.xf as Transform3D) * (_placed.box as AABB)
+		var s := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+		var by := (bb.position / s).round() * s - bb.position
+		var xf: Transform3D = _placed.xf
+		_placed.xf = Transform3D(xf.basis, xf.origin + by)
+		_stamp_placed()
+		_gizmo.position = _placed_centre()
+		return
+	if sculpt_state == "bricks" or sculpt.form.block_count() == 0:
+		return
+	# Samples: a cell starts at a multiple of 5 along and across, of 2 up.
+	var lo := Vector3i(sculpt.form.bounds().position)
+	var per := Vector3i(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud())
+	var by := Vector3i.ZERO
+	for k in 3:
+		var r := posmod(lo[k], per[k])
+		by[k] = -r if r * 2 <= per[k] else per[k] - r
+	move_field(Vector3(by))
+
+
+## The sculpt panel's nudge row: the step, and a button each way.
+func _build_nudge_row(box: Container) -> void:
+	var row := HFlowContainer.new()
+	box.add_child(row)
+	var step := OptionButton.new()
+	step.focus_mode = Control.FOCUS_NONE
+	step.add_item("step: half stud (up: a plate)")
+	step.add_item("step: 1 stud (up: a brick)")
+	step.select(1 if nudge_whole else 0)
+	step.item_selected.connect(func(i: int) -> void: nudge_whole = i == 1)
+	row.add_child(step)
+	for b in [["left", Vector3i(-1, 0, 0)], ["right", Vector3i(1, 0, 0)], ["up", Vector3i(0, 1, 0)],
+			["down", Vector3i(0, -1, 0)], ["front", Vector3i(0, 0, 1)], ["back", Vector3i(0, 0, -1)]]:
+		var btn := Button.new()
+		btn.text = b[0]
+		btn.focus_mode = Control.FOCUS_NONE
+		var d: Vector3i = b[1]
+		btn.pressed.connect(func() -> void: nudge(d))
+		row.add_child(btn)
 
 
 # The gun's size on the grid ----------------------------------------------------------

@@ -1632,6 +1632,7 @@ func _sculpt() -> void:
 	_lathe()
 	_flatten()
 	_placed_model()
+	_nudges()
 	_size_and_view()
 	_ws.rail_pick("place")
 
@@ -1902,6 +1903,72 @@ func _placed_model() -> void:
 			g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD)])
 	_ws.drop_model()
 	_ws.sculpt_clear()
+
+
+## The gizmo's resize can no longer blow a model out of the field (it was the mouse's
+## distance from the middle over where it started: grabbed at the middle, a short drag
+## made it twelve times over and the stamp refused it -- the model vanished); nudges a
+## half stud or a stud each way, snap to studs, OBJ and STL files.
+func _nudges() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.0, 0.4, 0.2)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.place_mesh(am, "box.glb")
+	var g: ModelGizmo = _ws._gizmo
+	g.begin("size", Vector3.ZERO, Vector3.FORWARD, Vector2(100, 100), _ws._camera)
+	var f: float = g.drag_delta(Vector3.ZERO, Vector3.FORWARD, Vector2(200, 100)).size
+	_ok("the resize cube: 100 px right is 1.41 times, wherever it was grabbed", is_equal_approx(f, sqrt(2.0)), str(f))
+	g.end()
+	_ws._gizmo_xf0 = _ws._placed.xf
+	var huge: Transform3D = _ws.dragged_xf({"size": 1000.0}, false)
+	var s: Vector3 = (huge * (_ws._placed.box as AABB)).size / STUD
+	_ok("and a model is held at 250 studs long", s.x <= 250.5 and s.x > 240.0, str(s))
+	var bb: AABB = _ws.size_box()
+	_ws.nudge(Vector3i(1, 0, 0))
+	_ws.nudge(Vector3i(0, 1, 0))
+	var moved: AABB = _ws.size_box()
+	_ok("a nudge moves a placed model half a stud, up a plate", (moved.position - bb.position).is_equal_approx(
+			Vector3(0.5 * STUD, BrickPalette.PLATE_M, 0)), str((moved.position - bb.position) / STUD))
+	_ws.snap_to_studs()
+	var snapped: AABB = _ws.size_box()
+	var off := Vector3(fposmod(snapped.position.x / STUD + 0.5, 1.0) - 0.5, fposmod(snapped.position.y / BrickPalette.PLATE_M + 0.5, 1.0) - 0.5,
+			fposmod(snapped.position.z / STUD + 0.5, 1.0) - 0.5)
+	_ok("snap to studs puts its corner on a stud, its bottom on a plate", off.length() < 0.001, str(off))
+	_ws.lay_model()
+	var lo: Vector3 = _ws.sculpt.form.bounds().position
+	var n: int = _ws.sculpt.form.cells().size()
+	var groups: int = _ws._edit_groups.size()
+	_ws.nudge_whole = true
+	_ws.nudge(Vector3i(0, 0, -1))
+	_ws.nudge_whole = false
+	_ok("laid, the whole block-out moves a stud back: exact, one undo", _ws.sculpt.form.bounds().position == lo + Vector3(0, 0, -5)
+			and _ws.sculpt.form.cells().size() == n and _ws._edit_groups.size() == groups + 1, str(_ws.sculpt.form.bounds().position - lo))
+	_ws._undo()
+	_ok("one Z moves it back", _ws.sculpt.form.bounds().position == lo)
+	_ws.move_field(Vector3(1, 3, 2))
+	_ws.snap_to_studs()
+	var p: Vector3 = _ws.sculpt.form.bounds().position
+	_ok("snap to studs lines a laid block-out up with the cells", int(p.x) % 5 == 0 and int(p.y) % 2 == 0 and int(p.z) % 5 == 0, str(p))
+	_ws.sculpt_clear()
+	# OBJ (a quad, a fan) and STL (text) read as triangles.
+	var obj := "user://_probe_model.obj"
+	var fo := FileAccess.open(obj, FileAccess.WRITE)
+	fo.store_string("o q\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1 4//1\nf -4 -2 -1\n")
+	fo.close()
+	var stl := "user://_probe_model.stl"
+	var fs := FileAccess.open(stl, FileAccess.WRITE)
+	fs.store_string("solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 3 0\nendloop\nendfacet\nendsolid t\n")
+	fs.close()
+	var mo := ModelMesh.read(obj)
+	var ms := ModelMesh.read(stl)
+	_ok("OBJ and STL files read", mo != null and mo.surface_get_array_index_len(0) == 9 and ms != null
+			and is_equal_approx(ms.get_aabb().size.x, 2.0) and is_equal_approx(ms.get_aabb().size.y, 3.0))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(obj))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(stl))
 
 
 ## The field's box in workshop space.

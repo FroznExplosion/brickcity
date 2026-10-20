@@ -18,6 +18,9 @@ const PICK := 0.08
 ## The gizmo's size: this share of its distance from the camera (an orthographic view:
 ## of the view's height).
 const SCREEN := 0.16
+## Pixels of drag that double (or halve) the size; the farthest one drag moves, metres.
+const SIZE_PX := 200.0
+const MOVE_MAX := 60.0
 
 var hover := ""
 var _mats := {}   # handle -> material
@@ -180,9 +183,13 @@ func end() -> void:
 ## The gizmo stays where it began until `begin` again (the workshop moves it).
 func drag_delta(from: Vector3, dir: Vector3, mouse: Vector2) -> Dictionary:
 	if _drag.begins_with("move"):
+		# An arrow pointing nearly at the camera gives no move: there the mouse's ray meets
+		# the axis far off, and a pixel would throw the model out of sight.
 		var a := AXES[int(_drag.right(1))]
+		if absf(a.dot(dir.normalized())) > 0.97:
+			return {"move": Vector3.ZERO}
 		var c := _closest(global_position, a, from, dir.normalized())
-		return {"move": a * (c.x - _s0)}
+		return {"move": a * clampf(c.x - _s0, -MOVE_MAX, MOVE_MAX)}
 	if _drag.begins_with("turn"):
 		var a := AXES[int(_drag.right(1))]
 		var v := _on_ring_plane(a, from, dir)
@@ -190,8 +197,10 @@ func drag_delta(from: Vector3, dir: Vector3, mouse: Vector2) -> Dictionary:
 			return {"turn": [a, 0.0]}
 		return {"turn": [a, atan2(a.dot(_v0.cross(v)), _v0.dot(v))]}
 	if _drag == "size":
-		var r0 := maxf((_m0 - _c0).length(), 8.0)
-		return {"size": maxf((mouse - _c0).length(), 1.0) / r0}
+		# Twice the size for every SIZE_PX right or up. (It was the mouse's distance from
+		# the middle over where it started: grabbed at the middle, a short drag made the
+		# model twelve times over -- too big to stamp, and it vanished.)
+		return {"size": pow(2.0, ((mouse.x - _m0.x) - (mouse.y - _m0.y)) / SIZE_PX)}
 	return {}
 
 

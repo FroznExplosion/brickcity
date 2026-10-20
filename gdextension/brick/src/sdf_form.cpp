@@ -95,6 +95,7 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("lathe", "op", "xform", "profile", "blend", "part"), &SdfForm::lathe);
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
+    ClassDB::bind_method(D_METHOD("move", "by"), &SdfForm::move);
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
     ClassDB::bind_method(D_METHOD("clear"), &SdfForm::clear);
     ClassDB::bind_method(D_METHOD("cells"), &SdfForm::cells);
@@ -635,6 +636,14 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
 }
 
 void SdfForm::scale(float factor, const Vector3 &pivot) {
+    remap(factor, pivot, Vector3());
+}
+
+void SdfForm::move(const Vector3 &by) {
+    remap(1.0f, Vector3(), by);
+}
+
+void SdfForm::remap(float factor, const Vector3 &pivot, const Vector3 &by) {
     if (factor <= 0.0f || blocks.empty()) {
         return;
     }
@@ -645,8 +654,8 @@ void SdfForm::scale(float factor, const Vector3 &pivot) {
     std::unordered_map<int64_t, bool> want;
     for (const auto &kv : blocks) {
         const Vector3 o = Vector3(unkey(kv.first)) * (float)B;
-        const Vector3i lo = floor3(pivot + (o - pivot) * factor) - Vector3i(1, 1, 1);
-        const Vector3i hi = ceil3(pivot + (o + Vector3(B, B, B) - pivot) * factor) + Vector3i(1, 1, 1);
+        const Vector3i lo = floor3(pivot + (o - pivot) * factor + by) - Vector3i(1, 1, 1);
+        const Vector3i hi = ceil3(pivot + (o + Vector3(B, B, B) - pivot) * factor + by) + Vector3i(1, 1, 1);
         for (int bz = fdiv(lo.z, B); bz <= fdiv(hi.z, B); ++bz)
             for (int by = fdiv(lo.y, B); by <= fdiv(hi.y, B); ++by)
                 for (int bx = fdiv(lo.x, B); bx <= fdiv(hi.x, B); ++bx)
@@ -661,7 +670,7 @@ void SdfForm::scale(float factor, const Vector3 &pivot) {
             for (int y = 0; y < B; ++y)
                 for (int x = 0; x < B; ++x) {
                     const Vector3 p((float)(bc.x * B + x) + 0.5f, (float)(bc.y * B + y) + 0.5f, (float)(bc.z * B + z) + 0.5f);
-                    const Vector3 src = pivot + (p - pivot) / factor;
+                    const Vector3 src = pivot + (p - by - pivot) / factor;
                     const float ds = trilinear(src);
                     const float d = ds < BAND ? clampb(ds * factor) : BAND;
                     const Vector3i s = floor3(src);

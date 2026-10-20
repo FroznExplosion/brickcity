@@ -11,8 +11,17 @@ class_name ModelMesh
 ## down and a hundredth the size (2026-10-19).
 
 
-## The file (glTF, GLB or FBX) as one mesh, or null if it cannot be read.
+## The model files read: glTF / GLB and FBX through Godot's importers, OBJ and STL here.
+const EXTENSIONS := ["glb", "gltf", "fbx", "obj", "stl"]
+
+
+## The file as one mesh, or null if it cannot be read.
 static func read(path: String) -> ArrayMesh:
+	match path.get_extension().to_lower():
+		"obj":
+			return _soup_mesh(_read_obj(path))
+		"stl":
+			return _soup_mesh(_read_stl(path))
 	var fbx := path.get_extension().to_lower() == "fbx"
 	var doc: GLTFDocument = FBXDocument.new() if fbx else GLTFDocument.new()
 	var state: GLTFState = FBXState.new() if fbx else GLTFState.new()
@@ -60,6 +69,69 @@ static func _add(n: Node, root: Node, out: ArrayMesh) -> void:
 			out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s)
 	for c in n.get_children():
 		_add(c, root, out)
+
+
+## [vertices, index] as a mesh; null when empty.
+static func _soup_mesh(soup: Array) -> ArrayMesh:
+	if soup.is_empty() or (soup[1] as PackedInt32Array).is_empty():
+		return null
+	var s := []
+	s.resize(Mesh.ARRAY_MAX)
+	s[Mesh.ARRAY_VERTEX] = soup[0]
+	s[Mesh.ARRAY_INDEX] = soup[1]
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s)
+	return out
+
+
+## Wavefront OBJ: its `v` and `f` lines (a face of more than three corners a fan; v/vt/vn
+## and negative indices as the format has them). Every object and group in one.
+static func _read_obj(path: String) -> Array:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return []
+	var v := PackedVector3Array()
+	var idx := PackedInt32Array()
+	while not f.eof_reached():
+		var line := f.get_line().strip_edges()
+		if line.begins_with("v "):
+			var p := line.substr(2).split(" ", false)
+			if p.size() >= 3:
+				v.append(Vector3(float(p[0]), float(p[1]), float(p[2])))
+		elif line.begins_with("f "):
+			var corners := PackedInt32Array()
+			for c in line.substr(2).split(" ", false):
+				var i := int(c.get_slice("/", 0))
+				corners.append(i - 1 if i > 0 else v.size() + i)
+			for k in range(1, corners.size() - 1):
+				idx.append_array([corners[0], corners[k], corners[k + 1]])
+	return [v, idx]
+
+
+## STL, binary or text: every facet's three corners.
+static func _read_stl(path: String) -> Array:
+	var bytes := FileAccess.get_file_as_bytes(path)
+	if bytes.size() < 84:
+		return []
+	var v := PackedVector3Array()
+	var n := bytes.decode_u32(80)
+	if 84 + n * 50 == bytes.size():
+		for t in n:
+			var at := 84 + t * 50 + 12
+			for k in 3:
+				var o := at + k * 12
+				v.append(Vector3(bytes.decode_float(o), bytes.decode_float(o + 4), bytes.decode_float(o + 8)))
+	else:
+		for line in bytes.get_string_from_ascii().split("\n"):
+			var s := line.strip_edges()
+			if s.begins_with("vertex"):
+				var p := s.split(" ", false)
+				if p.size() >= 4:
+					v.append(Vector3(float(p[1]), float(p[2]), float(p[3])))
+	var idx := PackedInt32Array()
+	for i in v.size() - v.size() % 3:
+		idx.append(i)
+	return [v, idx]
 
 
 ## A node's transform in root's frame, from the nodes' own transforms (the scene is not in
