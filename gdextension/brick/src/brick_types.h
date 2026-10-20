@@ -717,6 +717,19 @@ struct Chunk {
     // then patched in place: uploading a fresh ArrayMesh re-sends the whole
     // vertex buffer, which measured 175 ms per cascade step at 16.5k blocks.
     PackedInt32Array live_indices;
+    // What live_indices was last filled against, so a patch can redo only the
+    // faces a change reaches (BrickWorld::refill_changed) instead of every
+    // face of the chunk: each block's alive flag then, the bake it was filled
+    // from, each block's own faces (first, count -- a block's faces are
+    // contiguous in the bake), and, for each block, the faces of OTHER blocks
+    // it hides (their `other` is it), as one list cut by idx_rev_at.
+    std::vector<uint8_t> idx_alive;
+    std::vector<int32_t> idx_own_first;
+    std::vector<int32_t> idx_own_n;
+    std::vector<int32_t> idx_rev_at;
+    std::vector<int32_t> idx_rev;
+    uint32_t idx_serial = 0;
+    int32_t idx_emitted = 0;
 
     // --- where this chunk is in the world ---------------------------------
     //

@@ -10508,6 +10508,7 @@ func _physics_process(_delta: float) -> void:
 		if not _dirty.has(id):
 			_dirty.append(id)
 	_resolves_put_off += again.size()
+	t = _mark("after_spawn", t)
 	for sid in _stairs_due.keys():
 		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
 			break
@@ -10515,6 +10516,7 @@ func _physics_process(_delta: float) -> void:
 		if cut >= 0:
 			_stairs_due.erase(sid)
 			spawned += cut
+	t = _mark("stairs", t)
 	# M4: spread promotions rather than letting several land in one frame.
 	var hits := 0
 	var damage_until := Time.get_ticks_usec() + int(DAMAGE_BUDGET_MS * 1000.0)
@@ -10524,6 +10526,7 @@ func _physics_process(_delta: float) -> void:
 		var h: Array = _damage_queue.pop_front()
 		_apply_blast(h[0], h[1], int(h[2]) if h.size() > 2 else 0)
 		hits += 1
+	islands.flush_meshes()
 	# One space lift per building per tick, however many hits landed on it.
 	var t_dis := Time.get_ticks_usec()
 	for id in _pending_disable:
@@ -13594,6 +13597,16 @@ func _report_profile() -> void:
 		for k in keys:
 			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / maxi(_tick_samples, 1)]
 		print("[prof] mean per tick: " + line)
+		line = ""
+		for k in ["after_spawn", "stairs", "dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces", "dmg_disable"]:
+			line += "%s %.2f  " % [k, float(_prof_sum.get(k, 0.0)) / maxi(_tick_samples, 1)]
+		print("[prof]   of which damage, mean per tick: " + line)
+		var dn: Array = islands.damage_near_ms
+		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [
+				int(dn[4]), dn[0], dn[1], dn[2], dn[3]])
+		var dm: Array = islands.damage_ms
+		print("[prof]     of which a hit on a piece: the hit %.1f ms, throwing what it killed %.1f, cutting shapes %.1f, solve %.1f, mesh %.1f" % [
+				dm[0], dm[1], dm[2], dm[3], dm[4]])
 		var tp: Dictionary = islands.tick_prof
 		var n := maxi(int(islands.census.ticks), 1)
 		print("[prof] islands per tick, whole run: loop %.2f (pieces %.2f, dormancy %.2f, cap %.2f)  resolve %.2f  fracture %.2f  mesh %.2f  multimesh %.2f" % [
