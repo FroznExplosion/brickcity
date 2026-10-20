@@ -91,6 +91,8 @@ private:
             float (*sdf)(const Vector3 &, const void *), const void *ctx);
     void cell_box(const Vector3i &c, int op, int part);
     void grow(const Vector3 &a, const Vector3 &b, float radius, float amount, int part);
+    // Every sample from where it came: scaled by `factor` about `pivot`, then moved `by`.
+    void remap(float factor, const Vector3 &pivot, const Vector3 &by);
 
 public:
     /// A capsule from `a` to `b` (samples), `radius` round it: a sphere when a == b.
@@ -131,6 +133,9 @@ public:
 
     /// The whole form scaled by `factor` about `pivot` (samples).
     void scale(float factor, const Vector3 &pivot);
+    /// The whole form moved `by` samples: exact for whole samples, resampled (trilinear,
+    /// labels from the nearest) for a part of one -- half a stud is 2.5.
+    void move(const Vector3 &by);
     /// The whole form blurred `passes` times (each sample to the mean of its 27).
     void blur(int passes);
     void clear();

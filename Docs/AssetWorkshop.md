@@ -595,6 +595,27 @@ dropped, laid as one undo, the gizmo's handles picked, the ruler, the game view'
 hip and the sights), sdf_form_probe 38, workshop_probe 96. `-- --shot --model` (the gizmo, the
 ruler and grip box) and `-- --shot --model --gameview`.
 
+**Fixes and nudges (2026-10-19, later).** The user: moving the SDF with the gizmo made it
+disappear; wanted buttons to move it half a stud or a stud each way, since a model sitting
+half a stud off converts badly; and which model files load.
+
+- **Why it vanished:** the resize cube scaled by the mouse's distance from the gizmo's middle
+  over where the drag began. Grabbed at the middle (where the cube is) that start is a few
+  pixels, so a short drag made the model ten or more times over; `stamp_mesh` refuses a model
+  that big (over 400 million samples), and the field was left empty. Now 200 px right or up
+  doubles it (left or down halves), held between a stud and 250 studs long. An arrow pointing
+  nearly at the camera no longer moves (there a pixel meant metres), a move is held to 60 m,
+  and the gizmo reads the ray at the event's own position.
+- **Nudges** (sculpt panel): left, right, up, down, front, back (as the side view shows them),
+  by **half a stud** (up and down: a plate) or **a stud** (a brick). They move the placed
+  model, or with none placed the whole block-out (`SdfForm.move`, one undo: exact for whole
+  samples; half a stud is 2.5 samples and is resampled). **Snap to studs** puts the placed
+  model's (else the block-out's) near corner on a whole stud and its bottom on a plate.
+- **Files:** glTF / GLB and FBX (Godot's importers), and now **OBJ** and **STL** (read in
+  `ModelMesh`). The size never matters: a model is resized to the gun class's length.
+
+asset_workshop_probe 279 (8 new).
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
