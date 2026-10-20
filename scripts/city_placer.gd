@@ -312,7 +312,7 @@ func _first_surface(from: Vector3, dir: Vector3) -> Dictionary:
 	var best := {}
 	for b in _registry.buildings:
 		var box := box_of(b)
-		var t := _ray_box(from, dir, box)
+		var t := BuildingRegistry.ray_hit(b, from, dir)
 		if t < best_t:
 			var p := from + dir * t
 			# Nudge into the box so the column is one of the building's own.
@@ -340,24 +340,6 @@ func _first_surface(from: Vector3, dir: Vector3) -> Dictionary:
 	return best
 
 
-## Slab test, world AABB. INF when the ray misses or the box is behind it.
-static func _ray_box(from: Vector3, dir: Vector3, box: AABB) -> float:
-	var t0 := -INF
-	var t1 := INF
-	for a in 3:
-		if absf(dir[a]) < 1e-9:
-			if from[a] < box.position[a] or from[a] > box.end[a]:
-				return INF
-			continue
-		var ta := (box.position[a] - from[a]) / dir[a]
-		var tb := (box.end[a] - from[a]) / dir[a]
-		t0 = maxf(t0, minf(ta, tb))
-		t1 = minf(t1, maxf(ta, tb))
-	if t1 < maxf(t0, 0.0):
-		return INF
-	return t0 if t0 > 0.0 else INF
-
-
 ## Centred on the stud when that fits; otherwise the nearest shift that still
 ## covers it. Centred and red when nothing does -- the workshop's `_fit_over`.
 func _fit_over(stud: Vector3i, d: Vector3i, half: Vector3i) -> Vector3i:
@@ -376,19 +358,13 @@ func _fit_over(stud: Vector3i, d: Vector3i, half: Vector3i) -> Vector3i:
 	return best
 
 
-## A building's box in the world. Every building stands on the grid at a
-## quarter turn (BuildingRegistry.on_grid), so its turned box is exactly an AABB.
+## A building's box in the world: the AABB round its own box. Every building
+## stands on the world grid at a quarter turn (BuildingRegistry.on_grid), so
+## today it is exact; on a tilted frame it is only the BROAD phase, and a
+## precise question goes through BuildingRegistry.contains / ray_hit
+## (Planets.md 9.2).
 static func box_of(b) -> AABB:
-	var cell := BrickWorld.get_cell_size()
-	var size: Vector3
-	if b.is_build():
-		var d: Vector3i = b.build.chunk_dims()
-		size = Vector3(d.x * cell.x, d.y * cell.y, d.z * cell.z)
-	else:
-		size = Vector3(int(b.recipe.footprint_x) * cell.x,
-				TowerRecipe.total_plates(int(b.recipe.courses)) * cell.y,
-				int(b.recipe.footprint_z) * cell.z)
-	return b.xform * AABB(Vector3.ZERO, size)
+	return b.xform * BuildingRegistry.own_box(b)
 
 
 ## Does the build, turned as it is, fit with its min corner at `c`? It must not

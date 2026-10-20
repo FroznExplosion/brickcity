@@ -100,15 +100,16 @@ authored meshes placed on the surface, like buildings.
 
 | | today (flat, editable in the editor) | planet ground (static) |
 |---|---|---|
-| mesh | generated per tile while streaming | **baked once** (at world build or first visit, cached to disk) and simplified per chunk -- flat ground collapses to a few triangles |
+| mesh | generated per tile while streaming | **simplified offline** per chunk -- flat ground collapses to a few triangles |
 | collision | 100–200 merged boxes a tile | one heightmap shape a chunk, baked |
 | lighting | sun shadow baked per vertex already | the same, plus baked AO |
 | navigation outdoors | brick-column grid, read live | **baked once** per chunk (§7) |
 | edit store | copy-on-write sculpt tiles | none at runtime |
 | explosions | (already do not dig) | scorch decals |
 
-Streaming becomes LOADING, not generating -- which is where most of this month's terrain hitches
-came from. Triangles: indestructibility does not remove any by itself; it permits offline
+Not a disk cache of raw tiles: measured, reading one back is slower than building it (§9.5). The
+win is what can be done to ground that never changes -- simplified meshes, baked colliders and
+navigation -- before anyone plays. Triangles: indestructibility does not remove any by itself; it permits offline
 simplification. With the low-poly look (Terrain.md 18.6 follow-up) the near ground estimate is
 ~100–190k triangles where laid brick is ~400k; offline simplification of the far ground could
 plausibly halve its ~370k again. **Estimates, not measured.**
@@ -279,6 +280,16 @@ through `CityPlacer.box_of`'s "a building is on the grid at a quarter turn, so i
 (14 call sites, 7 of `on_grid`). Keep the AABB as a broad phase only. That makes buildings tilted
 in a tangent frame free later, and a bent building one function swap.
 
+*Built 2026-10-20:* `BuildingRegistry.to_building`, `to_world`, `own_box`, `contains`, `ray_hit`
+-- the one door. `on_grid` snaps in `grid_frame_at(p)` (the world's frame today, the tangent frame
+on a planet), so a building's grid follows the ground it stands on. `CityPlacer.box_of` is the
+AABB round `own_box` and is documented as the broad phase; the placer's aim ray and the disaster
+context's "which building is this point in" go through the building's own space. The other
+`box_of` callers (earthquake, material effects, the city's pad and range checks) use it as a broad
+phase or a footprint and are right as they are on the flat world; on a tilted frame they are the
+list to revisit. The placer itself still snaps to the world's stud grid -- on a planet it will
+snap in `grid_frame_at` too.
+
 ### 9.3 Room-graph pathfinding
 
 Docs/AI.md §3.6.1. Faster and smarter in the flat game (fewer nodes, doors and stairs understood,
@@ -293,8 +304,12 @@ tangent-plane patches of §3.1. In the flat game it is also what lets a patch si
 
 ### 9.5 Bake the static ground
 
-Cache built tile meshes and colliders to disk, keyed by world, edits generation and tile. Streaming
-then loads instead of generating -- the hitches go, and §3.3 is already half done.
+~~Cache built tile meshes and colliders to disk.~~ **Measured, not worth it (2026-10-20):** a tile
+builds in 2.9 ms on a worker thread (chamfered 3.0 ms) and reading the same tile back from disk
+(`bytes_to_var`, 198 KB) took 14 ms -- five times slower, and the build was never on the main
+thread anyway: this month's hitches were in assembling nodes and uploading meshes, which a cache
+does not touch. What §3.3 wants on a planet is OFFLINE SIMPLIFICATION of static ground, which is
+planet work, not a cache.
 
 ### 9.6 Keep positions local where they are stored
 

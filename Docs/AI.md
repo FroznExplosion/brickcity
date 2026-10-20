@@ -374,6 +374,47 @@ it.
 4. The plays read the graph (stack, clear, search). `bt_play_clear_room` already takes an opening
    and stack slots.
 
+**Step 1 is blocked, and why (2026-10-20).** Two things the step assumed are not in the game:
+
+* **Generated towers have no doorway to the street.** Their only openings are windows
+  (`TowerRecipe.window_gaps`), whose sills stand two courses above every floor, ground floor
+  included. Builds from the workshop can have doorways; towers cannot.
+* **Nothing climbs through a window.** `AINav` steps up one brick (`STEP_UP`) and has no vault
+  or climb link; `pawn_moves.gd` has no vault either.
+
+So today a squad gets into a tower only by breaching (§3.6, built). Step 1 waits on either a
+street doorway in the tower recipe (the building side) or a vault move plus a nav link for it
+(pawn and `AINav`). Until then the graph serves the route once a squad is inside.
+
+**Step 2 built (2026-10-20): `scripts/ai/building_layout.gd`.** `BuildingLayout.for_tower(fx, fz,
+courses, keepouts)` from the recipe alone -- rooms from `TowerRecipe.plan`, a stair space per
+storey on the stairwell joined storey to storey, doorways from `TowerRecipe.doorways` (new: the
+function `_lay_wall_line` itself now cuts its doorway with, `wall_doorway`, so the graph cannot
+drift from the bricks), windows as portals -- cached per recipe. `for_record(rec)` makes the same
+graph from a structure record (workshop builds, `StructureSpaces`). `space_at`, `route` (start,
+every opening, goal, in building metres; `BuildingRegistry.to_world` turns it round),
+`reachable`. Not yet called by any play (step 4).
+
+`tools/building_layout_probe.gd` builds each tower in bricks and checks the graph against them:
+every doorway it walks through is air with wall beside it, and the spaces finder on the bricks
+sees the same rooms and doorways. Measured:
+
+| tower | spaces | links | made | a route | the grid it replaces |
+|---|---|---|---|---|---|
+| 30 x 30, 12 courses | 10 | 11 | 0.5 ms | 73 us | ~450 nodes |
+| 40 x 30, 24 courses | 20 | 19 | 0.5 ms | 161 us | ~1,200 nodes |
+| 40 x 40, 60 courses | 50 | 39 | 1.0 ms | 259 us | ~4,000 nodes |
+
+**What the probe found in the buildings** (for the building side, not fixed here):
+
+* **Sealed rooms.** One doorway per interior wall LINE per storey, and a line runs past several
+  rooms, so a room both of whose wall lines put their doorway elsewhere has no way in: 4 of 20
+  spaces on 40 x 30, 10 of 50 on 40 x 40 (the corner room, every storey). 30 x 30 is whole only
+  because its stairwell opens every room. A squad has to breach into those.
+* **Doorways across a junction.** The recipe can place a doorway where the other wall line
+  crosses, and that wall then stands in half of it: 40 x 30 storeys 1 and 2, two studs clear of
+  four -- one body exactly. The graph uses the clear part (`BuildingLayout.clear_span`).
+
 ### 3.7 Cover is a number: how long it will last
 
 Cover against a threat = the live bricks between the two points, by the DDA in §3.1, across every

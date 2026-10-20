@@ -964,9 +964,7 @@ static func _lay_wall_line(world: BrickWorld, chunk_id: int, palette: Dictionary
 		y: int, from: int, to: int, line: int, keepouts: Array, storey: int,
 		along_z: bool, thick: int = WALL_THICK, columns: Array = []) -> void:
 	var blocked := _keepout_spans(keepouts, line, along_z, thick)
-	# A doorway does not go through a column standing in the wall.
-	var door := _door_span(from, to, storey,
-			blocked + _keepout_spans(columns, line, along_z, thick))
+	var door := wall_doorway(from, to, line, keepouts, storey, along_z, thick, columns)
 	for k in COURSES_PER_FLOOR:
 		var gaps: Array = blocked.duplicate()
 		if k < COURSES_PER_FLOOR - 1 and door != Vector2i.ZERO:
@@ -981,6 +979,59 @@ static func _lay_wall_line(world: BrickWorld, chunk_id: int, palette: Dictionary
 		else:
 			_run_x(world, chunk_id, palette, at, from, to, line, ROOM_WALL_COLOUR,
 					gaps, lead, thick)
+
+
+## The doorway `_lay_wall_line` cuts through one interior wall line on one
+## storey, as [from, to) along the line; ZERO for none. The ONE answer, read by
+## the bricks and by anything that needs the doorways without them (the AI's
+## BuildingLayout, Docs/AI.md 3.6.1). A doorway does not go through a column
+## standing in the wall, nor through a fixture's keep-out.
+static func wall_doorway(from: int, to: int, line: int, keepouts: Array, storey: int,
+		along_z: bool, thick: int = WALL_THICK, columns: Array = []) -> Vector2i:
+	var blocked := _keepout_spans(keepouts, line, along_z, thick)
+	return _door_span(from, to, storey, blocked + _keepout_spans(columns, line, along_z, thick))
+
+
+## Every doorway `build` cuts in the interior walls, from the recipe alone:
+## [{"storey", "floor_y" (plates, the storey's floor), "along_z", "line" (the
+## wall's near face, studs), "thick", "span" (Vector2i along the line)}]. The
+## same keep-outs and `rooms` as the build it describes, as `frame`.
+static func doorways(footprint_x: int, footprint_z: int, courses: int,
+		keepouts: Array = [], rooms: bool = true) -> Array:
+	var out := []
+	if not rooms:
+		return out
+	var t := WALL_THICK
+	var clear := snap_keepouts(keepouts, footprint_x, footprint_z)
+	var pl := plan(footprint_x, footprint_z)
+	var bands := layout(courses)
+	var columns_first := ROOM_WALL_THICK < 2
+	var standing: Array = []
+	if columns_first:
+		for c in (pl.columns as Array):
+			var r: Rect2i = c
+			if not _blocked(clear, r.position.x, r.position.y, r.size.x, r.size.y):
+				standing.append(r)
+	var storey := 0
+	for i in bands.size() - 1:
+		var b: Dictionary = bands[i]
+		if not ((b.kind == "base" or b.kind == "slab") and bands[i + 1].kind == "course"):
+			continue
+		var floor_y: int = int(b.y) + SLAB_PLATES
+		for at in (pl.wall_x as Array):
+			var span := wall_doorway(t, footprint_z - t, int(at), clear, storey, true,
+					ROOM_WALL_THICK, standing)
+			if span != Vector2i.ZERO:
+				out.append({"storey": storey, "floor_y": floor_y, "along_z": true,
+						"line": int(at), "thick": ROOM_WALL_THICK, "span": span})
+		for at in (pl.wall_z as Array):
+			var span := wall_doorway(t, footprint_x - t, int(at), clear, storey, false,
+					ROOM_WALL_THICK, standing)
+			if span != Vector2i.ZERO:
+				out.append({"storey": storey, "floor_y": floor_y, "along_z": false,
+						"line": int(at), "thick": ROOM_WALL_THICK, "span": span})
+		storey += 1
+	return out
 
 
 ## Where a fixture crosses this wall line, in the line's own axis.
