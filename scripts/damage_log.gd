@@ -181,9 +181,22 @@ class Entry extends RefCounted:
 	var points := PackedVector3Array()   ## PIECE_SNAP: where it snaps
 	var blocks := PackedInt32Array()     ## DETACH: the blocks that left
 
+	## On the wire and in a save, world positions are in the BODY's frame
+	## (WorldFrame, Planets.md 9.6): `point` of the building kinds, and a
+	## resting piece's origin. Grid coordinates -- the piece kinds, a region's
+	## corners, LOAD's cells -- are not world positions and go as they are.
 	func to_array() -> Array:
-		return [tick, kind, target, point, radius, normal, limit, seq,
-				frame, owner, flags, points, blocks]
+		var p := WorldFrame.to_body(point) if _point_is_world() else point
+		var pts := points
+		if kind == Kind.PIECE_REST and pts.size() > 0:
+			pts = points.duplicate()
+			pts[0] = WorldFrame.to_body(pts[0])
+		return [tick, kind, target, p, radius, normal, limit, seq,
+				frame, owner, flags, pts, blocks]
+
+	func _point_is_world() -> bool:
+		return kind == Kind.BLAST or kind == Kind.SHEAR or kind == Kind.SEVER \
+				or kind == Kind.CHIP or kind == Kind.SCORCH
 
 	static func from_array(a: Array) -> Entry:
 		var e := Entry.new()
@@ -201,6 +214,11 @@ class Entry extends RefCounted:
 			e.flags = int(a[10])
 			e.points = a[11]
 			e.blocks = a[12]
+		if e._point_is_world():
+			e.point = WorldFrame.from_body(e.point)
+		if e.kind == Kind.PIECE_REST and e.points.size() > 0:
+			e.points = e.points.duplicate()
+			e.points[0] = WorldFrame.from_body(e.points[0])
 		return e
 
 	func is_piece() -> bool:

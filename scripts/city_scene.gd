@@ -12988,8 +12988,16 @@ const CHECKPOINT_GATE_META := &"city_checkpoint_gate"
 func save_checkpoint() -> bool:
 	# The stud's strength with it: the log is what happened at THAT strength,
 	# and replayed at another the solves in it come out differently.
-	var scene := {"damage": _damage_queue.duplicate(true), "dirty": Array(_dirty),
-			"camera": camera.global_transform, "placed": _placed.duplicate(true),
+	# Hits still queued are [point, radius, ...] with the point in the world:
+	# in the body's frame in the save, as every other position (WorldFrame).
+	var queued := []
+	for h in _damage_queue:
+		var row: Array = (h as Array).duplicate()
+		row[0] = WorldFrame.to_body(row[0])
+		queued.append(row)
+	var scene := {"damage": queued, "dirty": Array(_dirty),
+			"camera": WorldFrame.xform_to_body(camera.global_transform),
+			"placed": _placed_to_body(),
 			"stud_times": BrickStrength.times}
 	var bytes := AreaSnapshot.capture(authority.commands, islands, scene).to_bytes()
 	var f := FileAccess.open(CHECKPOINT_PATH, FileAccess.WRITE)
@@ -13022,6 +13030,16 @@ func _note_placed(id: int, grounded: bool) -> void:
 			"grounded": grounded})
 
 
+## The placed builds as a save carries them: in the body's frame (WorldFrame).
+func _placed_to_body() -> Array:
+	var out := []
+	for d in _placed:
+		var row: Dictionary = d.duplicate(true)
+		row["xform"] = WorldFrame.xform_to_body(d["xform"])
+		out.append(row)
+	return out
+
+
 ## A placed build from a checkpoint, put back as it was placed: registered (so
 ## it has the id the log knows it by), its pad cut again if it stood on the
 ## ground, indexed and shelled.
@@ -13029,7 +13047,8 @@ func _replace_build(d: Dictionary) -> void:
 	var recipe := BuildRecipe.from_dict(d.get("recipe", {}))
 	if recipe.is_empty():
 		return
-	var id := registry.register_build(recipe, d.get("xform", Transform3D()))
+	var id := registry.register_build(recipe,
+			WorldFrame.xform_from_body(d.get("xform", Transform3D())))
 	if id < 0:
 		return
 	if id != int(d.get("id", -1)):
@@ -13110,11 +13129,13 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		_dress(id, b.chunk, true)
 	var scene: Dictionary = report.get("scene", {})
 	for h in scene.get("damage", []):
-		_damage_queue.append(h)
+		var row: Array = (h as Array).duplicate()
+		row[0] = WorldFrame.from_body(row[0])
+		_damage_queue.append(row)
 	for id in scene.get("dirty", []):
 		_mark_dirty(int(id))
 	if scene.has("camera"):
-		camera.global_transform = scene.camera
+		camera.global_transform = WorldFrame.xform_from_body(scene.camera)
 	print("[city] checkpoint loaded in %d ms, %d placed build(s): %s" % [
 		Time.get_ticks_msec() - t0, _placed.size(), report])
 	return report
