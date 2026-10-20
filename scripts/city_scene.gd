@@ -11806,7 +11806,7 @@ func _path_promote() -> void:
 	if n == 0:
 		return
 	var space := get_world_3d().direct_space_state
-	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) \
+	var g := Gravity.strength() \
 			* IslandManager.DEBRIS_GRAVITY
 	var t := PATH_AHEAD_S
 	var checked := 0

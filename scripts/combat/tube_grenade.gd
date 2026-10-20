@@ -46,7 +46,7 @@ func _physics_process(delta: float) -> void:
 ## Fly `delta` seconds, a ray from here to where it will be.
 func step(delta: float) -> void:
 	_left -= delta
-	velocity += Vector3.DOWN * GRAVITY * delta
+	velocity += Gravity.down_at(global_position) * GRAVITY * delta
 	var from := global_position
 	var to := from + velocity * delta
 	var q := PhysicsRayQueryParameters3D.create(from, to, mask, exclude)

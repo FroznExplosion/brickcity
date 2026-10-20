@@ -12,7 +12,7 @@ const MARGIN := 0.75
 static func of_piece(islands: IslandManager, isl: BrickIsland) -> AABB:
 	var box := islands.world_aabb(isl)
 	var v := isl.body.linear_velocity
-	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) \
+	var g := Gravity.strength() \
 			* isl.body.gravity_scale
 	var ahead := box
 	ahead.position += v * HORIZON + Vector3.DOWN * 0.5 * g * HORIZON * HORIZON

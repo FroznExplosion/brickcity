@@ -406,7 +406,7 @@ func _walk(delta: float) -> void:
 	if _body.is_on_floor():
 		_body.velocity.y = minf(_body.velocity.y, 0.0)
 	else:
-		_body.velocity.y -= GRAVITY * delta
+		_body.velocity += Gravity.down_at(_body.global_position) * GRAVITY * delta
 	_body.move_and_slide()
 
 	# Stopped dead by something low -- a kerb of rubble, a course of brick, the

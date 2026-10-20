@@ -415,7 +415,7 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 	elif body.is_on_floor() and body.velocity.y <= 0.0:
 		body.velocity.y = 0.0
 	else:
-		body.velocity.y -= GRAVITY * delta
+		body.velocity += Gravity.down_at(body.global_position) * GRAVITY * delta
 	shove *= exp(-SHOVE_DECAY * delta)
 	body.move_and_slide()
 

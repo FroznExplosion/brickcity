@@ -157,7 +157,7 @@ func _build() -> void:
 	_proc.spread = 4.0
 	_proc.initial_velocity_min = 20.0
 	_proc.initial_velocity_max = 26.0
-	_proc.gravity = Vector3(0.0, -9.8, 0.0)
+	_proc.gravity = Gravity.down_at(Vector3.ZERO) * 9.8
 	_proc.scale_min = 0.6
 	_proc.scale_max = 1.6
 	_hail = GPUParticles3D.new()

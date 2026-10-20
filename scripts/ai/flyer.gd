@@ -397,7 +397,7 @@ func _fall(delta: float) -> void:
 		return
 	body.velocity.x *= 0.98
 	body.velocity.z *= 0.98
-	body.velocity.y -= FALL_G * delta
+	body.velocity += Gravity.down_at(body.global_position) * FALL_G * delta
 	body.move_and_slide()
 	var p := body.global_position
 	# Off the edge of the world: down, with nothing to crash on.

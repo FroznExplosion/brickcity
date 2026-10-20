@@ -199,7 +199,7 @@ func _ready() -> void:
 	if body == null:
 		push_error("TitanMotor: no CharacterBody3D parent — the motor will do nothing.")
 		return
-	_gravity = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * gravity_scale
+	_gravity = Gravity.strength() * gravity_scale
 	# The motor owns terrain handling, so it owns the body's terrain settings.
 	body.floor_max_angle = deg_to_rad(max_slope_deg)
 	body.floor_snap_length = 0.5
@@ -560,7 +560,7 @@ func _apply_vertical(dt: float, on_floor: bool) -> void:
 		body.velocity.y = -GROUND_PRESS
 		_air_peak_y = body.global_position.y
 	else:
-		body.velocity.y -= _gravity * dt
+		body.velocity += Gravity.down_at(body.global_position) * _gravity * dt
 		_air_peak_y = maxf(_air_peak_y, body.global_position.y)
 
 
