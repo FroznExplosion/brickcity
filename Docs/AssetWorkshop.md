@@ -501,6 +501,100 @@ sdf_form_probe 38 (6 new), asset_workshop_probe 251, palette_probe 1858 (its fam
 rule knows a wedge is a brick), shaped_probe 424, orient_probe 51, workshop_probe 96.
 `-- --shot --sculpt --stamps` adds a lathe (a muzzle brake) and leaves a lathe's ghost showing.
 
+### SDF tools, round 4: a model placed by a gizmo, the gun's size, the game's view (2026-10-19)
+
+The user (2026-10-19), after loading a model into the SDF: it converts to bricks very well,
+but it **spawns twice** -- a huge blue guide and a small SDF copy -- and only the SDF one is
+wanted; a **gizmo** to move, resize and turn it; it spawned far from the grid. And: build in
+**sizing**, starting with the SMG -- mark on the grid how long the gun is in nano studs, use
+the **pistol grip** as the sizing helper (every gun's grip the same size, so the printed guns
+share one hand), and **see it in the game's first-person view**. Written here first, then
+built in this order.
+
+**Why two copies.** The test model is skinned (a character on a skeleton). The guide is drawn
+posed by its skeleton, which scales and turns it (an armature at 1/100, lying the model down
+or standing it up); the stamp read the mesh's raw vertices with only the mesh node's own
+transform, so it went in at the bind pose's size and lying the other way. The box that sized
+the guide was read the same raw way. Fix: a model is **flattened when it loads** -- every
+mesh, a skinned one baked in its current pose (`bake_mesh_from_current_skeleton_pose`), put
+into the model's own frame as one mesh. The box, the drawing and the stamp all read that one
+mesh, so they agree.
+
+**1. A placed model (the sculpt panel's "add a 3D model...").** No guide any more: the
+model goes into the current part's field and stays **placed** -- movable -- until it is laid.
+
+- It spawns **on the grid**: its longest side the gun class's real length (below; the SMG's
+  852 mm, 53 studs), standing on the plate, centred on the build area and the mirror plane,
+  its long side along x. The view frames it.
+- A **gizmo** sits on it: three arrows (x red, y green, z blue) move it along an axis, three
+  rings turn it about one, and a white cube at its middle resizes it evenly (drag up or out
+  to grow). Moves snap to a quarter stud, turns to 15 degrees, sizes to 1% -- Shift drags
+  free. Under the drag the model shows as a see-through ghost in the part's colour; on release
+  the field is put back as it was before the model and the model stamped where it now is.
+- **Enter** (or "lay the model", or picking another tool) lays it: the gizmo goes, the
+  model's stamps from first to last are **one undo**. **Escape** takes it back out. While it
+  is placed the panel shows its size: studs long, real and print mm.
+- "Carve the model out" carves a placed model's shape out instead of adding it (the same
+  gizmo, red ghost).
+- The guide panel (F3) still loads guides to trace inside -- blue, see-through, never in the
+  field -- for anyone who wants one; "model into this part" stays there for a guide.
+
+**2. The gun's size on the grid.** A gun is built at a quarter of the real one, in nano
+bricks (Docs/Parts/joints.md section 7): **one stud here is a nano stud** -- 4 mm printed,
+16 mm of the real gun -- half a building brick's stud. The game then shrinks the gun again
+to the hands. A **gun class** picker (Gun menu and the sculpt panel; SMG first, then rifle
+and pistol from the same table) draws on the grid:
+
+- a **length ruler** along x on the plate, from the butt's end: a tick a stud, numbers every
+  5, and the class's length marked -- the SMG's **53 studs = 852 mm real = 213 mm print** --
+  with a faint band to it;
+- the **grip box**: the one grip every gun shares, where the hand closes -- **6 studs long
+  (24 mm print), 3 fore and aft, 2 thick**, standing under the body at an SMG's grip place
+  (a quarter of the length from the butt), raked back 15 degrees like a real pistol grip.
+  Size a model by its grip: resize it until its grip fills the box, then the rest of it is at
+  scale and its grip fits the shared printed hand.
+
+The ruler's butt is at the build's back end once there is one (the field's or the bricks'
+box, the muzzle end as `settle_muzzle` reads it), else where a placed model spawns.
+
+**3. The game's view** (View menu, Alt C): the workshop's camera becomes the first-person
+one, framed exactly as `PlayerView` frames a held gun: horizontal FOV 90, the gun scaled so
+its length is the class's view length (an SMG reads 0.4 m in the hands -- the game scales
+each class to that, whatever the model's size), the top of its back end at the hip pose
+(0.12 right, 0.06 down, 0.3 ahead), muzzle forward. Alt C again (or any view key) goes back.
+Hands (Alt H) show if on. It frames whatever is showing: the field or the bricks. A second
+press of the view's button (or right mouse) toggles aiming down the sights (the ADS pose).
+
+Note what the sizes do: in the game's view the class length decides how big the gun looks;
+the stud count decides its proportions and that it prints at the right size with the shared
+grip.
+
+Checks: `asset_workshop_probe` -- a skinned or scaled mesh stamps where its drawing is (the
+field's box against the model's), a placed model moved twice and laid is one undo and Escape
+leaves the field as before, the spawn stands on the grid, the ruler's SMG length is 53 studs,
+the game view's camera puts the gun's back top at the hip pose. Picture pass: `-- --shot
+--sculpt --model` (a placed model with its gizmo, the ruler and grip box) and `--gameview`.
+
+**Built 2026-10-19**, as above, with these differences found on the way:
+
+- The skinned test robot (`TestRobot.glb`, armature at 1/100) now reads standing; its field's
+  box matches the model's to 0.05 stud. Godot's own `bake_mesh_from_current_skeleton_pose`
+  refuses a scene not yet in the tree, so `ModelMesh` (scripts/model_mesh.gd) skins by hand:
+  bone pose times bind pose, weighted. Reading it and the first stamp take about 0.6 s; a
+  stamp again on letting go of the gizmo about half that.
+- A model's surfaces are stamped as **one** triangle soup (a model split by material is one
+  closed solid; stamped a surface at a time, each open surface counted inside wrongly). The
+  guide panel's "model into this part" does the same.
+- A brush stroke, a tool change, Z / Shift Z or Convert lays a placed model first, so its
+  record never covers someone else's edit.
+- The size marks are hidden in the game's view. The view takes RMB to aim; Escape, Alt C or a
+  view key leaves it.
+
+asset_workshop_probe 271 (20 new: a skinned mesh flattened, a model placed, moved, snapped,
+dropped, laid as one undo, the gizmo's handles picked, the ruler, the game view's camera at the
+hip and the sights), sdf_form_probe 38, workshop_probe 96. `-- --shot --model` (the gizmo, the
+ruler and grip box) and `-- --shot --model --gameview`.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's

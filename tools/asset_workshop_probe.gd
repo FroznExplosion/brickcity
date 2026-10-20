@@ -1630,6 +1630,9 @@ func _sculpt() -> void:
 	_convert_plain()
 	_stamp_box()
 	_lathe()
+	_flatten()
+	_placed_model()
+	_size_and_view()
 	_ws.rail_pick("place")
 
 
@@ -1790,6 +1793,166 @@ func _lathe() -> void:
 			and _ws.sculpt.form.cells().is_empty())
 	_ws.sculpt_shape = "box"
 	_ws.sculpt_mode = "shape"
+
+
+## A model read as one mesh where it is drawn (Docs/AssetWorkshop.md, "SDF tools, round 4"):
+## a skinned mesh posed by its skeleton -- an armature at 1/100 with its bone a hundred
+## times over draws real size, and so must the mesh -- and a plain one by its nodes.
+func _flatten() -> void:
+	var root := Node3D.new()
+	var sk := Skeleton3D.new()
+	sk.scale = Vector3.ONE * 0.01
+	root.add_child(sk)
+	sk.add_bone("b")
+	sk.set_bone_rest(0, Transform3D(Basis.from_scale(Vector3.ONE * 100.0), Vector3.ZERO))
+	sk.reset_bone_poses()
+	var arr := BoxMesh.new().get_mesh_arrays()
+	var nv: int = (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var bones := PackedInt32Array()
+	var weights := PackedFloat32Array()
+	for i in nv:
+		bones.append_array([0, 0, 0, 0])
+		weights.append_array([1.0, 0.0, 0.0, 0.0])
+	arr[Mesh.ARRAY_BONES] = bones
+	arr[Mesh.ARRAY_WEIGHTS] = weights
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	var mi := MeshInstance3D.new()
+	mi.mesh = am
+	var skin := Skin.new()
+	skin.add_named_bind("b", Transform3D())
+	mi.skin = skin
+	sk.add_child(mi)
+	mi.skeleton = NodePath("..")
+	var plain := MeshInstance3D.new()
+	plain.mesh = BoxMesh.new()
+	plain.scale = Vector3(2, 1, 1)
+	plain.position = Vector3(5, 0, 0)
+	root.add_child(plain)
+	var flat := ModelMesh.flatten(root)
+	var bb := flat.get_aabb() if flat != null else AABB()
+	# The skinned box: 1 m at the origin; the plain one: 2 m long at x = 5.
+	_ok("a skinned mesh is read posed by its skeleton, a plain one by its nodes",
+			bb.position.is_equal_approx(Vector3(-0.5, -0.5, -0.5)) and bb.end.is_equal_approx(Vector3(6, 0.5, 0.5)), str(bb))
+	root.free()
+
+
+## A placed model: on the grid at the class's length, moved by the gizmo and stamped again,
+## one undo when laid, Escape leaves the field as it was.
+func _placed_model() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws.set_gun_class("smg")
+	# A model longer across (z) than along: turned to lie along x.
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.2, 0.4, 2.0)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	var groups: int = _ws._edit_groups.size()
+	_ok("a model is placed", _ws.place_mesh(am, "box.glb"))
+	var s: Vector3 = _ws.placed_size()
+	_ok("along x, as long as an SMG (53 studs)", absf(s.x - 53.25) < 0.01 and s.z < 6.0, str(s))
+	var bb: AABB = _ws.size_box()
+	_ok("standing on the plate, on the mirror plane", absf(bb.position.y - BrickPalette.PLATE_M) < 0.01
+			and absf(bb.get_center().z - _ws.mirror_z * STUD) < 0.01, str(bb))
+	var field := _field_box()
+	_ok("and in the field where it stands", field.size != Vector3.ZERO and absf(field.size.x - bb.size.x) < STUD
+			and absf(field.get_center().x - bb.get_center().x) < STUD, "%s vs %s" % [field, bb])
+	# The gizmo's drags, snapped.
+	_ws._gizmo_xf0 = _ws._placed.xf
+	var turned: Transform3D = _ws.dragged_xf({"turn": [Vector3.UP, 0.2]}, false)
+	var by := (turned.basis.orthonormalized() * (_ws._gizmo_xf0 as Transform3D).basis.orthonormalized().inverse()).get_euler().y
+	_ok("a turn snaps to 15 degrees", is_equal_approx(by, deg_to_rad(15.0)), str(rad_to_deg(by)))
+	var sized: Transform3D = _ws.dragged_xf({"size": 1.234}, false)
+	_ok("a resize snaps to 1%", is_equal_approx(sized.basis.get_scale().x / (_ws._placed.xf as Transform3D).basis.get_scale().x, 1.23))
+	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(2.1 * STUD, 0, 0)}, false)
+	_ws._stamp_placed()
+	var moved := _field_box()
+	_ok("a move snaps to a quarter stud, and the field follows", absf(moved.position.x - field.position.x - 2.0 * STUD) < 0.05,
+			"%.3f studs" % ((moved.position.x - field.position.x) / STUD))
+	_ok("nothing to undo while it is placed", _ws._edit_groups.size() == groups)
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_ok("Escape takes it back out", _ws._placed_key(esc) and _ws.placed_model().is_empty()
+			and _ws.sculpt.form.cells().is_empty())
+	_ws.place_mesh(am, "box.glb")
+	_ws._gizmo_xf0 = _ws._placed.xf
+	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 3.0 * STUD)}, false)
+	_ws._stamp_placed()
+	_ws.model_op(SdfForm.ADD)
+	var cells: PackedInt32Array = _ws.sculpt.form.cells()
+	_ws.lay_model()
+	_ok("laid: one undo, the field kept", _ws._edit_groups.size() == groups + 1 and _ws.sculpt.form.cells() == cells
+			and not _ws._gizmo.visible)
+	_ws._undo()
+	_ok("one Z takes the model out", _ws.sculpt.form.cells().is_empty())
+	_ws.redo()
+	_ok("Shift Z puts it back", _ws.sculpt.form.cells() == cells)
+	# The gizmo's handles under the mouse's ray.
+	_ws.place_mesh(am, "box.glb")
+	var g: ModelGizmo = _ws._gizmo
+	g.scale = Vector3.ONE * 2.0
+	var at: Vector3 = g.global_position
+	_ok("the gizmo's arrow, ring and cube are picked by a ray", g.pick(at + Vector3(1.2, 0, 10), Vector3.FORWARD) == "move0"
+			and g.pick(at + Vector3(1.018, 10, 1.018), Vector3.DOWN) == "turn1" and g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD) == "size"
+			and g.pick(at + Vector3(5, 5, 10), Vector3.FORWARD) == "",
+			"%s %s %s" % [g.pick(at + Vector3(1.2, 0, 10), Vector3.FORWARD), g.pick(at + Vector3(1.018, 10, 1.018), Vector3.DOWN),
+			g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD)])
+	_ws.drop_model()
+	_ws.sculpt_clear()
+
+
+## The field's box in workshop space.
+func _field_box() -> AABB:
+	var bb: AABB = _ws.sculpt.form.bounds()
+	if bb.size == Vector3.ZERO:
+		return AABB()
+	return _ws.global_transform.affine_inverse() * _ws.sculpt.global_transform * bb
+
+
+## The size marks and the game's view: the SMG's ruler 53 studs from the butt, the grip
+## box, and the camera framing the gun as PlayerView does.
+func _size_and_view() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ok("an SMG is 53.25 studs, a rifle 62.5, a pistol 13.5", is_equal_approx(_ws.class_studs("smg"), 53.25)
+			and is_equal_approx(_ws.class_studs("rifle"), 62.5) and is_equal_approx(_ws.class_studs("pistol"), 13.5))
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.0, 0.4, 0.2)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.place_mesh(am, "box.glb")
+	_ws.muzzle_end = "+x"
+	_ws.draw_size_marks()
+	var bb: AABB = _ws.size_box()
+	var r: Vector2 = _ws.size_ruler()
+	var labels: Array = _ws._size_labels.get_children().map(func(l: Node) -> String: return (l as Label3D).text)
+	_ok("the ruler starts at the butt and marks the SMG's length", is_equal_approx(r.x, bb.position.x) and r.y > 0.0
+			and labels.has("50") and labels.any(func(t: String) -> bool: return t.begins_with("SMG: 53.3 studs = 852 mm real, 213 mm print"))
+			and labels.any(func(t: String) -> bool: return t.begins_with("grip:")), str(labels))
+	_ws.flip_butt()
+	_ok("turned, from the other end", is_equal_approx(_ws.size_ruler().x, bb.end.x) and _ws.size_ruler().y < 0.0)
+	_ws.flip_butt()
+	var was: Transform3D = _ws._camera.global_transform
+	_ws.set_game_view(true)
+	var k: float = bb.size.x / float(PlayerView.VIEW_LENGTH[&"smg"])
+	var back_top := Vector3(bb.position.x, bb.end.y, bb.get_center().z)
+	var seen: Vector3 = _ws._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
+	_ok("the game's view: the gun's back top at the hip pose, muzzle ahead", _ws.game_view_on
+			and seen.is_equal_approx(PlayerView.HIP * k) and (-_ws._camera.global_transform.basis.z).is_equal_approx(Vector3.RIGHT),
+			"%s vs %s" % [seen, PlayerView.HIP * k])
+	var rmb := InputEventMouseButton.new()
+	rmb.button_index = MOUSE_BUTTON_RIGHT
+	rmb.pressed = true
+	_ws._game_view_input(rmb)
+	seen = _ws._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
+	_ok("RMB aims down the sights", _ws.game_view_ads and seen.is_equal_approx(PlayerView.ADS * k))
+	_ws.set_game_view(false)
+	_ok("and back to the camera as it was", not _ws.game_view_on and _ws._camera.global_transform.is_equal_approx(was))
+	_ws.drop_model()
+	_ws.sculpt_clear()
 
 
 ## A box stamp snapped to the grid: one undo, and Convert makes exactly its cells bricks.
