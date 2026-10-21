@@ -1230,6 +1230,15 @@ private:
     // it never writes.
     friend class AIWorld;
     std::vector<brick::Archetype> archetypes;
+    /// A read-only copy of `archetypes` for worker jobs, made when a job first
+    /// needs it after a change and shared by every job until the next change.
+    /// Every bake used to copy the whole palette for itself: with the city's
+    /// 273 parts that was ~1 ms of the main thread per building promoted, a
+    /// 348-brick tower's bake start costing more than its bricks.
+    std::shared_ptr<const std::vector<brick::Archetype>> parts_snapshot;
+    std::shared_ptr<const std::vector<brick::Archetype>> palette_snapshot();
+    /// Every change to `archetypes` calls this: the next job copies afresh.
+    void palette_changed() { parts_snapshot.reset(); }
     // A deque, not a vector, for one reason: the face bake runs on a worker
     // thread holding a reference to its chunk, and creating another chunk
     // meanwhile must not move the one being baked. deque never invalidates
@@ -1438,7 +1447,7 @@ private:
     struct CoarseJob {
         int chunk_id = -1;
         CoarseOut out;
-        std::vector<brick::Archetype> parts; // snapshot, as a BakeJob's
+        std::shared_ptr<const std::vector<brick::Archetype>> parts; // as a BakeJob's
         std::atomic<bool> done{false};
         std::thread worker;
     };
@@ -1552,7 +1561,9 @@ private:
     struct BakeJob {
         int chunk_id = -1;
         brick::FaceBake bake;
-        std::vector<brick::Archetype> parts; // snapshot: the palette is shared
+        // The palette as it was when the job started (palette_snapshot): held
+        // for as long as the worker reads it, whatever the palette does since.
+        std::shared_ptr<const std::vector<brick::Archetype>> parts;
         std::atomic<bool> done{false};
         std::thread worker;
     };

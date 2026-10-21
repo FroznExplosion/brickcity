@@ -72,17 +72,30 @@ func _init(w: BrickWorld, c: int, in_space: RID, xform: Transform3D, merge: bool
 		PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
 		PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
 		PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
-		# See IslandManager.spawn: the shapes are built inside the extension,
-		# dead blocks disabled as they go.
-		var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, merge, merge,
-				si if n > 1 else -1, true)
-		PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, xform)
-		PhysicsServer3D.body_set_space(body, space)
+		if not merge:
+			# See IslandManager.spawn: the shapes are built inside the extension,
+			# dead blocks disabled as they go.
+			var built: Dictionary = world.add_chunk_shapes(body, chunk, Vector3.ZERO, false,
+					false, si if n > 1 else -1, true)
+			maps.append(built.get("map", {}))
+		else:
+			maps.append({})
 		bodies.append(body)
-		maps.append(built.get("map", {}))
 		merged.append(merge)
 		stale.append(false)
 		parked.append(false)
+	if merge:
+		# Every band from one walk over the building's blocks, as flush does
+		# (add_band_shapes), not one walk a band.
+		var sis := PackedInt32Array()
+		for si in n:
+			sis.append(si)
+		world.add_band_shapes(bodies, chunk, Vector3.ZERO, sis, true)
+	# Into the space only once shaped: a shape added to a body in a space costs
+	# time proportional to its shape count (reshape).
+	for body in bodies:
+		PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, xform)
+		PhysicsServer3D.body_set_space(body, space)
 
 
 func free_bodies() -> void:

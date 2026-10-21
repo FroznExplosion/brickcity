@@ -94,6 +94,12 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   only move it to `add_child`, so none was made. Trees are no longer brought in by an encounter
   (`Encounter.setup`, `Trees.is_tree`): 39 -> 24 promotions at the firefight's start, ~97 -> 77 ms
   in all; the worst tick left is one 60-course tower, 8.1 ms on its own.
+  *Promotions made cheaper, 2026-10-21* (`tools/promote_cost_probe.gd` times the parts): every
+  bake copied the whole 273-part palette for its worker -- now one shared read-only snapshot
+  (`BrickWorld.palette_snapshot`), bake start 1.0-1.9 -> 0.1 ms; `BuildingCollision` builds its
+  merged bands in one walk (`add_band_shapes`), ~20% off. Firefight gate: 3.2 -> 1.6 ms a
+  promotion, worst 8.1 -> 3.8 ms, no AI tick over 8 ms. Left per tower: collision 0.2-1.6, the
+  bricks from their template 0.2-0.9, the mesh node's renderer flush ~1.
 * `buffer_update` errors, unexplained.
 
 ## Working notes (things that bit this session)
