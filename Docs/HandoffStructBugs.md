@@ -58,7 +58,8 @@ both lists, in this order; the detail of each item is where it points.
    bricks, shell from its bricks, bands). Not reproduced yet; the check is there for when it is.
    Same run, "no brick lying in mid-air" failed at all three tiers on ONE heap brick at 45 m
    on the 60 m tower, 1.96 m over the building's collision -- item 2 is real after all, and
-   flaky (passed the run before). Next: say per heap brick what it was laid on.
+   flaky (passed the run before, and the run after). Each heap brick now keeps what it came
+   down on and when, while `--lodbreak` runs (`BrickHeap.track`): the next failure prints it.
 4. CollapseNext 29(a): from mid range (LOD 2) parts of a wall that should be gone stay drawn until
    the player comes close.
 5. CollapseNext 29: from 320 m an 829-brick piece stays frozen 22 m over what is under its middle
