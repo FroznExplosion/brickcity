@@ -3277,7 +3277,7 @@ func _tend_rest_shells() -> void:
 
 var _shell_pieces: Array[ShellPiece] = []
 var shell_pieces_made := 0
-var shell_pieces_bricked := 0   ## storeys of shell pieces made bricks
+var shell_pieces_bricked := 0   ## shell pieces made bricks
 
 
 ## Everything from storey `s` up has nothing under it: the laid storeys up
@@ -3336,17 +3336,18 @@ func _give_way(id: int, s: int) -> void:
 	_rest_sync(id)
 
 
-## Storeys `which` of a shell piece become bricks: laid from the template into
-## a chunk of their own, placed where the piece is, and let go as a brick piece
-## moving as it moves. What is left of the shell piece below them stays this
-## piece; what is above, a new one.
-func _piece_to_bricks(p: ShellPiece, which: PackedInt32Array) -> BrickIsland:
+## A shell piece becomes bricks: ALL of it, laid from the template into a chunk
+## of its own with every joint it had, placed where the piece is and let go as
+## one brick piece moving as it moved. One piece, as a section is (heal_joints):
+## a storey nobody hit is as stiff as LEGO, and what breaks is what the landing
+## or the blast breaks -- not a floor at a time.
+func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 	var b := registry.get_building(p.building)
-	if b == null or which.is_empty():
+	_shell_pieces.erase(p)
+	if b == null:
+		p.queue_free()
 		return null
 	var lines := registry.storey_lines(b)
-	var s0: int = which[0]
-	var s1: int = which[which.size() - 1] + 1
 	var tid: int = b.band_template
 	var chunk := world.create_band_chunk(tid)
 	world.kill_blocks(chunk, p.record.dead)
@@ -3354,41 +3355,27 @@ func _piece_to_bricks(p: ShellPiece, which: PackedInt32Array) -> BrickIsland:
 	world.set_worn_blocks(chunk, p.record.worn)
 	world.set_scorched_blocks(chunk, p.record.scorched)
 	# Storey by storey: one that left as bricks already (a hole) is not laid.
-	for s in which:
+	for s in range(p.lo, p.hi):
 		if not p.holes.has(s):
 			world.lay_band(chunk, tid, lines[s], lines[s + 1])
 	world.set_chunk_transform(chunk, p.global_transform)
-	var ids := world.get_blocks_in_band(chunk, lines[s0], lines[s1])
+	var ids := world.get_blocks_in_band(chunk, lines[p.lo], lines[p.hi])
 	var isl: BrickIsland = null
 	if not ids.is_empty():
 		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, -1, -1)
+		if isl != null and isl.is_valid():
+			world.heal_joints(isl.chunk)
 	world.release_chunk(chunk)
-	shell_pieces_bricked += s1 - s0
-	# Above them: a piece of its own, moving as this one was.
-	if s1 < p.hi:
-		var q := ShellPiece.new()
-		q.building = p.building
-		q.lo = s1
-		q.hi = p.hi
-		q.holes = p.holes
-		q.record = p.record
-		q.transform = p.global_transform
-		q.linear_velocity = p.linear_velocity
-		q.angular_velocity = p.angular_velocity
-		add_child(q)
-		if q.shape(registry, brick_material):
-			_shell_pieces.append(q)
-		else:
-			q.queue_free()
-	p.hi = s0
-	if p.hi <= p.lo or not p.shape(registry, brick_material):
-		_shell_pieces.erase(p)
-		p.queue_free()
+	shell_pieces_bricked += 1
+	p.queue_free()
 	return isl
 
 
-## Once a tick: a shell piece that landed hard has its lowest storey made
-## bricks; one that fell out of the world goes.
+## Once a tick: a shell piece that landed hard where somebody could see it
+## break becomes bricks, and the landing breaks them as it would any brick
+## piece's (IslandManager.fracture_on_impact). Far from everyone it lands
+## whole and stays a shell (FRACTURE_RANGE, as a brick piece). One that fell
+## out of the world goes.
 func _tend_shell_pieces() -> void:
 	for i in range(_shell_pieces.size() - 1, -1, -1):
 		var p := _shell_pieces[i]
@@ -3401,24 +3388,25 @@ func _tend_shell_pieces() -> void:
 			continue
 		if p.landed_hard:
 			p.landed_hard = false
-			var lowest: int = p.lo
-			while p.holes.has(lowest) and lowest < p.hi:
-				lowest += 1
-			if lowest < p.hi:
-				_piece_to_bricks(p, PackedInt32Array([lowest]))
+			var speed := p.landed_speed
+			p.landed_speed = 0.0
+			if islands.far_from_everyone(p.global_transform * p.center_of_mass):
+				continue
+			var isl := _piece_to_bricks(p)
+			if isl != null and isl.is_valid():
+				islands.fracture_on_impact(isl, speed)
 
 
-## A blast reaching a shell piece: the storeys it reaches become bricks first,
-## and then it lands on them like on any piece.
+## A blast reaching a shell piece: it becomes bricks first, and the blast then
+## lands on them as on any piece.
 func _blast_shell_pieces(point: Vector3, radius: float) -> void:
 	for p in _shell_pieces.duplicate():
 		if not is_instance_valid(p) or not p.reaches(registry, point, radius):
 			continue
-		var which: PackedInt32Array = p.storeys_at(registry, point, radius)
-		if which.is_empty():
+		if p.storeys_at(registry, point, radius).is_empty():
 			continue
-		var isl := _piece_to_bricks(p, which)
-		if isl != null:
+		var isl := _piece_to_bricks(p)
+		if isl != null and isl.is_valid():
 			islands.damage(isl, point, radius)
 
 
@@ -7637,8 +7625,9 @@ func _run_storeys_pass() -> void:
 	while t3 < 600 and shell_pieces_bricked == bricked0:
 		await get_tree().physics_frame
 		t3 += 1
-	_gate_ok("it lands hard and its lowest storey becomes bricks", shell_pieces_bricked > bricked0,
-			"after %d ticks, %d storeys" % [t3, shell_pieces_bricked - bricked0])
+	_gate_ok("it lands hard, close by, and becomes ONE brick piece that breaks where it landed",
+			shell_pieces_bricked == bricked0 + 1, "after %d ticks, %d piece(s) made bricks" % [t3,
+			shell_pieces_bricked - bricked0])
 	await _frames(120)
 
 	# Given back and laid again: the same record. Of the template's blocks: a
@@ -7667,7 +7656,7 @@ func _run_storeys_pass() -> void:
 			same = false
 	_gate_ok("given back and laid again, its record replays", same,
 			"%d dead before, %d after" % [dead.size(), again.size()])
-	print("[storeys] laid later %d times, %.1f ms all told, worst %.1f; rest shells made %d; storeys of shell pieces made bricks %d" % [
+	print("[storeys] laid later %d times, %.1f ms all told, worst %.1f; rest shells made %d; shell pieces made bricks %d" % [
 			storeys_laid_later, _lay_more_ms, _lay_more_worst, rest_shells_made, shell_pieces_bricked])
 	print("[storeys] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
