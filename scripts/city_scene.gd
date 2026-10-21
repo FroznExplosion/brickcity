@@ -3238,6 +3238,12 @@ func _free_rest(id: int) -> void:
 		ai_world.remove_proxy(_rest_proxy_id(id, k))
 	_rest_shells.erase(id)
 	_nav_touch(id)
+	# Its boxes held whatever lay on them -- a piece, a heap brick -- and the
+	# next rest shell, or the bricks laid in its place, may not hold it where
+	# it lies: everything resting on the building asks again.
+	var b := registry.get_building(id)
+	if b != null:
+		islands.support_gone(_world_box(b))
 
 
 ## Rest shell proxies have ids of their own: a building's shell's are
