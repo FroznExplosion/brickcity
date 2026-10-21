@@ -1632,6 +1632,7 @@ func _sculpt() -> void:
 	_lathe()
 	_flatten()
 	_placed_model()
+	_pick_and_move()
 	_nudges()
 	_symmetric_convert()
 	_size_and_view()
@@ -1884,6 +1885,8 @@ func _placed_model() -> void:
 			and _ws._edit_groups.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
 	_ws._undo()
 	_ok("Z moves it back a stud", absf(_form_box(node).position.x - own.position.x - STUD) < 0.05)
+	_ok("undo keeps it picked, the gizmo where it now is", not _ws.placed_model().is_empty() and _ws._gizmo.visible
+			and _ws._gizmo.position.is_equal_approx(_ws._placed_centre()))
 	_ws.select_model(_ws.models[0])
 	var esc := InputEventKey.new()
 	esc.keycode = KEY_ESCAPE
@@ -1915,6 +1918,13 @@ func _placed_model() -> void:
 	var pal: PackedColorArray = (_ws._placed.node as AssetSculpt).palette
 	_ok("two models; a piece given a part takes its colour", _ws.models.size() == 2 and _ws._placed.parts[1] == barrel
 			and pal[2] == _ws.sculpt.palette[barrel + 1] and pal[1] != pal[2])
+	var first: AABB = (_ws.models[0].xf as Transform3D) * (_ws.models[0].box as AABB)
+	var second: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
+	var lead: float = second.position.z / STUD
+	_ok("the second spawns beside the first: two studs clear on +z, on a stud line, on its bottom",
+			not first.intersects(second) and second.position.z >= first.end.z + 2.0 * STUD - 0.001
+			and absf(lead - roundf(lead)) < 0.001 and absf(second.position.y - first.position.y) < 0.001,
+			"%s vs %s" % [second, first])
 	_ws._gizmo_xf0 = _ws._placed.xf
 	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 20.0 * STUD)}, false)
 	_ws._stamp_placed()
@@ -1946,6 +1956,119 @@ func _placed_model() -> void:
 			and g.pick(at + Vector3(1.018, 10, 1.018), Vector3.DOWN) == "turn1" and g.pick(at + Vector3(0, 0, 10), Vector3.FORWARD) == "size"
 			and g.pick(at + Vector3(5, 5, 10), Vector3.FORWARD) == "")
 	_ws._reset_space()
+
+
+## Pick and move (Docs/AssetWorkshop.md, "Pick and move"): a sculpted part lifted by a ray,
+## moved and put down as one undo, Escape leaving the field as it was; a model's piece
+## picked by a ray and given a part; a guide picked, moved by the gizmo, its adjust kept
+## through the panel's turn and saved.
+func _pick_and_move() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	var f: SdfForm = _ws.sculpt.form
+	var c1 := Vector3(2510, 40, 2510)
+	var c2 := c1 + Vector3(20, 0, 0)
+	f.box(SdfForm.ADD, c1, Vector3(10, 4, 5), 0.0, 1)
+	f.box(SdfForm.ADD, c2, Vector3(10, 4, 5), 0.0, 2)
+	_ws.sculpt.remesh()
+	var before := _cells_by_part(f)
+	var s: Transform3D = _ws.sculpt.transform
+	var top := s * (c2 + Vector3(0, 30, 0))
+	var down := (s * c2 - top).normalized()
+	_ws.pick_at(top, down)
+	var lifted := _cells_by_part(f)
+	_ok("a ray on the block-out lifts the part under it, the gizmo on it", _ws._held_kind() == "part"
+			and int(_ws._placed.label) == 2 and _ws._gizmo.visible and not lifted.values().has(2) and lifted.values().has(1))
+	var groups: int = _ws._edit_groups.size()
+	_ws._gizmo_xf0 = _ws._placed.xf
+	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(2.0 * STUD, 0, 0)}, false)
+	_ws._held_moved([])
+	_ws.lay_model()
+	var moved := _cells_by_part(f)
+	var want := {}
+	for k in before:
+		want[k + Vector3i(2, 0, 0) if before[k] == 2 else k] = before[k]
+	_ok("moved two studs and put down: one undo, its cells two studs along", moved == want
+			and _ws._edit_groups.size() == groups + 1 and _ws._held_kind() == "", "%d vs %d cells" % [moved.size(), want.size()])
+	_ws._undo()
+	_ok("Z puts it back where it was", _cells_by_part(f) == before)
+	_ws.pick_at(top, down)
+	_ws._gizmo_xf0 = _ws._placed.xf
+	_ws._placed.xf = _ws.dragged_xf({"turn": [Vector3.UP, PI * 0.5]}, false)
+	_ws._held_follow()
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_ok("Escape puts a lifted part back exactly, no undo", _ws._placed_key(esc) and _cells_by_part(f) == before
+			and _ws._edit_groups.size() == groups and _ws._held_kind() == "")
+	# A model's piece under the mouse.
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	var b1 := BoxMesh.new()
+	b1.size = Vector3(1.0, 0.3, 0.3)
+	var b2 := BoxMesh.new()
+	b2.size = Vector3(0.3, 0.3, 0.3)
+	var m1 := ArrayMesh.new()
+	m1.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, b1.get_mesh_arrays())
+	var a2 := b2.get_mesh_arrays()
+	var v2: PackedVector3Array = a2[Mesh.ARRAY_VERTEX]
+	for i in v2.size():
+		v2[i] += Vector3(1.0, 0, 0)
+	a2[Mesh.ARRAY_VERTEX] = v2
+	var m2 := ArrayMesh.new()
+	m2.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a2)
+	_ws.add_model([["receiver", m1], ["muzzle", m2]], "two.glb")
+	var m: Dictionary = _ws.models[0]
+	_ws.select_model(null)
+	var at: Vector3 = (m.xf as Transform3D) * m2.get_aabb().get_center()
+	_ws.pick_at(at + Vector3(0, 10, 0), Vector3.DOWN)
+	_ok("a ray on a model picks it and the piece under it", _ws._held_kind() == "model" and int(_ws._placed.get("piece", -1)) == 1,
+			str(_ws._placed.get("piece", "none")))
+	var barrel: int = _ws.part_names.find("barrel")
+	_ws.select_part(barrel)
+	groups = _ws._edit_groups.size()
+	_ws.give_piece_part()
+	_ok("the picked piece given this part, one undo", int(_ws._placed.parts[1]) == barrel and int(_ws._placed.parts[0]) == -1
+			and _ws._edit_groups.size() == groups + 1)
+	# A guide: picked, moved by the gizmo, the adjust kept and saved.
+	_ws._reset_space()
+	var obj := "user://_probe_guide_cube.obj"
+	var fo := FileAccess.open(obj, FileAccess.WRITE)
+	fo.store_string("o cube\nv 0 0 0\nv 4 0 0\nv 4 1 0\nv 0 1 0\nv 0 0 1\nv 4 0 1\nv 4 1 1\nv 0 1 1\n"
+			+ "f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 4 8 7 3\nf 1 5 8 4\nf 2 3 7 6\n")
+	fo.close()
+	var gi: int = _ws.load_guide(ProjectSettings.globalize_path(obj), 160.0)
+	_ws.select_model(null)
+	var g: Dictionary = _ws.guides[gi] if gi >= 0 else {}
+	var gc: Vector3 = (g.node as Node3D).transform * (g.box as AABB).get_center() if gi >= 0 else Vector3.ZERO
+	_ws.pick_at(gc + Vector3(0, 10, 0), Vector3.DOWN)
+	_ok("a ray on a guide picks it, the gizmo on it", gi >= 0 and _ws._held_kind() == "guide" and _ws._gizmo.visible)
+	if _ws._held_kind() == "guide":
+		_ws._gizmo_xf0 = _ws._placed.xf
+		_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 3.0 * STUD)}, false)
+		_ws._held_moved([])
+		var fit: Transform3D = _ws._guide_fit_xf(g)
+		var moved_z := (g.node as Node3D).transform.origin.z - fit.origin.z
+		_ws._guide_action("turn")
+		fit = _ws._guide_fit_xf(g)
+		var kept_z := (g.node as Node3D).transform.origin.z - fit.origin.z
+		var saved: Array = _ws.recipe.meta.asset.guides[gi].adjust
+		_ok("moved three studs; kept through the panel's turn, and saved", absf(moved_z - 3.0 * STUD) < 1e-4
+				and absf(kept_z - 3.0 * STUD) < 1e-4 and int(g.turn) == 1 and absf(float(saved[11]) - 3.0 * STUD) < 1e-4,
+				"%.3f %.3f" % [moved_z / STUD, kept_z / STUD])
+	_ws._reset_space()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(obj))
+
+
+## A form's solid cells, cell -> part label.
+func _cells_by_part(f: SdfForm) -> Dictionary:
+	var out := {}
+	var c := f.cells()
+	for i in range(0, c.size(), 5):
+		out[Vector3i(c[i], c[i + 1], c[i + 2])] = c[i + 3]
+	return out
 
 
 ## A form's box in workshop space.

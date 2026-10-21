@@ -432,9 +432,11 @@ func openings_of(building_id: int, index: int, may_scan: bool = true) -> Array[A
 ## The plate heights of a building's floors, in its own grid, bottom up: where
 ## a landing snaps a piece of it and a big collapse cuts it (IslandManager,
 ## CollapseDirector). From the structure record (Docs/DestructionLod.md 4): a
-## generated building's frame (TowerRecipe.frame), a build's own `floors` when
-## it has them (found or marked), and nothing otherwise -- a piece of it breaks
-## where it is weakest, with no floor to prefer.
+## generated building's frame (TowerRecipe.frame); a build's own `floors` when
+## it has them, found in its bricks when it does not
+## (StructureSpaces.floors_of_build, Docs/Structures.md 2.4) -- a build with no
+## wide layer of structure has none, and a piece of it breaks where it is
+## weakest, with no floor to prefer.
 func floor_lines(building_id: int) -> PackedInt32Array:
 	var b := get_building(building_id)
 	if b == null:
@@ -443,14 +445,18 @@ func floor_lines(building_id: int) -> PackedInt32Array:
 		return b.floors_memo
 	var lines := PackedInt32Array()
 	var floors: Array = []
+	var down := 0   # the build's own grid to its chunk's (_rebase_of)
 	if b.is_build():
 		# The build's own recipe: `b.recipe` of a build is only its box.
 		floors = (b.build.meta.get("structure", {}) as Dictionary).get("floors", [])
+		if floors.is_empty():
+			floors = StructureSpaces.floors_of_build(b.build)
+		down = _rebase_of(b).y
 	else:
 		floors = TowerRecipe.frame(b.recipe.footprint_x, b.recipe.footprint_z,
 				b.recipe.courses).floors
 	for f in floors:
-		lines.append(int(f[0]))
+		lines.append(int(f[0]) - down)
 	lines.sort()
 	b.floors_memo = lines
 	return lines

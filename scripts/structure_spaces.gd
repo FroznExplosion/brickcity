@@ -279,6 +279,98 @@ static func empty() -> Dictionary:
 	return {"spaces": [], "openings": [], "points": [], "floors": [], "columns": [], "core": []}
 
 
+# ---------------------------------------------------------------------------
+# Floors found in the bricks (Docs/Structures.md 2.4).
+
+## How far round a cell has to be structure, in studs, for the cell to be
+## floor: a slab is structure all round; a wall two studs thick or a column is
+## not, however long it is, nor where two walls meet.
+const FLOOR_REACH := 2
+## Floor cells a layer needs to be a floor: a slab of 7 x 7 studs or more.
+const FLOOR_CORE := 9
+
+
+## The floors of a structure, found in its bricks: wide layers of structure,
+## [[y, plates], ...] bottom up -- what TowerRecipe.frame says of a generated
+## building, found for a build (BuildingRegistry.floor_lines). `layer.call(y)`
+## is plate layer y as size.x * size.z bytes, x fastest, 1 where there is
+## structure. A layer is floor where FLOOR_CORE of its cells have structure
+## FLOOR_REACH all round them; a run of such layers is one floor, at any
+## height -- a mezzanine half a storey up is a floor like any other. A solid
+## mass is one floor as thick as it is: its foot is still where it parts.
+static func find_floors(layer: Callable, size: Vector3i) -> Array:
+	var out := []
+	var run_y := -1
+	for y in size.y + 1:
+		var is_floor := y < size.y and _floor_layer(layer.call(y), size.x, size.z)
+		if is_floor and run_y < 0:
+			run_y = y
+		elif not is_floor and run_y >= 0:
+			out.append([run_y, y - run_y])
+			run_y = -1
+	return out
+
+
+## A build's floors (find_floors) from its recipe alone, in its own grid: its
+## structure, not its interior or detail, and its upright frame only, as the
+## space finder sees it.
+static func floors_of_build(recipe: BuildRecipe) -> Array:
+	var bounds: Array = recipe.bounds()
+	var lo: Vector3i = bounds[0]
+	var size: Vector3i = bounds[1]
+	if size.x <= 0 or size.y <= 0 or size.z <= 0:
+		return []
+	var area := size.x * size.z
+	var cells := PackedByteArray()   # layer by layer, x fastest
+	cells.resize(area * size.y)
+	for id in recipe.size():
+		if recipe.role_of(id) != BuildRecipe.Role.STRUCTURE or recipe.frame_of(id) != 0:
+			continue
+		var c := recipe.cell_of(id) - lo
+		var s := BuildRecipe.part_size(recipe.part_of(id))
+		for y in range(maxi(c.y, 0), mini(c.y + s.y, size.y)):
+			for z in range(maxi(c.z, 0), mini(c.z + s.z, size.z)):
+				for x in range(maxi(c.x, 0), mini(c.x + s.x, size.x)):
+					cells[y * area + z * size.x + x] = 1
+	var found := find_floors(func(y: int) -> PackedByteArray:
+			return cells.slice(y * area, (y + 1) * area), size)
+	for f in found:
+		f[0] = int(f[0]) + lo.y
+	return found
+
+
+## Has this layer FLOOR_CORE cells with structure FLOOR_REACH all round them?
+## Along x first -- is the run of cells centred on each one all structure --
+## then along z over those.
+static func _floor_layer(mask: PackedByteArray, w: int, d: int) -> bool:
+	var side := 2 * FLOOR_REACH + 1
+	if w < side or d < side or mask.count(1) < FLOOR_CORE:
+		return false
+	var across := PackedByteArray()
+	across.resize(w * d)
+	for z in d:
+		var row := z * w
+		var n := 0
+		for x in w:
+			n += mask[row + x]
+			if x >= side:
+				n -= mask[row + x - side]
+			if n == side:
+				across[row + x - FLOOR_REACH] = 1
+	var core := 0
+	for x in range(FLOOR_REACH, w - FLOOR_REACH):
+		var n := 0
+		for z in d:
+			n += across[z * w + x]
+			if z >= side:
+				n -= across[(z - side) * w + x]
+			if n == side:
+				core += 1
+				if core >= FLOOR_CORE:
+					return true
+	return false
+
+
 ## A space found from `seed`, as the record keeps it, with its openings --
 ## the kinds set by hand on `old` openings kept where the same cells are
 ## still an opening.

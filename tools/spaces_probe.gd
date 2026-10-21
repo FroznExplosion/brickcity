@@ -14,6 +14,10 @@ extends SceneTree
 ##   by hand    an opening's kind set by hand stays when the room is found again
 ##   generated  a generated building's rooms are all found from its bricks, each of
 ##              its own kind, with windows out and doorways between them
+##   floors     floors found in the bricks (Structures.md 2.4): a generated tower's
+##              are the ones its generator laid; a build's are its slabs and its
+##              mezzanine, not its walls, a column or an interior plate; and the
+##              registry gives a build those as its floor lines
 
 var _w: BrickWorld
 var _palette: Dictionary
@@ -164,6 +168,7 @@ func _run() -> void:
 			and StructureSpaces.space_at(rec, Vector3i(12, 8, 5)) == -1)
 	_generated()
 	_generated_with_stairs()
+	_floors()
 
 
 ## A generated building, two storeys of 30 x 30 studs, as the city lays one.
@@ -257,3 +262,55 @@ func _generated_with_stairs() -> void:
 			and (after.spaces as Array).size() > 0,
 			"%d of %d rooms found, %d open" % [(after.spaces as Array).size(), rooms,
 			int(open_rooms.call(after))])
+
+
+## Floors found in the bricks (StructureSpaces.find_floors; Docs/Structures.md
+## 2.4).
+func _floors() -> void:
+	# A generated tower, its stairwell carved: what the finder makes of its
+	# bricks against what the generator says it laid.
+	var fx := 40
+	var fz := 40
+	var courses := 18
+	var w := BrickWorld.new()
+	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
+	TowerRecipe.build(w, c, TowerRecipe.bake_palette(w), fx, fz, courses, [TowerRecipe.stair_rect(fx, fz)])
+	var t0 := Time.get_ticks_usec()
+	var found := StructureSpaces.find_floors(func(y: int) -> PackedByteArray:
+			return w.get_column_mask(c, y, y + 1), w.get_chunk_dims(c))
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	var laid: Array = TowerRecipe.frame(fx, fz, courses).floors
+	_ok("a generated tower's floors, found in its bricks, are the ones its generator laid",
+			str(found) == str(laid), "found %s, laid %s, %.1f ms" % [str(found), str(laid), ms])
+
+	# A build, its corner at (5, 2, 5): a one-plate base 20 x 20, walls two studs
+	# thick and nine plates high round it, a mezzanine 10 x 10 three plates over a
+	# floor of interior plates, a 4 x 4 column, and a roof two plates thick.
+	var r := BuildRecipe.new()
+	var o := Vector3i(5, 2, 5)
+	var slab := func(y: int) -> void:
+		for q in [Vector2i(0, 0), Vector2i(10, 0), Vector2i(0, 10), Vector2i(10, 10)]:
+			r.add("plate_10x10", o + Vector3i(q.x, y, q.y), 0)
+	slab.call(0)
+	for y in [1, 4, 7]:
+		for x in 20:
+			for z in 20:
+				if x < 2 or z < 2 or x >= 18 or z >= 18:
+					r.add("brick_1x1", o + Vector3i(x, y, z), 0)
+	var rug := r.size()
+	r.add("plate_10x10", o + Vector3i(2, 2, 2), 0)
+	r.set_role(rug, BuildRecipe.Role.INTERIOR)
+	r.add("plate_10x10", o + Vector3i(2, 5, 2), 0)
+	for y in range(1, 10):
+		r.add("plate_4x4", o + Vector3i(13, y, 13), 0)
+	slab.call(10)
+	slab.call(11)
+	t0 = Time.get_ticks_usec()
+	var floors := StructureSpaces.floors_of_build(r)
+	ms = float(Time.get_ticks_usec() - t0) / 1000.0
+	_ok("a build's floors: its base, its mezzanine and its roof, in its own grid -- not its walls, the column or the interior plates",
+			str(floors) == str([[2, 1], [7, 1], [12, 2]]), "%s, %.1f ms" % [str(floors), ms])
+	var reg := BuildingRegistry.new(BrickWorld.new(), {})
+	var id := reg.register_build(r, Transform3D())
+	_ok("and the registry gives the build those as its floor lines, in its chunk's grid",
+			str(reg.floor_lines(id)) == str(PackedInt32Array([0, 5, 10])), str(reg.floor_lines(id)))
