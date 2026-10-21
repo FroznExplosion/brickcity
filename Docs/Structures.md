@@ -140,10 +140,24 @@ reaches so far between supports -- further for a thicker one, further for a stro
 (`BRICK_MATERIALS[].toughness`: stone 2.5, metal 4) -- and past that sags and breaks mid-span. That
 is what an open hall, a long room in a castle wall and a room hanging off the side need.
 
-### 2.4 Floors found in the bricks — not started
+### 2.4 Floors found in the bricks — the finder built 2026-10-20; the floor-line snap uses it
 A floor is a wide layer of plates, found in the grid at whatever height it is. Interiors, the
 floor-line snap and the space finder (3.2) use found floors, so a mezzanine or a double-height hall
 is a floor like any other.
+
+**Built:** `StructureSpaces.find_floors(layer, size)`: a plate layer is floor where 9 of its cells
+(`FLOOR_CORE`, a slab 7 x 7 studs or more) have structure 2 studs all round them (`FLOOR_REACH`),
+so a wall two studs thick, a column or two walls meeting never are, however long; a run of floor
+layers is one floor, `[y, plates]`. `floors_of_build(recipe)` asks it of a build's structure (not
+its interior or detail, upright frame only), from the recipe alone. `BuildingRegistry.floor_lines`
+gives a build its own `floors` when its record has them and the found ones when not, in its chunk's
+grid -- so a build's pieces land and break along its floors, and a big collapse of one is cut
+between them, as a generated building's are (DestructionLod 5.7). It also read the record from
+the wrong place (`b.recipe`, which for a build has no `meta`): no build ever had floors there.
+Checked on a generated tower: its found floors are the ones its generator laid (40 x 40, three
+storeys, stairwell carved: 4 of 4, 11.6 ms). The saved builds: 0.1-0.9 ms (the watchtower's 8 x 8
+floors at plates 18, 37 and 56). `spaces_probe` 14. **Not yet:** interiors and the space finder
+still go by the recipe's storeys and the clicked floor.
 
 ### 2.5 Collapse in three tiers — built, as rules already there; named 2026-10-18
 Looked at before building it: most of this was already in, spread over ten constants. They now
