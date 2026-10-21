@@ -444,8 +444,8 @@ func floor_lines(building_id: int) -> PackedInt32Array:
 	var lines := PackedInt32Array()
 	var floors: Array = []
 	if b.is_build():
-		var meta: Dictionary = b.recipe.get("meta", {})
-		floors = (meta.get("structure", {}) as Dictionary).get("floors", [])
+		# The build's own recipe: `b.recipe` of a build is only its box.
+		floors = (b.build.meta.get("structure", {}) as Dictionary).get("floors", [])
 	else:
 		floors = TowerRecipe.frame(b.recipe.footprint_x, b.recipe.footprint_z,
 				b.recipe.courses).floors
