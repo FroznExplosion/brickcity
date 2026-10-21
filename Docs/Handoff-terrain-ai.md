@@ -71,8 +71,15 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   "once out, neither is left" on code from before this session too (pre-existing).
 
 ## Older open items
-* Time the threaded window-glass fix (needs the editor closed).
+* ~~Time the threaded window-glass fix~~ -- **done 2026-10-21** (editor closed, `city --stress`):
+  0.6-0.9 ms a tick mean but one 18-27 ms tick, the window shader built on first use; warmed at
+  load now -> 0.09 ms mean, 0.4 worst. `[prof] glass` in the exit report.
 * Measure AI / pathfinding / vehicle cost in a real fight; batch squad brains if it shows.
+  *First reading 2026-10-21* (`firefight.tscn -- --gate`, editor closed, nothing else running):
+  worst AI tick 15.4 ms, all of it `encounters`, in the first 20 ticks (setting the encounter
+  up); 3 ticks over 8 ms in the run; worst nav service 1.9 ms (search 1.7), tactic decisions
+  1.3 ms worst. The gate is short and scripted (4-soldier waves, ~25 s) -- still wanted: a long
+  fight with several squads and armour, and what `encounters` does in its first ticks.
 * `buffer_update` errors, unexplained.
 
 ## Working notes (things that bit this session)

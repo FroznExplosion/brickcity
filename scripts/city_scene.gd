@@ -2706,6 +2706,25 @@ var _glass_jobs: Array = []   ## [task, [arrays], shell node, building id, fades
 var glass_built := 0
 
 
+## What the glass cost the main thread (the exit report's "[prof] glass"): a
+## tick's _build_owed_glass, summed over every tick it ran and the worst one.
+## On the main thread it was 2.7 ms a tick, 10 ms at worst (above).
+var _glass_usec := 0
+var _glass_ticks := 0
+var _glass_worst_usec := 0
+## Of it: the worst worker result turned into a mesh and hung, and the worst
+## window built here from the live bricks (a shell drawn from its bricks).
+var _glass_hang_worst_usec := 0
+var _glass_here_worst_usec := 0
+var _glass_here := 0
+
+
+func _glass_note(usec: int) -> void:
+	_glass_usec += usec
+	_glass_ticks += 1
+	_glass_worst_usec = maxi(_glass_worst_usec, usec)
+
+
 func _build_owed_glass() -> void:
 	# Land what the workers finished.
 	for i in range(_glass_jobs.size() - 1, -1, -1):
@@ -2717,7 +2736,9 @@ func _build_owed_glass() -> void:
 		var arrays: Array = job[1][0]
 		if arrays.is_empty() or not is_instance_valid(job[2]) or _shells.get(int(job[3])) != job[2]:
 			continue
+		var t_hang := Time.get_ticks_usec()
 		_hang_glass(job[2], BuildingShell.window_mesh_of(arrays), job[4])
+		_glass_hang_worst_usec = maxi(_glass_hang_worst_usec, Time.get_ticks_usec() - t_hang)
 	if _glass_owed.is_empty():
 		return
 	# The owed, nearest first; the gone dropped, the about-to-go kept back.
@@ -2750,7 +2771,10 @@ func _build_owed_glass() -> void:
 		if owed[4]:
 			if made_here > 0 and Time.get_ticks_usec() - t0 > int(GLASS_BUDGET_MS * 1000.0):
 				continue
+			var t_here := Time.get_ticks_usec()
 			_build_glass_here(owed)
+			_glass_here_worst_usec = maxi(_glass_here_worst_usec, Time.get_ticks_usec() - t_here)
+			_glass_here += 1
 			made_here += 1
 			taken[int(r[1])] = true
 		elif _glass_jobs.size() < GLASS_JOBS:
@@ -2824,8 +2848,11 @@ func _cell_standing(cell: Vector3i, chunk: int, origin: Vector3i) -> bool:
 ## built it -- 14 ms, in the tick of the first blast that laid a room's
 ## furniture (2026-10-15). A collapse's dust is another.
 func _warm_shaders() -> void:
+	# The shells' window panes too: the first pane hung loaded and built their
+	# shader, 17.7 ms in one tick of a --stress run (2026-10-21).
 	var specks := [[FurnitureMesh.unit_mesh(), FurnitureMesh.material()],
-			[CollapseDust._quad(), null]]
+			[CollapseDust._quad(), null],
+			[FurnitureMesh.unit_mesh(), BuildingShell.window_material()]]
 	for speck in specks:
 		var mi := MeshInstance3D.new()
 		mi.mesh = speck[0]
@@ -10735,7 +10762,9 @@ func _physics_process(_delta: float) -> void:
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
 	if not _glass_owed.is_empty() or not _glass_jobs.is_empty():
+		var t_gl := Time.get_ticks_usec()
 		_build_owed_glass()
+		_glass_note(Time.get_ticks_usec() - t_gl)
 	if not _shadow_jobs.is_empty():
 		_harvest_shadow_jobs()
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
@@ -13618,6 +13647,11 @@ func _report_profile() -> void:
 				_phys_sum / _frame_samples, _proc_sum / _frame_samples])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			_prof_worst_ms, int(_prof_worst.get("island_count", 0))])
+	if _glass_ticks > 0:
+		print("[prof] glass: %.2f ms a tick on the main thread over %d ticks, worst %.1f ms (one hung %.1f, one built here from bricks %.1f, %d built here); %d built in all" % [
+				_glass_usec / 1000.0 / _glass_ticks, _glass_ticks, _glass_worst_usec / 1000.0,
+				_glass_hang_worst_usec / 1000.0, _glass_here_worst_usec / 1000.0, _glass_here,
+				glass_built])
 	if not _prof_spikes.is_empty():
 		var spikes := _prof_spikes.duplicate()
 		spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
