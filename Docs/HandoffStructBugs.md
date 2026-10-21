@@ -35,14 +35,14 @@ both lists, in this order; the detail of each item is where it points.
 1. ~~`collapse_probe` flickers about 3 runs in 4~~ -- fixed 2026-10-20: "inside"'s toppling tower
    hits the one beside it, the first-fit picker shifts, the last six-storey tower goes to a
    four-storey ask. "shellhit" has a city of its own (`shellhit_probe`); DestructionLod 5.7.
-2. ~~`--lodbreak`: the odd heap brick in mid-air~~ (CollapseNext 28; "Open" 3 below). **The
+2. `--lodbreak`: the odd heap brick in mid-air (CollapseNext 28; "Open" 3 below). **The
    check (2026-10-20):** `--floating` failed the baseline the same way -- three heap bricks "with
    nothing under them" at 135 m, lying on the first floor of a building given back to its shell.
    `_floating_furniture` (both gates' test) knew only the ground and grids: blind to buildings in
    bricks 120-140 m off (its radius shrank with 5.2's `INTERIOR_RANGE`; heap bricks are asked to
    `BrickHeap.DRAW_RANGE`, 140), to a shell's floors (drawn, not in the grid, no collision) and
    to asleep pieces (stand-ins). Fixed (`_float_supports`, `_float_held`); 2026-10-21 `--floating`
-   6 of 6, `--lodbreak` no brick in mid-air 4 of 4.
+   6 of 6, `--lodbreak` no brick in mid-air 4 of 4. But the next run had one real one (item 3).
 
 **2. What the user sees in play**
 3. CollapseNext 29(b): from far (LOD 3) a building sometimes vanishes, then close up its interior
@@ -50,6 +50,15 @@ both lists, in this order; the detail of each item is where it points.
    that change what draws a building at range: the far view from its own bricks
    (`CityScene._far_real`, Structures 2.1) and the painted panes on brick buildings
    (`_tend_brick_panes`, DestructionLod 5.2).
+   **2026-10-21:** `--lodbreak` now asks at every stop inside SHELL_RANGE that something draws
+   the tower's walls (shell, far box, instanced set, brick mesh or bands: `_walls_drawn_by`), and
+   comes at each tower from a side with no other building in the way (`_clear_way`): at 160 m
+   its shot had been landing on building 10, in front of the tower it asks about (11), so that
+   tier never shot its tower. With both: 160 m shot lands, walls drawn at every stop (far box,
+   bricks, shell from its bricks, bands). Not reproduced yet; the check is there for when it is.
+   Same run, "no brick lying in mid-air" failed at all three tiers on ONE heap brick at 45 m
+   on the 60 m tower, 1.96 m over the building's collision -- item 2 is real after all, and
+   flaky (passed the run before). Next: say per heap brick what it was laid on.
 4. CollapseNext 29(a): from mid range (LOD 2) parts of a wall that should be gone stay drawn until
    the player comes close.
 5. CollapseNext 29: from 320 m an 829-brick piece stays frozen 22 m over what is under its middle
@@ -131,7 +140,7 @@ areas' tests).
   `far_rules` 9, `replay` 13, `loopback` 32, `snapshot` 48, `dormant` 33, `span` 6,
   `workshop_spaces` 8 (all passed 2026-10-20, `far_rules` after `ad080d8`).
 - Windowed (Bash, `override.cfg`): `city.tscn -- --groups --big` 25, `--jam --big` 4,
-  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 8,
+  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 12,
   `big_city.tscn -- --far --buildings=150` 19, `city.tscn -- --floating` 6.
 - Profile: `city.tscn -- --big --shot`; the `[prof]` lines now break damage down
   (`of which damage, mean per tick`, `loose pieces (damage_near)`, `a hit on a piece`).

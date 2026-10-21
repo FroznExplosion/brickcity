@@ -7849,6 +7849,7 @@ func _run_floating_pass() -> void:
 		print("  given back while away: %s, %d pieces of it" % [not b.is_materialised(), _pieces_of(b.id)])
 		var d := 160.0
 		var seen_worst := 0
+		var worst_parts := ""
 		var worst_at := -1.0
 		var shot := false
 		var n := 0
@@ -7864,12 +7865,17 @@ func _run_floating_pass() -> void:
 			if f.size() > seen_worst:
 				seen_worst = f.size()
 				worst_at = d
+				worst_parts = ""
+				for e in f.slice(0, 4):
+					worst_parts += " [%s at %s]" % [e[0], str((e[1] as Vector3).snapped(Vector3.ONE * 0.1))]
 				if not shot and f.size() >= 3:
 					await _frames(3)
 					_save("floating_%d" % k)
 					shot = true
 					_floating_report("first seen at %d m" % int(d), f)
 		await _frames(30)
+		if seen_worst > 0:
+			print("  --   the worst, at %d m:%s" % [int(worst_at), worst_parts])
 		_floating_report("walked in to 8 m (worst %d parts at %d m)" % [seen_worst, int(worst_at)],
 				_floating_furniture())
 		if not shot:
@@ -7888,8 +7894,9 @@ func _run_floating_pass() -> void:
 ##     godot --path . scenes/big_city.tscn -- --lodbreak [--at=<m>] [--pick=<n>] [--foot]
 ##
 ## Gates, at each tower's end: no brick of the heap lying in mid-air (a crumb's
-## floor gone before it got there: IslandManager._crumb_floor_gone) and no stud
-## drawn on a brick that has gone (BrickNear.stale_studs). Furniture riding a
+## floor gone before it got there: IslandManager._crumb_floor_gone), no stud
+## drawn on a brick that has gone (BrickNear.stale_studs), and at every stop
+## inside SHELL_RANGE something drawing its walls (_walls_drawn_by). Furniture riding a
 ## piece lying on its side reads as floating to _floating_furniture: printed,
 ## not gated.
 func _run_lodbreak_pass() -> void:
@@ -7920,6 +7927,10 @@ func _run_lodbreak_pass() -> void:
 		var aim_y := TowerRecipe.total_plates(b.recipe.courses) * PLATE * 0.5
 		if "--foot" in OS.get_cmdline_user_args():
 			aim_y = 3.0
+		# From the city's middle outward was not always clear: at 160 m the shot
+		# landed on the tower in front (2026-10-21, building 10 for 11), and the
+		# one asked about was never hit.
+		away = _clear_way(b, mid + Vector3(0.0, aim_y, 0.0), away, d)
 		camera.global_position = mid + away * d + Vector3(0.0, aim_y, 0.0)
 		camera.look_at(mid + Vector3(0.0, aim_y, 0.0), Vector3.UP)
 		await _frames(90)
@@ -7953,6 +7964,9 @@ func _run_lodbreak_pass() -> void:
 		var ss: Array = brick_near.stale_studs()
 		_gate_ok("%d m: no stud drawn on a brick that has gone" % int(d), int(ss[1]) == 0,
 				"%d of %d" % [ss[1], ss[0]])
+		_gate_ok("%d m: its walls drawn at every stop (CollapseNext 29(b))" % int(d),
+				_lodbreak_blind == 0, "%d stop(s) with nothing drawing them" % _lodbreak_blind)
+		_lodbreak_blind = 0
 		_save("lodbreak_%d_%dm_settled" % [k, int(d)])
 		var ff: Array = _floating_furniture()
 		if not ff.is_empty():
@@ -7982,10 +7996,63 @@ func _run_lodbreak_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## What draws a building's walls right now: its shell, shown with a mesh; its
+## brick node's mesh; or its bands. "" when nothing does (CollapseNext 29(b):
+## "close up its interiors are drawn whole and its walls invisible").
+func _walls_drawn_by(id: int) -> String:
+	var by := PackedStringArray()
+	var shell: MeshInstance3D = _shells.get(id)
+	if shell != null and shell.is_visible_in_tree() and shell.mesh != null \
+			and shell.mesh.get_surface_count() > 0:
+		by.append("shell")
+	# A shell with no mesh of its own, drawn by its far box or its instanced set.
+	if _far_on.has(id):
+		by.append("far box")
+	if shell != null and _shell_inst.has(id):
+		by.append("instanced set")
+	var bricks = _brick_nodes.get(id)
+	if bricks is MeshInstance3D and (bricks as MeshInstance3D).is_visible_in_tree():
+		var m: Mesh = (bricks as MeshInstance3D).mesh
+		if m != null and m.get_surface_count() > 0:
+			by.append("bricks")
+		var bands := 0
+		for c in (bricks as Node).get_children():
+			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null \
+					and (c as MeshInstance3D).mesh.get_surface_count() > 0 \
+					and (c as MeshInstance3D).material_override != BuildingShell.window_material():
+				bands += 1
+		if bands > 0:
+			by.append("%d band(s)" % bands)
+	return " + ".join(by)
+
+
+var _lodbreak_blind := 0   ## stops where a building with bricks alive drew no walls
+
+
+## Of eight ways round building `b`, starting at `away`, the first with no other
+## building's box between a camera `d` out and `at`.
+func _clear_way(b: BuildingRegistry.Building, at: Vector3, away: Vector3, d: float) -> Vector3:
+	for k in 8:
+		var dir := away.rotated(Vector3.UP, k * PI / 4.0)
+		var blocked := false
+		for o in registry.buildings:
+			if o.id != b.id and CityPlacer.box_of(o).intersects_segment(at + dir * d, at):
+				blocked = true
+				break
+		if not blocked:
+			return dir
+	return away
+
+
 func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 	var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else -1
 	var shell: MeshInstance3D = _shells.get(b.id)
 	var bricks: Node3D = _brick_nodes.get(b.id)
+	var drawn := _walls_drawn_by(b.id)
+	print("    its walls drawn by: %s" % (drawn if drawn != "" else "NOTHING"))
+	# Past SHELL_RANGE a building has no node at all: the far city draws it.
+	if drawn == "" and alive != 0 and b.xform.origin.distance_to(camera.global_position) < SHELL_RANGE:
+		_lodbreak_blind += 1
 	var ss: Array = brick_near.stale_studs()
 	var ff: Array = _floating_furniture()
 	var fk := {}
