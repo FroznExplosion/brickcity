@@ -509,6 +509,11 @@ public:
     /// stud, as before; it must divide the tile.
     /// Bricks poking out of curved ground (Terrain.md 18.7): the share of
     /// curve cells a brick starts on. 0 for none.
+    /// Shelves on slopes ground (Terrain.md 18.8): every `bricks` of height
+    /// the first `share` of the rise is flat. 0 bricks for none. Changes the
+    /// FIELD: call before anything is built from it.
+    static void set_shelves(double bricks, double share);
+    static Vector2 get_shelves();
     static void set_curve_bricks(double share);
     static double get_curve_bricks();
     static void set_curve_step(int studs);

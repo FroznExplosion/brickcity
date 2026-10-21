@@ -133,12 +133,18 @@ static bool g_smooth_terrain = false;
 static bool g_smooth_slopes = false;
 /// Studs a side of one LOW-POLY curve quad. See BrickTerrain::set_curve_step.
 static int g_curve_step = 4;
-/// Share of curve cells a brick patch starts on. See set_curve_bricks.
-static float g_curve_bricks = 1.0f / 110.0f;
+/// Share of curve cells a brick patch starts on. See set_curve_bricks. Off:
+/// bricks standing proud of a slope were not what was wanted (18.8) -- the
+/// bricks belong flush, in the flat places.
+static float g_curve_bricks = 0.0f;
 /// On "slopes" ground, the share of level curve cells that take a stud.
 constexpr float CURVE_STUD_CHANCE = 0.125f;
-/// Plates a stud: regional steepness above which a slope curves.
-static float g_curve_slope = 0.25f;
+/// Plates a stud: broad steepness above which ground curves (18.8).
+static float g_curve_slope = 0.15f;
+/// SHELVES on slopes ground (Terrain.md 18.8): bricks a level, and the share
+/// of each level's rise that is flat shelf. 0 bricks for none.
+static float g_shelf_bricks = 4.0f;
+static float g_shelf_share = 0.3f;
 /// Bumped by every pad edit, so a cache of the field can tell it moved.
 static std::atomic<uint32_t> g_pad_gen{ 1 };
 
@@ -186,9 +192,13 @@ constexpr int REGION = 8;
 /// found a 3-plate cliff under a curve on the first run.
 constexpr int MAX_QSTEP = 2;
 /// Slopes mode's cliff, in plates a stud, regional: steeper than this is
-/// stacked courses. 1.5 is ~31 degrees, steeper than anything the generator
-/// makes (max 0.67); it is for sculpted and dug ground.
-constexpr float CLIFF_SLOPE = 1.5f;
+/// stacked courses. 3.0 is ~50 degrees. It was 1.5, steeper than anything
+/// the noise made -- until shelves (18.8) gathered each level's rise into
+/// ramps up to twice as steep, and every steep stretch of hillside came out
+/// as stacked brick: rows of ledges across the slopes, the "smooth tiles
+/// everywhere" the curves were meant to replace. A cliff is for sculpted and
+/// dug ground.
+constexpr float CLIFF_SLOPE = 3.0f;
 }
 
 /// Steepness at a column, in plates a stud: the larger of the two central
@@ -239,6 +249,39 @@ static float regional_slope(const Field &f, int x, int z) {
     return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
 }
 
+/// How flat the ground is ROUND a block: the steepest of the 3 x 3 blocks
+/// centred on it. Laid brick on slopes ground is for ground that is flat
+/// across a place -- a hill top, a valley floor, a plain (Terrain.md 18.8) --
+/// not every few studs that happen to level off on the way down a hill; a
+/// block counts as flat only if its neighbours are too, so a flat patch is
+/// never smaller than ~24 studs across.
+static float broad_block_slope(const Field &f, int bx, int bz) {
+    const int r = smoothcfg::REGION;
+    float worst = 0.0f;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            worst = std::max(worst, block_slope(f, bx + dx * r, bz + dz * r));
+        }
+    }
+    return worst;
+}
+
+/// broad_block_slope blended between block middles, as regional_slope: a
+/// threshold on it is a smooth contour, never squares and never speckle.
+static float broad_slope(const Field &f, int x, int z) {
+    const int r = smoothcfg::REGION;
+    const int h = r / 2;
+    const int x0 = floor_div(x - h, r) * r + h;
+    const int z0 = floor_div(z - h, r) * r + h;
+    const float tx = (float)(x - x0) / (float)r;
+    const float tz = (float)(z - z0) / (float)r;
+    const float a = broad_block_slope(f, x0, z0);
+    const float b = broad_block_slope(f, x0 + r, z0);
+    const float c = broad_block_slope(f, x0, z0 + r);
+    const float d = broad_block_slope(f, x0 + r, z0 + r);
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+}
+
 /// Curve or bricks, for one column. `qstep` is the largest step to a
 /// neighbour on the QUANTISED surface, in plates -- the caller has it to
 /// hand, and recomputing it would be four more field evaluations a cell.
@@ -262,8 +305,11 @@ static bool smooth_column(const Field &f, int x, int z, int qstep) {
         if (on_pad_flat(x, z)) {
             return false;
         }
-        const float s = regional_slope(f, x, z);
-        return s > g_curve_slope && s < smoothcfg::CLIFF_SLOPE;
+        // Broad slope, not regional: brick only where the ground is flat
+        // across a place (18.8). The cliff test stays on the block's own
+        // slope -- a cliff is a cliff however flat the land above it is.
+        const float s = broad_slope(f, x, z);
+        return s > g_curve_slope && regional_slope(f, x, z) < smoothcfg::CLIFF_SLOPE;
     }
     // A real cliff stays brick wherever it is. This is per COLUMN because a
     // step of more than two plates is a wall, and a wall is a wall whatever
@@ -436,7 +482,25 @@ float Field::base_plate(int x, int z) const {
     // 90 bricks is 38 m of landform amplitude and gives ~25 m of real
     // relief, because three octaves of fBm over value noise sit well inside
     // their nominal range: 34 measured only 9.8 m across 140 m of ground.
-    const float bricks = landform * 90.0f + relief * 9.0f + detail * 1.5f + 14.0f;
+    float bricks = landform * 90.0f + relief * 9.0f + detail * 1.5f + 14.0f;
+    // SHELVES (Terrain.md 18.8), on slopes ground only. Laid brick there is
+    // for places that are flat ON PURPOSE -- hill tops, valley floors -- and
+    // noise has almost none: 2% of the test field is flat across 24 studs.
+    // So every `g_shelf_bricks` of height, the first `g_shelf_share` of the
+    // rise is held flat and the rest climbs to the next shelf on a
+    // smoothstep, flat-in and flat-out so a shelf meets its slope without a
+    // crease. Where the land is gentle -- tops and bottoms -- a shelf is wide
+    // and the broad-flat rule lays it in brick; on a hillside it is a ledge
+    // a few studs wide, too narrow for brick, and the hill stays a curve.
+    if (g_smooth_slopes && g_smooth_terrain && g_shelf_bricks > 0.0f) {
+        const float k = bricks / g_shelf_bricks;
+        const float level = std::floor(k);
+        const float t = k - level;
+        float u = t <= g_shelf_share ? 0.0f
+                : (t - g_shelf_share) / std::max(1.0f - g_shelf_share, 1e-3f);
+        u = u * u * (3.0f - 2.0f * u);
+        bricks = (level + u) * g_shelf_bricks;
+    }
     // Sculpted strokes on the noise, under the pads (§20.6).
     return bricks * (float)PLATES_PER_CELL + sculpt_plates(x, z);
 }
@@ -2008,6 +2072,11 @@ bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
 
 void BrickTerrain::set_smooth_terrain(bool on) { g_smooth_terrain = on; }
 bool BrickTerrain::get_smooth_terrain() { return g_smooth_terrain; }
+void BrickTerrain::set_shelves(double bricks, double share) {
+    g_shelf_bricks = (float)std::max(0.0, bricks);
+    g_shelf_share = (float)std::clamp(share, 0.0, 0.9);
+}
+Vector2 BrickTerrain::get_shelves() { return Vector2(g_shelf_bricks, g_shelf_share); }
 void BrickTerrain::set_curve_step(int studs) { g_curve_step = std::max(1, studs); }
 int BrickTerrain::get_curve_step() { return g_curve_step; }
 void BrickTerrain::set_smooth_slopes(bool on) { g_smooth_slopes = on; }
@@ -2736,6 +2805,21 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     }
                     if (dy > 0 && top_is_packed(lx, yp, lz)) {
                         continue;   // the surface packer owns this one
+                    }
+                    // A CURVED column's top and sides are the curve's
+                    // (Terrain.md 18.8). Its exposed faces only ever face
+                    // lower ground, and between two curves the shared
+                    // corners already close it, while against lower brick
+                    // the curve draws its own skirt. Drawn here as well,
+                    // the voxel staircase under every curve stood through
+                    // it -- the curve runs through the middle of each step,
+                    // so the top half of every step's wall and its top
+                    // showed: the ledges and "smooth tiles everywhere" on
+                    // curved hills, since 18.5.
+                    if (dy >= 0 && g_smooth_terrain && lx >= 0 && lz >= 0
+                            && lx < TILE && lz < TILE
+                            && s.smooth[TileSample::idx(lx, lz)]) {
+                        continue;
                     }
                     if (in_piece_solid(lx, yp, lz)) {
                         // A piece owns EVERY face of its own brick, not just
@@ -4693,6 +4777,10 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_smooth_terrain);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_smooth_terrain"),
         &BrickTerrain::get_smooth_terrain);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_shelves", "bricks", "share"),
+        &BrickTerrain::set_shelves);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_shelves"),
+        &BrickTerrain::get_shelves);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_curve_bricks", "share"),
         &BrickTerrain::set_curve_bricks);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_curve_bricks"),

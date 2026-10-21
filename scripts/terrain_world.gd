@@ -346,7 +346,7 @@ static func from_dict(d: Dictionary) -> Dictionary:
 	settle_sea(float(d.get("drowned", DEFAULT_DROWNED)))
 	sculpt_from_list(d.get("sculpt", []))
 	set_ground(String(d.get("ground", "brick")))
-	BrickTerrain.set_curve_slope(float(d.get("curve_slope", 0.25)))
+	BrickTerrain.set_curve_slope(float(d.get("curve_slope", 0.15)))
 	sites = []
 	for p in d.get("pads", []):
 		BrickTerrain.add_pad(int(p.get("x", 0)), int(p.get("z", 0)),
