@@ -1,6 +1,6 @@
 # Space: asteroids, ships, stations, and bricks only where it broke
 
-Status (2026-10-21): **design, not scheduled.** Written at the user's request with
+Status (2026-10-21): **design; §5's storey units built for generated towers (§5.3b).** Written at the user's request with
 [Planets.md](Planets.md) (real sphere planets). It answers four questions: how small a smooth
 asteroid can be; whether ships and stations the size of the city's buildings can be destructible;
 whether a section can stay whole until it breaks and only then become bricks without a hitch; and
@@ -281,24 +281,64 @@ is partly laid, its bricks are drawn (`_brick_nodes`) and no stand-in shell is u
 **A storey gives way** when no brick of it is left under the storey above
 (`get_blocks_topping` empty after the solve). Then everything above leaves as a **shell piece**
 (`ShellPiece`): one rigid body drawn by the shell bands of those storeys, with their boxes, no
-bricks. Their ids go into the building's `gone` record (they are a piece now) and the building's
-profile marks those bands gone. Laid storeys above the gap leave as ordinary brick pieces. When the
-shell piece lands hard (speed over `ShellPiece.LAND_SPEED`) or is shot, it becomes bricks the
-cheap way: its lowest storey is laid from the template into a piece chunk and the rest stays a
-shell piece riding on it -- see §5.5 for what was built of that.
+bricks. The building keeps `cut_storey`: those storeys are never laid in it again (their blocks
+stay absent), its profile marks their bands gone and their rooms are written off. Laid storeys
+above the gap leave as ordinary brick pieces. When the shell piece lands hard (speed lost over
+`ShellPiece.LAND_SPEED` in a step) its lowest storey is laid from the template into a chunk of
+its own and let go as a brick piece moving as the shell moved; the rest stays a shell piece,
+resting on it. Shot, the storeys the blast reaches become bricks the same way and the piece
+splits round them. So a tower comes down a storey of bricks at a time.
 
 **Templates per band** come free: `lay_band` copies blocks out of the template, so a storey is
 never built.
 
-**Builds** (`BuildRecipe`) are sliced at the slabs the floor finder finds (`floor_lines`, which
-uses `find_floors`, Structures §2.4): a build's storey is the plates between two of them. A build
-has a template once it has been laid once (`prepare_templates` lays single-frame builds too);
-multi-frame builds stay whole.
+**Builds** (`BuildRecipe`) are to be sliced at the slabs the floor finder finds (`floor_lines`,
+Structures §2.4) -- **not built yet**: a build is still laid whole, and needs a template of its
+own and a rest shell from `BuildShell` first.
 
 Gate: `city.tscn -- --storeys --big` (new): the biggest tower shot at mid-height, first-hit time,
 bricks laid and chunk memory, `--whole` against storey units; the part above falls as one shell
 piece; the building given back and laid again replays its record (`storey_unit_probe` headless checks
 ids and the record round trip).
+
+### 5.3b What was built, and what it measured (2026-10-21)
+
+Branch `claude/great-rhodes-077356`. All of §5.3a for generated towers; not builds, not rooms as
+units, not the budget (§5.3).
+
+`--storeys --big`, the 80 x 60 tower of 204 courses (24,522 bricks, 35 storeys) shot once at
+mid-height, then the same with `--whole` (today). One run each, the editor closed, no other Godot
+running, display awake; heat under 80 C throughout:
+
+| first hit | `--whole` | storey units |
+|---|---|---|
+| promotion (laying, collision, bake start) | 30.4 ms | 5.7 ms |
+| bricks laid | 24,522 | 1,443 (storeys 16-17) |
+| occupancy grid | 12.6 MB | 0.77 MB |
+| BrickWorld memory | +93 MB | +8.4 MB |
+| process static memory | +103 MB | +11 MB |
+| video memory | +35 MB | +4.3 MB |
+| the shot shown (bands drawn) at tick | 29 | 7-9 |
+
+Both have one 0.5-0.76 s frame some ticks after the shot, all of it in `_process` (725 ms), none
+in the physics tick: not the promotion, and not storey units (it is there with `--whole` too). Not
+found yet; it looks like a first-use cost (a pipeline, a first drawing of something).
+
+Then (storey units) storey 17 blown out with blasts all through it: the storeys over the last
+laid one leave as **one shell piece** (storeys 20-34) at tick 67; the building is 5 laid storeys
+(3,623 bricks -- the blasts and the wreckage landing reached 15-19); the piece lands hard and is
+made bricks a storey at a time; given back and laid again, the record replays exactly
+(template ids; a room's piece laid as bricks is not laid again, as before).
+
+Found on the way and fixed: `lay_band` changed a chunk a worker was baking (barrage probe
+crashed); bands rebuilt for storeys just laid drew what the building had shed (held now, as a
+promotion is behind its shell); a landing on a building's shell (`_shear_building`) laid the
+whole building; falling-path promotion laid every storey under wreckage falling *inside* its own
+building; the collapse director took a banded building's template count for its size.
+
+Not done: builds; the brick budget (§5.3); the shell piece and a storey giving way are not
+DamageLog commands yet (co-op clients would not see them); a building laid a storey at a time
+never topples whole (only a storey gives way); rooms as units; anchor cells by list.
 
 ### 5.4 What it should buy (estimates)
 

@@ -3158,12 +3158,17 @@ var _rest_shells := {}
 var rest_shells_made := 0
 
 
-## A rest shell belongs on a building partly in bricks whose bricks are drawn
-## -- not one still behind its stand-in shell (promoting, or its mesh given up
-## at range: that shell draws all of it).
+## A rest shell belongs on every building partly in bricks: its boxes are the
+## only collision -- and its proxies the only thing the AI asks -- where the
+## storeys are not laid. It is DRAWN only while the bricks are: behind a
+## stand-in shell (promoting, or its mesh given up at range) that shell draws
+## all of it (_rest_drawn).
 func _rest_wanted(b: BuildingRegistry.Building) -> bool:
-	return b != null and registry.is_partial(b) and _brick_nodes.has(b.id) \
-			and not _shells.has(b.id) and not _toppling.has(b.id)
+	return b != null and registry.is_partial(b) and not _toppling.has(b.id)
+
+
+func _rest_drawn(id: int) -> bool:
+	return _brick_nodes.has(id) and not _shells.has(id)
 
 
 func _rest_sync(id: int) -> void:
@@ -3175,10 +3180,14 @@ func _rest_sync(id: int) -> void:
 	var key := [b.storeys_laid.duplicate(), b.cut_storey]
 	if _rest_shells.has(id):
 		# Storeys just laid are drawn by it until their bands are up.
-		if _rest_shells[id][2] == key or _bands_building(id):
-			return
-		_free_rest(id)
-	_make_rest(id, key)
+		if _rest_shells[id][2] != key and not _bands_building(id):
+			_free_rest(id)
+			_make_rest(id, key)
+	else:
+		_make_rest(id, key)
+	var mi = _rest_shells[id][0]
+	if is_instance_valid(mi):
+		(mi as MeshInstance3D).visible = _rest_drawn(id)
 
 
 func _make_rest(id: int, key: Array) -> void:
@@ -8967,6 +8976,24 @@ func _floating_report(what: String, found: Array) -> void:
 		some += " [%s at %s]" % [f[0], str((f[1] as Vector3).snapped(Vector3.ONE * 0.1))]
 	_gate_ok("%s: no furniture with nothing under it (%d parts drawn)" % [what, _float_seen],
 			found.is_empty(), "%d parts: %s;%s" % [found.size(), str(kinds), some])
+	# What each of the first few stands over: which building, in what state.
+	for f in found.slice(0, 2):
+		var at: Vector3 = f[1]
+		for id in _near_buildings(at, 2.0):
+			var b := registry.get_building(id)
+			if b == null or b.is_build() or not _world_box(b).grow(0.5).has_point(at):
+				continue
+			var local := b.xform.affine_inverse() * at
+			var band := -1
+			var bi := 0
+			for l in TowerRecipe.layout(b.recipe.courses):
+				if local.y >= int(l.y) * PLATE - 0.3 and local.y < (int(l.y) + int(l.plates)) * PLATE + 0.3:
+					band = bi
+				bi += 1
+			print("  --   over building %d at local y %.2f: bricks %s, banded %s, laid %s, cut %d, shell %s (coarse %s), rest shell %s, toppled %s, profile around band %d: %s" % [
+					id, local.y, b.is_materialised(), b.banded, str(b.storeys_laid), b.cut_storey,
+					_shells.has(id), _shell_coarse.get(id, false), _rest_shells.has(id), b.toppled, band,
+					str([b.damage_profile.get(band - 1), b.damage_profile.get(band), b.damage_profile.get(band + 1)])])
 
 
 ## Every part of an interior drawing within its range of the camera, and every
@@ -9053,11 +9080,41 @@ func _float_supports(here: Vector3) -> Dictionary:
 		if b.is_materialised() and b.chunk >= 0:
 			chunks.append([b.chunk, world.get_chunk_transform(b.chunk).affine_inverse(),
 					world.get_chunk_origin(b.chunk)])
+			# Laid a storey at a time: the storeys still whole are its rest
+			# shell, and what lies on them is held (Docs/Space.md 5.3a) -- on a
+			# floor, or on the top of a run of wall under a storey that is gone.
+			if _rest_shells.has(id):
+				var rtops := PackedFloat32Array()
+				var rest := registry.rest_profile(id)
+				var ri := 0
+				var standing := false
+				var last_top := 0.0
+				for band in TowerRecipe.layout(b.recipe.courses):
+					var gone := BuildingShell._band_is_gone(rest.get(ri, PackedInt32Array()))
+					ri += 1
+					var top := float(int(band.y) + int(band.plates)) * PLATE
+					if not gone and (band.kind == "base" or band.kind == "slab"):
+						rtops.append(top)
+					if standing and gone:
+						rtops.append(last_top)
+					standing = not gone
+					last_top = top
+				if standing:
+					rtops.append(last_top)
+				shells.append([b.xform.affine_inverse(), b.recipe.footprint_x * STUD,
+						b.recipe.footprint_z * STUD, rtops])
 		elif not b.is_build() and _shells.has(id):
 			var tops := PackedFloat32Array()
 			if bool(_shell_coarse.get(id, false)):
-				# The far-far tier: one solid band and a cap.
+				# The far-far tier: one solid band and a cap. And its roof: the
+				# cap is at the cornice's top, a row of buttresses along one edge,
+				# and what lies on the roof lies a cornice lower.
 				tops.append(TowerRecipe.total_plates(b.recipe.courses) * PLATE)
+				var lay := TowerRecipe.layout(b.recipe.courses)
+				for li in range(lay.size() - 1, -1, -1):
+					if lay[li].kind == "slab" or lay[li].kind == "base":
+						tops.append(float(int(lay[li].y) + int(lay[li].plates)) * PLATE)
+						break
 			else:
 				var bi := 0
 				for band in TowerRecipe.layout(b.recipe.courses):
@@ -9071,6 +9128,23 @@ func _float_supports(here: Vector3) -> Dictionary:
 		if isl.is_valid() and isl.chunk >= 0:
 			chunks.append([isl.chunk, world.get_chunk_transform(isl.chunk).affine_inverse(),
 					world.get_chunk_origin(isl.chunk)])
+	# A shell piece (Docs/Space.md 5.3a) is a body like any piece: what lies on
+	# its floors, or on its top, lies on something. In its own frame it is the
+	# building's storeys [lo, hi), so its tops are theirs.
+	for p in _shell_pieces:
+		if not is_instance_valid(p):
+			continue
+		var pb := registry.get_building(p.building)
+		if pb == null:
+			continue
+		var plines := registry.storey_lines(pb)
+		var ptops := PackedFloat32Array()
+		for st in range(p.lo, p.hi):
+			if not p.holes.has(st):
+				ptops.append((plines[st] + TowerRecipe.SLAB_PLATES) * PLATE)
+		ptops.append(plines[p.hi] * PLATE)
+		shells.append([p.global_transform.affine_inverse(), pb.recipe.footprint_x * STUD,
+				pb.recipe.footprint_z * STUD, ptops])
 	var sleepers: Array = []
 	for dm in islands.dormant:
 		if dm.stand_in != null and is_instance_valid(dm.stand_in):
