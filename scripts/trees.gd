@@ -58,6 +58,12 @@ const LEAF := 13
 static var _recipes := {}
 
 
+## Is registered building `b` a tree? A tree is a build whose recipe is named
+## for its variant (`recipe`).
+static func is_tree(b) -> bool:
+	return b != null and b.is_build() and b.build != null and String(b.build.name).begins_with("tree_")
+
+
 ## The recipe of one variant. The trunk's corner is at TRUNK_CORNER; `trunk_offset`
 ## says where it is once the recipe is rebased to its min corner, which is how
 ## a placed build is laid out.
