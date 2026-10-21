@@ -79,7 +79,17 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   worst AI tick 15.4 ms, all of it `encounters`, in the first 20 ticks (setting the encounter
   up); 3 ticks over 8 ms in the run; worst nav service 1.9 ms (search 1.7), tactic decisions
   1.3 ms worst. The gate is short and scripted (4-soldier waves, ~25 s) -- still wanted: a long
-  fight with several squads and armour, and what `encounters` does in its first ticks.
+  fight with several squads and armour.
+  *The opening ticks, done 2026-10-21:* `encounters` is the encounter materialising its zone,
+  which was 2 buildings a tick whatever they cost; a promotion is ~2.5-3 ms (a 42-course tower
+  7.5: bake start 2-5, collision 1-2, bricks ~1). `Encounter` now promotes inside 3 ms a tick (one
+  at least): worst AI tick 15.4/12.7/10.6/12.0 -> 8.1/7.5/6.6 ms, 3-5 ticks over 8 ms -> 0-1.
+  `[ai-prof] promotions` breaks the worst and every slow one (> 4 ms) into parts.
+  **Open:** in the fight, `MeshInstance3D.new()` in `_dress` takes 0.7-5 ms (the late tree
+  builds 4-5 ms) where a `Node3D.new()` beside it is ~0 and a bench outside the game is 3-10 us
+  however many instances exist -- the main thread waits on something worker jobs hold while
+  creating a render instance (a RenderingServer lock, probably; the bakes run then). Not
+  chased further.
 * `buffer_update` errors, unexplained.
 
 ## Working notes (things that bit this session)
