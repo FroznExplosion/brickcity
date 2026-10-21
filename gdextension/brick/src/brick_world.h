@@ -225,6 +225,10 @@ public:
     /// a blast opened. 0 is a stud under a ceiling: a storey's floor, seen
     /// only through a window. BrickNear draws those near and not as far cards.
     PackedByteArray get_chunk_studs_open(int chunk_id, int section) const;
+    /// Both of the above from ONE walk: [buffer, open]. Asked separately each
+    /// walks every block of the chunk for the band's, and the second throws
+    /// its buffer away -- every band's stud fetch (BrickNear) did it twice.
+    Array get_chunk_studs_and_open(int chunk_id, int section) const;
     /// Whether a part at `corner` (chunk cells) of `size` lies turned a quarter
     /// from the way it was printed (chunk_studs; ps_top_turned in the shader).
     static bool stud_turn(const Vector3i &size, const Vector3i &corner);
