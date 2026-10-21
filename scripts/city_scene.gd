@@ -544,6 +544,14 @@ const SHELLS_PER_TICK := 4
 ## Past this, a shell pass makes no more shells (one at least; _stream_shells).
 const SHELL_BUDGET_MS := 2.0
 var _promote_queue: Array[int] = []
+## building id -> the storeys its queued promotion asks for (Docs/Space.md
+## 5.3a): what was aimed at, walked up to or about to be landed on. Absent, or
+## storey units off: the whole building.
+var _promote_storeys := {}
+## How far round an aimed-at point, and round the camera on a walk-up, the
+## storeys are made bricks: a storey is 2.8 m, so this is the one looked at or
+## stood in and its neighbour on the near side.
+const AIM_STOREY_REACH := 2.0
 var _remesh_queue: Array[int] = []
 ## Buildings fire has charred -> the physics frame their bands are rebuilt on
 ## (scorch). A colour is in the vertices, which an index patch never touches,
@@ -2999,9 +3007,9 @@ func _promote(id: int, solve: bool = true,
 		return -1
 	if b.is_materialised():
 		# Laid a storey at a time: the ones asked for that it lacks come in
-		# now (Docs/Space.md 5.3a).
-		if b.banded and not storeys.is_empty():
-			_lay_more(id, storeys)
+		# now (Docs/Space.md 5.3a) -- all of them, asked for none.
+		if b.banded:
+			_lay_more(id, storeys if not storeys.is_empty() else registry.all_storeys(b))
 		return b.chunk
 
 	var t0 := Time.get_ticks_usec()
@@ -3043,6 +3051,32 @@ func _promote_part(part: String) -> void:
 # ---------------------------------------------------------------------------
 # Storey units (Docs/Space.md 5.3a)
 # ---------------------------------------------------------------------------
+
+## Does a promotion asking for `want` have anything to do: a building not in
+## bricks, or one laid a storey at a time that lacks some of them.
+func _wants_bricks(b: BuildingRegistry.Building, want: PackedInt32Array) -> bool:
+	if not b.is_materialised():
+		return true
+	if not b.banded or want.is_empty():
+		return false
+	for s in want:
+		if not b.storeys_laid.has(s) and (b.cut_storey < 0 or s < b.cut_storey):
+			return true
+	return false
+
+
+## Queue a promotion of `want` (empty: the whole building), at the front for
+## one somebody is about to shoot.
+func _queue_promotion(id: int, want: PackedInt32Array, first: bool) -> void:
+	if first:
+		_promote_queue.push_front(id)
+	else:
+		_promote_queue.append(id)
+	if want.is_empty():
+		_promote_storeys.erase(id)
+	else:
+		_promote_storeys[id] = want
+
 
 ## The storeys `what` reaches of building `id` when storey units are on, and
 ## none (the whole building) when they are off or it is a build.
@@ -3253,15 +3287,19 @@ func _give_way(id: int, s: int) -> void:
 			holes.append(k)
 	# The bricks up there go as pieces, as any group that lost its hold does.
 	var up := world.get_blocks_in_band(b.chunk, lines[s], lines[top])
-	registry.cut_storeys(id, s)
+	var came: BrickIsland = null
 	if not up.is_empty():
 		_disable(id, up)
 		var piece := islands.record_detach(id, null, b.chunk, up, DamageLog.FLAG_CHUNK)
-		var came := islands.spawn(b.chunk, up, Vector3.ZERO, Vector3.ZERO, piece, id)
+		came = islands.spawn(b.chunk, up, Vector3.ZERO, Vector3.ZERO, piece, id)
 		if came != null:
 			_note_handover(id, came)
-	# What its rooms drew up there is not there any more.
-	_groups_rooms_moved(b, lines[s] * PLATE, lines[top] * PLATE)
+			world.heal_joints(came.chunk)   # one piece until it lands, as a section is
+	# What its rooms drew up there has no floor here now: on the bricks that
+	# left, it rides them; anywhere else it is out of the drawing.
+	_groups_floor_went(b, AABB(Vector3(-1.0, lines[s] * PLATE, -1.0),
+			Vector3(1e4, (lines[top] - lines[s]) * PLATE, 1e4)), came)
+	registry.cut_storeys(id, s)
 	_refresh_furniture(id)
 	_queue_remesh(id)
 	var p := ShellPiece.new()
@@ -4672,7 +4710,8 @@ func _break_items(b: BuildingRegistry.Building, chunk: int, room: Room, items: D
 
 ## Shear, not destroy: a brick struck by falling masonry comes loose.
 func _shear_building(id: int, point: Vector3, radius: float) -> void:
-	var chunk := _promote(id)
+	# The storeys it lands on, not the building (Docs/Space.md 5.3a).
+	var chunk := _promote(id, true, _storeys_for(id, point, radius))
 	if chunk < 0:
 		return
 	director.note_hit(id, point)
@@ -4776,7 +4815,7 @@ func fire_chunks(point: Vector3, radius: float, promote := false) -> Array:
 		if not registry.local_box(b.id).grow(radius).has_point(b.xform.affine_inverse() * point):
 			continue
 		if not b.is_materialised():
-			if not promote or _promote(b.id) < 0:
+			if not promote or _promote(b.id, true, _storeys_for(b.id, point, radius)) < 0:
 				continue
 		var cs := b.chunks()
 		for fi in cs.size():
@@ -5806,8 +5845,8 @@ func _mech_floor_at(feet: Vector3) -> Dictionary:
 	if v.x < 0:
 		for id in _near_buildings(feet, 1.0):
 			var b := registry.get_building(id)
-			if b != null and not b.is_materialised() and _world_box(b).grow(0.3).has_point(under):
-				_promote(id)
+			if b != null and _world_box(b).grow(0.3).has_point(under) 					and _wants_bricks(b, _storeys_for(id, under, 1.0)):
+				_promote(id, true, _storeys_for(id, under, 1.0))
 				ai_world.sync()
 				v = _block_under_footprint(under)
 				break
@@ -7444,10 +7483,141 @@ var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
 
-## The storey-units gate: not written yet (handover note). Quits so a run ends.
+## The storey-units gate (Docs/Space.md 5.3a): the biggest tower shot once at
+## mid-height -- what the first hit costs and what it holds afterwards; then
+## (storey units on) that storey blown out until it gives way, the part above
+## falling as one shell piece and landing; then the building given back and
+## laid again, its record replayed. `-- --storeys --big`, and with `--whole`
+## for today's numbers. Timing only means anything with the editor closed.
 func _run_storeys_pass() -> void:
-	print("[storeys] gate not written yet")
-	get_tree().quit(0)
+	var units := registry.storey_units
+	print("[storeys] storey units %s" % ("on" if units else "OFF (--whole)"))
+	var b: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or c.is_materialised() or _wide_ids.has(c.id) or _is_tree(c.id):
+			continue
+		if b == null or c.recipe.courses * c.recipe.footprint_x * c.recipe.footprint_z \
+				> b.recipe.courses * b.recipe.footprint_x * b.recipe.footprint_z:
+			b = c
+	if b == null:
+		print("[storeys] no tower")
+		get_tree().quit(1)
+		return
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	var lines := registry.storey_lines(b)
+	var n := lines.size() - 1
+	@warning_ignore("integer_division")
+	var mid := n / 2
+	var mid_y: float = (lines[mid] + 10) * PLATE
+	# Facing away while the city streams in: a look at it for six ticks would
+	# make it bricks before the shot (_aim_promote).
+	camera.position = b.xform * Vector3(fx * 0.5, mid_y, -45.0)
+	camera.look_at(camera.position + (b.xform.basis * Vector3(0, 0, -1)), Vector3.UP)
+	await _frames(120)
+	var mem0: int = int(world.get_memory_report().total_bytes)
+	var static0 := OS.get_static_memory_usage()
+	var vid0 := Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)
+	var p0 := _promote_ms
+	var whole_bricks: int = registry.get_building(b.id).blocks
+	camera.look_at(b.xform * Vector3(fx * 0.5, mid_y, fz * 0.5), Vector3.UP)
+	_blast(b.xform * Vector3(fx * 0.5, mid_y, 0.0), BLAST_RADIUS)
+	var worst := 0.0
+	var prev := Time.get_ticks_usec()
+	var shown := -1
+	for t in 90:
+		await get_tree().physics_frame
+		var now := Time.get_ticks_usec()
+		worst = maxf(worst, float(now - prev) / 1000.0)
+		prev = now
+		if shown < 0 and b.is_materialised() and not _shells.has(b.id) and not _bands_building(b.id):
+			shown = t + 1
+	var rep := registry.storey_report(b.id)
+	var bricks: int = int(rep.get("bricks", 0)) if bool(rep.get("banded", false)) \
+			else world.get_block_count(b.chunk)
+	var occ: int = world.get_occupancy_bytes(b.chunk) if b.is_materialised() else 0
+	print("[storeys] first hit on building %d (%d bricks whole, %d storeys):" % [b.id,
+			whole_bricks, n])
+	print("[storeys]   promote %.1f ms, worst frame %.1f ms in 90 ticks, shot shown at tick %d" % [
+			_promote_ms - p0, worst, shown])
+	print("[storeys]   %d bricks laid (storeys %s), its grid %.2f MB; BrickWorld %+.1f MB, static %+.1f MB, video %+.1f MB" % [
+			bricks, str(rep.get("laid", "all")), occ / 1048576.0,
+			(int(world.get_memory_report().total_bytes) - mem0) / 1048576.0,
+			(OS.get_static_memory_usage() - static0) / 1048576.0,
+			(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) - vid0) / 1048576.0])
+	_gate_ok("the shot shows within 15 ticks", shown > 0 and shown <= 15, "tick %d" % shown)
+	if not units:
+		print("[storeys] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1 if _gate_fail > 0 else 0)
+		return
+	_gate_ok("only the storeys the shot reached are bricks", bricks > 0 and bricks <= 2000,
+			"%d bricks, storeys %s" % [bricks, str(rep.get("laid", []))])
+	_gate_ok("a rest shell draws the storeys still whole", _rest_shells.has(b.id))
+
+	# The storey blown out, everything in it, until nothing holds what is over it.
+	var made0 := shell_pieces_made
+	var bricked0 := shell_pieces_bricked
+	var dy: float = lines[mid] * PLATE
+	for h in [1.0, 1.8]:
+		var x := 0.5
+		while x < fx:
+			var z := 0.5
+			while z < fz:
+				_blast(b.xform * Vector3(x, dy + h, z), 1.0)
+				z += 1.0
+			x += 1.0
+	var piece: ShellPiece = null
+	var t2 := 0
+	while t2 < 600 and piece == null:
+		await get_tree().physics_frame
+		t2 += 1
+		for p in _shell_pieces:
+			if is_instance_valid(p) and p.building == b.id:
+				piece = p
+	var rep2 := registry.storey_report(b.id)
+	print("[storeys] storey %d blown out: %s at tick %d; building laid %s, cut at %d, %d bricks" % [
+			mid, "a shell piece" if piece != null else "no shell piece", t2,
+			str(rep2.get("laid", [])), int(rep2.get("cut", -1)), int(rep2.get("bricks", 0))])
+	_gate_ok("the part above leaves as one shell piece", piece != null and shell_pieces_made == made0 + 1,
+			"%d made" % (shell_pieces_made - made0))
+	if piece != null:
+		_gate_ok("it is every storey over the one that went", piece.hi == n and piece.lo <= mid + 2,
+				"storeys %d-%d" % [piece.lo, piece.hi - 1])
+	_gate_ok("and the building stays a storey or two of bricks", int(rep2.get("bricks", 0)) <= 4000,
+			"%d bricks" % int(rep2.get("bricks", 0)))
+	var t3 := 0
+	while t3 < 600 and shell_pieces_bricked == bricked0:
+		await get_tree().physics_frame
+		t3 += 1
+	_gate_ok("it lands hard and its lowest storey becomes bricks", shell_pieces_bricked > bricked0,
+			"after %d ticks, %d storeys" % [t3, shell_pieces_bricked - bricked0])
+	await _frames(120)
+
+	# Given back and laid again: the same record.
+	var dead := {}
+	for d in world.get_dead_blocks(b.chunk):
+		dead[d] = true
+	for d in world.get_detached_blocks(b.chunk):
+		dead[d] = true
+	var laid: PackedInt32Array = (registry.storey_report(b.id).laid as PackedInt32Array).duplicate()
+	_demote(b.id, 0.0)
+	_materialised.erase(b.id)
+	await _frames(5)
+	_promote(b.id, true, laid)
+	await _frames(5)
+	var again := {}
+	for d in world.get_dead_blocks(b.chunk):
+		again[d] = true
+	var same := again.size() == dead.size()
+	for d in dead:
+		if not again.has(d):
+			same = false
+	_gate_ok("given back and laid again, its record replays", same,
+			"%d dead before, %d after" % [dead.size(), again.size()])
+	print("[storeys] laid later %d times, %.1f ms all told, worst %.1f; rest shells made %d; storeys of shell pieces made bricks %d" % [
+			storeys_laid_later, _lay_more_ms, _lay_more_worst, rest_shells_made, shell_pieces_bricked])
+	print("[storeys] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## How long a break takes to show. Reported: a break, then pieces that do
@@ -10966,7 +11136,10 @@ func _physics_process(_delta: float) -> void:
 		# where they are, the groups are solved again next tick and go the
 		# moment the bands are drawn -- with the holes they leave, which is also
 		# when the shot is first seen on the building.
-		if _shells.has(b.id) and _bands_building(b.id):
+		# Laid a storey at a time and its bands rebuilding for storeys just laid
+		# (_lay_more): no shell stands in, and the old bands still draw what
+		# would leave -- held the same way, for the few ticks the bands take.
+		if _bands_building(b.id) and (_shells.has(b.id) or b.banded):
 			continue
 		# Breakage as it always was; a mega building's collapse as a few big
 		# chunks, its furniture split out to be written off (CollapseDirector).
@@ -11065,7 +11238,7 @@ func _physics_process(_delta: float) -> void:
 		var gb := registry.get_building(id)
 		if gb == null or not gb.banded or not gb.is_materialised():
 			continue
-		if _shells.has(id) and _bands_building(id):
+		if _bands_building(id):
 			continue   # its groups wait for its bands; so does this
 		var gave := registry.storey_gave_way(id)
 		if gave >= 0:
@@ -11162,7 +11335,9 @@ func _physics_process(_delta: float) -> void:
 	while promoted < PROMOTIONS_PER_FRAME and not _promote_queue.is_empty():
 		var pid: int = _promote_queue.pop_front()
 		var pb := registry.get_building(pid)
-		_promote(pid, pb == null or pb.is_damaged())
+		_promote(pid, pb == null or pb.is_damaged(),
+				_promote_storeys.get(pid, PackedInt32Array()))
+		_promote_storeys.erase(pid)
 		promoted += 1
 	t = _mark("promote", t)
 
@@ -11343,21 +11518,26 @@ func _stream_residency() -> void:
 	var found: Array = []
 	for id in _near_buildings(here, PROMOTE_RANGE):
 		var b := registry.get_building(id)
-		if b == null or b.is_materialised() or b.toppled or b.is_build():
+		if b == null or b.toppled or b.is_build():
 			continue
 		if _promote_queue.has(id):
 			continue
 		var dist := _box_distance(_world_box(b), here)
 		if dist > PROMOTE_RANGE:
 			continue
-		found.append([dist, id])
+		# The storeys at the camera's height (Docs/Space.md 5.3a): a walk-up
+		# is for the rooms about to be asked for, and those are on its storey.
+		var want := _storeys_for(id, here, AIM_STOREY_REACH)
+		if not _wants_bricks(b, want):
+			continue
+		found.append([dist, id, want])
 	if found.is_empty():
 		return
 	# Nearest first: the one whose rooms are about to be asked for is the one
 	# worth a promotion this pass.
 	found.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
 	for i in mini(PROMOTE_PER_PASS, found.size()):
-		_promote_queue.append(int(found[i][1]))
+		_queue_promotion(int(found[i][1]), found[i][2], false)
 		_near_promotions += 1
 
 
@@ -12350,9 +12530,14 @@ func _aim_promote() -> void:
 	if now - _aim_since < AIM_PROMOTE_TICKS:
 		return
 	var b := registry.get_building(id)
-	if b == null or b.is_materialised() or b.toppled or _promote_queue.has(id):
+	if b == null or b.toppled or _promote_queue.has(id):
 		return
-	_promote_queue.push_front(id)
+	# The storeys round where it is looked at (Docs/Space.md 5.3a): the shot
+	# that follows lands within a few metres of the look.
+	var want := _storeys_for(id, hit.position, AIM_STOREY_REACH)
+	if not _wants_bricks(b, want):
+		return
+	_queue_promotion(id, want, true)
 	_band_first[id] = true
 	aim_promotions += 1
 
@@ -12409,9 +12594,13 @@ func _path_promote() -> void:
 			if id < 0:
 				continue
 			var b := registry.get_building(id)
-			if b == null or b.is_materialised() or b.toppled or _promote_queue.has(id):
+			if b == null or b.toppled or _promote_queue.has(id):
 				continue
-			_promote_queue.push_front(id)
+			# The storeys the swept box reaches (Docs/Space.md 5.3a).
+			var want := _storeys_for(id, ahead.get_center(), ahead.size.y * 0.5)
+			if not _wants_bricks(b, want):
+				continue
+			_queue_promotion(id, want, true)
 			_band_first[id] = true
 			path_promotions += 1
 			return   # one a pass: a promotion is the expensive part

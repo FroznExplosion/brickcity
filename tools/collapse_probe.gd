@@ -688,7 +688,10 @@ func _check_farcut() -> void:
 		if not b.is_materialised() or b.toppled:
 			continue
 		var building: bool = city._bands_building(id)
-		if city._handovers.has(id):
+		# Bricks that left as pieces, or -- laid a storey at a time -- the
+		# storeys over one that gave way, leaving as one shell piece
+		# (Docs/Space.md 5.3a).
+		if city._handovers.has(id) or b.cut_storey >= 0:
 			left = true
 		# A piece has left while bands built from the bricks before it are up:
 		# they draw the section standing while it falls.
@@ -1049,7 +1052,11 @@ func _check_far_rules() -> void:
 	await _ticks(30 * 4)
 
 	# (b) A building coming apart gets no interior until it is still -- with
-	# the rule, and (the same case) without it.
+	# the rule, and (the same case) without it. Laid whole: laid a storey at a
+	# time its top leaves as a shell piece, which draws no interior at all
+	# (Docs/Space.md 5.3a), and the case without the rule has nothing to show.
+	var units: bool = city.registry.storey_units
+	city.registry.storey_units = false
 	for with_rule in [true, false]:
 		city.hold_interiors_mid_collapse = with_rule
 		var id := _tower(6)
@@ -1097,6 +1104,7 @@ func _check_far_rules() -> void:
 					"%d piece(s) falling for %d tick(s); %d storey group(s) drawn meanwhile" % [
 					falling, fell_ticks, shown_falling])
 	city.hold_interiors_mid_collapse = true
+	city.registry.storey_units = units
 	print("  --   interior passes put off: %d" % city.interior_waits)
 
 	# (c) Nothing new is drawn on wreckage that is still moving; once it is

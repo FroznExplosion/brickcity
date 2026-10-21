@@ -6560,6 +6560,12 @@ int BrickWorld::lay_band(int chunk_id, int template_id, int y_lo, int y_hi) {
     if (in.empty()) {
         return 0;
     }
+    // A worker may be reading this chunk -- a bake, a coarse mesh, a chamfered
+    // band. The blocks and the grid are about to change under it (the grid
+    // reallocated), so every job on it is settled first, as release_chunk does.
+    settle_bake_job(chunk_id, false);
+    settle_coarse_job(chunk_id);
+    drop_chamfer(chunk_id, -1, true);
     // Present, with the record it carried while absent.
     for (const int32_t i : in) {
         Block &b = c.blocks[(size_t)i];
@@ -6599,12 +6605,6 @@ int BrickWorld::lay_band(int chunk_id, int template_id, int y_lo, int y_hi) {
     joint_cache[chunk_id] = brick::JointCache();
     conn_forget(chunk_id);
     c.bake.valid = false;
-    if (!bake_jobs.empty() && bake_pending(chunk_id)) {
-        settle_bake_job(chunk_id, false);
-    }
-    if (!coarse_jobs.empty()) {
-        settle_coarse_job(chunk_id);
-    }
     return (int)in.size();
 }
 

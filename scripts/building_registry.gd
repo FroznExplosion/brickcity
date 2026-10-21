@@ -841,8 +841,9 @@ func materialise(id: int, storeys: PackedInt32Array = PackedInt32Array()) -> int
 		return -1
 	if b.is_materialised():
 		b.materialised_at = Time.get_ticks_msec()
-		if b.banded and not storeys.is_empty():
-			_lay_storeys(b, storeys)
+		if b.banded:
+			# Empty asks for the whole building, here as anywhere.
+			_lay_storeys(b, storeys if not storeys.is_empty() else all_storeys(b))
 		return b.chunk
 	if b.toppled:
 		return -1  # its bricks are an island now; building them again would double it
@@ -969,6 +970,17 @@ func storey_lines(b: Building) -> PackedInt32Array:
 	return out
 
 
+## Every storey the building still has (none past one that left as a shell piece).
+func all_storeys(b: Building) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var n := storey_lines(b).size() - 1
+	if b.cut_storey >= 0:
+		n = mini(n, b.cut_storey)
+	for s in n:
+		out.append(s)
+	return out
+
+
 func storey_count(id: int) -> int:
 	return maxi(storey_lines(get_building(id)).size() - 1, 0)
 
@@ -988,6 +1000,10 @@ func storeys_in(id: int, world_point: Vector3, radius: float) -> PackedInt32Arra
 	for s in lines.size() - 1:
 		if lines[s + 1] > lo and lines[s] <= hi:
 			out.append(s)
+	# Over its roof or under its ground floor: the storey nearest. Never none --
+	# none asks for the whole building.
+	if out.is_empty() and lines.size() > 1:
+		out.append(0 if hi < 0 else lines.size() - 2)
 	return out
 
 
@@ -1133,6 +1149,19 @@ func cut_storeys(id: int, s: int) -> void:
 	b.floors_memo = null
 	b.hit = true
 	set_storey_bounds(b)
+	# Their rooms went with them: written off, as a fallen building's are, so
+	# nothing draws them where the storeys stood -- now or after it is given
+	# back. (The pieces on laid storeys that left as bricks ride those.)
+	if not b.is_build():
+		var y_cut: int = storey_lines(b)[b.cut_storey]
+		for room in rooms_of(id):
+			if room.lo.y < y_cut:
+				continue
+			if room.items.is_empty():
+				room.items = RoomManifest.items_for(room)
+			for i in room.items.size():
+				if not room.laid.has(i):
+					room.gone[i] = true
 
 
 ## The bands of the shell (TowerRecipe.layout, as the damage profile counts
