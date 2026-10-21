@@ -88,8 +88,12 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   **Open:** in the fight, `MeshInstance3D.new()` in `_dress` takes 0.7-5 ms (the late tree
   builds 4-5 ms) where a `Node3D.new()` beside it is ~0 and a bench outside the game is 3-10 us
   however many instances exist -- the main thread waits on something worker jobs hold while
-  creating a render instance (a RenderingServer lock, probably; the bakes run then). Not
-  chased further.
+  creating a render instance. **Explained:** it is the band meshes the workers finished being
+  handed to the renderer at its next main-thread call (`CityScene._physics_process`'s flush note,
+  `BAND_VERTS_PER_TICK`) -- `Node3D.new()` makes no renderer call. A pool of ready nodes would
+  only move it to `add_child`, so none was made. Trees are no longer brought in by an encounter
+  (`Encounter.setup`, `Trees.is_tree`): 39 -> 24 promotions at the firefight's start, ~97 -> 77 ms
+  in all; the worst tick left is one 60-course tower, 8.1 ms on its own.
 * `buffer_update` errors, unexplained.
 
 ## Working notes (things that bit this session)

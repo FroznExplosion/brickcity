@@ -29,10 +29,15 @@ var _queue: Array[int] = []
 
 ## Every building whose box meets `p_zone`. `world_box` answers a building's
 ## world AABB by id.
+##
+## Not trees. Nobody fights in or from a tree, and a tree's shell already
+## stands and stops rounds; a tree that is hit becomes bricks then, as it does
+## anywhere (CityScene). Brought in up front they were the slowest promotions
+## of the firefight's opening, 4-9 ms each for 25-29 bricks (2026-10-21).
 func setup(registry: BuildingRegistry, p_zone: AABB, world_box: Callable) -> void:
 	zone = p_zone
 	for b in registry.buildings:
-		if b.toppled:
+		if b.toppled or Trees.is_tree(b):
 			continue
 		var box: AABB = world_box.call(b.id)
 		if box.intersects(zone):

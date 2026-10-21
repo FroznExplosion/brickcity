@@ -3890,8 +3890,7 @@ func _build_one_band(id: int) -> bool:
 
 
 func _is_tree(id: int) -> bool:
-	var b := registry.get_building(id)
-	return b != null and b.is_build() and b.build != null and String(b.build.name).begins_with("tree_")
+	return Trees.is_tree(registry.get_building(id))
 
 
 ## Ground for snow to lie on (SnowCover): only a city on terrain has any.
@@ -3920,7 +3919,7 @@ func _sway_of(id: int) -> Vector3:
 	if b == null or b.toppled:
 		return Vector3.ZERO
 	var h := registry.local_box(id).end.y
-	if b.is_build() and b.build != null and String(b.build.name).begins_with("tree_"):
+	if Trees.is_tree(b):
 		return WeatherFx.sway_tree(h)
 	return WeatherFx.sway_building(h)
 
