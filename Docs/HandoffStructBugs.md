@@ -35,14 +35,14 @@ both lists, in this order; the detail of each item is where it points.
 1. ~~`collapse_probe` flickers about 3 runs in 4~~ -- fixed 2026-10-20: "inside"'s toppling tower
    hits the one beside it, the first-fit picker shifts, the last six-storey tower goes to a
    four-storey ask. "shellhit" has a city of its own (`shellhit_probe`); DestructionLod 5.7.
-2. `--lodbreak`: the odd heap brick in mid-air (CollapseNext 28; "Open" 3 below). **Likely the
+2. ~~`--lodbreak`: the odd heap brick in mid-air~~ (CollapseNext 28; "Open" 3 below). **The
    check (2026-10-20):** `--floating` failed the baseline the same way -- three heap bricks "with
    nothing under them" at 135 m, lying on the first floor of a building given back to its shell.
    `_floating_furniture` (both gates' test) knew only the ground and grids: blind to buildings in
    bricks 120-140 m off (its radius shrank with 5.2's `INTERIOR_RANGE`; heap bricks are asked to
    `BrickHeap.DRAW_RANGE`, 140), to a shell's floors (drawn, not in the grid, no collision) and
-   to asleep pieces (stand-ins). Fixed on `struct-bugs` (`_float_supports`, `_float_held`), **not
-   merged until `--floating` and `--lodbreak` pass on it windowed** (the display was asleep).
+   to asleep pieces (stand-ins). Fixed (`_float_supports`, `_float_held`); 2026-10-21 `--floating`
+   6 of 6, `--lodbreak` no brick in mid-air 4 of 4.
 
 **2. What the user sees in play**
 3. CollapseNext 29(b): from far (LOD 3) a building sometimes vanishes, then close up its interior
