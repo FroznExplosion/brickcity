@@ -105,6 +105,20 @@ class Building:
 	## A player build rather than a generated tower. Mutually exclusive with the
 	## parametric `recipe` fields; `kind` says which.
 	var build: BuildRecipe = null
+	## Laid a storey at a time (Docs/Space.md 5.3a): `chunk` is a band chunk of
+	## the template `band_template`, and only `storeys_laid` (ascending) are
+	## bricks -- the rest are the rest shell. False for a building laid whole.
+	var banded := false
+	var band_template := -1
+	var storeys_laid := PackedInt32Array()
+	## How many runs of laid storeys carried a load of the storeys over them
+	## (BuildingRegistry.ABOVE_OWNER), so a run that has merged into another
+	## has its load taken off.
+	var load_runs := 0
+	## The storey that gave way under everything above it, which left as a
+	## shell piece: storeys from here up are not this building's any more. -1
+	## while it has them all.
+	var cut_storey := -1
 
 	func is_build() -> bool:
 		return build != null
@@ -177,6 +191,14 @@ class Building:
 
 
 const RECIPE_VERSION := 1
+
+## Storey units (Docs/Space.md 5.3a): a building a blast or a look reaches is
+## laid as the storeys reached, not whole. Off, every materialise lays the
+## whole building, as it always did (CityScene --whole: the gate's "today").
+var storey_units := true
+## set_load owner for the weight of the intact storeys over a run of laid ones:
+## ABOVE_OWNER - run. Wreckage on a building is owned by its piece id, >= 0.
+const ABOVE_OWNER := -1000
 
 var world: BrickWorld
 var palette := {}
@@ -694,8 +716,17 @@ func prepare_templates() -> float:
 	for b in buildings:
 		if b == null or b.is_build() or b.is_materialised() or b.toppled:
 			continue
-		if _templates.has(_template_key(b)):
-			continue
+		_template_of(b)
+	return float(Time.get_ticks_usec() - t0) / 1000.0
+
+
+## The template of a generated tower's shape, built now if it was not: laid
+## whole into a chunk of its own, saved, and the chunk let go. -1 for a build.
+func _template_of(b: Building) -> int:
+	if b.is_build():
+		return -1
+	var key := _template_key(b)
+	if not _templates.has(key):
 		var chunk := world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(
 				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses))
 		# The fixtures' block lists are the building's own; put them back after.
@@ -706,7 +737,7 @@ func prepare_templates() -> float:
 		for i in b.fixtures.size():
 			b.fixtures[i].blocks = kept[i]
 		world.release_chunk(chunk)
-	return float(Time.get_ticks_usec() - t0) / 1000.0
+	return int((_templates[key] as Array)[0])
 
 
 func _keepouts_of(b: Building) -> Array:
@@ -799,16 +830,31 @@ func materialise_count() -> int:
 
 ## Build the real bricks. Idempotent: already-materialised buildings are returned
 ## as they are.
-func materialise(id: int) -> int:
+##
+## `storeys` (Docs/Space.md 5.3a): with storey units on, a generated tower is
+## laid as those storeys only -- a band chunk of its template, the rest absent
+## -- and one already laid that way gets any of them it lacks. Empty lays the
+## whole building, as it always did; so does a build, for now.
+func materialise(id: int, storeys: PackedInt32Array = PackedInt32Array()) -> int:
 	var b := get_building(id)
 	if b == null:
 		return -1
 	if b.is_materialised():
 		b.materialised_at = Time.get_ticks_msec()
+		if b.banded:
+			# Empty asks for the whole building, here as anywhere.
+			_lay_storeys(b, storeys if not storeys.is_empty() else all_storeys(b))
 		return b.chunk
 	if b.toppled:
 		return -1  # its bricks are an island now; building them again would double it
 
+	# A building whose top left as a shell piece is never laid whole again:
+	# that would grow back what is lying in the street.
+	if storeys.is_empty() and b.cut_storey >= 0:
+		for s in b.cut_storey:
+			storeys.append(s)
+	var banded := not storeys.is_empty() and not b.is_build() \
+			and (storey_units or b.cut_storey >= 0)
 	var t0 := Time.get_ticks_usec()
 	var fixtures_laid := false
 	if b.is_build() and not b.build.is_single_frame():
@@ -841,6 +887,19 @@ func materialise(id: int) -> int:
 	elif b.is_build():
 		b.chunk = world.create_chunk(Vector3i.ZERO, b.build.chunk_dims())
 		b.build.build(world, b.chunk, palette)
+	elif banded:
+		# Every block of the template, absent; the storeys asked for are laid
+		# below, once the record is in -- so they come in with their damage.
+		var tid := _template_of(b)
+		b.chunk = world.create_band_chunk(tid)
+		b.band_template = tid
+		b.banded = true
+		b.storeys_laid = PackedInt32Array()
+		b.load_runs = 0
+		var saved: Array = (_templates[_template_key(b)] as Array)[1]
+		for i in b.fixtures.size():
+			b.fixtures[i].blocks = (saved[i] as PackedInt32Array).duplicate()
+		fixtures_laid = true
 	else:
 		b.chunk = world.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(
 				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses))
@@ -879,12 +938,270 @@ func materialise(id: int) -> int:
 		world.kill_blocks(cs[i], b.gone_in(i))
 		world.set_worn_blocks(cs[i], b.worn_in(i))
 		world.set_scorched_blocks(cs[i], b.scorched_in(i))
+	if b.banded:
+		_lay_storeys(b, storeys)
 
 	b.materialised_at = Time.get_ticks_msec()
 	_materialised += 1
 	_materialise_count += 1
 	_materialise_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	return b.chunk
+
+
+# ---------------------------------------------------------------------------
+# Storey units (Docs/Space.md 5.3a)
+# ---------------------------------------------------------------------------
+
+## Where a building's storeys start, in plates of its own grid, bottom up, and
+## then its top: storey s is [lines[s], lines[s + 1]). A tower's storey is its
+## slab and the six courses over it (TowerRecipe.STOREY_PLATES); the last one
+## is the roof slab and the cornice. A build has none yet.
+func storey_lines(b: Building) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	if b == null or b.is_build():
+		return out
+	var top: int = TowerRecipe.chunk_dims(b.recipe.footprint_x, b.recipe.footprint_z,
+			b.recipe.courses).y
+	var y := 0
+	while y < top:
+		out.append(y)
+		y += TowerRecipe.STOREY_PLATES
+	out.append(top)
+	return out
+
+
+## Every storey the building still has (none past one that left as a shell piece).
+func all_storeys(b: Building) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var n := storey_lines(b).size() - 1
+	if b.cut_storey >= 0:
+		n = mini(n, b.cut_storey)
+	for s in n:
+		out.append(s)
+	return out
+
+
+func storey_count(id: int) -> int:
+	return maxi(storey_lines(get_building(id)).size() - 1, 0)
+
+
+## The storeys a blast of `radius` metres at a world point reaches, by height
+## alone: the caller has already found it inside the building's box.
+func storeys_in(id: int, world_point: Vector3, radius: float) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var b := get_building(id)
+	if b == null:
+		return out
+	var lines := storey_lines(b)
+	var local := b.xform.affine_inverse() * world_point
+	var plate := BrickWorld.get_plate_metres()
+	var lo := floori((local.y - radius) / plate)
+	var hi := floori((local.y + radius) / plate)
+	for s in lines.size() - 1:
+		if lines[s + 1] > lo and lines[s] <= hi:
+			out.append(s)
+	# Over its roof or under its ground floor: the storey nearest. Never none --
+	# none asks for the whole building.
+	if out.is_empty() and lines.size() > 1:
+		out.append(0 if hi < 0 else lines.size() - 2)
+	return out
+
+
+## Is it bricks only in part -- a band chunk with storeys still absent?
+func is_partial(b: Building) -> bool:
+	if b == null or not b.banded or not b.is_materialised():
+		return false
+	var n := storey_count(b.id)
+	if b.cut_storey >= 0:
+		n = mini(n, b.cut_storey)
+	return b.storeys_laid.size() < n
+
+
+## Lay more storeys of a building already laid a storey at a time. Returns how
+## many blocks came in: 0 for a building laid whole, or with them all.
+func lay_storeys(id: int, storeys: PackedInt32Array) -> int:
+	var b := get_building(id)
+	if b == null or not b.is_materialised() or not b.banded:
+		return 0
+	return _lay_storeys(b, storeys)
+
+
+## How many storeys this building has laid, of how many (for the gates).
+func storey_report(id: int) -> Dictionary:
+	var b := get_building(id)
+	if b == null:
+		return {}
+	return {"banded": b.banded, "laid": b.storeys_laid.duplicate(), "of": storey_count(id),
+			"cut": b.cut_storey,
+			"bricks": (world.get_block_count(b.chunk) - world.get_absent_count(b.chunk))
+					if b.is_materialised() else 0,
+			"occupancy_bytes": world.get_occupancy_bytes(b.chunk) if b.is_materialised() else 0}
+
+
+var storeys_laid_total := 0     ## storeys laid one at a time, all told
+var storey_blocks_total := 0    ## and the blocks they brought in
+var storey_ms := 0.0
+
+
+func _lay_storeys(b: Building, storeys: PackedInt32Array) -> int:
+	var t0 := Time.get_ticks_usec()
+	var lines := storey_lines(b)
+	var n := lines.size() - 1
+	var laid := 0
+	var any := false
+	for s in storeys:
+		if s < 0 or s >= n or b.storeys_laid.has(s):
+			continue
+		if b.cut_storey >= 0 and s >= b.cut_storey:
+			continue   # left as a shell piece
+		laid += world.lay_band(b.chunk, b.band_template, lines[s], lines[s + 1])
+		b.storeys_laid.append(s)
+		storeys_laid_total += 1
+		any = true
+	if not any:
+		return 0
+	b.storeys_laid.sort()
+	storey_blocks_total += laid
+	b.structure_version += 1
+	b.floors_memo = null
+	set_storey_bounds(b)
+	storey_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	return laid
+
+
+## The runs of laid storeys, as [first, one past the last].
+static func storey_runs(laid: PackedInt32Array) -> Array:
+	var runs: Array = []
+	for s in laid:
+		if not runs.is_empty() and int(runs[-1][1]) == s:
+			runs[-1][1] = s + 1
+		else:
+			runs.append([s, s + 1])
+	return runs
+
+
+## What holds the laid storeys and what they hold (Docs/Space.md 5.2): each run
+## stands on the intact storey under it -- its bottom plate anchored -- and
+## carries the weight of everything over it on its top bricks. Asked again after
+## a solve, because the top bricks a hit takes out carry nothing any more and
+## their share has to go to the ones still standing.
+func set_storey_bounds(b: Building) -> void:
+	if b == null or not b.banded or not b.is_materialised():
+		return
+	var lines := storey_lines(b)
+	var top_y: int = lines[lines.size() - 1] if b.cut_storey < 0 else lines[b.cut_storey]
+	var runs := storey_runs(b.storeys_laid)
+	if runs.is_empty():
+		return
+	world.set_foundation_level(b.chunk, lines[int(runs[0][0])])
+	var anchors := PackedInt32Array()
+	for r in range(1, runs.size()):
+		anchors.append(lines[int(runs[r][0])])
+	world.set_anchor_levels(b.chunk, anchors)
+	for r in runs.size():
+		var y_top: int = lines[int(runs[r][1])]
+		var ids := world.get_blocks_topping(b.chunk, y_top) if y_top < top_y \
+				else PackedInt32Array()
+		var mass := world.get_template_mass(b.band_template, y_top, top_y) \
+				if not ids.is_empty() else 0.0
+		if ids.is_empty() or mass <= 0.0:
+			world.clear_load(b.chunk, ABOVE_OWNER - r)
+		else:
+			world.set_load(b.chunk, ABOVE_OWNER - r, ids, mass / ids.size())
+	for r in range(runs.size(), b.load_runs):
+		world.clear_load(b.chunk, ABOVE_OWNER - r)
+	b.load_runs = runs.size()
+
+
+## The runs whose top has nothing left standing under the storey on it: the
+## intact storeys over such a run hang on nothing (Docs/Space.md 5.3a). Returns
+## the lowest storey that has lost its support, or -1.
+func storey_gave_way(id: int) -> int:
+	var b := get_building(id)
+	if b == null or not b.banded or not b.is_materialised():
+		return -1
+	var lines := storey_lines(b)
+	var n := lines.size() - 1
+	var top := n if b.cut_storey < 0 else b.cut_storey
+	for run in storey_runs(b.storeys_laid):
+		var above: int = int(run[1])
+		if above >= top:
+			continue   # nothing over it
+		if world.get_blocks_topping(b.chunk, lines[above]).is_empty():
+			return above
+	return -1
+
+
+## Everything from storey `s` up has left the building as a shell piece: it is
+## not this building's any more. Laid storeys up there leave as brick pieces --
+## the caller cuts them out; this only says they are not the building's.
+func cut_storeys(id: int, s: int) -> void:
+	var b := get_building(id)
+	if b == null:
+		return
+	b.cut_storey = s if b.cut_storey < 0 else mini(b.cut_storey, s)
+	var keep := PackedInt32Array()
+	for k in b.storeys_laid:
+		if k < b.cut_storey:
+			keep.append(k)
+	b.storeys_laid = keep
+	b.structure_version += 1
+	b.floors_memo = null
+	b.hit = true
+	set_storey_bounds(b)
+	# Their rooms went with them: written off, as a fallen building's are, so
+	# nothing draws them where the storeys stood -- now or after it is given
+	# back. (The pieces on laid storeys that left as bricks ride those.)
+	if not b.is_build():
+		var y_cut: int = storey_lines(b)[b.cut_storey]
+		for room in rooms_of(id):
+			if room.lo.y < y_cut:
+				continue
+			if room.items.is_empty():
+				room.items = RoomManifest.items_for(room)
+			for i in room.items.size():
+				if not room.laid.has(i):
+					room.gone[i] = true
+
+
+## The bands of the shell (TowerRecipe.layout, as the damage profile counts
+## them) of each storey: storey -> [first band, one past the last].
+func _band_storeys(b: Building) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for band in TowerRecipe.layout(b.recipe.courses):
+		@warning_ignore("integer_division")
+		out.append(int(band.y) / TowerRecipe.STOREY_PLATES)
+	return out
+
+
+## A profile of a partly laid building: the bricks' own for laid storeys
+## (`live`), the kept one for the rest, and every band of a storey cut away
+## gone. `hide_laid` marks laid storeys' bands gone instead -- the rest shell,
+## drawn beside the bricks rather than in place of them.
+func merged_profile(b: Building, live: Dictionary, hide_laid := false) -> Dictionary:
+	var out := {}
+	var storey_of := _band_storeys(b)
+	for i in storey_of.size():
+		var s: int = storey_of[i]
+		if b.cut_storey >= 0 and s >= b.cut_storey:
+			out[i] = PackedInt32Array([0, 0, 0, 0])
+		elif b.banded and b.storeys_laid.has(s):
+			if hide_laid:
+				out[i] = PackedInt32Array([0, 0, 0, 0])
+			elif live.has(i):
+				out[i] = live[i]
+		elif b.damage_profile.has(i):
+			out[i] = b.damage_profile[i]
+	return out
+
+
+## What the rest shell of a partly laid building draws: its storeys still
+## whole, with the damage they had when its bricks were last given back.
+func rest_profile(id: int) -> Dictionary:
+	var b := get_building(id)
+	if b == null or b.is_build():
+		return {}
+	return merged_profile(b, {}, true)
 
 
 ## Give the bricks back but keep the damage. The building returns to being a
@@ -928,13 +1245,16 @@ func dematerialise(id: int) -> void:
 	# build has none. Docs/BuildMode.md section 12 question 3 is exactly this:
 	# what a multi-frame build's cheap representation should be. Until that is
 	# answered a build has no shell tier, so it needs no profile either.
-	if b.is_damaged() and not b.is_build():
+	if (b.is_damaged() or b.cut_storey >= 0) and not b.is_build():
 		b.damage_profile = _build_damage_profile(b)
 	for c in b.chunks():
 		world.release_chunk(c)
 	b.chunk = -1
 	b.frames = PackedInt32Array()
 	b.asm = null
+	b.banded = false
+	b.storeys_laid = PackedInt32Array()
+	b.load_runs = 0
 	_materialised -= 1
 
 
@@ -1005,7 +1325,10 @@ func damage(id: int, world_point: Vector3, radius: float) -> PackedInt32Array:
 	var b := get_building(id)
 	if b == null:
 		return PackedInt32Array()
-	var chunk := materialise(id)
+	# The storeys it reaches, and no others (Docs/Space.md 5.3a). A build is
+	# laid whole.
+	var chunk := materialise(id, storeys_in(id, world_point, radius)
+			if storey_units and not b.is_build() else PackedInt32Array())
 	if chunk < 0:
 		return PackedInt32Array()
 	# Every frame, not only the root: a blast does not care which grid the brick
@@ -1101,6 +1424,11 @@ func _build_damage_profile(b: Building) -> Dictionary:
 	for band in TowerRecipe.layout(b.recipe.courses):
 		bands.push_back(int(band.y))
 		bands.push_back(int(band.plates))
-	return world.build_damage_profile(b.chunk, b.recipe.footprint_x, b.recipe.footprint_z,
-			TowerRecipe.WALL_THICK, BuildingShell.SEGMENTS, bands)
+	var live: Dictionary = world.build_damage_profile(b.chunk, b.recipe.footprint_x,
+			b.recipe.footprint_z, TowerRecipe.WALL_THICK, BuildingShell.SEGMENTS, bands)
+	# Laid a storey at a time: the storeys never laid are not gone, they are
+	# what the profile last said (Docs/Space.md 5.3a).
+	if b.banded or b.cut_storey >= 0:
+		return merged_profile(b, live)
+	return live
 

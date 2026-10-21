@@ -443,6 +443,12 @@ public:
 
     /// Cells at or below this grid Y anchor the structure. Default 0.
     void set_foundation_level(int chunk_id, int grid_y);
+    /// More anchors, above the foundation: a block whose bottom is at exactly
+    /// one of these grid Ys is held there too. A building laid a storey at a
+    /// time stands each run of laid storeys on the intact ones under it
+    /// (Docs/Space.md 5.3a); the lowest run is the foundation level, the rest
+    /// are these. Weight above an anchor is held there, not passed down.
+    void set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys);
 
     // --- stress (M2) -------------------------------------------------------
 
@@ -707,6 +713,32 @@ public:
     /// changed, if the chunk does not fit.
     bool load_template(int template_id, int chunk_id);
     int get_template_count() const;
+
+    // --- a building a storey at a time (Docs/Space.md 5.3a) -------------------
+
+    /// A chunk with the template's origin, dims and every block -- all of them
+    /// ABSENT: in the list, so every block id is the template's, but owning no
+    /// cells and in no solve, mesh, hit or count. The occupancy grid is empty
+    /// until lay_band. Returns the chunk id, or -1.
+    int create_band_chunk(int template_id);
+    /// Make present every absent block whose cell Y is in [y_lo, y_hi) (grid
+    /// Y, absolute), with the damage record it carried while absent. Grows the
+    /// occupancy window to hold it. Returns how many were laid.
+    int lay_band(int chunk_id, int template_id, int y_lo, int y_hi);
+    /// How many blocks of a band chunk are absent (0 for any other chunk).
+    int get_absent_count(int chunk_id) const;
+    bool is_block_absent(int chunk_id, int block_id) const;
+    /// Mass in kg of the template's structure (not decorative) whose cell Y is
+    /// in [y_lo, y_hi): the weight the intact storeys there put on what is laid.
+    float get_template_mass(int template_id, int y_lo, int y_hi) const;
+    /// Live structure whose top face is at grid Y `y`: what carries the storey
+    /// standing on y.
+    PackedInt32Array get_blocks_topping(int chunk_id, int y) const;
+    /// Live structure and furniture whose cell Y is in [y_lo, y_hi): a run of
+    /// storeys, to be cut out as a piece.
+    PackedInt32Array get_blocks_in_band(int chunk_id, int y_lo, int y_hi) const;
+    /// Bytes the chunk's occupancy grid holds (the window, for a band chunk).
+    int64_t get_occupancy_bytes(int chunk_id) const;
 
     // --- damage ------------------------------------------------------------
 
@@ -1238,6 +1270,25 @@ private:
     };
     std::vector<SolveStats> solve_stats;
     std::vector<int> foundation_level;
+    /// Per chunk, grid Ys above the foundation that anchor too (set_anchor_levels).
+    std::vector<std::vector<int>> anchor_levels;
+    /// Is a block whose bottom is at height `h` held by the ground there?
+    bool grounded_at(int chunk_id, int h) const {
+        if (h <= foundation_level[(size_t)chunk_id]) {
+            return true;
+        }
+        const std::vector<int> &a = anchor_levels[(size_t)chunk_id];
+        return !a.empty() && std::find(a.begin(), a.end(), h) != a.end();
+    }
+    /// An anchor above the foundation: weight above it is held there.
+    bool extra_anchor(int chunk_id, int h) const {
+        const std::vector<int> &a = anchor_levels[(size_t)chunk_id];
+        return !a.empty() && h > foundation_level[(size_t)chunk_id]
+                && std::find(a.begin(), a.end(), h) != a.end();
+    }
+    /// Rebuild a chunk's occupancy for the window [y0, y1) (local Y) from its
+    /// present blocks.
+    void set_occupancy_window(brick::Chunk &c, int y0, int y1);
     /// Per chunk, which grid direction gravity pulls toward. (0,-1,0) unless a
     /// piece has toppled and someone told us otherwise.
     std::vector<Vector3i> chunk_down;

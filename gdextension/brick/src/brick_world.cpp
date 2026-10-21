@@ -473,6 +473,8 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     Chunk c;
     c.origin = origin;
     c.dims = dims;
+    c.occ_y0 = 0;
+    c.occ_dy = dims.y;
     c.occupancy.reset(c.cell_count());
     c.xform = Transform3D(Basis(), brick::grid_to_world(origin));
     c.anchored = true;
@@ -484,6 +486,7 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     solve_stats.push_back(SolveStats());
     stress.push_back(StressState());
     foundation_level.push_back(origin.y); // the chunk's own floor anchors it
+    anchor_levels.push_back(std::vector<int>());
     chunk_down.push_back(Vector3i(0, -1, 0));
     return (int)chunks.size() - 1;
 }
@@ -521,7 +524,9 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
                     continue;
                 }
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
-                if (!c.in_bounds(l) || c.occupancy[c.index_of(l)] >= 0) {
+                // index_of is -1 outside a band chunk's occupancy window:
+                // nothing can be put where nothing is laid.
+                if (!c.in_bounds(l) || c.index_of(l) < 0 || c.occupancy[c.index_of(l)] >= 0) {
                     return -1;
                 }
             }
@@ -537,6 +542,9 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     b.colour = (uint8_t)std::clamp(colour, 0, 255);
     b.decorative = decorative;
     c.blocks.push_back(b);
+    if (!c.absent.empty()) {
+        c.absent.push_back(0); // placed, so present
+    }
 
     for (int x = 0; x < a.size.x; ++x) {
         for (int y = 0; y < a.size.y; ++y) {
@@ -678,7 +686,7 @@ bool BrickWorld::can_place(int chunk_id, Vector3i cell, int archetype_id) const 
                     continue;
                 }
                 const Vector3i l(base.x + x, base.y + y, base.z + z);
-                if (!c.in_bounds(l) || c.occupancy[c.index_of(l)] >= 0) {
+                if (!c.in_bounds(l) || c.index_of(l) < 0 || c.occupancy[c.index_of(l)] >= 0) {
                     return false;
                 }
             }
@@ -756,6 +764,12 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
     for (int i = 0; i < ids.size(); ++i) {
         const int32_t bid = ids[i];
         if (bid < 0 || bid >= (int32_t)c.blocks.size()) {
+            continue;
+        }
+        if (c.is_absent(bid)) {
+            // Not laid: the record says it is dead, and it comes in dead.
+            c.absent[(size_t)bid] &= (uint8_t)~Chunk::ABSENT_ALIVE;
+            c.blocks[bid].hp = 0;
             continue;
         }
         c.blocks[bid].alive = false;
@@ -1055,6 +1069,9 @@ int BrickWorld::get_dead_block_count(int chunk_id) const {
         const Block &b = c.blocks[i];
         if (!b.alive && !b.detached && !b.removed) {
             ++n;
+        } else if (c.is_absent((int32_t)i)
+                && (c.absent[i] & (Chunk::ABSENT_ALIVE | Chunk::ABSENT_DETACHED)) == 0) {
+            ++n; // not laid, and dead in its record
         }
     }
     return n;
@@ -1072,6 +1089,9 @@ PackedInt32Array BrickWorld::get_dead_blocks(int chunk_id) const {
         // blocks were edited away, which is not damage either.
         if (!c.blocks[i].alive && !c.blocks[i].detached && !c.blocks[i].removed) {
             out.push_back((int32_t)i);
+        } else if (c.is_absent((int32_t)i)
+                && (c.absent[i] & (Chunk::ABSENT_ALIVE | Chunk::ABSENT_DETACHED)) == 0) {
+            out.push_back((int32_t)i); // not laid: its record (Chunk::absent)
         }
     }
     return out;
@@ -1085,6 +1105,8 @@ PackedInt32Array BrickWorld::get_detached_blocks(int chunk_id) const {
     const Chunk &c = chunks[chunk_id];
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         if (c.blocks[i].detached && !c.blocks[i].removed) {
+            out.push_back((int32_t)i);
+        } else if (c.is_absent((int32_t)i) && (c.absent[i] & Chunk::ABSENT_DETACHED) != 0) {
             out.push_back((int32_t)i);
         }
     }
@@ -4982,11 +5004,10 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
 
     // Seed from every live block resting on the foundation level. A block that
     // has been crushed loose is never a seed and is never reached.
-    const int floor_y = foundation_level[chunk_id];
     const Vector3i up = -chunk_down[chunk_id];
     for (size_t i = 0; i < n; ++i) {
         const Block &b = c.blocks[i];
-        if (b.alive && !b.support_broken && height_along(b.cell, up) <= floor_y) {
+        if (b.alive && !b.support_broken && grounded_at(chunk_id, height_along(b.cell, up))) {
             mark[i] = 1;
             scratch_depth[i] = 0;
             scratch_queue.push_back((int32_t)i);
@@ -5101,6 +5122,17 @@ Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
 void BrickWorld::set_foundation_level(int chunk_id, int grid_y) {
     if (valid_chunk(chunk_id)) {
         foundation_level[chunk_id] = grid_y;
+    }
+}
+
+void BrickWorld::set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    std::vector<int> &a = anchor_levels[(size_t)chunk_id];
+    a.clear();
+    for (int64_t i = 0; i < grid_ys.size(); ++i) {
+        a.push_back(grid_ys[i]);
     }
 }
 
@@ -5513,6 +5545,12 @@ Dictionary BrickWorld::lateral_check(int chunk_id, float accel_g, Vector3 world_
         W += m[k];
         WX += mx[k];
         WY += my[k];
+        if (extra_anchor(chunk_id, h)) {
+            // Held here (set_anchor_levels): what is above weighs on this
+            // anchor, not on anything under it.
+            W = WX = WY = 0.0;
+            continue;
+        }
         if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
             continue; // the foundation, or nothing meets here
         }
@@ -5682,7 +5720,7 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
         for (int r = 0; r < regions; ++r) {
             rW[(size_t)r] += rm[(size_t)k * regions + r];
             const double studs = rj[(size_t)k * regions + r];
-            if (h <= floor_y || rW[(size_t)r] <= 0.0 || studs <= 0.0) {
+            if (h <= floor_y || extra_anchor(chunk_id, h) || rW[(size_t)r] <= 0.0 || studs <= 0.0) {
                 continue; // nothing meets here: what is above is the span rule's
             }
             const double rc = rW[(size_t)r] / (studs * crush_cap);
@@ -5692,6 +5730,12 @@ Dictionary BrickWorld::gravity_check(int chunk_id, float crush_per_stud) {
                 rbest_r = r;
                 rbest_w = rW[(size_t)r];
             }
+        }
+        if (extra_anchor(chunk_id, h)) {
+            // As the lateral check: held here, so nothing under it carries it.
+            W = WX = WZ = 0.0;
+            std::fill(rW.begin(), rW.end(), 0.0);
+            continue;
         }
         if (h <= floor_y || W <= 0.0 || j[k] <= 0.0) {
             continue;
@@ -6427,12 +6471,231 @@ int BrickWorld::get_template_count() const {
     return (int)templates.size();
 }
 
+// --- a building a storey at a time (Docs/Space.md 5.3a) ---------------------
+//
+// A building's block ids are its template's: the recipe laid whole, once, when
+// the city was laid out. A band chunk holds that whole list from the start, so
+// an id means the same brick whichever storeys are laid, which is what the
+// damage record rides on. What is not laid is ABSENT: `removed` (owning no
+// cells, so every bake, solve, hit and count already passes it by) and marked
+// in Chunk::absent, whose bits plus the block's own hp / scorched / colour are
+// its damage record until it is laid.
+
+int BrickWorld::create_band_chunk(int template_id) {
+    if (template_id < 0 || template_id >= (int)templates.size()) {
+        return -1;
+    }
+    const ChunkTemplate &t = templates[template_id];
+    // Made as any chunk is, one cell tall, then given the template's dims with
+    // an EMPTY occupancy window: the building's sections number as they would
+    // with every brick in it, and the grid costs nothing until a storey is laid.
+    const int id = create_chunk(t.origin, Vector3i(t.dims.x, 1, t.dims.z));
+    if (id < 0) {
+        return -1;
+    }
+    Chunk &c = chunks[id];
+    c.dims = t.dims;
+    c.occ_y0 = 0;
+    c.occ_dy = 0;
+    c.occupancy.reset(0);
+    c.blocks = t.blocks;
+    c.absent.assign(c.blocks.size(), 0);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        Block &b = c.blocks[i];
+        if (b.removed) {
+            continue; // removed in the recipe itself: stays a tombstone
+        }
+        c.absent[i] = Chunk::ABSENT | (b.alive ? Chunk::ABSENT_ALIVE : 0)
+                | (b.detached ? Chunk::ABSENT_DETACHED : 0);
+        b.removed = true;
+        b.alive = false;
+    }
+    joint_cache[id] = brick::JointCache();
+    conn_forget(id);
+    return id;
+}
+
+void BrickWorld::set_occupancy_window(Chunk &c, int y0, int y1) {
+    y0 = std::max(y0, 0);
+    y1 = std::min(y1, c.dims.y);
+    c.occ_y0 = y0;
+    c.occ_dy = std::max(y1 - y0, 0);
+    c.occupancy.reset((int64_t)c.dims.x * c.occ_dy * c.dims.z);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (a.solid_at(x, y, z)) {
+                        c.occupancy.set(c.index_of(Vector3i(base.x + x, base.y + y, base.z + z)),
+                                (int32_t)i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+int BrickWorld::lay_band(int chunk_id, int template_id, int y_lo, int y_hi) {
+    if (!valid_chunk(chunk_id) || template_id < 0 || template_id >= (int)templates.size()) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    const ChunkTemplate &t = templates[template_id];
+    if (c.absent.size() != c.blocks.size() || c.blocks.size() < t.blocks.size()) {
+        return 0; // not a band chunk of this template
+    }
+    // Which absent blocks come in, and the window that has to hold them and
+    // everything already laid.
+    std::vector<int32_t> in;
+    int lo = c.occ_dy > 0 ? c.occ_y0 : INT_MAX;
+    int hi = c.occ_dy > 0 ? c.occ_y0 + c.occ_dy : INT_MIN;
+    for (size_t i = 0; i < t.blocks.size(); ++i) {
+        if ((c.absent[i] & Chunk::ABSENT) == 0) {
+            continue;
+        }
+        const Block &b = c.blocks[i];
+        if (b.cell.y < y_lo || b.cell.y >= y_hi) {
+            continue;
+        }
+        in.push_back((int32_t)i);
+        const int by = b.cell.y - c.origin.y;
+        lo = std::min(lo, by);
+        hi = std::max(hi, by + archetypes[b.archetype].size.y);
+    }
+    if (in.empty()) {
+        return 0;
+    }
+    // A worker may be reading this chunk -- a bake, a coarse mesh, a chamfered
+    // band. The blocks and the grid are about to change under it (the grid
+    // reallocated), so every job on it is settled first, as release_chunk does.
+    settle_bake_job(chunk_id, false);
+    settle_coarse_job(chunk_id);
+    drop_chamfer(chunk_id, -1, true);
+    // Present, with the record it carried while absent.
+    for (const int32_t i : in) {
+        Block &b = c.blocks[(size_t)i];
+        const uint8_t a = c.absent[(size_t)i];
+        b.removed = false;
+        b.detached = (a & Chunk::ABSENT_DETACHED) != 0;
+        b.alive = (a & Chunk::ABSENT_ALIVE) != 0 && !b.detached;
+        if (!b.alive) {
+            b.hp = 0;
+        }
+        c.absent[(size_t)i] = 0;
+    }
+    // A dead or detached block still owns its cells (place_block's note), so
+    // every block that came in is written -- by rebuilding the grid for the
+    // window that holds them all. A storey is ~100k cells.
+    if (c.occ_dy <= 0 || lo < c.occ_y0 || hi > c.occ_y0 + c.occ_dy) {
+        set_occupancy_window(c, lo, hi);
+    } else {
+        for (const int32_t i : in) {
+            const Block &b = c.blocks[(size_t)i];
+            const Archetype &ar = archetypes[b.archetype];
+            const Vector3i base = b.cell - c.origin;
+            for (int x = 0; x < ar.size.x; ++x) {
+                for (int y = 0; y < ar.size.y; ++y) {
+                    for (int z = 0; z < ar.size.z; ++z) {
+                        if (ar.solid_at(x, y, z)) {
+                            c.occupancy.set(c.index_of(Vector3i(base.x + x, base.y + y, base.z + z)),
+                                    i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Everything derived from the cells is stale: the joints (rebuilt from the
+    // grid on the next ask), the components and the bake.
+    joint_cache[chunk_id] = brick::JointCache();
+    conn_forget(chunk_id);
+    c.bake.valid = false;
+    return (int)in.size();
+}
+
+int BrickWorld::get_absent_count(int chunk_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    int n = 0;
+    for (const uint8_t a : chunks[chunk_id].absent) {
+        if ((a & Chunk::ABSENT) != 0) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+bool BrickWorld::is_block_absent(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    const Chunk &c = chunks[chunk_id];
+    return block_id >= 0 && block_id < (int)c.blocks.size() && c.is_absent(block_id);
+}
+
+float BrickWorld::get_template_mass(int template_id, int y_lo, int y_hi) const {
+    if (template_id < 0 || template_id >= (int)templates.size()) {
+        return 0.0f;
+    }
+    float total = 0.0f;
+    for (const Block &b : templates[template_id].blocks) {
+        if (b.removed || !b.alive || b.decorative || b.cell.y < y_lo || b.cell.y >= y_hi) {
+            continue;
+        }
+        total += std::max(archetypes[b.archetype].mass, 0.0001f);
+    }
+    return total;
+}
+
+PackedInt32Array BrickWorld::get_blocks_topping(int chunk_id, int y) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.removed || b.decorative) {
+            continue;
+        }
+        if (b.cell.y + archetypes[b.archetype].size.y == y) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
+PackedInt32Array BrickWorld::get_blocks_in_band(int chunk_id, int y_lo, int y_hi) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.alive && !b.removed && b.cell.y >= y_lo && b.cell.y < y_hi) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
+int64_t BrickWorld::get_occupancy_bytes(int chunk_id) const {
+    return valid_chunk(chunk_id) ? chunks[chunk_id].occupancy.bytes() : 0;
+}
+
 Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
     SolveScratch &scratch = solve_scratch();
     std::vector<int32_t> &scratch_depth = scratch.depth;
     Dictionary out;
     Chunk &c = chunks[chunk_id];
-    const int floor_y = foundation_level[chunk_id];
     const Vector3 cs = cell_size();
 
     float total_mass = 0.0f;
@@ -6486,7 +6749,7 @@ Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
         // middle really is standing. What the hull buys is the case those are
         // one load away from: put weight over a corner no leg is under and the
         // rectangle still says it is supported.
-        if (b.cell.y <= floor_y) {
+        if (grounded_at(chunk_id, b.cell.y)) {
             const Vector3i base = b.cell - c.origin;
             const Vector3i sz = archetypes[b.archetype].size;
             const Vector2 lo(base.x * cs.x, base.z * cs.z);
@@ -6719,7 +6982,10 @@ PackedInt32Array BrickWorld::get_worn_blocks(int chunk_id) const {
     const Chunk &c = chunks[chunk_id];
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
-        if (b.alive && !b.removed && b.hp < 255) {
+        const bool live = c.is_absent((int32_t)i)
+                ? (c.absent[i] & Chunk::ABSENT_ALIVE) != 0
+                : (b.alive && !b.removed);
+        if (live && b.hp < 255) {
             out.push_back((int32_t)i);
             out.push_back((int32_t)b.hp);
         }
@@ -6738,7 +7004,9 @@ void BrickWorld::set_worn_blocks(int chunk_id, const PackedInt32Array &worn) {
             continue;
         }
         Block &b = c.blocks[id];
-        if (!b.alive || b.removed) {
+        const bool live = c.is_absent(id) ? (c.absent[(size_t)id] & Chunk::ABSENT_ALIVE) != 0
+                : (b.alive && !b.removed);
+        if (!live) {
             continue;
         }
         b.hp = (uint8_t)std::clamp((int)worn[i + 1], 1, 255);
@@ -6799,7 +7067,10 @@ PackedInt32Array BrickWorld::get_scorched_blocks(int chunk_id) const {
     const Chunk &c = chunks[chunk_id];
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
-        if (b.alive && !b.removed && b.scorched) {
+        const bool live = c.is_absent((int32_t)i)
+                ? (c.absent[i] & Chunk::ABSENT_ALIVE) != 0
+                : (b.alive && !b.removed);
+        if (live && b.scorched) {
             out.push_back((int32_t)i);
         }
     }
@@ -6818,6 +7089,14 @@ void BrickWorld::set_scorched_blocks(int chunk_id, const PackedInt32Array &ids) 
             continue;
         }
         Block &b = c.blocks[id];
+        if (c.is_absent(id)) {
+            // Its record: it comes in charred (lay_band keeps the colour).
+            if ((c.absent[(size_t)id] & Chunk::ABSENT_ALIVE) != 0) {
+                b.scorched = true;
+                b.colour = (uint8_t)brick_material_darkest(b.material);
+            }
+            continue;
+        }
         if (!b.alive || b.removed) {
             continue;
         }
@@ -7900,6 +8179,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     fire_clear(chunk_id);
     joint_cache[chunk_id] = brick::JointCache();
     conn_watch[(size_t)chunk_id] = ConnWatch();
+    anchor_levels[(size_t)chunk_id].clear();
 }
 
 // --- islands ---------------------------------------------------------------
@@ -8057,7 +8337,6 @@ PackedInt32Array BrickWorld::spans_from(int chunk_id, float reach_studs, const s
     const brick::JointCache &jc = joints_of(chunk_id);
     Chunk &c = chunks[chunk_id];
     const int32_t n = (int32_t)c.blocks.size();
-    const int floor_y = foundation_level[chunk_id];
     auto usable = [&](int32_t i) {
         const Block &b = c.blocks[(size_t)i];
         return b.alive && !b.removed && !b.support_broken;
@@ -8112,7 +8391,8 @@ PackedInt32Array BrickWorld::spans_from(int chunk_id, float reach_studs, const s
     for (const int32_t bid : order) {
         const Block &b = c.blocks[(size_t)bid];
         const Vector3i sz = archetypes[b.archetype].size;
-        const bool ground = seeds != nullptr ? (*seeds)[(size_t)bid] != 0 : b.cell.y <= floor_y;
+        const bool ground = seeds != nullptr ? (*seeds)[(size_t)bid] != 0
+                : grounded_at(chunk_id, b.cell.y);
         if (!ground && b.bottom_broken) {
             continue;
         }
@@ -10114,6 +10394,22 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("place_blocks", "chunk_id", "origin", "cells", "archetype_ids", "colours"),
             &BrickWorld::place_blocks);
     ClassDB::bind_method(D_METHOD("load_template", "template_id", "chunk_id"), &BrickWorld::load_template);
+    ClassDB::bind_method(D_METHOD("create_band_chunk", "template_id"), &BrickWorld::create_band_chunk);
+    ClassDB::bind_method(D_METHOD("lay_band", "chunk_id", "template_id", "y_lo", "y_hi"),
+            &BrickWorld::lay_band);
+    ClassDB::bind_method(D_METHOD("get_absent_count", "chunk_id"), &BrickWorld::get_absent_count);
+    ClassDB::bind_method(D_METHOD("is_block_absent", "chunk_id", "block_id"),
+            &BrickWorld::is_block_absent);
+    ClassDB::bind_method(D_METHOD("get_template_mass", "template_id", "y_lo", "y_hi"),
+            &BrickWorld::get_template_mass);
+    ClassDB::bind_method(D_METHOD("get_blocks_topping", "chunk_id", "y"),
+            &BrickWorld::get_blocks_topping);
+    ClassDB::bind_method(D_METHOD("get_blocks_in_band", "chunk_id", "y_lo", "y_hi"),
+            &BrickWorld::get_blocks_in_band);
+    ClassDB::bind_method(D_METHOD("get_occupancy_bytes", "chunk_id"),
+            &BrickWorld::get_occupancy_bytes);
+    ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),
+            &BrickWorld::set_anchor_levels);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
             &BrickWorld::set_tension_per_stud);

@@ -1,6 +1,6 @@
 # Space: asteroids, ships, stations, and bricks only where it broke
 
-Status (2026-10-21): **design, not scheduled.** Written at the user's request with
+Status (2026-10-21): **design; §5's storey units built for generated towers (§5.3b).** Written at the user's request with
 [Planets.md](Planets.md) (real sphere planets). It answers four questions: how small a smooth
 asteroid can be; whether ships and stations the size of the city's buildings can be destructible;
 whether a section can stay whole until it breaks and only then become bricks without a hitch; and
@@ -226,6 +226,120 @@ Replace "materialised while near, given back after quiet" with **a budget of bri
   guess; the gate sets it.
 - The city's distance rings (DestructionLod §2) stay as they are for *what pieces do*; the budget
   decides *how many bricks exist*.
+
+### 5.3a Build plan (2026-10-21) -- storey units in the flat game
+
+Taken up from §7 item 1 and Next.md 2.5. What the code does today, and what changes:
+
+**Ids.** A block id is its index in the chunk's block list (`BrickWorld::place_block` appends),
+and the damage record (`dead`, `gone`, `worn`, `scorched`) is lists of ids. So a storey cannot be
+laid on its own by running the recipe for it: every id after it would move. Instead the **whole
+building's template** (`BuildingRegistry._templates`, built for every shape at city layout) is the
+id space, and a storey is laid *from the template*:
+
+- `BrickWorld.create_band_chunk(template)` makes a chunk with the template's origin and dims and
+  its full block list -- every block **absent**: in the list (so ids hold) but owning no cells,
+  never drawn, solved, hit or counted. An absent block is marked `removed` (which every hot loop
+  already skips) plus a per-chunk byte that says it is absent, not edited away.
+- `BrickWorld.lay_band(chunk, template, y_lo, y_hi)` makes present every absent block whose cell
+  y is in `[y_lo, y_hi)` -- copied from the template, cells written -- and returns how many. A
+  storey is `[20 s, 20 s + 20)` plates (`TowerRecipe.STOREY_PLATES`: its slab, then six courses).
+- **The record rides absent blocks.** `kill_blocks`, `set_worn_blocks`, `set_scorched_blocks`
+  on an absent id write its record bits; `get_dead_blocks`, `get_detached_blocks`,
+  `get_worn_blocks`, `get_scorched_blocks` report them. So the record round-trips through a
+  partly laid building unchanged, and a storey laid later comes in with its damage (`lay_band`
+  applies its bits as it makes it present).
+- **Occupancy only where laid.** A chunk's dims stay the building's (so its sections -- the bands
+  drawing and collision are cut into -- number as before), but its occupancy grid holds a
+  **y-window**: the plates of what is laid. A cell outside it reads empty. The window grows when a
+  storey outside it is laid (the grid is rebuilt from the present blocks; a storey is ~1 ms).
+
+**Boundaries for the solver.**
+- Below: each run of laid storeys is anchored at its bottom plate. `foundation_level` keeps the
+  lowest; `BrickWorld.set_anchor_levels(chunk, ys)` adds the others (two storeys laid apart).
+- Above: the weight of everything over a run's top (template mass, `get_template_mass`) rests on
+  the run's top bricks (`get_blocks_topping(chunk, y)`: alive structure whose top face is at y)
+  through `set_load` with owner `BuildingRegistry.ABOVE_OWNER - run` (wreckage loads use piece
+  ids, which are >= 0).
+
+**Registry.** `materialise(id, storeys := [])`: empty lays the whole building as today (every
+probe and gate that promotes by hand keeps its meaning); a list lays those storeys from the
+template. `lay_storeys(id, storeys)` lays more into a building already partly laid. `damage()`
+lays the storeys a blast reaches first. `storeys_in(id, point, radius)` says which. A building
+knows `storeys_laid` (empty = all). The damage profile of a partly laid building is the bricks'
+for laid storeys and the kept profile for the rest (`live_damage_profile`, `dematerialise`).
+
+**City.** A hit (`_apply_blast`), an aim (`_aim_promote`), a falling piece's path
+(`_path_promote`) and a walk-up (`_stream_residency`) promote the storeys they reach, not the
+building; a hit on storeys not yet laid lays them (`_lay_more`: lay, bake again, bands rebuilt --
+the old ones drawn meanwhile -- and collision reshaped for the new sections). The storeys still
+whole are drawn by the building's **rest shell** (`_rest_shells`): the recipe shell with laid
+storeys' bands marked gone, with its collision boxes and AI proxies. It exists while the building
+is partly laid, its bricks are drawn (`_brick_nodes`) and no stand-in shell is up (`_shells`);
+`_rest_sync` keeps that true. `--whole` turns storey units off (the gate's "today").
+
+**A storey gives way** when no brick of it is left under the storey above
+(`get_blocks_topping` empty after the solve). Then everything above leaves as a **shell piece**
+(`ShellPiece`): one rigid body drawn by the shell bands of those storeys, with their boxes, no
+bricks. The building keeps `cut_storey`: those storeys are never laid in it again (their blocks
+stay absent), its profile marks their bands gone and their rooms are written off. Laid storeys
+above the gap leave as ordinary brick pieces. When the shell piece lands hard (speed lost over
+`ShellPiece.LAND_SPEED` in a step) its lowest storey is laid from the template into a chunk of
+its own and let go as a brick piece moving as the shell moved; the rest stays a shell piece,
+resting on it. Shot, the storeys the blast reaches become bricks the same way and the piece
+splits round them. So a tower comes down a storey of bricks at a time.
+
+**Templates per band** come free: `lay_band` copies blocks out of the template, so a storey is
+never built.
+
+**Builds** (`BuildRecipe`) are to be sliced at the slabs the floor finder finds (`floor_lines`,
+Structures §2.4) -- **not built yet**: a build is still laid whole, and needs a template of its
+own and a rest shell from `BuildShell` first.
+
+Gate: `city.tscn -- --storeys --big` (new): the biggest tower shot at mid-height, first-hit time,
+bricks laid and chunk memory, `--whole` against storey units; the part above falls as one shell
+piece; the building given back and laid again replays its record (`storey_unit_probe` headless checks
+ids and the record round trip).
+
+### 5.3b What was built, and what it measured (2026-10-21)
+
+Branch `claude/great-rhodes-077356`. All of §5.3a for generated towers; not builds, not rooms as
+units, not the budget (§5.3).
+
+`--storeys --big`, the 80 x 60 tower of 204 courses (24,522 bricks, 35 storeys) shot once at
+mid-height, then the same with `--whole` (today). One run each, the editor closed, no other Godot
+running, display awake; heat under 80 C throughout:
+
+| first hit | `--whole` | storey units |
+|---|---|---|
+| promotion (laying, collision, bake start) | 30.4 ms; 9.7 ms after main's cheaper promotions (1b717e6) | 5.7 ms; 2.0 ms after |
+| bricks laid | 24,522 | 1,443 (storeys 16-17) |
+| occupancy grid | 12.6 MB | 0.77 MB |
+| BrickWorld memory | +93 MB | +8.4 MB |
+| process static memory | +103 MB | +11 MB |
+| video memory | +35 MB | +4.3 MB |
+| the shot shown (bands drawn) at tick | 28-29 | 7-9; 4 after |
+
+Before main's cheaper promotions both had one 0.5-0.76 s frame some ticks after the shot, all of
+it in `_process`, none in the physics tick, with `--whole` as with storey units. After merging them
+(one palette snapshot shared by bakes) it is gone: the worst frame of the 90 ticks after the shot
+is 37 ms in both modes, and not the shot's tick.
+
+Then (storey units) storey 17 blown out with blasts all through it: the storeys over the last
+laid one leave as **one shell piece** (storeys 20-34) at tick 67; the building is 5 laid storeys
+(3,623 bricks -- the blasts and the wreckage landing reached 15-19); the piece lands hard and is
+made bricks a storey at a time; given back and laid again, the record replays exactly
+(template ids; a room's piece laid as bricks is not laid again, as before).
+
+Found on the way and fixed: `lay_band` changed a chunk a worker was baking (barrage probe
+crashed); bands rebuilt for storeys just laid drew what the building had shed (held now, as a
+promotion is behind its shell); a landing on a building's shell (`_shear_building`) laid the
+whole building; falling-path promotion laid every storey under wreckage falling *inside* its own
+building; the collapse director took a banded building's template count for its size.
+
+Not done: builds; the brick budget (§5.3); the shell piece and a storey giving way are not
+DamageLog commands yet (co-op clients would not see them); a building laid a storey at a time
+never topples whole (only a storey gives way); rooms as units; anchor cells by list.
 
 ### 5.4 What it should buy (estimates)
 

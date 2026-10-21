@@ -611,7 +611,12 @@ struct Occupancy {
         }
     }
 
+    // A negative index is a cell outside the chunk's occupancy window
+    // (Chunk::index_of): it holds nothing, and writing it does nothing.
     int32_t operator[](int64_t i) const {
+        if (i < 0) {
+            return -1;
+        }
         if (!paged) {
             return dense[(size_t)i];
         }
@@ -620,6 +625,9 @@ struct Occupancy {
     }
 
     void set(int64_t i, int32_t v) {
+        if (i < 0) {
+            return;
+        }
         if (!paged) {
             dense[(size_t)i] = v;
             return;
@@ -707,8 +715,20 @@ struct Chunk {
         return section_layers() * section_tiles_x() * section_tiles_z();
     }
 
-    Occupancy occupancy; // dims.x * dims.y * dims.z, -1 = empty; write with set()
+    Occupancy occupancy; // dims.x * occ_dy * dims.z, -1 = empty; write with set()
+    // The plates the occupancy grid holds: local y in [occ_y0, occ_y0 + occ_dy).
+    // Every chunk's is its whole height (create_chunk) except a building laid
+    // a storey at a time (create_band_chunk, Docs/Space.md 5.3a): its dims --
+    // and so its sections -- are the whole building's, but a cell outside the
+    // window reads empty and index_of returns -1 for it.
+    int occ_y0 = 0;
+    int occ_dy = 0;
     std::vector<Block> blocks;
+    // Empty, except in a band chunk: per block, ABSENT_* bits. An absent block
+    // is in the list -- so every id after it holds -- but not in the world: it
+    // is `removed` (owns no cells; every loop skips it) and its damage record
+    // lives in these bits and its own hp / scorched / colour (lay_band).
+    std::vector<uint8_t> absent;
     FaceBake bake;
 
     // The index buffer currently on the GPU. FIXED length -- six entries per
@@ -766,8 +786,20 @@ struct Chunk {
     }
 
     int64_t index_of(const Vector3i &local) const {
-        return (int64_t)local.x + (int64_t)dims.x * ((int64_t)local.y + (int64_t)dims.y * local.z);
+        const int ly = local.y - occ_y0;
+        if ((unsigned)ly >= (unsigned)occ_dy) {
+            return -1; // outside the window: Occupancy reads -1, ignores a write
+        }
+        return (int64_t)local.x + (int64_t)dims.x * ((int64_t)ly + (int64_t)occ_dy * local.z);
     }
+
+    bool is_absent(int32_t bid) const {
+        return !absent.empty() && (absent[(size_t)bid] & ABSENT) != 0;
+    }
+
+    static constexpr uint8_t ABSENT = 1;          ///< not laid (lay_band)
+    static constexpr uint8_t ABSENT_ALIVE = 2;    ///< its record: alive
+    static constexpr uint8_t ABSENT_DETACHED = 4; ///< its record: left as a piece
 
     // -1 when empty or out of bounds.
     int32_t block_at(const Vector3i &local) const {
